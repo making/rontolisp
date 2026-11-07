@@ -29,7 +29,8 @@
 ;;;;   - on success the socket ENTRY is swapped onto the cleartext ends IN PLACE,
 ;;;;     so tls-upgrade answers the SAME fd it was given (the component
 ;;;;     divergence from the interpreter/JVM's new-handle convention) and every
-;;;;     stream built-in keeps working on it unchanged.
+;;;;     stream built-in keeps working on it unchanged -- except that its writes
+;;;;     are buffered from then on (sockets.lisp, "the TLS output buffer").
 ;;;;
 ;;;; What the draft interface does not expose, and this file therefore SIGNALS
 ;;;; for instead of silently ignoring: :insecure (skip verification -- a program
@@ -92,6 +93,10 @@
                               nil
                               (progn
                                 (rontolisp:await hs)
+                                ;; Writes collect in sockets.lisp's TLS output
+                                ;; buffer from here on (why: "the TLS output
+                                ;; buffer" there).
+                                (rontolisp::%sock-buffer-output e)
                                 fd))))
           (rontolisp:wit-error (c)
             ;; The handshake's err arm carries an own<error> RESOURCE handle

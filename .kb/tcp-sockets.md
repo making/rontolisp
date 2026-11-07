@@ -197,10 +197,41 @@ was refused on Preview 1, `http://` ones included (measured 2026-11-06).
   interpose before the send side is committed, so it requires a handle with no prior write.
 - The entry is swapped onto the cleartext ends IN PLACE (`%sock-set-streams`), so here `tls-upgrade`
   answers the SAME fd where interpreter/JVM answer a NEW one.
-- **Many small writes can lose their tail** (measured 2026-11-06, wasmtime 49): about 128 writes in
-  a row before a read leave the last bytes unsent, the peer times out and the read answers EOF.
-  drakma's byte-wise request hits it on every https URL; dexador writes once per request and does
-  not. Measurements and the likely host cause: `.todo/i93`.
+- **A TLS entry BUFFERS its writes** (since 2026-11-07; sockets.lisp, "the TLS output buffer"):
+  an 8 KiB octet vector in the entry (slots 9-11: buffer, fill, flushing), installed by
+  `tls-upgrade` after the handshake. Flushed by `%sock-fill` (a read that must ask the host),
+  `listen`, `force-output`/`finish-output` (`%io-force-output`/`%io-finish-output`, routed by
+  `WasmSocketsRewrite` since then; the other two providers answer the native identity),
+  `close`, and a full buffer. Each piece goes out after a `(wait-for 1)`; while one task has a
+  piece in flight, another flusher waits, so pieces keep buffer order. Plain TCP still writes
+  through. A write followed by a wait on something else (sleep, another socket) waits for the
+  next flush point -- real cl+ssl's buffer flushes at fewer points (force/finish-output, full,
+  close), so a program correct against it is correct here.
+- **Why: wasmtime-wasi-tls 49 drops the tail of a write** (measured 2026-11-07, wasmtime 49.0.0,
+  against 1.1.1.1 and httpbin.org). Unbuffered, a run of more than about 128 writes before a read
+  lost its end (byte-wise: 121 writes answered, 131-181 timed out), and so did ONE write past
+  16 KiB (a 1,000-byte POST body answered, 20 KB, 70 KB, 200 KB did not; dexador's 50 KB POST
+  timed out too). Host cause, read in the source (`p3/util/tokio_streams.rs`, `p3/util/pipe.rs`,
+  tokio-rustls 0.26 `common/mod.rs`, tokio `io/util/mem.rs`): the cleartext consumer
+  (`AsyncWriteConsumer::poll_consume`) reports a write `Completed` when tokio-rustls' `poll_write`
+  ACCEPTS the plaintext; tokio-rustls returns `Ready(n)` even when writing the records to the
+  ciphertext pipe (a 16 KiB tokio `duplex`) answered `Pending` -- pipe full, or tokio's
+  cooperative budget (128 operations per task poll; the duplex's `poll_write` takes one) used up.
+  The records stay in rustls; nothing calls `poll_flush`, and `poll_read` never writes, so they
+  wait for the next cleartext write. Confirmed from the guest side: byte-wise 181 writes with a
+  10 ms sleep after write 60, 100, 150 or 170 answered, after write 20 (160 left) did not; 1 MB
+  in 8 KiB pieces each after `(sleep 0.001)` answered, the same pieces without the sleep did not;
+  `(sleep 0)` and `(wait-for 0)` are no yield (no host wait, budget not reset). So the fix has to
+  make each piece fit an empty pipe (8 KiB plus record overhead < 16 KiB) under a fresh budget;
+  buffering alone (no wait) still failed past 16 KiB. With it (same day): drakma
+  `https://1.1.1.1/` 200 (was `No status line` after 15 s), drakma 40 KB string and 30 KB octet
+  POSTs, dexador 50 KB POST, a 1 MB write: all answer, as on the interpreter.
+- **Residual**: a peer slower than the 1 ms wait (the pipe not drained into TCP by then) can
+  still strand the last piece; not observed. The upstream fix is the consumer reporting a write
+  complete only after `poll_flush` is `Ready` (or a task driving the flush). **Trigger**: on every
+  wasmtime floor bump re-run the opt-in `componentTlsFetchesARealHostOverHttps` with the buffer
+  bypassed (write-through); when it passes, the wait and the buffer can go (keep the buffer only
+  if fewer records are wanted -- byte-wise writes cost one record each).
 - Errors nil; `connector.connect`'s err arm is an `own<error>` RESOURCE the handler releases
   (`%tls-err:error-drop`). `:insecure` non-nil SIGNALS at RUN time (the draft has no verification
   knob). Verification uses the HOST's anchors, so `javax.net.ssl.trustStore` has no effect.
@@ -547,7 +578,8 @@ the wasmtime container; `#componentTcpReadDeadlineListenProbeAndWithdrawnReads` 
 `#componentUsocketReceiveTimeoutAndWaitForInputAreReal` -- `UsocketWaitFixture`, shared with the
 other three socket backends -- the deadline, the probe, the withdrawn reads and the handshake bound), `#componentTlsUpgradeAttemptsARealHandshakeAndRejectsAnUntrustedServer` (a
 REAL handshake against an in-container `openssl s_server`), `#componentTlsFetchesARealHostOverHttps`
-(opt-in `RONTOLISP_HTTP_E2E=1`); `WasmSocketsRewriteTest`;
+(opt-in `RONTOLISP_HTTP_E2E=1`: a byte-wise request and a 20 KB one against 1.1.1.1, the TLS output
+buffer's pin -- no peer the host trusts can run in the container); `WasmSocketsRewriteTest`;
 `PackageResolverTest#usocketLibraryFormsAreAResolverFixedPoint`; `LoadInlinerTest`;
 `LispEvaluatorAsdfTest`; `NativeTcpTest` (the `--native` runner, "--native: the runner's sockets").
 The one test taking the shim to a real server is `ClPostgresE2eTest` (runs

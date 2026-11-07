@@ -92,7 +92,7 @@ class WasmSocketsRewriteTest {
 	}
 
 	@Test
-	void terpriLowersOntoTheWriteStringDispatchAndKeepsTheNilAnswer() {
+	void terpriAndForceOutputReachTheSocketDispatchAndKeepTheNilAnswer() {
 		// terpri has no dispatch defun of its own: it lowers onto write-string (which
 		// owns the socket arm), the same shared-lowering rule write-char follows. A
 		// terpri on a socket would otherwise reach the NATIVE terpri compiler and
@@ -109,6 +109,11 @@ class WasmSocketsRewriteTest {
 		// An explicit nil keeps flowing through the dispatch defun's non-socket arm,
 		// whose designator rule answers stdout -- same as write-string's.
 		assertThat(rewriteInDefun("(terpri nil)")).contains("RONTOLISP::%IO-WRITE-STRING");
+		// force-output / finish-output flush a component TLS socket's output buffer, so
+		// they have dispatch defuns (answering nil) and default to *standard-output*.
+		assertThat(rewriteInDefun("(force-output s)")).contains("(RONTOLISP::%IO-FORCE-OUTPUT S)");
+		assertThat(rewriteTopLevel("(finish-output)")).contains("RONTOLISP::%IO-FINISH-OUTPUT", "*STANDARD-OUTPUT*")
+			.doesNotContain("RONTOLISP:AWAIT");
 	}
 
 	@Test

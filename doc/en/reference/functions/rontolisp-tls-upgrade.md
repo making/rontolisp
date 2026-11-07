@@ -71,6 +71,13 @@ HTTPS requests prefer [`rontolisp:fetch`](rontolisp-fetch.md)):
   have no effect there — a non-`nil` `:insecure` value **signals** rather
   than silently verifying). The interface is an explicitly experimental
   draft, so a wasmtime update may need a matching rontolisp update.
+  Writes on the upgraded handle are **buffered**: they go out when the
+  program reads from the handle or asks [`listen`](listen.md), calls
+  [`force-output`](force-output.md) or [`finish-output`](finish-output.md),
+  closes it, or has written 8 KiB. A write followed by a wait on something
+  else reaches the peer at the next of those points, so call `force-output`
+  before such a wait. (wasmtime 49 holds back the end of an unbuffered
+  stream of small writes, and of a write past 16 KiB, until the next write.)
 - **WASM Preview 1**, a [native executable](../../compiling/native.md#tcp-sockets)
   included: not supported — the call **signals an error when it runs** (no TLS
   host API exists for Preview 1), so a program that never reaches it still

@@ -582,9 +582,10 @@ can make one carries it and, with it, the protocol. Pin:
   output = the interpreter's (example.com over http and https, a local server's text and
   binary bodies). Component (`-S inherit-network=y -S tcp=y -S tls=y`): an IP-literal URL
   answers text and binary bodies, and since 2026-11-06 a host name does too
-  (`http://example.com/`, `-S allow-ip-name-lookup=y`). https does not: drakma's default
-  `:verify nil` is refused there, and under `:verify :required` its byte-wise request writes lose
-  their tail (`.todo/i93`; `https://1.1.1.1/` measured the same, so not the name).
+  (`http://example.com/`, `-S allow-ip-name-lookup=y`). https answers under `:verify :required`
+  since 2026-11-07 (`https://1.1.1.1/`, 40 KB string and 30 KB octet POSTs to httpbin.org; its
+  byte-wise request lost its tail before the component's TLS output buffer,
+  [tcp-sockets.md](tcp-sockets.md), "WASM TLS"); drakma's default `:verify nil` is refused there.
   Preview 1: no sockets, and cl+ssl's `tls-upgrade` is a compile error (permanent).
 - Not the real library: 48,418 of its 52,557 lines are the GBK table (`enc-cn-tbl.lisp`), the
   rest mostly code-page tables and per-(encoding, eol) class macrology (measured 2026-10-31).

@@ -56,11 +56,16 @@ import am.ik.rontolisp.macro.LispMacroExpander;
 final class WasmSocketsRewrite {
 
 	// Sync-context substitutions: native name -> the sockets.lisp dispatch defun.
-	private static final Map<String, String> SYNC_DISPATCH = Map.of(LispNames.READ_LINE, "%IO-READ-LINE",
-			LispNames.READ_CHAR, "%IO-READ-CHAR", LispNames.READ_BYTE, "%IO-READ-BYTE", LispNames.WRITE_LINE,
-			"%IO-WRITE-LINE", LispNames.WRITE_BYTE, "%IO-WRITE-BYTE", LispNames.WRITE_STRING, "%IO-WRITE-STRING",
-			LispNames.FRESH_LINE, "%IO-FRESH-LINE", LispNames.CLOSE, "%IO-CLOSE", LispNames.LISTEN, "%IO-LISTEN",
-			LispNames.OPEN_STREAM_P, "%IO-OPEN-STREAM-P");
+	// force-output / finish-output flush a component TLS socket's output buffer
+	// (sockets.lisp, "the TLS output buffer").
+	private static final Map<String, String> SYNC_DISPATCH = Map.ofEntries(
+			Map.entry(LispNames.READ_LINE, "%IO-READ-LINE"), Map.entry(LispNames.READ_CHAR, "%IO-READ-CHAR"),
+			Map.entry(LispNames.READ_BYTE, "%IO-READ-BYTE"), Map.entry(LispNames.WRITE_LINE, "%IO-WRITE-LINE"),
+			Map.entry(LispNames.WRITE_BYTE, "%IO-WRITE-BYTE"), Map.entry(LispNames.WRITE_STRING, "%IO-WRITE-STRING"),
+			Map.entry(LispNames.FRESH_LINE, "%IO-FRESH-LINE"), Map.entry(LispNames.CLOSE, "%IO-CLOSE"),
+			Map.entry(LispNames.LISTEN, "%IO-LISTEN"), Map.entry(LispNames.OPEN_STREAM_P, "%IO-OPEN-STREAM-P"),
+			Map.entry(LispNames.FORCE_OUTPUT, "%IO-FORCE-OUTPUT"),
+			Map.entry(LispNames.FINISH_OUTPUT, "%IO-FINISH-OUTPUT"));
 
 	// Async-context read promotions: native name -> the future-returning async internal.
 	private static final Map<String, String> ASYNC_FUTURES = Map.of(LispNames.READ_LINE, "%READ-LINE-FUTURE",
@@ -80,6 +85,8 @@ final class WasmSocketsRewrite {
 			Map.entry(LispNames.WRITE_STRING, new int[] { 1, 2 }), Map.entry(LispNames.FRESH_LINE, new int[] { 0, 1 }),
 			Map.entry(LispNames.CLOSE, new int[] { 1, 1 }), Map.entry(LispNames.LISTEN, new int[] { 0, 1 }),
 			Map.entry(LispNames.OPEN_STREAM_P, new int[] { 1, 1 }),
+			Map.entry(LispNames.FORCE_OUTPUT, new int[] { 0, 1 }),
+			Map.entry(LispNames.FINISH_OUTPUT, new int[] { 0, 1 }),
 			Map.entry(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_CONNECT), new int[] { 2, 2 }),
 			Map.entry(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TCP_ACCEPT), new int[] { 1, 1 }));
 
@@ -354,7 +361,8 @@ final class WasmSocketsRewrite {
 			// defun's non-socket arm into %write-string-raw / %write-line-raw, whose
 			// compilers apply the same designator rule (StreamDesignators).
 			if (((LispNames.WRITE_STRING.equals(head) || LispNames.WRITE_LINE.equals(head)) && parts.size() == 2)
-					|| (LispNames.FRESH_LINE.equals(head) && parts.size() == 1)) {
+					|| ((LispNames.FRESH_LINE.equals(head) || LispNames.FORCE_OUTPUT.equals(head)
+							|| LispNames.FINISH_OUTPUT.equals(head)) && parts.size() == 1)) {
 				List<LispVal> withDefault = new java.util.ArrayList<>(parts);
 				withDefault.add(new LispSymbol(LispNames.STANDARD_OUTPUT_VAR));
 				parts = withDefault;

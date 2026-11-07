@@ -6992,6 +6992,12 @@ public final class LispNames {
 	/** See {@link #READ_LINE_RAW_INTERNAL}. */
 	public static final String LISTEN_RAW_INTERNAL = "%LISTEN-RAW";
 
+	/**
+	 * See {@link #READ_LINE_RAW_INTERNAL}: the native {@code force-output}, which
+	 * {@code finish-output}'s dispatch defun falls back to as well (the two coincide).
+	 */
+	public static final String FORCE_OUTPUT_RAW_INTERNAL = "%FORCE-OUTPUT-RAW";
+
 	/** See {@link #READ_LINE_RAW_INTERNAL}. */
 	public static final String OPEN_STREAM_P_RAW_INTERNAL = "%OPEN-STREAM-P-RAW";
 

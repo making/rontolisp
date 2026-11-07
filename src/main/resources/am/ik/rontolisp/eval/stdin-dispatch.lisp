@@ -54,6 +54,12 @@
 
 (defun rontolisp::%io-close (stream) (rontolisp::%close-raw stream))
 
+(defun rontolisp::%io-force-output (&optional stream)
+  (rontolisp::%force-output-raw stream))
+
+(defun rontolisp::%io-finish-output (&optional stream)
+  (rontolisp::%force-output-raw stream))
+
 ;;; open-stream-p and listen are redirected by the same rewrite, so they need
 ;;; definitions here too or the call compiles to a call-time error and TRAPS --
 ;;; which is what (open-stream-p *error-output*) used to do in a socket-free

@@ -32,6 +32,9 @@ interpreter and JVM verify (the JDK trust store; `javax.net.ssl.trustStore` make
 naming `--native`. Component run flags: `-S tcp=y -S inherit-network=y -S tls=y`
 (`-S tls=y` even for `http://`: the cl+ssl shim is always loaded and imports `wasi:tls`), plus
 `-S allow-ip-name-lookup=y` for a host name. No `--dir`.
+2026-11-07: an https POST past 16 KiB timed out on the component (`read-byte: Read timed out`, a
+50 KB body to httpbin.org) and answers since the TLS output buffer ([tcp-sockets.md](tcp-sockets.md),
+"WASM TLS").
 
 ## Coverage, and what is not run
 - `examples/net/dexador-client.lisp` against `examples/net/httpbin.lisp`: compile legs only

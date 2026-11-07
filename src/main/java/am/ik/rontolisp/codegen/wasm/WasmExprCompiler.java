@@ -641,6 +641,7 @@ final class WasmExprCompiler {
 						|| LispNames.WRITE_SEQUENCE_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.CLOSE_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.LISTEN_RAW_INTERNAL.equals(qn.member())
+						|| LispNames.FORCE_OUTPUT_RAW_INTERNAL.equals(qn.member())
 						|| LispNames.OPEN_STREAM_P_RAW_INTERNAL.equals(qn.member())) {
 					// The NATIVE stream built-ins under their internal alias names: the
 					// %io-* socket-dispatch defuns a socket provider splices
@@ -696,6 +697,7 @@ final class WasmExprCompiler {
 						}
 						case LispNames.READ_CHAR_RAW_INTERNAL -> WasmReadCharCompiler.compile(cons, ctx);
 						case LispNames.LISTEN_RAW_INTERNAL -> WasmListenCompiler.compile(cons, ctx);
+						case LispNames.FORCE_OUTPUT_RAW_INTERNAL -> compileForceOutput(cons, ctx);
 						case LispNames.READ_BYTE_RAW_INTERNAL -> WasmReadByteCompiler.compile(cons, ctx);
 						case LispNames.WRITE_LINE_RAW_INTERNAL -> WasmWriteLineCompiler.compile(cons, ctx);
 						case LispNames.WRITE_BYTE_RAW_INTERNAL -> WasmWriteByteCompiler.compile(cons, ctx);
@@ -1671,21 +1673,7 @@ final class WasmExprCompiler {
 			}
 			case LispNames.WRITE_OCTET_INTERNAL -> WasmWriteByteCompiler.compile(cons, ctx);
 			case LispNames.CLEAR_OUTPUT -> compileExpansion(LispMacroExpander.expandClearOutput(cons), ctx, tail);
-			case LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT -> {
-				// Every WASM write goes out synchronously (fd_write / the component's
-				// sock-stream-write park per call), so flushing is the identity: the
-				// designator is still evaluated, the value is nil.
-				java.util.List<LispVal> foParts = cons.toList();
-				if (foParts.size() > 2) {
-					throw new UnsupportedOperationException(
-							"force-output expects 0 or 1 arguments, got " + (foParts.size() - 1));
-				}
-				LispVal foExpansion = foParts.size() == 2
-						? new LispCons(new LispSymbol(LispNames.PROGN),
-								new LispCons(foParts.get(1), new LispCons(LispNil.INSTANCE, LispNil.INSTANCE)))
-						: LispNil.INSTANCE;
-				WasmExprCompiler.compileExpr(foExpansion, ctx);
-			}
+			case LispNames.FORCE_OUTPUT, LispNames.FINISH_OUTPUT -> compileForceOutput(cons, ctx);
 			case LispNames.OPEN_STREAM_P -> compileOpenStreamP(cons, ctx);
 			case LispNames.LISTEN -> WasmListenCompiler.compile(cons, ctx);
 			case LispNames.READ_SEQUENCE -> compileExpansion(guardPackedForWideStreams(
@@ -3027,6 +3015,26 @@ final class WasmExprCompiler {
 					? LispMacroExpander.markingClose(cons,
 							am.ik.rontolisp.compiler.StreamDesignators.STANDARD_ERROR_HANDLE, close)
 					: close.apply(cons), ctx);
+	}
+
+	/**
+	 * {@code force-output} / {@code finish-output} and their socket-dispatch fallback
+	 * {@code %force-output-raw}. Every WASM write goes out synchronously (fd_write per
+	 * call), so flushing is the identity: the designator is still evaluated, the value is
+	 * nil. The one buffered stream, a TLS socket on {@code --component}, is flushed by
+	 * its dispatch defun ({@code %io-force-output}) and never reaches this.
+	 */
+	private static void compileForceOutput(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		java.util.List<LispVal> foParts = cons.toList();
+		if (foParts.size() > 2) {
+			throw new UnsupportedOperationException(
+					"force-output expects 0 or 1 arguments, got " + (foParts.size() - 1));
+		}
+		LispVal foExpansion = foParts.size() == 2
+				? new LispCons(new LispSymbol(LispNames.PROGN),
+						new LispCons(foParts.get(1), new LispCons(LispNil.INSTANCE, LispNil.INSTANCE)))
+				: LispNil.INSTANCE;
+		WasmExprCompiler.compileExpr(foExpansion, ctx);
 	}
 
 	/**

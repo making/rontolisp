@@ -17415,23 +17415,34 @@ class WasmLispCompilerIntegrationTest {
 		// The trusted success path needs a certificate wasmtime's compiled-in webpki
 		// roots accept, i.e. a real public host -- opt-in like the other network
 		// E2Es. 1.1.1.1's certificate carries its IP as a SAN, so the IP-literal
-		// tcp-connect (hostname lookup is not implemented) verifies cleanly.
+		// tcp-connect verifies cleanly. The two requests are the shapes whose tail
+		// wasmtime's wasi:tls kept back before sockets.lisp buffered TLS writes
+		// (.kb/tcp-sockets.md, "WASM TLS"): a request written byte by byte (drakma's
+		// shape; the server timed out waiting for the rest) and one write past the
+		// host's 16 KiB pipe. Either way only a delivered end of headers gets an answer.
 		String program = """
+				(defun request (pad)
+				  (format nil "GET / HTTP/1.1~a~aHost: 1.1.1.1~a~aX-Pad: ~a~a~aConnection: close~a~a~a~a"
+				          #\\Return #\\Newline #\\Return #\\Newline (make-string pad :initial-element #\\a)
+				          #\\Return #\\Newline #\\Return #\\Newline #\\Return #\\Newline))
 				(let ((s (rontolisp:tcp-connect "1.1.1.1" 443)))
-				  (let ((tls (rontolisp:tls-upgrade s "1.1.1.1")))
-				    (write-line "GET / HTTP/1.1" tls)
-				    (write-line "Host: 1.1.1.1" tls)
-				    (write-line "Connection: close" tls)
-				    (write-line "" tls)
-				    (print (read-line tls))
+				  (let ((tls (rontolisp:tls-upgrade s "1.1.1.1")) (req (request 200)))
+				    (dotimes (i (length req))
+				      (write-byte (char-code (char req i)) tls))
+				    (force-output tls)
+				    (print (subseq (read-line tls) 0 8))
 				    (close tls)))
+				(let ((tls (rontolisp:tls-connect "1.1.1.1" 443)))
+				  (write-string (request 20000) tls)
+				  (print (subseq (read-line tls) 0 8))
+				  (close tls))
 				""";
 		byte[] componentBytes = compileFetchComponent(program);
 		wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("tls-real.component.wasm"));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
 				"tcp=y", "-S", "inherit-network=y", "-S", "tls=y", path("tls-real.component.wasm"));
 		assertThat(result.getExitCode()).as("stdout: %s stderr: %s", result.getStdout(), result.getStderr()).isZero();
-		assertThat(result.getStdout()).contains("HTTP/1.1");
+		assertThat(result.getStdout().trim()).isEqualTo("\"HTTP/1.1\"\n\"HTTP/1.1\"");
 	}
 
 	@Test

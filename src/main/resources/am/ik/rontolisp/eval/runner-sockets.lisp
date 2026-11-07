@@ -591,3 +591,15 @@
           (remhash (rontolisp::%sock-handle stream) rontolisp::*sock-table*)
           t)
         (rontolisp::%close-raw stream))))
+
+;;; force-output and finish-output: every runner write has reached the host when
+;;; it returns, so a socket has nothing to flush.
+(defun rontolisp::%io-force-output (&optional stream)
+  (if (rontolisp::%sock-entry stream)
+      nil
+      (rontolisp::%force-output-raw stream)))
+
+(defun rontolisp::%io-finish-output (&optional stream)
+  (if (rontolisp::%sock-entry stream)
+      nil
+      (rontolisp::%force-output-raw stream)))
