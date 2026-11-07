@@ -3357,7 +3357,7 @@ public final class Environment implements Scope {
 		String streamReadName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_READ);
 		env.defineFunction(streamReadName, new LispFunction(streamReadName, args -> {
 			LispStream stream = requireAsyncStream(LispNames.STREAM_READ, args, 1);
-			return LispFuture.of(stream.read());
+			return stream.readFuture();
 		}));
 		// stream-write appends a chunk; the returned future settles when accepted.
 		String streamWriteName = PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.STREAM_WRITE);

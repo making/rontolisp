@@ -25,6 +25,8 @@ final class Target_AsyncRuntime {
 	static LispFuture run(Function<LispFuture, LispVal> body) {
 		java.util.concurrent.CompletableFuture<LispVal> result = new java.util.concurrent.CompletableFuture<>();
 		LispFuture future = LispFuture.of(result);
+		// Run to its end before returning: the future is known settled.
+		future.markKnownSettled();
 		try {
 			result.complete(body.apply(future));
 		}

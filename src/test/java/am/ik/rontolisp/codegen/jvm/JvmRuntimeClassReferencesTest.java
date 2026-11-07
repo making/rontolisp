@@ -22,7 +22,8 @@ class JvmRuntimeClassReferencesTest {
 	@ValueSource(strings = { "(print (java:call (java:new \"java.lang.StringBuilder\" \"ab\") \"reverse\"))",
 			"(defun rev (s) (java:call s \"reverse\")) (print (rev (java:new \"java.lang.StringBuilder\" \"ab\")))",
 			"(let ((h (make-hash-table))) (setf (gethash 1 h) 2) (print (gethash 1 h)))",
-			"(print (java:call (java:reify \"java.lang.Runnable\" \"run\" (lambda () nil)) \"toString\"))" })
+			"(print (java:call (java:reify \"java.lang.Runnable\" \"run\" (lambda () nil)) \"toString\"))",
+			"(rontolisp:async-defun one () 1) (print (rontolisp:await (one)))" })
 	void runsWithTheShippedRuntimeClassesAlone(String source) {
 		JvmLispCompiler compiler = JvmLispCompiler.builder().className("Prog").build();
 		byte[] bytes = compiler.compile(CompileFrontendAccess.corpus(source, Features.JVM, false, false));

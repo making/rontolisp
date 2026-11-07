@@ -26,9 +26,10 @@ import org.jspecify.annotations.Nullable;
  * <p>
  * Representations in the compiled value model:
  * <ul>
- * <li>a <em>future</em> is a bare {@link java.util.concurrent.CompletableFuture} OR a
- * stream-read token {@code {RMARKER, queue, state}} -- a deferred take whose blocking
- * happens at await;</li>
+ * <li>a <em>future</em> is a {@link java.util.concurrent.CompletableFuture} -- a
+ * {@code runtime/RontoFuture} when the program or its fetch makes it -- OR a stream-read
+ * token {@code {RMARKER, queue, state}} -- a deferred take whose blocking happens at
+ * await;</li>
  * <li>a <em>stream</em> is {@code {SMARKER, LinkedBlockingQueue, AtomicInteger}}: chunks
  * ride the queue, the flag closes it, and end of stream is the {@code SMARKER} string
  * itself as a re-enqueued poison pill (an interned marker no reader-producible value can
@@ -41,9 +42,10 @@ import org.jspecify.annotations.Nullable;
  * implement;</li>
  * <li>an asynchronous body runs on a virtual thread: {@code _async_run} instantiates the
  * generated class (which {@code implements Runnable}), hands it the body funref, a fresh
- * future and the eager-start handoff latch, starts the thread and waits on the latch --
- * released by the body's first blocking await ({@code _handoffTl}) or its completion, the
- * cross-backend eager-start contract;</li>
+ * future (a {@code runtime/RontoFuture}, which knows whether the program knows it
+ * settled) and the eager-start handoff latch, starts the thread and waits on the latch --
+ * released by the body's first await of a future the program does not know settled
+ * ({@code _handoffTl}) or its completion, the cross-backend eager-start contract;</li>
  * <li>an error thrown by the body cannot ride the {@code _condTl} condition channel
  * across threads (it is a ThreadLocal), so {@code run()} completes the future NORMALLY
  * with {@code {EMARKER, throwable, condition}} and {@code _await} records the condition
@@ -168,6 +170,12 @@ final class JvmAsyncRuntimeBuilder {
 	/** The eager-start handoff ThreadLocal static field. */
 	static final String HANDOFF_FIELD = "_handoffTl";
 
+	/** The future the program makes, in internal form. */
+	static final String FUTURE_CLASS = "am/ik/rontolisp/runtime/RontoFuture";
+
+	/** The runtime class file a program with the async runtime carries beside it. */
+	static final List<String> RUNTIME_CLASS_FILES = List.of(FUTURE_CLASS + ".class");
+
 	private JvmAsyncRuntimeBuilder() {
 	}
 
@@ -235,12 +243,17 @@ final class JvmAsyncRuntimeBuilder {
 			JvmDynVarRuntimeBuilder.@Nullable DynVarRuntime dynVars) {
 		// --- shared class/method references ---
 		ClassEntry futureClass = cp.classEntry("java/util/concurrent/CompletableFuture");
-		MethodRefEntry futureCtor = cp.methodRef(futureClass, "<init>", "()V");
-		MethodRefEntry futureJoin = cp.methodRef(futureClass, "join", "()Ljava/lang/Object;");
 		MethodRefEntry futureIsDone = cp.methodRef(futureClass, "isDone", "()Z");
-		MethodRefEntry futureComplete = cp.methodRef(futureClass, "complete", "(Ljava/lang/Object;)Z");
-		MethodRefEntry futureCompleted = cp.methodRef(futureClass, "completedFuture",
+		// What the program makes is a RontoFuture, which knows whether the program knows
+		// it settled
+		ClassEntry ownFutureClass = cp.classEntry(FUTURE_CLASS);
+		MethodRefEntry ownFutureCtor = cp.methodRef(ownFutureClass, "<init>", "()V");
+		MethodRefEntry settledFuture = cp.methodRef(ownFutureClass, "settled",
 				"(Ljava/lang/Object;)Ljava/util/concurrent/CompletableFuture;");
+		MethodRefEntry futureSettle = cp.methodRef(ownFutureClass, "settle",
+				"(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V");
+		MethodRefEntry futureKnownSettled = cp.methodRef(ownFutureClass, "knownSettled", "(Ljava/lang/Object;)Z");
+		MethodRefEntry futureJoin = cp.methodRef(ownFutureClass, "join", "(Ljava/lang/Object;)Ljava/lang/Object;");
 
 		ClassEntry queueClass = cp.classEntry("java/util/concurrent/LinkedBlockingQueue");
 		MethodRefEntry queueCtor = cp.methodRef(queueClass, "<init>", "()V");
@@ -339,9 +352,9 @@ final class JvmAsyncRuntimeBuilder {
 		{
 			MethodCode a = new MethodCode();
 			// future (slot 1)
-			a.new_(futureClass);
+			a.new_(ownFutureClass);
 			a.dup();
-			a.invokespecial(futureCtor);
+			a.invokespecial(ownFutureCtor);
 			a.astore(1);
 			// latch (slot 2)
 			a.new_(latchClass);
@@ -482,8 +495,9 @@ final class JvmAsyncRuntimeBuilder {
 				a.labelBinding(single);
 				a.aload(1); // [future, v-or-payload]
 			}
-			a.invokevirtual(futureComplete);
-			a.pop();
+			a.aload(0);
+			a.getfield(latchField);
+			a.invokestatic(futureSettle);
 			MethodCode.Label tryEnd = a.newBoundLabel();
 			MethodCode.Label done = a.newLabel();
 			a.goto_(done);
@@ -566,8 +580,9 @@ final class JvmAsyncRuntimeBuilder {
 				a.aastore();
 			}
 			// [future, payload]
-			a.invokevirtual(futureComplete);
-			a.pop();
+			a.aload(0);
+			a.getfield(latchField);
+			a.invokestatic(futureSettle);
 			a.labelBinding(done);
 			// latch.countDown() on both paths
 			a.aload(0);
@@ -645,14 +660,16 @@ final class JvmAsyncRuntimeBuilder {
 			a.aload(0);
 			a.checkcast(futureClass);
 			a.astore(3); // f
+			// Not whether it is done: a timer that fired before this await still ends
+			// the eager part, or the caller's progress would hang on how fast it was.
 			a.aload(3);
-			a.invokevirtual(futureIsDone);
+			a.invokestatic(futureKnownSettled);
 			MethodCode.Label joinIt = a.newLabel();
 			a.ifne(joinIt);
 			a.invokestatic(releaseHandoff);
 			a.labelBinding(joinIt);
 			a.aload(3);
-			a.invokevirtual(futureJoin);
+			a.invokestatic(futureJoin);
 			a.astore(4); // r
 			// the {EMARKER, t, cond[, trace]} error envelope
 			MethodCode.Label plain = a.newLabel();
@@ -973,11 +990,11 @@ final class JvmAsyncRuntimeBuilder {
 			a.pop();
 			a.labelBinding(settle);
 			a.aload(3);
-			a.invokestatic(futureCompleted);
+			a.invokestatic(settledFuture);
 			a.areturn();
 			a.labelBinding(drained);
 			a.aconst_null();
-			a.invokestatic(futureCompleted);
+			a.invokestatic(settledFuture);
 			a.areturn();
 			a.labelBinding(bad);
 			emitNotAStream(a, cp, thisClass, objectClass, longValueOf, LispNames.STREAM_READ);
@@ -1020,7 +1037,7 @@ final class JvmAsyncRuntimeBuilder {
 			a.pop();
 			// accepted immediately: a settled future of nil
 			a.aconst_null();
-			a.invokestatic(futureCompleted);
+			a.invokestatic(settledFuture);
 			a.areturn();
 			a.labelBinding(bad);
 			emitNotAStream(a, cp, thisClass, objectClass, longValueOf, LispNames.STREAM_WRITE);
@@ -1239,9 +1256,9 @@ final class JvmAsyncRuntimeBuilder {
 			a.lconst_0();
 			a.lcmp();
 			a.iflt(bad); // []
-			a.new_(futureClass);
+			a.new_(ownFutureClass);
 			a.dup();
-			a.invokespecial(futureCtor); // [cf]
+			a.invokespecial(ownFutureCtor); // [cf]
 			a.aconst_null(); // [cf, nil]
 			a.lload(1); // [cf, nil, J]
 			a.getstatic(millisUnit); // [cf, nil, J, unit]

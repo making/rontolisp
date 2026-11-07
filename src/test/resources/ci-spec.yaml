@@ -5429,7 +5429,10 @@ cases:
   - name: an-async-bodys-eager-part-is-a-call
     # Before its first suspension an async body sees the handlers and restarts around
     # the call, and a handler's exit leaves the call; only a condition no handler took
-    # stays the future's (.kb/async-await.md, "The eager part is a call").
+    # stays the future's (.kb/async-await.md, "The eager part is a call"). An await of
+    # a future already settled when the program got it -- a body that finished, a pull
+    # read -- or of a non-future does not end that part, so the body's exit still
+    # leaves the call.
     source: |
       (define-condition ci-eager-c (error) ())
       (rontolisp:async-defun ci-eager-signals () (signal 'ci-eager-c) (print :declined) 1)
@@ -5473,7 +5476,13 @@ cases:
       (print (multiple-value-list (ci-eager-invoke)))
       (defun ci-eager-body-exit ()
         (block out
-          (funcall (rontolisp:async-lambda () (return-from out :left) :stayed))
+          (funcall (rontolisp:async-lambda ()
+                     (rontolisp:await 7)
+                     (rontolisp:await (funcall (rontolisp:async-lambda () 1)))
+                     (rontolisp:await (rontolisp:stream-read
+                                       (rontolisp::%stream-new (lambda () "c") (lambda () nil))))
+                     (return-from out :left)
+                     :stayed))
           :stayed))
       (print (ci-eager-body-exit))
     expected: |

@@ -21,10 +21,15 @@ public final class OwnHandlerStacksPrograms {
 			"(let ((j (java:new \"java.lang.Thread\" (lambda (m) (declare (ignore m)) (worker))))) (java:call j \"start\") j)",
 			"(java:call th \"join\")" };
 
-	/** An async body, past its first suspension. */
-	public static final String[] ASYNC_BODY = {
-			"(funcall (rontolisp:async-lambda () (rontolisp:await (rontolisp:wait-for 1)) (worker)))",
-			"(rontolisp:await th)" };
+	/**
+	 * An async body, past its first suspension: an await of a timer that has already
+	 * fired, which still ends the eager part. A loaded box let the timer fire before the
+	 * await, and the body ran on as its caller's call, waiting for that caller forever.
+	 */
+	public static final String[] ASYNC_BODY = { """
+			(let ((tick (rontolisp:wait-for 1)))
+			  (loop until (rontolisp::%future-settled-p tick) do (sleep 0.001))
+			  (funcall (rontolisp:async-lambda () (rontolisp:await tick) (worker))))""", "(rontolisp:await th)" };
 
 	/**
 	 * What {@link #SERVED} answers on {@code /second}, whichever request's stack is left.
@@ -64,7 +69,8 @@ public final class OwnHandlerStacksPrograms {
 	 * reach, and a handler's exit reaching a frame its awaiter is in. A holder signals on
 	 * the turn its caller hands out, not after a timer: on the interpreter and the JVM it
 	 * resumes in parallel with its caller, so a timer raced the caller's read and the
-	 * other holder's {@code push}.
+	 * other holder's {@code push}. Last, an await of a timer an await has already
+	 * resolved stays in the eager part, so the body's exit leaves the call.
 	 */
 	public static final String SUSPENDING = """
 			(define-condition own-c (error) ())
@@ -125,6 +131,11 @@ public final class OwnHandlerStacksPrograms {
 			      (rontolisp:await (own-late-signal))
 			      :stayed)))
 			(print (multiple-value-list (rontolisp:await (own-invoke))))
+			(print (let ((tick (rontolisp:wait-for 1)))
+			         (rontolisp:await tick)
+			         (block out
+			           (funcall (rontolisp:async-lambda () (rontolisp:await tick) (return-from out :left)))
+			           :stayed)))
 			""";
 
 	/** The printed lines of {@link #SUSPENDING}. */
@@ -140,7 +151,8 @@ public final class OwnHandlerStacksPrograms {
 			:HANDLED
 			:LEFT
 			:THROWN
-			(NIL T)""";
+			(NIL T)
+			:LEFT""";
 
 	private OwnHandlerStacksPrograms() {
 	}

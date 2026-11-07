@@ -2,7 +2,7 @@
 
 `(rontolisp:await value)`
 
-Given a future, suspends the current asynchronous function until the future settles and returns its settled values. Settled futures never suspend, nested futures flatten, and a value that is not a future passes through unchanged — like a JavaScript `await` on a non-promise — so `await` can be applied uniformly to a value that may or may not be a future.
+Given a future, suspends the current asynchronous function until the future settles and returns its settled values. A future known to have settled — one settled before the call that made it returned, or one an earlier `await` resolved — never suspends, nested futures flatten, and a value that is not a future passes through unchanged — like a JavaScript `await` on a non-promise — so `await` can be applied uniformly to a value that may or may not be a future.
 
 ```lisp
 (rontolisp:await 42)   ; => 42

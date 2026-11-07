@@ -67,8 +67,10 @@ class JvmHttpHandlerTravellingRuntimeTest {
 				(rontolisp:http-handler 'handle 8080)
 				""");
 
-		assertThat(compiled.runtimeClasses().keySet())
-			.containsExactlyInAnyOrderElementsOf(JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES);
+		// A handler is awaited, so the async runtime's future travels too.
+		Set<String> expected = new LinkedHashSet<>(JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES);
+		expected.addAll(JvmAsyncRuntimeBuilder.RUNTIME_CLASS_FILES);
+		assertThat(compiled.runtimeClasses().keySet()).containsExactlyInAnyOrderElementsOf(expected);
 		// The closure the emitted class actually has, walked from its constant pool: the
 		// list above is a hand-written mirror of it and this is what keeps the two equal.
 		assertThat(projectClosure(compiled)).containsExactlyInAnyOrderElementsOf(compiled.runtimeClasses().keySet());
@@ -97,6 +99,7 @@ class JvmHttpHandlerTravellingRuntimeTest {
 				""", null);
 
 		Set<String> expected = new LinkedHashSet<>(JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES);
+		expected.addAll(JvmAsyncRuntimeBuilder.RUNTIME_CLASS_FILES);
 		expected.addAll(JvmHttpHandlerRuntimeBuilder.WAR_RUNTIME_CLASS_FILES);
 		assertThat(compiled.runtimeClasses().keySet()).containsExactlyInAnyOrderElementsOf(expected);
 		for (String warClass : JvmHttpHandlerRuntimeBuilder.WAR_RUNTIME_CLASS_FILES) {

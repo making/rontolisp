@@ -8,10 +8,12 @@ import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import am.ik.rontolisp.testsupport.OwnHandlerStacksPrograms;
 import am.ik.rontolisp.testsupport.SocketTest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -138,6 +140,8 @@ class JvmThreadTest {
 	}
 
 	@Test
+	// A hang guard: a body that never ends its eager part blocks its caller for good.
+	@Timeout(value = 2, unit = TimeUnit.MINUTES, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 	void aThreadsHandlersAreItsOwn() throws Exception {
 		// The handler stack was one static: a thread leaving its handler-bind restored
 		// what it had saved over a handler the main thread pushed since.

@@ -154,6 +154,12 @@ public final class JvmLispCompiler implements LispCompiler {
 	private boolean needsFetchRuntime;
 
 	/**
+	 * Whether the last {@link #compile} emits the async runtime, i.e. whether the emitted
+	 * class needs {@code RontoFuture} beside it.
+	 */
+	private boolean needsAsyncRuntime;
+
+	/**
 	 * The decoder of a compressed HTTP reply ({@code rontolisp::%inflate-new},
 	 * {@code %inflate-update}, {@code %inflate-finish}), in internal form: the class
 	 * {@code JvmExprCompiler} calls them on, which travels with the output.
@@ -1022,12 +1028,13 @@ public final class JvmLispCompiler implements LispCompiler {
 	 * @return each file's path within an output tree (or jar), mapped to its bytes
 	 */
 	public Map<String, byte[]> runtimeClassFiles() {
-		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsInflateRuntime
-				&& !this.needsConditionVariableRuntime && !this.needsProcessRuntime && !this.needsConsCasRuntime
-				&& !this.needsSignalRuntime && !this.needsInterruptRuntime && !this.needsTerminalRuntime
-				&& !this.needsHashTableRuntime && !this.needsComplexRuntime && !this.needsQuantizedRuntime
-				&& !this.needsIoStreamRuntime && !this.needsCharFileRuntime && !this.needsStringInputRuntime
-				&& !this.needsJavaValueRuntime && this.partClassFiles.isEmpty() && this.bridgeClassFiles.isEmpty()) {
+		if (!this.needsHandleRuntime && !this.needsHttpRuntime && !this.needsFetchRuntime && !this.needsAsyncRuntime
+				&& !this.needsInflateRuntime && !this.needsConditionVariableRuntime && !this.needsProcessRuntime
+				&& !this.needsConsCasRuntime && !this.needsSignalRuntime && !this.needsInterruptRuntime
+				&& !this.needsTerminalRuntime && !this.needsHashTableRuntime && !this.needsComplexRuntime
+				&& !this.needsQuantizedRuntime && !this.needsIoStreamRuntime && !this.needsCharFileRuntime
+				&& !this.needsStringInputRuntime && !this.needsJavaValueRuntime && this.partClassFiles.isEmpty()
+				&& this.bridgeClassFiles.isEmpty()) {
 			return Map.of();
 		}
 		// A program too large for one class brings its $PartN classes, and a bridged
@@ -1064,6 +1071,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (this.needsFetchRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(JvmFetchRuntimeBuilder.RUNTIME_CLASS_FILES));
+		}
+		if (this.needsAsyncRuntime) {
+			files.putAll(JvmRuntimeClassFiles.read(JvmAsyncRuntimeBuilder.RUNTIME_CLASS_FILES));
 		}
 		if (this.needsInflateRuntime) {
 			files.putAll(JvmRuntimeClassFiles.read(INFLATE_RUNTIME_CLASS_FILES));
@@ -2769,6 +2779,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		// A fetching program calls the transport class, which travels the same way, and a
 		// decompressing one the decoder.
 		this.needsFetchRuntime = usesFetch;
+		// The async runtime makes its futures as RontoFutures.
+		this.needsAsyncRuntime = usesAsyncRuntime;
 		this.needsInflateRuntime = usesInflate;
 		this.needsConditionVariableRuntime = programUsesSymbol(program,
 				LispNames.CONDITION_VARIABLE_NEW_INTERNAL_QUALIFIED);

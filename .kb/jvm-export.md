@@ -76,7 +76,8 @@ lists (`JvmRuntimeClassFilesTest` names them all):
 | `JvmExportRuntimeBuilder.RUNTIME_CLASS_FILES` | a `:float-vector`/`:float-matrix` export | `RontoFloatArray` + `RontoBoundary` |
 | `JvmHttpHandlerRuntimeBuilder.RUNTIME_CLASS_FILES` | `rontolisp:http-handler` / `%http-server-start` | `RontoHttpServer`, `RontoHttpClack`, `RontoClackEnv`, `RontoHashTable` and its nested classes |
 | `JvmHttpHandlerRuntimeBuilder.WAR_RUNTIME_CLASS_FILES` | a `.war` or `<servlet>true</servlet>`, IN ADDITION to the served list | `RontoHttpServlet` + `RontoHttpServletInitializer` |
-| `JvmFetchRuntimeBuilder.RUNTIME_CLASS_FILES` | `rontolisp:fetch` | `RontoFetch` -- the whole transport -- and `RontoFetch$BodyPump`, the subscriber filling a reply's body stream as it arrives (`.kb/fetch-http.md`) |
+| `JvmFetchRuntimeBuilder.RUNTIME_CLASS_FILES` | `rontolisp:fetch` | `RontoFetch` -- the whole transport -- and `RontoFetch$BodyPump`, the subscriber filling a reply's body stream as it arrives (`.kb/fetch-http.md`), and the `RontoFuture` it answers |
+| `JvmAsyncRuntimeBuilder.RUNTIME_CLASS_FILES` | the async runtime (`usesAsyncRuntime`: an await, an async body, a timer, a stream verb, a served handler, ...) | `RontoFuture` -- the future that knows whether it is known settled (`.kb/async-await.md`, "Where the eager part ends") |
 | `JvmLispCompiler.INFLATE_RUNTIME_CLASS_FILES` | `rontolisp::%inflate-new` (the Clojure HTTP client) | `RontoInflate` and its `$Code`/`$Stop` -- the decoder of a compressed reply (`.kb/fetch-http.md`, "Decompression") |
 | `JvmLispCompiler.CONDITION_VARIABLE_RUNTIME_CLASS_FILES` | `rontolisp::%condition-variable-new` (the `bordeaux-threads` shim) | `RontoConditionVariable` -- the interpreter runs the same class (`.kb/mutexes.md`) |
 | `JvmLispCompiler.CONS_CAS_RUNTIME_CLASS_FILES` | `rontolisp::%cons-cas-car` / `-cdr` (the atomics arm) | `RontoConsCas` (`.kb/asdf.md`, `eval/AtomicsForms`) |

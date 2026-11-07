@@ -31,6 +31,13 @@ public final class LispFuture implements LispVal {
 	 */
 	private volatile LispVal extras = LispNil.INSTANCE;
 
+	/**
+	 * Whether the program knows the future settled ({@link #knownSettled()}): an await of
+	 * one it does not ends an asynchronous body's eager part even once it has settled
+	 * ({@code .kb/async-await.md}, "Cross-backend contract").
+	 */
+	private volatile boolean knownSettled;
+
 	private LispFuture(CompletableFuture<LispVal> future) {
 		this.future = future;
 	}
@@ -50,7 +57,19 @@ public final class LispFuture implements LispVal {
 	 * @return the future value
 	 */
 	public static LispFuture settled(LispVal value) {
-		return new LispFuture(CompletableFuture.completedFuture(value));
+		return ofSettled(CompletableFuture.completedFuture(value));
+	}
+
+	/**
+	 * Wraps a computation that has already completed, in program order: the operation
+	 * making it ran it to the end before returning.
+	 * @param future the completed computation
+	 * @return the future value, which an await never suspends on
+	 */
+	public static LispFuture ofSettled(CompletableFuture<LispVal> future) {
+		LispFuture settled = new LispFuture(future);
+		settled.knownSettled = true;
+		return settled;
 	}
 
 	/**
@@ -60,7 +79,7 @@ public final class LispFuture implements LispVal {
 	 * @return the future value
 	 */
 	public static LispFuture failed(RuntimeException error) {
-		return new LispFuture(CompletableFuture.failedFuture(error));
+		return ofSettled(CompletableFuture.failedFuture(error));
 	}
 
 	/**
@@ -69,6 +88,27 @@ public final class LispFuture implements LispVal {
 	 */
 	public CompletableFuture<LispVal> future() {
 		return this.future;
+	}
+
+	/**
+	 * Records that the program knows the future settled: the asynchronous body settling
+	 * it finished before its first suspension (its thread calls this before completing
+	 * the computation), or an await has resolved it.
+	 */
+	public void markKnownSettled() {
+		this.knownSettled = true;
+	}
+
+	/**
+	 * Whether the program knows the future settled: it was settled before the call that
+	 * made it returned (an already-settled value, a read that ran to its end, an
+	 * asynchronous body that finished without suspending), or an await has resolved it
+	 * since. A timer, a fetch, a buffered stream read or a body that suspended is not
+	 * known settled until an await resolves it, however soon it settles.
+	 * @return whether an await of this future may go on without suspending
+	 */
+	public boolean knownSettled() {
+		return this.knownSettled;
 	}
 
 	/**

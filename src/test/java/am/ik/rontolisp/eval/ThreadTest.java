@@ -3,6 +3,7 @@ package am.ik.rontolisp.eval;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispVal;
@@ -10,6 +11,7 @@ import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.OwnHandlerStacksPrograms;
 import am.ik.rontolisp.testsupport.SocketTest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -116,6 +118,8 @@ class ThreadTest {
 	}
 
 	@Test
+	// A hang guard: a body that never ends its eager part blocks its caller for good.
+	@Timeout(value = 2, unit = TimeUnit.MINUTES, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 	void aThreadsHandlersAreItsOwn() {
 		// The handler stack was one global: a thread leaving its handler-bind restored
 		// what it had saved over a handler the main thread pushed since, and the main

@@ -19581,10 +19581,11 @@ public final class LispEvaluator {
 	}
 
 	// Resolves a value like JavaScript await: a future joins its computation (releasing
-	// the eager-start handoff first when it would block, so this is the async body's
-	// suspension point), re-signaling a stored error -- a Lisp-originated condition
-	// (LispEvalException) crosses intact so handler-case around the await catches it by
-	// type -- and flattening nested futures; a non-future passes through unchanged.
+	// the eager-start handoff first unless the program knows the future settled, so this
+	// is the async body's suspension point), re-signaling a stored error -- a
+	// Lisp-originated condition (LispEvalException) crosses intact so handler-case around
+	// the await catches it by type -- and flattening nested futures; a non-future passes
+	// through unchanged.
 	private LispVal awaitValue(LispVal v) {
 		while (v instanceof LispFuture future) {
 			v = joinFuture(future);
@@ -19595,7 +19596,9 @@ public final class LispEvaluator {
 	// One step of the resolve: joins one future's computation, unflattened.
 	private static LispVal joinFuture(LispFuture future) {
 		java.util.concurrent.CompletableFuture<LispVal> cf = future.future();
-		if (!cf.isDone()) {
+		// Not whether it is done: a timer that fired before this await still ends the
+		// eager part, or the caller's progress would hang on how fast the timer was.
+		if (!future.knownSettled()) {
 			AsyncRuntime.releaseHandoffIfPending();
 		}
 		try {
@@ -19616,6 +19619,10 @@ public final class LispEvaluator {
 			// a host failure with no message (the JDK client's ConnectException)
 			// reports its class, as the JVM backend's rethrown throwable does
 			throw new LispEvalException(java.util.Objects.requireNonNullElse(cause.getMessage(), cause.toString()));
+		}
+		finally {
+			// Resolved here, so an await of it again goes on, as it does on a component.
+			future.markKnownSettled();
 		}
 	}
 
@@ -19909,7 +19916,7 @@ public final class LispEvaluator {
 				// what makes the relay byte-exact; a string chunk (a guest make-stream)
 				// is UTF-8 encoded.
 				java.io.ByteArrayOutputStream drained = new java.io.ByteArrayOutputStream();
-				LispVal chunk = awaitValue(LispFuture.of(stream.read()));
+				LispVal chunk = awaitValue(stream.readFuture());
 				while (!(chunk instanceof LispNil)) {
 					switch (chunk) {
 						case LispIntVector octets -> drained.writeBytes(octetsBytes(octets));
@@ -19918,7 +19925,7 @@ public final class LispEvaluator {
 						default -> throw new LispEvalException(
 								LispNames.HTTP_HANDLER + ": a stream response body must hold strings or octets");
 					}
-					chunk = awaitValue(LispFuture.of(stream.read()));
+					chunk = awaitValue(stream.readFuture());
 				}
 				return drained.toByteArray();
 			}

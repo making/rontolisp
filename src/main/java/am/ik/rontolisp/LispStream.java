@@ -96,6 +96,18 @@ public final class LispStream implements LispVal {
 	}
 
 	/**
+	 * Takes the next chunk as a future value. A pull read is known settled, its thunk
+	 * having run here; a buffered read settles when its chunk is written, so an await of
+	 * it ends an asynchronous body's eager part even when the chunk is already there.
+	 * @return a future settling to the next chunk, or to {@code nil} once the stream is
+	 * closed and drained
+	 */
+	public LispFuture readFuture() {
+		CompletableFuture<LispVal> next = read();
+		return (this.readFn != null) ? LispFuture.ofSettled(next) : LispFuture.of(next);
+	}
+
+	/**
 	 * Takes the next chunk.
 	 * @return a future settling to the next chunk, or to {@code nil} once the stream is
 	 * closed and drained

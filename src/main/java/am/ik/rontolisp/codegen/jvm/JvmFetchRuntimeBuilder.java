@@ -49,11 +49,12 @@ final class JvmFetchRuntimeBuilder {
 			+ "Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;";
 
 	/**
-	 * The runtime class files a program that fetches carries beside it: the transport and
-	 * the subscriber pumping a reply's body into its stream as it arrives.
+	 * The runtime class files a program that fetches carries beside it: the transport,
+	 * the subscriber pumping a reply's body into its stream as it arrives, and the future
+	 * the transport answers.
 	 */
 	static final List<String> RUNTIME_CLASS_FILES = List.of(TRANSPORT_CLASS + ".class",
-			TRANSPORT_CLASS + "$BodyPump.class");
+			TRANSPORT_CLASS + "$BodyPump.class", JvmAsyncRuntimeBuilder.FUTURE_CLASS + ".class");
 
 	private JvmFetchRuntimeBuilder() {
 	}

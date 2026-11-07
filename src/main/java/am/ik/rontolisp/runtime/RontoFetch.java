@@ -93,15 +93,16 @@ public final class RontoFetch {
 			request = builder.build();
 		}
 		catch (RuntimeException ex) {
-			return CompletableFuture
-				.failedFuture(new IllegalStateException("HTTP request failed: " + ex.getMessage(), ex));
+			return RontoFuture.of(CompletableFuture
+				.failedFuture(new IllegalStateException("HTTP request failed: " + ex.getMessage(), ex)));
 		}
 		// The per-request client is not closed: close() would wait for the request, and
 		// the interpreter leaves its client to the collector the same way. The future
 		// settles at the head; the body fills in as the reply arrives (bodyStream).
-		return HttpClient.newHttpClient()
+		// A RontoFuture, so an await that resolved it lets the next one go on
+		return RontoFuture.of(HttpClient.newHttpClient()
 			.sendAsync(request, HttpResponse.BodyHandlers.ofPublisher())
-			.thenApply(RontoFetch::plist);
+			.thenApply(RontoFetch::plist));
 	}
 
 	/**

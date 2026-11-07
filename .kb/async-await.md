@@ -12,9 +12,10 @@
   nil; NOT `sleep`). `promisep` and `LispPromise` are DELETED.
 
 ## Cross-backend contract
-- **Eager start**: the body runs immediately until its first await of an UNSETTLED future, so output
-  before the first suspension is identically ordered everywhere. Await of a settled future or a
-  non-future never suspends; nested futures flatten; an errored future re-signals AT AWAIT.
+- **Eager start**: the body runs immediately until its first await of a future the program does not
+  KNOW settled, so output before the first suspension is identically ordered everywhere ("Where the
+  eager part ends", below). Await of a known-settled future or a non-future never suspends; nested
+  futures flatten; an errored future re-signals AT AWAIT.
 - **Values**: `await` answers every value the body answered ("Multiple values", below).
 - **await placement is lexical**: legal in async bodies and at top level, illegal in any plain
   defun/lambda even nested inside an async body (the JavaScript rule).
@@ -29,7 +30,8 @@
 - **Interpreter** `eval/AsyncRuntime.run` = virtual thread + eager-start handoff latch
   (`releaseHandoffIfPending`), the ONLY LispEvaluator-reachable thread site; the playground
   substitutes it (`src/web/java/.../Target_AsyncRuntime.java`). `LispFuture`; `LispStream` push or PULL.
-- **JVM** `JvmAsyncRuntimeBuilder`: future = bare `CompletableFuture`; stream =
+- **JVM** `JvmAsyncRuntimeBuilder`: future = `runtime/RontoFuture`, a `CompletableFuture` that
+  knows whether it is known settled ("Where the eager part ends"); stream =
   `{SMARKER, LinkedBlockingQueue, AtomicInteger}`, SMARKER re-enqueued as EOF poison pill;
   `stream-read` returns an `{RMARKER, queue, state}` token taken at `_await`. The class
   `implements Runnable`; `_async_run` spawns
@@ -59,6 +61,45 @@
   the printer's cons arm (`--component`'s rejected future has the same shape). Every other example,
   size-report and bench program is byte-identical at default, `--component` and `--optimize=size`.
   **`--no-gc`** rejects the whole async surface by name, `%stream-new` included.
+
+## Where the eager part ends
+**Invariant (2026-11-07): where an async body's eager part ends depends on no thread's timing.** It ends
+at the first await of a future the program does not know settled. Known settled: settled before the
+call that made it returned (a body that finished without suspending, `stream-write`'s answer, a pull
+stream's read, `LispFuture.settled`), or resolved by an await since. Anything else -- a timer, a fetch, a
+push stream's read, a body that suspended -- ends it even when it has settled by then.
+- Interpreter: `LispFuture.knownSettled`, set by `AsyncRuntime.run` for a body completing with its
+  handoff pending, by `ofSettled`, and by `joinFuture` after every join. `LispStream.readFuture` makes a
+  pull read known, a buffered one not.
+- JVM: `runtime/RontoFuture` (travels with every async program, [jvm-export.md](jvm-export.md)).
+  `_async_run`, `_wait_for` and the fetch transport make one; the settled answers are
+  `RontoFuture.settled`; `run()` completes through `settle`, which marks a body whose latch is still
+  up; `_await` asks `knownSettled` and joins through `RontoFuture.join`, which marks. A Java
+  `CompletableFuture` is never known. The push read token always ended the part; the interpreter's
+  buffered read used to go on when a chunk was queued, and now ends it too.
+- Component and Preview 1: unchanged. Nothing settles behind a component's program: a host future
+  settles only while something blocks on the scheduler, so settled is known there, but for a future
+  the scheduler settled while the program awaited ANOTHER (a 1 ms timer under an await of a 10 ms
+  one). The component goes on where the threaded backends hand off, which is one of the orders they
+  allow, since a handed-off body runs in parallel.
+- An await on another thread marks the future when it returns, so a parallel program's handoff can
+  follow its own race; a one-thread program's cannot.
+
+Until 2026-11-07 the part ended at the first await of a future not yet DONE. A timer settles on the
+JDK's delayer thread, so on a loaded box `(await (wait-for 1))` found it done, the body ran on as its
+caller's call, and one that then waited for the caller hung both: `ThreadTest#aThreadsHandlersAreItsOwn`
+held a full `./mvnw test` for over 4 hours at load 17. Rejected: ending at EVERY await (ECMAScript). On
+the threaded backends what follows a settled await would then race the caller, where all four run it
+in order now (`then` over a finished body, `read-all` over a pull stream). Rejected too: only what
+arrived settled (no mark at the join). A body re-awaiting a timer its caller had awaited then raced
+the caller on the threaded backends and ran in order on the component.
+
+Pinned by `aThreadsHandlersAreItsOwn` in `ThreadTest`/`JvmThreadTest` (`ASYNC_BODY`: a timer that has
+fired but no await resolved still ends the part; it polls `%future-settled-p` until the timer fires, so
+nothing depends on how fast; it hung both before), the last line of `OwnHandlerStacksPrograms.SUSPENDING`
+(a timer an await resolved does not end it, so the body's exit leaves the call; three suspending
+backends), and ci-spec `an-async-bodys-eager-part-is-a-call`'s `ci-eager-body-exit` (a non-future, a
+finished body, a pull read; all four).
 
 ## The eager part is a call
 **Invariant (2026-11-05): before its first suspension an async body sees what a call sees, on all four backends.**

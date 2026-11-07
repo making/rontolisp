@@ -39,8 +39,8 @@ resolves it, and a handful of combinators build on top.
 
 `rontolisp:async-defun` defines a function whose *call* starts the body
 immediately and hands back a future rather than a value. The body runs until
-its first `await` of an unsettled future (or until it finishes) — "eager
-start" — then the caller resumes:
+its first `await` of a future not yet known to have settled (or until it
+finishes) — "eager start" — then the caller resumes:
 
 ```lisp
 (rontolisp:async-defun add-later (a b)
@@ -65,14 +65,23 @@ equivalent JavaScript-flavored spelling of the two.
 ## Awaiting
 
 `rontolisp:await` suspends the current asynchronous function until a future
-settles and returns its settled value. It is *generic*: a settled future never
-suspends, nested futures flatten, and a value that is not a future passes
+settles and returns its settled value. It is *generic*: a future known to have settled
+never suspends, nested futures flatten, and a value that is not a future passes
 through unchanged — so `await` can be applied uniformly to a value that may or
 may not be a future.
 
 ```lisp
 (rontolisp:await 42)   ; => 42
 ```
+
+A future is *known* to have settled when it settled before the call that made it
+returned (a body that finished without suspending, the answer of
+`stream-write`) or when an earlier `await` resolved it. Any other future — a
+timer, a fetch, a stream read, a body that suspended — ends the eager part at its
+first `await` even if it has settled by then, so where the caller resumes never
+depends on timing. On `--component` the event loop may already have settled such
+a future while the program awaited another one; the body then goes on, which is
+one of the orders the threaded backends allow.
 
 A future answers every value its body answered, the way a function call does,
 so a multiple-value consumer reads them straight through the `await`:

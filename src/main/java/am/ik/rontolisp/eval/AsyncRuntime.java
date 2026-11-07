@@ -20,11 +20,13 @@ import am.ik.rontolisp.LispVal;
  * <p>
  * {@link #run(Function)} implements the cross-backend <em>eager-start</em> contract of
  * {@code rontolisp:async-defun}: the body starts on a virtual thread, but the caller does
- * not resume until the body reaches its first real suspension point (an await of an
- * unsettled future -- which calls {@link #releaseHandoffIfPending()} before blocking) or
- * completes, whichever is first. Output and side effects up to the first suspension are
- * therefore ordered identically on every backend; after it, the body progresses in
- * parallel with the caller (the interpreter's documented concurrency model).
+ * not resume until the body reaches its first suspension point (an await of a future the
+ * program does not know settled, {@link LispFuture#knownSettled()}, which calls
+ * {@link #releaseHandoffIfPending()} first) or completes, whichever is first. Output and
+ * side effects up to the first suspension are therefore ordered identically on every
+ * backend, and where it falls depends on no thread's timing; after it, the body
+ * progresses in parallel with the caller (the interpreter's documented concurrency
+ * model).
  */
 final class AsyncRuntime {
 
@@ -54,13 +56,16 @@ final class AsyncRuntime {
 		Thread.ofVirtual().start(() -> {
 			HANDOFF.set(handoff);
 			try {
-				result.complete(body.apply(future));
+				LispVal value = body.apply(future);
+				arrive(future, handoff);
+				result.complete(value);
 			}
 			catch (Throwable ex) {
 				if (handoff.getCount() > 0 && ex instanceof RuntimeException transfer
 						&& LispEvaluator.isControlTransfer(transfer)) {
 					exit[0] = transfer;
 				}
+				arrive(future, handoff);
 				result.completeExceptionally(ex);
 			}
 			finally {
@@ -79,6 +84,15 @@ final class AsyncRuntime {
 			throw exit[0];
 		}
 		return future;
+	}
+
+	// A body that settles its future before its first suspension hands its caller a
+	// future known settled. Only this thread counts the latch down, so the test cannot
+	// race.
+	private static void arrive(LispFuture future, CountDownLatch handoff) {
+		if (handoff.getCount() > 0) {
+			future.markKnownSettled();
+		}
 	}
 
 	/**
@@ -150,8 +164,9 @@ final class AsyncRuntime {
 	/**
 	 * Releases the caller of the asynchronous body running on this thread, if it is still
 	 * waiting for the eager-start handoff. Called by {@code rontolisp:await} before
-	 * blocking on an unsettled future (the body's first real suspension point) and
-	 * idempotent afterwards. A no-op on threads that are not an asynchronous body.
+	 * joining a future the program does not know settled (the body's first suspension
+	 * point), whether or not it has settled meanwhile, and idempotent afterwards. A no-op
+	 * on threads that are not an asynchronous body.
 	 */
 	static void releaseHandoffIfPending() {
 		CountDownLatch handoff = HANDOFF.get();

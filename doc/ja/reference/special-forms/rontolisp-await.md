@@ -2,7 +2,7 @@
 
 `(rontolisp:await value)`
 
-future を与えると、future が確定するまで現在の非同期関数をサスペンドし、確定した値を返します。確定済みの future はサスペンドせず、ネストした future はフラット化され、future でない値はそのまま通過します — JavaScript でプロミス以外を `await` した場合と同じで、「future かもしれない値」に一律に `await` を適用できます。
+future を与えると、future が確定するまで現在の非同期関数をサスペンドし、確定した値を返します。確定したと分かっている future — それを作った呼び出しが返る前に確定していたもの、または前の `await` が解決したもの — はサスペンドせず、ネストした future はフラット化され、future でない値はそのまま通過します — JavaScript でプロミス以外を `await` した場合と同じで、「future かもしれない値」に一律に `await` を適用できます。
 
 ```lisp
 (rontolisp:await 42)   ; => 42
