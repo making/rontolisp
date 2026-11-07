@@ -506,7 +506,7 @@
           ((char= d #\[)
            (%fmt-cond-directive ctrl end all out np idx params colon at))
           ((char= d #\{) (%fmt-iterate ctrl end all out np idx params colon at))
-          ((char= d #\<) (%fmt-block ctrl end all out np idx at))
+          ((char= d #\<) (%fmt-block ctrl end all out np idx colon at))
           ((char= d #\/) (%fmt-user-function ctrl end all out np idx colon at))
           (t (%fmt-control ctrl end all out np idx params colon at d raw)))))
 
@@ -560,19 +560,19 @@
 ;;;   - logical block: with 2+ sections the first is the prefix (a ~@; separator
 ;;;     makes it a per-line prefix, which without line breaks is the same text)
 ;;;     and, with 3, the last is the suffix. Both are literal text and consume no
-;;;     argument.
+;;;     argument; a ~:< block's default prefix and suffix are "(" and ")".
 ;;; A logical block without @ takes ONE argument -- a LIST -- and renders its
 ;;; body against that list as the whole argument list; with @ the body continues
 ;;; on the enclosing arguments. esrap's context report is the plain form:
 ;;; (format s "~2@T~<~@;~A~:>" (list line)) prints the line, not the list.
-(defun %fmt-block (ctrl end all out pos i at)
+(defun %fmt-block (ctrl end all out pos i colon at)
   (let* ((cl (%fmt-clauses-until ctrl pos end #\>))
          (segs (nth 0 cl))
          (close (nth 1 cl))
          (after (%fmt-after ctrl close end))
          (blockp (nth 2 (%fmt-shape ctrl (+ close 1) end))))
     (if blockp
-        (%fmt-logical-block ctrl all out segs i after at)
+        (%fmt-logical-block ctrl all out segs i after colon at)
         (%fmt-justify ctrl all out segs i after))))
 
 ;;; Justification: the segments share one argument cursor, left to right.
@@ -585,7 +585,7 @@
         (setq rest (cdr rest))))
     (list acc after cur nil)))
 
-(defun %fmt-logical-block (ctrl all out segs i after at)
+(defun %fmt-logical-block (ctrl all out segs i after colon at)
   (let* ((n (length segs))
          (body (if (> n 1) (nth 1 segs) (nth 0 segs)))
          (pre (if (> n 1) (nth 0 segs) nil))
@@ -594,17 +594,17 @@
          (items (if at all (%fmt-args (%fmt-arg all i #\<))))
          (start (if at i 0))
          (r (%fmt-run ctrl (nth 0 body) (nth 1 body) items start))
-         (acc out))
-    (if pre
-        (setq acc
-              (%fmt-cat acc
-               (nth 0 (%fmt-run ctrl (nth 0 pre) (nth 1 pre) items start)))))
-    (setq acc (%fmt-cat acc (nth 0 r)))
-    (if suf
-        (setq acc
-              (%fmt-cat acc
-               (nth 0 (%fmt-run ctrl (nth 0 suf) (nth 1 suf) items start)))))
-    (list acc after (if at (nth 1 r) (+ i 1)) nil)))
+         ;; A ~:< block's prefix and suffix default to "(" and ")".
+         (prefix
+          (if pre
+              (nth 0 (%fmt-run ctrl (nth 0 pre) (nth 1 pre) items start))
+              (if colon "(" "")))
+         (suffix
+          (if suf
+              (nth 0 (%fmt-run ctrl (nth 0 suf) (nth 1 suf) items start))
+              (if colon ")" ""))))
+    (list (%fmt-cat (%fmt-cat (%fmt-cat out prefix) (nth 0 r)) suffix) after
+          (if at (nth 1 r) (+ i 1)) nil)))
 
 ;;; The ~/name/ arm -- %fmt-user-function -- is NOT here: it is the one part of
 ;;; the renderer that resolves a function out of a name built at run time, so it

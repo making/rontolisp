@@ -282,10 +282,12 @@ cursor cannot serve it -- `~*`, `~:*`, `~n@*` and `~?`/`~{` recursion make the a
 - **`~<...~>` is JUSTIFICATION, `~<...~:>` a LOGICAL BLOCK, and the closing directive decides.**
   A justification's `~;` segments consume arguments in turn; a logical block's first section is
   the prefix (a `~@;` separator makes it per-line) and, with three sections, the last is the
-  suffix, neither consuming an argument; a block WITHOUT `@` takes one LIST argument as its
-  whole argument list. The LAYOUT does not happen -- no `:mincol` padding, no right-margin
-  wrapping, only the mandatory `~:@_` (gated on `*print-pretty*`) breaks a line, `~i` inert --
-  all for want of the stream's column. [pretty-printer.md](pretty-printer.md).
+  suffix, neither consuming an argument, and a `~:<` block's prefix and suffix default to `(` and
+  `)` (CLHS 22.3.5.2; petalisp prints a shape `(~ 3)` through one, which came out `~ 3` until
+  2026-11-07; ci-spec `esrap-enablement-language-group`); a block WITHOUT `@` takes one LIST
+  argument as its whole argument list. The LAYOUT does not happen -- no `:mincol` padding, no
+  right-margin wrapping, only the mandatory `~:@_` (gated on `*print-pretty*`) breaks a line, `~i`
+  inert -- all for want of the stream's column. [pretty-printer.md](pretty-printer.md).
 - **`~/name/` resolves as if by `find-symbol`, INTERNAL spelling first** (`:` and `::` equivalent,
   CLHS 22.3.5.4): `find-symbol`'s answer, then `PKG::NAME`, then `PKG:NAME`, first `fboundp`
   wins. It opens and closes its string stream by hand, never `with-output-to-string`, because the

@@ -170,10 +170,11 @@ differences follow from the control being data rather than source:
 decides which. Their SECTION rules are the standard ones: a justification's `~;`
 segments consume arguments in turn, while a logical block's first section is the
 prefix and, when there are three, the last is the suffix (neither consumes an
-argument), and a block without `@` takes one argument -- a list -- as its whole
-argument list. What does not happen is the LAYOUT: no padding to a minimum
-column, no wrapping at the right margin, and of the conditional newlines only the
-mandatory `~:@_` breaks a line (`~_` / `~:_` / `~@_` and `~i` do nothing).
+argument), a `~:<` block's prefix and suffix default to `(` and `)`, and a block
+without `@` takes one argument -- a list -- as its whole argument list. What does
+not happen is the LAYOUT: no padding to a minimum column, no wrapping at the right
+margin, and of the conditional newlines only the mandatory `~:@_` breaks a line
+(`~_` / `~:_` / `~@_` and `~i` do nothing).
 Deciding the others needs the stream's current column, which no rontolisp stream
 carries -- the same reason `pprint-newline` only honors `:mandatory`.
 
@@ -198,7 +199,8 @@ keep the directive available unconditionally. The interpreter always supports it
   (princ (if colonp "[" "<") stream) (princ x stream) (princ (if atp "]" ">") stream))
 (list (format nil "~@<a and ~a~:>" 1)
       (format nil "~<~@;~a-~a~:>" (list "x" "y"))
-      (format nil "~/brackets/ ~:@/brackets/" 1 2)) ; => ("a and 1" "x-y" "<1> [2]")
+      (format nil "~:<~@{~a~^ ~}~:>" (list 1 2))
+      (format nil "~/brackets/ ~:@/brackets/" 1 2)) ; => ("a and 1" "x-y" "(1 2)" "<1> [2]")
 ```
 
 `~r` without a radix parameter handles integers up to magnitude 10^66 - 1 in English (`negative` precedes a negative one), 1..3999 as Roman numerals and 1..4999 as old Roman numerals; beyond that it signals a `simple-error` such as `Number too large to print in Roman numerals: 4,000`. A non-integer argument prints as if by `~a`.
