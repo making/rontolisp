@@ -2912,17 +2912,12 @@ public final class UserMacroExpander {
 					}
 					return walked;
 				}
-				case LispNames.INCF, LispNames.DECF: {
-					// incf/decf on a user setf-expander place: expand to setf here so the
-					// place rewrite above applies; an ordinary place is left for the
-					// compiler's own expansion.
-					if (parts.size() >= 2 && parts.get(1) instanceof LispCons place
-							&& place.car() instanceof LispSymbol acc && macroEval.hasSetfExpander(acc.name())) {
-						LispVal setfForm = LispNames.INCF.equals(sym.name()) ? LispMacroExpander.expandIncf(cons)
-								: LispMacroExpander.expandDecf(cons);
-						return expandAll(setfForm, macroEval);
-					}
-					return rebuild(cons, parts, 1, macroEval);
+				case LispNames.INCF, LispNames.DECF, LispNames.PUSH, LispNames.PUSHNEW, LispNames.POP: {
+					// Over a user setf place, the expansion through the place's setf
+					// expansion, which reads it by the access form (the compilers have no
+					// expander to ask); an ordinary place is left for the compiler's own.
+					LispVal userPlace = macroEval.expandModifyUserPlace(cons);
+					return userPlace != null ? expandAll(userPlace, macroEval) : rebuild(cons, parts, 1, macroEval);
 				}
 				default:
 					// Every other operator: the head stays, all arguments are walked.

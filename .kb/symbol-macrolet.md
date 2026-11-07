@@ -103,9 +103,14 @@ iterators, on all four). Now `expandAll`'s `SYMBOL_MACROLET` case leaves such bi
 backends. The interpreter's arm takes the walk's answer as it is when the walk substituted.
 `LispEvaluator.expandUserMacroPlaces` (the interpreter's `setf` of a macro place) stops at an
 operator with a user setf expander for the same reason: `(setf (m ...) v)` itself failed there.
-ci-spec `a-symbol-macro-naming-a-user-setf-place-writes-through-its-expander`. Not covered: `incf`,
-`push` and the other read-modify-write macros over a user setf place read it through a call of the
-operator (`The function CI-FIRST is undefined`), with or without a symbol macro.
+`incf`, `decf`, `push`, `pushnew` and `pop` over a user setf place expand through the place's setf
+expansion (`LispEvaluator.expandModifyUserPlace`, CLHS 5.1.3: the pushed item, the temporaries,
+the store variable bound to the new value made from the ACCESS form, the store form), in the walk
+and in the interpreter's arms (`modifyMacroExpansion`). They read the place by a call of its
+operator before, which names no function for a place only its expander knows (`The function
+CI-USP-FIRST is undefined` on all four), with or without a symbol macro. Not covered: `remf`,
+`rotatef`, `shiftf`, `psetf` and a `define-modify-macro` over such a place.
+ci-spec `a-symbol-macro-naming-a-user-setf-place-writes-through-its-expander`.
 
 ## Tests
 `LispEvaluatorTest#evalSymbolMacrolet*`,

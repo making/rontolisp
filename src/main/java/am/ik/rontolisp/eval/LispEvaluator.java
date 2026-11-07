@@ -11424,10 +11424,10 @@ public final class LispEvaluator {
 									result = evalScharSet(cons, env);
 									break frame;
 								case LispNames.PUSH:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandPush);
+									next = modifyMacroExpansion(cons, LispMacroExpander::expandPush);
 									break dispatch;
 								case LispNames.POP:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandPop);
+									next = modifyMacroExpansion(cons, LispMacroExpander::expandPop);
 									break dispatch;
 								case LispNames.LET_STAR:
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandLetStar);
@@ -11436,10 +11436,10 @@ public final class LispEvaluator {
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandDolist);
 									break dispatch;
 								case LispNames.INCF:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandIncf);
+									next = modifyMacroExpansion(cons, LispMacroExpander::expandIncf);
 									break dispatch;
 								case LispNames.DECF:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandDecf);
+									next = modifyMacroExpansion(cons, LispMacroExpander::expandDecf);
 									break dispatch;
 								case LispNames.FORMAT:
 									next = builtinMacroExpansion(cons, form -> {
@@ -11455,7 +11455,7 @@ public final class LispEvaluator {
 									next = builtinMacroExpansion(cons, LispMacroExpander::expandWithInputFromString);
 									break dispatch;
 								case LispNames.PUSHNEW:
-									next = builtinMacroExpansion(cons, LispMacroExpander::expandPushnew);
+									next = modifyMacroExpansion(cons, LispMacroExpander::expandPushnew);
 									break dispatch;
 								case LispNames.OBJ_REF:
 								case LispNames.OBJ_SET: {
@@ -12801,6 +12801,31 @@ public final class LispEvaluator {
 	 */
 	private LispVal builtinMacroExpansion(LispCons cons, java.util.function.Function<LispCons, LispVal> expander) {
 		return builtinMacroExpansion(cons, expander, true);
+	}
+
+	/**
+	 * The expansion of a read-modify-write macro ({@code incf}, {@code push}, ...): over
+	 * a user setf place, the one through the place's setf expansion
+	 * ({@link #expandModifyUserPlace}), kept per site like a {@code setf}'s
+	 * ({@link #placeEpoch}); over any other place, the built-in one.
+	 * @param cons the macro call form
+	 * @param expander the built-in expansion
+	 * @return the expansion
+	 */
+	private LispVal modifyMacroExpansion(LispCons cons, java.util.function.Function<LispCons, LispVal> expander) {
+		if (!this.setfExpanders.isEmpty()) {
+			int epoch = placeEpoch();
+			LispVal kept = memoizedSetfExpansion(cons, epoch);
+			if (kept != null) {
+				return kept;
+			}
+			LispVal userPlace = expandModifyUserPlace(cons);
+			if (userPlace != null) {
+				this.placeExpansions.put(cons, new PlaceExpansion(userPlace, epoch));
+				return userPlace;
+			}
+		}
+		return builtinMacroExpansion(cons, expander);
 	}
 
 	/**
@@ -15108,6 +15133,90 @@ public final class LispEvaluator {
 		mvb.add(value);
 		mvb.add(storeForm);
 		return letStarForm(bindings, List.of(consList(mvb)));
+	}
+
+	/**
+	 * The expansion of {@code incf}, {@code decf}, {@code push}, {@code pushnew} or
+	 * {@code pop} over a registered user place, through the place's setf expansion (CLHS
+	 * 5.1.3): the pushed item first, the temporaries bound to the place's subforms in
+	 * order, the store variable to the new value made from the ACCESS form, then the
+	 * store form. The built-in expansion reads the place by calling its operator, which
+	 * names no function where only the expander knows the place
+	 * ({@code define-setf-expander} alone, anaphora's {@code internal-symbol-macrolet}).
+	 * Public so the compile path's macro-time walk takes the same expansion.
+	 * @param form the macro call
+	 * @return the expansion, or {@code null} when the place is no user place
+	 */
+	public @Nullable LispVal expandModifyUserPlace(LispCons form) {
+		if (this.setfExpanders.isEmpty() || !form.isProperList() || !(form.car() instanceof LispSymbol head)) {
+			return null;
+		}
+		String operator = memberName(head.name());
+		boolean pushes = LispNames.PUSH.equals(operator) || LispNames.PUSHNEW.equals(operator);
+		List<LispVal> parts = form.toList();
+		int placeAt = pushes ? 2 : 1;
+		if (parts.size() <= placeAt || !(parts.get(placeAt) instanceof LispCons place)
+				|| !(place.car() instanceof LispSymbol accessor)) {
+			return null;
+		}
+		UserSetf entry = lookupSetfExpander(accessor.name());
+		if (entry == null) {
+			return null;
+		}
+		List<LispVal> five = userPlaceFiveValues(place, entry);
+		List<LispVal> temps = asJavaList(five.get(0));
+		List<LispVal> values = asJavaList(five.get(1));
+		List<LispVal> stores = asJavaList(five.get(2));
+		if (stores.isEmpty()) {
+			return null;
+		}
+		LispVal access = five.get(4);
+		List<LispVal> bindings = new ArrayList<>();
+		LispVal item = parts.get(1);
+		if (pushes) {
+			LispSymbol itemVar = freshSetfTemp("item");
+			bindings.add(consList(List.of(itemVar, item)));
+			item = itemVar;
+		}
+		for (int i = 0; i < temps.size(); i++) {
+			bindings.add(consList(List.of(temps.get(i), i < values.size() ? values.get(i) : LispNil.INSTANCE)));
+		}
+		LispVal storeForm = five.get(3);
+		LispVal newValue;
+		switch (operator) {
+			case LispNames.INCF,
+					LispNames.DECF ->
+				newValue = consList(
+						List.of(new LispSymbol(LispNames.INCF.equals(operator) ? LispNames.ADD : LispNames.SUB), access,
+								parts.size() > 2 ? parts.get(2) : new LispInteger(1)));
+			case LispNames.PUSH -> newValue = consList(List.of(new LispSymbol(LispNames.CONS), item, access));
+			case LispNames.PUSHNEW -> {
+				List<LispVal> adjoin = new ArrayList<>(List.of(new LispSymbol(LispNames.ADJOIN), item, access));
+				adjoin.addAll(parts.subList(3, parts.size()));
+				newValue = consList(adjoin);
+			}
+			case LispNames.POP -> {
+				LispSymbol old = freshSetfTemp("old");
+				bindings.add(consList(List.of(old, access)));
+				bindStores(bindings, stores, consList(List.of(new LispSymbol(LispNames.CDR), old)));
+				return letStarForm(bindings, List.of(consList(List.of(new LispSymbol(LispNames.PROG1),
+						consList(List.of(new LispSymbol(LispNames.CAR), old)), storeForm))));
+			}
+			default -> {
+				return null;
+			}
+		}
+		bindStores(bindings, stores, newValue);
+		return letStarForm(bindings, List.of(storeForm));
+	}
+
+	// The first store variable takes the new value and any other nil, as SBCL's incf
+	// binds them.
+	private static void bindStores(List<LispVal> bindings, List<LispVal> stores, LispVal newValue) {
+		bindings.add(consList(List.of(stores.get(0), newValue)));
+		for (LispVal store : stores.subList(1, stores.size())) {
+			bindings.add(consList(List.of(store, LispNil.INSTANCE)));
+		}
 	}
 
 	/**

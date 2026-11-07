@@ -29,7 +29,10 @@ package-qualified operator asked the two uiop probes through two `splitQualified
 itself unless an entry is a bare symbol or `(x)`).
 
 Place-writing macros (`push`, `pop`, `incf`, `decf`, `pushnew`, `remf`, `psetf`, `rotatef`,
-`shiftf`) ARE memoized: they lower to `(setf place ...)`, whose own memo is below.
+`shiftf`) ARE memoized: they lower to `(setf place ...)`, whose own memo is below. Over a user
+setf place, `incf`/`decf`/`push`/`pushnew`/`pop` expand through the place's setf expansion instead
+(`modifyMacroExpansion`, [symbol-macrolet.md](symbol-macrolet.md), "An expansion that is a user
+setf place"), kept in the setf memo under the same `placeEpoch`.
 
 ## The setf memo (`LispEvaluator.setfExpansion`, since 2026-11-06)
 A `setf` site's expansion is kept on its head (`PlaceNote`) and in `placeExpansions`, under

@@ -16162,7 +16162,8 @@ cases:
       100
   # A macro with a user setf expander is that expander's place (CLHS 5.1.2.7: the
   # expander before the macro), also as what a symbol macro names -- anaphora's slet,
-  # whose IT is an internal-symbol-macrolet place.
+  # whose IT is an internal-symbol-macrolet place. incf, push and pop read such a place
+  # through its expansion's access form, which a place only its expander knows needs.
   - name: a-symbol-macro-naming-a-user-setf-place-writes-through-its-expander
     source: |
       (defvar *ci-usp-cell* (list 1 2 3))
@@ -16177,12 +16178,23 @@ cases:
       (print *ci-usp-cell*)
       (defun ci-usp-scale (c)
         (symbol-macrolet ((ci-usp-x (ci-usp-place ((ci-usp-y 1)) (car c))))
-          (setf ci-usp-x (* ci-usp-x 7)))
+          (setf ci-usp-x (* ci-usp-x 7))
+          (incf ci-usp-x))
         c)
       (print (ci-usp-scale (list 3 4)))
+      (define-setf-expander ci-usp-first (x)
+        (let ((v (gensym)) (s (gensym)))
+          (values (list v) (list x) (list s) `(progn (rplaca ,v ,s) ,s) `(car ,v))))
+      (defun ci-usp-modify (c)
+        (incf (ci-usp-first c) 3)
+        (push :a (ci-usp-first (cdr c)))
+        (pushnew :a (ci-usp-first (cdr c)))
+        (let ((popped (pop (ci-usp-first (cdr c))))) (list popped c)))
+      (print (ci-usp-modify (list 1 (list 2))))
     expected: |
       (5 22 3)
-      (21 4)
+      (22 4)
+      (:A (4 (2)))
   # define-symbol-macro is the GLOBAL sibling: the definition is dropped on the
   # compile paths and every later top-level form substituted, while the interpreter
   # consults its table at the reference. Reads, setq/setf/incf write-through, a
