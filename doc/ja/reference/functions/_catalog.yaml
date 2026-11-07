@@ -65,6 +65,7 @@ categories:
       - { slug: float-radix, name: "float-radix" }
       - { slug: float-sign, name: "float-sign" }
       - { slug: float-digits, name: "float-digits" }
+      - { slug: float-precision, name: "float-precision" }
       - { slug: decode-float, name: "decode-float" }
       - { slug: integer-decode-float, name: "integer-decode-float" }
   - title: "複素数"

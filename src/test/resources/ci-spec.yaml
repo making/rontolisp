@@ -6484,9 +6484,10 @@ cases:
       333/1000
       1/10000000000
   # float-sign's sign-as-float (negative zero answers
-  # -1.0) and float-digits' significand width (53 for every normal double,
-  # fewer for a subnormal, 0 for a zero). Every row stays inside what every
-  # backend holds: small integers and floats only, no limb-tier intermediates.
+  # -1.0), float-digits' representation width (53 for every double) and
+  # float-precision's significant digits (fewer for a subnormal, 0 for a zero).
+  # Every row stays inside what every backend holds: small integers and floats
+  # only, no limb-tier intermediates.
   - name: smalls-float-sign
     source: |
       (print (float-sign 2.5))
@@ -6510,17 +6511,21 @@ cases:
       (print (float-digits -1.5))
       (print (float-digits 0.0))
       (print (float-digits 4.9406564584124654d-324))
-      (print (float-digits (* 3.0 4.9406564584124654d-324)))
-      (print (float-digits (scale-float 1.0 2097)))
-      (print (funcall #'float-digits 1.5))
+      (print (float-precision 0.0))
+      (print (float-precision 4.9406564584124654d-324))
+      (print (float-precision (* 3.0 4.9406564584124654d-324)))
+      (print (float-precision (scale-float 1.0 2097)))
+      (print (list (funcall #'float-digits 1.5) (funcall #'float-precision 1.5)))
     expected: |
+      53
+      53
       53
       53
       0
       1
       2
       53
-      53
+      (53 53)
   - name: list-sequence-additions
     source: |
       (print (list* 1 2 '(3 4)))
@@ -33059,18 +33064,6 @@ cases:
       3/2
       1/10
       -1/10
-  - name: float-digits
-    source: |
-      (print (float-digits 1.0)) (print (float-digits 2.0)) (print (float-digits -1.5)) (print (float-digits 0.0)) (print (float-digits 4.9406564584124654d-324)) (print (float-digits (* 3.0 4.9406564584124654d-324))) (print (float-digits (scale-float 1.0 2097))) (print (funcall #'float-digits 1.5))
-    expected: |
-      53
-      53
-      53
-      0
-      1
-      2
-      53
-      53
   - name: return-in-a-handler-bind-handler-exits-the-lexical-nil-block
     source: |
       (define-condition my-error (error) ())

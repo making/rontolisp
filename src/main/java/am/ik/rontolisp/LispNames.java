@@ -9924,11 +9924,16 @@ public final class LispNames {
 	public static final String FLOAT_SIGN = "FLOAT-SIGN";
 
 	/**
-	 * The {@code float-digits} prelude function (the number of radix-2 digits in a
-	 * float's significand: 53 for every normal double, fewer for a subnormal, 0 for a
-	 * zero).
+	 * The {@code float-digits} prelude function (the number of radix-2 digits the float
+	 * representation uses: 53 for every float, a double).
 	 */
 	public static final String FLOAT_DIGITS = "FLOAT-DIGITS";
+
+	/**
+	 * The {@code float-precision} prelude function (the number of significant radix-2
+	 * digits a float holds: 53 for a normal double, fewer for a subnormal, 0 for a zero).
+	 */
+	public static final String FLOAT_PRECISION = "FLOAT-PRECISION";
 
 	/**
 	 * The {@code typep} macro -- lite: the type specifier must be a literal (quoted)

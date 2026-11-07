@@ -5912,18 +5912,25 @@ class LispEvaluatorTest {
 		assertThat(eval("(float-digits 0.5)").print()).isEqualTo("53");
 		assertThat(eval("(float-digits -1.5)").print()).isEqualTo("53");
 		assertThat(eval("(float-digits 1.7976931348623157d308)").print()).isEqualTo("53");
-		assertThat(eval("(float-digits 0.0)").print()).isEqualTo("0");
-		assertThat(eval("(float-digits -0.0)").print()).isEqualTo("0");
+		// float-digits is the representation's width, a zero's and a subnormal's too;
+		// float-precision the digits the value holds (SBCL 2.2.9 answers the same).
+		assertThat(eval("(list (float-digits 0.0) (float-digits 4.9406564584124654d-324))").print())
+			.isEqualTo("(53 53)");
+		assertThat(eval("(list (float-precision 1.0) (float-precision 0.0) (float-precision -0.0))").print())
+			.isEqualTo("(53 0 0)");
 		// Subnormals carry fewer digits: the least positive double has one,
 		// twice it two, and one ulp below the least normal fifty-two.
-		assertThat(eval("(float-digits 4.9406564584124654d-324)").print()).isEqualTo("1");
-		assertThat(eval("(float-digits (* 2.0 4.9406564584124654d-324))").print()).isEqualTo("2");
-		assertThat(eval("(float-digits (* 3.0 4.9406564584124654d-324))").print()).isEqualTo("2");
-		assertThat(eval("(float-digits (- (scale-float 1.0 -1022) 4.9406564584124654d-324))").print()).isEqualTo("52");
+		assertThat(eval("(float-precision 4.9406564584124654d-324)").print()).isEqualTo("1");
+		assertThat(eval("(float-precision (* 2.0 4.9406564584124654d-324))").print()).isEqualTo("2");
+		assertThat(eval("(float-precision (* 3.0 4.9406564584124654d-324))").print()).isEqualTo("2");
+		assertThat(eval("(float-precision (- (scale-float 1.0 -1022) 4.9406564584124654d-324))").print())
+			.isEqualTo("52");
 		// Non-finite floats keep the representation width.
-		assertThat(eval("(float-digits (scale-float 1.0 2097))").print()).isEqualTo("53");
-		assertThat(eval("(float-digits (scale-float -1.0 2097))").print()).isEqualTo("53");
-		assertThat(eval("(funcall #'float-digits 1.5)").print()).isEqualTo("53");
+		assertThat(eval("(float-precision (scale-float 1.0 2097))").print()).isEqualTo("53");
+		assertThat(eval("(float-precision (scale-float -1.0 2097))").print()).isEqualTo("53");
+		assertThat(eval("(list (funcall #'float-digits 1.5) (funcall #'float-precision 1.5))").print())
+			.isEqualTo("(53 53)");
+		assertThatThrownBy(() -> eval("(float-precision 1)")).isInstanceOf(LispEvalException.class);
 		assertThatThrownBy(() -> eval("(float-digits)")).isInstanceOf(LispEvalException.class)
 			.hasMessageContaining("expects 1 argument");
 		assertThatThrownBy(() -> eval("(float-digits 1.0 2.0)")).isInstanceOf(LispEvalException.class)

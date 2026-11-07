@@ -3799,9 +3799,9 @@ public final class LispPreludeLibrary {
 		// integer-decode-float: like decode-float but the significand is an
 		// integer -- f = significand * 2^exponent * sign, exactly, with the sign
 		// an INTEGER (CLHS: a float sign is decode-float's business only). The
-		// significand is scaled to exactly (float-digits f) bits -- 53 for a
+		// significand is scaled to exactly (float-precision f) bits -- 53 for a
 		// normal double, fewer for a subnormal, whose true precision is shorter
-		// (see float-digits below) -- never stripped of trailing factors of two
+		// (see float-precision below) -- never stripped of trailing factors of two
 		// beyond that width: a normal double's significand always fills the full
 		// 53 bits, even bits included, matching the fixed-width mantissa field
 		// the hardware stores (the previous body stripped every
@@ -3820,7 +3820,7 @@ public final class LispPreludeLibrary {
 				          (error "integer-decode-float of a non-finite float is undefined")
 				          (let* ((a (abs f))
 				                 (e 0)
-				                 (digits (float-digits a))
+				                 (digits (float-precision a))
 				                 (hi (expt 2.0 digits))
 				                 (lo (expt 2.0 (1- digits))))
 				            (while (>= a hi)
@@ -3844,18 +3844,25 @@ public final class LispPreludeLibrary {
 				      (- (abs m))
 				      (abs m)))
 				""");
-		// float-digits: the number of radix-2 digits in the significand,
-		// including the implicit leading bit -- 53 for every normal double. A
-		// zero has no digits; a non-finite float keeps the representation
-		// width. A subnormal's significand is shorter: doubling it up to
-		// [2^52, 2^53) (each doubling exact in binary floating point) takes one
-		// shift per missing leading bit, and the shifted value is the odd-free
-		// integer k * 2^(j - 1074) with 53 significant bits -- so k, the true
-		// significand, has 53 - (j - 1074) = 1127 - j digits. At most 1126
-		// shifts (the least positive double), every intermediate scalar-small
-		// and exact on every backend.
+		// float-digits: the number of radix-2 digits the representation uses,
+		// including the implicit leading bit -- 53 for every float, a double,
+		// whatever its value (CLHS; float-precision is the digits a value holds).
 		SOURCES.put(LispNames.FLOAT_DIGITS, """
 				(defun float-digits (f)
+				  (check-type f float)
+				  53)
+				""");
+		// float-precision: the number of significant radix-2 digits, including the
+		// implicit leading bit -- 53 for every normal double. A zero has none; a
+		// non-finite float keeps the representation width. A subnormal's
+		// significand is shorter: doubling it up to [2^52, 2^53) (each doubling
+		// exact in binary floating point) takes one shift per missing leading bit,
+		// and the shifted value is the odd-free integer k * 2^(j - 1074) with 53
+		// significant bits -- so k, the true significand, has 53 - (j - 1074) =
+		// 1127 - j digits. At most 1126 shifts (the least positive double), every
+		// intermediate scalar-small and exact on every backend.
+		SOURCES.put(LispNames.FLOAT_PRECISION, """
+				(defun float-precision (f)
 				  (check-type f float)
 				  (let ((a (abs f)))
 				    (cond ((= a 0.0) 0)
@@ -3887,7 +3894,7 @@ public final class LispPreludeLibrary {
 		// (already a simplest rational, and the only one that round-trips by
 		// construction) -- with no fraction involved this is exact on every
 		// backend, and the check runs BEFORE integer-decode-float: since
-		// that function answers a full-width (float-digits ax)-bit
+		// that function answers a full-width (float-precision ax)-bit
 		// significand instead of one stripped down to its odd part, an
 		// integer-valued float's exponent is no longer reliably non-negative
 		// (2.0 decodes to significand 4503599627370496 and exponent -51, not
