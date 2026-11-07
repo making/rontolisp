@@ -32272,7 +32272,7 @@ public final class LispMacroExpander {
 	 * and answers the program unchanged when it cannot.
 	 *
 	 * <p>
-	 * Three ways in, and the scan has to answer for all of them BEFORE the expressions
+	 * Several ways in, and the scan has to answer for all of them BEFORE the expressions
 	 * are expanded (that happens per form, much later, and cannot add a top-level defun):
 	 * <ul>
 	 * <li>a renderer call is already present -- the condition-report runtime injected
@@ -32283,7 +32283,9 @@ public final class LispMacroExpander {
 	 * <li>an {@code error} / {@code warn} / {@code signal} / {@code cerror} call whose
 	 * datum is computed and which carries arguments after it -- a datum that is a STRING
 	 * at runtime is a format control, and the designator expansion renders it -- see
-	 * {@link #signalRendersRuntimeControl}.</li>
+	 * {@link #signalRendersRuntimeControl};</li>
+	 * <li>a restart report over a computed control -- see
+	 * {@link #reportRendersRuntimeControl}.</li>
 	 * </ul>
 	 * The scan covers the registry's condition {@code :report}s beside the program: a
 	 * {@code warn} of a class with a report of its own inlines that report at its site
@@ -32742,7 +32744,7 @@ public final class LispMacroExpander {
 						|| LispNames.FORMATTER.equals(head.name())) {
 					return true;
 				}
-				if (signalRendersRuntimeControl(head.name(), cons)) {
+				if (signalRendersRuntimeControl(head.name(), cons) || reportRendersRuntimeControl(head.name(), cons)) {
 					return true;
 				}
 			}
@@ -32752,6 +32754,29 @@ public final class LispMacroExpander {
 			form = cons.cdr();
 		}
 		return false;
+	}
+
+	/**
+	 * Whether a restart report of this call formats a control computed at run time:
+	 * {@code with-simple-restart}'s format control and {@code cerror}'s continue control,
+	 * when not a literal string ({@link #expandWithSimpleRestart},
+	 * {@link #expandCerror}).
+	 * @param head the call's operator name, qualified or plain
+	 * @param cons the call
+	 * @return true when the expansion of this call may contain a renderer call
+	 */
+	private static boolean reportRendersRuntimeControl(String head, LispCons cons) {
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(head);
+		String member = qn == null ? head : qn.member();
+		LispVal control = null;
+		if (LispNames.CERROR.equals(member) && cons.cdr() instanceof LispCons controlCell) {
+			control = controlCell.car();
+		}
+		else if (LispNames.WITH_SIMPLE_RESTART.equals(member) && cons.cdr() instanceof LispCons specCell
+				&& specCell.car() instanceof LispCons spec && spec.cdr() instanceof LispCons controlCell) {
+			control = controlCell.car();
+		}
+		return control != null && !(control instanceof LispString);
 	}
 
 	/**
@@ -36224,11 +36249,11 @@ public final class LispMacroExpander {
 	 * but in restart mode the error becomes REAL {@code cerror}: the equivalent
 	 * {@code (restart-case (error datum args...) (continue () :report cfc nil))}, so a
 	 * handler (or the {@code continue} function) can resume past it with nil. With format
-	 * arguments the report is {@code (lambda (s) (format s cfc args...))} over
-	 * temporaries the error call assigns as it evaluates each non-constant argument, so
-	 * the error and the report see the same values. Outside restart mode nothing can
-	 * invoke the restart, so the lite lowering is behavior-identical and keeps the
-	 * program byte-identical.
+	 * arguments, or a control that is not a literal string, the report is
+	 * {@code (lambda (s) (format s cfc args...))} over temporaries the error call assigns
+	 * as it evaluates each non-constant argument, so the error and the report see the
+	 * same values. Outside restart mode nothing can invoke the restart, so the lite
+	 * lowering is behavior-identical and keeps the program byte-identical.
 	 * @param cons the cerror expression
 	 * @param closRegistry the class registry
 	 * @param restartMode whether the program uses the restart system
@@ -36247,7 +36272,10 @@ public final class LispMacroExpander {
 		List<LispVal> bindings = new ArrayList<>();
 		java.util.function.Supplier<LispSymbol> temps = freshTemps(CERROR_ARG_VAR, cons);
 		LispVal control = parts.get(1);
-		if (!args.isEmpty() && !isOrderFreeConstant(control)) {
+		// A control that is not a literal string goes through format too: as a report it
+		// would name a function.
+		boolean formatted = !args.isEmpty() || !(control instanceof LispString);
+		if (formatted && !isOrderFreeConstant(control)) {
 			control = bind(temps.get(), control, bindings);
 		}
 		// Each non-constant argument is assigned to its temporary where the error call
@@ -36268,7 +36296,7 @@ public final class LispMacroExpander {
 				reportArgs.add(temp);
 			}
 		}
-		LispVal report = args.isEmpty() ? control : formatReport(cons, control, reportArgs);
+		LispVal report = formatted ? formatReport(cons, control, reportArgs) : control;
 		LispVal clause = listToCons(List.of(new LispSymbol(LispNames.CONTINUE), LispNil.INSTANCE,
 				new LispSymbol(":REPORT"), report, LispNil.INSTANCE));
 		LispVal restartCase = listToCons(
@@ -44448,10 +44476,10 @@ public final class LispMacroExpander {
 	/**
 	 * Expands {@code (with-simple-restart (name format-control format-args...)
 	 * body...)} into the equivalent {@code restart-case} whose named clause returns
-	 * {@code (values nil t)} from the form (the CL contract). The format control is the
-	 * restart's report; with arguments the report is
-	 * {@code (lambda (s) (format s control args...))}, the arguments evaluated when it
-	 * prints.
+	 * {@code (values nil t)} from the form (the CL contract). A literal string control is
+	 * the restart's report; with arguments, or a control that is evaluated (a variable,
+	 * which as a report would name a function), the report is
+	 * {@code (lambda (s) (format s control args...))}, evaluated when it prints.
 	 * @param cons the with-simple-restart expression
 	 * @return the expanded expression
 	 */
@@ -44463,7 +44491,7 @@ public final class LispMacroExpander {
 					LispNames.WITH_SIMPLE_RESTART + " expects (name format-control args...): " + cons.print());
 		}
 		List<LispVal> specParts = spec.toList();
-		LispVal report = specParts.size() > 2
+		LispVal report = specParts.size() > 2 || specParts.size() == 2 && !(specParts.get(1) instanceof LispString)
 				? formatReport(cons, specParts.get(1), specParts.subList(2, specParts.size()))
 				: specParts.size() > 1 ? specParts.get(1) : LispNil.INSTANCE;
 		LispVal valuesForm = listToCons(List.of(new LispSymbol(LispNames.VALUES), LispNil.INSTANCE, LispTrue.INSTANCE));
@@ -51371,6 +51399,18 @@ public final class LispMacroExpander {
 				}
 			}
 		}
+		if (subV instanceof LispCons subOr && LispNames.OR.equals(compoundTypeHead(subOr))) {
+			// (or A B ...) as the sub: a subtype when EVERY branch is. Exact, so it goes
+			// ahead of a compound super, whose (or ...) asks for one branch holding the
+			// whole sub ((or float rational) against (or rational float)).
+			List<LispVal> parts = subOr.toList();
+			for (int i = 1; i < parts.size(); i++) {
+				if (!subtypep(parts.get(i), superV, closRegistry, expanding)) {
+					return false;
+				}
+			}
+			return parts.size() > 1;
+		}
 		if (superV instanceof LispCons supCons) {
 			// A COMPOUND super: only the logical connectives decide anything here.
 			// (or A B ...) holds when the sub is a subtype of ANY branch, (and A B ...)
@@ -51382,6 +51422,19 @@ public final class LispMacroExpander {
 				List<LispVal> parts = supCons.toList();
 				for (int i = 1; i < parts.size(); i++) {
 					if (subtypep(subV, parts.get(i), closRegistry, expanding)) {
+						return true;
+					}
+				}
+				// A numeric name the branches cover between them: rational is integer
+				// and ratio, and so on up (NUMBER_PARTITIONS).
+				List<String> partition = subV instanceof LispSymbol subName ? NUMBER_PARTITIONS.get(subName.name())
+						: null;
+				if (partition != null) {
+					boolean covered = true;
+					for (String part : partition) {
+						covered = covered && subtypep(new LispSymbol(part), superV, closRegistry, expanding);
+					}
+					if (covered) {
 						return true;
 					}
 				}
@@ -51414,15 +51467,6 @@ public final class LispMacroExpander {
 				return false;
 			}
 			List<LispVal> parts = subCons.toList();
-			if (LispNames.OR.equals(subHead)) {
-				// (or A B ...) as the sub: a subtype when EVERY branch is.
-				for (int i = 1; i < parts.size(); i++) {
-					if (!subtypep(parts.get(i), superV, closRegistry, expanding)) {
-						return false;
-					}
-				}
-				return parts.size() > 1;
-			}
 			if (LispNames.AND.equals(subHead)) {
 				// (and A B ...) as the sub: a subtype when ANY conjunct is.
 				for (int i = 1; i < parts.size(); i++) {
@@ -51446,6 +51490,16 @@ public final class LispMacroExpander {
 		return namedSubtypep(new SubtypepName(subSym, closRegistry), new SubtypepName(superSym, closRegistry),
 				closRegistry, expanding);
 	}
+
+	/**
+	 * The numeric types that are exactly the union of others here: {@code integer} and
+	 * {@code ratio} partition {@code rational} (CLHS 12.1.1), and every real is a
+	 * rational or a float and every number a real or a complex (what SBCL answers too).
+	 * The {@code (or ...)} super arm of {@link #subtypep} and its runtime twin
+	 * ({@link #RUNTIME_COMPOUND_SUBTYPEP_SOURCE}) read it.
+	 */
+	private static final java.util.Map<String, List<String>> NUMBER_PARTITIONS = java.util.Map.of("RATIONAL",
+			List.of("INTEGER", "RATIO"), "REAL", List.of("RATIONAL", "FLOAT"), "NUMBER", List.of("REAL", "COMPLEX"));
 
 	private static @Nullable ArrayTypeShape arrayTypeShape(LispVal spec, ClosRegistry closRegistry) {
 		return ArrayTypeShape.of(spec, element -> {
@@ -55108,13 +55162,29 @@ public final class LispMacroExpander {
 	private static final String RUNTIME_COMPOUND_SUBTYPEP_SOURCE = """
 			(cond
 			  ((if (consp %stc-sub) (equal %stc-sub %stc-sup) nil) t)
+			  ((if (consp %stc-sub)
+			       (let ((%stc-h (car %stc-sub))) (if (symbolp %stc-h) (string= (symbol-name %stc-h) "OR") nil))
+			       nil)
+			   (if (null (cdr %stc-sub))
+			       nil
+			       (dolist (%stc-e (cdr %stc-sub) t)
+			         (if (%subtypep-recur %stc-e %stc-sup) nil (return nil)))))
 			  ((consp %stc-sup)
 			   (let* ((%stc-h (car %stc-sup))
 			          (%stc-n (if (symbolp %stc-h) (symbol-name %stc-h) "")))
 			     (cond
 			     ((string= %stc-n "OR")
-			      (dolist (%stc-e (cdr %stc-sup) nil)
-			        (if (%subtypep-recur %stc-sub %stc-e) (return t) nil)))
+			      (if (dolist (%stc-e (cdr %stc-sup) nil)
+			            (if (%subtypep-recur %stc-sub %stc-e) (return t) nil))
+			          t
+			          (let ((%stc-p (if (symbolp %stc-sub)
+			                            (cdr (assoc %stc-sub '((rational integer ratio) (real rational float)
+			                                                   (number real complex))))
+			                            nil)))
+			            (if %stc-p
+			                (dolist (%stc-e %stc-p t)
+			                  (if (%subtypep-recur %stc-e %stc-sup) nil (return nil)))
+			                nil))))
 			     ((string= %stc-n "AND")
 			      (dolist (%stc-e (cdr %stc-sup) t)
 			        (if (%subtypep-recur %stc-sub %stc-e) nil (return nil))))
@@ -55140,11 +55210,6 @@ public final class LispMacroExpander {
 			          (%stc-n (if (symbolp %stc-h) (symbol-name %stc-h) "")))
 			     (cond
 			       ((string= %stc-n "") nil)
-			       ((string= %stc-n "OR")
-			        (if (null (cdr %stc-sub))
-			            nil
-			            (dolist (%stc-e (cdr %stc-sub) t)
-			              (if (%subtypep-recur %stc-e %stc-sup) nil (return nil)))))
 			       ((string= %stc-n "AND")
 			        (dolist (%stc-e (cdr %stc-sub) nil)
 			          (if (%subtypep-recur %stc-e %stc-sup) (return t) nil)))

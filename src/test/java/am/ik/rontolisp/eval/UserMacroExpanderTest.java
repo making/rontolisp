@@ -166,10 +166,10 @@ class UserMacroExpanderTest {
 	}
 
 	@Test
-	void whatCompileTimeCodeDidToThePackagesReachesTheCompilersResolver() {
+	void whatTheCompileImageDidToThePackagesReachesTheCompilersResolver() {
 		// No macro in the program: a compile-time eval-when opens the pass by itself.
-		// Each
-		// change reaches the compilers' resolver in front of the form after it.
+		// Each change reaches the compilers' resolver in front of the form after it, and
+		// so does a name only the consumed defmacro interned, for the import of it.
 		List<LispVal> emitted = UserMacroExpander.expand(LispReader.readAllFromString("""
 				(eval-when (:compile-toplevel :load-toplevel :execute)
 				  (unless (find-package :ume-made) (make-package :ume-made :use '(:cl))))
@@ -178,12 +178,19 @@ class UserMacroExpanderTest {
 				(eval-when (:compile-toplevel :load-toplevel :execute)
 				  (export (intern "COMPUTED" :ume-exports) :ume-exports))
 				(print 'ume-exports:computed)
+				(defpackage :ume-macro-only (:use :cl))
+				(in-package :ume-macro-only)
+				(defmacro hidden () 1)
+				(in-package :cl-user)
+				(defpackage :ume-importer (:use :cl) (:import-from :ume-macro-only #:hidden))
+				(print 'ume-importer::hidden)
 				"""));
 		List<String> resolved = new am.ik.rontolisp.PackageResolver().resolveProgram(emitted)
 			.stream()
 			.map(LispVal::print)
 			.toList();
-		assertThat(resolved).contains("(PRINT 'UME-MADE::MADE)", "(PRINT 'UME-EXPORTS::COMPUTED)");
+		assertThat(resolved).contains("(PRINT 'UME-MADE::MADE)", "(PRINT 'UME-EXPORTS::COMPUTED)",
+				"(PRINT 'UME-MACRO-ONLY::HIDDEN)");
 		assertThat(emitted.stream().filter(form -> form.print().startsWith("(%IMAGE-PACKAGES (\"UME-")).count())
 			.isEqualTo(2);
 	}

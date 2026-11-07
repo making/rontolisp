@@ -1099,9 +1099,15 @@ loads and answers what SBCL 2.2.9 answers on the interpreter (`with-html-string`
 `:raw`, `escape-string`, a `define-namespace`); what it took beyond this item: `describe-object`
 ([clos.md](clos.md)), a keyword `macrolet` name and `&whole` being the form
 ([defmacro-backquote.md](defmacro-backquote.md)), `notinline` ([compiler-macros.md](compiler-macros.md)),
-`formatter` ([format.md](format.md)). The JVM compile of serapeum then stops at
-`(:import-from #:serapeum/iter #:collecting*)`: a name only a consumed `defmacro` interns, so the package
-stays sealed for the backend's resolver (`.todo/i99`). typo stops on `.todo/i90`.
+`formatter` ([format.md](format.md)). serapeum then stopped the compile paths at
+`(:import-from #:serapeum/iter #:collecting*)`, a name only a consumed `defmacro` interns
+([packages.md](packages.md), "The compile image's packages"). Measured 2026-11-07 after it:
+`(ql:quickload :serapeum)` with `serapeum:take` and `serapeum::collecting*` compiles and runs on the
+JVM, P1 and the component with no warning, as interpreted; on the way out went
+`with-simple-restart`/`cerror` over a variable control ([error-handling.md](error-handling.md)) and
+36 `Can't check exhaustiveness` warnings ([declarations-type-checks.md](declarations-type-checks.md),
+the compound `subtypep`). The `%define-method-combination` compile-time failure the same compile
+printed was i97's replay fix. typo stops on `.todo/i90`.
 
 **`eval/ClReexportForms`** (pinned by `ClReexportE2eTest`, all four, SBCL 2.2.9's answers). clingon's
 `src/package.lisp` is `(defpackage :clingon (:use :cl))` plus top-level

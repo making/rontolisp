@@ -344,7 +344,14 @@ table is GENERATED from it. **Change them together.**
 
 - A type is a subtype of itself, compound included (`equal` on the specifiers). `(or ...)`: any
   branch as the super, EVERY branch as the sub; `(and ...)`: every conjunct as the super, ANY
-  conjunct as the sub.
+  conjunct as the sub. The `(or ...)` sub is split FIRST, being exact: tried after an `(or ...)` super
+  asked for one branch holding all of it, `(or float rational)` against `(or rational float)` was nil.
+- **A numeric name the branches of an `(or ...)` super cover between them** is a subtype
+  (`NUMBER_PARTITIONS`: `rational` = `integer` + `ratio`, CLHS 12.1.1; `real` = `rational` + `float`,
+  `number` = `real` + `complex`, SBCL's answers too). Both 2026-11-07, both twins: serapeum's
+  `dispatch-case` asks `same-type?` of its clause types against `real*` = `(or rational float)`, and
+  each compile of `range.lisp` warned `Can't check exhaustiveness` 36 times. Pin: ci-spec
+  `computed-compound-subtypep-specifier`.
 - **Any other head as the SUB reduces to that head and re-tests** (`(integer 0 10)` <= `integer`);
   the same reduction on the SUPER would be unsound, so `(subtypep 'integer '(integer 0 10))` stays
   nil (SBCL agrees). `(not ...)`/`(member ...)`/`(eql ...)`/`(satisfies ...)` stay unknown

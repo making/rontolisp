@@ -161,6 +161,15 @@ public final class PackageResolver {
 	private boolean recordsReadSymbols = false;
 
 	/**
+	 * The members an {@code :import-from} / {@code :shadowing-import-from} clause took
+	 * from a source package that does not declare them -- a name this image only read
+	 * there, or one an unsealed source is taken to have -- by source package, until
+	 * {@link #importedReadSymbolsMarker} hands them over; null when nobody asks
+	 * ({@link #notingImportedReadSymbols}).
+	 */
+	private @Nullable Map<String, Set<String>> importedReadSymbols;
+
+	/**
 	 * The external set each package was DECLARED with -- its {@code defpackage}
 	 * {@code :export} clause, or the set the registry seeded a built-in package with --
 	 * captured the first time a runtime {@code export}/{@code unexport} directive touches
@@ -227,6 +236,16 @@ public final class PackageResolver {
 	public PackageResolver recordingReadSymbols() {
 		this.recordsReadSymbols = true;
 		return this;
+	}
+
+	/**
+	 * Makes this resolver note the members an import clause takes from a source package
+	 * that does not declare them, for {@link #importedReadSymbolsMarker}: the compile
+	 * paths' macro-time evaluator, whose reads the compilers' resolver does not see
+	 * ({@code .kb/packages.md}, "The compile image's packages").
+	 */
+	public synchronized void notingImportedReadSymbols() {
+		this.importedReadSymbols = new java.util.TreeMap<>();
 	}
 
 	/**
@@ -2147,11 +2166,20 @@ public final class PackageResolver {
 			}
 			// Only a SEALED source answers "no such symbol": one source was read into
 			// may hold names the reader interned and the table never saw.
-			if (this.registry.isSealed(source) && accessibleIn(source, member, spelling -> false) == null) {
+			Accessible accessible = accessibleIn(source, member, spelling -> false);
+			if (this.registry.isSealed(source) && accessible == null) {
 				throw DefpackageException.missingSymbol(clauseName + ": no symbol named " + member + " in " + source,
 						source, member);
 			}
-			target.put(member, trueHome(source, member));
+			String home = trueHome(source, member);
+			// A package this image made (runtime tier here) is one the compilers'
+			// resolver
+			// may hold sealed, having read none of what this image read into it.
+			if (this.importedReadSymbols != null && home.equals(source) && this.registry.isRuntimePackage(source)
+					&& (accessible == null || this.registry.isRecorded(source, member))) {
+				this.importedReadSymbols.computeIfAbsent(source, k -> new java.util.TreeSet<>()).add(member);
+			}
+			target.put(member, home);
 		}
 	}
 
@@ -3791,12 +3819,34 @@ public final class PackageResolver {
 	 * @return the marker, or null when nothing was recorded
 	 */
 	public synchronized @Nullable LispVal readSymbolsMarker() {
+		return readSymbolsMarker(this.registry.recordedMembers());
+	}
+
+	/**
+	 * What the import clauses resolved since the last call took from a package this image
+	 * made that does not declare it ({@link #notingImportedReadSymbols}), as a
+	 * {@link #readSymbolsMarker}: the compilers' resolver records those members, so its
+	 * {@code :import-from} check finds what this image found, though it never read the
+	 * form that interned the name -- a {@code defmacro} the macro pass consumed, a macro
+	 * body, a compile-time-only form.
+	 * @return the marker, or null when no import took such a member
+	 */
+	public synchronized @Nullable LispVal importedReadSymbolsMarker() {
+		if (this.importedReadSymbols == null || this.importedReadSymbols.isEmpty()) {
+			return null;
+		}
+		LispVal marker = readSymbolsMarker(this.importedReadSymbols);
+		this.importedReadSymbols.clear();
+		return marker;
+	}
+
+	private static @Nullable LispVal readSymbolsMarker(Map<String, Set<String>> members) {
 		List<LispVal> marker = new ArrayList<>();
 		marker.add(new LispSymbol(LispNames.READ_SYMBOLS));
-		this.registry.recordedMembers().forEach((pkg, members) -> {
+		members.forEach((pkg, names) -> {
 			List<LispVal> row = new ArrayList<>();
 			row.add(new LispString(pkg));
-			members.forEach(member -> row.add(new LispString(member)));
+			names.forEach(member -> row.add(new LispString(member)));
 			marker.add(properList(row));
 		});
 		return marker.size() == 1 ? null : properList(marker);

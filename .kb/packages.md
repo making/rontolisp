@@ -317,7 +317,9 @@ once); `:documentation`/`:size` ignored.
   those of forms pruned before it reads them. Built-in / pre-seeded packages are never sealed. The failure carries the
   source package and name (`DefpackageException.missingSymbol`). A pruned third-party
   `defstruct` leaves its `%struct-definition` marker in the stream so this check stays off for
-  a kept defpackage that imports one of the struct's slot names (.kb/library-defun-pruning.md).
+  a kept defpackage that imports one of the struct's slot names (.kb/library-defun-pruning.md),
+  and a name only the compile path's macro-time evaluator read reaches the compilers' check through
+  a `%read-symbols` marker ("The compile image's packages").
 - **At run time the failures are conditions**: a nested `defpackage` (`rareOperatorExpansion`)
   and `(eval '(defpackage ...))` (the `eval` native, which would otherwise take the top-level
   directive path) both go through `LispEvaluator.registerRuntimeDefpackage`: `PROGRAM_ERROR` ->
@@ -1286,8 +1288,24 @@ re-exports every `cl` external through a computed `export` in an `eval-when`, so
   `while-collecting`'s and `with-package-iterator`'s generated names); the computed exports; a
   `setf` of anaphora's `it` (`.kb/symbol-macrolet.md`, "An expansion that is a user setf
   place"); `with-accessors` under cl-environments' walker (`.kb/clos.md`, "Slot shadowing").
+- **What the image READ goes the same way, where an import asks for it** (i99, 2026-11-07). A
+  `defmacro` the macro pass consumes, a macro body, a compile-time-only member: the compilers'
+  resolver reads none of them, so a package whose other forms mint nothing stays sealed there, and
+  `(:import-from :p #:hidden*)` of a name only such a form interned failed `no symbol named` on the
+  three compile paths (serapeum's `package.lisp` over `serapeum/iter::collecting*`). The image's
+  resolver notes, at its own import check (`collectImportFrom`, when made
+  `notingImportedReadSymbols`), each member a clause took from a package it made that does not
+  declare it -- recorded by a read or `intern`, or presumed by an unsealed package -- and `emit` puts
+  them in a `%read-symbols` marker ahead of the directive (`importedReadSymbolsMarker`), which the
+  compilers' resolver records as members. So its check finds what the image's found, and the
+  source's enumerations hold the name, as the interpreter's do. **Rejected**: a trace per consumed
+  definition (`%own-symbol`'s way): it misses a name only a macro body or a compile-time form
+  interned, and every consumed kind (`defmacro`, `define-symbol-macro`, `defsetf`, ...) would need
+  one; and handing the seal itself over, which re-runs a check the image already passed and leaves
+  the member out. A run-time `find-symbol` of the name answered the symbol before too (the build
+  answer, "What a program read").
 - Pinned by ci-spec `a-package-the-compile-image-made-or-changed`,
-  `UserMacroExpanderTest#whatCompileTimeCodeDidToThePackagesReachesTheCompilersResolver`.
+  `UserMacroExpanderTest#whatTheCompileImageDidToThePackagesReachesTheCompilersResolver`.
 
 ## Tests
 `PackageResolverTest` (the `::` cases, the defpackage clause/error cases, the json.lisp fixed-point

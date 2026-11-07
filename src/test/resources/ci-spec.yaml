@@ -4997,6 +4997,13 @@ cases:
         (export (intern "CI-COMPUTED" :ci-image-exports) :ci-image-exports))
       (print (eq 'ci-image-exports:ci-computed (find-symbol "CI-COMPUTED" :ci-image-exports)))
       (print (nth-value 1 (find-symbol "CI-COMPUTED" :ci-image-exports)))
+      (defpackage :ci-image-macro-only (:use :cl) (:export #:ci-visible))
+      (in-package :ci-image-macro-only)
+      (defmacro ci-hidden* () 1)
+      (defun ci-visible () 2)
+      (in-package :cl-user)
+      (defpackage :ci-image-importer (:use :cl) (:import-from :ci-image-macro-only #:ci-hidden*))
+      (print (list (ci-image-importer::ci-hidden*) (ci-image-macro-only:ci-visible)))
     expected: |
       CI-IMAGE-MADE::CI-IMAGE-HELLO
       "CI-IMAGE-MADE"
@@ -5004,6 +5011,7 @@ cases:
       :EXISTS
       T
       :EXTERNAL
+      (1 2)
   # remprop, the plist REMOVER: one prelude defun over the same %symbol-plists store
   # get / (setf get) / symbol-plist share.
   - name: symbol-plist-remprop
@@ -18585,6 +18593,13 @@ cases:
                  (list (multiple-value-list
                         (with-simple-restart (ci-skip "Skip ~a." (incf ci-rs-k)) (error "x")))
                        ci-rs-k))))
+      ;; A control in a variable is a format control too, not a report function name
+      ;; (serapeum's static-let).
+      (print (let ((ci-rs-ctl "Skip."))
+               (handler-bind ((error (lambda (c)
+                                       (if (find-restart 'ci-skip) (invoke-restart 'ci-skip) (continue)))))
+                 (list (multiple-value-list (with-simple-restart (ci-skip ci-rs-ctl) (error "x")))
+                       (cerror ci-rs-ctl "y")))))
       (print (handler-bind ((warning (lambda (w) (muffle-warning))))
                (list :done (warn "noise"))))
       (print (let ((ci-rs-hit nil))
@@ -18644,6 +18659,7 @@ cases:
       ((0 NIL :NONE) (3 T :LATE))
       (:AFTER NIL 1 "problem 1")
       ((NIL T) 0)
+      ((NIL T) NIL)
       (:DONE NIL)
       9
       (CI-AAA CI-BBB)
@@ -39256,9 +39272,18 @@ standalone:
                     (stp '(satisfies oddp) 'number)
                     (stp '(and) 'number)
                     (stp '(member 1 2) 'number)
-                    (stp '(eql 1) 'number))))
+                    (stp '(eql 1) 'number)
+                    ;; An (or ...) sub is decided branch by branch ahead of an (or ...)
+                    ;; super, and the branches may cover a numeric type between them
+                    ;; (serapeum's dispatch-case exhaustiveness check).
+                    (stp '(or float integer) '(or integer float))
+                    (stp '(or float integer) 'stc-num)
+                    (subtypep '(or float integer) 'stc-num)
+                    (stp 'number '(or integer ratio float complex))
+                    (subtypep 'rational '(or ratio integer))
+                    (stp 'rational '(or integer float)))))
     stdout: |
-      ((T T T NIL T T T NIL T T T) (T T T T T T T T T T) (T T NIL NIL NIL NIL NIL))
+      ((T T T NIL T T T NIL T T T) (T T T T T T T T T T) (T T NIL NIL NIL NIL NIL T T T T T NIL))
   # simple-vector/simple-array/simple-string are lattice EDGES, not aliases: the
   # reverse direction answers nil, as SBCL 2.2.9's does on this very program --
   # except group 3's 2nd and 4th, where base-string stays an alias because there

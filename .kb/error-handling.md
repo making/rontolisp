@@ -956,8 +956,14 @@ the same cost as `function`.
   SBCL); `cerror`'s the same over temporaries the `error` call assigns, `(error datum (setq tmp
   arg) ...)`, so the error and the report see one evaluation in the call's order and the datum stays
   as written for the static signal dispatch (binding it to a variable sent a `make-condition` datum
-  to `%error-runtime`). A form without arguments keeps the string report. Until then the arguments
+  to `%error-runtime`). A form without arguments keeps a literal string report. Until then the arguments
   were dropped and SLDB listed `Skip ~a.`.
+- **A control that is not a literal string is formatted too** (2026-11-07, both lowerings and
+  `eval-macros.lisp`'s row): as a `:report` a variable names a function, so serapeum's
+  `(with-simple-restart (recklessly-continue continue-string) ...)` established no restart on the
+  interpreter (the report lookup signalled first) and warned `the function CONTINUE-STRING is
+  undefined` compiled, `cerror` alike. `reportRendersRuntimeControl` brings the format renderer such a
+  report needs. ci-spec `restart-system`.
 - `runtimeSignalSites` reads `cerror`'s datum one place later, and `assert`'s two: restart mode and
   the `assert` expansion lower to `error` after the scan, so `(cerror "c" ty :code 7)` with a computed
   `ty` called an uninjected `%error-runtime` on the JVM and both wasm-GC (until 2026-10-30).

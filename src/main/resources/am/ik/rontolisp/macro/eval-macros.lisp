@@ -1841,7 +1841,7 @@
   (let* ((spec (car args)) (control (cadr spec)))
     `(restart-case (progn ,@(cdr args))
        (,(car spec) ()
-         :report ,(if (cddr spec)
+         :report ,(if (or (cddr spec) (not (stringp control)))
                       `(lambda (%eval-stream)
                          (format %eval-stream ,control ,@(cddr spec)))
                       control)

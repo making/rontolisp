@@ -295,6 +295,9 @@ public final class UserMacroExpander {
 			this.macroEval.setCompiledTemplateSink(this.templateCaptures);
 			this.seenModifications = this.macroEval.packageResolver().packageModifications();
 			this.seenPackages.putAll(this.macroEval.packageResolver().packageRecords());
+			if (!shallow) {
+				this.macroEval.packageResolver().notingImportedReadSymbols();
+			}
 		}
 
 		/**
@@ -360,7 +363,9 @@ public final class UserMacroExpander {
 		 * macro-time evaluator ran did to its packages since the last one: the
 		 * {@code (%image-packages ...)} marker of each package it made or changed, as it
 		 * holds them now ({@code .kb/packages.md}, "The compile image's packages"). The
-		 * form may name a package the code made while expanding it.
+		 * form may name a package the code made while expanding it. Behind it, the
+		 * members an import clause of the form took that only this evaluator read
+		 * ({@link PackageResolver#importedReadSymbolsMarker}).
 		 * @param form the form
 		 */
 		private void emit(LispVal form) {
@@ -368,16 +373,20 @@ public final class UserMacroExpander {
 			this.result.add(form);
 		}
 
-		/** Adds the marker {@link #emit} puts in front of a form, when there is one. */
+		/** Adds the markers {@link #emit} puts in front of a form, when there are any. */
 		void emitPackages() {
 			notePackages(false);
-			if (this.changedByCode.isEmpty()) {
-				return;
+			PackageResolver resolver = this.macroEval.packageResolver();
+			if (!this.changedByCode.isEmpty()) {
+				LispVal marker = resolver.imagePackagesMarker(this.changedByCode);
+				this.changedByCode.clear();
+				if (marker != null) {
+					this.result.add(marker);
+				}
 			}
-			LispVal marker = this.macroEval.packageResolver().imagePackagesMarker(this.changedByCode);
-			this.changedByCode.clear();
-			if (marker != null) {
-				this.result.add(marker);
+			LispVal imported = resolver.importedReadSymbolsMarker();
+			if (imported != null) {
+				this.result.add(imported);
 			}
 		}
 
