@@ -4866,6 +4866,17 @@ public final class LispNames {
 	public static final String MACRO_EXPANDER_STUB = "%MACRO-EXPANDER-STUB";
 
 	/**
+	 * The {@code %operator-function} internal: what {@code symbol-function} and
+	 * {@code fdefinition} answer on the compile paths for a special operator or a macro,
+	 * one function per name that signals {@code undefined-function} when called; nil for
+	 * any other name. A computed {@code fboundp} asks it on a registry miss.
+	 */
+	public static final String OPERATOR_FUNCTION_INTERNAL = "%OPERATOR-FUNCTION";
+
+	/** The alist {@link #OPERATOR_FUNCTION_INTERNAL} keeps its answers in. */
+	public static final String OPERATOR_FUNCTIONS_VAR = "%OPERATOR-FUNCTIONS%";
+
+	/**
 	 * The run-time {@code (setf macro-function)} of the compile paths:
 	 * {@code (%set-macro-function name function)} makes {@link #MACRO_FUNCTION} answer
 	 * {@code function} for {@code name} from then on. What was compiled is already

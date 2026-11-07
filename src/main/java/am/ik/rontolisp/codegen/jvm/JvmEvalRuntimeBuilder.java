@@ -2305,6 +2305,23 @@ final class JvmEvalRuntimeBuilder {
 		n = special(a, OP, LispNames.DEFUN);
 		car(a, REST);
 		a.astore(ACC); // name symbol
+		// The binding's name: a (setf place) function is stored under its writer's
+		// symbol, "%setf-" + place, as every other lookup of such a name spells it.
+		a.aload(ACC);
+		a.astore(OP);
+		MethodCode.Label symbolName = a.newLabel();
+		a.aload(ACC);
+		a.instanceOf(this.k.stringClass());
+		a.ifne(symbolName);
+		ldcStr(a, ClosRegistry.SETF_FUNCTION_PREFIX);
+		cdr(a, ACC);
+		a.astore(TMP);
+		car(a, TMP);
+		a.checkcast(this.k.stringClass());
+		a.invokevirtual(
+				this.k.cp().methodRef(this.k.stringClass(), "concat", "(Ljava/lang/String;)Ljava/lang/String;"));
+		a.astore(OP);
+		a.labelBinding(symbolName);
 		// lambdaForm = cons("lambda", cdr(REST))
 		a.loadConstant(2);
 		a.anewarray(this.k.objectClass());
@@ -2323,7 +2340,7 @@ final class JvmEvalRuntimeBuilder {
 		a.invokestatic(this.k.evalRef());
 		a.astore(NEWCELL); // closure value
 		// install into the function namespace (Lisp-2): _fenv, not _genv
-		storeFunctionBinding(a, ACC, NEWCELL);
+		storeFunctionBinding(a, OP, NEWCELL);
 		a.aload(ACC);
 		a.areturn();
 		a.labelBinding(n);

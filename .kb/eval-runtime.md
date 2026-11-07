@@ -134,6 +134,12 @@ arm per macro** (2026-11-05, ci-spec `eval-expands-the-built-in-macros`, agrees 
   bytes an arm on the JVM, and dexador's 451 setf functions made a method past the 64 KB limit, refusing every dexador
   program on the JVM (2026-11-06; segments of 4.5 KB now). Pinned by
   `JvmLispCompilerTest#anEvaldSetfFindsItsSetfFunctionThroughSegmentsTheJitCompiles`.
+  An eval'd `(defun (setf name) ...)` binds `%setf-name` (both `defun` arms; wasm's
+  `emitSetfFunctionSymbol` is `%setf-function-symbol`'s build), the symbol a computed `fdefinition` /
+  `fboundp` of the list probes. Until 2026-11-07 it bound the list, which no lookup compares:
+  `(fdefinition (list 'setf n))` signalled undefined-function on the JVM, P1 and the component (typo's
+  `ensure-fdefinition`; ci-spec `eval-defun-then-call`). An eval'd `setf` of such a place still assigns
+  nothing: `%eval-setf-form` knows the compiled definitions only (the doc says so).
 - **Restarts** (2026-11-05, ci-spec `eval-establishes-restarts`, agrees with SBCL 2.2.9 but for printing a restart object:
   on every backend it prints the record, SBCL its report). `%eval-restart-case` pushes the records the compile-time
   expansion writes, names computed, through an empty `restart-bind`: its save and restore, and what opens restart mode.

@@ -413,7 +413,8 @@ table is GENERATED from it. **Change them together.**
   stays a fixnum. Pin: ci-spec `subtypep-fixnum-is-a-63-bit-interval` (SBCL's answers). typo's load
   then passed `vm/predicates.lisp` once a `shared-initialize` method's initargs reached the slots
   ([clos.md](clos.md), "The instance-initialization protocol") and stops in
-  `vm/data-and-control-flow.lisp` on `(fdefinition 'if)` (`.todo/j03`, measured 2026-11-07).
+  `vm/data-and-control-flow.lisp` on `(fdefinition 'if)`, which loads since 2026-11-07
+  ([symbol-runtime-api.md](symbol-runtime-api.md), "`symbol-function` of an operator").
 - **The stream subtypes are edges to `STREAM`** (`file-stream` ... `concatenated-stream`), and a
   Gray class (ancestor `rontolisp:fundamental-stream`) is below `STREAM` in `namedSubtypep`. The
   edges join the runtime universe only for the names `runtimeStreamTypeNames` keeps, so a

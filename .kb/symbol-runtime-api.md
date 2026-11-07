@@ -824,7 +824,8 @@ symbol-to-function route (the interpreter resolves designators against the live 
   `symbol-function` itself as an `undefined-function` (WASM: the arity-0 dispatcher's
   report, so a trap only where no handler can catch; a name `fmakunbound` retired throws
   through `_undefined_function` instead, since the dispatcher's registry lookup may still
-  answer it and call the retired function), matching the interpreter and SBCL. `t`,
+  answer it and call the retired function), matching the interpreter and SBCL; a special
+  operator or a macro answers its `%operator-function` ("`symbol-function` of an operator"). `t`,
   `nil` and keywords are such names: the interpreter's `fboundp` / `symbol-function` /
   `fdefinition` / `funcall` accept the `t` and `nil` VALUES as the symbols they are, and the
   JVM maps a null designator to `NIL` before the registry sees it. The eval runtime's
@@ -1029,6 +1030,40 @@ Mechanics: `.kb/gensym-macroexpand.md`.
 The one shape that must NOT be walked as a call is `(setf (macro-function name) function)` — a
 write to the macro table, recognized syntactically (`.kb/defmacro-backquote.md`); `expandAll`'s
 `SETF` case returns it verbatim.
+
+### `symbol-function` of an operator
+**A special operator or a macro is fbound, and `symbol-function` / `fdefinition` answer one
+function per name that signals `undefined-function` naming it when called, on all four** (CLHS
+leaves the object's nature to the implementation; SBCL 2.2.9's `(:special if)` / `(:macro or)` are
+one per name and signal the same class). typo keys a hash table by it (`ensure-fdefinition`).
+Before (2026-11-07, the name held as data): the interpreter's `fboundp` T and `symbol-function`
+undefined-function; the JVM, P1 and the component NIL and undefined-function.
+
+- **Interpreter**: `LispEvaluator.symbolFunction` asks `ansiSpecialOperatorNames` / `isMacroName`
+  first and keeps one `LispFunction` per name (`operatorFunctions`).
+- **Compile paths**: the prelude's `%operator-function`, `(or (special-operator-p s)
+  (macro-function s))` then an alist of the functions made, so the three answers agree by
+  construction. Asked on a registry MISS only (JVM `compileComputedFboundp` /
+  `emitResolvedFunction`, wasm after `FUNC_FBOUNDP` and in `emitRegistryBox`): a found function
+  pays nothing, and `fmakunbound`'s tombstone still decides first. The miss arm reads the operand
+  again, so an operand that is a form is bound to `%opfn-name` first
+  (`compiler/OperatorFunctions.throughVariable`). A literal `(symbol-function 'op)` is lowered to
+  `(%operator-function 'op)` by `UserMacroExpander`, the one pass that knows the program's macros;
+  a computed site also makes `emitMacroFunctionTable` append them.
+- **The gate is the surface fact** (`OperatorFunctions.reached`: a computed operand of `fboundp` /
+  `symbol-function` / `fdefinition`, one of them or `compile` as a value, a call of the helper).
+  Measured 2026-11-07: 14 of the 153 example programs gain it (clack, ningle, tiny-routes, dexador,
+  jzon, cffi, through `uiop:ensure-function` and alexandria's `ensure-function`), every one of them
+  evaluating data (`eval`, `read-from-string`), where a table narrowed to the operator names data
+  spells (the deftype alias table's rule) would still be whole. `net/hello-clack` +10.5 KB class
+  (+0.4%), its worker +8.8 KB component (+0.4%); a 2-line program with a computed `fboundp` +70 KB
+  class and +40 KB module (the `macro-function` table). Re-evaluation trigger: a program with no
+  data evaluator measured to care -- then narrow, keeping `macro-function` the one table.
+- Residuals: a literal `(fboundp 'name)` of a name only a run-time `(setf macro-function)` defines
+  is NIL on the compile paths (the fold), a computed one T. A `defun` after a `defmacro` of the same
+  name leaves the macro on all four (its calls expand; SBCL 2.2.9 replaces it), so `symbol-function`
+  answers the operator's function there, as `macro-function` answers the macro.
+- Pinned by ci-spec `macro-function-and-special-operator-p` (SBCL 2.2.9 agrees).
 
 Tests: `LispEvaluatorTest#macroFunctionAndSpecialOperatorPPartitionTheOperators` (incl. the
 `while` leg) / `#macroFunctionIsTheRealExpanderOnTheInterpreter` (incl. the arity probes) /

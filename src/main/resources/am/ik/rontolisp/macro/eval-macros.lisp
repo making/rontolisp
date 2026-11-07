@@ -1996,6 +1996,12 @@
 
 (defun %eval-place-svref (args value) `(%eval-store-aref ',value ,@args))
 
+(defun %eval-place-row-major-aref (args value)
+  `(%eval-store-row-major-aref ,(car args) ,(cadr args) ',value))
+
+(defun %eval-store-row-major-aref (array index value)
+  (setf (row-major-aref array index) value))
+
 (defun %eval-place-elt (args value)
   `(%eval-store-elt ,(car args) ,(cadr args) ',value))
 

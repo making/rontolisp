@@ -13,6 +13,8 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.FunctionDesignators;
+import am.ik.rontolisp.compiler.OperatorFunctions;
+import org.jspecify.annotations.Nullable;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
@@ -75,7 +77,14 @@ final class WasmFunctionFormCompiler {
 		// registry (_lookup, live through usesRuntimeFunctionBox) answers, and a miss
 		// traps exactly like the dispatchers' late binding. Only the function
 		// namespace is read: a global VARIABLE holding a lambda is not a function
-		// binding (the interpreter and SBCL signal for it).
+		// binding (the interpreter and SBCL signal for it). A registry miss asks
+		// %operator-function about the operand, a variable it reads again.
+		boolean operators = ctx.functions.containsKey(LispNames.OPERATOR_FUNCTION_INTERNAL);
+		LispVal throughVariable = OperatorFunctions.throughVariable(cons, operators);
+		if (throughVariable != null) {
+			WasmExprCompiler.compileExpr(throughVariable, ctx);
+			return;
+		}
 		WasmExprCompiler.compileExpr(parts.get(1), ctx);
 		int symTemp = ctx.allocTemp();
 		int bindTemp = ctx.allocTemp();
@@ -111,7 +120,7 @@ final class WasmFunctionFormCompiler {
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.writeRefType(true, Type.EQ.code());
 		// No binding: resolve through the registry and box.
-		emitRegistryBox(ctx, symTemp);
+		emitRegistryBox(ctx, symTemp, OperatorFunctions.askedOperand(parts.get(1), operators));
 		ctx.writer.write(Instruction.ELSE);
 		// A binding decides on its own: the value cell, or -- for fmakunbound's
 		// tombstone (cdr nil), which shadows the registry -- an undefined-function.
@@ -150,10 +159,11 @@ final class WasmFunctionFormCompiler {
 
 	/**
 	 * Resolves the symbol in {@code symTemp} through the compiled-function registry and
-	 * boxes the hit as a closure struct, trapping on a miss. Leaves the closure on the
-	 * stack.
+	 * boxes the hit as a closure struct; on a miss, what {@code %operator-function}
+	 * answers for {@code operand} when it is not null, else a trap. Leaves the closure on
+	 * the stack.
 	 */
-	private static void emitRegistryBox(WasmLispCompiler.Ctx ctx, int symTemp) {
+	private static void emitRegistryBox(WasmLispCompiler.Ctx ctx, int symTemp, @Nullable LispSymbol operand) {
 		// found = _lookup(off) != -1?
 		emitStringOffset(ctx, symTemp);
 		ctx.writer.write(Instruction.CALL);
@@ -183,7 +193,25 @@ final class WasmFunctionFormCompiler {
 			WasmEmitHelper.emitNewClosure(ctx);
 		}
 		ctx.writer.write(Instruction.ELSE);
-		emitUnboundSignal(ctx, symTemp);
+		if (operand != null) {
+			int operatorTemp = ctx.allocTemp();
+			WasmExprCompiler.compileExpr(OperatorFunctions.call(operand), ctx);
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(operatorTemp);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(operatorTemp);
+			ctx.writer.write(Instruction.REF_IS_NULL);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.writeRefType(true, Type.EQ.code());
+			emitUnboundSignal(ctx, symTemp);
+			ctx.writer.write(Instruction.ELSE);
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(operatorTemp);
+			ctx.writer.write(Instruction.END);
+		}
+		else {
+			emitUnboundSignal(ctx, symTemp);
+		}
 		ctx.writer.write(Instruction.END);
 	}
 

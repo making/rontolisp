@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.compiler.EvalReferences;
 import am.ik.wasm.Instruction;
@@ -314,6 +315,43 @@ final class WasmEvalRuntimeBuilder {
 		getLocal(w, slot);
 		refCast(w, WasmLispCompiler.TYPE_CONS);
 		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
+	}
+
+	/**
+	 * Pushes the symbol the {@code (setf place)} function name in {@code nameSlot} is
+	 * stored under: {@code "%setf-"} + the place's spelling, interned -- the
+	 * {@code %setf-function-symbol} the compiled code builds
+	 * ({@code WasmSymbolApiCompiler.compileSetfFunctionSymbol}). Clobbers {@code tmpSlot}
+	 * and the i32 locals {@code addrSlot} and {@code lenSlot}.
+	 */
+	private static void emitSetfFunctionSymbol(WasmWriter w, int nameSlot, int tmpSlot, int addrSlot, int lenSlot) {
+		byte[] prefix = ClosRegistry.SETF_FUNCTION_PREFIX.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+		emitCdrOf(w, nameSlot);
+		setLocal(w, tmpSlot);
+		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		setLocal(w, addrSlot);
+		// The place's bytes after the prefix's room; len = prefix + place.
+		emitCarOf(w, tmpSlot);
+		getLocal(w, addrSlot);
+		i32(w, prefix.length);
+		w.write(Instruction.I32_ADD);
+		WasmEmitHelper.emitStrToMemCall(w);
+		i32(w, prefix.length);
+		w.write(Instruction.I32_ADD);
+		setLocal(w, lenSlot);
+		for (int i = 0; i < prefix.length; i++) {
+			getLocal(w, addrSlot);
+			i32(w, prefix[i]);
+			w.write(Instruction.I32_STORE8, 0x00);
+			w.writeUnsignedLeb128(i);
+		}
+		getLocal(w, addrSlot);
+		getLocal(w, lenSlot);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_INTERN);
+		getLocal(w, lenSlot);
+		WasmEmitHelper.emitStrBuildCall(w);
 	}
 
 	/** Emits {@code (cdr (ref.cast cons (local.get slot)))} onto the stack. */
@@ -1070,6 +1108,16 @@ final class WasmEvalRuntimeBuilder {
 		openSpecial(w, OFF, off.of(LispNames.DEFUN));
 		emitCarOf(w, REST); // name symbol
 		setLocal(w, ACC);
+		// The binding's name: a (setf place) function is stored under its writer's
+		// symbol, "%setf-" + place, as every other lookup of such a name spells it.
+		getLocal(w, ACC);
+		setLocal(w, OP);
+		getLocal(w, ACC);
+		refTest(w, WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.IF, 0x40);
+		emitSetfFunctionSymbol(w, ACC, TMP, ADDR, LEN);
+		setLocal(w, OP);
+		w.write(Instruction.END);
 		// lambdaForm = cons("lambda", cdr(REST))
 		i32(w, off.of(LispNames.LAMBDA));
 		i32(w, 6); // "lambda".length()
@@ -1084,7 +1132,7 @@ final class WasmEvalRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_EVAL);
 		setLocal(w, NEWCELL);
 		// install into the function namespace (Lisp-2): $fenv, not $genv
-		getLocal(w, ACC);
+		getLocal(w, OP);
 		getLocal(w, NEWCELL);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_SET_SYMBOL_FUNCTION);

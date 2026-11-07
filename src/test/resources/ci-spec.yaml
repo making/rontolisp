@@ -16691,6 +16691,16 @@ cases:
       (mfp-expand-1 (defvar *mfp-var* 5))
       (print (list (mfp-twice 4) (mfp-twice 10) *mfp-var*
                    (second (multiple-value-list (macroexpand-1 '(defclass mfp-k () ()))))))
+      ;; Both are fbound, and symbol-function / fdefinition answer one function per name
+      ;; that signals undefined-function when called, SBCL's (:special if) / (:macro or):
+      ;; typo keys a table by it. A name held as data, and a literal one.
+      (defun mfp-fdefinition (name)
+        (let* ((s (intern name)) (f (fdefinition s)))
+          (list name (and (fboundp s) t) (functionp f) (eq f (symbol-function s))
+                (handler-case (funcall f 1 2) (undefined-function (c) (cell-error-name c))))))
+      (print (mapcar #'mfp-fdefinition '("IF" "OR" "WHEN" "MFP-MAC")))
+      (print (list (eq (fdefinition 'unless) (symbol-function (intern "UNLESS")))
+                   (fboundp (intern "MFP-NO-SUCH-NAME"))))
     expected: |
       (:SPECIAL :SPECIAL :MACRO :MACRO :MACRO :FUNCTION :FUNCTION)
       (T NIL NIL)
@@ -16703,6 +16713,8 @@ cases:
       "boom"
       (1 2)
       (8 :BIG 5 T)
+      (("IF" T T T IF) ("OR" T T T OR) ("WHEN" T T T WHEN) ("MFP-MAC" T T T MFP-MAC))
+      (T NIL)
   # A (setf (macro-function ...)) no top-level form leaves is a write the program runs.
   # The compile paths have expanded every call by then, so this reads the write through
   # macro-function and macroexpand, never by a call. SBCL 2.2.9 agrees but for the words
@@ -33624,8 +33636,15 @@ cases:
   - name: eval-defun-then-call
     source: |
       (print (eval '(progn (defun sq2 (x) (* x x)) (sq2 6))))
+      ;; An eval'd (setf name) function is the one fdefinition of the name finds, and an
+      ;; eval'd row-major-aref place assigns: typo's ensure-fdefinition.
+      (eval '(defun (setf edc-first) (value cell) (setf (row-major-aref cell 0) value)))
+      (let ((v (vector 1 2)))
+        (funcall (fdefinition (list 'setf (intern "EDC-FIRST"))) 9 v)
+        (print v))
     expected: |
       36
+      #(9 2)
   - name: eval-setf-car-cdr
     source: |
       (print (eval '(let ((x (list 1 2 3))) (setf (car x) 99) x)))

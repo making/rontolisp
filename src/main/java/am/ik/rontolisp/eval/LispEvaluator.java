@@ -1519,6 +1519,12 @@ public final class LispEvaluator {
 	private final Map<String, LispFunction> genericFunctionValues = new java.util.concurrent.ConcurrentHashMap<>();
 
 	/**
+	 * The one function value of each special operator and macro
+	 * ({@link #symbolFunction}).
+	 */
+	private final Map<String, LispFunction> operatorFunctions = new java.util.concurrent.ConcurrentHashMap<>();
+
+	/**
 	 * Every function-body tail a multiple-value producer was lowered into when its
 	 * function was DEFINED ({@code evalDefun}, {@link #settledLambdaTail}): the lowering
 	 * spells the built-in's values by name, so a {@code defmethod} on the producer that
@@ -2273,7 +2279,7 @@ public final class LispEvaluator {
 				throw new LispEvalException(
 						LispNames.SYMBOL_FUNCTION + " expects a symbol, got " + args.get(0).print());
 			}
-			return functionValue(name);
+			return symbolFunction(name);
 		}));
 		// fdefinition = symbol-function, which also takes a (setf name) function name.
 		this.globalEnv.defineFunction(LispNames.FDEFINITION, new LispFunction(LispNames.FDEFINITION, args -> {
@@ -2285,7 +2291,7 @@ public final class LispEvaluator {
 			if (name == null) {
 				throw new LispEvalException(LispNames.FDEFINITION + " expects a symbol, got " + args.get(0).print());
 			}
-			return functionValue(name);
+			return symbolFunction(name);
 		}));
 		// concatenate re-registered WITH the class registry, so a result-type designator
 		// naming a user deftype (fast-http's simple-byte-vector) resolves through its
@@ -15997,6 +16003,24 @@ public final class LispEvaluator {
 	 */
 	LispVal functionValue(String name) {
 		return functionValue(name, ClosRegistry.normalize(name));
+	}
+
+	/**
+	 * What {@code symbol-function} and {@code fdefinition} answer: for a special operator
+	 * or a macro -- the names {@code special-operator-p} and {@code macro-function}
+	 * answer for -- one function per name that signals {@code undefined-function} when
+	 * called (CLHS leaves its nature to the implementation; SBCL's is
+	 * {@code (:macro or)}), else {@link #functionValue}.
+	 * @param name the canonical name
+	 * @return the value
+	 */
+	private LispVal symbolFunction(String name) {
+		if (PackageRegistry.ansiSpecialOperatorNames().contains(name) || isMacroName(name)) {
+			return this.operatorFunctions.computeIfAbsent(name, operator -> new LispFunction(operator, args -> {
+				throw CellErrorException.undefinedFunction(operator);
+			}));
+		}
+		return functionValue(name);
 	}
 
 	/**

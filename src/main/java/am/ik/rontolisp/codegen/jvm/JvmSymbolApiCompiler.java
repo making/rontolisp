@@ -15,7 +15,9 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.OperatorFunctions;
 import am.ik.rontolisp.compiler.RuntimeFunctionNames;
+import org.jspecify.annotations.Nullable;
 import am.ik.jvm.ConstantPool;
 
 /**
@@ -402,8 +404,9 @@ final class JvmSymbolApiCompiler {
 	 * fboundp: a literal quoted symbol folds at compile time (functions, macros, special
 	 * forms, car/cdr compositions, user defuns) -- a function a defun below the top level
 	 * defines reads its global instead; a computed argument probes the runtime
-	 * {@code _fenv} then the compiled-function registry {@code _lookup} (so it sees
-	 * functions only -- built-in macros and special forms exist solely at compile time).
+	 * {@code _fenv}, the compiled-function registry {@code _lookup}, then -- for a
+	 * special operator or a macro -- {@code %operator-function}
+	 * ({@code compiler.OperatorFunctions}).
 	 *
 	 * <p>
 	 * When the program calls {@code fmakunbound} the fold is emitted BEHIND a tombstone
@@ -464,13 +467,33 @@ final class JvmSymbolApiCompiler {
 			}
 			return;
 		}
+		// A special operator or a macro answers t too: the miss arm asks
+		// %operator-function about the operand, a variable it reads again.
+		boolean operators = ctx.functions.containsKey(LispNames.OPERATOR_FUNCTION_INTERNAL);
+		LispVal throughVariable = OperatorFunctions.throughVariable(cons, operators);
+		if (throughVariable != null) {
+			JvmExprCompiler.compileExpr(throughVariable, ctx, className);
+			return;
+		}
 		// A (setf place) list built at run time probes the name its writer is stored
 		// under.
-		compileComputedFboundp(RuntimeFunctionNames.functionNameArgument(parts.get(1),
-				ctx.functions.containsKey(LispNames.FUNCTION_NAME_INTERNAL)), ctx, className);
+		compileComputedFboundp(
+				RuntimeFunctionNames.functionNameArgument(parts.get(1),
+						ctx.functions.containsKey(LispNames.FUNCTION_NAME_INTERNAL)),
+				OperatorFunctions.askedOperand(parts.get(1), operators), ctx, className);
 	}
 
 	private static void compileComputedFboundp(LispVal arg, JvmLispCompiler.Ctx ctx, String className) {
+		compileComputedFboundp(arg, null, ctx, className);
+	}
+
+	/**
+	 * The run-time probe of a computed {@code fboundp}: the function namespace, the
+	 * compiled-function registry, then -- where {@code operand} is not null -- whether
+	 * {@code %operator-function} answers for it.
+	 */
+	private static void compileComputedFboundp(LispVal arg, @Nullable LispSymbol operand, JvmLispCompiler.Ctx ctx,
+			String className) {
 		int tempSlot = compileArgToTemp(arg, ctx, className);
 		// nil -> nil
 		ctx.body.aload(tempSlot);
@@ -510,6 +533,14 @@ final class JvmSymbolApiCompiler {
 		MethodCode.Label gotoEnd3 = ctx.body.newLabel();
 		ctx.body.goto_(gotoEnd3);
 		ctx.body.labelBinding(registryMiss);
+		if (operand != null) {
+			JvmExprCompiler.compileExpr(OperatorFunctions.call(operand), ctx, className);
+			MethodCode.Label noOperator = ctx.body.newLabel();
+			ctx.body.ifnull(noOperator);
+			JvmEmitHelper.compileTrue(ctx);
+			ctx.body.goto_(gotoEnd3);
+			ctx.body.labelBinding(noOperator);
+		}
 		ctx.body.aconst_null();
 		ctx.body.labelBinding(gotoEnd1);
 		ctx.body.labelBinding(gotoEnd2);

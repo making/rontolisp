@@ -1107,8 +1107,15 @@ JVM, P1 and the component with no warning, as interpreted; on the way out went
 `with-simple-restart`/`cerror` over a variable control ([error-handling.md](error-handling.md)) and
 36 `Can't check exhaustiveness` warnings ([declarations-type-checks.md](declarations-type-checks.md),
 the compound `subtypep`). The `%define-method-combination` compile-time failure the same compile
-printed was i97's replay fix. typo stops on `.todo/j03` (measured 2026-11-07: past
-`vm/predicates.lisp` on all three it was run on, the interpreter, the JVM and P1).
+printed was i97's replay fix. Measured 2026-11-07 after `symbol-function` of an operator
+([symbol-runtime-api.md](symbol-runtime-api.md)) and an eval'd `(defun (setf name) ...)`
+([eval-runtime.md](eval-runtime.md)): `(ql:quickload :typo)` loads on the interpreter, the JVM and P1,
+and `find-fnrecord` / `type-specifier-ntype` answer what SBCL 2.2.9 answers (but
+`call-arguments-limit`, ours). petalisp's `petalisp.core`, `.ir` and `.codegen` load on the
+interpreter; `petalisp` itself stops at `petalisp.native-backend`'s `static-vectors`, whose `.asd`
+signals for an implementation it does not list, and whose backend reads a Lisp array's storage
+through `sb-ext:array-storage-vector` / `static-vector-pointer` (`#-(or sbcl ccl)` is "Not
+implemented yet."; `.todo/j05`).
 
 **`eval/ClReexportForms`** (pinned by `ClReexportE2eTest`, all four, SBCL 2.2.9's answers). clingon's
 `src/package.lisp` is `(defpackage :clingon (:use :cl))` plus top-level

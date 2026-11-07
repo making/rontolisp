@@ -12,6 +12,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.rontolisp.compiler.OperatorFunctions;
 import am.ik.rontolisp.compiler.RuntimeFunctionNames;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
@@ -255,7 +256,8 @@ final class WasmSymbolApiCompiler {
 	/**
 	 * fboundp: a literal quoted symbol folds at compile time (functions, macros, special
 	 * forms, car/cdr compositions, user defuns); a computed argument probes the runtime
-	 * {@code _fenv} then the compiled-function registry (functions only).
+	 * {@code _fenv}, the compiled-function registry, then -- for a special operator or a
+	 * macro -- {@code %operator-function} ({@code compiler.OperatorFunctions}).
 	 *
 	 * <p>
 	 * When the program calls {@code fmakunbound} the fold is emitted BEHIND a tombstone
@@ -308,6 +310,14 @@ final class WasmSymbolApiCompiler {
 			}
 			return;
 		}
+		// A special operator or a macro answers t too: a miss asks %operator-function
+		// about the operand, a variable it reads again.
+		boolean operators = ctx.functions.containsKey(LispNames.OPERATOR_FUNCTION_INTERNAL);
+		LispVal throughVariable = OperatorFunctions.throughVariable(cons, operators);
+		if (throughVariable != null) {
+			WasmExprCompiler.compileExpr(throughVariable, ctx);
+			return;
+		}
 		// A (setf place) list built at run time probes the name its writer is stored
 		// under.
 		LispVal name = RuntimeFunctionNames.functionNameArgument(parts.get(1),
@@ -315,6 +325,20 @@ final class WasmSymbolApiCompiler {
 		WasmExprCompiler.compileExpr(name, ctx);
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_FBOUNDP);
+		LispSymbol operand = OperatorFunctions.askedOperand(parts.get(1), operators);
+		if (operand != null) {
+			ctx.writer.write(Instruction.REF_IS_NULL);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.writeRefType(true, Type.EQ.code());
+			WasmExprCompiler.compileExpr(
+					new LispCons(new LispSymbol(LispNames.IF),
+							new LispCons(OperatorFunctions.call(operand),
+									new LispCons(LispTrue.INSTANCE, new LispCons(LispNil.INSTANCE, LispNil.INSTANCE)))),
+					ctx);
+			ctx.writer.write(Instruction.ELSE);
+			WasmEmitHelper.emitTrue(ctx);
+			ctx.writer.write(Instruction.END);
+		}
 	}
 
 	/**

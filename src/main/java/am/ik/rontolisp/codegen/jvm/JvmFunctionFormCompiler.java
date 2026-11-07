@@ -18,6 +18,8 @@ import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.BuiltinFunctionWrappers;
 import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.FunctionDesignators;
+import am.ik.rontolisp.compiler.OperatorFunctions;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Compiles the {@code (function name)} special form ({@code #'name} reader syntax) and
@@ -79,7 +81,14 @@ final class JvmFunctionFormCompiler {
 		// Otherwise the compiled-function registry (_lookup) answers, and a miss
 		// signals exactly like the dispatchers' late binding. Only the function
 		// namespace is read: a global VARIABLE holding a lambda is not a function
-		// binding (the interpreter and SBCL signal for it).
+		// binding (the interpreter and SBCL signal for it). A registry miss asks
+		// %operator-function about the operand, a variable it reads again.
+		boolean operators = ctx.functions.containsKey(LispNames.OPERATOR_FUNCTION_INTERNAL);
+		LispVal throughVariable = OperatorFunctions.throughVariable(cons, operators);
+		if (throughVariable != null) {
+			JvmExprCompiler.compileExpr(throughVariable, ctx, className);
+			return;
+		}
 		JvmExprCompiler.compileExpr(parts.get(1), ctx, className);
 		int symSlot = ctx.allocTemp();
 		ctx.body.astore(symSlot);
@@ -90,18 +99,21 @@ final class JvmFunctionFormCompiler {
 		JvmEmitHelper.compileStringLiteral("NIL", ctx);
 		ctx.body.astore(symSlot);
 		ctx.body.labelBinding(named);
-		emitResolvedFunction(symSlot, ctx, className);
+		emitResolvedFunction(symSlot, OperatorFunctions.askedOperand(parts.get(1), operators), ctx, className);
 	}
 
 	/**
 	 * Pushes the function the symbol in {@code symSlot} names when the code runs: what
 	 * {@code _fenv} binds, where the eval runtime exists, else the registry's row boxed
-	 * ({@code _funcref}), else the undefined-function naming the symbol.
+	 * ({@code _funcref}), else what {@code %operator-function} answers for
+	 * {@code operand} when it is not null, else the undefined-function naming the symbol.
 	 * @param symSlot the local holding the symbol, never nil
+	 * @param operand the variable holding the symbol, for the operator arm, or null
 	 * @param ctx the method context
 	 * @param className the class being emitted
 	 */
-	private static void emitResolvedFunction(int symSlot, JvmLispCompiler.Ctx ctx, String className) {
+	private static void emitResolvedFunction(int symSlot, @Nullable LispSymbol operand, JvmLispCompiler.Ctx ctx,
+			String className) {
 		MethodCode.Label done = ctx.body.newLabel();
 		if (ctx.evalStoreRef != null) {
 			ctx.body.aload(symSlot).getstatic(fenvField(ctx, className));
@@ -137,6 +149,11 @@ final class JvmFunctionFormCompiler {
 		ctx.body.goto_(boxed);
 		ctx.body.labelBinding(registryMiss);
 		ctx.body.pop();
+		if (operand != null) {
+			JvmExprCompiler.compileExpr(OperatorFunctions.call(operand), ctx, className);
+			ctx.body.dup().ifnonnull(boxed);
+			ctx.body.pop();
+		}
 		emitUndefinedFunctionThrow(symSlot, ctx);
 		ctx.body.labelBinding(done);
 		ctx.body.labelBinding(boxed);
@@ -206,7 +223,7 @@ final class JvmFunctionFormCompiler {
 					ctx, className);
 			int symSlot = ctx.allocTemp();
 			ctx.body.astore(symSlot);
-			emitResolvedFunction(symSlot, ctx, className);
+			emitResolvedFunction(symSlot, null, ctx, className);
 		}
 		else if (ctx.globals.contains(name)) {
 			// A top-level (setq name (lambda ...)) the same way.

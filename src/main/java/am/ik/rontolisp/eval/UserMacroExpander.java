@@ -24,6 +24,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.compiler.CompileWarnings;
+import am.ik.rontolisp.compiler.OperatorFunctions;
 import am.ik.rontolisp.compiler.SplicedComponentGroups;
 import am.ik.rontolisp.reader.FeaturePushes;
 import am.ik.rontolisp.reader.Features;
@@ -1149,7 +1150,10 @@ public final class UserMacroExpander {
 	 * answering the form unchanged and signalling, so without the program's own names
 	 * they would answer a USER macro call with silence where the built-ins signal. (Only
 	 * a COMPUTED argument survives -- a literal one was folded to its expansion above --
-	 * which is exactly the case those bodies serve.)
+	 * which is exactly the case those bodies serve.) So does a site that can reach
+	 * {@code %operator-function} ({@link OperatorFunctions#reached}), which asks
+	 * {@code macro-function} whether a name {@code fboundp} or {@code symbol-function}
+	 * was handed is a macro.
 	 *
 	 * <p>
 	 * Appended, not prepended, and every unqualified name is spelled
@@ -1163,7 +1167,9 @@ public final class UserMacroExpander {
 	private static void emitMacroFunctionTable(LispEvaluator macroEval, List<LispVal> result) {
 		List<String> macroNames = macroEval.userMacroNames();
 		boolean writes = LispMacroExpander.usesRuntimeSetfMacroFunction(result);
-		if ((macroNames.isEmpty() && !writes) || result.stream().noneMatch(UserMacroExpander::usesMacroIntrospection)
+		if ((macroNames.isEmpty() && !writes)
+				|| result.stream().noneMatch(UserMacroExpander::usesMacroIntrospection)
+						&& !OperatorFunctions.reached(result)
 				|| result.stream().anyMatch(UserMacroExpander::definesMacroFunction)) {
 			return;
 		}
@@ -1383,6 +1389,12 @@ public final class UserMacroExpander {
 	 * compiled program at all, so only a compile-time answer can be the right one. Only
 	 * the {@code t} direction is decided: a name that is not a macro may still be a
 	 * function, which stays a runtime question.
+	 *
+	 * <p>
+	 * A literal {@code (symbol-function 'name)} / {@code (fdefinition 'name)} of a
+	 * special operator or a macro, user or built-in, becomes
+	 * {@code (%operator-function 'name)} the same way: the backends see no definition of
+	 * such a name.
 	 */
 	private static LispVal foldMacroFboundp(LispVal form, LispEvaluator macroEval) {
 		return LispTrees.rebuildSpine(form, node -> foldedMacroFboundpNode(node, macroEval),
@@ -1415,7 +1427,26 @@ public final class UserMacroExpander {
 				&& quotedCell.car() instanceof LispSymbol probed && macroEval.isUserMacro(probed.name())) {
 			return SourceProvenance.inherit(cons, LispTrue.INSTANCE);
 		}
+		if (cons.car() instanceof LispSymbol op
+				&& (LispNames.SYMBOL_FUNCTION.equals(memberName(op.name()))
+						|| LispNames.FDEFINITION.equals(memberName(op.name())))
+				&& cons.cdr() instanceof LispCons argCell && argCell.cdr() instanceof LispNil
+				&& argCell.car() instanceof LispCons quote && quote.car() instanceof LispSymbol q
+				&& LispNames.QUOTE.equals(q.name()) && quote.cdr() instanceof LispCons quotedCell
+				&& quotedCell.car() instanceof LispSymbol named && isOperatorName(named.name(), macroEval)) {
+			return SourceProvenance.inherit(cons, OperatorFunctions.call(argCell.car()));
+		}
 		return null;
+	}
+
+	/**
+	 * Whether {@code macro-function} or {@code special-operator-p} answers for the
+	 * canonical name on the compile paths: a macro of the program, a built-in one, or an
+	 * ANSI special operator.
+	 */
+	private static boolean isOperatorName(String name, LispEvaluator macroEval) {
+		return macroEval.isUserMacro(name) || PackageRegistry.ansiSpecialOperatorNames().contains(name)
+				|| PackageRegistry.runtimeMacroNames().contains(name);
 	}
 
 	/**

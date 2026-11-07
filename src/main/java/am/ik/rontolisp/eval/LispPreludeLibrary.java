@@ -608,6 +608,25 @@ public final class LispPreludeLibrary {
 				(defun %macro-expander-stub (form environment)
 				  (error "macro-function: a compiled program cannot expand a macro at run time"))
 				""");
+		// symbol-function / fdefinition of a special operator or a macro: one function
+		// per name (a caller may key a table by it) that signals when called, as SBCL's
+		// (:special if) / (:macro or) do; nil for any other name. The compile paths ask
+		// it on a registry miss (compiler.OperatorFunctions), so a computed fboundp
+		// answers t for the same names. The two predicates decide, so the answers agree.
+		SOURCES.put(LispNames.OPERATOR_FUNCTION_INTERNAL, """
+				(defvar %operator-functions% nil)
+				(defun %operator-function (symbol)
+				  (if (or (special-operator-p symbol) (macro-function symbol))
+				      (let ((known (assoc symbol %operator-functions%)))
+				        (if known
+				            (cdr known)
+				            (let ((function (lambda (&rest arguments)
+				                              (declare (ignore arguments))
+				                              (error 'undefined-function :name symbol))))
+				              (setq %operator-functions% (cons (cons symbol function) %operator-functions%))
+				              function)))
+				      nil))
+				""");
 		// A compiled image has no macro table, so a form built at RUNTIME that is not a
 		// macro call is already its own expansion: that identity answer is what lets a
 		// portable code walker (ironclad's trivial-macroexpand-all) compile. A literal
@@ -5845,6 +5864,11 @@ public final class LispPreludeLibrary {
 		// name (compile 'name) hands it.
 		if (LispNames.MACRO_FUNCTION.equals(entry)) {
 			return referencesName(program, LispNames.COMPILE, canonical);
+		}
+		// %operator-function: the fboundp / symbol-function lowerings call it from inside
+		// the expression compilers, after this pass.
+		if (LispNames.OPERATOR_FUNCTION_INTERNAL.equals(entry)) {
+			return am.ik.rontolisp.compiler.OperatorFunctions.reached(program);
 		}
 		// %set-macro-function: LispMacroExpander.expandSetf produces the call, inside the
 		// expression compilers.
