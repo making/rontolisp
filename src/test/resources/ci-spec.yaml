@@ -19641,11 +19641,23 @@ cases:
                             (bt:wait-on-semaphore ci-bt-s :timeout 1))
                      (bt:condition-notify (bt:make-condition-variable))
                      (bt:thread-yield))))
+      ; bt2's atomic counter: incf/decf answer the old value plus or minus the
+      ; delta and store it wrapped to a 64-bit word, as SBCL's arm does, and the swap
+      ; stores only over the value it expects (petalisp's barrier).
+      (print (let ((ci-bt2-a (bt2:make-atomic-integer :value 3)))
+               (list (bt2:atomic-integer-incf ci-bt2-a) (bt2:atomic-integer-decf ci-bt2-a 2)
+                     (bt2:atomic-integer-compare-and-swap ci-bt2-a 9 0)
+                     (bt2:atomic-integer-compare-and-swap ci-bt2-a 2 7)
+                     (bt2:atomic-integer-value ci-bt2-a)
+                     (progn (setf (bt2:atomic-integer-value ci-bt2-a) 0)
+                            (bt2:atomic-integer-decf ci-bt2-a))
+                     (bt2:atomic-integer-value ci-bt2-a))))
     expected: |
       NIL
       :NOT-A-THREAD
       :HELD
       (T T NIL T T NIL NIL)
+      (4 2 NIL T 7 -1 18446744073709551615)
   - name: equalp-arrays-elementwise
     source: |
       (print (equalp #(1 "A" (2 3)) #(1 "a" (2 3.0))))

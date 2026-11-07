@@ -205,6 +205,51 @@
               (bordeaux-threads:condition-wait cv lock :timeout remaining))
             (bordeaux-threads:condition-wait cv lock))))))
 
+;;; --- atomic integers -----------------------------------------------------------
+
+;; bt2's counter: an unsigned 64-bit word that wraps, incremented, decremented and
+;; swapped atomically. One lock per counter guards it -- upstream's own arm for an
+;; implementation without a compare-and-swap of its own -- so each operation is atomic
+;; against the others on the interpreter and the JVM, and a WASM module, which runs one
+;; thread, takes the lock for nothing. The incf/decf answer the old value plus or minus
+;; the delta, unwrapped, as upstream's SBCL arm does; the swap answers t when it stored.
+(defstruct (bt2:atomic-integer (:%intern-package "BT2")
+            (:constructor bt2::%make-atomic-integer (value lock))
+            (:predicate bt2::atomic-integer-p)
+            (:conc-name bt2::%atomic-integer-) (:copier nil))
+  value
+  lock)
+
+(defun bt2:make-atomic-integer (&key (value 0))
+  (check-type value (unsigned-byte 64))
+  (bt2::%make-atomic-integer value (rontolisp:make-mutex)))
+
+(defun bt2:atomic-integer-value (atomic-integer)
+  (rontolisp:with-mutex ((bt2::%atomic-integer-lock atomic-integer))
+    (bt2::%atomic-integer-value atomic-integer)))
+
+(defun (setf bt2:atomic-integer-value) (new-value atomic-integer)
+  (rontolisp:with-mutex ((bt2::%atomic-integer-lock atomic-integer))
+    (setf (bt2::%atomic-integer-value atomic-integer) new-value)))
+
+(defun bt2:atomic-integer-incf (atomic-integer &optional (delta 1))
+  (rontolisp:with-mutex ((bt2::%atomic-integer-lock atomic-integer))
+    (let ((new (+ (bt2::%atomic-integer-value atomic-integer) delta)))
+      (setf (bt2::%atomic-integer-value atomic-integer) (ldb (byte 64 0) new))
+      new)))
+
+(defun bt2:atomic-integer-decf (atomic-integer &optional (delta 1))
+  (rontolisp:with-mutex ((bt2::%atomic-integer-lock atomic-integer))
+    (let ((new (- (bt2::%atomic-integer-value atomic-integer) delta)))
+      (setf (bt2::%atomic-integer-value atomic-integer) (ldb (byte 64 0) new))
+      new)))
+
+(defun bt2:atomic-integer-compare-and-swap (atomic-integer old new)
+  (rontolisp:with-mutex ((bt2::%atomic-integer-lock atomic-integer))
+    (when (= (bt2::%atomic-integer-value atomic-integer) old)
+      (setf (bt2::%atomic-integer-value atomic-integer) new)
+      t)))
+
 ;;; --- threads -------------------------------------------------------------------
 
 (defvar bt2:*default-special-bindings* nil)

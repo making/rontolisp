@@ -1475,13 +1475,19 @@ public final class PackageRegistry {
 		Set<String> bt2Externals = new HashSet<>(Set.of(LispNames.MAKE_THREAD, LispNames.JOIN_THREAD, LispNames.THREADP,
 				LispNames.THREAD_ALIVE_P, LispNames.DESTROY_THREAD, LispNames.DEFAULT_SPECIAL_BINDINGS,
 				LispNames.MAKE_LOCK, LispNames.ACQUIRE_LOCK, LispNames.RELEASE_LOCK, LispNames.WITH_LOCK_HELD,
-				LispNames.CURRENT_THREAD));
+				LispNames.CURRENT_THREAD,
+				// The atomic counter (bt2 only): string literals, as nothing in
+				// Java names them -- the trivial-cltl2 precedent below.
+				"ATOMIC-INTEGER", "MAKE-ATOMIC-INTEGER", "ATOMIC-INTEGER-COMPARE-AND-SWAP", "ATOMIC-INTEGER-DECF",
+				"ATOMIC-INTEGER-INCF", "ATOMIC-INTEGER-VALUE"));
 		bt2Externals.addAll(btV1Members);
 		Set<String> bt2Symbols = new HashSet<>(bt2Externals);
 		// Internal: the shim's own :initial-bindings value-form resolver, spelled
-		// bt2::resolve-binding-value by its call site. Owned by the package rather than
-		// left to the resolver's tolerance for an unknown :: member.
-		bt2Symbols.add(LispNames.RESOLVE_BINDING_VALUE);
+		// bt2::resolve-binding-value by its call site, and the atomic counter's
+		// constructor, predicate and slots. Owned by the package rather than left to the
+		// resolver's tolerance for an unknown :: member.
+		bt2Symbols.addAll(Set.of(LispNames.RESOLVE_BINDING_VALUE, "%MAKE-ATOMIC-INTEGER", "ATOMIC-INTEGER-P",
+				"%ATOMIC-INTEGER-VALUE", "%ATOMIC-INTEGER-LOCK"));
 		define(new LispPackage(LispNames.BT2_PKG, List.of(), bt2Symbols, Set.copyOf(bt2Externals), bt2LockImports));
 		// babel + babel-encodings: the UTF-8 slice of the charset-conversion library,
 		// implemented in babel.lisp (eval.ShimLibraries). Real babel carries 40+ code

@@ -100,6 +100,17 @@ redirects make one definition serve both spellings, so `bt2:with-lock-held` hits
 otherwise; a library passing a variable-reference form would need eval-in-the-new-thread
 (`.kb/eval-runtime.md`).
 
+**bt2's atomic counter** (`make-atomic-integer`, `atomic-integer-value` and its setf, `-incf`, `-decf`,
+`-compare-and-swap`; 2026-11-07, petalisp's worker barrier): a structure over a value and a mutex of its
+own, every operation under it -- upstream's arm for an implementation without a compare-and-swap, so
+atomic on the interpreter and the JVM and a lock taken for nothing on wasm. The value is a 64-bit word
+stored wrapped, and incf/decf answer the old value plus or minus the delta unwrapped, as upstream's SBCL
+arm does (`(atomic-integer-decf a)` of 0 answers -1 and leaves 18446744073709551615). Pinned by ci-spec
+`bt2-thread-api-portable-surface`. Still absent from bt2's export list against bordeaux-threads 0.9.4's:
+the `native-lock` family, `lock-name`, `lockp`, `semaphorep`, `condition-variable-p`, `thread-native-thread`,
+`signal-in-thread` / `warn-in-thread` / `error-in-thread`, `abnormal-exit`, `bordeaux-threads-error`,
+`not-implemented`, `+supports-threads-p+` -- reading one stops the file.
+
 `current-thread` is **EQ-stable per thread** — what dbi's per-thread connection cache keys on
 (`cache/thread.lisp`'s `steal-cache-table`). Interpreter `AsyncRuntime.currentThreadHandle()`
 (ThreadLocal-cached, future never completed — self-join blocks forever); JVM `_thread_current`
