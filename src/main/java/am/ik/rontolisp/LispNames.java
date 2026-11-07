@@ -13108,7 +13108,8 @@ public final class LispNames {
 	 * whose every export is undefined. The shim provides the two members trivia level2
 	 * calls ({@code define-declaration} as a registering no-op,
 	 * {@code declaration-information} answering nil -- rontolisp declarations are no-ops,
-	 * so there is never information to report); the remaining exports resolve but are
+	 * so there is never information to report) and typo's {@code function-information}
+	 * (the global kind, no declarations); the remaining exports resolve but are
 	 * undefined-function errors when called (the uiop stub convention).
 	 */
 	public static final String TRIVIAL_CLTL2_PKG = "TRIVIAL-CLTL2";

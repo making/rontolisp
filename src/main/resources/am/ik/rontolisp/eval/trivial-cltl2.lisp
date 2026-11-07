@@ -3,9 +3,9 @@
 ;; re-export of each host implementation's CLtL2 environment API (sb-cltl2,
 ;; ccl, hcl, ...); on rontolisp every implementation branch of its one source
 ;; file is feature-false, so loading it verbatim yields a package whose every
-;; export is undefined. Only the two members trivia level2 calls are defined
-;; here; the remaining exports (compiler-let, variable-information,
-;; function-information, augment-environment, parse-macro, enclose) resolve
+;; export is undefined. The two members trivia level2 calls and the one typo
+;; calls are defined here; the remaining exports (compiler-let,
+;; variable-information, augment-environment, parse-macro, enclose) resolve
 ;; through the seeded package but are undefined-function errors when called
 ;; (the uiop stub convention).
 ;; Written in canonical (pre-resolved) shape like closer-mop.lisp; the package
@@ -29,3 +29,15 @@
   (if (eq decl-name 'optimize)
       '((speed 1) (safety 1) (debug 1) (space 1) (compilation-speed 1))
       nil))
+
+;; CLtL2's kind of a function name, whether it is local, and its declarations.
+;; There is no environment object, so nothing is local, and a declamation is a
+;; no-op, so none is in effect: typo asks for an ftype and falls back without one.
+(defun trivial-cltl2:function-information (name &optional env)
+  (declare (ignore env))
+  (let ((kind
+         (cond ((and (symbolp name) (special-operator-p name)) :special-form)
+               ((and (symbolp name) (macro-function name)) :macro)
+               ((fboundp name) :function)
+               (t nil))))
+    (values kind nil nil)))

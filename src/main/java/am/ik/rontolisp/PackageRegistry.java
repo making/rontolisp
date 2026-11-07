@@ -1555,9 +1555,10 @@ public final class PackageRegistry {
 		// the same name (trivial-cltl2.lisp, eval.ShimLibraries). The real library is
 		// a pure re-export of the host's CLtL2 environment API; on rontolisp every
 		// implementation branch is feature-false, so loading it verbatim yields only
-		// undefined names. define-declaration / declaration-information have shim
-		// definitions (trivia level2 calls them); the rest of the export list resolves
-		// but is an undefined-function error when called (the uiop stub convention).
+		// undefined names. define-declaration / declaration-information (trivia level2
+		// calls them) and function-information (typo's) have shim definitions; the rest
+		// of the export list resolves but is an undefined-function error when called
+		// (the uiop stub convention).
 		define(new LispPackage(LispNames.TRIVIAL_CLTL2_PKG, List.of(),
 				new HashSet<>(Set.of(LispNames.DEFINE_DECLARATION, LispNames.DECLARATION_INFORMATION, "COMPILER-LET",
 						"VARIABLE-INFORMATION", "FUNCTION-INFORMATION", "AUGMENT-ENVIRONMENT", "PARSE-MACRO",

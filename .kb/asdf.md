@@ -828,7 +828,8 @@ downloading. `BuiltinSystems.DEPENDENCIES` records edges between shims; one exis
   `rontolisp:*-mutex`, `.kb/mutexes.md`); `trivial-garbage` (nickname `tg`; `finalize` registers
   nothing — consequence: a leaked prepared statement lives until the connection closes);
   `trivial-cltl2` (nickname `cltl2`; `declaration-information` always nil, routing trivia's
-  match2*+ onto `:trivial`); `cl+ssl` (over `rontolisp:tls-upgrade`, `.kb/tcp-sockets.md`);
+  match2*+ onto `:trivial`; `function-information` the global kind, never local, no
+  declarations, for typo's ftype lookup); `cl+ssl` (over `rontolisp:tls-upgrade`, `.kb/tcp-sockets.md`);
   `mgl-pax-bootstrap` (package `mgl-pax`, nickname `pax`; `defsection` -> `(defvar NAME nil)`);
   `swank`
   (`create-server` starts the command line's server on the interpreter, `.kb/swank.md`, and

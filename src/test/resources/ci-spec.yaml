@@ -34069,10 +34069,18 @@ cases:
       (print (list (eq 'oqc::declaration 'cl:declaration) (eq 'oqc::dynamic-extent 'dynamic-extent)
                    (eq 'oqc::ftype 'cl:ftype) (eq 'oqc::ignorable 'ignorable) (eq 'oqc::ignore 'cl:ignore)
                    (eq 'oqc::inline 'inline) (eq 'oqc::notinline 'cl:notinline) (eq 'oqc::special 'special)))
+      ;; function-information's kind of a global name, never local (typo's ftype lookup).
+      (defun oqc::f (x) x)
+      (print (list (trivial-cltl2:function-information 'car) (trivial-cltl2:function-information 'when)
+                   (trivial-cltl2:function-information 'if) (trivial-cltl2:function-information 'oqc::f)
+                   (trivial-cltl2:function-information 'oqc::no-such-function)
+                   (trivial-cltl2:function-information '(setf oqc::g))
+                   (nth-value 1 (trivial-cltl2:function-information 'oqc::f))))
     expected: |
       (T T T T)
       T
       (T T T T T T T T)
+      (:FUNCTION :MACRO :SPECIAL-FORM :FUNCTION NIL NIL NIL)
   - name: subtypep-reads-array-specifiers
     source: |
       ;; An array specifier compares by element type, dimensions and simplicity, against a
