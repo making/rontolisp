@@ -328,12 +328,31 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
-	 * The interface a name resolves to: the current namespace's own, a referred one, or
-	 * one reached through an alias or its namespace's full name; null when it names none.
+	 * The interface a name resolves to: the current namespace's own, a referred one, one
+	 * reached through an alias or its namespace's full name, or the class name the
+	 * oracle's lookup answers -- the binary name {@code my.p.I} a {@code definterface}
+	 * binds, or an imported short name of one; null when it names none.
 	 */
 	static ClojureLowering.@Nullable DefinedInterface definedInterfaceOf(ClojureLowering ctx, String name) {
-		String key = ctx.isLocal(name) ? null : ctx.resolveVar(name);
-		return key == null ? null : ctx.definedInterfaces.get(key);
+		if (ctx.isLocal(name)) {
+			return null;
+		}
+		String key = ctx.resolveVar(name);
+		if (key != null) {
+			ClojureLowering.DefinedInterface own = ctx.definedInterfaces.get(key);
+			if (own != null) {
+				return own;
+			}
+		}
+		// a class name resolves wherever its short name does: the binary name as
+		// written, or the fully qualified name an import gives the short spelling
+		String binary = ClojureNamespaceLowering.resolveClass(ctx, name);
+		for (ClojureLowering.DefinedInterface declared : ctx.definedInterfaces.values()) {
+			if (declared.binaryName().equals(name) || declared.binaryName().equals(binary)) {
+				return declared;
+			}
+		}
+		return null;
 	}
 
 	/**

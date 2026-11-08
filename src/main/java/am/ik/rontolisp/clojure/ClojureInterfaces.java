@@ -609,11 +609,7 @@ final class ClojureInterfaces {
 	 * @return the interface, or null
 	 */
 	static @Nullable HostInterface defined(ClojureLowering ctx, String symbol) {
-		String key = ctx.isLocal(symbol) ? null : ctx.resolveVar(symbol);
-		if (key == null) {
-			return null;
-		}
-		ClojureLowering.DefinedInterface declared = ctx.definedInterfaces.get(key);
+		ClojureLowering.DefinedInterface declared = ClojureProtocolLowering.definedInterfaceOf(ctx, symbol);
 		if (declared == null) {
 			return null;
 		}

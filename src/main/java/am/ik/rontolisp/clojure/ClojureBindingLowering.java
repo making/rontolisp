@@ -869,7 +869,8 @@ final class ClojureBindingLowering {
 		int at = 1;
 		ClojureLowerUtil.isTrue(items.size() > at, "fn needs a parameter vector and a body");
 		String self = null;
-		if (items.get(at) instanceof LispSymbol) {
+		// reader metadata (schema's `^:schema` on the name) wraps the symbol
+		if (ClojureLowerUtil.stripMeta(items.get(at)) instanceof LispSymbol) {
 			self = ClojureLowerUtil.plainName(items.get(at), "fn");
 			at++;
 		}

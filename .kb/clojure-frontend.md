@@ -133,7 +133,7 @@ answered `2 5 3` before).
 | `def` | top-level store of the mangled name: the validating and notifying `%clojure-var-store` over the value cell, folding to its `setq` (`ClojureArms.Family.WATCH`) | inside a body it sets the global when the body runs. The value lowers against the OLD binding, so `(def p (memoize p))` after `(defn p ...)` captures `#'c%p`. A docstring and an attr map are skipped (recorded as var metadata); an attr map needs a value behind it and a lone string is the value. A name qualified with the current namespace (or an alias of it) is its bare var for `def`/`defonce`/`declare` (`ClojureLowering.defName`), so the def a syntax-quote template spells is reached bare; another namespace's is refused in the oracle's words (`Can't create defs outside of current ns` for an existing var, else `Can't refer to qualified var that doesn't exist`); until 2026-10-30 the qualified spelling was interned as written. `ClojureLoweringTest.defReadsItsNameAndALoneStringAsTheOracleDoes`, clojure-spec `syntax-quote-qualifies-unresolved-symbols-with-the-defining-namespace` |
 | `defonce` | `def` unless `boundp` | a reload keeps the root |
 | `defn-` | a private `defn` | "Namespaces and project files" |
-| `fn` / `#(...)` | `lambda`; several arities one `lambda` over `&rest` dispatching per arity, each arity binding through `let*` | a named `fn` is a `labels` self-binding, an anonymous one only when a `recur` reaches it. `#()` READS as the oracle's `(fn* [p1__N# ...] (body))` (`ClojureReader.readAnonFn`; `fn*` lowers as `fn`): fixed parameters up to the highest `%N`, an unused lower one generated after the body, `& rest__N#` for `%&`, `%` inside a quote replaced too, a nested `#()` refused; its body is ONE call (`#(f a b)` -> `(f a b)`; several forms need `do`). N restarts per top-level form (the oracle's counter is process-wide): a parameter only has to differ from those of forms it nests in, and a case's printed spelling stays put wherever it sits in a file |
+| `fn` / `#(...)` | `lambda`; several arities one `lambda` over `&rest` dispatching per arity, each arity binding through `let*` | a named `fn` is a `labels` self-binding, an anonymous one only when a `recur` reaches it. `#()` READS as the oracle's `(fn* [p1__N# ...] (body))` (`ClojureReader.readAnonFn`; `fn*` lowers as `fn`): fixed parameters up to the highest `%N`, an unused lower one generated after the body, `& rest__N#` for `%&`, `%` inside a quote replaced too, a nested `#()` refused; its body is ONE call (`#(f a b)` -> `(f a b)`; several forms need `do`). N restarts per top-level form (the oracle's counter is process-wide): a parameter only has to differ from those of forms it nests in, and a case's printed spelling stays put wherever it sits in a file. A name symbol carrying reader metadata (`schema`'s `(fn ^{:schema ...} fn2050 ...)`) is unwrapped, like every other name position (`ClojureLowerUtil.stripMeta`) |
 | destructuring (`let`/`loop`/`fn`/`defn`/`for`/`doseq`) | `let*` pairs over one temporary per pattern | vector: positional through `%clojure-nth` (nil past the end; a map or set refused, the oracle's `nth`) -- in a pattern with `&` through the seq view instead (`%clojure-seq-nth`, the oracle's `first` after each `next`), so `[[k v] & ks]` walks a map or a set (spec.alpha's `map-spec-impl`; g90, clojure-spec `a-vector-pattern-takes-as-after-its-rest`) --, `&` rest through `%clojure-drop`, `:as`, in the oracle's `seq-binding-form` order -- patterns, an optional `& rest`, an optional `:as name` ending the pattern (`[tag & content :as all]`: hiccup, honeysql; refused until 2026-10-12, as is `:as` not last now); `collectPatternNames` strips a pattern's type hint (`(for [^String s ...])`, tools.cli); map: the table-aware read with `:keys`/`:syms`/`:strs`/`:or`/`:as` (a qualified `:keys` entry binds the short name; a `:keys` vector may hold keywords `:a`/`:b/c`/`::d`; `:ns/keys`, `:ns/syms`, `::keys`, `::alias/keys` qualify each simple symbol, `keysDirective`/`directiveNamespace`, and refuse a qualified or keyword entry and `:ns/strs` as the oracle's `ns-keys` spec does, verified against clj 1.12.6, clojure-spec `namespaced-map-destructuring`; `ClojureLoopLowering.collectKeyNames` mirrors `bindKeys`; a hinted entry `{:keys [^String class]}` binds the bare name, tools.analyzer.jvm's `validate.clj`, g87, clojure-spec `map-destructuring-reads-through-get`) of the init through `%clojure-destructure-map`, which reads a `seq?` (list or lazy seq, never a vector) as `seq-to-map-for-destructuring` does (one member itself, none `{}`, more pairs through `%clojure-plist-table` with an odd last member's `%clojure-merge-entry-plist`), so `& {:keys ...}` takes keyword arguments and `:as` binds that map; until 2026-10-08 the rest list was read as is and every keyword argument was nil, clojure-spec `a-map-pattern-reads-a-seq-as-keyword-arguments` (oracle-identical); nested; malformed shapes refused by name |
 | `let` / `letfn` | `let*` (sequential) / one `labels` over every entry | `letfn` names are pre-scanned, so siblings call each other; each entry is its own `recur` target; a later entry shadows an earlier one |
 | `loop` / `recur` | `labels` self call | "recur"; each `recur` is a fresh call with fresh parameters, so a closure the body creates captures its own iteration's value like the oracle's (g41, clojure-spec `dotimes-and-loop-closures-capture-the-iteration`) |
@@ -5100,6 +5100,12 @@ by the interface's own name: every verb below measured on clj 1.12.6.
   form binds the name to the binary name through an ordinary `def`, so
   `resolve`, redefinition and a later session buffer see it; `gen-class` and
   `gen-interface` stay `protocols are not supported yet`.
+- Names: the short name, the binary name the `def` binds (`my.p.I`, what core.logic's
+  `protocols.clj:194` spells), and an imported short name of one resolve alike
+  (`definedInterfaceOf` also matches the binary name and the fully qualified name an
+  `:import` gives the short spelling), so `instance?`, a type body, an `extend` refusal
+  and an import from another namespace take the class name wherever they take the short
+  one (oracle `true false true` for the binary spelling, clj 1.12.6.1673).
 - Bodies (`typeBody`): a group symbol naming a defined interface (resolved like a
   protocol's) joins the closure as a `HostInterface` of the new
   `ClojureArms.Family.DEFINED_INTERFACE` family, whose store
@@ -5121,7 +5127,8 @@ by the interface's own name: every verb below measured on clj 1.12.6.
   `bases` of the interface answer nil, like the oracle's.
 - Pins: clojure-spec
   `a-definterface-defines-methods-a-deftype-implements-and-calls-dispatch`,
-  `a-definterface-method-on-a-reify-refuses-foreign-receivers` (all four
+  `a-definterface-method-on-a-reify-refuses-foreign-receivers`,
+  `a-definterface-resolves-by-its-binary-name-and-an-import` (all four
   backends, the oracle's but the two commented lines),
   `ClojureLoweringTest#aDefinterfaceDefinesAnInterfaceADefTypeImplementsThroughItsOwnRow`
   (the stores, the `instance?` and call shapes, every refusal),
@@ -7049,8 +7056,12 @@ one algorithm (`ClojureReader.readConditional`, `%clojure-rd-conditional`):
   library can say "not the JVM branch here". The order of the form decides, not the set:
   `#?(:clj a :rontolisp b)` is `a`.
 - ns forms: every `:require-macros`/`:include-macros` in the seven libraries (18 lines)
-  sits inside a `:cljs` branch, so none reaches `ClojureNamespaceLowering` (whose
-  `:include-macros` refusal stays; the oracle ignores the option).
+  sits inside a `:cljs` branch, so none reaches `ClojureNamespaceLowering`. A libspec
+  outside one (`:include-macros`, `:refer-macros`; schema core.cljc:85) is accepted and
+  ignored: the oracle (clj 1.12.6.1673) takes any require option it does not know and
+  `:refer-macros` refers nothing, so a `require` call and an `ns` `:require` clause
+  answer as if the pair were absent (clojure-spec
+  `cljs-only-libspec-options-are-accepted-and-ignored`).
 - **`{:read-cond :preserve}`** (oracle-checked clj 1.12.6, 2026-10-08, about 170 probes): after
   the `#?`/`#?@` and `(` checks, `%clojure-rd-preserved` reads the whole list (features never
   asked, `:else` too) into `(:C%READER-COND form splicing)`, `splicing` the Clojure boolean,

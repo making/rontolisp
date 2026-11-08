@@ -133,6 +133,20 @@ cases:
       :multi-defn
       9
       :got-it
+  - name: a-named-fn-unwraps-reader-metadata-on-its-name
+    # schema's s/fn and s/defn expand to (fn ^{:schema ...} fn2050 ([...] ...)): a
+    # name symbol carrying metadata is a reader-metadata wrapper, and fn's name test
+    # unwraps it like every other name position. Oracle-identical (clj 1.12.6.1673):
+    # the same lines, single- and multi-arity, and metadata on the parameter vector
+    # already worked.
+    source: |
+      (prn ((fn ^:x nm [g] g) 2) ((fn ^{:schema 1} nm ([g] g)) 3))
+      (prn ((fn ^:x nm ([] 0) ([g] g)) 11))
+      (prn ((fn ^:v [g] g) 4))
+    expected: |
+      2 3
+      11
+      4
   - name: recur-fibs-and-primes-prefix
     # The book's functional.clj fibs (a letfn tail-fibo mapped over 0..10) and
     # primes.clj prefix (a named fn recurring with its found vector to 25 primes).
@@ -9234,6 +9248,23 @@ cases:
       (2) 3 #{2} 1
       #{[1 2]} #{[3]} #{{:a [1]}}
       "Wrong number of args (1) passed to: clojure.set/select"
+  - name: cljs-only-libspec-options-are-accepted-and-ignored
+    # :include-macros and :refer-macros are ClojureScript options a portable libspec
+    # (schema core.cljc:85) carries outside a reader conditional. The oracle (clj
+    # 1.12.6.1673) accepts them in a require call and an ns :require clause and
+    # ignores them -- :refer-macros refers nothing -- so the same lines hold here.
+    source: |
+      (prn (require '[clojure.set :as setinc :include-macros true :refer-macros [union]]))
+      (prn (sort (setinc/union #{1} #{2})))
+      (prn (sort (clojure.set/union #{5} #{6})))
+      (ns spec.include-macros (:require [clojure.set :as setinc2 :include-macros true]))
+      (prn (sort (setinc2/union #{3} #{4})))
+      (in-ns 'user)
+    expected: |
+      nil
+      (1 2)
+      (5 6)
+      (3 4)
   - name: read-string-reads-what-a-quote-reads
     # read-string is a run-time reader over the source reader's language:
     # the first datum of the string, answering what a quote of the same text
@@ -17171,6 +17202,26 @@ cases:
       [:body :b :a] true false
       [:lock :unlock] true
       :abstract
+  - name: a-definterface-resolves-by-its-binary-name-and-an-import
+    # KB "Defined interfaces": the name is bound to the binary name, and the class
+    # name resolves wherever the short name does -- instance?, a type body, an
+    # :import from another namespace (the extend refusal is a lowering refusal
+    # here, pinned in ClojureLoweringTest). core.logic's protocols.clj:194 names
+    # clojure.core.logic.protocols.IEnforceableConstraint. Every line is the
+    # oracle's (clj 1.12.6.1673), on all four backends.
+    source: |
+      (ns spec.ifacebinary)
+      (definterface IBin)
+      (deftype UBin [] IBin)
+      (prn (instance? spec.ifacebinary.IBin (UBin.)) (instance? spec.ifacebinary.IBin 1) (instance? IBin (UBin.)))
+      (ns spec.ifacebinary.user (:import (spec.ifacebinary IBin)))
+      (deftype VBin [] IBin)
+      (deftype WBin [] spec.ifacebinary.IBin)
+      (prn (instance? IBin (VBin.)) (instance? spec.ifacebinary.IBin (VBin.)) (instance? IBin (WBin.)))
+      (in-ns 'user)
+    expected: |
+      true false true
+      true true true
   - name: string-getChars-subSequence-and-char-array-strings-read-on-every-backend
     # String.getChars copies into a char array, .subSequence answers the range and
     # String. of a char array (whole or ranged) its characters, on every backend (a

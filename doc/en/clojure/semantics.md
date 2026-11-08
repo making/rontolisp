@@ -466,7 +466,9 @@ the extension rows, like the oracle (see [defprotocol](reference/defprotocol.md)
 A `definterface` declares methods without generating a host class: the name is bound
 to the binary name, and a `deftype` or `reify` body naming it stores its methods in
 the type's row under that name, which `instance?` tests and a `.method` call
-dispatches on, like the oracle's class. A signature is the method name over one
+dispatches on, like the oracle's class. The class name resolves wherever the short
+name does: `(instance? my.ns.I x)`, a type body spelling it that way, and an
+`:import` of `(my.ns I)` into another namespace name the same interface. A signature is the method name over one
 parameter vector, `(m [x y])` -- without one, `(m)`, a zero-argument method; a
 repeated signature is refused naming the duplicate with its signature. Type hints
 (`^int`, `^chars`) parse and drop, never affecting dispatch.

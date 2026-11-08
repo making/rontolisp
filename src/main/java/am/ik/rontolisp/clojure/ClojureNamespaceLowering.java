@@ -486,6 +486,10 @@ final class ClojureNamespaceLowering {
 				case ":only" -> only = referNames(arg, spec);
 				case ":exclude" -> exclude.addAll(referNames(arg, spec));
 				case ":rename" -> rename = renameMap(arg, spec);
+				// ClojureScript-only options a portable libspec carries: the oracle
+				// accepts and ignores them, so `:refer-macros` refers nothing
+				case ":include-macros", ":refer-macros" -> {
+				}
 				default -> throw new LispReadException("require option " + opt.name() + " is not supported yet");
 			}
 		}

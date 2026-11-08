@@ -1758,6 +1758,11 @@ class ClojureLoweringTest {
 			.contains("(RONTOLISP::%CLOJURE-INTERFACE-ENTRY");
 		assertThat(lowered("(definterface PBR (m [x])) (defn f [x] (.m x 1))"))
 			.contains("(RONTOLISP::%CLOJURE-INTERFACE-ENTRY");
+		// the binary name and an imported short name resolve like the short name
+		assertThat(lowered("(ns my.p) (definterface I) (defn f [x] (instance? my.p.I x))"))
+			.contains("(RONTOLISP::%CLOJURE-INTERFACE-ENTRY");
+		assertThat(lowered("(ns my.p) (definterface I) (deftype U [] my.p.I)")).contains("'(\"my.p.I\")");
+		assertThat(lowered("(ns a) (definterface I) (ns b (:import (a I))) (deftype U [] I)")).contains("'(\"a.I\")");
 		// a program defining none lowers a .m call and an instance? without the rows
 		assertThat(lowered("(defn f [x] (.m x 1))")).doesNotContain("DEFINED-INTERFACE-ROW");
 		for (String[] refused : new String[][] { { "(definterface)", "definterface takes a name and methods" },
@@ -1777,6 +1782,8 @@ class ClojureLoweringTest {
 						"interface user.PBR is not a protocol" },
 				{ "(definterface PBR (m [x])) (extend-type String PBR (m [_] 1))",
 						"interface user.PBR is not a protocol" },
+				{ "(ns my.p) (definterface I) (extend-type String my.p.I (m [_] 1))",
+						"interface my.p.I is not a protocol" },
 				{ "(deftype R [] PBR (m [_] 1))", "Unable to resolve symbol: PBR in this context" } }) {
 			assertThatThrownBy(() -> Clojure.read(refused[0], null)).as(refused[0])
 				.isInstanceOf(LispReadException.class)
