@@ -141,7 +141,7 @@
     { "type": "java.lang.Character" },
     {
       "type": "java.lang.Class",
-      "methods": [{ "name": "forName" }]
+      "methods": [{ "name": "forName" }, { "name": "getName" }]
     },
     { "type": "java.lang.ClassCastException" },
     { "type": "java.lang.ClassCircularityError" },

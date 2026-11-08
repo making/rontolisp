@@ -5606,7 +5606,11 @@ a ThreadLocal like the old loader) -- and only `ClojureReflectedClasses` touches
   readChars`, the binary the exact reverse). `parseInterface` keeps declaration
   order now (`Collections.unmodifiableMap`), on every backend. The registration list grows
   by the run members; the binary stays byte-identical (GraalVM 25.0.4, Linux x86-64,
-  2026-10-14).
+  2026-10-14). 2026-11-09: `Class#getName` runs too -- `clojure.reflect`'s
+  `typename` on a class value, reached while a macro body lowers
+  (`clojure-spec.yaml`'s dump, CI run 42524456817: the bare `Class` entry refused the
+  invoke) -- registered as a method of `java.lang.Class` and listed in
+  `HOST_STATIC_CLASSES` beside `forName`.
 - Pins: `ClojureClassFilesLoweringTest` (reflection vs class files over
   `e2e/ClojureLoweringCorpus`: the spec program, the manifest's Clojure examples, a host-form
   program, a no-JDK host-form program), `ClojureHostImageTypesTest` (the registered list
