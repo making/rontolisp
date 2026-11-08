@@ -310,7 +310,7 @@ class ClojureLoweringTest {
 		// carries its own labels, so the pin names the stored shape, not their
 		// absence)
 		assertThat(lowered("(defmulti m :shape) (defmethod m :a [a & r] a)"))
-			.contains("(LAMBDA (|c%a| &REST |c%r|) |c%a|)")
+			.contains("(LAMBDA (|c%a| &REST |c%r|) (DECLARE")
 			.doesNotContain("%*");
 		// an extended protocol method is a fn: its recur passes the target too
 		assertThat(lowered("(defprotocol P (foo [t a & r])) (extend-protocol P String (foo [t a & r] (recur t a r)))"))
@@ -4868,9 +4868,9 @@ class ClojureLoweringTest {
 		assertThat(lowered("(java.io.PushbackReader. *in*)")).endsWith("(RONTOLISP::%CLOJURE-IN)");
 		assertThat(lowered("(defn f [r] (java.io.PushbackReader. r))")).contains("(STREAMP ")
 			.contains("(JAVA:NEW \"java.io.PushbackReader\" ");
-		// a StringReader by itself stays the host class: a Java API takes it
-		assertThat(lowered("(java.io.StringReader. \"x\")"))
-			.contains("(JAVA:NEW \"java.io.StringReader\" \"x\" :JAVA-FALSE)");
+		// a StringReader by itself is a string input stream too, so slurp and
+		// io/reader reach it on every backend
+		assertThat(lowered("(java.io.StringReader. \"x\")")).endsWith("(RONTOLISP::%CLOJURE-STRING-READER \"x\")");
 	}
 
 	@Test
