@@ -1,0 +1,1 @@
+error: ~/.m2/repository/riddley/riddley/0.1.12/riddley-0.1.12.jar!/riddley/compiler.clj:12:3: proxy constructor arguments are not supported yet: (|%vector| (|Compiler$ObjExpr.| |nil|) |nil|)

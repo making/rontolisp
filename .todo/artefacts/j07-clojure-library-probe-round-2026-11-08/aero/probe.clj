@@ -1,0 +1,8 @@
+(ns probe (:require [aero.core :as aero] [clojure.java.io :as io]))
+(spit "config.edn" "{:port #profile {:dev 8080 :prod 80}\n :host #or [#env NO_SUCH_VAR_X \"localhost\"]\n :url #join [\"http://\" #ref [:host] \":\" #ref [:port]]\n :n #long \"42\"\n :b #boolean \"true\"\n :inc #include \"other.edn\"\n :kw #keyword \"abc\"}")
+(spit "other.edn" "{:x 1}")
+(prn (aero/read-config "config.edn" {:profile :dev}))
+(prn (:port (aero/read-config "config.edn" {:profile :prod})))
+(prn (aero/read-config (java.io.StringReader. "{:a #profile {:default 1 :test 2}}") {:profile :test}))
+(defmethod aero/reader 'twice [_ _ v] (* 2 v))
+(prn (aero/read-config (java.io.StringReader. "{:a #twice 21}")))

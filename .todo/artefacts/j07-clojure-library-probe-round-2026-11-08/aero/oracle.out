@@ -1,0 +1,4 @@
+{:port 8080, :host "localhost", :url "http://localhost:8080", :n 42, :b true, :inc {:x 1}, :kw :abc}
+80
+{:a 2}
+{:a 42}

@@ -1,0 +1,104 @@
+--- a/datascript/db.cljc
++++ b/datascript/db.cljc
+@@ -8,7 +8,7 @@
+     [datascript.util :as util]
+     [me.tonsky.persistent-sorted-set :as set]
+     [me.tonsky.persistent-sorted-set.arrays :as arrays])
+-  #?(:clj (:import clojure.lang.IFn$OOL))
++  
+   #?(:cljs (:require-macros [datascript.db :refer [case-tree combine-cmp defn+ defcomp defrecord-updatable int-compare validate-attr validate-val]]))
+   (:refer-clojure :exclude [seqable? #?(:clj update)]))
+ 
+@@ -76,8 +76,8 @@
+      (if cljs-env?
+        meta
+        (condp = (:tag meta)
+-         'boolean (assoc meta :tag java.lang.Boolean)
+-         'number  (assoc meta :tag clojure.core$long)
++         'boolean (assoc meta :tag 'java.lang.Boolean)
++         'number  (assoc meta :tag 'long)
+          meta))))
+ 
+ #?(:clj
+@@ -151,9 +151,7 @@
+ 
+ #?(:clj
+    (defmacro defrecord-updatable [name fields & impls]
+-     `(if-cljs
+-        ~(apply make-record-updatable-cljs name fields impls)
+-        ~(apply make-record-updatable-clj  name fields impls))))
++     `(defrecord ~name ~fields ~@impls)))
+ 
+ ;; ----------------------------------------------------------------------------
+ 
+@@ -247,7 +245,7 @@
+        (valAt [d k nf] (val-at-datom d k nf))
+ 
+        clojure.lang.Associative
+-       (entryAt [d k] (some->> (val-at-datom d k nil) (clojure.lang.MapEntry k)))
++       (entryAt [d k] (some->> (val-at-datom d k nil) (clojure.lang.MapEntry. k)))
+        (containsKey [e k] (#{:e :a :v :tx :added} k))
+        (assoc [d k v] (assoc-datom d k v))]))
+ 
+@@ -492,9 +490,6 @@
+                   ~@body))
+               clojure.lang.IFn
+               (invoke [this# ~a1 ~a2]
+-                (.compare this# ~a1 ~a2))
+-              IFn$OOL
+-              (invokePrim [this# ~a1 ~a2]
+                 (.compare this# ~a1 ~a2))))))))
+ 
+ (defcomp cmp-datoms-eavt ^long [^Datom d1, ^Datom d2]
+@@ -694,23 +689,7 @@
+        (-persistent! [db] (db-persistent! db))]
+ 
+       :clj
+-      [Object               (hashCode [db]      (hash-db db))
+-       clojure.lang.IHashEq (hasheq [db]        (hash-db db))
+-       clojure.lang.IPersistentCollection
+-       (count [db]         (count eavt))
+-       (equiv [db other]   (equiv-db db other))
+-       clojure.lang.IEditableCollection 
+-       (empty [db]         (-> (restore-db
+-                                 {:schema  (.-schema db)
+-                                  :rschema (.-rschema db)
+-                                  :eavt    (empty (.-eavt db))
+-                                  :aevt    (empty (.-aevt db))
+-                                  :avet    (empty (.-avet db))})
+-                             (with-meta (meta db))))
+-       (asTransient [db] (db-transient db))
+-       clojure.lang.ITransientCollection
+-       (conj [db key] (throw (ex-info "datascript.DB/conj! is not supported" {})))
+-       (persistent [db] (db-persistent! db))])
++      [])
+ 
+   IDB
+   (-schema [db] (.-schema db))
+@@ -824,25 +803,7 @@
+        (-assoc [_ _ _]       (throw (js/Error. "-assoc is not supported on FilteredDB")))]
+ 
+       :clj
+-      [Object               (hashCode [db]      (hash-fdb db))
+-
+-       clojure.lang.IHashEq (hasheq [db]        (hash-fdb db))
+-
+-       clojure.lang.IPersistentCollection
+-       (count [db]         (count (-datoms db :eavt nil nil nil nil)))
+-       (equiv [db o]       (equiv-db db o))
+-       (cons [db [k v]]    (throw (UnsupportedOperationException. "cons is not supported on FilteredDB")))
+-       (empty [db]         (throw (UnsupportedOperationException. "empty is not supported on FilteredDB")))
+-
+-       clojure.lang.ILookup (valAt [db k]       (throw (UnsupportedOperationException. "valAt/2 is not supported on FilteredDB")))
+-       (valAt [db k nf]    (throw (UnsupportedOperationException. "valAt/3 is not supported on FilteredDB")))
+-       clojure.lang.IKeywordLookup (getLookupThunk [db k]
+-                                     (throw (UnsupportedOperationException. "getLookupThunk is not supported on FilteredDB")))
+-
+-       clojure.lang.Associative
+-       (containsKey [e k]  (throw (UnsupportedOperationException. "containsKey is not supported on FilteredDB")))
+-       (entryAt [db k]     (throw (UnsupportedOperationException. "entryAt is not supported on FilteredDB")))
+-       (assoc [db k v]     (throw (UnsupportedOperationException. "assoc is not supported on FilteredDB")))])
++      [])
+ 
+   IDB
+   (-schema [db]

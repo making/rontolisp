@@ -1,0 +1,146 @@
+--- a/schema/core.cljc
++++ b/schema/core.cljc
+@@ -30,7 +30,7 @@
+    with details described below), plus helpers below that provide optional values,
+    enumerations, arbitrary predicates, and more.
+ 
+-   Assuming you (:require [schema.core :as s :include-macros true]),
++   Assuming you (:require [schema.core :as s]),
+    Schema also provides macros for defining records with schematized elements
+    (s/defrecord), and named or anonymous functions (s/fn and s/defn) with
+    schematized inputs and return values.  In addition to producing better-documented
+@@ -82,7 +82,7 @@
+    [clojure.string :as str]
+    #?(:clj [schema.macros :as macros])
+    [schema.utils :as utils]
+-   [schema.spec.core :as spec :include-macros true]
++   [schema.spec.core :as spec]
+    [schema.spec.leaf :as leaf]
+    [schema.spec.variant :as variant]
+    [schema.spec.collection :as collection])
+@@ -105,21 +105,6 @@
+      user> (s/explain {:a s/Keyword :b [s/Int]} )
+      {:a Keyword, :b [Int]}"))
+ 
+-#?(:clj
+-(clojure.core/defn register-schema-print-as-explain [t]
+-  (clojure.core/defmethod print-method t [s writer]
+-    (print-method (explain s) writer))
+-  (clojure.core/defmethod pprint/simple-dispatch t [s]
+-    (pprint/write-out (explain s)))))
+-
+-;; macros/defrecord-schema implements print methods in bb/cljs
+-#?(:bb nil
+-   :clj (do (register-schema-print-as-explain schema.core.Schema)
+-            (doseq [m [print-method pprint/simple-dispatch]]
+-              (prefer-method m schema.core.Schema clojure.lang.IRecord)
+-              (prefer-method m schema.core.Schema java.util.Map)
+-              (prefer-method m schema.core.Schema clojure.lang.IPersistentMap))))
+-
+ (clojure.core/defn checker
+   "Compile an efficient checker for schema, which returns nil for valid values and
+    error descriptions otherwise."
+@@ -204,34 +189,7 @@
+ ;; On the JVM, the primitive coercion functions (double, long, etc)
+ ;; alias to the corresponding boxed number classes
+ 
+-#?(:clj
+-(do
+-  (defmacro extend-primitive [cast-sym class-sym]
+-    (let [qualified-cast-sym `(class @(resolve '~cast-sym))]
+-      `(extend-protocol Schema
+-         ~qualified-cast-sym
+-         (spec [this#]
+-           (variant/variant-spec spec/+no-precondition+ [{:schema ~class-sym}]))
+-         (explain [this#]
+-           '~cast-sym))))
+-
+-  (extend-primitive double Double)
+-  (extend-primitive float Float)
+-  (extend-primitive long Long)
+-  (extend-primitive int Integer)
+-  (extend-primitive short Short)
+-  (extend-primitive char Character)
+-  (extend-primitive byte Byte)
+-  (extend-primitive boolean Boolean)
+-
+-  (extend-primitive doubles (Class/forName "[D"))
+-  (extend-primitive floats (Class/forName "[F"))
+-  (extend-primitive longs (Class/forName "[J"))
+-  (extend-primitive ints (Class/forName "[I"))
+-  (extend-primitive shorts (Class/forName "[S"))
+-  (extend-primitive chars (Class/forName "[C"))
+-  (extend-primitive bytes (Class/forName "[B"))
+-  (extend-primitive booleans (Class/forName "[Z"))))
++
+ 
+ ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+ ;;; Cross-platform Schema leaves
+@@ -845,7 +803,7 @@
+                 (cond e (item-fn e)
+                       required? (item-fn (utils/error [rk 'missing-required-key])))
+                 (if e
+-                  (dissoc #?(:clj (if (instance? clojure.lang.PersistentStructMap m) (into {} m) m)
++                  (dissoc #?(:clj m
+                              :cljs m)
+                           rk)
+                   m))))))
+@@ -1048,7 +1006,7 @@
+           (explain schema))))
+ 
+ (clojure.core/defn record* [klass schema map-constructor]
+-  #?(:clj (macros/assert! (or (class? klass) #?(:bb (instance? sci.lang.Type klass))) "Expected record class, got %s" (utils/type-of klass)))
++  nil
+   (macros/assert! (map? schema) "Expected map, got %s" (utils/type-of schema))
+   (with-meta (Record. klass schema) {:konstructor map-constructor}))
+ 
+@@ -1324,7 +1282,7 @@
+         {:keys [outer-bindings schema-form fn-body]} (macros/process-fn- &env name more-fn-args)]
+     `(let [~@outer-bindings
+            ;; let bind to work around https://clojure.atlassian.net/browse/CLJS-968
+-           f# ~(vary-meta `(clojure.core/fn ~name ~@fn-body)
++           f# ~(vary-meta `(clojure.core/fn ~(with-meta name nil) ~@fn-body)
+                           #(assoc (merge (meta &form) %)
+                                   :schema schema-form))]
+        f#))))
+--- a/schema/macros.clj
++++ b/schema/macros.clj
+@@ -95,7 +95,7 @@
+                 (if-bb (schema.core/register-schema-print-as-explain ~n)
+                        ;; relies on (register-schema-print-as-explain schema.core.Schema)
+                        nil))
+-       ~n))
++       nil))
+ 
+ ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+ ;;; Helpers for processing and normalizing element/argument schemas in s/defrecord and s/(de)fn
+@@ -413,7 +413,7 @@
+              (new ~(symbol (str name))
+                   ~@(map (fn [s] `(safe-get ~map-sym ~(keyword s))) field-schema)))))))
+ 
+-(if-bb nil
++(comment
+ (defn -instrument-protocol-method
+   "Given a protocol Var pvar, its method method-var and instrument-method,
+   instrument the protocol method."
+--- a/schema/utils.cljc
++++ b/schema/utils.cljc
+@@ -49,7 +49,7 @@
+ 
+ #?(:clj
+ (defmacro char-map []
+-  clojure.lang.Compiler/CHAR_MAP))
++  '{\@ "_CIRCA_", \! "_BANG_", \" "_DOUBLEQUOTE_", \# "_SHARP_", \% "_PERCENT_", \& "_AMPERSAND_", \' "_SINGLEQUOTE_", \* "_STAR_", \+ "_PLUS_", \- "_", \/ "_SLASH_", \: "_COLON_", \[ "_LBRACK_", \{ "_LBRACE_", \< "_LT_", \\ "_BSLASH_", \| "_BAR_", \= "_EQ_", \] "_RBRACK_", \} "_RBRACE_", \> "_GT_", \^ "_CARET_", \~ "_TILDE_", \? "_QMARK_"}))
+ 
+ #?(:clj
+ (defn unmunge
+@@ -152,8 +152,7 @@
+    (= (class x) klass), not (instance? klass x)."
+     [klass schema]
+     #?(:bb nil ;; fn identity is used as klass in bb
+-       :default (assert (class? klass)
+-                        (format* "Cannot declare class schema for non-class %s" (pr-str (class klass)))))
++       :default nil)
+     (.put +class-schemata+ klass schema))
+ 
+   (defn class-schema

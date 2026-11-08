@@ -1,0 +1,6 @@
+true :open
+[[:start-db "jdbc:x"] [:start-app :open] :stop-app :stop-db]
+nil
+{:x :y}
+:com.stuartsierra.component/missing-dependency
+(:db :app)

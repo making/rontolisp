@@ -1,0 +1,28 @@
+--- a/aero/core.cljc
++++ b/aero/core.cljc
+@@ -24,7 +24,6 @@
+ 
+ (defrecord Deferred [delegate])
+ 
+-(macro/usetime
+ (declare read-config)
+ 
+ (defmulti reader (fn [opts tag value] tag))
+@@ -191,7 +190,7 @@
+ (defn read-config-into-tagged-literal
+   [source]
+   #?(:clj
+-     (with-open [pr (-> source io/reader clojure.lang.LineNumberingPushbackReader.)]
++     (with-open [pr (-> source io/reader java.io.PushbackReader.)]
+        (try
+          (read-pr-into-tagged-literal pr)
+          (catch Exception e
+@@ -428,7 +427,7 @@
+          (resolve-tagged-literals opts)
+          (realize-deferreds))))
+   ([source] (read-config source {})))
+-)
++
+ 
+ (macro/deftime
+   (defmacro deferred [& expr]

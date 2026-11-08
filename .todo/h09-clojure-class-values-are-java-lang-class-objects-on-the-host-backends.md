@@ -33,3 +33,20 @@ backend's corpus, what a native image without the generated classes answers.
 Done when `(= (class "a") String)`, `(class? (class 1))` and `(.isAssignableFrom Number Long)`
 answer the oracle's on the interpreter and the JVM, and tools.analyzer.jvm analyzes every form
 of the kb's measured list.
+
+More consumers, found by the 2026-11-08 library probe round (`.todo/j07`; each patched past by
+hand there, see its `patches.diff`):
+
+- core.match 1.1.1, `clojure/core/match.clj:175-186` (`test-inline ::vector`): `(class? the-tag)`
+  of `clojure.lang.IPersistentVector` (a vector pattern's tag) is false here, so every vector
+  pattern throws `java.lang.Error: Unsupported tag type:clojure.lang.IPersistentVector` at macro
+  time; then `(.isArray ^Class c)`.
+- core.logic 1.1.1, `clojure/core/logic.clj:299,778,783,789` and `nominal.clj:98`:
+  `(.. this getClass (isInstance o))` in the deftypes' `equals`/`toString` -- `No matching method
+  isInstance found taking 1 args for class clojure.lang.Keyword` on the first `appendo`.
+- schema 1.4.2: `schema/utils.cljc:155` `(assert (class? klass) ...)` in `declare-class-schema!`
+  (`Cannot declare class schema for non-class :keyword`, every `s/defrecord`), and
+  `schema/core.cljc:1009` `(class? klass)` in `record*`.
+
+Related items from the same round: `.todo/j13` (a record name as a value), `.todo/j15`
+(`clojure.core$NAME`), `.todo/j20` (a class value inside a macro's expansion).

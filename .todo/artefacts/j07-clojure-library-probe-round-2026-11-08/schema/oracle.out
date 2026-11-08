@@ -1,0 +1,10 @@
+{:name "a", :age 3}
+{:age (not (integer? "x"))}
+{:name (not (instance? java.lang.String 1)), :age missing-required-key}
+[nil nil (not (integer? "3"))]
+(not (#{:b :a} :c))
+nil
+{:name Str, :age Int, (optional-key :email) Str}
+3
+:schema.core/error
+(not (pos? -1))

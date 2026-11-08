@@ -1,0 +1,8 @@
+#{["Ivan" 15] ["Petr" 37]}
+"Petr"
+["Ivan"]
+37
+"Ivan"
+{:friend [{:name "Ivan"}], :name "Petr"}
+5
+#{[2]}

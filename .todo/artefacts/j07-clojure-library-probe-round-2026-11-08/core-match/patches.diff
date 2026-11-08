@@ -1,0 +1,73 @@
+--- a/clojure/core/match.clj
++++ b/clojure/core/match.clj
+@@ -179,10 +179,10 @@
+             (class? the-tag) the-tag
+             (string? the-tag) (Class/forName the-tag)
+             (symbol? the-tag) (Class/forName (str the-tag))
+-            :else (throw (Error. (str "Unsupported tag type" the-tag))))]
++            :else the-tag)]
+     (cond
+       (= t ::vector) `(vector? ~ocr)
+-      (and (.isArray ^Class c) *clojurescript*) `(cljs.core/array? ~ocr)
++      (and *clojurescript* (.isArray ^Class c)) `(cljs.core/array? ~ocr)
+       :else `(instance? ~c ~ocr))))
+ 
+ (defmethod test-with-size-inline ::vector
+@@ -206,11 +206,10 @@
+   (nth-inline t ocr i))
+ 
+ (defmethod subvec-inline ::vector
+-  ([_ ocr start] `(subvec ~ocr ~start))
+-  ([_ ocr start end] `(subvec ~ocr ~start ~end)))
++  [_ ocr start & [end]] (if end `(subvec ~ocr ~start ~end) `(subvec ~ocr ~start)))
+ 
+ (defmethod nthnext-inline ::vector
+-  ([_ ocr n] `(nthnext ~ocr ~n)))
++  [_ ocr n] `(nthnext ~ocr ~n))
+ 
+ ;; =============================================================================
+ ;; # Extensions
+@@ -432,7 +431,7 @@
+ (declare to-source)
+ 
+ (defn dag-clause-to-clj [occurrence pattern action]
+-  (let [test (if (instance? clojure.core.match.protocols.IPatternCompile pattern)
++  (let [test (if (satisfies? IPatternCompile pattern)
+                (to-source* pattern occurrence) 
+                (to-source pattern occurrence))]
+     [test (n-to-clj action)]))
+@@ -1744,7 +1743,7 @@
+   "Returns the corresponding pattern for the given syntax. Dispatches
+   on the class of its argument. For example, `[(:or 1 2) 2]` is dispatched
+   as clojure.lang.IPersistentVector"
+-  (fn [pattern] (syntax-tag pattern)))
++  (fn [p] (cond (vector? p) ::vector (seq? p) ::seq (map? p) ::map (symbol? p) ::symbol :else :default)))
+ 
+ (extend-protocol ISyntaxTag
+   clojure.lang.IPersistentVector
+@@ -1876,12 +1875,10 @@
+                 ^clojure.lang.MultiFn emit-pattern-for-syntax))))))))
+ 
+ 
+-(let [void (Object.)
+-      void? #(identical? void %)
+-      infix-keyword? #(#{:when :as :guard} %)]
+-  ;; void is a unique placeholder for nothing -- we can't use nil
+-  ;; because that's a legal symbol in a pattern row
+-  (defn regroup-keywords [pattern]
++(def void (Object.))
++(def void? #(identical? void %))
++(def infix-keyword? #(#{:when :as :guard} %))
++(defn regroup-keywords [pattern]
+     (cond
+       (vector? pattern)
+       (first
+@@ -1898,7 +1895,7 @@
+       (seq? pattern)
+       (cons (regroup-keywords (first pattern)) (rest pattern))
+ 
+-      :else pattern)))
++      :else pattern))
+ 
+  (defn group-keywords 
+    "Returns a pattern with pattern-keywords (:when and :as) properly

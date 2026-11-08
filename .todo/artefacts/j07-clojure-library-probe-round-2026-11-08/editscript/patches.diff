@@ -1,0 +1,11 @@
+--- a/editscript/util/common.cljc
++++ b/editscript/util/common.cljc
+@@ -35,7 +35,7 @@
+ 
+ (defn current-time
+   []
+-  #?(:clj  (quot (System/nanoTime) 1000000)
++  #?(:clj  (System/currentTimeMillis)
+      :cljs (long (.now js/performance))
+      :cljr (quot (* (Stopwatch/GetTimestamp) 1000)
+                  Stopwatch/Frequency)))

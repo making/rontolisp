@@ -1,0 +1,219 @@
+--- a/rewrite_clj/node/comment.cljc
++++ b/rewrite_clj/node/comment.cljc
+@@ -21,7 +21,7 @@
+   (toString [node]
+     (node/string node)))
+ 
+-(node/make-printable! CommentNode)
++
+ 
+ ;; ## Constructor
+ 
+--- a/rewrite_clj/node/fn.cljc
++++ b/rewrite_clj/node/fn.cljc
+@@ -86,7 +86,7 @@
+   (toString [node]
+     (node/string node)))
+ 
+-(node/make-printable! FnNode)
++
+ 
+ ;; ## Constructor
+ 
+--- a/rewrite_clj/node/forms.cljc
++++ b/rewrite_clj/node/forms.cljc
+@@ -31,7 +31,7 @@
+   (toString [node]
+     (node/string node)))
+ 
+-(node/make-printable! FormsNode)
++
+ 
+ ;; ## Constructor
+ 
+--- a/rewrite_clj/node/integer.cljc
++++ b/rewrite_clj/node/integer.cljc
+@@ -30,7 +30,7 @@
+   (toString [node]
+     (node/string node)))
+ 
+-(node/make-printable! IntNode)
++
+ 
+ ;; ## Constructor
+ 
+--- a/rewrite_clj/node/keyword.cljc
++++ b/rewrite_clj/node/keyword.cljc
+@@ -52,7 +52,7 @@
+   (toString [node]
+     (node/string node)))
+ 
+-(node/make-printable! KeywordNode)
++
+ 
+ (defn keyword-node?
+   "Returns true if `n` is a node representing a keyword."
+--- a/rewrite_clj/node/meta.cljc
++++ b/rewrite_clj/node/meta.cljc
+@@ -41,7 +41,7 @@
+   (toString [node]
+     (node/string node)))
+ 
+-(node/make-printable! MetaNode)
++
+ 
+ ;; ## Constructor
+ 
+--- a/rewrite_clj/node/namespaced_map.cljc
++++ b/rewrite_clj/node/namespaced_map.cljc
+@@ -118,8 +118,8 @@
+   (toString [node]
+     (node/string node)))
+ 
+-(node/make-printable! MapQualifierNode)
+-(node/make-printable! NamespacedMapNode)
++
++
+ 
+ ;; ## Constructors
+ 
+--- a/rewrite_clj/node/protocols.cljc
++++ b/rewrite_clj/node/protocols.cljc
+@@ -163,7 +163,7 @@
+          (-write writer (node->string o))))))
+ 
+ (defn make-printable! [obj]
+-  #?(:clj (make-printable-clj! obj)
++  #?(:clj nil
+      :cljs (make-printable-cljs! obj)))
+ 
+ ;; ## Helpers
+--- a/rewrite_clj/node/quote.cljc
++++ b/rewrite_clj/node/quote.cljc
+@@ -30,7 +30,7 @@
+   (toString [node]
+     (node/string node)))
+ 
+-(node/make-printable! QuoteNode)
++
+ 
+ ;; ## Constructors
+ 
+--- a/rewrite_clj/node/reader_macro.cljc
++++ b/rewrite_clj/node/reader_macro.cljc
+@@ -86,9 +86,9 @@
+   (toString [node]
+     (node/string node)))
+ 
+-(node/make-printable! ReaderNode)
+-(node/make-printable! ReaderMacroNode)
+-(node/make-printable! DerefNode)
++
++
++
+ 
+ ;; ## Constructors
+ 
+--- a/rewrite_clj/node/regex.cljc
++++ b/rewrite_clj/node/regex.cljc
+@@ -22,7 +22,7 @@
+   (toString [node]
+     (node/string node)))
+ 
+-(node/make-printable! RegexNode)
++
+ 
+ ;; Internal Utils
+ 
+--- a/rewrite_clj/node/seq.cljc
++++ b/rewrite_clj/node/seq.cljc
+@@ -35,7 +35,7 @@
+   (toString [node]
+     (node/string node)))
+ 
+-(node/make-printable! SeqNode)
++
+ 
+ ;; ## Constructors
+ 
+--- a/rewrite_clj/node/stringz.cljc
++++ b/rewrite_clj/node/stringz.cljc
+@@ -40,7 +40,7 @@
+   (toString [node]
+     (node/string node)))
+ 
+-(node/make-printable! StringNode)
++
+ 
+ ;; ## Constructors
+ 
+--- a/rewrite_clj/node/token.cljc
++++ b/rewrite_clj/node/token.cljc
+@@ -58,8 +58,8 @@
+   (toString [node]
+     (node/string node)))
+ 
+-(node/make-printable! TokenNode)
+-(node/make-printable! SymbolNode)
++
++
+ 
+ (defn symbol-node?
+   "Returns true if `n` is a node representing a symbol."
+--- a/rewrite_clj/node/uneval.cljc
++++ b/rewrite_clj/node/uneval.cljc
+@@ -29,7 +29,7 @@
+   (toString [node]
+     (node/string node)))
+ 
+-(node/make-printable! UnevalNode)
++
+ 
+ ;; ## Constructor
+ 
+--- a/rewrite_clj/node/whitespace.cljc
++++ b/rewrite_clj/node/whitespace.cljc
+@@ -79,9 +79,9 @@
+   (toString [node]
+     (node/string node)))
+ 
+-(node/make-printable! WhitespaceNode)
+-(node/make-printable! CommaNode)
+-(node/make-printable! NewlineNode)
++
++
++
+ 
+ ;; ## Constructors
+ 
+--- a/rewrite_clj/zip/findz.cljc
++++ b/rewrite_clj/zip/findz.cljc
+@@ -42,12 +42,7 @@
+   ([zloc p?]
+    (find zloc m/right p?))
+   ([zloc f p?]
+-   (->> zloc
+-        (iterate f)
+-        (take-while identity)
+-        (take-while (complement m/end?))
+-        (drop-while (complement p?))
+-        (first))))
++   (loop [z zloc] (cond (nil? z) nil (m/end? z) nil (p? z) z :else (recur (f z))))))
+ 
+ (defn find-last-by-pos
+   "Return `zloc` located at the last node spanning position `pos` that satisfies the predicate `p?`, else `nil`.
+--- a/rewrite_clj/zip/whitespace.cljc
++++ b/rewrite_clj/zip/whitespace.cljc
+@@ -41,11 +41,7 @@
+   "Return zipper with location moved to first location not satisfying predicate `p?` starting from the node in
+    `zloc` and traversing by function `f`."
+   [f p? zloc]
+-  (->> (iterate f zloc)
+-       (take-while identity)
+-       (take-while (complement zraw/end?))
+-       (drop-while p?)
+-       (first)))
++  (loop [z zloc] (cond (nil? z) nil (zraw/end? z) nil (p? z) (recur (f z)) :else z)))
+ 
+ (defn skip-whitespace
+   "Return zipper with location moved to first non-whitespace/non-comment starting from current node in `zloc`

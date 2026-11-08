@@ -1,0 +1,189 @@
+--- a/com/rpl/specter.cljc
++++ b/com/rpl/specter.cljc
+@@ -55,9 +55,7 @@
+    (do
+ 
+      (defmacro defmacroalias [name target]
+-       `(do
+-          (def ~name (var ~target))
+-          (alter-meta! (var ~name) merge {:macro true})))
++       `(defmacro ~name [& args#] (cons '~target args#)))
+ 
+      (defmacroalias richnav macros/richnav)
+      (defmacroalias nav macros/nav)
+@@ -188,7 +186,7 @@
+         an illustrative example of dynamic navs."
+        [name & args]
+        (let [[name args] (name-with-attributes name args)]
+-         `(def ~name (dynamicnav ~@args))))
++         `(do (declare ~name) (def ~name (dynamicnav ~@args)))))
+ 
+ 
+      (defn- ic-prepare-path [locals-set path]
+@@ -271,7 +269,7 @@
+        of Specter provides huge speedup. This macro is automatically used by the
+        select/transform/setval/replace-in/etc. macros."
+        [& path]
+-       #?(:bb `(comp-paths ~@path)
++       #?(:clj `(comp-paths ~@path)
+           :default
+           (let [;;this is a hack, but the composition of &env is considered stable for cljs
+                   platform (if (contains? &env :locals) :cljs :clj)
+@@ -493,9 +491,7 @@
+        (let [m (-> protpath-prot :sigs keys first)
+              params (-> protpath-prot :sigs first last :arglists first)]
+          (doseq [[atype path-code] extensions]
+-            (extend atype protpath-prot
+-              {m (binding [*compile-files* false]
+-                   (eval `(fn ~params (path ~path-code))))}))))
++            (throw (ex-info "patched out" {})))))
+ 
+      (defmacro extend-protocolpath
+        "Used in conjunction with `defprotocolpath`. See [[defprotocolpath]]."
+--- a/com/rpl/specter/impl.cljc
++++ b/com/rpl/specter/impl.cljc
+@@ -15,8 +15,7 @@
+             #?(:clj [clojure.pprint :as pp])
+             [clojure.string :as s]
+             [clojure.walk :as walk]
+-            #?(:bb [clojure.walk :as riddley]
+-               :clj [riddley.walk :as riddley]))
++            #?(:clj [clojure.walk :as riddley]))
+ 
+   #?@(:bb []
+       :clj [(:import [com.rpl.specter Util MutableCell])]))
+@@ -88,7 +87,7 @@
+      `(object-array ~i))
+    :clj
+    (defmacro fast-object-array [i]
+-     `(com.rpl.specter.Util/makeObjectArray ~i)))
++     `(object-array ~i)))
+ 
+ 
+ (defn benchmark [iters afn]
+@@ -285,7 +284,7 @@
+        ~vals
+        ~structure
+        (fn [vals# structure#]
+-        (if (identical? vals# [])
++        (if (empty? vals#)
+           (~result-fn structure#)
+           (~result-fn (conj vals# structure#))))))
+ 
+@@ -296,7 +295,7 @@
+       vals
+       structure
+       (fn [vals structure]
+-       (if (identical? vals [])
++       (if (empty? vals)
+          (result-fn structure)
+          (result-fn (conj vals structure)))))))
+ 
+@@ -426,7 +425,7 @@
+   (not (identical? NONE (compiled-select-any* path structure))))
+ 
+ (defn terminal* [afn vals structure]
+-  (if (identical? vals [])
++  (if (empty? vals)
+     (afn structure)
+     (apply afn (conj vals structure))))
+ 
+@@ -441,7 +440,7 @@
+   (exec-transform* nav [] structure transform-fn))
+ 
+ (defn fn-invocation? [f]
+-  (or #?(:clj  (instance? clojure.lang.Cons f))
++  (or #?(:clj  (seq? f))
+       #?(:clj  (instance? clojure.lang.LazySeq f))
+       #?(:cljs (instance? cljs.core.LazySeq f))
+       (list? f)))
+@@ -471,7 +470,7 @@
+   [op params code])
+ 
+ (defn dynamic-param? [o]
+-  (contains? #{DynamicPath DynamicVal DynamicFunction} (type o)))
++  (or (instance? DynamicPath o) (instance? DynamicVal o) (instance? DynamicFunction o)))
+ 
+ (defn static-path? [path]
+   (if (sequential? path)
+@@ -645,7 +644,7 @@
+                                set?
+                                #(and (map? %) (not (record? %)))
+                                nil?
+-                               #(instance? clojure.lang.Cons %)
++                               seq?
+                                #(instance? clojure.lang.LazySeq %))]
+       (defn eval+
+         "Automatically extracts non-evalable stuff into a closure and then evals"
+--- a/com/rpl/specter/navs.cljc
++++ b/com/rpl/specter/navs.cljc
+@@ -116,8 +116,8 @@
+                     (non-transient-map-all-transform structure next-fn {}))
+      :clj
+      (all-transform [structure next-fn]
+-       (let [k-it (.keyIterator structure)
+-             v-it (.valIterator structure)
++       (let [k-it (.iterator ^Iterable (or (keys structure) []))
++             v-it (.iterator ^Iterable (or (vals structure) []))
+              none-cell (i/mutable-cell 0)
+              len (.count structure)
+              array (i/fast-object-array (* 2 len))]
+@@ -137,10 +137,10 @@
+                   (recur (+ i 2) (+ j 2)))))))
+          (let [none-count (i/get-cell none-cell)
+                array (if (not= 0 none-count)
+-                       (java.util.Arrays/copyOf array (int (* 2 (- len none-count))))
++                       (object-array (take (* 2 (- len none-count)) array))
+                        array
+                        )]
+-          (clojure.lang.PersistentArrayMap/createAsIfByAssoc array)))))
++          (apply array-map array)))))
+ 
+ 
+   #?(:cljs cljs.core/PersistentArrayMap)
+@@ -274,8 +274,8 @@
+                          (map-vals-non-transient-transform structure {} next-fn))
+      :clj
+      (map-vals-transform [structure next-fn]
+-       (let [k-it (.keyIterator structure)
+-             v-it (.valIterator structure)
++       (let [k-it (.iterator ^Iterable (or (keys structure) []))
++             v-it (.iterator ^Iterable (or (vals structure) []))
+              none-cell (i/mutable-cell 0)
+              len (.count structure)
+              array (i/fast-object-array (* 2 len))]
+@@ -295,17 +295,17 @@
+                   (recur (+ i 2) (+ j 2)))))))
+          (let [none-count (i/get-cell none-cell)
+                array (if (not= 0 none-count)
+-                        (java.util.Arrays/copyOf array (int (* 2 (- len none-count))))
++                        (object-array (take (* 2 (- len none-count)) array))
+                         array
+                         )]
+-          (clojure.lang.PersistentArrayMap. array)))))
++          (apply array-map array)))))
+   #?(:bb
+      (map-keys-transform [structure next-fn]
+                          (map-keys-non-transient-transform structure {} next-fn))
+      :clj
+      (map-keys-transform [structure next-fn]
+-       (let [k-it (.keyIterator structure)
+-             v-it (.valIterator structure)
++       (let [k-it (.iterator ^Iterable (or (keys structure) []))
++             v-it (.iterator ^Iterable (or (vals structure) []))
+              none-cell (i/mutable-cell 0)
+              len (.count structure)
+              array (i/fast-object-array (* 2 len))]
+@@ -325,10 +325,10 @@
+                   (recur (+ i 2) (+ j 2)))))))
+          (let [none-count (i/get-cell none-cell)
+                array (if (not= 0 none-count)
+-                        (java.util.Arrays/copyOf array (int (* 2 (- len none-count))))
++                        (object-array (take (* 2 (- len none-count)) array))
+                         array
+                         )]
+-          (clojure.lang.PersistentArrayMap/createAsIfByAssoc array)))))
++          (apply array-map array)))))
+ 
+   #?(:cljs cljs.core/PersistentArrayMap)
+   #?(:cljs

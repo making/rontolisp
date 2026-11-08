@@ -1,0 +1,139 @@
+--- a/clojure/core/logic.clj
++++ b/clojure/core/logic.clj
+@@ -128,7 +128,7 @@
+ 
+   IConstraintStore
+   (addc [this a c]
+-    (when (or (not (instance? clojure.core.logic.protocols.IVerifyConstraint c))
++    (when (or (not (satisfies? clojure.core.logic.protocols/IVerifyConstraint c))
+               (-verify c a this))
+       (let [vars (var-rands a c)
+             c    (with-id c cid)
+@@ -137,7 +137,7 @@
+ 
+   (updatec [this a c]
+     (let [oc (cm (id c))
+-          nkm (if (instance? clojure.core.logic.protocols.IEntailedVar c)
++          nkm (if (satisfies? clojure.core.logic.protocols/IEntailedVar c)
+                 (reduce (fn [km x]
+                           (if (-entailed-var? c x)
+                             (dissoc km x)
+@@ -173,7 +173,7 @@
+           nkm    (assoc (dissoc km x) root (into rootcs xcs))]
+       (when (every?
+               (fn [c]
+-                (if (instance? clojure.core.logic.protocols.IVerifyConstraint c)
++                (if (satisfies? clojure.core.logic.protocols/IVerifyConstraint c)
+                   (-verify c a this)
+                   true))
+               (map cm xcs))
+@@ -296,7 +296,7 @@
+   Object
+   (equals [this o]
+     (or (identical? this o)
+-        (and (.. this getClass (isInstance o))
++        (and (= (type this) (type o))
+              (= s (:s o)))))
+   ;; TODO: prn doesn't work anymore on empty-s, why not?
+   (toString [_] (str s))
+@@ -775,18 +775,18 @@
+   LConsPrint
+   (toShortString [this]
+     (cond
+-     (.. this getClass (isInstance d)) (str a " " (toShortString d))
++     (= (type this) (type d)) (str a " " (toShortString d))
+      :else (str a " . " d )))
+ 
+   Object
+   (toString [this] (cond
+-                    (.. this getClass (isInstance d))
++                    (= (type this) (type d))
+                       (str "(" a " " (toShortString d) ")")
+                     :else (str "(" a " . " d ")")))
+ 
+   (equals [this o]
+     (or (identical? this o)
+-        (and (.. this getClass (isInstance o))
++        (and (= (type this) (type o))
+              (loop [me this
+                     you o]
+                (cond
+@@ -946,7 +946,7 @@
+   clojure.lang.IPersistentMap
+   (unify-terms [u v s]
+     (cond
+-      (instance? clojure.core.logic.protocols.IUnifyWithRecord v)
++      (satisfies? clojure.core.logic.protocols/IUnifyWithRecord v)
+       (unify-with-record v u s)
+ 
+       (map? v)
+@@ -1649,7 +1649,7 @@
+         e (if (-> n meta :tabled)
+             `(fnm ~t ~as :tabled ~@cs)
+             `(fnm ~t ~as ~@cs))]
+-    `(def ~(vary-meta n #(merge {:arglists (list 'quote (list as))} %1)) ~e)))
++    `(do (declare ~n) (def ~(vary-meta n #(merge {:arglists (list 'quote (list as))} %1)) ~e))))
+ 
+ ;; =============================================================================
+ ;; Useful goals
+@@ -2067,7 +2067,7 @@
+     (assoc a :cs (runc (:cs a) c false))))
+ 
+ (defn ientailed? [c]
+-  (instance? clojure.core.logic.protocols.IEntailed c))
++  (satisfies? clojure.core.logic.protocols/IEntailed c))
+ 
+ (defn entailed? [c c' a]
+   (let [id (id c)]
+--- a/clojure/core/logic/nominal.clj
++++ b/clojure/core/logic/nominal.clj
+@@ -95,7 +95,7 @@
+   (hashCode [_]
+     (.hashCode lvar))
+   (equals [this o]
+-    (and (.. this getClass (isInstance o))
++    (and (= (type this) (type o))
+          (= lvar (:lvar o))))
+ 
+   clojure.lang.IObj
+--- a/clojure/core/logic/protocols.clj
++++ b/clojure/core/logic/protocols.clj
+@@ -163,12 +163,12 @@
+   (-id [c]))
+ 
+ (defn id [c]
+-  (if (instance? clojure.core.logic.protocols.IConstraintId c)
++  (if (satisfies? clojure.core.logic.protocols/IConstraintId c)
+     (-id c)
+     (-> c meta ::id)))
+ 
+ (defn with-id [c id]
+-  (if (instance? clojure.core.logic.protocols.IWithConstraintId c)
++  (if (satisfies? clojure.core.logic.protocols/IWithConstraintId c)
+     (-with-id c id)
+     (vary-meta c assoc ::id id)))
+ 
+@@ -186,12 +186,12 @@
+   (-verify [c a cs]))
+ 
+ (defn reifiable? [x]
+-  (instance? clojure.core.logic.protocols.IReifiableConstraint x))
++  (satisfies? clojure.core.logic.protocols/IReifiableConstraint x))
+ 
+ (definterface IEnforceableConstraint)
+ 
+ (defn enforceable? [x]
+-  (instance? clojure.core.logic.protocols.IEnforceableConstraint x))
++  (instance? IEnforceableConstraint x))
+ 
+ ;; cgoal
+ 
+@@ -218,7 +218,7 @@
+ (definterface ITreeConstraint)
+ 
+ (defn tree-constraint? [x]
+-  (instance? clojure.core.logic.protocols.ITreeConstraint x))
++  (instance? ITreeConstraint x))
+ 
+ (defprotocol IPrefix
+   (-prefix [c]))

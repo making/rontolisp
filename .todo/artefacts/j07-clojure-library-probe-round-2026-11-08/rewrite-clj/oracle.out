@@ -1,0 +1,9 @@
+(defn foo [x] (+ x 1))
+foo
+"(defn foo-bar [x]\n  ;; comment\n  (+ x 1))"
+"(defn foo [x]\n  ;; comment\n  (- x 1))"
+"{:a 1, :b [2 3]}"
+:set
+"[1 2 3 4]"
+((a (b c)) a (b c) b c)
+"{:x [1 \"s\"]}"

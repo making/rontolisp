@@ -1,0 +1,1 @@
+error: ~/.m2/repository/rewrite-clj/rewrite-clj/1.3.59/rewrite-clj-1.3.59.jar!/rewrite_clj/node/protocols.cljc:166:11: print-method of |obj| is not supported yet: the printer consults a print-method of a record, deftype, :type keyword or host class no core value belongs to only
