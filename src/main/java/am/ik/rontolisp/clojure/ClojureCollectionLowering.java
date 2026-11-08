@@ -50,6 +50,19 @@ final class ClojureCollectionLowering {
 	static final String HOST_SEQABLE_P = "RONTOLISP::%CLOJURE-HOST-SEQABLE-P";
 
 	/**
+	 * The oracle's canonical empty collections ({@code clojure.lisp}): one object per
+	 * kind per program, what its reader's {@code []}, {@code {}} and {@code #{}} and the
+	 * verbs answering through its statics answer.
+	 */
+	static final LispSymbol EMPTY_VECTOR = new LispSymbol("RONTOLISP::%CLOJURE-EMPTY-VECTOR");
+
+	/** The canonical empty map ({@link #EMPTY_VECTOR}). */
+	static final LispSymbol EMPTY_MAP = new LispSymbol("RONTOLISP::%CLOJURE-EMPTY-MAP");
+
+	/** The canonical empty set ({@link #EMPTY_VECTOR}). */
+	static final LispSymbol EMPTY_SET = new LispSymbol("RONTOLISP::%CLOJURE-EMPTY-SET");
+
+	/**
 	 * A verb's host arm, the clause ahead of its fall-through: the host object
 	 * {@code coll} answers {@code body}. A program naming no {@code java:} operator sheds
 	 * it.
@@ -334,6 +347,10 @@ final class ClojureCollectionLowering {
 	 * differ ({@code ClojureReader.equivKey}).
 	 */
 	static LispVal mapLiteral(ClojureLowering ctx, List<LispVal> items) {
+		if (items.size() == 1) {
+			// the oracle's reader answers PersistentArrayMap.EMPTY for {}: one object
+			return EMPTY_MAP;
+		}
 		List<LispVal> pairs = ctx.lowers(items, 1);
 		List<LispVal> keys = new ArrayList<>();
 		for (int i = 1; i < items.size(); i += 2) {
@@ -359,6 +376,10 @@ final class ClojureCollectionLowering {
 	 * the later member.
 	 */
 	static LispVal setLiteral(ClojureLowering ctx, List<LispVal> items) {
+		if (items.size() == 1) {
+			// the oracle's reader answers PersistentHashSet.EMPTY for #{}: one object
+			return EMPTY_SET;
+		}
 		List<LispVal> members = items.subList(1, items.size());
 		List<LispVal> elements = ctx.lowers(items, 1);
 		if (members.size() < 2 || constantKeys(ctx, members) != null) {
@@ -640,8 +661,11 @@ final class ClojureCollectionLowering {
 		LispVal rewrap = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), keep,
 				ClojureProtocolLowering.rewrapRecord(map, copy), copy);
 		// a sorted map's survivors go back in its order (a view a program building no
-		// sorted collection sheds, ClojureArms)
-		LispVal survivors = ClojureSortedLowering.runtime("sorted-shrunk", copy, map);
+		// sorted collection sheds, ClojureArms); a plain map's empty answer is the
+		// canonical empty map unless the source carried metadata
+		LispVal survivors = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureSortedLowering.sortedTest(map),
+				ClojureSortedLowering.runtime("sorted-shrunk", copy, map),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DISSOC-RESULT"), copy, map));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(keep, ClojureLowering.TRUE_CONST),
 						ClojureLowerUtil.list(miss,
@@ -1107,8 +1131,9 @@ final class ClojureCollectionLowering {
 	static LispVal conjOf(ClojureLowering ctx, List<LispVal> items) {
 		int n = items.size() - 1;
 		if (n == 0) {
-			// the oracle's init arity: (transduce xf conj coll) starts from it
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"));
+			// the oracle's init arity: (transduce xf conj coll) starts from it, the
+			// canonical empty vector (its [] constant)
+			return EMPTY_VECTOR;
 		}
 		LispVal acc = ctx.lower(items.get(1));
 		for (int i = 2; i < items.size(); i++) {
@@ -1285,10 +1310,9 @@ final class ClojureCollectionLowering {
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.sym("&optional"),
 						ClojureLowerUtil.list(coll, ClojureLowering.NIL_CONST, supplied),
 						ClojureLowering.AMPERSAND_REST, items)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), supplied,
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("reduce"), step, items,
-								ClojureLowerUtil.sym(":initial-value"), coll),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"))));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), supplied, ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("reduce"), step, items, ClojureLowerUtil.sym(":initial-value"), coll),
+						EMPTY_VECTOR));
 	}
 
 	static LispVal disjOf(ClojureLowering ctx, List<LispVal> items) {
@@ -1455,6 +1479,10 @@ final class ClojureCollectionLowering {
 
 	static LispVal mapConstructorOf(ClojureLowering ctx, List<LispVal> items, String what) {
 		ClojureLowerUtil.isTrue((items.size() - 1) % 2 == 0, what + " takes key/value pairs");
+		if (items.size() == 1) {
+			// (hash-map) and (array-map) answer the oracle's {} constant
+			return EMPTY_MAP;
+		}
 		return mapBuild(ctx.lowers(items, 1));
 	}
 
@@ -1468,9 +1496,12 @@ final class ClojureCollectionLowering {
 		LispVal arity = ClojureRefusals.refusal(ClojureRefusals.ILLEGAL_ARGUMENT,
 				LispString.literal(what + " takes key/value pairs"));
 		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("oddp"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), pairs)),
-				arity, grownTable(ClojureLowering.NIL_CONST, pairs));
+				ClojureLowerUtil
+					.list(ClojureLowerUtil.sym("oddp"), ClojureLowerUtil.list(ClojureLowerUtil.sym("length"), pairs)),
+				arity,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), pairs), EMPTY_MAP,
+						grownTable(ClojureLowering.NIL_CONST, pairs)));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, pairs), body);
 	}

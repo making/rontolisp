@@ -9692,6 +9692,50 @@
   (rontolisp::%clojure-check-arity args 1 1 "peek")
   (rontolisp::%clojure-peek (car args)))
 
+;; The oracle's canonical empty collections: PersistentVector.EMPTY,
+;; PersistentArrayMap.EMPTY and PersistentHashSet.EMPTY are one object per kind, and
+;; its reader's [], {} and #{} and every core verb answering through empty() answer
+;; that one object (measured against clj 1.12.6, 2026-11-08). These are the same on
+;; every backend: one per program, like the oracle's statics. A persistent collection
+;; is never edited in place here (a transient copies first), and a value carrying
+;; metadata is a fresh copy, so the constants stay empty and meta-less.
+(defvar rontolisp::%clojure-empty-vector (vector)
+  "The oracle's PersistentVector.EMPTY: the empty vector literal and the verbs
+   answering an empty vector answer this object.")
+
+(defvar rontolisp::%clojure-empty-map (make-hash-table :test 'equal)
+  "The oracle's PersistentArrayMap.EMPTY: the empty map literal and the verbs
+   answering an empty map answer this object.")
+
+(defvar rontolisp::%clojure-empty-set (list :C%SET (make-hash-table :test 'equal))
+  "The oracle's PersistentHashSet.EMPTY: the empty set literal and the verbs
+   answering an empty set answer this object.")
+
+(defun rontolisp::%clojure-empty-vector-with-meta (x)
+  "The empty vector of X's kind: the canonical one when X carries no metadata,
+   else a fresh one carrying it."
+  (let ((m (rontolisp::%clojure-meta x)))
+    (if m
+        (rontolisp::%clojure-put-meta (vector) m)
+        rontolisp::%clojure-empty-vector)))
+
+(defun rontolisp::%clojure-empty-map-with-meta (x)
+  "The empty map of X's kind: the canonical one when X carries no metadata, else
+   a fresh one carrying it."
+  (let ((m (rontolisp::%clojure-meta x)))
+    (if m
+        (rontolisp::%clojure-put-meta (make-hash-table :test 'equal) m)
+        rontolisp::%clojure-empty-map)))
+
+(defun rontolisp::%clojure-empty-set-with-meta (x)
+  "The empty set of X's kind: the canonical one when X carries no metadata, else
+   a fresh one carrying it."
+  (let ((m (rontolisp::%clojure-meta x)))
+    (if m
+        (rontolisp::%clojure-put-meta (list :C%SET (make-hash-table :test 'equal))
+                                      m)
+        rontolisp::%clojure-empty-set)))
+
 (defun rontolisp::%clojure-pop (coll)
   "A vector without its last member, a list without its first; nil of nil."
   (cond ((null coll) nil)
@@ -9702,7 +9746,10 @@
    ((consp coll) (cdr coll))
    ((= (length coll) 0)
     (rontolisp::%clojure-illegal-state-exception "Can't pop empty vector"))
-   (t (subseq coll 0 (- (length coll) 1)))))
+   (t (let ((out (subseq coll 0 (- (length coll) 1))))
+        (if (and (zerop (length out)) (null (rontolisp::%clojure-meta coll)))
+            rontolisp::%clojure-empty-vector
+            out)))))
 
 (defun rontolisp::%clojure-pop-v (&rest args)
   "pop as a value."
@@ -9720,29 +9767,28 @@
 
 ;; empty carries X's metadata over, like the oracle's empty (a list, a lazy seq
 ;; and a seq answer nil, the empty-as-nil position of rest and next, so they have
-;; none to carry). The sorted arm keeps the comparator and the kind.
+;; none to carry). A plain vector, map or set without metadata answers the
+;; canonical empty object, like the oracle's empty() (2026-11-08). The sorted arm
+;; keeps the comparator and the kind.
 (defun rontolisp::%clojure-empty (x)
   "The empty collection of X's kind: a vector, map, set or sorted collection
-   answers a fresh empty one carrying X's metadata and, for a sorted one, its
+   answers an empty one, carrying X's metadata and, for a sorted one, its
    comparator; a record signals; a list, a seq, a string and anything that is
    no collection answer nil."
   (cond ((hash-table-p x)
-         (rontolisp::%clojure-put-meta (make-hash-table :test 'equal)
-                                       (rontolisp::%clojure-meta x)))
+         (rontolisp::%clojure-empty-map-with-meta x))
         ((rontolisp::%clojure-record-p x)
          (rontolisp::%clojure-unsupported-operation-exception
           (concatenate 'string "Can't create empty: "
                        (car (cdr (cdr (cdr (cdr x))))))))
         ((rontolisp::%clojure-set-p x)
-         (rontolisp::%clojure-put-meta
-          (list :C%SET (make-hash-table :test 'equal))
-          (rontolisp::%clojure-meta x)))
+         (rontolisp::%clojure-empty-set-with-meta x))
         ((rontolisp::%clojure-sorted-p x)
          (rontolisp::%clojure-put-meta
           (rontolisp::%clojure-sorted-with x (vector))
           (rontolisp::%clojure-meta x)))
         ((and (vectorp x) (not (stringp x)))
-         (rontolisp::%clojure-put-meta (vector) (rontolisp::%clojure-meta x)))
+         (rontolisp::%clojure-empty-vector-with-meta x))
         ;; an IPersistentCollection's empty: an arm of the collection-interface
         ;; family ("Collection interfaces")
         ((rontolisp::%clojure-icollection-p x)
@@ -9768,8 +9814,18 @@
   (rontolisp::%clojure-comparator (car args)))
 
 (defun rontolisp::%clojure-hash-set-v (&rest xs)
-  "hash-set as a value: the set of its arguments, a repeated one kept once."
-  (rontolisp::%clojure-set-of xs))
+  "hash-set as a value: the set of its arguments, a repeated one kept once, of
+   no argument the canonical empty set."
+  (if (null xs)
+      rontolisp::%clojure-empty-set
+      (rontolisp::%clojure-set-of xs)))
+
+(defun rontolisp::%clojure-vector (&rest args)
+  "vector as a value: of no argument the oracle's canonical empty vector, else a
+   fresh vector of its arguments."
+  (if (null args)
+      rontolisp::%clojure-empty-vector
+      (apply #'vector args)))
 
 (defun rontolisp::%clojure-dedupe (coll)
   "COLL without consecutive = duplicates."
@@ -9853,9 +9909,10 @@
 ;; between the bounds, the oracle's SubVector over it: arms of the
 ;; vector-interface family ("Collection interfaces").
 (defun rontolisp::%clojure-subvec (v start end)
-  "(subvec V START END): a fresh vector of V's members from START up to END; a
-   non-vector V (a string included) signals, and so does a bound out of range or
-   START past END, like the oracle's IndexOutOfBoundsException."
+  "(subvec V START END): a vector of V's members from START up to END, the
+   canonical empty vector when the bounds are equal; a non-vector V (a string
+   included) signals, and so does a bound out of range or START past END, like
+   the oracle's IndexOutOfBoundsException."
   (cond ((rontolisp::%clojure-ivector-p v)
          (rontolisp::%clojure-ivector-subvec v start end))
         (t
@@ -9868,8 +9925,11 @@
                (rontolisp::%clojure-index-out-of-bounds-exception
                 (format nil "Index out of bounds for subvec ~D ~D of length ~D"
                         s e (length v))))
-           (let ((out (make-array (- e s))))
-             (dotimes (j (- e s) out) (setf (aref out j) (aref v (+ s j)))))))))
+           (if (= s e)
+               rontolisp::%clojure-empty-vector
+               (let ((out (make-array (- e s))))
+                 (dotimes (j (- e s) out)
+                   (setf (aref out j) (aref v (+ s j))))))))))
 
 (defun rontolisp::%clojure-subvec-from (v start)
   "(subvec V START): V from START to its end."
@@ -12233,21 +12293,26 @@
    NullPointerException, anything but a map its ClassCastException to
    java.util.Map (without the module tail). The target is always a table: the
    lowering answers a record or a sorted map the oracle's message-less
-   UnsupportedOperationException, and anything else its no-such-method refusal."
-  (if (or (hash-table-p source) (rontolisp::%clojure-record-p source)
-          (rontolisp::%clojure-sorted-map-p source))
-      (let ((entries (rontolisp::%clojure-merge-entry-plist source)))
-        (do ((p entries (cdr (cdr p))))
-            ((null p) nil)
-          (setf (gethash (rontolisp::%clojure-store-key (car p) target) target)
-                (car (cdr p)))))
-      (if (null source)
-          (rontolisp::%clojure-null-pointer-exception
-           "Cannot invoke \"java.util.Map.size()\" because \"m\" is null")
-          (rontolisp::%clojure-class-cast-exception
-           (concatenate 'string "class "
-                        (rontolisp::%clojure-class-name-of source)
-                        " cannot be cast to class java.util.Map")))))
+   UnsupportedOperationException, and anything else its no-such-method refusal.
+   The canonical empty map is immutable there too (the oracle's persistent map,
+   whose putAll throws), so its entries never reach the shared object."
+  (if (eq target rontolisp::%clojure-empty-map)
+      (rontolisp::%clojure-unsupported-operation-exception nil)
+      (if (or (hash-table-p source) (rontolisp::%clojure-record-p source)
+              (rontolisp::%clojure-sorted-map-p source))
+          (let ((entries (rontolisp::%clojure-merge-entry-plist source)))
+            (do ((p entries (cdr (cdr p))))
+                ((null p) nil)
+              (setf (gethash (rontolisp::%clojure-store-key (car p) target)
+                             target)
+                    (car (cdr p)))))
+          (if (null source)
+              (rontolisp::%clojure-null-pointer-exception
+               "Cannot invoke \"java.util.Map.size()\" because \"m\" is null")
+              (rontolisp::%clojure-class-cast-exception
+               (concatenate 'string "class "
+                            (rontolisp::%clojure-class-name-of source)
+                            " cannot be cast to class java.util.Map"))))))
 
 (defun rontolisp::%clojure-sorted-conj (s item)
   "(conj S ITEM) for the sorted collection S: a set gains ITEM unless a member
@@ -19364,6 +19429,15 @@
       (remhash (rontolisp::%clojure-table-key k out) out)
       out))
    (t (rontolisp::%clojure-class-cast-exception-of "dissoc needs a map" m))))
+
+(defun rontolisp::%clojure-dissoc-result (table orig)
+  "The map a plain dissoc leaves: TABLE itself, or the canonical empty map when
+   it holds no entry and ORIG carries no metadata (the oracle's
+   PersistentArrayMap.EMPTY; a value with metadata is a fresh copy there)."
+  (if (and (zerop (hash-table-count table))
+           (null (rontolisp::%clojure-meta orig)))
+      rontolisp::%clojure-empty-map
+      table))
 
 (defun rontolisp::%clojure-typed-select-keys (m keys out)
   "(select-keys m keys) of the typed map M into the fresh map OUT: the entry

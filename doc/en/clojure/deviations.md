@@ -552,8 +552,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `NullPointerException`. A two-argument construction of two numbers
   (`(java.util.HashMap. 1024 0.25)`) is the empty map too, and `.putAll` of a map stores
   its entries into the map and answers nil; on a record or a sorted map it throws the
-  same `UnsupportedOperationException`. `.putAll` into a map literal stores into the
-  literal's own table there, where the oracle throws. `str` and `class` read the Clojure map (`{:a 1}`, an array- or
+  same `UnsupportedOperationException`. `.putAll` into a non-empty map literal stores
+  into the literal's own table there, where the oracle throws; the canonical empty map
+  (every empty literal) throws the oracle's exception, since its table is shared. `str` and `class` read the Clojure map (`{:a 1}`, an array- or
   hash-map keyword), where the oracle spells the `HashMap`; a capacity argument answers
   itself, where the oracle builds an empty mutable map. Where the host is (the
   interpreter and the JVM) the construction stays that mutable object.

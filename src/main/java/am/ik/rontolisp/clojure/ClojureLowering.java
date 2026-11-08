@@ -4950,6 +4950,10 @@ public final class ClojureLowering {
 			return computedHeadCall(items);
 		}
 		if (head == ClojureReader.VECTOR) {
+			if (items.size() == 1) {
+				// the oracle's reader answers PersistentVector.EMPTY for []: one object
+				return ClojureCollectionLowering.EMPTY_VECTOR;
+			}
 			return ClojureLowerUtil.cons(ClojureLowerUtil.sym("vector"), lowers(items, 1));
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "%hash-map")) {
@@ -5495,7 +5499,9 @@ public final class ClojureLowering {
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("EQ"), booleanTemp, TRUE_CONST),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("EQ"), booleanTemp, this.falseVariable))));
 			case "vector":
-				return plain("vector", items);
+				// (vector) is the oracle's [] constant; a non-empty call builds a fresh
+				// one
+				return n == 0 ? ClojureCollectionLowering.EMPTY_VECTOR : plain("vector", items);
 			case "make-array":
 				return ClojureInteropLowering.makeArrayOf(this, items);
 			case "aget":
@@ -6082,6 +6088,8 @@ public final class ClojureLowering {
 			case "hash-map" -> ClojureCollectionLowering.mapConstructorValue(this, "hash-map");
 			case "array-map" -> ClojureCollectionLowering.mapConstructorValue(this, "array-map");
 			case "vec" -> ClojureCollectionLowering.vecValue(this);
+			case "vector" ->
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), new LispSymbol("RONTOLISP::%CLOJURE-VECTOR"));
 			case "comp" -> ClojureFnLowering.compValue(this);
 			case "partial" -> ClojureFnLowering.partialValue(this);
 			case "complement" -> ClojureFnLowering.complementValue(this);
@@ -6651,6 +6659,11 @@ public final class ClojureLowering {
 			}
 			refusePendingTag(items);
 			if (!items.isEmpty() && items.get(0) == ClojureReader.VECTOR) {
+				if (items.size() == 1) {
+					// a quoted [] is the reader's PersistentVector.EMPTY, the literal's
+					// object
+					return ClojureCollectionLowering.EMPTY_VECTOR;
+				}
 				List<LispVal> out = new ArrayList<>();
 				out.add(ClojureLowerUtil.sym("vector"));
 				for (int i = 1; i < items.size(); i++) {
@@ -6711,6 +6724,11 @@ public final class ClojureLowering {
 	 * per-element path -- they are skipped here, not quoted.
 	 */
 	LispVal quotedCollection(List<LispVal> items, boolean keepMeta) {
+		if (items.size() == 1) {
+			// a quoted {} or #{} is the reader's EMPTY constant, the literal's object
+			return ClojureLowerUtil.isSymbolNamed(items.get(0), "%hash-map") ? ClojureCollectionLowering.EMPTY_MAP
+					: ClojureCollectionLowering.EMPTY_SET;
+		}
 		List<LispVal> quoted = new ArrayList<>();
 		for (int i = 1; i < items.size(); i++) {
 			quoted.add(quotedElement(items.get(i), keepMeta));

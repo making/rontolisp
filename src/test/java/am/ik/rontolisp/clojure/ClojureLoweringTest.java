@@ -747,9 +747,9 @@ class ClojureLoweringTest {
 	@Test
 	void mapsAndSetsBuildTables() {
 		assertThat(lowered("{:a 1}")).contains("PLIST-HASH-TABLE").contains(":C%KEYWORD");
-		assertThat(lowered("{}")).contains("PLIST-HASH-TABLE");
+		assertThat(lowered("{}")).isEqualTo(FALSE_BINDING + "RONTOLISP::%CLOJURE-EMPTY-MAP");
 		assertThat(lowered("#{1 2}")).contains(":C%SET").contains("GETHASH");
-		assertThat(lowered("#{ }")).contains(":C%SET");
+		assertThat(lowered("#{ }")).isEqualTo(FALSE_BINDING + "RONTOLISP::%CLOJURE-EMPTY-SET");
 		assertThatThrownBy(() -> Clojure.read("(nope 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("unknown name");
 	}
@@ -831,9 +831,9 @@ class ClojureLoweringTest {
 			.hasMessageContaining("get takes a map");
 		assertThatThrownBy(() -> Clojure.read("(hash-map :a)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("hash-map takes key/value pairs");
-		// (conj) is the oracle's init arity, [], what (transduce xf conj coll) starts
-		// from
-		assertThat(lowered("(conj)")).isEqualTo(FALSE_BINDING + "(VECTOR)");
+		// (conj) is the oracle's init arity, its canonical [] constant, what
+		// (transduce xf conj coll) starts from
+		assertThat(lowered("(conj)")).isEqualTo(FALSE_BINDING + "RONTOLISP::%CLOJURE-EMPTY-VECTOR");
 		assertThatThrownBy(() -> Clojure.read("(count a b)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("count takes one collection");
 	}
@@ -4354,7 +4354,8 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defn f [ks] (get-in {} ks :d))")).contains("RONTOLISP::%CLOJURE-SEQ-ALL");
 		assertThat(lowered("(get-in {:a {:b 1}} [:a :b] :d)")).doesNotContain("RONTOLISP::%CLOJURE-SEQ-ALL");
 		assertThat(lowered("(update-in {:a 1} [] assoc :b 2)")).doesNotContain("RONTOLISP::%CLOJURE-SEQ-ALL");
-		assertThat(lowered("(into [] (map inc) [1])")).contains("(RONTOLISP::%CLOJURE-INTO-XF (VECTOR)");
+		assertThat(lowered("(into [] (map inc) [1])"))
+			.contains("(RONTOLISP::%CLOJURE-INTO-XF RONTOLISP::%CLOJURE-EMPTY-VECTOR");
 		assertThatThrownBy(() -> Clojure.read("(into [])", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("into takes a target, an optional transducer and a source");
 	}
@@ -4378,7 +4379,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(instance? String \"a\")")).contains("STRINGP");
 		// an interface tests every kind implementing it, then the host object, the value
 		// bound once
-		assertThat(lowered("(instance? java.util.Map (identity {}))")).contains("(HASH-TABLE-P ")
+		assertThat(lowered("(instance? java.util.Map (identity {:a 1}))")).contains("(HASH-TABLE-P ")
 			.contains("(RONTOLISP::%CLOJURE-SORTED-MAP-P ")
 			.contains("(RONTOLISP::%CLOJURE-HOST-OBJECT-P ")
 			.contains("\"java.util.Map\")")
@@ -4879,7 +4880,7 @@ class ClojureLoweringTest {
 			.contains("(RONTOLISP::%CLOJURE-HASHEQ (VECTOR 1))")
 			.contains("(RONTOLISP::%CLOJURE-HASH-COMBINE 1 (LIST :C%KEYWORD \"a\"))")
 			.contains("(RONTOLISP::%CLOJURE-MIX-COLLECTION-HASH 1 2)")
-			.contains("(RONTOLISP::%CLOJURE-HASH-ORDERED-COLL (VECTOR))");
+			.contains("(RONTOLISP::%CLOJURE-HASH-ORDERED-COLL RONTOLISP::%CLOJURE-EMPTY-VECTOR)");
 		assertThat(lowered("(map hash [1]) (map hash-unordered-coll [#{}])")).contains("#'RONTOLISP::%CLOJURE-HASHEQ-V")
 			.contains("#'RONTOLISP::%CLOJURE-HASH-UNORDERED-COLL-V");
 		assertThatThrownBy(() -> Clojure.read("(hash)", null)).isInstanceOf(LispReadException.class)

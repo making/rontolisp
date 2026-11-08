@@ -8097,6 +8097,29 @@ cases:
       [1] nil nil "a" {:a 1} nil nil
       (0 1)
       :signalled
+  - name: empty-collection-literals-are-one-canonical-object
+    # The oracle's reader's [], {}, #{} and every core verb answering through
+    # PersistentVector/ArrayMap/HashSet.EMPTY are one object per kind; (vec nil),
+    # with-meta, a transient's persistent! and disj of a set's last member are not.
+    # Oracle-identical (clj 1.12.6.1673, 2026-11-08).
+    source: |
+      (let [f (fn [v] (identical? v []))]
+        (println (f []) (identical? [] []) (identical? {} {}) (identical? #{} #{})
+                 (identical? (pop [1]) []) (identical? (empty [1 2]) []) (identical? (vec nil) [])))
+      (println (identical? (vector) []) (identical? (hash-map) {}) (identical? (array-map) {}) (identical? (hash-set) #{}))
+      (println (identical? (apply vector []) []) (identical? (apply hash-map []) {}) (identical? (apply hash-set []) #{}))
+      (println (identical? (empty {:a 1}) {}) (identical? (empty #{1}) #{}) (identical? (dissoc {:a 1} :a) {})
+               (identical? (subvec [1 2] 1 1) []) (identical? (persistent! (transient [])) []))
+      (println (identical? (disj #{1} 1) #{}) (identical? (with-meta [] {}) []) (identical? '[] [])
+               (identical? (first '[{}]) {}) (identical? (first '[#{}]) #{}))
+      (println (meta ^:m []) (meta []) (meta ^:m {}) (meta {}) (meta ^:m #{}) (meta #{}))
+    expected: |
+      true true true true true true false
+      true true true true
+      true true true
+      true true true true false
+      false false true true true
+      {:m true} nil {:m true} nil {:m true} nil
   - name: dedupe-partition-all-and-partition-by
     # dedupe drops consecutive = duplicates (1 and 1.0 stay apart, maps and
     # sets compare structurally); partition-all keeps the short tail;
@@ -10850,12 +10873,12 @@ cases:
       "Cannot cast java.lang.Long to java.math.BigDecimal" "No matching method divide found taking 2 args for class java.math.BigDecimal" "Cannot cast java.lang.Long to java.math.MathContext" "No matching method divide found taking 2 args for class java.math.BigDecimal" 1M
   - name: identical-compares-numbers-and-symbols-by-value
     # A deviation: identical? is eql here, so two numbers or two symbols of one value are
-    # identical (the oracle: false for boxed 1000, 1.5 and two read symbols), while two
-    # empty map literals are two tables (the oracle: one constant).
+    # identical (the oracle: false for boxed 1000, 1.5 and two read symbols); two empty
+    # map literals are the one canonical constant, like the oracle (2026-11-08).
     source: |
       (prn (identical? 1000 1000) (identical? 'a 'a) (identical? 1.5 1.5) (identical? {} {}))
     expected: |
-      true true true false
+      true true true true
   - name: sorted-map-and-sorted-set-print-in-comparator-order
     # Oracle-identical (clj 1.12.6): compare orders the keys (nil first, numbers across
     # their kinds, vectors by length first); of keys comparing equal the first stays and,

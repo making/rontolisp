@@ -1085,8 +1085,9 @@ final class ClojureValueMethodLowering {
 			// (HashMap. 1024 0.25) this way at load). A record or a sorted map is
 			// immutable there as here, so writing one is the oracle's
 			// message-less UnsupportedOperationException, like .put's above; any
-			// other receiver keeps the refusal, in the oracle's words
-			// (.kb/clojure-frontend.md, "HashMap construction")
+			// other receiver keeps the refusal, in the oracle's words. The canonical
+			// empty map is immutable there too, so a shared empty literal never gains
+			// an entry (.kb/clojure-frontend.md, "HashMap construction")
 			LispVal stored = ClojureLowerUtil.list(new LispSymbol(HASH_MAP_PUT_ALL), recv, args.get(0));
 			LispVal unmodifiable = ctx.lower(ClojureLowerUtil.list(new LispSymbol("throw"),
 					ClojureLowerUtil.list(new LispSymbol("new"), new LispSymbol(UNSUPPORTED_OPERATION))));

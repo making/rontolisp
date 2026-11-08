@@ -194,6 +194,10 @@ final class ClojureCoreLowering {
 				arity(name, n, 1, 1);
 				return worker(name, ClojureBindingLowering.realFnValue(ctx, items.get(1)));
 			case "hash-set":
+				// (hash-set) is the oracle's #{} constant; members build a fresh set
+				if (items.size() == 1) {
+					return ClojureCollectionLowering.EMPTY_SET;
+				}
 				return worker("set-of", ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 1)));
 			case "hash":
 				// Util.hasheq, the hash consistent with =
@@ -832,8 +836,7 @@ final class ClojureCoreLowering {
 		for (int i = layers.size() - 1; i >= 0; i--) {
 			entries.addAll(metaEntries(layers.get(i)));
 		}
-		return ClojureLowerUtil.list(runtime("put-meta"), ctx.lower(target),
-				ClojureCollectionLowering.mapBuild(ctx.lowers(entries, 0)));
+		return metadataAttach(target, ctx.lower(target), ClojureCollectionLowering.mapBuild(ctx.lowers(entries, 0)));
 	}
 
 	/**
@@ -978,7 +981,7 @@ final class ClojureCoreLowering {
 		LispVal head = parts.get(0);
 		if (head == ClojureReader.VECTOR || ClojureLowerUtil.isSymbolNamed(head, "%hash-map")
 				|| ClojureLowerUtil.isSymbolNamed(head, "%hash-set")) {
-			return ClojureLowerUtil.list(runtime("put-meta"), value, meta);
+			return metadataAttach(target, value, meta);
 		}
 		if (head instanceof LispSymbol marker && marker.name().startsWith("%")) {
 			return value; // a regex, record or tagged literal: no metadata here
@@ -986,6 +989,21 @@ final class ClojureCoreLowering {
 		// a quoted list may be one constant, which every evaluation shares
 		return ClojureLowerUtil.list(runtime("put-meta"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("copy-list"), value), meta);
+	}
+
+	/**
+	 * {@code value} carrying {@code meta} on a collection literal: a non-empty literal is
+	 * fresh at its site, so the metadata is recorded in place; an EMPTY one is the
+	 * canonical shared object ({@link ClojureCollectionLowering#EMPTY_VECTOR}) and takes
+	 * a fresh copy through {@code with-meta} instead, so the metadata never reaches every
+	 * empty literal of that kind.
+	 */
+	private static LispVal metadataAttach(LispVal target, LispVal value, LispVal meta) {
+		List<LispVal> parts = ClojureLowerUtil.items(target);
+		boolean empty = parts != null && parts.size() == 1
+				&& (parts.get(0) == ClojureReader.VECTOR || ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-map")
+						|| ClojureLowerUtil.isSymbolNamed(parts.get(0), "%hash-set"));
+		return ClojureLowerUtil.list(runtime(empty ? "with-meta" : "put-meta"), value, meta);
 	}
 
 	/**

@@ -924,7 +924,9 @@ class ClojureLibraryTest {
 		List<String> processed = ClojureLibrary.process(plain).stream().map(LispVal::print).toList();
 		assertThat(processed).noneMatch(text -> text.matches("(?s).*RONTOLISP::%CLOJURE-NS[ )].*"))
 			.contains("(|c%a/f|)")
-			.anyMatch(text -> text.contains("(PROGN NIL (PROGN (RONTOLISP::%CLOJURE-WRITE-DATUM 1"));
+			// a top-level do is lowered as its members (ClojureLowering), so the
+			// stripped in-ns switch and the println stand apart
+			.anyMatch(text -> text.contains("(PROGN (RONTOLISP::%CLOJURE-WRITE-DATUM 1"));
 		List<LispVal> read = Clojure.read("(ns a) (println (str *ns*))", null);
 		assertThat(ClojureLibrary.process(read).stream().map(LispVal::print)).contains(
 				"(DEFVAR RONTOLISP::%CLOJURE-NS (RONTOLISP::%CLOJURE-NS-OBJECT \"user\"))",
