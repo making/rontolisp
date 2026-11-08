@@ -31,8 +31,7 @@
     <h2 class="block-title">書き留めたこと</h2>
     <form class="note-form" method="post" action="/books/{{id}}/notes"
           hx-post="/books/{{id}}/notes" hx-target="#note-list" hx-swap="afterbegin"
-          hx-status:422="swap:none"
-          hx-on::after:request="if (ctx.response.status < 400) this.reset()">
+          hx-status:422="swap:none" data-reset-on-success>
       <fieldset class="kinds">
         <legend class="visually-hidden">種類</legend>
         <label><input type="radio" name="kind" value="quote" checked><span>引用</span></label>

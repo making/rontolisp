@@ -14,10 +14,11 @@ dashboard that piles up the books finished each month. The UI is in Japanese.
 shiori.lisp          the whole server
 templates/*.mustache layout, pages (home, library, book, book-form, error) and pieces
 static/app.css       the stylesheet
+static/app.js        the page's script: toasts, the request-failure dialog, the spine preview
 static/favicon.svg
 ```
 
-The templates and the stylesheet are read when the program is compiled, so the
+The templates, the stylesheet and the script are read when the program is compiled, so the
 built class or component carries them and runs from any directory.
 
 ## Run
@@ -71,12 +72,36 @@ page needs no configuration. When a request that expected a fragment
 Inheritance is explicit in htmx 4: the layout sets `hx-boost:inherited`.
 
 A request that gets no usable answer changes nothing on the page and opens a
-dialog instead (`layout.mustache`): `htmx:error` covers a network failure, the
+dialog instead (`static/app.js`): `htmx:error` covers a network failure, the
 browser being offline and htmx's timeout; `htmx:before:swap` cancels an error
 response that is not one of this site's HTML pages (a proxy's `502`). The
 dialog's retry sends the same request again -- the form is resubmitted with its
 submitter, the link clicked -- and a failed post says that what was typed is
 still in the form.
+
+## Security
+
+There is no login: Shiori is one person's journal, and anyone who can reach the
+port can read and change it. Do not expose it beyond the machine or network you
+trust.
+
+- **Cross-site request forgery.** A page on another site can make the visitor's
+  browser post to Shiori (on localhost, on a LAN) even with no login involved.
+  `wrap-same-origin` answers a POST with `403` unless `Sec-Fetch-Site` is
+  `same-origin` or `none`; a browser that does not send it is checked by
+  `Origin` against `Host`. A request with neither header did not come from a
+  browser page and is let through. No token is needed in any form.
+- **Injection.** Every value reaches PostgreSQL as a `$n` parameter, and every
+  value reaches the HTML through `{{...}}`, which escapes `< > & " '`; no
+  template uses `{{{...}}}`. The page's script writes text with `textContent`.
+- **Content-Security-Policy.** Script loads only from the site and from the
+  pinned htmx URL, which also carries an `integrity` hash. There is no inline
+  script and no `hx-on` (htmx compiles it with `Function`), so the policy needs
+  neither `unsafe-inline` nor `unsafe-eval` for scripts. Only style
+  *attributes* are allowed inline: a spine is drawn from them.
+  `frame-ancestors 'none'` keeps the pages out of other sites' frames.
+- **Limits.** A request body is capped at 64 KiB; the flash cookie is
+  `HttpOnly; SameSite=Lax`.
 
 ## Notes
 
@@ -88,7 +113,7 @@ still in the form.
   `{{current-page}}`).
 - **Spines.** A book's cloth colour and height come from a hash of its title and
   its width from its page count (`spine-style`). The form's live preview in
-  `layout.mustache` computes the same in JavaScript from `*spine-json*`.
+  `static/app.js` computes the same in JavaScript from `*spine-json*`.
 - **Caching.** The stylesheet URL carries a hash of its text and is served
   `immutable`.
 - **Search** uses `strpos`, not `like`, so `%` and `_` typed by the visitor are

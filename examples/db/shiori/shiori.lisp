@@ -16,9 +16,9 @@
 ;; request, the same route answers with a fragment -- a single partial -- or with
 ;; an HX-Location instead of a 303. See README.md for the request flow.
 ;;
-;; The templates and the stylesheet are read when the program is COMPILED (the
-;; define-asset macro below), so the built class or component carries them and
-;; runs from any directory.
+;; The templates, the stylesheet and the script are read when the program is
+;; COMPILED (the define-asset macro below), so the built class or component
+;; carries them and runs from any directory.
 ;;
 ;; It needs a server, and reads where to find it out of DATABASE_URL
 ;; (../database-url.lisp parses the URL):
@@ -81,6 +81,7 @@
   "pagination")
 
 (define-asset *stylesheet* "static/app.css")
+(define-asset *script* "static/app.js")
 (define-asset *favicon* "static/favicon.svg")
 
 (defparameter *compiled-templates*
@@ -357,7 +358,7 @@
   "The custom properties app.css builds a spine from. The cloth and the
    height follow from the title alone, so a book keeps its look; the width
    follows from the page count. The book form's live preview
-   (layout.mustache) computes the same in JavaScript, out of *spine-json*."
+   (static/app.js) computes the same in JavaScript, out of *spine-json*."
   (let ((hash (text-hash title)))
     (destructuring-bind (h s l) (nth (mod hash (length *cloths*)) *cloths*)
       (format nil "--h: ~d; --s: ~d%; --l: ~d%; --w: ~dpx; --sh: ~dpx" h s l
@@ -377,6 +378,10 @@
   (format nil "/static/app.css?v=~(~36r~)" (text-hash *stylesheet*))
   "The stylesheet's URL carries a hash of its text, so a changed stylesheet
    is a new URL and the old one can be cached for good.")
+
+(defparameter *script-url*
+  (format nil "/static/app.js?v=~(~36r~)" (text-hash *script*))
+  "The page's script, versioned like the stylesheet.")
 
 (defparameter *spine-json*
   (format nil
@@ -447,10 +452,31 @@
     (multiple-value-bind (n end) (parse-integer text :junk-allowed t)
       (when (and n (= end (length text)) (plusp n)) n))))
 
+(defparameter *content-security-policy*
+  (format nil "~{~a~^; ~}"
+          '("default-src 'self'"
+            "script-src 'self' https://unpkg.com/htmx.org@4.0.1/"
+            "style-src-elem 'self' https://fonts.googleapis.com"
+            ;; A spine's cloth and size are custom properties in its style
+            ;; attribute (spine-style).
+            "style-src-attr 'unsafe-inline'"
+            "font-src https://fonts.gstatic.com"
+            ;; app.css masks the paper grain with a data: SVG.
+            "img-src 'self' data:" "object-src 'none'" "base-uri 'none'"
+            "form-action 'self'" "frame-ancestors 'none'"))
+  "What a page may load and run. No inline script and no eval: an injected
+   <script> or on* attribute does not run even if escaping were ever missed.
+   frame-ancestors keeps the pages (their delete buttons) out of other
+   sites' frames.")
+
 (defun html (status body &rest headers)
   (tiny:make-response :status status
-   :headers (list* :content-type "text/html; charset=utf-8" headers)
-   :body body))
+                      :headers (list* :content-type "text/html; charset=utf-8"
+                                      :content-security-policy
+                                      *content-security-policy*
+                                      :x-content-type-options "nosniff"
+                                      :referrer-policy "same-origin" headers)
+                      :body body))
 
 (defun flash-cookie (message)
   (format nil "shiori_flash=~a; Path=/; Max-Age=60; HttpOnly; SameSite=Lax"
@@ -499,6 +525,7 @@
                   (append (list (cons :page template) (cons :title title)
                                 (cons :flash flash)
                                 (cons :stylesheet *stylesheet-url*)
+                                (cons :script *script-url*)
                                 (cons :nav-home (string= nav "home"))
                                 (cons :nav-library (string= nav "library"))
                                 (cons :nav-new (string= nav "new"))) data))))
@@ -1098,8 +1125,10 @@
 
 (defun static (content-type text cache-control)
   (tiny:make-response :status 200
-   :headers (list :content-type content-type :cache-control cache-control)
-   :body text))
+                      :headers (list :content-type content-type
+                                     :cache-control cache-control
+                                     :x-content-type-options "nosniff")
+                      :body text))
 
 ;;; --- middleware --------------------------------------------------------------------
 
@@ -1121,6 +1150,32 @@
                                              type))
                                        (rontolisp:query-params
                                         (tiny:request-body req)))))))))
+
+(defun same-origin-p (req)
+  "False when a browser says another site sent this request. Sec-Fetch-Site
+   is the browser's own word on it; a browser too old to send it still sends
+   Origin, compared with Host. A request carrying neither did not come from a
+   browser page (curl, a script) and has no visitor's browser to abuse."
+  (let ((site (tiny:request-header req "sec-fetch-site"))
+        (origin (tiny:request-header req "origin"))
+        (host (tiny:request-header req "host")))
+    (cond (site (member site '("same-origin" "none") :test #'string=))
+          (origin (let ((authority (search "://" origin)))
+                    (and authority host
+                         (string= (subseq origin (+ authority 3)) host))))
+          (t t))))
+
+(defun wrap-same-origin (handler)
+  "Middleware against cross-site request forgery: a page on another site can
+   make the visitor's browser post here. There is no login to borrow, but the
+   post still reaches an app the visitor can reach and that site cannot (on
+   localhost, on a LAN). A POST from another origin gets a 403 before any
+   handler runs."
+  (lambda (req)
+    (if (or (member (tiny:request-method req) '(:get :head :options))
+            (same-origin-p req))
+        (funcall handler req)
+        (error-page req 403 "別のサイトからの送信です" "栞の画面から操作してください。"))))
 
 (defun wrap-connection (handler)
   "Middleware: one connection per request, as :db, closed even when the handler
@@ -1162,6 +1217,9 @@
     (static "text/css; charset=utf-8" *stylesheet*
             ;; Its URL changes with its text (*stylesheet-url*).
             "public, max-age=31536000, immutable"))
+  (tiny:define-get "/static/app.js" (req)
+    (static "text/javascript; charset=utf-8" *script*
+            "public, max-age=31536000, immutable"))
   (tiny:define-get "/favicon.svg" (req)
     (static "image/svg+xml" *favicon* "public, max-age=86400"))
   (tiny:define-any "*" (req) (not-found req)))
@@ -1169,8 +1227,8 @@
 (defparameter *app*
   (tiny:pipe (tiny:routes (tiny:pipe *app-routes*
                            (tiny:wrap-post-match-middleware #'wrap-connection))
-                          *static-routes*) (wrap-errors) (wrap-params)
-             (tiny:wrap-request-body :max-bytes 65536)))
+                          *static-routes*) (wrap-same-origin) (wrap-errors)
+             (wrap-params) (tiny:wrap-request-body :max-bytes 65536)))
 
 (clack:clackup *app*
                :server :rontolisp
