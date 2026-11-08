@@ -444,7 +444,9 @@ order, and anything else passes on (oracle-checked clj 1.12.6, 2026-10-03).
   `Class.forName` test image found `IllegalArgumentException` and `FileNotFoundException`,
   not `StackOverflowError` or `java.sql.SQLException`); `ClojureThrowablesTest` pins its `java`
   rows to reflection and its completeness against `JAVA_LANG`. A construction bakes its chain
-  (`throwableConstruction`); a catch class resolves like any class name -- an unknown one is the
+  (`throwableConstruction`); `(clojure.lang.ExceptionInfo. msg data)` (and the three-argument
+  cause form, schema's `error!` macro) is `ex-info`'s own value on every backend rather than
+  a host constructor (2026-11-08, `.todo/j23`). A catch class resolves like any class name -- an unknown one is the
   oracle's `Unable to resolve classname: Foo`, a non-throwable (`Object`, `String`)
   `Catch type is not a subclass of Throwable: C` (the oracle's `VerifyError`).
 - Lowering: `(catch C e body)` is the clause `((and error (satisfies |C%E-CATCHES-<C>|)) (e)
@@ -1719,7 +1721,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | component 1.2.0 (stuartsierra) | = | = | = | = | no transitive deps; 2026-11-08 round (`.todo/j07`): records implementing `Lifecycle`, `system-map`/`using`/`start`/`stop`, a missing-dependency `ex-data`, `update-system` -- 7 lines; two `JAVA:CALL` warnings on wasm off the path |
 | editscript 0.8.0 | = | = | stop | stop | 2026-11-08 round: the 7-line probe (map/vector/string diffs, `patch`, `edit-distance`, `:quick`) is the oracle's on the interpreter and the JVM; wasm traps on `System/nanoTime`, then `java.util.IdentityHashMap` (`.todo/j28`, which also records the host-side identity loss of a Clojure key in an `IdentityHashMap`) |
 | data.csv 1.1.1 | 5/6 | | | | 2026-11-08 round: `read-csv`/`write-csv` over strings and a `StringWriter` print the oracle's lines; `io/reader` of a `java.io.StringReader` refuses (`.todo/j16`). Other backends not run |
-| aero 1.1.6, core.match 1.1.1, core.logic 1.1.1, schema 1.4.2, specter 1.1.6, rewrite-clj 1.3.59, datascript 1.8.1 | stop | | | | 2026-11-08 round, interpreter only: each stops at load; past hand patches all but datascript print the oracle's lines (core.logic but its pinned `()`-is-`nil` line). The stops, library by library, and the items they became: `.todo/j07` (probes, patches and outputs in `.todo/artefacts/j07-clojure-library-probe-round-2026-11-08/`) |
+| aero 1.1.6, core.match 1.1.1, core.logic 1.1.1, schema 1.4.2, specter 1.1.6, rewrite-clj 1.3.59, datascript 1.8.1 | stop | | | | 2026-11-08 round, interpreter only: each stops at load; past hand patches all but datascript print the oracle's lines (core.logic but its pinned `()`-is-`nil` line). The stops, library by library, and the items they became: `.todo/j07` (probes, patches and outputs in `.todo/artefacts/j07-clojure-library-probe-round-2026-11-08/`). j23 (2026-11-08, `.todo/j23`): specter's `extend-protocolpath*` and schema's `extend-primitive` hunks are no longer needed -- with the other hunks applied, specter's probe is the oracle's line for line and schema's loads and prints the same but the pinned set-order line (interpreter; the other backends unprobed) |
 f92 shares every site-independent core value program-wide through `%clojure-shared-value`, so the probe is green again on all four. f98: the 8-line pattern-schema probe (`form`/`type` of `(m/schema #"a")`, `validate` of a hit, a miss and a non-string, `explain`, the `:malli.core/invalid-schema` refusals of `(m/schema 42)` and `(m/schema "s")`) is the oracle's line for line on all four since 2026-10-13 (`type` of a pattern hits the `class-schemas` entry: the host class where a host is, the designator where none is). That 12-line wasm parity was overstated (2026-10-13, f99): the probe's decode lines print bare (`println`), under which an undecoded `"1"` reads as `1` -- `(Long/parseLong x)` refused at call time there, so `-string->long`'s catch kept the input (`pr-str` shows the gap). One-argument `Long/parseLong` now lowers to the portable reader where the host is not (`%clojure-parse-long-static`, "Portable number statics"), and the 12-line probe is the oracle's line for line under `pr-str` on all four backends |
 
 `=` is the oracle's output line for line (12-31 lines per probe; tools.cli's `:parse-fn` is
@@ -4675,16 +4677,42 @@ constructor and consumer, and a regex `replace` with a function replacement.
   (2026-10-09, clj 1.12.6; `extensionRows` ends the rows in `nil`; they used to answer the
   last `setf`'s lambda, echoed `#<procedure>`); pinned by clojure-spec `extend-forms-answer-nil`
   and `ClojureSessionTest.theExtendFormsEchoNil`.
-- **Protocol introspection** (2026-10-13, `.todo/f75`). A protocol var holds its method
-  table, so `extenders` answers the extended tags in walk order (`:object` last where the
-  default table exists, which a literal protocol name passes beside the methods table),
+- **A computed type or protocol** (2026-11-08, `.todo/j23`): an `extend`,
+  `extend-protocol` or `extend-type` whose type operand is no literal name (a form such as
+  `(class 1)`, `(Class/forName "[D")`, or a local) or whose protocol operand is a local or a
+  var holding a protocol value (a symbol no `protocolOf` names but `resolveVar` resolves)
+  lowers to the run-time `%clojure-extend` instead of the compile-time row stores -- one call
+  per type for `extend-protocol`, in the oracle's evaluation order. `%clojure-extend` reads
+  the protocol through the registry, keys the type through `%clojure-extends-key` (a class
+  value, a class keyword or a tag keyword; a record or deftype name in value position is its
+  dispatch tag, `ClojureProtocolLowering.typeTagValue`), and applies the same row rules (g43).
+  The run-time key is exact, so a computed concrete class or kind reaches its row; a
+  computed *interface* or superclass row needs the walk, which only a literal name
+  registers (`noteWalk`), a deviation. A program whose operands are all literal names keeps
+  the compile-time stores and carries no `%clojure-extend` (pinned by
+  `ClojureLoweringTest`); `Class/forName` of a literal class name is the designator where no
+  host is, so a wasm program can extend an array class. Pinned by clojure-spec
+  `extend-takes-a-computed-protocol-and-a-computed-type` (all four, oracle-identical but the
+  class print).
+- **Protocol introspection** (2026-10-13, `.todo/f75`). A protocol var holds the oracle's
+  protocol map (2026-11-08, `.todo/j23`; before, the method table): `:on` and
+  `:on-interface` its interface as a class keyword (the oracle's `Class`; a class value here
+  prints as its keyword), `:sigs` each method's keyword to `{:tag nil, :name sym, :arglists
+  (vectors), :doc nil}` (`ProtocolDef.arglists`), `:method-map` the method symbol to its
+  keyword, and `:impls` the method table the extend rows land in (present from the
+  definition, where the oracle adds it on the first extend); `:var` and `:method-builders`
+  are not carried. The registry (`%clojure-protocols`) is keyed by that map and by the
+  method table, so `extenders` answers the extended tags in walk order (`:object` last where
+  the default table exists, which a literal protocol name passes beside the methods table),
   `nil` of a value holding no table like the oracle's nil of a non-protocol;
   `find-protocol-impl` answers the tag row's map, else the `Object` default's, else nil, and
   `find-protocol-method` the row's function for the method key the same way -- where the
   oracle answers the same, except that a non-protocol is its `NullPointerException` there.
   The tags are the keywords `class` answers, so an extender prints `:string` where the
-  oracle prints its `Class`. A computed protocol (or any `-v` value) reads the table
-  itself, which holds no `Object` default. As values `satisfies?`/`extends?`/`extend`
+  oracle prints its `Class`. A computed protocol (or any `-v` value) resolves the map
+  through the registry and reads the getters' current tables (`%clojure-protocol-tables`),
+  or the value itself as a table where the registry holds none; the default shows only
+  through a literal protocol name. As values `satisfies?`/`extends?`/`extend`
   check the count in the oracle's words, then read the run-time registry the `defprotocol`
   populates beside the methods table (`%clojure-protocols`, an `eq` table from the table
   to getters over its methods, inline and default tables plus a setter over the default,

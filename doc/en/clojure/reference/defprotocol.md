@@ -3,8 +3,12 @@
 `(defprotocol Name docstring? (method [target & args]+ docstring?)*)`
 
 Declares a protocol: a method-table global plus one dispatcher per method over the
-target's tag (the multimethod shape without the hierarchy search). The name answers
-its method table. A call dispatches on the target's exact tag, then on a class the
+target's tag (the multimethod shape without the hierarchy search). The name answers the
+protocol's map, in the oracle's shape -- the interface under `:on`/`:on-interface` (a
+class keyword here), each method's parameter vectors under `:sigs`, the method map and
+the extension table under `:impls` -- which `extend`, `satisfies?`, `extends?` and
+`extenders` accept like the name at a call site. `:var` and `:method-builders` are not
+carried. A call dispatches on the target's exact tag, then on a class the
 target extends or implements that the protocol was extended to (a throwable, `IRef`, ...:
 [extend-protocol](extend-protocol.md)), then the `Object` row; a miss with no `Object` row
 signals, like the oracle. A method declares one

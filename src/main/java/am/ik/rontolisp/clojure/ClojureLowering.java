@@ -1286,8 +1286,8 @@ public final class ClojureLowering {
 	 * which {@code reduce} and {@code reduce-kv} hand such a value to; null for every
 	 * other protocol.
 	 */
-	record ProtocolDef(Set<String> methods, Map<String, Set<Integer>> arities, LispSymbol methodsVar,
-			LispSymbol defaultVar, @Nullable LispSymbol inlineVar, @Nullable String reducerRow) {
+	record ProtocolDef(Set<String> methods, Map<String, Set<Integer>> arities, Map<String, List<LispVal>> arglists,
+			LispSymbol methodsVar, LispSymbol defaultVar, @Nullable LispSymbol inlineVar, @Nullable String reducerRow) {
 
 		/** The table an inline (body) implementation is stored in. */
 		LispSymbol inlineTable() {
@@ -6515,6 +6515,10 @@ public final class ClojureLowering {
 				LispVal classValue = ClojureInteropLowering.classValue(this, name);
 				if (classValue != null) {
 					return classValue;
+				}
+				LispVal typeTag = ClojureProtocolLowering.typeTagValue(this, name);
+				if (typeTag != null) {
+					return typeTag;
 				}
 				LispVal langKeyword = ClojureValueClasses.classKeyword(this, name);
 				if (langKeyword != null) {

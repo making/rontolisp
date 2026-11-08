@@ -14007,6 +14007,62 @@ cases:
       [:one "s"] [:two "s" 2] [:object 1]
       [:long 5] "7"
       "ab"
+  - name: extend-takes-a-computed-protocol-and-a-computed-type
+    # j23: a protocol is a run-time value -- its var holds the oracle's map
+    # (:on, :on-interface, :sigs with each method's name and arglists, and
+    # :method-map; this front end's class values are keywords, so :on prints
+    # :user.J23P where the oracle prints its class) -- and extend reads it
+    # through the registry, storing under a type value computed at run time.
+    # extend-protocol and extend-type take a computed type, the type of a
+    # core fn and a class from Class/forName included (an array row is
+    # stored but never reached: an array here is a vector, the pinned
+    # representation); satisfies?, extends? and extend take a protocol held
+    # in a var or a local, like the value arms. The ExceptionInfo
+    # constructor schema's error! macro spells is ex-info's value on every
+    # backend. Oracle-identical (clj 1.12.6, 2026-11-08) but the class print.
+    # schema 1.4.2's extend-primitive and specter 1.1.6's extend-protocolpath*
+    # are the load-time shapes this unblocks.
+    source: |
+      (defprotocol J23P (j23-f [x]))
+      (defn j23-ext! [proto t] (extend t proto {:j23-f (fn [_] :ext)}))
+      (j23-ext! J23P String)
+      (prn (j23-f "s"))
+      (defmacro j23-ext-class [expr] `(extend-protocol J23P ~expr (j23-f [_#] :computed)))
+      (deftype J23T [])
+      (j23-ext-class J23T)
+      (prn (j23-f (J23T.)))
+      (j23-ext-class (class 1))
+      (prn (j23-f 2))
+      (prn (:sigs J23P))
+      (prn (-> J23P :sigs first last :arglists first))
+      (prn (-> J23P :sigs keys first))
+      (prn (:on J23P))
+      (prn (satisfies? J23P "s") (extends? J23P String) (satisfies? J23P (J23T.)))
+      (def j23-proto J23P)
+      (prn (satisfies? j23-proto "s") (extends? j23-proto Long))
+      (extend-type (class 1) J23P (j23-f [_] :type-computed))
+      (prn (j23-f 3))
+      (prn ((fn [p t] (extend t p {:j23-f (fn [_] :val)})) J23P Boolean))
+      (prn (j23-f true))
+      (extend-protocol J23P (Class/forName "[D") (j23-f [_] :array))
+      (extend-protocol J23P (class @(resolve 'double)) (j23-f [_] :fn-class))
+      (prn (j23-f @(resolve 'double)))
+      (prn (:a (ex-data (clojure.lang.ExceptionInfo. (str "m") {:a 1}))))
+    expected: |
+      :ext
+      :computed
+      :computed
+      {:j23-f {:tag nil, :name j23-f, :arglists ([x]), :doc nil}}
+      [x]
+      :j23-f
+      :user.J23P
+      true true true
+      true true
+      :type-computed
+      nil
+      :val
+      :fn-class
+      1
   - name: clojure-repl-doc-prints-a-definitions-metadata-like-the-oracle
     # The built-in clojure.repl (.kb/clojure-frontend.md "clojure.jar namespaces"): doc of a
     # defn, a defmacro, a defn without a docstring and a def with :doc metadata prints the

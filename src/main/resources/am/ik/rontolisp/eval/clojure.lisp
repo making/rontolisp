@@ -10625,14 +10625,21 @@
                                                       default-getter
                                                       default-ensurer walks
                                                       guard names reducer pkey
-                                                      iface clearer)
-  "Register METHODS' record beside the methods table, answering the table
-   (what the protocol's setq answers, so a defprotocol answers what it
-   answered before the registry existed)."
-  (setf (gethash methods rontolisp::%clojure-protocols)
-        (list methods-getter inline-getter default-getter default-ensurer walks
-              guard names reducer pkey iface clearer))
-  methods)
+                                                      iface clearer value)
+  "Register METHODS' record beside the methods table and the protocol's
+   value map VALUE (the oracle's :on, :on-interface, :sigs and :method-map,
+   made by the defprotocol), answering VALUE -- what the protocol's setq
+   answers. VALUE's :impls is METHODS, the row family an extend fills
+   (g43), so extenders and a value reading :impls see the same rows the
+   dispatchers do; the registry answers both VALUE and the table, so a
+   captured table reads what it reads like the calls do."
+  (let ((record
+         (list methods-getter inline-getter default-getter default-ensurer walks
+               guard names reducer pkey iface clearer)))
+    (setf (gethash (list :c%keyword "impls") value) methods)
+    (setf (gethash methods rontolisp::%clojure-protocols) record)
+    (setf (gethash value rontolisp::%clojure-protocols) record))
+  value)
 
 (defun rontolisp::%clojure-register-type-tag (tag class protocols)
   "Register the record or deftype dispatch-tag keyword TAG beside its CLASS
@@ -10980,10 +10987,28 @@
             (setq out (append out (list (list :c%keyword "object")))))
         out)))
 
+(defun rontolisp::%clojure-protocol-tables (p)
+  "The (methods . default) a value arm's protocol value P reads: through
+   the registry a defprotocol registered the protocol's map in, with the
+   getters that read the current tables (a re-executed defprotocol reads
+   the new ones, like the calls do); P itself as the methods table where
+   the registry holds none, so a -v arm handed a plain table (or a
+   non-protocol map) answers what it answered before."
+  (let ((record
+         (and (hash-table-p p) (gethash p rontolisp::%clojure-protocols))))
+    (if record
+        (cons (funcall (car record)) (funcall (car (cdr (cdr record)))))
+        (cons p nil))))
+
+(defun rontolisp::%clojure-extenders-of (p)
+  "(extenders p) over a run-time protocol value P."
+  (let ((tables (rontolisp::%clojure-protocol-tables p)))
+    (rontolisp::%clojure-extenders (car tables) (cdr tables))))
+
 (defun rontolisp::%clojure-extenders-v (&rest args)
   "extenders as a value."
   (rontolisp::%clojure-check-arity args 1 1 "extenders")
-  (rontolisp::%clojure-extenders (car args) nil))
+  (rontolisp::%clojure-extenders-of (car args)))
 
 (defun rontolisp::%clojure-find-protocol-impl (methods default x)
   "(find-protocol-impl p x): the map of X's implementation, else the Object
@@ -10991,10 +11016,15 @@
   (let ((row (rontolisp::%clojure-protocol-row methods default x)))
     (and row (rontolisp::%clojure-plist-table row nil))))
 
+(defun rontolisp::%clojure-find-protocol-impl-of (p x)
+  "(find-protocol-impl p x) over a run-time protocol value P."
+  (let ((tables (rontolisp::%clojure-protocol-tables p)))
+    (rontolisp::%clojure-find-protocol-impl (car tables) (cdr tables) x)))
+
 (defun rontolisp::%clojure-find-protocol-impl-v (&rest args)
   "find-protocol-impl as a value."
   (rontolisp::%clojure-check-arity args 2 2 "find-protocol-impl")
-  (rontolisp::%clojure-find-protocol-impl (car args) nil (car (cdr args))))
+  (rontolisp::%clojure-find-protocol-impl-of (car args) (car (cdr args))))
 
 (defun rontolisp::%clojure-find-protocol-method (methods default m x)
   "(find-protocol-method p m x): X's function for the method key M, else the
@@ -11002,11 +11032,16 @@
   (let ((row (rontolisp::%clojure-protocol-row methods default x)))
     (and row (gethash m row))))
 
+(defun rontolisp::%clojure-find-protocol-method-of (p m x)
+  "(find-protocol-method p m x) over a run-time protocol value P."
+  (let ((tables (rontolisp::%clojure-protocol-tables p)))
+    (rontolisp::%clojure-find-protocol-method (car tables) (cdr tables) m x)))
+
 (defun rontolisp::%clojure-find-protocol-method-v (&rest args)
   "find-protocol-method as a value."
   (rontolisp::%clojure-check-arity args 3 3 "find-protocol-method")
-  (rontolisp::%clojure-find-protocol-method (car args) nil (car (cdr args))
-                                            (car (cdr (cdr args)))))
+  (rontolisp::%clojure-find-protocol-method-of (car args) (car (cdr args))
+                                               (car (cdr (cdr args)))))
 
 ;;;; Checked casts: cast of a computed class.
 ;;

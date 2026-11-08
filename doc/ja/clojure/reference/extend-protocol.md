@@ -17,7 +17,9 @@
 届きます。レコードならマップのインタフェース（`clojure.lang.IPersistentMap`、`java.util.Map`
 など）、`reify`・`deftype`・`defrecord` なら本体が挙げたインタフェース
 （[reify](reify.md#host-interfaces)）、ベクタなら `clojure.lang.Sequential`、キーワードなら
-`clojure.lang.IFn` です。どのクラスでもない名前は `instance?` 同様に拒否されます。複数の
+`clojure.lang.IFn` です。どのクラスでもない名前は `instance?` 同様に拒否されます。型には
+クラス値を計算する式（`(class 1)`、`(Class/forName "[D")`）も書け、その行はフォームの
+実行時に格納されます。複数の
 アリティを持つメソッドは、アリティを `fn` の節として
 `(method ([target] ...) ([target x] ...))` のように書きます。
 

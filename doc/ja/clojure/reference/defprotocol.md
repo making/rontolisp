@@ -3,7 +3,11 @@
 `(defprotocol Name docstring? (method [target & args]+ docstring?)*)`
 
 プロトコルを宣言します。メソッドごとにターゲットのタグ上のディスパッチャ（階層
-探索なしの multimethod 形）を持ちます。名前はメソッド表を答えます。呼び出しは
+探索なしの multimethod 形）を持ちます。名前はプロトコルのマップをオラクルと同じ形で
+答えます。`:on`/`:on-interface` にインタフェース（ここではクラスキーワード）、`:sigs` に
+各メソッドのパラメータベクター、メソッドマップと拡張表を `:impls` に持ち、`extend`・
+`satisfies?`・`extends?`・`extenders` は呼び出し位置の名前と同様にこれを受け取ります。
+`:var` と `:method-builders` は持ちません。呼び出しは
 ターゲットのタグの完全一致、次にターゲットが継承または実装するクラスのうちプロトコルを
 extend したもの（throwable、`IRef` など。[extend-protocol](extend-protocol.md)）、
 それから `Object` 行でディスパッチし、`Object` 行なしの外れはオラクル同様シグナルを

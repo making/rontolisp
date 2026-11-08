@@ -1405,11 +1405,11 @@ class ClojureLoweringTest {
 		assertThat(lowered("(def x extends?)")).contains("RONTOLISP::%CLOJURE-EXTENDS-P")
 			.contains("clojure.core/extends?");
 		assertThat(lowered("(def x extend)")).contains("RONTOLISP::%CLOJURE-EXTEND");
-		// g42: a defprotocol registers its tables beside the methods table, and
-		// answers the table (what the bare setq answers); a defrecord registers
-		// its tag beside the constructors, answering the tag
+		// g42: a defprotocol registers its tables beside the methods table and
+		// answers its value map; a defrecord registers its tag beside the
+		// constructors, answering the tag
 		assertThat(lowered("(defprotocol P (foo [x]))")).contains("RONTOLISP::%CLOJURE-REGISTER-PROTOCOL")
-			.contains("(SETQ |c%P| |c%P%methods|)");
+			.contains("(SETQ |c%P| (RONTOLISP::%CLOJURE-REGISTER-PROTOCOL");
 		assertThat(lowered("(defrecord R [a])")).contains("RONTOLISP::%CLOJURE-REGISTER-TYPE-TAG")
 			.contains("DEFUN |c%->R|");
 		assertThatThrownBy(() -> Clojure.read("(extends? p)", null)).isInstanceOf(LispReadException.class)
@@ -1442,12 +1442,12 @@ class ClojureLoweringTest {
 	void protocolsRecordsAndTypesLowerToTables() {
 		// a protocol is a method-table global plus one dispatcher defun per method,
 		// over the shared tag reader (the multimethod shape without the hierarchy
-		// search); the protocol name answers its table
+		// search); the protocol name answers its oracle-shaped value map
 		assertThat(lowered("(defprotocol P (foo [x]) (bar [x y]))")).contains("C%PROTOCOL-TAG")
 			.contains("|c%P%methods|")
 			.contains("DEFUN |c%foo|")
 			.contains("DEFUN |c%bar|")
-			.contains("(SETQ |c%P| |c%P%methods|)");
+			.contains("(SETQ |c%P| (RONTOLISP::%CLOJURE-REGISTER-PROTOCOL");
 		// a record is a (:C%RECORD tag fields table) wrapper with positional and map
 		// constructors as mangled defuns, so constructor calls stay direct
 		assertThat(lowered("(defprotocol P (foo [x])) (defrecord R [a] P (foo [_] a))")).contains(":C%RECORD")
@@ -1485,6 +1485,25 @@ class ClojureLoweringTest {
 		assertThat(lowered("(defprotocol P (foo [x])) (extend-type String P (foo [s] s))")).contains("|c%P%methods|");
 		assertThat(lowered("(defprotocol P (foo [x])) (extend String P {:foo (fn [s] s)})")).contains("|c%P%methods|");
 		assertThat(lowered("(defprotocol P (foo [x])) (satisfies? P 1)")).contains("C%PROTOCOL-TAG");
+		// a computed type or protocol takes the run-time extend, and a program whose
+		// operands are all literal names does not (the arm family's gate)
+		assertThat(lowered("(defprotocol P (foo [x])) (extend-protocol P (class 1) (foo [_] 1))"))
+			.contains("%CLOJURE-EXTEND");
+		assertThat(lowered("(defprotocol P (foo [x])) (extend-type (class 1) P (foo [_] 1))"))
+			.contains("%CLOJURE-EXTEND");
+		assertThat(lowered("(defprotocol P (foo [x])) (extend (class 1) P {:foo (fn [_] 1)})"))
+			.contains("%CLOJURE-EXTEND");
+		assertThat(lowered("(defprotocol P (foo [x])) (defn f [p] (extend String p {:foo (fn [_] 1)}))"))
+			.contains("%CLOJURE-EXTEND");
+		assertThat(lowered("(defprotocol P (foo [x])) (extend-protocol P String (foo [s] s))"))
+			.doesNotContain("%CLOJURE-EXTEND");
+		// a record or deftype name in value position is its dispatch tag
+		assertThat(lowered("(defrecord R [a]) (prn R)")).contains(":C%KEYWORD \"R\"");
+		assertThat(lowered("(deftype T []) (prn T)")).contains(":C%KEYWORD \"T\"");
+		// the protocol's value is the oracle's map, its registry beside the method table
+		assertThat(lowered("(defprotocol P (foo [x] [x y]))")).contains("%CLOJURE-REGISTER-PROTOCOL")
+			.contains(":C%KEYWORD \"sigs\"")
+			.contains(":C%KEYWORD \"arglists\"");
 		assertThat(lowered("(defrecord R [a]) (instance? R 1)")).contains("C%PROTOCOL-TAG");
 		assertThat(lowered("(defrecord R [a]) (.-a (->R 1))")).contains("GETHASH");
 		// the stays-refused set: interfaces and code generation, a signature that is

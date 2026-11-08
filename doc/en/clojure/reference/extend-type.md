@@ -6,7 +6,9 @@ Replaces protocols' rows for one type: the same rows `extend-protocol` stores,
 grouped under protocol names (each group replaces the protocol's row for the type,
 like the oracle). Method groups without a protocol name are refused --
 there is no interface to check them against. Unlike inline `defrecord`/`deftype`
-bodies, the methods do not see the type's fields as locals. A method of several
+bodies, the methods do not see the type's fields as locals. The type may be an
+expression computing a class value (`(class 1)`), stored when the form runs. A method of
+several
 arities spells them as the clauses of a `fn`, and a method named twice keeps the later
 implementation, like the oracle.
 

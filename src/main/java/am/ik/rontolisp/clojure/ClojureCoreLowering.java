@@ -1229,7 +1229,7 @@ final class ClojureCoreLowering {
 		if (def != null) {
 			return worker("extenders", def.methodsVar(), def.defaultVar());
 		}
-		return worker("extenders", ctx.lower(items.get(1)), ClojureLowering.NIL_CONST);
+		return worker("extenders-of", ctx.lower(items.get(1)));
 	}
 
 	/**
@@ -1242,8 +1242,7 @@ final class ClojureCoreLowering {
 		if (def != null) {
 			return worker("find-protocol-impl", def.methodsVar(), def.defaultVar(), ctx.lower(items.get(2)));
 		}
-		return worker("find-protocol-impl", ctx.lower(items.get(1)), ClojureLowering.NIL_CONST,
-				ctx.lower(items.get(2)));
+		return worker("find-protocol-impl-of", ctx.lower(items.get(1)), ctx.lower(items.get(2)));
 	}
 
 	/**
@@ -1257,8 +1256,8 @@ final class ClojureCoreLowering {
 			return worker("find-protocol-method", def.methodsVar(), def.defaultVar(), ctx.lower(items.get(2)),
 					ctx.lower(items.get(3)));
 		}
-		return worker("find-protocol-method", ctx.lower(items.get(1)), ClojureLowering.NIL_CONST,
-				ctx.lower(items.get(2)), ctx.lower(items.get(3)));
+		return worker("find-protocol-method-of", ctx.lower(items.get(1)), ctx.lower(items.get(2)),
+				ctx.lower(items.get(3)));
 	}
 
 	/** The protocol a datum names, or null for anything else. */

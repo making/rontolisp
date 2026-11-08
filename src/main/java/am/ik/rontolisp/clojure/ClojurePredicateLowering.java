@@ -459,6 +459,13 @@ final class ClojurePredicateLowering {
 		String protocol = ((LispSymbol) items.get(1)).name();
 		ClojureLowering.ProtocolDef def = ClojureProtocolLowering.protocolOf(ctx, protocol);
 		if (def == null) {
+			if (ClojureProtocolLowering.computedProtocolOperand(ctx, protocol)) {
+				// a var holding a protocol value: the run-time registry answers
+				ctx.usedProtocols = true;
+				ctx.usedProtocolValues = true;
+				return ClojureLowerUtil.list(new LispSymbol(ClojureProtocolLowering.EXTENDS_CALL),
+						ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+			}
 			throw new LispReadException("No such protocol: " + protocol);
 		}
 		LispVal key = ClojureProtocolLowering.extendKeyForm(ctx, ((LispSymbol) items.get(2)).name(), "extends?");

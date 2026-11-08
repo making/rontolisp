@@ -174,6 +174,25 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
+	 * A record or deftype name in value position: its dispatch tag, which is what
+	 * {@code class} answers for its values here and what a run-time {@code extend} reads
+	 * the type back through ({@link #EXTENDS_CALL}, {@code %clojure-extends-key}); null
+	 * for any other name. The oracle answers the host class object, which no backend here
+	 * generates.
+	 * @param ctx the hub
+	 * @param name the name's spelling
+	 * @return the tag form, or null
+	 */
+	static @Nullable LispVal typeTagValue(ClojureLowering ctx, String name) {
+		String key = ctx.typeKeyOf(name);
+		if (key == null) {
+			return null;
+		}
+		ClojureLowering.TypeDef type = ctx.types.get(key);
+		return type == null ? null : typeTagForm(type.tagSpelling());
+	}
+
+	/**
 	 * The protocol runtime, spliced once per program behind the false binding: the tag
 	 * reader every dispatcher and {@code satisfies?} shares. A record, deftype or reify
 	 * answers its own tag; anything else answers its {@code class} kind keyword, so
@@ -667,6 +686,7 @@ final class ClojureProtocolLowering {
 		}
 		Set<String> methods = new LinkedHashSet<>();
 		Map<String, Set<Integer>> arities = new HashMap<>();
+		Map<String, List<LispVal>> arglists = new LinkedHashMap<>();
 		for (; at < items.size(); at++) {
 			List<LispVal> sig = ClojureLowerUtil.items(items.get(at));
 			if (sig == null || sig.isEmpty() || !(ClojureLowerUtil.stripMeta(sig.get(0)) instanceof LispSymbol)) {
@@ -682,6 +702,7 @@ final class ClojureProtocolLowering {
 				marg++; // a docstring ahead of the parameter vectors
 			}
 			Set<Integer> counts = new LinkedHashSet<>();
+			List<LispVal> vectors = new ArrayList<>();
 			for (; marg < sig.size()
 					&& ClojureBindingLowering.isVectorDatum(ClojureLowerUtil.stripMeta(sig.get(marg))); marg++) {
 				List<LispVal> params = ClojureLowerUtil.bindingItems(ClojureLowerUtil.stripMeta(sig.get(marg)),
@@ -690,14 +711,17 @@ final class ClojureProtocolLowering {
 						"Definition of function " + method + " in protocol " + name + " must take at least one arg.");
 				ClojureLowerUtil.isTrue(counts.add(params.size()),
 						"defprotocol " + name + " declares " + method + " twice with " + params.size() + " parameters");
+				vectors.add(ClojureLowerUtil.stripMeta(sig.get(marg)));
 			}
 			ClojureLowerUtil.isTrue(!counts.isEmpty(),
 					"a defprotocol method signature is its name over one parameter vector per arity, not "
 							+ items.get(at).print());
 			arities.put(method, Set.copyOf(counts));
+			// the parameter vectors the oracle's :sigs carries, in declaration order
+			arglists.put(method, List.copyOf(vectors));
 		}
 		String var = ClojureLowering.varSym(key).name();
-		return new ClojureLowering.ProtocolDef(methods, arities, new LispSymbol(var + "%methods"),
+		return new ClojureLowering.ProtocolDef(methods, arities, arglists, new LispSymbol(var + "%methods"),
 				new LispSymbol(var + "%default"), viaMetadata ? new LispSymbol(var + "%inline") : null,
 				REDUCER_ROWS.get(key));
 	}
@@ -738,8 +762,12 @@ final class ClojureProtocolLowering {
 		for (String method : def.methods()) {
 			forms.add(dispatcherDefun(ctx, name, method, def));
 		}
+		// the protocol's value is the oracle's map (its interface under :on and
+		// :on-interface, its methods' signatures under :sigs, the method map), the
+		// extensions beside it under :impls; a value arm resolves it through the
+		// registry the register call populates, and the definition answers it
 		forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"),
-				ClojureLowering.varSym(ClojureLowering.varKey(ctx.currentNs, name)), def.methodsVar()));
+				ClojureLowering.varSym(ClojureLowering.varKey(ctx.currentNs, name)), registerProtocol(ctx, def, key)));
 		ctx.usedProtocols = true;
 		// the value arms resolve the protocol's tables through the registry: the
 		// record holds getters over the globals (a re-executed defprotocol rebinds
@@ -748,20 +776,23 @@ final class ClojureProtocolLowering {
 		// pass settled, the method names an extend entry must keyword-name, the
 		// reducing method's keyword a typed row filters on, and the var key and
 		// interface name a body-implementation refusal reports, so a captured old
-		// table reads what it reads like the calls do; the store answers the table
-		// (what the protocol's setq answers), so the definition answers what it
-		// answered before the registry existed
-		forms.add(registerProtocol(ctx, def, key));
+		// table reads what it reads like the calls do; the store answers the value
+		// map, so the definition answers it
 		return forms;
 	}
 
 	/**
 	 * The registry store of a {@code defprotocol}: the record beside the protocol's
-	 * methods table, answering the table. The record carries the reducing method's
-	 * keyword (g43: the keyword a typed row filters on, never the row writer itself, so
-	 * loading a reducing protocol names no arm producer), the protocol's var key and
-	 * interface name (what the run-time {@code extend}'s body-implementation refusal
-	 * reports), and a setter over the default (what a run-time extend writes).
+	 * methods table, answering the protocol's value map. The record carries the reducing
+	 * method's keyword (g43: the keyword a typed row filters on, never the row writer
+	 * itself, so loading a reducing protocol names no arm producer), the protocol's var
+	 * key and interface name (what the run-time {@code extend}'s body-implementation
+	 * refusal reports), and a setter over the default (what a run-time extend writes).
+	 * The value map is the oracle's shape: its interface under {@code :on} and
+	 * {@code :on-interface}, its methods under {@code :sigs} (each a keyword to its name,
+	 * parameter vectors and doc), the method map, and the extensions beside them under
+	 * {@code :impls}. A value arm resolves the map through this registry, and the
+	 * run-time {@code extend} reads the record's tables.
 	 * @param ctx the hub
 	 * @param def the protocol
 	 * @param key the protocol's var key
@@ -779,7 +810,51 @@ final class ClojureProtocolLowering {
 				ensurer(def.defaultVar()), walks(ctx, def) ? ClojureLowering.TRUE_CONST : ClojureLowering.NIL_CONST,
 				guard == null ? ClojureLowering.NIL_CONST : guard, ctx.quote(ClojureLowerUtil.list(names)),
 				reducerKeyword(def), LispString.literal(key), LispString.literal(interfaceName(key)),
-				clearer(def.defaultVar()));
+				clearer(def.defaultVar()), valueDatum(ctx, def, key));
+	}
+
+	/**
+	 * The datum the register call builds the protocol's value from
+	 * ({@link #registerProtocol}): a quoted map of the oracle's shape, less {@code :var}
+	 * and {@code :method-builders}, which no verb here reads.
+	 * @param ctx the hub
+	 * @param def the protocol
+	 * @param key the protocol's var key
+	 * @return the quoted map
+	 */
+	private static LispVal valueDatum(ClojureLowering ctx, ClojureLowering.ProtocolDef def, String key) {
+		String iface = ":" + interfaceName(key);
+		List<LispVal> map = new ArrayList<>();
+		map.add(new LispSymbol("%hash-map"));
+		map.add(new LispSymbol(":on"));
+		map.add(new LispSymbol(iface));
+		map.add(new LispSymbol(":on-interface"));
+		map.add(new LispSymbol(iface));
+		map.add(new LispSymbol(":sigs"));
+		List<LispVal> sigs = new ArrayList<>();
+		sigs.add(new LispSymbol("%hash-map"));
+		List<LispVal> methodMap = new ArrayList<>();
+		methodMap.add(new LispSymbol("%hash-map"));
+		for (String method : def.methods()) {
+			sigs.add(new LispSymbol(":" + method));
+			List<LispVal> sig = new ArrayList<>();
+			sig.add(new LispSymbol("%hash-map"));
+			sig.add(new LispSymbol(":tag"));
+			sig.add(ClojureLowering.NIL_CONST);
+			sig.add(new LispSymbol(":name"));
+			sig.add(new LispSymbol(method));
+			sig.add(new LispSymbol(":arglists"));
+			sig.add(ClojureLowerUtil.list(Objects.requireNonNull(def.arglists().get(method))));
+			sig.add(new LispSymbol(":doc"));
+			sig.add(ClojureLowering.NIL_CONST);
+			sigs.add(ClojureLowerUtil.list(sig));
+			methodMap.add(new LispSymbol(":" + method));
+			methodMap.add(new LispSymbol(":" + method));
+		}
+		map.add(ClojureLowerUtil.list(sigs));
+		map.add(new LispSymbol(":method-map"));
+		map.add(ClojureLowerUtil.list(methodMap));
+		return ctx.quote(ClojureLowerUtil.list(map));
 	}
 
 	/**
@@ -1225,6 +1300,21 @@ final class ClojureProtocolLowering {
 			return new LispReadException("interface " + declared.binaryName() + " is not a protocol");
 		}
 		return new LispReadException("No such protocol: " + protocol);
+	}
+
+	/**
+	 * Whether a protocol operand no literal protocol name answers is a value read at run
+	 * time: a local, or a var holding a value. A {@code definterface}'s name stays a
+	 * lowering refusal ({@link #noSuchProtocol}), like an undefined name.
+	 * @param ctx the hub
+	 * @param name the operand's spelling
+	 * @return whether the operand is computed
+	 */
+	static boolean computedProtocolOperand(ClojureLowering ctx, String name) {
+		if (ctx.isLocal(name)) {
+			return true;
+		}
+		return protocolOf(ctx, name) == null && definedInterfaceOf(ctx, name) == null && ctx.resolveVar(name) != null;
 	}
 
 	/**
@@ -2520,19 +2610,178 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
+	 * Whether a type operand is resolved while lowering: a symbol no local holds. Any
+	 * other operand -- a local, or a form such as {@code (class 1)} -- is a type value
+	 * the program computes, which the run-time {@code extend} reads
+	 * ({@link #computedExtend}).
+	 * @param ctx the hub
+	 * @param operand the type operand
+	 * @return whether it is a literal name
+	 */
+	private static boolean staticTypeOperand(ClojureLowering ctx, LispVal operand) {
+		return operand instanceof LispSymbol s && !ctx.isLocal(s.name());
+	}
+
+	/**
+	 * Whether a protocol operand is resolved while lowering: a symbol no local holds that
+	 * names a protocol. A local, or any other form, is a protocol value computed at run
+	 * time.
+	 * @param ctx the hub
+	 * @param operand the protocol operand
+	 * @return whether it is a literal protocol name
+	 */
+	private static boolean staticProtocolOperand(ClojureLowering ctx, LispVal operand) {
+		return operand instanceof LispSymbol s && !ctx.isLocal(s.name()) && protocolOf(ctx, s.name()) != null;
+	}
+
+	/**
+	 * The run-time {@code extend} a computed type or protocol lowers to: each operand
+	 * evaluated in the oracle's order (the type first, then each protocol and method
+	 * map), through {@link #EXTEND_CALL}, which reads the protocol through the registry
+	 * and the type as a class value. A literal protocol whose methods are known validates
+	 * a literal map's entries, like the head call; a computed protocol leaves that to the
+	 * run time, which skips entries naming no method like the oracle.
+	 * @param ctx the hub
+	 * @param items the whole form
+	 * @return the call
+	 */
+	private static LispVal computedExtend(ClojureLowering ctx, List<LispVal> items) {
+		ctx.usedProtocols = true;
+		ctx.usedProtocolValues = true;
+		List<LispVal> args = new ArrayList<>();
+		args.add(ctx.lower(items.get(1)));
+		for (int p = 2; p + 1 < items.size(); p += 2) {
+			args.add(ctx.lower(items.get(p)));
+			args.add(ctx.lower(items.get(p + 1)));
+		}
+		return ClojureLowerUtil.list(new LispSymbol(EXTEND_CALL),
+				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), args));
+	}
+
+	/**
+	 * One {@code extend} call of a computed {@code extend-protocol} or
+	 * {@code extend-type}: the type and protocol forms, then each method's keyword to its
+	 * lambda ({@link #extensionLambda}), built by
+	 * {@link ClojureCollectionLowering#mapBuild}.
+	 * @param ctx the hub
+	 * @param type the type form
+	 * @param protocol the protocol form
+	 * @param methods the method implementations
+	 * @return the extend call
+	 */
+	private static LispVal computedTypeExtend(ClojureLowering ctx, LispVal type, LispVal protocol,
+			List<ClojureLowering.TypeMethod> methods) {
+		ctx.usedProtocols = true;
+		ctx.usedProtocolValues = true;
+		List<LispVal> pairs = new ArrayList<>();
+		for (ClojureLowering.TypeMethod method : methods) {
+			pairs.add(ClojureCollectionLowering.keywordForm(method.method()));
+			pairs.add(extensionLambda(ctx, method));
+		}
+		List<LispVal> args = new ArrayList<>();
+		args.add(type);
+		args.add(protocol);
+		args.add(ClojureCollectionLowering.mapBuild(pairs));
+		return ClojureLowerUtil.list(new LispSymbol(EXTEND_CALL),
+				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), args));
+	}
+
+	/**
+	 * The method implementations a computed {@code extend-protocol} type spells: each a
+	 * list whose head is the method name. A non-list datum ends the type's methods.
+	 * @param items the whole form
+	 * @param at the index past the type
+	 * @param def the protocol when its name is literal, else null
+	 * @return the methods
+	 */
+	private static List<ClojureLowering.TypeMethod> protocolTypeMethods(ClojureLowering ctx, List<LispVal> items,
+			int at, ClojureLowering.@Nullable ProtocolDef def) {
+		List<ClojureLowering.TypeMethod> methods = new ArrayList<>();
+		while (at < items.size() && !(items.get(at) instanceof LispSymbol)) {
+			List<LispVal> impl = ClojureLowerUtil.items(items.get(at));
+			if (impl == null || impl.size() < 2 || !(ClojureLowerUtil.stripMeta(impl.get(0)) instanceof LispSymbol)) {
+				throw new LispReadException(
+						"a method implementation takes a name, parameters and a body, not " + items.get(at).print());
+			}
+			String method = methodName(((LispSymbol) ClojureLowerUtil.stripMeta(impl.get(0))).name());
+			if (def != null) {
+				ClojureLowerUtil.isTrue(def.methods().contains(method),
+						"Can't define method not in interfaces: " + method);
+			}
+			methods.add(extensionMethod(method, impl));
+			at++;
+		}
+		return methods;
+	}
+
+	/**
+	 * Whether an {@code extend-protocol} form names a type the program computes: a type
+	 * operand that is no local symbol, at each position the form's shape expects one.
+	 * @param ctx the hub
+	 * @param items the whole form
+	 * @return whether any type operand is computed
+	 */
+	private static boolean computedTypeOperand(ClojureLowering ctx, List<LispVal> items) {
+		int at = 2;
+		while (at < items.size()) {
+			if (!staticTypeOperand(ctx, items.get(at))) {
+				return true;
+			}
+			at++;
+			while (at < items.size() && !(items.get(at) instanceof LispSymbol)) {
+				at++;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * {@code extend-protocol} whose protocol or a type is computed at run time: one
+	 * run-time {@code extend} per type (the oracle's expansion), the protocol form
+	 * evaluated in each, the methods a map of keyword to lambda
+	 * ({@link #computedTypeExtend}).
+	 * @param ctx the hub
+	 * @param items the whole form
+	 * @param def the protocol when its name is literal, else null
+	 * @return the forms
+	 */
+	private static LispVal computedExtendProtocol(ClojureLowering ctx, List<LispVal> items,
+			ClojureLowering.@Nullable ProtocolDef def) {
+		ctx.usedProtocols = true;
+		ctx.usedProtocolValues = true;
+		LispVal protocol = ctx.lower(items.get(1));
+		List<LispVal> rows = new ArrayList<>();
+		int at = 2;
+		while (at < items.size()) {
+			LispVal type = ctx.lower(items.get(at));
+			at++;
+			List<ClojureLowering.TypeMethod> methods = protocolTypeMethods(ctx, items, at, def);
+			at += methods.size();
+			rows.add(computedTypeExtend(ctx, type, protocol, methods));
+		}
+		return extensionRows(rows);
+	}
+
+	/**
 	 * {@code (extend-protocol P Type (method [target & args] body...)+ ...)}: one row per
 	 * method per type, like {@code defmethod} rows. The type may repeat (later rows win,
 	 * like the oracle); a method of several arities spells them as {@code fn} clauses
-	 * ({@link #extensionMethod}).
+	 * ({@link #extensionMethod}). A type the program computes, or a protocol a local
+	 * holds, lowers to run-time extends ({@link #computedExtendProtocol}).
 	 */
 	static LispVal extendProtocolForm(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 3, "extend-protocol takes a protocol, a type and methods");
-		ClojureLowerUtil.isTrue(items.get(1) instanceof LispSymbol, "extend-protocol takes a protocol name");
-		String protocol = ((LispSymbol) items.get(1)).name();
-		ClojureLowering.ProtocolDef def = protocolOf(ctx, protocol);
-		if (def == null) {
-			throw noSuchProtocol(ctx, protocol);
+		ClojureLowering.ProtocolDef def = null;
+		if (items.get(1) instanceof LispSymbol protocol && !ctx.isLocal(protocol.name())) {
+			def = protocolOf(ctx, protocol.name());
+			if (def == null && !computedProtocolOperand(ctx, protocol.name())) {
+				throw noSuchProtocol(ctx, protocol.name());
+			}
 		}
+		if (def == null || computedTypeOperand(ctx, items)) {
+			return computedExtendProtocol(ctx, items, def);
+		}
+		String protocol = ((LispSymbol) items.get(1)).name();
 		List<LispVal> rows = new ArrayList<>();
 		int at = 2;
 		while (at < items.size()) {
@@ -2559,7 +2808,7 @@ final class ClojureProtocolLowering {
 					throw new LispReadException("a method implementation takes a name, parameters and a body, not "
 							+ items.get(at).print());
 				}
-				String method = ((LispSymbol) ClojureLowerUtil.stripMeta(impl.get(0))).name();
+				String method = methodName(((LispSymbol) ClojureLowerUtil.stripMeta(impl.get(0))).name());
 				rows.add(extendRow(ctx, protocol, key, walkKey, extensionMethod(method, impl), typed));
 				at++;
 			}
@@ -2569,13 +2818,79 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
+	 * Whether an {@code extend-type} group head is a symbol a local holds, so the
+	 * protocol is a value computed at run time.
+	 * @param ctx the hub
+	 * @param items the whole form
+	 * @return whether any group head names a local
+	 */
+	private static boolean localProtocolGroup(ClojureLowering ctx, List<LispVal> items) {
+		for (int at = 2; at < items.size(); at++) {
+			if (items.get(at) instanceof LispSymbol protocol && !protocol.name().startsWith(":")) {
+				if (ctx.isLocal(protocol.name())) {
+					return true;
+				}
+				if (computedProtocolOperand(ctx, protocol.name())) {
+					// a var holding a protocol value, read when the extend runs
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * {@code extend-type} whose type the program computes: one run-time {@code extend}
+	 * naming each protocol group (a protocol a local holds evaluated as a value, a
+	 * literal one validated like the head call).
+	 * @param ctx the hub
+	 * @param items the whole form
+	 * @return the call
+	 */
+	private static LispVal computedExtendType(ClojureLowering ctx, List<LispVal> items) {
+		ctx.usedProtocols = true;
+		ctx.usedProtocolValues = true;
+		List<LispVal> args = new ArrayList<>();
+		args.add(ctx.lower(items.get(1)));
+		int at = 2;
+		while (at < items.size()) {
+			LispVal head = items.get(at);
+			if (!(head instanceof LispSymbol protocol) || protocol.name().startsWith(":")) {
+				throw new LispReadException("extend-type methods group under a protocol name, not " + head.print());
+			}
+			ClojureLowering.ProtocolDef def = null;
+			if (!ctx.isLocal(protocol.name())) {
+				def = protocolOf(ctx, protocol.name());
+				if (def == null && !computedProtocolOperand(ctx, protocol.name())) {
+					throw noSuchProtocol(ctx, protocol.name());
+				}
+			}
+			args.add(ctx.lower(head));
+			at++;
+			List<ClojureLowering.TypeMethod> methods = protocolTypeMethods(ctx, items, at, def);
+			at += methods.size();
+			List<LispVal> pairs = new ArrayList<>();
+			for (ClojureLowering.TypeMethod method : methods) {
+				pairs.add(ClojureCollectionLowering.keywordForm(method.method()));
+				pairs.add(extensionLambda(ctx, method));
+			}
+			args.add(ClojureCollectionLowering.mapBuild(pairs));
+		}
+		return ClojureLowerUtil.list(new LispSymbol(EXTEND_CALL),
+				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), args));
+	}
+
+	/**
 	 * {@code (extend-type T Protocol (method [target & args] body...)+ ...)}: the same
 	 * rows, grouped under protocol names. A bare method group (no protocol) is refused:
-	 * there is no interface to check it against.
+	 * there is no interface to check it against. A type the program computes, or a
+	 * protocol a local holds, lowers to a run-time extend ({@link #computedExtendType}).
 	 */
 	static LispVal extendTypeForm(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 3, "extend-type takes a type, a protocol and methods");
-		ClojureLowerUtil.isTrue(items.get(1) instanceof LispSymbol, "extend-type takes a type name");
+		if (!staticTypeOperand(ctx, items.get(1)) || localProtocolGroup(ctx, items)) {
+			return computedExtendType(ctx, items);
+		}
 		String target = ((LispSymbol) items.get(1)).name();
 		LispVal key = extendKeyForm(ctx, target, "extend-type");
 		LispVal walkKey = interfaceWalkKey(ctx, target);
@@ -2607,23 +2922,42 @@ final class ClojureProtocolLowering {
 	 * {@code (extend T Protocol {method fn ...} ...)}: the same rows from each protocol's
 	 * map of method functions -- a map literal's entries lowered in place, a map the
 	 * program computes ({@code clojure.java.io/default-streams-impl} with a row replaced)
-	 * stored entry by entry when it runs ({@link #computedRows}).
+	 * stored entry by entry when it runs ({@link #computedRows}). A type or protocol the
+	 * program computes (a local, a form) lowers to the run-time extend
+	 * ({@link #computedExtend}).
 	 */
 	static LispVal extendForm(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 4 && items.size() % 2 == 0,
 				"extend takes a type, then a protocol and a map of methods, any number of times");
-		ClojureLowerUtil.isTrue(items.get(1) instanceof LispSymbol, "extend takes a type name");
-		String target = ((LispSymbol) items.get(1)).name();
 		List<ClojureLowering.ProtocolDef> defs = new ArrayList<>();
+		boolean staticOperands = staticTypeOperand(ctx, items.get(1));
 		for (int p = 2; p < items.size(); p += 2) {
-			ClojureLowerUtil.isTrue(items.get(p) instanceof LispSymbol, "extend takes a protocol name");
-			String protocol = ((LispSymbol) items.get(p)).name();
-			ClojureLowering.ProtocolDef def = protocolOf(ctx, protocol);
+			if (!(items.get(p) instanceof LispSymbol protocol)) {
+				staticOperands = false;
+				defs.add(null);
+				continue;
+			}
+			if (ctx.isLocal(protocol.name())) {
+				staticOperands = false;
+				defs.add(null);
+				continue;
+			}
+			ClojureLowering.ProtocolDef def = protocolOf(ctx, protocol.name());
 			if (def == null) {
-				throw noSuchProtocol(ctx, protocol);
+				if (computedProtocolOperand(ctx, protocol.name())) {
+					// a var holding a protocol value: the run-time extend reads it
+					staticOperands = false;
+					defs.add(null);
+					continue;
+				}
+				throw noSuchProtocol(ctx, protocol.name());
 			}
 			defs.add(def);
 		}
+		if (!staticOperands) {
+			return computedExtend(ctx, items);
+		}
+		String target = ((LispSymbol) items.get(1)).name();
 		LispVal key = extendKeyForm(ctx, target, "extend");
 		LispVal walkKey = interfaceWalkKey(ctx, target);
 		boolean typed = isTypedTarget(ctx, target);
@@ -2784,10 +3118,23 @@ final class ClojureProtocolLowering {
 	 */
 	static LispVal satisfiesOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "satisfies? takes a protocol and a value");
-		ClojureLowerUtil.isTrue(items.get(1) instanceof LispSymbol, "satisfies? takes a protocol name");
-		String protocol = ((LispSymbol) items.get(1)).name();
+		if (!(items.get(1) instanceof LispSymbol protocolOperand) || ctx.isLocal(protocolOperand.name())) {
+			// a protocol the program computes: the run-time registry read, like the value
+			ctx.usedProtocols = true;
+			ctx.usedProtocolValues = true;
+			return ClojureLowerUtil.list(new LispSymbol(SATISFIES_CALL), ctx.lower(items.get(1)),
+					ctx.lower(items.get(2)));
+		}
+		String protocol = protocolOperand.name();
 		ClojureLowering.ProtocolDef def = protocolOf(ctx, protocol);
 		if (def == null) {
+			if (computedProtocolOperand(ctx, protocol)) {
+				// a var holding a protocol value: the run-time registry answers
+				ctx.usedProtocols = true;
+				ctx.usedProtocolValues = true;
+				return ClojureLowerUtil.list(new LispSymbol(SATISFIES_CALL), ctx.lower(items.get(1)),
+						ctx.lower(items.get(2)));
+			}
 			throw new LispReadException("No such protocol: " + protocol);
 		}
 		LispSymbol tag = ctx.freshTemp();

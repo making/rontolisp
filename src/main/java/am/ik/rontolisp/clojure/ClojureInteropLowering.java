@@ -958,6 +958,14 @@ final class ClojureInteropLowering {
 			// backend
 			return decimal;
 		}
+		if (cls.equals(ClojureStateLowering.EXCEPTION_INFO) && (lowered.size() == 2 || lowered.size() == 3)) {
+			// the oracle's ExceptionInfo constructor (schema's error! macro): ex-info's
+			// own value on every backend, a host class here on none
+			ctx.usedExInfo = true;
+			ctx.hostExceptionClasses.add(ClojureStateLowering.EXCEPTION_INFO);
+			return ClojureLowerUtil.list(new LispSymbol(ClojureStateLowering.EX_INFO), lowered.get(0), lowered.get(1),
+					lowered.size() == 3 ? lowered.get(2) : ClojureLowering.NIL_CONST);
+		}
 		if (types == null) {
 			LispVal exception = throwableConstruction(ctx, cls, lowered,
 					argDatums.size() == 1 && STRING.equals(classHint(ctx, argDatums.get(0))));
@@ -1363,6 +1371,13 @@ final class ClojureInteropLowering {
 			// a clojure.lang static the run-time library answers, on every backend
 			// (clojure.lang is no host class here)
 			return lang;
+		}
+		if (!ctx.hostTarget && cls.equals("java.lang.Class") && member.equals("forName") && args.size() == 1
+				&& args.get(0) instanceof LispString name) {
+			// Class/forName of a literal class name where no host is (wasm): the
+			// designator a bare class literal reads there, so a schema's
+			// (Class/forName "[D") extends the class it names (the oracle's Class)
+			return ClojureCoreLowering.classDesignator(name.value());
 		}
 		if (!ctx.hostTarget && cls.equals("java.lang.String") && member.equals("valueOf") && args.size() == 1) {
 			// where no host is, the value's toString (camel-snake-kebab's

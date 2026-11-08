@@ -18,7 +18,9 @@ superclasses first, then the interfaces, each ahead of its own supertypes, then 
 extension to an interface reaches every value implementing it: a record's map interfaces
 (`clojure.lang.IPersistentMap`, `java.util.Map` ...), the interfaces a `reify`, `deftype` or
 `defrecord` body names ([reify](reify.md#host-interfaces)), `clojure.lang.Sequential` of a
-vector, `clojure.lang.IFn` of a keyword. A name no class has is refused, like `instance?`. A method of several arities spells them as
+vector, `clojure.lang.IFn` of a keyword. A name no class has is refused, like `instance?`. A type may also be an expression
+computing a class value (`(class 1)`, `(Class/forName "[D")`), stored when the form
+runs. A method of several arities spells them as
 the clauses of a `fn`: `(method ([target] ...) ([target x] ...))`.
 
 ```clojure
