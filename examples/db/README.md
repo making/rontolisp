@@ -12,6 +12,7 @@ rontolisp-specific binding.
 | [`postmodern-dao.lisp`](postmodern-dao.lisp) | the DAO layer on top: a `(:metaclass pomo:dao-class)` class as the table definition, `dao-table-definition`, `deftable`/`create-table`, and the CRUD cycle as `insert-dao` / `get-dao` / `update-dao` / `upsert-dao` / `select-dao` / `delete-dao` | <https://github.com/marijnh/Postmodern> |
 | [`postgres-web.lisp`](postgres-web.lisp) | notes app: PostgreSQL storage + `rontolisp:http-handler` + cl-who for HTML | <https://github.com/edicl/cl-who> |
 | [`bbs-api.lisp`](bbs-api.lisp) | bulletin-board REST API: JSON instead of HTML, routed with tiny-routes and served through Clack — paginated `GET`, a validated `POST`, a `DELETE` that tells 204 from 404, and one error document behind every failure | <https://github.com/jeko2000/tiny-routes> |
+| [`shiori/`](shiori) | reading-journal web app: cl-postgres storage, cl-mustache templates, tiny-routes routing and htmx in-place updates (bookshelf, progress, notes, tags, dashboard) | <https://github.com/kanru/cl-mustache> |
 | [`database-url.lisp`](database-url.lisp) | not a program: the `DATABASE_URL` parser the four above share, `(load)`ed by each of them | — |
 
 ## Setup

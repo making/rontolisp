@@ -1,0 +1,10 @@
+{{#pagination}}
+<nav class="pagination" aria-label="ページ">
+  {{#prev}}<a href="{{prev}}" hx-get="{{prev}}" hx-target="#shelf" hx-push-url="true" rel="prev">前へ</a>{{/prev}}
+  {{#links}}
+    {{#gap}}<span class="page-gap">…</span>{{/gap}}
+    {{^gap}}<a href="{{href}}" hx-get="{{href}}" hx-target="#shelf" hx-push-url="true" {{#current}}aria-current="page"{{/current}}>{{n}}</a>{{/gap}}
+  {{/links}}
+  {{#next}}<a href="{{next}}" hx-get="{{next}}" hx-target="#shelf" hx-push-url="true" rel="next">次へ</a>{{/next}}
+</nav>
+{{/pagination}}

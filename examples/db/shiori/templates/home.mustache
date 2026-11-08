@@ -1,0 +1,70 @@
+<section class="today">
+  {{#stats}}
+  <p class="today-date">{{today}}、{{weekday}}曜日。</p>
+  <h1 class="today-line">{{#has-reading}}読みかけの本が{{reading}}冊あります。{{/has-reading}}{{^has-reading}}いま読みかけの本はありません。{{/has-reading}}</h1>
+  <p class="today-sub">今年読み終えたのは{{finished-this-year}}冊。これまでに{{pages-read}}頁を読みました。本棚には{{total}}冊。</p>
+  {{/stats}}
+</section>
+
+<section class="block">
+  <h2 class="block-title">読みかけ</h2>
+  {{#has-reading}}
+  <ul class="now">
+    {{#reading-now}}
+    <li class="now-row">
+      {{>spine}}
+      <div class="now-body">
+        <h3><a href="/books/{{id}}">{{title}}</a></h3>
+        <p class="now-author">{{author}}</p>
+        {{#pages}}
+        <div class="ruler small" style="--at: {{progress}}%">
+          <span class="ruler-start">1</span><span class="ruler-end">{{pages}}</span>
+          <span class="ruler-mark" aria-hidden="true"></span>
+          <span class="ruler-label">p.{{current-page}}</span>
+        </div>
+        {{/pages}}
+      </div>
+    </li>
+    {{/reading-now}}
+  </ul>
+  {{/has-reading}}
+  {{^has-reading}}
+  <p class="empty"><a href="/books?status=want">読みたい本</a>から一冊選んで、読み始めた頁を記録しましょう。</p>
+  {{/has-reading}}
+</section>
+
+<div class="pair">
+  <section class="block">
+    <h2 class="block-title">月ごとの読了</h2>
+    <ol class="piles" aria-label="この12か月に読み終えた本">
+      {{#months}}
+      <li class="pile{{#current}} is-current{{/current}}" aria-label="{{full-label}}">
+        <span class="pile-count">{{count}}</span>
+        <span class="pile-books">{{#books}}<a class="pile-book" href="/books/{{id}}" style="{{style}}" title="{{title}}"><span class="visually-hidden">{{title}}</span></a>{{/books}}</span>
+        <span class="pile-month">{{label}}</span>
+      </li>
+      {{/months}}
+    </ol>
+  </section>
+
+  <section class="block">
+    <h2 class="block-title">索引</h2>
+    <ul class="index">
+      {{#tags}}<li><a href="{{href}}"><span class="index-term">{{name}}</span><span class="index-n">{{n}}</span></a></li>{{/tags}}
+    </ul>
+  </section>
+</div>
+
+<section class="block">
+  <h2 class="block-title">最近書き留めたこと</h2>
+  <ul class="notes">
+    {{#notes}}{{>note}}{{/notes}}
+  </ul>
+</section>
+
+<section class="block">
+  <h2 class="block-title">最近読み終えた本</h2>
+  <ol class="shelf">
+    {{#recently-finished}}<li>{{>spine}}</li>{{/recently-finished}}
+  </ol>
+</section>

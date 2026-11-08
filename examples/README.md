@@ -16,7 +16,7 @@ documented here: [`size-report/`](../size-report).
 | [`llm/`](llm) | llama2.c's `run.c` ported whole: a Llama 2 inference engine over the real TinyStories checkpoints — the example `--simd` is for |
 | [`llm-from-scratch/`](llm-from-scratch) | 『作ってわかる大規模言語モデルの仕組み』 ch2–ch3, ported on the `torch` package: attention, a Transformer, a GPT trained on 漱石 |
 | [`net/`](net) | Sockets, HTTP servers and JSON web services |
-| [`db/`](db) | PostgreSQL through the real cl-postgres driver and postmodern, up to a REST API |
+| [`db/`](db) | PostgreSQL through the real cl-postgres driver and postmodern, up to a REST API and a full web app |
 | [`jvm/`](jvm) | A Java-callable library class, a C library through `cffi`, `java:` interop and Swing GUIs (JVM only) |
 | [`macos/`](macos) | A native Cocoa window, the Objective-C runtime, and Metal under it, through the built-in `appkit` / `objc` / `metal` / `scene` packages (macOS only) |
 | [`browser/`](browser) | Browser demos: compile to WASM, run in a page |

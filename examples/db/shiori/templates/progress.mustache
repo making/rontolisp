@@ -1,0 +1,41 @@
+<section class="progress" id="progress" aria-label="読んだところ">
+  {{#book}}
+  {{#pages}}
+  <div class="ruler" style="--at: {{progress}}%">
+    <span class="ruler-start">1</span>
+    <span class="ruler-end">{{pages}}</span>
+    <span class="ruler-mark" aria-hidden="true"></span>
+    <span class="ruler-label">p.{{current-page}}<small>{{progress}}%</small></span>
+  </div>
+  {{#finished}}
+  <div class="stamp{{#pressed}} pressed{{/pressed}}" aria-label="{{finished-stamp}} 読了">
+    <span class="stamp-top">読了</span>
+    <span class="stamp-date">{{finished-stamp}}</span>
+    <span class="stamp-bottom">栞</span>
+  </div>
+  {{/finished}}
+  {{^finished}}
+  <form class="progress-form" method="post" action="/books/{{id}}/progress"
+        hx-post="/books/{{id}}/progress" hx-target="#progress" hx-swap="outerHTML">
+    <label for="current-page">p.</label>
+    <input id="current-page" type="number" name="current_page" min="0" max="{{pages}}" value="{{current-page}}" inputmode="numeric" required>
+    <span class="progress-form-text">まで読んだ</span>
+    <button class="button" type="submit">記録する</button>
+    <button class="button quiet" type="submit" name="finished" value="yes" formnovalidate>読み終えた</button>
+  </form>
+  {{/finished}}
+  {{/pages}}
+  {{^pages}}
+  <p class="progress-none">総頁数を<a href="/books/{{id}}/edit">登録</a>すると、読んだところを記録できます。</p>
+  {{/pages}}
+  {{/book}}
+  {{#error}}<p class="field-error" role="alert">{{error}}</p>{{/error}}
+</section>
+{{! Answering htmx, recording progress can also change the spine on its stand,
+    the status and the finishing date: each travels along as a partial naming
+    its own target. }}
+{{#partials}}{{#book}}
+<hx-partial hx-target="#stand" hx-swap="innerHTML">{{>spine}}</hx-partial>
+<hx-partial hx-target="#card-status" hx-swap="innerHTML">{{status-label}}</hx-partial>
+<hx-partial hx-target="#card-finished" hx-swap="innerHTML">{{#finished-label}}{{finished-label}}{{/finished-label}}</hx-partial>
+{{/book}}{{/partials}}

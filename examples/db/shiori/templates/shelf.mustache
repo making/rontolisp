@@ -1,0 +1,14 @@
+<div id="shelf" class="shelf-area">
+  <p class="shelf-summary">
+    {{#filtered}}{{total}}冊が見つかりました。{{/filtered}}{{^filtered}}{{total}}冊。{{/filtered}}
+    {{#tag}}<a class="tag-filter" href="{{clear-tag}}" hx-get="{{clear-tag}}" hx-target="#shelf" hx-push-url="true">「{{tag}}」で絞り込み中<span>解除</span></a>{{/tag}}
+  </p>
+  <ol class="shelf">
+    {{#books}}<li>{{>spine}}</li>{{/books}}
+  </ol>
+  {{^books}}
+  <p class="empty">条件に合う本はありません。検索語を短くするか、状態を「すべて」に戻してください。</p>
+  {{/books}}
+  <p class="legend"><span class="legend-ribbon"></span>スピンが垂れているのは読みかけ、<span class="legend-obi"></span>帯つきはまだ読んでいない本、傾いているのは中断中の本です。背の幅は頁数に比例します。</p>
+  {{>pagination}}
+</div>

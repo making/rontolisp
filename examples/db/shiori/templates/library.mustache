@@ -1,0 +1,34 @@
+<section class="library">
+  <h1 class="page-title">本棚</h1>
+
+  {{! One form for every filter. htmx sends it whenever a field changes (the
+      search box after a pause) and swaps in only #shelf; without JavaScript
+      the button does the same with a full page. }}
+  <form class="filters" action="/books" method="get"
+        hx-get="/books" hx-target="#shelf" hx-push-url="true"
+        hx-trigger="input changed delay:300ms from:'find input[type=search]', change, submit"
+        hx-indicator="#shelf">
+    <fieldset class="tabs">
+      <legend class="visually-hidden">読書の状態</legend>
+      {{#tabs}}
+      <label class="tab">
+        <input type="radio" name="status" value="{{value}}" {{#checked}}checked{{/checked}}>
+        <span>{{label}}<small>{{n}}</small></span>
+      </label>
+      {{/tabs}}
+    </fieldset>
+    <div class="filter-row">
+      <input class="search" type="search" name="q" value="{{q}}" placeholder="書名・著者・タグで探す" aria-label="本棚を検索" autocomplete="off">
+      {{#tag}}<input type="hidden" name="tag" value="{{tag}}">{{/tag}}
+      <label class="sort">
+        <span>並び順</span>
+        <select name="sort">
+          {{#sorts}}<option value="{{value}}" {{#selected}}selected{{/selected}}>{{label}}</option>{{/sorts}}
+        </select>
+      </label>
+      <noscript><button class="button" type="submit">絞り込む</button></noscript>
+    </div>
+  </form>
+
+  {{>shelf}}
+</section>

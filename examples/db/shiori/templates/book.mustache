@@ -1,0 +1,50 @@
+{{#book}}
+<article class="book">
+  <p class="crumbs"><a href="/books">本棚</a> ＞ {{title}}</p>
+  <div class="book-layout">
+    <div class="stand" id="stand">{{>spine}}</div>
+
+    <div class="card">
+      <h1 class="card-title">{{title}}</h1>
+      <p class="card-author">{{author}}</p>
+      <dl class="card-rows">
+        <div><dt>状態</dt><dd id="card-status">{{status-label}}</dd></div>
+        <div><dt>評価</dt><dd>{{>stars}}</dd></div>
+        <div><dt>頁数</dt><dd>{{#pages}}{{pages}}頁{{/pages}}</dd></div>
+        <div><dt>読み始め</dt><dd>{{#started-label}}{{started-label}}{{/started-label}}</dd></div>
+        <div><dt>読み終わり</dt><dd id="card-finished">{{#finished-label}}{{finished-label}}{{/finished-label}}</dd></div>
+        <div><dt>索引</dt><dd class="card-tags">{{#tag-list}}<a href="{{href}}">{{name}}</a>{{/tag-list}}</dd></div>
+      </dl>
+      {{#summary}}<p class="card-remarks">{{summary}}</p>{{/summary}}
+      <div class="card-actions">
+        <a class="button" href="/books/{{id}}/edit">編集する</a>
+        <form method="post" action="/books/{{id}}/delete" hx-confirm="『{{title}}』を本棚から外しますか？書き留めた引用とメモも消えます。">
+          <button class="button quiet danger" type="submit">本棚から外す</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  {{>progress}}
+
+  <section class="block" id="notes">
+    <h2 class="block-title">書き留めたこと</h2>
+    <form class="note-form" method="post" action="/books/{{id}}/notes"
+          hx-post="/books/{{id}}/notes" hx-target="#note-list" hx-swap="afterbegin"
+          hx-status:422="swap:none"
+          hx-on::after:request="if (ctx.response.status < 400) this.reset()">
+      <fieldset class="kinds">
+        <legend class="visually-hidden">種類</legend>
+        <label><input type="radio" name="kind" value="quote" checked><span>引用</span></label>
+        <label><input type="radio" name="kind" value="note"><span>メモ</span></label>
+      </fieldset>
+      <label class="note-page">p.<input type="number" name="page" min="1" {{#pages}}max="{{pages}}"{{/pages}} inputmode="numeric" aria-label="頁"></label>
+      <textarea name="body" rows="3" maxlength="2000" required aria-label="本文" placeholder="心に残った一節、考えたこと"></textarea>
+      <button class="button primary" type="submit">書き留める</button>
+    </form>
+    <ul class="notes" id="note-list">
+      {{#notes}}{{>note}}{{/notes}}
+    </ul>
+  </section>
+</article>
+{{/book}}
