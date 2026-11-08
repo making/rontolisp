@@ -2734,10 +2734,9 @@ class ClojureInteropTest {
 		assertBothEqual(prelude + " (spit " + path + " \"[1 2] :k\\nnext line\")"
 				+ " (with-open [r (java.io.PushbackReader. (reader " + path + "))]"
 				+ " (prn (read r) (read r) (.readLine r) (read r false :eof)))", "[1 2] :k \"\" next\n");
-		// a host reader is no stream: read says what it reads from
-		assertThatThrownBy(
-				() -> interpret("(let [sr (java.io.StringReader. \"1\")] (read (java.io.PushbackReader. sr)))"))
-			.hasMessageContaining("read needs a reader");
+		// a StringReader lowers to a string input stream, so read takes a
+		// PushbackReader over it
+		assertBothEqual("(prn (read (java.io.PushbackReader. (java.io.StringReader. \"1\"))))", "1\n");
 	}
 
 	@Test
