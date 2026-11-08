@@ -2354,6 +2354,7 @@ final class WasmExprCompiler {
 			case LispNames.ARRAY_BECOME_DISPLACED -> WasmArrayCompiler.compileArrayBecomeDisplaced(cons, ctx);
 			case LispNames.ARRAY_DEFAULT_ELEMENT -> WasmArrayCompiler.compileArrayDefaultElement(cons, ctx);
 			case LispNames.ARRAY_ADOPT_ELEMENT_TYPE -> WasmArrayCompiler.compileArrayAdoptElementType(cons, ctx);
+			case LispNames.ARRAY_JAVA_COMPONENT -> WasmArrayCompiler.compileArrayJavaComponent(cons, ctx);
 			case LispNames.ARRAY_ALIKE -> WasmArrayCompiler.compileArrayAlike(cons, ctx);
 			case LispNames.ARRAY_DISPLACEMENT ->
 				compileExpansion(LispMacroExpander.expandArrayDisplacement(cons), ctx, tail);

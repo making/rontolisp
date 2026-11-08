@@ -763,6 +763,13 @@ class JavaBridgeTemplateParityTest {
 		return method;
 	}
 
+	// A converted value's text without the identity hashes a vector's header prints:
+	// the bridge and a direct site each build their own header array, and only the
+	// CONTENTS are the parity claim.
+	private static String deepText(@Nullable Object value) {
+		return Arrays.deepToString(new Object[] { value }).replaceAll("@[0-9a-f]+", "");
+	}
+
 	// A Java value comes back the same whichever copy reads it: the bridge's unmarshal
 	// and
 	// the _junm a direct site calls, and at a call ending in :java-false the bridge's
@@ -802,14 +809,12 @@ class JavaBridgeTemplateParityTest {
 			Method junf = declared(program, JvmJavaDirectSites.UNMARSHAL_FALSE, Object.class);
 			Method jcmp = declared(program, JvmJavaDirectSites.COMPARISON, Object.class, Object.class, Object.class);
 			for (Object value : values) {
-				String direct = Arrays.deepToString(new Object[] { junm.invoke(null, value) });
-				String directFalse = Arrays.deepToString(new Object[] { junf.invoke(null, value) });
-				assertThat(Arrays.deepToString(new Object[] {
-						invoke("unmarshal", new Class<?>[] { Object.class, boolean.class }, value, false) }))
+				String direct = deepText(junm.invoke(null, value));
+				String directFalse = deepText(junf.invoke(null, value));
+				assertThat(deepText(invoke("unmarshal", new Class<?>[] { Object.class, boolean.class }, value, false)))
 					.as("bridge %s", value)
 					.isEqualTo(direct);
-				assertThat(Arrays.deepToString(new Object[] {
-						invoke("unmarshal", new Class<?>[] { Object.class, boolean.class }, value, true) }))
+				assertThat(deepText(invoke("unmarshal", new Class<?>[] { Object.class, boolean.class }, value, true)))
 					.as("bridge :java-false %s", value)
 					.isEqualTo(directFalse);
 			}
@@ -871,22 +876,24 @@ class JavaBridgeTemplateParityTest {
 			Method jufo = declared(program, JvmJavaDirectSites.UNMARSHAL_FALSE_OCTETS, Object.class);
 			Class<?>[] flags = { Object.class, boolean.class, boolean.class };
 			for (Object value : values) {
-				assertThat(Arrays.deepToString(new Object[] { invoke("unmarshal", flags, value, false, true) }))
-					.as("bridge :octets %s", value)
-					.isEqualTo(Arrays.deepToString(new Object[] { juno.invoke(null, value) }));
-				assertThat(Arrays.deepToString(new Object[] { invoke("unmarshal", flags, value, true, true) }))
+				assertThat(deepText(invoke("unmarshal", flags, value, false, true))).as("bridge :octets %s", value)
+					.isEqualTo(deepText(juno.invoke(null, value)));
+				assertThat(deepText(invoke("unmarshal", flags, value, true, true)))
 					.as("bridge :java-false :octets %s", value)
-					.isEqualTo(Arrays.deepToString(new Object[] { jufo.invoke(null, value) }));
-				assertThat(Arrays.deepToString(new Object[] { invoke("unmarshal", flags, value, false, false) }))
-					.as("bridge %s", value)
-					.isEqualTo(Arrays.deepToString(new Object[] { junm.invoke(null, value) }));
+					.isEqualTo(deepText(jufo.invoke(null, value)));
+				assertThat(deepText(invoke("unmarshal", flags, value, false, false))).as("bridge %s", value)
+					.isEqualTo(deepText(junm.invoke(null, value)));
 			}
 			byte[] octets = { 1, -1 };
 			assertThat(juno.invoke(null, (Object) octets)).isSameAs(octets);
 			assertThat(jufo.invoke(null, (Object) octets)).isSameAs(octets);
 			assertThat(invoke("unmarshal", flags, octets, false, true)).isSameAs(octets);
-			Object[] element = (Object[]) Objects.requireNonNull(juno.invoke(null, (Object) new Object[] { octets }));
-			assertThat(element[0]).isSameAs(octets);
+			// an Object[] of one octet vector answers the Lisp vector it stands for: the
+			// header at slot 0, the octets themselves (not a copy) at slot 1
+			ArrayList<?> element = (ArrayList<?>) Objects
+				.requireNonNull(juno.invoke(null, (Object) new Object[] { octets }));
+			assertThat(element.get(0)).isInstanceOf(Object[].class);
+			assertThat(element.get(1)).isSameAs(octets);
 		}
 	}
 
@@ -957,14 +964,14 @@ class JavaBridgeTemplateParityTest {
 						.isEqualTo(true);
 				}
 				for (Object value : Arrays.asList(apple, pair, list, new Object[] { apple, Boolean.FALSE, pair })) {
-					String direct = Arrays.deepToString(new Object[] { junm.invoke(null, value) });
-					String directFalse = Arrays.deepToString(new Object[] { junf.invoke(null, value) });
-					assertThat(Arrays.deepToString(new Object[] {
-							invoke("unmarshal", new Class<?>[] { Object.class, boolean.class }, value, false) }))
+					String direct = deepText(junm.invoke(null, value));
+					String directFalse = deepText(junf.invoke(null, value));
+					assertThat(
+							deepText(invoke("unmarshal", new Class<?>[] { Object.class, boolean.class }, value, false)))
 						.as("bridge %s", value)
 						.isEqualTo(direct);
-					assertThat(Arrays.deepToString(new Object[] {
-							invoke("unmarshal", new Class<?>[] { Object.class, boolean.class }, value, true) }))
+					assertThat(
+							deepText(invoke("unmarshal", new Class<?>[] { Object.class, boolean.class }, value, true)))
 						.as("bridge :java-false %s", value)
 						.isEqualTo(directFalse);
 				}

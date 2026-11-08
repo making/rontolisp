@@ -63,7 +63,7 @@ public final class JavaImplementationPrograms {
 			65
 			3.0
 			42
-			(1 "two" 3.0)
+			#(1 "two" 3.0)
 			"[1, two, 3.0]"
 			"[1, x]"
 			("accept" "A")
@@ -434,7 +434,7 @@ public final class JavaImplementationPrograms {
 			(#(3) #(4) #(3) #(4) #(3) #(4) (3) (4))
 			boom
 			#(9 8 7)
-			(5 (#(5)))
+			(5 #(#(5)))
 			((7 5) #(7 5))""";
 
 	/**

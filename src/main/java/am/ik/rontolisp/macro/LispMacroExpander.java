@@ -32795,8 +32795,8 @@ public final class LispMacroExpander {
 							LispNames.VECTOR_POP, LispNames.VECTOR_PUSH_EXTEND, LispNames.ADJUST_ARRAY,
 							LispNames.ARRAY_BECOME, LispNames.ARRAY_DISPLACEMENT, LispNames.ARRAY_DISP_TARGET,
 							LispNames.ARRAY_DISP_OFFSET, LispNames.ARRAY_ALIKE, LispNames.ARRAY_DEFAULT_ELEMENT,
-							LispNames.ARRAY_ADOPT_ELEMENT_TYPE, LispNames.ARRAY_BECOME_DISPLACED,
-							LispNames.ARRAY_UNDISPLACE, LispNames.COERCE,
+							LispNames.ARRAY_ADOPT_ELEMENT_TYPE, LispNames.ARRAY_JAVA_COMPONENT,
+							LispNames.ARRAY_BECOME_DISPLACED, LispNames.ARRAY_UNDISPLACE, LispNames.COERCE,
 							// fill/read-sequence/write-sequence join the list for the
 							// same
 							// reason as make-string: each has an array-typed arm the JVM

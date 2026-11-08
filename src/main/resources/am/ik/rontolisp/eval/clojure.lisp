@@ -377,13 +377,15 @@
                                       "java.util.Calendar" "java.util.UUID")
                                     :test #'equal)))
                     (setq interfaces
-                          (append interfaces (java:call c "getInterfaces"))))
+                          (append interfaces
+                           (coerce (java:call c "getInterfaces") 'list))))
                   (if own (setq interfaces nil))
                   (do ()
                       ((or found (null interfaces)) found)
                     (let ((i (car interfaces)))
                       (setq interfaces
-                       (append (cdr interfaces) (java:call i "getInterfaces")))
+                            (append (cdr interfaces)
+                             (coerce (java:call i "getInterfaces") 'list)))
                       (setq found (gethash (java:call i "getName") table)))))
     (error () nil)))
 
@@ -2129,7 +2131,7 @@
         (let* ((super (java:call class "getSuperclass"))
                (bases
                 (append (if super (list super))
-                        (java:call class "getInterfaces")))
+                        (coerce (java:call class "getInterfaces") 'list)))
                (names nil))
           (dolist (b bases) (setq names (cons (java:call b "getName") names)))
           (setq rows (cons (cons name (reverse names)) rows))
@@ -2779,7 +2781,8 @@
    base, superclass then interfaces, and its supers), each a class object."
   (let ((super (java:call c "getSuperclass")))
     (dolist (base
-             (append (if super (list super)) (java:call c "getInterfaces")))
+             (append (if super (list super))
+                     (coerce (java:call c "getInterfaces") 'list)))
       (if (not (c%h-mem? base acc))
           (setq acc
                 (rontolisp::%clojure-host-class-supers base (cons base acc))))))
@@ -2829,7 +2832,8 @@
    from in the hierarchy H; anything else %clojure-class-parents."
   (if (rontolisp::%clojure-host-class-name k)
       (let ((super (java:call k "getSuperclass")))
-        (append (if super (list super)) (java:call k "getInterfaces")
+        (append (if super (list super))
+                (coerce (java:call k "getInterfaces") 'list)
                 (rontolisp::%clojure-host-class-derived
                  (gethash '(:c%keyword "parents") h) (list k) kinds)))
       (rontolisp::%clojure-class-parents k rows)))
@@ -3110,8 +3114,9 @@
                       (rontolisp::%clojure-sorted-count c)
                       (hash-table-count (if setp (car (cdr c)) c))))
              (let ((miss (list nil)) (ok t))
-               (dolist (e (java:call (if setp h (java:call h "entrySet"))
-                                     "toArray" :java-false) ok)
+               (dolist (e (coerce (java:call
+                                   (if setp h (java:call h "entrySet"))
+                                   "toArray" :java-false) 'list) ok)
                  (if ok
                      (let ((w
                             (rontolisp::%clojure-sorted-lookup c
@@ -3157,15 +3162,16 @@
    byte[] a byte array --, a nested host collection stays one. A snapshot, read
    whole: the oracle's seq of an Iterable is lazy."
   (cond ((rontolisp::%clojure-host-instance-p x "java.util.Collection")
-         (rontolisp::%clojure-host-answer
-          (java:call x "toArray" :java-false :octets)))
+         ;; toArray answers a vector now; the members are the list's
+         (mapcar #'rontolisp::%clojure-host-answer
+                 (coerce (java:call x "toArray" :java-false :octets) 'list)))
         ((rontolisp::%clojure-host-instance-p x "java.util.Map")
          (mapcar (lambda (e)
                    (vector (rontolisp::%clojure-host-answer
                             (java:call e "getKey" :java-false :octets))
                            (rontolisp::%clojure-host-answer
                             (java:call e "getValue" :java-false :octets))))
-                 (java:call (java:call x "entrySet") "toArray")))
+                 (coerce (java:call (java:call x "entrySet") "toArray") 'list)))
         ((rontolisp::%clojure-host-instance-p x "java.lang.CharSequence")
          (coerce (java:call x "toString") 'list))
         (t
@@ -9699,15 +9705,18 @@
 ;; every backend: one per program, like the oracle's statics. A persistent collection
 ;; is never edited in place here (a transient copies first), and a value carrying
 ;; metadata is a fresh copy, so the constants stay empty and meta-less.
-(defvar rontolisp::%clojure-empty-vector (vector)
+(defvar rontolisp::%clojure-empty-vector
+  (vector)
   "The oracle's PersistentVector.EMPTY: the empty vector literal and the verbs
    answering an empty vector answer this object.")
 
-(defvar rontolisp::%clojure-empty-map (make-hash-table :test 'equal)
+(defvar rontolisp::%clojure-empty-map
+  (make-hash-table :test 'equal)
   "The oracle's PersistentArrayMap.EMPTY: the empty map literal and the verbs
    answering an empty map answer this object.")
 
-(defvar rontolisp::%clojure-empty-set (list :C%SET (make-hash-table :test 'equal))
+(defvar rontolisp::%clojure-empty-set
+  (list :C%SET (make-hash-table :test 'equal))
   "The oracle's PersistentHashSet.EMPTY: the empty set literal and the verbs
    answering an empty set answer this object.")
 
@@ -9732,8 +9741,8 @@
    a fresh one carrying it."
   (let ((m (rontolisp::%clojure-meta x)))
     (if m
-        (rontolisp::%clojure-put-meta (list :C%SET (make-hash-table :test 'equal))
-                                      m)
+        (rontolisp::%clojure-put-meta
+         (list :C%SET (make-hash-table :test 'equal)) m)
         rontolisp::%clojure-empty-set)))
 
 (defun rontolisp::%clojure-pop (coll)
@@ -9775,25 +9784,22 @@
    answers an empty one, carrying X's metadata and, for a sorted one, its
    comparator; a record signals; a list, a seq, a string and anything that is
    no collection answer nil."
-  (cond ((hash-table-p x)
-         (rontolisp::%clojure-empty-map-with-meta x))
-        ((rontolisp::%clojure-record-p x)
-         (rontolisp::%clojure-unsupported-operation-exception
-          (concatenate 'string "Can't create empty: "
-                       (car (cdr (cdr (cdr (cdr x))))))))
-        ((rontolisp::%clojure-set-p x)
-         (rontolisp::%clojure-empty-set-with-meta x))
-        ((rontolisp::%clojure-sorted-p x)
-         (rontolisp::%clojure-put-meta
-          (rontolisp::%clojure-sorted-with x (vector))
-          (rontolisp::%clojure-meta x)))
-        ((and (vectorp x) (not (stringp x)))
-         (rontolisp::%clojure-empty-vector-with-meta x))
-        ;; an IPersistentCollection's empty: an arm of the collection-interface
-        ;; family ("Collection interfaces")
-        ((rontolisp::%clojure-icollection-p x)
-         (rontolisp::%clojure-collection-empty x))
-        (t nil)))
+  (cond ((hash-table-p x) (rontolisp::%clojure-empty-map-with-meta x))
+   ((rontolisp::%clojure-record-p x)
+    (rontolisp::%clojure-unsupported-operation-exception
+     (concatenate 'string "Can't create empty: "
+                  (car (cdr (cdr (cdr (cdr x))))))))
+   ((rontolisp::%clojure-set-p x) (rontolisp::%clojure-empty-set-with-meta x))
+   ((rontolisp::%clojure-sorted-p x)
+    (rontolisp::%clojure-put-meta (rontolisp::%clojure-sorted-with x (vector))
+                                  (rontolisp::%clojure-meta x)))
+   ((and (vectorp x) (not (stringp x)))
+    (rontolisp::%clojure-empty-vector-with-meta x))
+   ;; an IPersistentCollection's empty: an arm of the collection-interface
+   ;; family ("Collection interfaces")
+   ((rontolisp::%clojure-icollection-p x)
+    (rontolisp::%clojure-collection-empty x))
+   (t nil)))
 
 (defun rontolisp::%clojure-empty-v (&rest args)
   "empty as a value."
@@ -9816,16 +9822,12 @@
 (defun rontolisp::%clojure-hash-set-v (&rest xs)
   "hash-set as a value: the set of its arguments, a repeated one kept once, of
    no argument the canonical empty set."
-  (if (null xs)
-      rontolisp::%clojure-empty-set
-      (rontolisp::%clojure-set-of xs)))
+  (if (null xs) rontolisp::%clojure-empty-set (rontolisp::%clojure-set-of xs)))
 
 (defun rontolisp::%clojure-vector (&rest args)
   "vector as a value: of no argument the oracle's canonical empty vector, else a
    fresh vector of its arguments."
-  (if (null args)
-      rontolisp::%clojure-empty-vector
-      (apply #'vector args)))
+  (if (null args) rontolisp::%clojure-empty-vector (apply #'vector args)))
 
 (defun rontolisp::%clojure-dedupe (coll)
   "COLL without consecutive = duplicates."
@@ -12338,9 +12340,9 @@
           (let ((entries (rontolisp::%clojure-merge-entry-plist source)))
             (do ((p entries (cdr (cdr p))))
                 ((null p) nil)
-              (setf (gethash (rontolisp::%clojure-store-key (car p) target)
-                             target)
-                    (car (cdr p)))))
+              (setf
+               (gethash (rontolisp::%clojure-store-key (car p) target) target)
+               (car (cdr p)))))
           (if (null source)
               (rontolisp::%clojure-null-pointer-exception
                "Cannot invoke \"java.util.Map.size()\" because \"m\" is null")
@@ -28086,21 +28088,42 @@
          (if (rontolisp::%clojure-host-holds-octets x)
              (mapcar #'rontolisp::%clojure-host-answer x)
              x))
+        ;; the octet vector itself FIRST: it is a vector too, and it is the byte array
         ((rontolisp::%clojure-octets-p x) (rontolisp::%clojure-bytes-of x))
+        ;; A Java array answers a vector now: its octet elements are byte arrays too,
+        ;; in it or in a vector it holds, so a fresh vector carries the conversions.
+        ((and (vectorp x) (not (stringp x)))
+         (if (rontolisp::%clojure-host-holds-octets x)
+             (let ((out (copy-seq x)))
+               (dotimes (i (length x) out)
+                 (setf (aref out i)
+                       (rontolisp::%clojure-host-answer (aref x i)))))
+             x))
         (t x)))
 
 ;; Whether the list X -- an array a host call answered -- holds an (unsigned-byte 8)
 ;; vector, in it or in a list it holds. A list headed by a keyword is a Clojure
 ;; value's wrapper, which holds none.
 (defun rontolisp::%clojure-host-holds-octets (x)
-  (if (keywordp (car x))
-      nil
-      (do ((rest x (cdr rest)))
-          ((not (consp rest)) nil)
-        (let ((e (car rest)))
-          (if (or (rontolisp::%clojure-octets-p e)
-                  (and (consp e) (rontolisp::%clojure-host-holds-octets e)))
-              (return t))))))
+  (cond ((consp x)
+         (if (keywordp (car x))
+             nil
+             (do ((rest x (cdr rest)))
+                 ((not (consp rest)) nil)
+               (let ((e (car rest)))
+                 (if (or (rontolisp::%clojure-octets-p e)
+                         (and (or (consp e) (and (vectorp e) (not (stringp e))))
+                              (rontolisp::%clojure-host-holds-octets e)))
+                     (return t))))))
+        ((and (vectorp x) (not (stringp x)))
+         (do ((i 0 (+ i 1)))
+             ((>= i (length x)) nil)
+           (let ((e (aref x i)))
+             (if (or (rontolisp::%clojure-octets-p e)
+                     (and (or (consp e) (and (vectorp e) (not (stringp e))))
+                          (rontolisp::%clojure-host-holds-octets e)))
+                 (return t)))))
+        (t nil)))
 
 ;; bytes?: T for a byte array, NO (the false object) for anything else. A program
 ;; making no byte array calls progn in its place (the family's alias), so the
@@ -28199,7 +28222,8 @@
   (if (rontolisp::%clojure-bytes-p a)
       (rontolisp::%clojure-bytes-of (copy-seq (car (cdr a))))
       (if (= (array-rank a) 1)
-          (copy-seq a)
+          (rontolisp::%clojure-java-array (copy-seq a)
+                                          (%array-java-component a))
           (let ((out (make-array (array-dimensions a))))
             (dotimes (i (array-total-size a) out)
               (setf (row-major-aref out i) (row-major-aref a i)))))))
@@ -29182,20 +29206,29 @@
             (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
                          " cannot be cast to class java.lang.Character")))))
 
-(defun rontolisp::%clojure-build-array (members zero cast)
+(defun rontolisp::%clojure-java-array (a cname)
+  "A as the Java array of component CNAME: the stamp a java: member reads to
+   select the array type the value really is (object-array's Object, int-array's
+   int, a returned array's own component). Where no host exists (wasm) the stamp
+   is a no-op."
+  (%array-java-component a cname))
+
+(defun rontolisp::%clojure-build-array (members zero cast cname)
   "The vector of the MEMBERS list, each through CAST (nil: as is), over the
-   initial element ZERO."
+   initial element ZERO, stamped as the Java array of component CNAME."
   (let ((out (make-array (length members) :initial-element zero)) (i 0))
     (dolist (e members out)
       (setf (aref out i) (if cast (funcall cast e) e))
-      (setq i (+ i 1)))))
+      (setq i (+ i 1)))
+    (rontolisp::%clojure-java-array out cname)))
 
-(defun rontolisp::%clojure-build-array-sized (size members zero cast)
+(defun rontolisp::%clojure-build-array-sized (size members zero cast cname)
   "The vector of SIZE elements from the MEMBERS list, each through CAST (nil:
-   as is), over the initial element ZERO: the members past SIZE drop."
+   as is), over the initial element ZERO: the members past SIZE drop; stamped as
+   the Java array of component CNAME."
   (let ((out (make-array size :initial-element zero)) (i 0) (s members))
     (do ()
-        ((or (>= i size) (null s)) out)
+        ((or (>= i size) (null s)) (rontolisp::%clojure-java-array out cname))
       (setf (aref out i) (if cast (funcall cast (car s)) (car s)))
       (setq i (+ i 1))
       (setq s (rontolisp::%clojure-seq-rest s)))))
@@ -29205,12 +29238,14 @@
    size (its intValue) of nils, anything else a seq whose members stand
    as is."
   (if (numberp x)
-      (make-array (rontolisp::%clojure-array-size
-                   (rontolisp::%clojure-unchecked-cast x 32 nil nil "int"))
-                  :initial-element nil)
+      (rontolisp::%clojure-java-array (make-array
+                                       (rontolisp::%clojure-array-size
+                                        (rontolisp::%clojure-unchecked-cast x 32
+                                         nil nil "int"))
+                                       :initial-element nil) "java.lang.Object")
       (rontolisp::%clojure-build-array
        (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members x)) nil
-       nil)))
+       nil "java.lang.Object")))
 
 (defun rontolisp::%clojure-object-array-v (&rest args)
   "object-array as a value."
@@ -29223,7 +29258,7 @@
   (if (or (rontolisp::%clojure-is-seqable coll)
           (rontolisp::%clojure-host-seqable-p coll))
       (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all coll) nil
-                                       nil)
+                                       nil "java.lang.Object")
       (rontolisp::%clojure-runtime-exception
        (concatenate 'string "Unable to convert: class "
                     (rontolisp::%clojure-class-name-of coll) " to Object[]"))))
@@ -29387,14 +29422,14 @@
          (rontolisp::%clojure-seq-all
           (rontolisp::%clojure-array-members aseq))))
     (if (null s)
-        (vector)
+        (rontolisp::%clojure-java-array (vector) "java.lang.Object")
         (let ((cname
                (if (null (car s))
                    "java.lang.Object"
                    (rontolisp::%clojure-class-name-of (car s)))))
           (dolist (e (cdr s))
             (rontolisp::%clojure-check-array-component e cname))
-          (rontolisp::%clojure-build-array s nil nil)))))
+          (rontolisp::%clojure-build-array s nil nil cname)))))
 
 (defun rontolisp::%clojure-into-array-2 (type aseq)
   "(into-array type aseq): the members as a vector of the component TYPE, a
@@ -29418,10 +29453,10 @@
                    ((equal cname "double") #'rontolisp::%clojure-into-double)
                    ((equal cname "float") #'rontolisp::%clojure-float-member)
                    ((equal cname "char") #'rontolisp::%clojure-into-char)
-                   (t #'rontolisp::%clojure-boolean-member)))
+                   (t #'rontolisp::%clojure-boolean-member)) cname)
             (progn
               (dolist (e s) (rontolisp::%clojure-check-array-component e cname))
-              (rontolisp::%clojure-build-array s nil nil))))))
+              (rontolisp::%clojure-build-array s nil nil cname))))))
 
 (defun rontolisp::%clojure-into-array-v (&rest args)
   "into-array as a value."
@@ -29433,12 +29468,14 @@
   "(int-array size-or-seq): SIZE zeros, or the members of a seq narrowed like
    Java's (int)."
   (if (numberp x)
-      (make-array (rontolisp::%clojure-array-size
-                   (rontolisp::%clojure-unchecked-cast x 32 nil nil "int"))
-                  :initial-element 0)
+      (rontolisp::%clojure-java-array (make-array
+                                       (rontolisp::%clojure-array-size
+                                        (rontolisp::%clojure-unchecked-cast x 32
+                                         nil nil "int"))
+                                       :initial-element 0) "int")
       (rontolisp::%clojure-build-array
        (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members x)) 0
-       #'rontolisp::%clojure-int-member)))
+       #'rontolisp::%clojure-int-member "int")))
 
 (defun rontolisp::%clojure-int-array-2 (size init)
   "(int-array size init): SIZE elements, each the int INIT -- any number -- or
@@ -29446,11 +29483,12 @@
   (let ((n
          (rontolisp::%clojure-array-size (rontolisp::%clojure-int-cast size))))
     (if (numberp init)
-        (fill (make-array n :initial-element 0)
-              (rontolisp::%clojure-int-member init))
+        (rontolisp::%clojure-java-array (fill (make-array n :initial-element 0)
+                                         (rontolisp::%clojure-int-member init))
+                                        "int")
         (rontolisp::%clojure-build-array-sized n
          (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members init))
-         0 #'rontolisp::%clojure-int-member))))
+         0 #'rontolisp::%clojure-int-member "int"))))
 
 (defun rontolisp::%clojure-int-array-v (&rest args)
   "int-array as a value."
@@ -29462,12 +29500,14 @@
   "(long-array size-or-seq): SIZE zeros, or the members of a seq narrowed like
    Java's (long)."
   (if (numberp x)
-      (make-array (rontolisp::%clojure-array-size
-                   (rontolisp::%clojure-unchecked-cast x 32 nil nil "int"))
-                  :initial-element 0)
+      (rontolisp::%clojure-java-array (make-array
+                                       (rontolisp::%clojure-array-size
+                                        (rontolisp::%clojure-unchecked-cast x 32
+                                         nil nil "int"))
+                                       :initial-element 0) "long")
       (rontolisp::%clojure-build-array
        (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members x)) 0
-       #'rontolisp::%clojure-long-member)))
+       #'rontolisp::%clojure-long-member "long")))
 
 (defun rontolisp::%clojure-long-array-2 (size init)
   "(long-array size init): SIZE elements, each the long INIT -- any number --
@@ -29475,11 +29515,12 @@
   (let ((n
          (rontolisp::%clojure-array-size (rontolisp::%clojure-int-cast size))))
     (if (numberp init)
-        (fill (make-array n :initial-element 0)
-              (rontolisp::%clojure-long-member init))
+        (rontolisp::%clojure-java-array (fill (make-array n :initial-element 0)
+                                         (rontolisp::%clojure-long-member init))
+                                        "long")
         (rontolisp::%clojure-build-array-sized n
          (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members init))
-         0 #'rontolisp::%clojure-long-member))))
+         0 #'rontolisp::%clojure-long-member "long"))))
 
 (defun rontolisp::%clojure-long-array-v (&rest args)
   "long-array as a value."
@@ -29491,12 +29532,14 @@
   "(double-array size-or-seq): SIZE zeros, or the members of a seq widened to
    doubles."
   (if (numberp x)
-      (make-array (rontolisp::%clojure-array-size
-                   (rontolisp::%clojure-unchecked-cast x 32 nil nil "int"))
-                  :initial-element 0.0)
+      (rontolisp::%clojure-java-array (make-array
+                                       (rontolisp::%clojure-array-size
+                                        (rontolisp::%clojure-unchecked-cast x 32
+                                         nil nil "int"))
+                                       :initial-element 0.0) "double")
       (rontolisp::%clojure-build-array
        (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members x)) 0.0
-       #'rontolisp::%clojure-double-member)))
+       #'rontolisp::%clojure-double-member "double")))
 
 (defun rontolisp::%clojure-double-array-2 (size init)
   "(double-array size init): SIZE elements, each the double INIT -- any
@@ -29504,11 +29547,13 @@
   (let ((n
          (rontolisp::%clojure-array-size (rontolisp::%clojure-int-cast size))))
     (if (numberp init)
-        (fill (make-array n :initial-element 0.0)
-              (rontolisp::%clojure-double-member init))
+        (rontolisp::%clojure-java-array (fill
+                                         (make-array n :initial-element 0.0)
+                                         (rontolisp::%clojure-double-member
+                                          init)) "double")
         (rontolisp::%clojure-build-array-sized n
          (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members init))
-         0.0 #'rontolisp::%clojure-double-member))))
+         0.0 #'rontolisp::%clojure-double-member "double"))))
 
 (defun rontolisp::%clojure-double-array-v (&rest args)
   "double-array as a value."
@@ -29520,12 +29565,14 @@
   "(float-array size-or-seq): SIZE zeros, or the members of a seq widened to
    doubles (doubles only here, like float)."
   (if (numberp x)
-      (make-array (rontolisp::%clojure-array-size
-                   (rontolisp::%clojure-unchecked-cast x 32 nil nil "int"))
-                  :initial-element 0.0)
+      (rontolisp::%clojure-java-array (make-array
+                                       (rontolisp::%clojure-array-size
+                                        (rontolisp::%clojure-unchecked-cast x 32
+                                         nil nil "int"))
+                                       :initial-element 0.0) "float")
       (rontolisp::%clojure-build-array
        (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members x)) 0.0
-       #'rontolisp::%clojure-float-member)))
+       #'rontolisp::%clojure-float-member "float")))
 
 (defun rontolisp::%clojure-float-array-2 (size init)
   "(float-array size init): SIZE elements, each the float INIT -- any
@@ -29533,11 +29580,13 @@
   (let ((n
          (rontolisp::%clojure-array-size (rontolisp::%clojure-int-cast size))))
     (if (numberp init)
-        (fill (make-array n :initial-element 0.0)
-              (rontolisp::%clojure-float-member init))
+        (rontolisp::%clojure-java-array (fill
+                                         (make-array n :initial-element 0.0)
+                                         (rontolisp::%clojure-float-member
+                                          init)) "float")
         (rontolisp::%clojure-build-array-sized n
          (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members init))
-         0.0 #'rontolisp::%clojure-float-member))))
+         0.0 #'rontolisp::%clojure-float-member "float"))))
 
 (defun rontolisp::%clojure-float-array-v (&rest args)
   "float-array as a value."
@@ -29549,12 +29598,14 @@
   "(short-array size-or-seq): SIZE zeros, or the members of a seq narrowed
    like Java's (short) of its intValue."
   (if (numberp x)
-      (make-array (rontolisp::%clojure-array-size
-                   (rontolisp::%clojure-unchecked-cast x 32 nil nil "int"))
-                  :initial-element 0)
+      (rontolisp::%clojure-java-array (make-array
+                                       (rontolisp::%clojure-array-size
+                                        (rontolisp::%clojure-unchecked-cast x 32
+                                         nil nil "int"))
+                                       :initial-element 0) "short")
       (rontolisp::%clojure-build-array
        (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members x)) 0
-       #'rontolisp::%clojure-short-member)))
+       #'rontolisp::%clojure-short-member "short")))
 
 (defun rontolisp::%clojure-short-array-2 (size init)
   "(short-array size init): SIZE elements, each the short INIT -- an integer
@@ -29563,10 +29614,11 @@
   (let ((n
          (rontolisp::%clojure-array-size (rontolisp::%clojure-int-cast size))))
     (if (and (integerp init) (<= -32768 init 32767))
-        (fill (make-array n :initial-element 0) init)
+        (rontolisp::%clojure-java-array
+         (fill (make-array n :initial-element 0) init) "short")
         (rontolisp::%clojure-build-array-sized n
          (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members init))
-         0 #'rontolisp::%clojure-short-member))))
+         0 #'rontolisp::%clojure-short-member "short"))))
 
 (defun rontolisp::%clojure-short-array-v (&rest args)
   "short-array as a value."
@@ -29578,12 +29630,14 @@
   "(char-array size-or-seq): SIZE nulls, or the members of a seq, each a
    character."
   (if (numberp x)
-      (make-array (rontolisp::%clojure-array-size
-                   (rontolisp::%clojure-unchecked-cast x 32 nil nil "int"))
-                  :initial-element (code-char 0))
+      (rontolisp::%clojure-java-array (make-array
+                                       (rontolisp::%clojure-array-size
+                                        (rontolisp::%clojure-unchecked-cast x 32
+                                         nil nil "int"))
+                                       :initial-element (code-char 0)) "char")
       (rontolisp::%clojure-build-array
        (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members x))
-       (code-char 0) #'rontolisp::%clojure-char-member)))
+       (code-char 0) #'rontolisp::%clojure-char-member "char")))
 
 (defun rontolisp::%clojure-char-array-2 (size init)
   "(char-array size init): SIZE elements, each the character INIT -- a
@@ -29592,10 +29646,11 @@
   (let ((n
          (rontolisp::%clojure-array-size (rontolisp::%clojure-int-cast size))))
     (if (characterp init)
-        (fill (make-array n :initial-element (code-char 0)) init)
+        (rontolisp::%clojure-java-array
+         (fill (make-array n :initial-element (code-char 0)) init) "char")
         (rontolisp::%clojure-build-array-sized n
          (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members init))
-         (code-char 0) #'rontolisp::%clojure-char-member))))
+         (code-char 0) #'rontolisp::%clojure-char-member "char"))))
 
 (defun rontolisp::%clojure-char-array-v (&rest args)
   "char-array as a value."
@@ -29607,12 +29662,16 @@
   "(boolean-array size-or-seq): SIZE falses, or the members of a seq, each a
    boolean."
   (if (numberp x)
-      (make-array (rontolisp::%clojure-array-size
-                   (rontolisp::%clojure-unchecked-cast x 32 nil nil "int"))
-                  :initial-element rontolisp::%clojure-false)
+      (rontolisp::%clojure-java-array (make-array
+                                       (rontolisp::%clojure-array-size
+                                        (rontolisp::%clojure-unchecked-cast x 32
+                                         nil nil "int"))
+                                       :initial-element
+                                       rontolisp::%clojure-false) "boolean")
       (rontolisp::%clojure-build-array
        (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members x))
-       rontolisp::%clojure-false #'rontolisp::%clojure-boolean-member)))
+       rontolisp::%clojure-false #'rontolisp::%clojure-boolean-member
+       "boolean")))
 
 (defun rontolisp::%clojure-boolean-array-2 (size init)
   "(boolean-array size init): SIZE elements, each the boolean INIT -- a
@@ -29621,10 +29680,13 @@
   (let ((n
          (rontolisp::%clojure-array-size (rontolisp::%clojure-int-cast size))))
     (if (or (eq init t) (eq init rontolisp::%clojure-false))
-        (fill (make-array n :initial-element rontolisp::%clojure-false) init)
+        (rontolisp::%clojure-java-array
+         (fill (make-array n :initial-element rontolisp::%clojure-false) init)
+         "boolean")
         (rontolisp::%clojure-build-array-sized n
          (rontolisp::%clojure-seq-all (rontolisp::%clojure-array-members init))
-         rontolisp::%clojure-false #'rontolisp::%clojure-boolean-member))))
+         rontolisp::%clojure-false #'rontolisp::%clojure-boolean-member
+         "boolean"))))
 
 (defun rontolisp::%clojure-boolean-array-v (&rest args)
   "boolean-array as a value."
@@ -29694,13 +29756,15 @@
    ((rontolisp::%clojure-host-seqable-p coll)
     (if (rontolisp::%clojure-host-instance-p coll "java.util.Collection")
         (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all coll) nil
-                                         #'rontolisp::%clojure-to-array)
+                                         #'rontolisp::%clojure-to-array
+                                         "java.lang.Object")
         (rontolisp::%clojure-class-cast-exception
          (concatenate 'string "class " (rontolisp::%clojure-class-name-of coll)
                       " cannot be cast to class java.util.Collection"))))
    ((rontolisp::%clojure-is-seqable coll)
     (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all coll) nil
-                                     #'rontolisp::%clojure-to-array))
+                                     #'rontolisp::%clojure-to-array
+                                     "java.lang.Object"))
    (t (rontolisp::%clojure-class-cast-exception
        (concatenate 'string "class " (rontolisp::%clojure-class-name-of coll)
                     " cannot be cast to class java.util.Collection")))))
@@ -29884,7 +29948,8 @@
       nil
       (if (rontolisp::%clojure-is-vector x)
           (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all x) 0
-                                           #'rontolisp::%clojure-int-member)
+                                           #'rontolisp::%clojure-int-member
+                                           "int")
           (rontolisp::%clojure-cast-refusal x "I"))))
 
 (defun rontolisp::%clojure-ints-v (&rest args)
@@ -29900,7 +29965,8 @@
       nil
       (if (rontolisp::%clojure-is-vector x)
           (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all x) 0
-                                           #'rontolisp::%clojure-long-member)
+                                           #'rontolisp::%clojure-long-member
+                                           "long")
           (rontolisp::%clojure-cast-refusal x "J"))))
 
 (defun rontolisp::%clojure-longs-v (&rest args)
@@ -29916,7 +29982,8 @@
       nil
       (if (rontolisp::%clojure-is-vector x)
           (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all x) 0.0
-                                           #'rontolisp::%clojure-double-member)
+                                           #'rontolisp::%clojure-double-member
+                                           "double")
           (rontolisp::%clojure-cast-refusal x "D"))))
 
 (defun rontolisp::%clojure-doubles-v (&rest args)
@@ -29932,7 +29999,8 @@
       nil
       (if (rontolisp::%clojure-is-vector x)
           (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all x) 0.0
-                                           #'rontolisp::%clojure-float-member)
+                                           #'rontolisp::%clojure-float-member
+                                           "float")
           (rontolisp::%clojure-cast-refusal x "F"))))
 
 (defun rontolisp::%clojure-floats-v (&rest args)
@@ -29948,7 +30016,8 @@
       nil
       (if (rontolisp::%clojure-is-vector x)
           (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all x) 0
-                                           #'rontolisp::%clojure-short-member)
+                                           #'rontolisp::%clojure-short-member
+                                           "short")
           (rontolisp::%clojure-cast-refusal x "S"))))
 
 (defun rontolisp::%clojure-shorts-v (&rest args)
@@ -29965,7 +30034,8 @@
       (if (rontolisp::%clojure-is-vector x)
           (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all x)
                                            (code-char 0)
-                                           #'rontolisp::%clojure-char-member)
+                                           #'rontolisp::%clojure-char-member
+                                           "char")
           (rontolisp::%clojure-cast-refusal x "C"))))
 
 (defun rontolisp::%clojure-chars-v (&rest args)
@@ -29982,7 +30052,8 @@
       (if (rontolisp::%clojure-is-vector x)
           (rontolisp::%clojure-build-array (rontolisp::%clojure-seq-all x)
                                            rontolisp::%clojure-false
-                                           #'rontolisp::%clojure-boolean-member)
+                                           #'rontolisp::%clojure-boolean-member
+                                           "boolean")
           (rontolisp::%clojure-cast-refusal x "Z"))))
 
 (defun rontolisp::%clojure-booleans-v (&rest args)

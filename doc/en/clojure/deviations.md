@@ -470,7 +470,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `sequential?` and `counted?` are true, `aset` stores any value, and `alength` and
   `aclone` take a vector -- where the oracle answers its array classes, prints `#object`
   with the identity hash, compares by identity, takes no collection predicate, refuses a
-  mistyped `aset`, and refuses a vector to `alength`/`aclone`. `to-array-2d` answers a
+  mistyped `aset`, and refuses a vector to `alength`/`aclone`. A typed array crosses
+  into a `java:` member as the Java array it stands for (`object-array` as `Object[]`,
+  `int-array` as `int[]`), and a Java array a member answers is a vector stamped with
+  its component the same way; what a member writes into an array argument is copied
+  back when it returns. `to-array-2d` answers a
   vector of vectors, read through nested [aget](reference/aget.md) (several indexes over
   one is a rank error, as over any nested vector). An `aset-int`, `aset-long`,
   `aset-double`, `aset-float`, `aset-short`, `aset-boolean` or `aset-char` stores the

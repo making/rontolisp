@@ -218,6 +218,32 @@ public final class LispArray implements LispVal {
 		this.elementTypeCode = code;
 	}
 
+	// The Java array this vector stands for ({@code %array-java-component}): its
+	// component type's Java name -- "int", "java.lang.Object", "java.lang.String" -- or
+	// null for a vector that is no Java array. The Clojure front end's typed arrays and
+	// the arrays a java: call answers carry it, so a later java: call selects the array
+	// type the value really is; the compiled representation keeps the same name in the
+	// array header's remembered-type slot.
+	@Nullable private String javaComponent;
+
+	/**
+	 * Returns the Java array component this vector stands for, or {@code null} for a
+	 * vector that is no Java array.
+	 * @return the component type's Java name, or null
+	 */
+	public @Nullable String javaComponent() {
+		return this.javaComponent;
+	}
+
+	/**
+	 * Makes this array remember the Java array component it stands for
+	 * ({@code %array-java-component} with two arguments); {@code null} forgets it.
+	 * @param component the component type's Java name, or null
+	 */
+	public void setJavaComponent(@Nullable String component) {
+		this.javaComponent = component;
+	}
+
 	/**
 	 * Returns the displacement target, or {@code null} when the array owns its storage.
 	 * @return the {@code :displaced-to} array (a {@link LispArray}, a

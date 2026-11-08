@@ -78,7 +78,7 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   (`JavaBridgeTemplateParityTest#theBridgeAndADirectSiteCountTheSameHostObjects`): NOT a
   `Long`/`Double`/`BigInteger`/`String`, NOT any Java array (characters, ratios, conses,
   function values, instances, streams, `#d`/`#f`/octet vectors -- a Java array a call answers
-  is unmarshalled into a list, so none is ever a host), NOT exactly an `ArrayList` whose slot 0
+  is unmarshalled into a Lisp vector, so none is ever a host), NOT exactly an `ArrayList` whose slot 0
   is an `Object[]` (a Lisp array), NOT a class in `am.ik.rontolisp.runtime` (`RontoHashTable`,
   every hash table; `RontoComplex`) -- but a handle or view (`RontoJavaValue`, "Handles and
   views") is one. The bridge spells the table class and the package itself (no rontolisp
@@ -304,6 +304,32 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   `JavaImplementationsTest#theMarkersAFormEndsInAreCarriedByItsImplementation`,
   `JvmLispCompilerSplitTest#aForcedSplitKeepsJavaCallsWorking` (a store reaching Java across a
   split).
+
+## Java arrays and Clojure typed arrays (2026-11-08)
+- A Java array a `java:` form answers is the Clojure typed array it stands for, not a list:
+  a rank-1 general array of the unmarshalled elements, stamped with the component type's
+  Java name. A `byte[]` without `:octets` keeps the list of signed bytes (the byte-array
+  family's own representation is the `:octets` vector). Interpreter `LispArray.javaComponent`
+  (`%array-java-component`), compiled header slot 4 (the slot `_arrayAdoptElementType`
+  copies), bridge `arrayToVector`. The stamp makes an argument cross as the array type the
+  value really is: `object-array` as `Object[]` (never the primitive array its element costs
+  would choose), a returned `int[]`/`long[]`/`double[]` as that array. The cost is the same
+  name comparison on all three paths (`arrayComponentCost`; the direct sites' `_jcomp` and
+  emitted cost arms): exact for the same component, `WIDEN` for `Object[]` from a reference
+  component, `NO_MATCH` otherwise -- covariant arrays past `Object` are the deviation.
+  `%clojure-object-array` / `to-array` / `into-array` / the primitive constructors and
+  `aclone` stamp the value (`%array-java-component` with two arguments; on wasm a no-op).
+  A JVM program naming a `java:call`/`java:static`/`java:field` forces the array runtime
+  (`JvmLispCompiler.programAsksJavaForAnArray`): its printer, `vectorp`/`arrayp` and the
+  sequence readers have to know the vector a Java array answers.
+- A Java method's writes into an array argument are written back when it returns: interpreter
+  `writeBackArrays`, bridge `writeBackArrays`, direct sites `_jwb`/`_jwbf`/`_jwbo`/`_jwbao`
+  (fixed parameters; a varargs tail is not written back). The vector is a copy, not a view:
+  the oracle's identity is not kept, and a `byte[]` handed a fn, proxy or face is still the
+  `:octets` identity case above, not this one. Pins: clojure-spec
+  `a-java-array-answers-a-typed-array-and-crosses-back-as-its-component` (interpreter and
+  JVM; host-only), `JavaInteropTest`/`JvmJavaInteropCompilerTest`
+  `arrayRoundTripsThroughCopyOf`.
 - A function implementing `java.util.Comparator.compare` at a form ending in BOTH markers
   (`JavaImplementation.readsComparison`: a functional implementation of `Comparator` alone) is
   read as Clojure's `AFunction.compare`: `t` -1; `|false|` 1 when the function answers true
@@ -853,8 +879,10 @@ resolved `Method.invoke` is the cheap part.
   a method of a package-private superclass links through it) and the chosen descriptor (the most
   specific covariant return), under a handler catching Throwable -> the `error ...` text; the value
   converted back specialized to the declared type (`_junm` = the bridge's `unmarshal` for a type a
-  box/String/array may hide behind, `_jarr` its `arrayToList` over every array type without
-  `java.lang.reflect.Array`).
+  box/String/array may hide behind, `_jarr` its array-to-vector over every array type with
+  `java.lang.reflect.Array`; a non-byte array answers a rank-1 general array stamped with its
+  component, the Clojure typed array, and `_jwb` writes what Java stored into an array argument
+  back into it after the member returns -- "Java arrays and Clojure typed arrays" below).
 - Nothing in a direct call reflects: a FUNCTION kind for an interface parameter -- at a
   dispatched site in an open `_jconv$N` too -- is the interface's generated proxy class
   (`JvmJavaImplementations.proxyFactory`, "Implementing interfaces" below); until a16 it called

@@ -2874,7 +2874,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		// forcedGroups carries the verdict of a previous run whose source scan
 		// under-predicted this gate (see compile(List)); it never turns the gate OFF.
 		boolean usesArrays = programUsesAnyArrayOp(program) || usesFloatArray || usesIntArray
-				|| forcedGroups.contains(GROUP_ARRAYS);
+				|| programAsksJavaForAnArray(program) || forcedGroups.contains(GROUP_ARRAYS);
 		// Whether any make-array in the program asks for an element type narrower than t,
 		// or any array literal carries a remembered one (#*1011 is stamped bit) -- the
 		// only ways a general array can carry a remembered element type, and so the
@@ -7312,6 +7312,36 @@ public final class JvmLispCompiler implements LispCompiler {
 				return true;
 			}
 			if (asksJavaForOctets(cons.car())) {
+				return true;
+			}
+			val = cons.cdr();
+		}
+		return false;
+	}
+
+	// Whether any java: form in the program may answer a Java ARRAY: a call, a static
+	// call
+	// or a field read (a constructor answers an object, the implementation forms answer
+	// their object). A non-byte array answers a Lisp vector now, so the program needs the
+	// array runtime for the printer and the predicates to know it -- as a java: form
+	// ending in :octets needs the packed-int runtime.
+	private static boolean programAsksJavaForAnArray(List<LispVal> program) {
+		for (LispVal expr : program) {
+			if (asksJavaForAnArray(expr)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean asksJavaForAnArray(LispVal val) {
+		while (val instanceof LispCons cons) {
+			if (cons.car() instanceof LispSymbol head && (LispNames.JAVA_CALL_QUALIFIED.equals(head.name())
+					|| LispNames.JAVA_STATIC_QUALIFIED.equals(head.name())
+					|| LispNames.JAVA_FIELD_QUALIFIED.equals(head.name()))) {
+				return true;
+			}
+			if (asksJavaForAnArray(cons.car())) {
 				return true;
 			}
 			val = cons.cdr();

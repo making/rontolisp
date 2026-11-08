@@ -279,19 +279,27 @@ class JavaInteropTest {
 				""").print()).isEqualTo("(\"1\" \"1/2\" \"3\")");
 	}
 
-	// A returned Java array surfaces as a Lisp list, and a list marshals back into an
-	// array parameter -- Arrays.copyOf(int[], int) round-trips both directions.
+	// A returned Java array answers the typed array it stands for -- a vector here --
+	// and carries its component, so a list marshals back into an array parameter:
+	// Arrays.copyOf(int[], int) round-trips both directions. A Java method's writes into
+	// a passed array are written back (fill then the array).
 	@Test
 	void arrayRoundTripsThroughCopyOf() {
-		assertThat(eval("(java:static \"java.util.Arrays\" \"copyOf\" (list 1 2 3) 2)").print()).isEqualTo("(1 2)");
+		assertThat(eval("(java:static \"java.util.Arrays\" \"copyOf\" (list 1 2 3) 2)").print()).isEqualTo("#(1 2)");
+		assertThat(eval("""
+				(let ((a (java:static "java.util.Arrays" "copyOf" (list 1 2) 2)))
+				  (java:static "java.util.Arrays" "fill" a 9)
+				  a)
+				""").print()).isEqualTo("#(9 9)");
 	}
 
-	// A returned primitive array unmarshals element-wise; the IntStream implementation
-	// class is JDK-internal, so this also exercises the accessible-method resolution.
+	// A returned primitive array unmarshals element-wise into a vector; the IntStream
+	// implementation class is JDK-internal, so this also exercises the accessible-method
+	// resolution.
 	@Test
-	void returnedPrimitiveArrayUnmarshalsToList() {
+	void returnedPrimitiveArrayUnmarshalsToVector() {
 		assertThat(eval("(java:call (java:call (java:new \"java.lang.StringBuilder\" \"ab\") \"chars\") \"toArray\")")
-			.print()).isEqualTo("(97 98)");
+			.print()).isEqualTo("#(97 98)");
 	}
 
 	// An interface method a non-public class inherits from a non-public superclass
@@ -578,7 +586,7 @@ class JavaInteropTest {
 				(print (java:static "java.lang.Long" "valueOf" 7))
 				(print (java:call (java:static "java.util.regex.Pattern" "compile" ",") "split" "a,b"))
 				(print (java:call (java:new "java.util.ArrayList") "add" nil))
-				""")).isEqualTo("#\\b\nT\n#\\a\nT\n1.5\n7\n(\"a\" \"b\")\nT");
+				""")).isEqualTo("#\\b\nT\n#\\a\nT\n1.5\n7\n#(\"a\" \"b\")\nT");
 	}
 
 	// An interface has Object's public methods as members, which Class.getMethods() of

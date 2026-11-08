@@ -56,12 +56,12 @@ Lisp の値も `java:call` の receiver になり、`Object` 引数に渡した�
 | 名前が `false` のシンボル | `boolean` の false、任意の参照には `Boolean.FALSE` | `:java-false` の後では Java の false |
 | `java` オブジェクト | ラップされたホストオブジェクト | その他のオブジェクト → `java` オブジェクト |
 | 関数/ラムダ | 一致するインターフェースに対する `java:proxy`、`:functional` の後ではその抽象メソッドの実装。`Object` が期待される箇所では `:functional :java-false` の後で関数そのものであるオブジェクト (引数に限る) | — |
-| 真リスト / ベクタ (特殊化されたものも含む) | `T[]` (要素ごとに変換、プリミティブ配列も可)、または `List`/`Collection`/`Iterable` | 任意の Java 配列 → リスト (`:octets` の後では `byte[]` → `(unsigned-byte 8)` のベクタ) |
+| 真リスト / ベクタ (特殊化されたものも含む) | `T[]` (要素ごとに変換、プリミティブ配列も可)、または `List`/`Collection`/`Iterable` | 任意の Java 配列 → 要素のベクタ (要素型を記憶する。`:octets` のない `byte[]` は符号付きバイトのリスト、`:octets` の後では `(unsigned-byte 8)` のベクタ) |
 | ハッシュテーブル | 新しい `java.util.LinkedHashMap` (`Map`、`HashMap`、`Object` など) | — |
 | `java:handle` | Java からはテキストに見えるオブジェクト | 代理する値 |
 | `java:view` | 要素を持つ読み取り専用の `List`・`Set`・`Map` (`List` のビューは、そのまま受け取る引数がないときに限り要素の配列。`:bytes` のビューはオクテットの `byte[]`) | 代理する値 |
 
-Java の `null` (および `void` メソッド) は `nil` として返ります。Java の配列が期待される箇所に真リスト (または `make-array` で作ったランク 1 の配列。`double-float`、`single-float`、`bfloat16`、`(unsigned-byte 8|16|32)` に特殊化された配列も含む) を渡すと、要素ごとに要素型へ変換されます (`int[]` などのプリミティブ配列も含む)。`List`/`Collection`/`Iterable` が期待される箇所では `java.util.List` になり、ネストしたリストは再帰的に変換されます。逆方向では、Java の **配列** の結果は Lisp のリストになりますが、返された `java.util.List` は不透明な `java` オブジェクトのままで、そのメソッドを呼び出して操作します。
+Java の `null` (および `void` メソッド) は `nil` として返ります。Java の配列が期待される箇所に真リスト (または `make-array` で作ったランク 1 の配列。`double-float`、`single-float`、`bfloat16`、`(unsigned-byte 8|16|32)` に特殊化された配列も含む) を渡すと、要素ごとに要素型へ変換されます (`int[]` などのプリミティブ配列も含む)。`List`/`Collection`/`Iterable` が期待される箇所では `java.util.List` になり、ネストしたリストは再帰的に変換されます。逆方向では、Java の **配列** の結果は要素のベクタになり、要素型を記憶するので、その配列型として再び渡ります (`:octets` のない `byte[]` は符号付きバイトのリストのまま)。返された `java.util.List` は不透明な `java` オブジェクトのままで、そのメソッドを呼び出して操作します。Java メソッドが配列引数へ書き込んだ値は、メソッドの復帰時にベクタへコピーされます。
 
 ```lisp
 ;; in: the list becomes a Collection
@@ -69,9 +69,11 @@ Java の `null` (および `void` メソッド) は `nil` として返ります�
 ```
 
 ```lisp
-;; in: (1 2 3) -> int[]; out: the int[] result -> a list
-(java:static "java.util.Arrays" "copyOf" (list 1 2 3) 2)   ; => (1 2)
+;; in: (1 2 3) -> int[]; out: the int[] result -> a vector
+(java:static "java.util.Arrays" "copyOf" (list 1 2 3) 2)   ; => #(1 2)
 ```
+
+[Clojure の型付き配列](../clojure/reference/int-array.md) は、それが表す配列として渡ります。`object-array` は `Object[]`、`int-array` は `int[]` です。そのため `(java.util.Arrays/copyOf (object-array [1 2]) 3)` は `nil` で埋めた `Object[]` を答え、数のリストが選ぶ `long[]` にはなりません。
 
 bignum は、`java.math.BigInteger` (または `Number`、`Object` などその上位型) が期待される箇所に `BigInteger` として渡り、それより狭い型には渡りません。`long` にも `double` にもならないので、`double` が必要なら先に `float` で変換してください。fixnum は決して `BigInteger` パラメータには渡りません (`int` や `long` のオーバーロードが受けます)。逆方向では、`java.math.BigInteger` の結果は `java` オブジェクトではなく Lisp の整数になるため、`java:call` ではなく Lisp の演算で扱ってください。
 
@@ -136,7 +138,7 @@ Java の false は Common Lisp 唯一の偽である `nil` として返ります
 
 ### バイト列を受け取る: `:octets`
 
-Java の配列はリストとして返るので、`byte[]` は符号付きバイトのリストになります。`:octets` で終わる `java:new`・`java:call`・`java:static`・`java:field` は、`byte[]` (結果、フィールドの値、返した配列の要素) を、そのオクテットを持つ `(unsigned-byte 8)` のベクタとして返します。ほかのマーカーとの順序は問いません。このベクタは、インタプリタでもコンパイル済みプログラムでも Java の配列そのものです。そのため Java が後からこの配列へ書き込んだ値 (`ByteBuffer` の `array()` へバッファが書き込む値など) もベクタから読め、同じ配列を 2 度受け取ると 2 つは `eq` になります。Java へ `byte[]` を渡すには [`:bytes` のビュー](#views-javaview)を使います。
+`:octets` のない `byte[]` は符号付きバイトのリストとして返ります (それ以外の配列はベクタです)。`:octets` で終わる `java:new`・`java:call`・`java:static`・`java:field` は、`byte[]` (結果、フィールドの値、返した配列の要素) を、そのオクテットを持つ `(unsigned-byte 8)` のベクタとして返します。ほかのマーカーとの順序は問いません。このベクタは、インタプリタでもコンパイル済みプログラムでも Java の配列そのものです。そのため Java が後からこの配列へ書き込んだ値 (`ByteBuffer` の `array()` へバッファが書き込む値など) もベクタから読め、同じ配列を 2 度受け取ると 2 つは `eq` になります。Java へ `byte[]` を渡すには [`:bytes` のビュー](#views-javaview)を使います。
 
 ```lisp
 (let ((md (java:static "java.security.MessageDigest" "getInstance" "MD5")))

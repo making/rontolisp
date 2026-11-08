@@ -300,7 +300,9 @@ final class JavaInterop {
 				: marshalArguments(overload, args, caller);
 		try {
 			Constructor<?> constructor = (Constructor<?>) executable(overload);
-			return unmarshal(constructor.newInstance(handed), caller);
+			Object made = constructor.newInstance(handed);
+			writeBackArrays(args, overload, handed, caller);
+			return unmarshal(made, caller);
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("constructing " + name, ex);
@@ -373,7 +375,9 @@ final class JavaInterop {
 				: marshalArguments(overload, args, caller);
 		try {
 			Method method = (Method) executable(overload);
-			return unmarshal(method.invoke(receiver, handed), caller);
+			Object answer = method.invoke(receiver, handed);
+			writeBackArrays(args, overload, handed, caller);
+			return unmarshal(answer, caller);
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail("calling " + type.name() + "." + overload.executable().name(), ex);
@@ -814,10 +818,15 @@ final class JavaInterop {
 						: marshalCheckedArguments(overload, taken, caller, what);
 		try {
 			java.lang.reflect.Executable reflected = ((ReflectiveJavaClasses.Member) executable).executable();
+			Object answer;
 			if (reflected instanceof Constructor<?> constructor) {
-				return unmarshal(constructor.newInstance(javaArgs), caller);
+				answer = constructor.newInstance(javaArgs);
 			}
-			return unmarshal(((Method) reflected).invoke(target, javaArgs), caller);
+			else {
+				answer = ((Method) reflected).invoke(target, javaArgs);
+			}
+			writeBackArrays(taken, overload, javaArgs, caller);
+			return unmarshal(answer, caller);
 		}
 		catch (ReflectiveOperationException ex) {
 			throw fail(executable.isConstructor() ? "constructing " + className
@@ -1693,7 +1702,9 @@ final class JavaInterop {
 			}
 			default -> {
 				List<LispVal> elements = sequenceElements(value);
-				return elements != null ? marshalSequence(elements, target, caller, out, index, proxies) : NO_MATCH;
+				return elements != null
+						? marshalSequence(elements, target, caller, out, index, proxies, javaComponentOf(value))
+						: NO_MATCH;
 			}
 		}
 	}
@@ -1826,12 +1837,21 @@ final class JavaInterop {
 	// java.util.List of boxed elements. The per-element costs count toward the total so
 	// string elements still prefer a String[] parameter over Object[].
 	private static int marshalSequence(List<LispVal> elements, JavaType target, Caller caller, @Nullable Object[] out,
-			int index, boolean proxies) {
+			int index, boolean proxies, @Nullable String javaComponent) {
 		@Nullable Object[] slot = new @Nullable Object[1];
 		JavaType component = target.componentType();
 		if (component != null) {
+			// A value that IS a Java array (a Clojure typed array, or one a java: call
+			// answered) crosses only where its array type fits: Object[] to Object[] and
+			// to
+			// a supertype array, Object[] never to long[]. Without the stamp the element
+			// costs decide, which is what a plain list or vector does.
+			int componentCost = arrayComponentCost(javaComponent, target);
+			if (componentCost == NO_MATCH) {
+				return NO_MATCH;
+			}
 			Object array = Array.newInstance(classOf(component), elements.size());
-			int total = JavaOverloads.COST_CONVERT;
+			int total = javaComponent != null ? componentCost : JavaOverloads.COST_CONVERT;
 			for (int i = 0; i < elements.size(); i++) {
 				int cost = marshal(elements.get(i), component, caller, slot, 0, proxies);
 				if (cost == NO_MATCH) {
@@ -1878,7 +1898,8 @@ final class JavaInterop {
 		if (items == null) {
 			return NO_MATCH;
 		}
-		int cost = marshalSequence(items, target, caller, out, index, proxies);
+		int cost = marshalSequence(items, target, caller, out, index, proxies,
+				view.value() instanceof LispVal inner ? javaComponentOf(inner) : null);
 		return cost == NO_MATCH ? NO_MATCH : cost - JavaOverloads.COST_CONVERT + JavaOverloads.COST_VIEW_ARRAY;
 	}
 
@@ -2291,7 +2312,124 @@ final class JavaInterop {
 			case Character c -> new LispChar(c);
 			case String s -> new LispString(s);
 			case byte[] bytes when octets -> octetVector(bytes);
-			default -> o.getClass().isArray() ? arrayToList(o, javaFalse, octets) : new LispJavaObject(o);
+			// A byte[] without :octets keeps the list of signed bytes a java: call has
+			// always answered (the byte-array family's own representation is the
+			// :octets vector); every other array answers the Clojure typed array it
+			// stands for -- a rank-1 vector of its unmarshalled elements, stamped with
+			// its component so a later java: call passes the array type it really is
+			// (clojure/ClojureInteropLowering; %clojure-object-array and friends).
+			case byte[] bytes -> arrayToList(bytes, javaFalse, octets);
+			default -> o.getClass().isArray() ? arrayToVector(o, javaFalse, octets) : new LispJavaObject(o);
+		};
+	}
+
+	// The Clojure typed array a Java array answers as: a rank-1 general array of its
+	// unmarshalled elements, stamped with the component type's Java name
+	// (%array-java-component). The oracle's Object[]/int[]/... is a vector here, as
+	// object-array's is; the stamp is what makes the round trip pass Object[] where
+	// Object[] is expected instead of the primitive array the element costs would
+	// choose.
+	private static LispArray arrayToVector(Object array, boolean javaFalse, boolean octets) {
+		int length = Array.getLength(array);
+		LispVal[] data = new LispVal[length];
+		for (int i = 0; i < length; i++) {
+			data[i] = unmarshal(Array.get(array, i), javaFalse, octets);
+		}
+		LispArray vector = new LispArray(new int[] { length }, data);
+		vector.setJavaComponent(array.getClass().getComponentType().getName());
+		return vector;
+	}
+
+	// The Java array component a Lisp value stands for: its own stamp, or the stamp of
+	// the vector a Clojure front end java:view was made over (every argument of a Clojure
+	// java: call crosses as such a view). Null for a plain list or vector.
+	private static @Nullable String javaComponentOf(LispVal value) {
+		return switch (value) {
+			case LispArray array -> array.javaComponent();
+			case LispJavaObject obj when obj.ref() instanceof RontoJavaListView view
+					&& view.value() instanceof LispVal inner ->
+				javaComponentOf(inner);
+			default -> null;
+		};
+	}
+
+	// What an array target costs a value stamped with the Java component `javaComponent`:
+	// exact for the same array type, WIDEN where an Object[] is expected (an array of any
+	// reference component fits it), NO_MATCH for anything else -- an Object[] never
+	// crosses as long[]. A value with no stamp costs COST_CONVERT, the element-wise
+	// conversion a plain list or vector has always had (the element costs are added by
+	// the
+	// caller). The component names are compared, not the classes: the direct-site cost
+	// functions compare the same names in bytecode, so the four backends choose alike.
+	private static int arrayComponentCost(@Nullable String javaComponent, JavaType target) {
+		if (javaComponent == null || !target.isArray()) {
+			return JavaOverloads.COST_CONVERT;
+		}
+		JavaType component = target.componentType();
+		if (component == null) {
+			return JavaOverloads.COST_CONVERT;
+		}
+		String name = component.name();
+		if (javaComponent.equals(name)) {
+			return JavaOverloads.COST_EXACT;
+		}
+		return "java.lang.Object".equals(name) && javaComponent.indexOf('.') >= 0 ? JavaOverloads.COST_WIDEN : NO_MATCH;
+	}
+
+	// After a call, copies what Java stored into an array argument back into the Clojure
+	// typed array it was marshalled from: the copy the crossing makes is written back
+	// when
+	// the member (or a constructor) returns or throws, so the program reads what Java
+	// wrote -- the round trip the todo's object-array case needs. Only a value stamped
+	// with a Java component writes back; a plain list or vector has no identity to keep.
+	private static void writeBackArrays(List<LispVal> args, JavaOverloads.Overload overload, @Nullable Object[] handed,
+			Caller caller) {
+		if (handed == null) {
+			return;
+		}
+		List<? extends JavaType> params = overload.executable().parameterTypes();
+		int fixed = overload.packed() ? params.size() - 1 : params.size();
+		for (int i = 0; i < fixed && i < args.size(); i++) {
+			writeBackArray(args.get(i), params.get(i), handed[i], caller);
+		}
+		if (overload.packed() && !params.isEmpty()) {
+			JavaType component = params.get(fixed).componentType();
+			Object packed = handed[fixed];
+			if (component != null && packed != null) {
+				for (int i = fixed; i < args.size(); i++) {
+					writeBackArray(args.get(i), component, Array.get(packed, i - fixed), caller);
+				}
+			}
+		}
+	}
+
+	private static void writeBackArray(LispVal value, JavaType target, @Nullable Object javaArray, Caller caller) {
+		if (javaArray == null || !target.isArray()) {
+			return;
+		}
+		LispArray array = stampedArray(value);
+		if (array == null || array.javaComponent() == null || array.dimensions().length != 1) {
+			return;
+		}
+		if (arrayComponentCost(array.javaComponent(), target) == NO_MATCH) {
+			return;
+		}
+		JavaMarkers markers = caller.markers();
+		int length = Math.min(Array.getLength(javaArray), array.dimensions()[0]);
+		for (int i = 0; i < length; i++) {
+			array.writeFlat(i, unmarshal(Array.get(javaArray, i), markers.javaFalse(), markers.octets()));
+		}
+	}
+
+	// The typed array a value is, through the Clojure front end's java:view of one, or
+	// null for a value that is no stamped array.
+	private static @Nullable LispArray stampedArray(LispVal value) {
+		return switch (value) {
+			case LispArray array -> array;
+			case LispJavaObject obj when obj.ref() instanceof RontoJavaListView view
+					&& view.value() instanceof LispArray inner ->
+				inner;
+			default -> null;
 		};
 	}
 

@@ -2261,6 +2261,19 @@ public final class LispNames {
 	public static final String ARRAY_ADOPT_ELEMENT_TYPE = "%ARRAY-ADOPT-ELEMENT-TYPE";
 
 	/**
+	 * The {@code %array-java-component} internal built-in function, the Clojure front
+	 * end's record of the Java array a vector stands for:
+	 * {@code (%array-java-component array)} answers the component type's Java name
+	 * ({@code "int"}, {@code "java.lang.Object"}) or nil for a vector that is no Java
+	 * array, and {@code (%array-java-component array name)} remembers {@code name} (nil
+	 * forgets it) and returns {@code array}. A {@code java:} member's argument reads it
+	 * to select the array type the value really is, so an {@code object-array} crosses as
+	 * {@code Object[]} rather than as the primitive array its elements would otherwise
+	 * choose. No wasm backend has a host, so there the stamp is a no-op.
+	 */
+	public static final String ARRAY_JAVA_COMPONENT = "%ARRAY-JAVA-COMPONENT";
+
+	/**
 	 * The {@code fill-pointer} built-in function (the fill pointer of a vector). Also a
 	 * {@code setf} place (target {@link #SET_FILL_POINTER}).
 	 */

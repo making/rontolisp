@@ -84,7 +84,7 @@ Arguments and results are converted between rontolisp and Java automatically:
 | the symbol named `false` | `boolean` false, `Boolean.FALSE` for any reference | after `:java-false`, Java's false |
 | a `java` object | the wrapped host object | any other object → a `java` object |
 | a function/lambda | a `java:proxy` over the matching interface, or after `:functional` an implementation of its abstract methods; where `Object` is expected, after `:functional :java-false`, the object it is (an argument only) | — |
-| a proper list / a vector (specialized too) | `T[]` (element-wise, incl. primitives), or `List`/`Collection`/`Iterable` | any Java array → a list (after `:octets`, a `byte[]` → an `(unsigned-byte 8)` vector) |
+| a proper list / a vector (specialized too) | `T[]` (element-wise, incl. primitives), or `List`/`Collection`/`Iterable` | any Java array → a vector of its elements, stamped with its component (a byte array without `:octets` → a list of signed bytes; after `:octets`, a `byte[]` → an `(unsigned-byte 8)` vector) |
 | a hash table | a fresh `java.util.LinkedHashMap` (`Map`, `HashMap`, `Object`, ...) | — |
 | a `java:handle` | an object Java sees as its text | the value it stands for |
 | a `java:view` | a read-only `List`, `Set` or `Map` of its items (a `List` view: an array of them where nothing takes it whole; a `:bytes` view: the `byte[]` of its octets) | the value it stands for |
@@ -95,8 +95,11 @@ rank-1 array made with `make-array`, a specialized one included (`double-float`,
 converted element-wise to the component type (including primitive arrays like
 `int[]`), and where a `List`/`Collection`/`Iterable` is expected it becomes a
 `java.util.List`; nested lists convert recursively. In the other direction a
-Java **array** result becomes a Lisp list, while a returned `java.util.List`
-stays an opaque `java` object whose methods you call:
+Java **array** result becomes a vector of its elements that remembers its
+component type, so it crosses back as that array type -- a `byte[]` without
+`:octets` stays a list of signed bytes -- while a returned `java.util.List`
+stays an opaque `java` object whose methods you call. A Java method's writes
+into an array argument are copied back into the vector when it returns.
 
 ```lisp
 ;; in: the list becomes a Collection
@@ -104,9 +107,14 @@ stays an opaque `java` object whose methods you call:
 ```
 
 ```lisp
-;; in: (1 2 3) -> int[]; out: the int[] result -> a list
-(java:static "java.util.Arrays" "copyOf" (list 1 2 3) 2)   ; => (1 2)
+;; in: (1 2 3) -> int[]; out: the int[] result -> a vector
+(java:static "java.util.Arrays" "copyOf" (list 1 2 3) 2)   ; => #(1 2)
 ```
+
+A [Clojure typed array](../clojure/reference/int-array.md) crosses as the array it
+stands for -- an `object-array` as `Object[]`, an `int-array` as `int[]` -- so
+`(java.util.Arrays/copyOf (object-array [1 2]) 3)` answers an `Object[]` padded
+with `nil`, not the `long[]` a list of numbers would select.
 
 A bignum is passed as a `java.math.BigInteger` where one (or a supertype such as
 `Number` or `Object`) is expected, and nowhere narrower: not as a `long`, and not
@@ -205,7 +213,8 @@ holds, to hand Java inside a collection or as a function's answer.
 
 ### Octets back: `:octets`
 
-A Java array comes back as a list, so a `byte[]` is a list of signed bytes. A `java:new`,
+A `byte[]` without `:octets` comes back as a list of signed bytes (any other array is a
+vector). A `java:new`,
 `java:call`, `java:static` or `java:field` ending in `:octets` answers a `byte[]` -- the
 result, a field's value, an element of an array it answers -- as an `(unsigned-byte 8)` vector
 of its octets instead, beside the other markers in any order. The vector is Java's array

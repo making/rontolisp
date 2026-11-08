@@ -2869,7 +2869,7 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   without the oracle's futures. The host stream is a param-tagged construction
   (`(^[] java.io.ByteArrayOutputStream/new)`), which the io lowering leaves to `java:new`,
   since `ByteArrayOutputStream.` makes the byte-array family's stream. `:out-enc :bytes`
-  answers `(byte-array (.toByteArray out))`: a host `byte[]` crosses back as a Lisp list
+  answers `(byte-array (.toByteArray out))`: a host `byte[]` crosses back as a Lisp vector
   (empty: nil, todo `f13`). Oracle-identical on the interpreter and the JVM:
   `ClojureInteropTest#clojureJavaShellRunsAHostProcessLikeTheOracle`.
 - `clojure.reflect` (2026-10-29, for tools.analyzer.jvm's `jvm.utils`): Clojure source over
@@ -3461,6 +3461,16 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   `boolean` the booleans. A reference component takes nil, `Object` all,
   `Number` the numbers, `CharSequence` the strings, any other class its own
   members (`array element type mismatch` else).
+- **The Java crossing** (2026-11-08, j25): a typed array is stamped with the Java
+  array component it stands for (`%array-java-component`, `LispArray.javaComponent`
+  on the interpreter, header slot 4 compiled, a no-op on wasm), so a `java:` member
+  takes it as the array it is -- `object-array` as `Object[]`, `int-array` as
+  `int[]`, never the primitive array its element costs would choose -- and a Java
+  array a member answers is the same stand-in stamped the same way. The write-back of
+  what Java stores into an array argument is in `.kb/java-interop.md`, "Java arrays and
+  Clojure typed arrays". Pins: clojure-spec
+  `a-java-array-answers-a-typed-array-and-crosses-back-as-its-component` (interpreter
+  and JVM; host-only).
 - **Pins**: clojure-spec
   `object-array-to-array-and-into-array-answer-vectors`,
   `typed-array-constructors-coerce-like-the-oracles`,
@@ -5775,7 +5785,7 @@ host alone answers ("Host arms where the host is not").
   supported`; after, `[1 2]`, `true`, `1`, UOE, UOE as the oracle. Deviations (user doc): a
   read-only view's mutator throws only when it would change something (`.remove` of an absent
   key, `.clear` of an empty vector answer; the oracle always throws); `.toArray` answers a
-  list (a Java array a call answers is unmarshalled). Pins:
+  vector (a Java array a call answers is the typed array it stands for). Pins:
   `ClojureInteropTest#aMethodNoRowNamesReachesTheValuesJavaObject`,
   `#collectionKeywordSymbolAndRatioReceiversAnswerTheirCommonMethods` (`.hashCode2`, `.reduce`),
   `ClojureWasmInteropRefusalTest#aMethodOfAValuesJavaObjectIsUnsupportedOnBothBackends`, the

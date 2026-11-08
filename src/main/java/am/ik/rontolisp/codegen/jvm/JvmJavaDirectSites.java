@@ -136,6 +136,23 @@ final class JvmJavaDirectSites {
 	static final String ARRAY_TO_LIST = "_jarr";
 
 	/**
+	 * {@code _jwb(Object value, Object javaArg)Object}: after a member returns, copies
+	 * what Java stored into an array argument back into the Clojure typed array it was
+	 * marshalled from, so the program reads what Java wrote. A value with no component
+	 * stamp, or an argument that is no array, is left alone.
+	 */
+	static final String WRITE_BACK = "_jwb";
+
+	/**
+	 * {@code _jcomp(Object)Ljava/lang/String;}: the Java array component the Lisp vector
+	 * (or the {@code java:view} of one) stands for, or null -- header slot 4 of a
+	 * non-displaced array long enough to have one, the stamp
+	 * {@code %array-java-component} writes. The cost functions read it so a typed array
+	 * chooses its own array type instead of the primitive array its element costs would.
+	 */
+	static final String JAVA_COMPONENT = "_jcomp";
+
+	/**
 	 * {@code _junf(Object)Object}: {@link #UNMARSHAL} at a call ending in
 	 * {@code :java-false}, which answers Java's {@code false} as {@code |false|}.
 	 */
@@ -389,6 +406,16 @@ final class JvmJavaDirectSites {
 	private @Nullable MethodRefEntry host;
 
 	private @Nullable MethodRefEntry lispArray;
+
+	private @Nullable MethodRefEntry javaComponent;
+
+	/**
+	 * The {@code _jwb*} write-back helpers, by markers: {@code _jwb}, {@code _jwbf},
+	 * {@code _jwbo}, {@code _jwbf o}.
+	 */
+	private static final String[] WRITE_BACKS = { "_jwb", "_jwbf", "_jwbo", "_jwbao" };
+
+	private final @Nullable MethodRefEntry[] writeBacks = new MethodRefEntry[WRITE_BACKS.length];
 
 	private @Nullable MethodRefEntry lispTable;
 
@@ -1239,6 +1266,43 @@ final class JvmJavaDirectSites {
 	}
 
 	/**
+	 * The component stamp of a Lisp vector (or the {@code java:view} of one), shared as
+	 * {@link #lispArray()} is. Built on first use.
+	 * @return {@code _jcomp(Object)Ljava/lang/String;}
+	 */
+	MethodRefEntry javaComponent() {
+		MethodRefEntry ref = this.javaComponent;
+		if (ref == null) {
+			Utf8Entry name = this.cp.utf8Entry(JAVA_COMPONENT);
+			Utf8Entry desc = this.cp.utf8Entry("(Ljava/lang/Object;)Ljava/lang/String;");
+			ref = this.cp.methodRef(this.thisClass, name, desc);
+			this.javaComponent = ref;
+			this.methods.add(buildJavaComponent(name, desc));
+		}
+		return ref;
+	}
+
+	/**
+	 * The array write-back of the site's markers, shared as {@link #lispArray()} is.
+	 * Built on first use.
+	 * @param javaFalse whether Java's false answers as {@code |false|}
+	 * @param octets whether a {@code byte[]} answers as an octet vector
+	 * @return {@code _jwb(Object,Object)Object}
+	 */
+	MethodRefEntry writeBack(boolean javaFalse, boolean octets) {
+		int index = unmarshalIndex(javaFalse, octets);
+		MethodRefEntry ref = this.writeBacks[index];
+		if (ref == null) {
+			Utf8Entry name = this.cp.utf8Entry(WRITE_BACKS[index]);
+			Utf8Entry desc = this.cp.utf8Entry("(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+			ref = this.cp.methodRef(this.thisClass, name, desc);
+			this.writeBacks[index] = ref;
+			this.methods.add(buildWriteBack(name, desc, unmarshal(javaFalse, octets)));
+		}
+		return ref;
+	}
+
+	/**
 	 * The one test a {@code java:} program tells a Lisp hash table from a host value by,
 	 * shared as {@link #lispArray()} is. Built on first use.
 	 * @return {@code _jltab(Object)Z}
@@ -1446,6 +1510,12 @@ final class JvmJavaDirectSites {
 			int stackForCall;
 			@Nullable JavaType resultType;
 			String failure;
+			// The call's parameters and converted argument locals, for the array
+			// write-back after it returns (null where nothing was converted).
+			@Nullable List<? extends JavaType> callParams = null;
+			boolean callPacked = false;
+			int callFirstValue = 0;
+			int @Nullable [] callConverted = null;
 			// A dispatched site returns from each arm.
 			JavaField resolvedField = this.site.field();
 			if (resolvedField != null) {
@@ -1469,9 +1539,14 @@ final class JvmJavaDirectSites {
 				// the
 				// member cannot take fails as it did.
 				JavaExecutable executable = Objects.requireNonNull(this.site.executable());
-				int[] converted = emitArgumentsUnchecked(executable, hasReceiver ? 1 : 0);
+				int firstValue = hasReceiver ? 1 : 0;
+				int[] converted = emitArgumentsUnchecked(executable, firstValue);
 				stackForCall = emitInvoke(executable, converted, hasReceiver, memberFailed);
 				resultType = executable.isConstructor() ? this.type : executable.returnType();
+				callParams = executable.parameterTypes();
+				callPacked = this.site.packed();
+				callFirstValue = firstValue;
+				callConverted = converted;
 				failure = executable.isConstructor() ? "error constructing " + this.type.name() + ": "
 						: "error calling " + this.type.name() + "." + executable.name() + ": ";
 			}
@@ -1494,11 +1569,18 @@ final class JvmJavaDirectSites {
 				stackForCall = emitInvoke(executable, converted, hasReceiver, memberFailed);
 				handle(convertStart, this.a.newBoundLabel(), memberFailed, "java/lang/Throwable");
 				resultType = executable.isConstructor() ? this.type : executable.returnType();
+				callParams = executable.parameterTypes();
+				callPacked = this.site.packed();
+				callFirstValue = firstValue;
+				callConverted = converted;
 				failure = executable.isConstructor() ? "error constructing " + this.type.name() + ": "
 						: "error calling " + this.type.name() + "." + executable.name() + ": ";
 			}
 			if (resultType != null) {
 				emitUnmarshal(resultType);
+				if (callParams != null && callConverted != null) {
+					emitWriteBacks(callParams, callPacked, callFirstValue, callConverted);
+				}
 				this.a.areturn();
 			}
 			// The handlers.
@@ -2020,6 +2102,7 @@ final class JvmJavaDirectSites {
 				int[] converted = emitConverted(overload, firstValue);
 				stack = Math.max(stack, emitInvoke(executable, converted, hasReceiver, memberFailed));
 				emitUnmarshal(executable.isConstructor() ? this.type : executable.returnType());
+				emitWriteBacks(executable.parameterTypes(), overload.packed(), firstValue, converted);
 				a.areturn();
 				if (!last) {
 					a.labelBinding(nextArm);
@@ -2154,6 +2237,25 @@ final class JvmJavaDirectSites {
 				converted[fixed] = array;
 			}
 			return converted;
+		}
+
+		/**
+		 * Copies what Java stored into an array argument back into the Clojure typed
+		 * array it was marshalled from, for every fixed argument whose parameter is an
+		 * array (a varargs tail is skipped: its array is not one Lisp value). The answer
+		 * stays on the stack, untouched.
+		 */
+		private void emitWriteBacks(List<? extends JavaType> params, boolean packed, int firstValue, int[] converted) {
+			int fixed = packed ? params.size() - 1 : params.size();
+			for (int j = 0; j < fixed; j++) {
+				if (!params.get(j).isArray()) {
+					continue;
+				}
+				this.a.aload(this.valueSlots[firstValue + j]);
+				this.a.aload(converted[j]);
+				this.a.invokestatic(writeBack(this.site.javaFalse(), this.site.octets()));
+				this.a.pop();
+			}
 		}
 
 	}
@@ -4205,15 +4307,23 @@ final class JvmJavaDirectSites {
 		}
 		JavaType element = sequenceElement(target);
 		if (element != null) {
-			MethodCode.Label sequenceValue = a.newLabel();
+			MethodCode.Label arrayValue = a.newLabel();
+			MethodCode.Label consValue = a.newLabel();
 			MethodCode.Label notSequence = a.newLabel();
 			a.iload(code);
 			a.loadConstant(KIND_CONS);
-			a.if_icmpeq(sequenceValue);
+			a.if_icmpeq(consValue);
 			a.iload(code);
 			a.loadConstant(KIND_ARRAY);
 			a.if_icmpne(notSequence);
-			a.labelBinding(sequenceValue);
+			a.labelBinding(arrayValue);
+			// A stamped typed array chooses its own array type (a Java array's
+			// component),
+			// not the primitive array its element costs would.
+			emitStampedArrayCost(a, target);
+			emitSummedCost(a, sequence(), target.isArray() ? JavaOverloads.COST_CONVERT : JavaOverloads.COST_BOXED,
+					cost(element, functions));
+			a.labelBinding(consValue);
 			emitSummedCost(a, sequence(), target.isArray() ? JavaOverloads.COST_CONVERT : JavaOverloads.COST_BOXED,
 					cost(element, functions));
 			a.labelBinding(notSequence);
@@ -4296,6 +4406,9 @@ final class JvmJavaDirectSites {
 			a.ireturn();
 		}
 		else {
+			// A typed array's component stamp decides the array it fits (the view stands
+			// for it); an unstamped view keeps the item costs.
+			emitStampedArrayCost(a, target);
 			MethodCode.Label hasItems = a.newLabel();
 			int cost = code + 1;
 			a.aload(0);
@@ -5714,37 +5827,292 @@ final class JvmJavaDirectSites {
 		a.invokevirtual(method("java/lang/String", "substring", "(II)Ljava/lang/String;"));
 	}
 
-	// _jarr(Object)Object: the bridge's arrayToList over every array type (elements
-	// unmarshalled as Array.get would box them), or the value itself when it is no array;
-	// _jarf with javaFalse, a false boolean element |false|; with octets (_jaro, _jafo) a
-	// byte[] -- the value, or as an Object[] element through UNMARSHAL -- an
-	// (unsigned-byte 8) vector: the very array, which is the vector.
+	// _jcomp(Object)Ljava/lang/String;: the Java array component the Lisp vector (or the
+	// java:view of one) stands for, or null. Locals: 0 = value, 1 = the vector, 2 = its
+	// header.
+	private Method buildJavaComponent(Utf8Entry name, Utf8Entry desc) {
+		MethodCode a = new MethodCode();
+		ClassEntry viewClass = cls(JAVA_LIST_VIEW);
+		ClassEntry arrayListClass = cls("java/util/ArrayList");
+		ClassEntry objectArrayClass = cls("[Ljava/lang/Object;");
+		ClassEntry stringClass = cls("java/lang/String");
+		MethodRefEntry getClass = method("java/lang/Object", "getClass", "()Ljava/lang/Class;");
+		MethodRefEntry alGet = method("java/util/ArrayList", "get", "(I)Ljava/lang/Object;");
+		MethodRefEntry alIsEmpty = method("java/util/ArrayList", "isEmpty", "()Z");
+		MethodCode.Label nil = a.newLabel();
+		MethodCode.Label notView = a.newLabel();
+		MethodCode.Label haveVector = a.newLabel();
+		a.aload(0);
+		a.instanceOf(viewClass);
+		a.ifeq(notView);
+		a.aload(0);
+		a.checkcast(viewClass);
+		a.invokevirtual(method(JAVA_LIST_VIEW, "value", "()Ljava/lang/Object;"));
+		a.astore(1);
+		a.goto_(haveVector);
+		a.labelBinding(notView);
+		a.aload(0);
+		a.astore(1);
+		a.labelBinding(haveVector);
+		a.aload(1);
+		a.ifnull(nil);
+		a.aload(1);
+		a.invokevirtual(getClass);
+		a.ldc(arrayListClass);
+		a.if_acmpne(nil);
+		a.aload(1);
+		a.checkcast(arrayListClass);
+		a.invokevirtual(alIsEmpty);
+		a.ifne(nil);
+		a.aload(1);
+		a.checkcast(arrayListClass);
+		a.loadConstant(0);
+		a.invokevirtual(alGet);
+		a.checkcast(objectArrayClass);
+		a.astore(2);
+		a.aload(2);
+		a.arraylength();
+		a.loadConstant(5);
+		a.if_icmplt(nil);
+		a.aload(2);
+		a.loadConstant(3);
+		a.aaload();
+		a.ifnonnull(nil);
+		a.aload(2);
+		a.loadConstant(4);
+		a.aaload();
+		a.instanceOf(stringClass);
+		a.ifeq(nil);
+		a.aload(2);
+		a.loadConstant(4);
+		a.aaload();
+		a.checkcast(stringClass);
+		a.areturn();
+		a.labelBinding(nil);
+		a.aconst_null();
+		a.areturn();
+		return new Method(name, desc, a);
+	}
+
+	// _jwb(Object value, Object javaArg)Object: the post-call write-back. Locals: 0 =
+	// value, 1 = javaArg, 2 = the vector, 3 = its header, 4 = n, 5 = i, 6 = the list, 7 =
+	// an element.
+	private Method buildWriteBack(Utf8Entry name, Utf8Entry desc, MethodRefEntry unmarshal) {
+		MethodCode a = new MethodCode();
+		ClassEntry viewClass = cls(JAVA_LIST_VIEW);
+		ClassEntry arrayListClass = cls("java/util/ArrayList");
+		ClassEntry objectClass = cls("java/lang/Object");
+		ClassEntry objectArrayClass = cls("[Ljava/lang/Object;");
+		ClassEntry stringClass = cls("java/lang/String");
+		ClassEntry longClass = cls("java/lang/Long");
+		MethodRefEntry getClass = method("java/lang/Object", "getClass", "()Ljava/lang/Class;");
+		MethodRefEntry isArray = method("java/lang/Class", "isArray", "()Z");
+		MethodRefEntry alGet = method("java/util/ArrayList", "get", "(I)Ljava/lang/Object;");
+		MethodRefEntry alIsEmpty = method("java/util/ArrayList", "isEmpty", "()Z");
+		MethodRefEntry alClear = method("java/util/ArrayList", "clear", "()V");
+		MethodRefEntry alAdd = method("java/util/ArrayList", "add", "(Ljava/lang/Object;)Z");
+		MethodRefEntry arrayGetLength = method("java/lang/reflect/Array", "getLength", "(Ljava/lang/Object;)I");
+		MethodRefEntry arrayGet = method("java/lang/reflect/Array", "get", "(Ljava/lang/Object;I)Ljava/lang/Object;");
+		MethodCode.Label done = a.newLabel();
+		MethodCode.Label notView = a.newLabel();
+		MethodCode.Label haveVector = a.newLabel();
+		a.aload(1);
+		a.ifnull(done);
+		a.aload(1);
+		a.invokevirtual(getClass);
+		a.invokevirtual(isArray);
+		a.ifeq(done);
+		a.aload(0);
+		a.instanceOf(viewClass);
+		a.ifeq(notView);
+		a.aload(0);
+		a.checkcast(viewClass);
+		a.invokevirtual(method(JAVA_LIST_VIEW, "value", "()Ljava/lang/Object;"));
+		a.astore(2);
+		a.goto_(haveVector);
+		a.labelBinding(notView);
+		a.aload(0);
+		a.astore(2);
+		a.labelBinding(haveVector);
+		a.aload(2);
+		a.ifnull(done);
+		a.aload(2);
+		a.invokevirtual(getClass);
+		a.ldc(arrayListClass);
+		a.if_acmpne(done);
+		a.aload(2);
+		a.checkcast(arrayListClass);
+		a.invokevirtual(alIsEmpty);
+		a.ifne(done);
+		a.aload(2);
+		a.checkcast(arrayListClass);
+		a.loadConstant(0);
+		a.invokevirtual(alGet);
+		a.checkcast(objectArrayClass);
+		a.astore(3);
+		a.aload(3);
+		a.arraylength();
+		a.loadConstant(5);
+		a.if_icmplt(done);
+		a.aload(3);
+		a.loadConstant(3);
+		a.aaload();
+		a.ifnonnull(done);
+		a.aload(3);
+		a.loadConstant(4);
+		a.aaload();
+		a.instanceOf(stringClass);
+		a.ifeq(done);
+		// n = min(Array.getLength(javaArg), dims[0])
+		a.aload(1);
+		a.invokestatic(arrayGetLength);
+		a.istore(4);
+		a.aload(3);
+		a.loadConstant(0);
+		a.aaload();
+		a.checkcast(objectArrayClass);
+		a.loadConstant(0);
+		a.aaload();
+		a.checkcast(longClass);
+		a.invokevirtual(method("java/lang/Long", "intValue", "()I"));
+		a.istore(7);
+		MethodCode.Label dimsFit = a.newLabel();
+		a.iload(4);
+		a.iload(7);
+		a.if_icmple(dimsFit);
+		a.iload(7);
+		a.istore(4);
+		a.labelBinding(dimsFit);
+		// list = (ArrayList) lisp; list.clear(); list.add(new Object[]{dims, null, null,
+		// null, component})
+		a.aload(2);
+		a.checkcast(arrayListClass);
+		a.astore(6);
+		a.aload(6);
+		a.invokevirtual(alClear);
+		a.aload(6);
+		a.loadConstant(5);
+		a.anewarray(objectClass);
+		a.dup();
+		a.loadConstant(0);
+		a.aload(3);
+		a.loadConstant(0);
+		a.aaload();
+		a.aastore();
+		a.dup();
+		a.loadConstant(4);
+		a.aload(3);
+		a.loadConstant(4);
+		a.aaload();
+		a.aastore();
+		a.invokevirtual(alAdd);
+		a.pop();
+		// for (i = 0; i < n; i++) list.add(unmarshal(Array.get(javaArg, i)))
+		a.loadConstant(0);
+		a.istore(5);
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label copied = a.newLabel();
+		a.labelBinding(loop);
+		a.iload(5);
+		a.iload(4);
+		a.if_icmpge(copied);
+		a.aload(6);
+		a.aload(1);
+		a.iload(5);
+		a.invokestatic(arrayGet);
+		a.invokestatic(unmarshal);
+		a.invokevirtual(alAdd);
+		a.pop();
+		a.iinc(5, 1);
+		a.goto_(loop);
+		a.labelBinding(copied);
+		a.labelBinding(done);
+		a.aload(0);
+		a.areturn();
+		return new Method(name, desc, a);
+	}
+
+	// Emits the stamped-array cost of the value in slot 0 against an array TARGET: an
+	// exact match for the same component, WIDEN for an Object[] from a reference
+	// component, NO_MATCH otherwise. A value with no stamp falls through to the caller's
+	// element-wise cost (the names are compared, not the classes, so the four backends
+	// choose alike).
+	private void emitStampedArrayCost(MethodCode a, JavaType target) {
+		JavaType component = target.componentType();
+		if (component == null) {
+			return;
+		}
+		String name = component.name();
+		int stamp = 6;
+		MethodCode.Label unstamped = a.newLabel();
+		MethodCode.Label notExact = a.newLabel();
+		a.aload(0);
+		a.invokestatic(javaComponent());
+		a.astore(stamp);
+		a.aload(stamp);
+		a.ifnull(unstamped);
+		a.aload(stamp);
+		a.ldc(str(name));
+		a.invokevirtual(method("java/lang/String", "equals", "(Ljava/lang/Object;)Z"));
+		a.ifeq(notExact);
+		a.loadConstant(JavaOverloads.COST_EXACT);
+		a.ireturn();
+		a.labelBinding(notExact);
+		if ("java.lang.Object".equals(name)) {
+			MethodCode.Label noMatch = a.newLabel();
+			a.aload(stamp);
+			a.loadConstant('.');
+			a.invokevirtual(method("java/lang/String", "indexOf", "(I)I"));
+			a.iflt(noMatch);
+			a.loadConstant(JavaOverloads.COST_WIDEN);
+			a.ireturn();
+			a.labelBinding(noMatch);
+		}
+		a.loadConstant(JavaOverloads.NO_MATCH);
+		a.ireturn();
+		a.labelBinding(unstamped);
+	}
+
+	// _jarr(Object)Object: a Java array as the Lisp value it answers -- a byte[] without
+	// :octets the list of signed bytes a java: call has always answered, every other
+	// array
+	// the Clojure typed array it stands for: a rank-1 general array (an ArrayList with
+	// its
+	// header) of the elements unmarshalled as Array.get boxes them, header slot 4
+	// stamping
+	// the component type so a later java: call passes the array type it really is.
+	// _jarf with javaFalse; with octets (_jaro, _jafo) a byte[] -- the value, or as an
+	// Object[] element through UNMARSHAL -- an (unsigned-byte 8) vector: the very array,
+	// which is the vector. Anything that is no array stays itself.
 	private Method buildArrayToList(Utf8Entry name, Utf8Entry desc, MethodRefEntry unmarshal, boolean javaFalse,
 			boolean octets) {
 		MethodCode a = new MethodCode();
-		MethodRefEntry longValueOf = method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
-		MethodRefEntry doubleValueOf = method("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");
 		ClassEntry objectClass = cls("java/lang/Object");
+		ClassEntry byteArrayClass = cls("[B");
+		MethodRefEntry longValueOf = method("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
+		MethodRefEntry arrayGetLength = method("java/lang/reflect/Array", "getLength", "(Ljava/lang/Object;)I");
+		MethodRefEntry arrayGet = method("java/lang/reflect/Array", "get", "(Ljava/lang/Object;I)Ljava/lang/Object;");
+		MethodRefEntry getClass = method("java/lang/Object", "getClass", "()Ljava/lang/Class;");
+		MethodRefEntry getComponentType = method("java/lang/Class", "getComponentType", "()Ljava/lang/Class;");
+		MethodRefEntry getName = method("java/lang/Class", "getName", "()Ljava/lang/String;");
+		ClassEntry arrayListClass = cls("java/util/ArrayList");
+		MethodRefEntry alInit = method("java/util/ArrayList", "<init>", "(I)V");
+		MethodRefEntry alAdd = method("java/util/ArrayList", "add", "(Ljava/lang/Object;)Z");
+		MethodCode.Label notBytes = a.newLabel();
+		a.aload(0);
+		a.instanceOf(byteArrayClass);
+		a.ifeq(notBytes);
 		if (octets) {
-			MethodCode.Label notBytes = a.newLabel();
-			a.aload(0);
-			a.instanceOf(cls("[B"));
-			a.ifeq(notBytes);
+			// the byte[] is the octet vector
 			a.aload(0);
 			a.areturn();
-			a.labelBinding(notBytes);
 		}
-		String[] arrays = { "[Ljava/lang/Object;", "[I", "[J", "[D", "[F", "[S", "[B", "[C", "[Z" };
-		for (String array : arrays) {
-			MethodCode.Label next = a.newLabel();
-			a.aload(0);
-			a.instanceOf(cls(array));
-			a.ifeq(next);
-			// result = nil; array = (T[]) value; i = array.length
+		else {
+			// the list of signed bytes, front to back
 			a.aconst_null();
 			a.astore(1);
 			a.aload(0);
-			a.checkcast(cls(array));
+			a.checkcast(byteArrayClass);
 			a.astore(2);
 			a.aload(2);
 			a.arraylength();
@@ -5755,75 +6123,15 @@ final class JvmJavaDirectSites {
 			a.iinc(3, -1);
 			a.iload(3);
 			a.iflt(done);
-			// result = new Object[] { element(i), result }
 			a.loadConstant(2);
 			a.anewarray(objectClass);
 			a.dup();
 			a.loadConstant(0);
 			a.aload(2);
 			a.iload(3);
-			switch (array) {
-				case "[Ljava/lang/Object;" -> {
-					a.aaload();
-					a.invokestatic(unmarshal);
-				}
-				case "[I" -> {
-					a.iaload();
-					a.i2l();
-					a.invokestatic(longValueOf);
-				}
-				case "[J" -> {
-					a.laload();
-					a.invokestatic(longValueOf);
-				}
-				case "[D" -> {
-					a.daload();
-					a.invokestatic(doubleValueOf);
-				}
-				case "[F" -> {
-					a.faload();
-					a.f2d();
-					a.invokestatic(doubleValueOf);
-				}
-				case "[S" -> {
-					a.saload();
-					a.i2l();
-					a.invokestatic(longValueOf);
-				}
-				case "[B" -> {
-					a.baload();
-					a.i2l();
-					a.invokestatic(longValueOf);
-				}
-				case "[C" -> {
-					// A char element is a Character, unmarshalled to int[]{c}.
-					a.caload();
-					a.istore(4);
-					a.loadConstant(1);
-					a.newarray(TypeKind.INT);
-					a.dup();
-					a.loadConstant(0);
-					a.iload(4);
-					a.iastore();
-				}
-				default -> {
-					// boolean[]: t or nil (|false| when javaFalse).
-					MethodCode.Label falseValue = a.newLabel();
-					MethodCode.Label stored = a.newLabel();
-					a.baload();
-					a.ifeq(falseValue);
-					a.ldc(str("T"));
-					a.goto_(stored);
-					a.labelBinding(falseValue);
-					if (javaFalse) {
-						a.ldc(str(LispNames.JAVA_FALSE));
-					}
-					else {
-						a.aconst_null();
-					}
-					a.labelBinding(stored);
-				}
-			}
+			a.baload();
+			a.i2l();
+			a.invokestatic(longValueOf);
 			a.aastore();
 			a.dup();
 			a.loadConstant(1);
@@ -5834,8 +6142,75 @@ final class JvmJavaDirectSites {
 			a.labelBinding(done);
 			a.aload(1);
 			a.areturn();
-			a.labelBinding(next);
 		}
+		a.labelBinding(notBytes);
+		// Anything that is no array stays itself (getComponentType is null only for a
+		// non-array class).
+		MethodCode.Label notArray = a.newLabel();
+		a.aload(0);
+		a.invokevirtual(getClass);
+		a.invokevirtual(getComponentType);
+		a.ifnull(notArray);
+		// n = Array.getLength(value); list = new ArrayList(n + 1)
+		a.aload(0);
+		a.invokestatic(arrayGetLength);
+		a.istore(4);
+		a.new_(arrayListClass);
+		a.dup();
+		a.iload(4);
+		a.loadConstant(1);
+		a.iadd();
+		a.invokespecial(alInit);
+		a.astore(1);
+		// header = new Object[]{ new Object[]{Long.valueOf(n)}, null, null, null,
+		// value.getClass().getComponentType().getName() }; list.add(header)
+		a.loadConstant(5);
+		a.anewarray(objectClass);
+		a.astore(2);
+		a.aload(2);
+		a.loadConstant(0);
+		a.loadConstant(1);
+		a.anewarray(objectClass);
+		a.dup();
+		a.loadConstant(0);
+		a.iload(4);
+		a.i2l();
+		a.invokestatic(longValueOf);
+		a.aastore();
+		a.aastore();
+		a.aload(2);
+		a.loadConstant(4);
+		a.aload(0);
+		a.invokevirtual(getClass);
+		a.invokevirtual(getComponentType);
+		a.invokevirtual(getName);
+		a.aastore();
+		a.aload(1);
+		a.aload(2);
+		a.invokevirtual(alAdd);
+		a.pop();
+		// for (i = 0; i < n; i++) list.add(unmarshal(Array.get(value, i)))
+		a.loadConstant(0);
+		a.istore(3);
+		MethodCode.Label copy = a.newLabel();
+		MethodCode.Label copied = a.newLabel();
+		a.labelBinding(copy);
+		a.iload(3);
+		a.iload(4);
+		a.if_icmpge(copied);
+		a.aload(1);
+		a.aload(0);
+		a.iload(3);
+		a.invokestatic(arrayGet);
+		a.invokestatic(unmarshal);
+		a.invokevirtual(alAdd);
+		a.pop();
+		a.iinc(3, 1);
+		a.goto_(copy);
+		a.labelBinding(copied);
+		a.aload(1);
+		a.areturn();
+		a.labelBinding(notArray);
 		a.aload(0);
 		a.areturn();
 		return new Method(name, desc, a);

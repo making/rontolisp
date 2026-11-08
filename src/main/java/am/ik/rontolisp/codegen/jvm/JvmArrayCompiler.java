@@ -285,6 +285,29 @@ final class JvmArrayCompiler {
 				JvmArrayRuntimeBuilder.ADOPT_ELEMENT_TYPE_DESC);
 	}
 
+	static void compileArrayJavaComponent(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		// (%array-java-component array) reads the Java array component the vector
+		// stands for; (%array-java-component array name) remembers it. The two halves
+		// are one operator so the Clojure front end's aclone can carry a component over
+		// without a second internal name.
+		List<LispVal> args = cons.toList();
+		if (args.size() == 2) {
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.JAVA_COMPONENT,
+					JvmArrayRuntimeBuilder.JAVA_COMPONENT_DESC);
+			return;
+		}
+		if (args.size() == 3) {
+			JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+			JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+			invokeHelper(ctx, className, JvmArrayRuntimeBuilder.SET_JAVA_COMPONENT,
+					JvmArrayRuntimeBuilder.SET_JAVA_COMPONENT_DESC);
+			return;
+		}
+		throw new UnsupportedOperationException(
+				"%array-java-component expects 1 or 2 arguments, got " + (args.size() - 1) + " argument(s)");
+	}
+
 	static void compileArrayDefaultElement(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		// (%array-default-element array): the element an unsupplied slot of the array
 		// takes, i.e. its remembered element type's own zero (nil when it remembers

@@ -2981,6 +2981,29 @@ final class WasmArrayCompiler {
 		getLocal(ctx, aSlot);
 	}
 
+	static void compileArrayJavaComponent(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		// (%array-java-component array [name]): the Java array component a vector stands
+		// for. Neither wasm backend has a host, so the stamp is never read: both halves
+		// are a no-op that still evaluates every argument in order -- the getter answers
+		// nil, the setter answers the array.
+		List<LispVal> args = cons.toList();
+		if (args.size() != 2 && args.size() != 3) {
+			throw new UnsupportedOperationException(
+					"%array-java-component expects 1 or 2 arguments, got " + (args.size() - 1) + " argument(s)");
+		}
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		if (args.size() == 2) {
+			// the getter: the array is evaluated and dropped, nil answers
+			ctx.writer.write(Instruction.DROP);
+			refNull(ctx);
+			return;
+		}
+		int arraySlot = setTemp(ctx);
+		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		ctx.writer.write(Instruction.DROP);
+		getLocal(ctx, arraySlot);
+	}
+
 	static void compileArrayAdoptElementType(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		// (%array-adopt-element-type new old): make the freshly built general array new
 		// remember what old remembers, and answer new. adjust-array does not change an

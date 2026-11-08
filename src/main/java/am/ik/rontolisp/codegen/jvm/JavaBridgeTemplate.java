@@ -338,6 +338,9 @@ final class JavaBridgeTemplate {
 	/** {@code RontoJavaListView.items()}, bound with {@link #javaListViewClass}. */
 	private static @Nullable Method javaListViewItems;
 
+	/** {@code RontoJavaListView.value()}, bound with {@link #javaListViewClass}. */
+	private static @Nullable Method javaListViewValue;
+
 	/**
 	 * {@code runtime/RontoJavaBytesView} -- a {@code java:view} of shape {@code :bytes}
 	 * -- bound with {@link #javaListViewClass}: the {@code byte[]} it hands Java wherever
@@ -413,12 +416,14 @@ final class JavaBridgeTemplate {
 		try {
 			Class<?> listViewClass = Class.forName(JAVA_LIST_VIEW_CLASS, false, mainClass.getClassLoader());
 			javaListViewItems = listViewClass.getMethod("items");
+			javaListViewValue = listViewClass.getMethod("value");
 			javaListViewClass = listViewClass;
 		}
 		catch (ClassNotFoundException | NoSuchMethodException ex) {
 			// No runtime/RontoJavaListView beside this program: no view can exist.
 			javaListViewClass = null;
 			javaListViewItems = null;
+			javaListViewValue = null;
 		}
 		try {
 			Class<?> bytesViewClass = Class.forName(JAVA_BYTES_VIEW_CLASS, false, mainClass.getClassLoader());
@@ -503,10 +508,11 @@ final class JavaBridgeTemplate {
 		}
 		Object[] overload = (Object[]) resolution[0];
 		boolean forced = Boolean.TRUE.equals(resolution[1]);
+		@Nullable Object[] handed = marshalArguments(overload, values, functions, through,
+				forced ? "constructing " + name : null);
 		try {
-			@Nullable Object[] handed = marshalArguments(overload, values, functions, through,
-					forced ? "constructing " + name : null);
 			Object made = ((Constructor<?>) overload[0]).newInstance(handed);
+			writeBackArrays(values, overload, handed, javaFalse, octets);
 			return unmarshal(made, javaFalse, octets);
 		}
 		catch (ReflectiveOperationException ex) {
@@ -1521,10 +1527,11 @@ final class JavaBridgeTemplate {
 		}
 		Object[] overload = (Object[]) resolution[0];
 		boolean forced = Boolean.TRUE.equals(resolution[1]);
+		@Nullable Object[] handed = marshalArguments(overload, values, functions, through,
+				forced ? "calling " + cls.getName() + "." + ((Method) overload[0]).getName() : null);
 		try {
-			@Nullable Object[] handed = marshalArguments(overload, values, functions, through,
-					forced ? "calling " + cls.getName() + "." + ((Method) overload[0]).getName() : null);
 			Object answer = ((Method) overload[0]).invoke(receiver, handed);
+			writeBackArrays(values, overload, handed, javaFalse, octets);
 			return unmarshal(answer, javaFalse, octets);
 		}
 		catch (ReflectiveOperationException ex) {
@@ -2195,7 +2202,7 @@ final class JavaBridgeTemplate {
 			if (elements == null) {
 				return NO_MATCH; // a dotted (improper) list is not a sequence
 			}
-			return marshalSequence(elements, target, out, index, functions, through);
+			return marshalSequence(elements, target, out, index, functions, through, null);
 		}
 		Object @Nullable [] header = lispArrayHeader(value);
 		if (header != null) {
@@ -2213,14 +2220,15 @@ final class JavaBridgeTemplate {
 				for (long v : packed) {
 					elements.add(v == Long.MIN_VALUE ? null : v);
 				}
-				return marshalSequence(elements, target, out, index, functions, through);
+				return marshalSequence(elements, target, out, index, functions, through, javaComponentOf(value));
 			}
 			int count = header[1] instanceof Long fp ? fp.intValue() : list.size() - 1;
-			return marshalSequence(new ArrayList<>(list.subList(1, 1 + count)), target, out, index, functions, through);
+			return marshalSequence(new ArrayList<>(list.subList(1, 1 + count)), target, out, index, functions, through,
+					javaComponentOf(value));
 		}
 		List<@Nullable Object> packed = packedElements(value);
 		if (packed != null) {
-			return marshalSequence(packed, target, out, index, functions, through);
+			return marshalSequence(packed, target, out, index, functions, through, null);
 		}
 		List<@Nullable Object> entries = tableEntries(value);
 		if (entries != null) {
@@ -2250,12 +2258,38 @@ final class JavaBridgeTemplate {
 		catch (ReflectiveOperationException ex) {
 			throw new IllegalStateException("java interop: cannot read a view", ex);
 		}
+		// The vector the view stands for: a Clojure typed array's stamp is its Java array
+		// component, which decides the target arrays it fits (a view is every Clojure
+		// java: argument, so the component has to be read through it).
+		String component = javaComponentOf(viewValueOf(view));
+		if (component != null) {
+			List<@Nullable Object> elements = items == null ? List.of()
+					: items.getClass() == Object[].class ? properListElements((Object[]) items) : null;
+			if (elements != null) {
+				int cost = marshalSequence(elements, target, out, index, functions, through, component);
+				return cost == NO_MATCH ? NO_MATCH : cost - COST_CONVERT + COST_VIEW_ARRAY;
+			}
+		}
 		if (items == null) {
 			out[index] = Array.newInstance(target.getComponentType(), 0);
 			return COST_VIEW_ARRAY;
 		}
 		int cost = marshal(items, target, out, index, functions, through);
 		return cost == NO_MATCH ? NO_MATCH : cost - COST_CONVERT + COST_VIEW_ARRAY;
+	}
+
+	// The value a java:view stands for (runtime/RontoJavaListView.value), or null.
+	private static @Nullable Object viewValueOf(Object view) {
+		Method value = javaListViewValue;
+		if (value == null) {
+			return null;
+		}
+		try {
+			return value.invoke(view);
+		}
+		catch (ReflectiveOperationException ex) {
+			throw new IllegalStateException("java interop: cannot read a view", ex);
+		}
 	}
 
 	// A Lisp hash table's entries in insertion order, keys and values alternating (an
@@ -2519,12 +2553,16 @@ final class JavaBridgeTemplate {
 	// component type, recursively) or, for any List-compatible reference target, to a
 	// java.util.List of boxed elements.
 	private static int marshalSequence(List<@Nullable Object> elements, Class<?> target, @Nullable Object[] out,
-			int index, int functions, @Nullable Object through) {
+			int index, int functions, @Nullable Object through, @Nullable String javaComponent) {
 		@Nullable Object[] slot = new @Nullable Object[1];
 		if (target.isArray()) {
+			int componentCost = arrayComponentCost(javaComponent, target);
+			if (componentCost == NO_MATCH) {
+				return NO_MATCH;
+			}
 			Class<?> component = target.getComponentType();
 			Object array = Array.newInstance(component, elements.size());
-			int total = COST_CONVERT;
+			int total = javaComponent != null ? componentCost : COST_CONVERT;
 			for (int i = 0; i < elements.size(); i++) {
 				int cost = marshal(elements.get(i), component, slot, 0, functions, through);
 				if (cost == NO_MATCH) {
@@ -2623,7 +2661,10 @@ final class JavaBridgeTemplate {
 			return o;
 		}
 		if (o.getClass().isArray()) {
-			return arrayToList(o, javaFalse, octets);
+			// A byte[] without :octets stays the list of signed bytes a java: call has
+			// always answered; every other array is the Clojure typed array it stands for
+			// (a rank-1 vector stamped with its component), as interpreted.
+			return o instanceof byte[] ? arrayToList(o, javaFalse, octets) : arrayToVector(o, javaFalse, octets);
 		}
 		Class<?> valueClass = javaValueClass;
 		Method value = javaValueMethod;
@@ -2649,13 +2690,111 @@ final class JavaBridgeTemplate {
 		}
 	}
 
-	// A Java array result surfaces as a Lisp list, elements unmarshalled recursively.
+	// A Java array result surfaces as a Lisp list, elements unmarshalled recursively (a
+	// byte[] without :octets).
 	private static @Nullable Object arrayToList(Object array, boolean javaFalse, boolean octets) {
 		Object result = null;
 		for (int i = Array.getLength(array) - 1; i >= 0; i--) {
 			result = new Object[] { unmarshal(Array.get(array, i), javaFalse, octets), result };
 		}
 		return result;
+	}
+
+	// Every other Java array answers the Clojure typed array it stands for: a rank-1
+	// general array of its unmarshalled elements, its header's slot 4 stamping the
+	// component type so a later java: call passes the array type it really is (mirrors
+	// eval/JavaInterop's arrayToVector and the interpreter's LispArray.javaComponent).
+	private static Object arrayToVector(Object array, boolean javaFalse, boolean octets) {
+		int length = Array.getLength(array);
+		ArrayList<Object> list = new ArrayList<>(length + 1);
+		Object[] header = new Object[] { new Object[] { Long.valueOf(length) }, null, null, null,
+				array.getClass().getComponentType().getName() };
+		list.add(header);
+		for (int i = 0; i < length; i++) {
+			list.add(unmarshal(Array.get(array, i), javaFalse, octets));
+		}
+		return list;
+	}
+
+	// The Java array component a Lisp vector stands for (header slot 4 of a
+	// non-displaced array long enough to have one), or null.
+	private static @Nullable String javaComponentOf(@Nullable Object value) {
+		Object[] header = lispArrayHeader(value);
+		if (header == null || header.length < 5 || header[3] != null || !(header[4] instanceof String component)) {
+			return null;
+		}
+		return component;
+	}
+
+	// What an array target costs a value stamped with a Java component: exact for its own
+	// array type, WIDEN for a supertype array, NO_MATCH for anything else (mirrors
+	// eval/JavaInterop's arrayComponentCost).
+	private static int arrayComponentCost(@Nullable String javaComponent, Class<?> target) {
+		if (javaComponent == null || !target.isArray()) {
+			return COST_CONVERT;
+		}
+		Class<?> component = target.getComponentType();
+		if (component == null) {
+			return COST_CONVERT;
+		}
+		String name = component.getName();
+		if (javaComponent.equals(name)) {
+			return COST_EXACT;
+		}
+		return "java.lang.Object".equals(name) && javaComponent.indexOf('.') >= 0 ? COST_WIDEN : NO_MATCH;
+	}
+
+	// After a call, copies what Java stored into an array argument back into the Clojure
+	// typed array it was marshalled from, so the program reads what Java wrote (mirrors
+	// eval/JavaInterop's writeBackArrays). The vector is rebuilt boxed from the array's
+	// elements; only a value stamped with a Java component writes back.
+	private static void writeBackArrays(@Nullable Object[] values, Object[] overload, @Nullable Object[] handed,
+			boolean javaFalse, boolean octets) {
+		if (handed == null) {
+			return;
+		}
+		Class<?>[] params = (Class<?>[]) overload[1];
+		boolean packs = (Boolean) overload[2];
+		int fixed = packs ? params.length - 1 : params.length;
+		for (int i = 0; i < fixed && i < values.length; i++) {
+			writeBackArray(values[i], params[i], handed[i], javaFalse, octets);
+		}
+		if (packs && !params[fixed].isPrimitive()) {
+			Class<?> component = params[fixed].getComponentType();
+			Object packed = handed[fixed];
+			if (component != null && packed != null) {
+				for (int i = fixed; i < values.length; i++) {
+					writeBackArray(values[i], component, Array.get(packed, i - fixed), javaFalse, octets);
+				}
+			}
+		}
+	}
+
+	private static void writeBackArray(@Nullable Object value, Class<?> target, @Nullable Object javaArray,
+			boolean javaFalse, boolean octets) {
+		if (javaArray == null || !target.isArray()) {
+			return;
+		}
+		Object lisp = value;
+		Class<?> viewClass = javaListViewClass;
+		if (viewClass != null && viewClass.isInstance(value)) {
+			lisp = viewValueOf(value);
+		}
+		Object[] header = lispArrayHeader(lisp);
+		if (header == null || header.length < 5 || header[3] != null || !(header[4] instanceof String component)) {
+			return;
+		}
+		if (arrayComponentCost(component, target) == NO_MATCH) {
+			return;
+		}
+		Object[] dims = (Object[]) header[0];
+		int length = Math.min(Array.getLength(javaArray), ((Number) dims[0]).intValue());
+		ArrayList<Object> list = (ArrayList<Object>) Objects.requireNonNull(lisp);
+		list.clear();
+		list.add(new Object[] { header[0], null, null, null, component });
+		for (int i = 0; i < length; i++) {
+			list.add(unmarshal(Array.get(javaArray, i), javaFalse, octets));
+		}
 	}
 
 	private static boolean isLispString(@Nullable Object v) {

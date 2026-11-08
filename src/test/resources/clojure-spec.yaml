@@ -15462,6 +15462,35 @@ cases:
       :vector :vector "[1 2]" true
       :oob [1 2]
       [1.9 2]
+  - name: a-java-array-answers-a-typed-array-and-crosses-back-as-its-component
+    # A Java array result is the Clojure typed array it stands for (a vector here),
+    # stamped with its component: aset mutates it, and a later java: call passes the
+    # array type the value really is -- object-array crosses as Object[], so Arrays.copyOf
+    # pads nil rather than the 0 a long[] would, and a returned int[]/long[]/double[]
+    # crosses back as that array. A method's writes into a passed array are written back
+    # (fill then the array). Host-only: java.util.Arrays is a call-time refusal where no
+    # host is.
+    skip:
+      wasm: java.util.Arrays is a call-time refusal where no host is
+      wasm_component: java.util.Arrays is a call-time refusal where no host is
+    source: |
+      (prn (let [a (java.util.Arrays/copyOf (object-array [1 2]) 3)] (aset a 2 :x) (vec a)))
+      (prn (vec (java.util.Arrays/copyOf (object-array [1 2]) 3)))
+      (prn (let [a (object-array 3)] (java.util.Arrays/fill a :x) (vec a)))
+      (prn (let [a (int-array [1 2])] (vec (java.util.Arrays/copyOf a 3))))
+      (prn (let [a (long-array [1 2])] (vec (java.util.Arrays/copyOf a 3))))
+      (prn (let [a (double-array [1.5 2.5])] (vec (java.util.Arrays/copyOf a 3))))
+      (prn (let [a (java.util.Arrays/copyOf (object-array ["a" :b]) 2)] (vec (java.util.Arrays/copyOf a 2))))
+      (prn (let [a (aclone (object-array [1 2]))] (aset a 0 9) (vec a)))
+    expected: |
+      [1 2 :x]
+      [1 2 nil]
+      [:x :x :x]
+      [1 2 0]
+      [1 2 0]
+      [1.5 2.5 0.0]
+      ["a" :b]
+      [9 2]
   - name: to-array-2d-answers-a-vector-of-vectors
     # to-array-2d of a collection of collections is the vector of (to-array
     # row) for each row; alength, aget, aset and aclone take one as they take a

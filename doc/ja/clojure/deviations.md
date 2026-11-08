@@ -446,7 +446,7 @@
   ベクターを印字し、`=` は要素を比べ、`coll?`・`vector?`・`sequential?`・`counted?` は真で、
   `aset` はどんな値も格納し、`alength` と `aclone` はベクターを受けます。オラクルは配列のクラスを答え、
   識別ハッシュ付きの `#object` を印字し、同一性で比べ、コレクション述語は偽で、型違いの `aset` を拒否し、
-  `alength`・`aclone` にベクターを拒否します。`to-array-2d` はベクタのベクタを答え、入れ子の [aget](reference/aget.md) で読みます（1 つの配列に複数の添字は、入れ子のベクター一般と同様にランク違反です）。`aset-int`・`aset-long`・`aset-double`・`aset-float`・`aset-short`・`aset-boolean`・`aset-char` は、プリミティブへのキャスト値をどのベクターにも格納し、値自体を答えます。オラクルは要素型を検査します。複数の添字は入れ子のベクターに格納します。オラクルの行は `Object` 配列で、リフレクションが拒否します。`ints`・`longs`・`doubles`・`floats`・`shorts`・`chars`・`booleans` はどのベクターも狭めます（広げます）。オラクルはプリミティブ配列でないものを拒否します。`float` は `float` と同じく倍精度を持つので、
+  `alength`・`aclone` にベクターを拒否します。型付き配列は、それが表す Java の配列として `java:` メンバーへ渡ります（`object-array` は `Object[]`、`int-array` は `int[]`）。Java の配列を返すメンバーの結果は、同じように要素型を記憶したベクタです。メンバーが配列引数へ書き込んだ値は、復帰時にベクタへコピーされます。`to-array-2d` はベクタのベクタを答え、入れ子の [aget](reference/aget.md) で読みます（1 つの配列に複数の添字は、入れ子のベクター一般と同様にランク違反です）。`aset-int`・`aset-long`・`aset-double`・`aset-float`・`aset-short`・`aset-boolean`・`aset-char` は、プリミティブへのキャスト値をどのベクターにも格納し、値自体を答えます。オラクルは要素型を検査します。複数の添字は入れ子のベクターに格納します。オラクルの行は `Object` 配列で、リフレクションが拒否します。`ints`・`longs`・`doubles`・`floats`・`shorts`・`chars`・`booleans` はどのベクターも狭めます（広げます）。オラクルはプリミティブ配列でないものを拒否します。`float` は `float` と同じく倍精度を持つので、
   `(first (float-array [1/3]))` は長く印字されます（オラクルは `0.33333334`）。2 引数の `short` の初期値は
   short 範囲の整数ならどれでも詰めます。オラクルは `Short` にだけ詰めます（`Short` はここでは整数です）。
   小さな `N` リテラルは `Long` なので、オラクルの `BigInt` が拒否するところで `Long` の要素型を取ります。

@@ -2013,6 +2013,7 @@ final class JvmExprCompiler {
 			case LispNames.ARRAY_DEFAULT_ELEMENT -> JvmArrayCompiler.compileArrayDefaultElement(cons, ctx, className);
 			case LispNames.ARRAY_ADOPT_ELEMENT_TYPE ->
 				JvmArrayCompiler.compileArrayAdoptElementType(cons, ctx, className);
+			case LispNames.ARRAY_JAVA_COMPONENT -> JvmArrayCompiler.compileArrayJavaComponent(cons, ctx, className);
 			case LispNames.ARRAY_ALIKE -> JvmArrayCompiler.compileArrayAlike(cons, ctx, className);
 			case LispNames.ARRAY_DISPLACEMENT ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayDisplacement(cons), ctx, className);

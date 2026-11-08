@@ -286,6 +286,30 @@ final class JvmArrayRuntimeBuilder {
 	static final String ADOPT_ELEMENT_TYPE_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
 	/**
+	 * {@code _arrayJavaComponent(a) -> Object}: the Java array component the vector
+	 * {@code a} stands for, or null for a vector that is no Java array. The Clojure front
+	 * end's {@code %array-java-component} getter: the component name lives in header slot
+	 * 4 of a non-displaced array long enough to have one (the slot
+	 * {@link #ADOPT_ELEMENT_TYPE} copies), and only a {@code String} there is a Java
+	 * component -- a remembered element type is a cons or a name string, and this code
+	 * tells them apart by reading the same slot.
+	 */
+	static final String JAVA_COMPONENT = "_arrayJavaComponent";
+
+	static final String JAVA_COMPONENT_DESC = "(Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/**
+	 * {@code _arraySetJavaComponent(a, name) -> a}: makes the general array {@code a}
+	 * remember the Java array component {@code name} (a string, or null to forget it) in
+	 * header slot 4 and answers {@code a}. The setter half of
+	 * {@code %array-java-component}: a length-3 header grows to hold the slot, a
+	 * displaced one (where slot 4 is the offset) keeps what it has.
+	 */
+	static final String SET_JAVA_COMPONENT = "_arraySetJavaComponent";
+
+	static final String SET_JAVA_COMPONENT_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
+	/**
 	 * {@code _arrayAlike(seq, n) -> Object}: the {@code %array-alike} allocator -- a
 	 * fresh zero-filled rank-1 array of length {@code n} of the SAME KIND as {@code seq},
 	 * keyed on {@link #ELEMENT_TYPE}'s answer rather than on {@code seq}'s runtime class:
@@ -2170,6 +2194,12 @@ final class JvmArrayRuntimeBuilder {
 		aet.astore(2);
 		aet.aload(2);
 		aet.ifnull(aetT);
+		// A String there is the Java array component (%array-java-component), not an
+		// element type: array-element-type answers t for it, as the interpreter does
+		// (its component is a field apart from the remembered element type).
+		aet.aload(2);
+		aet.instanceOf(cp.classEntry("java/lang/String"));
+		aet.ifne(aetT);
 		aet.aload(2);
 		aet.areturn();
 		aet.labelBinding(aetT);
@@ -2386,6 +2416,131 @@ final class JvmArrayRuntimeBuilder {
 		ad.aload(0);
 		ad.areturn();
 		methods.add(new ArrayMethod(cp.utf8Entry(ADOPT_ELEMENT_TYPE), cp.utf8Entry(ADOPT_ELEMENT_TYPE_DESC), ad));
+
+		// _arrayJavaComponent(a) -> Object: the Java array component the vector stands
+		// for, or null. Only header slot 4 of a non-displaced header long enough to have
+		// one is read; a String there is the component, anything else (a remembered
+		// element type) is no Java component. Locals: 0 = a, 1 = header.
+		MethodCode jc = new MethodCode();
+		MethodCode.Label jcNil = jc.newLabel();
+		jc.aload(0);
+		jc.instanceOf(arrayListClass);
+		jc.ifeq(jcNil);
+		emitLoadHeader(jc, arrayListClass, objectArrayClass, alGet, 0);
+		jc.astore(1);
+		jc.aload(1);
+		jc.arraylength();
+		jc.loadConstant(5);
+		jc.if_icmplt(jcNil);
+		jc.aload(1);
+		jc.loadConstant(3);
+		jc.aaload();
+		jc.ifnonnull(jcNil);
+		jc.aload(1);
+		jc.loadConstant(4);
+		jc.aaload();
+		jc.instanceOf(stringClass);
+		jc.ifeq(jcNil);
+		jc.aload(1);
+		jc.loadConstant(4);
+		jc.aaload();
+		jc.areturn();
+		jc.labelBinding(jcNil);
+		jc.aconst_null();
+		jc.areturn();
+		methods.add(new ArrayMethod(cp.utf8Entry(JAVA_COMPONENT), cp.utf8Entry(JAVA_COMPONENT_DESC), jc));
+
+		// _arraySetJavaComponent(a, name) -> a: store the component string in header
+		// slot 4, growing a length-3 header to hold it; a displaced header (slot 3
+		// non-null, where slot 4 is the offset) keeps what it has, and anything that is
+		// no general array is answered unchanged. Locals: 0 = a, 1 = name, 2 = header.
+		MethodCode jcs = new MethodCode();
+		MethodCode.Label jcsDone = jcs.newLabel();
+		MethodCode.Label jcsGrow = jcs.newLabel();
+		// The component is a Lisp STRING: compiled, a string carries its quote framing
+		// ("\"int\""), so the raw name is stored unquoted -- the form the bridge and the
+		// interpreter store, and the form the cost comparisons read.
+		MethodCode.Label jcsNameDone = jcs.newLabel();
+		MethodRefEntry jcLength = cp.methodRef(stringClass, "length", "()I");
+		MethodRefEntry jcCharAt = cp.methodRef(stringClass, "charAt", "(I)C");
+		MethodRefEntry jcSubstring = cp.methodRef(stringClass, "substring", "(II)Ljava/lang/String;");
+		jcs.aload(1);
+		jcs.ifnull(jcsNameDone);
+		jcs.aload(1);
+		jcs.instanceOf(stringClass);
+		jcs.ifeq(jcsNameDone);
+		jcs.aload(1);
+		jcs.checkcast(stringClass);
+		jcs.invokevirtual(jcLength);
+		jcs.loadConstant(2);
+		jcs.if_icmplt(jcsNameDone);
+		jcs.aload(1);
+		jcs.checkcast(stringClass);
+		jcs.loadConstant(0);
+		jcs.invokevirtual(jcCharAt);
+		jcs.loadConstant('"');
+		jcs.if_icmpne(jcsNameDone);
+		jcs.aload(1);
+		jcs.checkcast(stringClass);
+		jcs.aload(1);
+		jcs.checkcast(stringClass);
+		jcs.invokevirtual(jcLength);
+		jcs.loadConstant(1);
+		jcs.isub();
+		jcs.invokevirtual(jcCharAt);
+		jcs.loadConstant('"');
+		jcs.if_icmpne(jcsNameDone);
+		jcs.aload(1);
+		jcs.checkcast(stringClass);
+		jcs.loadConstant(1);
+		jcs.aload(1);
+		jcs.checkcast(stringClass);
+		jcs.invokevirtual(jcLength);
+		jcs.loadConstant(1);
+		jcs.isub();
+		jcs.invokevirtual(jcSubstring);
+		jcs.astore(1);
+		jcs.labelBinding(jcsNameDone);
+		jcs.aload(0);
+		jcs.instanceOf(arrayListClass);
+		jcs.ifeq(jcsDone);
+		emitLoadHeader(jcs, arrayListClass, objectArrayClass, alGet, 0);
+		jcs.astore(2);
+		jcs.aload(2);
+		jcs.arraylength();
+		jcs.loadConstant(5);
+		jcs.if_icmplt(jcsGrow);
+		jcs.aload(2);
+		jcs.loadConstant(3);
+		jcs.aaload();
+		jcs.ifnonnull(jcsDone);
+		jcs.aload(2);
+		jcs.loadConstant(4);
+		jcs.aload(1);
+		jcs.aastore();
+		jcs.goto_(jcsDone);
+		jcs.labelBinding(jcsGrow);
+		jcs.aload(2);
+		jcs.arraylength();
+		jcs.loadConstant(3);
+		jcs.if_icmpne(jcsDone);
+		// a.set(0, new Object[]{header[0], header[1], header[2], null, name})
+		jcs.aload(0);
+		jcs.checkcast(arrayListClass);
+		jcs.loadConstant(0);
+		jcs.loadConstant(5);
+		jcs.anewarray(objectClass);
+		emitCopyHeaderSlots(jcs, 2, 3);
+		jcs.dup();
+		jcs.loadConstant(4);
+		jcs.aload(1);
+		jcs.aastore();
+		jcs.invokevirtual(alSet);
+		jcs.pop();
+		jcs.labelBinding(jcsDone);
+		jcs.aload(0);
+		jcs.areturn();
+		methods.add(new ArrayMethod(cp.utf8Entry(SET_JAVA_COMPONENT), cp.utf8Entry(SET_JAVA_COMPONENT_DESC), jcs));
 
 		// _arrayAlike(seq, n): a fresh zero-filled rank-1 array of length n of the same
 		// KIND as seq. The kind is _arrayElementType's answer, not seq's runtime class:

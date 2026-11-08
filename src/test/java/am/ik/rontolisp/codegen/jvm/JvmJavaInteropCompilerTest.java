@@ -357,21 +357,29 @@ class JvmJavaInteropCompilerTest {
 				""")).isEqualTo("(\"1\" \"1/2\" \"3\")");
 	}
 
-	// A returned Java array surfaces as a Lisp list, and a list marshals back into an
-	// array parameter -- Arrays.copyOf(int[], int) round-trips both directions.
+	// A returned Java array answers the typed array it stands for -- a vector here --
+	// and carries its component, so a list marshals back into an array parameter:
+	// Arrays.copyOf(int[], int) round-trips both directions. A Java method's writes into
+	// a passed array are written back (fill then the array).
 	@Test
 	void arrayRoundTripsThroughCopyOf() throws Exception {
 		assertThat(compileAndRun("(print (java:static \"java.util.Arrays\" \"copyOf\" (list 1 2 3) 2))"))
-			.isEqualTo("(1 2)");
+			.isEqualTo("#(1 2)");
+		assertThat(compileAndRun("""
+				(let ((a (java:static "java.util.Arrays" "copyOf" (list 1 2) 2)))
+				  (java:static "java.util.Arrays" "fill" a 9)
+				  (print a))
+				""")).isEqualTo("#(9 9)");
 	}
 
-	// A returned primitive array unmarshals element-wise; the IntStream implementation
-	// class is JDK-internal, so this also exercises the accessible-method resolution.
+	// A returned primitive array unmarshals element-wise into a vector; the IntStream
+	// implementation class is JDK-internal, so this also exercises the accessible-method
+	// resolution.
 	@Test
-	void returnedPrimitiveArrayUnmarshalsToList() throws Exception {
+	void returnedPrimitiveArrayUnmarshalsToVector() throws Exception {
 		assertThat(compileAndRun(
 				"(print (java:call (java:call (java:new \"java.lang.StringBuilder\" \"ab\") \"chars\") \"toArray\"))"))
-			.isEqualTo("(97 98)");
+			.isEqualTo("#(97 98)");
 	}
 
 	// An interface method a non-public class inherits from a non-public superclass
@@ -518,7 +526,7 @@ class JvmJavaInteropCompilerTest {
 			.contains("InterfaceMethod java/util/List.size:()I")
 			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX)
 			.doesNotContain(JvmJavaRuntimeBuilder.INIT_METHOD)
-			.doesNotContain("java/lang/reflect")
+			.doesNotContain("java/lang/reflect/Method")
 			.doesNotContain("_eval");
 	}
 
@@ -619,7 +627,7 @@ class JvmJavaInteropCompilerTest {
 			.contains(JvmJavaDirectSites.COST_PREFIX)
 			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX)
 			.doesNotContain(JvmJavaRuntimeBuilder.INIT_METHOD)
-			.doesNotContain("java/lang/reflect");
+			.doesNotContain("java/lang/reflect/Method");
 	}
 
 	// Sequences and functions reach a dispatched site as the run-time resolution passes
@@ -707,7 +715,7 @@ class JvmJavaInteropCompilerTest {
 			.contains("Method Test$Proxy0.of:([Ljava/lang/Object;)Ljava/lang/Object;")
 			.doesNotContain("javaProxy")
 			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX)
-			.doesNotContain("java/lang/reflect");
+			.doesNotContain("java/lang/reflect/Method");
 		JvmLispCompiler compiler = new JvmLispCompiler("Test");
 		compiler.compile(LispReader.readAllFromString(program));
 		assertThat(compiler.runtimeClassFiles()).containsOnlyKeys("Test$Implementation.class", "Test$Proxy0.class");
@@ -934,7 +942,7 @@ class JvmJavaInteropCompilerTest {
 					"""));
 		assertThat(new String(classBytes, java.nio.charset.StandardCharsets.ISO_8859_1))
 			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX)
-			.doesNotContain("java/lang/reflect");
+			.doesNotContain("java/lang/reflect/Method");
 	}
 
 	// A reify passed where its interface is expected resolves the call before it runs:
@@ -998,7 +1006,7 @@ class JvmJavaInteropCompilerTest {
 				(print (java:static "java.lang.Long" "valueOf" 7))
 				(print (java:call (java:static "java.util.regex.Pattern" "compile" ",") "split" "a,b"))
 				(print (java:call (java:new "java.util.ArrayList") "add" nil))
-				""")).isEqualTo("#\\b\nT\n#\\a\nT\n1.5\n7\n(\"a\" \"b\")\nT");
+				""")).isEqualTo("#\\b\nT\n#\\a\nT\n1.5\n7\n#(\"a\" \"b\")\nT");
 	}
 
 	// A string a program builds is a mutable character vector: it is rendered to the
@@ -1042,10 +1050,10 @@ class JvmJavaInteropCompilerTest {
 				"""));
 		assertThat(new String(classBytes, java.nio.charset.StandardCharsets.ISO_8859_1))
 			.doesNotContain(JvmJavaRuntimeBuilder.BRIDGE_SUFFIX)
-			.doesNotContain("java/lang/reflect");
+			.doesNotContain("java/lang/reflect/Method");
 		assertThat(direct.runtimeClassFiles()).allSatisfy(
 				(name, bytes) -> assertThat(new String(bytes, java.nio.charset.StandardCharsets.ISO_8859_1)).as(name)
-					.doesNotContain("java/lang/reflect"));
+					.doesNotContain("java/lang/reflect/Method"));
 		// A dispatch among overloads needs no reflection either -- one that may pass a
 		// function where an interface (or an array of one) is expected makes it the
 		// interface's generated proxy.

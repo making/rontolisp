@@ -2382,6 +2382,17 @@ public final class Environment implements Scope {
 					}
 					return args.get(0);
 				}));
+		env.defineFunction(LispNames.ARRAY_JAVA_COMPONENT, new LispFunction(LispNames.ARRAY_JAVA_COMPONENT, args -> {
+			requireArgCountBetween(LispNames.ARRAY_JAVA_COMPONENT, args, 1, 2);
+			if (args.size() == 1) {
+				return args.get(0) instanceof LispArray array && array.javaComponent() != null
+						? new LispString(array.javaComponent()) : LispNil.INSTANCE;
+			}
+			if (args.get(0) instanceof LispArray array) {
+				array.setJavaComponent(args.get(1) instanceof LispString name ? name.value() : null);
+			}
+			return args.get(0);
+		}));
 		env.defineFunction(LispNames.ARRAY_BECOME, new LispFunction(LispNames.ARRAY_BECOME, args -> {
 			requireArgCount(LispNames.ARRAY_BECOME, args, 2);
 			LispArray old = requireGeneralArray(LispNames.ARRAY_BECOME, args.get(0));

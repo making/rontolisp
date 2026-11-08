@@ -513,11 +513,11 @@ public final class JavaInteropPrograms {
 	/** What {@link #JAVA_FALSE_PROGRAM} prints. */
 	public static final String JAVA_FALSE_OUTPUT = """
 			(|false| |false| |false| NIL)
-			((|false| T NIL) (NIL T NIL))
+			(#(|false| T NIL) #(NIL T NIL))
 			(|false| T NIL)
 			(|false| |false| T NIL)
 			"false"
-			((|false| |false|) (|false|) (NIL))
+			(#(|false| |false|) #(|false|) #(NIL))
 			(|false| |false| NIL T)
 			(|false| |false| NIL)""";
 
@@ -582,7 +582,7 @@ public final class JavaInteropPrograms {
 			(T NIL 1)
 			("[apple, banana]" APPLE)
 			((B) (B) APPLE APPLE (B) T)
-			(APPLE (B))
+			#(APPLE (B))
 			(APPLE (B))
 			("[y, z, x]" 0)
 			"[b, a]"
@@ -643,7 +643,7 @@ public final class JavaInteropPrograms {
 			                    (java:call ts "add" w)
 			                    (java:call ts "add" (java:view #(7) #(7) :vector nil #'by-length "my.Vec"))
 			                    (java:call ts "add" (java:view #(1 2 3) #(1 2 3) :vector nil #'by-length "my.Vec"))
-			                    (mapcar #'length (java:call ts "toArray")))))
+			                    (mapcar #'length (coerce (java:call ts "toArray") 'list)))))
 			  (row (lambda () (java:call w "compareTo" "x")))
 			  (row (lambda () (java:call (java:view #(1) #(1) :vector) "compareTo" w))))
 			;; a handle with no text is equal only to a handle of its very value, spelled class@hash
@@ -754,7 +754,7 @@ public final class JavaInteropPrograms {
 			                  (java:call l "add" (java:view v v :bytes))
 			                  (list (eq (java:call bb "array" :octets) (java:call bb "array" :octets))
 			                        (eq v (java:call l "get" 0 :octets))
-			                        (eq v (first (java:call l "toArray" :octets)))))))
+			                        (eq v (aref (java:call l "toArray" :octets) 0))))))
 			""";
 
 	/** What {@link #OCTETS_PROGRAM} prints. */
@@ -762,7 +762,7 @@ public final class JavaInteropPrograms {
 			(#(65 200) #(65 200) #(65 200) (UNSIGNED-BYTE 8))
 			(65 -56)
 			(#(65 200) #(65 200))
-			((#(1 2) "x") #(1 2) ((1 2) "x"))
+			(#(#(1 2) "x") #(1 2) #((1 2) "x"))
 			0
 			#(9)
 			#(7 0)
