@@ -2,38 +2,38 @@
 
 Suite: `ca06bd919661af162c67407c9d994e881870bdb3`
 
-**17,456 / 20,078 tests pass (86.9%)** -- 1,261 fail, 1,361 signal an error.
+**17,474 / 20,077 tests pass (87.0%)** -- 1,251 fail, 1,352 signal an error.
 
-0 top-level forms could not be read, 257 could not be evaluated, 3 did not terminate; every test those forms would have defined is missing from the counts above.
+0 top-level forms could not be read, 257 could not be evaluated, 4 did not terminate; every test those forms would have defined is missing from the counts above.
 
 | chapter | tests | pass | fail | error | pass rate | top-level forms lost |
 |---|---:|---:|---:|---:|---:|---:|
 | arrays | 1,356 | 1,319 | 17 | 20 | 97.3% | 8 |
 | characters | 259 | 233 | 4 | 22 | 90.0% | 8 |
 | conditions | 673 | 600 | 29 | 44 | 89.2% | 8 |
-| cons | 1,882 | 1,744 | 77 | 61 | 92.7% | 8 |
-| data-and-control-flow | 1,428 | 1,265 | 66 | 97 | 88.6% | 8 |
+| cons | 1,882 | 1,749 | 75 | 58 | 92.9% | 8 |
+| data-and-control-flow | 1,428 | 1,271 | 63 | 94 | 89.0% | 8 |
 | environment | 210 | 142 | 11 | 57 | 67.6% | 8 |
 | eval-and-compile | 306 | 258 | 26 | 22 | 84.3% | 8 |
 | files | 87 | 37 | 10 | 40 | 42.5% | 8 |
-| hash-tables | 157 | 134 | 17 | 6 | 85.4% | 10 |
+| hash-tables | 157 | 136 | 15 | 6 | 86.6% | 10 |
 | iteration | 843 | 777 | 44 | 22 | 92.2% | 8 |
-| misc | 740 | 730 | 10 | 0 | 98.6% | 8 |
+| misc | 740 | 731 | 9 | 0 | 98.8% | 8 |
 | numbers | 1,444 | 1,250 | 105 | 89 | 86.6% | 11 |
-| objects | 846 | 595 | 131 | 120 | 70.3% | 19 |
+| objects | 846 | 599 | 128 | 119 | 70.8% | 19 |
 | packages | 500 | 436 | 38 | 26 | 87.2% | 8 |
 | pathnames | 215 | 144 | 27 | 44 | 67.0% | 8 |
-| printer | 732 | 464 | 165 | 103 | 63.4% | 38 |
+| printer | 732 | 464 | 166 | 102 | 63.4% | 38 |
 | rctest | 0 | 0 | 0 | 0 | 0.0% | 8 |
 | reader | 668 | 547 | 77 | 44 | 81.9% | 11 |
 | sequences | 3,287 | 3,128 | 54 | 105 | 95.2% | 8 |
 | streams | 801 | 671 | 73 | 57 | 83.8% | 8 |
-| strings | 509 | 436 | 54 | 19 | 85.7% | 9 |
+| strings | 509 | 437 | 54 | 18 | 85.9% | 9 |
 | structures | 1,287 | 1,022 | 70 | 195 | 79.4% | 17 |
 | symbols | 1,145 | 1,090 | 23 | 32 | 95.2% | 8 |
 | system-construction | 77 | 28 | 1 | 48 | 36.4% | 8 |
-| types-and-classes | 626 | 406 | 132 | 88 | 64.9% | 9 |
-| **total** | **20,078** | **17,456** | **1,261** | **1,361** | **86.9%** | **260** |
+| types-and-classes | 625 | 405 | 132 | 88 | 64.8% | 10 |
+| **total** | **20,077** | **17,474** | **1,251** | **1,352** | **87.0%** | **261** |
 
 ## Most frequent failure reasons
 
