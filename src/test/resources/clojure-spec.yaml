@@ -2339,6 +2339,29 @@ cases:
       1
       true
       0
+  - name: defmethod-takes-every-fn-shape
+    # Oracle clj 1.12.6.1673: defmethod's tail is fn's, so several arities, a name
+    # before them (visible in the body for recursion) and a & rest arity beside a
+    # fixed one are all legal. core.match spells its subvec-inline methods this way
+    # (match.clj:208).
+    source: |
+      (defmulti j08-m (fn [t & _] t))
+      (defmethod j08-m :a ([_ x] [:one x]) ([_ x y] [:two x y]))
+      (println (j08-m :a 1))
+      (println (j08-m :a 1 2))
+      (defmethod j08-m :b j08-countdown ([_ n] (if (zero? n) :done (j08-countdown nil (dec n)))))
+      (println (j08-m :b 3))
+      (defmethod j08-m :c ([_ x] [:fixed x]) ([_ x & more] [:rest x more]))
+      (println (j08-m :c 1))
+      (println (j08-m :c 1 2))
+      (println (j08-m :c 1 2 3))
+    expected: |
+      [:one 1]
+      [:two 1 2]
+      :done
+      [:fixed 1]
+      [:rest 1 (2)]
+      [:rest 1 (2 3)]
   - name: hierarchies-derive-isa-and-prefer
     # derive/underive rewrite the global hierarchy value; isa?/parents/ancestors/
     # descendants read it (sets print in #{...}, single members only here -- the walk

@@ -4400,7 +4400,11 @@ constructor and consumer, and a regex `replace` with a function replacement.
 - `defmulti`: four globals (`equal` method table, default value, prefers table, `Object`
   slot) plus a rest-args dispatcher `defun`. A keyword dispatch function takes a lookup
   plus an optional default, so multi-argument calls dispatch; `:default` and `:hierarchy`
-  options. `defmethod` stores a parameter lambda under the value `dispatchKeyForm` lowers:
+  options. `defmethod`'s tail is `fn`'s tail (`(defmethod name dv & fn-tail)` expands to
+  `(. name addMethod dv (fn fn-tail))` in the oracle), so several arities, a name before
+  them (visible in the body for recursion) and a `&` rest arity lower through the same
+  path `fn` takes (core.match's `subvec-inline`, `match.clj:208`); the method lambda is
+  stored under the value `dispatchKeyForm` lowers:
   a class spelling to the keyword `class` answers for it, `nil` to the `(:C%NIL)` marker
   (the dispatcher maps a true nil there, so no table keys on nil and a literal `:nil` keeps
   its own row), `Object` to `:object` plus the slot, literal vectors element by element.

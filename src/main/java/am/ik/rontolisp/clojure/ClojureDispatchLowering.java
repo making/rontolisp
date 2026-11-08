@@ -1324,17 +1324,28 @@ final class ClojureDispatchLowering {
 	}
 
 	/**
-	 * {@code (defmethod name dispatch-value [params...] body...)}: the lambda over the
-	 * (possibly destructured) parameters stored in the method table. The multimethod must
-	 * be defined -- forward order aside, the pre-scan declares every {@code defmulti}
-	 * first.
+	 * A {@code defmethod}'s method lambda from the form's tail, which is {@code fn}'s
+	 * tail in the oracle ({@code (defmethod name dv & fn-tail)} expands to
+	 * {@code (. name addMethod dv (fn fn-tail))}): several arities, a name before them
+	 * (visible in the body for recursion) and a rest arity all lower through
+	 * {@link ClojureBindingLowering#fn}, not a second parser (core.match's
+	 * {@code (defmethod subvec-inline ::vector ([_ ocr start] ...) ([_ ocr start end]
+	 * ...))}, match.clj:208).
 	 */
+	static LispVal methodFn(ClojureLowering ctx, List<LispVal> tail) {
+		List<LispVal> items = new ArrayList<>();
+		items.add(ClojureLowerUtil.sym("fn"));
+		items.addAll(tail);
+		return ClojureBindingLowering.fn(ctx, items, null);
+	}
+
 	/**
-	 * One single-arity method lambda, {@code labels}-wrapped under a fresh name when a
-	 * {@code recur} reaches its body (like an anonymous {@code fn}): a stored method has
-	 * no callable name of its own, so without a {@code recur} it stays a bare lambda,
-	 * exactly as before. A used variadic target splits into a worker plus its
-	 * {@code &rest} head, like every other {@code fn} shape (decided 2026-10-01).
+	 * One single-arity method lambda for a protocol extension's already-parsed arity,
+	 * {@code labels}-wrapped under a fresh name when a {@code recur} reaches its body
+	 * (like an anonymous {@code fn}): a stored method has no callable name of its own, so
+	 * without a {@code recur} it stays a bare lambda, exactly as before. A used variadic
+	 * target splits into a worker plus its {@code &rest} head, like every other
+	 * {@code fn} shape (decided 2026-10-01).
 	 */
 	static LispVal methodLambda(ClojureLowering ctx, LispVal params, List<LispVal> bodyForms) {
 		String fresh = ctx.freshRecurName();
@@ -1471,7 +1482,7 @@ final class ClojureDispatchLowering {
 	 */
 	private static LispVal printMethodForm(ClojureLowering ctx, List<LispVal> items) {
 		LispVal tag = printMethodTag(ctx, items.get(2));
-		LispVal lambda = methodLambda(ctx, items.get(3), items.subList(4, items.size()));
+		LispVal lambda = methodFn(ctx, items.subList(3, items.size()));
 		return ClojureLowerUtil.list(new LispSymbol(PRINT_METHOD_ROW), tag, lambda);
 	}
 
@@ -1493,13 +1504,18 @@ final class ClojureDispatchLowering {
 	 */
 	private static LispVal printDupForm(ClojureLowering ctx, List<LispVal> items) {
 		LispVal tag = printMethodTag(ctx, items.get(2), "print-dup");
-		LispVal lambda = methodLambda(ctx, items.get(3), items.subList(4, items.size()));
+		LispVal lambda = methodFn(ctx, items.subList(3, items.size()));
 		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-PRINT-DUP-ROW"), tag, lambda);
 	}
 
+	/**
+	 * {@code (defmethod name dispatch-value & fn-tail)}: the method lambda the tail
+	 * lowers to ({@link #methodFn}), stored in the method table under the dispatch value.
+	 * The multimethod must be defined -- forward order aside, the pre-scan declares every
+	 * {@code defmulti} first.
+	 */
 	static LispVal defmethodForm(ClojureLowering ctx, List<LispVal> items) {
-		ClojureLowerUtil.isTrue(items.size() >= 4,
-				"defmethod takes a name, a dispatch value, a parameter vector and a body");
+		ClojureLowerUtil.isTrue(items.size() >= 4, "defmethod takes a name, a dispatch value and a function tail");
 		String name = ClojureLowerUtil.plainName(items.get(1), "defmethod");
 		if (isPrintMethod(ctx, name)) {
 			return printMethodForm(ctx, items);
@@ -1514,7 +1530,7 @@ final class ClojureDispatchLowering {
 			ClojureTestLowering.use(ctx);
 		}
 		LispSymbol methods = tableGlobal(key, "%methods");
-		LispVal lambda = methodLambda(ctx, items.get(3), items.subList(4, items.size()));
+		LispVal lambda = methodFn(ctx, items.subList(3, items.size()));
 		if (key.equals(ClojureTestLowering.varKeyOf("assert-expr"))) {
 			// an assert-expr method is also consulted at lower time: an is over
 			// its head spelling expands through it (see
