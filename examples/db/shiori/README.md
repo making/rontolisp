@@ -11,15 +11,25 @@ dashboard that piles up the books finished each month. The UI is in Japanese.
 | browser | [htmx](https://four.htmx.org) 4.0.1 from a CDN; everything works without it |
 
 ```
-shiori.lisp          the whole server
+shiori.lisp          the entry: loads the parts below, the routes, the server
+db.lisp              the connection and the query helpers
+schema.lisp          the schema and the sample books of the first start
+view.lisp            templates and assets, how a book is drawn (spines, stars, tags)
+http.lisp            requests, responses, flash messages, middleware
+home.lisp            the dashboard
+library.lisp         search, filters, sorting, pages
+book.lisp            a book's page; progress, rating and notes updated in place
+book-form.lisp       registering, editing and removing a book
 templates/*.mustache layout, pages (home, library, book, book-form, error) and pieces
 static/app.css       the stylesheet
 static/app.js        the page's script: toasts, the request-failure dialog, the spine preview
 static/favicon.svg
 ```
 
-The templates, the stylesheet and the script are read when the program is compiled, so the
-built class or component carries them and runs from any directory.
+The parts are joined by top-level `load`s, which the compiler splices in place,
+so a build is still one program. The templates, the stylesheet and the script
+are read when the program is compiled, so the built class or component carries
+them and runs from any directory.
 
 ## Run
 

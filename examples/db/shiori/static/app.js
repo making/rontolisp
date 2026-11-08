@@ -85,7 +85,7 @@ document.addEventListener("close", (e) => {
 }, true);
 
 // The book form's spine preview: the cloth, height and width the server
-// would give the book (spine-style in shiori.lisp), out of the numbers the
+// would give the book (spine-style in view.lisp), out of the numbers the
 // form carries in data-spine.
 function shioriSpine(title, pages, spec) {
   let hash = 0;
