@@ -139,10 +139,15 @@ final class ClojureBindingLowering {
 		}
 		List<LispVal> metaStore = ClojureVarLowering.record(ctx, key, form, nameDatum, null, doc, attrMap, false,
 				false);
+		// ^:macro makes the var's root a macro function, like the oracle's metadata
+		List<LispVal> macroForms = ClojureLowerUtil.nameIsMacro(nameDatum) && !dynamic ? ClojureMacroLowering
+			.metadataMacro(ctx, key, ClojureLowering.varSym(key), ClojureLowering.Kind.VARIABLE) : List.of();
 		if (valueless) {
 			// the oracle's (def x) interns x and leaves a bound root alone; an
 			// unbound one holds the unbound root
-			return new Def(valuelessDefForms(ctx, key, dynamic, metaStore, hoisted), List.of());
+			List<LispVal> forms = new ArrayList<>(valuelessDefForms(ctx, key, dynamic, metaStore, hoisted));
+			forms.addAll(macroForms);
+			return new Def(forms, List.of());
 		}
 		List<LispVal> forms;
 		if (dynamic) {
@@ -182,6 +187,7 @@ final class ClojureBindingLowering {
 			// the class the oracle compiles a def'd fn literal to, which .getClass names
 			forms.add(ClojureValueMethodLowering.noteFnClass(ClojureLowering.varSym(key), key));
 		}
+		forms.addAll(macroForms);
 		List<LispVal> repoints = List.of();
 		if (ctx.repointsRedefinitions() && ctx.defnCounts.containsKey(key)) {
 			// the calls lowered while a defn held the var name its function cells: they

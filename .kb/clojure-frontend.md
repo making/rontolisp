@@ -3962,6 +3962,29 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   over a macro, function, valued or declared root) validates and notifies like the
   oracle's `bindRoot`, through the `%clojure-var-defn-notify` statement arm behind the
   expander registration ("State", validators and watches).
+- **A var the program makes a macro by METADATA is a macro from the next form on**:
+  `^:macro` on a `def`'s name, `(alter-meta! #'f assoc :macro true)` /
+  `(alter-meta! (var f) merge {:macro true})` and `(.setMacro #'f)` all make the var's
+  root a macro function. A top-level write of one is run in the macro-time image once
+  its datum lowered (the same lowered `alter-meta!`/`reset-meta!`/`setMacro` the program
+  runs), and the flag is read back as `(get (meta var) :macro)`; the writes of a loaded
+  namespace's file run the same way. The expander calls the root the oracle's way, with
+  the call and its environment ahead of the arguments, so a `def`'d
+  `(fn [form env & args] ...)`, a `defn`'s function and -- potemkin's and specter's
+  re-export idiom -- a var object the var holds (`(def alias (var target))` plus the
+  flag) all expand. A later write clearing the flag takes the macro meaning away again;
+  that covers a metadata-made macro only (a `defmacro` stays one). A computed reference
+  and a write inside a local scope decide nothing at lower time. `(.setMacro #'f)` is
+  `Var.setMacro()`'s row, the call answering nil. Measured 2026-11-08: specter 1.1.6
+  loads and prints the oracle's ten lines without the `defmacroalias` hunk of j07's
+  `specter/patches.diff`. Pins: clojure-spec
+  `a-var-made-a-macro-by-its-metadata-expands-like-the-oracle`,
+  `a-macro-alias-referred-from-another-namespace-expands-its-target`.
+- **A top-level `do` is its members, one datum at a time**, in a whole program and in a
+  required namespace's file: the oracle's top-level `eval` loops over a `do`, so a
+  definition or a var-metadata write in one member reaches the members below it. This is
+  what carries a reader conditional's `#?(:clj (do ...))` library body, where specter
+  defines its aliases and then uses them in the same `do`.
 - **A `defmacro` name** is refused only when a call site could never reach the
   macro table: a reader head, a leading-dot or `/`-qualified name,
   or a trailing-dot name over a class spelling (a construction head,
@@ -7597,7 +7620,7 @@ resolve var`.
 - **`clojure.lang.Var` members** (g87, 2026-10-29; `ClojureValueMethodLowering.varRows`, on
   every backend): `.isDynamic` (the site's depth element, `%clojure-var-dynamic-p`, so a
   core special's var is dynamic), `.ns` (`%clojure-var-ns`, a producer of the namespace
-  family), `.sym`, `.toSymbol`, `.isMacro`, `.isPublic`, `.isBound` -- tools.analyzer's
+  family), `.sym`, `.toSymbol`, `.isMacro`, `.setMacro`, `.isPublic`, `.isBound` -- tools.analyzer's
   `dynamic?` and tools.analyzer.jvm's `create-var` read them. Pin: clojure-spec
   `var-get-answers-the-root-of-a-var` (oracle-identical).
 - **Unbound vars.** A declared-never-defined name and a value-less `def` are the oracle's

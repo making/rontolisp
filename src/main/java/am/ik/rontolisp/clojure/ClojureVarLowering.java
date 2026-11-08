@@ -928,15 +928,22 @@ final class ClojureVarLowering {
 	static LispVal alterMetaOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 3,
 				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/alter-meta!");
-		return ClojureLowerUtil.list(runtime("ALTER-META"), ctx.lower(items.get(1)), ctx.lower(items.get(2)),
+		LispVal var = ctx.lower(items.get(1));
+		LispVal call = ClojureLowerUtil.list(runtime("ALTER-META"), var, ctx.lower(items.get(2)),
 				ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 3)));
+		// the write may set :macro, which decides how the forms below it lower
+		ctx.noteMacroFlagWrite(literalVarName(items.get(1)), call, var);
+		return call;
 	}
 
 	/** {@code (reset-meta! r m)}: the reference's metadata becomes {@code m}. */
 	static LispVal resetMetaOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3,
 				"Wrong number of args (" + (items.size() - 1) + ") passed to: clojure.core/reset-meta!");
-		return ClojureLowerUtil.list(runtime("RESET-META"), ctx.lower(items.get(1)), ctx.lower(items.get(2)));
+		LispVal var = ctx.lower(items.get(1));
+		LispVal call = ClojureLowerUtil.list(runtime("RESET-META"), var, ctx.lower(items.get(2)));
+		ctx.noteMacroFlagWrite(literalVarName(items.get(1)), call, var);
+		return call;
 	}
 
 	/** {@code alter-meta!} or {@code reset-meta!} as a value. */

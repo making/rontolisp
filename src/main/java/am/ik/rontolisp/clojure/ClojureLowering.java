@@ -1674,6 +1674,32 @@ public final class ClojureLowering {
 	final List<String> macroExpanderKeys = new ArrayList<>();
 
 	/**
+	 * The var keys a metadata write made macros ({@code ^:macro}, an
+	 * {@code alter-meta! ... :macro true} or a {@code .setMacro}), and the kind each had
+	 * before, so a later write dropping the flag takes the macro meaning away again. A
+	 * {@code defmacro} is no member: its macro-ness is its form.
+	 */
+	final Set<String> metadataMacros = new LinkedHashSet<>();
+
+	/** The kind of each of {@link #metadataMacros} before its flag made it a macro. */
+	final Map<String, Kind> metadataMacroKinds = new LinkedHashMap<>();
+
+	/**
+	 * The var-metadata writes the top-level datum lowering now performs on a literal var,
+	 * in order: run in the macro-time image once the datum has lowered, so the macro flag
+	 * they set (or clear) decides how the forms below it lower, like the oracle's
+	 * form-by-form compile.
+	 */
+	List<MacroFlagWrite> macroFlagWrites = new ArrayList<>();
+
+	/**
+	 * One var-metadata write of a datum: the var key, the lowered write (evaluated into
+	 * the macro-time image in order) and the var form whose metadata the probe reads.
+	 */
+	record MacroFlagWrite(String key, LispVal write, LispVal var) {
+	}
+
+	/**
 	 * The core var forms a namespace's mapping lists ({@code ns-map}, {@code ns-publics}
 	 * of {@code clojure.core} ...), by identity: the lowering's own values, so a verb's
 	 * among them makes no program lower at run time ({@link ClojureRunTime#reachesAny}).
@@ -1925,7 +1951,9 @@ public final class ClojureLowering {
 		// pass two: lower
 		Datums pass = lowering.new Datums(reader, datums);
 		for (LispVal datum = pass.next(lowering.forms); datum != null; datum = pass.next(lowering.forms)) {
-			lowering.forms.addAll(lowering.topLevels(datum));
+			for (LispVal member : topLevelMembers(datum)) {
+				lowering.forms.addAll(lowering.topLevels(member));
+			}
 		}
 		if (lowering.takesMacroRoots && lowering.coreMacrosInBodies) {
 			// a program macro's root reaches the bodies that use the core macros'
@@ -2534,22 +2562,48 @@ public final class ClojureLowering {
 		// starts over from the namespace this pass started in
 		String ns = this.currentNs;
 		for (LispVal datum : datums) {
-			scanRedefinitions(datum);
+			for (LispVal member : topLevelMembers(datum)) {
+				scanRedefinitions(member);
+			}
 		}
 		try {
 			for (LispVal datum : datums) {
-				try {
-					declareOne(datum);
-					scanDynamicDefinitions(datum);
-				}
-				catch (LispReadException ex) {
-					throw positioned(ex, datum);
+				for (LispVal member : topLevelMembers(datum)) {
+					try {
+						declareOne(member);
+						scanDynamicDefinitions(member);
+					}
+					catch (LispReadException ex) {
+						throw positioned(ex, member);
+					}
 				}
 			}
 		}
 		finally {
 			this.currentNs = ns;
 		}
+	}
+
+	/**
+	 * The top-level forms a datum stands for: a {@code do} is the sequence of its
+	 * members, which the oracle's compiler evaluates one at a time at top level (its
+	 * {@code eval} loops over a top-level {@code do}), so a definition or a var-metadata
+	 * write in one member reaches the members below it -- how a reader conditional's
+	 * {@code #?(:clj (do ...))} library body defines and then uses its macros. Any other
+	 * datum stands for itself.
+	 * @param datum the top-level datum
+	 * @return its top-level forms, in order
+	 */
+	private static List<LispVal> topLevelMembers(LispVal datum) {
+		List<LispVal> items = ClojureLowerUtil.items(datum);
+		if (items == null || items.isEmpty() || !ClojureLowerUtil.isSymbolNamed(items.get(0), "do")) {
+			return List.of(datum);
+		}
+		List<LispVal> members = new ArrayList<>();
+		for (LispVal member : items.subList(1, items.size())) {
+			members.addAll(topLevelMembers(member));
+		}
+		return members;
 	}
 
 	/**
@@ -3398,6 +3452,40 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * Whether a local binding is in reach where the lowering stands: a metadata write
+	 * with one in reach reads a value only the program has, so it is not run in the
+	 * macro-time image.
+	 * @return whether some local is visible
+	 */
+	boolean inLocalScope() {
+		for (Map<String, Kind> scope : this.scopes) {
+			if (!scope.isEmpty()) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Records a var-metadata write over a literal var, to run in the macro-time image
+	 * once the top-level datum has lowered
+	 * ({@link ClojureMacroLowering#applyMacroFlagWrites}): what makes a var a macro below
+	 * the form.
+	 * @param name the name the var form spells, or null for any other reference
+	 * @param write the lowered write
+	 * @param var the lowered var form
+	 */
+	void noteMacroFlagWrite(@Nullable String name, LispVal write, LispVal var) {
+		if (name == null || this.macroEvaluator == null || inLocalScope()) {
+			return;
+		}
+		String key = lookupVar(name);
+		if (key != null) {
+			this.macroFlagWrites.add(new MacroFlagWrite(key, write, var));
+		}
+	}
+
+	/**
 	 * The symbol a name reads as: a local's own mangled name, else the var it resolves to
 	 * -- a redefined {@code defn}'s current definition (see {@link #currentDefnSym}), so
 	 * the call sites below each definition call the newest and a value position captures
@@ -3469,11 +3557,20 @@ public final class ClojureLowering {
 	List<LispVal> topLevels(LispVal form, boolean echoVars) {
 		List<LispVal> outer = this.hoisted;
 		boolean outerEcho = this.nestedDefAnswersVar;
+		List<MacroFlagWrite> outerWrites = this.macroFlagWrites;
 		this.hoisted = new ArrayList<>();
 		this.nestedDefAnswersVar = echoVars;
+		this.macroFlagWrites = new ArrayList<>();
 		try {
 			List<LispVal> own = echoVars ? echoingTopLevelsOf(form) : topLevelsOf(form);
 			ClojureMacroLowering.handOver(this, form, own);
+			// the datum's var-metadata writes run in the macro-time image now, so a
+			// flag they set or clear decides how the datums below it lower
+			List<LispVal> flagForms = ClojureMacroLowering.applyMacroFlagWrites(this);
+			if (!flagForms.isEmpty()) {
+				own = new ArrayList<>(own);
+				own.addAll(flagForms);
+			}
 			if (this.hoisted.isEmpty()) {
 				return own;
 			}
@@ -3484,6 +3581,7 @@ public final class ClojureLowering {
 		finally {
 			this.hoisted = outer;
 			this.nestedDefAnswersVar = outerEcho;
+			this.macroFlagWrites = outerWrites;
 		}
 	}
 
@@ -3526,57 +3624,8 @@ public final class ClojureLowering {
 			declare(datums);
 			Datums pass = new Datums(fileReader, datums);
 			for (LispVal datum = pass.next(loaded); datum != null; datum = pass.next(loaded)) {
-				if (isInitDef(datum)) {
-					// a def/defonce of the namespace runs when the namespace loads
-					// (a reload resets a def and keeps a defonce, like the oracle);
-					// a dynamic one's declaim and counter ride top-level, where the
-					// collectors read them
-					int mark = loaded.size();
-					// what the value hoists (a reify's rows) lands with the file's
-					// definitions, in order -- after the defprotocol whose table the
-					// rows store into (camel-snake-kebab's generic-separator)
-					List<LispVal> outer = this.hoisted;
-					this.hoisted = new ArrayList<>();
-					List<LispVal> init;
-					List<LispVal> valueHoisted;
-					try {
-						init = initDefForms(datum, loaded);
-					}
-					finally {
-						valueHoisted = this.hoisted;
-						this.hoisted = outer;
-					}
-					List<LispVal> handed = new ArrayList<>(loaded.subList(mark, loaded.size()));
-					handed.addAll(init);
-					loaded.addAll(valueHoisted);
-					ClojureMacroLowering.handOver(this, datum, handed);
-					statements.addAll(init);
-				}
-				else {
-					// like topLevels, but the drained hoisted forms (the namespaces
-					// this datum loads) stay top-level while only the datum's own
-					// forms join the definitions or the init
-					List<LispVal> outer = this.hoisted;
-					this.hoisted = new ArrayList<>();
-					List<LispVal> own;
-					try {
-						own = topLevelsOf(datum);
-						ClojureMacroLowering.handOver(this, datum, own);
-					}
-					finally {
-						loaded.addAll(this.hoisted);
-						this.hoisted = outer;
-					}
-					if (isDefinitionalDatum(datum)) {
-						// a definition's evaluated var metadata runs with the
-						// namespace's statements, where the definition stands
-						for (LispVal one : own) {
-							(ClojureVarLowering.isMetaStore(one) ? statements : loaded).add(one);
-						}
-					}
-					else {
-						statements.addAll(own);
-					}
+				for (LispVal member : topLevelMembers(datum)) {
+					lowerLoadedDatum(member, loaded, statements);
 				}
 			}
 			this.loadedNamespaces.add(ns);
@@ -3597,6 +3646,77 @@ public final class ClojureLowering {
 			this.uncheckedMath = outerUnchecked;
 		}
 		this.hoisted.addAll(loaded);
+	}
+
+	/**
+	 * One top-level datum of a loaded namespace's file lowered (see {@link #loadFile}): a
+	 * {@code def}/{@code defonce} runs when the namespace loads, anything else joins the
+	 * init, and the datum's var-metadata writes run in the macro-time image once it
+	 * lowered, like {@link #topLevels}.
+	 * @param datum the datum
+	 * @param loaded where the file's definitions go
+	 * @param statements where the namespace's init goes
+	 */
+	private void lowerLoadedDatum(LispVal datum, List<LispVal> loaded, List<LispVal> statements) {
+		if (isInitDef(datum)) {
+			// a def/defonce of the namespace runs when the namespace loads
+			// (a reload resets a def and keeps a defonce, like the oracle);
+			// a dynamic one's declaim and counter ride top-level, where the
+			// collectors read them
+			int mark = loaded.size();
+			// what the value hoists (a reify's rows) lands with the file's
+			// definitions, in order -- after the defprotocol whose table the
+			// rows store into (camel-snake-kebab's generic-separator)
+			List<LispVal> outer = this.hoisted;
+			this.hoisted = new ArrayList<>();
+			List<LispVal> init;
+			List<LispVal> valueHoisted;
+			try {
+				init = initDefForms(datum, loaded);
+			}
+			finally {
+				valueHoisted = this.hoisted;
+				this.hoisted = outer;
+			}
+			List<LispVal> handed = new ArrayList<>(loaded.subList(mark, loaded.size()));
+			handed.addAll(init);
+			loaded.addAll(valueHoisted);
+			ClojureMacroLowering.handOver(this, datum, handed);
+			statements.addAll(init);
+			return;
+		}
+		// like topLevels, but the drained hoisted forms (the namespaces
+		// this datum loads) stay top-level while only the datum's own
+		// forms join the definitions or the init
+		List<LispVal> outer = this.hoisted;
+		List<MacroFlagWrite> outerWrites = this.macroFlagWrites;
+		this.hoisted = new ArrayList<>();
+		this.macroFlagWrites = new ArrayList<>();
+		List<LispVal> own;
+		try {
+			own = topLevelsOf(datum);
+			ClojureMacroLowering.handOver(this, datum, own);
+			List<LispVal> flagForms = ClojureMacroLowering.applyMacroFlagWrites(this);
+			if (!flagForms.isEmpty()) {
+				own = new ArrayList<>(own);
+				own.addAll(flagForms);
+			}
+		}
+		finally {
+			loaded.addAll(this.hoisted);
+			this.hoisted = outer;
+			this.macroFlagWrites = outerWrites;
+		}
+		if (isDefinitionalDatum(datum)) {
+			// a definition's evaluated var metadata runs with the
+			// namespace's statements, where the definition stands
+			for (LispVal one : own) {
+				(ClojureVarLowering.isMetaStore(one) ? statements : loaded).add(one);
+			}
+		}
+		else {
+			statements.addAll(own);
+		}
 	}
 
 	/**

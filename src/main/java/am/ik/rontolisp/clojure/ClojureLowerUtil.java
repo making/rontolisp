@@ -190,6 +190,14 @@ final class ClojureLowerUtil {
 	}
 
 	/**
+	 * Whether a name datum carries {@code ^:macro} metadata (or {@code ^{:macro true}}),
+	 * under any wrapping: the oracle's flag that makes a var's root a macro function.
+	 */
+	static boolean nameIsMacro(LispVal nameDatum) {
+		return nameHasFlag(nameDatum, ":macro");
+	}
+
+	/**
 	 * Whether a name datum carries {@code ^:private} metadata (or {@code ^{:private
 	 * true}}), under any wrapping.
 	 */

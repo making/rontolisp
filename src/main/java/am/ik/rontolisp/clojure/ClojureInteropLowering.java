@@ -582,7 +582,13 @@ final class ClojureInteropLowering {
 				// a read of an http: or https: URL the program spells names fetch
 				ctx.readsUrlOf(items.get(1));
 			}
-			return instanceCall(ctx, ctx.lower(items.get(1)), name.substring(1), items.subList(2, items.size()));
+			LispVal target = ctx.lower(items.get(1));
+			LispVal call = instanceCall(ctx, target, name.substring(1), items.subList(2, items.size()));
+			if (name.equals(".setMacro")) {
+				// Var.setMacro() sets :macro, which decides how the forms below it lower
+				ctx.noteMacroFlagWrite(ClojureVarLowering.literalVarName(items.get(1)), call, target);
+			}
+			return call;
 		}
 		if (isConstructionHead(name)) {
 			String base = name.substring(0, name.length() - 1);

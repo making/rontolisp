@@ -501,6 +501,14 @@ final class ClojureValueMethodLowering {
 		row("toSymbol", 0, arm(List.of("var?"), core("symbol", R)));
 		row("isMacro", 0,
 				arm(List.of("var?"), core("boolean", core("get", core("meta", R), new LispSymbol(":macro")))));
+		// Var.setMacro(): the var's metadata gains :macro true, and the call answers nil
+		// (`do` is a special form, not a clojure.core var, so it is not core()-prefixed)
+		row("setMacro", 0,
+				arm(List.of("var?"),
+						ClojureLowerUtil.list(
+								new LispSymbol("do"), core("alter-meta!", R, new LispSymbol("assoc"),
+										new LispSymbol(":macro"), ClojureLowering.TRUE_CONST),
+								ClojureLowering.NIL_CONST)));
 		row("isPublic", 0, arm(List.of("var?"), core("not", core("get", core("meta", R), new LispSymbol(":private")))));
 		row("isBound", 0, arm(List.of("var?"), core("bound?", R)));
 	}

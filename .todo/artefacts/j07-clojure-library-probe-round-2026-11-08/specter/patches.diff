@@ -1,16 +1,5 @@
 --- a/com/rpl/specter.cljc
 +++ b/com/rpl/specter.cljc
-@@ -55,9 +55,7 @@
-    (do
- 
-      (defmacro defmacroalias [name target]
--       `(do
--          (def ~name (var ~target))
--          (alter-meta! (var ~name) merge {:macro true})))
-+       `(defmacro ~name [& args#] (cons '~target args#)))
- 
-      (defmacroalias richnav macros/richnav)
-      (defmacroalias nav macros/nav)
 @@ -188,7 +186,7 @@
          an illustrative example of dynamic navs."
         [name & args]

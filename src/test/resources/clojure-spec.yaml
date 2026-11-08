@@ -17815,3 +17815,64 @@ cases:
       false 9223372036854775807 (0 4611686018427387904 6917529027641081856) 63
       (0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29) (0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 29 28)
       false ()
+  - name: a-var-made-a-macro-by-its-metadata-expands-like-the-oracle
+    # Macro-ness is decided per call from the var's :macro metadata, which ^:macro,
+    # alter-meta! and .setMacro set: the re-export idiom potemkin and specter use
+    # (def alias (var target)) + (alter-meta! (var alias) merge {:macro true})
+    # answers the target's macro function, and a defn or a def'd fn whose flag is
+    # set is called with the call and its environment ahead of the arguments.
+    # Oracle-identical (clj 1.12.6, 2026-11-08).
+    source: |
+      (defmacro md-dn [name & body] `(def ~name ~@body))
+      (defmacro md-alias [name target]
+        `(do (def ~name (var ~target)) (alter-meta! (var ~name) merge {:macro true})))
+      (md-alias md-dn2 md-dn)
+      (md-dn2 md-x 5)
+      (println md-x)
+      (println (:macro (meta #'md-dn2)))
+      (println (macroexpand-1 '(md-dn2 md-q 1)))
+
+      (defn md-f [form env x] (list 'def x 42))
+      (alter-meta! #'md-f assoc :macro true)
+      (md-f md-y)
+      (println md-y)
+
+      (def ^:macro md-g (fn [form env x] (list 'def x 43)))
+      (md-g md-z)
+      (println md-z)
+
+      (defn md-h [form env x] (list 'def x 44))
+      (.setMacro #'md-h)
+      (md-h md-w)
+      (println md-w)
+      ;; dropping the flag takes the macro meaning away again
+      (reset-meta! #'md-h (dissoc (meta #'md-h) :macro))
+      (println (:macro (meta #'md-h)))
+      (println (macroexpand-1 '(md-h md-v 1)))
+      (println (md-h 1 2 3))
+    expected: |
+      5
+      true
+      (def md-q 1)
+      42
+      43
+      44
+      nil
+      (md-h md-v 1)
+      (def 3 44)
+  - name: a-macro-alias-referred-from-another-namespace-expands-its-target
+    # The re-export idiom across namespaces: the alias var is defined in one
+    # namespace and referred into another, like specter's defmacroalias.
+    # Oracle-identical (clj 1.12.6, 2026-11-08).
+    source: |
+      (ns metad-macros)
+      (defmacro ma-dn [name & body] `(def ~name ~@body))
+      (ns metad-aliases (:require [metad-macros :as a]))
+      (def ma-dn2 (var a/ma-dn))
+      (alter-meta! (var ma-dn2) merge {:macro true})
+      (ns metad-users (:require [metad-aliases :refer [ma-dn2]]))
+      (ma-dn2 ma-cross 77)
+      (println ma-cross)
+      (ns auto)
+    expected: |
+      77

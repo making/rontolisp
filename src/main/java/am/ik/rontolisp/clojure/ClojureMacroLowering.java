@@ -297,6 +297,143 @@ final class ClojureMacroLowering {
 	}
 
 	/**
+	 * The var-metadata writes a top-level datum performed on a literal var, run in the
+	 * macro-time image in order, then the var's {@code :macro} flag read: the oracle
+	 * decides macro-ness per call from that metadata, so a write that sets it makes the
+	 * var a macro from the next form on ({@code ^:macro}, {@code alter-meta!},
+	 * {@code .setMacro} and potemkin's re-export idiom alike), and one that clears it
+	 * takes the meaning away again.
+	 *
+	 * <p>
+	 * The write evaluates the same lowered form the program runs, in the image built from
+	 * the definitions handed over so far, so an alias whose root is another var answers
+	 * that var's root. A write the image cannot evaluate (a runtime value in reach) is
+	 * skipped: its flag stays what the lowering last decided.
+	 * @param ctx the lowering
+	 * @return the macro table entries of the macros it made, if any
+	 */
+	static List<LispVal> applyMacroFlagWrites(ClojureLowering ctx) {
+		List<ClojureLowering.MacroFlagWrite> writes = new ArrayList<>(ctx.macroFlagWrites);
+		ctx.macroFlagWrites.clear();
+		if (writes.isEmpty() || ctx.macroEvaluator == null) {
+			return List.of();
+		}
+		List<LispVal> forms = new ArrayList<>();
+		for (ClojureLowering.MacroFlagWrite write : writes) {
+			if (ctx.globals.get(write.key()) != ClojureLowering.Kind.MACRO) {
+				// a definition since the flag replaced the kind and the metadata: the
+				// tracking is stale, so a flag this write clears restores nothing
+				ctx.metadataMacros.remove(write.key());
+				ctx.metadataMacroKinds.remove(write.key());
+			}
+			boolean macro;
+			try {
+				ctx.macroEvaluator.evaluate(write.write());
+				LispVal flag = ctx.macroEvaluator.evaluate(macroFlagProbe(ctx, write.var()));
+				macro = truthy(flag);
+			}
+			catch (RuntimeException ex) {
+				continue;
+			}
+			if (macro) {
+				if (ctx.metadataMacros.contains(write.key())
+						|| ctx.globals.get(write.key()) == ClojureLowering.Kind.MACRO) {
+					continue;
+				}
+				forms.addAll(metadataMacro(ctx, write.key(), ClojureVarLowering.rootOfKey(ctx, write.key()),
+						ctx.globals.get(write.key())));
+			}
+			else if (ctx.metadataMacros.remove(write.key())) {
+				ctx.macros.remove(write.key());
+				ctx.envMacros.remove(write.key());
+				ClojureLowering.Kind previous = ctx.metadataMacroKinds.remove(write.key());
+				if (previous != null) {
+					ctx.globals.put(write.key(), previous);
+				}
+				// a run-time expansion reads the table, so the cleared flag must clear it
+				forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), macroTable(write.key()),
+						ClojureLowering.NIL_CONST));
+			}
+		}
+		return forms;
+	}
+
+	/**
+	 * The metadata read the flag probe performs over a var form: {@code (get (meta v)
+	 * :macro)}, through the table-aware read the oracle's {@code meta} and {@code get}
+	 * lower to.
+	 */
+	private static LispVal macroFlagProbe(ClojureLowering ctx, LispVal var) {
+		LispVal meta = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-META"), var);
+		return ClojureCollectionLowering.getForm(ctx, meta, ClojureCollectionLowering.keywordForm("macro"),
+				ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST);
+	}
+
+	/** Whether a macro-time value is the oracle's {@code true}: neither nil nor false. */
+	private static boolean truthy(LispVal value) {
+		return !(value instanceof LispNil) && !(value instanceof LispSymbol s && s.name().equals("false"));
+	}
+
+	/**
+	 * A var made a macro by its metadata: an expander that calls the var's root the way
+	 * the oracle calls a macro function, with the call and its environment ahead of the
+	 * arguments ({@code (&form &env & args)}). The root is read where the flag was set: a
+	 * function the var holds, a function defined directly, or -- the re-export idiom -- a
+	 * var object, which the call dispatches through.
+	 *
+	 * <p>
+	 * The expander takes the encoded argument values the macro-time image holds
+	 * ({@link #expandMacro}'s calling convention for a program macro) and hands them,
+	 * with the call and environment the expansion bound, to the root. It is registered in
+	 * the macro table and, for a whole program, indexed like a {@code defmacro}'s so a
+	 * run-time expansion reaches it.
+	 * @param ctx the lowering
+	 * @param key the var key
+	 * @param root the var's root where the flag was set
+	 * @param previous the kind the var had before the flag made it a macro
+	 * @return the forms the program carries for the table entry
+	 */
+	static List<LispVal> metadataMacro(ClojureLowering ctx, String key, LispVal root,
+			ClojureLowering.@Nullable Kind previous) {
+		LispSymbol args = new LispSymbol("__clojure_macro_args");
+		LispVal call = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CALL"), root,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), new LispSymbol(MACRO_FORM),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), new LispSymbol(MACRO_ENV), args)));
+		// the internal expander convention, like a defmacro's: one argument, the list of
+		// the call's argument values
+		LispVal expander = ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(args), call);
+		ctx.metadataMacros.add(key);
+		if (previous != null) {
+			ctx.metadataMacroKinds.putIfAbsent(key, previous);
+		}
+		ctx.macros.put(key, expander);
+		ctx.envMacros.add(key);
+		ctx.globals.put(key, ClojureLowering.Kind.MACRO);
+		List<LispVal> forms = new ArrayList<>();
+		LispSymbol table = macroTable(key);
+		if (ctx.open) {
+			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), table, expander));
+		}
+		else {
+			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), table,
+					new LispInteger(ctx.macroExpanders.size())));
+			ctx.macroExpanders.add(expander);
+			ctx.macroExpanderKeys.add(key);
+		}
+		forms.add(ClojureLowerUtil.list(ClojureStateLowering.NOTE_MACRO_EXPANDER, LispString.literal(key), expander));
+		if (ctx.macroEvaluator != null) {
+			try {
+				handOverCaughtClasses(ctx, ctx.macroEvaluator);
+				ctx.macroEvaluator.evaluate(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), table, expander));
+			}
+			catch (RuntimeException ex) {
+				// the table is read only when a later expansion takes the root
+			}
+		}
+		return forms;
+	}
+
+	/**
 	 * The heads of a top-level datum whose every lowered form is a definition -- a
 	 * function, a method or protocol table store, a record's constructors -- so the macro
 	 * evaluator replays all of it. Any other datum's statements ({@code prn}, a
