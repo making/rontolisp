@@ -1075,7 +1075,7 @@ final class ClojureMacroLowering {
 			// literal's own spelling, its forName object where a host is and its
 			// designator where none is -- the same value a source spelling lowers to
 			LispVal literal = ClojureInteropLowering.classValue(ctx, type.getName());
-			// a class no spelling here names (clojure.core$long, .todo/j15): its
+			// a class no source spelling here names (clojure.core$long): its
 			// designator
 			if (literal == null) {
 				literal = ClojureCoreLowering.classDesignator(type.getName());

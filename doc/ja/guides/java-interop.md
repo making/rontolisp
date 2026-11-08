@@ -183,7 +183,7 @@ Java の false は Common Lisp 唯一の偽である `nil` として返ります
   (java:call m "put" (java:handle 'apple "apple") 1)
   (list (java:call m "toString")
         (java:call m "get" (java:handle nil "apple"))
-        (java:call (java:call m "keySet") "toArray")))   ; => ("{apple=1}" 1 (APPLE))
+        (java:call (java:call m "keySet") "toArray")))   ; => ("{apple=1}" 1 #(APPLE))
 ```
 
 完全な形は `(java:handle value text hash order class)` で、ほかに関数そのものであるオブジェクトを作る `(java:handle function :functional :java-false ...)` があります ([Java の false を受け取る](#javas-false-back-java-false))。`hash` が nil のハンドルは、同じクラスでまったく同じ値を表すオブジェクト (同様のハンドル、`:value` を付けた `java:reify`、関数そのものであるオブジェクト) とだけ等しくなり、このとき `text` を nil にすると `Object` と同じくクラス名とハッシュで綴られます。関数の `order` は、値と、Java がハンドルと比べるオブジェクトとを比べ、その答えの符号で順序を決めます。`order` が nil のハンドルは何とも順序付けられません。`class` は等価と順序を分けます。クラスの異なるハンドル同士は等しくならず、比べると両方のクラス名を挙げた `ClassCastException` になります。実数のハンドルは、その数の `java.lang.Number` です ([java:handle](../reference/functions/java-handle.md))。値を表しながらインターフェースも実装するオブジェクトは、`:value` を付けた `java:reify` で作ります ([java:reify によるインターフェースの実装](#implementing-interfaces-with-javareify))。

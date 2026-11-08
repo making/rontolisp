@@ -168,7 +168,7 @@ class JvmLispCompilerSplitTest {
 		JvmLispCompiler whole = JvmLispCompiler.builder().className("Features").build();
 		String expected = run("Features", whole.compile(program(source)), whole.runtimeClassFiles());
 		assertThat(expected).contains("\"[1, 2]\"")
-			.endsWith("(3 4.0)\n7\n\"ba\"\n(97 98)\n1\n2\n3\n10\n\"boom 1\"\n(\"[1, 2, apple]\" APPLE |false|)\n#(9 0)"
+			.endsWith("(3 4.0)\n7\n\"ba\"\n#(97 98)\n1\n2\n3\n10\n\"boom 1\"\n(\"[1, 2, apple]\" APPLE |false|)\n#(9 0)"
 					+ "\n(\"5\" 30)");
 		JvmLispCompiler split = JvmLispCompiler.builder().className("Features").classPoolLimit(3000).build();
 		byte[] splitMain = split.compile(program(source));

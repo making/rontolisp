@@ -295,7 +295,7 @@ the value:
   (java:call m "put" (java:handle 'apple "apple") 1)
   (list (java:call m "toString")
         (java:call m "get" (java:handle nil "apple"))
-        (java:call (java:call m "keySet") "toArray")))   ; => ("{apple=1}" 1 (APPLE))
+        (java:call (java:call m "keySet") "toArray")))   ; => ("{apple=1}" 1 #(APPLE))
 ```
 
 The full form is `(java:handle value text hash order class)`, beside `(java:handle function

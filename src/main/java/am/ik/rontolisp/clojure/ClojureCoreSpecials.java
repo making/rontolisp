@@ -279,6 +279,16 @@ final class ClojureCoreSpecials {
 	 */
 	static List<LispVal> definitions(ClojureLowering ctx, Collection<String> names) {
 		List<LispVal> forms = new ArrayList<>();
+		if (names.contains("*data-readers*") && ctx.dataReadersRoot == null) {
+			// The default root IS the oracle's canonical empty map, so it lowers to
+			// clojure.lisp's %clojure-empty-map. A session evaluates its specials
+			// before the library loads, so the object is defined here first; the
+			// library's own defvar (the same initform) is idempotent and keeps this
+			// one.
+			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("defvar"), ClojureCollectionLowering.EMPTY_MAP,
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("make-hash-table"), new LispSymbol(":TEST"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.sym("equal")))));
+		}
 		for (Special special : SPECIALS.values()) {
 			if (!names.contains(special.name())) {
 				continue;

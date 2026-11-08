@@ -5878,6 +5878,9 @@ final class JvmJavaDirectSites {
 		a.loadConstant(3);
 		a.aaload();
 		a.ifnonnull(nil);
+		// The slot is shared with a remembered element type, whose names are RAW
+		// strings; the component is stored as the Lisp string, quote-framed, so a
+		// quoted String is the component and the answer is its unquoted name.
 		a.aload(2);
 		a.loadConstant(4);
 		a.aaload();
@@ -5887,6 +5890,22 @@ final class JvmJavaDirectSites {
 		a.loadConstant(4);
 		a.aaload();
 		a.checkcast(stringClass);
+		a.ldc(cp.stringEntry("\""));
+		a.invokevirtual(method("java/lang/String", "startsWith", "(Ljava/lang/String;)Z"));
+		a.ifeq(nil);
+		a.aload(2);
+		a.loadConstant(4);
+		a.aaload();
+		a.checkcast(stringClass);
+		a.loadConstant(1);
+		a.aload(2);
+		a.loadConstant(4);
+		a.aaload();
+		a.checkcast(stringClass);
+		a.invokevirtual(method("java/lang/String", "length", "()I"));
+		a.loadConstant(1);
+		a.isub();
+		a.invokevirtual(method("java/lang/String", "substring", "(II)Ljava/lang/String;"));
 		a.areturn();
 		a.labelBinding(nil);
 		a.aconst_null();

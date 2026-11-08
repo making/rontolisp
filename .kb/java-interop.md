@@ -311,7 +311,12 @@ Package `java` (`LispNames.JAVA_PKG`, `PackageRegistry`; does NOT use `cl`): `ja
   Java name. A `byte[]` without `:octets` keeps the list of signed bytes (the byte-array
   family's own representation is the `:octets` vector). Interpreter `LispArray.javaComponent`
   (`%array-java-component`), compiled header slot 4 (the slot `_arrayAdoptElementType`
-  copies), bridge `arrayToVector`. The stamp makes an argument cross as the array type the
+  copies), bridge `arrayToVector`. The slot is shared with a remembered element type,
+  whose names are RAW strings ("BIT", "SINGLE-FLOAT"); the component is stored as the
+  Lisp string it is, quote-framed ("\"int\""), and that framing is what
+  `_arrayElementType`/`_arrayDefaultElement` and the bridge's `javaComponentOf` read to
+  tell the two apart (measured 2026-11-09: without it, every array built with a runtime
+  `:element-type` string answered `t` and a bit vector stopped being a bit vector). The stamp makes an argument cross as the array type the
   value really is: `object-array` as `Object[]` (never the primitive array its element costs
   would choose), a returned `int[]`/`long[]`/`double[]` as that array. The cost is the same
   name comparison on all three paths (`arrayComponentCost`; the direct sites' `_jcomp` and

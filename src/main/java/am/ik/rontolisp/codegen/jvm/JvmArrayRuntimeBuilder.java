@@ -390,8 +390,8 @@ final class JvmArrayRuntimeBuilder {
 			TO_DISPLAY_STRING, FILL_POINTER, SET_FILL_POINTER, HAS_FILL_POINTER, ADJUSTABLE_ARRAY_P, VECTOR_PUSH,
 			VECTOR_POP, VECTOR_PUSH_EXTEND, MAKE_DISPLACED, UNDISPLACE, RM_GET, RM_SET, ARRAY_BECOME, DISP_TARGET,
 			DISP_OFFSET, CHAR_VEC_MAKE, STRV, STR_TO_CHAR_VEC, SUBSEQ_CV, TO_MUT_STR, WIDEN, MAKE_TYPED, ELEMENT_TYPE,
-			DEFAULT_ELEMENT, ADOPT_ELEMENT_TYPE, ALIKE, CHECK_RANK, RANK_ERR, ARRAY_BECOME_DISPLACED, CK_ARRAY,
-			CK_FILL_POINTER, DIMS_TOTAL);
+			DEFAULT_ELEMENT, ADOPT_ELEMENT_TYPE, JAVA_COMPONENT, SET_JAVA_COMPONENT, ALIKE, CHECK_RANK, RANK_ERR,
+			ARRAY_BECOME_DISPLACED, CK_ARRAY, CK_FILL_POINTER, DIMS_TOTAL);
 
 	/** An array helper method body ready to be emitted into the generated class. */
 	record ArrayMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
@@ -2159,6 +2159,7 @@ final class JvmArrayRuntimeBuilder {
 		MethodCode.Label aetTop = aet.newLabel();
 		MethodCode.Label aetOwn = aet.newLabel();
 		MethodCode.Label aetNotPacked = aet.newLabel();
+		MethodCode.Label aetOwnType = aet.newLabel();
 		MethodCode.Label aetPackedDone = aet.newLabel();
 		aet.labelBinding(aetTop);
 		// The hop may land on a PACKED target, whose element type is its representation
@@ -2194,12 +2195,19 @@ final class JvmArrayRuntimeBuilder {
 		aet.astore(2);
 		aet.aload(2);
 		aet.ifnull(aetT);
-		// A String there is the Java array component (%array-java-component), not an
-		// element type: array-element-type answers t for it, as the interpreter does
-		// (its component is a field apart from the remembered element type).
+		// A quote-framed String there is the Java array component
+		// (%array-java-component), not an element type -- those names are raw strings:
+		// array-element-type answers t for it, as the interpreter does (its component
+		// is a field apart from the remembered element type).
 		aet.aload(2);
 		aet.instanceOf(cp.classEntry("java/lang/String"));
+		aet.ifeq(aetOwnType);
+		aet.aload(2);
+		aet.checkcast(cp.classEntry("java/lang/String"));
+		aet.ldc(cp.stringEntry("\""));
+		aet.invokevirtual(cp.methodRef(cp.classEntry("java/lang/String"), "startsWith", "(Ljava/lang/String;)Z"));
 		aet.ifne(aetT);
+		aet.labelBinding(aetOwnType);
 		aet.aload(2);
 		aet.areturn();
 		aet.labelBinding(aetT);
@@ -2223,6 +2231,7 @@ final class JvmArrayRuntimeBuilder {
 		MethodCode de = new MethodCode();
 		MethodCode.Label deNil = de.newLabel();
 		MethodCode.Label deChar = de.newLabel();
+		MethodCode.Label deNotComponent = de.newLabel();
 		MethodCode.Label deInt = de.newLabel();
 		// A runtime string IS a rank-1 character array, so it answers the character zero
 		// even though it carries no header at all.
@@ -2252,6 +2261,17 @@ final class JvmArrayRuntimeBuilder {
 		de.astore(2);
 		de.aload(2);
 		de.ifnull(deNil);
+		// A quote-framed String is the Java array component, not a remembered element
+		// type: the array remembers nothing, so its unsupplied slot is nil.
+		de.aload(2);
+		de.instanceOf(stringClass);
+		de.ifeq(deNotComponent);
+		de.aload(2);
+		de.checkcast(stringClass);
+		de.ldc(cp.stringEntry("\""));
+		de.invokevirtual(cp.methodRef(stringClass, "startsWith", "(Ljava/lang/String;)Z"));
+		de.ifne(deNil);
+		de.labelBinding(deNotComponent);
 		de.aload(2);
 		de.instanceOf(objectArrayClass);
 		de.ifne(deInt);
@@ -2418,11 +2438,15 @@ final class JvmArrayRuntimeBuilder {
 		methods.add(new ArrayMethod(cp.utf8Entry(ADOPT_ELEMENT_TYPE), cp.utf8Entry(ADOPT_ELEMENT_TYPE_DESC), ad));
 
 		// _arrayJavaComponent(a) -> Object: the Java array component the vector stands
-		// for, or null. Only header slot 4 of a non-displaced header long enough to have
-		// one is read; a String there is the component, anything else (a remembered
-		// element type) is no Java component. Locals: 0 = a, 1 = header.
+		// for, as the Lisp string (%array-java-component answers one), or null. Only
+		// header slot 4 of a non-displaced header long enough to have one is read. The
+		// slot is shared with a remembered element type, whose names are RAW strings
+		// ("BIT", "SINGLE-FLOAT"); a Lisp string is quote-framed ("\"int\""), so a
+		// quote-framed String there is the component and anything else is no component.
+		// Locals: 0 = a, 1 = header.
 		MethodCode jc = new MethodCode();
 		MethodCode.Label jcNil = jc.newLabel();
+		MethodRefEntry stringStartsWithFrame = cp.methodRef(stringClass, "startsWith", "(Ljava/lang/String;)Z");
 		jc.aload(0);
 		jc.instanceOf(arrayListClass);
 		jc.ifeq(jcNil);
@@ -2444,6 +2468,13 @@ final class JvmArrayRuntimeBuilder {
 		jc.aload(1);
 		jc.loadConstant(4);
 		jc.aaload();
+		jc.checkcast(stringClass);
+		jc.ldc(cp.stringEntry("\""));
+		jc.invokevirtual(stringStartsWithFrame);
+		jc.ifeq(jcNil);
+		jc.aload(1);
+		jc.loadConstant(4);
+		jc.aaload();
 		jc.areturn();
 		jc.labelBinding(jcNil);
 		jc.aconst_null();
@@ -2457,48 +2488,15 @@ final class JvmArrayRuntimeBuilder {
 		MethodCode jcs = new MethodCode();
 		MethodCode.Label jcsDone = jcs.newLabel();
 		MethodCode.Label jcsGrow = jcs.newLabel();
-		// The component is a Lisp STRING: compiled, a string carries its quote framing
-		// ("\"int\""), so the raw name is stored unquoted -- the form the bridge and the
-		// interpreter store, and the form the cost comparisons read.
+		// The component is the Lisp STRING of that name: compiled, a string carries its
+		// quote framing ("\"int\""), and the framing is what tells the slot apart from
+		// a remembered element type's RAW name ("BIT"). A caller of another shape
+		// forgets the component.
 		MethodCode.Label jcsNameDone = jcs.newLabel();
-		MethodRefEntry jcLength = cp.methodRef(stringClass, "length", "()I");
-		MethodRefEntry jcCharAt = cp.methodRef(stringClass, "charAt", "(I)C");
-		MethodRefEntry jcSubstring = cp.methodRef(stringClass, "substring", "(II)Ljava/lang/String;");
-		jcs.aload(1);
-		jcs.ifnull(jcsNameDone);
 		jcs.aload(1);
 		jcs.instanceOf(stringClass);
-		jcs.ifeq(jcsNameDone);
-		jcs.aload(1);
-		jcs.checkcast(stringClass);
-		jcs.invokevirtual(jcLength);
-		jcs.loadConstant(2);
-		jcs.if_icmplt(jcsNameDone);
-		jcs.aload(1);
-		jcs.checkcast(stringClass);
-		jcs.loadConstant(0);
-		jcs.invokevirtual(jcCharAt);
-		jcs.loadConstant('"');
-		jcs.if_icmpne(jcsNameDone);
-		jcs.aload(1);
-		jcs.checkcast(stringClass);
-		jcs.aload(1);
-		jcs.checkcast(stringClass);
-		jcs.invokevirtual(jcLength);
-		jcs.loadConstant(1);
-		jcs.isub();
-		jcs.invokevirtual(jcCharAt);
-		jcs.loadConstant('"');
-		jcs.if_icmpne(jcsNameDone);
-		jcs.aload(1);
-		jcs.checkcast(stringClass);
-		jcs.loadConstant(1);
-		jcs.aload(1);
-		jcs.checkcast(stringClass);
-		jcs.invokevirtual(jcLength);
-		jcs.loadConstant(1);
-		jcs.isub();
-		jcs.invokevirtual(jcSubstring);
+		jcs.ifne(jcsNameDone);
+		jcs.aconst_null();
 		jcs.astore(1);
 		jcs.labelBinding(jcsNameDone);
 		jcs.aload(0);

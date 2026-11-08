@@ -3463,7 +3463,9 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   members (`array element type mismatch` else).
 - **The Java crossing** (2026-11-08, j25): a typed array is stamped with the Java
   array component it stands for (`%array-java-component`, `LispArray.javaComponent`
-  on the interpreter, header slot 4 compiled, a no-op on wasm), so a `java:` member
+  on the interpreter, header slot 4 compiled as the quote-framed Lisp string -- the
+  framing separates it from a remembered element type's raw name -- a no-op on wasm),
+  so a `java:` member
   takes it as the array it is -- `object-array` as `Object[]`, `int-array` as
   `int[]`, never the primitive array its element costs would choose -- and a Java
   array a member answers is the same stand-in stamped the same way. The write-back of

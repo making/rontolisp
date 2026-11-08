@@ -2708,7 +2708,7 @@ final class JavaBridgeTemplate {
 		int length = Array.getLength(array);
 		ArrayList<Object> list = new ArrayList<>(length + 1);
 		Object[] header = new Object[] { new Object[] { Long.valueOf(length) }, null, null, null,
-				array.getClass().getComponentType().getName() };
+				"\"" + array.getClass().getComponentType().getName() + "\"" };
 		list.add(header);
 		for (int i = 0; i < length; i++) {
 			list.add(unmarshal(Array.get(array, i), javaFalse, octets));
@@ -2717,13 +2717,15 @@ final class JavaBridgeTemplate {
 	}
 
 	// The Java array component a Lisp vector stands for (header slot 4 of a
-	// non-displaced array long enough to have one), or null.
+	// non-displaced array long enough to have one), or null. The slot is shared with a
+	// remembered element type, whose names are raw strings; a Lisp string is
+	// quote-framed, so only a quoted String there is the component.
 	private static @Nullable String javaComponentOf(@Nullable Object value) {
 		Object[] header = lispArrayHeader(value);
-		if (header == null || header.length < 5 || header[3] != null || !(header[4] instanceof String component)) {
+		if (header == null || header.length < 5 || header[3] != null || !isLispString(header[4])) {
 			return null;
 		}
-		return component;
+		return stringValue((String) header[4]);
 	}
 
 	// What an array target costs a value stamped with a Java component: exact for its own
@@ -2781,9 +2783,10 @@ final class JavaBridgeTemplate {
 			lisp = viewValueOf(value);
 		}
 		Object[] header = lispArrayHeader(lisp);
-		if (header == null || header.length < 5 || header[3] != null || !(header[4] instanceof String component)) {
+		if (header == null || header.length < 5 || header[3] != null || !isLispString(header[4])) {
 			return;
 		}
+		String component = stringValue((String) header[4]);
 		if (arrayComponentCost(component, target) == NO_MATCH) {
 			return;
 		}
@@ -2791,7 +2794,7 @@ final class JavaBridgeTemplate {
 		int length = Math.min(Array.getLength(javaArray), ((Number) dims[0]).intValue());
 		ArrayList<Object> list = (ArrayList<Object>) Objects.requireNonNull(lisp);
 		list.clear();
-		list.add(new Object[] { header[0], null, null, null, component });
+		list.add(new Object[] { header[0], null, null, null, header[4] });
 		for (int i = 0; i < length; i++) {
 			list.add(unmarshal(Array.get(javaArray, i), javaFalse, octets));
 		}
