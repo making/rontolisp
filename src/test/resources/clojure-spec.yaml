@@ -6931,6 +6931,10 @@ cases:
     # is (ClojureRingAdapterTest serves it). A reader over a reader is the stream
     # itself. Matches the oracle (clj 1.12.6, 2026-10-08); slurp closes the stream
     # it read, and the with-open below closing it again is harmless.
+    # A bare java.io.StringReader construction is a string input stream too (2026-11-08):
+    # the oracle's IOFactory extends Reader/Writer, so slurp, reader and line-seq take
+    # one, and io/writer takes a java.io.StringWriter; data.csv's
+    # (with-open [r (io/reader ...)] (read-csv r)) and aero's read-config of one need it.
     source: |
       (println (slurp (java.io.BufferedReader. (java.io.StringReader. "ab\ncd"))))
       (println (line-seq (clojure.java.io/reader (java.io.BufferedReader. (java.io.StringReader. "x\ny")))))
@@ -6938,12 +6942,24 @@ cases:
                            (clojure.java.io/reader (java.io.PushbackReader. (java.io.StringReader. "w")))]))
       (with-open [r (clojure.java.io/reader (java.io.BufferedReader. (java.io.StringReader. "z\n")))]
         (println (pr-str (slurp r))))
+      (println (slurp (java.io.StringReader. "abc")))
+      (println (line-seq (clojure.java.io/reader (java.io.StringReader. "a\nb"))))
+      (with-open [r (clojure.java.io/reader (java.io.StringReader. "s\nt"))]
+        (println (pr-str (slurp r))))
+      (let [w (java.io.StringWriter.) out (clojure.java.io/writer w)]
+        (.write out "ab\n")
+        (.flush out)
+        (println (pr-str (str w))))
     expected: |
       ab
       cd
       (x y)
       (v w)
       "z\n"
+      abc
+      (a b)
+      "s\nt"
+      "ab\n"
   - name: slurp-closes-the-stream-it-reads
     # slurp of an open reader closes it, like the oracle's with-open (clj 1.12.6,
     # 2026-10-08): every later read -- .read, .readLine, slurp, line-seq,

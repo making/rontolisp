@@ -3692,6 +3692,23 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   (`ClojureIoLowering.construction`): `File.` of 1/2, `FileInputStream.`,
   `FileOutputStream.` (append), `FileReader.`, `FileWriter.` (append), `Buffered*.` (the
   stream itself), `OutputStreamWriter.`, `InputStreamReader.` over a byte stream.
+- **`(java.io.StringReader. s)` and `(java.io.StringWriter.)`** (2026-11-08): the oracle's
+  `IOFactory` extends `Reader`/`Writer`, so `slurp`, `reader`, `writer`, `line-seq` and
+  `copy` take the JDK's own string streams -- data.csv's
+  `(with-open [r (io/reader ...)] (read-csv r))` and aero's `read-config` of a
+  `StringReader` need it. `ClojureInteropLowering.stringReaderConstruction` lowers an
+  untagged 1-argument construction to `%clojure-string-reader` (a string input stream),
+  as `stringWriterConstruction`/`stringStreamConstruction` already did for
+  `StringWriter`/`StringBuilder`; measured 2026-11-08: before it the bare construction
+  was a host object on the interpreter and the JVM (`slurp` answered `Cannot open
+  <#<java java.io.StringReader>> as an InputStream`), and on both WASM targets it had no
+  lowering at all, `java:` being a call-time error there. A genuine host
+  `java.io.Reader`/`Writer` from a `java:` member still has no arm -- a string stream is
+  the one shape a program builds. Measured after: the same program prints `"wasm-abc"` /
+  `("p" "q")` / `"z\n"` under `wasmtime run` (both WASM targets). The
+  string input stream prints and answers `class` as `clojure.lang.LineNumberingPushbackReader`
+  (`doc/*/clojure/deviations.md`), the existing deviation. Pins: clojure-spec
+  `slurp-and-the-reader-take-an-open-stream` (four legs).
 - **Resources** (2026-10-10, e96; every claim against clj 1.12.6 on JDK 25). `resource` is a
   PART (`clojure/java/io_resource.clj`): `ClojureIoLowering.literalResource` answers a
   literal-name call in `ClojureLowering.lowerInner` ahead of the macro check (whose

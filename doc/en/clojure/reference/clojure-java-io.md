@@ -87,7 +87,12 @@ included (`java.io.InputStream` for a byte stream).
 ## Streams
 
 A reader or writer over a file is a character stream like `*in*` and `*out*`, so `line-seq`,
-`read`, `.readLine`, a `binding` of `*in*` or `*out*` and `with-open` take it. A byte stream
+`read`, `.readLine`, a `binding` of `*in*` or `*out*` and `with-open` take it. A
+`(java.io.StringReader. s)` is a character input stream over `s`, and a
+`(java.io.StringWriter.)` a character output stream, on every backend: `slurp`, `reader`
+and `line-seq` take the reader, `writer` and `copy` the writer, so
+`(with-open [r (io/reader (java.io.StringReader. "a,b"))] ...)` reads a string as a
+library's `reader` would ([Deviations](../deviations.md)). A byte stream
 answers `read` (the next octet, `-1` past the end), `read` into a byte array or a part of one
 (the count read, `-1` past the end), `readNBytes`, `readAllBytes` (a byte array), `available`,
 `skip`, `transferTo`, `write` of an int's low octet or of a byte array or a part of one,

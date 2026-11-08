@@ -88,7 +88,11 @@ URL は綴りを保ち、`getProtocol`、`getHost`、`getPort`、`getPath`、`ge
 ## ストリーム
 
 ファイルの上のリーダーとライターは `*in*` や `*out*` と同じ文字ストリームなので、`line-seq`、
-`read`、`.readLine`、`*in*` や `*out*` の `binding`、`with-open` が受け付けます。バイトストリームは
+`read`、`.readLine`、`*in*` や `*out*` の `binding`、`with-open` が受け付けます。
+`(java.io.StringReader. s)` は `s` の上の文字入力ストリーム、`(java.io.StringWriter.)` は文字出力
+ストリームで、どのバックエンドでも `slurp`、`reader`、`line-seq` はその入力を、`writer` と `copy`
+はその出力を受け付けます。したがって `(with-open [r (io/reader (java.io.StringReader. "a,b"))] ...)`
+は、ライブラリの `reader` がするように文字列を読みます（[相違点](../deviations.md)）。バイトストリームは
 `read`（次のオクテット。終端の先では `-1`）、バイト配列やその一部への `read`（読んだ数。終端の
 先では `-1`）、`readNBytes`、`readAllBytes`（バイト配列）、`available`、`skip`、`transferTo`、
 `write`（int の下位オクテット、バイト配列やその一部）、`flush`、`close` に答えます。バイト

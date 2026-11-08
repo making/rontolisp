@@ -27,7 +27,9 @@
  `#object[java.io.OutputStreamWriter "java.io.OutputStreamWriter"]`）。`str` も同じ形の
  `toString` を答えます。文字列入力ストリームは `with-in-str` の
  `clojure.lang.LineNumberingPushbackReader` で、オラクルが `StringReader` の上の
- `java.io.PushbackReader` を答える場合も同じです。
+ `java.io.PushbackReader` を答える場合も同じです。`(java.io.StringReader. s)` の構築も
+ 同じ文字列入力ストリームなので、印字も `class` も `java.io.StringReader` ではなく
+  `clojure.lang.LineNumberingPushbackReader` になります。
 - `*print-meta*` はオラクル同様に値のメタデータを値の前に書きますが、クォートしたリストは
  オラクルのリーダーが付ける `:line`/`:column` メタデータを持ちません。`*print-dup*` は
  プリンタが読まないただの値です。`assert` は展開される時点の `*assert*` を読むため、

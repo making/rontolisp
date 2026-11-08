@@ -527,6 +527,9 @@ final class ClojureInteropLowering {
 	/** A reader over a {@code java.io.StringReader}: a string input stream. */
 	static final String STRING_READER = "RONTOLISP::%CLOJURE-STRING-READER";
 
+	/** {@code java.io.StringReader}: a construction of one is a string input stream. */
+	static final String STRING_READER_CLASS = "java.io.StringReader";
+
 	/** The stream test, an arm of {@code ClojureArms.Family.STREAM}. */
 	static final String STREAM_P = "RONTOLISP::%CLOJURE-STREAM-P";
 
@@ -902,6 +905,10 @@ final class ClojureInteropLowering {
 			LispVal writer = stringWriterConstruction(cls, arg);
 			if (writer != null) {
 				return writer;
+			}
+			LispVal reader = stringReaderConstruction(cls, arg);
+			if (reader != null) {
+				return reader;
 			}
 			if (!ctx.hostTarget) {
 				LispVal hashMap = hashMapCopy(ctx, cls, arg);
@@ -1713,6 +1720,10 @@ final class ClojureInteropLowering {
 			if (writer != null) {
 				return writer;
 			}
+			LispVal reader = stringReaderConstruction(cls, args.get(0));
+			if (reader != null) {
+				return reader;
+			}
 			if (!ctx.hostTarget) {
 				LispVal hashMap = hashMapCopy(ctx, cls, args.get(0));
 				if (hashMap != null) {
@@ -1894,6 +1905,24 @@ final class ClojureInteropLowering {
 	static @Nullable LispVal stringWriterConstruction(String cls, LispVal arg) {
 		if (cls.equals(STRING_WRITER_CLASS)) {
 			return ClojureLowerUtil.list(new LispSymbol(STRING_WRITER_1), arg);
+		}
+		return null;
+	}
+
+	/**
+	 * A one-argument {@code java.io.StringReader} construction (dotted or imported,
+	 * resolved) over the already-lowered argument: a string input stream of its text
+	 * ({@code %clojure-string-reader}, a stream producer), so every backend runs it --
+	 * wasm included, which never sees the refused {@code java:new} -- and {@code slurp},
+	 * {@code clojure.java.io/reader} and {@code line-seq} take it, the oracle's
+	 * {@code IOFactory} arm for a {@code java.io.Reader}. Only untagged constructions
+	 * reach it (the callers keep a tagged one, whose param tags name the host overload,
+	 * on {@code java:new}); a construction of any other count keeps its {@code java:new}
+	 * shape. Null for any other class.
+	 */
+	static @Nullable LispVal stringReaderConstruction(String cls, LispVal arg) {
+		if (cls.equals(STRING_READER_CLASS)) {
+			return ClojureLowerUtil.list(new LispSymbol(STRING_READER), arg);
 		}
 		return null;
 	}

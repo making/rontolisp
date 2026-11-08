@@ -26,7 +26,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `#object[java.io.OutputStreamWriter "java.io.OutputStreamWriter"]`), and `str` answers
   its `toString` the same way: a string input stream is a
   `clojure.lang.LineNumberingPushbackReader` (`with-in-str`'s), also where the oracle's is
-  a `java.io.PushbackReader` over a `StringReader`.
+  a `java.io.PushbackReader` over a `StringReader`; a `(java.io.StringReader. s)`
+  construction is one too, so it prints and answers `class` as that rather than as a
+  `java.io.StringReader`.
 - `*print-meta*` writes a value's metadata ahead of it like the oracle, but no quoted
   list carries the oracle reader's `:line`/`:column` metadata; `*print-dup*` is a plain
   value the printer does not read. `assert` reads `*assert*` where it expands, so a
