@@ -4188,6 +4188,23 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   for the parameter numbers). A `#()`
   lowers to fixed parameters instead of `&rest` + `nth`, so `#()`-using programs shrink;
   a `read-string` program carries the run-time `#()` reader.
+- **A class value decodes to a constant** (2026-11-08, j20). A `(:C%CLASS name)` designator
+  (`type`'s answer, and a class literal where no host is) travels under `%embedded` as the
+  `(list :C%CLASS name)` construction the lowering emits for it
+  (`ClojureMacroLowering.decodeClass`): its head is this front end's keyword symbol, which
+  no quoted datum spells, so a `quote` round trip would turn it into a `:C%KEYWORD`
+  wrapper. A host `java.lang.Class` a macro body evaluated decodes to the class literal's
+  own spelling -- its `forName` object where a host is, its designator where none is, and
+  a designator for a name no spelling loads here (`clojure.core$long`, j15). So
+  datascript's `defn+` puts `java.lang.Boolean` into `:tag` metadata and lowers
+  (`(prn (db/datom 1 :name "Ivan" 5))` prints the oracle's line with the `boolean` line of
+  j07's patch-tag hunk reverted); the tag is the oracle's class (visible in `(meta #'x)`,
+  ignored elsewhere) on the interpreter and the JVM, a designator on wasm. The hunk's
+  `clojure.core$long` line still needs j15: `unknown name: clojure.core$long` at
+  `db.cljc:80` lowers the whole file, no `^number` expansion involved. Pins: clojure-spec
+  `a-macro-expansion-holding-a-class-value-lowers`,
+  `a-macro-expansions-tag-metadata-holds-the-class-value` (the host legs),
+  `ClojureLoweringTest#aMacroExpansionHoldingAClassValueLowersAsAConstant`.
 - `macroexpand-1`/`macroexpand` answer the mangled data itself, so `=` against a quoted form
   holds and the printer (demangling `c%`) spells the oracle's lowercase; a non-macro head
   answers the form, and `macroexpand` stops where an expansion answers its form itself

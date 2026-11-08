@@ -830,6 +830,9 @@ final class ClojureMacroLowering {
 				if (tag.name().equals(":C%PATTERN")) {
 					return decodePattern(cons);
 				}
+				if (tag.name().equals(":C%CLASS")) {
+					return decodeClass(cons);
+				}
 				if (tag.name().equals(":C%INST") || tag.name().equals(":C%TIMESTAMP")
 						|| tag.name().equals(":C%CALENDAR") || tag.name().equals(":C%UUID")) {
 					return decodeTagged(cons);
@@ -887,7 +890,7 @@ final class ClojureMacroLowering {
 			return value;
 		}
 		if (value instanceof am.ik.rontolisp.LispJavaObject host) {
-			LispVal own = decodeHostValue(host.ref());
+			LispVal own = decodeHostValue(ctx, host.ref());
 			if (own != null) {
 				return own;
 			}
@@ -915,10 +918,11 @@ final class ClojureMacroLowering {
 	 * A host {@code java.util.UUID} or instant back to the marker of its literal: the
 	 * oracle's compiler embeds one by printing its {@code #uuid} or {@code #inst} and
 	 * reading it back, which here reads this front end's own value (a {@code Timestamp}
-	 * and a {@code Calendar}, like the oracle's, come back a Date). Null for any other
-	 * host object, which has no spelling to compile.
+	 * and a {@code Calendar}, like the oracle's, come back a Date). A class value, which
+	 * the oracle's compiler embeds as a constant, comes back the class literal's own
+	 * spelling. Null for any other host object, which has no spelling to compile.
 	 */
-	private static @Nullable LispVal decodeHostValue(Object ref) {
+	private static @Nullable LispVal decodeHostValue(ClojureLowering ctx, Object ref) {
 		if (ref instanceof java.util.UUID uuid) {
 			return ClojureLowerUtil.list(ClojureDefaultReaders.UUID, new LispInteger(uuid.getMostSignificantBits()),
 					new LispInteger(uuid.getLeastSignificantBits()));
@@ -929,7 +933,36 @@ final class ClojureMacroLowering {
 		if (ref instanceof java.util.Calendar calendar) {
 			return ClojureLowerUtil.list(ClojureDefaultReaders.INST, new LispInteger(calendar.getTimeInMillis()));
 		}
+		if (ref instanceof Class<?> type) {
+			// a class value the oracle's compiler embeds as a constant: the class
+			// literal's own spelling, its forName object where a host is and its
+			// designator where none is -- the same value a source spelling lowers to
+			LispVal literal = ClojureInteropLowering.classValue(ctx, type.getName());
+			// a class no spelling here names (clojure.core$long, .todo/j15): its
+			// designator
+			if (literal == null) {
+				literal = ClojureCoreLowering.classDesignator(type.getName());
+			}
+			return ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, literal);
+		}
 		return null;
+	}
+
+	/**
+	 * A class designator answer -- {@code (:C%CLASS name)}, what {@code type} answers for
+	 * a kind whose keyword collides with a schema registry entry and what a class literal
+	 * is where no host is -- back to the construction it is. Its head is this front end's
+	 * own keyword symbol, which no quoted datum spells (a keyword literal quotes to the
+	 * {@code :C%KEYWORD} wrapper), so it travels under {@link ClojureRunTime#EMBEDDED} as
+	 * the {@code (list :C%CLASS name)} form the lowering emits for it: the same value on
+	 * every backend.
+	 */
+	static LispVal decodeClass(LispCons wrapper) {
+		List<LispVal> parts = ClojureLowerUtil.items(wrapper);
+		if (parts != null && parts.size() == 2 && parts.get(1) instanceof LispString name) {
+			return ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, ClojureCoreLowering.classDesignator(name.value()));
+		}
+		throw new LispReadException("an unreadable value: " + wrapper.print());
 	}
 
 	/**

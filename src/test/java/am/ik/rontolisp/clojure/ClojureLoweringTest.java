@@ -2174,6 +2174,23 @@ class ClojureLoweringTest {
 			.hasMessageContaining("unknown name: &env");
 	}
 
+	@Test
+	void aMacroExpansionHoldingAClassValueLowersAsAConstant() {
+		// a class value has no readable form, but both kinds that reach an expansion
+		// are constants: a (:C%CLASS name) designator (what type answers at macro time)
+		// travels as the construction it is, the same value on every backend
+		assertThat(macroLowered("(defmacro mcv-t [v] `'~(mapv type v)) (mcv-t [a 1])"))
+			.contains("(LIST :C%CLASS \"clojure.lang.Symbol\")");
+		// a host java.lang.Class (a class literal a macro body evaluates) as the class
+		// literal's own spelling, the forName object where the host is; in :tag
+		// metadata it is ignored by the backends and visible in (meta #'x), like the
+		// symbol tag -- datascript's defn+ (db.cljc:73-81)
+		String tagged = "(defmacro mcv-tag [] (list 'def (with-meta 'mcv-x {:tag java.lang.Boolean}) true))";
+		assertThat(macroLowered(tagged + " (mcv-tag)")).contains("(RONTOLISP::%CLOJURE-VAR-STORE")
+			.contains("\"java.lang.Boolean\"")
+			.contains("JAVA:STATIC");
+	}
+
 	private static String macroLowered(String source) {
 		return Clojure.read(source, null, ClojureMacroTime.create())
 			.stream()

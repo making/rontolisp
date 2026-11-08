@@ -4245,6 +4245,33 @@ cases:
       true
       true
       6 (+ 1 2)
+  - name: a-macro-expansion-holding-a-class-value-lowers
+    # A macro's answer travels back through this front end's value model, where a class
+    # value has no readable form: a (:C%CLASS name) designator (what type answers at
+    # macro time) travels as the construction it is, the same value on every backend,
+    # and a class a macro body's answer holds lowers rather than refusing the expansion
+    # (datascript's defn+ patch-tag, db.cljc:73-81). The tag itself is metadata the
+    # backends never read; the case below prints it where a host class exists.
+    source: |
+      (defmacro cvm-type [v] `'~(mapv type v))
+      (println (cvm-type [(foo) a 1]))
+      (defmacro cvm-tag [] (list 'def (with-meta 'cvm-x {:tag java.lang.Boolean}) true))
+      (cvm-tag)
+      (println cvm-x)
+    expected: |
+      [:list (:C%CLASS clojure.lang.Symbol) :java.lang.Long]
+      true
+  - name: a-macro-expansions-tag-metadata-holds-the-class-value
+    # The class value the macro put in :tag metadata is visible in (meta #'x) and
+    # ignored elsewhere. It is the oracle's class on a host, its (:C%CLASS name)
+    # designator where no host exists (a class literal's own split).
+    skip:
+      wasm: a class literal is its (:C%CLASS name) designator there
+      wasm_component: a class literal is its (:C%CLASS name) designator there
+    source: |
+      (println (:tag (meta #'cvm-x)))
+    expected: |
+      java.lang.Boolean
   - name: a-macro-may-take-a-trailing-dot-name-without-a-class
     # shcloj4's ?. macro (examples/utils.clj): a trailing-dot name with no class
     # base is no construction at a call site (only X. over a class spelling is),
