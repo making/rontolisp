@@ -4495,7 +4495,10 @@ cases:
     # no local of the call site in reach; a lowering error is catchable there. resolve
     # answers the var or nil, of a quoted symbol while the program lowers, of a computed
     # one at expansion time. evm-compile-if is data.priority-map's and instaparse's
-    # compile-if. clj 1.12.6, oracle-identical.
+    # compile-if. A def an eval'd form makes is the program's var, unbound when the
+    # program starts. clj 1.12.6: oracle-identical but the last line, which is the
+    # oracle's AOT compile's (compile, then the classes loaded in a fresh JVM); clj -M
+    # keeps the compile-time root and prints [true 5].
     host: the corpus's run-time expansions reach these macro bodies' eval and resolve
     source: |
       (in-ns 'lit)
@@ -4519,11 +4522,50 @@ cases:
                (let [x 1] (evm-compile-if (= 1 1) x 0)) (evm-caught (evm-nowhere 1))
                (evm-resolved? evm-x) (evm-resolved? evm-nowhere))
       (println (resolve 'inc) (resolve 'evm-f) (resolve 'when) (resolve 'evm-nowhere) (resolve 'nope/x))
+      (defmacro evm-defines [] (eval '(def evm-zz 5)) `[(bound? (var evm-zz)) ~(eval 'evm-zz)])
+      (println (evm-defines))
     expected: |
       :has :lacks :f :no-g
       :x3 :f4 :new :yes
       [3 ab [1 2]] 6 1 :caught true false
       #'clojure.core/inc #'lit/evm-f #'clojure.core/when nil nil
+      [false 5]
+  - name: a-var-a-macro-interns-while-it-expands-starts-the-program-unbound
+    # A var a macro body interns while it expands (specter's inline caches) is the
+    # program's from there on, named by its gensym's spelling (a def of a gensym too),
+    # and holds the body's value at compile time -- a helper a macro body calls sees
+    # it -- but no root when the program starts: the fallback an AOT-safe cache takes
+    # fills it. A declared var is unbound at compile time too. A receiver hinted with a
+    # host class the method resolves against is cast: a value of another class is the
+    # ClassCastException. clj 1.12.6: oracle-identical but the last line, which is
+    # the oracle's AOT compile's (compile, then the classes loaded in a fresh JVM);
+    # clj -M keeps the compile-time value and prints true.
+    source: |
+      (in-ns 'lit)
+      (declare mti-u)
+      (defmacro mti-u-bound? [] (bound? #'mti-u))
+      (defn mti-cast [x]
+        (try (let [^java.util.concurrent.atomic.AtomicReference r x] (.get r))
+             (catch ClassCastException e (re-find #"^class \S+ cannot be cast to class \S+" (.getMessage e)))))
+      (println (mti-u-bound?) (bound? #'mti-u) (= clojure.lang.Var$Unbound (class mti-u)))
+      (println (mti-cast mti-u) (mti-cast :k))
+      (defmacro mti-cached [x]
+        (let [s (gensym "mti-cache")]
+          (intern *ns* s (atom nil))
+          `(let [c# (if (bound? (var ~s)) ~s (alter-var-root (var ~s) (fn [_#] (atom nil))))]
+             (when (nil? @c#) (reset! c# ~x))
+             [@c# (boolean (re-matches #"#'lit/mti-cache\d+" (pr-str (var ~s))))])))
+      (defn mti-f [] (mti-cached 42))
+      (defmacro mti-at-compile [] (mti-f))
+      (defmacro mti-defg [] (let [s (gensym "mti-g")] `(do (def ~s 5) [~s (boolean (re-matches #"#'lit/mti-g\d+" (pr-str (var ~s))))])))
+      (println (mti-f) (mti-f) (mti-at-compile) (mti-defg))
+      (defmacro mti-seen [] (let [s (gensym "mti-seen")] (intern *ns* s :compiled) `(bound? (var ~s))))
+      (println (mti-seen))
+    expected: |
+      false false true
+      class clojure.lang.Var$Unbound cannot be cast to class java.util.concurrent.atomic.AtomicReference class clojure.lang.Keyword cannot be cast to class java.util.concurrent.atomic.AtomicReference
+      [42 true] [42 true] [42 true] [5 true]
+      false
   - name: a-macros-var-root-is-its-function-of-form-env-and-args
     # A macro's var root is the oracle's macro function over (&form &env & args): a
     # core macro's the expander answering its expansion as data, a program macro's

@@ -33,7 +33,8 @@ import org.jspecify.annotations.Nullable;
  * {@code eval} and {@code resolve} of a computed symbol, which the run-time library
  * refuses, call back into the lowering here ({@link ClojureMacroEvaluator.Lowering}): the
  * form lowers in the namespace of the expansion and evaluates in this environment, like
- * the oracle's {@code eval} inside a macro body.
+ * the oracle's {@code eval} inside a macro body. Its {@code intern} tells the lowering of
+ * the var, which the program's names below may then resolve to.
  */
 public final class ClojureMacroTime {
 
@@ -96,6 +97,12 @@ public final class ClojureMacroTime {
 	 */
 	private static final LispSymbol MACRO_SCOPE = new LispSymbol(ClojureLowering.MACRO_SCOPE);
 
+	/**
+	 * The run-time library's {@code intern} of a bare name, answering the var: here it
+	 * tells the lowering too.
+	 */
+	private static final LispSymbol INTERN_BARE = new LispSymbol("RONTOLISP::%CLOJURE-INTERN-BARE");
+
 	/** The run-time library's value as a form, every lazy seq in it realized. */
 	private static final LispSymbol FORM_OF = new LispSymbol("RONTOLISP::%CLOJURE-FORM-OF");
 
@@ -143,6 +150,7 @@ public final class ClojureMacroTime {
 				macroEval.eval(callingBack(FIND_VAR_RESOLVE, ClojureMacroEvaluator.Lowering::resolveForm, false));
 				macroEval.eval(callingBack(NS_RESOLVE_IN, ClojureMacroEvaluator.Lowering::nsResolveForm, false));
 				macroEval.eval(callingBack(MACRO_SCOPE, ClojureMacroEvaluator.Lowering::macroScopeForm, false));
+				macroEval.eval(tellingInterns(macroEval.eval(list(new LispSymbol("FUNCTION"), INTERN_BARE))));
 				this.evaluator = macroEval;
 			}
 			for (Pending definition : this.pending) {
@@ -191,6 +199,26 @@ public final class ClojureMacroTime {
 			LispVal passed = realized ? list(FORM_OF, arg) : arg;
 			return list(new LispSymbol("DEFUN"), name, list(arg),
 					list(new LispSymbol("FUNCALL"), list(new LispSymbol("QUOTE"), body), passed));
+		}
+
+		/**
+		 * The definition replacing the run-time library's {@code intern} of a bare name
+		 * by one handing the var it answers -- found or made, so a later pass hears of it
+		 * again -- to the lowering, after the library's own definition ran.
+		 */
+		private LispVal tellingInterns(LispVal original) {
+			LispFunction tell = new LispFunction(INTERN_BARE.name(), args -> {
+				ClojureMacroEvaluator.Lowering current = this.lowering;
+				if (current != null) {
+					current.interned(args.get(0));
+				}
+				return args.get(0);
+			});
+			LispSymbol[] params = { new LispSymbol("NS"), new LispSymbol("NAME"), new LispSymbol("VAL"),
+					new LispSymbol("VAL-P") };
+			return list(new LispSymbol("DEFUN"), INTERN_BARE, list(params),
+					list(new LispSymbol("FUNCALL"), list(QUOTE, tell), list(new LispSymbol("FUNCALL"),
+							list(QUOTE, original), params[0], params[1], params[2], params[3])));
 		}
 
 		private static LispVal list(LispVal... items) {

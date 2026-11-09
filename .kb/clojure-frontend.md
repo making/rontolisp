@@ -1738,7 +1738,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | component 1.2.0 (stuartsierra) | = | = | = | = | no transitive deps; 2026-11-08 round (`.todo/j07`): records implementing `Lifecycle`, `system-map`/`using`/`start`/`stop`, a missing-dependency `ex-data`, `update-system` -- 7 lines; two `JAVA:CALL` warnings on wasm off the path |
 | editscript 0.8.0 | = | = | stop | stop | 2026-11-08 round: the 7-line probe (map/vector/string diffs, `patch`, `edit-distance`, `:quick`) is the oracle's on the interpreter and the JVM; wasm traps on `System/nanoTime`, then `java.util.IdentityHashMap` (`.todo/j28`, which also records the host-side identity loss of a Clojure key in an `IdentityHashMap`) |
 | data.csv 1.1.1 | 5/6 | | | | 2026-11-08 round: `read-csv`/`write-csv` over strings and a `StringWriter` print the oracle's lines; `io/reader` of a `java.io.StringReader` refuses (`.todo/j16`). Other backends not run |
-| aero 1.1.6, core.match 1.1.1, core.logic 1.1.1, schema 1.4.2, specter 1.1.6, rewrite-clj 1.3.59, datascript 1.8.1 | stop | | | | 2026-11-08 round, interpreter only: each stops at load; past hand patches all but datascript print the oracle's lines (core.logic but its pinned `()`-is-`nil` line). The stops, library by library, and the items they became: `.todo/j07` (probes, patches and outputs in `.todo/artefacts/j07-clojure-library-probe-round-2026-11-08/`). j23 (2026-11-08, `.todo/j23`): specter's `extend-protocolpath*` and schema's `extend-primitive` hunks are no longer needed -- with the other hunks applied, specter's probe is the oracle's line for line and schema's loads and prints the same but the pinned set-order line (interpreter; the other backends unprobed). j09 (2026-11-09): core.match's `void` hunk is no longer needed either -- with the other hunks applied and the original `let`-wrapped `regroup-keywords` restored, the probe prints its 11 oracle lines on the interpreter, the JVM class and wasm ("Macros", the wrapper bullet). j12 (2026-11-09): core.logic's `defnm`, specter's `defdynamicnav` `declare` hunks and aero's `usetime` unwrap are no longer needed -- with the other hunks applied, aero and specter print the oracle's lines and core.logic the same but its pinned line (interpreter). j18 (2026-11-09): rewrite-clj needs no hunk at all -- the verbatim 1.3.59 jar prints the probe's 9 oracle lines on all four backends (the wasm legs warn of `JAVA:STATIC`/`JAVA:NEW` off the probe's path; its zipper walks are `(->> (iterate f loc) (take-while identity) ...)`, which needed `iterate` to compute a member only when read, a lazy `take-while`, and `next` of a lazy seq ending past its head to answer nil: "Laziness") |
+| aero 1.1.6, core.match 1.1.1, core.logic 1.1.1, schema 1.4.2, specter 1.1.6, rewrite-clj 1.3.59, datascript 1.8.1 | stop | | | | 2026-11-08 round, interpreter only: each stops at load; past hand patches all but datascript print the oracle's lines (core.logic but its pinned `()`-is-`nil` line). The stops, library by library, and the items they became: `.todo/j07` (probes, patches and outputs in `.todo/artefacts/j07-clojure-library-probe-round-2026-11-08/`). j23 (2026-11-08, `.todo/j23`): specter's `extend-protocolpath*` and schema's `extend-primitive` hunks are no longer needed -- with the other hunks applied, specter's probe is the oracle's line for line and schema's loads and prints the same but the pinned set-order line (interpreter; the other backends unprobed). j09 (2026-11-09): core.match's `void` hunk is no longer needed either -- with the other hunks applied and the original `let`-wrapped `regroup-keywords` restored, the probe prints its 11 oracle lines on the interpreter, the JVM class and wasm ("Macros", the wrapper bullet). j12 (2026-11-09): core.logic's `defnm`, specter's `defdynamicnav` `declare` hunks and aero's `usetime` unwrap are no longer needed -- with the other hunks applied, aero and specter print the oracle's lines and core.logic the same but its pinned line (interpreter). j18 (2026-11-09): rewrite-clj needs no hunk at all -- the verbatim 1.3.59 jar prints the probe's 9 oracle lines on all four backends (the wasm legs warn of `JAVA:STATIC`/`JAVA:NEW` off the probe's path; its zipper walks are `(->> (iterate f loc) (take-while identity) ...)`, which needed `iterate` to compute a member only when read, a lazy `take-while`, and `next` of a lazy seq ending past its head to answer nil: "Laziness"). j21 (2026-11-09): specter's `path` hunk (the inline cache) is no longer needed -- with the other hunks applied, the probe prints the oracle's ten lines on the interpreter and the JVM class ("Macros", a var a macro body interns) |
 f92 shares every site-independent core value program-wide through `%clojure-shared-value`, so the probe is green again on all four. f98: the 8-line pattern-schema probe (`form`/`type` of `(m/schema #"a")`, `validate` of a hit, a miss and a non-string, `explain`, the `:malli.core/invalid-schema` refusals of `(m/schema 42)` and `(m/schema "s")`) is the oracle's line for line on all four since 2026-10-13 (`type` of a pattern hits the `class-schemas` entry: the host class where a host is, the designator where none is). That 12-line wasm parity was overstated (2026-10-13, f99): the probe's decode lines print bare (`println`), under which an undecoded `"1"` reads as `1` -- `(Long/parseLong x)` refused at call time there, so `-string->long`'s catch kept the input (`pr-str` shows the gap). One-argument `Long/parseLong` now lowers to the portable reader where the host is not (`%clojure-parse-long-static`, "Portable number statics"), and the 12-line probe is the oracle's line for line under `pr-str` on all four backends |
 
 `=` is the oracle's output line for line (12-31 lines per probe; tools.cli's `:parse-fn` is
@@ -4280,11 +4280,45 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   oracle. Deviations: resolution in the lowering namespace (the oracle reads `*ns*` when
   the call runs) and to a pre-scanned definition below the call site; the `used*` flags
   an eval'd form sets stay set for the program; a `def` an eval'd form makes is the
-  macro-time environment's only (the program reads the var unbound; the oracle's process
-  keeps it). Pins: clojure-spec `a-macro-body-evaluates-a-form-while-it-expands`
-  (oracle-identical), `ClojureLoweringTest#aMacroBodysEvalChoosesTheCodeThisFrontEndLowers`,
+  macro-time environment's only: the program's var starts unbound (`evalForm` hands each
+  value var the form defined in the namespace to `startsUnbound`, the oracle's AOT
+  compile's; until 2026-11-09 reading it signalled `The variable c%zz is unbound`), where
+  the oracle's process keeps the root. Pins: clojure-spec
+  `a-macro-body-evaluates-a-form-while-it-expands` (oracle-identical but its `evm-defines`
+  line, the AOT compile's), `ClojureLoweringTest#aMacroBodysEvalChoosesTheCodeThisFrontEndLowers`,
   `#aMacroBodysEvalSeesNoLocalOfTheCallSite`, `#evalAndResolveRefuseWhatTheyCannotTake`,
   `ClojureSessionTest#evalLowersThroughTheSessionsOneLoweringInAMacroBodyAndAsAnInputRuns`.
+- **A var a macro body interns while it expands is the program's from there on, unbound
+  when the program starts** (j21, 2026-11-09; specter's `path` behind every
+  `select`/`transform`: `(intern *ns* (gensym "pathcache") (mutable-cell))`, then code
+  reading and filling `pathcacheN`; until then `Unable to resolve var: #:pathcache223`).
+  The macro-time image's `%clojure-intern-bare` is wrapped (`ClojureMacroTime.tellingInterns`)
+  to hand each var it finds or makes to the lowering
+  (`ClojureMacroEvaluator.Lowering.interned` -> `ClojureLowering.macroTimeInterns`; found
+  too, so a later pass hears again), and `lookupVar` declares one where a name first
+  reaches it and the program defines none (`declaresMacroTimeIntern`: `Kind.DECLARED`, an
+  unbound root). The chosen semantics is the oracle's AOT compile's (`compile`, its classes
+  loaded in a fresh JVM: the class files intern the var and leave the macro-time root
+  behind); `clj -M` compiles and runs in one process and keeps the root. Carrying the root
+  was weighed and not made: it is no constant a program can hold (specter's is a
+  `MutableCell` host object, a fn any closure), it would split values by whether they have a
+  literal form, and every other change a body makes already stays at compile time (the
+  bullet above). Specter's cache is AOT-safe: `(.get ^MutableCell c)` of the unbound root is
+  the oracle's `ClassCastException` (the hinted receiver's cast, "Java interop"), `bound?`
+  false, `alter-var-root` fills it. The image's global of the var holds the interned root
+  (handed over ahead of `unboundRoot`'s, which then leaves it alone), so code the image
+  runs -- a macro body using specter, a helper reading the cache -- sees the oracle's
+  compile-time var; `unboundRoot` hands every declared or value-less var's root to the image
+  too (a macro body's `(bound? #'x)` of a `declare`d `x` was `The variable c%x is unbound`).
+  A gensym names the var of its spelling (`ClojureLowering.varName`, read by `varKey`,
+  `internName`, `internDeclared`), the oracle's gensym being an ordinary symbol: a
+  `(def ~(gensym) v)` and its uses meet outside `user` too (`The variable #:x1 is unbound`
+  before) and `(var ~s)` prints `#'ns/x1` (`#'user/#:x1`); a non-local gensym in value
+  position reads the var it names, a local still binds its uninterned symbol. Measured
+  2026-11-09: specter 1.1.6's probe prints the oracle's ten lines without j07's `path` hunk
+  on the interpreter and the JVM class, and a macro body calling `sp/transform` expands.
+  Pins: clojure-spec `a-var-a-macro-interns-while-it-expands-starts-the-program-unbound`
+  (four backends; oracle-identical but its last line, the AOT compile's).
 - **A program macro wins over every lowering row of its name from its definition on;
   above it the core meaning holds**, like the oracle's form-by-form compile. `lowerInner`
   tries the macro before any row, except for `isReservedHead` (the oracle's special forms
@@ -6389,7 +6423,19 @@ host alone answers ("Host arms where the host is not").
   unchanged). The `java:` hint designator (`.kb/java-interop.md`, "Argument hints") narrows a
   site resolved before it runs, as the oracle's compiler reads `:tag`s; a reflective site reads
   none, as its reflector. A receiver's hint is still dropped, so a hinted `defn` parameter
-  receiver stays reflective (user doc deviation). With the function cost's `Callable`
+  receiver stays reflective (user doc deviation) -- but for its refusal (j21, 2026-11-09):
+  where the hinted class is a host class no Clojure value may be an instance of
+  (`ClojureValueClasses.mayHoldValue`) with one public instance method of the name and
+  count (`ClojureInteropLowering.castClass`), the oracle's compiler casts the receiver, so a
+  value no arm answers is `%clojure-cast-failure`'s `ClassCastException` (`class X cannot be
+  cast to class C`; nil the `NullPointerException`) instead of `%clojure-no-method`'s
+  `IllegalArgumentException`. `ClojureLowering.receiverCast` carries the class while the
+  call's value arms lower, and only their final refusals read it
+  (`ClojureValueMethodLowering.castOrRefusal`): a value an arm answers (a portable stand-in, a
+  `Supplier`'s `.get` of an atom) still answers, and a string or number receiver still
+  reaches the host call -- no test is added on a path an answer takes; only a casting
+  call's refusal form changes. Specter's AOT-safe cache catches this
+  `ClassCastException` ("Macros", a var a macro body interns). With the function cost's `Callable`
   preference, oracle-identical on interpreter and JVM (clj 1.12.6): `@(.submit pool (fn [] 1))`
   1 on an untyped receiver, `^Runnable` nil and `^Callable` 42 on a typed one, `^String`
   (no overload) 5, a hinted local/parameter nil. Before, every row was `submit(Runnable)`: nil.
@@ -8008,6 +8054,11 @@ resolve var`.
   order); a `^:dynamic` declare joins `dynamicVars` with its declaim and counter hoisted.
   A function's or macro's name declared too gets no root (its value is no value cell); a
   `#'f` deref above the `defn` answers the function where the oracle's is unbound (kept).
+  The macro-time image's cell takes the root as the lowering meets it (`unboundRoot`
+  hands it over), so a macro body reads the var unbound like the oracle's compile does;
+  a var a macro body interns is one too ("Macros"). `class` of the root answers
+  `:clojure.lang.Var$Unbound` and `%clojure-class-name-of` its name, both UNBOUND-family
+  arms (`:list` and `java.lang.Object` before 2026-11-09).
   **Arms**: every library test of the root (`%clojure-unbound-p` in the printer, `str`,
   IFn, `bound?`) and `defonce`'s is an arm of `ClojureArms.Family.UNBOUND`, whose producer
   is `%clojure-unbound`, so a program making no unbound var compiles byte-identically.

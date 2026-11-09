@@ -247,6 +247,14 @@ public final class ClojureLowering {
 	final Set<String> unboundRoots = new LinkedHashSet<>();
 
 	/**
+	 * The var keys the macro-time image's {@code intern} found or made while this
+	 * lowering ran (a macro body's inline cache, made while its call site expands): a
+	 * name naming none of the program's own vars names one of these, which
+	 * {@link #lookupVar} then declares -- interned, unbound when the program starts.
+	 */
+	final Set<String> macroTimeInterns = new HashSet<>();
+
+	/**
 	 * The var keys a valued {@code def} or {@code defonce} lowered above the current
 	 * form, in lowering order: their value cell holds a root. A {@code defn} over one
 	 * notifies with that root as the replaced one.
@@ -739,6 +747,14 @@ public final class ClojureLowering {
 	@Nullable LispVal defValueForm;
 
 	@Nullable String defValueKey;
+
+	/**
+	 * The host class the instance call being lowered casts its receiver to -- the class
+	 * its receiver's hint names, against which the oracle's compiler resolved the method
+	 * ({@link ClojureInteropLowering#castClass}) -- or null: a value no arm answers is
+	 * the oracle's {@code ClassCastException} there, not the reflector's refusal.
+	 */
+	@Nullable String receiverCast;
 
 	/** The enclosing proxy methods' {@code this}, innermost last; empty outside any. */
 	final Deque<ProxyMethod> proxyMethods = new ArrayDeque<>();
@@ -3014,9 +3030,22 @@ public final class ClojureLowering {
 		this.directScopes.add(new HashSet<>());
 	}
 
-	/** The var key of a name in a namespace: {@code ns/name}. */
+	/**
+	 * The var key of a name in a namespace: {@code ns/name}, a gensym's by its spelling
+	 * ({@link #varName}).
+	 */
 	static String varKey(String ns, String name) {
-		return ns + "/" + name;
+		return ns + "/" + varName(name);
+	}
+
+	/**
+	 * The name of the var a name names: a gensym ({@code #:}-spelled, uninterned, so a
+	 * local it binds stays apart from every other name) names the var of its spelling,
+	 * like the oracle's gensym, an ordinary symbol -- the one a macro body's
+	 * {@code intern} or a {@code def} of it makes.
+	 */
+	static String varName(String name) {
+		return name.startsWith("#:") ? name.substring(2) : name;
 	}
 
 	/**
@@ -3176,8 +3205,8 @@ public final class ClojureLowering {
 	/** {@link #intern} without ending a multimethod: the pre-scan defines nothing. */
 	private String internName(String name, boolean isPrivate) {
 		ClojureNsState here = ns();
-		here.interns.put(name, isPrivate);
-		here.refers.remove(name);
+		here.interns.put(varName(name), isPrivate);
+		here.refers.remove(varName(name));
 		return varKey(this.currentNs, name);
 	}
 
@@ -3190,8 +3219,8 @@ public final class ClojureLowering {
 	 */
 	String internDeclared(String name, boolean isPrivate) {
 		ClojureNsState here = ns();
-		here.interns.putIfAbsent(name, isPrivate);
-		here.refers.remove(name);
+		here.interns.putIfAbsent(varName(name), isPrivate);
+		here.refers.remove(varName(name));
 		return varKey(this.currentNs, name);
 	}
 
@@ -3244,8 +3273,9 @@ public final class ClojureLowering {
 	/**
 	 * The var key a name names as a global var of a project namespace, with no regard to
 	 * locals or privacy: unqualified, an intern of the current namespace, else a refer to
-	 * a project var; qualified, the var of the namespace its head names. Null when it
-	 * names none (a known library's var, a builtin, interop, or nothing).
+	 * a project var; qualified, the var of the namespace its head names -- either one a
+	 * macro body interned ({@link #macroTimeInterns}). Null when it names none (a known
+	 * library's var, a builtin, interop, or nothing).
 	 */
 	@Nullable String lookupVar(String name) {
 		int slash = qualifierSlash(name);
@@ -3254,14 +3284,14 @@ public final class ClojureLowering {
 			if (this.globals.containsKey(own)) {
 				return pendingCoreMacro(own, name) ? null : own;
 			}
-			VarRef referred = ns().refers.get(name);
+			VarRef referred = ns().refers.get(varName(name));
 			if (referred != null && !ClojureNamespaceLowering.isKnownNamespace(referred.ns())) {
 				loadReplRefer(name, referred);
 				loadPartOf(referred.ns(), referred.var());
 				String key = varKey(referred.ns(), referred.var());
 				return this.globals.containsKey(key) && !pendingCoreMacro(key, name) ? key : null;
 			}
-			return null;
+			return referred == null && declaresMacroTimeIntern(own) ? own : null;
 		}
 		String target = projectNamespaceOf(name.substring(0, slash));
 		if (target == null) {
@@ -3269,7 +3299,57 @@ public final class ClojureLowering {
 		}
 		loadPartOf(target, name.substring(slash + 1));
 		String key = varKey(target, name.substring(slash + 1));
-		return this.globals.containsKey(key) ? key : null;
+		return this.globals.containsKey(key) || declaresMacroTimeIntern(key) ? key : null;
+	}
+
+	/**
+	 * Whether the var is one a macro body interned ({@link #macroTimeInterns}) and the
+	 * program defines nowhere: then declared here, where a name first reaches it -- like
+	 * the var an AOT-compiled program's code interns, which holds no root when the
+	 * program starts, the value the body put there staying at compile time (the oracle
+	 * compiling and running in one process keeps it; specter's inline caches take the
+	 * unbound root for a cache to fill). The macro-time image's global of the var holds
+	 * that value.
+	 * @param key the var key
+	 * @return whether the var is declared
+	 */
+	private boolean declaresMacroTimeIntern(String key) {
+		if (!this.macroTimeInterns.contains(key)) {
+			return false;
+		}
+		int slash = key.indexOf('/');
+		this.namespaces.computeIfAbsent(key.substring(0, slash), n -> new ClojureNsState()).interns
+			.putIfAbsent(key.substring(slash + 1), false);
+		this.globals.put(key, Kind.DECLARED);
+		if (this.macroEvaluator != null) {
+			// the macro-time image runs the program's code over the var's global too
+			// (a helper a macro body calls, a body using the macro): it holds the
+			// root the body put there, as the oracle's var does while it compiles --
+			// ahead of the unbound root, which then leaves the bound global alone
+			LispSymbol var = varSym(key);
+			this.macroEvaluator.define(ClojureLowerUtil.list(ClojureLowerUtil.sym("unless"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("boundp"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), var)),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var,
+							ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-VAR-GET"),
+									ClojureLowerUtil.list(ClojureLowerUtil.sym("gethash"), LispString.literal(key),
+											new LispSymbol("RONTOLISP::%CLOJURE-VAR-TABLE"))))));
+		}
+		startsUnbound(key);
+		return true;
+	}
+
+	/**
+	 * The var's value cell holds the unbound root when the program starts
+	 * ({@link ClojureVarLowering#unboundRoot}): a file's from its start, a session's
+	 * buffer from a store ahead of the datum reading it.
+	 * @param key the var key
+	 */
+	void startsUnbound(String key) {
+		LispVal root = ClojureVarLowering.unboundRoot(this, key);
+		if (root != null) {
+			this.hoisted.add(root);
+		}
 	}
 
 	/**
@@ -6567,11 +6647,15 @@ public final class ClojureLowering {
 			// itself instead of mangling behind the prefix -- but one naming a
 			// function (a fn's self name, core.unify's var-unification fns) is
 			// the function cell in value position, like any function name, so
-			// the labels expansion rewrites it to the shared cell
+			// the labels expansion rewrites it to the shared cell, and one naming
+			// no local but a var (a def of it, a macro body's intern) reads the
+			// var below
 			if (isFunction(name)) {
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), symOf(name));
 			}
-			return s;
+			if (isLocal(name) || resolveVar(name) == null) {
+				return s;
+			}
 		}
 		String core = coreSpelling(name);
 		if (core == null) {

@@ -584,7 +584,7 @@ final class ClojureInteropLowering {
 				ctx.readsUrlOf(items.get(1));
 			}
 			LispVal target = ctx.lower(items.get(1));
-			LispVal call = instanceCall(ctx, target, name.substring(1), items.subList(2, items.size()));
+			LispVal call = instanceCall(ctx, target, items.get(1), name.substring(1), items.subList(2, items.size()));
 			if (name.equals(".setMacro")) {
 				// Var.setMacro() sets :macro, which decides how the forms below it lower
 				ctx.noteMacroFlagWrite(ClojureVarLowering.literalVarName(items.get(1)), call, target);
@@ -1238,7 +1238,7 @@ final class ClojureInteropLowering {
 			}
 			return staticCall(ctx, ClojureNamespaceLowering.resolveClass(ctx, named.name()), method, lowered);
 		}
-		return instanceCall(ctx, ctx.lower(target), method, argDatums);
+		return instanceCall(ctx, ctx.lower(target), target, method, argDatums);
 	}
 
 	/**
@@ -2735,12 +2735,70 @@ final class ClojureInteropLowering {
 	 * character as its {@code String}, box or {@code Character}.
 	 */
 	static LispVal instanceCall(ClojureLowering ctx, LispVal receiver, String method, List<LispVal> argDatums) {
+		return instanceCall(ctx, receiver, null, method, argDatums);
+	}
+
+	/**
+	 * {@link #instanceCall(ClojureLowering, LispVal, String, List)} of a receiver datum
+	 * whose hint may cast it ({@link #castClass}): a value no arm answers is then the
+	 * oracle's {@code ClassCastException}.
+	 * @param ctx the hub
+	 * @param receiver the lowered receiver
+	 * @param receiverDatum the receiver as written, or null where none is
+	 * @param method the method
+	 * @param argDatums the argument datums
+	 * @return the call
+	 */
+	static LispVal instanceCall(ClojureLowering ctx, LispVal receiver, @Nullable LispVal receiverDatum, String method,
+			List<LispVal> argDatums) {
 		List<LispVal> args = new ArrayList<>();
 		for (LispVal arg : argDatums) {
 			args.add(ctx.lower(arg));
 		}
-		return instanceCallLoweredWithClass(ctx, receiver, null, method, hintedDesignator(ctx, method, argDatums),
-				args);
+		String outerCast = ctx.receiverCast;
+		ctx.receiverCast = receiverDatum == null ? null : castClass(ctx, receiverDatum, method, args.size());
+		try {
+			return instanceCallLoweredWithClass(ctx, receiver, null, method, hintedDesignator(ctx, method, argDatums),
+					args);
+		}
+		finally {
+			ctx.receiverCast = outerCast;
+		}
+	}
+
+	/**
+	 * The host class an instance call casts its receiver to: the class the receiver's
+	 * hint names ({@link #classHint}) where the oracle's compiler resolves the method
+	 * against it -- one public instance method of the name taking the count -- and
+	 * compiles a cast ahead of the call, so a receiver of another class is its
+	 * {@code ClassCastException} (specter's inline cache catches one from
+	 * {@code (.get ^MutableCell c)} of a var still unbound). Null for no hint, a class a
+	 * Clojure value may be an instance of ({@link ClojureValueClasses#mayHoldValue}), or
+	 * a method the class does not resolve to one: the reflector's call, whose refusal is
+	 * an {@code IllegalArgumentException}.
+	 * @param ctx the hub
+	 * @param receiverDatum the receiver as written
+	 * @param method the method
+	 * @param n the argument count
+	 * @return the class, or null
+	 */
+	static @Nullable String castClass(ClojureLowering ctx, LispVal receiverDatum, String method, int n) {
+		String hint = classHint(ctx, receiverDatum);
+		if (hint == null || ClojureValueClasses.mayHoldValue(hint)) {
+			return null;
+		}
+		ClojureJavaClasses.JavaClass type = ClojureHostClasses.find(hint);
+		if (type == null) {
+			return null;
+		}
+		int found = 0;
+		for (ClojureJavaClasses.Member candidate : type.methods()) {
+			if (candidate.name().equals(method) && candidate.parameterCount() == n && !candidate.isStatic()
+					&& !candidate.isBridge()) {
+				found++;
+			}
+		}
+		return found == 1 ? hint : null;
 	}
 
 	/**

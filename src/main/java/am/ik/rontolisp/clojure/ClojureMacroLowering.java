@@ -1861,7 +1861,20 @@ final class ClojureMacroLowering {
 
 			@Override
 			public LispVal evalForm(LispVal value) {
-				return ctx.lowerDetached(decodeDatum(ctx, value));
+				Set<String> known = new HashSet<>(ctx.globals.keySet());
+				String own = ctx.currentNs + "/";
+				LispVal lowered = ctx.lowerDetached(decodeDatum(ctx, value));
+				// a var the form defines is the program's from here on, but the
+				// definition runs here only: the program starts with it unbound, like
+				// a var a macro body interns (a namespace the form loads joins the
+				// program with its definitions)
+				for (String key : List.copyOf(ctx.globals.keySet())) {
+					if (key.startsWith(own) && !known.contains(key)
+							&& ctx.globals.get(key) == ClojureLowering.Kind.VARIABLE) {
+						ctx.startsUnbound(key);
+					}
+				}
+				return lowered;
 			}
 
 			@Override
@@ -1892,6 +1905,15 @@ final class ClojureMacroLowering {
 			public LispVal macroScopeForm(LispVal namespace) {
 				String name = namespace instanceof LispString string ? string.value() : "";
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), macroScope(ctx, name));
+			}
+
+			@Override
+			public void interned(LispVal var) {
+				List<LispVal> parts = ClojureLowerUtil.items(var);
+				if (parts != null && parts.size() == 3 && ClojureLowerUtil.isSymbolNamed(parts.get(0), ":C%VAR")
+						&& parts.get(1) instanceof LispString key) {
+					ctx.macroTimeInterns.add(key.value());
+				}
 			}
 
 		};

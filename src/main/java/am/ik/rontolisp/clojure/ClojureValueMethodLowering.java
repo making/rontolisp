@@ -932,7 +932,7 @@ final class ClojureValueMethodLowering {
 			}
 			// a row at this arity names every kind whose class has the method
 			LispVal fallback = arms.isEmpty() ? unmappedArm(ctx, method, designator, self, locals)
-					: refusal(self, method, true, locals);
+					: castOrRefusal(ctx, self, method, true, locals);
 			// an instant or a UUID made here that no row answered: its class's method
 			// through the host object it stands for (arms a program making none sheds)
 			fallback = ClojureTimeValueLowering.methodArm(ctx, method, designator, self, locals,
@@ -942,7 +942,7 @@ final class ClojureValueMethodLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
 								ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RECORD-P"), self),
 								ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-TYPED-OPAQUE-P"), self)),
-						refusal(self, method, true, locals), fallback);
+						castOrRefusal(ctx, self, method, true, locals), fallback);
 			}
 			clauses.add(ClojureLowerUtil.list(ClojureLowering.TRUE_CONST, fallback));
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
@@ -1040,7 +1040,7 @@ final class ClojureValueMethodLowering {
 	private static LispVal unmappedArm(ClojureLowering ctx, String method, String designator, LispSymbol recv,
 			List<LispVal> args) {
 		int n = args.size();
-		LispVal refusal = refusal(recv, method, !ClojureValueMethods.unsupported(method, n), args);
+		LispVal refusal = castOrRefusal(ctx, recv, method, !ClojureValueMethods.unsupported(method, n), args);
 		List<LispVal> tests = new ArrayList<>();
 		String maker = HOST_MEMBER;
 		if (declares(List.of(OBJECT), method, n)) {
@@ -1091,10 +1091,11 @@ final class ClojureValueMethodLowering {
 			answer = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), recv), stored,
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojurePredicateLowering.rawTest("map?", recv),
-							unmodifiable, refusal(recv, method, !ClojureValueMethods.unsupported(method, n), args)));
+							unmodifiable,
+							castOrRefusal(ctx, recv, method, !ClojureValueMethods.unsupported(method, n), args)));
 		}
 		else {
-			answer = refusal(recv, method, false, args);
+			answer = castOrRefusal(ctx, recv, method, false, args);
 		}
 		LispVal test = tests.size() == 1 ? tests.get(0) : ClojureLowerUtil.cons(ClojureLowerUtil.sym("or"), tests);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), test, answer, refusal);
@@ -1122,6 +1123,22 @@ final class ClojureValueMethodLowering {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * {@link #refusal} of a value no arm answered, where the call casts its receiver to a
+	 * host class ({@link ClojureLowering#receiverCast}) the oracle's
+	 * {@code ClassCastException} (nil its {@code NullPointerException}) instead: its
+	 * compiler casts the receiver before the arguments run.
+	 */
+	private static LispVal castOrRefusal(ClojureLowering ctx, LispVal recv, String method, boolean known,
+			List<LispVal> args) {
+		String cast = ctx.receiverCast;
+		if (cast == null) {
+			return refusal(recv, method, known, args);
+		}
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CAST-FAILURE"), recv, LispString.literal(cast),
+				LispString.literal(method));
 	}
 
 	/**
