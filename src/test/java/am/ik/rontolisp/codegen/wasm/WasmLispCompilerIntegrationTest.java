@@ -1605,6 +1605,10 @@ class WasmLispCompilerIntegrationTest {
 				:FLOAT""";
 		assertThat(compileAndRun(exact)).isEqualTo(exactExpected);
 		assertThat(compileComponentAndRun(exact)).isEqualTo(exactExpected);
+		// Holding eval, peek, words and churn are leaves compiled twice: the copy
+		// on empty cells and +tbl+'s vector, and the one peek runs before the
+		// definition.
+		assertThat(compileAndRun("(defun run-data (form) (eval form))\n" + exact)).isEqualTo(exactExpected);
 	}
 
 	@Test
@@ -25495,6 +25499,13 @@ class WasmLispCompilerIntegrationTest {
 				  (print (multiple-value-list (values (aref regs 0) (aref regs 3)))))
 				""";
 		assertThat(compileAndRunWithFuel(compression, 75_000_000L)).isEqualTo("(2309246193 1923398755)");
+		// With eval in the program every defun has a cell and +k+ can be written
+		// by name, and compress, a leaf, compiles twice (.kb/wasm-int-fusion.md,
+		// "A leaf compiled twice"): while the cells are empty and +k+ holds its
+		// vector it runs the code above, 62.1 M, against 79.8 M with every site
+		// checking the cells and testing the table.
+		assertThat(compileAndRunWithFuel("(defun run-data (form) (eval form))\n" + compression, 75_000_000L))
+			.isEqualTo("(2309246193 1923398755)");
 	}
 
 	// The mutex primitives exist on WASM as no-ops (single-threaded by construction) so

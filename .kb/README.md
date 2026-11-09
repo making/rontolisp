@@ -185,7 +185,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [wasm-landing-pad-refresh.md](wasm-landing-pad-refresh.md) -- a `try_table` landing pad refreshes every local live after it: Cranelift passes a local into the pad as a pre-call exceptional-edge argument, stale after a copying collection; the push is narrowed to the live locals once the body is complete
 - [wasm-bignum.md](wasm-bignum.md) -- exact integers in three tiers (i31, `TYPE_BIGNUM`, `TYPE_BIGINT`), ratios with components in those tiers, and the correctly rounded conversions to double
 - [wasm-complex.md](wasm-complex.md) -- the tagged `TYPE_COMPLEX` struct (the `TYPE_FARRAY` twin that forced the tag), the `_c*` runtime group, the `containsComplex` steering, and a complex through a variable or beside a float literal found at run time
-- [wasm-int-fusion.md](wasm-int-fusion.md) -- integer expression-tree fusion keeping raw i64; the same order checks with an inline probe
+- [wasm-int-fusion.md](wasm-int-fusion.md) -- integer expression-tree fusion keeping raw i64; the same order checks with an inline probe; a leaf defun compiled twice, over empty cells and its tables' vectors
 - [wasm-ref-type-fold.md](wasm-ref-type-fold.md) -- a closed module's `ref.test`/`ref.cast` are decided by its own constructors: the byte-level type-flow fold before the shaker, the call-forwarding redirect, the exact integer export lane, the raw condition compare
 - [wasm-counted-loops.md](wasm-counted-loops.md) -- a loop induction variable as a bare `i64` counter
 - [wasm-unboxed-locals.md](wasm-unboxed-locals.md) -- dual-representation `let` locals

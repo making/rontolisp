@@ -58,7 +58,9 @@ shadow, no `_ub_read`) and the fused sites over it read its range (`.kb/wasm-int
   must be a `setq`/`setf` of the bare name (`WasmCountedLoopCompiler.plainAssignedValues`: any
   other writer refuses) whose range its shape alone bounds -- a `logand` with a non-negative
   literal, an `ldb`, interval arithmetic over those -- because the scan is blind to the body's
-  own bindings. A call of a defun with a cell proves nothing: a replacement answers anything.
+  own bindings. A call of a defun with a cell proves nothing: a replacement answers anything --
+  except in a leaf's first copy, which runs only while the cell is empty
+  ([wasm-int-fusion.md](wasm-int-fusion.md), "A leaf compiled twice").
   ironclad's SHA-256 round variables qualify (inits read the declared registers, assignments are
   `mod32+`).
 - **Stores** (`compileRawStore`): the fast path writes the slot; a bail's or an unfusable value's
@@ -85,5 +87,6 @@ restored per fused site; `maxI64Locals` is the declaration's high-water mark.
 
 `WasmLispCompilerIntegrationTest#fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath` (its second
 program: exact locals, a bailing assignment through a bignum and a float, constants, array
-parameters; P1 and component); ci-spec `flet-fusion-and-unboxed-locals`. The ci-spec corpus holds
-`eval`, so it never reaches the exact flavour.
+parameters; P1 and component, and with `eval` added, where `churn` is a leaf compiled twice); ci-spec
+`flet-fusion-and-unboxed-locals`. The ci-spec corpus holds `eval`, so it reaches the exact flavour
+only in a leaf's first copy ([wasm-int-fusion.md](wasm-int-fusion.md), "A leaf compiled twice").

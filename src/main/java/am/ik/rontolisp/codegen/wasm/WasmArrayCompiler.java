@@ -1357,9 +1357,25 @@ final class WasmArrayCompiler {
 	 */
 	static Map<String, ConstantArray> constantArrays(List<LispVal> program,
 			am.ik.rontolisp.@Nullable ClosRegistry registry) {
+		return constantArrays(program, registry, false);
+	}
+
+	/**
+	 * As {@link #constantArrays(List, am.ik.rontolisp.ClosRegistry)}, for a program that
+	 * CAN name a variable at run time when {@code guarded}: a definition may then also be
+	 * {@code defconst}'s {@code (if (boundp 'name) (symbol-value 'name) V)}, its guard
+	 * unfolded, and the global holds whatever the run left there, which a reader has to
+	 * test ({@link WasmLeafVersioning}).
+	 * @param program the top-level forms, definitions included
+	 * @param registry the registry resolving element-type aliases
+	 * @param guarded whether the guarded definition counts
+	 * @return constant name to the vector its definition builds
+	 */
+	static Map<String, ConstantArray> constantArrays(List<LispVal> program,
+			am.ik.rontolisp.@Nullable ClosRegistry registry, boolean guarded) {
 		Map<String, ConstantArray> candidates = new java.util.HashMap<>();
 		for (LispVal form : program) {
-			collectConstantArrays(form, registry, candidates);
+			collectConstantArrays(form, registry, guarded, candidates);
 		}
 		if (candidates.isEmpty()) {
 			return Map.of();
@@ -1377,14 +1393,14 @@ final class WasmArrayCompiler {
 	}
 
 	private static void collectConstantArrays(LispVal form, am.ik.rontolisp.@Nullable ClosRegistry registry,
-			Map<String, ConstantArray> out) {
+			boolean guarded, Map<String, ConstantArray> out) {
 		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
 			return;
 		}
 		List<LispVal> parts = cons.toList();
 		if (LispNames.PROGN.equals(head.name())) {
 			for (LispVal sub : parts.subList(1, parts.size())) {
-				collectConstantArrays(sub, registry, out);
+				collectConstantArrays(sub, registry, guarded, out);
 			}
 			return;
 		}
@@ -1392,10 +1408,30 @@ final class WasmArrayCompiler {
 				|| !(parts.get(1) instanceof LispSymbol name)) {
 			return;
 		}
-		ConstantArray array = literalPackedArray(parts.get(2), registry);
+		LispVal value = parts.get(2);
+		if (guarded && value instanceof LispCons guard && guard.isProperList() && guard.toList().size() == 4
+				&& guard.car() instanceof LispSymbol ifHead && LispNames.IF.equals(ifHead.name())
+				&& isQuotedNameCall(guard.toList().get(1), LispNames.BOUNDP, name.name())
+				&& isQuotedNameCall(guard.toList().get(2), LispNames.SYMBOL_VALUE, name.name())) {
+			value = guard.toList().get(3);
+		}
+		ConstantArray array = literalPackedArray(value, registry);
 		if (array != null) {
 			out.putIfAbsent(name.name(), array);
 		}
+	}
+
+	/** Whether {@code form} is {@code (operator 'name)}. */
+	private static boolean isQuotedNameCall(LispVal form, String operator, String name) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)
+				|| !operator.equals(head.name())) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		return parts.size() == 2 && parts.get(1) instanceof LispCons quoted && quoted.isProperList()
+				&& quoted.car() instanceof LispSymbol quote && LispNames.QUOTE.equals(quote.name())
+				&& quoted.toList().size() == 2 && quoted.toList().get(1) instanceof LispSymbol symbol
+				&& name.equals(symbol.name());
 	}
 
 	// A literal packed make-array: a literal size and only the keys that keep the

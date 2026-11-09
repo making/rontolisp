@@ -27,9 +27,25 @@ final class WasmLambdaCompiler {
 	}
 
 	/**
+	 * A {@code lambda} form's function, registered once while a leaf's body compiles
+	 * twice ({@link WasmLeafVersioning}): the second copy makes its closure over the same
+	 * function.
+	 *
+	 * @param funcId the function's funcId
+	 * @param freeVars the variables it captures, in capture order
+	 */
+	record Registration(int funcId, List<String> freeVars) {
+	}
+
+	/**
 	 * Compiles a lambda expression as a closure value.
 	 */
 	static void compileValue(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		Registration registered = ctx.lambdaRegistrations == null ? null : ctx.lambdaRegistrations.get(cons);
+		if (registered != null) {
+			emitClosureValue(registered.funcId(), registered.freeVars(), ctx);
+			return;
+		}
 		List<LispVal> parts = cons.toList();
 		LambdaLists.NativeForm nf = LambdaLists.toNative(parts.get(1), parts.subList(2, parts.size()),
 				LambdaLists.MAX_PHYSICAL_PARAMS, ctx.specialVars);
@@ -63,6 +79,9 @@ final class WasmLambdaCompiler {
 		ctx.lambdaDecls.add(new WasmLispCompiler.LambdaInfo(funcId, methodName, paramNames, nf.variadic(),
 				nf.optionals(), bodyExprs, new ArrayList<>(freeVars), funcIndex, null));
 		WasmUncaughtLocations.registerLambda(funcId, cons, bodyExprs, ctx);
+		if (ctx.lambdaRegistrations != null) {
+			ctx.lambdaRegistrations.put(cons, new Registration(funcId, List.copyOf(freeVars)));
+		}
 
 		emitClosureValue(funcId, new ArrayList<>(freeVars), ctx);
 	}
