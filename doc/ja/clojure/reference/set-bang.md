@@ -23,8 +23,11 @@ REPL の中だけです。
 フィールド形式（`(.f x)`、`(.-f x)`、`(. x f)`）は、対象、値の順に評価した後、実行時に
 決まります。fn の `__methodImplCache` は値を受け取ってその値を返し、それ以外の Clojure の
 値はそのフィールドを持ちません（`No matching field found: f for class ...`。`nil` は
-`NullPointerException`）。ホストオブジェクトのフィールドと static フィールドは書き込みの
-実行時に名前を挙げて拒否します（`java:` 表面にフィールド書き込みがありません）。
+`NullPointerException`）。ホストオブジェクトの public フィールドには書き込み、値を返します。
+値はオラクルのリフレクタと同じく変換し、数値はプリミティブ数値型のフィールドへ縮小変換、
+受け取れないその他の値は `IllegalArgumentException` です。static フィールド
+（`(. Class f)` や `Class/f`）にも同様に書き込みます。WASM にはホストオブジェクトがなく、
+static フィールドへの書き込みは `UnsupportedOperationException` です。
 
 ```clojure
 (defprotocol Counter (bump! [c]) (total [c]))

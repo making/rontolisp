@@ -697,8 +697,10 @@ final class JavaInterop {
 	}
 
 	// (java:field "class.Name" "CONSTANT") -> static field; (java:field obj "name") ->
-	// instance field.
-	static LispVal field(LispVal classOrObject, String fieldName, Caller caller) {
+	// instance field; with a VALUE after the name the field is written instead, and the
+	// form answers the value written.
+	static LispVal field(LispVal classOrObject, String fieldName, @Nullable LispVal value, Caller caller) {
+		String what = (value == null ? "reading" : "writing") + " field " + fieldName;
 		try {
 			if (classOrObject instanceof LispString s) {
 				ReflectiveJavaClasses.Type type = loadClass(s.value(), caller);
@@ -708,17 +710,23 @@ final class JavaInterop {
 							+ am.ik.rontolisp.compiler.JavaSiteResolver.notStatic(type.name(), fieldName));
 				}
 				Field field = publicField(type, fieldName);
-				return unmarshal(field.get(null), caller);
+				return value != null ? writeField(field, null, value, caller, what)
+						: unmarshal(field.get(null), caller);
 			}
 			if (classOrObject instanceof LispJavaObject obj) {
-				Field field = publicField(ReflectiveJavaClasses.of(obj.ref().getClass()), fieldName);
-				return unmarshal(field.get(obj.ref()), caller);
+				ReflectiveJavaClasses.Type type = ReflectiveJavaClasses.of(obj.ref().getClass());
+				if (type.field(fieldName) == null) {
+					throw noMatch(what, JavaOverloads.noMatchingField(fieldName, type.name()));
+				}
+				Field field = publicField(type, fieldName);
+				return value != null ? writeField(field, obj.ref(), value, caller, what)
+						: unmarshal(field.get(obj.ref()), caller);
 			}
 			throw new LispEvalException(
 					"java:field expects a class-name string or a java object, got " + classOrObject.print());
 		}
 		catch (ReflectiveOperationException ex) {
-			throw fail("reading field " + fieldName, ex);
+			throw fail(what, ex);
 		}
 		catch (NoClassDefFoundError ex) {
 			String name = classOrObject instanceof LispString s ? s.value()
@@ -732,6 +740,69 @@ final class JavaInterop {
 							: classOrObject.print();
 			throw initializerFailed(name, ex);
 		}
+	}
+
+	// Writes VALUE -- a condition standing for a host exception as that exception -- to
+	// the field of TARGET (null for a static field) and answers what was written. The
+	// value converts as the oracle's reflector boxes a field write's (Reflector.boxArg):
+	// a number narrowed by its own intValue, longValue, ... where the field is a
+	// numeric primitive, nil there its NullPointerException; anything else as an
+	// argument of the field's type converts (marshal), else the field's type refuses
+	// it -- a numeric primitive with the reflector's IllegalArgumentException, any
+	// other type with the cast's ClassCastException. A final field is
+	// Field.set's IllegalAccessException. Mirrored by the bridge's writeField
+	// (codegen.jvm.JavaBridgeTemplate).
+	private static LispVal writeField(Field field, @Nullable Object target, LispVal value, Caller caller, String what)
+			throws IllegalAccessException {
+		LispVal handed = hostException(value, caller);
+		Class<?> type = field.getType();
+		Object written = null;
+		boolean converted = false;
+		boolean numeric = type.isPrimitive() && type != boolean.class && type != char.class;
+		if (numeric) {
+			Number number = switch (handed) {
+				case LispInteger i -> i.value();
+				case LispBigInteger b -> b.value();
+				case LispDouble d -> d.value();
+				default -> null;
+			};
+			if (number != null) {
+				written = JavaOverloads.writtenNumber(number, type);
+				converted = true;
+			}
+			else if (handed instanceof LispNil) {
+				throw fail(what, JavaOverloads.nullFieldWrite());
+			}
+		}
+		if (!converted) {
+			@Nullable Object[] slot = new @Nullable Object[1];
+			if (marshal(handed, ReflectiveJavaClasses.of(type), caller, slot, 0) == NO_MATCH) {
+				String given = writtenClassName(handed);
+				throw fail(what, numeric ? JavaOverloads.unexpectedParamType(type, given)
+						: castFailure(given, castTargetName(type)));
+			}
+			written = slot[0];
+		}
+		field.set(target, written);
+		return handed;
+	}
+
+	// The class a field write's refusal names a value by: the Java class a value with a
+	// kind crosses as, a host object's own, anything else castFromName's (mirrored by
+	// the bridge's writtenClassName).
+	private static String writtenClassName(LispVal value) {
+		return switch (value) {
+			case LispString ignored -> "java.lang.String";
+			case LispChar ignored -> "java.lang.Character";
+			case LispTrue ignored -> "java.lang.Boolean";
+			case LispSymbol symbol when LispNames.JAVA_FALSE.equals(symbol.name()) -> "java.lang.Boolean";
+			case LispInteger ignored -> "java.lang.Long";
+			case LispBigInteger ignored -> "java.math.BigInteger";
+			case LispDouble ignored -> "java.lang.Double";
+			case LispLambda ignored -> JavaImplementation.FUNCTION_CLASS;
+			case LispFunction ignored -> JavaImplementation.FUNCTION_CLASS;
+			default -> castFromName(value);
+		};
 	}
 
 	/**

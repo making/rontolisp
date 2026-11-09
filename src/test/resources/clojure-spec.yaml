@@ -16913,6 +16913,30 @@ cases:
       v "No matching field found: foo for class java.lang.String"
       v :npe
       "No matching field found: foo for class clojure.lang.PersistentArrayMap"
+  - name: set-of-a-host-field-writes-it
+    # (set! (.-f x) v), (. x f) and (.f x) of a host object's public field write it and
+    # answer the value, which converts as the oracle's reflector boxes it: a Long or a
+    # Double narrowed into the int field, a string its IllegalArgumentException, nil its
+    # NullPointerException; a field the class lacks is No matching field found.
+    # Oracle-identical (clj 1.12.6, 2026-11-09).
+    skip:
+      wasm: no host object exists where no host is
+      wasm_component: no host object exists where no host is
+    source: |
+      (def shf-p (java.awt.Point. 1 2))
+      (prn (set! (.-x shf-p) 5) (.-x shf-p) (set! (. shf-p y) 7) (.-y shf-p))
+      (prn (set! (.x shf-p) 3.9) (.-x shf-p))
+      (let [q (java.awt.Point. 1 2)] (prn (set! (.-x q) 8) (.-x q)))
+      (prn (try (set! (.-x shf-p) "s") (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (set! (.-x shf-p) nil) (catch NullPointerException e :npe)))
+      (prn (try (set! (.-nope shf-p) 1) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      5 5 7 7
+      3.9 3
+      8 8
+      "Unexpected param type, expected: int, given: java.lang.String"
+      :npe
+      "No matching field found: nope for class java.awt.Point"
   - name: print-simple-print-dup-and-print-ctor
     # print-simple writes as print writes, print-dup as pr writes except for
     # the readable #= constructions, and print-ctor wraps a writer's output in

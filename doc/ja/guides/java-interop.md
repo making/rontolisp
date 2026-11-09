@@ -13,7 +13,7 @@
 | `java:new` | ホストオブジェクトの生成: `(java:new "fqcn" args...)` |
 | `java:call` | インスタンスメソッドの呼び出し: `(java:call obj "method" args...)` |
 | `java:static` | 静的メソッドの呼び出し: `(java:static "fqcn" "method" args...)` |
-| `java:field` | 静的・インスタンスフィールドの読み取り: `(java:field class-or-obj "name")` |
+| `java:field` | 静的・インスタンスフィールドの読み取り: `(java:field class-or-obj "name")`、書き込み: `(java:field class-or-obj "name" value)` |
 | `java:proxy` | callable を 1 つ以上のインターフェースへ適合: `(java:proxy "iface"... callable)` |
 | `java:subclass` | callable でクラスを継承: `(java:subclass "super" '("iface"...) '("method"...) args... callable)` |
 | `java:reify` | インターフェース群をメソッドごとに実装: `(java:reify "iface" "method" function ...)` |

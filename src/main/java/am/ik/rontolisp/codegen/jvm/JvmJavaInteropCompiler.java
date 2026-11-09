@@ -101,8 +101,8 @@ final class JvmJavaInteropCompiler {
 				requireArity(size >= 3, "java:call expects (java:call object \"method\" args...)");
 			case LispNames.JAVA_STATIC ->
 				requireArity(size >= 3, "java:static expects (java:static \"class\" \"method\" args...)");
-			case LispNames.JAVA_FIELD ->
-				requireArity(size == 3, "java:field expects (java:field class-or-object \"field\")");
+			case LispNames.JAVA_FIELD -> requireArity(size == 3 || size == 4,
+					"java:field expects (java:field class-or-object \"field\" [value])");
 			case LispNames.JAVA_PROXY -> requireArity(size >= 3, JavaImplementations.PROXY_USAGE);
 			case LispNames.JAVA_REIFY -> requireArity(size >= 2 && size % 2 == 0, JavaImplementations.REIFY_USAGE);
 			case LispNames.JAVA_SUBCLASS -> requireArity(size >= 5, JavaImplementations.SUBCLASS_USAGE);
@@ -182,11 +182,13 @@ final class JvmJavaInteropCompiler {
 				emitBridgeCall(ctx, ops, "static");
 			}
 			case LispNames.JAVA_FIELD -> {
-				// The object or class and the field name, then the markers the form ends
-				// in (the bridge reads :java-false off them).
+				// The object or class and the field name, then a written value and the
+				// markers the form ends in (the bridge reads :java-false off them): the
+				// value is a member's argument, a host exception's condition the
+				// exception.
 				JvmExprCompiler.compileExpr(args.get(1), ctx, className);
 				JvmExprCompiler.compileExpr(args.get(2), ctx, className);
-				compileRestArray(args, 3, ctx, className);
+				compileArgumentArray(args, 3, ctx, className);
 				emitBridgeCall(ctx, ops, "field");
 			}
 			case LispNames.JAVA_REIFY -> {

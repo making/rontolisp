@@ -476,6 +476,8 @@ class JavaSiteResolverTest {
 			.isEqualTo("class java.lang.Runnable is an interface");
 		assertThat(resolve("(java:field \"java.awt.Point\" \"x\")").reason())
 			.isEqualTo("field java.awt.Point.x is not static");
+		assertThat(resolve("(java:field (java:new \"java.awt.Point\") \"x\" 1)").reason())
+			.isEqualTo("a field write is resolved when it runs");
 		assertThat(resolve("(java:new \"" + Hidden.class.getName() + "\")").reason())
 			.isEqualTo("class " + Hidden.class.getName() + " is not public");
 		assertThat(resolve("(java:static \"java.lang.AbstractStringBuilder\" \"m\")").reason())

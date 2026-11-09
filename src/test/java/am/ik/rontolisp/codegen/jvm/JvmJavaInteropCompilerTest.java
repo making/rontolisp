@@ -116,12 +116,15 @@ class JvmJavaInteropCompilerTest {
 	}
 
 	@Test
-	void instanceReadsField() throws Exception {
-		// java.awt.Point has public int fields x/y, and works headless.
-		assertThat(compileAndRun("""
-				(setq p (java:new "java.awt.Point" 3 4))
-				(print (java:field p "y"))
-				""")).isEqualTo("4");
+	void instanceReadsAndWritesField() throws Exception {
+		// java.awt.Point has public int fields x/y, and works headless. A write answers
+		// the value written, narrowed into the int field as the interpreter does.
+		assertThat(compileAndRun(
+				"""
+						(setq p (java:new "java.awt.Point" 3 4))
+						(print (list (java:field p "y") (java:field p "y" 7) (java:field p "y") (java:field p "x" 2.9) (java:field p "x")))
+						"""))
+			.isEqualTo("(4 7 7 2.9 2)");
 	}
 
 	// An integer argument prefers the int overload (returning an integer), not the
@@ -675,11 +678,36 @@ class JvmJavaInteropCompilerTest {
 					"error calling java.lang.String.length: java.lang.IllegalArgumentException: No matching method length found taking 0 args");
 	}
 
+	// A class name reaches only a static field; a write refuses a final field and a value
+	// the field's type cannot take, with the interpreter's texts.
 	@Test
-	void aClassNameReadsOnlyAStaticField() {
+	void aFieldRefusesInTheOraclesWords() {
 		assertThatThrownBy(() -> compileAndRun("(java:field \"java.awt.Point\" \"x\")"))
 			.isInstanceOf(RuntimeException.class)
 			.hasMessage("java:field: field java.awt.Point.x is not static");
+		assertThatThrownBy(() -> compileAndRun("(java:field \"java.awt.Point\" \"x\" 1)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage("java:field: field java.awt.Point.x is not static");
+		assertThatThrownBy(() -> compileAndRun("(java:field \"java.lang.Integer\" \"MAX_VALUE\" 1)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage(
+					"error writing field MAX_VALUE: java.lang.IllegalAccessException: Can not set static final int field java.lang.Integer.MAX_VALUE to java.lang.Integer");
+		assertThatThrownBy(() -> compileAndRun("(java:field (java:new \"java.awt.Point\") \"x\" \"s\")"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage(
+					"error writing field x: java.lang.IllegalArgumentException: Unexpected param type, expected: int, given: java.lang.String");
+		assertThatThrownBy(() -> compileAndRun("(java:field (java:new \"java.awt.Point\") \"x\" nil)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage(
+					"error writing field x: java.lang.NullPointerException: Cannot invoke \"Object.getClass()\" because \"arg\" is null");
+		assertThatThrownBy(() -> compileAndRun("(java:field (java:new \"java.awt.Point\") \"z\" 1)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage(
+					"error writing field z: java.lang.IllegalArgumentException: No matching field found: z for class java.awt.Point");
+		assertThatThrownBy(() -> compileAndRun("(java:field (java:new \"java.awt.GridBagConstraints\") \"insets\" 1)"))
+			.isInstanceOf(RuntimeException.class)
+			.hasMessage(
+					"error writing field insets: java.lang.ClassCastException: class java.lang.Long cannot be cast to class java.awt.Insets");
 	}
 
 	// What the member throws is wrapped as the bridge and the interpreter wrap it.

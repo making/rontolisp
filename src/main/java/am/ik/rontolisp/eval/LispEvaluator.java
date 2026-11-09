@@ -8113,13 +8113,14 @@ public final class LispEvaluator {
 		String jfield = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_FIELD);
 		this.globalEnv.defineFunction(jfield, javaBuiltin(jfield, all -> {
 			// The markers ending the call (compiler/JavaMarkers): :java-false answers a
-			// false field as |false|.
+			// false field as |false|. A value after the name writes the field.
 			int markers = am.ik.rontolisp.compiler.JavaMarkers.count(all, 2);
 			List<LispVal> args = all.subList(0, all.size() - markers);
-			if (args.size() != 2 || !(args.get(1) instanceof LispString field)) {
-				throw new LispEvalException(jfield + " expects (java:field class-or-object \"field\")");
+			if ((args.size() != 2 && args.size() != 3) || !(args.get(1) instanceof LispString field)) {
+				throw new LispEvalException(jfield + " expects (java:field class-or-object \"field\" [value])");
 			}
-			return JavaInterop.field(args.get(0), field.value(), JavaInterop.withMarkers(caller, all, 2));
+			return JavaInterop.field(args.get(0), field.value(), args.size() == 3 ? args.get(2) : null,
+					JavaInterop.withMarkers(caller, all, 2));
 		}));
 		String jproxy = PackageRegistry.qualify(LispNames.JAVA_PKG, LispNames.JAVA_PROXY);
 		this.globalEnv.defineFunction(jproxy, new LispFunction(jproxy, all -> {

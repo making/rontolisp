@@ -35,7 +35,7 @@ The package is not part of Common Lisp, so its functions are referenced with the
 | `java:new` | Construct a host object: `(java:new "fqcn" args...)` |
 | `java:call` | Invoke an instance method: `(java:call obj "method" args...)` |
 | `java:static` | Invoke a static method: `(java:static "fqcn" "method" args...)` |
-| `java:field` | Read a static or instance field: `(java:field class-or-obj "name")` |
+| `java:field` | Read a static or instance field: `(java:field class-or-obj "name")`; write it: `(java:field class-or-obj "name" value)` |
 | `java:proxy` | Adapt a callable to one or more interfaces: `(java:proxy "iface"... callable)` |
 | `java:subclass` | Extend a class with a callable: `(java:subclass "super" '("iface"...) '("method"...) args... callable)` |
 | `java:reify` | Implement interfaces one method at a time: `(java:reify "iface" "method" function ...)` |

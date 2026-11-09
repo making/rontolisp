@@ -3048,9 +3048,16 @@ class ClojureLoweringTest {
 		// anything else names what is missing
 		assertThatThrownBy(() -> Clojure.read("(set! *no-such-var* 1)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("set! of a var is not supported yet: *no-such-var*");
-		// a field form is decided when it runs: a host object's field is refused by name
-		assertThat(lowered("(set! (.-f (Object.)) 1)")).contains(
-				"(RONTOLISP::%CLOJURE-UNSUPPORTED-OPERATION-EXCEPTION \"set! of a host field is not supported yet");
+		// a field form is decided when it runs: where the host is, a host object's field
+		// and a static field (Class/f too) are written by java:field with the value as a
+		// host call hands it over; where no host is, a static field is refused by name
+		assertThat(lowered("(set! (.-f (Object.)) 1)")).contains("\"f\" (RONTOLISP::%CLOJURE-HOST-VALUE ");
+		// a fn's protocol cache is no host field: its write names no java: operator
+		assertThat(lowered("(set! (.__methodImplCache inc) nil)")).doesNotContain("JAVA:");
+		assertThat(lowered("(set! Integer/MAX_VALUE 1)"))
+			.contains("(JAVA:FIELD \"java.lang.Integer\" \"MAX_VALUE\" (RONTOLISP::%CLOJURE-HOST-VALUE ");
+		assertThat(wasmLowered("(set! (. Integer MAX_VALUE) 1)")).contains(
+				"(RONTOLISP::%CLOJURE-UNSUPPORTED-OPERATION-EXCEPTION \"set! of a host field is not supported where no host is\")");
 		assertThatThrownBy(() -> Clojure.read("(set! 3 4)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("Invalid assignment target");
 		assertThatThrownBy(() -> Clojure.read("(def y 1) (set! y)", null)).isInstanceOf(LispReadException.class)

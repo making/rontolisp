@@ -1215,7 +1215,8 @@ final class ClojureProtocolLowering {
 	 * static field the run-time library holds ({@link ClojureLangClasses#runtimeStatic})
 	 * stores a boolean, refusing anything else as the oracle's cast to {@code Boolean}
 	 * does, and answers the value. A field form {@code (.f x)} is decided when it runs
-	 * ({@link #hostFieldSetOf}).
+	 * ({@link #hostFieldSetOf}); a host class's static field {@code Class/f} is written
+	 * where the host is ({@link #staticFieldSet}).
 	 */
 	static LispVal setBangOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "Malformed assignment, expecting (set! target val)");
@@ -1232,6 +1233,13 @@ final class ClojureProtocolLowering {
 		LispVal fieldSet = hostFieldSetOf(ctx, target, items.get(2));
 		if (fieldSet != null) {
 			return fieldSet;
+		}
+		ClojureInteropLowering.QualifiedMember member = target instanceof LispSymbol qualified
+				? ClojureInteropLowering.qualifiedMember(ctx, qualified.name()) : null;
+		if (member != null && member.typeKey() == null && !member.member().startsWith(".")
+				&& !member.member().equals("new")) {
+			// Class/f: a static field
+			return staticFieldSet(ctx, member.cls(), member.member(), items.get(2));
 		}
 		if (!(target instanceof LispSymbol s) || s.name().startsWith(":") || s.name().equals("nil")
 				|| s.name().equals("true") || s.name().equals("false")) {
@@ -1277,7 +1285,7 @@ final class ClojureProtocolLowering {
 	/** The field every fn of the oracle's has: its protocol method cache. */
 	static final String METHOD_IMPL_CACHE = "__methodImplCache";
 
-	private static final String HOST_FIELD_WRITE = "set! of a host field is not supported yet: the java: surface has no field write";
+	private static final String HOST_FIELD_WRITE = "set! of a host field is not supported where no host is";
 
 	/**
 	 * {@code (set! (.f x) v)}, {@code (set! (.-f x) v)} or {@code (set! (. x f) v)}: a
@@ -1287,9 +1295,11 @@ final class ClojureProtocolLowering {
 	 * keeps no per-fn cache, so the write stores nothing (schema's {@code s/defprotocol}
 	 * synchronizes the field between a method and its wrapper). Any other Clojure value
 	 * has no such public field: the oracle's {@code No matching field found} (nil its
-	 * {@code NullPointerException}). A host object's field is refused by name, as is a
-	 * static field {@code (. Class f)}: the {@code java:} surface has no field write.
-	 * Null when the target is no field form.
+	 * {@code NullPointerException}). Where the host is, a host object's field is written
+	 * by {@code java:field} with the value, which converts as the oracle's reflector
+	 * boxes it, and the {@code set!} answers the value; a static field
+	 * {@code (. Class f)} likewise ({@link #staticFieldSet}). Null when the target is no
+	 * field form.
 	 */
 	private static @Nullable LispVal hostFieldSetOf(ClojureLowering ctx, LispVal target, LispVal valueDatum) {
 		List<LispVal> parts = ClojureLowerUtil.items(target);
@@ -1302,8 +1312,7 @@ final class ClojureProtocolLowering {
 		if (name.equals(".") && parts.size() == 3 && parts.get(2) instanceof LispSymbol member) {
 			field = member.name().startsWith("-") ? member.name().substring(1) : member.name();
 			if (parts.get(1) instanceof LispSymbol cls && ClojureNamespaceLowering.isClasslike(ctx, cls.name())) {
-				return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ctx.lower(valueDatum), ClojureRefusals
-					.refusal(ClojureRefusals.UNSUPPORTED_OPERATION, LispString.literal(HOST_FIELD_WRITE)));
+				return staticFieldSet(ctx, ClojureNamespaceLowering.resolveClass(ctx, cls.name()), field, valueDatum);
 			}
 			object = parts.get(1);
 		}
@@ -1318,22 +1327,58 @@ final class ClojureProtocolLowering {
 		LispSymbol obj = ctx.freshTemp();
 		LispSymbol value = ctx.freshTemp();
 		LispVal refusal = ClojureValueMethodLowering.refusal(obj, field, true, List.of());
-		if (ctx.hostTarget) {
+		boolean cache = field.equals(METHOD_IMPL_CACHE);
+		if (ctx.hostTarget && !cache) {
+			// a fn's cache needs no host: no host object here is a Clojure fn
 			refusal = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LISP-VALUE-P"), obj), refusal,
-					ClojureRefusals.refusal(ClojureRefusals.UNSUPPORTED_OPERATION,
-							LispString.literal(HOST_FIELD_WRITE)));
+					hostFieldWrite(ctx, obj, field, value));
 		}
 		LispVal bindings = ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(obj, ctx.lower(object)),
 				ClojureLowerUtil.list(value, ctx.lower(valueDatum))));
-		if (!field.equals(METHOD_IMPL_CACHE)) {
+		if (cache) {
+			refusal = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), obj), value, refusal);
+		}
+		else if (!ctx.hostTarget) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), bindings, ClojureLowerUtil
 				.list(ClojureLowerUtil.sym("declare"), ClojureLowerUtil.list(ClojureLowerUtil.sym("ignore"), value)),
 					refusal);
 		}
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), bindings,
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), obj), value, refusal));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), bindings, refusal);
+	}
+
+	/**
+	 * {@code (set! (. Class f) v)} or {@code (set! Class/f v)}: the value evaluates, then
+	 * where the host is the static field is written ({@link #hostFieldWrite}) and the
+	 * {@code set!} answers the value; where it is not, the
+	 * {@code UnsupportedOperationException} {@link #HOST_FIELD_WRITE}.
+	 * @param ctx the hub
+	 * @param cls the class's binary name
+	 * @param field the field name
+	 * @param valueDatum the value's datum
+	 * @return the write
+	 */
+	static LispVal staticFieldSet(ClojureLowering ctx, String cls, String field, LispVal valueDatum) {
+		if (!ctx.hostTarget) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ctx.lower(valueDatum), ClojureRefusals
+				.refusal(ClojureRefusals.UNSUPPORTED_OPERATION, LispString.literal(HOST_FIELD_WRITE)));
+		}
+		LispSymbol value = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(value, ctx.lower(valueDatum)))),
+				hostFieldWrite(ctx, LispString.literal(cls), field, value));
+	}
+
+	/**
+	 * The write of a host field: {@code java:field} over the object (or the class name),
+	 * the field and the value as a host call hands it over
+	 * ({@link ClojureInteropLowering#hostCall}), then the value itself -- what the
+	 * oracle's {@code set!} answers.
+	 */
+	private static LispVal hostFieldWrite(ClojureLowering ctx, LispVal objectOrClass, String field, LispSymbol value) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ClojureInteropLowering.hostCall(ctx,
+				ClojureInteropLowering.JAVA_FIELD, List.of(objectOrClass, LispString.literal(field), value), 2), value);
 	}
 
 	/**

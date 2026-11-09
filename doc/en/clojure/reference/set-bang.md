@@ -24,8 +24,11 @@ A field form -- `(.f x)`, `(.-f x)`, `(. x f)` -- is decided when it runs, after
 target and then the value evaluate: a fn's `__methodImplCache` takes the value and
 answers it, and any other Clojure value has no such field
 (`No matching field found: f for class ...`; `nil` is a `NullPointerException`). A host
-object's field and a static field are refused by name when the write runs (the `java:`
-surface has no field write).
+object's public field is written and the value answered, converted as the oracle's
+reflector converts it: a number is narrowed into a numeric primitive field, anything else
+it cannot take is an `IllegalArgumentException`. A static field -- `(. Class f)` or
+`Class/f` -- is written the same way. On WASM no host object exists, and a static field's
+write is an `UnsupportedOperationException`.
 
 ```clojure
 (defprotocol Counter (bump! [c]) (total [c]))

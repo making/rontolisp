@@ -779,6 +779,23 @@ resolved `Method.invoke` is the cheap part.
 - `(java:field "C" "f")` reads a static field: an instance field so named is `java:field: field
   C.f is not static` on all three (was an NPE), and the resolver leaves it unresolved with that
   reason. `(java:field obj "CONSTANT")` of a static field still reads it.
+- A value after the field name WRITES it (j35, 2026-11-09) and answers the value handed
+  (a host exception's condition the exception): interpreter `JavaInterop.writeField`, bridge
+  `writeField` (hand copy; the compiler hands the value through `compileArgumentArray`). The
+  value converts as the oracle's reflector boxes a field write's (`Reflector.boxArg`): a Lisp
+  integer, bignum or float narrowed by `intValue`/`longValue`/... into a numeric primitive
+  field (`JavaOverloads.writtenNumber`; truncating, unchecked), `nil` there the reflector's
+  NPE (`nullFieldWrite`), anything else `marshal`ed as an argument of the field's type, which
+  refusing it is `unexpectedParamType` (IAE) for a numeric primitive, `castFailure` (CCE)
+  otherwise -- the value named by the Java class its kind crosses as (`writtenClassName`). A
+  final field is `Field.set`'s `IllegalAccessException` (the oracle's compiled `putstatic` of
+  a static final is an `IllegalAccessError` -- deviation). Errors read `error writing field f:
+  ...`. A write is NEVER resolved (`JavaSiteResolver.FIELD_WRITE`, "a field write is resolved
+  when it runs"): no direct site writes, so `--java-static` refuses one; the oracle's hinted
+  `set!` is a direct `putfield`, which no program here has needed yet.
+- An instance field the object's class lacks (read or write) is the oracle's
+  `IllegalArgumentException` `No matching field found: f for class C`
+  (`JavaOverloads.noMatchingField`, both run-time paths; was `NoSuchFieldException: f`).
 - Warnings: `java:*warn-on-reflection*` (special, nil; `--warn-java-reflection` sets it) --
   interpreter: at top-level load for the sites the form shows (`sitesIn`), prefixed with the
   top-level form's `file:line`, and at the first resolution of a site not shown there; compile

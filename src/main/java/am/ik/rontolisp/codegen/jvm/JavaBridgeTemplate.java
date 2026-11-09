@@ -628,19 +628,26 @@ final class JavaBridgeTemplate {
 
 	/**
 	 * Implements {@code (java:field "class.Name" "CONSTANT")} (static) and
-	 * {@code (java:field obj "name")} (instance).
+	 * {@code (java:field obj "name")} (instance) -- and, with a value after the name in
+	 * {@code rest}, the write of that field, answering the value written.
 	 */
 	static @Nullable Object javaField(@Nullable Object classOrObject, @Nullable Object fieldName,
-			@Nullable Object[] markers) {
+			@Nullable Object[] rest) {
 		// The markers the form ends in: :java-false answers a false field as |false|,
-		// :octets a byte[] one as an (unsigned-byte 8) vector.
-		int marked = functionsOf(markers, markerCount(markers, 0));
+		// :octets a byte[] one as an (unsigned-byte 8) vector; :functional and :through
+		// convert a written function.
+		int markerCount = markerCount(rest, 0);
+		int marked = functionsOf(rest, markerCount);
+		Object through = throughOf(rest, markerCount);
 		boolean javaFalse = (marked & FUNCTIONS_JAVA_FALSE) != 0;
 		boolean octets = (marked & FUNCTIONS_OCTETS) != 0;
 		String name = lispString(fieldName);
-		if (name == null) {
-			throw new RuntimeException("java:field expects (java:field class-or-object \"field\")");
+		int values = rest.length - markerCount;
+		if (name == null || values > 1) {
+			throw new RuntimeException("java:field expects (java:field class-or-object \"field\" [value])");
 		}
+		boolean write = values == 1;
+		String what = (write ? "writing" : "reading") + " field " + name;
 		try {
 			String staticClass = lispString(classOrObject);
 			if (staticClass != null) {
@@ -650,17 +657,25 @@ final class JavaBridgeTemplate {
 					// Mirrors compiler/JavaSiteResolver.notStatic.
 					throw new RuntimeException("java:field: field " + cls.getName() + "." + name + " is not static");
 				}
-				return unmarshal(field.get(null), javaFalse, octets);
+				return write ? writeField(field, null, rest[0], marked, through, what)
+						: unmarshal(field.get(null), javaFalse, octets);
 			}
 			if (classOrObject != null && isJavaObject(classOrObject)) {
-				Field field = publicField(classOrObject.getClass(), name);
-				return unmarshal(field.get(classOrObject), javaFalse, octets);
+				Field field;
+				try {
+					field = publicField(classOrObject.getClass(), name);
+				}
+				catch (NoSuchFieldException ex) {
+					throw noMatch(what, noMatchingField(name, classOrObject.getClass().getName()));
+				}
+				return write ? writeField(field, classOrObject, rest[0], marked, through, what)
+						: unmarshal(field.get(classOrObject), javaFalse, octets);
 			}
 			throw new RuntimeException(
 					"java:field expects a class-name string or a java object, got " + describe(classOrObject));
 		}
 		catch (ReflectiveOperationException ex) {
-			throw fail("reading field " + name, ex);
+			throw fail(what, ex);
 		}
 		catch (NoClassDefFoundError ex) {
 			// Only a class a getField or field read touched throws: the named one, or
@@ -678,6 +693,69 @@ final class JavaBridgeTemplate {
 			}
 			throw initializerFailed(owner, ex);
 		}
+	}
+
+	// Writes VALUE to the field of TARGET (null for a static field) and answers it: a
+	// number narrowed by its own intValue, longValue, ... where the field is a numeric
+	// primitive, nil there the reflector's NullPointerException; anything else as an
+	// argument of the field's type converts (marshal), else the field's type refuses it
+	// -- a numeric primitive with the reflector's IllegalArgumentException, any other
+	// type with the cast's ClassCastException (mirrors eval/JavaInterop.writeField and
+	// compiler/JavaOverloads.writtenNumber / unexpectedParamType / nullFieldWrite).
+	private static @Nullable Object writeField(Field field, @Nullable Object target, @Nullable Object value,
+			int functions, @Nullable Object through, String what) throws IllegalAccessException {
+		Class<?> type = field.getType();
+		Object written = null;
+		boolean converted = false;
+		boolean numeric = type.isPrimitive() && type != boolean.class && type != char.class;
+		if (numeric) {
+			if (value instanceof Long || value instanceof BigInteger || value instanceof Double) {
+				Number n = (Number) value;
+				written = type == int.class ? (Object) n.intValue()
+						: type == long.class ? (Object) n.longValue()
+								: type == double.class ? (Object) n.doubleValue() : type == float.class
+										? (Object) n.floatValue()
+										: type == short.class ? (Object) n.shortValue() : (Object) n.byteValue();
+				converted = true;
+			}
+			else if (value == null) {
+				throw fail(what,
+						new NullPointerException("Cannot invoke \"Object.getClass()\" because \"arg\" is null"));
+			}
+		}
+		if (!converted) {
+			@Nullable Object[] slot = new @Nullable Object[1];
+			if (marshal(value, type, slot, 0, functions, through) == NO_MATCH) {
+				String given = writtenClassName(value);
+				throw fail(what,
+						numeric ? new IllegalArgumentException(
+								"Unexpected param type, expected: " + type + ", given: " + given)
+								: castFailure(given, castTargetName(type)));
+			}
+			written = slot[0];
+		}
+		field.set(target, written);
+		return value;
+	}
+
+	// The class a field write's refusal names a value by: the Java class a value with a
+	// kind crosses as, a host object's own, anything else castFromName's (mirrors
+	// eval/JavaInterop.writtenClassName).
+	private static String writtenClassName(@Nullable Object value) {
+		Object kind = kindOf(rendered(value));
+		if (KIND_STRING.equals(kind) || KIND_STRING_1.equals(kind)) {
+			return "java.lang.String";
+		}
+		if (KIND_CHAR.equals(kind) || KIND_SUPPLEMENTARY_CHAR.equals(kind)) {
+			return "java.lang.Character";
+		}
+		if (KIND_T.equals(kind) || KIND_FALSE.equals(kind)) {
+			return "java.lang.Boolean";
+		}
+		if (KIND_FUNCTION.equals(kind)) {
+			return FUNCTION_CLASS;
+		}
+		return castFromName(value);
 	}
 
 	/**
@@ -2929,9 +3007,9 @@ final class JavaBridgeTemplate {
 		}
 	}
 
-	// What the oracle's reflector refuses a call or a construction with (mirrors
-	// compiler/JavaOverloads.noMatchingMethod/noMatchingCtor; this class must stand
-	// alone).
+	// What the oracle's reflector refuses a call, a construction or a field with
+	// (mirrors compiler/JavaOverloads.noMatchingMethod/noMatchingCtor/noMatchingField;
+	// this class must stand alone).
 	private static String noMatchingMethod(String name, int argc, @Nullable String contextClass) {
 		return "No matching method " + name + " found taking " + argc + " args"
 				+ (contextClass != null ? " for " + contextClass : "");
@@ -2939,6 +3017,10 @@ final class JavaBridgeTemplate {
 
 	private static String noMatchingCtor(String className) {
 		return "No matching ctor found for class " + className;
+	}
+
+	private static String noMatchingField(String name, String className) {
+		return "No matching field found: " + name + " for class " + className;
 	}
 
 	// What a failed resolution throws: the oracle's refusal carried by a

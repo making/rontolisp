@@ -522,6 +522,11 @@ public final class JavaSiteResolver {
 
 	private JavaSite resolveField(List<LispVal> parts, boolean javaFalse) {
 		JavaSite.Operator op = JavaSite.Operator.FIELD;
+		if (parts.size() == 4) {
+			// A write: no direct site writes a field, so the run-time path does
+			// (eval/JavaInterop.field, the bridge's javaField).
+			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, FIELD_WRITE);
+		}
 		if (parts.size() != 3 || !(parts.get(2) instanceof LispString fieldName)) {
 			return JavaSite.unresolved(op, JavaStaticType.UNKNOWN, "the field name is not a literal string");
 		}
@@ -554,6 +559,9 @@ public final class JavaSiteResolver {
 		return new JavaSite(op, type.name(), fieldName.value(), null, field, false,
 				JavaStaticType.ofDeclared(field.type(), this.lookup, javaFalse), List.of(), null, List.of());
 	}
+
+	/** Why a {@code (java:field x "f" value)} write is resolved when it runs. */
+	static final String FIELD_WRITE = "a field write is resolved when it runs";
 
 	/**
 	 * The error a {@code (java:field "C" "f")} of an instance field raises when it runs,

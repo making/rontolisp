@@ -59,12 +59,16 @@ class JavaInteropTest {
 	}
 
 	@Test
-	void instanceReadsField() {
-		// java.awt.Point has public int fields x/y, and works headless.
-		assertThat(eval("""
-				(setq p (java:new "java.awt.Point" 3 4))
-				(java:field p "y")
-				""")).isEqualTo(new LispInteger(4));
+	void instanceReadsAndWritesField() {
+		// java.awt.Point has public int fields x/y, and works headless. A write answers
+		// the value written, narrowed into the int field as the oracle's reflector does.
+		assertThat(
+				eval("""
+						(setq p (java:new "java.awt.Point" 3 4))
+						(list (java:field p "y") (java:field p "y" 7) (java:field p "y") (java:field p "x" 2.9) (java:field p "x"))
+						""")
+					.print())
+			.isEqualTo("(4 7 7 2.9 2)");
 	}
 
 	// An integer argument prefers the int overload (returning an integer), not the
@@ -538,10 +542,34 @@ class JavaInteropTest {
 					"error calling java.lang.String.length: java.lang.IllegalArgumentException: No matching method length found taking 0 args");
 	}
 
+	// A class name reaches only a static field; a write refuses a final field and a value
+	// the field's type cannot take, in the oracle's reflector's words.
 	@Test
-	void aClassNameReadsOnlyAStaticField() {
+	void aFieldRefusesInTheOraclesWords() {
 		assertThatThrownBy(() -> eval("(java:field \"java.awt.Point\" \"x\")")).isInstanceOf(LispEvalException.class)
 			.hasMessage("java:field: field java.awt.Point.x is not static");
+		assertThatThrownBy(() -> eval("(java:field \"java.awt.Point\" \"x\" 1)")).isInstanceOf(LispEvalException.class)
+			.hasMessage("java:field: field java.awt.Point.x is not static");
+		assertThatThrownBy(() -> eval("(java:field \"java.lang.Integer\" \"MAX_VALUE\" 1)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage(
+					"error writing field MAX_VALUE: java.lang.IllegalAccessException: Can not set static final int field java.lang.Integer.MAX_VALUE to java.lang.Integer");
+		assertThatThrownBy(() -> eval("(java:field (java:new \"java.awt.Point\") \"x\" \"s\")"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage(
+					"error writing field x: java.lang.IllegalArgumentException: Unexpected param type, expected: int, given: java.lang.String");
+		assertThatThrownBy(() -> eval("(java:field (java:new \"java.awt.Point\") \"x\" nil)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage(
+					"error writing field x: java.lang.NullPointerException: Cannot invoke \"Object.getClass()\" because \"arg\" is null");
+		assertThatThrownBy(() -> eval("(java:field (java:new \"java.awt.Point\") \"z\" 1)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage(
+					"error writing field z: java.lang.IllegalArgumentException: No matching field found: z for class java.awt.Point");
+		assertThatThrownBy(() -> eval("(java:field (java:new \"java.awt.GridBagConstraints\") \"insets\" 1)"))
+			.isInstanceOf(LispEvalException.class)
+			.hasMessage(
+					"error writing field insets: java.lang.ClassCastException: class java.lang.Long cannot be cast to class java.awt.Insets");
 	}
 
 	// What the member throws is wrapped, with the compiled program's text.

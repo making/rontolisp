@@ -566,7 +566,7 @@ var はエクスポートより下で定義してかまいません。
 | コア関数が参照するもの以外の `clojure.lang` のインタフェースを挙げた `reify`/`deftype`/`defrecord` の本体（[reify](reference/reify.md#host-interfaces)） | `... is not supported yet as an interface of ...` | それ以外の `clojure.lang` のインタフェース（`IChunkedSeq` など）を参照する関数がまだない |
 | レコード自身のインタフェースのメソッドのうち、レコードがインタフェース側に任せるもの（`assocEx`、`java.util.Map` の default メソッド）を定義した `defrecord` の本体 | `... is not supported yet as a method of defrecord` | それらのインタフェースにはレコード自身の動詞が答えるため、そのメソッドを持つ行がない |
 | 本体が書かなかった `java.util` の default メソッドのインスタンス呼び出し | `the default method ... is not supported yet` | default メソッドの本体は Java で、どのバックエンドもそれを実行しない |
-| 特殊変数でない core の var（`inc`）やホストオブジェクトのフィールドへの `set!` | `set! of a var is not supported yet: ...`、`set! of a host field is not supported yet: ...`（書き込みの実行時に `UnsupportedOperationException`） | 代入先の var がない。`java:` にフィールド書き込みがない |
+| 特殊変数でない core の var（`inc`）への `set!`、WASM でのホストの static フィールドへの `set!` | `set! of a var is not supported yet: ...`、`set! of a host field is not supported where no host is`（書き込みの実行時に `UnsupportedOperationException`） | 代入先の var がない。WASM にホストのクラスがない |
 | WASM バックエンドでの `future`、`future-call`、`promise`/`deliver` | `... is not supported yet on this backend ...` | WASM バックエンドはシングルスレッド。インタプリタと JVM はホストスレッドで実行する |
 | proxy メソッドの外側の `proxy-super` | `proxy-super outside a proxy method` | `proxy-super` はメソッドの `this` に対するスーパークラスの実装呼び出し |
 | 2 つめのクラス・重複メソッド・`final` スーパークラスを伴う `proxy` | `... is a class, not an interface`、`proxy defines method ... twice`、`proxy cannot extend final class ...` | スーパークラスは 1 つのみ、メソッド名ごとに本体は 1 つ、`final` のスーパークラスは不可 |

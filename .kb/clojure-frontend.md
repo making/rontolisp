@@ -6695,8 +6695,12 @@ host alone answers ("Host arms where the host is not").
   before a protocol call fills it), any other Lisp value is `%clojure-no-method`'s
   `No matching field found` (nil its NPE; a record's declared field the oracle's
   `IllegalAccessException` -- deviation), and where the host is, a host object's field
-  and a static `(. Class f)` are the `UnsupportedOperationException`
-  `set! of a host field is not supported yet`: the `java:` surface has no write primitive.
+  is written by `(java:field obj "f" value)` (j35, 2026-11-09; `hostFieldWrite`, the value
+  through `hostCall` as a host call's argument) and the `set!` answers the Clojure value.
+  A static field -- `(. Class f)` or `Class/f` (`staticFieldSet`, after
+  `ClojureLangClasses.runtimeStaticTarget`) -- likewise; where no host is, the
+  `UnsupportedOperationException` `set! of a host field is not supported where no host is`.
+  Pin: clojure-spec `set-of-a-host-field-writes-it` (oracle-identical, wasm legs skipped).
   Until j24 every field form refused at lower time, so schema 1.4.2's `macros.clj`
   (`-instrument-protocol-method`'s cache sync) stopped the namespace's load. Pin: clojure-spec
   `set-of-a-field-form-decides-when-it-runs` (oracle-identical, four backends).

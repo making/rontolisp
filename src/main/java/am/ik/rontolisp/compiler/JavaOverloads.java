@@ -470,6 +470,17 @@ public final class JavaOverloads {
 	}
 
 	/**
+	 * What the oracle's reflector refuses a read or write of an instance field the
+	 * object's class has no public field of the name for.
+	 * @param name the field name
+	 * @param className the object's class
+	 * @return e.g. {@code No matching field found: z for class java.awt.Point}
+	 */
+	public static String noMatchingField(String name, String className) {
+		return "No matching field found: " + name + " for class " + className;
+	}
+
+	/**
 	 * What the oracle's reflector refuses a construction with (clj 1.12.6, measured
 	 * 2026-10-13).
 	 * @param className the class
@@ -1068,6 +1079,58 @@ public final class JavaOverloads {
 	 */
 	public static IllegalArgumentException outOfRange(String name, Object value) {
 		return new IllegalArgumentException("Value out of range for " + name + ": " + value);
+	}
+
+	/**
+	 * A number written to a field, as the oracle's reflector boxes a field write's value
+	 * ({@code Reflector.boxArg}): narrowed by the number's own {@code intValue},
+	 * {@code longValue}, ... -- truncating, unchecked -- where the field is a numeric
+	 * primitive. The interpreter's {@code JavaInterop} and the bridge write through it
+	 * (the bridge by a hand copy).
+	 * @param n the number
+	 * @param target the field's type
+	 * @return the boxed primitive, or {@code null} when the field is no numeric primitive
+	 */
+	public static @Nullable Object writtenNumber(Number n, Class<?> target) {
+		if (target == int.class) {
+			return n.intValue();
+		}
+		if (target == long.class) {
+			return n.longValue();
+		}
+		if (target == double.class) {
+			return n.doubleValue();
+		}
+		if (target == float.class) {
+			return n.floatValue();
+		}
+		if (target == short.class) {
+			return n.shortValue();
+		}
+		if (target == byte.class) {
+			return n.byteValue();
+		}
+		return null;
+	}
+
+	/**
+	 * The {@link IllegalArgumentException} of a field write whose value a numeric
+	 * primitive field cannot take, in the oracle's reflector's words.
+	 * @param target the field's type
+	 * @param given the class name of the value
+	 * @return the exception
+	 */
+	public static IllegalArgumentException unexpectedParamType(Class<?> target, String given) {
+		return new IllegalArgumentException("Unexpected param type, expected: " + target + ", given: " + given);
+	}
+
+	/**
+	 * The {@link NullPointerException} of a field write of {@code nil} to a numeric
+	 * primitive field, in the oracle's reflector's words (it asks the value's class).
+	 * @return the exception
+	 */
+	public static NullPointerException nullFieldWrite() {
+		return new NullPointerException("Cannot invoke \"Object.getClass()\" because \"arg\" is null");
 	}
 
 	/**
