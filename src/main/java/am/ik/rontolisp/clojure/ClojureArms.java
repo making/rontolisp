@@ -1164,6 +1164,15 @@ public final class ClojureArms {
 				Set.of(ClojureKernelLowering.HTTP_REQUEST, ClojureIoLowering.INSTALL_FETCH), Set.of()),
 
 		/**
+		 * A portable {@code java.util.IdentityHashMap}, whose members an instance call
+		 * reads: only its construction makes one
+		 * ({@link ClojurePortableIdentityMapLowering}), so a program making none folds
+		 * the arm every {@code .get}, {@code .put} and the rest carry.
+		 */
+		IDENTITY_MAP("identity-map", Set.of(ClojurePortableIdentityMapLowering.IDENTITY_MAP_P),
+				Set.of(ClojurePortableIdentityMapLowering.IDENTITY_MAP_NEW), ClojurePortableIdentityMapLowering.OWNED),
+
+		/**
 		 * A Clojure future or promise -- what {@code future} and {@code future-call}
 		 * spawn on their own thread, and what {@code promise} builds -- which the future
 		 * verbs and {@code deref} (with or without a timeout) read through the host task,

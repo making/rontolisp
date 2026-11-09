@@ -11,9 +11,10 @@ import am.ik.jvm.ConstantPool;
 /**
  * Compiles the time built-in functions for the JVM, each taking no arguments and
  * returning a boxed {@code Long}: {@code get-universal-time} (seconds since 1900-01-01
- * GMT, the Common Lisp epoch), {@code get-internal-real-time} (wall-clock milliseconds)
- * and {@code get-internal-run-time} (run-time milliseconds). They read {@code
- * System.currentTimeMillis} / {@code System.nanoTime}.
+ * GMT, the Common Lisp epoch), {@code get-internal-real-time} (wall-clock milliseconds),
+ * {@code get-internal-run-time} (run-time milliseconds) and {@code %nano-time} (the
+ * monotonic nanoseconds). They read {@code System.currentTimeMillis} /
+ * {@code System.nanoTime}.
  */
 final class JvmTimeCompiler {
 
@@ -44,6 +45,7 @@ final class JvmTimeCompiler {
 				pushRawLong(1000000L, ctx);
 				ctx.body.ldiv();
 			}
+			case LispNames.NANO_TIME -> ctx.body.invokestatic(ctx.systemOp("nanoTime"));
 			default -> throw new UnsupportedOperationException("Not a time function: " + name);
 		}
 		// Box the long result.

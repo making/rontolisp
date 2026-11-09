@@ -15709,6 +15709,58 @@ cases:
       [1.1419053154730547 0.9194079489827879]
       [-1192035722 1672896916]
       [:ok :ok :ok]
+  - name: an-identity-hash-map-keys-by-identity-and-nano-time-reads-a-clock
+    # (java.util.IdentityHashMap.) is the portable eq-keyed map on every
+    # backend (editscript's per-diff caches): a Clojure key no longer crosses
+    # the java: boundary, which made a new Java object of it per crossing so
+    # the host map missed every lookup. (String. s) is a fresh copy on every
+    # backend. System/nanoTime is %nano-time, the monotonic clock (WASI's on
+    # wasm). Oracle-identical (clj 1.12.6, 2026-11-09).
+    source: |
+      (prn (pos? (System/nanoTime)))
+      (let [t0 (System/nanoTime)] (prn (<= t0 (System/nanoTime))))
+      (let [m (java.util.IdentityHashMap.) k (String. "a")]
+        (.put m k 1)
+        (prn (.get m k) (.get m (String. "a")) (.size m)))
+      (let [m (java.util.IdentityHashMap.) k [1 2] v {:a 1}]
+        (prn (.put ^java.util.IdentityHashMap m k :x) (.put m k :y) (.put m v nil))
+        (prn (.get m k) (.get m [1 2]) (.containsKey m v) (.containsKey m {:a 1}) (.get m v))
+        (prn (.size m) (.isEmpty m) (.remove m k) (.remove m k) (.size m))
+        (prn (.clear m) (.size m) (.isEmpty m)))
+    expected: |
+      true
+      true
+      1 nil 1
+      nil :x nil
+      :y nil true false nil
+      2 false :y nil 1
+      nil 0 true
+  - name: a-string-joiner-construction-is-a-joiner-where-the-host-is-not
+    # (java.util.StringJoiner. d [prefix suffix]) where no host is (wasm) is
+    # the deftype of the internal namespace rontolisp.internal.string-joiner
+    # (editscript's character-level string patch). The first line calls .add
+    # on a hinted parameter lowered before any construction: the hint loads
+    # the namespace. Oracle-identical (clj 1.12.6, 2026-11-09).
+    source: |
+      (prn (str (reduce (fn [^java.util.StringJoiner j s] (.add j s)) (java.util.StringJoiner. "") ["p" "q" "r"])))
+      (let [j (java.util.StringJoiner. ", " "[" "]")]
+        (prn (str j) (.length j))
+        (.add j "a")
+        (.add ^java.util.StringJoiner j nil)
+        (prn (.toString ^java.util.StringJoiner j) (str j) (.length j)))
+      (let [j (java.util.StringJoiner. "-")]
+        (prn (str (.setEmptyValue j "EMPTY")) (.length j))
+        (prn (str (-> j (.add "x") (.add "y")))))
+      (prn (try (java.util.StringJoiner. nil) (catch NullPointerException e (ex-message e))))
+      (prn (try (.setEmptyValue (java.util.StringJoiner. ",") nil) (catch NullPointerException e (ex-message e))))
+    expected: |
+      "pqr"
+      "[]" 2
+      "[a, null]" "[a, null]" 9
+      "EMPTY" 5
+      "x-y"
+      "The delimiter must not be null"
+      "The empty value must not be null"
   - name: a-linked-list-construction-is-a-mutable-list-where-the-host-is-not
     # (java.util.LinkedList.) where no host is (wasm) is the deftype of the
     # internal namespace rontolisp.internal.linked-list, loaded where the

@@ -555,6 +555,15 @@
   `.remove` は常にその添字の要素の削除です（long に対してオラクルのリフレクターが選ぶ
   オーバーロードです）。ホストがある場合（インタープリターと JVM）は、ホストの
   `LinkedList` のまま残ります。
+- 引数なしの `(java.util.IdentityHashMap.)` は全バックエンドでこのフロントエンド独自の
+  同一性をキーとするマップになり、Clojure のキーは Java へ渡りません（渡るたびに新しい
+  Java オブジェクトになり、どの検索も外れるため）。数値と文字はその値をキーにします
+  （オラクルはボックス化したオブジェクトを比べます）。`class`、`instance?`、`print` は
+  それをホストのマップとして読みません（`(:C%IDENTITY-MAP {...})` と表示されます）。
+- `(java.util.StringJoiner. delimiter [prefix suffix])` の構築は wasm バックエンドでは
+  このフロントエンド独自の joiner になります。`class`、`java.util.StringJoiner` への
+  `instance?`、`print` はその joiner として読み、`.merge` は提供しません。ホストがある
+  場合は、ホストの `StringJoiner` のまま残ります。
 - 引数なしの `(Object.)` は wasm バックエンドでは新しい uninterned シンボルになるため、
   ロード時のロックが構築できます。2 つの構築はホストのオブジェクト同様 `=` にも
   `identical?` にもなりませんが、表示は gensym になります（オラクルはオブジェクトの

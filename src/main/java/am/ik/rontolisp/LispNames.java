@@ -445,6 +445,14 @@ public final class LispNames {
 	public static final String GET_INTERNAL_RUN_TIME = "GET-INTERNAL-RUN-TIME";
 
 	/**
+	 * The {@code %nano-time} internal: the monotonic clock in nanoseconds, an integer on
+	 * every backend ({@code System.nanoTime} on the interpreter and the JVM, WASI's
+	 * monotonic {@code clock_time_get} on wasm). Its origin is arbitrary; only
+	 * differences mean anything. The Clojure front end's {@code System/nanoTime}.
+	 */
+	public static final String NANO_TIME = "%NANO-TIME";
+
+	/**
 	 * The {@code sleep} built-in function: block for the given number of seconds (a
 	 * non-negative real; sub-second values are rounded to whole milliseconds) and return
 	 * nil. The interpreter, the JVM and WASM Preview 1 wait through {@link #SLEEP_MS};

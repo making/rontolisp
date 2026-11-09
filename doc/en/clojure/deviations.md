@@ -593,6 +593,16 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   always the removal at that index (the overload the oracle's reflector picks for a
   long). Where the host is (the interpreter and the JVM) the construction stays the
   host's `LinkedList`.
+- A zero-argument `(java.util.IdentityHashMap.)` is an identity-keyed map of this front
+  end's own on every backend, so a Clojure key never crosses into Java (where each
+  crossing would make a new Java object of it, missing every lookup). A number or a
+  character keys by its value, where the oracle compares the boxed objects; `class`,
+  `instance?` and `print` do not read it as the host's map (it prints as
+  `(:C%IDENTITY-MAP {...})`).
+- A `(java.util.StringJoiner. delimiter [prefix suffix])` construction is a joiner of this
+  front end's own on the wasm backends: `class`, `instance?` of `java.util.StringJoiner`
+  and `print` read it as that joiner, and `.merge` is not offered. Where the host is it
+  stays the host's `StringJoiner`.
 - A zero-argument `(Object.)` is a fresh uninterned symbol on the wasm backends, so a
   load-time lock builds; two constructions are never `=` or `identical?`, like two host
   objects, but one prints as a gensym where the oracle prints the object's identity.

@@ -17,7 +17,8 @@ interop の書き方も、すべてのバックエンドで同じ値を作りま
 インスタント、`(java.util.Date. ms)` と `(java.sql.Timestamp. ms)` はそのミリ秒のインスタント、
 `(java.util.UUID. msb lsb)` は 2 つの半分からなる UUID です。`UUID/randomUUID` と
 `UUID/fromString` は [random-uuid](random-uuid.md) と `#uuid` と同じ値を返し、
-`System/currentTimeMillis` はエポックからのミリ秒を返します。Date の `getTime`、`setTime`
+`System/currentTimeMillis` はエポックからのミリ秒を、`System/nanoTime` は単調時計の
+ナノ秒を返します（起点は任意で、意味を持つのは差だけです）。Date の `getTime`、`setTime`
 （その場で書き換えます）、`before`、`after`、`compareTo`、Timestamp の `getNanos` と
 `setNanos`（その場で書き換えます）、UUID の 2 つの半分と `version`、`variant` はどこでも
 答えます。Calendar の `set`（1 つのフィールド、または年・月・日と省略可能な時刻）、
@@ -54,6 +55,7 @@ wasm バックエンドでは、`java.time.format.DateTimeFormatter/ISO_INSTANT`
 | `java.util.Date.` | `(java.util.Date. 1000)` | `#inst "1970-01-01T00:00:01.000-00:00"` |
 | `java.util.UUID/fromString` | `(= (java.util.UUID/fromString "1-1-1-1-1") #uuid "1-1-1-1-1")` | `true` |
 | `System/currentTimeMillis` | `(integer? (System/currentTimeMillis))` | `true` |
+| `System/nanoTime` | `(integer? (System/nanoTime))` | `true` |
 
 ```clojure
 (def at #inst "2020-06-15T10:20:30.456+02:00")

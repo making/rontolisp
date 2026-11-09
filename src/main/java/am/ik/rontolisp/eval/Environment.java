@@ -4087,6 +4087,11 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.GET_INTERNAL_RUN_TIME, args, 0);
 			return new LispInteger(System.nanoTime() / 1000000L);
 		}));
+		// %nano-time: the monotonic clock in nanoseconds (Clojure's System/nanoTime).
+		env.defineFunction(LispNames.NANO_TIME, new LispFunction(LispNames.NANO_TIME, args -> {
+			requireArgCount(LispNames.NANO_TIME, args, 0);
+			return new LispInteger(System.nanoTime());
+		}));
 		// sleep: park the thread for a non-negative number of seconds and answer nil.
 		// Registered as a real function (not only as the %sleep-ms expansion) so #'sleep
 		// and native-image mode work; the argument may be any real, sub-second values

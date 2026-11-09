@@ -29802,6 +29802,59 @@
   (rplaca (cdr (cdr c)) nil)
   nil)
 
+;;;; Portable java.util.IdentityHashMap: the table a (java.util.IdentityHashMap.)
+;;;; construction is on every backend, the (:C%IDENTITY-MAP table) list over an
+;;;; eq table, so a key is found by identity like the host's. Where the host is
+;;;; a Clojure key crossing the java: boundary became a new Java object on every
+;;;; crossing, so the host map missed every lookup; here no key crosses. A
+;;;; number or a character has no identity apart from its value (eq is eql), so
+;;;; it keys by value (clojure/ClojurePortableIdentityMapLowering).
+
+(defvar rontolisp::%clojure-identity-map-absent
+  (list :absent)
+  "The default a lookup of an absent key answers: no stored value is it.")
+
+(defun rontolisp::%clojure-identity-map-p (x)
+  "Whether X is a portable IdentityHashMap: the (:C%IDENTITY-MAP table) list
+   a (java.util.IdentityHashMap.) construction makes."
+  (and (consp x) (eq (car x) :C%IDENTITY-MAP) (consp (cdr x))))
+
+(defun rontolisp::%clojure-identity-map-new ()
+  "A (java.util.IdentityHashMap.) construction: an empty identity map."
+  (list :C%IDENTITY-MAP (make-hash-table :test 'eq)))
+
+(defun rontolisp::%clojure-identity-map-put (m k v)
+  "(.put M K V): store V under K, answering the value K held or nil."
+  (let ((table (car (cdr m))))
+    (prog1 (gethash k table) (setf (gethash k table) v))))
+
+(defun rontolisp::%clojure-identity-map-get (m k)
+  "(.get M K): the value K holds, or nil."
+  (gethash k (car (cdr m))))
+
+(defun rontolisp::%clojure-identity-map-contains (m k)
+  "(.containsKey M K): whether K holds a value, nil included."
+  (not
+   (eq (gethash k (car (cdr m)) rontolisp::%clojure-identity-map-absent)
+       rontolisp::%clojure-identity-map-absent)))
+
+(defun rontolisp::%clojure-identity-map-remove (m k)
+  "(.remove M K): drop K, answering the value it held or nil."
+  (let ((table (car (cdr m)))) (prog1 (gethash k table) (remhash k table))))
+
+(defun rontolisp::%clojure-identity-map-size (m)
+  "(.size M): the number of keys."
+  (hash-table-count (car (cdr m))))
+
+(defun rontolisp::%clojure-identity-map-empty (m)
+  "(.isEmpty M): whether M holds no key."
+  (= 0 (hash-table-count (car (cdr m)))))
+
+(defun rontolisp::%clojure-identity-map-clear (m)
+  "(.clear M): drop every key, answering nil like the host's void method."
+  (clrhash (car (cdr m)))
+  nil)
+
 ;;;; Typed arrays: object-array, to-array, into-array and the primitive
 ;;;; constructors (clojure.core/int-array and friends). An array is a vector
 ;;;; here, as one make-array makes (doc deviations): the constructors coerce

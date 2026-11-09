@@ -8,6 +8,11 @@
   (`.kb/wasm-export-no-wasi.md`). i64 normalized through `_int_new` (`.kb/wasm-bignum.md`).
 - `get-universal-time` = Unix seconds + 2208988800; `internal-time-units-per-second` is a
   reader constant **1000** beside `char-code-limit`.
+- `%nano-time` (2026-11-09, a CL internal): the monotonic clock in nanoseconds, the Clojure
+  front end's `System/nanoTime` -- `System.nanoTime` on the interpreter and the JVM, the same
+  `clock_time_get(CLOCK_MONOTONIC)` reading `get-internal-run-time` divides (no division) on
+  wasm, the host cell under `--no-wasi`. Same compiler classes and `NoWasiLoadPathRefusals`
+  `CLOCK` kind as the three.
 - WASM clock/environ *imports* exist in both modes to keep import indices identical; the
   component's `environ_*` imports are DEAD WEIGHT kept because the fifteen preview1 slots
   (`IMPORT_FUNC_COUNT`) are index-pinned. **Pinned does not mean closed**: a WASI function

@@ -12,6 +12,8 @@
 
 引数なしの `(java.util.LinkedList.)` はホストがない場合（wasm バックエンド）に可変のリストになります。`seq`・`count` と `java.util.List` のメンバー `.add`（1 つの値、または添字の位置へ）・`.addAll`（コレクション、または添字の位置へ）・添字の `.remove`・`.get`・`.size`・`.isEmpty`・`.contains`・`.indexOf`・`.clear`・`.toString` はホストのリストと同じ値を返し、範囲外の添字は JDK の文言で拒否します。ホストがある場合はホストの `LinkedList` のまま残り、コレクションからの構築は全域でホストの構築のまま残ります。`(BigInteger. s)` と `(BigInteger. s radix)` の構築は wasm バックエンドでも文字列が表す整数に、`(BigInteger. bytes)` はビッグエンディアンの 2 の補数に、`(BigInteger. signum bytes)` は符号付きの絶対値になり、いずれも `BigInteger` の文言で拒否します。
 
+引数なしの `(java.util.IdentityHashMap.)` は全バックエンドでこのフロントエンド独自の同一性をキーとするマップです。`.put`・`.get`・`.containsKey`・`.remove`・`.size`・`.isEmpty`・`.clear` はホストのマップと同じ値を返し、キーは同じオブジェクトのときだけ見つかります（数値と文字はその値で）。`(java.util.StringJoiner. delimiter)` と `(java.util.StringJoiner. delimiter prefix suffix)` の構築はホストがない場合（wasm バックエンド）に joiner になります。`.add`・`.setEmptyValue`・`.length`・`.toString`・`str` はホストの joiner と同じ値を返し、nil は JDK の文言で拒否します。ホストがある場合はホストの `StringJoiner` のまま残ります。
+
 ```clojure
 (println (.toUpperCase "hi")) ; HI
 (println (.length "hi")) ; 2
@@ -29,4 +31,6 @@
 (let [h (doto (java.util.HashMap. 8 0.5) (.putAll {:a 1}))] (println (.get h :a) (.size h))) ; 1 1
 (println (identical? (Object.) (Object.))) ; false
 (let [q (java.util.LinkedList.)] (.add q 1) (.addAll q 0 [0]) (println (seq q) (.remove q 0) (.size q))) ; (0 1) 0 1
+(let [m (java.util.IdentityHashMap.) k [1]] (.put m k :a) (println (.get m k) (.get m [1]))) ; :a nil
+(println (str (.add (java.util.StringJoiner. ", " "[" "]") "a"))) ; [a]
 ```

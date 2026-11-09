@@ -76,6 +76,15 @@ the integer the string spells on the wasm backends too, `(BigInteger. bytes)` th
 big-endian two's complement and `(BigInteger. signum bytes)` the signed magnitude, each
 refused in `BigInteger`'s words.
 
+A zero-argument `(java.util.IdentityHashMap.)` is an identity-keyed map of this front end's
+own on every backend: `.put`, `.get`, `.containsKey`, `.remove`, `.size`, `.isEmpty` and
+`.clear` answer what the host's map answers, a key found only as the same object (a number
+or a character by its value). A `(java.util.StringJoiner. delimiter)` or
+`(java.util.StringJoiner. delimiter prefix suffix)` construction is a joiner where the host
+is not (the wasm backends): `.add`, `.setEmptyValue`, `.length`, `.toString` and `str`
+answer what the host's joiner answers, nil refused in the JDK's words. Where the host is it
+stays the host's `StringJoiner`.
+
 ```clojure
 (println (.toUpperCase "hi")) ; HI
 (println (.length "hi")) ; 2
@@ -93,4 +102,6 @@ refused in `BigInteger`'s words.
 (let [h (doto (java.util.HashMap. 8 0.5) (.putAll {:a 1}))] (println (.get h :a) (.size h))) ; 1 1
 (println (identical? (Object.) (Object.))) ; false
 (let [q (java.util.LinkedList.)] (.add q 1) (.addAll q 0 [0]) (println (seq q) (.remove q 0) (.size q))) ; (0 1) 0 1
+(let [m (java.util.IdentityHashMap.) k [1]] (.put m k :a) (println (.get m k) (.get m [1]))) ; :a nil
+(println (str (.add (java.util.StringJoiner. ", " "[" "]") "a"))) ; [a]
 ```

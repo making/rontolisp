@@ -16,7 +16,8 @@ The interop spellings make the same values, on every backend: `(java.util.Date.)
 current instant, `(java.util.Date. ms)` and `(java.sql.Timestamp. ms)` the instant of those
 milliseconds, `(java.util.UUID. msb lsb)` the UUID of the two halves, `UUID/randomUUID` and
 `UUID/fromString` those of [random-uuid](random-uuid.md) and `#uuid`, and
-`System/currentTimeMillis` answers the milliseconds since the epoch. A Date's `getTime`,
+`System/currentTimeMillis` answers the milliseconds since the epoch and `System/nanoTime`
+the monotonic clock in nanoseconds (an arbitrary origin; only differences mean anything). A Date's `getTime`,
 `setTime` (in place), `before`, `after` and `compareTo`, a Timestamp's `getNanos` and
 `setNanos` (in place) and a UUID's halves, `version` and `variant` answer everywhere. A
 Calendar's `set` (a field, or the year, month and day with an optional time), `setTimeZone`,
@@ -50,6 +51,7 @@ object and `.format` its call.
 | `java.util.Date.` | `(java.util.Date. 1000)` | `#inst "1970-01-01T00:00:01.000-00:00"` |
 | `java.util.UUID/fromString` | `(= (java.util.UUID/fromString "1-1-1-1-1") #uuid "1-1-1-1-1")` | `true` |
 | `System/currentTimeMillis` | `(integer? (System/currentTimeMillis))` | `true` |
+| `System/nanoTime` | `(integer? (System/nanoTime))` | `true` |
 
 ```clojure
 (def at #inst "2020-06-15T10:20:30.456+02:00")

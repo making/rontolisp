@@ -853,7 +853,8 @@ public final class NoWasiLoadPathRefusals {
 			return entropy && !hostRandom ? Kind.ENTROPY : null;
 		}
 		return switch (name) {
-			case LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME ->
+			case LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME,
+					LispNames.NANO_TIME ->
 				Kind.CLOCK;
 			case LispNames.SLEEP -> Kind.SLEEP;
 			case LispNames.OPEN, LispNames.WITH_OPEN_FILE, LispNames.LOAD -> Kind.FILESYSTEM;

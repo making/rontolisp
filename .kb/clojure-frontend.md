@@ -1751,7 +1751,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | tools.reader 1.3.6 | = | = | = | = | no transitive deps; g97 (2026-10-29): the 12-line probe -- `read-string` of a collection, of radix/octal/ratio numbers, `#inst`, `#uuid`, `'x`, a syntax-quote, `syntax-quote` the macro, `edn/read-string`, an indexing reader's form metadata, line and column, `^:dyn` metadata, a reader conditional -- prints the oracle's lines. Fixed on the way, each in its own section: a `clojure.lang` class of the oracle's jar as a dispatch value ("Host classes", `ClojureLangJar`), a host class's `print-method`/`print-dup` ("Dispatch", print-method), `%t` refused at call time ("The lowering table", `format`), `RT/map`, `RT/nextID`, `PersistentList/create`, `PersistentHashSet/createWithCheck`, `BigInt/fromBigInteger`, `Numbers/reduceBigInt` and an integer's `.negate`/`.bitLength` ("Collection interfaces", the `clojure.lang` statics), an `ns-map` chunk a macro body calls while it expands ("State", mappings), `bound-fn*`'s capture beside a program var named like a core special ("State", bound functions), a `declare`d excluded core name ("Macros", shadowing definitions), a JVM dispatch tree past 32,767 function ids (`.kb/jvm-method-size-limits.md`). Wasm (2026-10-30): 11 of the 12 lines print the oracle's on both backends (`=` with the `#inst` line left out; reader-conditional splicing, a bignum, `36r...` and `\uXXXX` also checked `=` on all four) -- fixed on the way: the pending-forms `(LinkedList.)` ("Portable LinkedList"), `Character/isWhitespace`/`isDigit`/`digit`/`valueOf`, one-argument `Integer/parseInt`, `Double/parseDouble`, `(BigInteger. s radix)` and an integer's `.longValue` ("Portable number statics"); the `#inst` line stopped at `(GregorianCalendar. y m d h mi s)` in `construct-calendar` (`JAVA:NEW`; then `Calendar/MILLISECOND`, `TimeZone/getTimeZone`, `.setTimeZone`, `.getTime`), the one remaining blocker until h10 (2026-10-30, "Portable GregorianCalendar"): the 12-line probe is `=` on all four. Past the probe, on wasm: `read-instant-calendar` prints the oracle's line, and so does `read-instant-timestamp` (a Timestamp's `.setNanos`, "Instants and UUIDs"); on the interpreter and the JVM the host Calendar's `print-calendar` stops at `format`'s `%t` |
 | component 1.2.0 (stuartsierra) | = | = | = | = | no transitive deps; 2026-11-08 round (`.todo/j07`): records implementing `Lifecycle`, `system-map`/`using`/`start`/`stop`, a missing-dependency `ex-data`, `update-system` -- 7 lines; two `JAVA:CALL` warnings on wasm off the path |
 | extend-clj 0.1.0 (tonsky) | = | = | = | = | no transitive deps; j26 (2026-11-09): `deftype-atom` spells `deftype*` over `IMeta`, `IReference`, `IDeref`, `IRef`, `IAtom`, `IAtom2`, its `IAtom3` protocol and `IKeywordLookup` ("Macros", the type special forms; "Host interfaces", the reference interfaces); the 5-line probe -- `deref`, `swap!` of one to three arguments, `reset!`, `compare-and-set!` both ways, `swap-vals!`, `reset-vals!`, a watch's calls, `remove-watch`, a validator refusing, `reset-meta!`/`alter-meta!` -- prints the oracle's lines on all four backends. Its swap is a `compare-and-set!` of an unchanged `assoc`, which looped forever before an `assoc` changing nothing answered its map ("The copy a map verb takes") |
-| editscript 0.8.0 | = | = | stop | stop | 2026-11-08 round: the 7-line probe (map/vector/string diffs, `patch`, `edit-distance`, `:quick`) is the oracle's on the interpreter and the JVM; wasm traps on `System/nanoTime`, then `java.util.IdentityHashMap` (`.todo/j28`, which also records the host-side identity loss of a Clojure key in an `IdentityHashMap`) |
+| editscript 0.8.0 | = | = | = | = | 2026-11-08 round: the 7-line probe (map/vector/string diffs, `patch`, `edit-distance`, `:quick`) is the oracle's on the interpreter and the JVM; wasm trapped on `System/nanoTime`, then `java.util.IdentityHashMap`. j28 (2026-11-09): `System/nanoTime` is `%nano-time` and the map is the portable identity map on every backend ("Portable IdentityHashMap", which also fixed the host-side miss of every Clojure key), so the verbatim probe is `=` on all four, warning-free on both wasm backends; a character-level string `patch` (`sreplace-character`'s `(StringJoiner. "")`, "Portable StringJoiner") prints the oracle's line on all four too |
 | data.csv 1.1.1 | 5/6 | | | | 2026-11-08 round: `read-csv`/`write-csv` over strings and a `StringWriter` print the oracle's lines; `io/reader` of a `java.io.StringReader` refuses (`.todo/j16`). Other backends not run |
 | aero 1.1.6, core.match 1.1.1, core.logic 1.1.1, schema 1.4.2, rewrite-clj 1.3.59, datascript 1.8.1 | stop | | | | 2026-11-08 round, interpreter only (specter 1.1.6 too, verbatim since j27: its own row below): each stops at load; past hand patches all but datascript print the oracle's lines (core.logic but its pinned `()`-is-`nil` line). The stops, library by library, and the items they became: `.todo/j07` (probes, patches and outputs in `.todo/artefacts/j07-clojure-library-probe-round-2026-11-08/`). j23 (2026-11-08, `.todo/j23`): specter's `extend-protocolpath*` and schema's `extend-primitive` hunks are no longer needed -- with the other hunks applied, specter's probe is the oracle's line for line and schema's loads and prints the same but the pinned set-order line (interpreter; the other backends unprobed). j09 (2026-11-09): core.match's `void` hunk is no longer needed either -- with the other hunks applied and the original `let`-wrapped `regroup-keywords` restored, the probe prints its 11 oracle lines on the interpreter, the JVM class and wasm ("Macros", the wrapper bullet). j12 (2026-11-09): core.logic's `defnm`, specter's `defdynamicnav` `declare` hunks and aero's `usetime` unwrap are no longer needed -- with the other hunks applied, aero and specter print the oracle's lines and core.logic the same but its pinned line (interpreter). j18 (2026-11-09): rewrite-clj needs no hunk at all -- the verbatim 1.3.59 jar prints the probe's 9 oracle lines on all four backends (the wasm legs warn of `JAVA:STATIC`/`JAVA:NEW` off the probe's path; its zipper walks are `(->> (iterate f loc) (take-while identity) ...)`, which needed `iterate` to compute a member only when read, a lazy `take-while`, and `next` of a lazy seq ending past its head to answer nil: "Laziness"). j21 (2026-11-09): specter's `path` hunk (the inline cache) is no longer needed -- with the other hunks applied, the probe prints the oracle's ten lines on the interpreter and the JVM class ("Macros", a var a macro body interns). j26 (2026-11-09): datascript 1.8.1 loads verbatim -- `defrecord-updatable` over the oracle's `defrecord` expansion and `deftype*`, `defcomp`'s `IFn$OOL`, extend-clj's `deftype-atom`, `transact`'s `IBlockingDeref` reify, `RT/assoc` and `Util/hashCombine` -- and its first `create-conn` stops at `Cannot link class me.tonsky.persistent_sorted_set.PersistentSortedSet: missing class clojure.lang.IEditableCollection` (interpreter; the JVM class with the jar on its run class path the same; wasm P1 `The function JAVA:NEW is undefined`): the sorted set its indexes are is Java over `clojure.lang` ("Classes compiled against `clojure.lang`", persistent-sorted-set: decided to read its `.cljs` port, `.todo/j37`). j24 (2026-11-09): schema's `-instrument-protocol-method` `(comment ...)` hunk is no longer needed -- with the other hunks applied the probe prints as before, and an `s/defprotocol` method with schemas validates under `s/with-fn-validation` like the oracle (interpreter, JVM class; wasm P1 stops expanding `s/defprotocol` at `No matching field found: get`, as it did before j24): a field-form `set!` decides when it runs and a protocol method whose var a program alters is redefinable ("Java interop", "Vars and metadata") |
 | specter 1.1.6 | = | = | stop | stop | j27 (2026-11-09): the verbatim jar prints the 10-line probe's oracle lines on the interpreter and the JVM class (the jar on its run class path; a host class with or without riddley) -- riddley 0.1.12, its pinned dependency, is the built-in one ("riddley (j27)"), the last of j07's hunks. P1 and the component stop compiling at `specter.cljc:1020:1: in macro com.rpl.specter/path: No matching field found: get for class clojure.lang.Symbol`: `path`'s body reads its inline cache through `(.get ^MutableCell c)` in a helper lowered for the target, whose instance call keeps no host arm there ("Host arms where the host is not"), the same with `clojure.walk` in riddley's place (j24's schema stop is this one); and the cache a run reads is a host `MutableCell` |
@@ -3443,6 +3443,53 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   `lib/rontolisp/internal/` (so `core_macros.clj` was absent from the binary too);
   the pattern takes subdirectories now and `NativeImageResourceConfigTest` lists the
   directory.
+
+## Portable IdentityHashMap
+
+- **The map** (2026-11-09, j28; `ClojurePortableIdentityMapLowering`, `clojure.lisp`
+  "Portable java.util.IdentityHashMap"): an untagged zero-argument
+  `(java.util.IdentityHashMap.)` (every spelling) is `(:C%IDENTITY-MAP table)` over an `eq`
+  table on EVERY backend; `.put`/`.get`/`.containsKey`/`.remove`/`.size`/`.isEmpty`/`.clear`
+  answer through workers behind a `%clojure-identity-map-p` gate, the outermost arm of the
+  instance call. A receiver hinted `^IdentityHashMap` (editscript's) is treated as unknown.
+  `ClojureArms.Family.IDENTITY_MAP` folds the gate in a program making no map, so the arm
+  every `.get`/`.put` carries costs nothing there. A capacity or copy construction keeps
+  `java:new`.
+- **Why every backend, not wasm only**: measured 2026-11-08 (j07) on the interpreter and the
+  JVM, the host map missed EVERY lookup of a Clojure key: each crossing of the `java:`
+  boundary converts a Clojure value into a new Java object (a string too), so the key put is
+  never the key looked up. editscript stayed right only because its maps are caches (each
+  miss recomputed: quadratic where the library is linear). `HashMap` and `WeakHashMap` key by
+  `equals`/`hashCode`, which the crossing preserves: `(.get m [1 2])` of a vector put finds
+  it on the interpreter and the JVM, like the oracle (measured 2026-11-09).
+- `(String. s)` of a string is `(copy-seq s)` on every backend (`ClojureBytesLowering.
+  stringConstruction`; it was `java:new`, a call-time refusal on wasm), so two constructions
+  are never `identical?`.
+- Deviations: a number or a character keys by value (`eq` is `eql`, `.kb/eq-numbers.md`);
+  `class`, `instance?` and `print` read the list.
+- **Pins**: clojure-spec `an-identity-hash-map-keys-by-identity-and-nano-time-reads-a-clock`
+  (all four, oracle-identical).
+
+## Portable StringJoiner
+
+- **The joiner** (2026-11-09; `ClojurePortableStringJoinerLowering`,
+  `lib/rontolisp/internal/string_joiner.clj`): where the host is not (wasm) an untagged
+  `(java.util.StringJoiner. d)` or `(java.util.StringJoiner. d prefix suffix)` is the
+  deftype of the INTERNAL namespace `rontolisp.internal.string-joiner`, like "Portable
+  LinkedList": `add`, `setEmptyValue` and `length` through a `definterface`, `toString`/`str`
+  through `Object`; nil refused in the JDK's words. editscript's `sreplace-character`
+  (character-level string `patch`) builds one.
+- **Load order**: a `definterface` row exists only once the namespace loads, and
+  editscript's reducing `(fn [^StringJoiner joiner edit] ... (.add joiner s))` lowers
+  BEFORE the `(StringJoiner. "")` it reduces from; with no row the hinted call compiled the
+  oracle's `ClassCastException` (`castClass`). So an instance call whose receiver is hinted
+  `StringJoiner` loads the namespace too (`preloadForHint`). An unhinted `.add` lowered before
+  any construction or hint still has no row (not measured in a library).
+- A receiver known to be a `StringJoiner` is treated as unknown where the host is not.
+  Where the host is the construction keeps the host's object.
+- Deviations (wasm only): `class`, `instance?` and `print` read the deftype; no `merge`.
+- **Pins**: clojure-spec `a-string-joiner-construction-is-a-joiner-where-the-host-is-not`
+  (all four, oracle-identical; its first line is the hinted-before-construction order).
 
 ## Portable GregorianCalendar
 
@@ -7888,7 +7935,8 @@ milliseconds; the reverse false, the oracle's one-sided `equals`).
   `(UUID. a b)` `make-uuid` of two `%clojure-long-cast`s (the oracle's compiler resolves the
   one constructor and emits `RT.longCast`: `1.5` is 1, `:k` a CCE, nil an NPE, `2^64` out of
   range); `UUID/randomUUID`, `UUID/fromString` (`%clojure-uuid-from-string`, the strict
-  `uuid-of`, a non-string a CCE) and `System/currentTimeMillis` (`get-internal-real-time`).
+  `uuid-of`, a non-string a CCE) and `System/currentTimeMillis` (`get-internal-real-time`);
+  `System/nanoTime` is `%nano-time` (2026-11-09, `.kb/time-environment-builtins.md`).
   Every spelling: `.`, `new`, `Class/new` (`hostConstruction(Lowered)`), `staticCall`/
   `staticNoArg` (so the member values and `..` too) and param tags naming the own constructor.
   A receiver known to be one of the three classes is treated as unknown, so the value arms

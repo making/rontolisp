@@ -875,6 +875,10 @@ final class ClojureInteropLowering {
 	static LispVal hostConstruction(ClojureLowering ctx, String cls, List<LispVal> argDatums,
 			@Nullable List<String> types) {
 		if (types == null) {
+			LispVal identityMap = ClojurePortableIdentityMapLowering.construction(cls, argDatums.size());
+			if (identityMap != null) {
+				return identityMap;
+			}
 			LispVal wrapped = readerWrapperConstruction(ctx, cls, argDatums);
 			if (wrapped != null) {
 				return wrapped;
@@ -902,6 +906,13 @@ final class ClojureInteropLowering {
 				if (linkedList != null) {
 					return linkedList;
 				}
+			}
+			if (ClojurePortableStringJoinerLowering.constructs(ctx, cls, argDatums.size())) {
+				List<LispVal> args = new ArrayList<>();
+				for (LispVal datum : argDatums) {
+					args.add(ctx.lower(datum));
+				}
+				return ClojurePortableStringJoinerLowering.construction(ctx, args);
 			}
 			LispVal object = objectToken(cls, argDatums.size());
 			if (object != null) {
@@ -1760,6 +1771,12 @@ final class ClojureInteropLowering {
 		if (stringStream != null) {
 			return stringStream;
 		}
+		if (types == null) {
+			LispVal identityMap = ClojurePortableIdentityMapLowering.construction(cls, args.size());
+			if (identityMap != null) {
+				return identityMap;
+			}
+		}
 		if (!ctx.hostTarget && types == null) {
 			LispVal empty = hashMapEmpty(cls, args.size());
 			if (empty != null) {
@@ -1774,6 +1791,9 @@ final class ClojureInteropLowering {
 				if (linkedList != null) {
 					return linkedList;
 				}
+			}
+			if (ClojurePortableStringJoinerLowering.constructs(ctx, cls, args.size())) {
+				return ClojurePortableStringJoinerLowering.construction(ctx, args);
 			}
 		}
 		if (args.size() == 1 && types == null) {
@@ -2789,6 +2809,9 @@ final class ClojureInteropLowering {
 	 */
 	static LispVal instanceCall(ClojureLowering ctx, LispVal receiver, @Nullable LispVal receiverDatum, String method,
 			List<LispVal> argDatums) {
+		if (receiverDatum != null && !ctx.hostTarget) {
+			ClojurePortableStringJoinerLowering.preloadForHint(ctx, classHint(ctx, receiverDatum));
+		}
 		List<LispVal> args = new ArrayList<>();
 		for (LispVal arg : argDatums) {
 			args.add(ctx.lower(arg));
@@ -2900,10 +2923,16 @@ final class ClojureInteropLowering {
 				args.size(), false);
 		if (cls != null && (ClojureTimeValueLowering.CLASSES.contains(cls)
 				|| ClojurePortableCalendarLowering.CLASSES.contains(cls) || ClojureDecimalLowering.CLASSES.contains(cls)
-				|| cls.equals("java.math.BigInteger"))) {
-			// a Date, Timestamp, UUID, Calendar, BigDecimal, MathContext or
-			// RoundingMode may be a value made here, and a BigInteger is always an
-			// integer (converted at the java: boundary): the value arms take it
+				|| cls.equals("java.math.BigInteger")
+				|| cls.equals(ClojurePortableIdentityMapLowering.IDENTITY_MAP_CLASS))) {
+			// a Date, Timestamp, UUID, Calendar, BigDecimal, MathContext, RoundingMode
+			// or IdentityHashMap may be a value made here, and a BigInteger is always
+			// an integer (converted at the java: boundary): the value arms take it
+			cls = null;
+		}
+		if (cls != null && !ctx.hostTarget && cls.equals(ClojurePortableStringJoinerLowering.STRING_JOINER_CLASS)) {
+			// where no host is a StringJoiner is the portable deftype, whose methods
+			// the type rows answer
 			cls = null;
 		}
 		if (args.isEmpty() && EXCEPTION_METHODS.contains(method) && (cls == null || plainThrowable(cls) != null)) {
@@ -2961,6 +2990,11 @@ final class ClojureInteropLowering {
 			// call lowered to (the host call, or the oracle's refusal where no
 			// hostless class has the method)
 			call = randomArm(method, recv, args, call);
+		}
+		if (cls == null && ClojurePortableIdentityMapLowering.answers(method, args.size())) {
+			// a portable IdentityHashMap answers its member on every backend; anything
+			// else keeps what the call lowered to
+			call = ClojurePortableIdentityMapLowering.arm(ctx, method, recv, args, call);
 		}
 		if (!ctx.hostTarget && ClojurePortableThreadLocalLowering.THREAD_LOCAL_METHODS.containsKey(method)
 				&& ClojurePortableThreadLocalLowering.THREAD_LOCAL_METHODS.get(method).contains(args.size())) {

@@ -94,9 +94,10 @@ final class WasmTimeCompiler {
 	}
 
 	// The arithmetic over a nanosecond reading, shared by both sources: seconds since
-	// 1900 for get-universal-time, milliseconds for the two internal clocks. Under
-	// --no-wasi all three read the ONE cell the host set -- there is no second clock to
-	// distinguish a monotonic reading from a wall-clock one, and a module that cannot
+	// 1900 for get-universal-time, milliseconds for the two internal clocks, the
+	// reading itself for %nano-time. Under --no-wasi all of them read the ONE cell the
+	// host set -- there is no second clock to distinguish a monotonic reading from a
+	// wall-clock one, and a module that cannot
 	// advance its own clock reports the same instant for both, which is the truth about
 	// it rather than an invented number.
 	private static void emitReading(WasmLispCompiler.Ctx ctx, String name, boolean fromHostCell) {
@@ -123,6 +124,7 @@ final class WasmTimeCompiler {
 				ctx.writer.writeSignedLeb128(NANOS_PER_MILLI);
 				ctx.writer.write(Instruction.I64_DIV_U);
 			}
+			case LispNames.NANO_TIME -> emitNanos(ctx, CLOCK_MONOTONIC, fromHostCell);
 			default -> throw new UnsupportedOperationException("Not a time function: " + name);
 		}
 		// Normalize the i64 into the exact-integer representation (an i31 would only

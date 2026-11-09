@@ -326,8 +326,9 @@ final class ClojureBytesLowering {
 	 * {@code java:new} call: the same operands under the family's alias, each argument
 	 * the host value of a {@code java:} member under the family's alias of it, so a byte
 	 * array first argument reaches the construction as it is and decodes on every
-	 * backend, and anything else reaches the host's constructor as it would. Null for
-	 * another class or count, or a call the lowering built otherwise.
+	 * backend, a lone string argument is copied on every backend, and anything else
+	 * reaches the host's constructor as it would. Null for another class or count, or a
+	 * call the lowering built otherwise.
 	 * @param cls the resolved class name
 	 * @param argCount the argument count
 	 * @param hostCall the {@code java:new} call
@@ -346,11 +347,17 @@ final class ClojureBytesLowering {
 							? LispCons.rebuilt(value, new LispSymbol(HOST_VALUE), value.cdr()) : each);
 		}
 		LispVal string = LispCons.rebuilt(call, new LispSymbol(STRING_NEW), ClojureLowerUtil.list(operands));
+		if (argCount == 1 && operands.get(1) instanceof LispString) {
+			// (String. s) of a string is a fresh copy on every backend, the host's
+			// copy constructor
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("copy-seq"), operands.get(1));
+		}
 		if (argCount != 1 && argCount != 3 || operands.get(1) instanceof LispString) {
 			return string;
 		}
 		// (String. x [off len]) of a char array reads its characters on every
-		// backend (a char[] is a vector of characters here); anything else keeps
+		// backend (a char[] is a vector of characters here), (String. x) of a string
+		// copies it; anything else keeps
 		// the host's constructor, which a program making no byte array calls
 		// directly (the family's alias). The call's trailing markers (:function,
 		// :java-false) stay out of the characters' range.
@@ -363,11 +370,16 @@ final class ClojureBytesLowering {
 		rebuilt.add(operands.get(0));
 		rebuilt.add(one);
 		rebuilt.addAll(operands.subList(2, operands.size()));
+		LispVal body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol(CHAR_VECTOR_P), one), ClojureLowerUtil.list(chars),
+				LispCons.rebuilt(call, new LispSymbol(STRING_NEW), ClojureLowerUtil.list(rebuilt)));
+		if (argCount == 1) {
+			body = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), one),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("copy-seq"), one), body);
+		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, operands.get(1)))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-						ClojureLowerUtil.list(new LispSymbol(CHAR_VECTOR_P), one), ClojureLowerUtil.list(chars),
-						LispCons.rebuilt(call, new LispSymbol(STRING_NEW), ClojureLowerUtil.list(rebuilt))));
+				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, operands.get(1)))), body);
 	}
 
 	/**

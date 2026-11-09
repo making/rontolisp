@@ -2297,10 +2297,12 @@ class ClojureLoweringTest {
 			assertThat(lowered(exit)).as(exit).contains("(%HOST-EXIT (LOGAND 3 255))").doesNotContain("JAVA:");
 		}
 		// a String construction is the byte-array family's alias of java:new, which
-		// decodes a byte array; a param-tagged one is java:new itself
-		assertThat(lowered("(String. \"hi\")")).contains("(RONTOLISP::%CLOJURE-STRING-NEW \"java.lang.String\" \"hi\"");
+		// decodes a byte array, behind a string's copy; of a string literal it is the
+		// copy alone; a param-tagged one is java:new itself
+		assertThat(lowered("(fn [s] (String. s))")).contains("(COPY-SEQ ")
+			.contains("(RONTOLISP::%CLOJURE-STRING-NEW \"java.lang.String\" ");
 		assertThat(lowered("(Integer/MAX_VALUE)")).contains("JAVA:FIELD");
-		assertThat(lowered("(new String \"hi\")")).contains("(RONTOLISP::%CLOJURE-STRING-NEW \"java.lang.String\"");
+		assertThat(lowered("(new String \"hi\")")).contains("(COPY-SEQ \"hi\")").doesNotContain("JAVA:");
 		assertThat(lowered("(^[String] String/new \"hi\")")).contains("JAVA:NEW").doesNotContain("STRING-NEW");
 		assertThat(lowered("(java.util.ArrayList. 3)")).contains("JAVA:NEW");
 		assertThat(lowered("((memfn toUpperCase) \"hi\")")).contains("LAMBDA").contains("toUpperCase");
@@ -3059,8 +3061,10 @@ class ClojureLoweringTest {
 	void staticMembersResolveByHostArity() {
 		// a zero-argument static method is a static call, even in the (. Class m)
 		// spelling; a field stays a field read, in call and dot-form alike
-		assertThat(lowered("(System/nanoTime)")).contains("JAVA:STATIC").doesNotContain("JAVA:FIELD");
-		assertThat(lowered("(. System nanoTime)")).contains("JAVA:STATIC").doesNotContain("JAVA:FIELD");
+		assertThat(lowered("(System/lineSeparator)")).contains("JAVA:STATIC").doesNotContain("JAVA:FIELD");
+		assertThat(lowered("(. System lineSeparator)")).contains("JAVA:STATIC").doesNotContain("JAVA:FIELD");
+		// System/nanoTime is the monotonic clock on every backend
+		assertThat(lowered("(System/nanoTime)")).endsWith("(%NANO-TIME)");
 		assertThat(lowered("(Integer/MAX_VALUE)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
 		assertThat(lowered("(. Math PI)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");
 		assertThat(lowered("(Math/PI)")).contains("JAVA:FIELD").doesNotContain("JAVA:STATIC");

@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Set;
 
 import am.ik.rontolisp.LispInteger;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -113,8 +114,9 @@ final class ClojureTimeValueLowering {
 	 * A static call over already-lowered arguments: {@code UUID/randomUUID} a version 4
 	 * UUID, {@code UUID/fromString} the UUID a string spells, and
 	 * {@code System/currentTimeMillis} the milliseconds since the epoch
-	 * ({@code get-internal-real-time}, the wall clock on every backend). Null for any
-	 * other member or count.
+	 * ({@code get-internal-real-time}, the wall clock on every backend) and
+	 * {@code System/nanoTime} the monotonic nanoseconds ({@code %nano-time}). Null for
+	 * any other member or count.
 	 * @param cls the resolved class name
 	 * @param member the static member
 	 * @param args the lowered arguments
@@ -129,6 +131,9 @@ final class ClojureTimeValueLowering {
 		}
 		if (cls.equals("java.lang.System") && member.equals("currentTimeMillis") && args.isEmpty()) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("get-internal-real-time"));
+		}
+		if (cls.equals("java.lang.System") && member.equals("nanoTime") && args.isEmpty()) {
+			return ClojureLowerUtil.list(new LispSymbol(LispNames.NANO_TIME));
 		}
 		return null;
 	}
