@@ -495,7 +495,15 @@ final class ClojureCoreLowering {
 			case "chunk", "chunk-append", "chunk-buffer", "chunk-cons", "chunk-first", "chunk-next", "chunk-rest",
 					"->ArrayChunk":
 				return refusedCall(ctx, items, name + " is not supported yet: sequences chunk nowhere here");
-			case "->Vec", "->VecNode", "->VecSeq", "->Eduction", "-cache-protocol-fn", "-reset-methods":
+			case "->Eduction": {
+				// the eduction of one transducer, which eduction constructs (datascript
+				// spells it, over its index slices)
+				arity(name, n, 2, 2);
+				List<LispVal> eduction = new ArrayList<>(items);
+				eduction.set(0, new LispSymbol("eduction"));
+				return ClojureTransducerLowering.callOf(ctx, "eduction", eduction);
+			}
+			case "->Vec", "->VecNode", "->VecSeq", "-cache-protocol-fn", "-reset-methods":
 				return refusedCall(ctx, items,
 						name + " is not supported yet: construction of clojure.lang internals is not supported");
 			case "stream-reduce!", "stream-into!", "stream-seq!", "stream-transduce!":
@@ -770,7 +778,9 @@ final class ClojureCoreLowering {
 			case "chunk", "chunk-append", "chunk-buffer", "chunk-cons", "chunk-first", "chunk-next", "chunk-rest",
 					"->ArrayChunk" ->
 				refusedValue(name + " is not supported yet: sequences chunk nowhere here");
-			case "->Vec", "->VecNode", "->VecSeq", "->Eduction", "-cache-protocol-fn", "-reset-methods" ->
+			case "->Eduction" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("function"),
+					new LispSymbol("RONTOLISP::%CLOJURE-EDUCTION-CTOR-V"));
+			case "->Vec", "->VecNode", "->VecSeq", "-cache-protocol-fn", "-reset-methods" ->
 				refusedValue(name + " is not supported yet: construction of clojure.lang internals is not supported");
 			case "stream-reduce!", "stream-into!", "stream-seq!", "stream-transduce!" ->
 				refusedValue(name + " is not supported yet: streaming reduction has no lowering");

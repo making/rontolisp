@@ -241,6 +241,13 @@ public final class ClojureLowering {
 	final Set<String> unboundCapable = new HashSet<>();
 
 	/**
+	 * The var keys a read of the value cell was lowered against while the var was only
+	 * declared ({@link #noteDeclaredRootRead}): the {@code defn} defining one stores its
+	 * function there too.
+	 */
+	final Set<String> declaredRootReads = new HashSet<>();
+
+	/**
 	 * The var keys a file starts with the unbound root in their value cell, in lowering
 	 * order (see {@link ClojureVarLowering#unboundRoot}).
 	 */
@@ -567,6 +574,21 @@ public final class ClojureLowering {
 	 * are refused by name.
 	 */
 	final Set<String> builtinNamespaces = new HashSet<>();
+
+	/**
+	 * The namespaces read from their ClojureScript port in place of a Clojure file whose
+	 * classes cannot load here ({@link ClojureSourcePath.Port}), each with why: a var the
+	 * Clojure file has and the port lacks refuses where it is called, not where it is
+	 * named ({@link ClojureScriptPort}).
+	 */
+	final Map<String, ClojureSourcePath.Port> portNamespaces = new HashMap<>();
+
+	/**
+	 * Whether the forms lowering are a ClojureScript port's ({@link ClojureScriptPort}):
+	 * the {@code cljs.core} names, the {@code js/} globals and the {@code cljs.core}
+	 * protocols read as this front end's Clojure.
+	 */
+	boolean clojureScript;
 
 	/**
 	 * The namespaces whose files are lowering, innermost first: a {@code require} of one
@@ -3791,6 +3813,12 @@ public final class ClojureLowering {
 		// the file starts with its loader's *unchecked-math* and hands it back, like the
 		// oracle's load binding it
 		Boolean outerUnchecked = this.uncheckedMath;
+		boolean outerScript = this.clojureScript;
+		ClojureSourcePath.Port port = found.port();
+		if (port != null) {
+			this.portNamespaces.put(ns, port);
+		}
+		this.clojureScript = port != null;
 		this.unitFiles.put(ns, found.resource());
 		this.loadingFile = fileOf(ns);
 		this.loadingSourcePath = ClojureSourcePath.lastSegmentOf(this.loadingFile);
@@ -3826,6 +3854,7 @@ public final class ClojureLowering {
 			this.loadingFile = outerFile;
 			this.loadingSourcePath = outerSourcePath;
 			this.uncheckedMath = outerUnchecked;
+			this.clojureScript = outerScript;
 		}
 		this.hoisted.addAll(loaded);
 	}
@@ -5443,6 +5472,13 @@ public final class ClojureLowering {
 		// name up first) -- the current namespace's own or referred var, since
 		// every namespace has its own; a clojure.core/ spelling consults none
 		boolean known = !coreOnly && known(name);
+		if (this.clojureScript && !known) {
+			// a ClojureScript port's cljs.core/, js/ and Math/ names, and .slice
+			LispVal port = ClojureScriptPort.call(this, name, items);
+			if (port != null) {
+				return port;
+			}
+		}
 		// the re-* names lower beside the big core switch (which stays under the
 		// method-size limit): same position, before any qualified name
 		// a name excluded by (:refer-clojure ...) is no core call unless spelled
@@ -5461,6 +5497,11 @@ public final class ClojureLowering {
 			return ClojureNamespaceLowering.namespaceCall(this, qualified, items, form);
 		}
 		if (!known) {
+			// a var a ClojureScript port lacks refuses where it is called
+			LispVal portless = ClojureScriptPort.missingVarCall(this, name, items);
+			if (portless != null) {
+				return portless;
+			}
 			// a qualified name whose head names a project namespace is that
 			// namespace's var or nothing: never a class
 			ClojureNamespaceLowering.refuseMissingVar(this, name);
@@ -5513,6 +5554,7 @@ public final class ClojureLowering {
 			// variable whose value may hold a collection goes through the
 			// prelude dispatcher instead, which funcalls real functions.
 			if (!isDirectVar(name)) {
+				noteDeclaredRootRead(name);
 				return callableApply(symOf(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), args));
 			}
 			List<LispVal> funcall = new ArrayList<>();
@@ -6675,6 +6717,13 @@ public final class ClojureLowering {
 				return s;
 			}
 		}
+		if (this.clojureScript && !known(name)) {
+			// a ClojureScript port's cljs.core/, js/ and Math/ names
+			LispVal port = ClojureScriptPort.value(this, name);
+			if (port != null) {
+				return port;
+			}
+		}
 		String core = coreSpelling(name);
 		if (core == null) {
 			core = renamedCore(name);
@@ -6702,6 +6751,10 @@ public final class ClojureLowering {
 			}
 			if (name.equals("quot")) {
 				return sharedCoreValue(name, ClojureSeqLowering.quotValue(this));
+			}
+			LispVal portless = ClojureScriptPort.missingVarValue(this, name);
+			if (portless != null) {
+				return portless;
 			}
 			ClojureNamespaceLowering.refuseMissingVar(this, name);
 			VarRef qualified = ClojureNamespaceLowering.resolveQualified(this, name);
@@ -6750,7 +6803,24 @@ public final class ClojureLowering {
 		if (this.open && isDeclaredOnly(name)) {
 			return ClojureVarLowering.sessionDeclaredRoot(symOf(name));
 		}
+		noteDeclaredRootRead(name);
 		return symOf(name);
+	}
+
+	/**
+	 * Records a read of the value cell of a name only declared so far: a {@code defn}
+	 * lowered later (one a macro's expansion holds, which the pre-scan never sees, like
+	 * datascript's {@code defn+}) then stores its function there too, as the oracle's
+	 * {@code defn} binds the declared var's root, so the read lowered here reaches it.
+	 * @param name the name read
+	 */
+	void noteDeclaredRootRead(String name) {
+		if (isDeclaredOnly(name)) {
+			String key = resolveVar(name);
+			if (key != null) {
+				this.declaredRootReads.add(key);
+			}
+		}
 	}
 
 	/**

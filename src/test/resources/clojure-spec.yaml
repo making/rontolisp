@@ -1642,11 +1642,18 @@ cases:
     # expansion: core.logic's defne, specter's defdynamicnav; a body), and a
     # top-level macro's expansion is pre-scanned like a top-level datum (aero's
     # usetime, a (do ~@body) whose caller sits between the declare and the defn).
+    # A declared var a macro's defn defines below its callers is the function
+    # they call (datascript's defn+): the defn binds the root they read.
     source: |
       (declare dcl-f)
       (defn dcl-g [] (dcl-f 1))
       (defn dcl-f [x] (* 2 x))
       (println (dcl-g))
+      (declare dcl-plus)
+      (defn dcl-uses3 [] (dcl-plus 3))
+      (defmacro dcl-defn+ [n & body] `(defn ~n ~@body))
+      (dcl-defn+ dcl-plus [x] (* 3 x))
+      (println (dcl-uses3))
       (defmacro dcl-defrec [n] `(def ~n (fn [x#] (if (zero? x#) :done (~n (dec x#))))))
       (dcl-defrec dcl-a)
       (println (dcl-a 3))
@@ -1678,6 +1685,7 @@ cases:
       (in-ns 'user)
     expected: |
       2
+      9
       :done
       :meta down
       -1
@@ -8677,11 +8685,14 @@ cases:
     # lazy input stays lazy, so take of an infinite one terminates; several
     # collections step in lockstep); reduce, reduce-kv and transduce stop at a
     # reduced answer; reduce walks a lazy input whole (it folded the wrapper's
-    # own cells). Every line matches the oracle (clj 1.12,
-    # 2026-10-02): prn prints an eduction as its seq there too.
+    # own cells). ->Eduction, which eduction constructs, is the eduction of its
+    # one transducer (datascript's index slices). Every line matches the oracle
+    # (clj 1.12, 2026-10-02; ->Eduction 2026-11-09): prn prints an eduction as
+    # its seq there too.
     source: |
       (prn (sequence (map inc) [1 2 3]) (take 3 (sequence (map inc) (iterate inc 0))) (sequence (map vector) [1 2] [3 4]) (sequence (comp (map inc) (partition-all 2)) [1 2 3]))
       (prn (eduction (filter odd?) (range 6)) (eduction (map inc) (filter even?) [1 2 3 4]) (reduce + 0 (eduction (map inc) [1 2 3])))
+      (prn (into [] (->Eduction (map inc) [1 2 3])) (sequence (->Eduction (filter odd?) (range 6))) (map (partial apply ->Eduction) [[(map -) [1]]]))
       (prn (reduce (fn [a x] (if (> a 5) (reduced a) (+ a x))) 0 (range 100)) (reduce (fn [a x] (reduced :stop)) [1 2 3]) (reduce (fn [a x] (reduced :stop)) [1]))
       (prn (reduced? (reduced 1)) (reduced? 1) (unreduced (reduced 2)) (unreduced 3) (reduced? (ensure-reduced 1)) @(reduced 5))
       (prn (reduce + (map inc (lazy-seq [1 2 3]))) (into [] (map inc (lazy-seq [1 2 3]))) (reduce + []) (reduce + [7]))
@@ -8690,6 +8701,7 @@ cases:
     expected: |
       (2 3 4) (1 2 3) ([1 3] [2 4]) ([2 3] [4])
       (1 3 5) (2 4) 9
+      [2 3 4] (1 3 5) ((-1))
       6 :stop 1
       true false 2 3 true 5
       9 [2 3 4] 0 7
@@ -15597,20 +15609,24 @@ cases:
     # nil is the oracle's doubleValue NullPointerException, anything else no
     # number its ClassCastException to Number (the reflector casts the
     # argument); any other arity stays the host's call. The host's own answers
-    # or refuses its own way. Oracle-identical (clj 1.12.6, 2026-10-21) but
-    # for the cast message's module tail, which names no JVM here (pinned at
-    # the class).
+    # or refuses its own way. So do (Math/pow a b) and Integer/compare and
+    # Long/compare of two (persistent-sorted-set's and datascript's orders).
+    # Oracle-identical (clj 1.12.6, 2026-10-21; pow and the compares
+    # 2026-11-09) but for the cast message's module tail, which names no JVM
+    # here (pinned at the class).
     source: |
       (defmacro mc-rfc [cls form] `(try (try ~form :none) (catch ~cls e# :ok) (catch Throwable e# (class e#))))
       (prn (map #(Math/floor %) [5 2.5 -2.5 -0.5 0.0]))
       (prn (map #(Math/ceil %) [5 2.5 -2.5 -0.5 0.0]))
       (prn (map #(Math/log %) [2 1.0 0.0 -1.0]))
       (prn [(mc-rfc ClassCastException (Math/floor "a")) (mc-rfc NullPointerException (Math/floor nil)) (mc-rfc ClassCastException (Math/ceil :k)) (mc-rfc ClassCastException (Math/log true))])
+      (prn (Math/pow 2 10) (Math/pow 2 0.5) (Integer/compare 1 2) (Integer/compare 5 5) (Long/compare 9 2))
     expected: |
       (5.0 2.0 -3.0 -1.0 0.0)
       (5.0 3.0 -2.0 -0.0 0.0)
       (0.6931471805599453 0.0 ##-Inf ##NaN)
       [:ok :ok :ok :ok]
+      1024.0 1.4142135623730951 -1 0 1
   - name: math-abs-answers-like-the-host-static
     # (Math/abs x) of one argument where no host is lowers to the portable
     # magnitude: an integer in the long range (Long/MIN_VALUE its own, like
@@ -15845,10 +15861,13 @@ cases:
     # constructor build the map, a map's keyIterator/valIterator step its keys and
     # vals (specter), Compiler/CHAR_MAP is the munge table, in a macro too (schema),
     # a dotted class called is the call-time ClassCastException and
-    # clojure.core$long the class of long's value (datascript). Runs on every
-    # backend. Oracle-identical (clj 1.12.6, 2026-10-13; the rest 2026-10-29 and
+    # clojure.core$long the class of long's value (datascript); Numbers/compare
+    # is compare's order of two numbers and RT/EMPTY_ARRAY an empty Object array
+    # (datascript, persistent-sorted-set). Runs on every backend.
+    # Oracle-identical (clj 1.12.6, 2026-10-13; the rest 2026-10-29 and
     # 2026-11-09).
     source: |
+      (println (pr-str [(clojure.lang.Numbers/compare 3 2.5) (clojure.lang.Numbers/compare 1 1) (count clojure.lang.RT/EMPTY_ARRAY)]))
       (println (pr-str (clojure.lang.RT/map (object-array [:a 1 :b 2]))))
       (println (pr-str (try (clojure.lang.RT/map (object-array [:a 1 :a 2])) (catch IllegalArgumentException e :dup))))
       (println (pr-str (clojure.lang.PersistentHashSet/createWithCheck [1 2])))
@@ -15882,6 +15901,7 @@ cases:
       (println (pr-str (try (treader-entry 1 2) (catch ClassCastException e (ex-message e)))))
       (println (pr-str [(= clojure.core$long (class long)) (= clojure.core$_PLUS_ (class +))]))
     expected: |
+      [1 0 0]
       {:a 1, :b 2}
       :dup
       #{1 2}
@@ -15952,10 +15972,18 @@ cases:
     # = compares elements, coll?/vector?/sequential?/counted? are true, aset
     # stores any value, and alength/aclone take a vector -- the oracle's
     # classes, printing, identity and refusals. aget, aset, alength, aclone and
-    # every seq verb otherwise run over one as over a vector. Runs on every
-    # backend; oracle-checked (clj 1.12.6, 2026-10-13) for the non-deviating
-    # lines.
+    # every seq verb otherwise run over one as over a vector. System/arraycopy
+    # copies between two (an array over itself as through a copy) or two byte
+    # arrays, refusing as the JDK does, and java.util.Arrays' copyOf, copyOfRange,
+    # sort and fill take an object array, on every backend (persistent-sorted-set's
+    # array macros). Runs on every backend; oracle-checked (clj 1.12.6,
+    # 2026-10-13; the array statics 2026-11-09) for the non-deviating lines.
     source: |
+      (prn (let [s (object-array [1 2 3 4 5]) d (object-array 5)] (System/arraycopy s 1 d 0 3) (System/arraycopy s 0 s 1 4) [(vec d) (vec s)]))
+      (prn (let [s (byte-array [1 2 3]) d (byte-array 4)] (System/arraycopy s 0 d 1 3) (vec d)))
+      (defn tav-try [f] (try (f) (catch Exception e [(.getName (class e)) (ex-message e)])))
+      (prn (tav-try #(System/arraycopy (object-array 3) 1 (object-array 3) 0 3)) (tav-try #(System/arraycopy (object-array 3) 0 (byte-array 3) 0 1)) (tav-try #(System/arraycopy "abc" 0 (object-array 3) 0 1)))
+      (prn (vec (java.util.Arrays/copyOf (object-array [1 2]) 3)) (vec (java.util.Arrays/copyOfRange (object-array [1 2 3]) 1 5)) (let [a (object-array [3 1 2])] (java.util.Arrays/sort a) (vec a)) (let [a (object-array [3 1 2])] (java.util.Arrays/sort a (comparator >)) (vec a)) (let [a (object-array 2)] (java.util.Arrays/fill a :z) (vec a)))
       (prn (let [a (int-array [1 2 3])] [(aget a 1) (alength a) (count a) (nth a 0) (get a 2) (first a) (last a) (into [] a) (reduce + a) (= a a)]))
       (prn (let [a (object-array [1 2])] (aset a 0 9) [(vec a) (aget a 0)]))
       (prn (let [a (int-array [1 2])] (aset a 0 5) (vec a)))
@@ -15966,6 +15994,10 @@ cases:
       (prn (try (aget (int-array [1 2]) 5) (catch IndexOutOfBoundsException e :oob)) (aclone [1 2]))
       (prn (let [a (int-array [1 2])] (aset a 0 1.9) (vec a)))
     expected: |
+      [[2 3 4 nil nil] [1 1 2 3 4]]
+      [0 1 2 3]
+      ["java.lang.ArrayIndexOutOfBoundsException" "arraycopy: last source index 4 out of bounds for object array[3]"] ["java.lang.ArrayStoreException" "arraycopy: type mismatch: can not copy object array[] into byte[]"] ["java.lang.ArrayStoreException" "arraycopy: source type java.lang.String is not an array"]
+      [1 2 nil] [2 3 nil nil] [1 2 3] [3 2 1] [:z :z]
       [2 3 3 1 3 1 3 [1 2 3] 6 true]
       [[9 2] 9]
       [5 2]
@@ -15981,11 +16013,11 @@ cases:
     # array type the value really is -- object-array crosses as Object[], so Arrays.copyOf
     # pads nil rather than the 0 a long[] would, and a returned int[]/long[]/double[]
     # crosses back as that array. A method's writes into a passed array are written back
-    # (fill then the array). Host-only: java.util.Arrays is a call-time refusal where no
-    # host is.
+    # (fill then the array). Host-only: where no host is no array records its
+    # component, so java.util.Arrays' copies pad an int-array with nil there.
     skip:
-      wasm: java.util.Arrays is a call-time refusal where no host is
-      wasm_component: java.util.Arrays is a call-time refusal where no host is
+      wasm: no array records its component where no host is, so a copy pads a primitive array with nil
+      wasm_component: no array records its component where no host is, so a copy pads a primitive array with nil
     source: |
       (prn (let [a (java.util.Arrays/copyOf (object-array [1 2]) 3)] (aset a 2 :x) (vec a)))
       (prn (vec (java.util.Arrays/copyOf (object-array [1 2]) 3)))
@@ -17927,7 +17959,11 @@ cases:
     # String. of a char array (whole or ranged) its characters, on every backend (a
     # char[] is a vector of characters here); .isArray of a class keyword is true
     # only of a byte array's, and java.io.PrintWriter over a stream is the stream.
-    # Oracle-identical (clj 1.12.6).
+    # A string's .equals is false of anything but a string of its characters, and
+    # its .compareTo and a number's are compare's; the .getClass of a number, a
+    # string or a character is no array class (datascript's tx-id?,
+    # value-compare and tuple tests, where no host is too). Oracle-identical
+    # (clj 1.12.6; the last line 2026-11-09).
     source: |
       (let [b (char-array 5)]
         (.getChars "hello" 1 4 b 1)
@@ -17938,6 +17974,7 @@ cases:
       (prn (.isArray (class 1)) (.isArray (class "s")))
       (prn (let [pw (java.io.StringWriter.)] (.append pw "ab") (.append pw \c) (str pw)))
       (prn (with-out-str (let [pw (java.io.PrintWriter. *out*)] (.append pw "hi") nil)))
+      (prn (.equals "abc" 1) (.equals "a" 'a) (.equals "a" "a") (.equals "a" \a) (.compareTo 1 2) (.compareTo 2.5 1.5) (.compareTo "a" "c") (.isArray (.getClass 1)) (.isArray (.getClass "s")) (.isArray (.getClass \c)))
     expected: |
       "ell" true true
       "ell"
@@ -17946,6 +17983,7 @@ cases:
       false false
       "abc"
       "hi"
+      false false true false -1 1 -2 false false false
   - name: condp-of-instance-applies-instance-per-clause
     # (condp instance? ...) has no function value to bind: each clause tests
     # (instance? test expr), the class evaluated like the oracle's. Every line is

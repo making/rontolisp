@@ -109,6 +109,22 @@ public final class JavaLibraryJar {
 	 */
 	public static Path build(Path dir, String jarName, Map<String, String> sources,
 			java.util.function.Predicate<String> include) {
+		return build(dir, jarName, sources, include, Map.of());
+	}
+
+	/**
+	 * Compiles Java sources into a jar holding the selected entries and text files beside
+	 * them -- a library's Clojure sources over its classes.
+	 * @param dir a directory to work in
+	 * @param jarName the jar's file name
+	 * @param sources the sources, by path below the source root
+	 * @param include which compiled paths (slash-spelled, relative to the classes
+	 * directory) the jar holds
+	 * @param texts the text entries, by path in the jar
+	 * @return the jar
+	 */
+	public static Path build(Path dir, String jarName, Map<String, String> sources,
+			java.util.function.Predicate<String> include, Map<String, String> texts) {
 		try {
 			Path src = Files.createTempDirectory(dir, "src");
 			Path classes = Files.createTempDirectory(dir, "classes");
@@ -134,6 +150,11 @@ public final class JavaLibraryJar {
 					}
 					zip.putNextEntry(new JarEntry(entry));
 					zip.write(Files.readAllBytes(file));
+					zip.closeEntry();
+				}
+				for (Map.Entry<String, String> text : new java.util.TreeMap<>(texts).entrySet()) {
+					zip.putNextEntry(new JarEntry(text.getKey()));
+					zip.write(text.getValue().getBytes(java.nio.charset.StandardCharsets.UTF_8));
 					zip.closeEntry();
 				}
 			}

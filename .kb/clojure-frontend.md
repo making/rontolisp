@@ -78,7 +78,12 @@ backends, zero divergences -- nothing to fix, pin or cut as a follow-up.
   calling its own var lowers anywhere. Until 2026-11-09 a macro's `(def n (fn ... (n ...)))`
   was `unknown name` (core.logic's `defne`, specter's `defdynamicnav`) and a macro's
   `(do (declare f) (defn g [] (f)) (defn f ...))` called the unbound declared root (aero's
-  `usetime`); clojure-spec `declare-forward-declares`. A REPL lowers through a session ("A session").
+  `usetime`); clojure-spec `declare-forward-declares`. A call or a read lowered while a var was
+  only declared reads its root, so the `defn` defining it below -- one a macro's expansion holds,
+  which pass one never sees -- stores its function there too (`declaredRootReads`), as the
+  oracle's `defn` binds the declared var: datascript's `(declare val-at-datom)` above the
+  `Datom` methods calling it, then `(defn+ val-at-datom ...)`, answered `Attempting to call
+  unbound fn` on every backend until 2026-11-09 (j37; same pin). A REPL lowers through a session ("A session").
   Where a tagged literal waits for the data readers, pass two reads the text again a
   datum at a time ("Data readers").
 - Errors name the innermost form's source position (`.kb/source-positions.md`).
@@ -289,7 +294,7 @@ answered `2 5 3` before).
 | `quote` | `quote` with symbols mangled | vectors, maps and sets inside are rebuilt (a quoted list holding one becomes a `list` construction); a quoted empty vector, map or set is the canonical empty object, like the oracle's reader constant (`(identical? '[] [])` is true, clojure-spec `empty-collection-literals-are-one-canonical-object`) |
 | `comment` | `nil` | |
 | `transient` `persistent!` `conj!` `assoc!` `dissoc!` `disj!` `pop!` | `ClojureTransientLowering`: one call to the `clojure.lisp` worker after a lower-time arity check in the oracle's wording; `-v` as a value | "Transients" |
-| refused by name (call-time since g30) | a call lowers to the arguments in order, then `(error "same words")`: naming one compiles, and only the call signals -- a library merely defining such a function loads (integrant 1.0.1 over `enumeration-seq`). As a value each answers a `&rest` lambda over the same signal, shared program-wide | `use-fixtures`; `bean` `supers` `bases` `clojure-version` (host answers on no wasm backend); `destructure`; the proxy helpers (`proxy-mappings` `proxy-name` `proxy-super` `proxy-call-with-super` `construct-proxy` `init-proxy` `update-proxy` `get-proxy-class` `method-sig`); the chunk verbs (`chunk` `chunk-append` `chunk-buffer` `chunk-cons` `chunk-first` `chunk-next` `chunk-rest` `->ArrayChunk`); `->Vec` `->VecNode` `->VecSeq` `->Eduction` `-cache-protocol-fn` `-reset-methods`; `stream-reduce!` `stream-into!` `stream-seq!` `stream-transduce!`; `pcalls` `seque` `await1` (no thread pool); `send-via` `release-pending-sends` `set-agent-send-executor!` `set-agent-send-off-executor!`; `enumeration-seq` `resultset-seq`; `compile` `get-thread-bindings` `read+string`; `gen-class` `gen-interface` stay expansion refusals (the oracle fails the compile too); `eval` and the lowering verbs over computed arguments lower as the program runs on the interpreter and refuse in a compiled program ("Lowering at run time"); g26's deprecated/internal four stay unknown names (`add-classpath` -- no class loader exists here, dependencies come from `deps.edn`, `--java-dep` and `--java-classpath`; deprecated since 1.1 even in the oracle -- `Inst`, `PrintWriter-on`, `primitives-classnames`) |
+| refused by name (call-time since g30) | a call lowers to the arguments in order, then `(error "same words")`: naming one compiles, and only the call signals -- a library merely defining such a function loads (integrant 1.0.1 over `enumeration-seq`). As a value each answers a `&rest` lambda over the same signal, shared program-wide | `use-fixtures`; `bean` `supers` `bases` `clojure-version` (host answers on no wasm backend); `destructure`; the proxy helpers (`proxy-mappings` `proxy-name` `proxy-super` `proxy-call-with-super` `construct-proxy` `init-proxy` `update-proxy` `get-proxy-class` `method-sig`); the chunk verbs (`chunk` `chunk-append` `chunk-buffer` `chunk-cons` `chunk-first` `chunk-next` `chunk-rest` `->ArrayChunk`); `->Vec` `->VecNode` `->VecSeq` `-cache-protocol-fn` `-reset-methods` (`->Eduction` is the eduction of its one transducer since j37: datascript spells it); `stream-reduce!` `stream-into!` `stream-seq!` `stream-transduce!`; `pcalls` `seque` `await1` (no thread pool); `send-via` `release-pending-sends` `set-agent-send-executor!` `set-agent-send-off-executor!`; `enumeration-seq` `resultset-seq`; `compile` `get-thread-bindings` `read+string`; `gen-class` `gen-interface` stay expansion refusals (the oracle fails the compile too); `eval` and the lowering verbs over computed arguments lower as the program runs on the interpreter and refuse in a compiled program ("Lowering at run time"); g26's deprecated/internal four stay unknown names (`add-classpath` -- no class loader exists here, dependencies come from `deps.edn`, `--java-dep` and `--java-classpath`; deprecated since 1.1 even in the oracle -- `Inst`, `PrintWriter-on`, `primitives-classnames`) |
 
 ## Deviations
 
@@ -1753,7 +1758,9 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | extend-clj 0.1.0 (tonsky) | = | = | = | = | no transitive deps; j26 (2026-11-09): `deftype-atom` spells `deftype*` over `IMeta`, `IReference`, `IDeref`, `IRef`, `IAtom`, `IAtom2`, its `IAtom3` protocol and `IKeywordLookup` ("Macros", the type special forms; "Host interfaces", the reference interfaces); the 5-line probe -- `deref`, `swap!` of one to three arguments, `reset!`, `compare-and-set!` both ways, `swap-vals!`, `reset-vals!`, a watch's calls, `remove-watch`, a validator refusing, `reset-meta!`/`alter-meta!` -- prints the oracle's lines on all four backends. Its swap is a `compare-and-set!` of an unchanged `assoc`, which looped forever before an `assoc` changing nothing answered its map ("The copy a map verb takes") |
 | editscript 0.8.0 | = | = | = | = | 2026-11-08 round: the 7-line probe (map/vector/string diffs, `patch`, `edit-distance`, `:quick`) is the oracle's on the interpreter and the JVM; wasm trapped on `System/nanoTime`, then `java.util.IdentityHashMap`. j28 (2026-11-09): `System/nanoTime` is `%nano-time` and the map is the portable identity map on every backend ("Portable IdentityHashMap", which also fixed the host-side miss of every Clojure key), so the verbatim probe is `=` on all four, warning-free on both wasm backends; a character-level string `patch` (`sreplace-character`'s `(StringJoiner. "")`, "Portable StringJoiner") prints the oracle's line on all four too |
 | data.csv 1.1.1 | 5/6 | | | | 2026-11-08 round: `read-csv`/`write-csv` over strings and a `StringWriter` print the oracle's lines; `io/reader` of a `java.io.StringReader` refuses (`.todo/j16`). Other backends not run |
-| aero 1.1.6, core.match 1.1.1, core.logic 1.1.1, schema 1.4.2, rewrite-clj 1.3.59, datascript 1.8.1 | stop | | | | 2026-11-08 round, interpreter only (specter 1.1.6 too, verbatim since j27: its own row below): each stops at load; past hand patches all but datascript print the oracle's lines (core.logic but its pinned `()`-is-`nil` line). The stops, library by library, and the items they became: `.todo/j07` (probes, patches and outputs in `.todo/artefacts/j07-clojure-library-probe-round-2026-11-08/`). j23 (2026-11-08, `.todo/j23`): specter's `extend-protocolpath*` and schema's `extend-primitive` hunks are no longer needed -- with the other hunks applied, specter's probe is the oracle's line for line and schema's loads and prints the same but the pinned set-order line (interpreter; the other backends unprobed). j09 (2026-11-09): core.match's `void` hunk is no longer needed either -- with the other hunks applied and the original `let`-wrapped `regroup-keywords` restored, the probe prints its 11 oracle lines on the interpreter, the JVM class and wasm ("Macros", the wrapper bullet). j12 (2026-11-09): core.logic's `defnm`, specter's `defdynamicnav` `declare` hunks and aero's `usetime` unwrap are no longer needed -- with the other hunks applied, aero and specter print the oracle's lines and core.logic the same but its pinned line (interpreter). j18 (2026-11-09): rewrite-clj needs no hunk at all -- the verbatim 1.3.59 jar prints the probe's 9 oracle lines on all four backends (the wasm legs warn of `JAVA:STATIC`/`JAVA:NEW` off the probe's path; its zipper walks are `(->> (iterate f loc) (take-while identity) ...)`, which needed `iterate` to compute a member only when read, a lazy `take-while`, and `next` of a lazy seq ending past its head to answer nil: "Laziness"). j21 (2026-11-09): specter's `path` hunk (the inline cache) is no longer needed -- with the other hunks applied, the probe prints the oracle's ten lines on the interpreter and the JVM class ("Macros", a var a macro body interns). j26 (2026-11-09): datascript 1.8.1 loads verbatim -- `defrecord-updatable` over the oracle's `defrecord` expansion and `deftype*`, `defcomp`'s `IFn$OOL`, extend-clj's `deftype-atom`, `transact`'s `IBlockingDeref` reify, `RT/assoc` and `Util/hashCombine` -- and its first `create-conn` stops at `Cannot link class me.tonsky.persistent_sorted_set.PersistentSortedSet: missing class clojure.lang.IEditableCollection` (interpreter; the JVM class with the jar on its run class path the same; wasm P1 `The function JAVA:NEW is undefined`): the sorted set its indexes are is Java over `clojure.lang` ("Classes compiled against `clojure.lang`", persistent-sorted-set: decided to read its `.cljs` port, `.todo/j37`). j24 (2026-11-09): schema's `-instrument-protocol-method` `(comment ...)` hunk is no longer needed -- with the other hunks applied the probe prints as before, and an `s/defprotocol` method with schemas validates under `s/with-fn-validation` like the oracle (interpreter, JVM class; wasm P1 stops expanding `s/defprotocol` at `No matching field found: get`, as it did before j24): a field-form `set!` decides when it runs and a protocol method whose var a program alters is redefinable ("Java interop", "Vars and metadata") |
+| aero 1.1.6, core.match 1.1.1, core.logic 1.1.1, schema 1.4.2, rewrite-clj 1.3.59 | stop | | | | 2026-11-08 round, interpreter only (specter 1.1.6 and datascript 1.8.1 too, verbatim since j27 and j37: their own rows below): each stops at load; past hand patches all but datascript print the oracle's lines (core.logic but its pinned `()`-is-`nil` line). The stops, library by library, and the items they became: `.todo/j07` (probes, patches and outputs in `.todo/artefacts/j07-clojure-library-probe-round-2026-11-08/`). j23 (2026-11-08, `.todo/j23`): specter's `extend-protocolpath*` and schema's `extend-primitive` hunks are no longer needed -- with the other hunks applied, specter's probe is the oracle's line for line and schema's loads and prints the same but the pinned set-order line (interpreter; the other backends unprobed). j09 (2026-11-09): core.match's `void` hunk is no longer needed either -- with the other hunks applied and the original `let`-wrapped `regroup-keywords` restored, the probe prints its 11 oracle lines on the interpreter, the JVM class and wasm ("Macros", the wrapper bullet). j12 (2026-11-09): core.logic's `defnm`, specter's `defdynamicnav` `declare` hunks and aero's `usetime` unwrap are no longer needed -- with the other hunks applied, aero and specter print the oracle's lines and core.logic the same but its pinned line (interpreter). j18 (2026-11-09): rewrite-clj needs no hunk at all -- the verbatim 1.3.59 jar prints the probe's 9 oracle lines on all four backends (the wasm legs warn of `JAVA:STATIC`/`JAVA:NEW` off the probe's path; its zipper walks are `(->> (iterate f loc) (take-while identity) ...)`, which needed `iterate` to compute a member only when read, a lazy `take-while`, and `next` of a lazy seq ending past its head to answer nil: "Laziness"). j21 (2026-11-09): specter's `path` hunk (the inline cache) is no longer needed -- with the other hunks applied, the probe prints the oracle's ten lines on the interpreter and the JVM class ("Macros", a var a macro body interns). j26: datascript loads verbatim, its own row below. j24 (2026-11-09): schema's `-instrument-protocol-method` `(comment ...)` hunk is no longer needed -- with the other hunks applied the probe prints as before, and an `s/defprotocol` method with schemas validates under `s/with-fn-validation` like the oracle (interpreter, JVM class; wasm P1 stops expanding `s/defprotocol` at `No matching field found: get`, as it did before j24): a field-form `set!` decides when it runs and a protocol method whose var a program alters is redefinable ("Java interop", "Vars and metadata") |
+| persistent-sorted-set 0.3.1 | = | = | = | = | j37 (2026-11-09): read from its `.cljs` port, its `.clj` importing classes over `clojure.lang` ("ClojureScript ports"); the 14-line probe -- `sorted-set`, `conj`/`disj` with a comparator, `slice`, `rslice`, `seek` of a slice, `reduce`, `contains?`/`get`/invoke, printing, `=` with a core set both ways, 2000 shuffled `conj`s and 1000 `disj`s -- prints the oracle's lines on all four backends, wasm warning-free. `seek` of `(seq set)` takes no `Iter` here (the seq view, the deviation), so the probe seeks a `slice` |
+| datascript 1.8.1 | = | = | = | = | j37 (2026-11-09): the verbatim jars print j07's 8 oracle lines (`create-conn` with a ref schema, `transact!`, five `q` shapes, `entity`, `pull`, `datoms`, a retract) on all four backends; the JVM class runs with or without persistent-sorted-set's jar on its run class path, and both wasm backends warn `JAVA:CALL`/`JAVA:NEW`/`JAVA:STATIC` off the probe's path. Its indexes are persistent-sorted-set's port and `datascript.storage` its storage-less `.cljs` ("ClojureScript ports"). Fixed on the way, each in its own section: `String.equals` of a non-string false (`tx-id?`), `->Eduction` an eduction (its index slices), `.isArray` of a fn's class ("Java interop"), a declared var a macro's `defn` defines below its callers (`defn+`, "Where it sits"); for wasm, `Math/pow`, `Integer/compare`, `Long/compare`, `Numbers/compare`, `.getClass` of a number or a string, `.compareTo` of a number or a string, and `System/arraycopy` and `java.util.Arrays`' copies, sorts and fill over the vector an array is ("Portable number statics", "Remaining array surface"). j26 (2026-11-09): datascript loaded verbatim -- `defrecord-updatable` over the oracle's `defrecord` expansion and `deftype*`, `defcomp`'s `IFn$OOL`, extend-clj's `deftype-atom`, `transact`'s `IBlockingDeref` reify, `RT/assoc` and `Util/hashCombine` -- and its first `create-conn` stopped at `Cannot link class me.tonsky.persistent_sorted_set.PersistentSortedSet: missing class clojure.lang.IEditableCollection` (interpreter; the JVM class with the jar on its run class path the same; wasm P1 `The function JAVA:NEW is undefined`): the sorted set its indexes are is Java over `clojure.lang` ("Classes compiled against `clojure.lang`", persistent-sorted-set). |
 | specter 1.1.6 | = | = | stop | stop | j27 (2026-11-09): the verbatim jar prints the 10-line probe's oracle lines on the interpreter and the JVM class (the jar on its run class path; a host class with or without riddley) -- riddley 0.1.12, its pinned dependency, is the built-in one ("riddley (j27)"), the last of j07's hunks. P1 and the component stop compiling at `specter.cljc:1020:1: in macro com.rpl.specter/path: No matching field found: get for class clojure.lang.Symbol`: `path`'s body reads its inline cache through `(.get ^MutableCell c)` in a helper lowered for the target, whose instance call keeps no host arm there ("Host arms where the host is not"), the same with `clojure.walk` in riddley's place (j24's schema stop is this one); and the cache a run reads is a host `MutableCell` |
 f92 shares every site-independent core value program-wide through `%clojure-shared-value`, so the probe is green again on all four. f98: the 8-line pattern-schema probe (`form`/`type` of `(m/schema #"a")`, `validate` of a hit, a miss and a non-string, `explain`, the `:malli.core/invalid-schema` refusals of `(m/schema 42)` and `(m/schema "s")`) is the oracle's line for line on all four since 2026-10-13 (`type` of a pattern hits the `class-schemas` entry: the host class where a host is, the designator where none is). That 12-line wasm parity was overstated (2026-10-13, f99): the probe's decode lines print bare (`println`), under which an undecoded `"1"` reads as `1` -- `(Long/parseLong x)` refused at call time there, so `-string->long`'s catch kept the input (`pr-str` shows the gap). One-argument `Long/parseLong` now lowers to the portable reader where the host is not (`%clojure-parse-long-static`, "Portable number statics"), and the 12-line probe is the oracle's line for line under `pr-str` on all four backends |
 
@@ -2127,7 +2134,81 @@ uncaught `NoClassDefFoundError: clojure/lang/IPersistentMap` from
     the smallest, but one library special-cased (the probes' rule is infrastructure).
   Decision: (b), the portable path the library's author maintains, on every backend:
   `.todo/j37` (a `.clj` whose classes cannot link read through its `.cljs` sibling, and the
-  ClojureScript surface the port spells).
+  ClojureScript surface the port spells). Became (j37, 2026-11-09): the trigger is an
+  `:import` of the Clojure file's `ns` naming a class that cannot load, not a per-namespace
+  table, and the namespace's other vars refuse where called ("ClojureScript ports"); the
+  rule swapped `datascript.storage` too, whose `.clj` read `.-_storage` off the port's set
+  and refused every `create-conn`. persistent-sorted-set and datascript are `=` on all four
+  backends ("Library probes").
+
+## ClojureScript ports
+
+**A namespace whose Clojure file's `ns` imports a class that cannot load here, and whose root
+ships a `.cljs` of the namespace beside it, is read from the `.cljs`, ClojureScript's names
+read as this front end's Clojure** (j37, 2026-11-09; persistent-sorted-set 0.3.1, datascript
+1.8.1's `datascript.storage`). Why: "Classes compiled against `clojure.lang`", the
+persistent-sorted-set bullet.
+
+- Trigger (`ClojureSourcePath.portFor`): the `.clj` (or `.cljc`) found for the namespace, a
+  `.cljs` of it in the same root, and an `:import` of the Clojure file's first form naming a
+  class with a missing supertype (`ClojureJavaClasses.missingSupertype`: the
+  `NoClassDefFoundError` loading it names on a JVM; the class files' supertypes walked,
+  interfaces ahead of the superclass as the JVM resolves them, on the native binary). No
+  trigger: a class absent altogether (a `clojure.lang` class the lowering answers itself; any
+  class the binary sees without a JDK), or one that loads but whose members name a missing
+  type (`reitit.Trie`). Not a per-namespace table: the rule reaches every library shipping its
+  ClojureScript half beside a Java half over `clojure.lang`, and the storage namespace it also
+  swapped is the one datascript's ClojureScript build runs. The jar's `.clj` is not what runs
+  (user doc: `clojure/deviations.md`, `guides/java-interop.md`).
+- A var the Clojure file has and the port lacks (datascript's `.cljc` files name
+  `storage/restore-impl` ... in their `:clj` branches) refuses where it is called
+  (`ClojureScriptPort.missingVarCall`/`missingVarValue`, ahead of `No such var`), naming the
+  port and why it is read.
+- The reading (`ClojureLowering.clojureScript`, set by `loadFile` for the port's forms;
+  `ClojureScriptPort`):
+  - `cljs.core`: the internal namespace `rontolisp.internal.cljs-core`
+    (`lib/rontolisp/internal/cljs_core.clj`) loads at the port's `ns`, which refers its every
+    public var but a name its `:refer-clojure` leaves out, and imports its types' class names
+    (`ArrayChunk`). It holds the protocols no `clojure.lang` interface stands for
+    (`ICloneable`, `IPrintWithWriter`, and `IChunk`/`IChunkedSeq`/`IChunkedNext`: no verb here
+    reads a chunk), the functions of the ones an interface stands for (`-seq`, `-lookup`,
+    `-reduce` ... over the core verbs; `-first`/`-next`/`-rest` over the seq's own methods, so a
+    port's seq type steps to the value it makes), `pr-str*`, `pr-writer`, `-write`,
+    `pr-sequential-writer` (cut at `*print-length*` and `*print-level*`), `equiv-sequential`,
+    `caching-hash` (a macro setting the mutable field), `lookup-contains?`, `js-number`,
+    `js-slice`; its `print-method` of `IPrintWithWriter`'s interface prints a type implementing
+    it through its `-pr-writer` ("Dispatch", a protocol interface's row). `cljs.core/x` is that
+    namespace's var, else `clojure.core`'s.
+  - Protocol stand-ins (`ClojureScriptPort.STANDINS`): in a `deftype` or `reify` body a
+    `cljs.core` protocol an interface stands for is the interface, its methods renamed
+    (`ISeqable`'s `-seq` is `Seqable`'s `seq`, `ISeq`'s `-first`/`-rest` `first`/`more`,
+    `INext`'s `-next` `ISeq`'s `next`, `IEquiv`'s `-equiv` the collection's `equiv` where a
+    collection interface is among the body's, else `Object`'s `equals`), so the core verbs read
+    the port's types as "Host interfaces" and "Collection interfaces" say. Two protocols' methods
+    one interface method stands for (`ISet`'s `-disjoin`, `ITransientSet`'s `-disjoin!`) are the
+    first defined. A set's `contains` and `get` are made over its lookup, which ClojureScript's
+    `contains?` and `get` ask, and a persistent set is a `java.util.Set` too (`size`, `isEmpty`,
+    `iterator` over its count and seq), as every set class of the oracle's is, so a core set
+    compares equal to one as ClojureScript compares sets. Any other `cljs.core` protocol name
+    refuses by name.
+  - `^:mutable` marks a mutable field (`ClojureProtocolLowering.mutableFields`); `:require-macros`
+    requires the namespace, its macros held with its functions, and stays refused in a Clojure
+    file, as the oracle's `ns` spec refuses it.
+  - JavaScript: `js/Math.m` and the bare `Math/m` are `java.lang.Math`'s member through
+    `js-number`: a double holding a whole number within 2^53 is that integer, as ClojureScript
+    prints one -- `(js/Math.pow 2 bits-per-level)` is the integer `32`, which the port's bit
+    operations take. `js/Error.` is `java.lang.RuntimeException.`, what the library's Java half
+    throws; `.slice` of an array or a string is JavaScript's (`js-slice`); any other `js/` name
+    refuses where it is reached.
+- Deviations (user doc): `seq` of a port's collection answers the seq view, a list like every
+  seq here, not the port's own seq object, so a port function of that object
+  (persistent-sorted-set's `(seek (seq set) k)`) does not take it (`slice` answers the object);
+  arithmetic is Clojure's, `/` of two integers a ratio (`Math/floor` reads it whole); an
+  `IPrintWithWriter` method writes to the printer's stream with nil `opts`.
+- Pins: `ClojureProjectNamespacesTest#aNamespaceWhoseClassesCannotLoadReadsItsClojureScriptPort*`
+  (`ClojureScriptPortFixture`: a jar whose `.clj` imports a class over a type the jar omits and
+  whose `.cljs` spells the surface above; four backends), `ClojureClassFilesLoweringTest`
+  (`cljs-port`: reflection and class files choose the port alike).
 
 ## Ring adapter
 
@@ -3254,7 +3335,18 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   count and the leading zero count of the `longCast` of a number (ratios
   truncated, out-of-range the oracle's long refusal); nil the oracle's
   `doubleValue` `NullPointerException`, anything else no number its
-  `ClassCastException` to `Number`. `.isInfinite`/`.isNaN`
+  `ClassCastException` to `Number`. `Math/pow` of two (`%strict-math :pow`), and
+  `Integer/compare` and `Long/compare` of two (-1, 0 or 1 over the int and long
+  casts) join them (2026-11-09, j37): persistent-sorted-set's port computes its
+  widths with `Math/pow`, datascript's comparators `int-compare` with
+  `Integer/compare`; `clojure.lang.Numbers/compare` is `compare` on every
+  backend ("Collection interfaces", the `clojure.lang` statics). Where no host is,
+  a number's or a string's `.compareTo` is `compare` too, and a number's,
+  string's or character's `.getClass` the class `class` answers
+  (`ClojureValueMethodLowering.valueArm`, `ClojureDispatchLowering.getClassForm`):
+  datascript's `value-compare` and its `(.isArray (.getClass x))` tuple tests.
+  Pin: clojure-spec `math-floor-ceil-and-log-read-like-the-host-statics`,
+  `string-getChars-subSequence-and-char-array-strings-read-on-every-backend`. `.isInfinite`/`.isNaN`
   of no argument answer what `infinite?`/`NaN?` answer over a double, as a
   Clojure boolean (`ctx.booleanAnswer` over a `floatp` gate in
   `instanceCallLoweredWithClass`, so a double prints `true`/`false` like the
@@ -3799,6 +3891,31 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   (the new workers prune with the old),
   `ClojureInteropTest#typedArraysStoreCheckedValuesThroughAsetStar`
   (interpreter and JVM).
+- **Array statics** (2026-11-09, j37; persistent-sorted-set's `arrays` macros:
+  `acopy`, `aclone`, `aconcat`, `asort`; `clojure.lisp` "Array statics",
+  `ClojurePortableStaticsLowering.arrayCall`): `System/arraycopy` of five is
+  `%clojure-system-arraycopy` on every backend -- its `Object` parameters take a
+  vector as a `List` view, never the array it stands for, so the host's call
+  refused every object array (`arraycopy: source type RontoJavaVectorView is not an
+  array`). Two vectors or two byte arrays copy as through a copy (one over itself
+  shifts intact); the JDK's refusals in its order and words: nil the message-less
+  `NullPointerException`, no array (a string too) `source/destination type X is
+  not an array`, a byte array and a vector the type mismatch (`ArrayStoreException`,
+  the new carrier `ARRAY_STORE`), a negative index or length and a range past either
+  end `ArrayIndexOutOfBoundsException` (`last source index 4 out of bounds for
+  object array[3]`, a stamped primitive component named as the JDK names it). Two
+  vectors of other components copy, where the JDK checks. `java.util.Arrays`'
+  `copyOf`, `copyOfRange`, `sort`/`parallelSort` (of one to four: a range, a
+  comparator through `%clojure-sorted-order`, stable like the JDK's object sort)
+  and `fill` of two are workers where no host is, the host taking a stamped vector
+  as its array elsewhere ("Typed arrays", the Java crossing). Where no host is no
+  array records its component, so a copy of an `int-array` pads nil where the
+  host's pads 0 (the deviation; clojure-spec
+  `a-java-array-answers-a-typed-array-and-crosses-back-as-its-component` stays
+  host-only). `clojure.lang.RT/EMPTY_ARRAY` is a fresh `(object-array 0)` (the
+  oracle's is one shared array). Pin: clojure-spec
+  `typed-arrays-are-vectors-to-aget-aset-alength-aclone-and-the-verbs` (four
+  backends, oracle-identical lines).
 
 ## Charset values
 
@@ -5840,8 +5957,10 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   keyword, what `class` answers for every fn (h09 would make each its own).
 - j26 (2026-11-09; datascript, persistent-sorted-set's `arrays` macros): `RT/assoc` of three,
   `RT/aget`, `RT/alength`, `RT/aset`, `Util/hasheq` and `Util/equiv` are the core verbs they
-  back (`ClojureLangClasses.core`, over the lowered arguments), `Util/hashCombine` the
-  library's `%clojure-hash-combine-ints` over its two int-cast arguments; a record
+  back (`ClojureLangClasses.core`, over the lowered arguments), and so is
+  `Numbers/compare` (`compare`, j37: datascript's `value-compare`), `Util/hashCombine` the
+  library's `%clojure-hash-combine-ints` over its two int-cast arguments,
+  `RT/EMPTY_ARRAY` an empty object array ("Remaining array surface"); a record
   expansion's `APersistentMap/mapEquals`, `mapHash`, `mapHasheq` and `RecordIterator.`
   construction call `rontolisp.internal.records` ("Macros", the type special forms).
 - `clojure.lang.LineNumberingPushbackReader.` (j15, aero's `read-config`): the prelude's
@@ -6168,6 +6287,14 @@ a ThreadLocal like the old loader) -- and only `ClojureReflectedClasses` touches
 The `java:` surface (`.kb/java-interop.md`); interpreter and JVM only -- wasm compiles
 `java:` to a call-time error (`ClojureWasmInteropRefusalTest`), a warning only for a call the
 host alone answers ("Host arms where the host is not").
+
+- j37 (2026-11-09; datascript): `.equals` of a string is false of anything but a string of the
+  same characters (it was CL `string=`, refusing a number and equal to a symbol of the
+  spelling; `tx-id?` asks it of every entity id), and its `.compareTo` is `compare`
+  (`ClojureInteropLowering.stringMethod`); `.isArray` of a class designator -- a fn's class,
+  which `.getClass` answers -- is whether its name starts with `[`
+  (`%clojure-designator-array-p`). Pin: clojure-spec
+  `string-getChars-subSequence-and-char-array-strings-read-on-every-backend`.
 
 - `(. obj m args)`/`(.m obj args)` instance, `(. Class m args)`/`(Class/m args)` static,
   `(Class. args)`/`(new Class args)`, `(Class/FIELD)`, `(.-f obj)`, `..`, `memfn`. Classes
@@ -9009,8 +9136,10 @@ nested `def` is read almost never, so the size cost on every file is not worth t
   `clojureSetWiresLikeClojureString`), `ClojureThrowablesTest` (class chains), `ClojureRefusalsTest`
   (the refusal carriers' chains), `ClojureClassBasesTest` (class rows), `ClojureReaderTest`,
   `ClojureSessionTest`, `ClojureProjectNamespacesTest` (a `deps.edn` project, all four
-  backends, `aCljcFile*` a `.cljc` entry and namespace; `MemoryClojureFiles` for the unit
-  tests, `ClojureLoweringTest#aNamespaceLoadsItsCljFromAnyRootAheadOfItsCljc`).
+  backends, `aCljcFile*` a `.cljc` entry and namespace, `aNamespaceWhoseClassesCannotLoad*`
+  a library read from its ClojureScript port over `testsupport/ClojureScriptPortFixture`;
+  `MemoryClojureFiles` for the unit tests,
+  `ClojureLoweringTest#aNamespaceLoadsItsCljFromAnyRootAheadOfItsCljc`).
 - Reading: the `read-string-*`/`read-takes-*`/`str-spells-*` spec cases,
   `ClojureLoweringTest#readingVerbs*`/`#aReaderWrapper*`, `ClojureReaderTest#aDiscard*`/
   `#aCharacterLiteral*`, `ClojureSessionTest#aBufferRegisters*`,

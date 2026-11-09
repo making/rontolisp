@@ -541,7 +541,11 @@ final class ClojureBindingLowering {
 		// cells they name, and the value cell the calls lowered while a def held the
 		// var read
 		forms.addAll(defined.repoints());
-		if (ctx.repointsRedefinitions() && !dynamic && !redef && ctx.valuedAbove.contains(key)) {
+		if (!dynamic && !redef && (ctx.repointsRedefinitions() && ctx.valuedAbove.contains(key)
+				|| ctx.declaredRootReads.contains(key))) {
+			// so is the value cell a read lowered while a def held the var reads, or
+			// one while it was only declared (a defn a macro expands to, below its
+			// calls: datascript's defn+)
 			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), ClojureLowering.varSym(key),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), fn)));
 		}

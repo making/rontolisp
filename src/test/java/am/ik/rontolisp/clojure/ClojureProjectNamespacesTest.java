@@ -22,6 +22,7 @@ import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.testsupport.CliStack;
+import am.ik.rontolisp.testsupport.ClojureScriptPortFixture;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.junit.jupiter.api.BeforeAll;
@@ -964,6 +965,33 @@ class ClojureProjectNamespacesTest {
 		assertThat(runOnWasm(entry, true)).isEqualTo(CLJC_OUT);
 	}
 
+	/**
+	 * A library's {@code .clj} importing a class that cannot load here (one compiled
+	 * against a type its jar omits, as persistent-sorted-set's are against
+	 * {@code clojure.lang}) stands aside for the ClojureScript port its jar ships, which
+	 * every backend reads alike ({@link ClojureScriptPortFixture}): the reading needs the
+	 * jar's classes, the program's Java class path, to tell.
+	 */
+	@Test
+	void aNamespaceWhoseClassesCannotLoadReadsItsClojureScriptPortOnTheInterpreterAndTheJvm() throws Exception {
+		Path entry = ClojureScriptPortFixture.project(Files.createTempDirectory(project, "port"));
+		List<Path> classPath = List.of(ClojureScriptPortFixture.jar(entry));
+		assertThat(interpret(entry, classPath)).isEqualTo(ClojureScriptPortFixture.OUTPUT);
+		assertThat(runOnJvm(entry, "ProjPort", classPath)).isEqualTo(ClojureScriptPortFixture.OUTPUT);
+	}
+
+	@Test
+	void aNamespaceWhoseClassesCannotLoadReadsItsClojureScriptPortOnBothWasmBackends() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path entry = ClojureScriptPortFixture.project(Files.createTempDirectory(project, "port-wasm"));
+		List<Path> classPath = List.of(ClojureScriptPortFixture.jar(entry));
+		for (boolean component : List.of(false, true)) {
+			assertThat(execWasm(CompileFrontendAccess.clojureFile(entry, classPath, null, true, component), component))
+				.as("component %s", component)
+				.isEqualTo(ClojureScriptPortFixture.OUTPUT);
+		}
+	}
+
 	@Test
 	void aCljFileRefusesAReaderConditional() throws Exception {
 		assertThatThrownBy(() -> read(entry("cond_test.clj", "(println #?(:clj 1))")))
@@ -1023,22 +1051,40 @@ class ClojureProjectNamespacesTest {
 	}
 
 	private static String interpret(Path entry) throws Exception {
+		return interpret(entry, List.of());
+	}
+
+	// The program's Java classes those of the class path: what its lowering reads them
+	// from.
+	private static String interpret(Path entry, List<Path> javaClassPath) throws Exception {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		CliStack.call("clojure-namespaces", () -> {
-			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
-			// as the command line runs it: a program lowering as it runs keeps its
-			// lowering
-			for (LispVal form : evaluator.clojureProgram(SourceLanguage.CLOJURE.readClojure(Files.readString(entry),
-					Features.INTERPRETER, entry.toString(), SourceStandards.DEFAULT, SourceLoader.fileSystem()))) {
-				evaluator.eval(form);
-			}
-			return null;
-		});
+		java.net.URL[] urls = new java.net.URL[javaClassPath.size()];
+		for (int i = 0; i < urls.length; i++) {
+			urls[i] = javaClassPath.get(i).toUri().toURL();
+		}
+		try (var loader = new java.net.URLClassLoader(urls, LispEvaluator.class.getClassLoader())) {
+			CliStack.call("clojure-namespaces", () -> {
+				LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+				// as the command line runs it: a program lowering as it runs keeps its
+				// lowering
+				for (LispVal form : evaluator
+					.clojureProgram(SourceLanguage.CLOJURE.readClojure(Files.readString(entry), Features.INTERPRETER,
+							entry.toString(), SourceStandards.DEFAULT, SourceLoader.fileSystem(loader)))) {
+					evaluator.eval(form);
+				}
+				return null;
+			});
+		}
 		return out.toString(StandardCharsets.UTF_8);
 	}
 
 	private static String runOnJvm(Path entry, String name) throws Exception {
+		return runOnJvm(entry, name, List.of());
+	}
+
+	private static String runOnJvm(Path entry, String name, List<Path> javaClassPath) throws Exception {
 		JvmSourceCompiler.Result result = new JvmSourceCompiler(name).sourceLanguage("clojure")
+			.javaClasspath(javaClassPath)
 			.compile(Files.readString(entry), entry.toString());
 		Path classes = Files.createTempDirectory(project, name);
 		Files.write(classes.resolve(name + ".class"), result.classBytes());

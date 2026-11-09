@@ -251,6 +251,22 @@ public final class CompileFrontendAccess {
 	 */
 	public static Program clojureFile(Path entryFile, List<Path> javaClassPath, @Nullable JavaClassLookup classFiles)
 			throws java.io.IOException {
+		return clojureFile(entryFile, javaClassPath, classFiles, false, false);
+	}
+
+	/**
+	 * {@link #clojureFile(Path, List, JavaClassLookup)} for a target.
+	 * @param entryFile the program file
+	 * @param javaClassPath the program's Java class path ({@code --java-classpath})
+	 * @param classFiles the classes to lower against instead of reflecting, or
+	 * {@code null}
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @return the expanded program and the feature set it was read with
+	 * @throws java.io.IOException when the file cannot be read
+	 */
+	public static Program clojureFile(Path entryFile, List<Path> javaClassPath, @Nullable JavaClassLookup classFiles,
+			boolean wasm, boolean component) throws java.io.IOException {
 		Path file = entryFile.toAbsolutePath();
 		String source = java.nio.file.Files.readString(file);
 		try (JavaClassPath classPath = JavaClassPath.of(javaClassPath)) {
@@ -261,6 +277,8 @@ public final class CompileFrontendAccess {
 				.javaClassLookup(classFiles)
 				.javaClassPath(classPath::add)
 				.options(CompileFrontend.Options.builder()
+					.wasm(wasm)
+					.component(component)
 					.baseDir(java.util.Objects.requireNonNull(file.getParent()).toString())
 					.build())
 				.build());

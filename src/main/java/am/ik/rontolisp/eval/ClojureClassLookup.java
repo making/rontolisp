@@ -1,7 +1,9 @@
 package am.ik.rontolisp.eval;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import am.ik.rontolisp.clojure.ClojureJavaClasses;
@@ -44,6 +46,37 @@ final class ClojureClassLookup implements ClojureJavaClasses {
 		JavaClass made = new Type(type);
 		JavaClass raced = this.classes.putIfAbsent(name, made);
 		return raced != null ? raced : made;
+	}
+
+	// The class files hold a class whose supertype is missing, which a JVM cannot load:
+	// its supertypes are walked as the JVM resolves them, each class's interfaces ahead
+	// of its superclass.
+	@Override
+	public @Nullable String missingSupertype(String name) {
+		JavaType type = this.lookup.find(name);
+		return type == null || type.isPrimitive() || type.isArray() ? null : missingAbove(type, new HashSet<>());
+	}
+
+	private @Nullable String missingAbove(JavaType type, Set<String> seen) {
+		List<String> supers = new ArrayList<>(type.interfaceNames());
+		String superclass = type.superclassName();
+		if (superclass != null) {
+			supers.add(superclass);
+		}
+		for (String each : supers) {
+			if (!seen.add(each)) {
+				continue;
+			}
+			JavaType found = this.lookup.find(each);
+			if (found == null) {
+				return each;
+			}
+			String missing = missingAbove(found, seen);
+			if (missing != null) {
+				return missing;
+			}
+		}
+		return null;
 	}
 
 	private static Member member(JavaExecutable executable) {

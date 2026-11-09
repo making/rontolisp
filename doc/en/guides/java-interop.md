@@ -944,7 +944,10 @@ The refusal is catchable like any other failure -- `(catch Exception e ...)` tak
 it on the interpreter and the JVM alike -- and a direct call the compile resolved
 from the class files refuses the same way when it runs. No `clojure.lang` bridge is
 shipped: libraries that need one also ship a portable path, and the reader takes a
-library's `:rontolisp` branch where one names it first.
+library's `:rontolisp` branch where one names it first. A Clojure namespace whose `ns`
+imports a class whose superclass or interface is missing is read from the ClojureScript
+port its jar ships beside it, where it ships one, as persistent-sorted-set does
+([Deviations](../clojure/deviations.md)): the jar's `.clj` is not what runs.
 
 The GraalVM native binary cannot load a class at run time, so there the class path
 reaches only what a compile resolves calls against -- what a Clojure host form means

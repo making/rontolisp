@@ -1856,6 +1856,13 @@
                                 "java.lang.Exception" "java.lang.Throwable")
                               message))
 
+(defun rontolisp::%clojure-array-store-exception (message)
+  "A refusal the oracle throws as an ArrayStoreException."
+  (rontolisp::%clojure-refuse '("java.lang.ArrayStoreException"
+                                "java.lang.RuntimeException"
+                                "java.lang.Exception" "java.lang.Throwable")
+                              message))
+
 (defun rontolisp::%clojure-negative-array-size-exception (message)
   "A refusal the oracle throws as a NegativeArraySizeException."
   (rontolisp::%clojure-refuse '("java.lang.NegativeArraySizeException"
@@ -16236,6 +16243,14 @@
          (dollar (position #\$ tail :from-end t)))
     (if dollar (subseq tail (+ dollar 1)) tail)))
 
+(defun rontolisp::%clojure-designator-array-p (x)
+  ".isArray of the class designator X: whether it names an array class, whose
+   name starts with [, like Class#isArray; true or false."
+  (let ((name (car (cdr x))))
+    (if (and (> (length name) 0) (char= (char name 0) #\[))
+        t
+        rontolisp::%clojure-false)))
+
 ;;;; Protocol interfaces: a protocol's interface as a class value.
 ;;
 ;; The interface's dotted name (schema.core.Schema) evaluates to the designator
@@ -21231,6 +21246,11 @@
      (rontolisp::%clojure-xf-comp
       (mapcar #'rontolisp::%clojure-as-fn (reverse (cdr rev))))
      (list (rontolisp::%clojure-reducible-items (car rev))))))
+
+(defun rontolisp::%clojure-eduction-ctor-v (&rest args)
+  "->Eduction as a value: the eduction of one transducer over one collection."
+  (rontolisp::%clojure-check-arity args 2 2 "->Eduction")
+  (rontolisp::%clojure-eduction-v (car args) (car (cdr args))))
 
 (defun rontolisp::%clojure-sequence-v (&rest args)
   "sequence as a value: [coll] or [xf coll...]."
@@ -29571,6 +29591,27 @@
    bits, where no host is (wasm); the cast above refuses as it does."
   (%strict-math :log (rontolisp::%clojure-math-double x)))
 
+(defun rontolisp::%clojure-integer-compare (x y)
+  "(Integer/compare x y): -1, 0 or 1 as the int X sorts against the int Y,
+   each narrowed to an int as the oracle's reflector narrows a long, where no
+   host is (wasm)."
+  (let ((a (rontolisp::%clojure-int-value x))
+        (b (rontolisp::%clojure-int-value y)))
+    (cond ((< a b) -1) ((> a b) 1) (t 0))))
+
+(defun rontolisp::%clojure-long-compare (x y)
+  "(Long/compare x y): -1, 0 or 1 as the long X sorts against the long Y,
+   where no host is (wasm); the casts refuse as the oracle's do."
+  (let ((a (rontolisp::%clojure-long-cast x))
+        (b (rontolisp::%clojure-long-cast y)))
+    (cond ((< a b) -1) ((> a b) 1) (t 0))))
+
+(defun rontolisp::%clojure-math-pow (a b)
+  "(Math/pow a b): A raised to the power B as doubles, the oracle's bits,
+   where no host is (wasm); the casts above refuse as they do."
+  (%strict-math :pow (rontolisp::%clojure-math-double a)
+                (rontolisp::%clojure-math-double b)))
+
 (defun rontolisp::%clojure-math-abs (x)
   "(Math/abs x) of one argument: the magnitude of an integer in the long
    range (Long/MIN_VALUE its own, like the oracle's) or of a double (-0.0
@@ -30955,6 +30996,174 @@
           (t (java:new "java.lang.String" x (car more) (car (cdr more))
                        (rontolisp::%clojure-io-host (car (cdr (cdr more))))
                        :java-false)))))
+
+;;;; Array statics: System/arraycopy on every backend, and java.util.Arrays'
+;;;; copyOf, copyOfRange, sort, parallelSort and fill where no host is (wasm).
+;;;; An array is a vector here, a byte array its octets (Typed arrays, Byte
+;;;; arrays above): System/arraycopy's Object parameters take neither as the
+;;;; array it is, so the copy is this library's everywhere; where the host is,
+;;;; java.util.Arrays takes a stamped vector as its array (interop) and stays the
+;;;; host's (clojure/ClojurePortableStaticsLowering). Measured against clj
+;;;; 1.12.6 on JDK 25, 2026-11-09.
+
+(defun rontolisp::%clojure-array-type-name (a)
+  "How the JDK names the array A in arraycopy's words: byte for a byte array,
+   a primitive component for a vector stamped with one, else object array."
+  (if (rontolisp::%clojure-bytes-p a)
+      "byte"
+      (let ((c (%array-java-component a)))
+        (if (and (stringp c)
+                 (member c
+                  '("boolean" "char" "short" "int" "long" "float" "double")
+                  :test #'string=))
+            c
+            "object array"))))
+
+(defun rontolisp::%clojure-array-cells (a)
+  "The vector holding the members of the array A: a byte array's octets, a
+   vector itself."
+  (if (rontolisp::%clojure-bytes-p a) (car (cdr a)) a))
+
+(defun rontolisp::%clojure-array-like-p (a)
+  "Whether A is an array here: a byte array, or a vector that is no string."
+  (or (rontolisp::%clojure-bytes-p a) (and (vectorp a) (not (stringp a)))))
+
+(defun rontolisp::%clojure-system-arraycopy (src src-pos dest dest-pos length)
+  "(System/arraycopy src src-pos dest dest-pos length): LENGTH members of SRC
+   from SRC-POS stored into DEST from DEST-POS, as through a copy, so one array
+   copied over itself shifts intact; nil. The JDK's refusals in its order and
+   words: nil its message-less NullPointerException, no array its
+   ArrayStoreException, a byte array and a vector its type mismatch, a
+   negative index or length and a range past either end its
+   ArrayIndexOutOfBoundsException. Vectors of other components copy, where
+   the JDK checks them."
+  (if (or (null src) (null dest))
+      (rontolisp::%clojure-null-pointer-exception nil))
+  (if (not (rontolisp::%clojure-array-like-p src))
+      (rontolisp::%clojure-array-store-exception
+       (concatenate 'string "arraycopy: source type "
+                    (rontolisp::%clojure-class-name-of src)
+                    " is not an array")))
+  (if (not (rontolisp::%clojure-array-like-p dest))
+      (rontolisp::%clojure-array-store-exception
+       (concatenate 'string "arraycopy: destination type "
+                    (rontolisp::%clojure-class-name-of dest)
+                    " is not an array")))
+  (let ((src-type (rontolisp::%clojure-array-type-name src))
+        (dest-type (rontolisp::%clojure-array-type-name dest))
+        (s (rontolisp::%clojure-array-cells src))
+        (d (rontolisp::%clojure-array-cells dest)))
+    ;; a byte array and a vector: each byte-array test an if's, where a program
+    ;; making none folds it
+    (if (if (rontolisp::%clojure-bytes-p src)
+            (if (rontolisp::%clojure-bytes-p dest) nil t)
+            (if (rontolisp::%clojure-bytes-p dest) t nil))
+        (rontolisp::%clojure-array-store-exception
+         (concatenate 'string "arraycopy: type mismatch: can not copy " src-type
+                      "[] into " dest-type "[]")))
+    (cond ((< src-pos 0)
+           (rontolisp::%clojure-array-index-out-of-bounds-exception
+            (format nil "arraycopy: source index ~D out of bounds for ~A[~D]"
+                    src-pos src-type (length s))))
+          ((< dest-pos 0)
+           (rontolisp::%clojure-array-index-out-of-bounds-exception
+            (format nil
+                    "arraycopy: destination index ~D out of bounds for ~A[~D]"
+                    dest-pos dest-type (length d))))
+          ((< length 0)
+           (rontolisp::%clojure-array-index-out-of-bounds-exception
+            (format nil "arraycopy: length ~D is negative" length)))
+          ((> (+ src-pos length) (length s))
+           (rontolisp::%clojure-array-index-out-of-bounds-exception
+            (format nil
+                    "arraycopy: last source index ~D out of bounds for ~A[~D]"
+                    (+ src-pos length) src-type (length s))))
+          ((> (+ dest-pos length) (length d))
+           (rontolisp::%clojure-array-index-out-of-bounds-exception
+            (format nil
+             "arraycopy: last destination index ~D out of bounds for ~A[~D]"
+             (+ dest-pos length) dest-type (length d)))))
+    (replace d s :start1 dest-pos :start2 src-pos :end2 (+ src-pos length))
+    nil))
+
+(defun rontolisp::%clojure-array-zero (a)
+  "The member a new array like A starts with: 0 for a byte array or an
+   integral component, 0.0 for a floating one, false for boolean, the NUL
+   character for char, nil for an object array."
+  (if (rontolisp::%clojure-bytes-p a)
+      0
+      (let ((c (%array-java-component a)))
+        (cond ((not (stringp c)) nil)
+              ((member c '("int" "long" "short" "byte") :test #'string=) 0)
+              ((member c '("double" "float") :test #'string=) 0.0d0)
+              ((string= c "boolean") rontolisp::%clojure-false)
+              ((string= c "char") (code-char 0))
+              (t nil)))))
+
+(defun rontolisp::%clojure-array-like (a n)
+  "A new array of N members like the array A: a byte array, or a vector of
+   A's stamp over A's starting member."
+  (let ((size (rontolisp::%clojure-array-size n)))
+    (if (rontolisp::%clojure-bytes-p a)
+        (rontolisp::%clojure-bytes-of
+         (make-array size :element-type '(unsigned-byte 8) :initial-element 0))
+        (rontolisp::%clojure-java-array
+         (make-array size :initial-element (rontolisp::%clojure-array-zero a))
+         (%array-java-component a)))))
+
+(defun rontolisp::%clojure-arrays-copy-of (a n)
+  "(java.util.Arrays/copyOf a n): A's first N members in a new array like it,
+   padded with its starting member; a negative N the oracle's
+   NegativeArraySizeException."
+  (if (null a) (rontolisp::%clojure-null-pointer-exception nil))
+  (let ((out (rontolisp::%clojure-array-like a n)))
+    (rontolisp::%clojure-system-arraycopy a 0 out 0
+     (min (length (rontolisp::%clojure-array-cells a)) n))
+    out))
+
+(defun rontolisp::%clojure-arrays-copy-of-range (a from to)
+  "(java.util.Arrays/copyOfRange a from to): A's members from FROM up to TO in
+   a new array like it, padded past A's end; FROM past TO the oracle's
+   IllegalArgumentException, a FROM outside A arraycopy's refusal."
+  (if (null a) (rontolisp::%clojure-null-pointer-exception nil))
+  (if (> from to)
+      (rontolisp::%clojure-illegal-argument-exception
+       (format nil "~D > ~D" from to)))
+  (let ((out (rontolisp::%clojure-array-like a (- to from))))
+    (rontolisp::%clojure-system-arraycopy a from out 0
+     (min (- (length (rontolisp::%clojure-array-cells a)) from) (- to from)))
+    out))
+
+(defun rontolisp::%clojure-arrays-sort (a from to cmp)
+  "(java.util.Arrays/sort a), with a range FROM up to TO and a comparator CMP
+   (nil: compare), and parallelSort the same: A's members in that range sorted
+   in place, stably, like the JDK's object sort; nil. A range outside A, or one
+   ending before it starts, is the JDK's refusal."
+  (if (null a) (rontolisp::%clojure-null-pointer-exception nil))
+  (let* ((cells (rontolisp::%clojure-array-cells a))
+         (end (if to to (length cells)))
+         (start (if from from 0)))
+    (cond ((> start end)
+           (rontolisp::%clojure-illegal-argument-exception
+            (format nil "fromIndex(~D) > toIndex(~D)" start end)))
+          ((< start 0)
+           (rontolisp::%clojure-array-index-out-of-bounds-exception
+            (format nil "Array index out of range: ~D" start)))
+          ((> end (length cells))
+           (rontolisp::%clojure-array-index-out-of-bounds-exception
+            (format nil "Array index out of range: ~D" end))))
+    (let ((sorted
+           (stable-sort (subseq cells start end)
+            (lambda (x y) (< (rontolisp::%clojure-sorted-order cmp x y) 0)))))
+      (replace cells sorted :start1 start)
+      nil)))
+
+(defun rontolisp::%clojure-arrays-fill (a v)
+  "(java.util.Arrays/fill a v): every member of A set to V; nil."
+  (if (null a) (rontolisp::%clojure-null-pointer-exception nil))
+  (fill (rontolisp::%clojure-array-cells a)
+        (if (rontolisp::%clojure-bytes-p a) (rontolisp::%clojure-octet-of v) v))
+  nil)
 
 ;;;; clojure.java.io: rontolisp.internal.io, the namespace only the built-in
 ;;;; clojure.java.io requires, lowers each var to one of these, and the

@@ -26,6 +26,19 @@ public interface ClojureJavaClasses {
 	 */
 	@Nullable JavaClass find(String name);
 
+	/**
+	 * The class a name's class cannot load without: the first of its supertypes these
+	 * classes do not hold, its interfaces walked ahead of its superclass and each one's
+	 * own ahead of the next, the order a JVM resolves them in -- what a dependency's
+	 * class compiled against {@code clojure.lang} names ({@code .kb/clojure-frontend.md},
+	 * "Classes compiled against `clojure.lang`"). {@link #find} answers no class for it
+	 * on a JVM, which cannot load it, but one on class files, which hold it.
+	 * @param name the binary name
+	 * @return the missing class's binary name, or {@code null} when the class loads or
+	 * there is no class of the name
+	 */
+	@Nullable String missingSupertype(String name);
+
 	/** A class, as {@link Class} describes it. */
 	interface JavaClass {
 

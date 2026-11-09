@@ -963,8 +963,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   object keeps (`ByteBuffer/wrap`'s, a `ByteBuffer`'s `.array`) is the byte array itself. A
   `byte[]` coming back is a new byte array over the same bytes, never `identical?` to one that
   went out; so is one Java hands a `proxy`, a deftype or reify method or a fn.
+- `System/arraycopy` copies between two arrays here itself, on every backend, and does
+  not check that the two hold the same component type (it refuses a byte array and any
+  other array). Where no host is (wasm), `java.util.Arrays`' `copyOf`, `copyOfRange`,
+  `sort`, `parallelSort` and `fill` run here too; no array records its component there,
+  so a copy of an `int-array` pads `nil` where the oracle pads `0`.
 - An integer receiver is called as an `Integer` when it fits one, else as a `Long`
-  (the oracle's is always a `Long`): `(.getClass 1)` answers `java.lang.Integer`.
+  (the oracle's is always a `Long`): `(.getClass 1)` answers `java.lang.Integer`. Where no
+  host is (wasm), a number's, a string's or a character's `.getClass` is what `class` answers
+  and its `.compareTo` (a number's or a string's) is `compare`'s.
 - A `_` param tag leaves that parameter to the cost rule of the `java:` surface, so
   `(^[_] Math/abs -2)` answers `2` where the oracle refuses tags that leave more than one
   overload.
@@ -996,7 +1003,25 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   not read it anyway. Libraries that need one also ship a portable path (reitit's
   `clojure-trie-compiler` answers the oracle's lines), and the reader takes a
   library's `:rontolisp` branch where one names it first.
-- Only `.clj` and `.cljc` files below the source roots are read. A dependency's jar holding
+- A namespace whose `.clj` (or `.cljc`) imports such a class in its `ns` -- one whose
+  superclass or interface is missing -- is read from the `.cljs` beside it in the same
+  jar, the library's ClojureScript port: the jar's `.clj` is not what runs.
+  persistent-sorted-set's `me.tonsky.persistent-sorted-set` (and so datascript's indexes)
+  and datascript's `datascript.storage` are read so, on every backend, wasm included. A
+  var the `.clj` defines and the port does not (`store`, `restore-by`, datascript's file
+  storage) refuses when it is called, naming the port. The port is read as ClojureScript
+  reads it: its `cljs.core` names are referred, a `cljs.core` protocol in a `deftype` is the
+  `clojure.lang` interface standing for it (`ISeqable` is `Seqable`, `ICounted` `Counted`
+  ...), `^:mutable` marks a mutable field, `:require-macros` requires the namespace,
+  `js/Math` and `Math` answer an integer where the result is whole (ClojureScript prints
+  `(js/Math.pow 2 5)` as `32`), `js/Error.` makes a `RuntimeException`, and `.slice` of an
+  array is JavaScript's. Other differences: `seq` of a port's collection is a list like
+  every seq here, not the port's own seq object, so a port function taking that object
+  (persistent-sorted-set's `(seek (seq set) k)`) does not take it -- `slice`'s answer is
+  the object; `/` of two integers is a ratio, as in Clojure; another `js/` name refuses
+  where it is reached.
+- Only `.clj` and `.cljc` files below the source roots are read, and a `.cljs` only as
+  such a port. A dependency's jar holding
   classes also joins the Java class path; a directory's classes do not (give a prepped
   library's `target/classes` with `--java-classpath`). The project's `deps.edn` is the
   nearest one at or above the entry file, where the oracle reads the working directory's.

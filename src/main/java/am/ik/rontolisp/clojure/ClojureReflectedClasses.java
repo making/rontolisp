@@ -45,6 +45,27 @@ final class ClojureReflectedClasses implements ClojureJavaClasses {
 		return raced != null ? raced : made;
 	}
 
+	// Loading the class resolves its supertypes, and the first one missing is what the
+	// NoClassDefFoundError names (slashes for dots); any other words (a class file of
+	// the wrong name) name no class.
+	@Override
+	public @Nullable String missingSupertype(String name) {
+		if (this.found.containsKey(name)) {
+			return null;
+		}
+		try {
+			Class.forName(name, false, this.loader);
+			return null;
+		}
+		catch (NoClassDefFoundError ex) {
+			String missing = ex.getMessage();
+			return missing == null || missing.isEmpty() || missing.indexOf(' ') >= 0 ? null : missing.replace('/', '.');
+		}
+		catch (ClassNotFoundException | LinkageError ex) {
+			return null;
+		}
+	}
+
 	private static Member member(Executable executable) {
 		List<String> parameters = new ArrayList<>(executable.getParameterCount());
 		for (Class<?> parameter : executable.getParameterTypes()) {

@@ -21,9 +21,11 @@ import org.jspecify.annotations.Nullable;
  * {@code Long/numberOfLeadingZeros} of one argument (test.check's {@code shrink-long}),
  * and what tools.reader's read path calls: {@code Integer/parseInt} of one argument (any
  * literal int radix beside it), {@code Double/parseDouble},
- * {@code Character/isWhitespace}, {@code isDigit}, {@code digit} and {@code valueOf}, and
- * a {@code BigInteger} construction of a string, a byte array or either with its radix or
- * signum ({@link #construction}). Where the host is not (wasm) each lowers to its
+ * {@code Character/isWhitespace}, {@code isDigit}, {@code digit} and {@code valueOf}, a
+ * {@code BigInteger} construction of a string, a byte array or either with its radix or
+ * signum ({@link #construction}), and {@code Math/pow}, {@code Integer/compare} and
+ * {@code Long/compare} of two (persistent-sorted-set's and datascript's). The array
+ * statics are {@link #arrayCall}'s. Where the host is not (wasm) each lowers to its
  * portable worker in {@code clojure.lisp} -- never a {@code java:static}, which wasm
  * refuses; where the host is each stays the host's call. Each worker is measured against
  * clj 1.12.6, {@code Long/valueOf}'s and {@code Long/parseLong}'s grammar being
@@ -82,6 +84,15 @@ final class ClojurePortableStaticsLowering {
 	/** {@code (Math/log x)}. */
 	static final String MATH_LOG = "RONTOLISP::%CLOJURE-MATH-LOG";
 
+	/** {@code (Math/pow a b)}. */
+	static final String MATH_POW = "RONTOLISP::%CLOJURE-MATH-POW";
+
+	/** {@code (Integer/compare x y)}. */
+	static final String INTEGER_COMPARE = "RONTOLISP::%CLOJURE-INTEGER-COMPARE";
+
+	/** {@code (Long/compare x y)}. */
+	static final String LONG_COMPARE = "RONTOLISP::%CLOJURE-LONG-COMPARE";
+
 	/** {@code (Math/abs x)}. */
 	static final String MATH_ABS = "RONTOLISP::%CLOJURE-MATH-ABS";
 
@@ -97,7 +108,67 @@ final class ClojurePortableStaticsLowering {
 	/** {@code NaN?} over a double: what {@code .isNaN} answers. */
 	static final String IS_NAN = "RONTOLISP::%CLOJURE-IS-NAN";
 
+	/** {@code (System/arraycopy src src-pos dest dest-pos length)}. */
+	static final String ARRAYCOPY = "RONTOLISP::%CLOJURE-SYSTEM-ARRAYCOPY";
+
+	/** {@code (java.util.Arrays/copyOf a n)}. */
+	static final String ARRAYS_COPY_OF = "RONTOLISP::%CLOJURE-ARRAYS-COPY-OF";
+
+	/** {@code (java.util.Arrays/copyOfRange a from to)}. */
+	static final String ARRAYS_COPY_OF_RANGE = "RONTOLISP::%CLOJURE-ARRAYS-COPY-OF-RANGE";
+
+	/** {@code (java.util.Arrays/sort a from? to? cmp?)} and {@code parallelSort}. */
+	static final String ARRAYS_SORT = "RONTOLISP::%CLOJURE-ARRAYS-SORT";
+
+	/** {@code (java.util.Arrays/fill a v)}. */
+	static final String ARRAYS_FILL = "RONTOLISP::%CLOJURE-ARRAYS-FILL";
+
 	private ClojurePortableStaticsLowering() {
+	}
+
+	/**
+	 * An array static over the vector an array is here ({@code clojure.lisp}, "Array
+	 * statics"): {@code System/arraycopy} on every backend, since its {@code Object}
+	 * parameters take no vector as the array it stands for; {@code java.util.Arrays}'
+	 * {@code copyOf}, {@code copyOfRange}, {@code sort}, {@code parallelSort} and
+	 * {@code fill} of two arguments where no host is, the host taking a stamped vector as
+	 * its array elsewhere. persistent-sorted-set's {@code arrays} macros spell them.
+	 * @param host whether the target has the host
+	 * @param cls the resolved class name
+	 * @param member the static member
+	 * @param args the lowered arguments
+	 * @return the call, or null
+	 */
+	static @Nullable LispVal arrayCall(boolean host, String cls, String member, List<LispVal> args) {
+		if (cls.equals("java.lang.System") && member.equals("arraycopy") && args.size() == 5) {
+			return call(ARRAYCOPY, args);
+		}
+		if (host || !cls.equals("java.util.Arrays")) {
+			return null;
+		}
+		int n = args.size();
+		return switch (member) {
+			case "copyOf" -> n == 2 ? call(ARRAYS_COPY_OF, args) : null;
+			case "copyOfRange" -> n == 3 ? call(ARRAYS_COPY_OF_RANGE, args) : null;
+			case "fill" -> n == 2 ? call(ARRAYS_FILL, args) : null;
+			case "sort", "parallelSort" -> switch (n) {
+				case 1 -> call(ARRAYS_SORT, List.of(args.get(0), ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST,
+						ClojureLowering.NIL_CONST));
+				case 2 -> call(ARRAYS_SORT,
+						List.of(args.get(0), ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST, args.get(1)));
+				case 3 -> call(ARRAYS_SORT, List.of(args.get(0), args.get(1), args.get(2), ClojureLowering.NIL_CONST));
+				case 4 -> call(ARRAYS_SORT, args);
+				default -> null;
+			};
+			default -> null;
+		};
+	}
+
+	private static LispVal call(String worker, List<LispVal> args) {
+		List<LispVal> out = new ArrayList<>();
+		out.add(new LispSymbol(worker));
+		out.addAll(args);
+		return ClojureLowerUtil.list(out);
 	}
 
 	/**
@@ -159,6 +230,15 @@ final class ClojurePortableStaticsLowering {
 		}
 		if (cls.equals("java.lang.Math") && member.equals("log") && args.size() == 1) {
 			return ClojureLowerUtil.list(new LispSymbol(MATH_LOG), args.get(0));
+		}
+		if (cls.equals("java.lang.Math") && member.equals("pow") && args.size() == 2) {
+			return ClojureLowerUtil.list(new LispSymbol(MATH_POW), args.get(0), args.get(1));
+		}
+		if (cls.equals("java.lang.Integer") && member.equals("compare") && args.size() == 2) {
+			return ClojureLowerUtil.list(new LispSymbol(INTEGER_COMPARE), args.get(0), args.get(1));
+		}
+		if (cls.equals("java.lang.Long") && member.equals("compare") && args.size() == 2) {
+			return ClojureLowerUtil.list(new LispSymbol(LONG_COMPARE), args.get(0), args.get(1));
 		}
 		if (cls.equals("java.lang.Math") && member.equals("abs") && args.size() == 1) {
 			return ClojureLowerUtil.list(new LispSymbol(MATH_ABS), args.get(0));

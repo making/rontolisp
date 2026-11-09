@@ -485,13 +485,13 @@ final class ClojureValueMethodLowering {
 				new LispSymbol(":C%CLASS"), part(ctx, FN_CLASS_NAME))), arm(List.of(), core("class", R)));
 		// .isArray of a class keyword: only a byte array's class ([B) is an array
 		// class here (a char[] is a vector of characters, a host array unmarshals
-		// to a list), so its name decides, like the oracle's Class#isArray
-		// .isArray of a class keyword: only a byte array's class ([B) is an array
-		// class here (a char[] is a vector of characters, a host array unmarshals
 		// to a list), so its name decides, like the oracle's Class#isArray. The =
 		// already answers true-or-false, so no booleanAnswer wraps it (whose test
-		// would read the false object as true).
-		row("isArray", 0, arm(List.of("keyword?"), core("=", core("name", R), LispString.literal("[B"))));
+		// would read the false object as true). A class designator (the class of a
+		// number, persistent-sorted-set's array? of one) is an array class by its
+		// name, as Class#isArray answers
+		row("isArray", 0, arm(List.of("keyword?"), core("=", core("name", R), LispString.literal("[B"))),
+				new Arm(List.of(CLASS_DESIGNATOR), ctx -> part(ctx, "RONTOLISP::%CLOJURE-DESIGNATOR-ARRAY-P")));
 		// IHashEq: a collection's, a keyword's or a symbol's hasheq is its hash
 		row("hasheq", 0, arm(List.of("coll?", "ident?"), core("hash", R)));
 		row("deref", 0, arm(List.of(ATOM), core("deref", R)));
@@ -659,6 +659,14 @@ final class ClojureValueMethodLowering {
 			// the name exists for the host call to take
 			dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 					ClojureLowerUtil.list(ClojureLowerUtil.sym("integerp"), recv), bigIntegerCall, dispatch);
+		}
+		if (!ctx.hostTarget && method.equals("compareTo") && args.size() == 1) {
+			// where no host is, a number's Comparable order is compare's (datascript's
+			// value-compare), never the host call
+			LispVal compare = ctx.lower(core("compare", ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, recv),
+					ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, args.get(0))));
+			dispatch = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("numberp"), recv), compare, dispatch);
 		}
 		return dispatch;
 	}

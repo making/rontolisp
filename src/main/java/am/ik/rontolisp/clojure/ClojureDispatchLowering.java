@@ -788,6 +788,16 @@ final class ClojureDispatchLowering {
 	 */
 	static LispVal getClassForm(ClojureLowering ctx, LispSymbol recv, @Nullable String knownClass, LispVal call) {
 		LispVal out = call;
+		if (!ctx.hostTarget && knownClass == null) {
+			// where no host is, a number's or a character's class is the one class
+			// answers (datascript's (.isArray (.getClass x)) over every value), never
+			// the host call
+			out = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("numberp"), recv),
+							ClojureLowerUtil.list(ClojureLowerUtil.sym("characterp"), recv)),
+					classForm(ctx, recv), out);
+		}
 		if (knownClass == null || ClojureClassBases.isStreamClass(knownClass)) {
 			out = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 					ClojureLowerUtil.list(new LispSymbol(ClojureInteropLowering.STREAM_P), recv),

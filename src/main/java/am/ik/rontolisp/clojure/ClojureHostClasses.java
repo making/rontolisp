@@ -58,6 +58,17 @@ final class ClojureHostClasses {
 	}
 
 	/**
+	 * The supertype a class of the program's classes cannot load without
+	 * ({@link ClojureJavaClasses#missingSupertype}).
+	 * @param name the binary name
+	 * @return the missing class, or {@code null} when the class loads or there is none
+	 */
+	static @Nullable String missingSupertype(String name) {
+		ClojureJavaClasses classes = CURRENT.get();
+		return (classes != null ? classes : OWN).missingSupertype(name);
+	}
+
+	/**
 	 * Whether the program's classes have a class of a binary name.
 	 * @param name the binary name
 	 * @return whether it resolves

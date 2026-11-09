@@ -249,6 +249,11 @@ final class ClojureNamespaceLowering {
 		List<LispVal> calls = new ArrayList<>();
 		calls.add(ctx.nsSwitch(name.name()));
 		calls.addAll(nsClauses(ctx, items));
+		if (ctx.clojureScript) {
+			// a ClojureScript port refers cljs.core as a Clojure namespace refers
+			// clojure.core
+			ClojureScriptPort.referCore(ctx);
+		}
 		// loaded once its clauses ran, like the oracle's ns: a require of it from a
 		// namespace its own clauses load is a cycle, not a no-op
 		ctx.loadedNamespaces.add(name.name());
@@ -271,6 +276,8 @@ final class ClojureNamespaceLowering {
 			}
 			switch (head.name()) {
 				case ":require" -> calls.addAll(requireSpecs(ctx, parts.subList(1, parts.size()), false));
+				case ":require-macros" ->
+					calls.addAll(ClojureScriptPort.requireMacros(ctx, parts.subList(1, parts.size())));
 				case ":use" -> calls.addAll(requireSpecs(ctx, parts.subList(1, parts.size()), true));
 				case ":import" -> importSpecs(ctx, parts.subList(1, parts.size()));
 				case ":refer-clojure" -> referClojure(ctx, parts.subList(1, parts.size()));

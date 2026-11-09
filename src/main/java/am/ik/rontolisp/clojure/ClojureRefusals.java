@@ -50,6 +50,12 @@ final class ClojureRefusals {
 	/** {@code java.lang.NegativeArraySizeException}: a byte array of a negative size. */
 	static final String NEGATIVE_ARRAY_SIZE = "RONTOLISP::%CLOJURE-NEGATIVE-ARRAY-SIZE-EXCEPTION";
 
+	/**
+	 * {@code java.lang.ArrayStoreException}: {@code System/arraycopy} of a value that is
+	 * no array, or between a byte array and a vector.
+	 */
+	static final String ARRAY_STORE = "RONTOLISP::%CLOJURE-ARRAY-STORE-EXCEPTION";
+
 	/** {@code java.lang.UnsupportedOperationException}. */
 	static final String UNSUPPORTED_OPERATION = "RONTOLISP::%CLOJURE-UNSUPPORTED-OPERATION-EXCEPTION";
 
@@ -245,6 +251,7 @@ final class ClojureRefusals {
 			Map.entry(STRING_INDEX_OUT_OF_BOUNDS, "java.lang.StringIndexOutOfBoundsException"),
 			Map.entry(ARRAY_INDEX_OUT_OF_BOUNDS, "java.lang.ArrayIndexOutOfBoundsException"),
 			Map.entry(NEGATIVE_ARRAY_SIZE, "java.lang.NegativeArraySizeException"),
+			Map.entry(ARRAY_STORE, "java.lang.ArrayStoreException"),
 			Map.entry(UNSUPPORTED_OPERATION, "java.lang.UnsupportedOperationException"),
 			Map.entry(NUMBER_FORMAT, "java.lang.NumberFormatException"),
 			Map.entry(ARITHMETIC, "java.lang.ArithmeticException"), Map.entry(ARITY, "clojure.lang.ArityException"),

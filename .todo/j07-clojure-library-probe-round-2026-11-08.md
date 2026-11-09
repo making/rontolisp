@@ -30,7 +30,7 @@ outputs and the patches: `.todo/artefacts/j07-clojure-library-probe-round-2026-1
 | prismatic/schema 1.4.2 | stops at load | `clojure.lang.Compiler/CHAR_MAP` in a macro (`utils.cljc:58`) | j15, j24, j19, j14, j23, j13, h09 |
 | com.rpl/specter 1.1.6 | stops at load | riddley's `proxy` of `Compiler$ObjMethod` (`riddley/compiler.clj:12`) | j27, j15, j13, j23, j22, j21, j12, j25, j17 (all landed; verbatim `=` on the interpreter and the JVM class, 2026-11-09; P1 and the component stop compiling at `path`'s macro-time `.get` of a host `MutableCell`, the KB's specter row) |
 | rewrite-clj/rewrite-clj 1.3.59 | stops at load | `defmethod print-method` of a fn parameter (`node/protocols.cljc:166`) | j14, j13, j18 (all landed; verbatim `=` on all four backends, 2026-11-09) |
-| datascript/datascript 1.8.1 | stops at load | `clojure.core$long` (`db.cljc:80`) | j15, j26: loads verbatim since j26 (2026-11-09); its first `create-conn` stops at the sorted set (`Cannot link class me.tonsky.persistent_sorted_set.PersistentSortedSet: missing class clojure.lang.IEditableCollection`): j37 (its `.cljs` port) |
+| datascript/datascript 1.8.1 | stops at load | `clojure.core$long` (`db.cljc:80`) | j15, j26, j37 (all landed; verbatim `=` on all four backends, 2026-11-09: persistent-sorted-set and `datascript.storage` read from their `.cljs` ports, the KB's datascript row) |
 
 Library-side facts worth keeping:
 
@@ -49,7 +49,8 @@ Library-side facts worth keeping:
 Every library in the table is re-probed verbatim (no patches) on the interpreter, the JVM class,
 wasm P1 and the component after j08-j28 land, the rows join the KB's "Library probes" table with
 what each backend prints and what still stops it, and any new stop is filed (a large one) or fixed
-in the same session (a small one). datascript may stay red behind j37; its row says so. specter's
+in the same session (a small one). datascript's row joined the KB table with j37 (2026-11-09: `=` on
+all four backends). specter's
 row joined the KB table with j27 (2026-11-09: `=` on the interpreter and the JVM class); its wasm
 stop, a macro body's helper calling a host object's instance method on a wasm compile (schema's
 too), is one of the stops this item files or fixes.

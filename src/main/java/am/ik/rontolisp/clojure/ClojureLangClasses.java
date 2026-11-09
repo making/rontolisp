@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 
 import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -161,6 +162,8 @@ final class ClojureLangClasses {
 			case "RT/aset/3" -> core(ctx, "aset", args);
 			case "Util/hasheq/1" -> core(ctx, "hash", args);
 			case "Util/equiv/2" -> core(ctx, "=", args);
+			// two numbers' order, which compare answers (datascript's value-compare)
+			case "Numbers/compare/2" -> core(ctx, "compare", args);
 			case "Util/hashCombine/2" -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-HASH-COMBINE-INTS"),
 					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-INT-CAST"), args.get(0)),
 					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-INT-CAST"), args.get(1)));
@@ -241,6 +244,11 @@ final class ClojureLangClasses {
 		if (cls.equals(PERSISTENT_ARRAY_MAP) && member.equals("EMPTY")) {
 			// the empty map, which map destructuring's expansion spells
 			return ctx.lower(ClojureLowerUtil.list(new LispSymbol("%hash-map")));
+		}
+		if (cls.equals("clojure.lang.RT") && member.equals("EMPTY_ARRAY")) {
+			// an empty Object array (persistent-sorted-set's arrays/array of no
+			// member), a fresh one per read where the oracle's is one shared array
+			return ctx.lower(ClojureLowerUtil.list(new LispSymbol("object-array"), new LispInteger(0)));
 		}
 		if (cls.equals(COMPILER) && member.equals("CHAR_MAP")) {
 			// the munge table as the map it is (schema's char-map macro answers it

@@ -12,6 +12,7 @@ import java.util.List;
 import javax.tools.JavaCompiler;
 import javax.tools.ToolProvider;
 
+import am.ik.rontolisp.testsupport.ClojureScriptPortFixture;
 import am.ik.rontolisp.testsupport.YamlResources;
 import tools.jackson.dataformat.yaml.YAMLMapper;
 
@@ -23,9 +24,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * ({@code .kb/clojure-frontend.md}, "Host classes"): {@code clojure-spec.yaml}'s program,
  * every Clojure example {@code examples.yaml} lists without a {@code cli} (its
  * {@code javaSources} compiled onto its Java class path), the Clojure examples it does
- * not list, a program of the host forms a native image's own classes answered wrongly,
- * and a program whose host forms name only the JDK classes the image registers, which the
- * binary must lower alike with no JDK found.
+ * not list, a program of the host forms a native image's own classes answered wrongly, a
+ * program whose host forms name only the JDK classes the image registers, which the
+ * binary must lower alike with no JDK found, and a program over a library read from its
+ * ClojureScript port, which only the classes of its jar tell
+ * ({@link ClojureScriptPortFixture}).
  */
 final class ClojureLoweringCorpus {
 
@@ -111,6 +114,8 @@ final class ClojureLoweringCorpus {
 		Path noJdkHostForms = workDir.resolve("no_jdk_host_forms.clj");
 		Files.writeString(noJdkHostForms, NO_JDK_HOST_FORMS);
 		programs.add(new Program(NO_JDK_PROGRAM, noJdkHostForms, List.of()));
+		Path port = ClojureScriptPortFixture.project(Files.createDirectories(workDir.resolve("cljs-port")));
+		programs.add(new Program("cljs-port", port, List.of(ClojureScriptPortFixture.jar(port))));
 		for (ExamplesE2eTest.Example example : ExamplesE2eTest.loadManifest().examples()) {
 			String path = example.path();
 			if (!(path.endsWith(".clj") || path.endsWith(".cljc"))

@@ -918,9 +918,15 @@
   配列、`ByteBuffer` の `.array`）はバイト配列そのものです。戻ってきた `byte[]` は同じバイトを
   持つ新しいバイト配列で、渡したものと `identical?` にはなりません。Java が `proxy`、deftype や
   reify のメソッド、fn に渡す `byte[]` も同じです。
+- `System/arraycopy` は二つの配列の間のコピーをすべてのバックエンドでここ自身が行い、
+  二つの要素型が同じかは確かめません（バイト配列とそれ以外の配列の組は拒否します）。
+  ホストのない wasm では `java.util.Arrays` の `copyOf`・`copyOfRange`・`sort`・
+  `parallelSort`・`fill` もここで動きます。そこではどの配列も要素型を記録していないため、
+  `int-array` のコピーはオラクルが `0` で埋めるところを `nil` で埋めます。
 - 整数の receiver は `Integer` に収まれば `Integer`、収まらなければ `Long` として
   呼ばれます（オラクルでは常に `Long` です）。`(.getClass 1)` は
-  `java.lang.Integer` を答えます。
+  `java.lang.Integer` を答えます。ホストのない wasm では、数・文字列・文字の
+  `.getClass` は `class` の答えるクラスで、数と文字列の `.compareTo` は `compare` の順序です。
 - パラメータタグの `_` はその引数を `java:` サーフェスのコスト規則に任せるため、
   `(^[_] Math/abs -2)` は `2` を答えます。オラクルは複数のオーバーロードが残るタグを
   拒否します。
@@ -953,7 +959,27 @@
   クラスを必要とするライブラリはポータブルな経路も提供しており（reitit の
   `clojure-trie-compiler` は oracle と同じ行を出力します）、リーダーは先に名前があれば
   ライブラリの `:rontolisp` ブランチを取ります。
-- 読むのはソースルート以下の `.clj` と `.cljc` のファイルだけです。クラスを含む依存の jar は
+- `.clj`（または `.cljc`）の `ns` がそのようなクラス（スーパークラスかインターフェースが
+  不足しているクラス）を import する名前空間は、同じ jar の隣にある `.cljs`、つまり
+  ライブラリの ClojureScript 版から読みます。jar の `.clj` は実行されません。
+  persistent-sorted-set の `me.tonsky.persistent-sorted-set`（したがって datascript の
+  インデックス）と datascript の `datascript.storage` はこのように読まれ、wasm を含む
+  すべてのバックエンドで動きます。`.clj` が定義して ClojureScript 版が定義しない var
+  （`store`、`restore-by`、datascript のファイルストレージ）は、呼び出されたときに
+  ClojureScript 版を名指しして拒否されます。ClojureScript 版は ClojureScript
+  と同じように読みます。`cljs.core` の名前を参照し、`deftype` の `cljs.core` プロトコルは
+  それに対応する `clojure.lang` インターフェース（`ISeqable` は `Seqable`、`ICounted`
+  は `Counted` など）になり、`^:mutable` は可変フィールドを示し、`:require-macros`
+  は名前空間を require し、`js/Math` と `Math` は結果が整数値なら整数を返し
+  （ClojureScript は `(js/Math.pow 2 5)` を `32` と表示します）、`js/Error.` は
+  `RuntimeException` を作り、配列の `.slice` は JavaScript のものです。その他の違い:
+  ClojureScript 版のコレクションの `seq` はここの他の seq と同じくリストで、その
+  ClojureScript 版自身の seq オブジェクトではありません。そのオブジェクトを受け取る関数
+  （persistent-sorted-set の `(seek (seq set) k)`）には渡せません（`slice`
+  の答えはそのオブジェクトです）。整数どうしの `/` は Clojure と同じく比になります。
+  その他の `js/` の名前は、到達した時点で拒否されます。
+- 読むのはソースルート以下の `.clj` と `.cljc` のファイルだけで、`.cljs`
+  は上記の ClojureScript 版としてだけ読みます。クラスを含む依存の jar は
   Java クラスパスにも加わりますが、ディレクトリのクラスは加わりません（準備済みライブラリの
   `target/classes` は `--java-classpath` で与えます）。プロジェクトの `deps.edn` は、oracle が
   作業ディレクトリのものを読むのに対し、エントリファイルの位置から上へたどって最初に見つかる

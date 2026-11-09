@@ -1409,6 +1409,13 @@ final class ClojureInteropLowering {
 			// (clojure.lang is no host class here)
 			return lang;
 		}
+		LispVal array = designator.equals(member)
+				? ClojurePortableStaticsLowering.arrayCall(ctx.hostTarget, cls, member, args) : null;
+		if (array != null) {
+			// System/arraycopy over the vector an array is here, on every backend;
+			// java.util.Arrays' copies, sorts and fill where no host is
+			return array;
+		}
 		if (cls.equals("java.lang.Class") && member.equals("forName") && args.size() == 1
 				&& args.get(0) instanceof LispString name && name.value().indexOf('.') >= 0) {
 			// Class/forName of a literal naming a record, deftype or protocol interface
@@ -3450,6 +3457,20 @@ final class ClojureInteropLowering {
 	}
 
 	/**
+	 * {@code (.equals s x)} of the string {@code s}: whether {@code x} is a string of the
+	 * same characters, false of any other value, like the oracle's
+	 * {@code String.equals(Object)}.
+	 */
+	private static LispVal stringEquals(ClojureLowering ctx, LispVal recv, LispVal arg) {
+		LispSymbol other = ctx.freshTemp();
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
+				ClojureLowerUtil.list(ClojureLowerUtil.list(other, arg)),
+				ctx.booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), other),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("string="), recv, other))));
+	}
+
+	/**
 	 * A {@code String} instance method over an already-bound string receiver: the core
 	 * operation answering what the oracle answers (a missing {@code indexOf} is
 	 * {@code -1}, like the oracle, not the {@code nil} {@code clojure.string} favors).
@@ -3490,9 +3511,13 @@ final class ClojureInteropLowering {
 			// .intern of a string is the string (no interning is observable here but
 			// identical?)
 			case "intern" -> args.isEmpty() ? recv : null;
-			case "getClass" ->
-				args.isEmpty() ? ClojureLowerUtil.cons(JAVA_STATIC, List.of(LispString.literal("java.lang.Class"),
-						LispString.literal("forName"), LispString.literal("java.lang.String"))) : null;
+			// the host's String class, or where no host is the class class answers
+			case "getClass" -> !args.isEmpty() ? null
+					: ctx.hostTarget
+							? ClojureLowerUtil.cons(JAVA_STATIC,
+									List.of(LispString.literal("java.lang.Class"), LispString.literal("forName"),
+											LispString.literal("java.lang.String")))
+							: ClojureDispatchLowering.classForm(ctx, recv);
 			case "substring" -> switch (args.size()) {
 				case 1 -> ClojureLowerUtil.list(
 						new LispSymbol(typed ? ClojureRefusals.SUBS : ClojureRefusals.SUBS_BY_REFLECTION), recv,
@@ -3516,9 +3541,15 @@ final class ClojureInteropLowering {
 			case "charAt" -> args.size() == 1 ? ClojureLowerUtil.list(
 					new LispSymbol(typed ? ClojureRefusals.CHAR_AT : ClojureRefusals.CHAR_AT_BY_REFLECTION), recv,
 					ClojureStringLowering.bound(args.get(0))) : null;
-			case "equals" -> args.size() == 1
-					? ctx.booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("string="), recv, args.get(0)))
-					: null;
+			// String.equals(Object): false of anything but a string of the same
+			// characters (datascript's tx-id? asks it of every entity id)
+			case "equals" -> args.size() == 1 ? stringEquals(ctx, recv, args.get(0)) : null;
+			// String.compareTo(String), which compare answers of two strings
+			// (datascript's value-compare where no host is)
+			case "compareTo" ->
+				args.size() == 1 ? ctx.lower(ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.PREFIX + "compare"),
+						ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, recv),
+						ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, args.get(0)))) : null;
 			case "equalsIgnoreCase" -> args.size() == 1
 					? ctx.booleanAnswer(ClojureLowerUtil.list(ClojureLowerUtil.sym("string-equal"), recv, args.get(0)))
 					: null;

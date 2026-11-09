@@ -673,7 +673,7 @@ final class ClojureProtocolLowering {
 		boolean record = ClojureLowerUtil.isSymbolNamed(items.get(0), "defrecord");
 		String name = ClojureLowerUtil.plainName(items.get(1), record ? "defrecord" : "deftype");
 		List<String> fields = recordFields(ctx, items);
-		List<String> mutable = mutableFields(items);
+		List<String> mutable = mutableFields(ctx, items);
 		ClojureLowerUtil.isTrue(!record || mutable.isEmpty(),
 				":volatile-mutable or :unsynchronized-mutable not supported for record fields");
 		BodyProtocols body = BodyProtocols.of(ctx, items);
@@ -1188,13 +1188,15 @@ final class ClojureProtocolLowering {
 	/**
 	 * The declared fields marked {@code ^:unsynchronized-mutable} or
 	 * {@code ^:volatile-mutable}, in declaration order. ClojureScript's {@code ^:mutable}
-	 * is no marker here: the oracle keeps such a field immutable.
+	 * is no marker in a Clojure file -- the oracle keeps such a field immutable -- but is
+	 * one in a ClojureScript port ({@link ClojureScriptPort#isMutable}).
 	 */
-	static List<String> mutableFields(List<LispVal> items) {
+	static List<String> mutableFields(ClojureLowering ctx, List<LispVal> items) {
 		List<String> mutable = new ArrayList<>();
 		for (LispVal datum : ClojureLowerUtil.bindingItems(ClojureLowerUtil.stripMeta(items.get(2)), "deftype")) {
 			if (ClojureLowerUtil.nameHasFlag(datum, ":unsynchronized-mutable")
-					|| ClojureLowerUtil.nameHasFlag(datum, ":volatile-mutable")) {
+					|| ClojureLowerUtil.nameHasFlag(datum, ":volatile-mutable")
+					|| ClojureScriptPort.isMutable(ctx, datum)) {
 				mutable.add(((LispSymbol) ClojureLowerUtil.stripMeta(datum)).name());
 			}
 		}
@@ -1554,7 +1556,9 @@ final class ClojureProtocolLowering {
 	 * @param what the defining form
 	 * @return the groups and the interface implementation
 	 */
-	static TypeBody typeBody(ClojureLowering ctx, List<LispVal> rest, String what) {
+	static TypeBody typeBody(ClojureLowering ctx, List<LispVal> body, String what) {
+		// a ClojureScript port's cljs.core protocols are the interfaces standing for them
+		List<LispVal> rest = ClojureScriptPort.typeBody(ctx, body, what);
 		Map<String, ClojureLowering.ProtocolDef> protocols = new LinkedHashMap<>();
 		List<ClojureInterfaces.HostInterface> named = new ArrayList<>();
 		Map<String, List<ClojureLowering.TypeMethod>> byProtocol = new LinkedHashMap<>();
@@ -2023,7 +2027,7 @@ final class ClojureProtocolLowering {
 		String name = ClojureLowerUtil.plainName(equivalent.get(1), "deftype*");
 		BodyProtocols body = BodyProtocols.of(ctx, equivalent);
 		ClojureLowering.TypeDef def = new ClojureLowering.TypeDef(false, recordFields(ctx, equivalent), name, className,
-				mutableFields(equivalent), body.methods(), body.protocols(), drops);
+				mutableFields(ctx, equivalent), body.methods(), body.protocols(), drops);
 		ctx.types.put(ClojureLowering.varKey(ctx.currentNs, name), def);
 		return def;
 	}

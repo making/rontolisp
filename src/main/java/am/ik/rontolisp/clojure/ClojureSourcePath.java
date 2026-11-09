@@ -8,6 +8,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.clojure.ClojureDepsEdn.Lib;
 import am.ik.rontolisp.clojure.ClojureDepsGraph.Contribution;
 import am.ik.rontolisp.clojure.ClojureDepsGraph.Root;
@@ -45,8 +47,29 @@ final class ClojureSourcePath {
 	 * @param text its contents
 	 * @param builtin whether it is a built-in namespace's file
 	 * ({@link ClojureBuiltinNamespaces}) rather than the project's
+	 * @param port why the file is the namespace's ClojureScript port rather than its
+	 * {@code .clj}, or {@code null} for a Clojure file
 	 */
-	record Found(String path, String resource, String text, boolean builtin) {
+	record Found(String path, String resource, String text, boolean builtin, @Nullable Port port) {
+
+		Found(String path, String resource, String text, boolean builtin) {
+			this(path, resource, text, builtin, null);
+		}
+
+	}
+
+	/**
+	 * Why a namespace is read from the {@code .cljs} its root ships beside its Clojure
+	 * file: the Clojure file imports a class that cannot load here, a supertype it was
+	 * compiled against missing -- a library's Java half over {@code clojure.lang}, whose
+	 * ClojureScript half is the portable one ({@code .kb/clojure-frontend.md}, "Classes
+	 * compiled against `clojure.lang`").
+	 *
+	 * @param clojureFile the Clojure file's path below its root ({@code me/x/y.clj})
+	 * @param imported the class it imports that cannot load
+	 * @param missing the supertype that class cannot load without
+	 */
+	record Port(String clojureFile, String imported, String missing) {
 	}
 
 	private final ClojureFiles files;
@@ -158,7 +181,9 @@ final class ClojureSourcePath {
 	 * one the oracle loads before the program, which a {@code require} never reads again.
 	 * A namespace a jar holds only compiled ahead of time is refused: only source lowers.
 	 * A deferred library holding the namespace ({@link ClojureDepsGraph.Deferred}) is
-	 * read first, its roots taking their place on the source path.
+	 * read first, its roots taking their place on the source path. A Clojure file whose
+	 * {@code ns} imports a class that cannot load here stands aside for the {@code .cljs}
+	 * its root ships beside it ({@link Port}).
 	 * @param ns the namespace
 	 * @return the file, or {@code null} when neither a root nor the built-ins hold one
 	 */
@@ -171,10 +196,13 @@ final class ClojureSourcePath {
 		String base = scriptBaseOf(ns);
 		boolean startup = ClojureBuiltinNamespaces.isStartup(ns) || ClojureBuiltinNamespaces.isInternal(ns);
 		for (String extension : startup ? List.<String>of() : List.of(".clj", ".cljc")) {
-			Found project = findFile(base + extension);
-			if (project != null) {
-				this.found.put(ns, project);
-				return project;
+			for (Root root : roots()) {
+				Found project = fileIn(root, base + extension);
+				if (project != null) {
+					Found chosen = portFor(root, base, project);
+					this.found.put(ns, chosen);
+					return chosen;
+				}
 			}
 		}
 		for (Root root : startup ? List.<Root>of() : roots()) {
@@ -263,22 +291,90 @@ final class ClojureSourcePath {
 	 */
 	@Nullable Found findFile(String relative) {
 		for (Root root : roots()) {
-			if (root.archive()) {
-				if (entriesOf(root).contains(relative)) {
-					String text = this.files.readArchiveEntry(root.path(), relative);
-					if (text != null) {
-						return new Found(root.path() + "!/" + relative, relative, text, false);
-					}
-				}
-				continue;
-			}
-			String path = this.files.resolve(root.path(), relative);
-			String text = this.files.read(path);
-			if (text != null) {
-				return new Found(path, relative, text, false);
+			Found found = fileIn(root, relative);
+			if (found != null) {
+				return found;
 			}
 		}
 		return null;
+	}
+
+	/** A file below one root, or {@code null} when the root holds none of the path. */
+	private @Nullable Found fileIn(Root root, String relative) {
+		if (root.archive()) {
+			if (!entriesOf(root).contains(relative)) {
+				return null;
+			}
+			String text = this.files.readArchiveEntry(root.path(), relative);
+			return text == null ? null : new Found(root.path() + "!/" + relative, relative, text, false);
+		}
+		String path = this.files.resolve(root.path(), relative);
+		String text = this.files.read(path);
+		return text == null ? null : new Found(path, relative, text, false);
+	}
+
+	/**
+	 * The file a namespace is read from once its Clojure file is found: the {@code .cljs}
+	 * beside it in the same root where the Clojure file's {@code ns} imports a class that
+	 * cannot load here ({@link Port}), else the Clojure file. The imports are the first
+	 * form's, read as the file is read; a first form that does not read keeps the Clojure
+	 * file, whose own read reports it.
+	 */
+	private Found portFor(Root root, String base, Found clojure) {
+		Found script = fileIn(root, base + ".cljs");
+		if (script == null) {
+			return clojure;
+		}
+		LispVal first;
+		try {
+			first = new ClojureReader(clojure.text(), clojure.path()).readTopLevel();
+		}
+		catch (LispReadException ex) {
+			return clojure;
+		}
+		for (String imported : nsImports(first)) {
+			String missing = ClojureHostClasses.missingSupertype(imported);
+			if (missing != null) {
+				return new Found(script.path(), script.resource(), script.text(), false,
+						new Port(clojure.resource(), imported, missing));
+			}
+		}
+		return clojure;
+	}
+
+	/**
+	 * The classes an {@code ns} form's {@code :import} clauses name, in order: a class
+	 * symbol, or a package followed by class names in a vector or a list.
+	 */
+	static List<String> nsImports(@Nullable LispVal form) {
+		List<LispVal> items = form == null ? null : ClojureLowerUtil.items(form);
+		if (items == null || items.isEmpty() || !ClojureLowerUtil.isSymbolNamed(items.get(0), "ns")) {
+			return List.of();
+		}
+		List<String> out = new ArrayList<>();
+		for (LispVal clause : items.subList(1, items.size())) {
+			List<LispVal> parts = ClojureLowerUtil.items(clause);
+			if (parts == null || parts.isEmpty() || !ClojureLowerUtil.isSymbolNamed(parts.get(0), ":import")) {
+				continue;
+			}
+			for (LispVal spec : parts.subList(1, parts.size())) {
+				if (spec instanceof LispSymbol single) {
+					out.add(single.name());
+					continue;
+				}
+				List<LispVal> named = ClojureLowerUtil.items(spec);
+				int head = named != null && !named.isEmpty() && named.get(0) == ClojureReader.VECTOR ? 1 : 0;
+				if (named == null || named.size() <= head || !(named.get(head) instanceof LispSymbol pack)) {
+					continue;
+				}
+				for (LispVal each : named.subList(head + 1, named.size())) {
+					if (each instanceof LispSymbol simple) {
+						out.add(pack.name() + "." + simple.name());
+					}
+				}
+			}
+		}
+		return out;
 	}
 
 	/**

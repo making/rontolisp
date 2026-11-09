@@ -8,8 +8,9 @@ standing as is. An array is a vector here, as one `make-array` makes: it reads t
 copies through [aclone](aclone.md), and takes every seq verb, `count`, `nth`, `get` and
 `=` as a vector does. `class` answers `:vector`, `str` and `pr` print the vector, and
 `=` compares elements, where the oracle answers its classes, prints `#object` and
-compares by identity ([deviations](../deviations.md)). Runs on every backend; as a value
-a one-argument function.
+compares by identity ([deviations](../deviations.md)). `System/arraycopy` copies between
+two, and `java.util.Arrays`' `copyOf`, `copyOfRange`, `sort` and `fill` take one, on every
+backend. Runs on every backend; as a value a one-argument function.
 
 ```clojure
 (prn (vec (object-array [1 "a" nil])) (vec (object-array 2))) ; [1 "a" nil] [nil nil]
