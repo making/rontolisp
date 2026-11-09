@@ -72,9 +72,11 @@
          ;; java.util.LinkedHashMap keeps insertion order, so the keys come back
          ;; in the order they were first written. The cursor (arg 1) stays nil:
          ;; this store hands back every key at once, so there is no next page --
-         ;; and the key-response record crosses as a keyword plist.
-         (list :keys (java:call (java:call (java-bucket (nth 0 args)) "keySet")
-                                "toArray")
+         ;; and the key-response record crosses as a keyword plist. toArray is a
+         ;; vector, so it is coerced: the list<string> field is a list.
+         (list :keys (coerce (java:call (java:call (java-bucket (nth 0 args)) "keySet")
+                                        "toArray")
+                             'list)
                :cursor nil))
         ((string= member "bucket-drop")
          ;; Releasing the reference, not the store: the LinkedHashMap stays, and the
