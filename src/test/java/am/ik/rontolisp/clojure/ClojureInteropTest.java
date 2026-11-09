@@ -221,6 +221,14 @@ class ClojureInteropTest {
 			.isEqualTo("Cannot link class fixture.unlinkable.Unlinkable: missing class fixture.unlinkable.Missing\n");
 		assertThat(runOnJvmWithClasses(construction, jar, java.util.List.of(jar.toUri().toURL())))
 			.isEqualTo("Cannot link class fixture.unlinkable.Unlinkable: missing class fixture.unlinkable.Missing\n");
+		// a class whose superclass is the missing one never loads at all, which is no
+		// absent class either (persistent-sorted-set's PersistentSortedSet over
+		// clojure.lang.APersistentSet)
+		String subclass = "(println (try (fixture.unlinkable.Sub.) (catch Exception e (ex-message e))))";
+		assertThat(interpretWithClasses(subclass, jar))
+			.isEqualTo("Cannot link class fixture.unlinkable.Sub: missing class fixture.unlinkable.Missing\n");
+		assertThat(runOnJvmWithClasses(subclass, jar, java.util.List.of(jar.toUri().toURL())))
+			.isEqualTo("Cannot link class fixture.unlinkable.Sub: missing class fixture.unlinkable.Missing\n");
 	}
 
 	@Test
@@ -286,6 +294,12 @@ class ClojureInteropTest {
 					}
 					public static Missing identify(Missing value) {
 						return value;
+					}
+				}
+				""", "fixture/unlinkable/Sub.java", """
+				package fixture.unlinkable;
+				public class Sub extends Missing {
+					public Sub() {
 					}
 				}
 				""", "fixture/unlinkable/Missing.java", """

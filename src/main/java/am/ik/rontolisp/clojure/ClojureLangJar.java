@@ -109,7 +109,13 @@ final class ClojureLangJar {
 		return SIMPLE_NAMES.contains(simple) || isPrimitiveFn(simple);
 	}
 
-	private static boolean isPrimitiveFn(String simple) {
+	/**
+	 * Whether the simple name is one of the jar's primitive {@code IFn} interfaces: each
+	 * declares one {@code invokePrim} over the letters but the last.
+	 * @param simple the name past {@code clojure.lang.} ({@code IFn$OOL})
+	 * @return {@code true} for one of the 358
+	 */
+	static boolean isPrimitiveFn(String simple) {
 		if (!simple.startsWith("IFn$")) {
 			return false;
 		}

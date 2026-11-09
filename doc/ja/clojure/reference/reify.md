@@ -53,6 +53,10 @@ import します（オラクル同様、`clojure.lang` は既定の import に�
 | `ILookup` | `get`、`get-in`、キーワードやシンボルの呼び出し、マップの分配束縛 |
 | `IFn`（`Callable` と `Runnable` を含む） | 呼び出し、関数引数（`map`、`filter` など）、`apply`（`applyTo` を通す）、`ifn?` |
 | `IDeref` | `deref`、`@` |
+| `IBlockingDeref` | タイムアウトとタイムアウト値を取る `deref` |
+| `IAtom`、`IAtom2` | アトムでない値の `swap!`、`reset!`、`compare-and-set!`、`swap-vals!`、`reset-vals!` |
+| `IRef`、`IReference` | `add-watch`、`remove-watch`、`set-validator!`、`get-validator`、`alter-meta!`、`reset-meta!` |
+| `IFn$OOL` などのプリミティブ `IFn` インターフェース | `.invokePrim`（値の呼び出しは `IFn` の `invoke` を通ります）、`instance?` |
 | `IMeta`, `IObj` | `meta`、`with-meta`、`vary-meta`（`deftype` のみ。`reify` は自身でメタデータを持ちます） |
 | `java.lang.CharSequence` | `count`（`length`）、`nth`、`seq` と seq を辿るすべての関数（`charAt`）、`seqable?`。`re-matcher` と `re-find` は照合に要るところまでその文字を（`charAt` で）読み、`re-seq`・`re-matches`・`clojure.string`・文字列の `.contains` と `.replace` は全文字を並べた文字列を読みます |
 | `Object` | `str` と印字（`toString`）、`=`（`equals`）、`.hashCode` と `IHashEq` がない場合の `hash`（`hashCode`） |
@@ -69,7 +73,8 @@ import します（オラクル同様、`clojure.lang` は既定の import に�
 インタフェースへの `instance?` と、そのメソッドのインスタンス呼び出し（`(.count x)`）も型に
 届きます。そのインタフェースへ拡張したプロトコルも同様です。本体が書かなかったメソッドを呼ぶと
 オラクルの `AbstractMethodError` になり（`java.util` の default メソッドはインタフェース側の実装の
-ままで、呼ぶと名前を挙げて拒否されます）、それ以外の `clojure.lang` のインタフェース
+ままで、呼ぶと名前を挙げて拒否されます）。`IType`、`IRecord`、`IKeywordLookup` は `instance?`
+が読む目印です（`IRecord` を実装する型は `record?` です）。それ以外の `clojure.lang` のインタフェース
 （`IChunkedSeq` など）は名前を挙げて拒否されます。それ以外の public なホストのインタフェース
 （`java.io.Closeable`、`java.util.concurrent.ThreadFactory`、`java.util.concurrent.locks.Lock`
 など）は、`definterface` と同じく型の行にバイナリ名でメソッドを格納します。`instance?` は

@@ -5,6 +5,8 @@
 Answers a fresh map over `m`'s pairs plus the given ones, later pairs winning; `m` is
 never mutated. `assoc` onto `nil` builds from empty. Odd pair counts are refused. Keys
 compare by `=`: a key `=` to one already there replaces its value and keeps that key.
+When every key already holds that very value the answer is `m` itself (`identical?`),
+like the oracle's.
 
 Onto a record the entries join the entry table and the type survives.
 

@@ -1392,10 +1392,22 @@ public final class ClojureLowering {
 	 * class, which an instance call reaches ({@code (.m r)}), where an
 	 * {@code extend-type} row is none. {@code protocols} are the var keys of the
 	 * protocols its body names, with methods or none: the interfaces of its host class,
-	 * which {@code instance?} tests.
+	 * which {@code instance?} tests. {@code starDrops} is -1 for a type a
+	 * {@code defrecord} or {@code deftype} row defines, whose constructions call its
+	 * {@code ->Name}; a type the special form {@code deftype*} defines
+	 * ({@link ClojureTypeSpecials}) has its own constructor over every field and counts
+	 * here its trailing {@code __meta}/{@code __extmap}/{@code __hash}/{@code __hasheq}
+	 * fields, which the oracle's shorter constructors fill and whose presence gives the
+	 * class its static {@code create}.
 	 */
 	record TypeDef(boolean record, List<String> fields, String simpleName, String className, List<String> mutableFields,
-			Set<String> inlineMethods, Set<String> protocols) {
+			Set<String> inlineMethods, Set<String> protocols, int starDrops) {
+
+		/** Whether the special form {@code deftype*} defined the type. */
+		boolean star() {
+			return this.starDrops >= 0;
+		}
+
 	}
 
 	/**
@@ -4893,6 +4905,12 @@ public final class ClojureLowering {
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "reify")) {
 			return capturingMutableFields(() -> ClojureProtocolLowering.reifyForm(this, items));
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "reify*")) {
+			return capturingMutableFields(() -> ClojureTypeSpecials.reifyStarOf(this, items));
+		}
+		if (ClojureLowerUtil.isSymbolNamed(head, "deftype*")) {
+			return ClojureTypeSpecials.deftypeStarOf(this, items);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "satisfies?")) {
 			return ClojureProtocolLowering.satisfiesOf(this, items);

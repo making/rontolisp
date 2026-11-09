@@ -63,15 +63,16 @@ final class ClojureBuiltinNamespaces {
 					"it reads class files with the ASM library inside clojure.jar; JavaReflector reflects through the host")),
 			Map.entry(ClojureLangClasses.NAMESPACE, Map.of()), Map.entry("rontolisp.http-client", httpClientLeftOut()),
 			Map.entry(ClojureIoLowering.HTTP_URLS, Map.of()), Map.entry(ClojureCoreMacros.NAMESPACE, Map.of()),
-			Map.entry(ClojurePortableLinkedListLowering.NAMESPACE, Map.of()));
+			Map.entry(ClojurePortableLinkedListLowering.NAMESPACE, Map.of()),
+			Map.entry(ClojureTypeSpecials.RECORDS, Map.of()));
 
 	/**
 	 * The shipped namespaces the lowering loads for itself, no user surface: no project
 	 * file shadows one and no program requires one ({@link ClojureCoreMacros},
-	 * {@link ClojurePortableLinkedListLowering}).
+	 * {@link ClojurePortableLinkedListLowering}, {@link ClojureTypeSpecials}).
 	 */
 	private static final Set<String> INTERNAL = Set.of(ClojureCoreMacros.NAMESPACE,
-			ClojurePortableLinkedListLowering.NAMESPACE);
+			ClojurePortableLinkedListLowering.NAMESPACE, ClojureTypeSpecials.RECORDS);
 
 	/**
 	 * The public vars of babashka.http-client 0.4.23 that {@code rontolisp.http-client}

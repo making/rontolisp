@@ -7,7 +7,8 @@
   the special forms let*, loop*, letfn*, fn* and case* under the binding
   macros, if and do under the conditionals. Written for this front end from
   the documented behaviour of the macros of the same names and diffed against
-  their expansions on clj 1.12.6; destructure is clojure.core's own function.")
+  their expansions on clj 1.12.6; destructure is clojure.core's own function."
+  (:require [rontolisp.internal.types :as types]))
 
 (defn- push
   "The vector v with xs after its members: every vector these expansions build
@@ -784,3 +785,250 @@
   "(future body*): future-call of a thunk over the body."
   [&form &env & body]
   `(future-call (~(with-meta 'fn* {:once true}) [] ~@body)))
+
+;; the types: reify*, deftype* and the record's own methods
+
+(defn- parse-opts
+  "The leading keyword options of a type body, then the rest: [opts specs]."
+  [s]
+  (loop [opts {} [k v & rs :as s] s]
+    (if (keyword? k)
+      (recur (assoc opts k v) rs)
+      [opts s])))
+
+(defn- parse-impls
+  "Each group symbol of a type body to the methods following it, a map: a group
+  named again keeps its place and takes its later methods."
+  [specs]
+  (loop [ret {} s specs]
+    (if (seq s)
+      (recur (assoc ret (first s) (take-while seq? (next s)))
+             (drop-while seq? (next s)))
+      ret)))
+
+(defn- group-interface
+  "The interface a group symbol names: a protocol's (the :on of its var's map),
+  else the symbol. Resolved while the program lowers; where it runs no lowering
+  is, so the symbol stays as written."
+  [sym]
+  (let [v (when (symbol? sym) (types/protocol-var sym))]
+    (if (var? v) (:on @v) sym)))
+
+(defn- type-method
+  "One method as the special forms take it, (name [params] body*): a parameter
+  pattern replaced by a fresh p__ name the body's let takes apart."
+  [[name params & body]]
+  (if (every? symbol? params)
+    (list* name params body)
+    (loop [ps (seq params) plain [] lets []]
+      (if ps
+        (let [p (first ps)]
+          (if (symbol? p)
+            (recur (next ps) (push plain p) lets)
+            (let [g (gensym "p__")]
+              (recur (next ps) (push plain g) (push lets p g)))))
+        (list name (with-meta plain (meta params)) `(let ~lets ~@body))))))
+
+(defn- parse-opts+specs
+  "A type body as [interfaces methods opts]: the interfaces its groups name,
+  each once, Object none; every method in group order."
+  [opts+specs]
+  (let [[opts specs] (parse-opts opts+specs)
+        impls (parse-impls specs)
+        interfaces (-> (map group-interface (keys impls))
+                       set
+                       (disj 'Object 'java.lang.Object)
+                       vec)
+        methods (map type-method (apply concat (vals impls)))]
+    (when-let [bad (seq (remove #{:no-print :load-ns} (keys opts)))]
+      (throw (IllegalArgumentException. (apply print-str "Unsupported option(s) -" bad))))
+    [interfaces methods opts]))
+
+(defn expand-reify
+  "(reify group method* ...): reify* over the interfaces the groups name and
+  every method, carrying the call's metadata."
+  [&form &env & opts+specs]
+  (let [[interfaces methods] (parse-opts+specs opts+specs)]
+    (with-meta (list* 'reify* interfaces methods) (meta &form))))
+
+(defn- validate-fields
+  "Refuses a field vector that is none, names a record's own field or holds
+  anything but symbols."
+  [fields name]
+  (when-not (vector? fields)
+    (throw (AssertionError. "No fields vector given.")))
+  (let [specials '#{__hash __meta __hasheq __extmap}]
+    (when (some specials fields)
+      (throw (AssertionError. (str "The names in " specials
+                                   " cannot be used as field names for types or records.")))))
+  (let [non-syms (remove symbol? fields)]
+    (when (seq non-syms)
+      (throw (AssertionError. (str "defrecord and deftype fields must be symbols, " *ns* "." name
+                                   " had: " (apply str (interpose ", " non-syms))))))))
+
+(defn- class-of
+  "The class a type of the name defines in the current namespace."
+  [cname]
+  (symbol (str (namespace-munge *ns*) "." cname)))
+
+(defn- positional-factory
+  "The defn of ->name over the fields, past twenty of them a rest argument
+  counted when it runs."
+  [nom classname fields]
+  (let [fn-name (symbol (str "->" nom))
+        [field-args over] (split-at 20 fields)
+        over-count (count over)]
+    `(defn ~fn-name
+       ~(str "Positional factory function for class " classname ".")
+       [~@field-args ~@(if (seq over) '[& overage] [])]
+       ~(if (seq over)
+          `(if (= (count ~'overage) ~over-count)
+             (new ~classname ~@field-args ~@(map (fn [i] (list `nth 'overage i)) (range over-count)))
+             (throw (clojure.lang.ArityException. (+ ~(count field-args) (count ~'overage)) (name '~fn-name))))
+          `(new ~classname ~@field-args)))))
+
+(defn expand-deftype
+  "(deftype name [fields*] opts* specs*): deftype* of the class implementing
+  the groups' interfaces and IType, the class imported, its ->name, and the
+  class."
+  [&form &env name fields & opts+specs]
+  (validate-fields fields name)
+  (let [[interfaces methods opts] (parse-opts+specs opts+specs)
+        classname (class-of name)]
+    `(let []
+       (deftype* ~(symbol (str (ns-name *ns*)) (str name)) ~(with-meta classname (meta name)) ~fields
+         :implements ~(push interfaces 'clojure.lang.IType)
+         ~@(mapcat identity opts)
+         ~@methods)
+       (import ~classname)
+       ~(positional-factory name classname (vec (map #(with-meta % nil) fields)))
+       ~classname)))
+
+(defn- core-name
+  "A record method's name as the oracle's expansion spells it, qualified by
+  clojure.core."
+  [name]
+  (symbol "clojure.core" name))
+
+(defn- record-methods
+  "The record's own methods, last first, as the oracle's expansion lists them
+  ahead of the body's: the java.util.Map ones, then IPersistentMap's,
+  ILookup's and IKeywordLookup's, IObj's and IHashEq's with Object's."
+  [tagname classname fields base-fields gs]
+  (let [type-hash (hash classname)
+        hinted (with-meta gs {:tag tagname})
+        others (fn [& drop] (remove (set drop) fields))]
+    [`(~(core-name "entrySet") [this#] (set this#))
+     `(~(core-name "values") [this#] (vals this#))
+     `(~(core-name "keySet") [this#] (set (keys this#)))
+     `(~(core-name "clear") [this#] (throw (java.lang.UnsupportedOperationException.)))
+     `(~(core-name "putAll") [this# m#] (throw (java.lang.UnsupportedOperationException.)))
+     `(~(core-name "remove") [this# k#] (throw (java.lang.UnsupportedOperationException.)))
+     `(~(core-name "put") [this# k# v#] (throw (java.lang.UnsupportedOperationException.)))
+     `(~(core-name "get") [this# k#] (.valAt this# k#))
+     `(~(core-name "containsValue") [this# v#] (boolean (some #{v#} (vals this#))))
+     `(~(core-name "isEmpty") [this#] (= 0 (.count this#)))
+     `(~(core-name "size") [this#] (.count this#))
+     `(~(core-name "without") [this# k#]
+       (if (contains? #{~@(map keyword base-fields)} k#)
+         (dissoc (with-meta (into {} this#) ~'__meta) k#)
+         (new ~tagname ~@(others '__extmap '__hash '__hasheq)
+              (not-empty (dissoc ~'__extmap k#)))))
+     `(~(core-name "assoc") [this# k# ~gs]
+       (condp identical? k#
+         ~@(mapcat (fn [fld]
+                     [(keyword fld) (list* 'new tagname (replace {fld gs} (others '__hash '__hasheq)))])
+                   base-fields)
+         (new ~tagname ~@(others '__extmap '__hash '__hasheq) (assoc ~'__extmap k# ~gs))))
+     `(~(core-name "iterator") [~gs]
+       (clojure.lang.RecordIterator. ~gs [~@(map keyword base-fields)] (clojure.lang.RT/iter ~'__extmap)))
+     `(~(core-name "seq") [this#]
+       (seq (concat [~@(map #(list 'clojure.lang.MapEntry/create (keyword %) %) base-fields)]
+                    ~'__extmap)))
+     `(~(core-name "entryAt") [this# k#]
+       (let [v# (.valAt this# k# this#)]
+         (when-not (identical? this# v#)
+           (clojure.lang.MapEntry/create k# v#))))
+     `(~(core-name "containsKey") [this# k#] (not (identical? this# (.valAt this# k# this#))))
+     `(~(core-name "equiv") [this# ~gs]
+       (boolean
+        (or (identical? this# ~gs)
+            (when (identical? (class this#) (class ~gs))
+              (let [~gs ~hinted]
+                (and ~@(map (fn [fld] `(= ~fld (. ~gs ~(symbol (str "-" fld))))) base-fields)
+                     (= ~'__extmap (. ~gs ~'__extmap))))))))
+     `(~(core-name "cons") [this# e#] ((var clojure.core/imap-cons) this# e#))
+     `(~(core-name "empty") [this#]
+       (throw (java.lang.UnsupportedOperationException. (str "Can't create empty: " ~(str classname)))))
+     `(~(core-name "count") [this#] (+ ~(count base-fields) (count ~'__extmap)))
+     `(~(core-name "getLookupThunk") [this# k#]
+       (let [~'gclass (class this#)]
+         (case k#
+           ~@(mapcat (fn [fld]
+                       [(keyword fld)
+                        `(reify clojure.lang.ILookupThunk
+                           (get [~'thunk ~'gtarget]
+                             (if (identical? (class ~'gtarget) ~'gclass)
+                               (. ~(with-meta 'gtarget {:tag tagname}) ~(symbol (str "-" fld)))
+                               ~'thunk)))])
+                     base-fields)
+           nil)))
+     `(~(core-name "valAt") [this# k# else#]
+       (case k# ~@(mapcat (fn [fld] [(keyword fld) fld]) base-fields)
+         (get ~'__extmap k# else#)))
+     `(~(core-name "valAt") [this# k#] (.valAt this# k# nil))
+     `(~(core-name "withMeta") [this# ~gs] (new ~tagname ~@(replace {'__meta gs} fields)))
+     `(~(core-name "meta") [this#] ~'__meta)
+     `(~(core-name "equals") [this# ~gs] (clojure.lang.APersistentMap/mapEquals this# ~gs))
+     `(~(core-name "hashCode") [this#]
+       (let [hash# ~'__hash]
+         (if (zero? hash#)
+           (let [h# (clojure.lang.APersistentMap/mapHash this#)]
+             (set! ~'__hash h#)
+             h#)
+           hash#)))
+     `(~(core-name "hasheq") [this#]
+       (let [hq# ~'__hasheq]
+         (if (zero? hq#)
+           (let [h# (int (bit-xor ~type-hash (clojure.lang.APersistentMap/mapHasheq this#)))]
+             (set! ~'__hasheq h#)
+             h#)
+           hq#)))]))
+
+(defn expand-defrecord
+  "(defrecord name [fields*] opts* specs*): deftype* of the class over the
+  fields and the record's own __meta, __extmap and hash caches, implementing
+  the groups' interfaces and the record's, every method of the record's own
+  ahead of the body's; the class imported, ->name and map->name, and the
+  class."
+  [&form &env name fields & opts+specs]
+  (validate-fields fields name)
+  (let [[interfaces methods opts] (parse-opts+specs opts+specs)
+        classname (class-of name)
+        base-fields (vec (map #(with-meta % nil) fields))
+        all-fields (push base-fields '__meta '__extmap
+                         (with-meta '__hash {:unsynchronized-mutable true})
+                         (with-meta '__hasheq {:unsynchronized-mutable true}))
+        gs (gensym)]
+    (when (some #{:volatile-mutable :unsynchronized-mutable} (mapcat (comp keys meta) fields))
+      (throw (IllegalArgumentException.
+              ":volatile-mutable or :unsynchronized-mutable not supported for record fields")))
+    `(let []
+       (declare ~(symbol (str "->" name)))
+       (declare ~(symbol (str "map->" name)))
+       (deftype* ~(symbol (str (ns-name *ns*)) (str name)) ~(with-meta classname (meta name))
+         ~(push fields '__meta '__extmap
+                (with-meta '__hash {:unsynchronized-mutable true :tag 'int})
+                (with-meta '__hasheq {:unsynchronized-mutable true :tag 'int}))
+         :implements ~(push interfaces 'clojure.lang.IRecord 'clojure.lang.IHashEq 'clojure.lang.IObj
+                            'clojure.lang.ILookup 'clojure.lang.IKeywordLookup 'clojure.lang.IPersistentMap
+                            'java.util.Map 'java.io.Serializable)
+         ~@(mapcat identity opts)
+         ~@(concat (record-methods name classname all-fields base-fields gs) methods))
+       (import ~classname)
+       ~(positional-factory name classname base-fields)
+       (defn ~(symbol (str "map->" name))
+         ~(str "Factory function for class " classname ", taking a map of keywords to field values.")
+         ([m#] (~(symbol (str classname "/create"))
+                (if (instance? clojure.lang.MapEquivalence m#) m# (into {} m#)))))
+       ~classname)))

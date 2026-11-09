@@ -30,7 +30,7 @@ outputs and the patches: `.todo/artefacts/j07-clojure-library-probe-round-2026-1
 | prismatic/schema 1.4.2 | stops at load | `clojure.lang.Compiler/CHAR_MAP` in a macro (`utils.cljc:58`) | j15, j24, j19, j14, j23, j13, h09 |
 | com.rpl/specter 1.1.6 | stops at load | riddley's `proxy` of `Compiler$ObjMethod` (`riddley/compiler.clj:12`) | j27, j15, j13, j23, j22, j21, j12, j25, j17 |
 | rewrite-clj/rewrite-clj 1.3.59 | stops at load | `defmethod print-method` of a fn parameter (`node/protocols.cljc:166`) | j14, j13, j18 (all landed; verbatim `=` on all four backends, 2026-11-09) |
-| datascript/datascript 1.8.1 | stops at load | `clojure.core$long` (`db.cljc:80`) | not reached: j26 (persistent-sorted-set) |
+| datascript/datascript 1.8.1 | stops at load | `clojure.core$long` (`db.cljc:80`) | j15, j26: loads verbatim since j26 (2026-11-09); its first `create-conn` stops at the sorted set (`Cannot link class me.tonsky.persistent_sorted_set.PersistentSortedSet: missing class clojure.lang.IEditableCollection`): j37 (its `.cljs` port) |
 
 Library-side facts worth keeping:
 
@@ -49,5 +49,5 @@ Library-side facts worth keeping:
 Every library in the table is re-probed verbatim (no patches) on the interpreter, the JVM class,
 wasm P1 and the component after j08-j28 land, the rows join the KB's "Library probes" table with
 what each backend prints and what still stops it, and any new stop is filed (a large one) or fixed
-in the same session (a small one). datascript and specter may stay red behind their decision items
-(j26, j27); their rows say so.
+in the same session (a small one). datascript and specter may stay red behind their items
+(j37, j27); their rows say so.

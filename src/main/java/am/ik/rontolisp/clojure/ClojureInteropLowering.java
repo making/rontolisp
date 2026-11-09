@@ -596,8 +596,7 @@ final class ClojureInteropLowering {
 			String type = ctx.typeKeyOf(base);
 			if (type != null) {
 				// (T. args...) constructs the record or deftype, like ->T
-				return ctx.lower(ClojureLowerUtil.cons(new LispSymbol(constructorSpelling(ctx, type)),
-						items.subList(1, items.size())));
+				return typeConstruction(ctx, type, items.subList(1, items.size()));
 			}
 			String constructed = ClojureNamespaceLowering.resolveClass(ctx, name.substring(0, name.length() - 1));
 			return hostConstruction(ctx, constructed, items.subList(1, items.size()), null);
@@ -628,6 +627,12 @@ final class ClojureInteropLowering {
 		if (qualified.typeKey() != null) {
 			// (R/new args...) constructs the record or deftype, like ->R; a record's
 			// static (R/create m) builds it from a map, like map->R
+			ClojureLowering.TypeDef def = ctx.types.get(qualified.typeKey());
+			if (def != null && def.star()) {
+				return qualified.member().equals("create")
+						? ClojureTypeSpecials.createCall(ctx, qualified.typeKey(), argDatums)
+						: ClojureTypeSpecials.construction(ctx, qualified.typeKey(), def, argDatums);
+			}
 			return ctx.lower(ClojureLowerUtil.cons(new LispSymbol(typeMemberSpelling(ctx, qualified)), argDatums));
 		}
 		String cls = qualified.cls();
@@ -679,8 +684,9 @@ final class ClojureInteropLowering {
 		String type = ctx.typeKeyOf(head);
 		if (type != null) {
 			ClojureLowering.TypeDef def = ctx.types.get(type);
-			return member.equals("new") || member.equals("create") && def != null && def.record()
-					? new QualifiedMember(head, member, type) : null;
+			return member.equals("new") || member.equals("create") && def != null
+					&& (def.star() ? ClojureTypeSpecials.creates(def) : def.record())
+							? new QualifiedMember(head, member, type) : null;
 		}
 		return new QualifiedMember(ClojureNamespaceLowering.resolveClass(ctx, head), member, null);
 	}
@@ -1027,6 +1033,10 @@ final class ClojureInteropLowering {
 		if (cls.equals("clojure.lang.SeqIterator") && args.size() == 1) {
 			return ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.SEQ_ITERATOR), args.get(0));
 		}
+		if (cls.equals("clojure.lang.RecordIterator") && args.size() == 3) {
+			// a record expansion's iterator (a deftype* implementing IRecord)
+			return ClojureTypeSpecials.recordsCall(ctx, "record-iterator", args);
+		}
 		if (args.isEmpty() && cls.equals("clojure.lang.LispReader$StringReader")) {
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LISPREADER-STRING"));
 		}
@@ -1224,6 +1234,12 @@ final class ClojureInteropLowering {
 			}
 			method = called.name();
 			argDatums = items.subList(3, items.size());
+			if (method.length() > 1 && method.startsWith("-") && argDatums.isEmpty()
+					&& !(target instanceof LispSymbol named
+							&& ClojureNamespaceLowering.isClasslike(ctx, named.name()))) {
+				// (. x -field) is the field read (.-field x), like the oracle's
+				return ctx.lower(ClojureLowerUtil.list(new LispSymbol(".-" + method.substring(1)), target));
+			}
 		}
 		if (target instanceof LispSymbol named && ClojureNamespaceLowering.isClasslike(ctx, named.name())) {
 			if (argDatums.isEmpty()) {
@@ -1586,6 +1602,11 @@ final class ClojureInteropLowering {
 		if (qualified.typeKey() != null) {
 			// R/new is the record or deftype's positional constructor, like ->R, and a
 			// record's R/create its map constructor, like map->R
+			ClojureLowering.TypeDef def = ctx.types.get(qualified.typeKey());
+			if (def != null && def.star()) {
+				return qualified.member().equals("create") ? ClojureTypeSpecials.createValue(qualified.typeKey())
+						: ClojureTypeSpecials.constructionValue(ctx, qualified.typeKey(), def);
+			}
 			return ctx.lower(new LispSymbol(typeMemberSpelling(ctx, qualified)));
 		}
 		String cls = qualified.cls();
@@ -1896,8 +1917,7 @@ final class ClojureInteropLowering {
 		String type = ctx.typeKeyOf(named.name());
 		if (type != null) {
 			// (new T args...) constructs the record or deftype, like ->T
-			return ctx.lower(ClojureLowerUtil.cons(new LispSymbol(constructorSpelling(ctx, type)),
-					items.subList(2, items.size())));
+			return typeConstruction(ctx, type, items.subList(2, items.size()));
 		}
 		String cls = ClojureNamespaceLowering.resolveClass(ctx, named.name());
 		return hostConstruction(ctx, cls, items.subList(2, items.size()), null);
@@ -2301,6 +2321,18 @@ final class ClojureInteropLowering {
 	 */
 	static String constructorSpelling(ClojureLowering ctx, String typeKey) {
 		return typeFunctionSpelling(ctx, typeKey, "->");
+	}
+
+	/**
+	 * A construction of a record or deftype: a row-defined one's {@code ->T}, a
+	 * {@code deftype*} type's own constructor ({@link ClojureTypeSpecials#construction}).
+	 */
+	private static LispVal typeConstruction(ClojureLowering ctx, String typeKey, List<LispVal> argDatums) {
+		ClojureLowering.TypeDef def = ctx.types.get(typeKey);
+		if (def != null && def.star()) {
+			return ClojureTypeSpecials.construction(ctx, typeKey, def, argDatums);
+		}
+		return ctx.lower(ClojureLowerUtil.cons(new LispSymbol(constructorSpelling(ctx, typeKey)), argDatums));
 	}
 
 	/**
@@ -2798,11 +2830,19 @@ final class ClojureInteropLowering {
 			return null;
 		}
 		int found = 0;
-		for (ClojureJavaClasses.Member candidate : type.methods()) {
-			if (candidate.name().equals(method) && candidate.parameterCount() == n && !candidate.isStatic()
-					&& !candidate.isBridge()) {
-				found++;
+		try {
+			for (ClojureJavaClasses.Member candidate : type.methods()) {
+				if (candidate.name().equals(method) && candidate.parameterCount() == n && !candidate.isStatic()
+						&& !candidate.isBridge()) {
+					found++;
+				}
 			}
+		}
+		catch (LinkageError | SecurityException _) {
+			// a hint naming a class that cannot link casts nothing: the call's own
+			// run-time refusal names the missing class (.kb/clojure-frontend.md,
+			// "Classes compiled against `clojure.lang`")
+			return null;
 		}
 		return found == 1 ? hint : null;
 	}

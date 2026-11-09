@@ -2478,6 +2478,20 @@ final class JavaInterop {
 
 	private static ReflectiveJavaClasses.Type loadClass(String name, Caller caller) {
 		ReflectiveJavaClasses.Type type = caller.classes().find(name);
+		if (type == null) {
+			// a class whose own supertype cannot link (persistent-sorted-set's
+			// PersistentSortedSet over clojure.lang.APersistentSet) is no absent one:
+			// its refusal names the missing class, like every other java: entry point's
+			try {
+				Class.forName(name, false, caller.classes().loader());
+			}
+			catch (NoClassDefFoundError ex) {
+				throw unlinkable(name, ex);
+			}
+			catch (ClassNotFoundException | LinkageError ex) {
+				// absent, or broken some other way: no such class
+			}
+		}
 		if (type == null || type.isPrimitive() || type.isArray()) {
 			throw new LispEvalException("No such class: " + name);
 		}

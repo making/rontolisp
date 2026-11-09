@@ -1064,6 +1064,18 @@ and the hierarchy's `c%h-copy-table`.
   node)`, for `instaparse.abnf`'s grammar) and message cache dominated that grammar's
   `cfg/ebnf` as a JVM class; with the structure shared, `instaparse.core` loads in seconds
   where before it took tens -- the numbers in `.kb/hash-tables.md`.
+- **An `assoc` that changes nothing answers its map** (j26, 2026-11-09): the oracle's
+  `PersistentArrayMap`/`PersistentHashMap.assoc` hand back the map when the key already holds
+  that very value (`identical?`), and extend-clj's `deftype-atom` swaps by
+  `(compare-and-set! atom (assoc @atom :db old) (assoc @atom :db new))`, which looped forever
+  here (every `assoc` a fresh copy, so the identity compare never held). `%clojure-plist-table`
+  answers its base when a non-empty plist's every key is held with an `eq` value
+  (`%clojure-plist-held-p`: one lookup per pair, stopping at the first change, before the
+  copy), so `assoc`, `merge` and a map's `conj` of an unchanged entry answer the map itself; a
+  record's `assoc` still rewraps (the oracle's record builds a new one), a vector's copies (so
+  does the oracle's). Pin: clojure-spec
+  `a-type-implementing-the-reference-interfaces-answers-the-atom-verbs` (its `identical?`
+  line, oracle-identical).
 
 ## Hashes
 
@@ -1736,9 +1748,10 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | spec.alpha 0.5.238 + core.specs.alpha 0.4.74 | = | = | = | = | no `deps.edn` needed: the built-in clojure's own dependencies, fetched at the first require; g90 ("clojure.spec.alpha (g90)" below: the 35-line probe, and the gaps it leaves) |
 | tools.reader 1.3.6 | = | = | = | = | no transitive deps; g97 (2026-10-29): the 12-line probe -- `read-string` of a collection, of radix/octal/ratio numbers, `#inst`, `#uuid`, `'x`, a syntax-quote, `syntax-quote` the macro, `edn/read-string`, an indexing reader's form metadata, line and column, `^:dyn` metadata, a reader conditional -- prints the oracle's lines. Fixed on the way, each in its own section: a `clojure.lang` class of the oracle's jar as a dispatch value ("Host classes", `ClojureLangJar`), a host class's `print-method`/`print-dup` ("Dispatch", print-method), `%t` refused at call time ("The lowering table", `format`), `RT/map`, `RT/nextID`, `PersistentList/create`, `PersistentHashSet/createWithCheck`, `BigInt/fromBigInteger`, `Numbers/reduceBigInt` and an integer's `.negate`/`.bitLength` ("Collection interfaces", the `clojure.lang` statics), an `ns-map` chunk a macro body calls while it expands ("State", mappings), `bound-fn*`'s capture beside a program var named like a core special ("State", bound functions), a `declare`d excluded core name ("Macros", shadowing definitions), a JVM dispatch tree past 32,767 function ids (`.kb/jvm-method-size-limits.md`). Wasm (2026-10-30): 11 of the 12 lines print the oracle's on both backends (`=` with the `#inst` line left out; reader-conditional splicing, a bignum, `36r...` and `\uXXXX` also checked `=` on all four) -- fixed on the way: the pending-forms `(LinkedList.)` ("Portable LinkedList"), `Character/isWhitespace`/`isDigit`/`digit`/`valueOf`, one-argument `Integer/parseInt`, `Double/parseDouble`, `(BigInteger. s radix)` and an integer's `.longValue` ("Portable number statics"); the `#inst` line stopped at `(GregorianCalendar. y m d h mi s)` in `construct-calendar` (`JAVA:NEW`; then `Calendar/MILLISECOND`, `TimeZone/getTimeZone`, `.setTimeZone`, `.getTime`), the one remaining blocker until h10 (2026-10-30, "Portable GregorianCalendar"): the 12-line probe is `=` on all four. Past the probe, on wasm: `read-instant-calendar` prints the oracle's line, and so does `read-instant-timestamp` (a Timestamp's `.setNanos`, "Instants and UUIDs"); on the interpreter and the JVM the host Calendar's `print-calendar` stops at `format`'s `%t` |
 | component 1.2.0 (stuartsierra) | = | = | = | = | no transitive deps; 2026-11-08 round (`.todo/j07`): records implementing `Lifecycle`, `system-map`/`using`/`start`/`stop`, a missing-dependency `ex-data`, `update-system` -- 7 lines; two `JAVA:CALL` warnings on wasm off the path |
+| extend-clj 0.1.0 (tonsky) | = | = | = | = | no transitive deps; j26 (2026-11-09): `deftype-atom` spells `deftype*` over `IMeta`, `IReference`, `IDeref`, `IRef`, `IAtom`, `IAtom2`, its `IAtom3` protocol and `IKeywordLookup` ("Macros", the type special forms; "Host interfaces", the reference interfaces); the 5-line probe -- `deref`, `swap!` of one to three arguments, `reset!`, `compare-and-set!` both ways, `swap-vals!`, `reset-vals!`, a watch's calls, `remove-watch`, a validator refusing, `reset-meta!`/`alter-meta!` -- prints the oracle's lines on all four backends. Its swap is a `compare-and-set!` of an unchanged `assoc`, which looped forever before an `assoc` changing nothing answered its map ("The copy a map verb takes") |
 | editscript 0.8.0 | = | = | stop | stop | 2026-11-08 round: the 7-line probe (map/vector/string diffs, `patch`, `edit-distance`, `:quick`) is the oracle's on the interpreter and the JVM; wasm traps on `System/nanoTime`, then `java.util.IdentityHashMap` (`.todo/j28`, which also records the host-side identity loss of a Clojure key in an `IdentityHashMap`) |
 | data.csv 1.1.1 | 5/6 | | | | 2026-11-08 round: `read-csv`/`write-csv` over strings and a `StringWriter` print the oracle's lines; `io/reader` of a `java.io.StringReader` refuses (`.todo/j16`). Other backends not run |
-| aero 1.1.6, core.match 1.1.1, core.logic 1.1.1, schema 1.4.2, specter 1.1.6, rewrite-clj 1.3.59, datascript 1.8.1 | stop | | | | 2026-11-08 round, interpreter only: each stops at load; past hand patches all but datascript print the oracle's lines (core.logic but its pinned `()`-is-`nil` line). The stops, library by library, and the items they became: `.todo/j07` (probes, patches and outputs in `.todo/artefacts/j07-clojure-library-probe-round-2026-11-08/`). j23 (2026-11-08, `.todo/j23`): specter's `extend-protocolpath*` and schema's `extend-primitive` hunks are no longer needed -- with the other hunks applied, specter's probe is the oracle's line for line and schema's loads and prints the same but the pinned set-order line (interpreter; the other backends unprobed). j09 (2026-11-09): core.match's `void` hunk is no longer needed either -- with the other hunks applied and the original `let`-wrapped `regroup-keywords` restored, the probe prints its 11 oracle lines on the interpreter, the JVM class and wasm ("Macros", the wrapper bullet). j12 (2026-11-09): core.logic's `defnm`, specter's `defdynamicnav` `declare` hunks and aero's `usetime` unwrap are no longer needed -- with the other hunks applied, aero and specter print the oracle's lines and core.logic the same but its pinned line (interpreter). j18 (2026-11-09): rewrite-clj needs no hunk at all -- the verbatim 1.3.59 jar prints the probe's 9 oracle lines on all four backends (the wasm legs warn of `JAVA:STATIC`/`JAVA:NEW` off the probe's path; its zipper walks are `(->> (iterate f loc) (take-while identity) ...)`, which needed `iterate` to compute a member only when read, a lazy `take-while`, and `next` of a lazy seq ending past its head to answer nil: "Laziness"). j21 (2026-11-09): specter's `path` hunk (the inline cache) is no longer needed -- with the other hunks applied, the probe prints the oracle's ten lines on the interpreter and the JVM class ("Macros", a var a macro body interns). j24 (2026-11-09): schema's `-instrument-protocol-method` `(comment ...)` hunk is no longer needed -- with the other hunks applied the probe prints as before, and an `s/defprotocol` method with schemas validates under `s/with-fn-validation` like the oracle (interpreter, JVM class; wasm P1 stops expanding `s/defprotocol` at `No matching field found: get`, as it did before j24): a field-form `set!` decides when it runs and a protocol method whose var a program alters is redefinable ("Java interop", "Vars and metadata") |
+| aero 1.1.6, core.match 1.1.1, core.logic 1.1.1, schema 1.4.2, specter 1.1.6, rewrite-clj 1.3.59, datascript 1.8.1 | stop | | | | 2026-11-08 round, interpreter only: each stops at load; past hand patches all but datascript print the oracle's lines (core.logic but its pinned `()`-is-`nil` line). The stops, library by library, and the items they became: `.todo/j07` (probes, patches and outputs in `.todo/artefacts/j07-clojure-library-probe-round-2026-11-08/`). j23 (2026-11-08, `.todo/j23`): specter's `extend-protocolpath*` and schema's `extend-primitive` hunks are no longer needed -- with the other hunks applied, specter's probe is the oracle's line for line and schema's loads and prints the same but the pinned set-order line (interpreter; the other backends unprobed). j09 (2026-11-09): core.match's `void` hunk is no longer needed either -- with the other hunks applied and the original `let`-wrapped `regroup-keywords` restored, the probe prints its 11 oracle lines on the interpreter, the JVM class and wasm ("Macros", the wrapper bullet). j12 (2026-11-09): core.logic's `defnm`, specter's `defdynamicnav` `declare` hunks and aero's `usetime` unwrap are no longer needed -- with the other hunks applied, aero and specter print the oracle's lines and core.logic the same but its pinned line (interpreter). j18 (2026-11-09): rewrite-clj needs no hunk at all -- the verbatim 1.3.59 jar prints the probe's 9 oracle lines on all four backends (the wasm legs warn of `JAVA:STATIC`/`JAVA:NEW` off the probe's path; its zipper walks are `(->> (iterate f loc) (take-while identity) ...)`, which needed `iterate` to compute a member only when read, a lazy `take-while`, and `next` of a lazy seq ending past its head to answer nil: "Laziness"). j21 (2026-11-09): specter's `path` hunk (the inline cache) is no longer needed -- with the other hunks applied, the probe prints the oracle's ten lines on the interpreter and the JVM class ("Macros", a var a macro body interns). j26 (2026-11-09): datascript 1.8.1 loads verbatim -- `defrecord-updatable` over the oracle's `defrecord` expansion and `deftype*`, `defcomp`'s `IFn$OOL`, extend-clj's `deftype-atom`, `transact`'s `IBlockingDeref` reify, `RT/assoc` and `Util/hashCombine` -- and its first `create-conn` stops at `Cannot link class me.tonsky.persistent_sorted_set.PersistentSortedSet: missing class clojure.lang.IEditableCollection` (interpreter; the JVM class with the jar on its run class path the same; wasm P1 `The function JAVA:NEW is undefined`): the sorted set its indexes are is Java over `clojure.lang` ("Classes compiled against `clojure.lang`", persistent-sorted-set: decided to read its `.cljs` port, `.todo/j37`). j24 (2026-11-09): schema's `-instrument-protocol-method` `(comment ...)` hunk is no longer needed -- with the other hunks applied the probe prints as before, and an `s/defprotocol` method with schemas validates under `s/with-fn-validation` like the oracle (interpreter, JVM class; wasm P1 stops expanding `s/defprotocol` at `No matching field found: get`, as it did before j24): a field-form `set!` decides when it runs and a protocol method whose var a program alters is redefinable ("Java interop", "Vars and metadata") |
 f92 shares every site-independent core value program-wide through `%clojure-shared-value`, so the probe is green again on all four. f98: the 8-line pattern-schema probe (`form`/`type` of `(m/schema #"a")`, `validate` of a hit, a miss and a non-string, `explain`, the `:malli.core/invalid-schema` refusals of `(m/schema 42)` and `(m/schema "s")`) is the oracle's line for line on all four since 2026-10-13 (`type` of a pattern hits the `class-schemas` entry: the host class where a host is, the designator where none is). That 12-line wasm parity was overstated (2026-10-13, f99): the probe's decode lines print bare (`println`), under which an undecoded `"1"` reads as `1` -- `(Long/parseLong x)` refused at call time there, so `-string->long`'s catch kept the input (`pr-str` shows the gap). One-argument `Long/parseLong` now lowers to the portable reader where the host is not (`%clojure-parse-long-static`, "Portable number statics"), and the 12-line probe is the oracle's line for line under `pr-str` on all four backends |
 
 `=` is the oracle's output line for line (12-31 lines per probe; tools.cli's `:parse-fn` is
@@ -2005,6 +2018,45 @@ uncaught `NoClassDefFoundError: clojure/lang/IPersistentMap` from
   (static call, construction and static-field read over a fixture jar holding a class
   whose static field needs the omitted type) and
   `#aGenuinelyBrokenInitializerKeepsPropagating`.
+- A class whose own SUPERTYPE is the missing one never loads at all
+  (persistent-sorted-set's `PersistentSortedSet` over `clojure.lang.APersistentSet`): the
+  shared `ReflectiveJavaClasses.find` answers it absent, and the interpreter's `loadClass`
+  answered `No such class`; it now loads the class again on a miss and answers the
+  refusal naming the missing class (j26, 2026-11-09), which the JVM class already did. The
+  lowering's hint reads over such a class (`castClass`, `ClojureValueMethodLowering.declares`)
+  guard the `LinkageError` too: datascript's `^PersistentSortedSet` hints crashed the lowering
+  with an uncaught `NoClassDefFoundError: clojure/lang/IFn`. Pin: the first test above (its
+  `fixture.unlinkable.Sub extends Missing` lines).
+- **persistent-sorted-set (datascript's indexes), measured 2026-11-09 (j26)**: its `.clj`
+  wraps Java classes extending `APersistentSet`; with j26 datascript 1.8.1 loads verbatim and
+  its first `create-conn` stops at `Cannot link class
+  me.tonsky.persistent_sorted_set.PersistentSortedSet: missing class
+  clojure.lang.IEditableCollection` (interpreter; the JVM class with the jar on its run class
+  path the same; wasm P1 at `The function JAVA:NEW is undefined`). The options, measured:
+  - (a) the real `clojure.lang` on the host: with clj 1.12.6's jar (4.2 MB, plus spec.alpha
+    and core.specs.alpha) on the class path, `Class.forName` of `PersistentSortedSet` --
+    `RT`'s static init loading clojure.core -- took 618, 820 and 964 ms (three runs, a loaded
+    host), then 1000 `.cons` 20-42 ms. Every program loading such a jar pays that init; the
+    set, its `Seq` (an `ASeq`) and its transient are host objects every verb would read
+    through `java.util`; the comparator a face called across the boundary per comparison;
+    wasm stays red. Not chosen: it is the bridge rejected above, over the same mismatch.
+  - (b) the library's `.cljs` port (`me/tonsky/persistent_sorted_set.cljs`, 1111 lines, in
+    the same jar): every function datascript's `:clj` code calls but the storage ones
+    (`store`, `restore-by`, `walk-addresses`, `datascript.storage` only). Read as the
+    namespace's source it stops at once (`ns clause :require-macros is not supported yet`);
+    its surface: `:require-macros`, `js/Math.pow` x3, `js/Math.floor` x2, `js/Error.` x3, a JS
+    array's `.slice` x9, `^:mutable` fields, three deftypes and a chunk over 24 `cljs.core`
+    protocols (`ISeqable`, `ICounted`, `ILookup`, `IReduce`, `IEquiv`, `IHash`,
+    `ITransientSet`, `IChunkedSeq` ...), each a `clojure.lang` interface row here under
+    another name, and 128 uses of the `arrays` macros, whose `:clj` branches the lowering
+    takes (`clojure.lang.RT/aget`, `alength`, `aset`, answered since j26). All four
+    backends.
+  - (c) datascript red, this row saying why.
+  - (d) a shipped portable `me.tonsky.persistent-sorted-set` over the native sorted set:
+    the smallest, but one library special-cased (the probes' rule is infrastructure).
+  Decision: (b), the portable path the library's author maintains, on every backend:
+  `.todo/j37` (a `.clj` whose classes cannot link read through its `.cljs` sibling, and the
+  ClojureScript surface the port spells).
 
 ## Ring adapter
 
@@ -4449,8 +4501,8 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   `or`, `case`, `if-let`, `when-let`, `if-some`, `when-some`, `when-first`, `->`, `->>`,
   `as->`, `cond->`, `cond->>`, `some->`, `some->>`, `doto`, `..`, `dotimes`, `doseq`, `for`,
   `while`, `comment`, `declare`, `defn`, `defn-`, `binding`, `assert`, `locking`,
-  `with-open` and `future` (`ClojureCoreMacros.EXPANDERS`), while a program's own call
-  sites keep their lowering rows. The expanders are Clojure source,
+  `with-open`, `future`, `reify`, `deftype` and `defrecord` (`ClojureCoreMacros.EXPANDERS`),
+  while a program's own call sites keep their lowering rows. The expanders are Clojure source,
   `lib/rontolisp/internal/core_macros.clj` (`rontolisp.internal.core-macros`: shipped, never
   shadowed by a project file, refused to a program's `require` --
   `ClojureBuiltinNamespaces.INTERNAL`), written from the documented behaviour and diffed
@@ -4496,7 +4548,56 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   - Deviations: a malformed call's refusal propagates as the expander throws it (the oracle's
     `Syntax error macroexpanding` wraps it); a `case` whose tests collide in two or more
     buckets lists the skipped hashes in insertion order; a BigDecimal test hashes as its
-    ratio; the macros outside the list answer their call. Pins: clojure-spec
+    ratio; the macros outside the list answer their call; a type body's interfaces, the
+    oracle's `(vec (set ...))` of its groups, keep their order (the pinned set-order
+    deviation: the oracle's two interfaces may come out swapped).
+  - **The type special forms `deftype*` and `reify*`** (j26, 2026-11-09): what `deftype`,
+    `defrecord` and `reify` expand to (`expand-deftype`, `expand-defrecord`, `expand-reify`:
+    the oracle's shapes, the record's own map methods spelled `clojure.core/`-qualified and
+    listed last first ahead of the body's, a group's protocol read as its `:on` symbol --
+    the protocol's value map's `:on` is that symbol since j26, a keyword before -- and every
+    shape diffed against clj 1.12.6 with gensyms renumbered) lower in `ClojureTypeSpecials`,
+    so a program's macro may build them: datascript's `defrecord-updatable` postwalks
+    `(macroexpand-1 (list* 'defrecord ...))`, dedupes the `:implements` vector and drops the
+    record methods its body overrides (`hashCode`, `hasheq`, `count`, `equiv`, `empty`);
+    extend-clj's `deftype-atom` spells `deftype*` over the reference interfaces ("Host
+    interfaces"). Each reads off the datum the macro it underlies would be: `reify*` is the
+    `reify` of `java.lang.Object` plus its vector's names, a protocol's interface
+    (`protocolOfInterface`) standing for the protocol, and its methods; `deftype*` the
+    `deftype` of the tag's name over its field vector (each field's name unqualified --
+    extend-clj's syntax-quote spells `extend-clj.core/__extmap` -- its metadata kept) and its
+    `:implements` names, under the `what` "deftype*" no row check applies to. The type is the
+    literal class: a `:C%TYPE` over every field (`TypeDef.starDrops` >= 0;
+    `declareStarType` registers no `->Name`, which the form never defines), every method a
+    row -- so a record's expansion is the oracle's record method for method, its overrides
+    included, and the generated `valAt`, `assoc`, `without`, `seq`, `equiv`, `hasheq` ...
+    run as written -- `IRecord` making it `record?` and a record to the printer. Its
+    constructions (`(new T ...)`, `(T. ...)`, `T/new`) call its own defun over every field
+    (`ClojureTypeSpecials.constructor`, `->T%new`: `(T. ...)` of a row-made type still calls
+    `->T`), the oracle's shorter constructors appending their fills -- the trailing
+    `__meta`/`__extmap`/`__hash`/`__hasheq` (`Compiler`'s `altCtorDrops`) as nil, nil, 0, 0,
+    and all but the two hash caches -- and any other count is the oracle's compile-time
+    `No matching ctor found for class C`; with those fields `T/create` builds it from a map
+    (`->T%create`: each other field read and taken out, the rest the `__extmap`, nil when
+    empty). What the expansion calls that no class here has is the shipped internal
+    namespace `rontolisp.internal.records` (`records.clj`, loaded where such a call first
+    lowers): `APersistentMap/mapEquals`/`mapHash`/`mapHasheq`, `clojure.lang.RecordIterator.`
+    and the private `#'clojure.core/imap-cons` (a var whose root is its function); `(. x -f)`
+    reads the field like `(.-f x)`. Measured 2026-11-09 against clj 1.12.6: a
+    `defrecord-updatable` of two fields overriding `hashCode`, `hasheq`, `count` and `equiv`
+    and implementing a protocol prints the oracle's lines on all four backends (printing,
+    `=`, `hash`, `assoc`/`dissoc` keeping or dropping the record, `map->`, `conj`, `seq`,
+    `keys`/`vals`, `find`, metadata, `empty`'s refusal). Deviations: `T` resolves after a
+    bare `deftype*` without the oracle's `import`; a record made so is a deftype to every
+    verb, slower than a `defrecord`'s; an expansion where the program runs keeps a protocol
+    group's symbol as written (the expanders read the group's var through the kernel
+    `rontolisp.internal.types/protocol-var`: nil in the program, the lowering's `resolve` in the
+    macro-time image, so no run-time expansion reaches a lowering verb -- with `resolve` in the
+    expander the JVM corpus compiled as a host, `.kb/jvm-run-time-lowering.md`), which the
+    `deftype*`/`reify*` lowering takes as the protocol's name. Pins: clojure-spec
+    `core-macros-expand-to-the-oracles-forms-as-data` (its `reify`/`deftype`/`defrecord`
+    lines), `the-type-special-forms-define-what-deftype-defrecord-and-reify-expand-to` (both
+    oracle-identical, four backends). Pins: clojure-spec
     `core-macros-expand-to-the-oracles-forms-as-data`,
     `a-macros-var-root-is-its-function-of-form-env-and-args`,
     `let-star-loop-star-letfn-star-and-case-star-are-special-forms` (oracle-identical but the
@@ -5246,8 +5347,9 @@ checked against clj 1.12.6, 2026-10-08).
   `Runnable`, `IDeref`, `IMeta`, `IObj`, `Object`'s `toString`/`equals`/`hashCode`,
   `java.lang.CharSequence` (f27, below), `java.util.Comparator` (f58, 2026-10-13:
   `compare`, in the `Comparable` row's family, read by `sort`, `sort-by` and the
-  sorted `-by` constructors), and the collection interfaces. Any other interface of the jar (`CLOJURE_LANG`, its public list:
-  `IChunkedSeq`, `IRef` ...) is refused by name
+  sorted `-by` constructors), the collection interfaces, and since j26 the reference interfaces,
+  `IBlockingDeref`, the primitive `IFn`s and the type special form's markers (below). Any other interface of the jar (`CLOJURE_LANG`, its public list:
+  `IChunkedSeq`, `IDrop` ...) is refused by name
   (`X is not supported yet as an interface of reify`), a class the oracle's `only interfaces
   are supported, had: C`, an undotted unknown name its `Unable to resolve symbol` (`clojure.lang`
   is no default import), a dotted one `Unable to resolve classname`. Any other public host
@@ -5285,6 +5387,44 @@ checked against clj 1.12.6, 2026-10-08).
   `ClojureLibraryTest#aProgramStoringNoInterfaceRowSplicesTheVerbsWithoutTheirInterfaceArms`,
   `ClojureInteropTest#aDeftypeOrReifyReachesJavaAsAnImplementationOfItsInterfaces` (the
   `ThreadFactory` an executor calls).
+- **The primitive `IFn` interfaces** (j26, 2026-11-09; datascript's `defcomp`, a comparator
+  reify of `Comparator`, `IFn` and `IFn$OOL`): `clojure.lang.IFn$OOL` and the jar's other 357
+  (`IFn$` and one to five of `O`/`L`/`D`, not all `O`: `ClojureLangJar.isPrimitiveFn`) are
+  host interfaces no core verb reads, synthesized since no class loads
+  (`ClojureInterfaces.primitiveFn`): one `invokePrim` at the letters' count (the target
+  counted) in `Family.HOST_INTERFACE`, so `.invokePrim` reaches the row's method through
+  `%clojure-host-interface-method-p` and `instance?` the name through
+  `%clojure-host-interface-row-p`; a call of the value goes through its `IFn`'s `invoke`, as
+  the oracle's does. Before: `Unable to resolve classname: clojure.lang.IFn$OOL`. Pin:
+  clojure-spec `an-ifn-type-is-called-through-its-invoke-and-applied-through-its-apply-to` (its
+  `IFn$OOL` lines, oracle-identical on all four backends).
+- **The reference interfaces** (j26, 2026-11-09; extend-clj 0.1.0's `deftype-atom`, datascript's
+  `Conn`): `IReference` (`alterMeta`, `resetMeta`; an `IMeta`), `IRef` (`setValidator`,
+  `getValidator`, `getWatches`, `addWatch`, `removeWatch`; an `IDeref`), `IAtom` (`swap` of
+  two to five, `compareAndSet`, `reset`) and `IAtom2` (`swapVals` of two to five,
+  `resetVals`; an `IAtom`), read off clj 1.12.6 by reflection, in
+  `Family.REFERENCE_INTERFACE`. Where the value is no atom, `swap!`, `reset!`,
+  `compare-and-set!`, `swap-vals!` and `reset-vals!` (calls and values) call its method --
+  `ClojureStateLowering.withAtom`'s arm ahead of the cast refusal, the body's lowered
+  arguments copied into it (`copied`: no shared structure), `%clojure-iatom-swap` handing the
+  arguments past the second as one seq like the oracle's -- and so do the watch and
+  validator workers and `alter-meta!`/`reset-meta!`, an arm at each worker's head;
+  `set-validator!` answers nil (the method is void). `IBlockingDeref` (`deref` of three)
+  joins `DEREFABLE`, which the three-argument `deref` reads (datascript's `transact`
+  answers one). A method answering the wrong type where the oracle's interface declares a
+  primitive or a class (`compareAndSet`'s boolean, `resetMeta`'s map) is not cast: the
+  oracle's `ClassCastException` is the deviation. Pins: clojure-spec
+  `a-type-implementing-the-reference-interfaces-answers-the-atom-verbs` (oracle-identical,
+  four backends); extend-clj's `deftype-atom` verbatim ("Library probes").
+- **The interfaces the type special form names** (j26): `IType`, `IRecord`,
+  `IKeywordLookup` (`getLookupThunk`) and `ILookupThunk` (`get`), in `Family.MARKER`:
+  `instance?` and an instance call read them; a type implementing `IRecord` (a `deftype*` of
+  a record's expansion, "Macros") is `record?` -- the marker family's alias
+  `%clojure-is-record-type` -> `%clojure-record-p` keeps every other program's `record?` --
+  and prints as a record (`#ns.Name{...}`, the typed printer's arm). A `defrecord` naming
+  `IRecord` or `IKeywordLookup` is the oracle's `Duplicate interface name` (`RECORD_DIRECT`),
+  a `deftype` naming `IType` too (`DEFTYPE_DIRECT`); a row-made deftype answers `instance?`
+  of `IType` false (no row holds it: the deviation).
 - Parse (`ClojureProtocolLowering.typeBody`): the group heads first, then each method matched
   by name and count against its group's protocol, the interfaces with their supers
   (`ClojureInterfaces.closure`: `Indexed` a `Counted`, `IObj` an `IMeta`, `IReduce` an
@@ -5570,6 +5710,12 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   `ClassCastException`, args unevaluated (the oracle casts first); `clojure.core$NAME`
   of a core function (`isCoreFunctionClass`, the munged name) is the `:function` class
   keyword, what `class` answers for every fn (h09 would make each its own).
+- j26 (2026-11-09; datascript, persistent-sorted-set's `arrays` macros): `RT/assoc` of three,
+  `RT/aget`, `RT/alength`, `RT/aset`, `Util/hasheq` and `Util/equiv` are the core verbs they
+  back (`ClojureLangClasses.core`, over the lowered arguments), `Util/hashCombine` the
+  library's `%clojure-hash-combine-ints` over its two int-cast arguments; a record
+  expansion's `APersistentMap/mapEquals`, `mapHash`, `mapHasheq` and `RecordIterator.`
+  construction call `rontolisp.internal.records` ("Macros", the type special forms).
 - `clojure.lang.LineNumberingPushbackReader.` (j15, aero's `read-config`): the prelude's
   text pull stream over the inner reader pulling ONE character per piece
   (`%clojure-line-reader-pull`), so the counters see exactly what left the inner reader,

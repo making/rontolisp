@@ -236,11 +236,73 @@ final class ClojureStateLowering {
 	 */
 	static LispVal withAtom(ClojureLowering ctx, LispVal lowered, String op,
 			java.util.function.Function<LispVal, LispVal> body) {
+		return withAtom(ctx, lowered, op, body, null, null);
+	}
+
+	/**
+	 * {@link #withAtom}, where a value that is no atom but implements the reference
+	 * interface the {@code test} names answers through its own method: the {@code iface}
+	 * builder's call, the oracle's interface call (an arm of
+	 * {@link ClojureArms.Family#REFERENCE_INTERFACE}, so a program storing no such row
+	 * keeps the plain refusal). The builder runs after the body's, whose lowered
+	 * arguments it may copy ({@link #copied}).
+	 */
+	static LispVal withAtom(ClojureLowering ctx, LispVal lowered, String op,
+			java.util.function.Function<LispVal, LispVal> body, @Nullable String test,
+			java.util.function.@Nullable Function<LispVal, LispVal> iface) {
 		LispSymbol cell = ctx.freshTemp();
+		LispVal atom = body.apply(cell);
+		LispVal refusal = ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST_OF,
+				LispString.literal(op + " needs an atom"), cell);
+		if (test != null && iface != null) {
+			refusal = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(new LispSymbol(test), cell), iface.apply(cell), refusal);
+		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(cell, lowered))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isAtomForm(cell), body.apply(cell), ClojureRefusals
-					.refusal(ClojureRefusals.CLASS_CAST_OF, LispString.literal(op + " needs an atom"), cell)));
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), isAtomForm(cell), atom, refusal));
+	}
+
+	/**
+	 * A fresh copy of a lowered form's cons cells: the arguments an atom verb's body
+	 * lowered, handed to its reference-interface arm too, which must not share structure
+	 * with the body's.
+	 */
+	static LispVal copied(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return form;
+		}
+		List<LispVal> items = new ArrayList<>();
+		LispVal rest = cons;
+		while (rest instanceof LispCons cell) {
+			items.add(copied(cell.car()));
+			rest = cell.cdr();
+		}
+		LispVal out = rest;
+		for (int i = items.size() - 1; i >= 0; i--) {
+			out = new LispCons(items.get(i), out);
+		}
+		return out;
+	}
+
+	/** {@link #copied} of each form, as the cdr of a {@code list} call. */
+	private static LispVal copiedList(List<LispVal> forms) {
+		List<LispVal> out = new ArrayList<>();
+		for (LispVal form : forms) {
+			out.add(copied(form));
+		}
+		return ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), out);
+	}
+
+	/** {@code (swap! x f args...)} of a type implementing IAtom: its swap. */
+	static final LispSymbol IATOM_SWAP = new LispSymbol("RONTOLISP::%CLOJURE-IATOM-SWAP");
+
+	/** A reference verb of a type implementing its interface: the method by name. */
+	static final LispSymbol IATOM_CALL = new LispSymbol("RONTOLISP::%CLOJURE-IATOM-CALL");
+
+	/** The reference-interface arm of a method over its argument forms. */
+	private static LispVal ifaceCall(LispVal cell, String method, List<LispVal> args) {
+		return ClojureLowerUtil.list(IATOM_CALL, cell, LispString.literal(method), copiedList(args));
 	}
 
 	/**
@@ -284,12 +346,21 @@ final class ClojureStateLowering {
 		LispSymbol cell = ctx.freshTemp();
 		LispSymbol ms = ctx.freshTemp();
 		LispSymbol dflt = ctx.freshTemp();
+		// a type implementing IBlockingDeref answers through its deref of the timeout
+		// and the timeout value (an arm a program storing no such row sheds)
+		LispVal blocking = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.BLOCKING_DEREFABLE_P), cell),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"),
+						ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.ENTRY), cell,
+								LispString.literal("deref")),
+						cell, ms, dflt),
+				ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST_OF,
+						LispString.literal("deref with a timeout needs a future"), cell));
 		LispVal host = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(new LispSymbol(ClojureDispatchLowering.HOST_OBJECT_P), cell,
 						LispString.literal(HOST_FUTURE)),
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-HOST-FUTURE-GET-WITHIN"), cell, ms, dflt),
-				ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST_OF,
-						LispString.literal("deref with a timeout needs a future"), cell));
+				blocking);
 		LispVal promised = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureFutureLowering.promiseTest(cell),
 				ClojureLowerUtil.list(new LispSymbol(ClojureFutureLowering.PROMISE_GET_WITHIN), cell, ms, dflt), host);
 		// a rontolisp future (rontolisp.http-client's :async answer) waits through the
@@ -353,13 +424,17 @@ final class ClojureStateLowering {
 		LispVal loweredAtom = ctx.lower(items.get(1));
 		LispVal fun = items.get(2);
 		List<LispVal> rest = items.subList(3, items.size());
+		List<LispVal> lowered = new ArrayList<>();
 		return withAtom(ctx, loweredAtom, op, cell -> {
 			List<LispVal> tail = new ArrayList<>();
 			for (LispVal arg : rest) {
 				tail.add(ctx.lower(arg));
 			}
 			if (atomic(op)) {
-				return ClojureLowerUtil.list(ATOM_SWAP, cell, ClojureBindingLowering.fnValue(ctx, fun),
+				LispVal f = ClojureBindingLowering.fnValue(ctx, fun);
+				lowered.add(f);
+				lowered.addAll(tail);
+				return ClojureLowerUtil.list(ATOM_SWAP, cell, f,
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), tail));
 			}
 			LispVal spread = ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), atomGet(cell),
@@ -371,7 +446,8 @@ final class ClojureStateLowering {
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("apply"),
 										ClojureBindingLowering.fnValue(ctx, fun), spread)))),
 						atomPut(cell, next), next);
-		});
+		}, atomic(op) ? ClojureInterfaces.IATOM_P : null, cell -> ClojureLowerUtil.list(IATOM_SWAP, cell,
+				LispString.literal("swap"), copied(lowered.get(0)), copiedList(lowered.subList(1, lowered.size()))));
 	}
 
 	static LispVal resetOf(ClojureLowering ctx, List<LispVal> items) {
@@ -385,7 +461,7 @@ final class ClojureStateLowering {
 			LispSymbol next = ctx.freshTemp();
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(next, value))), atomPut(cell, next), next);
-		});
+		}, atomic(op) ? ClojureInterfaces.IATOM_P : null, cell -> ifaceCall(cell, "reset", List.of(value)));
 	}
 
 	/**
@@ -406,7 +482,7 @@ final class ClojureStateLowering {
 					ClojureLowerUtil
 						.list(List.of(ClojureLowerUtil.list(expected, wanted), ClojureLowerUtil.list(next, value))),
 					compareAndSetBuild(ctx, cell, expected, next));
-		});
+		}, ClojureInterfaces.IATOM_P, cell -> ifaceCall(cell, "compareAndSet", List.of(wanted, value)));
 	}
 
 	/**
@@ -592,8 +668,12 @@ final class ClojureStateLowering {
 		LispVal loweredAtom = ctx.lower(items.get(1));
 		LispVal second = swap ? ClojureBindingLowering.fnValue(ctx, items.get(2)) : ctx.lower(items.get(2));
 		LispVal rest = ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), ctx.lowers(items, 3));
-		return withAtom(ctx, loweredAtom, op, cell -> swap ? ClojureLowerUtil.list(ATOM_SWAP_VALS, cell, second, rest)
-				: ClojureLowerUtil.list(ATOM_RESET_VALS, cell, second));
+		return withAtom(ctx, loweredAtom, op,
+				cell -> swap ? ClojureLowerUtil.list(ATOM_SWAP_VALS, cell, second, rest)
+						: ClojureLowerUtil.list(ATOM_RESET_VALS, cell, second),
+				ClojureInterfaces.IATOM2_P,
+				cell -> swap ? ClojureLowerUtil.list(IATOM_SWAP, cell, LispString.literal("swapVals"), copied(second),
+						copied(rest)) : ifaceCall(cell, "resetVals", List.of(second)));
 	}
 
 	/** {@code swap-vals!}/{@code reset-vals!} as a value. */
@@ -602,12 +682,15 @@ final class ClojureStateLowering {
 		LispSymbol arg = new LispSymbol(ClojureLowering.mangle("vals-arg"));
 		if (op.equals("reset-vals!")) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(cell, arg)),
-					withAtom(ctx, cell, op, bound -> ClojureLowerUtil.list(ATOM_RESET_VALS, bound, arg)));
+					withAtom(ctx, cell, op, bound -> ClojureLowerUtil.list(ATOM_RESET_VALS, bound, arg),
+							ClojureInterfaces.IATOM2_P, bound -> ifaceCall(bound, "resetVals", List.of(arg))));
 		}
 		LispSymbol rest = new LispSymbol(ClojureLowering.mangle("vals-rest"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(cell, arg, ClojureLowering.AMPERSAND_REST, rest)),
-				withAtom(ctx, cell, op, bound -> ClojureLowerUtil.list(ATOM_SWAP_VALS, bound, arg, rest)));
+				withAtom(ctx, cell, op, bound -> ClojureLowerUtil.list(ATOM_SWAP_VALS, bound, arg, rest),
+						ClojureInterfaces.IATOM2_P,
+						bound -> ClojureLowerUtil.list(IATOM_SWAP, bound, LispString.literal("swapVals"), arg, rest)));
 	}
 
 	/**
@@ -720,7 +803,8 @@ final class ClojureStateLowering {
 						atomPut(cell, next), next);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(cell, fun, ClojureLowering.AMPERSAND_REST, rest)),
-				withAtom(ctx, cell, "swap!", ignored -> update));
+				withAtom(ctx, cell, "swap!", ignored -> update, atomic(op) ? ClojureInterfaces.IATOM_P : null,
+						bound -> ClojureLowerUtil.list(IATOM_SWAP, bound, LispString.literal("swap"), fun, rest)));
 	}
 
 	/**
@@ -732,7 +816,9 @@ final class ClojureStateLowering {
 		LispSymbol value = new LispSymbol(ClojureLowering.mangle("reset-value"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(cell, value)),
 				withAtom(ctx, cell, "reset!",
-						bound -> atomic(op) ? ClojureLowerUtil.list(ATOM_RESET, bound, value) : atomPut(bound, value)));
+						bound -> atomic(op) ? ClojureLowerUtil.list(ATOM_RESET, bound, value) : atomPut(bound, value),
+						atomic(op) ? ClojureInterfaces.IATOM_P : null,
+						bound -> ifaceCall(bound, "reset", List.of(value))));
 	}
 
 	/**
@@ -813,7 +899,8 @@ final class ClojureStateLowering {
 		LispSymbol value = new LispSymbol(ClojureLowering.mangle("cas-value"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(List.of(cell, wanted, value)),
-				withAtom(ctx, cell, "compare-and-set!", bound -> compareAndSetBuild(ctx, bound, wanted, value)));
+				withAtom(ctx, cell, "compare-and-set!", bound -> compareAndSetBuild(ctx, bound, wanted, value),
+						ClojureInterfaces.IATOM_P, bound -> ifaceCall(bound, "compareAndSet", List.of(wanted, value))));
 	}
 
 	// state: refs and agents over the atom cell (the spliced helpers of clojure.lisp,

@@ -493,7 +493,14 @@ methods' rows belong to the form, stored once in each protocol's table (the
 oracle's one class per form), and each value carries the methods its evaluation
 made. Constructors are mangled functions:
 `->Type` positionally, `map->Type` from a map (records only -- the oracle defines
-none for deftypes); `(Type. ...)`/`(new Type ...)` rewrite to `->Type`.
+none for deftypes); `(Type. ...)`/`(new Type ...)` rewrite to `->Type`. The special
+forms these macros expand to lower too ([macroexpand-1](reference/macroexpand-1.md)
+answers the oracle's expansions): `reify*` over its interface vector and methods, and
+`deftype*` over every field it names, its `:implements` and every method -- a record's
+expansion's own map methods included, so a macro may rewrite the expansion and the type
+answers through its methods, `record?` and printing as a record through `IRecord`. Its
+constructions call its own constructor (the oracle's shorter ones fill `__meta`,
+`__extmap` and the hash caches) and `Type/create` builds one from a map.
 `instance?` of a record/deftype name tests the tag; `(.-field x)` reads the field
 table (missing fields signal, like the oracle). Inline method bodies see the
 fields as locals (an explicit parameter shadows its field, like the oracle);

@@ -608,7 +608,8 @@ Clojure プログラムの `deps.edn` の依存のうちクラスを含むもの
 なります。ここにない言語に対してコンパイルされた依存の Java クラス（`clojure.lang`
 に対する Clojure ライブラリ自身のクラス、たとえば `reitit.Trie`）への `java:`
 呼び出しは、不足クラスを名指しする `Cannot link class C: missing class M`
-で失敗します。不足クラスを静的イニシャライザが必要とするクラス（その型の静的
+で失敗します。スーパークラスやインターフェースが不足クラスであるクラス
+（persistent-sorted-set の `clojure.lang.APersistentSet` を継承する `PersistentSortedSet`）も同様です。不足クラスを静的イニシャライザが必要とするクラス（その型の静的
 フィールドを持つもの、たとえば `sci.impl.FISupport`）も同じ拒否になります。その
 `ExceptionInInitializerError` が不足クラスを運ぶため、構築・呼び出し・静的
 フィールド読みのいずれも同じ拒否を答え、本当に壊れたイニシャライザ（一つも不足
