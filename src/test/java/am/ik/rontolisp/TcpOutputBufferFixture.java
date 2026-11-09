@@ -12,13 +12,13 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * A connected socket's output buffer ({@code .kb/tcp-sockets.md}, "A connected socket
- * BUFFERS its writes"), against a JDK peer that counts its reads, on every backend with
- * sockets: the interpreter, the JVM, the WASM component and a {@code --native}
- * executable. A line written a byte at a time arrives in ONE read -- written through,
- * each byte after the first waited for the peer's delayed ACK under the host's Nagle.
- * Then a byte, a write past the buffer (sent as it is, after the byte), and a line the
- * program never flushes, which its end sends.
+ * A connected socket's output buffer ({@code .kb/tcp-sockets.md}, "Per-backend
+ * mechanics"), against a JDK peer that counts its reads, on every backend with sockets:
+ * the interpreter, the JVM, the WASM component and a {@code --native} executable. A line
+ * written a byte at a time arrives in ONE read -- written through, each byte after the
+ * first waited for the peer's delayed ACK under the host's Nagle. Then a byte, a write
+ * past the buffer (sent as it is, after the byte), and a line the program never flushes,
+ * which its end sends.
  */
 public final class TcpOutputBufferFixture implements AutoCloseable {
 
