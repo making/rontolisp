@@ -444,7 +444,7 @@ class ClojureArmsTest {
 	}
 
 	@Test
-	void theReplyReaderFamilyIsMadeByAReaderOpenedAndTakesItsDefinitionsWithItsArms() {
+	void theReaderFamiliesAreMadeByTheirReadersAndTakeTheirDefinitionsWithTheirArms() {
 		// a reader over a fetched reply is opened by a kernel opening a reader over a
 		// byte stream; where none is, the reads' arms fold to the decode at once, and the
 		// family's own definitions go with them -- they name the prelude's Gray class
@@ -469,6 +469,15 @@ class ClojureArmsTest {
 		assertThat(ClojureArms.madeBeside(ClojureArms.Family.REPLY_READER, java.util.Set.of(ClojureArms.Family.FETCH)))
 			.isTrue();
 		assertThat(ClojureArms.madeBeside(ClojureArms.Family.FETCH, java.util.Set.of())).isTrue();
+		// a line-numbering reader likewise, made by its construction alone
+		List<LispVal> lines = read(
+				"(if (or (rontolisp::%clojure-reply-reader-p s) (rontolisp::%clojure-line-reader-p s)) (closed s) s)"
+						+ " (defun rontolisp::%clojure-line-reader-new (in) (rontolisp::%make-text-pull-stream in nil))");
+		assertThat(ClojureArms.scan(lines, ClojureArms.Family.LINE_READER).strips()).isTrue();
+		assertThat(ClojureArms.strip(lines, ClojureArms.Family.LINE_READER).stream().map(LispVal::print))
+			.containsExactly("(IF (RONTOLISP::%CLOJURE-REPLY-READER-P S) (CLOSED S) S)");
+		assertThat(ClojureArms.scan(read("(rontolisp::%clojure-line-reader-new r)"), ClojureArms.Family.LINE_READER)
+			.builds()).isTrue();
 	}
 
 	@Test

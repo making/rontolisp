@@ -7131,6 +7131,38 @@ cases:
       (a b)
       "s\nt"
       "ab\n"
+  - name: a-line-numbering-reader-counts-what-left-the-reader-it-reads
+    # clojure.lang.LineNumberingPushbackReader over a reader (aero's read-config):
+    # read, clojure.edn/read, .read, .readLine and .unread over it, its line and
+    # column counting what left the reader it reads -- a datum's delimiter too,
+    # which the oracle reads and unreads -- the end once after a character ending
+    # no line, CR LF one line end. A close closes it, a read after it is the
+    # oracle's IOException. Runs on every backend. Oracle-identical (clj 1.12.6,
+    # 2026-11-09).
+    source: |
+      (require 'clojure.edn)
+      (defn lnr-of [s] (clojure.lang.LineNumberingPushbackReader. (java.io.StringReader. s)))
+      (println (pr-str (let [r (lnr-of "{:a 1}\n:b")] [(read r) (.getLineNumber r) (read r) (.getLineNumber r) (read r false :eof) (.getLineNumber r)])))
+      (println (pr-str (let [r (lnr-of ":a\n\n:b\n")] [(read r) (.getLineNumber r) (read r) (.getLineNumber r)])))
+      (println (pr-str (let [r (lnr-of "ab\ncd")] [(.getColumnNumber r) (.read r) (.getColumnNumber r) (.readLine r) (.getLineNumber r) (.atLineStart r) (.readLine r) (.getLineNumber r) (.readLine r)])))
+      (println (pr-str (let [r (lnr-of "ab")] [(.read r) (do (.unread r 97) (.read r)) (.read r) (.read r)])))
+      (println (pr-str (let [r (lnr-of "x\r\ny\nz")] [(.readLine r) (.getLineNumber r) (.readLine r) (.getLineNumber r)])))
+      (println (pr-str (let [r (lnr-of "1")] [(instance? java.io.Reader r) (instance? clojure.lang.LineNumberingPushbackReader r)])))
+      (println (pr-str (let [r (lnr-of "{:a")] (try (read r) (catch Exception e (.getLineNumber r))))))
+      (println (pr-str (with-open [r (lnr-of "1 2")] (read r))))
+      (println (pr-str (let [r (lnr-of "1")] (.close r) (try (.read r) (catch java.io.IOException e (ex-message e))))))
+      (println (pr-str (let [r (lnr-of "{:x #foo 1}\n:z")] [(clojure.edn/read {:readers {'foo inc}} r) (.getLineNumber r) (clojure.edn/read r)])))
+    expected: |
+      [{:a 1} 1 :b 3 :eof 3]
+      [:a 2 :b 4]
+      [1 97 2 "b" 2 true "cd" 3 nil]
+      [97 97 98 -1]
+      ["x" 2 "y" 3]
+      [true true]
+      2
+      1
+      "Stream closed"
+      [{:x 2} 1 :z]
   - name: slurp-closes-the-stream-it-reads
     # slurp of an open reader closes it, like the oracle's with-open (clj 1.12.6,
     # 2026-10-08): every later read -- .read, .readLine, slurp, line-seq,
@@ -15493,8 +15525,14 @@ cases:
     # members; RT/nextID counts up; BigInt/fromBigInteger and
     # Numbers/reduceBigInt keep the integer, and an integer answers BigInteger's
     # negate and bitLength (tools.reader's readers). A clojure.lang class of the
-    # oracle's jar is a dispatch value no value here answers. Runs on every
-    # backend. Oracle-identical (clj 1.12.6, 2026-10-13; the rest 2026-10-29).
+    # oracle's jar is a dispatch value no value here answers, and instance? of one
+    # no value here is answers false. createAsIfByAssoc and the PersistentArrayMap
+    # constructor build the map, a map's keyIterator/valIterator step its keys and
+    # vals (specter), Compiler/CHAR_MAP is the munge table, in a macro too (schema),
+    # a dotted class called is the call-time ClassCastException and
+    # clojure.core$long the class of long's value (datascript). Runs on every
+    # backend. Oracle-identical (clj 1.12.6, 2026-10-13; the rest 2026-10-29 and
+    # 2026-11-09).
     source: |
       (println (pr-str (clojure.lang.RT/map (object-array [:a 1 :b 2]))))
       (println (pr-str (try (clojure.lang.RT/map (object-array [:a 1 :a 2])) (catch IllegalArgumentException e :dup))))
@@ -15517,6 +15555,17 @@ cases:
       (println (pr-str (try (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :a])) (catch IllegalArgumentException e :dup))))
       (println (pr-str (try (clojure.lang.PersistentArrayMap/createWithCheck nil) (catch NullPointerException e :nil))))
       (println (pr-str (clojure.lang.PersistentArrayMap/createWithCheck (object-array [:a 1 :b 2 :c 3]))))
+      (println (pr-str [(clojure.lang.PersistentArrayMap/createAsIfByAssoc (object-array [:a 1 :b 2 :a 3]))
+                        (clojure.lang.PersistentArrayMap. (object-array [:a 1]))]))
+      (println (pr-str (let [m {:a 1 :b 2} k (.keyIterator m) v (.valIterator m)]
+                         [(.next k) (.next v) (.hasNext k) (.next k) (.next v) (.hasNext v)])))
+      (println (pr-str [(instance? clojure.lang.ChunkedCons 1) (instance? clojure.lang.PersistentStructMap {:a 1})]))
+      (defmacro treader-char-map [] clojure.lang.Compiler/CHAR_MAP)
+      (println (pr-str [(get clojure.lang.Compiler/CHAR_MAP \-) (count (treader-char-map)) (clojure.lang.Compiler/munge "a-b?")]))
+      (println (pr-str clojure.lang.Compiler/CHAR_MAP))
+      (defn treader-entry [k v] (clojure.lang.MapEntry k v))
+      (println (pr-str (try (treader-entry 1 2) (catch ClassCastException e (ex-message e)))))
+      (println (pr-str [(= clojure.core$long (class long)) (= clojure.core$_PLUS_ (class +))]))
     expected: |
       {:a 1, :b 2}
       :dup
@@ -15536,6 +15585,13 @@ cases:
       :dup
       :nil
       {:a 1, :b 2, :c 3}
+      [{:a 3, :b 2} {:a 1}]
+      [:a 1 true :b 2 false]
+      [false false]
+      ["_" 24 "a_b_QMARK_"]
+      {\@ "_CIRCA_", \! "_BANG_", \" "_DOUBLEQUOTE_", \# "_SHARP_", \% "_PERCENT_", \& "_AMPERSAND_", \' "_SINGLEQUOTE_", \* "_STAR_", \+ "_PLUS_", \- "_", \/ "_SLASH_", \: "_COLON_", \[ "_LBRACK_", \{ "_LBRACE_", \< "_LT_", \\ "_BSLASH_", \| "_BAR_", \= "_EQ_", \] "_RBRACK_", \} "_RBRACE_", \> "_GT_", \^ "_CARET_", \~ "_TILDE_", \? "_QMARK_"}
+      "class java.lang.Class cannot be cast to class clojure.lang.IFn (java.lang.Class is in module java.base of loader 'bootstrap'; clojure.lang.IFn is in unnamed module of loader 'app')"
+      [true true]
   - name: typed-array-constructors-coerce-like-the-oracles
     # int/long/short narrow (a double saturating, NaN 0), double/float widen,
     # char takes characters, boolean booleans; of a size, or of a size and an

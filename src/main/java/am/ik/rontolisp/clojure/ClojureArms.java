@@ -1174,6 +1174,19 @@ public final class ClojureArms {
 				ClojureIoLowering.REPLY_PREFIX, FETCH),
 
 		/**
+		 * A {@code clojure.lang.LineNumberingPushbackReader}, whose line and column a
+		 * method call reads, whose {@code unread} and {@code close} are its own and whose
+		 * closed reads are the oracle's {@code IOException}
+		 * ({@link ClojureIoLowering#LINE_READER_P}): only its construction makes one
+		 * ({@link ClojureIoLowering#LINE_READER_NEW}). It is the prelude's text pull
+		 * stream, a Gray class, so its definitions are the family's own
+		 * ({@link ClojureIoLowering#LINE_READER_PREFIX}) and a program building none
+		 * compiles as before it existed.
+		 */
+		LINE_READER("line-reader", Set.of(ClojureIoLowering.LINE_READER_P), Set.of(ClojureIoLowering.LINE_READER_NEW),
+				ClojureIoLowering.LINE_READER_PREFIX),
+
+		/**
 		 * A {@code jar:} URL whose entry is read from its jar when the program runs,
 		 * which {@code clojure.java.io}'s reads ({@code slurp}, the readers and byte
 		 * streams, {@code .openStream}) and {@code ring.util.response}'s directory test

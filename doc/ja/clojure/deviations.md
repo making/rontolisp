@@ -584,8 +584,9 @@
   `clojure.lang.PersistentList` なので、`(map inc [1])` について `IPersistentList` と `Counted` は
   `true`、`LazySeq` は `false` です（オラクルでは `LazySeq`）。2要素のベクタはすべて
   `java.util.Map$Entry` です（`map-entry?`）。整数は `(int 1)` も含めて `Long` で、`Integer` には
-  なりません。どの種類の値もインスタンスにならない `clojure.lang` のクラス
-  （`clojure.lang.PersistentQueue`）は未知の名前になります（オラクルは `false`）。プロトコル
+  なりません。オラクルの jar にあり、どの種類の値もインスタンスにならない `clojure.lang` の
+  クラスは `false` を返します。`(cons 1 '(2))` と `(seq (object-array [1]))` はここではリストなので、
+  それらについても `Cons` と `ArraySeq` は `false` です（オラクルは `true`）。プロトコル
   自身の名前（var である `P`）は未知の名前になります（オラクルは `ClassCastException`）。
   プロトコルのインタフェース（`user.P`）はオラクルと同じに答えます。
   `class` が返したクラスの値は `class` が区別するものだけを区別するので、
@@ -594,6 +595,12 @@
   `(instance? (class #inst "2020") ts)` は `false` です。キーワードは `class` が返すクラスの
   キーワードとして扱うので、var 経由の `(instance? :a x)` は `false` になります（オラクルは
   `ClassCastException`）。その例外のメッセージにモジュールの末尾は付きません。
+- `clojure.core$long`（コア関数を munge した任意の `clojure.core$` 名）は、ここで `class` が
+  すべての関数について返すクラスなので、`(class inc)` とも等しくなります。同じキーを2度持つ
+  `(clojure.lang.PersistentArrayMap. array)` は後の値の1エントリだけを持ちます（オラクルの
+  マップは両方を持ちます）。`clojure.lang.LineNumberingPushbackReader` の `.unread` は、渡された
+  文字によらず直前の読み取りが返した文字を戻します。`.readLine` は改行（LF）だけで行を区切ります
+  （単独の CR も `.getLineNumber` では行末として数えます）。
 - `reduce` と `reduce-kv`（とその上に作られた動詞）が `clojure.core.protocols/CollReduce` と
   `IKVReduce` を参照するのは record・deftype・`reify` に対してだけです。どちらかを `nil`、
   `Object`、コアの種類へ拡張したものには `coll-reduce` や `kv-reduce` を直接呼んで届きます。

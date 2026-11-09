@@ -390,6 +390,11 @@ final class ClojureDispatchLowering {
 		if (!streams.isEmpty()) {
 			arms.add(streamArm(streams));
 		}
+		if (streams.contains(ClojureInteropLowering.LINE_NUMBERING_READER)) {
+			// a line-numbering reader, a Gray stream: an arm a program building none
+			// sheds (ClojureArms.Family.LINE_READER)
+			arms.add(runtime(Use.VARIABLE, ClojureIoLowering.LINE_READER_P));
+		}
 		for (String throwable : ClojureValueClasses.throwablesImplementing(fqn)) {
 			List<String> throwableChain = ClojureThrowables.chainOf(throwable);
 			if (throwableChain != null) {
@@ -423,10 +428,11 @@ final class ClojureDispatchLowering {
 					v -> ClojureLowerUtil.list(new LispSymbol(HOST_OBJECT_P), v, LispString.literal(fqn))));
 		}
 		if (arms.isEmpty()) {
-			if (!loads && !fqn.equals(MULTI_FN)) {
+			if (!loads && !ClojureLangJar.holds(fqn)) {
 				throw new LispReadException("unknown name: " + name);
 			}
-			// a class no value here has (Integer: an int is a Long)
+			// a class no value here has (Integer: an int is a Long; a clojure.lang
+			// class of the oracle's jar no kind here is, Cons or ChunkedCons)
 			return raw ? ClojureLowering.NIL_CONST
 					: ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), lowered, ctx.falseVariable);
 		}
@@ -458,15 +464,6 @@ final class ClojureDispatchLowering {
 
 	/** {@code instance?}'s host arm ({@code clojure.lisp}). */
 	static final String HOST_OBJECT_P = "RONTOLISP::%CLOJURE-HOST-OBJECT-P";
-
-	/**
-	 * {@code clojure.lang.MultiFn}, which {@code instance?} answers false for on every
-	 * backend: a multimethod here is a function, never a {@code MultiFn} instance (even
-	 * where a host loads the class, which none here does), so the class test stays false
-	 * instead of refusing the name. clojure.test.check asks exactly this to detect a
-	 * rebound {@code report}.
-	 */
-	static final String MULTI_FN = "clojure.lang.MultiFn";
 
 	/**
 	 * How an arm reads the value: once, several times (a variable or a constant then), or
@@ -675,6 +672,10 @@ final class ClojureDispatchLowering {
 		// a stream answers the host class its printer names, as a keyword like every
 		// kind: an arm a program making no stream sheds (ClojureArms.Family.STREAM)
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureInteropLowering.STREAM_P), one),
+				streamClassKeyword(one)));
+		// a line-numbering reader, a Gray stream, answers its class's keyword: an arm a
+		// program building none sheds (ClojureArms.Family.LINE_READER)
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.LINE_READER_P), one),
 				streamClassKeyword(one)));
 		// a namespace answers its class's keyword: an arm a program making no namespace
 		// sheds (ClojureArms.Family.NAMESPACE)

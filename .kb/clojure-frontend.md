@@ -4052,7 +4052,7 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   `a-reader-over-a-streamed-reply-reads-as-it-arrives` (`/held?<key>` holds the rest of its
   reply until `/release?<key>`, the key the leg's name, `@LEG@`), `a-reply-is-text-in-the-oracles-decoding`
   (`FetchSpecE2eTest`'s four legs, oracle-identical);
-  `ClojureArmsTest#theReplyReaderFamilyIsMadeByAReaderOpenedAndTakesItsDefinitionsWithItsArms`,
+  `ClojureArmsTest#theReaderFamiliesAreMadeByTheirReadersAndTakeTheirDefinitionsWithTheirArms`,
   `LispPreludeLibraryTest#aTextPullStreamPullsThePieceAReadNeedsAndReadsLinesAcrossPieces`;
   `ClojureHttpUrlsTest` (the gate's positions and non-positions, the
   require, a session, the fetch arm's fold, the refusal of a computed URL, the reads on the
@@ -5517,6 +5517,35 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   (tools.reader's number, map, set and list readers and its syntax-quote gensyms); pin:
   clojure-spec `create-with-check-builds-checking-duplicate-keys` (oracle-identical, four
   backends).
+- j15 (2026-11-09; aero, schema, specter, datascript), same pin:
+  `PersistentArrayMap/createAsIfByAssoc` and the `PersistentArrayMap.` constructor are one
+  build, `ClojureLangClasses.arrayMap` (`apply hash-map`: a later duplicate wins, where the
+  oracle's constructor keeps both); `Compiler/munge` is `munge`; `Compiler/CHAR_MAP` a
+  constant map in the oracle's walk order (`CHAR_MAP_ORDER`), so a macro answering it
+  (schema's `char-map`) expands to the literal; `.keyIterator`/`.valIterator` of a map are
+  seq iterators over `keys`/`vals` (`ClojureValueMethodLowering` rows). `instance?` of a
+  class of the jar (`ClojureLangJar`) no kind is answers false instead of `unknown name`
+  (`Cons`/`ArraySeq` too: those values are lists here); a dotted class in call position
+  (`ClojureValueClasses.isCalledClass`) lowers to the oracle's call-time
+  `ClassCastException`, args unevaluated (the oracle casts first); `clojure.core$NAME`
+  of a core function (`isCoreFunctionClass`, the munged name) is the `:function` class
+  keyword, what `class` answers for every fn (h09 would make each its own).
+- `clojure.lang.LineNumberingPushbackReader.` (j15, aero's `read-config`): the prelude's
+  text pull stream over the inner reader pulling ONE character per piece
+  (`%clojure-line-reader-pull`), so the counters see exactly what left the inner reader,
+  which is what the oracle's `LineNumberReader` counts (a peeked delimiter is one the
+  oracle read and unread). Line: LF, CR, CR LF once, the end once after a non-terminator
+  (not of an empty stream) -- JDK 25's rule, measured. Column: the pulled count, minus the
+  character in hand. State in an eq table (never removed: a closed reader must still
+  answer the IOException arm of `%clojure-open-reader`). Family `LINE_READER` (producer
+  `%clojure-line-reader-new`, everything `%clojure-line-reader-` owned) because the text
+  pull stream is a Gray class; arms: `%clojure-open-reader`, the printer, `str`,
+  `%clojure-stream-class`/`-string`, `%clojure-class-name-of`, `class`, `instance?` of a
+  stream class, and `streamMethod`'s `getLineNumber`/`getColumnNumber`/`atLineStart`/
+  `unread`/`close` (`ClojureIoLowering.LINE_READER_METHODS`). aero 1.1.6's probe runs with
+  its `LineNumberingPushbackReader` line verbatim (interpreter, JVM class). Pin: clojure-spec
+  `a-line-numbering-reader-counts-what-left-the-reader-it-reads` (oracle-identical, four
+  backends), `ClojureArmsTest#theReaderFamiliesAreMadeByTheirReadersAndTakeTheirDefinitionsWithTheirArms`.
 - `java.util` default methods (`getOrDefault`, `forEach`, `stream` ...) are declared
   (`HostInterface.defaults`) but stored only when the body defines them; an instance call of a
   method only defaults declare goes through `%clojure-default-method`, refusing by name when

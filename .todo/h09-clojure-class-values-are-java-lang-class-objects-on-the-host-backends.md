@@ -58,4 +58,4 @@ protocol, so `instance?`, `isa?` and `print-method` read the types whose body im
 -- what a generated interface would replace.
 
 Related items from the same round: `.todo/j13` (a record name as a value, done 2026-11-09), `.todo/j15`
-(`clojure.core$NAME`), `.todo/j20` (a class value inside a macro's expansion).
+(`clojure.core$NAME`, done 2026-11-09: every one is the `:function` class keyword, which a class per function would replace), `.todo/j20` (a class value inside a macro's expansion).

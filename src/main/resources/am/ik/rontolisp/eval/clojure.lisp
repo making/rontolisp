@@ -934,9 +934,11 @@
 (defun rontolisp::%clojure-open-reader (stream)
   "STREAM while it is open; a closed one is the oracle's IOException, which a
    closed Java reader answers to every read."
-  ;; a reader over a fetched reply is a Gray stream, which open-stream-p answers
-  ;; true for, closed or not: an arm a program making no such reader folds
-  (if (rontolisp::%clojure-reply-reader-p stream)
+  ;; a reader over a fetched reply and a line-numbering reader are Gray streams,
+  ;; which open-stream-p answers true for, closed or not: arms a program making
+  ;; no such reader folds
+  (if (or (rontolisp::%clojure-reply-reader-p stream)
+          (rontolisp::%clojure-line-reader-p stream))
       (if (rontolisp::%text-pull-stream-closed-p stream)
           (rontolisp::%clojure-io-exception "Stream closed")
           stream)
@@ -977,25 +979,31 @@
 (defun rontolisp::%clojure-stream-class (x)
   "The host class of the oracle's stream of stream X's kind: a string input
    stream is with-in-str's *in*, a file stream clojure.java.io/reader's."
-  (let ((kind (%obj-ref x 1)))
-    (cond ((equal kind :standard-output) "java.io.OutputStreamWriter")
-          ((equal kind :standard) "java.io.PrintWriter")
-          ((equal kind :string-output) "java.io.StringWriter")
-          ((or (equal kind :standard-input) (equal kind :string-input))
-           "clojure.lang.LineNumberingPushbackReader")
-          ((output-stream-p x) "java.io.BufferedWriter")
-          (t "java.io.BufferedReader"))))
+  ;; a line-numbering reader is a Gray stream: an arm a program building none
+  ;; folds
+  (if (rontolisp::%clojure-line-reader-p x)
+      "clojure.lang.LineNumberingPushbackReader"
+      (let ((kind (%obj-ref x 1)))
+        (cond ((equal kind :standard-output) "java.io.OutputStreamWriter")
+              ((equal kind :standard) "java.io.PrintWriter")
+              ((equal kind :string-output) "java.io.StringWriter")
+              ((or (equal kind :standard-input) (equal kind :string-input))
+               "clojure.lang.LineNumberingPushbackReader")
+              ((output-stream-p x) "java.io.BufferedWriter")
+              (t "java.io.BufferedReader")))))
 
 (defun rontolisp::%clojure-stream-string (x)
   "Stream X's toString: a StringWriter's text so far, left in place (what
    get-output-stream-string answers and clears is written straight back), any
    other stream its host class name -- the oracle's Class@hash without the
    hash."
-  (if (equal (%obj-ref x 1) :string-output)
-      (let ((text (get-output-stream-string x)))
-        (write-string text x)
-        text)
-      (rontolisp::%clojure-stream-class x)))
+  (if (rontolisp::%clojure-line-reader-p x)
+      (rontolisp::%clojure-stream-class x)
+      (if (equal (%obj-ref x 1) :string-output)
+          (let ((text (get-output-stream-string x)))
+            (write-string text x)
+            text)
+          (rontolisp::%clojure-stream-class x))))
 
 (defun rontolisp::%clojure-string-output-p (x)
   "Whether X is a string output stream: a java.io.StringWriter,
@@ -1237,7 +1245,8 @@
            (rontolisp::%clojure-write-nested (car rest) nil-replacement readable
                                              stream labels))
          (write-char #\) stream))
-        ((rontolisp::%clojure-stream-p x)
+        ((or (rontolisp::%clojure-stream-p x)
+             (rontolisp::%clojure-line-reader-p x))
          (rontolisp::%clojure-write-stream x readable stream))
         ((functionp x) (write-string "#<procedure>" stream))
         ((rontolisp::%clojure-host-seqable-p x)
@@ -1334,7 +1343,8 @@
                ;; a delay's toString, its class name (the hash left out): an arm
                ;; a program making none folds
                ((rontolisp::%clojure-delay-p x) "clojure.lang.Delay")
-               ((rontolisp::%clojure-stream-p x)
+               ((or (rontolisp::%clojure-stream-p x)
+                    (rontolisp::%clojure-line-reader-p x))
                 (rontolisp::%clojure-stream-string x))
                ((rontolisp::%clojure-re-pattern-p x)
                 (rontolisp::%clojure-re-pat-source x))
@@ -2560,7 +2570,8 @@
    ((or (eq x t) (eq x rontolisp::%clojure-false)) "java.lang.Boolean")
    ((functionp x) "clojure.lang.AFunction")
    ((rontolisp::%clojure-io-p x) (rontolisp::%clojure-io-class-name x))
-   ((rontolisp::%clojure-stream-p x) (rontolisp::%clojure-stream-class x))
+   ((or (rontolisp::%clojure-stream-p x) (rontolisp::%clojure-line-reader-p x))
+    (rontolisp::%clojure-stream-class x))
    ((rontolisp::%clojure-keyword-p x) "clojure.lang.Keyword")
    ((rontolisp::%clojure-set-p x) "clojure.lang.PersistentHashSet")
    ((rontolisp::%clojure-sorted-map-p x) "clojure.lang.PersistentTreeMap")
@@ -33059,6 +33070,107 @@
                (rontolisp::%clojure-make-lazy
                 (lambda () (rontolisp::%clojure-reply-lines r close)))))
           (rontolisp::%clojure-make-lazy (lambda () (cons line more)))))))
+
+;;;; Line-numbering readers
+;;;;
+;;;; (clojure.lang.LineNumberingPushbackReader. r) is the prelude's text pull
+;;;; stream pulling R one character at a time, so it counts what has left R
+;;;; the way the oracle's LineNumberReader counts it: a line feed, a carriage
+;;;; return (and no line feed right after one), and the end once, after a
+;;;; character that ended no line. A character the reader peeks has left R,
+;;;; as the oracle's read and unread of it has. Each reader's counters are a
+;;;; vector #(line column column-before-the-last-pulled) in an eq table. Every
+;;;; definition here is the line-reader family's own (clojure/ClojureArms): a
+;;;; program building no such reader carries neither them nor the Gray streams
+;;;; they splice.
+
+(defvar rontolisp::%clojure-line-reader-table nil)
+
+(defvar rontolisp::%clojure-line-reader-guard (rontolisp:make-mutex))
+
+;; The line-numbering reader over the reader IN; closing it closes IN.
+(defun rontolisp::%clojure-line-reader-new (in)
+  (let* ((state (vector 1 1 1))
+         (last (list nil))
+         (r
+          (rontolisp::%make-text-pull-stream
+           (lambda () (rontolisp::%clojure-line-reader-pull in state last))
+           (lambda () (rontolisp::%clojure-io-close-stream in)))))
+    (rontolisp:with-mutex (rontolisp::%clojure-line-reader-guard)
+      (if (null rontolisp::%clojure-line-reader-table)
+          (setq rontolisp::%clojure-line-reader-table
+                (make-hash-table :test 'eq)))
+      (setf (gethash r rontolisp::%clojure-line-reader-table) state))
+    r))
+
+;; The next character of IN as a one-character string, nil at its end, counted
+;; into STATE; LAST is a one-cell list of the character pulled before (nil
+;; before the first, :eof after the end).
+(defun rontolisp::%clojure-line-reader-pull (in state last)
+  (let ((c (read-char in nil nil)) (before (car last)))
+    (setf (svref state 2) (svref state 1))
+    (if (null c)
+        (progn
+          (if (and before (not (eq before :eof)) (not (eql before #\Newline))
+                   (not (eql before #\Return)))
+              (setf (svref state 0) (+ (svref state 0) 1)))
+          (setf (svref state 1) 1)
+          (setf (car last) :eof)
+          nil)
+        (progn
+          (cond ((eql c #\Return)
+                 (setf (svref state 0) (+ (svref state 0) 1))
+                 (setf (svref state 1) 1))
+                ((eql c #\Newline)
+                 (if (not (eql before #\Return))
+                     (setf (svref state 0) (+ (svref state 0) 1)))
+                 (setf (svref state 1) 1))
+                (t (setf (svref state 1) (+ (svref state 1) 1))))
+          (setf (car last) c)
+          (string c)))))
+
+;; Whether X is a line-numbering reader: the line-reader family's arm test.
+(defun rontolisp::%clojure-line-reader-p (x)
+  (if rontolisp::%clojure-line-reader-table
+      (rontolisp:with-mutex (rontolisp::%clojure-line-reader-guard)
+        (if (gethash x rontolisp::%clojure-line-reader-table) t nil))))
+
+(defun rontolisp::%clojure-line-reader-state (r)
+  (rontolisp:with-mutex (rontolisp::%clojure-line-reader-guard)
+    (gethash r rontolisp::%clojure-line-reader-table)))
+
+;; .getLineNumber of the line-numbering reader R.
+(defun rontolisp::%clojure-line-reader-line (r)
+  (svref (rontolisp::%clojure-line-reader-state r) 0))
+
+;; .getColumnNumber of R: the column after the last character read, the one in
+;; hand (peeked or unread) not counted.
+(defun rontolisp::%clojure-line-reader-column (r)
+  (let ((state (rontolisp::%clojure-line-reader-state r)))
+    (if (< (rontolisp::%text-pull-index r)
+           (length (rontolisp::%text-pull-text r)))
+        (svref state 2)
+        (svref state 1))))
+
+;; .atLineStart of R: whether the last character read ended a line (or none
+;; was read).
+(defun rontolisp::%clojure-line-reader-at-line-start (r)
+  (if (= (rontolisp::%clojure-line-reader-column r) 1)
+      t
+      rontolisp::%clojure-false))
+
+;; .unread of R: the character the last read answered in hand again, answering
+;; nil (PushbackReader.unread is void).
+(defun rontolisp::%clojure-line-reader-unread (r)
+  (if (> (rontolisp::%text-pull-index r) 0)
+      (setf (rontolisp::%text-pull-index r)
+            (- (rontolisp::%text-pull-index r) 1)))
+  nil)
+
+;; .close of R: closes the reader it reads, once; R stays in the table, so a
+;; read after it is the oracle's IOException (%clojure-open-reader).
+(defun rontolisp::%clojure-line-reader-close (r)
+  (rontolisp::%text-pull-stream-close r))
 
 ;;;; Instance methods: one function per method of a value here, dispatched by
 ;;;; its kind, refusing a kind the oracle's class has no such method for in the

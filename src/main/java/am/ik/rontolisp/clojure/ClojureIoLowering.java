@@ -218,6 +218,29 @@ final class ClojureIoLowering {
 	static final String REPLY_INPUT_P = REPLY_PREFIX + "INPUT-P";
 
 	/**
+	 * The prefix of the line-reader family's own definitions
+	 * ({@link ClojureArms.Family#LINE_READER}): a
+	 * {@code clojure.lang.LineNumberingPushbackReader} counting the lines and columns of
+	 * the reader it reads ({@code clojure.lisp}, "Line-numbering readers").
+	 */
+	static final String LINE_READER_PREFIX = "RONTOLISP::%CLOJURE-LINE-READER-";
+
+	/** The line-reader family's producer: the reader over a reader. */
+	static final String LINE_READER_NEW = LINE_READER_PREFIX + "NEW";
+
+	/** The line-reader family's arm test: whether a stream is a line-numbering reader. */
+	static final String LINE_READER_P = LINE_READER_PREFIX + "P";
+
+	/**
+	 * The line-numbering reader's methods its arms call, by method name and argument
+	 * count: {@code getLineNumber}, {@code getColumnNumber}, {@code atLineStart},
+	 * {@code unread} (of the character the last read answered) and {@code close}.
+	 */
+	static final Map<String, String> LINE_READER_METHODS = Map.of("getLineNumber/0", LINE_READER_PREFIX + "LINE",
+			"getColumnNumber/0", LINE_READER_PREFIX + "COLUMN", "atLineStart/0", LINE_READER_PREFIX + "AT-LINE-START",
+			"unread/1", LINE_READER_PREFIX + "UNREAD", "close/0", LINE_READER_PREFIX + "CLOSE");
+
+	/**
 	 * The namespace a program requires to read {@code http:} and {@code https:} URLs
 	 * through {@code rontolisp:fetch} where it spells none it reads
 	 * ({@link #spellsHttpUrl}): a built-in file defining nothing, whose load is the
