@@ -628,6 +628,12 @@ final class ClojureInteropLowering {
 			// (R/new args...) constructs the record or deftype, like ->R; a record's
 			// static (R/create m) builds it from a map, like map->R
 			ClojureLowering.TypeDef def = ctx.types.get(qualified.typeKey());
+			LispVal read = qualified.member().equals("new")
+					? ClojurePortableClasses.typeConstruction(ctx, qualified.typeKey(), argDatums) : null;
+			if (read != null) {
+				// a dependency's class read as Clojure: its constructor, not the fields
+				return read;
+			}
 			if (def != null && def.star()) {
 				return qualified.member().equals("create")
 						? ClojureTypeSpecials.createCall(ctx, qualified.typeKey(), argDatums)
@@ -682,6 +688,12 @@ final class ClojureInteropLowering {
 			return null;
 		}
 		String type = ctx.typeKeyOf(head);
+		if (type != null && ClojurePortableClasses.isReadingType(type)) {
+			// a dependency's class read as Clojure: its statics are the class's, its
+			// construction the reading's constructor
+			ClojureLowering.TypeDef def = Objects.requireNonNull(ctx.types.get(type));
+			return new QualifiedMember(def.className(), member, member.equals("new") ? type : null);
+		}
 		if (type != null) {
 			ClojureLowering.TypeDef def = ctx.types.get(type);
 			return member.equals("new") || member.equals("create") && def != null
@@ -751,7 +763,13 @@ final class ClojureInteropLowering {
 			LispVal tag = metaTag(parts.get(2));
 			if (tag != null) {
 				if (!(tag instanceof LispSymbol named) || named.name().startsWith(":") || named.name().indexOf('/') >= 0
-						|| PRIMITIVE_TAGS.contains(named.name()) || ctx.typeKeyOf(named.name()) != null) {
+						|| PRIMITIVE_TAGS.contains(named.name())) {
+					return null;
+				}
+				String type = ctx.typeKeyOf(named.name());
+				if (type != null && !ClojurePortableClasses.isReadingType(type)) {
+					// a record or deftype hints nothing; a dependency's class read as
+					// Clojure is still the host class its hint names
 					return null;
 				}
 				String cls = ClojureNamespaceLowering.resolveClass(ctx, named.name());
@@ -893,6 +911,21 @@ final class ClojureInteropLowering {
 			return stringStream;
 		}
 		if (!ctx.hostTarget && types == null) {
+			LispVal portable = ClojurePortableClasses.construction(ctx, cls, argDatums);
+			if (portable != null) {
+				// a dependency's class read as Clojure: its constructor
+				return portable;
+			}
+			LispVal weakMap = ClojurePortableIdentityMapLowering.equalConstruction(cls, argDatums.size());
+			if (weakMap != null) {
+				// a WeakHashMap: the portable map keying by =
+				return weakMap;
+			}
+			LispVal reference = ClojurePortableAtomicReferenceLowering.construction(ctx, cls, argDatums);
+			if (reference != null) {
+				// an AtomicReference: the portable cell
+				return reference;
+			}
 			LispVal hashMap = hashMapEmpty(cls, argDatums.size());
 			if (hashMap != null) {
 				return hashMap;
@@ -1380,6 +1413,11 @@ final class ClojureInteropLowering {
 	 * designator ({@link #designator}); the boolean rule still reads the bare member.
 	 */
 	static LispVal staticCall(ClojureLowering ctx, String cls, String member, String designator, List<LispVal> args) {
+		LispVal read = designator.equals(member) ? ClojurePortableClasses.staticCall(ctx, cls, member, args) : null;
+		if (read != null) {
+			// a dependency's class read as Clojure where no host is: its function
+			return read;
+		}
 		LispVal timeValue = ClojureTimeValueLowering.staticCall(cls, member, args);
 		if (timeValue != null) {
 			// UUID/randomUUID, UUID/fromString and System/currentTimeMillis: the values
@@ -1476,6 +1514,12 @@ final class ClojureInteropLowering {
 			LispVal portable = ClojurePortableStaticsLowering.staticCall(cls, member, args);
 			if (portable != null) {
 				return portable;
+			}
+			// where no host is, a synchronized wrapper is its collection: no other
+			// thread exists there (schema's class registry)
+			LispVal wrapped = ClojurePortableIdentityMapLowering.synchronizedWrapper(cls, member, args);
+			if (wrapped != null) {
+				return wrapped;
 			}
 			// where no host is, a date formatter or zone static is its marker,
 			// so malli's formatter defs load; the host's object elsewhere
@@ -1584,6 +1628,15 @@ final class ClojureInteropLowering {
 			if (calendarField != null) {
 				return calendarField;
 			}
+			// where no host is, a dependency's class read as Clojure: its
+			// zero-argument function, else its field
+			LispVal portable = ClojurePortableClasses.staticCall(ctx, cls, member, List.of());
+			if (portable == null) {
+				portable = ClojurePortableClasses.staticField(ctx, cls, member);
+			}
+			if (portable != null) {
+				return portable;
+			}
 		}
 		if (staticMember(cls, member).arities().contains(0)) {
 			return ClojureDecimalLowering.hostAnswer(ctx,
@@ -1626,6 +1679,11 @@ final class ClojureInteropLowering {
 		QualifiedMember qualified = qualifiedMember(ctx, name);
 		if (qualified == null) {
 			return null;
+		}
+		if (qualified.typeKey() != null && ClojurePortableClasses.isReadingType(qualified.typeKey())) {
+			// C/new of a dependency's class read as Clojure: its constructor function
+			String ns = qualified.typeKey().substring(0, qualified.typeKey().lastIndexOf('/'));
+			return ctx.lower(new LispSymbol(ns + "/" + ClojureJavaClassReading.INIT));
 		}
 		if (qualified.typeKey() != null) {
 			// R/new is the record or deftype's positional constructor, like ->R, and a
@@ -1691,6 +1749,11 @@ final class ClojureInteropLowering {
 			LispVal calendarField = ClojurePortableCalendarLowering.field(cls, member);
 			if (calendarField != null) {
 				return calendarField;
+			}
+			// where no host is, a dependency's class read as Clojure: its field
+			LispVal portable = ClojurePortableClasses.staticField(ctx, cls, member);
+			if (portable != null) {
+				return portable;
 			}
 		}
 		ClojureLowering.StaticMember seen = staticMember(cls, member);
@@ -2365,6 +2428,11 @@ final class ClojureInteropLowering {
 	 * {@code deftype*} type's own constructor ({@link ClojureTypeSpecials#construction}).
 	 */
 	private static LispVal typeConstruction(ClojureLowering ctx, String typeKey, List<LispVal> argDatums) {
+		LispVal read = ClojurePortableClasses.typeConstruction(ctx, typeKey, argDatums);
+		if (read != null) {
+			// a dependency's class read as Clojure: its constructor, not the fields
+			return read;
+		}
 		ClojureLowering.TypeDef def = ctx.types.get(typeKey);
 		if (def != null && def.star()) {
 			return ClojureTypeSpecials.construction(ctx, typeKey, def, argDatums);
@@ -2827,7 +2895,11 @@ final class ClojureInteropLowering {
 	static LispVal instanceCall(ClojureLowering ctx, LispVal receiver, @Nullable LispVal receiverDatum, String method,
 			List<LispVal> argDatums) {
 		if (receiverDatum != null && !ctx.hostTarget) {
-			ClojurePortableStringJoinerLowering.preloadForHint(ctx, classHint(ctx, receiverDatum));
+			String hint = classHint(ctx, receiverDatum);
+			ClojurePortableStringJoinerLowering.preloadForHint(ctx, hint);
+			ClojurePortableAtomicReferenceLowering.preloadForHint(ctx, hint);
+			// a dependency's class read as Clojure: its interface answers the call
+			ClojurePortableClasses.loaded(ctx, hint);
 		}
 		List<LispVal> args = new ArrayList<>();
 		for (LispVal arg : argDatums) {
@@ -2984,7 +3056,7 @@ final class ClojureInteropLowering {
 		// which no string then reaches
 		LispVal mapped = ctx.hostTarget ? null : stringMethod(ctx, method, recv, args, typed);
 		if (cls == null && !ctx.hostTarget && !(method.equals("toString") && args.isEmpty()) && !hashCode) {
-			call = hostlessCall(recv, method, args, call, mapped != null, stream != null);
+			call = hostlessCall(ctx, recv, method, args, call, mapped != null, stream != null);
 		}
 		if (stream != null) {
 			call = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
@@ -3147,7 +3219,14 @@ final class ClojureInteropLowering {
 	 * (wasm): the {@code java:call} -- a call-time error there, which the compile warns
 	 * of -- when a class such a receiver may be an object of has the method at the count,
 	 * since the program's call then needs the host; otherwise the oracle's own refusal,
-	 * since no value there has the method.
+	 * since no value there has the method -- its {@code ClassCastException} where the
+	 * call casts its receiver to a hinted class ({@link ClojureLowering#receiverCast}).
+	 * The refusal stands behind a host object's {@code java:call}, an arm of the
+	 * host-object family: the program, which holds no host object, has it stripped, and
+	 * the macro-time image -- a host, which runs the forms as they lower and makes a host
+	 * object of a class with no portable reading -- answers it as the host does, so a
+	 * macro body's host member runs at compile time whatever the target.
+	 * @param ctx the hub
 	 * @param recv the bound receiver
 	 * @param method the method name
 	 * @param args the lowered arguments
@@ -3156,8 +3235,8 @@ final class ClojureInteropLowering {
 	 * @param streams whether a stream answers ahead of the arm (the stream arm)
 	 * @return the arm
 	 */
-	static LispVal hostlessCall(LispSymbol recv, String method, List<LispVal> args, LispVal call, boolean strings,
-			boolean streams) {
+	static LispVal hostlessCall(ClojureLowering ctx, LispSymbol recv, String method, List<LispVal> args, LispVal call,
+			boolean strings, boolean streams) {
 		List<String> classes = new ArrayList<>(HOSTLESS_RECEIVERS);
 		if (!strings) {
 			classes.add(STRING);
@@ -3166,8 +3245,13 @@ final class ClojureInteropLowering {
 			classes.add("java.io.Writer");
 			classes.add("java.io.Reader");
 		}
-		return ClojureValueMethodLowering.declares(classes, method, args.size()) ? call
-				: ClojureValueMethodLowering.refusal(recv, method, true, args);
+		if (ClojureValueMethodLowering.declares(classes, method, args.size())) {
+			return call;
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol(ClojureDispatchLowering.HOST_OBJECT_P), recv,
+						LispString.literal(OBJECT)),
+				call, ClojureValueMethodLowering.castOrRefusal(ctx, recv, method, true, args));
 	}
 
 	/**

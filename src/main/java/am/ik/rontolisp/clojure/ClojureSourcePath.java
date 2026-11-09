@@ -6,6 +6,7 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import am.ik.rontolisp.LispSymbol;
@@ -111,6 +112,12 @@ final class ClojureSourcePath {
 
 	/** The namespaces found so far: one read per file per lowering. */
 	private final Map<String, Found> found = new HashMap<>();
+
+	/**
+	 * The readings of the dependency classes asked so far, by binary name: empty for a
+	 * class no root holds or the reading does not cover.
+	 */
+	private final Map<String, Optional<ClojureJavaClassReading.Reading>> classReadings = new HashMap<>();
 
 	/** The data readers the roots hold, read with them. */
 	private @Nullable ClojureDataReaders dataReaders;
@@ -375,6 +382,33 @@ final class ClojureSourcePath {
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * The reading of a class a root holds as a class file, as Clojure where no host is
+	 * ({@link ClojureJavaClassReading}): its namespace's source is the file {@link #find}
+	 * answers for the namespace from then on.
+	 * @param binaryName the class's binary name
+	 * @return the reading, or {@code null} when no root holds the class or the reading
+	 * does not cover it
+	 */
+	ClojureJavaClassReading.@Nullable Reading classReading(String binaryName) {
+		return this.classReadings.computeIfAbsent(binaryName, name -> {
+			String resource = name.replace('.', '/') + ".class";
+			Resource file = findResource(resource);
+			if (file == null || file.octets() == null) {
+				return Optional.empty();
+			}
+			ClojureJavaClassReading.Reading reading;
+			try {
+				reading = ClojureJavaClassReading.read(name, file.octets());
+			}
+			catch (ClojureJavaClassReading.Unreadable ex) {
+				return Optional.empty();
+			}
+			this.found.put(reading.namespace(), new Found(file.spec(), resource, reading.source(), false));
+			return Optional.of(reading);
+		}).orElse(null);
 	}
 
 	/**

@@ -1195,6 +1195,9 @@ final class ClojureNamespaceLowering {
 	static void importClass(ClojureLowering ctx, String fqn) {
 		int dot = fqn.lastIndexOf('.');
 		ctx.ns().classNames.put(dot < 0 ? fqn : fqn.substring(dot + 1), fqn);
+		// where no host is, a dependency's class read as Clojure loads here, so an
+		// instance call below on a receiver hinted with it finds the type's interface
+		ClojurePortableClasses.loaded(ctx, fqn);
 	}
 
 	/**

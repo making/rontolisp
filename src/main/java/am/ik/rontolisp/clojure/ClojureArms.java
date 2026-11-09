@@ -1170,7 +1170,9 @@ public final class ClojureArms {
 		 * the arm every {@code .get}, {@code .put} and the rest carry.
 		 */
 		IDENTITY_MAP("identity-map", Set.of(ClojurePortableIdentityMapLowering.IDENTITY_MAP_P),
-				Set.of(ClojurePortableIdentityMapLowering.IDENTITY_MAP_NEW), ClojurePortableIdentityMapLowering.OWNED),
+				Set.of(ClojurePortableIdentityMapLowering.IDENTITY_MAP_NEW,
+						ClojurePortableIdentityMapLowering.IDENTITY_MAP_NEW_EQUAL),
+				ClojurePortableIdentityMapLowering.OWNED),
 
 		/**
 		 * A Clojure future or promise -- what {@code future} and {@code future-call}

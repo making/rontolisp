@@ -29353,7 +29353,8 @@
   "(Double/parseDouble s): the double the string S spells, Double/valueOf's
    grammar and NumberFormatException; nil its NullPointerException, anything
    else its cast refusal to String."
-  (rontolisp::%clojure-double-value-of (rontolisp::%clojure-string-parameter s)))
+  (rontolisp::%clojure-double-value-of
+   (rontolisp::%clojure-string-parameter s)))
 
 (defun rontolisp::%clojure-parse-boolean-static (s)
   "(Boolean/parseBoolean s): whether the string S is true in any case; nil
@@ -29905,24 +29906,41 @@
   "A (java.util.IdentityHashMap.) construction: an empty identity map."
   (list :C%IDENTITY-MAP (make-hash-table :test 'eq)))
 
+;; A (java.util.WeakHashMap.) where no host is (schema's class registry) keys by
+;; = like the host's equals-keyed map: the same list over an equal table whose
+;; keys a Clojure map's would be, marked by a third element. Its keys stay held
+;; (no collector drops an entry here).
+(defun rontolisp::%clojure-identity-map-new-equal ()
+  "A (java.util.WeakHashMap.) construction where no host is: an empty map
+   keying by =."
+  (list :C%IDENTITY-MAP (make-hash-table :test 'equal) t))
+
+(defun rontolisp::%clojure-identity-map-key (m k)
+  "The key M finds K under: K itself in an identity map, the key = to K an
+   equal map holds (or K)."
+  (if (cdr (cdr m)) (rontolisp::%clojure-table-key k (car (cdr m))) k))
+
 (defun rontolisp::%clojure-identity-map-put (m k v)
   "(.put M K V): store V under K, answering the value K held or nil."
-  (let ((table (car (cdr m))))
-    (prog1 (gethash k table) (setf (gethash k table) v))))
+  (let* ((table (car (cdr m)))
+         (key (if (cdr (cdr m)) (rontolisp::%clojure-store-key k table) k)))
+    (prog1 (gethash key table) (setf (gethash key table) v))))
 
 (defun rontolisp::%clojure-identity-map-get (m k)
   "(.get M K): the value K holds, or nil."
-  (gethash k (car (cdr m))))
+  (gethash (rontolisp::%clojure-identity-map-key m k) (car (cdr m))))
 
 (defun rontolisp::%clojure-identity-map-contains (m k)
   "(.containsKey M K): whether K holds a value, nil included."
   (not
-   (eq (gethash k (car (cdr m)) rontolisp::%clojure-identity-map-absent)
+   (eq (gethash (rontolisp::%clojure-identity-map-key m k) (car (cdr m))
+                rontolisp::%clojure-identity-map-absent)
        rontolisp::%clojure-identity-map-absent)))
 
 (defun rontolisp::%clojure-identity-map-remove (m k)
   "(.remove M K): drop K, answering the value it held or nil."
-  (let ((table (car (cdr m)))) (prog1 (gethash k table) (remhash k table))))
+  (let ((table (car (cdr m))) (key (rontolisp::%clojure-identity-map-key m k)))
+    (prog1 (gethash key table) (remhash key table))))
 
 (defun rontolisp::%clojure-identity-map-size (m)
   "(.size M): the number of keys."

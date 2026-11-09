@@ -66,6 +66,7 @@ final class ClojureBuiltinNamespaces {
 			Map.entry(ClojureIoLowering.HTTP_URLS, Map.of()), Map.entry(ClojureCoreMacros.NAMESPACE, Map.of()),
 			Map.entry(ClojurePortableLinkedListLowering.NAMESPACE, Map.of()),
 			Map.entry(ClojurePortableStringJoinerLowering.NAMESPACE, Map.of()),
+			Map.entry(ClojurePortableAtomicReferenceLowering.NAMESPACE, Map.of()),
 			Map.entry(ClojureTypeSpecials.RECORDS, Map.of()), Map.entry(ClojureScriptPort.NAMESPACE, Map.of()),
 			Map.entry("riddley.walk", Map.of()), Map.entry("riddley.compiler", Map.of()));
 
@@ -73,12 +74,13 @@ final class ClojureBuiltinNamespaces {
 	 * The shipped namespaces the lowering loads for itself, no user surface: no project
 	 * file shadows one and no program requires one ({@link ClojureCoreMacros},
 	 * {@link ClojurePortableLinkedListLowering},
-	 * {@link ClojurePortableStringJoinerLowering}, {@link ClojureTypeSpecials},
+	 * {@link ClojurePortableStringJoinerLowering},
+	 * {@link ClojurePortableAtomicReferenceLowering}, {@link ClojureTypeSpecials},
 	 * {@link ClojureScriptPort}).
 	 */
 	private static final Set<String> INTERNAL = Set.of(ClojureCoreMacros.NAMESPACE,
 			ClojurePortableLinkedListLowering.NAMESPACE, ClojurePortableStringJoinerLowering.NAMESPACE,
-			ClojureTypeSpecials.RECORDS, ClojureScriptPort.NAMESPACE);
+			ClojurePortableAtomicReferenceLowering.NAMESPACE, ClojureTypeSpecials.RECORDS, ClojureScriptPort.NAMESPACE);
 
 	/**
 	 * The public vars of babashka.http-client 0.4.23 that {@code rontolisp.http-client}

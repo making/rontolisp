@@ -313,7 +313,10 @@
  キャッシュがするような `intern`）はそこから先プログラムの var になりますが、プログラムの
  開始時にはルートを持ちません。oracle の AOT コンパイル（`compile`）が残す状態と同じです。
  その var の `bound?` は false なので、束縛のない var を埋めるコード（specter のキャッシュ
- がそうです）はそれを埋めます。プログラムのマクロが展開した `defmethod` やプロトコル
+ がそうです）はそれを埋めます。wasm バックエンドでは、本体はプログラムがコンパイルされる
+ コード（プログラムがこのフロントエンド独自の値を持つ所ではその値）を実行しますが、
+ コンパイル自体はホスト上で動くため、そのような値を持たないクラスの Java オブジェクトを
+ 本体が作った場合は、そこでそのメソッドに答えます。プログラムのマクロが展開した `defmethod` やプロトコル
  拡張はそこでは見えません。定義より上での呼び出しは拒否され、プログラム定義のマクロのむき出しの名前は oracle と同じく値を持ちません。special
  form（`if`、`do`、`let*`、`new` など）、リーダーが綴る先頭（`deref`、
  `syntax-quote`、`ns`、`in-ns`）の `defmacro` は名前を挙げて拒否されます。oracle はこれを
@@ -564,6 +567,23 @@
   このフロントエンド独自の joiner になります。`class`、`java.util.StringJoiner` への
   `instance?`、`print` はその joiner として読み、`.merge` は提供しません。ホストがある
   場合は、ホストの `StringJoiner` のまま残ります。
+- wasm バックエンドでは、引数なしの `(java.util.WeakHashMap.)` はホストの `equals`
+  をキーとするマップと同じく `=` をキーとする、このフロントエンド独自のマップになります。
+  `.put`、`.get`、`.containsKey`、`.remove`、`.size`、`.isEmpty`、`.clear` はホストの
+  ものと同じ値を返し、キーが落とされることはありません（回収するものがないため）。
+  `java.util.Collections` の synchronized ラッパー（`synchronizedMap`、`synchronizedList`
+  など）は、他のスレッドが存在しないため引数そのものです。引数なしの
+  `(java.util.ArrayList.)` は `LinkedList` と同じ可変リストで、`RandomAccess`
+  でもあるため `nth` で読めます（`LinkedList` はオラクルと同じく拒否します）。
+  `(java.util.concurrent.atomic.AtomicReference.)` と `(AtomicReference. x)`
+  の構築はこのフロントエンド独自のセルになり、`.get`、`.set`、`.lazySet`、
+  `.getAndSet`、`.compareAndSet`（同一性で比較）、`.updateAndGet`、`.getAndUpdate`、
+  `.accumulateAndGet`、`.getAndAccumulate`、`str` はホストのものと同じ値を返します。
+  `class`、`instance?`、`print` はいずれもこのフロントエンド独自の値として読みます。
+  ホストがある場合はどれもホストのオブジェクトのまま残ります。そこでは、ホストの
+  `AtomicReference` へ渡る値は毎回新しい Java オブジェクトになるため、キーワードや
+  コレクションの `.compareAndSet` は格納したものを見つけられません（nil、真偽値、
+  小さな整数は見つけます）。
 - 引数なしの `(Object.)` は wasm バックエンドでは新しい uninterned シンボルになるため、
   ロード時のロックが構築できます。2 つの構築はホストのオブジェクト同様 `=` にも
   `identical?` にもなりませんが、表示は gensym になります（オラクルはオブジェクトの
@@ -979,6 +999,18 @@
   （persistent-sorted-set の `(seek (seq set) k)`）には渡せません（`slice`
   の答えはそのオブジェクトです）。整数どうしの `/` は Clojure と同じく比になります。
   その他の `js/` の名前は、到達した時点で拒否されます。
+- wasm バックエンドでは、依存がソースと並べて含める素の Java クラス（specter の
+  `com.rpl.specter.MutableCell` と `Util`）を、そのクラスファイルからそれに相当する
+  Clojure として読みます。コンストラクター、メソッド、static メソッド、static
+  フィールドはホストのオブジェクトが存在しない場所で動き、`class`、`instance?`、`print`
+  はそれをクラス名のクラスとして読みます。クラスは `Object` を継承し、インターフェースを
+  実装せず、public なインスタンスフィールドを持たず、自身のフィールドとメソッドだけを
+  使うものに限ります。使えるのはローカル変数、定数、配列、`int`・`long`・`double`
+  の算術、分岐と switch で、`float`、例外ハンドラー、他のクラスのメンバー（文字列連結は
+  これを呼びます）は使えません。クラス内のキャストは何も検査しません。それ以外の
+  クラスはホストのもののまま残り、すべての `java:` 呼び出しと同じく呼び出したときに
+  拒否されます。ホストがある場合（インタープリターと JVM）は、クラスは常にホストの
+  ものです。
 - 読むのはソースルート以下の `.clj` と `.cljc` のファイルだけで、`.cljs`
   は上記の ClojureScript 版としてだけ読みます。クラスを含む依存の jar は
   Java クラスパスにも加わりますが、ディレクトリのクラスは加わりません（準備済みライブラリの

@@ -329,6 +329,27 @@ final class JavaInterop {
 		return invoke(loadClass(className, caller), null, methodName, args, caller);
 	}
 
+	/**
+	 * A method invoked for the program. {@code Class.forName(String)} is
+	 * caller-sensitive, and the caller is the program: its class loader -- the jars of
+	 * its dependencies included -- finds the class, as a compiled program's own loader
+	 * does ({@code instance?} of a dependency's class), where the reflective call would
+	 * ask rontolisp's loader.
+	 */
+	private static @Nullable Object invokeMethod(Method method, @Nullable Object target, @Nullable Object[] args,
+			Caller caller) throws ReflectiveOperationException {
+		if (method.getDeclaringClass() == Class.class && method.getName().equals("forName") && args.length == 1
+				&& args[0] instanceof String name) {
+			try {
+				return Class.forName(name, true, caller.classes().loader());
+			}
+			catch (ClassNotFoundException ex) {
+				throw new InvocationTargetException(ex);
+			}
+		}
+		return method.invoke(target, args);
+	}
+
 	// A static call chooses among the static methods only (JavaOverloads.staticMethods),
 	// so its choices are remembered apart from an instance call's of the same name.
 	private static LispVal invoke(ReflectiveJavaClasses.Type type, @Nullable Object receiver, String methodName,
@@ -375,7 +396,7 @@ final class JavaInterop {
 				: marshalArguments(overload, args, caller);
 		try {
 			Method method = (Method) executable(overload);
-			Object answer = method.invoke(receiver, handed);
+			Object answer = invokeMethod(method, receiver, handed, caller);
 			writeBackArrays(args, overload, handed, caller);
 			return unmarshal(answer, caller);
 		}
@@ -894,7 +915,7 @@ final class JavaInterop {
 				answer = constructor.newInstance(javaArgs);
 			}
 			else {
-				answer = ((Method) reflected).invoke(target, javaArgs);
+				answer = invokeMethod((Method) reflected, target, javaArgs, caller);
 			}
 			writeBackArrays(taken, overload, javaArgs, caller);
 			return unmarshal(answer, caller);

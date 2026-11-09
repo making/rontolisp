@@ -1204,6 +1204,15 @@ resolved `Method.invoke` is the cheap part.
   (`MavenCoordinates.pomXml(simd, deps)`; a `--java-classpath` entry is the consumer's). A war
   packs jars into `WEB-INF/lib/`, a directory's files into `WEB-INF/classes/` (a collision
   with the program's own entries refused). A `.class` carries nothing (`java -cp`).
+- `Class.forName(String)` is caller-sensitive, and the interpreter's caller is the program:
+  `JavaInterop.invokeMethod` (both the reflective and the resolved-site invocation) answers
+  it through `Caller.classes().loader()`, where `Method.invoke` would ask rontolisp's own
+  loader (j38, 2026-11-09: the Clojure library's `instance?` of a dependency's class,
+  `%clojure-host-instance-p`'s `(java:static "java.lang.Class" "forName" name)`, was false on
+  the interpreter and true on the JVM class, whose own loader holds the jar). A miss throws
+  the `ClassNotFoundException` the reflective call threw. Pin:
+  `ClojureProjectNamespacesTest#aDependencysPlainJavaClassesRunAsTheHostsOnTheInterpreterAndTheJvm`
+  (`instance? Cell`).
 - Pins: `JavaInteropTest#aClassOnTheProgramsJavaClassPathIsReachable`,
   `JvmJavaInteropCompilerTest#aClassOnTheJavaClassPathIsCalledDirectly` (the shared
   `testsupport/JavaLibraryJar` program: new, static, field, reify with a default method,

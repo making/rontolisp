@@ -34,6 +34,25 @@ final class ClojurePortableIdentityMapLowering {
 	/** An empty portable identity map: the family's producer. */
 	static final String IDENTITY_MAP_NEW = "RONTOLISP::%CLOJURE-IDENTITY-MAP-NEW";
 
+	/**
+	 * An empty portable map keying by {@code =}, a {@code java.util.WeakHashMap} where no
+	 * host is: the family's other producer.
+	 */
+	static final String IDENTITY_MAP_NEW_EQUAL = "RONTOLISP::%CLOJURE-IDENTITY-MAP-NEW-EQUAL";
+
+	/**
+	 * The host class whose construction is the map keying by {@code =} where no host is.
+	 */
+	static final String WEAK_HASH_MAP_CLASS = "java.util.WeakHashMap";
+
+	/**
+	 * The {@code java.util.Collections} wrappers that answer their argument where no host
+	 * is: no other thread exists there to synchronize with.
+	 */
+	static final Set<String> SYNCHRONIZED_WRAPPERS = Set.of("synchronizedMap", "synchronizedList", "synchronizedSet",
+			"synchronizedCollection", "synchronizedSortedMap", "synchronizedSortedSet", "synchronizedNavigableMap",
+			"synchronizedNavigableSet");
+
 	/** The prefix of the library definitions only the family reaches. */
 	static final String OWNED = "RONTOLISP::%CLOJURE-IDENTITY-MAP";
 
@@ -57,6 +76,38 @@ final class ClojurePortableIdentityMapLowering {
 			return null;
 		}
 		return ClojureLowerUtil.list(new LispSymbol(IDENTITY_MAP_NEW));
+	}
+
+	/**
+	 * An untagged zero-argument {@code java.util.WeakHashMap} construction where no host
+	 * is (schema's class registry): the portable map keying by {@code =}, which no
+	 * collector empties. The caller checks the target and that it is untagged. Null for
+	 * any other class or count (a capacity or a copy keeps {@code java:new}).
+	 * @param cls the resolved class name
+	 * @param argCount the argument count
+	 * @return the construction, or null
+	 */
+	static @Nullable LispVal equalConstruction(String cls, int argCount) {
+		if (argCount != 0 || !WEAK_HASH_MAP_CLASS.equals(cls)) {
+			return null;
+		}
+		return ClojureLowerUtil.list(new LispSymbol(IDENTITY_MAP_NEW_EQUAL));
+	}
+
+	/**
+	 * A {@code java.util.Collections} synchronized wrapper of one collection where no
+	 * host is: the collection itself, since no other thread exists there. The caller
+	 * checks the target.
+	 * @param cls the resolved class name
+	 * @param member the static method
+	 * @param args the lowered arguments
+	 * @return the argument, or null for any other call
+	 */
+	static @Nullable LispVal synchronizedWrapper(String cls, String member, List<LispVal> args) {
+		if (!cls.equals("java.util.Collections") || args.size() != 1 || !SYNCHRONIZED_WRAPPERS.contains(member)) {
+			return null;
+		}
+		return args.get(0);
 	}
 
 	/**

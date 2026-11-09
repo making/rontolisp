@@ -22,6 +22,7 @@ import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.testsupport.CliStack;
+import am.ik.rontolisp.testsupport.ClojureJavaClassFixture;
 import am.ik.rontolisp.testsupport.ClojureScriptPortFixture;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.ThreadStdio;
@@ -992,6 +993,36 @@ class ClojureProjectNamespacesTest {
 		}
 	}
 
+	/**
+	 * A library's plain Java classes run as the host's where the host is
+	 * ({@link ClojureJavaClassFixture}): the interpreter and the JVM class, the jar on
+	 * its class path, print the oracle's lines.
+	 */
+	@Test
+	void aDependencysPlainJavaClassesRunAsTheHostsOnTheInterpreterAndTheJvm() throws Exception {
+		Path entry = ClojureJavaClassFixture.project(Files.createTempDirectory(project, "plain"));
+		List<Path> classPath = List.of(ClojureJavaClassFixture.jar(entry));
+		assertThat(interpret(entry, classPath)).isEqualTo(ClojureJavaClassFixture.HOST_OUTPUT);
+		assertThat(runOnJvm(entry, "ProjPlain", classPath)).isEqualTo(ClojureJavaClassFixture.HOST_OUTPUT);
+	}
+
+	/**
+	 * Where no host is the same classes are read as Clojure from their class files, a
+	 * macro body building one while it expands, so both wasm backends print the oracle's
+	 * lines -- but the class the reading does not cover, refused when called.
+	 */
+	@Test
+	void aDependencysPlainJavaClassesAreReadAsClojureOnBothWasmBackends() throws Exception {
+		assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+		Path entry = ClojureJavaClassFixture.project(Files.createTempDirectory(project, "plain-wasm"));
+		List<Path> classPath = List.of(ClojureJavaClassFixture.jar(entry));
+		for (boolean component : List.of(false, true)) {
+			assertThat(execWasm(CompileFrontendAccess.clojureFile(entry, classPath, null, true, component), component))
+				.as("component %s", component)
+				.isEqualTo(ClojureJavaClassFixture.WASM_OUTPUT);
+		}
+	}
+
 	@Test
 	void aCljFileRefusesAReaderConditional() throws Exception {
 		assertThatThrownBy(() -> read(entry("cond_test.clj", "(println #?(:clj 1))")))
@@ -1055,7 +1086,7 @@ class ClojureProjectNamespacesTest {
 	}
 
 	// The program's Java classes those of the class path: what its lowering reads them
-	// from.
+	// from and its java: calls load them from, as the command line runs it.
 	private static String interpret(Path entry, List<Path> javaClassPath) throws Exception {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		java.net.URL[] urls = new java.net.URL[javaClassPath.size()];
@@ -1065,11 +1096,12 @@ class ClojureProjectNamespacesTest {
 		try (var loader = new java.net.URLClassLoader(urls, LispEvaluator.class.getClassLoader())) {
 			CliStack.call("clojure-namespaces", () -> {
 				LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+				SourceLoader sources = SourceLoader.fileSystem(loader);
+				evaluator.setSourceLoader(sources);
 				// as the command line runs it: a program lowering as it runs keeps its
 				// lowering
-				for (LispVal form : evaluator
-					.clojureProgram(SourceLanguage.CLOJURE.readClojure(Files.readString(entry), Features.INTERPRETER,
-							entry.toString(), SourceStandards.DEFAULT, SourceLoader.fileSystem(loader)))) {
+				for (LispVal form : evaluator.clojureProgram(SourceLanguage.CLOJURE.readClojure(Files.readString(entry),
+						Features.INTERPRETER, entry.toString(), SourceStandards.DEFAULT, sources))) {
 					evaluator.eval(form);
 				}
 				return null;
@@ -1093,7 +1125,7 @@ class ClojureProjectNamespacesTest {
 			Files.createDirectories(target.getParent());
 			Files.write(target, file.getValue());
 		}
-		return execJvm(name, classes);
+		return execJvm(name, classes, javaClassPath);
 	}
 
 	private static String runLoadsOnJvm(Path entry, String name) throws Exception {
@@ -1111,9 +1143,20 @@ class ClojureProjectNamespacesTest {
 	}
 
 	private static String execJvm(String name, Path classes) throws Exception {
+		return execJvm(name, classes, List.of());
+	}
+
+	// The compiled program run with its Java class path's jars beside it: the -o
+	// Prog.class contract.
+	private static String execJvm(String name, Path classes, List<Path> javaClassPath) throws Exception {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		try (var loader = new java.net.URLClassLoader(new java.net.URL[] { classes.toUri().toURL() },
-				ClassLoader.getSystemClassLoader()); var _ = ThreadStdio.out(out)) {
+		java.net.URL[] urls = new java.net.URL[javaClassPath.size() + 1];
+		urls[0] = classes.toUri().toURL();
+		for (int i = 0; i < javaClassPath.size(); i++) {
+			urls[i + 1] = javaClassPath.get(i).toUri().toURL();
+		}
+		try (var loader = new java.net.URLClassLoader(urls, ClassLoader.getSystemClassLoader());
+				var _ = ThreadStdio.out(out)) {
 			CliStack.call("clojure-namespaces", () -> {
 				Method main = loader.loadClass(name).getMethod("main", String[].class);
 				main.invoke(null, (Object) new String[0]);

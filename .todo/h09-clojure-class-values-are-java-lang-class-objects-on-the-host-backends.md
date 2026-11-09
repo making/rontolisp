@@ -50,7 +50,8 @@ hand there, see its `patches.diff`):
   `(:C%CLASS "ns.Name")` designator, `class?` true, one Java object per class as a host map
   key), so `s/defrecord`, `s/record` and `record*`'s `(class? klass)` run verbatim. Re-probed
   verbatim 2026-11-09 (j07): this is the only stop on the interpreter and the JVM class (the
-  first seven lines print, the set-order one pinned); wasm stops at load first (`.todo/j38`).
+  first seven lines print, the set-order one pinned); since j38 (2026-11-09) both wasm backends
+  load schema and stop here too, the class value being a `:function` keyword there as well.
 - core.match 1.1.1 re-probed verbatim 2026-11-09 (j07): the `class?` stop above is the only one
   on all four backends (nothing prints).
 

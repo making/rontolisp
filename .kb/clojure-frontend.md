@@ -1767,10 +1767,10 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | core.logic 1.1.1 | = but 1 | = but 1 | = but 1 | = but 1 | 2026-11-08 round: `run*`/`run`, `membero`, `!=`, `conde`, `appendo`, `fd/in`/`interval`/`>`/`+`/`<`, `conso`, a `defne`, `featurec` -- 9 lines; `appendo`'s line prints `nil` for the oracle's `()` (the pinned empty-list deviation). Needed j19, j10, j12; then (2026-11-09) `.isInstance` of a class keyword or designator is `instance?` ("Java interop"), its deftypes' `(.. this getClass (isInstance o))`. Verbatim on all four; wasm warns `JAVA:CALL`/`JAVA:STATIC` off the path |
 | rewrite-clj 1.3.59 | = | = | = | = | j14, j13, j18 (2026-11-09): the 9-line probe; the wasm legs warn `JAVA:STATIC`/`JAVA:NEW` off the path. Its zipper walks are `(->> (iterate f loc) (take-while identity) ...)`, which needed `iterate` to compute a member only when read, a lazy `take-while`, and `next` of a lazy seq ending past its head to answer nil ("Laziness"). Re-probed 2026-11-09 (j07): the JVM and both wasm compiles warned `Function expects 4 arguments, got 2` -- `file-reader`'s `(PushbackReader. r 2)` under its `java.io` import lowered to tools.reader's deftype of that name ("Records", fixed); and an integer's `.toString` of a radix (`int->str`) answered the radix ("Java interop", fixed) |
 | core.match 1.1.1 | stop | stop | stop | stop | 2026-11-08 round, 10 lines (vector, map, rest, `:or`, `:guard`, FizzBuzz, `:seq`, nested, literal, nil). Verbatim 2026-11-09 every backend stops at macro time: `Unsupported tag type:clojure.lang.IPersistentVector` -- `test-inline ::vector`'s `(class? the-tag)` of a class keyword is false (`.todo/h09`). With that one hunk the probe is `=` on all four (j08, j09, j10, j11 took the rest) |
-| schema 1.4.2 | stop | stop | stop | stop | 2026-11-08 round, 10 lines (`validate`, `check` of a map, a vector, `enum`, `maybe`, `explain`, `s/defn` with `with-fn-validation`, `both`). Verbatim 2026-11-09, interpreter and JVM: seven lines (the `enum` one the pinned set order), then `Assert failed: Cannot declare class schema for non-class :keyword` -- `declare-class-schema!`'s `(class? (class f))` of a fn (`.todo/h09`); past it the probe is the oracle's but that line. Wasm stops at load: `(Collections/synchronizedMap (WeakHashMap.))` (`.todo/j38`). Needed j15, j24, j19, j14, j23, j13; j24: `s/defprotocol` methods validate on the host |
+| schema 1.4.2 | stop | stop | stop | stop | 2026-11-08 round, 10 lines (`validate`, `check` of a map, a vector, `enum`, `maybe`, `explain`, `s/defn` with `with-fn-validation`, `both`). Verbatim 2026-11-09, interpreter and JVM: seven lines (the `enum` one the pinned set order), then `Assert failed: Cannot declare class schema for non-class :keyword` -- `declare-class-schema!`'s `(class? (class f))` of a fn (`.todo/h09`); past it the probe is the oracle's but that line. j38 (2026-11-09): wasm stops where the host does -- the load's `(Collections/synchronizedMap (WeakHashMap.))` is the portable map keying by `=` ("Portable IdentityHashMap and WeakHashMap"), `use-fn-validation`'s `AtomicReference` the portable cell ("Portable AtomicReference"), the collection checker's `ArrayList` the portable list ("Portable LinkedList and ArrayList"), so P1 and the component print the same seven lines and h09's stop; past h09's hunk wasm prints the oracle's lines but the set-order one, like the host. `s/defprotocol` expands on wasm too (its macro body read the switch through `.get`; "Macros", what a macro body runs where the target has no host). Both wasm legs warn `JAVA:STATIC` off the path (`System/identityHashCode` in `recursive`'s explain). Needed j15, j24, j19, j14, j23, j13; j24: `s/defprotocol` methods validate on the host |
 | persistent-sorted-set 0.3.1 | = | = | = | = | j37 (2026-11-09): read from its `.cljs` port, its `.clj` importing classes over `clojure.lang` ("ClojureScript ports"); the 14-line probe -- `sorted-set`, `conj`/`disj` with a comparator, `slice`, `rslice`, `seek` of a slice, `reduce`, `contains?`/`get`/invoke, printing, `=` with a core set both ways, 2000 shuffled `conj`s and 1000 `disj`s -- prints the oracle's lines on all four backends, wasm warning-free. `seek` of `(seq set)` takes no `Iter` here (the seq view, the deviation), so the probe seeks a `slice` |
 | datascript 1.8.1 | = | = | = | = | j37 (2026-11-09): the verbatim jars print j07's 8 oracle lines (`create-conn` with a ref schema, `transact!`, five `q` shapes, `entity`, `pull`, `datoms`, a retract) on all four backends; the JVM class runs with or without persistent-sorted-set's jar on its run class path, and both wasm backends warn `JAVA:CALL`/`JAVA:NEW`/`JAVA:STATIC` off the probe's path. Its indexes are persistent-sorted-set's port and `datascript.storage` its storage-less `.cljs` ("ClojureScript ports"). Fixed on the way, each in its own section: `String.equals` of a non-string false (`tx-id?`), `->Eduction` an eduction (its index slices), `.isArray` of a fn's class ("Java interop"), a declared var a macro's `defn` defines below its callers (`defn+`, "Where it sits"); for wasm, `Math/pow`, `Integer/compare`, `Long/compare`, `Numbers/compare`, `.getClass` of a number or a string, `.compareTo` of a number or a string, and `System/arraycopy` and `java.util.Arrays`' copies, sorts and fill over the vector an array is ("Portable number statics", "Remaining array surface"). j26 (2026-11-09): datascript loaded verbatim -- `defrecord-updatable` over the oracle's `defrecord` expansion and `deftype*`, `defcomp`'s `IFn$OOL`, extend-clj's `deftype-atom`, `transact`'s `IBlockingDeref` reify, `RT/assoc` and `Util/hashCombine` -- and its first `create-conn` stopped at `Cannot link class me.tonsky.persistent_sorted_set.PersistentSortedSet: missing class clojure.lang.IEditableCollection` (interpreter; the JVM class with the jar on its run class path the same; wasm P1 `The function JAVA:NEW is undefined`): the sorted set its indexes are is Java over `clojure.lang` ("Classes compiled against `clojure.lang`", persistent-sorted-set). |
-| specter 1.1.6 | = | = | stop | stop | 2026-11-08 round, 10 lines (`transform`/`select`/`select-one`/`setval` over `MAP-VALS`, `ALL`, `END`, `LAST`, `filterer`, `srange`, `collect-one`, `NONE`). Needed j27, j15, j13, j23, j22, j21, j12, j25, j17. j27 (2026-11-09): the verbatim jar prints the 10-line probe's oracle lines on the interpreter and the JVM class (the jar on its run class path; a host class with or without riddley) -- riddley 0.1.12, its pinned dependency, is the built-in one ("riddley (j27)"), the last of j07's hunks. Re-probed 2026-11-09 (j07): unchanged; the wasm stop is `.todo/j38`. P1 and the component stop compiling at `specter.cljc:1020:1: in macro com.rpl.specter/path: No matching field found: get for class clojure.lang.Symbol`: `path`'s body reads its inline cache through `(.get ^MutableCell c)` in a helper lowered for the target, whose instance call keeps no host arm there ("Host arms where the host is not"), the same with `clojure.walk` in riddley's place (j24's schema stop is this one); and the cache a run reads is a host `MutableCell` |
+| specter 1.1.6 | = | = | = | = | 2026-11-08 round, 10 lines (`transform`/`select`/`select-one`/`setval` over `MAP-VALS`, `ALL`, `END`, `LAST`, `filterer`, `srange`, `collect-one`, `NONE`). Needed j27, j15, j13, j23, j22, j21, j12, j25, j17. j27 (2026-11-09): the verbatim jar prints the 10-line probe's oracle lines on the interpreter and the JVM class (the jar on its run class path; a host class with or without riddley) -- riddley 0.1.12, its pinned dependency, is the built-in one ("riddley (j27)"), the last of j07's hunks. Re-probed 2026-11-09 (j07): unchanged; the wasm stop is `.todo/j38`. P1 and the component stop compiling at `specter.cljc:1020:1: in macro com.rpl.specter/path: No matching field found: get for class clojure.lang.Symbol`: `path`'s body reads its inline cache through `(.get ^MutableCell c)` in a helper lowered for the target, whose instance call keeps no host arm there ("Host arms where the host is not"), the same with `clojure.walk` in riddley's place (j24's schema stop is this one); and the cache a run reads is a host `MutableCell`. j38 (2026-11-09): where no host is `MutableCell` and `Util` are read from their class files as Clojure ("Portable reading of a dependency's Java class"), which the macro-time image runs as the program does, so the verbatim probe prints the oracle's lines on all four backends; both wasm legs warn `JAVA:NEW`/`JAVA:FIELD` off the path. A path closing over a local (`[sp/ALL #(> % k)]`) is a dynamic path specter compiles through `eval` at its first call, which wasm refuses by name ("Lowering at run time"); `setval` of `NONE` over a lazy seq answers it reversed on every backend (`(empty (range 3))` is nil here, the pinned empty-list deviation, so its `list?` arm misses) |
 f92 shares every site-independent core value program-wide through `%clojure-shared-value`, so the probe is green again on all four. f98: the 8-line pattern-schema probe (`form`/`type` of `(m/schema #"a")`, `validate` of a hit, a miss and a non-string, `explain`, the `:malli.core/invalid-schema` refusals of `(m/schema 42)` and `(m/schema "s")`) is the oracle's line for line on all four since 2026-10-13 (`type` of a pattern hits the `class-schemas` entry: the host class where a host is, the designator where none is). That 12-line wasm parity was overstated (2026-10-13, f99): the probe's decode lines print bare (`println`), under which an undecoded `"1"` reads as `1` -- `(Long/parseLong x)` refused at call time there, so `-string->long`'s catch kept the input (`pr-str` shows the gap). One-argument `Long/parseLong` now lowers to the portable reader where the host is not (`%clojure-parse-long-static`, "Portable number statics"), and the 12-line probe is the oracle's line for line under `pr-str` on all four backends |
 
 `=` is the oracle's output line for line (12-31 lines per probe; tools.cli's `:parse-fn` is
@@ -2218,6 +2218,69 @@ persistent-sorted-set bullet.
   (`ClojureScriptPortFixture`: a jar whose `.clj` imports a class over a type the jar omits and
   whose `.cljs` spells the surface above; four backends), `ClojureClassFilesLoweringTest`
   (`cljs-port`: reflection and class files choose the port alike).
+
+## Portable reading of a dependency's Java class
+
+**Where no host is (wasm), a class a source root holds as a class file -- a Clojure library's
+own helper class -- is read as the Clojure it amounts to when its every member is within the
+reading's subset** (j38, 2026-11-09; `ClojureJavaClassReading` over `java.lang.classfile`,
+`ClojurePortableClasses`, `ClojureSourcePath.classReading`). Why: specter's `path` caches its
+compiled path in a `com.rpl.specter.MutableCell` (`(MutableCell. v)`, `.get`, `.set`) and
+`fast-object-array` is `Util/makeObjectArray` -- Java in specter's jar, beside its sources,
+which no wasm module runs. Weighed (j38): the class read from its class file (chosen: every
+library shipping such a class, no per-library table); specter's `:bb` branch (babashka's
+runtime, a JVM with its classes; the reader keeps the form's order, `:clj` first for
+specter); the `:cljs` branch (ClojureScript reads a `.cljc` twice, its macros from the `:clj`
+reading -- one namespace here serves both, and specter's macros call `intern*`, which its
+`:cljs` branch refuses); red.
+- What is read: a concrete class extending `Object` and implementing nothing; fields of any
+  type but `float` (an instance field private: a deftype's mutable field answers no `.-f`);
+  methods without exception handlers over locals, `int`/`long`/`double`/`String` constants,
+  the class's own fields, methods and constructors, arrays, `int`/`long`/`double`
+  arithmetic (an int wraps: `unchecked-*-int`; `d2i`/`d2l` saturate through helpers the
+  namespace defines), comparisons, every branch and switch. Not read (`Unreadable`):
+  another class's member (a JDK method, a string concatenation's `invokedynamic`), a
+  handler, a `float`, two overloads of one count, a superclass or interface, a name a
+  special form spells, a static method named like its class. Such a class stays the host's:
+  a call-time refusal where no host is, as before (`JAVA:NEW` warns).
+- The namespace `rontolisp.java.<binary name>` (the source generated once per lowering; the
+  source path answers it as the namespace's file): a `definterface Members` of the instance
+  methods and the constructors (`<init>`, one per count), a `deftype*` of the class's simple
+  and binary names over the instance fields, all `^:unsynchronized-mutable`, so `class`,
+  `instance?`, the printer and a protocol row read the oracle's class (`fixture.plain.Cell`);
+  a `<init>` function per count (a fresh instance over the fields' defaults, its constructor
+  method run on it, `this(...)` a method call); a function per static method; a var
+  `field-NAME` per static field (no Java name has a hyphen, so a field and a method of one
+  name keep their own): a constant's value, else an atom. A body is one `let` where it does
+  not branch, else a `loop` over a `case` of its blocks, each block's locals and stack passed
+  to `recur`; a stack value is bound in bytecode order (`t-N`), and a value keeps its Clojure
+  spelling at every boundary -- a parameter, a result, a field, an array element: a `boolean`
+  true/false, a `char` a character -- and the JVM's on the stack (0/1, an int).
+- Where the lowering reaches it (`ClojurePortableClasses.loaded`: top-level datums only,
+  never where the host is, never a `java.`/`javax.`/`jdk.`/`sun.`/`com.sun.`/`clojure.`
+  class): an `import` loads the namespace (`importClass`, so an instance call below finds the
+  interface's rows), as do a construction (`hostConstruction`), a static call (`staticCall`),
+  a static member read (`staticNoArg`, `memberValue`) and a receiver's hint
+  (`instanceCall`). Once loaded the type is found by its class name (`typeKeyOf`), so a
+  construction -- `(C. ...)`, `(new C ...)`, `C/new` -- takes the reading's `<init>` of the
+  count, never the type's positional constructor (`ClojurePortableClasses.typeConstruction`;
+  a count none takes is the oracle's `No matching ctor found for class C`), `C/static` the
+  class's static (`qualifiedMember`), and a hint `^C` still names the host class (`tagHint`),
+  so `castClass` keeps the oracle's `ClassCastException` (specter's cache catches it from
+  `(.get ^MutableCell c)` of a var still unbound; the hostless refusal casts too, "Host arms
+  where the host is not"). Only the reading's own namespace builds the type over its fields;
+  the simple-name leniency of `typeKeyOf` skips a reading's namespace.
+- The macro-time image runs the program's lowering, so a macro body uses the reading too:
+  specter's `path` makes its cache cell and `used-locals` its cell through it while `select`
+  expands ("Macros", the image where the target has no host).
+- Deviations (wasm only, user doc): a `checkcast` in a read class checks nothing; arrays are
+  the vectors they are here.
+- Pins: `ClojureProjectNamespacesTest#aDependencysPlainJavaClasses*` (`ClojureJavaClassFixture`:
+  a jar of four classes and a namespace over them -- a cell, statics with branches, a loop
+  over an array, a switch, int overflow, a boolean and a char, a static counter, chained
+  constructors and a `toString`, a macro building a cell while it expands, and a class
+  concatenating a string, refused where no host is but answered by a macro body there; the
+  interpreter and the JVM run the host's classes).
 
 ## Ring adapter
 
@@ -3509,7 +3572,7 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   `ClojureLoweringTest#aRandomConstructionLowersToThePortableGeneratorWhereTheHostIsNot`
   and `#aRandomDrawLowersToThePortableWorkerWhereTheHostIsNot`.
 
-## Portable LinkedList
+## Portable LinkedList and ArrayList
 
 - **The list** (2026-10-30; `ClojurePortableLinkedListLowering`,
   `lib/rontolisp/internal/linked_list.clj`): an untagged zero-argument
@@ -3540,15 +3603,24 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   read the deftype (`print` writes the members like `pr`, the oracle the host
   object); `.remove` of an integer is always remove-at-index (the overload the
   oracle's reflector picks for a long; `remove(Object)` is not offered).
+- **The ArrayList** (j38, 2026-11-09; schema's collection checker, `(java.util.ArrayList.)`
+  with `.add`, `.iterator`, `nth`): an untagged zero-argument construction where the host is
+  not is the same namespace's `ArrayList`, the list body plus `java.util.RandomAccess`, so
+  `nth` reads it through `%clojure-nth`'s RandomAccess arm, the oracle's `RT.nthFrom` (a
+  `LinkedList` is no RandomAccess: `nth` refuses it there as in the oracle). Both deftypes come
+  from one `deflist` macro of the namespace. Deviation: `class`, `instance?` and `print` read
+  the deftype.
 - **Pins**: clojure-spec
   `a-linked-list-construction-is-a-mutable-list-where-the-host-is-not` (all four,
-  oracle-identical; the imported spelling pins the leniency skip).
+  oracle-identical; the imported spelling pins the leniency skip),
+  `a-weak-hash-map-atomic-reference-and-array-list-are-portable-where-the-host-is-not` (the
+  ArrayList lines).
 - Native image: `resource-config.json`'s `lib/rontolisp` pattern did not reach
   `lib/rontolisp/internal/` (so `core_macros.clj` was absent from the binary too);
   the pattern takes subdirectories now and `NativeImageResourceConfigTest` lists the
   directory.
 
-## Portable IdentityHashMap
+## Portable IdentityHashMap and WeakHashMap
 
 - **The map** (2026-11-09, j28; `ClojurePortableIdentityMapLowering`, `clojure.lisp`
   "Portable java.util.IdentityHashMap"): an untagged zero-argument
@@ -3571,8 +3643,22 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   are never `identical?`.
 - Deviations: a number or a character keys by value (`eq` is `eql`, `.kb/eq-numbers.md`);
   `class`, `instance?` and `print` read the list.
+- **The WeakHashMap** (j38, 2026-11-09; schema's class registry,
+  `(Collections/synchronizedMap (WeakHashMap.))`): where the host is not an untagged
+  zero-argument `(java.util.WeakHashMap.)` is `(%clojure-identity-map-new-equal)`, the same
+  list over an `equal` table with a third element marking it, whose workers store a key
+  through `%clojure-store-key` and find one through `%clojure-table-key` (`%clojure-identity-map-key`),
+  so it keys by `=` like a Clojure map; a second producer of `IDENTITY_MAP`. Nothing drops a
+  key (no collector weakens one). A `java.util.Collections` synchronized wrapper
+  (`synchronizedMap`, `-List`, `-Set`, `-Collection`, the sorted and navigable ones) of one
+  argument is that argument where the host is not
+  (`ClojurePortableIdentityMapLowering.synchronizedWrapper`): no other thread exists there, and
+  an immutable map's `.put` refuses as the oracle's wrapper of it does. Where the host is both
+  stay the host's (the crossing keeps `equals`, above).
 - **Pins**: clojure-spec `an-identity-hash-map-keys-by-identity-and-nano-time-reads-a-clock`
-  (all four, oracle-identical).
+  (all four, oracle-identical),
+  `a-weak-hash-map-atomic-reference-and-array-list-are-portable-where-the-host-is-not` (the
+  map lines).
 
 ## Portable StringJoiner
 
@@ -3594,6 +3680,30 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
 - Deviations (wasm only): `class`, `instance?` and `print` read the deftype; no `merge`.
 - **Pins**: clojure-spec `a-string-joiner-construction-is-a-joiner-where-the-host-is-not`
   (all four, oracle-identical; its first line is the hinted-before-construction order).
+
+## Portable AtomicReference
+
+- **The cell** (j38, 2026-11-09; `ClojurePortableAtomicReferenceLowering`,
+  `lib/rontolisp/internal/atomic_reference.clj`): where the host is not an untagged
+  `(java.util.concurrent.atomic.AtomicReference.)` or `(AtomicReference. x)` is the deftype of
+  the INTERNAL namespace `rontolisp.internal.atomic-reference`, like "Portable StringJoiner":
+  `get`, `set`, `lazySet`, `getPlain`, `setPlain`, `getAndSet`, `compareAndSet` and
+  `weakCompareAndSetPlain` (by `identical?`, the JDK's `==`), `getAndUpdate`, `updateAndGet`,
+  `getAndAccumulate`, `accumulateAndGet` (a fn called, else the reified operator's `.apply`)
+  through a `definterface`, `toString` `String.valueOf`'s (`null` for nil). schema keeps its
+  fn-validation switch in one (`use-fn-validation`, read by `(.get ^AtomicReference ...)` in
+  `s/defn` and `s/defprotocol`'s expansions and at macro time). A receiver hinted
+  `^AtomicReference` loads the namespace too (`preloadForHint`, StringJoiner's load order).
+- Where the host is the construction keeps the host's object. There a value crossing into it
+  is a new Java object each time (the IdentityHashMap measurement above), so `.compareAndSet`
+  of a keyword or a collection never finds the one stored; nil, a boolean and an integer the
+  JDK caches do (measured 2026-11-09: `(.compareAndSet r :x :y)` after `(.set r :x)` is false
+  on the interpreter and the JVM, true in the oracle). Not made portable there: the host's
+  cell is the one a program's threads share.
+- Deviations (wasm only): `class`, `instance?` and `print` read the deftype.
+- **Pins**: clojure-spec
+  `a-weak-hash-map-atomic-reference-and-array-list-are-portable-where-the-host-is-not` (all
+  four, oracle-identical; values whose identity survives the host's crossing).
 
 ## Portable GregorianCalendar
 
@@ -4627,6 +4737,27 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   on the interpreter and the JVM class, and a macro body calling `sp/transform` expands.
   Pins: clojure-spec `a-var-a-macro-interns-while-it-expands-starts-the-program-unbound`
   (four backends; oracle-identical but its last line, the AOT compile's).
+- **What a macro body runs where the target has no host** (j38, 2026-11-09): the forms the
+  image runs are the program's own lowering (`handOver`), lowered for the target, so where
+  no host is a body sees the program's values -- the portable readings of JDK classes
+  ("Portable ..." sections) and of a dependency's plain classes ("Portable reading of a
+  dependency's Java class"): specter's `path` builds its cache cell, schema's
+  `s/defprotocol` reads its switch, through them. The image itself is a host, though: a
+  `java:new`/`java:static` of a class with no portable value makes a host object there,
+  which the target's code assumes cannot exist, so the hostless instance call's refusal
+  stands behind a host-object arm the image keeps and the program has stripped ("Host arms
+  where the host is not") -- a body's host member (`.text` of a dependency's class read
+  nowhere) answers at compile time as on the JVM, the ClojureScript model, where macros run
+  on the compiling JVM. Weighed and not made: lowering every handed-over datum a second
+  time for the host (the ClojureScript model whole: a twin lowering in lockstep with the
+  target's, its passes, loads and interns) -- every wasm compile with a macro would lower
+  its program twice, and the image's divergence is only the host object; and the image
+  refusing `java:new` too (consistent, but a macro body's host use would fail on wasm
+  only). Before (2026-11-08 round): specter's `path` stopped at `No matching field found:
+  get for class clojure.lang.Symbol` (the default class name of a host object in
+  `%clojure-class-name-of`), schema's `s/defprotocol` the same. Pins:
+  `ClojureProjectNamespacesTest#aDependencysPlainJavaClasses*` (a macro building a read
+  cell, and one calling an unread class's member while it expands).
 - **A program macro wins over every lowering row of its name from its definition on;
   above it the core meaning holds**, like the oracle's form-by-form compile. `lowerInner`
   tries the macro before any row, except for `isReservedHead` (the oracle's special forms
@@ -6192,7 +6323,14 @@ real call too. Where it is decided, every piece keyed on `hostTarget` (`Clojure.
   `Object`, `Long`, `Double`, `Character`, `Boolean`, `Throwable`, and `String` / `Writer` /
   `Reader` unless the string / stream arm answers first -- has the method at the count (the
   program's call needs the host: `(.byteValue x)` still warns); otherwise the oracle's refusal
-  (`No matching method getBytes found taking 1 args for class java.lang.Long`). The string arm is
+  (`No matching method getBytes found taking 1 args for class java.lang.Long`), its
+  `ClassCastException` where the call casts a hinted receiver (`castClass`, j38: a number
+  handed to `(.get ^MutableCell c)`), behind `(if (%clojure-host-object-p recv
+  "java.lang.Object") <java:call> <refusal>)` (j38, 2026-11-09). That test is a `HOST` arm:
+  the program, which holds no host object, has it stripped (its bytes unchanged), and the
+  macro-time image -- a host running the forms as they lower, which makes a host object of
+  a class with no portable value -- keeps it, so a macro body's host member answers there as
+  on the JVM ("Macros", what a macro body runs where the target has no host). The string arm is
   built ahead of the host arm on wasm only, so the host's temp numbering is unchanged.
   `.toString` there is `str` past the stream arm; `(.-f x)` of a non-type the oracle's
   `No matching field found`; an io value's unmapped member refused by name when an io class has

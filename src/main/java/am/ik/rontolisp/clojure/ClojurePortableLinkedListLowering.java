@@ -23,27 +23,35 @@ final class ClojurePortableLinkedListLowering {
 
 	private static final String LINKED_LIST_CLASS = "java.util.LinkedList";
 
+	/**
+	 * The other list class whose zero-argument construction is the portable list where
+	 * the host is not (schema's collection checker): a {@code java.util.List} the same
+	 * members answer.
+	 */
+	private static final String ARRAY_LIST_CLASS = "java.util.ArrayList";
+
 	private ClojurePortableLinkedListLowering() {
 	}
 
 	/**
-	 * A zero-argument {@code java.util.LinkedList} construction as the portable list,
-	 * where the host is not: the caller checks the target, the count and that the
-	 * construction is untagged (the collection copy keeps {@code java:new}). Null for any
-	 * other class, and outside top-level datums (a run-time lowering), where no namespace
-	 * loads: that keeps {@code java:new} too.
+	 * A zero-argument {@code java.util.LinkedList} or {@code java.util.ArrayList}
+	 * construction as the portable list, where the host is not: the caller checks the
+	 * target, the count and that the construction is untagged (the collection copy keeps
+	 * {@code java:new}). Null for any other class, and outside top-level datums (a
+	 * run-time lowering), where no namespace loads: that keeps {@code java:new} too.
 	 * @param ctx the hub
 	 * @param cls the class's binary name
 	 * @return the construction, or null
 	 */
 	static @Nullable LispVal construction(ClojureLowering ctx, String cls) {
-		if (!cls.equals(LINKED_LIST_CLASS) || !ctx.atTopLevel()) {
+		if (!cls.equals(LINKED_LIST_CLASS) && !cls.equals(ARRAY_LIST_CLASS) || !ctx.atTopLevel()) {
 			return null;
 		}
 		if (!ctx.loadedNamespaces.contains(NAMESPACE) && !ctx.loadingNamespaces.contains(NAMESPACE)) {
 			ClojureNamespaceLowering.preload(ctx, NAMESPACE);
 		}
-		return ClojureLowerUtil.list(ClojureLowering.varSym(NAMESPACE + "/linked-list"));
+		return ClojureLowerUtil
+			.list(ClojureLowering.varSym(NAMESPACE + (cls.equals(ARRAY_LIST_CLASS) ? "/array-list" : "/linked-list")));
 	}
 
 }

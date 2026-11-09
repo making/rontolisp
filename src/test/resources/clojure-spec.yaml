@@ -15793,6 +15793,44 @@ cases:
       "x-y"
       "The delimiter must not be null"
       "The empty value must not be null"
+  - name: a-weak-hash-map-atomic-reference-and-array-list-are-portable-where-the-host-is-not
+    # Where no host is (wasm) a (java.util.WeakHashMap.) is the portable map
+    # keying by = (the identity map's list over an equal table), a
+    # Collections/synchronized* wrapper its argument, an (AtomicReference. [x])
+    # the deftype of rontolisp.internal.atomic-reference (its interface
+    # loaded by a hinted receiver too) and an (ArrayList.) the portable list,
+    # RandomAccess so nth reads it (schema's class registry, fn-validation
+    # switch and collection checker). The interpreter and the JVM keep the
+    # host's objects; compareAndSet compares values whose identity survives
+    # the java: boundary there. Oracle-identical (clj 1.12.6, 2026-11-09).
+    source: |
+      (let [m (java.util.Collections/synchronizedMap (java.util.WeakHashMap.))]
+        (prn (.put m [1 2] :v) (.put m "k" 1) (.put m [1 2] :w) (.put m {:a 1} nil))
+        (prn (.get m [1 2]) (.get m (vector 1 2)) (.get m "k") (.containsKey m {:a 1}) (.containsKey m "z") (.size m))
+        (prn (.remove m [1 2]) (.remove m [1 2]) (.size m) (.isEmpty m) (.clear m) (.isEmpty m)))
+      (let [r (java.util.concurrent.atomic.AtomicReference. false)
+            e (java.util.concurrent.atomic.AtomicReference.)]
+        (prn (.get r) (.set r true) (.get r) (.get e) (str e) (str r))
+        (prn (.getAndSet r 1) (.compareAndSet r 1 2) (.compareAndSet r 1 3) (.get r))
+        (prn (.updateAndGet r (fn [v] [v])) (.getAndUpdate r count) (.get r)))
+      (defn read-reference [^java.util.concurrent.atomic.AtomicReference r] (.get r))
+      (prn (read-reference (java.util.concurrent.atomic.AtomicReference. 42)))
+      (let [l (java.util.ArrayList.)]
+        (prn (.add l 1) (.add l "a") (.size l) (nth l 1) (nth l 5 :none) (seq l) (vec l) (str l))
+        (let [it (.iterator l)] (prn (.hasNext it) (.next it) (.next it) (.hasNext it))))
+      (let [s (java.util.Collections/synchronizedList (java.util.ArrayList.))]
+        (prn (.add s :x) (.get s 0) (.size s)))
+    expected: |
+      nil nil :v nil
+      :w :w 1 true false 3
+      :w nil 2 false nil true
+      false nil true nil "null" "true"
+      true true false 2
+      [2] [2] 1
+      42
+      true true 2 "a" :none (1 "a") [1 "a"] "[1, a]"
+      true 1 "a" false
+      true :x 1
   - name: a-linked-list-construction-is-a-mutable-list-where-the-host-is-not
     # (java.util.LinkedList.) where no host is (wasm) is the deftype of the
     # internal namespace rontolisp.internal.linked-list, loaded where the

@@ -1157,8 +1157,7 @@ final class ClojureValueMethodLowering {
 	 * {@code ClassCastException} (nil its {@code NullPointerException}) instead: its
 	 * compiler casts the receiver before the arguments run.
 	 */
-	private static LispVal castOrRefusal(ClojureLowering ctx, LispVal recv, String method, boolean known,
-			List<LispVal> args) {
+	static LispVal castOrRefusal(ClojureLowering ctx, LispVal recv, String method, boolean known, List<LispVal> args) {
 		String cast = ctx.receiverCast;
 		if (cast == null) {
 			return refusal(recv, method, known, args);

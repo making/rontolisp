@@ -81,12 +81,12 @@ class ClojureWasmInteropRefusalTest {
 
 	@Test
 	void hostBooleanCallRefusesOnPreview1() throws Exception {
-		assertRefusal("(println (.isEmpty (java.util.ArrayList.)))", "JAVA:CALL", false);
+		assertRefusal("(println (.isEmpty (java.util.ArrayDeque.)))", "JAVA:CALL", false);
 	}
 
 	@Test
 	void hostBooleanCallRefusesOnTheComponent() throws Exception {
-		assertRefusal("(println (.isEmpty (java.util.ArrayList.)))", "JAVA:CALL", true);
+		assertRefusal("(println (.isEmpty (java.util.ArrayDeque.)))", "JAVA:CALL", true);
 	}
 
 	@Test
@@ -103,12 +103,12 @@ class ClojureWasmInteropRefusalTest {
 
 	@Test
 	void qualifiedConstructorRefusesOnPreview1() throws Exception {
-		assertRefusal("(println (java.util.ArrayList/new))", "JAVA:NEW", false);
+		assertRefusal("(println (java.util.ArrayDeque/new))", "JAVA:NEW", false);
 	}
 
 	@Test
 	void qualifiedConstructorRefusesOnTheComponent() throws Exception {
-		assertRefusal("(println (java.util.ArrayList/new))", "JAVA:NEW", true);
+		assertRefusal("(println (java.util.ArrayDeque/new))", "JAVA:NEW", true);
 	}
 
 	@Test

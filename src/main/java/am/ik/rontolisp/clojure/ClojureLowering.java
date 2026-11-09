@@ -3602,8 +3602,9 @@ public final class ClojureLowering {
 		for (Map.Entry<String, TypeDef> type : this.types.entrySet()) {
 			// an internal namespace's deftype (the portable LinkedList) is no program's
 			// class: only its own namespace names it
-			if (type.getValue().simpleName().equals(name) && !ClojureBuiltinNamespaces
-				.isInternal(type.getKey().substring(0, type.getKey().lastIndexOf('/')))) {
+			String typeNs = type.getKey().substring(0, type.getKey().lastIndexOf('/'));
+			if (type.getValue().simpleName().equals(name) && !ClojureBuiltinNamespaces.isInternal(typeNs)
+					&& !ClojurePortableClasses.isReadingNamespace(typeNs)) {
 				if (only != null) {
 					return null;
 				}

@@ -328,7 +328,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   and runs in one process. A var the body interns while it expands (`intern`, as
   specter's inline caches do) is the program's from there on, but holds no root when the
   program starts, as the oracle's AOT compile (`compile`) leaves it: `bound?` of it is
-  false, so code that fills an unbound var (specter's caches do) fills it. A
+  false, so code that fills an unbound var (specter's caches do) fills it. On the wasm
+  backends the body runs the code the program compiles to -- the values of this front
+  end's own where the program has them -- but the compile runs on a host, so a Java
+  object the body makes of a class with no such value answers its methods there. A
   `defmethod` or protocol extension a program macro expands to is not seen there. A call
   above a macro's definition is refused, and a program macro's bare name has no value,
   like the oracle's. A `defmacro` of a special
@@ -603,6 +606,21 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   front end's own on the wasm backends: `class`, `instance?` of `java.util.StringJoiner`
   and `print` read it as that joiner, and `.merge` is not offered. Where the host is it
   stays the host's `StringJoiner`.
+- On the wasm backends a zero-argument `(java.util.WeakHashMap.)` is a map of this front
+  end's own keyed by `=`, as the host's `equals`-keyed map is: `.put`, `.get`,
+  `.containsKey`, `.remove`, `.size`, `.isEmpty` and `.clear` answer like the host's, and
+  no key is ever dropped (nothing collects one). A `java.util.Collections` synchronized
+  wrapper (`synchronizedMap`, `synchronizedList` ...) is its argument there, no other
+  thread existing. A zero-argument `(java.util.ArrayList.)` is the mutable list a
+  `LinkedList` is, `RandomAccess` too, so `nth` reads it (and refuses a `LinkedList`, as
+  the oracle does). An `(java.util.concurrent.atomic.AtomicReference.)` or
+  `(AtomicReference. x)` construction is a cell of this front end's own: `.get`, `.set`,
+  `.lazySet`, `.getAndSet`, `.compareAndSet` (by identity), `.updateAndGet`,
+  `.getAndUpdate`, `.accumulateAndGet`, `.getAndAccumulate` and `str` answer like the
+  host's. `class`, `instance?` and `print` read each as the value of this front end's own.
+  Where the host is all stay the host's objects; there a value crossing into a host
+  `AtomicReference` is a new Java object each time, so `.compareAndSet` of a keyword or a
+  collection never finds the one stored (nil, a boolean or a small integer does).
 - A zero-argument `(Object.)` is a fresh uninterned symbol on the wasm backends, so a
   load-time lock builds; two constructions are never `=` or `identical?`, like two host
   objects, but one prints as a gensym where the oracle prints the object's identity.
@@ -1021,6 +1039,17 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   (persistent-sorted-set's `(seek (seq set) k)`) does not take it -- `slice`'s answer is
   the object; `/` of two integers is a ratio, as in Clojure; another `js/` name refuses
   where it is reached.
+- On the wasm backends a plain Java class a dependency ships beside its sources --
+  specter's `com.rpl.specter.MutableCell` and `Util` -- is read from its class file as the
+  Clojure it amounts to: its constructors, methods, static methods and static fields run
+  where no host object exists, and `class`, `instance?` and `print` read it as the class
+  it names. The class must extend `Object`, implement no interface, have no public
+  instance field and keep to its own fields and methods: locals, constants, arrays,
+  `int`, `long` and `double` arithmetic, branches and switches, but no `float`, no
+  exception handler and no other class's member (a string concatenation calls one). A
+  cast inside it checks nothing. Any other class stays the host's and refuses when called
+  there, as every `java:` call does. Where the host is (the interpreter and the JVM) the
+  class is always the host's.
 - Only `.clj` and `.cljc` files below the source roots are read, and a `.cljs` only as
   such a port. A dependency's jar holding
   classes also joins the Java class path; a directory's classes do not (give a prepped
