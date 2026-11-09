@@ -2,10 +2,46 @@
 
 ;;; --- the database ------------------------------------------------------------
 
+(defun tagged-postgresql-p (instance)
+  "Whether a VCAP_SERVICES entry carries the postgresql tag."
+  (let ((tags (gethash "tags" instance)))
+    (and (vectorp tags) (find "postgresql" tags :test #'equal))))
+
+(defun vcap-database-url (vcap-services)
+  "The credentials' uri of the first service tagged postgresql in
+   VCAP_SERVICES, or nil. That is what Cloud Foundry gives an app bound to a
+   user-provided service (cf create-user-provided-service ... -p
+   '{\"uri\":\"postgres://...\"}' -t postgresql) or to a broker's PostgreSQL,
+   whatever the offering is called."
+  (when (and vcap-services (string/= vcap-services ""))
+    (let ((services (rontolisp:json-parse vcap-services)))
+      (when (hash-table-p services)
+        (maphash (lambda (offering instances)
+                   (declare (ignore offering))
+                   (when (vectorp instances)
+                     (loop for instance across instances
+                           do
+                             (when (and (hash-table-p instance)
+                                        (tagged-postgresql-p instance))
+                               (let ((credentials
+                                      (gethash "credentials" instance)))
+                                 (when (hash-table-p credentials)
+                                   (let ((uri (gethash "uri" credentials)))
+                                     (when (stringp uri)
+                                       (return-from vcap-database-url
+                                                    uri))))))))) services)
+        nil))))
+
+(defun database-url ()
+  "Where the database is: a service tagged postgresql in VCAP_SERVICES, else
+   DATABASE_URL."
+  (or (vcap-database-url (uiop:getenv "VCAP_SERVICES"))
+      (uiop:getenv "DATABASE_URL")))
+
 (defun connect ()
   "A connection to the database. One per request -- see wrap-connection."
   (multiple-value-bind (database user password host port)
-      (database-url-parts (uiop:getenv "DATABASE_URL"))
+      (database-url-parts (database-url))
     (cl-postgres:open-database database user password host port)))
 
 (defun column-key (name)

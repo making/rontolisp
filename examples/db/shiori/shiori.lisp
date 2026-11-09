@@ -21,7 +21,8 @@
 ;; carries them and runs from any directory.
 ;;
 ;; It needs a server, and reads where to find it out of DATABASE_URL
-;; (../database-url.lisp parses the URL):
+;; (../database-url.lisp parses the URL), or on Cloud Foundry out of the
+;; credentials' uri of a service tagged postgresql in VCAP_SERVICES (db.lisp):
 ;;   docker run --rm -p 54329:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:17-alpine
 ;;   export DATABASE_URL=postgresql://postgres@127.0.0.1:54329/postgres
 ;;   rontolisp examples/db/shiori/shiori.lisp

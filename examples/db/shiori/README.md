@@ -55,6 +55,16 @@ run under `pg_advisory_xact_lock`, so instances starting together do not race.
 `DATABASE_URL` is parsed by [`../database-url.lisp`](../database-url.lisp); see
 [`../README.md`](../README.md) for its format and for wasmCloud and Spin.
 
+On Cloud Foundry, a service bound to the app and tagged `postgresql` comes
+first: the `uri` of its credentials in `VCAP_SERVICES`, whatever the offering
+is called. A user-provided service gives it the same way a broker's PostgreSQL
+does, so one can replace the other without a change to the app:
+
+```bash
+cf create-user-provided-service shiori-db -p '{"uri":"postgres://user:password@db.example.com:5432/shiori"}' -t postgresql
+cf bind-service shiori shiori-db
+```
+
 ## Routes
 
 | Request | Without htmx | With htmx (`HX-Request`) |
