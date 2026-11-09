@@ -3607,9 +3607,11 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   with `.add`, `.iterator`, `nth`): an untagged zero-argument construction where the host is
   not is the same namespace's `ArrayList`, the list body plus `java.util.RandomAccess`, so
   `nth` reads it through `%clojure-nth`'s RandomAccess arm, the oracle's `RT.nthFrom` (a
-  `LinkedList` is no RandomAccess: `nth` refuses it there as in the oracle). Both deftypes come
-  from one `deflist` macro of the namespace. Deviation: `class`, `instance?` and `print` read
-  the deftype.
+  `LinkedList` is no RandomAccess: `nth` refuses it there as in the oracle). The two bodies
+  spell the same members over the namespace's private functions -- not one macro: an internal
+  namespace lowers wherever a construction does, a lowering with no macro-time evaluator
+  included (`ClojureLoweringTest`'s), which cannot expand one. Deviation: `class`, `instance?`
+  and `print` read the deftype.
 - **Pins**: clojure-spec
   `a-linked-list-construction-is-a-mutable-list-where-the-host-is-not` (all four,
   oracle-identical; the imported spelling pins the leniency skip),

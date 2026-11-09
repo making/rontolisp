@@ -28,8 +28,14 @@ class ClojureLoweringTest {
 		return forms.stream().map(LispVal::print).collect(Collectors.joining("\n"));
 	}
 
+	/**
+	 * A program lowered where no host is, as the wasm backends receive it: the
+	 * host-object family's arms stripped (no host object exists there; the splice strips
+	 * them whatever the program names), which the macro-time image alone keeps.
+	 */
 	private static String wasmLowered(String source) {
-		List<LispVal> forms = Clojure.read(source, null, null, ClojureFiles.NONE, false);
+		List<LispVal> forms = ClojureArms.strip(Clojure.read(source, null, null, ClojureFiles.NONE, false),
+				ClojureArms.Family.HOST);
 		return forms.stream().map(LispVal::print).collect(Collectors.joining("\n"));
 	}
 
@@ -2401,10 +2407,7 @@ class ClojureLoweringTest {
 		// where the host is not, no java: operator is left for any of them
 		String portable = "(let [sb (StringBuilder.)] (.append sb \"a\") (println (str sb) (.length sb)))"
 				+ " (println (.toUpperCase \"hi\" java.util.Locale/US) (.intern \"x\"))";
-		assertThat(Clojure.read(portable, null, null, ClojureFiles.NONE, false)
-			.stream()
-			.map(LispVal::print)
-			.collect(Collectors.joining("\n"))).doesNotContain("JAVA:");
+		assertThat(wasmLowered(portable)).doesNotContain("JAVA:");
 	}
 
 	@Test
@@ -2440,10 +2443,7 @@ class ClojureLoweringTest {
 		// where the host is not, no java: operator is left for any of them
 		String portable = "(println (str (StringBuilder. \"ab\")))" + " (println (str (new StringBuffer 16)))"
 				+ " (println (let [sb (StringBuilder/new \"x\")] (.append sb \"y\") (str sb)))";
-		assertThat(Clojure.read(portable, null, null, ClojureFiles.NONE, false)
-			.stream()
-			.map(LispVal::print)
-			.collect(Collectors.joining("\n"))).doesNotContain("JAVA:");
+		assertThat(wasmLowered(portable)).doesNotContain("JAVA:");
 	}
 
 	@Test
@@ -2473,10 +2473,7 @@ class ClojureLoweringTest {
 		String portable = "(println (str (java.io.StringWriter. 16)))"
 				+ " (println (str (new java.io.StringWriter (long 8))))"
 				+ " (println (let [w (java.io.StringWriter/new 4)] (.append w \"y\") (str w)))";
-		assertThat(Clojure.read(portable, null, null, ClojureFiles.NONE, false)
-			.stream()
-			.map(LispVal::print)
-			.collect(Collectors.joining("\n"))).doesNotContain("JAVA:");
+		assertThat(wasmLowered(portable)).doesNotContain("JAVA:");
 	}
 
 	@Test
