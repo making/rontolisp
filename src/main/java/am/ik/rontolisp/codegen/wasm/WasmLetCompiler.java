@@ -621,12 +621,6 @@ final class WasmLetCompiler {
 	}
 
 	/**
-	 * Collects the value expression of every {@code setq}/{@code setf} pair whose
-	 * assignment target is a plain symbol, anywhere in the tree (shadowing-blind: an
-	 * inner binding's setq also lands here, which only widens the eligibility heuristic,
-	 * never the compiled scoping). Feeds the unboxed-local eligibility check above.
-	 */
-	/**
 	 * The range of an outer variable a binding's init reads: a shadowless (counted or
 	 * exact) unboxed local's, or null for any other variable.
 	 */
@@ -636,6 +630,12 @@ final class WasmLetCompiler {
 		return raw == null || raw.shadowed() ? null : new WasmIntFusionCompiler.Range(raw.lo(), raw.hi());
 	}
 
+	/**
+	 * Collects the value expression of every {@code setq}/{@code setf} pair whose
+	 * assignment target is a plain symbol, anywhere in the tree (shadowing-blind: an
+	 * inner binding's setq also lands here, which only widens the eligibility heuristic,
+	 * never the compiled scoping). Feeds the unboxed-local eligibility check above.
+	 */
 	private static void collectAssignedValues(LispVal form, Map<String, List<LispVal>> out) {
 		if (!(form instanceof LispCons cons)) {
 			return;
