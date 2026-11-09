@@ -93,7 +93,8 @@ public final class SocketsLibrary {
 	 * itself runs later in the pipeline, so its tcp references are not visible here),
 	 * splice the target's provider: {@code sockets.lisp} (its {@code wit-import}
 	 * directive already lowered) for the component, {@code runner-sockets.lisp} for the
-	 * runner. A no-op on every other backend and when the program does not touch sockets.
+	 * runner; the component's program then ends in a flush of every socket's buffered
+	 * output. A no-op on every other backend and when the program does not touch sockets.
 	 * @param program the top-level forms
 	 * @param backend the backend being compiled for
 	 * @param runnerHosted whether the module runs under the {@code --native} runner
@@ -141,6 +142,9 @@ public final class SocketsLibrary {
 			out.add(form);
 		}
 		out.addAll(program);
+		// A connected socket buffers its writes (sockets.lisp, "the output buffer"):
+		// what a program wrote last and never flushed goes out when it ends.
+		out.add(LispReader.readAllFromString("(rontolisp::%sock-flush-all)", Features.INTERPRETER).get(0));
 		return out;
 	}
 

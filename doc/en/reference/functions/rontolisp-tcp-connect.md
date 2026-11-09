@@ -10,7 +10,8 @@ file streams, so the standard stream functions work on it directly:
 [`read-char`](read-char.md), [`read-byte`](read-byte.md),
 [`write-byte`](write-byte.md) and
 [`close`](close.md). Unlike buffered file output, socket writes are sent
-immediately (`write-line` flushes per line). `read-line` returns `nil` once
+immediately (`write-line` flushes per line; the WASM component buffers them,
+below). `read-line` returns `nil` once
 the peer has closed the connection.
 
 The example below is self-contained: it listens on an ephemeral port with
@@ -59,7 +60,12 @@ the server closes:
   failed connection, or a hostname that does not resolve to an IPv4 address,
   returns `nil` instead of a handle; without the `-S` flags
   the component still starts, but every socket operation fails and yields
-  `nil`. The tcp built-ins
+  `nil`. Writes are **buffered**: they go out when the program waits on any
+  socket (a read, [`listen`](listen.md), `tcp-accept`, `tcp-connect`), calls
+  [`force-output`](force-output.md) or [`finish-output`](finish-output.md),
+  closes the socket, has written 8 KiB, or ends; call `force-output` before a
+  wait on anything else, and before `uiop:quit`.
+  The tcp built-ins
   compile in Preview 1 (core-module) mode but every call raises a call-time
   error naming the backends that work.
 - **Native executable** (`--native`): as on the interpreter and the JVM -- the

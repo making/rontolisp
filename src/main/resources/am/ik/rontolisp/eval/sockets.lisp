@@ -39,10 +39,11 @@
 ;;;;     the same withdrawal is what makes listen a real probe (start a read,
 ;;;;     take it back when the host has nothing) and what lets close drop a stream
 ;;;;     another task is still reading.
-;;;;   - a TLS entry (tls.lisp) BUFFERS its writes and sends them at a read,
-;;;;     listen, force-output / finish-output, close or a full buffer: the host's
-;;;;     wasi:tls keeps back the tail of unbuffered writes ("the TLS output
-;;;;     buffer", below).
+;;;;   - a connected socket BUFFERS its writes and sends them when the program
+;;;;     waits on any socket (a read that must ask the host, listen, accept,
+;;;;     connect), at force-output / finish-output, close, a full buffer and the
+;;;;     program's end ("the output buffer", below): one message written in pieces
+;;;;     leaves as one host write instead of one segment per piece.
 
 ;; The WIT interfaces are lowered by SocketsLibrary (which calls
 ;; WitImportDirective.lower itself), so these directives never reach
@@ -57,16 +58,21 @@
                       :package %sock-dns)
 
 ;;; --- the socket table: fd -> (socket kind recv tx buf cursor eof mid-line
-;;; deadline out out-fill flushing) ---
+;;; deadline out out-fill flushing paced) ---
 ;;; kind 1 = connected, 2 = listener; recv = the recv byte stream (or, for a
 ;;; listener, the accept stream); tx = the write end of the send pair; mid-line =
 ;;; whether the characters written so far left the line open; deadline = the read
-;;; deadline in milliseconds, or nil; out = the output buffer of a TLS entry (nil
-;;; for a plain socket, which writes through), out-fill = its byte count,
-;;; flushing = whether a flush has a piece in flight.
+;;; deadline in milliseconds, or nil; out = the output buffer of a connected
+;;; socket (nil for a listener), out-fill = its byte count, flushing = whether a
+;;; flush has a piece in flight, paced = whether each piece waits first (a TLS
+;;; entry).
 
 (defvar rontolisp::*sock-table* (make-hash-table))
 (defvar rontolisp::*sock-next-fd* 200)
+
+;; The entries holding buffered output, flushed together whenever the program
+;; waits on a socket.
+(defvar rontolisp::*sock-dirty* nil)
 
 ;; The raw handle a stream designator names: an OPEN stream is a VALUE carrying its
 ;; handle in slot 0, and a synonym stream forwards to whatever its variable holds
@@ -118,6 +124,7 @@
 (defun rontolisp::%sock-e-flushing (e) (car (nthcdr 11 e)))
 (defun rontolisp::%sock-set-out-fill (e n) (rplaca (nthcdr 10 e) n))
 (defun rontolisp::%sock-set-flushing (e flag) (rplaca (nthcdr 11 e) flag))
+(defun rontolisp::%sock-e-paced (e) (car (nthcdr 12 e)))
 
 (defun rontolisp::%sock-set-streams (e recv tx)
   ;; tls.lisp's tls-upgrade swaps the entry onto the cleartext stream ends IN
@@ -135,7 +142,10 @@
   (let ((fd rontolisp::*sock-next-fd*))
     (setq rontolisp::*sock-next-fd* (+ fd 1))
     (setf (gethash fd rontolisp::*sock-table*)
-          (list sock kind recv tx nil 0 nil nil nil nil 0 nil))
+          (list sock kind recv tx nil 0 nil nil nil
+                (if (= kind 1)
+                    (make-array 8192 :element-type '(unsigned-byte 8))
+                    nil) 0 nil nil))
     (%obj-new '%STREAM fd (if (= kind 2) :socket-server :socket))))
 
 ;;; --- addresses: IPv4 literals parsed here, every other name looked up ---
@@ -235,6 +245,7 @@
   ;; resolve) yields nil, the WASM error convention -- matching fetch. The nil
   ;; convention lives HERE so the sync surface (a %future-force of this) and an
   ;; async body's promoted (await (%tcp-connect-f ...)) behave identically.
+  (rontolisp:await (rontolisp::%sock-flush-all-f))
   (handler-case (let* ((addr
                         (rontolisp:await (rontolisp::%sock-addr-f host port)))
                        (sock (%sock:tcp-socket-create :ipv4)))
@@ -259,6 +270,7 @@
 (rontolisp:async-defun rontolisp::%tcp-accept-f (listener)
   ;; A non-listener handle (or a host error) yields nil, like the old adapter's
   ;; errno convention.
+  (rontolisp:await (rontolisp::%sock-flush-all-f))
   (handler-case (let ((e (rontolisp::%sock-entry listener)))
                   (if (and e (= (rontolisp::%sock-e-kind e) 2))
                       (let ((sock
@@ -390,10 +402,9 @@
   ;; timer. When the timer wins the read is withdrawn; a chunk that landed
   ;; meanwhile is still taken, and an empty withdrawal (status 2, cancelled) is
   ;; the timeout. Nothing stays in flight, so the next read starts afresh, as
-  ;; after SO_TIMEOUT. A TLS entry's buffered output goes first: the peer may be
-  ;; waiting for it.
-  (when (rontolisp::%sock-e-out e)
-    (rontolisp:await (rontolisp::%sock-flush-f e)))
+  ;; after SO_TIMEOUT. Every socket's buffered output goes first: this peer, or
+  ;; one this program also talks to, may be waiting for it.
+  (rontolisp:await (rontolisp::%sock-flush-all-f))
   (let* ((recv (rontolisp::%sock-e-recv e))
          (rd (%sock:sock-stream-read recv))
          (ms (rontolisp::%sock-e-deadline e))
@@ -704,43 +715,68 @@
   ;; still go out), or an octet vector's length.
   (if (stringp s) (rontolisp::%str-byte-length s) (length s)))
 
+;;; --- the output buffer. wasi:sockets has no TCP_NODELAY and the host's socket
+;;; keeps Nagle on, so each write going out on its own made a message written in
+;;; pieces (cl-postgres writes a field at a time) wait for the peer's delayed ACK
+;;; of the piece before: 40 ms per piece against PostgreSQL on Linux. So a
+;;; connected socket collects its writes here and sends them at a flush: whenever
+;;; the program waits on ANY socket (a read or listen that has to ask the host,
+;;; accept, connect -- a single-threaded program may write on one socket and then
+;;; wait on its peer's end), force-output / finish-output, close, a full buffer,
+;;; and the program's end (SocketsLibrary appends the call). A write of a buffer
+;;; or more goes out as it is, after what is buffered.
+;;;
+;;; A TLS entry (tls.lisp) is PACED: each piece waits 1 ms first. wasmtime's
+;;; wasi:tls (49) hands each cleartext write to rustls and reports it written once
+;;; rustls has ACCEPTED it; the records rustls could not pass on yet -- the host
+;;; pipe behind it was full, or the task had used up its I/O budget for this turn
+;;; -- wait for the next cleartext write, since nothing on the host flushes them.
+;;; Unbuffered, a write followed by a read lost its tail: about 128 small writes
+;;; in a row, or one write past the pipe's 16 KiB. A piece of at most one buffer
+;;; makes a record that fits the pipe, and the wait lets the host drain the pipe
+;;; and starts a fresh budget, so rustls can pass the whole record on.
+;;; (.kb/tcp-sockets.md, "WASM TLS".) ---
+
 (defun rontolisp::%sock-write-string (e s)
   ;; S is a string or an octet vector (%sock-seq-payload); the stream write takes
   ;; either as its bytes. %sock-ensure-tx makes the write pair (and calls the
-  ;; at-most-once tcp-socket.send) on the first write -- the deferral tls-upgrade
-  ;; rests on. A TLS entry buffers instead (%sock-buffer-bytes, below).
-  (when (> (rontolisp::%sock-payload-length s) 0)
-    (if (rontolisp::%sock-e-out e)
-        (rontolisp::%sock-buffer-bytes e s)
-        (%sock:sock-stream-write (rontolisp::%sock-ensure-tx e) s)))
+  ;; at-most-once tcp-socket.send) on the first write that goes out -- the
+  ;; deferral tls-upgrade rests on. A listener has no buffer and writes through,
+  ;; as every socket did before the buffer.
+  (let ((n (rontolisp::%sock-payload-length s))
+        (out (rontolisp::%sock-e-out e)))
+    (when (> n 0)
+      (if (null out)
+          (%sock:sock-stream-write (rontolisp::%sock-ensure-tx e) s)
+          (if (or (rontolisp::%sock-e-paced e) (< n (length out)))
+              (rontolisp::%sock-buffer-bytes e s)
+              (progn
+                (rontolisp::%sock-flush e)
+                ;; another task's piece still in flight: queue behind it
+                (if (rontolisp::%sock-e-flushing e)
+                    (rontolisp::%sock-buffer-bytes e s)
+                    (progn
+                      (rontolisp::%sock-set-flushing e t)
+                      (%sock:sock-stream-write (rontolisp::%sock-ensure-tx e) s)
+                      (rontolisp::%sock-set-flushing e nil))))))))
   s)
 
-;;; --- the TLS output buffer. wasmtime's wasi:tls (49) hands each cleartext
-;;; write to rustls and reports it written once rustls has ACCEPTED it; the
-;;; records rustls could not pass on yet -- the host pipe behind it was full, or
-;;; the task had used up its I/O budget for this turn -- wait for the next
-;;; cleartext write, since nothing on the host flushes them. A write followed by
-;;; a read therefore lost its tail: about 128 small writes in a row, or one write
-;;; past the pipe's 16 KiB. So a TLS entry collects its writes here and sends
-;;; them at a flush: a read or listen that has to ask the host, force-output /
-;;; finish-output, close, or a full buffer -- the points real cl+ssl flushes its
-;;; own output buffer at, and then some. Each piece (at most one buffer, whose
-;;; record fits the pipe) is sent after a 1 ms wait, which lets the host drain
-;;; the pipe and starts a fresh budget, so rustls can pass the whole record on.
-;;; (.kb/tcp-sockets.md, "WASM TLS".) ---
-
-(defun rontolisp::%sock-buffer-output (e)
-  ;; tls.lisp's tls-upgrade turns buffering on once the handshake is done.
-  (rplaca (nthcdr 9 e) (make-array 8192 :element-type '(unsigned-byte 8))))
+(defun rontolisp::%sock-pace-output (e)
+  ;; tls.lisp's tls-upgrade paces the entry's flushes once the handshake is done.
+  (rplaca (nthcdr 12 e) t))
 
 (defun rontolisp::%sock-buffer-bytes (e payload)
   ;; The payload's bytes onto the buffer, flushing whenever it is full. A string
   ;; is first rendered by %string-concat: a character vector (a make-string or
-  ;; subseq result) would be rendered again by every %str-byte-ref.
+  ;; subseq result) would be rendered again by every %str-byte-ref. An entry
+  ;; whose buffer was empty joins *sock-dirty*.
   (let* ((str (stringp payload))
          (s (if str (%string-concat payload "") payload))
          (n (rontolisp::%sock-payload-length s))
          (i 0))
+    (when (and (> n 0) (= (rontolisp::%sock-e-out-fill e) 0)
+               (not (member e rontolisp::*sock-dirty*)))
+      (setq rontolisp::*sock-dirty* (cons e rontolisp::*sock-dirty*)))
     (while (< i n)
       (let* ((out (rontolisp::%sock-e-out e))
              (fill (rontolisp::%sock-e-out-fill e))
@@ -757,7 +793,7 @@
 
 (rontolisp:async-defun rontolisp::%sock-flush-f (e)
   ;; Sends the buffered bytes, one piece at a time. A piece is copied out and the
-  ;; buffer emptied BEFORE the wait, so writes made meanwhile by another task land
+  ;; buffer emptied BEFORE it goes, so writes made meanwhile by another task land
   ;; behind it; while one task has a piece in flight, any other flusher waits its
   ;; turn, which keeps the pieces in buffer order.
   (while (> (rontolisp::%sock-e-out-fill e) 0)
@@ -772,14 +808,28 @@
             (setq i (+ i 1)))
           (rontolisp::%sock-set-out-fill e 0)
           (rontolisp::%sock-set-flushing e t)
-          (rontolisp:await (rontolisp:wait-for 1))
-          (%sock:sock-stream-write (rontolisp::%sock-e-tx e) piece)
+          (when (rontolisp::%sock-e-paced e)
+            (rontolisp:await (rontolisp:wait-for 1)))
+          (%sock:sock-stream-write (rontolisp::%sock-ensure-tx e) piece)
           (rontolisp::%sock-set-flushing e nil))))
   nil)
 
 (defun rontolisp::%sock-flush (e)
   (if (rontolisp::%sock-e-out e)
       (rontolisp::%future-force (rontolisp::%sock-flush-f e))
+      nil))
+
+(rontolisp:async-defun rontolisp::%sock-flush-all-f ()
+  ;; Every socket's buffered output, before the program waits on a socket.
+  (while rontolisp::*sock-dirty*
+    (let ((e (car rontolisp::*sock-dirty*)))
+      (setq rontolisp::*sock-dirty* (cdr rontolisp::*sock-dirty*))
+      (rontolisp:await (rontolisp::%sock-flush-f e))))
+  nil)
+
+(defun rontolisp::%sock-flush-all ()
+  (if rontolisp::*sock-dirty*
+      (rontolisp::%future-force (rontolisp::%sock-flush-all-f))
       nil))
 
 ;; What characters leave of the line (.kb/standard-output-redirect.md, "A stream's
@@ -865,18 +915,18 @@
   ;; native listen under its %listen-raw alias -- the same shape %io-read-char's
   ;; raw twin uses: a string input stream answers from its record, and the alias
   ;; keeps the compile-time socket rewrite of the public name from recursing.
-  ;; A TLS entry sends its buffered output first: the input asked about may wait
-  ;; on it.
+  ;; Every socket's buffered output goes first: the input asked about may wait on
+  ;; it.
   (let ((e (rontolisp::%sock-entry s)))
     (if e
         (if (= (rontolisp::%sock-e-kind e) 1)
             (progn
-              (rontolisp::%sock-flush e)
+              (rontolisp::%sock-flush-all)
               (rontolisp::%future-force (rontolisp::%sock-probe-f e)))
             nil)
         (rontolisp::%listen-raw s))))
 
-;;; force-output and finish-output send a TLS entry's buffered output and answer
+;;; force-output and finish-output send a socket's buffered output and answer
 ;;; nil; on anything else they are the native built-in, which has nothing to
 ;;; flush on WASM (every other write goes out as it is made).
 (defun rontolisp::%io-force-output (&optional stream)
@@ -908,8 +958,8 @@
   ;; stream traps), which wakes that task at once with nothing -- and a reader that
   ;; found the socket still open would start another read on the stream being
   ;; dropped. The withdrawal answers nil, touching nothing, when none is in flight.
-  ;; A TLS entry's buffered output goes out first; the flush may wait, so the
-  ;; entry is looked up again after it (another task may have closed it).
+  ;; The buffered output goes out first; the flush may wait, so the entry is
+  ;; looked up again after it (another task may have closed it).
   (let ((e (rontolisp::%sock-entry stream))) (if e (rontolisp::%sock-flush e)))
   (let ((e (rontolisp::%sock-entry stream)))
     (if e

@@ -29,8 +29,9 @@
 ;;;;   - on success the socket ENTRY is swapped onto the cleartext ends IN PLACE,
 ;;;;     so tls-upgrade answers the SAME fd it was given (the component
 ;;;;     divergence from the interpreter/JVM's new-handle convention) and every
-;;;;     stream built-in keeps working on it unchanged -- except that its writes
-;;;;     are buffered from then on (sockets.lisp, "the TLS output buffer").
+;;;;     stream built-in keeps working on it unchanged -- except that its
+;;;;     buffered writes are paced from then on (sockets.lisp, "the output
+;;;;     buffer").
 ;;;;
 ;;;; What the draft interface does not expose, and this file therefore SIGNALS
 ;;;; for instead of silently ignoring: :insecure (skip verification -- a program
@@ -55,12 +56,13 @@
 
 (rontolisp:async-defun rontolisp::%tls-upgrade-f (fd host)
   ;; Failure (handshake rejection, an entry that is not a connected socket, a
-  ;; handle already written to) yields nil, the WASM error convention --
+  ;; handle already written to, its writes sent or still buffered) yields nil, the WASM error convention --
   ;; matching the tcp family. The transform setup order is the sample
   ;; application's: receive, send, then the handshake.
   (let ((e (rontolisp::%sock-entry fd)))
     (if (and e (= (rontolisp::%sock-e-kind e) 1)
-             (null (rontolisp::%sock-e-tx e)))
+             (null (rontolisp::%sock-e-tx e))
+             (= (rontolisp::%sock-e-out-fill e) 0))
         (handler-case (let* ((conn (%tls:connector-new))
                              (rp
                               (%tls:connector-receive conn
@@ -93,10 +95,10 @@
                               nil
                               (progn
                                 (rontolisp:await hs)
-                                ;; Writes collect in sockets.lisp's TLS output
-                                ;; buffer from here on (why: "the TLS output
+                                ;; The writes sockets.lisp buffers go out
+                                ;; paced from here on (why: "the output
                                 ;; buffer" there).
-                                (rontolisp::%sock-buffer-output e)
+                                (rontolisp::%sock-pace-output e)
                                 fd))))
           (rontolisp:wit-error (c)
             ;; The handshake's err arm carries an own<error> RESOURCE handle

@@ -56,8 +56,8 @@ import am.ik.rontolisp.macro.LispMacroExpander;
 final class WasmSocketsRewrite {
 
 	// Sync-context substitutions: native name -> the sockets.lisp dispatch defun.
-	// force-output / finish-output flush a component TLS socket's output buffer
-	// (sockets.lisp, "the TLS output buffer").
+	// force-output / finish-output flush a component socket's output buffer
+	// (sockets.lisp, "the output buffer").
 	private static final Map<String, String> SYNC_DISPATCH = Map.ofEntries(
 			Map.entry(LispNames.READ_LINE, "%IO-READ-LINE"), Map.entry(LispNames.READ_CHAR, "%IO-READ-CHAR"),
 			Map.entry(LispNames.READ_BYTE, "%IO-READ-BYTE"), Map.entry(LispNames.WRITE_LINE, "%IO-WRITE-LINE"),

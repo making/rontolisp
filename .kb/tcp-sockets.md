@@ -197,16 +197,15 @@ was refused on Preview 1, `http://` ones included (measured 2026-11-06).
   interpose before the send side is committed, so it requires a handle with no prior write.
 - The entry is swapped onto the cleartext ends IN PLACE (`%sock-set-streams`), so here `tls-upgrade`
   answers the SAME fd where interpreter/JVM answer a NEW one.
-- **A TLS entry BUFFERS its writes** (since 2026-11-07; sockets.lisp, "the TLS output buffer"):
-  an 8 KiB octet vector in the entry (slots 9-11: buffer, fill, flushing), installed by
-  `tls-upgrade` after the handshake. Flushed by `%sock-fill` (a read that must ask the host),
-  `listen`, `force-output`/`finish-output` (`%io-force-output`/`%io-finish-output`, routed by
-  `WasmSocketsRewrite` since then; the other two providers answer the native identity),
-  `close`, and a full buffer. Each piece goes out after a `(wait-for 1)`; while one task has a
-  piece in flight, another flusher waits, so pieces keep buffer order. Plain TCP still writes
-  through. A write followed by a wait on something else (sleep, another socket) waits for the
-  next flush point -- real cl+ssl's buffer flushes at fewer points (force/finish-output, full,
-  close), so a program correct against it is correct here.
+- **A TLS entry's buffered writes are PACED** (buffered since 2026-11-07, plain TCP too since
+  2026-11-09: "A connected socket BUFFERS its writes" below; sockets.lisp, "the output buffer"):
+  `tls-upgrade` marks the entry (slot 12) after the handshake, and each piece then goes out after
+  a `(wait-for 1)`; while one task has a piece in flight, another flusher waits, so pieces keep
+  buffer order. `force-output`/`finish-output` reach the flush through
+  `%io-force-output`/`%io-finish-output` (routed by `WasmSocketsRewrite`; the other two providers
+  answer the native identity). Real cl+ssl's buffer flushes at fewer points (force/finish-output,
+  full, close), so a program correct against it is correct here. `tls-upgrade` refuses an entry
+  with bytes still buffered as it refuses one already written to.
 - **Why: wasmtime-wasi-tls 49 drops the tail of a write** (measured 2026-11-07, wasmtime 49.0.0,
   against 1.1.1.1 and httpbin.org). Unbuffered, a run of more than about 128 writes before a read
   lost its end (byte-wise: 121 writes answered, 131-181 timed out), and so did ONE write past
@@ -282,6 +281,35 @@ so fetch+tcp and serve+tcp compose in one component.
 - Plumbing `%sock-plumb`: `receive()` yields the recv stream (its future dropped immediately — EOF is
   the stream status), `sock-stream-new` makes a pair whose read end goes to `send()`; `%io-close`
   drops the write end (FIN), the recv stream and the resource.
+- **A connected socket BUFFERS its writes** (since 2026-11-09; sockets.lisp, "the output buffer"):
+  an 8 KiB octet vector per connected entry (slots 9-12: buffer, fill, flushing, paced; a listener
+  has none and writes through). Flushed by every socket-layer host wait, for EVERY entry with
+  buffered bytes (`*sock-dirty*`, `%sock-flush-all-f`): `%sock-fill` (a read the chunk cannot
+  answer), `listen`, `%tcp-accept-f`, `%tcp-connect-f` -- all entries, because a single-threaded
+  program writes on one socket and then waits on its peer's end (the loopback echo choreography).
+  Also by `force-output`/`finish-output` and `close` (that entry), a full buffer, and the program's
+  end (`SocketsLibrary` appends `(rontolisp::%sock-flush-all)` to a component program). A plain
+  write of 8 KiB or more goes out as it is after the buffered bytes (no copy); a TLS entry's never
+  does (its pieces must fit wasi:tls's pipe). NOT flushed by a wait outside the socket layer
+  (`sleep`, `wait-for`, stdin, fetch) nor by `uiop:quit`/`%host-exit`: a program that writes and
+  then only sleeps sends at the next flush point, as with SBCL's buffered fd-streams; the
+  interpreter, JVM and `--native` write through. Flushing at the scheduler's own block point
+  (`_sched_loop` before `waitable-set.wait`, and the serve callback's WAIT return) would cover
+  every wait; not done -- runtime-built WASM calling a Lisp defun, re-entered by the flush's own
+  write.
+- **Why: Nagle meets delayed ACK** (measured 2026-11-09, `examples/db/shiori` as a component on
+  sluice's wasi wicket, wasmtime 50, Linux container on OrbStack, PostgreSQL 18 in the next
+  container, md5 auth). wasmtime-wasi 50 sets no `TCP_NODELAY` and wasi:sockets has no option for
+  it, so write-through sent every piece cl-postgres writes as its own segment, each after the
+  peer's delayed ACK of the one before: `/books` (6 statements) 0.47 s, first start (schema and
+  sample data) 15.6 s; with delayed ACK off on PostgreSQL's side (`ip route change ... quickack 1`)
+  0.025 s and 0.24 s. PostgreSQL's statement log showed 84 ms from each `parse` to its `bind` and
+  43 ms to the next `parse`. A macOS host's loopback answered a page in about 0.1 s (no delayed
+  ACK there). Pin: `componentTcpBuffersWritesUntilTheProgramWaitsOnASocket` (a JDK peer counts 1
+  read for a line written byte-wise -- 2 before the buffer -- then the write past the buffer and
+  the end-of-program flush). The interpreter, the JVM (`new Socket`, no `setTcpNoDelay`, unbuffered
+  socket `OutputStream`) and the `--native` runner (`write_all`, no `set_nodelay`) write through
+  under the same Nagle; not measured there.
 - **Addresses** (`%sock-addr-f`, 2026-11-06): an IPv4 literal (and `localhost`) is parsed in Lisp
   (`%sock-parse-ipv4`) and needs no lookup permission; any other name goes to
   `wasi:sockets/ip-name-lookup@0.3.0`'s `resolve-addresses` (the second `wit-import` of sockets.lisp,
