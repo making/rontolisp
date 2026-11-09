@@ -55,7 +55,8 @@ Both groups pinned by `HandleOperandFixture` ([error-handling.md](error-handling
   synchronized `_addStream`) — invariant and the crossed-PostgreSQL-handshake failure in
   `.kb/read-load-streams.md`.
 - Interpreter `eval/SocketSupport.java`: the raw `Socket`/`ServerSocket` goes into
-  `Map<Long, Closeable> streams` so `close` needs no special case; built-ins branch on
+  `Map<Long, Closeable> streams` (`close` sends a connected socket's buffer first,
+  `SocketSupport.close`); built-ins branch on
   `instanceof Socket` (`socketEntry`, on the ALREADY-resolved designator). It is the web
   substitution seam (`Target_SocketSupport` signals).
 - JVM `JvmTcpCompiler` + `JvmSocketRuntimeBuilder`; `JvmIoRuntimeBuilder` grows `instanceof Socket`
@@ -77,14 +78,43 @@ Both groups pinned by `HandleOperandFixture` ([error-handling.md](error-handling
   Handle is an integer >= 200 but the table is LISP state (`rontolisp::*sock-table*`); the old
   `sock.*` seam at core indices 8-11 is gone, so `FUNC_START` = `IMPORT_FUNC_COUNT` (8).
 - JVM gate `usesSockets` = any `tcp-*` OR `tls-connect`/`tls-listen`/`%tls-listen-p12`.
+- **Every connected socket BUFFERS its writes, on all four backends** (interpreter, JVM and
+  `--native` since 2026-11-09; the component's mechanics in "Inside sockets.lisp" below). 8 KiB
+  per socket; flushed before every wait on ANY socket (a read, `listen`, accept, connect), by
+  `force-output`/`finish-output`, by `close` (a failed send there does not stop the close), when
+  full, and on every way out of the program. Interpreter: `SocketSupport.OUTPUT_BUFFERS`
+  (socket -> `BufferedOutputStream`, a `ConcurrentHashMap`), `out`/`in`/`flushAll`; the end is
+  `openStreamFlusher` (what the CLI calls however the program ends, quit included). JVM:
+  `_sockBufs` (the field, made by the synchronized `_sockBufs()`), `_sockOut`/`_sockIn`/
+  `_sockFlushAll`/`_sockDetach`/`_sockClose`; the end is `_flushStreams`, emitted for a socket
+  program too (`main`'s return, `%host-exit`, the uncaught handler). `--native`: the runner's
+  `Conn` (`tcp.rs`), the `flush` import, `flush_all` from `main` after `_start` however it ended.
+  `tls-upgrade` sends and drops the plain socket's buffer before the handshake; the `SSLSocket`
+  gets its own (fewer TLS records too). Unlike the component, `uiop:quit` sends what is buffered.
+  **Trap (threads, interpreter/JVM)**: a thread that writes and then waits on something that is no
+  socket (a join, a condition, `sleep`) leaves its bytes buffered until any thread next waits on a
+  socket -- SBCL's buffered fd-streams behave the same; such a program owes a `force-output`.
+  Pins: `TcpOutputBufferFixture` on every socket backend (`LispEvaluatorTest#tcpEchoRoundTripOnLoopback`,
+  `JvmLispCompilerTest#compileAndRunTcpEchoRoundTripOnLoopback`, `NativeTcpTest`,
+  `WasmLispCompilerIntegrationTest#componentTcpBuffersWritesUntilTheProgramWaitsOnASocket`) and
+  the Rust loopback `tcp::tests` (the bytes wait in `Conn.out` until a wait sends them).
+- **Why, measured 2026-11-09** (Linux, PostgreSQL 18-alpine in Docker reached at its bridge
+  address, md5 auth; cl-postgres, 20 `exec-prepared` then 20 simple `exec-query` on one
+  connection, ms): write-through interpreter 1796 / 1767, JVM 1676 / 1779, `--native` 1646 / 1640
+  (about 85 ms a query: two delayed ACKs); buffered 95 / 59, 61 / 101, 5 / 4. cl-postgres writes a
+  message with one `write-byte` per byte, so the first byte left alone and the rest waited for the
+  peer's delayed ACK under Nagle. `TCP_NODELAY` was not taken: with byte-wise writes it sends a
+  segment per byte, and with the buffer the stall is gone without it (usocket's `:nodelay` stays
+  accepted-and-ignored, and the component cannot set it).
 
 ## --native: the runner's sockets (since 2026-10-24)
 A `--native` executable is the Preview 1 module plus the runner, so the RUNNER owns the sockets
 and the module owns the dispatch layer: `runner-sockets.lisp` is a SECOND PROVIDER of the
-`%io-*`/`%...-future` names sockets.lisp provides a component, over thirteen `rltcp` imports the
+`%io-*`/`%...-future` names sockets.lisp provides a component, over fourteen `rltcp` imports the
 network runner answers (`rontolisp-native/runner/src/tcp.rs`; `connect`/`listen` (host string,
 port), `accept`, `read` (the `:bytes` caller-buffer shape), `write` (`:octets`: an octet vector
-or a string's raw bytes), `close`, `localPort`/`localAddress`/`peerAddress`/`peerPort`,
+or a string's raw bytes, into the host's output buffer), `flush` (`force-output`/`finish-output`;
+nil on a listener), `close`, `localPort`/`localAddress`/`peerAddress`/`peerPort`,
 `setTimeout`, `readable`, `lastError`). The host is a `std::net` stream or listener per number; every call
 BLOCKS the module's one thread (no scheduler on Preview 1), a host name resolves as the JDK
 resolves one, and a failure answers -1 leaving the OS's text (`serve.rs`'s `reason`, no
@@ -129,8 +159,9 @@ resolves one, and a failure answers -1 leaving the OS's text (`serve.rs`'s `reas
   (`RontoLispCli`, `SocketsLibrary.RUNNER_IMPORT_MODULE`; the plain stub exits 1 naming it). The
   host lives under the runner's `net` feature (std::net adds no dependency; one network runner).
 - Pins: `NativeTcpTest` (the imports; one executable running the loopback programs of the
-  `componentTcp*`/`componentUsocket*` tests with the error texts, then the `LineStartFixture` and
-  `UsocketWaitFixture` programs every socket backend runs -- skips without the host pair),
+  `componentTcp*`/`componentUsocket*` tests with the error texts, then the `LineStartFixture`,
+  `UsocketWaitFixture` and `TcpOutputBufferFixture` programs every socket backend runs -- skips
+  without the host pair),
   `NativeFetchTest#theOutputStartsWithTheRunnerItsModuleNeeds` (Linux), the Rust `tcp::tests`
   (`build.sh --test`), `StdinLibraryTest#theThreeDispatchSplicesDefineTheSameNamesAndShapes`.
   Not run anywhere automatically: cl-postgres over the shim from an executable (`ClPostgresE2eTest`
@@ -292,8 +323,9 @@ so fetch+tcp and serve+tcp compose in one component.
   write of 8 KiB or more goes out as it is after the buffered bytes (no copy); a TLS entry's never
   does (its pieces must fit wasi:tls's pipe). NOT flushed by a wait outside the socket layer
   (`sleep`, `wait-for`, stdin, fetch) nor by `uiop:quit`/`%host-exit`: a program that writes and
-  then only sleeps sends at the next flush point, as with SBCL's buffered fd-streams; the
-  interpreter, JVM and `--native` write through. Flushing at the scheduler's own block point
+  then only sleeps sends at the next flush point, as with SBCL's buffered fd-streams (the
+  interpreter, JVM and `--native` buffer at the same points, quit included). Flushing at the
+  scheduler's own block point
   (`_sched_loop` before `waitable-set.wait`, and the serve callback's WAIT return) would cover
   every wait; not done -- runtime-built WASM calling a Lisp defun, re-entered by the flush's own
   write.
@@ -307,9 +339,10 @@ so fetch+tcp and serve+tcp compose in one component.
   43 ms to the next `parse`. A macOS host's loopback answered a page in about 0.1 s (no delayed
   ACK there). Pin: `componentTcpBuffersWritesUntilTheProgramWaitsOnASocket` (a JDK peer counts 1
   read for a line written byte-wise -- 2 before the buffer -- then the write past the buffer and
-  the end-of-program flush). The interpreter, the JVM (`new Socket`, no `setTcpNoDelay`, unbuffered
-  socket `OutputStream`) and the `--native` runner (`write_all`, no `set_nodelay`) write through
-  under the same Nagle; not measured there.
+  the end-of-program flush; `TcpOutputBufferFixture`, run by every socket backend). The
+  interpreter, the JVM (`new Socket`, no `setTcpNoDelay`, unbuffered
+  socket `OutputStream`) and the `--native` runner (`write_all`, no `set_nodelay`) wrote through
+  under the same Nagle until they buffered too ("Per-backend mechanics").
 - **Addresses** (`%sock-addr-f`, 2026-11-06): an IPv4 literal (and `localhost`) is parsed in Lisp
   (`%sock-parse-ipv4`) and needs no lookup permission; any other name goes to
   `wasi:sockets/ip-name-lookup@0.3.0`'s `resolve-addresses` (the second `wit-import` of sockets.lisp,

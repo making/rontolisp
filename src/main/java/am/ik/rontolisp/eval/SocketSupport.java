@@ -1,5 +1,6 @@
 package am.ik.rontolisp.eval;
 
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.IOException;
@@ -15,6 +16,8 @@ import java.security.GeneralSecurityException;
 import java.security.KeyStore;
 
 import java.security.cert.X509Certificate;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
@@ -30,18 +33,122 @@ import org.jspecify.annotations.Nullable;
 /**
  * Performs blocking TCP socket operations for the interpreter backend, using the JDK
  * {@link Socket} / {@link ServerSocket}. A socket is stored directly in the interpreter's
- * stream table (both types implement {@link Closeable}, so {@code close} needs no special
- * case) and the stream built-ins ({@code read-line}, {@code write-line},
- * {@code write-string}, {@code read-char}, {@code read-byte}, {@code write-byte})
- * dispatch to the helpers here for socket entries. Reads are byte-at-a-time (no readahead
- * buffer is held between calls) and writes go out immediately, matching the compiled
- * backends. This is the seam the browser playground substitutes (see
+ * stream table (both types implement {@link Closeable}; {@code close} sends a connected
+ * socket's buffer first, {@link #close}) and the stream built-ins ({@code read-line},
+ * {@code write-line}, {@code write-string}, {@code read-char}, {@code read-byte},
+ * {@code write-byte}) dispatch to the helpers here for socket entries. Reads are
+ * byte-at-a-time (no readahead buffer is held between calls). Writes go to a per-socket
+ * output buffer ({@link #out}) flushed before every read, {@code listen}, accept and
+ * connect on ANY socket ({@link #flushAll}), by
+ * {@code force-output}/{@code finish-output}, by {@code close} and at the program's end:
+ * written through, each piece of a message waited for the peer's delayed ACK of the one
+ * before under the host's Nagle. This is the seam the browser playground substitutes (see
  * {@code src/web/java/.../eval/Target_SocketSupport.java}), where every operation signals
  * an error: the browser sandbox provides no host TCP sockets.
  */
 final class SocketSupport {
 
+	/**
+	 * The size of a connected socket's output buffer: the component's. A write that does
+	 * not fit flushes the buffer first; one of this size or more goes out as it is.
+	 */
+	static final int OUTPUT_BUFFER_SIZE = 8192;
+
+	/**
+	 * Every connected socket's output buffer, made on its first write. A {@code Socket}
+	 * keeps {@code Object}'s identity equality, so a socket is its own key.
+	 */
+	private static final Map<Socket, OutputStream> OUTPUT_BUFFERS = new ConcurrentHashMap<>();
+
 	private SocketSupport() {
+	}
+
+	/**
+	 * The output buffer of a connected socket: every socket write goes through it.
+	 * @param socket the connected socket
+	 * @return its buffer over the socket's output stream
+	 * @throws IOException if the socket is closed
+	 */
+	static OutputStream out(Socket socket) throws IOException {
+		OutputStream buffer = OUTPUT_BUFFERS.get(socket);
+		if (buffer == null) {
+			OutputStream fresh = new BufferedOutputStream(socket.getOutputStream(), OUTPUT_BUFFER_SIZE);
+			buffer = OUTPUT_BUFFERS.putIfAbsent(socket, fresh);
+			if (buffer == null) {
+				buffer = fresh;
+			}
+		}
+		return buffer;
+	}
+
+	/**
+	 * The input stream of a connected socket, after {@link #flushAll}: a single-threaded
+	 * program writes on one socket and then waits on its peer's end, which may be another
+	 * socket of the same program.
+	 * @param socket the connected socket
+	 * @return the socket's input stream
+	 * @throws IOException if the socket is closed
+	 */
+	static InputStream in(Socket socket) throws IOException {
+		flushAll();
+		return socket.getInputStream();
+	}
+
+	/**
+	 * Sends what every socket's buffer holds -- before a wait on any socket and at the
+	 * program's end. A flush that fails is skipped: its bytes stay buffered, and the
+	 * socket's own next write or flush reports the failure.
+	 */
+	static void flushAll() {
+		for (OutputStream buffer : OUTPUT_BUFFERS.values()) {
+			try {
+				buffer.flush();
+			}
+			catch (IOException ex) {
+				// reported by the socket's own next write or flush
+			}
+		}
+	}
+
+	/**
+	 * Sends what one socket's buffer holds: {@code force-output}/{@code finish-output}.
+	 * @param socket the connected socket
+	 * @throws IOException if the bytes cannot be sent
+	 */
+	static void flush(Socket socket) throws IOException {
+		OutputStream buffer = OUTPUT_BUFFERS.get(socket);
+		if (buffer != null) {
+			buffer.flush();
+		}
+	}
+
+	/**
+	 * Sends what the socket's buffer holds and drops the buffer: before {@code close},
+	 * and before a TLS upgrade, whose socket writes through its own buffer.
+	 * @param socket the connected socket
+	 * @throws IOException if the bytes cannot be sent
+	 */
+	private static void detach(Socket socket) throws IOException {
+		OutputStream buffer = OUTPUT_BUFFERS.remove(socket);
+		if (buffer != null) {
+			buffer.flush();
+		}
+	}
+
+	/**
+	 * Closes a connected socket after sending what its buffer holds. A flush that fails
+	 * (the peer reset the connection) does not stop the close.
+	 * @param socket the connected socket
+	 * @throws IOException if the close fails
+	 */
+	static void close(Socket socket) throws IOException {
+		try {
+			detach(socket);
+		}
+		catch (IOException ex) {
+			// the connection is gone; the close below still releases it
+		}
+		socket.close();
 	}
 
 	/**
@@ -52,6 +159,7 @@ final class SocketSupport {
 	 * @throws LispEvalException if the connection cannot be established
 	 */
 	static Socket connect(String host, int port) {
+		flushAll();
 		try {
 			return new Socket(host, port);
 		}
@@ -83,6 +191,7 @@ final class SocketSupport {
 	 * @throws LispEvalException if the connection or the handshake fails
 	 */
 	static Socket connectTls(String host, int port, boolean insecure) {
+		flushAll();
 		Socket socket = null;
 		try {
 			socket = new Socket(host, port);
@@ -124,6 +233,7 @@ final class SocketSupport {
 	 */
 	static Socket upgradeTls(Socket socket, String host, boolean insecure) {
 		try {
+			detach(socket);
 			return handshake(socket, host, insecure);
 		}
 		catch (IOException | GeneralSecurityException ex) {
@@ -370,6 +480,7 @@ final class SocketSupport {
 	 * @throws LispEvalException if accepting fails (e.g. the listener was closed)
 	 */
 	static Socket accept(ServerSocket listener) {
+		flushAll();
 		try {
 			return listener.accept();
 		}
@@ -477,7 +588,7 @@ final class SocketSupport {
 	 */
 	static @Nullable TerminatedLine readTerminatedLine(Socket socket) {
 		try {
-			InputStream in = socket.getInputStream();
+			InputStream in = in(socket);
 			ByteArrayOutputStream line = new ByteArrayOutputStream();
 			int b = in.read();
 			if (b < 0) {
@@ -497,15 +608,13 @@ final class SocketSupport {
 	}
 
 	/**
-	 * Writes a line (the string plus {@code \n}, UTF-8) to a socket. Socket output
-	 * streams are unbuffered, so the bytes go out immediately (unlike buffered file
-	 * writers).
+	 * Writes a line (the string plus {@code \n}, UTF-8) to a socket's output buffer.
 	 * @param socket the connected socket
 	 * @param line the line to send (without the newline)
 	 */
 	static void writeLine(Socket socket, String line) {
 		try {
-			socket.getOutputStream().write((line + "\n").getBytes(StandardCharsets.UTF_8));
+			out(socket).write((line + "\n").getBytes(StandardCharsets.UTF_8));
 		}
 		catch (IOException ex) {
 			throw new LispEvalException("write-line: " + ex.getMessage());
@@ -513,14 +622,13 @@ final class SocketSupport {
 	}
 
 	/**
-	 * Writes a string (UTF-8) to a socket -- {@link #writeLine} without the newline. Like
-	 * every socket write the bytes go out immediately.
+	 * Writes a string (UTF-8) to a socket -- {@link #writeLine} without the newline.
 	 * @param socket the connected socket
 	 * @param text the string to send
 	 */
 	static void writeString(Socket socket, String text) {
 		try {
-			socket.getOutputStream().write(text.getBytes(StandardCharsets.UTF_8));
+			out(socket).write(text.getBytes(StandardCharsets.UTF_8));
 		}
 		catch (IOException ex) {
 			throw new LispEvalException("write-string: " + ex.getMessage());
@@ -540,7 +648,7 @@ final class SocketSupport {
 	 */
 	static int readChar(Socket socket) {
 		try {
-			InputStream in = socket.getInputStream();
+			InputStream in = in(socket);
 			int b0 = in.read();
 			if (b0 < 0) {
 				return -1;
@@ -572,7 +680,7 @@ final class SocketSupport {
 	 */
 	static int readByte(Socket socket) {
 		try {
-			return socket.getInputStream().read();
+			return in(socket).read();
 		}
 		catch (IOException ex) {
 			throw new LispEvalException("read-byte: " + ex.getMessage());
@@ -580,13 +688,13 @@ final class SocketSupport {
 	}
 
 	/**
-	 * Writes a single byte to a socket (sent immediately).
+	 * Writes a single byte to a socket's output buffer.
 	 * @param socket the connected socket
 	 * @param value the byte value (0-255)
 	 */
 	static void writeByte(Socket socket, int value) {
 		try {
-			socket.getOutputStream().write(value);
+			out(socket).write(value);
 		}
 		catch (IOException ex) {
 			throw new LispEvalException("write-byte: " + ex.getMessage());

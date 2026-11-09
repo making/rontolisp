@@ -1409,14 +1409,14 @@ final class JvmIoRuntimeBuilder {
 		code.astore(1);
 		MethodCode.Label done = code.newLabel();
 		if (this.sockets != null) {
-			// if (entry instanceof Socket) { entry.getOutputStream().flush(); }
+			// if (entry instanceof Socket) { _sockOut(entry).flush(); }
 			code.aload(1);
 			code.instanceOf(this.sockets.socketClass());
 			MethodCode.Label ifNotSocket = code.newLabel();
 			code.ifeq(ifNotSocket);
 			code.aload(1);
 			code.checkcast(this.sockets.socketClass());
-			code.invokevirtual(this.sockets.socketGetOutputStream());
+			code.invokestatic(this.sockets.sockOut());
 			code.invokevirtual(this.outputStreamFlush);
 			code.goto_(done);
 			code.labelBinding(ifNotSocket);
@@ -1565,7 +1565,7 @@ final class JvmIoRuntimeBuilder {
 			code.ifeq(ifNotSocket);
 			code.aload(1);
 			code.checkcast(this.sockets.socketClass());
-			code.invokevirtual(this.sockets.socketGetInputStream());
+			code.invokestatic(this.sockets.sockIn());
 			code.invokevirtual(this.inputStreamAvailable);
 			code.ifle(returnNil);
 			code.goto_(returnT);
@@ -2805,7 +2805,7 @@ final class JvmIoRuntimeBuilder {
 			code.ifeq(ifNotSocket);
 			code.aload(2);
 			code.checkcast(this.sockets.socketClass());
-			code.invokevirtual(this.sockets.socketClose());
+			code.invokestatic(this.sockets.sockClose());
 			code.goto_(closed);
 			code.labelBinding(ifNotSocket);
 			code.aload(2);

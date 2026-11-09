@@ -16777,55 +16777,16 @@ class WasmLispCompilerIntegrationTest {
 
 	@Test
 	void componentTcpBuffersWritesUntilTheProgramWaitsOnASocket() throws Exception {
-		// The plain-TCP output buffer (sockets.lisp, "the output buffer"), against a JDK
-		// peer that counts its reads: a line written a byte at a time arrives in ONE
-		// host write -- one by one, each byte after the first waited for the peer's
-		// delayed ACK under the host's Nagle. Then a byte, a write past the buffer
-		// (sent as it is, after the byte), and a line the program never flushes, which
-		// its end sends.
-		try (java.net.ServerSocket listener = new java.net.ServerSocket(0, 1,
-				java.net.InetAddress.getLoopbackAddress())) {
-			java.util.concurrent.CompletableFuture<String> peer = java.util.concurrent.CompletableFuture
-				.supplyAsync(() -> {
-					try (java.net.Socket s = listener.accept()) {
-						s.setSoTimeout(30_000);
-						java.io.InputStream in = s.getInputStream();
-						byte[] buf = new byte[65536];
-						java.io.ByteArrayOutputStream line = new java.io.ByteArrayOutputStream();
-						int reads = 0;
-						while (line.size() == 0 || buf[line.size() - 1] != '\n') {
-							int n = in.read(buf, line.size(), buf.length - line.size());
-							if (n < 0) {
-								break;
-							}
-							line.write(buf, line.size(), n);
-							reads++;
-						}
-						s.getOutputStream().write((reads + "\n").getBytes(java.nio.charset.StandardCharsets.US_ASCII));
-						return line.size() + ":"
-								+ new String(in.readAllBytes(), java.nio.charset.StandardCharsets.US_ASCII);
-					}
-					catch (IOException ex) {
-						throw new UncheckedIOException(ex);
-					}
-				});
-			String program = """
-					(let ((s (rontolisp:tcp-connect "127.0.0.1" %d)))
-					  (dotimes (i 100) (write-byte 97 s))
-					  (terpri s)
-					  (print (read-line s))
-					  (write-string "x" s)
-					  (write-string (make-string 20000 :initial-element #\\b) s)
-					  (write-line "bye" s))
-					""".formatted(listener.getLocalPort());
-			byte[] componentBytes = compileFetchComponent(program);
+		// The plain-TCP output buffer (sockets.lisp, "the output buffer"); the other
+		// backends run the same fixture.
+		try (am.ik.rontolisp.TcpOutputBufferFixture peer = am.ik.rontolisp.TcpOutputBufferFixture.start()) {
+			byte[] componentBytes = compileFetchComponent(peer.program());
 			wasmtime.copyFileToContainer(Transferable.of(componentBytes), path("tcp-buffer.component.wasm"));
 			ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", "-S",
 					"tcp=y", "-S", "inherit-network=y", path("tcp-buffer.component.wasm"));
 			assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
-			assertThat(result.getStdout().trim()).isEqualTo("\"1\"");
-			assertThat(peer.get(60, java.util.concurrent.TimeUnit.SECONDS))
-				.isEqualTo("101:x" + "b".repeat(20000) + "bye\n");
+			assertThat(result.getStdout().trim()).isEqualTo(am.ik.rontolisp.TcpOutputBufferFixture.EXPECTED_OUTPUT);
+			assertThat(peer.received()).isEqualTo(am.ik.rontolisp.TcpOutputBufferFixture.EXPECTED_RECEIVED);
 		}
 	}
 

@@ -9,6 +9,14 @@
 //! JDK resolves one. A call that fails leaves the OS's text, worded as the JDK words it
 //! (no `(os error N)`; a read past its deadline is `Read timed out`), for `lastError`, and
 //! answers -1; the module signals with it under the operator's name.
+//!
+//! A connected socket BUFFERS its writes (`Conn`): written through, each piece of a
+//! message waited for the peer's delayed ACK of the one before under the kernel's Nagle.
+//! The buffer goes out before every call that waits on ANY socket (`read`, `readable`,
+//! `accept`, `connect`: a single-threaded program writes on one socket and then waits on
+//! its peer's end, which may be another socket of the same program), at `flush`
+//! (`force-output`/`finish-output`), at `close`, when full, and at the program's end
+//! (`flush_all` from `main`).
 
 use std::collections::BTreeMap;
 use std::ffi::{c_int, c_ulong};
@@ -30,8 +38,52 @@ pub const MODULE: &str = "rltcp";
 /// table is never locked across a read or an accept.
 #[derive(Clone)]
 enum Socket {
-    Stream(Arc<TcpStream>),
+    Stream(Arc<Conn>),
     Listener(Arc<TcpListener>),
+}
+
+/// The size of a connected socket's output buffer: the interpreter's and the component's.
+/// A write that does not fit sends the buffer first; one of this size or more goes out as
+/// it is.
+const OUTPUT_BUFFER: usize = 8192;
+
+/// A connected socket and the bytes written to it that have not gone out yet.
+struct Conn {
+    stream: TcpStream,
+    out: Mutex<Vec<u8>>,
+}
+
+impl Conn {
+    fn new(stream: TcpStream) -> Arc<Conn> {
+        Arc::new(Conn {
+            stream,
+            out: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// Sends what the buffer holds; on a failure the bytes stay for the next attempt.
+    fn flush(&self) -> std::io::Result<()> {
+        let mut out = lock(&self.out);
+        if !out.is_empty() {
+            (&self.stream).write_all(&out)?;
+            out.clear();
+        }
+        Ok(())
+    }
+
+    fn write(&self, bytes: &[u8]) -> std::io::Result<()> {
+        let mut out = lock(&self.out);
+        if out.len() + bytes.len() > OUTPUT_BUFFER && !out.is_empty() {
+            (&self.stream).write_all(&out)?;
+            out.clear();
+        }
+        if bytes.len() >= OUTPUT_BUFFER {
+            (&self.stream).write_all(bytes)
+        } else {
+            out.extend_from_slice(bytes);
+            Ok(())
+        }
+    }
 }
 
 /// The sockets open, by number; numbers are never reused while the process runs.
@@ -60,7 +112,7 @@ fn socket(handle: i32) -> Result<Socket, String> {
         .ok_or_else(|| "not an open socket".to_owned())
 }
 
-fn stream(handle: i32) -> Result<Arc<TcpStream>, String> {
+fn stream(handle: i32) -> Result<Arc<Conn>, String> {
     match socket(handle)? {
         Socket::Stream(s) => Ok(s),
         Socket::Listener(_) => Err("not a connected socket".into()),
@@ -80,10 +132,29 @@ fn port_of(port: i32) -> Result<u16, String> {
     u16::try_from(port).map_err(|_| format!("port {port} is out of range"))
 }
 
+/// Sends what every connected socket's buffer holds: before a wait on any socket and at
+/// the program's end. A failure is skipped; the socket's own next write or flush reports
+/// it.
+pub fn flush_all() {
+    let conns: Vec<Arc<Conn>> = lock(&SOCKETS)
+        .1
+        .values()
+        .filter_map(|s| match s {
+            Socket::Stream(c) => Some(Arc::clone(c)),
+            Socket::Listener(_) => None,
+        })
+        .collect();
+    for conn in conns {
+        let _ = conn.flush();
+    }
+}
+
 /// Connects to `host:port` (a name or an address literal) and answers the socket's number.
 fn connect(host: &str, port: i32) -> Result<i32, String> {
-    let stream = TcpStream::connect((host, port_of(port)?)).map_err(|e| reason(&e))?;
-    Ok(register(Socket::Stream(Arc::new(stream))))
+    let port = port_of(port)?;
+    flush_all();
+    let stream = TcpStream::connect((host, port)).map_err(|e| reason(&e))?;
+    Ok(register(Socket::Stream(Conn::new(stream))))
 }
 
 /// Binds `host:port` (an empty host is every interface) and answers the listener's number.
@@ -98,15 +169,17 @@ fn accept(handle: i32) -> Result<i32, String> {
     let Socket::Listener(listener) = socket(handle)? else {
         return Err("not a listener".into());
     };
+    flush_all();
     let (stream, _) = listener.accept().map_err(|e| reason(&e))?;
-    Ok(register(Socket::Stream(Arc::new(stream))))
+    Ok(register(Socket::Stream(Conn::new(stream))))
 }
 
 /// Reads into `buf`: the count, 0 at the peer's close.
 fn read(handle: i32, buf: &mut [u8]) -> Result<usize, String> {
-    let stream = stream(handle)?;
+    let conn = stream(handle)?;
+    flush_all();
     loop {
-        match (&*stream).read(buf) {
+        match (&conn.stream).read(buf) {
             Ok(n) => return Ok(n),
             Err(e) if e.kind() == ErrorKind::Interrupted => continue,
             Err(e) => return Err(io_reason(&e)),
@@ -129,35 +202,44 @@ unsafe extern "C" {
 /// blocking: `listen`'s question, asked as the JDK's `available()` asks it (`FIONREAD`),
 /// so nothing is consumed, a pending error included. False at the peer's close.
 fn readable(handle: i32) -> Result<bool, String> {
-    let stream = stream(handle)?;
+    let conn = stream(handle)?;
+    flush_all();
     let mut waiting: c_int = 0;
     // SAFETY: FIONREAD writes one int through the pointer and touches nothing else.
-    if unsafe { ioctl(stream.as_raw_fd(), FIONREAD, &raw mut waiting) } < 0 {
+    if unsafe { ioctl(conn.stream.as_raw_fd(), FIONREAD, &raw mut waiting) } < 0 {
         return Err(reason(&std::io::Error::last_os_error()));
     }
     Ok(waiting > 0)
 }
 
 fn write(handle: i32, bytes: &[u8]) -> Result<(), String> {
-    let stream = stream(handle)?;
-    (&*stream).write_all(bytes).map_err(|e| io_reason(&e))
+    stream(handle)?.write(bytes).map_err(|e| io_reason(&e))
 }
 
-/// Closes the socket: the last handle on it is dropped here, which sends the FIN.
+/// Sends what the socket's buffer holds: `force-output`/`finish-output`.
+fn flush(handle: i32) -> Result<(), String> {
+    stream(handle)?.flush().map_err(|e| io_reason(&e))
+}
+
+/// Closes the socket after sending what its buffer holds (a failure there -- the peer
+/// reset the connection -- does not stop the close): the last handle on it is dropped
+/// here, which sends the FIN.
 fn close(handle: i32) {
-    lock(&SOCKETS).1.remove(&handle);
+    if let Some(Socket::Stream(conn)) = lock(&SOCKETS).1.remove(&handle) {
+        let _ = conn.flush();
+    }
 }
 
 fn local_addr(handle: i32) -> Result<SocketAddr, String> {
     match socket(handle)? {
-        Socket::Stream(s) => s.local_addr(),
+        Socket::Stream(c) => c.stream.local_addr(),
         Socket::Listener(l) => l.local_addr(),
     }
     .map_err(|e| reason(&e))
 }
 
 fn peer_addr(handle: i32) -> Result<SocketAddr, String> {
-    stream(handle)?.peer_addr().map_err(|e| reason(&e))
+    stream(handle)?.stream.peer_addr().map_err(|e| reason(&e))
 }
 
 /// The read deadline, in milliseconds; 0 clears it.
@@ -166,7 +248,10 @@ fn set_timeout(handle: i32, millis: i32) -> Result<(), String> {
         .ok()
         .filter(|&ms| ms > 0)
         .map(Duration::from_millis);
-    stream(handle)?.set_read_timeout(deadline).map_err(|e| reason(&e))
+    stream(handle)?
+        .stream
+        .set_read_timeout(deadline)
+        .map_err(|e| reason(&e))
 }
 
 /// -1 after leaving `e` for `lastError`.
@@ -220,7 +305,8 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
             })
         },
     )?;
-    // write(socket, octets) -> 0, or -1: blocks until the kernel has taken the bytes.
+    // write(socket, octets) -> 0, or -1: into the socket's buffer, or, when it is full,
+    // blocks until the kernel has taken the bytes.
     linker.func_wrap(
         MODULE,
         "write",
@@ -238,6 +324,10 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
             })
         },
     )?;
+    // flush(socket) -> 0, or -1: blocks until the kernel has taken the buffered bytes.
+    linker.func_wrap(MODULE, "flush", |handle: i32| -> i32 {
+        answer(flush(handle).map(|()| 0))
+    })?;
     linker.func_wrap(MODULE, "close", close)?;
     linker.func_wrap(MODULE, "localPort", |handle: i32| -> i32 {
         answer(local_addr(handle).map(|a| i32::from(a.port())))
@@ -302,8 +392,9 @@ mod tests {
     }
 
     /// A loopback exchange through the host functions as the module drives them, with
-    /// no module: listen, connect, accept, both directions, what `readable` answers
-    /// before, while and after bytes wait, the addresses, the deadline and the close.
+    /// no module: listen, connect, accept, both directions, the output buffer a wait
+    /// sends, what `readable` answers before, while and after bytes wait, the addresses,
+    /// the deadline and the close.
     #[test]
     fn a_loopback_connection_carries_bytes_both_ways_and_ends_at_the_close() {
         let listener = listen("127.0.0.1", 0).unwrap();
@@ -314,8 +405,15 @@ mod tests {
         let server = accept(listener).unwrap();
         assert_eq!(peer_addr(server).unwrap().port(), local_addr(client).unwrap().port());
         assert!(!readable(server).unwrap(), "nothing has been written yet");
-        write(client, b"hello\n\xff").unwrap();
+        write(client, b"hello\n").unwrap();
+        write(client, b"\xff").unwrap();
+        assert_eq!(
+            lock(&stream(client).unwrap().out).len(),
+            7,
+            "the writes wait in the buffer"
+        );
         wait_readable(server);
+        assert!(lock(&stream(client).unwrap().out).is_empty(), "a wait sent them");
         let mut buf = [0u8; 16];
         let mut got = Vec::new();
         while got.len() < 7 {

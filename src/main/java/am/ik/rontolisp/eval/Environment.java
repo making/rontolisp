@@ -6249,6 +6249,7 @@ public final class Environment implements Scope {
 			return handle;
 		};
 		env.globals.openStreamFlusher = () -> {
+			SocketSupport.flushAll();
 			for (Closeable entry : streams.values()) {
 				if (entry instanceof java.io.Flushable flushable) {
 					try {
@@ -7267,7 +7268,12 @@ public final class Environment implements Scope {
 				return LispTrue.INSTANCE;
 			}
 			try {
-				stream.close();
+				if (stream instanceof Socket socket) {
+					SocketSupport.close(socket);
+				}
+				else {
+					stream.close();
+				}
 			}
 			catch (IOException ex) {
 				throw new UncheckedIOException(ex);
@@ -7291,7 +7297,7 @@ public final class Environment implements Scope {
 				}
 				Closeable entry = streams.get(handle.value());
 				switch (entry) {
-					case Socket socket -> socket.getOutputStream().flush();
+					case Socket socket -> SocketSupport.flush(socket);
 					case Writer writer -> writer.flush();
 					case OutputStream os -> os.flush();
 					case null -> throw new LispEvalException(
@@ -7353,7 +7359,7 @@ public final class Environment implements Scope {
 				}
 				Closeable entry = streams.get(handle.value());
 				boolean ready = switch (entry) {
-					case Socket socket -> socket.getInputStream().available() > 0;
+					case Socket socket -> SocketSupport.in(socket).available() > 0;
 					case RontoIoFileStream io -> io.ready();
 					// A string input stream answers whether a character remains,
 					// not Reader.ready() (true until close): at the end, with
@@ -7450,7 +7456,6 @@ public final class Environment implements Scope {
 			}
 			Closeable entry = streams.get(handle.value());
 			if (entry instanceof Socket socket) {
-				// Socket writes are unbuffered: the line goes out immediately.
 				SocketSupport.writeLine(socket, text);
 				midLineStreams.remove(handle.value());
 				return str;

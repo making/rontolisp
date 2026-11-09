@@ -7,10 +7,14 @@ qualifier (see [Packages](../reference/packages.md)). A connected socket is a
 **bidirectional stream handle** in the same handle space as file streams, so
 the standard stream functions work on it directly: `read-line`, `write-line`,
 `write-string`, `write-char`, `read-char`, `read-byte`, `write-byte` and
-`close`. Unlike buffered file
-output, socket
-writes are sent immediately (`write-line` flushes per line; the WASM
-`--component` backend buffers them, see below), and `read-line`
+`close`. A connected socket **buffers its writes** on every backend: they go
+out when the program waits on any socket (a read, `listen`, `tcp-accept`,
+`tcp-connect`), calls `force-output` or `finish-output`, closes the socket, has
+written 8 KiB, or ends. A write followed by a wait on anything else (`sleep`,
+standard input, a fetch, another thread) reaches the peer at the next of those
+points, so call `force-output` before such a wait. (Written through, each
+piece of a message would wait for the peer's delayed ACK of the one before
+under the kernel's Nagle algorithm.) `read-line`
 returns `nil` once the peer has closed the connection. A socket carries BYTES:
 `write-string` puts the string's UTF-8 bytes on the wire and `read-char` reads
 one character back out of them, so `read-byte` and `read-char` can be mixed on
@@ -54,16 +58,9 @@ take a socket; render with `(format nil ...)` and send the result with
 > per-workload virtual network, not the machine's real 127.0.0.1 — a
 > connect to a loopback address only reaches a listener inside the same
 > wasmCloud workload (such as a service component bound there), while
-> non-loopback addresses go out over the real network. A component's socket
-> **buffers its writes**: they go out when the program waits on any socket
-> (a read, `listen`, `tcp-accept`, `tcp-connect`), calls `force-output` or
-> `finish-output`, closes the socket, has written 8 KiB, or ends. A write
-> followed by a wait on anything else (`sleep`, standard input, a fetch)
-> reaches the peer at the next of those points, so call `force-output` before
-> such a wait; `uiop:quit` sends nothing still buffered. (The host's socket
-> has Nagle's algorithm on and wasi:sockets offers no `TCP_NODELAY`, so a
-> message written in pieces would otherwise wait for the peer's delayed ACK
-> of each piece.) In the **browser
+> non-loopback addresses go out over the real network. A component's
+> `uiop:quit` sends nothing its sockets still buffer (on the other backends
+> it sends it). In the **browser
 > playground** every tcp function signals an error (the browser sandbox has no
 > raw TCP), so the runnable example below only works outside the browser. See
 > the [tcp-connect](../reference/functions/rontolisp-tcp-connect.md) reference

@@ -9,6 +9,7 @@ import java.lang.classfile.constantpool.Utf8Entry;
 import java.util.ArrayList;
 import java.util.List;
 
+import am.ik.jvm.AccessFlag;
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
 import am.ik.rontolisp.LispNames;
@@ -26,9 +27,14 @@ import org.jspecify.annotations.Nullable;
  * stream built-ins dispatch on it: {@code _writeLine}/{@code _readLineStream}/
  * {@code _writeString}/{@code _readChar} call the {@code _sockWriteLine}/
  * {@code _sockReadLine}/{@code _sockWriteString}/{@code _sockReadChar} helpers here
- * (byte-at-a-time reads, unbuffered writes), {@code _readByte}/{@code _writeByte} branch
- * to the socket's input/output stream, and {@code _closeStream} closes the socket
- * directly. All methods are emitted only when the program uses a tcp or tls built-in.
+ * (byte-at-a-time reads), {@code _readByte}/{@code _writeByte} branch to the socket's
+ * input/output stream, and {@code _closeStream} closes the socket through
+ * {@code _sockClose}. Writes go to a per-socket output buffer ({@code _sockOut}) flushed
+ * before every read, {@code listen}, accept and connect on ANY socket ({@code _sockIn},
+ * {@code _sockFlushAll}), by {@code force-output}, by {@code close} and on every way out
+ * of the program ({@link JvmFlushStreamsBuilder}) -- the interpreter's
+ * {@code SocketSupport} buffer. All methods are emitted only when the program uses a tcp
+ * or tls built-in.
  *
  * <p>
  * Every helper checks its arguments before it acts, with the interpreter's words: a host,
@@ -43,8 +49,16 @@ import org.jspecify.annotations.Nullable;
  */
 final class JvmSocketRuntimeBuilder {
 
-	/** A socket-runtime method body ready to be emitted into the generated class. */
-	record SocketMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
+	/**
+	 * A socket-runtime method body ready to be emitted into the generated class, with the
+	 * access flags it adds to {@code private static}.
+	 */
+	record SocketMethod(Utf8Entry name, Utf8Entry desc, MethodCode code, int extraFlags) {
+
+		SocketMethod(Utf8Entry name, Utf8Entry desc, MethodCode code) {
+			this(name, desc, code, 0);
+		}
+
 	}
 
 	/**
@@ -52,10 +66,10 @@ final class JvmSocketRuntimeBuilder {
 	 * add the socket branches to the shared stream built-ins.
 	 */
 	record SocketRuntime(List<SocketMethod> methods, ClassEntry socketClass, ClassEntry serverSocketClass,
-			MethodRefEntry socketGetInputStream, MethodRefEntry socketGetOutputStream, MethodRefEntry socketClose,
-			MethodRefEntry serverSocketClose, MethodRefEntry sockReadLine, MethodRefEntry sockWriteLine,
-			MethodRefEntry sockWriteString, MethodRefEntry sockReadChar, MethodRefEntry sockReadByte,
-			MethodRefEntry sockWriteByte, @Nullable MethodRefEntry sockReadLinePair) {
+			MethodRefEntry sockIn, MethodRefEntry sockOut, MethodRefEntry sockClose, MethodRefEntry serverSocketClose,
+			MethodRefEntry sockReadLine, MethodRefEntry sockWriteLine, MethodRefEntry sockWriteString,
+			MethodRefEntry sockReadChar, MethodRefEntry sockReadByte, MethodRefEntry sockWriteByte,
+			@Nullable MethodRefEntry sockReadLinePair) {
 	}
 
 	static final String TCP_CONNECT_METHOD = "_tcpConnect";
@@ -147,6 +161,36 @@ final class JvmSocketRuntimeBuilder {
 	private static final String SOCK_MS_METHOD = "_sockMs";
 
 	private static final String SOCK_MS_DESC = "(Ljava/lang/Object;)I";
+
+	/** The static field holding every connected socket's output buffer, by socket. */
+	static final String SOCK_BUFS_FIELD = "_sockBufs";
+
+	static final String SOCK_BUFS_FIELD_DESC = "Ljava/util/Map;";
+
+	private static final String SOCK_BUFS_METHOD = "_sockBufs";
+
+	private static final String SOCK_BUFS_DESC = "()Ljava/util/Map;";
+
+	private static final String SOCK_OUT_METHOD = "_sockOut";
+
+	private static final String SOCK_OUT_DESC = "(Ljava/net/Socket;)Ljava/io/OutputStream;";
+
+	private static final String SOCK_IN_METHOD = "_sockIn";
+
+	private static final String SOCK_IN_DESC = "(Ljava/net/Socket;)Ljava/io/InputStream;";
+
+	static final String SOCK_FLUSH_ALL_METHOD = "_sockFlushAll";
+
+	static final String SOCK_FLUSH_ALL_DESC = "()V";
+
+	private static final String SOCK_DETACH_METHOD = "_sockDetach";
+
+	private static final String SOCK_CLOSE_METHOD = "_sockClose";
+
+	private static final String SOCK_SOCKET_VOID_DESC = "(Ljava/net/Socket;)V";
+
+	/** A connected socket's output buffer size: the interpreter's and the component's. */
+	private static final int SOCK_BUFFER_SIZE = 8192;
 
 	private static final String TLS_HANDSHAKE_METHOD = "_tlsHandshake";
 
@@ -277,6 +321,20 @@ final class JvmSocketRuntimeBuilder {
 	private final MethodRefEntry serverSocketAccept;
 
 	private final MethodRefEntry socketClose;
+
+	private final FieldRefEntry sockBufsField;
+
+	private final MethodRefEntry sockBufsRef;
+
+	private final MethodRefEntry sockOutRef;
+
+	private final MethodRefEntry sockInRef;
+
+	private final MethodRefEntry sockFlushAllRef;
+
+	private final MethodRefEntry sockDetachRef;
+
+	private final MethodRefEntry sockCloseRef;
 
 	private final MethodRefEntry serverSocketClose;
 
@@ -413,6 +471,13 @@ final class JvmSocketRuntimeBuilder {
 		this.inetGetHostAddress = cp.methodRef(inetAddressClass, "getHostAddress", "()Ljava/lang/String;");
 		this.serverSocketAccept = cp.methodRef(this.serverSocketClass, "accept", "()Ljava/net/Socket;");
 		this.socketClose = cp.methodRef(this.socketClass, "close", "()V");
+		this.sockBufsField = cp.fieldRef(thisClass, SOCK_BUFS_FIELD, SOCK_BUFS_FIELD_DESC);
+		this.sockBufsRef = cp.methodRef(thisClass, SOCK_BUFS_METHOD, SOCK_BUFS_DESC);
+		this.sockOutRef = cp.methodRef(thisClass, SOCK_OUT_METHOD, SOCK_OUT_DESC);
+		this.sockInRef = cp.methodRef(thisClass, SOCK_IN_METHOD, SOCK_IN_DESC);
+		this.sockFlushAllRef = cp.methodRef(thisClass, SOCK_FLUSH_ALL_METHOD, SOCK_FLUSH_ALL_DESC);
+		this.sockDetachRef = cp.methodRef(thisClass, SOCK_DETACH_METHOD, SOCK_SOCKET_VOID_DESC);
+		this.sockCloseRef = cp.methodRef(thisClass, SOCK_CLOSE_METHOD, SOCK_SOCKET_VOID_DESC);
 		this.serverSocketClose = cp.methodRef(this.serverSocketClass, "close", "()V");
 		ClassEntry inputStreamClass = cp.classEntry("java/io/InputStream");
 		this.inputStreamRead = cp.methodRef(inputStreamClass, "read", "()I");
@@ -480,6 +545,17 @@ final class JvmSocketRuntimeBuilder {
 		methods.add(new SocketMethod(cp.utf8Entry(SOCK_PORT_METHOD), cp.utf8Entry(SOCK_PORT_DESC),
 				builder.buildSockPort()));
 		methods.add(new SocketMethod(cp.utf8Entry(SOCK_MS_METHOD), cp.utf8Entry(SOCK_MS_DESC), builder.buildSockMs()));
+		methods.add(new SocketMethod(cp.utf8Entry(SOCK_BUFS_METHOD), cp.utf8Entry(SOCK_BUFS_DESC),
+				builder.buildSockBufs(), AccessFlag.ACC_SYNCHRONIZED));
+		methods
+			.add(new SocketMethod(cp.utf8Entry(SOCK_OUT_METHOD), cp.utf8Entry(SOCK_OUT_DESC), builder.buildSockOut()));
+		methods.add(new SocketMethod(cp.utf8Entry(SOCK_IN_METHOD), cp.utf8Entry(SOCK_IN_DESC), builder.buildSockIn()));
+		methods.add(new SocketMethod(cp.utf8Entry(SOCK_FLUSH_ALL_METHOD), cp.utf8Entry(SOCK_FLUSH_ALL_DESC),
+				builder.buildSockFlushAll()));
+		methods.add(new SocketMethod(cp.utf8Entry(SOCK_DETACH_METHOD), cp.utf8Entry(SOCK_SOCKET_VOID_DESC),
+				builder.buildSockDetach()));
+		methods.add(new SocketMethod(cp.utf8Entry(SOCK_CLOSE_METHOD), cp.utf8Entry(SOCK_SOCKET_VOID_DESC),
+				builder.buildSockClose()));
 		methods.add(new SocketMethod(cp.utf8Entry(SOCK_READ_LINE_METHOD), cp.utf8Entry(SOCK_READ_LINE_DESC),
 				builder.buildSockReadLine(false)));
 		methods.add(new SocketMethod(cp.utf8Entry(SOCK_WRITE_LINE_METHOD), cp.utf8Entry(SOCK_WRITE_LINE_DESC),
@@ -499,8 +575,8 @@ final class JvmSocketRuntimeBuilder {
 					builder.buildSockReadLine(true)));
 			sockReadLinePair = cp.methodRef(thisClass, SOCK_READ_LINE_PAIR_METHOD, SOCK_READ_LINE_DESC);
 		}
-		return new SocketRuntime(methods, builder.socketClass, builder.serverSocketClass, builder.socketGetInputStream,
-				builder.socketGetOutputStream, builder.socketClose, builder.serverSocketClose, builder.sockReadLineRef,
+		return new SocketRuntime(methods, builder.socketClass, builder.serverSocketClass, builder.sockInRef,
+				builder.sockOutRef, builder.sockCloseRef, builder.serverSocketClose, builder.sockReadLineRef,
 				builder.sockWriteLineRef, builder.sockWriteStringRef, builder.sockReadCharRef,
 				cp.methodRef(thisClass, SOCK_READ_BYTE_METHOD, SOCK_READ_BYTE_DESC),
 				cp.methodRef(thisClass, SOCK_WRITE_BYTE_METHOD, SOCK_WRITE_BYTE_DESC), sockReadLinePair);
@@ -517,7 +593,9 @@ final class JvmSocketRuntimeBuilder {
 		emitCheckedString(code, 0, 2, LispNames.TCP_CONNECT);
 		emitCheckedPort(code, 1, LispNames.TCP_CONNECT);
 		code.istore(3);
-		// try { return addStream(new Socket(h, p)); } catch (IOException e) { ... }
+		// _sockFlushAll(); try { return addStream(new Socket(h, p)); }
+		// catch (IOException e) { ... }
+		code.invokestatic(this.sockFlushAllRef);
 		MethodCode.Label tryStart = code.newBoundLabel();
 		code.new_(this.socketClass);
 		code.dup();
@@ -550,6 +628,7 @@ final class JvmSocketRuntimeBuilder {
 		emitCheckedString(code, 0, 3, LispNames.TLS_CONNECT);
 		emitCheckedPort(code, 1, LispNames.TLS_CONNECT);
 		code.istore(6);
+		code.invokestatic(this.sockFlushAllRef);
 		code.aconst_null();
 		code.astore(4);
 		MethodCode.Label tryStart = code.newBoundLabel();
@@ -615,6 +694,10 @@ final class JvmSocketRuntimeBuilder {
 		code.astore(4);
 		emitCheckedString(code, 1, 3, LispNames.TLS_UPGRADE);
 		MethodCode.Label tryStart = code.newBoundLabel();
+		// _sockDetach(sock): the plain socket's buffered bytes go out before the
+		// handshake, and the SSLSocket writes through a buffer of its own.
+		code.aload(4);
+		code.invokestatic(this.sockDetachRef);
 		code.aload(4);
 		code.aload(3);
 		code.aload(2);
@@ -894,6 +977,7 @@ final class JvmSocketRuntimeBuilder {
 		MethodCode code = new MethodCode();
 		emitCheckedEntry(code, 0, LISTENER_KIND, LispNames.TCP_ACCEPT + " expects a listener handle");
 		code.checkcast(this.serverSocketClass);
+		code.invokestatic(this.sockFlushAllRef);
 		MethodCode.Label tryStart = code.newBoundLabel();
 		code.invokevirtual(this.serverSocketAccept);
 		code.invokestatic(this.addStreamRef);
@@ -1026,6 +1110,183 @@ final class JvmSocketRuntimeBuilder {
 	}
 
 	/**
+	 * {@code synchronized _sockBufs() -> Map}: the socket-to-buffer map in
+	 * {@code _sockBufs}, a {@code ConcurrentHashMap} made on the first call. A
+	 * {@code Socket} keeps {@code Object}'s identity equality, so a socket is its own
+	 * key.
+	 */
+	private MethodCode buildSockBufs() {
+		MethodCode code = new MethodCode();
+		ClassEntry mapClass = this.cp.classEntry("java/util/concurrent/ConcurrentHashMap");
+		// if (_sockBufs == null) _sockBufs = new ConcurrentHashMap(); return _sockBufs;
+		code.getstatic(this.sockBufsField);
+		MethodCode.Label made = code.newLabel();
+		code.ifnonnull(made);
+		code.new_(mapClass);
+		code.dup();
+		code.invokespecial(this.cp.methodRef(mapClass, "<init>", "()V"));
+		code.putstatic(this.sockBufsField);
+		code.labelBinding(made);
+		code.getstatic(this.sockBufsField);
+		code.areturn();
+		return code;
+	}
+
+	/**
+	 * {@code _sockOut(Socket s) -> OutputStream}: the socket's output buffer, a
+	 * {@code BufferedOutputStream} of {@link #SOCK_BUFFER_SIZE} bytes made on its first
+	 * write. Every socket write goes through it.
+	 */
+	private MethodCode buildSockOut() {
+		// Slots: 0=s, 1=map, 2=buffer, 3=prev
+		MethodCode code = new MethodCode();
+		ClassEntry mapClass = this.cp.classEntry("java/util/Map");
+		ClassEntry bufferedClass = this.cp.classEntry("java/io/BufferedOutputStream");
+		ClassEntry outputStreamClass = this.cp.classEntry("java/io/OutputStream");
+		// map = _sockBufs(); buffer = map.get(s); if (buffer != null) return buffer;
+		code.invokestatic(this.sockBufsRef);
+		code.astore(1);
+		code.aload(1);
+		code.aload(0);
+		code.invokeinterface(this.cp.interfaceMethodRef(mapClass, "get", "(Ljava/lang/Object;)Ljava/lang/Object;"));
+		code.astore(2);
+		code.aload(2);
+		MethodCode.Label done = code.newLabel();
+		code.ifnonnull(done);
+		// buffer = new BufferedOutputStream(s.getOutputStream(), SIZE);
+		code.new_(bufferedClass);
+		code.dup();
+		code.aload(0);
+		code.invokevirtual(this.socketGetOutputStream);
+		code.loadConstant(SOCK_BUFFER_SIZE);
+		code.invokespecial(this.cp.methodRef(bufferedClass, "<init>", "(Ljava/io/OutputStream;I)V"));
+		code.astore(2);
+		// prev = map.putIfAbsent(s, buffer); if (prev != null) buffer = prev;
+		code.aload(1);
+		code.aload(0);
+		code.aload(2);
+		code.invokeinterface(this.cp.interfaceMethodRef(mapClass, "putIfAbsent",
+				"(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"));
+		code.astore(3);
+		code.aload(3);
+		code.ifnull(done);
+		code.aload(3);
+		code.astore(2);
+		code.labelBinding(done);
+		code.aload(2);
+		code.checkcast(outputStreamClass);
+		code.areturn();
+		return code;
+	}
+
+	/**
+	 * {@code _sockIn(Socket s) -> InputStream}: the socket's input stream after
+	 * {@code _sockFlushAll()} -- a single-threaded program writes on one socket and then
+	 * waits on its peer's end, which may be another socket of the same program.
+	 */
+	private MethodCode buildSockIn() {
+		MethodCode code = new MethodCode();
+		code.invokestatic(this.sockFlushAllRef);
+		code.aload(0);
+		code.invokevirtual(this.socketGetInputStream);
+		code.areturn();
+		return code;
+	}
+
+	/**
+	 * {@code _sockFlushAll()}: sends what every socket's buffer holds. A flush that fails
+	 * is skipped: its bytes stay buffered, and the socket's own next write or flush
+	 * reports the failure.
+	 */
+	private MethodCode buildSockFlushAll() {
+		// Slots: 0=iterator, 1=buffer
+		MethodCode code = new MethodCode();
+		ClassEntry iteratorClass = this.cp.classEntry("java/util/Iterator");
+		// Iterator it = _sockBufs().values().iterator();
+		code.invokestatic(this.sockBufsRef);
+		code.invokeinterface(
+				this.cp.interfaceMethodRef(this.cp.classEntry("java/util/Map"), "values", "()Ljava/util/Collection;"));
+		code.invokeinterface(this.cp.interfaceMethodRef(this.cp.classEntry("java/util/Collection"), "iterator",
+				"()Ljava/util/Iterator;"));
+		code.astore(0);
+		// while (it.hasNext()) try { ((OutputStream) it.next()).flush(); } catch
+		// (IOException e) { }
+		MethodCode.Label loop = code.newBoundLabel();
+		code.aload(0);
+		code.invokeinterface(this.cp.interfaceMethodRef(iteratorClass, "hasNext", "()Z"));
+		MethodCode.Label done = code.newLabel();
+		code.ifeq(done);
+		code.aload(0);
+		code.invokeinterface(this.cp.interfaceMethodRef(iteratorClass, "next", "()Ljava/lang/Object;"));
+		code.astore(1);
+		MethodCode.Label tryStart = code.newBoundLabel();
+		emitFlushBuffer(code, 1);
+		MethodCode.Label tryEnd = code.newBoundLabel();
+		code.goto_(loop);
+		MethodCode.Label failed = code.newBoundLabel();
+		code.pop();
+		code.goto_(loop);
+		code.labelBinding(done);
+		code.return_();
+		code.exceptionCatch(tryStart, tryEnd, failed, this.cp.classEntry("java/io/IOException"));
+		return code;
+	}
+
+	/**
+	 * {@code _sockDetach(Socket s)}: drops the socket's buffer after sending what it
+	 * holds -- before {@code close}, and before a TLS upgrade, whose socket writes
+	 * through a buffer of its own. A failed send propagates.
+	 */
+	private MethodCode buildSockDetach() {
+		// Slots: 0=s, 1=buffer
+		MethodCode code = new MethodCode();
+		// buffer = _sockBufs().remove(s); if (buffer != null) buffer.flush();
+		code.invokestatic(this.sockBufsRef);
+		code.aload(0);
+		code.invokeinterface(this.cp.interfaceMethodRef(this.cp.classEntry("java/util/Map"), "remove",
+				"(Ljava/lang/Object;)Ljava/lang/Object;"));
+		code.astore(1);
+		code.aload(1);
+		MethodCode.Label done = code.newLabel();
+		code.ifnull(done);
+		emitFlushBuffer(code, 1);
+		code.labelBinding(done);
+		code.return_();
+		return code;
+	}
+
+	/**
+	 * {@code _sockClose(Socket s)}: {@code close} on a connected socket --
+	 * {@code _sockDetach(s)}, whose failure (the peer reset the connection) does not stop
+	 * the close, then {@code s.close()}.
+	 */
+	private MethodCode buildSockClose() {
+		MethodCode code = new MethodCode();
+		MethodCode.Label tryStart = code.newBoundLabel();
+		code.aload(0);
+		code.invokestatic(this.sockDetachRef);
+		MethodCode.Label tryEnd = code.newBoundLabel();
+		MethodCode.Label close = code.newLabel();
+		code.goto_(close);
+		MethodCode.Label failed = code.newBoundLabel();
+		code.pop();
+		code.labelBinding(close);
+		code.aload(0);
+		code.invokevirtual(this.socketClose);
+		code.return_();
+		code.exceptionCatch(tryStart, tryEnd, failed, this.cp.classEntry("java/io/IOException"));
+		return code;
+	}
+
+	/** {@code ((OutputStream) <slot>).flush();} */
+	private void emitFlushBuffer(MethodCode code, int slot) {
+		ClassEntry outputStreamClass = this.cp.classEntry("java/io/OutputStream");
+		code.aload(slot);
+		code.checkcast(outputStreamClass);
+		code.invokevirtual(this.cp.methodRef(outputStreamClass, "flush", "()V"));
+	}
+
+	/**
 	 * {@code _sockReadLine(Object socket) -> Object}. Reads bytes up to a {@code \n}
 	 * (exclusive, one trailing {@code \r} stripped), decodes UTF-8 and wraps the line
 	 * with the internal {@code '"'} prefix/suffix; returns {@code null} (nil) when the
@@ -1041,7 +1302,7 @@ final class JvmSocketRuntimeBuilder {
 		// in = ((Socket) socket).getInputStream();
 		code.aload(0);
 		code.checkcast(this.socketClass);
-		code.invokevirtual(this.socketGetInputStream);
+		code.invokestatic(this.sockInRef);
 		code.astore(1);
 		// baos = new ByteArrayOutputStream();
 		code.new_(this.baosClass);
@@ -1142,8 +1403,8 @@ final class JvmSocketRuntimeBuilder {
 
 	/**
 	 * {@code _sockWriteLine(Object str, Object socket) -> str}. Writes the string content
-	 * (without the surrounding quotes) plus a newline to the socket, UTF-8, sent
-	 * immediately (socket output streams are unbuffered).
+	 * (without the surrounding quotes) plus a newline to the socket's output buffer,
+	 * UTF-8.
 	 */
 	private MethodCode buildSockWriteLine() {
 		// Slots: 0=str, 1=socket, 2=content (String)
@@ -1158,7 +1419,7 @@ final class JvmSocketRuntimeBuilder {
 		// ((Socket) socket).getOutputStream().write(content.getBytes(UTF_8));
 		code.aload(1);
 		code.checkcast(this.socketClass);
-		code.invokevirtual(this.socketGetOutputStream);
+		code.invokestatic(this.sockOutRef);
 		code.aload(2);
 		code.getstatic(this.utf8Field);
 		code.invokevirtual(this.stringGetBytes);
@@ -1172,7 +1433,7 @@ final class JvmSocketRuntimeBuilder {
 	/**
 	 * {@code _sockWriteString(Object str, Object socket) -> str}.
 	 * {@link #buildSockWriteLine} without the newline: the string content (quotes
-	 * stripped) UTF-8-encoded onto the socket, sent immediately. Reached from
+	 * stripped) UTF-8-encoded onto the socket's output buffer. Reached from
 	 * {@code _writeString} -- and therefore from {@code write-char}, which lowers to
 	 * {@code write-string} on every backend.
 	 */
@@ -1184,7 +1445,7 @@ final class JvmSocketRuntimeBuilder {
 		// ((Socket) socket).getOutputStream().write(content.getBytes(UTF_8));
 		code.aload(1);
 		code.checkcast(this.socketClass);
-		code.invokevirtual(this.socketGetOutputStream);
+		code.invokestatic(this.sockOutRef);
 		code.aload(2);
 		code.getstatic(this.utf8Field);
 		code.invokevirtual(this.stringGetBytes);
@@ -1205,7 +1466,7 @@ final class JvmSocketRuntimeBuilder {
 		MethodCode.Label tryStart = code.newBoundLabel();
 		code.aload(0);
 		code.checkcast(this.socketClass);
-		code.invokevirtual(this.socketGetInputStream);
+		code.invokestatic(this.sockInRef);
 		code.invokevirtual(this.inputStreamRead);
 		code.ireturn();
 		emitStreamFailure(code, tryStart, 1, "read-byte: ");
@@ -1214,7 +1475,7 @@ final class JvmSocketRuntimeBuilder {
 
 	/**
 	 * {@code _sockWriteByte(Object socket, int b)}. One byte onto the socket's output
-	 * stream, sent immediately; the {@code write-byte} arm of {@code _writeByte}.
+	 * buffer; the {@code write-byte} arm of {@code _writeByte}.
 	 */
 	private MethodCode buildSockWriteByte() {
 		// Slots: 0=socket, 1=b
@@ -1222,7 +1483,7 @@ final class JvmSocketRuntimeBuilder {
 		MethodCode.Label tryStart = code.newBoundLabel();
 		code.aload(0);
 		code.checkcast(this.socketClass);
-		code.invokevirtual(this.socketGetOutputStream);
+		code.invokestatic(this.sockOutRef);
 		code.iload(1);
 		code.invokevirtual(this.cp.methodRef(this.cp.classEntry("java/io/OutputStream"), "write", "(I)V"));
 		code.return_();
@@ -1249,7 +1510,7 @@ final class JvmSocketRuntimeBuilder {
 		// in = ((Socket) socket).getInputStream();
 		code.aload(0);
 		code.checkcast(this.socketClass);
-		code.invokevirtual(this.socketGetInputStream);
+		code.invokestatic(this.sockInRef);
 		code.astore(1);
 		// b0 = in.read(); if (b0 < 0) return null;
 		code.aload(1);

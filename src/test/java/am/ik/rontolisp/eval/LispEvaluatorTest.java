@@ -13041,10 +13041,10 @@ class LispEvaluatorTest {
 	}
 
 	@SocketTest
-	void tcpEchoRoundTripOnLoopback() {
+	void tcpEchoRoundTripOnLoopback() throws Exception {
 		// Single-threaded choreography: connect before accept (the connection sits in
 		// the listen backlog) and write before the peer reads (small payloads sit in
-		// the kernel socket buffers), so nothing deadlocks.
+		// the output buffer until the read flushes it), so nothing deadlocks.
 		String program = """
 				(let* ((listener (rontolisp:tcp-listen 0 "127.0.0.1"))
 				       (port (rontolisp:tcp-local-port listener))
@@ -13060,6 +13060,17 @@ class LispEvaluatorTest {
 				      reply)))
 				""";
 		assertThat(eval(program)).isEqualTo(new LispString("hello"));
+		// The output buffer against a counting peer; what the program never flushes goes
+		// out at its end (flushOpenStreams, which the CLI calls).
+		try (am.ik.rontolisp.TcpOutputBufferFixture peer = am.ik.rontolisp.TcpOutputBufferFixture.start()) {
+			ByteArrayOutputStream out = new ByteArrayOutputStream();
+			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out));
+			evaluator.eval(LispReader.readFromString(peer.program()));
+			evaluator.flushOpenStreams();
+			assertThat(out.toString(StandardCharsets.UTF_8).trim())
+				.isEqualTo(am.ik.rontolisp.TcpOutputBufferFixture.EXPECTED_OUTPUT);
+			assertThat(peer.received()).isEqualTo(am.ik.rontolisp.TcpOutputBufferFixture.EXPECTED_RECEIVED);
+		}
 	}
 
 	@SocketTest

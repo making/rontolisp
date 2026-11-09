@@ -47,7 +47,7 @@ class NativeTcpTest {
 	@Test
 	void aSocketProgramImportsTheRunnersHostAndAUsocketOneTheSame() {
 		// The tree shaker keeps the imports the program reaches: a listener alone binds
-		// three of the thirteen, the whole family every one.
+		// three of the fourteen, the whole family every one.
 		byte[] listener = module("(print (rontolisp:tcp-local-port (rontolisp:tcp-listen 0 \"127.0.0.1\")))");
 		assertThat(WasmImports.functionFields(listener, SocketsLibrary.RUNNER_IMPORT_MODULE))
 			.containsExactlyInAnyOrder("listen", "localPort", "lastError");
@@ -59,12 +59,13 @@ class NativeTcpTest {
 				       (s (rontolisp:tcp-accept l)))
 				  (rontolisp:tcp-set-timeout c 10)
 				  (write-line (rontolisp:tcp-local-address l) c)
+				  (finish-output c)
 				  (print (list (listen s) (read-line s) (rontolisp:tcp-peer-address s) (rontolisp:tcp-peer-port s)))
 				  (close c))
 				""");
 		assertThat(WasmImports.functionFields(family, SocketsLibrary.RUNNER_IMPORT_MODULE)).containsExactlyInAnyOrder(
-				"connect", "listen", "accept", "read", "write", "close", "localPort", "localAddress", "peerAddress",
-				"peerPort", "setTimeout", "readable", "lastError");
+				"connect", "listen", "accept", "read", "write", "flush", "close", "localPort", "localAddress",
+				"peerAddress", "peerPort", "setTimeout", "readable", "lastError");
 		// The usocket shim rides the same provider.
 		byte[] usocket = module("(print (usocket:socket-listen \"127.0.0.1\" usocket:*auto-port*))");
 		assertThat(WasmLispCompiler.importModules(usocket)).contains(SocketsLibrary.RUNNER_IMPORT_MODULE);
@@ -187,6 +188,21 @@ class NativeTcpTest {
 			String fixtureOutput = new String(fixtureProcess.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 			assertThat(fixtureProcess.waitFor(2, TimeUnit.MINUTES)).as("%s: %s", fixture[0], fixtureOutput).isTrue();
 			assertThat(fixtureOutput.trim()).as(fixture[0]).isEqualTo(fixture[2]);
+		}
+		// The output buffer against a counting peer; what the program never flushes goes
+		// out at its end (the runner's flush_all).
+		try (am.ik.rontolisp.TcpOutputBufferFixture peer = am.ik.rontolisp.TcpOutputBufferFixture.start()) {
+			Path bufferSource = this.tempDir.resolve("buffer.lisp");
+			Files.writeString(bufferSource, peer.program(), StandardCharsets.UTF_8);
+			Path bufferExecutable = this.tempDir.resolve("buffer");
+			new RontoLispCli(new ByteArrayInputStream(new byte[0]),
+					new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8))
+				.run(new String[] { bufferSource.toString(), "--native", "-o", bufferExecutable.toString() });
+			Process bufferProcess = new ProcessBuilder(bufferExecutable.toString()).redirectErrorStream(true).start();
+			String bufferOutput = new String(bufferProcess.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+			assertThat(bufferProcess.waitFor(2, TimeUnit.MINUTES)).as("buffer: %s", bufferOutput).isTrue();
+			assertThat(bufferOutput.trim()).isEqualTo(am.ik.rontolisp.TcpOutputBufferFixture.EXPECTED_OUTPUT);
+			assertThat(peer.received()).isEqualTo(am.ik.rontolisp.TcpOutputBufferFixture.EXPECTED_RECEIVED);
 		}
 	}
 

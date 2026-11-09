@@ -8,9 +8,13 @@
 [`write-line`](write-line.md)、[`write-string`](write-string.md)、
 [`write-char`](write-char.md)、[`read-char`](read-char.md)、
 [`read-byte`](read-byte.md)、
-[`write-byte`](write-byte.md)、[`close`](close.md)。バッファリングされる
-ファイル出力と異なり、ソケットへの書き込みは即時に送信されます(`write-line` は
-行ごとにフラッシュ。WASM コンポーネントではバッファされます。後述)。相手側が接続を閉じると `read-line` は `nil` を返します。
+[`write-byte`](write-byte.md)、[`close`](close.md)。書き込みは**バッファ**
+されます。送られるのは、プログラムがいずれかのソケットを待つとき(読み込み、
+[`listen`](listen.md)、`tcp-accept`、`tcp-connect`)、
+[`force-output`](force-output.md) か [`finish-output`](finish-output.md)
+を呼んだとき、ソケットをクローズしたとき、8 KiB を書いたとき、プログラムが
+終わるときです。それ以外のものを待つ前には `force-output` を呼んでください。
+相手側が接続を閉じると `read-line` は `nil` を返します。
 
 以下の例は自己完結しています:
 [`rontolisp:tcp-listen`](rontolisp-tcp-listen.md) でエフェメラルポートを
@@ -58,11 +62,7 @@ listen し、ループバック経由で自分自身へ接続して、
   `-S allow-ip-name-lookup=y` も付けます(IPv4 リテラルと `localhost` は解決を
   要しません)。接続失敗や IPv4 アドレスに解決できないホスト名は、ハンドルの代わりに `nil` を返します。`-S` フラグなしでも
   コンポーネントは起動しますが、すべてのソケット操作が失敗して `nil` になります。
-  書き込みは**バッファ**されます。送られるのは、プログラムがいずれかのソケットを
-  待つとき(読み込み、[`listen`](listen.md)、`tcp-accept`、`tcp-connect`)、
-  [`force-output`](force-output.md) か [`finish-output`](finish-output.md)
-  を呼んだとき、ソケットをクローズしたとき、8 KiB を書いたとき、プログラムが
-  終わるときです。それ以外のものを待つ前と `uiop:quit` の前には `force-output`
+  `uiop:quit` はバッファに残った分を送らないため、その前には `force-output`
   を呼んでください。
   tcp 系関数は Preview 1(コアモジュール)モードでもコンパイルは通りますが、
   呼び出すたびに動作するバックエンドを名指しする呼び出し時エラーになります。

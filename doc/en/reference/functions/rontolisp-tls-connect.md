@@ -10,8 +10,8 @@ lives in the same handle space as file streams, so the standard stream
 functions work on it directly: [`read-line`](read-line.md),
 [`write-line`](write-line.md), [`read-byte`](read-byte.md),
 [`write-byte`](write-byte.md) and [`close`](close.md). As with plain sockets,
-writes are sent immediately and `read-line` returns `nil` once the peer has
-closed the connection.
+writes are buffered ([`tcp-connect`](rontolisp-tcp-connect.md)) and
+`read-line` returns `nil` once the peer has closed the connection.
 
 The server certificate is validated against the JDK default trust store and
 the hostname is verified (HTTPS-style endpoint identification), so connecting

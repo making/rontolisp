@@ -52,7 +52,11 @@ static PAYLOAD_SECTION: [u8; payload::TRAILER_LEN] = payload::EMPTY_SECTION;
 fn main() {
     // Keeps the fingerprint marker in the binary for the side that assembles executables.
     std::hint::black_box(rlabi::STUB_MARKER.as_ptr());
-    match run() {
+    let result = run();
+    // The sockets' buffered bytes go out however the program ended.
+    #[cfg(feature = "net")]
+    tcp::flush_all();
+    match result {
         Ok(()) => exit(0),
         Err(e) => {
             if let Some(code) = e.downcast_ref::<I32Exit>() {
