@@ -17834,7 +17834,12 @@ class JvmLispCompilerTest {
 		// bytes, i.e. the default build really did emit the fused methods. Its
 		// multiple-value-list settles every defun tail, so mod32+ and rol32 arrive
 		// wrapped in the channel's clear (LispMacroExpander.clearedForm): mix32 still
-		// calls neither, and the fused call clears what (values ... 7) published.
+		// calls neither, and the fused call clears what (values ... 7) published. A
+		// program holding eval gives every defun a cell, which the fused sites check:
+		// mix32
+		// calls rol32 in no way, and mod32+, its tail, through the tail entry that keeps
+		// a
+		// call through a replaced name proper.
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(INT_FUSION_PROGRAM));
 		byte[] fast = JvmLispCompiler.builder()
@@ -17847,13 +17852,24 @@ class JvmLispCompilerTest {
 			.optimize(OptimizeLevel.SIZE)
 			.build()
 			.compile(program);
+		byte[] celled = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(am.ik.rontolisp.eval.LispPreludeLibrary
+				.process(LispReader.readAllFromString("(defun eval-it (x) (eval x))\n" + INT_FUSION_PROGRAM)));
 		assertThat(small).isNotEqualTo(fast);
 		assertThat(declaredMethodNames(fast)).anyMatch(name -> name.startsWith("_fx$"));
 		assertThat(declaredMethodNames(small)).noneMatch(name -> name.startsWith("_fx$"));
 		assertThat(ownCallsIn(fast, "MIX32", "MOD32+") + ownCallsIn(fast, "MIX32", "ROL32")).isZero();
 		assertThat(ownCallsIn(small, "MIX32", "MOD32+") + ownCallsIn(small, "MIX32", "ROL32")).isEqualTo(2);
+		assertThat(ownCallsIn(celled, "MIX32", "ROL32") + ownCallsIn(celled, "MIX32", "_n$ROL32")
+				+ ownCallsIn(celled, "MIX32", "_n$MOD32+"))
+			.isZero();
+		assertThat(ownCallsIn(celled, "MIX32", "_nt$MOD32+")).isOne();
 		assertThat(runClass(fast)).isEqualTo(INT_FUSION_EXPECTED);
 		assertThat(runClass(small)).isEqualTo(INT_FUSION_EXPECTED);
+		assertThat(runClass(celled)).isEqualTo(INT_FUSION_EXPECTED);
 	}
 
 	@Test

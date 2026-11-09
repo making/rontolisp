@@ -93,6 +93,26 @@ its index is part of the tree (below). What is this backend's own:
   `WasmLispCompilerIntegrationTest.compileInlinableDefunsFuseWithoutChangingResults` (a fuel
   budget: a million substituted iterations 45.8 M, as calls 233.6 M) and the `ci-svc-inc` line
   of `multipleValueChannelIsExactInSingleValueContexts` (the clear).
+- **A name with a cell is substituted too** (`CelledCall`, 2026-11-09). A program holding `eval`
+  gives every named defun a cell ([symbol-runtime-api.md](symbol-runtime-api.md), "A write through a
+  computed name"), and from 2026-11-05 `inlinableDefuns` left those names out: a clack app (clack's
+  `eval-file` holds `eval`) lost ironclad's fusion. Now the body substitutes as a `CelledCall` node: each
+  fast path first bails if any substituted name's cell is filled (`emitCellChecks`, one
+  `global.get`/`ref.is_null` per name), and the fallback CALLS the named entry over the arguments --
+  the compiled definition while the cell is empty, the replacement once written -- once per argument
+  use however many places read it (`emitFallbacks`). Order: the fused evaluation runs every leaf
+  before any application, so a site substitutes only when every leaf after a celled call's
+  application begins is inert (`keepsCelledOrder`: a constant, an unboxed or uncaptured lexical
+  variable, a `defconstant`); otherwise those calls stay leaves for that site. A root call in tail
+  position stays a call (its `return_call` keeps a tail call through a replaced name proper). A
+  program whose defuns have no cell compiles byte-identically (`postgres-web.lisp` checked). Measured
+  2026-11-09 (Xeon E5-2697A v4, wasmtime 49), `gen-salted-password` x4096 six times, Preview 1 fuel:
+  no `eval` 7.20 G; with `eval` 23.9 G as calls, 7.76 G substituted, 7.57 G without the checks;
+  Shiori's SCRAM login under `wasmtime serve` 2.09-2.30 s -> 0.59-0.89 s (0.51-0.64 s substituted with
+  no check at all, unsound). Pinned by the `eval` leg of the same fuel budget (45.9 M) and
+  ci-spec `a-defun-written-through-a-computed-name-answers-the-new-definition` (`cwn-add32`: the
+  replacement called once, in the interpreter's order, all four backends). The JVM twin does the same
+  in its outlined method ([jvm-int-fusion.md](jvm-int-fusion.md), "A name with a cell").
 - **Masked signed field**: `(%mask-signed-field k x)` with a literal `1 <= k <= 64` is an op node
   whose operand emits WRAPPED and sign-extends below 64 (`i64.shl`/`i64.shr_s` by `64 - k`): the
   JVM twin's node (`.kb/jvm-int-fusion.md`), same fallback through `_big_xor`/`_big_and`/`_rat_add`

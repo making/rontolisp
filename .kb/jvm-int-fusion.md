@@ -119,6 +119,26 @@ computed divisor.
   FIRST run went 1.4 s -> 1.7 s under the Graal JIT (C2: no change; C1 only: 1.9 s -> 0.9 s), the
   class carrying 389 `_fx$` methods against 172 to tier up; a PostgreSQL SCRAM login in a fresh
   `java -cp . PgHello` 3.4 s -> 4.2 s.
+- **A name with a cell** (`CelledCall`, 2026-11-09): `notinline` -- `celledDefuns`, every named defun
+  of a program holding `eval`, or a linked class's declared names -- substitutes too, the wasm twin's
+  design ([wasm-int-fusion.md](wasm-int-fusion.md), "A name with a cell"). Until then such a program's
+  warm `gen-salted-password` x4096 derivations measured 254-657 ms against 91-212 ms without the
+  `eval` (Xeon E5-2697A v4). The fused method checks each substituted name's cell
+  (`getstatic _fc$name; ifnonnull` to the bail, `emitCellChecks`) after the draws and before the
+  guards; the fallback calls the named entry `_n$name` over the arguments' fallbacks
+  (`JvmTailBounce.emitDirectCall`, no form: the depth and unwrap a bouncing entry owes), once however
+  many places read it (`countFallbackUses`, a temporary of the method). The structure key numbers
+  each call, so a call read twice and two equal calls do not share a method. Order:
+  `keepsCelledOrder` (every leaf evaluated after a call's application begins is inert -- an
+  order-independent form, an uncaptured lexical, a `defconstant`, a raw LOCAL; a raw global is a
+  field a replacement can write, a draw never qualifies), else that site keeps those calls leaves. A
+  root call whose ordinary emission would take the name's tail entry `_nt$` (`JvmTailBounce.
+  takesTailEntry`) stays a call, as does a local function's root whose body is such a call; a root
+  call's fused method clears the multiple-value channel on its fast path only
+  (`Pending.clearsChannel`), the fallback's function settling its own. No double path over one.
+  Pinned by the `eval` leg of `fusedIntegerExpressionTreesMatchTheGenericPath` (`MIX32` calls neither
+  `ROL32` nor `_n$ROL32`, and `MOD32+`, its tail, through `_nt$MOD32+`) and ci-spec
+  `a-defun-written-through-a-computed-name-answers-the-new-definition` (`cwn-add32`).
 - **Packed aref leaves** (whenever `Ctx.usesArrays`): a rank-1 `(aref a i)` reads raw from either
   the bare `long[]` packed integer vector (elements from slot 1, past the width header; only under
   `Ctx.usesIntArray`) or the general array's length-6 header over a flat `long[]` (elements from

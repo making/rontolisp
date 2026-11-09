@@ -105,7 +105,7 @@ final class JvmIntFusionCompiler {
 
 	// ------------------------------------------------------------------ the tree model
 
-	private sealed interface Node permits OpNode, ConstLeaf, ExprLeaf, ArefLeaf, RandomLeaf, RawLeaf {
+	private sealed interface Node permits OpNode, ConstLeaf, ExprLeaf, ArefLeaf, RandomLeaf, RawLeaf, CelledCall {
 
 	}
 
@@ -282,6 +282,47 @@ final class JvmIntFusionCompiler {
 	}
 
 	/**
+	 * A substituted call of a defun whose name has a cell ({@link JvmFunctionCell}: a
+	 * run-time write can replace it). The fast path computes {@link #body} while the cell
+	 * is empty -- the fused method checks the cells of its calls first
+	 * ({@link #emitCellChecks}) -- and the fallback calls the named entry over
+	 * {@link #args}, which runs the compiled definition while the cell is empty and what
+	 * a write left there once it is not. {@link #bodyStart} is where the site's events
+	 * stood when the body's applications began ({@link #keepsCelledOrder}).
+	 */
+	private static final class CelledCall implements Node {
+
+		final JvmLispCompiler.FunctionInfo function;
+
+		final String name;
+
+		final int bodyStart;
+
+		List<Node> args;
+
+		Node body;
+
+		/** How many places of the fallback read the call ({@link #emitFallbacks}). */
+		int fallbackUses;
+
+		/** The call's value for the fallback's later reads, or -1 before the first. */
+		int fallbackSlot = -1;
+
+		CelledCall(JvmLispCompiler.FunctionInfo function, String name, List<Node> args, Node body, int bodyStart) {
+			this.function = function;
+			this.name = name;
+			this.args = args;
+			this.body = body;
+			this.bodyStart = bodyStart;
+		}
+
+		JvmFunctionCell cell() {
+			return java.util.Objects.requireNonNull(this.function.cell());
+		}
+
+	}
+
+	/**
 	 * An unboxed (dual-representation) {@code let} local: {@code longSlot} (two JVM
 	 * slots) holds the raw value, {@code shadowSlot} an ordinary boxed reference, and
 	 * {@code flagSlot} an {@code int} that is non-zero while the raw slot is
@@ -406,9 +447,14 @@ final class JvmIntFusionCompiler {
 
 	}
 
-	/** One outlined fused-site method awaiting its body (the compiler's fused pass). */
+	/**
+	 * One outlined fused-site method awaiting its body (the compiler's fused pass).
+	 * {@code clearsChannel}: the root is a call of a name with a cell
+	 * ({@link CelledCall}) whose fast path clears the multiple-value channel, as the
+	 * function's settled tail would; its fallback calls the function, which does.
+	 */
 	record Pending(MethodRefEntry ref, Utf8Entry nameUtf8, Utf8Entry descUtf8, Node root, List<Node> leaves,
-			int cmpMask) {
+			int cmpMask, boolean clearsChannel) {
 
 		boolean isCompare() {
 			return this.cmpMask >= 0;
@@ -441,6 +487,11 @@ final class JvmIntFusionCompiler {
 		final Map<String, RawLeaf> sharedRawLeaves = new HashMap<>();
 
 		final Set<String> assignedNames = new HashSet<>();
+
+		/**
+		 * The calls of names with a cell the site substituted, in classification order.
+		 */
+		final List<CelledCall> celledCalls = new ArrayList<>();
 
 		/**
 		 * What the classified tree does, in the order the interpreter does it: each
@@ -505,6 +556,22 @@ final class JvmIntFusionCompiler {
 	 * ordinary per-operation path.
 	 */
 	static boolean tryCompile(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		return tryCompile(cons, ctx, className, false);
+	}
+
+	/**
+	 * As {@link #tryCompile(LispCons, JvmLispCompiler.Ctx, String)}; {@code call} when
+	 * the form is a call whose substituted body is the root
+	 * ({@link #tryCompileDefunCall}, {@link #tryCompileLocalCall}). The body is an
+	 * integer tree, one value, and the function's own settled tail would have cleared
+	 * what an argument published -- a lambda's as its compiler settles it, a defun's as
+	 * {@link #inlinableBody} reads it without that clear -- so the fused call clears the
+	 * channel: in the fused method's fast path alone when the root is a
+	 * {@link CelledCall}, whose fallback calls the function and lets its tail settle it.
+	 * Such a root stays a call where the ordinary call would be a proper tail call
+	 * through the name ({@link #keepsTailCall}).
+	 */
+	private static boolean tryCompile(LispCons cons, JvmLispCompiler.Ctx ctx, String className, boolean call) {
 		if (!enabled(ctx)) {
 			return false;
 		}
@@ -517,22 +584,46 @@ final class JvmIntFusionCompiler {
 		Classified classified = classifyOrdered(cons, ctx, site -> classify(cons, ctx, Map.of(), site, 0));
 		Node root = classified.root();
 		Site site = classified.site();
-		if (!(root instanceof OpNode)) {
+		CelledCall celledRoot = root instanceof CelledCall c ? c : null;
+		Node tree = celledRoot != null ? celledRoot.body : root;
+		if (root == null || !(tree instanceof OpNode)
+				|| celledRoot != null && keepsTailCall(celledRoot, cons, call, ctx)) {
 			return false;
 		}
 		int ops = countOps(root);
 		if (ops > MAX_OPS || site.leaves.size() > MAX_EXPR_LEAVES) {
 			return false;
 		}
-		if (ops < 2 && !hasRawRead(site.leaves) && !hasConstOperand(root)) {
+		if (ops < 2 && !hasRawRead(site.leaves) && !hasConstOperand(tree)) {
 			// A single operation over plain boxed leaves runs no leaner fused; the
 			// generic call keeps owning that shape (and its emission stays byte-stable).
 			return false;
 		}
 		boolean lineFree = reportsOnlyCallerSite(root, ctx.siteCurrent);
-		MethodRefEntry ref = methodFor(root, site.leaves, -1, ctx);
+		MethodRefEntry ref = methodFor(root, site.leaves, -1, call && celledRoot != null, ctx);
 		pushLeaves(classified, lineFree, ctx, className);
 		ctx.body.invokestatic(ref);
+		if (call && celledRoot == null && ctx.mvChannel != null) {
+			ctx.mvChannel.emitClear(ctx);
+		}
+		return true;
+	}
+
+	/**
+	 * Whether a root {@link CelledCall} must stay a call: where the ordinary emission
+	 * would take the name's tail entry, which hands a replacement's bounce on so a chain
+	 * of tail calls through replaced names keeps no frame per hop
+	 * ({@link JvmFunctionCell#tailEntryBody}) -- the fallback's call would keep one. A
+	 * local function's body is a lambda's, whose tail call through such a name always
+	 * takes it.
+	 */
+	private static boolean keepsTailCall(CelledCall root, LispCons cons, boolean call, JvmLispCompiler.Ctx ctx) {
+		if (root.cell().tailNamed() == null) {
+			return false;
+		}
+		if (call && cons.car() instanceof LispSymbol head && head.name().equals(root.name)) {
+			return JvmTailBounce.takesTailEntry(root.function, cons, ctx);
+		}
 		return true;
 	}
 
@@ -611,7 +702,7 @@ final class JvmIntFusionCompiler {
 			return false;
 		}
 		boolean lineFree = reportsOnlyCallerSite(root, ctx.siteCurrent);
-		MethodRefEntry ref = methodFor(root, site.leaves, maskFor(branchOpcode), ctx);
+		MethodRefEntry ref = methodFor(root, site.leaves, maskFor(branchOpcode), false, ctx);
 		pushLeaves(classified, lineFree, ctx, className);
 		ctx.body.invokestatic(ref);
 		return true;
@@ -651,7 +742,7 @@ final class JvmIntFusionCompiler {
 	 */
 	static boolean tryCompileLocalCall(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		return enabled(ctx) && cons.cdr() instanceof LispCons fnCell && fnCell.car() instanceof LispSymbol fvar
-				&& ctx.localIntLambdas.containsKey(fvar.name()) && tryCompileCall(cons, ctx, className);
+				&& ctx.localIntLambdas.containsKey(fvar.name()) && tryCompile(cons, ctx, className, true);
 	}
 
 	/**
@@ -662,24 +753,16 @@ final class JvmIntFusionCompiler {
 	 */
 	static boolean tryCompileDefunCall(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
 		return cons.car() instanceof LispSymbol name && ctx.inlinableDefuns.containsKey(name.name())
-				&& tryCompileCall(cons, ctx, className);
+				&& tryCompile(cons, ctx, className, true);
 	}
 
 	/**
-	 * A call fused with its substituted body as the root. The body is an integer tree,
-	 * one value; the function's own settled tail would have cleared what an argument
-	 * published -- a lambda's as its compiler settles it, a defun's as
-	 * {@link #inlinableBody} reads it without that clear -- so the fused call clears the
-	 * channel here.
+	 * The function of a defun whose name has a cell ({@link JvmFunctionCell}), or null
+	 * for any other name.
 	 */
-	private static boolean tryCompileCall(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
-		if (!tryCompile(cons, ctx, className)) {
-			return false;
-		}
-		if (ctx.mvChannel != null) {
-			ctx.mvChannel.emitClear(ctx);
-		}
-		return true;
+	private static JvmLispCompiler.@Nullable FunctionInfo cellOf(String name, JvmLispCompiler.Ctx ctx) {
+		JvmLispCompiler.FunctionInfo function = ctx.functions.get(name);
+		return function != null && function.cell() != null ? function : null;
 	}
 
 	// ------------------------------------------------------------------ raw locals
@@ -860,11 +943,11 @@ final class JvmIntFusionCompiler {
 				emitRawSlotStore(target, ctx);
 				return;
 			}
-			if ((root instanceof OpNode || root instanceof ArefLeaf) && countOps(root) <= MAX_OPS
-					&& site.leaves.size() <= MAX_EXPR_LEAVES) {
+			if ((root instanceof OpNode || root instanceof ArefLeaf || root instanceof CelledCall)
+					&& countOps(root) <= MAX_OPS && site.leaves.size() <= MAX_EXPR_LEAVES) {
 				MethodCode.Label @Nullable [] step = emitRawStepFastPath(root, ctx, target);
 				boolean lineFree = reportsOnlyCallerSite(root, ctx.siteCurrent);
-				MethodRefEntry ref = methodFor(root, site.leaves, -1, ctx);
+				MethodRefEntry ref = methodFor(root, site.leaves, -1, false, ctx);
 				if (step != null) {
 					ctx.body.labelBinding(step[0]);
 				}
@@ -1066,7 +1149,7 @@ final class JvmIntFusionCompiler {
 	 * The expression a call substitutes for a defun: its single body expression, read
 	 * through the clear a program with a multiple-value operator settles every defun tail
 	 * with ({@link LispMacroExpander#clearedForm}); the fused call clears instead
-	 * ({@link #tryCompileCall}).
+	 * ({@link #tryCompileDefunCall}).
 	 */
 	private static @Nullable LispVal inlinableBody(JvmLispCompiler.DefunDecl defun) {
 		LispVal body = singleBodyExpr(defun.bodyExprs());
@@ -1280,17 +1363,21 @@ final class JvmIntFusionCompiler {
 			LocalIntLambda lambda = ctx.localIntLambdas.get(fvar.name());
 			if (lambda != null && arity - 1 == lambda.params().size()) {
 				Node substituted = substituteCall(lambda.params(), lambda.body(), parts.subList(2, parts.size()), ctx,
-						env, site, depth, site.owner);
+						env, site, depth, site.owner, null, op);
 				if (substituted != null) {
 					return substituted;
 				}
 			}
 		}
 		JvmLispCompiler.DefunDecl inlinable = ctx.inlinableDefuns.get(op);
-		if (inlinable != null && arity == inlinable.paramNames().size() && depth < MAX_INLINE_DEPTH) {
+		JvmLispCompiler.FunctionInfo celled = inlinable == null ? null : cellOf(op, ctx);
+		// A name with a cell is substituted where the site keeps the order a replacement
+		// would see (keepsCelledOrder).
+		if (inlinable != null && arity == inlinable.paramNames().size() && depth < MAX_INLINE_DEPTH
+				&& (celled == null || site.ordering.substitutesCelled)) {
 			LispVal body = java.util.Objects.requireNonNull(inlinableBody(inlinable));
 			Node substituted = substituteCall(inlinable.paramNames(), body, parts.subList(1, parts.size()), ctx, env,
-					site, depth, inlinedOwner(inlinable, ctx));
+					site, depth, inlinedOwner(inlinable, ctx), celled, op);
 			if (substituted != null) {
 				return substituted;
 			}
@@ -1461,18 +1548,24 @@ final class JvmIntFusionCompiler {
 	 * arguments. Each argument is classified ONCE (registering its leaves in source
 	 * order) and the resulting node is shared across every occurrence of its parameter.
 	 * On failure the leaves registered by this attempt are rolled back, so the caller's
-	 * fall-through leaf treatment does not ALSO evaluate them.
+	 * fall-through leaf treatment does not ALSO evaluate them. A {@code celled}
+	 * function's body comes back as a {@link CelledCall} of {@code name} over the
+	 * arguments' nodes.
 	 */
 	@Nullable private static Node substituteCall(List<String> params, LispVal body, List<LispVal> args, JvmLispCompiler.Ctx ctx,
-			Map<String, Node> env, Site site, int depth, int bodyOwner) {
+			Map<String, Node> env, Site site, int depth, int bodyOwner, JvmLispCompiler.@Nullable FunctionInfo celled,
+			String name) {
 		List<Node> leaves = site.leaves;
 		// An accessor-shaped body -- exactly (aref P I) over parameters/literals -- maps
 		// straight onto an ArefLeaf over the CALLER's operand expressions, provided each
 		// is a bare symbol or literal at the top env (pure, so re-reading and eliding
 		// the call are unobservable). This lets a typed-struct accessor call read a
-		// packed vector's element raw inside a fused tree.
-		if (env.isEmpty() && ctx.usesArrays && body instanceof LispCons bodyCons && bodyCons.isProperList()
-				&& bodyCons.car() instanceof LispSymbol bodyHead && LispNames.AREF.equals(bodyHead.name())) {
+		// packed vector's element raw inside a fused tree. Not for a name with a cell:
+		// its fallback calls the entry over the arguments, which this shape never
+		// classifies.
+		if (celled == null && env.isEmpty() && ctx.usesArrays && body instanceof LispCons bodyCons
+				&& bodyCons.isProperList() && bodyCons.car() instanceof LispSymbol bodyHead
+				&& LispNames.AREF.equals(bodyHead.name())) {
 			List<LispVal> bodyParts = bodyCons.toList();
 			if (bodyParts.size() == 3) {
 				LispVal arr = inlineArefOperand(bodyParts.get(1), params, args);
@@ -1488,7 +1581,9 @@ final class JvmIntFusionCompiler {
 		}
 		int mark = leaves.size();
 		int eventMark = site.events.size();
+		int celledMark = site.celledCalls.size();
 		Map<String, Node> callEnv = new HashMap<>();
+		List<Node> argNodes = new ArrayList<>(params.size());
 		Node substituted = null;
 		for (int i = 0; i < params.size(); i++) {
 			Node argNode = classify(args.get(i), ctx, env, site, depth);
@@ -1496,7 +1591,9 @@ final class JvmIntFusionCompiler {
 				break;
 			}
 			callEnv.put(params.get(i), argNode);
+			argNodes.add(argNode);
 		}
+		int bodyStart = site.events.size();
 		if (callEnv.size() == params.size()) {
 			// The arguments were the caller's forms; the body is the callee's.
 			int callerOwner = site.owner;
@@ -1511,6 +1608,13 @@ final class JvmIntFusionCompiler {
 		if (substituted == null) {
 			leaves.subList(mark, leaves.size()).clear();
 			site.events.subList(eventMark, site.events.size()).clear();
+			site.celledCalls.subList(celledMark, site.celledCalls.size()).clear();
+			return null;
+		}
+		if (celled != null) {
+			CelledCall call = new CelledCall(celled, name, argNodes, substituted, bodyStart);
+			site.celledCalls.add(call);
+			return call;
 		}
 		return substituted;
 	}
@@ -1605,6 +1709,8 @@ final class JvmIntFusionCompiler {
 			case RandomLeaf ignored -> 0;
 			case RawLeaf ignored -> 0;
 			case ConstLeaf ignored -> 0;
+			// What the fast path computes; the fallback's call is smaller.
+			case CelledCall call -> countOps(call.body);
 			case OpNode op -> {
 				int ops = CMP_ROOT.equals(op.op()) ? 1 : Math.max(1, op.args().size() - 1);
 				for (Node arg : op.args()) {
@@ -1635,9 +1741,12 @@ final class JvmIntFusionCompiler {
 
 	/**
 	 * The method reference for this tree shape, minting (and queueing for the fused pass)
-	 * a new {@code _fx$N} only when no structurally identical site exists yet.
+	 * a new {@code _fx$N} only when no structurally identical site exists yet;
+	 * {@code clearsChannel} when its fast path clears the multiple-value channel
+	 * ({@link Pending#clearsChannel}).
 	 */
-	private static MethodRefEntry methodFor(Node root, List<Node> leaves, int cmpMask, JvmLispCompiler.Ctx ctx) {
+	private static MethodRefEntry methodFor(Node root, List<Node> leaves, int cmpMask, boolean clearsChannel,
+			JvmLispCompiler.Ctx ctx) {
 		if (reportsOnlyCallerSite(root, ctx.siteCurrent)) {
 			// Every form in the tree reports the site the call itself is at -- the
 			// common one-line tree -- so the method needs no line numbers of its own: it
@@ -1658,7 +1767,7 @@ final class JvmIntFusionCompiler {
 			}
 		}
 		desc.append(")").append(cmpMask >= 0 ? "I" : "Ljava/lang/Object;");
-		String key = cmpMask + "|" + desc + "|" + structureKey(root, leaves);
+		String key = cmpMask + (clearsChannel ? "c" : "") + "|" + desc + "|" + structureKey(root, leaves);
 		MethodRefEntry existing = state.byKey.get(key);
 		if (existing != null) {
 			return existing;
@@ -1668,7 +1777,7 @@ final class JvmIntFusionCompiler {
 		Utf8Entry descUtf8 = ctx.cp.utf8Entry(desc.toString());
 		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(state.className), nameUtf8, descUtf8);
 		state.byKey.put(key, ref);
-		state.pending.add(new Pending(ref, nameUtf8, descUtf8, root, leaves, cmpMask));
+		state.pending.add(new Pending(ref, nameUtf8, descUtf8, root, leaves, cmpMask, clearsChannel));
 		return ref;
 	}
 
@@ -1684,6 +1793,8 @@ final class JvmIntFusionCompiler {
 			case ArefLeaf leaf -> (leaf.site == 0 || leaf.site == callerSite)
 					&& reportsOnlyCallerSite(java.util.Objects.requireNonNull(leaf.indexNode), callerSite);
 			case RandomLeaf leaf -> leaf.site == 0 || leaf.site == callerSite;
+			case CelledCall call -> reportsOnlyCallerSite(call.body, callerSite)
+					&& call.args.stream().allMatch(arg -> reportsOnlyCallerSite(arg, callerSite));
 			default -> true;
 		};
 	}
@@ -1704,6 +1815,12 @@ final class JvmIntFusionCompiler {
 				leaf.site = 0;
 				yield leaf;
 			}
+			// In place, as a leaf: a call read twice stays one call.
+			case CelledCall call -> {
+				call.body = withoutSites(call.body);
+				call.args = call.args.stream().map(JvmIntFusionCompiler::withoutSites).toList();
+				yield call;
+			}
 			default -> node;
 		};
 	}
@@ -1711,11 +1828,15 @@ final class JvmIntFusionCompiler {
 	/** A deterministic structural serialization: leaves by ordinal, ops by name. */
 	private static String structureKey(Node root, List<Node> leaves) {
 		StringBuilder sb = new StringBuilder();
-		appendKey(root, leaves, sb);
+		appendKey(root, leaves, new java.util.IdentityHashMap<>(), sb);
 		return sb.toString();
 	}
 
-	private static void appendKey(Node node, List<Node> leaves, StringBuilder sb) {
+	/**
+	 * Appends the node's structure; {@code calls} numbers each {@link CelledCall} met, so
+	 * a call read in two places keys apart from two calls, which its fallback makes.
+	 */
+	private static void appendKey(Node node, List<Node> leaves, Map<CelledCall, Integer> calls, StringBuilder sb) {
 		switch (node) {
 			case ConstLeaf c -> sb.append('#').append(c.value());
 			case OpNode op -> {
@@ -1727,7 +1848,7 @@ final class JvmIntFusionCompiler {
 				}
 				for (Node arg : op.args()) {
 					sb.append(' ');
-					appendKey(arg, leaves, sb);
+					appendKey(arg, leaves, calls, sb);
 				}
 				sb.append(')');
 			}
@@ -1738,7 +1859,7 @@ final class JvmIntFusionCompiler {
 					sb.append('@').append(leaf.site);
 				}
 				sb.append('[');
-				appendKey(java.util.Objects.requireNonNull(leaf.indexNode), leaves, sb);
+				appendKey(java.util.Objects.requireNonNull(leaf.indexNode), leaves, calls, sb);
 				sb.append(']');
 			}
 			case RandomLeaf leaf -> sb.append('n')
@@ -1746,6 +1867,21 @@ final class JvmIntFusionCompiler {
 				.append(leaf.limitExpr == null ? "#" + leaf.limitConst : "")
 				.append(leaf.site == 0 ? "" : "@" + leaf.site);
 			case RawLeaf leaf -> sb.append('r').append(leafIndex(leaf, leaves));
+			case CelledCall call -> {
+				Integer seen = calls.get(call);
+				sb.append('c').append(seen == null ? calls.size() : seen);
+				if (seen == null) {
+					calls.put(call, calls.size());
+					sb.append('(').append(call.name);
+					for (Node arg : call.args) {
+						sb.append(' ');
+						appendKey(arg, leaves, calls, sb);
+					}
+					sb.append(" = ");
+					appendKey(call.body, leaves, calls, sb);
+					sb.append(')');
+				}
+			}
 		}
 	}
 
@@ -1797,6 +1933,11 @@ final class JvmIntFusionCompiler {
 		final Set<LispVal> opaque = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
 
 		final Map<LispVal, LispVal> expansions = new java.util.IdentityHashMap<>();
+
+		/**
+		 * Whether calls of names with a cell are substituted ({@link #keepsCelledOrder}).
+		 */
+		boolean substitutesCelled = true;
 
 	}
 
@@ -1857,6 +1998,12 @@ final class JvmIntFusionCompiler {
 		while (true) {
 			Site site = new Site(form, ctx, ordering);
 			Node root = classifier.apply(site);
+			if (root != null && !keepsCelledOrder(site, ctx)) {
+				// Those calls stay calls, each an ordinary leaf of the next
+				// classification.
+				ordering.substitutesCelled = false;
+				continue;
+			}
 			OrderPlan plan = root == null ? new OrderPlan(Map.of(), Set.of(), 0) : planOrder(site, ctx);
 			if (plan.demote().isEmpty()) {
 				return plan.checks() > MAX_ORDER_CHECKS ? new Classified(site, null, plan)
@@ -1914,6 +2061,52 @@ final class JvmIntFusionCompiler {
 		return new OrderPlan(boundaries, demote, checks);
 	}
 
+	/**
+	 * Whether every leaf the site evaluates after a {@link CelledCall}'s application
+	 * began is inert: the call site evaluates every leaf before the fused method applies
+	 * anything, and a replacement a write left in the cell runs where the call applies,
+	 * in the fallback, so nothing evaluated after that point may run code or read what
+	 * code can change. The fallback then calls each replacement in the interpreter's
+	 * order: after its arguments and every application before it, which is all the leaves
+	 * between could not tell from the fused one. An inert leaf is a quiet one, so no
+	 * boundary ({@link #planOrder}) ever has a celled call's application pending.
+	 */
+	private static boolean keepsCelledOrder(Site site, JvmLispCompiler.Ctx ctx) {
+		int first = site.events.size();
+		for (CelledCall call : site.celledCalls) {
+			first = Math.min(first, call.bodyStart);
+		}
+		for (int i = first; i < site.events.size(); i++) {
+			Event event = site.events.get(i);
+			if (event.node() instanceof RandomLeaf || !event.applies() && !inert(event.node(), ctx)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Whether evaluating the leaf neither runs code nor reads what code can change: an
+	 * unboxed local (never captured), or a self-evaluating form, a quoted one, a constant
+	 * variable or a lexical variable no closure holds -- read where the call site
+	 * evaluates it or where the interpreter does, the same value.
+	 */
+	private static boolean inert(Node leaf, JvmLispCompiler.Ctx ctx) {
+		if (leaf instanceof RawLeaf raw) {
+			return !raw.src.isField();
+		}
+		LispVal evaluated = evaluatedForm(leaf);
+		if (evaluated == null || ArgumentOrder.isOrderIndependent(evaluated)) {
+			return true;
+		}
+		if (!(evaluated instanceof LispSymbol sym) || !JvmArithCompiler.isQuietVariable(sym.name(), ctx)) {
+			return false;
+		}
+		String name = sym.name();
+		return ctx.locals.containsKey(name) && !ctx.boxedVars.contains(name) && !ctx.specialVars.contains(name)
+				|| ctx.closRegistry.constantNames().contains(name);
+	}
+
 	/** What evaluating the leaf runs at the call site, or null when nothing does. */
 	private static @Nullable LispVal evaluatedForm(Node leaf) {
 		return switch (leaf) {
@@ -1945,6 +2138,11 @@ final class JvmIntFusionCompiler {
 		return switch (node) {
 			case OpNode op -> op.args();
 			case ArefLeaf leaf -> List.of(java.util.Objects.requireNonNull(leaf.indexNode));
+			case CelledCall call -> {
+				List<Node> nodes = new ArrayList<>(call.args);
+				nodes.add(call.body);
+				yield nodes;
+			}
 			default -> List.of();
 		};
 	}
@@ -2014,6 +2212,11 @@ final class JvmIntFusionCompiler {
 					return null;
 				}
 				case RandomLeaf ignored -> {
+					return null;
+				}
+				// A replacement decides what it signals (never pending:
+				// keepsCelledOrder).
+				case CelledCall ignored -> {
 					return null;
 				}
 				case OpNode op -> {
@@ -2228,7 +2431,7 @@ final class JvmIntFusionCompiler {
 		StringBuilder key = new StringBuilder("probe|").append(desc);
 		for (Node root : applied) {
 			key.append('|');
-			appendKey(root, leaves, key);
+			appendKey(root, leaves, new java.util.IdentityHashMap<>(), key);
 		}
 		MethodRefEntry existing = state.byKey.get(key.toString());
 		if (existing != null) {
@@ -2238,7 +2441,8 @@ final class JvmIntFusionCompiler {
 		Utf8Entry descUtf8 = ctx.cp.utf8Entry(desc.toString());
 		MethodRefEntry ref = ctx.cp.methodRef(ctx.cp.classEntry(state.className), nameUtf8, descUtf8);
 		state.byKey.put(key.toString(), ref);
-		state.pending.add(new Pending(ref, nameUtf8, descUtf8, new OpNode(PROBE_ROOT, applied, 0), leaves, PROBE));
+		state.pending
+			.add(new Pending(ref, nameUtf8, descUtf8, new OpNode(PROBE_ROOT, applied, 0), leaves, PROBE, false));
 		return new Probe(ref, leaves);
 	}
 
@@ -2321,6 +2525,7 @@ final class JvmIntFusionCompiler {
 		if (bailFlag >= 0) {
 			ctx.body.iload(bailFlag).ifne(bails);
 		}
+		emitCellChecks(pending.root(), ctx, bails);
 		for (Node leaf : pending.leaves()) {
 			switch (leaf) {
 				case ExprLeaf l -> {
@@ -2387,6 +2592,9 @@ final class JvmIntFusionCompiler {
 		else {
 			emitFast(pending.root(), ctx, state);
 			JvmEmitHelper.boxLong(ctx);
+			if (pending.clearsChannel() && ctx.mvChannel != null) {
+				ctx.mvChannel.emitClear(ctx);
+			}
 			ctx.body.areturn();
 		}
 		MethodCode.Label tryEnd = ctx.body.newBoundLabel();
@@ -2423,6 +2631,21 @@ final class JvmIntFusionCompiler {
 			fallbackBails = doubleBails;
 		}
 		emitBailAndFallback(pending, ctx, state, fallbackBails, tryStart, tryEnd, className);
+	}
+
+	/**
+	 * Bails to the fallback when a write filled the cell of a name the tree substituted,
+	 * once per name: the fallback then calls through the cell. Nothing the fast path runs
+	 * can write one, so a check up front holds for the whole tree.
+	 */
+	private static void emitCellChecks(Node root, JvmLispCompiler.Ctx ctx, MethodCode.Label bails) {
+		Set<FieldRefEntry> checked = new java.util.LinkedHashSet<>();
+		for (Node node : inTreeOrder(List.of(root))) {
+			if (node instanceof CelledCall call && checked.add(call.cell().field())) {
+				ctx.body.getstatic(call.cell().field());
+				ctx.body.ifnonnull(bails);
+			}
+		}
 	}
 
 	/** Parameter slots in leaf order; answers the first free slot. */
@@ -2517,7 +2740,7 @@ final class JvmIntFusionCompiler {
 
 	/** Whether the leaf is an aref read whose index the prologue computes. */
 	private static boolean computesIndex(Node leaf) {
-		return leaf instanceof ArefLeaf l && l.indexNode instanceof OpNode;
+		return leaf instanceof ArefLeaf l && (l.indexNode instanceof OpNode || l.indexNode instanceof CelledCall);
 	}
 
 	/**
@@ -2539,6 +2762,7 @@ final class JvmIntFusionCompiler {
 					emitArefRead(leaf, ctx, state, bails, longArrayClass, scratch);
 				}
 			}
+			case CelledCall call -> emitArefReads(call.body, read, ctx, state, bails, longArrayClass, scratch);
 			default -> {
 			}
 		}
@@ -2566,7 +2790,7 @@ final class JvmIntFusionCompiler {
 			JvmEmitHelper.emitIntConst(ctx, (int) c.value());
 			ctx.body.istore(idxSlot);
 		}
-		else if (index instanceof OpNode) {
+		else if (index instanceof OpNode || index instanceof CelledCall) {
 			// Computed raw, inside the checked region: an overflow bails like the
 			// tree's own.
 			emitFast(index, ctx, state);
@@ -2707,6 +2931,10 @@ final class JvmIntFusionCompiler {
 	}
 
 	private static boolean doubleOps(Node node) {
+		if (node instanceof CelledCall) {
+			// Its fast path is the integer one, behind the cell checks.
+			return false;
+		}
 		if (!(node instanceof OpNode op)) {
 			return true;
 		}
@@ -2773,6 +3001,7 @@ final class JvmIntFusionCompiler {
 			case RawLeaf leaf -> emitDoubleLoad(leaf.dblSlot, ctx);
 			case ArefLeaf ignored -> throw new IllegalStateException("aref leaf on the double path");
 			case RandomLeaf ignored -> throw new IllegalStateException("random leaf on the double path");
+			case CelledCall ignored -> throw new IllegalStateException("celled call on the double path");
 			case OpNode op -> {
 				// The integer constants a node starts with fold exactly, as the generic
 				// helpers fold them before they meet the first Double, and only their
@@ -2838,6 +3067,7 @@ final class JvmIntFusionCompiler {
 		ctx.stack.enterHandler();
 		ctx.body.pop();
 		ctx.body.labelBinding(bails);
+		countFallbackUses(pending.root());
 		if (pending.isCompare()) {
 			OpNode root = (OpNode) pending.root();
 			emitFallback(root.args().get(0), ctx, className);
@@ -2889,6 +3119,8 @@ final class JvmIntFusionCompiler {
 			case ArefLeaf leaf -> emitLongLoad(leaf.longSlot, ctx);
 			case RandomLeaf leaf -> emitLongLoad(leaf.longSlot, ctx);
 			case RawLeaf leaf -> emitLongLoad(leaf.longSlot, ctx);
+			// The cells were checked on entry (emitCellChecks).
+			case CelledCall call -> emitFast(call.body, ctx, state);
 			case OpNode op -> {
 				// (%mask-signed-field k x) keeps the low k <= 64 bits, which the WRAPPED
 				// subtree computes exactly; a narrower field sign-extends from bit k-1.
@@ -2961,6 +3193,10 @@ final class JvmIntFusionCompiler {
 	 * depends on HIGH bits emits through the checked path.
 	 */
 	private static void emitFastWrapped(Node node, JvmLispCompiler.Ctx ctx, State state) {
+		if (node instanceof CelledCall call) {
+			emitFastWrapped(call.body, ctx, state);
+			return;
+		}
 		if (!(node instanceof OpNode op)) {
 			emitFast(node, ctx, state);
 			return;
@@ -3039,6 +3275,23 @@ final class JvmIntFusionCompiler {
 	 */
 	private static void emitFallback(Node node, JvmLispCompiler.Ctx ctx, String className) {
 		switch (node) {
+			// The call itself, through the named entry: the compiled definition while the
+			// cell is empty, the replacement once a write filled it. Called once however
+			// many places read it.
+			case CelledCall call -> {
+				if (call.fallbackSlot >= 0) {
+					ctx.body.aload(call.fallbackSlot);
+					return;
+				}
+				for (Node arg : call.args) {
+					emitFallback(arg, ctx, className);
+				}
+				JvmTailBounce.emitDirectCall(call.function, null, ctx, className);
+				if (call.fallbackUses > 1) {
+					call.fallbackSlot = ctx.allocTemp();
+					ctx.body.dup().astore(call.fallbackSlot);
+				}
+			}
 			case ConstLeaf c -> JvmEmitHelper.compileLong(c.value(), ctx);
 			case ExprLeaf leaf -> {
 				ctx.body.aload(leaf.paramSlot);
@@ -3133,6 +3386,31 @@ final class JvmIntFusionCompiler {
 					ctx.restoreSite(op.site());
 					ctx.body.invokestatic(numOpFor(op.op(), JvmNumericRuntimeBuilder.LOGNOT, ctx));
 				}
+			}
+		}
+	}
+
+	/**
+	 * Counts how many places of the fallback read each {@link CelledCall} under
+	 * {@code node}: a parameter of a substituted function used twice reads its argument
+	 * twice, and the interpreter calls a function in an argument once.
+	 */
+	private static void countFallbackUses(Node node) {
+		switch (node) {
+			case CelledCall call -> {
+				if (call.fallbackUses++ == 0) {
+					for (Node arg : call.args) {
+						countFallbackUses(arg);
+					}
+				}
+			}
+			case OpNode op -> {
+				for (Node arg : op.args()) {
+					countFallbackUses(arg);
+				}
+			}
+			case ArefLeaf leaf -> countFallbackUses(java.util.Objects.requireNonNull(leaf.indexNode));
+			default -> {
 			}
 		}
 	}

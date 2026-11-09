@@ -5087,7 +5087,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// rewritten plain defun LOOKS inlinable (a one-form body is a closed int
 		// tree), but calling one must build the TYPE_FUTURE its entry+resume state
 		// machine answers -- splicing the raw body would hand a synchronous caller
-		// the value where every other backend hands a future.
+		// the value where every other backend hands a future. A name a run-time write
+		// can reach (celledDefuns: every defun of a program holding eval) is one too:
+		// a fused site checks its cell and, once a write filled it, calls through it
+		// (WasmIntFusionCompiler.CelledCall).
 		Map<String, DefunDecl> inlinableDefuns = new HashMap<>();
 		if (!this.dynamic) {
 			Map<String, Integer> defunCounts = new HashMap<>();
@@ -5096,7 +5099,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			for (DefunDecl defun : defuns) {
 				if (defunCounts.getOrDefault(defun.name(), 0) == 1 && !asyncDefunNames.contains(defun.name())
-						&& !celledDefuns.contains(defun.name()) && WasmIntFusionCompiler.isInlinableDefun(defun)) {
+						&& WasmIntFusionCompiler.isInlinableDefun(defun)) {
 					inlinableDefuns.put(defun.name(), defun);
 				}
 			}

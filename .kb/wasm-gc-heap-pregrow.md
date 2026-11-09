@@ -135,6 +135,16 @@ entirely is worse except at reuse=1.
 wasmCloud pools the heap mapping, so the reuse=1 column bounds the SHAPE of the cost, not
 its size — measure the host.
 
+What the small heap costs a heavy handler, measured 2026-11-09 (Xeon E5-2697A v4, wasmtime 49
+`serve`, a handler loading cl-postgres and cl-who): the heap settles at 8.5 MiB around a 2.7 MB live
+set, never grows again (wasmtime grows only past half the capacity), and a SCRAM key derivation
+(~29 MB allocated) collects 18-19 times, against none in the command's 128 MiB; Shiori (5.2 MB live)
+14-17 times a request. Timed in the guest that is 30-50 ms of a 0.45-0.55 s derivation, and
+`-O gc-heap-initial-size=128MiB` (2 collections in 4 requests) moved the login within the run-to-run
+spread. Before the fusion
+substituted ironclad's arithmetic again it was 419 collections a derivation, which is what doubled the
+handler's login against the command's ([asdf.md](asdf.md), cl-postgres, "What a SCRAM login costs").
+
 ## Why a Proxy-Wasm filter has none
 A module exporting `proxy_abi_version_*` allocates nothing here
 (`WasmExportCompiler.isProxyWasmAbiVersion`). It follows from the export, not an option: that
