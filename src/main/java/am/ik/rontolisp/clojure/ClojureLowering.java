@@ -1251,14 +1251,14 @@ public final class ClojureLowering {
 
 	/**
 	 * The class rows not yet emitted, as {@code (name base ...)} conses, each a class
-	 * with known bases, or {@code (name . t)} for a record, a deftype or a type whose
-	 * host classes are no one value here ({@link ClojureClassBases#KINDS}). With
-	 * {@link #allClassRows}, every class {@code class} may answer joins first: the core
-	 * kinds with the supers of the values they stand for
-	 * ({@link ClojureValueClasses#kindSupers}), so {@code ancestors} of one holds the
-	 * interfaces its values implement, and {@code isa?} and {@code parents} follow them
-	 * -- measured 2026-10-21 against the kinds-are-opaque premise and the dispatch rows
-	 * (g29).
+	 * with known bases, or {@code (name . t)} for a record or deftype (by its class name,
+	 * which its class designator spells) or a type whose host classes are no one value
+	 * here ({@link ClojureClassBases#KINDS}). With {@link #allClassRows}, every class
+	 * {@code class} may answer joins first: the core kinds with the supers of the values
+	 * they stand for ({@link ClojureValueClasses#kindSupers}), so {@code ancestors} of
+	 * one holds the interfaces its values implement, and {@code isa?} and {@code parents}
+	 * follow them -- measured 2026-10-21 against the kinds-are-opaque premise and the
+	 * dispatch rows (g29).
 	 */
 	List<LispVal> pendingClassRows() {
 		List<String> opaque = new ArrayList<>();
@@ -1275,7 +1275,7 @@ public final class ClojureLowering {
 					this.classBases.putIfAbsent(kind, supers);
 				}
 			}
-			this.types.values().stream().map(TypeDef::tagSpelling).sorted().forEach(opaque::add);
+			this.types.values().stream().map(TypeDef::className).sorted().forEach(opaque::add);
 		}
 		List<LispVal> rows = new ArrayList<>();
 		for (Map.Entry<String, List<String>> row : this.classBases.entrySet()) {
@@ -1363,21 +1363,23 @@ public final class ClojureLowering {
 
 	/**
 	 * A record or deftype the program defines: whether it is map-like (a record) or
-	 * opaque (a deftype), its declared field names, its dispatch-tag spelling and its
-	 * host class name ({@code my_app.core.Name}: the defining namespace with {@code -}
-	 * munged to {@code _}, then the name verbatim, like the oracle's), which a record
-	 * prints and a record literal names. {@code mutableFields} are the deftype fields
-	 * declared {@code ^:unsynchronized-mutable} or {@code ^:volatile-mutable}, a subset
-	 * of {@code fields} in declaration order: they live in a slot vector behind the
-	 * public table, so only the type's own inline methods read or {@code set!} them.
-	 * {@code inlineMethods} are the protocol methods its body implements, each as
-	 * {@link #inlineMethodKey}: the methods of its host class, which an instance call
-	 * reaches ({@code (.m r)}), where an {@code extend-type} row is none.
-	 * {@code protocols} are the var keys of the protocols its body names, with methods or
-	 * none: the interfaces of its host class, which {@code instance?} tests.
+	 * opaque (a deftype), its declared field names, its simple name and its host class
+	 * name ({@code my_app.core.Name}: the defining namespace with {@code -} munged to
+	 * {@code _}, then the name verbatim, like the oracle's), which a record prints, a
+	 * record literal names and its class value designates
+	 * ({@link ClojureProtocolLowering#typeTagForm}). {@code mutableFields} are the
+	 * deftype fields declared {@code ^:unsynchronized-mutable} or
+	 * {@code ^:volatile-mutable}, a subset of {@code fields} in declaration order: they
+	 * live in a slot vector behind the public table, so only the type's own inline
+	 * methods read or {@code set!} them. {@code inlineMethods} are the protocol methods
+	 * its body implements, each as {@link #inlineMethodKey}: the methods of its host
+	 * class, which an instance call reaches ({@code (.m r)}), where an
+	 * {@code extend-type} row is none. {@code protocols} are the var keys of the
+	 * protocols its body names, with methods or none: the interfaces of its host class,
+	 * which {@code instance?} tests.
 	 */
-	record TypeDef(boolean record, List<String> fields, String tagSpelling, String className,
-			List<String> mutableFields, Set<String> inlineMethods, Set<String> protocols) {
+	record TypeDef(boolean record, List<String> fields, String simpleName, String className, List<String> mutableFields,
+			Set<String> inlineMethods, Set<String> protocols) {
 	}
 
 	/**
@@ -3485,7 +3487,7 @@ public final class ClojureLowering {
 		for (Map.Entry<String, TypeDef> type : this.types.entrySet()) {
 			// an internal namespace's deftype (the portable LinkedList) is no program's
 			// class: only its own namespace names it
-			if (type.getValue().tagSpelling().equals(name) && !ClojureBuiltinNamespaces
+			if (type.getValue().simpleName().equals(name) && !ClojureBuiltinNamespaces
 				.isInternal(type.getKey().substring(0, type.getKey().lastIndexOf('/')))) {
 				if (only != null) {
 					return null;

@@ -121,8 +121,9 @@ final class ClojureReadLowering {
 
 	/**
 	 * The registration of the record and deftype classes a record literal may name:
-	 * {@code (rontolisp::%clojure-read-register '((class tag (field ...) record-p)
-	 * ...))}, sorted by class name. Null when there is none.
+	 * {@code (rontolisp::%clojure-read-register '((class (field ...) record-p) ...))},
+	 * sorted by class name, which the literal's record takes its tag from. Null when
+	 * there is none.
 	 * @param types the classes to register
 	 * @return the form, or null
 	 */
@@ -140,8 +141,7 @@ final class ClojureReadLowering {
 			for (String field : type.fields()) {
 				fields.add(LispString.literal(field));
 			}
-			entries.add(ClojureLowerUtil.list(LispString.literal(type.className()),
-					LispString.literal(type.tagSpelling()), ClojureLowerUtil.list(fields),
+			entries.add(ClojureLowerUtil.list(LispString.literal(type.className()), ClojureLowerUtil.list(fields),
 					type.record() ? ClojureLowering.TRUE_CONST : ClojureLowering.NIL_CONST));
 		}
 		return ClojureLowerUtil.list(runtime("READ-REGISTER"),

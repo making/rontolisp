@@ -61,6 +61,20 @@ final class ClojurePredicateLowering {
 	 */
 	static final String IS_UUID = "RONTOLISP::%CLOJURE-IS-UUID";
 
+	/**
+	 * {@code class?}'s test {@code (p value "java.lang.Class")}: a class designator or a
+	 * host class object, an alias of {@code %clojure-host-instance-p} in a program that
+	 * makes no designator ({@link ClojureArms.Family#CLASS_DESIGNATOR}), which lowers
+	 * {@code class?} as before designators answered it.
+	 */
+	static final String IS_CLASS = "RONTOLISP::%CLOJURE-IS-CLASS";
+
+	/**
+	 * The class-designator family's test of a {@code (:C%CLASS name)} designator
+	 * ({@code clojure.lisp}).
+	 */
+	static final String CLASS_DESIGNATOR_P = "RONTOLISP::%CLOJURE-DESIGNATOR-P";
+
 	/** The instant family's test of a Date, a Timestamp or a Calendar. */
 	static final String INSTANT_P = "RONTOLISP::%CLOJURE-INSTANT-P";
 
@@ -107,7 +121,8 @@ final class ClojurePredicateLowering {
 			Map.entry("realized?", helper("IS-REALIZED")), Map.entry("special-symbol?", helper("IS-SPECIAL-SYMBOL")),
 			Map.entry("inst?", helper("IS-INST")),
 			Map.entry("uuid?", new Test(IS_UUID, List.of(LispString.literal("java.util.UUID")))),
-			Map.entry("uri?", helper("IS-URI")), Map.entry("class?", host("java.lang.Class")));
+			Map.entry("uri?", helper("IS-URI")),
+			Map.entry("class?", new Test(IS_CLASS, List.of(LispString.literal("java.lang.Class")))));
 
 	/**
 	 * The predicates a record, deftype or reify answers true for when its body implements
@@ -516,10 +531,6 @@ final class ClojurePredicateLowering {
 
 	private static Test qualified(LispVal keywords, LispVal symbols, LispVal qualified) {
 		return new Test(helperSymbol("IS-QUALIFIED").name(), List.of(keywords, symbols, qualified));
-	}
-
-	private static Test host(String className) {
-		return new Test(helperSymbol("HOST-INSTANCE-P").name(), List.of(LispString.literal(className)));
 	}
 
 	private static LispSymbol helperSymbol(String name) {

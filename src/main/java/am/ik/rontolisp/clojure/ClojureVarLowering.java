@@ -508,9 +508,10 @@ final class ClojureVarLowering {
 	/**
 	 * What {@code resolve} of a symbol answers here: the var {@code #'name} lowers to
 	 * where it lowers (a program var, a {@code clojure.core} var the subset implements or
-	 * a core macro), the class a class name spells, and nil for every other name -- a
-	 * core var the subset lacks included, so a library choosing code by the
-	 * {@code clojure.core} it runs on chooses the code this front end lowers.
+	 * a core macro), the class a class name spells (a record's or deftype's class value
+	 * included), and nil for every other name -- a core var the subset lacks included, so
+	 * a library choosing code by the {@code clojure.core} it runs on chooses the code
+	 * this front end lowers.
 	 * @param ctx the hub
 	 * @param name the symbol's name
 	 * @return the lowered answer
@@ -539,6 +540,9 @@ final class ClojureVarLowering {
 			return library;
 		}
 		LispVal classValue = ClojureInteropLowering.classValue(ctx, name);
+		if (classValue == null) {
+			classValue = ClojureProtocolLowering.typeTagValue(ctx, name);
+		}
 		return classValue != null ? classValue : ClojureLowering.NIL_CONST;
 	}
 

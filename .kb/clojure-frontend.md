@@ -98,7 +98,7 @@ backends, zero divergences -- nothing to fix, pin or cut as a follow-up.
 | `[..]` | a CL vector (a `vector` call) | a string is a CL vector too, so `vector?`/`coll?` exclude strings |
 | list, seq | a CL list | lazy seq: `(:C%LAZY cell)`, memoized through `rplaca`/`rplacd` ("Laziness") |
 | atom, volatile, ref, agent | `(:C%ATOM #(value))`; a volatile's cell `#(value :C%VOLATILE)`; a validated ref's and every agent's `#(value nil validator state watches)` (`state` an agent's `#(running queue error handler mode)`, nil for a ref), and so is every atom's and ref's in a program that may give a reference a validator or a watch ("State", validators and watches) | one cell shape, so STM verbs accept atoms; `volatile?` reads the length 2, so slot 1 of the longer cells stays nil; `send` refuses a cell that is not 5 long with a state |
-| record / deftype / reify | `(:C%RECORD tag fields table class)` / `(:C%TYPE tag fields table class slots?)` / a fresh `:C%REIFY` tag | "Dispatch"; the interfaces a body implements are rows under the tag ("Host interfaces") |
+| record / deftype / reify | `(:C%RECORD tag fields table class)` / `(:C%TYPE tag fields table class slots?)` / a fresh `:C%REIFY` tag | "Dispatch"; the interfaces a body implements are rows under the tag ("Host interfaces"); a record's or deftype's tag is its class value, the `(:C%CLASS "ns.Name")` designator ("Record and deftype class values") |
 | `#"re"` | `(:C%PATTERN stamp source ops ngroups)` | the stamp is a gensym, so `=` is identity like the oracle |
 | byte array (`byte-array`, `.getBytes`) | `(:C%BYTES octets)`, `octets` a packed `(unsigned-byte 8)` vector | "Byte arrays" |
 | transient | `(:C%TRANSIENT #(kind data count live))` | "Transients" |
@@ -1485,8 +1485,9 @@ a program without `ns` lowers unqualified. A quoted `'n/x` is the symbol of var 
   the lowering asks of a class name goes through `ClojureHostClasses.load`, bound for the
   lowering from `ClojureFiles.javaClassLoader()` (`.kb/java-interop.md`, "The program's
   Java class path").
-- **Records** keep the simple-name tag; `typeKeyOf` resolves own, then an imported or
-  dotted name matching the class, else the only one of that simple name.
+- **Records**: `typeKeyOf` resolves own, then an imported or dotted name matching the
+  class, else the only one of that simple name; the tag is the class name's designator, so
+  two namespaces' records of one simple name are two classes (j13; before, one `:R` tag).
 
 ## deps.edn
 
@@ -3378,9 +3379,21 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   vocabulary, `ClojureCoreLowering.classDesignator`), so a class-keyed map
   (malli's `class-schemas`, read at load into the default registry) builds --
   never a `java:static`, which wasm refuses. Two literals of one class are
-  `equal`, like two `forName` answers; anything needing the object itself (a
-  class value under `instance?`, `class?`) reads the designator as no host
-  class. Where the host is the literal keeps its `forName` object.
+  `equal`, like two `forName` answers. Where the host is the literal keeps its `forName`
+  object. Since j13 (2026-11-09) a designator is a class value with no host object, on
+  every backend: it prints as its name (`pr` and `print`), `str`s as `class` and the name
+  (an interface's too: the designator carries no interface bit, a wasm deviation), hashes
+  by its name (both hashes: two of one class were `=` but hashed by identity before), is
+  `identical?` to every other of its name, answers `class?`, `(instance? Class x)`,
+  `.getSimpleName` (`.getName` already did) and `java.lang.Class` from `class`, and casts
+  by the kind its name has here. The arms are the `CLASS_DESIGNATOR` family's
+  (`ClojureArms`, test `%clojure-designator-p`): a program naming no `:C%CLASS`
+  construction and no `type` folds them, `class?` to the host test it called before (the
+  alias). A producer spelled inside an arm makes the family, so `class` of a designator
+  answers `(%clojure-designator-class)` and the value-method arm tests through the
+  family's function, never spelling the tag. The printer's arm reads the name as `(cadr
+  x)`: spelled `(car (cdr x))` the clause no longer fits the `cond`'s aligned layout and
+  the formatter re-indents the whole printer.
 - **The chain** (2026-10-13, f92; `ClojureDateBuilderLowering`): a
   `DateTimeFormatterBuilder` construction is the builder marker, each builder
   call (`appendPattern`, `optionalStart`, `appendFraction`, `optionalEnd`,
@@ -3420,6 +3433,65 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   `doubleLimitsAnswerThemselvesWhereTheHostIsNot` /
   `aClassLiteralIsItsDesignatorWhereTheHostIsNot` /
   `dateBuilderChainsThreadTheirMarkerWhereTheHostIsNot`.
+
+## Record and deftype class values
+
+- **The decision** (2026-11-09, j13; oracle clj 1.12.6.1673): a record's or deftype's
+  dispatch tag is the `(:C%CLASS "ns.Name")` designator of its class name
+  (`ClojureProtocolLowering.typeTagForm`), and that tag is the type's class value: what
+  `class` and `type` answer for its values, what its name evaluates to in value position
+  (`typeTagValue`, after a local and a var of the name), what `resolve` and
+  `Class/forName` of its class name answer, and what the definition itself answers (the
+  registry store goes last and answers the tag). So `(= R (class r))`, a set or map keyed
+  by the class, `instance?` of a computed class, `extend` of one and a multimethod
+  dispatching on `class` (vectors of classes included) all meet the same value, and it
+  prints `user.R` like the oracle's. Before, the tag was the simple name's keyword `:R`:
+  `=` to a user keyword `:R`, printing `:R`, and one tag for two namespaces' `R`s.
+- **Why the tag itself, not a class value beside a keyword tag**: every row a type has --
+  protocol, inline, interface, multimethod, hierarchy, `print-method`, the tag registry --
+  is keyed by the tag through `equal` tables, so making the tag the class value keeps one
+  identity: a computed class reaches each row exactly as the name does, with no mapping
+  at each consumer (a vector dispatch value `[(class a) (class b)]` would have needed one
+  per element). The run-time readers that turned a class designator into a kind keyword
+  keep a registered tag as itself: `%clojure-dispatch-value` (`remove-method` and the
+  other computed dispatch values) and `%clojure-extends-key` (computed `extend`,
+  `extends?`). h09 would give the host targets generated `Class` objects; the tag form is
+  one function to change.
+- **Across the `java:` boundary** (interpreter and JVM): a designator crosses as one
+  `java:handle` per class name (`%clojure-designator-host`, kept in
+  `%clojure-designator-handles`), class `java.lang.Class`, spelled and equal by `class
+  ns.Name`, so a Java map keys a record's class like the oracle's one `Class` object -- a
+  `WeakHashMap` too, which is what schema's class-schema registry is; before, an identity
+  handle per crossing, so `.get` missed. Java hands it back as the designator.
+- **`R/create`** (a record's static factory over a map, schema's `s/record` expansion
+  `#(Foo/create %)`) is its map constructor `map->R`, in call position and as a value,
+  like `R/new` is `->R` (`ClojureInteropLowering.qualifiedMember`; a deftype has none).
+- **Kept lenient**: a local or a var of the name wins (the oracle refuses `(def R ...)`
+  beside `(defrecord R ...)` either way round), and a reference above the definition reads
+  the class like a function defined below (the oracle's `Unable to resolve symbol`).
+  `(parents R)`/`(ancestors R)` stay `Object` alone (the record's host interfaces are not
+  modeled), `supers` stays refused.
+- **Measured**: the j13 repros, `(class R)`, `class?`, `instance?` of a computed class,
+  `cast`, `identical?`, `hash`, `group-by type`, `extenders`, a `[R T]` multimethod,
+  `derive` of a deftype, two namespaces' `R`, `PersistentQueue`'s class, `(do (defrecord R
+  [a]) R)` and `(prn (defrecord R [a]))` print the oracle's lines on all four backends; a
+  deftype still prints as its wrapper list (now `(:C%TYPE user.T ...)`).
+- **Libraries** (2026-11-09, j07's harness, interpreter): specter 1.1.6's
+  `dynamic-param?` (`(contains? #{DynamicPath DynamicVal DynamicFunction} (type o))`) runs
+  verbatim: the probe prints the oracle's lines with that hunk of `patches.diff` dropped,
+  and `dynamic-param?`/`static-path?` of each record answer the oracle's. schema 1.4.2's
+  `defrecord-schema` (`~n`, the class as the `do`'s value) and `record*`'s `(class?
+  klass)` assert run verbatim (the probe is the oracle's but its pre-existing set-order
+  line), and with `declare-class-schema!`'s assert hunk dropped too `s/defrecord` and
+  `s/record` validate like the oracle; that hunk stays for `s/defn`, whose `(class f)` is
+  the `:function` keyword (h09). rewrite-clj 1.3.59's nineteen `(node/make-printable!
+  XNode)` calls run verbatim with `make-printable!`'s own body still patched (j14).
+- **Pins**: clojure-spec `a-record-or-deftype-name-is-its-class-value` (all four,
+  oracle-identical), `type-answers-a-host-class-designator-where-the-oracle-answers-a-class`
+  (now printing the class names); `ClojureLoweringTest#protocolsRecordsAndTypesLowerToTables`
+  (the name's designator), `ClojureWasmInteropRefusalTest#classValueAnswersTheDesignator*`,
+  `ClojureInteropTest#aSetAKeywordAndARecordCrossTheJavaBoundaryAsTheOraclesDo` (a record's
+  class as a `WeakHashMap` key).
 
 ## Typed arrays
 
@@ -4183,8 +4255,9 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   time and called back at macro time through `ClojureMacroEvaluator.Lowering.nsResolveForm`).
   `resolve` of a quoted symbol lowers in place (`ClojureVarLowering.resolved`): what
   `#'name` lowers to (program var, core macro, core var with a value here), the class a
-  class name loads, else nil -- a core var the subset lacks (`seque`; `hash-unordered-coll`
-  and `mix-collection-hash` until 2026-10-09, "Hashes"), a record name (no class value here) and a lowering-built
+  class name loads (a record's or deftype's class value, j13), else nil -- a core var the
+  subset lacks (`seque`; `hash-unordered-coll`
+  and `mix-collection-hash` until 2026-10-09, "Hashes") and a lowering-built
   namespace's var (`clojure.string/join`) included, so `compile-if` picks the branch that
   lowers. Verified on clj 1.12.6: `*clojure-version*` reads `{:major 1 :minor 12 ...}`
   at expansion time and `Class/forName` runs on the macro-time JVM, so both agree with the
@@ -4740,8 +4813,9 @@ constructor and consumer, and a regex `replace` with a function replacement.
   lowers to the run-time `%clojure-extend` instead of the compile-time row stores -- one call
   per type for `extend-protocol`, in the oracle's evaluation order. `%clojure-extend` reads
   the protocol through the registry, keys the type through `%clojure-extends-key` (a class
-  value, a class keyword or a tag keyword; a record or deftype name in value position is its
-  dispatch tag, `ClojureProtocolLowering.typeTagValue`), and applies the same row rules (g43).
+  value, a class keyword, or a record's or deftype's tag -- its class designator, which
+  its name in value position evaluates to, `ClojureProtocolLowering.typeTagValue` --, kept as
+  itself through the tag registry), and applies the same row rules (g43).
   The run-time key is exact, so a computed concrete class or kind reaches its row; a
   computed *interface* or superclass row needs the walk, which only a literal name
   registers (`noteWalk`), a deviation. A program whose operands are all literal names keeps
@@ -4764,8 +4838,9 @@ constructor and consumer, and a regex `replace` with a function replacement.
   `find-protocol-impl` answers the tag row's map, else the `Object` default's, else nil, and
   `find-protocol-method` the row's function for the method key the same way -- where the
   oracle answers the same, except that a non-protocol is its `NullPointerException` there.
-  The tags are the keywords `class` answers, so an extender prints `:string` where the
-  oracle prints its `Class`. A computed protocol (or any `-v` value) resolves the map
+  The tags are what `class` answers: a core kind's keyword, which prints `:string` where
+  the oracle prints its `Class`, and a record's or deftype's class, which prints `user.R`
+  like the oracle's. A computed protocol (or any `-v` value) resolves the map
   through the registry and reads the getters' current tables (`%clojure-protocol-tables`),
   or the value itself as a table where the registry holds none; the default shows only
   through a literal protocol name. As values `satisfies?`/`extends?`/`extend`
@@ -4940,7 +5015,9 @@ constructor and consumer, and a regex `replace` with a function replacement.
   any other throwable); `C%H-ISA?`'s last arm and the readers ask `clojure.lisp`'s "Class
   chains" (`%clojure-class-isa`/`-parents`/`-ancestors`/`-rows`). Every class row `isa?`
   `Object` (an interface too, like `isAssignableFrom`), while an interface's supers stop
-  short of it. A record, a deftype or `reify` is a row `(name . t)`: its host classes
+  short of it. A record, a deftype (by its class name, which its designator spells; the
+  designator reads its row like a keyword, `%clojure-class-rows`) or `reify` is a row
+  `(name . t)`: its host classes
   are no one value here, so its supers are `Object` alone and `parents` adds nothing --
   the documented deviation. A core kind is a row of the supers of the values it stands
   for (`ClojureValueClasses.kindSupers`, read off clj 1.12.6 on JDK 25 with the

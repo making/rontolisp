@@ -43,7 +43,9 @@ the class:
 
 - oracle: `<R 1>`
 - interpreter and JVM class: `error: f.clj:2:22: print-method of |c| is not supported yet: ...`
-  (also needs j13 for the bare `R` argument)
+  (the bare `R` argument evaluates since j13, 2026-11-09: to the record's dispatch tag, the
+  `(:C%CLASS "user.R")` designator its `print-method` rows are keyed by, so a computed
+  dispatch value that is a record's class is that row's key as it is)
 
 ## Analysis
 

@@ -121,7 +121,7 @@ class ClojureSessionTest {
 				"(prn (sp? (ST.)) (sp? 1) (sp-call (ST.)) (sp? (eval '(SE.))) (sp-call (eval '(SE.))))"))
 			.isEqualTo("true false :st true :se\n");
 		assertThat(forms(new ClojureSession().read("(deftype Task [] Runnable (run [_] nil))")))
-			.anyMatch(form -> form.contains("(RONTOLISP::%CLOJURE-JAVA-FACE-TAG (LIST :C%KEYWORD \"Task\")"));
+			.anyMatch(form -> form.contains("(RONTOLISP::%CLOJURE-JAVA-FACE-TAG (LIST :C%CLASS \"user.Task\")"));
 	}
 
 	@Test
@@ -234,14 +234,13 @@ class ClojureSessionTest {
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
 			.toList();
-		assertThat(reading.get(0))
-			.isEqualTo("(RONTOLISP::%CLOJURE-READ-REGISTER '((\"user.RecS\" \"RecS\" (\"a\") T)))");
+		assertThat(reading.get(0)).isEqualTo("(RONTOLISP::%CLOJURE-READ-REGISTER '((\"user.RecS\" (\"a\") T)))");
 		List<String> later = session.read("(defrecord RecT [b]) (read-string \"1\")")
 			.stream()
 			.flatMap(top -> top.forms().stream())
 			.map(LispVal::print)
 			.toList();
-		assertThat(later.get(0)).isEqualTo("(RONTOLISP::%CLOJURE-READ-REGISTER '((\"user.RecT\" \"RecT\" (\"b\") T)))");
+		assertThat(later.get(0)).isEqualTo("(RONTOLISP::%CLOJURE-READ-REGISTER '((\"user.RecT\" (\"b\") T)))");
 		assertThat(session.read("(read-string \"2\")")
 			.stream()
 			.flatMap(top -> top.forms().stream())

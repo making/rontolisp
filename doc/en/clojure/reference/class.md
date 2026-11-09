@@ -10,7 +10,9 @@ class's name as a keyword: `:java.lang.Long`, `:java.lang.Double`, `:clojure.lan
 `Double` in value position read as the same keyword, so `(= Long (class 1))` is `true`. A byte array answers
 `:[B`, `byte[]`'s binary name. The oracle answers
 host classes, which no wasm backend has -- the keyword names the kind instead, on every
-backend alike. A record or deftype answers its tag keyword. An exception or a runtime error
+backend alike. A record or deftype answers its class, the value its name evaluates to, which
+prints as the oracle's (`user.R`, `str` `"class user.R"`); a class value (a record's, what
+[type](type.md) answers) answers `java.lang.Class`. An exception or a runtime error
 answers its class name as a keyword (`:java.lang.IllegalArgumentException`,
 `:clojure.lang.ExceptionInfo`; a runtime error or a refusal the class the oracle throws for it,
 an error naming no class `:java.lang.RuntimeException`). A stream (`*out*`, `*in*`, `*err*`, a `StringWriter`, a reader) answers the host class its printer names as a keyword

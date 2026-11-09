@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
@@ -607,10 +608,11 @@ final class ClojureInteropLowering {
 	/**
 	 * A qualified member in call position, {@code (Class/member args...)}: a static call,
 	 * {@code Class/.method} an instance call on the first argument, {@code Class/new} the
-	 * construction ({@code R/new} of a record or deftype its positional constructor).
-	 * {@code tags} are the {@code ^[types]} param tags, naming the overload through the
-	 * {@code java:} parameter-tag designator; null when untagged. Null when the name is
-	 * no classlike slash form, so the call keeps falling through.
+	 * construction ({@code R/new} of a record or deftype its positional constructor, a
+	 * record's {@code R/create} its map constructor). {@code tags} are the
+	 * {@code ^[types]} param tags, naming the overload through the {@code java:}
+	 * parameter-tag designator; null when untagged. Null when the name is no classlike
+	 * slash form, so the call keeps falling through.
 	 */
 	static @Nullable LispVal memberCall(ClojureLowering ctx, String name, List<LispVal> items, @Nullable LispVal tags) {
 		LispVal langStatic = items.size() == 1 && tags == null ? ClojureLangClasses.staticValue(ctx, name) : null;
@@ -624,9 +626,9 @@ final class ClojureInteropLowering {
 		}
 		List<LispVal> argDatums = items.subList(1, items.size());
 		if (qualified.typeKey() != null) {
-			// (R/new args...) constructs the record or deftype, like ->R
-			return ctx
-				.lower(ClojureLowerUtil.cons(new LispSymbol(constructorSpelling(ctx, qualified.typeKey())), argDatums));
+			// (R/new args...) constructs the record or deftype, like ->R; a record's
+			// static (R/create m) builds it from a map, like map->R
+			return ctx.lower(ClojureLowerUtil.cons(new LispSymbol(typeMemberSpelling(ctx, qualified)), argDatums));
 		}
 		String cls = qualified.cls();
 		String member = qualified.member();
@@ -660,7 +662,8 @@ final class ClojureInteropLowering {
 	 * A {@code Class/member} spelling split and resolved: the class (null for a record or
 	 * deftype, whose key {@code typeKey} is), and the member as written ({@code .method},
 	 * {@code new} or a static name). Null when the head is no class, the member is empty
-	 * or slashed, or a record or deftype names anything but {@code new}.
+	 * or slashed, or a record or deftype names anything but {@code new} (and a record
+	 * {@code create}, its static factory over a map).
 	 */
 	static @Nullable QualifiedMember qualifiedMember(ClojureLowering ctx, String name) {
 		int slash = name.indexOf('/');
@@ -675,7 +678,9 @@ final class ClojureInteropLowering {
 		}
 		String type = ctx.typeKeyOf(head);
 		if (type != null) {
-			return member.equals("new") ? new QualifiedMember(head, member, type) : null;
+			ClojureLowering.TypeDef def = ctx.types.get(type);
+			return member.equals("new") || member.equals("create") && def != null && def.record()
+					? new QualifiedMember(head, member, type) : null;
 		}
 		return new QualifiedMember(ClojureNamespaceLowering.resolveClass(ctx, head), member, null);
 	}
@@ -1372,6 +1377,15 @@ final class ClojureInteropLowering {
 			// (clojure.lang is no host class here)
 			return lang;
 		}
+		if (cls.equals("java.lang.Class") && member.equals("forName") && args.size() == 1
+				&& args.get(0) instanceof LispString name && name.value().indexOf('.') >= 0) {
+			// Class/forName of a literal naming a record or deftype of the program: its
+			// class value, on every backend (no host class is generated for one)
+			LispVal type = ClojureProtocolLowering.typeTagValue(ctx, name.value());
+			if (type != null) {
+				return type;
+			}
+		}
 		if (!ctx.hostTarget && cls.equals("java.lang.Class") && member.equals("forName") && args.size() == 1
 				&& args.get(0) instanceof LispString name) {
 			// Class/forName of a literal class name where no host is (wasm): the
@@ -1561,8 +1575,9 @@ final class ClojureInteropLowering {
 			return null;
 		}
 		if (qualified.typeKey() != null) {
-			// R/new is the record or deftype's positional constructor, like ->R
-			return ctx.lower(new LispSymbol(constructorSpelling(ctx, qualified.typeKey())));
+			// R/new is the record or deftype's positional constructor, like ->R, and a
+			// record's R/create its map constructor, like map->R
+			return ctx.lower(new LispSymbol(typeMemberSpelling(ctx, qualified)));
 		}
 		String cls = qualified.cls();
 		String member = qualified.member();
@@ -2246,9 +2261,28 @@ final class ClojureInteropLowering {
 	 * {@code ->T} for its own, {@code ns/->T} for another namespace's.
 	 */
 	static String constructorSpelling(ClojureLowering ctx, String typeKey) {
+		return typeFunctionSpelling(ctx, typeKey, "->");
+	}
+
+	/**
+	 * The constructor a record or deftype's {@code R/new} or a record's {@code R/create}
+	 * names: the positional {@code ->R}, or the map constructor {@code map->R}, which the
+	 * oracle's static factory over a map is.
+	 */
+	private static String typeMemberSpelling(ClojureLowering ctx, QualifiedMember member) {
+		String typeKey = Objects.requireNonNull(member.typeKey());
+		return typeFunctionSpelling(ctx, typeKey, member.member().equals("create") ? "map->" : "->");
+	}
+
+	/**
+	 * How the current namespace names a constructor of a record or deftype, the prefix
+	 * ({@code ->}, {@code map->}) ahead of its name: unqualified for its own, qualified
+	 * by the defining namespace for another's.
+	 */
+	private static String typeFunctionSpelling(ClojureLowering ctx, String typeKey, String prefix) {
 		int slash = typeKey.indexOf('/');
 		String ns = typeKey.substring(0, slash);
-		String ctor = "->" + typeKey.substring(slash + 1);
+		String ctor = prefix + typeKey.substring(slash + 1);
 		return ns.equals(ctx.currentNs) ? ctor : ns + "/" + ctor;
 	}
 

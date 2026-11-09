@@ -25,7 +25,10 @@ The class resolves dotted,
 imported, or `java.lang`. A bare loadable class name (`String`) is the class
 object, equal to `(Class/forName "java.lang.String")`, and `.getClass` on a
 string answers it; on the wasm backends it is its `(:C%CLASS name)` designator instead,
-so a class-keyed map builds at load, and two literals of one class are still equal.
+so a class-keyed map builds at load, and two literals of one class are still equal (a
+designator prints, `str`s, hashes and answers `class?`, `.getName` and `.getSimpleName` like
+the class object). `(Class/forName "user.R")` of a record or deftype the program defines is
+its class value on every backend.
 A `DateTimeFormatterBuilder` chain evaluates on the wasm backends (each builder call
 threads a marker, `toFormatter` the formatter, `ofPattern` and `ZoneId/of` their own),
 but parsing or formatting with one is rejected. A class object prints its name (`java.lang.String`), and `str`
@@ -37,7 +40,8 @@ target, as `(.method target args...)`, and as a value it is a function taking th
 target first, dispatching per arity of the class's public instance methods (a name with
 none is refused when the program is read). `Class/new` is the constructor, as
 `(Class. args...)`, in call position and as a value; `R/new` of a record or deftype is
-its positional constructor. `^[types]` param tags before any of these name the overload:
+its positional constructor, and a record's static `R/create` its map constructor
+(`map->R`). `^[types]` param tags before any of these name the overload:
 the value then takes exactly that many arguments (plus the target). A tag is a class
 name, a primitive, `ints`/`longs`/... or `objects` for a primitive or `Object` array,
 `T/N` for an `N`-dimensional array, or `_` for any type; a tagged call with another

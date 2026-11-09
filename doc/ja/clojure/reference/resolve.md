@@ -2,7 +2,8 @@
 
 `(resolve sym)`
 
-シンボルが現在の名前空間で指す var、クラス名が表すクラス、または `nil` を返します。
+シンボルが現在の名前空間で指す var、クラス名が表すクラス（レコード・deftype のクラスを含む）、
+または `nil` を返します。
 quote したシンボルはプログラムの lower 中に解決され、`#'name` が lower する var に
 なります。プログラムの var、このフロントエンドが実装する `clojure.core` の var、
 core のマクロ、低レベル化として実装するライブラリの var（`clojure.string/upper-case`）です。それ以外の名前は `nil` で、このフロントエンドにない core の var も

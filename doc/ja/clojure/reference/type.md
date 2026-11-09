@@ -6,7 +6,8 @@
 そうでなければオラクルがホストクラスを返すところではホストクラスを、それ以外は
 [class](class.md) の答えを返します。オラクルの `(or (get (meta x) :type) (class x))` です。
 関数・キーワード・文字列・シンボル・真偽値・マップ・セットはホストクラスを `(:C%CLASS name)`
-指示子で答え、パターンはホストがあるところではホストの `java.util.regex.Pattern` クラス
+指示子で答え（印字と `str` はオラクルのクラスオブジェクトと同じく `java.lang.String`・
+`"class java.lang.String"`）、パターンはホストがあるところではホストの `java.util.regex.Pattern` クラス
 （ホストがないところではその指示子）で答え、nil には nil を答えます。スキーマレジストリの探索はミスすると `(type x)` に
 フォールスルーし、オラクルのクラスは `Pattern` 以外の全エントリをミスするため、未登録の値は
 衝突する種類エントリをループ（あるいは誤って型付け）する代わりに、オラクルと同じく
@@ -25,7 +26,7 @@ nil を返すため、`nil` のメソッドが受け取ります。値として�
 ```clojure
 (defrecord Circle [r])
 (println (type (with-meta {:r 1} {:type :circle})) (= (type (->Circle 1)) (class (->Circle 2)))) ; :circle true
-(println (type "s") (type nil)) ; (:C%CLASS java.lang.String) nil
+(println (type "s") (type nil)) ; java.lang.String nil
 (println (= (type #"a") java.util.regex.Pattern)) ; true
 (defmulti area type)
 (defmethod area :circle [x] (* 3 (:r x) (:r x)))
