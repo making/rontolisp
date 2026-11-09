@@ -2410,28 +2410,6 @@
   (rontolisp::%clojure-illegal-argument-exception
    (format nil "~A~A" words (rontolisp::%clojure-class-name-of x))))
 
-;; Whether X is a typed value whose own body implements METHOD (a keyword) of
-;; the protocol whose inline rows TABLE holds: a record or deftype of one of
-;; CLASSES, the classes the lowering saw implement it, or a reify with a row
-;; there (no extension reaches a reify site's tag).
-(defun rontolisp::%clojure-inline-method-p (x table method classes)
-  (and (consp x)
-       (if (eq (car x) :C%REIFY)
-           (let ((row (gethash (car (cdr x)) table)))
-             (and row (gethash method row) t))
-           (and (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE))
-                (member (nth 4 x) classes :test #'equal) t))))
-
-;; instance? of a protocol's interface: X is a record or deftype whose class
-;; is among CLASSES (the types whose body names the protocol), or a reify
-;; holding a row under its site's tag in TABLE, the protocol's body table.
-(defun rontolisp::%clojure-implements-p (x table classes)
-  (and (consp x)
-       (if (eq (car x) :C%REIFY)
-           (and (gethash (car (cdr x)) table) t)
-           (and (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE))
-                (member (nth 4 x) classes :test #'equal) t))))
-
 ;; Whether X is a record or deftype declaring FIELD (a keyword): its declared
 ;; list holds the immutable fields only, since a mutable one is private.
 (defun rontolisp::%clojure-declared-field-p (x field)
@@ -10651,6 +10629,37 @@
   (setf (gethash tag rontolisp::%clojure-protocol-type-tags)
         (cons class protocols))
   tag)
+
+;; Whether X is a reify, or a record or deftype whose body names the
+;; protocol of var key PKEY: read off the tag registry every definition fills
+;; when it runs, so a type defined after the asking site (a later file, a
+;; run-time eval) answers like the oracle's class implementing the interface.
+(defun rontolisp::%clojure-own-body-p (x pkey)
+  (and (consp x)
+       (if (eq (car x) :C%REIFY)
+           t
+           (and (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE))
+                (member pkey
+                        (cdr
+                         (gethash (car (cdr x))
+                                  rontolisp::%clojure-protocol-type-tags))
+                        :test #'equal) t))))
+
+;; Whether X is a typed value whose own body implements METHOD (a keyword) of
+;; the protocol of var key PKEY whose body rows TABLE holds: a row there under
+;; X's tag holding METHOD (an extension never stores under the tag of a body
+;; naming the protocol, and no extension reaches a reify site's tag).
+(defun rontolisp::%clojure-inline-method-p (x table method pkey)
+  (and (rontolisp::%clojure-own-body-p x pkey)
+       (let ((row (gethash (car (cdr x)) table)))
+         (and row (gethash method row) t))))
+
+;; instance? of a protocol's interface: X is a record or deftype whose body
+;; names the protocol of var key PKEY, or a reify holding a row under its
+;; site's tag in TABLE, the protocol's body table.
+(defun rontolisp::%clojure-implements-p (x table pkey)
+  (and (rontolisp::%clojure-own-body-p x pkey)
+       (or (not (eq (car x) :C%REIFY)) (and (gethash (car (cdr x)) table) t))))
 
 ;; The class spellings an extend target resolves to, by kind (clojure/
 ;; ClojureProtocolLowering, extendKeyForm): a class object or designator

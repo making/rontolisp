@@ -608,24 +608,16 @@ final class ClojureProtocolLowering {
 
 	/**
 	 * {@code instance?} of a protocol's interface: a record or deftype whose body names
-	 * the protocol (by class, read off the definitions at lowering), or a reify holding a
-	 * row under its site's tag in the protocol's body table (every protocol its body
-	 * names has one, and no extension reaches the tag). An extension row is no interface,
-	 * like the oracle.
+	 * the protocol (read off the tag registry when the test runs, so a type defined after
+	 * the site answers too), or a reify holding a row under its site's tag in the
+	 * protocol's body table (every protocol its body names has one, and no extension
+	 * reaches the tag). An extension row is no interface, like the oracle.
 	 */
 	static LispVal implementsForm(ClojureLowering ctx, Map.Entry<String, ClojureLowering.ProtocolDef> protocol,
 			LispVal value) {
-		String protocolKey = protocol.getKey();
-		List<String> classes = ctx.types.values()
-			.stream()
-			.filter(type -> type.protocols().contains(protocolKey))
-			.map(ClojureLowering.TypeDef::className)
-			.sorted()
-			.toList();
 		ctx.usedProtocols = true;
 		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-IMPLEMENTS-P"), value,
-				protocol.getValue().inlineTable(),
-				classes.isEmpty() ? ClojureLowering.NIL_CONST : ClojureThrowables.quoted(classes));
+				protocol.getValue().inlineTable(), LispString.literal(protocol.getKey()));
 	}
 
 	/**

@@ -59,6 +59,12 @@ class ClojureProjectNamespacesTest {
 					     (extend String Separator {:split-by by-string})
 					     (extend Character Separator {:split-by by-char})))
 					(def generic (reify Separator (split-by [_ s] (string/split s #"\\s+"))))
+					"""), Map.entry("src/app/sep_kind.clj", """
+					(ns app.sep-kind (:require [app.sep :refer [Separator]]))
+					(defn separator? [x] (instance? app.sep.Separator x))
+					(defn by-method [x s] (.split-by x s))
+					(deftype Space [] Separator (split-by [_ s] (clojure.string/split s #" ")))
+					(defn space [] (Space.))
 					"""), Map.entry("src/app/svc.clj", """
 					(ns app.svc)
 					(defn fetch [id] (str "real-" id))
@@ -378,15 +384,20 @@ class ClojureProjectNamespacesTest {
 	 * land among the file's definitions in order, after the defprotocol made the table
 	 * they store into (they went ahead of the file's definitions before, an unbound
 	 * table). {@code Pattern/quote}, {@code Pattern/compile} and {@code String/valueOf}
-	 * are the front end's own, so wasm runs it too. The oracle's output, clj 1.12.6.
+	 * are the front end's own, so wasm runs it too. A namespace requiring the protocol
+	 * tests its interface and calls its method as an instance method in helpers above the
+	 * deftype implementing it (core.match's, core.logic's): both answer for the type the
+	 * helpers' lowering never saw. The oracle's output, clj 1.12.6.
 	 */
 	private static final String SEPARATOR = """
-			(ns app.sep-test (:require [app.sep :refer [split-by generic]]))
+			(ns app.sep-test (:require [app.sep :refer [split-by generic]] [app.sep-kind :as k]))
 			(prn (split-by #"-" "a-b") (split-by "." "a.b") (split-by \\, "a,b") (split-by generic "x  y"))
+			(prn (k/separator? (k/space)) (k/separator? generic) (k/separator? 1) (k/by-method (k/space) "x y"))
 			""";
 
 	private static final String SEPARATOR_OUT = """
 			["a" "b"] ["a" "b"] ["a" "b"] ["x" "y"]
+			true true false ["x" "y"]
 			""";
 
 	@Test

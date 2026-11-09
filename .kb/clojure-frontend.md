@@ -4857,19 +4857,32 @@ constructor and consumer, and a regex `replace` with a function replacement.
   A protocol's interface (oracle-checked clj 1.12.6, 2026-10-04) is the class
   `ClojureProtocolLowering.interfaceName` spells (namespace and name through the oracle's
   `munge`/`CHAR_MAP`: `auto.ipr_dash_QMARK_`; an import resolves to it), matched before the
-  core-class tables: `%clojure-implements-p` (`clojure.lisp`) answers a record/deftype whose
-  class is among those whose body names the protocol (`TypeDef.protocols`, the pre-scan's
-  `BodyProtocols`, methods or none; quoted at lowering, so a type a later REPL input defines
-  is not seen) and a reify with a row under its site's tag in the protocol's body table
-  (`inlineTable`). An `extend-type`/`extend-protocol` target is not an instance (its rows
+  core-class tables: `%clojure-implements-p x table "ns/P"` (`clojure.lisp`) answers a
+  record/deftype whose body names the protocol and a reify with a row under its site's tag
+  in the protocol's body table (`inlineTable`). The record/deftype half reads the tag
+  registry (`%clojure-protocol-type-tags`, the `(class . body protocol keys)` entry every
+  definition registers when it runs, `TypeDef.protocols`/`BodyProtocols`, methods or none)
+  when the test runs, so a type defined after the site -- a later file requiring the
+  protocol's namespace (core.match's `dag-clause-to-clj`, core.logic's helpers), a later
+  REPL buffer, a run-time `eval` -- is an instance like the oracle's (2026-11-09; until then
+  the class list was quoted at lowering and a type the site's lowering had not pre-scanned
+  answered false). The registry is keyed by tag, the simple name, like the protocol rows:
+  two types of one name in two namespaces share an entry. An `extend-type`/`extend-protocol` target is not an instance (its rows
   share the tag with a record's body rows, hence the class list). A body naming a protocol
   with no method stores an empty row (`emptyRowForm`), so `(deftype T [] P)`/`(reify P)` also
   satisfy and extend it like the oracle (before: false). The bare protocol name (`P`, a var)
   stays `unknown name` (oracle: `ClassCastException`). Size (wasm P1 / `--optimize=size` /
-  component / JVM class): a protocol program without it and `examples/clojure/demo.clj`
-  byte-identical; two `(instance? user.P x)` sites +694 / +622 / +701 / +1015 against one
-  `(instance? R x)`; an empty body group +498 / +498 / +502 / +118. Pin: clojure-spec
-  `instance-of-a-protocol-interface-tests-the-body-implementations`.
+  component / JVM class, 2026-10-04, before the registry read; not re-measured): a protocol
+  program without it and `examples/clojure/demo.clj` byte-identical; two `(instance? user.P
+  x)` sites +694 / +622 / +701 / +1015 against one `(instance? R x)`; an empty body group
+  +498 / +498 / +502 / +118. The registry read adds no per-definition store (the
+  registration predates it) and a site now carries the key string where it carried the
+  quoted class list. Pins: clojure-spec
+  `instance-of-a-protocol-interface-tests-the-body-implementations`,
+  `ClojureProjectNamespacesTest#aReifyBelowItsProtocolsExtensionsInsideALetfnStoresIntoItsTable`
+  (a later file's deftype, all four),
+  `ClojureSessionTest#aTypeDefinedInOneBufferShowsJavaItsFaceInTheNext` (a later buffer and
+  an `eval`, the instance call too).
   A class VALUE (oracle-checked clj 1.12.6, 2026-10-11; instaparse's `(instance?
   gll/failure-type x)`, `failure-type` a `(type (Failure. nil nil))`): a class argument that is
   no symbol, or a symbol a local or a var holds, or one that does not read like a class
@@ -5823,15 +5836,16 @@ host alone answers ("Host arms where the host is not").
   `typedMembers` decides at lowering: a site whose name is a method of some protocol (any
   arity) or a field of some known type gets, inside the arm's `cond`, per protocol declaring
   it at the site's arity (`ProtocolDef.arities`) a clause `(%clojure-inline-method-p recv
-  table kw '(classes))` -> the protocol's dispatcher; the classes are the types whose body
-  implements it (`TypeDef.inlineMethods`, read leniently by the pre-scan in
-  `declareRecordType`), a reify is any row under its site's tag (no extension reaches it).
+  table kw "ns/P")` -> the protocol's dispatcher: a record or deftype whose body names the
+  protocol (the tag registry, read when the call runs: see the protocol-interface
+  paragraph) or a reify, with a row holding the method under its tag (no extension
+  stores under the tag of a body naming the protocol, none reaches a reify's).
   Then the mapped rows (a record is `map?`, so `(.count r)` stays the map's), then for zero
   arguments an immutable declared field (`%clojure-declared-field-p`, the `(caddr x)` key
   list), then the refusal in the oracle's words on a typed receiver. A site naming neither
   is lowered as on a collection (`unmappedArm`: a record's `Map` methods, else the table's
-  words), and a site lowered before a later REPL input defines
-  a type does not see it. A deftype carries its class name at index 4 like a record, for
+  words); a site lowered before a later REPL input defines a protocol or a field does not
+  see it, a later type implementing a protocol it saw it does. A deftype carries its class name at index 4 like a record, for
   the refusal; `.-f` refuses in the same words. Size, 2026-10-04 (wasm P1 / `--optimize=size`
   / component / JVM class): a program with no such site is byte-identical but for a per-deftype
   class string; a method or field access costs a check per site against the plain host call.

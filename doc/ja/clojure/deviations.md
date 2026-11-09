@@ -490,8 +490,9 @@
   `NullPointerException` を投げます。`nil` へのそれ以外のメソッドは `NullPointerException` です。
   record・deftype・reify でも、プログラムが定義したどの record・deftype のプロトコルメソッドでも
   フィールドでもない名前はコレクションと同じように扱います。
-  後の REPL 入力が record・deftype を定義しても、それより前に lower された呼び出し箇所は
-  そのメソッドもフィールドも見ません。
+  後の REPL 入力がプロトコル・record・deftype を定義しても、それより前に lower された
+  呼び出し箇所はそのプロトコルのメソッドも型のフィールドも見ません（その箇所が知っている
+  プロトコルについて、後で定義した型のメソッドは見ます）。
 - 引数なしの `(StringBuilder.)`（`(new StringBuilder)`・`(StringBuffer.)` も）は全バックエンドで
   文字列出力ストリームであり、`(new java.io.StringWriter)` と同じオブジェクトです。`class` は
   `:java.io.StringWriter` を返し、`StringWriter` の `#object` として印字します。`(.length w)`
@@ -576,10 +577,9 @@
   `true`、`LazySeq` は `false` です（オラクルでは `LazySeq`）。2要素のベクタはすべて
   `java.util.Map$Entry` です（`map-entry?`）。整数は `(int 1)` も含めて `Long` で、`Integer` には
   なりません。どの種類の値もインスタンスにならない `clojure.lang` のクラス
-  （`clojure.lang.PersistentQueue`）は未知の名前になります（オラクルは `false`）。プロトコルの
-  インタフェース（`user.P`）が知るのはその箇所を lower した時点で定義済みの record と deftype
-  なので、後の REPL 入力で定義したものはそこではインスタンスになりません。プロトコル自身の名前
-  （var である `P`）は未知の名前になります（オラクルは `ClassCastException`）。
+  （`clojure.lang.PersistentQueue`）は未知の名前になります（オラクルは `false`）。プロトコル
+  自身の名前（var である `P`）は未知の名前になります（オラクルは `ClassCastException`）。
+  プロトコルのインタフェース（`user.P`）はオラクルと同じに答えます。
   `class` が返したクラスの値は `class` が区別するものだけを区別するので、
   `(instance? (class 1) 1.5)` と `(instance? (class {}) (sorted-map))` は `true` です。サブクラスを
   たどるのは例外と実行時エラーだけなので、`java.sql.Timestamp` の `ts` について

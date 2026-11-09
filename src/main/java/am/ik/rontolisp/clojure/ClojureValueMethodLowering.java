@@ -825,24 +825,24 @@ final class ClojureValueMethodLowering {
 
 	/**
 	 * What a site's method name is on a record, deftype or reify: the protocols declaring
-	 * it at the site's arity, each with the record and deftype classes whose body
-	 * implements it ({@code classes}; a reify is read at run time), and whether it is an
-	 * immutable declared field a zero-argument call reads.
+	 * it at the site's arity (the types whose body implements it are read at run time),
+	 * and whether it is an immutable declared field a zero-argument call reads.
 	 */
 	private record TypedMembers(List<InlineCall> calls, boolean field) {
 
 	}
 
 	/** One protocol a site's method may call: its var key and definition. */
-	private record InlineCall(String protocolKey, ClojureLowering.ProtocolDef def, List<String> classes) {
+	private record InlineCall(String protocolKey, ClojureLowering.ProtocolDef def) {
 
 	}
 
 	/**
 	 * The typed members a site's method name may reach, or null when it names no protocol
 	 * method (at any arity) and no declared field of a known record or deftype: such a
-	 * site is lowered as before. The protocols and types are the lowering's, so a type
-	 * defined later in another buffer of a session is not seen.
+	 * site is lowered as before. The protocols and the declared fields are the
+	 * lowering's, so a protocol or field defined later in another buffer of a session is
+	 * not seen; a later type implementing a seen protocol is.
 	 */
 	private static @Nullable TypedMembers typedMembers(ClojureLowering ctx, String method, int n) {
 		boolean named = false;
@@ -854,14 +854,7 @@ final class ClojureValueMethodLowering {
 			}
 			named = true;
 			if (arities.contains(n + 1)) {
-				String inline = ClojureLowering.inlineMethodKey(protocol.getKey(), method);
-				List<String> classes = ctx.types.values()
-					.stream()
-					.filter(type -> type.inlineMethods().contains(inline))
-					.map(ClojureLowering.TypeDef::className)
-					.sorted()
-					.toList();
-				calls.add(new InlineCall(protocol.getKey(), protocol.getValue(), classes));
+				calls.add(new InlineCall(protocol.getKey(), protocol.getValue()));
 			}
 		}
 		boolean field = false;
@@ -969,18 +962,14 @@ final class ClojureValueMethodLowering {
 
 	/**
 	 * A clause calling a protocol method's dispatcher on a typed receiver whose own body
-	 * implements it -- an {@code extend-type} row is no method of the class, so it is not
-	 * reached here, like the oracle.
+	 * implements it (read when the call runs, so a type defined after the site answers
+	 * too) -- an {@code extend-type} row is no method of the class, so it is not reached
+	 * here, like the oracle.
 	 */
 	private static LispVal inlineClause(InlineCall call, String method, LispSymbol self, List<LispVal> locals) {
-		List<LispVal> classes = new ArrayList<>();
-		for (String cls : call.classes()) {
-			classes.add(LispString.literal(cls));
-		}
 		LispVal test = ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-INLINE-METHOD-P"), self,
 				call.def().inlineTable(), ClojureCollectionLowering.keywordForm(method),
-				classes.isEmpty() ? ClojureLowering.NIL_CONST
-						: ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), ClojureLowerUtil.list(classes)));
+				LispString.literal(call.protocolKey()));
 		String ns = call.protocolKey().substring(0, call.protocolKey().lastIndexOf('/'));
 		List<LispVal> invocation = new ArrayList<>();
 		invocation.add(ClojureLowering.varSym(ClojureLowering.varKey(ns, method)));

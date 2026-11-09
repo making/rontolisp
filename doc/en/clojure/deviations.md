@@ -527,8 +527,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `NullPointerException`; any other method on `nil` is one. On a record, deftype or reify,
   a name that is no protocol method and no field of a record or deftype the program defined
   is treated as on a collection; a site lowered
-  before a later REPL input defines a record or deftype does not see its methods or
-  fields.
+  before a later REPL input defines a protocol, record or deftype does not see that
+  protocol's methods or the type's fields (a later type's methods of a protocol the site saw
+  it does).
 - A zero-argument `(StringBuilder.)` (or `(new StringBuilder)`, `(StringBuffer.)`) is a
   string output stream on every backend, the same object as `(new java.io.StringWriter)`:
   `class` answers `:java.io.StringWriter` and it prints as one's `#object`, `(.length w)`
@@ -613,9 +614,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   is a `java.util.Map$Entry` (`map-entry?`); an integer is a `Long`, `(int 1)` too, never an
   `Integer`. A `clojure.lang` class no kind is an instance of
   (`clojure.lang.PersistentQueue`) is an unknown name, where the oracle answers `false`. A
-  protocol's interface (`user.P`) knows the records and deftypes defined when the site is
-  lowered, so one a later REPL input defines is not an instance there; the protocol's own
-  name (`P`, a var) is an unknown name, where the oracle throws a `ClassCastException`.
+  protocol's own name (`P`, a var) is an unknown name, where the oracle throws a
+  `ClassCastException`; its interface (`user.P`) answers like the oracle's.
   A class value `class` answered tells what `class` tells: `(instance? (class 1) 1.5)` and
   `(instance? (class {}) (sorted-map))` are `true`, and a subclass is walked only for an
   exception or a runtime error, so `(instance? (class #inst "2020") ts)` of a
