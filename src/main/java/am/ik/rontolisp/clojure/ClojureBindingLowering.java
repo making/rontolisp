@@ -1607,15 +1607,15 @@ final class ClojureBindingLowering {
 	}
 
 	/**
-	 * The seq view past the first {@code n} items: the spliced {@code %clojure-drop},
-	 * stepping one realized level at a time, so a lazy rest stays lazy (and an infinite
-	 * input still binds).
+	 * The seq view past the first {@code n} items: the spliced {@code %clojure-nthnext},
+	 * the oracle's {@code next} after each position, stepping one realized level at a
+	 * time, so a lazy rest stays lazy (and an infinite input still binds).
 	 */
 	static LispVal dropView(ClojureLowering ctx, LispVal coll, int n) {
 		if (n == 0) {
 			return ClojureSeqLowering.seqForm(ctx, coll);
 		}
-		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DROP"), new LispInteger(n), coll);
+		return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-NTHNEXT"), coll, new LispInteger(n));
 	}
 
 	/**

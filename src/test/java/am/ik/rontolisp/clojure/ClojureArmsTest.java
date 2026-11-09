@@ -766,7 +766,7 @@ class ClojureArmsTest {
 				new InterfaceCase(ClojureArms.Family.SEQABLE,
 						"(cond ((rontolisp::%clojure-seqable-p coll) (s coll)) (t (e coll)))"
 								+ " (if (rontolisp::%clojure-lazy-input-p coll) (l coll) (w coll))",
-						List.of("(COND (T (E COLL)))", "(IF (RONTOLISP::%CLOJURE-LAZY-P COLL) (L COLL) (W COLL))"),
+						List.of("(COND (T (E COLL)))", "(IF (RONTOLISP::%CLOJURE-LAZY-SEQ-P COLL) (L COLL) (W COLL))"),
 						"(rontolisp::%clojure-seqable-row (cadr self) '(\"clojure.lang.Seqable\") (list \"seq\" f))"),
 				new InterfaceCase(ClojureArms.Family.COUNTED, "(or (v x) (rontolisp::%clojure-counted-p x))",
 						List.of("(V X)"),

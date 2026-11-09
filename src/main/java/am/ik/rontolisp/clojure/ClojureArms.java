@@ -841,10 +841,10 @@ public final class ClojureArms {
 		 * makes one, {@code iteration}'s included, or of a {@code java.lang.Iterable} or
 		 * {@code java.util.Map} row, whose seq the same clause steps ({@link #ITERABLE},
 		 * {@link #JAVA_MAP}). The alias is the lazy-or-strict verbs' test of a lazy
-		 * input, which takes such a value as one.
+		 * input, which takes such a value as one, and a lazy seq alone without it.
 		 */
 		SEQABLE("seqable", Set.of("RONTOLISP::%CLOJURE-SEQABLE-P"), Set.of(),
-				Map.of("RONTOLISP::%CLOJURE-LAZY-INPUT-P", "RONTOLISP::%CLOJURE-LAZY-P"),
+				Map.of("RONTOLISP::%CLOJURE-LAZY-INPUT-P", "RONTOLISP::%CLOJURE-LAZY-SEQ-P"),
 				Set.of(ClojureInterfaces.SEQABLE_ROW, ClojureInterfaces.ITERATION, ClojureInterfaces.ITERATION_V,
 						ClojureInterfaces.ITERABLE_ROW, ClojureInterfaces.JAVA_MAP_ROW),
 				Set.of()),

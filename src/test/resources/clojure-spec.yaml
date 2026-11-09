@@ -623,9 +623,15 @@ cases:
       (1 3 5 7)
       (10 20 21 22 23)
       (99 0 1)
-  - name: logging-seq-realizes-only-take
+  - name: lazy-seqs-realize-only-what-a-consumer-reads
     # Laziness is observable: the logging seq (the book's lazy_index_of_any.clj
     # shape) runs its body only for what take realizes -- exactly two elements.
+    # iterate computes a member when its own cell realizes, from the one before
+    # (it computed the next member with each, so (second (iterate f 1)) called f
+    # on f's nil and threw), and take, drop, drop-while, split-with, reductions
+    # and partition-by over a lazy input wait to be read, each reduction and run
+    # member when its own cell realizes, like the oracle's (clj 1.12.6.1673, the
+    # same lines; the counter is the call count when the form returns).
     source: |
       (def visit-log (atom []))
       (defn logging-seq [coll]
@@ -635,9 +641,24 @@ cases:
                 (cons (first s) (logging-seq (rest s)))))))
       (println (take 2 (logging-seq [10 20 30 40])))
       (println @visit-log)
+      (def lazy-calls (atom 0))
+      (defn nil-after-one [x] (swap! lazy-calls inc) (if (nil? x) (throw (ex-info "called on nil" {})) nil))
+      (println (try (second (iterate nil-after-one 1)) (catch Exception e :threw)) @lazy-calls)
+      (reset! lazy-calls 0)
+      (println (try (doall (take-while identity (iterate nil-after-one 1))) (catch Exception e :threw)) @lazy-calls)
+      (defn counted-inc [x] (swap! lazy-calls inc) (inc x))
+      (defn lazy-calls-after [f] (reset! lazy-calls 0) (let [v (f)] [v @lazy-calls]))
+      (println (lazy-calls-after #(do (take 5 (iterate counted-inc 0)) :ok)) (lazy-calls-after #(first (take 5 (iterate counted-inc 0)))) (lazy-calls-after #(first (drop 2 (iterate counted-inc 0)))))
+      (println (lazy-calls-after #(do (drop-while neg? (iterate counted-inc 0)) :ok)) (lazy-calls-after #(first (first (split-with (fn [x] (< x 3)) (iterate counted-inc 0))))) (lazy-calls-after #(doall (take 3 (reductions + 10 (iterate counted-inc 0))))))
+      (println (lazy-calls-after #(first (first (partition-by pos? (iterate counted-inc 1))))) (lazy-calls-after #(doall (take 2 (partition-by (fn [x] (quot x 3)) (iterate counted-inc 0))))))
     expected: |
       (10 20)
       [10 20]
+      nil 1
+      (1) 1
+      [:ok 0] [0 0] [2 2]
+      [:ok 0] [0 0] [(10 10 11) 1]
+      [1 0] [((0 1 2) (3 4 5)) 3]
   - name: primes-prefix-over-lazy-sieve
     # The book's primes.clj shape: a lazy sieve over (iterate inc 2); only the
     # taken prefix realizes, and it prints through take alone.
@@ -709,7 +730,12 @@ cases:
     # answered strict lists over the whole-collection view, so an infinite input
     # never answered, and interleave over only infinite inputs overflowed). A run
     # of dropped members is a loop inside one realization; a set, map or keyword as
-    # the function goes through the dispatcher at the call site.
+    # the function goes through the dispatcher at the call site. So do take-while,
+    # drop-while, split-with, split-at, mapcat, reductions and partition-by (a run
+    # lazy too): take-while walked to the first failing member and partition-by a
+    # whole run, so a predicate that never failed never answered. A seq holding a
+    # lazy tail (what seq, nthnext, a cons onto one or drop over a strict head
+    # answer) is a lazy input: map, filter, for, sequence ... realized it whole.
     source: |
       (println (take 3 (remove odd? (iterate inc 0))) (take 3 (keep #(when (even? %) (* % 10)) (iterate inc 0))))
       (println (take 3 (keep-indexed (fn [i x] (when (odd? i) [i x])) (iterate inc 10))))
@@ -727,6 +753,12 @@ cases:
       (println (remove odd? [1 2 3 4]) (keep identity [1 nil false 2]) (keep-indexed #(when (even? %1) %2) [:a :b :c]))
       (println (map-indexed vector "ab") (distinct [1 2 1 3 2]) (interpose ", " ["a" "b" "c"]))
       (println (partition 2 [1 2 3 4 5]) (partition 2 1 [1 2 3]) (interleave [1 2 3] [:a :b]) (apply partition [2 [1 2 3 4 5]]))
+      (println (first (take-while pos? (iterate inc 1))) (take 3 (take-while identity (iterate inc 0))) (first (drop-while neg? (iterate inc -3))))
+      (println (first (first (split-with pos? (iterate inc 1)))) (take 2 (second (split-at 2 (iterate inc 0)))) (take 3 (mapcat list (iterate inc 0))) (take 3 (reductions + (iterate inc 0))))
+      (println (first (first (partition-by pos? (iterate inc 1)))) (take 2 (partition-by #(quot % 3) (iterate inc 0))) (take 3 (mapcat (fn [x] (repeat x)) [1 2])))
+      (println (take 3 (map inc (drop 2 (iterate inc 0)))) (take 3 (map inc (seq (iterate inc 0)))) (take 3 (filter odd? (seq (range)))) (take 3 (map inc (nthnext (iterate inc 0) 2))))
+      (println (take 3 (map inc (cons 1 (seq (iterate inc 0))))) (take 3 (concat (drop 1 (iterate inc 0)))) (take 3 (for [x (drop 1 (iterate inc 0))] x)) (take 3 (sequence (map inc) (drop 1 (iterate inc 0)))))
+      (println (take 3 (map + (drop 1 (iterate inc 0)) [1 2 3 4])) (take 2 (partition 2 (drop-while neg? (iterate inc -1)))) (take 3 (distinct (seq (iterate inc 0)))) (take 3 (take-while pos? (drop 1 (iterate inc 0)))))
     expected: |
       (0 2 4) (0 20 40)
       ([1 11] [3 13] [5 15])
@@ -744,6 +776,12 @@ cases:
       (2 4) (1 false 2) (:a :c)
       ([0 a] [1 b]) (1 2 3) (a ,  b ,  c)
       ((1 2) (3 4)) ((1 2) (2 3)) (1 :a 2 :b) ((1 2) (3 4))
+      1 (0 1 2) 0
+      1 (2 3) (0 1 2) (0 1 3)
+      1 ((0 1 2) (3 4 5)) (1 1 1)
+      (3 4 5) (1 2 3) (1 3 5) (3 4 5)
+      (2 1 2) (1 2 3) (1 2 3) (2 3 4)
+      (2 4 6) ((0 1) (2 3)) (0 1 2) (1 2 3)
   - name: nth-and-quot-as-values
     # nth/quot as values are lambdas with the Clojure argument order (a bare #'NTH
     # would take the index first).
@@ -10071,10 +10109,10 @@ cases:
       :refused
       false 1
   - name: locals-bound-to-functions-feed-the-inline-loops
-    # Oracle clj 1.12.6.1673 prints the same. The inline loops (every? some take-while
-    # drop-while group-by sort sort-by comp partial complement memoize trampoline
-    # merge-with) funcall a local bound to a real function and send any other value
-    # (a set or map local, a parameter) through the dispatcher.
+    # Oracle clj 1.12.6.1673 prints the same. The inline loops (every? some group-by
+    # sort sort-by comp partial complement memoize trampoline merge-with) and the
+    # take-while/drop-while workers funcall a local bound to a real function and send
+    # any other value (a set or map local, a parameter) through the dispatcher.
     source: |
       (let [f odd? g inc k >] (println (every? f [1 3]) (some f [2 3]) (take-while f [1 3 4 5]) (drop-while f [1 3 4 5]) (group-by g [1 2 3]) (sort-by g k [1 3 2]) (sort k [1 3 2])))
       (let [f inc g dec h odd?] (println ((comp f g) 1) ((partial f) 1) ((complement h) 1) ((memoize f) 1) (merge-with + {:a 1} {:a 2})))
@@ -16161,15 +16199,22 @@ cases:
       #object[clojure.lang.PersistentQueue clojure.lang.PersistentQueue@7861] [#object[clojure.lang.PersistentQueue clojure.lang.PersistentQueue@1]]
   - name: fnext-and-nnext-step-past-the-head
     # (first (next x)) and (next (next x)), each tail through the seq view.
-    # Oracle-identical (clj 1.12.6, 2026-10-10).
+    # Oracle-identical (clj 1.12.6, 2026-10-10). next, nnext and nfirst realize the
+    # tail they answer, so a lazy seq with nothing past the head is nil, where
+    # rest answers the empty lazy tail (until 2026-11-09 next answered that tail,
+    # so a loop over next ran once past the end; oracle-identical, 2026-11-09).
     source: |
       (prn (fnext [1 2 3]) (fnext [1]) (fnext nil) (fnext {:a 1}) (fnext "ab") (fnext (lazy-seq (cons 1 (lazy-seq (list 2))))))
       (prn (nnext [1 2 3]) (nnext [1 2]) (nnext nil) (nnext '(1 2 3 4)) (first (nnext (iterate inc 0))) (nnext "abc"))
       (prn (map fnext [[1 2] [3 4]]) (map nnext [[1 2 3] [4]]) (take 2 (nnext (iterate inc 0))))
+      (prn (next (map inc (lazy-seq [1]))) (nnext (map inc (lazy-seq [1 2]))) (nfirst [(map inc (lazy-seq [1]))]) (map next [(take-while pos? (iterate dec 1))]))
+      (prn (loop [s (seq (map inc (lazy-seq [1 2]))) n 0] (if s (recur (next s) (inc n)) n)) (rest (map inc (lazy-seq [1]))))
     expected: |
       2 nil nil nil \b 2
       (3) nil nil (3 4) 2 (\c)
       (2 4) ((3) nil) (2 3)
+      nil nil nil (nil)
+      2 ()
   - name: a-reader-macro-class-reads-a-literals-body-from-a-stream
     # (clojure.lang.LispReader$StringReader.) and $RegexReader are functions of
     # (reader, opening character, options, pending forms): they read the body

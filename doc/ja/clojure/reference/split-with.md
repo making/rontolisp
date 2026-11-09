@@ -2,8 +2,9 @@
 
 `(split-with pred coll)`
 
-`[(take-while pred coll) (drop-while pred coll)]` を `coll` の seq の1回の走査で返します。
-`false` も `nil` と同様に接頭部を止めます。空の側は `nil` です（オラクルは `()`）。
+オラクルと同じく `[(take-while pred coll) (drop-while pred coll)]` を返します。lazy な
+`coll` にはどちらの側も lazy で、述語は側ごとに1回ずつ接頭部を試します。`false` も `nil` と
+同様に接頭部を止めます。strict なコレクションの空の側は `nil` です（オラクルは `()`）。
 値としては2引数の関数です。
 
 ```clojure

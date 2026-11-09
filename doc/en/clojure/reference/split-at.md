@@ -2,9 +2,9 @@
 
 `(split-at n coll)`
 
-Answers `[(take n coll) (drop n coll)]`: the two halves of `coll`'s seq at `n`.
-An empty half is `nil`, where the oracle prints `()`. As a value a two-argument
-function.
+Answers `[(take n coll) (drop n coll)]`: the two halves of `coll`'s seq at `n`, each
+lazy over a lazy `coll`. An empty half of a strict collection is `nil`, where the
+oracle prints `()`. As a value a two-argument function.
 
 ```clojure
 (println (split-at 2 [1 2 3 4])) ; [(1 2) (3 4)]

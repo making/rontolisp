@@ -2,8 +2,11 @@
 
 `(mapcat f coll...)` / `(mapcat f)`
 
-Maps `f` over the collections and concats the mapped seq views, strictly
-(nil-safe: a `nil` result contributes nothing, like `concat`). `(mapcat f)` is its
+Maps `f` over the collections and concats the mapped seq views (nil-safe: a `nil`
+result contributes nothing, like `concat`): lazily when a collection is lazy, each
+mapped seq read as it is reached, else strictly unless a mapped seq is lazy. Over a
+lazy input only what is read realizes, where the oracle realizes up to four mapped
+elements ahead. `(mapcat f)` is its
 [transducer](transducers.md), `(comp (map f) cat)`. As a value a rest lambda, which
 answers the transducer of the function alone.
 

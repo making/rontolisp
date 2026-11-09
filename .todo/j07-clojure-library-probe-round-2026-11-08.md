@@ -29,7 +29,7 @@ outputs and the patches: `.todo/artefacts/j07-clojure-library-probe-round-2026-1
 | org.clojure/core.logic 1.1.1 | stops at load | `instance?` of a `definterface` by its qualified name (`protocols.clj:194`) | j19, j10, j12, h09; then `()` vs `nil` (pinned deviation) |
 | prismatic/schema 1.4.2 | stops at load | `clojure.lang.Compiler/CHAR_MAP` in a macro (`utils.cljc:58`) | j15, j24, j19, j14, j23, j13, h09 |
 | com.rpl/specter 1.1.6 | stops at load | riddley's `proxy` of `Compiler$ObjMethod` (`riddley/compiler.clj:12`) | j27, j15, j13, j23, j22, j21, j12, j25, j17 |
-| rewrite-clj/rewrite-clj 1.3.59 | stops at load | `defmethod print-method` of a fn parameter (`node/protocols.cljc:166`) | j14, j13, j18 |
+| rewrite-clj/rewrite-clj 1.3.59 | stops at load | `defmethod print-method` of a fn parameter (`node/protocols.cljc:166`) | j14, j13, j18 (all landed; verbatim `=` on all four backends, 2026-11-09) |
 | datascript/datascript 1.8.1 | stops at load | `clojure.core$long` (`db.cljc:80`) | not reached: j26 (persistent-sorted-set) |
 
 Library-side facts worth keeping:

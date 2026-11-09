@@ -366,9 +366,9 @@ final class ClojureSeqLowering {
 	 * oracle's). The collection runs once, as the call's argument. A realized lazy seq's
 	 * tail is another wrapper, so only a consumer that reads the head
 	 * ({@code first}/{@code seq}/{@code when-first}) or steps on with
-	 * {@code %clojure-seq-rest} ({@code some}, {@code take-while}, {@code doseq}, ...)
-	 * takes this view; every consumer that walks the list with a Common Lisp list
-	 * operation takes {@link #seqAllForm}.
+	 * {@code %clojure-seq-rest} ({@code some}, {@code nth}, {@code doseq}, ...) takes
+	 * this view; every consumer that walks the list with a Common Lisp list operation
+	 * takes {@link #seqAllForm}.
 	 * @param lowered the lowered collection
 	 * @return the form answering the list view
 	 */
@@ -514,11 +514,26 @@ final class ClojureSeqLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), seqForm(ctx, coll)));
 	}
 
-	/** {@code rest}/{@code next} as a value: the tail of the seq view. */
+	/** {@code rest} as a value: the tail of the seq view. */
 	static LispVal restValue(ClojureLowering ctx) {
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("rest-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(coll),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), seqForm(ctx, coll)));
+	}
+
+	/**
+	 * {@code next} of an already-lowered collection: the seq past the head, its lazy tail
+	 * realized one level ({@link #seqRestForm}), so a lazy seq with nothing past its head
+	 * answers nil like the oracle's, where {@code rest} answers the empty tail.
+	 */
+	static LispVal nextForm(ClojureLowering ctx, LispVal lowered) {
+		return seqRestForm(seqForm(ctx, lowered));
+	}
+
+	/** {@code next} as a value: the realized seq past the head. */
+	static LispVal nextValue(ClojureLowering ctx) {
+		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("next-coll"));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(coll), nextForm(ctx, coll));
 	}
 
 	/** {@code cons} as a value: the item over the collection, lazily when lazy. */

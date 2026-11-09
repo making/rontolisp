@@ -3,6 +3,7 @@
 `(drop-while pred coll)` / `(drop-while pred)`
 
 `coll` の seq ビューのうち truthy な接頭辞を落とした残りを返します（末尾を共有します）。
+lazy な `coll` には、最初に読まれたときに接頭辞を読み飛ばす lazy seq を返します。
 値としては2引数のラムダです。
 
 `(drop-while pred)` は[トランスデューサー](transducers.md)を返します（値としても同じです）。

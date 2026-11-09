@@ -342,11 +342,15 @@ untouched, vectors and strings coerce, maps contribute one two-vector per entry 
 one member per element (both in insertion order); `nil` and `false`
 are empty; anything else signals like the oracle. Strict collections coerce up front,
 while a lazy seq (`lazy-seq`, `lazy-cat`, `repeat`, `cycle`, `iterate`, `repeatedly`)
-realizes one element at a time through the same view: `take` steps through it and
-terminates on infinite seqs, `drop`/`first`/`rest`/`next`/`seq` realize through it, and
-`cons`/`concat`/`map`/`filter`, `remove`, `keep`, `keep-indexed`, `map-indexed`,
-`distinct`, `interpose`, `partition` and `interleave` answer lazy again when any input
-is lazy (strict lists otherwise). A `lazy-seq` body runs at most once per seq object;
+realizes one element at a time through the same view: `first`/`rest`/`next`/`seq`
+realize through it (`next` of a lazy seq with nothing past its head is `nil`), and every
+verb answering a seq -- `cons`, `concat`, `map`, `filter`, `remove`, `keep`,
+`keep-indexed`, `map-indexed`, `mapcat`, `distinct`, `dedupe`, `interpose`, `interleave`,
+`partition`, `partition-all`, `partition-by`, `take`, `drop`, `take-while`, `drop-while`,
+`take-nth`, `split-at`, `split-with`, `reductions`, `for`, `sequence` -- answers lazy again
+when an input is lazy (a seq `seq` or `nthnext` answered over one counts), strict lists
+otherwise, so an infinite input answers as far as it is read. `iterate` computes each
+element when it is read, from the one before. A `lazy-seq` body runs at most once per seq object;
 printing realizes a lazy seq like the oracle (an empty one prints `()`, an infinite one
 without end). There is no chunking. `count`/`empty?`/`=` reach maps and sets (`=` deeply
 and structurally); `get` takes an optional default and reads maps, sets, vectors,
@@ -355,9 +359,8 @@ strings and nil.
 A lazy input reaches every seq verb. The verbs that walk the whole collection (`count`,
 `last`, `sort`, `apply`, `reverse`, `set`, `frequencies`, `reduce`, `into`) realize it
 first -- an infinite one never answers, like the oracle's -- and the ones that stop
-early (`second`, `nth`, `some`, `every?`, `take-while`, `drop-while`, `zipmap`,
-positional destructuring, `doseq`/`for`) step through it, so an infinite input still
-answers.
+early (`second`, `nth`, `some`, `every?`, `zipmap`, `nthnext`, positional
+destructuring, `doseq`) step through it, so an infinite input still answers.
 
 ## State and dynamic scope
 

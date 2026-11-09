@@ -124,13 +124,16 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   core verb in the whole file, calls above the definition included (the oracle's calls
   above it still reach the core verb); a local binding shadows it in its scope, like the
   oracle.
-- The seq family's empty `rest`/`next` is `nil`, where the oracle prints `()`; `nth` past
+- The seq family's empty `rest` of a strict collection is `nil`, where the oracle prints `()`; `nth` past
   the end answers the default instead of throwing; strings seq to characters printing in Common Lisp notation. Lazy seqs realize
-  one element at a time (no chunking); `str` of a lazy seq spells its members, where the
+  one element at a time (no chunking); `next`, `nthnext` and a `&` rest realize the
+  element they reach, so over an `iterate` seq they call its function where the oracle's
+  waits for the element to be read, and `mapcat` over a lazy input realizes only what is
+  read, where the oracle's realizes up to four mapped elements ahead; `str` of a lazy seq spells its members, where the
   oracle answers `clojure.lang.LazySeq@<hash>`; `map` takes any number of collections.
 - A `for` over strict collections answers a strict list, realized when the `for` runs
   (the oracle's waits to be consumed); with no elements it is `nil`, where the oracle
-  prints `()` (the same empty-as-`nil` position as `rest`/`next`/`take`). From its first
+  prints `()` (the same empty-as-`nil` position as `rest`/`take` over a strict collection). From its first
   lazy collection on, it is lazy like the oracle's, and so is a whole `for` whose bindings
   or body name the definition it stands in.
 - `cond` keeps the lenient reading: an odd trailing arm is the default, where Clojure

@@ -2,9 +2,9 @@
 
 `(take n coll)` / `(take n)`
 
-`coll` の最初の `n` 要素のリストを返します。lazy 要素を1つずつ辿るため、`(take n infinite)` は strict な prefix で終了します。答えに必要な分だけ realize します。カウントが尽きても次の要素は unrealized のままです。
+`coll` の最初の `n` 要素を返します。lazy な `coll` には、読まれた要素ごとに1要素ずつ realize する lazy seq を返すため、`(take n infinite)` は終了し、読まれない要素は realize されません。strict な `coll` には strict なリストを返します。
 
-仕様との差異: 長すぎる take は、空のとき seq 全体として `nil` を返します。オラクルは `()` を表示します。
+仕様との差異: strict なコレクションに対する空の take は `nil` を返します。オラクルは `()` を表示します。
 
 `(take n)` は[トランスデューサー](transducers.md)を返します（値としても同じです）。
 

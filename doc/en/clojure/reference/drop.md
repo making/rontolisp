@@ -2,10 +2,11 @@
 
 `(drop n coll)` / `(drop n)`
 
-Answers `coll` without its first `n` elements, stepping through one lazy element at a
-time; the remainder may stay lazy when the input is lazy.
+Answers `coll` without its first `n` elements: over a lazy `coll` a lazy seq that steps
+over them when it is first read, over a strict `coll` the strict view past them.
 
-Deviation: an over-long drop answers `nil`, where the oracle prints `()`.
+Deviation: an over-long drop of a strict collection answers `nil`, where the oracle
+prints `()`.
 
 `(drop n)` is its [transducer](transducers.md), as a value too.
 

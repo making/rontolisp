@@ -5423,10 +5423,10 @@
           (setq s (rontolisp::%clojure-seq-rest s))
           (setq left (- left 1))))))
 
-(defun rontolisp::%clojure-take (n coll)
+(defun rontolisp::%clojure-take-strict (n coll)
   "The first N of COLL as a strict list, stepping through one wrapper at a
-   time so (take n infinite) terminates. Realizes exactly what it answers:
-   the next wrapper stays unforcd when the count runs out."
+   time so it terminates over an infinite COLL. Realizes exactly what it
+   answers: the next wrapper stays unforced when the count runs out."
   (let ((left n) (s (rontolisp::%clojure-seq coll)) (acc nil))
     (do ()
         ((or (<= left 0) (null s)) (reverse acc))
@@ -5434,25 +5434,104 @@
       (setq left (- left 1))
       (if (> left 0) (setq s (rontolisp::%clojure-seq (cdr s)))))))
 
+(defun rontolisp::%clojure-take (n coll)
+  "(take n coll): the first N members of COLL, lazy when COLL is lazy (one
+   member per realization, like the oracle's, so a member past the ones read
+   never realizes), the strict list otherwise."
+  (if (rontolisp::%clojure-lazy-input-p coll)
+      (rontolisp::%clojure-take-lazy n coll)
+      (rontolisp::%clojure-take-strict n coll)))
+
+(defun rontolisp::%clojure-take-lazy (n coll)
+  "The lazy arm of %clojure-take."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (if (> n 0)
+         (let ((s (rontolisp::%clojure-seq coll)))
+           (if (null s)
+               nil
+               (cons (car s) (rontolisp::%clojure-take-lazy (- n 1) (cdr s)))))
+         nil))))
+
 (defun rontolisp::%clojure-drop (n coll)
-  "COLL past its first N: the remainder, which may stay lazy."
-  (let ((left n) (s (rontolisp::%clojure-seq coll)))
+  "(drop n coll): COLL past its first N members, lazy when COLL is lazy (the
+   members are stepped over in one realization when the seq is first read,
+   like the oracle's), the strict view past them otherwise."
+  (if (rontolisp::%clojure-lazy-input-p coll)
+      (rontolisp::%clojure-make-lazy
+       (lambda () (rontolisp::%clojure-nthnext coll n)))
+      (rontolisp::%clojure-nthnext coll n)))
+
+(defun rontolisp::%clojure-take-while (pred coll)
+  "(take-while pred coll): the members while the real function PRED holds
+   (nil and false stop it), lazy when COLL is lazy -- one member per
+   realization, so an infinite COLL whose PRED never fails still answers its
+   first members -- the strict list otherwise."
+  (if (rontolisp::%clojure-lazy-input-p coll)
+      (rontolisp::%clojure-take-while-lazy pred coll)
+      (let ((s (rontolisp::%clojure-seq coll)) (acc nil))
+        (do ()
+            ((or (null s) (not (rontolisp::%clojure-filter-test pred (car s))))
+             (reverse acc))
+          (setq acc (cons (car s) acc))
+          (setq s (cdr s))))))
+
+(defun rontolisp::%clojure-take-while-lazy (pred coll)
+  "The lazy arm of %clojure-take-while."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (let ((s (rontolisp::%clojure-seq coll)))
+       (if (and s (rontolisp::%clojure-filter-test pred (car s)))
+           (cons (car s) (rontolisp::%clojure-take-while-lazy pred (cdr s)))
+           nil)))))
+
+(defun rontolisp::%clojure-drop-while (pred coll)
+  "(drop-while pred coll): the seq of COLL past the members the real function
+   PRED holds for, its tail shared: lazy when COLL is lazy (the members are
+   stepped over in one realization when the seq is first read, like the
+   oracle's), the strict view otherwise."
+  (if (rontolisp::%clojure-lazy-input-p coll)
+      (rontolisp::%clojure-make-lazy
+       (lambda () (rontolisp::%clojure-drop-while-seq pred coll)))
+      (let ((s (rontolisp::%clojure-seq coll)))
+        (do ()
+            ((or (null s) (not (rontolisp::%clojure-filter-test pred (car s))))
+             s)
+          (setq s (cdr s))))))
+
+(defun rontolisp::%clojure-drop-while-seq (pred coll)
+  "The seq of the lazy COLL past the members PRED holds for, stepped one
+   realized level at a time."
+  (let ((s (rontolisp::%clojure-seq coll)))
     (do ()
-        ((or (<= left 0) (null s)) s)
-      (setq s (rontolisp::%clojure-seq (cdr s)))
-      (setq left (- left 1)))))
+        ((or (null s) (not (rontolisp::%clojure-filter-test pred (car s)))) s)
+      (setq s (rontolisp::%clojure-seq-rest s)))))
 
 ;; The lazy-or-strict verbs ask %clojure-lazy-input-p of their input: a lazy
-;; wrapper, or a type implementing Seqable, whose seq may be lazy and endless
-;; (the oracle's verbs are lazy over it). Their lazy arms step the input through
-;; %clojure-seq alone, which reads such a type, and never hold the input itself
-;; as a seq's tail. A program storing no Seqable row calls %clojure-lazy-p in its
-;; place (the seqable family's alias, "Host interfaces").
+;; seq -- the wrapper, or a seq whose spine holds one, as seq, next, nthnext or
+;; a cons onto a realized lazy seq answer -- or a type implementing Seqable,
+;; whose seq may be lazy and endless (the oracle's verbs are lazy over it). Their
+;; lazy arms step the input through %clojure-seq alone, which reads such a type,
+;; and never hold the input itself as a seq's tail. A program storing no Seqable
+;; row calls %clojure-lazy-seq-p in its place (the seqable family's alias, "Host
+;; interfaces").
 (defun rontolisp::%clojure-lazy-input-p (x)
-  "Whether the lazy-or-strict verbs take X as a lazy input: a lazy wrapper or a
+  "Whether the lazy-or-strict verbs take X as a lazy input: a lazy seq or a
    Seqable."
-  (or (rontolisp::%clojure-lazy-p x) (rontolisp::%clojure-seqable-p x)
+  (or (rontolisp::%clojure-lazy-seq-p x) (rontolisp::%clojure-seqable-p x)
       (rontolisp::%clojure-iterable-p x) (rontolisp::%clojure-jmap-p x)))
+
+(defun rontolisp::%clojure-lazy-seq-p (x)
+  "Whether X is a lazy seq: the wrapper, or a plain list whose spine reaches
+   one (a realized lazy seq's view), whose rest may be endless. The wrapper
+   (:C%LAZY cell) is a proper list, so a spine reaching it reads as a list
+   holding the CL keyword :C%LAZY, which no plain list's member is: member
+   finds it in one walk of a strict list."
+  (if (consp x)
+      (if (keywordp (car x))
+          (rontolisp::%clojure-lazy-p x)
+          (if (member :C%LAZY (cdr x)) t nil))
+      nil))
 
 (defun rontolisp::%clojure-lazy-input (coll)
   "COLL as a lazy input of a lazy-or-strict verb: itself when it is one, else a
@@ -5698,7 +5777,7 @@
         (t (let ((s (rontolisp::%clojure-seq-all coll)) (acc nil) (part nil))
              (do ()
                  ((progn
-                    (setq part (rontolisp::%clojure-take n s))
+                    (setq part (rontolisp::%clojure-take-strict n s))
                     (< (length part) n))
                   (reverse acc))
                (setq acc (cons part acc))
@@ -5709,12 +5788,12 @@
   (rontolisp::%clojure-make-lazy
    (lambda ()
      (let* ((s (rontolisp::%clojure-seq coll))
-            (part (rontolisp::%clojure-take n s)))
+            (part (rontolisp::%clojure-take-strict n s)))
        (if (< (length part) n)
            nil
            (cons part
                  (rontolisp::%clojure-partition-lazy n step
-                  (rontolisp::%clojure-drop step s))))))))
+                  (rontolisp::%clojure-nthnext s step))))))))
 
 (defun rontolisp::%clojure-partition-pad (n step pad coll)
   "(partition n step pad coll): runs of N every STEP members, like the oracle's;
@@ -5732,14 +5811,14 @@
      (let ((s (rontolisp::%clojure-seq coll)))
        (if (null s)
            nil
-           (let ((part (rontolisp::%clojure-take n s)))
+           (let ((part (rontolisp::%clojure-take-strict n s)))
              (if (< (length part) n)
                  (list
                   (append part
-                          (rontolisp::%clojure-take (- n (length part)) pad)))
+                   (rontolisp::%clojure-take-strict (- n (length part)) pad)))
                  (cons part
                        (rontolisp::%clojure-partition-pad-lazy n step pad
-                        (rontolisp::%clojure-drop step s))))))))))
+                        (rontolisp::%clojure-nthnext s step))))))))))
 
 (defun rontolisp::%clojure-partition-v (&rest args)
   "partition as a value: [n coll], [n step coll] or [n step pad coll]."
@@ -5814,9 +5893,19 @@
        (cons (car c) (rontolisp::%clojure-cycle-from full (cdr c)))))))
 
 (defun rontolisp::%clojure-iterate (f x)
-  "X, (f X), (f (f X)) ... as a lazy seq of the real function F."
+  "X, (f X), (f (f X)) ... as a lazy seq of the real function F. Each member
+   past X is computed when its own cell realizes, from the member before it,
+   like the oracle's Iterate: reading a member never calls F for the next."
   (rontolisp::%clojure-make-lazy
-   (lambda () (cons x (rontolisp::%clojure-iterate f (funcall f x))))))
+   (lambda () (cons x (rontolisp::%clojure-iterate-after f x)))))
+
+(defun rontolisp::%clojure-iterate-after (f x)
+  "The cells of %clojure-iterate past the member X: (f X) computed when the
+   first one realizes."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (let ((y (funcall f x)))
+       (cons y (rontolisp::%clojure-iterate-after f y))))))
 
 (defun rontolisp::%clojure-range ()
   "The infinite seq of the integers from 0, the oracle's (range) without an
@@ -5891,32 +5980,49 @@
 
 (defun rontolisp::%clojure-reductions (f init coll)
   "(reductions f init coll): INIT and each reduction of the real function F,
-   stopping past a reduced value's answer; lazy when COLL is lazy, strict
+   each computed when its own cell realizes and a reduced answer ending the
+   seq unwrapped, like the oracle's; lazy when COLL is lazy, strict
    otherwise."
   (rontolisp::%clojure-lazy-or-strict coll
-   (rontolisp::%clojure-reductions-lazy f init (rontolisp::%clojure-seq coll))))
+   (rontolisp::%clojure-reductions-lazy f init coll)))
 
 (defun rontolisp::%clojure-reductions-2 (f coll)
   "(reductions f coll): the reductions from the first member, or ((f)) of an
    empty collection, like the oracle's."
-  (let ((s (rontolisp::%clojure-seq coll)))
-    (if (null s)
-        (list (rontolisp::%clojure-call f nil))
-        (rontolisp::%clojure-reductions f (car s) (cdr s)))))
+  (rontolisp::%clojure-lazy-or-strict coll
+                                      (rontolisp::%clojure-make-lazy
+                                       (lambda ()
+                                         (let ((s
+                                                (rontolisp::%clojure-seq coll)))
+                                           (if (null s)
+                                               (list
+                                                (rontolisp::%clojure-call f
+                                                                          nil))
+                                               (rontolisp::%clojure-reductions-lazy
+                                                f (car s) (cdr s))))))))
 
-(defun rontolisp::%clojure-reductions-lazy (f acc s)
-  "The lazy arm of %clojure-reductions: ACC emitted, then the reductions from
-   ACC over S; a reduced answer is emitted unwrapped after ACC and ends the
-   seq."
+(defun rontolisp::%clojure-reductions-lazy (f acc coll)
+  "The lazy arm of %clojure-reductions: ACC (alone and unwrapped when it is
+   reduced), then the reductions from it over COLL."
+  (if (rontolisp::%clojure-reduced-p acc)
+      (list (rontolisp::%clojure-unreduced acc))
+      (rontolisp::%clojure-make-lazy
+       (lambda ()
+         (cons acc (rontolisp::%clojure-reductions-after f acc coll))))))
+
+(defun rontolisp::%clojure-reductions-after (f acc coll)
+  "The reductions past ACC over COLL: (f ACC member) computed when its own
+   cell realizes, a reduced answer emitted unwrapped and ending the seq."
   (rontolisp::%clojure-make-lazy
    (lambda ()
-     (if (null s)
-         (list acc)
-         (let ((next (rontolisp::%clojure-call f (list acc (car s)))))
-           (if (rontolisp::%clojure-reduced-p next)
-               (list acc (rontolisp::%clojure-unreduced next))
-               (cons acc
-                     (rontolisp::%clojure-reductions-lazy f next (cdr s)))))))))
+     (let ((s (rontolisp::%clojure-seq coll)))
+       (if (null s)
+           nil
+           (let ((next (rontolisp::%clojure-call f (list acc (car s)))))
+             (if (rontolisp::%clojure-reduced-p next)
+                 (list (rontolisp::%clojure-unreduced next))
+                 (cons next
+                  (rontolisp::%clojure-reductions-after f next (cdr s))))))))))
 
 (defun rontolisp::%clojure-reductions-v (&rest args)
   "reductions as a value."
@@ -5987,7 +6093,7 @@
 
 (defun rontolisp::%clojure-splitv-at (n coll)
   "(splitv-at n coll): [(vec (take n coll)) (drop n coll)]."
-  (vector (apply #'vector (rontolisp::%clojure-take n coll))
+  (vector (apply #'vector (rontolisp::%clojure-take-strict n coll))
           (rontolisp::%clojure-drop n coll)))
 
 (defun rontolisp::%clojure-splitv-at-v (&rest args)
@@ -6218,10 +6324,28 @@
 
 (defun rontolisp::%clojure-mapcat (f colls)
   "Map the real function F over the COLLS list and concat the mapped seq
-   views, strictly (nil-safe: a nil result contributes nothing, like concat)."
-  (apply #'append
-         (mapcar #'rontolisp::%clojure-realize-all
-                 (rontolisp::%clojure-map-strict f colls))))
+   views (nil-safe: a nil result contributes nothing, like concat): lazy when
+   an input is lazy -- the oracle's (apply concat (map f colls)), each mapped
+   seq stepped as it is read -- else concat over the strict map, lazy only when
+   a mapped seq is."
+  (if (rontolisp::%clojure-any-lazy-p colls)
+      (rontolisp::%clojure-cat-lazy nil (rontolisp::%clojure-map-lazy f colls))
+      (rontolisp::%clojure-concat (rontolisp::%clojure-map-strict f colls))))
+
+(defun rontolisp::%clojure-cat-lazy (coll colls)
+  "The members of COLL, then of each collection the seq COLLS holds in turn,
+   one member per realization; a run of empty collections is a loop inside one
+   realization."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (let ((s (rontolisp::%clojure-seq coll)) (more colls))
+       (do ()
+           ((or s (null (setq more (rontolisp::%clojure-seq more))))
+            (if s
+                (cons (car s) (rontolisp::%clojure-cat-lazy (cdr s) more))
+                nil))
+         (setq s (rontolisp::%clojure-seq (car more)))
+         (setq more (cdr more)))))))
 
 (defun rontolisp::%clojure-shuffle (items)
   "Fisher-Yates over the strict ITEMS list, answering a fresh vector (never the
@@ -9832,7 +9956,7 @@
       (rontolisp::%clojure-drop-last (car args) (car (cdr args)))))
 
 (defun rontolisp::%clojure-split-at (n coll)
-  "[(take n coll) (drop n coll)]."
+  "[(take n coll) (drop n coll)], each half lazy over a lazy COLL."
   (vector (rontolisp::%clojure-take n coll) (rontolisp::%clojure-drop n coll)))
 
 (defun rontolisp::%clojure-split-at-v (&rest args)
@@ -9841,13 +9965,11 @@
   (rontolisp::%clojure-split-at (car args) (car (cdr args))))
 
 (defun rontolisp::%clojure-split-with (pred coll)
-  "[(take-while pred coll) (drop-while pred coll)] in one walk."
-  (let ((s (rontolisp::%clojure-seq coll)) (acc nil))
-    (do ()
-        ((or (null s) (not (rontolisp::%clojure-filter-test pred (car s))))
-         (vector (reverse acc) s))
-      (setq acc (cons (car s) acc))
-      (setq s (rontolisp::%clojure-seq (cdr s))))))
+  "[(take-while pred coll) (drop-while pred coll)], like the oracle's: each half
+   lazy over a lazy COLL, so an infinite COLL whose PRED never fails answers
+   its first half, and PRED runs on the prefix once per half."
+  (vector (rontolisp::%clojure-take-while pred coll)
+          (rontolisp::%clojure-drop-while pred coll)))
 
 (defun rontolisp::%clojure-split-with-v (&rest args)
   "split-with as a value."
@@ -9859,7 +9981,7 @@
   "The last N members of COLL as a strict list (nil when none), walking a
    lead N ahead like the oracle."
   (let ((s (rontolisp::%clojure-seq coll))
-        (lead (rontolisp::%clojure-seq (rontolisp::%clojure-drop n coll))))
+        (lead (rontolisp::%clojure-nthnext coll n)))
     (do ()
         ((null lead) (rontolisp::%clojure-realize-all s))
       (setq s (rontolisp::%clojure-seq (cdr s)))
@@ -10330,9 +10452,9 @@
      (let ((s (rontolisp::%clojure-seq coll)))
        (if (null s)
            nil
-           (cons (rontolisp::%clojure-take n s)
+           (cons (rontolisp::%clojure-take-strict n s)
                  (rontolisp::%clojure-partition-all-lazy n step
-                  (rontolisp::%clojure-drop step s))))))))
+                  (rontolisp::%clojure-nthnext s step))))))))
 
 (defun rontolisp::%clojure-partition-all-v (&rest args)
   "partition-all as a value: [n] the transducer, [n coll] or [n step coll]."
@@ -10345,12 +10467,52 @@
                                                 (car (cdr (cdr args))))))))
 
 (defun rontolisp::%clojure-partition-by (f coll)
-  "COLL split into runs where (f member) stays =."
-  (rontolisp::%clojure-lazy-or-strict coll
-   (rontolisp::%clojure-partition-by-lazy f coll)))
+  "COLL split into runs where (f member) stays =: lazy when COLL is lazy, each
+   run lazy too, the strict list of strict runs otherwise."
+  (if (rontolisp::%clojure-lazy-input-p coll)
+      (rontolisp::%clojure-partition-by-lazy f coll)
+      (rontolisp::%clojure-realize-all
+       (rontolisp::%clojure-partition-by-runs f coll))))
 
 (defun rontolisp::%clojure-partition-by-lazy (f coll)
-  "The lazy arm of %clojure-partition-by: each run is strict."
+  "The lazy arm of %clojure-partition-by, the oracle's: a run is the first
+   member before the lazily read next ones whose (f member) is = to the
+   first's, so an endless run answers its first members; the next run starts
+   where this one ends once it is read whole (the oracle's drop of its count).
+   The member after the first realizes when the run is read past it, as the
+   oracle's iterate defers it."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (let ((s (rontolisp::%clojure-seq coll)))
+       (if (null s)
+           nil
+           (let* ((end (list nil))
+                  (run
+                   (rontolisp::%clojure-cons (car s)
+                    (rontolisp::%clojure-partition-by-run f (funcall f (car s))
+                                                          (cdr s) end)))
+                  (after
+                   (rontolisp::%clojure-make-lazy
+                    (lambda ()
+                      (rontolisp::%clojure-dorun run)
+                      (car end)))))
+             (cons run (rontolisp::%clojure-partition-by-lazy f after))))))))
+
+(defun rontolisp::%clojure-partition-by-run (f v coll end)
+  "The members of COLL past a run's first while (f member) is = to V, one per
+   realization; the seq where the run ends goes to (car END)."
+  (rontolisp::%clojure-make-lazy
+   (lambda ()
+     (let ((s (rontolisp::%clojure-seq coll)))
+       (if (and s (rontolisp::%clojure-equal v (funcall f (car s))))
+           (cons (car s) (rontolisp::%clojure-partition-by-run f v (cdr s) end))
+           (progn
+             (rplaca end s)
+             nil))))))
+
+(defun rontolisp::%clojure-partition-by-runs (f coll)
+  "The runs of %clojure-partition-by over a strict COLL, one strict run per
+   realization."
   (rontolisp::%clojure-make-lazy
    (lambda ()
      (let ((s (rontolisp::%clojure-seq coll)))
@@ -10363,7 +10525,7 @@
                  ((or (null more)
                    (not (rontolisp::%clojure-equal v (funcall f (car more)))))
                   (cons (reverse run)
-                        (rontolisp::%clojure-partition-by-lazy f more)))
+                        (rontolisp::%clojure-partition-by-runs f more)))
                (setq run (cons (car more) run))
                (setq more (rontolisp::%clojure-seq (cdr more))))))))))
 
@@ -18983,7 +19145,7 @@
       (rontolisp::%clojure-make-lazy
        (lambda ()
          (rontolisp::%clojure-pmap-step futures
-          (rontolisp::%clojure-drop n futures))))))
+          (rontolisp::%clojure-nthnext futures n))))))
 
 (defun rontolisp::%clojure-pmap-step (vs fs)
   "One dereferenced head over the future seqs VS and FS, or nil past the end."

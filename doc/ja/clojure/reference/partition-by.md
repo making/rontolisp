@@ -2,8 +2,9 @@
 
 `(partition-by f coll)` / `(partition-by f)`
 
-`coll` の seq を、`(f x)` が先頭の値と `=` であり続ける区間ごとに分けます。各区間は
-strict です。lazy な入力には区間の lazy seq を、strict な入力には strict なリストを返します。
+`coll` の seq を、`(f x)` が先頭の値と `=` であり続ける区間ごとに分けます。lazy な入力には
+lazy な区間の lazy seq を返すため、終わらない区間でも先頭の要素を答えます。strict な入力には
+strict な区間の strict なリストを返します。
 `(partition-by f)` は[トランスデューサー](transducers.md)で、ベクターを流します。値としては1引数か2引数を取ります。
 
 ```clojure

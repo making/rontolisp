@@ -624,7 +624,10 @@ class ClojureLoweringTest {
 		assertThat(lowered("(seq [1 2])")).contains("%CLOJURE-SEQ");
 		assertThat(lowered("(first [1 2])")).contains("(CAR").contains("%CLOJURE-SEQ");
 		assertThat(lowered("(rest [1 2])")).contains("(CDR").contains("%CLOJURE-SEQ");
-		assertThat(lowered("(next [1 2])")).contains("(CDR").contains("%CLOJURE-SEQ");
+		// next realizes the tail one level, so a lazy seq ending past its head answers
+		// nil
+		assertThat(lowered("(next [1 2])")).contains("(RONTOLISP::%CLOJURE-SEQ-REST (RONTOLISP::%CLOJURE-SEQ ")
+			.doesNotContain("(CDR");
 		assertThat(lowered("(cons 0 [1 2])")).contains("%CLOJURE-CONS");
 		assertThat(lowered("(first '(1 2))")).contains("(CAR").contains("%CLOJURE-SEQ");
 		assertThat(lowered("(seq {:a 1})")).contains("%CLOJURE-SEQ");
@@ -986,8 +989,9 @@ class ClojureLoweringTest {
 		assertThat(lowered("(let [[a b] [1 2]] a)")).contains("LET*")
 			.contains("(RONTOLISP::%CLOJURE-NTH")
 			.contains("|c%a|");
-		// the rest past the positions steps too, so a lazy rest stays lazy
-		assertThat(lowered("(let [[a & r] [1 2 3]] r)")).contains("(RONTOLISP::%CLOJURE-DROP 1 ")
+		// the rest past the positions steps too (the oracle's next after each), so a
+		// lazy rest stays lazy
+		assertThat(lowered("(let [[a & r] [1 2 3]] r)")).contains("(RONTOLISP::%CLOJURE-NTHNEXT ")
 			.doesNotContain("NTHCDR");
 		assertThat(lowered("(let [[a :as v] [1 2]] v)")).contains("LET*");
 		assertThat(lowered("(let [{:keys [a b] :as m :or {a 9}} {:a 1}] a)")).contains("GETHASH")
@@ -1001,7 +1005,7 @@ class ClojureLoweringTest {
 			.hasMessageContaining("a vector pattern & needs a single rest pattern after it");
 		// the oracle's seq-binding-form: an :as name may follow the rest, and ends the
 		// pattern
-		assertThat(lowered("(let [[a & r :as all] [1 2]] all)")).contains("(RONTOLISP::%CLOJURE-DROP 1 ");
+		assertThat(lowered("(let [[a & r :as all] [1 2]] all)")).contains("(RONTOLISP::%CLOJURE-NTHNEXT ");
 		assertThatThrownBy(() -> Clojure.read("(let [[a & r b] [1 2]] a)", null)).isInstanceOf(LispReadException.class)
 			.hasMessageContaining("a vector pattern & takes a single rest pattern after it");
 		assertThatThrownBy(() -> Clojure.read("(let [[a :as all b] [1 2]] a)", null))
@@ -4269,7 +4273,10 @@ class ClojureLoweringTest {
 		// a two-argument partition evaluates its size once, as size and step
 		assertThat(lowered("(partition (inc 1) [1])")).containsOnlyOnce("(RONTOLISP::%CLOJURE-BD-+ 1 1)")
 			.contains("(RONTOLISP::%CLOJURE-PARTITION ");
-		assertThat(lowered("(take-while odd? [1])")).contains("LABELS");
+		assertThat(lowered("(take-while odd? [1])")).contains("(RONTOLISP::%CLOJURE-TAKE-WHILE ")
+			.doesNotContain("%CLOJURE-CALL");
+		assertThat(lowered("(def s #{1}) (drop-while s [1])")).contains("(RONTOLISP::%CLOJURE-DROP-WHILE ")
+			.contains("(RONTOLISP::%CLOJURE-AS-FN |c%s|)");
 		assertThat(lowered("(interleave [1] [2])"))
 			.contains("(RONTOLISP::%CLOJURE-INTERLEAVE (LIST (VECTOR 1) (VECTOR 2)))");
 		assertThat(lowered("(interpose 0 [1])")).contains("(RONTOLISP::%CLOJURE-INTERPOSE 0 (VECTOR 1))");
@@ -4295,8 +4302,7 @@ class ClojureLoweringTest {
 			assertThat(lowered("(def x [1]) " + form)).as(form).contains(all);
 		}
 		String step = "(RONTOLISP::%CLOJURE-SEQ-REST ";
-		for (String form : List.of("(some odd? [1])", "(every? odd? [1])", "(take-while odd? [1])",
-				"(drop-while odd? [1])", "(zipmap [1] [2])")) {
+		for (String form : List.of("(some odd? [1])", "(every? odd? [1])", "(zipmap [1] [2])")) {
 			assertThat(lowered(form)).as(form).contains(step).doesNotContain(all);
 		}
 		assertThat(lowered("(second [1 2])"))
@@ -4327,7 +4333,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(filterv odd? [1])")).contains("RONTOLISP::%CLOJURE-FILTERV");
 		assertThat(lowered("(mapcat reverse [[1]])")).contains("RONTOLISP::%CLOJURE-MAPCAT");
 		assertThat(lowered("(ffirst [[1]])")).contains("CAR").contains("%CLOJURE-SEQ");
-		assertThat(lowered("(nfirst [[1]])")).contains("CDR").contains("%CLOJURE-SEQ");
+		assertThat(lowered("(nfirst [[1]])")).contains("%CLOJURE-SEQ-REST").contains("%CLOJURE-SEQ");
 		assertThat(lowered("(boolean 1)")).contains("RONTOLISP::%CLOJURE-FALSE");
 		assertThat(lowered("(char 97)")).contains("RONTOLISP::%CLOJURE-CHAR");
 		assertThat(lowered("(name :a/b)")).contains("RONTOLISP::%CLOJURE-NAME");

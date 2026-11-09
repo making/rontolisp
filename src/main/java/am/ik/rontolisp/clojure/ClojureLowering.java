@@ -5561,10 +5561,12 @@ public final class ClojureLowering {
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("car"),
 						ClojureSeqLowering.seqForm(this, lower(items.get(1))));
 			case "rest":
-			case "next":
 				ClojureLowerUtil.isTrue(items.size() == 2, name + " takes one collection");
 				return ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"),
 						ClojureSeqLowering.seqForm(this, lower(items.get(1))));
+			case "next":
+				ClojureLowerUtil.isTrue(items.size() == 2, name + " takes one collection");
+				return ClojureSeqLowering.nextForm(this, lower(items.get(1)));
 			case "cons":
 				ClojureLowerUtil.isTrue(items.size() == 3, "cons takes an item and a collection");
 				return ClojureLoopLowering.consForm(this, lower(items.get(1)), lower(items.get(2)));
@@ -5727,12 +5729,12 @@ public final class ClojureLowering {
 				return ClojureFilterLowering.partitionOf(this, items);
 			case "take-while":
 				ClojureLowerUtil.isTrue(n == 2, "take-while takes a predicate and a collection");
-				return ClojureFilterLowering.takeWhileForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
-						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
+				return ClojureFilterLowering.takeWhileForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
+						lower(items.get(2)));
 			case "drop-while":
 				ClojureLowerUtil.isTrue(n == 2, "drop-while takes a predicate and a collection");
-				return ClojureFilterLowering.dropWhileForm(this, ClojureBindingLowering.fnArg(this, items.get(1)),
-						ClojureSeqLowering.seqForm(this, lower(items.get(2))));
+				return ClojureFilterLowering.dropWhileForm(this, ClojureBindingLowering.realFnValue(this, items.get(1)),
+						lower(items.get(2)));
 			case "interleave":
 				return ClojureFilterLowering.interleaveOf(this, items);
 			case "interpose":
@@ -6127,7 +6129,8 @@ public final class ClojureLowering {
 			case "println-str" -> ClojureStringLowering.printStrValue(false, true);
 			case "seq" -> ClojureSeqLowering.seqValue(this);
 			case "first" -> ClojureSeqLowering.firstValue(this);
-			case "rest", "next" -> ClojureSeqLowering.restValue(this);
+			case "rest" -> ClojureSeqLowering.restValue(this);
+			case "next" -> ClojureSeqLowering.nextValue(this);
 			case "cons" -> ClojureSeqLowering.consValue(this);
 			case "count" -> ClojureCollectionLowering.countValue(this);
 			case "reverse" -> {

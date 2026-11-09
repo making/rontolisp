@@ -263,79 +263,39 @@ final class ClojureFilterLowering {
 	}
 
 	/**
-	 * {@code take-while}: the strict prefix while the predicate stays truthy
-	 * ({@code false} stops, like nil).
+	 * {@code take-while}: the members while the predicate stays truthy ({@code false}
+	 * stops, like nil), through the spliced {@code rontolisp::%clojure-take-while}.
+	 * Lazy-or-strict, so an infinite input whose predicate never fails answers. The
+	 * predicate is a real function ({@link ClojureLowering#realFun}).
 	 */
-	static LispVal takeWhileForm(ClojureLowering ctx, ClojureBindingLowering.FnArg fn, LispVal seq) {
-		String name = ClojureLowering.mangle("take-while-") + (ctx.counter++);
-		LispSymbol self = new LispSymbol(name);
-		LispSymbol pred = ctx.freshTemp();
-		LispSymbol rest = ctx.freshTemp();
-		LispSymbol acc = ctx.freshTemp();
-		LispSymbol got = ctx.freshTemp();
-		LispVal invoked = ctx.callFun(fn.real(), pred,
-				List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest)));
-		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("reverse"), acc),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got, invoked))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, ctx.falseVariable)),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("reverse"), acc),
-								ClojureLowerUtil.list(self, ClojureSeqLowering.seqRestForm(rest),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"),
-												ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest), acc)))));
-		LispVal binding = new LispCons(self,
-				new LispCons(ClojureLowerUtil.list(List.of(rest, acc)), ClojureLowerUtil.cons(step, List.of())));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(pred, fn.fun()))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
-						ClojureLowerUtil.list(self, seq, ClojureLowering.NIL_CONST)));
+	static LispVal takeWhileForm(ClojureLowering ctx, LispVal pred, LispVal coll) {
+		return runtimeCall("TAKE-WHILE", pred, coll);
 	}
 
-	/** {@code take-while} as a value: a two-argument lambda over the same loop. */
+	/** {@code take-while} as a value: a two-argument lambda over the same call. */
 	static LispVal takeWhileValue(ClojureLowering ctx) {
 		LispSymbol pred = new LispSymbol(ClojureLowering.mangle("take-while-pred"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("take-while-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(pred, coll)),
-				takeWhileForm(ctx, ClojureBindingLowering.FnArg.of(pred), ClojureSeqLowering.seqForm(ctx, coll)));
+				takeWhileForm(ctx, ClojureLowering.realFun(pred), coll));
 	}
 
-	/** {@code drop-while}: the seq view past the truthy prefix, sharing the tail. */
-	static LispVal dropWhileForm(ClojureLowering ctx, ClojureBindingLowering.FnArg fn, LispVal seq) {
-		String name = ClojureLowering.mangle("drop-while-") + (ctx.counter++);
-		LispSymbol self = new LispSymbol(name);
-		LispSymbol pred = ctx.freshTemp();
-		LispSymbol rest = ctx.freshTemp();
-		LispSymbol got = ctx.freshTemp();
-		LispVal invoked = ctx.callFun(fn.real(), pred,
-				List.of(ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), rest)));
-		LispVal step = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), rest), ClojureLowering.NIL_CONST,
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
-						ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(got, invoked))),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), got),
-										ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, ctx.falseVariable)),
-								rest, ClojureLowerUtil.list(self, ClojureSeqLowering.seqRestForm(rest)))));
-		LispVal binding = new LispCons(self,
-				new LispCons(ClojureLowerUtil.list(List.of(rest)), ClojureLowerUtil.cons(step, List.of())));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
-				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(pred, fn.fun()))),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("labels"), ClojureLowerUtil.list(List.of(binding)),
-						ClojureLowerUtil.list(self, seq)));
+	/**
+	 * {@code drop-while}: the seq past the truthy prefix, sharing the tail, through the
+	 * spliced {@code rontolisp::%clojure-drop-while}. Lazy-or-strict: over a lazy input
+	 * the prefix is stepped over when the seq is first read. The predicate is a real
+	 * function ({@link ClojureLowering#realFun}).
+	 */
+	static LispVal dropWhileForm(ClojureLowering ctx, LispVal pred, LispVal coll) {
+		return runtimeCall("DROP-WHILE", pred, coll);
 	}
 
-	/** {@code drop-while} as a value: a two-argument lambda over the same loop. */
+	/** {@code drop-while} as a value: a two-argument lambda over the same call. */
 	static LispVal dropWhileValue(ClojureLowering ctx) {
 		LispSymbol pred = new LispSymbol(ClojureLowering.mangle("drop-while-pred"));
 		LispSymbol coll = new LispSymbol(ClojureLowering.mangle("drop-while-coll"));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(List.of(pred, coll)),
-				dropWhileForm(ctx, ClojureBindingLowering.FnArg.of(pred), ClojureSeqLowering.seqForm(ctx, coll)));
+				dropWhileForm(ctx, ClojureLowering.realFun(pred), coll));
 	}
 
 	/**
@@ -790,12 +750,11 @@ final class ClojureFilterLowering {
 	}
 
 	/**
-	 * {@code nfirst} over an already-lowered seq view: the tail of the head, each level
-	 * through the view (of empty, nil -- the {@code next} shape, not {@code rest}).
+	 * {@code nfirst} over an already-lowered seq view: the {@code next} of the head, each
+	 * level through the view (of empty, nil -- the {@code next} shape, not {@code rest}).
 	 */
 	static LispVal nfirstForm(ClojureLowering ctx, LispVal seq) {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"),
-				ClojureSeqLowering.seqForm(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), seq)));
+		return ClojureSeqLowering.nextForm(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), seq));
 	}
 
 	/** {@code nfirst} as a value: a one-argument lambda over the same tail. */
@@ -826,8 +785,7 @@ final class ClojureFilterLowering {
 	 * {@code next}, each tail through the view (of fewer than three members, nil).
 	 */
 	static LispVal nnextForm(ClojureLowering ctx, LispVal seq) {
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"),
-				ClojureSeqLowering.seqForm(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), seq)));
+		return ClojureSeqLowering.nextForm(ctx, ClojureLowerUtil.list(ClojureLowerUtil.sym("cdr"), seq));
 	}
 
 	/** {@code nnext} as a value: a one-argument lambda over the same tail. */
