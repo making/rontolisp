@@ -1291,24 +1291,25 @@ public final class ClojureLowering {
 	final Set<String> inliningDispatch = new HashSet<>();
 
 	/**
-	 * A protocol the program defines or extends: its method names, the method-table
-	 * global and the {@code Object}-default global. Protocols dispatch over the
-	 * {@code C%PROTOCOL-TAG} of the target (the multimethod shape without the hierarchy
-	 * search); the table maps a tag to its row (method keyword to lambda), the default
-	 * global holds the {@code Object} row consulted on a miss (nil until the first
-	 * {@code Object} extension). A protocol declared {@code :extend-via-metadata true}
-	 * also has {@code inlineVar}: the table of the implementations a
-	 * {@code defrecord}/{@code deftype}/{@code reify} body holds, which win over the
-	 * target's metadata, which wins over the extension rows, like the oracle; null for
-	 * every other protocol, whose inline rows share the method table. {@code arities}
-	 * maps each method to the parameter counts of its signatures, the target included.
-	 * {@code reducerRow} is the library function storing a record's, deftype's or reify's
-	 * row of {@code clojure.core.protocols}' {@code CollReduce} or {@code IKVReduce},
-	 * which {@code reduce} and {@code reduce-kv} hand such a value to; null for every
-	 * other protocol.
+	 * A protocol the program defines or extends: its var key, its method names, the
+	 * method-table global and the {@code Object}-default global. Protocols dispatch over
+	 * the {@code C%PROTOCOL-TAG} of the target (the multimethod shape without the
+	 * hierarchy search); the table maps a tag to its row (method keyword to lambda), the
+	 * default global holds the {@code Object} row consulted on a miss (nil until the
+	 * first {@code Object} extension). A protocol declared
+	 * {@code :extend-via-metadata true} also has {@code inlineVar}: the table of the
+	 * implementations a {@code defrecord}/{@code deftype}/{@code reify} body holds, which
+	 * win over the target's metadata, which wins over the extension rows, like the
+	 * oracle; null for every other protocol, whose inline rows share the method table.
+	 * {@code arities} maps each method to the parameter counts of its signatures, the
+	 * target included. {@code reducerRow} is the library function storing a record's,
+	 * deftype's or reify's row of {@code clojure.core.protocols}' {@code CollReduce} or
+	 * {@code IKVReduce}, which {@code reduce} and {@code reduce-kv} hand such a value to;
+	 * null for every other protocol.
 	 */
-	record ProtocolDef(Set<String> methods, Map<String, Set<Integer>> arities, Map<String, List<LispVal>> arglists,
-			LispSymbol methodsVar, LispSymbol defaultVar, @Nullable LispSymbol inlineVar, @Nullable String reducerRow) {
+	record ProtocolDef(String key, Set<String> methods, Map<String, Set<Integer>> arities,
+			Map<String, List<LispVal>> arglists, LispSymbol methodsVar, LispSymbol defaultVar,
+			@Nullable LispSymbol inlineVar, @Nullable String reducerRow) {
 
 		/** The table an inline (body) implementation is stored in. */
 		LispSymbol inlineTable() {
@@ -1407,6 +1408,13 @@ public final class ClojureLowering {
 	 * {@code IRef}, {@code java.util.Date}. A session's dispatchers all walk.
 	 */
 	final Set<String> walkingProtocols = new HashSet<>();
+
+	/**
+	 * The protocols whose dispatchers this pass handed the macro-time evaluator walking
+	 * after a walk or guard miss ({@link ClojureProtocolLowering#noteWalk}), by
+	 * method-table name.
+	 */
+	final Set<String> walkingAtMacroTime = new HashSet<>();
 
 	/**
 	 * The protocols an extension to a walked class reached after their dispatchers had

@@ -13732,11 +13732,18 @@ cases:
     # extend-protocol to clojure.lang.IPersistentMap, IPersistentVector, IPersistentSet and
     # java.util.Map, which also key the core kinds' rows, and to ISeq
     # (.kb/clojure-frontend.md "Collection interfaces"): a deftype or reify implementing one
-    # takes its row, an extension to none the Object row; satisfies? agrees. Every line is
-    # the oracle's (clj 1.12.6), on all four backends.
+    # takes its row, an extension to none the Object row; satisfies? agrees. A macro body
+    # dispatching on a list from the source takes the ISeq row too, the macro defined above
+    # the extension or below it, used in its namespace or another (core.match's
+    # emit-pattern; "Macros", the protocol walk at macro time). Every line is the oracle's
+    # (clj 1.12.6), on all four backends.
     source: |
       (ns iface-extend)
       (defprotocol Kind (kind [x]))
+      (defmulti kind-emit (fn [x] (kind x)))
+      (defmethod kind-emit :seq [x] `(quote ~x))
+      (defmethod kind-emit :default [x] x)
+      (defmacro kind-quote [v] (kind-emit v))
       (extend-protocol Kind
         clojure.lang.IPersistentMap (kind [_] :map)
         clojure.lang.IPersistentVector (kind [_] :vector)
@@ -13751,10 +13758,15 @@ cases:
       (deftype KindJMapT [m] java.util.Map (size [_] (count m)))
       (prn (kind (KindMapT. {})) (kind (KindVecT. [])) (kind (KindSeqT. [])) (kind (KindSetT. #{})) (kind (KindJMapT. {})) (kind (reify clojure.lang.Counted (count [_] 0))))
       (prn (kind #{1}) (satisfies? Kind (KindMapT. {})) (satisfies? Kind (KindVecT. [])))
+      (defmacro kind-at-expansion [v] (kind v))
+      (prn (kind-quote (kind-a b)) (kind-at-expansion (kind-a b)) (kind-at-expansion [1]))
       (in-ns 'user)
+      (prn (iface-extend/kind-quote (kind-a b)))
     expected: |
       :map :vector :seq :set :java-map :object
       :set true true
+      (kind-a b) :seq :vector
+      (kind-a b)
   - name: a-protocol-extended-to-an-interface-reaches-every-value-implementing-it
     # extend-protocol to an interface spelled like a core kind whose instances go past
     # that kind (.kb/clojure-frontend.md "Collection interfaces"): a record reaches

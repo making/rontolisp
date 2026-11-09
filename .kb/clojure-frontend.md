@@ -4092,7 +4092,18 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   protocol to hands it the walk again over every class so far
   (`ClojureProtocolLowering.putWalkTest`, 2026-10-12), so a macro body dispatching on a seq
   takes the `ISeq` row (hiccup's `render-html` while `html` expands; it took `Object`'s,
-  `("hi")` for `hi`). Deviations: no other statement runs at lower time, and what a body
+  `("hi")` for `hi`). The walk reaches only a dispatcher that asks it: a pass whose
+  dispatchers of the protocol lowered without it (no walk, or no guard for the interface:
+  "Collection interfaces") records a miss and starts over, and until then
+  `ClojureProtocolLowering.walkAtMacroTime` hands the evaluator the protocol's dispatchers
+  walking (2026-11-09), so the expansions of the rest of that pass take the row the next
+  pass's do. Before, they took `Object`'s: core.match's `emit-pattern` of a pattern list
+  (`(n :guard even?)`) answered `:default` and the pass failed on `unknown name: n` before
+  it could restart. A restart expands every call site again, so a body runs once per pass
+  and the last pass's expansion is the program's (a body printing prints once per pass, the
+  oracle once). Pin: clojure-spec
+  `a-protocol-extended-to-a-collection-interface-reaches-a-type-implementing-it`.
+  Deviations: no other statement runs at lower time, and what a body
   changes (a `swap!` of a program atom) the program never sees -- the oracle's `@seen`
   after two counting expansions is 2, here 0; a `defmethod` a program macro expands to
   is not replayed.

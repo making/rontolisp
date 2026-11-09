@@ -713,7 +713,7 @@ final class ClojureProtocolLowering {
 			arglists.put(method, List.copyOf(vectors));
 		}
 		String var = ClojureLowering.varSym(key).name();
-		return new ClojureLowering.ProtocolDef(methods, arities, arglists, new LispSymbol(var + "%methods"),
+		return new ClojureLowering.ProtocolDef(key, methods, arities, arglists, new LispSymbol(var + "%methods"),
 				new LispSymbol(var + "%default"), viaMetadata ? new LispSymbol(var + "%inline") : null,
 				REDUCER_ROWS.get(key));
 	}
@@ -752,7 +752,7 @@ final class ClojureProtocolLowering {
 					ClojureCollectionLowering.makeTable()));
 		}
 		for (String method : def.methods()) {
-			forms.add(dispatcherDefun(ctx, name, method, def));
+			forms.add(dispatcherDefun(ctx, method, def, walks(ctx, def)));
 		}
 		// the protocol's value is the oracle's map (its interface under :on and
 		// :on-interface, its methods' signatures under :sigs, the method map), the
@@ -943,10 +943,14 @@ final class ClojureProtocolLowering {
 	 * protocol declared {@code :extend-via-metadata true} looks in three places, in the
 	 * oracle's order: the inline table (a body implementation), the target's metadata
 	 * under the protocol-qualified method symbol (invoked like any {@code IFn}), then the
-	 * extension rows and the {@code Object} default.
+	 * extension rows and the {@code Object} default. {@code walking} asks the protocol
+	 * runtime's walk ahead of the {@code Object} row ({@link #walks}); without it, the
+	 * interface guard the pass before learned guards the walk ({@link #interfaceGuard}).
 	 */
-	static LispVal dispatcherDefun(ClojureLowering ctx, String protocol, String method,
-			ClojureLowering.ProtocolDef def) {
+	static LispVal dispatcherDefun(ClojureLowering ctx, String method, ClojureLowering.ProtocolDef def,
+			boolean walking) {
+		String ns = def.key().substring(0, def.key().indexOf('/'));
+		String protocol = def.key().substring(def.key().indexOf('/') + 1);
 		LispSymbol args = ctx.freshTemp();
 		LispSymbol tag = ctx.freshTemp();
 		LispSymbol miss = ctx.freshTemp();
@@ -966,7 +970,7 @@ final class ClojureProtocolLowering {
 				miss);
 		LispVal objectRow = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), target), miss, defaultRow);
-		if (walks(ctx, def)) {
+		if (walking) {
 			// a walked class's row ahead of the Object row, like the oracle's
 			// superclass chain and interfaces
 			LispSymbol up = ctx.freshTemp();
@@ -1013,7 +1017,7 @@ final class ClojureProtocolLowering {
 			LispSymbol direct = ctx.freshTemp();
 			LispSymbol viaMeta = ctx.freshTemp();
 			LispVal metaKey = ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"),
-					ClojureLowerUtil.idSym(ClojureLowering.varKey(ctx.currentNs, method)));
+					ClojureLowerUtil.idSym(ClojureLowering.varKey(ns, method)));
 			LispVal metaOrExtended = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 					ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(viaMeta,
 							ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-META-METHOD"),
@@ -1046,7 +1050,7 @@ final class ClojureProtocolLowering {
 						LispString.literal("wrong number of arguments passed to: " + method)),
 				lookup);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"),
-				ClojureLowering.varSym(ClojureLowering.varKey(ctx.currentNs, method)),
+				ClojureLowering.varSym(ClojureLowering.varKey(ns, method)),
 				ClojureLowerUtil.list(List.of(ClojureLowering.AMPERSAND_REST, args)), body);
 	}
 
@@ -2187,6 +2191,24 @@ final class ClojureProtocolLowering {
 		putWalkTest(ctx, walked, test);
 		if (!walks(ctx, def)) {
 			ctx.walkMisses.add(def.methodsVar().name());
+			walkAtMacroTime(ctx, def);
+		}
+	}
+
+	/**
+	 * Hands the macro-time evaluator the protocol's dispatchers walking, once this pass
+	 * learned (a walk or guard miss) that the ones it handed over cannot reach the class
+	 * just extended to. The pass starts over for the program's forms, but a macro body it
+	 * expands before then -- core.match's {@code syntax-tag} of a pattern list, its
+	 * {@code ISeq} row -- dispatches as the program will: the walk answers what the
+	 * guarded or plain dispatcher of the next pass does. Once per protocol and pass.
+	 */
+	private static void walkAtMacroTime(ClojureLowering ctx, ClojureLowering.ProtocolDef def) {
+		if (ctx.macroEvaluator == null || !ctx.walkingAtMacroTime.add(def.methodsVar().name())) {
+			return;
+		}
+		for (String method : def.methods()) {
+			ctx.macroEvaluator.define(dispatcherDefun(ctx, method, def, true));
 		}
 	}
 
@@ -2287,22 +2309,28 @@ final class ClojureProtocolLowering {
 			return;
 		}
 		ClojureInterfaces.HostInterface implemented = ClojureInterfaces.named(name);
-		if (implemented != null) {
-			guard(ctx, protocol, implemented.test());
-		}
+		boolean missed = implemented != null && guard(ctx, protocol, implemented.test());
 		if (reachesRecords(name)) {
 			ctx.recordGuards.add(protocol);
 			if (definesRecord(ctx)) {
-				guard(ctx, protocol, RECORD_P);
+				missed |= guard(ctx, protocol, RECORD_P);
 			}
+		}
+		if (missed) {
+			walkAtMacroTime(ctx, def);
 		}
 	}
 
-	/** A guard test the protocol's dispatchers must ask, a miss unless they do. */
-	private static void guard(ClojureLowering ctx, String protocol, String test) {
-		if (!ctx.interfaceGuards.getOrDefault(protocol, Set.of()).contains(test)) {
-			ctx.guardMisses.computeIfAbsent(protocol, ignored -> new LinkedHashSet<>()).add(test);
+	/**
+	 * A guard test the protocol's dispatchers must ask, a miss unless they do.
+	 * @return whether it is a miss
+	 */
+	private static boolean guard(ClojureLowering ctx, String protocol, String test) {
+		if (ctx.interfaceGuards.getOrDefault(protocol, Set.of()).contains(test)) {
+			return false;
 		}
+		ctx.guardMisses.computeIfAbsent(protocol, ignored -> new LinkedHashSet<>()).add(test);
+		return true;
 	}
 
 	private static boolean definesRecord(ClojureLowering ctx) {
