@@ -18,8 +18,13 @@ dynamic グローバルの `set!` と同じエラーです。`clojure.core` の�
 REPL の中だけです。
 
 それ以外の代入先はオラクル同様に拒否されます。ローカル・パラメータ・不変フィールドは
-`Cannot assign to non-mutable: ...`、ホストフィールドはまだサポートしていません
-（`java:` 表面にフィールド書き込みがありません）。
+`Cannot assign to non-mutable: ...` です。
+
+フィールド形式（`(.f x)`、`(.-f x)`、`(. x f)`）は、対象、値の順に評価した後、実行時に
+決まります。fn の `__methodImplCache` は値を受け取ってその値を返し、それ以外の Clojure の
+値はそのフィールドを持ちません（`No matching field found: f for class ...`。`nil` は
+`NullPointerException`）。ホストオブジェクトのフィールドと static フィールドは書き込みの
+実行時に名前を挙げて拒否します（`java:` 表面にフィールド書き込みがありません）。
 
 ```clojure
 (defprotocol Counter (bump! [c]) (total [c]))

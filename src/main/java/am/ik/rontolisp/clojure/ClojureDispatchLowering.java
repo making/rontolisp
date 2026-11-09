@@ -665,6 +665,10 @@ final class ClojureDispatchLowering {
 		// making none sheds (ClojureArms.Family.DELAY)
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol(ClojureLazyLowering.DELAY_P), one),
 				ClojureCollectionLowering.keywordForm("clojure.lang.Delay")));
+		// an unbound var's root answers its class's keyword (its marker is a cons): an
+		// arm a program making none sheds (ClojureArms.Family.UNBOUND)
+		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-UNBOUND-P"), one),
+				ClojureCollectionLowering.keywordForm("clojure.lang.Var$Unbound")));
 		// a decimal or a math context answers its class's keyword (its wrapper is a
 		// cons): an arm a program making neither sheds (ClojureArms.Family.DECIMAL)
 		branches

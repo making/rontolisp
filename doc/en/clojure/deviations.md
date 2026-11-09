@@ -325,9 +325,13 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   (functions, multimethods, protocol extensions, and a `def`'s value, built when the
   body first reads it), but no other top-level statement runs there, and what the body
   changes (a `swap!` of a program atom) the program never sees -- the oracle compiles
-  and runs in one process. A `defmethod` or protocol extension a program macro expands
-  to is not seen there. A call above a macro's definition is refused, and a program
-  macro's bare name has no value, like the oracle's. A `defmacro` of a special
+  and runs in one process. A var the body interns while it expands (`intern`, as
+  specter's inline caches do) is the program's from there on, but holds no root when the
+  program starts, as the oracle's AOT compile (`compile`) leaves it: `bound?` of it is
+  false, so code that fills an unbound var (specter's caches do) fills it. A
+  `defmethod` or protocol extension a program macro expands to is not seen there. A call
+  above a macro's definition is refused, and a program macro's bare name has no value,
+  like the oracle's. A `defmacro` of a special
   form (`if`, `do`, `let*`, `new`, ...), of a head the reader spells (`deref`,
   `syntax-quote`, `ns`, `in-ns`) is refused by name, where the oracle
   accepts it (and ignores it at call sites, for a special form). A core macro's bare
@@ -375,7 +379,8 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   atom (`Can't embed object in code`); a form that does not lower throws a
   `Compiler$CompilerException` with the lowering's words. In a macro body `eval` and
   `resolve` of a computed symbol run while the program lowers on every backend, and a
-  definition such an `eval`'d form makes exists only there. `resolve`
+  definition such an `eval`'d form makes runs only there: the program's var starts unbound,
+  as the oracle's AOT compile leaves it. `resolve`
   answers `nil` for a `clojure.core` var this front end lacks (the oracle's var) and for a
   var of a namespace built into the lowering (`clojure.string`); a quoted symbol resolves in
   the namespace the call lowers in, where the oracle reads `*ns*` when the call runs, and to
@@ -839,8 +844,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - The root `with-redefs` and `alter-var-root` replace is the var's value cell, so inside
   a `binding` of a `^:dynamic` var they change that binding (the oracle changes the root
   and the binding stays). A `clojure.core` var is refused by name, and so is a
-  multimethod, protocol method, record constructor or test that `alter-var-root` reaches;
-  in the REPL, so is a `defn` an earlier input defined without `^:redef`.
+  multimethod, record constructor or test that `alter-var-root` reaches; in the REPL, so
+  is a `defn` an earlier input defined without `^:redef` and a protocol method an earlier
+  input defined. A protocol method's replaced root reaches every call, where the oracle's
+  call site with a target implementing the protocol in its body calls the type's method
+  directly (schema's `s/defprotocol` adds `:inline` to defeat that).
+- A fn has no protocol method cache: `(.__methodImplCache f)` is `nil` and a `set!` of
+  it stores nothing. A `set!` of a record's declared field is
+  `No matching field found` (an `IllegalArgumentException`), the oracle's an
+  `IllegalAccessException` (`Can not set final ... field`).
 - `locking` holds a mutex kept per value, and the lock table keeps every value it was
   handed for the program's lifetime. The `NullPointerException` of a `nil` lock names
   the local `locklocal` (the oracle names a generated one).
@@ -937,7 +949,11 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - An argument's `:tag` -- its own, or a hinted `let` local's or parameter's -- picks the
   overload where the call's class is known before it runs, as the oracle's compiler does; a
   receiver's hint is dropped, so `(defn f [^ExecutorService e ^Runnable r] (.submit e r))`
-  calls by reflection, which reads no hint. A fn passed where `Callable` and another
+  calls by reflection, which reads no hint. Only its refusal follows the hint: where the
+  hinted class is a host class with one method of that name and count, a value that has no
+  such method (an unbound var's root, a keyword) is the oracle's `ClassCastException`, not
+  the reflector's `IllegalArgumentException`; a string or number is still called by
+  reflection. A fn passed where `Callable` and another
   interface both take it is a `Callable`: `(.submit e (fn [] 1))` answers a future of `1`
   where the oracle refuses an unhinted call on a typed receiver (`More than one matching
   method found: submit`), and reflectively on a `ScheduledThreadPoolExecutor` picks

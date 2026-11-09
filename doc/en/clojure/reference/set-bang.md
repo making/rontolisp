@@ -18,8 +18,14 @@ always bound, so `set!` assigns them anywhere, like the oracle -- `*ns*`, `*file
 `*1` included. `*repl*` is bound only in the REPL.
 
 Any other target is refused like the oracle: a local, a parameter or an immutable
-field with `Cannot assign to non-mutable: ...`; a host field is not supported yet
-(the `java:` surface has no field write).
+field with `Cannot assign to non-mutable: ...`.
+
+A field form -- `(.f x)`, `(.-f x)`, `(. x f)` -- is decided when it runs, after the
+target and then the value evaluate: a fn's `__methodImplCache` takes the value and
+answers it, and any other Clojure value has no such field
+(`No matching field found: f for class ...`; `nil` is a `NullPointerException`). A host
+object's field and a static field are refused by name when the write runs (the `java:`
+surface has no field write).
 
 ```clojure
 (defprotocol Counter (bump! [c]) (total [c]))

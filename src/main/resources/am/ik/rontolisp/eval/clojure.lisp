@@ -2595,6 +2595,8 @@
    ((rontolisp::%clojure-bd-value-p x) (rontolisp::%clojure-bd-class-name x))
    ;; a class designator: an arm of the class-designator family
    ((rontolisp::%clojure-designator-p x) "java.lang.Class")
+   ;; an unbound var's root: an arm of the unbound-root family
+   ((rontolisp::%clojure-unbound-p x) "clojure.lang.Var$Unbound")
    ((and (consp x) (keywordp (car x))) "java.lang.Object")
    ((consp x) "clojure.lang.PersistentList")
    ((hash-table-p x)
@@ -2623,6 +2625,18 @@
        (format nil "NullPointerException: ~A of nil" method)))
   (rontolisp::%clojure-illegal-argument-exception
    (format nil "~A~A" words (rontolisp::%clojure-class-name-of x))))
+
+;; Refuse an instance call of METHOD on X, a value no arm answers, where the
+;; call casts its receiver to the host class CLASS-NAME (the hint the oracle's
+;; compiler resolved the method against): the oracle's ClassCastException;
+;; nil is its NullPointerException, as for %clojure-no-method.
+(defun rontolisp::%clojure-cast-failure (x class-name method)
+  (if (null x)
+      (rontolisp::%clojure-null-pointer-exception
+       (format nil "NullPointerException: ~A of nil" method)))
+  (rontolisp::%clojure-class-cast-exception
+   (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
+                " cannot be cast to class " class-name)))
 
 ;; Whether X is a record or deftype declaring FIELD (a keyword): its declared
 ;; list holds the immutable fields only, since a mutable one is private.

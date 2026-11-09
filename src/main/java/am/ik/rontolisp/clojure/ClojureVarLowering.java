@@ -237,7 +237,7 @@ final class ClojureVarLowering {
 				// local holds the cell object itself
 				return ctx.symOf(name);
 			}
-			throw new LispReadException("Unable to resolve var: " + name + " in this context");
+			throw new LispReadException("Unable to resolve var: " + ClojureLowering.varName(name) + " in this context");
 		}
 		return coreVarOf(ctx, core);
 	}
@@ -557,14 +557,14 @@ final class ClojureVarLowering {
 	 * validates and notifies like the oracle's {@code bindRoot} where the var is guarded,
 	 * and is the plain {@code setq} otherwise (an {@code if} arm the strip folds back). A
 	 * var is a value cell here: a {@code def}'s, a {@code declare}'s, and a
-	 * {@code defn}'s when the var is redefinable
-	 * ({@link ClojureLowering#redefinable(String, LispVal)}), which every {@code defn} a
+	 * {@code defn}'s or a protocol method's when the var is redefinable
+	 * ({@link ClojureLowering#redefinable(String, LispVal)}), which every one a
 	 * {@code with-redefs} names is: the pre-scan finds the name, or the program lowers
 	 * again ({@link ClojureLowering#redefMisses}). A session cannot lower an earlier
 	 * input again, so there a {@code defn} it lowered as a direct call is refused by
 	 * name. A local, an unknown name, a macro, a {@code clojure.core} var (its verbs
-	 * lower inline) and a function no {@code defn} defined (a multimethod, a protocol
-	 * method, a test) are refused too. The body sits behind the {@code try} barrier.
+	 * lower inline) and a function no {@code defn} defined (a multimethod, a test) are
+	 * refused too. The body sits behind the {@code try} barrier.
 	 */
 	static LispVal withRedefsOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2,
@@ -627,7 +627,7 @@ final class ClojureVarLowering {
 	 */
 	private static @Nullable String redefTarget(ClojureLowering ctx, String name) {
 		if (ctx.isLocal(name)) {
-			throw new LispReadException("Unable to resolve var: " + name + " in this context");
+			throw new LispReadException("Unable to resolve var: " + ClojureLowering.varName(name) + " in this context");
 		}
 		String core = ctx.coreSpelling(name);
 		String key = core != null ? null : ctx.lookupVar(name);
@@ -636,7 +636,7 @@ final class ClojureVarLowering {
 				throw new LispReadException("with-redefs of a clojure.core var is not supported: "
 						+ (core != null ? core : name) + " lowers inline at every call");
 			}
-			throw new LispReadException("Unable to resolve var: " + name + " in this context");
+			throw new LispReadException("Unable to resolve var: " + ClojureLowering.varName(name) + " in this context");
 		}
 		ClojureLowering.Kind kind = ctx.globals.get(key);
 		if (kind == ClojureLowering.Kind.MACRO) {
@@ -649,7 +649,7 @@ final class ClojureVarLowering {
 			// the program already lowers again with the var redefinable, and its
 			// definition still calls directly: no defn or def defined it
 			throw new LispReadException("with-redefs of " + key
-					+ " is not supported: only a def or defn var can be redefined, not a multimethod, protocol method, record constructor or test");
+					+ " is not supported: only a def or defn var can be redefined, not a multimethod, record constructor or test");
 		}
 		if (ctx.incremental) {
 			throw new LispReadException("with-redefs of " + key
@@ -1046,22 +1046,28 @@ final class ClojureVarLowering {
 	 * start ({@link #unboundRootInits}) and the site lowers to nothing: a definition
 	 * above the site has replaced it by then, and one below it still finds it, like the
 	 * oracle's interned var. A session cannot place anything ahead of an earlier buffer,
-	 * so its site stores the root when the cell is still unbound.
+	 * so its site stores the root when the cell is still unbound. The macro-time image's
+	 * cell takes the root at once, so a macro body reading the var there sees it unbound
+	 * too.
 	 * @param ctx the hub
 	 * @param key the var key
 	 * @return the session's store, or null for a file
 	 */
 	static @Nullable LispVal unboundRoot(ClojureLowering ctx, String key) {
 		ctx.unboundCapable.add(key);
+		LispSymbol var = ClojureLowering.varSym(key);
+		LispVal store = ClojureLowerUtil.list(ClojureLowerUtil.sym("unless"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("boundp"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), var)),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var, unboundOf(key)));
+		if (ctx.macroEvaluator != null) {
+			ctx.macroEvaluator.define(store);
+		}
 		if (!ctx.incremental) {
 			ctx.unboundRoots.add(key);
 			return null;
 		}
-		LispSymbol var = ClojureLowering.varSym(key);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("unless"),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("boundp"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), var)),
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), var, unboundOf(key)));
+		return store;
 	}
 
 	/** The stores a file's program starts with: each unbound var's root into its cell. */

@@ -309,7 +309,11 @@
  （関数、マルチメソッド、プロトコル拡張、そして本体が最初に読むときに作られる `def`
  の値）は見えますが、それ以外のトップレベル文はそこでは実行されず、本体が変えたもの
  （プログラムの atom への `swap!`）はプログラムからは見えません。oracle はコンパイルと
- 実行を一つのプロセスで行います。プログラムのマクロが展開した `defmethod` やプロトコル
+ 実行を一つのプロセスで行います。本体が展開中に intern した var（specter のインライン
+ キャッシュがするような `intern`）はそこから先プログラムの var になりますが、プログラムの
+ 開始時にはルートを持ちません。oracle の AOT コンパイル（`compile`）が残す状態と同じです。
+ その var の `bound?` は false なので、束縛のない var を埋めるコード（specter のキャッシュ
+ がそうです）はそれを埋めます。プログラムのマクロが展開した `defmethod` やプロトコル
  拡張はそこでは見えません。定義より上での呼び出しは拒否され、プログラム定義のマクロのむき出しの名前は oracle と同じく値を持ちません。special
  form（`if`、`do`、`let*`、`new` など）、リーダーが綴る先頭（`deref`、
  `syntax-quote`、`ns`、`in-ns`）の `defmacro` は名前を挙げて拒否されます。oracle はこれを
@@ -357,7 +361,8 @@
  `Can't embed object in code` で拒否します）。lower できないフォームは lower の文言の
  `Compiler$CompilerException` を投げます。マクロ本体の中の `eval` と計算したシンボルの
  `resolve` はどのバックエンドでもプログラムの lower 中に動き、そこで `eval` したフォームが
- 作る定義は lower 中にだけ存在します。`resolve` は、このフロントエンドにない `clojure.core` の
+ 作る定義は lower 中にだけ実行されます。プログラムの var は oracle の AOT コンパイルが
+ 残す状態と同じく、束縛のない状態で始まります。`resolve` は、このフロントエンドにない `clojure.core` の
  var（oracle は var）と、lower に組み込まれた名前空間（`clojure.string`）の var に対して
  `nil` を返します。quote したシンボルは呼び出しが lower される名前空間で解決され（oracle は
  呼び出しの実行時の `*ns*` を読みます）、呼び出しより下の定義にも解決されます。
@@ -790,8 +795,15 @@
 - `with-redefs` と `alter-var-root` が置き換えるルートは var の値セルなので、
   `^:dynamic` な var の `binding` の内側では、その var の束縛を変更します（オラクルでは
   ルートが変わり、束縛はそのままです）。`clojure.core` の var は名前を挙げて拒否し、
-  `alter-var-root` が届いたマルチメソッド、プロトコルメソッド、レコードのコンストラクタ、
-  テストも拒否します。REPL では、以前の入力が `^:redef` なしで定義した `defn` を拒否します。
+  `alter-var-root` が届いたマルチメソッド、レコードのコンストラクタ、テストも拒否します。
+  REPL では、以前の入力が `^:redef` なしで定義した `defn` と、以前の入力が定義した
+  プロトコルメソッドを拒否します。プロトコルメソッドの置き換えたルートはすべての呼び出しに
+  届きます。オラクルでは、本体でプロトコルを実装した型が対象の呼び出しは型のメソッドを
+  直接呼びます（schema の `s/defprotocol` はこれを避けるため `:inline` を付けます）。
+- fn はプロトコルメソッドのキャッシュを持ちません。`(.__methodImplCache f)` は `nil` で、
+  その `set!` は何も保存しません。レコードの宣言済みフィールドへの `set!` は
+  `No matching field found`（`IllegalArgumentException`）で、オラクルは
+  `IllegalAccessException`（`Can not set final ... field`）です。
 - `locking` のロックは値ごとに保持するミューテックスで、ロック表は渡された値を
   プログラムの実行中ずっと保持します。`nil` をロックしたときの
   `NullPointerException` のメッセージはローカル名 `locklocal` を示します（オラクルは
@@ -896,7 +908,11 @@
 - 引数の `:tag`（引数自身のもの、またはヒント付きの `let` ローカルやパラメータのもの）は、
   呼び出しのクラスが実行前にわかる場合、オラクルのコンパイラと同じくオーバーロードを選びます。
   receiver のヒントは捨てるため、`(defn f [^ExecutorService e ^Runnable r] (.submit e r))`
-  はヒントを読まないリフレクションで呼びます。`Callable` と別のインターフェースの両方が
+  はヒントを読まないリフレクションで呼びます。ヒントに従うのは拒否だけです。ヒントのクラスが
+  その名前と引数の数のメソッドを一つだけ持つホストクラスなら、そのメソッドを持たない値
+  （束縛のない var のルート、キーワード）はリフレクションの `IllegalArgumentException` では
+  なくオラクルの `ClassCastException` になります。文字列や数値は従来どおりリフレクションで
+  呼びます。`Callable` と別のインターフェースの両方が
   受け取れる位置の fn は `Callable` です。`(.submit e (fn [] 1))` は `1` の future を答えます。
   オラクルは型のわかる receiver に対するヒントなしの呼び出しを拒否し
   （`More than one matching method found: submit`）、`ScheduledThreadPoolExecutor` に対する

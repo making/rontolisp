@@ -71,9 +71,9 @@ public interface ClojureMacroEvaluator {
 	}
 
 	/**
-	 * The lowering's half of the macro-time {@code eval}, {@code resolve} and macro
-	 * scopes: each takes a value as the run-time library holds it and answers the core
-	 * form to evaluate.
+	 * The lowering's half of the macro-time {@code eval}, {@code resolve}, macro scopes
+	 * and {@code intern}: each takes a value as the run-time library holds it, and the
+	 * first four answer the core form to evaluate.
 	 */
 	interface Lowering {
 
@@ -113,6 +113,14 @@ public interface ClojureMacroEvaluator {
 		 * @return the quoted scope
 		 */
 		LispVal macroScopeForm(LispVal namespace);
+
+		/**
+		 * Hears of a var this environment's {@code intern} found or made -- a macro
+		 * body's inline cache, made while the call site expands: a name below that
+		 * resolves to no definition of the program resolves to it.
+		 * @param var the var, as the run-time library holds it
+		 */
+		void interned(LispVal var);
 
 	}
 
