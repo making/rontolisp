@@ -1460,8 +1460,19 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   `client_encoding SQL_ASCII` and desyncs the connection on a non-ASCII parameter. Harness: a
   Testcontainers `postgres:17-alpine` with ONE ROLE PER METHOD so a broken rung cannot fall back.
   **The component leg connects to the server's network ALIAS** (since 2026-11-06), so it also pins
-  the component's name lookup (`.kb/tcp-sockets.md`, "Inside sockets.lisp"). Scram connect cost is the recorded baseline in the e2e (regression
-  = a change to this file).
+  the component's name lookup (`.kb/tcp-sockets.md`, "Inside sockets.lisp").
+  - **What a SCRAM login costs** (the server's `authentication=` under PostgreSQL 18
+    `log_connections=all`, `examples/db/postgres-hello.lisp`, 2026-11-09, Xeon E5-2697A v4): the
+    interpreter ~260 ms (the native kernel above); `--component` under wasmtime 49 0.40-0.44 s,
+    1.09-1.14 s while the fusion declined a settled defun tail, 2026-09-19 to 2026-11-09
+    ([wasm-int-fusion.md](wasm-int-fusion.md)); a fresh JVM class 4.1-4.3 s, JIT tier-up
+    ([jvm-int-fusion.md](jvm-int-fusion.md)). On macOS arm64, before that fix, the same three:
+    81 ms, 345 ms, 1.38 s.
+    What the component still spends is ironclad's own PBKDF2 round, ~94 us of it: four
+    compressions at ~12-15 us where two would do (`reinitialize-instance` re-derives the HMAC pads
+    each round), and ~45 us of CLOS re-init, digest copies and finalization -- `produce-digest`
+    alone ~6 us past its compression, `sha256-regs-digest` 1.8 us for 32 bytes, the pad loop's 56
+    stores 1.3 us (`.todo/417`).
 - **alexandria 1.0.1** — `AlexandriaE2eTest` (all four); vendored UNMODIFIED. **The exercise IS
   `examples/asdf/alexandria-demo.lisp` verbatim — keep the two in sync.** ci-spec
   `last-with-a-count` / `every-some-over-many-sequences` / `coerce-to-a-computed-result-type` /

@@ -17556,6 +17556,9 @@ class JvmLispCompilerTest {
 			(defun rol32 (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))
 			(print (mod32+ 4294967295 10))
 			(print (rol32 2882400001 8))
+			(defun mix32 (x y) (mod32+ (rol32 x 8) y))
+			(print (mix32 2882400001 4294967295))
+			(print (multiple-value-list (mod32+ (values 4294967295 7) 10)))
 			(let ((s 0))
 			  (dotimes (i 64) (setq s (mod32+ s (rol32 (+ i 12345) (mod i 31)))))
 			  (print s))
@@ -17635,6 +17638,8 @@ class JvmLispCompilerTest {
 	private static final String INT_FUSION_EXPECTED = """
 			9
 			3454992811
+			3454992810
+			(9)
 			2147508531
 			9223372037000250000
 			9223372037000250001
@@ -17820,7 +17825,10 @@ class JvmLispCompilerTest {
 		// it answers what the generic per-op path answers, bit for bit, across the
 		// shapes it takes and the bails it survives -- and that --optimize=size (which
 		// declines the speed-for-size trades) compiles the same program to different
-		// bytes, i.e. the default build really did emit the fused methods.
+		// bytes, i.e. the default build really did emit the fused methods. Its
+		// multiple-value-list settles every defun tail, so mod32+ and rol32 arrive
+		// wrapped in the channel's clear (LispMacroExpander.clearedForm): mix32 still
+		// calls neither, and the fused call clears what (values ... 7) published.
 		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary
 			.process(LispReader.readAllFromString(INT_FUSION_PROGRAM));
 		byte[] fast = JvmLispCompiler.builder()
@@ -17836,6 +17844,8 @@ class JvmLispCompilerTest {
 		assertThat(small).isNotEqualTo(fast);
 		assertThat(declaredMethodNames(fast)).anyMatch(name -> name.startsWith("_fx$"));
 		assertThat(declaredMethodNames(small)).noneMatch(name -> name.startsWith("_fx$"));
+		assertThat(ownCallsIn(fast, "MIX32", "MOD32+") + ownCallsIn(fast, "MIX32", "ROL32")).isZero();
+		assertThat(ownCallsIn(small, "MIX32", "MOD32+") + ownCallsIn(small, "MIX32", "ROL32")).isEqualTo(2);
 		assertThat(runClass(fast)).isEqualTo(INT_FUSION_EXPECTED);
 		assertThat(runClass(small)).isEqualTo(INT_FUSION_EXPECTED);
 	}

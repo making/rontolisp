@@ -110,7 +110,15 @@ computed divisor.
   never under `--dynamic`) or a let-bound local function (`Ctx.localIntLambdas`, `JvmLetCompiler`),
   so a tree spans `mod32+`/`rol32`/`sigma0`. A parameter used twice SHARES its argument's node; a
   failed substitution rolls back the leaves it registered. A body that is exactly `(aref P I)` maps
-  onto an ArefLeaf.
+  onto an ArefLeaf. A defun tail settled for the multiple-value channel is read through its clear,
+  and a root-position call (`tryCompileDefunCall`) clears after its tree -- the wasm twin's rule
+  and its 2026-09-19 to 2026-11-09 regression ([wasm-int-fusion.md](wasm-int-fusion.md)); pinned
+  here by `JvmLispCompilerTest.fusedIntegerExpressionTreesMatchTheGenericPath` (`MIX32` calls
+  neither `MOD32+` nor `ROL32`). Measured 2026-11-09 (Xeon E5-2697A v4, Oracle GraalVM 25), the
+  ironclad PBKDF2 x4096 of that file, best warm run: 350-500 ms declined, 136 ms substituted. The
+  FIRST run went 1.4 s -> 1.7 s under the Graal JIT (C2: no change; C1 only: 1.9 s -> 0.9 s), the
+  class carrying 389 `_fx$` methods against 172 to tier up; a PostgreSQL SCRAM login in a fresh
+  `java -cp . PgHello` 3.4 s -> 4.2 s.
 - **Packed aref leaves** (whenever `Ctx.usesArrays`): a rank-1 `(aref a i)` reads raw from either
   the bare `long[]` packed integer vector (elements from slot 1, past the width header; only under
   `Ctx.usesIntArray`) or the general array's length-6 header over a flat `long[]` (elements from

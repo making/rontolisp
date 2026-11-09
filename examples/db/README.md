@@ -198,9 +198,10 @@ Three things are worth reading the source for:
   options.
 - **SCRAM-SHA-256** completes on all backends well within PostgreSQL's default
   60-second `authentication_timeout`. The interpreter runs its 4096-round PBKDF2
-  on a native kernel, so the handshake costs milliseconds there; the compiled
-  backends run ironclad's own code and finish in seconds. `trust`, `password`
-  and `md5` auth are unaffected.
+  on a native kernel, in milliseconds; the compiled backends run ironclad's own
+  code: a fraction of a second on the WASM component, a second or more in a
+  freshly started JVM (JIT warm-up). `trust`, `password` and `md5` auth are
+  unaffected.
 - **TLS is interpreter/JVM only.** A connection that negotiates SSL cannot work
   under WASM; use plain TCP (the default `:no`).
 - **wasmCloud addressing.** wash routes loopback to a per-workload virtual

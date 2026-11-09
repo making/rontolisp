@@ -930,17 +930,10 @@ final class JvmExprCompiler {
 				if (LispNames.isCarCdrComposition(sym.name())) {
 					JvmExprCompiler.compileExpr(LispMacroExpander.expandCarCdrComposition(cons), ctx, className);
 				}
-				// A ROOT-position call to a fusion-inlinable defun ((mod32+ a b) as
-				// a setf value or argument) fuses like a call inside a tree would:
-				// classify substitutes the body, so the site pays one outlined call
-				// instead of a boxed call whose body re-guards its own arguments
-				// (.kb/jvm-int-fusion.md). Anything else declines with nothing
-				// emitted and takes the ordinary call path.
-				else if (ctx.inlinableDefuns.containsKey(sym.name())
-						&& JvmIntFusionCompiler.tryCompile(cons, ctx, className)) {
-					// fused
-				}
-				else {
+				// A ROOT-position call to a fusion-inlinable defun fuses like a call
+				// inside a tree would (.kb/jvm-int-fusion.md); anything else takes
+				// the ordinary call path.
+				else if (!JvmIntFusionCompiler.tryCompileDefunCall(cons, ctx, className)) {
 					JvmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx, className);
 				}
 			}
@@ -2088,16 +2081,7 @@ final class JvmExprCompiler {
 				// A funcall of a fusion-eligible flet lambda substitutes its body
 				// into a fused tree (.kb/jvm-int-fusion.md); anything else takes
 				// the ordinary dispatch.
-				if (JvmIntFusionCompiler.tryCompileLocalCall(cons, ctx, className)) {
-					// The substituted body is an integer tree, one value; the
-					// lambda's own tail would have cleared what an argument
-					// published (LispMacroExpander.settleFunctionBody), so the
-					// fused call clears it here.
-					if (ctx.mvChannel != null) {
-						ctx.mvChannel.emitClear(ctx);
-					}
-				}
-				else {
+				if (!JvmIntFusionCompiler.tryCompileLocalCall(cons, ctx, className)) {
 					JvmFunctionCallCompiler.compileFuncall(cons, ctx, className);
 				}
 			}

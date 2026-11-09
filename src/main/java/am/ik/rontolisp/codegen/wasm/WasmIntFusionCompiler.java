@@ -598,7 +598,38 @@ final class WasmIntFusionCompiler {
 	 */
 	static boolean tryCompileLocalCall(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		return cons.cdr() instanceof LispCons fnCell && fnCell.car() instanceof LispSymbol fvar
-				&& ctx.localIntLambdas.containsKey(fvar.name()) && tryCompile(cons, ctx);
+				&& ctx.localIntLambdas.containsKey(fvar.name()) && tryCompileCall(cons, ctx);
+	}
+
+	/**
+	 * The direct-call entry point: compiles {@code (name args...)} of a fusion-inlinable
+	 * defun as a fused tree (the substituted body becomes the root), or returns
+	 * {@code false} (emitting nothing) for anything else.
+	 */
+	static boolean tryCompileDefunCall(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		return cons.car() instanceof LispSymbol name && ctx.inlinableDefuns.containsKey(name.name())
+				&& tryCompileCall(cons, ctx);
+	}
+
+	/**
+	 * A call fused with its substituted body as the root. The body is an integer tree,
+	 * one value; the function's own settled tail would have cleared what an argument
+	 * published -- a lambda's as its compiler settles it, a defun's as
+	 * {@link #inlinableBody} reads it without that clear -- so the fused call clears the
+	 * channel here.
+	 */
+	private static boolean tryCompileCall(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		if (!tryCompile(cons, ctx)) {
+			return false;
+		}
+		Integer spillGlobal = ctx.globalIndices.get(LispNames.MV_SPILL);
+		if (spillGlobal != null) {
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+			ctx.writer.write(Instruction.SET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(spillGlobal);
+		}
+		return true;
 	}
 
 	/**
@@ -831,8 +862,19 @@ final class WasmIntFusionCompiler {
 				return false;
 			}
 		}
-		LispVal body = singleBodyExpr(defun.bodyExprs());
+		LispVal body = inlinableBody(defun);
 		return body != null && isClosedIntTree(body, defun.paramNames());
+	}
+
+	/**
+	 * The expression a call substitutes for a defun: its single body expression, read
+	 * through the clear a program with a multiple-value operator settles every defun tail
+	 * with ({@link LispMacroExpander#clearedForm}); the fused call clears instead
+	 * ({@link #tryCompileCall}).
+	 */
+	private static @Nullable LispVal inlinableBody(WasmLispCompiler.DefunDecl defun) {
+		LispVal body = singleBodyExpr(defun.bodyExprs());
+		return body == null ? null : LispMacroExpander.clearedForm(body);
 	}
 
 	// The single non-declare body expression, or null when the body has none or more
@@ -1043,7 +1085,7 @@ final class WasmIntFusionCompiler {
 		}
 		WasmLispCompiler.DefunDecl inlinable = ctx.inlinableDefuns.get(op);
 		if (inlinable != null && arity == inlinable.paramNames().size() && depth < MAX_INLINE_DEPTH) {
-			LispVal body = java.util.Objects.requireNonNull(singleBodyExpr(inlinable.bodyExprs()));
+			LispVal body = java.util.Objects.requireNonNull(inlinableBody(inlinable));
 			Node substituted = substituteCall(inlinable.paramNames(), body, parts.subList(1, parts.size()), ctx, env,
 					site, depth, op);
 			if (substituted != null) {
