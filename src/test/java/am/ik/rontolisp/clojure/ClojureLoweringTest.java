@@ -3461,6 +3461,13 @@ class ClojureLoweringTest {
 		assertThat(loweredWithMacros(
 				"(when true (defn mu-helper [x] (list 'inc x))) (defmacro mu-m [x] (mu-helper x)) (mu-m 1)"))
 			.endsWith("(RONTOLISP::%CLOJURE-BD-+ 1 1)");
+		// a statement is no wrapper: a definition inside a fn it calls runs only when
+		// the fn does, and a local it assigns defines nothing, so the statement never
+		// runs at lower time and the body reads the atom as no statement touched it
+		assertThat(loweredWithMacros("(defn mu-call [f] (f)) (def mu-seen (atom 0))"
+				+ " (prn (mu-call #(do (swap! mu-seen inc) (dissoc (identity {:c 3}) :c))))"
+				+ " (defmacro mu-count [] @mu-seen) (mu-count)"))
+			.endsWith("0");
 	}
 
 	@Test

@@ -1210,7 +1210,8 @@ resolved `Method.invoke` is the cheap part.
   loader (j38, 2026-11-09: the Clojure library's `instance?` of a dependency's class,
   `%clojure-host-instance-p`'s `(java:static "java.lang.Class" "forName" name)`, was false on
   the interpreter and true on the JVM class, whose own loader holds the jar). A miss throws
-  the `ClassNotFoundException` the reflective call threw. Pin:
+  the `ClassNotFoundException` the reflective call threw; a program over rontolisp's own
+  loader (a native image, which defines no class at run time) keeps the reflective call. Pin:
   `ClojureProjectNamespacesTest#aDependencysPlainJavaClassesRunAsTheHostsOnTheInterpreterAndTheJvm`
   (`instance? Cell`).
 - Pins: `JavaInteropTest#aClassOnTheProgramsJavaClassPathIsReachable`,

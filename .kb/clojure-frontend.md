@@ -4636,7 +4636,13 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   `ClojureMacroLowering.handOver` hands over such a datum as one form (its lowered
   `let*`/`let`/`labels`/`if`, run in the macro-time image) rather than only the
   definition forms in it, so the run makes the closure; `holdsDefinition` finds the
-  definition nested in the lowered tree. A top-level `do` is still its members, one datum
+  definition nested in the lowered tree -- one the datum's run makes: a `lambda`'s body and
+  a `labels`/`flet` function's run only when called, and a `setq` of a name a `let`/`let*`
+  of the datum binds assigns a local (j38, 2026-11-09: a statement handing a fn to a call,
+  `(prn (rh #(dissoc ... :members)))`, was a wrapper through `dissoc`'s walk, so it ran at
+  lower time, and in the native binary clojure-spec's `clojure.reflect` case reached
+  `Class.getSuperclass`, which its image does not register; the corpus dump died there,
+  unseen since develop's native job was skipped). A top-level `do` is still its members, one datum
   at a time, so its statements stay out of the image. A wrapper-defined `defmacro` cannot
   expand through its datum: `ctx.nestedMacros` records it, `defmacroForms` emits
   `(setq c%name%macro-closure <expander>)` inside the wrapper (and evaluates one over the

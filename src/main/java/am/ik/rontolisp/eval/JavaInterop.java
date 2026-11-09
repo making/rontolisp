@@ -331,15 +331,16 @@ final class JavaInterop {
 
 	/**
 	 * A method invoked for the program. {@code Class.forName(String)} is
-	 * caller-sensitive, and the caller is the program: its class loader -- the jars of
-	 * its dependencies included -- finds the class, as a compiled program's own loader
-	 * does ({@code instance?} of a dependency's class), where the reflective call would
-	 * ask rontolisp's loader.
+	 * caller-sensitive, and the caller is the program: where its class loader is its own
+	 * -- the jars of its dependencies on it -- that loader finds the class, as a compiled
+	 * program's own loader does ({@code instance?} of a dependency's class), where the
+	 * reflective call would ask rontolisp's loader. A program over rontolisp's own loader
+	 * (a native image, which loads no class at run time) keeps the reflective call.
 	 */
 	private static @Nullable Object invokeMethod(Method method, @Nullable Object target, @Nullable Object[] args,
 			Caller caller) throws ReflectiveOperationException {
 		if (method.getDeclaringClass() == Class.class && method.getName().equals("forName") && args.length == 1
-				&& args[0] instanceof String name) {
+				&& args[0] instanceof String name && caller.classes().loader() != JavaInterop.class.getClassLoader()) {
 			try {
 				return Class.forName(name, true, caller.classes().loader());
 			}

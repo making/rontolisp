@@ -510,34 +510,90 @@ final class ClojureMacroLowering {
 	}
 
 	/**
-	 * Whether a lowered form makes a definition anywhere inside it: a {@code defun}, a
-	 * var store ({@code setq}, {@code defparameter}, a {@code %clojure-var-store}), a
-	 * {@code declaim}. Quoted data and a {@code function} form hold none; anything else
-	 * is searched member by member.
+	 * Whether a lowered form makes a definition when it runs: a {@code defun}, a
+	 * {@code declaim}, a var store ({@code defparameter}, a {@code %clojure-var-store}, a
+	 * {@code setq} of a variable no binding of the form around it binds). Quoted data
+	 * holds none, and neither does a function: a {@code lambda}'s body and a local
+	 * function's run when they are called, not when the form runs (until 2026-11-09 a
+	 * statement calling a fn that assigns a local -- {@code dissoc}'s walk -- was a
+	 * wrapper, so it ran at lower time, where the native binary refused the reflection it
+	 * reached). Anything else is searched member by member, a {@code let}'s body with its
+	 * names bound.
 	 * @param form the lowered form
 	 * @return whether it defines a var
 	 */
 	private static boolean holdsDefinition(LispVal form) {
+		return holdsDefinition(form, Set.of());
+	}
+
+	private static boolean holdsDefinition(LispVal form, Set<String> locals) {
 		List<LispVal> items = ClojureLowerUtil.items(form);
 		if (items == null || items.isEmpty() || !(items.get(0) instanceof LispSymbol head)) {
 			return false;
 		}
 		switch (head.name().toUpperCase(java.util.Locale.ROOT)) {
-			case "DEFUN", "DECLAIM", "DEFPARAMETER", "SETQ", "RONTOLISP::%CLOJURE-VAR-STORE" -> {
+			case "DEFUN", "DECLAIM", "DEFPARAMETER", "RONTOLISP::%CLOJURE-VAR-STORE" -> {
 				return true;
 			}
-			case "QUOTE", "FUNCTION" -> {
+			case "SETQ" -> {
+				for (int i = 1; i < items.size(); i += 2) {
+					if (items.get(i) instanceof LispSymbol var && !locals.contains(var.name())
+							|| i + 1 < items.size() && holdsDefinition(items.get(i + 1), locals)) {
+						return true;
+					}
+				}
+				return false;
+			}
+			case "QUOTE", "FUNCTION", "LAMBDA" -> {
+				return false;
+			}
+			case "LET", "LET*" -> {
+				return items.size() > 1 && letHoldsDefinition(items, head.name().endsWith("*"), locals);
+			}
+			case "LABELS", "FLET" -> {
+				// the local functions run when called; the body runs with the form
+				for (LispVal member : items.subList(Math.min(2, items.size()), items.size())) {
+					if (holdsDefinition(member, locals)) {
+						return true;
+					}
+				}
 				return false;
 			}
 			default -> {
 				for (LispVal member : items.subList(1, items.size())) {
-					if (holdsDefinition(member)) {
+					if (holdsDefinition(member, locals)) {
 						return true;
 					}
 				}
 				return false;
 			}
 		}
+	}
+
+	/**
+	 * {@link #holdsDefinition} of a {@code let} or {@code let*}: an init in the scope it
+	 * runs in (a {@code let*}'s sees the names bound ahead of it), the body with every
+	 * name bound.
+	 */
+	private static boolean letHoldsDefinition(List<LispVal> items, boolean sequential, Set<String> locals) {
+		Set<String> bound = new HashSet<>(locals);
+		List<LispVal> bindings = ClojureLowerUtil.items(items.get(1));
+		for (LispVal binding : bindings == null ? List.<LispVal>of() : bindings) {
+			List<LispVal> pair = ClojureLowerUtil.items(binding);
+			if (pair != null && pair.size() > 1 && holdsDefinition(pair.get(1), sequential ? bound : locals)) {
+				return true;
+			}
+			LispVal name = pair != null && !pair.isEmpty() ? pair.get(0) : binding;
+			if (name instanceof LispSymbol symbol) {
+				bound.add(symbol.name());
+			}
+		}
+		for (LispVal member : items.subList(2, items.size())) {
+			if (holdsDefinition(member, bound)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
