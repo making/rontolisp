@@ -508,6 +508,8 @@ and a literal `symbol-function` / `fdefinition` with the old definition on JVM, 
   decides, and `LetBoundDesignators` leaves the name alone. Both fusions substitute an integer
   one-liner with a cell under a check of it, calling the entry once it is filled
   ([wasm-int-fusion.md](wasm-int-fusion.md), "A name with a cell"; [jvm-int-fusion.md](jvm-int-fusion.md)).
+  On wasm-GC a leaf calling such one-liners tests their cells once when it starts and runs a copy
+  compiled as if they had none ([wasm-int-fusion.md](wasm-int-fusion.md), "A leaf compiled twice").
 - **`%restore-compiled-definition`**: each `defun` form of such a name leaves it where it stood: a
   binding is unlinked and the cell cleared, so the compiled definition answers from there, whatever
   a write did before it (`(undefine 'f) (defun f ...)`, uiop's `defun*`). A call ahead of the form

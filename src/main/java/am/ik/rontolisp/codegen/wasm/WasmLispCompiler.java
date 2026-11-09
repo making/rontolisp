@@ -5237,9 +5237,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// The constants a fused read may take for the packed vector they were built as:
 		// only in a program that cannot name a variable at run time, where the analysis's
 		// scan of every use is the whole story.
-		Map<String, WasmArrayCompiler.ConstantArray> constantArrays = usesEval || this.dynamic
-				|| programUsesSymbol(program, LispNames.PROGV) ? Map.of()
-						: WasmArrayCompiler.constantArrays(program, closRegistry);
+		boolean namesVariablesAtRunTime = usesEval || programUsesSymbol(program, LispNames.PROGV);
+		Map<String, WasmArrayCompiler.ConstantArray> constantArrays = namesVariablesAtRunTime || this.dynamic ? Map.of()
+				: WasmArrayCompiler.constantArrays(program, closRegistry);
+		// Elsewhere a leaf still reads one as its vector while the global holds one,
+		// which it tests when it starts (WasmLeafVersioning).
+		Map<String, WasmArrayCompiler.ConstantArray> leafConstantArrays = namesVariablesAtRunTime && !this.dynamic
+				? WasmArrayCompiler.constantArrays(program, closRegistry, true) : Map.of();
 
 		// Reusable builder template with shared constants and state
 		// --report-locations: the frames' shared state, in EH mode only -- the only mode
@@ -5273,6 +5277,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.inlinableDefuns(inlinableDefuns)
 			.duplicatedDefunNames(duplicatedDefunNames)
 			.constantArrays(constantArrays)
+			.leafConstantArrays(leafConstantArrays)
 			.lambdaDecls(lambdaDecls)
 			.indirectCallArities(indirectCallArities)
 			.fdlibmUsed(fdlibmUsed)
@@ -5495,25 +5500,15 @@ public final class WasmLispCompiler implements LispCompiler {
 			funcCtx.ucFunctionName = injectedBody ? null : defun.name;
 			funcCtx.ucWrittenIn = funcCtx.ucFunctionName;
 			WasmUncaughtLocations.open(funcCtx, defunFrames.get(defun));
-			if (defun.bodyExprs.isEmpty()) {
-				// (defun f ()) -- an empty body answers nil, per CL (dissect's no-op
-				// interface stubs are this shape).
-				WasmExprCompiler.compileExpr(LispNil.INSTANCE, funcCtx);
+			// A leaf calling inlinable defuns with cells, or reading a constant's
+			// table in a program that can name a variable at run time, compiles
+			// twice: on those facts, and without them (WasmLeafVersioning).
+			WasmLeafVersioning.Assumptions assumptions = WasmLeafVersioning.assumptions(defun.bodyExprs, funcCtx);
+			if (assumptions.isEmpty()) {
+				compileDefunBody(defun.bodyExprs, funcCtx);
 			}
-			for (int i = 0; i < defun.bodyExprs.size(); i++) {
-				// Non-tail statements compile for effect: a docstring materializes
-				// nothing (it used to _str_build a fresh string per call), and a
-				// statement-position aset/setq skips its value box.
-				if (i < defun.bodyExprs.size() - 1) {
-					WasmExprCompiler.compileForEffect(defun.bodyExprs.get(i), funcCtx);
-				}
-				else {
-					// The last form's value is the function's: a call there is a tail
-					// call (Ctx.tailPosition).
-					funcCtx.tailPosition = true;
-					WasmUncaughtLocations.tailForm(funcCtx, defun.bodyExprs.get(i));
-					WasmExprCompiler.compileExpr(defun.bodyExprs.get(i), funcCtx);
-				}
+			else {
+				WasmLeafVersioning.compile(assumptions, () -> compileDefunBody(defun.bodyExprs, funcCtx), funcCtx);
 			}
 			WasmUncaughtLocations.close(funcCtx);
 			funcWriter.write(Instruction.END);
@@ -11835,6 +11830,33 @@ public final class WasmLispCompiler implements LispCompiler {
 	}
 
 	/**
+	 * Compiles a defun's body forms, leaving the function's value: the statements for
+	 * effect, the last form in tail position.
+	 */
+	private static void compileDefunBody(List<LispVal> bodyExprs, Ctx funcCtx) {
+		if (bodyExprs.isEmpty()) {
+			// (defun f ()) -- an empty body answers nil, per CL (dissect's no-op
+			// interface stubs are this shape).
+			WasmExprCompiler.compileExpr(LispNil.INSTANCE, funcCtx);
+		}
+		for (int i = 0; i < bodyExprs.size(); i++) {
+			// Non-tail statements compile for effect: a docstring materializes nothing
+			// (it used to _str_build a fresh string per call), and a statement-position
+			// aset/setq skips its value box.
+			if (i < bodyExprs.size() - 1) {
+				WasmExprCompiler.compileForEffect(bodyExprs.get(i), funcCtx);
+			}
+			else {
+				// The last form's value is the function's: a call there is a tail call
+				// (Ctx.tailPosition).
+				funcCtx.tailPosition = true;
+				WasmUncaughtLocations.tailForm(funcCtx, bodyExprs.get(i));
+				WasmExprCompiler.compileExpr(bodyExprs.get(i), funcCtx);
+			}
+		}
+	}
+
+	/**
 	 * Builds a function body's locals declaration and appends the body, resolving the i64
 	 * scratch-local references the fusion compiler emitted as placeholders
 	 * ({@link Ctx#writeI64LocalIndex}): the declaration is one {@code (ref null eq)} run
@@ -12135,6 +12157,35 @@ public final class WasmLispCompiler implements LispCompiler {
 		Map<String, WasmIntFusionCompiler.RawLocal> rawLocals = Map.of();
 
 		/**
+		 * The names with a cell this copy of a leaf's body compiles as if they had none
+		 * ({@link WasmLeafVersioning}): the copy runs only while each of their cells is
+		 * empty, and nothing it runs can fill one.
+		 */
+		Set<String> uncelled = Set.of();
+
+		/**
+		 * Whether this copy of a leaf's body declines the speed trades, as
+		 * {@code --optimize=size} does
+		 * ({@link WasmIntFusionCompiler#speedTradesEnabled}): the copy a filled cell runs
+		 * ({@link WasmLeafVersioning}).
+		 */
+		boolean declinesSpeedTrades;
+
+		/**
+		 * The defun's {@code flet} expansions, one per form, while
+		 * {@link WasmLeafVersioning} decides whether to compile its body twice; null
+		 * elsewhere.
+		 */
+		@Nullable IdentityHashMap<LispVal, LispVal> fletExpansions;
+
+		/**
+		 * While a leaf's body compiles twice, each {@code lambda} form's registration by
+		 * the first copy, which the second reuses ({@link WasmLambdaCompiler}); null
+		 * elsewhere.
+		 */
+		@Nullable IdentityHashMap<LispCons, WasmLambdaCompiler.Registration> lambdaRegistrations;
+
+		/**
 		 * The module global holding the raw-local sentinel (a private TYPE_CELL
 		 * instance): a shadow slot ref.eq to it means "the raw i64 is authoritative". A
 		 * null shadow cannot carry that meaning -- nil IS null, and a local holding nil
@@ -12193,6 +12244,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * of one tests for and how long it is.
 		 */
 		Map<String, WasmArrayCompiler.ConstantArray> constantArrays = Map.of();
+
+		/**
+		 * In a program that can name a variable at run time, where
+		 * {@link #constantArrays} is empty, the constants its analysis finds: a leaf
+		 * reads one as its vector while the module global holds one of its kind and
+		 * length, which the leaf tests when it starts ({@link WasmLeafVersioning}). Empty
+		 * elsewhere.
+		 */
+		Map<String, WasmArrayCompiler.ConstantArray> leafConstantArrays = Map.of();
 
 		Map<String, Integer> captures = Map.of();
 
@@ -13376,6 +13436,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.inlinableDefuns = builder.inlinableDefuns;
 			this.duplicatedDefunNames = builder.duplicatedDefunNames;
 			this.constantArrays = builder.constantArrays;
+			this.leafConstantArrays = builder.leafConstantArrays;
 		}
 
 		static Builder builder() {
@@ -13415,6 +13476,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private Set<String> duplicatedDefunNames = Set.of();
 
 			private Map<String, WasmArrayCompiler.ConstantArray> constantArrays = Map.of();
+
+			private Map<String, WasmArrayCompiler.ConstantArray> leafConstantArrays = Map.of();
 
 			private List<LambdaInfo> lambdaDecls = new ArrayList<>();
 
@@ -13761,6 +13824,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.inlinableDefuns = proto.inlinableDefuns;
 				this.duplicatedDefunNames = proto.duplicatedDefunNames;
 				this.constantArrays = proto.constantArrays;
+				this.leafConstantArrays = proto.leafConstantArrays;
 			}
 
 			Builder writer(WasmWriter writer) {
@@ -13795,6 +13859,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder constantArrays(Map<String, WasmArrayCompiler.ConstantArray> constantArrays) {
 				this.constantArrays = constantArrays;
+				return this;
+			}
+
+			Builder leafConstantArrays(Map<String, WasmArrayCompiler.ConstantArray> leafConstantArrays) {
+				this.leafConstantArrays = leafConstantArrays;
 				return this;
 			}
 

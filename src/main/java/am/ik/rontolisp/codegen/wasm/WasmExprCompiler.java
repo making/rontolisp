@@ -2806,7 +2806,7 @@ final class WasmExprCompiler {
 			case LispNames.WITH_STANDARD_IO_SYNTAX ->
 				compileExpansion(LispMacroExpander.expandWithStandardIoSyntax(cons, ctx.specialVars), ctx, tail);
 			case LispNames.WRITE_CHAR -> compileExpansion(LispMacroExpander.expandWriteChar(cons), ctx, tail);
-			case LispNames.FLET -> compileExpansion(LispMacroExpander.expandFlet(cons), ctx, tail);
+			case LispNames.FLET -> compileExpansion(WasmLeafVersioning.fletExpansion(cons, ctx), ctx, tail);
 			case LispNames.LABELS -> compileExpansion(LispMacroExpander.expandLabels(cons), ctx, tail);
 			case LispNames.VALUES -> compileExpansion(LispMacroExpander.expandValues(cons), ctx, tail);
 			case LispNames.MULTIPLE_VALUE_BIND ->

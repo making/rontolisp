@@ -83,12 +83,13 @@ final class WasmIntFusionCompiler {
 	 * {@code _ub_read}. Measured, that half-configuration is dominated on BOTH axes --
 	 * larger than declining both, slower than keeping both
 	 * ({@code .kb/optimize-dead-code-elimination.md} has the four-way table), so it is a
-	 * configuration nobody can want and it gets no spelling.
+	 * configuration nobody can want and it gets no spelling. A leaf's copy for a filled
+	 * cell declines both too ({@link WasmLeafVersioning}).
 	 * @param ctx the compilation context
 	 * @return {@code true} when the trades are emitted
 	 */
 	static boolean speedTradesEnabled(WasmLispCompiler.Ctx ctx) {
-		return !ctx.optimize.prefersSizeOverSpeed();
+		return !ctx.optimize.prefersSizeOverSpeed() && !ctx.declinesSpeedTrades;
 	}
 
 	private sealed interface Node permits OpNode, ConstLeaf, ExprLeaf, ArefLeaf, RawLeaf, CelledCall {
@@ -1130,11 +1131,12 @@ final class WasmIntFusionCompiler {
 
 	/**
 	 * The function of a defun whose name has a cell ({@link WasmFunctionCells}), or null
-	 * for any other name.
+	 * for any other name -- and for one the copy of a leaf's body being compiled runs
+	 * only while its cell is empty ({@code Ctx.uncelled}).
 	 */
 	private static WasmLispCompiler.@Nullable WasmFunctionInfo cellOf(String name, WasmLispCompiler.Ctx ctx) {
 		WasmLispCompiler.WasmFunctionInfo function = ctx.functions.get(name);
-		return function != null && function.entryIndex() >= 0 ? function : null;
+		return function != null && function.entryIndex() >= 0 && !ctx.uncelled.contains(name) ? function : null;
 	}
 
 	/**
@@ -1466,7 +1468,7 @@ final class WasmIntFusionCompiler {
 	 * with ({@link LispMacroExpander#clearedForm}); the fused call clears instead
 	 * ({@link #tryCompileDefunCall}).
 	 */
-	private static @Nullable LispVal inlinableBody(WasmLispCompiler.DefunDecl defun) {
+	static @Nullable LispVal inlinableBody(WasmLispCompiler.DefunDecl defun) {
 		LispVal body = singleBodyExpr(defun.bodyExprs());
 		return body == null ? null : LispMacroExpander.clearedForm(body);
 	}

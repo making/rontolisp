@@ -186,9 +186,11 @@ final class WasmFunctionCallCompiler {
 			}
 			WasmPhysicalArgs.emit(ctx, fi, emitters);
 			// Every compiled Lisp function answers one (ref null eq), so a tail call
-			// to any of them is a return_call from any of them.
+			// to any of them is a return_call from any of them. A name whose cell the
+			// leaf being compiled runs only while it is empty calls the function itself
+			// (WasmLeafVersioning).
 			ctx.writer.write(WasmUncaughtLocations.tailCallOp(ctx, tail, name));
-			ctx.writer.writeUnsignedLeb128(fi.callIndex());
+			ctx.writer.writeUnsignedLeb128(ctx.uncelled.contains(name) ? fi.funcIndex() : fi.callIndex());
 		}
 		else if (WasmFunctionFormCompiler.nestedDefun(name, ctx)) {
 			// A defun nested inside a top-level let or a function body compiles to

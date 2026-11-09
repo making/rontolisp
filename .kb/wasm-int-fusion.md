@@ -112,7 +112,9 @@ its index is part of the tree (below). What is this backend's own:
   no check at all, unsound). Pinned by the `eval` leg of the same fuel budget (45.9 M) and
   ci-spec `a-defun-written-through-a-computed-name-answers-the-new-definition` (`cwn-add32`: the
   replacement called once, in the interpreter's order, all four backends). The JVM twin does the same
-  in its outlined method ([jvm-int-fusion.md](jvm-int-fusion.md), "A name with a cell").
+  in its outlined method ([jvm-int-fusion.md](jvm-int-fusion.md), "A name with a cell"). A leaf
+  calling such names compiles twice instead, its first copy over empty cells (below, "A leaf
+  compiled twice").
 - **Masked signed field**: `(%mask-signed-field k x)` with a literal `1 <= k <= 64` is an op node
   whose operand emits WRAPPED and sign-extends below 64 (`i64.shl`/`i64.shr_s` by `64 - k`): the
   JVM twin's node (`.kb/jvm-int-fusion.md`), same fallback through `_big_xor`/`_big_and`/`_rat_add`
@@ -191,9 +193,55 @@ fast path alone, with no `block $bail` and no fallback: in `tryCompile`, `tryCom
   Pinned by the fuel budget in
   `WasmLispCompilerIntegrationTest.compileInlinableDefunsFuseWithoutChangingResults` (a
   SHA-256-shaped compression, 61.0 M against 95.5 M with shadowed round variables) and the exact-
-  locals program in `.fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath`. **A program
-  holding `eval` keeps most of it off**: every defun has a cell, a celled root proves no range
-  and no celled site is free of bails (the same ten derivations 28.5 G -> 19.5 G).
+  locals program in `.fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath`. A program
+  holding `eval` kept most of it off until the same day's "A leaf compiled twice": every defun
+  has a cell, a celled root proves no range and no celled site is free of bails (the same ten
+  derivations 28.5 G -> 19.5 G).
+
+## A leaf compiled twice (2026-11-09, `.todo/j36`)
+
+**A leaf defun runs nothing that can run user code, so what holds when it starts holds until it
+returns.** `WasmLeafVersioning` compiles such a body twice into one function: `if` every
+assumption holds, the body compiled on them, `else` the body with the speed trades declined
+(`Ctx.declinesSpeedTrades`, as `--optimize=size` declines them: the cold copy stays small,
+measured 28 KB of `update-sha256-block`'s 60 KB). The test runs once per call, at entry.
+
+- **The assumptions**: every cell of an inlinable defun the body may call is empty
+  (`Ctx.uncelled`: `cellOf` answers null, so the name substitutes as if it had none -- exact
+  locals, no cell check, array parameters -- and a direct call skips the entry); and every
+  constant of `Ctx.leafConstantArrays` it names holds a packed vector of its kind, at least as
+  long as its definition's (`emitHoldsVector`; the copy reads it as a `constantArrays` entry). That
+  map is `constantArrays`' analysis in a program that can name a variable at run time, where
+  `constantArrays` is empty, `defconst`'s unfolded `(if (boundp 'n) (symbol-value 'n) V)`
+  counting as a definition. A cell an `eval` filled, a constant read before its definition: the
+  cold copy runs, calling through the entry, reading generically.
+- **The leaf** (`Scan`, over the forms the compilers meet, a built-in macro expanded as they
+  expand it -- `setf`, `loop`, `flet` -- anything unknown no leaf): the sequencing and binding
+  special forms, `dotimes`, a whitelist of operators compiled without a call into Lisp code
+  (`PURE_OPERATORS`: arithmetic, comparison, `aref`/`%aset`, conses, `eq`/`eql`, `values`),
+  calls of inlinable defuns (closed integer trees; their own callees join the cells), and a
+  `funcall` of a let-bound `lambda` nothing assigns, its body scanned too. An error a helper
+  signals never returns into it (no correctable operator offers a restart, `.todo/433`). A
+  quoted aggregate is refused: one site compiled twice would hold two constants.
+- **Each `lambda` registers once**: the scan's `flet` expansions are memoized for the copies
+  (`Ctx.fletExpansions`), so both meet the same `lambda` conses, and the second reuses the
+  first's funcId (`Ctx.lambdaRegistrations`).
+- Measured 2026-11-09 (Xeon E5-2697A v4, wasmtime 49): `update-sha256-block` in a program
+  holding `eval` 156 KB with every site celled -> 60 KB (the no-`eval` body is 31.5 KB); ten
+  4096-round derivations on Preview 1 3.7-4.1 s -> 1.34-1.53 s, the program without `eval`
+  1.33-1.51 s; the cells alone, the table still tested and bailing, 2.0 s. SCRAM logins in
+  [asdf.md](asdf.md). Compile time unchanged (Shiori 33-35 s either way); a program with no cell
+  and no such constant compiles byte-identically (`pbkdf2` alone checked). `postgres-hello.lisp`
+  and `postgres-web.lisp` hold no `eval` but name variables at run time, so they gain the
+  constant half (postgres-hello's block 119 KB -> 60 KB, its module 4.36 MB -> 4.31 MB).
+- Pinned by the `eval` leg of the compression fuel budget in
+  `WasmLispCompilerIntegrationTest.compileInlinableDefunsFuseWithoutChangingResults` (62.1 M,
+  79.8 M before, the budget the program without `eval` has -- fuel cannot see the table half,
+  whose cost is machine code), the `eval` leg of the exact-locals program in
+  `.fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath` (a table read before its
+  definition takes the cold copy), and ci-spec
+  `a-defun-written-through-a-computed-name-answers-the-new-definition` (`cwn-mix32` and
+  `cwn-double32` are leaves: the replacement through the cold copy).
 
 ## When fusion does NOT trigger (and must keep not triggering)
 

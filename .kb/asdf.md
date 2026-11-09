@@ -1488,7 +1488,13 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
     against 443-497 ms before and the native interpreter's 195-316 ms the same hour (an older
     binary with the same kernel); `postgres-web.lisp` under `wasmtime serve` 180-269 ms against
     432-600 ms, the command's speed; Shiori 578-841 ms against 776-928 ms -- its `eval` keeps
-    every defun celled, and a celled root proves no range and leaves no site free of bails. A
+    every defun celled, and a celled root proves no range and leaves no site free of bails.
+    **Since the leaf copies** ([wasm-int-fusion.md](wasm-int-fusion.md), "A leaf compiled twice";
+    `.todo/j36`; same box, load 5-9, eight runs each, the same hour): Shiori 170-323 ms against
+    478-643 ms (a page 0.32-0.51 s against 0.61-0.81 s); `postgres-hello.lisp` with an `eval`
+    added 147-201 ms against 365-515 ms; `postgres-hello.lisp` itself 147-211 ms against 165-295 ms
+    and `postgres-web.lisp` under serve 166-277 ms against 202-278 ms, both naming variables at
+    run time, so their round-constant table was tested and bailed too. A
     derivation (`pbkdf2-hash-password` x4096) took 153-158 ms against 407-511 ms. Where the round
     goes now (ten derivations, cycles, self): `sha256-expand-block` 16%, `update-sha256-block` 14%
     -- a block 11k cycles, was 44k -- `xor-block` 11% (its indices are boxed parameters, every
