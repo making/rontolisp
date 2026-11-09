@@ -795,8 +795,15 @@
 - `with-redefs` と `alter-var-root` が置き換えるルートは var の値セルなので、
   `^:dynamic` な var の `binding` の内側では、その var の束縛を変更します（オラクルでは
   ルートが変わり、束縛はそのままです）。`clojure.core` の var は名前を挙げて拒否し、
-  `alter-var-root` が届いたマルチメソッド、プロトコルメソッド、レコードのコンストラクタ、
-  テストも拒否します。REPL では、以前の入力が `^:redef` なしで定義した `defn` を拒否します。
+  `alter-var-root` が届いたマルチメソッド、レコードのコンストラクタ、テストも拒否します。
+  REPL では、以前の入力が `^:redef` なしで定義した `defn` と、以前の入力が定義した
+  プロトコルメソッドを拒否します。プロトコルメソッドの置き換えたルートはすべての呼び出しに
+  届きます。オラクルでは、本体でプロトコルを実装した型が対象の呼び出しは型のメソッドを
+  直接呼びます（schema の `s/defprotocol` はこれを避けるため `:inline` を付けます）。
+- fn はプロトコルメソッドのキャッシュを持ちません。`(.__methodImplCache f)` は `nil` で、
+  その `set!` は何も保存しません。レコードの宣言済みフィールドへの `set!` は
+  `No matching field found`（`IllegalArgumentException`）で、オラクルは
+  `IllegalAccessException`（`Can not set final ... field`）です。
 - `locking` のロックは値ごとに保持するミューテックスで、ロック表は渡された値を
   プログラムの実行中ずっと保持します。`nil` をロックしたときの
   `NullPointerException` のメッセージはローカル名 `locklocal` を示します（オラクルは

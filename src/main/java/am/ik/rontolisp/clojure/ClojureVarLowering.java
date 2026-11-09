@@ -557,14 +557,14 @@ final class ClojureVarLowering {
 	 * validates and notifies like the oracle's {@code bindRoot} where the var is guarded,
 	 * and is the plain {@code setq} otherwise (an {@code if} arm the strip folds back). A
 	 * var is a value cell here: a {@code def}'s, a {@code declare}'s, and a
-	 * {@code defn}'s when the var is redefinable
-	 * ({@link ClojureLowering#redefinable(String, LispVal)}), which every {@code defn} a
+	 * {@code defn}'s or a protocol method's when the var is redefinable
+	 * ({@link ClojureLowering#redefinable(String, LispVal)}), which every one a
 	 * {@code with-redefs} names is: the pre-scan finds the name, or the program lowers
 	 * again ({@link ClojureLowering#redefMisses}). A session cannot lower an earlier
 	 * input again, so there a {@code defn} it lowered as a direct call is refused by
 	 * name. A local, an unknown name, a macro, a {@code clojure.core} var (its verbs
-	 * lower inline) and a function no {@code defn} defined (a multimethod, a protocol
-	 * method, a test) are refused too. The body sits behind the {@code try} barrier.
+	 * lower inline) and a function no {@code defn} defined (a multimethod, a test) are
+	 * refused too. The body sits behind the {@code try} barrier.
 	 */
 	static LispVal withRedefsOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() >= 2,
@@ -649,7 +649,7 @@ final class ClojureVarLowering {
 			// the program already lowers again with the var redefinable, and its
 			// definition still calls directly: no defn or def defined it
 			throw new LispReadException("with-redefs of " + key
-					+ " is not supported: only a def or defn var can be redefined, not a multimethod, protocol method, record constructor or test");
+					+ " is not supported: only a def or defn var can be redefined, not a multimethod, record constructor or test");
 		}
 		if (ctx.incremental) {
 			throw new LispReadException("with-redefs of " + key

@@ -2405,13 +2405,19 @@ final class ClojureInteropLowering {
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"), got, miss),
 						ClojureValueMethodLowering.refusal(one, field, true, List.of()), got));
+		LispVal other = ctx.hostTarget ? fieldCall(ctx, one, field, true)
+				: ClojureValueMethodLowering.refusal(one, field, true, List.of());
+		if (field.equals(ClojureProtocolLowering.METHOD_IMPL_CACHE)) {
+			// a fn's protocol method cache, which dispatch here never fills
+			other = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), one), ClojureLowering.NIL_CONST, other);
+		}
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(one, target),
 						ClojureLowerUtil.list(miss,
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("list"), ClojureLowering.NIL_CONST)))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"), ClojureProtocolLowering.isTypedForm(one), read,
-						ctx.hostTarget ? fieldCall(ctx, one, field, true)
-								: ClojureValueMethodLowering.refusal(one, field, true, List.of())));
+						other));
 	}
 
 	/**

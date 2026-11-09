@@ -1738,7 +1738,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | component 1.2.0 (stuartsierra) | = | = | = | = | no transitive deps; 2026-11-08 round (`.todo/j07`): records implementing `Lifecycle`, `system-map`/`using`/`start`/`stop`, a missing-dependency `ex-data`, `update-system` -- 7 lines; two `JAVA:CALL` warnings on wasm off the path |
 | editscript 0.8.0 | = | = | stop | stop | 2026-11-08 round: the 7-line probe (map/vector/string diffs, `patch`, `edit-distance`, `:quick`) is the oracle's on the interpreter and the JVM; wasm traps on `System/nanoTime`, then `java.util.IdentityHashMap` (`.todo/j28`, which also records the host-side identity loss of a Clojure key in an `IdentityHashMap`) |
 | data.csv 1.1.1 | 5/6 | | | | 2026-11-08 round: `read-csv`/`write-csv` over strings and a `StringWriter` print the oracle's lines; `io/reader` of a `java.io.StringReader` refuses (`.todo/j16`). Other backends not run |
-| aero 1.1.6, core.match 1.1.1, core.logic 1.1.1, schema 1.4.2, specter 1.1.6, rewrite-clj 1.3.59, datascript 1.8.1 | stop | | | | 2026-11-08 round, interpreter only: each stops at load; past hand patches all but datascript print the oracle's lines (core.logic but its pinned `()`-is-`nil` line). The stops, library by library, and the items they became: `.todo/j07` (probes, patches and outputs in `.todo/artefacts/j07-clojure-library-probe-round-2026-11-08/`). j23 (2026-11-08, `.todo/j23`): specter's `extend-protocolpath*` and schema's `extend-primitive` hunks are no longer needed -- with the other hunks applied, specter's probe is the oracle's line for line and schema's loads and prints the same but the pinned set-order line (interpreter; the other backends unprobed). j09 (2026-11-09): core.match's `void` hunk is no longer needed either -- with the other hunks applied and the original `let`-wrapped `regroup-keywords` restored, the probe prints its 11 oracle lines on the interpreter, the JVM class and wasm ("Macros", the wrapper bullet). j12 (2026-11-09): core.logic's `defnm`, specter's `defdynamicnav` `declare` hunks and aero's `usetime` unwrap are no longer needed -- with the other hunks applied, aero and specter print the oracle's lines and core.logic the same but its pinned line (interpreter). j18 (2026-11-09): rewrite-clj needs no hunk at all -- the verbatim 1.3.59 jar prints the probe's 9 oracle lines on all four backends (the wasm legs warn of `JAVA:STATIC`/`JAVA:NEW` off the probe's path; its zipper walks are `(->> (iterate f loc) (take-while identity) ...)`, which needed `iterate` to compute a member only when read, a lazy `take-while`, and `next` of a lazy seq ending past its head to answer nil: "Laziness"). j21 (2026-11-09): specter's `path` hunk (the inline cache) is no longer needed -- with the other hunks applied, the probe prints the oracle's ten lines on the interpreter and the JVM class ("Macros", a var a macro body interns) |
+| aero 1.1.6, core.match 1.1.1, core.logic 1.1.1, schema 1.4.2, specter 1.1.6, rewrite-clj 1.3.59, datascript 1.8.1 | stop | | | | 2026-11-08 round, interpreter only: each stops at load; past hand patches all but datascript print the oracle's lines (core.logic but its pinned `()`-is-`nil` line). The stops, library by library, and the items they became: `.todo/j07` (probes, patches and outputs in `.todo/artefacts/j07-clojure-library-probe-round-2026-11-08/`). j23 (2026-11-08, `.todo/j23`): specter's `extend-protocolpath*` and schema's `extend-primitive` hunks are no longer needed -- with the other hunks applied, specter's probe is the oracle's line for line and schema's loads and prints the same but the pinned set-order line (interpreter; the other backends unprobed). j09 (2026-11-09): core.match's `void` hunk is no longer needed either -- with the other hunks applied and the original `let`-wrapped `regroup-keywords` restored, the probe prints its 11 oracle lines on the interpreter, the JVM class and wasm ("Macros", the wrapper bullet). j12 (2026-11-09): core.logic's `defnm`, specter's `defdynamicnav` `declare` hunks and aero's `usetime` unwrap are no longer needed -- with the other hunks applied, aero and specter print the oracle's lines and core.logic the same but its pinned line (interpreter). j18 (2026-11-09): rewrite-clj needs no hunk at all -- the verbatim 1.3.59 jar prints the probe's 9 oracle lines on all four backends (the wasm legs warn of `JAVA:STATIC`/`JAVA:NEW` off the probe's path; its zipper walks are `(->> (iterate f loc) (take-while identity) ...)`, which needed `iterate` to compute a member only when read, a lazy `take-while`, and `next` of a lazy seq ending past its head to answer nil: "Laziness"). j21 (2026-11-09): specter's `path` hunk (the inline cache) is no longer needed -- with the other hunks applied, the probe prints the oracle's ten lines on the interpreter and the JVM class ("Macros", a var a macro body interns). j24 (2026-11-09): schema's `-instrument-protocol-method` `(comment ...)` hunk is no longer needed -- with the other hunks applied the probe prints as before, and an `s/defprotocol` method with schemas validates under `s/with-fn-validation` like the oracle (interpreter, JVM class; wasm P1 stops expanding `s/defprotocol` at `No matching field found: get`, as it did before j24): a field-form `set!` decides when it runs and a protocol method whose var a program alters is redefinable ("Java interop", "Vars and metadata") |
 f92 shares every site-independent core value program-wide through `%clojure-shared-value`, so the probe is green again on all four. f98: the 8-line pattern-schema probe (`form`/`type` of `(m/schema #"a")`, `validate` of a hit, a miss and a non-string, `explain`, the `:malli.core/invalid-schema` refusals of `(m/schema 42)` and `(m/schema "s")`) is the oracle's line for line on all four since 2026-10-13 (`type` of a pattern hits the `class-schemas` entry: the host class where a host is, the designator where none is). That 12-line wasm parity was overstated (2026-10-13, f99): the probe's decode lines print bare (`println`), under which an undecoded `"1"` reads as `1` -- `(Long/parseLong x)` refused at call time there, so `-string->long`'s catch kept the input (`pr-str` shows the gap). One-argument `Long/parseLong` now lowers to the portable reader where the host is not (`%clojure-parse-long-static`, "Portable number statics"), and the 12-line probe is the oracle's line for line under `pr-str` on all four backends |
 
 `=` is the oracle's output line for line (12-31 lines per probe; tools.cli's `:parse-fn` is
@@ -6413,7 +6413,19 @@ host alone answers ("Host arms where the host is not").
   `this`, `proxy-super` calls the generated `super$` accessor, an unnamed abstract method
   throws `UnsupportedOperationException`. Multi-arity methods, a second class, a final
   superclass are refused.
-- No host-field `set!`: the `java:` surface has no write primitive.
+- `set!` of a field form (`(.f x)`, `(.-f x)`, `(. x f)`; j24, 2026-11-09) lowers to a write
+  decided when it runs (`ClojureProtocolLowering.hostFieldSetOf`), after the target and then
+  the value, like the oracle's reflective `InstanceFieldExpr`: a fn's `__methodImplCache`
+  takes the value and answers it (no per-fn cache here, so it stores nothing; the read --
+  a `ClojureValueMethodLowering` row and `fieldRead` -- is nil, what the oracle's holds
+  before a protocol call fills it), any other Lisp value is `%clojure-no-method`'s
+  `No matching field found` (nil its NPE; a record's declared field the oracle's
+  `IllegalAccessException` -- deviation), and where the host is, a host object's field
+  and a static `(. Class f)` are the `UnsupportedOperationException`
+  `set! of a host field is not supported yet`: the `java:` surface has no write primitive.
+  Until j24 every field form refused at lower time, so schema 1.4.2's `macros.clj`
+  (`-instrument-protocol-method`'s cache sync) stopped the namespace's load. Pin: clojure-spec
+  `set-of-a-field-form-decides-when-it-runs` (oracle-identical, four backends).
 - Argument type hints (2026-10-29): `ClojureInteropLowering.hintedDesignator` spells an
   untagged instance, static or construction member `m(^C,_)` when an argument carries a class
   `:tag` (`classHint`: the datum's own outermost tag, else a bare local's,
@@ -8159,7 +8171,12 @@ resolve var`.
   too: a local and an unknown name (`Unable to resolve var`, the oracle's), a macro, a
   `clojure.core` var (its verbs lower inline; the oracle's inlined `inc` ignores the
   redef too, its `println` does not), and a key still `FUNCTION` after the reseed (a
-  multimethod, protocol method, record constructor, test). Deviation: inside a `binding`
+  multimethod, record constructor, test). A protocol method is redefinable the same way
+  (j24, 2026-11-09): `declareProtocol` makes a redefinable method's key `VARIABLE` and
+  `defprotocolForms` stores its dispatcher in the value cell (`varStore`), so every call --
+  a target implementing the protocol in its body too -- reads the cell (deviation: the
+  oracle's call site calls such a target's method directly, which schema's
+  `s/defprotocol` defeats with `:inline`). Deviation: inside a `binding`
   of a `^:dynamic` var the `setq` changes the binding (the oracle changes the root; CL has
   no portable global-value write under a dynamic binding). Checked 2026-10-08 (clj
   1.12.6) and pinned by clojure-spec `with-redefs-replaces-var-roots-for-the-body`,
@@ -8182,8 +8199,8 @@ resolve var`.
   without setter (`unsetVarSites` -> `rootSetterMiss` -> another pass). With it on, a var site
   of a direct `defn` adds the key to `redefMisses`, so every function whose var the program
   takes is redefinable; a program with no computed `alter-var-root` lowers its var sites as
-  before. No setter -- a `clojure.core` var, a macro, a multimethod / protocol method /
-  record constructor / test, a session's direct `defn` -- is the run-time
+  before. No setter -- a `clojure.core` var, a macro, a multimethod / record constructor /
+  test, a session's direct `defn` or protocol method -- is the run-time
   `UnsupportedOperationException` `alter-var-root of #'... is not supported: ...` (the oracle
   alters them). A non-var is `ClassCastException`, nil `NullPointerException`. Deviation as
   `with-redefs`: under a `binding` of a dynamic var the `setq` changes the binding.

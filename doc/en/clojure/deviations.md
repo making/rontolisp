@@ -844,8 +844,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - The root `with-redefs` and `alter-var-root` replace is the var's value cell, so inside
   a `binding` of a `^:dynamic` var they change that binding (the oracle changes the root
   and the binding stays). A `clojure.core` var is refused by name, and so is a
-  multimethod, protocol method, record constructor or test that `alter-var-root` reaches;
-  in the REPL, so is a `defn` an earlier input defined without `^:redef`.
+  multimethod, record constructor or test that `alter-var-root` reaches; in the REPL, so
+  is a `defn` an earlier input defined without `^:redef` and a protocol method an earlier
+  input defined. A protocol method's replaced root reaches every call, where the oracle's
+  call site with a target implementing the protocol in its body calls the type's method
+  directly (schema's `s/defprotocol` adds `:inline` to defeat that).
+- A fn has no protocol method cache: `(.__methodImplCache f)` is `nil` and a `set!` of
+  it stores nothing. A `set!` of a record's declared field is
+  `No matching field found` (an `IllegalArgumentException`), the oracle's an
+  `IllegalAccessException` (`Can not set final ... field`).
 - `locking` holds a mutex kept per value, and the lock table keeps every value it was
   handed for the program's lifetime. The `NullPointerException` of a `nil` lock names
   the local `locklocal` (the oracle names a generated one).

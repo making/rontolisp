@@ -556,7 +556,7 @@ var はエクスポートより下で定義してかまいません。
 | コア関数が参照するもの以外の `clojure.lang` のインタフェースを挙げた `reify`/`deftype`/`defrecord` の本体（[reify](reference/reify.md#host-interfaces)） | `... is not supported yet as an interface of ...` | それ以外の `clojure.lang` のインタフェース（`IChunkedSeq` など）を参照する関数がまだない |
 | レコード自身のインタフェースのメソッドのうち、レコードがインタフェース側に任せるもの（`assocEx`、`java.util.Map` の default メソッド）を定義した `defrecord` の本体 | `... is not supported yet as a method of defrecord` | それらのインタフェースにはレコード自身の動詞が答えるため、そのメソッドを持つ行がない |
 | 本体が書かなかった `java.util` の default メソッドのインスタンス呼び出し | `the default method ... is not supported yet` | default メソッドの本体は Java で、どのバックエンドもそれを実行しない |
-| 特殊変数でない core の var（`inc`）やホストフィールドへの `set!` | `set! of a var is not supported yet: ...`、`set! of a host field is not supported yet: ...` | 代入先の var がない。`java:` にフィールド書き込みがない |
+| 特殊変数でない core の var（`inc`）やホストオブジェクトのフィールドへの `set!` | `set! of a var is not supported yet: ...`、`set! of a host field is not supported yet: ...`（書き込みの実行時に `UnsupportedOperationException`） | 代入先の var がない。`java:` にフィールド書き込みがない |
 | WASM バックエンドでの `future`、`future-call`、`promise`/`deliver` | `... is not supported yet on this backend ...` | WASM バックエンドはシングルスレッド。インタプリタと JVM はホストスレッドで実行する |
 | proxy メソッドの外側の `proxy-super` | `proxy-super outside a proxy method` | `proxy-super` はメソッドの `this` に対するスーパークラスの実装呼び出し |
 | 2 つめのクラス・重複メソッド・`final` スーパークラスを伴う `proxy` | `... is a class, not an interface`、`proxy defines method ... twice`、`proxy cannot extend final class ...` | スーパークラスは 1 つのみ、メソッド名ごとに本体は 1 つ、`final` のスーパークラスは不可 |
@@ -566,8 +566,8 @@ var はエクスポートより下で定義してかまいません。
 | 未知のエイリアスの `::alias/kw` | `Invalid token: ...` | 解決するのは require のエイリアス、ファイル自身の ns、既知の名前空間のみ |
 | `--no-gc` ビルド | 名前で | そのバックエッドにはペアもシンボルもクロージャもない |
 | `file:`、`http:`、`https:` 以外のプロトコル（`ftp:` など）の URL の読み取り | `reading the ftp: URL ... is not built in` | `clojure.java.io` の下にそのための接続の実行系がない。`http:` URL は `rontolisp:fetch` で読む（[HTTP の URL](reference/clojure-java-io.md#http-urls)） |
-| `clojure.core` の var、マクロ、マルチメソッド、プロトコルメソッドの `with-redefs`。REPL では、以前の入力が `^:redef` なしで定義した `defn` の `with-redefs` | `with-redefs of ... is not supported...`、`... define it ^:redef to redefine it` | コアの関数は呼び出しごとにインライン展開される。置き換えるルートを持つのは `def`/`defn`/`declare` の var だけで、REPL の入力は直接呼び出しのまま実行済み |
-| `clojure.core` の var、マルチメソッド、プロトコルメソッド、レコードのコンストラクタ、テストの `alter-var-root`。REPL では、以前の入力が `^:redef` なしで定義した `defn` の `alter-var-root` | `alter-var-root of #'... is not supported: ...`（呼び出しの実行時に `UnsupportedOperationException`） | `with-redefs` と同じ |
+| `clojure.core` の var、マクロ、マルチメソッドの `with-redefs`。REPL では、以前の入力が `^:redef` なしで定義した `defn` の `with-redefs` | `with-redefs of ... is not supported...`、`... define it ^:redef to redefine it` | コアの関数は呼び出しごとにインライン展開される。置き換えるルートを持つのは `def`/`defn`/`declare` の var だけで、REPL の入力は直接呼び出しのまま実行済み |
+| `clojure.core` の var、マルチメソッド、レコードのコンストラクタ、テストの `alter-var-root`。REPL では、以前の入力が `^:redef` なしで定義した `defn` や以前の入力が定義したプロトコルメソッドの `alter-var-root` | `alter-var-root of #'... is not supported: ...`（呼び出しの実行時に `UnsupportedOperationException`） | `with-redefs` と同じ |
 | 非同期の Ring ハンドラ（`:async? true` 付きの `run-server`） | `asynchronous handlers (:async? true) are not supported` | トランスポートに respond/raise の仕組みがない |
 | `rontolisp.wasm` の宣言の `:async`、`async func` の WIT メンバーやエクスポート | `:async is not supported yet ...`、`... is an async func ...` | 中断する呼び出しが答える future は Clojure の future ではない |
 | stream か future を受け取るか答える WIT メンバー | `... which the Clojure tier does not carry yet (file.wit:N)` | 非同期 canonical ABI のハンドルが答える Clojure の future がまだない |

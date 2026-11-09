@@ -369,8 +369,9 @@ final class ClojureValueMethodLowering {
 	 * A fn is the oracle's {@code AFunction}: an {@code IFn} ({@code invoke} of up to
 	 * twenty arguments, {@code applyTo}), a {@code Callable} ({@code call}), a
 	 * {@code Runnable} ({@code run}) and a {@code Comparator} ({@code compare}, whose
-	 * boolean answer is {@code AFunction.compare}'s); the {@code IFn} ones answer for any
-	 * {@code ifn?} value, an {@code AFn} too.
+	 * boolean answer is {@code AFunction.compare}'s), with the public
+	 * {@code __methodImplCache} field; the {@code IFn} ones answer for any {@code ifn?}
+	 * value, an {@code AFn} too.
 	 */
 	private static void functionRows() {
 		for (int n = 0; n <= MAX_INVOKE_ARITY; n++) {
@@ -386,6 +387,9 @@ final class ClojureValueMethodLowering {
 		row("run", 0, arm(List.of("ifn?"),
 				ClojureLowerUtil.list(new LispSymbol("do"), ClojureLowerUtil.list(R), new LispSymbol("nil"))));
 		row("compare", 2, new Arm(List.of(FUNCTION), ClojureValueMethodLowering::fnCompare));
+		// AFunction's protocol method cache: protocol dispatch here keeps none, so
+		// the field reads nil, what the oracle's holds before a protocol call fills it
+		row(ClojureProtocolLowering.METHOD_IMPL_CACHE, 0, arm(List.of(FUNCTION), new LispSymbol("nil")));
 		// a multimethod is its dispatcher function here: a registered one answers
 		// clojure.lang.MultiFn's dispatchFn and getMethod (spec.alpha's multi-spec)
 		row("dispatchFn", 0, new Arm(List.of(FUNCTION), ctx -> multiFnMember(ctx, "dispatchFn")));

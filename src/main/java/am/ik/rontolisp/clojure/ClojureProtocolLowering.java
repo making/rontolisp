@@ -360,7 +360,13 @@ final class ClojureProtocolLowering {
 		ctx.macros.remove(key); // a definition wins over the macro it shadows
 		for (String method : def.methods()) {
 			String methodKey = ctx.intern(method, false);
-			ctx.globals.put(methodKey, ClojureLowering.Kind.FUNCTION);
+			// a redefinable method (its var altered, with-redefs) keeps its dispatcher
+			// in the value cell, which every call reads, like a redefinable defn
+			boolean redef = ctx.redefinable(methodKey, ClojureLowering.NIL_CONST);
+			ctx.globals.put(methodKey, redef ? ClojureLowering.Kind.VARIABLE : ClojureLowering.Kind.FUNCTION);
+			if (redef) {
+				ctx.globalDirectFuns.remove(methodKey);
+			}
 			ctx.macros.remove(methodKey); // a definition wins over the macro it shadows
 		}
 		return def;
@@ -790,6 +796,14 @@ final class ClojureProtocolLowering {
 		}
 		for (String method : def.methods()) {
 			forms.add(dispatcherDefun(ctx, method, def, walks(ctx, def)));
+			String methodKey = ClojureLowering.varKey(ctx.currentNs, method);
+			if (ctx.globals.get(methodKey) == ClojureLowering.Kind.VARIABLE) {
+				// the value cell every call reads, validating and notifying like the
+				// oracle's bindRoot, so alter-var-root and with-redefs reach the calls
+				LispSymbol cell = ClojureLowering.varSym(methodKey);
+				forms.add(ClojureStateLowering.varStore(ctx, cell,
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), cell), methodKey));
+			}
 		}
 		// the protocol's value is the oracle's map (its interface under :on and
 		// :on-interface, its methods' signatures under :sigs, the method map), the
@@ -1199,7 +1213,8 @@ final class ClojureProtocolLowering {
 	 * var, a flag {@code clojure.main} binds at the top level too. A {@code clojure.lang}
 	 * static field the run-time library holds ({@link ClojureLangClasses#runtimeStatic})
 	 * stores a boolean, refusing anything else as the oracle's cast to {@code Boolean}
-	 * does, and answers the value. Any other host field stays refused by name.
+	 * does, and answers the value. A field form {@code (.f x)} is decided when it runs
+	 * ({@link #hostFieldSetOf}).
 	 */
 	static LispVal setBangOf(ClojureLowering ctx, List<LispVal> items) {
 		ClojureLowerUtil.isTrue(items.size() == 3, "Malformed assignment, expecting (set! target val)");
@@ -1213,11 +1228,9 @@ final class ClojureProtocolLowering {
 							ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-BOOLEAN-FIELD-VALUE"), value)),
 					value);
 		}
-		List<LispVal> parts = ClojureLowerUtil.items(target);
-		if (parts != null && !parts.isEmpty() && parts.get(0) instanceof LispSymbol head
-				&& (head.name().equals(".") || head.name().startsWith(".-"))) {
-			throw new LispReadException(
-					"set! of a host field is not supported yet: the java: surface has no field write");
+		LispVal fieldSet = hostFieldSetOf(ctx, target, items.get(2));
+		if (fieldSet != null) {
+			return fieldSet;
 		}
 		if (!(target instanceof LispSymbol s) || s.name().startsWith(":") || s.name().equals("nil")
 				|| s.name().equals("true") || s.name().equals("false")) {
@@ -1258,6 +1271,68 @@ final class ClojureProtocolLowering {
 		}
 		throw new LispReadException("set! of a var is not supported yet: " + name
 				+ " (only a deftype's mutable field or a thread-bound dynamic var is assignable)");
+	}
+
+	/** The field every fn of the oracle's has: its protocol method cache. */
+	static final String METHOD_IMPL_CACHE = "__methodImplCache";
+
+	private static final String HOST_FIELD_WRITE = "set! of a host field is not supported yet: the java: surface has no field write";
+
+	/**
+	 * {@code (set! (.f x) v)}, {@code (set! (.-f x) v)} or {@code (set! (. x f) v)}: a
+	 * field write decided when it runs, like the oracle's reflective
+	 * {@code InstanceFieldExpr}, after the target and then the value evaluate. A fn's
+	 * {@link #METHOD_IMPL_CACHE} takes the value and answers it: protocol dispatch here
+	 * keeps no per-fn cache, so the write stores nothing (schema's {@code s/defprotocol}
+	 * synchronizes the field between a method and its wrapper). Any other Clojure value
+	 * has no such public field: the oracle's {@code No matching field found} (nil its
+	 * {@code NullPointerException}). A host object's field is refused by name, as is a
+	 * static field {@code (. Class f)}: the {@code java:} surface has no field write.
+	 * Null when the target is no field form.
+	 */
+	private static @Nullable LispVal hostFieldSetOf(ClojureLowering ctx, LispVal target, LispVal valueDatum) {
+		List<LispVal> parts = ClojureLowerUtil.items(target);
+		if (parts == null || parts.isEmpty() || !(parts.get(0) instanceof LispSymbol head)) {
+			return null;
+		}
+		String name = head.name();
+		LispVal object;
+		String field;
+		if (name.equals(".") && parts.size() == 3 && parts.get(2) instanceof LispSymbol member) {
+			field = member.name().startsWith("-") ? member.name().substring(1) : member.name();
+			if (parts.get(1) instanceof LispSymbol cls && ClojureNamespaceLowering.isClasslike(ctx, cls.name())) {
+				return ClojureLowerUtil.list(ClojureLowerUtil.sym("progn"), ctx.lower(valueDatum), ClojureRefusals
+					.refusal(ClojureRefusals.UNSUPPORTED_OPERATION, LispString.literal(HOST_FIELD_WRITE)));
+			}
+			object = parts.get(1);
+		}
+		else if (name.startsWith(".") && name.length() > 1 && !name.equals("..") && parts.size() == 2) {
+			field = name.startsWith(".-") ? name.substring(2) : name.substring(1);
+			object = parts.get(1);
+		}
+		else {
+			return null;
+		}
+		ClojureLowerUtil.isTrue(!field.isEmpty(), "set! of a field needs a field name: " + target.print());
+		LispSymbol obj = ctx.freshTemp();
+		LispSymbol value = ctx.freshTemp();
+		LispVal refusal = ClojureValueMethodLowering.refusal(obj, field, true, List.of());
+		if (ctx.hostTarget) {
+			refusal = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LISP-VALUE-P"), obj), refusal,
+					ClojureRefusals.refusal(ClojureRefusals.UNSUPPORTED_OPERATION,
+							LispString.literal(HOST_FIELD_WRITE)));
+		}
+		LispVal bindings = ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(obj, ctx.lower(object)),
+				ClojureLowerUtil.list(value, ctx.lower(valueDatum))));
+		if (!field.equals(METHOD_IMPL_CACHE)) {
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), bindings, ClojureLowerUtil
+				.list(ClojureLowerUtil.sym("declare"), ClojureLowerUtil.list(ClojureLowerUtil.sym("ignore"), value)),
+					refusal);
+		}
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), bindings,
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), obj), value, refusal));
 	}
 
 	/**

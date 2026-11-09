@@ -5619,8 +5619,9 @@ cases:
     # The root becomes (apply f root args) and the call answers it: a def's, a
     # dynamic var's at the root, a declared one's (from the unbound root), a defn's
     # (made redefinable, so a caller sees the new root, also from a macro
-    # expansion's #'), past a local of the name; a throwing f leaves the root.
-    # Oracle-identical (clj 1.12.6).
+    # expansion's #'), past a local of the name; a throwing f leaves the root; a
+    # protocol method's (made redefinable too: a call, a caller and the method
+    # as a value reach the new root). Oracle-identical (clj 1.12.6).
     source: |
       (def ^:dynamic *avr-fmt* :hiccup)
       (println (alter-var-root #'*avr-fmt* (constantly :enlive)) *avr-fmt*)
@@ -5648,6 +5649,11 @@ cases:
       (avr-swap! avr-g (fn [] :swapped))
       (println (avr-g) (avr-h))
       (println (try (alter-var-root #'avr-counter (fn [x] (throw (ex-info "no" {})))) (catch Exception e (ex-message e))) avr-counter)
+      (defprotocol AvrP (avr-m [x]))
+      (extend-protocol AvrP Long (avr-m [x] (inc x)))
+      (defn avr-call-m [x] (avr-m x))
+      (alter-var-root #'avr-m (fn [m] (fn [x] [:w (m x)])))
+      (println (avr-m 1) (avr-call-m 2) (map avr-m [3]))
     expected: |
       :enlive :enlive
       [11 11]
@@ -5660,6 +5666,7 @@ cases:
       :x
       :swapped :swapped
       no :m
+      [:w 2] [:w 3] ([:w 4])
   - name: alter-meta-and-reset-meta-replace-a-reference-metadata
     # A var keeps the altered metadata at every later #' site until a later def
     # of the name replaces it (instaparse's defclone copies :doc/:arglists this
@@ -16657,6 +16664,27 @@ cases:
       true true
       false false
       :cast :npe false
+  - name: set-of-a-field-form-decides-when-it-runs
+    # (set! (.f x) v), (.-f x) and (. x f): the target, then the value, then the write
+    # by the target's kind -- a fn's __methodImplCache takes it (schema's s/defprotocol
+    # syncs it), any other value has no such field (nil the NullPointerException).
+    # Oracle-identical (clj 1.12.6, 2026-11-09).
+    source: |
+      (defn sbf-g [^clojure.lang.AFunction f] (set! (.__methodImplCache f) nil) :set)
+      (prn :loaded (try (sbf-g inc) (catch Throwable e :threw)))
+      (prn (.__methodImplCache inc) (.-__methodImplCache inc) (set! (. inc __methodImplCache) nil))
+      (defn sbf-h [x] (set! (.-foo x) (do (print "v ") 2)))
+      (prn (try (sbf-h [1]) (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (sbf-h "s") (catch IllegalArgumentException e (ex-message e))))
+      (prn (try (sbf-h nil) (catch NullPointerException e :npe)))
+      (prn (try (set! (.foo {}) 1) (catch IllegalArgumentException e (ex-message e))))
+    expected: |
+      :loaded :set
+      nil nil nil
+      v "No matching field found: foo for class clojure.lang.PersistentVector"
+      v "No matching field found: foo for class java.lang.String"
+      v :npe
+      "No matching field found: foo for class clojure.lang.PersistentArrayMap"
   - name: print-simple-print-dup-and-print-ctor
     # print-simple writes as print writes, print-dup as pr writes except for
     # the readable #= constructions, and print-ctor wraps a writer's output in
