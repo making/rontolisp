@@ -9,8 +9,9 @@
 ファイルストリームと同じハンドル空間にあるため、標準のストリーム関数がそのまま
 使えます: [`read-line`](read-line.md)、[`write-line`](write-line.md)、
 [`read-byte`](read-byte.md)、[`write-byte`](write-byte.md)、
-[`close`](close.md)。プレーンなソケットと同様、書き込みは即座に送信され、相手が
-接続を閉じると `read-line` は `nil` を返します。
+[`close`](close.md)。プレーンなソケットと同様、書き込みはバッファされ
+([`tcp-connect`](rontolisp-tcp-connect.md))、相手が接続を閉じると `read-line` は
+`nil` を返します。
 
 サーバー証明書は JDK デフォルトのトラストストアで検証され、ホスト名も検証されます
 (HTTPS 方式のエンドポイント識別)。そのため、信頼されていない証明書やホスト名の

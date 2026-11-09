@@ -84,7 +84,8 @@ a handler serves are read from the file system as in any program
 The [`rontolisp:tcp-*` functions](../guides/tcp-sockets.md) and the usocket
 shim work in an executable as they do on the interpreter and the JVM: the
 runner opens the sockets, `host` may be a name or an address literal, every
-call blocks until it is done, `tcp-set-timeout` sets a real read deadline, and
+call blocks until it is done, writes are buffered until the program waits on a
+socket, flushes, closes or ends, `tcp-set-timeout` sets a real read deadline, and
 a failure signals an error with the same text (`tcp-connect: cannot connect to
 127.0.0.1:1: Connection refused`), which the usocket shim re-signals as
 `usocket:socket-error`. So a program that talks to PostgreSQL (cl-postgres) or

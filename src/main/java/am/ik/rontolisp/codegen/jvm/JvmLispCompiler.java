@@ -1671,14 +1671,6 @@ public final class JvmLispCompiler implements LispCompiler {
 		MethodRefEntry drainBodyHelperMethod = usesAsyncRuntime
 				? cp.methodRef(thisClass, JvmAsyncRuntimeBuilder.DRAIN_BODY_METHOD, JvmAsyncRuntimeBuilder.UNARY_DESC)
 				: null;
-		// An output file the program never closes is flushed on every way out of it, as
-		// C's exit flushes stdio and both wasm backends write through. Gated on the
-		// program naming one of the two file-stream producers (the program is not
-		// macro-expanded yet: with-open-file becomes open later, and a quit inside its
-		// body skips the close), so every other artifact keeps its exact bytes.
-		final @Nullable MethodRefEntry flushStreamsMethod = programUsesSymbol(program, LispNames.OPEN)
-				|| programUsesSymbol(program, LispNames.WITH_OPEN_FILE)
-						? cp.methodRef(thisClass, JvmFlushStreamsBuilder.METHOD, JvmFlushStreamsBuilder.DESC) : null;
 		MethodRefEntry waitForHelperMethod = usesAsyncRuntime
 				? cp.methodRef(thisClass, JvmAsyncRuntimeBuilder.WAIT_FOR_METHOD, JvmAsyncRuntimeBuilder.UNARY_DESC)
 				: null;
@@ -1705,6 +1697,15 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_LISTEN))
 				|| programUsesSymbol(program,
 						PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.TLS_LISTEN_P12));
+		// An output file the program never closes, and a socket's output buffer, are
+		// flushed on every way out of the program, as C's exit flushes stdio. Gated on
+		// the program naming one of the two file-stream producers (the program is not
+		// macro-expanded yet: with-open-file becomes open later, and a quit inside its
+		// body skips the close) or a socket built-in, so every other artifact keeps its
+		// exact bytes.
+		final @Nullable MethodRefEntry flushStreamsMethod = programUsesSymbol(program, LispNames.OPEN)
+				|| programUsesSymbol(program, LispNames.WITH_OPEN_FILE) || usesSockets
+						? cp.methodRef(thisClass, JvmFlushStreamsBuilder.METHOD, JvmFlushStreamsBuilder.DESC) : null;
 		// Cryptographic entropy helper: emitted only when the program references the
 		// internal %random-byte primitive, so an entropy-free program never loads
 		// java.security and keeps byte-identical output.
@@ -4611,7 +4612,7 @@ public final class JvmLispCompiler implements LispCompiler {
 					usesQuantized, this.needsIoStreamRuntime, usesReadLinePairs, usesLineStarts)
 			.methods();
 		if (flushStreamsMethod != null) {
-			ioMethods.add(JvmFlushStreamsBuilder.build(cp, thisClass));
+			ioMethods.add(JvmFlushStreamsBuilder.build(cp, thisClass, socketRuntime != null));
 		}
 		Utf8Entry streamsFieldName = cp.utf8Entry(JvmIoRuntimeBuilder.STREAMS_FIELD);
 		Utf8Entry streamsFieldDesc = cp.utf8Entry(JvmIoRuntimeBuilder.STREAMS_DESC);
@@ -4969,6 +4970,13 @@ public final class JvmLispCompiler implements LispCompiler {
 		definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | AccessFlag.ACC_VOLATILE, streamsFieldName,
 				streamsFieldDesc);
 		definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, streamCountFieldName, streamCountFieldDesc);
+		if (socketRuntime != null) {
+			// Every connected socket's output buffer, by socket: a ConcurrentHashMap made
+			// by the synchronized _sockBufs on first use.
+			definition.addField(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC,
+					cp.utf8Entry(JvmSocketRuntimeBuilder.SOCK_BUFS_FIELD),
+					cp.utf8Entry(JvmSocketRuntimeBuilder.SOCK_BUFS_FIELD_DESC));
+		}
 		if (midLineFieldRef != null) {
 			// A concurrent set, filled in <clinit>: one virtual thread per served request
 			// writes its own stream through the same field, and a table of flags growing
@@ -5854,7 +5862,8 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		if (socketRuntime != null) {
 			for (JvmSocketRuntimeBuilder.SocketMethod sm : socketRuntime.methods()) {
-				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, sm.name(), sm.desc(), sm.code());
+				definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC | sm.extraFlags(), sm.name(),
+						sm.desc(), sm.code());
 			}
 		}
 		if (ctorName != null) {
@@ -8474,10 +8483,11 @@ public final class JvmLispCompiler implements LispCompiler {
 		final @Nullable MethodRefEntry waitForHelper;
 
 		/**
-		 * {@code _flushStreams}, for a program that opens a file stream (null otherwise):
-		 * what every way out of the program -- {@code main}'s return, {@code %host-exit},
-		 * the uncaught-condition handler -- calls first, so an output file the program
-		 * never closed keeps what it still buffers ({@link JvmFlushStreamsBuilder}).
+		 * {@code _flushStreams}, for a program that opens a file stream or a socket (null
+		 * otherwise): what every way out of the program -- {@code main}'s return,
+		 * {@code %host-exit}, the uncaught-condition handler -- calls first, so an output
+		 * file or a socket the program never closed keeps what it still buffers
+		 * ({@link JvmFlushStreamsBuilder}).
 		 */
 		final @Nullable MethodRefEntry flushStreams;
 

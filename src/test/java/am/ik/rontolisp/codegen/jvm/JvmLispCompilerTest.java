@@ -11822,6 +11822,12 @@ class JvmLispCompilerTest {
 				      (close listener)
 				      (print reply))))
 				""")).isEqualTo("\"hello\"");
+		// The output buffer against a counting peer; what the program never flushes goes
+		// out on main's return (_flushStreams).
+		try (am.ik.rontolisp.TcpOutputBufferFixture peer = am.ik.rontolisp.TcpOutputBufferFixture.start()) {
+			assertThat(compileAndRun(peer.program())).isEqualTo(am.ik.rontolisp.TcpOutputBufferFixture.EXPECTED_OUTPUT);
+			assertThat(peer.received()).isEqualTo(am.ik.rontolisp.TcpOutputBufferFixture.EXPECTED_RECEIVED);
+		}
 	}
 
 	@Test

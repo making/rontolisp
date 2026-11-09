@@ -10,17 +10,19 @@ import am.ik.jvm.MethodCode;
 /**
  * Builds {@code _flushStreams()V}: flush every {@code java.io.Flushable} left in the
  * {@code _streams} table -- the {@code BufferedWriter} / {@code BufferedOutputStream} of
- * an output file the program never closed. C's {@code exit} does this for its stdio
- * buffers and both wasm backends need nothing ({@code fd_write} writes through), so
- * without it the JVM and the interpreter were the two backends where such a file ended up
- * empty.
+ * an output file the program never closed -- and, in a program with sockets, every
+ * socket's output buffer ({@code _sockFlushAll}, {@link JvmSocketRuntimeBuilder}). C's
+ * {@code exit} does this for its stdio buffers and both wasm backends need nothing for
+ * files ({@code fd_write} writes through), so without it the JVM and the interpreter were
+ * the two backends where such a file ended up empty.
  *
  * <p>
  * Called on every way out of the program: {@code main}'s return, {@code %host-exit}
  * before its {@code System.exit} ({@link JvmExitCompiler}) and the uncaught-condition
  * handler before its rethrow ({@link JvmUncaughtHandler}). A flush that fails is skipped,
  * as {@code exit} skips it, so the other streams still get theirs. Emitted, and called,
- * only for a program that names {@code open}, so every other artifact keeps its bytes.
+ * only for a program that names {@code open} or a socket built-in, so every other
+ * artifact keeps its bytes.
  */
 final class JvmFlushStreamsBuilder {
 
@@ -31,7 +33,7 @@ final class JvmFlushStreamsBuilder {
 	private JvmFlushStreamsBuilder() {
 	}
 
-	static JvmIoRuntimeBuilder.IoMethod build(ConstantPool cp, ClassEntry thisClass) {
+	static JvmIoRuntimeBuilder.IoMethod build(ConstantPool cp, ClassEntry thisClass, boolean sockets) {
 		FieldRefEntry streams = cp.fieldRef(thisClass, JvmIoRuntimeBuilder.STREAMS_FIELD,
 				JvmIoRuntimeBuilder.STREAMS_DESC);
 		ClassEntry flushable = cp.classEntry("java/io/Flushable");
@@ -39,6 +41,10 @@ final class JvmFlushStreamsBuilder {
 		ClassEntry ioException = cp.classEntry("java/io/IOException");
 		// Slots: 0=table, 1=index, 2=entry
 		MethodCode code = new MethodCode();
+		if (sockets) {
+			code.invokestatic(cp.methodRef(thisClass, JvmSocketRuntimeBuilder.SOCK_FLUSH_ALL_METHOD,
+					JvmSocketRuntimeBuilder.SOCK_FLUSH_ALL_DESC));
+		}
 		// Object[] table = _streams; if (table == null) return;
 		code.getstatic(streams);
 		code.astore(0);

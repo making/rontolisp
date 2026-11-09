@@ -37,7 +37,9 @@
 ;; whose text lastError holds. read fills the caller's buffer (the :bytes
 ;; shape: the trailing argument is the (unsigned-byte 8) vector) and answers
 ;; the count, 0 at the peer's close; write takes an octet vector or a string's
-;; raw bytes; readable answers 1 while bytes wait to be read, without blocking.
+;; raw bytes into the socket's output buffer, which flush sends (the host also
+;; sends it before any wait on a socket, at close and at the program's end);
+;; readable answers 1 while bytes wait to be read, without blocking.
 (rontolisp:wasm-import 'rontolisp::%rltcp-connect
                        :from "rltcp"
                        :as "connect"
@@ -62,6 +64,11 @@
                        :from "rltcp"
                        :as "write"
                        :params '(:s32 :octets)
+                       :returns :s32)
+(rontolisp:wasm-import 'rontolisp::%rltcp-flush
+                       :from "rltcp"
+                       :as "flush"
+                       :params '(:s32)
                        :returns :s32)
 (rontolisp:wasm-import 'rontolisp::%rltcp-close
                        :from "rltcp"
@@ -372,8 +379,9 @@
               (setq i (+ i 1))))))
     i))
 
-;;; --- writes: the host takes the bytes whole and blocks until the kernel has
-;;; them. A string crosses as its raw bytes, an octet vector as it is. ---
+;;; --- writes: the host takes the bytes whole into the socket's output buffer,
+;;; blocking only when it sends. A string crosses as its raw bytes, an octet
+;;; vector as it is. ---
 
 (defun rontolisp::%sock-write-octets (e octets op)
   (when (< (rontolisp::%rltcp-write (rontolisp::%sock-e-host e) octets) 0)
@@ -592,14 +600,23 @@
           t)
         (rontolisp::%close-raw stream))))
 
-;;; force-output and finish-output: every runner write has reached the host when
-;;; it returns, so a socket has nothing to flush.
+;;; force-output and finish-output: a socket's output buffer lives in the host,
+;;; which sends it and blocks until the kernel has the bytes.
+(defun rontolisp::%sock-send-buffered (e op)
+  ;; A listener has nothing to send, as the interpreter's has not.
+  (when (and (= (rontolisp::%sock-e-kind e) 1)
+             (< (rontolisp::%rltcp-flush (rontolisp::%sock-e-host e)) 0))
+    (rontolisp::%sock-host-fail (concatenate 'string op ": ")))
+  nil)
+
 (defun rontolisp::%io-force-output (&optional stream)
-  (if (rontolisp::%sock-entry stream)
-      nil
-      (rontolisp::%force-output-raw stream)))
+  (let ((e (rontolisp::%sock-entry stream)))
+    (if e
+        (rontolisp::%sock-send-buffered e "force-output")
+        (rontolisp::%force-output-raw stream))))
 
 (defun rontolisp::%io-finish-output (&optional stream)
-  (if (rontolisp::%sock-entry stream)
-      nil
-      (rontolisp::%force-output-raw stream)))
+  (let ((e (rontolisp::%sock-entry stream)))
+    (if e
+        (rontolisp::%sock-send-buffered e "finish-output")
+        (rontolisp::%force-output-raw stream))))
