@@ -45,8 +45,14 @@ hand there, see its `patches.diff`):
   `(.. this getClass (isInstance o))` in the deftypes' `equals`/`toString` -- `No matching method
   isInstance found taking 1 args for class clojure.lang.Keyword` on the first `appendo`.
 - schema 1.4.2: `schema/utils.cljc:155` `(assert (class? klass) ...)` in `declare-class-schema!`
-  (`Cannot declare class schema for non-class :keyword`, every `s/defrecord`), and
-  `schema/core.cljc:1009` `(class? klass)` in `record*`.
+  (`Cannot declare class schema for non-class :keyword`): `s/defn` hands it `(class f)`, the
+  `:function` keyword. Since j13 (2026-11-09) a record's class is a class value (its
+  `(:C%CLASS "ns.Name")` designator, `class?` true, one Java object per class as a host map
+  key), so `s/defrecord`, `s/record` and `record*`'s `(class? klass)` run verbatim.
 
-Related items from the same round: `.todo/j13` (a record name as a value), `.todo/j15`
+A record's or deftype's class value is its dispatch tag since j13: the designator one function
+makes (`ClojureProtocolLowering.typeTagForm`), every row of the type keyed by it -- what a
+generated class would replace on the host targets.
+
+Related items from the same round: `.todo/j13` (a record name as a value, done 2026-11-09), `.todo/j15`
 (`clojure.core$NAME`), `.todo/j20` (a class value inside a macro's expansion).

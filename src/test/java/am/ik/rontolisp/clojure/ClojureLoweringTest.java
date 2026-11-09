@@ -705,7 +705,7 @@ class ClojureLoweringTest {
 		// the body is data: built in place over the quoted values (no constructor
 		// call), the declared fields first, nil until named
 		String map = lowered("(defrecord R [a b]) #user.R{:b x :c (f 1)}");
-		assertThat(map).contains("(LIST :C%RECORD (LIST :C%KEYWORD \"R\")")
+		assertThat(map).contains("(LIST :C%RECORD (LIST :C%CLASS \"user.R\")")
 			.contains("'|c%x|")
 			.contains("'(|c%f| 1)")
 			.contains("\"user.R\"")
@@ -1497,9 +1497,12 @@ class ClojureLoweringTest {
 			.contains("%CLOJURE-EXTEND");
 		assertThat(lowered("(defprotocol P (foo [x])) (extend-protocol P String (foo [s] s))"))
 			.doesNotContain("%CLOJURE-EXTEND");
-		// a record or deftype name in value position is its dispatch tag
-		assertThat(lowered("(defrecord R [a]) (prn R)")).contains(":C%KEYWORD \"R\"");
-		assertThat(lowered("(deftype T []) (prn T)")).contains(":C%KEYWORD \"T\"");
+		// a record or deftype name in value position is its dispatch tag, its class
+		// designator
+		assertThat(lowered("(defrecord R [a]) (prn R)"))
+			.contains("(RONTOLISP::%CLOJURE-WRITE-DATUM (LIST :C%CLASS \"user.R\")");
+		assertThat(lowered("(deftype T []) (prn T)"))
+			.contains("(RONTOLISP::%CLOJURE-WRITE-DATUM (LIST :C%CLASS \"user.T\")");
 		// the protocol's value is the oracle's map, its registry beside the method table
 		assertThat(lowered("(defprotocol P (foo [x] [x y]))")).contains("%CLOJURE-REGISTER-PROTOCOL")
 			.contains(":C%KEYWORD \"sigs\"")
@@ -1640,7 +1643,7 @@ class ClojureLoweringTest {
 		String record = lowered("(require '[clojure.core.protocols :as p]) (defrecord R [a])"
 				+ " (extend-protocol p/IKVReduce R (kv-reduce [r f init] init))");
 		assertThat(record).contains(
-				"(RONTOLISP::%CLOJURE-KV-REDUCER-ROW |c%clojure.core.protocols/IKVReduce%methods| (LIST :C%KEYWORD \"R\")");
+				"(RONTOLISP::%CLOJURE-KV-REDUCER-ROW |c%clojure.core.protocols/IKVReduce%methods| (LIST :C%CLASS \"user.R\")");
 		// the namespace's own nil and Object rows, a core kind and any other protocol
 		// store without the writer (the defprotocol registration carries the
 		// reducing method's keyword, never the row writer, so a program
@@ -1688,9 +1691,9 @@ class ClojureLoweringTest {
 			.contains("'(\"clojure.lang.Counted\") (LIST \"count\" (LAMBDA (");
 		String indexed = lowered("(deftype T [n] clojure.lang.Indexed (nth [_ i] i))");
 		assertThat(indexed).contains(
-				"(RONTOLISP::%CLOJURE-INDEXED-ROW (LIST :C%KEYWORD \"T\") '(\"clojure.lang.Indexed\") (LIST \"nth\"")
+				"(RONTOLISP::%CLOJURE-INDEXED-ROW (LIST :C%CLASS \"user.T\") '(\"clojure.lang.Indexed\") (LIST \"nth\"")
 			.contains(
-					"(RONTOLISP::%CLOJURE-COUNTED-ROW (LIST :C%KEYWORD \"T\") '(\"clojure.lang.Counted\") (LIST \"count\"")
+					"(RONTOLISP::%CLOJURE-COUNTED-ROW (LIST :C%CLASS \"user.T\") '(\"clojure.lang.Counted\") (LIST \"count\"")
 			.contains("(RONTOLISP::%CLOJURE-ABSTRACT-METHOD-ERROR \"does not define or inherit an implementation of"
 					+ " the resolved method count of interface clojure.lang.Counted\")")
 			.contains("(RONTOLISP::%CLOJURE-ABSTRACT-METHOD-ERROR \"does not define or inherit an implementation of"
@@ -1700,11 +1703,11 @@ class ClojureLoweringTest {
 		String chars = lowered("(deftype S [s] CharSequence (length [_] 1) (charAt [_ i] \\a)"
 				+ " (subSequence [_ a b] nil) (toString [_] \"a\"))");
 		assertThat(chars)
-			.contains("(RONTOLISP::%CLOJURE-CHAR-SEQUENCE-ROW (LIST :C%KEYWORD \"S\") '(\"java.lang.CharSequence\")"
+			.contains("(RONTOLISP::%CLOJURE-CHAR-SEQUENCE-ROW (LIST :C%CLASS \"user.S\") '(\"java.lang.CharSequence\")"
 					+ " (LIST \"length\" (LAMBDA (")
 			.contains("\"charAt\" (LAMBDA (")
 			.contains("\"subSequence\" (LAMBDA (")
-			.contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (LIST :C%KEYWORD \"S\") NIL (LIST \"toString\" (LAMBDA (")
+			.contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (LIST :C%CLASS \"user.S\") NIL (LIST \"toString\" (LAMBDA (")
 			.doesNotContain("\"isEmpty\"");
 		// a Comparator stores its compare through the Comparable row's family (the
 		// defaults its body leaves out stay Java's)
@@ -1732,7 +1735,7 @@ class ClojureLoweringTest {
 		assertThat(lowered("(deftype D [] java.util.concurrent.ScheduledFuture (isDone [_] true))"))
 			.contains("'(\"java.util.concurrent.ScheduledFuture\" \"java.util.concurrent.Delayed\""
 					+ " \"java.util.concurrent.Future\")")
-			.contains("(RONTOLISP::%CLOJURE-COMPARABLE-ROW (LIST :C%KEYWORD \"D\") '(\"java.lang.Comparable\")");
+			.contains("(RONTOLISP::%CLOJURE-COMPARABLE-ROW (LIST :C%CLASS \"user.D\") '(\"java.lang.Comparable\")");
 		for (String[] refused : new String[][] {
 				{ "(reify IFn (invoke [_] 1))", "Unable to resolve symbol: IFn in this context" },
 				{ "(reify clojure.lang.IChunkedSeq (first [_] 1))",
@@ -1766,7 +1769,7 @@ class ClojureLoweringTest {
 		String defined = lowered("(definterface PBR (^int readChar []) (^long readChars [b s l]))");
 		assertThat(defined).contains("\"user.PBR\"").doesNotContain("-ROW (");
 		String type = lowered("(definterface PBR (^int readChar [])) (deftype R [n] PBR (readChar [_] n))");
-		assertThat(type).contains("(RONTOLISP::%CLOJURE-DEFINED-INTERFACE-ROW (LIST :C%KEYWORD \"R\")"
+		assertThat(type).contains("(RONTOLISP::%CLOJURE-DEFINED-INTERFACE-ROW (LIST :C%CLASS \"user.R\")"
 				+ " '(\"user.PBR\") (LIST \"readChar\" (LAMBDA (");
 		String reified = lowered("(definterface PBR (^int readChar [])) (def r (reify PBR (readChar [_] 1)))");
 		assertThat(reified).contains("(RONTOLISP::%CLOJURE-DEFINED-INTERFACE-ROW (LIST :C%KEYWORD \"reify ")
@@ -1819,9 +1822,9 @@ class ClojureLoweringTest {
 		// compareTo of a type implementing no Comparable the oracle's cast failure
 		String task = "(deftype Task [] Runnable (run [_] (println \"ran\")))";
 		String faced = lowered(task + " (Thread. (Task.))");
-		assertThat(faced)
-			.contains("(RONTOLISP::%CLOJURE-INVOKABLE-ROW (RONTOLISP::%CLOJURE-JAVA-FACE-TAG (LIST :C%KEYWORD \"Task\")"
-					+ " (LAMBDA (")
+		assertThat(faced).contains(
+				"(RONTOLISP::%CLOJURE-INVOKABLE-ROW (RONTOLISP::%CLOJURE-JAVA-FACE-TAG (LIST :C%CLASS \"user.Task\")"
+						+ " (LAMBDA (")
 			.contains("(JAVA:REIFY '(\"java.lang.Runnable\" \"java.lang.Comparable\") :VALUE ")
 			.contains(" :CLASS \"user.Task\" \"compareTo(java.lang.Object)\" (LAMBDA (")
 			.contains("(RONTOLISP::%CLOJURE-CLASS-CAST-EXCEPTION"
@@ -1882,13 +1885,13 @@ class ClojureLoweringTest {
 		// ILookup) and Counted: one store per family of the closure
 		String map = lowered("(deftype M [m] clojure.lang.IPersistentMap (count [_] 0) (without [_ k] nil))");
 		assertThat(map).contains(
-				"(RONTOLISP::%CLOJURE-PERSISTENT-MAP-ROW (LIST :C%KEYWORD \"M\") '(\"clojure.lang.IPersistentMap\")")
-			.contains("(RONTOLISP::%CLOJURE-ITERABLE-ROW (LIST :C%KEYWORD \"M\") '(\"java.lang.Iterable\")")
-			.contains("(RONTOLISP::%CLOJURE-ASSOCIATIVE-ROW (LIST :C%KEYWORD \"M\")")
-			.contains("(RONTOLISP::%CLOJURE-COLLECTION-ROW (LIST :C%KEYWORD \"M\")")
-			.contains("(RONTOLISP::%CLOJURE-SEQABLE-ROW (LIST :C%KEYWORD \"M\")")
-			.contains("(RONTOLISP::%CLOJURE-LOOKUP-ROW (LIST :C%KEYWORD \"M\")")
-			.contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (LIST :C%KEYWORD \"M\")")
+				"(RONTOLISP::%CLOJURE-PERSISTENT-MAP-ROW (LIST :C%CLASS \"user.M\") '(\"clojure.lang.IPersistentMap\")")
+			.contains("(RONTOLISP::%CLOJURE-ITERABLE-ROW (LIST :C%CLASS \"user.M\") '(\"java.lang.Iterable\")")
+			.contains("(RONTOLISP::%CLOJURE-ASSOCIATIVE-ROW (LIST :C%CLASS \"user.M\")")
+			.contains("(RONTOLISP::%CLOJURE-COLLECTION-ROW (LIST :C%CLASS \"user.M\")")
+			.contains("(RONTOLISP::%CLOJURE-SEQABLE-ROW (LIST :C%CLASS \"user.M\")")
+			.contains("(RONTOLISP::%CLOJURE-LOOKUP-ROW (LIST :C%CLASS \"user.M\")")
+			.contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (LIST :C%CLASS \"user.M\")")
 			// an abstract method the body leaves out is the oracle's AbstractMethodError
 			// ...
 			.contains("the resolved method iterator of interface java.lang.Iterable\")")
@@ -1897,11 +1900,11 @@ class ClojureLoweringTest {
 			.doesNotContain("\"spliterator\"");
 		// a java.util interface's equals and hashCode are Object's
 		assertThat(lowered("(deftype S [] java.util.Set (equals [_ o] true))"))
-			.contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (LIST :C%KEYWORD \"S\") NIL (LIST \"equals\" (LAMBDA (")
+			.contains("(RONTOLISP::%CLOJURE-OBJECT-ROW (LIST :C%CLASS \"user.S\") NIL (LIST \"equals\" (LAMBDA (")
 			.doesNotContain("the resolved method equals");
 		// a type hint on a method's name is metadata, like the oracle's
 		assertThat(lowered("(deftype V [] clojure.lang.Counted (^long count [_] 1))"))
-			.contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (LIST :C%KEYWORD \"V\") '(\"clojure.lang.Counted\")"
+			.contains("(RONTOLISP::%CLOJURE-COUNTED-ROW (LIST :C%CLASS \"user.V\") '(\"clojure.lang.Counted\")"
 					+ " (LIST \"count\" (LAMBDA (");
 		assertThat(lowered("(defprotocol G (^String g [x])) (deftype W [] G (^String g [_] \"w\")) (g (W.))"))
 			.contains("(|c%g| (|c%->W|))");
@@ -4862,8 +4865,7 @@ class ClojureLoweringTest {
 		// aliases (what ::kw resolves against); a program that reads registers its
 		// record classes behind the false binding, ahead of everything else
 		String program = lowered("(ns rd (:require [clojure.string :as s])) (defrecord R [a]) (read-string \"1\")");
-		assertThat(program)
-			.startsWith(FALSE_BINDING + "(RONTOLISP::%CLOJURE-READ-REGISTER '((\"rd.R\" \"R\" (\"a\") T)))")
+		assertThat(program).startsWith(FALSE_BINDING + "(RONTOLISP::%CLOJURE-READ-REGISTER '((\"rd.R\" (\"a\") T)))")
 			.contains("(RONTOLISP::%CLOJURE-READ-STRING \"1\" '(\"rd\" ")
 			.contains("(\"s\" \"clojure.string\")");
 		assertThat(lowered("(read-string {:eof 1} \"\")")).contains("(RONTOLISP::%CLOJURE-READ-STRING-OPTS ");
@@ -4918,7 +4920,7 @@ class ClojureLoweringTest {
 			.hasMessageContaining("Wrong number of args (2) passed to: clojure.core/hash-ordered-coll");
 		// hash reads an IHashEq row, so it is a family of its own, not a marker
 		assertThat(lowered("(deftype H [] clojure.lang.IHashEq (hasheq [_] 1))"))
-			.contains("(RONTOLISP::%CLOJURE-HASHEQ-ROW (LIST :C%KEYWORD \"H\") '(\"clojure.lang.IHashEq\")")
+			.contains("(RONTOLISP::%CLOJURE-HASHEQ-ROW (LIST :C%CLASS \"user.H\") '(\"clojure.lang.IHashEq\")")
 			.doesNotContain("%CLOJURE-MARKER-ROW");
 		// .hashCode of a receiver of no known class is the hashCode of any value, on
 		// every backend; a known host class keeps the host's

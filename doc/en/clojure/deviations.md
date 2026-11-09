@@ -369,11 +369,10 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `Compiler$CompilerException` with the lowering's words. In a macro body `eval` and
   `resolve` of a computed symbol run while the program lowers on every backend, and a
   definition such an `eval`'d form makes exists only there. `resolve`
-  answers `nil` for a `clojure.core` var this front end lacks (the oracle's var), for a
-  record or type name (the oracle's class) and for a var of a namespace built into the
-  lowering (`clojure.string`); a quoted symbol resolves in the namespace the call lowers
-  in, where the oracle reads `*ns*` when the call runs, and to a definition below the call
-  too.
+  answers `nil` for a `clojure.core` var this front end lacks (the oracle's var) and for a
+  var of a namespace built into the lowering (`clojure.string`); a quoted symbol resolves in
+  the namespace the call lowers in, where the oracle reads `*ns*` when the call runs, and to
+  a definition below the call too.
 - `#(...)` reads as the oracle's `(fn* [p1__N# ...] (body))` in source, under a quote and
   in `read-string`/`read`, but N restarts at each top-level form (each datum read), where
   the oracle's counter runs across the process: the parameter names differ, and two reads
@@ -602,8 +601,12 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   field.
 - A bare class name is its `(:C%CLASS name)` designator on the wasm backends, so a
   class-keyed map builds at load; two literals of one class are equal, like two
-  `forName` answers, but one prints as the list where the oracle prints the name, and
-  `class?` and `str` read the designator.
+  `forName` answers. A designator prints as the class's name and answers `class?`,
+  `.getName` and `.getSimpleName` like the oracle's class object, but `str` of one spells
+  `class` ahead of the name for an interface too (the oracle: `interface`). A record's or
+  deftype's class and what `type` answers are designators on every backend, so on the
+  interpreter and the JVM, where a class literal is the host's class object,
+  `(= (type "a") String)` is `false`.
 - A `DateTimeFormatterBuilder` chain evaluates on the wasm backends (each builder call
   threads a marker, `toFormatter` the formatter, `ofPattern` and `ZoneId/of` their
   own), so a load-time formatter builds; parsing or formatting with one is rejected in

@@ -2,7 +2,7 @@
 
 `(defrecord Name [fields...] Protocol (method [target & args] body...) ...)`
 
-Defines a record: a map with a type tag. The value wraps the entry table every map
+Defines a record: a map with a type tag, its class. The value wraps the entry table every map
 uses as `(:C%RECORD tag fields table class)`, so the map verbs read through it
 (`get`/`contains?`/`keys`/`vals`/`count`/`seq` read the entries; `assoc`/`update`/
 `conj`/`merge` rebuild the table and keep the tag; `dissoc` keeps the record while
@@ -15,6 +15,14 @@ kept); `(Name. ...)` rewrites to `->Name`. Inline method bodies see the fields a
 locals, and an instance call reaches the inline methods and the declared fields
 ([`.name`](dot-name.md)). The name joins the whole-file pre-scan, so a constructor call may stand
 above the definition.
+
+The name in value position is the record's class, like the oracle's: what [class](class.md) and
+[type](type.md) answer for its values, so `(= R (class r))`, a set or map keyed by it and
+`instance?` of it agree; it prints as `user.R`, `str` answers `"class user.R"`, `class?` is true,
+`.getName`/`.getSimpleName` answer `"user.R"`/`"R"`, and `(Class/forName "user.R")` and
+`(resolve 'R)` answer it. The definition's value is the class too. A local or a var of the same
+name wins over it (the oracle refuses a program defining both), and a reference above the
+definition reads it as well (the oracle's `Unable to resolve symbol`), like a function's.
 
 A record prints as its literal, like the oracle: `#user.R{:a 7}` -- the defining
 namespace (`-` spelled `_`) plus the name, the declared fields first. The literal
@@ -37,6 +45,7 @@ Deviation: `str` of a record spells its literal, where the oracle answers
 (println (= r (->R 7)))           ; true
 (println (= r {:a 7}))            ; false
 (println (get (assoc r :b 1) :b)) ; 1
+(println R (str R) (= R (class r)) (contains? #{R} (type r))) ; user.R class user.R true true
 ```
 
 The body may implement the interfaces of [reify](reify.md#host-interfaces) a record does not

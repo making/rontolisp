@@ -453,6 +453,8 @@ final class ClojureValueMethodLowering {
 		row("getName", 0, arm(List.of("ident?"), core("name", R)),
 				new Arm(List.of(CLASS_DESIGNATOR), ctx -> part(ctx, "CADR")),
 				arm(List.of(NAMESPACE), core("ns-name", R)));
+		row("getSimpleName", 0,
+				new Arm(List.of(CLASS_DESIGNATOR), ctx -> part(ctx, "RONTOLISP::%CLOJURE-DESIGNATOR-SIMPLE-NAME")));
 		row("name", 0, arm(List.of(NAMESPACE), core("ns-name", R)));
 		row("getNamespace", 0, arm(List.of("ident?"), core("namespace", R)));
 		// a keyword's symbol; a var's name symbol, its public sym field
@@ -996,10 +998,10 @@ final class ClojureValueMethodLowering {
 			tests.add(switch (kind) {
 				case ATOM -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ATOM-P"), self);
 				case FUNCTION -> ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), self);
-				case CLASS_DESIGNATOR -> ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), self),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("eq"),
-								ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), self), new LispSymbol(":C%CLASS")));
+				// the class-designator family's test, so a program making no designator
+				// sheds the arm (spelling the tag here would make the family)
+				case CLASS_DESIGNATOR ->
+					ClojureLowerUtil.list(new LispSymbol(ClojurePredicateLowering.CLASS_DESIGNATOR_P), self);
 				case SEQ_ITERATOR -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SEQ-ITERATOR-P"), self);
 				// a vector's methods: a type implementing Indexed answers its own through
 				// the typed clauses ahead of the rows

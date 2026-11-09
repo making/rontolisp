@@ -10,7 +10,9 @@ oracle, unless the body implements the interface the function reads (below). Onl
 the fields as locals, like `defrecord`. A field marked `^:unsynchronized-mutable` or
 `^:volatile-mutable` is private to those methods, which assign it with
 [`set!`](set-bang.md). An instance call reaches the inline methods and the immutable
-fields ([`.name`](dot-name.md)). The name joins the whole-file pre-scan.
+fields ([`.name`](dot-name.md)). The name joins the whole-file pre-scan. The name in value
+position is the type's class, like a [record](defrecord.md)'s (`user.T`, what `class` answers
+for its values).
 
 ```clojure
 (deftype T [a])

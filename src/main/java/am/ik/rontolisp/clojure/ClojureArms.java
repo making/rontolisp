@@ -1018,6 +1018,23 @@ public final class ClojureArms {
 				Set.of()),
 
 		/**
+		 * A class designator {@code (:C%CLASS name)}: a record's or deftype's class (its
+		 * dispatch tag, which its name evaluates to and {@code class} answers), what
+		 * {@code type} answers for a core value whose kind collides with a schema
+		 * registry entry, and a class literal where no host is. The printer, {@code str},
+		 * {@code class}, {@code instance?} of {@code Class}, the hashes,
+		 * {@code identical?}, {@code cast}, {@code class?}, the class chains, the
+		 * {@code .getName}/{@code .getSimpleName} arms and a {@code java:} member's
+		 * argument read one: only a construction spelling the {@code :C%CLASS} tag and
+		 * {@code type}'s run-time designator make one. The alias is {@code class?}'s call
+		 * {@code (is-class value "java.lang.Class")}, which stands for the host test it
+		 * made before designators answered it.
+		 */
+		CLASS_DESIGNATOR("class-designator", Set.of(ClojurePredicateLowering.CLASS_DESIGNATOR_P), Set.of(),
+				Map.of(ClojurePredicateLowering.IS_CLASS, "RONTOLISP::%CLOJURE-HOST-INSTANCE-P"),
+				Set.of(":C%CLASS", ClojureDispatchLowering.TYPE_DESIGNATOR), Set.of()),
+
+		/**
 		 * A namespace, which the printer, {@code str} and {@code class} spell: only a
 		 * read of {@code *ns*} (whose root and switches build one), {@code the-ns},
 		 * {@code find-ns} and a var's {@code .ns} hand one to the program.

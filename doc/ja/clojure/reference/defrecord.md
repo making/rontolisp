@@ -2,7 +2,7 @@
 
 `(defrecord Name [fields...] Protocol (method [target & args] body...) ...)`
 
-レコードを定義します。型タグ付きのマップです。すべてのマップが使うエントリ表を
+レコードを定義します。型タグ（そのクラス）付きのマップです。すべてのマップが使うエントリ表を
 `(:C%RECORD tag fields table class)` で包むため、マップ動詞はそれを通して読みます
 （`get`・`contains?`・`keys`・`vals`・`count`・`seq` はエントリを読み、
 `assoc`・`update`・`conj`・`merge` は表を組み直してタグを保ち、`dissoc` は宣言
@@ -16,6 +16,14 @@ lower されます。位置指定の `->Name`（数が違うとシグナル）�
 見え、インスタンス呼び出しはインラインのメソッドと宣言フィールドに届きます
 （[`.name`](dot-name.md)）。名前はファイル全体の事前走査に参加するため、コンストラクタ呼び出しは
 定義より前に書けます。
+
+値の位置の名前は、オラクルと同じくレコードのクラスです。その値に対して [class](class.md) と
+[type](type.md) が返すものと同じなので、`(= R (class r))`、それをキーにしたセットやマップ、それに
+対する `instance?` の答えが一致します。`user.R` と印字され、`str` は `"class user.R"`、`class?` は
+真、`.getName`/`.getSimpleName` は `"user.R"`/`"R"` を返し、`(Class/forName "user.R")` と
+`(resolve 'R)` もこれを返します。定義そのものの値もクラスです。同名のローカルや var はこれより
+優先され（オラクルは両方を定義するプログラムを拒否します）、定義より前の参照も関数と同じくこれを
+読みます（オラクルは `Unable to resolve symbol`）。
 
 レコードはオラクル同様リテラルで印字されます。`#user.R{:a 7}` のように、定義した
 名前空間（`-` は `_` と綴る）と名前を並べ、宣言フィールドを先に置きます。リテラルは
@@ -38,6 +46,7 @@ lower されます。位置指定の `->Name`（数が違うとシグナル）�
 (println (= r (->R 7)))           ; true
 (println (= r {:a 7}))            ; false
 (println (get (assoc r :b 1) :b)) ; 1
+(println R (str R) (= R (class r)) (contains? #{R} (type r))) ; user.R class user.R true true
 ```
 
 本体は、[reify](reify.md#host-interfaces) のインタフェースのうちレコード自身が実装しない

@@ -66,19 +66,17 @@ class ClojureWasmInteropRefusalTest {
 	@Test
 	void classValueAnswersTheDesignatorOnPreview1() throws Exception {
 		// a bare class name is its (:C%CLASS name) designator where the host is
-		// not, so a class-keyed map builds at load (malli's class-schemas); two
-		// literals of one class are equal
-		assertThat(run("(println String) (println (= String String))", false))
-			.isEqualTo("(:C%CLASS java.lang.String)\ntrue\n");
+		// not, so a class-keyed map builds at load (malli's class-schemas); it
+		// prints as the oracle's class, and two literals of one class are equal
+		assertThat(run("(println String) (println (= String String))", false)).isEqualTo("java.lang.String\ntrue\n");
 	}
 
 	@Test
 	void classValueAnswersTheDesignatorOnTheComponent() throws Exception {
 		// a bare class name is its (:C%CLASS name) designator where the host is
-		// not, so a class-keyed map builds at load (malli's class-schemas); two
-		// literals of one class are equal
-		assertThat(run("(println String) (println (= String String))", true))
-			.isEqualTo("(:C%CLASS java.lang.String)\ntrue\n");
+		// not, so a class-keyed map builds at load (malli's class-schemas); it
+		// prints as the oracle's class, and two literals of one class are equal
+		assertThat(run("(println String) (println (= String String))", true)).isEqualTo("java.lang.String\ntrue\n");
 	}
 
 	@Test

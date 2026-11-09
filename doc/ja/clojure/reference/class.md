@@ -10,7 +10,9 @@
 `Double` も同じキーワードとして読むので、`(= Long (class 1))` は `true` です。バイト配列は `byte[]` のバイナリ名
 の `:[B` を返します。
 オラクルはホストクラスを返しますが、wasm バックエンドにはないため、全バックエンド共通で
-種類名のキーワードを返します。record/deftype はタグのキーワードを返します。例外と実行時エラーは
+種類名のキーワードを返します。record/deftype はそのクラスを返します。これは名前を値として評価した
+ものと同じで、オラクルと同じく `user.R` と印字され、`str` は `"class user.R"` を返します。クラス値
+（record のクラスや [type](type.md) の答え）には `java.lang.Class` を返します。例外と実行時エラーは
 クラス名をキーワードで返します（`:java.lang.IllegalArgumentException`、`:clojure.lang.ExceptionInfo`。
 実行時エラーと拒否はオラクルがその箇所で投げるクラス、クラスを示さないエラーは
 `:java.lang.RuntimeException`）。ストリーム（`*out*`・`*in*`・`*err*`、`StringWriter`、リーダー）はプリンタが示すホストクラスを

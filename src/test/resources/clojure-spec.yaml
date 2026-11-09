@@ -2855,8 +2855,10 @@ cases:
     # with :malli.core/invalid-schema like the oracle, instead of looping
     # through or mistyping under the colliding :function/:keyword/... entry
     # (f96). class keeps the kind keyword. Metadata and records still answer
-    # first. The designator names the host class where the oracle prints its
-    # object; anything else is the oracle's (clj 1.12.6, 2026-10-13).
+    # first. The designator prints as the oracle's class object (j13, 2026-11-09):
+    # every line is the oracle's (clj 1.12.6) but a function's class (the oracle
+    # names each function's own), the vector's and the number's kind keywords and
+    # class's keywords.
     source: |
       (println (type (fn [x] x)) (type pos-int?) (= (type pos-int?) (type pos-int?)))
       (println (type "s") (type :k) (type 's) (type true) (type nil))
@@ -2865,10 +2867,10 @@ cases:
       (println (class (fn [x] x)) (class "s") (class nil))
       (println (= (type "a") :string) (= (type 1) (class 1)))
     expected: |
-      (:C%CLASS clojure.lang.AFunction) (:C%CLASS clojure.lang.AFunction) true
-      (:C%CLASS java.lang.String) (:C%CLASS clojure.lang.Keyword) (:C%CLASS clojure.lang.Symbol) (:C%CLASS java.lang.Boolean) nil
+      clojure.lang.AFunction clojure.lang.AFunction true
+      java.lang.String clojure.lang.Keyword clojure.lang.Symbol java.lang.Boolean nil
       :foo
-      (:C%CLASS clojure.lang.PersistentArrayMap) (:C%CLASS clojure.lang.PersistentArrayMap) (:C%CLASS clojure.lang.PersistentTreeMap) (:C%CLASS clojure.lang.PersistentHashSet) :vector :java.lang.Long
+      clojure.lang.PersistentArrayMap clojure.lang.PersistentArrayMap clojure.lang.PersistentTreeMap clojure.lang.PersistentHashSet :vector :java.lang.Long
       :function :string :nil
       false true
   - name: a-type-designator-dispatches-and-instances-as-its-kind
@@ -4281,10 +4283,10 @@ cases:
   - name: a-macro-expansion-holding-a-class-value-lowers
     # A macro's answer travels back through this front end's value model, where a class
     # value has no readable form: a (:C%CLASS name) designator (what type answers at
-    # macro time) travels as the construction it is, the same value on every backend,
-    # and a class a macro body's answer holds lowers rather than refusing the expansion
-    # (datascript's defn+ patch-tag, db.cljc:73-81). The tag itself is metadata the
-    # backends never read; the case below prints it where a host class exists.
+    # macro time, printing as its class's name) travels as the construction it is, the
+    # same value on every backend, and a class a macro body's answer holds lowers rather
+    # than refusing the expansion (datascript's defn+ patch-tag, db.cljc:73-81). The tag
+    # itself is metadata the backends never read; the case below prints it.
     source: |
       (defmacro cvm-type [v] `'~(mapv type v))
       (println (cvm-type [(foo) a 1]))
@@ -4292,15 +4294,13 @@ cases:
       (cvm-tag)
       (println cvm-x)
     expected: |
-      [:list (:C%CLASS clojure.lang.Symbol) :java.lang.Long]
+      [:list clojure.lang.Symbol :java.lang.Long]
       true
   - name: a-macro-expansions-tag-metadata-holds-the-class-value
     # The class value the macro put in :tag metadata is visible in (meta #'x) and
     # ignored elsewhere. It is the oracle's class on a host, its (:C%CLASS name)
-    # designator where no host exists (a class literal's own split).
-    skip:
-      wasm: a class literal is its (:C%CLASS name) designator there
-      wasm_component: a class literal is its (:C%CLASS name) designator there
+    # designator where no host exists (a class literal's own split), which prints
+    # as the class's name.
     source: |
       (println (:tag (meta #'cvm-x)))
     expected: |
@@ -6645,24 +6645,24 @@ cases:
       1
       (:mass)
       (7)
-      :Rock
+      runs_ns.Rock
       true
       false
       true
-      :Rock
+      runs_ns.Rock
       :red
       :gone
       #runs_ns.Rock{:mass 42}
-      :Rock
+      runs_ns.Rock
       :gone
       {}
       true
-      :Rock
+      runs_ns.Rock
       :map
       17
-      :Rock
+      runs_ns.Rock
       17
-      :Rock
+      runs_ns.Rock
       :map
       :map
       7
@@ -6730,7 +6730,7 @@ cases:
       true
       true
       true
-      :Clock
+      runs_ns.Clock
       nil
       100
   - name: object-extension-keeps-a-row-per-method
@@ -6879,7 +6879,7 @@ cases:
   - name: reify-values-dispatch-and-deftypes-stay-opaque
     # each reify is a distinct dispatch value (= is identity); a deftype is
     # opaque to the map verbs (reads miss; contains?, writers and seq/count/empty?
-    # signal, caught here) while instance?/class still see its tag.
+    # signal, caught here) while instance?/class still see its tag, its class.
     source: |
       (defprotocol Greet (hello [g]))
       (def ga (reify Greet (hello [_] :a)))
@@ -6921,7 +6921,7 @@ cases:
       :threw
       :threw
       :threw
-      :Box
+      runs_ns.Box
       true
       :str
       :fn
@@ -16027,15 +16027,15 @@ cases:
       "queue of 3" "other"
   - name: a-persistent-queue-prints-as-the-host-object-its-hash-left-out
     # A deviation: the oracle's #object carries the identity hash, which no value
-    # here has (a byte array's precedent), and class answers the deftype's tag
-    # keyword, where the oracle answers clojure.lang.PersistentQueue. toString is
-    # the oracle's (Class@ the hex of its hashCode).
+    # here has (a byte array's precedent). class answers the deftype's class,
+    # clojure.lang.PersistentQueue like the oracle's (j13), and toString is the
+    # oracle's (Class@ the hex of its hashCode).
     source: |
       (def pq-p (conj clojure.lang.PersistentQueue/EMPTY 1 2 3))
       (prn pq-p (class pq-p))
       (println pq-p [clojure.lang.PersistentQueue/EMPTY])
     expected: |
-      #object[clojure.lang.PersistentQueue "clojure.lang.PersistentQueue@7861"] :PersistentQueue
+      #object[clojure.lang.PersistentQueue "clojure.lang.PersistentQueue@7861"] clojure.lang.PersistentQueue
       #object[clojure.lang.PersistentQueue clojure.lang.PersistentQueue@7861] [#object[clojure.lang.PersistentQueue clojure.lang.PersistentQueue@1]]
   - name: fnext-and-nnext-step-past-the-head
     # (first (next x)) and (next (next x)), each tail through the seq view.
@@ -18060,3 +18060,44 @@ cases:
       (ns auto)
     expected: |
       77
+  - name: a-record-or-deftype-name-is-its-class-value
+    # j13: a record's or deftype's name in value position is its class value -- the
+    # (:C%CLASS "ns.Name") designator that is also its dispatch tag and what class and
+    # type answer for its values -- so set membership, = and a function handed the
+    # class agree, and it prints and strs as the oracle's class: a local of the name
+    # wins, a top-level do answers it (the next form constructs), the definition's
+    # value is the class, a multimethod over [(class a) (class b)] finds the [R T]
+    # row, extenders, Class/forName and resolve answer it, the record's static
+    # create builds it from a map, and two namespaces' records of one simple name
+    # are two classes. Oracle-identical (clj 1.12.6, 2026-11-09).
+    source: |
+      (in-ns 'user)
+      (defrecord J13R [a])
+      (deftype J13T [])
+      (defn j13-reg [c] (str c))
+      (prn (contains? #{J13R} (type (->J13R 1))) (= J13T (type (J13T.))) (j13-reg J13R) [J13R J13T])
+      (do (defrecord J13D [a]) J13D)
+      (prn (J13D. 1) (deftype J13E []))
+      (prn (let [J13R 5] J13R) (class J13R) (class? J13R) (.getSimpleName J13R) (identical? J13R (class (->J13R 1))))
+      (prn (get {J13R :r J13T :t} (class (J13T.))) (instance? (identity J13R) (->J13R 1)) (cast J13R (->J13R 2)))
+      (defmulti j13-m (fn [a b] [(class a) (class b)]))
+      (defmethod j13-m [J13R J13T] [a b] :rt)
+      (defmethod j13-m :default [a b] :other)
+      (prn (j13-m (->J13R 1) (J13T.)) (j13-m (J13T.) (->J13R 1)))
+      (defprotocol J13P (j13-p [x]))
+      (extend-type J13R J13P (j13-p [x] :p))
+      (prn (extenders J13P) (= (Class/forName "user.J13R") J13R) (resolve 'J13R))
+      (prn (J13R/create {:a 3 :z 4}) (map J13R/create [{}]))
+      (ns j13-other)
+      (defrecord J13R [b])
+      (prn J13R (= J13R user.J13R) (->J13R 1))
+      (in-ns 'auto)
+    expected: |
+      true true "class user.J13R" [user.J13R user.J13T]
+      #user.J13D{:a 1} user.J13E
+      5 java.lang.Class true "J13R" true
+      :t true #user.J13R{:a 2}
+      :rt :other
+      (user.J13R) true user.J13R
+      #user.J13R{:a 3, :z 4} (#user.J13R{:a nil})
+      j13_other.J13R false #j13_other.J13R{:b 1}

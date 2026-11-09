@@ -168,28 +168,31 @@ final class ClojureProtocolLowering {
 	/** The index of a deftype's mutable-field slot vector, behind its class name. */
 	static final int DEFTYPE_SLOTS = 5;
 
-	/** A type's dispatch tag as data: the keyword of its spelling. */
-	static LispVal typeTagForm(String name) {
-		return ClojureCollectionLowering.keywordForm(name);
+	/**
+	 * A type's dispatch tag as data: the {@code (:C%CLASS "ns.Name")} designator of its
+	 * class, which is also its class value -- what {@code class} and {@code type} answer
+	 * for its values, what its name evaluates to, and what prints as the oracle's class
+	 * ({@code user.R}). Every row the type has (protocol, multimethod, hierarchy,
+	 * {@code print-method}, interface) is keyed by it, so a computed class value reaches
+	 * them as the name does.
+	 */
+	static LispVal typeTagForm(ClojureLowering.TypeDef type) {
+		return ClojureCoreLowering.classDesignator(type.className());
 	}
 
 	/**
-	 * A record or deftype name in value position: its dispatch tag, which is what
-	 * {@code class} answers for its values here and what a run-time {@code extend} reads
-	 * the type back through ({@link #EXTENDS_CALL}, {@code %clojure-extends-key}); null
-	 * for any other name. The oracle answers the host class object, which no backend here
-	 * generates.
+	 * A record or deftype name in value position: its class value ({@link #typeTagForm}),
+	 * equal to what {@code class} and {@code type} answer for its values and what a
+	 * run-time {@code extend} reads the type back through ({@link #EXTENDS_CALL},
+	 * {@code %clojure-extends-key}); null for any other name. A local or a var of the
+	 * name is resolved before this.
 	 * @param ctx the hub
 	 * @param name the name's spelling
 	 * @return the tag form, or null
 	 */
 	static @Nullable LispVal typeTagValue(ClojureLowering ctx, String name) {
-		String key = ctx.typeKeyOf(name);
-		if (key == null) {
-			return null;
-		}
-		ClojureLowering.TypeDef type = ctx.types.get(key);
-		return type == null ? null : typeTagForm(type.tagSpelling());
+		ClojureLowering.TypeDef type = ctx.typeDefOf(name);
+		return type == null ? null : typeTagForm(type);
 	}
 
 	/**
@@ -1841,19 +1844,6 @@ final class ClojureProtocolLowering {
 		}
 		TypeBody body = typeBody(ctx, rest, what);
 		List<LispVal> forms = new ArrayList<>();
-		// the value arms read a run-time type back as a typed key through the
-		// tag registry: the tag beside the constructors, answering the tag
-		// (what the constructors' defuns answer), so the definition answers
-		// what it answered before the registry existed. Beside the tag the
-		// registry holds the host class name and the var keys of the protocols
-		// the body names, so a run-time extend to a type whose body already
-		// implements the protocol refuses like the head call does (g43).
-		List<LispVal> bodyProtocols = new ArrayList<>();
-		for (String protocolKey : new TreeSet<>(def.protocols())) {
-			bodyProtocols.add(LispString.literal(protocolKey));
-		}
-		forms.add(ClojureLowerUtil.list(new LispSymbol(REGISTER_TAG), typeTagForm(name),
-				LispString.literal(def.className()), ctx.quote(ClojureLowerUtil.list(bodyProtocols))));
 		forms.add(positionalCtor(ctx, name, def));
 		if (record) {
 			forms.add(mapCtor(ctx, name, def));
@@ -1861,17 +1851,29 @@ final class ClojureProtocolLowering {
 		for (ClojureLowering.ImplGroup group : body.groups()) {
 			ClojureLowering.ProtocolDef protocol = protocolOf(ctx, group.protocol());
 			if (protocol != null && group.methods().isEmpty()) {
-				forms.add(emptyRowForm(protocol.inlineTable(), typeTagForm(name)));
+				forms.add(emptyRowForm(protocol.inlineTable(), typeTagForm(def)));
 			}
 			for (ClojureLowering.TypeMethod impl : group.methods()) {
-				forms.add(methodRow(ctx, group.protocol(), typeTagForm(name), impl, def.fields(), def.mutableFields()));
+				forms.add(methodRow(ctx, group.protocol(), typeTagForm(def), impl, def.fields(), def.mutableFields()));
 			}
 		}
-		List<LispVal> rows = interfaceRows(ctx, what, body.interfaces(), typeTagForm(name), null, def.fields(),
+		List<LispVal> rows = interfaceRows(ctx, what, body.interfaces(), typeTagForm(def), null, def.fields(),
 				def.mutableFields());
 		// what Java sees of a deftype: an implementation of its Java interfaces
 		ClojureJavaFaces.give(ctx, what, body.interfaces(), def.className(), rows);
 		forms.addAll(rows);
+		// the value arms read a run-time type back as a typed key through the tag
+		// registry: the tag beside the host class name and the var keys of the
+		// protocols the body names, so a run-time extend to a type whose body already
+		// implements the protocol refuses like the head call does (g43). Last, since
+		// the store answers the tag: the definition's value is the class, like the
+		// oracle's
+		List<LispVal> bodyProtocols = new ArrayList<>();
+		for (String protocolKey : new TreeSet<>(def.protocols())) {
+			bodyProtocols.add(LispString.literal(protocolKey));
+		}
+		forms.add(ClojureLowerUtil.list(new LispSymbol(REGISTER_TAG), typeTagForm(def),
+				LispString.literal(def.className()), ctx.quote(ClojureLowerUtil.list(bodyProtocols))));
 		ctx.usedProtocols = true;
 		return forms;
 	}
@@ -1900,9 +1902,9 @@ final class ClojureProtocolLowering {
 		LispVal table = ClojureCollectionLowering
 			.tableFromPlist(ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), pairs));
 		LispVal value = def.record()
-				? wrapRecord(typeTagForm(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table,
+				? wrapRecord(typeTagForm(def), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table,
 						LispString.literal(def.className()))
-				: wrapDeftype(typeTagForm(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table,
+				: wrapDeftype(typeTagForm(def), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table,
 						LispString.literal(def.className()),
 						slots.isEmpty() ? null : ClojureLowerUtil.cons(ClojureLowerUtil.sym("vector"), slots));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"),
@@ -1934,7 +1936,7 @@ final class ClojureProtocolLowering {
 							ClojureLowering.NIL_CONST),
 					ClojureLowering.NIL_CONST));
 		}
-		fill.add(wrapRecord(typeTagForm(name), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table,
+		fill.add(wrapRecord(typeTagForm(def), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table,
 				LispString.literal(def.className())));
 		LispVal whole = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"),
 				ClojureLowerUtil.list(List.of(ClojureLowerUtil.list(src, src),
@@ -2013,7 +2015,7 @@ final class ClojureProtocolLowering {
 			pairs.add(ClojureCollectionLowering.keywordForm(entry.getKey()));
 			pairs.add(ctx.quote(entry.getValue()));
 		}
-		return wrapRecord(typeTagForm(def.tagSpelling()), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys),
+		return wrapRecord(typeTagForm(def), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys),
 				ClojureCollectionLowering.tableFromPlist(ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), pairs)),
 				LispString.literal(className));
 	}
@@ -2041,7 +2043,7 @@ final class ClojureProtocolLowering {
 		}
 		ClojureLowering.TypeDef type = ctx.typeDefOf(typeName);
 		if (type != null) {
-			return typeTagForm(type.tagSpelling());
+			return typeTagForm(type);
 		}
 		// a package-qualified or imported spelling resolves like a defmethod dispatch
 		// value

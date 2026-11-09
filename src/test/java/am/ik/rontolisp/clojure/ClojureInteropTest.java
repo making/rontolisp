@@ -1867,7 +1867,13 @@ class ClojureInteropTest {
 				+ " (seq s)))", "\"[:a]\" true true (:a)\n");
 		assertBothEqual("(let [l (java.util.ArrayList.)] (.add l 'sym) (.add l 'ns/q) (prn (str l) (first l)"
 				+ " (symbol? (first l)) (= 'ns/q (second l))))", "\"[sym, ns/q]\" sym true true\n");
-		assertBothEqual("(defrecord R [a]) (println (str (java.util.HashMap. (->R 1))))", "{:a=1}\n");
+		// a record's class crosses as one object per class, so a Java map keys it
+		// like the oracle's Class, a WeakHashMap too (schema's class-schema registry)
+		assertBothEqual(
+				"(defrecord R [a]) (println (str (java.util.HashMap. (->R 1))))"
+						+ " (let [m (java.util.WeakHashMap.)] (.put m R 1) (System/gc) (prn (.get m R)"
+						+ " (.get m (class (->R 2))) (str (first (.keySet m))) (= R (first (.keySet m)))))",
+				"{:a=1}\n1 1 \"class user.R\" true\n");
 		assertBothEqual("(println (str (java.util.ArrayList. (sorted-set 3 1 2)))"
 				+ " (str (java.util.TreeMap. (sorted-map :b 1 :a 2))) (str (java.util.ArrayList. (map inc [1 2]))))",
 				"[1, 2, 3] {:a=2, :b=1} [2, 3]\n");

@@ -332,7 +332,7 @@ final class ClojureDispatchLowering {
 			ctx.usedProtocols = true;
 			return answer.apply(ClojureLowerUtil.list(ClojureLowerUtil.sym("equal"),
 					ClojureLowerUtil.list(new LispSymbol(ClojureProtocolLowering.PROTOCOL_TAG), lowered),
-					ClojureProtocolLowering.typeTagForm(known.tagSpelling())));
+					ClojureProtocolLowering.typeTagForm(known)));
 		}
 		ClojureLowering.DefinedInterface defined = ClojureProtocolLowering.definedInterfaceOf(ctx, name);
 		if (defined != null) {
@@ -410,6 +410,13 @@ final class ClojureDispatchLowering {
 			arms.add(new Arm(Use.VARIABLE, v -> ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.HOST_ROW_P), v,
 					LispString.literal(fqn))));
 		}
+		if (fqn.equals(JAVA_LANG_CLASS)) {
+			// a class designator (a record's or deftype's class, what type answers, a
+			// class literal where no host is): an arm a program making none sheds
+			// (ClojureArms.Family.CLASS_DESIGNATOR)
+			arms.add(new Arm(Use.VARIABLE,
+					v -> ClojureLowerUtil.list(new LispSymbol(ClojurePredicateLowering.CLASS_DESIGNATOR_P), v)));
+		}
 		boolean loads = ClojureValueClasses.loads(fqn);
 		if (ClojureValueClasses.hostMayHold(fqn, loads)) {
 			arms.add(new Arm(Use.VARIABLE,
@@ -425,6 +432,9 @@ final class ClojureDispatchLowering {
 		}
 		return armsAnswer(ctx, arms, lowered, answer);
 	}
+
+	/** The class every class value is an instance of. */
+	private static final String JAVA_LANG_CLASS = "java.lang.Class";
 
 	/** Whether the host's classes hold the name as an interface. */
 	private static boolean isHostInterface(String fqn) {
@@ -630,8 +640,9 @@ final class ClojureDispatchLowering {
 	static LispVal classForm(ClojureLowering ctx, LispVal lowered) {
 		LispSymbol one = ctx.freshTemp();
 		List<LispVal> branches = new ArrayList<>();
-		// a record or deftype answers its tag keyword (the oracle answers a host
-		// class, which no wasm backend has); a reify answers a constant keyword
+		// a record or deftype answers its tag, the (:C%CLASS "ns.Name") designator its
+		// name evaluates to, which prints as the oracle's class; a reify answers a
+		// constant keyword
 		branches.add(ClojureLowerUtil.list(ClojureProtocolLowering.isRecordForm(one),
 				ClojureProtocolLowering.typedTagOf(one)));
 		branches.add(ClojureLowerUtil.list(ClojureProtocolLowering.isDeftypeForm(one),
@@ -714,6 +725,13 @@ final class ClojureDispatchLowering {
 				ClojureCollectionLowering.keywordForm("map")));
 		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedSetTest(one),
 				ClojureCollectionLowering.keywordForm("set")));
+		// a class designator is a java.lang.Class, whose designator the library makes
+		// (its wrapper is a cons; spelled here, the designator would make the family a
+		// program calling class builds): an arm a program making none sheds
+		// (ClojureArms.Family.CLASS_DESIGNATOR)
+		branches.add(ClojureLowerUtil.list(
+				ClojureLowerUtil.list(new LispSymbol(ClojurePredicateLowering.CLASS_DESIGNATOR_P), one),
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DESIGNATOR-CLASS"))));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), one),
 				ClojureCollectionLowering.keywordForm("list")));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("functionp"), one),
@@ -928,7 +946,7 @@ final class ClojureDispatchLowering {
 	static @Nullable LispVal classKey(ClojureLowering ctx, String name) {
 		ClojureLowering.TypeDef type = ctx.typeDefOf(name);
 		if (type != null) {
-			return ClojureProtocolLowering.typeTagForm(type.tagSpelling());
+			return ClojureProtocolLowering.typeTagForm(type);
 		}
 		String fqn = ClojureNamespaceLowering.resolveClass(ctx, name);
 		String kind = DISPATCH_CLASS_KEYWORDS.get(fqn.substring(fqn.lastIndexOf('.') + 1));
@@ -1442,7 +1460,7 @@ final class ClojureDispatchLowering {
 	private static LispVal printMethodTag(ClojureLowering ctx, LispVal keyDatum, String verb) {
 		ClojureLowering.TypeDef type = keyDatum instanceof LispSymbol s ? ctx.typeDefOf(s.name()) : null;
 		if (type != null) {
-			return ClojureProtocolLowering.typeTagForm(type.tagSpelling());
+			return ClojureProtocolLowering.typeTagForm(type);
 		}
 		if (keyDatum instanceof LispSymbol s && s.name().startsWith(":")) {
 			return ClojureCollectionLowering

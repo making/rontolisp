@@ -8,8 +8,10 @@
 class the call names the test is the `instance?` one, so records, deftypes and
 the core kinds cast on every backend; a host class no value here has always
 refuses (host classes exist on no wasm backend). A computed class casts by the
-protocol tag, what `class` answers (so `(cast (class y) x)` holds), a computed
-host class by the kind its name has here. As a value two arguments.
+protocol tag, what `class` answers (so `(cast (class y) x)` holds, a record's or
+deftype's class included), a computed host class and a class designator (what `type`
+answers, a class literal on the wasm backends) by the kind its name has here. As a value
+two arguments.
 
 ```clojure
 (println (cast String "a")) ; a

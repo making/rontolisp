@@ -887,6 +887,11 @@
         ((rontolisp::%clojure-keyword-p x)
          (write-char #\: stream)
          (write-string (car (cdr x)) stream))
+        ;; a class designator (a record's or deftype's class, what type answers for
+        ;; a core value, a class literal where no host is) writes its name under
+        ;; print and pr alike, like the oracle's Class: an arm of the
+        ;; class-designator family
+        ((rontolisp::%clojure-designator-p x) (write-string (cadr x) stream))
         ;; a decimal carries no metadata either and writes its M under print and
         ;; pr alike, a math context its #object: an arm of the decimal family
         ((rontolisp::%clojure-bd-value-p x)
@@ -1122,6 +1127,10 @@
                 (rontolisp::%clojure-str-of (car (cdr x)) nil-replacement
                                             readable))
                ((rontolisp::%clojure-io-p x) (rontolisp::%clojure-io-string x))
+               ;; a class designator's toString, the oracle's Class's: an arm of
+               ;; the class-designator family
+               ((rontolisp::%clojure-designator-p x)
+                (concatenate 'string "class " (car (cdr x))))
                ;; a byte array's toString, its class name (the oracle's
                ;; Class@hash without the hash): an arm a program making none
                ;; folds
@@ -2381,6 +2390,8 @@
    ((rontolisp::%clojure-meta-symbol-p x) "clojure.lang.Symbol")
    ;; a decimal or a math context: an arm of the decimal family
    ((rontolisp::%clojure-bd-value-p x) (rontolisp::%clojure-bd-class-name x))
+   ;; a class designator: an arm of the class-designator family
+   ((rontolisp::%clojure-designator-p x) "java.lang.Class")
    ((and (consp x) (keywordp (car x))) "java.lang.Object")
    ((consp x) "clojure.lang.PersistentList")
    ((hash-table-p x)
@@ -2646,15 +2657,19 @@
 ;; names a class when the program's class rows ROWS (c%h-supers, read off
 ;; clojure/ClojureClassBases) hold a row (name base ...) for its name: the
 ;; oracle's bases, the superclass first, then the interfaces. A row (name . t)
-;; is a class whose host classes are no one value here (a core kind, a record):
-;; its supers are java.lang.Object alone, its bases unknown. Any other keyword
-;; is no class, but for the class of a host Throwable no construction names,
-;; whose rows the host answers.
+;; is a class whose host classes are no one value here (a core kind; a record
+;; or deftype, whose class designator names its row): its supers are
+;; java.lang.Object alone, its bases unknown. Any other keyword is no class,
+;; but for the class of a host Throwable no construction names, whose rows the
+;; host answers.
 
 (defun rontolisp::%clojure-class-rows (k rows)
-  "ROWS when they hold the row of the class keyword K, the host's rows of K's
+  "ROWS when they hold the row of the class keyword or designator K (a
+   record's or deftype's, by its class name), the host's rows of K's
    Throwable class ahead of them when they do not, NIL when K names no class."
-  (if (and (consp k) (eq (car k) :c%keyword))
+  (if (or (and (consp k) (eq (car k) :c%keyword))
+          ;; an arm of the class-designator family
+          (rontolisp::%clojure-designator-p k))
       (let ((name (car (cdr k))))
         (if (rontolisp::%clojure-class-row name rows)
             rows
@@ -3536,7 +3551,8 @@
 ;; (realized) lazy seq a read-only java:view List -- a vector's RandomAccess and
 ;; Comparable, as the oracle's vector compares --, a set or a sorted set a Set, a
 ;; map, a sorted map or a record a Map, each spelled as str spells the value and
-;; holding its members as this makes them; a Date, Timestamp or UUID the host
+;; holding its members as this makes them; a class designator one handle per class
+;; (%clojure-designator-host); a Date, Timestamp or UUID the host
 ;; object (%clojure-time-value-host); a byte array the byte[] of its octets (a
 ;; :bytes java:view, which Java never holds itself); a fn the object it is -- a
 ;; Runnable, Callable and Comparator calling it through %clojure-host-call, the
@@ -3592,6 +3608,9 @@
    ;; every member taking one, like the oracle's; a math context or a rounding
    ;; mode the java.math one; an arm a program making no decimal folds
    ((rontolisp::%clojure-bd-value-p x) (rontolisp::%clojure-bd-host x))
+   ;; a class designator: an arm of the class-designator family
+   ((rontolisp::%clojure-designator-p x)
+    (rontolisp::%clojure-designator-host x))
    ;; any other wrapper: an atom, a deftype, a reify, a pattern, a var ...
    ((and (consp x) (keywordp (car x))) (rontolisp::%clojure-host-object x))
    ((consp x) (rontolisp::%clojure-host-seq-view x))
@@ -3659,6 +3678,23 @@
              (rontolisp::%clojure-host-members (rontolisp::%clojure-seq-all x))
              :list #'rontolisp::%clojure-host-text nil
              (rontolisp::%clojure-class-name-of x)))
+
+(defvar rontolisp::%clojure-designator-handles
+  (make-hash-table :test 'equal)
+  "Each class name a designator crossed into Java under to the handle it crossed
+   as.")
+
+(defun rontolisp::%clojure-designator-host (x)
+  "The Java object the class designator X is: one java:handle per class name,
+   spelled and equal by its toString (class and the name, the oracle's Class's)
+   and kept here, so a host map -- a WeakHashMap too -- keys the class like the
+   oracle's one Class object. Java hands it back as the designator."
+  (let ((name (car (cdr x))))
+    (or (gethash name rontolisp::%clojure-designator-handles)
+        (setf (gethash name rontolisp::%clojure-designator-handles)
+              (java:handle x (concatenate 'string "class " name)
+                           (rontolisp::%clojure-string-hash-code name) nil
+                           "java.lang.Class")))))
 
 ;; X -- an atom, a deftype, a reify, a pattern, a var, or a value of no Java kind
 ;; -- as a java:handle equal only to itself, of the oracle's class
@@ -3990,6 +4026,11 @@
          (cond
           ((rontolisp::%clojure-keyword-p x)
            (logand (+ 11 (rontolisp::%clojure-hash-string (car (cdr x))))
+                   1048575))
+          ;; a class designator by its name, = to every one of its class: an arm
+          ;; of the class-designator family
+          ((rontolisp::%clojure-designator-p x)
+           (logand (+ 13 (rontolisp::%clojure-hash-string (car (cdr x))))
                    1048575))
           ((rontolisp::%clojure-set-p x)
            (rontolisp::%clojure-hash-entries (car (cdr x)) t))
@@ -4718,15 +4759,21 @@
           (java:call x "hashCode"))))
 
 (defun rontolisp::%clojure-cons-hash (x eq)
-  "The hash of the cons X: hasheq when EQ, else hashCode. A keyword's, a
-   type's own hasheq (when EQ) and then its hashCode, a record's, a set's, a
-   list's or lazy seq's, a sorted collection's, an instant's (Date.hashCode of
-   its milliseconds; a Calendar's too, where the oracle mixes in its zone, its
-   locale's week and its cutover), a UUID's, a reader value's, a
-   clojure.java.io value's; any other wrapper's identity hash."
+  "The hash of the cons X: hasheq when EQ, else hashCode. A keyword's, a class
+   designator's, a type's own hasheq (when EQ) and then its hashCode, a
+   record's, a set's, a list's or lazy seq's, a sorted collection's, an
+   instant's (Date.hashCode of its milliseconds; a Calendar's too, where the
+   oracle mixes in its zone, its locale's week and its cutover), a UUID's, a
+   reader value's, a clojure.java.io value's; any other wrapper's identity
+   hash."
   (cond
    ((rontolisp::%clojure-keyword-p x)
     (rontolisp::%clojure-keyword-hash (car (cdr x)) eq))
+   ;; a class designator its name's String.hashCode, so the values of one class
+   ;; hash alike (the oracle's Class hashes by identity, one object per class):
+   ;; an arm of the class-designator family
+   ((rontolisp::%clojure-designator-p x)
+    (rontolisp::%clojure-string-hash-code (car (cdr x))))
    ;; a type's own: arms of the hasheq-interface and object-methods families
    ((rontolisp::%clojure-hasheq-p x)
     (if eq
@@ -10534,11 +10581,12 @@
    (:C%NIL) marker (no table keys on nil, like the dispatcher's own mapping),
    a class object or designator to the kind keyword a class spelling stores
    (the full name's keyword where no kind answers, which is the row a spelled
-   chained class keeps), anything else itself."
+   chained class keeps), anything else itself -- a record's or deftype's class
+   designator too, its tag, which its rows are stored under."
   (if (null dv)
       (list :C%NIL)
       (let ((name (rontolisp::%clojure-dispatch-name dv)))
-        (if (null name)
+        (if (or (null name) (gethash dv rontolisp::%clojure-protocol-type-tags))
             dv
             (let ((kind
                    (cdr
@@ -10594,11 +10642,11 @@
 
 (defvar rontolisp::%clojure-protocol-type-tags
   (make-hash-table :test 'equal)
-  "A record's or deftype's dispatch-tag keyword to its (class . protocols)
-   entry -- the host class name and the var keys of the protocols its body
-   names -- made beside its constructors, so a run-time type value reads
-   back as a typed key and a run-time extend to a type whose body already
-   implements the protocol refuses like the oracle's.")
+  "A record's or deftype's dispatch tag (its class designator) to its
+   (class . protocols) entry -- the host class name and the var keys of the
+   protocols its body names -- made beside its constructors, so a run-time
+   type value reads back as a typed key and a run-time extend to a type whose
+   body already implements the protocol refuses like the oracle's.")
 
 (defun rontolisp::%clojure-register-protocol (methods methods-getter
                                                       inline-getter
@@ -10622,10 +10670,10 @@
   value)
 
 (defun rontolisp::%clojure-register-type-tag (tag class protocols)
-  "Register the record or deftype dispatch-tag keyword TAG beside its CLASS
-   name and the var keys of the protocols its body names (PROTOCOLS),
-   answering TAG (what the constructors' defun answers, so a definition
-   answers what it answered before the registry existed)."
+  "Register the record or deftype dispatch tag TAG, its class designator,
+   beside its CLASS name and the var keys of the protocols its body names
+   (PROTOCOLS), answering TAG: the definition's value, its class, like the
+   oracle's."
   (setf (gethash tag rontolisp::%clojure-protocol-type-tags)
         (cons class protocols))
   tag)
@@ -10752,9 +10800,11 @@
    keyword (no table keys on nil, like the dispatcher's own mapping), a
    class keyword to the keyword a class spelling stores (:object to the
    default marker), a class object or designator the same way -- what the
-   head call's mapping answers. Anything but a class object, a designator
-   or a class keyword is the oracle's cast failure."
+   head call's mapping answers -- but a record's or deftype's class
+   designator, its tag, which is its own key. Anything but a class object, a
+   designator or a class keyword is the oracle's cast failure."
   (cond ((null x) (list :c%keyword "nil"))
+        ((gethash x rontolisp::%clojure-protocol-type-tags) x)
         ((rontolisp::%clojure-keyword-p x)
          (rontolisp::%clojure-extends-spelling (car (cdr x)) x))
         (t (let ((name (rontolisp::%clojure-extends-class-name x)))
@@ -10764,12 +10814,12 @@
 
 (defun rontolisp::%clojure-extends-spelling (spelling x)
   "The methods-table key the class keyword of SPELLING reads: itself for a
-   tag, a kind, an instant, a java.io name or a nil, its kind for a class
-   keyword, the keyword a class spelling stores for any other dotted
-   class name. A dotless spelling naming none of those is no class, like
-   the oracle's cast of it."
+   kind, an instant, a java.io name or a nil, its kind for a class keyword,
+   the keyword a class spelling stores for any other dotted class name. A
+   dotless spelling naming none of those is no class, like the oracle's cast
+   of it."
   (cond ((equal spelling "object") :default)
-        ((or (gethash x rontolisp::%clojure-protocol-type-tags)
+        ((or
           (member spelling
                   '("string" "boolean" "keyword" "symbol" "char" "map" "vector"
                     "set" "list" "function" "atom" "nil" "reify" "pattern"
@@ -11123,6 +11173,9 @@
              (concatenate 'string "Cannot cast "
                           (rontolisp::%clojure-class-name-of x) " to "
                           (car (cdr c)))))))
+   ;; an arm of the class-designator family
+   ((rontolisp::%clojure-designator-p c)
+    (rontolisp::%clojure-cast-designator c x))
    ((null c)
     (rontolisp::%clojure-null-pointer-exception
      "Cannot invoke \"java.lang.Class.cast(Object)\" because \"c\" is null"))
@@ -11142,6 +11195,21 @@
                        (concatenate 'string "Cannot cast "
                                     (rontolisp::%clojure-class-name-of x) " to "
                                     name))))))))))
+
+(defun rontolisp::%clojure-cast-designator (c x)
+  "cast of the class designator C over X: X when it is nil, when its tag is C
+   (a record's or deftype's class) or when the kind C's name has here is its
+   (%clojure-cast-kind, what a host class object casts by), else the oracle's
+   refusal."
+  (let* ((name (car (cdr c))) (kind (rontolisp::%clojure-cast-kind name)))
+    (if (or (null x) (equal name "java.lang.Object")
+            (equal (c%protocol-tag x) c)
+            (and kind (equal (c%protocol-tag x) kind))
+            (and kind (equal (car (cdr kind)) "number") (numberp x)))
+        x
+        (rontolisp::%clojure-class-cast-exception
+         (concatenate 'string "Cannot cast "
+                      (rontolisp::%clojure-class-name-of x) " to " name)))))
 
 (defun rontolisp::%clojure-cast-v (&rest args)
   "cast as a value."
@@ -11427,11 +11495,13 @@
 
 (defun rontolisp::%clojure-is-identical (a b)
   "identical?: eql, except that two keywords of one spelling are one object,
-   like the oracle's interned keywords (here each is a fresh list). Numbers and
-   characters compare by value."
+   like the oracle's interned keywords (here each is a fresh list), and two
+   class designators of one name one class, like the oracle's Class. Numbers
+   and characters compare by value."
   (if (and (rontolisp::%clojure-keyword-p a) (rontolisp::%clojure-keyword-p b))
       (equal (car (cdr a)) (car (cdr b)))
-      (eql a b)))
+      ;; an arm of the class-designator family
+      (if (rontolisp::%clojure-designator-p a) (equal a b) (eql a b))))
 
 (defun rontolisp::%clojure-is-distinct (xs)
   "distinct?: no two of XS are =, through the structural-key runtime like
@@ -15729,6 +15799,32 @@
    which type answers X's class, like the oracle's (or (get (meta x) :type)
    (class x))."
   (rontolisp::%clojure-meta-method x (list :C%KEYWORD "type")))
+
+;;;; Class designators: (:C%CLASS name), a class value with no host object.
+;;
+;; A record's or deftype's class (its dispatch tag, what its name evaluates to),
+;; what type answers for a core value whose kind keyword would collide with a
+;; schema registry entry, and a class literal where no host is: each is the
+;; designator of its class's name, = to every other of that class, hashing by
+;; the name, printing as the name and answering class? like the oracle's Class.
+
+(defun rontolisp::%clojure-designator-p (x)
+  "Whether X is a class designator: the class-designator family's test. A
+   program making none folds its arms."
+  (and (consp x) (eq (car x) :C%CLASS) (consp (cdr x)) (stringp (car (cdr x)))))
+
+(defun rontolisp::%clojure-designator-class ()
+  "class of a class designator: the designator of java.lang.Class."
+  (list :C%CLASS "java.lang.Class"))
+
+(defun rontolisp::%clojure-designator-simple-name (x)
+  ".getSimpleName of the class designator X: its name past the package and
+   the enclosing classes, like Class#getSimpleName."
+  (let* ((name (car (cdr x)))
+         (dot (position #\. name :from-end t))
+         (tail (if dot (subseq name (+ dot 1)) name))
+         (dollar (position #\$ tail :from-end t)))
+    (if dollar (subseq tail (+ dollar 1)) tail)))
 
 ;;;; Type designators: what type answers where the oracle answers a host class.
 ;;
@@ -21071,8 +21167,8 @@
 (defvar rontolisp::%clojure-read-records
   nil
   "The record and deftype classes a record literal may name, newest first:
-   entries (class tag fields record-p) over strings, registered by the
-   lowering of a program that reads.")
+   entries (class fields record-p) over strings, registered by the lowering
+   of a program that reads.")
 
 (defvar rontolisp::%clojure-rd-args
   nil
@@ -22486,11 +22582,10 @@
          (concatenate 'string
                       "a record literal needs a defined record class, not "
                       tag)))
-    (if (null (car (cdr (cdr (cdr entry)))))
+    (if (null (car (cdr (cdr entry))))
         (error "~A"
          (concatenate 'string "a deftype literal is not supported yet: " tag)))
-    (let ((keys
-           (mapcar (lambda (f) (list :C%KEYWORD f)) (car (cdr (cdr entry)))))
+    (let ((keys (mapcar (lambda (f) (list :C%KEYWORD f)) (car (cdr entry))))
           (table (make-hash-table :test 'equal)))
       (dolist (k keys) (setf (gethash k table) nil))
       (if map-body
@@ -22507,7 +22602,7 @@
             (do ((k keys (cdr k)) (v items (cdr v)))
                 ((null k))
               (setf (gethash (car k) table) (car v)))))
-      (list :C%RECORD (list :C%KEYWORD (car (cdr entry))) keys table tag))))
+      (list :C%RECORD (list :C%CLASS (car entry)) keys table (car entry)))))
 
 (defun rontolisp::%clojure-rd-index (s c start)
   "The index of the first character C in S at or after START, or -1."
@@ -23385,6 +23480,13 @@
    program that makes no UUID calls %clojure-host-instance-p in its place (the
    strip's alias)."
   (or (rontolisp::%clojure-uuid-p x)
+      (rontolisp::%clojure-host-instance-p x class-name)))
+
+(defun rontolisp::%clojure-is-class (x class-name)
+  "class?: a class designator, or a host object of the class CLASS-NAME,
+   java.lang.Class. A program that makes no designator calls
+   %clojure-host-instance-p in its place (the strip's alias)."
+  (or (rontolisp::%clojure-designator-p x)
       (rontolisp::%clojure-host-instance-p x class-name)))
 
 (defun rontolisp::%clojure-signed-64 (n)

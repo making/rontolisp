@@ -6,7 +6,8 @@ The `:type` entry of the value's metadata when it is logically true (any value: 
 string ...), else the host class where the oracle answers one, else what
 [class](class.md) answers -- the oracle's `(or (get (meta x) :type) (class x))`.
 A function, keyword, string, symbol, boolean, map or set answers its host class as a
-`(:C%CLASS name)` designator, a pattern its host `java.util.regex.Pattern` class where a
+`(:C%CLASS name)` designator, which prints and `str`s as the oracle's class object
+(`java.lang.String`, `"class java.lang.String"`), a pattern its host `java.util.regex.Pattern` class where a
 host is (its designator where none is), nil answers nil: a schema registry lookup falls
 through to `(type x)` on a miss, where the oracle's class misses every entry but
 `Pattern`'s, so an unregistered value refuses with `:malli.core/invalid-schema` like the
@@ -25,7 +26,7 @@ classes apart); a map names its size's class (`PersistentArrayMap`, past eight e
 ```clojure
 (defrecord Circle [r])
 (println (type (with-meta {:r 1} {:type :circle})) (= (type (->Circle 1)) (class (->Circle 2)))) ; :circle true
-(println (type "s") (type nil)) ; (:C%CLASS java.lang.String) nil
+(println (type "s") (type nil)) ; java.lang.String nil
 (println (= (type #"a") java.util.regex.Pattern)) ; true
 (defmulti area type)
 (defmethod area :circle [x] (* 3 (:r x) (:r x)))
