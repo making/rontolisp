@@ -8,7 +8,12 @@ protocol's map, in the oracle's shape -- the interface under `:on`/`:on-interfac
 class keyword here), each method's parameter vectors under `:sigs`, the method map and
 the extension table under `:impls` -- which `extend`, `satisfies?`, `extends?` and
 `extenders` accept like the name at a call site. `:var` and `:method-builders` are not
-carried. A call dispatches on the target's exact tag, then on a class the
+carried. The interface's dotted name (`user.P`, `my_app.core.P`) is its class value: it
+prints as the name, answers `class?`, and `instance?` of it, `isa?` and a multimethod
+dispatching on `class` take a record, deftype or `reify` whose body implements the
+protocol (an extension does not), like the oracle's -- a
+[print-method](print-method.md) of it too; it is not `=` to the `:on-interface` keyword.
+A call dispatches on the target's exact tag, then on a class the
 target extends or implements that the protocol was extended to (a throwable, `IRef`, ...:
 [extend-protocol](extend-protocol.md)), then the `Object` row; a miss with no `Object` row
 signals, like the oracle. A method declares one

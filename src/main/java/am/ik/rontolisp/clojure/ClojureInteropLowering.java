@@ -977,7 +977,7 @@ final class ClojureInteropLowering {
 			if (exception != null) {
 				return exception;
 			}
-			LispVal own = clojureLangConstruction(cls, lowered);
+			LispVal own = clojureLangConstruction(ctx, cls, lowered);
 			if (own != null) {
 				return own;
 			}
@@ -1016,9 +1016,11 @@ final class ClojureInteropLowering {
 	 * a {@code SeqIterator} over a seq the library's iterator over it
 	 * ({@link ClojureInterfaces#SEQ_ITERATOR}), the no-argument reader macros of a string
 	 * and a regex literal a function of the oracle's four arguments reading the literal's
-	 * body from a stream. Null for any other class or count.
+	 * body from a stream, a {@code Cons} the library's cons and a
+	 * {@code PersistentArrayMap} over an array the map its pairs make
+	 * ({@link ClojureLangClasses#arrayMap}). Null for any other class or count.
 	 */
-	static @Nullable LispVal clojureLangConstruction(String cls, List<LispVal> args) {
+	static @Nullable LispVal clojureLangConstruction(ClojureLowering ctx, String cls, List<LispVal> args) {
 		if (cls.equals("clojure.lang.MapEntry") && args.size() == 2) {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("vector"), args.get(0), args.get(1));
 		}
@@ -1033,6 +1035,9 @@ final class ClojureInteropLowering {
 		}
 		if (cls.equals("clojure.lang.Cons") && args.size() == 2) {
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CONS"), args.get(0), args.get(1));
+		}
+		if (cls.equals(ClojureLangClasses.PERSISTENT_ARRAY_MAP) && args.size() == 1) {
+			return ClojureLangClasses.arrayMap(ctx, args.get(0));
 		}
 		return null;
 	}
@@ -1379,9 +1384,13 @@ final class ClojureInteropLowering {
 		}
 		if (cls.equals("java.lang.Class") && member.equals("forName") && args.size() == 1
 				&& args.get(0) instanceof LispString name && name.value().indexOf('.') >= 0) {
-			// Class/forName of a literal naming a record or deftype of the program: its
-			// class value, on every backend (no host class is generated for one)
+			// Class/forName of a literal naming a record, deftype or protocol interface
+			// of the program: its class value, on every backend (no host class is
+			// generated for one)
 			LispVal type = ClojureProtocolLowering.typeTagValue(ctx, name.value());
+			if (type == null) {
+				type = ClojureProtocolLowering.interfaceValue(ctx, name.value());
+			}
 			if (type != null) {
 				return type;
 			}
@@ -1796,7 +1805,7 @@ final class ClojureInteropLowering {
 			if (exception != null) {
 				return exception;
 			}
-			LispVal own = clojureLangConstruction(cls, args);
+			LispVal own = clojureLangConstruction(ctx, cls, args);
 			if (own != null) {
 				return own;
 			}
@@ -2104,12 +2113,16 @@ final class ClojureInteropLowering {
 		if (cls.equals(INPUT_STREAM_READER) && !args.isEmpty() && args.size() <= 2) {
 			return inputStreamReaderConstruction(ctx, args);
 		}
-		if (!READER_WRAPPERS.contains(cls) || args.isEmpty() || args.size() > 2) {
+		boolean numbering = cls.equals(LINE_NUMBERING_READER);
+		if (!READER_WRAPPERS.contains(cls) && !numbering || args.isEmpty() || args.size() > 2) {
 			return null;
 		}
 		LispVal text = stringReaderText(ctx, args.get(0));
 		LispVal reader = text != null ? ClojureLowerUtil.list(new LispSymbol(STRING_READER), ctx.lower(text))
 				: ctx.lower(args.get(0));
+		if (numbering) {
+			return lineNumberingConstruction(ctx, cls, reader, args);
+		}
 		if (args.size() == 1 && isStreamForm(reader)) {
 			return reader;
 		}
@@ -2128,6 +2141,32 @@ final class ClojureInteropLowering {
 				: ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("streamp"), source), source,
 						ClojureLowerUtil.cons(JAVA_NEW, host));
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), body);
+	}
+
+	/** The oracle's reader counting lines, {@code *in*}'s class. */
+	static final String LINE_NUMBERING_READER = "clojure.lang.LineNumberingPushbackReader";
+
+	/**
+	 * A {@code clojure.lang.LineNumberingPushbackReader} construction (a buffer size
+	 * behind the reader, evaluated and dropped): over a Common Lisp stream the
+	 * line-numbering reader over it ({@link ClojureIoLowering#LINE_READER_NEW}) on every
+	 * backend, decided at run time unless the argument lowers to one; over anything else
+	 * the host construction, which no host here has.
+	 */
+	private static LispVal lineNumberingConstruction(ClojureLowering ctx, String cls, LispVal reader,
+			List<LispVal> args) {
+		LispSymbol source = ctx.freshTemp();
+		List<LispVal> bindings = new ArrayList<>();
+		bindings.add(ClojureLowerUtil.list(source, reader));
+		if (args.size() == 2) {
+			bindings.add(ClojureLowerUtil.list(ctx.freshTemp(), ctx.lower(args.get(1))));
+		}
+		LispVal made = ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.LINE_READER_NEW), source);
+		LispVal body = isStreamForm(reader) ? made
+				: ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("streamp"), source), made,
+						ClojureLowerUtil.list(JAVA_NEW, LispString.literal(cls), source));
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings), body);
 	}
 
@@ -3246,8 +3285,19 @@ final class ClojureInteropLowering {
 			return ClojureLowerUtil.list(ClojureLowerUtil.sym("read-line"), ClojureStringLowering.openReader(recv),
 					ClojureLowering.NIL_CONST, ClojureLowering.NIL_CONST);
 		}
-		if (method.equals("close") && args.isEmpty()) {
-			return ClojureLowerUtil.list(ClojureLowerUtil.sym("close"), recv);
+		String lineReader = ClojureIoLowering.LINE_READER_METHODS.get(method + "/" + args.size());
+		if (lineReader != null) {
+			// a LineNumberingPushbackReader's own: an arm a program building none folds;
+			// close closes any other stream, the rest refuse it like the oracle
+			List<LispVal> own = new ArrayList<>();
+			own.add(ClojureLowerUtil.sym("progn"));
+			own.addAll(args);
+			own.add(ClojureLowerUtil.list(new LispSymbol(lineReader), recv));
+			LispVal other = method.equals("close") ? ClojureLowerUtil.list(ClojureLowerUtil.sym("close"), recv)
+					: ClojureValueMethodLowering.refusal(recv, method, true, args);
+			return ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+					ClojureLowerUtil.list(new LispSymbol(ClojureIoLowering.LINE_READER_P), recv),
+					ClojureLowerUtil.list(own), other);
 		}
 		if (method.equals("read") && args.isEmpty()) {
 			// one character's code, -1 past the end, like Reader.read

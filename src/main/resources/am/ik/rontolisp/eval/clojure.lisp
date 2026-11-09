@@ -343,6 +343,9 @@
                           (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE)))
                      (gethash (car (cdr x)) rontolisp::%clojure-print-methods)
                      nil)
+                 ;; a protocol interface's method: an arm of the protocol-interface
+                 ;; family
+                 (rontolisp::%clojure-print-method-walk x)
                  (if (rontolisp::%clojure-lisp-value-p x)
                      nil
                      (rontolisp::%clojure-host-print-method x
@@ -402,6 +405,195 @@
   "print-method as a value."
   (rontolisp::%clojure-check-arity args 2 2 "print-method")
   (rontolisp::%clojure-print-method (car args) (car (cdr args))))
+
+;; A print-method whose dispatch value is read when the defmethod runs -- a
+;; record's class handed to a function (rewrite-clj's make-printable!), a
+;; protocol interface's class value (schema's Schema) -- stores under the row
+;; the value names then: a record's or deftype's class (its tag), the
+;; interface's class value, a :type keyword. Anything else the printer never
+;; consults (a core value's class, a host class, nil) is the lowering's refusal
+;; of a literal one, at run time. A protocol interface's row is noted in the
+;; order first stored: the printer reaches it through the types implementing
+;; the interface (%clojure-print-method-walk), by MultiFn's selection among it,
+;; the other interfaces' rows and the printer's own methods of the type's class,
+;; which prefer-method's preferences break.
+
+(defvar rontolisp::%clojure-print-method-ifaces
+  nil
+  "The class values of the protocol interfaces a print-method was stored
+   under, in the order first stored.")
+
+(defvar rontolisp::%clojure-print-method-prefers
+  (make-hash-table :test 'equal)
+  "The preferences prefer-method stored for print-method: (x . y) to T, each a
+   class name, a :type keyword as itself.")
+
+(defun rontolisp::%clojure-print-method-type-key-p (k)
+  "Whether the keyword K stores a :type row: a keyword no class answers -- a
+   namespaced one, or one that is neither a core value's kind (what class
+   answers for its values) nor a class name's keyword."
+  (let ((spelling (car (cdr k))))
+    (if (position #\/ spelling)
+        t
+        (not
+         (or (position #\. spelling)
+             (member spelling
+                     '("boolean" "keyword" "symbol" "char" "string" "set" "map"
+                       "vector" "pattern" "matcher" "list" "function" "atom"
+                       "reify" "object" "nil")
+                     :test #'equal))))))
+
+(defun rontolisp::%clojure-print-method-key (dv)
+  "The print-method row the dispatch value DV, read at run time, names: a
+   record's or deftype's class, a protocol interface's class value, a :type
+   keyword; anything else refused as the lowering refuses a literal one."
+  (cond ((and dv (gethash dv rontolisp::%clojure-protocol-type-tags)) dv)
+        ;; an arm of the protocol-interface family
+        ((rontolisp::%clojure-protocol-interface-p dv) dv)
+        ((and (rontolisp::%clojure-keyword-p dv)
+              (rontolisp::%clojure-print-method-type-key-p dv))
+         dv)
+        (t (rontolisp::%clojure-unsupported-operation-exception
+            (concatenate 'string "print-method of "
+             (rontolisp::%clojure-str-of dv "nil" nil)
+             " is not supported yet: the printer consults a"
+             " print-method of a record, deftype, protocol interface,"
+             " :type keyword or host class no core value belongs to"
+             " only")))))
+
+(defun rontolisp::%clojure-print-method-store (dv method)
+  "defmethod print-method of a dispatch value read when it runs: METHOD stored
+   under the row DV names, an interface's noted for the printer's walk;
+   answers nil."
+  (let ((key (rontolisp::%clojure-print-method-key dv)))
+    ;; an arm of the protocol-interface family
+    (if (rontolisp::%clojure-protocol-interface-p key)
+        (if (not
+             (member key rontolisp::%clojure-print-method-ifaces :test #'equal))
+            (setq rontolisp::%clojure-print-method-ifaces
+                  (append rontolisp::%clojure-print-method-ifaces (list key)))))
+    (setf (gethash key rontolisp::%clojure-print-methods) method))
+  nil)
+
+(defun rontolisp::%clojure-print-method-prefer-key (v)
+  "The name a print-method preference keeps the dispatch value V under: a
+   class value's class name (a record's, a protocol interface's, a host
+   class's, a class keyword's spelling), a :type keyword itself."
+  (cond ((and (consp v) (eq (car v) :C%CLASS) (consp (cdr v))
+              (stringp (car (cdr v))))
+         (car (cdr v)))
+        ((rontolisp::%clojure-keyword-p v)
+         (if (rontolisp::%clojure-print-method-type-key-p v) v (car (cdr v))))
+        (t (or (rontolisp::%clojure-host-class-name v) v))))
+
+(defun rontolisp::%clojure-print-method-prefer (x y)
+  "prefer-method of print-method: X's method wins over Y's where both match a
+   value's class; answers print-method."
+  (setf (gethash (cons (rontolisp::%clojure-print-method-prefer-key x)
+                       (rontolisp::%clojure-print-method-prefer-key y))
+                 rontolisp::%clojure-print-method-prefers) t)
+  #'rontolisp::%clojure-print-method-v)
+
+(defun rontolisp::%clojure-print-method-multi-p (f)
+  "Whether F is print-method's value: the print-method-value family's test, a
+   multimethod verb's value arm asking it ahead of the registry."
+  (eq f #'rontolisp::%clojure-print-method-v))
+
+;; The oracle's own print-method methods a record's class matches beside a
+;; protocol interface's (Object's aside, which every one of them dominates):
+;; IRecord's, which prints a record, java.util.Map's and IPersistentMap's.
+(defvar rontolisp::%clojure-print-method-record-rows
+  '("clojure.lang.IRecord" "java.util.Map" "clojure.lang.IPersistentMap"))
+
+;; The oracle's own print-method preferences among those, and the
+;; super-interfaces its preference walk climbs (MultiFn.prefers reads the
+;; parents of either side).
+(defvar rontolisp::%clojure-print-method-own-prefers
+  '(("clojure.lang.IRecord" . "java.util.Map")
+    ("clojure.lang.IRecord" . "clojure.lang.IPersistentMap")
+    ("clojure.lang.IPersistentCollection" . "java.util.Map")))
+
+(defvar rontolisp::%clojure-print-method-parents
+  '(("clojure.lang.IPersistentMap" "java.lang.Iterable"
+     "clojure.lang.Associative" "clojure.lang.Counted")
+    ("clojure.lang.Associative" "clojure.lang.IPersistentCollection"
+     "clojure.lang.ILookup")
+    ("clojure.lang.IPersistentCollection" "clojure.lang.Seqable")))
+
+(defun rontolisp::%clojure-print-method-prefers-p (x y)
+  "MultiFn.prefers of print-method over the class names X and Y: a preference
+   of X over Y (stored, or the oracle's own), else of X over a parent of Y,
+   else of a parent of X over Y."
+  (or (gethash (cons x y) rontolisp::%clojure-print-method-prefers)
+      (if (member (cons x y) rontolisp::%clojure-print-method-own-prefers
+                  :test #'equal)
+          t
+          nil)
+      (let ((found nil))
+        (dolist (p
+                 (cdr
+                  (assoc y rontolisp::%clojure-print-method-parents
+                         :test #'equal)))
+          (if (and (not found) (rontolisp::%clojure-print-method-prefers-p x p))
+              (setq found t)))
+        (dolist (p
+                 (cdr
+                  (assoc x rontolisp::%clojure-print-method-parents
+                         :test #'equal)))
+          (if (and (not found) (rontolisp::%clojure-print-method-prefers-p p y))
+              (setq found t)))
+        found)))
+
+(defun rontolisp::%clojure-print-method-dominates-p (x y)
+  "MultiFn.dominates of print-method over the class names X and Y: X is Y or
+   preferred over it (no row's interface here derives from another's)."
+  (or (equal x y) (rontolisp::%clojure-print-method-prefers-p x y)))
+
+(defun rontolisp::%clojure-print-method-walk (x)
+  "The print-method the record, deftype or reify X takes through a protocol
+   interface its body implements, no row of its own class or :type keyword
+   holding one: MultiFn's selection among those interfaces' rows and the
+   printer's own methods X's class matches (a record's IRecord, java.util.Map
+   and IPersistentMap), each taken in turn and kept where it dominates the one
+   kept. NIL where no interface's row matches or the printer's own is kept;
+   one neither dominating the other is the oracle's IllegalArgumentException.
+   The protocol-interface family's test."
+  (if (and rontolisp::%clojure-print-method-ifaces (consp x)
+       (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE) (eq (car x) :C%REIFY)))
+      (let ((rows nil))
+        (dolist (c rontolisp::%clojure-print-method-ifaces)
+          (let ((method (gethash c rontolisp::%clojure-print-methods))
+                (entry (rontolisp::%clojure-protocol-interface-entry c)))
+            (if (and method entry
+                 (rontolisp::%clojure-implements-p x (cdr entry) (car entry)))
+                (setq rows (cons (cons (car (cdr c)) method) rows)))))
+        (if rows
+            (let ((best nil) (chosen nil) (all (reverse rows)))
+              (if (eq (car x) :C%RECORD)
+                  (dolist (name
+                           (reverse
+                            rontolisp::%clojure-print-method-record-rows))
+                    (setq all (cons (cons name nil) all))))
+              (dolist (row all)
+                (cond
+                 ((null best)
+                  (setq best (car row))
+                  (setq chosen (cdr row)))
+                 ((rontolisp::%clojure-print-method-dominates-p (car row) best)
+                  (setq best (car row))
+                  (setq chosen (cdr row)))
+                 ((not
+                   (rontolisp::%clojure-print-method-dominates-p best
+                                                                 (car row)))
+                  (rontolisp::%clojure-illegal-argument-exception
+                   (concatenate 'string
+                    "Multiple methods in multimethod 'print-method' match dispatch value: class "
+                    (if (stringp (nth 4 x)) (nth 4 x) "java.lang.Object")
+                    " -> interface " (car row) " and interface " best
+                    ", and neither is preferred")))))
+              chosen)
+            nil))
+      nil))
 
 (defun rontolisp::%clojure-ident-spelling (k)
   "The spelling of the keyword or symbol K (a symbol's demangled), NIL for
@@ -742,9 +934,11 @@
 (defun rontolisp::%clojure-open-reader (stream)
   "STREAM while it is open; a closed one is the oracle's IOException, which a
    closed Java reader answers to every read."
-  ;; a reader over a fetched reply is a Gray stream, which open-stream-p answers
-  ;; true for, closed or not: an arm a program making no such reader folds
-  (if (rontolisp::%clojure-reply-reader-p stream)
+  ;; a reader over a fetched reply and a line-numbering reader are Gray streams,
+  ;; which open-stream-p answers true for, closed or not: arms a program making
+  ;; no such reader folds
+  (if (or (rontolisp::%clojure-reply-reader-p stream)
+          (rontolisp::%clojure-line-reader-p stream))
       (if (rontolisp::%text-pull-stream-closed-p stream)
           (rontolisp::%clojure-io-exception "Stream closed")
           stream)
@@ -785,25 +979,31 @@
 (defun rontolisp::%clojure-stream-class (x)
   "The host class of the oracle's stream of stream X's kind: a string input
    stream is with-in-str's *in*, a file stream clojure.java.io/reader's."
-  (let ((kind (%obj-ref x 1)))
-    (cond ((equal kind :standard-output) "java.io.OutputStreamWriter")
-          ((equal kind :standard) "java.io.PrintWriter")
-          ((equal kind :string-output) "java.io.StringWriter")
-          ((or (equal kind :standard-input) (equal kind :string-input))
-           "clojure.lang.LineNumberingPushbackReader")
-          ((output-stream-p x) "java.io.BufferedWriter")
-          (t "java.io.BufferedReader"))))
+  ;; a line-numbering reader is a Gray stream: an arm a program building none
+  ;; folds
+  (if (rontolisp::%clojure-line-reader-p x)
+      "clojure.lang.LineNumberingPushbackReader"
+      (let ((kind (%obj-ref x 1)))
+        (cond ((equal kind :standard-output) "java.io.OutputStreamWriter")
+              ((equal kind :standard) "java.io.PrintWriter")
+              ((equal kind :string-output) "java.io.StringWriter")
+              ((or (equal kind :standard-input) (equal kind :string-input))
+               "clojure.lang.LineNumberingPushbackReader")
+              ((output-stream-p x) "java.io.BufferedWriter")
+              (t "java.io.BufferedReader")))))
 
 (defun rontolisp::%clojure-stream-string (x)
   "Stream X's toString: a StringWriter's text so far, left in place (what
    get-output-stream-string answers and clears is written straight back), any
    other stream its host class name -- the oracle's Class@hash without the
    hash."
-  (if (equal (%obj-ref x 1) :string-output)
-      (let ((text (get-output-stream-string x)))
-        (write-string text x)
-        text)
-      (rontolisp::%clojure-stream-class x)))
+  (if (rontolisp::%clojure-line-reader-p x)
+      (rontolisp::%clojure-stream-class x)
+      (if (equal (%obj-ref x 1) :string-output)
+          (let ((text (get-output-stream-string x)))
+            (write-string text x)
+            text)
+          (rontolisp::%clojure-stream-class x))))
 
 (defun rontolisp::%clojure-string-output-p (x)
   "Whether X is a string output stream: a java.io.StringWriter,
@@ -1045,7 +1245,8 @@
            (rontolisp::%clojure-write-nested (car rest) nil-replacement readable
                                              stream labels))
          (write-char #\) stream))
-        ((rontolisp::%clojure-stream-p x)
+        ((or (rontolisp::%clojure-stream-p x)
+             (rontolisp::%clojure-line-reader-p x))
          (rontolisp::%clojure-write-stream x readable stream))
         ((functionp x) (write-string "#<procedure>" stream))
         ((rontolisp::%clojure-host-seqable-p x)
@@ -1142,7 +1343,8 @@
                ;; a delay's toString, its class name (the hash left out): an arm
                ;; a program making none folds
                ((rontolisp::%clojure-delay-p x) "clojure.lang.Delay")
-               ((rontolisp::%clojure-stream-p x)
+               ((or (rontolisp::%clojure-stream-p x)
+                    (rontolisp::%clojure-line-reader-p x))
                 (rontolisp::%clojure-stream-string x))
                ((rontolisp::%clojure-re-pattern-p x)
                 (rontolisp::%clojure-re-pat-source x))
@@ -2368,7 +2570,8 @@
    ((or (eq x t) (eq x rontolisp::%clojure-false)) "java.lang.Boolean")
    ((functionp x) "clojure.lang.AFunction")
    ((rontolisp::%clojure-io-p x) (rontolisp::%clojure-io-class-name x))
-   ((rontolisp::%clojure-stream-p x) (rontolisp::%clojure-stream-class x))
+   ((or (rontolisp::%clojure-stream-p x) (rontolisp::%clojure-line-reader-p x))
+    (rontolisp::%clojure-stream-class x))
    ((rontolisp::%clojure-keyword-p x) "clojure.lang.Keyword")
    ((rontolisp::%clojure-set-p x) "clojure.lang.PersistentHashSet")
    ((rontolisp::%clojure-sorted-map-p x) "clojure.lang.PersistentTreeMap")
@@ -2608,6 +2811,9 @@
               (equal (rontolisp::%clojure-host-class-name c)
                      "java.util.regex.Pattern"))
          t)
+        ;; a protocol interface's class value: an arm of the protocol-interface
+        ;; family
+        ((rontolisp::%clojure-protocol-interface-instance-p c x) t)
         ((and (consp c) (eq (car c) :C%CLASS) (consp (cdr c))
               (stringp (car (cdr c))))
          (and (not (null x))
@@ -10582,11 +10788,16 @@
    a class object or designator to the kind keyword a class spelling stores
    (the full name's keyword where no kind answers, which is the row a spelled
    chained class keeps), anything else itself -- a record's or deftype's class
-   designator too, its tag, which its rows are stored under."
+   designator too, its tag, which its rows are stored under, and a protocol
+   interface's class value."
   (if (null dv)
       (list :C%NIL)
       (let ((name (rontolisp::%clojure-dispatch-name dv)))
-        (if (or (null name) (gethash dv rontolisp::%clojure-protocol-type-tags))
+        (if (or (null name) (gethash dv rontolisp::%clojure-protocol-type-tags)
+                ;; a protocol interface's class value, which a defmethod of
+                ;; it stores under as it is: an arm of the protocol-interface
+                ;; family
+                (rontolisp::%clojure-protocol-interface-p dv))
             dv
             (let ((kind
                    (cdr
@@ -15825,6 +16036,66 @@
          (tail (if dot (subseq name (+ dot 1)) name))
          (dollar (position #\$ tail :from-end t)))
     (if dollar (subseq tail (+ dollar 1)) tail)))
+
+;;;; Protocol interfaces: a protocol's interface as a class value.
+;;
+;; The interface's dotted name (schema.core.Schema) evaluates to the designator
+;; of its name, made by %clojure-protocol-interface-class, which registers the
+;; name with the protocol's var key and body table. instance? of the value,
+;; isa? and a multimethod's dispatch of a record's or deftype's class on it,
+;; and a print-method stored under it read the type's own body through the
+;; entry, like a class implementing the interface: a record or deftype whose
+;; body names the protocol, a reify holding a row in its body table. An
+;; extension row is no interface, like the oracle's. The arms asking for one
+;; are the protocol-interface family's, which a program making no such value
+;; folds.
+
+(defvar rontolisp::%clojure-protocol-interfaces
+  (make-hash-table :test 'equal)
+  "A protocol interface's class name to its (pkey . table) entry: the
+   protocol's var key and its body table.")
+
+(defun rontolisp::%clojure-protocol-interface-class (name pkey table)
+  "The class value of the protocol interface NAME, the designator of its name:
+   NAME registered with the protocol's var key PKEY and body table TABLE."
+  (setf (gethash name rontolisp::%clojure-protocol-interfaces)
+        (cons pkey table))
+  (list :C%CLASS name))
+
+(defun rontolisp::%clojure-protocol-interface-entry (c)
+  "The (pkey . table) entry of the protocol interface whose class value is C,
+   NIL for anything else."
+  (if (and (consp c) (eq (car c) :C%CLASS) (consp (cdr c))
+           (stringp (car (cdr c))))
+      (gethash (car (cdr c)) rontolisp::%clojure-protocol-interfaces)
+      nil))
+
+(defun rontolisp::%clojure-protocol-interface-p (c)
+  "Whether C is a protocol interface's class value: the protocol-interface
+   family's test."
+  (if (rontolisp::%clojure-protocol-interface-entry c) t nil))
+
+(defun rontolisp::%clojure-protocol-interface-instance-p (c x)
+  "Whether C is a protocol interface's class value and X an instance of it: a
+   record or deftype whose body names the protocol, a reify holding a row
+   under its site's tag in the protocol's body table. The protocol-interface
+   family's test."
+  (let ((entry (rontolisp::%clojure-protocol-interface-entry c)))
+    (if entry
+        (rontolisp::%clojure-implements-p x (cdr entry) (car entry))
+        nil)))
+
+(defun rontolisp::%clojure-protocol-interface-isa-p (child parent)
+  "isa? of a record's or deftype's class CHILD on a protocol interface's class
+   value PARENT: the type's body names the protocol, read off the tag registry
+   its definition fills. The protocol-interface family's test."
+  (let ((entry (rontolisp::%clojure-protocol-interface-entry parent)))
+    (if (and entry
+             (member (car entry)
+              (cdr (gethash child rontolisp::%clojure-protocol-type-tags))
+              :test #'equal))
+        t
+        nil)))
 
 ;;;; Type designators: what type answers where the oracle answers a host class.
 ;;
@@ -32799,6 +33070,107 @@
                (rontolisp::%clojure-make-lazy
                 (lambda () (rontolisp::%clojure-reply-lines r close)))))
           (rontolisp::%clojure-make-lazy (lambda () (cons line more)))))))
+
+;;;; Line-numbering readers
+;;;;
+;;;; (clojure.lang.LineNumberingPushbackReader. r) is the prelude's text pull
+;;;; stream pulling R one character at a time, so it counts what has left R
+;;;; the way the oracle's LineNumberReader counts it: a line feed, a carriage
+;;;; return (and no line feed right after one), and the end once, after a
+;;;; character that ended no line. A character the reader peeks has left R,
+;;;; as the oracle's read and unread of it has. Each reader's counters are a
+;;;; vector #(line column column-before-the-last-pulled) in an eq table. Every
+;;;; definition here is the line-reader family's own (clojure/ClojureArms): a
+;;;; program building no such reader carries neither them nor the Gray streams
+;;;; they splice.
+
+(defvar rontolisp::%clojure-line-reader-table nil)
+
+(defvar rontolisp::%clojure-line-reader-guard (rontolisp:make-mutex))
+
+;; The line-numbering reader over the reader IN; closing it closes IN.
+(defun rontolisp::%clojure-line-reader-new (in)
+  (let* ((state (vector 1 1 1))
+         (last (list nil))
+         (r
+          (rontolisp::%make-text-pull-stream
+           (lambda () (rontolisp::%clojure-line-reader-pull in state last))
+           (lambda () (rontolisp::%clojure-io-close-stream in)))))
+    (rontolisp:with-mutex (rontolisp::%clojure-line-reader-guard)
+      (if (null rontolisp::%clojure-line-reader-table)
+          (setq rontolisp::%clojure-line-reader-table
+                (make-hash-table :test 'eq)))
+      (setf (gethash r rontolisp::%clojure-line-reader-table) state))
+    r))
+
+;; The next character of IN as a one-character string, nil at its end, counted
+;; into STATE; LAST is a one-cell list of the character pulled before (nil
+;; before the first, :eof after the end).
+(defun rontolisp::%clojure-line-reader-pull (in state last)
+  (let ((c (read-char in nil nil)) (before (car last)))
+    (setf (svref state 2) (svref state 1))
+    (if (null c)
+        (progn
+          (if (and before (not (eq before :eof)) (not (eql before #\Newline))
+                   (not (eql before #\Return)))
+              (setf (svref state 0) (+ (svref state 0) 1)))
+          (setf (svref state 1) 1)
+          (setf (car last) :eof)
+          nil)
+        (progn
+          (cond ((eql c #\Return)
+                 (setf (svref state 0) (+ (svref state 0) 1))
+                 (setf (svref state 1) 1))
+                ((eql c #\Newline)
+                 (if (not (eql before #\Return))
+                     (setf (svref state 0) (+ (svref state 0) 1)))
+                 (setf (svref state 1) 1))
+                (t (setf (svref state 1) (+ (svref state 1) 1))))
+          (setf (car last) c)
+          (string c)))))
+
+;; Whether X is a line-numbering reader: the line-reader family's arm test.
+(defun rontolisp::%clojure-line-reader-p (x)
+  (if rontolisp::%clojure-line-reader-table
+      (rontolisp:with-mutex (rontolisp::%clojure-line-reader-guard)
+        (if (gethash x rontolisp::%clojure-line-reader-table) t nil))))
+
+(defun rontolisp::%clojure-line-reader-state (r)
+  (rontolisp:with-mutex (rontolisp::%clojure-line-reader-guard)
+    (gethash r rontolisp::%clojure-line-reader-table)))
+
+;; .getLineNumber of the line-numbering reader R.
+(defun rontolisp::%clojure-line-reader-line (r)
+  (svref (rontolisp::%clojure-line-reader-state r) 0))
+
+;; .getColumnNumber of R: the column after the last character read, the one in
+;; hand (peeked or unread) not counted.
+(defun rontolisp::%clojure-line-reader-column (r)
+  (let ((state (rontolisp::%clojure-line-reader-state r)))
+    (if (< (rontolisp::%text-pull-index r)
+           (length (rontolisp::%text-pull-text r)))
+        (svref state 2)
+        (svref state 1))))
+
+;; .atLineStart of R: whether the last character read ended a line (or none
+;; was read).
+(defun rontolisp::%clojure-line-reader-at-line-start (r)
+  (if (= (rontolisp::%clojure-line-reader-column r) 1)
+      t
+      rontolisp::%clojure-false))
+
+;; .unread of R: the character the last read answered in hand again, answering
+;; nil (PushbackReader.unread is void).
+(defun rontolisp::%clojure-line-reader-unread (r)
+  (if (> (rontolisp::%text-pull-index r) 0)
+      (setf (rontolisp::%text-pull-index r)
+            (- (rontolisp::%text-pull-index r) 1)))
+  nil)
+
+;; .close of R: closes the reader it reads, once; R stays in the table, so a
+;; read after it is the oracle's IOException (%clojure-open-reader).
+(defun rontolisp::%clojure-line-reader-close (r)
+  (rontolisp::%text-pull-stream-close r))
 
 ;;;; Instance methods: one function per method of a value here, dispatched by
 ;;;; its kind, refusing a kind the oracle's class has no such method for in the

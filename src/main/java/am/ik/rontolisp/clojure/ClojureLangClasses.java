@@ -1,8 +1,11 @@
 package am.ik.rontolisp.clojure;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import am.ik.rontolisp.LispChar;
+import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import org.jspecify.annotations.Nullable;
@@ -36,6 +39,12 @@ final class ClojureLangClasses {
 	 * the map of an array's keys and values ({@link #staticCall}), with no namespace.
 	 */
 	static final String PERSISTENT_ARRAY_MAP = "clojure.lang.PersistentArrayMap";
+
+	/** {@code clojure.lang.Compiler}, whose {@code CHAR_MAP} is a constant map here. */
+	private static final String COMPILER = "clojure.lang.Compiler";
+
+	/** The keys of the oracle's {@code CHAR_MAP}, in the order it walks them. */
+	private static final String CHAR_MAP_ORDER = "@!\"#%&'*+-/:[{<\\|=]}>^~?";
 
 	/**
 	 * Each class's static fields, by name, with the var of {@link #NAMESPACE} holding it.
@@ -119,10 +128,7 @@ final class ClojureLangClasses {
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-CREATE-WITH-CHECK"), args.get(0));
 			// the map an array's keys and values make as if by assoc, a later key
 			// replacing an earlier one: map destructuring's coercion of a seq
-			case "PersistentArrayMap/createAsIfByAssoc/1" ->
-				ctx.lower(ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.PREFIX + "apply"),
-						new LispSymbol(ClojureCoreNames.PREFIX + "hash-map"),
-						ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, args.get(0))));
+			case "PersistentArrayMap/createAsIfByAssoc/1" -> arrayMap(ctx, args.get(0));
 			// the duplicate-checking set build over a List's members (tools.reader's
 			// set reader)
 			case "PersistentHashSet/createWithCheck/1" -> ClojureLowerUtil.list(
@@ -137,6 +143,10 @@ final class ClojureLangClasses {
 			case "RT/nextID/0" -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-RT-NEXT-ID"));
 			// a class name spelled back as the var it was munged from, $ as / (spec's
 			// fn-sym)
+			// a string munged as munge munges a name (schema's fn-name)
+			case "Compiler/munge/1" ->
+				ctx.lower(ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.PREFIX + "munge"),
+						ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, args.get(0))));
 			case "Compiler/demunge/1" ->
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-DEMUNGE"), args.get(0));
 			// a BigInteger is an integer here, as a BigInt is, and a BigInt the long
@@ -144,6 +154,21 @@ final class ClojureLangClasses {
 			case "BigInt/fromBigInteger/1", "Numbers/reduceBigInt/1" -> args.get(0);
 			default -> null;
 		};
+	}
+
+	/**
+	 * The map an array's keys and values make as if by {@code assoc}, a later key
+	 * replacing an earlier one: {@code PersistentArrayMap/createAsIfByAssoc}, and the
+	 * {@code PersistentArrayMap} constructor, whose map holds a duplicate key twice in
+	 * the oracle (the deviation: one entry here, the later value).
+	 * @param ctx the hub
+	 * @param array the lowered array
+	 * @return the form
+	 */
+	static LispVal arrayMap(ClojureLowering ctx, LispVal array) {
+		return ctx.lower(ClojureLowerUtil.list(new LispSymbol(ClojureCoreNames.PREFIX + "apply"),
+				new LispSymbol(ClojureCoreNames.PREFIX + "hash-map"),
+				ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, array)));
 	}
 
 	/**
@@ -189,6 +214,18 @@ final class ClojureLangClasses {
 		if (cls.equals(PERSISTENT_ARRAY_MAP) && member.equals("EMPTY")) {
 			// the empty map, which map destructuring's expansion spells
 			return ctx.lower(ClojureLowerUtil.list(new LispSymbol("%hash-map")));
+		}
+		if (cls.equals(COMPILER) && member.equals("CHAR_MAP")) {
+			// the munge table as the map it is (schema's char-map macro answers it
+			// whole), its entries in the oracle's hash map order, which a map here
+			// keeps and prints
+			List<LispVal> entries = new ArrayList<>();
+			entries.add(new LispSymbol("%hash-map"));
+			for (char c : CHAR_MAP_ORDER.toCharArray()) {
+				entries.add(new LispChar(c));
+				entries.add(LispString.literal(ClojureLowerUtil.munge(String.valueOf(c))));
+			}
+			return ctx.lower(ClojureLowerUtil.list(entries));
 		}
 		Map<String, String> statics = STATICS.get(cls);
 		String var = statics == null ? null : statics.get(member);

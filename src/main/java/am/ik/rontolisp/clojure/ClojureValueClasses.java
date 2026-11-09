@@ -423,11 +423,58 @@ final class ClojureValueClasses {
 			return null;
 		}
 		String fqn = ClojureNamespaceLowering.resolveClass(ctx, name);
+		if (isCoreFunctionClass(fqn)) {
+			// the class of a core function's value: what class answers for every
+			// function here (datascript's :tag clojure.core$long)
+			return ClojureCollectionLowering.keywordForm("function");
+		}
 		if (fqn.indexOf('.') < 0 || ClojureHostClasses.exists(fqn)
 				|| kindsOf(fqn).isEmpty() && !ClojureLangJar.holds(fqn)) {
 			return null;
 		}
 		return ClojureCollectionLowering.keywordForm(fqn);
+	}
+
+	/** The package of the classes of the {@code clojure.core} functions. */
+	private static final String CORE_FUNCTION_PREFIX = "clojure.core$";
+
+	/**
+	 * Whether the name is the oracle's class of a {@code clojure.core} function's value,
+	 * {@code clojure.core$} and its munged name ({@code clojure.core$long},
+	 * {@code clojure.core$_PLUS_}).
+	 * @param fqn the class's binary name
+	 * @return {@code true} for one
+	 */
+	static boolean isCoreFunctionClass(String fqn) {
+		if (!fqn.startsWith(CORE_FUNCTION_PREFIX)) {
+			return false;
+		}
+		String munged = fqn.substring(CORE_FUNCTION_PREFIX.length());
+		for (String core : ClojureCoreNames.NAMES) {
+			if (!ClojureCoreNames.isMacro(core) && ClojureLowerUtil.munge(core).equals(munged)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a call's head spells a class the oracle resolves there: a dotted name of a
+	 * host class, a {@code clojure.lang} class of its jar, a kind's class or a core
+	 * function's class. Its call is the oracle's cast of the class to {@code IFn},
+	 * failing when it runs; a bare imported name is its compile-time refusal, as here.
+	 * @param ctx the lowering
+	 * @param name the head, as written
+	 * @return {@code true} for one
+	 */
+	static boolean isCalledClass(ClojureLowering ctx, String name) {
+		if (name.indexOf('.') <= 0 || name.endsWith(".") || ClojureLowering.qualifierSlash(name) >= 0
+				|| !ClojureNamespaceLowering.isClasslike(ctx, name)) {
+			return false;
+		}
+		String fqn = ClojureNamespaceLowering.resolveClass(ctx, name);
+		return ClojureHostClasses.exists(fqn) || ClojureLangJar.holds(fqn) || !kindsOf(fqn).isEmpty()
+				|| isCoreFunctionClass(fqn) || ctx.typeDefOf(name) != null;
 	}
 
 	/**

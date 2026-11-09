@@ -275,6 +275,12 @@ final class ClojureValueMethodLowering {
 		// iterator answers hasNext and next
 		row("iterator", 0, new Arm(List.of("coll?"),
 				ctx -> ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.SEQ_ITERATOR), ctx.localSym(RECV))));
+		// a map's IMapIterable iterators step its keys and its vals, in its walk order
+		// (specter's map navigators)
+		row("keyIterator", 0, new Arm(List.of("map?"), ctx -> ClojureLowerUtil
+			.list(new LispSymbol(ClojureInterfaces.SEQ_ITERATOR), ctx.lower(core("keys", R)))));
+		row("valIterator", 0, new Arm(List.of("map?"), ctx -> ClojureLowerUtil
+			.list(new LispSymbol(ClojureInterfaces.SEQ_ITERATOR), ctx.lower(core("vals", R)))));
 		row("hasNext", 0, new Arm(List.of(SEQ_ITERATOR), ctx -> ctx.booleanAnswer(
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-ITER-HAS-NEXT"), ctx.localSym(RECV)))));
 		row("next", 0, arm(List.of("seq?"), core("next", R)), new Arm(List.of(SEQ_ITERATOR),

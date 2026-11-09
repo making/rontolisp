@@ -36,12 +36,15 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   a function, or to a computed value, does not (the oracle's takes effect once it runs).
   A Common Lisp `format`'s `~S`/`~A` on Clojure values stay Common Lisp notation (it is
   a CL surface; `clojure.pprint/cl-format` writes them as Clojure).
-  [print-method](reference/print-method.md) takes a program's own records, deftypes and
-  `:type` keywords, and a host class no core value belongs to but an instant or a UUID,
-  whose method writes host objects only (an instant or a UUID made here keeps its
-  `#inst`/`#uuid`): any other class is refused by name, `methods` and `prefer-method` of
-  it are too, and `get-method` of a type without one answers `print-method` itself where
-  the oracle's answers its default method.
+  [print-method](reference/print-method.md) takes a program's own records, deftypes,
+  protocol interfaces and `:type` keywords, and a host class no core value belongs to but
+  an instant or a UUID, whose method writes host objects only (an instant or a UUID made
+  here keeps its `#inst`/`#uuid`): any other class is refused by name (a computed one when
+  the `defmethod` runs), `methods` of it is too, and `get-method` of a type without one
+  answers `print-method` itself where the oracle's answers its default method. A deftype or
+  `reify` matches no printer's own method beside a protocol interface's, and preferences
+  that settle only some of the rows are read in a fixed order where the oracle's follows
+  its method table's hash order.
 - A wrong argument count is the oracle's `Wrong number of args (N) passed to: name`, but a
   local `fn`'s name is the oracle's class name without its generated parts: the enclosing
   function's name (a `defn`'s `my.app/f`, the namespace outside any), then the `fn`'s own
@@ -241,8 +244,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   and so does a number's class (`(= Long (class 1))` is `true`; `Long` prints as
   `:java.lang.Long`).
   A record or a deftype stands for host classes that are no one value here: it `isa?`
-  `Object` and its `ancestors` add `Object`, but its host class's other supers are not
-  modeled. Since the
+  `Object` and the interface of each protocol its body implements (`user.P`, so a method on
+  the interface takes it, like the oracle's), and its `ancestors` add `Object`, but its host
+  class's other supers are not modeled. Since the
   keyword is the class here, a keyword spelled `:java.lang.Exception` is that class too.
   A host class object (`class` of a host object, interpreter and JVM) is the same class as
   its name's keyword and, by its simple name, a core kind's, so
@@ -615,8 +619,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   seq is a `clojure.lang.PersistentList`, so `IPersistentList` and `Counted` are `true` of
   `(map inc [1])` and `LazySeq` is not (the oracle's is a `LazySeq`); every two-member vector
   is a `java.util.Map$Entry` (`map-entry?`); an integer is a `Long`, `(int 1)` too, never an
-  `Integer`. A `clojure.lang` class no kind is an instance of
-  (`clojure.lang.PersistentQueue`) is an unknown name, where the oracle answers `false`. A
+  `Integer`. A `clojure.lang` class of the oracle's jar no kind is an instance of answers
+  `false`; `(cons 1 '(2))` and `(seq (object-array [1]))` are lists here, so `Cons` and
+  `ArraySeq` are `false` of them too, where the oracle answers `true`. A
   protocol's own name (`P`, a var) is an unknown name, where the oracle throws a
   `ClassCastException`; its interface (`user.P`) answers like the oracle's.
   A class value `class` answered tells what `class` tells: `(instance? (class 1) 1.5)` and
@@ -625,6 +630,13 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `java.sql.Timestamp` is `false`. A keyword is taken for the class keyword `class` answers,
   so `(instance? :a x)` through a var answers `false`, where the oracle throws a
   `ClassCastException`; that exception's message has no module tail.
+- `clojure.core$long` (any `clojure.core$` munged name of a core function) is the class
+  `class` answers for every function here, so it equals `(class inc)` too. A
+  `(clojure.lang.PersistentArrayMap. array)` holding a key twice keeps one entry, the
+  later value; the oracle's map holds both. A `clojure.lang.LineNumberingPushbackReader`'s
+  `.unread` hands back the character its last read answered, whatever it is given, and
+  `.readLine` ends a line at a line feed only (a lone carriage return still counts as a
+  line end for `.getLineNumber`).
 - `reduce` and `reduce-kv` (and the verbs built on them) consult
   `clojure.core.protocols/CollReduce` and `IKVReduce` for a record, deftype or `reify`
   only: an extension of either to `nil`, `Object` or a core kind is reached through

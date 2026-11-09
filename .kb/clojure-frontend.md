@@ -3485,7 +3485,19 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   line), and with `declare-class-schema!`'s assert hunk dropped too `s/defrecord` and
   `s/record` validate like the oracle; that hunk stays for `s/defn`, whose `(class f)` is
   the `:function` keyword (h09). rewrite-clj 1.3.59's nineteen `(node/make-printable!
-  XNode)` calls run verbatim with `make-printable!`'s own body still patched (j14).
+  XNode)` calls run verbatim, and since j14 (2026-11-09) `make-printable!`'s own body too.
+- **Libraries after j14** (2026-11-09, j07's harness, every other hunk applied): rewrite-clj
+  loads with no `make-printable!` hunk and prints a node as the oracle does
+  (`(prn (p/parse-string ";; c\n"))` is `<comment: ";; c\n">`, interpreter, JVM class and
+  wasm P1; the verbatim jar loads and prints nodes, then stops in `z/of-string` on j18's
+  `iterate`), and schema loads with its `register-schema-print-as-explain` hunk dropped:
+  `(prn (s/maybe s/Int))` and `pprint` of it are `(maybe Int)`, a schema record inside a
+  vector or map prints its explanation, `s/defrecord`'s own record prints `#ns.Foo{:a 1}` --
+  the oracle's lines but the set order of `(enum ...)` (interpreter and JVM class; wasm P1
+  stops at load on a `JAVA:STATIC` the patched copy still reaches). j14's premise that the
+  oracle prints `#rewrite_clj.node.comment.CommentNode{...}` and `#schema.core.Maybe{...}`
+  was measured on the patched copies (the registrations dropped); the verbatim jars print
+  `<comment: ...>` and `(maybe Int)` (clj 1.12.6.1673, 2026-11-09).
 - **Pins**: clojure-spec `a-record-or-deftype-name-is-its-class-value` (all four,
   oracle-identical), `type-answers-a-host-class-designator-where-the-oracle-answers-a-class`
   (now printing the class names); `ClojureLoweringTest#protocolsRecordsAndTypesLowerToTables`
@@ -4040,7 +4052,7 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   `a-reader-over-a-streamed-reply-reads-as-it-arrives` (`/held?<key>` holds the rest of its
   reply until `/release?<key>`, the key the leg's name, `@LEG@`), `a-reply-is-text-in-the-oracles-decoding`
   (`FetchSpecE2eTest`'s four legs, oracle-identical);
-  `ClojureArmsTest#theReplyReaderFamilyIsMadeByAReaderOpenedAndTakesItsDefinitionsWithItsArms`,
+  `ClojureArmsTest#theReaderFamiliesAreMadeByTheirReadersAndTakeTheirDefinitionsWithTheirArms`,
   `LispPreludeLibraryTest#aTextPullStreamPullsThePieceAReadNeedsAndReadsLinesAcrossPieces`;
   `ClojureHttpUrlsTest` (the gate's positions and non-positions, the
   require, a session, the fetch arm's fold, the refusal of a computed URL, the reads on the
@@ -4692,12 +4704,48 @@ constructor and consumer, and a regex `replace` with a function replacement.
   `%clojure-print-dup-to` consults by record/deftype tag and the same host walk (the
   oracle's `print-dup` dispatches on `class` alone, so a `:type` row is never read).
   Refused by name: `Object`, a class a core value is an instance of (`String`,
-  `java.util.Map`), a `clojure.lang` class, nil, `methods`/`prefer-method` of it. Pins:
+  `java.util.Map`), a `clojure.lang` class, nil, `methods` of it. Pins:
   clojure-spec `print-method-of-a-record-or-deftype-is-how-every-printer-writes-it`
   (oracle-identical, four backends) and
   `print-method-of-a-type-keyword-prints-its-carriers-first` (oracle-identical);
   `ClojureInteropTest#aHostDateOrUuidIsEqualToAndComparesBesideOneMadeHere` (host classes,
-  interpreter and JVM), `ClojureLoweringTest#printMethodOfATypeKeywordStoresUnderTheKeyword`.
+  interpreter and JVM), `ClojureLoweringTest#printMethodStoresUnderTheRowItsDispatchValueNames`.
+  **A dispatch value read at run time** (2026-11-09, `.todo/j14`; rewrite-clj's
+  `make-printable!`, `(defmethod print-method obj ...)` over a fn parameter, and schema's
+  `register-schema-print-as-explain` over the `Schema` interface): a local, a var, a call or a
+  protocol interface's name (`ClojureDispatchLowering.isRunTimePrintMethodValue`) lowers to
+  `(%clojure-print-method-store value lambda)`, which keys the row by what the value names when
+  the `defmethod` runs (`%clojure-print-method-key`): a registered record/deftype tag, a
+  protocol interface's class value, a `:type` keyword (one that names no class: namespaced, or
+  neither dotted nor a kind spelling); anything else is the lowering's refusal as an
+  `UnsupportedOperationException` (a computed host class included: no table here tells a host
+  class's kinds at run time). `remove-method`/`get-method` of such a value key through the same
+  function. The store is a producer of `PRINT_METHOD` and `PRINT_FLAGS` like the row store.
+  **A protocol interface's row** is noted in `%clojure-print-method-ifaces` (store order);
+  `%clojure-print-method-p`'s disjunct after the tag row, `%clojure-print-method-walk` (a test of
+  `ClojureArms.Family.PROTOCOL_INTERFACE`), takes a record, deftype or reify whose body
+  implements one (`%clojure-implements-p` over the entry the value registered) through
+  MultiFn's selection: the printer's own rows a record's class matches (`IRecord`,
+  `java.util.Map`, `IPersistentMap` -- `Object` is dominated by every row), then the interface
+  rows, each kept where it dominates the kept one (`prefers` over the stored preferences, the
+  oracle's own three among those rows and the parents its walk climbs; no row's interface
+  derives from another's), an undominated pair the oracle's `IllegalArgumentException`
+  (`Multiple methods ... -> interface A and interface B, and neither is preferred`); a kept
+  printer row prints natively. `prefer-method` of `print-method` lowers to
+  `%clojure-print-method-prefer` (by class name: a designator's, a host class's, a class
+  keyword's spelling; a `:type` keyword itself), and the value arm of `prefer-method` asks
+  `%clojure-print-method-multi-p` ahead of the registry (`Family.PRINT_METHOD_VALUE`, made by a
+  reference to `%clojure-print-method-v`), so schema's `(doseq [m [print-method
+  pprint/simple-dispatch]] (prefer-method m ...))` stores both. Deviations (documented): a
+  deftype's or reify's class matches no printer row (the oracle's may match a collection
+  interface's), and preferences settling only some rows are read in that fixed order where
+  the oracle's follow its method table's hash order -- measured 2026-11-09: with only
+  `Q > IRecord` preferred one oracle program printed through `Q`, another (more methods
+  stored) threw `Multiple methods`. A program making no interface value and no run-time store
+  folds every new arm (`ClojureArmsTest#thePrintFlagAndPrintMethodFamiliesFoldTheirArmsInAProgramMakingNone`).
+  Pin: clojure-spec `print-method-of-a-protocol-interface-prints-the-types-implementing-it`
+  (oracle-identical, four backends; the computed record class and `:type` keyword in the
+  record case above).
 - `type` (`ClojureDispatchLowering.typeForm`, 2026-10-11; instaparse's `failure-type`) is the
   oracle's `(or (get (meta x) :type) (class x))`: `%clojure-type-tag` (the logically true
   `:type` entry, through `%clojure-meta-method`), else `%clojure-type-designator` over
@@ -4982,6 +5030,24 @@ constructor and consumer, and a regex `replace` with a function replacement.
   (a later file's deftype, all four),
   `ClojureSessionTest#aTypeDefinedInOneBufferShowsJavaItsFaceInTheNext` (a later buffer and
   an `eval`, the instance call too).
+  **The interface as a class value** (2026-11-09, `.todo/j14`; schema's
+  `(register-schema-print-as-explain schema.core.Schema)`, `unknown name` until then): the
+  interface's dotted name in value position, and `resolve`/`Class/forName` of its literal
+  name, is `(%clojure-protocol-interface-class name pkey table)`
+  (`ClojureProtocolLowering.interfaceValue`, after a local, a var, a record or deftype and a
+  loadable host class): the `(:C%CLASS name)` designator, the name registered with the
+  protocol's var key and body table in `%clojure-protocol-interfaces`. `instance?` of the value
+  (`%clojure-class-instance-p`'s clause ahead of the exact designator), `isa?` and a
+  multimethod's dispatch on `class` (`C%H-ISA?`'s arm, `%clojure-protocol-interface-isa-p`: a
+  type tag whose registry entry names the protocol), `%clojure-dispatch-value` (kept as
+  itself, so a computed `defmethod` and the value arm's `prefer-method` key one row) and
+  `print-method` read it -- arms of `ClojureArms.Family.PROTOCOL_INTERFACE`, made by the
+  construction (also a `CLASS_DESIGNATOR` producer). A type's `ancestors` stay `Object` alone.
+  `:on`/`:on-interface` stay class keywords, so `(= (:on-interface P) user.P)` is false (the
+  oracle's true): the protocol map is a quoted constant of every `defprotocol`, and a
+  designator there would make every protocol program carry the designator family -- not made.
+  Pin: clojure-spec `print-method-of-a-protocol-interface-prints-the-types-implementing-it`
+  (with `pprint/simple-dispatch`, a `class` multimethod, `isa?` and `instance?` of the value).
   A class VALUE (oracle-checked clj 1.12.6, 2026-10-11; instaparse's `(instance?
   gll/failure-type x)`, `failure-type` a `(type (Failure. nil nil))`): a class argument that is
   no symbol, or a symbol a local or a var holds, or one that does not read like a class
@@ -5019,7 +5085,9 @@ constructor and consumer, and a regex `replace` with a function replacement.
   designator reads its row like a keyword, `%clojure-class-rows`) or `reify` is a row
   `(name . t)`: its host classes
   are no one value here, so its supers are `Object` alone and `parents` adds nothing --
-  the documented deviation. A core kind is a row of the supers of the values it stands
+  the documented deviation (`isa?` of a record's or deftype's class on a protocol interface
+  its body implements answers ahead of the rows, "The interface as a class value", 2026-11-09,
+  so it holds without class chains). A core kind is a row of the supers of the values it stands
   for (`ClojureValueClasses.kindSupers`, read off clj 1.12.6 on JDK 25 with the
   interface tables 2026-10-21, `Object` last): `:function`'s row names `AFn`,
   `AFunction`, `IFn` and the rest, so its `ancestors` hold `clojure.lang.IFn`, and
@@ -5449,6 +5517,35 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   (tools.reader's number, map, set and list readers and its syntax-quote gensyms); pin:
   clojure-spec `create-with-check-builds-checking-duplicate-keys` (oracle-identical, four
   backends).
+- j15 (2026-11-09; aero, schema, specter, datascript), same pin:
+  `PersistentArrayMap/createAsIfByAssoc` and the `PersistentArrayMap.` constructor are one
+  build, `ClojureLangClasses.arrayMap` (`apply hash-map`: a later duplicate wins, where the
+  oracle's constructor keeps both); `Compiler/munge` is `munge`; `Compiler/CHAR_MAP` a
+  constant map in the oracle's walk order (`CHAR_MAP_ORDER`), so a macro answering it
+  (schema's `char-map`) expands to the literal; `.keyIterator`/`.valIterator` of a map are
+  seq iterators over `keys`/`vals` (`ClojureValueMethodLowering` rows). `instance?` of a
+  class of the jar (`ClojureLangJar`) no kind is answers false instead of `unknown name`
+  (`Cons`/`ArraySeq` too: those values are lists here); a dotted class in call position
+  (`ClojureValueClasses.isCalledClass`) lowers to the oracle's call-time
+  `ClassCastException`, args unevaluated (the oracle casts first); `clojure.core$NAME`
+  of a core function (`isCoreFunctionClass`, the munged name) is the `:function` class
+  keyword, what `class` answers for every fn (h09 would make each its own).
+- `clojure.lang.LineNumberingPushbackReader.` (j15, aero's `read-config`): the prelude's
+  text pull stream over the inner reader pulling ONE character per piece
+  (`%clojure-line-reader-pull`), so the counters see exactly what left the inner reader,
+  which is what the oracle's `LineNumberReader` counts (a peeked delimiter is one the
+  oracle read and unread). Line: LF, CR, CR LF once, the end once after a non-terminator
+  (not of an empty stream) -- JDK 25's rule, measured. Column: the pulled count, minus the
+  character in hand. State in an eq table (never removed: a closed reader must still
+  answer the IOException arm of `%clojure-open-reader`). Family `LINE_READER` (producer
+  `%clojure-line-reader-new`, everything `%clojure-line-reader-` owned) because the text
+  pull stream is a Gray class; arms: `%clojure-open-reader`, the printer, `str`,
+  `%clojure-stream-class`/`-string`, `%clojure-class-name-of`, `class`, `instance?` of a
+  stream class, and `streamMethod`'s `getLineNumber`/`getColumnNumber`/`atLineStart`/
+  `unread`/`close` (`ClojureIoLowering.LINE_READER_METHODS`). aero 1.1.6's probe runs with
+  its `LineNumberingPushbackReader` line verbatim (interpreter, JVM class). Pin: clojure-spec
+  `a-line-numbering-reader-counts-what-left-the-reader-it-reads` (oracle-identical, four
+  backends), `ClojureArmsTest#theReaderFamiliesAreMadeByTheirReadersAndTakeTheirDefinitionsWithTheirArms`.
 - `java.util` default methods (`getOrDefault`, `forEach`, `stream` ...) are declared
   (`HostInterface.defaults`) but stored only when the body defines them; an instance call of a
   method only defaults declare goes through `%clojure-default-method`, refusing by name when

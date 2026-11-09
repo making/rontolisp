@@ -543,6 +543,9 @@ final class ClojureVarLowering {
 		if (classValue == null) {
 			classValue = ClojureProtocolLowering.typeTagValue(ctx, name);
 		}
+		if (classValue == null) {
+			classValue = ClojureProtocolLowering.interfaceValue(ctx, name);
+		}
 		return classValue != null ? classValue : ClojureLowering.NIL_CONST;
 	}
 

@@ -37,12 +37,15 @@
  `set!` や計算した値への `set!` では無効になりません（オラクルでは実行された時点で効きます）。
  Common Lisp の `format` で Clojure 値に `~S`/`~A` を使うと Common Lisp 記法のままです（CL
  サーフェスのため。`clojure.pprint/cl-format` は Clojure の記法で書きます）。
- [print-method](reference/print-method.md) はプログラム自身の record・deftype・`:type`
- キーワードと、インスタントか UUID 以外のコアの値が属さないホストクラスが対象です。ホストクラスの
- メソッドはホストオブジェクトだけを書きます（ここで作ったインスタントや UUID は `#inst`/`#uuid`
- のままです）。ほかのクラスのメソッドは名前で拒否し、その `methods` と `prefer-method` も
- 同様です。メソッドのない型の `get-method` は `print-method` 自身を
- 返します（オラクルは既定のメソッドを返します）。
+ [print-method](reference/print-method.md) はプログラム自身の record・deftype・プロトコルの
+ インタフェース・`:type` キーワードと、インスタントか UUID 以外のコアの値が属さないホストクラスが
+ 対象です。ホストクラスのメソッドはホストオブジェクトだけを書きます（ここで作ったインスタントや
+ UUID は `#inst`/`#uuid` のままです）。ほかのクラスのメソッドは名前で拒否し（計算した値は
+ `defmethod` の実行時に拒否します）、その `methods` も同様です。メソッドのない型の
+ `get-method` は `print-method` 自身を返します（オラクルは既定のメソッドを返します）。
+ deftype と `reify` はプロトコルのインタフェースのメソッドのほかにプリンタ自身のメソッドに
+ 一致せず、行の一部しか決めない優先は、オラクルではメソッド表のハッシュ順に従うところを
+ 固定の順で読みます。
 - 引数の個数の誤りはオラクルと同じ `Wrong number of args (N) passed to: 名前` ですが、
  ローカルの `fn` の名前はオラクルのクラス名から生成部分を除いたものです。囲む関数の名前
  （`defn` なら `my.app/f`、外にない場合は名前空間）に、`fn` 自身の名前か `fn` を続けます
@@ -228,8 +231,10 @@
  キーワードになります（`clojure.lang.PersistentVector$ChunkedSeq` の `defmethod` は一致しません）。
  数値のクラスも同じで、`(= Long (class 1))` は `true`、`Long` は
  `:java.lang.Long` と印字します。record や deftype は
- ここでは 1 つの値にならないホストクラス群を表します。`Object` に `isa?` で、`ancestors` は
- `Object` を加えますが、ホストクラスのそれ以外のスーパータイプはモデル化しません。ここではキーワードがクラス
+ ここでは 1 つの値にならないホストクラス群を表します。`Object` と、本体で実装する各プロトコルの
+ インタフェース（`user.P`。そのためインタフェースのメソッドはオラクルと同じくそれに届きます）に
+ `isa?` で、`ancestors` は `Object` を加えますが、ホストクラスのそれ以外のスーパータイプは
+ モデル化しません。ここではキーワードがクラス
  そのものなので、`:java.lang.Exception` と綴ったキーワードもそのクラスです。ホストの
  クラスオブジェクト（ホストオブジェクトの `class`、インタプリタと JVM）はその名前の
  キーワードと、単純名を通じてコアの種類のキーワードと同じクラスなので、
@@ -579,8 +584,9 @@
   `clojure.lang.PersistentList` なので、`(map inc [1])` について `IPersistentList` と `Counted` は
   `true`、`LazySeq` は `false` です（オラクルでは `LazySeq`）。2要素のベクタはすべて
   `java.util.Map$Entry` です（`map-entry?`）。整数は `(int 1)` も含めて `Long` で、`Integer` には
-  なりません。どの種類の値もインスタンスにならない `clojure.lang` のクラス
-  （`clojure.lang.PersistentQueue`）は未知の名前になります（オラクルは `false`）。プロトコル
+  なりません。オラクルの jar にあり、どの種類の値もインスタンスにならない `clojure.lang` の
+  クラスは `false` を返します。`(cons 1 '(2))` と `(seq (object-array [1]))` はここではリストなので、
+  それらについても `Cons` と `ArraySeq` は `false` です（オラクルは `true`）。プロトコル
   自身の名前（var である `P`）は未知の名前になります（オラクルは `ClassCastException`）。
   プロトコルのインタフェース（`user.P`）はオラクルと同じに答えます。
   `class` が返したクラスの値は `class` が区別するものだけを区別するので、
@@ -589,6 +595,12 @@
   `(instance? (class #inst "2020") ts)` は `false` です。キーワードは `class` が返すクラスの
   キーワードとして扱うので、var 経由の `(instance? :a x)` は `false` になります（オラクルは
   `ClassCastException`）。その例外のメッセージにモジュールの末尾は付きません。
+- `clojure.core$long`（コア関数を munge した任意の `clojure.core$` 名）は、ここで `class` が
+  すべての関数について返すクラスなので、`(class inc)` とも等しくなります。同じキーを2度持つ
+  `(clojure.lang.PersistentArrayMap. array)` は後の値の1エントリだけを持ちます（オラクルの
+  マップは両方を持ちます）。`clojure.lang.LineNumberingPushbackReader` の `.unread` は、渡された
+  文字によらず直前の読み取りが返した文字を戻します。`.readLine` は改行（LF）だけで行を区切ります
+  （単独の CR も `.getLineNumber` では行末として数えます）。
 - `reduce` と `reduce-kv`（とその上に作られた動詞）が `clojure.core.protocols/CollReduce` と
   `IKVReduce` を参照するのは record・deftype・`reify` に対してだけです。どちらかを `nil`、
   `Object`、コアの種類へ拡張したものには `coll-reduce` や `kv-reduce` を直接呼んで届きます。

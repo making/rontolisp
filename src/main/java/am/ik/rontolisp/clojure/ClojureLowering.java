@@ -5327,6 +5327,11 @@ public final class ClojureLowering {
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("IF"), raw, TRUE_CONST, this.falseVariable);
 	}
 
+	/** The oracle's message for a class called as a function. */
+	private static final String CALLED_CLASS = "class java.lang.Class cannot be cast to class clojure.lang.IFn"
+			+ " (java.lang.Class is in module java.base of loader 'bootstrap';"
+			+ " clojure.lang.IFn is in unnamed module of loader 'app')";
+
 	LispVal call(LispVal form, List<LispVal> items, boolean coreOnly) {
 		if (!(items.get(0) instanceof LispSymbol op)) {
 			throw new LispReadException("a call's head must be a name: " + items.get(0).print());
@@ -5367,6 +5372,12 @@ public final class ClojureLowering {
 			}
 		}
 		VarRef referred = known ? null : ClojureNamespaceLowering.libraryRefer(this, name);
+		if (!known && referred == null && ClojureValueClasses.isCalledClass(this, name)) {
+			// a class called: the oracle compiles it and fails when the call runs,
+			// casting the class to IFn ahead of the arguments (datascript's
+			// never-called (clojure.lang.MapEntry k v))
+			return ClojureRefusals.refusal(ClojureRefusals.CLASS_CAST, LispString.literal(CALLED_CLASS));
+		}
 		ClojureLowerUtil.isTrue(known || referred != null, "unknown name: " + name);
 		if (referred != null) {
 			return ClojureNamespaceLowering.namespaceCall(this, referred, items, form);
@@ -6612,6 +6623,10 @@ public final class ClojureLowering {
 				LispVal typeTag = ClojureProtocolLowering.typeTagValue(this, name);
 				if (typeTag != null) {
 					return typeTag;
+				}
+				LispVal iface = ClojureProtocolLowering.interfaceValue(this, name);
+				if (iface != null) {
+					return iface;
 				}
 				LispVal langKeyword = ClojureValueClasses.classKeyword(this, name);
 				if (langKeyword != null) {

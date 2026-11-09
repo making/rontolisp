@@ -413,10 +413,17 @@ final class ClojureHierarchyLowering {
 	static final String CLASS_KINDS = "C%H-KINDS";
 
 	/**
-	 * {@code (defun c%h-isa? (h child parent) ...)}: equal, vector-wise, or an ancestor
-	 * walk -- and, with {@code classes}, the class rows' walk ({@code clojure.lisp},
-	 * {@code %clojure-class-isa}), with {@code host} a host class object's too
-	 * ({@code %clojure-host-class-isa}).
+	 * Whether a record's or deftype's class derives from a protocol interface's class
+	 * value ({@code clojure.lisp}): its body names the protocol.
+	 */
+	static final String INTERFACE_ISA = "RONTOLISP::%CLOJURE-PROTOCOL-INTERFACE-ISA-P";
+
+	/**
+	 * {@code (defun c%h-isa? (h child parent) ...)}: equal, vector-wise, an ancestor
+	 * walk, a type's class on a protocol interface its body implements
+	 * ({@link #INTERFACE_ISA}) -- and, with {@code classes}, the class rows' walk
+	 * ({@code clojure.lisp}, {@code %clojure-class-isa}), with {@code host} a host class
+	 * object's too ({@code %clojure-host-class-isa}).
 	 */
 	static LispVal isaDefun(boolean classes, boolean host) {
 		LispSymbol h = new LispSymbol("h");
@@ -426,6 +433,11 @@ final class ClojureHierarchyLowering {
 		LispVal classArm = host
 				? hfn("RONTOLISP::%CLOJURE-HOST-CLASS-ISA", h, child, parent, rows, new LispSymbol(CLASS_KINDS))
 				: hfn("RONTOLISP::%CLOJURE-CLASS-ISA", h, child, parent, rows);
+		// a record's or deftype's class isa a protocol interface its body implements:
+		// an arm a program making no interface value sheds
+		// (ClojureArms.Family.PROTOCOL_INTERFACE)
+		LispVal interfaceArm = hfn("IF", hfn(INTERFACE_ISA, child, parent), ClojureLowering.TRUE_CONST,
+				classes ? classArm : ClojureLowering.NIL_CONST);
 		return hdefun("C%H-ISA?", List.of(h, child, parent), hfn("IF", hfn("EQUAL", child, parent),
 				ClojureLowering.TRUE_CONST,
 				hfn("IF", hfn("AND", hfn("VECTORP", child), hfn("VECTORP", parent)),
@@ -435,7 +447,7 @@ final class ClojureHierarchyLowering {
 								hfn("C%H-MEM?", parent,
 										hfn("C%H-SET-LIST",
 												hfn("C%H-GET-SET", hfn("GETHASH", hkey("ancestors"), h), child))),
-								ClojureLowering.TRUE_CONST, classes ? classArm : ClojureLowering.NIL_CONST))));
+								ClojureLowering.TRUE_CONST, interfaceArm))));
 	}
 
 	/**
@@ -751,8 +763,13 @@ final class ClojureHierarchyLowering {
 	 * {@code prefer-method} as a value: over a multimethod and two dispatch values, like
 	 * the call -- the preference stored under the same key the call's shape stores (nil
 	 * to the marker, a class object or designator to the keyword a class spelling
-	 * stores), answering the multimethod. A function the registry holds no tables for
-	 * refuses at run time, like before. The count is checked first, in the call's words.
+	 * stores), answering the multimethod. {@code print-method}'s value, which the
+	 * registry holds no tables for, stores the printer's preference like the call of its
+	 * name (an arm a program naming no {@code print-method} value sheds,
+	 * {@link ClojureArms.Family#PRINT_METHOD_VALUE}: schema's {@code (doseq [m
+	 * [print-method ...]] (prefer-method m ...))}). Any other function the registry holds
+	 * no tables for refuses at run time, like before. The count is checked first, in the
+	 * call's words.
 	 * @return the value form
 	 */
 	static LispVal preferMethodValue() {
@@ -780,6 +797,12 @@ final class ClojureHierarchyLowering {
 							LispString.literal("prefer-method of a computed multimethod is not supported"
 									+ " at run time: only a literal multimethod name prefers, where the call stands")),
 						store));
+		LispVal printer = ClojureLowerUtil.list(new LispSymbol(ClojureDispatchLowering.PRINT_METHOD_PREFER),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("cadr"), args),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("caddr"), args));
+		LispVal arms = ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
+				ClojureLowerUtil.list(new LispSymbol(ClojureDispatchLowering.PRINT_METHOD_MULTI_P), multi), printer,
+				read);
 		return ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"),
 				ClojureLowerUtil.list(ClojureLowering.AMPERSAND_REST, args),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("if"),
@@ -788,7 +811,7 @@ final class ClojureHierarchyLowering {
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("let"),
 								ClojureLowerUtil.list(ClojureLowerUtil.list(multi,
 										ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), args))),
-								read),
+								arms),
 						ClojureRefusals.refusal(ClojureRefusals.ARITY,
 								LispString.literal("prefer-method takes a multimethod and two dispatch values"))));
 	}
@@ -805,6 +828,12 @@ final class ClojureHierarchyLowering {
 			return ClojureDispatchLowering.computedCall(ctx, "prefer-method", items);
 		}
 		String name = ClojureLowerUtil.plainName(items.get(1), "prefer-method");
+		if (ClojureDispatchLowering.isPrintMethod(ctx, name)) {
+			// the printer's preference, read by its walk over protocol interfaces by
+			// class name, answering print-method
+			return ClojureLowerUtil.list(new LispSymbol(ClojureDispatchLowering.PRINT_METHOD_PREFER),
+					ctx.lower(items.get(2)), ctx.lower(items.get(3)));
+		}
 		String key = ClojureDispatchLowering.multimethodKey(ctx, name);
 		LispSymbol prefers = ClojureDispatchLowering.tableGlobal(key, "%prefers");
 		ctx.usedHierarchy = true;

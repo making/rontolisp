@@ -10,8 +10,8 @@ author).
 
 ## Stops in load order (2026-11-08, develop `a3c68a63f`, interpreter)
 
-1. `datascript/db.cljc:80` `clojure.core$long` as a class value -> j15.
-2. `db.cljc:250` `(clojure.lang.MapEntry k v)` (a class in call position, never called) -> j15.
+1. `datascript/db.cljc:80` `clojure.core$long` as a class value -> j15 (done 2026-11-09: the `:function` class keyword).
+2. `db.cljc:250` `(clojure.lang.MapEntry k v)` (a class in call position, never called) -> j15 (done 2026-11-09: the call-time `ClassCastException`).
 3. `db.cljc:481-498` `defcomp`: a `reify` of `java.util.Comparator`, `clojure.lang.IFn` AND
    `clojure.lang.IFn$OOL` (`invokePrim`) -- `Unable to resolve classname: clojure.lang.IFn$OOL`
    (`ClojureInterfaces`). Repro:
