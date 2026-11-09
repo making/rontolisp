@@ -80,6 +80,13 @@ public final class ClojureMacroTime {
 	private static final LispSymbol RESOLVE = new LispSymbol("RONTOLISP::%CLOJURE-RESOLVE");
 
 	/**
+	 * The var a type body's group symbol names, which the type expanders read a
+	 * protocol's interface off: nil where the program runs, resolved like {@code resolve}
+	 * here.
+	 */
+	private static final LispSymbol TYPES_PROTOCOL_VAR = new LispSymbol("RONTOLISP::%CLOJURE-TYPES-PROTOCOL-VAR");
+
+	/**
 	 * The run-time library's {@code find-var} of a computed qualified symbol, refused
 	 * there; resolved like {@code resolve} here.
 	 */
@@ -148,6 +155,7 @@ public final class ClojureMacroTime {
 				macroEval.eval(callingBack(EVAL, ClojureMacroEvaluator.Lowering::evalForm, true));
 				macroEval.eval(callingBack(RESOLVE, ClojureMacroEvaluator.Lowering::resolveForm, false));
 				macroEval.eval(callingBack(FIND_VAR_RESOLVE, ClojureMacroEvaluator.Lowering::resolveForm, false));
+				macroEval.eval(callingBack(TYPES_PROTOCOL_VAR, ClojureMacroEvaluator.Lowering::resolveForm, false));
 				macroEval.eval(callingBack(NS_RESOLVE_IN, ClojureMacroEvaluator.Lowering::nsResolveForm, false));
 				macroEval.eval(callingBack(MACRO_SCOPE, ClojureMacroEvaluator.Lowering::macroScopeForm, false));
 				macroEval.eval(tellingInterns(macroEval.eval(list(new LispSymbol("FUNCTION"), INTERN_BARE))));

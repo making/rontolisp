@@ -12,7 +12,9 @@ function value.
 
 A core macro expands to the oracle's form: `let` to `let*` over the destructured
 bindings, `fn` to `fn*`, `case` to `case*` over its hashed map, `doseq` and `for` to
-their chunked walks, and so on for the macros [Deviations](../deviations.md) lists; any
+their chunked walks, `defrecord`, `deftype` and `reify` to `deftype*` and `reify*` (a
+record's own map methods ahead of the body's, which a macro may rewrite and lower), and so
+on for the macros [Deviations](../deviations.md) lists; any
 other core macro (`lazy-seq`, `defmacro`, ...) answers the form itself. Every macro
 call goes through the macro's function, which its var holds and takes the call, the
 environment and the call's arguments, like the oracle's: `(#'when '(when a b) nil 'a 'b)`

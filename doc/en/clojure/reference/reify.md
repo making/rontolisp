@@ -52,6 +52,10 @@ parameter count against every group of the body, so a `toString` may stand under
 | `ILookup` | `get`, `get-in`, a keyword's or symbol's call, map destructuring |
 | `IFn` (with `Callable` and `Runnable`) | a call, a function argument (`map`, `filter` ...), `apply` (through `applyTo`), `ifn?` |
 | `IDeref` | `deref`, `@` |
+| `IBlockingDeref` | `deref` with a timeout and a timeout value |
+| `IAtom`, `IAtom2` | `swap!`, `reset!`, `compare-and-set!`, `swap-vals!`, `reset-vals!` of a value that is no atom |
+| `IRef`, `IReference` | `add-watch`, `remove-watch`, `set-validator!`, `get-validator`; `alter-meta!`, `reset-meta!` |
+| `IFn$OOL` and the other primitive `IFn` interfaces | `.invokePrim` (a call of the value goes through `IFn`'s `invoke`), `instance?` |
 | `IMeta`, `IObj` | `meta`, `with-meta`, `vary-meta` (`deftype` only: a `reify` carries metadata itself) |
 | `java.lang.CharSequence` | `count` (`length`), `nth`, `seq` and every function over a seq (`charAt`), `seqable?`; `re-matcher` and `re-find` read its characters (`charAt`) as far as a match needs, `re-seq`, `re-matches`, `clojure.string` and a string's `.contains` and `.replace` the string of all of them |
 | `Object` | `str` and printing (`toString`), `=` (`equals`), `.hashCode` and `hash` without `IHashEq` (`hashCode`) |
@@ -69,8 +73,9 @@ protocol.
 `instance?` of the interface and an instance call of its method (`(.count x)`) reach the type
 too, and so does a protocol extended to the interface. A method the body leaves out is the
 oracle's `AbstractMethodError` when called (a `java.util` default method keeps the
-interface's, refused by name when called), and any other `clojure.lang` interface
-(`IChunkedSeq` ...) is refused by name. Any other public host interface (`java.io.Closeable`,
+interface's, refused by name when called). `IType`, `IRecord` and `IKeywordLookup` are
+markers `instance?` reads (a type implementing `IRecord` is `record?`); any other
+`clojure.lang` interface (`IChunkedSeq` ...) is refused by name. Any other public host interface (`java.io.Closeable`,
 `java.util.concurrent.ThreadFactory`, `java.util.concurrent.locks.Lock` ...) stores its
 methods in the type's row under its binary name, like a `definterface`'s: `instance?` tests it
 (its super-interfaces too), a `.method` call no core function answers calls the row's method,

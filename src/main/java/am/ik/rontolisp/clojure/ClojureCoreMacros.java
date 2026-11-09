@@ -51,7 +51,8 @@ final class ClojureCoreMacros {
 		for (String macro : List.of("let", "loop", "fn", "letfn", "when", "when-not", "if-not", "cond", "condp", "and",
 				"or", "case", "if-let", "when-let", "if-some", "when-some", "when-first", "->", "->>", "as->", "cond->",
 				"cond->>", "some->", "some->>", "doto", "dotimes", "while", "doseq", "for", "comment", "declare",
-				"defn", "defn-", "binding", "assert", "locking", "with-open", "future")) {
+				"defn", "defn-", "binding", "assert", "locking", "with-open", "future", "reify", "deftype",
+				"defrecord")) {
 			out.put(macro, "expand-" + macro);
 		}
 		out.put("..", "expand-dotdot");

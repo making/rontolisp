@@ -78,8 +78,15 @@ final class ClojureInterfaces {
 	/** The store of an {@code IFn}, {@code Callable} or {@code Runnable} row. */
 	static final String INVOKABLE_ROW = "RONTOLISP::%CLOJURE-INVOKABLE-ROW";
 
-	/** The store of an {@code IDeref} row. */
+	/** The store of an {@code IDeref} or {@code IBlockingDeref} row. */
 	static final String DEREFABLE_ROW = "RONTOLISP::%CLOJURE-DEREFABLE-ROW";
+
+	/**
+	 * The test of a type implementing {@code clojure.lang.IBlockingDeref}, whose
+	 * {@code deref} of a timeout and a timeout value the three-argument {@code deref}
+	 * calls.
+	 */
+	static final String BLOCKING_DEREFABLE_P = "RONTOLISP::%CLOJURE-BLOCKING-DEREFABLE-P";
 
 	/** The store of an {@code IMeta} or {@code IObj} row. */
 	static final String META_ROW = "RONTOLISP::%CLOJURE-META-ROW";
@@ -164,6 +171,31 @@ final class ClojureInterfaces {
 	 * only an instance call reaches.
 	 */
 	static final String MARKER_ROW = "RONTOLISP::%CLOJURE-MARKER-ROW";
+
+	/**
+	 * The store of an {@code IReference}, {@code IRef}, {@code IAtom} or {@code IAtom2}
+	 * row, whose methods {@code swap!}, {@code reset!}, the watch and validator verbs and
+	 * the metadata writers call.
+	 */
+	static final String REFERENCE_ROW = "RONTOLISP::%CLOJURE-REFERENCE-ROW";
+
+	/** The test of a type implementing {@code clojure.lang.IAtom}. */
+	static final String IATOM_P = "RONTOLISP::%CLOJURE-IATOM-P";
+
+	/** The test of a type implementing {@code clojure.lang.IAtom2}. */
+	static final String IATOM2_P = "RONTOLISP::%CLOJURE-IATOM2-P";
+
+	/** The test of a type implementing {@code clojure.lang.IRef}. */
+	static final String IREF_P = "RONTOLISP::%CLOJURE-IREF-P";
+
+	/** The test of a type implementing {@code clojure.lang.IReference}. */
+	static final String IREFERENCE_P = "RONTOLISP::%CLOJURE-IREFERENCE-P";
+
+	/**
+	 * The test of a type implementing {@code clojure.lang.IRecord}: {@code record?} and
+	 * the printer's {@code #ns.Name{...}} read it.
+	 */
+	static final String IRECORD_P = "RONTOLISP::%CLOJURE-IRECORD-P";
 
 	/**
 	 * The view of a collection {@code vec} and {@code set} walk: a value implementing
@@ -253,6 +285,7 @@ final class ClojureInterfaces {
 			Map.entry(ClojureArms.Family.JAVA_COLLECTION, JAVA_COLLECTION_ROW),
 			Map.entry(ClojureArms.Family.JAVA_MAP, JAVA_MAP_ROW), Map.entry(ClojureArms.Family.HASHEQ, HASHEQ_ROW),
 			Map.entry(ClojureArms.Family.MARKER, MARKER_ROW),
+			Map.entry(ClojureArms.Family.REFERENCE_INTERFACE, REFERENCE_ROW),
 			Map.entry(ClojureArms.Family.DEFINED_INTERFACE, DEFINED_ROW),
 			Map.entry(ClojureArms.Family.HOST_INTERFACE, HOST_ROW));
 
@@ -362,14 +395,21 @@ final class ClojureInterfaces {
 	private static final Set<String> RECORD_PROVIDED = Set.of("clojure.lang.Counted", "clojure.lang.Seqable",
 			"clojure.lang.ILookup", "clojure.lang.IMeta", "clojure.lang.IObj", "clojure.lang.IPersistentCollection",
 			"clojure.lang.Associative", "clojure.lang.IPersistentMap", "clojure.lang.IHashEq", "java.lang.Iterable",
-			"java.util.Map", "java.io.Serializable");
+			"java.util.Map", "java.io.Serializable", "clojure.lang.IRecord", "clojure.lang.IKeywordLookup");
 
 	/**
 	 * The supported interfaces among a record class's own direct ones, which a
 	 * {@code defrecord} body may not name: the oracle's {@code Duplicate interface name}.
 	 */
 	private static final Set<String> RECORD_DIRECT = Set.of("clojure.lang.ILookup", "clojure.lang.IObj",
-			"clojure.lang.IPersistentMap", "clojure.lang.IHashEq", "java.util.Map", "java.io.Serializable");
+			"clojure.lang.IPersistentMap", "clojure.lang.IHashEq", "java.util.Map", "java.io.Serializable",
+			"clojure.lang.IRecord", "clojure.lang.IKeywordLookup");
+
+	/**
+	 * The supported interface a deftype class implements itself, which a {@code deftype}
+	 * body may not name: the oracle's {@code Duplicate interface name}.
+	 */
+	private static final Set<String> DEFTYPE_DIRECT = Set.of("clojure.lang.IType");
 
 	/**
 	 * The methods a record class defines itself, as {@code name/count} with the target
@@ -434,13 +474,47 @@ final class ClojureInterfaces {
 				"RONTOLISP::%CLOJURE-RUNNABLE-P");
 		add(table, "clojure.lang.IDeref", methods("deref", 1), List.of(), ClojureArms.Family.DEREFABLE,
 				"RONTOLISP::%CLOJURE-DEREFABLE-P");
+		add(table, "clojure.lang.IBlockingDeref", methods("deref", 3), List.of(), ClojureArms.Family.DEREFABLE,
+				BLOCKING_DEREFABLE_P);
 		add(table, "clojure.lang.IMeta", methods("meta", 1), List.of(), ClojureArms.Family.META_INTERFACE,
 				"RONTOLISP::%CLOJURE-IMETA-P");
 		add(table, "clojure.lang.IObj", methods("withMeta", 2), List.of("clojure.lang.IMeta"),
 				ClojureArms.Family.META_INTERFACE, "RONTOLISP::%CLOJURE-IOBJ-P");
 		collectionTable(table);
+		referenceTable(table);
 		javaTable(table);
 		return table;
+	}
+
+	/**
+	 * The reference interfaces, whose methods {@code swap!}, {@code reset!},
+	 * {@code compare-and-set!}, {@code swap-vals!}, {@code reset-vals!}, the watch and
+	 * validator verbs and {@code alter-meta!}/{@code reset-meta!} call on a type
+	 * implementing them (extend-clj's {@code deftype-atom}); and the interfaces the type
+	 * special form names that no verb here reads beyond {@code instance?}: {@code IType},
+	 * {@code IRecord} ({@code record?} and the printer read it), the keyword lookup a
+	 * record's expansion implements.
+	 */
+	private static void referenceTable(Map<String, HostInterface> table) {
+		ClojureArms.Family reference = ClojureArms.Family.REFERENCE_INTERFACE;
+		add(table, "clojure.lang.IReference", methods("alterMeta", 3, "resetMeta", 2), List.of("clojure.lang.IMeta"),
+				reference, IREFERENCE_P);
+		add(table, "clojure.lang.IRef",
+				methods("setValidator", 2, "getValidator", 1, "getWatches", 1, "addWatch", 3, "removeWatch", 2),
+				List.of("clojure.lang.IDeref"), reference, IREF_P);
+		add(table, "clojure.lang.IAtom",
+				methods("swap", 2, "swap", 3, "swap", 4, "swap", 5, "compareAndSet", 3, "reset", 2), List.of(),
+				reference, IATOM_P);
+		add(table, "clojure.lang.IAtom2",
+				methods("swapVals", 2, "swapVals", 3, "swapVals", 4, "swapVals", 5, "resetVals", 2),
+				List.of("clojure.lang.IAtom"), reference, IATOM2_P);
+		ClojureArms.Family marker = ClojureArms.Family.MARKER;
+		add(table, "clojure.lang.IType", Map.of(), List.of(), marker, "RONTOLISP::%CLOJURE-ITYPE-P");
+		add(table, "clojure.lang.IRecord", Map.of(), List.of(), marker, IRECORD_P);
+		add(table, "clojure.lang.IKeywordLookup", methods("getLookupThunk", 2), List.of(), marker,
+				"RONTOLISP::%CLOJURE-IKEYWORD-LOOKUP-P");
+		add(table, "clojure.lang.ILookupThunk", methods("get", 2), List.of(), marker,
+				"RONTOLISP::%CLOJURE-ILOOKUP-THUNK-P");
 	}
 
 	/**
@@ -675,6 +749,10 @@ final class ClojureInterfaces {
 		if (name.equals(OBJECT)) {
 			return OBJECT_METHODS;
 		}
+		HostInterface primitive = primitiveFn(name);
+		if (primitive != null) {
+			return primitive;
+		}
 		if (CLOJURE_LANG.contains(name)) {
 			throw new LispReadException(name + " is not supported yet as an interface of " + what);
 		}
@@ -693,6 +771,28 @@ final class ClojureInterfaces {
 			throw new LispReadException(name + " is not supported yet as an interface of " + what);
 		}
 		return reflected;
+	}
+
+	/**
+	 * A primitive {@code IFn} interface of the oracle's jar ({@code clojure.lang.IFn$OOL}
+	 * and its 357 siblings, which no class here loads): its one {@code invokePrim}, over
+	 * the parameters its letters but the last spell. No core verb reads it -- a call of
+	 * the value goes through its {@code IFn}'s {@code invoke}, as the oracle's does --,
+	 * so it takes the row of a host interface no core verb reads, which an instance call
+	 * {@code (.invokePrim f a b)} and {@code instance?} read
+	 * ({@link ClojureArms.Family#HOST_INTERFACE}).
+	 * @param name the binary name
+	 * @return the interface, or null for any other name
+	 */
+	static @Nullable HostInterface primitiveFn(String name) {
+		String prefix = "clojure.lang.";
+		if (!name.startsWith(prefix) || !ClojureLangJar.isPrimitiveFn(name.substring(prefix.length()))) {
+			return null;
+		}
+		// the parameters and the answer: with the target counted, the letters' count
+		int count = name.length() - (prefix + "IFn$").length();
+		return new HostInterface(name, Map.of("invokePrim", Set.of(count)), Map.of(), List.of(),
+				ClojureArms.Family.HOST_INTERFACE, "");
 	}
 
 	/**
@@ -887,6 +987,7 @@ final class ClojureInterfaces {
 	static void checkNamed(String what, HostInterface named) {
 		Set<String> direct = switch (what) {
 			case "defrecord" -> RECORD_DIRECT;
+			case "deftype" -> DEFTYPE_DIRECT;
 			case "reify" -> REIFY_DIRECT;
 			default -> Set.of();
 		};

@@ -326,14 +326,24 @@
  `or`、`case`、`if-let`、`when-let`、`if-some`、`when-some`、`when-first`、`->`、`->>`、
  `as->`、`cond->`、`cond->>`、`some->`、`some->>`、`doto`、`..`、`dotimes`、`doseq`、
  `for`、`while`、`comment`、`declare`、`defn`、`defn-`、`binding`、`assert`、`locking`、
- `with-open`、`future` を、gensym の番号を除いて oracle と同じフォームに展開します。
+ `with-open`、`future`、`reify`、`deftype`、`defrecord` を、gensym の番号を除いて oracle と同じフォームに展開します。
  それ以外の core マクロ（`lazy-seq`、`delay`、`defmacro`、`ns` など）は呼び出しそのものを
  答えます。oracle はその展開を答えます。誤った形の呼び出しの拒否は展開関数が投げた
  まま伝わります。oracle はそれを `Compiler$CompilerException`（`Syntax error
  macroexpanding ...`）に包みます。テストが 2 つ以上のハッシュバケットで衝突する `case` は、
- スキップするハッシュを挿入順に並べます（セットの順序の差異）。実行中にこれらを呼ぶ
+ スキップするハッシュを挿入順に並べ、型の本体のインターフェースは本体の順を保ちます。
+ oracle のセットは 2 つを入れ替えることがあります（いずれもセットの順序の差異）。実行中にこれらを呼ぶ
  プログラムは展開関数を持ち運び、マクロ本体の中でだけ展開するプログラムは何も持ち
  運びません。
+- `deftype`、`defrecord`、`reify` が展開する特殊形式 `deftype*` と `reify*` は同じ仕組みで
+ lower されます。プログラムの実行中のこれらのマクロの展開は、プロトコルのグループを書いた
+ ままのシンボルで残します。oracle はそのインターフェース（`user.P`）を挙げます（プログラムを
+ lower する間にマクロ本体が作る展開は挙げます）。`deftype*` が定義する型はどの関数にとっても deftype です。それを通した
+ レコードの展開は `record?` でレコードとして印字されますが、自分のメソッドを通して読むため
+ `defrecord` より遅くなります。その名前は oracle の `import` なしで解決されます。`deftype`
+ フォームが定義する deftype は `clojure.lang.IType` の `instance?` になりません。参照
+ インターフェース（`IAtom`、`IRef` など）のメソッドがインターフェースの宣言と違う型を
+ 答えてもキャストしません。oracle はその `ClassCastException` を投げます。
 - `eval`、計算で得たシンボルの `resolve`・`find-var`・`ns-resolve`・`requiring-resolve`、
  計算した引数の `require`・`use`・`refer`・`alias`・`in-ns`・`load`・`load-file`・
  `load-string`、そして `load-reader` が実行中に lower されるのはインタプリタと JVM の

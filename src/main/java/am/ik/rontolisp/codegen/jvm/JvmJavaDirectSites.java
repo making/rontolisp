@@ -1585,12 +1585,10 @@ final class JvmJavaDirectSites {
 			}
 			// The handlers.
 			this.a.labelBinding(classMissing);
-			this.a.pop();
-			throwMessage(this.a, "No such class: " + this.type.name());
+			emitClassMissing(this.type.name());
 			for (Map.Entry<String, MethodCode.Label> bound : this.boundMissing.entrySet()) {
 				this.a.labelBinding(bound.getValue());
-				this.a.pop();
-				throwMessage(this.a, "No such class: " + bound.getKey());
+				emitClassMissing(bound.getKey());
 			}
 			// What the member threw: a class that cannot link is the refusal naming the
 			// missing class -- so is a class whose initialization needs one, whose
@@ -1631,6 +1629,28 @@ final class JvmJavaDirectSites {
 			this.a.invokestatic(failure());
 			this.a.athrow();
 			return finish(name, desc);
+		}
+
+		// The NoClassDefFoundError of a class constant on the stack: the class itself
+		// absent is "No such class"; a class whose own supertype is missing (it names
+		// another class) is the refusal naming that one, like the bridge's loadClass
+		// (.kb/clojure-frontend.md, "Classes compiled against `clojure.lang`").
+		private void emitClassMissing(String className) {
+			MethodCode.Label unlinkable = this.a.newLabel();
+			this.a.dup();
+			this.a.invokevirtual(method("java/lang/Throwable", "getMessage", "()Ljava/lang/String;"));
+			this.a.ldc(str(className.replace('.', '/')));
+			this.a.swap();
+			this.a.invokevirtual(method("java/lang/String", "equals", "(Ljava/lang/Object;)Z"));
+			this.a.ifeq(unlinkable);
+			this.a.pop();
+			throwMessage(this.a, "No such class: " + className);
+			this.a.labelBinding(unlinkable);
+			this.a.ldc(str(className));
+			this.a.swap();
+			this.a.checkcast(cls("java/lang/NoClassDefFoundError"));
+			this.a.invokestatic(unlinkable());
+			this.a.athrow();
 		}
 
 		// java:call / java:field on an object: a host object (the bridge's

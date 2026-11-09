@@ -135,7 +135,7 @@ final class ClojurePredicateLowering {
 	private static final Map<String, Test> TYPE_TESTS = Map.of("coll?", helper("IS-COLL-TYPE"), "seq?",
 			helper("IS-SEQ-TYPE"), "list?", helper("IS-LIST-TYPE"), "sequential?", helper("IS-SEQUENTIAL-TYPE"), "map?",
 			helper("IS-MAP-TYPE"), "set?", helper("IS-SET-TYPE"), "associative?", helper("IS-ASSOCIATIVE-TYPE"),
-			"reversible?", helper("IS-REVERSIBLE-TYPE"));
+			"reversible?", helper("IS-REVERSIBLE-TYPE"), "record?", helper("IS-RECORD-TYPE"));
 
 	/**
 	 * A predicate's test in a call or a value: {@link #TYPE_TESTS}' over {@link #TESTS}'.

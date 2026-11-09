@@ -4597,9 +4597,11 @@ cases:
     # destructured bindings, the hashed case map and the chunked doseq/for walks --
     # through the expanders of the shipped rontolisp.internal.core-macros, while the
     # program's own calls of them keep their lowering. cmx-norm renumbers gensyms in
-    # order of appearance, so an expansion prints the oracle's line. The head
-    # resolves in *ns*: a definition or an exclusion hides a core macro, a rename and
-    # an alias of clojure.core reach it. Every line is the oracle's (clj 1.12.6).
+    # order of appearance, so an expansion prints the oracle's line. reify, deftype
+    # and defrecord expand to reify* and deftype* (the record's own map methods,
+    # clojure.core-qualified, ahead of the body's). The head resolves in *ns*: a
+    # definition or an exclusion hides a core macro, a rename and an alias of
+    # clojure.core reach it. Every line is the oracle's (clj 1.12.6).
     source: |
       (defn cmx-norm [form]
         (let [seen (atom {})]
@@ -4627,6 +4629,9 @@ cases:
       (prn (cmx-norm (clojure.walk/macroexpand-all '(when (or a b) (some-> x f)))))
       (prn (cmx-norm (destructure '[[a & r] v {:keys [b] :or {b 1} :as m} x])))
       (prn (macroexpand-1 '(foo 1)) (macroexpand-1 '(clojure.core/when-not a b)))
+      (prn (cmx-norm (macroexpand-1 '(reify Object (toString [_] "x") java.util.Comparator (compare [_ [a] b] 0)))))
+      (prn (cmx-norm (macroexpand-1 '(deftype T [a ^:volatile-mutable b] Object (toString [_] "x")))))
+      (prn (cmx-norm (macroexpand-1 '(defrecord R [a] Object (toString [_] "r")))))
       (ns cmx-shadow (:refer-clojure :exclude [when] :rename {cond kond}) (:require [clojure.core :as cc]))
       (defn when [x] x)
       (defmacro unless [c x] (list 'if c nil x))
@@ -4651,6 +4656,9 @@ cases:
       (if (let* [or__1__auto__ a] (if or__1__auto__ or__1__auto__ b)) (do (let* [G__2 x] (if (clojure.core/nil? G__2) nil (f G__2)))))
       [vec__1 v seq__2 (clojure.core/seq vec__1) first__3 (clojure.core/first seq__2) seq__2 (clojure.core/next seq__2) a first__3 r seq__2 map__4 x map__4 (if (clojure.core/seq? map__4) (if (clojure.core/next map__4) (clojure.lang.PersistentArrayMap/createAsIfByAssoc (clojure.core/to-array map__4)) (if (clojure.core/seq map__4) (clojure.core/first map__4) clojure.lang.PersistentArrayMap/EMPTY)) map__4) m map__4 b (clojure.core/get map__4 :b 1)]
       (foo 1) (if a nil (do b))
+      (reify* [java.util.Comparator] (toString [_] "x") (compare [_ p__1 b] (clojure.core/let [[a] p__1] 0)))
+      (clojure.core/let [] (deftype* lit/T lit.T [a b] :implements [clojure.lang.IType] (toString [_] "x")) (clojure.core/import lit.T) (clojure.core/defn ->T "Positional factory function for class lit.T." [a b] (new lit.T a b)) lit.T)
+      (clojure.core/let [] (clojure.core/declare ->R) (clojure.core/declare map->R) (deftype* lit/R lit.R [a __meta __extmap __hash __hasheq] :implements [clojure.lang.IRecord clojure.lang.IHashEq clojure.lang.IObj clojure.lang.ILookup clojure.lang.IKeywordLookup clojure.lang.IPersistentMap java.util.Map java.io.Serializable] (clojure.core/entrySet [this__1__auto__] (clojure.core/set this__1__auto__)) (clojure.core/values [this__2__auto__] (clojure.core/vals this__2__auto__)) (clojure.core/keySet [this__3__auto__] (clojure.core/set (clojure.core/keys this__3__auto__))) (clojure.core/clear [this__4__auto__] (throw (java.lang.UnsupportedOperationException.))) (clojure.core/putAll [this__5__auto__ m__6__auto__] (throw (java.lang.UnsupportedOperationException.))) (clojure.core/remove [this__7__auto__ k__8__auto__] (throw (java.lang.UnsupportedOperationException.))) (clojure.core/put [this__9__auto__ k__10__auto__ v__11__auto__] (throw (java.lang.UnsupportedOperationException.))) (clojure.core/get [this__12__auto__ k__13__auto__] (.valAt this__12__auto__ k__13__auto__)) (clojure.core/containsValue [this__14__auto__ v__15__auto__] (clojure.core/boolean (clojure.core/some #{v__15__auto__} (clojure.core/vals this__14__auto__)))) (clojure.core/isEmpty [this__16__auto__] (clojure.core/= 0 (.count this__16__auto__))) (clojure.core/size [this__17__auto__] (.count this__17__auto__)) (clojure.core/without [this__18__auto__ k__19__auto__] (if (clojure.core/contains? #{:a} k__19__auto__) (clojure.core/dissoc (clojure.core/with-meta (clojure.core/into {} this__18__auto__) __meta) k__19__auto__) (new R a __meta (clojure.core/not-empty (clojure.core/dissoc __extmap k__19__auto__))))) (clojure.core/assoc [this__20__auto__ k__21__auto__ G__22] (clojure.core/condp clojure.core/identical? k__21__auto__ :a (new R G__22 __meta __extmap) (new R a __meta (clojure.core/assoc __extmap k__21__auto__ G__22)))) (clojure.core/iterator [G__22] (clojure.lang.RecordIterator. G__22 [:a] (clojure.lang.RT/iter __extmap))) (clojure.core/seq [this__23__auto__] (clojure.core/seq (clojure.core/concat [(clojure.lang.MapEntry/create :a a)] __extmap))) (clojure.core/entryAt [this__24__auto__ k__25__auto__] (clojure.core/let [v__26__auto__ (.valAt this__24__auto__ k__25__auto__ this__24__auto__)] (clojure.core/when-not (clojure.core/identical? this__24__auto__ v__26__auto__) (clojure.lang.MapEntry/create k__25__auto__ v__26__auto__)))) (clojure.core/containsKey [this__27__auto__ k__28__auto__] (clojure.core/not (clojure.core/identical? this__27__auto__ (.valAt this__27__auto__ k__28__auto__ this__27__auto__)))) (clojure.core/equiv [this__29__auto__ G__22] (clojure.core/boolean (clojure.core/or (clojure.core/identical? this__29__auto__ G__22) (clojure.core/when (clojure.core/identical? (clojure.core/class this__29__auto__) (clojure.core/class G__22)) (clojure.core/let [G__22 G__22] (clojure.core/and (clojure.core/= a (. G__22 -a)) (clojure.core/= __extmap (. G__22 __extmap)))))))) (clojure.core/cons [this__30__auto__ e__31__auto__] ((var clojure.core/imap-cons) this__30__auto__ e__31__auto__)) (clojure.core/empty [this__32__auto__] (throw (java.lang.UnsupportedOperationException. (clojure.core/str "Can't create empty: " "lit.R")))) (clojure.core/count [this__33__auto__] (clojure.core/+ 1 (clojure.core/count __extmap))) (clojure.core/getLookupThunk [this__34__auto__ k__35__auto__] (clojure.core/let [gclass (clojure.core/class this__34__auto__)] (clojure.core/case k__35__auto__ :a (clojure.core/reify clojure.lang.ILookupThunk (clojure.core/get [thunk gtarget] (if (clojure.core/identical? (clojure.core/class gtarget) gclass) (. gtarget -a) thunk))) nil))) (clojure.core/valAt [this__36__auto__ k__37__auto__ else__38__auto__] (clojure.core/case k__37__auto__ :a a (clojure.core/get __extmap k__37__auto__ else__38__auto__))) (clojure.core/valAt [this__39__auto__ k__40__auto__] (.valAt this__39__auto__ k__40__auto__ nil)) (clojure.core/withMeta [this__41__auto__ G__22] (new R a G__22 __extmap __hash __hasheq)) (clojure.core/meta [this__42__auto__] __meta) (clojure.core/equals [this__43__auto__ G__22] (clojure.lang.APersistentMap/mapEquals this__43__auto__ G__22)) (clojure.core/hashCode [this__44__auto__] (clojure.core/let [hash__45__auto__ __hash] (if (clojure.core/zero? hash__45__auto__) (clojure.core/let [h__46__auto__ (clojure.lang.APersistentMap/mapHash this__44__auto__)] (set! __hash h__46__auto__) h__46__auto__) hash__45__auto__))) (clojure.core/hasheq [this__47__auto__] (clojure.core/let [hq__48__auto__ __hasheq] (if (clojure.core/zero? hq__48__auto__) (clojure.core/let [h__49__auto__ (clojure.core/int (clojure.core/bit-xor -1588483174 (clojure.lang.APersistentMap/mapHasheq this__47__auto__)))] (set! __hasheq h__49__auto__) h__49__auto__) hq__48__auto__))) (toString [_] "r")) (clojure.core/import lit.R) (clojure.core/defn ->R "Positional factory function for class lit.R." [a] (new lit.R a)) (clojure.core/defn map->R "Factory function for class lit.R, taking a map of keywords to field values." ([m__50__auto__] (lit.R/create (if (clojure.core/instance? clojure.lang.MapEquivalence m__50__auto__) m__50__auto__ (clojure.core/into {} m__50__auto__))))) lit.R)
       (when a b) (if a 1 (clojure.core/cond)) (cond a 1)
       (if a (do b)) (if a (do b)) (if a nil b)
       (if a nil (do b)) (if a nil (do b))
@@ -4680,6 +4688,56 @@ cases:
       2 :none
       [1 2] {:a 3, :b 2} {}
       3
+  - name: the-type-special-forms-define-what-deftype-defrecord-and-reify-expand-to
+    # deftype* and reify*: a deftype* type over every field it names, its
+    # :implements (a protocol's interface standing for the protocol, IType a marker)
+    # and its methods, a mutable field set! in place; the oracle's shorter
+    # constructors fill __meta, __extmap and the hash caches, T/create builds one from
+    # a map, (. x -f) reads a field. A macro rewriting a defrecord's expansion -- the
+    # generated hashCode dropped for the body's, like datascript's
+    # defrecord-updatable -- makes a record answering through the expansion's own
+    # methods: printing, =, hash, assoc and dissoc, seq, conj, its field, its
+    # protocol. Every line is the oracle's (clj 1.12.6, 2026-11-09).
+    source: |
+      (ns tsf (:require [clojure.walk]))
+      (defprotocol TsfP (tsf [x]))
+      (deftype* tsf/TsfT tsf.TsfT [a ^:unsynchronized-mutable n] :implements [clojure.lang.IType tsf.TsfP clojure.lang.IDeref]
+        (tsf [_] (set! n (inc n)) [a n])
+        (deref [_] n))
+      (import tsf.TsfT)
+      (def tsf-t (TsfT. 1 10))
+      (prn (tsf tsf-t) (tsf tsf-t) @tsf-t (.-a tsf-t) (. tsf-t -a) (instance? TsfT tsf-t) (instance? clojure.lang.IType tsf-t) (class tsf-t))
+      (deftype* tsf/TsfR tsf.TsfR [a __meta __extmap ^:unsynchronized-mutable ^int __hash ^:unsynchronized-mutable ^int __hasheq]
+        :implements [clojure.lang.ILookup]
+        (valAt [this k] (.valAt this k nil))
+        (valAt [_ k nf] (case k :a a (get __extmap k nf))))
+      (import tsf.TsfR)
+      (prn (:a (TsfR. 1)) (:b (TsfR. 1 nil {:b 2})) (:b (TsfR/create {:a 3 :b 4})) (:a (TsfR/create {:a 3 :b 4}))
+           (map :a (map (fn [x] (TsfR. x)) [5 6])) (record? (TsfR. 1)))
+      (prn (tsf (reify* [tsf.TsfP] (tsf [_] :r))) (sort (reify* [java.util.Comparator] (compare [_ x y] (compare y x))) [1 3 2])
+           (str (reify* [] (toString [_] "s"))))
+      (defmacro tsf-record
+        "A record whose hashCode the body overrides, the generated one removed from the
+        expansion like datascript's defrecord-updatable."
+        [name fields & impls]
+        (clojure.walk/postwalk
+         (fn [form]
+           (if (and (seq? form) (= 'deftype* (first form)))
+             (remove #(and (seq? %) (= 'clojure.core/hashCode (first %))) form)
+             form))
+         (macroexpand-1 (list* 'defrecord name fields impls))))
+      (tsf-record TsfDB [schema eavt] Object (hashCode [_] 42) TsfP (tsf [_] (count eavt)))
+      (def tsf-db (->TsfDB {:a 1} [1 2 3]))
+      (prn tsf-db (:eavt tsf-db) (count tsf-db) (.hashCode tsf-db) (tsf tsf-db) (record? tsf-db)
+           (= tsf-db (->TsfDB {:a 1} [1 2 3])) (= tsf-db (map->TsfDB {:schema {:a 1} :eavt []})))
+      (prn (assoc tsf-db :x 1) (dissoc tsf-db :eavt) (seq tsf-db) (hash tsf-db) (conj tsf-db [:y 2]) (.-schema tsf-db))
+      (in-ns 'user)
+    expected: |
+      [1 11] [1 12] 12 1 1 true true tsf.TsfT
+      1 2 4 3 (5 6) false
+      :r (3 2 1) "s"
+      #tsf.TsfDB{:schema {:a 1}, :eavt [1 2 3]} [1 2 3] 2 42 3 true true false
+      #tsf.TsfDB{:schema {:a 1}, :eavt [1 2 3], :x 1} {:schema {:a 1}} ([:schema {:a 1}] [:eavt [1 2 3]]) 1121651819 #tsf.TsfDB{:schema {:a 1}, :eavt [1 2 3], :y 2} {:a 1}
   - name: eval-and-resolve-of-a-computed-symbol-refuse-at-run-time
     # A wasm module carries no lowering, so eval and resolve of a computed symbol
     # refuse when the program runs. The oracle prints 3 and #'clojure.core/inc.
@@ -13555,8 +13613,10 @@ cases:
     # clojure.lang.IFn (.kb/clojure-frontend.md "Host interfaces"): a call, map, filter and
     # a record's call reach the invoke of the call's count, apply the applyTo (here
     # through clojure.lang.AFn/applyToHelper, the usual body); a count or an applyTo the
-    # body leaves out is the oracle's AbstractMethodError. Every line is the oracle's
-    # (clj 1.12.6), on all four backends.
+    # body leaves out is the oracle's AbstractMethodError. A primitive IFn interface
+    # (IFn$OOL) is a host interface no verb reads: .invokePrim and instance? reach
+    # it, a call goes through invoke. Every line is the oracle's (clj 1.12.6), on all four
+    # backends.
     source: |
       (ns iface-fn)
       (def f (reify clojure.lang.IFn
@@ -13569,12 +13629,77 @@ cases:
       (defrecord Adder [n] clojure.lang.IFn (invoke [_ x] (+ n x)))
       (prn ((->Adder 10) 5) (map (->Adder 1) [1 2]) (filter (reify clojure.lang.IFn (invoke [_ x] (odd? x))) [1 2 3]))
       (prn (apply (reify clojure.lang.IFn (invoke [_ a] a) (applyTo [_ args] [:applied args])) [7]))
+      (import clojure.lang.IFn$OOL)
+      (def prim-cmp (reify java.util.Comparator (compare [_ a b] (compare b a))
+                           clojure.lang.IFn (invoke [this a b] (.compare this a b))
+                           IFn$OOL (invokePrim [this a b] (.compare this a b))))
+      (deftype PrimInc [n] clojure.lang.IFn$LL (invokePrim [_ x] (+ x n)))
+      (prn (prim-cmp 1 2) (.invokePrim prim-cmp 1 2) (sort prim-cmp [3 1 2]) (instance? IFn$OOL prim-cmp)
+           (instance? clojure.lang.IFn$LL prim-cmp) (.invokePrim (PrimInc. 2) 40) (instance? clojure.lang.IFn$LL (PrimInc. 1)))
       (in-ns 'user)
     expected: |
       :none [:one 1] [:two 1 2] [:two 1 2] ([:one 1] [:one 2]) true false
       :abstract :abstract
       15 (2 3) (1 3)
       [:applied (7)]
+      1 1 (3 2 1) true false 42 true
+  - name: a-type-implementing-the-reference-interfaces-answers-the-atom-verbs
+    # IAtom, IAtom2, IRef, IReference and IBlockingDeref (extend-clj's
+    # deftype-atom, datascript's Conn): where the value is no atom, swap! (one to
+    # three arguments and a rest), reset!, compare-and-set!, swap-vals!, reset-vals!,
+    # the watch and validator verbs (set-validator! answers nil: the method is void),
+    # alter-meta!, reset-meta! and the timed deref call its methods, as calls and as
+    # values. An assoc changing nothing answers its map, so a compare-and-set! of one
+    # holds, the swap deftype-atom builds. Every line is the oracle's (clj 1.12.6,
+    # 2026-11-09).
+    source: |
+      (ns tsf-ref)
+      (deftype RefLog [log]
+        clojure.lang.IDeref (deref [_] :deref)
+        clojure.lang.IBlockingDeref (deref [_ ms dflt] [:deref ms dflt])
+        clojure.lang.IAtom2
+        (swap [_ f] [:swap (f 1)])
+        (swap [_ f x] [:swap (f 1 x)])
+        (swap [_ f x y] [:swap (f 1 x y)])
+        (swap [_ f x y more] [:swap (apply f 1 x y more)])
+        (compareAndSet [_ o n] (= o 1))
+        (reset [_ n] [:reset n])
+        (swapVals [_ f] [:swap-vals (f 1)])
+        (swapVals [_ f x] [:swap-vals (f 1 x)])
+        (swapVals [_ f x y] [:swap-vals (f 1 x y)])
+        (swapVals [_ f x y more] [:swap-vals (apply f 1 x y more)])
+        (resetVals [_ n] [:reset-vals n])
+        clojure.lang.IRef
+        (setValidator [_ f] (swap! log conj [:set-validator (f 1)]))
+        (getValidator [_] :validator)
+        (getWatches [_] {})
+        (addWatch [this k f] (swap! log conj [:add-watch k]) this)
+        (removeWatch [this k] (swap! log conj [:remove-watch k]) this)
+        clojure.lang.IReference
+        (alterMeta [_ f args] (apply f {:m 1} args))
+        (resetMeta [_ m] (assoc m :reset true)))
+      (def ref-log (RefLog. (atom [])))
+      (prn @ref-log (deref ref-log 5 :t) (swap! ref-log inc) (swap! ref-log + 1) (swap! ref-log + 1 2) (swap! ref-log + 1 2 3 4))
+      (prn (compare-and-set! ref-log 1 2) (compare-and-set! ref-log 0 2) (reset! ref-log 3) (swap-vals! ref-log inc)
+           (swap-vals! ref-log + 1 2 3) (reset-vals! ref-log 4))
+      (prn (identical? ref-log (add-watch ref-log :k prn)) (identical? ref-log (remove-watch ref-log :k))
+           (set-validator! ref-log odd?) (get-validator ref-log) @(.-log ref-log))
+      (prn (alter-meta! ref-log assoc :n 2) (reset-meta! ref-log {:o 3}))
+      (prn (map (fn [f] (f ref-log inc)) [swap! swap-vals!]) (apply reset! [ref-log 9]) ((fn [f] (f ref-log 1 2)) compare-and-set!))
+      (prn (instance? clojure.lang.IAtom ref-log) (instance? clojure.lang.IAtom2 ref-log) (instance? clojure.lang.IRef ref-log)
+           (instance? clojure.lang.IReference ref-log) (instance? clojure.lang.IBlockingDeref ref-log))
+      (let [m {:db 1 :x 2} a (atom m)]
+        (prn (identical? m (assoc m :db 1)) (identical? m (assoc m :db 2)) (identical? m (assoc m :db 1 :x 2))
+             (compare-and-set! a (assoc @a :db 1) (assoc @a :db 5)) @a))
+      (in-ns 'user)
+    expected: |
+      :deref [:deref 5 :t] [:swap 2] [:swap 2] [:swap 4] [:swap 11]
+      true false [:reset 3] [:swap-vals 2] [:swap-vals 7] [:reset-vals 4]
+      true true nil :validator [[:add-watch :k] [:remove-watch :k] [:set-validator true]]
+      {:m 1, :n 2} {:o 3, :reset true}
+      ([:swap 2] [:swap-vals 2]) [:reset 9] true
+      true true true true true
+      true false true true {:db 5, :x 2}
   - name: an-ideref-type-derefs-through-its-deref
     # clojure.lang.IDeref (.kb/clojure-frontend.md "Host interfaces"): deref, @ and deref
     # as a value. Every line is the oracle's (clj 1.12.6), on all four backends.
@@ -14271,8 +14396,9 @@ cases:
   - name: extend-takes-a-computed-protocol-and-a-computed-type
     # j23: a protocol is a run-time value -- its var holds the oracle's map
     # (:on, :on-interface, :sigs with each method's name and arglists, and
-    # :method-map; this front end's class values are keywords, so :on prints
-    # :user.J23P where the oracle prints its class) -- and extend reads it
+    # :method-map; :on is the interface's symbol, the oracle's, which the
+    # defrecord expansion reads a protocol group's interface off; :on-interface
+    # is a keyword here where the oracle's is the class) -- and extend reads it
     # through the registry, storing under a type value computed at run time.
     # extend-protocol and extend-type take a computed type, the type of a
     # core fn and a class from Class/forName included (an array row is
@@ -14280,7 +14406,7 @@ cases:
     # representation); satisfies?, extends? and extend take a protocol held
     # in a var or a local, like the value arms. The ExceptionInfo
     # constructor schema's error! macro spells is ex-info's value on every
-    # backend. Oracle-identical (clj 1.12.6, 2026-11-08) but the class print.
+    # backend. Oracle-identical (clj 1.12.6, 2026-11-08).
     # schema 1.4.2's extend-primitive and specter 1.1.6's extend-protocolpath*
     # are the load-time shapes this unblocks.
     source: |
@@ -14316,7 +14442,7 @@ cases:
       {:j23-f {:tag nil, :name j23-f, :arglists ([x]), :doc nil}}
       [x]
       :j23-f
-      :user.J23P
+      user.J23P
       true true true
       true true
       :type-computed

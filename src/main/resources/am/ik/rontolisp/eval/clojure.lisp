@@ -823,6 +823,12 @@
                (rontolisp::%clojure-jlist-p x))
            (let ((kind (rontolisp::%clojure-typed-print-kind x)))
              (setq open (rontolisp::%clojure-typed-open kind))
+             ;; a type implementing IRecord prints as a record (an arm of the
+             ;; marker family)
+             (if (rontolisp::%clojure-irecord-p x)
+                 (setq open
+                       (concatenate 'string "#" (car (cdr (cdr (cdr (cdr x)))))
+                                    open)))
              (setq close (rontolisp::%clojure-typed-close kind))
              (if (eq kind :map) (setq sep ", " pairs t))
              (setq parts (rontolisp::%clojure-typed-print-parts x kind n))))
@@ -4456,17 +4462,34 @@
 (defun rontolisp::%clojure-plist-table (base plist)
   "A fresh map: BASE's entries (a table copied as is, in its order, or nil) plus
    PLIST's alternating keys and values left to right, each key stored through
-   %clojure-store-key, later pairs winning."
+   %clojure-store-key, later pairs winning. BASE itself when PLIST changes
+   nothing of it -- each of its keys held with that very value -- like the
+   oracle's assoc, which answers the map it was handed then (extend-clj's
+   deftype-atom swaps through a compare-and-set! of such an assoc)."
   (if (rontolisp::%clojure-sorted-p base)
       (rontolisp::%clojure-sorted-assoc base plist)
-      (let ((out
-             (if base
-                 (rontolisp::%copy-equal-table base)
-                 (make-hash-table :test 'equal))))
-        (do ((p plist (cdr (cdr p))))
-            ((null p) out)
-          (setf (gethash (rontolisp::%clojure-store-key (car p) out) out)
-                (car (cdr p)))))))
+      (if (and base plist (rontolisp::%clojure-plist-held-p base plist))
+          base
+          (let ((out
+                 (if base
+                     (rontolisp::%copy-equal-table base)
+                     (make-hash-table :test 'equal))))
+            (do ((p plist (cdr (cdr p))))
+                ((null p) out)
+              (setf (gethash (rontolisp::%clojure-store-key (car p) out) out)
+                    (car (cdr p))))))))
+
+(defun rontolisp::%clojure-plist-held-p (table plist)
+  "Whether TABLE holds every key of PLIST's alternating keys and values with
+   that very (eq) value."
+  (let ((miss (list nil)) (held t) (p plist))
+    (do ()
+        ((or (null p) (null held)) held)
+      (setq held
+            (eq
+             (gethash (rontolisp::%clojure-table-key (car p) table) table miss)
+             (car (cdr p))))
+      (setq p (cdr (cdr p))))))
 
 ;; A literal whose keys or members are computed: the oracle's RT.map / RT.set check
 ;; at run time. The count tells a repeat apart; only then the reader's builders run
@@ -17530,24 +17553,31 @@
 (defun rontolisp::%clojure-set-validator (ref f)
   "set-validator!: F (nil to remove) as REF's validator, once REF's value
    passes it; answers nil. A macro's var reads no value, so one the program
-   defined checks its present expander, like the literal macro path."
-  (let ((cell (rontolisp::%clojure-watchable-cell ref "set-validator!"))
-        (f (if (rontolisp::%clojure-truthy f) f nil)))
-    (if cell
-        (progn
-          (rontolisp::%clojure-stm-validate (aref cell 0) f)
-          (setf (aref cell 2) f))
-        (let ((macro (rontolisp::%clojure-macro-expander-of ref)))
-          (if macro
-              (rontolisp::%clojure-set-validator-macro ref f macro)
-              (rontolisp:with-mutex ((rontolisp::%clojure-monitor ref))
-                (rontolisp::%clojure-stm-validate
-                 (rontolisp::%clojure-var-get ref) f)
-                (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
-                  (if f
-                      (setf (gethash ref rontolisp::%clojure-var-validators) f)
-                      (remhash ref rontolisp::%clojure-var-validators)))))))
-    nil))
+   defined checks its present expander, like the literal macro path. A type
+   implementing IRef answers through its setValidator."
+  (if (rontolisp::%clojure-iref-p ref)
+      ;; the interface's setValidator is void: nil, like the oracle's
+      (progn
+        (rontolisp::%clojure-iatom-call ref "setValidator" (list f))
+        nil)
+      (let ((cell (rontolisp::%clojure-watchable-cell ref "set-validator!"))
+            (f (if (rontolisp::%clojure-truthy f) f nil)))
+        (if cell
+            (progn
+              (rontolisp::%clojure-stm-validate (aref cell 0) f)
+              (setf (aref cell 2) f))
+            (let ((macro (rontolisp::%clojure-macro-expander-of ref)))
+              (if macro
+                  (rontolisp::%clojure-set-validator-macro ref f macro)
+                  (rontolisp:with-mutex ((rontolisp::%clojure-monitor ref))
+                    (rontolisp::%clojure-stm-validate
+                     (rontolisp::%clojure-var-get ref) f)
+                    (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+                      (if f
+                          (setf (gethash ref rontolisp::%clojure-var-validators)
+                                f)
+                          (remhash ref rontolisp::%clojure-var-validators)))))))
+        nil)))
 
 (defun rontolisp::%clojure-set-validator-v (&rest args)
   "set-validator! as a value."
@@ -17567,9 +17597,13 @@
   nil)
 
 (defun rontolisp::%clojure-get-validator (ref)
-  "get-validator: REF's validator, nil for none."
-  (rontolisp::%clojure-watchable-ref ref "get-validator")
-  (rontolisp::%clojure-ref-validator ref))
+  "get-validator: REF's validator, nil for none; a type implementing IRef
+   answers through its getValidator."
+  (if (rontolisp::%clojure-iref-p ref)
+      (rontolisp::%clojure-iatom-call ref "getValidator" nil)
+      (progn
+        (rontolisp::%clojure-watchable-ref ref "get-validator")
+        (rontolisp::%clojure-ref-validator ref))))
 
 (defun rontolisp::%clojure-get-validator-v (&rest args)
   "get-validator as a value."
@@ -17619,17 +17653,20 @@
 
 (defun rontolisp::%clojure-add-watch (ref key fn)
   "add-watch: FN called with KEY, REF, the old and the new value after each
-   change of REF, replacing an earlier watch of KEY; answers REF."
-  (let ((cell (rontolisp::%clojure-watchable-cell ref "add-watch")))
-    (if cell
-        (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
-          (setf (aref cell 4)
-                (rontolisp::%clojure-watch-put (aref cell 4) key fn)))
-        (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
-          (setf (gethash ref rontolisp::%clojure-var-watches)
-                (rontolisp::%clojure-watch-put
-                 (gethash ref rontolisp::%clojure-var-watches) key fn))))
-    ref))
+   change of REF, replacing an earlier watch of KEY; answers REF. A type
+   implementing IRef answers through its addWatch."
+  (if (rontolisp::%clojure-iref-p ref)
+      (rontolisp::%clojure-iatom-call ref "addWatch" (list key fn))
+      (let ((cell (rontolisp::%clojure-watchable-cell ref "add-watch")))
+        (if cell
+            (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
+              (setf (aref cell 4)
+                    (rontolisp::%clojure-watch-put (aref cell 4) key fn)))
+            (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+              (setf (gethash ref rontolisp::%clojure-var-watches)
+                    (rontolisp::%clojure-watch-put
+                     (gethash ref rontolisp::%clojure-var-watches) key fn))))
+        ref)))
 
 (defun rontolisp::%clojure-add-watch-v (&rest args)
   "add-watch as a value."
@@ -17638,21 +17675,24 @@
                                  (car (cdr (cdr args)))))
 
 (defun rontolisp::%clojure-remove-watch (ref key)
-  "remove-watch: REF without its watch of KEY; answers REF."
-  (let ((cell (rontolisp::%clojure-watchable-cell ref "remove-watch")))
-    (if cell
-        (if (= (length cell) 5)
-            (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
-              (setf (aref cell 4)
-                    (rontolisp::%clojure-watch-drop (aref cell 4) key))))
-        (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
-          (let ((left
-                 (rontolisp::%clojure-watch-drop
-                  (gethash ref rontolisp::%clojure-var-watches) key)))
-            (if left
-                (setf (gethash ref rontolisp::%clojure-var-watches) left)
-                (remhash ref rontolisp::%clojure-var-watches)))))
-    ref))
+  "remove-watch: REF without its watch of KEY; answers REF. A type
+   implementing IRef answers through its removeWatch."
+  (if (rontolisp::%clojure-iref-p ref)
+      (rontolisp::%clojure-iatom-call ref "removeWatch" (list key))
+      (let ((cell (rontolisp::%clojure-watchable-cell ref "remove-watch")))
+        (if cell
+            (if (= (length cell) 5)
+                (rontolisp:with-mutex (rontolisp::%clojure-atom-guard)
+                  (setf (aref cell 4)
+                        (rontolisp::%clojure-watch-drop (aref cell 4) key))))
+            (rontolisp:with-mutex (rontolisp::%clojure-var-guard)
+              (let ((left
+                     (rontolisp::%clojure-watch-drop
+                      (gethash ref rontolisp::%clojure-var-watches) key)))
+                (if left
+                    (setf (gethash ref rontolisp::%clojure-var-watches) left)
+                    (remhash ref rontolisp::%clojure-var-watches)))))
+        ref)))
 
 (defun rontolisp::%clojure-remove-watch-v (&rest args)
   "remove-watch as a value."
@@ -18107,14 +18147,17 @@
 
 (defun rontolisp::%clojure-alter-meta (r f args)
   "alter-meta!: the reference R's metadata becomes (apply f meta args), which
-   it answers."
-  (rontolisp::%clojure-check-reference r "alter-meta!")
-  (rontolisp:with-mutex ((rontolisp::%clojure-monitor r))
-    (let ((m
-           (rontolisp::%clojure-call f
-                                     (cons (rontolisp::%clojure-meta r) args))))
-      (rontolisp::%clojure-replace-meta r m)
-      m)))
+   it answers; a type implementing IReference answers through its alterMeta."
+  (if (rontolisp::%clojure-ireference-p r)
+      (rontolisp::%clojure-iatom-call r "alterMeta" (list f args))
+      (progn
+        (rontolisp::%clojure-check-reference r "alter-meta!")
+        (rontolisp:with-mutex ((rontolisp::%clojure-monitor r))
+          (let ((m
+                 (rontolisp::%clojure-call f
+                  (cons (rontolisp::%clojure-meta r) args))))
+            (rontolisp::%clojure-replace-meta r m)
+            m)))))
 
 (defun rontolisp::%clojure-alter-meta-v (&rest args)
   "alter-meta! as a value."
@@ -18122,11 +18165,15 @@
   (rontolisp::%clojure-alter-meta (car args) (car (cdr args)) (cdr (cdr args))))
 
 (defun rontolisp::%clojure-reset-meta (r m)
-  "reset-meta!: the reference R's metadata becomes M, which it answers."
-  (rontolisp::%clojure-check-reference r "reset-meta!")
-  (rontolisp:with-mutex ((rontolisp::%clojure-monitor r))
-    (rontolisp::%clojure-replace-meta r m)
-    m))
+  "reset-meta!: the reference R's metadata becomes M, which it answers; a type
+   implementing IReference answers through its resetMeta."
+  (if (rontolisp::%clojure-ireference-p r)
+      (rontolisp::%clojure-iatom-call r "resetMeta" (list m))
+      (progn
+        (rontolisp::%clojure-check-reference r "reset-meta!")
+        (rontolisp:with-mutex ((rontolisp::%clojure-monitor r))
+          (rontolisp::%clojure-replace-meta r m)
+          m))))
 
 (defun rontolisp::%clojure-reset-meta-v (&rest args)
   "reset-meta! as a value."
@@ -19483,6 +19530,9 @@
 (defun rontolisp::%clojure-derefable-p (x)
   (rontolisp::%clojure-interface-entry x "clojure.lang.IDeref"))
 
+(defun rontolisp::%clojure-blocking-derefable-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IBlockingDeref"))
+
 (defun rontolisp::%clojure-imeta-p (x)
   (rontolisp::%clojure-interface-entry x "clojure.lang.IMeta"))
 
@@ -19906,6 +19956,71 @@
 
 (defun rontolisp::%clojure-serializable-p (x)
   (rontolisp::%clojure-interface-entry x "java.io.Serializable"))
+
+(defun rontolisp::%clojure-itype-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IType"))
+
+(defun rontolisp::%clojure-irecord-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IRecord"))
+
+(defun rontolisp::%clojure-ikeyword-lookup-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IKeywordLookup"))
+
+(defun rontolisp::%clojure-ilookup-thunk-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.ILookupThunk"))
+
+(defun rontolisp::%clojure-types-protocol-var (sym)
+  "rontolisp.internal.types/protocol-var: the var the type expanders read a
+   protocol group's interface off -- nil where the program runs, which lowers
+   nothing, so a run-time expansion keeps the group as written; the macro-time
+   evaluator resolves SYM through the lowering instead."
+  (declare (ignore sym))
+  nil)
+
+(defun rontolisp::%clojure-is-record-type (x)
+  "record?: a record, or a type implementing IRecord (a deftype* of a record's
+   expansion). A program storing no marker row calls the plain test in its
+   place (the marker family's alias)."
+  (or (rontolisp::%clojure-record-p x)
+      (if (rontolisp::%clojure-irecord-p x) t nil)))
+
+;; The reference interfaces: a type implementing IReference, IRef, IAtom or
+;; IAtom2 (extend-clj's deftype-atom) answers swap!, reset!, compare-and-set!,
+;; swap-vals!, reset-vals!, the watch and validator verbs and the metadata
+;; writers through its own methods, like the oracle's, whose verbs are those
+;; interface calls. Arms of the reference-interface family.
+
+(defun rontolisp::%clojure-reference-row (tag names methods)
+  "Stores an IReference, IRef, IAtom or IAtom2 row."
+  (rontolisp::%clojure-interface-store tag names methods))
+
+(defun rontolisp::%clojure-ireference-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IReference"))
+
+(defun rontolisp::%clojure-iref-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IRef"))
+
+(defun rontolisp::%clojure-iatom-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IAtom"))
+
+(defun rontolisp::%clojure-iatom2-p (x)
+  (rontolisp::%clojure-interface-entry x "clojure.lang.IAtom2"))
+
+(defun rontolisp::%clojure-iatom-swap (x method f args)
+  "(swap! x f args...) or (swap-vals! x f args...) of the type X implementing
+   IAtom (IAtom2): its METHOD, swap or swapVals, over F and the arguments --
+   past the second as one seq, like the oracle's."
+  (let ((m (rontolisp::%clojure-interface-entry x method)))
+    (cond ((null args) (funcall m x f))
+          ((null (cdr args)) (funcall m x f (car args)))
+          ((null (cdr (cdr args))) (funcall m x f (car args) (car (cdr args))))
+          (t (funcall m x f (car args) (car (cdr args)) (cdr (cdr args)))))))
+
+(defun rontolisp::%clojure-iatom-call (x method args)
+  "A reference verb of the type X implementing the interface declaring METHOD:
+   the method over ARGS (reset, compareAndSet, resetVals, addWatch,
+   removeWatch, setValidator, getValidator, alterMeta, resetMeta)."
+  (apply (rontolisp::%clojure-interface-entry x method) x args))
 
 (defun rontolisp::%clojure-default-method (x name)
   "The method NAME of the row of X's type, one only defaults declare: the
@@ -20555,6 +20670,12 @@
   "Write the typed collection X as the kind %clojure-typed-print-kind answers:
    its members in its seq's order, a map's entries as key value pairs."
   (let ((kind (rontolisp::%clojure-typed-print-kind x)) (first t))
+    ;; a type implementing IRecord prints as a record, its class ahead of its
+    ;; map (an arm of the marker family)
+    (if (rontolisp::%clojure-irecord-p x)
+        (progn
+          (write-char #\# stream)
+          (write-string (car (cdr (cdr (cdr (cdr x))))) stream)))
     (write-string (rontolisp::%clojure-typed-open kind) stream)
     (dolist (p (rontolisp::%clojure-typed-print-parts x kind nil))
       (if first

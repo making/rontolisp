@@ -408,7 +408,9 @@ final class ClojureDispatchLowering {
 			// quoted value is never one
 			arms.add(new Arm(Use.VARIABLE, v -> ClojureLowerUtil.list(new LispSymbol(implemented.test()), v)));
 		}
-		else if (implemented == null && !fqn.startsWith("clojure.lang.") && isHostInterface(fqn)
+		else if (implemented == null
+				&& (!fqn.startsWith("clojure.lang.") && isHostInterface(fqn)
+						|| ClojureInterfaces.primitiveFn(fqn) != null)
 				&& (lowered instanceof LispSymbol || !isConstant(lowered))) {
 			// one whose body implements a host interface no core verb reads, its row
 			// holding the binary name (an arm a program storing no such row sheds)

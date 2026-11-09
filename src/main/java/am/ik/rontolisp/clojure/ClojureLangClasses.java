@@ -152,8 +152,35 @@ final class ClojureLangClasses {
 			// a BigInteger is an integer here, as a BigInt is, and a BigInt the long
 			// it reduces to is the same integer (tools.reader's number reader)
 			case "BigInt/fromBigInteger/1", "Numbers/reduceBigInt/1" -> args.get(0);
+			// RT's and Util's verbs as the core verbs they back (datascript's inline
+			// assoc and ihash, persistent-sorted-set's array macros): RT.assoc of nil a
+			// fresh map, Util.hashCombine over its two int-cast arguments
+			case "RT/assoc/3" -> core(ctx, "assoc", args);
+			case "RT/aget/2" -> core(ctx, "aget", args);
+			case "RT/alength/1" -> core(ctx, "alength", args);
+			case "RT/aset/3" -> core(ctx, "aset", args);
+			case "Util/hasheq/1" -> core(ctx, "hash", args);
+			case "Util/equiv/2" -> core(ctx, "=", args);
+			case "Util/hashCombine/2" -> ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-HASH-COMBINE-INTS"),
+					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-INT-CAST"), args.get(0)),
+					ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-INT-CAST"), args.get(1)));
+			// what a record expansion's equals, hashCode and hasheq call (a deftype*
+			// implementing IRecord, ClojureTypeSpecials)
+			case "APersistentMap/mapEquals/2" -> ClojureTypeSpecials.recordsCall(ctx, "map-equals", args);
+			case "APersistentMap/mapHash/1" -> ClojureTypeSpecials.recordsCall(ctx, "map-hash", args);
+			case "APersistentMap/mapHasheq/1" -> ClojureTypeSpecials.recordsCall(ctx, "map-hasheq", args);
 			default -> null;
 		};
+	}
+
+	/** The core verb over already-lowered arguments, lowered as its core call. */
+	private static LispVal core(ClojureLowering ctx, String verb, List<LispVal> args) {
+		List<LispVal> call = new ArrayList<>();
+		call.add(new LispSymbol(ClojureCoreNames.PREFIX + verb));
+		for (LispVal arg : args) {
+			call.add(ClojureLowerUtil.list(ClojureRunTime.EMBEDDED, arg));
+		}
+		return ctx.lower(ClojureLowerUtil.list(call));
 	}
 
 	/**

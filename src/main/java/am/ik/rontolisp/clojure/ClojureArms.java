@@ -456,17 +456,37 @@ public final class ClojureArms {
 
 		/**
 		 * A record, deftype or reify whose body implements {@code Serializable},
-		 * {@code IEditableCollection} or a transient interface, which {@code instance?}
+		 * {@code IEditableCollection}, a transient interface, {@code IType},
+		 * {@code IRecord} or the keyword lookup interfaces, which {@code instance?}
 		 * answers true of and an instance call reaches the methods of; {@code transient}
 		 * reaches an {@code IEditableCollection}'s {@code asTransient}, and
-		 * {@code persistent!} and the bang verbs a transient interface's methods.
+		 * {@code persistent!} and the bang verbs a transient interface's methods. A type
+		 * implementing {@code IRecord} (a {@code deftype*} of a record's expansion) is
+		 * {@code record?} -- the alias, to the native record's test -- and prints as a
+		 * record.
 		 */
 		MARKER("marker-interface",
 				Set.of("RONTOLISP::%CLOJURE-EDITABLE-P", "RONTOLISP::%CLOJURE-ITRANSIENT-COLLECTION-P",
 						"RONTOLISP::%CLOJURE-ITRANSIENT-ASSOCIATIVE-P", "RONTOLISP::%CLOJURE-ITRANSIENT-ASSOCIATIVE2-P",
 						"RONTOLISP::%CLOJURE-ITRANSIENT-MAP-P", "RONTOLISP::%CLOJURE-ITRANSIENT-VECTOR-P",
-						"RONTOLISP::%CLOJURE-ITRANSIENT-SET-P", "RONTOLISP::%CLOJURE-SERIALIZABLE-P"),
-				Set.of(), Map.of(), Set.of(ClojureInterfaces.MARKER_ROW), Set.of()),
+						"RONTOLISP::%CLOJURE-ITRANSIENT-SET-P", "RONTOLISP::%CLOJURE-SERIALIZABLE-P",
+						"RONTOLISP::%CLOJURE-ITYPE-P", ClojureInterfaces.IRECORD_P,
+						"RONTOLISP::%CLOJURE-IKEYWORD-LOOKUP-P", "RONTOLISP::%CLOJURE-ILOOKUP-THUNK-P"),
+				Set.of(), Map.of("RONTOLISP::%CLOJURE-IS-RECORD-TYPE", ClojureProtocolLowering.RECORD_P),
+				Set.of(ClojureInterfaces.MARKER_ROW), Set.of()),
+
+		/**
+		 * A deftype or reify whose body implements {@code IReference}, {@code IRef},
+		 * {@code IAtom} or {@code IAtom2} (extend-clj's {@code deftype-atom}), which
+		 * {@code swap!}, {@code reset!}, {@code compare-and-set!}, {@code swap-vals!},
+		 * {@code reset-vals!}, the watch and validator verbs, {@code alter-meta!} and
+		 * {@code reset-meta!} reach through its methods; {@code instance?} answers true
+		 * of it. Only the store of such a row makes one.
+		 */
+		REFERENCE_INTERFACE("reference-interface",
+				Set.of(ClojureInterfaces.IREFERENCE_P, ClojureInterfaces.IREF_P, ClojureInterfaces.IATOM_P,
+						ClojureInterfaces.IATOM2_P),
+				Set.of(), Map.of(), Set.of(ClojureInterfaces.REFERENCE_ROW), Set.of()),
 
 		/**
 		 * An interface a {@code definterface} defines, which a {@code deftype} or
@@ -892,11 +912,12 @@ public final class ClojureArms {
 
 		/**
 		 * A record, deftype or reify whose body implements {@code clojure.lang.IDeref},
-		 * which {@code deref} and {@code @} read through its {@code deref}: only the
-		 * store of such a row makes one.
+		 * which {@code deref} and {@code @} read through its {@code deref}, or
+		 * {@code IBlockingDeref}, whose {@code deref} of a timeout and a timeout value
+		 * the three-argument {@code deref} reads: only the store of such a row makes one.
 		 */
-		DEREFABLE("derefable", Set.of("RONTOLISP::%CLOJURE-DEREFABLE-P"), Set.of(), Map.of(),
-				Set.of(ClojureInterfaces.DEREFABLE_ROW), Set.of()),
+		DEREFABLE("derefable", Set.of("RONTOLISP::%CLOJURE-DEREFABLE-P", ClojureInterfaces.BLOCKING_DEREFABLE_P),
+				Set.of(), Map.of(), Set.of(ClojureInterfaces.DEREFABLE_ROW), Set.of()),
 
 		/**
 		 * A deftype whose body implements {@code clojure.lang.IMeta} or {@code IObj},

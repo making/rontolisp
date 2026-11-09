@@ -62,6 +62,12 @@ import org.jspecify.annotations.Nullable;
  * {@code rontolisp:fetch} itself, so the program names the transport every fetch splice
  * reads; the request builds the oracle's exceptions, so a call of it emits the exception
  * runtime.</li>
+ * <li>{@code rontolisp.internal.types} for the type expanders of
+ * {@code rontolisp.internal.core-macros}: the var a body's group symbol names, which the
+ * oracle's {@code deftype}, {@code defrecord} and {@code reify} read a protocol's
+ * {@code :on} off -- nil where the program runs, which lowers nothing, and the lowering's
+ * {@code resolve} in the macro-time evaluator ({@code eval.ClojureMacroTime}), so an
+ * expansion reaches no lowering verb in the program.</li>
  * <li>{@code rontolisp.internal.math} for {@code clojure.math}: each double function is
  * one {@code (%strict-math :name ...)} over its arguments cast as the oracle's
  * {@code double} casts them, lowered in place rather than as a worker call -- the
@@ -268,6 +274,8 @@ final class ClojureKernelLowering {
 					new Kernels("rontolisp.http-client", "RONTOLISP::%CLOJURE-HTTP-",
 							Map.ofEntries(Map.entry("request", 2), Map.entry("fetch", 2)),
 							Map.of("fetch", "RONTOLISP:FETCH"), true)),
+			Map.entry("rontolisp.internal.types",
+					new Kernels(ClojureCoreMacros.NAMESPACE, "RONTOLISP::%CLOJURE-TYPES-", Map.of("protocol-var", 1))),
 			Map.entry("rontolisp.internal.xml", xmlKernels()), Map.entry("rontolisp.internal.math", mathKernels()),
 			Map.entry(ClojureIoLowering.NAMESPACE, ClojureIoLowering.kernels()));
 

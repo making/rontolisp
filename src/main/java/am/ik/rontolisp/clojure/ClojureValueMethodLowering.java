@@ -1120,10 +1120,17 @@ final class ClojureValueMethodLowering {
 			if (type == null) {
 				continue;
 			}
-			for (ClojureJavaClasses.Member candidate : type.methods()) {
-				if (candidate.name().equals(method) && candidate.parameterCount() == n && !candidate.isStatic()) {
-					return true;
+			try {
+				for (ClojureJavaClasses.Member candidate : type.methods()) {
+					if (candidate.name().equals(method) && candidate.parameterCount() == n && !candidate.isStatic()) {
+						return true;
+					}
 				}
+			}
+			catch (LinkageError | SecurityException _) {
+				// a class that cannot link keeps the call, whose run-time refusal names
+				// the missing class
+				return true;
 			}
 		}
 		return false;

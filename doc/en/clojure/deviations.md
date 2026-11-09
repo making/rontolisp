@@ -343,14 +343,26 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   `condp`, `and`, `or`, `case`, `if-let`, `when-let`, `if-some`, `when-some`,
   `when-first`, `->`, `->>`, `as->`, `cond->`, `cond->>`, `some->`, `some->>`, `doto`,
   `..`, `dotimes`, `doseq`, `for`, `while`, `comment`, `declare`, `defn`, `defn-`,
-  `binding`, `assert`, `locking`, `with-open` and `future` to the oracle's forms, but
-  for the gensym numbers; any other core macro (`lazy-seq`, `delay`, `defmacro`, `ns`,
+  `binding`, `assert`, `locking`, `with-open`, `future`, `reify`, `deftype` and
+  `defrecord` to the oracle's forms, but for the gensym numbers; any other core macro (`lazy-seq`, `delay`, `defmacro`, `ns`,
   ...) answers the call itself, where the oracle answers its expansion. A malformed
   call's refusal propagates as the expander throws it, where the oracle wraps it in a
   `Compiler$CompilerException` (`Syntax error macroexpanding ...`), and a `case` whose
-  tests collide in two or more hash buckets lists the skipped hashes in insertion order
+  tests collide in two or more hash buckets lists the skipped hashes in insertion order,
+  and a type body's interfaces keep the body's order where the oracle's set may swap two
   (the set-order deviation). A program calling one of these as it runs carries the
   expanders; a program expanding only in its macro bodies carries none.
+- `deftype*` and `reify*`, the special forms `deftype`, `defrecord` and `reify` expand
+  to, lower over the same machinery. A type `deftype*` defines is a deftype to every
+  function: a record's expansion through it is `record?` and prints as a record, but
+  reads through its own methods, slower than a `defrecord`; its name resolves without the
+  oracle's `import`. An expansion of one of these macros where the program runs keeps a
+  protocol group's symbol as written, where the oracle names its interface (`user.P`; one a
+  macro body makes while the program lowers names it). A deftype a `deftype` form defines
+  is no `instance?` of
+  `clojure.lang.IType`. A method of a reference interface (`IAtom`, `IRef` ...) answering
+  another type than the interface declares is not cast, where the oracle throws its
+  `ClassCastException`.
 - `eval`, `resolve`, `find-var`, `ns-resolve` and `requiring-resolve` of a computed
   symbol, `require`, `use`, `refer`, `alias`, `in-ns`, `load`, `load-file` and
   `load-string` of computed arguments, and `load-reader` lower as the program runs on the

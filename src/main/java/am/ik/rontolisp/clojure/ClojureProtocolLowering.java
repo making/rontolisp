@@ -678,7 +678,7 @@ final class ClojureProtocolLowering {
 				":volatile-mutable or :unsynchronized-mutable not supported for record fields");
 		BodyProtocols body = BodyProtocols.of(ctx, items);
 		ClojureLowering.TypeDef def = new ClojureLowering.TypeDef(record, fields, name,
-				ctx.currentNs.replace('-', '_') + "." + name, mutable, body.methods(), body.protocols());
+				ctx.currentNs.replace('-', '_') + "." + name, mutable, body.methods(), body.protocols(), -1);
 		ctx.types.put(ClojureLowering.varKey(ctx.currentNs, name), def);
 		ctx.globals.put(ctx.intern("->" + name, false), ClojureLowering.Kind.FUNCTION);
 		if (record) {
@@ -866,13 +866,14 @@ final class ClojureProtocolLowering {
 	 * @return the quoted map
 	 */
 	private static LispVal valueDatum(ClojureLowering ctx, ClojureLowering.ProtocolDef def, String key) {
-		String iface = ":" + interfaceName(key);
 		List<LispVal> map = new ArrayList<>();
 		map.add(new LispSymbol("%hash-map"));
+		// :on is the oracle's symbol of the interface (what deftype and defrecord read a
+		// protocol group's interface off); :on-interface its class, a keyword here
 		map.add(new LispSymbol(":on"));
-		map.add(new LispSymbol(iface));
+		map.add(new LispSymbol(interfaceName(key)));
 		map.add(new LispSymbol(":on-interface"));
-		map.add(new LispSymbol(iface));
+		map.add(new LispSymbol(":" + interfaceName(key)));
 		map.add(new LispSymbol(":sigs"));
 		List<LispVal> sigs = new ArrayList<>();
 		sigs.add(new LispSymbol("%hash-map"));
@@ -1957,6 +1958,43 @@ final class ClojureProtocolLowering {
 		if (record) {
 			forms.add(mapCtor(ctx, name, def));
 		}
+		forms.addAll(bodyForms(ctx, def, body, what));
+		return forms;
+	}
+
+	/**
+	 * The pre-scan half of {@code deftype*} ({@link ClojureTypeSpecials}): registers the
+	 * type in the current namespace -- no {@code ->Name}, which the special form never
+	 * defines -- over its every field, the body read off the datum a {@code deftype} of
+	 * the same groups and methods would be.
+	 * @param ctx the hub
+	 * @param equivalent the {@code (deftype Name [fields] group... method...)} datum
+	 * @param className the class the form names
+	 * @param drops the trailing record fields the shorter constructors fill
+	 * @return the type
+	 */
+	static ClojureLowering.TypeDef declareStarType(ClojureLowering ctx, List<LispVal> equivalent, String className,
+			int drops) {
+		String name = ClojureLowerUtil.plainName(equivalent.get(1), "deftype*");
+		BodyProtocols body = BodyProtocols.of(ctx, equivalent);
+		ClojureLowering.TypeDef def = new ClojureLowering.TypeDef(false, recordFields(ctx, equivalent), name, className,
+				mutableFields(equivalent), body.methods(), body.protocols(), drops);
+		ctx.types.put(ClojureLowering.varKey(ctx.currentNs, name), def);
+		return def;
+	}
+
+	/**
+	 * The definitions of a type's body: one table row per inline protocol method, the
+	 * interface rows ({@link #interfaceRows}), the face Java sees and, last, the tag's
+	 * registration, which answers the class.
+	 * @param ctx the hub
+	 * @param def the type
+	 * @param body the parsed body ({@link #typeBody})
+	 * @param what the defining form
+	 * @return the forms
+	 */
+	static List<LispVal> bodyForms(ClojureLowering ctx, ClojureLowering.TypeDef def, TypeBody body, String what) {
+		List<LispVal> forms = new ArrayList<>();
 		for (ClojureLowering.ImplGroup group : body.groups()) {
 			ClojureLowering.ProtocolDef protocol = protocolOf(ctx, group.protocol());
 			if (protocol != null && group.methods().isEmpty()) {
@@ -1993,6 +2031,14 @@ final class ClojureProtocolLowering {
 	 * list for {@code dissoc}'s keep-type rule, the table for the map verbs).
 	 */
 	static LispVal positionalCtor(ClojureLowering ctx, String name, ClojureLowering.TypeDef def) {
+		return positionalCtor(ctx, def, ClojureLowering.varSym(ClojureLowering.varKey(ctx.currentNs, "->" + name)));
+	}
+
+	/**
+	 * The positional constructor under the defun name {@code fn}: a {@code deftype*}
+	 * type's own ({@link ClojureTypeSpecials}), which no var names.
+	 */
+	static LispVal positionalCtor(ClojureLowering ctx, ClojureLowering.TypeDef def, LispSymbol fn) {
 		List<LispVal> params = new ArrayList<>();
 		List<LispVal> pairs = new ArrayList<>();
 		List<LispVal> keys = new ArrayList<>();
@@ -2016,9 +2062,7 @@ final class ClojureProtocolLowering {
 				: wrapDeftype(typeTagForm(def), ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), keys), table,
 						LispString.literal(def.className()),
 						slots.isEmpty() ? null : ClojureLowerUtil.cons(ClojureLowerUtil.sym("vector"), slots));
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"),
-				ClojureLowering.varSym(ClojureLowering.varKey(ctx.currentNs, "->" + name)),
-				ClojureLowerUtil.list(params), value);
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("defun"), fn, ClojureLowerUtil.list(params), value);
 	}
 
 	/**

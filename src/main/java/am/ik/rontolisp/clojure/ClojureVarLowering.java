@@ -219,6 +219,18 @@ final class ClojureVarLowering {
 			throw new LispReadException("var takes a symbol: " + items.get(1).print());
 		}
 		String name = target.name();
+		if (name.equals(ClojureCoreNames.PREFIX + "imap-cons")) {
+			// the private core function a record's expansion calls through its var
+			// (a deftype* implementing IRecord, ClojureTypeSpecials)
+			LispVal metaForm = ctx.lower(ClojureLowerUtil.list(new LispSymbol("%hash-map"), keyword("name"),
+					ClojureLowerUtil.list(new LispSymbol("quote"), new LispSymbol("imap-cons")), keyword("ns"),
+					ClojureLowerUtil.list(new LispSymbol("quote"), new LispSymbol("clojure.core")), keyword("private"),
+					new LispSymbol("true")));
+			return ClojureLowerUtil.list(runtime("VAR"), LispString.literal(name),
+					ClojureLowerUtil.list(ClojureLowerUtil.sym("lambda"), ClojureLowerUtil.list(),
+							ClojureTypeSpecials.recordsFunction(ctx, "imap-cons")),
+					metaForm);
+		}
 		String core = ctx.coreSpelling(name);
 		String key = core != null ? null : ctx.lookupVar(name);
 		if (key != null) {

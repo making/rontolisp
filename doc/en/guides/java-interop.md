@@ -932,7 +932,9 @@ What each output carries:
 A class the class path holds but that cannot link refuses every call on it instead
 of crashing: a dependency's Java class compiled against a language that is not here
 (a Clojure library's class over `clojure.lang`, such as `reitit.Trie`) fails each
-`java:` call with `Cannot link class C: missing class M`, naming the missing class.
+`java:` call with `Cannot link class C: missing class M`, naming the missing class --
+a class whose superclass or interface is the missing one too (persistent-sorted-set's
+`PersistentSortedSet` over `clojure.lang.APersistentSet`).
 A class whose static initializer needs the missing class (a static field of its
 type, as in `sci.impl.FISupport`) refuses the same way: its
 `ExceptionInInitializerError` carries the missing class, so construction, calls and
