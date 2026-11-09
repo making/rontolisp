@@ -442,7 +442,7 @@ final class ClojureTestLowering {
 			return ClojureMacroLowering.expandMacro(ctx, "assert-expr", ctx.assertExprMethods.get(s.name()),
 					List.of(ClojureLowerUtil.sym("assert-expr"),
 							isItems.size() == 3 ? isItems.get(2) : ClojureLowering.NIL_CONST, form),
-					false);
+					false, false);
 		}
 		if (ClojureLowerUtil.isSymbolNamed(head, "thrown?")) {
 			ClojureLowerUtil.isTrue(parts.size() >= 2, "thrown? takes a class and a body");

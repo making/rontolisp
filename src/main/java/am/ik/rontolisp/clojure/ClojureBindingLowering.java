@@ -100,6 +100,10 @@ final class ClojureBindingLowering {
 		// The value lowers against the OLD binding, so (def p (memoize p)) after a
 		// (defn p ...) captures the function cell (a FUNCTION) instead of reading
 		// the still-unbound value cell; only then does the name become a VARIABLE.
+		// A name with no binding yet is interned first, like the oracle's def, so a
+		// value naming its own var (a fn calling itself) lowers wherever the def
+		// stands: a macro's expansion or a body, which the pre-scan never reads.
+		ctx.preInternDef(name, ClojureLowerUtil.nameIsPrivate(nameDatum));
 		boolean valueless = items.size() == at;
 		LispVal value;
 		if (valueless) {

@@ -15,7 +15,11 @@ a variable that may hold a collection goes through the prelude dispatcher instea
 through their lookup, like `IFn`; a keyword or symbol takes one or two arguments and signals the arity error otherwise); calling a `declare`d-but-never-defined name
 signals the oracle's `Attempting to call unbound fn` (in the REPL the call stays direct,
 since a later input may define it). `def` is a top-level `setq` -- inside a body it
-still sets the global when the body runs.
+still sets the global when the body runs. Like the oracle's, a `def` interns its name before
+its value, so the value may name its own var wherever the `def` stands (a macro's expansion,
+a body). A top-level macro call's expansion, and every member of a top-level `do` it is,
+declares its definitions like a top-level form: a `declare`, a caller and the `defn` under
+it in one `(do ...)` reach the definition.
 
 `defn` with several arities is one `defun` per arity plus a dispatch `defun` picking by
 argument count (a single variadic clause takes any count past its fixed parameters); any

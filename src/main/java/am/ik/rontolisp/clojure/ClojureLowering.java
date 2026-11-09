@@ -456,6 +456,49 @@ public final class ClojureLowering {
 	}
 
 	/**
+	 * The forms standing at top level inside the top-level datums, by identity: a
+	 * top-level macro call's expansion and the members of a {@code do} it is, as the
+	 * oracle's {@code eval} takes them ({@link #declareExpansion}). Cleared when the
+	 * outermost datum is lowered.
+	 */
+	private final Set<LispVal> topExpansions = Collections.newSetFromMap(new IdentityHashMap<>());
+
+	/**
+	 * Whether a macro call stands at top level: the top-level datum itself, or a form a
+	 * top-level expansion holds where the datum would.
+	 * @param form the call
+	 * @return whether its expansion is pre-scanned
+	 */
+	boolean standsAtTopLevel(LispVal form) {
+		return isTopDatum(form) || this.topLevelDepth > 0 && this.topExpansions.contains(form);
+	}
+
+	/**
+	 * The pre-scan of a top-level macro call's expansion, run before it lowers: the
+	 * definitions it holds -- itself or the members of a {@code do} it is, at any depth
+	 * -- declared like a top-level datum's ({@link #declare}), so a member calls a
+	 * definition below it and a {@code declare}d name reaches the {@code defn} under it
+	 * (aero's {@code usetime}, a {@code (do ~@body)} around its whole implementation).
+	 * The file's pre-scan never sees them: what a macro call defines is its expansion's
+	 * business. A name a definition above already settled keeps that kind until the
+	 * expansion's own definition lowers, so {@code (def p (memoize p))} still reads the
+	 * function a {@code defn p} above defined.
+	 * @param expansion the expansion
+	 */
+	void declareExpansion(LispVal expansion) {
+		List<LispVal> members = topLevelMembers(expansion);
+		this.topExpansions.add(expansion);
+		this.topExpansions.addAll(members);
+		Map<String, Kind> settled = new HashMap<>(this.globals);
+		declare(List.of(expansion));
+		for (Map.Entry<String, Kind> before : settled.entrySet()) {
+			if (before.getValue() != Kind.DECLARED) {
+				this.globals.put(before.getKey(), before.getValue());
+			}
+		}
+	}
+
+	/**
 	 * How deep the lowering is inside {@code defmacro} bodies: {@code &env} and
 	 * {@code &form} read the specials an expansion binds there.
 	 */
@@ -3112,6 +3155,22 @@ public final class ClojureLowering {
 		return key;
 	}
 
+	/**
+	 * A {@code def}'s name interned as a var before its value lowers, like the oracle's
+	 * {@code def} interning ahead of compiling the init: what the pre-scan
+	 * ({@link #declareOne}) does for a top-level one, for a name nothing binds yet -- no
+	 * var, no refer, no core var (a core name keeps its meaning above the definition).
+	 * @param name the plain name
+	 * @param isPrivate whether the definition is private
+	 */
+	void preInternDef(String name, boolean isPrivate) {
+		if (this.globals.containsKey(varKey(this.currentNs, name)) || ns().refers.containsKey(name)
+				|| ClojureCoreNames.contains(name)) {
+			return;
+		}
+		this.globals.put(internName(name, isPrivate), Kind.VARIABLE);
+	}
+
 	/** {@link #intern} without ending a multimethod: the pre-scan defines nothing. */
 	private String internName(String name, boolean isPrivate) {
 		ClojureNsState here = ns();
@@ -4415,6 +4474,9 @@ public final class ClojureLowering {
 			this.topLevelDepth--;
 			this.topDatum = outerDatum;
 			this.defersMissingLibraries = outerDefers;
+			if (this.topLevelDepth == 0) {
+				this.topExpansions.clear();
+			}
 		}
 	}
 
@@ -4509,7 +4571,7 @@ public final class ClojureLowering {
 				// a program macro wins over every lowering row of its name once
 				// defined (a core-named one above its definition is not visible
 				// yet, so the row lowers there, like the oracle's per-form compile)
-				LispVal macro = ClojureMacroLowering.macroCall(this, op.name(), items);
+				LispVal macro = ClojureMacroLowering.macroCall(this, form, op.name(), items);
 				if (macro != null) {
 					return macro;
 				}

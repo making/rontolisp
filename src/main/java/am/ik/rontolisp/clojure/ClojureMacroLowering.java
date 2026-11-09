@@ -756,7 +756,7 @@ final class ClojureMacroLowering {
 	 * name); a macro name without its expander is a call above its definition. Null when
 	 * the head names no macro.
 	 */
-	static @Nullable LispVal macroCall(ClojureLowering ctx, String name, List<LispVal> items) {
+	static @Nullable LispVal macroCall(ClojureLowering ctx, LispVal form, String name, List<LispVal> items) {
 		String key = macroKey(ctx, name);
 		if (key == null) {
 			return null;
@@ -769,7 +769,7 @@ final class ClojureMacroLowering {
 		// run stored in the macro-time image, not the expander datum re-evaluated with
 		// no binding in reach
 		LispVal callable = ctx.nestedMacros.contains(key) ? macroClosureRef(key) : expander;
-		return expandMacro(ctx, name, callable, items, ctx.envMacros.contains(key));
+		return expandMacro(ctx, name, callable, items, ctx.envMacros.contains(key), ctx.standsAtTopLevel(form));
 	}
 
 	/**
@@ -824,7 +824,7 @@ final class ClojureMacroLowering {
 	 * survives.
 	 */
 	static LispVal expandMacro(ClojureLowering ctx, String name, LispVal expander, List<LispVal> items,
-			boolean bindsEnv) {
+			boolean bindsEnv, boolean topLevel) {
 		if (ctx.macroDepth >= ClojureLowering.MAX_MACRO_DEPTH) {
 			throw new LispReadException("macro expansion of `" + name + "` did not terminate");
 		}
@@ -867,6 +867,11 @@ final class ClojureMacroLowering {
 		}
 		catch (LispReadException ex) {
 			throw new LispReadException("macro `" + name + "` answered an unreadable value: " + ex.getMessage());
+		}
+		if (topLevel) {
+			// a top-level call's expansion stands at top level, so the definitions it
+			// holds are pre-scanned like a top-level datum's
+			ctx.declareExpansion(expansion);
 		}
 		ctx.macroDepth++;
 		try {
