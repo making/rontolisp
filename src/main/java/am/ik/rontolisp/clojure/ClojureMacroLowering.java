@@ -219,6 +219,15 @@ final class ClojureMacroLowering {
 		LispSymbol table = macroTable(key);
 		LispVal superseded = ctx.macros.get(key);
 		ctx.macros.put(key, expander);
+		// a defmacro a wrapper holds expands through the closure the wrapper's own run
+		// made, not through the expander datum evaluated with no binding in reach
+		boolean nested = !ctx.isTopDatum(form);
+		if (nested) {
+			ctx.nestedMacros.add(key);
+		}
+		else {
+			ctx.nestedMacros.remove(key);
+		}
 		ctx.globals.put(key, ClojureLowering.Kind.MACRO);
 		List<LispVal> metaStore = ClojureVarLowering.record(ctx, key, form, items.get(1),
 				ClojureBindingLowering.arglistsOf(items.subList(at, items.size())), doc, attrMap, false, true);
@@ -229,6 +238,13 @@ final class ClojureMacroLowering {
 			try {
 				handOverCaughtClasses(ctx, ctx.macroEvaluator);
 				ctx.macroEvaluator.evaluate(setq);
+				if (nested) {
+					// what an expansion above the wrapper's run calls: the datum, until
+					// the run stores the closure over the wrapper's bindings (handed
+					// over whole, ClojureMacroLowering#handOver)
+					ctx.macroEvaluator
+						.evaluate(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), macroClosure(key), expander));
+				}
 			}
 			catch (RuntimeException ex) {
 				throw ctx.positioned(new LispReadException(exMessage(ex)), items.get(0));
@@ -243,8 +259,17 @@ final class ClojureMacroLowering {
 			// living in the one function only the run-time expansion calls
 			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), table,
 					new LispInteger(ctx.macroExpanders.size())));
-			ctx.macroExpanders.add(expander);
+			// a wrapper-defined macro's arm is the closure its definition stored: the
+			// datum itself would name the wrapper's locals, which a back-end cannot
+			// capture where C%MACRO-EXPANDER is compiled outside the wrapper
+			ctx.macroExpanders.add(nested ? macroClosureRef(key) : expander);
 			ctx.macroExpanderKeys.add(key);
+		}
+		if (nested) {
+			// the definition runs inside its wrapper, so the expander evaluates with the
+			// bindings in reach: the closure goes to the macro-time image's global
+			// (ClojureMacroLowering#macroClosure), which the expansion above reads
+			forms.add(ClojureLowerUtil.list(ClojureLowerUtil.sym("setq"), macroClosure(key), expander));
 		}
 		// the present expander noted under the var key, ahead of the notify
 		// statement: a refused redefinition still serves its new expander, so the
@@ -467,8 +492,51 @@ final class ClojureMacroLowering {
 		}
 		boolean definitions = items != null && !items.isEmpty() && items.get(0) instanceof LispSymbol head
 				&& DEFINITION_HEADS.contains(head.name()) && ctx.lookupVar(head.name()) == null;
+		// A wrapper (a let, a when, a binding, a letfn, an if) holding a definition
+		// defines a var all the same in the oracle, and its bindings are in reach of
+		// what it defines: the whole datum runs, so the function (or the macro) it
+		// makes closes over them. A top-level do is its members instead, each handed
+		// over on its own (the lowering splits it), so it keeps its statements out of
+		// the macro-time image.
+		boolean wrapped = !definitions && !isDoDatum(items)
+				&& forms.stream().anyMatch(ClojureMacroLowering::holdsDefinition);
 		for (LispVal form : forms) {
-			handOverForm(ctx, evaluator, form, definitions, false);
+			handOverForm(ctx, evaluator, form, definitions || wrapped, false);
+		}
+	}
+
+	private static boolean isDoDatum(@Nullable List<LispVal> items) {
+		return items != null && !items.isEmpty() && ClojureLowerUtil.isSymbolNamed(items.get(0), "do");
+	}
+
+	/**
+	 * Whether a lowered form makes a definition anywhere inside it: a {@code defun}, a
+	 * var store ({@code setq}, {@code defparameter}, a {@code %clojure-var-store}), a
+	 * {@code declaim}. Quoted data and a {@code function} form hold none; anything else
+	 * is searched member by member.
+	 * @param form the lowered form
+	 * @return whether it defines a var
+	 */
+	private static boolean holdsDefinition(LispVal form) {
+		List<LispVal> items = ClojureLowerUtil.items(form);
+		if (items == null || items.isEmpty() || !(items.get(0) instanceof LispSymbol head)) {
+			return false;
+		}
+		switch (head.name().toUpperCase(java.util.Locale.ROOT)) {
+			case "DEFUN", "DECLAIM", "DEFPARAMETER", "SETQ", "RONTOLISP::%CLOJURE-VAR-STORE" -> {
+				return true;
+			}
+			case "QUOTE", "FUNCTION" -> {
+				return false;
+			}
+			default -> {
+				for (LispVal member : items.subList(1, items.size())) {
+					if (holdsDefinition(member)) {
+						return true;
+					}
+				}
+				return false;
+			}
 		}
 	}
 
@@ -596,6 +664,29 @@ final class ClojureMacroLowering {
 	}
 
 	/**
+	 * The macro-time image's global holding a macro a wrapper defined: the closure its
+	 * definition made, with the wrapper's bindings in reach ({@code
+	 * ClojureLowering#nestedMacros}). The program's table ({@link #macroTable}) holds the
+	 * expander's index in a whole program, which is why the two cannot share a name.
+	 */
+	static LispSymbol macroClosure(String key) {
+		return new LispSymbol(ClojureLowering.varSym(key).name() + "%macro-closure");
+	}
+
+	/**
+	 * The form an expansion of a wrapper-defined macro calls: the closure its definition
+	 * stored in the macro-time image ({@link #macroClosure}). The expander datum itself
+	 * would evaluate with none of the wrapper's bindings in reach, and a back-end cannot
+	 * capture them where the datum is compiled outside the wrapper.
+	 * @param key the var key
+	 * @return the form
+	 */
+	static LispVal macroClosureRef(String key) {
+		return ClojureLowerUtil.list(ClojureLowerUtil.sym("SYMBOL-VALUE"),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("quote"), macroClosure(key)));
+	}
+
+	/**
 	 * Refuses {@code &form} and {@code &env} anywhere in a macro parameter datum: both
 	 * are the body's implicit arguments ({@link #MACRO_FORM}, {@link #MACRO_ENV}), which
 	 * a parameter of the name would hide.
@@ -674,7 +765,11 @@ final class ClojureMacroLowering {
 		if (expander == null) {
 			throw new LispReadException("macro `" + name + "` used before its definition");
 		}
-		return expandMacro(ctx, name, expander, items, ctx.envMacros.contains(key));
+		// a macro a wrapper defined closes over the wrapper's bindings: the closure its
+		// run stored in the macro-time image, not the expander datum re-evaluated with
+		// no binding in reach
+		LispVal callable = ctx.nestedMacros.contains(key) ? macroClosureRef(key) : expander;
+		return expandMacro(ctx, name, callable, items, ctx.envMacros.contains(key));
 	}
 
 	/**

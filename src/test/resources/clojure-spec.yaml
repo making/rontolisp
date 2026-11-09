@@ -4321,6 +4321,37 @@ cases:
       3 12 (1) [2]
       [[1] [1 2]] foo 3 5
       4 -1 4 {:x :k} 7
+  - name: a-macro-body-calls-a-definition-a-top-level-wrapper-made
+    # A definition or a macro a top-level wrapper (a let, a when, a binding, a letfn)
+    # holds is a var definition all the same in the oracle: the lowering runs the whole
+    # top-level datum at macro time, so a macro body below it calls what the wrapper
+    # made, its bindings closed over. A do is its members, unchanged. clj 1.12.6,
+    # oracle-identical.
+    source: |
+      (let [mtw-k 10] (defn mtw-g [x] (+ x mtw-k)))
+      (defmacro mtw-m [x] (mtw-g x))
+      (prn (mtw-g 1) (mtw-m 2))
+      (when true (defn mtw-w [x] (+ x 1)))
+      (defmacro mtw-wm [x] (mtw-w x))
+      (prn (mtw-wm 2))
+      (binding [*print-length* 3] (defn mtw-b [x] (+ x 1)))
+      (defmacro mtw-bm [x] (mtw-b x))
+      (prn (mtw-bm 2))
+      (letfn [(mtw-h [x] (* 2 x))] (defn mtw-l [x] (mtw-h x)))
+      (defmacro mtw-lm [x] (mtw-l x))
+      (prn (mtw-lm 2))
+      (let [mtw-ik 1] (defmacro mtw-im [x] (+ x mtw-ik)))
+      (prn (mtw-im 2))
+      (do (defn mtw-d [x] (+ x 1)))
+      (defmacro mtw-dm [x] (mtw-d x))
+      (prn (mtw-dm 2))
+    expected: |
+      11 12
+      3
+      3
+      4
+      3
+      3
   - name: a-macro-body-evaluates-a-form-while-it-expands
     # eval in a macro body, and in a helper the body calls, evaluates the form at
     # expansion time over the definitions above the call site, in its namespace, with

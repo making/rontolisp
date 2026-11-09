@@ -3420,6 +3420,14 @@ class ClojureLoweringTest {
 		// the oracle evaluates each top-level form before the next compiles
 		assertThat(loweredWithMacros("(defn mu-helper [x] (list 'inc x)) (defmacro mu-m [x] (mu-helper x)) (mu-m 1)"))
 			.endsWith("(RONTOLISP::%CLOJURE-BD-+ 1 1)");
+		// a wrapper holding a definition is a var definition all the same, and the
+		// macro-time image runs the whole form: what it makes closes over its bindings
+		assertThat(loweredWithMacros(
+				"(let [mu-k 10] (defn mu-helper [x] (list 'inc (* x mu-k)))) (defmacro mu-m [x] (mu-helper x)) (mu-m 1)"))
+			.endsWith("(RONTOLISP::%CLOJURE-BD-+ 10 1)");
+		assertThat(loweredWithMacros(
+				"(when true (defn mu-helper [x] (list 'inc x))) (defmacro mu-m [x] (mu-helper x)) (mu-m 1)"))
+			.endsWith("(RONTOLISP::%CLOJURE-BD-+ 1 1)");
 	}
 
 	@Test

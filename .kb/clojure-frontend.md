@@ -1721,7 +1721,7 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | component 1.2.0 (stuartsierra) | = | = | = | = | no transitive deps; 2026-11-08 round (`.todo/j07`): records implementing `Lifecycle`, `system-map`/`using`/`start`/`stop`, a missing-dependency `ex-data`, `update-system` -- 7 lines; two `JAVA:CALL` warnings on wasm off the path |
 | editscript 0.8.0 | = | = | stop | stop | 2026-11-08 round: the 7-line probe (map/vector/string diffs, `patch`, `edit-distance`, `:quick`) is the oracle's on the interpreter and the JVM; wasm traps on `System/nanoTime`, then `java.util.IdentityHashMap` (`.todo/j28`, which also records the host-side identity loss of a Clojure key in an `IdentityHashMap`) |
 | data.csv 1.1.1 | 5/6 | | | | 2026-11-08 round: `read-csv`/`write-csv` over strings and a `StringWriter` print the oracle's lines; `io/reader` of a `java.io.StringReader` refuses (`.todo/j16`). Other backends not run |
-| aero 1.1.6, core.match 1.1.1, core.logic 1.1.1, schema 1.4.2, specter 1.1.6, rewrite-clj 1.3.59, datascript 1.8.1 | stop | | | | 2026-11-08 round, interpreter only: each stops at load; past hand patches all but datascript print the oracle's lines (core.logic but its pinned `()`-is-`nil` line). The stops, library by library, and the items they became: `.todo/j07` (probes, patches and outputs in `.todo/artefacts/j07-clojure-library-probe-round-2026-11-08/`). j23 (2026-11-08, `.todo/j23`): specter's `extend-protocolpath*` and schema's `extend-primitive` hunks are no longer needed -- with the other hunks applied, specter's probe is the oracle's line for line and schema's loads and prints the same but the pinned set-order line (interpreter; the other backends unprobed) |
+| aero 1.1.6, core.match 1.1.1, core.logic 1.1.1, schema 1.4.2, specter 1.1.6, rewrite-clj 1.3.59, datascript 1.8.1 | stop | | | | 2026-11-08 round, interpreter only: each stops at load; past hand patches all but datascript print the oracle's lines (core.logic but its pinned `()`-is-`nil` line). The stops, library by library, and the items they became: `.todo/j07` (probes, patches and outputs in `.todo/artefacts/j07-clojure-library-probe-round-2026-11-08/`). j23 (2026-11-08, `.todo/j23`): specter's `extend-protocolpath*` and schema's `extend-primitive` hunks are no longer needed -- with the other hunks applied, specter's probe is the oracle's line for line and schema's loads and prints the same but the pinned set-order line (interpreter; the other backends unprobed). j09 (2026-11-09): core.match's `void` hunk is no longer needed either -- with the other hunks applied and the original `let`-wrapped `regroup-keywords` restored, the probe prints its 11 oracle lines on the interpreter, the JVM class and wasm ("Macros", the wrapper bullet) |
 f92 shares every site-independent core value program-wide through `%clojure-shared-value`, so the probe is green again on all four. f98: the 8-line pattern-schema probe (`form`/`type` of `(m/schema #"a")`, `validate` of a hit, a miss and a non-string, `explain`, the `:malli.core/invalid-schema` refusals of `(m/schema 42)` and `(m/schema "s")`) is the oracle's line for line on all four since 2026-10-13 (`type` of a pattern hits the `class-schemas` entry: the host class where a host is, the designator where none is). That 12-line wasm parity was overstated (2026-10-13, f99): the probe's decode lines print bare (`println`), under which an undecoded `"1"` reads as `1` -- `(Long/parseLong x)` refused at call time there, so `-string->long`'s catch kept the input (`pr-str` shows the gap). One-argument `Long/parseLong` now lowers to the portable reader where the host is not (`%clojure-parse-long-static`, "Portable number statics"), and the 12-line probe is the oracle's line for line under `pr-str` on all four backends |
 
 `=` is the oracle's output line for line (12-31 lines per probe; tools.cli's `:parse-fn` is
@@ -4094,8 +4094,28 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   takes the `ISeq` row (hiccup's `render-html` while `html` expands; it took `Object`'s,
   `("hi")` for `hi`). Deviations: no other statement runs at lower time, and what a body
   changes (a `swap!` of a program atom) the program never sees -- the oracle's `@seen`
-  after two counting expansions is 2, here 0; a `defmethod` a program macro expands to,
-  or a definition inside a top-level `let`, is not replayed.
+  after two counting expansions is 2, here 0; a `defmethod` a program macro expands to
+  is not replayed.
+- **A definition a top-level wrapper holds is handed over whole, its bindings included**
+  (2026-11-09): the oracle interns the var when the form compiles and sets its root when
+  the form runs, so `(let [k 10] (defn g [x] (+ x k)))`, `(when true (defn g ...))`,
+  `(binding [*print-length* 3] (defn g ...))`, `(letfn [(h ...)] (defn g ...))` and a
+  `defmacro` inside a `let` all define for the macro bodies below them.
+  `ClojureMacroLowering.handOver` hands over such a datum as one form (its lowered
+  `let*`/`let`/`labels`/`if`, run in the macro-time image) rather than only the
+  definition forms in it, so the run makes the closure; `holdsDefinition` finds the
+  definition nested in the lowered tree. A top-level `do` is still its members, one datum
+  at a time, so its statements stay out of the image. A wrapper-defined `defmacro` cannot
+  expand through its datum: `ctx.nestedMacros` records it, `defmacroForms` emits
+  `(setq c%name%macro-closure <expander>)` inside the wrapper (and evaluates one over the
+  bare datum for an expansion above the wrapper's run), and both the lower-time expansion
+  (`macroCall`) and a whole program's `C%MACRO-EXPANDER` arm (`macroClosureRef`) read
+  that global -- the datum names the wrapper's locals, which a back-end refuses to
+  capture where it compiles the expander outside the wrapper. Consequence: a wrapper's
+  other statements now run at lower time too (`(Object.)` in core.match's sentinel
+  `let`), into the null output stream; the program still never sees what they change.
+  Pins: clojure-spec `a-macro-body-calls-a-definition-a-top-level-wrapper-made` (four
+  backends), `ClojureLoweringTest#aMacroBodyCallsAHelperDefinedAboveIt`.
   `def` lazily, not eagerly (as the probe jars in `~/.m2` require):
   macro bodies calling a same-file `defn` -- camel-snake-kebab `defconversion`, hiccup
   `defelem`/`build-string`/`html5`, malli `assert` and its instrument macros, data.json

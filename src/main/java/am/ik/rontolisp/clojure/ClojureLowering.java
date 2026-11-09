@@ -446,6 +446,16 @@ public final class ClojureLowering {
 	private @Nullable LispVal topDatum;
 
 	/**
+	 * Whether {@code form} is the top-level datum lowering now, rather than a form nested
+	 * in it.
+	 * @param form the form
+	 * @return whether the lowering stands at that datum itself
+	 */
+	boolean isTopDatum(LispVal form) {
+		return this.topLevelDepth > 0 && this.topDatum == form;
+	}
+
+	/**
 	 * How deep the lowering is inside {@code defmacro} bodies: {@code &env} and
 	 * {@code &form} read the specials an expansion binds there.
 	 */
@@ -623,6 +633,17 @@ public final class ClojureLowering {
 	 * code.
 	 */
 	final Map<String, LispVal> macros = new HashMap<>();
+
+	/**
+	 * The macro var keys whose {@code defmacro} stood inside a wrapper (a top-level
+	 * {@code let}, {@code when}, {@code binding}, {@code letfn} or the like) rather than
+	 * at the top level: their expander closes over the wrapper's bindings, so a
+	 * lower-time expansion calls the macro-time image's table variable -- the closure the
+	 * wrapper's own run made -- instead of re-evaluating the expander datum, which no
+	 * binding is in reach of, and a whole program's run-time table arm reads the same
+	 * global ({@link ClojureMacroLowering#defmacroForms}).
+	 */
+	final Set<String> nestedMacros = new HashSet<>();
 
 	/**
 	 * Who evaluates one macro application in the macro-time environment, or null when the
