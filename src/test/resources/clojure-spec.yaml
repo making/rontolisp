@@ -1600,11 +1600,38 @@ cases:
   - name: declare-forward-declares
     # A declared name a namespace excludes from clojure.core is its own above the
     # definition too (tools.reader.edn's (declare read)), on all four backends.
+    # A def interns its name before its value lowers, wherever it stands (a macro's
+    # expansion: core.logic's defne, specter's defdynamicnav; a body), and a
+    # top-level macro's expansion is pre-scanned like a top-level datum (aero's
+    # usetime, a (do ~@body) whose caller sits between the declare and the defn).
     source: |
       (declare dcl-f)
       (defn dcl-g [] (dcl-f 1))
       (defn dcl-f [x] (* 2 x))
       (println (dcl-g))
+      (defmacro dcl-defrec [n] `(def ~n (fn [x#] (if (zero? x#) :done (~n (dec x#))))))
+      (dcl-defrec dcl-a)
+      (println (dcl-a 3))
+      (defmacro dcl-defmeta [n]
+        `(def ~(vary-meta n assoc :doc "down") (fn [x#] (if (zero? x#) :meta (~n (dec x#))))))
+      (dcl-defmeta dcl-b)
+      (println (dcl-b 3) (:doc (meta #'dcl-b)))
+      (let [k 2] (def dcl-k (fn [n] (if (pos? n) (dcl-k (- n k)) n))))
+      (println (dcl-k 5))
+      (do (declare dcl-rc)
+          (defn dcl-uses [] (dcl-rc 1))
+          (defn dcl-rc [s] [s]))
+      (println (dcl-uses))
+      (defmacro dcl-usetime [& body] `(do ~@body))
+      (dcl-usetime
+        (declare dcl-rc2)
+        (defn dcl-uses2 [] (dcl-rc2 2))
+        (defn dcl-rc2 [s] [s]))
+      (println (dcl-uses2))
+      (defn dcl-p [x] (* x 10))
+      (defmacro dcl-memo [n] `(def ~n (memoize ~n)))
+      (dcl-memo dcl-p)
+      (println (dcl-p 4))
       (ns dcl-ns (:refer-clojure :exclude [read]))
       (declare read)
       (defn- dcl-h [x] (read x))
@@ -1613,6 +1640,12 @@ cases:
       (in-ns 'user)
     expected: |
       2
+      :done
+      :meta down
+      -1
+      [1]
+      [2]
+      40
       :inner
   - name: chars-are-characters
     # Character literals print as their glyphs; equality and str see through.
