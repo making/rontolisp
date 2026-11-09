@@ -92,4 +92,7 @@
                :server :rontolisp
                :address "0.0.0.0"
                :port 8080
-               :use-thread nil)
+               :use-thread nil
+               ;; wrap-errors answers what a handler did not foresee; the
+               ;; default :debug t only adds a debug-mode notice to the log.
+               :debug nil)
