@@ -49233,6 +49233,52 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * The form a settled tail clears the channel around: {@code X} of
+	 * {@link #clearBefore}'s {@code (progn (setq %mv-spill nil) X)} or of
+	 * {@link #clearAfter}'s {@code (let ((__mvN_v X)) (progn (setq %mv-spill nil)
+	 * __mvN_v))}; {@code form} itself for any other shape. A compiler substituting a
+	 * {@code defun}'s body at a call site reads it through this and clears the channel at
+	 * that site instead, as it does for a local function's.
+	 * @param form a settled tail
+	 * @return the form it clears around, or {@code form}
+	 */
+	public static LispVal clearedForm(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
+			return form;
+		}
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			return form;
+		}
+		if (LispNames.PROGN.equals(head.name()) && isSpillClear(parts.get(1))) {
+			return parts.get(2);
+		}
+		if (LispNames.LET.equals(head.name()) && parts.get(1) instanceof LispCons bindings
+				&& bindings.cdr() instanceof LispNil && bindings.car() instanceof LispCons binding
+				&& binding.car() instanceof LispSymbol var && binding.cdr() instanceof LispCons valueCell
+				&& valueCell.cdr() instanceof LispNil && parts.get(2) instanceof LispCons body && body.isProperList()) {
+			List<LispVal> progn = body.toList();
+			if (progn.size() == 3 && progn.get(0) instanceof LispSymbol prognHead
+					&& LispNames.PROGN.equals(prognHead.name()) && isSpillClear(progn.get(1))
+					&& progn.get(2) instanceof LispSymbol result && result.name().equals(var.name())) {
+				return valueCell.car();
+			}
+		}
+		return form;
+	}
+
+	/** Whether {@code form} is {@code (setq %mv-spill nil)}. */
+	private static boolean isSpillClear(LispVal form) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList()) {
+			return false;
+		}
+		List<LispVal> parts = cons.toList();
+		return parts.size() == 3 && parts.get(0) instanceof LispSymbol op && LispNames.SETQ.equals(op.name())
+				&& parts.get(1) instanceof LispSymbol place && LispNames.MV_SPILL.equals(place.name())
+				&& parts.get(2) instanceof LispNil;
+	}
+
+	/**
 	 * {@code (progn form (setq %mv-spill nil) nil)}: a statement that answers nil on its
 	 * normal exit, cleared behind; a non-local exit out of it skips the clear and keeps
 	 * its own values.

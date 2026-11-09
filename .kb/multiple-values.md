@@ -325,7 +325,9 @@ publish in a non-tail position -- an argument, a `let` initform, a form before t
   backends compile it (`Jvm`/`WasmLambdaCompiler.compileValue` and `compileCall`, gated on the
   spill global's existence) and the built-in wrappers (`settleWrapperLambdas`, gated on
   `declaresMvSpill`) -- `flet`/`labels` functions are lambdas by then; a local function the
-  int-fusion inlines instead (`tryCompileLocalCall`) gets its clear at the fused call site; every
+  int-fusion inlines instead (`tryCompileLocalCall`) gets its clear at the fused call site, and
+  so does an inlined defun (`tryCompileDefunCall`), whose settled body the fusion reads through
+  its clear (`clearedForm`, [wasm-int-fusion.md](wasm-int-fusion.md)); every
   consumer's producer form (`lowerMvProducer`); a `handler-case` protected form with a
   `:no-error` clause. Three modes (`TailMode`): `PUBLISH` (the interpreter's `evalDefun`/
   `evalHandlerCase`, `spillEscapingMvProducers`: syntactic producers publish, nothing clears, and

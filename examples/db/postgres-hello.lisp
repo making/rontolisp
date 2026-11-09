@@ -19,9 +19,10 @@
 ;; tables uax-15 would otherwise build at load time are derived at compile time
 ;; and built only if something asks for one, and nothing here does.
 ;; trust, password, md5 and SCRAM-SHA-256 authentication all complete well
-;; within the default 60-second authentication_timeout: a SCRAM connect costs
-;; about a fifth of a second on every backend (the interpreter runs its
-;; 4096-round PBKDF2 on a native kernel).
+;; within the default 60-second authentication_timeout: a SCRAM connect costs a
+;; fraction of a second on the interpreter (it runs the 4096-round PBKDF2 on a
+;; native kernel) and on the WASM component, a second or more in a freshly
+;; started JVM (JIT warm-up).
 ;;
 ;; On WASM the driver needs --component (TCP is WASI 0.3 sockets; Preview 1 has
 ;; no host socket API):

@@ -41,10 +41,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * through another one. Each probe also asks for {@code current_user}, which is the proof
  * of which role actually got in;</li>
  * <li><b>SCRAM-SHA-256</b> -- the same probe against the SCRAM-only role. It used to be
- * separately opt-in because its 4096-round PBKDF2 ran for over two minutes interpreted; a
- * faster PBKDF2 made that ~50 s (~1 s on the JVM, ~3 s on the component), so it is an
- * ordinary leg again. The server's {@code authentication_timeout} is raised, for the
- * reason spelled out at {@link #POSTGRES};</li>
+ * separately opt-in because its 4096-round PBKDF2 ran for over two minutes interpreted;
+ * what a login costs on each backend now is in {@code .kb/asdf.md} ("Libraries that
+ * load", the cl-postgres entry). The server's {@code authentication_timeout} is raised,
+ * for the reason spelled out at {@link #POSTGRES};</li>
  * <li><b>CRUD</b> -- create / insert / select / update / delete / drop through
  * {@code exec-query}, plus a parameterised statement run twice through
  * {@code prepare-query} + {@code exec-prepared} so the extended protocol is covered too.
@@ -194,7 +194,9 @@ class ClPostgresE2eTest {
 			((1 5) (2 3))
 			""";
 
-	/** Generous: an opted-in SCRAM leg runs for over two minutes on the interpreter. */
+	/**
+	 * A hang guard, not a cost bound (.kb/test-execution.md, "No test reads a clock").
+	 */
 	private static final int TIMEOUT_MINUTES = 15;
 
 	private static final String JAVA = Path.of(System.getProperty("java.home"), "bin", "java").toString();
@@ -224,13 +226,12 @@ class ClPostgresE2eTest {
 		// authentication_timeout is RAISED (when this class stopped being
 		// opt-in). A leg that outruns it dies as "Database error: end of file" while the
 		// server logs "canceling authentication due to timeout", and the slowest leg --
-		// the interpreter's 4096-round PBKDF2 -- takes ~50 s of the DEFAULT 60 s with the
-		// machine to itself. Inside a full ./mvnw test it no longer has the machine to
-		// itself (JUnit runs classes 16-wide), and it measured 63 s, i.e. the default
-		// turned this leg into a stopwatch on ambient load rather than an assertion about
-		// SCRAM. What the leg tests is that SCRAM authentication SUCCEEDS; the PBKDF2
-		// cost claim (~50 s interpreted, ~1 s JVM, ~3 s component) lives in
-		// .kb/asdf.md, where a regression is a documentation change rather than a flake.
+		// then the interpreter's 4096-round PBKDF2 -- took ~50 s of the DEFAULT 60 s with
+		// the machine to itself, 63 s inside a full ./mvnw test (JUnit runs classes
+		// 16-wide): the default turned this leg into a stopwatch on ambient load rather
+		// than an assertion about SCRAM. What the leg tests is that SCRAM authentication
+		// SUCCEEDS; the cost claim lives in .kb/asdf.md, where a regression is a
+		// documentation change rather than a flake.
 		.withCommand("postgres", "-c", "hba_file=/etc/postgresql/pg_hba.conf", "-c", "authentication_timeout=600")
 		// Twice: once for the bootstrap server that runs the init script, once for real.
 		.waitingFor(Wait.forLogMessage(".*database system is ready to accept connections.*\\s", 2));

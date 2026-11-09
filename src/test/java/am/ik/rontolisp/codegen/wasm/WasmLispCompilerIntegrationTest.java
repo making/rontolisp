@@ -25423,6 +25423,19 @@ class WasmLispCompilerIntegrationTest {
 				(defun sq (x) (* x x))
 				(print (sq 4294967295))
 				""")).isEqualTo("18446744065119617025");
+		// A multiple-value operator settles every defun tail, so mod32+'s body arrives
+		// wrapped in the channel's clear (LispMacroExpander.clearedForm); the calls still
+		// substitute, and the fused call clears what (values h 1) published. A million
+		// iterations measured 45.8 M fuel substituted, 16.8 M of it the module's
+		// start-up,
+		// and 233.6 M as calls allocating a bignum per word.
+		assertThat(compileAndRunWithFuel("""
+				(defun mod32+ (a b) (ldb (byte 32 0) (+ a b)))
+				(defun rol32 (a s) (logior (ldb (byte 32 0) (ash a s)) (ash a (- s 32))))
+				(let ((h 4294967295))
+				  (dotimes (i 1000000) (setq h (mod32+ (rol32 h 7) 2654435769)))
+				  (print (multiple-value-list (mod32+ (values h 1) 0))))
+				""", 100_000_000L)).isEqualTo("(1936334747)");
 	}
 
 	// The mutex primitives exist on WASM as no-ops (single-threaded by construction) so

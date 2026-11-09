@@ -79,6 +79,20 @@ its index is part of the tree (below). What is this backend's own:
   the flet lowering's `(block name ...)` wrapper (via `singleBodyExpr`), or a declared flet param
   silently demotes to per-iteration funcall dispatch; **`substituteCall` ROLLS BACK leaves
   registered by a failed attempt**, or a side-effecting argument evaluates twice.
+- **A settled defun tail is still a substitutable body.** A program with any multiple-value
+  operator -- every real one, ironclad included -- settles every defun tail
+  (`LispMacroExpander.settleDefunTails`, [multiple-values.md](multiple-values.md)), so `mod32+`
+  arrives as `(let ((__mvN_v X)) (progn (setq %mv-spill nil) __mvN_v))` or `(progn (setq
+  %mv-spill nil) X)`. `inlinableBody` reads `X` through `LispMacroExpander.clearedForm` (the JVM
+  twin's too), and a root-position call (`tryCompileDefunCall`, like `tryCompileLocalCall`)
+  clears the channel after its tree; an interior call needs no clear, its value reaches no
+  consumer. From 2026-09-19 to 2026-11-09 `isInlinableDefun` declined that wrapper in every such
+  program, and identical results hid it. Measured 2026-11-09 (Xeon E5-2697A v4, wasmtime 49,
+  `--component`): ironclad's `pbkdf2-hash-password :sha256` x4096 1230 ms declined, 385 ms
+  substituted, 298 ms on the 2026-08-16 build; a SHA-256 block 67 us against 13 us. Pinned by
+  `WasmLispCompilerIntegrationTest.compileInlinableDefunsFuseWithoutChangingResults` (a fuel
+  budget: a million substituted iterations 45.8 M, as calls 233.6 M) and the `ci-svc-inc` line
+  of `multipleValueChannelIsExactInSingleValueContexts` (the clear).
 - **Masked signed field**: `(%mask-signed-field k x)` with a literal `1 <= k <= 64` is an op node
   whose operand emits WRAPPED and sign-extends below 64 (`i64.shl`/`i64.shr_s` by `64 - k`): the
   JVM twin's node (`.kb/jvm-int-fusion.md`), same fallback through `_big_xor`/`_big_and`/`_rat_add`
