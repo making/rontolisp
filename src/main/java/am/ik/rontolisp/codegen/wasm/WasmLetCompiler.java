@@ -129,6 +129,58 @@ final class WasmLetCompiler {
 				&& !Boolean.getBoolean("rontolisp.debug.norawlocals")) {
 			counted = WasmCountedLoopCompiler.analyze(bindings, bodyExprs, capturedInLet, ctx);
 		}
+		// An EXACT binding (WasmIntFusionCompiler.RawLocal.exact): one whose every
+		// assignment, its init included, answers an integer within a range whatever path
+		// computes it -- a mod32+ round variable, a declared u32 vector's element -- gets
+		// an i64 slot with no shadow, so reading it needs no sentinel test and the fast
+		// paths over it can drop their overflow checks and, with nothing left to bail on,
+		// their fallbacks. Decided after the counted binding (which wins) and before the
+		// dual one, under the dual one's conditions; not at top level, whose locals the
+		// eval mirror reads. The init is analyzed in the scope it is evaluated in (outer
+		// exact/counted locals, declared arrays); an assignment in the body only by what
+		// its shape bounds alone (a literal mask, an ldb), the body's own bindings being
+		// invisible to a scope-blind scan.
+		Map<String, WasmIntFusionCompiler.Range> exactRanges = new HashMap<>();
+		if (WasmIntFusionCompiler.speedTradesEnabled(ctx) && !ctx.dynamic && !async && ctx.asyncResume == null
+				&& !ctx.topLevel && !Boolean.getBoolean("rontolisp.debug.norawlocals")
+				&& bindings instanceof LispCons exactScan) {
+			Set<String> seenNames = new HashSet<>();
+			Set<String> duplicateNames = new HashSet<>();
+			for (LispVal binding : exactScan.toList()) {
+				String name = ((LispSymbol) ((LispCons) binding).toList().get(0)).name();
+				if (!seenNames.add(name)) {
+					duplicateNames.add(name);
+				}
+			}
+			for (LispVal binding : exactScan.toList()) {
+				List<LispVal> pairList = ((LispCons) binding).toList();
+				String name = ((LispSymbol) pairList.get(0)).name();
+				if (ctx.specialVars.contains(name) || capturedInLet.contains(name) || duplicateNames.contains(name)
+						|| counted != null && counted.name().equals(name) || pairList.size() < 2) {
+					continue;
+				}
+				WasmIntFusionCompiler.Range range = WasmIntFusionCompiler.valueRange(pairList.get(1), ctx,
+						free -> outerExactRange(free, ctx), true);
+				if (range == null) {
+					continue;
+				}
+				List<LispVal> assigned = WasmCountedLoopCompiler.plainAssignedValues(bodyExprs, name);
+				if (assigned == null) {
+					continue;
+				}
+				for (LispVal value : assigned) {
+					WasmIntFusionCompiler.Range r = WasmIntFusionCompiler.valueRange(value, ctx, free -> null, false);
+					if (r == null) {
+						range = null;
+						break;
+					}
+					range = new WasmIntFusionCompiler.Range(Math.min(range.lo(), r.lo()), Math.max(range.hi(), r.hi()));
+				}
+				if (range != null) {
+					exactRanges.put(name, range);
+				}
+			}
+		}
 		if (WasmIntFusionCompiler.speedTradesEnabled(ctx) && !ctx.dynamic && !async && ctx.asyncResume == null
 				&& (!ctx.topLevel || !FreeVarAnalyzer.createsAClosure(bodyExprs))
 				&& !Boolean.getBoolean("rontolisp.debug.norawlocals") && bindings instanceof LispCons rawScan) {
@@ -147,7 +199,8 @@ final class WasmLetCompiler {
 			for (LispVal binding : rawScan.toList()) {
 				List<LispVal> pairList = ((LispCons) binding).toList();
 				String name = ((LispSymbol) pairList.get(0)).name();
-				if (ctx.specialVars.contains(name) || capturedInLet.contains(name) || duplicateNames.contains(name)) {
+				if (ctx.specialVars.contains(name) || capturedInLet.contains(name) || duplicateNames.contains(name)
+						|| exactRanges.containsKey(name)) {
 					continue;
 				}
 				boolean anyRaw = WasmIntFusionCompiler.isRawAssignShaped(pairList.get(1), ctx);
@@ -237,6 +290,15 @@ final class WasmLetCompiler {
 				if (counted != null && counted.name().equals(name)) {
 					// Counted binding: an i64 slot, no ordinary local and no shadow.
 					rawRegistrations.put(name, WasmCountedLoopCompiler.compileBinding(counted, ctx));
+					continue;
+				}
+				WasmIntFusionCompiler.Range exact = exactRanges.get(name);
+				if (exact != null) {
+					// Exact binding: an i64 slot alone, its value always in range.
+					WasmIntFusionCompiler.RawLocal raw = WasmIntFusionCompiler.RawLocal.exact(ctx.allocI64Temp(),
+							exact.lo(), exact.hi());
+					WasmIntFusionCompiler.compileRawStore(pairList.get(1), ctx, raw);
+					rawRegistrations.put(name, raw);
 					continue;
 				}
 				if (rawEligible.contains(name)) {
@@ -564,6 +626,16 @@ final class WasmLetCompiler {
 	 * inner binding's setq also lands here, which only widens the eligibility heuristic,
 	 * never the compiled scoping). Feeds the unboxed-local eligibility check above.
 	 */
+	/**
+	 * The range of an outer variable a binding's init reads: a shadowless (counted or
+	 * exact) unboxed local's, or null for any other variable.
+	 */
+	private static WasmIntFusionCompiler.@org.jspecify.annotations.Nullable Range outerExactRange(String name,
+			WasmLispCompiler.Ctx ctx) {
+		WasmIntFusionCompiler.RawLocal raw = ctx.rawLocals.get(name);
+		return raw == null || raw.shadowed() ? null : new WasmIntFusionCompiler.Range(raw.lo(), raw.hi());
+	}
+
 	private static void collectAssignedValues(LispVal form, Map<String, List<LispVal>> out) {
 		if (!(form instanceof LispCons cons)) {
 			return;

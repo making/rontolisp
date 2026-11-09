@@ -98,6 +98,20 @@ Emission: `emitKindedAref1` is `ref.cast` + direct read (~19-30 B against 196; u
 arm keeping the raw-value fast path (`tryCompileRaw`); `length` of a packed kind is `ref.cast` + `array.len` + `ref.i31`, other kinds
 keeping the generic chain because a GENERAL vector's length must honour a fill pointer.
 
+- **The checks before the access** (2026-11-09). A one-subscript site of a packed kind tests the
+  array against that ONE type inline and calls `_arr_check_rank` only when the test fails (a packed
+  vector is rank 1 by construction, `emitKindedCheckRank`) -- it was the call every time, 9% of an
+  ironclad PBKDF2 component. A subscript whose SHAPE answers an integer skips `_idx_chk`
+  (`WasmIntFusionCompiler.answersInteger`: a literal, a counted or exact local, a bitwise
+  operation or `ldb` -- an integer or a signal whatever the operands -- or `+ - * mod rem 1+ 1-`
+  over such), at every site `compileSubscript` serves.
+- **A fused read takes the pin too** (`.kb/wasm-int-fusion.md`): one width tested where the integer
+  tree's aref leaf tested all three, and a DIRECT read -- a site with no signalling operation --
+  casts like the unfused read, so a false declaration traps there as well; it used to bail to the
+  generic read and answer. A constant's packed vector (`WasmArrayCompiler.constantArrays`) is
+  a fused read's kind only, never `arrayKindOfExpr`'s: its global is nothing before the
+  definition ran, which the unfused read must keep reporting as the generic read does.
+
 - `(setf (aref var i) v)` on a VARIABLE place of a pinned kind skips the expansion's
   `stringp`/`schar-set` branch (`nonStringArefStore`, intercepted at both `WasmExprCompiler` setf
   sites).

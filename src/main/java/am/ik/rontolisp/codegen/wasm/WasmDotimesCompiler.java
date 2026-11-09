@@ -136,7 +136,7 @@ final class WasmDotimesCompiler {
 		ctx.locals = new HashMap<>(savedLocals);
 		ctx.locals.remove(name);
 		Map<String, WasmIntFusionCompiler.RawLocal> rawLocals = new HashMap<>(savedRawLocals);
-		rawLocals.put(name, WasmIntFusionCompiler.RawLocal.counted(slot));
+		rawLocals.put(name, WasmIntFusionCompiler.RawLocal.counted(slot, 0, count.value()));
 		ctx.rawLocals = rawLocals;
 		if (savedLocalLambdas.containsKey(name)) {
 			ctx.localIntLambdas = new HashMap<>(savedLocalLambdas);

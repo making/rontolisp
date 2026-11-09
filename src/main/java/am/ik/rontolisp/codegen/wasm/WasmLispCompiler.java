@@ -5097,10 +5097,18 @@ public final class WasmLispCompiler implements LispCompiler {
 			for (DefunDecl defun : defuns) {
 				defunCounts.merge(defun.name(), 1, Integer::sum);
 			}
-			for (DefunDecl defun : defuns) {
-				if (defunCounts.getOrDefault(defun.name(), 0) == 1 && !asyncDefunNames.contains(defun.name())
-						&& WasmIntFusionCompiler.isInlinableDefun(defun)) {
-					inlinableDefuns.put(defun.name(), defun);
+			// A body calling inlinable defuns is one too: grown to a fixpoint, so a
+			// definition's place in the file decides nothing (a call cycle never joins).
+			boolean grew = true;
+			while (grew) {
+				grew = false;
+				for (DefunDecl defun : defuns) {
+					if (!inlinableDefuns.containsKey(defun.name()) && defunCounts.getOrDefault(defun.name(), 0) == 1
+							&& !asyncDefunNames.contains(defun.name())
+							&& WasmIntFusionCompiler.isInlinableDefun(defun, inlinableDefuns)) {
+						inlinableDefuns.put(defun.name(), defun);
+						grew = true;
+					}
 				}
 			}
 		}
@@ -5226,6 +5234,12 @@ public final class WasmLispCompiler implements LispCompiler {
 				duplicatedDefunNames.add(defun.name);
 			}
 		}
+		// The constants a fused read may take for the packed vector they were built as:
+		// only in a program that cannot name a variable at run time, where the analysis's
+		// scan of every use is the whole story.
+		Map<String, WasmArrayCompiler.ConstantArray> constantArrays = usesEval || this.dynamic
+				|| programUsesSymbol(program, LispNames.PROGV) ? Map.of()
+						: WasmArrayCompiler.constantArrays(program, closRegistry);
 
 		// Reusable builder template with shared constants and state
 		// --report-locations: the frames' shared state, in EH mode only -- the only mode
@@ -5258,6 +5272,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.functions(functions)
 			.inlinableDefuns(inlinableDefuns)
 			.duplicatedDefunNames(duplicatedDefunNames)
+			.constantArrays(constantArrays)
 			.lambdaDecls(lambdaDecls)
 			.indirectCallArities(indirectCallArities)
 			.fdlibmUsed(fdlibmUsed)
@@ -12172,6 +12187,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		 */
 		Set<String> duplicatedDefunNames = Set.of();
 
+		/**
+		 * The constants whose module global can only hold the packed vector their
+		 * definition builds ({@link WasmArrayCompiler#constantArrays}): what a fused read
+		 * of one tests for and how long it is.
+		 */
+		Map<String, WasmArrayCompiler.ConstantArray> constantArrays = Map.of();
+
 		Map<String, Integer> captures = Map.of();
 
 		Set<String> boxedVars = Set.of();
@@ -13353,6 +13375,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.callbackExports = builder.callbackExports;
 			this.inlinableDefuns = builder.inlinableDefuns;
 			this.duplicatedDefunNames = builder.duplicatedDefunNames;
+			this.constantArrays = builder.constantArrays;
 		}
 
 		static Builder builder() {
@@ -13390,6 +13413,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private Map<String, DefunDecl> inlinableDefuns = Map.of();
 
 			private Set<String> duplicatedDefunNames = Set.of();
+
+			private Map<String, WasmArrayCompiler.ConstantArray> constantArrays = Map.of();
 
 			private List<LambdaInfo> lambdaDecls = new ArrayList<>();
 
@@ -13735,6 +13760,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.callbackExports = proto.callbackExports;
 				this.inlinableDefuns = proto.inlinableDefuns;
 				this.duplicatedDefunNames = proto.duplicatedDefunNames;
+				this.constantArrays = proto.constantArrays;
 			}
 
 			Builder writer(WasmWriter writer) {
@@ -13764,6 +13790,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder duplicatedDefunNames(Set<String> duplicatedDefunNames) {
 				this.duplicatedDefunNames = duplicatedDefunNames;
+				return this;
+			}
+
+			Builder constantArrays(Map<String, WasmArrayCompiler.ConstantArray> constantArrays) {
+				this.constantArrays = constantArrays;
 				return this;
 			}
 

@@ -1546,6 +1546,65 @@ class WasmLispCompilerIntegrationTest {
 				(3.0 4)
 				(8 NIL 7 8)
 				UNSET""");
+		// Exact locals and what rides on them (.kb/wasm-unboxed-locals.md,
+		// .kb/wasm-int-fusion.md).
+		// churn's a, b and x are EXACT: every assignment is masked at its root, so the
+		// slot alone holds them and the sites over them drop their fallbacks -- except
+		// the one adding big, whose bignum and float bail and come back through the
+		// generic path, unboxed into the slot or signalling. peek reads a defconstant's
+		// packed table directly, and before the definition ran reports what the generic
+		// read does. u32x/u16x substitute into words through their array parameter,
+		// dpb and all, and an index past the octets reports as the call did. The
+		// interpreter's output, on P1 and as a component.
+		String exact = """
+				(defun mod32x (a b) (ldb (byte 32 0) (+ a b)))
+				(defun peek (i) (logand (+ (aref +tbl+ i) 1) 255))
+				(print (handler-case (peek 0) (error () :unbound)))
+				(defconstant +tbl+ (make-array 4 :element-type '(unsigned-byte 8)
+				                                 :initial-contents '(10 20 30 255)))
+				(print (list (peek 0) (peek 3) (handler-case (peek 4) (error () :out))))
+				(defun u16x (vector offset) (dpb (aref vector offset) (byte 8 8) (aref vector (1+ offset))))
+				(defun u32x (vector offset) (dpb (u16x vector offset) (byte 16 16) (u16x vector (+ offset 2))))
+				(defun words (block octets start)
+				  (declare (type (simple-array (unsigned-byte 32) (*)) block)
+				           (type (simple-array (unsigned-byte 8) (*)) octets))
+				  (loop for i from 0 below 2
+				        for j from start by 4
+				        do (setf (aref block i) (u32x octets j)))
+				  block)
+				(defun churn (regs big)
+				  (declare (type (simple-array (unsigned-byte 32) (2)) regs))
+				  (let ((a (aref regs 0)) (b (aref regs 1)))
+				    (dotimes (i 3)
+				      (let ((x (mod32x a (logxor b i))))
+				        (setf b (mod32x b x)
+				              a (ldb (byte 32 0) (+ a x big)))))
+				    (list a b (+ a b) (* a b))))
+				(let ((octets (make-array 9 :element-type '(unsigned-byte 8)))
+				      (block (make-array 2 :element-type '(unsigned-byte 32)))
+				      (regs (make-array 2 :element-type '(unsigned-byte 32)
+				                          :initial-contents '(4294967295 2863311530))))
+				  (dotimes (i 9) (setf (aref octets i) (* 29 (1+ i))))
+				  (print (words block octets 0))
+				  (print (handler-case (words block octets 2) (error () :out)))
+				  (print block)
+				  (print (u32x octets 4))
+				  (print (churn regs 1))
+				  (print (churn regs (expt 2 70)))
+				  (print (handler-case (churn regs 1.5) (error () :float))))
+				""";
+		String exactExpected = """
+				:UNBOUND
+				(11 0 :OUT)
+				#(490362740 2444151784)
+				:OUT
+				#(1467257262 2444151784)
+				2444151784
+				(2863311511 1431655743 4294967254 4099276368721157673)
+				(2863311507 1431655742 4294967249 4099276360131223194)
+				:FLOAT""";
+		assertThat(compileAndRun(exact)).isEqualTo(exactExpected);
+		assertThat(compileComponentAndRun(exact)).isEqualTo(exactExpected);
 	}
 
 	@Test
@@ -25402,6 +25461,40 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(compileAndRunWithFuel(million, 100_000_000L)).isEqualTo("(1936334747)");
 		assertThat(compileAndRunWithFuel("(defun run-data (form) (eval form))\n" + million, 100_000_000L))
 			.isEqualTo("(1936334747)");
+		// A SHA-256-shaped compression (.kb/wasm-int-fusion.md, "Ranges, and sites with
+		// nothing to bail on"): the round variables are exact locals, each round's sites
+		// bail nowhere and keep no fallback, the declared block and the defconstant's
+		// table are read directly, the register stores check their rank inline. 100,000
+		// compressions
+		// measured 61.0 M fuel, 16.8 M of it the start-up, against 95.5 M with the round
+		// variables shadowed and every site carrying its fallback (2026-11-09, wasmtime
+		// 49).
+		String compression = """
+				(defun mod32+ (a b) (ldb (byte 32 0) (+ a b)))
+				(defun rol32 (a s) (logior (ldb (byte 32 0) (ash a s)) (ash a (- s 32))))
+				(defconstant +k+ (make-array 4 :element-type '(unsigned-byte 32)
+				                               :initial-contents '(#x428A2F98 #x71374491 #xB5C0FBCF #xE9B5DBA5)))
+				(defun compress (regs block)
+				  (declare (type (simple-array (unsigned-byte 32) (4)) regs block))
+				  (let ((a (aref regs 0)) (b (aref regs 1)) (c (aref regs 2)) (d (aref regs 3)))
+				    (let ((x (mod32+ (rol32 d 26) (mod32+ (logxor b c) (mod32+ (aref block 0) (aref +k+ 0))))))
+				      (setf c (mod32+ c x) a (mod32+ (rol32 a 30) x)))
+				    (let ((x (mod32+ (rol32 c 26) (mod32+ (logxor a b) (mod32+ (aref block 1) (aref +k+ 1))))))
+				      (setf b (mod32+ b x) d (mod32+ (rol32 d 30) x)))
+				    (let ((x (mod32+ (rol32 b 26) (mod32+ (logxor d a) (mod32+ (aref block 2) (aref +k+ 2))))))
+				      (setf a (mod32+ a x) c (mod32+ (rol32 c 30) x)))
+				    (let ((x (mod32+ (rol32 a 26) (mod32+ (logxor c d) (mod32+ (aref block 3) (aref +k+ 3))))))
+				      (setf d (mod32+ d x) b (mod32+ (rol32 b 30) x)))
+				    (setf (aref regs 0) (mod32+ (aref regs 0) a) (aref regs 1) (mod32+ (aref regs 1) b)
+				          (aref regs 2) (mod32+ (aref regs 2) c) (aref regs 3) (mod32+ (aref regs 3) d))
+				    regs))
+				(let ((regs (make-array 4 :element-type '(unsigned-byte 32) :initial-contents '(1 2 3 4)))
+				      (block (make-array 4 :element-type '(unsigned-byte 32)
+				                           :initial-contents '(#xFFFFFFFF 5 6 7))))
+				  (dotimes (i 100000) (compress regs block))
+				  (print (multiple-value-list (values (aref regs 0) (aref regs 3)))))
+				""";
+		assertThat(compileAndRunWithFuel(compression, 75_000_000L)).isEqualTo("(2309246193 1923398755)");
 	}
 
 	// The mutex primitives exist on WASM as no-ops (single-threaded by construction) so

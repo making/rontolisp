@@ -42,7 +42,11 @@ both `!prefersSizeOverSpeed()` -- and the value tails' dispatcher copy `_vtcd<n>
 those shapes (`JvmLispCompilerTest.theSizeLevelChangesNothingWithoutASpeedForSizeTrade`).
 
 The size win barely varies (-16% to -24%); the run-time price varies more than thirtyfold, because
-only INTEGER arithmetic fuses. **The two wasm trades are ONE level, not two switches**: "fusion off
+only INTEGER arithmetic fuses. **A fused site with nothing to bail on is no trade** (2026-11-09,
+`.kb/wasm-int-fusion.md`, "Ranges, and sites with nothing to bail on"): it emits no fallback, so
+an accumulator masked at its root made `WasmLispCompilerTest`'s level program 2807 bytes at
+`default` against 2922 at `size`; the test's accumulator is a shadowed one now. The size level still
+declines those sites with the rest -- taking them there is open. **The two wasm trades are ONE level, not two switches**: "fusion off
 / unboxed locals on" is DOMINATED on both axes. `-Drontolisp.debug.norawlocals=true` still switches
 the locals alone.
 
