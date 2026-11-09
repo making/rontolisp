@@ -3488,12 +3488,13 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   XNode)` calls run verbatim, and since j14 (2026-11-09) `make-printable!`'s own body too.
 - **Libraries after j14** (2026-11-09, j07's harness, every other hunk applied): rewrite-clj
   loads with no `make-printable!` hunk and prints a node as the oracle does
-  (`(prn (p/parse-string ";; c\n"))` is `<comment: ";; c\n">`, interpreter and JVM class; the
-  verbatim jar loads and prints nodes, then stops in `z/of-string` on j18's `iterate`), and
-  schema loads with its `register-schema-print-as-explain` hunk dropped: `(prn (s/maybe
-  s/Int))` and `pprint` of it are `(maybe Int)`, a schema record inside a vector or map
-  prints its explanation, `s/defrecord`'s own record prints `#ns.Foo{:a 1}` -- the oracle's
-  lines but the set order of `(enum ...)` (interpreter and JVM class). j14's premise that the
+  (`(prn (p/parse-string ";; c\n"))` is `<comment: ";; c\n">`, interpreter, JVM class and
+  wasm P1; the verbatim jar loads and prints nodes, then stops in `z/of-string` on j18's
+  `iterate`), and schema loads with its `register-schema-print-as-explain` hunk dropped:
+  `(prn (s/maybe s/Int))` and `pprint` of it are `(maybe Int)`, a schema record inside a
+  vector or map prints its explanation, `s/defrecord`'s own record prints `#ns.Foo{:a 1}` --
+  the oracle's lines but the set order of `(enum ...)` (interpreter and JVM class; wasm P1
+  stops at load on a `JAVA:STATIC` the patched copy still reaches). j14's premise that the
   oracle prints `#rewrite_clj.node.comment.CommentNode{...}` and `#schema.core.Maybe{...}`
   was measured on the patched copies (the registrations dropped); the verbatim jars print
   `<comment: ...>` and `(maybe Int)` (clj 1.12.6.1673, 2026-11-09).
