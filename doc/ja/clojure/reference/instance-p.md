@@ -28,6 +28,7 @@ JVM ではホストのオブジェクトをホストのクラスで検査する�
 そのサブクラスの例外・実行時エラーについて `true` です。値として書いたクラス（`(def s String)`）は
 インタプリタと JVM ではホストに問い合わせます。オラクルと同じく、`nil` は
 `NullPointerException`、クラスでないそれ以外の値は `ClassCastException` を投げます。
+`class` や `.getClass` が返したクラスの `(.isInstance c x)` は `(instance? c x)` です。
 
 ```clojure
 (println (instance? String "a") (instance? String 1)) ; true false

@@ -41,14 +41,18 @@ hand there, see its `patches.diff`):
   of `clojure.lang.IPersistentVector` (a vector pattern's tag) is false here, so every vector
   pattern throws `java.lang.Error: Unsupported tag type:clojure.lang.IPersistentVector` at macro
   time; then `(.isArray ^Class c)`.
-- core.logic 1.1.1, `clojure/core/logic.clj:299,778,783,789` and `nominal.clj:98`:
-  `(.. this getClass (isInstance o))` in the deftypes' `equals`/`toString` -- `No matching method
-  isInstance found taking 1 args for class clojure.lang.Keyword` on the first `appendo`.
+- core.logic 1.1.1: no longer a consumer since j07's re-probe (2026-11-09): `.isInstance` of a
+  class keyword or designator is `instance?`, so its deftypes' `(.. this getClass (isInstance
+  o))` runs and the verbatim probe is `=` on all four backends but the pinned `()`-is-`nil` line.
 - schema 1.4.2: `schema/utils.cljc:155` `(assert (class? klass) ...)` in `declare-class-schema!`
   (`Cannot declare class schema for non-class :keyword`): `s/defn` hands it `(class f)`, the
   `:function` keyword. Since j13 (2026-11-09) a record's class is a class value (its
   `(:C%CLASS "ns.Name")` designator, `class?` true, one Java object per class as a host map
-  key), so `s/defrecord`, `s/record` and `record*`'s `(class? klass)` run verbatim.
+  key), so `s/defrecord`, `s/record` and `record*`'s `(class? klass)` run verbatim. Re-probed
+  verbatim 2026-11-09 (j07): this is the only stop on the interpreter and the JVM class (the
+  first seven lines print, the set-order one pinned); wasm stops at load first (`.todo/j38`).
+- core.match 1.1.1 re-probed verbatim 2026-11-09 (j07): the `class?` stop above is the only one
+  on all four backends (nothing prints).
 
 A record's or deftype's class value is its dispatch tag since j13: the designator one function
 makes (`ClojureProtocolLowering.typeTagForm`), every row of the type keyed by it -- what a

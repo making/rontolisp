@@ -27,7 +27,7 @@ is tested when the call runs: a class `class` or `type` answered is `true` of a 
 class is it and of an exception or runtime error of a subclass; a class spelled as a value
 (`(def s String)`) asks the host on the interpreter and the JVM. `nil` throws a
 `NullPointerException` and any other value that is no class a `ClassCastException`, like the
-oracle.
+oracle. `(.isInstance c x)` of a class `class` or `.getClass` answered is `(instance? c x)`.
 
 ```clojure
 (println (instance? String "a") (instance? String 1)) ; true false

@@ -12,12 +12,12 @@ per arity over the static call, so `(every? Character/isWhitespace s)` runs; a
 variadic-only member is refused. A static call or member value whose overloads
 all answer a boolean answers `true`/`false`. `(System/getProperty k)` of a literal
 key is nil and `(System/getProperty k dflt)` its default on the wasm backends, where
-no properties exist (nil is the oracle's `NullPointerException`); a computed key stays
-the host call. `Long/MAX_VALUE` (and `MIN_VALUE`, the `Integer`/`Short`/`Byte` pairs)
+no properties exist (nil is the oracle's `NullPointerException`), a computed key the
+same as it runs; `(System/getenv name)` reads the WASI environment there. `Long/MAX_VALUE` (and `MIN_VALUE`, the `Integer`/`Short`/`Byte` pairs)
 is itself on the wasm backends, where no host field exists; any other member stays the
 host field. One-argument `Long/valueOf`, `Double/valueOf`, `Double/parseDouble` and
 `Long/parseLong`, `Integer/parseInt` of a string alone or with a literal radix,
-one-argument `Integer/toHexString`, two-argument `Math/min`, and `Character/isWhitespace`,
+one-argument `Integer/toHexString`, two-argument `Math/min`, `Boolean/parseBoolean`, and `Character/isWhitespace`,
 `isDigit`, `digit` and `valueOf` evaluate portably on the wasm backends too, in the
 oracle's grammar and refusals; any other arity, and a computed radix, stays the host
 call.

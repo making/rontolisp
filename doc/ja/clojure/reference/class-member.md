@@ -12,12 +12,12 @@
 オーバーロードがどれも真偽値を答える静的呼び出し・メンバー値は `true`/`false` を
 答えます。リテラルなキーからの `(System/getProperty k)` は nil、
 `(System/getProperty k dflt)` は既定値を答えます（wasm バックエンド。プロパティは
-存在しません。nil はオラクルの `NullPointerException` です）。計算されたキーは
-ホストの呼び出しのまま残ります。`Long/MAX_VALUE`（および `MIN_VALUE`、`Integer`/`Short`/`Byte`
+存在しません。nil はオラクルの `NullPointerException` です）。計算されたキーも
+実行時に同じ値を答え、`(System/getenv name)` は WASI の環境変数を読みます。`Long/MAX_VALUE`（および `MIN_VALUE`、`Integer`/`Short`/`Byte`
 の組）は wasm バックエンドではその値自身になります（ホストのフィールドは存在しないため）。
 それ以外のメンバーはホストのフィールドのまま残ります。1 引数の `Long/valueOf`・`Double/valueOf`・
 `Double/parseDouble`・`Long/parseLong`、文字列だけまたは文字列とリテラルな基数からの
-`Integer/parseInt`、1 引数の `Integer/toHexString`、2 引数の `Math/min`、
+`Integer/parseInt`、1 引数の `Integer/toHexString`、2 引数の `Math/min`、`Boolean/parseBoolean`、
 `Character/isWhitespace`・`isDigit`・`digit`・`valueOf` は wasm バックエンドでも移植性のある
 読み取りとして評価され、オラクルの文法と拒否に従います。その他のアリティと計算された基数は
 ホストの呼び出しのまま残ります。

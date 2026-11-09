@@ -1447,17 +1447,27 @@ final class ClojureInteropLowering {
 			// properties exist there, so the one-argument call is nil and the
 			// two-argument call its default, like a host without the property
 			// (malli.registry's mode and type at load). Nil is the oracle's
-			// NullPointerException; a computed key stays the host call, which warns
-			// and refuses when it runs there.
-			if (args.size() == 1 && args.get(0) instanceof LispString) {
+			// NullPointerException; a computed key is the worker answering the same
+			// as it runs (aero's #prop).
+			boolean literal = !args.isEmpty() && args.get(0) instanceof LispString key && !key.value().isEmpty();
+			if (args.size() == 1 && literal) {
 				return ClojureLowering.NIL_CONST;
 			}
 			if (args.size() == 1 && args.get(0) instanceof LispNil) {
 				return ClojureRefusals.refusal(ClojureRefusals.NULL_POINTER, LispString.literal("key can't be null"));
 			}
-			if (args.size() == 2 && args.get(0) instanceof LispString) {
+			if (args.size() == 2 && literal) {
 				return args.get(1);
 			}
+			if (args.size() == 1 || args.size() == 2) {
+				return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SYSTEM-GET-PROPERTY"), args.get(0),
+						args.size() == 2 ? args.get(1) : ClojureLowering.NIL_CONST);
+			}
+		}
+		if (!ctx.hostTarget && cls.equals("java.lang.System") && member.equals("getenv") && args.size() == 1) {
+			// System/getenv of one name where no host is (wasm): the WASI
+			// environment's variable, read the way uiop:getenv reads it (aero's #env)
+			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-SYSTEM-GETENV"), args.get(0));
 		}
 		if (!ctx.hostTarget && designator.equals(member)) {
 			// where no host is, the pure number statics data.json's read path calls

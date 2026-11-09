@@ -27163,6 +27163,14 @@
                       (char "0123456789abcdefghijklmnopqrstuvwxyz" (mod m base))
                       chars)))))))
 
+(defun rontolisp::%clojure-big-integer-to-string (n radix)
+  "(.toString n radix) of an integer, BigInteger's: N in RADIX, lowercase,
+   a minus sign ahead of a negative one; a radix outside 2 to 36 is 10."
+  (let ((base (if (and (integerp radix) (>= radix 2) (<= radix 36)) radix 10)))
+    (if (< n 0)
+        (concatenate 'string "-" (rontolisp::%clojure-pp-digits (- n) base))
+        (rontolisp::%clojure-pp-digits n base))))
+
 (defun rontolisp::%clojure-pp-base-string (n base long-range)
   "The integer N in BASE the oracle's way: a value it holds as a Java integer
    (a long when LONG-RANGE, a ratio's part otherwise) through Java's format in
@@ -29332,15 +29340,48 @@
             (concatenate 'string "class " (rontolisp::%clojure-class-name-of s)
                          " cannot be cast to class java.lang.String")))))
 
-(defun rontolisp::%clojure-parse-double-static (s)
-  "(Double/parseDouble s): the double the string S spells, Double/valueOf's
-   grammar and NumberFormatException; nil its NullPointerException, anything
-   else its cast refusal to String (the reflector casts the argument)."
+(defun rontolisp::%clojure-string-parameter (s)
+  "S as a host String parameter: itself when a string or nil, else the
+   oracle's cast refusal to String (the reflector casts the argument)."
   (if (or (stringp s) (null s))
-      (rontolisp::%clojure-double-value-of s)
+      s
       (rontolisp::%clojure-class-cast-exception
        (concatenate 'string "class " (rontolisp::%clojure-class-name-of s)
                     " cannot be cast to class java.lang.String"))))
+
+(defun rontolisp::%clojure-parse-double-static (s)
+  "(Double/parseDouble s): the double the string S spells, Double/valueOf's
+   grammar and NumberFormatException; nil its NullPointerException, anything
+   else its cast refusal to String."
+  (rontolisp::%clojure-double-value-of (rontolisp::%clojure-string-parameter s)))
+
+(defun rontolisp::%clojure-parse-boolean-static (s)
+  "(Boolean/parseBoolean s): whether the string S is true in any case; nil
+   false."
+  (let ((s (rontolisp::%clojure-string-parameter s)))
+    (if (and s (string-equal s "true")) t rontolisp::%clojure-false)))
+
+(defun rontolisp::%clojure-system-getenv (name)
+  "(System/getenv name) where no host is: the variable the WASI environment
+   holds, or nil; nil the oracle's NullPointerException."
+  (let ((name (rontolisp::%clojure-string-parameter name)))
+    (if (null name)
+        (rontolisp::%clojure-null-pointer-exception
+         "Cannot invoke \"String.getBytes(java.nio.charset.Charset)\" because \"str\" is null")
+        (%host-getenv name))))
+
+(defun rontolisp::%clojure-system-get-property (key default)
+  "(System/getProperty key) and (System/getProperty key default) of a computed
+   KEY where no host is: no properties exist there, so DEFAULT (nil for the
+   one-argument call), like a host without the property; nil and the empty
+   string are the oracle's refusals."
+  (let ((key (rontolisp::%clojure-string-parameter key)))
+    (cond ((null key)
+           (rontolisp::%clojure-null-pointer-exception "key can't be null"))
+          ((= (length key) 0)
+           (rontolisp::%clojure-illegal-argument-exception
+            "key can't be empty"))
+          (t default))))
 
 (defun rontolisp::%clojure-character-code-of (x method count)
   "X as a Character static METHOD of COUNT arguments (a string) reads its char

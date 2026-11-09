@@ -2074,8 +2074,10 @@ cases:
     # dflt) its default where the host is not (wasm), where no properties exist
     # -- like a host without the property, which malli.registry's mode and type
     # read at load. Nil is the oracle's NullPointerException on every backend.
-    # Oracle-identical (clj 1.12.6, 2026-10-13); a computed key stays the host
-    # call, which warns and refuses on wasm.
+    # Oracle-identical (clj 1.12.6, 2026-10-13). A computed key answers the same
+    # as it runs, the empty one the oracle's IllegalArgumentException; System/getenv
+    # of one name reads the WASI environment there, and Boolean/parseBoolean is
+    # portable (aero's #prop, #env and #boolean; 2026-11-09, oracle-identical).
     source: |
       (println (pr-str (System/getProperty "no.such.property")))
       (println (pr-str (System/getProperty "no.such.property" "dflt")))
@@ -2083,6 +2085,9 @@ cases:
       (println (or (System/getProperty "malli.registry/type") "default"))
       (println (try (System/getProperty nil) (catch NullPointerException e :npe)))
       (println (ex-message (try (System/getProperty nil) (catch NullPointerException e e))))
+      (println (pr-str (System/getProperty (str "no.such" ".property"))) (pr-str (System/getProperty (str "no.such" ".property") "dflt")) (ex-message (try (System/getProperty (str "")) (catch IllegalArgumentException e e))) (ex-message (try (System/getProperty (first [nil])) (catch NullPointerException e e))))
+      (println (pr-str (System/getenv (str "RONTOLISP_NO_SUCH" "_VARIABLE"))) (try (System/getenv (first [nil])) (catch NullPointerException e :npe)))
+      (println (Boolean/parseBoolean "TrUe") (Boolean/parseBoolean "yes") (Boolean/parseBoolean nil) (try (Boolean/parseBoolean (first [1])) (catch ClassCastException e :cce)))
     expected: |
       nil
       "dflt"
@@ -2090,6 +2095,9 @@ cases:
       default
       :npe
       key can't be null
+      nil "dflt" key can't be empty key can't be null
+      nil :npe
+      true false false :cce
   - name: hash-map-capacity-and-load-build-the-empty-map-where-the-host-is-not
     # (java.util.HashMap. capacity loadFactor) of two number datums is the empty
     # map where the host is not (wasm) -- the empty mutable map the oracle builds
@@ -3616,7 +3624,8 @@ cases:
   - name: instance-of-an-interface-or-a-host-class-tests-the-classes-of-each-kind
     # instance? of any class answers what the oracle's isInstance does for every kind
     # of value: an interface the kind's host class implements (java.util.List of a
-    # vector), a class no value here has (java.io.File) false. Measured against clj
+    # vector), a class no value here has (java.io.File) false. .isInstance of a class
+    # value .getClass or class answers is instance? (core.logic's deftypes, 2026-11-09). Measured against clj
     # 1.12.6, identical. Callable, BigInteger and BigDecimal are default imports there
     # beside java.lang (2026-10-29; before, "unknown name: Callable").
     source: |
@@ -3669,6 +3678,7 @@ cases:
       (iok-row BigInteger)
       (iok-row BigDecimal)
       (println (instance? java.util.Map {1 2}) (instance? clojure.lang.Sorted 1/2) (instance? Comparable 1.5) (instance? java.io.Writer *out*) (instance? clojure.lang.Named :k) (instance? clojure.lang.IDeref (atom 1)) (instance? Integer 1))
+      (println (.isInstance (.getClass (->IokR 1)) (->IokR 2)) (.. (IokT. 1) getClass (isInstance (IokT. 2))) (.isInstance (.getClass (IokT. 1)) (->IokR 1)) (.isInstance (class 1) 2) (.isInstance (class "s") 2) (.isInstance IokT (IokT. 3)))
     expected: |
       java.util.List fffffffftttfffffffffffffff
       java.util.Map ffffffffffftftfffffftfffff
@@ -3712,6 +3722,7 @@ cases:
       BigInteger ffffffffffffffffffffffffff
       BigDecimal ffffffffffffffffffffffffff
       true false true true true true false
+      true true false true false true
   - name: instance-of-a-protocol-interface-tests-the-body-implementations
     # A protocol defines the interface ns.P (munged): a record, deftype or reify naming
     # it in its body is an instance, methods or none, an extend-type or extend-protocol
@@ -3786,13 +3797,17 @@ cases:
   - name: a-vector-import-spec-registers-its-classes
     # (:import [pkg A B]) and (import '[pkg A B]) register the classes like the list
     # spelling, a host class or another namespace's protocol interface (munged package).
-    # Measured against clj 1.12.6, identical.
+    # An imported host class is the class even where another namespace defines a type
+    # of its simple name (rewrite-clj's java.io.PushbackReader beside tools.reader's
+    # deftype; 2026-11-09). Measured against clj 1.12.6, identical.
     source: |
       (ns vi-ns.core)
       (defprotocol ViNsP (vi-ns-m [x]))
       (defrecord ViNsR [] ViNsP (vi-ns-m [_] 2))
+      (deftype PushbackReader [rdr buf buf-len buf-pos])
       (ns vi-use
-        (:import [java.io File] [java.util Map List] (java.util TreeMap) [vi_ns.core ViNsP]))
+        (:import [java.io File PushbackReader] [java.util Map List] (java.util TreeMap) [vi_ns.core ViNsP]))
+      (println (slurp (PushbackReader. (java.io.StringReader. "pb") 2)) (.-buf-len (vi-ns.core/->PushbackReader 1 2 3 4)))
       (println (instance? File "x") (instance? Map {}) (instance? Map [1]) (instance? List [1]) (instance? TreeMap {}))
       (println (instance? ViNsP (vi-ns.core/->ViNsR)) (instance? ViNsP {}))
       (import '[java.util Set] '(java.util Collection))
@@ -3801,6 +3816,7 @@ cases:
       (println (instance? Iterator [1]))
       (ns auto)
     expected: |
+      pb 3
       false true false true false
       true false
       true false true
@@ -15855,7 +15871,8 @@ cases:
     # createWithCheck the set's, PersistentList/create a list of a List's
     # members; RT/nextID counts up; BigInt/fromBigInteger and
     # Numbers/reduceBigInt keep the integer, and an integer answers BigInteger's
-    # negate and bitLength (tools.reader's readers). A clojure.lang class of the
+    # negate and bitLength (tools.reader's readers) and toString of a radix
+    # (rewrite-clj's int->str). A clojure.lang class of the
     # oracle's jar is a dispatch value no value here answers, and instance? of one
     # no value here is answers false. createAsIfByAssoc and the PersistentArrayMap
     # constructor build the map, a map's keyIterator/valIterator step its keys and
@@ -15875,7 +15892,7 @@ cases:
       (println (pr-str (clojure.lang.PersistentList/create [1 2 3])))
       (println (pr-str (let [a (clojure.lang.RT/nextID) b (clojure.lang.RT/nextID)] (< a b))))
       (println (pr-str [(= 5 (clojure.lang.BigInt/fromBigInteger (biginteger 5))) (= 7 (clojure.lang.Numbers/reduceBigInt (bigint 7)))]))
-      (println (pr-str [(.negate (biginteger 5)) (.bitLength (biginteger 255)) (.bitLength (biginteger -256))]))
+      (println (pr-str [(.negate (biginteger 5)) (.bitLength (biginteger 255)) (.bitLength (biginteger -256)) (.toString (biginteger 255) 16) (.toString (biginteger -255) 2) (.toString (biginteger 35) 99)]))
       (defmulti treader-cm class)
       (defmethod treader-cm clojure.lang.PersistentVector$ChunkedSeq [_] :chunked)
       (defmethod treader-cm :default [_] :other)
@@ -15909,7 +15926,7 @@ cases:
       (1 2 3)
       true
       [true true]
-      [-5 8 8]
+      [-5 8 8 "ff" "-11111111" "35"]
       [:other :other]
       {:a 1, :b 2}
       :dup

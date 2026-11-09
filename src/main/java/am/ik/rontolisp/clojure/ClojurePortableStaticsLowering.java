@@ -20,16 +20,17 @@ import org.jspecify.annotations.Nullable;
  * one argument (test.check's {@code mix-gamma}, every split) and
  * {@code Long/numberOfLeadingZeros} of one argument (test.check's {@code shrink-long}),
  * and what tools.reader's read path calls: {@code Integer/parseInt} of one argument (any
- * literal int radix beside it), {@code Double/parseDouble},
- * {@code Character/isWhitespace}, {@code isDigit}, {@code digit} and {@code valueOf}, a
- * {@code BigInteger} construction of a string, a byte array or either with its radix or
- * signum ({@link #construction}), and {@code Math/pow}, {@code Integer/compare} and
- * {@code Long/compare} of two (persistent-sorted-set's and datascript's). The array
- * statics are {@link #arrayCall}'s. Where the host is not (wasm) each lowers to its
- * portable worker in {@code clojure.lisp} -- never a {@code java:static}, which wasm
- * refuses; where the host is each stays the host's call. Each worker is measured against
- * clj 1.12.6, {@code Long/valueOf}'s and {@code Long/parseLong}'s grammar being
- * {@code parse-long}'s and {@code Double/valueOf}'s {@code parse-double}'s.
+ * literal int radix beside it), {@code Double/parseDouble}, {@code Boolean/parseBoolean}
+ * (aero's {@code #boolean}), {@code Character/isWhitespace}, {@code isDigit},
+ * {@code digit} and {@code valueOf}, a {@code BigInteger} construction of a string, a
+ * byte array or either with its radix or signum ({@link #construction}), and
+ * {@code Math/pow}, {@code Integer/compare} and {@code Long/compare} of two
+ * (persistent-sorted-set's and datascript's). The array statics are {@link #arrayCall}'s.
+ * Where the host is not (wasm) each lowers to its portable worker in {@code clojure.lisp}
+ * -- never a {@code java:static}, which wasm refuses; where the host is each stays the
+ * host's call. Each worker is measured against clj 1.12.6, {@code Long/valueOf}'s and
+ * {@code Long/parseLong}'s grammar being {@code parse-long}'s and
+ * {@code Double/valueOf}'s {@code parse-double}'s.
  *
  * <p>
  * One slice of {@link ClojureLowering}.
@@ -50,6 +51,9 @@ final class ClojurePortableStaticsLowering {
 
 	/** {@code (Double/parseDouble s)}. */
 	static final String PARSE_DOUBLE = "RONTOLISP::%CLOJURE-PARSE-DOUBLE-STATIC";
+
+	/** {@code (Boolean/parseBoolean s)}. */
+	static final String PARSE_BOOLEAN = "RONTOLISP::%CLOJURE-PARSE-BOOLEAN-STATIC";
 
 	/** {@code (Character/isWhitespace x)}. */
 	static final String IS_WHITESPACE = "RONTOLISP::%CLOJURE-CHARACTER-IS-WHITESPACE";
@@ -200,6 +204,9 @@ final class ClojurePortableStaticsLowering {
 		}
 		if (cls.equals("java.lang.Double") && member.equals("parseDouble") && args.size() == 1) {
 			return ClojureLowerUtil.list(new LispSymbol(PARSE_DOUBLE), args.get(0));
+		}
+		if (cls.equals("java.lang.Boolean") && member.equals("parseBoolean") && args.size() == 1) {
+			return ClojureLowerUtil.list(new LispSymbol(PARSE_BOOLEAN), args.get(0));
 		}
 		if (cls.equals("java.lang.Character")) {
 			String worker = switch (member + "/" + args.size()) {

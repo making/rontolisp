@@ -26,3 +26,6 @@ The library's own deps the patched copies need:
 
 editscript's `patches.diff` is the WASM-only patch (`System/nanoTime`); the interpreter, the JVM
 class need none.
+
+The verbatim re-probe on all four backends after the items landed (2026-11-09) is in
+`.kb/clojure-frontend.md`, "Library probes" (one row per library).

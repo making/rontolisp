@@ -628,8 +628,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
 - `(System/getProperty k)` of a literal key is nil and `(System/getProperty k dflt)`
   its default on the wasm backends, where no properties exist (like a host without the
   property, which is what a library load reads); nil is the oracle's
-  `NullPointerException`. A computed key stays the host call, which the wasm backends
-  reject.
+  `NullPointerException`. A computed key answers the same as it runs (the empty key the
+  oracle's `IllegalArgumentException`), and `(System/getenv name)` reads the WASI
+  environment there.
 - `Long/MAX_VALUE` (and `MIN_VALUE`, the `Integer`/`Short`/`Byte` pairs) is itself on
   the wasm backends, so a load-time constant reads; any other member stays the host
   field.
@@ -1062,8 +1063,9 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   taken, `::alias/kw` of an unknown alias reads (the oracle refuses it); the runtime
   reader splices `#?@(:clj nil)` as nothing (the oracle refuses it) and takes `:features`
   as a hash set only.
-- Records and deftypes of one simple name in two namespaces share a dispatch tag, which
-  `class`, protocol dispatch and `=` read.
+- A bare class name no import names resolves to the one record or deftype of that name
+  another namespace defines (the oracle needs the import); a name the namespace imports
+  is the imported class.
 - A name referred from two namespaces keeps the later refer (the oracle refuses it), and
   a definition replaces a refer of its name without the oracle's warning.
 - `clojure.spec.alpha` loads from its own jar, but `explain` names a bare predicate that is

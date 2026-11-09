@@ -3593,9 +3593,10 @@ public final class ClojureLowering {
 					return type.getKey();
 				}
 			}
-			if (name.indexOf('.') >= 0) {
-				return null; // a host class
-			}
+			// a host class: dotted, or a name the namespace imports, which no other
+			// namespace's type of the simple name captures (rewrite-clj's
+			// java.io.PushbackReader beside tools.reader's deftype)
+			return null;
 		}
 		String only = null;
 		for (Map.Entry<String, TypeDef> type : this.types.entrySet()) {

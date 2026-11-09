@@ -590,8 +590,9 @@
 - リテラルなキーからの `(System/getProperty k)` は nil、`(System/getProperty k dflt)`
   は既定値を返します（wasm バックエンド。プロパティは存在しないため。プロパティがない
   ホストと同じで、ライブラリのロードが読むものです）。nil はオラクルの
-  `NullPointerException` です。計算されたキーはホストの呼び出しのまま残り、wasm
-  バックエンドはそれを拒否します。
+  `NullPointerException` です。計算されたキーも実行時に同じ値を答え（空のキーは
+  オラクルの `IllegalArgumentException`）、`(System/getenv name)` は WASI の環境変数を
+  読みます。
 - `Long/MAX_VALUE`（および `MIN_VALUE`、`Integer`/`Short`/`Byte` の組）は wasm
   バックエンドではその値自身になるため、ロード時の定数が読めます。それ以外の
   メンバーはホストのフィールドのまま残ります。
@@ -1018,8 +1019,9 @@
   未知のエイリアスの `::alias/kw` も読めます（オラクルは拒否します）。実行時のリーダは
   `#?@(:clj nil)` を何も展開しないものとして読み（オラクルは拒否します）、`:features` は
   ハッシュセットだけを受け取ります。
-- 2 つの名前空間で同じ単純名を持つ record と deftype はディスパッチタグを共有し、
-  `class` の答え、プロトコルディスパッチ、`=` の比較はこのタグに基づきます。
+- import していない裸のクラス名は、別の名前空間が定義したその名前の record・deftype が
+  一つだけならそれに解決されます（oracle は import を要求します）。名前空間が import した
+  名前は import したクラスです。
 - 同じ名前を 2 つの名前空間から refer すると後の refer が有効になります（oracle は拒否
   します）。refer した名前を定義すると、その定義が oracle の警告なしに refer を置き換えます。
 - `clojure.spec.alpha` は自身の jar からロードしますが、`explain` は素の述語が名前付き `fn`

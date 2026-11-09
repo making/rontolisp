@@ -492,6 +492,10 @@ final class ClojureValueMethodLowering {
 		// name, as Class#isArray answers
 		row("isArray", 0, arm(List.of("keyword?"), core("=", core("name", R), LispString.literal("[B"))),
 				new Arm(List.of(CLASS_DESIGNATOR), ctx -> part(ctx, "RONTOLISP::%CLOJURE-DESIGNATOR-ARRAY-P")));
+		// .isInstance of a class keyword or designator (what .getClass answers, a
+		// record's or deftype's class among them) is instance? of it, like the
+		// oracle's Class#isInstance (core.logic's (.. this getClass (isInstance o)))
+		row("isInstance", 1, arm(List.of("keyword?", CLASS_DESIGNATOR), core("instance?", R, A)));
 		// IHashEq: a collection's, a keyword's or a symbol's hasheq is its hash
 		row("hasheq", 0, arm(List.of("coll?", "ident?"), core("hash", R)));
 		row("deref", 0, arm(List.of(ATOM), core("deref", R)));
@@ -675,16 +679,19 @@ final class ClojureValueMethodLowering {
 	 * The call of a {@code java.math.BigInteger} method {@code java.lang.Long} lacks, on
 	 * an integer (tools.reader's number reader): {@code negate} and {@code bitLength},
 	 * the length past the sign bit, and {@code clojure.lang.BigInt}'s
-	 * {@code toBigInteger}, the integer itself (data.generators' {@code bigdec}); and the
-	 * {@code longValue} and {@code intValue} both classes answer, the low bits (the
-	 * number reader's {@code .longValue}, which no host answers where none is); null for
-	 * any other method.
+	 * {@code toBigInteger}, the integer itself (data.generators' {@code bigdec}),
+	 * {@code toString} of a radix; and the {@code longValue} and {@code intValue} both
+	 * classes answer, the low bits (the number reader's {@code .longValue}, which no host
+	 * answers where none is); null for any other method.
 	 */
 	private static @Nullable LispVal bigIntegerMethod(String method, LispSymbol recv, List<LispVal> args) {
 		return switch (method + "/" + args.size()) {
 			case "negate/0" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("-"), recv);
 			case "bitLength/0" -> ClojureLowerUtil.list(ClojureLowerUtil.sym("integer-length"), recv);
 			case "toBigInteger/0" -> recv;
+			// its digits in a radix (rewrite-clj's int->str)
+			case "toString/1" ->
+				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-BIG-INTEGER-TO-STRING"), recv, args.get(0));
 			// the low 64 or 32 bits, as BigInteger's and Long's both answer
 			case "longValue/0" ->
 				ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-WRAP-BITS"), recv, new LispInteger(64));

@@ -2687,20 +2687,26 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void systemGetPropertyOfALiteralKeyIsNilOrItsDefaultWhereTheHostIsNot() {
+	void systemGetPropertyIsNilOrItsDefaultWhereTheHostIsNot() {
 		// (System/getProperty k) of a literal key is nil and (System/getProperty k
 		// dflt) its default where the host is not (wasm) -- no properties exist
 		// there -- never a java:static (which wasm refuses): malli.registry reads
 		// its mode and type this way at load. Nil is the oracle's
-		// NullPointerException; a computed key stays the host call. Where the host
-		// is every spelling keeps java:static.
+		// NullPointerException; a computed key is the worker answering the same as
+		// it runs, and so is System/getenv's. Where the host is every spelling keeps
+		// java:static.
 		assertThat(wasmLowered("(System/getProperty \"a\")")).doesNotContain("JAVA:");
 		assertThat(wasmLowered("(println (System/getProperty \"a\" \"d\"))")).contains("\"d\"")
 			.doesNotContain("JAVA:STATIC");
 		assertThat(wasmLowered("(System/getProperty nil)")).contains("RONTOLISP::%CLOJURE-NULL-POINTER-EXCEPTION")
 			.contains("key can't be null")
 			.doesNotContain("JAVA:");
-		assertThat(wasmLowered("(let [k \"a\"] (System/getProperty k))")).contains("JAVA:STATIC");
+		assertThat(wasmLowered("(let [k \"a\"] (System/getProperty k))"))
+			.contains("RONTOLISP::%CLOJURE-SYSTEM-GET-PROPERTY")
+			.doesNotContain("JAVA:");
+		assertThat(wasmLowered("(let [k \"a\"] (System/getenv k))")).contains("RONTOLISP::%CLOJURE-SYSTEM-GETENV")
+			.doesNotContain("JAVA:");
+		assertThat(lowered("(let [k \"a\"] (System/getenv k))")).contains("JAVA:STATIC");
 		assertThat(lowered("(System/getProperty \"a\")")).contains("JAVA:STATIC");
 		assertThat(lowered("(System/getProperty \"a\" \"d\")")).contains("JAVA:STATIC");
 	}
