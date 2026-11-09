@@ -126,7 +126,8 @@ oracle と同じく無視します。oracle の spec が拒否する値、どの
   `clojure.core.specs.alpha`）を初めて require した時点で取得するため、spec は自身のソースから
   ロードします。`ring/ring-core` と `ring/ring-codec` は、同梱のバージョン
   （ring-core 1.15.5、ring-codec 1.3.0）以下の Maven バージョンなら組み込みの Ring 名前空間です。
-  それより新しいバージョンは、Ring 名前空間をロードする時点で拒否します。
+  同じく 0.2.2 以下の `riddley/riddley` は組み込みの [riddley](reference/riddley.md) です。
+  それより新しいバージョンは、そのライブラリの名前空間をロードする時点で拒否します。
 - Clojure 本体に属さない `clojure.*` 名前空間（`org.clojure` の contrib ライブラリなど）は、
   ほかの名前空間と同じくソースパスからロードします。
 - Maven 座標（`:mvn/version`）は `:mvn/repos`（Maven Central、次に Clojars、次にマップが加える
@@ -245,7 +246,9 @@ destructuring、複数アリティは `defn` と同様。docstring と attr map 
 本体の `&form` は呼び出しそのもの、`&env` は呼び出し位置のローカルを各シンボルからそれ自身へ
 写すマップです（ローカルがなければ oracle と同じく nil。oracle の値はコンパイラの
 `LocalBinding`）。実行時の `macroexpand` は `&form` を束縛し、`&env` は nil のままです。
-本体が見えるのは核の built-in、`clojure.lisp`
+本体が呼ぶ `macroexpand-1`、`macroexpand`、`clojure.walk/macroexpand-all` は、oracle と同じく
+これらのローカルを、展開するマクロの `&env` として渡し、先頭がそのどれかを指す呼び出しは
+書かれたまま残します。本体が見えるのは核の built-in、`clojure.lisp`
 ライブラリ、そして呼び出し位置より上にあるプログラムのトップレベル定義（自身のファイル、
 require した名前空間、REPL の前の入力のもの）であり、oracle のフォームごとのロードと
 同じです。`def` の値は、本体がそれを読むときにだけ展開用に作られます。本体は

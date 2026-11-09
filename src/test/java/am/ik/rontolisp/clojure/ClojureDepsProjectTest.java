@@ -169,18 +169,30 @@ class ClojureDepsProjectTest {
 	}
 
 	@Test
-	void theBuiltInRingNamespacesStandInForAnOlderRingCoreOnly() throws Exception {
-		String program = "(require '[ring.util.response :as r]) (println (:status (r/response \"hi\")))\n";
-		for (String version : List.of("1.15.5", "1.9.0")) {
-			write("ring-" + version + "/deps.edn", "{:deps {ring/ring-core {:mvn/version \"" + version + "\"}}}\n");
-			Path main = write("ring-" + version + "/main.clj", program);
-			assertThat(interpret(main, SourceStandards.DEFAULT)).isEqualTo("200\n");
+	void theBuiltInRingAndRiddleyNamespacesStandInForAnOlderVersionOnly() throws Exception {
+		standsInForAnOlderVersionOnly("ring/ring-core", List.of("1.15.5", "1.9.0"), "ring.util.response",
+				"(require '[ring.util.response :as r]) (println (:status (r/response \"hi\")))\n", "200\n",
+				"ring-core 1.15.5");
+		// specter's pin, which nothing fetches: riddley's own jar is the compiler's
+		// internals
+		standsInForAnOlderVersionOnly("riddley/riddley", List.of("0.2.2", "0.1.12"), "riddley.walk",
+				"(require '[riddley.walk :as w]) (println (w/macroexpand-all '(when a b)))\n", "(if a (do b))\n",
+				"riddley 0.2.2");
+	}
+
+	private void standsInForAnOlderVersionOnly(String lib, List<String> versions, String ns, String program,
+			String output, String shipped) throws Exception {
+		String dir = lib.replace('/', '-');
+		for (String version : versions) {
+			write(dir + "-" + version + "/deps.edn", "{:deps {" + lib + " {:mvn/version \"" + version + "\"}}}\n");
+			Path main = write(dir + "-" + version + "/main.clj", program);
+			assertThat(interpret(main, SourceStandards.DEFAULT)).isEqualTo(output);
 		}
-		write("ring-newer/deps.edn", "{:deps {ring/ring-core {:mvn/version \"99.0\"}}}\n");
-		Path newer = write("ring-newer/main.clj", program);
+		write(dir + "-newer/deps.edn", "{:deps {" + lib + " {:mvn/version \"99.0\"}}}\n");
+		Path newer = write(dir + "-newer/main.clj", program);
 		assertThatThrownBy(() -> read(newer, SourceStandards.DEFAULT)).isInstanceOf(LispReadException.class)
-			.hasMessage(newer + ":1:1: ring.util.response: the deps.edn selects ring/ring-core 99.0, newer than the "
-					+ "built-in ring-core 1.15.5");
+			.hasMessage(newer + ":1:1: " + ns + ": the deps.edn selects " + lib + " 99.0, newer than the built-in "
+					+ shipped);
 	}
 
 	@Test

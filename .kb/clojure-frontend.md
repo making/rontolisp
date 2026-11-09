@@ -1660,9 +1660,11 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   libraries read when first asked ("clojure.spec.alpha (g90)"; until 2026-10-29 both were
   the front end too, and `clojure.spec.alpha` `unknown namespace`); `ring/ring-core` up to 1.15.5 and
   `ring/ring-codec` up to 1.3.0 are the shipped Ring files, standing in for an older version
-  as newest-wins assumes. A newer one, or the library as a local or git coordinate that lacks
-  the namespace, is refused when the built-in file would load (`refuseBuiltinStandIn`); with
-  no coordinate at all the files load as before (the oracle would fail).
+  as newest-wins assumes, and `riddley/riddley` up to 0.2.2 the shipped riddley ("riddley
+  (j27)": specter's 0.1.12 fetches nothing). A newer one, or the library as a local or git
+  coordinate that lacks the namespace, is refused when the built-in file would load
+  (`refuseBuiltinStandIn`); with no coordinate at all the files load as before (the oracle
+  would fail).
 - **`clojure.*`**: a contrib namespace (outside `ClojureBuiltinNamespaces.LANGUAGE`) loads
   from a dependency's roots like any library, and a miss is `Could not locate` with the
   not-searched note; clojure.jar's own never comes from a root ("Namespaces and project
@@ -1751,7 +1753,8 @@ copied under a `:local/root` (with `{:paths ["."]}`) and patched.
 | extend-clj 0.1.0 (tonsky) | = | = | = | = | no transitive deps; j26 (2026-11-09): `deftype-atom` spells `deftype*` over `IMeta`, `IReference`, `IDeref`, `IRef`, `IAtom`, `IAtom2`, its `IAtom3` protocol and `IKeywordLookup` ("Macros", the type special forms; "Host interfaces", the reference interfaces); the 5-line probe -- `deref`, `swap!` of one to three arguments, `reset!`, `compare-and-set!` both ways, `swap-vals!`, `reset-vals!`, a watch's calls, `remove-watch`, a validator refusing, `reset-meta!`/`alter-meta!` -- prints the oracle's lines on all four backends. Its swap is a `compare-and-set!` of an unchanged `assoc`, which looped forever before an `assoc` changing nothing answered its map ("The copy a map verb takes") |
 | editscript 0.8.0 | = | = | stop | stop | 2026-11-08 round: the 7-line probe (map/vector/string diffs, `patch`, `edit-distance`, `:quick`) is the oracle's on the interpreter and the JVM; wasm traps on `System/nanoTime`, then `java.util.IdentityHashMap` (`.todo/j28`, which also records the host-side identity loss of a Clojure key in an `IdentityHashMap`) |
 | data.csv 1.1.1 | 5/6 | | | | 2026-11-08 round: `read-csv`/`write-csv` over strings and a `StringWriter` print the oracle's lines; `io/reader` of a `java.io.StringReader` refuses (`.todo/j16`). Other backends not run |
-| aero 1.1.6, core.match 1.1.1, core.logic 1.1.1, schema 1.4.2, specter 1.1.6, rewrite-clj 1.3.59, datascript 1.8.1 | stop | | | | 2026-11-08 round, interpreter only: each stops at load; past hand patches all but datascript print the oracle's lines (core.logic but its pinned `()`-is-`nil` line). The stops, library by library, and the items they became: `.todo/j07` (probes, patches and outputs in `.todo/artefacts/j07-clojure-library-probe-round-2026-11-08/`). j23 (2026-11-08, `.todo/j23`): specter's `extend-protocolpath*` and schema's `extend-primitive` hunks are no longer needed -- with the other hunks applied, specter's probe is the oracle's line for line and schema's loads and prints the same but the pinned set-order line (interpreter; the other backends unprobed). j09 (2026-11-09): core.match's `void` hunk is no longer needed either -- with the other hunks applied and the original `let`-wrapped `regroup-keywords` restored, the probe prints its 11 oracle lines on the interpreter, the JVM class and wasm ("Macros", the wrapper bullet). j12 (2026-11-09): core.logic's `defnm`, specter's `defdynamicnav` `declare` hunks and aero's `usetime` unwrap are no longer needed -- with the other hunks applied, aero and specter print the oracle's lines and core.logic the same but its pinned line (interpreter). j18 (2026-11-09): rewrite-clj needs no hunk at all -- the verbatim 1.3.59 jar prints the probe's 9 oracle lines on all four backends (the wasm legs warn of `JAVA:STATIC`/`JAVA:NEW` off the probe's path; its zipper walks are `(->> (iterate f loc) (take-while identity) ...)`, which needed `iterate` to compute a member only when read, a lazy `take-while`, and `next` of a lazy seq ending past its head to answer nil: "Laziness"). j21 (2026-11-09): specter's `path` hunk (the inline cache) is no longer needed -- with the other hunks applied, the probe prints the oracle's ten lines on the interpreter and the JVM class ("Macros", a var a macro body interns). j26 (2026-11-09): datascript 1.8.1 loads verbatim -- `defrecord-updatable` over the oracle's `defrecord` expansion and `deftype*`, `defcomp`'s `IFn$OOL`, extend-clj's `deftype-atom`, `transact`'s `IBlockingDeref` reify, `RT/assoc` and `Util/hashCombine` -- and its first `create-conn` stops at `Cannot link class me.tonsky.persistent_sorted_set.PersistentSortedSet: missing class clojure.lang.IEditableCollection` (interpreter; the JVM class with the jar on its run class path the same; wasm P1 `The function JAVA:NEW is undefined`): the sorted set its indexes are is Java over `clojure.lang` ("Classes compiled against `clojure.lang`", persistent-sorted-set: decided to read its `.cljs` port, `.todo/j37`). j24 (2026-11-09): schema's `-instrument-protocol-method` `(comment ...)` hunk is no longer needed -- with the other hunks applied the probe prints as before, and an `s/defprotocol` method with schemas validates under `s/with-fn-validation` like the oracle (interpreter, JVM class; wasm P1 stops expanding `s/defprotocol` at `No matching field found: get`, as it did before j24): a field-form `set!` decides when it runs and a protocol method whose var a program alters is redefinable ("Java interop", "Vars and metadata") |
+| aero 1.1.6, core.match 1.1.1, core.logic 1.1.1, schema 1.4.2, rewrite-clj 1.3.59, datascript 1.8.1 | stop | | | | 2026-11-08 round, interpreter only (specter 1.1.6 too, verbatim since j27: its own row below): each stops at load; past hand patches all but datascript print the oracle's lines (core.logic but its pinned `()`-is-`nil` line). The stops, library by library, and the items they became: `.todo/j07` (probes, patches and outputs in `.todo/artefacts/j07-clojure-library-probe-round-2026-11-08/`). j23 (2026-11-08, `.todo/j23`): specter's `extend-protocolpath*` and schema's `extend-primitive` hunks are no longer needed -- with the other hunks applied, specter's probe is the oracle's line for line and schema's loads and prints the same but the pinned set-order line (interpreter; the other backends unprobed). j09 (2026-11-09): core.match's `void` hunk is no longer needed either -- with the other hunks applied and the original `let`-wrapped `regroup-keywords` restored, the probe prints its 11 oracle lines on the interpreter, the JVM class and wasm ("Macros", the wrapper bullet). j12 (2026-11-09): core.logic's `defnm`, specter's `defdynamicnav` `declare` hunks and aero's `usetime` unwrap are no longer needed -- with the other hunks applied, aero and specter print the oracle's lines and core.logic the same but its pinned line (interpreter). j18 (2026-11-09): rewrite-clj needs no hunk at all -- the verbatim 1.3.59 jar prints the probe's 9 oracle lines on all four backends (the wasm legs warn of `JAVA:STATIC`/`JAVA:NEW` off the probe's path; its zipper walks are `(->> (iterate f loc) (take-while identity) ...)`, which needed `iterate` to compute a member only when read, a lazy `take-while`, and `next` of a lazy seq ending past its head to answer nil: "Laziness"). j21 (2026-11-09): specter's `path` hunk (the inline cache) is no longer needed -- with the other hunks applied, the probe prints the oracle's ten lines on the interpreter and the JVM class ("Macros", a var a macro body interns). j26 (2026-11-09): datascript 1.8.1 loads verbatim -- `defrecord-updatable` over the oracle's `defrecord` expansion and `deftype*`, `defcomp`'s `IFn$OOL`, extend-clj's `deftype-atom`, `transact`'s `IBlockingDeref` reify, `RT/assoc` and `Util/hashCombine` -- and its first `create-conn` stops at `Cannot link class me.tonsky.persistent_sorted_set.PersistentSortedSet: missing class clojure.lang.IEditableCollection` (interpreter; the JVM class with the jar on its run class path the same; wasm P1 `The function JAVA:NEW is undefined`): the sorted set its indexes are is Java over `clojure.lang` ("Classes compiled against `clojure.lang`", persistent-sorted-set: decided to read its `.cljs` port, `.todo/j37`). j24 (2026-11-09): schema's `-instrument-protocol-method` `(comment ...)` hunk is no longer needed -- with the other hunks applied the probe prints as before, and an `s/defprotocol` method with schemas validates under `s/with-fn-validation` like the oracle (interpreter, JVM class; wasm P1 stops expanding `s/defprotocol` at `No matching field found: get`, as it did before j24): a field-form `set!` decides when it runs and a protocol method whose var a program alters is redefinable ("Java interop", "Vars and metadata") |
+| specter 1.1.6 | = | = | stop | stop | j27 (2026-11-09): the verbatim jar prints the 10-line probe's oracle lines on the interpreter and the JVM class (the jar on its run class path; a host class with or without riddley) -- riddley 0.1.12, its pinned dependency, is the built-in one ("riddley (j27)"), the last of j07's hunks. P1 and the component stop compiling at `specter.cljc:1020:1: in macro com.rpl.specter/path: No matching field found: get for class clojure.lang.Symbol`: `path`'s body reads its inline cache through `(.get ^MutableCell c)` in a helper lowered for the target, whose instance call keeps no host arm there ("Host arms where the host is not"), the same with `clojure.walk` in riddley's place (j24's schema stop is this one); and the cache a run reads is a host `MutableCell` |
 f92 shares every site-independent core value program-wide through `%clojure-shared-value`, so the probe is green again on all four. f98: the 8-line pattern-schema probe (`form`/`type` of `(m/schema #"a")`, `validate` of a hit, a miss and a non-string, `explain`, the `:malli.core/invalid-schema` refusals of `(m/schema 42)` and `(m/schema "s")`) is the oracle's line for line on all four since 2026-10-13 (`type` of a pattern hits the `class-schemas` entry: the host class where a host is, the designator where none is). That 12-line wasm parity was overstated (2026-10-13, f99): the probe's decode lines print bare (`println`), under which an undecoded `"1"` reads as `1` -- `(Long/parseLong x)` refused at call time there, so `-string->long`'s catch kept the input (`pr-str` shows the gap). One-argument `Long/parseLong` now lowers to the portable reader where the host is not (`%clojure-parse-long-static`, "Portable number statics"), and the 12-line probe is the oracle's line for line under `pr-str` on all four backends |
 
 `=` is the oracle's output line for line (12-31 lines per probe; tools.cli's `:parse-fn` is
@@ -1843,7 +1846,8 @@ Probe `{:deps {org.clojure/core.async {:mvn/version "1.6.681"}}}`,
   function, a core macro's answering the oracle's expansion into the special forms, which
   the lowering takes (`let*`, `loop*`, `letfn*`, `case*`; "Macros", the core macros); (6)
   `go` reads each `&env` value as a `Compiler$LocalBinding` (`.hasJavaClass`), each local
-  mapping to itself here; (7) at macro time `all-ns`, `find-ns` and `the-ns` answer the
+  mapping to itself here -- a value riddley's `register-local`/`register-arg` make too, so a
+  `LocalBinding` face replaces both ("riddley (j27)", the `&env` contract); (7) at macro time `all-ns`, `find-ns` and `the-ns` answer the
   namespaces created above their call site (`%clojure-all-ns`'s KNOWN), which predates
   `clojure.core.async` itself; (8) the emitted machine calls
   `clojure.lang.Var/getThreadBindingFrame` and `resetThreadBindingFrame`, builds an
@@ -1931,6 +1935,73 @@ regex ops (`cat`, `alt`, `*`, `+`, `?`), `int-in`/`double-in`/`conformer`/`nonco
   startup or with every session, and requiring spec there would fetch and lower it for every
   program that loads them.
 
+### riddley (j27)
+
+**`riddley.walk` and `riddley.compiler` are built in, and `riddley/riddley` up to 0.2.2 is a
+built-in coordinate** (decided 2026-11-09; `ClojureBuiltinLibs`, `ClojureBuiltinNamespaces`,
+`lib/riddley/*.clj`). riddley's jar drives the Clojure compiler's internals from outside --
+`(proxy [Compiler$ObjMethod] [(Compiler$ObjExpr. nil) nil])`, `Compiler/LOCAL_ENV`,
+`CLEAR_SITES` and `METHOD` bound with `with-bindings` and `.set`, and `riddley.Util`, a Java
+class building `Compiler$LocalBinding`s over `Compiler.analyze` -- so the verbatim jar stopped at
+`riddley/compiler.clj:12:3: proxy constructor arguments are not supported yet` (specter's
+`impl.cljc:17-19`, the `:clj` branch).
+- Options, weighed: (a) make the jar's namespaces work -- even with `Compiler/LOCAL_ENV` & co.
+  as dynamic vars and a constructible stub for the proxy, `register-arg` calls
+  `riddley.Util/localArgument` outside a `try`, a class that cannot link here (the census row
+  of "Classes compiled against `clojure.lang`"), so every `fn*` with parameters refuses: (a)
+  is the rejected `clojure.lang` bridge or a special case of riddley's own class. (b) ship the
+  two namespaces over the lowering's own locals: chosen. (c) claim nothing: specter and
+  potemkin stay red. riddley 0.2.2's babashka branch (`if-bb`: a plain `*locals*` var and a
+  two-argument `macroexpand-1`) is no route: specter pins 0.1.12, which has none, and this front
+  end claims no `:bb`.
+- Census (2026-11-09, the `.clj`/`.cljc` of the 1,281 jars in `~/.m2`): riddley is required by
+  specter 1.1.4/1.1.6 (`impl`: `macroexpand-all`, from `path`), potemkin 0.4.7
+  (`potemkin.types`: `macroexpand`, `macroexpand-all`, `walk-exprs`; `potemkin.macros`'
+  `equivalent?`: `macroexpand-all`; `potemkin.template`: `walk-exprs`, `locals`) and manifold
+  0.4.3 (`let-flow`: `walk-exprs`, `macroexpand-all`, `locals` with marker metadata on its
+  keys); `potemkin.walk` is potemkin's own walk. Through potemkin (`(require 'potemkin)` loads
+  `types` and `macros`): clj-http 3.13.x and manifold. No other jar reads `Compiler/LOCAL_ENV`;
+  `&env` values are read as `Compiler$LocalBinding`s by core.async's `go` and flatland/useful's
+  `assoc-record` (`.hasJavaClass`, `.getJavaClass`), and core.match reads
+  `Compiler/LOOP_LOCALS`' `.sym`.
+- The files are riddley 0.2.2's documented behaviour (riddley is MIT; nothing copied) and
+  stand in for an older version, as the Ring files do (a newer one is refused when a riddley
+  namespace loads). `riddley.compiler`'s locals are the lowering's locals in reach
+  (`%clojure-local-env`, "Macros") through the kernel namespace `rontolisp.internal.locals`
+  (`env`, `with-env`, `set-env!`): `with-base-env` binds `{}` where none is,
+  `with-lexical-scoping` a scope, `register-local`/`register-arg` replace the map in it.
+  `riddley.walk/macroexpand` loops over `macroexpand-1`, which hands that map on as `&env`;
+  `walk-exprs` walks the special forms riddley does (`do`, `def`, `fn*`, `let*`, `loop*`,
+  `letfn*` with its names in reach of each other, `case*`, `try`, `catch` and `finally` only
+  in a `try`, `reify*`, `deftype*`, `.`), marking each walked one's head for `special-form?`.
+- Deviations: no inline expansion -- no var carries `:inline` here (`definline` is a documented
+  no-op), so `(+ n 1)` stays a call where riddley answers `(. clojure.lang.Numbers (add n
+  1))`; a local's value is its symbol, `&env`'s contract (riddley's are `LocalBinding`s or
+  `::analyze-failure`); a key loses its metadata (the pinned symbol-key deviation, "Vars and
+  metadata"), which manifold's `let-flow` reads; `walk-exprs`' `(eval x)` of a `(var x)` form
+  its predicate picks makes a program reaching it a JVM host ("Lowering at run time"), and
+  is refused on wasm when it runs.
+- **The `&env` contract, decided with g87**: `&env`, `macroexpand-1`'s environment and
+  `riddley.compiler/locals` are one value, `%clojure-local-env`, keyed by each local's symbol
+  and valued by what this front end holds for a local -- the symbol, written by
+  `ClojureMacroLowering.envValue` and by `register-local`/`register-arg`. A
+  `Compiler$LocalBinding` face (`.sym`, `.tag`, `.hasJavaClass`, `.getJavaClass`; `.todo/g87`
+  step 3) replaces the value at both places together; no consumer measured here reads it
+  (specter, potemkin and manifold read the keys).
+- Measured 2026-11-09: specter's row above. A 25-line riddley probe (`walk-exprs` over every
+  special form, nested `&env`, `case*`'s sorted map, metadata, `tag-of`, `locals`) is identical
+  to clj 1.12.6 + riddley 0.2.2 on all four backends. Past riddley (interpreter): potemkin
+  0.4.7's `deftype+` expands, so clj-http 3.13.1 stops at `headers.clj:105:1: Unable to resolve
+  classname: potemkin.collections.PotemkinMap`; potemkin 0.4.9 stops at its self-import,
+  `potemkin.clj:12:4: unknown name: potemkin.namespaces`; manifold 0.5.0 stops before riddley,
+  at tools.logging's `logp` expansion holding `*ns*` (`manifold/debug.clj:22:3: an unreadable
+  symbol: :C%NS-OBJECT`).
+- Pins: clojure-spec `riddley-walks-code-with-the-locals-in-reach` (host; four backends,
+  oracle-identical), `macro-env-and-form-ns-resolve-and-a-require-that-runs-later` (the
+  nested-expansion lines),
+  `ClojureDepsProjectTest#theBuiltInRingAndRiddleyNamespacesStandInForAnOlderVersionOnly`,
+  `NativeImageResourceConfigTest` (the `lib/riddley` directory).
+
 ## Classes compiled against `clojure.lang`
 
 **A class that cannot link is a catchable refusal naming the missing class, on the
@@ -1978,7 +2049,7 @@ uncaught `NoClassDefFoundError: clojure/lang/IPersistentMap` from
   | nrepl 1.8.0 | 3 | Java threads over `IFn` |
   | potemkin 0.4.9 | 3 | `PersistentMapProxy` extends `APersistentMap` |
   | cider-nrepl 0.63.1 | 1 | `DebugSupport` over `IFn`/`IPersistentMap` |
-  | riddley 0.2.2 | 1 | `Util` over `Compiler$LocalBinding`/`Symbol` |
+  | riddley 0.2.2 | 1 | `Util` over `Compiler$LocalBinding`/`Symbol` (never fetched since j27: "riddley (j27)") |
   | sci.impl.reflector 0.0.5 | 1 field | `FISupport` static sets |
 
 - Decision: no `clojure.lang` bridge and no new reader branch. A bridge would
@@ -4190,9 +4261,18 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   else a map of each local's symbol to itself (the oracle's values are `LocalBinding`s;
   generated destructuring locals are not in it). A run-time expansion calls the macro's
   root (`C%MACRO-ROOT-OF`), which binds `&form` to the call and `&env` to the environment
-  argument -- nil from `macroexpand`, the oracle's -- whatever the body reads (until
-  2026-10-29 only where some body read `&form`, `readsMacroForm`). As parameter names both
-  are refused. Pins: clojure-spec
+  argument whatever the body reads (until 2026-10-29 only where some body read `&form`,
+  `readsMacroForm`). As parameter names both are refused.
+- **The locals in reach, the oracle's `Compiler/LOCAL_ENV`** (j27, 2026-11-09): every
+  lower-time expansion binds `%clojure-local-env` (`ClojureMacroLowering.LOCAL_ENV`) to the
+  call's `&env` value whatever the body reads, and `C%MACROEXPAND-1` passes it as the
+  expanded macro's environment -- nil where the program runs, the oracle's -- and answers a
+  form whose head is a key of it unexpanded (`%clojure-local-head-p`, the oracle's
+  `isMacro`). So a body's `macroexpand-1`, `macroexpand` and `clojure.walk/macroexpand-all`
+  expand among the call's locals: `(let [p 1 q 2] (expand-1-of (locals)))` prints the
+  oracle's `("p" "q")` (`nil` before), and riddley's walk grows the map as it enters binding
+  forms ("riddley (j27)"). The cost is the `&env` map built for every program-macro call
+  with a local in reach, where only `envMacros` built it. Pins: clojure-spec
   `macro-env-and-form-ns-resolve-and-a-require-that-runs-later` (four backends,
   oracle-identical), `ClojureLoweringTest#aMacroBodyReadsItsCallAndTheCallsLocalsThroughFormAndEnv`.
 - **The run-time table of a whole program holds an index, not the expander**:
@@ -4517,7 +4597,8 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
     lists, per namespace, the core macros a definition, refer, `:exclude` or `:rename` hides,
     as nil, and a rename's spelling and an alias of `clojure.core`, as the core name), then
     the program's table (`C%MACRO-ROOT-OF`), then `C%CORE-MACRO` for a bare or
-    `clojure.core/` name. `C%MACROEXPAND-1` is `(apply f form nil args)`.
+    `clojure.core/` name. `C%MACROEXPAND-1` is `(apply f form %clojure-local-env args)`, the
+    form itself for a head naming a local in reach (the locals-in-reach bullet above).
   - Loading (`ClojureCoreMacros.need`): code the program runs -- a `macroexpand` call or
     value, a core macro's var root or value, `destructure` -- loads the namespace; a whole
     program's macro body only notes it (`coreMacrosInBodies`): the macro-time evaluator holds

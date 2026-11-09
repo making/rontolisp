@@ -49,3 +49,4 @@ has them.
 | [IO](reference/io.md) | `spit`/`slurp`/`line-seq`/`file-seq`, `clojure.java.io/reader` and `format` |
 | [Tests (clojure.test)](reference/test.md) | `deftest`/`is`/`are`/`testing` and the `run-tests` summary runner |
 | [Macros](reference/macros.md) | `defmacro`, syntax-quote, `gensym`, `macroexpand-1`, `macroexpand` |
+| [Code walking (riddley)](reference/riddley.md) | The built-in `riddley.walk` and `riddley.compiler`: `macroexpand-all` and `walk-exprs` with the locals in reach at each macro call |

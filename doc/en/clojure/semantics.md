@@ -127,7 +127,8 @@ no known type and a dependency the oracle cannot resolve are errors in its words
   `clojure.spec.gen.alpha`, `clojure.spec.test.alpha`, `clojure.core.specs.alpha`), so
   spec loads from its own source. `ring/ring-core` and `ring/ring-codec` at a Maven version
   up to the one shipped (ring-core 1.15.5, ring-codec 1.3.0) are the built-in Ring
-  namespaces; a newer one is refused when a Ring namespace loads.
+  namespaces, and `riddley/riddley` up to 0.2.2 the built-in
+  [riddley](reference/riddley.md); a newer one is refused when one of its namespaces loads.
 - A `clojure.*` namespace that is not part of Clojure itself (an `org.clojure` contrib
   library) loads from the source path like any other.
 - A Maven coordinate (`:mvn/version`) is fetched from the `:mvn/repos` (Maven Central, then
@@ -246,7 +247,10 @@ call, runs expanded code. Parameters bind unevaluated forms (`&` rest, destructu
 and several arities like `defn`; a docstring and an attr map are skipped). A body's
 `&form` is the call and `&env` a map of the call site's locals, each symbol to itself (nil
 where the call sees none, like the oracle's; its values are the compiler's
-`LocalBinding`s); a run-time `macroexpand` binds `&form` and leaves `&env` nil. A body sees the core builtins, the `clojure.lisp`
+`LocalBinding`s); a run-time `macroexpand` binds `&form` and leaves `&env` nil. A
+`macroexpand-1`, `macroexpand` or `clojure.walk/macroexpand-all` the body calls hands those
+locals on as the `&env` of the macros it expands, and leaves a call whose head names one of
+them as written, like the oracle's. A body sees the core builtins, the `clojure.lisp`
 library and the program's top-level definitions above the call site -- its own file's,
 a required namespace's, an earlier REPL input's -- like the oracle's form-by-form load;
 a `def`'s value is built for an expansion only when the body reads it. A body may

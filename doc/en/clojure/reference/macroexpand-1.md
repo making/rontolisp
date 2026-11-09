@@ -20,6 +20,11 @@ call goes through the macro's function, which its var holds and takes the call, 
 environment and the call's arguments, like the oracle's: `(#'when '(when a b) nil 'a 'b)`
 answers `(if a (do b))`.
 
+The environment is the locals in reach, as in the oracle: none where the program runs, so
+the macro's `&env` is `nil`, and inside a macro body the call's locals, so a macro the body
+expands sees them as its `&env` ([riddley](riddley.md) adds the locals of the code it walks).
+A form whose head names one of those locals answers itself.
+
 ```clojure
 (defmacro doc-unless2 [c t] (list 'if c nil t))
 (println (macroexpand-1 '(doc-unless2 true 1))) ; (if true nil 1)

@@ -18243,6 +18243,33 @@
 
 (defvar rontolisp::%clojure-macro-form nil)
 
+;; The locals in reach where a macro expands while the program lowers, the
+;; oracle's Compiler/LOCAL_ENV: the expansion binds it to the call's &env,
+;; macroexpand-1 hands it to the macro it expands as that macro's &env and leaves
+;; a call whose head it binds as written, and riddley.compiler's walk grows it as
+;; it enters a binding form (the rontolisp.internal.locals kernels below). Nil
+;; where the program runs, so a run-time macroexpand's &env stays nil.
+(defvar rontolisp::%clojure-local-env nil)
+
+(defun rontolisp::%clojure-local-head-p (op)
+  "Whether OP, the head of a form macroexpand-1 is handed, is a local in reach,
+   which a macro of its name does not expand: the oracle's isMacro."
+  (let ((miss (list nil)))
+    (and (hash-table-p rontolisp::%clojure-local-env) (symbolp op)
+         (not (eq (gethash op rontolisp::%clojure-local-env miss) miss)))))
+
+(defun rontolisp::%clojure-locals-env ()
+  "riddley.compiler/locals: the locals in reach."
+  rontolisp::%clojure-local-env)
+
+(defun rontolisp::%clojure-locals-with-env (env thunk)
+  "THUNK's value, run with ENV as the locals in reach."
+  (let ((rontolisp::%clojure-local-env env)) (funcall thunk)))
+
+(defun rontolisp::%clojure-locals-set-env (env)
+  "Makes ENV the locals in reach until the innermost binding of them ends."
+  (setq rontolisp::%clojure-local-env env))
+
 (defun rontolisp::%clojure-eval (form)
   "eval at run time: the lowering's (%clojure-lower-at-run-time)."
   (rontolisp::%clojure-lower-at-run-time "eval" (list form)

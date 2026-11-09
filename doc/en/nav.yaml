@@ -337,3 +337,5 @@ sections:
             title: "Tests (clojure.test)"
           - file: clojure/reference/macros.md
             title: "Macros"
+          - file: clojure/reference/riddley.md
+            title: "Code walking (riddley)"

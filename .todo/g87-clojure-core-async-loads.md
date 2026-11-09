@@ -28,7 +28,11 @@ carrying metadata, the `Var` members. Plan, in order:
    lowering's `%clojure-lower-at-run-time` installed there), cached per namespace state.
 3. `clojure.lang.Compiler/LOADER` (a dynamic var), `RT/baseLoader`, `RT/makeClassLoader` and
    `RT/classForName` as `clojure.lang` statics (`ClojureLangClasses`); `&env` values answering
-   `Compiler$LocalBinding`'s `.hasJavaClass`/`.getJavaClass`.
+   `Compiler$LocalBinding`'s `.hasJavaClass`/`.getJavaClass`. The contract is decided with
+   riddley (`.kb/clojure-frontend.md`, "riddley (j27)"): `&env`, `macroexpand-1`'s environment
+   and `riddley.compiler/locals` are one map, whose value for a local is written at
+   `ClojureMacroLowering.envValue` and by riddley's `register-local`/`register-arg`; the face
+   replaces both.
 4. What the go machine emits: `Var/getThreadBindingFrame`/`resetThreadBindingFrame` (the
    `bound-fn*` frame), `AtomicReferenceArray`, the `.` special form over the analyzer's static
    and instance calls, the `Class` objects it embeds in `.`/`new`/`instance?`/catch forms.

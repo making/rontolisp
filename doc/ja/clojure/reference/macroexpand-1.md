@@ -19,6 +19,11 @@ core マクロは oracle と同じフォームに展開します。`let` は分�
 呼び出し・環境・呼び出しの引数をとります。`(#'when '(when a b) nil 'a 'b)` は
 `(if a (do b))` を返します。
 
+環境は、oracle と同じく見えているローカルです。プログラムの実行中にはローカルがないので、
+マクロの `&env` は `nil` です。マクロ本体の中では呼び出し位置のローカルなので、本体が展開する
+マクロはそれを `&env` として受け取ります（[riddley](riddley.md) は、走査するコードのローカルを
+これに加えます）。先頭がそのどれかのローカルを指すフォームは、そのまま返ります。
+
 ```clojure
 (defmacro doc-unless2 [c t] (list 'if c nil t))
 (println (macroexpand-1 '(doc-unless2 true 1))) ; (if true nil 1)

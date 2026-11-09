@@ -4899,7 +4899,11 @@ cases:
   - name: macro-env-and-form-ns-resolve-and-a-require-that-runs-later
     # A macro body's &form is the call and &env the call's locals (nil without one, so
     # instaparse's defclone and set-global-var! take their clj branch); a run-time
-    # macroexpand binds &form and leaves &env nil. ns-resolve resolves a quoted symbol in
+    # macroexpand binds &form and leaves &env nil. A macroexpand-1, macroexpand or
+    # clojure.walk/macroexpand-all in a macro body hands the call's locals on as the
+    # expanded macro's &env (the oracle's Compiler/LOCAL_ENV; macroexpand-all tracks no
+    # binding below the call, riddley's walk does), and leaves a head naming one of them
+    # as written. ns-resolve resolves a quoted symbol in
     # a namespace the program knows, answers nil for a symbol the environment holds, and
     # fails as the oracle does for one that does not exist (find-ns's nil, the-ns's No
     # namespace). A require inside a function of a namespace no root holds fails where
@@ -4910,6 +4914,13 @@ cases:
       (defmacro locals [] `(quote ~(when &env (sort (map name (keys &env))))))
       (prn (form-of 1 2) (macroexpand '(form-of 1 2)) (macroexpand-1 '(form-of :a)))
       (prn (locals) (let [p 1 q 2] (locals)) (macroexpand '(locals)))
+      (defmacro expand-1-of [x] (macroexpand-1 x))
+      (defmacro expand-of [x] (macroexpand x))
+      (defmacro expand-all-of [x] (clojure.walk/macroexpand-all x))
+      (defmacro head-of [x] `'~(macroexpand-1 x))
+      (let [p 1 q 2] (prn (expand-1-of (locals)) (expand-of (locals)) (expand-all-of (let [r 3] (locals)))))
+      (let [when 1] (prn (head-of (when p q)) (head-of (form-of 1))))
+      (prn (head-of (when p q)))
       (defmacro defclone [here there]
         (if (contains? &env :locals)
           `(def ~here ~there)
@@ -4929,6 +4940,9 @@ cases:
     expected: |
       (form-of 1 2) (quote (form-of 1 2)) (quote (form-of :a))
       nil ("p" "q") (quote nil)
+      ("p" "q") ("p" "q") ("p" "q")
+      (when p q) (quote (form-of 1))
+      (if p (do q))
       2
       "no rhizome: Could not locate rhizome/viz__init.class, rhizome/viz.clj or rhizome/viz.cljc on classpath."
       nil #'env-ns/tree-viz #'env-ns/my-inc #'env-ns/my-inc nil #'clojure.core/map
@@ -11986,6 +12000,42 @@ cases:
       (twice 1)
       (clojure.core/* 2 1)
       (clojure.core/* 2 1)
+  - name: riddley-walks-code-with-the-locals-in-reach
+    # The built-in riddley.walk and riddley.compiler, in a macro body and as the
+    # program runs: walk-exprs hands the expressions a predicate picks to a function
+    # among the locals each binding form puts in reach (let*, a named fn*, letfn*'s
+    # bindings in reach of each other, catch, reify* methods), and macroexpand-all
+    # expands every macro call with them as its &env, the call's own locals first.
+    # Identical to clj 1.12.6 with riddley 0.2.2.
+    host: walk-exprs evals a var form its predicate picks, and the corpus's run-time expansions reach these macro bodies
+    source: |
+      (ns riddley-ns (:require [riddley.walk :as rw] [riddley.compiler :as rc]))
+      (defn mark [s] (if (contains? (rc/locals) s) (list 'L s) s))
+      (defmacro marked [form] `'~(rw/walk-exprs symbol? mark form))
+      (defmacro walked [form] (rw/macroexpand-all form))
+      (defmacro env-keys [] `'~(vec (sort (map str (keys &env)))))
+      (defmacro locals-in-reach [] `'~(vec (sort (map str (keys (rc/locals))))))
+      (prn (marked (let [x 1 y x] (list x y z))))
+      (prn (marked (fn self [a] (self a b))))
+      (prn (marked (letfn [(f [x] (g x)) (g [y] y)] (f 1))))
+      (prn (marked (try (f e) (catch Exception e (g e)) (finally (h e)))))
+      (prn (marked (reify* [Object] (toString [this] (str this q)))))
+      (let [outer 1]
+        (prn (walked (let [inner 2] (env-keys))) ((walked (fn [q] (env-keys))) 0) (locals-in-reach)))
+      (prn (let [x 2] (walked (case x 1 :one 2 :two :other))) (walked (let [when list] (when 2))))
+      (prn (rw/macroexpand-all '(when a (when-not b c))) (rw/macroexpand '(when a b) #{'when}))
+      (prn (rw/special-form? (first (rw/macroexpand-all '(if a b c)))) (rc/locals))
+      (in-ns 'user)
+    expected: |
+      (let* [x 1 y (L x)] (list (L x) (L y) z))
+      (fn* self ([a] ((L self) (L a) b)))
+      (letfn* [f (fn* f ([x] ((L g) (L x)))) g (fn* g ([y] (L y)))] ((L f) 1))
+      (try (f e) (catch Exception e (g (L e))) (finally (h e)))
+      (reify* [Object] (toString [this] (str (L this) q)))
+      ["inner" "outer"] ["outer" "q"] ["outer"]
+      :two (2)
+      (if a (do (if b nil (do c)))) (when a b)
+      true nil
   - name: clojure-edn-reads-data-only
     # clojure.edn reads data only, like the oracle's EdnReader (.kb/clojure-frontend.md
     # "Reading"): the quote is a symbol constituent, the reader macros of code and

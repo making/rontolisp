@@ -39,7 +39,7 @@ class NativeImageResourceConfigTest {
 			"am/ik/rontolisp/codegen/wasm/component", "am/ik/rontolisp/clojure/lib/ring/util",
 			"am/ik/rontolisp/clojure/lib/ring/middleware", "am/ik/rontolisp/clojure/lib/clojure",
 			"am/ik/rontolisp/clojure/lib/clojure/core", "am/ik/rontolisp/clojure/lib/rontolisp",
-			"am/ik/rontolisp/clojure/lib/rontolisp/internal");
+			"am/ik/rontolisp/clojure/lib/rontolisp/internal", "am/ik/rontolisp/clojure/lib/riddley");
 
 	@Test
 	void everyBundledResourceIsRegistered() throws IOException {

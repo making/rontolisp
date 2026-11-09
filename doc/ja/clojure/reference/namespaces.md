@@ -70,5 +70,6 @@ Clojure で書かれた組み込みの名前空間は、プロジェクトのフ
 | `clojure.test` | [テスト (clojure.test)](test.md) |
 | `ring.adapter.rontolisp` | [Ring アダプター](ring.md) |
 | `ring.util.*`、`ring.middleware.*` | [Ring ユーティリティ](ring-util.md) |
+| `riddley.walk`、`riddley.compiler` | [コードの走査 (riddley)](riddley.md) |
 | `rontolisp.http-client` | [HTTP クライアント](http-client.md) |
 | `rontolisp.http-urls`（var はない。`clojure.java.io` が `http:` URL を `rontolisp:fetch` で読む） | [HTTP の URL](clojure-java-io.md#http-urls) |

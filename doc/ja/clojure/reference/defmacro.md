@@ -11,7 +11,9 @@ docstring と attr map は読み飛ばされます。本体の暗黙の `&form` 
 `&env` は呼び出し位置のローカルを各シンボルからそれ自身へ写すマップで、ローカルがなければ
 nil です（oracle の値はコンパイラの `LocalBinding`）。そのため `.cljc` ライブラリの
 `(contains? &env :locals)` は Clojure 側の分岐をとります。実行時の `macroexpand` は
-oracle と同じく `&form` を束縛し、`&env` は nil のままです。どちらもパラメータ名には使えません。
+oracle と同じく `&form` を束縛し、`&env` は nil のままです。本体が呼ぶ
+[macroexpand-1](macroexpand-1.md) は、呼び出し位置のローカルを `&env` として渡します。
+どちらもパラメータ名には使えません。
 
 定義は `nil` を返し、同じ expander を実行時テーブルにも登録するため、
 `macroexpand-1` は実行時にも同じ関数で展開します。マクロ本体が見えるのは核の

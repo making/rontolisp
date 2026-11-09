@@ -783,6 +783,16 @@ final class ClojureMacroLowering {
 	static final String MACRO_FORM = "RONTOLISP::%CLOJURE-MACRO-FORM";
 
 	/**
+	 * The locals in reach while a macro body runs, the oracle's
+	 * {@code Compiler/LOCAL_ENV}: every expansion binds it to the call's {@code &env},
+	 * and {@code macroexpand-1} hands it on as the {@code &env} of the macro it expands,
+	 * so a body expanding a form of its call (a walker's,
+	 * {@code clojure.walk/macroexpand-all}'s) expands it among the call's locals, like
+	 * the oracle's; riddley's walk grows it as it enters binding forms.
+	 */
+	static final String LOCAL_ENV = "RONTOLISP::%CLOJURE-LOCAL-ENV";
+
+	/**
 	 * The value of {@code &env} at a call: nil where the call sees no local, like the
 	 * oracle's, else a map of each local's symbol to itself (the oracle's values are the
 	 * compiler's {@code LocalBinding}s), built from the datum the program would spell.
@@ -837,20 +847,23 @@ final class ClojureMacroLowering {
 			quoted.add(ctx.quoteData(items.get(i)));
 		}
 		// the body reads the load's specials where the call expands, like the oracle's
-		// macroexpansion inside the load, and a body reading &env or &form the call's
-		// locals and the call
+		// macroexpansion inside the load, the call's locals as the locals in reach (what
+		// a macroexpand in the body hands on), and a body reading &env or &form the
+		// call's locals and the call
+		LispSymbol localEnv = new LispSymbol(LOCAL_ENV);
 		List<LispVal> bindings = new ArrayList<>(List.of(
 				ClojureLowerUtil.list(ClojureCoreSpecials.NS, ClojureCoreSpecials.namespaceObject(ctx.currentNs)),
 				ClojureLowerUtil.list(ClojureCoreSpecials.FILE, LispString.literal(ctx.loadingFile)),
-				ClojureLowerUtil.list(ClojureCoreSpecials.SOURCE_PATH, LispString.literal(ctx.loadingSourcePath))));
+				ClojureLowerUtil.list(ClojureCoreSpecials.SOURCE_PATH, LispString.literal(ctx.loadingSourcePath)),
+				ClojureLowerUtil.list(localEnv, envValue(ctx))));
 		if (bindsEnv) {
-			bindings.add(ClojureLowerUtil.list(new LispSymbol(MACRO_ENV), envValue(ctx)));
+			bindings.add(ClojureLowerUtil.list(new LispSymbol(MACRO_ENV), localEnv));
 			bindings
 				.add(ClojureLowerUtil.list(new LispSymbol(MACRO_FORM), ctx.quoteData(ClojureLowerUtil.list(items))));
 		}
 		// the answer as a form: a lazy seq in it (a concat, a lazy map) realizes, since
 		// no datum spells one (until 2026-10-29 a concat answer was an unreadable value)
-		LispVal invocation = ClojureLowerUtil.list(ClojureLowerUtil.sym("let"), ClojureLowerUtil.list(bindings),
+		LispVal invocation = ClojureLowerUtil.list(ClojureLowerUtil.sym("let*"), ClojureLowerUtil.list(bindings),
 				ClojureLowerUtil.list(FORM_OF, ClojureLowerUtil.list(ClojureLowerUtil.sym("funcall"), expander,
 						ClojureLowerUtil.cons(ClojureLowerUtil.sym("list"), quoted))));
 		handOverCaughtClasses(ctx, ctx.macroEvaluator);
@@ -2208,17 +2221,22 @@ final class ClojureMacroLowering {
 												ClojureHierarchyLowering.hfn("IF", hit, scoped, unscoped)),
 										ClojureLowering.NIL_CONST)));
 		// (defun C%MACROEXPAND-1 (form) ...): one expansion, the macro function applied
-		// to the call, no environment and the call's arguments, answered as the mangled
-		// data itself; a non-macro head answers the form itself
-		runtime
-			.add(ClojureHierarchyLowering.hdefun(MACROEXPAND_1, List.of(form), ClojureHierarchyLowering.hlet(
-					List.of(ClojureLowerUtil.list(next,
-							ClojureHierarchyLowering.hfn("IF", ClojureHierarchyLowering.hfn("CONSP", form),
-									ClojureHierarchyLowering.hfn("C%MACRO-FN",
-											ClojureHierarchyLowering.hfn("CAR", form)),
-									ClojureLowering.NIL_CONST))),
-					ClojureHierarchyLowering.hfn("IF", next, ClojureHierarchyLowering.hfn("APPLY", next, form,
-							ClojureLowering.NIL_CONST, ClojureHierarchyLowering.hfn("CDR", form)), form))));
+		// to the call, the locals in reach as its environment (nil where the program
+		// runs, the call's locals while a macro body runs) and the call's arguments,
+		// answered as the mangled data itself; a non-macro head, and a head naming a
+		// local in reach, answers the form itself, like the oracle's isMacro
+		LispSymbol localEnv = new LispSymbol(LOCAL_ENV);
+		runtime.add(ClojureHierarchyLowering.hdefun(MACROEXPAND_1, List.of(form), ClojureHierarchyLowering.hlet(
+				List.of(ClojureLowerUtil.list(next,
+						ClojureHierarchyLowering.hfn("IF",
+								ClojureHierarchyLowering.hfn("AND", ClojureHierarchyLowering.hfn("CONSP", form),
+										ClojureHierarchyLowering.hfn("NOT",
+												ClojureHierarchyLowering.hfn("RONTOLISP::%CLOJURE-LOCAL-HEAD-P",
+														ClojureHierarchyLowering.hfn("CAR", form)))),
+								ClojureHierarchyLowering.hfn("C%MACRO-FN", ClojureHierarchyLowering.hfn("CAR", form)),
+								ClojureLowering.NIL_CONST))),
+				ClojureHierarchyLowering.hfn("IF", next, ClojureHierarchyLowering.hfn("APPLY", next, form, localEnv,
+						ClojureHierarchyLowering.hfn("CDR", form)), form))));
 		// (defun C%MACROEXPAND (form) ...): to the fixpoint, where an expansion answers
 		// its form itself (a core macro this front end does not expand as data), the
 		// mangled data itself

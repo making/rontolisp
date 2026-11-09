@@ -11,7 +11,8 @@ and an attr map are skipped. The body's implicit `&form` is the call itself and 
 a map of the call site's locals, each local's symbol to itself, or nil where the call sees
 no local (the oracle's values are the compiler's `LocalBinding`s), so a `.cljc` library's
 `(contains? &env :locals)` takes its Clojure branch; a run-time `macroexpand` binds `&form`
-and leaves `&env` nil, like the oracle. Neither may name a parameter.
+and leaves `&env` nil, like the oracle. A [macroexpand-1](macroexpand-1.md) the body calls
+hands the call's locals on as `&env`. Neither may name a parameter.
 
 The definition answers `nil` and registers a runtime table entry of the same
 expander, so `macroexpand-1` expands the same function at run time. A macro body

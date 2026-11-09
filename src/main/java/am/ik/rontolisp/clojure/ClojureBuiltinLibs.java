@@ -16,11 +16,15 @@ import org.jspecify.annotations.Nullable;
 /**
  * The {@code deps.edn} coordinates this front end answers itself, with nothing to fetch:
  * {@code org.clojure/clojure} is the front end -- a subset of {@code clj} 1.12.6 whatever
- * version a project names, every surface it lacks refused where it is used -- and
+ * version a project names, every surface it lacks refused where it is used --
  * {@code ring/ring-core} / {@code ring/ring-codec} are the shipped Ring namespaces
- * ({@link ClojureBuiltinNamespaces}). A Maven coordinate of one of these is built in; any
- * other coordinate type of the same library (a local checkout, a git commit) is that
- * library's own source.
+ * ({@link ClojureBuiltinNamespaces}), and {@code riddley/riddley} is the shipped
+ * {@code riddley.walk} / {@code riddley.compiler}: riddley's own jar is the Clojure
+ * compiler's internals driven from outside ({@code Compiler/LOCAL_ENV}, a proxy of
+ * {@code Compiler$ObjMethod}, a Java class building {@code Compiler$LocalBinding}s), none
+ * of which exists here, while what it walks with is the lowering's own locals in reach. A
+ * Maven coordinate of one of these is built in; any other coordinate type of the same
+ * library (a local checkout, a git commit) is that library's own source.
  *
  * <p>
  * The libraries clojure.jar itself depends on, {@code spec.alpha} and
@@ -38,6 +42,8 @@ final class ClojureBuiltinLibs {
 
 	private static final Lib RING_CODEC = new Lib("ring", "ring-codec");
 
+	private static final Lib RIDDLEY = new Lib("riddley", "riddley");
+
 	private static final Lib SPEC = new Lib("org.clojure", "spec.alpha");
 
 	private static final Lib CORE_SPECS = new Lib("org.clojure", "core.specs.alpha");
@@ -46,7 +52,8 @@ final class ClojureBuiltinLibs {
 	 * Each built-in library with the version shipped, or the empty string for the front
 	 * end itself, which stands in for any version.
 	 */
-	private static final Map<Lib, String> SHIPPED = Map.of(CLOJURE, "", RING_CORE, "1.15.5", RING_CODEC, "1.3.0");
+	private static final Map<Lib, String> SHIPPED = Map.of(CLOJURE, "", RING_CORE, "1.15.5", RING_CODEC, "1.3.0",
+			RIDDLEY, "0.2.2");
 
 	/**
 	 * The dependencies of {@code org.clojure/clojure} 1.12.6 (its POM's compile scope, in
@@ -85,7 +92,7 @@ final class ClojureBuiltinLibs {
 
 	/**
 	 * The dependencies of a built-in library, known without fetching anything: the
-	 * built-in clojure's own two, none for the shipped Ring files.
+	 * built-in clojure's own two, none for the shipped Ring and riddley files.
 	 * @param lib a built-in library
 	 * @return its dependencies, in its POM's order
 	 */
@@ -127,14 +134,17 @@ final class ClojureBuiltinLibs {
 
 	/**
 	 * The library a built-in namespace belongs to: {@code ring.util.codec} is
-	 * ring-codec's, every other Ring namespace ring-core's, anything else the Clojure
-	 * jar's.
+	 * ring-codec's, every other Ring namespace ring-core's, a {@code riddley.*} one
+	 * riddley's, anything else the Clojure jar's.
 	 * @param ns a namespace a built-in file defines
 	 * @return its library
 	 */
 	static Lib libOf(String ns) {
 		if (ns.equals("ring.util.codec")) {
 			return RING_CODEC;
+		}
+		if (ns.startsWith("riddley.")) {
+			return RIDDLEY;
 		}
 		return ns.startsWith("ring.") ? RING_CORE : CLOJURE;
 	}

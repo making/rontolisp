@@ -13,8 +13,9 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The namespaces the Clojure front end ships as Clojure source: the pure-function subset
- * of ring-core and ring-codec, the counterpart of the built-in Clack shims, and the
- * map-shaped namespaces of clojure.jar, written for this front end from their documented
+ * of ring-core and ring-codec, the counterpart of the built-in Clack shims, the
+ * map-shaped namespaces of clojure.jar, and riddley's code walker, whose own jar drives
+ * the Clojure compiler's internals -- each written for this front end from its documented
  * behaviour (none of clojure.jar's own source is copied). Each is a classpath resource
  * below {@code lib/} next to this class, read through the namespace loader like a project
  * file -- after the project's own source roots, so a project file of the name wins, as a
@@ -64,7 +65,8 @@ final class ClojureBuiltinNamespaces {
 			Map.entry(ClojureLangClasses.NAMESPACE, Map.of()), Map.entry("rontolisp.http-client", httpClientLeftOut()),
 			Map.entry(ClojureIoLowering.HTTP_URLS, Map.of()), Map.entry(ClojureCoreMacros.NAMESPACE, Map.of()),
 			Map.entry(ClojurePortableLinkedListLowering.NAMESPACE, Map.of()),
-			Map.entry(ClojureTypeSpecials.RECORDS, Map.of()));
+			Map.entry(ClojureTypeSpecials.RECORDS, Map.of()), Map.entry("riddley.walk", Map.of()),
+			Map.entry("riddley.compiler", Map.of()));
 
 	/**
 	 * The shipped namespaces the lowering loads for itself, no user surface: no project

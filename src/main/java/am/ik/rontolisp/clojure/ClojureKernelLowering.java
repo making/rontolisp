@@ -78,6 +78,10 @@ import org.jspecify.annotations.Nullable;
  * stream values and the opening of every stream kind over them
  * ({@link ClojureIoLowering}); {@code resource} is lowered in place over the program's
  * directory roots.</li>
+ * <li>{@code rontolisp.internal.locals} for {@code riddley.compiler}: the locals in reach
+ * where a macro body runs (the oracle's {@code Compiler/LOCAL_ENV}, which every expansion
+ * binds to its call's {@code &env} and {@code macroexpand-1} hands on), read, bound
+ * around a function and replaced as the walk enters a binding form.</li>
  * </ul>
  *
  * <p>
@@ -277,7 +281,11 @@ final class ClojureKernelLowering {
 			Map.entry("rontolisp.internal.types",
 					new Kernels(ClojureCoreMacros.NAMESPACE, "RONTOLISP::%CLOJURE-TYPES-", Map.of("protocol-var", 1))),
 			Map.entry("rontolisp.internal.xml", xmlKernels()), Map.entry("rontolisp.internal.math", mathKernels()),
-			Map.entry(ClojureIoLowering.NAMESPACE, ClojureIoLowering.kernels()));
+			Map.entry(ClojureIoLowering.NAMESPACE, ClojureIoLowering.kernels()),
+			Map.entry("rontolisp.internal.locals",
+					new Kernels("riddley.compiler", "RONTOLISP::%CLOJURE-LOCALS-",
+							Map.of("env", 0, "with-env", 2, "set-env!", 1),
+							Map.of("set-env!", "RONTOLISP::%CLOJURE-LOCALS-SET-ENV"), false)));
 
 	private ClojureKernelLowering() {
 	}

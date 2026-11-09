@@ -48,3 +48,4 @@ interop エントリのすべてを、分野ごとにまとめています。**�
 | [入出力](reference/io.md) | `spit`・`slurp`・`line-seq`・`file-seq`・`clojure.java.io/reader` と `format` |
 | [テスト (clojure.test)](reference/test.md) | `deftest`/`is`/`are`/`testing` と `run-tests` の集計ランナー |
 | [マクロ](reference/macros.md) | `defmacro`、syntax-quote、`gensym`、`macroexpand-1`、`macroexpand` |
+| [コードの走査 (riddley)](reference/riddley.md) | 組み込みの `riddley.walk` と `riddley.compiler`: 各マクロ呼び出しの位置で見えるローカルを渡す `macroexpand-all` と `walk-exprs` |
