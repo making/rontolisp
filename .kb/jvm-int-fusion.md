@@ -118,7 +118,10 @@ computed divisor.
   ironclad PBKDF2 x4096 of that file, best warm run: 350-500 ms declined, 136 ms substituted. The
   FIRST run went 1.4 s -> 1.7 s under the Graal JIT (C2: no change; C1 only: 1.9 s -> 0.9 s), the
   class carrying 389 `_fx$` methods against 172 to tier up; a PostgreSQL SCRAM login in a fresh
-  `java -cp . PgHello` 3.4 s -> 4.2 s.
+  `java -cp . PgHello` 3.4 s -> 4.2 s. **Not a name with a cell** (`notinline` = `celledDefuns`: every
+  named defun of a program holding `eval`), which the wasm twin substitutes under a check of it since
+  2026-11-09 ([wasm-int-fusion.md](wasm-int-fusion.md), "A name with a cell"); here such a program's
+  warm derivations measured 254-657 ms against 91-212 ms without the `eval` (`.todo/j33`).
 - **Packed aref leaves** (whenever `Ctx.usesArrays`): a rank-1 `(aref a i)` reads raw from either
   the bare `long[]` packed integer vector (elements from slot 1, past the width header; only under
   `Ctx.usesIntArray`) or the general array's length-6 header over a flat `long[]` (elements from

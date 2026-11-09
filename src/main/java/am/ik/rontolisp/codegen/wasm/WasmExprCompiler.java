@@ -1138,7 +1138,7 @@ final class WasmExprCompiler {
 				// arithmetic wrapper) in a non-fused position: substitute and fuse
 				// the body right here, so the call boundary's box/unbox round trip
 				// disappears even outside a larger expression tree.
-				else if (!WasmIntFusionCompiler.tryCompileDefunCall(cons, ctx)) {
+				else if (!WasmIntFusionCompiler.tryCompileDefunCall(cons, ctx, tail)) {
 					WasmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx, tail);
 				}
 			}
@@ -2380,7 +2380,7 @@ final class WasmExprCompiler {
 				// A direct (funcall __FLETn_f ...) of a registered local function in
 				// a non-fused position: substitute and fuse the body right here,
 				// mirroring the inlinable-defun direct-call path.
-				if (!WasmIntFusionCompiler.tryCompileLocalCall(cons, ctx)) {
+				if (!WasmIntFusionCompiler.tryCompileLocalCall(cons, ctx, tail)) {
 					WasmFunctionCallCompiler.compileFuncall(cons, ctx, tail);
 				}
 			}

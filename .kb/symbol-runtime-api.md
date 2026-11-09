@@ -505,7 +505,10 @@ and a literal `symbol-function` / `fdefinition` with the old definition on JVM, 
   literal `fboundp` always probes it, `%fenv-function` reads it where a name has one. A function value
   keeps its code (the dispatcher cases call the function), so a wrapper's `old` runs the old
   definition. A count this definition rules out goes through `#'n`, so the replacement's lambda list
-  decides, and `inlinableDefuns` and `LetBoundDesignators` leave the name alone.
+  decides, and `LetBoundDesignators` leaves the name alone. The wasm-GC fusion substitutes an integer
+  one-liner with a cell under a check of it, calling the entry once it is filled
+  ([wasm-int-fusion.md](wasm-int-fusion.md), "A name with a cell"); the JVM's `inlinableDefuns` leaves
+  the name alone (`.todo/j33`).
 - **`%restore-compiled-definition`**: each `defun` form of such a name leaves it where it stood: a
   binding is unlinked and the cell cleared, so the compiled definition answers from there, whatever
   a write did before it (`(undefine 'f) (defun f ...)`, uiop's `defun*`). A call ahead of the form

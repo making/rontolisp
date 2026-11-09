@@ -91,7 +91,7 @@ final class WasmIntFusionCompiler {
 		return !ctx.optimize.prefersSizeOverSpeed();
 	}
 
-	private sealed interface Node permits OpNode, ConstLeaf, ExprLeaf, ArefLeaf, RawLeaf {
+	private sealed interface Node permits OpNode, ConstLeaf, ExprLeaf, ArefLeaf, RawLeaf, CelledCall {
 
 	}
 
@@ -228,6 +228,43 @@ final class WasmIntFusionCompiler {
 	}
 
 	/**
+	 * A substituted call of a defun whose name has a cell ({@link WasmFunctionCells}: a
+	 * run-time write can replace it). The fast path computes {@code body} while the cell
+	 * is empty -- every fast path checks the cells of its calls first
+	 * ({@link #emitCellChecks}) -- and the fallback calls the named entry over
+	 * {@code args}, which runs the compiled definition while the cell is empty and what a
+	 * write left there once it is not. {@code bodyStart} is where the site's events stood
+	 * when the body's applications began ({@link #keepsCelledOrder}).
+	 */
+	private static final class CelledCall implements Node {
+
+		final List<Node> args;
+
+		final Node body;
+
+		final int entry;
+
+		final int cell;
+
+		final int bodyStart;
+
+		/** How many places of the fallback read the call ({@link #emitFallbacks}). */
+		int fallbackUses;
+
+		/** The call's value for the fallback's later reads, or -1 before the first. */
+		int fallbackSlot = -1;
+
+		CelledCall(List<Node> args, Node body, WasmLispCompiler.WasmFunctionInfo function, int bodyStart) {
+			this.args = args;
+			this.body = body;
+			this.entry = function.entryIndex();
+			this.cell = function.cellGlobal();
+			this.bodyStart = bodyStart;
+		}
+
+	}
+
+	/**
 	 * Per-fused-site classification state: the registered leaves, plus what makes
 	 * raw-local reads shareable -- a local that NO leaf of this site can reassign (no
 	 * setq/setf of the name anywhere in the site's expression) snapshots once and is read
@@ -240,6 +277,11 @@ final class WasmIntFusionCompiler {
 		final java.util.Map<String, RawLeaf> sharedRawLeaves = new java.util.HashMap<>();
 
 		final java.util.Set<String> assignedNames = new java.util.HashSet<>();
+
+		/**
+		 * The calls of names with a cell the site substituted, in classification order.
+		 */
+		final List<CelledCall> celledCalls = new ArrayList<>();
 
 		/**
 		 * The innermost form read from a file the classification is under, and the defun
@@ -307,6 +349,22 @@ final class WasmIntFusionCompiler {
 	 * ordinary per-operation path.
 	 */
 	static boolean tryCompile(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		return tryCompile(cons, ctx, false, false);
+	}
+
+	/**
+	 * As {@link #tryCompile(LispCons, WasmLispCompiler.Ctx)}; {@code call} when the form
+	 * is a call whose substituted body is the root ({@link #tryCompileDefunCall},
+	 * {@link #tryCompileLocalCall}). The body is an integer tree, one value, and the
+	 * function's own settled tail would have cleared what an argument published -- a
+	 * lambda's as its compiler settles it, a defun's as {@link #inlinableBody} reads it
+	 * without that clear -- so the fused call clears the channel: on the fast path alone
+	 * when the root is a {@link CelledCall}, whose fallback calls the function and lets
+	 * its tail settle it. Such a root in {@code tail} position stays a call: the fallback
+	 * calls with a plain {@code call}, and a tail call through a replaced name stays a
+	 * {@code return_call} ({@code .kb/symbol-runtime-api.md}).
+	 */
+	private static boolean tryCompile(LispCons cons, WasmLispCompiler.Ctx ctx, boolean call, boolean tail) {
 		if (!speedTradesEnabled(ctx) || ctx.asyncResume != null) {
 			return false;
 		}
@@ -319,7 +377,12 @@ final class WasmIntFusionCompiler {
 		}
 		Classified classified = classifyOrdered(cons, ctx,
 				site -> nodes(classify(cons, ctx, java.util.Map.of(), site, 0)));
-		if (classified == null || !(classified.roots().get(0) instanceof OpNode root)) {
+		if (classified == null) {
+			return false;
+		}
+		Node top = classified.roots().get(0);
+		if (!((top instanceof CelledCall celled ? celled.body : top) instanceof OpNode root)
+				|| (tail && top instanceof CelledCall)) {
 			return false;
 		}
 		List<Node> leaves = classified.site().leaves;
@@ -341,18 +404,35 @@ final class WasmIntFusionCompiler {
 		ctx.writer.write(Instruction.BLOCK);
 		ctx.writer.writeRefType(true, Type.EQ.code());
 		ctx.writer.write(Instruction.BLOCK, 0x40);
-		emitLeafUnboxes(leaves, ctx);
-		emitFast(root, ctx);
+		emitFastEntry(classified.site(), ctx);
+		emitFast(top, ctx);
 		int rootI64 = ctx.allocI64Temp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writeI64LocalIndex(rootI64);
 		emitBoxI64FromSlot(rootI64, ctx);
+		if (call && top instanceof CelledCall) {
+			emitChannelClear(ctx);
+		}
 		ctx.writer.write(Instruction.BR, 1);
 		ctx.writer.write(Instruction.END);
-		emitFallback(root, ctx);
+		emitFallbacks(List.of(top), ctx);
 		ctx.writer.write(Instruction.END);
+		if (call && !(top instanceof CelledCall)) {
+			emitChannelClear(ctx);
+		}
 		ctx.nextI64Local = savedI64;
 		return true;
+	}
+
+	/** Clears the multiple-value channel, in a module that has one. */
+	private static void emitChannelClear(WasmLispCompiler.Ctx ctx) {
+		Integer spillGlobal = ctx.globalIndices.get(LispNames.MV_SPILL);
+		if (spillGlobal != null) {
+			ctx.writer.write(Instruction.REF_NULL);
+			ctx.writer.writeHeapType(Type.EQ.code());
+			ctx.writer.write(Instruction.SET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(spillGlobal);
+		}
 	}
 
 	/**
@@ -443,14 +523,13 @@ final class WasmIntFusionCompiler {
 		ctx.writer.write(Instruction.BLOCK);
 		ctx.writer.write(Type.I32);
 		ctx.writer.write(Instruction.BLOCK, 0x40);
-		emitLeafUnboxes(leaves, ctx);
+		emitFastEntry(classified.site(), ctx);
 		emitFast(left, ctx);
 		emitFast(right, ctx);
 		ctx.writer.write(i64Opcode);
 		ctx.writer.write(Instruction.BR, 1);
 		ctx.writer.write(Instruction.END);
-		emitFallback(left, ctx);
-		emitFallback(right, ctx);
+		emitFallbacks(List.of(left, right), ctx);
 		// The comparison compiler's own generic form, so = finds a complex a leaf held
 		// the way an unfused = does.
 		WasmComparisonCompiler.emitGenericCompare(ctx, cmpMask);
@@ -513,11 +592,11 @@ final class WasmIntFusionCompiler {
 		ctx.writer.write(Instruction.BLOCK);
 		ctx.writer.write(Type.I64);
 		ctx.writer.write(Instruction.BLOCK, 0x40);
-		emitLeafUnboxes(leaves, ctx);
+		emitFastEntry(classified.site(), ctx);
 		emitFast(root, ctx);
 		ctx.writer.write(Instruction.BR, 1);
 		ctx.writer.write(Instruction.END);
-		emitFallback(root, ctx);
+		emitFallbacks(List.of(root), ctx);
 		int boxedSlot = ctx.allocTemp();
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(boxedSlot);
@@ -596,9 +675,9 @@ final class WasmIntFusionCompiler {
 	 * registered local function as a fused tree (the substituted body becomes the root),
 	 * or returns {@code false} (emitting nothing) for anything else.
 	 */
-	static boolean tryCompileLocalCall(LispCons cons, WasmLispCompiler.Ctx ctx) {
+	static boolean tryCompileLocalCall(LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		return cons.cdr() instanceof LispCons fnCell && fnCell.car() instanceof LispSymbol fvar
-				&& ctx.localIntLambdas.containsKey(fvar.name()) && tryCompileCall(cons, ctx);
+				&& ctx.localIntLambdas.containsKey(fvar.name()) && tryCompile(cons, ctx, true, tail);
 	}
 
 	/**
@@ -606,30 +685,18 @@ final class WasmIntFusionCompiler {
 	 * defun as a fused tree (the substituted body becomes the root), or returns
 	 * {@code false} (emitting nothing) for anything else.
 	 */
-	static boolean tryCompileDefunCall(LispCons cons, WasmLispCompiler.Ctx ctx) {
+	static boolean tryCompileDefunCall(LispCons cons, WasmLispCompiler.Ctx ctx, boolean tail) {
 		return cons.car() instanceof LispSymbol name && ctx.inlinableDefuns.containsKey(name.name())
-				&& tryCompileCall(cons, ctx);
+				&& tryCompile(cons, ctx, true, tail);
 	}
 
 	/**
-	 * A call fused with its substituted body as the root. The body is an integer tree,
-	 * one value; the function's own settled tail would have cleared what an argument
-	 * published -- a lambda's as its compiler settles it, a defun's as
-	 * {@link #inlinableBody} reads it without that clear -- so the fused call clears the
-	 * channel here.
+	 * The function of a defun whose name has a cell ({@link WasmFunctionCells}), or null
+	 * for any other name.
 	 */
-	private static boolean tryCompileCall(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		if (!tryCompile(cons, ctx)) {
-			return false;
-		}
-		Integer spillGlobal = ctx.globalIndices.get(LispNames.MV_SPILL);
-		if (spillGlobal != null) {
-			ctx.writer.write(Instruction.REF_NULL);
-			ctx.writer.writeHeapType(Type.EQ.code());
-			ctx.writer.write(Instruction.SET_GLOBAL);
-			ctx.writer.writeUnsignedLeb128(spillGlobal);
-		}
-		return true;
+	private static WasmLispCompiler.@Nullable WasmFunctionInfo cellOf(String name, WasmLispCompiler.Ctx ctx) {
+		WasmLispCompiler.WasmFunctionInfo function = ctx.functions.get(name);
+		return function != null && function.entryIndex() >= 0 ? function : null;
 	}
 
 	/**
@@ -722,8 +789,8 @@ final class WasmIntFusionCompiler {
 				emitNullShadow(target, ctx);
 				return;
 			}
-			if (classified != null && (root instanceof OpNode || root instanceof ArefLeaf) && countOps(root) <= MAX_OPS
-					&& leaves.size() <= MAX_EXPR_LEAVES) {
+			if (classified != null && (root instanceof OpNode || root instanceof ArefLeaf || root instanceof CelledCall)
+					&& countOps(root) <= MAX_OPS && leaves.size() <= MAX_EXPR_LEAVES) {
 				int savedI64 = ctx.nextI64Local;
 				evalLeaves(classified, ctx);
 				ctx.fxLitTempSlot = -1;
@@ -731,14 +798,14 @@ final class WasmIntFusionCompiler {
 				// br $done } fallback -> shadow store } end
 				ctx.writer.write(Instruction.BLOCK, 0x40);
 				ctx.writer.write(Instruction.BLOCK, 0x40);
-				emitLeafUnboxes(leaves, ctx);
+				emitFastEntry(classified.site(), ctx);
 				emitFast(root, ctx);
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writeI64LocalIndex(target.i64Slot());
 				emitNullShadow(target, ctx);
 				ctx.writer.write(Instruction.BR, 1);
 				ctx.writer.write(Instruction.END);
-				emitFallback(root, ctx);
+				emitFallbacks(List.of(root), ctx);
 				ctx.writer.write(Instruction.SET_LOCAL);
 				ctx.writer.writeUnsignedLeb128(target.shadowSlot());
 				ctx.writer.write(Instruction.END);
@@ -870,7 +937,7 @@ final class WasmIntFusionCompiler {
 	 * The expression a call substitutes for a defun: its single body expression, read
 	 * through the clear a program with a multiple-value operator settles every defun tail
 	 * with ({@link LispMacroExpander#clearedForm}); the fused call clears instead
-	 * ({@link #tryCompileCall}).
+	 * ({@link #tryCompileDefunCall}).
 	 */
 	private static @Nullable LispVal inlinableBody(WasmLispCompiler.DefunDecl defun) {
 		LispVal body = singleBodyExpr(defun.bodyExprs());
@@ -1077,17 +1144,22 @@ final class WasmIntFusionCompiler {
 			LocalIntLambda lambda = ctx.localIntLambdas.get(fvar.name());
 			if (lambda != null && arity - 1 == lambda.params().size()) {
 				Node substituted = substituteCall(lambda.params(), lambda.body(), parts.subList(2, parts.size()), ctx,
-						env, site, depth, null);
+						env, site, depth, null, null);
 				if (substituted != null) {
 					return substituted;
 				}
 			}
 		}
 		WasmLispCompiler.DefunDecl inlinable = ctx.inlinableDefuns.get(op);
-		if (inlinable != null && arity == inlinable.paramNames().size() && depth < MAX_INLINE_DEPTH) {
+		WasmLispCompiler.WasmFunctionInfo celled = inlinable == null ? null : cellOf(op, ctx);
+		// A name with a cell is substituted where the site keeps the order a replacement
+		// would see (keepsCelledOrder) and its entry takes the arguments as they are.
+		if (inlinable != null && arity == inlinable.paramNames().size() && depth < MAX_INLINE_DEPTH
+				&& (celled == null || (site.ordering.substitutesCelled && celled.cellGlobal() >= 0 && !celled.variadic()
+						&& celled.optionals() == 0))) {
 			LispVal body = java.util.Objects.requireNonNull(inlinableBody(inlinable));
 			Node substituted = substituteCall(inlinable.paramNames(), body, parts.subList(1, parts.size()), ctx, env,
-					site, depth, op);
+					site, depth, op, celled);
 			if (substituted != null) {
 				return substituted;
 			}
@@ -1216,11 +1288,13 @@ final class WasmIntFusionCompiler {
 	 * interior node re-emits its pure arithmetic, a shared leaf re-reads its scratch
 	 * slot. On failure the leaves registered by this attempt are rolled back, so the
 	 * caller's fall-through leaf treatment does not ALSO evaluate them (evaluating a
-	 * side-effecting argument twice).
+	 * side-effecting argument twice). A {@code celled} function's body comes back as a
+	 * {@link CelledCall} over the arguments' nodes.
 	 */
 	@org.jspecify.annotations.Nullable
 	private static Node substituteCall(List<String> params, LispVal body, List<LispVal> args, WasmLispCompiler.Ctx ctx,
-			java.util.Map<String, Node> env, Site site, int depth, @Nullable String owner) {
+			java.util.Map<String, Node> env, Site site, int depth, @Nullable String owner,
+			WasmLispCompiler.@Nullable WasmFunctionInfo celled) {
 		List<Node> leaves = site.leaves;
 		// An accessor-shaped body -- exactly (aref P I) over parameters/literals -- maps
 		// straight onto an ArefLeaf over the CALLER's operand expressions, provided each
@@ -1229,8 +1303,10 @@ final class WasmIntFusionCompiler {
 		// ((sha256-regs-a regs), a one-line (aref s 0) defun) read a packed vector's
 		// element raw inside a fused tree instead of surviving as a boxed call leaf: the
 		// general classify below refuses aref under a non-empty env, because the
-		// slot-based ArefLeaf cannot express parameter references.
-		if (env.isEmpty() && body instanceof LispCons bodyCons && bodyCons.isProperList()
+		// slot-based ArefLeaf cannot express parameter references. Not for a name with a
+		// cell: its fallback calls the entry over the arguments, which this shape never
+		// classifies.
+		if (celled == null && env.isEmpty() && body instanceof LispCons bodyCons && bodyCons.isProperList()
 				&& bodyCons.car() instanceof LispSymbol bodyHead && LispNames.AREF.equals(bodyHead.name())) {
 			List<LispVal> bodyParts = bodyCons.toList();
 			if (bodyParts.size() == 3) {
@@ -1248,7 +1324,9 @@ final class WasmIntFusionCompiler {
 		}
 		int mark = leaves.size();
 		int eventMark = site.events.size();
+		int celledMark = site.celledCalls.size();
 		java.util.Map<String, Node> callEnv = new java.util.HashMap<>();
+		List<Node> argNodes = new ArrayList<>(params.size());
 		Node substituted = null;
 		for (int i = 0; i < params.size(); i++) {
 			Node argNode = classify(args.get(i), ctx, env, site, depth);
@@ -1256,7 +1334,9 @@ final class WasmIntFusionCompiler {
 				break;
 			}
 			callEnv.put(params.get(i), argNode);
+			argNodes.add(argNode);
 		}
+		int bodyStart = site.events.size();
 		if (callEnv.size() == params.size()) {
 			String outerBody = site.bodyOwner;
 			if (owner != null) {
@@ -1272,6 +1352,13 @@ final class WasmIntFusionCompiler {
 		if (substituted == null) {
 			leaves.subList(mark, leaves.size()).clear();
 			site.events.subList(eventMark, site.events.size()).clear();
+			site.celledCalls.subList(celledMark, site.celledCalls.size()).clear();
+			return null;
+		}
+		if (celled != null) {
+			CelledCall call = new CelledCall(argNodes, substituted, celled, bodyStart);
+			site.celledCalls.add(call);
+			return call;
 		}
 		return substituted;
 	}
@@ -1352,6 +1439,8 @@ final class WasmIntFusionCompiler {
 				}
 				yield ops;
 			}
+			// What the fast path computes; the fallback's call is smaller.
+			case CelledCall call -> countOps(call.body);
 		};
 	}
 
@@ -1419,6 +1508,11 @@ final class WasmIntFusionCompiler {
 		final java.util.Set<LispVal> opaque = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
 
 		final java.util.Map<LispVal, LispVal> expansions = new java.util.IdentityHashMap<>();
+
+		/**
+		 * Whether calls of names with a cell are substituted ({@link #keepsCelledOrder}).
+		 */
+		boolean substitutesCelled = true;
 
 	}
 
@@ -1493,6 +1587,12 @@ final class WasmIntFusionCompiler {
 			if (roots.isEmpty()) {
 				return null;
 			}
+			if (!keepsCelledOrder(site, ctx)) {
+				// Those calls stay calls, each an ordinary leaf of the next
+				// classification.
+				ordering.substitutesCelled = false;
+				continue;
+			}
 			OrderPlan plan = planOrder(site, ctx);
 			if (plan.demote().isEmpty()) {
 				return plan.probed() > MAX_OPS || plan.checks() > MAX_ORDER_CHECKS ? null
@@ -1560,6 +1660,49 @@ final class WasmIntFusionCompiler {
 				&& !ArgumentOrder.isQuiet(evaluated, name -> WasmArithCompiler.isQuietVariable(name, ctx));
 	}
 
+	/**
+	 * Whether every leaf the site evaluates after a {@link CelledCall}'s application
+	 * began is inert: the fused evaluation runs every leaf before any application, and a
+	 * replacement a write left in the cell runs where the call applies, so nothing
+	 * evaluated after that point may run code or read what code can change. The fallback
+	 * then calls each replacement in the interpreter's order: after its arguments and
+	 * every application before it, which is all the leaves between could not tell from
+	 * the fused one. A leaf no check can stand in for is not inert either, so no boundary
+	 * ({@link #planOrder}) ever has a celled call pending.
+	 */
+	private static boolean keepsCelledOrder(Site site, WasmLispCompiler.Ctx ctx) {
+		int first = site.events.size();
+		for (CelledCall call : site.celledCalls) {
+			first = Math.min(first, call.bodyStart);
+		}
+		for (int i = first; i < site.events.size(); i++) {
+			Event event = site.events.get(i);
+			if (!event.applies() && !inert(event.node(), ctx)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Whether evaluating the leaf neither runs code nor reads what code can change: a
+	 * constant, an unboxed local (never captured), or a self-evaluating form, a quoted
+	 * one, a constant variable or a lexical variable no closure holds -- read where the
+	 * leaf evaluates or where the interpreter evaluates it, the same value.
+	 */
+	private static boolean inert(Node leaf, WasmLispCompiler.Ctx ctx) {
+		if (observable(leaf, ctx)) {
+			return false;
+		}
+		LispVal evaluated = evaluatedForm(leaf);
+		if (evaluated instanceof LispSymbol sym) {
+			return sym.isKeyword() || WasmExprCompiler.plainLocalSlot(sym, ctx) >= 0
+					|| ctx.closRegistry.constantNames().contains(sym.name());
+		}
+		return !(evaluated instanceof LispCons cons)
+				|| cons.car() instanceof LispSymbol head && LispNames.QUOTE.equals(head.name());
+	}
+
 	/** What evaluating the leaf runs, or null when nothing does. */
 	private static @Nullable LispVal evaluatedForm(Node leaf) {
 		return switch (leaf) {
@@ -1600,6 +1743,11 @@ final class WasmIntFusionCompiler {
 		return switch (node) {
 			case OpNode op -> op.args();
 			case ArefLeaf leaf -> List.of(java.util.Objects.requireNonNull(leaf.indexNode));
+			case CelledCall call -> {
+				List<Node> nodes = new ArrayList<>(call.args);
+				nodes.add(call.body);
+				yield nodes;
+			}
 			default -> List.of();
 		};
 	}
@@ -1684,6 +1832,11 @@ final class WasmIntFusionCompiler {
 					}
 				}
 				case ArefLeaf ignored -> {
+					return null;
+				}
+				// A replacement decides what it signals (never pending:
+				// keepsCelledOrder).
+				case CelledCall ignored -> {
 					return null;
 				}
 				case OpNode op -> {
@@ -1856,6 +2009,33 @@ final class WasmIntFusionCompiler {
 	}
 
 	/**
+	 * What every fast path opens with, directly inside its bail block: the cell checks,
+	 * then the leaves' guards and unboxes.
+	 */
+	private static void emitFastEntry(Site site, WasmLispCompiler.Ctx ctx) {
+		emitCellChecks(site, ctx);
+		emitLeafUnboxes(site.leaves, ctx);
+	}
+
+	/**
+	 * Bails to the fallback ({@code br_if 0}) when a write filled the cell of a name the
+	 * site substituted, once per name: the fallback then calls through the cell. Nothing
+	 * the fast path runs can write one, so a check up front holds for the whole tree.
+	 */
+	private static void emitCellChecks(Site site, WasmLispCompiler.Ctx ctx) {
+		java.util.Set<Integer> checked = new java.util.HashSet<>();
+		for (CelledCall call : site.celledCalls) {
+			if (checked.add(call.cell)) {
+				ctx.writer.write(Instruction.GET_GLOBAL);
+				ctx.writer.writeUnsignedLeb128(call.cell);
+				ctx.writer.write(Instruction.REF_IS_NULL);
+				ctx.writer.write(Instruction.I32_EQZ);
+				ctx.writer.write(Instruction.BR_IF, 0);
+			}
+		}
+	}
+
+	/**
 	 * Guards and unboxes every non-constant leaf ONCE, in registration (source) order and
 	 * the aref reads after the rest, into an i64 scratch local -- the fast path re-reads
 	 * the local at every occurrence. The guard used to be re-emitted at every occurrence
@@ -1964,6 +2144,7 @@ final class WasmIntFusionCompiler {
 					emitArefReads(arg, read, ctx);
 				}
 			}
+			case CelledCall call -> emitArefReads(call.body, read, ctx);
 			case ArefLeaf leaf -> {
 				if (read.add(leaf)) {
 					emitArefReads(java.util.Objects.requireNonNull(leaf.indexNode), read, ctx);
@@ -1997,7 +2178,7 @@ final class WasmIntFusionCompiler {
 		}
 		else {
 			int slot;
-			if (index instanceof OpNode) {
+			if (index instanceof OpNode || index instanceof CelledCall) {
 				emitFast(index, ctx);
 				slot = ctx.allocI64Temp();
 				ctx.writer.write(Instruction.SET_LOCAL);
@@ -2067,6 +2248,8 @@ final class WasmIntFusionCompiler {
 			case ExprLeaf leaf -> writeI64LocalRead(leaf.i64Slot, ctx);
 			case ArefLeaf leaf -> writeI64LocalRead(leaf.i64Slot, ctx);
 			case RawLeaf leaf -> writeI64LocalRead(leaf.snapI64, ctx);
+			// The cells were checked on entry (emitCellChecks).
+			case CelledCall call -> emitFast(call.body, ctx);
 			case OpNode op -> {
 				// (%mask-signed-field k x) keeps the low k <= 64 bits, which the WRAPPED
 				// subtree computes exactly; a narrower field sign-extends from bit k-1.
@@ -2154,6 +2337,10 @@ final class WasmIntFusionCompiler {
 	 * leaf) emits through the ordinary checked path, whose value is exact.
 	 */
 	private static void emitFastWrapped(Node node, WasmLispCompiler.Ctx ctx) {
+		if (node instanceof CelledCall call) {
+			emitFastWrapped(call.body, ctx);
+			return;
+		}
 		if (!(node instanceof OpNode op)) {
 			emitFast(node, ctx);
 			return;
@@ -2266,6 +2453,41 @@ final class WasmIntFusionCompiler {
 	}
 
 	/**
+	 * A site's fallback: each root's {@link #emitFallback}, its value left on the stack,
+	 * after counting how many places read each {@link CelledCall} -- a parameter of a
+	 * substituted local function used twice reads its argument twice, and the interpreter
+	 * calls a function in an argument once.
+	 */
+	private static void emitFallbacks(List<Node> roots, WasmLispCompiler.Ctx ctx) {
+		for (Node root : roots) {
+			countFallbackUses(root);
+		}
+		for (Node root : roots) {
+			emitFallback(root, ctx);
+		}
+	}
+
+	private static void countFallbackUses(Node node) {
+		switch (node) {
+			case CelledCall call -> {
+				if (call.fallbackUses++ == 0) {
+					for (Node arg : call.args) {
+						countFallbackUses(arg);
+					}
+				}
+			}
+			case OpNode op -> {
+				for (Node arg : op.args()) {
+					countFallbackUses(arg);
+				}
+			}
+			case ArefLeaf leaf -> countFallbackUses(java.util.Objects.requireNonNull(leaf.indexNode));
+			default -> {
+			}
+		}
+	}
+
+	/**
 	 * The boxed fallback: the same tree, left-folded through the generic runtime helpers
 	 * the per-operation compilers call ({@code _rat_add}-family, {@code _big_*} bitwise),
 	 * reading the leaf locals -- so a bailing fast path costs a recomputation but
@@ -2273,6 +2495,28 @@ final class WasmIntFusionCompiler {
 	 */
 	private static void emitFallback(Node node, WasmLispCompiler.Ctx ctx) {
 		switch (node) {
+			// The call itself, through the named entry: the compiled definition while the
+			// cell is empty, the replacement once a write filled it. Called once however
+			// many places read it.
+			case CelledCall call -> {
+				if (call.fallbackSlot >= 0) {
+					ctx.writer.write(Instruction.GET_LOCAL);
+					ctx.writer.writeUnsignedLeb128(call.fallbackSlot);
+					return;
+				}
+				ctx.writer.write(Instruction.REF_NULL);
+				ctx.writer.writeHeapType(Type.EQ.code());
+				for (Node arg : call.args) {
+					emitFallback(arg, ctx);
+				}
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(call.entry);
+				if (call.fallbackUses > 1) {
+					call.fallbackSlot = ctx.allocTemp();
+					ctx.writer.write(Instruction.TEE_LOCAL);
+					ctx.writer.writeUnsignedLeb128(call.fallbackSlot);
+				}
+			}
 			case ConstLeaf c -> WasmEmitHelper.compileIntegerLiteral(c.value(), ctx);
 			case ExprLeaf leaf -> {
 				ctx.writer.write(Instruction.GET_LOCAL);

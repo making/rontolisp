@@ -1468,6 +1468,16 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
     ([wasm-int-fusion.md](wasm-int-fusion.md)); a fresh JVM class 4.1-4.3 s, JIT tier-up
     ([jvm-int-fusion.md](jvm-int-fusion.md)). On macOS arm64, before that fix, the same three:
     81 ms, 345 ms, 1.38 s.
+    **A wasi:http handler pays the same** (2026-11-09, same box, `wasmtime serve`): `postgres-web.lisp`
+    0.47-0.57 s against the command's 0.44-0.46 s, its digest functions the command's bytes; what is
+    the handler's own is the collector, 18-19 collections per derivation in serve mode's small heap
+    against none ([wasm-gc-heap-pregrow.md](wasm-gc-heap-pregrow.md), "Why serve is different").
+    Shiori took 2.09-2.30 s, from 2026-11-05 to 2026-11-09: clack's `eval` gave every defun a cell
+    and the fusion skipped those names; 0.59-0.89 s since it substitutes them
+    ([wasm-int-fusion.md](wasm-int-fusion.md), "A name with a cell"). On an Apple silicon Mac the
+    same day both handlers measured 0.69 s against the command's 0.10 s: Shiori's is this; the
+    `postgres-web.lisp` figure did not reproduce here and matches a component compiled before the
+    settled-tail fix (here the handler then paid 1.8-2.9 s against the command's 1.09-1.14 s).
     What the component still spends is ironclad's own PBKDF2 round, ~94 us of it: four
     compressions at ~12-15 us where two would do (`reinitialize-instance` re-derives the HMAC pads
     each round), and ~45 us of CLOS re-init, digest copies and finalization -- `produce-digest`

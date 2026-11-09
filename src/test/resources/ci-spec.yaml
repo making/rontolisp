@@ -17121,6 +17121,16 @@ cases:
       (print (cwn-loaded 1))
       (print (cwn-loaded-caller 2))
       (print (funcall #'cwn-loaded 3))
+      ;; An integer one-liner the WASM backends substitute into their callers' fused trees:
+      ;; a replacement is called where the call stands, once, after what the interpreter
+      ;; evaluates before it.
+      (defun cwn-add32 (a b) (ldb (byte 32 0) (+ a b)))
+      (defun cwn-mix32 (h) (logxor (cwn-add32 (ash h 3) 2654435769) 1))
+      (defun cwn-double32 (a) (flet ((dbl (x) (+ x x))) (dbl (cwn-add32 a 1))))
+      (defun cwn-ordered32 (h) (+ (cwn-add32 h 1) (progn (print :leaf) 0)))
+      (print (list (cwn-mix32 305419896) (cwn-double32 4294967295) (cwn-ordered32 5)))
+      (cwn-install 'cwn-add32 (lambda (a b) (print (list :replacement a b)) (- a b)))
+      (print (list (cwn-mix32 305419896) (cwn-double32 7) (cwn-ordered32 5)))
     expected: |
       (:OLD 0)
       (:NEW 1)
@@ -17188,6 +17198,13 @@ cases:
       (:LOADED 1)
       (:LOADED 2)
       (:LOADED 3)
+      :LEAF
+      (802827640 0 6)
+      (:REPLACEMENT 2443359168 2654435769)
+      (:REPLACEMENT 7 1)
+      (:REPLACEMENT 5 1)
+      :LEAF
+      (-211076602 12 4)
   - name: a-definition-of-a-generic-function-binds-its-name-again
     source: |
       ;; A definition of a generic function binds a name the program retired, after any
