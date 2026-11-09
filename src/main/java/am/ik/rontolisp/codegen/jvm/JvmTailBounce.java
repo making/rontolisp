@@ -517,6 +517,19 @@ final class JvmTailBounce {
 	}
 
 	/**
+	 * {@return whether a direct call of {@code callee} takes the tail entry of its cell}
+	 * ({@link JvmFunctionCell#tailEntryBody}): the method's tail, handing on the bounce
+	 * of what replaced the function, so the call stays proper.
+	 * @param callee the function called
+	 * @param cons the call form
+	 * @param ctx the method being emitted
+	 */
+	static boolean takesTailEntry(JvmLispCompiler.FunctionInfo callee, LispCons cons, JvmLispCompiler.Ctx ctx) {
+		JvmFunctionCell cell = callee.cell();
+		return cell != null && cell.tailNamed() != null && (passesThrough(cons, ctx) || answersCellBounce(cons, ctx));
+	}
+
+	/**
 	 * Emits a direct call of {@code callee}, its physical arguments on the stack, and the
 	 * check it owes its result. A callee that may answer a bounce takes the depth: this
 	 * method's when the call is its tail and the bounce passes on
@@ -533,7 +546,7 @@ final class JvmTailBounce {
 		boolean passes = cons != null && passesThrough(cons, ctx);
 		JvmFunctionCell cell = callee.cell();
 		MethodRefEntry tailEntry = cell == null ? null : cell.tailNamed();
-		if (cell != null && tailEntry != null && (passes || cons != null && answersCellBounce(cons, ctx))) {
+		if (cell != null && tailEntry != null && cons != null && takesTailEntry(callee, cons, ctx)) {
 			// The method's tail, of a function the program can replace: what replaced it
 			// comes back as a bounce this method hands on, so the call stays proper
 			// (JvmFunctionCell).

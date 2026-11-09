@@ -111,8 +111,8 @@ its index is part of the tree (below). What is this backend's own:
   Shiori's SCRAM login under `wasmtime serve` 2.09-2.30 s -> 0.59-0.89 s (0.51-0.64 s substituted with
   no check at all, unsound). Pinned by the `eval` leg of the same fuel budget (45.9 M) and
   ci-spec `a-defun-written-through-a-computed-name-answers-the-new-definition` (`cwn-add32`: the
-  replacement called once, in the interpreter's order, all four backends). The JVM twin still leaves
-  such a name a call (`.todo/j33`).
+  replacement called once, in the interpreter's order, all four backends). The JVM twin does the same
+  in its outlined method ([jvm-int-fusion.md](jvm-int-fusion.md), "A name with a cell").
 - **Masked signed field**: `(%mask-signed-field k x)` with a literal `1 <= k <= 64` is an op node
   whose operand emits WRAPPED and sign-extends below 64 (`i64.shl`/`i64.shr_s` by `64 - k`): the
   JVM twin's node (`.kb/jvm-int-fusion.md`), same fallback through `_big_xor`/`_big_and`/`_rat_add`

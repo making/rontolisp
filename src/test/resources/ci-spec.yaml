@@ -17121,7 +17121,7 @@ cases:
       (print (cwn-loaded 1))
       (print (cwn-loaded-caller 2))
       (print (funcall #'cwn-loaded 3))
-      ;; An integer one-liner the WASM backends substitute into their callers' fused trees:
+      ;; An integer one-liner the compiled backends substitute into their callers' fused trees:
       ;; a replacement is called where the call stands, once, after what the interpreter
       ;; evaluates before it.
       (defun cwn-add32 (a b) (ldb (byte 32 0) (+ a b)))

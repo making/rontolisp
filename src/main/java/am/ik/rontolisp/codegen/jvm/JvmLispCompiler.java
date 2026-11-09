@@ -3121,11 +3121,13 @@ public final class JvmLispCompiler implements LispCompiler {
 							cp.fieldRef(thisClass, flagNameUtf, Objects.requireNonNull(rawGlobalFlagDescUtf))));
 		}
 		JvmIntFusionCompiler.State fusedState = new JvmIntFusionCompiler.State(this.className);
+		// A name with a cell (notinline: every defun of a program holding eval, or one a
+		// linked class declares) is inlinable too: a fused site checks the cell and,
+		// once a write filled it, calls through it (JvmIntFusionCompiler.CelledCall).
 		Map<String, DefunDecl> inlinableDefuns = new HashMap<>();
 		if (intFusion && !this.dynamic) {
 			for (DefunDecl defun : defuns) {
-				if (!multiplyDefinedDefuns.contains(defun.name) && !notinline.contains(defun.name)
-						&& JvmIntFusionCompiler.isInlinableDefun(defun)) {
+				if (!multiplyDefinedDefuns.contains(defun.name) && JvmIntFusionCompiler.isInlinableDefun(defun)) {
 					inlinableDefuns.put(defun.name, defun);
 				}
 			}
@@ -3765,6 +3767,8 @@ public final class JvmLispCompiler implements LispCompiler {
 			for (JvmBodyOutliner.OutlinedBody outlined : mainCtx.outlinedBodies) {
 				callers.add(outlined.ctx());
 			}
+			// a fused method's fallback calls a name with a cell by its entry
+			callers.addAll(fusedCtxs);
 			for (Ctx caller : callers) {
 				caller.body.forEachEntry(entry -> calledEntries.add(entry.index()));
 			}
