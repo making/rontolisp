@@ -1231,13 +1231,17 @@ class WasmLispCompilerTest {
 		// integer-hot program is SMALLER at --optimize=size, because the fused sites
 		// that emit their tree twice are gone; and DEFAULT is byte-for-byte what the
 		// bare --optimize has always emitted, which is the whole reason the flag took a
-		// value instead of growing a second flag.
+		// value instead of growing a second flag. Every site here can bail (the
+		// parameters are boxed leaves, acc and i shadowed locals), so each keeps its
+		// fallback: a site that cannot bail emits none, and an accumulator masked at its
+		// root (an exact local) once made this program smaller at the default level
+		// (2807 bytes against 2922, 2026-11-09).
 		List<LispVal> program = LispReader.readAllFromString("""
 				(defun rol32d (x s) (logand (logior (ash x s) (ash x (- s 32))) 4294967295))
 				(defun mixd (a b)
 				  (let ((acc 0) (i 0))
 				    (tagbody top
-				      (setq acc (logand (+ (rol32d acc 7) (* a b) i) 4294967295))
+				      (setq acc (+ (logand (rol32d acc 7) 65535) (* a b) i))
 				      (setq i (+ i 1))
 				      (if (< i 64) (go top)))
 				    acc))

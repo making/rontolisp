@@ -137,6 +137,64 @@ its index is part of the tree (below). What is this backend's own:
   built once in a module global (`_t_sym`, FUNC_T_SYM / TYPE_T_SYM / the always-last global);
   same id = the intern offset of "T".
 
+## Ranges, and sites with nothing to bail on (2026-11-09, `.todo/j34`)
+
+Every node has a `range` -- a constant's, a packed element's width, a counted or exact local's
+(`.kb/wasm-unboxed-locals.md`), all of i64 for a boxed leaf or a dual local -- and an operation's
+follows by interval arithmetic in the order `emitFast` emits it. An add/sub/mul/left-`ash` step
+whose exact result provably stays in i64 (`stepRange`) is the plain i64 op: no `_fx_*` call, no
+inline literal check. A site that cannot bail (`canBail`: no boxed leaf, no shadowed local, no
+non-direct read, no cell, no checked step -- `fastBails` mirrors `emitFast`'s choices) emits its
+fast path alone, with no `block $bail` and no fallback: in `tryCompile`, `tryCompileCompare`,
+`tryCompileRaw` and `compileRawStore`.
+
+- **The snapshot barrier** (`emitSnapshotBarrier`). A local's raw value is a PURE expression from
+  its last join on, and with no-bail stores an exact local's runs through every assignment -- a
+  chain over a whole unrolled SHA-256 block. Cranelift places a pure value at its first use; a
+  use in a fallback dominates neither the fast path nor anything after the site, so each later
+  use rebuilt the chain from its last join, quadratically. Measured (Xeon E5-2697A v4, wasmtime
+  49): the 64-round block grew from 0.78 MB to 1.3 MB of machine code and ran 2.9x slower than
+  with shadowed locals. A site that can bail turns its non-counted raw snapshots into block
+  parameters first -- `memory.size; i32.eqz; if; (i64.const 0; local.set snap)*; end`, a branch
+  never taken (no module's memory is empty) that the engine cannot prove -- before each order
+  boundary and before the fast path. With it the same block was 0.52 MB and 35% fewer cycles.
+- **Direct reads** (`ArefLeaf.direct`, `markDirectReads`). A read of a packed vector pinned by a
+  declaration or a constant (below) does not bail: the declaration's `ref.cast` (a false one
+  traps, as the unfused declared read does, `.kb/declarations-type-checks.md`), a bound refused
+  through the one `_idx_ref` call (`WasmArrayCompiler.emitIndexReport`, EH mode) and
+  `unreachable`; a constant's array is tested and a miss reported the same way. Only when no
+  operation of the site can signal over integers (a `mod`/`rem` by other than a non-zero
+  literal, an `ash` by a computed count): then the first thing to go wrong in the
+  interpreter's order is the read itself -- leaf guards and cell checks run before any read and
+  still bail. A pinned read in a site that keeps its fallback tests ONE width
+  (`ArefLeaf.packedType`), not three; an index whose range is a fixnum skips the i31 test.
+- **Constant arrays** (`WasmArrayCompiler.constantArrays`, `Ctx.constantArrays`). A top-level
+  `(defconstant name V)`, V a packed vector the front end built (`LispIntVector`) or a literal
+  packed `make-array`, whose name appears nowhere but as the array of a rank-1 `aref` and has
+  one definition, in a program that names no variable at run time (no `eval`, `set`,
+  `symbol-value`, `progv`, `--dynamic`): its global holds that vector, or nothing before the
+  definition ran. A fused read knows its kind and length (ironclad's `+sha256-round-constants+`:
+  no bound check for the literal rounds). Fused reads only -- `arrayKindOfExpr` does not answer
+  it, so the unfused read keeps its generic shape for a read before the definition.
+- **Array parameters** (`arrayParams`, `Site.arrayEnv`). A substituted body whose parameter only
+  ever names an `aref`'s array -- directly, or as an argument another inlinable callee only
+  reads that way -- reads the caller's variable the parameter stands for; the argument must be a
+  bare variable at the caller's level (or an outer body's array parameter) that the other
+  arguments do not assign. Not for a celled call, whose fallback passes every argument's node.
+  `(dpb new (byte s p) n)` with a literal byte spec classifies through `expandDpb` and is a
+  closed-tree node, and `inlinableDefuns` grows to a fixpoint, a body calling inlinable defuns
+  being one too: ironclad's `ub32ref/be` (a `dpb` of two `ub16ref/be` calls) substitutes whole
+  into `fill-block-ub8-be`.
+- Measured (Xeon E5-2697A v4, wasmtime 49, the box loaded): ironclad `pbkdf2-hash-password
+  :sha256` x4096 ten times, a component: 25.9 G instructions / 13.0-15.0 G cycles -> 14.0 G /
+  4.4-4.5 G; a SHA-256 block of a 4 MiB digest 98k instructions / 44k cycles -> 40k / 11k.
+  Pinned by the fuel budget in
+  `WasmLispCompilerIntegrationTest.compileInlinableDefunsFuseWithoutChangingResults` (a
+  SHA-256-shaped compression, 61.0 M against 95.5 M with shadowed round variables) and the exact-
+  locals program in `.fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath`. **A program
+  holding `eval` keeps most of it off**: every defun has a cell, a celled root proves no range
+  and no celled site is free of bails (the same ten derivations 28.5 G -> 19.5 G).
+
 ## When fusion does NOT trigger (and must keep not triggering)
 
 - Under `--optimize=size`: `WasmIntFusionCompiler.speedTradesEnabled(ctx)`

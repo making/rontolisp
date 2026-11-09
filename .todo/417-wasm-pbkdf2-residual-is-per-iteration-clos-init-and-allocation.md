@@ -19,8 +19,10 @@ for the multiple-value channel stopped `mod32+`/`rol32` substituting -- and is
 restored (`.kb/wasm-int-fusion.md`, "A settled defun tail"). The 2026-11-09
 per-round breakdown on a Xeon (~94 us a round: four compressions, ~45 us of the
 rest, with the finalization pieces measured) is in `.kb/asdf.md`, the
-cl-postgres entry ("What a SCRAM login costs"); measure against those, not the
-M4 numbers above.
+cl-postgres entry ("What a SCRAM login costs"), and so is the profile taken the
+same day after `.todo/j34` took the compression from 44k cycles a block to 11k:
+the compression is now 30% of a derivation and the rest is this item's.
+Measure against those, not the M4 numbers above.
 
 ## What the 413 profile got wrong (do not re-chase it)
 

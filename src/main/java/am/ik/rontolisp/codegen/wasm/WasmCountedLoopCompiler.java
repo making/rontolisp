@@ -60,8 +60,11 @@ final class WasmCountedLoopCompiler {
 			LispNames.POP, LispNames.ROTATEF, LispNames.SHIFTF, LispNames.REMF, LispNames.DEFVAR,
 			LispNames.DEFPARAMETER, LispNames.DEFCONSTANT);
 
-	/** A binding proven to be a counted loop's induction variable. */
-	record Induction(String name, long start) {
+	/**
+	 * A binding proven to be a counted loop's induction variable, and every value it can
+	 * take: between its start and one step past the bound its loop's test checks.
+	 */
+	record Induction(String name, long start, long lo, long hi) {
 	}
 
 	/**
@@ -101,18 +104,21 @@ final class WasmCountedLoopCompiler {
 					|| capturedInLet.contains(name) || !fits(start.value())) {
 				continue;
 			}
-			if (isInductionVariable(name, start.value(), bodyExprs)) {
-				return new Induction(name, start.value());
+			long[] range = inductionRange(name, start.value(), bodyExprs);
+			if (range != null) {
+				return new Induction(name, start.value(), range[0], range[1]);
 			}
 		}
 		return null;
 	}
 
 	/**
-	 * Whether the variable is stepped by exactly one {@code (setq VAR (+ VAR LITERAL))}
-	 * that sits in the statement list of a {@code while} whose test bounds it.
+	 * The range of a variable stepped by exactly one {@code (setq VAR (+ VAR LITERAL))}
+	 * that sits in the statement list of a {@code while} whose test bounds it, or null
+	 * when it is not one.
 	 */
-	private static boolean isInductionVariable(String name, long start, List<LispVal> bodyExprs) {
+	private static long @org.jspecify.annotations.Nullable [] inductionRange(String name, long start,
+			List<LispVal> bodyExprs) {
 		List<LispCons> writers = new ArrayList<>();
 		for (LispVal form : bodyExprs) {
 			collectWriters(form, name, writers);
@@ -120,17 +126,17 @@ final class WasmCountedLoopCompiler {
 		if (writers.size() != 1) {
 			// No step at all, or a second assignment that the i64 slot could not
 			// represent -- and, either way, one the range proof cannot account for.
-			return false;
+			return null;
 		}
 		LispCons step = writers.get(0);
 		List<LispVal> stepParts = step.toList();
 		if (stepParts.size() != 3 || !(stepParts.get(0) instanceof LispSymbol setq)
 				|| !LispNames.SETQ.equals(setq.name()) || !isVar(stepParts.get(1), name)) {
-			return false;
+			return null;
 		}
 		long delta = stepDelta(stepParts.get(2), name);
 		if (delta == 0) {
-			return false;
+			return null;
 		}
 		// The step has to run in STATEMENT position -- a counted variable has no boxed
 		// value to hand back -- which being a direct element of a while's body list is.
@@ -139,15 +145,16 @@ final class WasmCountedLoopCompiler {
 			collectLoopsStepping(form, step, loops);
 		}
 		if (loops.size() != 1) {
-			return false;
+			return null;
 		}
 		Long bound = boundAtLoopTop(((LispCons) loops.get(0).cdr()).car(), name, delta > 0, false);
 		if (bound == null || !fits(bound)) {
-			return false;
+			return null;
 		}
 		// Every value the variable can take: the initial one, and (at the widest) one
 		// step past the last that passed the test. Both have to box exactly as an i31.
-		return fits(bound + delta);
+		long last = bound + delta;
+		return fits(last) ? new long[] { Math.min(start, last), Math.max(start, last) } : null;
 	}
 
 	/**
@@ -325,7 +332,7 @@ final class WasmCountedLoopCompiler {
 		ctx.writer.writeSignedLeb128(induction.start());
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writeI64LocalIndex(slot);
-		return WasmIntFusionCompiler.RawLocal.counted(slot);
+		return WasmIntFusionCompiler.RawLocal.counted(slot, induction.lo(), induction.hi());
 	}
 
 	/**
@@ -351,6 +358,41 @@ final class WasmCountedLoopCompiler {
 		ctx.writer.write(Instruction.I64_ADD);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writeI64LocalIndex(raw.i64Slot());
+	}
+
+	/**
+	 * The value form of every assignment of {@code name} in the forms, when each writer
+	 * is a {@code setq}/{@code setf} assigning it as a bare symbol; null when any other
+	 * writer could assign it ({@link #MODIFY_OPERATORS}: an {@code incf}, a
+	 * {@code psetq}, a place through it). As blind to scope and quoting as the counted
+	 * scan, which can only find more writers.
+	 * @param forms the forms the name is bound over
+	 * @param name the variable
+	 * @return the assigned value forms, or null
+	 */
+	static @org.jspecify.annotations.Nullable List<LispVal> plainAssignedValues(List<LispVal> forms, String name) {
+		List<LispCons> writers = new ArrayList<>();
+		for (LispVal form : forms) {
+			collectWriters(form, name, writers);
+		}
+		List<LispVal> values = new ArrayList<>();
+		for (LispCons writer : writers) {
+			List<LispVal> parts = writer.toList();
+			String op = ((LispSymbol) writer.car()).name();
+			if (!LispNames.SETQ.equals(op) && !LispNames.SETF.equals(op) || parts.size() % 2 != 1) {
+				return null;
+			}
+			for (int i = 1; i + 1 < parts.size(); i += 2) {
+				LispVal place = parts.get(i);
+				if (place instanceof LispSymbol sym && name.equals(sym.name())) {
+					values.add(parts.get(i + 1));
+				}
+				else if (writesName(place, name)) {
+					return null;
+				}
+			}
+		}
+		return values;
 	}
 
 	/** Whether any form in the list could assign {@code name}. */

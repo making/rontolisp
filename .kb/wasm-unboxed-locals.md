@@ -42,6 +42,35 @@ shadow, INCLUDING nil". Sentinel: a private `TYPE_CELL` in an immutable module g
 - Scoping mirrors `ctx.locals`. A name in `rawLocals` is never in `ctx.locals`
   (`WasmDefvarCompiler` checks both).
 
+## The exact flavour (`RawLocal.exact`, 2026-11-09)
+
+A third flavour: an i64 slot with NO shadow that is still assignable, its value always an integer
+in `[lo, hi]` (every flavour carries a range now; dual is all of i64, counted its loop's bounds).
+Its slot is authoritative at every point, so a read is the slot (no sentinel test, no snapshot
+shadow, no `_ub_read`) and the fused sites over it read its range (`.kb/wasm-int-fusion.md`,
+"Ranges, and sites with nothing to bail on").
+
+- **Eligibility** (`WasmLetCompiler`, after the counted binding and before the dual one, under the
+  dual one's conditions and not at top level): every assignment answers an integer in a range
+  WHATEVER path computes it -- `WasmIntFusionCompiler.valueRange`, the fused fast path and the
+  generic fallback computing the same exact value. The init is read in the scope it is evaluated
+  in (outer exact/counted locals' ranges, declared arrays' element widths); each body assignment
+  must be a `setq`/`setf` of the bare name (`WasmCountedLoopCompiler.plainAssignedValues`: any
+  other writer refuses) whose range its shape alone bounds -- a `logand` with a non-negative
+  literal, an `ldb`, interval arithmetic over those -- because the scan is blind to the body's
+  own bindings. A call of a defun with a cell proves nothing: a replacement answers anything.
+  ironclad's SHA-256 round variables qualify (inits read the declared registers, assignments are
+  `mod32+`).
+- **Stores** (`compileRawStore`): the fast path writes the slot; a bail's or an unfusable value's
+  boxed result unboxes into it (`emitUnboxExact`: an i31 or a `TYPE_BIGNUM`, the two tiers an
+  integer inside i64 takes, `.kb/wasm-bignum.md`). Anything else traps there -- only a false array
+  declaration can produce one (`.kb/declarations-type-checks.md`). A raw-to-raw copy from a
+  shadowed local does not apply (eligibility already refuses it).
+- **Reads** box by range (`emitBoxRanged`): a bare `ref.i31` inside the fixnum range, the i31 test
+  and `_int_new` otherwise.
+- **Trap**: a snapshot of an exact (or dual) local in a site that can bail must pass the snapshot
+  barrier, or Cranelift rebuilds its pure chain at every later use (`.kb/wasm-int-fusion.md`).
+
 ## The i64 locals run (`buildLocalsAndPatch`)
 
 An i64 slot's absolute index is unknowable mid-emission, so references emit as **3-byte fixed-width
@@ -54,5 +83,7 @@ restored per fused site; `maxI64Locals` is the declaration's high-water mark.
 
 ## Tests
 
-`WasmLispCompilerIntegrationTest#fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath`; ci-spec
-`flet-fusion-and-unboxed-locals`.
+`WasmLispCompilerIntegrationTest#fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath` (its second
+program: exact locals, a bailing assignment through a bignum and a float, constants, array
+parameters; P1 and component); ci-spec `flet-fusion-and-unboxed-locals`. The ci-spec corpus holds
+`eval`, so it never reaches the exact flavour.

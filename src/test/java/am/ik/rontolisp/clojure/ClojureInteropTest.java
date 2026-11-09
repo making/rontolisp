@@ -2422,7 +2422,7 @@ class ClojureInteropTest {
 						(let [p (promise)] (println (deref p 100 :dflt)))
 						(let [p (promise)] (deliver p :v) (println [(deref p 100 :dflt) (deref p 0 :dflt2)]))
 						(let [p (promise)] (println (deref p -5 :d)))
-						(println (deref (future 5) 1000 :d) (deref (future 5) 10.9 :d))
+						(println (deref (future 5) 1000 :d) (deref (future 5) 1000.9 :d))
 						(let [p (promise)] (future (do (Thread/sleep 100) (deliver p :late))) (println (deref p 5000 :early)))
 						(let [f (future 1)] (println [@f (future? f) (future-done? f) (future-cancelled? f) (future-cancel f) (realized? f)]))
 						(let [f (future 1)] (println [@f (future-cancel f) @f]))

@@ -954,13 +954,21 @@ final class WasmArrayCompiler {
 			DeclaredArrayTypes.Kind kind = arrayKindOfExpr(args.get(1), ctx);
 			if (kind != null && reportsBounds(ctx) && WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
 				// One representation: its bound compares inline after the subscript's
-				// type check and the rank check, the read's hot path paying the two calls
-				// those checks are.
+				// type check and the rank check, which a packed vector passes inline too
+				// (emitKindedCheckRank), as an integer-shaped subscript needs no type
+				// check (compileSubscript).
 				compileSubscript(subscript, ctx);
 				int idxSlot = setTemp(ctx);
-				emitArefCheckRank(ctx, arrSlot, subscriptCount);
+				emitKindedCheckRank(ctx, kind, arrSlot, subscriptCount);
 				emitFlatCheck(ctx, arrSlot, idxSlot, false, kindedBound(ctx, kind, arrSlot, subscriptCount));
 				emitKindedAref1(ctx, kind, arrSlot, idxSlot, true);
+				return;
+			}
+			if (kind != null && !reportsBounds(ctx)) {
+				compileSubscript(subscript, ctx);
+				int idxSlot = setTemp(ctx);
+				emitKindedCheckRank(ctx, kind, arrSlot, subscriptCount);
+				emitKindedAref1(ctx, kind, arrSlot, idxSlot, false);
 				return;
 			}
 			int idxSlot = compileReadSubscript(subscript, ctx, arrSlot, subscriptCount);
@@ -1018,6 +1026,28 @@ final class WasmArrayCompiler {
 		ctx.writer.write(Instruction.CALL);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_ARR_CHECK_RANK);
 		ctx.writer.write(Instruction.DROP);
+	}
+
+	/**
+	 * The rank check of a site whose array a declaration pins to {@code kind}: a packed
+	 * integer vector is rank 1 by construction, so at a one-subscript site the value that
+	 * IS one passes on a type test, and only another value -- a false declaration --
+	 * calls {@code _arr_check_rank}, which answers it as the call always did. Every other
+	 * kind or subscript count is the call.
+	 */
+	private static void emitKindedCheckRank(WasmLispCompiler.Ctx ctx, DeclaredArrayTypes.Kind kind, int arrSlot,
+			int given) {
+		if (given != 1 || kind.packedIntWidth() == 0) {
+			emitArefCheckRank(ctx, arrSlot, given);
+			return;
+		}
+		getLocal(ctx, arrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(intArrType(kind.packedIntWidth()));
+		ctx.writer.write(Instruction.I32_EQZ);
+		ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		emitArefCheckRank(ctx, arrSlot, given);
+		ctx.writer.write(Instruction.END);
 	}
 
 	/**
@@ -1298,6 +1328,166 @@ final class WasmArrayCompiler {
 		}
 		return new LispCons(new LispSymbol(LispNames.ASET),
 				new LispCons(arrayVar, new LispCons(placeParts.get(2), new LispCons(parts.get(2), LispNil.INSTANCE))));
+	}
+
+	/**
+	 * A constant whose value is a packed integer vector this compile builds: its kind and
+	 * its length.
+	 *
+	 * @param kind the packed kind
+	 * @param length the element count
+	 */
+	record ConstantArray(DeclaredArrayTypes.Kind kind, int length) {
+	}
+
+	/**
+	 * The constants whose value can only be the packed vector their definition builds: a
+	 * top-level {@code (defconstant name (make-array n :element-type '(unsigned-byte
+	 * w) ...))} with a literal size, whose name appears nowhere else in the program but
+	 * as the array of a rank-1 {@code (aref name i)} -- so nothing binds it, assigns it
+	 * or hands it on. Its module global then holds that vector or, read before the
+	 * definition runs, nothing ({@code ironclad}'s round constants: {@code defconst}'s
+	 * {@code boundp} guard folds away, {@code .kb/compile-time-boundp.md}). The caller
+	 * gates the whole analysis on a program that cannot name a variable at run time (no
+	 * {@code eval}, {@code set}, {@code symbol-value} or {@code progv}, not
+	 * {@code --dynamic}).
+	 * @param program the top-level forms, definitions included
+	 * @param registry the registry resolving element-type aliases
+	 * @return constant name to its vector
+	 */
+	static Map<String, ConstantArray> constantArrays(List<LispVal> program,
+			am.ik.rontolisp.@Nullable ClosRegistry registry) {
+		Map<String, ConstantArray> candidates = new java.util.HashMap<>();
+		for (LispVal form : program) {
+			collectConstantArrays(form, registry, candidates);
+		}
+		if (candidates.isEmpty()) {
+			return Map.of();
+		}
+		java.util.Set<String> disqualified = new java.util.HashSet<>();
+		Map<String, Integer> definitions = new java.util.HashMap<>();
+		for (LispVal form : program) {
+			scanConstantUses(form, candidates.keySet(), disqualified, definitions);
+		}
+		candidates.keySet().removeAll(disqualified);
+		// One definition anywhere, the top-level one: another (nested, or a second at
+		// top level) would leave which vector is current to the run.
+		candidates.keySet().removeIf(name -> definitions.getOrDefault(name, 0) != 1);
+		return candidates;
+	}
+
+	private static void collectConstantArrays(LispVal form, am.ik.rontolisp.@Nullable ClosRegistry registry,
+			Map<String, ConstantArray> out) {
+		if (!(form instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
+			return;
+		}
+		List<LispVal> parts = cons.toList();
+		if (LispNames.PROGN.equals(head.name())) {
+			for (LispVal sub : parts.subList(1, parts.size())) {
+				collectConstantArrays(sub, registry, out);
+			}
+			return;
+		}
+		if (!LispNames.DEFCONSTANT.equals(head.name()) || parts.size() < 3
+				|| !(parts.get(1) instanceof LispSymbol name)) {
+			return;
+		}
+		ConstantArray array = literalPackedArray(parts.get(2), registry);
+		if (array != null) {
+			out.putIfAbsent(name.name(), array);
+		}
+	}
+
+	// A literal packed make-array: a literal size and only the keys that keep the
+	// packed representation (:element-type, :initial-contents, :initial-element).
+	private static @Nullable ConstantArray literalPackedArray(LispVal init,
+			am.ik.rontolisp.@Nullable ClosRegistry registry) {
+		if (init instanceof am.ik.rontolisp.LispIntVector vector) {
+			// A packed vector the front end already built from the make-array.
+			return switch (vector.width()) {
+				case 8 -> new ConstantArray(DeclaredArrayTypes.Kind.U8, vector.length());
+				case 16 -> new ConstantArray(DeclaredArrayTypes.Kind.U16, vector.length());
+				case 32 -> new ConstantArray(DeclaredArrayTypes.Kind.U32, vector.length());
+				default -> null;
+			};
+		}
+		if (!(init instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)
+				|| !LispNames.MAKE_ARRAY.equals(localName(head.name()))) {
+			return null;
+		}
+		List<LispVal> args = cons.toList();
+		if (args.size() < 2 || !(args.get(1) instanceof LispInteger size) || size.value() < 0
+				|| size.value() > Integer.MAX_VALUE) {
+			return null;
+		}
+		LispVal elementType = null;
+		for (int i = 2; i + 1 < args.size(); i += 2) {
+			if (!(args.get(i) instanceof LispSymbol key)) {
+				return null;
+			}
+			switch (key.name()) {
+				case LispNames.ELEMENT_TYPE_KEYWORD -> elementType = args.get(i + 1);
+				case LispNames.INITIAL_ELEMENT_KEYWORD, LispNames.INITIAL_CONTENTS_KEYWORD -> {
+				}
+				default -> {
+					return null;
+				}
+			}
+		}
+		int width = packedIntElementWidth(LispMacroExpander.resolveElementTypeAlias(elementType, registry));
+		return switch (width) {
+			case 8 -> new ConstantArray(DeclaredArrayTypes.Kind.U8, (int) size.value());
+			case 16 -> new ConstantArray(DeclaredArrayTypes.Kind.U16, (int) size.value());
+			case 32 -> new ConstantArray(DeclaredArrayTypes.Kind.U32, (int) size.value());
+			default -> null;
+		};
+	}
+
+	// Disqualifies every candidate the form names other than as a defconstant's name or
+	// a rank-1 aref's array, and counts each candidate's defconstants. Quoted data names
+	// nothing.
+	private static void scanConstantUses(LispVal form, java.util.Set<String> names, java.util.Set<String> out,
+			Map<String, Integer> definitions) {
+		if (form instanceof LispSymbol sym) {
+			if (names.contains(sym.name())) {
+				out.add(sym.name());
+			}
+			return;
+		}
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		if (cons.car() instanceof LispSymbol head && cons.isProperList()) {
+			List<LispVal> parts = cons.toList();
+			switch (head.name()) {
+				case LispNames.QUOTE -> {
+					return;
+				}
+				case LispNames.DEFCONSTANT -> {
+					if (parts.size() >= 2 && parts.get(1) instanceof LispSymbol name) {
+						definitions.merge(name.name(), 1, Integer::sum);
+						for (LispVal sub : parts.subList(2, parts.size())) {
+							scanConstantUses(sub, names, out, definitions);
+						}
+						return;
+					}
+				}
+				case LispNames.AREF -> {
+					if (parts.size() == 3 && parts.get(1) instanceof LispSymbol) {
+						scanConstantUses(parts.get(2), names, out, definitions);
+						return;
+					}
+				}
+				default -> {
+				}
+			}
+		}
+		LispVal cur = cons;
+		while (cur instanceof LispCons cell) {
+			scanConstantUses(cell.car(), names, out, definitions);
+			cur = cell.cdr();
+		}
+		scanConstantUses(cur, names, out, definitions);
 	}
 
 	/**
@@ -1763,7 +1953,7 @@ final class WasmArrayCompiler {
 					// once the subscript passed.
 					int savedI64 = ctx.nextI64Local;
 					Runnable raw = compileIntStoreValue(valueExpr, ctx);
-					emitArefCheckRank(ctx, arrSlot, given);
+					emitKindedCheckRank(ctx, kind, arrSlot, given);
 					emitFlatCheck(ctx, arrSlot, idxSlot, false, () -> {
 						getLocal(ctx, arrSlot);
 						ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
@@ -1789,7 +1979,7 @@ final class WasmArrayCompiler {
 						int valSlot = setTemp(ctx);
 						emitUnboxIntForStore(ctx, valSlot);
 					}
-					emitArefCheckRank(ctx, arrSlot, given);
+					emitKindedCheckRank(ctx, kind, arrSlot, given);
 				}
 				ctx.writer.write(Instruction.I32_WRAP_I64);
 				ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
@@ -1951,11 +2141,14 @@ final class WasmArrayCompiler {
 	/**
 	 * Compiles a subscript, leaving it boxed. In EH mode one that is no integer is a
 	 * catchable type-error naming the access ({@link WasmEmitHelper#emitIndexCheck}),
-	 * where the {@code ref.cast i31} every arm unboxes it with would trap.
+	 * where the {@code ref.cast i31} every arm unboxes it with would trap. A subscript
+	 * whose shape answers an integer ({@link WasmIntFusionCompiler#answersInteger} -- a
+	 * literal, a counted loop's variable, integer arithmetic over them) is checked by
+	 * nothing: the check could only pass, and it was a call per access.
 	 */
 	private static void compileSubscript(LispVal subscript, WasmLispCompiler.Ctx ctx) {
 		WasmExprCompiler.compileExpr(subscript, ctx);
-		if (!(subscript instanceof LispInteger)) {
+		if (!WasmIntFusionCompiler.answersInteger(subscript, ctx)) {
 			WasmEmitHelper.emitIndexCheck(ctx);
 		}
 	}
@@ -1994,6 +2187,26 @@ final class WasmArrayCompiler {
 		callFixed(ctx, WasmLispCompiler.FUNC_IDX_REF);
 		ctx.writer.write(Instruction.DROP);
 		return idxSlot;
+	}
+
+	/**
+	 * Checks the boxed subscript in {@code idxSlot} of a rank-1 read of the array in
+	 * {@code arrSlot} -- its type, the array's rank and the bound -- through the one
+	 * {@code _idx_ref} call {@link #compileReadSubscript} makes, under the access's
+	 * operator: what a refused fused read reports with
+	 * ({@code WasmIntFusionCompiler.emitReadReport}). A module that
+	 * {@link #reportsBounds} only.
+	 * @param ctx the compile context
+	 * @param arrSlot the local holding the array
+	 * @param idxSlot the local holding the boxed subscript
+	 */
+	static void emitIndexReport(WasmLispCompiler.Ctx ctx, int arrSlot, int idxSlot) {
+		getLocal(ctx, arrSlot);
+		getLocal(ctx, idxSlot);
+		i32Const(ctx, 1 | WasmOperandTypes.operatorId(ctx) << 8);
+		boxI31(ctx);
+		callFixed(ctx, WasmLispCompiler.FUNC_IDX_REF);
+		ctx.writer.write(Instruction.DROP);
 	}
 
 	/**
@@ -4129,7 +4342,7 @@ final class WasmArrayCompiler {
 
 	// [ ] -> [i64]: data[idx] zero-extended (array.get_u for the sub-i32 widths, a plain
 	// array.get for i32 -- its element IS the raw 32 bits -- then i64.extend_i32_u).
-	private static void emitIntArrGetU(WasmLispCompiler.Ctx ctx, int arrSlot, Runnable pushIndex, int type) {
+	static void emitIntArrGetU(WasmLispCompiler.Ctx ctx, int arrSlot, Runnable pushIndex, int type) {
 		getLocal(ctx, arrSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(type);

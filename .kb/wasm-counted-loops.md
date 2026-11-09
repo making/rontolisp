@@ -17,14 +17,20 @@ runs faster. `(dotimes (i 1000000))` is a 203-byte module, was 1,987; no overflo
 the step and no range test on a read, the literal bound deciding both statically.
 
 ## The counted `RawLocal`
-`ctx.rawLocals` holds `WasmIntFusionCompiler.RawLocal.counted(slot)`, whose `shadowSlot` is
-`-1` (canonical constructor enforces "counted ⇔ no shadow"). Reusing that map is what makes
+`ctx.rawLocals` holds `WasmIntFusionCompiler.RawLocal.counted(slot, lo, hi)`, whose `shadowSlot`
+is `-1` (a counted local has no shadow; the exact flavour has none either but is assignable,
+`.kb/wasm-unboxed-locals.md`). `[lo, hi]` is every value it takes -- `[0, count]` for `dotimes`,
+start to one step past the bound for the `let`+`while` head (`Induction.lo`/`hi`) -- and the
+fused sites read it: `(- i 2)` over `i` in `[16, 65]` is a plain `i64.sub` with no overflow check
+and no i31 test before the read it indexes (`.kb/wasm-int-fusion.md`, "Ranges, and sites with
+nothing to bail on"). Reusing that map is what makes
 shadowing, `defvar` collision and Lisp-2 resolution work with no new rules
 (`WasmExprCompiler.compileSymbolRef`, `WasmLetCompiler`).
 
-Five sites branch on `counted()`: `evalLeaves` and `emitLeafUnboxes` do nothing (`snapI64`
-IS the counted slot); `emitFallback` and `emitRawLocalBoxedRead` emit `i32.wrap_i64;
-ref.i31`; `WasmSetqCompiler.compileForEffect` calls `WasmCountedLoopCompiler.compileStep`
+`evalLeaves` takes the counted slot as the snapshot itself; the other no-shadow sites ask
+`shadowed()` and treat the exact flavour alike: `emitLeafUnboxes` does nothing, `emitFallback`
+and `emitRawLocalBoxedRead` box by range (`i32.wrap_i64; ref.i31` for a counted one);
+`WasmSetqCompiler.compileForEffect` calls `WasmCountedLoopCompiler.compileStep` on `counted()`
 (one `i64.add`). `compileRawStore` **throws** on a counted target and `compileStep` throws on
 any value shape that is not the proven step, so an assignment the scan missed fails the
 compile loudly. The i64 slot comes from `ctx.nextI64Local` with the watermark restored after

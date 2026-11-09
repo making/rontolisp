@@ -1478,11 +1478,23 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
     same day both handlers measured 0.69 s against the command's 0.10 s: Shiori's is this; the
     `postgres-web.lisp` figure did not reproduce here and matches a component compiled before the
     settled-tail fix (here the handler then paid 1.8-2.9 s against the command's 1.09-1.14 s).
-    What the component still spends is ironclad's own PBKDF2 round, ~94 us of it: four
+    Before 2026-11-09's ranges and exact locals the component spent ~94 us a PBKDF2 round: four
     compressions at ~12-15 us where two would do (`reinitialize-instance` re-derives the HMAC pads
     each round), and ~45 us of CLOS re-init, digest copies and finalization -- `produce-digest`
     alone ~6 us past its compression, `sha256-regs-digest` 1.8 us for 32 bytes, the pad loop's 56
     stores 1.3 us (`.todo/417`).
+    **Since** ([wasm-int-fusion.md](wasm-int-fusion.md), "Ranges, and sites with nothing to bail
+    on"; `.todo/j34`; same box, loaded, the five-run spread): `postgres-hello.lisp` 174-223 ms
+    against 443-497 ms before and the native interpreter's 195-316 ms the same hour (an older
+    binary with the same kernel); `postgres-web.lisp` under `wasmtime serve` 180-269 ms against
+    432-600 ms, the command's speed; Shiori 578-841 ms against 776-928 ms -- its `eval` keeps
+    every defun celled, and a celled root proves no range and leaves no site free of bails. A
+    derivation (`pbkdf2-hash-password` x4096) took 153-158 ms against 407-511 ms. Where the round
+    goes now (ten derivations, cycles, self): `sha256-expand-block` 16%, `update-sha256-block` 14%
+    -- a block 11k cycles, was 44k -- `xor-block` 11% (its indices are boxed parameters, every
+    store's `_idx_chk` a call), `fill-block-ub8-be` 7%, `copy-to-buffer` 4%, `_idx_chk` 4%; the
+    keyword scans of `update-digest`/`produce-digest` calls (`_str_lit`, `equal`,
+    `%ll-key-cell`) ~4%; `replace`/`check-sequence`/`seq-len` ~5%.
 - **alexandria 1.0.1** — `AlexandriaE2eTest` (all four); vendored UNMODIFIED. **The exercise IS
   `examples/asdf/alexandria-demo.lisp` verbatim — keep the two in sync.** ci-spec
   `last-with-a-count` / `every-some-over-many-sequences` / `coerce-to-a-computed-result-type` /
