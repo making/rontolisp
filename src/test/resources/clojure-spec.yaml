@@ -2925,8 +2925,10 @@ cases:
     # stream the method's writer (.write, binding *out*, print-method of a part); a pr
     # inside it under print writes as print does (*print-readably* nil, like the
     # oracle's print), print-method called writes through it or as pr, get-method and
-    # remove-method reach it. instaparse's Failure and Parser print this way. Every
-    # line the oracle's (clj 1.12.6).
+    # remove-method reach it. instaparse's Failure and Parser print this way; a
+    # dispatch value read when the defmethod runs -- the class or :type keyword a fn
+    # is handed, rewrite-clj's make-printable! -- stores under the row it names then.
+    # Every line the oracle's (clj 1.12.6).
     source: |
       (ns pm-ns)
       (defrecord R [a b])
@@ -2962,6 +2964,13 @@ cases:
       (print (->Q "s")) (newline)
       (defmethod print-method Plain [p w] (.write w "P") (pr (:a p)))
       (prn (with-out-str (pr (->Plain "x"))) (with-out-str (print (->Plain "x"))))
+      (defrecord Comp [a])
+      (defn printable! [c] (defmethod print-method c [x w] (.write w (str "<Comp " (:a x) ">"))))
+      (printable! Comp)
+      (printable! :pm-ns/kw)
+      (prn (->Comp 1) [(->Comp 2)] (with-meta {:a 3} {:type :pm-ns/kw}) (fn? (get-method print-method (class (->Comp 4)))))
+      (remove-method print-method (class (->Comp 5)))
+      (prn (->Comp 6))
       (in-ns 'auto)
     expected: |
       #R<1>
@@ -2983,6 +2992,8 @@ cases:
       <"s"> <[1 <:k>]>
       <s>
       "P\"x\"" "Px"
+      <Comp 1> [<Comp 2>] <Comp 3> true
+      #pm_ns.Comp{:a 6}
   - name: print-method-of-a-type-keyword-prints-its-carriers-first
     # A print-method for a :type keyword prints every value carrying it, ahead of
     # the record-or-deftype tag's own -- the oracle dispatches print-method on
@@ -3008,6 +3019,61 @@ cases:
       #Box nil
       Pt!
       {:v 6}
+  - name: print-method-of-a-protocol-interface-prints-the-types-implementing-it
+    # A protocol interface's dotted name is its class value, and a print-method or
+    # simple-dispatch method stored under it -- through a fn, like schema's
+    # register-schema-print-as-explain -- prints every record, deftype and reify whose
+    # body implements the protocol: MultiFn's selection between it and the printer's
+    # own IRecord, java.util.Map and IPersistentMap methods a record's class matches,
+    # which prefer-method breaks (both through print-method's value and its name);
+    # unpreferred, the oracle's Multiple methods refusal. A multimethod on class, isa?
+    # and instance? of the value take the types the same way. Every line the oracle's
+    # (clj 1.12.6, 2026-11-09).
+    source: |
+      (ns pmiface (:require [clojure.pprint :as pp]))
+      (defprotocol Sch (expl [this]))
+      (defrecord Mb [schema] Sch (expl [this] (list 'maybe (:schema this))))
+      (defrecord Pl [a])
+      (deftype Ty [v] Sch (expl [this] (list 'ty v)))
+      (defn register! [t]
+        (defmethod print-method t [s w] (print-method (expl s) w))
+        (defmethod pp/simple-dispatch t [s] (pp/write-out (expl s))))
+      (register! pmiface.Sch)
+      (doseq [m [print-method pp/simple-dispatch]]
+        (prefer-method m pmiface.Sch clojure.lang.IRecord)
+        (prefer-method m pmiface.Sch java.util.Map)
+        (prefer-method m pmiface.Sch clojure.lang.IPersistentMap))
+      (prn (->Mb 1) [(->Mb (->Pl 2)) {:k (->Mb "s")}])
+      (println (->Mb "s") (Ty. 3) (reify Sch (expl [_] 'r)))
+      (prn (pr-str (->Mb :k)) (->Pl 5))
+      (pp/pprint [(->Mb 1) (Ty. 4)])
+      (defprotocol Q (q [this]))
+      (defrecord Qr [] Q (q [_] 1))
+      (defmethod print-method pmiface.Q [x w] (.write w "Q!"))
+      (println (try (pr-str (->Qr)) (catch IllegalArgumentException e (let [m (.getMessage e)] (subs m 0 (+ 2 (.indexOf m "->")))))))
+      (prefer-method print-method pmiface.Q clojure.lang.IRecord)
+      (prefer-method print-method pmiface.Q java.util.Map)
+      (prefer-method print-method pmiface.Q clojure.lang.IPersistentMap)
+      (prn (->Qr) (fn? (get-method print-method pmiface.Q)))
+      (remove-method print-method pmiface.Q)
+      (prn (->Qr))
+      (defmulti pmf class)
+      (defmethod pmf pmiface.Sch [x] :sch)
+      (defmethod pmf :default [x] :dflt)
+      (prn (pmf (->Mb 1)) (pmf (Ty. 1)) (pmf (->Pl 1)) (isa? Mb pmiface.Sch) (isa? Pl pmiface.Sch))
+      (let [c pmiface.Sch]
+        (prn c (class? c) (instance? c (->Mb 1)) (instance? c (->Pl 1)) (instance? c (reify Sch (expl [_] 0)))))
+      (in-ns 'auto)
+    expected: |
+      (maybe 1) [(maybe #pmiface.Pl{:a 2}) {:k (maybe "s")}]
+      (maybe s) (ty 3) r
+      "(maybe :k)" #pmiface.Pl{:a 5}
+      [(maybe 1) (ty 4)]
+      Multiple methods in multimethod 'print-method' match dispatch value: class pmiface.Qr ->
+      Q! true
+      #pmiface.Qr{}
+      :sch :sch :dflt true false
+      pmiface.Sch true true false true
   - name: def-tag-names-a-deftype-and-entry-methods-read-values
     # {:tag Type} on a def keeps the quoted symbol (flatland.ordered's
     # empty-ordered-map/set defs; the oracle stores the class, which has no spelling

@@ -170,6 +170,7 @@ public final class ClojureArms {
 	private static Set<String> printFlagProducers() {
 		Set<String> out = new HashSet<>(ClojureCoreSpecials.PRINT_FLAGS);
 		out.add(ClojureDispatchLowering.PRINT_METHOD_ROW);
+		out.add(ClojureDispatchLowering.PRINT_METHOD_STORE);
 		return Set.copyOf(out);
 	}
 
@@ -652,13 +653,39 @@ public final class ClojureArms {
 		/**
 		 * A record or deftype a program defined a {@code print-method} for, which the
 		 * printer writes through it: only the store of such a method
-		 * ({@link ClojureDispatchLowering#PRINT_METHOD_ROW}) makes one. The store is a
-		 * producer of {@link #PRINT_FLAGS} too: the method runs with
-		 * {@code *print-readably*} bound to the printer's side, which a {@code pr} inside
-		 * it reads through that family's view, as the oracle's {@code print} binds it.
+		 * ({@link ClojureDispatchLowering#PRINT_METHOD_ROW}, or
+		 * {@link ClojureDispatchLowering#PRINT_METHOD_STORE} for a dispatch value read at
+		 * run time) makes one. The store is a producer of {@link #PRINT_FLAGS} too: the
+		 * method runs with {@code *print-readably*} bound to the printer's side, which a
+		 * {@code pr} inside it reads through that family's view, as the oracle's
+		 * {@code print} binds it.
 		 */
 		PRINT_METHOD("print-method", Set.of(ClojureDispatchLowering.PRINT_METHOD_P), Set.of(), Map.of(),
-				Set.of(ClojureDispatchLowering.PRINT_METHOD_ROW), Set.of()),
+				Set.of(ClojureDispatchLowering.PRINT_METHOD_ROW, ClojureDispatchLowering.PRINT_METHOD_STORE), Set.of()),
+
+		/**
+		 * {@code print-method} as a value, which a multimethod verb's value arm is handed
+		 * where it reads the registry: only a reference to the value makes one, so the
+		 * {@code prefer-method} arm storing the printer's preference
+		 * ({@link ClojureDispatchLowering#PRINT_METHOD_MULTI_P}) goes from a program
+		 * naming none.
+		 */
+		PRINT_METHOD_VALUE("print-method-value", Set.of(ClojureDispatchLowering.PRINT_METHOD_MULTI_P), Set.of(),
+				Map.of(), Set.of("RONTOLISP::%CLOJURE-PRINT-METHOD-V"), Set.of()),
+
+		/**
+		 * A protocol interface's class value ({@code schema.core.Schema}), the designator
+		 * of its name: only its construction
+		 * ({@link ClojureProtocolLowering#INTERFACE_CLASS}) makes one. {@code instance?}
+		 * of the value, {@code isa?} and a multimethod's dispatch of a record's or
+		 * deftype's class on it, the run-time dispatch value's canon, and the printer's
+		 * walk to a {@code print-method} stored under it read the types implementing it;
+		 * a program making none sheds those arms.
+		 */
+		PROTOCOL_INTERFACE("protocol-interface",
+				Set.of("RONTOLISP::%CLOJURE-PROTOCOL-INTERFACE-P", "RONTOLISP::%CLOJURE-PROTOCOL-INTERFACE-INSTANCE-P",
+						ClojureHierarchyLowering.INTERFACE_ISA, "RONTOLISP::%CLOJURE-PRINT-METHOD-WALK"),
+				Set.of(), Map.of(), Set.of(ClojureProtocolLowering.INTERFACE_CLASS), Set.of()),
 
 		/**
 		 * A map the printer writes as {@code #:ns{...}} under
@@ -1025,14 +1052,16 @@ public final class ClojureArms {
 		 * {@code class}, {@code instance?} of {@code Class}, the hashes,
 		 * {@code identical?}, {@code cast}, {@code class?}, the class chains, the
 		 * {@code .getName}/{@code .getSimpleName} arms and a {@code java:} member's
-		 * argument read one: only a construction spelling the {@code :C%CLASS} tag and
-		 * {@code type}'s run-time designator make one. The alias is {@code class?}'s call
-		 * {@code (is-class value "java.lang.Class")}, which stands for the host test it
-		 * made before designators answered it.
+		 * argument read one: only a construction spelling the {@code :C%CLASS} tag,
+		 * {@code type}'s run-time designator and a protocol interface's class value
+		 * ({@link ClojureProtocolLowering#INTERFACE_CLASS}) make one. The alias is
+		 * {@code class?}'s call {@code (is-class value "java.lang.Class")}, which stands
+		 * for the host test it made before designators answered it.
 		 */
 		CLASS_DESIGNATOR("class-designator", Set.of(ClojurePredicateLowering.CLASS_DESIGNATOR_P), Set.of(),
 				Map.of(ClojurePredicateLowering.IS_CLASS, "RONTOLISP::%CLOJURE-HOST-INSTANCE-P"),
-				Set.of(":C%CLASS", ClojureDispatchLowering.TYPE_DESIGNATOR), Set.of()),
+				Set.of(":C%CLASS", ClojureDispatchLowering.TYPE_DESIGNATOR, ClojureProtocolLowering.INTERFACE_CLASS),
+				Set.of()),
 
 		/**
 		 * A namespace, which the printer, {@code str} and {@code class} spell: only a

@@ -529,16 +529,27 @@ class ClojureLoweringTest {
 	}
 
 	@Test
-	void printMethodOfATypeKeywordStoresUnderTheKeyword() {
+	void printMethodStoresUnderTheRowItsDispatchValueNames() {
 		// a :type keyword dispatch stores under the keyword itself, where the
 		// printer's :type-first lookup finds it (malli's ::into-schema); a host
 		// class no core value belongs to but an instant stores under its binary
 		// name, which the printer's host walk reads (tools.reader's Date method);
-		// any other dispatch value stays refused by name
+		// a value read when the defmethod runs (rewrite-clj's make-printable! over a
+		// fn parameter) and a protocol interface's class value (schema's Schema)
+		// store under the row they name then, and prefer-method of print-method
+		// stores the printer's preference; any other dispatch value stays refused
+		// by name
 		assertThat(lowered("(defmethod print-method :kw [x w] x)"))
 			.contains("(RONTOLISP::%CLOJURE-PRINT-METHOD-ROW (LIST :C%KEYWORD \"kw\")");
 		assertThat(lowered("(defmethod print-method java.util.Date [x w] x)"))
 			.contains("(RONTOLISP::%CLOJURE-PRINT-METHOD-ROW \"java.util.Date\"");
+		assertThat(lowered("(defn reg [c] (defmethod print-method c [x w] x))"))
+			.contains("(RONTOLISP::%CLOJURE-PRINT-METHOD-STORE |c%c| (LAMBDA (|c%x| |c%w|)");
+		assertThat(lowered("(defprotocol P (m [x])) (defmethod print-method user.P [x w] x)"
+				+ " (prefer-method print-method user.P clojure.lang.IRecord)"))
+			.contains("(RONTOLISP::%CLOJURE-PRINT-METHOD-STORE (RONTOLISP::%CLOJURE-PROTOCOL-INTERFACE-CLASS"
+					+ " \"user.P\" \"user/P\" |c%P%methods|)")
+			.contains("(RONTOLISP::%CLOJURE-PRINT-METHOD-PREFER (RONTOLISP::%CLOJURE-PROTOCOL-INTERFACE-CLASS");
 		for (String refused : List.of("Object", "String", "java.util.Map")) {
 			assertThatThrownBy(() -> Clojure.read("(defmethod print-method " + refused + " [x w] x)", null))
 				.isInstanceOf(LispReadException.class)

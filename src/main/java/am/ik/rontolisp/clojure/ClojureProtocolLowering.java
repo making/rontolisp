@@ -196,6 +196,40 @@ final class ClojureProtocolLowering {
 	}
 
 	/**
+	 * The construction of a protocol interface's class value ({@code clojure.lisp}):
+	 * {@code (%clojure-protocol-interface-class name pkey table)} answers the
+	 * {@code (:C%CLASS name)} designator and registers the name with the protocol's var
+	 * key and body table, which {@code instance?} of the value, {@code isa?}, a
+	 * multimethod's dispatch and a {@code print-method} stored under it read
+	 * ({@link ClojureArms.Family#PROTOCOL_INTERFACE}).
+	 */
+	static final String INTERFACE_CLASS = "RONTOLISP::%CLOJURE-PROTOCOL-INTERFACE-CLASS";
+
+	/**
+	 * A protocol's interface spelled as a class in value position
+	 * ({@code schema.core.Schema}, an import of it): its class value, the designator of
+	 * the interface's name, registered with the protocol it stands for
+	 * ({@link #INTERFACE_CLASS}); null for any other name. A local, a var, a record or
+	 * deftype of the name and a loadable host class are resolved before this.
+	 * @param ctx the hub
+	 * @param name the name's spelling
+	 * @return the construction, or null
+	 */
+	static @Nullable LispVal interfaceValue(ClojureLowering ctx, String name) {
+		if (name.indexOf('/') >= 0 || name.startsWith(":") || !ClojureNamespaceLowering.isClasslike(ctx, name)) {
+			return null;
+		}
+		String cls = ClojureNamespaceLowering.resolveClass(ctx, name);
+		Map.Entry<String, ClojureLowering.ProtocolDef> protocol = protocolOfInterface(ctx, cls);
+		if (protocol == null) {
+			return null;
+		}
+		ctx.usedProtocols = true;
+		return ClojureLowerUtil.list(new LispSymbol(INTERFACE_CLASS), LispString.literal(cls),
+				LispString.literal(protocol.getKey()), protocol.getValue().inlineTable());
+	}
+
+	/**
 	 * The protocol runtime, spliced once per program behind the false binding: the tag
 	 * reader every dispatcher and {@code satisfies?} shares. A record, deftype or reify
 	 * answers its own tag; anything else answers its {@code class} kind keyword, so

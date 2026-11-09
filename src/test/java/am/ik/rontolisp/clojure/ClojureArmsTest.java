@@ -641,7 +641,7 @@ class ClojureArmsTest {
 	}
 
 	@Test
-	void thePrintFlagFamilyFoldsTheCutTheLevelTheDepthAndTheReadableSwitch() {
+	void thePrintFlagAndPrintMethodFamiliesFoldTheirArmsInAProgramMakingNone() {
 		List<LispVal> forms = read("(cond ((rontolisp::%clojure-print-deep-p x) (a))"
 				+ " ((rontolisp::%clojure-print-cut-p x) (b)) (t (rontolisp::%clojure-write-nested x r)))"
 				+ " (rontolisp::%clojure-write x (rontolisp::%clojure-print-readable readable))");
@@ -650,9 +650,27 @@ class ClojureArmsTest {
 		assertThat(scan.strips()).isTrue();
 		assertThat(ClojureArms.strip(forms, ClojureArms.Family.PRINT_FLAGS).stream().map(LispVal::print))
 			.containsExactly("(COND (T (RONTOLISP::%CLOJURE-WRITE X R)))", "(RONTOLISP::%CLOJURE-WRITE X READABLE)");
-		// a flag's special anywhere is what keeps them
+		// a flag's special anywhere is what keeps them, and a print-method's store,
+		// whose method runs with *print-readably* bound -- the run-time one too
 		List<LispVal> flagged = read("(let* ((rontolisp::%clojure-print-level 1)) (f))");
 		assertThat(ClojureArms.scan(flagged, ClojureArms.Family.PRINT_FLAGS).builds()).isTrue();
+		List<LispVal> stored = read("(rontolisp::%clojure-print-method-store c (lambda (x w) w))");
+		assertThat(ClojureArms.scan(stored, ClojureArms.Family.PRINT_FLAGS).builds()).isTrue();
+		assertThat(ClojureArms.scan(stored, ClojureArms.Family.PRINT_METHOD).builds()).isTrue();
+		// prefer-method's arm for print-method's value goes from a program naming no
+		// such value; the protocol interfaces' walk, isa? and instance? arms from one
+		// making no interface's class value
+		List<LispVal> arms = read("(if (rontolisp::%clojure-print-method-multi-p m) (p a b) (r m))"
+				+ " (or (a x) (rontolisp::%clojure-print-method-walk x) (b x))"
+				+ " (if (rontolisp::%clojure-protocol-interface-isa-p c p) t (d c))");
+		assertThat(ClojureArms.strip(arms, ClojureArms.Family.PRINT_METHOD_VALUE).get(0).print()).isEqualTo("(R M)");
+		assertThat(ClojureArms.strip(arms, ClojureArms.Family.PROTOCOL_INTERFACE).stream().skip(1).map(LispVal::print))
+			.containsExactly("(OR (A X) (B X))", "(D C)");
+		assertThat(ClojureArms.scan(read("#'rontolisp::%clojure-print-method-v"), ClojureArms.Family.PRINT_METHOD_VALUE)
+			.builds()).isTrue();
+		List<LispVal> iface = read("(rontolisp::%clojure-protocol-interface-class \"a.P\" \"a/P\" |c%a/P%methods|)");
+		assertThat(ClojureArms.scan(iface, ClojureArms.Family.PROTOCOL_INTERFACE).builds()).isTrue();
+		assertThat(ClojureArms.scan(iface, ClojureArms.Family.CLASS_DESIGNATOR).builds()).isTrue();
 	}
 
 	@Test

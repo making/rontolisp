@@ -7,7 +7,12 @@
 答えます。`:on`/`:on-interface` にインタフェース（ここではクラスキーワード）、`:sigs` に
 各メソッドのパラメータベクター、メソッドマップと拡張表を `:impls` に持ち、`extend`・
 `satisfies?`・`extends?`・`extenders` は呼び出し位置の名前と同様にこれを受け取ります。
-`:var` と `:method-builders` は持ちません。呼び出しは
+`:var` と `:method-builders` は持ちません。インタフェースのドット付きの名前（`user.P`、
+`my_app.core.P`）はそのクラス値です。名前として印字し、`class?` に答え、それへの
+`instance?`、`isa?`、`class` でディスパッチするマルチメソッドは、本体でプロトコルを実装する
+record・deftype・`reify` をオラクルと同じく受け取ります（拡張では実装になりません）。その
+[print-method](print-method.md) も同様です。`:on-interface` のキーワードとは `=` になりません。
+呼び出しは
 ターゲットのタグの完全一致、次にターゲットが継承または実装するクラスのうちプロトコルを
 extend したもの（throwable、`IRef` など。[extend-protocol](extend-protocol.md)）、
 それから `Object` 行でディスパッチし、`Object` 行なしの外れはオラクル同様シグナルを

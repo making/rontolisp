@@ -52,7 +52,10 @@ hand there, see its `patches.diff`):
 
 A record's or deftype's class value is its dispatch tag since j13: the designator one function
 makes (`ClojureProtocolLowering.typeTagForm`), every row of the type keyed by it -- what a
-generated class would replace on the host targets.
+generated class would replace on the host targets. A protocol interface's class value is its
+designator too since j14 (2026-11-09: `%clojure-protocol-interface-class`, registered with its
+protocol, so `instance?`, `isa?` and `print-method` read the types whose body implements it)
+-- what a generated interface would replace.
 
 Related items from the same round: `.todo/j13` (a record name as a value, done 2026-11-09), `.todo/j15`
 (`clojure.core$NAME`), `.todo/j20` (a class value inside a macro's expansion).

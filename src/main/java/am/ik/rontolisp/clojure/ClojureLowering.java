@@ -6613,6 +6613,10 @@ public final class ClojureLowering {
 				if (typeTag != null) {
 					return typeTag;
 				}
+				LispVal iface = ClojureProtocolLowering.interfaceValue(this, name);
+				if (iface != null) {
+					return iface;
+				}
 				LispVal langKeyword = ClojureValueClasses.classKeyword(this, name);
 				if (langKeyword != null) {
 					return langKeyword;

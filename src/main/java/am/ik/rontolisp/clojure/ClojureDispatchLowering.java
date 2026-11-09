@@ -1432,6 +1432,81 @@ final class ClojureDispatchLowering {
 	static final String PRINT_METHOD_P = "RONTOLISP::%CLOJURE-PRINT-METHOD-P";
 
 	/**
+	 * The store of a {@code print-method} whose dispatch value is read when the
+	 * {@code defmethod} runs ({@code clojure.lisp}): a value computed at run time, or a
+	 * protocol interface's class value ({@link #isRunTimePrintMethodValue}), stored under
+	 * the row it names then ({@link #PRINT_METHOD_KEY}). A producer of the print-method
+	 * family like the row store, and of the print flags for the same reason.
+	 */
+	static final String PRINT_METHOD_STORE = "RONTOLISP::%CLOJURE-PRINT-METHOD-STORE";
+
+	/**
+	 * The row a {@code print-method} dispatch value read at run time names
+	 * ({@code clojure.lisp}): a record's or deftype's class, a protocol interface's class
+	 * value or a {@code :type} keyword, anything else refused as the lowering refuses a
+	 * literal one.
+	 */
+	static final String PRINT_METHOD_KEY = "RONTOLISP::%CLOJURE-PRINT-METHOD-KEY";
+
+	/**
+	 * {@code prefer-method} of {@code print-method} ({@code clojure.lisp}): the
+	 * preference the printer's walk over protocol interfaces reads, by class name.
+	 */
+	static final String PRINT_METHOD_PREFER = "RONTOLISP::%CLOJURE-PRINT-METHOD-PREFER";
+
+	/**
+	 * Whether a function value is {@code print-method}'s ({@code clojure.lisp}): what a
+	 * multimethod verb's value arm asks ahead of the registry, which holds no tables for
+	 * the printer ({@link ClojureArms.Family#PRINT_METHOD_VALUE}).
+	 */
+	static final String PRINT_METHOD_MULTI_P = "RONTOLISP::%CLOJURE-PRINT-METHOD-MULTI-P";
+
+	/**
+	 * Whether a {@code print-method} dispatch value is read when the {@code defmethod}
+	 * (or {@code remove-method}, {@code get-method}) runs: a local, a var, a call -- a
+	 * class value only the run time knows (rewrite-clj's {@code make-printable!} over a
+	 * fn parameter) -- or a protocol interface's name (schema's {@code Schema}), whose
+	 * row the printer reaches through the types implementing it. A record or deftype
+	 * name, a keyword, a host class and any other literal resolve while the program
+	 * lowers ({@link #printMethodTag}).
+	 */
+	static boolean isRunTimePrintMethodValue(ClojureLowering ctx, LispVal datum) {
+		LispVal bare = ClojureLowerUtil.stripMeta(datum);
+		if (bare instanceof LispSymbol s) {
+			String name = s.name();
+			if (name.startsWith(":") || name.equals("nil")) {
+				return false;
+			}
+			if (ctx.isLocal(name)) {
+				return true;
+			}
+			if (ctx.typeDefOf(name) != null) {
+				return false;
+			}
+			return ctx.lookupVar(name) != null || ClojureProtocolLowering.interfaceValue(ctx, name) != null;
+		}
+		List<LispVal> parts = ClojureLowerUtil.items(bare);
+		return parts != null && !parts.isEmpty()
+				&& !(parts.get(0) instanceof LispSymbol head && LITERAL_HEADS.contains(head.name()));
+	}
+
+	/** The heads the reader spells a literal's data with: never a computed value. */
+	private static final Set<String> LITERAL_HEADS = Set.of("%vector", "%hash-map", "%hash-set", "%regex", "%record");
+
+	/**
+	 * The row a {@code print-method} dispatch value names for {@code remove-method} and
+	 * {@code get-method}: read at run time ({@link #PRINT_METHOD_KEY}) where
+	 * {@link #isRunTimePrintMethodValue}, else the lowering's own
+	 * ({@link #printMethodTag}).
+	 */
+	private static LispVal printMethodKeyForm(ClojureLowering ctx, LispVal datum) {
+		if (isRunTimePrintMethodValue(ctx, datum)) {
+			return ClojureLowerUtil.list(new LispSymbol(PRINT_METHOD_KEY), ctx.lower(datum));
+		}
+		return printMethodTag(ctx, datum);
+	}
+
+	/**
 	 * Whether a multimethod name is {@code clojure.core/print-method}: spelled so, or
 	 * bare where no local or program var claims the name.
 	 */
@@ -1475,8 +1550,8 @@ final class ClojureDispatchLowering {
 			}
 		}
 		throw new LispReadException(verb + " of " + keyDatum.print()
-				+ " is not supported yet: the printer consults a print-method of a record, deftype, :type keyword"
-				+ " or host class no core value belongs to only");
+				+ " is not supported yet: the printer consults a print-method of a record, deftype, protocol"
+				+ " interface, :type keyword or host class no core value belongs to only");
 	}
 
 	/**
@@ -1499,6 +1574,13 @@ final class ClojureDispatchLowering {
 	 * string forms, at any depth ({@code clojure.lisp} "print-method").
 	 */
 	private static LispVal printMethodForm(ClojureLowering ctx, List<LispVal> items) {
+		if (isRunTimePrintMethodValue(ctx, items.get(2))) {
+			// the row the value names when the defmethod runs: its own evaluation
+			// first, then the method's, like the oracle's addMethod
+			LispVal value = ctx.lower(items.get(2));
+			LispVal lambda = methodFn(ctx, items.subList(3, items.size()));
+			return ClojureLowerUtil.list(new LispSymbol(PRINT_METHOD_STORE), value, lambda);
+		}
 		LispVal tag = printMethodTag(ctx, items.get(2));
 		LispVal lambda = methodFn(ctx, items.subList(3, items.size()));
 		return ClojureLowerUtil.list(new LispSymbol(PRINT_METHOD_ROW), tag, lambda);
@@ -1624,7 +1706,7 @@ final class ClojureDispatchLowering {
 		if (isPrintMethod(ctx, name)) {
 			// the type's method gone, the printer's default back
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-PRINT-METHOD-REMOVE"),
-					printMethodTag(ctx, items.get(2)));
+					printMethodKeyForm(ctx, items.get(2)));
 		}
 		String key = multimethodKey(ctx, name);
 		LispSymbol methods = tableGlobal(key, "%methods");
@@ -1657,7 +1739,7 @@ final class ClojureDispatchLowering {
 		String name = ClojureLowerUtil.plainName(items.get(1), "get-method");
 		if (isPrintMethod(ctx, name)) {
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-PRINT-METHOD-GET"),
-					printMethodTag(ctx, items.get(2)));
+					printMethodKeyForm(ctx, items.get(2)));
 		}
 		return ClojureLowerUtil.list(new LispSymbol(MULTI_GET_METHOD), ClojureLowerUtil
 			.list(ClojureLowerUtil.sym("function"), ClojureLowering.varSym(multimethodKey(ctx, name))),

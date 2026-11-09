@@ -1379,9 +1379,13 @@ final class ClojureInteropLowering {
 		}
 		if (cls.equals("java.lang.Class") && member.equals("forName") && args.size() == 1
 				&& args.get(0) instanceof LispString name && name.value().indexOf('.') >= 0) {
-			// Class/forName of a literal naming a record or deftype of the program: its
-			// class value, on every backend (no host class is generated for one)
+			// Class/forName of a literal naming a record, deftype or protocol interface
+			// of the program: its class value, on every backend (no host class is
+			// generated for one)
 			LispVal type = ClojureProtocolLowering.typeTagValue(ctx, name.value());
+			if (type == null) {
+				type = ClojureProtocolLowering.interfaceValue(ctx, name.value());
+			}
 			if (type != null) {
 				return type;
 			}

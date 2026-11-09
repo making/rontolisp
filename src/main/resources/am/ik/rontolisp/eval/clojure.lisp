@@ -343,6 +343,9 @@
                           (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE)))
                      (gethash (car (cdr x)) rontolisp::%clojure-print-methods)
                      nil)
+                 ;; a protocol interface's method: an arm of the protocol-interface
+                 ;; family
+                 (rontolisp::%clojure-print-method-walk x)
                  (if (rontolisp::%clojure-lisp-value-p x)
                      nil
                      (rontolisp::%clojure-host-print-method x
@@ -402,6 +405,195 @@
   "print-method as a value."
   (rontolisp::%clojure-check-arity args 2 2 "print-method")
   (rontolisp::%clojure-print-method (car args) (car (cdr args))))
+
+;; A print-method whose dispatch value is read when the defmethod runs -- a
+;; record's class handed to a function (rewrite-clj's make-printable!), a
+;; protocol interface's class value (schema's Schema) -- stores under the row
+;; the value names then: a record's or deftype's class (its tag), the
+;; interface's class value, a :type keyword. Anything else the printer never
+;; consults (a core value's class, a host class, nil) is the lowering's refusal
+;; of a literal one, at run time. A protocol interface's row is noted in the
+;; order first stored: the printer reaches it through the types implementing
+;; the interface (%clojure-print-method-walk), by MultiFn's selection among it,
+;; the other interfaces' rows and the printer's own methods of the type's class,
+;; which prefer-method's preferences break.
+
+(defvar rontolisp::%clojure-print-method-ifaces
+  nil
+  "The class values of the protocol interfaces a print-method was stored
+   under, in the order first stored.")
+
+(defvar rontolisp::%clojure-print-method-prefers
+  (make-hash-table :test 'equal)
+  "The preferences prefer-method stored for print-method: (x . y) to T, each a
+   class name, a :type keyword as itself.")
+
+(defun rontolisp::%clojure-print-method-type-key-p (k)
+  "Whether the keyword K stores a :type row: a keyword no class answers -- a
+   namespaced one, or one that is neither a core value's kind (what class
+   answers for its values) nor a class name's keyword."
+  (let ((spelling (car (cdr k))))
+    (if (position #\/ spelling)
+        t
+        (not
+         (or (position #\. spelling)
+             (member spelling
+                     '("boolean" "keyword" "symbol" "char" "string" "set" "map"
+                       "vector" "pattern" "matcher" "list" "function" "atom"
+                       "reify" "object" "nil")
+                     :test #'equal))))))
+
+(defun rontolisp::%clojure-print-method-key (dv)
+  "The print-method row the dispatch value DV, read at run time, names: a
+   record's or deftype's class, a protocol interface's class value, a :type
+   keyword; anything else refused as the lowering refuses a literal one."
+  (cond ((and dv (gethash dv rontolisp::%clojure-protocol-type-tags)) dv)
+        ;; an arm of the protocol-interface family
+        ((rontolisp::%clojure-protocol-interface-p dv) dv)
+        ((and (rontolisp::%clojure-keyword-p dv)
+              (rontolisp::%clojure-print-method-type-key-p dv))
+         dv)
+        (t (rontolisp::%clojure-unsupported-operation-exception
+            (concatenate 'string "print-method of "
+             (rontolisp::%clojure-str-of dv "nil" nil)
+             " is not supported yet: the printer consults a"
+             " print-method of a record, deftype, protocol interface,"
+             " :type keyword or host class no core value belongs to"
+             " only")))))
+
+(defun rontolisp::%clojure-print-method-store (dv method)
+  "defmethod print-method of a dispatch value read when it runs: METHOD stored
+   under the row DV names, an interface's noted for the printer's walk;
+   answers nil."
+  (let ((key (rontolisp::%clojure-print-method-key dv)))
+    ;; an arm of the protocol-interface family
+    (if (rontolisp::%clojure-protocol-interface-p key)
+        (if (not
+             (member key rontolisp::%clojure-print-method-ifaces :test #'equal))
+            (setq rontolisp::%clojure-print-method-ifaces
+                  (append rontolisp::%clojure-print-method-ifaces (list key)))))
+    (setf (gethash key rontolisp::%clojure-print-methods) method))
+  nil)
+
+(defun rontolisp::%clojure-print-method-prefer-key (v)
+  "The name a print-method preference keeps the dispatch value V under: a
+   class value's class name (a record's, a protocol interface's, a host
+   class's, a class keyword's spelling), a :type keyword itself."
+  (cond ((and (consp v) (eq (car v) :C%CLASS) (consp (cdr v))
+              (stringp (car (cdr v))))
+         (car (cdr v)))
+        ((rontolisp::%clojure-keyword-p v)
+         (if (rontolisp::%clojure-print-method-type-key-p v) v (car (cdr v))))
+        (t (or (rontolisp::%clojure-host-class-name v) v))))
+
+(defun rontolisp::%clojure-print-method-prefer (x y)
+  "prefer-method of print-method: X's method wins over Y's where both match a
+   value's class; answers print-method."
+  (setf (gethash (cons (rontolisp::%clojure-print-method-prefer-key x)
+                       (rontolisp::%clojure-print-method-prefer-key y))
+                 rontolisp::%clojure-print-method-prefers) t)
+  #'rontolisp::%clojure-print-method-v)
+
+(defun rontolisp::%clojure-print-method-multi-p (f)
+  "Whether F is print-method's value: the print-method-value family's test, a
+   multimethod verb's value arm asking it ahead of the registry."
+  (eq f #'rontolisp::%clojure-print-method-v))
+
+;; The oracle's own print-method methods a record's class matches beside a
+;; protocol interface's (Object's aside, which every one of them dominates):
+;; IRecord's, which prints a record, java.util.Map's and IPersistentMap's.
+(defvar rontolisp::%clojure-print-method-record-rows
+  '("clojure.lang.IRecord" "java.util.Map" "clojure.lang.IPersistentMap"))
+
+;; The oracle's own print-method preferences among those, and the
+;; super-interfaces its preference walk climbs (MultiFn.prefers reads the
+;; parents of either side).
+(defvar rontolisp::%clojure-print-method-own-prefers
+  '(("clojure.lang.IRecord" . "java.util.Map")
+    ("clojure.lang.IRecord" . "clojure.lang.IPersistentMap")
+    ("clojure.lang.IPersistentCollection" . "java.util.Map")))
+
+(defvar rontolisp::%clojure-print-method-parents
+  '(("clojure.lang.IPersistentMap" "java.lang.Iterable"
+     "clojure.lang.Associative" "clojure.lang.Counted")
+    ("clojure.lang.Associative" "clojure.lang.IPersistentCollection"
+     "clojure.lang.ILookup")
+    ("clojure.lang.IPersistentCollection" "clojure.lang.Seqable")))
+
+(defun rontolisp::%clojure-print-method-prefers-p (x y)
+  "MultiFn.prefers of print-method over the class names X and Y: a preference
+   of X over Y (stored, or the oracle's own), else of X over a parent of Y,
+   else of a parent of X over Y."
+  (or (gethash (cons x y) rontolisp::%clojure-print-method-prefers)
+      (if (member (cons x y) rontolisp::%clojure-print-method-own-prefers
+                  :test #'equal)
+          t
+          nil)
+      (let ((found nil))
+        (dolist (p
+                 (cdr
+                  (assoc y rontolisp::%clojure-print-method-parents
+                         :test #'equal)))
+          (if (and (not found) (rontolisp::%clojure-print-method-prefers-p x p))
+              (setq found t)))
+        (dolist (p
+                 (cdr
+                  (assoc x rontolisp::%clojure-print-method-parents
+                         :test #'equal)))
+          (if (and (not found) (rontolisp::%clojure-print-method-prefers-p p y))
+              (setq found t)))
+        found)))
+
+(defun rontolisp::%clojure-print-method-dominates-p (x y)
+  "MultiFn.dominates of print-method over the class names X and Y: X is Y or
+   preferred over it (no row's interface here derives from another's)."
+  (or (equal x y) (rontolisp::%clojure-print-method-prefers-p x y)))
+
+(defun rontolisp::%clojure-print-method-walk (x)
+  "The print-method the record, deftype or reify X takes through a protocol
+   interface its body implements, no row of its own class or :type keyword
+   holding one: MultiFn's selection among those interfaces' rows and the
+   printer's own methods X's class matches (a record's IRecord, java.util.Map
+   and IPersistentMap), each taken in turn and kept where it dominates the one
+   kept. NIL where no interface's row matches or the printer's own is kept;
+   one neither dominating the other is the oracle's IllegalArgumentException.
+   The protocol-interface family's test."
+  (if (and rontolisp::%clojure-print-method-ifaces (consp x)
+       (or (eq (car x) :C%RECORD) (eq (car x) :C%TYPE) (eq (car x) :C%REIFY)))
+      (let ((rows nil))
+        (dolist (c rontolisp::%clojure-print-method-ifaces)
+          (let ((method (gethash c rontolisp::%clojure-print-methods))
+                (entry (rontolisp::%clojure-protocol-interface-entry c)))
+            (if (and method entry
+                 (rontolisp::%clojure-implements-p x (cdr entry) (car entry)))
+                (setq rows (cons (cons (car (cdr c)) method) rows)))))
+        (if rows
+            (let ((best nil) (chosen nil) (all (reverse rows)))
+              (if (eq (car x) :C%RECORD)
+                  (dolist (name
+                           (reverse
+                            rontolisp::%clojure-print-method-record-rows))
+                    (setq all (cons (cons name nil) all))))
+              (dolist (row all)
+                (cond
+                 ((null best)
+                  (setq best (car row))
+                  (setq chosen (cdr row)))
+                 ((rontolisp::%clojure-print-method-dominates-p (car row) best)
+                  (setq best (car row))
+                  (setq chosen (cdr row)))
+                 ((not
+                   (rontolisp::%clojure-print-method-dominates-p best
+                                                                 (car row)))
+                  (rontolisp::%clojure-illegal-argument-exception
+                   (concatenate 'string
+                    "Multiple methods in multimethod 'print-method' match dispatch value: class "
+                    (if (stringp (nth 4 x)) (nth 4 x) "java.lang.Object")
+                    " -> interface " (car row) " and interface " best
+                    ", and neither is preferred")))))
+              chosen)
+            nil))
+      nil))
 
 (defun rontolisp::%clojure-ident-spelling (k)
   "The spelling of the keyword or symbol K (a symbol's demangled), NIL for
@@ -2608,6 +2800,9 @@
               (equal (rontolisp::%clojure-host-class-name c)
                      "java.util.regex.Pattern"))
          t)
+        ;; a protocol interface's class value: an arm of the protocol-interface
+        ;; family
+        ((rontolisp::%clojure-protocol-interface-instance-p c x) t)
         ((and (consp c) (eq (car c) :C%CLASS) (consp (cdr c))
               (stringp (car (cdr c))))
          (and (not (null x))
@@ -10582,11 +10777,16 @@
    a class object or designator to the kind keyword a class spelling stores
    (the full name's keyword where no kind answers, which is the row a spelled
    chained class keeps), anything else itself -- a record's or deftype's class
-   designator too, its tag, which its rows are stored under."
+   designator too, its tag, which its rows are stored under, and a protocol
+   interface's class value."
   (if (null dv)
       (list :C%NIL)
       (let ((name (rontolisp::%clojure-dispatch-name dv)))
-        (if (or (null name) (gethash dv rontolisp::%clojure-protocol-type-tags))
+        (if (or (null name) (gethash dv rontolisp::%clojure-protocol-type-tags)
+                ;; a protocol interface's class value, which a defmethod of
+                ;; it stores under as it is: an arm of the protocol-interface
+                ;; family
+                (rontolisp::%clojure-protocol-interface-p dv))
             dv
             (let ((kind
                    (cdr
@@ -15825,6 +16025,66 @@
          (tail (if dot (subseq name (+ dot 1)) name))
          (dollar (position #\$ tail :from-end t)))
     (if dollar (subseq tail (+ dollar 1)) tail)))
+
+;;;; Protocol interfaces: a protocol's interface as a class value.
+;;
+;; The interface's dotted name (schema.core.Schema) evaluates to the designator
+;; of its name, made by %clojure-protocol-interface-class, which registers the
+;; name with the protocol's var key and body table. instance? of the value,
+;; isa? and a multimethod's dispatch of a record's or deftype's class on it,
+;; and a print-method stored under it read the type's own body through the
+;; entry, like a class implementing the interface: a record or deftype whose
+;; body names the protocol, a reify holding a row in its body table. An
+;; extension row is no interface, like the oracle's. The arms asking for one
+;; are the protocol-interface family's, which a program making no such value
+;; folds.
+
+(defvar rontolisp::%clojure-protocol-interfaces
+  (make-hash-table :test 'equal)
+  "A protocol interface's class name to its (pkey . table) entry: the
+   protocol's var key and its body table.")
+
+(defun rontolisp::%clojure-protocol-interface-class (name pkey table)
+  "The class value of the protocol interface NAME, the designator of its name:
+   NAME registered with the protocol's var key PKEY and body table TABLE."
+  (setf (gethash name rontolisp::%clojure-protocol-interfaces)
+        (cons pkey table))
+  (list :C%CLASS name))
+
+(defun rontolisp::%clojure-protocol-interface-entry (c)
+  "The (pkey . table) entry of the protocol interface whose class value is C,
+   NIL for anything else."
+  (if (and (consp c) (eq (car c) :C%CLASS) (consp (cdr c))
+           (stringp (car (cdr c))))
+      (gethash (car (cdr c)) rontolisp::%clojure-protocol-interfaces)
+      nil))
+
+(defun rontolisp::%clojure-protocol-interface-p (c)
+  "Whether C is a protocol interface's class value: the protocol-interface
+   family's test."
+  (if (rontolisp::%clojure-protocol-interface-entry c) t nil))
+
+(defun rontolisp::%clojure-protocol-interface-instance-p (c x)
+  "Whether C is a protocol interface's class value and X an instance of it: a
+   record or deftype whose body names the protocol, a reify holding a row
+   under its site's tag in the protocol's body table. The protocol-interface
+   family's test."
+  (let ((entry (rontolisp::%clojure-protocol-interface-entry c)))
+    (if entry
+        (rontolisp::%clojure-implements-p x (cdr entry) (car entry))
+        nil)))
+
+(defun rontolisp::%clojure-protocol-interface-isa-p (child parent)
+  "isa? of a record's or deftype's class CHILD on a protocol interface's class
+   value PARENT: the type's body names the protocol, read off the tag registry
+   its definition fills. The protocol-interface family's test."
+  (let ((entry (rontolisp::%clojure-protocol-interface-entry parent)))
+    (if (and entry
+             (member (car entry)
+              (cdr (gethash child rontolisp::%clojure-protocol-type-tags))
+              :test #'equal))
+        t
+        nil)))
 
 ;;;; Type designators: what type answers where the oracle answers a host class.
 ;;
