@@ -17,4 +17,13 @@ public class WitParseException extends RuntimeException {
 				+ WitLocations.columnOf(source, offset));
 	}
 
+	/**
+	 * Creates the exception with a message that already names where the error is (a file
+	 * and line of a package read from several files).
+	 * @param message the full message
+	 */
+	public WitParseException(String message) {
+		super(message);
+	}
+
 }

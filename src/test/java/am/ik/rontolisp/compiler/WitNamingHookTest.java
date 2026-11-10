@@ -223,7 +223,7 @@ class WitNamingHookTest {
 		assertThat(described.members().get(1).async()).isTrue();
 		assertThat(described.members().get(2).params().get(0).shape().rep()).isEqualTo(WitTypeMapper.Rep.PLIST);
 		assertThat(shape(described.members().get(3).result()).rep()).isEqualTo(WitTypeMapper.Rep.BOOLEAN);
-		assertThat(described.members().get(3).line()).isEqualTo(9);
+		assertThat(described.members().get(3).at()).isEqualTo(WIT + ":9");
 	}
 
 	/**
@@ -310,7 +310,7 @@ class WitNamingHookTest {
 		assertThat(described.name()).isEqualTo("greeter");
 		assertThat(described.exports().stream().map(export -> export.name() + ":" + shape(export.result()).rep()))
 			.containsExactly("greet:STRING", "is-short:BOOLEAN");
-		assertThat(described.exports().get(1).line()).isEqualTo(5);
+		assertThat(described.exports().get(1).at()).isEqualTo("greeter.wit:5");
 		// the refusals lower makes before it reads a function, in its words
 		assertThatThrownBy(() -> WitExportDirective.describe(new WitExportDirective.Directive("w.wit", null), """
 				package local:w;

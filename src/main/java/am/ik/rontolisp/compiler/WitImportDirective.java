@@ -16,11 +16,10 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
+import am.ik.wit.WitDocument;
 import am.ik.wit.WitItem;
 import am.ik.wit.WitLocations;
-import am.ik.wit.WitParseException;
 import am.ik.wit.WitParseResult;
-import am.ik.wit.WitParser;
 import am.ik.wit.WitResolver;
 import am.ik.wit.WitType;
 
@@ -346,7 +345,25 @@ public final class WitImportDirective {
 	 */
 	public static List<LispVal> lower(Directive directive, String witSource, String witPath,
 			WitExportDirective.Backend backend, @Nullable Set<String> memberFilter, @Nullable Set<String> dropFilter) {
-		Target named = target(directive, witSource, witPath);
+		return lower(directive, WitSource.file(witPath, witSource), backend, memberFilter, dropFilter);
+	}
+
+	/**
+	 * Like
+	 * {@link #lower(Directive, String, String, WitExportDirective.Backend, Set, Set)},
+	 * over a WIT file or a package read from its directory.
+	 * @param directive the parsed directive
+	 * @param source the WIT
+	 * @param backend the backend being compiled for
+	 * @param memberFilter the FUNCTIONS to bind, or {@code null} for all of them
+	 * @param dropFilter the drop names the program references, or {@code null} to bind a
+	 * drop for every resource
+	 * @return the forms the directive stands for, in WIT order
+	 */
+	public static List<LispVal> lower(Directive directive, WitSource source, WitExportDirective.Backend backend,
+			@Nullable Set<String> memberFilter, @Nullable Set<String> dropFilter) {
+		String witPath = source.path();
+		Target named = target(directive, source);
 		WitLocations locations = named.locations();
 		WitResolver resolver = named.resolver();
 		WitItem.InterfaceDef iface = named.iface();
@@ -381,7 +398,7 @@ public final class WitImportDirective {
 		for (WitResolver.Func func : funcs) {
 			String member = memberName(func);
 			if (!allMembers.add(member)) {
-				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": interface '"
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": interface '"
 						+ iface.name() + "' binds '" + member + "' twice");
 			}
 			if (unnamed(directive, member) || filtered(memberFilter, directive, member)) {
@@ -438,7 +455,7 @@ public final class WitImportDirective {
 				// nothing to represent one -- the whole async surface is refused there.
 				// Say so against the WIT member, not against the wasm-import the
 				// lowering would have produced.
-				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '" + member
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
 						+ "' is an async func, which --no-gc cannot bind (the scalar backend has no future value);"
 						+ " compile it on the default GC backend, or against a synchronous WIT world");
 			}
@@ -484,7 +501,7 @@ public final class WitImportDirective {
 			}
 			String member = resource.name() + "-drop";
 			if (!allMembers.add(member)) {
-				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": interface '"
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, item) + ": interface '"
 						+ iface.name() + "' binds '" + member + "' twice");
 			}
 			// with-<resource>, the drop on any exit: bound when the program names it
@@ -507,7 +524,7 @@ public final class WitImportDirective {
 				componentMembers.add(dropBinding(resource.name(), name));
 			}
 			else if (noGcComponent) {
-				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": '" + member
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, item) + ": '" + member
 						+ "' releases the resource '" + resource.name() + "', which --no-gc --component cannot bind"
 						+ NO_GC_COMPONENT_RESOURCE_REASON);
 			}
@@ -549,7 +566,7 @@ public final class WitImportDirective {
 				// it, and only under --component.
 				String member = alias.name() + "-task-return";
 				if (!allMembers.add(member)) {
-					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": interface '"
+					throw new UnsupportedOperationException(WitSource.at(witPath, locations, item) + ": interface '"
 							+ iface.name() + "' binds '" + member + "' twice");
 				}
 				if (unnamed(directive, member) || filtered(dropFilter, directive, member)) {
@@ -557,7 +574,7 @@ public final class WitImportDirective {
 				}
 				if (!component) {
 					if (dropFilter != null) {
-						throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": '" + member
+						throw new UnsupportedOperationException(WitSource.at(witPath, locations, item) + ": '" + member
 								+ "' is the task-return built-in, which only the --component backend has (the async "
 								+ "canonical ABI); the interpreter, the JVM and Preview 1 WASM cannot bind it");
 					}
@@ -573,7 +590,7 @@ public final class WitImportDirective {
 			for (String op : asyncOps(stream)) {
 				String member = alias.name() + "-" + op;
 				if (!allMembers.add(member)) {
-					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": interface '"
+					throw new UnsupportedOperationException(WitSource.at(witPath, locations, item) + ": interface '"
 							+ iface.name() + "' binds '" + member + "' twice");
 				}
 				if (unnamed(directive, member) || filtered(dropFilter, directive, member)) {
@@ -581,7 +598,7 @@ public final class WitImportDirective {
 				}
 				if (!component) {
 					if (dropFilter != null) {
-						throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": '" + member
+						throw new UnsupportedOperationException(WitSource.at(witPath, locations, item) + ": '" + member
 								+ "' is a stream/future built-in, which only the --component backend has (the async "
 								+ "canonical ABI); the interpreter, the JVM and Preview 1 WASM cannot bind it");
 					}
@@ -610,14 +627,15 @@ public final class WitImportDirective {
 		// member out: the table lists its whole tier, so a program that names none of
 		// it binds nothing.
 		if (boundMembers.isEmpty() && !component && (memberFilter == null || directive.names() == null)) {
-			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(iface) + ": interface '"
+			throw new UnsupportedOperationException(WitSource.at(witPath, locations, iface) + ": interface '"
 					+ iface.name() + "': the program calls none of its functions");
 		}
 		if (directive.pkg() != null) {
 			forms.add(defpackageForm(directive.pkg(), boundMembers));
 		}
 		if (component) {
-			forms.add(componentImportForm(ifaceId, witSource, directive.octets(), componentMembers));
+			forms
+				.add(componentImportForm(ifaceId, source.text(named.document()), directive.octets(), componentMembers));
 		}
 		forms.addAll(bindings);
 		return forms;
@@ -627,18 +645,13 @@ public final class WitImportDirective {
 	 * The interface a directive names, parsed and resolved: what {@link #lower} and
 	 * {@link #describe} both start from.
 	 */
-	private record Target(WitLocations locations, WitResolver resolver, WitItem.InterfaceDef iface,
-			List<WitResolver.Func> funcs) {
+	private record Target(WitDocument document, WitLocations locations, WitResolver resolver,
+			WitItem.InterfaceDef iface, List<WitResolver.Func> funcs) {
 	}
 
-	private static Target target(Directive directive, String witSource, String witPath) {
-		WitParseResult parsed;
-		try {
-			parsed = WitParser.parseLocated(witSource);
-		}
-		catch (WitParseException ex) {
-			throw new UnsupportedOperationException(witPath + ": " + ex.getMessage(), ex);
-		}
+	private static Target target(Directive directive, WitSource source) {
+		String witPath = source.path();
+		WitParseResult parsed = source.parse();
 		WitLocations locations = parsed.locations();
 		WitResolver resolver = new WitResolver(parsed.document());
 		WitItem.InterfaceDef iface = resolver.findInterface(directive.iface());
@@ -648,10 +661,10 @@ public final class WitImportDirective {
 		}
 		List<WitResolver.Func> funcs = WitResolver.functions(iface);
 		if (funcs.isEmpty()) {
-			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(iface) + ": interface '"
+			throw new UnsupportedOperationException(WitSource.at(witPath, locations, iface) + ": interface '"
 					+ iface.name() + "' declares no functions");
 		}
-		return new Target(locations, resolver, iface, funcs);
+		return new Target(parsed.document(), locations, resolver, iface, funcs);
 	}
 
 	/**
@@ -696,10 +709,10 @@ public final class WitImportDirective {
 	 * @param result its result type ({@code null} for none; a constructor answers its
 	 * resource's handle)
 	 * @param async whether it is an {@code async func}
-	 * @param line the WIT line declaring it
+	 * @param at the WIT file and line declaring it ({@code path:line})
 	 */
 	public record Member(String name, Origin origin, List<WitTypeMapper.Param> params,
-			WitTypeMapper.@Nullable Shape result, boolean async, int line) {
+			WitTypeMapper.@Nullable Shape result, boolean async, String at) {
 	}
 
 	/**
@@ -727,7 +740,19 @@ public final class WitImportDirective {
 	 * the WIT file and line
 	 */
 	public static Description describe(Directive directive, String witSource, String witPath) {
-		Target named = target(directive, witSource, witPath);
+		return describe(directive, WitSource.file(witPath, witSource));
+	}
+
+	/**
+	 * Like {@link #describe(Directive, String, String)}, over a WIT file or a package
+	 * read from its directory.
+	 * @param directive the parsed directive
+	 * @param source the WIT
+	 * @return the interface's canonical id and members
+	 */
+	public static Description describe(Directive directive, WitSource source) {
+		String witPath = source.path();
+		Target named = target(directive, source);
 		WitLocations locations = named.locations();
 		WitResolver resolver = named.resolver();
 		WitItem.InterfaceDef iface = named.iface();
@@ -739,7 +764,7 @@ public final class WitImportDirective {
 		for (WitResolver.Func func : named.funcs()) {
 			String member = memberName(func);
 			if (!allMembers.add(member)) {
-				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": interface '"
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": interface '"
 						+ iface.name() + "' binds '" + member + "' twice");
 			}
 			List<WitTypeMapper.Param> params = new ArrayList<>();
@@ -760,7 +785,7 @@ public final class WitImportDirective {
 						: shapeOf(result, resolver, iface, witPath, locations, func.def(), member, "the result");
 			}
 			members.add(new Member(member, Origin.FUNCTION, List.copyOf(params), resultShape, func.def().func().async(),
-					locations.lineOf(func.def())));
+					WitSource.at(witPath, locations, func.def())));
 		}
 		for (WitItem item : iface.items()) {
 			if (!(item instanceof WitItem.ResourceDef resource)) {
@@ -768,12 +793,12 @@ public final class WitImportDirective {
 			}
 			String member = resource.name() + "-drop";
 			if (!allMembers.add(member)) {
-				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": interface '"
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, item) + ": interface '"
 						+ iface.name() + "' binds '" + member + "' twice");
 			}
 			members.add(new Member(member, Origin.DROP,
 					List.of(new WitTypeMapper.Param("self", handleShape(resource.name()))), null, false,
-					locations.lineOf(item)));
+					WitSource.at(witPath, locations, item)));
 		}
 		for (WitItem item : iface.items()) {
 			if (!(item instanceof WitItem.TypeAlias alias)) {
@@ -796,13 +821,14 @@ public final class WitImportDirective {
 			for (String op : async ? asyncOps(stream) : List.of("task-return")) {
 				String member = alias.name() + "-" + op;
 				if (!allMembers.add(member)) {
-					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": interface '"
+					throw new UnsupportedOperationException(WitSource.at(witPath, locations, item) + ": interface '"
 							+ iface.name() + "' binds '" + member + "' twice");
 				}
 				members.add(async
-						? new Member(member, Origin.ASYNC_BUILTIN, List.of(), shape, false, locations.lineOf(item))
+						? new Member(member, Origin.ASYNC_BUILTIN, List.of(), shape, false,
+								WitSource.at(witPath, locations, item))
 						: new Member(member, Origin.TASK_RETURN, List.of(new WitTypeMapper.Param("value", shape)), null,
-								false, locations.lineOf(item)));
+								false, WitSource.at(witPath, locations, item)));
 			}
 		}
 		return new Description(ifaceId, List.copyOf(members));
@@ -927,7 +953,7 @@ public final class WitImportDirective {
 	private static void validateNoGcComponentFunc(WitResolver.Func func, String witPath, WitLocations locations,
 			WitResolver resolver, WitItem.InterfaceDef iface, String member) {
 		if (func.resource() != null) {
-			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '" + member
+			throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
 					+ "' belongs to the resource '" + func.resource() + "', which --no-gc --component cannot bind"
 					+ NO_GC_COMPONENT_RESOURCE_REASON);
 		}
@@ -947,7 +973,7 @@ public final class WitImportDirective {
 		if (resolved instanceof WitType.Prim prim && BoundaryType.forWitName(prim.name()) != null) {
 			return;
 		}
-		throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '" + member
+		throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
 				+ "': the WIT type of " + what + " is not one --no-gc --component can carry (a fixed-width integer,"
 				+ " float64, bool or string); compile the interface on the default backend's --component, where the"
 				+ " canonical ABI marshals it");
@@ -1157,7 +1183,7 @@ public final class WitImportDirective {
 			WitType element = stream.element();
 			if (element != null && isResourceHandle(element, resolver, target.iface())) {
 				if (!"read".equals(op) && !"cancel-read".equals(op) && !"drop-readable".equals(op)) {
-					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(alias) + ": '" + member
+					throw new UnsupportedOperationException(WitSource.at(witPath, locations, alias) + ": '" + member
 							+ "': the alias '" + alias.name() + "' names a stream of resource handles, which is "
 							+ "read-only for the guest -- only the -read, -cancel-read and -drop-readable built-ins "
 							+ "bind");
@@ -1165,7 +1191,7 @@ public final class WitImportDirective {
 				return;
 			}
 			if (element == null || !isU8(element, resolver, target.iface())) {
-				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(alias) + ": '" + member
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, alias) + ": '" + member
 						+ "': the alias '" + alias.name() + "' names a stream whose element is not u8; only stream<u8> "
 						+ "(a byte stream) and a stream of resource handles have async built-ins");
 			}
@@ -1173,7 +1199,7 @@ public final class WitImportDirective {
 		}
 		WitType payload = ((WitType.FutureOf) target.type()).element();
 		if (payload == null) {
-			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(alias) + ": '" + member
+			throw new UnsupportedOperationException(WitSource.at(witPath, locations, alias) + ": '" + member
 					+ "': the alias '" + alias.name() + "' names a bare future with no payload type; only a "
 					+ "parameterized future<T> can be read or written");
 		}
@@ -1326,7 +1352,7 @@ public final class WitImportDirective {
 				if (!optionAllowed) {
 					// option<option<T>> has no rontolisp representation: both `none` and
 					// `some(none)` are nil.
-					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(anchor) + ": '" + member
+					throw new UnsupportedOperationException(WitSource.at(witPath, locations, anchor) + ": '" + member
 							+ "': the WIT type of " + what + " nests an option directly inside an option, which has no "
 							+ "rontolisp value (an option is the value or nil, so `none` and `some(none)` would be the "
 							+ "same nil)");
@@ -1367,8 +1393,8 @@ public final class WitImportDirective {
 							}
 						}
 					}
-					case WitItem.FlagsDef ignored -> throw new UnsupportedOperationException(witPath + ":"
-							+ locations.lineOf(anchor) + ": '" + member + "': the WIT type of " + what
+					case WitItem.FlagsDef ignored -> throw new UnsupportedOperationException(WitSource.at(witPath,
+							locations, anchor) + ": '" + member + "': the WIT type of " + what
 							+ " involves flags, which does not cross the component import boundary yet (its rontolisp "
 							+ "representation is settled: a keyword list)");
 					case WitItem.EnumDef ignored -> {
@@ -1395,7 +1421,7 @@ public final class WitImportDirective {
 	private static void rejectEmptyRecord(WitItem.RecordDef record, String witPath, WitLocations locations,
 			WitItem anchor, String member, String what) {
 		if (record.fields().isEmpty()) {
-			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(anchor) + ": '" + member
+			throw new UnsupportedOperationException(WitSource.at(witPath, locations, anchor) + ": '" + member
 					+ "': the WIT type of " + what + " involves the record '" + record.name()
 					+ "', which declares no fields -- the component model has no empty record type");
 		}
@@ -1429,14 +1455,14 @@ public final class WitImportDirective {
 		if (t instanceof WitType.StreamOf stream) {
 			WitType elem = stream.element();
 			if (elem == null || (!isU8(elem, resolver, in) && !isResourceHandle(elem, resolver, in))) {
-				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(anchor) + ": '" + member
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, anchor) + ": '" + member
 						+ "': the WIT type of " + what + " is a stream whose element is not u8; only stream<u8> "
 						+ "(a byte stream) and a stream of resource handles cross the component boundary");
 			}
 		}
 		else if (t instanceof WitType.FutureOf fut) {
 			if (fut.element() == null) {
-				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(anchor) + ": '" + member
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, anchor) + ": '" + member
 						+ "': the WIT type of " + what + " is a bare future with no payload type; only a parameterized "
 						+ "future<T> can be read");
 			}
@@ -1447,7 +1473,7 @@ public final class WitImportDirective {
 	private static UnsupportedOperationException undefinedType(String witPath, WitLocations locations, WitItem anchor,
 			String member, String what, WitType.Named named) {
 		return new UnsupportedOperationException(
-				witPath + ":" + locations.lineOf(anchor) + ": '" + member + "': the WIT type of " + what + " is '"
+				WitSource.at(witPath, locations, anchor) + ": '" + member + "': the WIT type of " + what + " is '"
 						+ named.name() + "', which the file does not define (nor import with a use clause)");
 	}
 
@@ -1498,7 +1524,7 @@ public final class WitImportDirective {
 						}
 					}
 					case WitItem.FlagsDef ignored ->
-						throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(anchor) + ": '"
+						throw new UnsupportedOperationException(WitSource.at(witPath, locations, anchor) + ": '"
 								+ member + "': the WIT type of " + what + " involves flags, which does not cross the "
 								+ "component import boundary yet (its rontolisp representation is settled: a keyword "
 								+ "list)");
@@ -1557,7 +1583,7 @@ public final class WitImportDirective {
 					"parameter '" + param.name() + "'", wasm, component, noGc, octets);
 			String name = param.name();
 			if (method && "self".equals(name)) {
-				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '" + member
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
 						+ "' declares a parameter named 'self', which collides with the resource handle rontolisp "
 						+ "passes as the first argument of a method");
 			}
@@ -1601,7 +1627,7 @@ public final class WitImportDirective {
 		for (WitType type : types) {
 			Scoped scoped = resolveAliases(type, resolver, iface);
 			if (scoped.type() instanceof WitType.ListOf list && isU8(list.element(), resolver, scoped.iface())) {
-				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '" + member
+				throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
 						+ "': :octets t crosses a list<u8> as a byte vector, which --no-gc has none of (the scalar "
 						+ "backend has no arrays); compile on the default GC backend, or drop :octets");
 			}
@@ -1643,13 +1669,13 @@ public final class WitImportDirective {
 				// text.
 				return ":VOID";
 			}
-			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '" + member
+			throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
 					+ "': the WIT type of " + what + " is a stream or a future, which only the --component backend can "
 					+ "marshal (through the canonical ABI's async built-ins); the interpreter, the JVM and Preview 1 "
 					+ "WASM have no rontolisp value for it");
 		}
 		if (rep == WitTypeMapper.Rep.UNSUPPORTED) {
-			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '" + member
+			throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '" + member
 					+ "': the WIT type of " + what + " has no rontolisp representation on any backend");
 		}
 		if (!wasm) {
@@ -1667,7 +1693,7 @@ public final class WitImportDirective {
 			// nothing else, because a core module has no component type with which to
 			// declare a richer shape to its host. The canonical ABI is what marshals the
 			// rich types, and it lives at the component boundary.
-			default -> throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(func.def()) + ": '"
+			default -> throw new UnsupportedOperationException(WitSource.at(witPath, locations, func.def()) + ": '"
 					+ member + "': the WIT type of " + what + " does not cross the Preview 1 WASM import boundary, "
 					+ "which carries the flat set (the integer scalars up to 32 bits, the float scalars, bool, "
 					+ "string, list<u8> and resource handles). Its rontolisp representation is settled (" + rep.name()

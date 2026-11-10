@@ -18,9 +18,7 @@ import am.ik.wit.WitDocument;
 import am.ik.wit.WitFunc;
 import am.ik.wit.WitItem;
 import am.ik.wit.WitLocations;
-import am.ik.wit.WitParseException;
 import am.ik.wit.WitParseResult;
-import am.ik.wit.WitParser;
 import am.ik.wit.WitResolver;
 import am.ik.wit.WitType;
 
@@ -262,13 +260,28 @@ public final class WitExportDirective {
 	 */
 	public static List<LispVal> lower(Directive directive, String witSource, String witPath, Defuns defuns,
 			Backend backend) {
-		Implemented implemented = implemented(directive, witSource, witPath);
+		return lower(directive, WitSource.file(witPath, witSource), defuns, backend);
+	}
+
+	/**
+	 * Like {@link #lower(Directive, String, String, Defuns, Backend)}, over a WIT file or
+	 * a package read from its directory.
+	 * @param directive the parsed directive
+	 * @param source the WIT
+	 * @param defuns the program's top-level function definitions
+	 * @param backend the backend the world is being checked against
+	 * @return one {@code (rontolisp:wasm-export ...)} form per world export, in world
+	 * order
+	 */
+	public static List<LispVal> lower(Directive directive, WitSource source, Defuns defuns, Backend backend) {
+		String witPath = source.path();
+		Implemented implemented = implemented(directive, source);
 		WitLocations locations = implemented.locations();
 		List<LispVal> forms = new ArrayList<>();
 		walk(implemented, witPath, (name, func, item, ifaceId) -> forms
 			.add(exportForm(name, func, witPath, locations, item, defuns, backend, ifaceId, directive.names())));
 		if (forms.isEmpty()) {
-			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(implemented.world()) + ": world '"
+			throw new UnsupportedOperationException(WitSource.at(witPath, locations, implemented.world()) + ": world '"
 					+ implemented.world().name() + "' declares no exports");
 		}
 		return forms;
@@ -290,15 +303,9 @@ public final class WitExportDirective {
 	private record Implemented(WitLocations locations, WitResolver resolver, WitItem.World world) {
 	}
 
-	private static Implemented implemented(Directive directive, String witSource, String witPath) {
-		WitParseResult parsed;
-		try {
-			parsed = WitParser.parseLocated(witSource);
-		}
-		catch (WitParseException ex) {
-			throw new UnsupportedOperationException(witPath + ": " + ex.getMessage(), ex);
-		}
-		WitItem.World world = selectWorld(parsed.document(), directive.world(), witPath);
+	private static Implemented implemented(Directive directive, WitSource source) {
+		WitParseResult parsed = source.parse();
+		WitItem.World world = selectWorld(parsed.document(), directive.world(), source);
 		return new Implemented(parsed.locations(), new WitResolver(parsed.document()), world);
 	}
 
@@ -312,10 +319,10 @@ public final class WitExportDirective {
 	 * @param async whether it is an {@code async func}
 	 * @param iface the exported interface it belongs to, or {@code null} for a
 	 * freestanding function
-	 * @param line the WIT line declaring it
+	 * @param at the WIT file and line declaring it ({@code path:line})
 	 */
 	public record Export(String name, List<WitTypeMapper.Param> params, WitTypeMapper.@Nullable Shape result,
-			boolean async, @Nullable String iface, int line) {
+			boolean async, @Nullable String iface, String at) {
 	}
 
 	/**
@@ -344,7 +351,19 @@ public final class WitExportDirective {
 	 * and line
 	 */
 	public static WorldDescription describe(Directive directive, String witSource, String witPath) {
-		Implemented implemented = implemented(directive, witSource, witPath);
+		return describe(directive, WitSource.file(witPath, witSource));
+	}
+
+	/**
+	 * Like {@link #describe(Directive, String, String)}, over a WIT file or a package
+	 * read from its directory.
+	 * @param directive the parsed directive
+	 * @param source the WIT
+	 * @return the world's name and exports
+	 */
+	public static WorldDescription describe(Directive directive, WitSource source) {
+		String witPath = source.path();
+		Implemented implemented = implemented(directive, source);
 		WitLocations locations = implemented.locations();
 		List<Export> exports = new ArrayList<>();
 		walk(implemented, witPath, (name, func, item, ifaceId) -> {
@@ -357,10 +376,10 @@ public final class WitExportDirective {
 			WitType result = func.result();
 			exports.add(new Export(name, List.copyOf(params),
 					result == null ? null : shapeOf(result, name, "the result", witPath, locations, item), func.async(),
-					ifaceId, locations.lineOf(item)));
+					ifaceId, WitSource.at(witPath, locations, item)));
 		});
 		if (exports.isEmpty()) {
-			throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(implemented.world()) + ": world '"
+			throw new UnsupportedOperationException(WitSource.at(witPath, locations, implemented.world()) + ": world '"
 					+ implemented.world().name() + "' declares no exports");
 		}
 		return new WorldDescription(implemented.world().name(), List.copyOf(exports));
@@ -450,9 +469,13 @@ public final class WitExportDirective {
 				&& "cli".equals(ref.target().pkg().name()) && RESERVED_RUN.equals(ref.target().name());
 	}
 
-	private static WitItem.World selectWorld(WitDocument document, @Nullable String requested, String witPath) {
+	// A package read from its directory chooses among its OWN worlds: its deps/ are
+	// packages it uses, whose worlds (wasi:http's proxy, ...) it does not implement.
+	private static WitItem.World selectWorld(WitDocument document, @Nullable String requested, WitSource source) {
+		String witPath = source.path();
 		List<WitItem.World> worlds = new ArrayList<>();
-		collectWorlds(document.items(), worlds);
+		collectWorlds(document.items(), worlds, !source.isDirectory());
+		String declarer = source.isDirectory() ? "the package" : "the file";
 		if (requested != null) {
 			for (WitItem.World world : worlds) {
 				if (requested.equals(world.name())) {
@@ -466,17 +489,17 @@ public final class WitExportDirective {
 			return worlds.get(0);
 		}
 		if (worlds.isEmpty()) {
-			throw new UnsupportedOperationException(witPath + ": the file declares no world");
+			throw new UnsupportedOperationException(witPath + ": " + declarer + " declares no world");
 		}
-		throw new UnsupportedOperationException(witPath + ": the file declares " + worlds.size() + " worlds ("
+		throw new UnsupportedOperationException(witPath + ": " + declarer + " declares " + worlds.size() + " worlds ("
 				+ worldNames(worlds) + "); name one with :world");
 	}
 
-	private static void collectWorlds(List<WitItem> items, List<WitItem.World> worlds) {
+	private static void collectWorlds(List<WitItem> items, List<WitItem.World> worlds, boolean blocks) {
 		for (WitItem item : items) {
 			switch (item) {
 				case WitItem.World world -> worlds.add(world);
-				case WitItem.PackageBlock block -> collectWorlds(block.items(), worlds);
+				case WitItem.PackageBlock block when blocks -> collectWorlds(block.items(), worlds, true);
 				default -> {
 				}
 			}
@@ -663,7 +686,7 @@ public final class WitExportDirective {
 
 	private static UnsupportedOperationException error(String witPath, WitLocations locations, WitItem item,
 			String message) {
-		return new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": " + message);
+		return new UnsupportedOperationException(WitSource.at(witPath, locations, item) + ": " + message);
 	}
 
 	private static LispVal quote(LispVal value) {

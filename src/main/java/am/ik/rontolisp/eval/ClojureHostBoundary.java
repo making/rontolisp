@@ -1,5 +1,7 @@
 package am.ik.rontolisp.eval;
 
+import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -7,9 +9,11 @@ import java.util.Locale;
 import java.util.Set;
 
 import am.ik.rontolisp.clojure.ClojureBoundary;
+import am.ik.rontolisp.clojure.ClojureFiles;
 import am.ik.rontolisp.compiler.BoundaryType;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
+import am.ik.rontolisp.compiler.WitSource;
 import am.ik.rontolisp.compiler.WitTypeMapper;
 import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
@@ -52,14 +56,15 @@ public final class ClojureHostBoundary implements ClojureBoundary {
 	}
 
 	@Override
-	public WitInterface importInterface(String witText, String witPath, String iface) {
+	public WitInterface importInterface(ClojureFiles files, String readPath, String witPath, String iface) {
+		WitSource source = read(files, readPath, witPath);
 		// the reference the emitted directive's parse reads: lowercased, like a bare
 		// symbol (WitImportDirective.parse)
 		WitImportDirective.Directive directive = new WitImportDirective.Directive(witPath,
 				iface.toLowerCase(Locale.ROOT), null, null, WitImportDirective.FieldStyle.CAMEL);
 		WitImportDirective.Description described;
 		try {
-			described = WitImportDirective.describe(directive, witText, witPath);
+			described = WitImportDirective.describe(directive, source);
 		}
 		catch (UnsupportedOperationException ex) {
 			throw new LispReadException(String.valueOf(ex.getMessage()));
@@ -67,16 +72,17 @@ public final class ClojureHostBoundary implements ClojureBoundary {
 		List<Function> members = new ArrayList<>();
 		for (WitImportDirective.Member member : described.members()) {
 			members.add(new Function(member.name(), Origin.valueOf(member.origin().name()), params(member.params()),
-					type(member.result()), member.async(), member.line()));
+					type(member.result()), member.async(), member.at()));
 		}
 		return new WitInterface(described.id(), List.copyOf(members));
 	}
 
 	@Override
-	public WitWorld exportWorld(String witText, String witPath, @Nullable String world) {
+	public WitWorld exportWorld(ClojureFiles files, String readPath, String witPath, @Nullable String world) {
+		WitSource source = read(files, readPath, witPath);
 		WitExportDirective.WorldDescription described;
 		try {
-			described = WitExportDirective.describe(new WitExportDirective.Directive(witPath, world), witText, witPath);
+			described = WitExportDirective.describe(new WitExportDirective.Directive(witPath, world), source);
 		}
 		catch (UnsupportedOperationException ex) {
 			throw new LispReadException(String.valueOf(ex.getMessage()));
@@ -84,9 +90,35 @@ public final class ClojureHostBoundary implements ClojureBoundary {
 		List<Function> exports = new ArrayList<>();
 		for (WitExportDirective.Export export : described.exports()) {
 			exports.add(new Function(export.name(), Origin.FUNCTION, params(export.params()), type(export.result()),
-					export.async(), export.line()));
+					export.async(), export.at()));
 		}
 		return new WitWorld(described.name(), List.copyOf(exports));
+	}
+
+	// The WIT through the one reader every directive reads it with (a file, or a
+	// package directory), a message naming the path as the program wrote it.
+	private static WitSource read(ClojureFiles files, String readPath, String witPath) {
+		SourceLoader loader = new SourceLoader() {
+			@Override
+			public String load(String path) throws IOException {
+				String text = files.read(path);
+				if (text == null) {
+					throw new FileNotFoundException(path);
+				}
+				return text;
+			}
+
+			@Override
+			public @Nullable List<String> listDirectory(String path) {
+				return files.list(path);
+			}
+		};
+		try {
+			return WitFiles.read(loader, readPath).shownAs(witPath);
+		}
+		catch (IOException ex) {
+			throw new LispReadException("cannot read WIT " + witPath + ": " + ex.getMessage());
+		}
 	}
 
 	private static List<Param> params(List<WitTypeMapper.Param> params) {

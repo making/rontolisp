@@ -402,6 +402,37 @@ the checked-in `.wasm` artifacts were rebuilt with it).
   only the ENTRY's directory. `LoadInliner.rebaseWitImport` fixes it (`LoadInlinerTest`);
   `http.lisp` never hit this because `HttpLibrary` lowers off the classpath.
 
+### A package directory (2026-11-10)
+The path of `wit-import` / `wit-export` (and Clojure's `rontolisp.wit/import`/`export`) may name a
+directory: a WIT package as published (wasi-keyvalue's `wit/`: five files, only `world.wit`
+declaring the package). `eval/WitFiles.read` is the ONE reader (every directive, the
+interpreter's special forms, `ClojureHostBoundary` through a `ClojureFiles` adapter): a file, or
+the directory's `*.wit` in name order plus each `deps/` entry (a directory or a `.wit`), into a
+`compiler/WitSource`. `am.ik.wit.WitPackageAssembler` parses each file ON ITS OWN and assembles
+the document a single file with nested `package` blocks would parse to: the package's
+interfaces/worlds top level under the one header (files must agree; one declaring it is enough),
+each dep a `PackageBlock`, a dep file's own nested blocks kept. Duplicate names per package,
+a dep without a package, and a parse error each name `file:line`.
+
+- **Positions stay per file**: `WitLocations.combine` of each file's table (`inFile`);
+  `fileOf(item)` names the file, and every message goes through `WitSource.at(path, locations,
+  item)` -- `Member.at` / `Export.at` / Clojure's `Function.at` carry `path:line`, not a bare line.
+- **The `--component` form carries `WitPrinter.print` of the assembled document** (a file's
+  text stays verbatim). The component is BYTE-IDENTICAL to the hand-concatenated file
+  (`WasmLispCompilerIntegrationTest.componentImportLowersListParametersAsTheInterpreterAndTheJvmPassThem`,
+  which runs it under wasmtime's keyvalue too); `--emit-wit` output identical too (measured).
+- No top-level `use` exists in the parser, so no file-scoped name can leak across files; an
+  interface-level `use store.{...}` reaches a sibling file, which is the WIT rule.
+- `wit-export` on a directory counts/searches only the package's own (top-level) worlds, not
+  its deps' (`selectWorld`); the message says "the package declares".
+- The playground's loader lists no directories: the read error says "a WIT package directory
+  is read only where the loader lists directories" (`WitImportInlinerTest`).
+- Not done (a separate decision): rontolisp's own libraries (`http.wit`, `sockets.wit`, ...)
+  still read their concatenated copies, not `src/wasm-component/deps/` -- a resource
+  directory is not listed in a native image.
+- Pins: `WitPackageAssemblerTest`, `WitImportInlinerTest.aPackageDirectoryBindsWhatItsHandConcatenationBinds`,
+  `ClojureHostBoundaryTest`; fixture `testsupport/WasiKeyvalueWit` (wasi-keyvalue `v0.2.0-draft`).
+
 ## Component imports — `canon lower`
 **A `--component` build is no longer import-locked to the fixed WASI blob surface**: a
 `wit-import` becomes a real component-model instance import whose functions are `canon lower`ed

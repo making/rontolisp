@@ -47,10 +47,14 @@ wasmtime run --invoke 'greet("world")' greet.wasm
 ## Arguments
 
 - The WIT file path, as a string. A relative path resolves against the directory
-  of the source file that names it, like [`load`](load.md).
+  of the source file that names it, like [`load`](load.md). It may name a WIT
+  package directory, read as
+  [`rontolisp:wit-import`](rontolisp-wit-import.md#arguments) reads one.
 - `:world` — the world to implement, as a bare symbol (spelled the way WIT
   spells it) or a string. It may be omitted when the file declares exactly one
-  world; when the file declares several, one must be named.
+  world; when the file declares several, one must be named. For a package
+  directory, the worlds counted and searched are the package's own, not those of
+  its `deps/`.
 
 Everything else comes from the world: `rontolisp:wasm-export`'s `:params`,
 `:param-names`, `:returns` and `:async` are all filled in from it, so the

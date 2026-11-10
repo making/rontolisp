@@ -12,6 +12,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.WitExportDirective;
+import am.ik.rontolisp.compiler.WitSource;
 
 import org.jspecify.annotations.Nullable;
 
@@ -77,7 +78,7 @@ public final class WitExportInliner {
 			if (WitExportDirective.isDirective(form)) {
 				WitExportDirective.Directive directive = WitExportDirective.parse((LispCons) form);
 				String path = SourceLoader.resolve(baseDir, directive.path());
-				result.addAll(WitExportDirective.lower(directive, read(loader, path), path, defuns::get, backend));
+				result.addAll(WitExportDirective.lower(directive, read(loader, path), defuns::get, backend));
 			}
 			else if (isWasmExport(form)) {
 				throw new UnsupportedOperationException(
@@ -92,9 +93,9 @@ public final class WitExportInliner {
 		return result;
 	}
 
-	private static String read(SourceLoader loader, String path) {
+	private static WitSource read(SourceLoader loader, String path) {
 		try {
-			return loader.load(path);
+			return WitFiles.read(loader, path);
 		}
 		catch (IOException ex) {
 			throw new UncheckedIOException("rontolisp:wit-export: cannot read WIT file " + path, ex);

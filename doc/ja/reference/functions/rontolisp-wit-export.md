@@ -46,10 +46,12 @@ wasmtime run --invoke 'greet("world")' greet.wasm
 ## 引数
 
 - WIT ファイルのパス (文字列)。相対パスは、それを書いたソースファイルのディレクトリ
-  を基準に解決されます ([`load`](load.md) と同じ)。
+  を基準に解決されます ([`load`](load.md) と同じ)。WIT パッケージのディレクトリも
+  指定でき、[`rontolisp:wit-import`](rontolisp-wit-import.md) と同じように読みます。
 - `:world` — 実装する world。素のシンボル (WIT の綴りのまま) または文字列で
   指定します。ファイルが world を 1 つだけ宣言している場合は省略できます。複数
-  宣言している場合は 1 つを指定しなければなりません。
+  宣言している場合は 1 つを指定しなければなりません。パッケージのディレクトリでは、
+  数えて探すのはそのパッケージ自身の world で、`deps/` のものは含みません。
 
 それ以外はすべて world から得られます。`rontolisp:wasm-export` の `:params`、
 `:param-names`、`:returns`、`:async` はすべて world から埋められるため、`defun`

@@ -139,13 +139,12 @@ final class ClojureWitLowering {
 	 * @param ns the namespace the declaration sits in, which each export's label names a
 	 * var of
 	 * @param path the WIT path the directive names
-	 * @param written the WIT path as the declaration wrote it, for a refusal
 	 * @param world the world the declaration names, or null for the file's only one
 	 * @param exports the world's exports
 	 * @param at where the declaration sits, for a refusal
 	 */
-	record PendingWorld(String ns, String path, String written, @Nullable String world,
-			List<ClojureBoundary.Function> exports, @Nullable SourceLocation at) {
+	record PendingWorld(String ns, String path, @Nullable String world, List<ClojureBoundary.Function> exports,
+			@Nullable SourceLocation at) {
 	}
 
 	/** The WIT state one lowering keeps (a session: across its buffers). */
@@ -267,12 +266,11 @@ final class ClojureWitLowering {
 		@Nullable String file = ctx.reader == null ? null : ctx.reader.file();
 		String readPath = ctx.files.resolve(file == null ? null : ctx.files.parent(file), path.value());
 		String directivePath = ctx.loadingNamespaces.isEmpty() ? path.value() : readPath;
-		String text = ctx.files.read(readPath);
-		if (text == null) {
+		if (!ctx.files.exists(readPath)) {
 			throw new LispReadException(what + ": cannot read WIT file " + path.value()
 					+ (ctx.files == ClojureFiles.NONE ? " (the program was read without files)" : ""));
 		}
-		ClojureBoundary.WitInterface wit = ctx.boundary.importInterface(text, path.value(), iface);
+		ClojureBoundary.WitInterface wit = ctx.boundary.importInterface(ctx.files, readPath, path.value(), iface);
 		String ns = namespaceOf(wit.id());
 		Imported existing = ctx.wit.imports.get(wit.id());
 		if (existing != null) {
@@ -282,7 +280,7 @@ final class ClojureWitLowering {
 			}
 		}
 		else {
-			ctx.wit.imports.put(wit.id(), bind(ctx, wit, ns, directivePath, iface, from, fieldStyle, path.value()));
+			ctx.wit.imports.put(wit.id(), bind(ctx, wit, ns, directivePath, iface, from, fieldStyle));
 		}
 		ctx.wit.references.put(iface, wit.id());
 		ctx.wit.references.put(wit.id(), wit.id());
@@ -304,7 +302,7 @@ final class ClojureWitLowering {
 	 * @return the import, with what a {@code provide} of the interface converts
 	 */
 	private static Imported bind(ClojureLowering ctx, ClojureBoundary.WitInterface wit, String ns, String directivePath,
-			String iface, @Nullable String from, @Nullable String fieldStyle, String path) {
+			String iface, @Nullable String from, @Nullable String fieldStyle) {
 		ctx.createdNamespaces.add(ns);
 		ClojureNsState state = ctx.namespaces.computeIfAbsent(ns, k -> new ClojureNsState());
 		Map<String, String> names = new LinkedHashMap<>();
@@ -313,7 +311,7 @@ final class ClojureWitLowering {
 		String firstRefusal = null;
 		for (ClojureBoundary.Function member : wit.members()) {
 			String key = ClojureLowering.varKey(ns, member.name());
-			String refusal = refusal(member, wit.id(), path);
+			String refusal = refusal(member, wit.id());
 			if (refusal != null) {
 				ctx.wit.refusals.put(key, refusal);
 				if (firstRefusal == null && member.origin() == ClojureBoundary.Origin.FUNCTION) {
@@ -432,8 +430,8 @@ final class ClojureWitLowering {
 	 * future does not map onto a Clojure one yet), or a type with no Clojure value (a
 	 * stream or a future, anywhere inside it).
 	 */
-	private static @Nullable String refusal(ClojureBoundary.Function member, String id, String path) {
-		String where = " (" + path + ":" + member.line() + ")";
+	private static @Nullable String refusal(ClojureBoundary.Function member, String id) {
+		String where = " (" + member.at() + ")";
 		String name = member.name() + " of " + id;
 		switch (member.origin()) {
 			case ASYNC_BUILTIN -> {
@@ -915,19 +913,18 @@ final class ClojureWitLowering {
 		@Nullable String file = ctx.reader == null ? null : ctx.reader.file();
 		String readPath = ctx.files.resolve(file == null ? null : ctx.files.parent(file), path.value());
 		String directivePath = ctx.loadingNamespaces.isEmpty() ? path.value() : readPath;
-		String text = ctx.files.read(readPath);
-		if (text == null) {
+		if (!ctx.files.exists(readPath)) {
 			throw new LispReadException(what + ": cannot read WIT file " + path.value()
 					+ (ctx.files == ClojureFiles.NONE ? " (the program was read without files)" : ""));
 		}
-		ClojureBoundary.WitWorld described = ctx.boundary.exportWorld(text, path.value(), world);
+		ClojureBoundary.WitWorld described = ctx.boundary.exportWorld(ctx.files, readPath, path.value(), world);
 		for (ClojureBoundary.Function export : described.exports()) {
 			if (export.async()) {
 				throw new LispReadException(what + ": " + export.name() + " is an async func export, which the "
-						+ "Clojure tier does not implement yet (" + path.value() + ":" + export.line() + ")");
+						+ "Clojure tier does not implement yet (" + export.at() + ")");
 			}
 		}
-		ctx.wit.worlds.add(new PendingWorld(ctx.currentNs, directivePath, path.value(), world, described.exports(),
+		ctx.wit.worlds.add(new PendingWorld(ctx.currentNs, directivePath, world, described.exports(),
 				ClojureWasmLowering.locate(ctx, form)));
 		ctx.wit.implemented = true;
 		return ClojureLowering.NIL_CONST;
@@ -973,10 +970,8 @@ final class ClojureWitLowering {
 				ClojureWasmLowering.Crossing crossing = result != null && result.rep() == ClojureBoundary.Rep.BOOLEAN
 						? ClojureWasmLowering.Crossing.BOOL : ClojureWasmLowering.Crossing.PLAIN;
 				// a refusal names the world's line the export is declared on
-				names.put(export.name(),
-						ClojureWasmLowering.implementation(ctx, world.ns(), export.name(), export.name(), params,
-								crossing, NAMESPACE + "/export (" + world.written() + ":" + export.line() + ")",
-								world.at(), out));
+				names.put(export.name(), ClojureWasmLowering.implementation(ctx, world.ns(), export.name(),
+						export.name(), params, crossing, NAMESPACE + "/export (" + export.at() + ")", world.at(), out));
 			}
 			List<LispVal> table = new ArrayList<>();
 			for (Map.Entry<String, String> entry : names.entrySet()) {

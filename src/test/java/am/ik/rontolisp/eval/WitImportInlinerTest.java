@@ -8,11 +8,15 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.testsupport.WasiKeyvalueWit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -167,6 +171,53 @@ class WitImportInlinerTest {
 				WitExportDirective.Backend.WASM_GC, uploads(Map.of())))
 			.hasMessageContaining("cannot read WIT file gl.wit")
 			.hasRootCauseInstanceOf(FileNotFoundException.class);
+		// a package directory, where the loader lists none, says why it is not read
+		assertThatThrownBy(() -> WitImportInliner.inline(
+				LispReader.readAllFromString("(rontolisp:wit-import \"wit/gl\" :interface \"local:webgl/gl\")"), null,
+				WitExportDirective.Backend.WASM_GC, uploads(Map.of("wit/gl/gl.wit", GL_WIT))))
+			.cause()
+			.hasMessageContaining("a WIT package directory is read only where the loader lists directories");
+	}
+
+	/**
+	 * A package read from its directory, as WebAssembly/wasi-keyvalue publishes it (only
+	 * {@code world.wit} declares the package; {@code atomic.wit} takes {@code bucket}
+	 * from {@code store.wit}), binds what the files concatenated by hand bind. The
+	 * {@code --component} bytes are pinned against the concatenation, and run, in
+	 * {@code WasmLispCompilerIntegrationTest}. A refusal names the file and line the
+	 * member is written on, not a line of anything merged.
+	 */
+	@Test
+	void aPackageDirectoryBindsWhatItsHandConcatenationBinds() throws IOException {
+		Path dir = WasiKeyvalueWit.directory(this.tempDir.resolve("wit/keyvalue"));
+		Files.writeString(this.tempDir.resolve("kv.wit"), WasiKeyvalueWit.concatenated());
+		String directive = "(rontolisp:wit-import \"%s\" :interface \"wasi:keyvalue/atomics@0.2.0-draft\" :package kva)";
+		for (WitExportDirective.Backend backend : List.of(WitExportDirective.Backend.OTHER,
+				WitExportDirective.Backend.WASM_COMPONENT)) {
+			List<LispVal> fromDirectory = WitImportInliner.inline(
+					LispReader.readAllFromString(directive.formatted("wit/keyvalue") + "(kva:increment 0 \"n\" 1)"),
+					this.tempDir.toString(), backend, SourceLoader.fileSystem());
+			List<LispVal> fromFile = WitImportInliner.inline(
+					LispReader.readAllFromString(directive.formatted("kv.wit") + "(kva:increment 0 \"n\" 1)"),
+					this.tempDir.toString(), backend, SourceLoader.fileSystem());
+			// the component form carries the WIT text, the one part that differs
+			assertThat(fromDirectory.stream().map(WitImportInlinerTest::withoutWitText).toList()).as("%s", backend)
+				.isEqualTo(fromFile.stream().map(WitImportInlinerTest::withoutWitText).toList());
+		}
+		assertThatThrownBy(() -> WitImportInliner.inline(
+				LispReader.readAllFromString(directive.formatted("wit/keyvalue") + "(kva:increment 0 \"n\" 1)"),
+				this.tempDir.toString(), WitExportDirective.Backend.WASM_GC, SourceLoader.fileSystem()))
+			.hasMessageStartingWith(dir.resolve("atomic.wit") + ":21: 'increment': the WIT type of parameter 'delta'");
+	}
+
+	// (rontolisp::%component-import "<id>" "<wit text>" ...), its text left out
+	private static String withoutWitText(LispVal form) {
+		if (form instanceof LispCons head && head.car() instanceof LispSymbol sym
+				&& sym.name().endsWith("%COMPONENT-IMPORT") && head.cdr() instanceof LispCons id
+				&& id.cdr() instanceof LispCons text) {
+			return new LispCons(sym, new LispCons(id.car(), new LispCons(new LispString("WIT"), text.cdr()))).print();
+		}
+		return form.print();
 	}
 
 	@Test

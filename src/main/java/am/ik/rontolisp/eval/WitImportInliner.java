@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
+import am.ik.rontolisp.compiler.WitSource;
 
 import org.jspecify.annotations.Nullable;
 
@@ -37,9 +38,9 @@ import org.jspecify.annotations.Nullable;
  * contract check must see every {@code defun}.
  *
  * <p>
- * The WIT text is read through a {@link SourceLoader}, the same indirection {@code load}
- * uses, so a front-end with no filesystem works: the browser playground backs it with its
- * map of uploaded files.
+ * The WIT is read through a {@link SourceLoader} ({@link WitFiles}: a file, or a package
+ * directory), the same indirection {@code load} uses, so a front-end with no filesystem
+ * works: the browser playground backs it with its map of uploaded files.
  *
  * <p>
  * {@code rontolisp:wit-provide} is meaningful only where a provider is dispatched -- the
@@ -124,8 +125,8 @@ public final class WitImportInliner {
 				// hand-written block's bytes).
 				Set<String> memberFilter = directive.names() != null && wasm && pruneMembers ? referenced
 						: componentFilter;
-				result.addAll(WitImportDirective.lower(directive, read(loader, path), path, backend, memberFilter,
-						dropFilter));
+				result
+					.addAll(WitImportDirective.lower(directive, read(loader, path), backend, memberFilter, dropFilter));
 			}
 			else if (wasm && isProviderBinding(form)) {
 				// The host is the provider on the WASM backends; a binding is inert
@@ -180,9 +181,9 @@ public final class WitImportInliner {
 		}
 	}
 
-	private static String read(SourceLoader loader, String path) {
+	private static WitSource read(SourceLoader loader, String path) {
 		try {
-			return loader.load(path);
+			return WitFiles.read(loader, path);
 		}
 		catch (IOException ex) {
 			throw new UncheckedIOException("rontolisp:wit-import: cannot read WIT file " + path, ex);

@@ -52,6 +52,7 @@ import am.ik.rontolisp.testsupport.DeclaredArityReportPrograms;
 import am.ik.rontolisp.testsupport.HashTableCopyPrograms;
 import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
 import am.ik.rontolisp.testsupport.HostBoundaryRuns;
+import am.ik.rontolisp.testsupport.WasiKeyvalueWit;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.MaskSignedFieldProgram;
 import am.ik.rontolisp.testsupport.OwnHandlerStacksPrograms;
@@ -24175,35 +24176,6 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(result.getStdout().trim()).isEqualTo(":GET\n:POST\n(:OTHER . \"PATCH\")\n:REJECTED");
 	}
 
-	// wasi:keyvalue's store and batch as wasmtime's -S keyvalue host answers them, cut
-	// down to what the program below binds. batch is the interface whose parameters are
-	// all list<T>: a list<string> and a list<tuple<string, list<u8>>>.
-	private static final String WASI_KEYVALUE_BATCH_WIT = """
-			package wasi:keyvalue@0.2.0-draft;
-
-			interface store {
-			  variant error {
-			    no-such-store,
-			    access-denied,
-			    other(string)
-			  }
-
-			  open: func(identifier: string) -> result<bucket, error>;
-
-			  resource bucket {
-			    get: func(key: string) -> result<option<list<u8>>, error>;
-			  }
-			}
-
-			interface batch {
-			  use store.{bucket, error};
-
-			  get-many: func(bucket: borrow<bucket>, keys: list<string>) -> result<list<option<tuple<string, list<u8>>>>, error>;
-			  set-many: func(bucket: borrow<bucket>, key-values: list<tuple<string, list<u8>>>) -> result<_, error>;
-			  delete-many: func(bucket: borrow<bucket>, keys: list<string>) -> result<_, error>;
-			}
-			""";
-
 	@Test
 	void componentImportLowersListParametersAsTheInterpreterAndTheJvmPassThem() throws Exception {
 		// The one program on three backends: on the interpreter and the JVM the program's
@@ -24211,14 +24183,23 @@ class WasmLispCompilerIntegrationTest {
 		// --component wasmtime's keyvalue host does, reading each list as the canonical
 		// array the wrapper staged -- an empty one included. A vector crosses as the
 		// list it holds, and a dotted list signals type-error on every backend, out of
-		// a kv:with-bucket that gives the handle back on the way.
+		// a kv:with-bucket that gives the handle back on the way. batch is the interface
+		// whose parameters are all list<T>: a list<string> and a
+		// list<tuple<string, list<u8>>>.
+		//
+		// The WIT is wasi:keyvalue's wit/ as published, read as the package directory it
+		// is: batch.wit and atomic.wit take bucket and error from store.wit, and only
+		// world.wit declares the package. The component is the one the files
+		// concatenated by hand into one compile to, byte for byte.
 		Path dir = Files.createTempDirectory("wit-list-param");
-		Files.writeString(dir.resolve("kv.wit"), WASI_KEYVALUE_BATCH_WIT);
-		Path program = dir.resolve("batch.lisp");
-		Files.writeString(program, """
-				(rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/store@0.2.0-draft" :package kv)
-				(rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/batch@0.2.0-draft" :package kvb)
+		WasiKeyvalueWit.directory(dir.resolve("wit/keyvalue"));
+		Files.writeString(dir.resolve("kv.wit"), WasiKeyvalueWit.concatenated());
+		String source = """
+				(rontolisp:wit-import "wit/keyvalue" :interface "wasi:keyvalue/store@0.2.0-draft" :package kv)
+				(rontolisp:wit-import "wit/keyvalue" :interface "wasi:keyvalue/batch@0.2.0-draft" :package kvb)
+				(rontolisp:wit-import "wit/keyvalue" :interface "wasi:keyvalue/atomics@0.2.0-draft" :package kva)
 				(defvar *pairs* (make-hash-table :test #'equal))
+				(defvar *counts* (make-hash-table :test #'equal))
 				(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0-draft"
 				  (lambda (member &rest args)
 				    (if (string= member "open") 0 (values (gethash (second args) *pairs*)))))
@@ -24230,6 +24211,10 @@ class WasmLispCompilerIntegrationTest {
 				          ((string= member "set-many")
 				           (dolist (pair arg) (setf (gethash (first pair) *pairs*) (second pair))))
 				          (t (dolist (k arg) (remhash k *pairs*))))))
+				(rontolisp:wit-provide "wasi:keyvalue/atomics@0.2.0-draft"
+				  (lambda (member bucket key delta)
+				    (declare (ignore member bucket))
+				    (incf (gethash key *counts* 0) delta)))
 				(kv:with-bucket (b (kv:open ""))
 				  (kvb:set-many b '(("a" "1") ("b" "22") ("c" "333")))
 				  (format t "~S~%" (kvb:get-many b '("a" "b" "nope" "c")))
@@ -24237,17 +24222,26 @@ class WasmLispCompilerIntegrationTest {
 				  (kvb:delete-many b '("a" "c"))
 				  (format t "~S~%" (kvb:get-many b '("a" "b" "c")))
 				  (format t "~S~%" (kv:bucket-get b "b"))
-				  (format t "~S~%" (kvb:get-many b (vector "b" "nope"))))
+				  (format t "~S~%" (kvb:get-many b (vector "b" "nope")))
+				  (kva:increment b "n" 2)
+				  (format t "~S~%" (kva:increment b "n" 3)))
 				(format t "~S~%" (handler-case (kv:with-bucket (b (kv:open "")) (kvb:get-many b '("b" . "c")))
 				                   (type-error () :type-error)))
-				""");
+				""";
+		Path program = dir.resolve("batch.lisp");
+		Files.writeString(program, source);
 		String expected = "((\"a\" \"1\") (\"b\" \"22\") NIL (\"c\" \"333\"))\n(NIL (\"b\" \"22\") NIL)\n\"22\"\n"
-				+ "((\"b\" \"22\") NIL)\n:TYPE-ERROR\n";
+				+ "((\"b\" \"22\") NIL)\n5\n:TYPE-ERROR\n";
 		assertThat(HostBoundaryRuns.cli(program.toString())).isEqualTo(expected);
 		assertThat(HostBoundaryRuns.jvm(program, Files.createDirectories(dir.resolve("classes")), "KvBatch"))
 			.isEqualTo(expected);
 		Path module = dir.resolve("batch.wasm");
 		HostBoundaryRuns.cli(program.toString(), "-o", module.toString(), "--component");
+		Path concatenated = dir.resolve("concatenated.lisp");
+		Files.writeString(concatenated, source.replace("\"wit/keyvalue\"", "\"kv.wit\""));
+		Path fromFile = dir.resolve("concatenated.wasm");
+		HostBoundaryRuns.cli(concatenated.toString(), "-o", fromFile.toString(), "--component");
+		assertThat(Files.readAllBytes(module)).isEqualTo(Files.readAllBytes(fromFile));
 		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-S", "keyvalue=y", module.toString());
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout()).isEqualTo(expected);

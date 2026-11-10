@@ -76,6 +76,7 @@ import am.ik.rontolisp.compiler.ClackEnv;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.WitExportDirective;
 import am.ik.rontolisp.compiler.WitImportDirective;
+import am.ik.rontolisp.compiler.WitSource;
 import am.ik.rontolisp.compiler.OperandTypes;
 import am.ik.rontolisp.clojure.Clojure;
 import am.ik.rontolisp.clojure.ClojureRunTime;
@@ -12996,17 +12997,16 @@ public final class LispEvaluator {
 	private LispVal evalWitExport(LispCons cons) {
 		WitExportDirective.Directive directive = WitExportDirective.parse(cons);
 		String resolved = SourceLoader.resolve(this.loadDirStack.peekLast(), directive.path());
-		String source;
+		WitSource source;
 		try {
-			source = this.sourceLoader.load(resolved);
+			source = WitFiles.read(this.sourceLoader, resolved);
 		}
 		catch (IOException ex) {
 			throw new LispEvalException(
 					LispNames.WIT_EXPORT_QUALIFIED + ": cannot read file " + resolved + ": " + ex.getMessage());
 		}
 		try {
-			WitExportDirective.lower(directive, source, resolved, this::exportedLambdaList,
-					WitExportDirective.Backend.OTHER);
+			WitExportDirective.lower(directive, source, this::exportedLambdaList, WitExportDirective.Backend.OTHER);
 		}
 		catch (UnsupportedOperationException ex) {
 			throw new LispEvalException(LispNames.WIT_EXPORT_QUALIFIED + ": " + ex.getMessage());
@@ -13025,9 +13025,9 @@ public final class LispEvaluator {
 	private LispVal evalWitImport(LispCons cons) {
 		WitImportDirective.Directive directive = WitImportDirective.parse(cons);
 		String resolved = SourceLoader.resolve(this.loadDirStack.peekLast(), directive.path());
-		String source;
+		WitSource source;
 		try {
-			source = this.sourceLoader.load(resolved);
+			source = WitFiles.read(this.sourceLoader, resolved);
 		}
 		catch (IOException ex) {
 			throw new LispEvalException(
@@ -13038,8 +13038,7 @@ public final class LispEvaluator {
 			// null drop filter: the interpreter binds a drop for every resource. It
 			// produces no artifact whose bytes have to stay identical, and a program may
 			// well reach a drop through funcall or eval.
-			bindings = WitImportDirective.lower(directive, source, resolved, WitExportDirective.Backend.OTHER, null,
-					null);
+			bindings = WitImportDirective.lower(directive, source, WitExportDirective.Backend.OTHER, null, null);
 		}
 		catch (UnsupportedOperationException ex) {
 			throw new LispEvalException(LispNames.WIT_IMPORT_QUALIFIED + ": " + ex.getMessage());

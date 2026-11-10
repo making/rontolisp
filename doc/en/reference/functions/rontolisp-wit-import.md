@@ -96,7 +96,13 @@ host that has never heard of the program. The output is identical all three ways
 ## Arguments
 
 - The WIT file path, as a string. A relative path resolves against the directory
-  of the source file that names it, like [`load`](load.md).
+  of the source file that names it, like [`load`](load.md). The path may name a
+  directory: a WIT package as it is published (and as `wasm-tools`, `wit-bindgen`
+  and `wkg wit fetch` lay it out). Its `*.wit` files are one package — one of them
+  declaring `package ...;` is enough — and each entry of its `deps/` (a directory
+  or a `.wit` file) is a package its `use` clauses may name. An error names the
+  file and line it comes from. The browser playground lists no directories, so
+  there a directory path is an error saying so.
 - `:interface` — the interface to bind (required). Written as the fully-qualified
   id (`"wasi:keyvalue/store@0.2.0"`), the id without its version
   (`"wasi:keyvalue/store"`), or the bare interface name (`store`) when the file

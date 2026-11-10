@@ -28,7 +28,9 @@ $ wasmtime run -S keyvalue=y hits.wasm
 42
 ```
 
-Both refer to their WIT file relative to the file that names it, like `load`.
+Both refer to their WIT file relative to the file that names it, like `load`. The path may name a
+WIT package directory as it is published: its `*.wit` files are one package, and each entry of its
+`deps/` a package its `use` clauses may name.
 
 ## Where it runs
 

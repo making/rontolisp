@@ -29,12 +29,12 @@ public interface ClojureBoundary {
 		}
 
 		@Override
-		public WitInterface importInterface(String witText, String witPath, String iface) {
+		public WitInterface importInterface(ClojureFiles files, String readPath, String witPath, String iface) {
 			throw unavailable();
 		}
 
 		@Override
-		public WitWorld exportWorld(String witText, String witPath, @Nullable String world) {
+		public WitWorld exportWorld(ClojureFiles files, String readPath, String witPath, @Nullable String world) {
 			throw unavailable();
 		}
 
@@ -55,25 +55,29 @@ public interface ClojureBoundary {
 
 	/**
 	 * The members a {@code rontolisp:wit-import} of the interface binds.
-	 * @param witText the WIT text
-	 * @param witPath the WIT file path, for a message
+	 * @param files where the WIT is read from
+	 * @param readPath the WIT file, or the directory of a package as published, as
+	 * {@link ClojureFiles#resolve} built it
+	 * @param witPath the WIT path as written, for a message
 	 * @param iface the interface reference as written
 	 * @return the interface
 	 * @throws LispReadException when the interface cannot be bound, naming the WIT file
 	 * and line
 	 */
-	WitInterface importInterface(String witText, String witPath, String iface);
+	WitInterface importInterface(ClojureFiles files, String readPath, String witPath, String iface);
 
 	/**
 	 * The exports of a WIT world, checked as {@code rontolisp:wit-export} checks them
 	 * before it reads the program.
-	 * @param witText the WIT text
-	 * @param witPath the WIT file path, for a message
+	 * @param files where the WIT is read from
+	 * @param readPath the WIT file, or the directory of a package as published, as
+	 * {@link ClojureFiles#resolve} built it
+	 * @param witPath the WIT path as written, for a message
 	 * @param world the world, or {@code null} for the file's only one
 	 * @return the world
 	 * @throws LispReadException on a contract violation, naming the WIT file and line
 	 */
-	WitWorld exportWorld(String witText, String witPath, @Nullable String world);
+	WitWorld exportWorld(ClojureFiles files, String readPath, String witPath, @Nullable String world);
 
 	/**
 	 * The house representation of a WIT type, the compiler's {@code WitTypeMapper.Rep}
@@ -147,9 +151,9 @@ public interface ClojureBoundary {
 	 * @param params its parameters, a method's handle first
 	 * @param result its result, or {@code null} for none
 	 * @param async whether it is an {@code async func}
-	 * @param line the WIT line declaring it
+	 * @param at the WIT file and line declaring it ({@code path:line})
 	 */
-	record Function(String name, Origin origin, List<Param> params, @Nullable Type result, boolean async, int line) {
+	record Function(String name, Origin origin, List<Param> params, @Nullable Type result, boolean async, String at) {
 	}
 
 	/**
