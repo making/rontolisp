@@ -33228,6 +33228,13 @@ cases:
                      (= 3993062400 (encode-universal-time s mi h d mo y)))))
       (print (multiple-value-list (decode-universal-time 3993062400 -9)))
       (print (length (multiple-value-list (get-decoded-time))))
+      ;; rontolisp:unix-time is the wall clock below the second: Unix seconds (the
+      ;; universal time's) and the nanoseconds within them, which three readings in
+      ;; a row would not all leave at zero.
+      (multiple-value-bind (s ns) (rontolisp:unix-time)
+        (print (list (<= 0 ns 999999999)
+                     (<= (abs (- (+ s 2208988800) (get-universal-time))) 1)
+                     (loop repeat 3 thereis (plusp (nth-value 1 (funcall #'rontolisp:unix-time)))))))
     expected: |
       T
       T
@@ -33235,6 +33242,7 @@ cases:
       (T T T T)
       (0 0 9 15 7 2026 2 NIL -9)
       9
+      (T T T)
   - name: signum
     source: |
       (print (signum -5))

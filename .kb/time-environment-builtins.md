@@ -13,6 +13,16 @@
   `clock_time_get(CLOCK_MONOTONIC)` reading `get-internal-run-time` divides (no division) on
   wasm, the host cell under `--no-wasi`. Same compiler classes and `NoWasiLoadPathRefusals`
   `CLOCK` kind as the three.
+- `%unix-nano-time` (2026-11-10, a CL internal): the wall clock in nanoseconds since the Unix
+  epoch -- `ChronoUnit.NANOS.between(Instant.EPOCH, Instant.now())` on the interpreter and the
+  JVM (exact in a long until 2262), `clock_time_get(CLOCK_REALTIME)` on wasm (the component
+  adapter answers it from `wasi:clocks/system-clock`'s `now`, seconds and nanoseconds), the
+  host cell under `--no-wasi`. Same compiler classes and `CLOCK` kind. Public API:
+  `rontolisp:unix-time`, a prelude defun answering `(values seconds nanoseconds)` -- local-time's
+  `%get-current-time` shape, which its tier-4 arm calls (`.kb/asdf.md`, local-time).
+  `NoWasiLoadPathRefusals` and the `--no-wasi` signal report both as `rontolisp:unix-time`.
+  Pinned by ci-spec `time-functions` (a nonzero fraction among three readings) and
+  `NoWasiLoadPathRefusalsTest#theClockIsNamedAsAHostObligationRatherThanARefusal`.
 - WASM clock/environ *imports* exist in both modes to keep import indices identical; the
   component's `environ_*` imports are DEAD WEIGHT kept because the fifteen preview1 slots
   (`IMPORT_FUNC_COUNT`) are index-pinned. **Pinned does not mean closed**: a WASI function

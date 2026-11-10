@@ -556,6 +556,7 @@ categories:
     functions:
       - { slug: rontolisp-version, name: "rontolisp:version" }
       - { slug: rontolisp-random-bytes, name: "rontolisp:random-bytes" }
+      - { slug: rontolisp-unix-time, name: "rontolisp:unix-time" }
       - { slug: rontolisp-bfloat16-bits, name: "rontolisp:bfloat16-bits" }
       - { slug: rontolisp-bits-bfloat16, name: "rontolisp:bits-bfloat16" }
       - { slug: rontolisp-float16-bits, name: "rontolisp:float16-bits" }

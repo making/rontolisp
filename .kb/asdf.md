@@ -1026,6 +1026,10 @@ shim: the rest of cl-fad is portable CL; `with-output-to-temporary-file` /
 `with-open-temporary-file` run on `(pathname stream)` (`.kb/pathnames.md`). hunchentoot (2026-10-31, interpreter)
 now stops at `HUNCHENTOOT::MAKE-EXTERNAL-FORMAT` (`specials.lisp:283`, flexi-streams shim, h52).
 
+**`eval/LocalTimeForms`** (no vendored copy; measured by quickload). local-time 1.0.6's
+`%get-current-time` fallback arm -> `(rontolisp:unix-time)`, so `now` carries the clock's fraction
+(the local-time entry below).
+
 **`eval/WithUserAbortForms`** (pinned by `WithUserAbortE2eTest`, all four, SBCL 2.2.9's answers).
 with-user-abort 0.1 names its condition per `#+impl` arm of a `quote` with no generic arm, so here
 the `quote` had no datum. One span: the last arm -> `rontolisp:interactive-interrupt`
@@ -1616,6 +1620,15 @@ library living only in the quicklisp cache is verified MANUALLY on all four.
   - Also landed: the `find` family taking the whole position keyword set (`buildPositionScan`,
     `positionScanValues.elementResult`), `make-array :initial-contents` from a packed vector, and
     `:element-type 'unsigned-byte` opening a BINARY stream.
+  - **`now` carries the clock's fraction** (2026-11-10): `%get-current-time` closes its
+    per-implementation arms with a `#-(or allegro cmu sbcl abcl ccl ...)` fallback of
+    `get-universal-time` and 0 nanoseconds. `eval/LocalTimeForms` (tier 4) replaces that arm's
+    body in `src/local-time.lisp` with `(rontolisp:unix-time)`, which answers the same
+    `(values sec nsec)` ([time-environment-builtins.md](time-environment-builtins.md)). A
+    rewrite, not a feature: every arm local-time tests names another implementation, and a
+    feature it would read would claim that implementation. The marker throws when moved; local-time
+    is not vendored, so only a quickload meets it (measured 2026-11-10 on all five builds,
+    `--no-wasi` through Node with the cell set: `nsec-of` the host's fraction).
   - **Two pre-existing backend defects had to be fixed**: argument evaluation order was
     right-to-left for `list` and backquote on all three compile backends
     (`.kb/argument-evaluation-order.md`), and `MAX_CALLABLE_ARITY` was raised to 10.

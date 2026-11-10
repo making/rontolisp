@@ -21,6 +21,8 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.List;
@@ -4091,6 +4093,12 @@ public final class Environment implements Scope {
 		env.defineFunction(LispNames.NANO_TIME, new LispFunction(LispNames.NANO_TIME, args -> {
 			requireArgCount(LispNames.NANO_TIME, args, 0);
 			return new LispInteger(System.nanoTime());
+		}));
+		// %unix-nano-time: the wall clock in nanoseconds since the Unix epoch, below the
+		// second (rontolisp:unix-time's source).
+		env.defineFunction(LispNames.UNIX_NANO_TIME, new LispFunction(LispNames.UNIX_NANO_TIME, args -> {
+			requireArgCount(LispNames.UNIX_NANO_TIME, args, 0);
+			return new LispInteger(ChronoUnit.NANOS.between(Instant.EPOCH, Instant.now()));
 		}));
 		// sleep: park the thread for a non-negative number of seconds and answer nil.
 		// Registered as a real function (not only as the %sleep-ms expansion) so #'sleep

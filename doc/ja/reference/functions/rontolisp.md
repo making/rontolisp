@@ -9,6 +9,7 @@
 |----------|---------|--------|
 | `rontolisp:version` | `(rontolisp:version)` | ビルド情報のプロパティリスト(`:version`, `:build-timestamp`, `:git-commit`, `:git-branch`) |
 | `rontolisp:random-bytes` | `(rontolisp:random-bytes 16)` | 暗号論的に強い乱数バイトのベクタ (`SecureRandom` / WASI `random_get`) |
+| `rontolisp:unix-time` | `(rontolisp:unix-time)` | 実時間の時計を 2 値で返す: Unix エポックからの秒数と、その秒の中のナノ秒 |
 | `rontolisp:bfloat16-bits` | `(rontolisp:bfloat16-bits 1.0)` | 実数の bfloat16 ビットパターン。最近接偶数丸め (0〜65535) |
 | `rontolisp:bits-bfloat16` | `(rontolisp:bits-bfloat16 16256)` | bfloat16 ビットパターンが表す浮動小数点数。65536 パターンすべてで厳密 |
 | `rontolisp:float16-bits` | `(rontolisp:float16-bits 1.0)` | 実数の IEEE binary16 (f16) ビットパターン。最近接偶数丸め (0〜65535) |

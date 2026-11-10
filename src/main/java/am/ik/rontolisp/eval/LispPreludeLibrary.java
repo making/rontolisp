@@ -3661,6 +3661,14 @@ public final class LispPreludeLibrary {
 				      (setf (aref %rb-out %rb-i) (rontolisp::%random-byte)))
 				    %rb-out))
 				""");
+		// rontolisp:unix-time -- the wall clock below the second, as local-time's
+		// %get-current-time answers it: (values unix-seconds nanoseconds), over the
+		// per-backend %unix-nano-time primitive.
+		SOURCES.put(LispNames.UNIX_TIME, """
+				(defun rontolisp:unix-time ()
+				  (let ((%ut-ns (%unix-nano-time)))
+				    (values (floor %ut-ns 1000000000) (mod %ut-ns 1000000000))))
+				""");
 		// subst walks the CDR direction with a loop like tree-equal below -- one frame
 		// per
 		// element is a StackOverflowError on an ordinary flat list. The structure-sharing

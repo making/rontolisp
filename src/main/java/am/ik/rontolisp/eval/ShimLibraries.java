@@ -360,6 +360,9 @@ public final class ShimLibraries {
 		else if (ClFadForms.SYSTEM.equals(systemName)) {
 			rewritten = ClFadForms.rewrite(componentFile, source);
 		}
+		else if (LocalTimeForms.SYSTEM.equals(systemName)) {
+			rewritten = LocalTimeForms.rewrite(componentFile, source);
+		}
 		else if (WithUserAbortForms.SYSTEM.equals(systemName)) {
 			rewritten = WithUserAbortForms.rewrite(componentFile, source);
 		}

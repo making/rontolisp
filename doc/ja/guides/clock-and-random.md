@@ -42,6 +42,17 @@ API である [`rontolisp:random-bytes`](../reference/functions/rontolisp-random
 (print (list (integerp (get-universal-time)) (>= (get-internal-real-time) 0)))   ; => (T T)
 ```
 
+秒未満は [`rontolisp:unix-time`](../reference/functions/rontolisp-unix-time.md)
+が実時間の時計を Unix 秒とその秒の中のナノ秒で返します。`local-time:now` はこれを読むため、
+そのタイムスタンプにも同じ秒未満の値が入ります。秒未満の値の取得元は次のとおりです。
+
+| ビルド | 秒未満の値 |
+| --- | --- |
+| インタプリタ、JVM | `java.time.Instant.now()` |
+| WASM Preview 1、`--native` | WASI `clock_time_get` の実時間クロック |
+| WASM `--component` | `wasi:clocks/system-clock` の `now` |
+| WASM `--no-wasi` | ホストが `__ronto_set_time` で書き込んだナノ秒 |
+
 [`encode-universal-time`](../reference/functions/encode-universal-time.md) と
 [`decode-universal-time`](../reference/functions/decode-universal-time.md)
 はその整数とカレンダー要素を純粋な算術で相互変換するので、どこでも同一に振る舞います。タイムゾーンを省略するとローカルゾーンで変換し、

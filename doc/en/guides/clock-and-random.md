@@ -53,6 +53,18 @@ an **integer on every backend**.
 (print (list (integerp (get-universal-time)) (>= (get-internal-real-time) 0)))   ; => (T T)
 ```
 
+Below the second, [`rontolisp:unix-time`](../reference/functions/rontolisp-unix-time.md)
+returns the wall clock as Unix seconds and the nanoseconds within them, and
+`local-time:now` reads it, so its timestamps carry the same fraction. The fraction
+comes from:
+
+| build | the fraction |
+| --- | --- |
+| interpreter, JVM | `java.time.Instant.now()` |
+| WASM Preview 1, `--native` | WASI `clock_time_get` on the realtime clock |
+| WASM `--component` | `wasi:clocks/system-clock`'s `now` |
+| WASM `--no-wasi` | the nanoseconds the host wrote through `__ronto_set_time` |
+
 [`encode-universal-time`](../reference/functions/encode-universal-time.md) and
 [`decode-universal-time`](../reference/functions/decode-universal-time.md) convert
 between that integer and calendar fields with pure arithmetic, so they behave

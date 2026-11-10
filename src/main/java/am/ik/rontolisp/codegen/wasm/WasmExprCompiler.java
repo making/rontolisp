@@ -2616,7 +2616,7 @@ final class WasmExprCompiler {
 			// while it is unset -- the branch is WasmTimeCompiler's, which is also
 			// where the reason lives.
 			case LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME,
-					LispNames.NANO_TIME ->
+					LispNames.NANO_TIME, LispNames.UNIX_NANO_TIME ->
 				WasmTimeCompiler.compile(cons, ctx, sym.name());
 			case LispNames.SQRT -> WasmComplexCompiler.compileSqrt(cons, ctx);
 			case LispNames.CIS -> WasmComplexCompiler.compileCis(cons, ctx);

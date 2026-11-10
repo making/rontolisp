@@ -63,9 +63,11 @@ final class WasmTimeCompiler {
 	 * window before the load-time reads), and pointing at one that does not exist would
 	 * be worse than saying so.
 	 * @param ctx the compilation context
-	 * @param name the built-in being compiled
+	 * @param operator the built-in being compiled
 	 */
-	private static void compileFromHostCell(WasmLispCompiler.Ctx ctx, String name) {
+	private static void compileFromHostCell(WasmLispCompiler.Ctx ctx, String operator) {
+		// The wall-clock internal reports as its public API.
+		String name = LispNames.UNIX_NANO_TIME.equals(operator) ? "rontolisp:unix-time" : operator;
 		if (ctx.reactorComponent) {
 			// The cell can only ever be zero here, so there is nothing to branch on:
 			// this shape carries no hook to fill it.
@@ -88,14 +90,15 @@ final class WasmTimeCompiler {
 		ctx.wasmCtrlDepth++;
 		WasmExprCompiler.compileExpr(LispMacroExpander.callTimeUnsupportedStub(message), ctx);
 		ctx.writer.write(Instruction.ELSE);
-		emitReading(ctx, name, true);
+		emitReading(ctx, operator, true);
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END);
 	}
 
 	// The arithmetic over a nanosecond reading, shared by both sources: seconds since
 	// 1900 for get-universal-time, milliseconds for the two internal clocks, the
-	// reading itself for %nano-time. Under --no-wasi all of them read the ONE cell the
+	// reading itself for %nano-time and %unix-nano-time. Under --no-wasi all of them read
+	// the ONE cell the
 	// host set -- there is no second clock to distinguish a monotonic reading from a
 	// wall-clock one, and a module that cannot
 	// advance its own clock reports the same instant for both, which is the truth about
@@ -125,6 +128,7 @@ final class WasmTimeCompiler {
 				ctx.writer.write(Instruction.I64_DIV_U);
 			}
 			case LispNames.NANO_TIME -> emitNanos(ctx, CLOCK_MONOTONIC, fromHostCell);
+			case LispNames.UNIX_NANO_TIME -> emitNanos(ctx, CLOCK_REALTIME, fromHostCell);
 			default -> throw new UnsupportedOperationException("Not a time function: " + name);
 		}
 		// Normalize the i64 into the exact-integer representation (an i31 would only

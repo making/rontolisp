@@ -9,6 +9,7 @@ package system. Each name below links to its own page.
 |----------|---------|--------|
 | `rontolisp:version` | `(rontolisp:version)` | a property list of build info (`:version`, `:build-timestamp`, `:git-commit`, `:git-branch`) |
 | `rontolisp:random-bytes` | `(rontolisp:random-bytes 16)` | a vector of cryptographically strong random bytes (`SecureRandom` / WASI `random_get`) |
+| `rontolisp:unix-time` | `(rontolisp:unix-time)` | the wall clock as two values: seconds since the Unix epoch and the nanoseconds within that second |
 | `rontolisp:bfloat16-bits` | `(rontolisp:bfloat16-bits 1.0)` | the bfloat16 bit pattern of a real, rounded to nearest even (0-65535) |
 | `rontolisp:bits-bfloat16` | `(rontolisp:bits-bfloat16 16256)` | the float a bfloat16 bit pattern encodes; exact for all 65536 patterns |
 | `rontolisp:float16-bits` | `(rontolisp:float16-bits 1.0)` | the IEEE binary16 (f16) bit pattern of a real, rounded to nearest even (0-65535) |

@@ -2340,7 +2340,7 @@ final class JvmExprCompiler {
 				}
 			}
 			case LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME,
-					LispNames.NANO_TIME ->
+					LispNames.NANO_TIME, LispNames.UNIX_NANO_TIME ->
 				JvmTimeCompiler.compile(cons, ctx, sym.name());
 			case LispNames.ISQRT -> JvmIsqrtCompiler.compile(cons, ctx, className);
 			case LispNames.EXPT -> JvmExptCompiler.compile(cons, ctx, className);

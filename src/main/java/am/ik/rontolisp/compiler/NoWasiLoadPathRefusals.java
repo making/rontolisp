@@ -848,13 +848,16 @@ public final class NoWasiLoadPathRefusals {
 			if (LispNames.FETCH.equals(qualified.member()) && hostFetch) {
 				return Kind.FETCH;
 			}
+			if (LispNames.UNIX_TIME.equals(qualified.member())) {
+				return Kind.CLOCK;
+			}
 			boolean entropy = LispNames.RANDOM_BYTES.equals(qualified.member())
 					|| LispNames.RANDOM_BYTE_INTERNAL.equals(qualified.member());
 			return entropy && !hostRandom ? Kind.ENTROPY : null;
 		}
 		return switch (name) {
 			case LispNames.GET_UNIVERSAL_TIME, LispNames.GET_INTERNAL_REAL_TIME, LispNames.GET_INTERNAL_RUN_TIME,
-					LispNames.NANO_TIME ->
+					LispNames.NANO_TIME, LispNames.UNIX_NANO_TIME ->
 				Kind.CLOCK;
 			case LispNames.SLEEP -> Kind.SLEEP;
 			case LispNames.OPEN, LispNames.WITH_OPEN_FILE, LispNames.LOAD -> Kind.FILESYSTEM;
@@ -867,14 +870,19 @@ public final class NoWasiLoadPathRefusals {
 		};
 	}
 
-	/** The operator a line names: the entropy pair reports as its public API. */
+	/**
+	 * The operator a line names: the entropy pair and the wall-clock pair report as their
+	 * public API.
+	 */
 	private static String reportedName(String name) {
 		PackageRegistry.QualifiedName qualified = PackageRegistry.splitQualified(name);
 		if (qualified == null) {
-			return name;
+			return LispNames.UNIX_NANO_TIME.equals(name) ? "rontolisp:" + LispNames.UNIX_TIME : name;
 		}
-		return LispNames.FETCH.equals(qualified.member()) ? "rontolisp:" + LispNames.FETCH
-				: "rontolisp:" + LispNames.RANDOM_BYTES;
+		return switch (qualified.member()) {
+			case LispNames.FETCH, LispNames.UNIX_TIME -> "rontolisp:" + qualified.member();
+			default -> "rontolisp:" + LispNames.RANDOM_BYTES;
+		};
 	}
 
 	private static String text(Found found, boolean reactorComponent) {

@@ -1,5 +1,6 @@
 package am.ik.rontolisp.codegen.jvm;
 
+import java.lang.classfile.constantpool.ClassEntry;
 import java.lang.classfile.constantpool.LongEntry;
 import java.util.List;
 
@@ -12,9 +13,10 @@ import am.ik.jvm.ConstantPool;
  * Compiles the time built-in functions for the JVM, each taking no arguments and
  * returning a boxed {@code Long}: {@code get-universal-time} (seconds since 1900-01-01
  * GMT, the Common Lisp epoch), {@code get-internal-real-time} (wall-clock milliseconds),
- * {@code get-internal-run-time} (run-time milliseconds) and {@code %nano-time} (the
- * monotonic nanoseconds). They read {@code System.currentTimeMillis} /
- * {@code System.nanoTime}.
+ * {@code get-internal-run-time} (run-time milliseconds), {@code %nano-time} (the
+ * monotonic nanoseconds) and {@code %unix-nano-time} (the wall clock's nanoseconds since
+ * the Unix epoch). They read {@code System.currentTimeMillis} / {@code System.nanoTime} /
+ * {@code Instant.now}.
  */
 final class JvmTimeCompiler {
 
@@ -46,6 +48,17 @@ final class JvmTimeCompiler {
 				ctx.body.ldiv();
 			}
 			case LispNames.NANO_TIME -> ctx.body.invokestatic(ctx.systemOp("nanoTime"));
+			case LispNames.UNIX_NANO_TIME -> {
+				// ChronoUnit.NANOS.between(Instant.EPOCH, Instant.now()): exact in a long
+				// until 2262.
+				ClassEntry chronoUnit = ctx.cp.classEntry("java/time/temporal/ChronoUnit");
+				ClassEntry instant = ctx.cp.classEntry("java/time/Instant");
+				ctx.body.getstatic(ctx.cp.fieldRef(chronoUnit, "NANOS", "Ljava/time/temporal/ChronoUnit;"));
+				ctx.body.getstatic(ctx.cp.fieldRef(instant, "EPOCH", "Ljava/time/Instant;"));
+				ctx.body.invokestatic(ctx.cp.methodRef(instant, "now", "()Ljava/time/Instant;"));
+				ctx.body.invokevirtual(ctx.cp.methodRef(chronoUnit, "between",
+						"(Ljava/time/temporal/Temporal;Ljava/time/temporal/Temporal;)J"));
+			}
 			default -> throw new UnsupportedOperationException("Not a time function: " + name);
 		}
 		// Box the long result.

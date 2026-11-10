@@ -56,6 +56,12 @@ class NoWasiLoadPathRefusalsTest {
 			.contains("the top-level (DEFVAR *STARTED*)")
 			.contains("__ronto_set_time")
 			.contains("BEFORE _initialize");
+		// The wall clock's public function and the internal its prelude body reads are
+		// one line, under the public name.
+		assertThat(warnings("(defvar *stamp* (rontolisp:unix-time))\n(defvar *nanos* (%unix-nano-time))\n"))
+			.containsOnlyOnce(LINE)
+			.contains("rontolisp:UNIX-TIME " + LINE)
+			.contains("__ronto_set_time");
 	}
 
 	@Test

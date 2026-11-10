@@ -453,6 +453,21 @@ public final class LispNames {
 	public static final String NANO_TIME = "%NANO-TIME";
 
 	/**
+	 * The {@code %unix-nano-time} internal: the wall clock in nanoseconds since the Unix
+	 * epoch, an integer on every backend ({@code Instant.now()} on the interpreter and
+	 * the JVM, WASI's realtime {@code clock_time_get} on wasm, the host cell under
+	 * {@code --no-wasi}). {@link #UNIX_TIME} is the public API over it.
+	 */
+	public static final String UNIX_NANO_TIME = "%UNIX-NANO-TIME";
+
+	/**
+	 * The {@code rontolisp:unix-time} function: the wall clock as two values, Unix
+	 * seconds and the nanoseconds within that second, built over {@link #UNIX_NANO_TIME}
+	 * in the prelude.
+	 */
+	public static final String UNIX_TIME = "UNIX-TIME";
+
+	/**
 	 * The {@code sleep} built-in function: block for the given number of seconds (a
 	 * non-negative real; sub-second values are rounded to whole milliseconds) and return
 	 * nil. The interpreter, the JVM and WASM Preview 1 wait through {@link #SLEEP_MS};
