@@ -425,7 +425,7 @@ as a `rontolisp:wit-error` condition, caught with `handler-case`), an
 `option`, a `record` (a keyword plist), a `variant`, an `enum`, a `tuple`, a
 `list<T>`, a `list<u8>`, a `string`, a `bool`, and `resource` handles.
 
-Everything but `list<T>` crosses **in both directions**, and an argument takes
+Everything crosses **in both directions**, and an argument takes
 exactly the shape the same type takes as a return value — so a value one call
 hands you goes straight into the next:
 
@@ -442,11 +442,10 @@ hands you goes straight into the next:
   (sock:tcp-socket-bind s '(:ipv4 :port 0 :address (127 0 0 1))))
 ```
 
-The one shape that still does not lower is a **`list<T>` argument**
-(`list<u8>` does): an argument is flattened, and a list
-would have to be written into linear memory as a canonical array instead. It
-is a compile error naming the WIT line, and `flags` does not cross in either
-direction yet.
+A `list<T>` argument is a proper list, which the wrapper writes into linear
+memory as a canonical array: `wasi:keyvalue/batch`'s `get-many` takes
+`'("a" "b")`, its `set-many` `'(("a" "1") ("b" "2"))`. `flags` does not cross
+in either direction yet.
 
 One interface a component **cannot** bind is one it already imports for its
 own WASI surface — and that surface grows with what the program uses
@@ -561,9 +560,7 @@ Current limitations:
   name, because its house integer is `i31ref`. `--no-gc` refuses an
   `async func` instead: `:async t` answers a future, and that value model
   has none.
-- Under `--component` a **`list<T>` argument** (other than `list<u8>`), and
-  `flags` anywhere, is a compile error; a `list<T>` still crosses as a
-  result.
+- Under `--component` `flags` anywhere is a compile error.
 - The directive binds an **interface**. A world's `import` items are still
   not read.
 - It must appear at top level **before** the code that calls the interface —

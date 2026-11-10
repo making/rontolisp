@@ -1,4 +1,4 @@
-package am.ik.rontolisp.clojure;
+package am.ik.rontolisp.testsupport;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -12,17 +12,15 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import am.ik.rontolisp.cli.RontoLispCli;
-import am.ik.rontolisp.testsupport.CliStack;
-import am.ik.rontolisp.testsupport.ThreadStdio;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Runs a Clojure program the ways the host-boundary tests need: through the CLI in
- * process (the interpreter, or a compile), as a compiled JVM class, and a compiled module
- * under {@code node} -- every path a temporary directory the test owns.
+ * Runs a program the ways the host-boundary tests need: through the CLI in process (the
+ * interpreter, or a compile), as a compiled JVM class, and a compiled module under
+ * {@code node} -- every path a temporary directory the test owns.
  */
-final class HostBoundaryRuns {
+public final class HostBoundaryRuns {
 
 	private HostBoundaryRuns() {
 	}
@@ -32,7 +30,7 @@ final class HostBoundaryRuns {
 	 * @param args the command line
 	 * @return what it printed
 	 */
-	static String cli(String... args) throws Exception {
+	public static String cli(String... args) throws Exception {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		CliStack.call("clojure-host-boundary", () -> {
 			new RontoLispCli(new ByteArrayInputStream(new byte[0]), new PrintStream(out, true, StandardCharsets.UTF_8))
@@ -49,7 +47,7 @@ final class HostBoundaryRuns {
 	 * @param name the class name
 	 * @return what it printed
 	 */
-	static String jvm(Path program, Path dir, String name) throws Exception {
+	public static String jvm(Path program, Path dir, String name) throws Exception {
 		cli(program.toString(), "-o", dir.resolve(name + ".class").toString());
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		try (var loader = new java.net.URLClassLoader(new java.net.URL[] { dir.toUri().toURL() },
@@ -64,7 +62,7 @@ final class HostBoundaryRuns {
 	}
 
 	/** Whether {@code node} runs here. */
-	static boolean nodeAvailable() {
+	public static boolean nodeAvailable() {
 		try {
 			return new ProcessBuilder("node", "--version").start().waitFor() == 0;
 		}
@@ -79,7 +77,7 @@ final class HostBoundaryRuns {
 	 * @param args the script and its arguments
 	 * @return what it printed
 	 */
-	static String node(Path dir, String... args) throws Exception {
+	public static String node(Path dir, String... args) throws Exception {
 		List<String> command = new ArrayList<>();
 		command.add("node");
 		command.addAll(List.of(args));

@@ -291,10 +291,9 @@ the provider is written against, not a marshaller. On the **Preview 1 WASM**
 boundary only the flat set `rontolisp:wasm-import` can carry crosses: a core
 import is a bare host function, with no component type to describe a richer shape
 with. Under **`--component`** the canonical ABI marshals the rich types, so a
-`record`, `variant`, `enum`, `option`, `tuple` or `result` crosses **in both
-directions** — as an argument as well as a result. Two do not: `flags` (in
-neither direction), and a `list<T>` **as an argument** (`list<u8>` crosses).
-Anything unsupported is a compile error naming the WIT file and line.
+`record`, `variant`, `enum`, `option`, `tuple`, `list<T>` or `result` crosses **in
+both directions** — as an argument as well as a result. Only `flags` does not (in
+neither direction). Anything unsupported is a compile error naming the WIT file and line.
 
 | WIT type | Lisp value | Preview 1 | `--component` |
 | --- | --- | --- | --- |
@@ -305,7 +304,7 @@ Anything unsupported is a compile error naming the WIT file and line.
 | `string` | a string | `:string` | yes |
 | `char` | a character | no | yes |
 | `list<u8>` | a string, the octets as UTF-8 text; under `:octets t` an `(unsigned-byte 8)` vector. An argument may also be an `(unsigned-byte 8)` vector, crossing a component (and Preview 1 under `:octets t`) as its octets | `:string`; `:octets` under `:octets t` | yes |
-| `list<T>` | a proper list | no | result only |
+| `list<T>` | a proper list | no | yes |
 | `tuple<...>` | a proper list, positional | no | yes |
 | `option<T>` | the value, or `nil` | no | yes |
 | `result<T, E>` | returned: the ok value, the error arm signals `rontolisp:wit-error`; passed: the `(:ok . V)` / `(:error . E)` envelope | no | yes |
@@ -361,10 +360,7 @@ decides what to make of it.
   even though `--component`, the interpreter and the JVM all bind it. The
   `wasi:keyvalue` example above is therefore a component (or an interpreter/JVM)
   program, not a Preview 1 one: its `result` arms keep it off that boundary.
-- Under `--component` a **`list<T>` argument** (other than `list<u8>`) is a
-  compile error, though the same type crosses as a *result*: an argument is
-  flattened, and a list would have to be written into linear memory as a canonical
-  array instead. `flags` does not cross in either direction yet.
+- Under `--component` `flags` does not cross in either direction yet.
 - Under `--component` the interface must not be one the component **already
   imports for its own WASI surface** (which grows with what the program uses:
   `rontolisp:fetch` adds `wasi:http/types` and `wasi:http/client`, the

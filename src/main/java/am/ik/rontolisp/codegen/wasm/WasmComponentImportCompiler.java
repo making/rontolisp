@@ -47,10 +47,8 @@ import org.jspecify.annotations.Nullable;
  * Lowering and lifting are mirror images of one shape, which is what makes a lifted value
  * passable straight back into another call: a variant case is the keyword {@code :get}
  * (or {@code (:other . "PATCH")} when it carries a payload), an enum is a keyword, a
- * record is a keyword plist, an option is the value or {@code nil}. The one thing
- * lowering refuses that lifting does not is a {@code list<T>} (other than
- * {@code list<u8>}): writing a canonical array into linear memory is a different
- * mechanism from flattening, and nothing needs it yet.
+ * record is a keyword plist, an option is the value or {@code nil}, a {@code list<T>} a
+ * proper list (staged as a canonical array in linear memory when lowered).
  *
  * <p>
  * The wrapper stages per-call bytes above a heap-pointer mark and pops back to it
@@ -2141,7 +2139,7 @@ final class WasmComponentImportCompiler {
 					}
 				}
 				case WitType.ListOf list when abi.isU8(list.element()) -> emitStageBytesParam(slot);
-				case WitType.ListOf ignored -> throw paramUnsupported("list<T>");
+				case WitType.ListOf list -> emitStageListParam(abi, list.element(), slot);
 				case WitType.BorrowOf ignored -> emitLowerHandleParam(slot);
 				case WitType.OwnOf ignored -> emitLowerHandleParam(slot);
 				// A stream/future crosses as its bare i32 end handle; the async built-ins
@@ -2533,6 +2531,95 @@ final class WasmComponentImportCompiler {
 			this.w.write(Instruction.I32_SUB);
 		}
 
+		// Stages a `list<T>` argument (T other than u8) -- a proper list, the shape
+		// emitLiftList builds; a vector is not taken -- as a canonical array and pushes
+		// its (ptr, len) pair:
+		// one walk counts the elements, the array is bump-allocated (__ronto_alloc's
+		// 8-byte alignment satisfies every element's), and a second walk stores each
+		// element at its slot through emitLowerAt. An element that stages bytes of its
+		// own (a string, a nested list) stages them above the array; the epilogue pops
+		// both with the rest of the call's staging.
+		private void emitStageListParam(WitCanonicalAbi abi, WitType element, int slot) {
+			int len = allocI32();
+			int ptr = allocI32();
+			int elemBase = allocI32();
+			int cur = this.ctx.allocTemp();
+			int item = this.ctx.allocTemp();
+			int elemSize = abi.size(element);
+			// len = length(list)
+			i32Const(0);
+			setLocal(len);
+			getLocal(slot);
+			setLocal(cur);
+			this.w.write(Instruction.BLOCK, 0x40);
+			this.w.write(Instruction.LOOP, 0x40);
+			getLocal(cur);
+			refTest(WasmLispCompiler.TYPE_CONS);
+			this.w.write(Instruction.I32_EQZ);
+			this.w.write(Instruction.BR_IF);
+			this.w.writeUnsignedLeb128(1);
+			getLocal(len);
+			i32Const(1);
+			this.w.write(Instruction.I32_ADD);
+			setLocal(len);
+			getLocal(cur);
+			structGet(WasmLispCompiler.TYPE_CONS, 1);
+			setLocal(cur);
+			this.w.write(Instruction.BR);
+			this.w.writeUnsignedLeb128(0);
+			this.w.write(Instruction.END);
+			this.w.write(Instruction.END);
+			// Anything but a proper list (a vector, a dotted tail) is a type error and
+			// traps, as every other one does on this backend -- not an empty array.
+			getLocal(cur);
+			this.w.write(Instruction.REF_IS_NULL);
+			this.w.write(Instruction.I32_EQZ);
+			this.w.write(Instruction.IF, 0x40);
+			this.w.write(Instruction.UNREACHABLE);
+			this.w.write(Instruction.END);
+			// ptr = elemBase = __ronto_alloc(len * size)
+			getLocal(len);
+			i32Const(elemSize);
+			this.w.write(Instruction.I32_MUL);
+			this.w.write(Instruction.CALL);
+			this.w.writeUnsignedLeb128(this.allocFuncIndex);
+			this.w.write(Instruction.TEE_LOCAL);
+			this.w.writeUnsignedLeb128(ptr);
+			setLocal(elemBase);
+			// while (consp cur) { lower (car cur) at elemBase; elemBase += size; cur =
+			// cdr }
+			getLocal(slot);
+			setLocal(cur);
+			this.w.write(Instruction.BLOCK, 0x40);
+			this.w.write(Instruction.LOOP, 0x40);
+			getLocal(cur);
+			refTest(WasmLispCompiler.TYPE_CONS);
+			this.w.write(Instruction.I32_EQZ);
+			this.w.write(Instruction.BR_IF);
+			this.w.writeUnsignedLeb128(1);
+			getLocal(cur);
+			structGet(WasmLispCompiler.TYPE_CONS, 0);
+			setLocal(item);
+			int save32 = this.i32Cursor;
+			int save64 = this.i64Cursor;
+			emitLowerAt(abi, element, item, elemBase, 0);
+			this.i32Cursor = save32;
+			this.i64Cursor = save64;
+			getLocal(elemBase);
+			i32Const(elemSize);
+			this.w.write(Instruction.I32_ADD);
+			setLocal(elemBase);
+			getLocal(cur);
+			structGet(WasmLispCompiler.TYPE_CONS, 1);
+			setLocal(cur);
+			this.w.write(Instruction.BR);
+			this.w.writeUnsignedLeb128(0);
+			this.w.write(Instruction.END);
+			this.w.write(Instruction.END);
+			getLocal(ptr);
+			getLocal(len);
+		}
+
 		// --- argument lowering into memory (the mirror of emitLiftAt) ---
 
 		// Stores the canonical memory representation of the boxed Lisp value in `slot`
@@ -2614,7 +2701,7 @@ final class WasmComponentImportCompiler {
 					}
 				}
 				case WitType.ListOf list when abi.isU8(list.element()) -> emitStoreStringAt(slot, base, offset, true);
-				case WitType.ListOf ignored -> throw paramUnsupported("list<T>");
+				case WitType.ListOf list -> emitStoreListAt(abi, list.element(), slot, base, offset);
 				case WitType.BorrowOf ignored -> emitStoreHandleAt(slot, base, offset);
 				case WitType.OwnOf ignored -> emitStoreHandleAt(slot, base, offset);
 				case WitType.StreamOf ignored -> emitStoreHandleAt(slot, base, offset);
@@ -2656,6 +2743,24 @@ final class WasmComponentImportCompiler {
 			else {
 				emitStageStringParam(slot);
 			}
+			setLocal(len);
+			setLocal(ptr);
+			getLocal(base);
+			getLocal(ptr);
+			store(offset, Instruction.I32_STORE, 2);
+			getLocal(base);
+			getLocal(len);
+			store(offset + 4, Instruction.I32_STORE, 2);
+			this.i32Cursor = save;
+		}
+
+		// list<T> (T other than u8) at [base + offset]: stage the array and store its
+		// canonical (ptr @+0, len @+4) pair.
+		private void emitStoreListAt(WitCanonicalAbi abi, WitType element, int slot, int base, int offset) {
+			int save = this.i32Cursor;
+			int ptr = allocI32();
+			int len = allocI32();
+			emitStageListParam(abi, element, slot);
 			setLocal(len);
 			setLocal(ptr);
 			getLocal(base);

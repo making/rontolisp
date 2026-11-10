@@ -63,8 +63,7 @@ import org.jspecify.annotations.Nullable;
  * wrapper split as Preview 1 for {@code result}-returning functions. The canonical ABI
  * marshals the rich types, so this is the only WASM boundary a {@code record} /
  * {@code variant} / {@code enum} / {@code option} / {@code tuple} / {@code result}
- * crosses -- as an argument as well as a result; only a {@code list<T>} argument (other
- * than {@code list<u8>}) and {@code flags} do not.</li>
+ * crosses -- as an argument as well as a result; only {@code flags} does not.</li>
  * </ul>
  *
  * <p>
@@ -1256,12 +1255,9 @@ public final class WitImportDirective {
 		return new Scoped(iface, type);
 	}
 
-	// What the canonical-ABI wrapper codegen supports today. Results lift recursively
-	// from
-	// the return area, so everything but flags crosses; parameters lower to flat values,
-	// which reaches every shape a variant / record flattens into -- but NOT a list<T>
-	// (other than list<u8>), because writing a canonical array into linear memory is a
-	// different mechanism from flattening.
+	// What the canonical-ABI wrapper codegen supports today: results lift recursively
+	// from the return area and parameters lower to flat values (a list<T> as a staged
+	// canonical array), so everything but flags crosses both ways.
 	private static void validateComponentFunc(WitResolver.Func func, String witPath, WitLocations locations,
 			WitResolver resolver, WitItem.InterfaceDef iface, String member) {
 		for (var param : func.def().func().params()) {
@@ -1287,15 +1283,8 @@ public final class WitImportDirective {
 				validateAsyncElement(t, witPath, locations, resolver, in, anchor, member, what);
 			case WitType.FutureOf ignored ->
 				validateAsyncElement(t, witPath, locations, resolver, in, anchor, member, what);
-			case WitType.ListOf list -> {
-				if (!isU8(list.element(), resolver, in)) {
-					throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(anchor) + ": '" + member
-							+ "': the WIT type of " + what + " is a list, which does not cross the component import "
-							+ "boundary as a parameter yet (only list<u8>, which crosses as a byte string, does). Its "
-							+ "rontolisp representation is settled (a proper list), and the interpreter and the JVM "
-							+ "backend bind it today");
-				}
-			}
+			case WitType.ListOf list ->
+				validateComponentParam(list.element(), witPath, locations, resolver, in, anchor, member, what, true);
 			case WitType.OptionOf opt -> {
 				if (!optionAllowed) {
 					// option<option<T>> has no rontolisp representation: both `none` and

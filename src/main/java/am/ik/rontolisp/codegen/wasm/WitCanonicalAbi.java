@@ -457,7 +457,7 @@ final class WitCanonicalAbi {
 
 	/**
 	 * Whether a type is {@code u8} (through any alias chain) -- the element type that
-	 * makes a {@code list} a byte string rather than a refused {@code list<T>}.
+	 * makes a {@code list} a byte string rather than a proper list.
 	 * @param type the type
 	 * @return {@code true} for {@code u8}
 	 */

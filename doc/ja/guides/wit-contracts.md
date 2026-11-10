@@ -248,7 +248,7 @@ wasmtime run -S keyvalue=y counter.wasm
 
 豊かな型をマーシャリングするのは canonical ABI なので、コンポーネントの境界は Preview 1 の境界よりはるかに多くを運びます: `result` (その error アームは `rontolisp:wit-error` コンディションとして到着し、`handler-case` で捕捉できます)、`option`、`record` (キーワード plist)、`variant`、`enum`、`tuple`、`list<T>`、`list<u8>`、`string`、`bool`、そして `resource` ハンドル。
 
-`list<T>` を除くすべてが**両方向で**渡ります。しかも引数は、同じ型が戻り値として取るのとまったく同じ形を取ります — ある呼び出しが返した値を、そのまま次の呼び出しに渡せます:
+すべてが**両方向で**渡ります。しかも引数は、同じ型が戻り値として取るのとまったく同じ形を取ります — ある呼び出しが返した値を、そのまま次の呼び出しに渡せます:
 
 ```console
 ;;; wasi:http/types, imported and called: a variant argument, whose `other` case
@@ -263,7 +263,7 @@ wasmtime run -S keyvalue=y counter.wasm
   (sock:tcp-socket-bind s '(:ipv4 :port 0 :address (127 0 0 1))))
 ```
 
-いまだにローワリングできない唯一の形は **`list<T>` の引数**です (`list<u8>` は渡ります)。引数はフラット化されますが、リストは代わりに canonical な配列としてリニアメモリに書き込む必要があるためです。これは WIT の行を示すコンパイルエラーになります。`flags` は今のところどちらの向きでも渡りません。
+`list<T>` の引数は proper list で、ラッパーがそれを canonical な配列としてリニアメモリに書き込みます: `wasi:keyvalue/batch` の `get-many` は `'("a" "b")` を、`set-many` は `'(("a" "1") ("b" "2"))` を取ります。`flags` は今のところどちらの向きでも渡りません。
 
 コンポーネントが束縛**できない**インターフェースが 1 つあります: そのコンポーネントが自身の WASI 表面としてすでにインポートしているものです。しかもその表面はプログラムが使う機能に応じて増えます (`rontolisp:fetch` は `wasi:http/types` と `wasi:http/client` を、`rontolisp:tcp-*` 組み込みは `wasi:sockets/types` を引き込みます)。コンポーネントは同じインターフェースを 2 回インポートできないため、これもコンパイルエラーです: 組み込みと併用するのではなく、組み込みの*代わりに* WIT 束縛経由で使ってください。
 
@@ -306,7 +306,7 @@ curl http://127.0.0.1:8080/index
 
 - Preview 1 の境界を渡れるのは `rontolisp:wasm-import` が運べる型だけです — 整数スカラー、浮動小数点スカラー、`bool`、`string`、`list<u8>`、リソースハンドル。`record`、`option`、`result` は、`--component`・インタプリタ・JVM のいずれもが束縛できるとしても、WIT ファイル名と行番号を示すコンパイルエラーになります (上の `wasi:keyvalue` プログラムが Preview 1 向けではなく、コンポーネントまたはインタプリタ／JVM 向けなのはそのためです: その `result` アームが Preview 1 の境界から遠ざけています)。コアインポートは素のホスト関数であり、より豊かな形を記述するためのコンポーネント型を持たないからです。`stream` と `future` はすべてのバックエンドで拒否されます。
 - どの整数幅が渡れるかはバックエンドの値モデル次第です: [`--no-gc`](wasm-nogc.md#host-imports-rontolispwasm-import) は `s64`/`u64` まで全ファミリを運び、それぞれの幅を保ちます。デフォルト (wasm-GC) のコアモジュールは 32 ビットまでで、ハウス整数が `i31ref` のため `s64`/`u64` は名前を挙げて拒否します。代わりに `--no-gc` は `async func` を拒否します: `:async t` は future を返しますが、あの値モデルに future はありません。
-- `--component` では、**`list<T>` の引数** (`list<u8>` を除く)、および位置を問わず `flags` はコンパイルエラーになります。`list<T>` は戻り値としては渡ります。
+- `--component` では、位置を問わず `flags` はコンパイルエラーになります。
 - 束縛できるのは**インターフェース**です。world の `import` 項目は依然として読まれません。
 - ディレクティブはトップレベルで、インターフェースを呼ぶコードより**前**に置かなければなりません (パッケージと束縛を定義するのがこれだからです)。`wit-export` とは逆です。
 

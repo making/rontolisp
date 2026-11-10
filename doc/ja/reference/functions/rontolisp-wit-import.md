@@ -298,9 +298,8 @@ cons `(:ok . V)` / `(:error . E)` — これは戻り値の `result` が ok
 インポートは素のホスト関数であり、より豊かな形をホストに伝えるためのコンポーネント型
 が存在しないからです。**`--component`** では canonical ABI
 が豊かな型をマーシャリングするので、`record`、`variant`、`enum`、`option`、`tuple`、
-`result` は**両方向で** — 戻り値としてだけでなく引数としても — 渡ります。渡らないのは
-2 つだけです: `flags` (どちらの向きでも)、および**引数としての** `list<T>`
-(`list<u8>` は渡ります)。サポートされない型は WIT
+`list<T>`、`result` は**両方向で** — 戻り値としてだけでなく引数としても — 渡ります。
+渡らないのは `flags` (どちらの向きでも) だけです。サポートされない型は WIT
 ファイル名と行番号を示すコンパイルエラーになります。
 
 | WIT type | Lisp value | Preview 1 | `--component` |
@@ -312,7 +311,7 @@ cons `(:ok . V)` / `(:error . E)` — これは戻り値の `result` が ok
 | `string` | a string | `:string` | yes |
 | `char` | a character | no | yes |
 | `list<u8>` | a string, the octets as UTF-8 text; under `:octets t` an `(unsigned-byte 8)` vector. An argument may also be an `(unsigned-byte 8)` vector, crossing a component (and Preview 1 under `:octets t`) as its octets | `:string`; `:octets` under `:octets t` | yes |
-| `list<T>` | a proper list | no | result only |
+| `list<T>` | a proper list | no | yes |
 | `tuple<...>` | a proper list, positional | no | yes |
 | `option<T>` | the value, or `nil` | no | yes |
 | `result<T, E>` | returned: the ok value, the error arm signals `rontolisp:wit-error`; passed: the `(:ok . V)` / `(:error . E)` envelope | no | yes |
@@ -369,10 +368,7 @@ variant のどの case でもないキーワードを渡すのは**型エラー*
   `wasi:keyvalue` の例はしたがって Preview 1 のプログラムではなく、コンポーネント
   (あるいはインタプリタ／JVM) のプログラムです: その `result`
   アームが Preview 1 の境界から遠ざけています。
-- `--component` では、**引数としての `list<T>`** (`list<u8>` を除く)
-  はコンパイルエラーになります。同じ型が*戻り値*としては渡るとしてもです。引数はフラット化
-  されますが、リストは代わりに canonical な配列としてリニアメモリに書き込む必要があるためです。
-  `flags` は今のところどちらの向きでも渡りません。
+- `--component` では、`flags` は今のところどちらの向きでも渡りません。
 - `--component` では、コンポーネントが**自身の WASI 表面としてすでにインポートしている**
   インターフェースを束縛できません (その表面はプログラムが使う機能に応じて増えます:
   `rontolisp:fetch` は `wasi:http/types` と `wasi:http/client` を、`rontolisp:tcp-*`

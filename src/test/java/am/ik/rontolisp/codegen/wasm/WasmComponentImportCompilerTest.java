@@ -688,22 +688,30 @@ class WasmComponentImportCompilerTest {
 	}
 
 	@Test
-	void rejectsAListParameterNamingTheWitLine() {
-		// A list<T> parameter would have to be written into linear memory as a canonical
-		// array, which is a different mechanism from flattening -- so it is still refused
-		// (list<u8> crosses, as a byte string).
+	@EnabledIf("am.ik.rontolisp.codegen.wasm.WitOracleE2eTest#wasmToolsIsAvailable")
+	void aListParameterStagesACanonicalArrayThatValidates(@TempDir Path tempDir) throws Exception {
+		// A list<T> parameter is staged as a canonical array, each element stored through
+		// the memory lowering -- a scalar, a record, a list inside a list, a list inside
+		// a variant payload, and one in a spilled async call's argument area. The
+		// wrapper bodies are worth what a real validator says of them; the round trip
+		// against a host is WasmLispCompilerIntegrationTest's.
 		String listParamWit = """
 				package local:x@0.1.0;
 
 				interface s {
-				    plot: func(xs: list<s32>);
-				    write: func(bytes: list<u8>);
+				    record point { x: s32, y: s32 }
+				    plot: func(xs: list<s32>, pts: list<point>);
+				    grid: func(rows: list<list<u32>>, tag: option<list<string>>);
+				    send: async func(a: u32, b: u32, c: u32, d: u32, names: list<string>);
 				}
 				""";
-		assertThatThrownBy(() -> lower(listParamWit, "local:x/s", WitExportDirective.Backend.WASM_COMPONENT))
-			.isInstanceOf(UnsupportedOperationException.class)
-			.hasMessageContaining("kv.wit:4")
-			.hasMessageContaining("is a list, which does not cross the component import boundary as a parameter yet");
+		Path file = tempDir.resolve("list-param.wasm");
+		Files.write(file, compileForms(lower(listParamWit, "local:x/s", WitExportDirective.Backend.WASM_COMPONENT)));
+		Process process = new ProcessBuilder("wasm-tools", "validate", "--features", "all", file.toString())
+			.redirectErrorStream(true)
+			.start();
+		String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+		assertThat(process.waitFor()).as(output).isZero();
 	}
 
 	@Test

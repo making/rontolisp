@@ -51,6 +51,7 @@ import am.ik.rontolisp.testsupport.AwaitValuesMatrix;
 import am.ik.rontolisp.testsupport.DeclaredArityReportPrograms;
 import am.ik.rontolisp.testsupport.HashTableCopyPrograms;
 import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
+import am.ik.rontolisp.testsupport.HostBoundaryRuns;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.MaskSignedFieldProgram;
 import am.ik.rontolisp.testsupport.OwnHandlerStacksPrograms;
@@ -24172,6 +24173,78 @@ class WasmLispCompilerIntegrationTest {
 				"http=y", path("wit-variant.component.wasm"));
 		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
 		assertThat(result.getStdout().trim()).isEqualTo(":GET\n:POST\n(:OTHER . \"PATCH\")\n:REJECTED");
+	}
+
+	// wasi:keyvalue's store and batch as wasmtime's -S keyvalue host answers them, cut
+	// down to what the program below binds. batch is the interface whose parameters are
+	// all list<T>: a list<string> and a list<tuple<string, list<u8>>>.
+	private static final String WASI_KEYVALUE_BATCH_WIT = """
+			package wasi:keyvalue@0.2.0-draft;
+
+			interface store {
+			  variant error {
+			    no-such-store,
+			    access-denied,
+			    other(string)
+			  }
+
+			  open: func(identifier: string) -> result<bucket, error>;
+
+			  resource bucket {
+			    get: func(key: string) -> result<option<list<u8>>, error>;
+			  }
+			}
+
+			interface batch {
+			  use store.{bucket, error};
+
+			  get-many: func(bucket: borrow<bucket>, keys: list<string>) -> result<list<option<tuple<string, list<u8>>>>, error>;
+			  set-many: func(bucket: borrow<bucket>, key-values: list<tuple<string, list<u8>>>) -> result<_, error>;
+			  delete-many: func(bucket: borrow<bucket>, keys: list<string>) -> result<_, error>;
+			}
+			""";
+
+	@Test
+	void componentImportLowersListParametersAsTheInterpreterAndTheJvmPassThem() throws Exception {
+		// The one program on three backends: on the interpreter and the JVM the program's
+		// own provider answers (it sees the proper lists the calls pass), under
+		// --component wasmtime's keyvalue host does, reading each list as the canonical
+		// array the wrapper staged -- an empty one included.
+		Path dir = Files.createTempDirectory("wit-list-param");
+		Files.writeString(dir.resolve("kv.wit"), WASI_KEYVALUE_BATCH_WIT);
+		Path program = dir.resolve("batch.lisp");
+		Files.writeString(program, """
+				(rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/store@0.2.0-draft" :package kv)
+				(rontolisp:wit-import "kv.wit" :interface "wasi:keyvalue/batch@0.2.0-draft" :package kvb)
+				(defvar *pairs* (make-hash-table :test #'equal))
+				(rontolisp:wit-provide "wasi:keyvalue/store@0.2.0-draft"
+				  (lambda (member &rest args)
+				    (if (string= member "open") 0 (values (gethash (second args) *pairs*)))))
+				(rontolisp:wit-provide "wasi:keyvalue/batch@0.2.0-draft"
+				  (lambda (member bucket arg)
+				    (declare (ignore bucket))
+				    (cond ((string= member "get-many")
+				           (mapcar (lambda (k) (let ((v (gethash k *pairs*))) (and v (list k v)))) arg))
+				          ((string= member "set-many")
+				           (dolist (pair arg) (setf (gethash (first pair) *pairs*) (second pair))))
+				          (t (dolist (k arg) (remhash k *pairs*))))))
+				(let ((b (kv:open "")))
+				  (kvb:set-many b '(("a" "1") ("b" "22") ("c" "333")))
+				  (format t "~S~%" (kvb:get-many b '("a" "b" "nope" "c")))
+				  (kvb:delete-many b '())
+				  (kvb:delete-many b '("a" "c"))
+				  (format t "~S~%" (kvb:get-many b '("a" "b" "c")))
+				  (format t "~S~%" (kv:bucket-get b "b")))
+				""");
+		String expected = "((\"a\" \"1\") (\"b\" \"22\") NIL (\"c\" \"333\"))\n(NIL (\"b\" \"22\") NIL)\n\"22\"\n";
+		assertThat(HostBoundaryRuns.cli(program.toString())).isEqualTo(expected);
+		assertThat(HostBoundaryRuns.jvm(program, Files.createDirectories(dir.resolve("classes")), "KvBatch"))
+			.isEqualTo(expected);
+		Path module = dir.resolve("batch.wasm");
+		HostBoundaryRuns.cli(program.toString(), "-o", module.toString(), "--component");
+		ExecResult result = wasmtime.execInContainer("wasmtime", "run", "-S", "keyvalue=y", module.toString());
+		assertThat(result.getExitCode()).as("stderr: %s", result.getStderr()).isZero();
+		assertThat(result.getStdout()).isEqualTo(expected);
 	}
 
 	// A subset of the real wasi:sockets/types@0.3.0: `create` takes an enum, `bind` takes

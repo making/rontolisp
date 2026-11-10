@@ -450,8 +450,7 @@ reaching the provider — uncatchable.
   cons `(:ok . V)` / `(:error . E)`; a generated wrapper
   `(defun kv:open (id) (rontolisp::%wit-result (kv::%open id)))` unwraps it, so the error arm
   rides the ORDINARY condition machinery. **The codegen never mentions conditions.**
-- Type tiers: `--component` params carry **everything except flags and `list<T>`** (`list<u8>`
-  crosses), results **everything except flags**. **Rejected precedent**: lowering rich P1 types
+- Type tiers: `--component` params and results carry **everything except flags**. **Rejected precedent**: lowering rich P1 types
   through `:s-expr` was REVERTED — a rontolisp-specific pseudo-protocol is not a WIT boundary and
   it broke P1 byte identity.
 - **Member pruning replaces the tree shaker on this path** (`--component` skips
@@ -480,7 +479,7 @@ reaching the provider — uncatchable.
   AFTER the function walk. A drop never appears in `--emit-wit`.
 
 ## Rich PARAMETERS across the component boundary
-**A param lowers everything a result lifts, except `list<T>` (T != u8)**. The premise "the
+**A param lowers everything a result lifts.** The premise "the
 blocking variants are all flat-payload" was WRONG: `wasi:http`'s `method` variant carries a
 **string** and `response-outparam.set` takes a `result` whose `error-code` cases carry records
 and `option<string>`.
@@ -507,6 +506,19 @@ envelope**; a payload-less arm may be the bare keyword because the tag/payload s
   aliases first** (`type headers = fields` targets a NAME while `WitTypeMapper` classifies
   structurally — a latent `IllegalArgumentException` on EVERY backend, pinned by
   `WasmComponentImportCompilerTest.followsATypeAlias...`).
+- **`list<T>` (T != u8), 2026-11-10** (`emitStageListParam`, the mirror of `emitLiftList`): one
+  walk counts the proper list, `__ronto_alloc(len * size)` takes the array (its 8-byte alignment
+  covers every element), a second walk stores each element through `emitLowerAt` (a string or
+  nested list stages ABOVE the array), and `(ptr, len)` goes on the stack -- or at an address
+  (`emitStoreListAt`) for a list inside an element, a payload or a spilled async argument. The
+  epilogue pops it with the rest of the staging. **A vector is not taken**: anything but a proper
+  list (a dotted tail too) traps rather than staging an empty array. Driven by `wasi:keyvalue`'s
+  `batch` (the measurement: 774 keys listed through `list-keys` + a `get` each cost 7.1-7.7 s
+  against a LAN store, 16 calls with `get-many`). Pinned by
+  `WasmLispCompilerIntegrationTest.componentImportLowersListParametersAsTheInterpreterAndTheJvmPassThem`
+  (one program, interpreter / JVM provider / wasmtime `-S keyvalue=y`'s `batch`, empty list
+  included) and `WasmComponentImportCompilerTest.aListParameterStagesACanonicalArrayThatValidates`
+  (list of record, list of list, list in an option, a spilled async argument; `wasm-tools`).
 - Edges: an **empty `record`** is a compile error naming the WIT line; a **`record`/`tuple` RESULT
   that flattens to one core value** lifts through `emitLiftRecordFlat`; `option<bool>` is
   ambiguous (`some(false)` and `none` are both nil) and **accepted, not refused**.
