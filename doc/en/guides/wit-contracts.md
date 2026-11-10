@@ -442,9 +442,11 @@ hands you goes straight into the next:
   (sock:tcp-socket-bind s '(:ipv4 :port 0 :address (127 0 0 1))))
 ```
 
-A `list<T>` argument is a proper list, which the wrapper writes into linear
-memory as a canonical array: `wasi:keyvalue/batch`'s `get-many` takes
-`'("a" "b")`, its `set-many` `'(("a" "1") ("b" "2"))`. `flags` does not cross
+A `list<T>` argument is a list or a vector (a JSON array `rontolisp:json-parse`
+read passes as it is), which the wrapper writes into linear memory as a
+canonical array: `wasi:keyvalue/batch`'s `get-many` takes `'("a" "b")`, its
+`set-many` `'(("a" "1") ("b" "2"))`. Anything else -- a dotted list, a string --
+signals `type-error` before the call, on every backend. `flags` does not cross
 in either direction yet.
 
 One interface a component **cannot** bind is one it already imports for its
@@ -524,8 +526,19 @@ binds:
   (kv:bucket-drop bucket))
 ```
 
-It is bound **only when the program names it** (`--no-prune` and `--dynamic`
-bind every resource's drop instead), which is why a component compiled before
+A call that signals before the drop skips it, so beside each drop the import
+binds a **`with-<resource>`** macro in `with-open-file`'s shape, which drops
+the handle on any exit:
+
+```console
+(kv:with-bucket (bucket (kv:open ""))
+  (kv:bucket-set bucket "visits" "41")   ; a rontolisp:wit-error here still drops
+  (print (kv:bucket-get bucket "visits")))
+```
+
+Either is bound **only when the program names it** -- naming `with-bucket` binds
+the drop it expands to, and `--no-prune` and `--dynamic` bind every resource's
+drop -- which is why a component compiled before
 drops existed comes out byte-identical — a WIT *function*, by contrast, is
 bound whether the program calls it or not. On the interpreter and the JVM
 the drop reaches the interface's provider as the member `"bucket-drop"`, so

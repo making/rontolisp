@@ -466,6 +466,13 @@ reaching the provider — uncatchable.
   `wasm-import`**; `--component` gets an ordinary core import (field `"[resource-drop]bucket"`,
   `(func (param i32))`) plus a SECOND outer emission kind. **Dropping a handle releases the
   reference, not the store.**
+- **`with-<resource>`** (2026-11-10): beside the drop, a macro in `with-open-file`'s shape,
+  `(kv:with-bucket (b (kv:open "")) ...)` -> `let` + `unwind-protect` + the drop
+  (`withResourceMacro`, built with `list`, no backquote template). Bound when the program names
+  it, and naming it binds the drop too (the gate reads the macro's name, not the drop it expands
+  to); not under a `:names` table, nor when a WIT function took the name. It follows the drop per
+  backend (a no-op on Preview 1, refused with it on `--no-gc --component`). Pinned by
+  `WitImportDirectiveTest.bindsAResourceDropOnlyWhenTheProgramNamesIt` and the `batch` E2E above.
 - **The outer side forces TWO counters.** `canon resource.drop` produces a **CORE function with
   NO component function behind it**, and mixing them yields a component that VALIDATES while
   lifting the wrong core function: `userImportFuncs` = decls only -> every **component**-func
@@ -511,13 +518,21 @@ envelope**; a payload-less arm may be the bare keyword because the tag/payload s
   covers every element), a second walk stores each element through `emitLowerAt` (a string or
   nested list stages ABOVE the array), and `(ptr, len)` goes on the stack -- or at an address
   (`emitStoreListAt`) for a list inside an element, a payload or a spilled async argument. The
-  epilogue pops it with the rest of the staging. **A vector is not taken**: anything but a proper
-  list (a dotted tail too) traps rather than staging an empty array. Driven by `wasi:keyvalue`'s
+  epilogue pops it with the rest of the staging. **A vector is taken, in Lisp, on every backend**
+  (2026-11-10, after a component trapped where the interpreter handed `json-parse`'s simple-vector
+  to the provider): `WitImportDirective.listDescriptor` quotes where in a parameter's type a
+  `list<T>` sits, and the binding passes the argument through `rontolisp::%wit-coerce`
+  (`wit.lisp`) -- inside `%wit-call` on the interpreter/JVM, inside a wrapper around the raw
+  binding (`wrapperDefun`, as a `result`'s) under `--component`. A vector (not a string) becomes
+  its list, anything else signals `type-error` before the call; the codegen's trap is left for a
+  raw binding a front end calls itself. Driven by `wasi:keyvalue`'s
   `batch` (the measurement: 774 keys listed through `list-keys` + a `get` each cost 7.1-7.7 s
   against a LAN store, 16 calls with `get-many`). Pinned by
   `WasmLispCompilerIntegrationTest.componentImportLowersListParametersAsTheInterpreterAndTheJvmPassThem`
-  (one program, interpreter / JVM provider / wasmtime `-S keyvalue=y`'s `batch`, empty list
-  included) and `WasmComponentImportCompilerTest.aListParameterStagesACanonicalArrayThatValidates`
+  (one program, interpreter / JVM provider / wasmtime `-S keyvalue=y`'s `batch`, empty list, a
+  vector and a caught dotted list included),
+  `LispEvaluatorTest.aListArgumentReachesTheProviderAsAProperListWhereverItSits` (the descriptor
+  through record / tuple / list / option / variant) and `WasmComponentImportCompilerTest.aListParameterStagesACanonicalArrayThatValidates`
   (list of record, list of list, list in an option, a spilled async argument; `wasm-tools`).
 - Edges: an **empty `record`** is a compile error naming the WIT line; a **`record`/`tuple` RESULT
   that flattens to one core value** lifts through `emitLiftRecordFlat`; `option<bool>` is

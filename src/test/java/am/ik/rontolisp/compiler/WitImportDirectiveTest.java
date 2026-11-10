@@ -395,8 +395,15 @@ class WitImportDirectiveTest {
 		// function, so it is outside the "Preview 1 binds every function" convention --
 		// and that one rule is what keeps every artifact that existed before drops
 		// byte-identical, since nothing in one references a `-drop` name.
-		assertThat(printed(lowerKeyvalue(Backend.OTHER, Set.of("bucket-get")))).doesNotContain("bucket-drop");
-		assertThat(printed(lowerKeyvalue(Backend.OTHER, Set.of("bucket-drop")))).contains("kv:|bucket-drop|");
+		assertThat(printed(lowerKeyvalue(Backend.OTHER, Set.of("bucket-get")))).doesNotContain("bucket-drop")
+			.doesNotContain("with-bucket");
+		assertThat(printed(lowerKeyvalue(Backend.OTHER, Set.of("bucket-drop")))).contains("kv:|bucket-drop|")
+			.doesNotContain("with-bucket");
+		// with-<resource> drops the handle on any exit, so naming it binds the drop too.
+		assertThat(printed(lowerKeyvalue(Backend.WASM_COMPONENT, Set.of("with-bucket"))))
+			.contains("(:DROP \"bucket\" \"kv:bucket-drop\")")
+			.contains("(DEFMACRO kv:|with-bucket| (|binding| &BODY |body|) (LIST 'LET (LIST |binding|) "
+					+ "(LIST 'UNWIND-PROTECT (CONS 'PROGN |body|) (LIST 'kv:|bucket-drop| (CAR |binding|)))))");
 		// No filter at all = every resource's drop: --no-prune / --dynamic, and the
 		// interpreter, which produces no artifact to keep identical.
 		assertThat(printed(lowerKeyvalue(Backend.OTHER, null))).contains("kv:|bucket-drop|");

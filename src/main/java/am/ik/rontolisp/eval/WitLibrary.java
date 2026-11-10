@@ -107,7 +107,7 @@ public final class WitLibrary {
 		String member = qn.member();
 		return LispNames.WIT_CALL.equals(member) || LispNames.WIT_PROVIDE.equals(member)
 				|| LispNames.WIT_ERROR.equals(member) || LispNames.WIT_ERROR_PAYLOAD.equals(member)
-				|| LispNames.WIT_RESULT.equals(member);
+				|| LispNames.WIT_RESULT.equals(member) || LispNames.WIT_COERCE.equals(member);
 	}
 
 	/**

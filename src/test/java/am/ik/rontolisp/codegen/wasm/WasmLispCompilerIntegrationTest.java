@@ -24209,7 +24209,9 @@ class WasmLispCompilerIntegrationTest {
 		// The one program on three backends: on the interpreter and the JVM the program's
 		// own provider answers (it sees the proper lists the calls pass), under
 		// --component wasmtime's keyvalue host does, reading each list as the canonical
-		// array the wrapper staged -- an empty one included.
+		// array the wrapper staged -- an empty one included. A vector crosses as the
+		// list it holds, and a dotted list signals type-error on every backend, out of
+		// a kv:with-bucket that gives the handle back on the way.
 		Path dir = Files.createTempDirectory("wit-list-param");
 		Files.writeString(dir.resolve("kv.wit"), WASI_KEYVALUE_BATCH_WIT);
 		Path program = dir.resolve("batch.lisp");
@@ -24228,15 +24230,19 @@ class WasmLispCompilerIntegrationTest {
 				          ((string= member "set-many")
 				           (dolist (pair arg) (setf (gethash (first pair) *pairs*) (second pair))))
 				          (t (dolist (k arg) (remhash k *pairs*))))))
-				(let ((b (kv:open "")))
+				(kv:with-bucket (b (kv:open ""))
 				  (kvb:set-many b '(("a" "1") ("b" "22") ("c" "333")))
 				  (format t "~S~%" (kvb:get-many b '("a" "b" "nope" "c")))
 				  (kvb:delete-many b '())
 				  (kvb:delete-many b '("a" "c"))
 				  (format t "~S~%" (kvb:get-many b '("a" "b" "c")))
-				  (format t "~S~%" (kv:bucket-get b "b")))
+				  (format t "~S~%" (kv:bucket-get b "b"))
+				  (format t "~S~%" (kvb:get-many b (vector "b" "nope"))))
+				(format t "~S~%" (handler-case (kv:with-bucket (b (kv:open "")) (kvb:get-many b '("b" . "c")))
+				                   (type-error () :type-error)))
 				""");
-		String expected = "((\"a\" \"1\") (\"b\" \"22\") NIL (\"c\" \"333\"))\n(NIL (\"b\" \"22\") NIL)\n\"22\"\n";
+		String expected = "((\"a\" \"1\") (\"b\" \"22\") NIL (\"c\" \"333\"))\n(NIL (\"b\" \"22\") NIL)\n\"22\"\n"
+				+ "((\"b\" \"22\") NIL)\n:TYPE-ERROR\n";
 		assertThat(HostBoundaryRuns.cli(program.toString())).isEqualTo(expected);
 		assertThat(HostBoundaryRuns.jvm(program, Files.createDirectories(dir.resolve("classes")), "KvBatch"))
 			.isEqualTo(expected);

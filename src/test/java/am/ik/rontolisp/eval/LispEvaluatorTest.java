@@ -24316,6 +24316,34 @@ class LispEvaluatorTest {
 	}
 
 	@Test
+	void aListArgumentReachesTheProviderAsAProperListWhereverItSits(@TempDir Path tempDir) throws Exception {
+		// A list<T> argument is a list or a vector, and the provider sees a proper list
+		// whichever the program passed -- at the top, in a record field, a tuple, a list,
+		// an option and a variant payload -- as a component's canonical array does
+		// (WitImportDirective.listDescriptor, wit.lisp's %wit-coerce). Anything else
+		// signals type-error before the provider runs.
+		String directive = witImport(tempDir, "echo.wit", """
+				package local:x@0.1.0;
+
+				interface echo {
+				  record shape { tags: list<string>, pts: list<tuple<s32, list<u32>>> }
+				  variant choice { none, some(list<u32>) }
+				  take: func(xs: list<shape>, grid: list<list<u32>>, opt: option<list<u32>>, c: choice) -> u32;
+				}
+				""", "local:x/echo@0.1.0", "echo");
+		assertThat(evalMulti(directive + """
+				(defvar *seen* nil)
+				(rontolisp:wit-provide "local:x/echo@0.1.0"
+				                       (lambda (member &rest args) member (setq *seen* args) 0))
+				(echo:take (vector (list :tags (vector "a") :pts (vector (list 1 (vector 2)))))
+				           (vector (vector 3) '(4)) (vector 5) (cons :some (vector 6)))
+				(list *seen*
+				      (handler-case (echo:take '(1 . 2) nil nil :none) (type-error (e) (type-error-datum e)))
+				      (handler-case (echo:take "ab" nil nil :none) (type-error (e) (type-error-datum e))))
+				""").print()).isEqualTo("((((:TAGS (\"a\") :PTS ((1 (2))))) ((3) (4)) (5) (:SOME 6)) (1 . 2) \"ab\")");
+	}
+
+	@Test
 	void aPackageLessWitImportBindsNamesTheProgramCanCall(@TempDir Path tempDir) throws Exception {
 		// The guide's own first wit-import example (doc/*/guides/wit-contracts.md): no
 		// :package, so the interface's functions land in the CURRENT package and the

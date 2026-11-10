@@ -134,6 +134,7 @@ rontolisp counter.lisp -o Counter.class && java Counter
 | `resource bucket` `constructor(...)` | `kv:bucket-new` | `(kv:bucket-new ...)` |
 | `resource bucket` `static func from-name` | `kv:bucket-from-name` | `(kv:bucket-from-name "x")` |
 | `resource bucket` — その**解放** (WIT はそのための関数を宣言しません) | `kv:bucket-drop` | `(kv:bucket-drop b)` |
+| どの経路で抜けても行う解放 (マクロ) | `kv:with-bucket` | `(kv:with-bucket (b (kv:open "")) ...)` |
 
 リソースのメンバーにはリソース名が前置されるため、2 つのリソースが同じメソッド名を
 宣言してもフラットな Lisp-2 の関数名前空間で衝突しません。また**メソッドはハンドルを
@@ -218,7 +219,18 @@ wasmtime 組み込みのキーバリュープロバイダはインスタンス�
   (kv:bucket-drop bucket))
 ```
 
-これが束縛されるのは、**プログラムがその名前を書いたときだけ**です。だからこそ、drop
+drop より前の呼び出しがコンディションを通知すると drop は実行されません。
+`with-open-file` と同じ形のマクロ **`with-<resource>`** は、どの経路で抜けてもハンドルを
+drop します:
+
+```console
+(kv:with-bucket (bucket (kv:open ""))
+  (kv:bucket-set bucket "visits" "41")
+  (print (kv:bucket-get bucket "visits")))
+```
+
+どちらも束縛されるのは、**プログラムがその名前を書いたときだけ**です (`with-bucket`
+を書けば drop も束縛されます)。だからこそ、drop
 が存在しなかった頃にコンパイルされたプログラムはバイト単位で同一のまま出てきます —
 その中には `-drop` という名前がどこにも現れないからです。WIT の*関数*のほうは、
 プログラムが呼ぶかどうかに関わらず束縛されます (Preview 1
@@ -311,7 +323,7 @@ cons `(:ok . V)` / `(:error . E)` — これは戻り値の `result` が ok
 | `string` | a string | `:string` | yes |
 | `char` | a character | no | yes |
 | `list<u8>` | a string, the octets as UTF-8 text; under `:octets t` an `(unsigned-byte 8)` vector. An argument may also be an `(unsigned-byte 8)` vector, crossing a component (and Preview 1 under `:octets t`) as its octets | `:string`; `:octets` under `:octets t` | yes |
-| `list<T>` | a proper list | no | yes |
+| `list<T>` | a proper list; an argument may also be a vector (not a string), crossing as the list it holds. Anything else signals `type-error` | no | yes |
 | `tuple<...>` | a proper list, positional | no | yes |
 | `option<T>` | the value, or `nil` | no | yes |
 | `result<T, E>` | returned: the ok value, the error arm signals `rontolisp:wit-error`; passed: the `(:ok . V)` / `(:error . E)` envelope | no | yes |
@@ -388,7 +400,8 @@ variant のどの case でもないキーワードを渡すのは**型エラー*
   ビルドから来ます)。
 - リソースハンドルは不透明で — その整数から何かを読み取ってよいのは、それを手渡した
   当人だけです — rontolisp が勝手に解放することはありません。解放できるのは
-  [`<resource>-drop`](#releasing-a-resource-resource-drop) だけです。WIT
+  [`<resource>-drop`](#releasing-a-resource-resource-drop) (あるいはそれを包む
+  `with-<resource>`) だけです。WIT
   リソースに `cl:close` は使えません。そのハンドルはプロバイダ (あるいはホスト)
   の私的な番号付けであって、rontolisp のストリームテーブルの枠ではないからです。
 - WASM バックエンドでは、他の関数と同様に 10 引数のアリティ制限が束縛にも適用されます。

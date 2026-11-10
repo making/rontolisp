@@ -418,8 +418,15 @@ public final class WitImportDirective {
 					String raw = rawName(directive, member);
 					componentMembers.add(memberBinding(member, raw));
 					if (!rawOnly(memberFilter, directive, member)) {
-						bindings.add(resultWrapperDefun(name, raw, params));
+						bindings.add(wrapperDefun(name, raw, params, true));
 					}
+				}
+				else if (params.stream().anyMatch(param -> param.descriptor() != null)) {
+					// A list<T> argument is coerced in Lisp, as the provider binding
+					// does: the raw binding stages proper lists only.
+					String raw = rawName(directive, member);
+					componentMembers.add(memberBinding(member, raw));
+					bindings.add(wrapperDefun(name, raw, params, false));
 				}
 				else {
 					componentMembers.add(memberBinding(member, name));
@@ -480,11 +487,22 @@ public final class WitImportDirective {
 				throw new UnsupportedOperationException(witPath + ":" + locations.lineOf(item) + ": interface '"
 						+ iface.name() + "' binds '" + member + "' twice");
 			}
-			if (unnamed(directive, member) || filtered(dropFilter, directive, member)) {
+			// with-<resource>, the drop on any exit: bound when the program names it
+			// (and then the drop it expands to with it), unless a WIT function took the
+			// name. A :names table's front end spells its own.
+			String with = "with-" + resource.name();
+			boolean withNamed = directive.names() == null && !allMembers.contains(with)
+					&& !filtered(dropFilter, directive, with);
+			if (unnamed(directive, member) || (filtered(dropFilter, directive, member) && !withNamed)) {
 				continue;
 			}
 			boundMembers.add(member);
 			String name = bindingName(directive, member);
+			if (withNamed) {
+				allMembers.add(with);
+				boundMembers.add(with);
+				bindings.add(withResourceMacro(bindingName(directive, with), name));
+			}
 			if (component) {
 				componentMembers.add(dropBinding(resource.name(), name));
 			}
@@ -1057,9 +1075,8 @@ public final class WitImportDirective {
 		List<LispVal> startCall = new ArrayList<>();
 		startCall.add(new LispSymbol(start));
 		for (Param param : params) {
-			LispSymbol symbol = new LispSymbol(param.name());
-			lambdaList.add(symbol);
-			startCall.add(symbol);
+			lambdaList.add(new LispSymbol(param.name()));
+			startCall.add(param.argument());
 		}
 		LispVal liftRef = list(List.of(new LispSymbol(LispNames.FUNCTION), new LispSymbol(lift)));
 		LispVal future = list(List.of(
@@ -1091,9 +1108,8 @@ public final class WitImportDirective {
 		call.add(new LispString(iface));
 		call.add(new LispString(member));
 		for (Param param : params) {
-			LispSymbol symbol = new LispSymbol(param.name());
-			lambdaList.add(symbol);
-			call.add(symbol);
+			lambdaList.add(new LispSymbol(param.name()));
+			call.add(param.argument());
 		}
 		return list(List.of(new LispSymbol(PackageRegistry.qualify(LispNames.RONTOLISP_PKG, LispNames.ASYNC_DEFUN)),
 				new LispSymbol(name), list(lambdaList), list(call)));
@@ -1175,6 +1191,25 @@ public final class WitImportDirective {
 		return list(List.of(new LispSymbol(":DROP"), new LispString(resource), new LispString(lispName)));
 	}
 
+	// (defmacro with-bucket (binding &body body)
+	// (list 'let (list binding)
+	// (list 'unwind-protect (cons 'progn body) (list 'kv:bucket-drop (car binding)))))
+	// -- (with-bucket (b (kv:open "")) ...) gives the handle back on any exit, in
+	// with-open-file's shape. Built with list, not a backquote template, so it reads the
+	// same on every backend's expander.
+	private static LispVal withResourceMacro(String name, String drop) {
+		LispSymbol binding = new LispSymbol("binding");
+		LispSymbol body = new LispSymbol("body");
+		LispSymbol listOp = new LispSymbol("LIST");
+		LispVal let = list(List.of(listOp, quote(new LispSymbol(LispNames.LET)), list(List.of(listOp, binding)),
+				list(List.of(listOp, quote(new LispSymbol(LispNames.UNWIND_PROTECT)),
+						list(List.of(new LispSymbol("CONS"), quote(new LispSymbol(LispNames.PROGN)), body)),
+						list(List.of(listOp, quote(new LispSymbol(drop)),
+								list(List.of(new LispSymbol("CAR"), binding))))))));
+		return list(List.of(new LispSymbol(LispNames.DEFMACRO), new LispSymbol(name),
+				list(List.of(binding, new LispSymbol("&BODY"), body)), let));
+	}
+
 	// (defun name (self) self nil) -- a Preview 1 drop, which releases nothing.
 	private static LispVal noopDropDefun(String name) {
 		return list(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name),
@@ -1199,20 +1234,22 @@ public final class WitImportDirective {
 	}
 
 	// (defun name (p ...) (rontolisp::%wit-result (raw p ...))) -- the public wrapper of
-	// a result-returning binding on the WASM backends.
-	private static LispVal resultWrapperDefun(String name, String raw, List<Param> params) {
+	// a result-returning binding on the WASM backends; without `unwrap`, (raw p ...)
+	// alone,
+	// the wrapper that coerces a list<T> argument.
+	private static LispVal wrapperDefun(String name, String raw, List<Param> params, boolean unwrap) {
 		List<LispVal> lambdaList = new ArrayList<>();
 		List<LispVal> call = new ArrayList<>();
 		call.add(new LispSymbol(raw));
 		for (Param param : params) {
-			LispSymbol symbol = new LispSymbol(param.name());
-			lambdaList.add(symbol);
-			call.add(symbol);
+			lambdaList.add(new LispSymbol(param.name()));
+			call.add(param.argument());
 		}
-		LispVal unwrap = list(
+		LispVal body = unwrap ? list(
 				List.of(new LispSymbol(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.WIT_RESULT)),
-						list(call)));
-		return list(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name), list(lambdaList), unwrap));
+						list(call)))
+				: list(call);
+		return list(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name), list(lambdaList), body));
 	}
 
 	// Whether the function's (effective) result is a WIT result -- the shape whose error
@@ -1524,7 +1561,7 @@ public final class WitImportDirective {
 						+ "' declares a parameter named 'self', which collides with the resource handle rontolisp "
 						+ "passes as the first argument of a method");
 			}
-			params.add(new Param(name, designator));
+			params.add(new Param(name, designator, listDescriptor(param.type(), resolver, iface)));
 		}
 		return params;
 	}
@@ -1702,9 +1739,8 @@ public final class WitImportDirective {
 		call.add(new LispString(iface));
 		call.add(new LispString(member));
 		for (Param param : params) {
-			LispSymbol symbol = new LispSymbol(param.name());
-			lambdaList.add(symbol);
-			call.add(symbol);
+			lambdaList.add(new LispSymbol(param.name()));
+			call.add(param.argument());
 		}
 		return list(List.of(new LispSymbol(LispNames.DEFUN), new LispSymbol(name), list(lambdaList), list(call)));
 	}
@@ -1733,7 +1769,102 @@ public final class WitImportDirective {
 	// One bound parameter: its Lisp name and the wasm-import type designator it crosses
 	// as
 	// (unused on the interpreter/JVM path, where the boundary is a Lisp call).
-	private record Param(String name, String designator) {
+	// `descriptor`, when the WIT type holds a list<T> (T other than u8), is the quoted
+	// map of where (listDescriptor): the binding passes the argument through
+	// rontolisp::%wit-coerce, so a vector crosses as a proper list and anything else
+	// signals type-error on every backend.
+	private record Param(String name, String designator, @Nullable LispVal descriptor) {
+
+		Param(String name, String designator) {
+			this(name, designator, null);
+		}
+
+		LispVal argument() {
+			LispSymbol symbol = new LispSymbol(this.name);
+			if (this.descriptor == null) {
+				return symbol;
+			}
+			return list(List.of(
+					new LispSymbol(PackageRegistry.qualifyInternal(LispNames.RONTOLISP_PKG, LispNames.WIT_COERCE)),
+					symbol, quote(this.descriptor)));
+		}
+
+	}
+
+	// Where a list<T> (T other than u8) sits in a parameter's WIT type, as the datum
+	// rontolisp::%wit-coerce walks: (:list D), (:option D), (:tuple D ...), (:record
+	// (:FIELD . D) ...), (:variant (:CASE . D) ...) -- a result's arms are :OK / :ERROR
+	// -- with nil for a position holding none; nil for the whole type when it holds none.
+	private static @Nullable LispVal listDescriptor(@Nullable WitType type, WitResolver resolver,
+			WitItem.InterfaceDef iface) {
+		if (type == null) {
+			return null;
+		}
+		Scoped scoped = resolveAliases(type, resolver, iface);
+		WitItem.InterfaceDef in = scoped.iface();
+		return switch (scoped.type()) {
+			case WitType.ListOf list -> isU8(list.element(), resolver, in) ? null
+					: list(List.of(new LispSymbol(":LIST"), orNil(listDescriptor(list.element(), resolver, in))));
+			case WitType.OptionOf opt -> {
+				LispVal element = listDescriptor(opt.element(), resolver, in);
+				yield element == null ? null : list(List.of(new LispSymbol(":OPTION"), element));
+			}
+			case WitType.TupleOf tuple -> {
+				List<LispVal> out = new ArrayList<>();
+				out.add(new LispSymbol(":TUPLE"));
+				boolean any = false;
+				for (WitType element : tuple.elements()) {
+					LispVal d = listDescriptor(element, resolver, in);
+					any |= d != null;
+					out.add(orNil(d));
+				}
+				yield any ? list(out) : null;
+			}
+			case WitType.ResultOf res -> keyed(":VARIANT", List.of("ok", "error"),
+					List.of(listDescriptorOrNil(res.ok(), resolver, in), listDescriptorOrNil(res.err(), resolver, in)));
+			case WitType.Named named -> {
+				WitResolver.Owned owned = resolver.resolveOwned(in, named.name());
+				WitItem.InterfaceDef owner = owned == null ? in : owned.owner();
+				yield switch (owned == null ? null : owned.item()) {
+					case WitItem.RecordDef record ->
+						keyed(":RECORD", record.fields().stream().map(WitItem.Field::name).toList(),
+								record.fields()
+									.stream()
+									.map(field -> listDescriptorOrNil(field.type(), resolver, owner))
+									.toList());
+					case WitItem.VariantDef variant ->
+						keyed(":VARIANT", variant.cases().stream().map(WitItem.Case::name).toList(),
+								variant.cases()
+									.stream()
+									.map(c -> listDescriptorOrNil(c.payload(), resolver, owner))
+									.toList());
+					case null, default -> null;
+				};
+			}
+			default -> null;
+		};
+	}
+
+	private static LispVal listDescriptorOrNil(@Nullable WitType type, WitResolver resolver,
+			WitItem.InterfaceDef iface) {
+		return orNil(listDescriptor(type, resolver, iface));
+	}
+
+	// (head (:NAME . D) ...) over the names whose descriptor is not nil; nil when none
+	// is.
+	private static @Nullable LispVal keyed(String head, List<String> names, List<LispVal> descriptors) {
+		List<LispVal> out = new ArrayList<>();
+		out.add(new LispSymbol(head));
+		for (int i = 0; i < names.size(); i++) {
+			if (descriptors.get(i) != LispNil.INSTANCE) {
+				out.add(new LispCons(new LispSymbol(":" + names.get(i).toUpperCase(Locale.ROOT)), descriptors.get(i)));
+			}
+		}
+		return out.size() == 1 ? null : list(out);
+	}
+
+	private static LispVal orNil(@Nullable LispVal value) {
+		return value == null ? LispNil.INSTANCE : value;
 	}
 
 	private static LispVal quote(LispVal value) {

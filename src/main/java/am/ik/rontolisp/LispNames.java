@@ -8868,6 +8868,14 @@ public final class LispNames {
 	public static final String WIT_CALL = "%WIT-CALL";
 
 	/**
+	 * The internal {@code rontolisp::%wit-coerce}: hands a {@code list<T>} argument on as
+	 * a proper list (a vector converted), signalling {@code type-error} for anything
+	 * else, wherever a quoted descriptor of the parameter's WIT type places one. Defined
+	 * in {@code wit.lisp}.
+	 */
+	public static final String WIT_COERCE = "%WIT-COERCE";
+
+	/**
 	 * The {@code wit-error} condition provided by the {@code rontolisp} package: what the
 	 * error arm of a WIT {@code result<T, E>} signals, carrying the mapped {@code E}
 	 * payload in its {@code payload} slot (the settled type mapping, {@code .kb/wit.md}).

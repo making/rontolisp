@@ -2532,7 +2532,9 @@ final class WasmComponentImportCompiler {
 		}
 
 		// Stages a `list<T>` argument (T other than u8) -- a proper list, the shape
-		// emitLiftList builds; a vector is not taken -- as a canonical array and pushes
+		// emitLiftList builds; the binding's Lisp wrapper has already turned a vector
+		// into one and signalled type-error for anything else (rontolisp::%wit-coerce)
+		// -- as a canonical array and pushes
 		// its (ptr, len) pair:
 		// one walk counts the elements, the array is bump-allocated (__ronto_alloc's
 		// 8-byte alignment satisfies every element's), and a second walk stores each
@@ -2569,8 +2571,9 @@ final class WasmComponentImportCompiler {
 			this.w.writeUnsignedLeb128(0);
 			this.w.write(Instruction.END);
 			this.w.write(Instruction.END);
-			// Anything but a proper list (a vector, a dotted tail) is a type error and
-			// traps, as every other one does on this backend -- not an empty array.
+			// Anything but a proper list (only a raw binding a front end calls itself
+			// can see one) traps, as every other type error here does -- not an empty
+			// array.
 			getLocal(cur);
 			this.w.write(Instruction.REF_IS_NULL);
 			this.w.write(Instruction.I32_EQZ);

@@ -172,7 +172,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 ## WASM backends
 
 - [wasi-component.md](wasi-component.md) -- `--component` WASI 0.3 component output
-- [wit.md](wit.md) -- `am.ik.wit`, `--emit-wit`, `WitTypeMapper`, `rontolisp:wit-export`/`wit-import`, the `:names` naming hook and `describe`, `:octets` (a `list<u8>` result lifted as octets)
+- [wit.md](wit.md) -- `am.ik.wit`, `--emit-wit`, `WitTypeMapper`, `rontolisp:wit-export`/`wit-import`, the `:names` naming hook and `describe`, `:octets` (a `list<u8>` result lifted as octets), a `list<T>` argument (a list or a vector, `%wit-coerce`), `with-<resource>`
 - [wasm-export-no-wasi.md](wasm-export-no-wasi.md) -- `rontolisp:wasm-export` + `--no-wasi` reactor mode
 - [wasm-import.md](wasm-import.md) -- `rontolisp:wasm-import`, `:async t`, `"rontolisp:memory"` and its `search`, `--emit-js-glue`, `--host-boundary`
 - [proxy-wasm-sdk.md](proxy-wasm-sdk.md) -- `examples/proxy-wasm`: what an exchange runs, instruction by instruction; `define-filter` over `defmethod`, measured; what state and each choice cost, what was weighed and left

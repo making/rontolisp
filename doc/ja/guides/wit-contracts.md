@@ -263,7 +263,7 @@ wasmtime run -S keyvalue=y counter.wasm
   (sock:tcp-socket-bind s '(:ipv4 :port 0 :address (127 0 0 1))))
 ```
 
-`list<T>` の引数は proper list で、ラッパーがそれを canonical な配列としてリニアメモリに書き込みます: `wasi:keyvalue/batch` の `get-many` は `'("a" "b")` を、`set-many` は `'(("a" "1") ("b" "2"))` を取ります。`flags` は今のところどちらの向きでも渡りません。
+`list<T>` の引数はリストまたはベクタ (`rontolisp:json-parse` が読んだ JSON 配列もそのまま渡せます) で、ラッパーがそれを canonical な配列としてリニアメモリに書き込みます: `wasi:keyvalue/batch` の `get-many` は `'("a" "b")` を、`set-many` は `'(("a" "1") ("b" "2"))` を取ります。それ以外 (ドット対のリスト、文字列) は、どのバックエンドでも呼び出しの前に `type-error` を通知します。`flags` は今のところどちらの向きでも渡りません。
 
 コンポーネントが束縛**できない**インターフェースが 1 つあります: そのコンポーネントが自身の WASI 表面としてすでにインポートしているものです。しかもその表面はプログラムが使う機能に応じて増えます (`rontolisp:fetch` は `wasi:http/types` と `wasi:http/client` を、`rontolisp:tcp-*` 組み込みは `wasi:sockets/types` を引き込みます)。コンポーネントは同じインターフェースを 2 回インポートできないため、これもコンパイルエラーです: 組み込みと併用するのではなく、組み込みの*代わりに* WIT 束縛経由で使ってください。
 
@@ -298,7 +298,15 @@ curl http://127.0.0.1:8080/index
   (kv:bucket-drop bucket))
 ```
 
-これが束縛されるのは、**プログラムがその名前を書いたときだけ**です (`--no-prune` と `--dynamic` はすべてのリソースの drop を束縛します)。だからこそ、drop が存在しなかった頃にコンパイルされたコンポーネントはバイト単位で同一のまま出てきます — 呼ぶかどうかに関わらず束縛される WIT の*関数*とは対照的です。インタプリタと JVM では、drop はメンバー名 `"bucket-drop"` としてインターフェースのプロバイダに届きます。したがってそれが何を*意味するか*はプロバイダが決めます: ハンドルを忘れる、接続を閉じる、あるいは解放するものが無いので `nil` を返す。Preview 1 では **no-op** です — そこでのハンドルはホストが手渡した不透明な整数にすぎず、WIT が宣言していない解放関数のインポートを rontolisp が勝手に作り出すことはありません。`--component` では `canon resource.drop` になり、ハンドルはホスト自身のテーブルへ返されます。
+drop より前の呼び出しがコンディションを通知すると drop は実行されません。そこでインポートは drop と並べて、`with-open-file` と同じ形の **`with-<resource>`** マクロを束縛します。これはどの経路で抜けてもハンドルを drop します:
+
+```console
+(kv:with-bucket (bucket (kv:open ""))
+  (kv:bucket-set bucket "visits" "41")   ; a rontolisp:wit-error here still drops
+  (print (kv:bucket-get bucket "visits")))
+```
+
+どちらも束縛されるのは、**プログラムがその名前を書いたときだけ**です。`with-bucket` を書けばそれが展開される先の drop も束縛され、`--no-prune` と `--dynamic` はすべてのリソースの drop を束縛します。だからこそ、drop が存在しなかった頃にコンパイルされたコンポーネントはバイト単位で同一のまま出てきます — 呼ぶかどうかに関わらず束縛される WIT の*関数*とは対照的です。インタプリタと JVM では、drop はメンバー名 `"bucket-drop"` としてインターフェースのプロバイダに届きます。したがってそれが何を*意味するか*はプロバイダが決めます: ハンドルを忘れる、接続を閉じる、あるいは解放するものが無いので `nil` を返す。Preview 1 では **no-op** です — そこでのハンドルはホストが手渡した不透明な整数にすぎず、WIT が宣言していない解放関数のインポートを rontolisp が勝手に作り出すことはありません。`--component` では `canon resource.drop` になり、ハンドルはホスト自身のテーブルへ返されます。
 
 これはリークだけの話ではありません。インターフェースは drop を**義務**にできます: `wasi:http` は `outgoing-body` の子である `output-stream` を body を finish する前に drop するよう要求し、そうしなければトラップします。そして drop が解放するのは*参照*であって、その先にあるものではありません — ストアはそのまま残り、次の `kv:open` はすべてのキーをそのまま見ます。
 

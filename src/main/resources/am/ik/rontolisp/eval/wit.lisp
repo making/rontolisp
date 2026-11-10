@@ -52,6 +52,57 @@
                          " -- bind one with rontolisp:wit-provide"))
         (apply provider member args))))
 
+;;; A list<T> argument (T other than u8) is a list or a vector: a binding passes
+;;; it through here, so the provider -- or the component's canonical array -- sees
+;;; one shape, a proper list, and anything else (a dotted list, a string, an atom)
+;;; signals type-error the program can handle, the same on every backend. The
+;;; descriptor is the quoted map of where in the parameter's WIT type a list<T>
+;;; sits (WitImportDirective.listDescriptor): (:list D), (:option D),
+;;; (:tuple D ...), (:record (:FIELD . D) ...), (:variant (:CASE . D) ...), nil
+;;; where none does.
+(defun rontolisp::%wit-coerce (value descriptor)
+  (let ((kind (car descriptor)))
+    (cond ((null descriptor) value)
+          ((eq kind :list)
+           (let ((items (rontolisp::%wit-proper-list value))
+                 (element (cadr descriptor)))
+             (if element
+                 (mapcar (lambda (item) (rontolisp::%wit-coerce item element))
+                         items)
+                 items)))
+          ((eq kind :option)
+           (if value (rontolisp::%wit-coerce value (cadr descriptor)) nil))
+          ((eq kind :tuple)
+           (let ((rest value) (out nil))
+             (dolist (element (cdr descriptor))
+               (push (rontolisp::%wit-coerce (car rest) element) out)
+               (setq rest (cdr rest)))
+             (nreverse out)))
+          ((eq kind :record)
+           (let ((rest value) (out nil))
+             (loop while (consp rest)
+                   do (push (car rest) out)
+                     (push (rontolisp::%wit-coerce (cadr rest)
+                            (cdr (assoc (car rest) (cdr descriptor)))) out)
+                     (setq rest (cddr rest)))
+             (nreverse out)))
+          ((consp value)
+           (cons (car value)
+                 (rontolisp::%wit-coerce (cdr value)
+                  (cdr (assoc (car value) (cdr descriptor))))))
+          (t value))))
+
+(defun rontolisp::%wit-proper-list (value)
+  (if (and (vectorp value) (not (stringp value)))
+      (coerce value 'list)
+      (let ((tail value))
+        (loop while (consp tail) do (setq tail (cdr tail)))
+        (if (null tail)
+            value
+            (error 'type-error
+                   :datum value
+                   :expected-type '(or list vector))))))
+
 (defun rontolisp::%wit-result (envelope)
   ;; The WASM boundaries cannot signal across the host call, so a
   ;; result-returning wit-imported function crosses as the envelope

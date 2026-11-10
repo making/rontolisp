@@ -133,6 +133,7 @@ host that has never heard of the program. The output is identical all three ways
 | `resource bucket` `constructor(...)` | `kv:bucket-new` | `(kv:bucket-new ...)` |
 | `resource bucket` `static func from-name` | `kv:bucket-from-name` | `(kv:bucket-from-name "x")` |
 | `resource bucket` — its **release** (WIT declares no function for it) | `kv:bucket-drop` | `(kv:bucket-drop b)` |
+| the release on any exit (a macro) | `kv:with-bucket` | `(kv:with-bucket (b (kv:open "")) ...)` |
 
 A resource member is prefixed with the resource, so two resources may declare
 the same method without colliding in the flat Lisp-2 function namespace, and a
@@ -217,9 +218,18 @@ find. rontolisp binds it as **`<resource>-drop`** — one argument, the handle:
   (kv:bucket-drop bucket))
 ```
 
-It is bound **only when the program names it**, which is why a program compiled
-before drops existed comes out byte-identical: nothing in it mentions a `-drop`
-name. A WIT *function*, by contrast, is bound whether the program calls it or not
+A call that signals before the drop skips it. **`with-<resource>`**, a macro in
+`with-open-file`'s shape, drops the handle on any exit:
+
+```console
+(kv:with-bucket (bucket (kv:open ""))
+  (kv:bucket-set bucket "visits" "41")
+  (print (kv:bucket-get bucket "visits")))
+```
+
+Each is bound **only when the program names it** (naming `with-bucket` binds the
+drop too), which is why a program compiled before drops existed comes out
+byte-identical: nothing in it mentions a `-drop` name. A WIT *function*, by contrast, is bound whether the program calls it or not
 (Preview 1 binds the whole interface). `--no-prune` and `--dynamic` bind every
 resource's drop instead — and so does the interpreter, which compiles nothing
 whose bytes have to stay the same.
@@ -304,7 +314,7 @@ neither direction). Anything unsupported is a compile error naming the WIT file 
 | `string` | a string | `:string` | yes |
 | `char` | a character | no | yes |
 | `list<u8>` | a string, the octets as UTF-8 text; under `:octets t` an `(unsigned-byte 8)` vector. An argument may also be an `(unsigned-byte 8)` vector, crossing a component (and Preview 1 under `:octets t`) as its octets | `:string`; `:octets` under `:octets t` | yes |
-| `list<T>` | a proper list | no | yes |
+| `list<T>` | a proper list; an argument may also be a vector (not a string), crossing as the list it holds. Anything else signals `type-error` | no | yes |
 | `tuple<...>` | a proper list, positional | no | yes |
 | `option<T>` | the value, or `nil` | no | yes |
 | `result<T, E>` | returned: the ok value, the error arm signals `rontolisp:wit-error`; passed: the `(:ok . V)` / `(:error . E)` envelope | no | yes |
@@ -379,7 +389,8 @@ decides what to make of it.
   component's WASI imports come from the build, not from the world).
 - A resource handle is opaque — only whoever handed it out may read anything into
   the integer — and rontolisp never releases one on its own. It is released by
-  [`<resource>-drop`](#releasing-a-resource-resource-drop) and by nothing else:
+  [`<resource>-drop`](#releasing-a-resource-resource-drop) (or the
+  `with-<resource>` around it) and by nothing else:
   `cl:close` does not apply to a WIT resource, whose handles are the provider's
   (or the host's) private numbering, not a slot in a rontolisp stream table.
 - On the WASM backend the 10-parameter arity limit applies to a binding like any
