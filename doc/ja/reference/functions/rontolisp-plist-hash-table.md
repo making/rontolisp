@@ -10,12 +10,12 @@ alexandria へ切り替えられます。JSON オブジェクトの構築では
 キーワードのキーは小文字化されるため、`:name` は `"name"` になります。
 
 ```lisp
-(rontolisp:json-stringify (rontolisp:plist-hash-table (list :name "rontolisp")))   ; => "{\"name\":\"rontolisp\"}"
+(rontolisp:json-stringify (rontolisp:plist-hash-table (list :name "rontolisp" :ok t)))   ; => "{\"name\":\"rontolisp\",\"ok\":true}"
 ```
 
-複数のキーを持つオブジェクトも同様に動作します(JSON 出力のキー順序は
-`maphash` と同様にバックエンド依存です)。テーブルは本物のハッシュテーブル
-なので、値は `gethash` で読み戻せます:
+メンバーはすべてのバックエンドで plist の順に出力されます(ハッシュテーブルの
+走査順は [`maphash`](maphash.md) と同じく、キーが最初に格納された順です)。
+テーブルは本物のハッシュテーブルなので、値は `gethash` で読み戻せます:
 
 ```lisp
 (gethash :ok (rontolisp:plist-hash-table (list :name "x" :ok t)))   ; => T

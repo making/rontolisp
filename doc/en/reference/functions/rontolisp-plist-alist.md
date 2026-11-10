@@ -13,8 +13,7 @@ alexandria unchanged.
 ```
 
 Unlike [`rontolisp:plist-hash-table`](rontolisp-plist-hash-table.md) there is no
-hash table in between, so the order is the input's — deterministic on every
-backend — and duplicate keys are kept rather than collapsed:
+hash table in between, so the order is the input's, and duplicate keys are kept rather than collapsed:
 
 ```lisp
 (rontolisp:plist-alist '(:a 1 :a 9))   ; => ((:A . 1) (:A . 9))

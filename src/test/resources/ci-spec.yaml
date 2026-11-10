@@ -12154,13 +12154,14 @@ cases:
   # list into a string-keyed hash table and back, and json-stringify also
   # serializes a CLOS instance as an object (slots in definition order; a
   # hash-table slot nests as an object, a list slot as an array) -- matching
-  # com.inuoe.jzon. Single-key hash objects keep the output backend-stable; the
-  # CLOS slot order is fixed by the class definition.
+  # com.inuoe.jzon. A hash object's members come out in the order their keys
+  # were first stored, on every backend (the plist's / alist's order); the CLOS slot
+  # order is fixed by the class definition.
   - name: json-object-building-and-clos
     source: |
-      (print (rontolisp:json-stringify (rontolisp:plist-hash-table (list :msg "hi"))))
+      (print (rontolisp:json-stringify (rontolisp:plist-hash-table (list :msg "hi" :ok t))))
       (print (rontolisp:hash-table-plist (rontolisp:plist-hash-table (list :a 1))))
-      (print (rontolisp:json-stringify (rontolisp:alist-hash-table (list (cons "x" 1)))))
+      (print (rontolisp:json-stringify (rontolisp:alist-hash-table (list (cons "x" 1) (cons "y" 2)))))
       (print (rontolisp:hash-table-alist (rontolisp:alist-hash-table (list (cons "k" 7)))))
       (defclass ci-json-resp () ((status :initarg :status) (headers :initarg :headers) (items :initarg :items)))
       (let ((h (make-hash-table :test 'equal)))
@@ -12168,16 +12169,15 @@ cases:
         (print (rontolisp:json-stringify
                 (make-instance 'ci-json-resp :status 200 :headers h :items (list 1 2 3)))))
     expected: |
-      "{\"msg\":\"hi\"}"
+      "{\"msg\":\"hi\",\"ok\":true}"
       (:A 1)
-      "{\"x\":1}"
+      "{\"x\":1,\"y\":2}"
       (("k" . 7))
       "{\"status\":200,\"headers\":{\"content-type\":\"application/json\"},\"items\":[1,2,3]}"
   # rontolisp:alist-plist / plist-alist (subsets of the same-named alexandria
   # utilities, prelude-spliced) convert between the two list shapes with no hash
   # table in between, so unlike the *-hash-table pairs above both directions
-  # preserve the input order -- multi-key output is backend-stable, and duplicate
-  # keys survive rather than collapsing.
+  # preserve the input order, and duplicate keys survive rather than collapsing.
   - name: alist-plist-conversions
     source: |
       (print (rontolisp:alist-plist (list (cons :a 1) (cons :b 2))))

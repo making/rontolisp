@@ -494,6 +494,8 @@ CL's `macrolet`, so the iterator can also be passed as a value.
 `(values t key value)`, or `(values nil nil nil)` when exhausted. Snapshotting avoids a per-backend
 cursor: one dispatch line each in `LispEvaluator.evalCons`, `Jvm`/`WasmExprCompiler.compileCons`,
 `PureBuiltinFolder`'s name-headed-spec arm. An entry added or removed DURING the walk is not seen.
+The walk is NEWEST first (the snapshot is the `maphash` accumulation, not reversed), unlike `maphash`'s
+insertion order, so the page keeps "the order is unspecified" and no case pins it (decided 2026-11-10).
 Internal variables are named after the ITERATOR (`__whti_<name>`, `_acc`, `_k`, `_v`, `_e`), not
 gensyms, so nesting shadows as the iterator names do and the emitted form is identical across
 backends and runs. The prefix goes on the MEMBER: an uninterned iterator name gives `#:__whti_G1`,

@@ -10,12 +10,12 @@ alexandria unchanged. It pairs with
 objects: keyword keys are down-cased, so `:name` becomes `"name"`.
 
 ```lisp
-(rontolisp:json-stringify (rontolisp:plist-hash-table (list :name "rontolisp")))   ; => "{\"name\":\"rontolisp\"}"
+(rontolisp:json-stringify (rontolisp:plist-hash-table (list :name "rontolisp" :ok t)))   ; => "{\"name\":\"rontolisp\",\"ok\":true}"
 ```
 
-Objects with several keys work the same way (the key order in the JSON output is
-backend-specific, like `maphash`); the table is a real hash table, so its values
-read back with `gethash`:
+The members come out in the plist's order, on every backend (a hash table's walk
+order, like [`maphash`](maphash.md)'s, is the order its keys were first stored).
+The table is a real hash table, so its values read back with `gethash`:
 
 ```lisp
 (gethash :ok (rontolisp:plist-hash-table (list :name "x" :ok t)))   ; => T

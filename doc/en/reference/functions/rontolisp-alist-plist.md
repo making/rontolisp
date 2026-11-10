@@ -12,8 +12,7 @@ Returns a property list holding the same keys and values as the association list
 ```
 
 Unlike [`rontolisp:hash-table-plist`](rontolisp-hash-table-plist.md) there is no
-hash table in between, so the order is the input's — deterministic on every
-backend — and duplicate keys are kept rather than collapsed. An empty list
+hash table in between, so the order is the input's, and duplicate keys are kept rather than collapsed. An empty list
 returns `nil`.
 
 ## Backend support

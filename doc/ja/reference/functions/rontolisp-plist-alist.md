@@ -13,8 +13,7 @@ alexandria に切り替えられます。
 ```
 
 [`rontolisp:plist-hash-table`](rontolisp-plist-hash-table.md) と違い間に
-ハッシュテーブルを挟まないため、順序は入力どおり(すべてのバックエンドで
-決定的)であり、重複キーもまとめられずに残ります:
+ハッシュテーブルを挟まないため、順序は入力どおりであり、重複キーもまとめられずに残ります:
 
 ```lisp
 (rontolisp:plist-alist '(:a 1 :a 9))   ; => ((:A . 1) (:A . 9))

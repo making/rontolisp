@@ -76,8 +76,8 @@ A value parsed from JSON round-trips structurally:
   [`rontolisp:plist-hash-table`](rontolisp-plist-hash-table.md) turns a keyword
   property list, and [`rontolisp:alist-hash-table`](rontolisp-alist-hash-table.md)
   an association list, into that hash table.
-- Hash-table key order in the output is backend-specific (unspecified), like
-  `maphash`.
+- A hash table's members come out in the order their keys were first stored, on
+  every backend, like [`maphash`](maphash.md).
 - Non-ASCII characters are emitted verbatim (never `\uXXXX`-escaped), which is
   valid JSON.
 - On the WASM backends a float with magnitude 2³¹ or larger cannot be
