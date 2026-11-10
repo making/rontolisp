@@ -74,9 +74,9 @@
          ;; this store hands back every key at once, so there is no next page --
          ;; and the key-response record crosses as a keyword plist. toArray is a
          ;; vector, so it is coerced: the list<string> field is a list.
-         (list :keys (coerce (java:call (java:call (java-bucket (nth 0 args)) "keySet")
-                                        "toArray")
-                             'list)
+         (list :keys (coerce (java:call
+                              (java:call (java-bucket (nth 0 args)) "keySet")
+                              "toArray") 'list)
                :cursor nil))
         ((string= member "bucket-drop")
          ;; Releasing the reference, not the store: the LinkedHashMap stays, and the
