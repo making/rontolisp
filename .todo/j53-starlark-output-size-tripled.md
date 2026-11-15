@@ -7,6 +7,8 @@ Difficulty: Medium
 at `85dd248a6`, after the conformance corpus's run-time additions (`%g`, `format`, the `repr`
 table, `dir`/`getattr` attribute tables, positions). The demo grew far less (161 KB -> 285 KB),
 so the growth is a fixed cost every Starlark program pays. Nobody measured where it comes from.
+Since the typed fast paths (same file, "Typed fast paths") `print(1 + 2)` is 174,530 / 176,175 /
+179,914 B: `1 + 2` is `(+ 1 2)` and reaches no `%starlark-add`. The fixed cost is unchanged.
 
 ## Do
 
