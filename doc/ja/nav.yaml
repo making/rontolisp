@@ -339,3 +339,9 @@ sections:
             title: "マクロ"
           - file: clojure/reference/riddley.md
             title: "コードの走査 (riddley)"
+  - title: Starlark（実験的）
+    pages:
+      - file: starlark/index.md
+        title: 概要
+      - file: starlark/deviations.md
+        title: 仕様との差異

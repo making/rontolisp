@@ -238,6 +238,23 @@ public final class CompileFrontendAccess {
 	}
 
 	/**
+	 * Compiles a STARLARK source text through the whole front end, the way the CLI does
+	 * for a {@code .star} entry file.
+	 * @param source the Starlark program text
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program starlark(String source, boolean wasm, boolean component) {
+		CompileFrontend.Result result = CompileFrontend.run(CompileFrontend.Request.builder()
+			.source(source)
+			.sourceLanguage("starlark")
+			.options(CompileFrontend.Options.builder().wasm(wasm).component(component).build())
+			.build());
+		return new Program(result.program(), result.features());
+	}
+
+	/**
 	 * A Clojure entry file through the whole front end the way the CLI compiles it, the
 	 * classes its host forms name those of a Java class path: described by reflection
 	 * through a loader over it, as on a JVM, or by {@code classFiles}, as a native image

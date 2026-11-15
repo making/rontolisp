@@ -2080,7 +2080,10 @@ public final class RontoLispCli {
 		this.out.println("                     (scheme base), partial conformance by design and no");
 		this.out.println("                     compatibility promise. clojure (.clj) is EXPERIMENTAL:");
 		this.out.println("                     a small subset lowered to the same core forms, no subset");
-		this.out.println("                     or compatibility promise yet. Neither with --no-gc.");
+		this.out.println("                     or compatibility promise yet. starlark (.star) is");
+		this.out.println("                     EXPERIMENTAL: partial conformance and no compatibility");
+		this.out.println("                     promise, files and -e only (no REPL yet). None of the");
+		this.out.println("                     three with --no-gc.");
 		this.out.println("  --scheme-standard NAME");
 		this.out.println("                     What every Scheme file of the program is read against:");
 		this.out.println("                     the entry file, a (load ...)ed one and the REPL.");

@@ -85,7 +85,11 @@ instance, got 42` (a `simple-error`), the JVM a `ClassCastException` -- and, a c
 - **ANY instance passes**, not the struct's own tags: a later `:include` child widens the tag set
   after the accessor exists (the predicate regeneration below), so `(point-x <another struct>)`
   still reads a slot. Deliberate; revisit with a per-accessor tag test the predicate refresh also
-  rebuilds.
+  rebuilds. Past the other struct's slots the backends part (measured 2026-11-15, `(b-r (mk-a 1))`
+  with one slot against the third): the interpreter signals `%OBJ-REF: slot index 2 is outside
+  %struct-A`, the JVM `index out of bounds`, and wasm-GC traps `out of bounds array access`, in EH
+  mode too. A library that takes values of several structs tests the predicate first
+  (`.kb/starlark-frontend.md`, "The run-time library's rules").
 - Cost, wasm-GC EH mode (2026-09-26, `--optimize=size`): every checked site pays
   the failure call's two literals and the blocks, plus the operator strings. A module already carrying
   the printer pays little. Outside EH mode: nothing.

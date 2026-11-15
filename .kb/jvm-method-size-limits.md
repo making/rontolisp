@@ -220,6 +220,12 @@ conversion tooling live in `.todo/artefacts/a8*`/`a9*` and git history.
   8000-bytecode cliff (`JvmLibraryMethodSizeTest` still allows `_top$N` over it).
   The shared walker's new plain-call arguments also reach oversized defuns (and the
   WASM twin's), byte-identical where no budget fires.
+  What the cut does not reach is ONE call of thousands of small arguments (measured
+  2026-11-15): `(print (mk 0 1 .. 2999))` over a `&rest` defun, and a Starlark list
+  expression of 3,000 integers, which is the same call, stop at `method _top$0: method code
+  exceeds the JVM's 65535-byte limit: 97874`; 1,500 arguments fit. Each argument is already
+  smaller than a method of its own would be, so outlining them saves nothing: the pushes are
+  the bytes. A quoted list of 3,000 elements compiles (the literal builders below).
 
 - An array literal of any family is filled by `_ql$N` builders past a budget, and a run of equal
   immediates costs one `addAll` ([array-literals.md](array-literals.md), "A long literal").

@@ -100,6 +100,8 @@ public final class LibraryDefunPruner {
 
 	@Nullable private static volatile Set<String> clojureDefinitionNames;
 
+	@Nullable private static volatile Set<String> starlarkDefinitionNames;
+
 	private LibraryDefunPruner() {
 	}
 
@@ -614,6 +616,9 @@ public final class LibraryDefunPruner {
 		if (SchemeLibrary.mayDefine(summary.structName()) && schemeStructNames().contains(summary.structName())) {
 			return true;
 		}
+		if (StarlarkLibrary.mayDefine(summary.structName()) && starlarkStructNames().contains(summary.structName())) {
+			return true;
+		}
 		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(summary.structName());
 		return qn != null && BUNDLED_STRUCT_PACKAGES.contains(PackageRegistry.canonicalBuiltinName(qn.pkg()));
 	}
@@ -639,6 +644,29 @@ public final class LibraryDefunPruner {
 			}
 			cached = checkedNames(names, SchemeLibrary::mayDefine, "scheme.lisp");
 			schemeStructNames = cached;
+		}
+		return cached;
+	}
+
+	@Nullable private static volatile Set<String> starlarkStructNames;
+
+	/**
+	 * The structs {@code starlark.lisp} defines (the list, tuple, dict, range and
+	 * function values), BY NAME like the Scheme ones: expanded, a program carries the
+	 * constructors, predicates and accessors it reaches and no others.
+	 */
+	private static Set<String> starlarkStructNames() {
+		Set<String> cached = starlarkStructNames;
+		if (cached == null) {
+			Set<String> names = new HashSet<>();
+			for (LispVal form : StarlarkLibrary.forms()) {
+				LispMacroExpander.StructDefinedNames summary = LispMacroExpander.defstructDefinedNames(form);
+				if (summary != null) {
+					names.add(summary.structName());
+				}
+			}
+			cached = checkedNames(names, StarlarkLibrary::mayDefine, "starlark.lisp");
+			starlarkStructNames = cached;
 		}
 		return cached;
 	}
@@ -1298,18 +1326,20 @@ public final class LibraryDefunPruner {
 
 	/**
 	 * Whether the name is a definition of a prunable bundled library: one of
-	 * {@link #prunableNames()}, or of the Scheme or Clojure front end's run-time library.
-	 * Those two are asked only for a name that can be theirs ({@code mayDefine}), so a
-	 * program of neither language never reads them: their read was 0.33 s of a 0.9 s
-	 * compile ({@code .kb/library-defun-pruning.md}). The Clojure core macros' shipped
-	 * expanders are keyed by their namespace's prefix: a program loads them for a
-	 * macro-time expansion as well as a run-time one.
+	 * {@link #prunableNames()}, or of the Scheme, Clojure or Starlark front end's
+	 * run-time library. Those are asked only for a name that can be theirs
+	 * ({@code mayDefine}), so a program of none of the languages never reads them: the
+	 * read of the first two was 0.33 s of a 0.9 s compile
+	 * ({@code .kb/library-defun-pruning.md}). The Clojure core macros' shipped expanders
+	 * are keyed by their namespace's prefix: a program loads them for a macro-time
+	 * expansion as well as a run-time one.
 	 */
 	private static boolean isBundledName(String name) {
 		return prunableNames().contains(name) || EvalMacroRows.defines(name)
 				|| AsdfRuntimeLibrary.mayDefine(name) && asdfDefinitionNames().contains(name)
 				|| SchemeLibrary.mayDefine(name) && schemeDefinitionNames().contains(name)
 				|| ClojureLibrary.mayDefine(name) && clojureDefinitionNames().contains(name)
+				|| StarlarkLibrary.mayDefine(name) && starlarkDefinitionNames().contains(name)
 				|| ClojureLowering.isCoreMacroDefinition(name);
 	}
 
@@ -1338,6 +1368,15 @@ public final class LibraryDefunPruner {
 		if (cached == null) {
 			cached = definitionNames(ClojureLibrary.forms(), ClojureLibrary::mayDefine, "clojure.lisp");
 			clojureDefinitionNames = cached;
+		}
+		return cached;
+	}
+
+	private static Set<String> starlarkDefinitionNames() {
+		Set<String> cached = starlarkDefinitionNames;
+		if (cached == null) {
+			cached = definitionNames(StarlarkLibrary.forms(), StarlarkLibrary::mayDefine, "starlark.lisp");
+			starlarkDefinitionNames = cached;
 		}
 		return cached;
 	}

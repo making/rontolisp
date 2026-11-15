@@ -62,13 +62,13 @@ class SchemeLibraryTest {
 	}
 
 	/**
-	 * A Common Lisp program reads neither front end's run-time library: not when the
+	 * A Common Lisp program reads no front end's run-time library: not when the
 	 * interpreter resolves a prelude function or an undefined one for the first time, and
 	 * not when the compile path splices and prunes the program. Observed in a class
 	 * loader of its own, since this JVM's other tests fill the libraries' caches.
 	 */
 	@Test
-	void aCommonLispProgramReadsNeitherFrontEndsLibrary(@TempDir Path dir) throws Exception {
+	void aCommonLispProgramReadsNoFrontEndsLibrary(@TempDir Path dir) throws Exception {
 		try (ResourceRecordingLoader loader = new ResourceRecordingLoader()) {
 			Method readAll = loader.loadClass("am.ik.rontolisp.reader.LispReader")
 				.getMethod("readAllFromString", String.class);
@@ -95,6 +95,10 @@ class SchemeLibraryTest {
 				eval.invoke(evaluator, form);
 			}
 			assertThat(loader.libraries()).containsExactly("scheme.lisp");
+			for (Object form : (List<?>) readAll.invoke(null, "#'rontolisp::%starlark-truth")) {
+				eval.invoke(evaluator, form);
+			}
+			assertThat(loader.libraries()).containsExactlyInAnyOrder("scheme.lisp", "starlark.lisp");
 		}
 	}
 
@@ -104,7 +108,8 @@ class SchemeLibraryTest {
 	 */
 	private static final class ResourceRecordingLoader extends URLClassLoader {
 
-		private static final Set<String> LIBRARIES = Set.of("scheme.lisp", "clojure.lisp", "clojure-unicode.lisp");
+		private static final Set<String> LIBRARIES = Set.of("scheme.lisp", "clojure.lisp", "clojure-unicode.lisp",
+				"starlark.lisp");
 
 		private final Set<String> read = ConcurrentHashMap.newKeySet();
 

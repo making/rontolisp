@@ -20,6 +20,7 @@ import am.ik.rontolisp.clojure.ClojureRepositories;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.scheme.Scheme;
 import am.ik.rontolisp.scheme.SchemeFiles;
+import am.ik.rontolisp.starlark.Starlark;
 
 /**
  * The ONE seam between user source text and the core forms every pipeline consumes. A
@@ -73,7 +74,16 @@ public enum SourceLanguage {
 	 * or compatibility promise yet. A {@code .cljc} file is Clojure too, read with its
 	 * reader conditionals ({@link #CLOJURE_COMMON_EXTENSION}).
 	 */
-	CLOJURE(".clj");
+	CLOJURE(".clj"),
+
+	/**
+	 * Starlark, EXPERIMENTAL: a file read by the specification's grammar and lowered to
+	 * the same core forms by the {@code starlark} package
+	 * ({@code .kb/starlark-frontend.md}). Partial conformance by design, no compatibility
+	 * promise. It has no {@code #.} and no reader features, and no REPL yet
+	 * ({@link SourceSession}).
+	 */
+	STARLARK(".star");
 
 	/**
 	 * The extension of a Clojure file shared between platforms, whose reader conditionals
@@ -142,8 +152,8 @@ public enum SourceLanguage {
 	/**
 	 * Reads user source text into core forms up to its first read error rather than
 	 * throwing it -- what a form-at-a-time {@code load} evaluates before it signals. A
-	 * Common Lisp source answers every form before the bad one; a Scheme or Clojure
-	 * source is lowered as a whole, so a read error there answers no form.
+	 * Common Lisp source answers every form before the bad one; a Scheme, Clojure or
+	 * Starlark source is lowered as a whole, so a read error there answers no form.
 	 * @param source the program text
 	 * @param features the active reader features
 	 * @param file the origin file for diagnostics and for what the source's file names
@@ -196,6 +206,9 @@ public enum SourceLanguage {
 			if (this == SCHEME) {
 				return new LispReader.ReadPrefix(Scheme.read(source, file, standards.scheme(), schemeFiles(loader)),
 						null);
+			}
+			if (this == STARLARK) {
+				return new LispReader.ReadPrefix(Starlark.read(source, file), null);
 			}
 			return new LispReader.ReadPrefix(clojure(source, features, file, standards, loader, false, null).forms(),
 					null);
@@ -582,17 +595,15 @@ public enum SourceLanguage {
 	/**
 	 * {@link #readStrict(String, Features)} with the files the source names read through
 	 * a loader: a Scheme {@code include} and the {@code define-library} files a Scheme
-	 * program imports (Scheme has no {@code #.}, so its read is the ordinary one).
+	 * program imports (only Common Lisp has {@code #.}, so every other language's read is
+	 * the ordinary one).
 	 * @param source the program text
 	 * @param features the active reader features
 	 * @param loader where named files are read from, or {@code null} when none can be
 	 * @return the parsed top-level forms
 	 */
 	public List<LispVal> readStrict(String source, Features features, @Nullable SourceLoader loader) {
-		if (this == SCHEME) {
-			return read(source, features, null, SourceStandards.DEFAULT, loader);
-		}
-		if (this == CLOJURE) {
+		if (this != COMMON_LISP) {
 			return read(source, features, null, SourceStandards.DEFAULT, loader);
 		}
 		return LispReader.readAllFromString(source, features);
@@ -618,6 +629,9 @@ public enum SourceLanguage {
 		if (path != null && (path.endsWith(CLOJURE.defaultExtension()) || path.endsWith(CLOJURE_COMMON_EXTENSION))) {
 			return CLOJURE;
 		}
+		if (path != null && path.endsWith(STARLARK.defaultExtension())) {
+			return STARLARK;
+		}
 		return COMMON_LISP;
 	}
 
@@ -642,7 +656,8 @@ public enum SourceLanguage {
 	 */
 	public static boolean isSourceFile(String path) {
 		return path.endsWith(COMMON_LISP.defaultExtension()) || path.endsWith(SCHEME.defaultExtension())
-				|| path.endsWith(CLOJURE.defaultExtension()) || path.endsWith(CLOJURE_COMMON_EXTENSION);
+				|| path.endsWith(CLOJURE.defaultExtension()) || path.endsWith(CLOJURE_COMMON_EXTENSION)
+				|| path.endsWith(STARLARK.defaultExtension());
 	}
 
 	/**
@@ -673,8 +688,11 @@ public enum SourceLanguage {
 		if (name.equals("clojure") || name.equals("clj")) {
 			return CLOJURE;
 		}
+		if (name.equals("starlark") || name.equals("star")) {
+			return STARLARK;
+		}
 		throw new IllegalArgumentException("--source-language '" + override
-				+ "' names no language this build reads (try common-lisp, or the experimental scheme, clojure)");
+				+ "' names no language this build reads (try common-lisp, or the experimental scheme, clojure, starlark)");
 	}
 
 }

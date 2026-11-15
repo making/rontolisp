@@ -68,6 +68,10 @@ import static org.assertj.core.api.Assertions.fail;
  * compared with what that REPL echoes for its form: the language's {@code write} text,
  * nothing for a definition or an effect, several values joined by {@code ", "}. An
  * {@code exit} ends the block's program, keeping what it printed.</li>
+ * <li>A <code>```starlark</code> block is a WHOLE program for the experimental Starlark
+ * front end, on a fresh evaluator: it must run, and a plain block right after it is its
+ * asserted standard output. It has no session yet, so no annotation, and on the site it
+ * is a static block.</li>
  * <li>A <code>```stdin</code> block is the standard input of the <code>```scheme</code> /
  * <code>```clojure</code> block right after it (every other block reads an empty
  * input).</li>
@@ -197,10 +201,11 @@ class DocExamplesTest {
 
 	/**
 	 * The {@code ; =>} check of a Scheme block is live: a wrong annotation fails the
-	 * page, exactly as it does in a {@code lisp} block.
+	 * page, exactly as it does in a {@code lisp} block. So is the output block after a
+	 * Starlark program.
 	 */
 	@Test
-	void aWrongSchemeAnnotationFailsThePage() {
+	void aWrongSchemeAnnotationOrStarlarkOutputFailsThePage() {
 		String right = """
 				```scheme
 				(define (f x) (* x 2))
@@ -208,11 +213,24 @@ class DocExamplesTest {
 				(list #t "s" #\\a) ; => (#t "s" #\\a)
 				(values 1 2) ; => 1, 2
 				```
+
+				```starlark
+				def f(x):
+				    return x * 2
+				print(f(21), "; => is no annotation here")
+				```
+
+				```
+				42 ; => is no annotation here
+				```
 				""";
 		checkMarkdown(right, "right.md");
 		assertThatThrownBy(() -> checkMarkdown(right.replace("=> 42", "=> 43"), "wrong.md"))
 			.isInstanceOf(AssertionError.class)
 			.hasMessageContaining("43");
+		assertThatThrownBy(() -> checkMarkdown(right.replace("42 ;", "43 ;"), "wrong.md"))
+			.isInstanceOf(AssertionError.class)
+			.hasMessageContaining("43 ;");
 	}
 
 	/**
@@ -258,13 +276,14 @@ class DocExamplesTest {
 			}
 			String blockStdin = stdin;
 			stdin = "";
-			if (block.isScheme() || block.isClojure()) {
-				SourceLanguage language = block.isScheme() ? SourceLanguage.SCHEME : SourceLanguage.CLOJURE;
-				if (noteFile(block.content(), files)) {
+			if (block.isScheme() || block.isClojure() || block.isStarlark()) {
+				SourceLanguage language = block.isScheme() ? SourceLanguage.SCHEME
+						: block.isClojure() ? SourceLanguage.CLOJURE : SourceLanguage.STARLARK;
+				if (!block.isStarlark() && noteFile(block.content(), files)) {
 					continue;
 				}
 				String actual;
-				if (block.content().contains(ARROW)) {
+				if (!block.isStarlark() && block.content().contains(ARROW)) {
 					SchemeRun run = runSession(language, block.content(), blockStdin, markdown, files);
 					for (int f = 0; f < run.forms().size(); f++) {
 						String source = String.join("\n", run.forms().get(f));
@@ -545,6 +564,10 @@ class DocExamplesTest {
 						pendingStdout = runProgram(language, rewriteFetchUrls(source), stdin, page.toString(), files);
 					}
 				}
+				else if (info.equals("starlark")) {
+					pendingStdout = runProgram(SourceLanguage.STARLARK, String.join("\n", content), stdin,
+							page.toString(), files);
+				}
 				else if (isOutputInfo(info) && pendingStdout != null) {
 					content = pendingStdout.isEmpty() ? List.of()
 							: new ArrayList<>(List.of(pendingStdout.split("\n", -1)));
@@ -698,6 +721,10 @@ class DocExamplesTest {
 
 		boolean isClojure() {
 			return this.info.equals("clojure");
+		}
+
+		boolean isStarlark() {
+			return this.info.equals("starlark");
 		}
 
 		boolean isStdin() {

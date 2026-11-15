@@ -114,6 +114,7 @@ class SourceLanguageSeamTest {
 			Map.entry("am.ik.rontolisp.eval.UrlLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.SchemeLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.ClojureLibrary", SHIPPED_SOURCE),
+			Map.entry("am.ik.rontolisp.eval.StarlarkLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.clojure.ClojureCaseMapping", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.scheme.SchemeBuiltins", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.scheme.SchemeCharacters", SHIPPED_SOURCE),

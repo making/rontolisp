@@ -26,7 +26,9 @@ subset for `.scm`, lowered to the same core forms so no backend learns a Scheme 
 run-time helpers are Common Lisp source spliced like any other library
 (`.kb/scheme-frontend.md`). The third language is `clojure` -- an EXPERIMENTAL small subset
 for `.clj` and `.cljc`, lowered to the same core forms so no backend learns a Clojure name
-(`.kb/clojure-frontend.md`).
+(`.kb/clojure-frontend.md`). The fourth is `starlark` -- EXPERIMENTAL, `.star`, the first
+that is no Lisp: its own lexer and parser, then the same lowering to core forms and the
+same kind of spliced run-time library (`.kb/starlark-frontend.md`).
 
 ## Language-independent libraries
 
@@ -69,7 +71,7 @@ cli -> eval, compiler, codegen.*, macro, reader, format, am.ik.wit, am.ik.maven
 codegen.jvm -> compiler, macro, runtime, am.ik.jvm, am.ik.gpu, am.ik.objc
 codegen.wasm -> compiler, macro, am.ik.wasm, am.ik.wit
 compiler -> macro, runtime, rontolisp (AST types only), am.ik.wit
-eval -> macro, compiler, reader, scheme, clojure, runtime, rontolisp (AST types only), am.ik.gpu, am.ik.objc, am.ik.artifact, am.ik.maven
+eval -> macro, compiler, reader, scheme, clojure, starlark, runtime, rontolisp (AST types only), am.ik.gpu, am.ik.objc, am.ik.artifact, am.ik.maven
 scheme -> reader, rontolisp (AST types only)
 clojure -> reader, rontolisp (AST types only)
 starlark -> reader, rontolisp (AST types only)

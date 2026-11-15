@@ -246,6 +246,12 @@ examples:
     expect:
       file: .expected/scheme-collatz.txt
 
+  # --- starlark: the experimental Starlark front end (.star) -----------------
+  - path: starlark/targets.star
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    expect:
+      file: .expected/starlark-targets.txt
+
   # --- clojure: the experimental Clojure front end (.clj) --------------------
   - path: clojure/demo.clj
     backends: [interpreter, jvm, wasm, wasm-component-run]

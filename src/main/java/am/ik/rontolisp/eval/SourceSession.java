@@ -89,8 +89,14 @@ public final class SourceSession {
 	 * @param language the language typed at the prompt
 	 * @param standards what the typed text is read against ({@code --scheme-standard})
 	 * @param loader where named files are read from, or {@code null} for none
+	 * @throws IllegalArgumentException for Starlark, which is read a file at a time
 	 */
 	public SourceSession(SourceLanguage language, SourceStandards standards, @Nullable SourceLoader loader) {
+		if (language == SourceLanguage.STARLARK) {
+			// A block ends where its indentation does, which no buffer rule here knows.
+			throw new IllegalArgumentException(
+					"Starlark is read a file at a time: it has no REPL yet (run a .star file, or -e)");
+		}
 		this.language = language;
 		this.scheme = language == SourceLanguage.SCHEME
 				? Scheme.session(standards.scheme(), SourceLanguage.schemeFiles(loader)) : null;

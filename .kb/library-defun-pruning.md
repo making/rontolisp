@@ -26,10 +26,11 @@ six of them -- see `.kb/architecture.md`, "Package rules".
   (`ClojureLowering.programMacroRuntimeForms`: `C%MACRO-EXPANDER`, `C%MACRO-FN`,
   `C%MACROEXPAND(-1)`), so a program expanding nothing at run time loses every macro
   expander and what its template spells (`.kb/clojure-frontend.md`, "Macros").
-- **The front ends' libraries (`scheme.lisp`, both feature variants, and `clojure.lisp`)
-  are asked behind their name gate** (2026-10-23): `isBundledName` is `prunableNames()`
-  (every library above, read eagerly) or, for a name `SchemeLibrary.mayDefine` /
-  `ClojureLibrary.mayDefine` admits, that library's definition names; `schemeStructNames`
+- **The front ends' libraries (`scheme.lisp`, both feature variants, `clojure.lisp` and
+  `starlark.lisp`) are asked behind their name gate** (2026-10-23): `isBundledName` is
+  `prunableNames()` (every library above, read eagerly) or, for a name
+  `SchemeLibrary.mayDefine` / `ClojureLibrary.mayDefine` / `StarlarkLibrary.mayDefine`
+  admits, that library's definition names; `schemeStructNames` and `starlarkStructNames`
   likewise. In the eager union they cost every compile 0.33 s of reading and generating
   (JFR: 33 of 49 samples of a 0.9 s `-o P.class` of a one-line Common Lisp program); a
   program of neither language now never reads them, and the output is byte-identical
@@ -56,8 +57,8 @@ third-party `Candidates` keyed-unit rule.
 - Recognized by the struct name's PACKAGE (`BUNDLED_STRUCT_PACKAGES`: torch/linalg/vec).
   Extend the set (never widen to `RONTOLISP`) if json/url/prelude gain one; third-party and
   user defstructs stay on the compilers' expansion path. The one exception is by NAME:
-  `scheme.lisp`'s structs (`schemeStructNames`, the promise record), whose helpers live in
-  `rontolisp::`. As a root the promise record cost every lowered Scheme program 1,181 B of
+  `scheme.lisp`'s structs (`schemeStructNames`, the promise record) and `starlark.lisp`'s
+  five value structs (`starlarkStructNames`), whose helpers live in `rontolisp::`. As a root the promise record cost every lowered Scheme program 1,181 B of
   class and 563 B of wasm; expanded, a printing program keeps only its predicate, +122 /
   +15 B (2026-09-17, `(display (list 1 'a "s"))`).
 - The expansion populates compiler-owned state (`structAccessors` incl. the

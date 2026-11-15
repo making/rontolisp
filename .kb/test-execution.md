@@ -8,7 +8,7 @@
   and it reaches a `@TestFactory`'s dynamic tests too): today
   `WasmLispCompilerIntegrationTest`, `RoveTestCommandE2eTest`, every subclass of
   `AsdfLibraryE2eSupport` (Ironclad, Jose, Rove, Sxql, ...), `ClPostgresE2eTest`,
-  `SchemeSpecE2eTest`, `UnclosedOutputFileE2eTest`, `eval.LinalgGpuDeclineTest` (its
+  `SchemeSpecE2eTest`, `StarlarkSpecE2eTest`, `UnclosedOutputFileE2eTest`, `eval.LinalgGpuDeclineTest` (its
   flag-on runs take a lock when a device answered the probe: `DeviceResidency` is not
   thread-safe), `WasmLispCompilerTest`, `cli/RontoLispCliTest`, `WasmTreeShakerCorpusTest`,
   `JvmDeadMethodEliminationCorpusTest` ("Concurrent methods" below) and the in-process JVM-backend
@@ -379,7 +379,7 @@ lifecycle methods and resource locks left on the JUnit worker. `RontoLispCliTest
 real depth regression, not a stack-size accident.
 
 Users: the interpreter legs of `AsdfLibraryE2eSupport` (cl-mustache's spec suite alone
-recurses past 1 MiB), `SchemeSpecE2eTest` and `SicpCorpusE2eTest`, and -- by the extension --
+recurses past 1 MiB), `SchemeSpecE2eTest`, `StarlarkSpecE2eTest` and `SicpCorpusE2eTest`, and -- by the extension --
 the in-process JVM-backend classes `JvmLispCompilerTest`, `JvmBFloat16ArrayTest`,
 `JvmLinalgGpuAccelCompilerTest`, `JvmLinalgSimdAccelCompilerTest`, `JvmQuantizedMatrixTest`,
 `JvmSimdAccelCompilerTest` and `JvmSimdParallelCompilerTest`.

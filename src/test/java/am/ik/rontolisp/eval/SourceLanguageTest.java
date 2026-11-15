@@ -81,6 +81,25 @@ class SourceLanguageTest {
 	}
 
 	@Test
+	void starlarkClaimsItsExtension() {
+		assertThat(SourceLanguage.forFile("build.star", null)).isEqualTo(SourceLanguage.STARLARK);
+		assertThat(SourceLanguage.forFile("build.txt", "starlark")).isEqualTo(SourceLanguage.STARLARK);
+		assertThat(SourceLanguage.forFile("build.star", "common-lisp")).isEqualTo(SourceLanguage.COMMON_LISP);
+		assertThat(SourceLanguage.isSourceFile("build.star")).isTrue();
+		assertThat(SourceLanguage.STARLARK.defaultExtension()).isEqualTo(".star");
+		// The seam's read is the whole front end: read and lower to core forms. It has
+		// no #., so the strict read is the same one.
+		assertThat(SourceLanguage.STARLARK.read("x = len(\"#.\")\n", Features.INTERPRETER, null))
+			.isEqualTo(SourceLanguage.STARLARK.readStrict("x = len(\"#.\")\n", Features.INTERPRETER))
+			.extracting(LispVal::print)
+			.containsExactly("(SETQ |x| (RONTOLISP::%STARLARK-B-LEN \"#.\"))");
+		// A buffer at a time is not read yet: a block ends where its indentation does.
+		assertThatThrownBy(() -> new SourceSession(SourceLanguage.STARLARK))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessage("Starlark is read a file at a time: it has no REPL yet (run a .star file, or -e)");
+	}
+
+	@Test
 	void theOverrideNamesTheEntryLanguage() {
 		assertThat(SourceLanguage.forFile("hello.lisp", "common-lisp")).isEqualTo(SourceLanguage.COMMON_LISP);
 		assertThat(SourceLanguage.forFile("hello.lisp", "cl")).isEqualTo(SourceLanguage.COMMON_LISP);

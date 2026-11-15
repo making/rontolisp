@@ -302,6 +302,8 @@ public final class LispEvaluator {
 
 	private boolean schemeLibraryLoaded = false;
 
+	private boolean starlarkLibraryLoaded = false;
+
 	private boolean clojureLibraryLoaded = false;
 
 	/** Whether the Clojure library came from {@link #clojureProgram}, stripped. */
@@ -16939,6 +16941,19 @@ public final class LispEvaluator {
 				// rebinds *standard-output*, and only a form whose special bindings were
 				// registered (SpecialVarCollector) binds it DYNAMICALLY for its callees.
 				for (LispVal form : SchemeLibrary.forms(this.sourceStandards)) {
+					evalResolved(form);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The run-time half of the experimental Starlark front end (starlark.lisp)
+			// loads the same way on the first resolution of a rontolisp::%starlark-
+			// helper, which only a lowered Starlark program names.
+			if (!this.starlarkLibraryLoaded && StarlarkLibrary.isStarlarkFunction(name)) {
+				this.starlarkLibraryLoaded = true;
+				for (LispVal form : StarlarkLibrary.forms()) {
 					evalResolved(form);
 				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);

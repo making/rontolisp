@@ -1,0 +1,9 @@
+build order: core -> tls -> net -> ui -> app
+  core: 3 sources, needs nothing
+  tls: 1 source, needs nothing
+  net: 1 source, needs core, tls
+  ui: 2 sources, needs core
+  app: 1 source, needs net, ui
+a change to tls rebuilds: ["tls", "net", "app"]
+largest: core ["list.c", "map.c", "str.c"]
+sources: ["http.c", "list.c", "main.c", "map.c", "str.c", "theme.c", "tls.c", "ui.c"]

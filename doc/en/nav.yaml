@@ -339,3 +339,9 @@ sections:
             title: "Macros"
           - file: clojure/reference/riddley.md
             title: "Code walking (riddley)"
+  - title: Starlark (experimental)
+    pages:
+      - file: starlark/index.md
+        title: Overview
+      - file: starlark/deviations.md
+        title: Deviations

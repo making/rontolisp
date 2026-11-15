@@ -64,6 +64,11 @@ playground's WebAssembly runtime, so `lisp` and `scheme` examples run in-page.
   there) after `rontoPutFile`-ing the page's file blocks. Those calls are
   `eval/PlaygroundRepl`'s `run` / `transcript`, and `DocExamplesTest` runs both through
   `run` too (`.kb/source-language.md`, "The browser").
+- ` ```starlark ` = a whole Starlark program on a fresh evaluator, stdout asserted by a
+  following plain block (`DocExamplesTest`, through `PlaygroundRepl.run`). It has no session,
+  so no `; =>`, and it is NOT a Run cell: `RunnableBlockTransformer` leaves it static until the
+  playground reads the language. Only a fence at column 0 is checked, and an indented one
+  would not parse anyway.
 - ` ```console ` = static transcript or anything needing stdin/files/network or that signals
   (`read`, `open`, `load`, `with-open-file`, `error`, `rontolisp:fetch`); not executed.
   ` ```bash ` = shell. Plain ` ``` ` = expected output.

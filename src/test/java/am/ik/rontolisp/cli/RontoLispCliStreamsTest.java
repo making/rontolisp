@@ -770,6 +770,36 @@ class RontoLispCliStreamsTest {
 	}
 
 	@Test
+	void aStarlarkFileRunsCompilesAndIsRefusedWhereItCannot() throws Exception {
+		Path program = this.tempDir.resolve("hello.star");
+		Files.writeString(program, "def greet(name):\n    return \"hello, \" + name\nprint(greet(\"starlark\"))\n");
+		assertThat(runReporting(program.toString())).containsExactly("0", "hello, starlark\n", "");
+		Path compiled = this.tempDir.resolve("HelloStarlark.class");
+		assertThat(runReporting(program.toString(), "-o", compiled.toString())[0]).isEqualTo("0");
+		assertThat(compiled).exists();
+		// --source-language reads any other source as Starlark
+		assertThat(runReporting("-e", "print(1 + 2)", "--source-language", "starlark")[1]).isEqualTo("3\n");
+		// a name nothing binds is refused before anything runs, at its position, on
+		// the interpreter and the compile path alike
+		Path broken = this.tempDir.resolve("broken.star");
+		Files.writeString(broken, "print(\"never\")\nprint(nope)\n");
+		String expected = "error: " + broken + ":2:7: undefined: nope";
+		String[] refused = runReporting(broken.toString());
+		assertThat(refused[1]).isEmpty();
+		assertThat(refused[2].trim()).isEqualTo(expected);
+		assertThat(runReporting(broken.toString(), "-o", this.tempDir.resolve("Broken.class").toString())[2].trim())
+			.isEqualTo(expected);
+		// the scalar backend has none of its values, and no buffer rule reads a block
+		assertThat(runReporting(program.toString(), "-o", this.tempDir.resolve("scalar.wasm").toString(), "--no-gc")[2]
+			.trim())
+			.isEqualTo("error: Cannot compile: a Starlark program needs the GC backend -- --no-gc has no structure,"
+					+ " no hash table and no closure (drop --no-gc)");
+		assertThat(runReporting("--source-language", "starlark")[2].trim())
+			.isEqualTo("error: Starlark is read a file at a time: it has no REPL yet (run a .star file, or -e)");
+		assertThat(runCli("", "-h")).contains("starlark (.star) is");
+	}
+
+	@Test
 	void anUncaughtSchemeErrorReportsItsMessageAndIrritants() throws Exception {
 		// The message is built under a rebound *standard-output*, inside a helper the
 		// interpreter loads lazily: loaded without registering its special bindings,

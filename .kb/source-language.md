@@ -120,9 +120,20 @@ downstream is unchanged (`.kb/clojure-frontend.md`). `CompileFrontend.run` refus
 entry language under `--no-gc`, like Scheme. `defaultExtension()` is per language;
 `fileNameForModule` and the package-inferred sub-system file stay Common Lisp.
 
+## The fourth language: `STARLARK` (experimental)
+
+`.star`, or `--source-language starlark` (`star`). `read` hands the text to
+`am.ik.rontolisp.starlark.Starlark.read` -- the reader, static name resolution and the
+lowering to core forms in one step, with no `#.`, no reader features and no file it names
+(`load` is refused) -- and everything downstream is unchanged
+(`.kb/starlark-frontend.md`). `CompileFrontend.run` refuses the entry language under
+`--no-gc`. It has no `SourceSession` yet: the constructor refuses it, which is what the
+REPL and the playground answer; `-e` and a file are whole programs and read through `read`.
+
 ## The run-time libraries' name gate (2026-10-23)
 
-Both front ends' run-time libraries (`scheme.lisp`, `clojure.lisp`) are Common Lisp
+The front ends' run-time libraries (`scheme.lisp`, `clojure.lisp`, and since 2026-11-15
+`starlark.lisp`, whose gate is the member prefix `%STARLARK-`) are Common Lisp
 loaded on demand, and the question "is this name one of yours" is asked about names of
 EVERY program:
 
@@ -130,7 +141,8 @@ EVERY program:
   does not bind yet, asks after the wrappers and special operators, in order: keyword
   helpers, linalg, objc, appkit, geom, checkpoint, safetensors, metal, scene, torch,
   tokenizer, gguf, vec, url, `SchemeLibrary.isSchemeFunction`,
-  `ClojureLibrary.isClojureFunction`, usocket, wit, the prelude (one defun at a time),
+  `StarlarkLibrary.isStarlarkFunction`, `ClojureLibrary.isClojureFunction`, usocket, wit,
+  the prelude (one defun at a time),
   uiop, asdf, the generated slot/struct helpers. The name sets are disjoint (packages,
   `%scheme-`/`%clojure-` helpers), so the order decides only which gates a name pays
   for, never which definition it gets. A whole Clojure program splices its library
@@ -164,11 +176,12 @@ Measured 2026-10-23, Apple M4 Max, Java 25.0.3, `java -jar` of the exec jar, min
 
 Scheme and Clojure examples (`examples/scheme/*.scm`, seven `examples/clojure` files) and
 four `examples/console` programs print the same and compile to byte-identical `.class` and
-`.wasm` either way. Pin: `SchemeLibraryTest#aCommonLispProgramReadsNeitherFrontEndsLibrary`
+`.wasm` either way. Pin: `SchemeLibraryTest#aCommonLispProgramReadsNoFrontEndsLibrary`
 loads the classes afresh in a loader that records resource reads (the JVM's other tests
 fill the static caches), runs a Common Lisp program through the interpreter and the
-compile front end, and asserts neither library was read -- then that `#'rontolisp::%scheme-acos`
-reads `scheme.lisp`. Rejected: resolving the prelude first (an undefined name still pays,
+compile front end, and asserts no front end's library was read -- then that
+`#'rontolisp::%scheme-acos` reads `scheme.lisp` and `#'rontolisp::%starlark-truth`
+`starlark.lisp`. Rejected: resolving the prelude first (an undefined name still pays,
 and the order was never the cause); asking only after a `.scm`/`.clj` file was read (state
 in the evaluator, while a REPL, a `load` from Common Lisp and Scheme `eval` reach the
 helpers by other paths); a build-time name index (a generated table to keep in sync, where
@@ -177,6 +190,7 @@ the spelling already is one).
 ## Tests
 
 `SourceLanguageSeamTest` (no class outside the seam reads user source through
-`LispReader` directly; no stale exemptions), `RontoLispCliTest` (the `repl...` and
+`LispReader` directly; no stale exemptions), `SourceLanguageTest` (each language claims its
+extension and reads through the seam), `RontoLispCliTest` (the `repl...` and
 `theSchemeRepl...` transcripts, the `.clj` pick and the `clojure>` REPL transcript),
 `JvmSourceCompilerTest`.
