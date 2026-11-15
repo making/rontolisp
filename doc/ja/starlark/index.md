@@ -10,6 +10,8 @@ Starlark のプログラムを試すために使ってください。ずっと�
 
 `.star` のファイルは Starlark として読まれます。それ以外のファイルと `-e` では
 `--source-language starlark` で指定します。言語はファイルごとに選ばれます。
+`--starlark-standard spec` を指定すると、既定では緩めているトップレベルと再帰についての
+仕様の規則を適用します（[仕様との差異](deviations.md)）。
 
 ```bash
 rontolisp hello.star                                # interpreter
@@ -122,7 +124,11 @@ for x in xs:
     xs.append(x)
 $ rontolisp loop.star
 Unhandled condition: cannot append to list during iteration
+  at loop.star:3
 ```
+
+代入前の変数を読むことも、ローカル変数かグローバル変数かにかかわらず同じくエラーです。
+`def` より上に書いたその関数の呼び出しもエラーです。
 
 ## このセクション
 

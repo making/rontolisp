@@ -789,6 +789,14 @@ class RontoLispCliStreamsTest {
 		assertThat(refused[2].trim()).isEqualTo(expected);
 		assertThat(runReporting(broken.toString(), "-o", this.tempDir.resolve("Broken.class").toString())[2].trim())
 			.isEqualTo(expected);
+		// --starlark-standard spec refuses what the specification does, as early
+		Path toplevel = this.tempDir.resolve("toplevel.star");
+		Files.writeString(toplevel, "for x in [1]:\n    print(x)\n");
+		assertThat(runReporting(toplevel.toString())[1]).isEqualTo("1\n");
+		assertThat(runReporting(toplevel.toString(), "--starlark-standard", "spec")[2].trim())
+			.isEqualTo("error: " + toplevel + ":1:1: for loop not within a function");
+		assertThat(runReporting(toplevel.toString(), "--starlark-standard=python")[2])
+			.contains("--starlark-standard 'python' names no standard");
 		// the scalar backend has none of its values, and no buffer rule reads a block
 		assertThat(runReporting(program.toString(), "-o", this.tempDir.resolve("scalar.wasm").toString(), "--no-gc")[2]
 			.trim())

@@ -214,7 +214,17 @@ public final class JvmSourceCompiler {
 	 * the default
 	 */
 	public JvmSourceCompiler schemeStandard(@Nullable String schemeStandard) {
-		this.standards = SourceStandards.parse(schemeStandard);
+		this.standards = SourceStandards.parse(schemeStandard, this.standards.starlark().optionName());
+		return this;
+	}
+
+	/**
+	 * @param starlarkStandard what every Starlark file of the program is read against
+	 * ({@code --starlark-standard}: {@code rontolisp} or {@code spec}), or {@code null}
+	 * for the default
+	 */
+	public JvmSourceCompiler starlarkStandard(@Nullable String starlarkStandard) {
+		this.standards = SourceStandards.parse(this.standards.scheme().optionName(), starlarkStandard);
 		return this;
 	}
 

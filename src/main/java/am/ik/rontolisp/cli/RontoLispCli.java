@@ -231,10 +231,12 @@ public final class RontoLispCli {
 			SourceLanguage.parse(sourceLanguage);
 		}
 		// --scheme-standard NAME: what EVERY Scheme file of the program is read against
-		// -- the entry file, a loaded one, the REPL -- like gosh -r7. Parsed here for
-		// the same reason. The user-level deps.edn every Clojure project merges is
-		// located here, from the environment the oracle's clj reads, and nowhere else.
-		SourceStandards standards = SourceStandards.parse(options.get("--scheme-standard"))
+		// -- the entry file, a loaded one, the REPL -- like gosh -r7; --starlark-standard
+		// the same for Starlark. Parsed here for the same reason. The user-level deps.edn
+		// every Clojure project merges is located here, from the environment the
+		// oracle's clj reads, and nowhere else.
+		SourceStandards standards = SourceStandards
+			.parse(options.get("--scheme-standard"), options.get("--starlark-standard"))
 			.withClojureConfigDir(SourceStandards.clojureConfigDir(System.getenv("CLJ_CONFIG"),
 					System.getenv("XDG_CONFIG_HOME"), System.getProperty("user.home")))
 			// and so are the repositories its Maven and git coordinates come from:
@@ -2093,6 +2095,12 @@ public final class RontoLispCli {
 		this.out.println("                     begins with (import ...), no SICP/MIT or R5RS name, no");
 		this.out.println("                     redefinition of an imported name, eval takes its");
 		this.out.println("                     environment.");
+		this.out.println("  --starlark-standard NAME");
+		this.out.println("                     What every Starlark file of the program is read against.");
+		this.out.println("                     rontolisp (the default) lets a global be bound again, if");
+		this.out.println("                     and for stand at the top level and a function call");
+		this.out.println("                     itself. spec is the specification's rules: each of the");
+		this.out.println("                     three is an error.");
 		this.out.println("  -A:ALIASES         Clojure: the deps.edn aliases (-A:dev:test) every");
 		this.out.println("                     Clojure file of the run is read under, as clj -A");
 		this.out.println("  -M[:ALIASES] ARGS  Clojure: run the working directory's deps.edn project");

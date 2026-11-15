@@ -21,34 +21,32 @@ print(len("𝄞"), "naïve"[2], "日本語"[::-1], hash("𝄞"))
 **`print` writes to standard output.** The specification leaves the destination to the
 host, and Bazel's is standard error.
 
-**The dialect is the permissive one.** `if` and `for` may stand at the top level, a global
-may be assigned more than once, and a function may call itself. Bazel refuses all three;
-Go's implementation has each as an option.
+**The dialect is permissive by default.** `if` and `for` may stand at the top level, a
+global may be assigned more than once, and a function may call itself; Go's implementation
+has each as an option. `--starlark-standard spec` makes all three errors, as the
+specification does: the first two before the program starts, a call while a call of the
+same `def` or `lambda` runs when it happens (`function f called recursively`).
 
-**A top-level function can be called above its `def`.** The specification makes that an
-error until the `def` statement has run.
-
-```starlark
-print(double(21))
-
-def double(x):
-    return x * 2
+```console
+$ cat count.star
+for x in range(2):
+    print(x)
+$ rontolisp count.star
+0
+1
+$ rontolisp --starlark-standard spec count.star
+error: count.star:1:1: for loop not within a function
 ```
-
-```
-42
-```
-
-**A variable read before it is assigned is not always an error.** A local variable reads
-`None`. A global is an error, with Common Lisp's text (`The variable y is unbound`).
 
 The rest, in short:
 
 - A slice of a range answers a list, and a range prints with its start: `range(0, 5)`.
 - `isalpha`, `isdigit`, `isalnum` and `isspace` test ASCII characters only.
 - An error ends the program: `Unhandled condition: ` and the message on standard error,
-  and a non-zero exit status. The message names no file or line. The texts follow the Go
-  implementation's.
+  then the file and line it happened on and the `def` holding it (on WebAssembly with
+  [`--report-locations`](../compiling/wasm.md#uncaught-condition-locations---report-locations)),
+  and a non-zero exit status. Only an error found before the program starts names the
+  column. The texts follow the Go implementation's.
 - A list, tuple or dict expression of several thousand elements does not compile to a JVM
   class: it passes the size a JVM method may have. The interpreter and WebAssembly take
   it.

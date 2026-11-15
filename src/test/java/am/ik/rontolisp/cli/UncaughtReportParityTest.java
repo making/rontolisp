@@ -435,10 +435,11 @@ class UncaughtReportParityTest {
 	}
 
 	@Test
-	void schemeSourceIsLocatedTheSameWay() throws Exception {
+	void aFrontEndsSourceIsLocatedTheSameWay() throws Exception {
 		// The Scheme reader locates its lists on both paths, and its procedures lower to
 		// the same named functions -- a named let's loop and an internal define report
-		// the procedure around them.
+		// the procedure around them. The Starlark lowering locates every statement and
+		// expression at its node, and a lambda reports the def it is written in.
 		Path program = write("scheme.scm", """
 				(define (count-down n)
 				  (define (check k)
@@ -453,6 +454,20 @@ class UncaughtReportParityTest {
 				(count-down 3)
 				""");
 		assertSameReport(program, "Unhandled condition: bottom", "  at " + program + ":8 in count-down");
+		Path starlark = write("starlark.star", """
+				def parse(s):
+				    return int(s)
+
+				def run(items):
+				    return [
+				        (lambda v: parse(v) + v)(s)
+				        for s in items]
+
+				print(run([]))
+				run(["2"])
+				""");
+		assertSameReport(starlark, "Unhandled condition: unknown binary op: int + string",
+				"  at " + starlark + ":6 in run");
 	}
 
 	@Test

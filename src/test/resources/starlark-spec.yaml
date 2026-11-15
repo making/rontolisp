@@ -79,10 +79,9 @@ cases:
       int string list dict tuple NoneType function builtin_function_or_method
   # A name is the innermost binding that holds it anywhere in its block; a comprehension's
   # variables are its own; a closure reads the variable, not a copy; a top-level def bound
-  # once is entered directly, also by a call written above it.
+  # once is entered directly.
   - name: names-resolve-statically
     source: |
-      print(scope_early(20))
       def scope_early(n):
           return n + 1
       scope_x = 1
@@ -104,12 +103,11 @@ cases:
               return False if n == 0 else even(n - 1)
           return even(10)
       T = "an identifier without a lowercase letter"
-      print(scope_mutual(), T, len == len, len == str, scope_early == scope_early)
+      print(scope_early(20), scope_mutual(), T, len == len, len == str, scope_early == scope_early)
     expected: |
-      21
       3 1 [9] 1
       [2, 2, 2] [2, 2, 2]
-      True an identifier without a lowercase letter True False True
+      21 True an identifier without a lowercase letter True False True
   # Both call tiers bind the same way and evaluate the arguments as written: the direct
   # call of a built-in places them while lowering, the run-time binder when the call runs.
   - name: arguments-bind-in-source-order-through-both-call-tiers
@@ -249,3 +247,30 @@ standalone:
     stdout: |
       1
     error: len accepts at most 1 positional argument (2 given)
+  # A top-level def is entered directly from anywhere, but a call above it reads the
+  # global the def statement assigns, which is not assigned yet.
+  - name: a-call-above-its-def-is-a-read-before-the-assignment
+    source: |
+      print("before")
+      print(early(1))
+      def early(n):
+          return n
+    stdout: |
+      before
+    error: global variable early referenced before assignment
+  # --starlark-standard spec: a call while a call of the same declaration runs; one
+  # after another is no recursion.
+  - name: the-spec-standard-refuses-recursion
+    standard: spec
+    source: |
+      def fact(n):
+          return 1 if n <= 1 else n * fact(n - 1)
+      def twice(f, x):
+          return f(f(x))
+      def inc(x):
+          return x + 1
+      print(twice(inc, 1), fact(1))
+      print(fact(3))
+    stdout: |
+      3 1
+    error: function fact called recursively

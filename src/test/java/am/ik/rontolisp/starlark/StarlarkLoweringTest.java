@@ -28,8 +28,10 @@ class StarlarkLoweringTest {
 
 	private static final String RT = "RONTOLISP::%STARLARK-";
 
+	// A source whose first line is "# spec" is read against --starlark-standard spec.
 	private static String lowered(String source) {
-		return Starlark.read(source, "t.star").stream().map(LispVal::print).collect(Collectors.joining("\n"));
+		StarlarkStandard standard = source.startsWith("# spec\n") ? StarlarkStandard.SPEC : StarlarkStandard.RONTOLISP;
+		return Starlark.read(source, "t.star", standard).stream().map(LispVal::print).collect(Collectors.joining("\n"));
 	}
 
 	// $ stands for the run-time helpers' prefix.
@@ -40,10 +42,12 @@ class StarlarkLoweringTest {
 						(SETQ |s%T| ($MAKE-LIST :NONE T NIL 1 -2.5 "s" ($MAKE-TUPLE 1) ($MAKE-DICT "k" 1)))
 						(SETQ |t| |s%T|)"""),
 				// a top-level def bound once: a defun ahead of every statement, entered
-				// directly by a call that fills each parameter by position
+				// directly by a call that fills each parameter by position; above the
+				// def, the call checks the global the def assigns
 				arguments("f(1, 2)\ndef f(a, b = 2):\n    return a\nf(1)\ng = f\n", """
 						(DEFUN |f| (|a| |b|) |a|)
-						(|f| 1 2)
+						(SETQ |f| :%UNBOUND)
+						(PROGN ($GLOBAL |f| "f") (|f| 1 2))
 						(SETQ |f| ($MAKE-FUNCTION "f" '("a" "b") (LIST :%REQUIRED 2) 2 NIL NIL #'|f|))
 						($CALL |f| (LIST 1) NIL)
 						(SETQ |g| |f|)"""),
@@ -52,8 +56,10 @@ class StarlarkLoweringTest {
 				arguments("def f(a, *args, c = 1, **kw):\n    pass\n",
 						"""
 								(SETQ |f| ($MAKE-FUNCTION "f" '("a" "c") (LIST :%REQUIRED 1) 1 T T (LAMBDA (|a| |c| |args| |kw|) :NONE)))"""),
-				// a body: a block around a let of every assigned name; a loop: a tagbody
-				// over the iterable's vector, given back before a return leaves it
+				// a body: a block around a let of every assigned name, unassigned until
+				// assigned and read through a check where a path may not assign it; a
+				// loop: a tagbody over the iterable's vector, given back before a return
+				// leaves it
 				arguments("""
 						def f(xs):
 						    for i, x in xs:
@@ -62,10 +68,10 @@ class StarlarkLoweringTest {
 						        elif i:
 						            continue
 						        break
-						    n = 0
+						    n = x
 						""",
 						"""
-								(DEFUN |f| (|xs|) (BLOCK %SL-FN (LET ((|i| :NONE) (|x| :NONE) (|n| :NONE)) \
+								(DEFUN |f| (|xs|) (BLOCK %SL-FN (LET ((|i| :%UNBOUND) (|x| :%UNBOUND) (|n| :%UNBOUND)) \
 								(LET* ((%SL-SEQ1 |xs|) (%SL-ITEMS2 ($ITERATE %SL-SEQ1)) (%SL-COUNT3 (LENGTH %SL-ITEMS2)) (%SL-INDEX4 0)) \
 								(BLOCK %SL-BREAK (TAGBODY %SL-TOP5 (IF (< %SL-INDEX4 %SL-COUNT3) (PROGN \
 								(LET ((%SL-UNPACKED6 ($UNPACK (AREF %SL-ITEMS2 %SL-INDEX4) 2))) \
@@ -73,7 +79,7 @@ class StarlarkLoweringTest {
 								(SETQ %SL-INDEX4 (+ %SL-INDEX4 1)) \
 								(BLOCK %SL-CONTINUE (IF ($TRUTH |x|) (PROGN ($ITERATED %SL-SEQ1) (RETURN-FROM %SL-FN |i|)) \
 								(IF ($TRUTH |i|) (RETURN-FROM %SL-CONTINUE NIL))) (RETURN-FROM %SL-BREAK NIL)) \
-								(GO %SL-TOP5))))) ($ITERATED %SL-SEQ1)) (SETQ |n| 0) :NONE)))
+								(GO %SL-TOP5))))) ($ITERATED %SL-SEQ1)) (SETQ |n| ($LOCAL |x| "x")) :NONE)))
 								(SETQ |f| ($MAKE-FUNCTION "f" '("xs") NIL 1 NIL NIL #'|f|))"""),
 				// truth is fused into a test; `and` / `or` as values keep the operand
 				arguments(
@@ -88,7 +94,7 @@ class StarlarkLoweringTest {
 				// own
 				arguments("x = [v * 2 for v in range(3) if v]\n",
 						"""
-								(SETQ |x| (LET ((%SL-ACC1 ($VECTOR)) (|v| :NONE)) \
+								(SETQ |x| (LET ((%SL-ACC1 ($VECTOR)) (|v| :%UNBOUND)) \
 								(LET* ((%SL-SEQ2 ($B-RANGE 3 :%UNSET 1)) (%SL-ITEMS3 ($ITERATE %SL-SEQ2)) (%SL-COUNT4 (LENGTH %SL-ITEMS3)) (%SL-INDEX5 0)) \
 								(TAGBODY %SL-TOP6 (IF (< %SL-INDEX5 %SL-COUNT4) (PROGN (SETQ |v| (AREF %SL-ITEMS3 %SL-INDEX5)) \
 								(SETQ %SL-INDEX5 (+ %SL-INDEX5 1)) (IF ($TRUTH |v|) (VECTOR-PUSH-EXTEND ($MUL |v| 2) %SL-ACC1)) \
@@ -121,7 +127,14 @@ class StarlarkLoweringTest {
 								($SET-INDEX |a| |i| (AREF %SL-UNPACKED3 0)) (SETQ |i| (AREF %SL-UNPACKED3 1))) \
 								(LET* ((%SL-KEY4 ($CALL |g| NIL NIL))) ($SET-INDEX |a| %SL-KEY4 ($SUB ($INDEX |a| %SL-KEY4) 1))) \
 								(SETQ |i| ($ADD-IN-PLACE |i| ($MAKE-LIST 1))) :NONE)
-								(SETQ |f| ($MAKE-FUNCTION "f" '("a" "g" "i") NIL 3 NIL NIL #'|f|))"""));
+								(SETQ |f| ($MAKE-FUNCTION "f" '("a" "g" "i") NIL 3 NIL NIL #'|f|))"""),
+				// --starlark-standard spec: a call while a call of the same declaration
+				// runs is refused
+				arguments("# spec\ndef f(n):\n    return f(n - 1)\n", """
+						(DEFUN |f| (|n|) (IF %SL-ACTIVE1 ($RECURSIVE "f")) (SETQ %SL-ACTIVE1 T) \
+						(LET ((%SL-RESULT2 (|f| ($SUB |n| 1)))) (SETQ %SL-ACTIVE1 NIL) %SL-RESULT2))
+						(SETQ %SL-ACTIVE1 NIL)
+						(SETQ |f| ($MAKE-FUNCTION "f" '("n") NIL 1 NIL NIL #'|f|))"""));
 	}
 
 	@ParameterizedTest
@@ -134,13 +147,20 @@ class StarlarkLoweringTest {
 		return List.of(arguments("x = 1\nprint(nope)\n", "t.star:2:7: undefined: nope"),
 				arguments("def f():\n    return g()\n", "t.star:2:12: undefined: g"),
 				arguments("load(\"m.star\", \"x\")\n", "t.star:1:1: load is not supported yet"),
-				arguments("x = b\"abc\"\n", "t.star:1:5: bytes literals are not supported yet"));
+				arguments("x = b\"abc\"\n", "t.star:1:5: bytes literals are not supported yet"),
+				// --starlark-standard spec, which these cases are read against
+				arguments("x = 1\nif x:\n    pass\n", "t.star:2:1: if statement not within a function"),
+				arguments("for x in []:\n    pass\n", "t.star:1:1: for loop not within a function"),
+				arguments("x, y = 1, 2\ndef y():\n    pass\n",
+						"t.star:2:1: cannot reassign global y declared at t.star:1:4"));
 	}
 
 	@ParameterizedTest
 	@MethodSource("refusals")
-	void aNameNothingBindsAndAMissingConstructAreRefusedAtTheirPosition(String source, String message) {
-		assertThatThrownBy(() -> Starlark.read(source, "t.star")).isInstanceOf(LispReadException.class)
+	void aNameNothingBindsAMissingConstructAndWhatTheSpecRefusesAreRefusedAtTheirPosition(String source,
+			String message) {
+		assertThatThrownBy(() -> Starlark.read(source, "t.star", StarlarkStandard.SPEC))
+			.isInstanceOf(LispReadException.class)
 			.hasMessage(message);
 	}
 

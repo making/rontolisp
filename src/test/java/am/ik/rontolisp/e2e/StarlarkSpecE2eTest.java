@@ -36,6 +36,7 @@ import am.ik.rontolisp.cli.JvmSourceCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.testsupport.CliStack;
@@ -66,9 +67,10 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * back per case, so a failure names its case and its backend. A {@code standalone:} case
  * ENDS its program with an uncaught error, so each one is compiled and run on its own,
  * per backend: it prints {@code stdout}, then fails with {@code error}, which the
- * interpreter throws and a compiled program reports first on standard error.
- * {@link #conformance} runs bazelbuild/starlark's conformance corpus the same four ways,
- * one program per corpus file.
+ * interpreter throws and a compiled program reports first on standard error; it may name
+ * the {@code standard} it is read against. {@link #conformance} runs
+ * bazelbuild/starlark's conformance corpus the same four ways, one program per corpus
+ * file.
  *
  * <p>
  * Unlike {@code CiSpecE2eTest} this needs no native binary: every leg goes through the
@@ -92,7 +94,13 @@ class StarlarkSpecE2eTest {
 
 	}
 
-	record Standalone(String name, String source, String stdout, String error) {
+	/**
+	 * A case that ends with an uncaught error.
+	 *
+	 * @param standard the {@code --starlark-standard} it is read against, or {@code null}
+	 * for the default
+	 */
+	record Standalone(String name, String source, String stdout, String error, @Nullable String standard) {
 
 		String stem() {
 			return "Standalone" + this.name.replaceAll("[^A-Za-z0-9]", "");
@@ -143,11 +151,14 @@ class StarlarkSpecE2eTest {
 	 * The chunks that do not pass yet, each with why. A chunk named here must still fail,
 	 * so the one a change fixes is taken off.
 	 */
-	private static final Map<String, String> KNOWN_FAILURES = Map.of("go/assign.star:153",
-			"a global read before its assignment is Common Lisp's unbound-variable error", "go/assign.star:172",
-			"a local read before its assignment reads None", "go/function.star:273",
-			"a local read before its assignment reads None", "go/builtins.star:64",
+	private static final Map<String, String> KNOWN_FAILURES = Map.of("go/builtins.star:64",
 			"the corpus matches 'Error in sorted', the line Go's and Java's tracebacks print, not the message");
+
+	/**
+	 * What the corpus is read against: the specification's rules, the Go implementation's
+	 * default, which the corpus is written for.
+	 */
+	private static final SourceStandards CORPUS_STANDARDS = SourceStandards.parse(null, "spec");
 
 	/** The line a program prints after each chunk: its name, then its error if any. */
 	private static final String CHUNK_MARK = "%%chunk ";
@@ -181,7 +192,8 @@ class StarlarkSpecE2eTest {
 					if (!HostWasmtime.isAvailable()) {
 						abort("no usable wasmtime on PATH");
 					}
-					Path module = compileWasm(s.source(), component, s.stem());
+					Path module = compileWasm(CompileFrontendAccess.starlark(s.source(), true, component, s.standard()),
+							component, s.stem());
 					Process process = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
 							module.toString())
 						.start();
@@ -333,7 +345,8 @@ class StarlarkSpecE2eTest {
 			Chunk chunk = chunks.get(i);
 			List<LispVal> lowered;
 			try {
-				lowered = SourceLanguage.STARLARK.read(PRELUDE + chunk.source(), Features.INTERPRETER, chunk.name());
+				lowered = SourceLanguage.STARLARK.read(PRELUDE + chunk.source(), Features.INTERPRETER, chunk.name(),
+						CORPUS_STANDARDS);
 			}
 			catch (LispReadException ex) {
 				forms.add(list(report, LispString.literal(chunk.name()),
@@ -470,7 +483,8 @@ class StarlarkSpecE2eTest {
 		CliStack.call("starlark-spec", () -> {
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
 			try {
-				for (LispVal form : SourceLanguage.STARLARK.read(s.source(), Features.INTERPRETER, null)) {
+				for (LispVal form : SourceLanguage.STARLARK.read(s.source(), Features.INTERPRETER, null,
+						SourceStandards.parse(null, s.standard()))) {
 					evaluator.eval(form);
 				}
 			}
@@ -491,6 +505,7 @@ class StarlarkSpecE2eTest {
 		Path dir = workDir.resolve(s.stem());
 		Files.createDirectories(dir);
 		JvmSourceCompiler.Result compiled = new JvmSourceCompiler(s.stem()).sourceLanguage("starlark")
+			.starlarkStandard(s.standard())
 			.compile(s.source(), null);
 		Files.write(dir.resolve(s.stem() + ".class"), compiled.classBytes());
 		for (Map.Entry<String, byte[]> runtime : compiled.runtimeClasses().entrySet()) {
@@ -641,7 +656,7 @@ class StarlarkSpecE2eTest {
 	}
 
 	private static Path compileWasm(String program, boolean component, String name) throws IOException {
-		return compileWasm(CompileFrontendAccess.starlark(program, true, component), component, name);
+		return compileWasm(CompileFrontendAccess.starlark(program, true, component, null), component, name);
 	}
 
 	private static Path compileWasm(CompileFrontendAccess.Program frontend, boolean component, String name)

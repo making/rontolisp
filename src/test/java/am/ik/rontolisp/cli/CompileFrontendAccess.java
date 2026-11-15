@@ -243,12 +243,15 @@ public final class CompileFrontendAccess {
 	 * @param source the Starlark program text
 	 * @param wasm whether the target is a {@code .wasm} output
 	 * @param component {@code --component}
+	 * @param standard the {@code --starlark-standard} value, or {@code null} for the
+	 * default
 	 * @return the expanded program and the feature set it was read with
 	 */
-	public static Program starlark(String source, boolean wasm, boolean component) {
+	public static Program starlark(String source, boolean wasm, boolean component, @Nullable String standard) {
 		CompileFrontend.Result result = CompileFrontend.run(CompileFrontend.Request.builder()
 			.source(source)
 			.sourceLanguage("starlark")
+			.standards(SourceStandards.parse(null, standard))
 			.options(CompileFrontend.Options.builder().wasm(wasm).component(component).build())
 			.build());
 		return new Program(result.program(), result.features());

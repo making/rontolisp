@@ -21,35 +21,32 @@ print(len("𝄞"), "naïve"[2], "日本語"[::-1], hash("𝄞"))
 **`print` は標準出力に書きます。** 仕様は出力先をホストに任せており、Bazel では
 標準エラー出力です。
 
-**寛容な方言です。** `if` と `for` をトップレベルに書けます。グローバル変数に 2 回以上
-代入できます。関数は自分自身を呼び出せます。Bazel はこの 3 つをすべて拒否し、Go の実装は
-それぞれをオプションにしています。
+**既定は寛容な方言です。** `if` と `for` をトップレベルに書けます。グローバル変数に
+2 回以上代入できます。関数は自分自身を呼び出せます。Go の実装はそれぞれをオプションにして
+います。`--starlark-standard spec` を指定すると、仕様どおり 3 つともエラーになります。
+前の 2 つはプログラムの実行前に、同じ `def` や `lambda` の呼び出しの実行中にそれを呼ぶことは
+呼び出した時点で（`function f called recursively`）エラーになります。
 
-**トップレベルの関数は、その `def` より上から呼び出せます。** 仕様では、`def` 文が
-実行されるまではエラーです。
-
-```starlark
-print(double(21))
-
-def double(x):
-    return x * 2
+```console
+$ cat count.star
+for x in range(2):
+    print(x)
+$ rontolisp count.star
+0
+1
+$ rontolisp --starlark-standard spec count.star
+error: count.star:1:1: for loop not within a function
 ```
-
-```
-42
-```
-
-**代入前の変数を読んでも、エラーになるとは限りません。** ローカル変数は `None` に
-なります。グローバル変数はエラーで、メッセージは Common Lisp のもの（`The variable y is
-unbound`）です。
 
 そのほかの差異は次のとおりです:
 
 - range のスライスはリストを返します。range は開始値を付けて `range(0, 5)` と印字されます。
 - `isalpha`、`isdigit`、`isalnum`、`isspace` は ASCII の文字だけを判定します。
 - エラーはプログラムを終了させます。標準エラー出力に `Unhandled condition: ` とメッセージが
-  出て、終了ステータスは 0 以外になります。メッセージにファイル名と行番号は含まれません。
-  文面は Go の実装に合わせています。
+  出て、続けて発生したファイルと行、およびそれを含む `def` が出ます（WebAssembly では
+  [`--report-locations`](../compiling/wasm.md#uncaught-condition-locations---report-locations)
+  を付けた場合）。終了ステータスは 0 以外になります。列まで示すのは、プログラムの実行前に
+  見つかったエラーだけです。文面は Go の実装に合わせています。
 - 数千要素のリスト式、タプル式、辞書式は JVM のクラスにコンパイルできません。JVM の
   メソッドに許される大きさを超えるためです。インタプリタと WebAssembly では動きます。
 

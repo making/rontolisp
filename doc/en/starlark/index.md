@@ -8,7 +8,9 @@ is a compatibility promise. Use it to try a Starlark program on the JVM or WebAs
 write Common Lisp for anything you need to keep working.
 
 A `.star` file is read as Starlark; `--source-language starlark` says so for any other
-file and for `-e`. The language is picked per file.
+file and for `-e`. The language is picked per file. `--starlark-standard spec` applies the
+specification's rules on the top level and recursion, which the default relaxes
+([Deviations](deviations.md)).
 
 ```bash
 rontolisp hello.star                                # interpreter
@@ -122,7 +124,11 @@ for x in xs:
     xs.append(x)
 $ rontolisp loop.star
 Unhandled condition: cannot append to list during iteration
+  at loop.star:3
 ```
+
+A variable read before it is assigned is an error the same way, a local or a global, and
+so is a call of a `def` written above it.
 
 ## This section
 

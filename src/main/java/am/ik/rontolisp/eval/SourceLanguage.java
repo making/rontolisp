@@ -208,7 +208,7 @@ public enum SourceLanguage {
 						null);
 			}
 			if (this == STARLARK) {
-				return new LispReader.ReadPrefix(Starlark.read(source, file), null);
+				return new LispReader.ReadPrefix(Starlark.read(source, file, standards.starlark()), null);
 			}
 			return new LispReader.ReadPrefix(clojure(source, features, file, standards, loader, false, null).forms(),
 					null);

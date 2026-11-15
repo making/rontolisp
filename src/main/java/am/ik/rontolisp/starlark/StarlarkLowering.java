@@ -5,6 +5,8 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -23,7 +25,9 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.LocatedCons;
 import am.ik.rontolisp.SourceLocation;
+import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.starlark.StarlarkBuiltins.Signature;
 import am.ik.rontolisp.starlark.StarlarkSyntax.Argument;
@@ -93,6 +97,16 @@ import org.jspecify.annotations.Nullable;
  * {@code return-from}; no exit crosses a {@code lambda}. A {@code return} inside loops
  * ends each loop's count on the iterable itself before it leaves, so no
  * {@code unwind-protect} is needed.</li>
+ * <li><b>A read is checked only where it can come before the assignment.</b> A
+ * definite-assignment pass runs with the lowering: a name assigned on every path to a
+ * read is read as it stands, any other read goes through
+ * {@code rontolisp::%starlark-local} or {@code -global}, which refuses the unassigned
+ * marker. A function's body starts with what was assigned where the function value was
+ * made: a variable is never unassigned again.</li>
+ * <li><b>Every statement and expression form is located</b> at its node's position, as a
+ * reader locates what it reads: recorded in the compile path's table, a
+ * {@link LocatedCons} for the interpreter, so an uncaught error names the line it
+ * happened on.</li>
  * <li><b>Truth is fused into tests.</b> A comparison, {@code not} and the Boolean
  * constants answer the Common Lisp booleans, so a condition built of them is tested as it
  * stands; only a value of unknown type goes through
@@ -204,6 +218,15 @@ final class StarlarkLowering {
 
 	private static final LispSymbol ADD_IN_PLACE = runtime("ADD-IN-PLACE");
 
+	private static final LispSymbol LOCAL = runtime("LOCAL");
+
+	private static final LispSymbol GLOBAL = runtime("GLOBAL");
+
+	private static final LispSymbol RECURSIVE = runtime("RECURSIVE");
+
+	/** What a variable holds until it is assigned: a value no program can make. */
+	private static final LispSymbol UNBOUND = new LispSymbol(":%UNBOUND");
+
 	private static final Map<String, LispVal> CONSTANTS = Map.of("None", StarlarkBuiltins.NONE, "True",
 			LispTrue.INSTANCE, "False", LispNil.INSTANCE);
 
@@ -216,23 +239,86 @@ final class StarlarkLowering {
 	 */
 	private final Map<String, Def> direct = new LinkedHashMap<>();
 
+	private final StarlarkStandard standard;
+
+	/** The direct entries' {@code defun}s, which go ahead of every statement. */
+	private final List<LispVal> hoisted = new ArrayList<>();
+
+	/** The globals some read checks: each starts as {@link #UNBOUND}. */
+	private final Set<String> checkedGlobals = new LinkedHashSet<>();
+
+	/**
+	 * Under {@link StarlarkStandard#SPEC}, one variable per function declaration, true
+	 * while a call of it runs.
+	 */
+	private final List<LispSymbol> active = new ArrayList<>();
+
+	/** What is assigned where the lowering stands. */
+	private Flow flow = new Flow(new HashSet<>(), false);
+
 	private int counter;
 
-	private StarlarkLowering() {
+	/** The compile path's unit the forms are recorded in, or {@code null}. */
+	private final SourceProvenance.@Nullable Unit unit;
+
+	/**
+	 * The file each form is located in as a {@link LocatedCons}, or {@code null}: a named
+	 * file lowered with no compile-path scope open, i.e. the interpreter's.
+	 */
+	private final @Nullable String runtimeFile;
+
+	/** The offset each line of the source starts at, for {@link #unit}. */
+	private final int[] lineStarts;
+
+	private StarlarkLowering(StarlarkStandard standard, String source, @Nullable String file) {
+		this.standard = standard;
+		this.unit = SourceProvenance.unit(file, source);
+		this.runtimeFile = this.unit == null ? file : null;
+		List<Integer> starts = new ArrayList<>(List.of(0));
+		for (int i = 0; i < source.length(); i++) {
+			if (source.charAt(i) == '\n') {
+				starts.add(i + 1);
+			}
+		}
+		this.lineStarts = starts.stream().mapToInt(Integer::intValue).toArray();
 	}
 
 	/**
 	 * Lowers a file.
 	 * @param file the file's statements
+	 * @param standard what the file is read against
+	 * @param source the file's text, which the positions are in
+	 * @param name the origin file, or {@code null} when unknown
 	 * @return the top-level forms
-	 * @throws LispReadException on a name no binding or built-in answers, and on a
-	 * construct the front end does not have yet, at its position
+	 * @throws LispReadException on a name no binding or built-in answers, on a construct
+	 * the front end does not have yet and on one the standard refuses, at its position
 	 */
-	static List<LispVal> lower(List<Statement> file) {
-		return new StarlarkLowering().file(file);
+	static List<LispVal> lower(List<Statement> file, StarlarkStandard standard, String source, @Nullable String name) {
+		return new StarlarkLowering(standard, source, name).file(file);
+	}
+
+	/**
+	 * A form located at a node's position: recorded in the compile path's table, or for
+	 * the interpreter answered as a located copy -- so the caller uses the value
+	 * returned.
+	 */
+	private LispVal located(LispVal form, SourceLocation at) {
+		if (!(form instanceof LispCons cons) || form instanceof LocatedCons) {
+			return form;
+		}
+		if (this.runtimeFile != null) {
+			return new LocatedCons(cons.car(), cons.cdr(), this.runtimeFile, at.line());
+		}
+		if (this.unit != null && at.line() >= 1 && at.line() <= this.lineStarts.length) {
+			SourceProvenance.record(cons, this.unit, this.lineStarts[at.line() - 1] + at.column() - 1);
+		}
+		return form;
 	}
 
 	private List<LispVal> file(List<Statement> statements) {
+		if (this.standard == StarlarkStandard.SPEC) {
+			specTopLevel(statements);
+		}
 		Map<String, Integer> bound = new LinkedHashMap<>();
 		bindings(statements, bound);
 		this.globals.addAll(bound.keySet());
@@ -242,16 +328,128 @@ final class StarlarkLowering {
 				this.direct.put(def.name(), def);
 			}
 		}
-		List<LispVal> forms = new ArrayList<>();
+		List<LispVal> body = statements(statements, new Frame(Scope.TOP));
 		// Every direct entry ahead of the first statement: a defun exists from the start
 		// in a compiled program and only once evaluated in the interpreter, so a call
 		// written above its def would otherwise run on three backends and fail on one.
-		for (Def def : this.direct.values()) {
-			forms.add(cons(DEFUN, cons(StarlarkNames.symbol(def.name()),
-					function(new Parameters(def.parameters()), def.body(), Scope.TOP))));
+		// Such a call checks the global its def assigns, as any read before it does.
+		List<LispVal> forms = new ArrayList<>(this.hoisted);
+		for (String name : this.checkedGlobals) {
+			forms.add(list(SETQ, StarlarkNames.symbol(name), UNBOUND));
 		}
-		forms.addAll(statements(statements, new Frame(Scope.TOP)));
+		for (LispSymbol flag : this.active) {
+			forms.add(list(SETQ, flag, LispNil.INSTANCE));
+		}
+		forms.addAll(body);
 		return List.copyOf(forms);
+	}
+
+	/**
+	 * The specification's top-level rules: no {@code if} or {@code for}, and a global
+	 * bound once.
+	 */
+	private static void specTopLevel(List<Statement> statements) {
+		Map<String, SourceLocation> declared = new HashMap<>();
+		for (Statement statement : statements) {
+			switch (statement) {
+				case If conditional -> throw error("if statement not within a function", conditional.at());
+				case For loop -> throw error("for loop not within a function", loop.at());
+				case Assignment assignment -> declare(assignment.target(), declared);
+				case AugmentedAssignment assignment -> declare(assignment.target(), declared);
+				case Def def -> declare(def.name(), def.at(), declared);
+				default -> {
+				}
+			}
+		}
+	}
+
+	private static void declare(Expression target, Map<String, SourceLocation> declared) {
+		switch (target) {
+			case Identifier identifier -> declare(identifier.name(), identifier.at(), declared);
+			case TupleLiteral tuple -> tuple.elements().forEach(element -> declare(element, declared));
+			case ListLiteral list -> list.elements().forEach(element -> declare(element, declared));
+			default -> {
+			}
+		}
+	}
+
+	private static void declare(String name, SourceLocation at, Map<String, SourceLocation> declared) {
+		SourceLocation first = declared.putIfAbsent(name, at);
+		if (first != null) {
+			throw error(
+					"cannot reassign global " + name + " declared at "
+							+ (first.file() == null ? "" : first.file() + ":") + first.line() + ":" + first.column(),
+					at);
+		}
+	}
+
+	// ---- definite assignment ----
+
+	/**
+	 * The names assigned on every path to where the lowering stands, or {@code dead} when
+	 * no path reaches it (after a {@code return}, {@code break} or {@code continue}),
+	 * where every name counts as assigned. Names, not bindings: a function or
+	 * comprehension takes its own names off when it starts.
+	 */
+	private static final class Flow {
+
+		private final Set<String> assigned;
+
+		private boolean dead;
+
+		Flow(Set<String> assigned, boolean dead) {
+			this.assigned = assigned;
+			this.dead = dead;
+		}
+
+		Flow copy() {
+			return new Flow(new HashSet<>(this.assigned), this.dead);
+		}
+
+		boolean has(String name) {
+			return this.dead || this.assigned.contains(name);
+		}
+
+		/** Where two paths join: what both assigned, a dead one contributing nothing. */
+		static Flow join(Flow a, Flow b) {
+			if (a.dead) {
+				return b;
+			}
+			if (!b.dead) {
+				a.assigned.retainAll(b.assigned);
+			}
+			return a;
+		}
+
+	}
+
+	/**
+	 * A read of a variable: as it stands where it is assigned on every path, else through
+	 * the check that refuses {@link #UNBOUND}.
+	 */
+	private LispVal read(String name, Scope scope) {
+		LispSymbol symbol = StarlarkNames.symbol(name);
+		if (this.flow.has(name)) {
+			return symbol;
+		}
+		boolean local = scope.binds(name);
+		if (!local) {
+			this.checkedGlobals.add(name);
+		}
+		return list(local ? LOCAL : GLOBAL, symbol, string(name));
+	}
+
+	/**
+	 * Enters a function or comprehension body: what is assigned there at first is what is
+	 * assigned where it is made, less the names it binds itself, plus those it is handed.
+	 * @return the flow to restore when the body is done
+	 */
+	private Flow enter(Set<String> own, List<String> handed) {
+		Flow outer = this.flow;
+		this.flow = outer.copy();
+		this.flow.assigned.removeAll(own);
+		this.flow.assigned.addAll(handed);
+		return outer;
 	}
 
 	// ---- scopes ----
@@ -328,7 +526,7 @@ final class StarlarkLowering {
 	private LispVal reference(Identifier identifier, Scope scope) {
 		String name = identifier.name();
 		if (isVariable(name, scope)) {
-			return StarlarkNames.symbol(name);
+			return read(name, scope);
 		}
 		LispVal constant = CONSTANTS.get(name);
 		if (constant != null) {
@@ -419,18 +617,24 @@ final class StarlarkLowering {
 	 * @param parameters the function's parameters
 	 * @param statements its statements
 	 * @param enclosing the scope the function is written in
+	 * @param name the function's name, which its body finds assigned
 	 * @return the lambda list and the body forms, what follows {@code lambda} or a
 	 * {@code defun}'s name
 	 */
-	private LispVal function(Parameters parameters, List<Statement> statements, Scope enclosing) {
+	private LispVal function(Parameters parameters, List<Statement> statements, Scope enclosing, String name) {
 		Set<String> names = new LinkedHashSet<>(parameters.names());
 		Map<String, Integer> assigned = new LinkedHashMap<>();
 		bindings(statements, assigned);
 		List<LispVal> locals = new ArrayList<>();
-		for (String name : assigned.keySet()) {
-			if (names.add(name)) {
-				locals.add(list(StarlarkNames.symbol(name), StarlarkBuiltins.NONE));
+		for (String local : assigned.keySet()) {
+			if (names.add(local)) {
+				locals.add(list(StarlarkNames.symbol(local), UNBOUND));
 			}
+		}
+		Flow outer = enter(names, parameters.names());
+		// The body runs only once the def statement assigned the name.
+		if (!names.contains(name)) {
+			this.flow.assigned.add(name);
 		}
 		Scope scope = enclosing.inner(names);
 		// A return ending the body is the body's value: it needs no block to leave.
@@ -448,7 +652,25 @@ final class StarlarkLowering {
 		if (returns(block)) {
 			forms = List.of(cons(BLOCK, cons(FUNCTION_BLOCK, listOf(forms))));
 		}
-		return cons(parameters.lambdaList(), listOf(forms));
+		this.flow = outer;
+		return cons(parameters.lambdaList(), listOf(once(forms, name)));
+	}
+
+	/**
+	 * A function's body forms, under {@link StarlarkStandard#SPEC} refusing a call while
+	 * a call of the same declaration runs: a variable of the declaration's own is true
+	 * meanwhile. It is set back on every normal exit and not on an error, which ends the
+	 * program.
+	 */
+	private List<LispVal> once(List<LispVal> forms, String name) {
+		if (this.standard != StarlarkStandard.SPEC) {
+			return forms;
+		}
+		LispSymbol flag = fresh("ACTIVE");
+		this.active.add(flag);
+		LispSymbol result = fresh("RESULT");
+		return List.of(list(IF, flag, list(RECURSIVE, string(name))), list(SETQ, flag, LispTrue.INSTANCE),
+				list(LET, list(list(result, progn(forms))), list(SETQ, flag, LispNil.INSTANCE), result));
 	}
 
 	/** Whether a {@code return} of this function stands in the statements. */
@@ -487,17 +709,28 @@ final class StarlarkLowering {
 
 	private LispVal definition(Def def, Scope scope) {
 		Parameters parameters = new Parameters(def.parameters());
-		LispVal implementation = (scope == Scope.TOP && this.direct.get(def.name()) == def)
-				? list(FUNCTION, StarlarkNames.symbol(def.name()))
-				: cons(LAMBDA, function(parameters, def.body(), scope));
+		LispVal implementation;
+		if (scope == Scope.TOP && this.direct.get(def.name()) == def) {
+			LispSymbol symbol = StarlarkNames.symbol(def.name());
+			this.hoisted
+				.add(located(cons(DEFUN, cons(symbol, function(parameters, def.body(), scope, def.name()))), def.at()));
+			implementation = list(FUNCTION, symbol);
+		}
+		else {
+			implementation = cons(LAMBDA, function(parameters, def.body(), scope, def.name()));
+		}
 		return functionValue(def.name(), parameters, implementation, scope);
 	}
 
 	private LispVal lambda(Lambda lambda, Scope scope) {
 		Parameters parameters = new Parameters(lambda.parameters());
-		Scope inner = scope.inner(new LinkedHashSet<>(parameters.names()));
+		Set<String> names = new LinkedHashSet<>(parameters.names());
+		Scope inner = scope.inner(names);
+		Flow outer = enter(names, parameters.names());
+		LispVal body = expression(lambda.body(), inner);
+		this.flow = outer;
 		return functionValue("lambda", parameters,
-				list(LAMBDA, parameters.lambdaList(), expression(lambda.body(), inner)), scope);
+				cons(LAMBDA, cons(parameters.lambdaList(), listOf(once(List.of(body), "lambda")))), scope);
 	}
 
 	// ---- statements ----
@@ -507,7 +740,7 @@ final class StarlarkLowering {
 		for (Statement statement : statements) {
 			LispVal form = statement(statement, frame);
 			if (form != null) {
-				forms.add(form);
+				forms.add(located(form, statement.at()));
 			}
 		}
 		return forms;
@@ -522,11 +755,20 @@ final class StarlarkLowering {
 			case Assignment assignment ->
 				assign(assignment.target(), Value.computed(expression(assignment.value(), scope)), scope);
 			case AugmentedAssignment assignment -> augmented(assignment, scope);
-			case Def def -> list(SETQ, StarlarkNames.symbol(def.name()), definition(def, scope));
+			case Def def -> {
+				LispVal form = list(SETQ, StarlarkNames.symbol(def.name()), definition(def, scope));
+				this.flow.assigned.add(def.name());
+				yield form;
+			}
 			case If conditional -> {
-				List<LispVal> form = new ArrayList<>(List.of(IF, test(conditional.condition(), scope),
-						progn(statements(conditional.then(), frame))));
+				List<LispVal> form = new ArrayList<>(List.of(IF, test(conditional.condition(), scope)));
+				Flow before = this.flow;
+				this.flow = before.copy();
+				form.add(progn(statements(conditional.then(), frame)));
+				Flow then = this.flow;
+				this.flow = before.copy();
 				List<LispVal> otherwise = statements(conditional.otherwise(), frame);
+				this.flow = Flow.join(then, this.flow);
 				if (!otherwise.isEmpty()) {
 					form.add(progn(otherwise));
 				}
@@ -535,14 +777,29 @@ final class StarlarkLowering {
 			case For iteration -> {
 				Loop loop = new Loop(iteration.target(), expression(iteration.iterable(), scope))
 					.exits(iteration.body());
+				// The body may run no time: what it assigns is not assigned after it.
+				Flow before = this.flow;
+				this.flow = before.copy();
+				LispVal assignment = loop.assignment(scope);
 				frame.loops.push(loop.iterable);
 				List<LispVal> body = statements(iteration.body(), frame);
 				frame.loops.pop();
-				yield loop.over(body, scope);
+				this.flow = before;
+				yield loop.over(assignment, body);
 			}
-			case Return returned -> returned(returned, frame);
-			case Break _ -> list(RETURN_FROM, BREAK_BLOCK, LispNil.INSTANCE);
-			case Continue _ -> list(RETURN_FROM, CONTINUE_BLOCK, LispNil.INSTANCE);
+			case Return returned -> {
+				LispVal form = returned(returned, frame);
+				this.flow.dead = true;
+				yield form;
+			}
+			case Break _ -> {
+				this.flow.dead = true;
+				yield list(RETURN_FROM, BREAK_BLOCK, LispNil.INSTANCE);
+			}
+			case Continue _ -> {
+				this.flow.dead = true;
+				yield list(RETURN_FROM, CONTINUE_BLOCK, LispNil.INSTANCE);
+			}
 			case Pass _ -> null;
 			case Load load -> throw error("load is not supported yet", load.at());
 		};
@@ -593,6 +850,14 @@ final class StarlarkLowering {
 		/** The variable holding the iterable while the loop runs. */
 		private final LispSymbol iterable = fresh("SEQ");
 
+		private final LispSymbol items = fresh("ITEMS");
+
+		private final LispSymbol count = fresh("COUNT");
+
+		private final LispSymbol index = fresh("INDEX");
+
+		private final LispSymbol top = fresh("TOP");
+
 		private final Expression target;
 
 		private final LispVal iterated;
@@ -635,19 +900,28 @@ final class StarlarkLowering {
 		}
 
 		/**
-		 * The loop around its body.
-		 * @param body the body's forms
+		 * The assignment of each element to the target, lowered before the body, which
+		 * finds the target assigned.
 		 * @param scope where the target's names resolve
+		 * @return the assignment
+		 */
+		LispVal assignment(Scope scope) {
+			return assign(this.target, Value.element(list(AREF, this.items, this.index)), scope);
+		}
+
+		/**
+		 * The loop around its body.
+		 * @param assignment what {@link #assignment} answered
+		 * @param body the body's forms
 		 * @return the loop
 		 */
-		LispVal over(List<LispVal> body, Scope scope) {
-			LispSymbol items = fresh("ITEMS");
-			LispSymbol count = fresh("COUNT");
-			LispSymbol index = fresh("INDEX");
-			LispSymbol top = fresh("TOP");
+		LispVal over(LispVal assignment, List<LispVal> body) {
+			LispSymbol items = this.items;
+			LispSymbol count = this.count;
+			LispSymbol index = this.index;
+			LispSymbol top = this.top;
 			List<LispVal> step = new ArrayList<>(
-					List.of(PROGN, assign(this.target, Value.element(list(AREF, items, index)), scope),
-							list(SETQ, index, list(PLUS, index, new LispInteger(1)))));
+					List.of(PROGN, assignment, list(SETQ, index, list(PLUS, index, new LispInteger(1)))));
 			if (this.continues) {
 				step.add(cons(BLOCK, cons(CONTINUE_BLOCK, listOf(body))));
 			}
@@ -693,7 +967,10 @@ final class StarlarkLowering {
 	 */
 	private LispVal assign(Expression target, Value value, Scope scope) {
 		return switch (target) {
-			case Identifier identifier -> list(SETQ, StarlarkNames.symbol(identifier.name()), value.form());
+			case Identifier identifier -> {
+				this.flow.assigned.add(identifier.name());
+				yield list(SETQ, StarlarkNames.symbol(identifier.name()), value.form());
+			}
 			case Index index -> {
 				List<LispVal> operands = List.of(value.form(), expression(index.receiver(), scope),
 						expression(index.index(), scope));
@@ -731,8 +1008,9 @@ final class StarlarkLowering {
 		LispVal value = expression(assignment.value(), scope);
 		return switch (assignment.target()) {
 			case Identifier identifier -> {
-				LispSymbol variable = StarlarkNames.symbol(identifier.name());
-				yield list(SETQ, variable, list(operator, variable, value));
+				LispVal current = read(identifier.name(), scope);
+				this.flow.assigned.add(identifier.name());
+				yield list(SETQ, StarlarkNames.symbol(identifier.name()), list(operator, current, value));
 			}
 			case Index index -> {
 				LispVal receiver = expression(index.receiver(), scope);
@@ -759,6 +1037,10 @@ final class StarlarkLowering {
 	// ---- expressions ----
 
 	private LispVal expression(Expression expression, Scope scope) {
+		return located(lowered(expression, scope), expression.at());
+	}
+
+	private LispVal lowered(Expression expression, Scope scope) {
 		return switch (expression) {
 			case Identifier identifier -> reference(identifier, scope);
 			case IntLiteral literal -> integer(literal.value());
@@ -921,20 +1203,38 @@ final class StarlarkLowering {
 		Scope inner = scope.inner(bound.keySet());
 		boolean dict = produced.size() == 2;
 		LispSymbol accumulator = fresh("ACC");
+		// The clauses in order, each loop's target assigned for the clauses after it;
+		// the first iterable is the enclosing block's.
+		LispVal first = expression(((ForClause) clauses.get(0)).iterable(), scope);
+		Flow outer = enter(bound.keySet(), List.of());
+		// per clause: its loop and the target's assignment, or no loop and its test
+		List<@Nullable Loop> loops = new ArrayList<>();
+		List<LispVal> heads = new ArrayList<>();
+		for (int i = 0; i < clauses.size(); i++) {
+			switch (clauses.get(i)) {
+				case IfClause condition -> {
+					loops.add(null);
+					heads.add(test(condition.condition(), inner));
+				}
+				case ForClause clause -> {
+					Loop loop = new Loop(clause.target(), i == 0 ? first : expression(clause.iterable(), inner));
+					loops.add(loop);
+					heads.add(loop.assignment(inner));
+				}
+			}
+		}
 		LispVal body = dict
 				? list(SET_INDEX, accumulator, expression(produced.get(0), inner), expression(produced.get(1), inner))
 				: list(VECTOR_PUSH_EXTEND, expression(produced.get(0), inner), accumulator);
+		this.flow = outer;
 		for (int i = clauses.size() - 1; i >= 0; i--) {
-			body = switch (clauses.get(i)) {
-				case IfClause condition -> list(IF, test(condition.condition(), inner), body);
-				case ForClause loop -> new Loop(loop.target(), expression(loop.iterable(), i == 0 ? scope : inner))
-					.over(List.of(body), inner);
-			};
+			Loop loop = loops.get(i);
+			body = loop == null ? list(IF, heads.get(i), body) : loop.over(heads.get(i), List.of(body));
 		}
 		List<LispVal> bindings = new ArrayList<>();
 		bindings.add(list(accumulator, list(dict ? EMPTY_DICT : VECTOR)));
 		for (String name : bound.keySet()) {
-			bindings.add(list(StarlarkNames.symbol(name), StarlarkBuiltins.NONE));
+			bindings.add(list(StarlarkNames.symbol(name), UNBOUND));
 		}
 		return list(LET, listOf(bindings), body, dict ? accumulator : list(LIST_FROM, accumulator));
 	}
@@ -970,8 +1270,11 @@ final class StarlarkLowering {
 			Def def = scope.binds(name) ? null : this.direct.get(name);
 			if (def != null && def.parameters().size() == arguments.size()
 					&& arguments.stream().allMatch(argument -> argument.kind() == ArgumentKind.POSITIONAL)) {
-				return cons(StarlarkNames.symbol(name),
+				// the callee first: a call above the def reads the global unassigned
+				LispVal global = read(name, scope);
+				LispVal direct = cons(StarlarkNames.symbol(name),
 						listOf(arguments.stream().map(argument -> expression(argument.value(), scope)).toList()));
+				return isSimple(global) ? direct : list(PROGN, global, direct);
 			}
 		}
 		return general(expression(callee, scope), arguments, scope);

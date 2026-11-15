@@ -35,9 +35,9 @@ and every user surface says so (`--source-language` help, the title of
   membership test then answer what `if` tests, with no conversion; `None` is a constant,
   not a variable read; a list is a structure, so `NIL` is never an empty collection. A
   `bool` is told from an `int` by type (`1 == True` is false, `{1: .., True: ..}` two
-  keys). The two markers the run time uses for itself are keywords no program can spell:
-  `:%unset` (an optional built-in parameter the call did not fill) and `:%required` (a
-  parameter with no default).
+  keys). The three markers the run time uses for itself are keywords no program can spell:
+  `:%unset` (an optional built-in parameter the call did not fill), `:%required` (a
+  parameter with no default) and `:%unbound` (a variable not assigned yet, "Names").
 - **Identifier escaping: verbatim when the name has an ASCII lowercase letter, else `s%` +
   the name** (`StarlarkNames`): canonical names are upcased, so `fib` can never be a
   built-in, a lambda-list keyword or `T`; `X`, `T`, `_`, `MAX_SIZE` could. An identifier
@@ -60,7 +60,7 @@ and every user surface says so (`--source-language` help, the title of
 - **An error is a Common Lisp `error` with a Starlark message** (Go's wording where it has
   one), so uncaught it is the pipeline's `Unhandled condition: ...` on standard error and
   a non-zero exit on all four -- and nothing on a wasm module that never prints, as for any
-  program ([error-handling.md](error-handling.md)). No position yet.
+  program ([error-handling.md](error-handling.md)). Where: "Positions" below.
 
 ## The lowering table
 
@@ -71,9 +71,11 @@ and every user surface says so (`--source-language` help, the title of
 | list, tuple, dict, range, function | structures of `starlark.lisp`: a list an adjustable vector plus `frozen` and an iteration count, a tuple a simple vector, a dict an `equal` hash table from a key's normal form to `(key . value)` plus the same two |
 | `[a, b]`, `(a, b)`, `{k: v}` | `(%starlark-make-list a b)`, `-make-tuple`, `-make-dict` (a key written twice is an error) |
 | top-level `x = v` | top-level `(setq x v)`, never `defvar` (a special would leak into callees) |
-| top-level `def` standing at the top level, the only binding of its name, no `*` parameter | `(defun f (a b) ..)` AHEAD of every statement, plus at its place `(setq f (%starlark-make-function "f" '("a" "b") defaults 2 nil nil #'f))` |
+| top-level `def` standing at the top level, the only binding of its name, no `*` parameter | `(defun f (a b) ..)` AHEAD of every statement (lowered where the `def` stands), plus at its place `(setq f (%starlark-make-function "f" '("a" "b") defaults 2 nil nil #'f))` |
 | any other `def`, `lambda` | the function value over a `(lambda (params.. [args] [kwargs]) ..)` |
-| function body | `(block %SL-FN (let ((assigned-name :none) ..) ..))`; the block only when a `return` leaves from the middle, the `let` only with locals; a `return` ending the body is the body's value |
+| function body | `(block %SL-FN (let ((assigned-name :%unbound) ..) ..))`; the block only when a `return` leaves from the middle, the `let` only with locals; a `return` ending the body is the body's value |
+| a read of a name not assigned on every path to it | `(%starlark-local x "x")` / `(%starlark-global x "x")`, refusing `:%unbound`; a global so read starts as `(setq x :%unbound)` ahead of the statements |
+| function body under `--starlark-standard spec` | `(if %SL-ACTIVEn (%starlark-recursive "f")) (setq %SL-ACTIVEn t) (let ((r body)) (setq %SL-ACTIVEn nil) r)`, every `%SL-ACTIVEn` set to `nil` ahead of the statements |
 | `for` | `(let* ((seq it) (items (%starlark-iterate seq)) (count (length items)) (index 0)) (tagbody top (if (< index count) (progn assign (setq index (+ index 1)) body.. (go top)))) (%starlark-iterated seq))`; `(block %SL-BREAK ..)` around the tagbody and `(block %SL-CONTINUE ..)` around the body only when the body has that exit |
 | `return v` inside loops | `(let ((r v)) (%starlark-iterated seq-inner) .. (return-from %SL-FN r))` -- every loop of the function gives its iterable back first, so no `unwind-protect` and no EH mode on wasm |
 | comprehension | the same loops around `(vector-push-extend elt acc)` / `(%starlark-set-index acc k v)`, its variables in a `let` of its own, the first iterable evaluated outside it |
@@ -82,7 +84,7 @@ and every user surface says so (`--source-language` help, the title of
 | `a and b` as a value | `(let ((v a)) (if (%starlark-truth v) b v))`; `(if a b nil)` when `a` is a Boolean form |
 | `a[i] = v`, `a, b = v` | `(%starlark-set-index a i v)`; `(let ((u (%starlark-unpack v 2))) (setq a (aref u 0)) ..)` |
 | `x += v`, `a[i] += v` | `(setq x (%starlark-add-in-place x v))` (a list is extended in place); the target's operands bound once when they are more than a variable |
-| call of a top-level `def` with a direct entry, every parameter filled by position | `(f a b)` |
+| call of a top-level `def` with a direct entry, every parameter filled by position | `(f a b)`; `(progn (%starlark-global f "f") (f a b))` where the `def` may not have run |
 | call of a built-in function whose arguments fit its signature | `(%starlark-b-sorted xs :none t)`: bound while lowering, defaults filled in |
 | `x.m(..)` whose arguments fit | `(%starlark-m-append x v)`: the helper takes the receiver first and tests it |
 | any other call | `(%starlark-call f (list pos..) (list "name" v ..))`, `*args` and `**kwargs` appended by `%starlark-elements` / `%starlark-keywords` |
@@ -98,10 +100,44 @@ anywhere at the top level, also inside a top-level `if`/`for`), else `None`/`Tru
 else a built-in function, else `undefined: NAME` as a positioned `LispReadException` before
 anything runs. A dot's name is not resolved.
 
-Not checked yet, each the same on four backends (measured 2026-11-15): a local read before
-its assignment reads `None`; a global read before its assignment is Common Lisp's `The
-variable y is unbound`; a global may be rebound, `if`/`for` stand at the top level, and a
-function may recurse.
+**Definite assignment runs with the lowering** (`StarlarkLowering.Flow`, 2026-11-15): the
+names assigned on every path to where the lowering stands, threaded through the statements
+in source order -- an `if` joins its branches (a branch ending in `return`/`break`/
+`continue` is dead and joins as everything), a `for` body's assignments are gone after the
+loop (it may run no time), a comprehension's clauses assign their targets for the clauses
+after them. A read of a name the flow has is the bare variable; any other is the checked
+read above: `local variable x referenced before assignment`, `global variable x ...` (Go's
+texts). A function or comprehension body starts with the flow where its value is MADE,
+less its own names, plus its parameters and its own name: a variable is never unassigned
+again (Starlark has no `del`), and a direct `defun` runs only once its `def` ran, because a
+direct call above the `def` checks the global. Over the conformance corpus 7 reads of
+~9,200 variable spellings stay checked; `bench.star`, the prototype's demo and
+`examples/starlark/` have none.
+
+## Standards (`--starlark-standard`, 2026-11-15)
+
+`starlark/StarlarkStandard`, a member of `eval/SourceStandards` like `--scheme-standard`
+(program-wide, `.kb/source-language.md`; `JvmSourceCompiler.starlarkStandard`).
+`rontolisp` (default) lets a global be bound again, `if`/`for` stand at the top level and a
+function recurse -- Go's options; `spec` makes the first two errors before anything runs
+(`if statement not within a function`, `for loop not within a function`, `cannot reassign
+global x declared at FILE:L:C`, an augmented assignment counting as a binding) and the
+third a run-time one (`function f called recursively`). The default is the permissive
+one, as Scheme's is its own dialect: the bench (`fib`), the prototype's demo (a top-level
+`for`) and the docs' examples use the relaxed forms.
+
+- Measured: the conformance corpus is written for Go's DEFAULT (strict) options ("go
+  implementation doesn't allow top level reassignments" chunks comment it out), and every
+  chunk passes under `spec` as under the default, so `#conformance` reads it under `spec`
+  -- that runs the recursion check over `yin`/`yang` (recursively defined, never
+  recurring).
+- Recursion is one flag per DECLARATION (a `def` or `lambda`), as the spec words it ("a
+  function value with the same declaration"), so a fresh closure per step (the Y
+  combinator) is caught. A global, not a dynamic binding: a special's binding is a
+  protected region on every backend and forces EH mode on wasm. It is set back on every
+  normal exit and NOT on an error, like a loop's count: a Common Lisp `handler-case` that
+  keeps going finds the declaration still active. The flags are reset ahead of the
+  statements, so a later program (the corpus's next chunk) starts clean.
 
 ## The two call tiers
 
@@ -126,8 +162,9 @@ then the dict of surplus named ones.
   parameter count). Defaults and names at the call site are not resolved yet.
 - **A direct `defun` goes ahead of every statement.** A compiled program has it from the
   start and the interpreter only once evaluated, so `f(1)` written above `def f` ran on
-  three backends and failed on one; hoisted, it runs on all four (the specification makes it
-  an error).
+  three backends and failed on one; hoisted, all four have it, and a call the `def` may not
+  precede reads the global `f` through the check first (`global variable f referenced
+  before assignment`, the specification's error).
 - **Arguments are evaluated as written** though both tiers place them otherwise (a named
   argument at its parameter, `*args` before the names, the value of `a[i] = v` last):
   `inSourceOrder` binds each operand that is more than a constant or a variable to a
@@ -244,13 +281,27 @@ lowering and Lisp run time that first measured the design,
 - The same corpus as `StarlarkSpecE2eTest#conformance` (in the tree, 39 files, 430 chunks),
   the MESSAGE now matched as well: **392 of 430** before this file's run-time additions,
   **426 of 430 on each of the four backends** after (2026-11-15), every file printing the
-  same on all four; the run takes about 30 s in process. The 4 left:
-  `go/assign.star:153` (a global read before its assignment), `go/assign.star:172` and
-  `go/function.star:273` (a local one, `.todo/j48`), `go/builtins.star:64` (`sorted(1)`,
-  whose patterns are `Error in sorted`, the traceback line Go and Java print, no message).
+  same on all four; the run takes about 30 s in process. Then **429 of 430** with the
+  checked reads, read under `--starlark-standard spec`. The one left: `go/builtins.star:64`
+  (`sorted(1)`, whose patterns are `Error in sorted`, the traceback line Go and Java print,
+  no message).
 - A list, tuple or dict expression is ONE call: 1,500 integer elements compile for the
   JVM, 3,000 are `method _top$0: method code exceeds the JVM's 65535-byte limit: 97862`
   (`.kb/jvm-method-size-limits.md`); the interpreter and wasm take them.
+
+## Positions
+
+A static error is a `LispReadException` at `file:line:column` (reader, names, the `spec`
+rules). A run-time one is reported as every language's is ([error-handling.md](error-handling.md)):
+`  at FILE:LINE in FUNCTION` under the `Unhandled condition:` line, on the interpreter and
+the JVM, and on wasm under `--report-locations` -- no column, which no location line has.
+`StarlarkLowering.located` places every statement's and expression's form at its node: a
+`SourceProvenance.record` (offset from the node's line and column through the source's line
+starts) when a compile-path scope is open, else, for a named file, a `LocatedCons` copy. A
+direct `def` is a named function (`in f`); a form in any other `def` or a `lambda` belongs
+to the direct `def` it is written in, and at the top level to none. Pins:
+`UncaughtReportParityTest#aFrontEndsSourceIsLocatedTheSameWay`,
+`WasmReportLocationsTest#aFrontEndsProgramNamesTheFunctionHoldingTheForm`.
 
 ## Reader
 
@@ -317,9 +368,12 @@ off. The compiled legs expand the wrapped forms through `CompileFrontendAccess.l
 
 `StarlarkSpecE2eTest` over `starlark-spec.yaml` (the corpus on four backends, in process:
 the prototype's feature tour first, then a case per decision above; `standalone:` cases end
-with an uncaught error and must report the same text), `StarlarkLoweringTest` (the table's
-rows as emitted forms, the refusals, helper arity), `SourceLanguageTest#starlarkClaimsItsExtension`,
-`RontoLispCliStreamsTest#aStarlarkFileRunsCompilesAndIsRefusedWhereItCannot`,
+with an uncaught error and must report the same text, read against their `standard:`),
+`StarlarkLoweringTest` (the table's rows as emitted forms -- a source starting `# spec` is
+read against `spec` -- the refusals, read against `spec`, helper arity),
+`SourceLanguageTest#starlarkClaimsItsExtension`,
+`RontoLispCliStreamsTest#aStarlarkFileRunsCompilesAndIsRefusedWhereItCannot` (and
+`--starlark-standard`),
 `SchemeLibraryTest#aCommonLispProgramReadsNoFrontEndsLibrary` (the gate),
 `DocExamplesTest` (a ` ```starlark ` fence is a whole program, its output the plain block
 after it), `ExamplesE2eTest` (`examples/starlark/targets.star`).

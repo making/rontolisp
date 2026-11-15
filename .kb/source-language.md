@@ -57,7 +57,8 @@ runs what the browser runs (`PlaygroundReplTest`, and `DocExamplesTest.runScheme
   making the language a pick rather than a parameter.
 
 **How strictly a language is read is program-wide, not per file**, and travels with the
-seam: `eval/SourceStandards` (the `--scheme-standard` value, `scheme/SchemeStandard`, and
+seam: `eval/SourceStandards` (the `--scheme-standard` value, `scheme/SchemeStandard`, the
+`--starlark-standard` value, `starlark/StarlarkStandard`, and
 the directory of the user-level Clojure `deps.edn`, which only `RontoLispCli` locates from
 the environment, and the `deps.edn` aliases `-A`/`-M`/`-X` select) is handed to every read of user source -- `read(source,
 features, file, standards)`, `SourceSession(language, standards)`, `LoadInliner`,
@@ -125,8 +126,8 @@ entry language under `--no-gc`, like Scheme. `defaultExtension()` is per languag
 `.star`, or `--source-language starlark` (`star`). `read` hands the text to
 `am.ik.rontolisp.starlark.Starlark.read` -- the reader, static name resolution and the
 lowering to core forms in one step, with no `#.`, no reader features and no file it names
-(`load` is refused) -- and everything downstream is unchanged
-(`.kb/starlark-frontend.md`). `CompileFrontend.run` refuses the entry language under
+(`load` is refused), against `SourceStandards.starlark()` -- and everything downstream is
+unchanged (`.kb/starlark-frontend.md`). `CompileFrontend.run` refuses the entry language under
 `--no-gc`. It has no `SourceSession` yet: the constructor refuses it, which is what the
 REPL and the playground answer; `-e` and a file are whole programs and read through `read`.
 

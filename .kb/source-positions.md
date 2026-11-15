@@ -124,6 +124,10 @@ line 0, a mark the report skips); no message ever gets a prefix, so `handler-cas
   rewrites reach `SourceProvenance.inherit`, so they stay located; `SchemeLowering.positioned`
   records its ANSWER (the located copy) in the reader's own offset map too, which syntax
   errors are positioned from. A `syntax-rules` expansion is positioned at its USE.
+- **Starlark**: the lowering locates every statement's and expression's form at its
+  syntax node (`StarlarkLowering.located`): `SourceProvenance.record` at the offset of the
+  node's line and column when a scope is open, else a `LocatedCons` copy for a named file
+  (`.kb/starlark-frontend.md`, "Positions").
 - The function a located form reports is the one it is WRITTEN in, read off the scope it is
   evaluated in (`Environment.lexicalFunction`: set by a `LispLambda.sourced` function's call scope
   and a macro expander's, inherited by every other scope, a closure's included), never off the

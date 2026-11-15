@@ -1176,6 +1176,23 @@
                (rontolisp::%starlark-function-self f) args)
         (apply (rontolisp::%starlark-function-body f) args))))
 
+;; A read of the variable NAME holding VALUE where the lowering cannot tell it was
+;; assigned: :%unbound is what it holds until then.
+(defun rontolisp::%starlark-local (value name)
+  (if (eq value :%unbound)
+      (error "local variable ~a referenced before assignment" name)
+      value))
+
+(defun rontolisp::%starlark-global (value name)
+  (if (eq value :%unbound)
+      (error "global variable ~a referenced before assignment" name)
+      value))
+
+;; --starlark-standard spec: a call of the function NAME while a call of its declaration
+;; runs.
+(defun rontolisp::%starlark-recursive (name)
+  (error "function ~a called recursively" name))
+
 ;; `x.name` where NAME is a method of the types KINDS: the method bound to X.
 (defun rontolisp::%starlark-method
     (x kinds name params defaults positional named-from varargs kwargs body)

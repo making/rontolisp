@@ -179,7 +179,7 @@ class WasmReportLocationsTest {
 
 	@Test
 	@EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
-	void aSchemeProgramNamesTheProcedureHoldingTheForm() throws Exception {
+	void aFrontEndsProgramNamesTheFunctionHoldingTheForm() throws Exception {
 		Path program = write("app.scm", """
 				(import (scheme base) (scheme write))
 
@@ -203,6 +203,23 @@ class WasmReportLocationsTest {
 		List<String> expected = List.of("Unhandled condition: not a number", "  at " + program + ":8 in parse");
 		assertThat(interpreterReport(program)).isEqualTo(expected);
 		assertThat(wasmReport(program, "--report-locations=line")).isEqualTo(expected);
+		Path starlark = write("app.star", """
+				def parse(s):
+				    return int(s)
+
+				def run(items):
+				    return [
+				        (lambda v: parse(v) + v)(s)
+				        for s in items]
+
+				print(run([]))
+				run(["2"])
+				""");
+		List<String> located = List.of("Unhandled condition: unknown binary op: int + string",
+				"  at " + starlark + ":6 in run");
+		assertThat(interpreterReport(starlark)).isEqualTo(located);
+		assertThat(wasmReport(starlark, "--report-locations=line")).isEqualTo(located);
+		assertThat(wasmReport(starlark, "--report-locations=line", "--component")).isEqualTo(located);
 	}
 
 	@Test

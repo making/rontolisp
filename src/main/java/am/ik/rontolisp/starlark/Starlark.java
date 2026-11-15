@@ -28,12 +28,14 @@ public final class Starlark {
 	 * Reads a Starlark file and lowers it to Common Lisp core forms.
 	 * @param source the file's text
 	 * @param file the origin file for diagnostics, or {@code null} when unknown
+	 * @param standard what the file is read against ({@code --starlark-standard})
 	 * @return the top-level forms
-	 * @throws LispReadException on a lexical or syntax error, a name nothing binds, or a
-	 * construct the front end does not have yet, each with its position
+	 * @throws LispReadException on a lexical or syntax error, a name nothing binds, a
+	 * construct the front end does not have yet, or one the standard refuses, each with
+	 * its position
 	 */
-	public static List<LispVal> read(String source, @Nullable String file) {
-		return StarlarkLowering.lower(StarlarkParser.parse(source, file));
+	public static List<LispVal> read(String source, @Nullable String file, StarlarkStandard standard) {
+		return StarlarkLowering.lower(StarlarkParser.parse(source, file), standard, source, file);
 	}
 
 	/**
