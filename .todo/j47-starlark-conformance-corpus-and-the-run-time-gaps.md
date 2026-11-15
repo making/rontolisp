@@ -13,6 +13,8 @@ backends (`.todo/artefacts/j45-starlark-front-end-prototype/`, `README.md`). Mak
   backend. Expected errors are matched by MESSAGE (the corpus's `###` patterns, the `java:`
   / `go:` / `rust:` variants any one of which may match); the prototype only checked that an
   error occurred.
+- With the corpus in the tree, parse every chunk in a test: the reader was compared with
+  Python's `ast` over it only once (`.kb/starlark-frontend.md`, "Reader").
 - The 26 failing chunks, by cause:
   - missing: `splitlines`, `title`, `islower`, `isupper`, `istitle`, `dir`, also
     `getattr`, `hasattr`, `codepoints`, `elem_ords`, `removeprefix`/`removesuffix`,

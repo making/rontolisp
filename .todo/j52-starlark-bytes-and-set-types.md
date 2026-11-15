@@ -8,7 +8,7 @@ After `.todo/j46`. Both are in the spec ("Bytes literals", "Bytes", "Sets", `byt
 
 ## bytes
 
-- An immutable array of ints 0-255, type `"bytes"`. The reader (`.todo/j45`) already lexes
+- An immutable array of ints 0-255, type `"bytes"`. The reader (`StarlarkParser`, `.kb/starlark-frontend.md`) already lexes
   `b"..."`, `br`/`rb` and their escapes; this item gives the literal a value: non-escaped
   text is its UTF-8 encoding, `\x`/octal escapes are any byte, `\u` is the code point's
   UTF-8.

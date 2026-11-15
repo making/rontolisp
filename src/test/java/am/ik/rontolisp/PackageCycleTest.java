@@ -90,6 +90,10 @@ class PackageCycleTest {
 		assertThat(graph.getOrDefault("am.ik.rontolisp.clojure", Set.of())).containsOnly("am.ik.rontolisp",
 				"am.ik.rontolisp.reader");
 		assertThat(graph.getOrDefault("am.ik.rontolisp.eval", Set.of())).contains("am.ik.rontolisp.clojure");
+		// The Starlark reader too: the AST types and the reader's exception, nothing
+		// else.
+		assertThat(graph.getOrDefault("am.ik.rontolisp.starlark", Set.of())).containsOnly("am.ik.rontolisp",
+				"am.ik.rontolisp.reader");
 	}
 
 	/**

@@ -72,6 +72,7 @@ compiler -> macro, runtime, rontolisp (AST types only), am.ik.wit
 eval -> macro, compiler, reader, scheme, clojure, runtime, rontolisp (AST types only), am.ik.gpu, am.ik.objc, am.ik.artifact, am.ik.maven
 scheme -> reader, rontolisp (AST types only)
 clojure -> reader, rontolisp (AST types only)
+starlark -> reader, rontolisp (AST types only)
 macro -> reader, rontolisp (AST types only)
 reader -> rontolisp (AST types only)
 format -> (nothing)

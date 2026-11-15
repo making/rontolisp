@@ -2,7 +2,7 @@
 
 Difficulty: High
 
-After `.todo/j45` (the reader). Port the prototype's lowering (`.todo/artefacts/j45-starlark-front-end-prototype/`, `sl2lisp.py`, table in
+After the reader (`StarlarkParser`, `.kb/starlark-frontend.md`). Port the prototype's lowering (`.todo/artefacts/j45-starlark-front-end-prototype/`, `sl2lisp.py`, table in
 its `README.md`) to Java and register the language, so `prog.star` runs on the four
 backends. Status EXPERIMENTAL, said on every user surface, as for Scheme and Clojure.
 
@@ -21,7 +21,7 @@ backends. Status EXPERIMENTAL, said on every user surface, as for Scheme and Clo
 - Every accessor behind a type check. The prototype found `(1, 2).append(3)` reaching a
   struct accessor of the wrong struct: an error with two different messages on the
   interpreter and the JVM, an uncatchable trap on WASM.
-- Decide and write down in a new `.kb` file: the representation of `None`/`False` (the
+- Decide and write down in `.kb/starlark-frontend.md` (the reader section is there): the representation of `None`/`False` (the
   prototype used `:none` and `NIL`), identifier escaping, the string model (the spec leaves
   bytes vs UTF-16 units to the implementation), where `print` writes.
 - User documentation in both `doc` trees in the same commit (`.kb/documentation-site.md`),

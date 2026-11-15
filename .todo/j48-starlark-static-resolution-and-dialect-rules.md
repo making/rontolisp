@@ -16,7 +16,7 @@ The spec makes these static or defined errors:
 - Evaluation order: `a[i] = rhs` evaluates `rhs` first (1 chunk fails); keyword and
   default arguments left to right.
 - Every error names file, line and column -- static errors from the reader's positions
-  (`.todo/j45`), dynamic ones as far as the pipeline already carries a position.
+  (`StarlarkParser`, `.kb/starlark-frontend.md`), dynamic ones as far as the pipeline already carries a position.
 
 Test through the conformance corpus (`.todo/j47`) where it has the case; extend an existing
 case otherwise.
