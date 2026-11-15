@@ -2,7 +2,7 @@
 
 Difficulty: High
 
-After `.todo/j47`, so the corpus guards it. The lowering makes every operator a generic call
+The conformance corpus (`StarlarkSpecE2eTest#conformance`) guards it. The lowering makes every operator a generic call
 and materializes `range`. Measured 2026-11-15 (`.kb/starlark-frontend.md`, "Measured";
 `bench.star` of `.todo/artefacts/j45-starlark-front-end-prototype/`: `fib(27)` plus a
 10^6-iteration loop): JVM 0.29-0.36 s, WASM 0.28-0.37 s / 0.28-0.33 s, Java Starlark

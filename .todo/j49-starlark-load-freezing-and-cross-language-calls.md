@@ -24,5 +24,5 @@ Not covered by the lowering of `.kb/starlark-frontend.md`, nor by the prototype 
   and a Common Lisp value's type is `"unknown"`. Host-predeclared names (what Bazel's `struct` or `json`
   are to Starlark) go through the same door.
 
-Verified on the four backends; a case per behavior in the corpus driver of `.todo/j47` or
+Verified on the four backends; a case per behavior in `StarlarkSpecE2eTest#conformance` or
 `ci-spec.yaml`.

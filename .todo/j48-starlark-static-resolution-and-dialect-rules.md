@@ -24,5 +24,5 @@ arguments are evaluated as written. What it does not check, and the spec makes a
   `SourceProvenance.record` wants an offset, the interpreter a `LocatedCons`
   (`.kb/source-positions.md`), and a `StarlarkSyntax` node has line and column.
 
-Test through the conformance corpus (`.todo/j47`) where it has the case; extend an existing
+Test through the conformance corpus (`StarlarkSpecE2eTest#conformance`, whose `KNOWN_FAILURES` names this item's three chunks) where it has the case; extend an existing
 `starlark-spec.yaml` case otherwise.

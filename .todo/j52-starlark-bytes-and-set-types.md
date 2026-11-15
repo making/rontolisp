@@ -45,5 +45,5 @@ helper in `starlark.lisp`, which tests its receiver before anything else.
 
 ## Test
 
-The conformance corpus (`.todo/j47`) barely covers either type, so add cases to that
+The conformance corpus (`StarlarkSpecE2eTest#conformance`) barely covers either type, so add cases to that
 driver from the spec's own examples, on the four backends.
