@@ -36,4 +36,14 @@ public final class Starlark {
 		return StarlarkLowering.lower(StarlarkParser.parse(source, file));
 	}
 
+	/**
+	 * The run-time library's definitions generated from this package's tables -- the
+	 * attributes of each type, the code points a string's {@code repr} escapes -- which
+	 * {@code eval/StarlarkLibrary} appends to {@code starlark.lisp}.
+	 * @return the forms, in the library's canonical shape
+	 */
+	public static List<LispVal> runtimeForms() {
+		return StarlarkLowering.runtimeForms();
+	}
+
 }

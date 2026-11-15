@@ -54,6 +54,17 @@
   stop
   step)
 
+;; What s.elems(), s.elem_ords(), s.codepoints() and s.codepoint_ords() answer: an
+;; iterable over the elements of STRING, as one-element strings or, when ORDS, as their
+;; codes. An element is a code point in this string model, so the four differ only in
+;; NAME, the method that made the value, which its type and `repr` show.
+(defstruct (rontolisp::%starlark-string-iterable (:%intern-package "RONTOLISP")
+            (:constructor rontolisp::%starlark-new-string-iterable
+                          (string name ords)) (:copier nil))
+  string
+  name
+  ords)
+
 ;; A function value: a `def` or `lambda` (KIND nil), a built-in function (:builtin) or
 ;; a method bound to its receiver SELF (:method). PARAMS names the parameters BODY
 ;; takes in order, the first POSITIONAL of them fillable by position and those from
@@ -122,6 +133,12 @@
         ((rontolisp::%starlark-tuple-p x) "tuple")
         ((rontolisp::%starlark-dict-p x) "dict")
         ((rontolisp::%starlark-range-p x) "range")
+        ((rontolisp::%starlark-string-iterable-p x)
+         (if (or (string= (rontolisp::%starlark-string-iterable-name x) "elems")
+                 (string= (rontolisp::%starlark-string-iterable-name x)
+                          "elem_ords"))
+             "string.elems"
+             "string.codepoints"))
         ((rontolisp::%starlark-function-p x)
          (if (rontolisp::%starlark-function-kind x)
              "builtin_function_or_method"
@@ -181,10 +198,22 @@
 
 (defun rontolisp::%starlark-iterable-p (x)
   (or (rontolisp::%starlark-list-p x) (rontolisp::%starlark-tuple-p x)
-      (rontolisp::%starlark-dict-p x) (rontolisp::%starlark-range-p x)))
+      (rontolisp::%starlark-dict-p x) (rontolisp::%starlark-range-p x)
+      (rontolisp::%starlark-string-iterable-p x)))
 
-;; The elements of an iterable as a fresh Common Lisp list.
-(defun rontolisp::%starlark-elements (x)
+;; X is a string iterable. Its elements as a fresh simple vector.
+(defun rontolisp::%starlark-string-iterable-vector (x)
+  (let* ((s (rontolisp::%starlark-string-iterable-string x))
+         (ords (rontolisp::%starlark-string-iterable-ords x))
+         (n (length s))
+         (v (make-array n)))
+    (dotimes (i n)
+      (setf (aref v i) (if ords (char-code (char s i)) (subseq s i (+ i 1)))))
+    v))
+
+;; The elements of X, an iterable, as a fresh Common Lisp list; MESSAGE is the error
+;; when X is no iterable, a format string over its type.
+(defun rontolisp::%starlark-elements-or (x message)
   (cond ((rontolisp::%starlark-list-p x)
          (coerce (rontolisp::%starlark-list-items x) 'list))
         ((rontolisp::%starlark-tuple-p x)
@@ -192,7 +221,18 @@
         ((rontolisp::%starlark-dict-p x) (rontolisp::%starlark-dict-key-list x))
         ((rontolisp::%starlark-range-p x)
          (coerce (rontolisp::%starlark-range-vector x) 'list))
-        (t (error "type '~a' is not iterable" (rontolisp::%starlark-type x)))))
+        ((rontolisp::%starlark-string-iterable-p x)
+         (coerce (rontolisp::%starlark-string-iterable-vector x) 'list))
+        (t (error message (rontolisp::%starlark-type x)))))
+
+;; The elements of an iterable as a fresh Common Lisp list.
+(defun rontolisp::%starlark-elements (x)
+  (rontolisp::%starlark-elements-or x "got ~a, want iterable"))
+
+;; The elements of the iterable of a `*` argument.
+(defun rontolisp::%starlark-star-elements (x)
+  (rontolisp::%starlark-elements-or x
+   "argument after * must be iterable, not ~a"))
 
 ;; A fresh simple vector of the elements of vector V.
 (defun rontolisp::%starlark-copy-vector (v)
@@ -214,7 +254,9 @@
                (+ (rontolisp::%starlark-dict-iterating x) 1))
          (coerce (rontolisp::%starlark-dict-key-list x) 'vector))
         ((rontolisp::%starlark-range-p x) (rontolisp::%starlark-range-vector x))
-        (t (error "type '~a' is not iterable" (rontolisp::%starlark-type x)))))
+        ((rontolisp::%starlark-string-iterable-p x)
+         (rontolisp::%starlark-string-iterable-vector x))
+        (t (error "~a value is not iterable" (rontolisp::%starlark-type x)))))
 
 ;; Ends the loop %starlark-iterate started over X.
 (defun rontolisp::%starlark-iterated (x)
@@ -234,7 +276,8 @@
                ((rontolisp::%starlark-list-p x)
                 (rontolisp::%starlark-copy-vector
                  (rontolisp::%starlark-list-items x)))
-               (t (coerce (rontolisp::%starlark-elements x) 'vector)))))
+               (t (coerce (rontolisp::%starlark-elements-or x
+                           "got ~a in sequence assignment") 'vector)))))
     (cond ((< (length v) n)
            (error "too few values to unpack (got ~a, want ~a)" (length v) n))
           ((> (length v) n)
@@ -309,8 +352,33 @@
                 (eq (rontolisp::%starlark-function-self a)
                     (rontolisp::%starlark-function-self b))))))
 
+;; X is a number: 0 for an int or a finite float, 1 for +inf, -1 for -inf, 2 for NaN --
+;; the order of the classes, NaN above everything.
+(defun rontolisp::%starlark-number-class (x)
+  (cond ((integerp x) 0)
+        ((/= x x) 2)
+        ((> x 1.7976931348623157d308) 1)
+        ((< x -1.7976931348623157d308) -1)
+        (t 0)))
+
+;; A and B are numbers: -1, 0 or 1. An int and a float compare as the values they are,
+;; exactly; NaN is greater than every other float and equal to itself.
+(defun rontolisp::%starlark-number-compare (a b)
+  (let ((ca (rontolisp::%starlark-number-class a))
+        (cb (rontolisp::%starlark-number-class b)))
+    (if (or (/= ca 0) (/= cb 0))
+        (cond ((< ca cb) -1) ((> ca cb) 1) (t 0))
+        (let ((x (if (and (floatp a) (integerp b)) (rational a) a))
+              (y (if (and (floatp b) (integerp a)) (rational b) b)))
+          (cond ((< x y) -1) ((> x y) 1) (t 0))))))
+
 (defun rontolisp::%starlark-equal (a b)
-  (cond ((numberp a) (and (numberp b) (= a b)))
+  (cond ((integerp a)
+         (cond ((integerp b) (= a b))
+               ((floatp b) (= (rontolisp::%starlark-number-compare a b) 0))
+               (t nil)))
+        ((floatp a)
+         (and (numberp b) (= (rontolisp::%starlark-number-compare a b) 0)))
         ((stringp a) (and (stringp b) (string= a b)))
         ((rontolisp::%starlark-list-p a)
          (and (rontolisp::%starlark-list-p b)
@@ -345,22 +413,20 @@
       (setq i (+ i 1)))))
 
 (defun rontolisp::%starlark-compare (a b)
-  (cond ((and (numberp a) (numberp b)) (cond ((< a b) -1) ((> a b) 1) (t 0)))
-        ((and (stringp a) (stringp b))
-         (cond ((string< a b) -1) ((string> a b) 1) (t 0)))
-        ((and (or (eq a t) (null a)) (or (eq b t) (null b)))
-         (cond ((eq a b) 0) ((null a) -1) (t 1)))
-        ((and (rontolisp::%starlark-list-p a) (rontolisp::%starlark-list-p b))
-         (rontolisp::%starlark-vector-compare
-          (rontolisp::%starlark-list-items a)
-          (rontolisp::%starlark-list-items b)))
-        ((and (rontolisp::%starlark-tuple-p a) (rontolisp::%starlark-tuple-p b))
-         (rontolisp::%starlark-vector-compare
-          (rontolisp::%starlark-tuple-items a)
-          (rontolisp::%starlark-tuple-items b)))
-        (t
-         (error "unsupported comparison: ~a <=> ~a"
-                (rontolisp::%starlark-type a) (rontolisp::%starlark-type b)))))
+  (cond ((and (integerp a) (integerp b)) (cond ((< a b) -1) ((> a b) 1) (t 0)))
+   ((and (numberp a) (numberp b)) (rontolisp::%starlark-number-compare a b))
+   ((and (stringp a) (stringp b))
+    (cond ((string< a b) -1) ((string> a b) 1) (t 0)))
+   ((and (or (eq a t) (null a)) (or (eq b t) (null b)))
+    (cond ((eq a b) 0) ((null a) -1) (t 1)))
+   ((and (rontolisp::%starlark-list-p a) (rontolisp::%starlark-list-p b))
+    (rontolisp::%starlark-vector-compare (rontolisp::%starlark-list-items a)
+                                         (rontolisp::%starlark-list-items b)))
+   ((and (rontolisp::%starlark-tuple-p a) (rontolisp::%starlark-tuple-p b))
+    (rontolisp::%starlark-vector-compare (rontolisp::%starlark-tuple-items a)
+                                         (rontolisp::%starlark-tuple-items b)))
+   (t (error "unsupported comparison: ~a <=> ~a" (rontolisp::%starlark-type a)
+             (rontolisp::%starlark-type b)))))
 
 (defun rontolisp::%starlark-less (a b) (< (rontolisp::%starlark-compare a b) 0))
 
@@ -376,15 +442,22 @@
 ;; --- dict -------------------------------------------------------------------------
 
 ;; The normal form a key is stored under, so that equal keys meet in an `equal` table:
-;; 1 and 1.0 are one key, True and 1 are two, a tuple is the list of its elements'
-;; normal forms.
+;; 1 and 1.0 are one key, True and 1 are two, every NaN is one key, a tuple is the list
+;; of its elements' normal forms. A `def` or `lambda` is itself, by identity; a
+;; built-in is its name and receiver, as two of them are equal.
 (defun rontolisp::%starlark-key (k)
   (cond ((stringp k) k)
         ((integerp k) k)
         ((floatp k)
-         (if (and (<= k 1.7976931348623157d308) (>= k -1.7976931348623157d308)
-                  (= k (float (round k) 1d0)))
-             (values (round k))
+         (cond ((/= k k) :nan)
+               ((and (<= k 1.7976931348623157d308)
+                     (>= k -1.7976931348623157d308) (= k (float (round k) 1d0)))
+                (values (round k)))
+               (t k)))
+        ((rontolisp::%starlark-function-p k)
+         (if (rontolisp::%starlark-function-kind k)
+             (list :builtin (rontolisp::%starlark-function-name k)
+                   (rontolisp::%starlark-function-self k))
              k))
         ((eq k t) :true)
         ((null k) :false)
@@ -465,25 +538,191 @@
 
 ;; --- printing ---------------------------------------------------------------------
 
-;; X is a string.
+;; Whether the character of CODE prints as itself in a string's `repr`: not a control,
+;; format, private-use or separator character other than the space (Go's
+;; strconv.IsPrint, the unassigned code points aside). The ranges past U+00A0 are
+;; %starlark-unprintable-ranges, generated from the JDK's tables (Starlark.java).
+(defun rontolisp::%starlark-printable-p (code)
+  (cond ((< code 127) (>= code 32))
+        ((< code 160) nil)
+        (t (let ((ranges (rontolisp::%starlark-unprintable-ranges)) (found nil))
+             (loop
+               (if (or found (null ranges) (< code (car ranges))) (return nil))
+               (if (<= code (cadr ranges)) (setq found t))
+               (setq ranges (cddr ranges)))
+             (not found)))))
+
+;; Writes the hexadecimal digits of N, at least WIDTH of them.
+(defun rontolisp::%starlark-write-hex (n width s)
+  (let ((text (format nil "~(~x~)" n)))
+    (dotimes (i (- width (length text))) (write-char #\0 s))
+    (write-string text s)))
+
+;; X is a string: the literal that denotes it, as Go's syntax.Quote writes one.
 (defun rontolisp::%starlark-write-string (x s)
   (write-char #\" s)
   (dotimes (i (length x))
-    (let ((c (char x i)))
+    (let* ((c (char x i)) (code (char-code c)))
       (cond ((char= c #\") (write-string "\\\"" s))
-            ((char= c #\\) (write-string "\\\\" s))
-            ((char= c #\Newline) (write-string "\\n" s))
-            ((char= c #\Tab) (write-string "\\t" s))
-            ((char= c #\Return) (write-string "\\r" s))
-            (t (write-char c s)))))
+       ((char= c #\\) (write-string "\\\\" s))
+       ((rontolisp::%starlark-printable-p code) (write-char c s))
+       ((= code 7) (write-string "\\a" s))
+       ((= code 8) (write-string "\\b" s))
+       ((= code 12) (write-string "\\f" s))
+       ((= code 10) (write-string "\\n" s))
+       ((= code 13) (write-string "\\r" s))
+       ((= code 9) (write-string "\\t" s))
+       ((= code 11) (write-string "\\v" s))
+       ((or (< code 32) (= code 127))
+        (write-string "\\x" s)
+        (rontolisp::%starlark-write-hex code 2 s))
+       ((< code 65536)
+        (write-string "\\u" s)
+        (rontolisp::%starlark-write-hex code 4 s))
+       (t
+        (write-string "\\U" s)
+        (rontolisp::%starlark-write-hex code 8 s)))))
   (write-char #\" s))
 
-;; X is a float.
+;; X is a finite float other than zero: the shortest decimal digits that read back as
+;; |X|, as a string with no leading or trailing zero, and as the second value DP, the
+;; place of the decimal point: |X| is 0.DIGITS times ten to the power DP. They are
+;; read off the printer's text, the one shortest-digit selection of every backend.
+(defun rontolisp::%starlark-float-digits (x)
+  (let* ((text (prin1-to-string (abs x)))
+         (n (length text))
+         (mark (position-if (lambda (c) (or (char= c #\e) (char= c #\d))) text))
+         (end (if mark mark n))
+         (exponent (if mark (parse-integer text :start (+ mark 1)) 0))
+         (point end)
+         (count 0)
+         (acc nil))
+    (dotimes (i end)
+      (let ((c (char text i)))
+        (if (char= c #\.)
+            (setq point count)
+            (progn
+              (push c acc)
+              (setq count (+ count 1))))))
+    (if (= point end) (setq point count))
+    (let ((digits (coerce (nreverse acc) 'string)) (dp (+ point exponent)))
+      (loop while (and (> (length digits) 1) (char= (char digits 0) #\0))
+            do (setq digits (subseq digits 1)) (setq dp (- dp 1)))
+      (let ((last (length digits)))
+        (loop while (and (> last 1) (char= (char digits (- last 1)) #\0))
+              do (setq last (- last 1)))
+        (values (subseq digits 0 last) dp)))))
+
+;; The exponent of an %e or %g text: its sign and at least two digits.
+(defun rontolisp::%starlark-exponent-string (e marker)
+  (format nil "~a~a~a~a" marker (if (< e 0) "-" "+") (if (< (abs e) 10) "0" "")
+          (abs e)))
+
+;; A non-negative integer Q as the text of Q / 10^PLACES with PLACES decimals.
+(defun rontolisp::%starlark-scaled-string (q places)
+  (let* ((text (format nil "~d" q))
+         (padded
+          (if (<= (length text) places)
+              (concatenate 'string
+               (make-string (- (+ places 1) (length text)) :initial-element #\0)
+               text)
+              text))
+         (cut (- (length padded) places)))
+    (concatenate 'string (subseq padded 0 cut) "." (subseq padded cut))))
+
+;; NUM / DEN rounded to the nearest integer, a tie to the even one.
+(defun rontolisp::%starlark-round-ratio (num den)
+  (multiple-value-bind (q r) (floor num den)
+    (let ((twice (* 2 r)))
+      (if (or (> twice den) (and (= twice den) (oddp q))) (+ q 1) q))))
+
+;; X is a finite float: |X| as the exact ratio NUM / DEN of two integers.
+(defun rontolisp::%starlark-float-ratio (x)
+  (multiple-value-bind (m e) (integer-decode-float (abs x))
+    (if (>= e 0) (values (* m (expt 2 e)) 1) (values m (expt 2 (- e))))))
+
+;; X is a finite float: |X| in %f form with 6 decimals, correctly rounded.
+(defun rontolisp::%starlark-fixed-string (x)
+  (multiple-value-bind (num den) (rontolisp::%starlark-float-ratio x)
+    (rontolisp::%starlark-scaled-string
+     (rontolisp::%starlark-round-ratio (* num 1000000) den) 6)))
+
+;; X is a finite float: |X| in %e form with 6 decimals, correctly rounded; MARKER is
+;; "e" or "E".
+(defun rontolisp::%starlark-exponential-string (x marker)
+  (if (= x 0)
+      (concatenate 'string "0.000000"
+                   (rontolisp::%starlark-exponent-string 0 marker))
+      (multiple-value-bind (num den) (rontolisp::%starlark-float-ratio x)
+        (multiple-value-bind (digits dp) (rontolisp::%starlark-float-digits x)
+          (declare (ignore digits))
+          ;; E is the decade of |X|: 10^E <= |X| < 10^(E+1). The shortest digits
+          ;; give it, or one more when they rounded up to a power of ten.
+          (let ((e (- dp 1)) (q 0))
+            (if (< (* num (if (< e 0) (expt 10 (- e)) 1))
+                   (* den (if (> e 0) (expt 10 e) 1)))
+                (setq e (- e 1)))
+            ;; Q is |X| / 10^(E-6), rounded: seven digits, or 10^7 when the rounding
+            ;; carried into the next decade.
+            (setq q
+                  (rontolisp::%starlark-round-ratio
+                   (* num (if (< (- e 6) 0) (expt 10 (- 6 e)) 1))
+                   (* den (if (> (- e 6) 0) (expt 10 (- e 6)) 1))))
+            (if (>= q 10000000)
+                (progn
+                  (setq e (+ e 1))
+                  (setq q
+                        (rontolisp::%starlark-round-ratio
+                         (* num (if (< (- e 6) 0) (expt 10 (- 6 e)) 1))
+                         (* den (if (> (- e 6) 0) (expt 10 (- e 6)) 1))))))
+            (concatenate 'string (rontolisp::%starlark-scaled-string q 6)
+                         (rontolisp::%starlark-exponent-string e marker)))))))
+
+;; X is a finite float: |X| in the shortest form that reads back as X, as Go's
+;; strconv.FormatFloat 'g' with precision -1 writes it: an exponent below 1e-4 and from
+;; 1e+06 on; MARKER is "e" or "E".
+(defun rontolisp::%starlark-shortest-string (x marker)
+  (if (= x 0)
+      "0"
+      (multiple-value-bind (digits dp) (rontolisp::%starlark-float-digits x)
+        (let ((nd (length digits)) (e (- dp 1)))
+          (cond ((or (< e -4) (>= e 6))
+                 (concatenate 'string (subseq digits 0 1) (if (> nd 1) "." "")
+                              (subseq digits 1)
+                              (rontolisp::%starlark-exponent-string e marker)))
+                ((<= dp 0)
+                 (concatenate 'string "0."
+                              (make-string (- dp) :initial-element #\0) digits))
+                ((>= dp nd)
+                 (concatenate 'string digits
+                              (make-string (- dp nd) :initial-element #\0)))
+                (t (concatenate 'string (subseq digits 0 dp) "."
+                                (subseq digits dp))))))))
+
+;; X is a float, CONV one of the `%` conversions e, E, f, F, g and G: the text Go's
+;; Starlark writes. `str` and `repr` are %g, which always shows a point or an exponent.
+(defun rontolisp::%starlark-format-float (x conv)
+  (cond ((/= x x) "nan")
+        ((> x 1.7976931348623157d308) "+inf")
+        ((< x -1.7976931348623157d308) "-inf")
+        (t
+         (let* ((upper (or (char= conv #\E) (char= conv #\G)))
+                (marker (if upper "E" "e"))
+                (text
+                 (cond ((or (char= conv #\f) (char= conv #\F))
+                        (rontolisp::%starlark-fixed-string x))
+                       ((or (char= conv #\e) (char= conv #\E))
+                        (rontolisp::%starlark-exponential-string x marker))
+                       (t
+                        (let ((g
+                               (rontolisp::%starlark-shortest-string x marker)))
+                          (if (or (search marker g) (find #\. g))
+                              g
+                              (concatenate 'string g ".0")))))))
+           (if (minusp (float-sign x)) (concatenate 'string "-" text) text)))))
+
 (defun rontolisp::%starlark-float-string (x)
-  (if (and (< x 1d17) (> x -1d17) (= x (float (round x) 1d0)))
-      (format nil "~a.0" (round x))
-      (let* ((text (format nil "~a" x)) (d (position #\d text)))
-        (if d (subseq text 0 d) text))))
+  (rontolisp::%starlark-format-float x #\g))
 
 ;; V is a vector.
 (defun rontolisp::%starlark-write-vector (v s open close)
@@ -529,6 +768,10 @@
              (format s "range(~d, ~d, ~d)" (rontolisp::%starlark-range-start x)
                      (rontolisp::%starlark-range-stop x)
                      (rontolisp::%starlark-range-step x))))
+        ((rontolisp::%starlark-string-iterable-p x)
+         (rontolisp::%starlark-write-string
+          (rontolisp::%starlark-string-iterable-string x) s)
+         (format s ".~a()" (rontolisp::%starlark-string-iterable-name x)))
         ((rontolisp::%starlark-function-p x)
          (let ((kind (rontolisp::%starlark-function-kind x))
                (name (rontolisp::%starlark-function-name x)))
@@ -571,7 +814,9 @@
 
 (defun rontolisp::%starlark-add (a b)
   (cond ((and (integerp a) (integerp b)) (+ a b))
-        ((and (numberp a) (numberp b)) (+ (float a 1d0) (float b 1d0)))
+        ((and (numberp a) (numberp b))
+         (+ (rontolisp::%starlark-to-float a)
+            (rontolisp::%starlark-to-float b)))
         ((and (stringp a) (stringp b)) (concatenate 'string a b))
         ((and (rontolisp::%starlark-list-p a) (rontolisp::%starlark-list-p b))
          (rontolisp::%starlark-list-of
@@ -595,12 +840,15 @@
 
 (defun rontolisp::%starlark-sub (a b)
   (cond ((and (integerp a) (integerp b)) (- a b))
-        ((and (numberp a) (numberp b)) (- (float a 1d0) (float b 1d0)))
+        ((and (numberp a) (numberp b))
+         (- (rontolisp::%starlark-to-float a)
+            (rontolisp::%starlark-to-float b)))
         (t (rontolisp::%starlark-binary-error "-" a b))))
 
 (defun rontolisp::%starlark-mul (a b)
   (cond ((and (integerp a) (integerp b)) (* a b))
-   ((and (numberp a) (numberp b)) (* (float a 1d0) (float b 1d0)))
+   ((and (numberp a) (numberp b))
+    (* (rontolisp::%starlark-to-float a) (rontolisp::%starlark-to-float b)))
    ((and (stringp a) (integerp b)) (rontolisp::%starlark-repeat-string a b))
    ((and (integerp a) (stringp b)) (rontolisp::%starlark-repeat-string b a))
    ((and (rontolisp::%starlark-list-p a) (integerp b))
@@ -621,7 +869,8 @@
   (if (and (numberp a) (numberp b))
       (if (= b 0)
           (error "floating-point division by zero")
-          (/ (float a 1d0) (float b 1d0)))
+          (/ (rontolisp::%starlark-to-float a)
+             (rontolisp::%starlark-to-float b)))
       (rontolisp::%starlark-binary-error "/" a b)))
 
 (defun rontolisp::%starlark-floordiv (a b)
@@ -630,7 +879,8 @@
         ((and (numberp a) (numberp b))
          (if (= b 0)
              (error "floored division by zero")
-             (float (floor (float a 1d0) (float b 1d0)) 1d0)))
+             (float (floor (rontolisp::%starlark-to-float a)
+                           (rontolisp::%starlark-to-float b)) 1d0)))
         (t (rontolisp::%starlark-binary-error "//" a b))))
 
 (defun rontolisp::%starlark-mod (a b)
@@ -639,7 +889,8 @@
         ((and (numberp a) (numberp b))
          (if (= b 0)
              (error "floating-point modulo by zero")
-             (mod (float a 1d0) (float b 1d0))))
+             (mod (rontolisp::%starlark-to-float a)
+                  (rontolisp::%starlark-to-float b))))
         ((stringp a)
          (rontolisp::%starlark-interpolate a
                                            (if (rontolisp::%starlark-tuple-p b)
@@ -895,14 +1146,22 @@
                        (rontolisp::%starlark-function-title f) (car kw)))
                (t (rontolisp::%starlark-dict-store kwargs (car kw) (cadr kw)))))
             (setq kw (cddr kw)))
-    (let ((defaults (rontolisp::%starlark-function-defaults f)))
+    (let ((defaults (rontolisp::%starlark-function-defaults f)) (missing nil))
       (dotimes (j n)
         (if (eq (aref vals j) :%unset)
             (if (or (null defaults) (eq (car defaults) :%required))
-                (error "~a missing argument for ~a"
-                       (rontolisp::%starlark-function-title f) (nth j params))
+                (push (nth j params) missing)
                 (setf (aref vals j) (car defaults))))
-        (setq defaults (cdr defaults))))
+        (setq defaults (cdr defaults)))
+      (setq missing (nreverse missing))
+      (cond ((null missing))
+            ((rontolisp::%starlark-function-kind f)
+             (error "~a: missing argument for ~a"
+                    (rontolisp::%starlark-function-name f) (car missing)))
+            (t (error "function ~a missing ~a argument~a (~a)"
+                      (rontolisp::%starlark-function-name f) (length missing)
+                      (if (cdr missing) "s" "")
+                      (rontolisp::%starlark-join-strings missing ", ")))))
     (append (coerce vals 'list)
             (if (rontolisp::%starlark-function-varargs f)
                 (list (rontolisp::%starlark-tuple-of (nreverse extra)))
@@ -962,6 +1221,35 @@
           (rontolisp::%starlark-separator sep "fail"))))
 
 (defun rontolisp::%starlark-b-type (x) (rontolisp::%starlark-type x))
+
+;; The attributes of X are the methods of its type: %starlark-attribute-names and
+;; %starlark-attribute are generated from the front end's table of them (Starlark.java).
+(defun rontolisp::%starlark-b-dir (x)
+  (rontolisp::%starlark-list-of
+   (copy-list
+    (rontolisp::%starlark-attribute-names (rontolisp::%starlark-type x)))))
+
+;; Whether X has the attribute NAME, which WHO's call names.
+(defun rontolisp::%starlark-has-attribute (x name who)
+  (if (not (stringp name))
+      (error "~a: for parameter name: got ~a, want string" who
+             (rontolisp::%starlark-type name)))
+  (if (member name
+       (rontolisp::%starlark-attribute-names (rontolisp::%starlark-type x))
+       :test #'string=)
+      t
+      nil))
+
+(defun rontolisp::%starlark-b-hasattr (x name)
+  (rontolisp::%starlark-has-attribute x name "hasattr"))
+
+(defun rontolisp::%starlark-b-getattr (x name default)
+  (cond ((rontolisp::%starlark-has-attribute x name "getattr")
+         (rontolisp::%starlark-attribute x name))
+        ((eq default :%unset)
+         (error "getattr: ~a has no .~a field or method"
+                (rontolisp::%starlark-type x) name))
+        (t default)))
 
 (defun rontolisp::%starlark-b-bool (x) (rontolisp::%starlark-truth x))
 
@@ -1034,7 +1322,9 @@
   (cond
    ((stringp x)
     (cond ((eq base :%unset) (rontolisp::%starlark-parse-int x 10))
-          ((not (integerp base)) (error "int: base must be int"))
+          ((not (integerp base))
+           (error "int: for parameter base: got ~a, want int"
+                  (rontolisp::%starlark-type base)))
           ((or (< base 0) (= base 1) (> base 36))
            (error "int: base must be an integer >= 2 && <= 36"))
           (t (rontolisp::%starlark-parse-int x base))))
@@ -1050,11 +1340,92 @@
    ((null x) 0)
    (t (error "int: cannot convert ~a to int" (rontolisp::%starlark-type x)))))
 
+;; X is an int: the nearest float, an error when that is an infinity -- when |X| is at
+;; least the halfway point between the greatest float and 2^1024.
+(defun rontolisp::%starlark-int-float (x)
+  (if (>= (abs x) (- (expt 2 1024) (expt 2 970)))
+      (error "int too large to convert to float")
+      (float x 1d0)))
+
+;; The digits of S from I short of N: the integer they spell and how many there were.
+(defun rontolisp::%starlark-scan-digits (s i n)
+  (let ((acc 0) (count 0))
+    (loop while (and (< i n) (<= 48 (char-code (char s i)) 57))
+          do (setq acc (+ (* acc 10) (- (char-code (char s i)) 48)))
+            (setq count (+ count 1)) (setq i (+ i 1)))
+    (values acc count)))
+
+;; The float the string S spells, as Go's float() reads one: an optional sign, then
+;; inf, infinity or nan in any case, or digits with an optional point and fraction and an
+;; optional exponent.
+(defun rontolisp::%starlark-parse-float (s)
+  (let* ((n (length s)) (i 0) (neg nil) (word nil))
+    (if (= n 0) (error "float: empty string"))
+    (if (or (char= (char s 0) #\+) (char= (char s 0) #\-))
+        (progn
+          (setq neg (char= (char s 0) #\-))
+          (setq i 1)))
+    (setq word (string-downcase (subseq s i)))
+    (cond ((or (string= word "inf") (string= word "infinity"))
+           (if neg (/ -1d0 0d0) (/ 1d0 0d0)))
+          ((string= word "nan") (/ 0d0 0d0))
+          (t
+           (multiple-value-bind (whole whole-digits)
+               (rontolisp::%starlark-scan-digits s i n)
+             (let ((mantissa whole)
+                   (digits whole-digits)
+                   (places 0)
+                   (exponent 0))
+               (setq i (+ i whole-digits))
+               (if (and (< i n) (char= (char s i) #\.))
+                   (multiple-value-bind (fraction count)
+                       (rontolisp::%starlark-scan-digits s (+ i 1) n)
+                     (setq mantissa (+ (* mantissa (expt 10 count)) fraction))
+                     (setq digits (+ digits count))
+                     (setq places count)
+                     (setq i (+ i 1 count))))
+               (if (and (> digits 0) (< i n)
+                        (or (char= (char s i) #\e) (char= (char s i) #\E)))
+                   (let ((j (+ i 1)) (eneg nil))
+                     (if (and (< j n)
+                          (or (char= (char s j) #\+) (char= (char s j) #\-)))
+                         (progn
+                           (setq eneg (char= (char s j) #\-))
+                           (setq j (+ j 1))))
+                     (multiple-value-bind (e count)
+                         (rontolisp::%starlark-scan-digits s j n)
+                       (if (= count 0) (setq digits 0))
+                       (setq exponent (if eneg (- e) e))
+                       (setq i (+ j count)))))
+               (if (or (= digits 0) (< i n))
+                   (error "invalid float literal: ~a" s))
+               (let* ((scale (- exponent places))
+                      (magnitude
+                       (if (= mantissa 0)
+                           0
+                           (+ (length (format nil "~d" mantissa)) scale)))
+                      (v
+                       (cond ((= mantissa 0) 0d0)
+                        ((> magnitude 310)
+                         (error "floating-point number too large"))
+                        ((< magnitude -330) 0d0)
+                        ((>= scale 0) (float (* mantissa (expt 10 scale)) 1d0))
+                        (t (float (/ mantissa (expt 10 (- scale))) 1d0)))))
+                 (if (> v 1.7976931348623157d308)
+                     (error "floating-point number too large"))
+                 (if neg (- v) v))))))))
+
+;; X is a number: itself when a float, else the nearest float.
+(defun rontolisp::%starlark-to-float (x)
+  (if (floatp x) x (rontolisp::%starlark-int-float x)))
+
 (defun rontolisp::%starlark-b-float (x)
-  (cond ((numberp x) (float x 1d0))
-        ((eq x t) 1d0)
+  (cond ((eq x t) 1d0)
         ((null x) 0d0)
-        (t (error "float: cannot convert ~a to float"
+        ((integerp x) (rontolisp::%starlark-int-float x))
+        ((floatp x) x)
+        ((stringp x) (rontolisp::%starlark-parse-float x))
+        (t (error "float got ~a, want number or string"
                   (rontolisp::%starlark-type x)))))
 
 (defun rontolisp::%starlark-b-abs (x)
@@ -1104,10 +1475,14 @@
     (rontolisp::%starlark-list-of (nreverse acc))))
 
 (defun rontolisp::%starlark-b-zip (args)
-  (let ((lists
-         (mapcar #'rontolisp::%starlark-elements
-                 (rontolisp::%starlark-elements args)))
-        (acc nil))
+  (let ((lists nil) (i 0) (acc nil))
+    (dolist (x (rontolisp::%starlark-elements args))
+      (setq i (+ i 1))
+      (if (not (rontolisp::%starlark-iterable-p x))
+          (error "zip: argument #~a is not iterable: ~a" i
+                 (rontolisp::%starlark-type x)))
+      (push (rontolisp::%starlark-elements x) lists))
+    (setq lists (nreverse lists))
     (if lists
         (loop while (not (member nil lists))
               do (push (rontolisp::%starlark-tuple-of (mapcar #'car lists)) acc)
@@ -1141,7 +1516,8 @@
   (let* ((given (rontolisp::%starlark-elements args))
          (xs
           (if (and given (null (cdr given)))
-              (rontolisp::%starlark-elements (car given))
+              (rontolisp::%starlark-elements-or (car given)
+               (concatenate 'string name ": ~a value is not iterable"))
               given))
          (key-function (rontolisp::%starlark-key-function key)))
     (if (null xs) (error "~a: empty sequence" name))
@@ -1549,11 +1925,116 @@
                                          (subseq s (+ r (length sep))))
         (rontolisp::%starlark-make-tuple "" "" s))))
 
+;; The iterable over the elements of S that the string method NAME answers.
+(defun rontolisp::%starlark-string-iterable (s name ords)
+  (rontolisp::%starlark-new-string-iterable
+   (rontolisp::%starlark-string-receiver s name) name ords))
+
 (defun rontolisp::%starlark-m-elems (s)
-  (rontolisp::%starlark-string-receiver s "elems")
-  (let ((acc nil))
-    (dotimes (i (length s)) (push (subseq s i (+ i 1)) acc))
+  (rontolisp::%starlark-string-iterable s "elems" nil))
+
+(defun rontolisp::%starlark-m-elem_ords (s)
+  (rontolisp::%starlark-string-iterable s "elem_ords" t))
+
+(defun rontolisp::%starlark-m-codepoints (s)
+  (rontolisp::%starlark-string-iterable s "codepoints" nil))
+
+(defun rontolisp::%starlark-m-codepoint_ords (s)
+  (rontolisp::%starlark-string-iterable s "codepoint_ords" t))
+
+;; The lines of S, split at \n, \r and \r\n, each with its line ending when KEEPENDS.
+(defun rontolisp::%starlark-m-splitlines (s keepends)
+  (rontolisp::%starlark-string-receiver s "splitlines")
+  (if (not (or (eq keepends t) (null keepends)))
+      (error "splitlines: for parameter keepends: got ~a, want bool"
+             (rontolisp::%starlark-type keepends)))
+  (let ((acc nil) (start 0) (i 0) (n (length s)))
+    (loop while (< i n)
+          do
+            (let ((c (char s i)))
+              (if (or (char= c #\Newline) (char= c #\Return))
+                  (let ((end
+                         (if (and (char= c #\Return) (< (+ i 1) n)
+                                  (char= (char s (+ i 1)) #\Newline))
+                             (+ i 2)
+                             (+ i 1))))
+                    (push (subseq s start (if keepends end i)) acc)
+                    (setq start end)
+                    (setq i end))
+                  (setq i (+ i 1)))))
+    (if (< start n) (push (subseq s start) acc))
     (rontolisp::%starlark-list-of (nreverse acc))))
+
+;; The case of the character C: :upper, :lower or :title by the case mappings it has
+;; (a titlecase letter has both), or nil when it is uncased.
+(defun rontolisp::%starlark-char-case (c)
+  (let ((up (char/= (char-upcase c) c)) (down (char/= (char-downcase c) c)))
+    (cond ((and up down) :title) (up :lower) (down :upper) (t nil))))
+
+;; Whether S has a cased letter and every one is of the case WANT (:lower or :upper).
+(defun rontolisp::%starlark-all-cased (s want name)
+  (rontolisp::%starlark-string-receiver s name)
+  (let ((cased nil) (ok t))
+    (dotimes (i (length s))
+      (let ((k (rontolisp::%starlark-char-case (char s i))))
+        (if k
+            (progn
+              (setq cased t)
+              (if (not (or (eq k want) (and (eq want :upper) (eq k :title))))
+                  (setq ok nil))))))
+    (and cased ok)))
+
+(defun rontolisp::%starlark-m-islower (s)
+  (rontolisp::%starlark-all-cased s :lower "islower"))
+
+(defun rontolisp::%starlark-m-isupper (s)
+  (rontolisp::%starlark-all-cased s :upper "isupper"))
+
+;; Whether S has a cased letter, an uppercase or titlecase one follows only an uncased
+;; character and a lowercase one only a cased character.
+(defun rontolisp::%starlark-m-istitle (s)
+  (rontolisp::%starlark-string-receiver s "istitle")
+  (let ((cased nil) (previous nil) (ok t))
+    (dotimes (i (length s))
+      (let ((k (rontolisp::%starlark-char-case (char s i))))
+        (cond ((null k) (setq previous nil))
+         ((eq k :lower)
+          (if (not previous) (setq ok nil))
+          (setq previous t)
+          (setq cased t))
+         (t
+          (if previous (setq ok nil))
+          (setq previous t)
+          (setq cased t)))))
+    (and cased ok)))
+
+;; S with each letter that follows a cased character lowercased, every other one
+;; uppercased.
+(defun rontolisp::%starlark-m-title (s)
+  (rontolisp::%starlark-string-receiver s "title")
+  (let ((out (copy-seq s)) (previous nil))
+    (dotimes (i (length s))
+      (let ((c
+             (if previous (char-downcase (char s i)) (char-upcase (char s i)))))
+        (setf (char out i) c)
+        (setq previous (rontolisp::%starlark-char-case c))))
+    out))
+
+(defun rontolisp::%starlark-m-removeprefix (s prefix)
+  (rontolisp::%starlark-string-receiver s "removeprefix")
+  (rontolisp::%starlark-string-argument prefix "removeprefix")
+  (if (and (<= (length prefix) (length s))
+           (string= s prefix :end1 (length prefix)))
+      (subseq s (length prefix))
+      s))
+
+(defun rontolisp::%starlark-m-removesuffix (s suffix)
+  (rontolisp::%starlark-string-receiver s "removesuffix")
+  (rontolisp::%starlark-string-argument suffix "removesuffix")
+  (if (and (<= (length suffix) (length s))
+           (string= s suffix :start1 (- (length s) (length suffix))))
+      (subseq s 0 (- (length s) (length suffix)))
+      s))
 
 (defun rontolisp::%starlark-m-capitalize (s)
   (rontolisp::%starlark-string-receiver s "capitalize")
@@ -1594,63 +2075,111 @@
 (defun rontolisp::%starlark-m-isspace (s)
   (rontolisp::%starlark-every-char s 3 "isspace"))
 
-;; "{} {0} {name}".format(...): ARGS is the tuple of positional arguments, KWARGS the
-;; dict of named ones.
+;; NAME is a replacement field's name: its digits as an integer, or nil when it is
+;; something else.
+(defun rontolisp::%starlark-decimal (name)
+  (if (and (> (length name) 0)
+           (every (lambda (c) (<= 48 (char-code c) 57)) name))
+      (rontolisp::%starlark-parse-int name 10)
+      nil))
+
+;; "{} {0} {name!r}".format(...), as Go's Starlark reads the template: ARGS is the
+;; tuple of positional arguments, KWARGS the dict of named ones. A field is numbered
+;; automatically or by hand, never both; it has no attribute, element or format spec.
 (defun rontolisp::%starlark-m-format (fmt args kwargs)
   (rontolisp::%starlark-string-receiver fmt "format")
-  (let ((pos (rontolisp::%starlark-elements args)))
+  (let ((pos (coerce (rontolisp::%starlark-elements args) 'vector))
+        (n (length fmt))
+        (i 0)
+        (index 0)
+        (auto 0))
     (with-output-to-string (out)
-      (let ((i 0) (n (length fmt)) (auto 0))
-        (loop while (< i n)
-              do
-                (let ((c (char fmt i)))
-                  (cond ((and (char= c #\{) (< (+ i 1) n)
-                              (char= (char fmt (+ i 1)) #\{))
-                         (write-char #\{ out)
-                         (setq i (+ i 2)))
-                        ((and (char= c #\}) (< (+ i 1) n)
-                              (char= (char fmt (+ i 1)) #\}))
-                         (write-char #\} out)
-                         (setq i (+ i 2)))
-                        ((char= c #\}) (error "format: single '}' in format"))
-                        ((char= c #\{)
-                         (let ((close (position #\} fmt :start i)))
+      (loop while (< i n)
+            do
+              (let ((c (char fmt i)))
+                (cond ((char= c #\})
+                       (if (and (< (+ i 1) n) (char= (char fmt (+ i 1)) #\}))
+                           (progn
+                             (write-char #\} out)
+                             (setq i (+ i 2)))
+                           (error "format: single '}' in format")))
+                      ((char/= c #\{)
+                       (write-char c out)
+                       (setq i (+ i 1)))
+                      ((and (< (+ i 1) n) (char= (char fmt (+ i 1)) #\{))
+                       (write-char #\{ out)
+                       (setq i (+ i 2)))
+                      (t (let ((close (position #\} fmt :start (+ i 1))))
                            (if (null close)
                                (error "format: unmatched '{' in format"))
-                           (let ((name (subseq fmt (+ i 1) close)))
+                           (let* ((field (subseq fmt (+ i 1) close))
+                                  (bang (position #\! field))
+                                  (name
+                                   (subseq field 0
+                                           (or bang (position #\: field)
+                                               (length field))))
+                                  (rest (if bang (subseq field (+ bang 1)) ""))
+                                  (colon
+                                   (if bang
+                                       (position #\: rest)
+                                       (position #\: field)))
+                                  (conv
+                                   (if bang
+                                       (subseq rest 0 (or colon (length rest)))
+                                       "s"))
+                                  (spec
+                                   (cond (colon (subseq (if bang rest field)
+                                                        (+ colon 1)))
+                                         (t "")))
+                                  (number (rontolisp::%starlark-decimal name))
+                                  (arg nil))
                              (cond ((= (length name) 0)
-                                    (if (>= auto (length pos))
+                                    (if (< auto 0)
+                                        (error
+                                         "format: cannot switch from manual field specification to automatic field numbering"))
+                                    (setq auto 1)
+                                    (if (>= index (length pos))
                                         (error
                                          "format: tuple index out of range"))
+                                    (setq arg (aref pos index))
+                                    (setq index (+ index 1)))
+                                   (number
+                                    (if (> auto 0)
+                                        (error
+                                         "format: cannot switch from automatic field numbering to manual field specification"))
+                                    (setq auto -1)
+                                    (if (>= number (length pos))
+                                        (error
+                                         "format: tuple index out of range"))
+                                    (setq arg (aref pos number)))
+                                   (t (let ((cell
+                                             (rontolisp::%starlark-dict-cell
+                                              kwargs name)))
+                                        (cond (cell (setq arg (cdr cell)))
+                                              ((find #\. name)
+                                               (error "format: attribute syntax x.y is not supported in replacement fields: ~a"
+                                                      name))
+                                              ((find #\[ name)
+                                               (error "format: element syntax a[i] is not supported in replacement fields: ~a"
+                                                      name))
+                                              ((find #\{ name)
+                                               (error
+                                                "format: nested replacement fields not supported"))
+                                              (t (error
+                                                  "format: keyword ~a not found"
+                                                  name))))))
+                             (if (> (length spec) 0)
+                                 (error "format spec features not supported in replacement fields: ~a"
+                                        spec))
+                             (cond ((string= conv "s")
                                     (write-string
-                                     (rontolisp::%starlark-b-str (nth auto pos))
-                                     out)
-                                    (setq auto (+ auto 1)))
-                                   ((<
-                                     (rontolisp::%starlark-digit (char name 0))
-                                     10)
-                                    (let ((idx
-                                           (rontolisp::%starlark-parse-int name
-                                                                           10)))
-                                      (if (>= idx (length pos))
-                                          (error
-                                           "format: tuple index out of range"))
-                                      (write-string (rontolisp::%starlark-b-str
-                                                     (nth idx pos)) out)))
-                                   (t
-                                    (let ((cell
-                                           (rontolisp::%starlark-dict-cell
-                                            kwargs name)))
-                                      (if (null cell)
-                                          (error "format: keyword ~a not found"
-                                                 name))
-                                      (write-string
-                                       (rontolisp::%starlark-b-str (cdr cell))
-                                       out)))))
-                           (setq i (+ close 1))))
-                        (t
-                         (write-char c out)
-                         (setq i (+ i 1))))))))))
+                                     (rontolisp::%starlark-b-str arg) out))
+                                   ((string= conv "r")
+                                    (write-string
+                                     (rontolisp::%starlark-b-repr arg) out))
+                                   (t (error "format: unknown conversion ~a"
+                                       (rontolisp::%starlark-b-repr conv))))
+                             (setq i (+ close 1)))))))))))
 
 ;; "%s %d %r" % args: FMT is a string, ARGS a Common Lisp list.
 (defun rontolisp::%starlark-interpolate (fmt args)
@@ -1680,26 +2209,36 @@
                                       ((char= d #\r)
                                        (write-string
                                         (rontolisp::%starlark-b-repr a) out))
+                                      ((find d "eEfFgG")
+                                       (if (not (numberp a))
+                                           (error
+                                            "%~a format requires float, not ~a"
+                                            d (rontolisp::%starlark-type a)))
+                                       (write-string
+                                        (rontolisp::%starlark-format-float
+                                         (rontolisp::%starlark-to-float a) d)
+                                        out))
                                       ((not
-                                        (or (char= d #\d) (char= d #\x)
-                                            (char= d #\X) (char= d #\o)))
-                                       (error "unsupported format character ~a"
-                                              d))
+                                        (or (char= d #\d) (char= d #\i)
+                                            (char= d #\x) (char= d #\X)
+                                            (char= d #\o)))
+                                       (error "unknown conversion %~a" d))
                                       ((not (numberp a))
                                        (error
                                         "%~a format requires integer, not ~a" d
                                         (rontolisp::%starlark-type a)))
-                                      (t (let ((v
-                                                (if (integerp a)
-                                                    a
-                                                    (rontolisp::%starlark-b-int
-                                                     a :%unset))))
-                                           (cond
-                                            ((char= d #\d) (format out "~d" v))
-                                            ((char= d #\x)
-                                             (format out "~(~x~)" v))
-                                            ((char= d #\X)
-                                             (format out "~:@(~x~)" v))
-                                            (t (format out "~o" v))))))))))
+                                      (t
+                                       (let ((v
+                                              (if (integerp a)
+                                                  a
+                                                  (rontolisp::%starlark-b-int a
+                                                   :%unset))))
+                                         (cond ((or (char= d #\d) (char= d #\i))
+                                                (format out "~d" v))
+                                               ((char= d #\x)
+                                                (format out "~(~x~)" v))
+                                               ((char= d #\X)
+                                                (format out "~:@(~x~)" v))
+                                               (t (format out "~o" v))))))))))
                       (setq i (+ i 2))))))
       (if args (error "too many arguments for format string")))))

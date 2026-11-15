@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
+import am.ik.rontolisp.starlark.Starlark;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -47,7 +48,8 @@ public final class StarlarkLibrary {
 	}
 
 	/**
-	 * Returns the parsed library definitions. The source is written in canonical shape
+	 * Returns the parsed library definitions, then those {@link Starlark#runtimeForms}
+	 * generates from the front end's tables. The source is written in canonical shape
 	 * (internal double-colon {@code rontolisp::} helpers, bare {@code cl} names), so it
 	 * needs no package resolution, and it reads the same for every target. Parsed once
 	 * and cached.
@@ -59,7 +61,10 @@ public final class StarlarkLibrary {
 			synchronized (StarlarkLibrary.class) {
 				cached = forms;
 				if (cached == null) {
-					cached = List.copyOf(LispReader.readAllFromString(readSource(), Features.INTERPRETER));
+					List<LispVal> read = new ArrayList<>(
+							LispReader.readAllFromString(readSource(), Features.INTERPRETER));
+					read.addAll(Starlark.runtimeForms());
+					cached = List.copyOf(read);
 					forms = cached;
 				}
 			}

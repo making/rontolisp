@@ -72,9 +72,12 @@ tuples, dicts, ranges and functions.
 | `all(x)`, `any(x)` | whether every element, or any, is true |
 | `bool(x=False)` | the truth of `x` |
 | `dict(pairs, **kwargs)` | a new dict: the entries of a dict or of an iterable of pairs, then the named arguments |
+| `dir(x)` | a new sorted list of the names of the methods of `x` |
 | `enumerate(x, start=0)` | a list of `(index, element)` tuples |
 | `fail(*args, sep=" ")` | nothing: it ends the program with the arguments as the error |
-| `float(x=0)` | a float from an int, a float or a bool |
+| `float(x=0)` | a float from an int, a float, a bool or a string (`"1e3"`, `"inf"`, `"nan"`) |
+| `getattr(x, name, default)` | the method `name` of `x` bound to it, else `default`, else an error |
+| `hasattr(x, name)` | whether `x` has the method `name` |
 | `hash(x)` | the hash of a string |
 | `int(x, base)` | an int from an int, a float, a bool, or a string in base 2 to 36 (`base=0` reads a `0x`, `0o` or `0b` prefix) |
 | `len(x)` | the number of elements of a string, list, tuple, dict or range |
@@ -94,7 +97,7 @@ tuples, dicts, ranges and functions.
 |---|---|
 | list | `append`, `clear`, `extend`, `index`, `insert`, `pop`, `remove` |
 | dict | `clear`, `get`, `items`, `keys`, `pop`, `popitem`, `setdefault`, `update`, `values` |
-| string | `capitalize`, `count`, `elems`, `endswith`, `find`, `format`, `index`, `isalnum`, `isalpha`, `isdigit`, `isspace`, `join`, `lower`, `lstrip`, `partition`, `replace`, `rfind`, `rindex`, `rpartition`, `rsplit`, `rstrip`, `split`, `startswith`, `strip`, `upper` |
+| string | `capitalize`, `codepoint_ords`, `codepoints`, `count`, `elem_ords`, `elems`, `endswith`, `find`, `format`, `index`, `isalnum`, `isalpha`, `isdigit`, `islower`, `isspace`, `istitle`, `isupper`, `join`, `lower`, `lstrip`, `partition`, `removeprefix`, `removesuffix`, `replace`, `rfind`, `rindex`, `rpartition`, `rsplit`, `rstrip`, `split`, `splitlines`, `startswith`, `strip`, `title`, `upper` |
 
 A method is called on its receiver, or taken as a value bound to it:
 

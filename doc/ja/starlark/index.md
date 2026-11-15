@@ -72,9 +72,12 @@ f(1, 2.5, None, x="a", y=[1, (2,)])
 | `all(x)`、`any(x)` | すべての要素が真か、いずれかの要素が真か |
 | `bool(x=False)` | `x` の真偽 |
 | `dict(pairs, **kwargs)` | 新しい辞書。辞書またはペアのイテラブルの項目に、名前付き引数を加えたもの |
+| `dir(x)` | `x` のメソッド名をソートした新しいリスト |
 | `enumerate(x, start=0)` | `(添字, 要素)` のタプルのリスト |
 | `fail(*args, sep=" ")` | 何も返しません。引数をエラーとしてプログラムを終了します |
-| `float(x=0)` | 整数、浮動小数点数、真偽値から作った浮動小数点数 |
+| `float(x=0)` | 整数、浮動小数点数、真偽値、文字列（`"1e3"`、`"inf"`、`"nan"`）から作った浮動小数点数 |
+| `getattr(x, name, default)` | `x` に束縛したメソッド `name`。なければ `default`、それもなければエラー |
+| `hasattr(x, name)` | `x` がメソッド `name` を持つか |
 | `hash(x)` | 文字列のハッシュ値 |
 | `int(x, base)` | 整数、浮動小数点数、真偽値、または 2 進から 36 進の文字列から作った整数（`base=0` は `0x`、`0o`、`0b` の接頭辞を読みます） |
 | `len(x)` | 文字列、リスト、タプル、辞書、range の要素数 |
@@ -94,7 +97,7 @@ f(1, 2.5, None, x="a", y=[1, (2,)])
 |---|---|
 | list | `append`, `clear`, `extend`, `index`, `insert`, `pop`, `remove` |
 | dict | `clear`, `get`, `items`, `keys`, `pop`, `popitem`, `setdefault`, `update`, `values` |
-| string | `capitalize`, `count`, `elems`, `endswith`, `find`, `format`, `index`, `isalnum`, `isalpha`, `isdigit`, `isspace`, `join`, `lower`, `lstrip`, `partition`, `replace`, `rfind`, `rindex`, `rpartition`, `rsplit`, `rstrip`, `split`, `startswith`, `strip`, `upper` |
+| string | `capitalize`, `codepoint_ords`, `codepoints`, `count`, `elem_ords`, `elems`, `endswith`, `find`, `format`, `index`, `isalnum`, `isalpha`, `isdigit`, `islower`, `isspace`, `istitle`, `isupper`, `join`, `lower`, `lstrip`, `partition`, `removeprefix`, `removesuffix`, `replace`, `rfind`, `rindex`, `rpartition`, `rsplit`, `rstrip`, `split`, `splitlines`, `startswith`, `strip`, `title`, `upper` |
 
 メソッドはレシーバに対して呼び出すか、レシーバに束縛された値として取り出します:
 

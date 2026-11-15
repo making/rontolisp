@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.function.Function;
 
 import am.ik.rontolisp.LispBigInteger;
@@ -159,7 +160,7 @@ final class StarlarkLowering {
 
 	private static final LispSymbol CALL = runtime("CALL");
 
-	private static final LispSymbol ELEMENTS = runtime("ELEMENTS");
+	private static final LispSymbol STAR_ELEMENTS = runtime("STAR-ELEMENTS");
 
 	private static final LispSymbol KEYWORDS = runtime("KEYWORDS");
 
@@ -1090,7 +1091,7 @@ final class StarlarkLowering {
 			}
 			return list(CALL, placed.get(0),
 					spliced(listOf(positional.stream().map(placed::get).toList()),
-							star.isEmpty() ? null : list(ELEMENTS, placed.get(star.get(0)))),
+							star.isEmpty() ? null : list(STAR_ELEMENTS, placed.get(star.get(0)))),
 					spliced(listOf(entries), starStar.isEmpty() ? null : list(KEYWORDS, placed.get(starStar.get(0)))));
 		});
 	}
@@ -1170,6 +1171,67 @@ final class StarlarkLowering {
 				anyDefault ? list(QUOTE, listOf(defaults)) : LispNil.INSTANCE, new LispInteger(signature.positional()),
 				new LispInteger(signature.namedFrom()), bool(signature.varargs()), bool(signature.kwargs()),
 				list(FUNCTION, new LispSymbol(signature.helper())));
+	}
+
+	// ---- the run-time library's generated half ----
+
+	/**
+	 * The definitions {@code starlark.lisp} takes from the tables here, generated so each
+	 * is written once: the attributes of each type, which {@code dir}, {@code getattr}
+	 * and {@code hasattr} read, and the code points a string's {@code repr} escapes.
+	 * @return the forms, in the library's canonical shape
+	 */
+	static List<LispVal> runtimeForms() {
+		LispSymbol type = new LispSymbol("TYPE");
+		LispSymbol x = new LispSymbol("X");
+		LispSymbol name = new LispSymbol("NAME");
+		LispSymbol cond = new LispSymbol("COND");
+		LispSymbol stringEquals = new LispSymbol("STRING=");
+		Map<String, List<String>> names = new TreeMap<>();
+		List<LispVal> attributes = new ArrayList<>();
+		for (Signature method : StarlarkBuiltins.methods()) {
+			for (String kind : method.kinds()) {
+				names.computeIfAbsent(kind, k -> new ArrayList<>()).add(method.name());
+			}
+			attributes.add(list(list(stringEquals, name, string(method.name())), methodValue(method, x)));
+		}
+		attributes.add(list(LispTrue.INSTANCE, list(NO_ATTRIBUTE, x, name)));
+		List<LispVal> byType = new ArrayList<>();
+		for (Map.Entry<String, List<String>> entry : names.entrySet()) {
+			byType.add(list(list(stringEquals, type, string(entry.getKey())),
+					quotedStrings(entry.getValue().stream().sorted().toList())));
+		}
+		byType.add(list(LispTrue.INSTANCE, LispNil.INSTANCE));
+		List<LispVal> ranges = new ArrayList<>();
+		int start = -1;
+		for (int code = 0xA0; code <= Character.MAX_CODE_POINT + 1; code++) {
+			boolean unprintable = code <= Character.MAX_CODE_POINT && isUnprintable(code);
+			if (unprintable && start < 0) {
+				start = code;
+			}
+			else if (!unprintable && start >= 0) {
+				ranges.add(new LispInteger(start));
+				ranges.add(new LispInteger(code - 1));
+				start = -1;
+			}
+		}
+		return List.of(list(DEFUN, runtime("ATTRIBUTE-NAMES"), list(type), cons(cond, listOf(byType))),
+				list(DEFUN, runtime("ATTRIBUTE"), list(x, name), cons(cond, listOf(attributes))),
+				list(DEFUN, runtime("UNPRINTABLE-RANGES"), LispNil.INSTANCE, list(QUOTE, listOf(ranges))));
+	}
+
+	/**
+	 * Whether a string's {@code repr} escapes the code point, as Go's
+	 * {@code strconv.IsPrint} answers past U+00A0: a control, format, private-use,
+	 * surrogate or separator character. An unassigned code point prints as itself here.
+	 */
+	private static boolean isUnprintable(int code) {
+		return switch (Character.getType(code)) {
+			case Character.CONTROL, Character.FORMAT, Character.PRIVATE_USE, Character.SURROGATE,
+					Character.LINE_SEPARATOR, Character.PARAGRAPH_SEPARATOR, Character.SPACE_SEPARATOR ->
+				true;
+			default -> false;
+		};
 	}
 
 	// ---- forms ----

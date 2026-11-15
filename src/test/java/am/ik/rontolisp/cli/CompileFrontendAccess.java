@@ -255,6 +255,35 @@ public final class CompileFrontendAccess {
 	}
 
 	/**
+	 * Expands forms a test has read and lowered itself -- a front end's read, wrapped by
+	 * the test -- through the pass pipeline, as {@code run} expands the forms the read of
+	 * a non-Lisp entry file answers.
+	 * @param forms the lowered top-level forms
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @return the expanded program and the feature set of its target
+	 */
+	public static Program lowered(List<LispVal> forms, boolean wasm, boolean component) {
+		Features features = wasm ? Features.WASM : Features.JVM;
+		if (wasm && component) {
+			features = features.with(List.of(Features.COMPONENT));
+		}
+		CompileFrontend.Result result = CompileFrontend.expand(new CompileFrontend.Loaded(forms, features),
+				CompileFrontend.Options.builder().wasm(wasm).component(component).build());
+		return new Program(result.program(), result.features());
+	}
+
+	/**
+	 * The JVM backend half alone over a program {@link #lowered} expanded.
+	 * @param className the class to emit
+	 * @param program the expanded program
+	 * @return the emitted class
+	 */
+	public static JvmSourceCompiler.Result jvmClass(String className, Program program) {
+		return new JvmSourceCompiler(className).compileProgram(program.forms(), program.features());
+	}
+
+	/**
 	 * A Clojure entry file through the whole front end the way the CLI compiles it, the
 	 * classes its host forms name those of a Java class path: described by reflection
 	 * through a loader over it, as on a JVM, or by {@code classFiles}, as a native image

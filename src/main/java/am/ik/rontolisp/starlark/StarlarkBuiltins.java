@@ -46,12 +46,12 @@ final class StarlarkBuiltins {
 	static final LispSymbol REQUIRED = new LispSymbol(":%REQUIRED");
 
 	private static final Map<String, Signature> FUNCTIONS = table("abs(x, /)", "all(x, /)", "any(x, /)",
-			"bool(x=False, /)", "dict(pairs=unset, /, **kwargs)", "enumerate(iterable, /, start=0)",
-			"fail(*args, sep=' ')", "float(x=0, /)", "hash(x, /)", "int(x, /, base=unset)", "len(x, /)",
-			"list(x=unset, /)", "max(*args, key=None)", "min(*args, key=None)", "print(*args, sep=' ')",
-			"range(start_or_stop, stop=unset, step=1, /)", "repr(x, /)", "reversed(sequence, /)",
-			"sorted(iterable, /, *, key=None, reverse=False)", "str(x, /)", "tuple(x=unset, /)", "type(x, /)",
-			"zip(*args)");
+			"bool(x=False, /)", "dict(pairs=unset, /, **kwargs)", "dir(x, /)", "enumerate(iterable, /, start=0)",
+			"fail(*args, sep=' ')", "float(x=0, /)", "getattr(x, name, default=unset, /)", "hasattr(x, name, /)",
+			"hash(x, /)", "int(x, /, base=unset)", "len(x, /)", "list(x=unset, /)", "max(*args, key=None)",
+			"min(*args, key=None)", "print(*args, sep=' ')", "range(start_or_stop, stop=unset, step=1, /)",
+			"repr(x, /)", "reversed(sequence, /)", "sorted(iterable, /, *, key=None, reverse=False)", "str(x, /)",
+			"tuple(x=unset, /)", "type(x, /)", "zip(*args)");
 
 	// A name two types share is one helper that tells the receivers apart: its
 	// parameters are what either takes.
@@ -59,16 +59,19 @@ final class StarlarkBuiltins {
 			"list.extend(x, /)", "list|string.index(x, start=None, end=None, /)", "list.insert(index, x, /)",
 			"list|dict.pop(key=unset, default=unset, /)", "list.remove(x, /)", "dict.get(key, default=None, /)",
 			"dict.items()", "dict.keys()", "dict.popitem()", "dict.setdefault(key, default=None, /)",
-			"dict.update(pairs=unset, /, **kwargs)", "dict.values()", "string.capitalize()",
-			"string.count(sub, start=None, end=None, /)", "string.elems()",
+			"dict.update(pairs=unset, /, **kwargs)", "dict.values()", "string.capitalize()", "string.codepoint_ords()",
+			"string.codepoints()", "string.count(sub, start=None, end=None, /)", "string.elem_ords()", "string.elems()",
 			"string.endswith(suffix, start=None, end=None, /)", "string.find(sub, start=None, end=None, /)",
 			"string.format(*args, **kwargs)", "string.isalnum()", "string.isalpha()", "string.isdigit()",
-			"string.isspace()", "string.join(iterable, /)", "string.lower()", "string.lstrip(cutset=None, /)",
-			"string.partition(sep, /)", "string.replace(old, new, count=unset, /)",
-			"string.rfind(sub, start=None, end=None, /)", "string.rindex(sub, start=None, end=None, /)",
-			"string.rpartition(sep, /)", "string.rsplit(sep=None, maxsplit=None, /)", "string.rstrip(cutset=None, /)",
-			"string.split(sep=None, maxsplit=None, /)", "string.startswith(prefix, start=None, end=None, /)",
-			"string.strip(cutset=None, /)", "string.upper()");
+			"string.islower()", "string.isspace()", "string.istitle()", "string.isupper()", "string.join(iterable, /)",
+			"string.lower()", "string.lstrip(cutset=None, /)", "string.partition(sep, /)",
+			"string.removeprefix(prefix, /)", "string.removesuffix(suffix, /)",
+			"string.replace(old, new, count=unset, /)", "string.rfind(sub, start=None, end=None, /)",
+			"string.rindex(sub, start=None, end=None, /)", "string.rpartition(sep, /)",
+			"string.rsplit(sep=None, maxsplit=None, /)", "string.rstrip(cutset=None, /)",
+			"string.split(sep=None, maxsplit=None, /)", "string.splitlines(keepends=False, /)",
+			"string.startswith(prefix, start=None, end=None, /)", "string.strip(cutset=None, /)", "string.title()",
+			"string.upper()");
 
 	private StarlarkBuiltins() {
 	}
@@ -259,6 +262,14 @@ final class StarlarkBuiltins {
 	 */
 	static @Nullable Signature method(String name) {
 		return METHODS.get(name);
+	}
+
+	/**
+	 * Every method, in the order the table declares them.
+	 * @return the signatures
+	 */
+	static List<Signature> methods() {
+		return List.copyOf(METHODS.values());
 	}
 
 	/**

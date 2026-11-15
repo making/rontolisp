@@ -101,7 +101,7 @@ class StarlarkLoweringTest {
 						"""
 								(DEFUN |f| (|xs| |k| |r|) ($MAKE-TUPLE \
 								(LET* ((%SL-ARG1 ($CALL |r| NIL NIL)) (%SL-ARG2 ($CALL |k| NIL NIL))) ($B-SORTED |xs| %SL-ARG2 %SL-ARG1)) \
-								($CALL ($BUILTIN "len" '("x") NIL 1 1 NIL NIL #'$B-LEN) ($ELEMENTS |xs|) NIL)))
+								($CALL ($BUILTIN "len" '("x") NIL 1 1 NIL NIL #'$B-LEN) ($STAR-ELEMENTS |xs|) NIL)))
 								(SETQ |f| ($MAKE-FUNCTION "f" '("xs" "k" "r") NIL 3 NIL NIL #'|f|))"""),
 				// a method: its helper, the receiver first; a name no type has is refused
 				// before its arguments are evaluated; uncalled, it is bound to its

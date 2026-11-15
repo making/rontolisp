@@ -18,8 +18,9 @@ and every user surface says so (`--source-language` help, the title of
   `--source-language starlark` (`star`), per FILE (`.kb/source-language.md`). A file is
   lowered whole. There is no `SourceSession` yet: its constructor refuses the language, so
   the REPL and the playground do (`-e` reads a whole program and works).
-- The run-time half is Common Lisp source, `eval/starlark.lisp`, handled the `UrlLibrary`
-  way by `eval/StarlarkLibrary`: the interpreter loads it on the first resolution of a
+- The run-time half is Common Lisp source, `eval/starlark.lisp`, plus the definitions
+  `Starlark.runtimeForms` generates from the front end's tables (the attributes of each
+  type, `repr`'s escape table), handled the `UrlLibrary` way by `eval/StarlarkLibrary`: the interpreter loads it on the first resolution of a
   `rontolisp::%starlark-` FUNCTION, `CompileFrontend.expand` splices it beside
   `SchemeLibrary` (inside the prelude, whose string comparisons and `search` it is written
   over) and `LibraryDefunPruner` drops what stays unreachable -- its five `defstruct`s are
@@ -152,11 +153,53 @@ then the dict of surplus named ones.
   accessor is not (`StarlarkLibrary.functionNames`).
 
 Also: `isalpha`/`isdigit`/`isalnum`/`isspace` test ASCII codes themselves (`alpha-char-p`
-is ASCII-only on wasm, `.todo/269`); a dict walks in insertion order because the host table
+is ASCII-only on wasm, `.todo/269`), while `islower`/`isupper`/`istitle`/`title` tell a
+letter's case by which of `char-upcase`/`char-downcase` changes it (both: titlecase), the
+same on four backends for the corpus's `ǅ`/`ǉ` lines; a dict walks in insertion order because the host table
 does, a key stored again keeping its place and one removed and stored again going last
 (`.kb/hash-tables.md`, "Representation"); a key's normal form (`%starlark-key`) makes `1`
 and `1.0` one key and a tuple the list of its elements' forms; a float key is rounded only
 when finite.
+
+Written to Go's Starlark (`go.starlark.net`, its `library.go`/`value.go` read
+2026-11-15; Java Starlark, `starlark_deploy.jar`, as the second opinion):
+
+- **A float prints as Go's `%g`** (`%starlark-format-float`): the shortest digits that read
+  back (taken from the printer's text, the one Schubfach selection of all four backends,
+  `.kb/format.md`), an exponent below `1e-4` and from `1e+06` on (`1e+100`, `1e+06`,
+  `100000.0`), `.0` when neither point nor exponent shows, `+inf`, `-inf`, `nan`. Java prints
+  `1000000.0` and `123456789.0`; the spec's own `%g` row (`1.2e+12`, `1200`) is Go's rule.
+  `%e`/`%f` are 6 decimals rounded exactly, half to even, over `integer-decode-float`'s
+  integers (no float arithmetic); `%g` is `str`.
+- `float(string)`: sign, `inf`/`infinity`/`nan` in any case, else digits, point, exponent,
+  converted as the exact rational (the Clojure parser's way); `float` of an int from
+  `2^1024 - 2^970` on is `int too large to convert to float`, as is int-float arithmetic.
+- **Numbers compare exactly and NaN is one value**: an int against a float compares with
+  the float's `rational`, NaN above `+inf` and equal to itself (`%starlark-number-compare`);
+  every NaN is one dict key (`:nan`).
+- A `def`/`lambda` is a dict key by identity, a built-in by name and receiver -- what makes
+  two of them equal.
+- `s.elems()`, `elem_ords`, `codepoints`, `codepoint_ords` answer a
+  `%starlark-string-iterable` (type `string.elems` or `string.codepoints`, repr
+  `"ab".elems()`), iterable and nothing else: no `len`, no index, unhashable. Elements and
+  code points are one thing in this string model, so the four differ in name only.
+- `repr` of a string is Go's `syntax.Quote`: `\a \b \f \n \r \t \v`, `\xHH` for another C0
+  control or DEL, `\uHHHH`/`\UHHHHHHHH` for a code point Go's `strconv.IsPrint` refuses.
+  Past U+00A0 that is a range table of the JDK's control, format, private-use, surrogate and
+  separator categories (`%starlark-unprintable-ranges`, 80-odd numbers); an UNASSIGNED code
+  point prints as itself, where Go escapes it -- the table would grow by ~700 ranges.
+- `dir`/`getattr`/`hasattr` read `%starlark-attribute-names` and `%starlark-attribute`,
+  generated from `StarlarkBuiltins`' method rows (`Starlark.runtimeForms`, appended by
+  `StarlarkLibrary.forms`, like `Scheme.runtimeForms`): a type's attributes are its methods,
+  and `getattr` answers the bound method the lowering's `x.m` builds. A program reaching
+  `getattr` carries every method helper.
+- `str.format` is Go's `string_format` ported: manual and automatic numbering refuse each
+  other, `!s`/`!r`, no `x.y`, `a[i]`, nested field or format spec. `splitlines` splits at
+  `\n`, `\r` and `\r\n` as the spec says (Go: `\n` only).
+- Messages: an iterable a built-in wants is `got T, want iterable`, a `for` over a
+  non-iterable `T value is not iterable`, a `*` argument `argument after * must be
+  iterable, not T`, a missing argument `function f missing 2 arguments (a, b)` for a `def`
+  and `NAME: missing argument for P` for a built-in.
 
 A loop counts itself on the list or dict it walks (`%starlark-iterate` /
 `%starlark-iterated`) and a mutation meanwhile is refused. The count is given back on every
@@ -198,6 +241,13 @@ lowering and Lisp run time that first measured the design,
   same on the four backends. The 14: `splitlines` (3), `islower` and its siblings (2),
   `title` (1), `dir` (3), `format` mixing automatic and manual numbering (3), a local read
   before its assignment (2).
+- The same corpus as `StarlarkSpecE2eTest#conformance` (in the tree, 39 files, 430 chunks),
+  the MESSAGE now matched as well: **392 of 430** before this file's run-time additions,
+  **426 of 430 on each of the four backends** after (2026-11-15), every file printing the
+  same on all four; the run takes about 30 s in process. The 4 left:
+  `go/assign.star:153` (a global read before its assignment), `go/assign.star:172` and
+  `go/function.star:273` (a local one, `.todo/j48`), `go/builtins.star:64` (`sorted(1)`,
+  whose patterns are `Error in sorted`, the traceback line Go and Java print, no message).
 - A list, tuple or dict expression is ONE call: 1,500 integer elements compile for the
   JVM, 3,000 are `method _top$0: method code exceeds the JVM's 65535-byte limit: 97862`
   (`.kb/jvm-method-size-limits.md`); the interpreter and wasm take them.
@@ -247,6 +297,23 @@ positions included. The corpus has three syntax-error chunks (two argument-order
 Python accepts and Starlark rejects, so `StarlarkParserTest` pins those by hand.
 
 ## Tests
+
+`StarlarkSpecE2eTest#conformance` runs bazelbuild/starlark's `test_suite/testdata`
+(`src/test/resources/starlark-conformance/`, Apache-2.0, its `LICENSE` beside it) on four
+backends, one program per FILE: every chunk is read and lowered alone behind the corpus
+harness's three assertion `def`s (a reader or name error becomes that chunk's report, so
+every chunk is parsed), each symbol the lowering spells with a lowercase letter -- every
+name of the program, `StarlarkNames` -- is renamed `c<N>%name` so the chunk has globals of
+its own, and every top-level statement but a `defun` runs inside `(if (null failure)
+(handler-case ..))`, so a chunk stops at its first error and the next one runs. A chunk
+passes as `starlark_test.py` judges it, plus nothing printed; its error is matched against
+its `###` patterns (lowercased, substring or regular expression, a brace that starts no
+repetition read as a brace as Python's `re` reads it), any implementation's variant
+accepted; an error is EXPECTED when a pattern names no implementation or names `go` (the
+one rust-only pattern, `x9a[1, 2] = 3`, is no error in the spec). `KNOWN_FAILURES` names the
+chunks that still fail, each with why; one that passes fails the test until it is taken
+off. The compiled legs expand the wrapped forms through `CompileFrontendAccess.lowered`
+(`CompileFrontend.expand`, as `run` expands a `.star` file's read).
 
 `StarlarkSpecE2eTest` over `starlark-spec.yaml` (the corpus on four backends, in process:
 the prototype's feature tour first, then a case per decision above; `standalone:` cases end

@@ -9,14 +9,27 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 import java.util.stream.Stream;
 
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispString;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.cli.CompileFrontendAccess;
 import am.ik.rontolisp.cli.JvmSourceCompiler;
@@ -24,6 +37,7 @@ import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.testsupport.CliStack;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.ThreadStdio;
@@ -53,6 +67,8 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * ENDS its program with an uncaught error, so each one is compiled and run on its own,
  * per backend: it prints {@code stdout}, then fails with {@code error}, which the
  * interpreter throws and a compiled program reports first on standard error.
+ * {@link #conformance} runs bazelbuild/starlark's conformance corpus the same four ways,
+ * one program per corpus file.
  *
  * <p>
  * Unlike {@code CiSpecE2eTest} this needs no native binary: every leg goes through the
@@ -99,6 +115,47 @@ class StarlarkSpecE2eTest {
 	@TempDir
 	static Path workDir;
 
+	/**
+	 * bazelbuild/starlark's {@code test_suite/testdata}: a file of chunks separated by
+	 * {@code ---} lines, each chunk a program of its own.
+	 */
+	private static final String CORPUS = "/starlark-conformance";
+
+	/**
+	 * What the corpus's harness ({@code test_suite/starlark_test.py}) puts ahead of every
+	 * chunk: its assertions are Starlark, not the language's.
+	 */
+	private static final String PRELUDE = """
+			def assert_eq(x, y):
+			  if x != y:
+			    print("%r != %r" % (x, y))
+
+			def assert_ne(x, y):
+			  if x == y:
+			    print("%r == %r" % (x, y))
+
+			def assert_(cond, msg="assertion failed"):
+			  if not cond:
+			    print(msg)
+			""";
+
+	/**
+	 * The chunks that do not pass yet, each with why. A chunk named here must still fail,
+	 * so the one a change fixes is taken off.
+	 */
+	private static final Map<String, String> KNOWN_FAILURES = Map.of("go/assign.star:153",
+			"a global read before its assignment is Common Lisp's unbound-variable error", "go/assign.star:172",
+			"a local read before its assignment reads None", "go/function.star:273",
+			"a local read before its assignment reads None", "go/builtins.star:64",
+			"the corpus matches 'Error in sorted', the line Go's and Java's tracebacks print, not the message");
+
+	/** The line a program prints after each chunk: its name, then its error if any. */
+	private static final String CHUNK_MARK = "%%chunk ";
+
+	private static final String CHUNK_ERROR = " error: ";
+
+	private static final Pattern EXPECTED_ERROR = Pattern.compile("(.*?) *### *((go|java|rust):)? *(.*)");
+
 	@TestFactory
 	Stream<DynamicNode> e2e() throws Exception {
 		Spec spec = loadSpec();
@@ -133,6 +190,278 @@ class StarlarkSpecE2eTest {
 			}
 		}
 		return legs.stream();
+	}
+
+	/**
+	 * The conformance corpus: every file one program per backend, each chunk in it
+	 * lowered on its own (the {@link #PRELUDE} first), its names given a spelling of
+	 * their own and every top-level statement guarded, so the chunk stops at its first
+	 * error and the next one runs. A chunk passes when it prints nothing (no assertion
+	 * failed) and fails exactly when the corpus expects an error, with a message one of
+	 * the corpus's patterns matches; the compiled legs must print what the interpreter
+	 * prints.
+	 */
+	@TestFactory
+	Stream<DynamicNode> conformance() throws Exception {
+		Path root = Path.of(Objects.requireNonNull(StarlarkSpecE2eTest.class.getResource(CORPUS)).toURI());
+		List<Path> files;
+		try (Stream<Path> walk = Files.walk(root)) {
+			files = walk.filter(path -> path.toString().endsWith(".star")).sorted().toList();
+		}
+		boolean wasm = HostWasmtime.isAvailable();
+		ExecutorService pool = Executors.newFixedThreadPool(4);
+		List<DynamicNode> nodes = new ArrayList<>();
+		for (Path file : files) {
+			String name = root.relativize(file).toString().replace('\\', '/');
+			List<Chunk> chunks = chunks(name, Files.readString(file, StandardCharsets.UTF_8));
+			List<LispVal> program = conformanceProgram(chunks);
+			String stem = "Conformance" + name.replaceAll("[^A-Za-z0-9]", "");
+			Future<String> interpreter = pool.submit(() -> interpretForms(program));
+			Future<String> jvm = pool.submit(() -> runClass(stem,
+					CliStack.call(stem,
+							() -> CompileFrontendAccess
+								.jvmClass(stem, CompileFrontendAccess.lowered(program, false, false))
+								.classBytes())));
+			Future<String> wasmPreview1 = wasm ? pool
+				.submit(() -> runModule(compileWasm(CompileFrontendAccess.lowered(program, true, false), false, stem)))
+					: null;
+			Future<String> wasmComponent = wasm ? pool
+				.submit(() -> runModule(compileWasm(CompileFrontendAccess.lowered(program, true, true), true, stem)))
+					: null;
+			nodes.add(dynamicContainer(name,
+					Stream.of(conformanceLeg("INTERPRETER", chunks, interpreter, null),
+							conformanceLeg("JVM", chunks, jvm, interpreter),
+							conformanceLeg("WASM", chunks, wasmPreview1, interpreter),
+							conformanceLeg("WASM_COMPONENT", chunks, wasmComponent, interpreter))));
+		}
+		pool.shutdown();
+		return nodes.stream();
+	}
+
+	/**
+	 * A chunk of the corpus.
+	 *
+	 * @param name its file and the line it starts on
+	 * @param source its text, the expected-error comments taken off
+	 * @param patterns what its error message must match, any one of them: the corpus's
+	 * {@code ###} patterns, an implementation's own ({@code go:}, {@code java:},
+	 * {@code rust:}) included
+	 * @param expectsError whether it must fail: when it has a pattern for every
+	 * implementation or one for Go, whose messages the front end's follow
+	 */
+	record Chunk(String name, String source, List<String> patterns, boolean expectsError) {
+
+		boolean matches(String message) {
+			String text = message.toLowerCase(Locale.ROOT);
+			for (String pattern : this.patterns) {
+				String wanted = pattern.toLowerCase(Locale.ROOT);
+				if (text.contains(wanted)) {
+					return true;
+				}
+				if (Pattern.compile(pythonRegex(wanted)).matcher(text).find()) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+	}
+
+	/**
+	 * A pattern as Python's {@code re} reads it: a brace that starts no repetition is a
+	 * brace, where Java's regular expressions refuse it.
+	 */
+	private static String pythonRegex(String pattern) {
+		try {
+			Pattern.compile(pattern);
+			return pattern;
+		}
+		catch (PatternSyntaxException ex) {
+			return pattern.replace("{", "\\{").replace("}", "\\}");
+		}
+	}
+
+	/** What a chunk printed (an assertion that failed) and the error it stopped at. */
+	record Outcome(List<String> printed, @Nullable String error) {
+	}
+
+	/** Splits a corpus file into its chunks, as {@code starlark_test.py} does. */
+	static List<Chunk> chunks(String file, String text) {
+		List<Chunk> chunks = new ArrayList<>();
+		StringBuilder source = new StringBuilder();
+		List<String> patterns = new ArrayList<>();
+		boolean expectsError = false;
+		int start = 1;
+		List<String> lines = text.lines().toList();
+		for (int i = 0; i <= lines.size(); i++) {
+			String line = i < lines.size() ? lines.get(i).stripTrailing() : "---";
+			if (line.equals("---")) {
+				chunks.add(new Chunk(file + ":" + start, source.toString(), List.copyOf(patterns), expectsError));
+				source.setLength(0);
+				patterns.clear();
+				expectsError = false;
+				start = i + 2;
+				continue;
+			}
+			Matcher m = EXPECTED_ERROR.matcher(line);
+			if (m.matches()) {
+				patterns.add(m.group(4));
+				expectsError |= m.group(3) == null || m.group(3).equals("go");
+				line = m.group(1);
+			}
+			source.append(line).append('\n');
+		}
+		return chunks;
+	}
+
+	/**
+	 * The program a corpus file runs as: a reporting function, then every chunk's forms
+	 * behind a guard, then its report.
+	 */
+	private static List<LispVal> conformanceProgram(List<Chunk> chunks) {
+		List<LispVal> forms = new ArrayList<>(SourceLanguage.COMMON_LISP.read("""
+				(defun corpus-report (name failure)
+				  (princ "%s")
+				  (princ name)
+				  (if failure
+				      (progn (princ "%s") (princ (substitute #\\Space #\\Newline failure))))
+				  (terpri))
+				""".formatted(CHUNK_MARK, CHUNK_ERROR), Features.INTERPRETER, null));
+		LispSymbol failure = new LispSymbol("CORPUS-FAILURE");
+		LispSymbol report = new LispSymbol("CORPUS-REPORT");
+		for (int i = 0; i < chunks.size(); i++) {
+			Chunk chunk = chunks.get(i);
+			List<LispVal> lowered;
+			try {
+				lowered = SourceLanguage.STARLARK.read(PRELUDE + chunk.source(), Features.INTERPRETER, chunk.name());
+			}
+			catch (LispReadException ex) {
+				forms.add(list(report, LispString.literal(chunk.name()),
+						LispString.literal(String.valueOf(ex.getMessage()))));
+				continue;
+			}
+			forms.add(list(new LispSymbol("SETQ"), failure, LispNil.INSTANCE));
+			String prefix = "c" + i + "%";
+			for (LispVal form : lowered) {
+				LispVal own = renamed(form, prefix);
+				boolean definition = own instanceof LispCons cons && cons.car() instanceof LispSymbol head
+						&& head.name().equals("DEFUN");
+				LispSymbol e = new LispSymbol("E");
+				forms.add(definition ? own : list(new LispSymbol("IF"), list(new LispSymbol("NULL"), failure),
+						list(new LispSymbol("HANDLER-CASE"), own, list(new LispSymbol("ERROR"), list(e),
+								list(new LispSymbol("SETQ"), failure, list(new LispSymbol("PRINC-TO-STRING"), e))))));
+			}
+			forms.add(list(report, LispString.literal(chunk.name()), failure));
+		}
+		return forms;
+	}
+
+	/**
+	 * A form with every name the program spells -- each symbol the lowering spells with a
+	 * lowercase letter ({@code StarlarkNames}) -- behind a prefix: the chunk's own
+	 * globals.
+	 */
+	private static LispVal renamed(LispVal form, String prefix) {
+		if (form instanceof LispSymbol symbol && !symbol.name().equals(symbol.name().toUpperCase(Locale.ROOT))) {
+			return new LispSymbol(prefix + symbol.name());
+		}
+		if (form instanceof LispCons cons) {
+			return new LispCons(renamed(cons.car(), prefix), renamed(cons.cdr(), prefix));
+		}
+		return form;
+	}
+
+	private static LispVal list(LispVal... elements) {
+		LispVal list = LispNil.INSTANCE;
+		for (int i = elements.length - 1; i >= 0; i--) {
+			list = new LispCons(elements[i], list);
+		}
+		return list;
+	}
+
+	/** The outcome of each chunk a program's output reports, by chunk name. */
+	static Map<String, Outcome> outcomes(String output) {
+		Map<String, Outcome> outcomes = new LinkedHashMap<>();
+		List<String> printed = new ArrayList<>();
+		for (String line : splitLines(output)) {
+			if (!line.startsWith(CHUNK_MARK)) {
+				printed.add(line);
+				continue;
+			}
+			String rest = line.substring(CHUNK_MARK.length());
+			int error = rest.indexOf(CHUNK_ERROR);
+			outcomes.put(error < 0 ? rest : rest.substring(0, error),
+					new Outcome(List.copyOf(printed), error < 0 ? null : rest.substring(error + CHUNK_ERROR.length())));
+			printed.clear();
+		}
+		return outcomes;
+	}
+
+	/** Why a chunk fails, or {@code null} when it passes. */
+	static @Nullable String verdict(Chunk chunk, @Nullable Outcome outcome) {
+		if (outcome == null) {
+			return "no report: the program stopped before it";
+		}
+		if (!outcome.printed().isEmpty()) {
+			return "printed " + outcome.printed();
+		}
+		if (chunk.expectsError()) {
+			if (outcome.error() == null) {
+				return "no error, expected one matching " + chunk.patterns();
+			}
+			if (!chunk.matches(outcome.error())) {
+				return "error '" + outcome.error() + "' matches none of " + chunk.patterns();
+			}
+		}
+		else if (outcome.error() != null) {
+			return "unexpected error '" + outcome.error() + "'";
+		}
+		return null;
+	}
+
+	// run is null when there is no wasmtime to run it on; reference, the interpreter's
+	// output, is what a compiled leg must print.
+	private static DynamicContainer conformanceLeg(String leg, List<Chunk> chunks, @Nullable Future<String> run,
+			@Nullable Future<String> reference) {
+		if (run == null) {
+			return dynamicContainer(leg,
+					Stream.of(dynamicTest("(skipped)", () -> abort("no usable wasmtime on PATH"))));
+		}
+		List<DynamicTest> tests = new ArrayList<>();
+		if (reference != null) {
+			tests.add(dynamicTest("prints what the interpreter prints",
+					() -> assertThat(splitLines(run.get())).containsExactlyElementsOf(splitLines(reference.get()))));
+		}
+		for (Chunk chunk : chunks) {
+			tests.add(dynamicTest(chunk.name(), () -> {
+				String why = verdict(chunk, outcomes(run.get()).get(chunk.name()));
+				String known = KNOWN_FAILURES.get(chunk.name());
+				if (known != null) {
+					assertThat(why)
+						.as("%s on %s is known to fail (%s) and passes now: take it off KNOWN_FAILURES", chunk.name(),
+								leg, known)
+						.isNotNull();
+				}
+				else {
+					assertThat(why)
+						.as("chunk %s on %s%n--- source ---%n%s--- end source ---", chunk.name(), leg, chunk.source())
+						.isNull();
+				}
+			}));
+		}
+		return dynamicContainer(leg, tests.stream());
+	}
+
+	private static String interpretForms(List<LispVal> program) throws Exception {
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		CliStack.call("starlark-conformance", () -> {
+			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+			for (LispVal form : program) {
+				evaluator.eval(form);
+			}
+			return null;
+		});
+		return out.toString(StandardCharsets.UTF_8);
 	}
 
 	private static void standaloneOnInterpreter(Standalone s) throws Exception {
@@ -268,7 +597,11 @@ class StarlarkSpecE2eTest {
 
 	private static String runOnJvm(String program) throws Exception {
 		String name = "StarlarkSpec";
-		byte[] classBytes = new JvmSourceCompiler(name).sourceLanguage("starlark").compile(program, null).classBytes();
+		return runClass(name,
+				new JvmSourceCompiler(name).sourceLanguage("starlark").compile(program, null).classBytes());
+	}
+
+	private static String runClass(String name, byte[] classBytes) throws Exception {
 		ClassLoader loader = new ClassLoader(StarlarkSpecE2eTest.class.getClassLoader()) {
 			@Override
 			protected Class<?> findClass(String n) throws ClassNotFoundException {
@@ -287,7 +620,10 @@ class StarlarkSpecE2eTest {
 	}
 
 	private static String runOnWasm(String program, boolean component) throws Exception {
-		Path module = compileWasm(program, component, "starlark-spec");
+		return runModule(compileWasm(program, component, "starlark-spec"));
+	}
+
+	private static String runModule(Path module) throws Exception {
 		Path outFile = Files.createTempFile(workDir, "starlark-spec", ".out");
 		Path errFile = Files.createTempFile(workDir, "starlark-spec", ".err");
 		Process process = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", module.toString())
@@ -299,13 +635,17 @@ class StarlarkSpecE2eTest {
 			throw new IllegalStateException("wasmtime command timed out: " + module);
 		}
 		assertThat(process.exitValue())
-			.as("wasmtime exit code (component=%s): %s", component, Files.readString(errFile, StandardCharsets.UTF_8))
+			.as("wasmtime exit code (%s): %s", module, Files.readString(errFile, StandardCharsets.UTF_8))
 			.isZero();
 		return Files.readString(outFile, StandardCharsets.UTF_8);
 	}
 
 	private static Path compileWasm(String program, boolean component, String name) throws IOException {
-		CompileFrontendAccess.Program frontend = CompileFrontendAccess.starlark(program, true, component);
+		return compileWasm(CompileFrontendAccess.starlark(program, true, component), component, name);
+	}
+
+	private static Path compileWasm(CompileFrontendAccess.Program frontend, boolean component, String name)
+			throws IOException {
 		byte[] module = WasmLispCompiler.builder()
 			.component(component)
 			.runtimeFeatures(frontend.features().names())

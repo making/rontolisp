@@ -174,7 +174,8 @@ cases:
       ([3, 4], 3) None
       [[1, 2], [3, 4, 6], [5]] [22, 9] [(1, 0), (2, 0), (2, 1)]
   # A string's elements are code points; hash is the specification's; equal keys are one
-  # dict key, which keeps its place when stored again and goes last once removed.
+  # dict key, which keeps its place when stored again and goes last once removed; a float
+  # prints as Go's %g, NaN equals itself; a function is a key by identity.
   - name: values-are-the-same-on-every-backend
     source: |
       print(len("𝄞"), "héllo"[1], "日本語"[::-1], hash("hello"), hash("𝄞"), repr("a\"b\\c\n"))
@@ -195,11 +196,27 @@ cases:
           t += (2,)
           return [alias, keep]
       print(val_in_place(), 12345678901234567890 * 10, 7 // -2, 7 % -2, 7.5 // 2, 1 << 70 >> 68)
+      print(1e100, 1.23e45 * 1.23e45, 1 / 3, 1000000.0, 100000.0, 0.0001, 1e-5, -0.0, 3.0)
+      val_nan = float("nan")
+      val_inf = float("-Infinity")
+      val_d = {val_nan: 1}
+      val_d[float("NaN")] = 2
+      print(val_inf, -val_inf, val_nan == val_nan, [val_nan] == [val_nan], sorted([val_nan, 1, -val_inf, val_inf]), val_d)
+      print(float("1e3"), float("-1.5E-3"), float(".5"), float("5."), float(True), float(1 << 60), int(2.5e3), (1 << 53) + 1 == float((1 << 53) + 1))
+      print("%e %f %g %E %G %f %g %d" % (1.5, 1.5, 1.5, 1.5e10, 1.5e-10, 1e22, 1e6, 3.7))
+      print(repr("tab\t\x01\x7f\u00a0\u200b\ue000é😀"), "a\r\nb\rc".splitlines(True), "hello wORLD".title())
+      print({val_in_place: 1}[val_in_place], {len: "b"}[len], "ab".elems(), type("ab".elems()), list("ab".elem_ords()), type("é".codepoints()))
     expected: |
       1 é 語本日 99162322 1772394 "a\"b\\c\n"
       {1: "b", True: "c", (1, 2): "d!", None: "e"}
       {True: "c", (1, 2): "d!", None: "e", 1: "again"} True False True True True
       [[1, 2], (1,)] 123456789012345678900 -4 -1 3.0 4
+      1e+100 1.5129e+90 0.3333333333333333 1e+06 100000.0 0.0001 1e-05 -0.0 3.0
+      -inf +inf True True [-inf, 1, +inf, nan] {nan: 2}
+      1000.0 -0.0015 0.5 5.0 1.0 1.152921504606847e+18 2500 False
+      1.500000e+00 1.500000 1.5 1.500000E+10 1.5E-10 10000000000000000000000.000000 1e+06 3
+      "tab\t\x01\x7f\u00a0\u200b\ue000é😀" ["a\r\n", "b\r", "c"] Hello World
+      1 b "ab".elems() string.elems [97, 98] string.codepoints
 # A case whose program ENDS: it prints stdout, then an uncaught error takes the process
 # down. Each one is compiled and run on its own, per backend, and must report the same
 # error text.
