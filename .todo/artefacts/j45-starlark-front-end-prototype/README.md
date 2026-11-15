@@ -79,7 +79,7 @@ bazelbuild/starlark at `c0af0ea`.
   | rontolisp JVM `.class` | 0.49 s |
   | rontolisp WASM preview 1 | 0.48 s |
   | rontolisp WASM component | 0.36 s |
-  | Java Starlark (`starlark_deploy.jar`) | 0.30 s |
+  | Java Starlark (`starlark_deploy.jar`) | 0.30 s (an error exit: it forbids recursion; `.kb/starlark-frontend.md`) |
   | CPython 3.12 | 0.14 s |
 
   Every operator is a generic call and `range` is materialized; nothing was optimized.

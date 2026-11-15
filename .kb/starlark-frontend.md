@@ -552,8 +552,11 @@ lowering and Lisp run time that first measured the design,
   | JVM `.class` | 0.45-0.50 s | 0.29-0.36 s |
   | WASM preview 1 | 0.39-0.40 s | 0.28-0.37 s |
   | WASM component | 0.35-0.38 s | 0.28-0.33 s |
-  | Java Starlark | 0.26-0.29 s | |
   | CPython 3.12 | 0.10-0.13 s | |
+
+  The prototype's row "Java Starlark 0.26-0.29 s" was the time to an error: Java Starlark
+  forbids recursion and `bench.star` exits 1 with `function 'fib' called recursively`
+  (found 2026-11-16). The other implementations: "Against the other implementations" below.
 
   The two lowerings differ here in an integer test ahead of the float one in the
   arithmetic helpers, helpers without `&key`, and no block where no exit needs one; which
@@ -652,6 +655,28 @@ time), same machine as above:
 - `bench.star` as in the table above (wall time, three runs): interpreter 2.55-2.63 s,
   JVM 0.15-0.16 s, WASM 0.07 s once wasmtime's cache holds the module (0.20 s the first
   run; before: 0.29-0.33 s and 0.39 s), component the same.
+
+### Against the other implementations (2026-11-16)
+
+At `82f86e5ba`, seconds, the best of three runs of the whole process (start-up included),
+`time.sh` for rontolisp; Go Starlark (`go.starlark.net` `4f4267fb140d`, `cmd/starlark
+-recursion`; its start-up 0.01 s), Java Starlark (`starlark_deploy.jar`), CPython 3.12.
+Programs: `bench.star` of the prototype, the rest of
+`.todo/artefacts/j51-starlark-typed-fast-paths/`. Every runner printed the same output;
+"--" is Java Starlark refusing recursion (the spec lets an implementation forbid it).
+
+| program | JVM | WASM | component | Go | Java | CPython |
+|---|---|---|---|---|---|---|
+| `bench.star` | 0.16 | 0.07 | 0.07 | 0.54 | -- | 0.12 |
+| `fib.star` (`fib(35)`) | 0.28 | 0.45 | 0.44 | 22.02 | -- | 1.48 |
+| `loop.star` (`range(30,000,000)`) | 0.20 | 0.69 | 0.64 | 3.80 | 2.41 | 1.82 |
+| `calls.star` | 0.22 | 0.27 | 0.30 | 7.31 | 1.95 | 0.75 |
+| `mixed.star` (Collatz, sieve) | 2.15 | 2.53 | 2.57 | 4.60 | 2.85 | 1.22 |
+
+Go is the implementation the error texts follow, so it is the one to compare against; Java
+Starlark is a second opinion on semantics only. rontolisp compiles ahead of time and the
+three others interpret, so this is not a like-for-like contest. `mixed.star` loses to
+CPython on `flags[j]`, which stays a generic call.
 
 ## Positions
 
