@@ -215,9 +215,10 @@ cases:
       1.500000e+00 1.500000 1.5 1.500000E+10 1.5E-10 10000000000000000000000.000000 1e+06 3
       "tab\t\x01\x7f\u00a0\u200b\ue000é😀" ["a\r\n", "b\r", "c"] Hello World
       1 b "ab".elems() string.elems [97, 98] string.codepoints
-# A case whose program ENDS: it prints stdout, then an uncaught error takes the process
-# down. Each one is compiled and run on its own, per backend, and must report the same
-# error text.
+# A case that is a program of its own, compiled and run alone, per backend. One with an
+# `error` ENDS: it prints stdout, then an uncaught error takes the process down, and every
+# backend must report the same error text. One with `files` is read from a directory
+# holding them, its source as the `entry` file (main.star when absent).
 standalone:
   # The prototype's divergence: a struct accessor handed another struct was two different
   # texts on the interpreter and the JVM and a trap on wasm. Every helper tests first.
@@ -274,3 +275,120 @@ standalone:
     stdout: |
       3 1
     error: function fact called recursively
+  # load: a module runs once however many files load it, where the first load stands;
+  # its globals are its own (three files define helper, and under spec each def has a
+  # flag of its own file); a name starting with an underscore and a name it loaded
+  # itself stay inside; a def above the load statement calls what it binds. When a file
+  # has run, the lists and dicts made meanwhile are frozen: a frozen list is a dict key,
+  # a list a module's function makes later is the caller's, and a default value made
+  # while the module ran refuses mutation.
+  - name: a-module-runs-once-with-globals-of-its-own-and-is-frozen
+    standard: spec
+    files:
+      lib/words.star: |
+        load("tags.star", "tag")
+        print("words runs")
+        COUNT = 2
+        _seen = ["start"]
+        seen = _seen
+        def helper(x):
+            return tag(x.upper())
+        def shout(x):
+            return helper(x) * COUNT
+        def fresh():
+            return [1, 2]
+        def remember(x, into = _seen):
+            into.append(x)
+            return into
+      lib/more.star: |
+        load("../lib/tags.star", "tag")
+        print("more runs")
+        def helper(x):
+            return tag(x.lower())
+        def whisper(x):
+            return helper(x)
+      lib/tags.star: |
+        print("tags runs")
+        def tag(s):
+            return "<" + s + ">"
+    source: |
+      def helper(x):
+          return "main " + shout(x)
+      load("lib/words.star", "shout", count = "COUNT", "fresh", "seen", "remember")
+      load("lib/more.star", "whisper")
+      print(helper("a"), whisper("B"), count, seen, type(shout))
+      own = fresh()
+      own.append(3)
+      keys = {seen: "a frozen list is a key"}
+      print(own, keys[seen], remember(1, []))
+      remember(2)
+    stdout: |
+      tags runs
+      words runs
+      more runs
+      main <A><A> <b> 2 ["start"] function
+      [1, 2, 3] a frozen list is a key [1]
+    error: cannot append to frozen list
+  # Across languages nothing is converted. A Common Lisp file loads Starlark files: their
+  # globals are its variables, and rontolisp:starlark-call calls a def, a built-in or a
+  # method value with positional arguments. A Starlark file loads the functions of a
+  # Common Lisp package -- load("@package", name = "symbol") -- and calls them, or a
+  # function it is handed, the same way. A module two files lowered apart load runs once.
+  # A call that ends in an error some handler takes gives back the loop it left counted
+  # and, under spec, the declaration it left active; the file's own values are frozen.
+  - name: common-lisp-and-starlark-call-each-other
+    standard: spec
+    entry: main.lisp
+    files:
+      rules.star: |
+        load("@cl-user", "emit", twice = "|twice|")
+        load("@cl", "gcd", cl_list = "list")
+        load("common.star", "tag")
+        targets = []
+        def target(name, deps = []):
+            targets.append(name)
+            return emit(name, cl_list(*deps))
+        def describe(*names, sep = ", "):
+            return sep.join(names)
+        def each(xs, f):
+            return [f(x) for x in xs]
+        def kinds(*xs):
+            return [type(x) for x in xs]
+        def fail_at(xs, bad):
+            for x in xs:
+                if x == bad:
+                    fail("stopped at", x)
+            xs.append(bad)
+            return xs
+        text = str
+        print(target("a"), target("b", ["a"]), gcd(12, 18), twice(21), emit, each([1, 2], twice), tag("r"))
+      sub/more.star: |
+        load("../common.star", "tag")
+        def tagged(x):
+            return tag(x)
+      common.star: |
+        print("common runs")
+        def tag(s):
+            return "<" + s + ">"
+    source: |
+      (defun emit (name deps) (format t "emit ~a ~s~%" name deps) (length deps))
+      (defun |twice| (x) (* 2 x))
+      (defun show (x) (format t "~a~%" (rontolisp:starlark-call |text| x)))
+      (load "rules.star")
+      (load "sub/more.star")
+      (show (rontolisp:starlark-call |describe| "x" (rontolisp:starlark-call |tagged| "m")))
+      (show (rontolisp:starlark-call |kinds| :none t nil 1 2.5d0 "s" #'car '(1 2)))
+      (let ((xs (rontolisp:starlark-call |each| |targets| #'string-upcase)))
+        (show (handler-case (rontolisp:starlark-call |fail_at| xs "B") (error (e) (princ-to-string e))))
+        (show (rontolisp:starlark-call |fail_at| xs "none")))
+      (show (handler-case (rontolisp:starlark-call |target| "c") (error (e) (princ-to-string e))))
+    stdout: |
+      common runs
+      emit a NIL
+      emit b ("a")
+      0 1 6 42 <built-in function cl-user:emit> [2, 4] <r>
+      x, <m>
+      ["NoneType", "bool", "bool", "int", "float", "string", "builtin_function_or_method", "unknown"]
+      fail: stopped at B
+      ["A", "B", "none"]
+      cannot append to frozen list

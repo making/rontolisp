@@ -13,7 +13,8 @@ and every user surface says so (`--source-language` help, the title of
   and `clojure` (`PackageCycleTest`): `StarlarkLexer` + `StarlarkParser` + `StarlarkSyntax`
   (text -> tree, "Reader" below), `StarlarkLowering` (tree -> core forms),
   `StarlarkBuiltins` (the built-in functions' and methods' signatures), `StarlarkNames`
-  (identifier escaping), `Starlark` (the facade).
+  (identifier escaping, a module's prefix), `StarlarkFiles` (the modules `load` reads,
+  "Modules" below), `Starlark` (the facade).
 - Reached ONLY through the seam: `eval/SourceLanguage.STARLARK`, picked for `.star` or by
   `--source-language starlark` (`star`), per FILE (`.kb/source-language.md`). A file is
   lowered whole. There is no `SourceSession` yet: its constructor refuses the language, so
@@ -26,7 +27,8 @@ and every user surface says so (`--source-language` help, the title of
   over) and `LibraryDefunPruner` drops what stays unreachable -- its five `defstruct`s are
   expanded by NAME like Scheme's (`starlarkStructNames`), so a program carries the
   accessors it reaches. The name gate is the spelling: `mayDefine` admits a member
-  starting `%STARLARK-` (`.kb/source-language.md`, "The run-time libraries' name gate").
+  starting `%STARLARK-` (`.kb/source-language.md`, "The run-time libraries' name gate")
+  and the one public name, `rontolisp:starlark-call` ("Across languages").
   The playground's chain has no splice yet.
 
 ## The decisions (2026-11-15)
@@ -68,14 +70,14 @@ and every user surface says so (`--source-language` help, the title of
 |---|---|
 | `None`, `True`, `False` | `:none`, `T`, `NIL` (a name, so a file may rebind it) |
 | int, float, string | integer (bignum), double, string literal; `-1` is the literal |
-| list, tuple, dict, range, function | structures of `starlark.lisp`: a list an adjustable vector plus `frozen` and an iteration count, a tuple a simple vector, a dict an `equal` hash table from a key's normal form to `(key . value)` plus the same two |
+| list, tuple, dict, range, function | structures of `starlark.lisp`: a list an adjustable vector plus the cell it was made under ("Freezing") and an iteration count, a tuple a simple vector, a dict an `equal` hash table from a key's normal form to `(key . value)` plus the same two |
 | `[a, b]`, `(a, b)`, `{k: v}` | `(%starlark-make-list a b)`, `-make-tuple`, `-make-dict` (a key written twice is an error) |
 | top-level `x = v` | top-level `(setq x v)`, never `defvar` (a special would leak into callees) |
 | top-level `def` standing at the top level, the only binding of its name, no `*` parameter | `(defun f (a b) ..)` AHEAD of every statement (lowered where the `def` stands), plus at its place `(setq f (%starlark-make-function "f" '("a" "b") defaults 2 nil nil #'f))` |
 | any other `def`, `lambda` | the function value over a `(lambda (params.. [args] [kwargs]) ..)` |
 | function body | `(block %SL-FN (let ((assigned-name :%unbound) ..) ..))`; the block only when a `return` leaves from the middle, the `let` only with locals; a `return` ending the body is the body's value |
 | a read of a name not assigned on every path to it | `(%starlark-local x "x")` / `(%starlark-global x "x")`, refusing `:%unbound`; a global so read starts as `(setq x :%unbound)` ahead of the statements |
-| function body under `--starlark-standard spec` | `(if %SL-ACTIVEn (%starlark-recursive "f")) (setq %SL-ACTIVEn t) (let ((r body)) (setq %SL-ACTIVEn nil) r)`, every `%SL-ACTIVEn` set to `nil` ahead of the statements |
+| function body under `--starlark-standard spec` | `(%starlark-enter FLAG "f") (let ((r body)) (%starlark-leave FLAG) r)`, `FLAG` the global `sl%(FILE)%SL-ACTIVEn`, set to `(list nil)` ahead of the statements |
 | `for` | `(let* ((seq it) (items (%starlark-iterate seq)) (count (length items)) (index 0)) (tagbody top (if (< index count) (progn assign (setq index (+ index 1)) body.. (go top)))) (%starlark-iterated seq))`; `(block %SL-BREAK ..)` around the tagbody and `(block %SL-CONTINUE ..)` around the body only when the body has that exit |
 | `return v` inside loops | `(let ((r v)) (%starlark-iterated seq-inner) .. (return-from %SL-FN r))` -- every loop of the function gives its iterable back first, so no `unwind-protect` and no EH mode on wasm |
 | comprehension | the same loops around `(vector-push-extend elt acc)` / `(%starlark-set-index acc k v)`, its variables in a `let` of its own, the first iterable evaluated outside it |
@@ -90,15 +92,18 @@ and every user surface says so (`--source-language` help, the title of
 | any other call | `(%starlark-call f (list pos..) (list "name" v ..))`, `*args` and `**kwargs` appended by `%starlark-elements` / `%starlark-keywords` |
 | a built-in as a value, `x.m` uncalled | `(%starlark-builtin "len" '("x") nil 1 1 nil nil #'%starlark-b-len)`, `(%starlark-method x '("list") "append" ..)`: function values the binder takes |
 | `x.nope`, `x.nope(..)` | `(%starlark-no-attribute x "nope")`: no type has it, so the arguments are never evaluated |
-| `load`, `b".."` | refused at their position |
+| a file | `(setq sl%(FILE)%SL-FILE (%starlark-file-begin))` ahead of its statements, `(%starlark-file-end sl%(FILE)%SL-FILE)` after them ("Freezing") |
+| `load("m.star", "f", y = "x")` | the module's `defun`s and `(defvar sl%(m.star)%SL-FILE nil)` with the program's definitions; where the first load of it stands `(setq STATE (if STATE t (%starlark-file-begin)))`, each of its statements as `(if (consp STATE) stmt)`, `(if (consp STATE) (setq STATE (%starlark-file-end STATE)))`; then `(setq f sl%(m.star)f) (setq y sl%(m.star)x)`, through `(%starlark-loaded v "x" "m.star")` where a path of the module may not assign it ("Modules") |
+| `load("@cl-user", f = "add-two")` | `(setq f (%starlark-foreign "cl-user:add-two" #'add-two))`; a call of `f` with positional arguments only is `(add-two a b)` ("Across languages") |
+| `b".."` | refused at its position |
 
 ## Names
 
 Resolved while lowering (`StarlarkLowering.reference`): the innermost function or
 comprehension binding the name ANYWHERE in its block, else the file's globals (bound
-anywhere at the top level, also inside a top-level `if`/`for`), else `None`/`True`/`False`,
-else a built-in function, else `undefined: NAME` as a positioned `LispReadException` before
-anything runs. A dot's name is not resolved.
+anywhere at the top level, also inside a top-level `if`/`for`, or by a `load` statement),
+else `None`/`True`/`False`, else a built-in function, else `undefined: NAME` as a positioned
+`LispReadException` before anything runs. A dot's name is not resolved.
 
 **Definite assignment runs with the lowering** (`StarlarkLowering.Flow`, 2026-11-15): the
 names assigned on every path to where the lowering stands, threaded through the statements
@@ -133,11 +138,15 @@ one, as Scheme's is its own dialect: the bench (`fib`), the prototype's demo (a 
   recurring).
 - Recursion is one flag per DECLARATION (a `def` or `lambda`), as the spec words it ("a
   function value with the same declaration"), so a fresh closure per step (the Y
-  combinator) is caught. A global, not a dynamic binding: a special's binding is a
-  protected region on every backend and forces EH mode on wasm. It is set back on every
-  normal exit and NOT on an error, like a loop's count: a Common Lisp `handler-case` that
-  keeps going finds the declaration still active. The flags are reset ahead of the
-  statements, so a later program (the corpus's next chunk) starts clean.
+  combinator) is caught. A global holding a cons, not a dynamic binding: a special's
+  binding is a protected region on every backend and forces EH mode on wasm. The global
+  is spelled behind the file's prefix (`sl%(FILE)%SL-ACTIVEn`): two files of one program
+  number their declarations alike, and a shared flag made `helper` of a module "recursive"
+  under `helper` of the program (pinned by the `standalone:` module case, read under
+  `spec`). The flag is set back on every normal exit; a call that is running is also a
+  frame ("Frames"), so after an error `rontolisp:starlark-call` sets it back. The flags
+  are made anew ahead of the statements, so a later program (the corpus's next chunk)
+  starts clean.
 
 ## The two call tiers
 
@@ -240,9 +249,134 @@ Written to Go's Starlark (`go.starlark.net`, its `library.go`/`value.go` read
 
 A loop counts itself on the list or dict it walks (`%starlark-iterate` /
 `%starlark-iterated`) and a mutation meanwhile is refused. The count is given back on every
-normal exit -- the loop's end, `break`, a `return` -- and NOT on an error: an error ends the
-program. A host that catches it and keeps the value (a REPL, a Common Lisp `handler-case`)
-will find the list still counted.
+normal exit -- the loop's end, `break`, a `return` -- by the lowering, and after an error by
+the boundary ("Frames").
+
+## Frames: what a call that does not return gives back (2026-11-15)
+
+**Decision: the boundary resets, and the boundary is `rontolisp:starlark-call`.** Go gives
+an iterator back with `defer`; here no loop has an `unwind-protect` (EH mode on wasm for
+every program), so what is counted is also pushed on one global list,
+`rontolisp::%starlark-frames`: the list or dict a loop walks, and under `spec` the flag of
+a declaration a call of which runs. The normal exits pop (`%starlark-pop-frame`, the
+innermost one). `rontolisp:starlark-call` remembers the list and the mutability cell,
+calls inside an `unwind-protect`, and on any exit gives back every frame above its mark
+(`%starlark-unwind`: a loop's count down, a flag off). Only a program that calls Starlark
+from Common Lisp carries the `unwind-protect`: `print(1 + 2)` grew by 566 B of class and
+174 B of wasm with all of this section and "Freezing".
+
+- Measured on the `standalone:` case `common-lisp-and-starlark-call-each-other`: called
+  through `rontolisp::%starlark-call` (no boundary) instead, the call after the caught
+  error is `cannot append to list during iteration`, and under `spec`
+  `function fail_at called recursively`; through the door both calls answer.
+- NOT reset: an error some handler takes outside the door -- around `(load "x.star")`.
+  The file did not finish; its values stay unfrozen and its loops counted.
+- One thread: the frames and the mutability are globals.
+- For the REPL (`.todo/j50`): `(%starlark-unwind nil)` between buffers gives everything
+  back.
+
+## Modules (`load`, 2026-11-15)
+
+**A module is a file lowering of its own whose globals are spelled behind its path, lowered
+with the file that loads it.** `StarlarkLowering.load`/`module`: the file is read through
+`starlark/StarlarkFiles` (`eval/SourceLanguage.starlarkFiles` over the site's
+`SourceLoader`, relative to the loading file's directory; `StarlarkFiles.NONE` refuses
+every file), parsed and lowered by a child `StarlarkLowering` sharing the `Session` (the
+modules by key, the files being lowered, every file's definitions). Read at lowering time,
+so a compiled program carries its modules.
+
+- **Names**: a module's global `helper` is `sl%(lib/util.star)helper`
+  (`StarlarkNames.filePrefix`): the key is the resolved path with `/` separators, `.` and
+  `name/..` removed, and `%`, `:`, `)` escaped (`%%`, `%c`, `%r`; a colon is a package
+  marker to the pipeline). No identifier's spelling starts `sl%` (its third character is
+  a `%`; Scheme's library names start `s%%(`). The program's own globals stay unprefixed
+  -- what a Common Lisp file reads. The key is the path AS RESOLVED, so one file reached
+  by an absolute and a relative spelling is two modules; rejected: a key relative to the
+  entry file (two program files in different directories would each run the module) and
+  a number per lowering (two lowerings of one program would share numbers).
+- **Once per program**: a module is lowered once per lowering (`Session.modules`) and its
+  statements stand where the first `load` of it stands, in emission order. Across files
+  lowered APART (a Common Lisp file loading two `.star` files that load one module:
+  inlined on the compile path, loaded at run time on the interpreter) both emit them, and
+  the state decides: `(defvar STATE nil)`; unset, the first form starts the run and
+  `STATE` is the file's mutability cell (a cons) while it lasts, then `T`. A state that
+  is set stays set, so a module that stopped at an error is not run again. Each statement
+  is its own top-level form behind `(if (consp STATE) ..)`, not one `progn`: a top-level
+  form is a JVM method (`.kb/jvm-method-size-limits.md`). The `defun`s are bare and may
+  be emitted twice.
+- **What `load` binds is a global of the loading file, assigned the module's**: a copy,
+  not an alias -- a checked read's `(setq x :%unbound)` would otherwise clear the
+  module's variable. A module's globals do not change once it ran, so the copy is the
+  value. Such a name is the file's own: no third file loads it (`loadedOnly`), and under
+  `spec` an assignment of it is `cannot reassign local x declared at ..`, a `load` over a
+  binding `cannot reassign top-level x` (Go's texts).
+- **Direct across files**: a name only a `load` binds to a module's direct `def` is called
+  as `(sl%(m.star)f a b)`, behind the same checked read of the loading file's global.
+- **Before anything runs** (`LispReadException` at the statement or the name):
+  `cannot load m.star: file not found`, `cannot load m.star: cycle in load graph` (a file
+  being lowered, the program's included), `load: name x not found in module m.star`,
+  `load: names with leading underscores are not exported: _x`, a name that is no
+  identifier without a local name, `load statement within a conditional` / `a loop`. A
+  global a path of the module may not assign (bound in a top-level `if`) is the same
+  `not found` error when the `load` runs (`%starlark-loaded`).
+- A function of a module is reported under its symbol: `in sl%(words.star)shout`.
+
+## Freezing (2026-11-15)
+
+**A list or dict holds the cell it was made under, and a file's end sets its cell.**
+`rontolisp::%starlark-mutability` is the current cell; `%starlark-file-begin` puts
+`(nil . previous)` in front and answers it, the constructors store the current one in the
+`mutability` slot, `%starlark-file-end` sets the cell's car and goes back to its cdr. So
+freezing is one `rplaca`, and what a closure of the file captured is frozen with no walk.
+Every file is bracketed, the program's too (the specification freezes "whether directly by
+the application or indirectly through a load"): a Common Lisp file that loaded a `.star`
+file finds its lists frozen.
+
+- Rejected: the walk from the globals (Go's `Freeze`). It needs each function value to
+  hand out what it captured (a second closure per nested `def`), a flag on a function to
+  end a cycle, and is exponential over a tuple DAG.
+- The difference from the specification's reachability: a value made while the file ran
+  that no global reaches is frozen too. A value the file's function makes when called
+  later is made under the caller's cell.
+- **A frozen list is a dict key** (`%starlark-key`: `(:list . keys)`), as `spec.md`
+  `c0af0ea` says ("not hashable, unless they have become immutable due to freezing", with
+  a comment proposing to drop it). Go and Java refuse it ("even a frozen list is
+  unhashable"). A frozen dict stays unhashable: its normal form would have to be
+  independent of insertion order, and a `def` key has no order.
+- The token is a global of the file's (`sl%(FILE)%SL-FILE`), not the current cell: an
+  error some handler took inside a file's run leaves another file's cell current, and the
+  end must set its own.
+
+## Across languages (2026-11-15)
+
+**Nothing is converted; the door is a call, in both directions.**
+
+- **Values**: `None` is `:none`, `True`/`False` are `T`/`NIL`, numbers and strings are
+  themselves, a list, tuple, dict, range and function are the structures. A Common Lisp
+  value with no Starlark type is `"unknown"` (`<unknown>`, true, `eq`, unhashable); a
+  Common Lisp function is `"builtin_function_or_method"`, callable, `<built-in function>`.
+  `NIL` is `False`, so an empty Common Lisp list is no Starlark list -- why a Common Lisp
+  list is not made iterable.
+- **Common Lisp -> Starlark: the function VALUE**, the variable `|name|` of a `(load
+  ..)`ed file, through `(rontolisp:starlark-call f arg..)`: positional arguments, bound
+  by `%starlark-bind` (defaults, `*args`, the binder's messages). The direct `defun`
+  under the same spelling exists for some `def`s only, with the exact count, and may
+  change with the lowering (`.todo/j51`): no contract. It is the one public name of
+  `starlark.lisp` (`LispNames.STARLARK_CALL`, a `rontolisp` external,
+  `StarlarkLibrary.mayDefine`); it is also "Frames"' boundary.
+- **Starlark -> Common Lisp: `load("@package", local = "symbol")`**. The specification
+  leaves a module string to the application; `@` + a package name binds the symbol's
+  FUNCTION (the string upcased, verbatim between vertical bars; `cl-user` symbols bare,
+  any other `PKG::NAME`) as a built-in value named `package:symbol`, and a call with
+  positional arguments only is the direct Common Lisp call. This is the door for
+  host-predeclared names too: the host defines the function, the file loads it.
+  Rejected: an undefined name falling through to a Common Lisp function (Scheme's rule;
+  `undefined: x` is a static error the corpus expects) and `load("lib.lisp", ..)` reading
+  a file (the host loads its own files; refused as `file not found` only when missing --
+  any path is read as Starlark).
+- **Named arguments do not cross**: `cl:gcd got an unexpected keyword argument a`.
+- **Sequences cross by spreading**: `cl_list(*xs)` with `load("@cl", cl_list = "list")`,
+  `(apply #'rontolisp:starlark-call f list)`. No converter is shipped.
 
 ## Measured (2026-11-15)
 
@@ -255,6 +389,13 @@ lowering and Lisp run time that first measured the design,
   `.class` 161,211 B, `.wasm` 146,660 B, component 150,710 B; `print(1 + 2)` alone 62,136 /
   51,673 / 55,336 B (the prototype, its library unpruned: 161,152 / 144,876 / 148,794 B for
   the demo).
+- Those sizes are of the first lowering. Re-measured at `85dd248a6` (after the corpus's
+  run-time additions: a float's `%g`, `format`, the `repr` table, positions): demo
+  284,890 / 263,265 / 266,992 B, `print(1 + 2)` 177,793 / 178,269 / 181,868 B. With the
+  file brackets, frames and modules of this file: 287,299 / 264,760 / 268,413 B and
+  178,359 / 178,443 / 182,071 B. `bench.star` is unchanged by them (JVM 0.30-0.34 s, wasm
+  0.28-0.34 s, three runs each, before and after). What tripled `print(1 + 2)` between
+  the two measurements was not measured.
 - `bench.star` (`fib(27)` plus a 10^6-iteration `for` over `range`), wall time of one run,
   three runs each:
 
@@ -367,10 +508,13 @@ off. The compiled legs expand the wrapped forms through `CompileFrontendAccess.l
 (`CompileFrontend.expand`, as `run` expands a `.star` file's read).
 
 `StarlarkSpecE2eTest` over `starlark-spec.yaml` (the corpus on four backends, in process:
-the prototype's feature tour first, then a case per decision above; `standalone:` cases end
-with an uncaught error and must report the same text, read against their `standard:`),
+the prototype's feature tour first, then a case per decision above; a `standalone:` case is
+a program of its own, read against its `standard:` -- one ending with an uncaught error
+must report the same text, one with `files:` is read from a directory holding them, its
+`entry:` a `.star` or a `.lisp` file: modules and freezing, and the two languages calling
+each other),
 `StarlarkLoweringTest` (the table's rows as emitted forms -- a source starting `# spec` is
-read against `spec` -- the refusals, read against `spec`, helper arity),
+read against `spec` -- the refusals, `load`'s included, helper arity),
 `SourceLanguageTest#starlarkClaimsItsExtension`,
 `RontoLispCliStreamsTest#aStarlarkFileRunsCompilesAndIsRefusedWhereItCannot` (and
 `--starlark-standard`),

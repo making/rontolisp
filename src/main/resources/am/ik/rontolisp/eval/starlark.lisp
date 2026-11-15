@@ -3,7 +3,8 @@
 ;; a Starlark name: the interpreter loads it on the first resolution of a
 ;; rontolisp::%starlark- function, the compile path splices it when the program
 ;; references one (StarlarkLibrary.java) and the tree-shaker drops what stays
-;; unreachable.
+;; unreachable. One name is public: rontolisp:starlark-call, what Common Lisp calls a
+;; Starlark function value with.
 ;;
 ;; The value model these helpers share with the lowering (.kb/starlark-frontend.md):
 ;; None is :none, True and False are T and NIL, an int is an integer, a float a double,
@@ -24,12 +25,23 @@
 
 ;; --- values ---------------------------------------------------------------------
 
-;; ITEMS is an adjustable vector with a fill pointer. ITERATING counts the loops
+;; The cell every list and dict made now is made under: its car turns true when the
+;; file that was running has run, and what was made under it is frozen. A file's run
+;; puts a cell of its own in front (%starlark-file-begin), whose cdr is the one before.
+(defvar rontolisp::%starlark-mutability (list nil))
+
+;; What a call that does not return leaves to give back, innermost first: a list or a
+;; dict a loop counts itself on, and under --starlark-standard spec the flag of a
+;; declaration a call of which runs (a cons). %starlark-unwind gives them back.
+(defvar rontolisp::%starlark-frames nil)
+
+;; ITEMS is an adjustable vector with a fill pointer. MUTABILITY is the cell the list
+;; was made under: the list is frozen once its car is true. ITERATING counts the loops
 ;; running over the list: a list is not mutated while one runs.
 (defstruct (rontolisp::%starlark-list (:%intern-package "RONTOLISP")
             (:constructor rontolisp::%starlark-new-list (items)) (:copier nil))
   items
-  (frozen nil)
+  (mutability rontolisp::%starlark-mutability)
   (iterating 0))
 
 ;; ITEMS is a simple vector, never written after the tuple is made.
@@ -44,7 +56,7 @@
 (defstruct (rontolisp::%starlark-dict (:%intern-package "RONTOLISP")
             (:constructor rontolisp::%starlark-new-dict (table)) (:copier nil))
   table
-  (frozen nil)
+  (mutability rontolisp::%starlark-mutability)
   (iterating 0))
 
 (defstruct (rontolisp::%starlark-range (:%intern-package "RONTOLISP")
@@ -143,6 +155,7 @@
          (if (rontolisp::%starlark-function-kind x)
              "builtin_function_or_method"
              "function"))
+        ((functionp x) "builtin_function_or_method")
         (t "unknown")))
 
 (defun rontolisp::%starlark-no-attribute (x name)
@@ -240,6 +253,40 @@
     (dotimes (i n) (setf (aref out i) (aref v i)))
     out))
 
+;; Takes X off the frames. It is the innermost one on every exit the lowering makes;
+;; one below is looked for only after an error left frames behind.
+(defun rontolisp::%starlark-pop-frame (x)
+  (let ((frames rontolisp::%starlark-frames))
+    (if (eq (car frames) x)
+        (setq rontolisp::%starlark-frames (cdr frames))
+        (loop while (cdr frames)
+              do
+                (if (eq (cadr frames) x)
+                    (progn
+                      (rplacd frames (cddr frames))
+                      (return nil))) (setq frames (cdr frames))))))
+
+;; Gives back every frame above MARK, what the frames were when a call started: the
+;; loops and declarations a call that did not return left counted. Nothing when MARK
+;; is no tail of the frames any more.
+(defun rontolisp::%starlark-unwind (mark)
+  (let ((frames rontolisp::%starlark-frames))
+    (loop while (and frames (not (eq frames mark)))
+          do (setq frames (cdr frames)))
+    (if (eq frames mark)
+        (loop until (eq rontolisp::%starlark-frames mark)
+              do
+                (let ((x (car rontolisp::%starlark-frames)))
+                  (cond ((consp x) (rplaca x nil))
+                        ((rontolisp::%starlark-list-p x)
+                         (setf (rontolisp::%starlark-list-iterating x)
+                               (- (rontolisp::%starlark-list-iterating x) 1)))
+                        ((rontolisp::%starlark-dict-p x)
+                         (setf (rontolisp::%starlark-dict-iterating x)
+                               (- (rontolisp::%starlark-dict-iterating x) 1)))))
+                (setq rontolisp::%starlark-frames
+                      (cdr rontolisp::%starlark-frames))))))
+
 ;; Starts a loop over X: the vector the loop indexes. A list and a dict count the loop
 ;; until %starlark-iterated, and refuse a mutation meanwhile; the list's own vector is
 ;; what the loop reads, since nothing can write it before then.
@@ -247,11 +294,13 @@
   (cond ((rontolisp::%starlark-list-p x)
          (setf (rontolisp::%starlark-list-iterating x)
                (+ (rontolisp::%starlark-list-iterating x) 1))
+         (setq rontolisp::%starlark-frames (cons x rontolisp::%starlark-frames))
          (rontolisp::%starlark-list-items x))
         ((rontolisp::%starlark-tuple-p x) (rontolisp::%starlark-tuple-items x))
         ((rontolisp::%starlark-dict-p x)
          (setf (rontolisp::%starlark-dict-iterating x)
                (+ (rontolisp::%starlark-dict-iterating x) 1))
+         (setq rontolisp::%starlark-frames (cons x rontolisp::%starlark-frames))
          (coerce (rontolisp::%starlark-dict-key-list x) 'vector))
         ((rontolisp::%starlark-range-p x) (rontolisp::%starlark-range-vector x))
         ((rontolisp::%starlark-string-iterable-p x)
@@ -262,10 +311,12 @@
 (defun rontolisp::%starlark-iterated (x)
   (cond ((rontolisp::%starlark-list-p x)
          (setf (rontolisp::%starlark-list-iterating x)
-               (- (rontolisp::%starlark-list-iterating x) 1)))
+               (- (rontolisp::%starlark-list-iterating x) 1))
+         (rontolisp::%starlark-pop-frame x))
         ((rontolisp::%starlark-dict-p x)
          (setf (rontolisp::%starlark-dict-iterating x)
-               (- (rontolisp::%starlark-dict-iterating x) 1))))
+               (- (rontolisp::%starlark-dict-iterating x) 1))
+         (rontolisp::%starlark-pop-frame x)))
   nil)
 
 ;; The N elements of X for a compound target, as a vector nothing writes.
@@ -286,17 +337,17 @@
 
 ;; L is a list. VERB names the mutation, as in "cannot append to frozen list".
 (defun rontolisp::%starlark-list-writable (l verb)
-  (cond
-   ((rontolisp::%starlark-list-frozen l) (error "cannot ~a frozen list" verb))
-   ((> (rontolisp::%starlark-list-iterating l) 0)
-    (error "cannot ~a list during iteration" verb))))
+  (cond ((car (rontolisp::%starlark-list-mutability l))
+         (error "cannot ~a frozen list" verb))
+        ((> (rontolisp::%starlark-list-iterating l) 0)
+         (error "cannot ~a list during iteration" verb))))
 
 ;; D is a dict.
 (defun rontolisp::%starlark-dict-writable (d verb)
-  (cond
-   ((rontolisp::%starlark-dict-frozen d) (error "cannot ~a frozen dict" verb))
-   ((> (rontolisp::%starlark-dict-iterating d) 0)
-    (error "cannot ~a dict during iteration" verb))))
+  (cond ((car (rontolisp::%starlark-dict-mutability d))
+         (error "cannot ~a frozen dict" verb))
+        ((> (rontolisp::%starlark-dict-iterating d) 0)
+         (error "cannot ~a dict during iteration" verb))))
 
 ;; --- equality and ordering --------------------------------------------------------
 
@@ -443,8 +494,8 @@
 
 ;; The normal form a key is stored under, so that equal keys meet in an `equal` table:
 ;; 1 and 1.0 are one key, True and 1 are two, every NaN is one key, a tuple is the list
-;; of its elements' normal forms. A `def` or `lambda` is itself, by identity; a
-;; built-in is its name and receiver, as two of them are equal.
+;; of its elements' normal forms, and so is a frozen list. A `def` or `lambda` is itself,
+;; by identity; a built-in is its name and receiver, as two of them are equal.
 (defun rontolisp::%starlark-key (k)
   (cond ((stringp k) k)
         ((integerp k) k)
@@ -467,6 +518,12 @@
            (dotimes (i (length items))
              (push (rontolisp::%starlark-key (aref items i)) acc))
            (cons :tuple (nreverse acc))))
+        ((and (rontolisp::%starlark-list-p k)
+              (car (rontolisp::%starlark-list-mutability k)))
+         (let ((items (rontolisp::%starlark-list-items k)) (acc nil))
+           (dotimes (i (length items))
+             (push (rontolisp::%starlark-key (aref items i)) acc))
+           (cons :list (nreverse acc))))
         (t (error "unhashable type: ~a" (rontolisp::%starlark-type k)))))
 
 (defun rontolisp::%starlark-empty-dict ()
@@ -780,6 +837,7 @@
                  (t (format s "<built-in method ~a of ~a value>" name
                             (rontolisp::%starlark-type
                              (rontolisp::%starlark-function-self x)))))))
+        ((functionp x) (write-string "<built-in function>" s))
         (t (write-string "<unknown>" s))))
 
 (defun rontolisp::%starlark-b-repr (x)
@@ -1167,14 +1225,63 @@
                 (list (rontolisp::%starlark-tuple-of (nreverse extra)))
                 nil) (if kwargs (list kwargs) nil))))
 
+;; A Common Lisp function is called with the positional arguments as they are.
 (defun rontolisp::%starlark-call (f pos kw)
-  (if (not (rontolisp::%starlark-function-p f))
-      (error "invalid call of non-function (~a)" (rontolisp::%starlark-type f)))
-  (let ((args (rontolisp::%starlark-bind f pos kw)))
-    (if (eq (rontolisp::%starlark-function-kind f) :method)
-        (apply (rontolisp::%starlark-function-body f)
-               (rontolisp::%starlark-function-self f) args)
-        (apply (rontolisp::%starlark-function-body f) args))))
+  (cond ((rontolisp::%starlark-function-p f)
+         (let ((args (rontolisp::%starlark-bind f pos kw)))
+           (if (eq (rontolisp::%starlark-function-kind f) :method)
+               (apply (rontolisp::%starlark-function-body f)
+                      (rontolisp::%starlark-function-self f) args)
+               (apply (rontolisp::%starlark-function-body f) args))))
+        ((functionp f)
+         (if kw
+             (error
+              "a Common Lisp function got an unexpected keyword argument ~a"
+              (car kw)))
+         (apply f pos))
+        (t (error "invalid call of non-function (~a)"
+                  (rontolisp::%starlark-type f)))))
+
+;; What Common Lisp calls a Starlark function, a built-in or a method value with: the
+;; positional arguments, as they are. A call that does not return -- an error some
+;; handler takes, a throw -- gives back what it left counted: the loops over a list or
+;; a dict, and under --starlark-standard spec the declarations a call of which ran.
+(defun rontolisp:starlark-call (f &rest args)
+  (let ((frames rontolisp::%starlark-frames)
+        (mutability rontolisp::%starlark-mutability))
+    (unwind-protect (rontolisp::%starlark-call f args nil)
+      (rontolisp::%starlark-unwind frames)
+      (setq rontolisp::%starlark-mutability mutability))))
+
+;; `load("@package", name = "symbol")`: the Common Lisp function FUNCTION as a built-in
+;; function value named NAME, taking positional arguments only.
+(defun rontolisp::%starlark-foreign (name function)
+  (rontolisp::%starlark-new-function name nil nil 0 0 t nil
+                                     (lambda (args)
+                                       (apply function
+                                              (coerce
+                                               (rontolisp::%starlark-tuple-items
+                                                args) 'list)))
+                                     :builtin nil))
+
+;; `load("module", "name")`: VALUE is what the global NAME of the module holds.
+(defun rontolisp::%starlark-loaded (value name module)
+  (if (eq value :%unbound)
+      (error "load: name ~a not found in module ~a" name module)
+      value))
+
+;; Starts a file's run: every list and dict made until %starlark-file-end is made under
+;; a cell of the file's own, which is answered.
+(defun rontolisp::%starlark-file-begin ()
+  (setq rontolisp::%starlark-mutability
+        (cons nil rontolisp::%starlark-mutability)))
+
+;; Ends the run CELL started: what was made under it is frozen, and what is made next is
+;; made under the cell before it. Answers T, what a module's state is from then on.
+(defun rontolisp::%starlark-file-end (cell)
+  (rplaca cell t)
+  (setq rontolisp::%starlark-mutability (cdr cell))
+  t)
 
 ;; A read of the variable NAME holding VALUE where the lowering cannot tell it was
 ;; assigned: :%unbound is what it holds until then.
@@ -1188,10 +1295,17 @@
       (error "global variable ~a referenced before assignment" name)
       value))
 
-;; --starlark-standard spec: a call of the function NAME while a call of its declaration
-;; runs.
-(defun rontolisp::%starlark-recursive (name)
-  (error "function ~a called recursively" name))
+;; --starlark-standard spec: starts a call of the function NAME, whose declaration's
+;; flag FLAG is -- a cons whose car is true while a call of it runs.
+(defun rontolisp::%starlark-enter (flag name)
+  (if (car flag) (error "function ~a called recursively" name))
+  (rplaca flag t)
+  (setq rontolisp::%starlark-frames (cons flag rontolisp::%starlark-frames)))
+
+;; Ends the call %starlark-enter started.
+(defun rontolisp::%starlark-leave (flag)
+  (rplaca flag nil)
+  (rontolisp::%starlark-pop-frame flag))
 
 ;; `x.name` where NAME is a method of the types KINDS: the method bound to X.
 (defun rontolisp::%starlark-method

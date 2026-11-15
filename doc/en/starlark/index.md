@@ -52,7 +52,7 @@ f(1, 2.5, None, x="a", y=[1, (2,)])
 
 ## What is read
 
-The whole grammar of the specification except `load`:
+The whole grammar of the specification:
 
 - `def` with default values, `*args`, keyword-only parameters and `**kwargs`; `lambda`;
   nested functions that read the variables around them.
@@ -62,6 +62,8 @@ The whole grammar of the specification except `load`:
 - List and dict comprehensions, conditional expressions, indexing and slicing, `and` /
   `or` / `not`, the comparisons, `in`, the arithmetic and bitwise operators, and `%` on a
   string.
+- `load`, for another Starlark file ([Modules](#modules)) and for the functions of a Common
+  Lisp package ([Mixing with Common Lisp](common-lisp.md)).
 
 The values are `None`, `True` and `False`, integers of any size, floats, strings, lists,
 tuples, dicts, ranges and functions.
@@ -130,7 +132,45 @@ Unhandled condition: cannot append to list during iteration
 A variable read before it is assigned is an error the same way, a local or a global, and
 so is a call of a `def` written above it.
 
+## Modules
+
+`load("words.star", "shout", count = "COUNT")` runs another file and binds names of the
+loading file to its globals: `shout` to the module's `shout`, `count` to its `COUNT`. The
+path is relative to the file holding the statement.
+
+- A module runs once per program, where the first `load` of it stands, however many files
+  load it.
+- Its globals are its own: two files may both define `helper`.
+- A name starting with an underscore cannot be loaded, and neither can a name the module
+  loaded itself.
+- A file that is not there, a name the module does not define and a file loading the one
+  that loads it are errors before the program starts.
+- A module is read when the program is compiled, so a compiled program carries it.
+
+**When a file has run, the lists and dicts made while it ran are frozen**: changing one is
+an error from then on. A list or dict that a function of the file makes when it is called
+later belongs to the caller. A frozen list is a dict key.
+
+```console
+$ cat words.star
+print("words runs")
+seen = ["start"]
+def shout(s):
+    return s.upper() + "!"
+$ cat main.star
+load("words.star", "shout", "seen")
+print(shout("hello"), seen, {seen: 1})
+seen.append("more")
+$ rontolisp main.star
+words runs
+HELLO! ["start"] {["start"]: 1}
+Unhandled condition: cannot append to frozen list
+  at main.star:3
+```
+
 ## This section
 
+- [Mixing with Common Lisp](common-lisp.md) -- what a Common Lisp file and a Starlark file
+  of one program see of each other.
 - [Deviations](deviations.md) -- where this front end departs from the specification,
   then what is not there yet.

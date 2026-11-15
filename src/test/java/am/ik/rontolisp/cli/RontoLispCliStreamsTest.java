@@ -779,6 +779,11 @@ class RontoLispCliStreamsTest {
 		assertThat(compiled).exists();
 		// --source-language reads any other source as Starlark
 		assertThat(runReporting("-e", "print(1 + 2)", "--source-language", "starlark")[1]).isEqualTo("3\n");
+		// a load statement reads its module beside the file loading it
+		Files.writeString(this.tempDir.resolve("words.star"), "def twice(s):\n    return s * 2\n");
+		Path loading = this.tempDir.resolve("loading.star");
+		Files.writeString(loading, "load(\"words.star\", \"twice\")\nprint(twice(\"ab\"))\n");
+		assertThat(runReporting(loading.toString())).containsExactly("0", "abab\n", "");
 		// a name nothing binds is refused before anything runs, at its position, on
 		// the interpreter and the compile path alike
 		Path broken = this.tempDir.resolve("broken.star");

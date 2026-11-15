@@ -343,5 +343,7 @@ sections:
     pages:
       - file: starlark/index.md
         title: 概要
+      - file: starlark/common-lisp.md
+        title: Common Lisp との混在
       - file: starlark/deviations.md
         title: 仕様との差異

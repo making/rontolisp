@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Set;
 
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.Features;
@@ -28,7 +29,8 @@ import org.jspecify.annotations.Nullable;
  * Consumers, the {@link UrlLibrary} shape:
  * <ul>
  * <li>the interpreter evaluates {@link #forms()} into the global environment the first
- * time one of the {@code rontolisp::%starlark-} functions is resolved
+ * time one of the {@code rontolisp::%starlark-} functions, or
+ * {@code rontolisp:starlark-call}, is resolved
  * ({@code LispEvaluator#resolveFunction});</li>
  * <li>the compile path calls {@link #process(List)} inside
  * {@code CompileFrontend.expand}: a program that references one of the functions -- only
@@ -39,6 +41,11 @@ import org.jspecify.annotations.Nullable;
 public final class StarlarkLibrary {
 
 	private static final String NAME_PREFIX = "%STARLARK-";
+
+	/**
+	 * The one public name: what Common Lisp calls a Starlark function value with.
+	 */
+	private static final String CALL = LispNames.RONTOLISP_PKG + ":" + LispNames.STARLARK_CALL;
 
 	@Nullable private static volatile List<LispVal> forms;
 
@@ -95,16 +102,17 @@ public final class StarlarkLibrary {
 
 	/**
 	 * Whether the name can be one the library defines, answered from its spelling alone:
-	 * every definition is a {@code rontolisp} {@code %starlark-} name. The interpreter
-	 * asks {@link #isStarlarkFunction} for every function name it resolves for the first
-	 * time and the compile path for every symbol of a program, so any other name must not
-	 * read the library ({@code .kb/source-language.md}, "The run-time libraries' name
-	 * gate").
+	 * every definition is a {@code rontolisp} {@code %starlark-} name, but
+	 * {@code rontolisp:starlark-call}. The interpreter asks {@link #isStarlarkFunction}
+	 * for every function name it resolves for the first time and the compile path for
+	 * every symbol of a program, so any other name must not read the library
+	 * ({@code .kb/source-language.md}, "The run-time libraries' name gate").
 	 * @param symbolName the symbol name, in its canonical spelling
 	 * @return {@code false} when the library cannot define the name
 	 */
 	static boolean mayDefine(String symbolName) {
-		return symbolName.contains(NAME_PREFIX) && LispSymbol.memberName(symbolName).startsWith(NAME_PREFIX);
+		return symbolName.contains(NAME_PREFIX) && LispSymbol.memberName(symbolName).startsWith(NAME_PREFIX)
+				|| symbolName.equals(CALL);
 	}
 
 	private static Set<String> functionNames() {

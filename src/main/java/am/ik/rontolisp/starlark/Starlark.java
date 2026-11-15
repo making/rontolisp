@@ -35,7 +35,26 @@ public final class Starlark {
 	 * its position
 	 */
 	public static List<LispVal> read(String source, @Nullable String file, StarlarkStandard standard) {
-		return StarlarkLowering.lower(StarlarkParser.parse(source, file), standard, source, file);
+		return read(source, file, standard, StarlarkFiles.NONE);
+	}
+
+	/**
+	 * Reads a Starlark file and lowers it to Common Lisp core forms, the modules its
+	 * {@code load} statements name with it: each is read through {@code files}, lowered
+	 * with globals of its own and run once, ahead of the statement that first loads it.
+	 * @param source the file's text
+	 * @param file the origin file for diagnostics and for what a {@code load}'s path is
+	 * relative to, or {@code null} when unknown
+	 * @param standard what the file and its modules are read against
+	 * ({@code --starlark-standard})
+	 * @param files where a {@code load} statement's module is read from
+	 * @return the top-level forms
+	 * @throws LispReadException as {@link #read(String, String, StarlarkStandard)}, and
+	 * on a module that cannot be loaded or a name it does not define
+	 */
+	public static List<LispVal> read(String source, @Nullable String file, StarlarkStandard standard,
+			StarlarkFiles files) {
+		return StarlarkLowering.lower(StarlarkParser.parse(source, file), standard, source, file, files);
 	}
 
 	/**

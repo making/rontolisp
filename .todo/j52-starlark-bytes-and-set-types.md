@@ -41,7 +41,9 @@ helper in `starlark.lisp`, which tests its receiver before anything else.
   `intersection`, `intersection_update`, `isdisjoint`, `issubset`, `issuperset`,
   `pop`, `remove`, `symmetric_difference`, `symmetric_difference_update`, `union`,
   `update`.
-- Freezing (`.todo/j49`) covers a set like a list.
+- Freezing covers a set like a list: it holds the cell it was made under, and a loop
+  over it is a frame (`.kb/starlark-frontend.md`, "Freezing", "Frames"). A frozen list is a
+  dict key there; decide the same for a frozen set.
 
 ## Test
 

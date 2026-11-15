@@ -258,6 +258,33 @@ public final class CompileFrontendAccess {
 	}
 
 	/**
+	 * Compiles a source text read from a file through the whole front end, the way the
+	 * CLI does for that entry file: its extension picks the language, and what it loads
+	 * is found beside it, each file in the language its own extension picks.
+	 * @param source the program text
+	 * @param entryFile the path the text was read from
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @param starlarkStandard the {@code --starlark-standard} value, or {@code null} for
+	 * the default
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program file(String source, String entryFile, boolean wasm, boolean component,
+			@Nullable String starlarkStandard) {
+		CompileFrontend.Result result = CompileFrontend.run(CompileFrontend.Request.builder()
+			.source(source)
+			.entryFile(entryFile)
+			.standards(SourceStandards.parse(null, starlarkStandard))
+			.options(CompileFrontend.Options.builder()
+				.wasm(wasm)
+				.component(component)
+				.baseDir(java.util.Objects.requireNonNull(Path.of(entryFile).toAbsolutePath().getParent()).toString())
+				.build())
+			.build());
+		return new Program(result.program(), result.features());
+	}
+
+	/**
 	 * Expands forms a test has read and lowered itself -- a front end's read, wrapped by
 	 * the test -- through the pass pipeline, as {@code run} expands the forms the read of
 	 * a non-Lisp entry file answers.

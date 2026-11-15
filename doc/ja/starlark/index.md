@@ -53,7 +53,7 @@ f(1, 2.5, None, x="a", y=[1, (2,)])
 
 ## 読めるもの
 
-仕様の文法のうち、`load` 以外のすべてを読みます:
+仕様の文法をすべて読みます:
 
 - デフォルト値、`*args`、キーワード専用パラメータ、`**kwargs` を持つ `def`。`lambda`。
   外側の変数を読むネストした関数。
@@ -62,6 +62,8 @@ f(1, 2.5, None, x="a", y=[1, (2,)])
   `<<=` など）。
 - リスト内包表記と辞書内包表記、条件式、添字とスライス、`and` / `or` / `not`、比較、`in`、
   算術演算子とビット演算子、文字列への `%`。
+- `load`。ほかの Starlark ファイル（[モジュール](#modules)）と、Common Lisp のパッケージの
+  関数（[Common Lisp との混在](common-lisp.md)）を読み込みます。
 
 値は `None`、`True` と `False`、大きさに制限のない整数、浮動小数点数、文字列、リスト、
 タプル、辞書、range、関数です。
@@ -130,6 +132,46 @@ Unhandled condition: cannot append to list during iteration
 代入前の変数を読むことも、ローカル変数かグローバル変数かにかかわらず同じくエラーです。
 `def` より上に書いたその関数の呼び出しもエラーです。
 
+## モジュール
+
+`load("words.star", "shout", count = "COUNT")` はほかのファイルを実行し、そのグローバル変数を
+読み込む側のファイルの名前に束縛します。`shout` はモジュールの `shout` に、`count` は
+モジュールの `COUNT` に束縛されます。パスは、この文を書いたファイルからの相対パスです。
+
+- モジュールは、いくつのファイルから読み込まれても、プログラムごとに 1 回だけ実行されます。
+  実行されるのは、最初の `load` の位置です。
+- モジュールのグローバル変数はそのモジュールだけのものです。2 つのファイルがどちらも
+  `helper` を定義できます。
+- アンダースコアで始まる名前は読み込めません。モジュール自身が `load` で得た名前も
+  読み込めません。
+- ファイルがない場合、モジュールが定義していない名前を指定した場合、読み込む側のファイルを
+  モジュールが読み込み返す場合は、プログラムの実行前にエラーになります。
+- モジュールはコンパイル時に読まれるので、コンパイルしたプログラムにはモジュールが
+  含まれます。
+
+**ファイルの実行が終わると、その実行中に作られたリストと辞書は凍結されます。** 凍結された
+値を変更しようとするとエラーになります。そのファイルの関数があとで呼び出されたときに作る
+リストや辞書は、呼び出した側のものです。凍結されたリストは辞書のキーにできます。
+
+```console
+$ cat words.star
+print("words runs")
+seen = ["start"]
+def shout(s):
+    return s.upper() + "!"
+$ cat main.star
+load("words.star", "shout", "seen")
+print(shout("hello"), seen, {seen: 1})
+seen.append("more")
+$ rontolisp main.star
+words runs
+HELLO! ["start"] {["start"]: 1}
+Unhandled condition: cannot append to frozen list
+  at main.star:3
+```
+
 ## このセクション
 
+- [Common Lisp との混在](common-lisp.md) -- 1 つのプログラムの中で、Common Lisp のファイルと
+  Starlark のファイルが互いにどう見えるか。
 - [仕様との差異](deviations.md) -- このフロントエンドが仕様と異なる点と、まだないもの。

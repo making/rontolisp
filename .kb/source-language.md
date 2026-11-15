@@ -79,7 +79,9 @@ jar read in place (`SourceLoader.listArchive`, whose default, like every probe's
 "none" for a loader that is not a filesystem) (`.kb/clojure-frontend.md`, "deps.edn"), and
 the WIT files `rontolisp.wit` reads, described through `eval/ClojureHostBoundary`, the
 `ClojureBoundary` the seam passes beside the loader (`.kb/clojure-frontend.md`, "Host
-boundary"). A read with no loader names no file. A Common Lisp read ignores it.
+boundary"). A Starlark read gets it through `SourceLanguage.starlarkFiles`, for the modules
+its `load` statements name (`.kb/starlark-frontend.md`, "Modules"). A read with no loader
+names no file. A Common Lisp read ignores it.
 
 The entry-language override is validated where it is parsed (an unknown name fails
 fast); loaded files always pick by extension, so the override never leaks into them.
@@ -125,16 +127,17 @@ entry language under `--no-gc`, like Scheme. `defaultExtension()` is per languag
 
 `.star`, or `--source-language starlark` (`star`). `read` hands the text to
 `am.ik.rontolisp.starlark.Starlark.read` -- the reader, static name resolution and the
-lowering to core forms in one step, with no `#.`, no reader features and no file it names
-(`load` is refused), against `SourceStandards.starlark()` -- and everything downstream is
-unchanged (`.kb/starlark-frontend.md`). `CompileFrontend.run` refuses the entry language under
+lowering to core forms in one step, with no `#.` and no reader features, the modules its
+`load` statements name read through the loader, against `SourceStandards.starlark()` --
+and everything downstream is unchanged (`.kb/starlark-frontend.md`). `CompileFrontend.run` refuses the entry language under
 `--no-gc`. It has no `SourceSession` yet: the constructor refuses it, which is what the
 REPL and the playground answer; `-e` and a file are whole programs and read through `read`.
 
 ## The run-time libraries' name gate (2026-10-23)
 
 The front ends' run-time libraries (`scheme.lisp`, `clojure.lisp`, and since 2026-11-15
-`starlark.lisp`, whose gate is the member prefix `%STARLARK-`) are Common Lisp
+`starlark.lisp`, whose gate is the member prefix `%STARLARK-` and the one public name
+`rontolisp:starlark-call`) are Common Lisp
 loaded on demand, and the question "is this name one of yours" is asked about names of
 EVERY program:
 

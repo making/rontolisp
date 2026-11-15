@@ -38,6 +38,11 @@ $ rontolisp --starlark-standard spec count.star
 error: count.star:1:1: for loop not within a function
 ```
 
+**Freezing follows when a value was made, not what reaches it.** The specification freezes
+what a file's globals reach when the file has run; here every list and dict made while the
+file ran is frozen, also one no global holds. A frozen list is a dict key, as the
+specification says; a frozen dict is not. (The Go and Java implementations refuse both.)
+
 The rest, in short:
 
 - A slice of a range answers a list, and a range prints with its start: `range(0, 5)`.
@@ -50,13 +55,12 @@ The rest, in short:
 - A list, tuple or dict expression of several thousand elements does not compile to a JVM
   class: it passes the size a JVM method may have. The interpreter and WebAssembly take
   it.
+- An error report names a module's function behind the module's path:
+  `in sl%(words.star)shout`.
+- A module that stopped at an error is not run again by a later `load` of it.
 
 ## Not there yet
 
-- `load`, and a `b"..."` literal: each is refused at its position before the program
-  starts.
+- A `b"..."` literal: it is refused at its position before the program starts.
 - The `bytes` and `set` types and the built-ins that make them.
-- Freezing: no value becomes immutable when a file has run.
 - The REPL, the playground's language pick and Run cells on these pages.
-- Calls between a Starlark file and a Common Lisp file of one program: what each side
-  sees of the other is not settled.

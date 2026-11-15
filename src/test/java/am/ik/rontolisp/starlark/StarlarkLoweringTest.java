@@ -28,13 +28,44 @@ class StarlarkLoweringTest {
 
 	private static final String RT = "RONTOLISP::%STARLARK-";
 
+	/** The files a {@code load} statement of {@code t.star} finds. */
+	private static final Map<String, String> FILES = Map.of("m.star", """
+			x = 1
+			_y = 2
+			def f(a, b):
+			    return a + b
+			if x:
+			    late = 2
+			""", "cycle.star", "load(\"t.star\", \"x\")\n", "reexport.star", "load(\"m.star\", \"x\")\n");
+
+	// t.star itself is there too: cycle.star loads it back.
+	private static final StarlarkFiles BESIDE = (from, path) -> FILES.containsKey(path) || path.equals("t.star")
+			? new StarlarkFiles.Source(path, FILES.getOrDefault(path, "")) : null;
+
 	// A source whose first line is "# spec" is read against --starlark-standard spec.
-	private static String lowered(String source) {
-		StarlarkStandard standard = source.startsWith("# spec\n") ? StarlarkStandard.SPEC : StarlarkStandard.RONTOLISP;
-		return Starlark.read(source, "t.star", standard).stream().map(LispVal::print).collect(Collectors.joining("\n"));
+	private static StarlarkStandard standard(String source) {
+		return source.startsWith("# spec\n") ? StarlarkStandard.SPEC : StarlarkStandard.RONTOLISP;
 	}
 
-	// $ stands for the run-time helpers' prefix.
+	// The two forms bracketing the file's run are in every program: one row shows them.
+	private static String lowered(String source) {
+		List<String> forms = Starlark.read(source, "t.star", standard(source), BESIDE)
+			.stream()
+			.map(LispVal::print)
+			.toList();
+		String begin = "(SETQ # (" + RT + "FILE-BEGIN))";
+		String end = "(" + RT + "FILE-END #)";
+		assertThat(forms).contains(begin.replace("#", FILE)).last().isEqualTo(end.replace("#", FILE));
+		boolean bracketed = source.startsWith("load(");
+		return forms.stream()
+			.filter(form -> bracketed || !form.equals(begin.replace("#", FILE)) && !form.equals(end.replace("#", FILE)))
+			.collect(Collectors.joining("\n"));
+	}
+
+	/** The variable holding the state of {@code t.star}'s run. */
+	private static final String FILE = "|sl%(t.star)%SL-FILE|";
+
+	// $ stands for the run-time helpers' prefix, @ for the prefix of m.star's globals.
 	static List<Arguments> rows() {
 		return List.of(
 				// values, and an identifier with no lowercase letter
@@ -129,37 +160,85 @@ class StarlarkLoweringTest {
 								(SETQ |i| ($ADD-IN-PLACE |i| ($MAKE-LIST 1))) :NONE)
 								(SETQ |f| ($MAKE-FUNCTION "f" '("a" "g" "i") NIL 3 NIL NIL #'|f|))"""),
 				// --starlark-standard spec: a call while a call of the same declaration
-				// runs is refused
+				// runs is refused, by a flag of the declaration's own, spelled behind
+				// the file's prefix
 				arguments("# spec\ndef f(n):\n    return f(n - 1)\n", """
-						(DEFUN |f| (|n|) (IF %SL-ACTIVE1 ($RECURSIVE "f")) (SETQ %SL-ACTIVE1 T) \
-						(LET ((%SL-RESULT2 (|f| ($SUB |n| 1)))) (SETQ %SL-ACTIVE1 NIL) %SL-RESULT2))
-						(SETQ %SL-ACTIVE1 NIL)
-						(SETQ |f| ($MAKE-FUNCTION "f" '("n") NIL 1 NIL NIL #'|f|))"""));
+						(DEFUN |f| (|n|) ($ENTER |sl%(t.star)%SL-ACTIVE1| "f") \
+						(LET ((%SL-RESULT2 (|f| ($SUB |n| 1)))) ($LEAVE |sl%(t.star)%SL-ACTIVE1|) %SL-RESULT2))
+						(SETQ |sl%(t.star)%SL-ACTIVE1| (LIST NIL))
+						(SETQ |f| ($MAKE-FUNCTION "f" '("n") NIL 1 NIL NIL #'|f|))"""),
+				// load: the module's definitions with the program's, its globals behind
+				// its path; its statements where the first load of it stands, behind a
+				// state that runs them once and between the two forms that bracket a
+				// file's run; what the statement binds is a global of the loading file,
+				// read through a check where a path of the module may not assign it. A
+				// name bound by the load alone is entered directly. @package is a Common
+				// Lisp package: the symbol's function, called as it stands.
+				arguments("""
+						load("m.star", "f", y = "x", "late")
+						load("@cl", "gcd", up = "string-upcase")
+						def g(n):
+						    return f(n, y) + gcd(n, 4) + late
+						""", """
+						(DEFUN |@f| (|a| |b|) ($ADD |a| |b|))
+						(DEFVAR |@%SL-FILE| NIL)
+						(DEFUN |g| (|n|) ($ADD ($ADD (|@f| |n| |y|) (CL::GCD |n| 4)) |late|))
+						(SETQ |sl%(t.star)%SL-FILE| ($FILE-BEGIN))
+						(SETQ |@%SL-FILE| (IF |@%SL-FILE| T ($FILE-BEGIN)))
+						(IF (CONSP |@%SL-FILE|) (SETQ |@late| :%UNBOUND))
+						(IF (CONSP |@%SL-FILE|) (SETQ |@x| 1))
+						(IF (CONSP |@%SL-FILE|) (SETQ |@_y| 2))
+						(IF (CONSP |@%SL-FILE|) (SETQ |@f| ($MAKE-FUNCTION "f" '("a" "b") NIL 2 NIL NIL #'|@f|)))
+						(IF (CONSP |@%SL-FILE|) (IF ($TRUTH |@x|) (SETQ |@late| 2)))
+						(IF (CONSP |@%SL-FILE|) (SETQ |@%SL-FILE| ($FILE-END |@%SL-FILE|)))
+						(SETQ |f| |@f|)
+						(SETQ |y| |@x|)
+						(SETQ |late| ($LOADED |@late| "late" "m.star"))
+						(SETQ |gcd| ($FOREIGN "cl:gcd" #'CL::GCD))
+						(SETQ |up| ($FOREIGN "cl:string-upcase" #'CL::STRING-UPCASE))
+						(SETQ |g| ($MAKE-FUNCTION "g" '("n") NIL 1 NIL NIL #'|g|))
+						($FILE-END |sl%(t.star)%SL-FILE|)"""));
 	}
 
 	@ParameterizedTest
 	@MethodSource("rows")
 	void aConstructLowersToItsRowOfTheTable(String source, String forms) {
-		assertThat(lowered(source)).isEqualTo(forms.replace("$", RT));
+		assertThat(lowered(source)).isEqualTo(forms.replace("$", RT).replace("@", "sl%(m.star)"));
 	}
 
 	static List<Arguments> refusals() {
 		return List.of(arguments("x = 1\nprint(nope)\n", "t.star:2:7: undefined: nope"),
 				arguments("def f():\n    return g()\n", "t.star:2:12: undefined: g"),
-				arguments("load(\"m.star\", \"x\")\n", "t.star:1:1: load is not supported yet"),
 				arguments("x = b\"abc\"\n", "t.star:1:5: bytes literals are not supported yet"),
-				// --starlark-standard spec, which these cases are read against
-				arguments("x = 1\nif x:\n    pass\n", "t.star:2:1: if statement not within a function"),
-				arguments("for x in []:\n    pass\n", "t.star:1:1: for loop not within a function"),
-				arguments("x, y = 1, 2\ndef y():\n    pass\n",
-						"t.star:2:1: cannot reassign global y declared at t.star:1:4"));
+				// load: a file that is not there, a name the module keeps or does not
+				// define -- what it loaded itself is not its own -- a file loading the
+				// one that loads it, a name no identifier can bind, a load that is not a
+				// top-level statement
+				arguments("load(\"nope.star\", \"x\")\n", "t.star:1:1: cannot load nope.star: file not found"),
+				arguments("load(\"m.star\", \"_y\")\n",
+						"t.star:1:16: load: names with leading underscores are not exported: _y"),
+				arguments("load(\"m.star\", \"z\")\n", "t.star:1:16: load: name z not found in module m.star"),
+				arguments("load(\"reexport.star\", \"x\")\n",
+						"t.star:1:23: load: name x not found in module reexport.star"),
+				arguments("load(\"cycle.star\", \"x\")\n", "cycle.star:1:1: cannot load t.star: cycle in load graph"),
+				arguments("load(\"@cl\", \"string-upcase\")\n",
+						"t.star:1:13: load: \"string-upcase\" is no identifier: write NAME = \"string-upcase\""),
+				arguments("if True:\n    load(\"m.star\", \"x\")\n", "t.star:2:5: load statement within a conditional"),
+				// --starlark-standard spec
+				arguments("# spec\nx = 1\nif x:\n    pass\n", "t.star:3:1: if statement not within a function"),
+				arguments("# spec\nfor x in []:\n    pass\n", "t.star:2:1: for loop not within a function"),
+				arguments("# spec\nx, y = 1, 2\ndef y():\n    pass\n",
+						"t.star:3:1: cannot reassign global y declared at t.star:2:4"),
+				arguments("# spec\nload(\"m.star\", \"x\")\nx = 2\n",
+						"t.star:3:1: cannot reassign local x declared at t.star:2:16"),
+				arguments("# spec\nx = 2\nload(\"m.star\", \"x\")\n", "t.star:3:16: cannot reassign top-level x"));
 	}
 
 	@ParameterizedTest
 	@MethodSource("refusals")
 	void aNameNothingBindsAMissingConstructAndWhatTheSpecRefusesAreRefusedAtTheirPosition(String source,
 			String message) {
-		assertThatThrownBy(() -> Starlark.read(source, "t.star", StarlarkStandard.SPEC))
+		assertThatThrownBy(() -> Starlark.read(source, "t.star", standard(source), BESIDE))
 			.isInstanceOf(LispReadException.class)
 			.hasMessage(message);
 	}

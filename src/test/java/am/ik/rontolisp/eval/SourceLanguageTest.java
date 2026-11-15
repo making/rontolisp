@@ -92,7 +92,8 @@ class SourceLanguageTest {
 		assertThat(SourceLanguage.STARLARK.read("x = len(\"#.\")\n", Features.INTERPRETER, null))
 			.isEqualTo(SourceLanguage.STARLARK.readStrict("x = len(\"#.\")\n", Features.INTERPRETER))
 			.extracting(LispVal::print)
-			.containsExactly("(SETQ |x| (RONTOLISP::%STARLARK-B-LEN \"#.\"))");
+			.containsExactly("(SETQ %SL-FILE (RONTOLISP::%STARLARK-FILE-BEGIN))",
+					"(SETQ |x| (RONTOLISP::%STARLARK-B-LEN \"#.\"))", "(RONTOLISP::%STARLARK-FILE-END %SL-FILE)");
 		// A buffer at a time is not read yet: a block ends where its indentation does.
 		assertThatThrownBy(() -> new SourceSession(SourceLanguage.STARLARK))
 			.isInstanceOf(IllegalArgumentException.class)

@@ -7303,6 +7303,14 @@ public final class LispNames {
 	public static final String PLIST_ALIST = "PLIST-ALIST";
 
 	/**
+	 * The {@code starlark-call} function provided by the {@code rontolisp} package: what
+	 * Common Lisp calls a value of the experimental Starlark front end with -- a
+	 * {@code def}, a {@code lambda}, a built-in or a bound method -- handing it the
+	 * positional arguments as they are ({@code eval/starlark.lisp}).
+	 */
+	public static final String STARLARK_CALL = "STARLARK-CALL";
+
+	/**
 	 * The {@code url-decode} function provided by the {@code rontolisp} package. Decodes
 	 * a percent-encoded (URL-encoded) string: {@code %XX} byte sequences are decoded as
 	 * UTF-8 and {@code +} becomes a space.

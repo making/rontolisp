@@ -7,9 +7,11 @@ import java.util.Arrays;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -61,6 +63,7 @@ import am.ik.rontolisp.starlark.StarlarkSyntax.Lambda;
 import am.ik.rontolisp.starlark.StarlarkSyntax.ListComprehension;
 import am.ik.rontolisp.starlark.StarlarkSyntax.ListLiteral;
 import am.ik.rontolisp.starlark.StarlarkSyntax.Load;
+import am.ik.rontolisp.starlark.StarlarkSyntax.LoadBinding;
 import am.ik.rontolisp.starlark.StarlarkSyntax.Parameter;
 import am.ik.rontolisp.starlark.StarlarkSyntax.Pass;
 import am.ik.rontolisp.starlark.StarlarkSyntax.Return;
@@ -85,6 +88,15 @@ import org.jspecify.annotations.Nullable;
  * the innermost function or comprehension that binds it anywhere in its body, else to the
  * file's globals, else to a built-in. A name bound nowhere is an error at its position
  * before anything runs.</li>
+ * <li><b>A {@code load} statement's module is lowered with the file that loads it.</b>
+ * The module is a lowering of its own whose globals are spelled behind its path, so two
+ * files may define one name; its definitions join the program's and its statements stand
+ * where the first {@code load} of it does, behind a state that runs them once per
+ * program. What a {@code load} binds is a global of the loading file, assigned the
+ * module's. A module spelled {@code @package} is a Common Lisp package: the name bound is
+ * that symbol's function.</li>
+ * <li><b>A file's run is bracketed.</b> Every list and dict made between its first and
+ * its last statement is frozen after the last.</li>
  * <li><b>Two call tiers.</b> A call whose callee and argument shape are known while
  * lowering -- a top-level {@code def} bound once, a built-in function, a method -- is a
  * direct call of a Common Lisp function with every parameter in place. Any other call
@@ -161,6 +173,10 @@ final class StarlarkLowering {
 
 	private static final LispSymbol VECTOR_PUSH_EXTEND = new LispSymbol("VECTOR-PUSH-EXTEND");
 
+	private static final LispSymbol DEFVAR = new LispSymbol("DEFVAR");
+
+	private static final LispSymbol CONSP = new LispSymbol("CONSP");
+
 	/** The block a function body is: what {@code return} leaves. */
 	private static final LispSymbol FUNCTION_BLOCK = new LispSymbol("%SL-FN");
 
@@ -222,7 +238,20 @@ final class StarlarkLowering {
 
 	private static final LispSymbol GLOBAL = runtime("GLOBAL");
 
-	private static final LispSymbol RECURSIVE = runtime("RECURSIVE");
+	private static final LispSymbol ENTER = runtime("ENTER");
+
+	private static final LispSymbol LEAVE = runtime("LEAVE");
+
+	private static final LispSymbol FILE_BEGIN = runtime("FILE-BEGIN");
+
+	private static final LispSymbol FILE_END = runtime("FILE-END");
+
+	private static final LispSymbol LOADED = runtime("LOADED");
+
+	private static final LispSymbol FOREIGN = runtime("FOREIGN");
+
+	/** What a {@code load} statement's module starts with when it is a package. */
+	private static final String PACKAGE_MARK = "@";
 
 	/** What a variable holds until it is assigned: a value no program can make. */
 	private static final LispSymbol UNBOUND = new LispSymbol(":%UNBOUND");
@@ -230,26 +259,140 @@ final class StarlarkLowering {
 	private static final Map<String, LispVal> CONSTANTS = Map.of("None", StarlarkBuiltins.NONE, "True",
 			LispTrue.INSTANCE, "False", LispNil.INSTANCE);
 
+	/**
+	 * What the files of one lowering share: the program's file and every module its
+	 * {@code load} statements reach.
+	 */
+	private static final class Session {
+
+		private final StarlarkStandard standard;
+
+		private final StarlarkFiles files;
+
+		/** The modules lowered so far, by {@link StarlarkNames#key}. */
+		private final Map<String, Module> modules = new HashMap<>();
+
+		/** The files being lowered, by key: loading one of them is a cycle. */
+		private final Deque<String> lowering = new ArrayDeque<>();
+
+		/**
+		 * Every file's definitions -- the direct entries' {@code defun}s, a module's
+		 * state -- which go ahead of every statement of the program.
+		 */
+		private final List<LispVal> definitions = new ArrayList<>();
+
+		Session(StarlarkStandard standard, StarlarkFiles files) {
+			this.standard = standard;
+			this.files = files;
+		}
+
+	}
+
+	/** A file a {@code load} statement read, lowered. */
+	private static final class Module {
+
+		/** The globals another file may load, by name. */
+		private final Map<String, Export> exports;
+
+		/** The statements, each behind the module's state. */
+		private final List<LispVal> forms;
+
+		/** Whether a {@code load} statement of this lowering already runs them. */
+		private boolean emitted;
+
+		Module(Map<String, Export> exports, List<LispVal> forms) {
+			this.exports = exports;
+			this.forms = forms;
+		}
+
+	}
+
+	/**
+	 * A global a module exports.
+	 *
+	 * @param symbol its variable, which is its function too when it has a direct entry
+	 * @param assigned whether every path through the module assigns it
+	 * @param parameters how many arguments its direct entry takes, or -1 with none
+	 */
+	private record Export(LispSymbol symbol, boolean assigned, int parameters) {
+	}
+
+	/**
+	 * A function a call enters directly.
+	 *
+	 * @param function its Common Lisp name
+	 * @param parameters how many arguments it takes, or -1 for any number (a Common Lisp
+	 * function)
+	 */
+	private record Callee(LispSymbol function, int parameters) {
+	}
+
+	/**
+	 * What a top-level {@code load} statement does where it stands.
+	 *
+	 * @param module the module whose statements run there first, or {@code null} for a
+	 * package
+	 * @param locals the names it binds
+	 * @param assignments the assignment of each, in order
+	 */
+	private record Loaded(@Nullable Module module, List<String> locals, List<LispVal> assignments) {
+	}
+
+	private final Session session;
+
 	/** The names the file binds at its top level. */
 	private final Set<String> globals = new LinkedHashSet<>();
 
 	/**
-	 * The top-level functions with a direct entry: a {@code def} standing at the top
-	 * level, the only binding of its name in the file, with no {@code *} parameter.
+	 * The top-level functions of this file with a direct entry: a {@code def} standing at
+	 * the top level, the only binding of its name in the file, with no {@code *}
+	 * parameter.
 	 */
 	private final Map<String, Def> direct = new LinkedHashMap<>();
 
+	/**
+	 * The names a call enters directly: this file's {@link #direct} ones, and what a
+	 * {@code load} statement alone binds to a module's direct entry or to a Common Lisp
+	 * function.
+	 */
+	private final Map<String, Callee> callees = new HashMap<>();
+
+	/** What each top-level {@code load} statement does. */
+	private final Map<Load, Loaded> loads = new IdentityHashMap<>();
+
+	/** The globals only {@code load} statements bind: no other file loads them. */
+	private final Set<String> loadedOnly = new HashSet<>();
+
 	private final StarlarkStandard standard;
 
-	/** The direct entries' {@code defun}s, which go ahead of every statement. */
-	private final List<LispVal> hoisted = new ArrayList<>();
+	/** The file being lowered, or {@code null} when unknown. */
+	private final @Nullable String file;
+
+	/** Whether the file is a {@code load} statement's module, with globals of its own. */
+	private final boolean module;
+
+	/** What a global of the file starts with: nothing unless it is a module. */
+	private final String globalPrefix;
+
+	/**
+	 * What a global the lowering generates starts with: the file's prefix, which two
+	 * files of one program do not share.
+	 */
+	private final String filePrefix;
+
+	/**
+	 * The file's state: the cell its lists and dicts are made under while it runs. A
+	 * module's is a variable no run resets: unset before its first run and {@code T}
+	 * after it, so its statements run once per program.
+	 */
+	private final LispSymbol state;
 
 	/** The globals some read checks: each starts as {@link #UNBOUND}. */
 	private final Set<String> checkedGlobals = new LinkedHashSet<>();
 
 	/**
-	 * Under {@link StarlarkStandard#SPEC}, one variable per function declaration, true
-	 * while a call of it runs.
+	 * Under {@link StarlarkStandard#SPEC}, one variable per function declaration: a cons
+	 * whose car is true while a call of it runs.
 	 */
 	private final List<LispSymbol> active = new ArrayList<>();
 
@@ -270,8 +413,14 @@ final class StarlarkLowering {
 	/** The offset each line of the source starts at, for {@link #unit}. */
 	private final int[] lineStarts;
 
-	private StarlarkLowering(StarlarkStandard standard, String source, @Nullable String file) {
-		this.standard = standard;
+	private StarlarkLowering(Session session, String source, @Nullable String file, boolean module) {
+		this.session = session;
+		this.standard = session.standard;
+		this.file = file;
+		this.module = module;
+		this.filePrefix = file == null ? "" : StarlarkNames.filePrefix(file);
+		this.globalPrefix = module ? this.filePrefix : "";
+		this.state = new LispSymbol(this.filePrefix + "%SL-FILE");
 		this.unit = SourceProvenance.unit(file, source);
 		this.runtimeFile = this.unit == null ? file : null;
 		List<Integer> starts = new ArrayList<>(List.of(0));
@@ -289,12 +438,19 @@ final class StarlarkLowering {
 	 * @param standard what the file is read against
 	 * @param source the file's text, which the positions are in
 	 * @param name the origin file, or {@code null} when unknown
+	 * @param files where a {@code load} statement's module is read from
 	 * @return the top-level forms
 	 * @throws LispReadException on a name no binding or built-in answers, on a construct
-	 * the front end does not have yet and on one the standard refuses, at its position
+	 * the front end does not have yet, on one the standard refuses and on a module that
+	 * cannot be loaded, at its position
 	 */
-	static List<LispVal> lower(List<Statement> file, StarlarkStandard standard, String source, @Nullable String name) {
-		return new StarlarkLowering(standard, source, name).file(file);
+	static List<LispVal> lower(List<Statement> file, StarlarkStandard standard, String source, @Nullable String name,
+			StarlarkFiles files) {
+		Session session = new Session(standard, files);
+		if (name != null) {
+			session.lowering.push(StarlarkNames.key(name));
+		}
+		return new StarlarkLowering(session, source, name, false).program(file);
 	}
 
 	/**
@@ -315,33 +471,222 @@ final class StarlarkLowering {
 		return form;
 	}
 
-	private List<LispVal> file(List<Statement> statements) {
+	/**
+	 * The program's file: the definitions of every file of the lowering, then its
+	 * statements between the two forms that bracket its run.
+	 */
+	private List<LispVal> program(List<Statement> statements) {
+		List<LispVal> body = body(statements);
+		// Every direct entry ahead of the first statement: a defun exists from the start
+		// in a compiled program and only once evaluated in the interpreter, so a call
+		// written above its def would otherwise run on three backends and fail on one.
+		// Such a call checks the global its def assigns, as any read before it does.
+		List<LispVal> forms = new ArrayList<>(this.session.definitions);
+		forms.add(list(SETQ, this.state, list(FILE_BEGIN)));
+		forms.addAll(prelude());
+		forms.addAll(body);
+		forms.add(list(FILE_END, this.state));
+		return List.copyOf(forms);
+	}
+
+	/**
+	 * A {@code load} statement's file: its statements behind its state, which runs them
+	 * once per program however often they are emitted -- a file loaded by two files
+	 * lowered apart is emitted by both -- and what another file may load of it.
+	 */
+	private Module module(List<Statement> statements) {
+		List<LispVal> body = body(statements);
+		Map<String, Export> exports = new LinkedHashMap<>();
+		for (String name : this.globals) {
+			if (this.loadedOnly.contains(name) || name.startsWith("_")) {
+				continue;
+			}
+			boolean assigned = this.flow.assigned.contains(name);
+			if (!assigned) {
+				// a load of it reads it through the check, so it starts unassigned
+				this.checkedGlobals.add(name);
+			}
+			Def def = this.direct.get(name);
+			exports.put(name, new Export(global(name), assigned, def == null ? -1 : def.parameters().size()));
+		}
+		this.session.definitions.add(list(DEFVAR, this.state, LispNil.INSTANCE));
+		List<LispVal> forms = new ArrayList<>();
+		// A state that is set -- the module ran, or stopped at an error -- stays set.
+		forms.add(list(SETQ, this.state, list(IF, this.state, LispTrue.INSTANCE, list(FILE_BEGIN))));
+		prelude().forEach(form -> forms.add(guarded(form)));
+		forms.addAll(body);
+		forms.add(guarded(list(SETQ, this.state, list(FILE_END, this.state))));
+		return new Module(exports, List.copyOf(forms));
+	}
+
+	/**
+	 * A top-level statement's form where it runs: as it stands in a program, behind the
+	 * state in a module, which holds a cons exactly while the module's first run lasts.
+	 */
+	private LispVal guarded(LispVal form) {
+		return this.module ? list(IF, list(CONSP, this.state), form) : form;
+	}
+
+	/** What a file's run starts with: the checked globals unassigned, no call active. */
+	private List<LispVal> prelude() {
+		List<LispVal> forms = new ArrayList<>();
+		for (String name : this.checkedGlobals) {
+			forms.add(list(SETQ, global(name), UNBOUND));
+		}
+		for (LispSymbol flag : this.active) {
+			forms.add(list(SETQ, flag, list(LIST, LispNil.INSTANCE)));
+		}
+		return forms;
+	}
+
+	/**
+	 * The file's statements as top-level forms, in order: a {@code load} statement is its
+	 * module's statements, the first time the lowering meets the module, then the
+	 * assignments of what it binds. The files it loads are lowered first -- a function
+	 * above a {@code load} statement calls what it binds -- and the definitions go to the
+	 * session.
+	 */
+	private List<LispVal> body(List<Statement> statements) {
 		if (this.standard == StarlarkStandard.SPEC) {
 			specTopLevel(statements);
 		}
 		Map<String, Integer> bound = new LinkedHashMap<>();
 		bindings(statements, bound);
 		this.globals.addAll(bound.keySet());
+		Map<String, Integer> loaded = new HashMap<>();
 		for (Statement statement : statements) {
 			if (statement instanceof Def def && bound.getOrDefault(def.name(), 0) == 1
 					&& new Parameters(def.parameters()).isPlain()) {
 				this.direct.put(def.name(), def);
+				this.callees.put(def.name(), new Callee(global(def.name()), def.parameters().size()));
+			}
+			else if (statement instanceof Load load) {
+				load.bindings().forEach(binding -> loaded.merge(binding.local(), 1, Integer::sum));
+				this.loads.put(load, load(load, bound));
 			}
 		}
-		List<LispVal> body = statements(statements, new Frame(Scope.TOP));
-		// Every direct entry ahead of the first statement: a defun exists from the start
-		// in a compiled program and only once evaluated in the interpreter, so a call
-		// written above its def would otherwise run on three backends and fail on one.
-		// Such a call checks the global its def assigns, as any read before it does.
-		List<LispVal> forms = new ArrayList<>(this.hoisted);
-		for (String name : this.checkedGlobals) {
-			forms.add(list(SETQ, StarlarkNames.symbol(name), UNBOUND));
+		loaded.forEach((name, count) -> {
+			if (count.equals(bound.get(name))) {
+				this.loadedOnly.add(name);
+			}
+		});
+		List<LispVal> forms = new ArrayList<>();
+		Frame frame = new Frame(Scope.TOP);
+		for (Statement statement : statements) {
+			if (statement instanceof Load load) {
+				Loaded bindings = Objects.requireNonNull(this.loads.get(load));
+				Module module = bindings.module();
+				if (module != null && !module.emitted) {
+					module.emitted = true;
+					forms.addAll(module.forms);
+				}
+				bindings.assignments().forEach(assignment -> forms.add(guarded(assignment)));
+				this.flow.assigned.addAll(bindings.locals());
+				continue;
+			}
+			LispVal form = statement(statement, frame);
+			if (form != null) {
+				forms.add(guarded(located(form, statement.at())));
+			}
 		}
-		for (LispSymbol flag : this.active) {
-			forms.add(list(SETQ, flag, LispNil.INSTANCE));
+		return forms;
+	}
+
+	// ---- load ----
+
+	/**
+	 * What a {@code load} statement binds: a module's globals, or the functions of a
+	 * Common Lisp package when the module is spelled {@code @package}.
+	 * @param load the statement
+	 * @param bound how often the file binds each name
+	 */
+	private Loaded load(Load load, Map<String, Integer> bound) {
+		boolean foreign = load.module().startsWith(PACKAGE_MARK);
+		Module module = foreign ? null : module(load);
+		List<String> locals = new ArrayList<>();
+		List<LispVal> assignments = new ArrayList<>();
+		for (LoadBinding binding : load.bindings()) {
+			String local = binding.local();
+			String remote = binding.remote();
+			if (!StarlarkNames.isIdentifier(local)) {
+				throw error("load: \"" + local + "\" is no identifier: write NAME = \"" + local + "\"", binding.at());
+			}
+			boolean only = bound.getOrDefault(local, 0) == 1;
+			LispVal value;
+			if (module == null) {
+				LispSymbol function = foreignFunction(load, binding);
+				value = list(FOREIGN, string(load.module().substring(PACKAGE_MARK.length()) + ":" + remote),
+						list(FUNCTION, function));
+				if (only) {
+					this.callees.put(local, new Callee(function, -1));
+				}
+			}
+			else {
+				if (remote.startsWith("_")) {
+					throw error("load: names with leading underscores are not exported: " + remote, binding.at());
+				}
+				Export export = module.exports.get(remote);
+				if (export == null) {
+					throw error("load: name " + remote + " not found in module " + load.module(), binding.at());
+				}
+				value = export.assigned() ? export.symbol()
+						: list(LOADED, export.symbol(), string(remote), string(load.module()));
+				if (only && export.parameters() >= 0) {
+					this.callees.put(local, new Callee(export.symbol(), export.parameters()));
+				}
+			}
+			locals.add(local);
+			assignments.add(located(list(SETQ, global(local), value), binding.at()));
 		}
-		forms.addAll(body);
-		return List.copyOf(forms);
+		return new Loaded(module, locals, assignments);
+	}
+
+	/** The module a {@code load} statement names, lowered once per lowering. */
+	private Module module(Load load) {
+		String path = load.module();
+		StarlarkFiles.Source source = this.session.files.find(this.file, path);
+		if (source == null) {
+			throw error("cannot load " + path + ": file not found", load.at());
+		}
+		String key = StarlarkNames.key(source.path());
+		if (this.session.lowering.contains(key)) {
+			throw error("cannot load " + path + ": cycle in load graph", load.at());
+		}
+		Module module = this.session.modules.get(key);
+		if (module == null) {
+			this.session.lowering.push(key);
+			module = new StarlarkLowering(this.session, source.text(), source.path(), true)
+				.module(StarlarkParser.parse(source.text(), source.path()));
+			this.session.lowering.pop();
+			this.session.modules.put(key, module);
+		}
+		return module;
+	}
+
+	/**
+	 * The Common Lisp function a {@code load} of a package names: the symbol the string
+	 * spells as the Common Lisp reader reads it -- upcased, verbatim between vertical
+	 * bars -- in the package after the {@code @}.
+	 */
+	private static LispSymbol foreignFunction(Load load, LoadBinding binding) {
+		String pkg = load.module().substring(PACKAGE_MARK.length()).toUpperCase(Locale.ROOT);
+		String name = binding.remote();
+		if (pkg.isEmpty() || name.isEmpty()) {
+			throw error("load: " + (pkg.isEmpty() ? "no package after @" : "empty name"), binding.at());
+		}
+		String member = name.length() > 2 && name.startsWith("|") && name.endsWith("|")
+				? name.substring(1, name.length() - 1) : name.toUpperCase(Locale.ROOT);
+		return new LispSymbol(pkg.equals("CL-USER") ? member : pkg + "::" + member);
+	}
+
+	/** A global of this file: behind the file's prefix when the file is a module. */
+	private LispSymbol global(String name) {
+		return new LispSymbol(this.globalPrefix + StarlarkNames.mangle(name));
+	}
+
+	/** The variable a name is where it is written: a local, or a global of the file. */
+	private LispSymbol variable(String name, Scope scope) {
+		return scope.binds(name) ? StarlarkNames.symbol(name) : global(name);
 	}
 
 	/**
@@ -350,34 +695,45 @@ final class StarlarkLowering {
 	 */
 	private static void specTopLevel(List<Statement> statements) {
 		Map<String, SourceLocation> declared = new HashMap<>();
+		Set<String> loaded = new HashSet<>();
 		for (Statement statement : statements) {
 			switch (statement) {
 				case If conditional -> throw error("if statement not within a function", conditional.at());
 				case For loop -> throw error("for loop not within a function", loop.at());
-				case Assignment assignment -> declare(assignment.target(), declared);
-				case AugmentedAssignment assignment -> declare(assignment.target(), declared);
-				case Def def -> declare(def.name(), def.at(), declared);
+				case Assignment assignment -> declare(assignment.target(), declared, loaded);
+				case AugmentedAssignment assignment -> declare(assignment.target(), declared, loaded);
+				case Def def -> declare(def.name(), def.at(), declared, loaded);
+				case Load load -> {
+					for (LoadBinding binding : load.bindings()) {
+						if (declared.putIfAbsent(binding.local(), binding.at()) != null) {
+							throw error("cannot reassign top-level " + binding.local(), binding.at());
+						}
+						loaded.add(binding.local());
+					}
+				}
 				default -> {
 				}
 			}
 		}
 	}
 
-	private static void declare(Expression target, Map<String, SourceLocation> declared) {
+	private static void declare(Expression target, Map<String, SourceLocation> declared, Set<String> loaded) {
 		switch (target) {
-			case Identifier identifier -> declare(identifier.name(), identifier.at(), declared);
-			case TupleLiteral tuple -> tuple.elements().forEach(element -> declare(element, declared));
-			case ListLiteral list -> list.elements().forEach(element -> declare(element, declared));
+			case Identifier identifier -> declare(identifier.name(), identifier.at(), declared, loaded);
+			case TupleLiteral tuple -> tuple.elements().forEach(element -> declare(element, declared, loaded));
+			case ListLiteral list -> list.elements().forEach(element -> declare(element, declared, loaded));
 			default -> {
 			}
 		}
 	}
 
-	private static void declare(String name, SourceLocation at, Map<String, SourceLocation> declared) {
+	// A name a load statement binds is the file's own, no global: Go's "local".
+	private static void declare(String name, SourceLocation at, Map<String, SourceLocation> declared,
+			Set<String> loaded) {
 		SourceLocation first = declared.putIfAbsent(name, at);
 		if (first != null) {
 			throw error(
-					"cannot reassign global " + name + " declared at "
+					"cannot reassign " + (loaded.contains(name) ? "local " : "global ") + name + " declared at "
 							+ (first.file() == null ? "" : first.file() + ":") + first.line() + ":" + first.column(),
 					at);
 		}
@@ -428,7 +784,7 @@ final class StarlarkLowering {
 	 * the check that refuses {@link #UNBOUND}.
 	 */
 	private LispVal read(String name, Scope scope) {
-		LispSymbol symbol = StarlarkNames.symbol(name);
+		LispSymbol symbol = variable(name, scope);
 		if (this.flow.has(name)) {
 			return symbol;
 		}
@@ -658,19 +1014,19 @@ final class StarlarkLowering {
 
 	/**
 	 * A function's body forms, under {@link StarlarkStandard#SPEC} refusing a call while
-	 * a call of the same declaration runs: a variable of the declaration's own is true
-	 * meanwhile. It is set back on every normal exit and not on an error, which ends the
-	 * program.
+	 * a call of the same declaration runs: the declaration's own flag is true meanwhile.
+	 * It is set back on every normal exit; after an error it is what
+	 * {@code rontolisp:starlark-call} gives back, with the loops the call left counted.
 	 */
 	private List<LispVal> once(List<LispVal> forms, String name) {
 		if (this.standard != StarlarkStandard.SPEC) {
 			return forms;
 		}
-		LispSymbol flag = fresh("ACTIVE");
+		LispSymbol flag = new LispSymbol(this.filePrefix + fresh("ACTIVE").name());
 		this.active.add(flag);
 		LispSymbol result = fresh("RESULT");
-		return List.of(list(IF, flag, list(RECURSIVE, string(name))), list(SETQ, flag, LispTrue.INSTANCE),
-				list(LET, list(list(result, progn(forms))), list(SETQ, flag, LispNil.INSTANCE), result));
+		return List.of(list(ENTER, flag, string(name)),
+				list(LET, list(list(result, progn(forms))), list(LEAVE, flag), result));
 	}
 
 	/** Whether a {@code return} of this function stands in the statements. */
@@ -711,8 +1067,8 @@ final class StarlarkLowering {
 		Parameters parameters = new Parameters(def.parameters());
 		LispVal implementation;
 		if (scope == Scope.TOP && this.direct.get(def.name()) == def) {
-			LispSymbol symbol = StarlarkNames.symbol(def.name());
-			this.hoisted
+			LispSymbol symbol = global(def.name());
+			this.session.definitions
 				.add(located(cons(DEFUN, cons(symbol, function(parameters, def.body(), scope, def.name()))), def.at()));
 			implementation = list(FUNCTION, symbol);
 		}
@@ -756,7 +1112,7 @@ final class StarlarkLowering {
 				assign(assignment.target(), Value.computed(expression(assignment.value(), scope)), scope);
 			case AugmentedAssignment assignment -> augmented(assignment, scope);
 			case Def def -> {
-				LispVal form = list(SETQ, StarlarkNames.symbol(def.name()), definition(def, scope));
+				LispVal form = list(SETQ, variable(def.name(), scope), definition(def, scope));
 				this.flow.assigned.add(def.name());
 				yield form;
 			}
@@ -801,7 +1157,9 @@ final class StarlarkLowering {
 				yield list(RETURN_FROM, CONTINUE_BLOCK, LispNil.INSTANCE);
 			}
 			case Pass _ -> null;
-			case Load load -> throw error("load is not supported yet", load.at());
+			// a top-level one is the file's body's business
+			case Load load ->
+				throw error("load statement within a " + (frame.loops.isEmpty() ? "conditional" : "loop"), load.at());
 		};
 	}
 
@@ -969,7 +1327,7 @@ final class StarlarkLowering {
 		return switch (target) {
 			case Identifier identifier -> {
 				this.flow.assigned.add(identifier.name());
-				yield list(SETQ, StarlarkNames.symbol(identifier.name()), value.form());
+				yield list(SETQ, variable(identifier.name(), scope), value.form());
 			}
 			case Index index -> {
 				List<LispVal> operands = List.of(value.form(), expression(index.receiver(), scope),
@@ -1010,7 +1368,7 @@ final class StarlarkLowering {
 			case Identifier identifier -> {
 				LispVal current = read(identifier.name(), scope);
 				this.flow.assigned.add(identifier.name());
-				yield list(SETQ, StarlarkNames.symbol(identifier.name()), list(operator, current, value));
+				yield list(SETQ, variable(identifier.name(), scope), list(operator, current, value));
 			}
 			case Index index -> {
 				LispVal receiver = expression(index.receiver(), scope);
@@ -1267,12 +1625,13 @@ final class StarlarkLowering {
 					return direct != null ? direct : general(builtinValue(builtin), arguments, scope);
 				}
 			}
-			Def def = scope.binds(name) ? null : this.direct.get(name);
-			if (def != null && def.parameters().size() == arguments.size()
+			Callee entry = scope.binds(name) ? null : this.callees.get(name);
+			if (entry != null && (entry.parameters() < 0 || entry.parameters() == arguments.size())
 					&& arguments.stream().allMatch(argument -> argument.kind() == ArgumentKind.POSITIONAL)) {
-				// the callee first: a call above the def reads the global unassigned
+				// the callee first: a call above the def, or above the load statement,
+				// reads the global unassigned
 				LispVal global = read(name, scope);
-				LispVal direct = cons(StarlarkNames.symbol(name),
+				LispVal direct = cons(entry.function(),
 						listOf(arguments.stream().map(argument -> expression(argument.value(), scope)).toList()));
 				return isSimple(global) ? direct : list(PROGN, global, direct);
 			}

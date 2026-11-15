@@ -21,6 +21,7 @@ import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.scheme.Scheme;
 import am.ik.rontolisp.scheme.SchemeFiles;
 import am.ik.rontolisp.starlark.Starlark;
+import am.ik.rontolisp.starlark.StarlarkFiles;
 
 /**
  * The ONE seam between user source text and the core forms every pipeline consumes. A
@@ -127,8 +128,9 @@ public enum SourceLanguage {
 	/**
 	 * Reads user source text into core forms against the program's standards, with the
 	 * files the source names read through a loader: a Scheme {@code include} and the
-	 * {@code define-library} files a Scheme program imports, resolved against the
-	 * directory of {@code file} like {@code load} (a Common Lisp read names none).
+	 * {@code define-library} files a Scheme program imports, the modules a Starlark
+	 * {@code load} statement names, resolved against the directory of {@code file} like
+	 * {@code load} (a Common Lisp read names none).
 	 * @param source the program text
 	 * @param features the active reader features (the target backend's on the compile
 	 * path, the evaluator's on the interpreter)
@@ -208,7 +210,8 @@ public enum SourceLanguage {
 						null);
 			}
 			if (this == STARLARK) {
-				return new LispReader.ReadPrefix(Starlark.read(source, file, standards.starlark()), null);
+				return new LispReader.ReadPrefix(
+						Starlark.read(source, file, standards.starlark(), starlarkFiles(loader)), null);
 			}
 			return new LispReader.ReadPrefix(clojure(source, features, file, standards, loader, false, null).forms(),
 					null);
@@ -299,16 +302,40 @@ public enum SourceLanguage {
 		}
 		return (from, path) -> {
 			String resolved = SourceLoader.resolve(from == null ? null : SourceLoader.parentDir(from), path);
-			if (!loader.exists(resolved)) {
-				return null;
-			}
-			try {
-				return new SchemeFiles.Source(resolved, loader.load(resolved));
-			}
-			catch (IOException ex) {
-				return null;
-			}
+			String text = text(loader, resolved);
+			return text == null ? null : new SchemeFiles.Source(resolved, text);
 		};
+	}
+
+	/**
+	 * The modules a Starlark program loads, through a loader: a path relative to the
+	 * loading file's directory, as {@code load} resolves one
+	 * ({@link SourceLoader#resolve}).
+	 * @param loader the loader, or {@code null} for none
+	 * @return the files
+	 */
+	static StarlarkFiles starlarkFiles(@Nullable SourceLoader loader) {
+		if (loader == null) {
+			return StarlarkFiles.NONE;
+		}
+		return (from, path) -> {
+			String resolved = SourceLoader.resolve(from == null ? null : SourceLoader.parentDir(from), path);
+			String text = text(loader, resolved);
+			return text == null ? null : new StarlarkFiles.Source(resolved, text);
+		};
+	}
+
+	/** The text of a file a source names, or {@code null} when there is none to read. */
+	private static @Nullable String text(SourceLoader loader, String resolved) {
+		if (!loader.exists(resolved)) {
+			return null;
+		}
+		try {
+			return loader.load(resolved);
+		}
+		catch (IOException ex) {
+			return null;
+		}
 	}
 
 	/**

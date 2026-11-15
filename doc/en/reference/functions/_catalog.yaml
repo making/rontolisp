@@ -609,6 +609,7 @@ categories:
       - { slug: rontolisp-query-param, name: "rontolisp:query-param" }
       - { slug: rontolisp-url-path, name: "rontolisp:url-path" }
       - { slug: rontolisp-url-query, name: "rontolisp:url-query" }
+      - { slug: rontolisp-starlark-call, name: "rontolisp:starlark-call" }
       - { slug: rontolisp-tcp-connect, name: "rontolisp:tcp-connect" }
       - { slug: rontolisp-tcp-listen, name: "rontolisp:tcp-listen" }
       - { slug: rontolisp-tcp-accept, name: "rontolisp:tcp-accept" }

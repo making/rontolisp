@@ -343,5 +343,7 @@ sections:
     pages:
       - file: starlark/index.md
         title: Overview
+      - file: starlark/common-lisp.md
+        title: Mixing with Common Lisp
       - file: starlark/deviations.md
         title: Deviations

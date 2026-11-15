@@ -15,8 +15,12 @@ the REPL and the playground answer.
   lowering resolves a name against ONE file's globals and refuses any other
   (`StarlarkLowering.reference`).
 - An error in one buffer must not leave a list counted as being iterated for the next: a
-  loop gives its count back on a normal exit only (`.kb/starlark-frontend.md`, "The
-  run-time library's rules").
+  loop gives its count back on a normal exit, and `(rontolisp::%starlark-unwind nil)` gives
+  back what an error left (`.kb/starlark-frontend.md`, "Frames").
+- Every file's run is bracketed and its lists and dicts are frozen at its end
+  (`.kb/starlark-frontend.md`, "Freezing"). A session is one run: a buffer must not freeze
+  what the buffer before it made, and a `load` in a buffer finds the modules an earlier
+  one loaded ("Modules": one `Session` per lowering today).
 - The browser playground's language pick and the documentation site's fenced Run cells
   (`.kb/source-language.md`, "The browser"; `.kb/documentation-site.md`). `DocExamplesTest`
   already runs a ` ```starlark ` fence as a whole program and asserts its output;

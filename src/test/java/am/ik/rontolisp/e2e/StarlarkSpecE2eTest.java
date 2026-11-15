@@ -36,6 +36,7 @@ import am.ik.rontolisp.cli.JvmSourceCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
@@ -65,12 +66,14 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * four. The {@code ci-spec.yaml} idea: the cases are concatenated into ONE {@code .star}
  * program per backend (they share its globals and run in order) and the output is sliced
  * back per case, so a failure names its case and its backend. A {@code standalone:} case
- * ENDS its program with an uncaught error, so each one is compiled and run on its own,
- * per backend: it prints {@code stdout}, then fails with {@code error}, which the
- * interpreter throws and a compiled program reports first on standard error; it may name
- * the {@code standard} it is read against. {@link #conformance} runs
- * bazelbuild/starlark's conformance corpus the same four ways, one program per corpus
- * file.
+ * is a program of its own, compiled and run alone, per backend: one that ENDS with an
+ * uncaught error -- it prints {@code stdout}, then fails with {@code error}, which the
+ * interpreter throws and a compiled program reports first on standard error -- or one of
+ * several {@code files}, which every leg reads from a directory holding them, the
+ * {@code source} as its {@code entry} file (a {@code .lisp} one is a Common Lisp program
+ * loading Starlark files). It may name the {@code standard} it is read against.
+ * {@link #conformance} runs bazelbuild/starlark's conformance corpus the same four ways,
+ * one program per corpus file.
  *
  * <p>
  * Unlike {@code CiSpecE2eTest} this needs no native binary: every leg goes through the
@@ -95,15 +98,40 @@ class StarlarkSpecE2eTest {
 	}
 
 	/**
-	 * A case that ends with an uncaught error.
+	 * A case run as a program of its own.
 	 *
+	 * @param error the uncaught error it ends with, or {@code null} when it ends normally
 	 * @param standard the {@code --starlark-standard} it is read against, or {@code null}
 	 * for the default
+	 * @param files the files beside the program, by path relative to it, or {@code null}
+	 * @param entry the name of the program's own file among them ({@code main.star} when
+	 * absent): its extension picks the language {@code source} is read in
 	 */
-	record Standalone(String name, String source, String stdout, String error, @Nullable String standard) {
+	record Standalone(String name, String source, String stdout, @Nullable String error, @Nullable String standard,
+			@Nullable Map<String, String> files, @Nullable String entry) {
 
 		String stem() {
 			return "Standalone" + this.name.replaceAll("[^A-Za-z0-9]", "");
+		}
+
+		/**
+		 * Writes the case's files, and the program itself, into a directory of this leg's
+		 * own and answers the program's path there; {@code null} for a case with none,
+		 * which is read as Starlark from no file.
+		 */
+		@Nullable Path entryFile(String leg) throws IOException {
+			if (this.files == null) {
+				return null;
+			}
+			Path dir = workDir.resolve(stem() + "-" + leg);
+			for (Map.Entry<String, String> file : this.files.entrySet()) {
+				Path path = dir.resolve(file.getKey());
+				Files.createDirectories(Objects.requireNonNull(path.getParent()));
+				Files.writeString(path, file.getValue(), StandardCharsets.UTF_8);
+			}
+			Path program = dir.resolve(this.entry == null ? "main.star" : this.entry);
+			Files.writeString(program, this.source, StandardCharsets.UTF_8);
+			return program;
 		}
 
 	}
@@ -192,12 +220,16 @@ class StarlarkSpecE2eTest {
 					if (!HostWasmtime.isAvailable()) {
 						abort("no usable wasmtime on PATH");
 					}
-					Path module = compileWasm(CompileFrontendAccess.starlark(s.source(), true, component, s.standard()),
+					String leg = component ? "WASM_COMPONENT" : "WASM";
+					Path entry = s.entryFile(leg);
+					Path module = compileWasm(entry == null
+							? CompileFrontendAccess.starlark(s.source(), true, component, s.standard())
+							: CompileFrontendAccess.file(s.source(), entry.toString(), true, component, s.standard()),
 							component, s.stem());
 					Process process = new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y",
 							module.toString())
 						.start();
-					assertEnded(s, component ? "WASM_COMPONENT" : "WASM", process);
+					assertEnded(s, leg, process);
 				}));
 			}
 		}
@@ -480,11 +512,20 @@ class StarlarkSpecE2eTest {
 	private static void standaloneOnInterpreter(Standalone s) throws Exception {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		Throwable[] thrown = new Throwable[1];
+		Path entry = s.entryFile("INTERPRETER");
 		CliStack.call("starlark-spec", () -> {
 			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+			SourceStandards standards = SourceStandards.parse(null, s.standard());
+			String file = entry == null ? null : entry.toString();
+			if (entry != null) {
+				// what the program loads is beside it, read against its standard, as the
+				// compiled legs' splice reads it
+				evaluator.setLoadBaseDir(Objects.requireNonNull(entry.getParent()).toString());
+				evaluator.setSourceStandards(standards);
+			}
 			try {
-				for (LispVal form : SourceLanguage.STARLARK.read(s.source(), Features.INTERPRETER, null,
-						SourceStandards.parse(null, s.standard()))) {
+				for (LispVal form : SourceLanguage.forFile(file, entry == null ? "starlark" : null)
+					.read(s.source(), Features.INTERPRETER, file, standards, SourceLoader.fileSystem())) {
 					evaluator.eval(form);
 				}
 			}
@@ -495,7 +536,12 @@ class StarlarkSpecE2eTest {
 		});
 		String where = where(s, "INTERPRETER", "");
 		assertThat(out.toString(StandardCharsets.UTF_8)).as("%s", where).isEqualTo(s.stdout());
-		assertThat(thrown[0]).as("%s: expected a failure", where).isNotNull().hasMessage(s.error());
+		if (s.error() == null) {
+			assertThat(thrown[0]).as("%s", where).isNull();
+		}
+		else {
+			assertThat(thrown[0]).as("%s: expected a failure", where).isNotNull().hasMessage(s.error());
+		}
 	}
 
 	// The program dies, so it runs in a process of its own: with the class and the
@@ -504,9 +550,12 @@ class StarlarkSpecE2eTest {
 	private static void standaloneOnJvm(Standalone s) throws Exception {
 		Path dir = workDir.resolve(s.stem());
 		Files.createDirectories(dir);
-		JvmSourceCompiler.Result compiled = new JvmSourceCompiler(s.stem()).sourceLanguage("starlark")
+		Path entry = s.entryFile("JVM");
+		JvmSourceCompiler.Result compiled = new JvmSourceCompiler(s.stem())
+			.sourceLanguage(entry == null ? "starlark" : null)
 			.starlarkStandard(s.standard())
-			.compile(s.source(), null);
+			.baseDir(entry == null ? null : Objects.requireNonNull(entry.getParent()).toString())
+			.compile(s.source(), entry == null ? null : entry.toString());
 		Files.write(dir.resolve(s.stem() + ".class"), compiled.classBytes());
 		for (Map.Entry<String, byte[]> runtime : compiled.runtimeClasses().entrySet()) {
 			Path file = dir.resolve(runtime.getKey());
@@ -536,6 +585,10 @@ class StarlarkSpecE2eTest {
 		String stderr = Files.readString(errors, StandardCharsets.UTF_8);
 		String where = where(s, leg, stderr);
 		assertThat(stdout).as("%s", where).isEqualTo(s.stdout());
+		if (s.error() == null) {
+			assertThat(process.exitValue()).as("%s", where).isZero();
+			return;
+		}
 		// the report first; what the host adds about the dead process follows
 		assertThat(splitLines(stderr)).as("%s", where).first().isEqualTo(UNHANDLED + s.error());
 		assertThat(process.exitValue()).as("%s: expected a non-zero exit", where).isNotZero();
