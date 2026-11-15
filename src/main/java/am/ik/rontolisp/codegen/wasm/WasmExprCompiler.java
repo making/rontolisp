@@ -2793,7 +2793,7 @@ final class WasmExprCompiler {
 			case LispNames.UPGRADED_COMPLEX_PART_TYPE ->
 				compileExpansion(LispMacroExpander.expandUpgradedComplexPartType(cons), ctx, tail);
 			case LispNames.CHECK_TYPE ->
-				compileExpansion(LispMacroExpander.expandCheckType(cons, ctx.closRegistry), ctx, tail);
+				compileExpansion(LispMacroExpander.expandCheckType(cons, ctx.closRegistry, ctx.ehMode), ctx, tail);
 			case LispNames.ASSERT -> compileExpansion(LispMacroExpander.expandAssert(cons), ctx, tail);
 			case LispNames.DECLARE -> compileExpansion(LispMacroExpander.expandDeclare(cons), ctx, tail);
 			case LispNames.DECLAIM -> compileExpansion(LispMacroExpander.expandDeclaim(cons), ctx, tail);

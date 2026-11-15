@@ -1046,11 +1046,18 @@ class LispMacroExpanderTest {
 				(define-condition my-error (error) ())
 				(handler-case (error 'my-error) (error (e) (princ e)))
 				(handler-case (error "plain ~a message" 1) (error (e) (princ e)))
+				(handler-case (let ((n 1)) (check-type n string)) (error (e) (princ e)))
 				""");
 		assertThat(narrowing.constructibleTags()).isNotNull()
-			.contains("%class-MY-ERROR", "%class-SIMPLE-ERROR", "%class-TYPE-ERROR", "%class-DIVISION-BY-ZERO")
+			.contains("%class-MY-ERROR", "%class-SIMPLE-ERROR", "%class-TYPE-ERROR", "%class-DIVISION-BY-ZERO",
+					"%class-SIMPLE-TYPE-ERROR")
 			.doesNotContain("%class-END-OF-FILE", "%class-UNBOUND-SLOT");
 		assertThat(narrowing.declineRenderer()).isTrue();
+		// A check-type signals its rendered text, so it alone gives no report a reader.
+		assertThat(LispMacroExpander.mayCreateConditions(
+				LispReader.readAllFromString("(defun f (x) (check-type x float) x) (print (f 1.0))"),
+				new ClosRegistry()))
+			.isFalse();
 	}
 
 	@Test

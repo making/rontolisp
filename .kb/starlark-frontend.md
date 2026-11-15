@@ -239,7 +239,7 @@ forms are the ones the backends already fuse ([jvm-int-fusion.md](jvm-int-fusion
 
 ## The run-time library's rules
 
-`starlark.lisp` keeps three, stated at its top:
+`starlark.lisp` keeps four, the first three stated at its top:
 
 - **A structure accessor is called only behind that structure's predicate.** An accessor
   handed an instance of ANOTHER structure passes the instance check
@@ -254,6 +254,10 @@ forms are the ones the backends already fuse ([jvm-int-fusion.md](jvm-int-fusion
 - **What the lowering calls is a `defun`**: the interpreter loads the file on the first
   resolution of one of its functions, which a structure's constructor, predicate or
   accessor is not (`StarlarkLibrary.functionNames`).
+- **An `error`'s control is a literal string.** A computed one (`(error message ..)`, a
+  `(concatenate ..)` control) bails the condition narrowing and keeps the run-time format
+  renderer in every program (~50 KB of wasm, "Measured"): `%starlark-elements-or` takes the
+  text before and after the type instead of a control.
 
 Also: `isalpha`/`isdigit`/`isalnum`/`isspace` test ASCII codes themselves (`alpha-char-p`
 is ASCII-only on wasm, `.todo/269`), while `islower`/`isupper`/`istitle`/`title` tell a
@@ -351,8 +355,7 @@ string nor a list on any backend; the literal's vector is shared, nothing writes
   branch: `def f(n): return n - 1` plus `print(f(3))` 177,199 / 177,354 -> 194,998 /
   195,369 (`.class` / `.wasm`; `%starlark-sub`'s set branch brings the set operations and
   `%starlark-key`), with `n + 1` 179,607 / 179,206 -> 192,869 / 193,356 (the bytes
-  branch). Not reduced here: `.todo/j53`'s question, a program paying for what a generic
-  helper can reach.
+  branch). What every program paid besides: "Measured", "The fixed cost".
 
 ## Frames: what a call that does not return gives back (2026-11-15)
 
@@ -538,8 +541,8 @@ lowering and Lisp run time that first measured the design,
   284,890 / 263,265 / 266,992 B, `print(1 + 2)` 177,793 / 178,269 / 181,868 B. With the
   file brackets, frames and modules of this file: 287,299 / 264,760 / 268,413 B and
   178,359 / 178,443 / 182,071 B. `bench.star` is unchanged by them (JVM 0.30-0.34 s, wasm
-  0.28-0.34 s, three runs each, before and after). What tripled `print(1 + 2)` between
-  the two measurements was not measured.
+  0.28-0.34 s, three runs each, before and after). What tripled `print(1 + 2)`: "The
+  fixed cost" below.
 - `bench.star` (`fib(27)` plus a 10^6-iteration `for` over `range`), wall time of one run,
   three runs each:
 
@@ -577,6 +580,40 @@ lowering and Lisp run time that first measured the design,
   a variable: `113078`); constants are quoted data, and a list of 100,000 integers, and
   one program of a 3,000-integer list, a list of 3,000 `("k", n)` tuples and a
   3,000-entry dict (`.class` 579,948 B), print the same on the four.
+
+### The fixed cost (2026-11-15)
+
+Measured on the wasm module's call graph (`-Drontolisp.wasm.debug-func-sizes` names each
+function index, `wasm-tools print` gives the calls) as a dominator tree: the bytes a
+function alone keeps reachable. `print(1 + 2)` at `999694f05`, 150,961 B of function
+bodies: `%condition-report-str` kept 53.6 KB, of it the run-time format renderer (`%fmt-*`,
+93 functions) 50.9 KB; `%starlark-write` 30.0 KB, of it `%starlark-format-float` 22.2 KB;
+`%print-object-str` (`%pos-walk`) 8.7 KB. The commits between the two measurements above
+were not bisected one by one: the tree names what a program keeps, which is what a
+bisection was to find.
+
+- The chain: every Starlark program is in EH mode on wasm (`%starlark-b-repr` and
+  `%starlark-join-strings` are `with-output-to-string`, an `unwind-protect`), which is
+  what prints an uncaught error's message there (outside EH mode it is a bare trap). So
+  messages are rendered and any constructible condition routes reports, as on the JVM
+  always. The float writer reaches the prelude's `integer-decode-float` /
+  `float-precision` / `float-sign`, whose `check-type` signalled `:format-control
+  "..~s.." :format-arguments (list x)`: the renderer. Independently,
+  `%starlark-elements-or`'s computed `(error message ..)` bailed the narrowing.
+- Made: `check-type` renders its report at the signal
+  ([declarations-type-checks.md](declarations-type-checks.md)), and the run-time library's
+  fourth rule ("The run-time library's rules"). Either alone gains nothing: only the
+  `check-type` change leaves `print(1 + 2)` at 184,430 / 184,224 / 187,922 B, only the
+  library's 178,124 / 179,508 / 183,398 B.
+- Sizes (`.class` / `.wasm` / component, before -> after): `print(1 + 2)` 184,193 /
+  184,176 / 187,837 -> 107,738 / 98,133 / 101,658; the prototype's `demo.star` 309,215 /
+  285,364 / 288,950 -> 237,401 / 206,596 / 210,570; `bench.star` 213,414 / 215,306 /
+  219,037 -> 137,893 / 127,685 / 131,399; `examples/starlark/targets.star` 294,873 /
+  281,584 / 285,176 -> 223,222 / 202,872 / 206,806. Output unchanged on the four.
+- Left, not made: `%starlark-write` dispatches on every type, so a program printing any
+  value keeps the float writer (24.5 KB of the 82.8 KB of function bodies `print(1 + 2)`
+  has now). Dropping it needs a proof that no float can exist (a literal, `/`, `float`,
+  a value from `load("@package")`).
 
 ### Typed fast paths (2026-11-15)
 

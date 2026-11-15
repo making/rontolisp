@@ -105,7 +105,7 @@ A condition is a CLOS-subset instance ([instance-syntax.md](instance-syntax.md))
   doubled, the control whose rendering is the text verbatim -- so the report, which renders the slot
   as a control, prints it exactly once. Producers: `LispMacroExpander.textControlForm` (a literal
   escaped at expansion, anything else `(%text-control x)`) at every expansion that builds a simple-*
-  instance, `reportingConditionForm` (the JVM pads, `%program-error`), `lowerFileError` and the
+  instance (`expandCheckType`'s included), `reportingConditionForm` (the JVM pads, `%program-error`), `lowerFileError` and the
   JVM/wasm pads' `simple-error` synthesis; `ClosRegistry.textControl` on the interpreter's Java side
   (`newReportingCondition`, the reader-/file-error factories, `synthesizeCondition`); the wasm-GC
   fixed runtime's `emitConditionThrow` (dispatcher and operand landings) through `_tilde`
@@ -403,7 +403,8 @@ every narrowing is IMPOSSIBILITY-based.
   site and raw failure under a bare handler-bind.
 - **`%format-condition` declines the renderer** when every possible control has no directive but
   `~~` -- a literal whose every `~` is half of a `~~`, nil, or a `(%text-control x)` -- with nil
-  arguments: the common case, since every string-datum signal site pre-renders
+  arguments: the common case, since every string-datum signal site, and `check-type` since
+  2026-11-15 ([declarations-type-checks.md](declarations-type-checks.md)), pre-renders
   (`formatMessagePieces`) and stores the text control. The declined arm is `(%control-text control)`,
   which undoubles the `~~`: the one directive such a control can hold, so declined and rendered
   artifacts print the same text. Only an explicit `:format-control` initarg with another directive

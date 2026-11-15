@@ -259,9 +259,10 @@
                   (if ords (char-code (char s i)) (subseq s i (+ i 1)))))
           v))))
 
-;; The elements of X, an iterable, as a fresh Common Lisp list; MESSAGE is the error
-;; when X is no iterable, a format string over its type.
-(defun rontolisp::%starlark-elements-or (x message)
+;; The elements of X, an iterable, as a fresh Common Lisp list; when X is no iterable
+;; the error is BEFORE, its type and AFTER. The message is no computed format control:
+;; one would keep the run-time format interpreter in every program.
+(defun rontolisp::%starlark-elements-or (x before after)
   (cond ((rontolisp::%starlark-list-p x)
          (coerce (rontolisp::%starlark-list-items x) 'list))
         ((rontolisp::%starlark-tuple-p x)
@@ -273,16 +274,16 @@
          (coerce (rontolisp::%starlark-range-vector x) 'list))
         ((rontolisp::%starlark-string-iterable-p x)
          (coerce (rontolisp::%starlark-string-iterable-vector x) 'list))
-        (t (error message (rontolisp::%starlark-type x)))))
+        (t (error "~a~a~a" before (rontolisp::%starlark-type x) after))))
 
 ;; The elements of an iterable as a fresh Common Lisp list.
 (defun rontolisp::%starlark-elements (x)
-  (rontolisp::%starlark-elements-or x "got ~a, want iterable"))
+  (rontolisp::%starlark-elements-or x "got " ", want iterable"))
 
 ;; The elements of the iterable of a `*` argument.
 (defun rontolisp::%starlark-star-elements (x)
-  (rontolisp::%starlark-elements-or x
-   "argument after * must be iterable, not ~a"))
+  (rontolisp::%starlark-elements-or x "argument after * must be iterable, not "
+                                    ""))
 
 ;; Takes X off the frames. It is the innermost one on every exit the lowering makes;
 ;; one below is looked for only after an error left frames behind.
@@ -362,8 +363,8 @@
                ((rontolisp::%starlark-list-p x)
                 (rontolisp::%starlark-copy-vector
                  (rontolisp::%starlark-list-items x)))
-               (t (coerce (rontolisp::%starlark-elements-or x
-                           "got ~a in sequence assignment") 'vector)))))
+               (t (coerce (rontolisp::%starlark-elements-or x "got "
+                           " in sequence assignment") 'vector)))))
     (cond ((< (length v) n)
            (error "too few values to unpack (got ~a, want ~a)" (length v) n))
           ((> (length v) n)
@@ -2051,7 +2052,8 @@
          (xs
           (if (and given (null (cdr given)))
               (rontolisp::%starlark-elements-or (car given)
-               (concatenate 'string name ": ~a value is not iterable"))
+                                                (concatenate 'string name ": ")
+                                                " value is not iterable")
               given))
          (key-function (rontolisp::%starlark-key-function key)))
     (if (null xs) (error "~a: empty sequence" name))

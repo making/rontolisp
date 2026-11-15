@@ -26382,6 +26382,11 @@ public final class LispMacroExpander {
 			// walk counts where it happens.
 			return false;
 		}
+		if (LispNames.CHECK_TYPE.equals(head)) {
+			// Its expansion (expandCheckType) is such a signal; its place is walked
+			// below.
+			return false;
+		}
 		return constructsInstance(head, form) || instantiatesConditionClass(head, form, closRegistry);
 	}
 
@@ -41217,7 +41222,7 @@ public final class LispMacroExpander {
 				return;
 			}
 			if (LispNames.CHECK_TYPE.equals(member) && parts.size() >= 3 && parts.size() <= 4) {
-				// Its signal (a simple-type-error over a runtime format argument) exists
+				// Its signal (a simple-type-error over its rendered text control) exists
 				// only in the expression expansion, after this scan: scan that instead.
 				walk(expandCheckType(cons), false);
 				return;
@@ -43288,6 +43293,19 @@ public final class LispMacroExpander {
 	 * @return the expanded expression
 	 */
 	public static LispVal expandCheckType(LispCons cons, ClosRegistry closRegistry) {
+		return expandCheckType(cons, closRegistry, true);
+	}
+
+	/**
+	 * Expands {@code (check-type ...)} as above, building the report only where a
+	 * signal's message can be read.
+	 * @param cons the check-type expression
+	 * @param closRegistry the class registry
+	 * @param rendered false on a wasm-GC module outside EH mode, whose signal is a bare
+	 * trap ({@link SignalMessages#LAZY}): the condition carries no report there
+	 * @return the expanded expression
+	 */
+	public static LispVal expandCheckType(LispCons cons, ClosRegistry closRegistry, boolean rendered) {
 		List<LispVal> parts = cons.toList();
 		if (parts.size() < 3 || parts.size() > 4) {
 			throw new IllegalArgumentException("check-type expects a place and a type specifier, got: " + cons.print());
@@ -43297,12 +43315,21 @@ public final class LispMacroExpander {
 		String expected = parts.size() == 4 && parts.get(3) instanceof LispString desc ? desc.value()
 				: "of type " + typeSpec.print();
 		LispSymbol var = new LispSymbol(CHECK_TYPE_VAR);
-		LispVal errorCall = listToCons(
-				List.of(new LispSymbol(LispNames.ERROR), quoteOf("SIMPLE-TYPE-ERROR"), new LispSymbol(":DATUM"), var,
-						new LispSymbol(":EXPECTED-TYPE"), quotedValue(typeSpec), new LispSymbol(":FORMAT-CONTROL"),
-						new LispString("The value of " + ClosRegistry.textControl(place.print())
-								+ " is ~s, which is not " + ClosRegistry.textControl(expected) + "."),
-						new LispSymbol(":FORMAT-ARGUMENTS"), listToCons(List.of(new LispSymbol(LispNames.LIST), var))));
+		// The report is rendered here, as a string datum's is, and signalled as its text
+		// control with no format arguments (the renderedDesignatorTypeError shape): a
+		// control holding ~s over a run-time argument would keep the run-time format
+		// renderer in every program that can reach a check-type.
+		LispSymbol report = new LispSymbol("__report");
+		// Unrendered, the control is nil: an omitted one costs the slot's default.
+		LispVal errorCall = listToCons(List.of(new LispSymbol(LispNames.ERROR), quoteOf("SIMPLE-TYPE-ERROR"),
+				new LispSymbol(":DATUM"), var, new LispSymbol(":EXPECTED-TYPE"), quotedValue(typeSpec),
+				new LispSymbol(":FORMAT-CONTROL"), rendered ? textControlForm(report) : LispNil.INSTANCE));
+		if (rendered) {
+			errorCall = makeLet(report.name(),
+					formatMessagePieces("The value of " + ClosRegistry.textControl(place.print())
+							+ " is ~S, which is not " + ClosRegistry.textControl(expected) + ".", List.of(var)),
+					errorCall);
+		}
 		LispVal test;
 		try {
 			test = makeTypeTest(var, closRegistry == EMPTY_CLOS_REGISTRY ? typeSpec : checkableTypeSpec(typeSpec),

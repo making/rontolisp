@@ -29,15 +29,24 @@ Seven `LispMacroExpander` expansions (no per-backend codegen), in `PackageRegist
 - `declare`/`declaim`/`proclaim` -> `nil`, arguments never evaluated or validated (`proclaim`
   deviates from CL); `the` -> its value form; `eval-when` -> `progn` of the body for `:execute`,
   `nil` otherwise ("An eval-when's position" below).
-- `check-type` -> `(let ((__check-type place)) (if <type-test> nil (error 'simple-type-error :datum
-  __check-type :expected-type 'spec :format-control "...~s..." :format-arguments (list
-  __check-type))))` (2026-10-30; was a plain `simple-error`, so `(type-error (c) ...)` missed it),
-  place and spec printed at EXPANSION time, only the value a runtime `~s` argument; an optional
-  third string replaces the "of type ..." part. The expansion runs inside the compilers, AFTER the
-  whole-program gates, so the gates name `check-type` themselves: `constructsInstance` (instance
-  + condition-report gates), `ConditionTagScan` walks the expansion (report-arm narrowing + the
-  runtime format renderer -- without it a JVM uncaught message printed the raw `~s`), and wasm's
-  `usedLayoutTags` keeps the `SIMPLE-TYPE-ERROR` layout. **Its test is the literal `typep`'s**
+- `check-type` -> `(let ((__check-type place)) (if <type-test> nil (let ((__report <"...~S..."
+  rendered over __check-type>)) (error 'simple-type-error :datum __check-type :expected-type 'spec
+  :format-control (%text-control __report)))))` (2026-10-30; was a plain `simple-error`, so
+  `(type-error (c) ...)` missed it), place and spec printed at EXPANSION time, only the value
+  rendered at the signal; an optional third string replaces the "of type ..." part. **The report
+  is rendered at the signal** (2026-11-15; it was `:format-control "...~s..." :format-arguments
+  (list __check-type)`), the shape of every string datum's ([error-handling.md](error-handling.md),
+  "The condition floor"): a run-time `~s` argument kept the run-time format renderer in every
+  program that could reach a `check-type` -- the prelude's `integer-decode-float` is one. `(defun
+  g (x) (princ (integer-decode-float x)))` compiled to a 115,034 B `.class`, now 19,257 B.
+  `simple-condition-format-control` is the report's text control, the arguments nil. A wasm-GC
+  module outside EH mode, where a signal is a bare trap, builds no report (`:format-control nil`,
+  `expandCheckType(cons, registry, ctx.ehMode)`). The expansion runs inside the compilers, AFTER
+  the whole-program gates, so the gates name `check-type` themselves: `constructsInstance`
+  (instance gate), `constructsCondition` answers false for it as for any signal of its own text
+  control (`signalsItsTextControl`), `ConditionTagScan` walks the expansion (report-arm
+  narrowing), and wasm's `usedLayoutTags` keeps the `SIMPLE-TYPE-ERROR` layout. Pin:
+  `LispMacroExpanderTest#conditionNarrowingCollectsLiteralTagsAndDeclinesTheRenderer`. **Its test is the literal `typep`'s**
   (`expandCheckType(cons, registry)`, 2026-11-05; it used to take no registry and pass any class,
   condition, struct or deftype): the compilers hand `ctx.closRegistry`, the interpreter's live one,
   so that arm re-expands ([interpreter-expansion-memo.md](interpreter-expansion-memo.md)). The
