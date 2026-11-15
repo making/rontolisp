@@ -4,6 +4,7 @@ import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -16,7 +17,10 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
@@ -102,16 +106,24 @@ import org.jspecify.annotations.Nullable;
  * of a global is direct, since a later buffer may bind the name again.</li>
  * <li><b>Two call tiers.</b> A call whose callee and argument shape are known while
  * lowering -- a top-level {@code def} bound once, a built-in function, a method -- is a
- * direct call of a Common Lisp function with every parameter in place. Any other call
- * hands the callee, the positional arguments and the named ones to the run-time binder
+ * direct call of a Common Lisp function with every parameter in place: the arguments
+ * bound to the parameters here, by position and by name, a default taken from where the
+ * {@code def} statement left its value. Any other call hands the callee, the positional
+ * arguments and the named ones to the run-time binder
  * ({@code rontolisp::%starlark-call}). Both tiers evaluate the arguments in source
  * order.</li>
  * <li><b>Control flow is lexical.</b> A function body is a {@code block} around a
  * {@code let} of every name it assigns, a {@code for} a {@code tagbody} over the
- * iterable's vector, {@code return} / {@code break} / {@code continue} a
- * {@code return-from}; no exit crosses a {@code lambda}. A {@code return} inside loops
- * ends each loop's count on the iterable itself before it leaves, so no
- * {@code unwind-protect} is needed.</li>
+ * iterable's vector -- over a counter when the iterable is a call of {@code range} --,
+ * {@code return} / {@code break} / {@code continue} a {@code return-from}; no exit
+ * crosses a {@code lambda}. A {@code return} inside loops ends each loop's count on the
+ * iterable itself before it leaves, so no {@code unwind-protect} is needed.</li>
+ * <li><b>An operator is generic unless its operands are known.</b> The lowering knows an
+ * expression to be an int or a Boolean from its spelling and from the bindings of the
+ * variables it reads ({@link Kind}): a variable is an int when every binding of it in its
+ * block is one. An arithmetic operator or a comparison over two ints is the Common Lisp
+ * operator; over operands that may be ints it is that operator behind a test of them, the
+ * generic helper otherwise; over one that is no int it is the helper alone.</li>
  * <li><b>A read is checked only where it can come before the assignment.</b> A
  * definite-assignment pass runs with the lowering: a name assigned on every path to a
  * read is read as it stands, any other read goes through
@@ -154,6 +166,8 @@ final class StarlarkLowering {
 
 	private static final LispSymbol NOT = new LispSymbol("NOT");
 
+	private static final LispSymbol EQ = new LispSymbol("EQ");
+
 	private static final LispSymbol BLOCK = new LispSymbol("BLOCK");
 
 	private static final LispSymbol RETURN_FROM = new LispSymbol("RETURN-FROM");
@@ -172,7 +186,37 @@ final class StarlarkLowering {
 
 	private static final LispSymbol LESS = new LispSymbol("<");
 
+	private static final LispSymbol GREATER = new LispSymbol(">");
+
+	private static final LispSymbol LESS_EQUAL = new LispSymbol("<=");
+
+	private static final LispSymbol GREATER_EQUAL = new LispSymbol(">=");
+
+	private static final LispSymbol NUMBER_EQUAL = new LispSymbol("=");
+
 	private static final LispSymbol PLUS = new LispSymbol("+");
+
+	private static final LispSymbol MINUS = new LispSymbol("-");
+
+	private static final LispSymbol TIMES = new LispSymbol("*");
+
+	private static final LispSymbol MOD = new LispSymbol("MOD");
+
+	private static final LispSymbol FLOOR = new LispSymbol("FLOOR");
+
+	private static final LispSymbol VALUES = new LispSymbol("VALUES");
+
+	private static final LispSymbol ASH = new LispSymbol("ASH");
+
+	private static final LispSymbol LOGAND = new LispSymbol("LOGAND");
+
+	private static final LispSymbol LOGIOR = new LispSymbol("LOGIOR");
+
+	private static final LispSymbol LOGXOR = new LispSymbol("LOGXOR");
+
+	private static final LispSymbol LOGNOT = new LispSymbol("LOGNOT");
+
+	private static final LispSymbol INTEGERP = new LispSymbol("INTEGERP");
 
 	private static final LispSymbol VECTOR_PUSH_EXTEND = new LispSymbol("VECTOR-PUSH-EXTEND");
 
@@ -214,6 +258,25 @@ final class StarlarkLowering {
 	private static final LispSymbol MAKE_DICT = runtime("MAKE-DICT");
 
 	private static final LispSymbol EMPTY_DICT = runtime("EMPTY-DICT");
+
+	private static final LispSymbol LIST_OF = runtime("LIST-OF");
+
+	private static final LispSymbol TUPLE_OF = runtime("TUPLE-OF");
+
+	private static final LispSymbol DICT_OF = runtime("DICT-OF");
+
+	/** Builds a list, tuple or dict expression of constants from its quoted form. */
+	private static final LispSymbol LITERAL = runtime("LITERAL");
+
+	private static final LispSymbol LIST_MARK = new LispSymbol(":%LIST");
+
+	private static final LispSymbol TUPLE_MARK = new LispSymbol(":%TUPLE");
+
+	private static final LispSymbol DICT_MARK = new LispSymbol(":%DICT");
+
+	private static final LispSymbol LOOP_STOP = runtime("LOOP-STOP");
+
+	private static final LispSymbol LOOP_STEP = runtime("LOOP-STEP");
 
 	private static final LispSymbol VECTOR = runtime("VECTOR");
 
@@ -266,6 +329,16 @@ final class StarlarkLowering {
 
 	private static final Map<String, LispVal> CONSTANTS = Map.of("None", StarlarkBuiltins.NONE, "True",
 			LispTrue.INSTANCE, "False", LispNil.INSTANCE);
+
+	/**
+	 * The operators that are the Common Lisp one behind a test of their operands, where
+	 * the operands may be ints: what a counting loop is written with. The bitwise
+	 * operators are the Common Lisp ones over known ints only.
+	 */
+	private static final Set<BinaryOperator> TESTED = Set.of(BinaryOperator.PLUS, BinaryOperator.MINUS,
+			BinaryOperator.MULTIPLY, BinaryOperator.FLOOR_DIVIDE, BinaryOperator.MODULO, BinaryOperator.EQUALS,
+			BinaryOperator.NOT_EQUALS, BinaryOperator.LESS, BinaryOperator.LESS_EQUALS, BinaryOperator.GREATER,
+			BinaryOperator.GREATER_EQUALS);
 
 	/**
 	 * What the files of one lowering share: the program's file and every module its
@@ -348,19 +421,21 @@ final class StarlarkLowering {
 	 *
 	 * @param symbol its variable, which is its function too when it has a direct entry
 	 * @param assigned whether every path through the module assigns it
-	 * @param parameters how many arguments its direct entry takes, or -1 with none
+	 * @param signature how its direct entry is called, or {@code null} with none
 	 */
-	private record Export(LispSymbol symbol, boolean assigned, int parameters) {
+	private record Export(LispSymbol symbol, boolean assigned, @Nullable Signature signature) {
 	}
 
 	/**
 	 * A function a call enters directly.
 	 *
 	 * @param function its Common Lisp name
-	 * @param parameters how many arguments it takes, or -1 for any number (a Common Lisp
-	 * function)
+	 * @param signature the parameters a {@code def} takes -- a default the constant it
+	 * is, else the global its {@code def} statement leaves the value in --, or
+	 * {@code null} for a Common Lisp function, which takes any number of positional
+	 * arguments
 	 */
-	private record Callee(LispSymbol function, int parameters) {
+	private record Callee(LispSymbol function, @Nullable Signature signature) {
 	}
 
 	/**
@@ -381,8 +456,7 @@ final class StarlarkLowering {
 
 	/**
 	 * The top-level functions of this file with a direct entry: a {@code def} standing at
-	 * the top level, the only binding of its name in the file, with no {@code *}
-	 * parameter.
+	 * the top level, the only binding of its name in the file.
 	 */
 	private final Map<String, Def> direct = new LinkedHashMap<>();
 
@@ -428,6 +502,9 @@ final class StarlarkLowering {
 	 * after it, so its statements run once per program.
 	 */
 	private final LispSymbol state;
+
+	/** What the file's globals are known to hold; nothing in a session's buffer. */
+	private final Map<String, Kind> globalKinds = new HashMap<>();
 
 	/** The globals some read checks: each starts as {@link #UNBOUND}. */
 	private final Set<String> checkedGlobals = new LinkedHashSet<>();
@@ -590,8 +667,8 @@ final class StarlarkLowering {
 				// a load of it reads it through the check, so it starts unassigned
 				this.checkedGlobals.add(name);
 			}
-			Def def = this.direct.get(name);
-			exports.put(name, new Export(global(name), assigned, def == null ? -1 : def.parameters().size()));
+			Callee callee = this.direct.containsKey(name) ? this.callees.get(name) : null;
+			exports.put(name, new Export(global(name), assigned, callee == null ? null : callee.signature()));
 		}
 		this.session.definitions.add(list(DEFVAR, this.state, LispNil.INSTANCE));
 		List<LispVal> forms = new ArrayList<>();
@@ -671,11 +748,16 @@ final class StarlarkLowering {
 		bindings(statements, bound);
 		this.globals.addAll(bound.keySet());
 		Map<String, Integer> loaded = new HashMap<>();
+		if (!this.interactive) {
+			// a later buffer of a session may bind a global to anything
+			Map<String, List<Supplier<Kind>>> kinds = new LinkedHashMap<>();
+			bound(statements, Scope.TOP, kinds);
+			infer(kinds, List.of(), this.globalKinds);
+		}
 		for (Statement statement : statements) {
-			if (statement instanceof Def def && !this.interactive && bound.getOrDefault(def.name(), 0) == 1
-					&& new Parameters(def.parameters()).isPlain()) {
+			if (statement instanceof Def def && !this.interactive && bound.getOrDefault(def.name(), 0) == 1) {
 				this.direct.put(def.name(), def);
-				this.callees.put(def.name(), new Callee(global(def.name()), def.parameters().size()));
+				this.callees.put(def.name(), new Callee(global(def.name()), signature(def)));
 			}
 			else if (statement instanceof Load load) {
 				load.bindings().forEach(binding -> loaded.merge(binding.local(), 1, Integer::sum));
@@ -739,7 +821,7 @@ final class StarlarkLowering {
 				value = list(FOREIGN, string(load.module().substring(PACKAGE_MARK.length()) + ":" + remote),
 						list(FUNCTION, function));
 				if (only) {
-					this.callees.put(local, new Callee(function, -1));
+					this.callees.put(local, new Callee(function, null));
 				}
 			}
 			else {
@@ -752,8 +834,8 @@ final class StarlarkLowering {
 				}
 				value = export.assigned() ? export.symbol()
 						: list(LOADED, export.symbol(), string(remote), string(load.module()));
-				if (only && export.parameters() >= 0) {
-					this.callees.put(local, new Callee(export.symbol(), export.parameters()));
+				if (only && export.signature() != null) {
+					this.callees.put(local, new Callee(export.symbol(), export.signature()));
 				}
 			}
 			locals.add(local);
@@ -931,11 +1013,14 @@ final class StarlarkLowering {
 
 	// ---- scopes ----
 
-	/** The names a function or a comprehension binds, inside the scope it stands in. */
-	private record Scope(@Nullable Scope parent, Set<String> names) {
+	/**
+	 * The names a function or a comprehension binds, inside the scope it stands in, and
+	 * what those of them hold that the lowering knows ({@link #infer}).
+	 */
+	private record Scope(@Nullable Scope parent, Set<String> names, Map<String, Kind> kinds) {
 
 		/** The file's top level: its names are the globals, no local. */
-		static final Scope TOP = new Scope(null, Set.of());
+		static final Scope TOP = new Scope(null, Set.of(), Map.of());
 
 		boolean binds(String name) {
 			for (Scope scope = this; scope != null; scope = scope.parent) {
@@ -947,20 +1032,23 @@ final class StarlarkLowering {
 		}
 
 		Scope inner(Set<String> names) {
-			return new Scope(this, names);
+			return new Scope(this, names, new HashMap<>());
 		}
 
 	}
 
 	/**
 	 * Where a statement stands: the scope its names resolve in and the loops of its own
-	 * function around it, innermost first, by the variable holding each one's iterable.
+	 * function around it -- those holding an iterable, innermost first, by the variable
+	 * holding it, and how many there are in all.
 	 */
 	private static final class Frame {
 
 		private final Scope scope;
 
 		private final Deque<LispSymbol> loops = new ArrayDeque<>();
+
+		private int depth;
 
 		Frame(Scope scope) {
 			this.scope = scope;
@@ -1020,6 +1108,208 @@ final class StarlarkLowering {
 		return scope.binds(name) || this.globals.contains(name);
 	}
 
+	/** The built-in function the name is where it is written, or {@code null}. */
+	private @Nullable Signature builtin(Expression callee, Scope scope) {
+		return callee instanceof Identifier identifier && !isVariable(identifier.name(), scope)
+				&& !CONSTANTS.containsKey(identifier.name()) ? StarlarkBuiltins.function(identifier.name()) : null;
+	}
+
+	// ---- kinds ----
+
+	/**
+	 * What the lowering knows of a value before the program runs: that it is an int, that
+	 * it is {@code True} or {@code False} (the Common Lisp booleans), that it is of some
+	 * other type -- no int --, or nothing.
+	 */
+	private enum Kind {
+
+		INT, BOOL, OTHER, ANY;
+
+		/** The kind of a value that is of either kind. */
+		static Kind join(Kind a, Kind b) {
+			if (a == b) {
+				return a;
+			}
+			return a.mayBeInt() || b.mayBeInt() ? ANY : OTHER;
+		}
+
+		boolean mayBeInt() {
+			return this == INT || this == ANY;
+		}
+
+	}
+
+	/** The kind of an expression's value, when the expression answers one. */
+	private Kind kind(Expression expression, Scope scope) {
+		return switch (expression) {
+			case IntLiteral _ -> Kind.INT;
+			case Identifier identifier -> kind(identifier.name(), scope);
+			case Unary unary -> {
+				Kind operand = kind(unary.operand(), scope);
+				yield unary.operator() == UnaryOperator.NOT ? Kind.BOOL
+						: operand == Kind.INT ? Kind.INT : operand == Kind.ANY ? Kind.ANY : Kind.OTHER;
+			}
+			case Binary binary -> {
+				Kind left = kind(binary.left(), scope);
+				Kind right = kind(binary.right(), scope);
+				yield switch (binary.operator()) {
+					case AND, OR -> Kind.join(left, right);
+					case EQUALS, NOT_EQUALS, LESS, LESS_EQUALS, GREATER, GREATER_EQUALS, IN, NOT_IN -> Kind.BOOL;
+					case DIVIDE -> Kind.OTHER;
+					// two ints answer an int; with an operand of another type the
+					// operator answers no int: a float, a string, a list
+					default -> left == Kind.INT && right == Kind.INT ? Kind.INT
+							: left.mayBeInt() && right.mayBeInt() ? Kind.ANY : Kind.OTHER;
+				};
+			}
+			case Conditional conditional ->
+				Kind.join(kind(conditional.then(), scope), kind(conditional.otherwise(), scope));
+			case Call call -> {
+				Signature signature = call.function() instanceof Dot dot ? StarlarkBuiltins.method(dot.name())
+						: builtin(call.function(), scope);
+				yield signature == null ? Kind.ANY : switch (signature.result()) {
+					case "int" -> Kind.INT;
+					case "bool" -> Kind.BOOL;
+					default -> Kind.ANY;
+				};
+			}
+			case Dot _, Index _ -> Kind.ANY;
+			case FloatLiteral _, StringLiteral _, BytesLiteral _, Lambda _, ListLiteral _, TupleLiteral _,
+					DictLiteral _, ListComprehension _, DictComprehension _, Slice _ ->
+				Kind.OTHER;
+		};
+	}
+
+	/** The kind of what a name holds where it is written. */
+	private Kind kind(String name, Scope scope) {
+		for (Scope binding = scope; binding != null; binding = binding.parent()) {
+			if (binding.names().contains(name)) {
+				return binding.kinds().getOrDefault(name, Kind.ANY);
+			}
+		}
+		if (this.globals.contains(name)) {
+			return this.globalKinds.getOrDefault(name, Kind.ANY);
+		}
+		// None and a built-in function are no ints
+		return name.equals("True") || name.equals("False") ? Kind.BOOL : Kind.OTHER;
+	}
+
+	/**
+	 * Collects, per name, the kind of each value these statements bind it to in their own
+	 * block, asked once the block's own kinds are being settled.
+	 */
+	private void bound(List<Statement> statements, Scope scope, Map<String, List<Supplier<Kind>>> out) {
+		for (Statement statement : statements) {
+			switch (statement) {
+				case Assignment assignment -> bound(assignment.target(), assignment.value(), scope, out);
+				case AugmentedAssignment assignment -> {
+					if (assignment.target() instanceof Identifier identifier) {
+						Binary applied = new Binary(assignment.operator(), identifier, assignment.value(),
+								assignment.at());
+						out.computeIfAbsent(identifier.name(), name -> new ArrayList<>())
+							.add(() -> kind(applied, scope));
+					}
+				}
+				case For loop -> {
+					element(loop.target(), loop.iterable(), scope, out);
+					bound(loop.body(), scope, out);
+				}
+				case If conditional -> {
+					bound(conditional.then(), scope, out);
+					bound(conditional.otherwise(), scope, out);
+				}
+				case Def def -> out.computeIfAbsent(def.name(), name -> new ArrayList<>()).add(() -> Kind.OTHER);
+				case Load load -> load.bindings()
+					.forEach(binding -> out.computeIfAbsent(binding.local(), name -> new ArrayList<>())
+						.add(() -> Kind.ANY));
+				default -> {
+				}
+			}
+		}
+	}
+
+	/**
+	 * A target bound to a value: a name to the value's kind, the names of a tuple or list
+	 * of targets to the elements of a tuple or list expression of as many, and to
+	 * anything when the value is not one ({@code null}: unknown).
+	 */
+	private void bound(Expression target, @Nullable Expression value, Scope scope,
+			Map<String, List<Supplier<Kind>>> out) {
+		List<Expression> targets = elements(target);
+		if (target instanceof Identifier identifier) {
+			out.computeIfAbsent(identifier.name(), name -> new ArrayList<>())
+				.add(value == null ? () -> Kind.ANY : () -> kind(value, scope));
+		}
+		else if (targets != null) {
+			List<Expression> values = value == null ? null : elements(value);
+			for (int i = 0; i < targets.size(); i++) {
+				bound(targets.get(i), values != null && values.size() == targets.size() ? values.get(i) : null, scope,
+						out);
+			}
+		}
+	}
+
+	/**
+	 * A loop's target bound to each element of its iterable: an int for a call of
+	 * {@code range}, a pair starting with an int for one of {@code enumerate}.
+	 */
+	private void element(Expression target, Expression iterable, Scope scope, Map<String, List<Supplier<Kind>>> out) {
+		Signature producer = iterable instanceof Call call ? builtin(call.function(), scope) : null;
+		String name = producer == null ? "" : producer.name();
+		List<Expression> targets = elements(target);
+		if (target instanceof Identifier identifier && name.equals("range")) {
+			out.computeIfAbsent(identifier.name(), key -> new ArrayList<>()).add(() -> Kind.INT);
+		}
+		else if (targets != null && targets.size() == 2 && targets.get(0) instanceof Identifier index
+				&& name.equals("enumerate")) {
+			out.computeIfAbsent(index.name(), key -> new ArrayList<>()).add(() -> Kind.INT);
+			bound(targets.get(1), null, scope, out);
+		}
+		else {
+			bound(target, null, scope, out);
+		}
+	}
+
+	/** The elements of a tuple or list expression, or {@code null} for any other. */
+	private static @Nullable List<Expression> elements(Expression expression) {
+		return switch (expression) {
+			case TupleLiteral tuple -> tuple.elements();
+			case ListLiteral list -> list.elements();
+			default -> null;
+		};
+	}
+
+	/**
+	 * Settles what a block's names hold: a name is an int when every value the block
+	 * binds it to is one, given the names assumed so -- the assumption is dropped name by
+	 * name until it holds --, and a Boolean likewise. A name the block is handed (a
+	 * parameter) holds anything. Nothing outside the block binds its names: a nested
+	 * function reads them, a session's later buffer is asked for no global.
+	 * @param bound what {@link #bound} collected of the block
+	 * @param handed the names the block is handed
+	 * @param kinds the block's kinds, filled here; the collected bindings read it
+	 */
+	private static void infer(Map<String, List<Supplier<Kind>>> bound, List<String> handed, Map<String, Kind> kinds) {
+		for (Kind assumed : List.of(Kind.INT, Kind.BOOL)) {
+			for (String name : bound.keySet()) {
+				if (!handed.contains(name)) {
+					kinds.putIfAbsent(name, assumed);
+				}
+			}
+			boolean settled = false;
+			while (!settled) {
+				settled = true;
+				for (Map.Entry<String, List<Supplier<Kind>>> binding : bound.entrySet()) {
+					if (kinds.get(binding.getKey()) == assumed
+							&& !binding.getValue().stream().allMatch(value -> value.get() == assumed)) {
+						kinds.remove(binding.getKey());
+						settled = false;
+					}
+				}
+			}
+		}
+	}
+
 	// ---- functions ----
 
 	/**
@@ -1055,11 +1345,6 @@ final class StarlarkLowering {
 					}
 				}
 			}
-		}
-
-		/** No {@code *}: every parameter can be filled by position. */
-		boolean isPlain() {
-			return this.keywordOnly.isEmpty() && this.varargs == null && this.kwargs == null;
 		}
 
 		/** The parameters an argument fills, positional first. */
@@ -1114,6 +1399,9 @@ final class StarlarkLowering {
 			this.flow.assigned.add(name);
 		}
 		Scope scope = enclosing.inner(names);
+		Map<String, List<Supplier<Kind>>> kinds = new LinkedHashMap<>();
+		bound(statements, scope, kinds);
+		infer(kinds, parameters.names(), scope.kinds());
 		// A return ending the body is the body's value: it needs no block to leave.
 		List<Statement> block = statements;
 		Expression last = null;
@@ -1170,13 +1458,20 @@ final class StarlarkLowering {
 	 * The function value a {@code def} or a {@code lambda} evaluates to: its name, its
 	 * parameters and their defaults -- evaluated here, once, in the scope the function is
 	 * written in -- around the Common Lisp function {@code implementation}.
+	 * @param holders for a function with a direct entry, its signature's defaults: a
+	 * default that is no constant is left in the global standing there, which a direct
+	 * call reads
 	 */
-	private LispVal functionValue(String name, Parameters parameters, LispVal implementation, Scope enclosing) {
+	private LispVal functionValue(String name, Parameters parameters, LispVal implementation, Scope enclosing,
+			@Nullable List<@Nullable LispVal> holders) {
 		List<LispVal> defaults = new ArrayList<>();
 		boolean anyDefault = false;
-		for (Expression value : parameters.defaults) {
+		for (int i = 0; i < parameters.defaults.size(); i++) {
+			Expression value = parameters.defaults.get(i);
 			anyDefault |= value != null;
-			defaults.add(value == null ? StarlarkBuiltins.REQUIRED : expression(value, enclosing));
+			LispVal holder = holders == null ? null : holders.get(i);
+			LispVal form = value == null ? StarlarkBuiltins.REQUIRED : expression(value, enclosing);
+			defaults.add(holder == null || isConstant(holder) ? form : list(SETQ, holder, form));
 		}
 		return list(MAKE_FUNCTION, string(name), quotedStrings(parameters.filled()),
 				anyDefault ? cons(LIST, listOf(defaults)) : LispNil.INSTANCE,
@@ -1187,16 +1482,38 @@ final class StarlarkLowering {
 	private LispVal definition(Def def, Scope scope) {
 		Parameters parameters = new Parameters(def.parameters());
 		LispVal implementation;
+		List<@Nullable LispVal> holders = null;
 		if (scope == Scope.TOP && this.direct.get(def.name()) == def) {
 			LispSymbol symbol = global(def.name());
 			this.session.definitions
 				.add(located(cons(DEFUN, cons(symbol, function(parameters, def.body(), scope, def.name()))), def.at()));
 			implementation = list(FUNCTION, symbol);
+			holders = Objects.requireNonNull(Objects.requireNonNull(this.callees.get(def.name())).signature())
+				.defaults();
 		}
 		else {
 			implementation = cons(LAMBDA, function(parameters, def.body(), scope, def.name()));
 		}
-		return functionValue(def.name(), parameters, implementation, scope);
+		return functionValue(def.name(), parameters, implementation, scope, holders);
+	}
+
+	/**
+	 * How a top-level {@code def} with a direct entry is called: its parameters as the
+	 * entry takes them, each default the constant it is written as, or a global of this
+	 * file's the {@code def} statement leaves the value in -- a default is evaluated when
+	 * the statement runs, and a direct call, which runs after it, needs the value.
+	 */
+	private Signature signature(Def def) {
+		Parameters parameters = new Parameters(def.parameters());
+		List<@Nullable LispVal> defaults = new ArrayList<>();
+		for (Expression value : parameters.defaults) {
+			LispVal constant = value == null ? null : scalar(value, Scope.TOP);
+			defaults.add(value == null || constant != null ? constant
+					: new LispSymbol(this.filePrefix + fresh("DEFAULT").name()));
+		}
+		return new Signature(def.name(), global(def.name()).name(), List.of(), List.copyOf(parameters.filled()),
+				Collections.unmodifiableList(defaults), parameters.positional.size(), 0, parameters.varargs != null,
+				parameters.kwargs != null, "");
 	}
 
 	private LispVal lambda(Lambda lambda, Scope scope) {
@@ -1207,7 +1524,7 @@ final class StarlarkLowering {
 		LispVal body = expression(lambda.body(), inner);
 		this.flow = outer;
 		return functionValue("lambda", parameters,
-				cons(LAMBDA, cons(parameters.lambdaList(), listOf(once(List.of(body), "lambda")))), scope);
+				cons(LAMBDA, cons(parameters.lambdaList(), listOf(once(List.of(body), "lambda")))), scope, null);
 	}
 
 	// ---- statements ----
@@ -1229,8 +1546,7 @@ final class StarlarkLowering {
 		return switch (statement) {
 			case ExpressionStatement expression ->
 				isLiteral(expression.expression()) ? null : expression(expression.expression(), scope);
-			case Assignment assignment ->
-				assign(assignment.target(), Value.computed(expression(assignment.value(), scope)), scope);
+			case Assignment assignment -> assignment(assignment, scope);
 			case AugmentedAssignment assignment -> augmented(assignment, scope);
 			case Def def -> {
 				LispVal form = list(SETQ, variable(def.name(), scope), definition(def, scope));
@@ -1252,15 +1568,20 @@ final class StarlarkLowering {
 				yield listOf(form);
 			}
 			case For iteration -> {
-				Loop loop = new Loop(iteration.target(), expression(iteration.iterable(), scope))
-					.exits(iteration.body());
+				Loop loop = loop(iteration.target(), iteration.iterable(), scope).exits(iteration.body());
 				// The body may run no time: what it assigns is not assigned after it.
 				Flow before = this.flow;
 				this.flow = before.copy();
 				LispVal assignment = loop.assignment(scope);
-				frame.loops.push(loop.iterable);
+				if (loop.iterable != null) {
+					frame.loops.push(loop.iterable);
+				}
+				frame.depth++;
 				List<LispVal> body = statements(iteration.body(), frame);
-				frame.loops.pop();
+				frame.depth--;
+				if (loop.iterable != null) {
+					frame.loops.pop();
+				}
 				this.flow = before;
 				yield loop.over(assignment, body);
 			}
@@ -1280,7 +1601,7 @@ final class StarlarkLowering {
 			case Pass _ -> null;
 			// a top-level one is the file's body's business
 			case Load load ->
-				throw error("load statement within a " + (frame.loops.isEmpty() ? "conditional" : "loop"), load.at());
+				throw error("load statement within a " + (frame.depth == 0 ? "conditional" : "loop"), load.at());
 		};
 	}
 
@@ -1292,8 +1613,8 @@ final class StarlarkLowering {
 
 	/**
 	 * {@code return}: the function's block is left with the value, after every loop of
-	 * the function it stands in gave its iterable back. The value is computed first: it
-	 * may still read what the loops hold.
+	 * the function it stands in that holds an iterable gave it back. The value is
+	 * computed first: it may still read what the loops hold.
 	 */
 	private LispVal returned(Return returned, Frame frame) {
 		Expression operand = returned.value();
@@ -1319,40 +1640,98 @@ final class StarlarkLowering {
 	}
 
 	/**
-	 * A loop over an iterable: its elements are read off one vector by index, and the
+	 * A loop: over an iterable, whose elements are read off one vector by index while the
 	 * iterable counts the loop from {@code %starlark-iterate} to
-	 * {@code %starlark-iterated}, refusing a mutation meanwhile. Only a loop whose body
-	 * leaves it gets the block to leave.
+	 * {@code %starlark-iterated}, refusing a mutation meanwhile; or, over a call of
+	 * {@code range}, over a counter, with no range and no vector made ({@link #loop}).
+	 * Only a loop whose body leaves it gets the block to leave.
 	 */
 	private final class Loop {
 
-		/** The variable holding the iterable while the loop runs. */
-		private final LispSymbol iterable = fresh("SEQ");
+		/** What the loop evaluates before it starts, as {@code let*} bindings. */
+		private final List<LispVal> bindings = new ArrayList<>();
 
-		private final LispSymbol items = fresh("ITEMS");
+		/**
+		 * The variable holding the iterable while the loop runs, or {@code null} for a
+		 * loop that counts: it holds nothing to give back.
+		 */
+		private final @Nullable LispSymbol iterable;
 
-		private final LispSymbol count = fresh("COUNT");
+		/** Whether an element is left. */
+		private final LispVal test;
 
-		private final LispSymbol index = fresh("INDEX");
+		/** The element the loop stands at. */
+		private final LispVal element;
 
-		private final LispSymbol top = fresh("TOP");
+		/** Moves the loop to the next element. */
+		private final LispVal step;
+
+		private final LispSymbol top;
 
 		private final Expression target;
-
-		private final LispVal iterated;
 
 		private boolean breaks;
 
 		private boolean continues;
 
 		/**
-		 * A loop.
+		 * A loop over an iterable.
 		 * @param target what each element is assigned to
 		 * @param iterated the iterable's form
 		 */
 		Loop(Expression target, LispVal iterated) {
+			LispSymbol iterable = fresh("SEQ");
+			LispSymbol items = fresh("ITEMS");
+			LispSymbol count = fresh("COUNT");
+			LispSymbol index = fresh("INDEX");
+			this.bindings.addAll(List.of(list(iterable, iterated), list(items, list(ITERATE, iterable)),
+					list(count, list(LENGTH, items)), list(index, new LispInteger(0))));
+			this.iterable = iterable;
+			this.test = list(LESS, index, count);
+			this.element = list(AREF, items, index);
+			this.step = list(SETQ, index, list(PLUS, index, new LispInteger(1)));
+			this.top = fresh("TOP");
 			this.target = target;
-			this.iterated = iterated;
+		}
+
+		/**
+		 * A loop that counts from {@code start} to {@code stop}, for a call of
+		 * {@code range}: the bounds and the step are evaluated as the call's arguments
+		 * are and checked as {@code range} checks them.
+		 * @param target what each number is assigned to
+		 * @param range the call
+		 * @param start the first number's form
+		 * @param stop the form of the number the loop stops before; a constant stands in
+		 * the test itself
+		 * @param constant the step when it is a constant, not zero, else {@code null}
+		 * @param step the step's form
+		 * @param ints whether the bounds are known ints, which need no check
+		 */
+		Loop(Expression target, Call range, LispVal start, LispVal stop, @Nullable BigInteger constant, LispVal step,
+				boolean ints) {
+			LispSymbol next = fresh("NEXT");
+			this.bindings.add(list(next, start));
+			LispVal limit = stop;
+			if (constant == null || !ints || !isConstant(stop)) {
+				LispSymbol held = fresh("STOP");
+				this.bindings.add(
+						list(held, constant == null || ints ? stop : located(list(LOOP_STOP, next, stop), range.at())));
+				limit = held;
+			}
+			LispVal by = step;
+			if (constant == null) {
+				// the step's sign is known only when the loop runs, and it checks the
+				// bounds with itself
+				by = fresh("STEP");
+				this.bindings.add(list(by, located(list(LOOP_STEP, next, limit, step), range.at())));
+			}
+			this.iterable = null;
+			this.test = constant != null ? list(constant.signum() > 0 ? LESS : GREATER, next, limit)
+					: list(IF, list(LESS, new LispInteger(0), by), list(LESS, next, limit), list(GREATER, next, limit));
+			this.element = next;
+			this.step = list(SETQ, next, list(PLUS, next, by));
+			this.top = fresh("TOP");
+			this.target = target;
 		}
 
 		/** Notes the {@code break} and {@code continue} of this loop in its body. */
@@ -1385,36 +1764,81 @@ final class StarlarkLowering {
 		 * @return the assignment
 		 */
 		LispVal assignment(Scope scope) {
-			return assign(this.target, Value.element(list(AREF, this.items, this.index)), scope);
+			return assign(this.target, Value.element(this.element), scope);
 		}
 
 		/**
-		 * The loop around its body.
+		 * The loop around its body, inside what it evaluates first.
 		 * @param assignment what {@link #assignment} answered
 		 * @param body the body's forms
 		 * @return the loop
 		 */
 		LispVal over(LispVal assignment, List<LispVal> body) {
-			LispSymbol items = this.items;
-			LispSymbol count = this.count;
-			LispSymbol index = this.index;
-			LispSymbol top = this.top;
-			List<LispVal> step = new ArrayList<>(
-					List.of(PROGN, assignment, list(SETQ, index, list(PLUS, index, new LispInteger(1)))));
+			return cons(LET_STAR, cons(listOf(this.bindings), listOf(walk(assignment, body))));
+		}
+
+		/**
+		 * The loop around its body, for a place where {@link #bindings} are bound.
+		 * @param assignment what {@link #assignment} answered
+		 * @param body the body's forms
+		 * @return the loop's forms
+		 */
+		List<LispVal> walk(LispVal assignment, List<LispVal> body) {
+			List<LispVal> step = new ArrayList<>(List.of(PROGN, assignment, this.step));
 			if (this.continues) {
 				step.add(cons(BLOCK, cons(CONTINUE_BLOCK, listOf(body))));
 			}
 			else {
 				step.addAll(body);
 			}
-			step.add(list(GO, top));
-			LispVal walk = list(TAGBODY, top, list(IF, list(LESS, index, count), listOf(step)));
-			return list(LET_STAR,
-					list(list(this.iterable, this.iterated), list(items, list(ITERATE, this.iterable)),
-							list(count, list(LENGTH, items)), list(index, new LispInteger(0))),
-					this.breaks ? list(BLOCK, BREAK_BLOCK, walk) : walk, list(ITERATED, this.iterable));
+			step.add(list(GO, this.top));
+			LispVal walk = list(TAGBODY, this.top, list(IF, this.test, listOf(step)));
+			List<LispVal> forms = new ArrayList<>();
+			forms.add(this.breaks ? list(BLOCK, BREAK_BLOCK, walk) : walk);
+			if (this.iterable != null) {
+				forms.add(list(ITERATED, this.iterable));
+			}
+			return forms;
 		}
 
+	}
+
+	/**
+	 * The loop of a {@code for} statement or clause: over a call of the built-in
+	 * {@code range} the loop counts, with no range made.
+	 * @param target what each element is assigned to
+	 * @param iterable the iterable
+	 * @param scope where the iterable's names resolve
+	 * @return the loop
+	 */
+	private Loop loop(Expression target, Expression iterable, Scope scope) {
+		Call range = iterable instanceof Call call && builtin(call.function(), scope) != null
+				&& ((Identifier) call.function()).name().equals("range") ? call : null;
+		List<Argument> arguments = range == null ? List.of() : range.arguments();
+		BigInteger constant = arguments.size() == 3 ? literalInt(arguments.get(2).value()) : BigInteger.ONE;
+		// a step written as zero is the range's to refuse
+		if (range == null || arguments.isEmpty() || arguments.size() > 3 || constant != null && constant.signum() == 0
+				|| !arguments.stream().allMatch(argument -> argument.kind() == ArgumentKind.POSITIONAL)) {
+			return new Loop(target, expression(iterable, scope));
+		}
+		Expression first = arguments.size() == 1 ? null : arguments.get(0).value();
+		Expression last = arguments.get(arguments.size() == 1 ? 0 : 1).value();
+		LispVal start = first == null ? new LispInteger(0) : expression(first, scope);
+		LispVal stop = expression(last, scope);
+		LispVal step = constant != null ? integer(constant) : expression(arguments.get(2).value(), scope);
+		boolean ints = (first == null || kind(first, scope) == Kind.INT) && kind(last, scope) == Kind.INT;
+		return new Loop(target, range, start, stop, constant, step, ints);
+	}
+
+	/** The int an expression is written as, or {@code null}. */
+	private static @Nullable BigInteger literalInt(Expression expression) {
+		return switch (expression) {
+			case IntLiteral literal -> literal.value();
+			case Unary unary when unary.operator() == UnaryOperator.MINUS
+					&& unary.operand() instanceof IntLiteral literal ->
+				literal.value().negate();
+			default -> null;
+		};
 	}
 
 	/**
@@ -1467,6 +1891,54 @@ final class StarlarkLowering {
 		};
 	}
 
+	/**
+	 * An assignment statement. A tuple or list of targets assigned a tuple or list
+	 * expression of as many elements takes them one by one, with no tuple made: every
+	 * element is evaluated, in order, before the first target is assigned.
+	 */
+	private LispVal assignment(Assignment assignment, Scope scope) {
+		List<Expression> targets = new ArrayList<>();
+		List<Expression> values = new ArrayList<>();
+		pairs(assignment.target(), assignment.value(), targets, values);
+		if (targets.size() == 1 && targets.get(0) == assignment.target() || targets.isEmpty()) {
+			return assign(assignment.target(), Value.computed(expression(assignment.value(), scope)), scope);
+		}
+		List<LispVal> bindings = new ArrayList<>();
+		List<LispVal> held = new ArrayList<>();
+		for (Expression value : values) {
+			LispVal form = expression(value, scope);
+			if (!isConstant(form)) {
+				LispSymbol element = fresh("ELEMENT");
+				bindings.add(list(element, form));
+				form = element;
+			}
+			held.add(form);
+		}
+		List<LispVal> forms = new ArrayList<>();
+		for (int i = 0; i < targets.size(); i++) {
+			forms.add(assign(targets.get(i), Value.element(held.get(i)), scope));
+		}
+		return bindings.isEmpty() ? progn(forms) : cons(LET, cons(listOf(bindings), listOf(forms)));
+	}
+
+	/**
+	 * Pairs a target with the value it takes: the targets of a tuple or list with the
+	 * elements of a tuple or list expression of as many, else the target with the value.
+	 */
+	private static void pairs(Expression target, Expression value, List<Expression> targets, List<Expression> values) {
+		List<Expression> inner = elements(target);
+		List<Expression> elements = elements(value);
+		if (inner != null && elements != null && inner.size() == elements.size()) {
+			for (int i = 0; i < inner.size(); i++) {
+				pairs(inner.get(i), elements.get(i), targets, values);
+			}
+		}
+		else {
+			targets.add(target);
+			values.add(value);
+		}
+	}
+
 	private LispVal unpack(List<Expression> targets, Value value, Scope scope) {
 		LispSymbol elements = fresh("UNPACKED");
 		List<LispVal> forms = new ArrayList<>(
@@ -1482,14 +1954,17 @@ final class StarlarkLowering {
 	 * value. {@code +=} extends a list in place.
 	 */
 	private LispVal augmented(AugmentedAssignment assignment, Scope scope) {
-		LispSymbol operator = assignment.operator() == BinaryOperator.PLUS ? ADD_IN_PLACE
-				: arithmetic(assignment.operator());
+		BinaryOperator operator = assignment.operator();
+		LispSymbol helper = operator == BinaryOperator.PLUS ? ADD_IN_PLACE : arithmetic(operator);
+		BiFunction<LispVal, LispVal, LispVal> generic = (left, right) -> list(helper, left, right);
+		Kind kind = kind(assignment.value(), scope);
 		LispVal value = expression(assignment.value(), scope);
 		return switch (assignment.target()) {
 			case Identifier identifier -> {
 				LispVal current = read(identifier.name(), scope);
 				this.flow.assigned.add(identifier.name());
-				yield list(SETQ, variable(identifier.name(), scope), list(operator, current, value));
+				yield list(SETQ, variable(identifier.name(), scope), operation(operator, current,
+						kind(identifier.name(), scope), value, kind, assignment.value(), generic, assignment.at()));
 			}
 			case Index index -> {
 				LispVal receiver = expression(index.receiver(), scope);
@@ -1505,7 +1980,8 @@ final class StarlarkLowering {
 					bindings.add(list(held, key));
 					key = held;
 				}
-				LispVal store = list(SET_INDEX, receiver, key, list(operator, list(INDEX, receiver, key), value));
+				LispVal store = list(SET_INDEX, receiver, key, operation(operator, list(INDEX, receiver, key), Kind.ANY,
+						value, kind, assignment.value(), generic, assignment.at()));
 				yield bindings.isEmpty() ? store : list(LET_STAR, listOf(bindings), store);
 			}
 			case Dot dot -> list(SET_ATTRIBUTE, expression(dot.receiver(), scope), string(dot.name()), value);
@@ -1531,9 +2007,19 @@ final class StarlarkLowering {
 			case Conditional conditional -> list(IF, test(conditional.condition(), scope),
 					expression(conditional.then(), scope), expression(conditional.otherwise(), scope));
 			case Lambda lambda -> lambda(lambda, scope);
-			case ListLiteral literal -> cons(MAKE_LIST, expressions(literal.elements(), scope));
-			case TupleLiteral literal -> cons(MAKE_TUPLE, expressions(literal.elements(), scope));
+			case ListLiteral literal -> {
+				LispVal constant = constant(literal, LIST_OF, scope);
+				yield constant != null ? constant : cons(MAKE_LIST, expressions(literal.elements(), scope));
+			}
+			case TupleLiteral literal -> {
+				LispVal constant = constant(literal, TUPLE_OF, scope);
+				yield constant != null ? constant : cons(MAKE_TUPLE, expressions(literal.elements(), scope));
+			}
 			case DictLiteral literal -> {
+				LispVal constant = constant(literal, DICT_OF, scope);
+				if (constant != null) {
+					yield constant;
+				}
 				List<LispVal> operands = new ArrayList<>();
 				for (Entry entry : literal.entries()) {
 					operands.add(expression(entry.key(), scope));
@@ -1566,21 +2052,97 @@ final class StarlarkLowering {
 		return operand == null ? StarlarkBuiltins.NONE : expression(operand, scope);
 	}
 
+	/**
+	 * A list, tuple or dict expression whose elements are all constants, as quoted data:
+	 * one constant however many elements, where the call of as many arguments passes what
+	 * one JVM method holds from some 1,500 on. The value is made anew from it each time:
+	 * a list over its elements, or, when an element is such an expression itself, what
+	 * {@code %starlark-literal} builds of the marked form.
+	 * @param literal the expression
+	 * @param builder the helper taking the elements as a list
+	 * @param scope where the expression stands
+	 * @return the form, or {@code null} when an element is no constant or there is none
+	 */
+	private @Nullable LispVal constant(Expression literal, LispSymbol builder, Scope scope) {
+		LispVal datum = datum(literal, scope);
+		if (!(datum instanceof LispCons marked) || marked.cdr() == LispNil.INSTANCE) {
+			return null;
+		}
+		boolean flat = marked.toList().stream().noneMatch(LispCons.class::isInstance);
+		return flat ? list(builder, list(QUOTE, marked.cdr())) : list(LITERAL, list(QUOTE, datum));
+	}
+
+	/**
+	 * A constant expression as a datum: a number, a string, {@code None}, {@code True} or
+	 * {@code False} is itself, a list, tuple or dict expression of constants its
+	 * elements' data behind a mark -- no other constant is a cons.
+	 * @return the datum, or {@code null} when the expression is no constant
+	 */
+	private @Nullable LispVal datum(Expression expression, Scope scope) {
+		List<Expression> elements = switch (expression) {
+			case ListLiteral list -> list.elements();
+			case TupleLiteral tuple -> tuple.elements();
+			case DictLiteral dict ->
+				dict.entries().stream().flatMap(entry -> Stream.of(entry.key(), entry.value())).toList();
+			default -> null;
+		};
+		if (elements == null) {
+			return scalar(expression, scope);
+		}
+		List<LispVal> data = new ArrayList<>();
+		data.add(expression instanceof ListLiteral ? LIST_MARK
+				: expression instanceof TupleLiteral ? TUPLE_MARK : DICT_MARK);
+		for (Expression element : elements) {
+			LispVal datum = datum(element, scope);
+			if (datum == null) {
+				return null;
+			}
+			data.add(datum);
+		}
+		return listOf(data);
+	}
+
+	/**
+	 * The constant an expression is written as -- a number, a string, {@code None},
+	 * {@code True} or {@code False} --, or {@code null}.
+	 */
+	private @Nullable LispVal scalar(Expression expression, Scope scope) {
+		return switch (expression) {
+			case IntLiteral literal -> integer(literal.value());
+			case FloatLiteral literal -> new LispDouble(literal.value());
+			case StringLiteral literal -> string(literal.value());
+			case Unary unary when unary.operator() == UnaryOperator.MINUS
+					&& unary.operand() instanceof IntLiteral literal ->
+				integer(literal.value().negate());
+			case Unary unary when unary.operator() == UnaryOperator.MINUS
+					&& unary.operand() instanceof FloatLiteral literal ->
+				new LispDouble(-literal.value());
+			case Identifier identifier when !isVariable(identifier.name(), scope) -> CONSTANTS.get(identifier.name());
+			default -> null;
+		};
+	}
+
+	/** A form that is a constant: a number, a string, a keyword, T or NIL. */
+	private static boolean isConstant(LispVal form) {
+		return !(form instanceof LispCons) && !(form instanceof LispSymbol symbol && !symbol.name().startsWith(":"));
+	}
+
 	private static LispVal integer(BigInteger value) {
 		return value.bitLength() < Long.SIZE ? new LispInteger(value.longValue()) : new LispBigInteger(value);
 	}
 
 	private LispVal unary(Unary unary, Scope scope) {
 		Expression operand = unary.operand();
+		boolean integer = kind(operand, scope) == Kind.INT;
 		return switch (unary.operator()) {
 			case NOT -> list(NOT, test(operand, scope));
 			case MINUS -> switch (operand) {
 				case IntLiteral literal -> integer(literal.value().negate());
 				case FloatLiteral literal -> new LispDouble(-literal.value());
-				default -> list(runtime("NEGATE"), expression(operand, scope));
+				default -> list(integer ? MINUS : runtime("NEGATE"), expression(operand, scope));
 			};
-			case PLUS -> list(runtime("PLUS"), expression(operand, scope));
-			case INVERT -> list(runtime("INVERT"), expression(operand, scope));
+			case PLUS -> integer ? expression(operand, scope) : list(runtime("PLUS"), expression(operand, scope));
+			case INVERT -> list(integer ? LOGNOT : runtime("INVERT"), expression(operand, scope));
 		};
 	}
 
@@ -1590,26 +2152,127 @@ final class StarlarkLowering {
 			// `a and b` is a when a is false, else b; `a or b` the other way round.
 			boolean and = operator == BinaryOperator.AND;
 			LispVal right = expression(binary.right(), scope);
-			if (isBoolean(binary.left(), scope)) {
+			Kind kind = kind(binary.left(), scope);
+			if (kind == Kind.BOOL) {
 				LispVal left = test(binary.left(), scope);
 				return and ? list(IF, left, right, LispNil.INSTANCE) : list(IF, left, LispTrue.INSTANCE, right);
 			}
 			LispSymbol held = fresh("VALUE");
 			return list(LET, list(list(held, expression(binary.left(), scope))),
-					and ? list(IF, list(TRUTH, held), right, held) : list(IF, list(TRUTH, held), held, right));
+					and ? list(IF, truth(held, kind), right, held) : list(IF, truth(held, kind), held, right));
 		}
 		LispVal left = expression(binary.left(), scope);
 		LispVal right = expression(binary.right(), scope);
+		boolean equals = operator == BinaryOperator.EQUALS;
+		if ((equals || operator == BinaryOperator.NOT_EQUALS) && (isSingleton(left) || isSingleton(right))) {
+			// None, True and False equal themselves only
+			LispVal same = list(EQ, left, right);
+			return equals ? same : list(NOT, same);
+		}
+		BiFunction<LispVal, LispVal, LispVal> generic = switch (operator) {
+			case EQUALS -> (a, b) -> list(EQUAL, a, b);
+			case NOT_EQUALS -> (a, b) -> list(NOT, list(EQUAL, a, b));
+			case LESS -> (a, b) -> list(runtime("LESS"), a, b);
+			case LESS_EQUALS -> (a, b) -> list(runtime("LESS-EQUAL"), a, b);
+			case GREATER -> (a, b) -> list(runtime("GREATER"), a, b);
+			case GREATER_EQUALS -> (a, b) -> list(runtime("GREATER-EQUAL"), a, b);
+			case IN -> (a, b) -> list(IN, a, b);
+			case NOT_IN -> (a, b) -> list(NOT, list(IN, a, b));
+			default -> (a, b) -> list(arithmetic(operator), a, b);
+		};
+		return operation(operator, left, kind(binary.left(), scope), right, kind(binary.right(), scope), binary.right(),
+				generic, binary.at());
+	}
+
+	/** A form that is {@code None}, {@code True} or {@code False}. */
+	private static boolean isSingleton(LispVal form) {
+		return form == LispTrue.INSTANCE || form == LispNil.INSTANCE || StarlarkBuiltins.NONE.equals(form);
+	}
+
+	/**
+	 * A binary operator over two lowered operands. Over two ints an arithmetic operator
+	 * or a comparison is the Common Lisp operator, which answers what the generic helper
+	 * answers for them; over operands that may be ints it is that operator behind a test
+	 * of those not known to be, with the helper as the other branch; over an operand that
+	 * is no int, and for any other operator, it is the helper.
+	 * @param operator the operator
+	 * @param left the left operand's form
+	 * @param leftKind what the left operand is known to be
+	 * @param right the right operand's form
+	 * @param rightKind what the right operand is known to be
+	 * @param divisor the right operand: a division or a shift is the Common Lisp operator
+	 * only by a constant that cannot fail
+	 * @param generic the helper's call over two operand forms
+	 * @param at the operator's position, which the helper's call is located at
+	 * @return the form
+	 */
+	private LispVal operation(BinaryOperator operator, LispVal left, Kind leftKind, LispVal right, Kind rightKind,
+			Expression divisor, BiFunction<LispVal, LispVal, LispVal> generic, SourceLocation at) {
+		BiFunction<LispVal, LispVal, LispVal> integers = integers(operator, divisor);
+		if (integers == null || !leftKind.mayBeInt() || !rightKind.mayBeInt()) {
+			return generic.apply(left, right);
+		}
+		if (leftKind == Kind.INT && rightKind == Kind.INT) {
+			return integers.apply(left, right);
+		}
+		if (!TESTED.contains(operator)) {
+			return generic.apply(left, right);
+		}
+		// each operand is evaluated once, in order, whichever branch is taken
+		List<LispVal> bindings = new ArrayList<>();
+		LispVal first = left;
+		LispVal second = right;
+		if (!isSimple(left)) {
+			first = fresh("LEFT");
+			bindings.add(list(first, left));
+		}
+		if (!isSimple(right)) {
+			second = fresh("RIGHT");
+			bindings.add(list(second, right));
+		}
+		List<LispVal> tests = new ArrayList<>();
+		if (leftKind != Kind.INT) {
+			tests.add(list(INTEGERP, first));
+		}
+		if (rightKind != Kind.INT) {
+			tests.add(list(INTEGERP, second));
+		}
+		LispVal form = list(IF, tests.size() == 1 ? tests.get(0) : cons(AND, listOf(tests)),
+				integers.apply(first, second), located(generic.apply(first, second), at));
+		return bindings.isEmpty() ? form : list(LET_STAR, listOf(bindings), form);
+	}
+
+	/**
+	 * The Common Lisp form of an operator over two ints, which answers what the generic
+	 * helper answers for them and cannot fail: an integer of any size.
+	 * @param operator the operator
+	 * @param right the right operand: {@code //} and {@code %} need a constant that is
+	 * not zero, a shift a constant count that is not negative
+	 * @return the form's builder, or {@code null} when the operator has none
+	 */
+	private static @Nullable BiFunction<LispVal, LispVal, LispVal> integers(BinaryOperator operator, Expression right) {
+		BigInteger constant = literalInt(right);
+		boolean divides = constant != null && constant.signum() != 0;
+		boolean shifts = constant != null && constant.signum() >= 0 && constant.bitLength() < Integer.SIZE;
 		return switch (operator) {
-			case EQUALS -> list(EQUAL, left, right);
-			case NOT_EQUALS -> list(NOT, list(EQUAL, left, right));
-			case LESS -> list(runtime("LESS"), left, right);
-			case LESS_EQUALS -> list(runtime("LESS-EQUAL"), left, right);
-			case GREATER -> list(runtime("GREATER"), left, right);
-			case GREATER_EQUALS -> list(runtime("GREATER-EQUAL"), left, right);
-			case IN -> list(IN, left, right);
-			case NOT_IN -> list(NOT, list(IN, left, right));
-			default -> list(arithmetic(operator), left, right);
+			case PLUS -> (a, b) -> list(PLUS, a, b);
+			case MINUS -> (a, b) -> list(MINUS, a, b);
+			case MULTIPLY -> (a, b) -> list(TIMES, a, b);
+			case FLOOR_DIVIDE -> divides ? (a, b) -> list(VALUES, list(FLOOR, a, b)) : null;
+			case MODULO -> divides ? (a, b) -> list(MOD, a, b) : null;
+			case BIT_AND -> (a, b) -> list(LOGAND, a, b);
+			case BIT_OR -> (a, b) -> list(LOGIOR, a, b);
+			case BIT_XOR -> (a, b) -> list(LOGXOR, a, b);
+			case SHIFT_LEFT -> shifts ? (a, b) -> list(ASH, a, b) : null;
+			case SHIFT_RIGHT ->
+				shifts ? (a, b) -> list(ASH, a, integer(Objects.requireNonNull(constant).negate())) : null;
+			case EQUALS -> (a, b) -> list(NUMBER_EQUAL, a, b);
+			case NOT_EQUALS -> (a, b) -> list(NOT, list(NUMBER_EQUAL, a, b));
+			case LESS -> (a, b) -> list(LESS, a, b);
+			case LESS_EQUALS -> (a, b) -> list(LESS_EQUAL, a, b);
+			case GREATER -> (a, b) -> list(GREATER, a, b);
+			case GREATER_EQUALS -> (a, b) -> list(GREATER_EQUAL, a, b);
+			default -> null;
 		};
 	}
 
@@ -1631,23 +2294,6 @@ final class StarlarkLowering {
 	}
 
 	/**
-	 * Whether the expression's value is known to be {@code True} or {@code False}, which
-	 * are the Common Lisp booleans: a comparison, {@code not}, a Boolean constant.
-	 */
-	private boolean isBoolean(Expression expression, Scope scope) {
-		return switch (expression) {
-			case Unary unary -> unary.operator() == UnaryOperator.NOT;
-			case Binary binary -> switch (binary.operator()) {
-				case EQUALS, NOT_EQUALS, LESS, LESS_EQUALS, GREATER, GREATER_EQUALS, IN, NOT_IN -> true;
-				default -> false;
-			};
-			case Identifier identifier -> !isVariable(identifier.name(), scope)
-					&& (identifier.name().equals("True") || identifier.name().equals("False"));
-			default -> false;
-		};
-	}
-
-	/**
 	 * An expression as a condition: the Common Lisp boolean of its truth. {@code and} and
 	 * {@code or} of conditions are {@code and} and {@code or} of their tests.
 	 */
@@ -1657,8 +2303,21 @@ final class StarlarkLowering {
 			return list(binary.operator() == BinaryOperator.AND ? AND : OR, test(binary.left(), scope),
 					test(binary.right(), scope));
 		}
-		LispVal value = expression(expression, scope);
-		return isBoolean(expression, scope) ? value : list(TRUTH, value);
+		return truth(expression(expression, scope), kind(expression, scope));
+	}
+
+	/**
+	 * The truth of a value: itself when it is known to be {@code True} or {@code False},
+	 * which are the Common Lisp booleans, as a comparison, {@code not} and the Boolean
+	 * constants answer; whether it is not zero for an int; else what
+	 * {@code %starlark-truth} answers.
+	 */
+	private static LispVal truth(LispVal value, Kind kind) {
+		return switch (kind) {
+			case BOOL -> value;
+			case INT -> list(NOT, list(NUMBER_EQUAL, value, new LispInteger(0)));
+			default -> list(TRUTH, value);
+		};
 	}
 
 	/**
@@ -1680,11 +2339,19 @@ final class StarlarkLowering {
 			}
 		}
 		Scope inner = scope.inner(bound.keySet());
+		Map<String, List<Supplier<Kind>>> kinds = new LinkedHashMap<>();
+		for (int i = 0; i < clauses.size(); i++) {
+			if (clauses.get(i) instanceof ForClause loop) {
+				element(loop.target(), loop.iterable(), i == 0 ? scope : inner, kinds);
+			}
+		}
+		infer(kinds, List.of(), inner.kinds());
 		boolean dict = produced.size() == 2;
 		LispSymbol accumulator = fresh("ACC");
 		// The clauses in order, each loop's target assigned for the clauses after it;
 		// the first iterable is the enclosing block's.
-		LispVal first = expression(((ForClause) clauses.get(0)).iterable(), scope);
+		ForClause outermost = (ForClause) clauses.get(0);
+		Loop first = loop(outermost.target(), outermost.iterable(), scope);
 		Flow outer = enter(bound.keySet(), List.of());
 		// per clause: its loop and the target's assignment, or no loop and its test
 		List<@Nullable Loop> loops = new ArrayList<>();
@@ -1696,7 +2363,7 @@ final class StarlarkLowering {
 					heads.add(test(condition.condition(), inner));
 				}
 				case ForClause clause -> {
-					Loop loop = new Loop(clause.target(), i == 0 ? first : expression(clause.iterable(), inner));
+					Loop loop = i == 0 ? first : loop(clause.target(), clause.iterable(), inner);
 					loops.add(loop);
 					heads.add(loop.assignment(inner));
 				}
@@ -1706,7 +2373,7 @@ final class StarlarkLowering {
 				? list(SET_INDEX, accumulator, expression(produced.get(0), inner), expression(produced.get(1), inner))
 				: list(VECTOR_PUSH_EXTEND, expression(produced.get(0), inner), accumulator);
 		this.flow = outer;
-		for (int i = clauses.size() - 1; i >= 0; i--) {
+		for (int i = clauses.size() - 1; i > 0; i--) {
 			Loop loop = loops.get(i);
 			body = loop == null ? list(IF, heads.get(i), body) : loop.over(heads.get(i), List.of(body));
 		}
@@ -1715,7 +2382,12 @@ final class StarlarkLowering {
 		for (String name : bound.keySet()) {
 			bindings.add(list(StarlarkNames.symbol(name), UNBOUND));
 		}
-		return list(LET, listOf(bindings), body, dict ? accumulator : list(LIST_FROM, accumulator));
+		// The first loop's iterable is evaluated outside the comprehension's variables:
+		// it reads the enclosing block's, one of the same name included.
+		List<LispVal> forms = new ArrayList<>(List.of(LET, listOf(bindings)));
+		forms.addAll(first.walk(heads.get(0), List.of(body)));
+		forms.add(dict ? accumulator : list(LIST_FROM, accumulator));
+		return list(LET_STAR, listOf(first.bindings), listOf(forms));
 	}
 
 	// ---- calls ----
@@ -1739,21 +2411,18 @@ final class StarlarkLowering {
 		}
 		if (callee instanceof Identifier identifier) {
 			String name = identifier.name();
-			if (!isVariable(name, scope) && !CONSTANTS.containsKey(name)) {
-				Signature builtin = StarlarkBuiltins.function(name);
-				if (builtin != null) {
-					LispVal direct = direct(builtin, arguments, scope);
-					return direct != null ? direct : general(builtinValue(builtin), arguments, scope);
-				}
+			Signature builtin = builtin(identifier, scope);
+			if (builtin != null) {
+				LispVal direct = direct(builtin, arguments, scope);
+				return direct != null ? direct : general(builtinValue(builtin), arguments, scope);
 			}
 			Callee entry = scope.binds(name) || this.interactive ? null : this.callees.get(name);
-			if (entry != null && (entry.parameters() < 0 || entry.parameters() == arguments.size())
-					&& arguments.stream().allMatch(argument -> argument.kind() == ArgumentKind.POSITIONAL)) {
+			LispVal direct = entry == null ? null : entry.signature() != null
+					? direct(entry.signature(), arguments, scope) : foreign(entry.function(), arguments, scope);
+			if (direct != null) {
 				// the callee first: a call above the def, or above the load statement,
 				// reads the global unassigned
 				LispVal global = read(name, scope);
-				LispVal direct = cons(entry.function(),
-						listOf(arguments.stream().map(argument -> expression(argument.value(), scope)).toList()));
 				return isSimple(global) ? direct : list(PROGN, global, direct);
 			}
 		}
@@ -1761,9 +2430,21 @@ final class StarlarkLowering {
 	}
 
 	/**
-	 * The direct tier: binds the arguments to a built-in's parameters while lowering and
-	 * calls its helper with every parameter in place.
-	 * @param signature the built-in
+	 * A Common Lisp function called with the positional arguments as they stand, or
+	 * {@code null} when an argument is not positional.
+	 */
+	private @Nullable LispVal foreign(LispSymbol function, List<Argument> arguments, Scope scope) {
+		if (!arguments.stream().allMatch(argument -> argument.kind() == ArgumentKind.POSITIONAL)) {
+			return null;
+		}
+		return cons(function, listOf(arguments.stream().map(argument -> expression(argument.value(), scope)).toList()));
+	}
+
+	/**
+	 * The direct tier: binds the arguments to the parameters of a built-in, or of a
+	 * {@code def} with a direct entry, while lowering and calls its function with every
+	 * parameter in place.
+	 * @param signature the built-in, or the {@code def}
 	 * @param arguments the call's arguments
 	 * @param scope where the arguments' names resolve
 	 * @return the call, or {@code null} when the arguments do not fit and the run-time
@@ -1774,6 +2455,8 @@ final class StarlarkLowering {
 		Arrays.fill(filledBy, -1);
 		List<Integer> surplus = new ArrayList<>();
 		List<Integer> named = new ArrayList<>();
+		// a surplus name written twice is the binder's to refuse
+		Set<String> names = new HashSet<>();
 		int position = 0;
 		for (int i = 0; i < arguments.size(); i++) {
 			Argument argument = arguments.get(i);
@@ -1793,7 +2476,7 @@ final class StarlarkLowering {
 				if (parameter >= 0 && filledBy[parameter] < 0) {
 					filledBy[parameter] = i;
 				}
-				else if (parameter < 0 && signature.kwargs()) {
+				else if (parameter < 0 && signature.kwargs() && names.add(keyword(argument))) {
 					named.add(i);
 				}
 				else {

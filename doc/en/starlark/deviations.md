@@ -53,8 +53,9 @@ The rest, in short:
   and a non-zero exit status. Only an error found before the program starts names the
   column. The texts follow the Go implementation's.
 - A list, tuple or dict expression of several thousand elements does not compile to a JVM
-  class: it passes the size a JVM method may have. The interpreter and WebAssembly take
-  it.
+  class unless every element is a constant (a number, a string, `None`, `True`, `False`,
+  or such an expression of constants): it passes the size a JVM method may have. The
+  interpreter and WebAssembly take it.
 - An error report names a module's function behind the module's path:
   `in sl%(words.star)shout`.
 - A module that stopped at an error is not run again by a later `load` of it.

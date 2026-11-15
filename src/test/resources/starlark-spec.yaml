@@ -78,8 +78,8 @@ cases:
       dflt 0 {} True 4
       int string list dict tuple NoneType function builtin_function_or_method
   # A name is the innermost binding that holds it anywhere in its block; a comprehension's
-  # variables are its own; a closure reads the variable, not a copy; a top-level def bound
-  # once is entered directly.
+  # variables are its own, and its first iterable reads the enclosing block's; a closure
+  # reads the variable, not a copy; a top-level def bound once is entered directly.
   - name: names-resolve-statically
     source: |
       def scope_early(n):
@@ -91,7 +91,7 @@ cases:
               return scope_x
           scope_x = 3
           return inner()
-      print(scope_shadow(), scope_x, [scope_x for scope_x in [9]], scope_x)
+      print(scope_shadow(), scope_x, [scope_x for scope_x in [9]], [scope_x for scope_x in range(scope_x + 2)], scope_x)
       scope_fs = []
       for scope_i in range(3):
           scope_fs.append(lambda: scope_i)
@@ -105,7 +105,7 @@ cases:
       T = "an identifier without a lowercase letter"
       print(scope_early(20), scope_mutual(), T, len == len, len == str, scope_early == scope_early)
     expected: |
-      3 1 [9] 1
+      3 1 [9] [0, 1, 2] 1
       [2, 2, 2] [2, 2, 2]
       21 True an identifier without a lowercase letter True False True
   # Both call tiers bind the same way and evaluate the arguments as written: the direct
@@ -171,6 +171,92 @@ cases:
     expected: |
       ([3, 4], 3) None
       [[1, 2], [3, 4, 6], [5]] [22, 9] [(1, 0), (2, 0), (2, 1)]
+  # What the lowering knows answers as the generic helpers do. An operator over operands
+  # that may be ints is the integer one behind a test of them, over known ints the
+  # integer one alone (a variable every binding of which is an int, past a machine word
+  # too); a loop over range counts, whatever the step, and its variable is the body's to
+  # assign; a known int or Boolean is its own truth. A def is entered directly with its
+  # defaults and names bound while lowering, a default being the one value the binder
+  # hands out too; a tuple of targets takes a tuple of values with none made; a list,
+  # tuple or dict of constants is made anew from quoted data each time; insert, pop and
+  # remove move a list's elements in place.
+  - name: what-the-lowering-knows-answers-as-the-generic-paths
+    source: |
+      def fast_add(a, b):
+          return a + b
+      def fast_compare(a, b):
+          return [a < b, a <= b, a > b, a >= b, a == b, a != b, a == None, None != b]
+      def fast_number(a, b):
+          return [a + b, a - b, a * b, a // 2, a % 3, -a // 2, a % -3, a and b, b - b or a]
+      print(fast_add(1, 2), fast_add("a", "b"), fast_add([1], [2]), fast_add(1, 2.5), fast_add(1 << 62, 1 << 62))
+      print(fast_compare(1, 2), fast_compare(2.5, 2), fast_compare("a", "b"), fast_compare((1, 2), (1, 2)))
+      print(fast_number(7, 2), fast_number(-7, 2), fast_number(7.5, 2), fast_number(1 << 70, 3))
+      def fast_count(n, xs):
+          total = 0
+          big = 1 << 62
+          for i in range(n):
+              total += i % 7 - i // 3 * 2 + (i << 2 >> 1) + (i & 6 | 1 ^ 3) + ~i + -i
+              big += big
+          for i in range(10, 0, -3):
+              total += i
+          for i in range(n, n + 6, 2):
+              i += 100
+              total += i
+          steps = []
+          for step in [1, 2, -2]:
+              for i in range(0 if step > 0 else 5, 5 if step > 0 else 0, step):
+                  steps.append(i)
+          for j in range(3, 3):
+              total = None
+          seen = [i, len(xs) + total, big, steps]
+          if total and not len(xs) and (total or xs) == total:
+              seen.append("truth")
+          done = False
+          for i in range(len(seen)):
+              done = done or i > 3
+          return seen + [done and not xs, [k * k for k in range(n) if k % 2]]
+      print(fast_count(5, []))
+      def fast_take(a, b = [], *rest, c = "c", **more):
+          b.append(a)
+          return [a, b, rest, c, more]
+      def fast_calls(log):
+          def note(v):
+              log.append(v)
+              return v
+          return [fast_take(1), fast_take(2, c = note("x"), b = note([])), fast_take(3, [], 4, 5, z = 6), fast_take(b = [0], a = note(7)), log]
+      print(fast_calls([]), fast_take(8), fast_take(*[9]))
+      def fast_swap(a, b, xs):
+          a, b = b, a
+          xs[0], xs[1] = xs[1], xs[0]
+          (c, d), [e] = (a, b), [xs]
+          f, g = 1, a + b
+          return [a, b, xs, c, d, e, f + g]
+      print(fast_swap(1, 2, [3, 4]))
+      def fast_literal():
+          return [[1, 2.5, "s", None, True, False, -3], (1, ("a", [2]), {"k": (3,)}), {"a": 1, 2: [3]}]
+      fast_one = fast_literal()
+      fast_one[0].append(4)
+      fast_one[1][1][1].append(5)
+      fast_one[2]["b"] = 6
+      print(fast_one, fast_literal())
+      fast_xs = [1, 2, 3]
+      fast_alias = fast_xs
+      fast_xs.insert(0, 0)
+      fast_xs.insert(-1, 9)
+      fast_xs.insert(99, 8)
+      print(fast_xs.pop(), fast_xs.pop(0), fast_xs.pop(-2), fast_xs)
+      fast_xs.remove(2)
+      print(fast_alias)
+    expected: |
+      3 ab [1, 2] 3.5 9223372036854775808
+      [True, True, False, False, False, True, False, True] [False, False, True, True, False, True, False, True] [True, True, False, False, False, True, False, True] [False, True, False, True, True, False, False, True]
+      [9, 5, 14, 3, 1, -4, -2, 2, 7] [-5, -9, -14, -4, 2, 3, -1, 2, -7] [9.5, 5.5, 15.0, 3.0, 1.5, -4.0, -1.5, 2, 7.5] [1180591620717411303427, 1180591620717411303421, 3541774862152233910272, 590295810358705651712, 1, -590295810358705651712, -2, 3, 1180591620717411303424]
+      [1, 358, 147573952589676412928, [0, 1, 2, 3, 4, 0, 2, 4, 5, 3, 1], "truth", True, [1, 9]]
+      [[1, [1, 8, 9], (), "c", {}], [2, [2], (), "x", {}], [3, [3], (4, 5), "c", {"z": 6}], [7, [0, 7], (), "c", {}], ["x", [2], 7]] [8, [1, 8, 9], (), "c", {}] [9, [1, 8, 9], (), "c", {}]
+      [2, 1, [4, 3], 2, 1, [4, 3], 4]
+      [[1, 2.5, "s", None, True, False, -3, 4], (1, ("a", [2, 5]), {"k": (3,)}), {"a": 1, 2: [3], "b": 6}] [[1, 2.5, "s", None, True, False, -3], (1, ("a", [2]), {"k": (3,)}), {"a": 1, 2: [3]}]
+      8 0 9 [1, 2, 3]
+      [1, 3]
   # A string's elements are code points; hash is the specification's; equal keys are one
   # dict key, which keeps its place when stored again and goes last once removed; a float
   # prints as Go's %g, NaN equals itself; a function is a key by identity.
@@ -248,6 +334,18 @@ standalone:
     stdout: |
       1
     error: len accepts at most 1 positional argument (2 given)
+  # A loop over range counts with no range made, and refuses what range refuses.
+  - name: a-counting-loop-refuses-the-step-range-refuses
+    source: |
+      def count(stop, step):
+          for i in range(1, stop, step):
+              print(i)
+      count(4, 2)
+      count(4, 0)
+    stdout: |
+      1
+      3
+    error: "range: step argument must not be zero"
   # A top-level def is entered directly from anywhere, but a call above it reads the
   # global the def statement assigns, which is not assigned yet.
   - name: a-call-above-its-def-is-a-read-before-the-assignment

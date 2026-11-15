@@ -222,8 +222,9 @@ conversion tooling live in `.todo/artefacts/a8*`/`a9*` and git history.
   WASM twin's), byte-identical where no budget fires.
   What the cut does not reach is ONE call of thousands of small arguments (measured
   2026-11-15): `(print (mk 0 1 .. 2999))` over a `&rest` defun, and a Starlark list
-  expression of 3,000 integers, which is the same call, stop at `method _top$0: method code
-  exceeds the JVM's 65535-byte limit: 97874`; 1,500 arguments fit. Each argument is already
+  expression of 3,000 elements that are not all constants, which is the same call (one of
+  constants is quoted data, [starlark-frontend.md](starlark-frontend.md)), stop at `method
+  _top$0: method code exceeds the JVM's 65535-byte limit: 97874`; 1,500 arguments fit. Each argument is already
   smaller than a method of its own would be, so outlining them saves nothing: the pushes are
   the bytes. A quoted list of 3,000 elements compiles (the literal builders below).
 

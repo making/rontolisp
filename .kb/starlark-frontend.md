@@ -73,21 +73,27 @@ and every user surface says so (`--source-language` help, the title of
 | int, float, string | integer (bignum), double, string literal; `-1` is the literal |
 | list, tuple, dict, range, function | structures of `starlark.lisp`: a list an adjustable vector plus the cell it was made under ("Freezing") and an iteration count, a tuple a simple vector, a dict an `equal` hash table from a key's normal form to `(key . value)` plus the same two |
 | `[a, b]`, `(a, b)`, `{k: v}` | `(%starlark-make-list a b)`, `-make-tuple`, `-make-dict` (a key written twice is an error) |
+| the same, every element a constant | `(%starlark-list-of '(1 "s" :none))`, `-tuple-of`, `-dict-of '(k v ..)`: quoted data, the value made anew from it each time; with such an expression as an element `(%starlark-literal '(:%list 1 (:%tuple 2) (:%dict "k" 3)))` |
 | top-level `x = v` | top-level `(setq x v)`, never `defvar` (a special would leak into callees) |
-| top-level `def` standing at the top level, the only binding of its name, no `*` parameter | `(defun f (a b) ..)` AHEAD of every statement (lowered where the `def` stands), plus at its place `(setq f (%starlark-make-function "f" '("a" "b") defaults 2 nil nil #'f))` |
+| top-level `def` standing at the top level, the only binding of its name | `(defun f (a b [args] [kwargs]) ..)` AHEAD of every statement (lowered where the `def` stands), plus at its place `(setq f (%starlark-make-function "f" '("a" "b") defaults 2 nil nil #'f))`; a default that is no constant is `(setq sl%(FILE)%SL-DEFAULTn expr)` inside `defaults` |
 | any other `def`, `lambda` | the function value over a `(lambda (params.. [args] [kwargs]) ..)` |
 | function body | `(block %SL-FN (let ((assigned-name :%unbound) ..) ..))`; the block only when a `return` leaves from the middle, the `let` only with locals; a `return` ending the body is the body's value |
 | a read of a name not assigned on every path to it | `(%starlark-local x "x")` / `(%starlark-global x "x")`, refusing `:%unbound`; a global so read starts as `(setq x :%unbound)` ahead of the statements |
 | function body under `--starlark-standard spec` | `(%starlark-enter FLAG "f") (let ((r body)) (%starlark-leave FLAG) r)`, `FLAG` the global `sl%(FILE)%SL-ACTIVEn`, set to `(list nil)` ahead of the statements |
 | `for` | `(let* ((seq it) (items (%starlark-iterate seq)) (count (length items)) (index 0)) (tagbody top (if (< index count) (progn assign (setq index (+ index 1)) body.. (go top)))) (%starlark-iterated seq))`; `(block %SL-BREAK ..)` around the tagbody and `(block %SL-CONTINUE ..)` around the body only when the body has that exit |
+| `for i in range(a, b, c)` (the built-in, positional arguments) | `(let* ((next a) (stop (%starlark-loop-stop next b))) (tagbody top (if (< next stop) (progn (setq i next) (setq next (+ next c)) body.. (go top)))))`: no range, no vector, nothing to give back; `>` for a negative constant step; `(stop b)` with no check when both bounds are known ints, a constant `b` in the test itself; a step that is no constant is `(step (%starlark-loop-step next stop c))` and the test `(if (< 0 step) (< next stop) (> next stop))`; a step written `0` stays the generic loop, whose `range` refuses it |
 | `return v` inside loops | `(let ((r v)) (%starlark-iterated seq-inner) .. (return-from %SL-FN r))` -- every loop of the function gives its iterable back first, so no `unwind-protect` and no EH mode on wasm |
-| comprehension | the same loops around `(vector-push-extend elt acc)` / `(%starlark-set-index acc k v)`, its variables in a `let` of its own, the first iterable evaluated outside it |
+| comprehension | the same loops around `(vector-push-extend elt acc)` / `(%starlark-set-index acc k v)`, its variables in a `let` of its own INSIDE the first loop's `let*`, so the first iterable reads the enclosing block's variables (`[x for x in range(x)]`) |
 | `a + b`, `a == b`, `a[i]`, `a[i:j]`, `x in y` | `(%starlark-add a b)`, `-equal`, `-index`, `-slice`, `-in`: generic, dispatching at run time; `!=` and `not in` are `(not ..)` of them |
-| `if c:`, `c ? ..` | `(if (%starlark-truth c) ..)`; a comparison, `not`, `in` and `True`/`False` are the test as they stand; `and`/`or` of tests are `and`/`or` |
-| `a and b` as a value | `(let ((v a)) (if (%starlark-truth v) b v))`; `(if a b nil)` when `a` is a Boolean form |
+| `+ - * // %`, a comparison, `==`, `!=` over operands that MAY be ints | `(if (and (integerp a) (integerp b)) (+ a b) (%starlark-add a b))`, an operand that is more than a variable bound first; `//` and `%` only by a constant that is not zero ("What the lowering knows") |
+| the same and `& \| ^ << >> ~`, unary `-`/`+`, over KNOWN ints | `(+ a b)`, `(< a b)`, `(= a b)`, `(mod a 7)`, `(values (floor a 2))`, `(logand a b)`, `(ash a 3)`, `(- a)`: no test, no helper (a shift only by a constant count that is not negative) |
+| `x == None`, `x != True` | `(eq x :none)`, `(not (eq x t))`: `None`, `True` and `False` equal themselves only |
+| `if c:`, `c ? ..` | `(if (%starlark-truth c) ..)`; a known Boolean (a comparison, `not`, `in`, `True`/`False`, a variable only such values are bound to, `bool(..)`, `s.startswith(..)`) is the test as it stands, a known int `(not (= c 0))`; `and`/`or` of tests are `and`/`or` |
+| `a and b` as a value | `(let ((v a)) (if (%starlark-truth v) b v))`; `(if a b nil)` when `a` is a known Boolean |
 | `a[i] = v`, `a, b = v` | `(%starlark-set-index a i v)`; `(let ((u (%starlark-unpack v 2))) (setq a (aref u 0)) ..)` |
-| `x += v`, `a[i] += v` | `(setq x (%starlark-add-in-place x v))` (a list is extended in place); the target's operands bound once when they are more than a variable |
-| call of a top-level `def` with a direct entry, every parameter filled by position | `(f a b)`; `(progn (%starlark-global f "f") (f a b))` where the `def` may not have run |
+| `a, b = b, a + b` (a tuple or list of targets, a tuple or list expression of as many) | `(let ((e1 b) (e2 (+ a b))) (setq a e1) (setq b e2))`: no tuple; every element before the first target, pairing through nested ones |
+| `x += v`, `a[i] += v` | `(setq x (%starlark-add-in-place x v))` (a list is extended in place), tested or inline like the binary operator; the target's operands bound once when they are more than a variable |
+| call of a top-level `def` with a direct entry whose arguments fit | `(f a b)`, bound while lowering like a built-in's: positional and named arguments at their parameters, a default the constant it is written as or the global its `def` statement set, surplus ones as `(%starlark-make-tuple ..)` / `(%starlark-make-dict "k" v ..)`; `(progn (%starlark-global f "f") (f a b))` where the `def` may not have run |
 | call of a built-in function whose arguments fit its signature | `(%starlark-b-sorted xs :none t)`: bound while lowering, defaults filled in |
 | `x.m(..)` whose arguments fit | `(%starlark-m-append x v)`: the helper takes the receiver first and tests it |
 | any other call | `(%starlark-call f (list pos..) (list "name" v ..))`, `*args` and `**kwargs` appended by `%starlark-elements` / `%starlark-keywords` |
@@ -168,8 +174,22 @@ then the dict of surplus named ones.
   signature as a value, so the binder's message is the one a program sees and no backend
   meets a Common Lisp arity error. A helper therefore has a FIXED parameter list, no
   `&optional`/`&key` -- `StarlarkLoweringTest#everyBuiltinsHelperTakesTheParametersItsSignatureDeclares`.
-- A `def` is direct only when every parameter is filled by position (the count equals the
-  parameter count). Defaults and names at the call site are not resolved yet.
+- **A `def` with a direct entry is bound the same way** (2026-11-15): `signature(def)` is a
+  `Signature` over its `defun` -- every top-level `def` bound once has one, `*args` and
+  `**kwargs` included -- and `direct` places positional and named arguments, defaults and
+  the surplus tuple and dict. A default is evaluated when the `def` statement runs, so
+  the call needs its VALUE: a default written as a constant (a number, a string, `None`,
+  `True`, `False`) is that constant at the call site; any other is left by the `def`
+  statement in a global of the file's, `sl%(FILE)%SL-DEFAULTn`, which the call reads --
+  the one object the function value's `defaults` hold, so a mutable default is shared by
+  both tiers. A direct call runs only once the `def` ran (it checks the global `f`
+  otherwise), so the global is set. A module's export carries the signature. A call that
+  does not fit (wrong count, unknown name, `*`/`**` argument, a surplus name twice) is
+  the binder's.
+- **The binder's shortcut** (`%starlark-fills`): a call with no named argument of a
+  function with no `*args`/`**kwargs` that takes exactly as many, each by position, hands
+  the argument list to the body as it is -- what a function VALUE called through a
+  parameter is (`f(x)` inside a higher-order `def`).
 - **A direct `defun` goes ahead of every statement.** A compiled program has it from the
   start and the interpreter only once evaluated, so `f(1)` written above `def f` ran on
   three backends and failed on one; hoisted, all four have it, and a call the `def` may not
@@ -180,6 +200,42 @@ then the dict of surplus named ones.
   `inSourceOrder` binds each operand that is more than a constant or a variable to a
   `let*` variable, in source order, exactly when the form would evaluate two of them the
   other way round. A variable needs none: no call can assign it.
+
+## What the lowering knows (2026-11-15)
+
+**Invariant: a fast path answers what the generic helper answers for every value it is
+taken for, and it is made of core forms: no backend learns a Starlark name.** The integer
+forms are the ones the backends already fuse ([jvm-int-fusion.md](jvm-int-fusion.md),
+[wasm-int-fusion.md](wasm-int-fusion.md)).
+
+- **Kinds** (`StarlarkLowering.Kind`, `kind`): INT, BOOL (exactly `T`/`NIL`), OTHER (no
+  int: a float, a string, a list ..), ANY. Read off the spelling -- a literal, an
+  operator's result (`int op int`, a comparison, `not`), a built-in whose every return is
+  one (`StarlarkBuiltins`' `-> int` / `-> bool`: `len`, `int`, `hash`, `find`, `index`,
+  `count`, `bool`, `any`, `all`, `hasattr`, `startswith`, `isdigit` ..) -- and off
+  variables.
+- **A variable is an int when every binding of it in its block is one** (`bound`, `infer`):
+  assignments (pairwise through `a, b = b, a + b`), augmented assignments, `for` and
+  comprehension targets (an int over `range(..)`, the index of `for i, x in
+  enumerate(..)`). All names of a block are assumed ints and the assumption is dropped
+  name by name until every binding agrees; then the same for Booleans. Sound because
+  nothing outside the block binds its names: Starlark has no `global`/`nonlocal`, so a
+  nested function only reads them. A parameter is ANY. A file's globals are inferred the
+  same way, a `load`ed name being ANY -- but not in a session, where a later buffer binds
+  anything. A variable still `:%unbound` is no hole: a read the flow does not vouch for
+  goes through the checked read first. A Common Lisp file that `setq`s a Starlark global
+  to another type gets Common Lisp's type error for Starlark's: no contract.
+- **Three tiers per operator** (`operation`): both operands known ints -> the Common Lisp
+  operator; both MAY be ints -> the operator behind `(integerp ..)` tests of the unknown
+  ones, the helper as the other branch (`TESTED`: `+ - * // %`, the comparisons, `==`,
+  `!=`); an operand known to be no int -> the helper alone (`"a" + s`, `x * 2.0`).
+  Integers are of any size on every backend, so `(+ a b)` IS Starlark's `+`. `//` and
+  `%` only by a constant that is not zero, a shift only by a constant count that is not
+  negative: the errors (`integer modulo by zero`, `negative shift count`) stay the
+  helper's. The bitwise operators are inline over known ints only (`|` is also a dict
+  union).
+- Not made, not measured: narrowing by a test (`type(x) == "int"`), the kind a `def`
+  returns, the kinds of a list's elements, an inline `x[i]`.
 
 ## The run-time library's rules
 
@@ -247,6 +303,11 @@ Written to Go's Starlark (`go.starlark.net`, its `library.go`/`value.go` read
   non-iterable `T value is not iterable`, a `*` argument `argument after * must be
   iterable, not T`, a missing argument `function f missing 2 arguments (a, b)` for a `def`
   and `NAME: missing argument for P` for a built-in.
+
+`insert`, `pop` and `remove` move a list's elements inside its own vector
+(`%starlark-delete-at`, 2026-11-15; they rebuilt it through a Common Lisp list before, so
+a stack's `pop()` was linear). Nothing else holds the vector meanwhile: a loop over the
+list counts on it and the mutation is refused, `%starlark-unpack` and the built-ins copy.
 
 A loop counts itself on the list or dict it walks (`%starlark-iterate` /
 `%starlark-iterated`) and a mutation meanwhile is refused. The count is given back on every
@@ -361,8 +422,9 @@ file finds its lists frozen.
 - **Common Lisp -> Starlark: the function VALUE**, the variable `|name|` of a `(load
   ..)`ed file, through `(rontolisp:starlark-call f arg..)`: positional arguments, bound
   by `%starlark-bind` (defaults, `*args`, the binder's messages). The direct `defun`
-  under the same spelling exists for some `def`s only, with the exact count, and may
-  change with the lowering (`.todo/j51`): no contract. It is the one public name of
+  under the same spelling exists for a top-level `def` bound once only, takes every
+  parameter (then the `*args` tuple and the `**kwargs` dict) and may change with the
+  lowering: no contract. It is the one public name of
   `starlark.lisp` (`LispNames.STARLARK_CALL`, a `rontolisp` external,
   `StarlarkLibrary.mayDefine`); it is also "Frames"' boundary.
 - **Starlark -> Common Lisp: `load("@package", local = "symbol")`**. The specification
@@ -469,7 +531,49 @@ lowering and Lisp run time that first measured the design,
   no message).
 - A list, tuple or dict expression is ONE call: 1,500 integer elements compile for the
   JVM, 3,000 are `method _top$0: method code exceeds the JVM's 65535-byte limit: 97862`
-  (`.kb/jvm-method-size-limits.md`); the interpreter and wasm take them.
+  (`.kb/jvm-method-size-limits.md`); the interpreter and wasm take them. Since the typed
+  fast paths (below) that holds for elements that are not all constants (3,000 reads of
+  a variable: `113078`); constants are quoted data, and a list of 100,000 integers, and
+  one program of a 3,000-integer list, a list of 3,000 `("k", n)` tuples and a
+  3,000-entry dict (`.class` 579,948 B), print the same on the four.
+
+### Typed fast paths (2026-11-15)
+
+Every candidate was measured first as a hand-edited lowering, per backend, and made only
+where it paid; the programs and the script are
+`.todo/artefacts/j51-starlark-typed-fast-paths/`. Seconds, JVM / WASM preview 1 / component, the best of three runs of the
+compiled program (`java Prog`; `wasmtime run` of a precompiled `.cwasm`, so no Cranelift
+time), same machine as above:
+
+| program | before | after | by |
+|---|---|---|---|
+| `fib(35)` | 0.67 / 1.13 / 1.14 | 0.32 / 0.41 / 0.46 | the tested integer operators |
+| `total += i % 7` over `range(30,000,000)` | 0.62 / 8.61 / 9.01 | 0.18 / 0.68 / 0.66 | the counting loop, known ints |
+| 6,000,000 calls `f(i)`, `f(i, c = 3)` of `def f(a, b = 1, c = 2)` | 2.79 / 10.39 / 10.38 | 0.22 / 0.24 / 0.23 | direct calls with defaults and names |
+| 10,000,000 `a, b = b, (a + b) % 1000000007` | 0.88 / 14.69 / 14.67 | 0.34 / 0.23 / 0.23 | no tuple, known ints |
+| 3,000,000 `[1, .. 8]` and `"c" in ("a", "b", "c")` | 2.34 / 7.17 / 7.23 | 1.44 / 4.48 / 4.49 | quoted data |
+| 20,000,000 `if flag and i:` / `if not flag or t:` | 0.57 / 5.14 / 5.01 | 0.16 / 0.39 / 0.35 | known Booleans and ints as their own truth |
+| 30,000 `append` then `pop()`, 3,000 `insert(0, x)`, 3,000 `remove(x)` | 21.79 / 60.88 / 61.55 | 0.38 / 1.01 / 1.01 | list methods in place |
+| 3,000,000 calls `f(i)` of a function handed as a parameter | 1.42 / 3.22 / 3.20 | 0.38 / 0.50 / 0.49 | `%starlark-fills` (0.95 / 1.93 / 1.94 without it) |
+| Collatz steps below 100,000 plus a sieve to 2,000,000 | 2.89 / 14.80 / 14.32 | 2.09 / 2.73 / 2.49 | all of them; `flags[j]` stays generic |
+
+- The hand-edited steps of the `range` loop: the counter alone 0.32 / 3.72 (the range's
+  vector is the cost: the vector loop WITH inline arithmetic stayed 0.65 / 8.06), plus
+  inline arithmetic 0.35 / 0.95. Of `fib(35)`: tests only where one operand is a
+  literal 0.40 / 0.48, every operator tested 0.28 / 0.44, plain Common Lisp 0.21 / 0.28.
+  Its `if .. return` written as one `if` with no block: 0.63 / 0.98 -- not made.
+- Sizes (`.class` / `.wasm` / component, before -> after): the prototype's `demo.star`
+  287,305 / 264,760 / 268,413 -> 289,662 / 264,109 / 267,848; `print(1 + 2)` 178,363 /
+  178,443 / 182,071 -> 174,530 / 176,175 / 179,914 (no `%starlark-add`); `bench.star`
+  210,963 / 204,087 / 207,654 -> 191,378 / 190,650 / 194,481; `examples/starlark/
+  targets.star` 275,597 / 258,448 / 262,222 -> 274,842 / 259,013 / 262,721. A tested
+  operator costs its site a few dozen bytes, which is why operands that both may be ints
+  are tested too, not only an operand beside a literal. A quoted `[1, 2]` is 56 B of
+  class smaller than the call and one byte of wasm larger, so every constant expression
+  is quoted, from one element on.
+- `bench.star` as in the table above (wall time, three runs): interpreter 2.55-2.63 s,
+  JVM 0.15-0.16 s, WASM 0.07 s once wasmtime's cache holds the module (0.20 s the first
+  run; before: 0.29-0.33 s and 0.39 s), component the same.
 
 ## Positions
 
@@ -549,7 +653,9 @@ off. The compiled legs expand the wrapped forms through `CompileFrontendAccess.l
 (`CompileFrontend.expand`, as `run` expands a `.star` file's read).
 
 `StarlarkSpecE2eTest` over `starlark-spec.yaml` (the corpus on four backends, in process:
-the prototype's feature tour first, then a case per decision above; a `standalone:` case is
+the prototype's feature tour first, then a case per decision above --
+`what-the-lowering-knows-answers-as-the-generic-paths` printed the same under the generic
+lowering, but one line --; a `standalone:` case is
 a program of its own, read against its `standard:` -- one ending with an uncaught error
 must report the same text, one with `files:` is read from a directory holding them, its
 `entry:` a `.star` or a `.lisp` file: modules and freezing, and the two languages calling

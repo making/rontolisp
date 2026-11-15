@@ -53,8 +53,10 @@ error: count.star:1:1: for loop not within a function
   [`--report-locations`](../compiling/wasm.md#uncaught-condition-locations---report-locations)
   を付けた場合）。終了ステータスは 0 以外になります。列まで示すのは、プログラムの実行前に
   見つかったエラーだけです。文面は Go の実装に合わせています。
-- 数千要素のリスト式、タプル式、辞書式は JVM のクラスにコンパイルできません。JVM の
-  メソッドに許される大きさを超えるためです。インタプリタと WebAssembly では動きます。
+- 数千要素のリスト式、タプル式、辞書式は、要素がすべて定数（数値、文字列、`None`、`True`、
+  `False`、定数だけからなるリスト式・タプル式・辞書式）である場合を除き、JVM のクラスに
+  コンパイルできません。JVM のメソッドに許される大きさを超えるためです。インタプリタと
+  WebAssembly では動きます。
 - エラーの報告は、モジュールの関数をモジュールのパス付きの名前で示します:
   `in sl%(words.star)shout`。
 - エラーで止まったモジュールは、あとの `load` で読み込まれても再実行されません。

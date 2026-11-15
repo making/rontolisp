@@ -68,25 +68,47 @@ class StarlarkLoweringTest {
 	// $ stands for the run-time helpers' prefix, @ for the prefix of m.star's globals.
 	static List<Arguments> rows() {
 		return List.of(
-				// values, and an identifier with no lowercase letter
-				arguments("T = [None, True, False, 1, -2.5, \"s\", (1,), {\"k\": 1}]\nt = T\n", """
-						(SETQ |s%T| ($MAKE-LIST :NONE T NIL 1 -2.5 "s" ($MAKE-TUPLE 1) ($MAKE-DICT "k" 1)))
-						(SETQ |t| |s%T|)"""),
+				// values, and an identifier with no lowercase letter; a list, tuple or
+				// dict of constants is quoted data, behind marks where one holds another
+				arguments(
+						"T = [None, True, False, 1, -2.5, \"s\", (1,), {\"k\": 1}]\nt = T\nu = [(1, 2), {\"k\": t}, []]\n",
+						"""
+								(SETQ |s%T| ($LITERAL '(:%LIST :NONE T NIL 1 -2.5 "s" (:%TUPLE 1) (:%DICT "k" 1))))
+								(SETQ |t| |s%T|)
+								(SETQ |u| ($MAKE-LIST ($TUPLE-OF '(1 2)) ($MAKE-DICT "k" |t|) ($MAKE-LIST)))"""),
 				// a top-level def bound once: a defun ahead of every statement, entered
-				// directly by a call that fills each parameter by position; above the
-				// def, the call checks the global the def assigns
-				arguments("f(1, 2)\ndef f(a, b = 2):\n    return a\nf(1)\ng = f\n", """
-						(DEFUN |f| (|a| |b|) |a|)
+				// directly by a call whose arguments fit, bound to the parameters here
+				// and still evaluated as written -- a default the constant it is, or
+				// the global the def statement leaves its value in; above the def, the
+				// call checks the global the def assigns; a call that does not fit is
+				// the binder's
+				arguments("""
+						f(1, 2)
+						def f(a, b = 2, *c, d = [], **e):
+						    return a
+						f(1)
+						f(1, 2, 3, x = 4, d = 5)
+						f(b = g, a = g())
+						f()
+						g = f
+						""", """
+						(DEFUN |f| (|a| |b| |d| |c| |e|) |a|)
 						(SETQ |f| :%UNBOUND)
-						(PROGN ($GLOBAL |f| "f") (|f| 1 2))
-						(SETQ |f| ($MAKE-FUNCTION "f" '("a" "b") (LIST :%REQUIRED 2) 2 NIL NIL #'|f|))
-						($CALL |f| (LIST 1) NIL)
+						(SETQ |g| :%UNBOUND)
+						(PROGN ($GLOBAL |f| "f") (|f| 1 2 |sl%(t.star)%SL-DEFAULT1| ($MAKE-TUPLE) ($MAKE-DICT)))
+						(SETQ |f| ($MAKE-FUNCTION "f" '("a" "b" "d") \
+						(LIST :%REQUIRED 2 (SETQ |sl%(t.star)%SL-DEFAULT1| ($MAKE-LIST))) 2 T T #'|f|))
+						(|f| 1 2 |sl%(t.star)%SL-DEFAULT1| ($MAKE-TUPLE) ($MAKE-DICT))
+						(|f| 1 2 5 ($MAKE-TUPLE 3) ($MAKE-DICT "x" 4))
+						(LET* ((%SL-ARG2 ($GLOBAL |g| "g")) (%SL-ARG3 ($CALL ($GLOBAL |g| "g") NIL NIL))) \
+						(|f| %SL-ARG3 %SL-ARG2 |sl%(t.star)%SL-DEFAULT1| ($MAKE-TUPLE) ($MAKE-DICT)))
+						($CALL |f| NIL NIL)
 						(SETQ |g| |f|)"""),
 				// any other function is a value over a lambda taking the parameters, then
 				// the surplus positional arguments, then the surplus named ones
-				arguments("def f(a, *args, c = 1, **kw):\n    pass\n",
+				arguments("if True:\n    def f(a, *args, c = 1, **kw):\n        pass\n",
 						"""
-								(SETQ |f| ($MAKE-FUNCTION "f" '("a" "c") (LIST :%REQUIRED 1) 1 T T (LAMBDA (|a| |c| |args| |kw|) :NONE)))"""),
+								(IF T (SETQ |f| ($MAKE-FUNCTION "f" '("a" "c") (LIST :%REQUIRED 1) 1 T T (LAMBDA (|a| |c| |args| |kw|) :NONE))))"""),
 				// a body: a block around a let of every assigned name, unassigned until
 				// assigned and read through a check where a path may not assign it; a
 				// loop: a tagbody over the iterable's vector, given back before a return
@@ -112,24 +134,64 @@ class StarlarkLoweringTest {
 								(IF ($TRUTH |i|) (RETURN-FROM %SL-CONTINUE NIL))) (RETURN-FROM %SL-BREAK NIL)) \
 								(GO %SL-TOP5))))) ($ITERATED %SL-SEQ1)) (SETQ |n| ($LOCAL |x| "x")) :NONE)))
 								(SETQ |f| ($MAKE-FUNCTION "f" '("xs") NIL 1 NIL NIL #'|f|))"""),
-				// truth is fused into a test; `and` / `or` as values keep the operand
+				// truth is fused into a test; `and` / `or` as values keep the operand;
+				// a comparison of operands that may be ints tests them first
 				arguments(
 						"def f(a, b, c):\n    if a == b and not c or b:\n        return a or b\n    return a == 1 and b\n",
 						"""
 								(DEFUN |f| (|a| |b| |c|) (BLOCK %SL-FN \
-								(IF (OR (AND ($EQUAL |a| |b|) (NOT ($TRUTH |c|))) ($TRUTH |b|)) \
+								(IF (OR (AND (IF (AND (INTEGERP |a|) (INTEGERP |b|)) (= |a| |b|) ($EQUAL |a| |b|)) \
+								(NOT ($TRUTH |c|))) ($TRUTH |b|)) \
 								(RETURN-FROM %SL-FN (LET ((%SL-VALUE1 |a|)) (IF ($TRUTH %SL-VALUE1) %SL-VALUE1 |b|)))) \
-								(IF ($EQUAL |a| 1) |b| NIL)))
+								(IF (IF (INTEGERP |a|) (= |a| 1) ($EQUAL |a| 1)) |b| NIL)))
 								(SETQ |f| ($MAKE-FUNCTION "f" '("a" "b" "c") NIL 3 NIL NIL #'|f|))"""),
-				// a comprehension: the same loop pushing onto a vector, its variable its
-				// own
-				arguments("x = [v * 2 for v in range(3) if v]\n",
+				// a comprehension: the same loops pushing onto a vector, its variables
+				// its own, the first iterable evaluated outside them
+				arguments("y = [1]\nx = [v * w for v in range(3) if v for w in y]\n",
 						"""
-								(SETQ |x| (LET ((%SL-ACC1 ($VECTOR)) (|v| :%UNBOUND)) \
-								(LET* ((%SL-SEQ2 ($B-RANGE 3 :%UNSET 1)) (%SL-ITEMS3 ($ITERATE %SL-SEQ2)) (%SL-COUNT4 (LENGTH %SL-ITEMS3)) (%SL-INDEX5 0)) \
-								(TAGBODY %SL-TOP6 (IF (< %SL-INDEX5 %SL-COUNT4) (PROGN (SETQ |v| (AREF %SL-ITEMS3 %SL-INDEX5)) \
-								(SETQ %SL-INDEX5 (+ %SL-INDEX5 1)) (IF ($TRUTH |v|) (VECTOR-PUSH-EXTEND ($MUL |v| 2) %SL-ACC1)) \
-								(GO %SL-TOP6)))) ($ITERATED %SL-SEQ2)) ($LIST-FROM %SL-ACC1)))"""),
+								(SETQ |y| ($LIST-OF '(1)))
+								(SETQ |x| (LET* ((%SL-NEXT2 0)) (LET ((%SL-ACC1 ($VECTOR)) (|v| :%UNBOUND) (|w| :%UNBOUND)) \
+								(TAGBODY %SL-TOP3 (IF (< %SL-NEXT2 3) (PROGN (SETQ |v| %SL-NEXT2) (SETQ %SL-NEXT2 (+ %SL-NEXT2 1)) \
+								(IF (NOT (= |v| 0)) (LET* ((%SL-SEQ4 |y|) (%SL-ITEMS5 ($ITERATE %SL-SEQ4)) \
+								(%SL-COUNT6 (LENGTH %SL-ITEMS5)) (%SL-INDEX7 0)) \
+								(TAGBODY %SL-TOP8 (IF (< %SL-INDEX7 %SL-COUNT6) (PROGN (SETQ |w| (AREF %SL-ITEMS5 %SL-INDEX7)) \
+								(SETQ %SL-INDEX7 (+ %SL-INDEX7 1)) \
+								(VECTOR-PUSH-EXTEND (IF (INTEGERP |w|) (* |v| |w|) ($MUL |v| |w|)) %SL-ACC1) (GO %SL-TOP8)))) \
+								($ITERATED %SL-SEQ4))) (GO %SL-TOP3)))) ($LIST-FROM %SL-ACC1))))"""),
+				// what the lowering knows: a loop over range counts, its bounds checked
+				// as range checks them unless they are known ints, a step that is no
+				// constant with them; an operator over known ints, the truth of an int
+				// or a Boolean and a comparison with None are Common Lisp's; a tuple of
+				// targets takes a tuple of values with none made
+				arguments("""
+						def f(n, xs, s):
+						    t = 0
+						    done = False
+						    for i in range(n):
+						        t += i % 7
+						    for i in range(len(xs), 0, -1):
+						        done = done or t > i
+						    for i in range(n, 9, t):
+						        if t and done and s != None:
+						            t, s = t // 2 << 1, s * 2.5 + t
+						    return -t
+						""",
+						"""
+								(DEFUN |f| (|n| |xs| |s|) (LET ((|t| :%UNBOUND) (|done| :%UNBOUND) (|i| :%UNBOUND)) \
+								(SETQ |t| 0) (SETQ |done| NIL) \
+								(LET* ((%SL-NEXT1 0) (%SL-STOP2 ($LOOP-STOP %SL-NEXT1 |n|))) \
+								(TAGBODY %SL-TOP3 (IF (< %SL-NEXT1 %SL-STOP2) (PROGN (SETQ |i| %SL-NEXT1) \
+								(SETQ %SL-NEXT1 (+ %SL-NEXT1 1)) (SETQ |t| (+ |t| (MOD |i| 7))) (GO %SL-TOP3))))) \
+								(LET* ((%SL-NEXT4 ($B-LEN |xs|))) \
+								(TAGBODY %SL-TOP5 (IF (> %SL-NEXT4 0) (PROGN (SETQ |i| %SL-NEXT4) \
+								(SETQ %SL-NEXT4 (+ %SL-NEXT4 -1)) (SETQ |done| (IF |done| T (> |t| |i|))) (GO %SL-TOP5))))) \
+								(LET* ((%SL-NEXT6 |n|) (%SL-STOP7 9) (%SL-STEP8 ($LOOP-STEP %SL-NEXT6 %SL-STOP7 |t|))) \
+								(TAGBODY %SL-TOP9 (IF (IF (< 0 %SL-STEP8) (< %SL-NEXT6 %SL-STOP7) (> %SL-NEXT6 %SL-STOP7)) \
+								(PROGN (SETQ |i| %SL-NEXT6) (SETQ %SL-NEXT6 (+ %SL-NEXT6 %SL-STEP8)) \
+								(IF (AND (AND (NOT (= |t| 0)) |done|) (NOT (EQ |s| :NONE))) \
+								(LET ((%SL-ELEMENT10 (ASH (VALUES (FLOOR |t| 2)) 1)) (%SL-ELEMENT11 ($ADD ($MUL |s| 2.5) |t|))) \
+								(SETQ |t| %SL-ELEMENT10) (SETQ |s| %SL-ELEMENT11))) (GO %SL-TOP9))))) (- |t|)))
+								(SETQ |f| ($MAKE-FUNCTION "f" '("n" "xs" "s") NIL 3 NIL NIL #'|f|))"""),
 				// a built-in: bound while lowering, defaults filled, the arguments still
 				// evaluated as written; one that does not fit goes to the run-time
 				// binder,
@@ -149,22 +211,24 @@ class StarlarkLoweringTest {
 								($METHOD |x| '("list") "append" '("x") NIL 1 1 NIL NIL #'$M-APPEND))
 								(SETQ |f| ($MAKE-FUNCTION "f" '("x" "g") NIL 2 NIL NIL #'|f|))"""),
 				// assignment: the value before the target's operands; an augmented one
-				// evaluates the target's operands once
+				// evaluates the target's operands once, and what it reads
 				arguments("def f(a, g, i):\n    a[g()] = g()\n    a[i], i = i, a\n    a[g()] -= 1\n    i += [1]\n",
 						"""
 								(DEFUN |f| (|a| |g| |i|) \
 								(LET* ((%SL-ARG1 ($CALL |g| NIL NIL)) (%SL-ARG2 ($CALL |g| NIL NIL))) ($SET-INDEX |a| %SL-ARG2 %SL-ARG1)) \
-								(LET ((%SL-UNPACKED3 ($UNPACK ($MAKE-TUPLE |i| |a|) 2))) \
-								($SET-INDEX |a| |i| (AREF %SL-UNPACKED3 0)) (SETQ |i| (AREF %SL-UNPACKED3 1))) \
-								(LET* ((%SL-KEY4 ($CALL |g| NIL NIL))) ($SET-INDEX |a| %SL-KEY4 ($SUB ($INDEX |a| %SL-KEY4) 1))) \
-								(SETQ |i| ($ADD-IN-PLACE |i| ($MAKE-LIST 1))) :NONE)
+								(LET ((%SL-ELEMENT3 |i|) (%SL-ELEMENT4 |a|)) \
+								($SET-INDEX |a| |i| %SL-ELEMENT3) (SETQ |i| %SL-ELEMENT4)) \
+								(LET* ((%SL-KEY5 ($CALL |g| NIL NIL))) ($SET-INDEX |a| %SL-KEY5 \
+								(LET* ((%SL-LEFT6 ($INDEX |a| %SL-KEY5))) (IF (INTEGERP %SL-LEFT6) (- %SL-LEFT6 1) ($SUB %SL-LEFT6 1))))) \
+								(SETQ |i| ($ADD-IN-PLACE |i| ($LIST-OF '(1)))) :NONE)
 								(SETQ |f| ($MAKE-FUNCTION "f" '("a" "g" "i") NIL 3 NIL NIL #'|f|))"""),
 				// --starlark-standard spec: a call while a call of the same declaration
 				// runs is refused, by a flag of the declaration's own, spelled behind
 				// the file's prefix
 				arguments("# spec\ndef f(n):\n    return f(n - 1)\n", """
 						(DEFUN |f| (|n|) ($ENTER |sl%(t.star)%SL-ACTIVE1| "f") \
-						(LET ((%SL-RESULT2 (|f| ($SUB |n| 1)))) ($LEAVE |sl%(t.star)%SL-ACTIVE1|) %SL-RESULT2))
+						(LET ((%SL-RESULT2 (|f| (IF (INTEGERP |n|) (- |n| 1) ($SUB |n| 1))))) \
+						($LEAVE |sl%(t.star)%SL-ACTIVE1|) %SL-RESULT2))
 						(SETQ |sl%(t.star)%SL-ACTIVE1| (LIST NIL))
 						(SETQ |f| ($MAKE-FUNCTION "f" '("n") NIL 1 NIL NIL #'|f|))"""),
 				// load: the module's definitions with the program's, its globals behind
@@ -173,23 +237,24 @@ class StarlarkLoweringTest {
 				// file's run; what the statement binds is a global of the loading file,
 				// read through a check where a path of the module may not assign it. A
 				// name bound by the load alone is entered directly. @package is a Common
-				// Lisp package: the symbol's function, called as it stands.
+				// Lisp package: the symbol's function, called as it stands. A global is
+				// known as a local is: the module's x is an int.
 				arguments("""
 						load("m.star", "f", y = "x", "late")
 						load("@cl", "gcd", up = "string-upcase")
 						def g(n):
-						    return f(n, y) + gcd(n, 4) + late
+						    return f(n, y), gcd(n, 4), late
 						""", """
-						(DEFUN |@f| (|a| |b|) ($ADD |a| |b|))
+						(DEFUN |@f| (|a| |b|) (IF (AND (INTEGERP |a|) (INTEGERP |b|)) (+ |a| |b|) ($ADD |a| |b|)))
 						(DEFVAR |@%SL-FILE| NIL)
-						(DEFUN |g| (|n|) ($ADD ($ADD (|@f| |n| |y|) (CL::GCD |n| 4)) |late|))
+						(DEFUN |g| (|n|) ($MAKE-TUPLE (|@f| |n| |y|) (CL::GCD |n| 4) |late|))
 						(SETQ |sl%(t.star)%SL-FILE| ($FILE-BEGIN))
 						(SETQ |@%SL-FILE| (IF |@%SL-FILE| T ($FILE-BEGIN)))
 						(IF (CONSP |@%SL-FILE|) (SETQ |@late| :%UNBOUND))
 						(IF (CONSP |@%SL-FILE|) (SETQ |@x| 1))
 						(IF (CONSP |@%SL-FILE|) (SETQ |@_y| 2))
 						(IF (CONSP |@%SL-FILE|) (SETQ |@f| ($MAKE-FUNCTION "f" '("a" "b") NIL 2 NIL NIL #'|@f|)))
-						(IF (CONSP |@%SL-FILE|) (IF ($TRUTH |@x|) (SETQ |@late| 2)))
+						(IF (CONSP |@%SL-FILE|) (IF (NOT (= |@x| 0)) (SETQ |@late| 2)))
 						(IF (CONSP |@%SL-FILE|) (SETQ |@%SL-FILE| ($FILE-END |@%SL-FILE|)))
 						(SETQ |f| |@f|)
 						(SETQ |y| |@x|)

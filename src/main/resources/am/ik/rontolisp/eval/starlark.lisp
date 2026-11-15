@@ -542,8 +542,9 @@
   (values
    (gethash (rontolisp::%starlark-key k) (rontolisp::%starlark-dict-table d))))
 
-;; A dict expression: a key written twice is an error.
-(defun rontolisp::%starlark-make-dict (&rest kvs)
+;; A dict expression over the Common Lisp list KVS (key, value, key, value ...): a
+;; key written twice is an error.
+(defun rontolisp::%starlark-dict-of (kvs)
   (let ((d (rontolisp::%starlark-empty-dict)))
     (loop while kvs
           do
@@ -553,6 +554,23 @@
             (rontolisp::%starlark-dict-store d (car kvs) (cadr kvs))
             (setq kvs (cddr kvs)))
     d))
+
+(defun rontolisp::%starlark-make-dict (&rest kvs)
+  (rontolisp::%starlark-dict-of kvs))
+
+;; A list, tuple or dict expression whose elements are constants and one of them such
+;; an expression again, from its quoted form: (:%list . elements), (:%tuple . elements)
+;; or (:%dict key value ...) over elements of the same form. No other constant is a
+;; cons.
+(defun rontolisp::%starlark-literal (x)
+  (if (consp x)
+      (let ((xs nil))
+        (dolist (e (cdr x)) (push (rontolisp::%starlark-literal e) xs))
+        (setq xs (nreverse xs))
+        (cond ((eq (car x) :%list) (rontolisp::%starlark-list-of xs))
+              ((eq (car x) :%tuple) (rontolisp::%starlark-tuple-of xs))
+              (t (rontolisp::%starlark-dict-of xs))))
+      x))
 
 ;; The named arguments a `**` argument supplies: name, value, name, value ...
 (defun rontolisp::%starlark-keywords (d)
@@ -1225,10 +1243,22 @@
                 (list (rontolisp::%starlark-tuple-of (nreverse extra)))
                 nil) (if kwargs (list kwargs) nil))))
 
+;; F is a function. Whether the positional arguments POS are the arguments its body
+;; takes as they stand: none is named, and F takes as many, each by position.
+(defun rontolisp::%starlark-fills (f pos kw)
+  (and (null kw) (not (rontolisp::%starlark-function-varargs f))
+       (not (rontolisp::%starlark-function-kwargs f))
+       (let ((positional (rontolisp::%starlark-function-positional f)))
+         (and (= positional (length pos))
+          (= positional (length (rontolisp::%starlark-function-params f)))))))
+
 ;; A Common Lisp function is called with the positional arguments as they are.
 (defun rontolisp::%starlark-call (f pos kw)
   (cond ((rontolisp::%starlark-function-p f)
-         (let ((args (rontolisp::%starlark-bind f pos kw)))
+         (let ((args
+                (if (rontolisp::%starlark-fills f pos kw)
+                    pos
+                    (rontolisp::%starlark-bind f pos kw))))
            (if (eq (rontolisp::%starlark-function-kind f) :method)
                (apply (rontolisp::%starlark-function-body f)
                       (rontolisp::%starlark-function-self f) args)
@@ -1400,6 +1430,24 @@
         (rontolisp::%starlark-dict-merge d pairs "dict"))
     (rontolisp::%starlark-dict-merge d kwargs "dict")
     d))
+
+;; The stop of `for .. in range(START, STOP)`, a loop that counts with no range made:
+;; both are ints, as `range` wants them.
+(defun rontolisp::%starlark-loop-stop (start stop)
+  (if (not (and (integerp start) (integerp stop)))
+      (error "range: got ~a, want int"
+             (rontolisp::%starlark-type (if (integerp start) stop start))))
+  stop)
+
+;; The step of such a loop over `range(START, STOP, STEP)` when STEP is no constant:
+;; the three are ints and the step is not zero.
+(defun rontolisp::%starlark-loop-step (start stop step)
+  (if (not (and (integerp start) (integerp stop) (integerp step)))
+      (error "range: got ~a, want int"
+             (rontolisp::%starlark-type
+              (if (integerp start) (if (integerp stop) step stop) start))))
+  (if (= step 0) (error "range: step argument must not be zero"))
+  step)
 
 (defun rontolisp::%starlark-b-range (a b c)
   (if (not (and (integerp a) (or (eq b :%unset) (integerp b)) (integerp c)))
@@ -1679,12 +1727,6 @@
   (rontolisp::%starlark-list-writable l verb)
   (rontolisp::%starlark-list-items l))
 
-;; L is a list: replaces its elements by those of the Common Lisp list XS.
-(defun rontolisp::%starlark-list-replace (l xs)
-  (let ((v (rontolisp::%starlark-vector)))
-    (dolist (x xs) (vector-push-extend x v))
-    (setf (rontolisp::%starlark-list-items l) v)))
-
 (defun rontolisp::%starlark-m-append (l x)
   (vector-push-extend x
    (rontolisp::%starlark-list-receiver l "append" "append to"))
@@ -1699,35 +1741,44 @@
       (vector-push-extend x (rontolisp::%starlark-list-items l))))
   :none)
 
+;; ITEMS is a list's vector: takes element J out, the elements after it moving one
+;; place down. Nothing else holds the vector: a loop over the list refuses the mutation.
+(defun rontolisp::%starlark-delete-at (items j)
+  (let ((last (- (length items) 1)))
+    (loop while (< j last)
+          do (setf (aref items j) (aref items (+ j 1))) (setq j (+ j 1)))
+    (setf (aref items last) nil)
+    (vector-pop items)))
+
 (defun rontolisp::%starlark-m-insert (l i x)
   (let* ((items (rontolisp::%starlark-list-receiver l "insert" "insert into"))
-         (xs (coerce items 'list))
-         (n (length xs)))
+         (n (length items)))
     (if (not (integerp i))
         (error "insert: for parameter index: got ~a, want int"
                (rontolisp::%starlark-type i)))
-    (let ((j (max 0 (min n (if (< i 0) (+ i n) i)))))
-      (rontolisp::%starlark-list-replace l
-       (append (subseq xs 0 j) (list x) (nthcdr j xs)))))
+    (let ((j (max 0 (min n (if (< i 0) (+ i n) i)))) (k n))
+      (vector-push-extend x items)
+      (loop while (> k j)
+            do (setf (aref items k) (aref items (- k 1))) (setq k (- k 1)))
+      (setf (aref items j) x)))
   :none)
 
 (defun rontolisp::%starlark-m-remove (l x)
-  (let ((items (rontolisp::%starlark-list-receiver l "remove" "remove from"))
-        (acc nil)
-        (found nil))
-    (dotimes (i (length items))
-      (let ((e (aref items i)))
-        (if (and (not found) (rontolisp::%starlark-equal e x))
-            (setq found t)
-            (push e acc))))
-    (if (not found) (error "remove: element not found"))
-    (rontolisp::%starlark-list-replace l (nreverse acc)))
+  (let* ((items (rontolisp::%starlark-list-receiver l "remove" "remove from"))
+         (n (length items))
+         (j 0))
+    (loop while
+            (and (< j n) (not (rontolisp::%starlark-equal (aref items j) x)))
+          do (setq j (+ j 1)))
+    (if (= j n) (error "remove: element not found"))
+    (rontolisp::%starlark-delete-at items j))
   :none)
 
 (defun rontolisp::%starlark-m-clear (x)
   (cond ((rontolisp::%starlark-list-p x)
          (rontolisp::%starlark-list-writable x "clear")
-         (rontolisp::%starlark-list-replace x nil))
+         (setf (rontolisp::%starlark-list-items x)
+               (rontolisp::%starlark-vector)))
         ((rontolisp::%starlark-dict-p x)
          (rontolisp::%starlark-dict-writable x "clear")
          (clrhash (rontolisp::%starlark-dict-table x)))
@@ -1740,14 +1791,13 @@
          (if (not (eq b :%unset))
              (error "pop: got 2 arguments, want at most 1"))
          (rontolisp::%starlark-list-writable x "pop from")
-         (let* ((xs (coerce (rontolisp::%starlark-list-items x) 'list))
-                (n (length xs))
+         (let* ((items (rontolisp::%starlark-list-items x))
                 (j
-                 (rontolisp::%starlark-element-index (if (eq a :%unset) -1 a) n
-                                                     "pop")))
-           (rontolisp::%starlark-list-replace x
-            (append (subseq xs 0 j) (nthcdr (+ j 1) xs)))
-           (nth j xs)))
+                 (rontolisp::%starlark-element-index (if (eq a :%unset) -1 a)
+                                                     (length items) "pop"))
+                (popped (aref items j)))
+           (rontolisp::%starlark-delete-at items j)
+           popped))
         ((rontolisp::%starlark-dict-p x)
          (if (eq a :%unset) (error "pop: missing argument for key"))
          (rontolisp::%starlark-dict-writable x "delete from")

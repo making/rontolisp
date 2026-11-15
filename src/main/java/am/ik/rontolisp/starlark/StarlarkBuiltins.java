@@ -32,7 +32,8 @@ import org.jspecify.annotations.Nullable;
  * {@code **kwargs} takes the surplus named arguments. A default is {@code None},
  * {@code True}, {@code False}, an integer, a quoted string, or {@code unset} for an
  * optional parameter with no value of its own: the helper is handed the marker and
- * decides.
+ * decides. {@code -> int} or {@code -> bool} after the parameters says what every call
+ * that returns answers, which the lowering's typed fast paths read.
  */
 final class StarlarkBuiltins {
 
@@ -45,10 +46,11 @@ final class StarlarkBuiltins {
 	/** What a function value's defaults hold for a parameter that needs an argument. */
 	static final LispSymbol REQUIRED = new LispSymbol(":%REQUIRED");
 
-	private static final Map<String, Signature> FUNCTIONS = table("abs(x, /)", "all(x, /)", "any(x, /)",
-			"bool(x=False, /)", "dict(pairs=unset, /, **kwargs)", "dir(x, /)", "enumerate(iterable, /, start=0)",
-			"fail(*args, sep=' ')", "float(x=0, /)", "getattr(x, name, default=unset, /)", "hasattr(x, name, /)",
-			"hash(x, /)", "int(x, /, base=unset)", "len(x, /)", "list(x=unset, /)", "max(*args, key=None)",
+	private static final Map<String, Signature> FUNCTIONS = table("abs(x, /)", "all(x, /) -> bool", "any(x, /) -> bool",
+			"bool(x=False, /) -> bool", "dict(pairs=unset, /, **kwargs)", "dir(x, /)",
+			"enumerate(iterable, /, start=0)", "fail(*args, sep=' ')", "float(x=0, /)",
+			"getattr(x, name, default=unset, /)", "hasattr(x, name, /) -> bool", "hash(x, /) -> int",
+			"int(x, /, base=unset) -> int", "len(x, /) -> int", "list(x=unset, /)", "max(*args, key=None)",
 			"min(*args, key=None)", "print(*args, sep=' ')", "range(start_or_stop, stop=unset, step=1, /)",
 			"repr(x, /)", "reversed(sequence, /)", "sorted(iterable, /, *, key=None, reverse=False)", "str(x, /)",
 			"tuple(x=unset, /)", "type(x, /)", "zip(*args)");
@@ -56,22 +58,23 @@ final class StarlarkBuiltins {
 	// A name two types share is one helper that tells the receivers apart: its
 	// parameters are what either takes.
 	private static final Map<String, Signature> METHODS = table("list.append(x, /)", "list|dict.clear()",
-			"list.extend(x, /)", "list|string.index(x, start=None, end=None, /)", "list.insert(index, x, /)",
+			"list.extend(x, /)", "list|string.index(x, start=None, end=None, /) -> int", "list.insert(index, x, /)",
 			"list|dict.pop(key=unset, default=unset, /)", "list.remove(x, /)", "dict.get(key, default=None, /)",
 			"dict.items()", "dict.keys()", "dict.popitem()", "dict.setdefault(key, default=None, /)",
 			"dict.update(pairs=unset, /, **kwargs)", "dict.values()", "string.capitalize()", "string.codepoint_ords()",
-			"string.codepoints()", "string.count(sub, start=None, end=None, /)", "string.elem_ords()", "string.elems()",
-			"string.endswith(suffix, start=None, end=None, /)", "string.find(sub, start=None, end=None, /)",
-			"string.format(*args, **kwargs)", "string.isalnum()", "string.isalpha()", "string.isdigit()",
-			"string.islower()", "string.isspace()", "string.istitle()", "string.isupper()", "string.join(iterable, /)",
-			"string.lower()", "string.lstrip(cutset=None, /)", "string.partition(sep, /)",
-			"string.removeprefix(prefix, /)", "string.removesuffix(suffix, /)",
-			"string.replace(old, new, count=unset, /)", "string.rfind(sub, start=None, end=None, /)",
-			"string.rindex(sub, start=None, end=None, /)", "string.rpartition(sep, /)",
+			"string.codepoints()", "string.count(sub, start=None, end=None, /) -> int", "string.elem_ords()",
+			"string.elems()", "string.endswith(suffix, start=None, end=None, /) -> bool",
+			"string.find(sub, start=None, end=None, /) -> int", "string.format(*args, **kwargs)",
+			"string.isalnum() -> bool", "string.isalpha() -> bool", "string.isdigit() -> bool",
+			"string.islower() -> bool", "string.isspace() -> bool", "string.istitle() -> bool",
+			"string.isupper() -> bool", "string.join(iterable, /)", "string.lower()", "string.lstrip(cutset=None, /)",
+			"string.partition(sep, /)", "string.removeprefix(prefix, /)", "string.removesuffix(suffix, /)",
+			"string.replace(old, new, count=unset, /)", "string.rfind(sub, start=None, end=None, /) -> int",
+			"string.rindex(sub, start=None, end=None, /) -> int", "string.rpartition(sep, /)",
 			"string.rsplit(sep=None, maxsplit=None, /)", "string.rstrip(cutset=None, /)",
 			"string.split(sep=None, maxsplit=None, /)", "string.splitlines(keepends=False, /)",
-			"string.startswith(prefix, start=None, end=None, /)", "string.strip(cutset=None, /)", "string.title()",
-			"string.upper()");
+			"string.startswith(prefix, start=None, end=None, /) -> bool", "string.strip(cutset=None, /)",
+			"string.title()", "string.upper()");
 
 	private StarlarkBuiltins() {
 	}
@@ -91,13 +94,17 @@ final class StarlarkBuiltins {
 	 * @param namedFrom the index of the first parameter a named argument fills
 	 * @param varargs whether surplus positional arguments are taken, as a tuple
 	 * @param kwargs whether surplus named arguments are taken, as a dict
+	 * @param result {@code "int"} or {@code "bool"} when every call that returns answers
+	 * one, else empty
 	 */
 	record Signature(String name, String helper, List<String> kinds, List<String> params,
-			List<@Nullable LispVal> defaults, int positional, int namedFrom, boolean varargs, boolean kwargs) {
+			List<@Nullable LispVal> defaults, int positional, int namedFrom, boolean varargs, boolean kwargs,
+			String result) {
 
 		/**
 		 * Reads a declaration: {@code "name(parameters)"} for a function,
-		 * {@code "type|type.name(parameters)"} for a method.
+		 * {@code "type|type.name(parameters)"} for a method, {@code " -> result"} after
+		 * either.
 		 * @param declaration the declaration
 		 * @return the signature
 		 */
@@ -110,7 +117,9 @@ final class StarlarkBuiltins {
 			if (dot >= 0) {
 				builder.kinds(List.of(declaration.substring(0, dot).split("\\|")));
 			}
-			String parameters = declaration.substring(open + 1, declaration.length() - 1);
+			int close = declaration.lastIndexOf(')');
+			builder.result(declaration.substring(close + 1).replace(" -> ", ""));
+			String parameters = declaration.substring(open + 1, close);
 			for (String part : parameters.isEmpty() ? new String[0] : parameters.split(",")) {
 				String parameter = part.strip();
 				if (parameter.equals("/")) {
@@ -169,7 +178,7 @@ final class StarlarkBuiltins {
 			defaults.addAll(this.defaults);
 			return new Signature(this.name, this.helper, this.kinds, List.copyOf(params),
 					Collections.unmodifiableList(defaults), this.positional + 1, this.namedFrom + 1, this.varargs,
-					this.kwargs);
+					this.kwargs, this.result);
 		}
 
 		/** Builds a signature parameter by parameter, as a declaration lists them. */
@@ -192,6 +201,8 @@ final class StarlarkBuiltins {
 			private boolean varargs;
 
 			private boolean kwargs;
+
+			private String result = "";
 
 			Builder name(String name) {
 				this.name = name;
@@ -234,12 +245,18 @@ final class StarlarkBuiltins {
 				return this;
 			}
 
+			/** What every call that returns answers: {@code "int"}, {@code "bool"}. */
+			Builder result(String result) {
+				this.result = result;
+				return this;
+			}
+
 			Signature build() {
 				return new Signature(Objects.requireNonNull(this.name, "name is required"),
 						Objects.requireNonNull(this.helper, "helper is required"), this.kinds, List.copyOf(this.params),
 						Collections.unmodifiableList(new ArrayList<>(this.defaults)),
 						this.positional < 0 ? this.params.size() : this.positional, this.namedFrom, this.varargs,
-						this.kwargs);
+						this.kwargs, this.result);
 			}
 
 		}
