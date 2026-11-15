@@ -94,10 +94,10 @@ class SourceLanguageTest {
 			.extracting(LispVal::print)
 			.containsExactly("(SETQ %SL-FILE (RONTOLISP::%STARLARK-FILE-BEGIN))",
 					"(SETQ |x| (RONTOLISP::%STARLARK-B-LEN \"#.\"))", "(RONTOLISP::%STARLARK-FILE-END %SL-FILE)");
-		// A buffer at a time is not read yet: a block ends where its indentation does.
-		assertThatThrownBy(() -> new SourceSession(SourceLanguage.STARLARK))
-			.isInstanceOf(IllegalArgumentException.class)
-			.hasMessage("Starlark is read a file at a time: it has no REPL yet (run a .star file, or -e)");
+		// A buffer at a time: a block ends at a blank line, a bracket goes on.
+		SourceSession session = new SourceSession(SourceLanguage.STARLARK);
+		assertThat(List.of("x = 1\n", "def f():\n    pass\n\n", "x = )\n")).allMatch(session::isComplete);
+		assertThat(List.of("x = [1,\n", "def f():\n", "def f():\n    pass\n")).noneMatch(session::isComplete);
 	}
 
 	@Test

@@ -191,6 +191,15 @@ final class StarlarkLexer {
 		return this.pending.poll();
 	}
 
+	/**
+	 * Whether the input is exhausted: every token left is the end of input's
+	 * {@link Kind#OUTDENT}s and its {@link Kind#EOF}.
+	 * @return {@code true} once the end of input was reached
+	 */
+	boolean exhausted() {
+		return this.eof != null;
+	}
+
 	private StarlarkToken endOfInput() {
 		int column = this.column(this.pos);
 		if (this.lineHasTokens && this.depth == 0) {

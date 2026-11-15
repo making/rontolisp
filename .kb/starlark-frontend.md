@@ -17,8 +17,8 @@ and every user surface says so (`--source-language` help, the title of
   "Modules" below), `Starlark` (the facade).
 - Reached ONLY through the seam: `eval/SourceLanguage.STARLARK`, picked for `.star` or by
   `--source-language starlark` (`star`), per FILE (`.kb/source-language.md`). A file is
-  lowered whole. There is no `SourceSession` yet: its constructor refuses the language, so
-  the REPL and the playground do (`-e` reads a whole program and works).
+  lowered whole; a REPL's buffers are lowered one at a time as one file's run ("A
+  session").
 - The run-time half is Common Lisp source, `eval/starlark.lisp`, plus the definitions
   `Starlark.runtimeForms` generates from the front end's tables (the attributes of each
   type, `repr`'s escape table), handled the `UrlLibrary` way by `eval/StarlarkLibrary`: the interpreter loads it on the first resolution of a
@@ -29,7 +29,8 @@ and every user surface says so (`--source-language` help, the title of
   accessors it reaches. The name gate is the spelling: `mayDefine` admits a member
   starting `%STARLARK-` (`.kb/source-language.md`, "The run-time libraries' name gate")
   and the one public name, `rontolisp:starlark-call` ("Across languages").
-  The playground's chain has no splice yet.
+  The playground's compile chain splices it inside `SchemeLibrary` the same way
+  (`RontoPlayground.frontend`).
 
 ## The decisions (2026-11-15)
 
@@ -272,8 +273,8 @@ from Common Lisp carries the `unwind-protect`: `print(1 + 2)` grew by 566 B of c
 - NOT reset: an error some handler takes outside the door -- around `(load "x.star")`.
   The file did not finish; its values stay unfrozen and its loops counted.
 - One thread: the frames and the mutability are globals.
-- For the REPL (`.todo/j50`): `(%starlark-unwind nil)` between buffers gives everything
-  back.
+- A session's buffer starts with `(%starlark-unwind nil)`, which gives everything back ("A
+  session").
 
 ## Modules (`load`, 2026-11-15)
 
@@ -377,6 +378,46 @@ file finds its lists frozen.
 - **Named arguments do not cross**: `cl:gcd got an unexpected keyword argument a`.
 - **Sequences cross by spreading**: `cl_list(*xs)` with `load("@cl", cl_list = "list")`,
   `(apply #'rontolisp:starlark-call f list)`. No converter is shipped.
+
+## A session (2026-11-15)
+
+**A session's buffers are one file's run** (`starlark/StarlarkSession`,
+`StarlarkLowering.interact`), asked through `eval/SourceSession`, so the CLI REPL and the
+playground share it. Prompt `starlark> `.
+
+- **`isComplete`**: the parser does not run out of input (an open bracket or string, a
+  block header with no block yet -- an error at the end of input's OUTDENT counts as end of
+  file, `StarlarkParser.error`), and when the LAST statement is a `def`/`if`/`for` the last
+  line is blank, since its block may go on (Python's prompt). A pasted `def` plus a call is
+  complete at the call.
+- **Steps**: a setup step, then one per statement. An expression statement is the echoed
+  step, a literal too (a file drops one as a docstring); the echo is `repr`, nothing for
+  `None`.
+- **Setup**: the definitions of the modules this buffer lowered; `(%starlark-unwind nil)`;
+  in the first buffer `(setq %SL-FILE (%starlark-file-begin))`, after it `(setq
+  %starlark-mutability %SL-FILE)` (an error inside a module's run left the module's cell
+  current); every global this buffer binds first set to `:%unbound`; the `spec` flags. No
+  `file-end`: no buffer freezes what an earlier one made (a module's values freeze at its
+  end).
+- **Names**: an earlier buffer's global is a global of this one, read through the checked
+  read -- that buffer may have stopped before assigning it (`global variable w referenced
+  before assignment`, not a Lisp unbound variable). A name no buffer bound yet is
+  `undefined: x` while lowering, as in Go's REPL; a function keeps what its names resolved
+  to when it was lowered (a built-in a later global shadows stays the built-in there).
+- **No direct call of a global**: a later buffer may bind `twice` again and an earlier
+  `quad` calls the new value (late binding). Every `def` is a function value and every
+  call of a global goes through `%starlark-call`; built-ins and methods stay direct, and
+  a module's own direct `defun`s stay (its globals do not change after its run).
+- **Modules**: the lowering's `Session` persists, so a later `load` finds the module
+  lowered. Every buffer loading it emits its statements again behind its state, which
+  runs them once (the emitting buffer may have stopped before them). Its exports are read
+  through `%starlark-loaded` (its run may have stopped at an error: `load: name x not
+  found in module m.star`).
+- A buffer whose lowering fails leaves the session as it was: the modules it lowered are
+  dropped, its globals not taken. The generated-name counter is the session's
+  (`%SL-ACTIVEn` are globals).
+- `--starlark-standard spec`: the top-level rules apply per buffer; a global bound in two
+  buffers is no error.
 
 ## Measured (2026-11-15)
 
@@ -520,4 +561,8 @@ read against `spec` -- the refusals, `load`'s included, helper arity),
 `--starlark-standard`),
 `SchemeLibraryTest#aCommonLispProgramReadsNoFrontEndsLibrary` (the gate),
 `DocExamplesTest` (a ` ```starlark ` fence is a whole program, its output the plain block
-after it), `ExamplesE2eTest` (`examples/starlark/targets.star`).
+after it), `ExamplesE2eTest` (`examples/starlark/targets.star`). A session:
+`RontoLispCliTest#theStarlarkReplRunsItsBuffersAsOneFile`,
+`PlaygroundReplTest#theStarlarkPickKeepsItsGlobalsAndModulesAcrossBuffersAndRunsAProgram`,
+`SourceLanguageTest#starlarkClaimsItsExtension` (`isComplete`),
+`StarlarkParserTest#nodesCarryTheirPositionAndAnUnfinishedInputSaysSo`.

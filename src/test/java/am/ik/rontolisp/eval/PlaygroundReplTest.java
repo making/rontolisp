@@ -11,7 +11,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The browser's interpreter: what the playground's REPL and the documentation site's Run
- * cells show, in either language.
+ * cells show, in every language.
  */
 class PlaygroundReplTest {
 
@@ -138,6 +138,23 @@ class PlaygroundReplTest {
 		SourceLoader local = files(Map.of("deps.edn", "{:deps {my/lib {:local/root \"lib\"}}}"));
 		assertThatThrownBy(() -> new PlaygroundRepl(local).pick(SourceLanguage.CLOJURE).run("(require 'app.x)"))
 			.hasMessageContaining("Local lib my/lib not found: lib");
+	}
+
+	@Test
+	void theStarlarkPickKeepsItsGlobalsAndModulesAcrossBuffersAndRunsAProgram() {
+		PlaygroundRepl repl = new PlaygroundRepl(files(Map.of("sq.star", "def sq(x):\n    return x * x\n")))
+			.pick(SourceLanguage.STARLARK);
+		assertThat(repl.eval("def f(n):\n    return [n] * 2\nprint(f(1))")).isEqualTo("[1, 1]\n");
+		assertThat(repl.eval("xs = f(2)\nxs")).isEqualTo("[2, 2]");
+		assertThat(repl.eval("None")).isEmpty();
+		// a buffer stopped before its assignment: the global is checked, not missing
+		assertThatThrownBy(() -> repl.eval("z = 1 // 0; w = 1")).hasMessageContaining("floored division by zero");
+		assertThatThrownBy(() -> repl.eval("w")).hasMessageContaining("global variable w referenced before assignment");
+		assertThatThrownBy(() -> repl.eval("nope")).hasMessageContaining("undefined: nope");
+		assertThat(repl.eval("load(\"sq.star\", \"sq\")\nsq(xs[0])")).isEqualTo("4");
+		assertThat(new PlaygroundRepl(files(Map.of("sq.star", "def sq(x):\n    return x * x\n")))
+			.pick(SourceLanguage.STARLARK)
+			.run("load(\"sq.star\", \"sq\")\nprint(sq(3))\n")).isEqualTo("9\n");
 	}
 
 	@Test

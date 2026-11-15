@@ -70,8 +70,8 @@ import static org.assertj.core.api.Assertions.fail;
  * {@code exit} ends the block's program, keeping what it printed.</li>
  * <li>A <code>```starlark</code> block is a WHOLE program for the experimental Starlark
  * front end, on a fresh evaluator: it must run, and a plain block right after it is its
- * asserted standard output. It has no session yet, so no annotation, and on the site it
- * is a static block.</li>
+ * asserted standard output, and no annotation. On the site it is a Run cell running the
+ * same thing.</li>
  * <li>A <code>```stdin</code> block is the standard input of the <code>```scheme</code> /
  * <code>```clojure</code> block right after it (every other block reads an empty
  * input).</li>

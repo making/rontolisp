@@ -81,8 +81,8 @@ public enum SourceLanguage {
 	 * Starlark, EXPERIMENTAL: a file read by the specification's grammar and lowered to
 	 * the same core forms by the {@code starlark} package
 	 * ({@code .kb/starlark-frontend.md}). Partial conformance by design, no compatibility
-	 * promise. It has no {@code #.} and no reader features, and no REPL yet
-	 * ({@link SourceSession}).
+	 * promise. It has no {@code #.} and no reader features; at a prompt a blank line ends
+	 * a block ({@link SourceSession}).
 	 */
 	STARLARK(".star");
 

@@ -16,6 +16,9 @@ import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.scheme.Scheme;
 import am.ik.rontolisp.scheme.SchemeSession;
 import am.ik.rontolisp.scheme.SchemeTopLevel;
+import am.ik.rontolisp.starlark.Starlark;
+import am.ik.rontolisp.starlark.StarlarkSession;
+import am.ik.rontolisp.starlark.StarlarkTopLevel;
 
 /**
  * The source-language seam for a consumer that has no file and reads one buffer at a time
@@ -26,8 +29,9 @@ import am.ik.rontolisp.scheme.SchemeTopLevel;
  * <p>
  * It is a session, not a function, because a language may need to remember what earlier
  * buffers defined: Scheme's lowering decides how a name is called from what defined it
- * ({@code .kb/scheme-frontend.md}, "A session"). Common Lisp keeps nothing here; its
- * state is the evaluator's.
+ * ({@code .kb/scheme-frontend.md}, "A session"), Starlark's resolves a name against the
+ * globals bound so far ({@code .kb/starlark-frontend.md}, "A session"). Common Lisp keeps
+ * nothing here; its state is the evaluator's.
  */
 public final class SourceSession {
 
@@ -51,11 +55,16 @@ public final class SourceSession {
 	// so no with-output-to-string is needed here either.
 	private static final String CLOJURE_ECHO = "(lambda (x) (rontolisp::%clojure-str-of x \"nil\" t))";
 
+	// The Starlark echo: repr, and nothing for None, as a Python prompt shows.
+	private static final String STARLARK_ECHO = "(lambda (x) (if (eq x :none) nil (rontolisp::%starlark-b-repr x)))";
+
 	private final SourceLanguage language;
 
 	private final @Nullable SchemeSession scheme;
 
 	private final @Nullable ClojureSession clojure;
+
+	private final @Nullable StarlarkSession starlark;
 
 	private final @Nullable ClojureMacroEvaluator clojureMacros;
 
@@ -89,19 +98,15 @@ public final class SourceSession {
 	 * @param language the language typed at the prompt
 	 * @param standards what the typed text is read against ({@code --scheme-standard})
 	 * @param loader where named files are read from, or {@code null} for none
-	 * @throws IllegalArgumentException for Starlark, which is read a file at a time
 	 */
 	public SourceSession(SourceLanguage language, SourceStandards standards, @Nullable SourceLoader loader) {
-		if (language == SourceLanguage.STARLARK) {
-			// A block ends where its indentation does, which no buffer rule here knows.
-			throw new IllegalArgumentException(
-					"Starlark is read a file at a time: it has no REPL yet (run a .star file, or -e)");
-		}
 		this.language = language;
 		this.scheme = language == SourceLanguage.SCHEME
 				? Scheme.session(standards.scheme(), SourceLanguage.schemeFiles(loader)) : null;
 		this.clojure = language == SourceLanguage.CLOJURE
 				? am.ik.rontolisp.clojure.Clojure.session(SourceLanguage.clojureFiles(loader, standards)) : null;
+		this.starlark = language == SourceLanguage.STARLARK
+				? Starlark.session(standards.starlark(), SourceLanguage.starlarkFiles(loader)) : null;
 		// One macro-time evaluator per session, built lazily on the first expansion,
 		// so a macro defined in one buffer expands in a later one.
 		this.clojureMacros = this.clojure == null ? null
@@ -149,6 +154,9 @@ public final class SourceSession {
 		if (this.clojure != null) {
 			return ClojureSession.isComplete(buffer);
 		}
+		if (this.starlark != null) {
+			return StarlarkSession.isComplete(buffer);
+		}
 		return isBalanced(buffer);
 	}
 
@@ -175,6 +183,12 @@ public final class SourceSession {
 			}
 			return steps;
 		}
+		if (this.starlark != null) {
+			for (StarlarkTopLevel topLevel : this.starlark.read(buffer)) {
+				steps.add(new Step(topLevel.forms(), topLevel.echoes()));
+			}
+			return steps;
+		}
 		LispReader.ReadPrefix read = this.language.readUntilError(buffer, features, null, SourceStandards.DEFAULT, null,
 				this.clTOrNil);
 		LispReadException error = read.error();
@@ -190,7 +204,7 @@ public final class SourceSession {
 	/**
 	 * The prompt for a fresh form. Common Lisp names the CURRENT package, read fresh
 	 * every time, because which package a bare symbol interns into is otherwise
-	 * invisible; Scheme has no package to show and names itself.
+	 * invisible; the other languages have no package to show and name themselves.
 	 * @param evaluator the session's evaluator
 	 * @return the prompt, trailing space included
 	 */
@@ -201,6 +215,9 @@ public final class SourceSession {
 		if (this.clojure != null) {
 			return "clojure> ";
 		}
+		if (this.starlark != null) {
+			return "starlark> ";
+		}
 		return evaluator.currentPackageName() + "> ";
 	}
 
@@ -209,17 +226,19 @@ public final class SourceSession {
 	 * through the {@code print-object} route for Common Lisp, the Scheme printer
 	 * ({@code #t}, {@code #f}, {@code ()}, case-sensitive symbols) for Scheme, the
 	 * Clojure printer ({@code [...]}, {@code {...}}, {@code #{...}}, demangled symbols)
-	 * for Clojure -- or nothing, for the unspecified object a Scheme effect answers.
+	 * for Clojure, {@code repr} for Starlark -- or nothing, for the unspecified object a
+	 * Scheme effect answers and Starlark's {@code None}.
 	 * @param value the value to show
 	 * @param evaluator the session's evaluator
 	 * @return the text, or {@code null} when the value is not shown
 	 */
 	public @Nullable String echo(LispVal value, LispEvaluator evaluator) {
-		if (this.scheme == null && this.clojure == null) {
+		if (this.scheme == null && this.clojure == null && this.starlark == null) {
 			return evaluator.prin1ToStringRouted(value);
 		}
 		try {
-			LispVal echoed = evaluator.printThrough(this.clojure != null ? CLOJURE_ECHO : ECHO, value);
+			LispVal echoed = evaluator.printThrough(
+					this.clojure != null ? CLOJURE_ECHO : this.starlark != null ? STARLARK_ECHO : ECHO, value);
 			return echoed instanceof LispString written ? written.value() : null;
 		}
 		catch (RuntimeException ex) {

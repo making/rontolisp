@@ -1582,6 +1582,45 @@ class RontoLispCliTest {
 	}
 
 	@Test
+	void theStarlarkReplRunsItsBuffersAsOneFile() throws Exception {
+		// A block ends at a blank line, a bracket continues; an expression echoes its
+		// repr, None nothing. A global bound again is what an earlier buffer's function
+		// calls, an error leaves no list counted as iterated, no buffer freezes what an
+		// earlier one made, and a module runs once.
+		Path module = this.tempDir.resolve("m.star");
+		Files.writeString(module, "print(\"m runs\")\ndef pair(x):\n    return [x, x]\n");
+		String program = """
+				def twice(x):
+				    return 2 * x
+
+				def quad(x):
+				    return twice(twice(x))
+
+				quad(1)
+				twice = lambda x: x + 1
+				quad(1)
+				xs = [1,
+				      2]
+				for x in xs:
+				    xs.append(1 // 0)
+
+				xs.append(3)
+				xs
+				"a"
+				print("hi")
+				None
+				load("%s", "pair")
+				p = pair(1)
+				p.append(2)
+				p
+				load("%s", again = "pair")
+				again(3)
+				""".formatted(module, module);
+		assertThat(runCli(program, "--source-language", "starlark"))
+			.isEqualTo("4\n3\n[1, 2, 3]\n\"a\"\nhi\nm runs\n[1, 1, 2]\n[3, 3]\n");
+	}
+
+	@Test
 	void theTestSubcommandHasItsOwnHelp() {
 		assertThat(runCli("", "test", "--help")).contains("Usage: rontolisp test")
 			.contains("--reporter")

@@ -180,11 +180,12 @@ class StarlarkParserTest {
 			.containsExactly(new SourceLocation("t.star", 1, 1), new SourceLocation("t.star", 1, 8),
 					new SourceLocation("t.star", 1, 5), new SourceLocation("t.star", 2, 17),
 					new SourceLocation("t.star", 2, 13), new SourceLocation("t.star", 2, 19));
-		assertThat(List.of("f(1,", "x = '''abc", "def f():\n"))
+		assertThat(List.of("f(1,", "x = '''abc", "def f():\n", "def f(xs):\n    for x in xs:\n"))
 			.allSatisfy(source -> assertThatThrownBy(() -> parse(source))
 				.isInstanceOfSatisfying(LispReadException.class, e -> assertThat(e.isEndOfFile()).isTrue()));
-		assertThatThrownBy(() -> parse("x = )")).isInstanceOfSatisfying(LispReadException.class,
-				e -> assertThat(e.isEndOfFile()).isFalse());
+		assertThat(List.of("x = )", "def f(xs):\n    for x in xs:\npass\n"))
+			.allSatisfy(source -> assertThatThrownBy(() -> parse(source))
+				.isInstanceOfSatisfying(LispReadException.class, e -> assertThat(e.isEndOfFile()).isFalse()));
 		assertThatThrownBy(() -> StarlarkParser.parse("x = )", null)).hasMessage("got ')', want primary expression");
 	}
 

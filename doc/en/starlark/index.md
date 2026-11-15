@@ -20,9 +20,15 @@ rontolisp hello.star -o hello-c.wasm --component && wasmtime run hello-c.wasm
 rontolisp -e 'print(1 + 2)' --source-language starlark
 ```
 
-`--no-gc` is refused: that backend has no structures, hash tables or closures. There is no
-REPL yet, so `--source-language starlark` without a program is refused, and the examples
-on these pages do not run in the browser.
+`--no-gc` is refused: that backend has no structures, hash tables or closures.
+
+`--source-language starlark` with no program starts a REPL with a `starlark>` prompt. An
+expression shows its `repr`, and `None` shows nothing. A `def`, `if` or `for` ends at a
+blank line. Each input sees what the inputs before it defined.
+
+The examples in this section run in your browser: **Run** runs each one as a program of its
+own, on a fresh interpreter. The [playground](../../../playground.html) reads Starlark when
+you pick it under **language**.
 
 [`examples/starlark/`](https://github.com/making/rontolisp/tree/develop/examples/starlark)
 holds a runnable program with its expected output.

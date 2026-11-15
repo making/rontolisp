@@ -136,10 +136,14 @@ class DocGenTest {
 	}
 
 	@Test
-	void aClojureBlockBecomesAClojureCell() {
+	void clojureAndStarlarkBlocksBecomeCellsOfTheirLanguage() {
 		String html = "<pre><code class=\"language-clojure\">(println (+ 1 2))</code></pre>";
 		assertThat(RunnableBlockTransformer.transform(html)).contains("<div class=\"code-cell\" data-lang=\"clojure\">")
 			.contains("(println (+ 1 2))");
+		html = "<pre><code class=\"language-starlark\">print(1 + 2)</code></pre>";
+		assertThat(RunnableBlockTransformer.transform(html))
+			.contains("<div class=\"code-cell\" data-lang=\"starlark\">")
+			.contains("print(1 + 2)");
 	}
 
 	@Test

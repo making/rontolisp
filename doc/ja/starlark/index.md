@@ -22,8 +22,15 @@ rontolisp -e 'print(1 + 2)' --source-language starlark
 ```
 
 `--no-gc` は拒否されます。そのバックエンドには構造体もハッシュテーブルもクロージャもない
-からです。REPL はまだありません。プログラムを与えずに `--source-language starlark` を
-指定すると拒否され、このセクションの例もブラウザでは実行できません。
+からです。
+
+プログラムを与えずに `--source-language starlark` を指定すると、`starlark>` をプロンプトと
+する REPL が始まります。式は `repr` の形で表示され、`None` は何も表示されません。`def`、
+`if`、`for` は空行で終わります。各入力からは、それより前の入力が定義したものが見えます。
+
+このセクションの例はブラウザ上で実行できます。**Run** はそれぞれを独立したプログラムとして、
+新しいインタプリタで実行します。[playground](../../../playground.html) は **language** で
+Starlark を選ぶと Starlark を読みます。
 
 [`examples/starlark/`](https://github.com/making/rontolisp/tree/develop/examples/starlark)
 に、期待される出力付きで実行できるプログラムがあります。

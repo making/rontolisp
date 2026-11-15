@@ -15,12 +15,14 @@ import am.ik.rontolisp.reader.Features;
  * The browser's interpreter: the playground's REPL and the documentation site's Run
  * cells, in the language picked for it. It lives here rather than beside the {@code @JS}
  * bootstrap in {@code src/web/java} so the JVM test suite runs exactly what the browser
- * runs -- {@code DocExamplesTest} checks a {@code scheme} fence through it.
+ * runs -- {@code DocExamplesTest} checks the {@code scheme}, {@code clojure} and
+ * {@code starlark} fences through it.
  *
  * <p>
  * Every buffer is read through {@link SourceSession}, one per language over the one
- * evaluator, so switching the pick keeps every definition and a Scheme session keeps what
- * its earlier buffers defined ({@code .kb/scheme-frontend.md}, "A session").
+ * evaluator, so switching the pick keeps every definition and a Scheme or Starlark
+ * session keeps what its earlier buffers defined ({@code .kb/scheme-frontend.md},
+ * {@code .kb/starlark-frontend.md}, "A session").
  *
  * <p>
  * Three ways to run a buffer, each returning the text a page shows:
@@ -29,7 +31,8 @@ import am.ik.rontolisp.reader.Features;
  * are echoed, unlike the CLI REPL (every form): a Run cell's block is a setup plus an
  * expression whose FINAL value is the annotated one.</li>
  * <li>{@link #run}: a whole program, read as a file is, standard output only -- a
- * {@code scheme} fence on the documentation site.</li>
+ * {@code scheme}, {@code clojure} or {@code starlark} fence on the documentation
+ * site.</li>
  * <li>{@link #transcript}: every form echoed after its own output, as the CLI REPL does
  * on a pipe -- a {@code scheme} fence carrying {@code ; =>} annotations.</li>
  * </ul>

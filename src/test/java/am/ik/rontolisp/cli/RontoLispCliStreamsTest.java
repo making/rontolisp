@@ -802,13 +802,11 @@ class RontoLispCliStreamsTest {
 			.isEqualTo("error: " + toplevel + ":1:1: for loop not within a function");
 		assertThat(runReporting(toplevel.toString(), "--starlark-standard=python")[2])
 			.contains("--starlark-standard 'python' names no standard");
-		// the scalar backend has none of its values, and no buffer rule reads a block
+		// the scalar backend has none of its values
 		assertThat(runReporting(program.toString(), "-o", this.tempDir.resolve("scalar.wasm").toString(), "--no-gc")[2]
 			.trim())
 			.isEqualTo("error: Cannot compile: a Starlark program needs the GC backend -- --no-gc has no structure,"
 					+ " no hash table and no closure (drop --no-gc)");
-		assertThat(runReporting("--source-language", "starlark")[2].trim())
-			.isEqualTo("error: Starlark is read a file at a time: it has no REPL yet (run a .star file, or -e)");
 		assertThat(runCli("", "-h")).contains("starlark (.star) is");
 	}
 

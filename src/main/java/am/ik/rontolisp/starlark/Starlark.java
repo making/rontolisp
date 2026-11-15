@@ -58,6 +58,16 @@ public final class Starlark {
 	}
 
 	/**
+	 * Starts an interactive session, whose buffers are lowered as one file's run.
+	 * @param standard what every buffer is read against ({@code --starlark-standard})
+	 * @param files where a {@code load} statement's module is read from
+	 * @return the session
+	 */
+	public static StarlarkSession session(StarlarkStandard standard, StarlarkFiles files) {
+		return new StarlarkSession(standard, files);
+	}
+
+	/**
 	 * The run-time library's definitions generated from this package's tables -- the
 	 * attributes of each type, the code points a string's {@code repr} escapes -- which
 	 * {@code eval/StarlarkLibrary} appends to {@code starlark.lisp}.

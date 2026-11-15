@@ -883,8 +883,11 @@ final class StarlarkParser {
 		return new SourceLocation(this.file, token.line(), token.column());
 	}
 
+	// An error at the end of input's outdent is the input running out too: a block
+	// whose header ends the text.
 	private LispReadException error(String message, StarlarkToken token) {
-		return new LispReadException(message, this.at(token), token.kind() == Kind.EOF);
+		return new LispReadException(message, this.at(token),
+				token.kind() == Kind.EOF || token.kind() == Kind.OUTDENT && this.lexer.exhausted());
 	}
 
 }

@@ -58,9 +58,11 @@ The rest, in short:
 - An error report names a module's function behind the module's path:
   `in sl%(words.star)shout`.
 - A module that stopped at an error is not run again by a later `load` of it.
+- At the REPL, a name an input uses is defined by that input or an earlier one, inside a
+  `def` too. A function keeps the built-in a later input's global of the same name hides,
+  and calls the new value of a global defined again. Nothing made at the REPL is frozen.
 
 ## Not there yet
 
 - A `b"..."` literal: it is refused at its position before the program starts.
 - The `bytes` and `set` types and the built-ins that make them.
-- The REPL, the playground's language pick and Run cells on these pages.

@@ -29,14 +29,16 @@ A consumer that reads one buffer at a time asks the LANGUAGE four things, throug
 `eval/SourceSession` (one per REPL): `isComplete` (continue the line or read now), `read`
 (core forms per top-level form, plus whether its value is worth echoing), `print` (the
 language's own `write`) and `prompt` (`CL-USER> ` follows the current package, `scheme> `
-has none). It is a session because a language may carry state between buffers; Scheme
-does (`.kb/scheme-frontend.md`, "A session"), Common Lisp keeps none here. Two consumers:
+has none, nor `clojure> `/`starlark> `). It is a session because a language may carry
+state between buffers; Scheme does (`.kb/scheme-frontend.md`, "A session"), Starlark too
+(the globals and modules of earlier buffers, `.kb/starlark-frontend.md`, "A session"),
+Common Lisp keeps none here. Two consumers:
 `cli/ReplBuffer` (both CLI REPL drivers) and `eval/PlaygroundRepl` (the browser).
 
 ## The browser (`eval/PlaygroundRepl`, 2026-09-19, `.todo/893`)
 
 The playground's REPL and the doc site's Run cells, in the language picked by
-`rontoSetLanguage` (`"lisp"`, `"scheme"`; `parse` names). In the main tree, not beside the
+`rontoSetLanguage` (`"lisp"`, `"scheme"`, `"clojure"`, `"starlark"`; `parse` names). In the main tree, not beside the
 `@JS` bootstrap (`src/web/java/.../RontoPlayground`, now a thin adapter), so the JVM suite
 runs what the browser runs (`PlaygroundReplTest`, and `DocExamplesTest.runScheme`).
 
@@ -50,9 +52,11 @@ runs what the browser runs (`PlaygroundReplTest`, and `DocExamplesTest.runScheme
   route for Common Lisp, as the CLI REPL; it was `print()` before).
 - `run` (a whole program read as a file) and `transcript` (every form echoed after a fresh
   line, the piped CLI REPL) run on a FRESH instance with the cell's stdin: the doc site's
-  Scheme cells (`.kb/documentation-site.md`).
+  Scheme, Clojure and Starlark cells (`.kb/documentation-site.md`).
 - The compile buttons read the pick through `readStrict(source, features, loader)`; its
-  Scheme arm reads the uploaded files an `include` / `define-library` names.
+  Scheme arm reads the uploaded files an `include` / `define-library` names, its Starlark
+  arm the modules a `load` names; the chain splices `StarlarkLibrary` as
+  `CompileFrontend.expand` does.
 - JS calls exported with `Function` / `BiFunction` only; a three-argument call is avoided by
   making the language a pick rather than a parameter.
 
@@ -130,8 +134,9 @@ entry language under `--no-gc`, like Scheme. `defaultExtension()` is per languag
 lowering to core forms in one step, with no `#.` and no reader features, the modules its
 `load` statements name read through the loader, against `SourceStandards.starlark()` --
 and everything downstream is unchanged (`.kb/starlark-frontend.md`). `CompileFrontend.run` refuses the entry language under
-`--no-gc`. It has no `SourceSession` yet: the constructor refuses it, which is what the
-REPL and the playground answer; `-e` and a file are whole programs and read through `read`.
+`--no-gc`. Its `SourceSession` reads a buffer at a time as one file's run, a blank line
+ending a block (`.kb/starlark-frontend.md`, "A session"); `-e` and a file are whole
+programs and read through `read`.
 
 ## The run-time libraries' name gate (2026-10-23)
 
@@ -196,5 +201,6 @@ the spelling already is one).
 `SourceLanguageSeamTest` (no class outside the seam reads user source through
 `LispReader` directly; no stale exemptions), `SourceLanguageTest` (each language claims its
 extension and reads through the seam), `RontoLispCliTest` (the `repl...` and
-`theSchemeRepl...` transcripts, the `.clj` pick and the `clojure>` REPL transcript),
+`theSchemeRepl...` transcripts, the `.clj` pick, the `clojure>` and `starlark>` REPL
+transcripts),
 `JvmSourceCompilerTest`.

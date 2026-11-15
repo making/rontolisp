@@ -97,6 +97,9 @@ import org.jspecify.annotations.Nullable;
  * that symbol's function.</li>
  * <li><b>A file's run is bracketed.</b> Every list and dict made between its first and
  * its last statement is frozen after the last.</li>
+ * <li><b>A session's buffers are one file's run</b> ({@link #interact}): each buffer is
+ * lowered against the globals the buffers before it bound, nothing is frozen, and no call
+ * of a global is direct, since a later buffer may bind the name again.</li>
  * <li><b>Two call tiers.</b> A call whose callee and argument shape are known while
  * lowering -- a top-level {@code def} bound once, a built-in function, a method -- is a
  * direct call of a Common Lisp function with every parameter in place. Any other call
@@ -250,6 +253,11 @@ final class StarlarkLowering {
 
 	private static final LispSymbol FOREIGN = runtime("FOREIGN");
 
+	private static final LispSymbol UNWIND = runtime("UNWIND");
+
+	/** The cell the lists and dicts made now are made under ("Freezing"). */
+	private static final LispSymbol MUTABILITY = runtime("MUTABILITY");
+
 	/** What a {@code load} statement's module starts with when it is a package. */
 	private static final String PACKAGE_MARK = "@";
 
@@ -281,9 +289,37 @@ final class StarlarkLowering {
 		 */
 		private final List<LispVal> definitions = new ArrayList<>();
 
-		Session(StarlarkStandard standard, StarlarkFiles files) {
+		/** Whether the program's file is a session's buffer ({@link Interaction}). */
+		private final boolean interactive;
+
+		Session(StarlarkStandard standard, StarlarkFiles files, boolean interactive) {
 			this.standard = standard;
 			this.files = files;
+			this.interactive = interactive;
+		}
+
+	}
+
+	/**
+	 * What the buffers of one session share: the modules loaded so far, the globals bound
+	 * so far and whether the session's run has begun. A buffer whose lowering fails
+	 * leaves it as it was.
+	 */
+	static final class Interaction {
+
+		private final Session session;
+
+		/** The globals the buffers lowered so far bind. */
+		private final Set<String> globals = new LinkedHashSet<>();
+
+		/** The last number a generated global took: the session's flags are globals. */
+		private int counter;
+
+		/** Whether a buffer started the session's run. */
+		private boolean begun;
+
+		Interaction(StarlarkStandard standard, StarlarkFiles files) {
+			this.session = new Session(standard, files, true);
 		}
 
 	}
@@ -371,6 +407,12 @@ final class StarlarkLowering {
 	/** Whether the file is a {@code load} statement's module, with globals of its own. */
 	private final boolean module;
 
+	/**
+	 * Whether the file is a session's buffer: a later buffer may bind any of its globals
+	 * again, so no call of one is direct.
+	 */
+	private final boolean interactive;
+
 	/** What a global of the file starts with: nothing unless it is a module. */
 	private final String globalPrefix;
 
@@ -418,6 +460,7 @@ final class StarlarkLowering {
 		this.standard = session.standard;
 		this.file = file;
 		this.module = module;
+		this.interactive = session.interactive && !module;
 		this.filePrefix = file == null ? "" : StarlarkNames.filePrefix(file);
 		this.globalPrefix = module ? this.filePrefix : "";
 		this.state = new LispSymbol(this.filePrefix + "%SL-FILE");
@@ -446,11 +489,50 @@ final class StarlarkLowering {
 	 */
 	static List<LispVal> lower(List<Statement> file, StarlarkStandard standard, String source, @Nullable String name,
 			StarlarkFiles files) {
-		Session session = new Session(standard, files);
+		Session session = new Session(standard, files, false);
 		if (name != null) {
 			session.lowering.push(StarlarkNames.key(name));
 		}
 		return new StarlarkLowering(session, source, name, false).program(file);
+	}
+
+	/**
+	 * Lowers one buffer of a session. The globals the buffers before it bound are its
+	 * globals too, read through the check -- such a buffer may have stopped before it
+	 * assigned one -- and the run the first buffer began goes on: nothing is frozen at a
+	 * buffer's end.
+	 * @param interaction what the session's buffers share
+	 * @param statements the buffer's statements
+	 * @param source the buffer's text, which the positions are in
+	 * @return the buffer's steps: the first sets the run up, then one per statement, an
+	 * expression statement's echoed
+	 * @throws LispReadException as {@link #lower}, leaving the session as it was
+	 */
+	static List<StarlarkTopLevel> interact(Interaction interaction, List<Statement> statements, String source) {
+		Session session = interaction.session;
+		Map<String, Module> modules = new HashMap<>(session.modules);
+		// Every buffer loading a module emits its statements again: the buffer that
+		// emitted them first may have stopped before they ran. Its state runs them once.
+		session.modules.values().forEach(module -> module.emitted = false);
+		try {
+			StarlarkLowering lowering = new StarlarkLowering(session, source, null, false);
+			lowering.globals.addAll(interaction.globals);
+			lowering.counter = interaction.counter;
+			List<StarlarkTopLevel> steps = lowering.buffer(statements, interaction);
+			interaction.globals.addAll(lowering.globals);
+			interaction.counter = lowering.counter;
+			interaction.begun = true;
+			return steps;
+		}
+		catch (RuntimeException ex) {
+			session.modules.clear();
+			session.modules.putAll(modules);
+			throw ex;
+		}
+		finally {
+			session.definitions.clear();
+			session.lowering.clear();
+		}
 	}
 
 	/**
@@ -476,7 +558,7 @@ final class StarlarkLowering {
 	 * statements between the two forms that bracket its run.
 	 */
 	private List<LispVal> program(List<Statement> statements) {
-		List<LispVal> body = body(statements);
+		List<LispVal> body = forms(body(statements));
 		// Every direct entry ahead of the first statement: a defun exists from the start
 		// in a compiled program and only once evaluated in the interpreter, so a call
 		// written above its def would otherwise run on three backends and fail on one.
@@ -495,13 +577,15 @@ final class StarlarkLowering {
 	 * lowered apart is emitted by both -- and what another file may load of it.
 	 */
 	private Module module(List<Statement> statements) {
-		List<LispVal> body = body(statements);
+		List<LispVal> body = forms(body(statements));
 		Map<String, Export> exports = new LinkedHashMap<>();
 		for (String name : this.globals) {
 			if (this.loadedOnly.contains(name) || name.startsWith("_")) {
 				continue;
 			}
-			boolean assigned = this.flow.assigned.contains(name);
+			// A session's buffer may load a module whose run stopped at an error: what
+			// it loads is checked then.
+			boolean assigned = this.flow.assigned.contains(name) && !this.session.interactive;
 			if (!assigned) {
 				// a load of it reads it through the check, so it starts unassigned
 				this.checkedGlobals.add(name);
@@ -517,6 +601,38 @@ final class StarlarkLowering {
 		forms.addAll(body);
 		forms.add(guarded(list(SETQ, this.state, list(FILE_END, this.state))));
 		return new Module(exports, List.copyOf(forms));
+	}
+
+	/**
+	 * A session's buffer: a step setting the run up, then the statements' steps. The
+	 * setup gives back what an error in an earlier buffer left counted
+	 * ({@code %starlark-unwind}), makes the session's cell current again -- an error in a
+	 * module's run left the module's -- or, in the first buffer, begins the run, and
+	 * starts the globals the buffer binds first unassigned.
+	 */
+	private List<StarlarkTopLevel> buffer(List<Statement> statements, Interaction interaction) {
+		List<StarlarkTopLevel> body = body(statements);
+		List<LispVal> setup = new ArrayList<>(this.session.definitions);
+		setup.add(list(UNWIND, LispNil.INSTANCE));
+		setup.add(interaction.begun ? list(SETQ, MUTABILITY, this.state) : list(SETQ, this.state, list(FILE_BEGIN)));
+		for (String name : this.globals) {
+			if (!interaction.globals.contains(name)) {
+				setup.add(list(SETQ, global(name), UNBOUND));
+			}
+		}
+		for (LispSymbol flag : this.active) {
+			setup.add(list(SETQ, flag, list(LIST, LispNil.INSTANCE)));
+		}
+		List<StarlarkTopLevel> steps = new ArrayList<>();
+		steps.add(new StarlarkTopLevel(setup, false));
+		steps.addAll(body);
+		return steps;
+	}
+
+	private static List<LispVal> forms(List<StarlarkTopLevel> steps) {
+		List<LispVal> forms = new ArrayList<>();
+		steps.forEach(step -> forms.addAll(step.forms()));
+		return forms;
 	}
 
 	/**
@@ -540,13 +656,14 @@ final class StarlarkLowering {
 	}
 
 	/**
-	 * The file's statements as top-level forms, in order: a {@code load} statement is its
-	 * module's statements, the first time the lowering meets the module, then the
-	 * assignments of what it binds. The files it loads are lowered first -- a function
-	 * above a {@code load} statement calls what it binds -- and the definitions go to the
-	 * session.
+	 * The file's statements as top-level forms, in order, one step per statement: a
+	 * {@code load} statement is its module's statements, the first time the lowering
+	 * meets the module, then the assignments of what it binds. The files it loads are
+	 * lowered first -- a function above a {@code load} statement calls what it binds --
+	 * and the definitions go to the session. At a session's prompt an expression
+	 * statement is the one step echoed, a literal included.
 	 */
-	private List<LispVal> body(List<Statement> statements) {
+	private List<StarlarkTopLevel> body(List<Statement> statements) {
 		if (this.standard == StarlarkStandard.SPEC) {
 			specTopLevel(statements);
 		}
@@ -555,7 +672,7 @@ final class StarlarkLowering {
 		this.globals.addAll(bound.keySet());
 		Map<String, Integer> loaded = new HashMap<>();
 		for (Statement statement : statements) {
-			if (statement instanceof Def def && bound.getOrDefault(def.name(), 0) == 1
+			if (statement instanceof Def def && !this.interactive && bound.getOrDefault(def.name(), 0) == 1
 					&& new Parameters(def.parameters()).isPlain()) {
 				this.direct.put(def.name(), def);
 				this.callees.put(def.name(), new Callee(global(def.name()), def.parameters().size()));
@@ -570,26 +687,30 @@ final class StarlarkLowering {
 				this.loadedOnly.add(name);
 			}
 		});
-		List<LispVal> forms = new ArrayList<>();
+		List<StarlarkTopLevel> steps = new ArrayList<>();
 		Frame frame = new Frame(Scope.TOP);
 		for (Statement statement : statements) {
 			if (statement instanceof Load load) {
 				Loaded bindings = Objects.requireNonNull(this.loads.get(load));
 				Module module = bindings.module();
+				List<LispVal> forms = new ArrayList<>();
 				if (module != null && !module.emitted) {
 					module.emitted = true;
 					forms.addAll(module.forms);
 				}
 				bindings.assignments().forEach(assignment -> forms.add(guarded(assignment)));
 				this.flow.assigned.addAll(bindings.locals());
+				steps.add(new StarlarkTopLevel(forms, false));
 				continue;
 			}
-			LispVal form = statement(statement, frame);
+			ExpressionStatement shown = this.interactive && statement instanceof ExpressionStatement expression
+					? expression : null;
+			LispVal form = shown != null ? expression(shown.expression(), Scope.TOP) : statement(statement, frame);
 			if (form != null) {
-				forms.add(guarded(located(form, statement.at())));
+				steps.add(new StarlarkTopLevel(List.of(guarded(located(form, statement.at()))), shown != null));
 			}
 		}
-		return forms;
+		return steps;
 	}
 
 	// ---- load ----
@@ -1625,7 +1746,7 @@ final class StarlarkLowering {
 					return direct != null ? direct : general(builtinValue(builtin), arguments, scope);
 				}
 			}
-			Callee entry = scope.binds(name) ? null : this.callees.get(name);
+			Callee entry = scope.binds(name) || this.interactive ? null : this.callees.get(name);
 			if (entry != null && (entry.parameters() < 0 || entry.parameters() == arguments.size())
 					&& arguments.stream().allMatch(argument -> argument.kind() == ArgumentKind.POSITIONAL)) {
 				// the callee first: a call above the def, or above the load statement,

@@ -43,14 +43,14 @@ import am.ik.rontolisp.reader.Features;
  * installs callables on the JavaScript global scope:
  * <ul>
  * <li>{@code rontoSetLanguage(name)} - pick the language every other call reads
- * ({@code "lisp"}, the default, or {@code "scheme"}); answers the picked language's
- * name.</li>
+ * ({@code "lisp"}, the default, {@code "scheme"}, {@code "clojure"} or
+ * {@code "starlark"}); answers the picked language's name.</li>
  * <li>{@code rontoEval(source)} - interpret source in a persistent REPL
  * environment and return the captured output plus the last form's values.</li>
  * <li>{@code rontoRunProgram(source, stdin)} / {@code rontoRunSession(source, stdin)} -
  * run source on a FRESH interpreter reading {@code stdin}: as a whole program
  * (its output), or form by form with every value echoed (the documentation site's
- * Scheme cells).</li>
+ * Scheme, Clojure and Starlark cells).</li>
  * <li>{@code rontoCompileJvm(source, className)} - compile to a JVM
  * {@code .class} file, returned as a Base64 string; a program whose class needs files
  * beside it (a bridge, a runtime class) answers {@value #FILES_PREFIX} and one
@@ -205,7 +205,8 @@ public final class RontoPlayground {
 		// The strict (error-mode) read is deliberate here, not a leftover: this
 		// reduced frontend has no marker-resolution pass, so a #. must be a read
 		// error rather than a marker no pass resolves. A Scheme source is read with
-		// the uploaded files its include / define-library name.
+		// the uploaded files its include / define-library name, a Starlark one with the
+		// modules its load statements name.
 		List<LispVal> read = WitImportInliner.inline(repl.language().readStrict(source, features, uploads), null,
 				backend, uploads);
 		// objc:, appkit:, metal: and scene: need the Objective-C runtime on the machine
@@ -229,7 +230,8 @@ public final class RontoPlayground {
 							.process(LinalgLibrary.process(GeomLibrary.process(TorchLibrary
 								.process(GgufLibrary.process(TokenizersLibrary
 									.process(am.ik.rontolisp.eval.ClojureLibrary.process(
-											am.ik.rontolisp.eval.SchemeLibrary.process(read, features,
+											am.ik.rontolisp.eval.SchemeLibrary.process(
+													am.ik.rontolisp.eval.StarlarkLibrary.process(read), features,
 													am.ik.rontolisp.eval.SourceStandards.DEFAULT),
 											!features.contains("rontolisp-wasm"))))))), backend)),
 						features))))));
