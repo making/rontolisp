@@ -25,6 +25,7 @@ import java.util.stream.Stream;
 import am.ik.rontolisp.LispBigInteger;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
+import am.ik.rontolisp.LispIntVector;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
@@ -1951,11 +1952,19 @@ final class StarlarkLowering {
 
 	/**
 	 * {@code target op= value}: the target's operands are evaluated once, before the
-	 * value. {@code +=} extends a list in place.
+	 * value. {@code +=} extends a list in place, {@code |=}, {@code &=}, {@code -=} and
+	 * {@code ^=} update a set, and {@code |=} a dict, in place.
 	 */
 	private LispVal augmented(AugmentedAssignment assignment, Scope scope) {
 		BinaryOperator operator = assignment.operator();
-		LispSymbol helper = operator == BinaryOperator.PLUS ? ADD_IN_PLACE : arithmetic(operator);
+		LispSymbol helper = switch (operator) {
+			case PLUS -> ADD_IN_PLACE;
+			case MINUS -> runtime("SUB-IN-PLACE");
+			case BIT_OR -> runtime("BIT-OR-IN-PLACE");
+			case BIT_AND -> runtime("BIT-AND-IN-PLACE");
+			case BIT_XOR -> runtime("BIT-XOR-IN-PLACE");
+			default -> arithmetic(operator);
+		};
 		BiFunction<LispVal, LispVal, LispVal> generic = (left, right) -> list(helper, left, right);
 		Kind kind = kind(assignment.value(), scope);
 		LispVal value = expression(assignment.value(), scope);
@@ -2001,7 +2010,8 @@ final class StarlarkLowering {
 			case IntLiteral literal -> integer(literal.value());
 			case FloatLiteral literal -> new LispDouble(literal.value());
 			case StringLiteral literal -> string(literal.value());
-			case BytesLiteral literal -> throw error("bytes literals are not supported yet", literal.at());
+			case BytesLiteral literal ->
+				list(runtime("BYTES-LITERAL"), LispIntVector.wrapOctets(literal.value().clone()));
 			case Unary unary -> unary(unary, scope);
 			case Binary binary -> binary(binary, scope);
 			case Conditional conditional -> list(IF, test(conditional.condition(), scope),

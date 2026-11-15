@@ -24,7 +24,7 @@ and every user surface says so (`--source-language` help, the title of
   type, `repr`'s escape table), handled the `UrlLibrary` way by `eval/StarlarkLibrary`: the interpreter loads it on the first resolution of a
   `rontolisp::%starlark-` FUNCTION, `CompileFrontend.expand` splices it beside
   `SchemeLibrary` (inside the prelude, whose string comparisons and `search` it is written
-  over) and `LibraryDefunPruner` drops what stays unreachable -- its five `defstruct`s are
+  over) and `LibraryDefunPruner` drops what stays unreachable -- its seven `defstruct`s are
   expanded by NAME like Scheme's (`starlarkStructNames`), so a program carries the
   accessors it reaches. The name gate is the spelling: `mayDefine` admits a member
   starting `%STARLARK-` (`.kb/source-language.md`, "The run-time libraries' name gate")
@@ -71,7 +71,7 @@ and every user surface says so (`--source-language` help, the title of
 |---|---|
 | `None`, `True`, `False` | `:none`, `T`, `NIL` (a name, so a file may rebind it) |
 | int, float, string | integer (bignum), double, string literal; `-1` is the literal |
-| list, tuple, dict, range, function | structures of `starlark.lisp`: a list an adjustable vector plus the cell it was made under ("Freezing") and an iteration count, a tuple a simple vector, a dict an `equal` hash table from a key's normal form to `(key . value)` plus the same two |
+| list, tuple, dict, set, bytes, range, function | structures of `starlark.lisp`: a list an adjustable vector plus the cell it was made under ("Freezing") and an iteration count, a tuple a simple vector, a dict an `equal` hash table from a key's normal form to `(key . value)` plus the same two, a set a dict of its own, a bytes an `(unsigned-byte 8)` vector ("Bytes and sets") |
 | `[a, b]`, `(a, b)`, `{k: v}` | `(%starlark-make-list a b)`, `-make-tuple`, `-make-dict` (a key written twice is an error) |
 | the same, every element a constant | `(%starlark-list-of '(1 "s" :none))`, `-tuple-of`, `-dict-of '(k v ..)`: quoted data, the value made anew from it each time; with such an expression as an element `(%starlark-literal '(:%list 1 (:%tuple 2) (:%dict "k" 3)))` |
 | top-level `x = v` | top-level `(setq x v)`, never `defvar` (a special would leak into callees) |
@@ -92,7 +92,7 @@ and every user surface says so (`--source-language` help, the title of
 | `a and b` as a value | `(let ((v a)) (if (%starlark-truth v) b v))`; `(if a b nil)` when `a` is a known Boolean |
 | `a[i] = v`, `a, b = v` | `(%starlark-set-index a i v)`; `(let ((u (%starlark-unpack v 2))) (setq a (aref u 0)) ..)` |
 | `a, b = b, a + b` (a tuple or list of targets, a tuple or list expression of as many) | `(let ((e1 b) (e2 (+ a b))) (setq a e1) (setq b e2))`: no tuple; every element before the first target, pairing through nested ones |
-| `x += v`, `a[i] += v` | `(setq x (%starlark-add-in-place x v))` (a list is extended in place), tested or inline like the binary operator; the target's operands bound once when they are more than a variable |
+| `x += v`, `a[i] += v` | `(setq x (%starlark-add-in-place x v))` (a list is extended in place), tested or inline like the binary operator; the target's operands bound once when they are more than a variable; `-=`, `\|=`, `&=`, `^=` the same through `-sub-in-place`, `-bit-or-in-place` .. (a set, and for `\|=` a dict, updated in place) |
 | call of a top-level `def` with a direct entry whose arguments fit | `(f a b)`, bound while lowering like a built-in's: positional and named arguments at their parameters, a default the constant it is written as or the global its `def` statement set, surplus ones as `(%starlark-make-tuple ..)` / `(%starlark-make-dict "k" v ..)`; `(progn (%starlark-global f "f") (f a b))` where the `def` may not have run |
 | call of a built-in function whose arguments fit its signature | `(%starlark-b-sorted xs :none t)`: bound while lowering, defaults filled in |
 | `x.m(..)` whose arguments fit | `(%starlark-m-append x v)`: the helper takes the receiver first and tests it |
@@ -102,7 +102,7 @@ and every user surface says so (`--source-language` help, the title of
 | a file | `(setq sl%(FILE)%SL-FILE (%starlark-file-begin))` ahead of its statements, `(%starlark-file-end sl%(FILE)%SL-FILE)` after them ("Freezing") |
 | `load("m.star", "f", y = "x")` | the module's `defun`s and `(defvar sl%(m.star)%SL-FILE nil)` with the program's definitions; where the first load of it stands `(setq STATE (if STATE t (%starlark-file-begin)))`, each of its statements as `(if (consp STATE) stmt)`, `(if (consp STATE) (setq STATE (%starlark-file-end STATE)))`; then `(setq f sl%(m.star)f) (setq y sl%(m.star)x)`, through `(%starlark-loaded v "x" "m.star")` where a path of the module may not assign it ("Modules") |
 | `load("@cl-user", f = "add-two")` | `(setq f (%starlark-foreign "cl-user:add-two" #'add-two))`; a call of `f` with positional arguments only is `(add-two a b)` ("Across languages") |
-| `b".."` | refused at its position |
+| `b".."` | `(%starlark-bytes-literal #(104 105))`: the reader's `byte[]` as a packed octet vector (`LispIntVector.wrapOctets`, `.kb/packed-integer-vectors.md`) |
 
 ## Names
 
@@ -314,6 +314,46 @@ A loop counts itself on the list or dict it walks (`%starlark-iterate` /
 normal exit -- the loop's end, `break`, a `return` -- by the lowering, and after an error by
 the boundary ("Frames").
 
+## Bytes and sets (2026-11-15)
+
+**A set is a structure over a dict of its own** (`%starlark-set`, slot `dict`), the
+elements its keys, every value `:none`: hashing (`%starlark-key`), order, the frozen cell,
+the loop count, frames and `%starlark-unwind` are the dict's, unchanged. A loop over a set
+counts on its dict (`%starlark-iterate` recurs on it). Rejected: `(:include
+%starlark-dict)` -- every `dict-p` dispatch (`get`, `keys`, `**`, `x[k]`, `dict(x)`, `|`)
+would take a set for a dict unless guarded one by one. **A bytes is a structure over an
+`(unsigned-byte 8)` vector** (`%starlark-bytes`, slot `octets`), so it is neither a
+string nor a list on any backend; the literal's vector is shared, nothing writes it.
+
+- Spec, where Go differs: `b[i]` is an int (Go: a one-byte bytes); `<` .. on sets is
+  `unsupported comparison` (Go: subset/superset); `set()` prints `set()` (Java, Python;
+  Go `set([])`). Go's: `repr` of a bytes is `syntax.Quote(.., true)` -- valid UTF-8 as
+  a string's text, any other octet `\xHH` (one decoder, `%starlark-utf8-decode`, serves
+  it and `str`, which gives U+FFFD per such octet); `hash` of a bytes is 32-bit FNV-1a,
+  non-negative; the messages (`int in bytes: .. out of range ..`, `'in bytes' requires
+  ..`, `bytes: at index i, ..`, `pop: empty set`).
+- `bytes(str)` is the UTF-8 of the string's code points (a surrogate code as U+FFFD's), so
+  the spec's `bytes("hello 😃"[:-1])` example (a broken sequence) cannot arise.
+- `|=` of two dicts updates in place, as the spec and Go's `INPLACE_PIPE` say; until this
+  item it rebound a new dict. Mutating `|=`, `&=`, `-=`, `^=` check the target as a method
+  does (`cannot apply |= to frozen set`).
+- `dict|set.update(*args, **kwargs)` is one helper (the table's rule for a shared name):
+  `d.update(1, 2)` is now the helper's `update: got 2 arguments, want at most 1`.
+- `set.pop()` lists the keys first (O(n)), like `dict.popitem`: `maphash` cannot stop
+  early without a non-local exit, which is EH mode on wasm.
+- Sizes (`.class` / `.wasm` / component, before -> after; base `9e5d00733`): `print(1 +
+  2)` 174,520 / 176,175 / 179,914 -> 184,183 / 184,176 / 187,837 (+9.7 / +8.0 / +7.9 KB:
+  `%starlark-write`, which `print` reaches through `str`, dispatches on both types and
+  carries the UTF-8 decoder and the set writer); the prototype's `demo.star` 289,665 /
+  264,109 / 267,848 -> 309,218 / 285,364 / 288,950; `bench.star` 191,366 / 190,650 /
+  194,481 -> 213,420 / 215,306 / 219,037; `examples/starlark/targets.star` 274,854 /
+  259,013 / 262,721 -> 294,885 / 281,584 / 285,176. A generic operator pays for its new
+  branch: `def f(n): return n - 1` plus `print(f(3))` 177,199 / 177,354 -> 194,998 /
+  195,369 (`.class` / `.wasm`; `%starlark-sub`'s set branch brings the set operations and
+  `%starlark-key`), with `n + 1` 179,607 / 179,206 -> 192,869 / 193,356 (the bytes
+  branch). Not reduced here: `.todo/j53`'s question, a program paying for what a generic
+  helper can reach.
+
 ## Frames: what a call that does not return gives back (2026-11-15)
 
 **Decision: the boundary resets, and the boundary is `rontolisp:starlark-call`.** Go gives
@@ -404,7 +444,8 @@ file finds its lists frozen.
   `c0af0ea` says ("not hashable, unless they have become immutable due to freezing", with
   a comment proposing to drop it). Go and Java refuse it ("even a frozen list is
   unhashable"). A frozen dict stays unhashable: its normal form would have to be
-  independent of insertion order, and a `def` key has no order.
+  independent of insertion order, and a `def` key has no order. A frozen set too, for the
+  same reason (the item asked to decide it as for a list, 2026-11-15).
 - The token is a global of the file's (`sl%(FILE)%SL-FILE`), not the current cell: an
   error some handler took inside a file's run leaves another file's cell current, and the
   end must set its own.
@@ -636,8 +677,9 @@ Python accepts and Starlark rejects, so `StarlarkParserTest` pins those by hand.
 ## Tests
 
 `StarlarkSpecE2eTest#conformance` runs bazelbuild/starlark's `test_suite/testdata`
-(`src/test/resources/starlark-conformance/`, Apache-2.0, its `LICENSE` beside it) on four
-backends, one program per FILE: every chunk is read and lowered alone behind the corpus
+(`src/test/resources/starlark-conformance/`, Apache-2.0, its `LICENSE` beside it), plus
+`spec/bytes.star` and `spec/set.star` written here in its form from `spec.md`'s examples
+(the corpus has neither type), on four backends, one program per FILE: every chunk is read and lowered alone behind the corpus
 harness's three assertion `def`s (a reader or name error becomes that chunk's report, so
 every chunk is parsed), each symbol the lowering spells with a lowercase letter -- every
 name of the program, `StarlarkNames` -- is renamed `c<N>%name` so the chunk has globals of

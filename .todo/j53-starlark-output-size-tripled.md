@@ -9,6 +9,9 @@ table, `dir`/`getattr` attribute tables, positions). The demo grew far less (161
 so the growth is a fixed cost every Starlark program pays. Nobody measured where it comes from.
 Since the typed fast paths (same file, "Typed fast paths") `print(1 + 2)` is 174,530 / 176,175 /
 179,914 B: `1 + 2` is `(+ 1 2)` and reaches no `%starlark-add`. The fixed cost is unchanged.
+Since the bytes and set types (j52) it is 184,183 / 184,176 / 187,837 B, and a generic
+operator pays for each type it dispatches on (`n - 1` over a parameter: +17.8 KB of class,
+the set operations behind `%starlark-sub`): `.kb/starlark-frontend.md`, "Bytes and sets".
 
 ## Do
 

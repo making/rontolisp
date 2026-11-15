@@ -207,20 +207,22 @@ class StarlarkLoweringTest {
 				// receiver
 				arguments("def f(x, g):\n    x.update(g(), a = 1)\n    x.nope(g())\n    return x.append\n",
 						"""
-								(DEFUN |f| (|x| |g|) ($M-UPDATE |x| ($CALL |g| NIL NIL) ($MAKE-DICT "a" 1)) ($NO-ATTRIBUTE |x| "nope") \
+								(DEFUN |f| (|x| |g|) ($M-UPDATE |x| ($MAKE-TUPLE ($CALL |g| NIL NIL)) ($MAKE-DICT "a" 1)) ($NO-ATTRIBUTE |x| "nope") \
 								($METHOD |x| '("list") "append" '("x") NIL 1 1 NIL NIL #'$M-APPEND))
 								(SETQ |f| ($MAKE-FUNCTION "f" '("x" "g") NIL 2 NIL NIL #'|f|))"""),
 				// assignment: the value before the target's operands; an augmented one
-				// evaluates the target's operands once, and what it reads
-				arguments("def f(a, g, i):\n    a[g()] = g()\n    a[i], i = i, a\n    a[g()] -= 1\n    i += [1]\n",
+				// evaluates the target's operands once, and what it reads, and updates
+				// a list, a set or a dict in place; a bytes literal is its octets
+				arguments(
+						"def f(a, g, i):\n    a[g()] = g()\n    a[i], i = i, a\n    a[g()] -= 1\n    i += [1]\n    i |= b\"\\xffa\"\n",
 						"""
 								(DEFUN |f| (|a| |g| |i|) \
 								(LET* ((%SL-ARG1 ($CALL |g| NIL NIL)) (%SL-ARG2 ($CALL |g| NIL NIL))) ($SET-INDEX |a| %SL-ARG2 %SL-ARG1)) \
 								(LET ((%SL-ELEMENT3 |i|) (%SL-ELEMENT4 |a|)) \
 								($SET-INDEX |a| |i| %SL-ELEMENT3) (SETQ |i| %SL-ELEMENT4)) \
 								(LET* ((%SL-KEY5 ($CALL |g| NIL NIL))) ($SET-INDEX |a| %SL-KEY5 \
-								(LET* ((%SL-LEFT6 ($INDEX |a| %SL-KEY5))) (IF (INTEGERP %SL-LEFT6) (- %SL-LEFT6 1) ($SUB %SL-LEFT6 1))))) \
-								(SETQ |i| ($ADD-IN-PLACE |i| ($LIST-OF '(1)))) :NONE)
+								(LET* ((%SL-LEFT6 ($INDEX |a| %SL-KEY5))) (IF (INTEGERP %SL-LEFT6) (- %SL-LEFT6 1) ($SUB-IN-PLACE %SL-LEFT6 1))))) \
+								(SETQ |i| ($ADD-IN-PLACE |i| ($LIST-OF '(1)))) (SETQ |i| ($BIT-OR-IN-PLACE |i| ($BYTES-LITERAL #(255 97)))) :NONE)
 								(SETQ |f| ($MAKE-FUNCTION "f" '("a" "g" "i") NIL 3 NIL NIL #'|f|))"""),
 				// --starlark-standard spec: a call while a call of the same declaration
 				// runs is refused, by a flag of the declaration's own, spelled behind
@@ -274,7 +276,6 @@ class StarlarkLoweringTest {
 	static List<Arguments> refusals() {
 		return List.of(arguments("x = 1\nprint(nope)\n", "t.star:2:7: undefined: nope"),
 				arguments("def f():\n    return g()\n", "t.star:2:12: undefined: g"),
-				arguments("x = b\"abc\"\n", "t.star:1:5: bytes literals are not supported yet"),
 				// load: a file that is not there, a name the module keeps or does not
 				// define -- what it loaded itself is not its own -- a file loading the
 				// one that loads it, a name no identifier can bind, a load that is not a
@@ -301,8 +302,7 @@ class StarlarkLoweringTest {
 
 	@ParameterizedTest
 	@MethodSource("refusals")
-	void aNameNothingBindsAMissingConstructAndWhatTheSpecRefusesAreRefusedAtTheirPosition(String source,
-			String message) {
+	void aNameNothingBindsAndWhatTheSpecRefusesAreRefusedAtTheirPosition(String source, String message) {
 		assertThatThrownBy(() -> Starlark.read(source, "t.star", standard(source), BESIDE))
 			.isInstanceOf(LispReadException.class)
 			.hasMessage(message);

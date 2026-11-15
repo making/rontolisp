@@ -71,8 +71,8 @@ The whole grammar of the specification:
 - `load`, for another Starlark file ([Modules](#modules)) and for the functions of a Common
   Lisp package ([Mixing with Common Lisp](common-lisp.md)).
 
-The values are `None`, `True` and `False`, integers of any size, floats, strings, lists,
-tuples, dicts, ranges and functions.
+The values are `None`, `True` and `False`, integers of any size, floats, strings, bytes,
+lists, tuples, dicts, sets, ranges and functions.
 
 ## Built-in functions
 
@@ -81,6 +81,7 @@ tuples, dicts, ranges and functions.
 | `abs(x)` | the absolute value of an int or a float |
 | `all(x)`, `any(x)` | whether every element, or any, is true |
 | `bool(x=False)` | the truth of `x` |
+| `bytes(x)` | a bytes: `x` itself, the UTF-8 encoding of a string, or the ints 0-255 of an iterable |
 | `dict(pairs, **kwargs)` | a new dict: the entries of a dict or of an iterable of pairs, then the named arguments |
 | `dir(x)` | a new sorted list of the names of the methods of `x` |
 | `enumerate(x, start=0)` | a list of `(index, element)` tuples |
@@ -88,15 +89,16 @@ tuples, dicts, ranges and functions.
 | `float(x=0)` | a float from an int, a float, a bool or a string (`"1e3"`, `"inf"`, `"nan"`) |
 | `getattr(x, name, default)` | the method `name` of `x` bound to it, else `default`, else an error |
 | `hasattr(x, name)` | whether `x` has the method `name` |
-| `hash(x)` | the hash of a string |
+| `hash(x)` | the hash of a string or a bytes |
 | `int(x, base)` | an int from an int, a float, a bool, or a string in base 2 to 36 (`base=0` reads a `0x`, `0o` or `0b` prefix) |
-| `len(x)` | the number of elements of a string, list, tuple, dict or range |
+| `len(x)` | the number of elements of a string, bytes, list, tuple, dict, set or range |
 | `list(x)`, `tuple(x)` | a new list, or a tuple, of the elements of an iterable |
 | `max(*args, key=None)`, `min(*args, key=None)` | the greatest, or least, of the arguments or of the one iterable |
 | `print(*args, sep=" ")` | `None`, after writing the `str` of the arguments and a newline to standard output |
 | `range(stop)`, `range(start, stop, step=1)` | a range of integers |
 | `repr(x)`, `str(x)` | `x` as a string; `repr` writes a string between double quotes |
 | `reversed(x)` | a new list in reverse order |
+| `set(x)` | a new set of the elements of an iterable, in their order; `set()` is empty |
 | `sorted(x, key=None, reverse=False)` | a new sorted list; equal elements keep their order |
 | `type(x)` | the name of the type of `x` |
 | `zip(*iterables)` | a list of tuples, as long as the shortest iterable |
@@ -107,6 +109,8 @@ tuples, dicts, ranges and functions.
 |---|---|
 | list | `append`, `clear`, `extend`, `index`, `insert`, `pop`, `remove` |
 | dict | `clear`, `get`, `items`, `keys`, `pop`, `popitem`, `setdefault`, `update`, `values` |
+| set | `add`, `clear`, `difference`, `difference_update`, `discard`, `intersection`, `intersection_update`, `isdisjoint`, `issubset`, `issuperset`, `pop`, `remove`, `symmetric_difference`, `symmetric_difference_update`, `union`, `update` |
+| bytes | `elems` |
 | string | `capitalize`, `codepoint_ords`, `codepoints`, `count`, `elem_ords`, `elems`, `endswith`, `find`, `format`, `index`, `isalnum`, `isalpha`, `isdigit`, `islower`, `isspace`, `istitle`, `isupper`, `join`, `lower`, `lstrip`, `partition`, `removeprefix`, `removesuffix`, `replace`, `rfind`, `rindex`, `rpartition`, `rsplit`, `rstrip`, `split`, `splitlines`, `startswith`, `strip`, `title`, `upper` |
 
 A method is called on its receiver, or taken as a value bound to it:
@@ -122,7 +126,23 @@ print(push, log, "banana".count("an"), {"k": 1}.get("missing", 0))
 <built-in method append of list value> ["a"] 2 0
 ```
 
-A list or a dict is not changed while a loop runs over it. Like every error, the attempt
+A set keeps its elements in the order they were first added. `|`, `&`, `-` and `^` answer a
+new set, and `|=`, `&=`, `-=` and `^=` change the set on the left (`|=` a dict too). A bytes
+is an immutable sequence of ints 0-255: indexing answers an int, slicing a bytes, and `str`
+decodes it as UTF-8.
+
+```starlark
+seen = set([3, 1, 3])
+seen |= set([2, 1])
+data = b"h\xc3\xa9"
+print(seen, seen & set([1, 2]), 2 in seen, repr(data), len(data), data[0], str(data[1:]))
+```
+
+```
+set([3, 1, 2]) set([1, 2]) True b"hé" 3 104 é
+```
+
+A list, a dict or a set is not changed while a loop runs over it. Like every error, the attempt
 ends the program:
 
 ```console
@@ -153,9 +173,9 @@ path is relative to the file holding the statement.
   that loads it are errors before the program starts.
 - A module is read when the program is compiled, so a compiled program carries it.
 
-**When a file has run, the lists and dicts made while it ran are frozen**: changing one is
-an error from then on. A list or dict that a function of the file makes when it is called
-later belongs to the caller. A frozen list is a dict key.
+**When a file has run, the lists, dicts and sets made while it ran are frozen**: changing
+one is an error from then on. A list, dict or set that a function of the file makes when it
+is called later belongs to the caller. A frozen list is a dict key.
 
 ```console
 $ cat words.star

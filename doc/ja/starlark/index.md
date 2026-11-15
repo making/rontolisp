@@ -72,8 +72,8 @@ f(1, 2.5, None, x="a", y=[1, (2,)])
 - `load`。ほかの Starlark ファイル（[モジュール](#modules)）と、Common Lisp のパッケージの
   関数（[Common Lisp との混在](common-lisp.md)）を読み込みます。
 
-値は `None`、`True` と `False`、大きさに制限のない整数、浮動小数点数、文字列、リスト、
-タプル、辞書、range、関数です。
+値は `None`、`True` と `False`、大きさに制限のない整数、浮動小数点数、文字列、bytes、
+リスト、タプル、辞書、集合、range、関数です。
 
 ## 組み込み関数
 
@@ -82,6 +82,7 @@ f(1, 2.5, None, x="a", y=[1, (2,)])
 | `abs(x)` | 整数または浮動小数点数の絶対値 |
 | `all(x)`、`any(x)` | すべての要素が真か、いずれかの要素が真か |
 | `bool(x=False)` | `x` の真偽 |
+| `bytes(x)` | bytes。`x` 自身、文字列の UTF-8 符号化、またはイテラブルの 0 から 255 の整数 |
 | `dict(pairs, **kwargs)` | 新しい辞書。辞書またはペアのイテラブルの項目に、名前付き引数を加えたもの |
 | `dir(x)` | `x` のメソッド名をソートした新しいリスト |
 | `enumerate(x, start=0)` | `(添字, 要素)` のタプルのリスト |
@@ -89,15 +90,16 @@ f(1, 2.5, None, x="a", y=[1, (2,)])
 | `float(x=0)` | 整数、浮動小数点数、真偽値、文字列（`"1e3"`、`"inf"`、`"nan"`）から作った浮動小数点数 |
 | `getattr(x, name, default)` | `x` に束縛したメソッド `name`。なければ `default`、それもなければエラー |
 | `hasattr(x, name)` | `x` がメソッド `name` を持つか |
-| `hash(x)` | 文字列のハッシュ値 |
+| `hash(x)` | 文字列または bytes のハッシュ値 |
 | `int(x, base)` | 整数、浮動小数点数、真偽値、または 2 進から 36 進の文字列から作った整数（`base=0` は `0x`、`0o`、`0b` の接頭辞を読みます） |
-| `len(x)` | 文字列、リスト、タプル、辞書、range の要素数 |
+| `len(x)` | 文字列、bytes、リスト、タプル、辞書、集合、range の要素数 |
 | `list(x)`、`tuple(x)` | イテラブルの要素からなる新しいリスト、またはタプル |
 | `max(*args, key=None)`、`min(*args, key=None)` | 引数の中、または 1 つだけ渡したイテラブルの中で最大、または最小の要素 |
 | `print(*args, sep=" ")` | `None`。引数の `str` と改行を標準出力に書きます |
 | `range(stop)`、`range(start, stop, step=1)` | 整数の range |
 | `repr(x)`、`str(x)` | `x` を表す文字列。`repr` は文字列を二重引用符で囲みます |
 | `reversed(x)` | 逆順の新しいリスト |
+| `set(x)` | イテラブルの要素をその順に持つ新しい集合。`set()` は空の集合 |
 | `sorted(x, key=None, reverse=False)` | ソートした新しいリスト。等しい要素の順序は保たれます |
 | `type(x)` | `x` の型の名前 |
 | `zip(*iterables)` | タプルのリスト。長さは最も短いイテラブルに合わせます |
@@ -108,6 +110,8 @@ f(1, 2.5, None, x="a", y=[1, (2,)])
 |---|---|
 | list | `append`, `clear`, `extend`, `index`, `insert`, `pop`, `remove` |
 | dict | `clear`, `get`, `items`, `keys`, `pop`, `popitem`, `setdefault`, `update`, `values` |
+| set | `add`, `clear`, `difference`, `difference_update`, `discard`, `intersection`, `intersection_update`, `isdisjoint`, `issubset`, `issuperset`, `pop`, `remove`, `symmetric_difference`, `symmetric_difference_update`, `union`, `update` |
+| bytes | `elems` |
 | string | `capitalize`, `codepoint_ords`, `codepoints`, `count`, `elem_ords`, `elems`, `endswith`, `find`, `format`, `index`, `isalnum`, `isalpha`, `isdigit`, `islower`, `isspace`, `istitle`, `isupper`, `join`, `lower`, `lstrip`, `partition`, `removeprefix`, `removesuffix`, `replace`, `rfind`, `rindex`, `rpartition`, `rsplit`, `rstrip`, `split`, `splitlines`, `startswith`, `strip`, `title`, `upper` |
 
 メソッドはレシーバに対して呼び出すか、レシーバに束縛された値として取り出します:
@@ -123,7 +127,22 @@ print(push, log, "banana".count("an"), {"k": 1}.get("missing", 0))
 <built-in method append of list value> ["a"] 2 0
 ```
 
-リストや辞書は、それを走査するループの実行中には変更できません。ほかのエラーと同じく、
+集合は要素を最初に加えた順に保ちます。`|`、`&`、`-`、`^` は新しい集合を返し、`|=`、`&=`、
+`-=`、`^=` は左辺の集合を変更します（`|=` は辞書も変更します）。bytes は 0 から 255 の整数の
+変更できない列です。添字は整数を、スライスは bytes を返し、`str` は UTF-8 として復号します。
+
+```starlark
+seen = set([3, 1, 3])
+seen |= set([2, 1])
+data = b"h\xc3\xa9"
+print(seen, seen & set([1, 2]), 2 in seen, repr(data), len(data), data[0], str(data[1:]))
+```
+
+```
+set([3, 1, 2]) set([1, 2]) True b"hé" 3 104 é
+```
+
+リスト、辞書、集合は、それを走査するループの実行中には変更できません。ほかのエラーと同じく、
 変更しようとするとプログラムが終了します:
 
 ```console
@@ -156,9 +175,9 @@ Unhandled condition: cannot append to list during iteration
 - モジュールはコンパイル時に読まれるので、コンパイルしたプログラムにはモジュールが
   含まれます。
 
-**ファイルの実行が終わると、その実行中に作られたリストと辞書は凍結されます。** 凍結された
-値を変更しようとするとエラーになります。そのファイルの関数があとで呼び出されたときに作る
-リストや辞書は、呼び出した側のものです。凍結されたリストは辞書のキーにできます。
+**ファイルの実行が終わると、その実行中に作られたリスト、辞書、集合は凍結されます。** 凍結
+された値を変更しようとするとエラーになります。そのファイルの関数があとで呼び出されたときに
+作るリスト、辞書、集合は、呼び出した側のものです。凍結されたリストは辞書のキーにできます。
 
 ```console
 $ cat words.star

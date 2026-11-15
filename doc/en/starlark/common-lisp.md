@@ -39,7 +39,7 @@ Hi, Lisp
 abc
 ```
 
-Once `load` returns, the lists and dicts the file made are [frozen](index.md#modules). A
+Once `load` returns, the lists, dicts and sets the file made are [frozen](index.md#modules). A
 call that ends in an error some handler takes (`handler-case`) leaves nothing counted: the
 lists its loops were running over can be changed again.
 

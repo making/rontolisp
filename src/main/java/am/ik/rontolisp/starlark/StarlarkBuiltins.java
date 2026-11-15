@@ -47,23 +47,23 @@ final class StarlarkBuiltins {
 	static final LispSymbol REQUIRED = new LispSymbol(":%REQUIRED");
 
 	private static final Map<String, Signature> FUNCTIONS = table("abs(x, /)", "all(x, /) -> bool", "any(x, /) -> bool",
-			"bool(x=False, /) -> bool", "dict(pairs=unset, /, **kwargs)", "dir(x, /)",
+			"bool(x=False, /) -> bool", "bytes(x, /)", "dict(pairs=unset, /, **kwargs)", "dir(x, /)",
 			"enumerate(iterable, /, start=0)", "fail(*args, sep=' ')", "float(x=0, /)",
 			"getattr(x, name, default=unset, /)", "hasattr(x, name, /) -> bool", "hash(x, /) -> int",
 			"int(x, /, base=unset) -> int", "len(x, /) -> int", "list(x=unset, /)", "max(*args, key=None)",
 			"min(*args, key=None)", "print(*args, sep=' ')", "range(start_or_stop, stop=unset, step=1, /)",
-			"repr(x, /)", "reversed(sequence, /)", "sorted(iterable, /, *, key=None, reverse=False)", "str(x, /)",
-			"tuple(x=unset, /)", "type(x, /)", "zip(*args)");
+			"repr(x, /)", "reversed(sequence, /)", "set(x=unset, /)", "sorted(iterable, /, *, key=None, reverse=False)",
+			"str(x, /)", "tuple(x=unset, /)", "type(x, /)", "zip(*args)");
 
 	// A name two types share is one helper that tells the receivers apart: its
 	// parameters are what either takes.
-	private static final Map<String, Signature> METHODS = table("list.append(x, /)", "list|dict.clear()",
+	private static final Map<String, Signature> METHODS = table("list.append(x, /)", "list|dict|set.clear()",
 			"list.extend(x, /)", "list|string.index(x, start=None, end=None, /) -> int", "list.insert(index, x, /)",
-			"list|dict.pop(key=unset, default=unset, /)", "list.remove(x, /)", "dict.get(key, default=None, /)",
+			"list|dict|set.pop(key=unset, default=unset, /)", "list|set.remove(x, /)", "dict.get(key, default=None, /)",
 			"dict.items()", "dict.keys()", "dict.popitem()", "dict.setdefault(key, default=None, /)",
-			"dict.update(pairs=unset, /, **kwargs)", "dict.values()", "string.capitalize()", "string.codepoint_ords()",
+			"dict|set.update(*args, **kwargs)", "dict.values()", "string.capitalize()", "string.codepoint_ords()",
 			"string.codepoints()", "string.count(sub, start=None, end=None, /) -> int", "string.elem_ords()",
-			"string.elems()", "string.endswith(suffix, start=None, end=None, /) -> bool",
+			"string|bytes.elems()", "string.endswith(suffix, start=None, end=None, /) -> bool",
 			"string.find(sub, start=None, end=None, /) -> int", "string.format(*args, **kwargs)",
 			"string.isalnum() -> bool", "string.isalpha() -> bool", "string.isdigit() -> bool",
 			"string.islower() -> bool", "string.isspace() -> bool", "string.istitle() -> bool",
@@ -74,7 +74,11 @@ final class StarlarkBuiltins {
 			"string.rsplit(sep=None, maxsplit=None, /)", "string.rstrip(cutset=None, /)",
 			"string.split(sep=None, maxsplit=None, /)", "string.splitlines(keepends=False, /)",
 			"string.startswith(prefix, start=None, end=None, /) -> bool", "string.strip(cutset=None, /)",
-			"string.title()", "string.upper()");
+			"string.title()", "string.upper()", "set.add(x, /)", "set.difference(*others)",
+			"set.difference_update(*others)", "set.discard(x, /)", "set.intersection(*others)",
+			"set.intersection_update(*others)", "set.isdisjoint(x, /) -> bool", "set.issubset(x, /) -> bool",
+			"set.issuperset(x, /) -> bool", "set.symmetric_difference(x, /)", "set.symmetric_difference_update(x, /)",
+			"set.union(*others)");
 
 	private StarlarkBuiltins() {
 	}

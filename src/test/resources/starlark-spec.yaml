@@ -427,6 +427,18 @@ standalone:
       main <A><A> <b> 2 ["start"] function
       [1, 2, 3] a frozen list is a key [1]
     error: cannot append to frozen list
+  # A set made while a module ran is frozen as a list is: read, never written.
+  - name: a-set-made-while-a-module-ran-is-frozen
+    files:
+      marks.star: |
+        marks = set(["m"])
+    source: |
+      load("marks.star", "marks")
+      print(marks, "m" in marks, marks | set(["n"]))
+      marks.add("n")
+    stdout: |
+      set(["m"]) True set(["m", "n"])
+    error: cannot insert into frozen set
   # Across languages nothing is converted. A Common Lisp file loads Starlark files: their
   # globals are its variables, and rontolisp:starlark-call calls a def, a built-in or a
   # method value with positional arguments. A Starlark file loads the functions of a

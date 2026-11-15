@@ -8,7 +8,8 @@ here, on every backend alike.
 
 **A string is a sequence of code points.** `len`, indexing and slicing count Unicode code
 points; the specification's two string models count UTF-8 bytes or UTF-16 units. `hash` is
-the specification's number all the same.
+the specification's number all the same, and `bytes` of a string is the UTF-8 encoding of
+its code points: no string holds part of a character.
 
 ```starlark
 print(len("𝄞"), "naïve"[2], "日本語"[::-1], hash("𝄞"))
@@ -39,9 +40,10 @@ error: count.star:1:1: for loop not within a function
 ```
 
 **Freezing follows when a value was made, not what reaches it.** The specification freezes
-what a file's globals reach when the file has run; here every list and dict made while the
-file ran is frozen, also one no global holds. A frozen list is a dict key, as the
-specification says; a frozen dict is not. (The Go and Java implementations refuse both.)
+what a file's globals reach when the file has run; here every list, dict and set made while
+the file ran is frozen, also one no global holds. A frozen list is a dict key, as the
+specification says; a frozen dict or set is not. (The Go and Java implementations refuse
+all three.)
 
 The rest, in short:
 
@@ -62,8 +64,3 @@ The rest, in short:
 - At the REPL, a name an input uses is defined by that input or an earlier one, inside a
   `def` too. A function keeps the built-in a later input's global of the same name hides,
   and calls the new value of a global defined again. Nothing made at the REPL is frozen.
-
-## Not there yet
-
-- A `b"..."` literal: it is refused at its position before the program starts.
-- The `bytes` and `set` types and the built-ins that make them.
