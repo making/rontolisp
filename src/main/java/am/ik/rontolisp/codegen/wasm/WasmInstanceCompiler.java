@@ -393,43 +393,138 @@ final class WasmInstanceCompiler {
 
 	/** {@code (%obj-is obj '<tag1> '<tag2> ...)}. */
 	static void compileIs(LispCons cons, WasmLispCompiler.Ctx ctx) {
-		List<LispVal> args = cons.toList();
 		if (gateOff(ctx)) {
-			evaluateForEffectThenNil(args.get(1), ctx);
+			evaluateForEffectThenNil(cons.toList().get(1), ctx);
 			return;
 		}
+		emitIsI32(cons, ctx);
+		WasmEmitHelper.emitBoolFromI32(ctx);
+	}
+
+	/**
+	 * {@link #compileIs} as the raw i32 truth a test position consumes
+	 * ({@link WasmConditionCompiler}): non-0 exactly when the object is an instance of
+	 * one of the tags.
+	 * @param cons the {@code %obj-is} form
+	 * @param ctx the compile context
+	 */
+	static void emitIsI32(LispCons cons, WasmLispCompiler.Ctx ctx) {
+		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int objSlot = ctx.allocTemp();
 		setLocal(ctx, objSlot);
+		emitIsI32(ctx, objSlot, args.subList(2, args.size()));
+	}
+
+	/**
+	 * Whether the object in {@code objSlot} is an instance of one of the quoted
+	 * {@code tags}, as an i32. At the speed levels one tag is one type test, five bytes
+	 * more than the test and the cast it replaces:
+	 * {@code block (result i32) block (result eqref) local.get obj; br_on_cast_fail 0
+	 * eqref (ref $instance); struct.get $instance 0; i32.const address; i32.eq; br 1 end
+	 * drop; i32.const 0 end}. A module no instance can exist in answers 0.
+	 * @param ctx the compile context
+	 * @param objSlot the local holding the object
+	 * @param tags the quoted tags
+	 */
+	static void emitIsI32(WasmLispCompiler.Ctx ctx, int objSlot, List<LispVal> tags) {
+		List<Integer> addresses = new java.util.ArrayList<>();
+		for (LispVal tag : tags) {
+			// A tag no registered layout carries can never match; the interpreter
+			// answers nil for it too.
+			Integer address = gateOff(ctx) ? null : ctx.layoutAddresses.get(quotedTag(tag, LispNames.OBJ_IS));
+			if (address != null) {
+				addresses.add(address);
+			}
+		}
+		if (addresses.isEmpty()) {
+			i32Const(ctx, 0);
+			return;
+		}
+		if (addresses.size() == 1 && WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
+			ctx.writer.write(Instruction.BLOCK);
+			ctx.writer.write(Type.I32);
+			ctx.writer.write(Instruction.BLOCK);
+			ctx.writer.writeRefType(true, Type.EQ.code());
+			getLocal(ctx, objSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.BR_ON_CAST_FAIL);
+			ctx.writer.write(0x01); // the operand nullable, the cast not
+			ctx.writer.writeUnsignedLeb128(0);
+			ctx.writer.writeHeapType(Type.EQ.code());
+			ctx.writer.writeHeapType(ctx.instanceTypeIndex);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
+			ctx.writer.writeUnsignedLeb128(0);
+			i32Const(ctx, addresses.get(0));
+			ctx.writer.write(Instruction.I32_EQ);
+			ctx.writer.write(Instruction.BR);
+			ctx.writer.writeUnsignedLeb128(1);
+			ctx.writer.write(Instruction.END);
+			ctx.writer.write(Instruction.DROP);
+			i32Const(ctx, 0);
+			ctx.writer.write(Instruction.END);
+			return;
+		}
 		getLocal(ctx, objSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
 		ctx.writer.write(Instruction.IF);
 		ctx.writer.write(Type.I32);
-		boolean any = false;
-		for (int i = 2; i < args.size(); i++) {
-			Integer address = ctx.layoutAddresses.get(quotedTag(args.get(i), LispNames.OBJ_IS));
-			if (address == null) {
-				// A tag no registered layout carries can never match; the interpreter
-				// answers nil for it too.
-				continue;
-			}
+		for (int i = 0; i < addresses.size(); i++) {
 			getLocal(ctx, objSlot);
 			pushLayoutAddress(ctx);
-			i32Const(ctx, address);
+			i32Const(ctx, addresses.get(i));
 			ctx.writer.write(Instruction.I32_EQ);
-			if (any) {
+			if (i > 0) {
 				ctx.writer.write(Instruction.I32_OR);
 			}
-			any = true;
-		}
-		if (!any) {
-			i32Const(ctx, 0);
 		}
 		ctx.writer.write(Instruction.ELSE);
 		i32Const(ctx, 0);
 		ctx.writer.write(Instruction.END);
-		WasmEmitHelper.emitBoolFromI32(ctx);
+	}
+
+	/**
+	 * Slot {@code index} of the object in {@code objSlot} when it is an instance, in one
+	 * type test, else what {@code miss} leaves: {@link #emitChecked}'s shape over a
+	 * local.
+	 * @param ctx the compile context
+	 * @param objSlot the local holding the object
+	 * @param index the slot's index
+	 * @param miss emits the value of a read of anything else
+	 */
+	static void emitReadOr(WasmLispCompiler.Ctx ctx, int objSlot, int index, Runnable miss) {
+		ctx.writer.write(Instruction.BLOCK);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		ctx.writer.write(Instruction.BLOCK);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		getLocal(ctx, objSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.BR_ON_CAST_FAIL);
+		ctx.writer.write(0x01); // the operand nullable, the cast not
+		ctx.writer.writeUnsignedLeb128(0);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
+		ctx.writer.writeUnsignedLeb128(1);
+		castBuckets(ctx);
+		pushCellIndex(ctx, index);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.write(Instruction.BR);
+		ctx.writer.writeUnsignedLeb128(1);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.DROP);
+		miss.run();
+		ctx.writer.write(Instruction.END);
+	}
+
+	/**
+	 * {@return whether an instance can exist in this module}
+	 * @param ctx the compile context
+	 */
+	static boolean instancesExist(WasmLispCompiler.Ctx ctx) {
+		return !gateOff(ctx);
 	}
 
 	/** {@code (%obj-tag obj)}: the tag symbol, or nil for a non-instance. */

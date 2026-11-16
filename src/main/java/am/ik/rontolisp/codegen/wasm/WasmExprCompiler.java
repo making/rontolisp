@@ -1139,7 +1139,11 @@ final class WasmExprCompiler {
 				// the body right here, so the call boundary's box/unbox round trip
 				// disappears even outside a larger expression tree.
 				else if (!WasmIntFusionCompiler.tryCompileDefunCall(cons, ctx, tail)) {
-					WasmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx, tail);
+					// A defstruct predicate or slot reader is the type test or the field
+					// read its body is, not a call of it.
+					if (!WasmStructAccess.tryCompile(cons, ctx)) {
+						WasmFunctionCallCompiler.compileDefault(sym.name(), cons, ctx, tail);
+					}
 				}
 			}
 			if (redefinedClFunction) {

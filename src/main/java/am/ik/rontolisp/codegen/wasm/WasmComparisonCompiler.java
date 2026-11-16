@@ -29,10 +29,59 @@ final class WasmComparisonCompiler {
 		// _rat_cmp_bits returns the comparison as a bitmask (1 = lt, 2 = eq,
 		// 4 = gt, 0 = unordered), so a NaN operand fails every operator. The old
 		// signum _rat_cmp against zero answered "equal" for NaN.
-		WasmExprCompiler.compileExpr(args.get(1), ctx);
-		WasmExprCompiler.compileExpr(args.get(2), ctx);
-		emitGenericCompare(ctx, maskFor(i32Opcode));
+		emitUnfusedCompare(args, ctx, i32Opcode);
 		WasmEmitHelper.emitBoolFromI32(ctx);
+	}
+
+	/**
+	 * The comparison of two operands no fused tree took, as the i32 truth of the
+	 * operator. At the speed levels two fixnums compare inline -- {@code block (result
+	 * i32) block (result eqref) a; br_on_cast_fail 0 i31; i31.get_s; b; br_on_cast_fail 0
+	 * i31; i31.get_s; op; br 1 end drop; a; b; generic end} over the operands in temps --
+	 * and only another pair calls {@link #emitGenericCompare}: a call spills the live
+	 * references around it, which is what a bounds test of a variable against a length
+	 * paid beside {@code _rat_cmp_bits}' own fixnum test.
+	 */
+	private static void emitUnfusedCompare(List<LispVal> args, WasmLispCompiler.Ctx ctx, int i32Opcode) {
+		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		if (!WasmIntFusionCompiler.speedTradesEnabled(ctx) || ctx.asyncResume != null) {
+			WasmExprCompiler.compileExpr(args.get(2), ctx);
+			emitGenericCompare(ctx, maskFor(i32Opcode));
+			return;
+		}
+		am.ik.wasm.WasmWriter w = ctx.writer;
+		int left = ctx.allocTemp();
+		w.write(am.ik.wasm.Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(left);
+		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		int right = ctx.allocTemp();
+		w.write(am.ik.wasm.Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(right);
+		w.write(am.ik.wasm.Instruction.BLOCK);
+		w.write(am.ik.wasm.Type.I32);
+		w.write(am.ik.wasm.Instruction.BLOCK);
+		w.writeRefType(true, am.ik.wasm.Type.EQ.code());
+		for (int slot : new int[] { left, right }) {
+			w.write(am.ik.wasm.Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(slot);
+			w.write(am.ik.wasm.Instruction.GC_PREFIX, am.ik.wasm.Instruction.BR_ON_CAST_FAIL);
+			w.write(0x01); // the operand nullable, the cast not
+			w.writeUnsignedLeb128(0);
+			w.writeHeapType(am.ik.wasm.Type.EQ.code());
+			w.writeHeapType(am.ik.wasm.Type.I31.code());
+			w.write(am.ik.wasm.Instruction.GC_PREFIX, am.ik.wasm.Instruction.I31_GET_S);
+		}
+		w.write(i32Opcode);
+		w.write(am.ik.wasm.Instruction.BR);
+		w.writeUnsignedLeb128(1);
+		w.write(am.ik.wasm.Instruction.END);
+		w.write(am.ik.wasm.Instruction.DROP);
+		w.write(am.ik.wasm.Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(left);
+		w.write(am.ik.wasm.Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(right);
+		emitGenericCompare(ctx, maskFor(i32Opcode));
+		w.write(am.ik.wasm.Instruction.END);
 	}
 
 	/**
@@ -222,9 +271,7 @@ final class WasmComparisonCompiler {
 			// cost a _t_sym call per true answer -- and would root the symbol machinery
 			// (_t_sym, _str_build) in a module that otherwise never makes a string.
 			// Not a speed-for-size trade, so it holds at every optimize level.
-			WasmExprCompiler.compileExpr(args.get(1), ctx);
-			WasmExprCompiler.compileExpr(args.get(2), ctx);
-			emitGenericCompare(ctx, maskFor(i32Opcode));
+			emitUnfusedCompare(args, ctx, i32Opcode);
 		}
 	}
 

@@ -2610,6 +2610,11 @@ on wasm-GC even in EH mode.
   (a packed integer vector's length, dimension 0) that calls it only on a miss; a pinned-kind
   read at the speed levels does the same after `_idx_chk`. A packed integer store's raw value waits
   in an i64 temp. `_idx_chk` answers a limb-tier integer rather than trapping in `_int_val`.
+  Since 2026-11-16 a rank-1 access of an unpinned or `GENERAL` array at the speed levels asks
+  ahead of all of it, inline, whether the array is a general vector with storage of its own and
+  the subscript a fixnum below `dims[0]` -- the same bound -- and a miss runs the calls above
+  unchanged, so they stay what reports (`.kb/adjustable-arrays.md`, "What an element access
+  costs").
 - **wasm-GC, every mode**: a rank-2+ access checks each axis (`_idx_in`, a trap outside EH mode --
   the wrap-around above was a wrong answer there); a `--simd` block's zero padding past its count is
   checked (`_idx_bound`), where no engine check reaches. **A rank-1 access outside EH mode keeps the

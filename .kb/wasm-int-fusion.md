@@ -252,7 +252,8 @@ measured 28 KB of `update-sha256-block`'s 60 KB). The test runs once per call, a
   off bails into its boxed shadow at every assignment, slower AND larger than either end
   (`.kb/optimize-dead-code-elimination.md`).
 - A single fusable op with neither a raw-reading leaf nor a literal operand. It calls
-  `_rat_add`/`_rat_sub`/`_rat_mul`, whose i31 head (below) is what makes it fast.
+  `_rat_add`/`_rat_sub`/`_rat_mul`, whose i31 head (below) is what makes it fast; a
+  comparison compares two fixnums at its site (below).
 - More than **64 ops or 32 expression leaves** (the site emits the tree twice;
   `.kb/wasm-function-body-size.md`).
 - A node whose immediate argument is a literal double (the `hasDoubleLiteral` f64 path keeps
@@ -284,10 +285,19 @@ paid `_rat_add -> _big_add -> _int_val x2 -> _int_new`.
   comes here, and measured there: +102 bytes on `zlib` (0.06%), +84 on `dom_reactor` (3%), which is the
   forwarder lost, against `(+ cells 4)` at 31 instructions for 95 and a third of a filter's instructions
   going through it: `http_headers` 28,126 -> 22,200 (`.kb/proxy-wasm-sdk.md`).
+- **A comparison of two plain operands has the head at its site** (2026-11-16,
+  `WasmComparisonCompiler.emitUnfusedCompare`, speed levels, value and test positions):
+  both operands in temps, two `br_on_cast_fail` to i31 and the i32 compare, the generic
+  comparison behind them for any other pair. The both-plain-leaves shape stays out of
+  `tryCompileCompare` (its fallback would be this again, twice the bytes). About 30 B a
+  site. Measured with and without it, everything else equal: `listidx.star` 2.17 -> 2.07 s
+  and `sorting.star` 4.28 -> 4.01 s on wasm, `dicts` / `methods` / `comps` / `mixed`
+  within noise, the modules 0.7-0.8% larger. The call it saves spills the live references
+  around it, which is what the helper's own head could not buy back.
 - Tests: `WasmRatioRuntimeBuilderTest`,
   `WasmLispCompilerIntegrationTest.theGenericArithmeticHelpersAnswerEveryTierThroughTheirI31Head`
-  (tier boundaries at every level, SBCL output), ci-spec `eql-of-a-literal-and-a-literal-evaluated-twice`
-  (the comparisons).
+  (tier boundaries at every level, SBCL output, the five comparisons of two parameters
+  too), ci-spec `eql-of-a-literal-and-a-literal-evaluated-twice` (the comparisons).
 
 ## Mechanics
 

@@ -2115,7 +2115,9 @@ class WasmLispCompilerIntegrationTest {
 		// --optimize=size those helpers open with an i31 x i31 head that answers in i64
 		// and boxes through _int_new; the head must not change any answer at a tier
 		// boundary: i31 overflow into TYPE_BIGNUM, i64 into the limb tier, a ratio, a
-		// float. Expected output: SBCL.
+		// float. Expected output: SBCL. A comparison of two such operands has the same
+		// head at its site (WasmComparisonCompiler.emitUnfusedCompare), with
+		// _rat_cmp_bits behind it for any pair that is not two fixnums.
 		String program = """
 				(defun add (a b) (+ a b))
 				(defun sub (a b) (- a b))
@@ -2134,6 +2136,9 @@ class WasmLispCompilerIntegrationTest {
 				(print (mul 2 1.5))
 				(print (sub 7 9223372036854775807))
 				(print (fib 25))
+				(defun cmp (a b) (list (< a b) (<= a b) (= a b) (>= a b) (> a b)))
+				(print (list (cmp 1 2) (cmp 2 2) (cmp -1073741824 1073741823) (cmp 1073741824 1) (cmp 1 1073741824)
+				             (cmp 1/2 1) (cmp 1 1.5) (cmp 9223372036854775808 1)))
 				""";
 		List<LispVal> parsed = LispReader.readAllFromString(program);
 		String expected = """
@@ -2149,7 +2154,9 @@ class WasmLispCompilerIntegrationTest {
 				3/2
 				3.0
 				-9223372036854775800
-				75025""";
+				75025
+				((T T NIL NIL NIL) (NIL T T T NIL) (T T NIL NIL NIL) (NIL NIL NIL T T) (T T NIL NIL NIL) \
+				(T T NIL NIL NIL) (T T NIL NIL NIL) (NIL NIL NIL T T))""";
 		for (OptimizeLevel level : OptimizeLevel.values()) {
 			byte[] module = WasmLispCompiler.builder().optimize(level).build().compile(parsed);
 			assertThat(runModule(module, "i31-head-" + level + ".wasm")).as("at %s", level).isEqualTo(expected);
@@ -22739,6 +22746,14 @@ class WasmLispCompilerIntegrationTest {
 				(print (te (lambda () (incf (point-x "s")))))
 				(print (te (lambda () (copy-point nil))))
 				(let ((p (make-point :x 1))) (setf (point-y p) 2) (incf (point-x p)) (print (list p (copy-point p))))
+				(defstruct (point3 (:include point)) z)
+				(defun kind (x) (cond ((point3-p x) :point3) ((point-p x) :point) (t :other)))
+				(defun xs (ps) (mapcar #'point-x ps))
+				(print (list (kind (make-point3 :x 7)) (kind (make-point)) (kind 1) (point-p (make-point3))
+				             (not (point3-p (make-point))) (xs (list (make-point :x 1) (make-point3 :x 2)))
+				             (point-x (point-x (make-point :x (make-point :x 9)))) (point3-z (make-point3 :z 3))))
+				(print (te (lambda () (point-x (point-y (make-point :y 42))))))
+				(print (te (lambda () (xs (list 1)))))
 				""";
 		String expected = """
 				(42 T "POINT-X: The value 42 is not of type POINT")
@@ -22747,8 +22762,49 @@ class WasmLispCompilerIntegrationTest {
 				:V
 				("s" T "POINT-X: The value \\"s\\" is not of type POINT")
 				(NIL T "COPY-POINT: The value NIL is not of type POINT")
-				(#S(POINT :X 2 :Y 2) #S(POINT :X 2 :Y 2))""";
-		assertThat(compileAndRunPrelude(source)).isEqualTo(expected);
+				(#S(POINT :X 2 :Y 2) #S(POINT :X 2 :Y 2))
+				(:POINT3 :POINT :OTHER T T (1 2) 9 3)
+				(42 T "POINT-X: The value 42 is not of type POINT")
+				(1 T "POINT-X: The value 1 is not of type POINT")""";
+		// A call of a predicate or a reader is the type test or the slot read its body
+		// is (WasmStructAccess), at the speed levels; a reader handed anything else
+		// calls the definition, whose report it is. Every level, P1 and component.
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(source));
+		for (OptimizeLevel level : OptimizeLevel.values()) {
+			assertThat(runModule(WasmLispCompiler.builder().optimize(level).build().compile(program),
+					"struct-access-" + level + ".wasm"))
+				.as("level %s", level)
+				.isEqualTo(expected);
+		}
+		assertThat(compileComponentAndRunProgram(program)).isEqualTo(expected);
+		// A name a run-time definition can replace keeps its call: every defun of a
+		// program holding eval has a cell, and the call answers what the cell holds.
+		assertThat(runModule(new WasmLispCompiler().compile(am.ik.rontolisp.cli.CompileFrontendAccess.corpus("""
+				(defstruct box v)
+				(defun get-v (b) (box-v b))
+				(print (get-v (make-box :v 1)))
+				(eval '(defun box-v (b) (list :replaced (box-p b))))
+				(print (get-v (make-box :v 1)))
+				(eval '(defun box-p (b) (declare (ignore b)) :never))
+				(print (list (get-v (make-box :v 1)) (if (box-p 5) :yes :no)))
+				""", am.ik.rontolisp.reader.Features.WASM, true, false)), "struct-access-replaced.wasm"))
+			.isEqualTo("1\n(:REPLACED T)\n((:REPLACED :NEVER) :YES)");
+		// What an element behind a structure costs: the slot read, the type test and the
+		// read or the store of a general vector's element are inline, where each was a
+		// call (two for a read, three for a store) around a dispatch over every array
+		// representation. 200,000 rounds of a store and a read: 78.5 M of fuel, 126.7 M
+		// before.
+		assertThat(compileAndRunWithFuel("""
+				(defstruct shelf items)
+				(defun shelf-get (s i) (if (shelf-p s) (aref (shelf-items s) i) 0))
+				(defun shelf-put (s i x) (if (shelf-p s) (setf (aref (shelf-items s) i) x) 0))
+				(defun shelf-run (s n)
+				  (let ((sum 0))
+				    (dotimes (k n) (shelf-put s (mod k 8) k) (setq sum (+ sum (shelf-get s (mod k 8)))))
+				    sum))
+				(print (handler-case (shelf-run (make-shelf :items (make-array 8 :initial-element 0)) 200000)
+				         (error (e) e)))
+				""", 100_000_000L)).isEqualTo("19999900000");
 	}
 
 	@Test

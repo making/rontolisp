@@ -150,8 +150,17 @@ final class WasmConditionCompiler {
 				}
 				return true;
 			}
+			case LispNames.OBJ_IS -> {
+				WasmInstanceCompiler.emitIsI32(cons, ctx);
+				if (negated) {
+					ctx.writer.write(Instruction.I32_EQZ);
+				}
+				return true;
+			}
 			default -> {
-				return WasmComparisonCompiler.tryCompileConditionI32(test, ctx, negated);
+				// A defstruct predicate is the type test its body is.
+				return WasmStructAccess.tryCompileTest(cons, ctx, negated)
+						|| WasmComparisonCompiler.tryCompileConditionI32(test, ctx, negated);
 			}
 		}
 	}

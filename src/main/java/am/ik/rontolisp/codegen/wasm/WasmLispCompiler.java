@@ -5112,6 +5112,22 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 			}
 		}
+		// The defuns a call of which is the instance primitive their body is
+		// (WasmStructAccess): a defstruct's predicates and slot readers, under the
+		// conditions an inlinable defun's substitution has.
+		Map<String, DefunDecl> structAccessDefuns = new HashMap<>();
+		if (!this.dynamic) {
+			Map<String, Integer> defunCounts = new HashMap<>();
+			for (DefunDecl defun : defuns) {
+				defunCounts.merge(defun.name(), 1, Integer::sum);
+			}
+			for (DefunDecl defun : defuns) {
+				if (defunCounts.getOrDefault(defun.name(), 0) == 1 && !asyncDefunNames.contains(defun.name())
+						&& WasmStructAccess.isAccessDefun(defun)) {
+					structAccessDefuns.put(defun.name(), defun);
+				}
+			}
+		}
 		// a function that declares its own wrong-count report (DeclaredArityReport) is
 		// named like a built-in operator, through the same shared message function
 		this.emitsArityMessage = ehMode && hasLandingPad && this.usesInstances
@@ -5275,6 +5291,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			.rawSentinelGlobalIndex(rawSentinelGlobalIndex)
 			.functions(functions)
 			.inlinableDefuns(inlinableDefuns)
+			.structAccessDefuns(structAccessDefuns)
 			.duplicatedDefunNames(duplicatedDefunNames)
 			.constantArrays(constantArrays)
 			.leafConstantArrays(leafConstantArrays)
@@ -12140,6 +12157,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		Map<String, DefunDecl> inlinableDefuns = Map.of();
 
 		/**
+		 * Uniquely-defined one-parameter defuns whose body is a type test or a slot read
+		 * of the parameter -- a {@code defstruct}'s predicates and slot readers -- which
+		 * a call site compiles as that primitive ({@link WasmStructAccess}). Empty under
+		 * {@code --dynamic}.
+		 */
+		Map<String, DefunDecl> structAccessDefuns = Map.of();
+
+		/**
 		 * Let-bound local functions (the {@code __FLETn_f} lambdas flet lowers to) in
 		 * scope whose bodies are closed integer-operation trees -- the fusion compiler
 		 * substitutes them at {@code (funcall __FLETn_f ...)} sites. Scoped by
@@ -13434,6 +13459,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			this.parkStrResultFuncIndex = builder.parkStrResultFuncIndex;
 			this.callbackExports = builder.callbackExports;
 			this.inlinableDefuns = builder.inlinableDefuns;
+			this.structAccessDefuns = builder.structAccessDefuns;
 			this.duplicatedDefunNames = builder.duplicatedDefunNames;
 			this.constantArrays = builder.constantArrays;
 			this.leafConstantArrays = builder.leafConstantArrays;
@@ -13472,6 +13498,8 @@ public final class WasmLispCompiler implements LispCompiler {
 			private Map<String, WasmFunctionInfo> functions = Map.of();
 
 			private Map<String, DefunDecl> inlinableDefuns = Map.of();
+
+			private Map<String, DefunDecl> structAccessDefuns = Map.of();
 
 			private Set<String> duplicatedDefunNames = Set.of();
 
@@ -13822,6 +13850,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				this.parkStrResultFuncIndex = proto.parkStrResultFuncIndex;
 				this.callbackExports = proto.callbackExports;
 				this.inlinableDefuns = proto.inlinableDefuns;
+				this.structAccessDefuns = proto.structAccessDefuns;
 				this.duplicatedDefunNames = proto.duplicatedDefunNames;
 				this.constantArrays = proto.constantArrays;
 				this.leafConstantArrays = proto.leafConstantArrays;
@@ -13849,6 +13878,11 @@ public final class WasmLispCompiler implements LispCompiler {
 
 			Builder inlinableDefuns(Map<String, DefunDecl> inlinableDefuns) {
 				this.inlinableDefuns = inlinableDefuns;
+				return this;
+			}
+
+			Builder structAccessDefuns(Map<String, DefunDecl> structAccessDefuns) {
+				this.structAccessDefuns = structAccessDefuns;
 				return this;
 			}
 

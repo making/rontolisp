@@ -959,6 +959,16 @@ final class WasmArrayCompiler {
 				// check (compileSubscript).
 				compileSubscript(subscript, ctx);
 				int idxSlot = setTemp(ctx);
+				if (kind == DeclaredArrayTypes.Kind.GENERAL && subscriptCount == 1) {
+					// a general vector: its element inline, and the bound of what the arm
+					// refuses through its call
+					emitSimpleVectorAccess(ctx, arrSlot, idxSlot, -1, () -> {
+						emitKindedCheckRank(ctx, kind, arrSlot, subscriptCount);
+						emitFlatCheck(ctx, arrSlot, idxSlot, false);
+						emitKindedAref1(ctx, kind, arrSlot, idxSlot, true);
+					});
+					return;
+				}
 				emitKindedCheckRank(ctx, kind, arrSlot, subscriptCount);
 				emitFlatCheck(ctx, arrSlot, idxSlot, false, kindedBound(ctx, kind, arrSlot, subscriptCount));
 				emitKindedAref1(ctx, kind, arrSlot, idxSlot, true);
@@ -969,6 +979,17 @@ final class WasmArrayCompiler {
 				int idxSlot = setTemp(ctx);
 				emitKindedCheckRank(ctx, kind, arrSlot, subscriptCount);
 				emitKindedAref1(ctx, kind, arrSlot, idxSlot, false);
+				return;
+			}
+			if (kind == null && subscriptCount == 1 && WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
+				// No representation known: a simple general vector reads inline, anything
+				// else through the checks and the dispatch below.
+				compileSubscript(subscript, ctx, reportsBounds(ctx));
+				int idxSlot = setTemp(ctx);
+				emitSimpleVectorAccess(ctx, arrSlot, idxSlot, -1, () -> {
+					emitReadChecks(ctx, arrSlot, idxSlot, subscriptCount);
+					emitAref1FromSlots(ctx, arrSlot, idxSlot, reportsBounds(ctx));
+				});
 				return;
 			}
 			int idxSlot = compileReadSubscript(subscript, ctx, arrSlot, subscriptCount);
@@ -1878,6 +1899,9 @@ final class WasmArrayCompiler {
 		boolean checked = reportsBounds(ctx) || subscriptCount >= 2;
 		testFarray(ctx, arrSlot);
 		emitIfEq(ctx);
+		// Each arm evaluates the subscripts and the value itself, so an exit one of them
+		// takes counts the arms it leaves.
+		ctx.wasmCtrlDepth++;
 		// packed: store the coerced f64 (narrowing to f32 for a single-float array) at
 		// data[Horner(subscripts)], returning the value AS STORED (read back widened) to
 		// match the interpreter/JVM across widths. Evaluation order: array (done),
@@ -1924,29 +1948,43 @@ final class WasmArrayCompiler {
 			// arm's rank always matches and it checks none.
 			testIntVector(ctx, arrSlot);
 			emitIfEq(ctx);
+			ctx.wasmCtrlDepth++;
 			emitPackedIntStore(ctx, arrSlot, args.get(2), args.get(args.size() - 1), resultNeeded);
 			ctx.writer.write(Instruction.ELSE);
 		}
 		// general: data[flat] = val, leaving val as the result -- the shared _arr_set
 		// answers the value it stored.
-		if (checked) {
+		if (subscriptCount == 1) {
+			// One subscript: a simple vector stores inline, anything else through the
+			// checks and the shared store.
+			compileSubscript(args.get(2), ctx);
+			int idxSlot = setTemp(ctx);
+			WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
+			int valSlot = setTemp(ctx);
+			emitSimpleVectorAccess(ctx, arrSlot, idxSlot, valSlot, () -> {
+				emitArefCheckRank(ctx, arrSlot, subscriptCount);
+				if (checked) {
+					// the bound through its call: what reaches here is the miss
+					emitFlatCheck(ctx, arrSlot, idxSlot, false);
+				}
+				getLocal(ctx, arrSlot);
+				castCellGet0(ctx);
+				getLocal(ctx, idxSlot);
+				WasmEmitHelper.castI31GetS(ctx);
+				getLocal(ctx, valSlot);
+				callArrSet(ctx);
+			});
+		}
+		else if (checked) {
 			int[] gSubs = compileSubscripts(ctx, args, 2, subscriptCount);
 			WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
 			int valSlot = setTemp(ctx);
 			emitArefCheckRank(ctx, arrSlot, subscriptCount);
-			if (subscriptCount == 1) {
-				emitFlatCheck(ctx, arrSlot, gSubs[0], false, generalBound(ctx, arrSlot, 0));
-			}
 			getLocal(ctx, arrSlot);
 			castCellGet0(ctx);
-			if (subscriptCount == 1) {
-				getLocal(ctx, gSubs[0]);
-				WasmEmitHelper.castI31GetS(ctx);
-			}
-			else {
-				emitCheckedFlatIndex(ctx, gSubs, k -> generalBound(ctx, arrSlot, k));
-			}
+			emitCheckedFlatIndex(ctx, gSubs, k -> generalBound(ctx, arrSlot, k));
 			getLocal(ctx, valSlot);
+			callArrSet(ctx);
 		}
 		else {
 			getLocal(ctx, arrSlot);
@@ -1956,11 +1994,13 @@ final class WasmArrayCompiler {
 			emitFlatIndex(ctx, headerSlot, args, 2, subscriptCount);
 			WasmExprCompiler.compileExpr(args.get(args.size() - 1), ctx);
 			emitArefCheckRank(ctx, arrSlot, subscriptCount);
+			callArrSet(ctx);
 		}
-		callArrSet(ctx);
 		if (subscriptCount == 1) {
+			ctx.wasmCtrlDepth--;
 			ctx.writer.write(Instruction.END);
 		}
+		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END);
 		if (!resultNeeded) {
 			ctx.writer.write(Instruction.DROP);
@@ -2044,13 +2084,22 @@ final class WasmArrayCompiler {
 					int idxSlot = setTemp(ctx);
 					WasmExprCompiler.compileExpr(valueExpr, ctx);
 					int valSlot = setTemp(ctx);
-					emitArefCheckRank(ctx, arrSlot, given);
-					emitFlatCheck(ctx, arrSlot, idxSlot, false, given == 1 ? generalBound(ctx, arrSlot, 0) : null);
-					getLocal(ctx, arrSlot);
-					castCellGet0(ctx);
-					getLocal(ctx, idxSlot);
-					WasmEmitHelper.castI31GetS(ctx);
-					getLocal(ctx, valSlot);
+					Runnable store = () -> {
+						emitArefCheckRank(ctx, arrSlot, given);
+						emitFlatCheck(ctx, arrSlot, idxSlot, false);
+						getLocal(ctx, arrSlot);
+						castCellGet0(ctx);
+						getLocal(ctx, idxSlot);
+						WasmEmitHelper.castI31GetS(ctx);
+						getLocal(ctx, valSlot);
+						callArrSet(ctx);
+					};
+					if (given == 1) {
+						emitSimpleVectorAccess(ctx, arrSlot, idxSlot, valSlot, store);
+					}
+					else {
+						store.run();
+					}
 				}
 				else {
 					getLocal(ctx, arrSlot);
@@ -2059,8 +2108,8 @@ final class WasmArrayCompiler {
 					WasmEmitHelper.castI31GetS(ctx);
 					WasmExprCompiler.compileExpr(valueExpr, ctx);
 					emitArefCheckRank(ctx, arrSlot, given);
+					callArrSet(ctx);
 				}
-				callArrSet(ctx);
 				if (!resultNeeded) {
 					ctx.writer.write(Instruction.DROP);
 				}
@@ -2183,10 +2232,158 @@ final class WasmArrayCompiler {
 	 * nothing: the check could only pass, and it was a call per access.
 	 */
 	private static void compileSubscript(LispVal subscript, WasmLispCompiler.Ctx ctx) {
+		compileSubscript(subscript, ctx, false);
+	}
+
+	/**
+	 * {@link #compileSubscript(LispVal, WasmLispCompiler.Ctx)}, or with {@code unchecked}
+	 * the subscript alone: its type is then checked with the rest of the access
+	 * ({@link #emitReadChecks}). At the speed levels a fixnum passes on a type test and
+	 * only another value calls {@code _idx_chk}.
+	 */
+	private static void compileSubscript(LispVal subscript, WasmLispCompiler.Ctx ctx, boolean unchecked) {
 		WasmExprCompiler.compileExpr(subscript, ctx);
-		if (!WasmIntFusionCompiler.answersInteger(subscript, ctx)) {
-			WasmEmitHelper.emitIndexCheck(ctx);
+		if (unchecked || !WasmEmitHelper.checksConsFields(ctx)
+				|| WasmIntFusionCompiler.answersInteger(subscript, ctx)) {
+			return;
 		}
+		if (!WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
+			WasmEmitHelper.emitIndexCheck(ctx);
+			return;
+		}
+		int slot = ctx.allocTemp();
+		ctx.writer.write(Instruction.TEE_LOCAL);
+		ctx.writer.writeUnsignedLeb128(slot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, Type.EQ.code());
+		getLocal(ctx, slot);
+		ctx.writer.write(Instruction.ELSE);
+		getLocal(ctx, slot);
+		WasmEmitHelper.emitIndexCheck(ctx);
+		ctx.writer.write(Instruction.END);
+	}
+
+	/**
+	 * The checks of a read whose subscript is evaluated into {@code idxSlot}, as
+	 * {@link #compileReadSubscript} makes them: in a module that {@link #reportsBounds}
+	 * the one {@code _idx_ref} call, elsewhere the rank check alone (the subscript's type
+	 * was checked where it was evaluated).
+	 */
+	private static void emitReadChecks(WasmLispCompiler.Ctx ctx, int arrSlot, int idxSlot, int given) {
+		if (!reportsBounds(ctx)) {
+			if (given != WasmArrayRuntimeBuilder.ANY_RANK) {
+				emitArefCheckRank(ctx, arrSlot, given);
+			}
+			return;
+		}
+		getLocal(ctx, arrSlot);
+		getLocal(ctx, idxSlot);
+		i32Const(ctx, given | WasmOperandTypes.operatorId(ctx) << 8);
+		boxI31(ctx);
+		callFixed(ctx, WasmLispCompiler.FUNC_IDX_REF);
+		ctx.writer.write(Instruction.DROP);
+	}
+
+	/**
+	 * A rank-1 access of a general vector with storage of its own, inline, at the speed
+	 * levels: the array in {@code arrSlot} a cell whose header is {@code (dims . (meta .
+	 * data))} with one dimension and the buckets array as its data, the boxed subscript
+	 * in {@code idxSlot} a fixnum below that dimension. Then the element is read, or with
+	 * a {@code valSlot} the value in it stored and answered. Anything else -- another
+	 * representation, a displaced view, another rank, a wide or out-of-range subscript, a
+	 * value that is no array -- runs {@code slow}, the access as the size level makes it,
+	 * which is what checks and reports. Every test of the arm is one that passes for the
+	 * vector, and no call: what the access cost was the type tests of the dispatch over
+	 * every representation, about a nanosecond each, and the live references each call
+	 * spills ({@code .kb/adjustable-arrays.md}, "What an element access costs"). Declined
+	 * at the size level, where {@code slow} is all there is.
+	 * @param ctx the compile context
+	 * @param arrSlot the local holding the array
+	 * @param idxSlot the local holding the boxed subscript
+	 * @param valSlot the local holding a store's value, or -1 for a read
+	 * @param slow emits the access from the slots, leaving its value
+	 */
+	static void emitSimpleVectorAccess(WasmLispCompiler.Ctx ctx, int arrSlot, int idxSlot, int valSlot, Runnable slow) {
+		if (!WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
+			slow.run();
+			return;
+		}
+		am.ik.wasm.WasmWriter w = ctx.writer;
+		int headerSlot = ctx.allocTemp();
+		int dimsSlot = ctx.allocTemp();
+		// block $done (result eqref) { block $miss { block $cast (result eqref) {
+		// tests; access; br $done } drop } slow }: a failed cast leaves through $cast
+		// with the value it refused, a failed compare through $miss.
+		w.write(Instruction.BLOCK);
+		w.writeRefType(true, Type.EQ.code());
+		w.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		w.write(Instruction.BLOCK);
+		w.writeRefType(true, Type.EQ.code());
+		// header = arr.0, a cons whose car is the dims array of ONE dimension
+		getLocal(ctx, arrSlot);
+		brOnCastFail(w, WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(headerSlot);
+		brOnCastFail(w, WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(dimsSlot);
+		brOnCastFail(w, WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		i32Const(ctx, 1);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 1);
+		// the subscript a fixnum below it (a dimension is one: plain casts from here on
+		// what the header of an array always holds, as _arr_get makes them)
+		getLocal(ctx, idxSlot);
+		brOnCastFail(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		getBuckets(ctx, dimsSlot);
+		i32Const(ctx, 0);
+		arrayGet(ctx);
+		WasmEmitHelper.castI31GetS(ctx);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		// data = header.cdr.cdr, the buckets array itself: no view, no packed target
+		getLocal(ctx, headerSlot);
+		castConsGet(ctx, 1);
+		castConsGet(ctx, 1);
+		brOnCastFail(w, WasmLispCompiler.TYPE_HASH_BUCKETS);
+		getLocal(ctx, idxSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		if (valSlot < 0) {
+			arrayGet(ctx);
+		}
+		else {
+			getLocal(ctx, valSlot);
+			arraySet(ctx);
+			getLocal(ctx, valSlot);
+		}
+		w.write(Instruction.BR, 2);
+		w.write(Instruction.END);
+		w.write(Instruction.DROP);
+		w.write(Instruction.END);
+		ctx.wasmCtrlDepth++;
+		slow.run();
+		ctx.wasmCtrlDepth--;
+		w.write(Instruction.END);
+	}
+
+	// br_on_cast_fail 0 (ref null eq) (ref type): the operand cast on the stack, or the
+	// branch to the innermost block taken with it as it was.
+	private static void brOnCastFail(am.ik.wasm.WasmWriter w, int type) {
+		w.write(Instruction.GC_PREFIX, Instruction.BR_ON_CAST_FAIL);
+		w.write(0x01); // the operand nullable, the cast not
+		w.writeUnsignedLeb128(0);
+		w.writeHeapType(Type.EQ.code());
+		w.writeHeapType(type);
 	}
 
 	/**

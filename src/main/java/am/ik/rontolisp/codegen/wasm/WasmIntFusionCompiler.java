@@ -3725,14 +3725,25 @@ final class WasmIntFusionCompiler {
 				// subscript must be an integer (a literal is), the array of rank 1, then
 				// the bound and the read.
 				WasmOperandTypes.withOperator(ctx, LispNames.AREF, () -> {
-					if (!(index instanceof ConstLeaf) && WasmEmitHelper.checksConsFields(ctx)) {
-						ctx.writer.write(Instruction.GET_LOCAL);
-						ctx.writer.writeUnsignedLeb128(idxSlot);
-						WasmEmitHelper.emitIndexCheck(ctx);
-						ctx.writer.write(Instruction.DROP);
+					Runnable read = () -> {
+						if (!(index instanceof ConstLeaf) && WasmEmitHelper.checksConsFields(ctx)) {
+							ctx.writer.write(Instruction.GET_LOCAL);
+							ctx.writer.writeUnsignedLeb128(idxSlot);
+							WasmEmitHelper.emitIndexCheck(ctx);
+							ctx.writer.write(Instruction.DROP);
+						}
+						WasmArrayCompiler.emitRank1Check(ctx, leaf.arrSlot);
+						WasmArrayCompiler.emitAref1FromSlots(ctx, leaf.arrSlot, idxSlot, false);
+					};
+					if (leaf.packedType < 0) {
+						// No declaration: what sent the tree here is most often a general
+						// vector -- a loop over one reads it by a raw index -- read
+						// inline.
+						WasmArrayCompiler.emitSimpleVectorAccess(ctx, leaf.arrSlot, idxSlot, -1, read);
 					}
-					WasmArrayCompiler.emitRank1Check(ctx, leaf.arrSlot);
-					WasmArrayCompiler.emitAref1FromSlots(ctx, leaf.arrSlot, idxSlot, false);
+					else {
+						read.run();
+					}
 				});
 				WasmUncaughtLocations.leaveOperation(located, ctx);
 			}

@@ -710,7 +710,8 @@ to CPython on is below: the `//`, not `flags[j]`.
 **Goal: a program compiled to the JVM, WASM preview 1 and the component runs in less wall
 time than `python3` on the same file** (best of three, the whole process). Met on
 the JVM for five of the eleven (`fib`, `loop`, `calls`, `mixed`, `listidx`) and on
-wasm and the component for four (`bench`, `fib`, `loop`, `calls`); where it is not, the cost left is a backend's and is named below with the item
+wasm and the component for four (`bench`, `fib`, `loop`, `calls`) -- five with `mixed` since
+"The list element on wasm" below; where it is not, the cost left is a backend's and is named below with the item
 that carries it.
 
 The five programs above cover integers, calls and `range`. Six were added, each about a
@@ -799,9 +800,10 @@ Left, each with its reason:
 
 - **`bench.star` on the JVM** (0.15 against 0.11-0.14 over the two runs): the start-up. Restated: on the
   JVM the goal is for a program of a second of CPython; wasm takes the short ones.
-- **wasm, the six container programs**: the calls above. `.todo/j55` (the vector read
-  and the structure calls), `.todo/j56` (strings: an ordering of two strings by the host,
-  case and stream capture that are not mutable).
+- **wasm, the six container programs**: the calls above. The vector read and the
+  structure calls: "The list element on wasm" below, and `.todo/j61` for what is left of
+  them; `.todo/j56` (strings: an ordering of two strings by the host, case and stream
+  capture that are not mutable).
 - **The JVM, `comps`, `methods`, `strings`, `sorting`**: boxing (`.todo/j58`), a string
   framed in quotes (a slice is three allocations), `upper`/`lower`/`strip` through the
   mutable producers (`.todo/j56`), and a sort that chases conses (30% of `sorting.star`'s
@@ -811,6 +813,57 @@ Left, each with its reason:
   string framed in quotes is copied more than once per join), 0.10 on wasm and 0.03 of
   CPython; 5,000 times 0.14, 0.04 and 0.03. `strings.star` accumulates 5,000 pieces for that
   reason. `.todo/j57`.
+
+### The list element on wasm (2026-11-16)
+
+What the item above left to the backend, measured before anything was changed
+(`listidx.star`, `wasmtime run --profile=guest`, then hand-edited `.wat` and plain Common
+Lisp loops, because the profiler charges a large function's samples to its small
+callees): of the three suspects the vector access was the most, 1.7 s of the 4.86 (the
+read's `_idx_ref` and `_arr_get`, the store's `_idx_chk`, `_arr_check_rank` and
+`_arr_set`) and 0.5 s more for a `stringp` of the vector ahead of every store (19 ns of
+`_charvec_p`); the structure calls 0.33 s, the boxed comparison 0.1 s. **And the premise
+was half wrong: it is not only the calls.** A type test that passes costs about a
+nanosecond and an access made some 35 of them; a call costs 2-5 ns with references live
+across it (`.kb/adjustable-arrays.md`, "What an element access costs").
+
+Made, all in the wasm backend at the speed levels unless said: the inline arm of a
+general vector's rank-1 read and store (same file); a structure's predicate and reader
+as the type test and the slot read at the call site (`.kb/defstruct.md`); two fixnums
+compared at the site of an unfused comparison (`.kb/wasm-int-fusion.md`); at every
+level, `_charvec_p` reading its marker first and `_seq_len` asking for a general vector
+first (`.kb/length-runtime.md`). In the library, `%starlark-set-index` stores through the
+accessor's value, not a variable holding it, so no `stringp` is asked (2.67 -> 2.16 s).
+
+Seconds as above (`time.sh`, best of three, same machine and day), before -> after;
+the JVM column moves only with the library's store:
+
+| program | JVM | WASM | component | CPython | `.wasm` bytes |
+|---|---|---|---|---|---|
+| `bench.star` | 0.15 -> 0.16 | 0.07 -> 0.07 | 0.06 -> 0.07 | 0.14 | 127,577 -> 137,197 |
+| `fib.star` | 0.32 -> 0.29 | 0.44 -> 0.42 | 0.42 -> 0.44 | 1.48 | 126,721 -> 136,341 |
+| `loop.star` | 0.17 -> 0.17 | 0.67 -> 0.66 | 0.62 -> 0.65 | 1.64 | 100,659 -> 105,157 |
+| `calls.star` | 0.21 -> 0.20 | 0.24 -> 0.26 | 0.25 -> 0.25 | 0.75 | 110,782 -> 116,866 |
+| `mixed.star` | 0.68 -> 0.72 | 1.61 -> 0.92 | 1.58 -> 0.89 | 1.20 | 162,989 -> 174,632 |
+| `listidx.star` | 1.12 -> 1.11 | 5.31 -> 2.08 | 4.87 -> 2.03 | 1.21 | 165,246 -> 177,404 |
+| `dicts.star` | 0.92 -> 0.98 | 1.70 -> 1.42 | 1.73 -> 1.36 | 0.93 | 166,334 -> 178,803 |
+| `comps.star` | 1.62 -> 1.47 | 2.29 -> 1.64 | 2.32 -> 1.68 | 0.87 | 162,627 -> 174,080 |
+| `methods.star` | 2.15 -> 2.13 | 3.34 -> 2.91 | 3.36 -> 2.93 | 1.10 | 158,307 -> 169,836 |
+| `strings.star` | 2.45 -> 2.42 | 3.31 -> 3.22 | 3.31 -> 3.22 | 1.16 | 132,151 -> 137,809 |
+| `sorting.star` | 3.78 -> 3.80 | 5.02 -> 3.97 | 5.07 -> 3.98 | 0.96 | 173,787 -> 188,237 |
+
+- Step by step on `listidx.star` (wasm, user seconds): 4.86; the array arm 3.15; the
+  structure calls 2.82; the comparison 2.77 (2.17 -> 2.07 measured again at the end);
+  `_seq_len`'s order 2.67; the store without `stringp` 2.16; `_seq_len` reading its
+  header once 2.06.
+- **The bytes**: a Starlark module is 4-9% larger (the library's own element accesses,
+  structure reads and comparisons carry the arms whether the program runs them or not):
+  `print(1 + 2)` 99,723 -> 104,221, `examples/starlark/targets.star` 203,655 -> 222,307.
+  `--optimize=size` declines all of it (`targets.star` 150,231 -> 150,139 there).
+- Left (`.todo/j61`): per `xs[i]` a call of `%starlark-index`, a boxed read of the loop
+  variable (`_ub_read`), `length` of the items (`_seq_len`: a call and seven tests) and
+  the arm's nine tests, three hops through `(ref null eq)` fields. `listidx` is still
+  1.7 times CPython on wasm, the JVM under it.
 
 ## Positions
 

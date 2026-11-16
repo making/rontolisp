@@ -23,6 +23,14 @@ Same lesson as `.kb/wasm-shared-coercion.md`, `.kb/sequence-op-runtimes.md`.
   `eql`, `aref`) still inline -- separate decisions.
 - A new tier edits `buildSeqLenBody` alone; a hot `_seq_len` gets a fast path, never a
   return to inlining.
+- **The order of the arms is by what a length costs there** (2026-11-16): a general
+  vector first (its answer is a field read; it sat behind the packed float, three packed
+  integer and string tests), then a list (a cons or nil, whose walk dwarfs the tests),
+  then the packed arrays and the string. The representations are disjoint, so the order
+  decides nothing else. The vector arm reads its header once. A Starlark `xs[i]` asks
+  the length of its list's vector on every element (`.kb/starlark-frontend.md`,
+  "Against CPython"); what a test costs: `.kb/adjustable-arrays.md`, "What an element
+  access costs".
 
 ## Tests
 - `WasmLispCompilerTest.aLengthSiteDoesNotCarryItsOwnCopyOfTheSharedDispatch` -- the

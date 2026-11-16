@@ -9,7 +9,12 @@ package am.ik.rontolisp;
  * array as if it were rank 1 and checked a non-integer subscript only against the bound,
  * and a wasm rank mismatch trapped where a handler should have taken it; a rank mismatch
  * was a {@code program-error} interpreted and a {@code simple-error} compiled, and a
- * compiled call checked the rank before it evaluated the subscripts. Shared by the
+ * compiled call checked the rank before it evaluated the subscripts. The last rows are a
+ * read and a store of whatever a parameter holds: a general vector with storage of its
+ * own, which wasm reads and stores inline, and everything that arm hands on -- a fill
+ * pointer, a view, a packed vector, a string, a subscript out of range, wide or no
+ * integer, another rank, no array -- and a store whose value form leaves the block around
+ * it, which wasm answered nil for, or never returned from inside a loop. Shared by the
  * backend suites, so every backend at every optimize level is held to one expected text.
  */
 public final class ArefRankAndSubscriptChecksFixture {
@@ -119,7 +124,28 @@ public final class ArefRankAndSubscriptChecksFixture {
 			(ao-check (funcall #'array-row-major-index *ao-m* 1))
 			(ao-check (funcall #'array-row-major-index *ao-m* nil))
 			(ao-check (reverse *ao-log*))
-			(ao-check (list (aref *ao-m* 1 1) (aref *ao-v8* 2) (aref *ao-md* 1 1) (funcall #'aref *ao-m* 1 0)))""";
+			(ao-check (list (aref *ao-m* 1 1) (aref *ao-v8* 2) (aref *ao-md* 1 1) (funcall #'aref *ao-m* 1 0)))
+			(defvar *ao-fp* (make-array 4 :fill-pointer 2 :adjustable t :initial-element 0))
+			(defvar *ao-dv* (make-array 2 :displaced-to *ao-v* :displaced-index-offset 1))
+			(defvar *ao-big* (expt 2 70))
+			(defun ao-get (v i) (aref v i))
+			(defun ao-put (v i x) (setf (aref v i) x) (list (aref v i) (length v)))
+			(defun ao-exit (v) (block nil (setf (aref v 0) (return :exited)) :stored))
+			(defun ao-loop-exit (v) (dotimes (i 3 :done) (setf (aref v i) (if (= i 1) (return v) :set))))
+			(ao-check (list (ao-get *ao-v* 2) (ao-get *ao-fp* 3) (ao-get *ao-dv* 1) (ao-get *ao-v8* 0) (ao-get "abc" 1)))
+			(ao-check (ao-get *ao-v* 3))
+			(ao-check (ao-get *ao-v* -1))
+			(ao-check (ao-get *ao-v* *ao-big*))
+			(ao-check (ao-get *ao-v* 'x))
+			(ao-check (ao-get *ao-fp* 4))
+			(ao-check (ao-get *ao-dv* 2))
+			(ao-check (ao-get *ao-m* 0))
+			(ao-check (ao-get 5 0))
+			(ao-check (list (ao-put (vector 1 2 3) 1 :x) (ao-put *ao-fp* 3 :y) (ao-put *ao-dv* 1 :z) *ao-v*))
+			(ao-check (ao-put (vector 1 2 3) 3 :x))
+			(ao-check (ao-put (vector 1 2 3) 1.5 :x))
+			(ao-check (ao-put *ao-m* 0 :x))
+			(ao-check (list (ao-exit (vector 1 2 3)) (ao-loop-exit (vector 1 2 3))))""";
 
 	/** What every backend prints for {@link #ORDER_SOURCE}. */
 	public static final String ORDER_EXPECTED = """
@@ -150,6 +176,20 @@ public final class ArefRankAndSubscriptChecksFixture {
 			ARRAY-ROW-MAJOR-INDEX: The value #2A((1 1) (1 1)) is not of type VECTOR | VECTOR
 			ARRAY-ROW-MAJOR-INDEX: The value NIL is not of type INTEGER | INTEGER
 			(7 8 9)
-			(1 3 1.0 1)""";
+			(1 3 1.0 1)
+			(3 0 3 1 #\\b)
+			AREF: The value 3 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
+			AREF: The value -1 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
+			AREF: The value 1180591620717411303424 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
+			AREF: The value X is not of type INTEGER | INTEGER
+			AREF: The value 4 is not of type (INTEGER 0 (4)) | (INTEGER 0 (4))
+			AREF: The value 2 is not of type (INTEGER 0 (2)) | (INTEGER 0 (2))
+			AREF: The value #2A((1 1) (1 1)) is not of type VECTOR | VECTOR
+			AREF: The value 5 is not of type ARRAY | ARRAY
+			((:X 3) (:Y 2) (:Z 2) #(1 2 :Z))
+			(SETF AREF): The value 3 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
+			(SETF AREF): The value 1.5 is not of type INTEGER | INTEGER
+			(SETF AREF): The value #2A((1 1) (1 1)) is not of type VECTOR | VECTOR
+			(:EXITED #(:SET 2 3))""";
 
 }

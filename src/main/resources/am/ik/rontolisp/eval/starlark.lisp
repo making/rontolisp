@@ -1484,12 +1484,15 @@
          (if (or (car (rontolisp::%starlark-list-mutability x))
                  (> (rontolisp::%starlark-list-iterating x) 0))
              (rontolisp::%starlark-list-writable x "assign to element of"))
-         (let* ((items (rontolisp::%starlark-list-items x)) (n (length items)))
-           (if (and (integerp i) (>= i 0) (< i n))
-               (setf (aref items i) v)
-               (setf
-                (aref items (rontolisp::%starlark-element-index i n "list"))
-                v))))
+         ;; The place is the accessor's value, not a variable holding it: a variable
+         ;; place may hold a string, and a compiled store asks its array that on
+         ;; every element (.kb/starlark-frontend.md, "Against CPython").
+         (let ((n (length (rontolisp::%starlark-list-items x))))
+           (setf (aref (rontolisp::%starlark-list-items x)
+                       (if (and (integerp i) (>= i 0) (< i n))
+                           i
+                           (rontolisp::%starlark-element-index i n "list")))
+                 v)))
         ((rontolisp::%starlark-dict-p x)
          (if (or (car (rontolisp::%starlark-dict-mutability x))
                  (> (rontolisp::%starlark-dict-iterating x) 0))

@@ -19,8 +19,8 @@ import am.ik.wasm.WasmWriter;
  * sequence: {@code LENGTH}'s type-error in EH mode, a trap outside it. A rank-2 array is
  * not a sequence and traps. An array and a hash table are both {@code TYPE_CELL} boxes;
  * the header's car distinguishes them (a bucket array for an array, an i31 count for a
- * hash table). A packed float vector ({@code TYPE_FARRAY}) is handled first: a rank-1 one
- * yields its {@code dims[0]}, a higher-rank one traps like a general rank-n array.
+ * hash table). A packed float vector ({@code TYPE_FARRAY}): a rank-1 one yields its
+ * {@code dims[0]}, a higher-rank one traps like a general rank-n array.
  *
  * <p>
  * The dispatch is ONE shared function, {@code _seq_len}
@@ -74,9 +74,153 @@ final class WasmLengthCompiler {
 		int dimsSlot = 1;
 		int fpSlot = 2;
 
+		// The arms are tested in the order of what a length is most often asked of and
+		// what it costs there: a general vector first, whose answer is a field read and
+		// whose test the others only delayed; then a list, whose walk dwarfs the tests;
+		// then the packed arrays and the string. The representations are disjoint, so
+		// the order decides nothing but that.
+		// An array and a hash table are both TYPE_CELL boxes holding a header cons. They
+		// are told apart by the header's car: an array's car is the dims bucket array, a
+		// hash table's car is an i31 count.
+		get(w, valSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		// dims = car(header) where header = cell.field0, kept in fpSlot for the fill
+		// pointer's read below
+		get(w, valSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(0); // header cons
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(fpSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(0); // car
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(dimsSlot);
+		// if (car is a bucket array) it is an array
+		get(w, dimsSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		// array: a vector (rank 1) has dims length 1; otherwise it is not a sequence.
+		get(w, dimsSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		// rank 1: the fill pointer when the meta cons carries one (the effective
+		// length), else dims[0] (both already i31s). meta = (cadr header), see
+		// WasmArrayCompiler.
+		get(w, fpSlot); // the header cons
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1); // (meta . data)
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(0); // meta
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(0); // fill pointer or null
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(fpSlot);
+		get(w, fpSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		get(w, fpSlot);
+		w.write(Instruction.ELSE);
+		get(w, dimsSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		// rank 2+: not a sequence.
+		w.write(Instruction.UNREACHABLE);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		// hash table: not a sequence.
+		emitNotSequence(w, valSlot, operatorGlobal, operatorId);
+		w.write(Instruction.END);
+		w.write(Instruction.ELSE);
+		// A list: a cons or nil. Count cons cells until the value is no longer a cons,
+		// which must be nil -- a dotted list's tail is no sequence. The counter reuses
+		// fpSlot; the cursor is the parameter itself.
+		get(w, valSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		get(w, valSlot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF);
+		w.writeRefType(true, Type.EQ.code());
+		int countSlot = fpSlot;
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(0);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(countSlot);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, valSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 1); // break to $exit
+		// count = count + 1
+		get(w, countSlot);
+		WasmEmitHelper.castI31GetS(w);
+		w.write(Instruction.I32_CONST);
+		w.writeSignedLeb128(1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(countSlot);
+		// val = cdr(val)
+		get(w, valSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(1); // cdr
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(valSlot);
+		w.write(Instruction.BR, 0); // continue loop
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		get(w, valSlot);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		emitNotSequence(w, valSlot, operatorGlobal, operatorId);
+		w.write(Instruction.END);
+		get(w, countSlot);
+		w.write(Instruction.ELSE);
+
 		// A packed float array (TYPE_FARRAY): a rank-1 vector's length is dims[0]; a
 		// higher-rank array is not a sequence and traps (like a general rank-n array).
-		// Falls through to the general string/array/list logic otherwise.
 		get(w, valSlot);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 		w.writeHeapType(WasmLispCompiler.TYPE_FARRAY);
@@ -151,143 +295,13 @@ final class WasmLengthCompiler {
 		w.write(Instruction.END);
 
 		w.write(Instruction.ELSE);
-		// An array and a hash table are both TYPE_CELL boxes holding a header cons. They
-		// are told apart by the header's car: an array's car is the dims bucket array, a
-		// hash table's car is an i31 count.
-		get(w, valSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
-		w.write(Instruction.IF);
-		w.writeRefType(true, Type.EQ.code());
-		// dims = car(header) where header = cell.field0
-		get(w, valSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
-		w.writeUnsignedLeb128(0); // header cons
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeUnsignedLeb128(0); // car
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(dimsSlot);
-		// if (car is a bucket array) it is an array
-		get(w, dimsSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		w.write(Instruction.IF);
-		w.writeRefType(true, Type.EQ.code());
-		// array: a vector (rank 1) has dims length 1; otherwise it is not a sequence.
-		get(w, dimsSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.I32_EQ);
-		w.write(Instruction.IF);
-		w.writeRefType(true, Type.EQ.code());
-		// rank 1: the fill pointer when the meta cons carries one (the effective
-		// length), else dims[0] (both already i31s). meta = (cadr header), see
-		// WasmArrayCompiler.
-		get(w, valSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
-		w.writeUnsignedLeb128(0); // header cons
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeUnsignedLeb128(1); // (meta . data)
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeUnsignedLeb128(0); // meta
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeUnsignedLeb128(0); // fill pointer or null
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(fpSlot);
-		get(w, fpSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(Type.I31.code());
-		w.write(Instruction.IF);
-		w.writeRefType(true, Type.EQ.code());
-		get(w, fpSlot);
-		w.write(Instruction.ELSE);
-		get(w, dimsSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		w.write(Instruction.END);
-		w.write(Instruction.ELSE);
-		// rank 2+: not a sequence.
-		w.write(Instruction.UNREACHABLE);
-		w.write(Instruction.END);
-		w.write(Instruction.ELSE);
-		// hash table: not a sequence.
+		// Anything else is no sequence.
 		emitNotSequence(w, valSlot, operatorGlobal, operatorId);
-		w.write(Instruction.END);
-		w.write(Instruction.ELSE);
-		// List case: count cons cells until the value is no longer a cons, which must be
-		// nil -- anything else (a non-list, a dotted list's tail) is no sequence. The
-		// counter reuses fpSlot; the cursor is the parameter itself.
-		int countSlot = fpSlot;
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(0);
-		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(countSlot);
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		get(w, valSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.BR_IF, 1); // break to $exit
-		// count = count + 1
-		get(w, countSlot);
-		WasmEmitHelper.castI31GetS(w);
-		w.write(Instruction.I32_CONST);
-		w.writeSignedLeb128(1);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(countSlot);
-		// val = cdr(val)
-		get(w, valSlot);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeUnsignedLeb128(1); // cdr
-		w.write(Instruction.SET_LOCAL);
-		w.writeUnsignedLeb128(valSlot);
-		w.write(Instruction.BR, 0); // continue loop
-		w.write(Instruction.END); // loop
-		w.write(Instruction.END); // block
-		get(w, valSlot);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.I32_EQZ);
-		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
-		emitNotSequence(w, valSlot, operatorGlobal, operatorId);
-		w.write(Instruction.END);
-		get(w, countSlot);
-
-		w.write(Instruction.END); // array/hash-table-vs-list if
-		w.write(Instruction.END); // outer if (string)
+		w.write(Instruction.END); // string if
 		w.write(Instruction.END); // packed integer vector if
-		w.write(Instruction.END); // outermost if (packed farray)
+		w.write(Instruction.END); // packed farray if
+		w.write(Instruction.END); // list if
+		w.write(Instruction.END); // array/hash-table if
 		w.write(Instruction.END); // function body
 		return out.toByteArray();
 	}

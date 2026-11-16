@@ -100,6 +100,17 @@ instance, got 42` (a `simple-error`), the JVM a `ClassCastException` -- and, a c
   `inst.slot(N)`. Any other argument, and every call under a debugger, runs the body, so the
   report is the body's. A struct-read loop ran 1.5x faster.
 
+## A call of a predicate or a reader is the primitive (wasm-GC, speed levels)
+**Invariant: on wasm-GC at the speed levels a call `(point-p x)` / `(point-x p)` of a name with ONE definition that nothing can replace while the program runs compiles as the type test or the slot read the definition's body is (`WasmStructAccess`), not as a call of it.** Since 2026-11-16. A structure's predicate and one accessor were 15 ns in a loop whose step is 9; a true predicate also called `_t_sym`.
+
+- **Which names**: a one-parameter defun whose whole body is `(%obj-is p 'tag..)` or `(%obj-ref p <literal> [failure])` (`isAccessDefun`, read through the tail's clear) -- what `expandDefstruct` generates, and any other definition of that shape. Not under `--dynamic`, not a name defined twice, not an async defun, not a name with a cell (`WasmFunctionCells`: every defun of a program holding `eval`, a name `(setf fdefinition)` writes) unless a leaf's copy runs with it empty, not a forwarder.
+- **A test position is the raw i32** (`WasmConditionCompiler`: `%obj-is` and a predicate's call): one `br_on_cast_fail` and the layout address compare, no `t`. A value position boxes it.
+- **A reader handed anything but an instance calls the definition**, whose check and report it is: `br_on_cast_fail` to the instance, the slot read, and on the miss `call` of the defun -- so the report, the datum and the expected type are the definition's ("Accessors check their object"), and the site carries no report text.
+- **The argument is evaluated once, then the multiple-value channel is cleared where the definition's settled tail clears it** (`clearOf`), as the call did; a test position clears nothing, no consumer reads the channel behind a test (`.kb/multiple-values.md`). The definitions do not clear today: `.todo/j60`.
+- The definition stays for `#'point-x` and the tree-shaker drops it when nothing reaches it. The size level keeps the call.
+- Cost: about 20 B a site over the call for a reader, none for a predicate in a test. Measured: `listidx.star` 3.15 -> 2.82 s on wasm with the array arm already in (four structure reads per element store, two per read).
+- Pinned by `WasmLispCompilerIntegrationTest.ehAStructAccessorOnANonInstanceSignalsATypeError` (every level and the component; a program holding `eval` replaces a reader and a predicate at run time and the call answers the replacement; the fuel budget) and ci-spec `a-vector-element-and-a-structure-slot-through-a-parameter`.
+
 ## `:include` (single inheritance)
 Parent slots (in ITS layout order) are PREPENDED, so an inherited slot keeps one index in every
 descendant and the parent's baked `%obj-ref` accessors read a child. `ClosRegistry.structAncestors`

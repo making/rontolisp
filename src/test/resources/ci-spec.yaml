@@ -26037,6 +26037,73 @@ cases:
       ("(SETF ROW-MAJOR-AREF): The value 3 is not of type (INTEGER 0 (3))" 3 (INTEGER 0 (3)))
       (1 0 0 T)
       ("AREF: The value 3 is not of type (INTEGER 0 (3))" 3.0)
+  - name: a-vector-element-and-a-structure-slot-through-a-parameter
+    # A read and a store of whatever a parameter holds: a general vector with storage of its
+    # own, which wasm reads and stores inline, and everything that arm hands on -- a fill
+    # pointer, a view, a packed vector, a string, a subscript out of range, wide or no
+    # integer, another rank, no array. A store whose value form leaves the block around it
+    # answered nil on wasm, and never returned from inside a loop. A structure's predicate
+    # and reader as the type test and the slot read they are, a reader of anything else
+    # reporting as its definition does. The vector rows are ArefRankAndSubscriptChecksFixture's.
+    source: |
+      (defmacro ci-ve-check (form)
+        `(handler-case (format t "~s~%" ,form)
+           (type-error (e) (format t "~a | ~s~%" e (type-error-expected-type e)))
+           (error (e) (format t "~a~%" e))))
+      (defvar *ci-ve-v* (vector 1 2 3))
+      (defvar *ci-ve-m* (make-array '(2 2) :initial-element 1))
+      (defvar *ci-ve-v8* (make-array 3 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3)))
+      (defvar *ci-ve-fp* (make-array 4 :fill-pointer 2 :adjustable t :initial-element 0))
+      (defvar *ci-ve-dv* (make-array 2 :displaced-to *ci-ve-v* :displaced-index-offset 1))
+      (defvar *ci-ve-big* (expt 2 70))
+      (defun ci-ve-get (v i) (aref v i))
+      (defun ci-ve-put (v i x) (setf (aref v i) x) (list (aref v i) (length v)))
+      (defun ci-ve-exit (v) (block nil (setf (aref v 0) (return :exited)) :stored))
+      (defun ci-ve-loop-exit (v) (dotimes (i 3 :done) (setf (aref v i) (if (= i 1) (return v) :set))))
+      (ci-ve-check (list (ci-ve-get *ci-ve-v* 2) (ci-ve-get *ci-ve-fp* 3) (ci-ve-get *ci-ve-dv* 1) (ci-ve-get *ci-ve-v8* 0)
+                         (ci-ve-get "abc" 1)))
+      (ci-ve-check (ci-ve-get *ci-ve-v* 3))
+      (ci-ve-check (ci-ve-get *ci-ve-v* -1))
+      (ci-ve-check (ci-ve-get *ci-ve-v* *ci-ve-big*))
+      (ci-ve-check (ci-ve-get *ci-ve-v* 'x))
+      (ci-ve-check (ci-ve-get *ci-ve-fp* 4))
+      (ci-ve-check (ci-ve-get *ci-ve-dv* 2))
+      (ci-ve-check (ci-ve-get *ci-ve-m* 0))
+      (ci-ve-check (ci-ve-get 5 0))
+      (ci-ve-check (list (ci-ve-put (vector 1 2 3) 1 :x) (ci-ve-put *ci-ve-fp* 3 :y) (ci-ve-put *ci-ve-dv* 1 :z) *ci-ve-v*))
+      (ci-ve-check (ci-ve-put (vector 1 2 3) 3 :x))
+      (ci-ve-check (ci-ve-put (vector 1 2 3) 1.5 :x))
+      (ci-ve-check (ci-ve-put *ci-ve-m* 0 :x))
+      (ci-ve-check (list (ci-ve-exit (vector 1 2 3)) (ci-ve-loop-exit (vector 1 2 3))))
+      (defstruct ci-ve-pt x y)
+      (defstruct (ci-ve-pt3 (:include ci-ve-pt)) z)
+      (defun ci-ve-kind (x) (cond ((ci-ve-pt3-p x) :pt3) ((ci-ve-pt-p x) :pt) (t :other)))
+      (defun ci-ve-xs (ps) (mapcar #'ci-ve-pt-x ps))
+      (ci-ve-check (list (ci-ve-kind (make-ci-ve-pt3 :x 7)) (ci-ve-kind (make-ci-ve-pt)) (ci-ve-kind 1)
+                         (ci-ve-pt-p (make-ci-ve-pt3)) (not (ci-ve-pt3-p (make-ci-ve-pt)))
+                         (ci-ve-xs (list (make-ci-ve-pt :x 1) (make-ci-ve-pt3 :x 2)))
+                         (ci-ve-pt-x (ci-ve-pt-x (make-ci-ve-pt :x (make-ci-ve-pt :x 9))))
+                         (ci-ve-pt3-z (make-ci-ve-pt3 :z 3))))
+      (ci-ve-check (ci-ve-pt-x (ci-ve-pt-y (make-ci-ve-pt :y 42))))
+      (ci-ve-check (ci-ve-xs (list 1)))
+    expected: |
+      (3 0 3 1 #\b)
+      AREF: The value 3 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
+      AREF: The value -1 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
+      AREF: The value 1180591620717411303424 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
+      AREF: The value X is not of type INTEGER | INTEGER
+      AREF: The value 4 is not of type (INTEGER 0 (4)) | (INTEGER 0 (4))
+      AREF: The value 2 is not of type (INTEGER 0 (2)) | (INTEGER 0 (2))
+      AREF: The value #2A((1 1) (1 1)) is not of type VECTOR | VECTOR
+      AREF: The value 5 is not of type ARRAY | ARRAY
+      ((:X 3) (:Y 2) (:Z 2) #(1 2 :Z))
+      (SETF AREF): The value 3 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
+      (SETF AREF): The value 1.5 is not of type INTEGER | INTEGER
+      (SETF AREF): The value #2A((1 1) (1 1)) is not of type VECTOR | VECTOR
+      (:EXITED #(:SET 2 3))
+      (:PT3 :PT :OTHER T T (1 2) 9 3)
+      CI-VE-PT-X: The value 42 is not of type CI-VE-PT | CI-VE-PT
+      CI-VE-PT-X: The value 1 is not of type CI-VE-PT | CI-VE-PT
   # CLHS 3.5.1.4-6 / .kb/error-handling.md, "Argument-shape errors signal a
   # catchable program-error": a keyword the operator does not accept, an odd
   # keyword tail and a non-keyword in keyword position signal a CATCHABLE
