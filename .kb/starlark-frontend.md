@@ -785,8 +785,13 @@ by plain Common Lisp loops over each primitive:
   true answer another (`_t_sym`). A Starlark `xs[i]` is some nine calls, 74 ns behind a
   `funcall`, where CPython's whole loop step is about 35. A `(declare (type (vector t)
   ..))` of the list's vector changed nothing (368 against 369 ms).
-- **The JVM boxes**: `Long.valueOf` is 32% of `comps.star`'s samples, 13 of them the
-  index `vector-push-extend` answers and a comprehension drops (`.todo/j58`).
+- **The JVM boxes**: `Long.valueOf` is 32% of `comps.star`'s samples. Not the index
+  `vector-push-extend` answers (remeasured 2026-11-16, four JFR runs of 169-283 samples
+  each: 0-3 samples below `_vectorPushExtend`, 14-20 below `_ubRead`, the boxed read of a
+  raw local, i.e. the ELEMENTS a general vector holds as `Long`s). Returning the header's
+  own fill-pointer `Long` as the answer, so nothing is boxed for it, moved nothing: `comps`
+  JVM 1.9 s before and after, a 100,000-element `vector-push-extend` loop 1.47 s against
+  1.49 s (HotSpot already drops a box nobody reads). Not made.
 - **A sort is a list's**: 50,000 ints by a merge sort over conses 13 ms on the JVM and 17
   on wasm, over a simple vector 30 and 139, over packed `(unsigned-byte 32)` vectors 79
   and 42; CPython's is 9. So `sorted` merges lists, compares ints inline, and keys that
@@ -807,7 +812,7 @@ Left, each with its reason:
 - **wasm, the six container programs**: the calls above. The vector read and the
   structure calls: "The list element on wasm" below, and `.todo/j61` for what is left of
   them; strings: "Strings nothing writes, ordered by the backend" below.
-- **The JVM, `comps`, `methods`, `strings`, `sorting`**: boxing (`.todo/j58`), a string
+- **The JVM, `comps`, `methods`, `strings`, `sorting`**: boxing of the elements (the vector holds `Long`s; above), a string
   framed in quotes (a slice is three allocations), `upper`/`lower` through the mutable
   producers (made since, below), and a sort that chases conses (30% of `sorting.star`'s
   samples are `_car`).
