@@ -1255,18 +1255,22 @@ final class WasmEmitHelper {
 	 */
 	static void compileUnspelledLiteral(String displayForm, WasmLispCompiler.Ctx ctx) {
 		WasmLispCompiler.StringTable.StringEntry entry = ctx.stringTable.addString(displayForm);
+		// A top-level form mostly runs once, and a module whose literals are all there
+		// (hello_world) carries no global and no start function for them; a form that
+		// signals runs on the way out of the fast path, and a literal named there alone
+		// -- most messages -- costs a site what it always did.
+		int global = ctx.topLevel || ctx.signalling > 0 ? -1
+				: ctx.quoteGlobals.literalGlobal(entry.offset(), entry.length());
+		if (global >= 0) {
+			ctx.writer.write(Instruction.GET_GLOBAL);
+			ctx.writer.writeUnsignedLeb128(global);
+			return;
+		}
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(entry.offset());
 		ctx.writer.write(Instruction.I32_CONST);
 		ctx.writer.writeSignedLeb128(entry.length());
-		// A top-level form mostly runs once, and a module whose literals are all there
-		// (hello_world) carries no table it would never read twice.
-		if (ctx.topLevel || !ctx.quoteGlobals.takeLiteralSite()) {
-			emitStrBuildCall(ctx.writer);
-			return;
-		}
-		ctx.writer.write(Instruction.CALL);
-		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_LIT);
+		emitStrBuildCall(ctx.writer);
 	}
 
 	/**

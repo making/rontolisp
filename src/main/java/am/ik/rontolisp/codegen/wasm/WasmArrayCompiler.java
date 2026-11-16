@@ -3724,6 +3724,15 @@ final class WasmArrayCompiler {
 		requireArgs(cons, 2, "vector-pop expects 1 argument");
 		List<LispVal> args = cons.toList();
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
+		// A vector that names its storage and holds an element gives it up inline; what
+		// the arm refuses is popped as below, which checks and reports.
+		boolean inline = WasmIntFusionCompiler.speedTradesEnabled(ctx) && ctx.asyncResume == null;
+		if (inline) {
+			int cellSlot = setTemp(ctx);
+			emitPopWithElement(ctx, cellSlot);
+			ctx.wasmCtrlDepth++;
+			getLocal(ctx, cellSlot);
+		}
 		emitFillPointerHeader(ctx);
 		int headerSlot = setTemp(ctx);
 		int metaSlot = ctx.allocTemp();
@@ -3765,6 +3774,82 @@ final class WasmArrayCompiler {
 		getLocal(ctx, fpSlot);
 		WasmEmitHelper.castI31GetS(ctx);
 		callFixed(ctx, WasmLispCompiler.FUNC_ARR_GET);
+		if (inline) {
+			ctx.wasmCtrlDepth--;
+			ctx.writer.write(Instruction.END);
+		}
+	}
+
+	/**
+	 * A pop off a vector that holds an element, inline, at the speed levels: the array in
+	 * {@code cellSlot} a cell naming its storage and its meta cons
+	 * ({@link #emitPushWithRoom}), its fill pointer a fixnum above zero. The fill pointer
+	 * steps back and the element it passed is the answer, behind the one cast of the
+	 * array. Opens the block the answer leaves through and falls into the code after it
+	 * for anything else -- an empty vector, one without a fill pointer, a view, a value
+	 * that is no array: the caller emits the pop that checks and reports there, then the
+	 * block's end. A pop was {@code _fp_hdr}, {@code _arr_get} and the header's walk.
+	 */
+	private static void emitPopWithElement(WasmLispCompiler.Ctx ctx, int cellSlot) {
+		am.ik.wasm.WasmWriter w = ctx.writer;
+		int fpSlot = ctx.allocTemp();
+		Runnable cell = () -> {
+			w.write(Instruction.GET_LOCAL);
+			ctx.writeScratchIndex(WasmLispCompiler.Ctx.Scratch.CELL);
+		};
+		Runnable meta = () -> {
+			cell.run();
+			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+			w.writeUnsignedLeb128(WasmLispCompiler.CELL_META_FIELD);
+		};
+		// block $done (result eqref) { block $miss { block $cast (result eqref) {
+		// tests; step back; read; br $done } drop } <the caller's pop> }
+		w.write(Instruction.BLOCK);
+		w.writeRefType(true, Type.EQ.code());
+		w.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		w.write(Instruction.BLOCK);
+		w.writeRefType(true, Type.EQ.code());
+		getLocal(ctx, cellSlot);
+		brOnCastFail(w, WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.SET_LOCAL);
+		ctx.writeScratchIndex(WasmLispCompiler.Ctx.Scratch.CELL);
+		meta.run();
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.BR_IF, 1);
+		// the fill pointer a fixnum above zero
+		meta.run();
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(fpSlot);
+		brOnCastFail(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		i32Const(ctx, 0);
+		w.write(Instruction.I32_LE_S);
+		w.write(Instruction.BR_IF, 1);
+		// meta.car = fp - 1; the answer is storage[fp - 1]
+		meta.run();
+		getLocal(ctx, fpSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		i32Const(ctx, 1);
+		w.write(Instruction.I32_SUB);
+		boxI31(ctx);
+		structSetCons(ctx, 0);
+		cell.run();
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(WasmLispCompiler.CELL_STORAGE_FIELD);
+		getLocal(ctx, fpSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		i32Const(ctx, 1);
+		w.write(Instruction.I32_SUB);
+		arrayGet(ctx);
+		w.write(Instruction.BR, 2);
+		w.write(Instruction.END);
+		w.write(Instruction.DROP);
+		w.write(Instruction.END);
 	}
 
 	static void compileVectorPushExtend(LispCons cons, WasmLispCompiler.Ctx ctx) {

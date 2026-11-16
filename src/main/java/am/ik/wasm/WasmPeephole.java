@@ -55,8 +55,9 @@ import org.jspecify.annotations.Nullable;
  * <li>{@code ref.test}, {@code ref.is_null} or {@code i32.eqz} then {@code drop} -&gt;
  * {@code drop}: a unary test that cannot trap, computed for nobody -- so the operand's
  * own push can then go with the drop.</li>
- * <li>{@code call F; drop} -&gt; nothing, when the caller names {@code F} a pure producer
- * of a non-null reference.</li>
+ * <li>{@code call F; drop} -&gt; one {@code drop} per parameter of {@code F}, when the
+ * caller names {@code F} a pure producer of a non-null reference: a constant built from
+ * constant arguments for nobody goes whole.</li>
  * <li>{@code ref.i31; ref.cast (ref i31)} -&gt; {@code ref.i31}: the operand's type says
  * so, and {@code i32.const K; ref.i31; i31.get_s} -&gt; {@code i32.const K} for a K the
  * box holds: a literal boxed for a parameter that unboxes it.</li>
@@ -132,14 +133,16 @@ public final class WasmPeephole {
 		}
 		List<byte[]> rewritten = new ArrayList<>(entries.size());
 		boolean changed = false;
+		int imported = WasmSections.importedFunctionCount(module);
+		PureCalls pure = new PureCalls(pureNonNullCall,
+				f -> f < imported ? -1 : types.func(defTypeIdx[f - imported]).params().size());
 		// The functions each body the first pass left alone calls (null for a body it
 		// changed): such a body can only change again at a call of a constant function.
 		int @Nullable [][] untouchedCallees = new int[entries.size()][];
 		for (int d = 0; d < entries.size(); d++) {
 			byte[] entry = entries.get(d);
 			Body body = WasmCodeModel.decode(entry, types);
-			byte[] out = rewriteEntry(entry, body, types.func(defTypeIdx[d]).results().isEmpty(), pureNonNullCall,
-					NO_CONSTANTS);
+			byte[] out = rewriteEntry(entry, body, types.func(defTypeIdx[d]).results().isEmpty(), pure, NO_CONSTANTS);
 			if (out == entry) {
 				untouchedCallees[d] = callees(body);
 			}
@@ -148,7 +151,7 @@ public final class WasmPeephole {
 		}
 		// A second pass for the calls of a constant function, decided over the bodies
 		// the first pass left (the fold's debris in a helper is what hides its constant).
-		int numImports = WasmSections.importedFunctionCount(module);
+		int numImports = imported;
 		Map<Integer, byte[]> constants = new HashMap<>();
 		for (int d = 0; d < rewritten.size(); d++) {
 			byte[] constant = constantBody(rewritten.get(d));
@@ -168,7 +171,7 @@ public final class WasmPeephole {
 				}
 				byte[] entry = rewritten.get(d);
 				byte[] out = rewriteEntry(entry, WasmCodeModel.decode(entry, types),
-						types.func(defTypeIdx[d]).results().isEmpty(), pureNonNullCall, calls);
+						types.func(defTypeIdx[d]).results().isEmpty(), pure, calls);
 				changed |= out != entry;
 				rewritten.set(d, out);
 			}
@@ -225,6 +228,18 @@ public final class WasmPeephole {
 	private record ConstantCalls(Map<Integer, byte[]> constants, IntUnaryOperator paramCount) {
 	}
 
+	/**
+	 * The calls a caller named pure producers of a non-null reference, with each
+	 * function's parameter count (-1 for an import, which is never one).
+	 */
+	private record PureCalls(java.util.function.IntPredicate pure, IntUnaryOperator paramCount) {
+
+		boolean test(int function) {
+			return this.pure.test(function);
+		}
+
+	}
+
 	private static final ConstantCalls NO_CONSTANTS = new ConstantCalls(Map.of(), f -> 0);
 
 	// The `i32.const K` bytes when the code entry is exactly: no local declarations,
@@ -272,8 +287,8 @@ public final class WasmPeephole {
 		return false;
 	}
 
-	private static byte[] rewriteEntry(byte[] entry, Body body, boolean funcResultsEmpty,
-			java.util.function.IntPredicate pureNonNullCall, ConstantCalls calls) {
+	private static byte[] rewriteEntry(byte[] entry, Body body, boolean funcResultsEmpty, PureCalls pureNonNullCall,
+			ConstantCalls calls) {
 		List<Instr> code = body.code();
 		if (code.isEmpty()) {
 			return entry;
@@ -312,8 +327,7 @@ public final class WasmPeephole {
 	// adjacent pair (a `tee` in front of a `drop`, the two neighbours a deleted pure
 	// value leaves touching, or the `i32.eqz` a re-tested box becomes beside the
 	// `i32.eqz` its consumer wrote) is seen without a second traversal.
-	private static List<Op> local(List<Instr> code, java.util.function.IntPredicate pureNonNullCall,
-			ConstantCalls calls) {
+	private static List<Op> local(List<Instr> code, PureCalls pureNonNullCall, ConstantCalls calls) {
 		List<Op> out = new ArrayList<>(code.size());
 		for (Instr in : code) {
 			byte @Nullable [] constant = in.op == Instruction.CALL ? calls.constants().get((int) in.a) : null;
@@ -330,14 +344,14 @@ public final class WasmPeephole {
 		return out;
 	}
 
-	private static void add(List<Op> out, Op op, java.util.function.IntPredicate pureNonNullCall) {
+	private static void add(List<Op> out, Op op, PureCalls pureNonNullCall) {
 		out.add(op);
 		while (out.size() >= 2 && collapseTail(out, pureNonNullCall)) {
 			// keep collapsing
 		}
 	}
 
-	private static boolean collapseTail(List<Op> out, java.util.function.IntPredicate pureNonNullCall) {
+	private static boolean collapseTail(List<Op> out, PureCalls pureNonNullCall) {
 		int n = out.size();
 		Op b = out.get(n - 1);
 		Op a = out.get(n - 2);
@@ -361,9 +375,14 @@ public final class WasmPeephole {
 			return true;
 		}
 		if (b.opcode == Instruction.DROP && a.opcode == Instruction.CALL && a.bytes == null
-				&& pureNonNullCall.test((int) a.in.a)) {
+				&& pureNonNullCall.test((int) a.in.a) && pureNonNullCall.paramCount().applyAsInt((int) a.in.a) >= 0) {
+			// The call only consumed its arguments: each is dropped where it was
+			// passed, and a pure push in front of a drop goes with it.
 			out.remove(n - 1);
 			out.remove(n - 2);
+			for (int i = pureNonNullCall.paramCount().applyAsInt((int) a.in.a); i > 0; i--) {
+				add(out, new Op(a.in, Instruction.DROP, new byte[] { (byte) Instruction.DROP }), pureNonNullCall);
+			}
 			return true;
 		}
 		if (isGc(a, Instruction.I31_REF_NEW) && isGc(b, Instruction.REF_CAST) && b.in.a == WasmCodeModel.HEAP_I31) {
@@ -416,7 +435,7 @@ public final class WasmPeephole {
 
 	// `if (result T) call F else ref.null end` at out[at..at+4], F a pure non-null
 	// producer: a boolean boxed into a language's true and false objects.
-	private static boolean isBoxedTruth(List<Op> out, int at, java.util.function.IntPredicate pureNonNullCall) {
+	private static boolean isBoxedTruth(List<Op> out, int at, PureCalls pureNonNullCall) {
 		Op open = out.get(at);
 		if (open.opcode != Instruction.IF || open.in.blockType == null || !open.in.blockType.params().isEmpty()
 				|| open.in.blockType.results().size() != 1) {

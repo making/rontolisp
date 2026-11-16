@@ -3998,6 +3998,17 @@ public final class LispNames {
 	public static final String STRING_JOIN = "%STRING-JOIN";
 
 	/**
+	 * The {@code %string-count} internal primitive: {@code (%string-count needle string
+	 * start end)} answers how many occurrences of NEEDLE that do not overlap, leftmost
+	 * first, lie in STRING between the character indices START and END, which the caller
+	 * checked. Nil -- nothing decided -- where the backend has no arm (the interpreter
+	 * and the JVM compile it to constant nil; on WASM an empty needle or an operand that
+	 * is no immutable string), and the caller's loop runs. See
+	 * {@code .kb/bulk-primitives.md}. Never read from source.
+	 */
+	public static final String STRING_COUNT = "%STRING-COUNT";
+
+	/**
 	 * The {@code %sort-by-keys} internal primitive: {@code (%sort-by-keys keys elements
 	 * out descending)} stores into the general vector OUT the ELEMENTS -- the KEYS
 	 * themselves when ELEMENTS is nil -- in the order of their keys, elements of equal

@@ -162,8 +162,9 @@ class WasmPeepholeTest {
 	@Test
 	void foldsALiteralBoxedForAParameterThatUnboxesIt() {
 		// A cast of an i31 just boxed needs no check, a constant the box holds comes back
-		// out as itself, and a call the caller vouches for is only there for its value. A
-		// constant past 31 bits is what the unboxing changes, so it stays.
+		// out as itself, and a call the caller vouches for is only there for its value --
+		// one that takes an argument too, whose push then goes with it. A constant past
+		// 31 bits is what the unboxing changes, so it stays.
 		byte[] literal = body(0, w -> {
 			w.write(Instruction.I32_CONST);
 			w.writeSignedLeb128(7);
@@ -185,13 +186,20 @@ class WasmPeepholeTest {
 			w.write(Instruction.CALL);
 			w.writeUnsignedLeb128(4);
 			w.write(Instruction.DROP);
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(9);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(5);
+			w.write(Instruction.DROP);
 		});
 		byte[] value = body(0, w -> {
 			w.write(Instruction.REF_NULL);
 			w.writeHeapType(Type.EQ.code());
 		});
-		byte[] rewritten = WasmPeephole
-			.rewrite(module(new int[] { 2, 2, 1, 3, 3 }, List.of(literal, wide, vouched, value, value)), f -> f == 3);
+		byte[] made = body(0, w -> local(w, Instruction.GET_LOCAL, 0));
+		byte[] rewritten = WasmPeephole.rewrite(
+				module(new int[] { 2, 2, 1, 3, 3, 0 }, List.of(literal, wide, vouched, value, value, made)),
+				f -> f == 3 || f == 5);
 
 		assertThat(code(rewritten, 0)).containsExactly("i32.const", "end");
 		assertThat(code(rewritten, 1)).containsExactly("i32.const", "0xFB", "0xFB", "end");

@@ -1615,6 +1615,21 @@ final class WasmRuntimeBuilder {
 			w.write(Instruction.I32_AND);
 		}
 		w.write(Instruction.IF, 0x40);
+		// The fold the string keeps from the first time it was hashed: a key's bytes
+		// were folded at every look-up, 21 ns of the 53 one of seven letters cost
+		// (.kb/hash-tables.md).
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(WasmLispCompiler.STRING_HASH_FIELD);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(2);
+		w.write(Instruction.IF, 0x40);
+		getLocal(w, 2);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
 		getLocal(w, 0);
 		WasmEmitHelper.emitStrBytesArray(w);
 		w.write(Instruction.SET_LOCAL);
@@ -1649,6 +1664,13 @@ final class WasmRuntimeBuilder {
 		w.write(Instruction.BR_IF, 0);
 		w.write(Instruction.END); // loop
 		w.write(Instruction.END); // block
+		getLocal(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		getLocal(w, 2);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(WasmLispCompiler.STRING_HASH_FIELD);
 		getLocal(w, 2);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);

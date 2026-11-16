@@ -31,6 +31,10 @@ final class WasmCharCompiler {
 	/** {@code (char string index)} / {@code (schar string index)}. */
 	static void compileChar(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		List<LispVal> args = cons.toList();
+		// A character built-in that reads this form's code point asked for the code
+		// alone (pushCheckedCode): no character is made of it.
+		boolean codeOnly = ctx.charCodeAsked == cons;
+		ctx.charCodeAsked = null;
 		// _str_char_ref reads a mutable character vector's ELEMENT (O(1), no rendered
 		// string) and decodes an immutable string's UTF-8 through _str_char_at.
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
@@ -41,7 +45,12 @@ final class WasmCharCompiler {
 		WasmEmitHelper.emitIndexCheck(ctx);
 		WasmEmitHelper.castI31GetS(ctx);
 		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_STR_CHAR_REF);
-		makeChar(ctx);
+		if (codeOnly) {
+			ctx.charCodeLeft = cons;
+		}
+		else {
+			makeChar(ctx);
+		}
 	}
 
 	/**
@@ -606,8 +615,27 @@ final class WasmCharCompiler {
 			ctx.writer.writeSignedLeb128(fold ? Character.toLowerCase(c.codePoint()) : c.codePoint());
 			return;
 		}
-		WasmExprCompiler.compileExpr(arg, ctx);
-		if (WasmEmitHelper.checksConsFields(ctx)) {
+		// (char s i) read for its code: _str_char_ref's answer as it stands, where the
+		// form made a character -- an object -- for this operator to take the code out
+		// of again. compileChar leaves the code only for the very form asked, so a form
+		// that compiles another way (a program's own CHAR) answers its character.
+		boolean code = false;
+		if (arg instanceof LispCons form && form.car() instanceof LispSymbol head
+				&& (LispNames.CHAR.equals(head.name()) || LispNames.SCHAR.equals(head.name()))) {
+			LispCons outer = ctx.charCodeLeft;
+			ctx.charCodeAsked = form;
+			WasmExprCompiler.compileExpr(arg, ctx);
+			code = ctx.charCodeLeft == form;
+			ctx.charCodeAsked = null;
+			ctx.charCodeLeft = outer;
+		}
+		else {
+			WasmExprCompiler.compileExpr(arg, ctx);
+		}
+		if (code) {
+			// the code point is on the stack
+		}
+		else if (WasmEmitHelper.checksConsFields(ctx)) {
 			ctx.writer.write(Instruction.I32_CONST);
 			ctx.writer.writeSignedLeb128(WasmOperandTypes.operatorId(ctx));
 			ctx.writer.write(Instruction.CALL);

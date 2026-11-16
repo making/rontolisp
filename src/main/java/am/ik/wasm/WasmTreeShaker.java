@@ -428,6 +428,14 @@ public final class WasmTreeShaker {
 				: WasmSections.parseCodeEntries(codeSec.payload());
 		int numDefined = codeEntries.size();
 		int totalFuncs = numImportedFuncs + numDefined;
+		// A start function with nothing in it -- an initializer whose every store an
+		// earlier pass deleted -- is no root, and its section goes.
+		boolean emptyStart = false;
+		if (startSec != null) {
+			int start = WasmSections.readU(startSec.payload(), new int[] { 0 }) - numImportedFuncs;
+			emptyStart = start >= 0 && start < numDefined
+					&& Arrays.equals(codeEntries.get(start), new byte[] { 0, (byte) Instruction.END });
+		}
 
 		// Call graph, type references and -- only when a droppable range makes them
 		// matter -- the i32.const immediates: one forward walk per defined function.
@@ -457,7 +465,7 @@ public final class WasmTreeShaker {
 					work.push(root);
 				}
 			}
-			if (startSec != null) {
+			if (startSec != null && !emptyStart) {
 				int[] p = { 0 };
 				int root = WasmSections.readU(startSec.payload(), p);
 				if (root >= 0 && root < totalFuncs && !reachable[root]) {
@@ -590,8 +598,11 @@ public final class WasmTreeShaker {
 						numImportedFuncs, reachable, funcRemap, typeRemap, globalRemap));
 				case SEC_EXPORT -> addVector(rebuilt, SEC_EXPORT,
 						WasmSections.rebuildExportSection(s.payload(), funcRemap, globalRemap, droppedExports));
-				case SEC_START ->
-					rebuilt.add(new Section(SEC_START, WasmSections.rebuildStartSection(s.payload(), funcRemap)));
+				case SEC_START -> {
+					if (!emptyStart) {
+						rebuilt.add(new Section(SEC_START, WasmSections.rebuildStartSection(s.payload(), funcRemap)));
+					}
+				}
 				case SEC_DATA -> {
 					if (deadSegments.isEmpty() && deadRanges.isEmpty()) {
 						rebuilt.add(s);

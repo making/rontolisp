@@ -8716,6 +8716,15 @@ cases:
           (print (list sv s (stringp sv) (array-displacement sv) (length sv)
                        (array-total-size sv)))))
       (ci-displaced-fp)
+      ;; vector-pop off a vector with storage of its own, down to nothing (the element it passed
+      ;; stays where it was); an empty vector, one with no fill pointer and a value that is no
+      ;; vector are refused as they were
+      (let ((v (make-array 2 :adjustable t :fill-pointer 0)))
+        (vector-push-extend 1 v) (vector-push-extend 2 v) (vector-push-extend 3 v)
+        (print (list (vector-pop v) (length v) (aref v 2) (vector-pop v) (vector-pop v) (length v)
+                     (handler-case (vector-pop v) (error () :empty))
+                     (handler-case (vector-pop (make-array 3)) (error () :no-fill-pointer))
+                     (handler-case (vector-pop 5) (error () :not-an-array)))))
     expected: |
       (2 2 T NIL (4) 4 50 #(20 30))
       (T 1)
@@ -8725,6 +8734,7 @@ cases:
       ("bc" 2 2 T)
       ("bcZ" "abcZef")
       ("bcZYX" "abcZYf" T NIL 5 8)
+      (3 2 3 2 1 0 :EMPTY :NO-FILL-POINTER :NOT-AN-ARRAY)
   - name: adjust-array-undisplaces-cross-backend
     source: |
       (defun ci-adjust-array-undisplaces ()
@@ -20376,6 +20386,12 @@ cases:
                (r4 (read-char rs))
                (r5 (read-char rs nil 'done)))
           (print (list (char-code r1) (char-code r2) (char-code r3) (char-code r4) r5))))
+      ;; A character read for its code alone -- char-code and the comparisons over (char s i),
+      ;; either representation, one read inside another -- is the character's code.
+      (let ((s "aé😀z") (m (copy-seq "aé😀z")))
+        (print (list (char-code (char s 2)) (char-code (schar m 1)) (char= (char s 3) (char m 3) #\z)
+                     (char< (char s 0) (char m 1)) (char-code (char s (- (char-code (char m 0)) 96)))
+                     (char-upcase (char s 1)) (alpha-char-p (char m 2)) (char-equal (char s 0) #\A))))
     expected: |
       233
       "é"
@@ -20399,6 +20415,7 @@ cases:
       3
       "a😀b"
       (97 233 128512 98 DONE)
+      (128512 233 T T 233 #\É NIL T)
   - name: character-index-is-not-linear-in-the-index
     source: |
       ;; Whatever an earlier index left behind, an index answers by its own position:
@@ -20733,6 +20750,12 @@ cases:
       (print (string-capitalize "ǆenan"))
       ;; String designators (symbol / keyword) take the same path.
       (print (string-downcase :FOO))
+      ;; A string of one-byte characters, counted (a literal, a concatenation) or never
+      ;; counted (a stream's text): the same answer, and what is answered is counted.
+      (print (list (string-upcase "Hello, World 123 {|}~") (string-downcase "Hello, World 123 @[]^_`")
+                   (length (string-upcase (concatenate 'string "ab" "cd")))
+                   (string-upcase (with-output-to-string (o) (write-string "stream text" o)))
+                   (char (string-upcase "abc") 2) (string-downcase "")))
     expected: |
       "éλω"
       "ÉΛΩ"
@@ -20750,6 +20773,7 @@ cases:
       "Aあb 42x"
       "Ǆenan"
       "foo"
+      ("HELLO, WORLD 123 {|}~" "hello, world 123 @[]^_`" 4 "STREAM TEXT" #\C "")
   - name: eq-on-characters-by-code-point
     source: |
       ;; CL permits (but does not require) eq to return T on two characters that
@@ -38128,6 +38152,12 @@ cases:
       (print (lit-keys :c 7 :a 6))
       (print (apply #'lit-keys nil))
       (print (handler-case (lit-keys :d 1) (program-error () 'refused)))
+      ;; a literal a function names is one object from the start; one a form that signals names is
+      ;; built where it stands, and is the same text
+      (defun lit-in-error (x) (if x (error "lit-message ~a" :lit-a) "lit-message ~a"))
+      (print (list (eq (lit-in-error nil) (lit-in-error nil))
+                   (handler-case (lit-in-error t) (error (e) (format nil "~a" e)))
+                   (equal (lit-in-error nil) "lit-message ~a")))
     expected: |
       (T T NIL NIL YES YES KW)
       (NIL NIL T T NO NO SYM)
@@ -38176,6 +38206,7 @@ cases:
       (6 2 NIL 7)
       (1 2 NIL 3)
       REFUSED
+      (T "lit-message LIT-A" T)
   - name: a-signal-renders-no-report
     source: |
       ;; SBCL's answers: a report runs where its text is read, so what it signals cannot

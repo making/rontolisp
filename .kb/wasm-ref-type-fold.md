@@ -77,6 +77,12 @@ off for that module** -- silently, by design; the loss is size, never an answer.
   questions about the same local (no assignment between the two reads) into one, so
   `emitIsExactInt`'s `x is i31 | x is bignum | x is bigint` decides as ONE question. Every
   other i32 is opaque.
+- **A global the start function assigns** (2026-11-16): `fold(module, assignedAtStart)` takes the
+  caller's word for the globals whose declared value nobody reads, and does not walk their
+  initializers, so the null they are declared with is no member of their set. The backend's are
+  the literals' globals (`_lit_init`, `.kb/wasm-gc-strings.md`, "A literal is one object"): a
+  literal read is a string, never nil, as `_str_lit`'s result was.
+  `WasmRefTypeFolderTest#aGlobalTheStartFunctionAssignsIsNeverWhatItWasDeclaredWith`.
 - **Singleton objects** (2026-09-27): an immutable reference global whose initializer's result
   is an allocation holds ONE object that nothing but that initializer made, so it gets a
   pseudo-member of its own (`Model.singletonSets`, after null / i31 / other). The global's

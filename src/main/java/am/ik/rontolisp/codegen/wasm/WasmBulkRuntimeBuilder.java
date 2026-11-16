@@ -4,6 +4,7 @@ import am.ik.rontolisp.codegen.wasm.WasmJsonRuntimeBuilder.Asm;
 import am.ik.rontolisp.codegen.wasm.WasmJsonRuntimeBuilder.Kind;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Builds the wasm-GC halves of the three primitives that take a whole sequence at once:
@@ -30,7 +31,39 @@ final class WasmBulkRuntimeBuilder {
 	/** {@code _str_cat (a, b, c, d) -> string}: up to four pieces as one string. */
 	static final int CAT = 3;
 
-	static final int FUNC_COUNT = 4;
+	/**
+	 * {@code _lit_init () -> ()}: the module's start function, which builds each literal
+	 * a function body names into its global ({@code QuoteGlobals.literalInitBodies}). Its
+	 * signature and body are the compiler's, not this class's.
+	 */
+	static final int LIT_INIT = 4;
+
+	/** {@code _str_count (needle, string, start, end) -> fixnum or nil}. */
+	static final int COUNT = 5;
+
+	/**
+	 * The functions {@code _lit_init} goes on in, each calling the next, where a module
+	 * names more literals than one body should hold ({@link #LIT_INIT_PARTS} in all,
+	 * {@code _lit_init} the first): a function body is bounded for the engine that
+	 * compiles it ({@code .kb/wasm-function-body-size.md}).
+	 */
+	static final int LIT_INIT_MORE = 6;
+
+	static final int LIT_INIT_PARTS = 8;
+
+	static final int FUNC_COUNT = LIT_INIT_MORE + LIT_INIT_PARTS - 1;
+
+	/**
+	 * Which of {@code _lit_init}'s parts the block's function at an offset is.
+	 * @param i the offset
+	 * @return the part, 0 for {@code _lit_init} itself, or -1 for another function
+	 */
+	static int litInitPart(int i) {
+		if (i == LIT_INIT) {
+			return 0;
+		}
+		return i >= LIT_INIT_MORE && i < FUNC_COUNT ? i - LIT_INIT_MORE + 1 : -1;
+	}
 
 	private static final int BYTES = WasmLispCompiler.TYPE_STR_BYTES;
 
@@ -63,8 +96,9 @@ final class WasmBulkRuntimeBuilder {
 	 *
 	 * @param identityHash whether a cons and a cell carry the identity-hash slot
 	 * @param charvecPossible whether the module can hold a mutable character vector
+	 * @param speed whether the module trades bytes for speed
 	 */
-	record Flags(boolean identityHash, boolean charvecPossible) {
+	record Flags(boolean identityHash, boolean charvecPossible, boolean speed) {
 	}
 
 	/**
@@ -76,7 +110,7 @@ final class WasmBulkRuntimeBuilder {
 		return switch (i) {
 			case SPLIT -> WasmLispCompiler.TYPE_CALLABLE_BASE + 2;
 			case JOIN -> WasmLispCompiler.TYPE_CALLABLE_BASE + 1;
-			case SORT, CAT -> WasmLispCompiler.TYPE_CALLABLE_BASE + 3;
+			case SORT, CAT, COUNT -> WasmLispCompiler.TYPE_CALLABLE_BASE + 3;
 			default -> throw new IllegalArgumentException("no bulk runtime function " + i);
 		};
 	}
@@ -93,6 +127,7 @@ final class WasmBulkRuntimeBuilder {
 			case JOIN -> buildJoin(flags);
 			case SORT -> buildSort();
 			case CAT -> buildCat();
+			case COUNT -> buildCount();
 			default -> throw new IllegalArgumentException("no bulk runtime function " + i);
 		};
 	}
@@ -175,10 +210,10 @@ final class WasmBulkRuntimeBuilder {
 		a.get(s.count).i32(1).op(Instruction.I32_ADD).tee(s.n).arrayNewDefault(ARR).set(s.out);
 		a.i32(1).set(s.from);
 		scan(a, s, () -> a.get(s.k).get(s.count).op(Instruction.I32_GE_U), () -> {
-			piece(a, s, s.i);
+			piece(a, s, s.i, flags.speed());
 			a.get(s.i).get(s.m).op(Instruction.I32_ADD).set(s.from);
 		});
-		piece(a, s, s.end);
+		piece(a, s, s.end, flags.speed());
 		// (dims . ((fill-pointer . (adjustable . 0)) . data)), as make-array builds it
 		a.get(s.n).i31().arrayNewFixed(ARR, 1);
 		a.get(s.n).i31();
@@ -201,10 +236,28 @@ final class WasmBulkRuntimeBuilder {
 	// where no occurrence fits any more or when stop answers true.
 	private static void scan(Asm a, Split s, Runnable stop, Runnable onMatch) {
 		a.i32(1).set(s.i);
+		walk(a, new Walk(s.sb, s.pb, s.i, s.j, s.m, s.first, s.last), stop, onMatch);
+	}
+
+	/**
+	 * What a walk over a string's bytes for a needle reads: the two byte arrays, the
+	 * position and a counter, the needle's bytes, its first byte, and the last position
+	 * an occurrence can start at.
+	 */
+	private record Walk(int sb, int pb, int i, int j, int m, int first, int last) {
+	}
+
+	// The walk of a string's bytes from the position in i: at each occurrence of the
+	// needle onMatch runs with i at its first byte, and the walk goes on behind it; it
+	// ends where no occurrence fits any more, or when stop (which may be null) answers
+	// true.
+	private static void walk(Asm a, Walk s, @Nullable Runnable stop, Runnable onMatch) {
 		a.block("scanned").loop("scan");
 		a.get(s.i).get(s.last).op(Instruction.I32_GT_S).brIf("scanned");
-		stop.run();
-		a.brIf("scanned");
+		if (stop != null) {
+			stop.run();
+			a.brIf("scanned");
+		}
 		a.get(s.sb).get(s.i).arrayGetU(BYTES).get(s.first).op(Instruction.I32_EQ).ifVoid();
 		a.i32(1).set(s.j);
 		a.block("differs").loop("rest");
@@ -225,13 +278,79 @@ final class WasmBulkRuntimeBuilder {
 		a.end().end();
 	}
 
-	// out[k++] = the bytes of the string from `from` short of the local `to`, framed.
-	private static void piece(Asm a, Split s, int to) {
+	// --- count -----------------------------------------------------------------
+
+	// _str_count (needle, string, start, end): the occurrences of the needle in the
+	// string between two character indices the caller checked, leftmost first and none
+	// overlapping another, in one walk of the bytes. Nil for an operand that is no
+	// immutable string, an empty needle or a bound that is no fixnum. A bound is its
+	// byte less the opening quote in a string counted at its bytes.
+	private static byte[] buildCount() {
+		Asm a = new Asm(4);
+		Walk s = new Walk(a.local(Kind.BYTES), a.local(Kind.BYTES), a.local(Kind.I32), a.local(Kind.I32),
+				a.local(Kind.I32), a.local(Kind.I32), a.local(Kind.I32));
+		int count = a.local(Kind.I32);
+		a.block("fail");
+		stringBytes(a, 0, s.pb, "fail");
+		stringBytes(a, 1, s.sb, "fail");
+		a.get(2).refTest(I31).get(3).refTest(I31).op(Instruction.I32_AND).op(Instruction.I32_EQZ).brIf("fail");
+		a.get(s.pb).arrayLen().i32(2).op(Instruction.I32_SUB).tee(s.m).i32(0).op(Instruction.I32_LE_S).brIf("fail");
+		a.get(s.pb).i32(1).arrayGetU(BYTES).set(s.first);
+		a.get(1).refCast(STRING).structGet(STRING, CHAR_COUNT);
+		a.get(s.sb).arrayLen().i32(2).op(Instruction.I32_SUB).op(Instruction.I32_EQ).ifVoid();
+		a.get(2).unI31().i32(1).op(Instruction.I32_ADD).set(s.i);
+		a.get(3).unI31().i32(1).op(Instruction.I32_ADD).get(s.m).op(Instruction.I32_SUB).set(s.last);
+		a.elseArm();
+		a.get(1).get(2).unI31().call(WasmLispCompiler.FUNC_STR_CHAR_BYTE_OFFSET).set(s.i);
+		a.get(1).get(3).unI31().call(WasmLispCompiler.FUNC_STR_CHAR_BYTE_OFFSET);
+		a.get(s.m).op(Instruction.I32_SUB).set(s.last);
+		a.end();
+		walk(a, s, null, () -> increment(a, count));
+		a.get(count).i31().ret();
+		a.end();
+		a.refNull();
+		return a.finish();
+	}
+
+	// A piece of at most this many bytes is made with its bytes in hand.
+	private static final int SHORT_PIECE = 8;
+
+	// out[k++] = the bytes of the string from `from` short of the local `to`, framed. A
+	// short piece is one array.new_fixed over the bytes read, at the speed levels: an
+	// array made empty and filled by array.copy is two calls into the engine (its fill
+	// and its copy), which were most of what a word of a split cost.
+	private static void piece(Asm a, Split s, int to, boolean speed) {
 		a.get(to).get(s.from).op(Instruction.I32_SUB).tee(s.len);
-		a.i32(2).op(Instruction.I32_ADD).tee(s.framed).arrayNewDefault(BYTES).set(s.piece);
+		a.i32(2).op(Instruction.I32_ADD).set(s.framed);
+		a.block("made");
+		if (speed) {
+			java.util.Map<Integer, String> cases = new java.util.HashMap<>();
+			a.block("long");
+			for (int n = SHORT_PIECE; n >= 0; n--) {
+				a.block("short" + n);
+				cases.put(n, "short" + n);
+			}
+			a.get(s.len).brTable("long", cases, SHORT_PIECE + 1);
+			for (int n = 0; n <= SHORT_PIECE; n++) {
+				a.end();
+				a.i32(QUOTE);
+				for (int j = 0; j < n; j++) {
+					a.get(s.sb).get(s.from);
+					if (j > 0) {
+						a.i32(j).op(Instruction.I32_ADD);
+					}
+					a.arrayGetU(BYTES);
+				}
+				a.i32(QUOTE).arrayNewFixed(BYTES, n + 2).set(s.piece);
+				a.br("made");
+			}
+			a.end();
+		}
+		a.get(s.framed).arrayNewDefault(BYTES).set(s.piece);
 		a.get(s.piece).i32(0).i32(QUOTE).arraySet(BYTES);
 		a.get(s.piece).get(s.len).i32(1).op(Instruction.I32_ADD).i32(QUOTE).arraySet(BYTES);
 		copyBytes(a, s.piece, s.one, s.sb, s.from, s.len);
+		a.end();
 		a.get(s.len).i32(-1).get(s.ascii).op(Instruction.SELECT).set(s.cc);
 		a.get(s.out).get(s.k);
 		WasmStringRuntimeBuilder.emitCountedRuntimeString(a.w, s.framed, s.piece, s.id, s.cc);

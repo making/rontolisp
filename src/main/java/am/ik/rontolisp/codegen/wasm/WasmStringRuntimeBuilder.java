@@ -46,9 +46,6 @@ final class WasmStringRuntimeBuilder {
 
 	private static final int CAPITALIZE = 3;
 
-	// The slots of _str_lit's table: a power of two.
-	private static final int LITERAL_TABLE_SIZE = 1024;
-
 	private WasmStringRuntimeBuilder() {
 	}
 
@@ -156,109 +153,34 @@ final class WasmStringRuntimeBuilder {
 	}
 
 	/**
-	 * Builds {@code _str_lit} (FUNC_STR_LIT): the object of the literal at {@code off},
-	 * {@code _str_build}'s result the first time and the same object after that, so that
-	 * evaluating a literal costs a table read rather than a byte loop and two
-	 * allocations. Sound because nothing writes a string's bytes in place and a
-	 * {@code TYPE_STRING}'s only mutable fields are the character cursor, a cache of the
-	 * same bytes ({@code .kb/wasm-gc-strings.md}, "A literal is one object").
-	 *
-	 * <p>
-	 * The table is direct-mapped by the offset's low bits and made on the first literal,
-	 * so a site stays {@code (off, len)} and the module grows by this one function. A
-	 * slot holds the last literal that mapped there: two hot literals sharing one cost
-	 * what a build costs, as if there were no table.
-	 *
-	 * <p>
-	 * With {@code counts} the literal's characters are counted as it is built, once: a
-	 * concatenation keeps the count of two counted operands
-	 * ({@link #buildStringConcatBody}), and a literal is an operand of most of them.
-	 * @param tableGlobal the module global holding the table, a {@code (mut (ref null
-	 * eq))} = null
-	 * @param counts whether a literal is counted when built, a speed-for-size trade
+	 * Builds {@code _str_lit} (FUNC_STR_LIT): {@code _str_build}'s result with its
+	 * characters counted, what {@code _lit_init} calls once for each literal a function
+	 * body names where speed is asked for. A concatenation keeps the count of two counted
+	 * operands ({@link #buildStringConcatBody}), and a literal is an operand of most of
+	 * them ({@code .kb/wasm-gc-strings.md}, "A literal is one object").
 	 * @return the function body (signature {@code (i32,i32)->(ref null eq)},
 	 * TYPE_RAT_NEW)
 	 */
-	static byte[] buildStrLitBody(int tableGlobal, boolean counts) {
+	static byte[] buildStrLitBody() {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// params: off = 0, len = 1. locals: hit = 2 (ref null TYPE_STRING), built = 3.
-		w.write(2);
+		// params: off = 0, len = 1. locals: built = 2.
 		w.write(1);
-		w.writeRefType(true, WasmLispCompiler.TYPE_STRING);
 		w.write(1);
 		w.writeRefType(true, Type.EQ.code());
-		int off = 0, len = 1, hit = 2, built = 3;
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.BLOCK);
-		w.writeRefType(true, Type.EQ.code());
-		w.write(Instruction.GET_GLOBAL);
-		w.writeUnsignedLeb128(tableGlobal);
-		emitBrOnCastFail(w, WasmLispCompiler.TYPE_HASH_BUCKETS);
-		get(w, off);
-		i32(w, LITERAL_TABLE_SIZE - 1);
-		w.write(Instruction.I32_AND);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		emitBrOnCastFail(w, WasmLispCompiler.TYPE_STRING);
-		w.write(Instruction.TEE_LOCAL);
-		w.writeUnsignedLeb128(hit);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
-		w.writeUnsignedLeb128(0);
-		get(w, off);
-		w.write(Instruction.I32_NE);
-		w.write(Instruction.BR_IF, 1);
-		get(w, hit);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
-		w.write(Instruction.DROP);
-		w.write(Instruction.END);
-		w.write(Instruction.GET_GLOBAL);
-		w.writeUnsignedLeb128(tableGlobal);
-		w.write(Instruction.REF_IS_NULL);
-		w.write(Instruction.IF, 0x40);
-		i32(w, LITERAL_TABLE_SIZE);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		w.write(Instruction.SET_GLOBAL);
-		w.writeUnsignedLeb128(tableGlobal);
-		w.write(Instruction.END);
-		w.write(Instruction.GET_GLOBAL);
-		w.writeUnsignedLeb128(tableGlobal);
-		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		get(w, off);
-		i32(w, LITERAL_TABLE_SIZE - 1);
-		w.write(Instruction.I32_AND);
+		int off = 0, len = 1, built = 2;
 		get(w, off);
 		get(w, len);
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_BUILD);
 		w.write(Instruction.TEE_LOCAL);
 		w.writeUnsignedLeb128(built);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
-		if (counts) {
-			get(w, built);
-			w.write(Instruction.CALL);
-			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_COUNT);
-			w.write(Instruction.DROP);
-		}
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_COUNT);
+		w.write(Instruction.DROP);
 		get(w, built);
 		w.write(Instruction.END);
 		return body.toByteArray();
-	}
-
-	// Leaves (ref heapType) on the stack, or branches with the operand to the
-	// eqref-valued
-	// block around it.
-	private static void emitBrOnCastFail(WasmWriter w, int heapType) {
-		w.write(Instruction.GC_PREFIX, Instruction.BR_ON_CAST_FAIL);
-		w.write(0x01); // the operand nullable, the cast not
-		w.writeUnsignedLeb128(0);
-		w.writeHeapType(Type.EQ.code());
-		w.writeHeapType(heapType);
 	}
 
 	/**
@@ -472,6 +394,7 @@ final class WasmStringRuntimeBuilder {
 		emitCountIsByteLength(w, len, count);
 		w.write(Instruction.SELECT);
 		get(w, count);
+		i32(w, 0); // the hash, not folded yet
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
 	}
@@ -2341,10 +2264,12 @@ final class WasmStringRuntimeBuilder {
 		// locals: needle = 6, hay = 7 ($str_bytes); from1 = 8, from2 = 9, last = 10,
 		// width = 11, pos = 12, k = 13, first = 14 (i32).
 		int needle = 6, hay = 7, from1 = 8, from2 = 9, last = 10, width = 11, pos = 12, k = 13, first = 14;
+		// single = 15: whether the haystack's count is its bytes, a character a byte
+		int single = 15;
 		w.write(2);
 		w.write(2);
 		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
-		w.write(7);
+		w.write(8);
 		w.write(Type.I32);
 		WasmStringpCompiler.emitStringpI32(w, seq1);
 		WasmStringpCompiler.emitStringpI32(w, seq2);
@@ -2365,16 +2290,38 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.IF, 0x40);
 		setStrArray(w, seq1, needle);
 		setStrArray(w, seq2, hay);
+		// A haystack counted at its bytes holds a character a byte: an index is its
+		// byte less the opening quote, at either bound and for the answer, with no
+		// call and no second walk (a Starlark `find` was four calls and two walks).
+		get(w, seq2);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(CHAR_COUNT);
+		get(w, hay);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_EQ);
+		set(w, single);
+		// The needle from its first character, as nearly every search asks: byte 1.
+		get(w, start1);
+		WasmEmitHelper.castI31GetS(w);
+		w.write(Instruction.IF, Type.I32.code());
 		emitByteOffset(w, seq1, start1);
+		w.write(Instruction.ELSE);
+		i32(w, 1);
+		w.write(Instruction.END);
 		set(w, from1);
-		emitByteOffset(w, seq2, start2);
+		emitByteOffsetOrSingle(w, seq2, start2, single);
 		set(w, from2);
 		// width = (end1's byte) - from1; last = (end2's byte) - width
-		emitEndByteOffset(w, seq1, end1, needle);
+		emitEndByteOffset(w, seq1, end1, needle, -1);
 		get(w, from1);
 		w.write(Instruction.I32_SUB);
 		set(w, width);
-		emitEndByteOffset(w, seq2, end2, hay);
+		emitEndByteOffset(w, seq2, end2, hay, single);
 		get(w, width);
 		w.write(Instruction.I32_SUB);
 		set(w, last);
@@ -2399,7 +2346,7 @@ final class WasmStringRuntimeBuilder {
 		get(w, first);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, 0x40);
-		emitByteMatch(w, needle, hay, from1, pos, width, k, start2, from2);
+		emitByteMatch(w, needle, hay, from1, pos, width, k, start2, from2, single);
 		w.write(Instruction.END);
 		get(w, pos);
 		i32(w, 1);
@@ -2625,8 +2572,24 @@ final class WasmStringRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_BYTE_OFFSET);
 	}
 
-	// Pushes the byte offset of an end bound: the closing quote's when it is nil.
-	private static void emitEndByteOffset(WasmWriter w, int strLocal, int endLocal, int arrLocal) {
+	// Pushes the byte offset of the character the fixnum in indexLocal names: the index
+	// and one where the i32 local `single` says the string holds a character a byte.
+	private static void emitByteOffsetOrSingle(WasmWriter w, int strLocal, int indexLocal, int single) {
+		get(w, single);
+		w.write(Instruction.IF, Type.I32.code());
+		get(w, indexLocal);
+		WasmEmitHelper.castI31GetS(w);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.ELSE);
+		emitByteOffset(w, strLocal, indexLocal);
+		w.write(Instruction.END);
+	}
+
+	// Pushes the byte offset of an end bound: the closing quote's when it is nil. With a
+	// `single` local (-1 for none) a bound of a string of one-byte characters is read
+	// off it (emitByteOffsetOrSingle).
+	private static void emitEndByteOffset(WasmWriter w, int strLocal, int endLocal, int arrLocal, int single) {
 		get(w, endLocal);
 		w.write(Instruction.REF_IS_NULL);
 		w.write(Instruction.IF, Type.I32.code());
@@ -2635,7 +2598,12 @@ final class WasmStringRuntimeBuilder {
 		i32(w, 1);
 		w.write(Instruction.I32_SUB);
 		w.write(Instruction.ELSE);
-		emitByteOffset(w, strLocal, endLocal);
+		if (single < 0) {
+			emitByteOffset(w, strLocal, endLocal);
+		}
+		else {
+			emitByteOffsetOrSingle(w, strLocal, endLocal, single);
+		}
 		w.write(Instruction.END);
 	}
 
@@ -2643,7 +2611,7 @@ final class WasmStringRuntimeBuilder {
 	// the position as a character index -- start2 plus the lead bytes before it, counted
 	// in k, which the comparison is done with by then.
 	private static void emitByteMatch(WasmWriter w, int needle, int hay, int from1, int pos, int width, int k,
-			int start2, int from2) {
+			int start2, int from2, int single) {
 		i32(w, 1);
 		set(w, k);
 		w.write(Instruction.BLOCK, 0x40);
@@ -2673,6 +2641,15 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.BR, 1);
 		w.write(Instruction.END);
 		w.write(Instruction.END); // loop
+		// a character a byte: the position less the opening quote
+		get(w, single);
+		w.write(Instruction.IF, 0x40);
+		get(w, pos);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
 		// k = start2; while (from2 < pos) k += hay[from2++] is a lead byte
 		get(w, start2);
 		WasmEmitHelper.castI31GetS(w);
@@ -3068,13 +3045,80 @@ final class WasmStringRuntimeBuilder {
 		WasmWriter w = new WasmWriter(body);
 		// Locals 1..7: pos, end, start, cur, cp, step, k (i32); 8: inArr ($str_bytes).
 		// cp doubles as the scratch the designator scan needs before the loop starts.
-		declareI32AndStrArrayLocals(w, 7, 1);
-		int pos = 1, end = 2, start = 3, cur = 4, cp = 5, step = 6, k = 7, inArr = 8;
+		declareI32AndStrArrayLocals(w, 7, 2);
+		int pos = 1, end = 2, start = 3, cur = 4, cp = 5, step = 6, k = 7, inArr = 8, out = 9;
 		setStrArray(w, 0, inArr);
+		emitSingleByteCaseConvert(w, upcase, inArr, out, pos, end, start, cur, cp);
 		emitStringContentRange(w, 0, pos, end);
 		emitCaseFoldCore(w, inArr, pos, end, start, cur, cp, step, k, -1, upcase ? UPCASE : DOWNCASE);
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	// The string in param 0, counted at its bytes -- a character a byte, so every one is
+	// ASCII and only a letter of the other case changes: the bytes go from its array to
+	// a new one, a letter moved by 32, and the answer keeps the count. Returns it; falls
+	// through for any other string, which the code-point core folds through the linear
+	// scratch (two byte loops and a call a character: 2.5% of a Starlark program of
+	// `s.upper().lower()`). len, count, id and b are i32 locals.
+	private static void emitSingleByteCaseConvert(WasmWriter w, boolean upcase, int inArr, int out, int pos, int len,
+			int count, int id, int b) {
+		get(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+		w.writeUnsignedLeb128(CHAR_COUNT);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(count);
+		get(w, inArr);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(len);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.ELSE);
+		get(w, len);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		set(w, out);
+		// the quotes are bytes like the rest: neither is a letter
+		i32(w, 0);
+		set(w, pos);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, pos);
+		get(w, len);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		get(w, out);
+		get(w, pos);
+		arrGetLocal(w, inArr, pos);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(b);
+		// b +- 32 when b is a letter of the other case
+		get(w, b);
+		i32(w, upcase ? 'a' : 'A');
+		w.write(Instruction.I32_SUB);
+		i32(w, 26);
+		w.write(Instruction.I32_LT_U);
+		i32(w, 5);
+		w.write(Instruction.I32_SHL);
+		w.write(upcase ? Instruction.I32_SUB : Instruction.I32_ADD);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		get(w, pos);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, pos);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		emitCountedRuntimeString(w, len, out, id, count);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
 	}
 
 	/**
@@ -4649,12 +4693,14 @@ final class WasmStringRuntimeBuilder {
 
 	private static final int CHAR_COUNT = 5;
 
-	// Pushes the seed cursor and count operands a struct.new TYPE_STRING needs after its
-	// data array: (0, 1, -1).
+	// Pushes the seed cursor, count and hash operands a struct.new TYPE_STRING needs
+	// after
+	// its data array: (0, 1, -1, 0).
 	static void emitSeedCursor(WasmWriter w) {
 		i32(w, 0);
 		i32(w, 1);
 		i32(w, -1);
+		i32(w, 0);
 	}
 
 	// Pushes cursor field `field` of the TYPE_STRING held in sLocal.

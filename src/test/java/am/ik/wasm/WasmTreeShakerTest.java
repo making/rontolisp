@@ -1156,7 +1156,10 @@ class WasmTreeShakerTest {
 		// and so does the type only it named. `00` (zero entries) says exactly what no
 		// section at all says, so the type, function and code sections must be gone --
 		// not present and empty. This is the shape the component's shared-memory module
-		// shakes down to for a print-only program, where it carried three of them.
+		// shakes down to for a print-only program, where it carried three of them. The
+		// function is the module's start function here, and still goes, its section with
+		// it: there is nothing in it to run (an initializer whose every store an
+		// earlier pass deleted).
 		java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
 		new WasmWriter(out).write("\0asm")
 			.writeLittleEndian4(1)
@@ -1164,6 +1167,7 @@ class WasmTreeShakerTest {
 			.writeFunction(funcs -> funcs.addFunction(0))
 			.writeMemory(memories -> memories.addMemory(1))
 			.writeExport(exports -> exports.addExport("memory", ExternalKind.MEMORY, 0))
+			.writeStartSection(0)
 			.writeCode(code -> code.addFunction(new byte[] { 0x00, (byte) 0x0B }));
 		byte[] shaken = WasmTreeShaker.shake(out.toByteArray());
 

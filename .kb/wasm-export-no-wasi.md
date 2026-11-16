@@ -89,8 +89,10 @@ by `WasmExportCompilerTest.noWasiStubsAnswerWhereverThereIsATrueAnswerAndTrapWhe
 The core module keeps the Preview 1 no-WASI contract (stubs, fd_write sink,
 `NoWasiFilesystemStubs`, `DATA_BASE_OFFSET` 256) but declares/exports its OWN memory, keeps
 `TYPE_START` at `() -> ()`, exports NO `run`/`_initialize`, and carries a core start section
-(`WasmWriter.writeStartSection(FUNC_START)`, between export and code; the shaker roots and renumbers
-it). **Top-level forms run at instantiation** -- the one component shape where an `--invoke`d export
+(`WasmWriter.writeStartSection`, between export and code; the shaker roots and renumbers
+it) naming `_start` -- or `_lit_init`, which calls `_start` behind the literals it builds, in a
+module with a literal inside a function (every shape of module has that start section then:
+`.kb/wasm-gc-strings.md`, "A literal is one object"). **Top-level forms run at instantiation** -- the one component shape where an `--invoke`d export
 sees `defparameter` globals assigned.
 
 - `WasmComponentBuilder.buildReactor`: no import block/adapter/mem module at either `--optimize`

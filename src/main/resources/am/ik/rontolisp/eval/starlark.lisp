@@ -1552,7 +1552,8 @@
                 (rontolisp::%starlark-type i)))))
 
 ;; X[I] = V. As %starlark-index: a list nothing forbids writing, subscripted by an int
-;; within it, is stored into here.
+;; within it, is stored into here, and a dict nothing forbids writing goes straight to
+;; its store.
 (defun rontolisp::%starlark-set-index (x i v)
   (if (and (rontolisp::%starlark-list-p x)
            (not (car (rontolisp::%starlark-list-mutability x)))
@@ -1563,7 +1564,11 @@
         (if (and (integerp i) (>= i 0) (< i n))
             (setf (aref items i) v)
             (rontolisp::%starlark-set-index-of x i v)))
-      (rontolisp::%starlark-set-index-of x i v)))
+      (if (and (rontolisp::%starlark-dict-p x)
+               (not (car (rontolisp::%starlark-dict-mutability x)))
+               (eql (rontolisp::%starlark-dict-iterating x) 0))
+          (rontolisp::%starlark-dict-store x i v)
+          (rontolisp::%starlark-set-index-of x i v))))
 
 ;; X[I] = V for every X and I.
 (defun rontolisp::%starlark-set-index-of (x i v)
@@ -2432,7 +2437,7 @@
 (defun rontolisp::%starlark-m-append (l x)
   (if (and (rontolisp::%starlark-list-p l)
            (null (car (rontolisp::%starlark-list-mutability l)))
-           (= (rontolisp::%starlark-list-iterating l) 0))
+           (eql (rontolisp::%starlark-list-iterating l) 0))
       (vector-push-extend x (rontolisp::%starlark-list-items l))
       (vector-push-extend x
        (rontolisp::%starlark-list-receiver l "append" "append to")))
@@ -2510,7 +2515,7 @@
 (defun rontolisp::%starlark-m-pop (x a b)
   (cond ((and (eq a :%unset) (rontolisp::%starlark-list-p x)
               (null (car (rontolisp::%starlark-list-mutability x)))
-              (= (rontolisp::%starlark-list-iterating x) 0)
+              (eql (rontolisp::%starlark-list-iterating x) 0)
               (> (length (rontolisp::%starlark-list-items x)) 0))
          (let* ((items (rontolisp::%starlark-list-items x))
                 (popped (vector-pop items)))
@@ -2555,10 +2560,15 @@
       d
       (rontolisp::%starlark-no-attribute d name)))
 
+;; An int or a string is its own normal form: the table is asked here, with no call
+;; of %starlark-dict-cell between.
 (defun rontolisp::%starlark-m-get (d k default)
   (if (not (rontolisp::%starlark-dict-p d))
       (rontolisp::%starlark-no-attribute d "get"))
-  (let ((cell (rontolisp::%starlark-dict-cell d k)))
+  (let ((cell
+         (if (or (integerp k) (stringp k))
+             (gethash k (rontolisp::%starlark-dict-table d))
+             (rontolisp::%starlark-dict-cell d k))))
     (if cell (cdr cell) default)))
 
 (defun rontolisp::%starlark-m-setdefault (d k default)
@@ -2809,37 +2819,46 @@
   (if (not (stringp sub)) (rontolisp::%starlark-string-argument sub "count"))
   (let* ((n (length s))
          (i (rontolisp::%starlark-slice-bound start n 0 n 0))
-         (hi (rontolisp::%starlark-slice-bound end n 0 n n))
-         (c 0)
-         (step (max 1 (length sub))))
-    (loop
-      (let ((r (if (> i hi) nil (rontolisp::%starlark-search sub s i hi))))
-        (if (null r) (return c))
-        (setq c (+ c 1))
-        (setq i (+ r step))))))
+         (hi (rontolisp::%starlark-slice-bound end n 0 n n)))
+    ;; one walk where the backend counts itself (.kb/bulk-primitives.md), else a
+    ;; search an occurrence
+    (or (if (<= i hi) (%string-count sub s i hi))
+        (let ((c 0) (step (max 1 (length sub))))
+          (loop
+            (let ((r
+                   (if (> i hi) nil (rontolisp::%starlark-search sub s i hi))))
+              (if (null r) (return c))
+              (setq c (+ c 1))
+              (setq i (+ r step))))))))
+
+;; Whether the string S between LO and HI begins (or, when AT-END, ends) with Q, which
+;; NAME's caller wants a string.
+(defun rontolisp::%starlark-affix-of (s q lo hi at-end name)
+  (if (not (stringp q))
+      (error "~a: got ~a, want string or tuple of string" name
+             (rontolisp::%starlark-type q)))
+  (let ((m (length q)))
+    (if (and (<= (+ lo m) hi)
+             (if at-end
+                 (rontolisp::%starlark-search q s (- hi m) hi)
+                 (rontolisp::%starlark-search q s lo (+ lo m))))
+        t
+        nil)))
 
 ;; Whether S between START and END begins (or, when AT-END, ends) with P, a string or
-;; a tuple of strings.
+;; a tuple of strings, each of which is asked for its type whatever the others answer.
 (defun rontolisp::%starlark-affix (s p start end at-end name)
   (if (not (stringp s)) (rontolisp::%starlark-no-attribute s name))
   (let* ((n (length s))
          (lo (rontolisp::%starlark-slice-bound start n 0 n 0))
-         (hi (rontolisp::%starlark-slice-bound end n 0 n n))
-         (found nil))
-    (dolist (q
-             (if (rontolisp::%starlark-tuple-p p)
-                 (rontolisp::%starlark-elements p)
-                 (list p)))
-      (if (not (stringp q))
-          (error "~a: got ~a, want string or tuple of string" name
-                 (rontolisp::%starlark-type q)))
-      (let ((m (length q)))
-        (if (and (not found) (<= (+ lo m) hi)
-                 (if at-end
-                     (rontolisp::%starlark-search q s (- hi m) hi)
-                     (rontolisp::%starlark-search q s lo (+ lo m))))
-            (setq found t))))
-    found))
+         (hi (rontolisp::%starlark-slice-bound end n 0 n n)))
+    (if (rontolisp::%starlark-tuple-p p)
+        (let ((found nil))
+          (dolist (q (rontolisp::%starlark-elements p))
+            (if (rontolisp::%starlark-affix-of s q lo hi at-end name)
+                (setq found t)))
+          found)
+        (rontolisp::%starlark-affix-of s p lo hi at-end name))))
 
 (defun rontolisp::%starlark-m-startswith (s p start end)
   (rontolisp::%starlark-affix s p start end nil "startswith"))
@@ -2857,21 +2876,35 @@
       (%string-downcase-piece s)
       (rontolisp::%starlark-no-attribute s "lower")))
 
-;; The characters a strip removes: white space, or those of the string CUTSET.
+;; What a strip removes: T for white space, or the codes of the string CUTSET's
+;; characters. A character is read as its code: a compiled (char-code (char s i)) makes
+;; no character, where a character compared with another is an object on wasm.
 (defun rontolisp::%starlark-cutset (cutset name)
   (if (eq cutset :none)
-      (list #\Space #\Tab #\Newline #\Return)
-      (coerce (rontolisp::%starlark-string-argument cutset name) 'list)))
+      t
+      (let ((chars (rontolisp::%starlark-string-argument cutset name))
+            (codes nil))
+        (dotimes (i (length chars))
+          (setq codes (cons (char-code (char chars i)) codes)))
+        codes)))
+
+;; Whether character I of the string S is one CUTSET removes.
+(defun rontolisp::%starlark-cut-p (s i cutset)
+  (let ((c (char-code (char s i))))
+    (if (eq cutset t)
+        (or (= c 32) (= c 9) (= c 10) (= c 13))
+        (if (member c cutset) t nil))))
 
 ;; S is a string: it without the characters of CUTSET at its start when LEFT and at its
 ;; end when RIGHT -- S itself when it has none there.
 (defun rontolisp::%starlark-trim (s cutset left right)
   (let* ((n (length s)) (lo 0) (hi n))
     (if left
-        (loop while (and (< lo hi) (member (char s lo) cutset))
+        (loop while (and (< lo hi) (rontolisp::%starlark-cut-p s lo cutset))
               do (setq lo (+ lo 1))))
     (if right
-        (loop while (and (< lo hi) (member (char s (- hi 1)) cutset))
+        (loop while
+                (and (< lo hi) (rontolisp::%starlark-cut-p s (- hi 1) cutset))
               do (setq hi (- hi 1))))
     (if (and (= lo 0) (= hi n)) s (rontolisp::%starlark-substring s lo hi))))
 

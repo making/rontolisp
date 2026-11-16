@@ -442,6 +442,19 @@ final class WasmExprCompiler {
 		compileExpr(expansion, ctx);
 	}
 
+	// The expansion of a form that signals: a literal in it -- the control string, a
+	// condition's name -- is evaluated on the way to a handler or a report, so it is
+	// built where it stands and has no global of its own (Ctx.signalling).
+	private static void compileSignalling(LispVal expansion, WasmLispCompiler.Ctx ctx, boolean tail) {
+		ctx.signalling++;
+		try {
+			compileExpansion(expansion, ctx, tail);
+		}
+		finally {
+			ctx.signalling--;
+		}
+	}
+
 	private static void compileCons(LispCons cons, WasmLispCompiler.Ctx ctx) {
 		compileCons(cons, ctx, false);
 	}
@@ -2382,6 +2395,7 @@ final class WasmExprCompiler {
 			// (WasmBulkRuntimeBuilder, .kb/bulk-primitives.md).
 			case LispNames.STRING_SPLIT -> compileBulkCall(cons, 3, WasmBulkRuntimeBuilder.SPLIT, ctx);
 			case LispNames.STRING_JOIN -> compileBulkCall(cons, 2, WasmBulkRuntimeBuilder.JOIN, ctx);
+			case LispNames.STRING_COUNT -> compileBulkCall(cons, 4, WasmBulkRuntimeBuilder.COUNT, ctx);
 			case LispNames.SORT_BY_KEYS -> compileBulkCall(cons, 4, WasmBulkRuntimeBuilder.SORT, ctx);
 			case LispNames.ARRAY_ROW_MAJOR_INDEX ->
 				compileExpansion(LispMacroExpander.expandArrayRowMajorIndex(cons), ctx, tail);
@@ -2576,21 +2590,21 @@ final class WasmExprCompiler {
 			case LispNames.CASE -> compileExpansion(LispMacroExpander.expandCase(cons), ctx, tail);
 			case LispNames.ECASE -> compileExpansion(LispMacroExpander.expandEcase(cons), ctx, tail);
 			case LispNames.CCASE -> compileExpansion(LispMacroExpander.expandCcase(cons), ctx, tail);
-			case LispNames.ERROR -> compileExpansion(
+			case LispNames.ERROR -> compileSignalling(
 					LispMacroExpander.expandError(cons, ctx.closRegistry, false, ctx.restartMode), ctx, tail);
 			case LispNames.CERROR ->
-				compileExpansion(LispMacroExpander.expandCerror(cons, ctx.closRegistry, ctx.restartMode), ctx, tail);
+				compileSignalling(LispMacroExpander.expandCerror(cons, ctx.closRegistry, ctx.restartMode), ctx, tail);
 			case LispNames.ERROR_INTERNAL -> WasmErrorCompiler.compile(cons, ctx);
 			case LispNames.ERROR_COND_INTERNAL ->
 				// Outside EH mode the condition-carrying variant traps like %error (a
 				// WASM trap is uncatchable and carries no payload; the arguments are
 				// not evaluated); in EH mode it throws the typed instance.
 				WasmErrorCompiler.compileCond(cons, ctx);
-			case LispNames.WARN -> compileExpansion(
+			case LispNames.WARN -> compileSignalling(
 					LispMacroExpander.expandWarn(cons, ctx.closRegistry, ctx.restartMode, ctx.signalClauseMatch), ctx,
 					tail);
 			case LispNames.WARN_INTERNAL -> WasmWarnCompiler.compile(cons, ctx);
-			case LispNames.SIGNAL -> compileExpansion(
+			case LispNames.SIGNAL -> compileSignalling(
 					LispMacroExpander.expandSignalMacro(cons, ctx.closRegistry, ctx.restartMode), ctx, tail);
 			case LispNames.SIGNAL_COND_INTERNAL -> WasmSignalCondCompiler.compile(cons, ctx);
 			case LispNames.HC_DEPTH_DEC_INTERNAL -> WasmHandlerCaseCompiler.compileDepthDec(ctx);

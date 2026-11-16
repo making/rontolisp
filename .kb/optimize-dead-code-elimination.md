@@ -374,8 +374,9 @@ falls by the same fraction.
 - a pure value then `drop` -> nothing (2-3 B): a constant, `ref.null`, `local.get`, `global.get`.
 - `if (result T) call F else ref.null end; ref.is_null` -> `i32.eqz` (8 B and a call) when the
   caller names `F` as a pure non-null producer -- `WasmLispCompiler.peepholePureNonNullCalls()`,
-  which is `_t_sym` alone: it lazily builds the `t` symbol into its global and answers it, and
-  every other consumer of the symbol calls it for itself. The shape is a predicate's i32 boxed
+  which is `_t_sym` (and, for the `call F; drop` rule below, `_str_build` and `_str_lit`): it
+  lazily builds the `t` symbol into its global and answers it, and every other consumer of the
+  symbol calls it for itself. The shape is a predicate's i32 boxed
   into t/nil (`WasmEmitHelper.emitBoolFromI32`) and tested for nil by its consumer; the census
   had read the `call` as an error signal ("an assertion in value position") -- it was the `t`
   literal, 3,304 times on the Worker. The emitter side of the same shape is
@@ -1194,7 +1195,12 @@ i32.add|sub; global.set G` goes whole, its read feeding only that write. The sha
 global. Exported and imported globals stay. It finds the operator register where no report reads it,
 the handler depth where nothing signals, `%mv-spill` where no form reads a second value (a `ref.null;
 global.set` per function), and a `defvar` nothing reads. A `(defvar *x* (f))` keeps its call.
-Two peepholes behind it: `call <pure>; drop` goes for what `peepholePureNonNullCalls` vouches for, and
+A start function it leaves empty goes with its section (`WasmTreeShaker.dropUnreachable`): a
+module's `_lit_init` when every literal it built was a dead body's (`.kb/wasm-gc-strings.md`, "A
+literal is one object").
+Two peepholes behind it: `call <pure>; drop` goes for what `peepholePureNonNullCalls` vouches for --
+a `drop` for each parameter in its place, so a literal built from two constants for a global nobody
+reads goes whole (2026-11-16) -- and
 a literal boxed for a parameter that unboxes it, `i32.const K; ref.i31; ref.cast (ref i31); i31.get_s`,
 is `i32.const K` where K fits 31 bits. Pins: `WasmWriteOnlyGlobalsTest`,
 `WasmPeepholeTest#foldsALiteralBoxedForAParameterThatUnboxesIt`.

@@ -16,6 +16,12 @@ match, or nil for "not decided", which runs the loop. Same shape as `%replace-bu
 - **Two `TYPE_STRING`s compare as bytes.** UTF-8 spells a code point one way and no lead byte is a
   continuation byte, so a byte match starting at the needle's lead byte is a character match. The
   answer is converted from bytes only when there is one: `start2` plus the lead bytes before it.
+- **A haystack counted at its bytes is indexed by them** (2026-11-16): `cc == len - 2` says a
+  character is a byte, so a bound is the index and one, the answer the position less one, with no
+  `_str_char_byte_offset` call and no second walk; a needle read from its first character starts at
+  byte 1 whatever it holds. A Starlark `find` was four calls and two walks of the bytes passed
+  (`.kb/starlark-frontend.md`, "A literal is a global"). The bounds are the caller's to check, as
+  before: an end past the count is no longer clamped here.
 - **A character vector on either side compares code points through `_str_char_ref`.** Rendering it
   would be one scan's cost per bounded call, quadratic in a tokenizer's loop over a buffer
   (`.kb/string-index-cost.md`).

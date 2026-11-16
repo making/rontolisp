@@ -8,7 +8,8 @@ wasm-GC heap (reclaimable), not in a linear-memory bump heap that only grew
 
 ```
 TYPE_STRING (rec-group type 4) = struct { i32 id, i32 len, (ref null eq) data,
-                                          (mut i32) ci, (mut i32) cb, (mut i32) cc }
+                                          (mut i32) ci, (mut i32) cb, (mut i32) cc,
+                                          (mut i32) hash }
 $str_bytes  (fixed type 36)    = (array (mut i8))          -- subtype of eq
 ```
 
@@ -22,6 +23,10 @@ $str_bytes  (fixed type 36)    = (array (mut i8))          -- subtype of eq
   `(0, 1)`) and the character count (`-1` until counted) that keep scans linear rather than
   quadratic ([[string-index-cost]]). Every `struct.new` for TYPE_STRING pushes the seed through
   `WasmStringRuntimeBuilder.emitSeedCursor`.
+- **hash** (`STRING_HASH_FIELD`, 2026-11-16): what `_hash` folded the bytes to the first time the
+  string keyed a table, 0 before -- and for a string whose bytes fold to 0, folded again. The
+  bytes never change, so it cannot go stale; a seventh i32 is no heap on wasmtime's 16-byte
+  rounding (`.kb/wasm-gc-object-size.md`). `.kb/hash-tables.md`, "Representation".
 
 ## Character accessors
 `FUNC_STR_CHAR_COUNT` (every `(length s)`), `FUNC_STR_CHAR_AT` (`(aref TYPE_STRING i)` directly;
@@ -37,31 +42,74 @@ offset helper walks from byte 0.
 `(from:u32, to:u32, delta:i32)` table in static data (~16 KB at Unicode 15: 690 upper, 674 lower
 ranges) generated from `Character.toUpperCase(int)`, so WASM matches the other backends on every
 Unicode letter ([[characters-code-points]]). Byte-level ASCII fold and equality stay correct
-under UTF-8.
+under UTF-8. **A string counted at its bytes is folded as bytes** (`emitSingleByteCaseConvert`,
+2026-11-16, the head of `_string_upcase` / `_string_downcase`): every character is ASCII then, so
+a letter of the other case moves by 32 into a new array and the answer keeps the count; any other
+string takes the code-point core, which renders through the linear scratch and `_str_fresh`. ci-spec
+`string-case-ops-full-unicode`.
 
 ## A literal is one object
-`compileUnspelledLiteral` calls `_str_lit` (`FUNC_STR_LIT`, `(off, len)` like `_str_build`, which it
-calls the first time): a table of 1,024 slots, direct-mapped by the offset's low bits, kept in a quote
-global and made by the first literal. An evaluation is 17 instructions and no allocation, where it
-was a byte loop and two allocations, about 14 per byte. Measured 2026-11-05: 34 such evaluations were 44% of
-what a Proxy-Wasm filter ran per exchange (`.kb/proxy-wasm-sdk.md`).
+A literal a function body names -- a string, a symbol, a keyword -- is a global: one
+`(mut (ref null eq))` a literal (`QuoteGlobals.literalGlobal`, by offset and length), which
+`_lit_init` fills before anything else runs, and a site is `global.get` (2026-11-16). Until then
+a site called `_str_lit (off, len)`, a table of 1,024 slots direct-mapped by the offset: 17
+instructions and a call where it was a byte loop and two allocations (2026-11-05: 34 such
+evaluations were 44% of what a Proxy-Wasm filter ran per exchange, `.kb/proxy-wasm-sdk.md`),
+and still 9% of a Starlark program's samples -- `:none` a method answers, `:%unset` for each
+argument a call leaves out, a string argument (`.kb/starlark-frontend.md`, "A literal is a
+global"). Measured first on the module edited as text, as the item asked: 1.67 -> 1.54 s.
 
 - **Nothing can tell.** Nothing writes a `$str_bytes` in place (every `array.set` and `array.copy` into
   one is onto an array made in that function), a literal is never written (`.kb/string-write-runtime.md`),
-  `eq` already compared ids, and the mutable fields are the cursor, a cache of the same bytes. So a
-  second evaluation also starts from the cursor the first left.
-- **A slot holds the last literal that mapped there.** Two hot literals in one slot rebuild, which is
-  what every evaluation did before. Only whole literals come here: a `_str_build` of part of one (a
-  message's piece at another length under one offset) goes straight to it.
-- **A top-level form takes `_str_build`**, as it mostly runs once (`Ctx.topLevel`), a top-level loop too. So
-  a module whose literals are all there has no `_str_lit` and no global: `QuoteGlobals.sealLiteralSites`,
-  after every body compiled, decides. `hello_world` stays 481 bytes, against 580 with the table.
-- It costs 89 bytes raw once. The sites are as they were, because a per-site global would be about 13 bytes
-  each on the 440 of a filter of 59KB, and a literal number at the site would have to be a class the shaker renumbers
-  ("The byte loop stays" below).
-- Pin: `WasmLispCompilerIntegrationTest.aLiteralIsOneObjectAndAPieceOfAStringIsNoByteLoop`, fuel over 10,000 rounds:
-  1,000 bytes 17.7 M against 430 M, of which 16.8 M are the module's start. ci-spec
-  `eql-of-a-literal-and-a-literal-evaluated-twice`.
+  `eq` already compared ids, and the mutable fields are the cursor and the hash, caches of the same
+  bytes. So a second evaluation also starts from the cursor the first left.
+- **`_lit_init` is the module's start function** (`WasmBulkRuntimeBuilder.LIT_INIT`, its body
+  `QuoteGlobals.literalInitBodies`): `i32.const off; i32.const len; call _str_lit; global.set g` a
+  literal, `_str_lit` now `_str_build` and a count (`_str_build` itself at `--optimize=size`). The
+  engine runs it at instantiation, behind the data segments and before any export -- a component's
+  `--invoke`d export runs no `run`, and a reactor's host may call an export before `_initialize`, so
+  neither is where a literal can be made. Its type is `() -> ()`: `TYPE_START`, but where that is
+  `run`'s `() -> i32` (a plain component), where one is appended last of all (`voidTypeIndex`).
+  A `--component --no-wasi` reactor's start section named `_start`; it names `_lit_init` now, which
+  calls `_start` behind the literals.
+- **A top-level form takes `_str_build`**, as it mostly runs once (`Ctx.topLevel`), a top-level loop
+  too, **and so does a form that signals** (`error`, `cerror`, `warn`, `signal`: `Ctx.signalling`,
+  `WasmExprCompiler.compileSignalling`): a message is named once, on the way out of the fast path,
+  and costs its site what it always did. A literal first met after the bodies are compiled
+  (`sealLiterals`) is built at its site too. A module whose literals are all there has no global and
+  no start section: `hello_world` is as it was but for the hash field's seed (490 -> 494 bytes).
+- **The shake takes a dead literal whole.** `WasmWriteOnlyGlobals` makes a `drop` of the store into
+  a global no reachable body reads; `WasmPeephole` takes `call F; drop` of a pure producer as one
+  `drop` a parameter (`_str_build` and `_str_lit` join `_t_sym` in `peepholePureNonNullCalls`), which
+  the constants in front collapse into; the shaker drops the global, the bytes nobody cites any more,
+  and a start function with nothing left in it together with its section
+  (`WasmTreeShaker.dropUnreachable`, `emptyStart`). `--optimize=off` builds them all.
+- **The type fold is told the global is never null** (`WasmRefTypeFolder.fold(module,
+  assignedAtStart)`, `QuoteGlobals.isLiteralGlobal`): a literal's declared null reaches nobody, so
+  its set is the string `_lit_init` stored. Without it every literal read was "a string or nil" and
+  the tests `_str_lit`'s result type had decided stayed (`bench-report/programs/string.lisp` +606
+  bytes, `SEARCH` alone +401).
+- **The bytes**: a site is 2-3 bytes where it was 7, a literal 5 of global and 9-10 of `_lit_init`,
+  so a literal named at four sites or more is smaller and one named once -- most are: 112 of the 125
+  in `examples/proxy-wasm/gateway.lisp` -- 10 larger. With every change of the day
+  (`.kb/starlark-frontend.md`, "A literal is a global"): `gateway.lisp` 86,521 -> 87,690
+  (`--optimize=size` 70,185 -> 71,313), `sdk-examples/http_headers.lisp` at size 7,280 -> 7,348,
+  `size-report/programs/zlib` 155,109 -> 155,053, `bench-report/programs/string.lisp` 25,380 ->
+  25,509, `sort.lisp` 21,748 -> 21,686, `clos.lisp` 8,020 -> 7,994, `hash.lisp` 10,568 -> 10,572.
+- **Every literal a function names is built at start and stays live**, where the table held the
+  last 1,024 evaluated: some 100 ns and 80 bytes of heap a literal, once. The ci-spec corpus as
+  one module names 11,500 (115 KB of `_lit_init`, 15.4 MB of module).
+- **`_lit_init` goes on in up to eight functions** (`LIT_INIT_MORE`, `LITERALS_PER_PART` = 16,384
+  literals, some 160 KB a body, each part calling the next): `CiSpecE2eTest` refuses a module
+  with a body over 256 KB (`.kb/wasm-function-body-size.md`), and the corpus was at 45% of it in
+  one body. Not for the engine's sake: `wasmtime compile` of a start function over 100,000
+  literals is 2.1 s and 449 MB, linear from 0.22 s and 68 MB over 12,000
+  (`.todo/artefacts/j65-starlark-methods-under-cpython/`).
+- Pin: `WasmLispCompilerIntegrationTest.aLiteralIsOneObjectAndAPieceOfAStringIsNoByteLoop` (fuel over
+  10,000 rounds); ci-spec `eql-of-a-literal-and-a-literal-evaluated-twice` (a literal in a function
+  and in a form that signals); `WasmTreeShakerTest` (`dropsStringsOnlyDeadBodiesInterned`, the empty
+  start function), `WasmPeepholeTest` (a vouched call with an argument), `WasmRefTypeFolderTest`
+  (`aGlobalTheStartFunctionAssignsIsNeverWhatItWasDeclaredWith`).
 
 **A piece of a string is no byte loop either** (same pin). `_string_concat` is `array.new_default` and two
 `array.copy`s, where it wrote both operands to the linear scratch and `_str_fresh` read them back: 57.9 M

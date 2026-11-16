@@ -11,6 +11,15 @@ component.
 | JVM compile | length-1 `int[]{codePoint}` | `instanceof int[]` |
 | WASM (both) | `TYPE_CHAR = struct { i32 code }` | `ref.test $type_char` |
 
+**WASM: a character read for its code makes no character** (2026-11-16). `(char s i)` is
+`_str_char_ref`'s i32 in a fresh `TYPE_CHAR`, and `char-code`, `char=` and the other character
+built-ins took the code out again: an allocation a character, about 30 ns. A built-in that reads an
+operand's code (`WasmCharCompiler.pushCheckedCode`) asks a `(char ..)` / `(schar ..)` operand for the
+code alone -- `Ctx.charCodeAsked` names the form, `compileChar` answers `Ctx.charCodeLeft` for that
+very form, so one that compiles another way still answers its character. The Starlark library's
+`strip` reads codes for it (`.kb/starlark-frontend.md`, "A literal is a global"). ci-spec
+`code-point-characters-beyond-ascii`.
+
 The interpreter's mutable-string storage is a matching `int[]` (`LispString.chars`), so
 `(setf (schar s i) (code-char cp))` writes one indexed slot on every backend. The JVM
 discriminator is disjoint from `Object[]` (cons/function), `BigInteger[]` (ratio) and

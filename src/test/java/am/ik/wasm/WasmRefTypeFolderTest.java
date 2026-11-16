@@ -253,6 +253,33 @@ class WasmRefTypeFolderTest {
 		});
 	}
 
+	@Test
+	void aGlobalTheStartFunctionAssignsIsNeverWhatItWasDeclaredWith() throws Exception {
+		// A mutable global declared null and assigned a struct: a read answers either,
+		// so its null test stays -- unless the caller says the start function assigns
+		// it before anything reads it, and then the test is the constant.
+		byte[] g = body(w -> {
+			struct(w, 7);
+			w.write(Instruction.SET_GLOBAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.GET_GLOBAL);
+			w.writeUnsignedLeb128(0);
+			w.write(Instruction.REF_IS_NULL);
+		});
+		byte[] module = module(new int[] { 2 }, globals -> globals.add(declared -> {
+			declared.writeRefType(true, Type.EQ.code());
+			declared.write(Mutability.VAR.code());
+			declared.write(Instruction.REF_NULL);
+			declared.writeHeapType(Type.EQ.code());
+			declared.write(Instruction.END);
+		}), List.of(g), Map.of("g", 0));
+
+		assertThat(mnemonics(code(WasmRefTypeFolder.fold(module), 0))).contains("0xD1");
+		byte[] folded = WasmRefTypeFolder.fold(module, global -> global == 0);
+		assertThat(mnemonics(code(folded, 0))).doesNotContain("0xD1").endsWith("i32.const 0", "end");
+		assertThat(validateAndInvoke(folded, "g")).isEqualTo("0");
+	}
+
 	private static void identityTest(WasmWriter w) {
 		local(w, 0);
 		w.write(Instruction.GET_GLOBAL);

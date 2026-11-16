@@ -1487,10 +1487,11 @@ public final class WasmLispCompiler implements LispCompiler {
 	// indices below is safe.
 	static final int FUNC_STR_BUILD = FUNC_READ_CHAR + 1;
 
-	// _str_lit (off, len) -> (ref null eq): the one object of a literal, built by
-	// _str_build the first time and kept in a table after that
-	// (WasmStringRuntimeBuilder.buildStrLitBody). What evaluating a literal calls: its
-	// id, bytes and length never change, so nothing can tell two evaluations apart.
+	// _str_lit (off, len) -> (ref null eq): _str_build's result with its characters
+	// counted (WasmStringRuntimeBuilder.buildStrLitBody). What _lit_init calls for each
+	// literal a function body names: evaluating one there reads the global it filled,
+	// and its id, bytes and length never change, so nothing can tell two evaluations
+	// apart.
 	static final int FUNC_STR_LIT = FUNC_STR_BUILD + 1;
 
 	// _str_fresh (off, len) -> (ref null eq): like _str_build, but stamps a fresh id
@@ -1809,7 +1810,8 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * @return the predicate over pre-shake function indices
 	 */
 	public static java.util.function.IntPredicate peepholePureNonNullCalls(int importShift) {
-		return f -> f == FUNC_T_SYM + importShift;
+		return f -> f == FUNC_T_SYM + importShift || f == FUNC_STR_BUILD + importShift
+				|| f == FUNC_STR_LIT + importShift;
 	}
 
 	/**
@@ -2509,6 +2511,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	static final int TYPE_CONS = 3; // in rec group
 
 	static final int TYPE_STRING = 4; // in rec group
+
+	/**
+	 * TYPE_STRING's field for the hash of its bytes: what {@code _hash} folded them to
+	 * the first time the string keyed a table, 0 until then (and for the rare string
+	 * whose bytes fold to 0, which is folded again). The bytes of a TYPE_STRING never
+	 * change, so the field cannot go stale; it costs no heap on an engine that rounds an
+	 * object to 16 bytes ({@code .kb/wasm-gc-object-size.md}).
+	 */
+	static final int STRING_HASH_FIELD = 6;
 
 	// in rec group - {(mut ref null eq) value, (mut (ref null TYPE_HASH_BUCKETS))
 	// storage, (mut (ref null TYPE_CONS)) meta}. The two fields behind the value are a
@@ -6400,11 +6411,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		// helper, the park helper and the shared host-hook signature), so no
 		// existing type index moves. Only meaningful when this module carries
 		// _funcref (emitsFuncref); every other module's type section is untouched.
-		int funcrefTypeIndex = this.emitsFuncref
-				? abiTypeBase + (componentStringAbi ? 1 + componentPostKinds.size() + retptrShimPlans.size() : 0)
-						+ (hostArena ? 2 : 0) + (bytesBoundary ? 1 : 0) + (parkHelpers ? 1 : 0)
-						+ ((seedRandom || setTime) ? 1 : 0)
-				: -1;
+		int appendedTypeEnd = abiTypeBase
+				+ (componentStringAbi ? 1 + componentPostKinds.size() + retptrShimPlans.size() : 0)
+				+ (hostArena ? 2 : 0) + (bytesBoundary ? 1 : 0) + (parkHelpers ? 1 : 0)
+				+ ((seedRandom || setTime) ? 1 : 0);
+		int funcrefTypeIndex = this.emitsFuncref ? appendedTypeEnd : -1;
+		// _lit_init's () -> (), behind _funcref's: only where TYPE_START is not that
+		// signature and the module has a literal to build (below).
+		int voidTypeIndex = appendedTypeEnd + (this.emitsFuncref ? 1 : 0);
 		int abiFuncBase = exportHelperBase + helperFuncCount + exportPlans.size();
 		int cabiReallocFuncIndex = abiFuncBase;
 		int cabiPostFuncBase = cabiReallocFuncIndex + 1;
@@ -6986,8 +7000,15 @@ public final class WasmLispCompiler implements LispCompiler {
 		// object. Its table covers every defun, the funcIds the registry and a
 		// static site can name; its global is allocated here, before the global
 		// section is emitted.
-		final byte[] strLitBody = quoteGlobals.sealLiteralSites() ? WasmStringRuntimeBuilder.buildStrLitBody(
-				quoteGlobals.literalTableIndex(), !this.optimize.prefersSizeOverSpeed()) : UNREACHABLE_BODY;
+		// The literals are known: no body after this one gives a literal a global.
+		final boolean literalGlobals = quoteGlobals.sealLiterals();
+		final boolean countedLiterals = literalGlobals && !this.optimize.prefersSizeOverSpeed();
+		final byte[] strLitBody = countedLiterals ? WasmStringRuntimeBuilder.buildStrLitBody() : UNREACHABLE_BODY;
+		// _lit_init's signature: a start function takes and answers nothing, which
+		// TYPE_START does but where it is the component's `run`; there a type is
+		// appended for it, last of all.
+		final boolean appendsVoidType = literalGlobals && this.component && !this.noWasi;
+		final int litInitType = appendsVoidType ? voidTypeIndex : TYPE_START;
 		final byte[] funcrefBody;
 		if (this.emitsFuncref) {
 			funcrefBody = WasmEvalRuntimeBuilder.buildFuncrefBody(defuns.size(), quoteGlobals.funcBoxTableIndex(),
@@ -7385,18 +7406,21 @@ public final class WasmLispCompiler implements LispCompiler {
 						}
 					});
 					// type 4: string struct {i32 id, i32 len, (ref null eq) data,
-					// (mut i32) ci, (mut i32) cb, (mut i32) cc}. id is the canonical
-					// integer identity (interned offset or runtime id, compared with
-					// i32.eq); len is the byte length; data is the $str_bytes GC array
-					// holding the quote-framed bytes (nil until a builder fills it -- see
-					// FUNC_STR_BUILD). ci/cb are the character-index cursor
-					// (_str_char_byte_offset): character ci starts at byte cb; cc is the
-					// character count once _str_char_count has counted it, -1 before.
-					// Every builder seeds (0, 1, -1).
+					// (mut i32) ci, (mut i32) cb, (mut i32) cc, (mut i32) hash}. id is
+					// the canonical integer identity (interned offset or runtime id,
+					// compared with i32.eq); len is the byte length; data is the
+					// $str_bytes GC array holding the quote-framed bytes (nil until a
+					// builder fills it -- see FUNC_STR_BUILD). ci/cb are the
+					// character-index cursor (_str_char_byte_offset): character ci
+					// starts at byte cb; cc is the character count once _str_char_count
+					// has counted it, -1 before; hash is what _hash folded the bytes
+					// to, 0 before (STRING_HASH_FIELD). Every builder seeds (0, 1, -1,
+					// 0).
 					rec.addSubFinalStruct(fields -> {
 						fields.addField(false, w -> w.write(Type.I32));
 						fields.addField(false, w -> w.write(Type.I32));
 						fields.addField(false, w -> w.writeRefType(true, Type.EQ.code()));
+						fields.addField(true, w -> w.write(Type.I32));
 						fields.addField(true, w -> w.write(Type.I32));
 						fields.addField(true, w -> w.write(Type.I32));
 						fields.addField(true, w -> w.write(Type.I32));
@@ -8119,6 +8143,11 @@ public final class WasmLispCompiler implements LispCompiler {
 						w.writeRefType(true, Type.EQ.code());
 					});
 				}
+				// _lit_init's () -> (), where TYPE_START is `run`'s () -> i32: after
+				// every other type, in a module with a literal to build.
+				if (appendsVoidType) {
+					types.addFunc(new Type[0], new Type[0]);
+				}
 			})
 			// Import section
 			.writeImportSection(imports -> {
@@ -8590,7 +8619,8 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (FUNC_VEC_SYNC)
 				// the bulk primitives (FUNC_BULK_BASE ..)
 				for (int i = 0; i < WasmBulkRuntimeBuilder.FUNC_COUNT; i++) {
-					fnDef.addFunction(WasmBulkRuntimeBuilder.typeIndexOf(i));
+					fnDef.addFunction(WasmBulkRuntimeBuilder.litInitPart(i) >= 0 ? litInitType
+							: WasmBulkRuntimeBuilder.typeIndexOf(i));
 				}
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
@@ -9208,7 +9238,13 @@ public final class WasmLispCompiler implements LispCompiler {
 		// top-level (defparameter ...) is readable from the very first export call,
 		// which the host-driven `run` export could never guarantee. The tree shaker
 		// treats it as a root and renumbers it like any function reference.
-		if (this.component && this.noWasi) {
+		// A module with a literal inside a function starts with _lit_init, which builds
+		// each one into its global before any export can be called; the reactor's top
+		// level then runs behind them, called by it.
+		if (literalGlobals) {
+			mainWriter.writeStartSection(FUNC_BULK_BASE + WasmBulkRuntimeBuilder.LIT_INIT);
+		}
+		else if (this.component && this.noWasi) {
 			mainWriter.writeStartSection(FUNC_START);
 		}
 		mainWriter
@@ -9380,7 +9416,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				// _str_build helper body (FUNC_STR_BUILD): linear[off..off+len) -> a
 				// TYPE_STRING backed by a $str_bytes GC array.
 				code.addFunction(WasmStringRuntimeBuilder.buildStrBuildBody());
-				// _str_lit (FUNC_STR_LIT): a literal's one object.
+				// _str_lit (FUNC_STR_LIT): a literal built and counted, for _lit_init.
 				code.addFunction(strLitBody);
 				// _str_fresh (FUNC_STR_FRESH): like _str_build but id = STRING_ID_CTR++.
 				code.addFunction(WasmStringRuntimeBuilder.buildStrFreshBody());
@@ -9746,9 +9782,29 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmArrayRuntimeBuilder.buildVecSyncBody());
 				// the bulk primitives (FUNC_BULK_BASE ..): shaken with their sites.
 				WasmBulkRuntimeBuilder.Flags bulkFlags = new WasmBulkRuntimeBuilder.Flags(this.usesIdentityHashTables,
-						this.charvecPossible);
+						this.charvecPossible, !this.optimize.prefersSizeOverSpeed());
+				// _lit_init and its parts: a literal counted as it is built where speed
+				// is asked for; and where the top level is the start function, it runs
+				// behind them.
+				int[] litInitParts = new int[WasmBulkRuntimeBuilder.LIT_INIT_PARTS];
 				for (int i = 0; i < WasmBulkRuntimeBuilder.FUNC_COUNT; i++) {
-					code.addFunction(WasmBulkRuntimeBuilder.build(i, bulkFlags));
+					int part = WasmBulkRuntimeBuilder.litInitPart(i);
+					if (part >= 0) {
+						litInitParts[part] = FUNC_BULK_BASE + i;
+					}
+				}
+				List<byte[]> litInitBodies = literalGlobals
+						? quoteGlobals.literalInitBodies(countedLiterals ? FUNC_STR_LIT : FUNC_STR_BUILD, litInitParts,
+								this.component && this.noWasi ? FUNC_START : -1)
+						: List.of();
+				for (int i = 0; i < WasmBulkRuntimeBuilder.FUNC_COUNT; i++) {
+					int part = WasmBulkRuntimeBuilder.litInitPart(i);
+					if (part < 0) {
+						code.addFunction(WasmBulkRuntimeBuilder.build(i, bulkFlags));
+					}
+					else {
+						code.addFunction(literalGlobals ? litInitBodies.get(part) : UNREACHABLE_BODY);
+					}
 				}
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
@@ -10008,7 +10064,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (this.component) {
 			if (this.optimize.eliminatesDeadCode()) {
 				coreModule = shakeCore(coreModule, caseFoldSegments, stringRanges, hostCellHooks, funcSizeNames,
-						hostImports.size());
+						hostImports.size(), quoteGlobals::isLiteralGlobal);
 			}
 			else if (funcSizeNames != null) {
 				dumpFuncSizes(coreModule, funcSizeNames, hostImports.size(),
@@ -10089,7 +10145,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		if (this.optimize.eliminatesDeadCode()) {
 			byte[] shaken = shakeCore(coreModule, caseFoldSegments, stringRanges, hostCellHooks, funcSizeNames,
-					hostImports.size());
+					hostImports.size(), quoteGlobals::isLiteralGlobal);
 			// The glue was built before the shake decided the hooks: it may call only the
 			// ones that survived.
 			HostGlueEmitter.Surface surface = this.hostGlue;
@@ -10401,7 +10457,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			List<am.ik.wasm.WasmTreeShaker.OwnedDataSegment> caseFoldSegments,
 			List<am.ik.wasm.WasmTreeShaker.DroppableDataRange> stringRanges,
 			List<am.ik.wasm.WasmTreeShaker.HostCellHook> hostCellHooks, @Nullable Map<Integer, String> funcNames,
-			int importShift) {
+			int importShift, java.util.function.IntPredicate literalGlobals) {
 		// The type-test fold first, then the call redirection through the forwarders it
 		// leaves, then the adjacent-instruction peepholes: all three rewrite bodies in
 		// place and renumber nothing, so the segment and range claims above still speak
@@ -10446,7 +10502,10 @@ public final class WasmLispCompiler implements LispCompiler {
 				throw new java.io.UncheckedIOException(ex);
 			}
 		}
-		coreModule = am.ik.wasm.WasmCallForwarding.redirect(am.ik.wasm.WasmRefTypeFolder.fold(coreModule));
+		// A literal's global is assigned by the start function, _lit_init, before any
+		// body reads it: the fold takes the string it holds for what a read answers.
+		coreModule = am.ik.wasm.WasmCallForwarding
+			.redirect(am.ik.wasm.WasmRefTypeFolder.fold(coreModule, literalGlobals));
 		// The fold retires readers; what they read goes before the peepholes collect the
 		// values it stored.
 		coreModule = am.ik.wasm.WasmWriteOnlyGlobals.rewrite(coreModule);
@@ -12039,13 +12098,15 @@ public final class WasmLispCompiler implements LispCompiler {
 
 		private final LispVal funcBoxTableToken = new am.ik.rontolisp.LispSymbol("#<function-box-table>");
 
-		private final LispVal literalTableToken = new am.ik.rontolisp.LispSymbol("#<literal-table>");
-
 		private final LispVal lineStartTableToken = new am.ik.rontolisp.LispSymbol("#<line-start-table>");
 
-		private boolean literalSites;
+		// A literal's global by its (offset, length), in the order the sites met them:
+		// the order _lit_init builds them in.
+		private final java.util.LinkedHashMap<Long, Integer> literals = new java.util.LinkedHashMap<>();
 
-		private boolean literalSitesSealed;
+		private final Set<Integer> literalGlobalIndices = new java.util.HashSet<>();
+
+		private boolean literalsSealed;
 
 		private am.ik.rontolisp.compiler.@org.jspecify.annotations.Nullable QuotedSharing sharing;
 
@@ -12150,15 +12211,6 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 
 		/**
-		 * The module global holding {@code _str_lit}'s table of literal objects,
-		 * allocating the next index on first sight.
-		 * @return the global index
-		 */
-		int literalTableIndex() {
-			return indexFor(this.literalTableToken);
-		}
-
-		/**
 		 * The module global holding a byte per descriptor past column 0 of its line, a
 		 * {@code $str_bytes} array {@code _line_mark} creates and grows, allocating the
 		 * next index on first sight: a compiled {@code _fresh_line_stream} call asks for
@@ -12179,26 +12231,95 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 
 		/**
-		 * A form is about to evaluate a literal.
-		 * @return whether it may call {@code _str_lit}: after {@link #sealLiteralSites},
-		 * only if that found a caller and so a body
+		 * The module global holding the one object of a literal, which {@code _lit_init}
+		 * builds before anything else runs ({@code .kb/wasm-gc-strings.md}, "A literal is
+		 * one object"), allocating the next index on first sight.
+		 * @param offset the literal's offset in the string data
+		 * @param length its byte length
+		 * @return the global index, or -1 for a literal first met after
+		 * {@link #sealLiterals}: the site builds that one itself
 		 */
-		boolean takeLiteralSite() {
-			if (this.literalSitesSealed) {
-				return this.literalSites;
+		int literalGlobal(int offset, int length) {
+			long key = ((long) offset << 32) | (length & 0xFFFFFFFFL);
+			Integer known = this.literals.get(key);
+			if (known != null) {
+				return known;
 			}
-			this.literalSites = true;
-			return true;
+			if (this.literalsSealed) {
+				return -1;
+			}
+			int index = indexFor(new am.ik.rontolisp.LispSymbol("#<literal>"));
+			this.literals.put(key, index);
+			this.literalGlobalIndices.add(index);
+			return index;
 		}
 
 		/**
-		 * Every body is compiled: whether {@code _str_lit} has a caller, so that a module
-		 * without one has no global for its table.
-		 * @return whether a site was taken
+		 * Whether a global holds a literal's object: one {@code _lit_init} assigns before
+		 * anything reads it.
+		 * @param global a global index
+		 * @return whether {@link #literalGlobal} allocated it
 		 */
-		boolean sealLiteralSites() {
-			this.literalSitesSealed = true;
-			return this.literalSites;
+		boolean isLiteralGlobal(int global) {
+			return this.literalGlobalIndices.contains(global);
+		}
+
+		/**
+		 * Every function body is compiled: the literals with a global are the ones
+		 * {@code _lit_init} builds, and no other joins them.
+		 * @return whether there is one
+		 */
+		boolean sealLiterals() {
+			this.literalsSealed = true;
+			return !this.literals.isEmpty();
+		}
+
+		/**
+		 * The literals one part of {@code _lit_init} builds: some 160 KB of body, under
+		 * what one function may be ({@code .kb/wasm-function-body-size.md}).
+		 */
+		static final int LITERALS_PER_PART = 16_384;
+
+		/**
+		 * The bodies of {@code _lit_init} and the parts it goes on in: each literal built
+		 * and stored into its global, {@link #LITERALS_PER_PART} a part (the last one
+		 * takes what is left), a part calling the next one that has any.
+		 * @param build the function that builds one, {@code (offset, length) -> string}
+		 * @param parts the function index of each part, {@code _lit_init} first
+		 * @param then a function to call after the last literal, -1 for none
+		 * @return the encoded body of each part
+		 */
+		List<byte[]> literalInitBodies(int build, int[] parts, int then) {
+			List<Map.Entry<Long, Integer>> all = new ArrayList<>(this.literals.entrySet());
+			List<byte[]> bodies = new ArrayList<>(parts.length);
+			for (int part = 0; part < parts.length; part++) {
+				int from = Math.min(all.size(), part * LITERALS_PER_PART);
+				int to = part == parts.length - 1 ? all.size() : Math.min(all.size(), from + LITERALS_PER_PART);
+				ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+				WasmWriter w = new WasmWriter(body);
+				w.write(0);
+				for (Map.Entry<Long, Integer> literal : all.subList(from, to)) {
+					w.write(Instruction.I32_CONST);
+					w.writeSignedLeb128((int) (literal.getKey() >> 32));
+					w.write(Instruction.I32_CONST);
+					w.writeSignedLeb128((int) (long) literal.getKey());
+					w.write(Instruction.CALL);
+					w.writeUnsignedLeb128(build);
+					w.write(Instruction.SET_GLOBAL);
+					w.writeUnsignedLeb128(literal.getValue());
+				}
+				if (to < all.size()) {
+					w.write(Instruction.CALL);
+					w.writeUnsignedLeb128(parts[part + 1]);
+				}
+				else if (then >= 0 && (from < to || part == 0)) {
+					w.write(Instruction.CALL);
+					w.writeUnsignedLeb128(then);
+				}
+				w.write(Instruction.END);
+				bodies.add(body.toByteArray());
+			}
+			return bodies;
 		}
 
 		/**
@@ -12214,6 +12335,22 @@ public final class WasmLispCompiler implements LispCompiler {
 	static final class Ctx {
 
 		final WasmWriter writer;
+
+		/**
+		 * How many forms that signal ({@code error}, {@code cerror}, {@code warn},
+		 * {@code signal}) enclose the form being compiled: a literal evaluated there is
+		 * built at its site ({@code WasmEmitHelper.compileUnspelledLiteral}).
+		 */
+		int signalling;
+
+		/**
+		 * The {@code (char s i)} form a character built-in is about to compile for its
+		 * code point alone, and the one {@code WasmCharCompiler.compileChar} left as a
+		 * code: the hand-over between the two, by the form's identity.
+		 */
+		@Nullable LispCons charCodeAsked;
+
+		@Nullable LispCons charCodeLeft;
 
 		final ByteArrayOutputStream bodyStream;
 

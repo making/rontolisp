@@ -285,14 +285,17 @@ forms are the ones the backends already fuse ([jvm-int-fusion.md](jvm-int-fusion
 - **A string method tests its receiver at its head and names itself only to refuse**
   (2026-11-16): `(if (not (stringp s)) (%starlark-no-attribute s "split"))`, and the same
   for a string argument. A literal is evaluated where it stands -- on wasm a call of
-  `_str_lit` and a table read -- so `(%starlark-string-receiver s "split")` made the name
-  on every call to hand it to a check that passes; `_str_lit` was 7% of `methods.star`.
+  `_str_lit` and a table read then, a global's read since "A literal is a global" -- so
+  `(%starlark-string-receiver s "split")` made the name on every call to hand it to a
+  check that passes; `_str_lit` was 7% of `methods.star`.
   A list or dict method's `-receiver` call sits behind its own test the same way
   (`%starlark-m-append`; `pop()` of a list's last element since 2026-11-16).
 - **A whole sequence is the backend's when it has a function for it** (2026-11-16):
-  `split` by a separator, `join` and `sorted` ask `%string-split`, `%string-join` and
-  `%sort-by-keys` first ([bulk-primitives.md](bulk-primitives.md)) and run their own
-  loop -- `%starlark-split-vector`, `-join-vector`, `-merge-sorted-vector` -- for nil,
+  `split` by a separator, `join`, `count` and `sorted` ask `%string-split`,
+  `%string-join`, `%string-count` and `%sort-by-keys` first
+  ([bulk-primitives.md](bulk-primitives.md)) and run their own loop --
+  `%starlark-split-vector`, `-join-vector`, `-merge-sorted-vector`, a search an
+  occurrence -- for nil,
   which is every call on the interpreter and the JVM. The loop is a `defun` of its own,
   so on wasm it is one function nothing reaches for a string. `extend` and `+=` of lists
   give the vector its room once and move the elements with one `replace`
@@ -733,9 +736,10 @@ time than `python3` on the same file** (best of three, the whole process). Met o
 the JVM for five of the eleven (`fib`, `loop`, `calls`, `mixed`, `listidx`) and on
 wasm and the component for four (`bench`, `fib`, `loop`, `calls`) -- five with `mixed` since
 "The list element on wasm", six with `listidx` since "An int test compiled twice",
-seven with `dicts` since "Where the time is" and ten with `comps`, `strings` and `sorting`
-since "A sequence at a time", all below; where it is not, the cost left is
-a backend's and is named below with the item that carries it.
+seven with `dicts` since "Where the time is", ten with `comps`, `strings` and `sorting`
+since "A sequence at a time" and all eleven with `methods` since "A literal is a global",
+all below; where it is not -- the JVM's six -- the cost left is a backend's and is named
+below with the item that carries it.
 
 The five programs above cover integers, calls and `range`. Six were added, each about a
 second of CPython, each printing a checksum CPython, Go and Java Starlark agree on
@@ -1140,7 +1144,7 @@ before -> after:
 - **Seven of the eleven are under CPython on wasm** and on the component (`dicts` with
   them, 0.83 against 0.89); four are not -- `comps` 0.93 / 0.89, `methods` 2.00 / 1.09,
   `strings` 1.50 / 1.14, `sorting` 2.14 / 1.00 -- and what each waited on was made
-  since ("A sequence at a time" below; `methods` is still over). The JVM column moves with the library: `dicts`, `comps`, `methods` and
+  since ("A sequence at a time" and "A literal is a global" below). The JVM column moves with the library: `dicts`, `comps`, `methods` and
   `strings` down, `sorting` up (below).
 - Step by step (wasm, user seconds of the precompiled module): `dicts.star` 1.15 -> 0.84
   with the look-ups; `sorting.star` 2.77 -> 1.97 the radix sort -> 1.88 its helpers typed;
@@ -1246,7 +1250,7 @@ before -> after:
 | `sorting.star` | 2.93 -> 3.07 | 1.98 -> 0.73 | 1.99 -> 0.70 | 0.97 | 208,637 -> 195,700 |
 
 - **Ten of the eleven are under CPython on wasm** and on the component; `methods.star`
-  is not (1.45 against 1.11), and what it still waits on is `.todo/j65`. `dicts` is under
+  is not (1.45 against 1.11); what it waited on is "A literal is a global" below. `dicts` is under
   by a twentieth and was level in one run of three (0.92 / 0.91). The JVM column is its
   spread from run to run: `strings` 2.28-2.43 before and 2.29-2.55 after over four runs
   each, `sorting` 3.09-3.31 and 3.30-3.66 over three (its ints are the merge sort's again).
@@ -1282,16 +1286,121 @@ before -> after:
   `StringValuedForms.certainlyString` as the licence to skip a piece's normalization (a
   piece routed through a printer control is a character vector: the ci-spec corpus
   trapped).
-- **Left** (`.todo/j65`): `methods.star` -- `find` and `count` 16% of it (`_str_search`'s
-  offsets and its second walk for the index), `split` 12.5% (25 objects a call), a
-  literal evaluated a call (`_str_lit` 6.4%: `:none`, `:%unset`, a string argument), the
-  dict's store and look-up 20%, `append` and `pop` through a `def` 7% each; and the JVM,
-  where the three primitives have no arm.
+- **Left then, made since** ("A literal is a global" below): `methods.star` -- `find` and
+  `count` 16% of it (`_str_search`'s offsets and its second walk for the index), `split`
+  12.5% (25 objects a call), a literal evaluated a call (`_str_lit` 6.4%: `:none`,
+  `:%unset`, a string argument), the dict's store and look-up 20%, `append` and `pop`
+  through a `def` 7% each. Still left: the JVM, where the primitives have no arm.
 - Pinned by `starlark-spec.yaml` `what-the-lowering-knows-answers-as-the-generic-paths`
   (`fast_bulk`, `fast_text`), `StarlarkLoweringTest` (the rows of a template and of `str`
   over a known int), ci-spec `format-nil-princ-to-string-prin1-to` (the chain) and the
   conformance corpus; the backend's halves also by ci-spec `vector-push-extend-growth`
   and the array suites (`ArefRankAndSubscriptChecksFixture`).
+
+### A literal is a global (2026-11-16)
+
+What "A sequence at a time" left to `.todo/j65`: `methods.star`, the one program still
+over CPython on wasm (1.45 against 1.11), and `dicts.star` under by a twentieth. The
+item's plan was made as written -- the literal first, measured on the module edited as
+text before it was made (`global.get` for each `_str_lit` call: 1.67 -> 1.54 s); then
+`find` and `count`, the dict's store, a string key's hash. The sampler named four more
+on the way: a `strip` made a character -- an object -- of every character it looked at,
+`upper` and `lower` went through the linear scratch a byte at a time, a `pop()` was
+three calls, and a word of a `split` two calls into the engine.
+
+Made, in the wasm backend, for every language:
+
+- **A literal a function names is a global the module's start function fills**
+  (`.kb/wasm-gc-strings.md`, "A literal is one object"): a site is `global.get`, where
+  it was a call of `_str_lit` and a table read -- 9% of `methods.star`'s samples
+  (`:none` a method answers, `:%unset` for each argument a call leaves out, a string
+  argument). A literal of a form that signals is built where it stands.
+- **`%string-count`** (`.kb/bulk-primitives.md`): one walk of the bytes; a `count` was a
+  search an occurrence, 10.8% of `methods.star`. **`%string-search` over a string
+  counted at its bytes** takes a bound and gives its answer with no offset call and no
+  second walk (`.kb/string-search-runtime.md`).
+- **A character read for its code makes no character** (`.kb/characters-code-points.md`):
+  `(char-code (char s i))`, `(char= (char s i) c)`.
+- **`string-upcase` / `-downcase` of one-byte characters move the bytes**
+  (`.kb/wasm-gc-strings.md`, "Character accessors"), **`vector-pop` with an element is
+  inline** (`.kb/adjustable-arrays.md`), **a short piece of a split is one
+  `array.new_fixed`** (`.kb/bulk-primitives.md`), **a string keeps its hash**
+  (`.kb/hash-tables.md`: `dicts.star` 0.85 -> 0.75 s by that alone).
+
+In the library, on every backend: `count` asks `%string-count` first; `strip` reads
+codes (`%starlark-cut-p`: white space by comparison, a cutset as a list of codes);
+`startswith` / `endswith` make no list of one prefix (`%starlark-affix-of`); `get` asks
+the table itself for an int or a string key and `x[k] = v` on a dict nothing forbids
+writing goes from `%starlark-set-index` straight to `%starlark-dict-store` (it went
+through `-set-index-of`: 4% of `methods.star` in a function that only passed it on);
+`append` and `pop` ask `eql` of the loop count.
+
+Seconds as above (`time.sh`, best of three, same machine, the two builds run in turn),
+before -> after:
+
+| program | JVM | WASM | component | CPython | `.wasm` bytes |
+|---|---|---|---|---|---|
+| `bench.star` | 0.16 -> 0.15 | 0.05 -> 0.05 | 0.04 -> 0.04 | 0.13 | 138,184 -> 139,229 |
+| `fib.star` | 0.27 -> 0.29 | 0.18 -> 0.21 | 0.17 -> 0.18 | 1.48 | 137,344 -> 138,376 |
+| `loop.star` | 0.18 -> 0.18 | 0.35 -> 0.32 | 0.36 -> 0.33 | 1.61 | 106,627 -> 107,597 |
+| `calls.star` | 0.26 -> 0.27 | 0.13 -> 0.17 | 0.17 -> 0.17 | 0.73 | 119,573 -> 120,547 |
+| `mixed.star` | 0.70 -> 0.68 | 0.55 -> 0.53 | 0.56 -> 0.53 | 1.21 | 177,917 -> 179,126 |
+| `listidx.star` | 1.19 -> 1.09 | 0.97 -> 0.99 | 0.96 -> 1.01 | 1.23 | 181,655 -> 182,824 |
+| `dicts.star` | 0.88 -> 0.86 | 0.88 -> 0.78 | 0.85 -> 0.79 | 0.92 | 182,183 -> 183,764 |
+| `comps.star` | 1.65 -> 1.56 | 0.65 -> 0.70 | 0.69 -> 0.69 | 0.87 | 176,860 -> 177,838 |
+| `methods.star` | 1.92 -> 1.83 | 1.42 -> 1.04 | 1.42 -> 1.03 | 1.10 | 175,832 -> 179,502 |
+| `strings.star` | 2.25 -> 2.34 | 0.88 -> 0.84 | 0.86 -> 0.84 | 1.15 | 124,965 -> 126,895 |
+| `sorting.star` | 3.34 -> 3.38 | 0.68 -> 0.71 | 0.66 -> 0.68 | 0.99 | 195,700 -> 197,276 |
+
+- **All eleven are under CPython on wasm** and on the component: `methods.star` by a
+  twentieth (1.04 against 1.10; 1.03-1.08 against 1.11-1.17 over four more runs of the
+  pair), `dicts.star` by a seventh (0.78 against 0.92). The JVM column is its spread from
+  run to run (the library's changes reach it; the primitives have no arm there), and so
+  are the short programs' hundredths (`calls.star` 0.13 -> 0.17: 129-140 ms against
+  132-142 over 25 runs of each, the function bodies the same but for two literals).
+- Step by step on `methods.star` (wasm, user seconds of the precompiled module, a pair
+  measured in turn, CPython 1.08-1.10): 1.41 -> 1.31 the literals -> 1.07 `count`, the
+  search's arm, `strip` by codes, `upper` and `lower` by bytes, `get` and the store's
+  shorter path -> 1.03 `pop` -> 0.96 a split's short pieces. `dicts.star` 0.85 -> 0.75
+  with the string's hash alone (0.86 before it, the other changes within the noise).
+- The parts (`parts/*.star` of the j63 artefacts, user seconds, before -> after against
+  CPython): `upper().lower().strip()` 0.20 -> 0.11 / 0.16; `startswith`, `endswith`,
+  `find`, `count` 0.33 -> 0.19 / 0.23; `split` 0.17 -> 0.15 / 0.28; `append` through a
+  `def` 0.12 -> 0.11 / 0.17, `pop` 0.19 -> 0.18 / 0.14 (its `list(range(n))` is most of
+  it), a dict through a `def` 0.28 -> 0.30 / 0.55.
+- **The samples of `methods.star` now** (the build of this section): `_str_split` 15%,
+  `_ht_get` 11%, `%starlark-m-append` 9%, the loop's own body 9%, the dict's store 9%
+  and `get` 9% with their look-ups, `pop` 5%, `_str_search` 4%, `_str_count` 3%, an int
+  past 2^30 boxed 3%. What a function costs there is its count of type operations --
+  a cast, a test, a bounds-checked `array.get`, ten to fifteen machine instructions
+  each: `_ht_get` is a dozen of them over arrays of `(ref null eq)` (27 ns a look-up of a
+  fixnum key), `%starlark-m-append` some 300 instructions for three guards and a push,
+  each of which casts the list's instance again.
+- **The bytes**: every Starlark program is about 1 KB larger (`loop.star` 970 B: its
+  literals, most of them named once), one with string
+  methods 3.7 KB (`methods.star`: `_str_count` 350 B, a split's short pieces 400 B, the
+  case conversion's arm, `pop`'s). Sizes (`.class` / `.wasm` / component): `print(1 + 2)`
+  109,427 / 105,704 / 109,274 -> 109,427 / 106,669 / 110,204;
+  `examples/starlark/targets.star` 225,589 / 216,757 / 220,670 -> 225,583 / 218,468 /
+  222,245, at `--optimize=size` 146,646 -> 148,217 B of wasm. Common Lisp programs:
+  `.kb/wasm-gc-strings.md`, "A literal is one object" (a Proxy-Wasm filter +1.3%, `zlib`
+  -56 B).
+- **Not made, measured** (`.todo/j66`): the hash table's entry as a struct with typed
+  fields; a structure reader that takes an instance's slots once; a `def` of one call
+  inlined (`push`, `lookup`); `(i * 31) % m` by a variable inline (`_fx_mod`, 7.5% of
+  `dicts.star`). And the JVM, where `%string-split`, `%string-join`, `%string-count` and
+  `%sort-by-keys` answer nil: `sorting.star` 3.38, `strings.star` 2.34, `methods.star`
+  1.83, `comps.star` 1.56 against CPython's 0.87-1.15.
+- Pinned by `starlark-spec.yaml` `what-the-lowering-knows-answers-as-the-generic-paths`
+  (`fast_strings`: `count`, `find` and the affixes over a string of one-byte characters,
+  one of several and one never counted, each bound; `strip` by white space and by a
+  cutset of several bytes; `upper` and `lower` both ways; a split of pieces of eight
+  bytes, nine and several-byte characters; `pop()` to an empty list; `get` and a store
+  by an int, a string, a tuple and a float key) and the conformance corpus; the backend's
+  halves by ci-spec `eql-of-a-literal-and-a-literal-evaluated-twice`,
+  `code-point-characters-beyond-ascii`, `string-case-ops-full-unicode`,
+  `displaced-fill-pointer-cross-backend` and
+  `search-over-strings-answers-characters-in-either-representation`.
 
 ## Positions
 

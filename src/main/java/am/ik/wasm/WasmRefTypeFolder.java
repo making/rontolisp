@@ -86,10 +86,25 @@ public final class WasmRefTypeFolder {
 	 * nothing could be decided or the module is not closed (see the class note)
 	 */
 	public static byte[] fold(byte[] module) {
+		return fold(module, g -> false);
+	}
+
+	/**
+	 * Folds as {@link #fold(byte[])} does, taking the caller's word for the globals the
+	 * module's start function assigns before anything reads them: the value such a global
+	 * is declared with reaches nobody, so it is no member of the global's set -- a
+	 * constant the start function builds is then never null where it is read.
+	 * @param module a core WASM module (the 8-byte header followed by sections)
+	 * @param assignedAtStart which global indices the start function assigns first
+	 * @return the module with its function bodies rewritten; the input itself when
+	 * nothing could be decided or the module is not closed (see the class note)
+	 */
+	public static byte[] fold(byte[] module, java.util.function.IntPredicate assignedAtStart) {
 		@Nullable Model model = Model.parse(module);
 		if (model == null) {
 			return module;
 		}
+		model.assignedAtStart = assignedAtStart;
 		return model.run();
 	}
 
@@ -423,6 +438,9 @@ public final class WasmRefTypeFolder {
 		final @Nullable BitSet[][] fieldSets; // per type: per field, or [0] = element
 
 		final @Nullable BitSet[] globalSets;
+
+		// The globals whose declared value nobody reads (fold's second argument).
+		java.util.function.IntPredicate assignedAtStart = g -> false;
 
 		final @Nullable BitSet[][] tagSets;
 
@@ -845,7 +863,8 @@ public final class WasmRefTypeFolder {
 				do {
 					this.changed = false;
 					for (int g = 0; g < this.globalInits.size(); g++) {
-						if (!this.globalInits.get(g).isEmpty() && this.lastGlobalInitEpoch[g] != this.globalInitEpoch) {
+						if (!this.globalInits.get(g).isEmpty() && this.lastGlobalInitEpoch[g] != this.globalInitEpoch
+								&& !this.assignedAtStart.test(g)) {
 							this.lastGlobalInitEpoch[g] = this.globalInitEpoch;
 							new Walk(this, -1, g, false).run();
 						}
