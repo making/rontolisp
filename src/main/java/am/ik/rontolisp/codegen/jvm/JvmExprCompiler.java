@@ -1963,19 +1963,21 @@ final class JvmExprCompiler {
 			case LispNames.ARRAY_DIMENSIONS -> JvmArrayCompiler.compileDims(cons, ctx, className);
 			case LispNames.ROW_MAJOR_AREF -> JvmArrayCompiler.compileRowMajorAref(cons, ctx, className);
 			case LispNames.ROW_MAJOR_ASET -> JvmArrayCompiler.compileRowMajorAset(cons, ctx, className);
-			// %replace-bulk (the replace runtime's engine-level copy arm, see
-			// LispNames.REPLACE_BULK): no JVM bulk path yet, so it answers constant
-			// nil and the caller's element loop runs. The arguments are the helper
-			// body's own bindings (pure reads), so skipping their evaluation is
-			// unobservable.
-			case LispNames.REPLACE_BULK -> ctx.body.aconst_null();
-			// %string-search (LispNames.STRING_SEARCH): no JVM arm, search's loop runs.
-			// Same reasoning: its arguments are search's own variables.
-			case LispNames.STRING_SEARCH -> ctx.body.aconst_null();
-			// %string-split, %string-join, %string-count, %sort-by-keys: no JVM arm, the
-			// callers' loops run. Their arguments are variables too.
-			case LispNames.STRING_SPLIT, LispNames.STRING_JOIN, LispNames.STRING_COUNT, LispNames.SORT_BY_KEYS ->
-				ctx.body.aconst_null();
+			// The primitives that take a whole sequence (.kb/bulk-primitives.md): one
+			// call of JvmBulkRuntimeBuilder's method each, null where it decides
+			// nothing and the caller's loop runs.
+			case LispNames.REPLACE_BULK ->
+				compileBulkCall(cons, ctx, className, JvmBulkRuntimeBuilder.COPY, JvmBulkRuntimeBuilder.COPY_DESC, 5);
+			case LispNames.STRING_SEARCH -> compileBulkCall(cons, ctx, className, JvmBulkRuntimeBuilder.SEARCH,
+					JvmBulkRuntimeBuilder.SEARCH_DESC, 6);
+			case LispNames.STRING_SPLIT ->
+				compileBulkCall(cons, ctx, className, JvmBulkRuntimeBuilder.SPLIT, JvmBulkRuntimeBuilder.SPLIT_DESC, 3);
+			case LispNames.STRING_JOIN ->
+				compileBulkCall(cons, ctx, className, JvmBulkRuntimeBuilder.JOIN, JvmBulkRuntimeBuilder.JOIN_DESC, 2);
+			case LispNames.STRING_COUNT ->
+				compileBulkCall(cons, ctx, className, JvmBulkRuntimeBuilder.COUNT, JvmBulkRuntimeBuilder.COUNT_DESC, 4);
+			case LispNames.SORT_BY_KEYS ->
+				compileBulkCall(cons, ctx, className, JvmBulkRuntimeBuilder.SORT, JvmBulkRuntimeBuilder.SORT_DESC, 4);
 			case LispNames.ARRAY_ROW_MAJOR_INDEX ->
 				JvmExprCompiler.compileExpr(LispMacroExpander.expandArrayRowMajorIndex(cons), ctx, className);
 			case LispNames.VECTOR -> JvmExprCompiler.compileExpr(LispMacroExpander.expandVector(cons), ctx, className);
@@ -1985,6 +1987,35 @@ final class JvmExprCompiler {
 			}
 		}
 		return true;
+	}
+
+	/**
+	 * A call of a {@link JvmBulkRuntimeBuilder} method over the form's {@code count}
+	 * operands, each into a temp as it is evaluated: nothing of the form is on the stack
+	 * while the next one runs.
+	 * @param cons the whole form
+	 * @param ctx the compilation context
+	 * @param className the class being generated
+	 * @param name the method
+	 * @param desc its descriptor, {@code count} objects to an object
+	 * @param count how many operands the primitive takes
+	 */
+	private static void compileBulkCall(LispCons cons, JvmLispCompiler.Ctx ctx, String className, String name,
+			String desc, int count) {
+		java.util.List<LispVal> operands = cons.toList();
+		if (operands.size() != count + 1) {
+			throw new IllegalArgumentException(operands.get(0).print() + " takes " + count + " arguments");
+		}
+		int[] temps = new int[count];
+		for (int i = 0; i < count; i++) {
+			JvmExprCompiler.compileExpr(operands.get(i + 1), ctx, className);
+			temps[i] = ctx.allocTemp();
+			ctx.body.astore(temps[i]);
+		}
+		for (int temp : temps) {
+			ctx.body.aload(temp);
+		}
+		ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, className, name, desc));
 	}
 
 	/**

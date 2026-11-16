@@ -25,9 +25,15 @@ match, or nil for "not decided", which runs the loop. Same shape as `%replace-bu
 - **A character vector on either side compares code points through `_str_char_ref`.** Rendering it
   would be one scan's cost per bounded call, quadratic in a tokenizer's loop over a buffer
   (`.kb/string-index-cost.md`).
-- **The interpreter and the JVM answer constant nil.** `SequenceScanFast` has already served the
-  interpreter's call (`.kb/seq-coerce-runtime.md`), and a JIT makes little of the loop's boxes.
-  `--no-gc` refuses `search` for its `&key`.
+- **The interpreter answers constant nil**: `SequenceScanFast` has already served its call
+  (`.kb/seq-coerce-runtime.md`). `--no-gc` refuses `search` for its `&key`.
+- **The JVM scans two immutable strings as UTF-16 units** (`_strSearch`,
+  `JvmBulkRuntimeBuilder`, 2026-11-16; `.kb/bulk-primitives.md`, "JVM"): the bounds through
+  `_cpoff`, the needle's first unit by `String.indexOf` and the rest by `regionMatches`, the answer
+  `start2` plus `codePointCount` of the units passed, which a Latin-1 string answers without a
+  walk. A needle that begins with a low surrogate or ends with a high one, a character vector and
+  a bound that is no fixnum decline. The loop was the prelude's `elt` pair a position: a Starlark
+  `split` was 28% of `methods.star` there and `%starlark-search` 19% (JFR, 1 ms samples).
 - Not served, so still the loop: `:test`, `:test-not`, `:key`, `:from-end`, a list or general vector
   on either side. `mismatch` keeps the same loop with the same boxes.
 
@@ -79,7 +85,8 @@ instructions from an `ExecutionListener` over one exchange:
 
 ## Costs
 Bytes, the same `search` with and without the arm: wasm +378 raw at both levels, JVM +370 for an arm
-that never answers (with `(< found 0)` in place of the `eql` the loop needs anyway, +599). A module
+that never answers (with `(< found 0)` in place of the `eql` the loop needs anyway, +599) and
+2,246 B more with the arm made and `%replace-bulk`'s beside it (2026-11-16). A module
 that never searches is unchanged. `http_body` at `--optimize=size`: 58,948 -> 59,633 raw, 22,867 ->
 23,065 gzip.
 

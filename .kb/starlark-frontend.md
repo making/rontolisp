@@ -738,8 +738,9 @@ wasm and the component for four (`bench`, `fib`, `loop`, `calls`) -- five with `
 "The list element on wasm", six with `listidx` since "An int test compiled twice",
 seven with `dicts` since "Where the time is", ten with `comps`, `strings` and `sorting`
 since "A sequence at a time" and all eleven with `methods` since "A literal is a global",
-all below; where it is not -- the JVM's six -- the cost left is a backend's and is named
-below with the item that carries it.
+all below; on the JVM six with `dicts` since "Where the time is", and no more since "The
+JVM's arms", which brought three of the other five nearer. Where it is not -- the JVM's
+five -- the cost left is a backend's and is named below with the item that carries it.
 
 The five programs above cover integers, calls and `range`. Six were added, each about a
 second of CPython, each printing a checksum CPython, Go and Java Starlark agree on
@@ -1385,12 +1386,13 @@ before -> after:
   222,245, at `--optimize=size` 146,646 -> 148,217 B of wasm. Common Lisp programs:
   `.kb/wasm-gc-strings.md`, "A literal is one object" (a Proxy-Wasm filter +1.3%, `zlib`
   -56 B).
-- **Not made, measured** (`.todo/j66`): the hash table's entry as a struct with typed
+- **Not made, measured** (`.todo/j67`): the hash table's entry as a struct with typed
   fields; a structure reader that takes an instance's slots once; a `def` of one call
   inlined (`push`, `lookup`); `(i * 31) % m` by a variable inline (`_fx_mod`, 7.5% of
   `dicts.star`). And the JVM, where `%string-split`, `%string-join`, `%string-count` and
-  `%sort-by-keys` answer nil: `sorting.star` 3.38, `strings.star` 2.34, `methods.star`
-  1.83, `comps.star` 1.56 against CPython's 0.87-1.15.
+  `%sort-by-keys` answered nil: `sorting.star` 3.38, `strings.star` 2.34, `methods.star`
+  1.83, `comps.star` 1.56 against CPython's 0.87-1.15 -- made since, "The JVM's arms"
+  below.
 - Pinned by `starlark-spec.yaml` `what-the-lowering-knows-answers-as-the-generic-paths`
   (`fast_strings`: `count`, `find` and the affixes over a string of one-byte characters,
   one of several and one never counted, each bound; `strip` by white space and by a
@@ -1401,6 +1403,81 @@ before -> after:
   `code-point-characters-beyond-ascii`, `string-case-ops-full-unicode`,
   `displaced-fill-pointer-cross-backend` and
   `search-over-strings-answers-characters-in-either-representation`.
+
+### The JVM's arms (2026-11-16)
+
+What "A literal is a global" left to `.todo/j66`: the JVM, where the bulk primitives
+answered nil, with the order to profile first (JFR, `jdk.ExecutionSample` every 1 ms;
+`.todo/artefacts/j66-starlark-jvm-bulk-arms/`). The profile agreed with the plan for
+`sorting.star`, named two primitives the plan had not -- `%string-search` and
+`%replace-bulk`, nil on the JVM as well -- and said `comps.star` waits on none of them:
+
+| program | where the main thread's samples were, the build before |
+|---|---|
+| `sorting` | `sorted` 93%: the merges over conses 65% (`-merge-sorted` 32%, `-merge-strings` 19%, `-merge-ascending` 13%), the cells made of the vector 12% |
+| `strings` | `join` through the string stream 15%, `split` 13.5%, `String.concat` 26.5%, `Long.toString` 16%, `len` of a string just made 12% (`_cpidx`: both memories missed, the string stored into a static field) |
+| `methods` | `split` 28% -- `%starlark-search`, the character loop, 19% of the program --, `count` 7%, `find` 4%, `list(xs)` and `extend` 6% in `%replace-runtime-array`'s element loop |
+| `comps` | `_vectorPushExtend` 23%, the dict comprehension's store 20% (half of it the table's growth), the loops' own body 31% |
+
+Made, in the JVM backend, for every language (`JvmBulkRuntimeBuilder`,
+[bulk-primitives.md](bulk-primitives.md), "JVM"): the arms of `%sort-by-keys`,
+`%string-split`, `%string-join` and `%string-count`; of `%string-search`
+([string-search-runtime.md](string-search-runtime.md)), so `find`, `in`, `replace` and
+the affixes scan no characters; of `%replace-bulk`
+([sequence-op-runtimes.md](sequence-op-runtimes.md)), so `list(xs)`, `extend` and a
+slice move without the element loop; and a short string counted where it stands
+([string-index-cost.md](string-index-cost.md)). Nothing in the library or the lowering
+changed: the interpreter still runs the callers' loops and the wasm modules are the
+same bytes.
+
+Seconds as above (`time.sh`, best of three, same machine, the two builds run in turn),
+before -> after:
+
+| program | JVM | WASM | component | CPython | `.class` bytes |
+|---|---|---|---|---|---|
+| `bench.star` | 0.15 -> 0.16 | 0.05 -> 0.05 | 0.05 -> 0.05 | 0.11 | 137,740 -> 140,006 |
+| `fib.star` | 0.30 -> 0.26 | 0.17 -> 0.20 | 0.17 -> 0.20 | 1.45 | 136,561 -> 138,827 |
+| `loop.star` | 0.18 -> 0.17 | 0.33 -> 0.34 | 0.35 -> 0.36 | 1.67 | 111,899 -> 114,175 |
+| `calls.star` | 0.28 -> 0.27 | 0.17 -> 0.16 | 0.14 -> 0.14 | 0.74 | 124,697 -> 126,973 |
+| `mixed.star` | 0.71 -> 0.73 | 0.56 -> 0.56 | 0.50 -> 0.52 | 1.29 | 168,240 -> 170,667 |
+| `listidx.star` | 1.16 -> 1.16 | 0.99 -> 1.02 | 0.99 -> 0.98 | 1.23 | 172,611 -> 175,038 |
+| `dicts.star` | 0.89 -> 0.89 | 0.82 -> 0.80 | 0.84 -> 0.83 | 0.97 | 174,654 -> 177,091 |
+| `comps.star` | 1.68 -> 1.69 | 0.69 -> 0.68 | 0.71 -> 0.73 | 0.92 | 165,900 -> 168,337 |
+| `methods.star` | 1.73 -> 1.39 | 1.12 -> 1.07 | 1.13 -> 1.09 | 1.17 | 163,417 -> 166,580 |
+| `strings.star` | 2.32 -> 1.90 | 0.84 -> 0.85 | 0.81 -> 0.82 | 1.14 | 127,097 -> 130,607 |
+| `sorting.star` | 3.31 -> 1.33 | 0.70 -> 0.71 | 0.73 -> 0.71 | 0.99 | 209,212 -> 214,701 |
+
+- **The JVM is under CPython for the same six** (`fib`, `loop`, `calls`, `mixed`,
+  `listidx`, `dicts`); `sorting` is a third over where it was three times, `methods` a
+  fifth over, `strings` two thirds, `comps` as it was. The wasm columns are their spread:
+  the modules did not change.
+- **The samples now**: `sorting.star` 884 of them where it had 4,931 -- `_sortKeys` 32%
+  (`_bulkRadix` 11 of it), the three vectors a `sorted` makes and the copy a key
+  function is kept from 15%, `min` and `max` 12%, `reversed` 9%; `methods.star` 1,019
+  for 2,360 -- `run`'s own body 20%, `ArrayList.add` 15%, `split` 14%, `lookup` 11%,
+  `push` 11%; `strings.star` 1,431 and 1,533 over two runs for 2,363 -- `String.concat`
+  30% and 42%, `Long.toString` 13%, `_strJoin` 7% and 10%, `_strSplit` 5% and 6%.
+- **What a sort waits on is the compiler** ([bulk-primitives.md](bulk-primitives.md),
+  "JVM"): 5.1 ms for a sort of 50,000 ints and one of 50,000 strings from the hundredth
+  round on, 11-15 ms before it, and `sorting.star` is 96 sorts in a process whose
+  compiler threads take four of its five seconds of CPU.
+- **Not made, measured**: a concatenation through one `StringBuilder` made at its size
+  (36 ns for `"item"` and a number against the 20 of `substring`, `substring`, `concat`;
+  a `char[]` 26; the deprecated Latin-1 `getBytes` pair 17 and wrong for any other
+  string).
+- **The bytes**: every Starlark class carries `_strSearch`, `_bulkCopy` and their
+  helpers, 2.3 KB (`print(1 + 2)` 109,424 -> 111,700 B; `examples/starlark/targets.star`
+  225,852 -> 231,747 with the sort, the split and the join). A Common Lisp class that
+  reaches neither `search` nor `replace` is the same bytes (`(print (+ 1 2))` 6,193).
+- **Left** (`.todo/j67`): `comps.star`'s pushes and its dict's growth, the JVM's string
+  that is three allocations a concatenation, and what a wasm operation costs.
+- Pinned by `starlark-spec.yaml` `what-the-lowering-knows-answers-as-the-generic-paths`
+  (`fast_bulk`, `fast_sort`, `fast_strings`, and `fast_wide`: strings of characters
+  below and above 256 and outside the BMP sorted both ways and by a key, joined, split,
+  counted and searched at 40 and at 6, a tuple's vector with False among its ints), the
+  conformance corpus, and for the two Common Lisp primitives ci-spec
+  `search-over-strings-answers-characters-in-either-representation`,
+  `typed-vector-struct-packs-and-replace-bulk` and the array suites.
 
 ## Positions
 

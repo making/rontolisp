@@ -3981,8 +3981,8 @@ public final class LispNames {
 	 * separator limit)} answers the pieces of STRING between the leftmost LIMIT
 	 * occurrences of SEPARATOR that do not overlap -- all of them when LIMIT is negative
 	 * -- in a fresh adjustable vector with a fill pointer. Nil -- nothing decided --
-	 * where the backend has no arm (the interpreter and the JVM compile it to constant
-	 * nil; on WASM an empty separator or an operand that is no string), and the caller's
+	 * where the backend has no arm (the interpreter compiles it to constant nil; on the
+	 * JVM and WASM an empty separator or an operand that is no string), and the caller's
 	 * loop runs. See {@code .kb/bulk-primitives.md}. Never read from source.
 	 */
 	public static final String STRING_SPLIT = "%STRING-SPLIT";
@@ -3991,7 +3991,7 @@ public final class LispNames {
 	 * The {@code %string-join} internal primitive: {@code (%string-join strings
 	 * separator)} answers the strings of a general vector as one immutable string,
 	 * SEPARATOR between them. Nil -- nothing decided -- where the backend has no arm (the
-	 * interpreter and the JVM compile it to constant nil; on WASM an element that is no
+	 * interpreter compiles it to constant nil; on the JVM and WASM an element that is no
 	 * immutable string), and the caller's loop runs. See {@code .kb/bulk-primitives.md}.
 	 * Never read from source.
 	 */
@@ -4002,7 +4002,7 @@ public final class LispNames {
 	 * start end)} answers how many occurrences of NEEDLE that do not overlap, leftmost
 	 * first, lie in STRING between the character indices START and END, which the caller
 	 * checked. Nil -- nothing decided -- where the backend has no arm (the interpreter
-	 * and the JVM compile it to constant nil; on WASM an empty needle or an operand that
+	 * compiles it to constant nil; on the JVM and WASM an empty needle or an operand that
 	 * is no immutable string), and the caller's loop runs. See
 	 * {@code .kb/bulk-primitives.md}. Never read from source.
 	 */
@@ -4013,10 +4013,10 @@ public final class LispNames {
 	 * out descending)} stores into the general vector OUT the ELEMENTS -- the KEYS
 	 * themselves when ELEMENTS is nil -- in the order of their keys, elements of equal
 	 * keys in the order they stood in, and answers OUT. Nil -- nothing decided, OUT as it
-	 * was -- where the backend has no arm (the interpreter and the JVM compile it to
-	 * constant nil; on WASM keys that are not all integers within 64 bits or all
-	 * immutable strings), and the caller's sort runs. See {@code .kb/bulk-primitives.md}.
-	 * Never read from source.
+	 * was -- where the backend has no arm (the interpreter compiles it to constant nil;
+	 * on the JVM and WASM keys that are not all integers within 64 bits or all immutable
+	 * strings), and the caller's sort runs. See {@code .kb/bulk-primitives.md}. Never
+	 * read from source.
 	 */
 	public static final String SORT_BY_KEYS = "%SORT-BY-KEYS";
 
@@ -4299,8 +4299,8 @@ public final class LispNames {
 	 * elements in one engine-level bulk copy when the backend can (WASM: both sequences
 	 * are packed integer vectors of the SAME width and the bounds are in range --
 	 * {@code array.copy}), and nil -- copying nothing -- otherwise, in which case the
-	 * caller's element loop runs. A backend with no bulk path (the JVM today) compiles it
-	 * to constant nil. See {@code .kb/sequence-op-runtimes.md}.
+	 * caller's element loop runs. The JVM moves two distinct general vectors with storage
+	 * of their own ({@code _bulkCopy}). See {@code .kb/sequence-op-runtimes.md}.
 	 */
 	public static final String REPLACE_BULK = "%REPLACE-BULK";
 
@@ -4310,8 +4310,8 @@ public final class LispNames {
 	 * checked bounds answers the leftmost match when the backend can scan two strings
 	 * without an element loop (WASM: no allocation at all), -1 when there is none, and
 	 * nil -- nothing decided -- for anything else, in which case {@code search}'s loop
-	 * runs. The interpreter and the JVM compile it to constant nil. See
-	 * {@code .kb/string-search-runtime.md}.
+	 * runs. The interpreter compiles it to constant nil; the JVM scans two immutable
+	 * strings ({@code _strSearch}). See {@code .kb/string-search-runtime.md}.
 	 */
 	public static final String STRING_SEARCH = "%STRING-SEARCH";
 

@@ -68,7 +68,14 @@ ranges lie within the storage, as the loop's own accesses must. The loop was `_i
 `_arr_check_rank` and `_arr_set` an element, 56 ns: ten rounds of `list(xs)` and `ys.extend(xs)`
 over 1,200,000 elements 1.36 -> 0.39 s (a Starlark list's `replace`, CPython 0.22), two thirds of
 the samples in the three helpers before. It is handed the DETACHED source (below), so a
-self-overlapping copy reaches it as two distinct vectors. The JVM compiles the form to constant nil.
+self-overlapping copy reaches it as two distinct vectors. **The JVM moves two distinct general
+vectors too** (`_bulkCopy`, `JvmBulkRuntimeBuilder`, 2026-11-16; `.kb/bulk-primitives.md`, "JVM"):
+boxed into a plain boxed vector (a header of length 3: it remembers no element type) a `get` and a
+`set` an element, unboxed into it a `Long` an element, unboxed into unboxed one `System.arraycopy`
+of the `long[]`; a boxed source into an unboxed destination declines (a store may have to widen
+it), as do a view, a character vector, another rank and a range outside the storage. `list(xs)`
+and `ys.extend(xs)` of 1,200,000 elements were 6% of `methods.star`'s samples in the loop and are
+4.5% in the arm, two calls the interpreter runs.
 
 ## Self-overlapping `replace`
 CLHS: when seq1 and seq2 are one object and the regions overlap, the result is as if the whole

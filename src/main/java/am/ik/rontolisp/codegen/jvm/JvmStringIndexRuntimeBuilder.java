@@ -148,6 +148,12 @@ final class JvmStringIndexRuntimeBuilder {
 	/** The breakpoint spacing in characters ({@code 1 << }{@value #STRIDE_SHIFT}). */
 	static final int STRIDE = 1 << STRIDE_SHIFT;
 
+	/**
+	 * A string of at most this many UTF-16 units, the framing quotes among them, has its
+	 * characters counted by {@code _scount} where it stands.
+	 */
+	static final int SHORT_COUNT = 66;
+
 	private JvmStringIndexRuntimeBuilder() {
 	}
 
@@ -164,7 +170,7 @@ final class JvmStringIndexRuntimeBuilder {
 		ClassEntry objectClass = cp.classEntry("java/lang/Object");
 		MethodRefEntry indexOf = cp.methodRef(selfClass, INDEX_METHOD, INDEX_DESC);
 		return List.of(buildOffset(cp, offsetByCodePoints, slot0, slot1, indexOf),
-				buildCount(cp, stringLength, slot0, slot1, indexOf),
+				buildCount(cp, stringLength, codePointCount, slot0, slot1, indexOf),
 				buildIndex(cp, stringLength, codePointCount, offsetByCodePoints, slot0, slot1, wide0, wide1,
 						intArrayClass, objectClass, stringClass),
 				buildCharRef(cp, selfClass, stringClass, usesArrays), buildOrder(cp, stringClass));
@@ -414,12 +420,22 @@ final class JvmStringIndexRuntimeBuilder {
 	}
 
 	// _scount(s): length - 2 for a flat string -- the same fact, so the same memory
-	// answers both -- else the count the breakpoint table's slot 0 carries.
-	private static StringIndexMethod buildCount(ConstantPool cp, MethodRefEntry stringLength, FieldRefEntry slot0,
-			FieldRefEntry slot1, MethodRefEntry indexOf) {
-		// Slots: 0 = s, 1 = table.
+	// answers both -- else the count the breakpoint table's slot 0 carries. A string of
+	// at most SHORT_COUNT units is counted where it stands and remembered nowhere: the
+	// count is the range's width for a Latin-1 string and a walk no longer than the
+	// probes for a wider one, and remembering a string just made is a store into a
+	// static field for every such string (.kb/string-index-cost.md).
+	private static StringIndexMethod buildCount(ConstantPool cp, MethodRefEntry stringLength,
+			MethodRefEntry codePointCount, FieldRefEntry slot0, FieldRefEntry slot1, MethodRefEntry indexOf) {
+		// Slots: 0 = s, 1 = table, 2 = the length in units.
 		MethodCode a = new MethodCode();
 		MethodCode.Label direct = a.newLabel();
+		MethodCode.Label remembered = a.newLabel();
+		a.aload(0).invokevirtual(stringLength).istore(2);
+		a.iload(2).loadConstant(SHORT_COUNT).if_icmpgt(remembered);
+		a.iload(2).loadConstant(2).if_icmplt(remembered);
+		a.aload(0).loadConstant(1).iload(2).loadConstant(1).isub().invokevirtual(codePointCount).ireturn();
+		a.labelBinding(remembered);
 		emitRememberedProbe(a, slot0, slot1, direct);
 		a.aload(0);
 		a.invokestatic(indexOf);

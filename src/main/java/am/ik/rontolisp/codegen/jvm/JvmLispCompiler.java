@@ -4808,6 +4808,12 @@ public final class JvmLispCompiler implements LispCompiler {
 			.toList();
 		final Utf8Entry stringIndexWideFieldDesc = cp.utf8Entry(JvmStringIndexRuntimeBuilder.WIDE_FIELD_DESC);
 
+		// The primitives that take a whole sequence (%string-split, %sort-by-keys and
+		// the rest, .kb/bulk-primitives.md). Emitted unconditionally: their sites are in
+		// library helpers this backend injects while it compiles, the methods call
+		// nothing of the array runtime, and the class shaker drops what nothing calls.
+		final List<JvmBulkRuntimeBuilder.BulkMethod> bulkMethods = JvmBulkRuntimeBuilder.build(cp, thisClass);
+
 		Utf8Entry mainUtf8 = cp.utf8Entry("main");
 		Utf8Entry mainDesc = cp.utf8Entry("([Ljava/lang/String;)V");
 		Utf8Entry codeUtf8 = cp.utf8Entry("Code");
@@ -5927,6 +5933,9 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		for (JvmStringIndexRuntimeBuilder.StringIndexMethod sm : stringIndexMethods) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, sm.name(), sm.desc(), sm.code());
+		}
+		for (JvmBulkRuntimeBuilder.BulkMethod bm : bulkMethods) {
+			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, bm.name(), bm.desc(), bm.code());
 		}
 		for (JvmReadRuntimeBuilder.ReadMethod rm : readMethodsFinal) {
 			definition.addMethod(AccessFlag.ACC_PRIVATE | AccessFlag.ACC_STATIC, rm.name(), rm.desc(), rm.code());

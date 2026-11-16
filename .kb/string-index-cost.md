@@ -65,6 +65,12 @@ When it holds, offset is `1 + i` and count `len - 2`. The probe is CONSTANT TIME
 LATIN1-backed string, so every ASCII/Latin-1 string is O(1) with nothing remembered; for a wider
 one the fact is remembered in two plain static fields (`_cpsimple0/1`).
 
+**A string of at most 66 units is counted where it stands** (`_scount`,
+`SHORT_COUNT`, 2026-11-16): `codePointCount` and nothing remembered. `len` of a string
+just made missed both memories, probed the wide pair and stored the string into a static
+field -- `len("item" + str(i))` six million times 0.99 -> 0.94 s, whole process. An
+index (`_cpoff`) still remembers a short string: its probe is a count a character.
+
 **Wide** -- one surrogate pair is enough -- has no such arithmetic and used to fall back to
 `offsetByCodePoints(1, i)` on EVERY index with nothing remembered, which is quadratic in a string
 that is otherwise pure ASCII. It gets a BREAKPOINT TABLE now, built in one pass: `t[0]` is the

@@ -220,7 +220,10 @@ cases:
   # of one-byte characters, one of several, one never counted; each bound), strip reads
   # codes, upper and lower of one-byte characters move the bytes, a split's short piece
   # is made with its bytes in hand and a long one copied, pop() empties a list, and get
-  # and a store reach the table for an int or a string key.
+  # and a store reach the table for an int or a string key. fast_wide sorts, joins,
+  # splits, counts and searches strings of characters below and above 256 and outside
+  # the BMP, on either side of the size a sort changes its method at, and a tuple's
+  # vector with False among its ints.
   - name: what-the-lowering-knows-answers-as-the-generic-paths
     source: |
       def fast_add(a, b):
@@ -354,6 +357,18 @@ cases:
           d["a"] += 1
           return [line.count("o"), line.count("the"), line.count("o", 13, 27), line.count(""), "aaaaa".count("aa", 1), u.count("ö"), u.count("ö", 8), u.count("ö", 8, 13), j.count("b,a"), j.upper().count("B", 3, 9), line.find("fox"), line.find("fox", 17), line.find("o", 13, 27), u.find("ö", 8), u.find("d"), j.find("b,a", 5), line.find("dog", 0, 42), line.startswith(("a", "the")), line.endswith("lazy", 0, 39), u.startswith("hé"), u.endswith("ö ö"), line.startswith("quick", 4), "  \t pad \n".strip() + "|", "  pad  ".lstrip() + "|", "  pad  ".rstrip() + "|", "xxpadxyx".strip("xy"), "éépadéé".strip("é"), "abc".strip(""), "   ".strip() + "|", "Hello World 123".upper(), "Hello World 123".lower(), "Héllo Wörld".upper(), "HÉLLO".lower(), len("abc".upper()), len(j.lower()), "a,bb,cccccccc,ccccccccc,é,ééééé,".upper().split(","), xs.pop(), xs.pop(), xs.pop(), xs, d.get("a"), d.get(2), d.get((1, 2)), d.get("zz", "dflt"), len(d)]
       print(fast_strings())
+      def fast_wide(n):
+          alphabet = ["a", "é", "ÿ", "Ā", "～", "😀", "z"]
+          ws = []
+          x = 7
+          for i in range(n):
+              x = (x * 1103515245 + 12345) % 2147483648
+              ws.append(alphabet[(x // 65536) % 7] * (1 + i % 3) + alphabet[(x // 1024) % 7] + ("-long-suffix" if i % 5 == 0 else ""))
+          up = sorted(ws)
+          by = sorted([(w, i) for i, w in enumerate(ws)], key = lambda p: p[0][:2], reverse = True)
+          line = "😀".join(ws)
+          return [up[:3], up[-2:], sorted(ws, reverse = True) == up[::-1], [p[1] for p in by[:6]], line.count("😀"), line.count("😀", 20, 60), line.find("z", 1), line.find("😀", 12), line.find("～😀", 3, len(line) - 2), len(line.split("😀")), line.split("😀", 2)[2][:5], "😀".join(line.split("😀")) == line, line.split("-long-suffix")[1][:4]]
+      print(fast_wide(40), fast_wide(6), sorted((5, 3, 1)), sorted((3, False, 1, True), key = lambda v: 0 if type(v) == "bool" else v), list((1, False, 2)), sorted(range(40), key = lambda v: v % 3, reverse = True)[12:16])
     expected: |
       3 ab [1, 2] 3.5 9223372036854775808
       [True, True, False, False, False, True, False, True] [False, False, True, True, False, True, False, True] [True, True, False, False, False, True, False, True] [False, True, False, True, True, False, False, True]
@@ -373,6 +388,7 @@ cases:
       [["w0", "w10", "w10"], ["w991", "w990", "w982"], "a-long-prefix/0é", "a-long-prefix/6é", [0, 2, 5, 11], False, [-4611686018427387904, -500], [2147483648, 1099511627776], True, 3523, True, 160, True, ["a", "b", "", "c"], ["a", "b----c"], ["é", "ö", "", ""], 1, "abéabéab", 139, "", "é"] [28, True, 20, False]
       ["item42", "s:0", "42-x", "42:s", "1180591620717411303424|1180591620717411303424|-42|\"s\"", "TrueTrue1180591620717411303424", "é-42😀", 5, "42s42s118059162071741130342442"] ["item-1073741824", ":6", "-1073741824-x", "-1073741824:", "-2147483648|-2147483648|1073741824|\"\"", "NoneNone-2147483648", "é1073741824😀", 12, "-1073741824-1073741824-2147483648-1073741824"]
       [4, 2, 2, 44, 2, 3, 2, 1, 69, 2, 16, -1, 17, 12, 10, 7, -1, True, True, True, True, True, "pad|", "pad  |", "  pad|", "pad", "pad", "abc", "|", "HELLO WORLD 123", "hello world 123", "HÉLLO WÖRLD", "héllo", 3, 209, ["A", "BB", "CCCCCCCC", "CCCCCCCCC", "É", "ÉÉÉÉÉ", ""], 3, 2, 1, [], 2, "TWO", 3, "dflt", 3]
+      [["aaaa", "aaaĀ-long-suffix", "aaa～"], ["😀😀😀Ā", "😀😀😀Ā-long-suffix"], True, [5, 8, 19, 18, 2, 22], 52, 14, 1, 14, 17, 53, "～～～Ā😀", True, "😀zz～"] [["zz-long-suffix", "zz～", "éĀ"], ["～～～Ā", "😀😀😀Ā-long-suffix"], True, [5, 2, 4, 3, 0, 1], 8, 6, 1, 14, 17, 9, "～～～Ā😀", True, "😀zz～"] [1, 3, 5] [False, True, 1, 3] [1, False, 2] [38, 1, 4, 7]
   # A string's elements are code points; hash is the specification's; equal keys are one
   # dict key, which keeps its place when stored again and goes last once removed; a float
   # prints as Go's %g, NaN equals itself; a function is a key by identity.

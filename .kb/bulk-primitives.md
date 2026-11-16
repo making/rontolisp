@@ -2,12 +2,12 @@
 
 **Invariant: each answers what its caller's own loop answers, or nil -- nothing decided --
 and the loop runs.** A cost invariant, the shape of `%string-search`
-(`.kb/string-search-runtime.md`): the wasm-GC backend has an arm, the interpreter and the
-JVM compile the form to constant nil (their arguments are variables, so skipping them is
-unobservable). No user source reads the names (`PackageRegistry.CL_INTERNALS`); the
-Starlark library is the caller (`.kb/starlark-frontend.md`, "A sequence at a time").
+(`.kb/string-search-runtime.md`): the wasm-GC backend and the JVM have an arm each, the
+interpreter compiles the form to constant nil (its arguments are variables, so skipping
+them is unobservable). No user source reads the names (`PackageRegistry.CL_INTERNALS`);
+the Starlark library is the caller (`.kb/starlark-frontend.md`, "A sequence at a time").
 
-| form | answers | nil on wasm for |
+| form | answers | nil on wasm and the JVM for |
 |---|---|---|
 | `(%string-split string separator limit)` | the pieces between the leftmost LIMIT occurrences of SEPARATOR that do not overlap (all when LIMIT is negative), in a fresh vector as `(make-array n :adjustable t :fill-pointer n)` makes one | an operand that is no string, an empty separator, a limit that is no fixnum |
 | `(%string-join strings separator)` | the strings of a general vector as one immutable string, SEPARATOR between them | a vector without storage of its own, an element or separator that is no immutable string (a mutable character vector among the elements) |
@@ -56,6 +56,57 @@ literal is one object").
   of that type reaches a type test and `WasmRefTypeFolder` opens no packed-vector arm for
   it.
 
+## JVM (`JvmBulkRuntimeBuilder`, 2026-11-16)
+
+Private static methods of the generated class, hand-assembled, emitted in every class
+and dropped by the shaker from one that calls none; with them the arms of
+`%string-search` (`_strSearch`, `.kb/string-search-runtime.md`) and `%replace-bulk`
+(`_bulkCopy`, `.kb/sequence-op-runtimes.md`). They call nothing of the array runtime,
+so a program outside the array gate may carry them.
+
+- **The two representations are read where they lie** (`_bulkStr`, `_bulkVec`,
+  `_bulkLen`): a string is a `String` of two units or more that begins with the framing
+  quote; a vector an `ArrayList` whose slot 0 is a header of length 3 (boxed elements),
+  5 with no target (boxed, an element type remembered) or 6 (unboxed in the `long[]`
+  of its last slot, `Long.MIN_VALUE` for nil -- what a plain `(make-array n)` is,
+  `.kb/adjustable-arrays.md`), of one dimension. A view, a character vector, another
+  rank, a host `ArrayList` decline. `out` must be a header of length 3.
+- **A needle is found as UTF-16 units** (`_strFind`: `indexOf` of its first unit,
+  `regionMatches` of the rest, nothing allocated): a match of units is a match of code
+  points when the needle neither begins with a low surrogate nor ends with a high one
+  (`_bulkWhole`); one that does declines. A bound is `_cpoff` of its character index.
+- **`_strSplit`** cuts each piece from one `char[]` of the string, the framing quotes
+  written over the unit before the piece and the one behind it (the opening quote or a
+  separator's last unit; a separator's first or the closing quote -- none read again),
+  so a piece is one `String` made in one pass. The vector is built as `make-array`
+  builds it: `{{n}, n, "T"}` in slot 0.
+- **`_strJoin`** measures, then appends each string once to a `StringBuilder` made at
+  that size.
+- **`_sortKeys`** reads each key once into a 64-bit word that orders unsigned as the
+  key does: a fixnum with its sign bit flipped (a `BigInteger` declines); of a string
+  its first seven units, each below 256, then its length saturating at eight, and from
+  the first unit of 256 or more on every bit set (`_bulkWord`) -- so a word is its whole
+  string when its low byte is below eight, and any other two strings of equal words go
+  to a merge. Every word is complemented when the order is descending. The keys'
+  PLACES are sorted by their words, the words moved beside them: by insertion up to 32
+  keys (a radix pass is 256 counters), else by the radix sort wasm's arm is
+  (`_bulkRadix`, one pass a call); then each run of equal words that are not their
+  whole string by a bottom-up merge over `_strOrder` (`_bulkMerge`). Keys or elements
+  in a `long[]` are read from it.
+- **Measured** (`.kb/starlark-frontend.md`, "The JVM's arms"): `sorting.star` 3.24 ->
+  1.30 s, `strings.star` 2.47 -> 1.83, `methods.star` 1.77 -> 1.42. A sort of 50,000
+  ints and one of 50,000 strings are 5.1 ms the pair from the hundredth round on, 15 ms
+  over the first 24 rounds and 11 over the next 72: `sorting.star` is 96 sorts, and its
+  process is 5.2 s of CPU for 1.3 s of wall time with one collection of 12 ms -- the
+  rest is the compiler's threads (Oracle GraalVM 25; with C2 as the top tier,
+  `-XX:-UseJVMCICompiler`, 2.8 s of CPU and 1.10 s). With the radix pass a method of
+  its own, `_sortKeys` and what it calls are 284 of the main thread's samples (1 ms
+  each) where they were 395.
+- **Bytes**: a class that reaches `search` or `replace` carries `_strSearch`,
+  `_bulkCopy` and their helpers, 2,246 B (`print(1 + 2)` in Starlark 109,424 ->
+  111,670); one that sorts, splits, joins and counts 5.5 KB (`sorting.star` 209,212 ->
+  214,701). `(print (+ 1 2))` is unchanged at 6,193 B.
+
 ## Measured (2026-11-16, wasmtime 49, user seconds of the precompiled module)
 
 - **A merge mispredicts, a radix pass does not.** `_sort_keys` first written as a merge
@@ -85,5 +136,10 @@ characters, with a limit, of characters of several bytes; `join` of none, one, s
 what a list made by `split` takes from `extend`, `append` and `pop`; `fast_strings`:
 `count` over one-byte characters, several-byte ones and a string never counted, with
 each bound, an empty needle and overlapping occurrences; a split of pieces of eight
-bytes, nine and several-byte characters) on four backends, and the conformance corpus. The interpreter and the JVM run the callers' loops there, so
-the same expected text pins both halves.
+bytes, nine and several-byte characters; `fast_wide`: strings of characters below and
+above 256 and outside the BMP sorted, joined, split, counted and searched at 40 and at
+6 -- either side of the size the JVM's sort changes its method at --, a tuple's vector
+with False among its ints) on four backends, and the conformance corpus. The interpreter
+runs the callers' loops there, so the same expected text pins both halves.
+`.todo/artefacts/j66-starlark-jvm-bulk-arms/fuzz.star` prints 424 lines of the same over
+six alphabets and seven int ranges; the interpreter, the JVM and wasm print the same.
