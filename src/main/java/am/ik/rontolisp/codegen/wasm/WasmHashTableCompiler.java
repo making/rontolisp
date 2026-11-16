@@ -499,22 +499,60 @@ final class WasmHashTableCompiler {
 	private static int headerSlot(LispVal tableExpr, WasmLispCompiler.Ctx ctx) {
 		WasmExprCompiler.compileExpr(tableExpr, ctx);
 		if (WasmEmitHelper.checksConsFields(ctx)) {
-			int tableSlot = setTemp(ctx);
-			emitTableCheck(ctx, tableSlot);
-			getLocal(ctx, tableSlot);
+			return headerSlotOf(setTemp(ctx), ctx);
 		}
 		castCellGet0(ctx);
 		return setTemp(ctx);
 	}
 
-	// The header of a table already evaluated into tableSlot, checked as a table.
+	// The header of a table already evaluated into tableSlot. In EH mode a value that is
+	// no hash table is the innermost named operator's HASH-TABLE type-error, and the
+	// three tests that say so are the casts the read needs -- the cell, its header cons,
+	// the i31 count in the car (emitHashTablePI32's answer) -- each made once: block
+	// $done { block $miss (result eqref) { table; br_on_cast_fail $miss cell; field 0;
+	// tee header; br_on_cast_fail $miss cons; car; ref.test i31; br_if $done; table }
+	// drop; the type-error }.
 	private static int headerSlotOf(int tableSlot, WasmLispCompiler.Ctx ctx) {
-		if (WasmEmitHelper.checksConsFields(ctx)) {
-			emitTableCheck(ctx, tableSlot);
+		if (!WasmEmitHelper.checksConsFields(ctx)) {
+			getLocal(ctx, tableSlot);
+			castCellGet0(ctx);
+			return setTemp(ctx);
 		}
+		int headerSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.BLOCK, 0x40);
+		ctx.writer.write(Instruction.BLOCK);
+		ctx.writer.writeRefType(true, Type.EQ.code());
 		getLocal(ctx, tableSlot);
-		castCellGet0(ctx);
-		return setTemp(ctx);
+		brOnCastFail(ctx, WasmLispCompiler.TYPE_CELL);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		ctx.writer.writeUnsignedLeb128(0);
+		ctx.writer.write(Instruction.TEE_LOCAL);
+		ctx.writer.writeUnsignedLeb128(headerSlot);
+		brOnCastFail(ctx, WasmLispCompiler.TYPE_CONS);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		ctx.writer.writeUnsignedLeb128(0);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		ctx.writer.writeHeapType(Type.I31.code());
+		ctx.writer.write(Instruction.BR_IF);
+		ctx.writer.writeUnsignedLeb128(1);
+		getLocal(ctx, tableSlot);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.DROP);
+		WasmOperandTypes.emitTypeError(ctx, tableSlot, OperandTypes.Kind.HASH_TABLE);
+		ctx.writer.write(Instruction.END);
+		return headerSlot;
+	}
+
+	// br_on_cast_fail 0 eqref (ref type): the eqref on the stack cast, or handed as it is
+	// to the enclosing block.
+	private static void brOnCastFail(WasmLispCompiler.Ctx ctx, int type) {
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.BR_ON_CAST_FAIL);
+		ctx.writer.write(0x01); // the operand nullable, the cast not
+		ctx.writer.writeUnsignedLeb128(0);
+		ctx.writer.writeHeapType(Type.EQ.code());
+		ctx.writer.writeHeapType(type);
 	}
 
 	// Whether the table operand may be evaluated after the operand that follows it in

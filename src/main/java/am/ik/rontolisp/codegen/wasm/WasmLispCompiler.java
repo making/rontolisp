@@ -6976,8 +6976,8 @@ public final class WasmLispCompiler implements LispCompiler {
 		// object. Its table covers every defun, the funcIds the registry and a
 		// static site can name; its global is allocated here, before the global
 		// section is emitted.
-		final byte[] strLitBody = quoteGlobals.sealLiteralSites()
-				? WasmStringRuntimeBuilder.buildStrLitBody(quoteGlobals.literalTableIndex()) : UNREACHABLE_BODY;
+		final byte[] strLitBody = quoteGlobals.sealLiteralSites() ? WasmStringRuntimeBuilder.buildStrLitBody(
+				quoteGlobals.literalTableIndex(), !this.optimize.prefersSizeOverSpeed()) : UNREACHABLE_BODY;
 		final byte[] funcrefBody;
 		if (this.emitsFuncref) {
 			funcrefBody = WasmEvalRuntimeBuilder.buildFuncrefBody(defuns.size(), quoteGlobals.funcBoxTableIndex(),

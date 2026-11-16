@@ -255,6 +255,19 @@ keeps a table of eight keys or fewer as a vector of pairs (next bullet).
   string looked up by the object that was stored -- without the call, which spills the
   walk's references. A Starlark program of dict reads and stores (`dicts.star`) 1.23 ->
   1.15 s, measured on the hand-edited module first.
+- **WASM: a table operand is walked once and a fixnum is hashed where it is read**
+  (2026-11-16). A site in EH mode asked `hash-table-p` -- the cell's test and cast, the header
+  cons's test and cast, the count's i31 test -- and then cast the cell again for the header:
+  seven type operations where the read needs three. `WasmHashTableCompiler.headerSlotOf` makes
+  the three, each a `br_on_cast_fail` out to the `HASH-TABLE` type-error, and keeps the header it
+  passed. `emitPlacementHash` reads an i31 key's hash inline (a fixnum is its own, under `_hash`
+  and `_ihash` alike), where the call of `_hash` was two failed struct tests and its depth
+  budget's globals ahead of the same read. 10,000,000 `gethash` of a fixnum key in an `equal`
+  table of 5,003 (plain Common Lisp, the loop's own 0.11 s in both): 0.48 -> 0.43 s. A string
+  key is 0.64 s before and after: its bytes are folded at every look-up (`_hash` keeps
+  nothing), 21 ns of the 53 a look-up of a seven-letter key costs. A hash kept in the string
+  would be a seventh field of `TYPE_STRING`, free on wasmtime's 16-byte rounding
+  (`.kb/wasm-gc-object-size.md`); not made.
 - **WASM: a table of at most `SMALL_MAX` (8) keys is SMALL (2026-11-06)**, a record
   `[count, key0, value0, ...]` of odd length (a flat one's is 4, a trie's 6), what
   `make-hash-table` and `clrhash` answer for every test but `equalp`. The pairs are scanned with

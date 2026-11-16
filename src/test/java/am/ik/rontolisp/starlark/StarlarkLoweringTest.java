@@ -126,13 +126,13 @@ class StarlarkLoweringTest {
 						"""
 								(DEFUN |f| (|xs|) (BLOCK %SL-FN (LET ((|i| :%UNBOUND) (|x| :%UNBOUND) (|n| :%UNBOUND)) \
 								(LET* ((%SL-SEQ1 |xs|) (%SL-ITEMS2 ($ITERATE %SL-SEQ1)) (%SL-COUNT3 (LENGTH %SL-ITEMS2)) (%SL-INDEX4 0)) \
-								(BLOCK %SL-BREAK (TAGBODY %SL-TOP5 (IF (< %SL-INDEX4 %SL-COUNT3) (PROGN \
-								(LET ((%SL-UNPACKED6 ($UNPACK (AREF %SL-ITEMS2 %SL-INDEX4) 2))) \
-								(SETQ |i| (AREF %SL-UNPACKED6 0)) (SETQ |x| (AREF %SL-UNPACKED6 1))) \
+								(BLOCK %SL-BREAK (WHILE (< %SL-INDEX4 %SL-COUNT3) \
+								(LET ((%SL-UNPACKED5 ($UNPACK (AREF %SL-ITEMS2 %SL-INDEX4) 2))) \
+								(SETQ |i| (AREF %SL-UNPACKED5 0)) (SETQ |x| (AREF %SL-UNPACKED5 1))) \
 								(SETQ %SL-INDEX4 (+ %SL-INDEX4 1)) \
 								(BLOCK %SL-CONTINUE (IF ($TRUTH |x|) (PROGN ($ITERATED %SL-SEQ1) (RETURN-FROM %SL-FN |i|)) \
-								(IF ($TRUTH |i|) (RETURN-FROM %SL-CONTINUE NIL))) (RETURN-FROM %SL-BREAK NIL)) \
-								(GO %SL-TOP5))))) ($ITERATED %SL-SEQ1)) (SETQ |n| ($LOCAL |x| "x")) :NONE)))
+								(IF ($TRUTH |i|) (RETURN-FROM %SL-CONTINUE NIL))) (RETURN-FROM %SL-BREAK NIL)))) \
+								($ITERATED %SL-SEQ1)) (SETQ |n| ($LOCAL |x| "x")) :NONE)))
 								(SETQ |f| ($MAKE-FUNCTION "f" '("xs") NIL 1 NIL NIL #'|f|))"""),
 				// truth is fused into a test; `and` / `or` as values keep the operand;
 				// a comparison of operands that may be ints tests them first
@@ -147,17 +147,16 @@ class StarlarkLoweringTest {
 								(SETQ |f| ($MAKE-FUNCTION "f" '("a" "b" "c") NIL 3 NIL NIL #'|f|))"""),
 				// a comprehension: the same loops pushing onto a vector, its variables
 				// its own, the first iterable evaluated outside them
-				arguments("y = [1]\nx = [v * w for v in range(3) if v for w in y]\n",
-						"""
-								(SETQ |y| ($LIST-OF '(1)))
-								(SETQ |x| (LET* ((%SL-NEXT2 0)) (LET ((%SL-ACC1 ($VECTOR)) (|v| :%UNBOUND) (|w| :%UNBOUND)) \
-								(TAGBODY %SL-TOP3 (IF (< %SL-NEXT2 3) (PROGN (SETQ |v| %SL-NEXT2) (SETQ %SL-NEXT2 (+ %SL-NEXT2 1)) \
-								(IF (NOT (= |v| 0)) (LET* ((%SL-SEQ4 |y|) (%SL-ITEMS5 ($ITERATE %SL-SEQ4)) \
-								(%SL-COUNT6 (LENGTH %SL-ITEMS5)) (%SL-INDEX7 0)) \
-								(TAGBODY %SL-TOP8 (IF (< %SL-INDEX7 %SL-COUNT6) (PROGN (SETQ |w| (AREF %SL-ITEMS5 %SL-INDEX7)) \
-								(SETQ %SL-INDEX7 (+ %SL-INDEX7 1)) \
-								(VECTOR-PUSH-EXTEND (IF (INTEGERP |w|) (* |v| |w|) ($MUL |v| |w|)) %SL-ACC1) (GO %SL-TOP8)))) \
-								($ITERATED %SL-SEQ4))) (GO %SL-TOP3)))) ($LIST-FROM %SL-ACC1))))"""),
+				arguments("y = [1]\nx = [v * w for v in range(3) if v for w in y]\n", """
+						(SETQ |y| ($LIST-OF '(1)))
+						(SETQ |x| (LET* ((%SL-NEXT2 0)) (LET ((%SL-ACC1 ($VECTOR)) (|v| :%UNBOUND) (|w| :%UNBOUND)) \
+						(WHILE (< %SL-NEXT2 3) (SETQ |v| %SL-NEXT2) (SETQ %SL-NEXT2 (+ %SL-NEXT2 1)) \
+						(IF (NOT (= |v| 0)) (LET* ((%SL-SEQ3 |y|) (%SL-ITEMS4 ($ITERATE %SL-SEQ3)) \
+						(%SL-COUNT5 (LENGTH %SL-ITEMS4)) (%SL-INDEX6 0)) \
+						(WHILE (< %SL-INDEX6 %SL-COUNT5) (SETQ |w| (AREF %SL-ITEMS4 %SL-INDEX6)) \
+						(SETQ %SL-INDEX6 (+ %SL-INDEX6 1)) \
+						(VECTOR-PUSH-EXTEND (IF (INTEGERP |w|) (* |v| |w|) ($MUL |v| |w|)) %SL-ACC1)) \
+						($ITERATED %SL-SEQ3)))) ($LIST-FROM %SL-ACC1))))"""),
 				// a template written as a literal over the arguments the expression
 				// spells is read here: the arguments first, in order, then the pieces
 				// joined; one whose reading ends in an error or needs a name, and any
@@ -176,9 +175,9 @@ class StarlarkLoweringTest {
 								($M-FORMAT |t| ($MAKE-TUPLE |a|) ($MAKE-DICT)) ($M-FORMAT "{k}" ($MAKE-TUPLE) ($MAKE-DICT "k" |a|)) \
 								($MOD "%s %s" ($MAKE-TUPLE |a|)) \
 								(LET* ((%SL-SEQ3 |t|) (%SL-ITEMS4 ($ITERATE %SL-SEQ3)) (%SL-COUNT5 (LENGTH %SL-ITEMS4)) (%SL-INDEX6 0)) \
-								(LET ((%SL-ACC2 ($EMPTY-DICT)) (|k| :%UNBOUND)) (TAGBODY %SL-TOP7 (IF (< %SL-INDEX6 %SL-COUNT5) \
-								(PROGN (SETQ |k| (AREF %SL-ITEMS4 %SL-INDEX6)) (SETQ %SL-INDEX6 (+ %SL-INDEX6 1)) \
-								($DICT-STORE %SL-ACC2 |k| |a|) (GO %SL-TOP7)))) ($ITERATED %SL-SEQ3) %SL-ACC2))))
+								(LET ((%SL-ACC2 ($EMPTY-DICT)) (|k| :%UNBOUND)) (WHILE (< %SL-INDEX6 %SL-COUNT5) \
+								(SETQ |k| (AREF %SL-ITEMS4 %SL-INDEX6)) (SETQ %SL-INDEX6 (+ %SL-INDEX6 1)) \
+								($DICT-PUT %SL-ACC2 |k| |a|)) ($ITERATED %SL-SEQ3) %SL-ACC2))))
 								(SETQ |f| ($MAKE-FUNCTION "f" '("a" "t") NIL 2 NIL NIL #'|f|))"""),
 				// what the lowering knows of a string: two are joined as they stand, one
 				// and an operand that may be one behind a test; a division by a divisor
@@ -211,15 +210,15 @@ class StarlarkLoweringTest {
 						""",
 						"""
 								(DEFUN |j| (|xs| |s|) (LET ((|t| :%UNBOUND) (|x| :%UNBOUND)) (SETQ |t| "") \
-								(LET ((%SL-PIECES6 (LIST |t|)) (%SL-PIECES7 (IF (STRINGP |s|) (LIST |s|)))) \
+								(LET ((%SL-PIECES5 (LIST |t|)) (%SL-PIECES6 (IF (STRINGP |s|) (LIST |s|)))) \
 								(LET* ((%SL-SEQ1 |xs|) (%SL-ITEMS2 ($ITERATE %SL-SEQ1)) (%SL-COUNT3 (LENGTH %SL-ITEMS2)) (%SL-INDEX4 0)) \
-								(TAGBODY %SL-TOP5 (IF (< %SL-INDEX4 %SL-COUNT3) (PROGN (SETQ |x| (AREF %SL-ITEMS2 %SL-INDEX4)) \
-								(SETQ %SL-INDEX4 (+ %SL-INDEX4 1)) (SETQ %SL-PIECES6 (CONS ($B-STR |x|) %SL-PIECES6)) \
-								(IF %SL-PIECES7 (IF (STRINGP |x|) (SETQ %SL-PIECES7 (CONS |x| %SL-PIECES7)) \
-								($ADD ($CONCAT-REVERSED %SL-PIECES7) |x|)) \
-								(SETQ |s| (IF (AND (INTEGERP |s|) (INTEGERP |x|)) (+ |s| |x|) ($ADD |s| |x|)))) (GO %SL-TOP5)))) \
-								($ITERATED %SL-SEQ1)) (SETQ |t| ($CONCAT-REVERSED %SL-PIECES6)) \
-								(IF %SL-PIECES7 (SETQ |s| ($CONCAT-REVERSED %SL-PIECES7)))) \
+								(WHILE (< %SL-INDEX4 %SL-COUNT3) (SETQ |x| (AREF %SL-ITEMS2 %SL-INDEX4)) \
+								(SETQ %SL-INDEX4 (+ %SL-INDEX4 1)) (SETQ %SL-PIECES5 (CONS ($B-STR |x|) %SL-PIECES5)) \
+								(IF %SL-PIECES6 (IF (STRINGP |x|) (SETQ %SL-PIECES6 (CONS |x| %SL-PIECES6)) \
+								($ADD ($CONCAT-REVERSED %SL-PIECES6) |x|)) \
+								(SETQ |s| (IF (AND (INTEGERP |s|) (INTEGERP |x|)) (+ |s| |x|) ($ADD |s| |x|))))) \
+								($ITERATED %SL-SEQ1)) (SETQ |t| ($CONCAT-REVERSED %SL-PIECES5)) \
+								(IF %SL-PIECES6 (SETQ |s| ($CONCAT-REVERSED %SL-PIECES6)))) \
 								(IF (STRINGP |s|) (%STRING-CONCAT |t| |s|) ($ADD |t| |s|))))
 								(SETQ |j| ($MAKE-FUNCTION "j" '("xs" "s") NIL 2 NIL NIL #'|j|))"""),
 				// what the lowering knows: a loop over range counts, its bounds checked
@@ -243,17 +242,17 @@ class StarlarkLoweringTest {
 						(DEFUN |f| (|n| |xs| |s|) (LET ((|t| :%UNBOUND) (|done| :%UNBOUND) (|i| :%UNBOUND)) \
 						(SETQ |t| 0) (SETQ |done| NIL) \
 						(LET* ((%SL-NEXT1 0) (%SL-STOP2 ($LOOP-STOP %SL-NEXT1 |n|))) \
-						(TAGBODY %SL-TOP3 (IF (< %SL-NEXT1 %SL-STOP2) (PROGN (SETQ |i| %SL-NEXT1) \
-						(SETQ %SL-NEXT1 (+ %SL-NEXT1 1)) (SETQ |t| (+ |t| (MOD |i| 7))) (GO %SL-TOP3))))) \
-						(LET* ((%SL-NEXT4 ($B-LEN |xs|))) \
-						(TAGBODY %SL-TOP5 (IF (> %SL-NEXT4 0) (PROGN (SETQ |i| %SL-NEXT4) \
-						(SETQ %SL-NEXT4 (+ %SL-NEXT4 -1)) (SETQ |done| (IF |done| T (> |t| |i|))) (GO %SL-TOP5))))) \
-						(LET* ((%SL-NEXT6 |n|) (%SL-STOP7 9) (%SL-STEP8 ($LOOP-STEP %SL-NEXT6 %SL-STOP7 |t|))) \
-						(TAGBODY %SL-TOP9 (IF (IF (< 0 %SL-STEP8) (< %SL-NEXT6 %SL-STOP7) (> %SL-NEXT6 %SL-STOP7)) \
-						(PROGN (SETQ |i| %SL-NEXT6) (SETQ %SL-NEXT6 (+ %SL-NEXT6 %SL-STEP8)) \
+						(WHILE (< %SL-NEXT1 %SL-STOP2) (SETQ |i| %SL-NEXT1) \
+						(SETQ %SL-NEXT1 (+ %SL-NEXT1 1)) (SETQ |t| (+ |t| (MOD |i| 7))))) \
+						(LET* ((%SL-NEXT3 ($B-LEN |xs|))) \
+						(WHILE (> %SL-NEXT3 0) (SETQ |i| %SL-NEXT3) \
+						(SETQ %SL-NEXT3 (+ %SL-NEXT3 -1)) (SETQ |done| (IF |done| T (> |t| |i|))))) \
+						(LET* ((%SL-NEXT4 |n|) (%SL-STOP5 9) (%SL-STEP6 ($LOOP-STEP %SL-NEXT4 %SL-STOP5 |t|))) \
+						(WHILE (IF (< 0 %SL-STEP6) (< %SL-NEXT4 %SL-STOP5) (> %SL-NEXT4 %SL-STOP5)) \
+						(SETQ |i| %SL-NEXT4) (SETQ %SL-NEXT4 (+ %SL-NEXT4 %SL-STEP6)) \
 						(IF (AND (AND (NOT (= |t| 0)) |done|) (NOT (EQ |s| :NONE))) \
-						(LET ((%SL-ELEMENT10 (ASH (ASH |t| -1) 1)) (%SL-ELEMENT11 ($ADD ($MUL |s| 2.5) |t|))) \
-						(SETQ |t| %SL-ELEMENT10) (SETQ |s| %SL-ELEMENT11))) (GO %SL-TOP9))))) (- |t|)))
+						(LET ((%SL-ELEMENT7 (ASH (ASH |t| -1) 1)) (%SL-ELEMENT8 ($ADD ($MUL |s| 2.5) |t|))) \
+						(SETQ |t| %SL-ELEMENT7) (SETQ |s| %SL-ELEMENT8))))) (- |t|)))
 						(SETQ |f| ($MAKE-FUNCTION "f" '("n" "xs" "s") NIL 3 NIL NIL #'|f|))"""),
 				// a built-in: bound while lowering, defaults filled, the arguments still
 				// evaluated as written; one that does not fit goes to the run-time
@@ -275,7 +274,8 @@ class StarlarkLoweringTest {
 								(SETQ |f| ($MAKE-FUNCTION "f" '("x" "g") NIL 2 NIL NIL #'|f|))"""),
 				// assignment: the value before the target's operands; an augmented one
 				// evaluates the target's operands once, and what it reads, and updates
-				// a list, a set or a dict in place; a bytes literal is its octets
+				// a list, a set or a dict in place -- a dict's item through its own
+				// cell when the value runs nothing; a bytes literal is its octets
 				arguments(
 						"def f(a, g, i):\n    a[g()] = g()\n    a[i], i = i, a\n    a[g()] -= 1\n    i += [1]\n    i |= b\"\\xffa\"\n",
 						"""
@@ -283,8 +283,10 @@ class StarlarkLoweringTest {
 								(LET* ((%SL-ARG1 ($CALL |g| NIL NIL)) (%SL-ARG2 ($CALL |g| NIL NIL))) ($SET-INDEX |a| %SL-ARG2 %SL-ARG1)) \
 								(LET ((%SL-ELEMENT3 |i|) (%SL-ELEMENT4 |a|)) \
 								($SET-INDEX |a| |i| %SL-ELEMENT3) (SETQ |i| %SL-ELEMENT4)) \
-								(LET* ((%SL-KEY5 ($CALL |g| NIL NIL))) ($SET-INDEX |a| %SL-KEY5 \
-								(LET* ((%SL-LEFT6 ($INDEX |a| %SL-KEY5))) (IF (INTEGERP %SL-LEFT6) (- %SL-LEFT6 1) ($SUB-IN-PLACE %SL-LEFT6 1))))) \
+								(LET* ((%SL-KEY5 ($CALL |g| NIL NIL))) (LET ((%SL-CELL7 ($ITEM-CELL |a| %SL-KEY5))) \
+								(IF %SL-CELL7 (RPLACD %SL-CELL7 (LET* ((%SL-LEFT8 (CDR %SL-CELL7))) \
+								(IF (INTEGERP %SL-LEFT8) (- %SL-LEFT8 1) ($SUB-IN-PLACE %SL-LEFT8 1)))) ($SET-INDEX |a| %SL-KEY5 \
+								(LET* ((%SL-LEFT6 ($INDEX |a| %SL-KEY5))) (IF (INTEGERP %SL-LEFT6) (- %SL-LEFT6 1) ($SUB-IN-PLACE %SL-LEFT6 1))))))) \
 								(SETQ |i| ($ADD-IN-PLACE |i| ($LIST-OF '(1)))) (SETQ |i| ($BIT-OR-IN-PLACE |i| ($BYTES-LITERAL #(255 97)))) :NONE)
 								(SETQ |f| ($MAKE-FUNCTION "f" '("a" "g" "i") NIL 3 NIL NIL #'|f|))"""),
 				// --starlark-standard spec: a call while a call of the same declaration

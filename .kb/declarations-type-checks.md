@@ -110,6 +110,13 @@ arm keeping the raw-value fast path (`tryCompileRaw`); `length` of a packed kind
 `GENERAL` kind, at the speed levels, the fill pointer or the storage's length off the cell's
 fields with `_seq_len` behind it (`.kb/length-runtime.md`), the generic call elsewhere.
 
+- **A `GENERAL` declaration is not always the faster access** (measured 2026-11-16,
+  `.todo/artefacts/j63-starlark-under-cpython/general-move.lisp`): `(setf (aref es2 place)
+  (aref es i))` in a loop of 10,000,000, both vectors parameters declared `(simple-array t
+  (*))`, is 66 ns a move on wasm and 118 on the JVM; with the declaration deleted, through
+  the inline arm of an unpinned vector (`.kb/adjustable-arrays.md`, "What an element access
+  costs"), 21 and 85. Not looked into; the Starlark library's radix sort moves places in
+  packed vectors instead.
 - **The checks before the access** (2026-11-09). A one-subscript site of a packed kind tests the
   array against that ONE type inline and calls `_arr_check_rank` only when the test fails (a packed
   vector is rank 1 by construction, `emitKindedCheckRank`) -- it was the call every time, 9% of an

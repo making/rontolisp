@@ -443,8 +443,20 @@ final class WasmHashTableRuntimeBuilder {
 	}
 
 	// Leaves the i32 hash the table places key (local keyLocal) by: _hash, or for an
-	// eql/eq table (tag in tagLocal >= 2) _ihash; spread and cut to 30 bits.
+	// eql/eq table (tag in tagLocal >= 2) _ihash; spread and cut to 30 bits. A fixnum
+	// is its own hash under both, read here: the call of _hash was two failed struct
+	// tests and its depth budget's globals ahead of the same i31 read.
 	private static void emitPlacementHash(Asm a, Flags flags, int keyLocal, int tagLocal, int hLocal) {
+		a.get(keyLocal).isI31().ifI32();
+		a.get(keyLocal).unI31();
+		a.elseArm();
+		emitHashCall(a, flags, keyLocal, tagLocal);
+		a.end();
+		a.set(hLocal);
+		emitSpread(a, hLocal);
+	}
+
+	private static void emitHashCall(Asm a, Flags flags, int keyLocal, int tagLocal) {
 		if (flags.identity()) {
 			a.get(tagLocal).i32(2).op(Instruction.I32_GE_S).ifI32();
 			a.get(keyLocal).call(WasmLispCompiler.FUNC_IHASH);
@@ -455,8 +467,6 @@ final class WasmHashTableRuntimeBuilder {
 		else {
 			a.get(keyLocal).call(WasmLispCompiler.FUNC_HASH);
 		}
-		a.set(hLocal);
-		emitSpread(a, hLocal);
 	}
 
 	// The high half folded into the low (the JVM's spread): a bucket index and the trie

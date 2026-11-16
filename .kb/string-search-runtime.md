@@ -97,7 +97,13 @@ family; `k` is its mismatch index), and the Starlark library's `%starlark-less` 
 
 - **wasm-GC**: `_str_order` (`FUNC_STR_ORDER`, `buildStrOrderBody`), two framed `TYPE_STRING`s
   compared as bytes (UTF-8's byte order is code point order); `k` counts the lead bytes passed, less
-  one when the differing bytes continue a character. Nil for anything else.
+  one when the differing bytes continue a character. Nil for anything else. The walk stops at the
+  shorter string's end and ORs the bytes it passes; `k` is taken behind it -- the bytes passed
+  when none had its high bit, a count of the lead bytes otherwise (2026-11-16: it tested both ends
+  and counted at every byte). That moved nothing where it was measured, a sort of 50,000 strings:
+  a third of the function's samples there are the four instructions that first load an operand's
+  header, the two string structs and their two byte arrays, which do not fit the second-level
+  cache (`.kb/starlark-frontend.md`, "Where the time is").
 - **JVM**: `_strOrder` (`JvmStringIndexRuntimeBuilder`), UTF-16 units in step; the first pair that
   differs is moved into code point order (a surrogate above every other BMP unit), and `k` counts
   the units that are no high surrogate. Nil for a character vector or a symbol's bare String.

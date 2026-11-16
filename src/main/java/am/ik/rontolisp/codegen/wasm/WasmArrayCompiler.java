@@ -4590,7 +4590,8 @@ final class WasmArrayCompiler {
 	 * ({@code LispMacroExpander.replaceDispatch}): when {@code dst} and {@code src} are
 	 * DISTINCT packed integer vectors of the SAME width, the three bounds are
 	 * non-negative i31s and both ranges are in bounds, the {@code n} elements move with
-	 * ONE {@code array.copy} and the form answers {@code t}; every other shape answers
+	 * ONE {@code array.copy} and the form answers {@code t}, and so do those of two
+	 * distinct general vectors ({@link #emitGeneralBulkCopy}); every other shape answers
 	 * nil having copied nothing, and the caller's loop runs. The same-object case is
 	 * deliberately declined: the loop copies forward element by element, and matching it
 	 * exactly (rather than {@code array.copy}'s memmove semantics) is what keeps an
@@ -4664,10 +4665,99 @@ final class WasmArrayCompiler {
 			ctx.writer.write(Instruction.BR, 2);
 			ctx.writer.write(Instruction.END);
 		}
+		emitGeneralBulkCopy(ctx, dst, src, slots[2], slots[3], slots[4]);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.REF_NULL);
 		ctx.writer.writeHeapType(Type.EQ.code());
 		ctx.writer.write(Instruction.END);
+	}
+
+	// %replace-bulk's arm for two general vectors: both cells name storage of their own
+	// (rank 1, no view; CELL_STORAGE_FIELD), the destination remembers no element type
+	// and is no character vector (its marker, meta.cdr.cdr, is 0: a store into one that
+	// does checks its value, which a block move would not) and both ranges lie within
+	// the storage, as the element loop's own reads and stores must. Then the n elements
+	// move with one array.copy, t is answered and the block two levels out left;
+	// anything else falls through having copied nothing. The loop was a call of
+	// _idx_ref, _arr_check_rank and _arr_set an element: a Starlark list(xs) or
+	// xs.extend(ys) spent two thirds of its time in them.
+	private static void emitGeneralBulkCopy(WasmLispCompiler.Ctx ctx, int dst, int src, int start1, int start2,
+			int count) {
+		am.ik.wasm.WasmWriter w = ctx.writer;
+		java.util.function.IntConsumer storage = slot -> {
+			getLocal(ctx, slot);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+			w.writeUnsignedLeb128(WasmLispCompiler.CELL_STORAGE_FIELD);
+		};
+		getLocal(ctx, dst);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		getLocal(ctx, src);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		for (int slot : new int[] { dst, src }) {
+			storage.accept(slot);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.BR_IF, 1);
+		}
+		// the destination's marker: meta.cdr.cdr, the fixnum 0
+		int rest = ctx.allocTemp();
+		getLocal(ctx, dst);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(WasmLispCompiler.CELL_META_FIELD);
+		for (int hop = 0; hop < 2; hop++) {
+			if (hop > 0) {
+				w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+				w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+			}
+			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+			w.writeUnsignedLeb128(1);
+			w.write(Instruction.TEE_LOCAL);
+			w.writeUnsignedLeb128(rest);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+			w.writeHeapType(hop == 0 ? WasmLispCompiler.TYPE_CONS : Type.I31.code());
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.BR_IF, 1);
+			getLocal(ctx, rest);
+		}
+		WasmEmitHelper.castI31GetS(ctx);
+		w.write(Instruction.BR_IF, 1);
+		// start + n > the storage's length declines (i31 bounds cannot overflow an i32
+		// add)
+		for (int[] range : new int[][] { { dst, start1 }, { src, start2 } }) {
+			getLocal(ctx, range[1]);
+			WasmEmitHelper.castI31GetS(ctx);
+			getLocal(ctx, count);
+			WasmEmitHelper.castI31GetS(ctx);
+			w.write(Instruction.I32_ADD);
+			storage.accept(range[0]);
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+			w.write(Instruction.I32_GT_U);
+			w.write(Instruction.BR_IF, 1);
+		}
+		storage.accept(dst);
+		getLocal(ctx, start1);
+		WasmEmitHelper.castI31GetS(ctx);
+		storage.accept(src);
+		getLocal(ctx, start2);
+		WasmEmitHelper.castI31GetS(ctx);
+		getLocal(ctx, count);
+		WasmEmitHelper.castI31GetS(ctx);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_COPY);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		WasmEmitHelper.emitTrue(ctx);
+		w.write(Instruction.BR, 2);
+		w.write(Instruction.END);
 	}
 
 	// [ ] -> [ ]: br_if to the enclosing $fail (depth 1, from inside the width arm's if)

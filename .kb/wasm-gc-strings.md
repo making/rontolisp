@@ -77,6 +77,41 @@ load's or store's offset its immediate. Measured 2026-11-06 on Endive over an 8 
 14 instructions a byte, 9 and 8.7; about 120 bytes each. `_str_build` and `_str_fresh` keep the
 byte loop: what they copy is short, and every module carries them.
 
+## A string is counted where its builder knows the count (2026-11-16)
+`(length s)` walks the bytes of a string nobody counted (`_str_char_count`, eight
+instructions a byte, then kept in `cc`), and a string built in a loop is a new one every
+round: the count was 8% of a Starlark program of `"item" + str(i)` and `len`
+(`.kb/starlark-frontend.md`, "Where the time is").
+
+- `emitCountedRuntimeString` is `emitRuntimeString` with the count: `cc` is stored, and when
+  it is the content's byte length -- every character one byte -- the cursor starts on the
+  closing quote, where `cb == ci + 1` answers every index at once
+  (`buildStrCharByteOffsetBody`). A count of -1 is the seed `(0, 1, -1)`.
+- **A fixnum's text** (`WasmRuntimeBuilder.emitFixnumText`, the head of `_princ_to_str` and
+  `_prin1_to_str`): the digits written straight into a `$str_bytes`, counted first, then
+  from the last one back. The general path renders through the capture mode into the
+  linear scratch and `_str_fresh` copies the bytes out one a round: 25% of that program.
+- **`_string_concat`** adds its operands' counts when both have one.
+- **A literal is counted when `_str_lit` builds it** (`buildStrLitBody`, the speed levels):
+  once per object, and a literal is an operand of most concatenations. Not in `_str_build`:
+  a module of top-level literals alone would carry `_str_char_count` for nothing.
+- **A slice** (`_subseq`'s string arm, the trim family: `emitBuildCore`) is `array.new_default`
+  and the bytes from one GC array to the other -- a loop up to sixteen, `array.copy` past
+  them (a call into the engine costs more than the loop does for a few) -- with the count
+  the bounds give (`end - start`; a trim leaves it to `length`). It went through the linear
+  scratch and `_str_fresh` before, two byte loops whatever the length.
+- Not counted: `_str_fresh` (what the capture mode renders: a float, a list), a string
+  stream's text, the host boundary's.
+- Sizes (`.wasm`, default level, with the hash table's site of `.kb/hash-tables.md` and
+  the bulk copy of `.kb/sequence-op-runtimes.md`, made the same day): `bench-report/programs/string.lisp`
+  24,843 -> 25,380, `sort.lisp` 20,654 -> 21,410, `size-report/programs/zlib` 151,982 ->
+  152,940, `hello_world` 490 as before; a program with a literal inside a function carries
+  `_str_char_count` where it did not ask for a length. Their run times do not move
+  (`string.lisp` 0.74 / 0.73 s).
+- Pinned by ci-spec `format-nil-princ-to-string-prin1-to` (a fixnum's text at both ends of
+  the i31 range and past it, the length, an index and a slice of what is joined from such
+  texts, a literal with characters of several bytes and a slice).
+
 ## HEAP_PTR is a stack pointer; identity is a counter
 Two disciplines share the linear scratch at `HEAP_PTR_ADDR`:
 - **Transient (save on entry, pop on exit)** -- a runtime build assembles bytes at

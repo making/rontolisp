@@ -168,12 +168,18 @@ final class WasmStringRuntimeBuilder {
 	 * so a site stays {@code (off, len)} and the module grows by this one function. A
 	 * slot holds the last literal that mapped there: two hot literals sharing one cost
 	 * what a build costs, as if there were no table.
+	 *
+	 * <p>
+	 * With {@code counts} the literal's characters are counted as it is built, once: a
+	 * concatenation keeps the count of two counted operands
+	 * ({@link #buildStringConcatBody}), and a literal is an operand of most of them.
 	 * @param tableGlobal the module global holding the table, a {@code (mut (ref null
 	 * eq))} = null
+	 * @param counts whether a literal is counted when built, a speed-for-size trade
 	 * @return the function body (signature {@code (i32,i32)->(ref null eq)},
 	 * TYPE_RAT_NEW)
 	 */
-	static byte[] buildStrLitBody(int tableGlobal) {
+	static byte[] buildStrLitBody(int tableGlobal, boolean counts) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		// params: off = 0, len = 1. locals: hit = 2 (ref null TYPE_STRING), built = 3.
@@ -233,6 +239,12 @@ final class WasmStringRuntimeBuilder {
 		w.writeUnsignedLeb128(built);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		if (counts) {
+			get(w, built);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_COUNT);
+			w.write(Instruction.DROP);
+		}
 		get(w, built);
 		w.write(Instruction.END);
 		return body.toByteArray();
@@ -422,6 +434,54 @@ final class WasmStringRuntimeBuilder {
 		emitSeedCursor(w);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+	}
+
+	/**
+	 * {@link #emitRuntimeString} for a string whose character count the builder knows
+	 * ({@code -1} where it does not): the count is kept, so {@code length} walks nothing,
+	 * and when it is the content's byte length -- every character one byte -- the cursor
+	 * starts on the closing quote, where {@code cb == ci + 1} says so for every index
+	 * ({@link #buildStrCharByteOffsetBody}).
+	 * @param w the writer
+	 * @param len the local holding the framed length
+	 * @param arr the local holding the {@code $str_bytes} array
+	 * @param id an i32 local to use
+	 * @param count the local holding the character count, or -1
+	 */
+	static void emitCountedRuntimeString(WasmWriter w, int len, int arr, int id, int count) {
+		i32(w, WasmLispCompiler.STRING_ID_CTR_ADDR);
+		w.write(Instruction.I32_LOAD, 0x02, 0x00);
+		set(w, id);
+		i32(w, WasmLispCompiler.STRING_ID_CTR_ADDR);
+		get(w, id);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_STORE, 0x02, 0x00);
+		get(w, id);
+		get(w, len);
+		get(w, arr);
+		// ci = count, cb = len - 1 when count == len - 2, else the seed (0, 1)
+		get(w, count);
+		i32(w, 0);
+		emitCountIsByteLength(w, len, count);
+		w.write(Instruction.SELECT);
+		get(w, len);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		i32(w, 1);
+		emitCountIsByteLength(w, len, count);
+		w.write(Instruction.SELECT);
+		get(w, count);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+	}
+
+	private static void emitCountIsByteLength(WasmWriter w, int len, int count) {
+		get(w, count);
+		get(w, len);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.I32_EQ);
 	}
 
 	/**
@@ -1547,10 +1607,10 @@ final class WasmStringRuntimeBuilder {
 	static byte[] buildStringConcatBody(boolean charvecPossible) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		// params: a = 0, b = 1. locals: lenA = 2, lenB = 3, total = 4, id = 5 (i32);
-		// arrA = 6, arrB = 7, out = 8 (ref $str_bytes).
-		declareI32AndStrArrayLocals(w, 4, 3);
-		int lenA = 2, lenB = 3, total = 4, id = 5, arrA = 6, arrB = 7, out = 8;
+		// params: a = 0, b = 1. locals: lenA = 2, lenB = 3, total = 4, id = 5, count = 6
+		// (i32); arrA = 7, arrB = 8, out = 9 (ref $str_bytes).
+		declareI32AndStrArrayLocals(w, 5, 3);
+		int lenA = 2, lenB = 3, total = 4, id = 5, count = 6, arrA = 7, arrB = 8, out = 9;
 		// Normalize both operands (the call site already does; _str_to_mem keeps the
 		// same belt-and-braces). Anything still not a TYPE_STRING traps on the cast
 		// below -- the contract the interpreter and the JVM backend enforce by
@@ -1613,7 +1673,34 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_COPY);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
-		emitRuntimeString(w, total, out, id);
+		// The characters are the operands' when both have counted theirs, so the length
+		// of what a loop builds piece by piece is never a walk of its bytes.
+		for (int operand = 0; operand < 2; operand++) {
+			get(w, operand);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+			w.writeUnsignedLeb128(CHAR_COUNT);
+		}
+		w.write(Instruction.I32_OR);
+		i32(w, 0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, Type.I32.code());
+		i32(w, -1);
+		w.write(Instruction.ELSE);
+		for (int operand = 0; operand < 2; operand++) {
+			get(w, operand);
+			w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+			w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STRING);
+			w.writeUnsignedLeb128(CHAR_COUNT);
+		}
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.END);
+		set(w, count);
+		emitCountedRuntimeString(w, total, out, id, count);
 		w.write(Instruction.END); // function
 		return body.toByteArray();
 	}
@@ -2341,17 +2428,21 @@ final class WasmStringRuntimeBuilder {
 	 * mutable character vector), whose caller then loops. UTF-8's byte order is code
 	 * point order, so the bytes are compared as they stand; {@code k} counts the lead
 	 * bytes passed, less one when the bytes that differ continue a character. Nothing is
-	 * allocated.
+	 * allocated. The walk reads the two bytes of a place and nothing else -- it stops at
+	 * the shorter string's end and ORs what it passes -- and {@code k} is taken behind
+	 * it: the bytes passed when none of them had its high bit, else a count of the lead
+	 * bytes among them ({@code sorted} of strings asks for the sign alone, 26 ns a pair
+	 * of six characters before).
 	 * @return the function body (signature {@code TYPE_CALLABLE_BASE + 1})
 	 */
 	static byte[] buildStrOrderBody() {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		int a = 0, b = 1, x = 2, y = 3, endX = 4, endY = 5, i = 6, k = 7, cx = 8, cy = 9;
+		int a = 0, b = 1, x = 2, y = 3, endX = 4, endY = 5, i = 6, k = 7, cx = 8, cy = 9, n = 10, seen = 11, j = 12;
 		w.write(2);
 		w.write(2);
 		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
-		w.write(6);
+		w.write(9);
 		w.write(Type.I32);
 		get(w, a);
 		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -2402,61 +2493,64 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.END);
 		i32(w, 1);
 		set(w, i);
-		w.write(Instruction.BLOCK, 0x40);
-		w.write(Instruction.LOOP, 0x40);
-		// the first has ended: 0 when the second has too, else the first is shorter
-		get(w, i);
+		// n = the shorter string's end
 		get(w, endX);
-		w.write(Instruction.I32_GE_S);
-		w.write(Instruction.IF, 0x40);
-		get(w, i);
 		get(w, endY);
-		w.write(Instruction.I32_GE_S);
-		w.write(Instruction.IF, 0x40);
-		i32(w, 0);
-		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
-		i32(w, -1);
-		get(w, k);
-		w.write(Instruction.I32_SUB);
-		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
-		get(w, i);
+		get(w, endX);
 		get(w, endY);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.SELECT);
+		set(w, n);
+		w.write(Instruction.BLOCK, 0x40); // $differ
+		w.write(Instruction.BLOCK, 0x40); // $ended
+		w.write(Instruction.LOOP, 0x40);
+		get(w, i);
+		get(w, n);
 		w.write(Instruction.I32_GE_S);
-		w.write(Instruction.IF, 0x40);
-		get(w, k);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
-		w.write(Instruction.RETURN);
-		w.write(Instruction.END);
+		w.write(Instruction.BR_IF, 1);
 		arrGetLocal(w, x, i);
-		set(w, cx);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(cx);
 		arrGetLocal(w, y, i);
 		w.write(Instruction.TEE_LOCAL);
 		w.writeUnsignedLeb128(cy);
-		get(w, cx);
 		w.write(Instruction.I32_NE);
-		w.write(Instruction.BR_IF, 1);
-		// k += cx is a lead byte
-		get(w, k);
+		w.write(Instruction.BR_IF, 2);
+		get(w, seen);
 		get(w, cx);
-		i32(w, 0xC0);
-		w.write(Instruction.I32_AND);
-		i32(w, 0x80);
-		w.write(Instruction.I32_NE);
-		w.write(Instruction.I32_ADD);
-		set(w, k);
+		w.write(Instruction.I32_OR);
+		set(w, seen);
 		get(w, i);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
 		set(w, i);
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END); // loop
-		w.write(Instruction.END); // block
+		w.write(Instruction.END); // $ended
+		// the shorter one has ended: 0 when both have, else the shorter comes first
+		get(w, endX);
+		get(w, endY);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		emitLeadBytesPassed(w, x, i, seen, j, k);
+		i32(w, -1);
+		get(w, k);
+		w.write(Instruction.I32_SUB);
+		get(w, k);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		get(w, endX);
+		get(w, endY);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.SELECT);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // $differ
+		emitLeadBytesPassed(w, x, i, seen, j, k);
 		// the bytes differ at i: k -= cx continues a character
 		get(w, k);
 		get(w, cx);
@@ -2480,6 +2574,46 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		w.write(Instruction.END); // function
 		return body.toByteArray();
+	}
+
+	// k = the characters that start among the bytes 1 .. i - 1 of the array in x: all of
+	// them when no byte passed had its high bit (seen, their OR), else the lead bytes.
+	private static void emitLeadBytesPassed(WasmWriter w, int x, int i, int seen, int j, int k) {
+		get(w, seen);
+		i32(w, 0x80);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.IF, 0x40);
+		get(w, i);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		set(w, k);
+		w.write(Instruction.ELSE);
+		i32(w, 0);
+		set(w, k);
+		i32(w, 1);
+		set(w, j);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get(w, j);
+		get(w, i);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.BR_IF, 1);
+		get(w, k);
+		arrGetLocal(w, x, j);
+		i32(w, 0xC0);
+		w.write(Instruction.I32_AND);
+		i32(w, 0x80);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_ADD);
+		set(w, k);
+		get(w, j);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, j);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
 	}
 
 	// Pushes the byte offset of the character the fixnum in indexLocal names.
@@ -2993,13 +3127,14 @@ final class WasmStringRuntimeBuilder {
 		// ref locals 3..6: node, head, tail, newc.
 		// i32 locals 7..14: pos, end, start, cur, b, startIdx, endIdx, ii.
 		// i32 locals 15..16: charLen, actualEnd (the bounds check).
-		// ref local 17: strArr (the input string's $str_bytes, for the string branch).
+		// ref locals 17..18: strArr (the input string's $str_bytes, for the string
+		// branch) and the bytes of the string it answers.
 		w.write(3);
 		w.write(4);
 		w.writeRefType(true, Type.EQ.code());
 		w.write(10);
 		w.write(Type.I32);
-		w.write(1);
+		w.write(2);
 		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
 		int node = 3, head = 4, tail = 5, newc = 6;
 		int pos = 7, end = 8, start = 9, cur = 10, b = 11, startIdx = 12, endIdx = 13, ii = 14;
@@ -3071,7 +3206,12 @@ final class WasmStringRuntimeBuilder {
 		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CHAR_BYTE_OFFSET);
 		w.write(Instruction.END);
 		set(w, end);
-		emitBuildCore(w, strArr, pos, end, start, cur, b);
+		// the characters copied are the bounds' difference
+		get(w, actualEnd);
+		get(w, startIdx);
+		w.write(Instruction.I32_SUB);
+		set(w, b);
+		emitBuildCore(w, strArr, pos, end, b, start, cur, strArr + 1);
 		w.write(Instruction.ELSE);
 		// --- List branch ---
 		emitSubseqList(w, node, head, tail, newc, startIdx, endIdx, ii, identityHash, charLen,
@@ -3472,8 +3612,8 @@ final class WasmStringRuntimeBuilder {
 		WasmWriter w = new WasmWriter(body);
 		// Locals 3..13: bagStart, bagEnd, lo, hi, mode, c, found, scan, start, cur, b
 		// (i32);
-		// 14..15: bagArr, strArr ($str_bytes).
-		declareI32AndStrArrayLocals(w, 11, 2);
+		// 14..16: bagArr, strArr and the answer's bytes ($str_bytes).
+		declareI32AndStrArrayLocals(w, 11, 3);
 		int bagStart = 3, bagEnd = 4, lo = 5, hi = 6, mode = 7, c = 8, found = 9, scan = 10, start = 11, cur = 12,
 				b = 13, bagArr = 14, strArr = 15;
 		// bagArr = bag.data; strArr = string.data.
@@ -3554,7 +3694,10 @@ final class WasmStringRuntimeBuilder {
 		w.write(Instruction.END);
 		w.write(Instruction.END);
 		w.write(Instruction.END); // if
-		emitBuildCore(w, strArr, lo, hi, start, cur, b);
+		// how many characters stay is for length to count
+		i32(w, -1);
+		set(w, b);
+		emitBuildCore(w, strArr, lo, hi, b, start, cur, strArr + 1);
 		w.write(Instruction.END);
 		return body.toByteArray();
 	}
@@ -4620,72 +4763,87 @@ final class WasmStringRuntimeBuilder {
 	}
 
 	// Copies bytes [posL, endL) of the input array inArrL (a $str_bytes, indexed 0-based)
-	// into a fresh heap string (wrapped in quotes) and leaves the new string struct on
-	// the stack. A plain byte copy: subseq and the trim family slice at character
-	// boundaries the caller already resolved, so no UTF-8 decoding is needed here (the
-	// case operators, which DO transform per code point, use emitCaseFoldCore). The
-	// output is assembled in a reused linear scratch at HEAP_PTR (NOT advanced -- a stack
-	// pop) and finalized via _str_fresh (a runtime string gets a counter id); the INPUT
-	// read goes through the GC array.
-	private static void emitBuildCore(WasmWriter w, int inArrL, int posL, int endL, int startL, int curL, int bL) {
-		// start = HEAP_PTR; mem[start] = '"'; cur = start + 1
-		i32(w, WasmLispCompiler.HEAP_PTR_ADDR);
-		w.write(Instruction.I32_LOAD, 0x02, 0x00);
-		set(w, startL);
-		// Ensure the whole output [start, start + (end-pos) + 2) fits before writing.
-		WasmEmitHelper.emitGrowHeapTo(w, () -> {
-			get(w, startL);
-			get(w, endL);
-			get(w, posL);
-			w.write(Instruction.I32_SUB);
-			w.write(Instruction.I32_ADD);
-			i32(w, 2);
-			w.write(Instruction.I32_ADD);
-		});
-		get(w, startL);
-		i32(w, QUOTE);
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		get(w, startL);
-		i32(w, 1);
+	// into a fresh string (wrapped in quotes) and leaves the new string struct on the
+	// stack. A plain byte copy: subseq and the trim family slice at character boundaries
+	// the caller already resolved, so no UTF-8 decoding is needed here (the case
+	// operators, which DO transform per code point, use emitCaseFoldCore). The bytes go
+	// from one GC array to the other: a loop for a few (a call into the engine costs
+	// more than sixteen bytes' worth of it), array.copy for more. They went through the
+	// linear scratch and _str_fresh before, two byte loops whatever the length -- what
+	// a piece of a Starlark split was. countL holds the characters copied, or -1 for
+	// the walk length does later; outL is a $str_bytes local, the other three i32.
+	private static void emitBuildCore(WasmWriter w, int inArrL, int posL, int endL, int countL, int lenL, int idL,
+			int outL) {
+		// len = end - pos + 2; out = array.new_default len; out[0] = out[len - 1] = '"'
+		get(w, endL);
+		get(w, posL);
+		w.write(Instruction.I32_SUB);
+		i32(w, 2);
 		w.write(Instruction.I32_ADD);
-		set(w, curL);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(lenL);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		set(w, outL);
+		get(w, outL);
+		i32(w, 0);
+		i32(w, QUOTE);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		get(w, outL);
+		get(w, lenL);
+		i32(w, 1);
+		w.write(Instruction.I32_SUB);
+		i32(w, QUOTE);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		get(w, lenL);
+		i32(w, 18);
+		w.write(Instruction.I32_GT_U);
+		w.write(Instruction.IF, 0x40);
+		get(w, outL);
+		i32(w, 1);
+		get(w, inArrL);
+		get(w, posL);
+		get(w, lenL);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_COPY);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(Instruction.ELSE);
+		// id counts the bytes placed: out[1 + id] = in[pos + id]
+		i32(w, 0);
+		set(w, idL);
 		w.write(Instruction.BLOCK, 0x40);
 		w.write(Instruction.LOOP, 0x40);
-		get(w, posL);
-		get(w, endL);
+		get(w, idL);
+		get(w, lenL);
+		i32(w, 2);
+		w.write(Instruction.I32_SUB);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF, 1);
-		arrGetLocal(w, inArrL, posL);
-		set(w, bL);
-		get(w, curL);
-		get(w, bL);
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		get(w, curL);
+		get(w, outL);
+		get(w, idL);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
-		set(w, curL);
+		get(w, inArrL);
 		get(w, posL);
+		get(w, idL);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		get(w, idL);
 		i32(w, 1);
 		w.write(Instruction.I32_ADD);
-		set(w, posL);
+		set(w, idL);
 		w.write(Instruction.BR, 0);
 		w.write(Instruction.END);
 		w.write(Instruction.END);
-		// mem[cur] = '"'. HEAP_PTR is NOT advanced: _str_fresh copies the assembled bytes
-		// into a fresh GC array, after which the scratch is dead, so leaving HEAP_PTR at
-		// `start` (a stack pop) reuses it for the next build -- this is what retires the
-		// linear string-heap leak.
-		get(w, curL);
-		i32(w, QUOTE);
-		w.write(Instruction.I32_STORE8, 0x00, 0x00);
-		// _str_fresh(start, cur + 1 - start): a runtime string gets a fresh counter id.
-		get(w, startL);
-		get(w, curL);
-		i32(w, 1);
-		w.write(Instruction.I32_ADD);
-		get(w, startL);
-		w.write(Instruction.I32_SUB);
-		WasmEmitHelper.emitStrFreshCall(w);
+		w.write(Instruction.END);
+		emitCountedRuntimeString(w, lenL, outL, idL, countL);
 	}
 
 	// Case-folds bytes [posL, endL) of the input array inArrL into a fresh heap string

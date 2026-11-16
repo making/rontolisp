@@ -80,10 +80,10 @@ and every user surface says so (`--source-language` help, the title of
 | function body | `(block %SL-FN (let ((assigned-name :%unbound) ..) ..))`; the block only when a `return` leaves from the middle, the `let` only with locals; a `return` ending the body is the body's value |
 | a read of a name not assigned on every path to it | `(%starlark-local x "x")` / `(%starlark-global x "x")`, refusing `:%unbound`; a global so read starts as `(setq x :%unbound)` ahead of the statements |
 | function body under `--starlark-standard spec` | `(%starlark-enter FLAG "f") (let ((r body)) (%starlark-leave FLAG) r)`, `FLAG` the global `sl%(FILE)%SL-ACTIVEn`, set to `(list nil)` ahead of the statements |
-| `for` | `(let* ((seq it) (items (%starlark-iterate seq)) (count (length items)) (index 0)) (tagbody top (if (< index count) (progn assign (setq index (+ index 1)) body.. (go top)))) (%starlark-iterated seq))`; `(block %SL-BREAK ..)` around the tagbody and `(block %SL-CONTINUE ..)` around the body only when the body has that exit |
-| `for i in range(a, b, c)` (the built-in, positional arguments) | `(let* ((next a) (stop (%starlark-loop-stop next b))) (tagbody top (if (< next stop) (progn (setq i next) (setq next (+ next c)) body.. (go top)))))`: no range, no vector, nothing to give back; `>` for a negative constant step; `(stop b)` with no check when both bounds are known ints, a constant `b` in the test itself; a step that is no constant is `(step (%starlark-loop-step next stop c))` and the test `(if (< 0 step) (< next stop) (> next stop))`; a step written `0` stays the generic loop, whose `range` refuses it |
+| `for` | `(let* ((seq it) (items (%starlark-iterate seq)) (count (length items)) (index 0)) (while (< index count) assign (setq index (+ index 1)) body..) (%starlark-iterated seq))`; `(block %SL-BREAK ..)` around the `while` and `(block %SL-CONTINUE ..)` around the body only when the body has that exit. `while` is the core form `loop` expands to; until 2026-11-16 the loop was a `tagbody` and a `go`, on wasm a `br_table` over a boxed counter every round |
+| `for i in range(a, b, c)` (the built-in, positional arguments) | `(let* ((next a) (stop (%starlark-loop-stop next b))) (while (< next stop) (setq i next) (setq next (+ next c)) body..))`: no range, no vector, nothing to give back; `>` for a negative constant step; `(stop b)` with no check when both bounds are known ints, a constant `b` in the test itself; a step that is no constant is `(step (%starlark-loop-step next stop c))` and the test `(if (< 0 step) (< next stop) (> next stop))`; a step written `0` stays the generic loop, whose `range` refuses it |
 | `return v` inside loops | `(let ((r v)) (%starlark-iterated seq-inner) .. (return-from %SL-FN r))` -- every loop of the function gives its iterable back first, so no `unwind-protect` and no EH mode on wasm |
-| comprehension | the same loops around `(vector-push-extend elt acc)` / `(%starlark-dict-store acc k v)` (the dict is the comprehension's own, so nothing of `a[k] = v`'s dispatch is asked), its variables in a `let` of its own INSIDE the first loop's `let*`, so the first iterable reads the enclosing block's variables (`[x for x in range(x)]`) |
+| comprehension | the same loops around `(vector-push-extend elt acc)` / `(%starlark-dict-put acc k v)` (the dict is the comprehension's own, so nothing of `a[k] = v`'s dispatch is asked, and an int or a string key is stored with one look-up: `(setf (gethash k table) (cons k v))`, the cell made anew for a key stored before), its variables in a `let` of its own INSIDE the first loop's `let*`, so the first iterable reads the enclosing block's variables (`[x for x in range(x)]`) |
 | `a + b`, `a == b`, `a[i]`, `a[i:j]`, `x in y` | `(%starlark-add a b)`, `-equal`, `-index`, `-slice`, `-in`: generic, dispatching at run time; `!=` and `not in` are `(not ..)` of them |
 | `+ - * // %`, a comparison, `==`, `!=` over operands that MAY be ints | `(if (and (integerp a) (integerp b)) (+ a b) (%starlark-add a b))`, an operand that is more than a variable bound first; `//` and `%` by a divisor that is no constant test it too, `(if (and (integerp a) (integerp b) (not (= b 0))) (mod a b) (%starlark-mod a b))`, also over known ints ("What the lowering knows") |
 | `s + t` over KNOWN strings; over one known string | `(%string-concat s t)`; `(if (stringp t) (%string-concat s t) (%starlark-add s t))` |
@@ -94,7 +94,7 @@ and every user surface says so (`--source-language` help, the title of
 | `a and b` as a value | `(let ((v a)) (if (%starlark-truth v) b v))`; `(if a b nil)` when `a` is a known Boolean |
 | `a[i] = v`, `a, b = v` | `(%starlark-set-index a i v)`; `(let ((u (%starlark-unpack v 2))) (setq a (aref u 0)) ..)` |
 | `a, b = b, a + b` (a tuple or list of targets, a tuple or list expression of as many) | `(let ((e1 b) (e2 (+ a b))) (setq a e1) (setq b e2))`: no tuple; every element before the first target, pairing through nested ones |
-| `x += v`, `a[i] += v` | `(setq x (%starlark-add-in-place x v))` (a list is extended in place), tested or inline like the binary operator; the target's operands bound once when they are more than a variable; `-=`, `\|=`, `&=`, `^=` the same through `-sub-in-place`, `-bit-or-in-place` .. (a set, and for `\|=` a dict, updated in place) |
+| `x += v`, `a[i] += v` | `(setq x (%starlark-add-in-place x v))` (a list is extended in place), tested or inline like the binary operator; the target's operands bound once when they are more than a variable; `a[i] op= v` with a `v` that runs nothing (a constant, a variable) is `(let ((cell (%starlark-item-cell a i))) (if cell (rplacd cell (op (cdr cell) v)) (%starlark-set-index a i (op (%starlark-index a i) v))))` -- the cell of a dict nothing forbids writing that holds the key, nil for anything else, so a dict's item is one look-up and every refusal stays the generic pair's; `-=`, `\|=`, `&=`, `^=` the same through `-sub-in-place`, `-bit-or-in-place` .. (a set, and for `\|=` a dict, updated in place) |
 | `s += piece`, `s = s + piece` in a `for` whose body spells `s` nowhere else (its pieces included), `s` a local assigned before the loop, no int or Boolean, spelled by no `def` or `lambda` of the function | `(let ((pieces (list s))) loop (setq s (%starlark-concat-reversed pieces)))`, each append `(setq pieces (cons piece pieces))`; `(if (stringp s) (list s))` and `(if pieces ..)` around both when `s` is not known to be a string, the append as it stands when it holds none; a piece that is no string `(%starlark-add-in-place (%starlark-concat-reversed pieces) piece)`, which refuses it. Joined at the loop's end and after `break`; a `return` or an error leaves a local nobody reads. The outermost such loop collects. A global never: a Common Lisp caller or a later buffer reads it |
 | call of a top-level `def` with a direct entry whose arguments fit | `(f a b)`, bound while lowering like a built-in's: positional and named arguments at their parameters, a default the constant it is written as or the global its `def` statement set, surplus ones as `(%starlark-make-tuple ..)` / `(%starlark-make-dict "k" v ..)`; `(progn (%starlark-global f "f") (f a b))` where the `def` may not have run |
 | call of a built-in function whose arguments fit its signature | `(%starlark-b-sorted xs :none t)`: bound while lowering, defaults filled in |
@@ -246,7 +246,7 @@ forms are the ones the backends already fuse ([jvm-int-fusion.md](jvm-int-fusion
 
 ## The run-time library's rules
 
-`starlark.lisp` keeps five, the first four stated at its top:
+`starlark.lisp` keeps six, the first four stated at its top:
 
 - **A structure accessor is called only behind that structure's predicate.** An accessor
   handed an instance of ANOTHER structure passes the instance check
@@ -281,6 +281,13 @@ forms are the ones the backends already fuse ([jvm-int-fusion.md](jvm-int-fusion
   `(concatenate ..)` control) bails the condition narrowing and keeps the run-time format
   renderer in every program (~50 KB of wasm, "Measured"): `%starlark-elements-or` takes the
   text before and after the type instead of a control.
+- **A string method tests its receiver at its head and names itself only to refuse**
+  (2026-11-16): `(if (not (stringp s)) (%starlark-no-attribute s "split"))`, and the same
+  for a string argument. A literal is evaluated where it stands -- on wasm a call of
+  `_str_lit` and a table read -- so `(%starlark-string-receiver s "split")` made the name
+  on every call to hand it to a check that passes; `_str_lit` was 7% of `methods.star`.
+  A list or dict method's `-receiver` call sits behind its own test the same way
+  (`%starlark-m-append`).
 
 Also: `isalpha`/`isdigit`/`isalnum`/`isspace` test ASCII codes themselves (`alpha-char-p`
 is ASCII-only on wasm, `.todo/269`), while `islower`/`isupper`/`istitle`/`title` tell a
@@ -715,9 +722,9 @@ to CPython on is below: the `//`, not `flags[j]`.
 time than `python3` on the same file** (best of three, the whole process). Met on
 the JVM for five of the eleven (`fib`, `loop`, `calls`, `mixed`, `listidx`) and on
 wasm and the component for four (`bench`, `fib`, `loop`, `calls`) -- five with `mixed` since
-"The list element on wasm" and six with `listidx` since "An int test compiled twice",
-both below; where it is not, the cost left is a backend's and is named below with the item
-that carries it.
+"The list element on wasm", six with `listidx` since "An int test compiled twice" and
+seven with `dicts` since "Where the time is", all below; where it is not, the cost left is
+a backend's and is named below with the item that carries it.
 
 The five programs above cover integers, calls and `range`. Six were added, each about a
 second of CPython, each printing a checksum CPython, Go and Java Starlark agree on
@@ -987,12 +994,13 @@ before -> after; the JVM column is the library's heads and its own spread from r
   (`sorting.star` 2.99 -> 2.87 s, and every entry of a module would have to set the
   global first); the calls on paths the head never takes as tail calls (inside the
   noise).
-- **Left** (`.todo/j63`): the head at its call site -- the call, the loop variable
-  boxed for it and unboxed in it, `length` boxed, the cell cast twice -- which is what
-  stands between `listidx`'s compiled helpers and the hand-written ones; `dicts`
-  (`d[k] += 1` is three `gethash`), and `strings`, `methods`, `sorting`, where the cost is
-  the string runtime's. The guest profiler is no witness for any of them: it charged 52%
-  of a loop of `gethash` to `puthash`, which the loop never calls.
+- **Left then** (`.todo/j63`; what a sampler said of it: "Where the time is" below): the
+  head at its call site -- the call, the loop variable boxed for it and unboxed in it,
+  `length` boxed, the cell cast twice -- which is what stands between `listidx`'s compiled
+  helpers and the hand-written ones; `dicts` (`d[k] += 1` is three `gethash`), and
+  `strings`, `methods`, `sorting`, where the cost is the string runtime's. The guest
+  profiler is no witness for any of them: it charged 52% of a loop of `gethash` to
+  `puthash`, which the loop never calls.
 
 ### Strings nothing writes, ordered by the backend (2026-11-16)
 
@@ -1053,6 +1061,127 @@ The JVM's 2,000,000 ranges from 0.69 to 1.48 over five runs. Sizes: `print(1 + 2
 `starlark-spec.yaml`'s `a-loop-gives-its-iterable-back-on-every-exit` (collected,
 captured, a global, a list and an int, `break`, `continue`, nested loops, past 64
 pieces) and `common-lisp-and-starlark-call-each-other` (the refused piece).
+
+### Where the time is: a sampler of the machine code (2026-11-16)
+
+What "An int test compiled twice" left to `.todo/j63`: five programs over CPython on wasm,
+and a helper's head at its call site as the first thing to make. **The premise overturned
+before anything was made.** A sampler of the machine code
+(`.todo/artefacts/j63-starlark-under-cpython/`; `.kb/wasm-int-fusion.md`, "Profiling trap":
+`ptrace`, no `perf`, the samples per function and per instruction) says the five do not
+wait on the index helpers, and names for each what it does wait on -- none of which the
+guest profiler or the hand-edited modules had shown:
+
+| program | where its samples were, the build before |
+|---|---|
+| `dicts` | the wrappers around `gethash` 41% between them (`%starlark-dict-cell` 14%: its key test, the table's `hash-table-p`), `_ht_get` 30%, `_hash` 14% -- six look-ups a round, three of them `if k in d: d[k] += 1` |
+| `comps` | the loops themselves 56%, the dict comprehension's store 37% (a miss in `gethash`, then `puthash`) |
+| `sorting` | the library's merge sort over conses 68% (`%starlark-less` 15%, the halves walked to be found 9%), `_str_order` 17% |
+| `strings` | `str(i)` 17% (the capture mode, then `_str_fresh` a byte a round), `%starlark-conversion` 19%, 15 of them `(find d "eEfFgG")` at its head, `_string_concat` 15%, `join` by halves over 1,200,000 pieces 10%, `len` of a string just made 6% |
+| `methods` | `split` 31% (`_str_search` 13%, the slice 9%; its vector grown from nothing is 9% of a split alone), `_str_lit` 7% (among them a method's own name, made to be handed to a check that passes), a collection 8%, `list(xs)` and `extend` 3% (two thirds of them `_idx_ref`, `_arr_check_rank`, `_arr_set`) |
+
+Made, in the library and the lowering, so on every backend:
+
+- **`sorted` of ints compares nothing** (`%starlark-radix-sorted`): 512 items or more whose
+  keys -- themselves, or what `key` answers -- are all ints spanning less than 2^32 are
+  sorted by a radix sort from the low digit up (8 bits a digit below 2,048 items, 11 from
+  there) over the keys less the smallest, the greatest less the key for `reverse`. What
+  moves is a key and, under a `key`, the place of its item, both in `(unsigned-byte 32)`
+  vectors; the items are read once at the end. A digit is N steps with no branch the data
+  decides; a merge is N log N of them. Stable both ways, as the merge is. Anything else --
+  fewer items, a float, a string, a span of 2^32 -- is the merge sort, which takes its
+  cells off the front as the recursion reaches them (`%starlark-sort-cells`: no half is
+  walked to be found) and asks `%string-order` first for a list that starts with a string
+  (`%starlark-merge-strings`).
+- **`a[k] op= v` on a dict is one look-up** (`%starlark-item-cell`, "The lowering table"),
+  a dict comprehension's store one (`%starlark-dict-put`), and a key is asked for an int
+  before a string (an int failed the string test's two casts first).
+- **A loop is `while`**, not `tagbody` and `go` ("The lowering table"): no `br_table` over
+  a boxed counter on wasm, and a counter over a constant bound is a counted loop's
+  (`.kb/wasm-counted-loops.md`).
+- **`join` of more than 64 strings goes through a string stream**, as
+  `%starlark-concat-reversed` does; `split` makes its vector with room for eight and reads
+  the separator's length once; a list of a literal's elements is made at their number
+  (`%starlark-list-of`); a string method, `get` and `setdefault` test their receiver
+  themselves ("The run-time library's rules"); `%starlark-conversion` tests its letter with
+  `char=`, an int under `%d` first.
+
+In the wasm backend, for every language: a table operand walked once and a fixnum hashed
+where it is read (`.kb/hash-tables.md`); a fixnum's text written straight into its bytes,
+a string counted where its builder knows the count, a slice copied array to array
+(`.kb/wasm-gc-strings.md`); `replace` between two general vectors as one `array.copy`
+(`.kb/sequence-op-runtimes.md`); `_str_order`'s walk (`.kb/string-search-runtime.md`).
+
+Seconds as above (`time.sh`, best of three, same machine, the two builds run in turn),
+before -> after:
+
+| program | JVM | WASM | component | CPython | `.wasm` bytes |
+|---|---|---|---|---|---|
+| `bench.star` | 0.15 -> 0.16 | 0.05 -> 0.05 | 0.05 -> 0.04 | 0.11 | 137,273 -> 138,255 |
+| `fib.star` | 0.29 -> 0.29 | 0.17 -> 0.21 | 0.17 -> 0.17 | 1.46 | 136,407 -> 137,416 |
+| `loop.star` | 0.18 -> 0.18 | 0.39 -> 0.33 | 0.41 -> 0.35 | 1.63 | 104,883 -> 105,799 |
+| `calls.star` | 0.27 -> 0.26 | 0.14 -> 0.13 | 0.14 -> 0.13 | 0.72 | 118,225 -> 119,114 |
+| `mixed.star` | 0.68 -> 0.68 | 0.52 -> 0.52 | 0.51 -> 0.48 | 1.23 | 177,760 -> 178,254 |
+| `listidx.star` | 1.16 -> 1.09 | 0.93 -> 0.98 | 0.97 -> 0.93 | 1.20 | 180,624 -> 181,499 |
+| `dicts.star` | 1.00 -> 0.92 | 1.20 -> 0.83 | 1.15 -> 0.86 | 0.89 | 181,253 -> 182,005 |
+| `comps.star` | 1.92 -> 1.65 | 1.02 -> 0.93 | 1.01 -> 0.92 | 0.89 | 176,817 -> 176,608 |
+| `methods.star` | 2.12 -> 1.90 | 2.51 -> 2.00 | 2.54 -> 2.00 | 1.09 | 173,219 -> 174,439 |
+| `strings.star` | 2.65 -> 2.42 | 3.04 -> 1.50 | 3.03 -> 1.60 | 1.14 | 139,497 -> 140,638 |
+| `sorting.star` | 2.72 -> 3.10 | 2.85 -> 2.14 | 2.84 -> 2.01 | 1.00 | 186,618 -> 208,637 |
+
+- **Seven of the eleven are under CPython on wasm** and on the component (`dicts` with
+  them, 0.83 against 0.89); four are not -- `comps` 0.93 / 0.89, `methods` 2.00 / 1.09,
+  `strings` 1.50 / 1.14, `sorting` 2.14 / 1.00 -- and what each still waits on is
+  `.todo/j64`. The JVM column moves with the library: `dicts`, `comps`, `methods` and
+  `strings` down, `sorting` up (below).
+- Step by step (wasm, user seconds of the precompiled module): `dicts.star` 1.15 -> 0.84
+  with the look-ups; `sorting.star` 2.77 -> 1.97 the radix sort -> 1.88 its helpers typed;
+  `strings.star` 2.80 -> 1.70 `join` through the stream and no `find` -> 1.56 a fixnum's
+  text -> 1.45 the counts -> 1.35 a literal list at its size; `methods.star` 2.45 -> 2.38
+  until `split`'s vector and the bulk copy, 1.95 with them.
+- The parts (`parts/*.star` of the artefacts, user seconds, before -> after against
+  CPython): `sorted` of ints both ways 0.98 -> 0.54 / 0.43, by a key 0.73 -> 0.40 / 0.34,
+  of strings 1.22 -> 1.07 / 0.35; `list(xs)` and `extend` 1.31 -> 0.43 / 0.25, `pop`
+  0.61 -> 0.34 / 0.17, `split` 0.77 -> 0.56 / 0.25; `+` and `str` 0.48 -> 0.35 / 0.50,
+  `join` 1.55 -> 0.54 / 0.19, `format` and `%` 0.87 -> 0.34 / 0.50.
+- **A sorted string is four cache misses a comparison.** A third of `_str_order`'s samples
+  under `sorted(words)` are the four instructions that first load an operand's header --
+  two string structs, two byte arrays; 50,000 strings are 4 MB -- so its walk's shape
+  moved nothing (`.kb/string-search-runtime.md`), and `sorted` of strings stays three
+  times CPython's.
+- **The JVM pays the radix sort's compilation.** Warm, a pass over 50,000 keys is 1.4-2.4
+  ms there; but C2 makes 109 KB of code of the pass's 495 bytes (the packed vector's
+  generic accessors inlined) in 0.7 s and makes it again after each branch it had not
+  seen, ten seconds of compiler threads over `sorting.star`'s 24 rounds: 2.72 -> 3.10 s
+  in the table's run, 2.9-3.6 against 3.2-4.0 over four runs of each in turn. With
+  C1 alone (`-XX:TieredStopAtLevel=1`) the same program is 10.6 -> 8.9 s.
+- **The bytes**: a program that calls `sorted` carries the radix sort (9 KB of wasm) and,
+  with its first packed vector, the arms that vector opens in every generic access of the
+  library (10 KB; over general vectors declared `(vector t)` the sort of ints is a fifth
+  slower, 0.63 against 0.50 s for `parts/o1`, and that much smaller). Sizes (`.class` /
+  `.wasm` / component): `examples/starlark/targets.star` 215,209 / 218,785 / 222,841 ->
+  253,163 / 246,745 / 250,676, at `--optimize=size` 149,376 -> 166,818 B of wasm;
+  `print(1 + 2)` 109,440 / 103,934 / 107,503 -> 109,443 / 104,877 / 108,446. Common Lisp
+  programs (`.wasm`, default level): `size-report/programs/zlib` 151,982 -> 152,940,
+  `bench-report/programs/sort.lisp` 20,654 -> 21,410, `string.lisp` 24,843 -> 25,380,
+  `hash.lisp` 10,552 -> 10,568, `sieve.lisp` and `hello_world` unchanged; their times do
+  not move (`sort` 0.37 / 0.39 s, `hash` 0.50 / 0.48, `string` 0.74 / 0.73).
+- **Not made, measured**: a merge sort over packed vectors in place of the one over
+  conses (`ms.lisp`, `ms2.lisp` of the artefacts: 25 ms a sort of 50,000 ints, 21 with
+  every index masked into a known range, the merge over conses 20 and the radix sort 8
+  -- a store's subscript still reads an unboxed local boxed and each access casts its
+  array again); the radix sort's keys in general vectors (a fifth slower, above); the
+  items carried beside the keys in vectors declared `(simple-array t (*))`
+  (`.kb/declarations-type-checks.md`: 66 ns a move).
+- Pinned by `starlark-spec.yaml` `what-the-lowering-knows-answers-as-the-generic-paths`
+  (`fast_sort`: 600 and 2,100 ints, negative, by a key both ways with the places of equal
+  keys, a span past 2^32, floats and strings on the merge; `fast_items`: an item updated
+  through its cell by each operator, a comprehension storing a key twice),
+  `common-lisp-and-starlark-call-each-other` (the cell of a frozen dict and of a key that
+  is not there), `StarlarkLoweringTest` (the rows), and the conformance corpus
+  (`rust/mutation_during_iteration.star`: `dict[k] += 1` in a loop over it); the backend's
+  halves by ci-spec `typed-vector-struct-packs-and-replace-bulk`,
+  `format-nil-princ-to-string-prin1-to` and `string-comparison-family`.
 
 ## Positions
 

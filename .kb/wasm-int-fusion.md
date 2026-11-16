@@ -387,6 +387,14 @@ always present, like the limb runtime.
 **Profiling trap**: wasmtime 47's guest profiler attributes samples inside a LARGE function to
 small CALLEE functions -- a 60k-instruction fused body shows ~0 self while a tiny accessor shows
 an impossible 30-60%. Wall-clock A/B against a standalone reproduction is the reliable oracle.
+It samples at function entries and loop back edges, which is why: the time before a call is the
+callee's. **A sampler that does not** (2026-11-16): `.todo/artefacts/j63-starlark-under-cpython/`
+(`sample.c`, `profile.sh`) stops the process by `ptrace` every 0.5 ms and reads the program counter
+and the frame-pointer chain, named through `wasmtime run --profile=perfmap`'s map and the
+`debug-func-sizes` listing; `--offsets NAME#N` gives the samples per instruction of one function
+beside binutils' `objdump -d` of the `.cwasm` (an ELF file; `wasmtime objdump` stops at the jump
+table of a function's first `br_table`). No `perf`, so no `perf_event_paranoid`. What it found in
+the Starlark programs: `.kb/starlark-frontend.md`, "Where the time is".
 
 ## Tests
 

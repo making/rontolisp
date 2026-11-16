@@ -60,7 +60,14 @@ Builders in `LispMacroExpander`, each the body its `expand*` used to inline:
 the n elements moved in one engine-level copy, nil = nothing happened and the loop runs.
 `WasmArrayCompiler.compileReplaceBulk` fires only for DISTINCT packed integer vectors of the SAME
 width with in-bounds non-negative i31 bounds, then one `array.copy`; it declines everything else so
-the loop keeps owning the error shape. It is handed the DETACHED source (below), so a
+the loop keeps owning the error shape. **Two distinct general vectors move the same way**
+(`emitGeneralBulkCopy`, 2026-11-16): both cells name storage of their own (rank 1, no view:
+`CELL_STORAGE_FIELD`, `.kb/adjustable-arrays.md`), the destination's marker (`meta.cdr.cdr`) is 0 --
+it remembers no element type and is no character vector, whose stores check their value -- and both
+ranges lie within the storage, as the loop's own accesses must. The loop was `_idx_ref`,
+`_arr_check_rank` and `_arr_set` an element, 56 ns: ten rounds of `list(xs)` and `ys.extend(xs)`
+over 1,200,000 elements 1.36 -> 0.39 s (a Starlark list's `replace`, CPython 0.22), two thirds of
+the samples in the three helpers before. It is handed the DETACHED source (below), so a
 self-overlapping copy reaches it as two distinct vectors. The JVM compiles the form to constant nil.
 
 ## Self-overlapping `replace`

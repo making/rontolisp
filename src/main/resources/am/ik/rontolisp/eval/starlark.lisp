@@ -135,10 +135,13 @@
 (defun rontolisp::%starlark-list-from (vector)
   (rontolisp::%starlark-new-list vector))
 
-;; A fresh list of the elements of a Common Lisp list.
+;; A fresh list of the elements of a Common Lisp list: its vector is made at their
+;; number, where a push an element grew it from nothing three times for five.
 (defun rontolisp::%starlark-list-of (xs)
-  (let ((v (rontolisp::%starlark-vector)))
-    (dolist (x xs) (vector-push-extend x v))
+  (let* ((n (length xs)) (v (make-array n :adjustable t :fill-pointer n)) (i 0))
+    (dolist (x xs)
+      (setf (aref v i) x)
+      (setq i (+ i 1)))
     (rontolisp::%starlark-new-list v)))
 
 (defun rontolisp::%starlark-make-list (&rest xs)
@@ -705,17 +708,35 @@
 
 ;; D is a dict the caller may write.
 (defun rontolisp::%starlark-dict-store (d k v)
-  (let* ((key (if (or (stringp k) (integerp k)) k (rontolisp::%starlark-key k)))
+  (let* ((key (if (or (integerp k) (stringp k)) k (rontolisp::%starlark-key k)))
          (table (rontolisp::%starlark-dict-table d))
          (cell (gethash key table)))
     (if cell (rplacd cell v) (setf (gethash key table) (cons k v)))
     v))
 
+;; %starlark-dict-store into the dict a comprehension fills, with one look-up for an
+;; int or a string: such a key is its own normal form, and the cell made anew for one
+;; stored before holds an equal key in the same place.
+(defun rontolisp::%starlark-dict-put (d k v)
+  (if (or (integerp k) (stringp k))
+      (setf (gethash k (rontolisp::%starlark-dict-table d)) (cons k v))
+      (rontolisp::%starlark-dict-store d k v))
+  v)
+
 ;; D is a dict. The cell (key . value) of K, or nil.
 (defun rontolisp::%starlark-dict-cell (d k)
   (values
-   (gethash (if (or (stringp k) (integerp k)) k (rontolisp::%starlark-key k))
+   (gethash (if (or (integerp k) (stringp k)) k (rontolisp::%starlark-key k))
             (rontolisp::%starlark-dict-table d))))
+
+;; The cell (key . value) of K in X when X is a dict nothing forbids writing that holds
+;; K, else nil: what `x[k] op= v` reads and stores through, one look-up for the two.
+(defun rontolisp::%starlark-item-cell (x k)
+  (if (and (rontolisp::%starlark-dict-p x)
+           (not (car (rontolisp::%starlark-dict-mutability x)))
+           (eql (rontolisp::%starlark-dict-iterating x) 0))
+      (rontolisp::%starlark-dict-cell x k)
+      nil))
 
 ;; A dict expression over the Common Lisp list KVS (key, value, key, value ...): a
 ;; key written twice is an error.
@@ -2257,51 +2278,220 @@
     (rplacd tail (if a a b))
     (cdr head)))
 
-;; ITEMS is a list of N items: its cells sorted, items that compare equal in the order
-;; they stood in. A merge sort, so the comparisons are N log N and the same on every
-;; backend; over a list, whose cells every backend reads inline.
-(defun rontolisp::%starlark-sort-list (items n descending keys)
-  (if (< n 2)
-      items
+;; %starlark-merge-ascending for a list that starts with a string: the backend's own
+;; order is asked first, and %starlark-less for the pair it declines.
+(defun rontolisp::%starlark-merge-strings (a b)
+  (let* ((head (cons nil nil)) (tail head))
+    (loop while (and a b)
+          do
+            (if (let ((order (%string-order (car b) (car a))))
+                  (if order
+                      (< order 0)
+                      (rontolisp::%starlark-less (car b) (car a))))
+                (progn
+                  (rplacd tail b)
+                  (setq tail b)
+                  (setq b (cdr b)))
+                (progn
+                  (rplacd tail a)
+                  (setq tail a)
+                  (setq a (cdr a)))))
+    (rplacd tail (if a a b))
+    (cdr head)))
+
+;; REST is a cons whose car is a list of at least N cells, N at least 1: the first N of
+;; them sorted, items that compare equal in the order they stood in, and the car of
+;; REST left at the cells behind them. A merge sort, so the comparisons are N log N and
+;; the same on every backend; over a list, whose cells every backend reads inline, and
+;; taken off the front as the recursion reaches them, so no half is walked to be found.
+;; MERGE is 0 for %starlark-merge-ascending, 1 for -merge-strings, 2 for -merge-sorted.
+(defun rontolisp::%starlark-sort-cells (rest n descending keys merge)
+  (if (= n 1)
+      (let ((cell (car rest)))
+        (rplaca rest (cdr cell))
+        (rplacd cell nil)
+        cell)
       (let* ((half (ash n -1))
-             (last (nthcdr (- half 1) items))
-             (rest (cdr last)))
-        (rplacd last nil)
-        (if (and (= keys 0) (not descending))
-            (rontolisp::%starlark-merge-ascending
-             (rontolisp::%starlark-sort-list items half descending keys)
-             (rontolisp::%starlark-sort-list rest (- n half) descending keys))
-            (rontolisp::%starlark-merge-sorted
-             (rontolisp::%starlark-sort-list items half descending keys)
-             (rontolisp::%starlark-sort-list rest (- n half) descending keys)
-             descending keys)))))
+             (a
+              (rontolisp::%starlark-sort-cells rest half descending keys merge))
+             (b
+              (rontolisp::%starlark-sort-cells rest (- n half) descending keys
+                                               merge)))
+        (cond ((= merge 0) (rontolisp::%starlark-merge-ascending a b))
+              ((= merge 1) (rontolisp::%starlark-merge-strings a b))
+              (t (rontolisp::%starlark-merge-sorted a b descending keys))))))
+
+;; COUNTS takes, per digit the mask DIGITS reads SHIFT bits up, the place of the first
+;; of the SIZE keys of KS with that digit once they stand in the order of their digits.
+(defun rontolisp::%starlark-radix-places (ks counts size shift digits)
+  (declare (type (simple-array (unsigned-byte 32) (*)) ks counts))
+  ;; Each bound and each step is masked: a variable whose range the compiled loop can
+  ;; read off its assignments is kept and stepped unboxed on wasm
+  ;; (.kb/wasm-unboxed-locals.md, "The exact flavour"). No vector is 2^30 long.
+  (let ((n (logand size 1073741823))
+        (mask (logand digits 65535))
+        (down (logand shift 31))
+        (sum 0)
+        (i 0))
+    (loop while (<= i mask)
+          do (setf (aref counts i) 0) (setq i (logand (+ i 1) 1073741823)))
+    (setq i 0)
+    (loop while (< i n)
+          do
+            (let ((d (logand (ash (aref ks i) (- down)) mask)))
+              (setf (aref counts d) (+ (aref counts d) 1)))
+            (setq i (logand (+ i 1) 1073741823)))
+    (setq i 0)
+    (loop while (<= i mask)
+          do
+            (let ((c (aref counts i)))
+              (setf (aref counts i) sum)
+              (setq sum (logand (+ sum c) 1073741823)))
+            (setq i (logand (+ i 1) 1073741823)))))
+
+;; One digit of %starlark-radix-sorted: the SIZE keys of KS, and with them their
+;; places of XS when CARRIED, go to KS2 and XS2 in the order of the digit the mask
+;; DIGITS reads SHIFT bits up, keys of one digit in the order they stood in. COUNTS is
+;; %starlark-radix-places' answer for the digit.
+(defun rontolisp::%starlark-radix-pass
+    (ks ks2 xs xs2 carried counts size shift digits)
+  (declare (type (simple-array (unsigned-byte 32) (*)) ks ks2 xs xs2 counts))
+  (let ((n (logand size 1073741823))
+        (mask (logand digits 65535))
+        (down (logand shift 31))
+        (i 0))
+    (loop while (< i n)
+          do
+            (let* ((k (aref ks i))
+                   (d (logand (ash k (- down)) mask))
+                   (place (aref counts d)))
+              (setf (aref counts d) (+ place 1))
+              (setf (aref ks2 place) k)
+              (if carried (setf (aref xs2 place) (aref xs i))))
+            (setq i (logand (+ i 1) 1073741823)))))
+
+;; The N keys of KEYS, ints between LO and HI, into KS as %starlark-radix-sorted
+;; sorts them: less LO, or HI less the key when DESCENDING. When CARRIED each key's
+;; place goes into XS beside it.
+(defun rontolisp::%starlark-radix-keys (keys ks xs carried n lo hi descending)
+  (declare (type (vector t) keys)
+           (type (simple-array (unsigned-byte 32) (*)) ks xs))
+  (dotimes (i n)
+    (setf (aref ks i) (if descending (- hi (aref keys i)) (- (aref keys i) lo)))
+    (if carried (setf (aref xs i) i))))
+
+;; The list vector %starlark-radix-sorted answers: when CARRIED the items of ELEMENTS
+;; at the places XS holds, in its order, else the ints the keys of KS stand for.
+(defun rontolisp::%starlark-radix-items
+    (ks xs elements carried n lo hi descending)
+  (declare (type (simple-array (unsigned-byte 32) (*)) ks xs))
+  (let ((items (make-array n :adjustable t :fill-pointer n)))
+    (declare (type (vector t) items))
+    (dotimes (i n)
+      (setf (aref items i)
+            (cond (carried (aref elements (aref xs i)))
+                  (descending (- hi (aref ks i)))
+                  (t (+ lo (aref ks i))))))
+    items))
+
+;; KEYS is a vector of N values, N at least 1, and ELEMENTS a vector of the N items
+;; they are the keys of, or nil when the keys are the items themselves. When every key
+;; is an int and they span less than 2^32: a fresh list vector of the items in the order
+;; of their keys -- from the greatest down when DESCENDING --, items of one key in the
+;; order they stood in. Else nil. A radix sort from the low digit up over the keys less
+;; the smallest (the greatest less the key, descending): N steps a digit and not one
+;; comparison, where a merge is N log N of them. What moves is a key and, under a key
+;; function, the place of its item, both in vectors of (unsigned-byte 32); the items
+;; are read once, at the end (.kb/starlark-frontend.md, "Where the time is").
+(defun rontolisp::%starlark-radix-sorted (keys elements n descending)
+  (let ((lo (aref keys 0)) (hi (aref keys 0)) (i 0) (ints t))
+    (loop while (and ints (< i n))
+          do
+            (let ((k (aref keys i)))
+              (if (integerp k)
+                  (progn
+                    (if (< k lo) (setq lo k))
+                    (if (> k hi) (setq hi k)))
+                  (setq ints nil))) (setq i (+ i 1)))
+    (if (and ints (< (- hi lo) 4294967296))
+        (let* ((bits (integer-length (- hi lo)))
+               (width (if (< n 2048) 8 11))
+               (mask (- (ash 1 width) 1))
+               (carried (if elements t nil))
+               (ks (make-array n :element-type '(unsigned-byte 32)))
+               (ks2 (make-array n :element-type '(unsigned-byte 32)))
+               ;; with nothing to carry the passes are handed the keys' own vectors
+               ;; for the places', which they then leave alone
+               (xs
+                (if carried
+                    (make-array n :element-type '(unsigned-byte 32))
+                    ks))
+               (xs2
+                (if carried
+                    (make-array n :element-type '(unsigned-byte 32))
+                    ks2))
+               (counts
+                (make-array (ash 1 width) :element-type '(unsigned-byte 32)))
+               (shift 0))
+          (rontolisp::%starlark-radix-keys keys ks xs carried n lo hi
+                                           descending)
+          (loop while (< shift bits)
+                do (rontolisp::%starlark-radix-places ks counts n shift mask)
+                  (rontolisp::%starlark-radix-pass ks ks2 xs xs2 carried counts
+                                                   n shift mask)
+                  (let ((k ks) (x xs))
+                    (setq ks ks2)
+                    (setq ks2 k)
+                    (setq xs xs2)
+                    (setq xs2 x)) (setq shift (+ shift width)))
+          (rontolisp::%starlark-radix-items ks xs elements carried n lo hi
+                                            descending))
+        nil)))
 
 (defun rontolisp::%starlark-b-sorted (x key reverse)
   (let* ((v (rontolisp::%starlark-element-vector x))
          (n (length v))
-         (elements nil)
-         (items (make-array n :adjustable t :fill-pointer n))
-         (keys 0)
-         (i n))
-    (loop while (> i 0) do (setq i (- i 1)) (push (aref v i) elements))
+         (descending (rontolisp::%starlark-truth reverse))
+         ;; a key function may write the list whose vector this is
+         (elements (if (eq key :none) nil (rontolisp::%starlark-copy-vector v)))
+         (keys v))
+    (if elements
+        (progn
+          (setq keys (make-array n))
+          (dotimes (i n)
+            (setf (aref keys i)
+             (rontolisp::%starlark-call key (list (aref elements i)) nil)))))
+    ;; Below some five hundred items the digits' counts cost what the comparisons do.
+    (let ((radix
+           (if (>= n 512)
+               (rontolisp::%starlark-radix-sorted keys elements n descending)
+               nil)))
+      (if radix
+          (rontolisp::%starlark-new-list radix)
+          (rontolisp::%starlark-new-list
+           (rontolisp::%starlark-merge-sorted-vector keys elements n
+                                                     descending))))))
+
+;; %starlark-radix-sorted's answer for any keys, by a merge sort.
+(defun rontolisp::%starlark-merge-sorted-vector (keys elements n descending)
+  (let ((cells nil) (items (make-array n :adjustable t :fill-pointer n)) (i n))
     ;; Under a key function an item is (key . element).
-    (if (not (eq key :none))
-        (let ((cells elements))
-          (setq keys 1)
-          (loop while cells
-                do
-                  (rplaca cells
-                          (cons (rontolisp::%starlark-call key
-                                                           (list (car cells))
-                                                           nil) (car cells)))
-                  (setq cells (cdr cells)))))
-    (setq i 0)
-    (dolist (item
-             (rontolisp::%starlark-sort-list elements n
-              (rontolisp::%starlark-truth reverse) keys))
-      (setf (aref items i) (if (= keys 0) item (cdr item)))
-      (setq i (+ i 1)))
-    (rontolisp::%starlark-new-list items)))
+    (loop while (> i 0)
+          do (setq i (- i 1))
+            (push
+             (if elements (cons (aref keys i) (aref elements i)) (aref keys i))
+             cells))
+    (if (> n 0)
+        (dolist (item
+                 (rontolisp::%starlark-sort-cells (list cells) n descending
+                                                  (if elements 1 0)
+                                                  (cond
+                                                   ((or elements descending) 2)
+                                                   ((stringp (aref keys 0)) 1)
+                                                   (t 0))))
+          (setf (aref items i) (if elements (cdr item) item))
+          (setq i (+ i 1))))
+    items))
 
 ;; `min` (WANT -1) and `max` (WANT 1) over ARGS, a tuple: its one iterable, or its
 ;; elements.
@@ -2468,15 +2658,15 @@
       (rontolisp::%starlark-no-attribute d name)))
 
 (defun rontolisp::%starlark-m-get (d k default)
-  (let ((cell
-         (rontolisp::%starlark-dict-cell
-          (rontolisp::%starlark-dict-receiver d "get") k)))
+  (if (not (rontolisp::%starlark-dict-p d))
+      (rontolisp::%starlark-no-attribute d "get"))
+  (let ((cell (rontolisp::%starlark-dict-cell d k)))
     (if cell (cdr cell) default)))
 
 (defun rontolisp::%starlark-m-setdefault (d k default)
-  (let ((cell
-         (rontolisp::%starlark-dict-cell
-          (rontolisp::%starlark-dict-receiver d "setdefault") k)))
+  (if (not (rontolisp::%starlark-dict-p d))
+      (rontolisp::%starlark-no-attribute d "setdefault"))
+  (let ((cell (rontolisp::%starlark-dict-cell d k)))
     (if cell
         (cdr cell)
         (progn
@@ -2629,6 +2819,11 @@
 
 ;; --- string methods ---------------------------------------------------------------
 
+;; A method tests its receiver and its string arguments at its head and calls a
+;; function only to refuse: `(if (not (stringp s)) (%starlark-no-attribute s "split"))`.
+;; The name is a string made where it is evaluated (on wasm a call and a table read per
+;; literal, .kb/wasm-gc-strings.md), which the test keeps off the path every call takes.
+
 ;; The string S, the receiver of the string method NAME.
 (defun rontolisp::%starlark-string-receiver (s name)
   (if (stringp s) s (rontolisp::%starlark-no-attribute s name)))
@@ -2688,8 +2883,8 @@
 
 ;; The index of SUB in S between START and END, the last one when FROM-END, or -1.
 (defun rontolisp::%starlark-find (s sub start end from-end name)
-  (rontolisp::%starlark-string-receiver s name)
-  (rontolisp::%starlark-string-argument sub name)
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s name))
+  (if (not (stringp sub)) (rontolisp::%starlark-string-argument sub name))
   (let* ((n (length s))
          (lo (rontolisp::%starlark-slice-bound start n 0 n 0))
          (hi (rontolisp::%starlark-slice-bound end n 0 n n)))
@@ -2712,8 +2907,8 @@
     (if (< r 0) (error "substring not found") r)))
 
 (defun rontolisp::%starlark-m-count (s sub start end)
-  (rontolisp::%starlark-string-receiver s "count")
-  (rontolisp::%starlark-string-argument sub "count")
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s "count"))
+  (if (not (stringp sub)) (rontolisp::%starlark-string-argument sub "count"))
   (let* ((n (length s))
          (i (rontolisp::%starlark-slice-bound start n 0 n 0))
          (hi (rontolisp::%starlark-slice-bound end n 0 n n))
@@ -2728,7 +2923,7 @@
 ;; Whether S between START and END begins (or, when AT-END, ends) with P, a string or
 ;; a tuple of strings.
 (defun rontolisp::%starlark-affix (s p start end at-end name)
-  (rontolisp::%starlark-string-receiver s name)
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s name))
   (let* ((n (length s))
          (lo (rontolisp::%starlark-slice-bound start n 0 n 0))
          (hi (rontolisp::%starlark-slice-bound end n 0 n n))
@@ -2755,10 +2950,14 @@
   (rontolisp::%starlark-affix s p start end t "endswith"))
 
 (defun rontolisp::%starlark-m-upper (s)
-  (%string-upcase-piece (rontolisp::%starlark-string-receiver s "upper")))
+  (if (stringp s)
+      (%string-upcase-piece s)
+      (rontolisp::%starlark-no-attribute s "upper")))
 
 (defun rontolisp::%starlark-m-lower (s)
-  (%string-downcase-piece (rontolisp::%starlark-string-receiver s "lower")))
+  (if (stringp s)
+      (%string-downcase-piece s)
+      (rontolisp::%starlark-no-attribute s "lower")))
 
 ;; The characters a strip removes: white space, or those of the string CUTSET.
 (defun rontolisp::%starlark-cutset (cutset name)
@@ -2779,30 +2978,38 @@
     (if (and (= lo 0) (= hi n)) s (rontolisp::%starlark-substring s lo hi))))
 
 (defun rontolisp::%starlark-m-strip (s cutset)
-  (rontolisp::%starlark-string-receiver s "strip")
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s "strip"))
   (rontolisp::%starlark-trim s (rontolisp::%starlark-cutset cutset "strip") t
                              t))
 
 (defun rontolisp::%starlark-m-lstrip (s cutset)
-  (rontolisp::%starlark-string-receiver s "lstrip")
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s "lstrip"))
   (rontolisp::%starlark-trim s (rontolisp::%starlark-cutset cutset "lstrip") t
                              nil))
 
 (defun rontolisp::%starlark-m-rstrip (s cutset)
-  (rontolisp::%starlark-string-receiver s "rstrip")
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s "rstrip"))
   (rontolisp::%starlark-trim s (rontolisp::%starlark-cutset cutset "rstrip") nil
                              t))
 
 (defun rontolisp::%starlark-m-join (sep xs)
-  (rontolisp::%starlark-string-receiver sep "join")
+  (if (not (stringp sep)) (rontolisp::%starlark-no-attribute sep "join"))
   (let* ((items (rontolisp::%starlark-element-vector xs)) (n (length items)))
     (dotimes (i n)
       (if (not (stringp (aref items i)))
           (error "join: in list, want string, got ~a"
                  (rontolisp::%starlark-type (aref items i)))))
-    (if (= n 0)
-        ""
-        (%normalize-string (rontolisp::%starlark-join-range items sep 0 n)))))
+    ;; As %starlark-concat-reversed: a few strings by halves, many through a string
+    ;; stream, which copies each character once.
+    (cond ((= n 0) "")
+          ((<= n 64)
+           (%normalize-string (rontolisp::%starlark-join-range items sep 0 n)))
+          (t (let ((out (make-string-output-stream)) (i 1))
+               (write-string (aref items 0) out)
+               (loop while (< i n)
+                     do (write-string sep out) (write-string (aref items i) out)
+                       (setq i (+ i 1)))
+               (%string-stream-piece out))))))
 
 ;; V is a vector of strings: those from LO short of HI, which is greater, with the
 ;; string SEP between them; the halves are joined first, as %starlark-concat-pieces
@@ -2816,9 +3023,9 @@
          (rontolisp::%starlark-join-range v sep mid hi)))))
 
 (defun rontolisp::%starlark-m-replace (s old new count)
-  (rontolisp::%starlark-string-receiver s "replace")
-  (rontolisp::%starlark-string-argument old "replace")
-  (rontolisp::%starlark-string-argument new "replace")
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s "replace"))
+  (if (not (stringp old)) (rontolisp::%starlark-string-argument old "replace"))
+  (if (not (stringp new)) (rontolisp::%starlark-string-argument new "replace"))
   (if (not (or (eq count :%unset) (integerp count)))
       (error "replace: for parameter count: got ~a, want int"
              (rontolisp::%starlark-type count)))
@@ -2865,13 +3072,18 @@
                   (rontolisp::%starlark-type maxsplit)))))
 
 (defun rontolisp::%starlark-m-split (s sep maxsplit)
-  (rontolisp::%starlark-string-receiver s "split")
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s "split"))
   (let ((c (rontolisp::%starlark-split-limit maxsplit "split")))
     (if (eq sep :none)
         (rontolisp::%starlark-list-of (rontolisp::%starlark-fields s))
-        (let ((items (rontolisp::%starlark-vector)) (i 0) (n (length s)))
-          (rontolisp::%starlark-string-argument sep "split")
-          (if (= (length sep) 0) (error "split: empty separator"))
+        (let ((items (make-array 8 :adjustable t :fill-pointer 0))
+              (i 0)
+              (n (length s))
+              (m 0))
+          (if (not (stringp sep))
+              (rontolisp::%starlark-string-argument sep "split"))
+          (setq m (length sep))
+          (if (= m 0) (error "split: empty separator"))
           (loop
             (let ((r (if (= c 0) nil (rontolisp::%starlark-search sep s i n))))
               (if (null r)
@@ -2880,17 +3092,18 @@
                                         items)
                     (return nil)))
               (vector-push-extend (rontolisp::%starlark-substring s i r) items)
-              (setq i (+ r (length sep)))
+              (setq i (+ r m))
               (setq c (- c 1))))
           (rontolisp::%starlark-new-list items)))))
 
 (defun rontolisp::%starlark-m-rsplit (s sep maxsplit)
-  (rontolisp::%starlark-string-receiver s "rsplit")
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s "rsplit"))
   (let ((c (rontolisp::%starlark-split-limit maxsplit "rsplit")))
     (if (or (eq sep :none) (< c 0))
         (rontolisp::%starlark-m-split s sep maxsplit)
         (let ((acc nil) (end (length s)))
-          (rontolisp::%starlark-string-argument sep "rsplit")
+          (if (not (stringp sep))
+              (rontolisp::%starlark-string-argument sep "rsplit"))
           (if (= (length sep) 0) (error "rsplit: empty separator"))
           (loop
             (let ((r (if (= c 0) nil (search sep s :end2 end :from-end t))))
@@ -2905,8 +3118,9 @@
           (rontolisp::%starlark-list-of acc)))))
 
 (defun rontolisp::%starlark-m-partition (s sep)
-  (rontolisp::%starlark-string-receiver s "partition")
-  (rontolisp::%starlark-string-argument sep "partition")
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s "partition"))
+  (if (not (stringp sep))
+      (rontolisp::%starlark-string-argument sep "partition"))
   (if (= (length sep) 0) (error "partition: empty separator"))
   (let ((r (rontolisp::%starlark-search sep s 0 (length s))))
     (if r
@@ -2915,8 +3129,9 @@
         (rontolisp::%starlark-make-tuple s "" ""))))
 
 (defun rontolisp::%starlark-m-rpartition (s sep)
-  (rontolisp::%starlark-string-receiver s "rpartition")
-  (rontolisp::%starlark-string-argument sep "rpartition")
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s "rpartition"))
+  (if (not (stringp sep))
+      (rontolisp::%starlark-string-argument sep "rpartition"))
   (if (= (length sep) 0) (error "rpartition: empty separator"))
   (let ((r (search sep s :from-end t)))
     (if r
@@ -2945,7 +3160,7 @@
 
 ;; The lines of S, split at \n, \r and \r\n, each with its line ending when KEEPENDS.
 (defun rontolisp::%starlark-m-splitlines (s keepends)
-  (rontolisp::%starlark-string-receiver s "splitlines")
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s "splitlines"))
   (if (not (or (eq keepends t) (null keepends)))
       (error "splitlines: for parameter keepends: got ~a, want bool"
              (rontolisp::%starlark-type keepends)))
@@ -2976,7 +3191,7 @@
 
 ;; Whether S has a cased letter and every one is of the case WANT (:lower or :upper).
 (defun rontolisp::%starlark-all-cased (s want name)
-  (rontolisp::%starlark-string-receiver s name)
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s name))
   (let ((cased nil) (ok t))
     (dotimes (i (length s))
       (let ((k (rontolisp::%starlark-char-case (char s i))))
@@ -2996,7 +3211,7 @@
 ;; Whether S has a cased letter, an uppercase or titlecase one follows only an uncased
 ;; character and a lowercase one only a cased character.
 (defun rontolisp::%starlark-m-istitle (s)
-  (rontolisp::%starlark-string-receiver s "istitle")
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s "istitle"))
   (let ((cased nil) (previous nil) (ok t))
     (dotimes (i (length s))
       (let ((k (rontolisp::%starlark-char-case (char s i))))
@@ -3014,7 +3229,7 @@
 ;; S with each letter that follows a cased character lowercased, every other one
 ;; uppercased.
 (defun rontolisp::%starlark-m-title (s)
-  (rontolisp::%starlark-string-receiver s "title")
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s "title"))
   (let ((previous nil) (out (make-string-output-stream)))
     (unwind-protect (progn
                       (dotimes (i (length s))
@@ -3028,23 +3243,25 @@
       (close out))))
 
 (defun rontolisp::%starlark-m-removeprefix (s prefix)
-  (rontolisp::%starlark-string-receiver s "removeprefix")
-  (rontolisp::%starlark-string-argument prefix "removeprefix")
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s "removeprefix"))
+  (if (not (stringp prefix))
+      (rontolisp::%starlark-string-argument prefix "removeprefix"))
   (if (and (<= (length prefix) (length s))
            (string= s prefix :end1 (length prefix)))
       (rontolisp::%starlark-substring s (length prefix) (length s))
       s))
 
 (defun rontolisp::%starlark-m-removesuffix (s suffix)
-  (rontolisp::%starlark-string-receiver s "removesuffix")
-  (rontolisp::%starlark-string-argument suffix "removesuffix")
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s "removesuffix"))
+  (if (not (stringp suffix))
+      (rontolisp::%starlark-string-argument suffix "removesuffix"))
   (if (and (<= (length suffix) (length s))
            (string= s suffix :start1 (- (length s) (length suffix))))
       (rontolisp::%starlark-substring s 0 (- (length s) (length suffix)))
       s))
 
 (defun rontolisp::%starlark-m-capitalize (s)
-  (rontolisp::%starlark-string-receiver s "capitalize")
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s "capitalize"))
   (if (= (length s) 0)
       s
       (%string-concat
@@ -3056,7 +3273,7 @@
 ;; (CLASS 0), digits (1), letters and digits (2) or white space (3). The Common Lisp
 ;; classifiers answer differently per backend past ASCII.
 (defun rontolisp::%starlark-every-char (s class name)
-  (rontolisp::%starlark-string-receiver s name)
+  (if (not (stringp s)) (rontolisp::%starlark-no-attribute s name))
   (let ((ok (> (length s) 0)))
     (dotimes (i (length s))
       (let* ((code (char-code (char s i)))
@@ -3096,7 +3313,7 @@
 ;; tuple of positional arguments, KWARGS the dict of named ones. A field is numbered
 ;; automatically or by hand, never both; it has no attribute, element or format spec.
 (defun rontolisp::%starlark-m-format (fmt args kwargs)
-  (rontolisp::%starlark-string-receiver fmt "format")
+  (if (not (stringp fmt)) (rontolisp::%starlark-no-attribute fmt "format"))
   (let ((pos (rontolisp::%starlark-element-vector args))
         (n (length fmt))
         (i 0)
@@ -3212,7 +3429,9 @@
 ;; What the conversion D of a `%` template, a character other than s and r, makes of
 ;; the argument A.
 (defun rontolisp::%starlark-conversion (a d)
-  (cond ((find d "eEfFgG")
+  (cond ((and (integerp a) (or (char= d #\d) (char= d #\i))) (%decimal-piece a))
+        ((or (char= d #\e) (char= d #\E) (char= d #\f) (char= d #\F)
+             (char= d #\g) (char= d #\G))
          (if (not (numberp a))
              (error "%~a format requires float, not ~a" d
                     (rontolisp::%starlark-type a)))

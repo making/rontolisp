@@ -176,9 +176,7 @@ final class StarlarkLowering {
 
 	private static final LispSymbol RETURN_FROM = new LispSymbol("RETURN-FROM");
 
-	private static final LispSymbol TAGBODY = new LispSymbol("TAGBODY");
-
-	private static final LispSymbol GO = new LispSymbol("GO");
+	private static final LispSymbol WHILE = new LispSymbol("WHILE");
 
 	private static final LispSymbol LIST = new LispSymbol("LIST");
 
@@ -297,6 +295,12 @@ final class StarlarkLowering {
 	private static final LispSymbol INDEX = runtime("INDEX");
 
 	private static final LispSymbol SET_INDEX = runtime("SET-INDEX");
+
+	private static final LispSymbol ITEM_CELL = runtime("ITEM-CELL");
+
+	private static final LispSymbol CDR = new LispSymbol("CDR");
+
+	private static final LispSymbol RPLACD = new LispSymbol("RPLACD");
 
 	private static final LispSymbol SLICE = runtime("SLICE");
 
@@ -1704,8 +1708,6 @@ final class StarlarkLowering {
 		/** Moves the loop to the next element. */
 		private final LispVal step;
 
-		private final LispSymbol top;
-
 		private final Expression target;
 
 		private boolean breaks;
@@ -1728,7 +1730,6 @@ final class StarlarkLowering {
 			this.test = list(LESS, index, count);
 			this.element = list(AREF, items, index);
 			this.step = list(SETQ, index, list(PLUS, index, new LispInteger(1)));
-			this.top = fresh("TOP");
 			this.target = target;
 		}
 
@@ -1768,7 +1769,6 @@ final class StarlarkLowering {
 					: list(IF, list(LESS, new LispInteger(0), by), list(LESS, next, limit), list(GREATER, next, limit));
 			this.element = next;
 			this.step = list(SETQ, next, list(PLUS, next, by));
-			this.top = fresh("TOP");
 			this.target = target;
 		}
 
@@ -1822,15 +1822,14 @@ final class StarlarkLowering {
 		 * @return the loop's forms
 		 */
 		List<LispVal> walk(LispVal assignment, List<LispVal> body) {
-			List<LispVal> step = new ArrayList<>(List.of(PROGN, assignment, this.step));
+			List<LispVal> step = new ArrayList<>(List.of(WHILE, this.test, assignment, this.step));
 			if (this.continues) {
 				step.add(cons(BLOCK, cons(CONTINUE_BLOCK, listOf(body))));
 			}
 			else {
 				step.addAll(body);
 			}
-			step.add(list(GO, this.top));
-			LispVal walk = list(TAGBODY, this.top, list(IF, this.test, listOf(step)));
+			LispVal walk = listOf(step);
 			List<LispVal> forms = new ArrayList<>();
 			forms.add(this.breaks ? list(BLOCK, BREAK_BLOCK, walk) : walk);
 			if (this.iterable != null) {
@@ -2273,6 +2272,15 @@ final class StarlarkLowering {
 				}
 				LispVal store = list(SET_INDEX, receiver, key, operation(operator, list(INDEX, receiver, key), Kind.ANY,
 						value, kind, assignment.value(), generic, assignment.at()));
+				// A value that runs nothing cannot take the key out between the read and
+				// the store, so a dict is looked up once: the item's own cell is read
+				// and stored into.
+				if (isSimple(value)) {
+					LispSymbol cell = fresh("CELL");
+					store = list(LET, list(list(cell, list(ITEM_CELL, receiver, key))),
+							list(IF, cell, list(RPLACD, cell, operation(operator, list(CDR, cell), Kind.ANY, value,
+									kind, assignment.value(), generic, assignment.at())), store));
+				}
 				yield bindings.isEmpty() ? store : list(LET_STAR, listOf(bindings), store);
 			}
 			case Dot dot -> list(SET_ATTRIBUTE, expression(dot.receiver(), scope), string(dot.name()), value);
@@ -2717,7 +2725,7 @@ final class StarlarkLowering {
 			}
 		}
 		LispVal body = dict
-				? list(runtime("DICT-STORE"), accumulator, expression(produced.get(0), inner),
+				? list(runtime("DICT-PUT"), accumulator, expression(produced.get(0), inner),
 						expression(produced.get(1), inner))
 				: list(VECTOR_PUSH_EXTEND, expression(produced.get(0), inner), accumulator);
 		this.flow = outer;

@@ -5533,6 +5533,143 @@ final class WasmRuntimeBuilder {
 	}
 
 	/**
+	 * The text of a fixnum, which is most of what {@code _princ_to_str} and
+	 * {@code _prin1_to_str} are asked for: when the value in {@code arg} is an i31, its
+	 * decimal digits written straight into a fresh {@code $str_bytes} -- counted first,
+	 * then from the last one back -- and the string returned with its character count and
+	 * its cursor on the closing quote, as every character is one byte. The general path
+	 * renders into the linear scratch through the capture mode and copies the bytes out a
+	 * byte a round ({@code _str_fresh}): {@code str(i)} of a Starlark program was 25% of
+	 * its string benchmark, the count of the result's characters another 8%.
+	 * @param w the writer
+	 * @param arg the local holding the value
+	 * @param base the first of five i32 locals, the {@code $str_bytes} local behind them
+	 */
+	private static void emitFixnumText(WasmWriter w, int arg, int base) {
+		int value = base;
+		int rest = base + 1;
+		int len = base + 2;
+		int at = base + 3;
+		int id = base + 4;
+		int bytes = base + 5;
+		java.util.function.IntConsumer get = local -> {
+			w.write(Instruction.GET_LOCAL);
+			w.writeUnsignedLeb128(local);
+		};
+		java.util.function.IntConsumer set = local -> {
+			w.write(Instruction.SET_LOCAL);
+			w.writeUnsignedLeb128(local);
+		};
+		java.util.function.IntConsumer constant = number -> {
+			w.write(Instruction.I32_CONST);
+			w.writeSignedLeb128(number);
+		};
+		Runnable store = () -> {
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		};
+		get.accept(arg);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.IF, 0x40);
+		get.accept(arg);
+		WasmEmitHelper.castI31GetS(w);
+		set.accept(value);
+		// rest = |value|, which an i31 always has
+		constant.accept(0);
+		get.accept(value);
+		w.write(Instruction.I32_SUB);
+		get.accept(value);
+		get.accept(value);
+		constant.accept(0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.SELECT);
+		set.accept(rest);
+		// len = the two quotes, the sign and the digits
+		constant.accept(3);
+		get.accept(value);
+		constant.accept(31);
+		w.write(Instruction.I32_SHR_U);
+		w.write(Instruction.I32_ADD);
+		set.accept(len);
+		get.accept(rest);
+		set.accept(at);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		get.accept(at);
+		constant.accept(10);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.BR_IF, 1);
+		get.accept(at);
+		constant.accept(10);
+		w.write(Instruction.I32_DIV_U);
+		set.accept(at);
+		get.accept(len);
+		constant.accept(1);
+		w.write(Instruction.I32_ADD);
+		set.accept(len);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		get.accept(len);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_NEW_DEFAULT);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		set.accept(bytes);
+		get.accept(bytes);
+		constant.accept(0);
+		constant.accept('"');
+		store.run();
+		get.accept(bytes);
+		get.accept(len);
+		constant.accept(1);
+		w.write(Instruction.I32_SUB);
+		constant.accept('"');
+		store.run();
+		// the digits, the last one first
+		get.accept(len);
+		constant.accept(2);
+		w.write(Instruction.I32_SUB);
+		set.accept(at);
+		w.write(Instruction.LOOP, 0x40);
+		get.accept(bytes);
+		get.accept(at);
+		get.accept(rest);
+		constant.accept(10);
+		w.write(Instruction.I32_REM_U);
+		constant.accept('0');
+		w.write(Instruction.I32_ADD);
+		store.run();
+		get.accept(at);
+		constant.accept(1);
+		w.write(Instruction.I32_SUB);
+		set.accept(at);
+		get.accept(rest);
+		constant.accept(10);
+		w.write(Instruction.I32_DIV_U);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(rest);
+		w.write(Instruction.BR_IF, 0);
+		w.write(Instruction.END);
+		get.accept(value);
+		constant.accept(0);
+		w.write(Instruction.I32_LT_S);
+		w.write(Instruction.IF, 0x40);
+		get.accept(bytes);
+		constant.accept(1);
+		constant.accept('-');
+		store.run();
+		w.write(Instruction.END);
+		// every character is one byte: the count is the content's length
+		get.accept(len);
+		constant.accept(2);
+		w.write(Instruction.I32_SUB);
+		set.accept(at);
+		WasmStringRuntimeBuilder.emitCountedRuntimeString(w, len, bytes, id, at);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+	}
+
+	/**
 	 * Builds the body of a string-runtime function ({@code _princ_to_str} or
 	 * {@code _prin1_to_str}). It renders the argument value between two quote bytes into
 	 * the heap by turning on the capture mode of {@code _write_str}, bumps the heap
@@ -5549,12 +5686,18 @@ final class WasmRuntimeBuilder {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 
-		// Locals: argCount=start (i32), argCount+1=cur (i32)
+		// Locals: argCount=start (i32), argCount+1=cur (i32); the fixnum arm's value,
+		// magnitude, framed length, index and id (i32) and its bytes.
 		int start = argCount;
 		int cur = argCount + 1;
-		w.write(1);
 		w.write(2);
+		w.write(7);
 		w.write(Type.I32);
+		w.write(1);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
+		if (argCount == 1) {
+			emitFixnumText(w, 0, argCount + 2);
+		}
 
 		// princ of a string is that string's text, and an immutable string's text is the
 		// string: what a format's ~a of a string runs, with no rendering and no copy.
