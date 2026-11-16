@@ -95,6 +95,7 @@ and every user surface says so (`--source-language` help, the title of
 | `a[i] = v`, `a, b = v` | `(%starlark-set-index a i v)`; `(let ((u (%starlark-unpack v 2))) (setq a (aref u 0)) ..)` |
 | `a, b = b, a + b` (a tuple or list of targets, a tuple or list expression of as many) | `(let ((e1 b) (e2 (+ a b))) (setq a e1) (setq b e2))`: no tuple; every element before the first target, pairing through nested ones |
 | `x += v`, `a[i] += v` | `(setq x (%starlark-add-in-place x v))` (a list is extended in place), tested or inline like the binary operator; the target's operands bound once when they are more than a variable; `-=`, `\|=`, `&=`, `^=` the same through `-sub-in-place`, `-bit-or-in-place` .. (a set, and for `\|=` a dict, updated in place) |
+| `s += piece`, `s = s + piece` in a `for` whose body spells `s` nowhere else (its pieces included), `s` a local assigned before the loop, no int or Boolean, spelled by no `def` or `lambda` of the function | `(let ((pieces (list s))) loop (setq s (%starlark-concat-reversed pieces)))`, each append `(setq pieces (cons piece pieces))`; `(if (stringp s) (list s))` and `(if pieces ..)` around both when `s` is not known to be a string, the append as it stands when it holds none; a piece that is no string `(%starlark-add-in-place (%starlark-concat-reversed pieces) piece)`, which refuses it. Joined at the loop's end and after `break`; a `return` or an error leaves a local nobody reads. The outermost such loop collects. A global never: a Common Lisp caller or a later buffer reads it |
 | call of a top-level `def` with a direct entry whose arguments fit | `(f a b)`, bound while lowering like a built-in's: positional and named arguments at their parameters, a default the constant it is written as or the global its `def` statement set, surplus ones as `(%starlark-make-tuple ..)` / `(%starlark-make-dict "k" v ..)`; `(progn (%starlark-global f "f") (f a b))` where the `def` may not have run |
 | call of a built-in function whose arguments fit its signature | `(%starlark-b-sorted xs :none t)`: bound while lowering, defaults filled in |
 | `x.m(..)` whose arguments fit | `(%starlark-m-append x v)`: the helper takes the receiver first and tests it |
@@ -273,8 +274,9 @@ forms are the ones the backends already fuse ([jvm-int-fusion.md](jvm-int-fusion
   `%string-stream-piece`, an int `%decimal-piece`, two strings are ordered by
   `%string-order` ([string-search-runtime.md](string-search-runtime.md)), and what a
   helper builds any other way is wrapped in `%normalize-string`. Several pieces are joined by halves (`%starlark-concat-pieces`,
-  `-join-range`): no string stream, whose contents come back mutable, and a character is
-  copied log N times.
+  `-join-range`): a character is copied log N times, and no string stream is made, whose
+  fixed cost a few pieces do not repay. `%starlark-concat-reversed` takes a string stream
+  and `%string-stream-piece` past 64 pieces ("A string a loop appends to").
 - **An `error`'s control is a literal string.** A computed one (`(error message ..)`, a
   `(concatenate ..)` control) bails the condition narrowing and keeps the run-time format
   renderer in every program (~50 KB of wasm, "Measured"): `%starlark-elements-or` takes the
@@ -809,11 +811,9 @@ Left, each with its reason:
   framed in quotes (a slice is three allocations), `upper`/`lower` through the mutable
   producers (made since, below), and a sort that chases conses (30% of `sorting.star`'s
   samples are `_car`).
-- **`s += piece` in a loop** copies the string so far, as Go's and Java's do; CPython
-  extends in place. 20,000 times `s += "ab"` is 0.60 s on the JVM (a
-  string framed in quotes is copied more than once per join), 0.10 on wasm and 0.03 of
-  CPython; 5,000 times 0.14, 0.04 and 0.03. `strings.star` accumulates 5,000 pieces for that
-  reason. `.todo/j57`.
+- **`s += piece` in a loop** copied the string so far, as Go's and Java's do; CPython
+  extends in place. Made since: "A string a loop appends to" below. `strings.star` still
+  accumulates 5,000 pieces, so its row stays comparable.
 
 ### The list element on wasm (2026-11-16)
 
@@ -895,6 +895,36 @@ Seconds as above (`time.sh`, best of three), before -> after:
 - Sizes (`.class` / `.wasm` / component): `print(1 + 2)` 108,358 / 104,221 / 107,790 ->
   108,352 / 104,217 / 107,786; `examples/starlark/targets.star` 216,392 / 222,307 / 226,361
   -> 213,285 / 219,198 / 223,252.
+
+### A string a loop appends to (2026-11-16)
+
+`s += "ab"` in `for i in range(n)` inside a `def` (`accumulate` of `strings.star` at three
+sizes), seconds as above (`time.sh`, best of three), before -> after:
+
+| pieces | JVM | WASM | component | CPython | Go | Java |
+|---|---|---|---|---|---|---|
+| 5,000 | 0.14 -> 0.11 | 0.05 -> 0.03 | 0.05 -> 0.03 | 0.03 | 0.02 | 0.34 |
+| 20,000 | 0.57 -> 0.12 | 0.10 -> 0.03 | 0.09 -> 0.03 | 0.03 | 0.21 | 0.59 |
+| 200,000 | 18.58 -> 0.23 | 5.10 -> 0.05 | -- -> 0.05 | 0.04 | 41 | 10.47 |
+| 2,000,000 | -- -> 1.08 | -- -> 0.39 | -- -> 0.36 | 0.17 | -- | -- |
+
+(`--`: not measured; Go's 41 s at 200,000 is the measurement the item started from.)
+
+Before, every append was a `%string-concat` of the whole string. The lowering collects
+the pieces of a local nobody reads while the loop runs and joins them once ("The lowering
+table"). The join: by halves (`%starlark-concat-pieces`), 2,000,000 pieces were 1.65 s on
+the JVM and 3.21 on wasm; through a string stream 0.83 and 0.36 -- and a stream costs a
+fixed amount a few pieces do not repay: a function joining 4 pieces, called 1,000,000
+times, is 0.57 s on wasm by halves and 1.50 through a stream (16 pieces 0.47 / 0.94, 64
+0.42 / 0.63, 256 0.41 / 0.38; the JVM 0.86 / 0.89 at 4, 0.87 / 0.56 at 64). So
+`%starlark-concat-reversed` joins up to 64 pieces by halves and more through a stream;
+its other callers (`replace`, `format`, `%` read at run time) keep their numbers.
+The JVM's 2,000,000 ranges from 0.69 to 1.48 over five runs. Sizes: `print(1 + 2)`
+108,352 / 104,217 / 107,786 -> 108,366 / 104,217 / 107,786; `examples/starlark/targets.star` 213,285 / 219,198 / 223,252 -> 213,952 /
+219,550 / 223,605 (the stream arm). Pinned by `StarlarkLoweringTest` (the row) and
+`starlark-spec.yaml`'s `a-loop-gives-its-iterable-back-on-every-exit` (collected,
+captured, a global, a list and an int, `break`, `continue`, nested loops, past 64
+pieces) and `common-lisp-and-starlark-call-each-other` (the refused piece).
 
 ## Positions
 

@@ -18,6 +18,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -70,6 +71,7 @@ import am.ik.rontolisp.starlark.StarlarkSyntax.ListComprehension;
 import am.ik.rontolisp.starlark.StarlarkSyntax.ListLiteral;
 import am.ik.rontolisp.starlark.StarlarkSyntax.Load;
 import am.ik.rontolisp.starlark.StarlarkSyntax.LoadBinding;
+import am.ik.rontolisp.starlark.StarlarkSyntax.Node;
 import am.ik.rontolisp.starlark.StarlarkSyntax.Parameter;
 import am.ik.rontolisp.starlark.StarlarkSyntax.Pass;
 import am.ik.rontolisp.starlark.StarlarkSyntax.Return;
@@ -179,6 +181,8 @@ final class StarlarkLowering {
 	private static final LispSymbol GO = new LispSymbol("GO");
 
 	private static final LispSymbol LIST = new LispSymbol("LIST");
+
+	private static final LispSymbol CONS = new LispSymbol("CONS");
 
 	private static final LispSymbol APPEND = new LispSymbol("APPEND");
 
@@ -307,6 +311,8 @@ final class StarlarkLowering {
 	private static final LispSymbol IN = runtime("IN");
 
 	private static final LispSymbol ADD_IN_PLACE = runtime("ADD-IN-PLACE");
+
+	private static final LispSymbol CONCAT_REVERSED = runtime("CONCAT-REVERSED");
 
 	private static final LispSymbol LOCAL = runtime("LOCAL");
 
@@ -778,7 +784,7 @@ final class StarlarkLowering {
 			}
 		});
 		List<StarlarkTopLevel> steps = new ArrayList<>();
-		Frame frame = new Frame(Scope.TOP);
+		Frame frame = new Frame(Scope.TOP, Set.of());
 		for (Statement statement : statements) {
 			if (statement instanceof Load load) {
 				Loaded bindings = Objects.requireNonNull(this.loads.get(load));
@@ -1048,7 +1054,8 @@ final class StarlarkLowering {
 	/**
 	 * Where a statement stands: the scope its names resolve in and the loops of its own
 	 * function around it -- those holding an iterable, innermost first, by the variable
-	 * holding it, and how many there are in all.
+	 * holding it, and how many there are in all; the locals a loop around it collects the
+	 * pieces of ({@link #collecting}).
 	 */
 	private static final class Frame {
 
@@ -1058,8 +1065,17 @@ final class StarlarkLowering {
 
 		private int depth;
 
-		Frame(Scope scope) {
+		/**
+		 * The names a def or lambda of the function spells: one may read such a local.
+		 */
+		private final Set<String> captured;
+
+		/** A collected local by the variable holding its pieces, the last first. */
+		private final Map<String, LispSymbol> collected = new HashMap<>();
+
+		Frame(Scope scope, Set<String> captured) {
 			this.scope = scope;
+			this.captured = captured;
 		}
 
 	}
@@ -1422,7 +1438,7 @@ final class StarlarkLowering {
 			last = returned.value();
 			block = block.subList(0, block.size() - 1);
 		}
-		List<LispVal> forms = new ArrayList<>(statements(block, new Frame(scope)));
+		List<LispVal> forms = new ArrayList<>(statements(block, new Frame(scope, captured(statements))));
 		forms.add(last == null ? StarlarkBuiltins.NONE : expression(last, scope));
 		if (!locals.isEmpty()) {
 			forms = List.of(cons(LET, cons(listOf(locals), listOf(forms))));
@@ -1559,8 +1575,14 @@ final class StarlarkLowering {
 		return switch (statement) {
 			case ExpressionStatement expression ->
 				isLiteral(expression.expression()) ? null : expression(expression.expression(), scope);
-			case Assignment assignment -> assignment(assignment, scope);
-			case AugmentedAssignment assignment -> augmented(assignment, scope);
+			case Assignment assignment -> {
+				LispVal collected = collected(statement, frame);
+				yield collected != null ? collected : assignment(assignment, scope);
+			}
+			case AugmentedAssignment assignment -> {
+				LispVal collected = collected(statement, frame);
+				yield collected != null ? collected : augmented(assignment, scope);
+			}
 			case Def def -> {
 				LispVal form = list(SETQ, variable(def.name(), scope), definition(def, scope));
 				this.flow.assigned.add(def.name());
@@ -1589,14 +1611,17 @@ final class StarlarkLowering {
 				if (loop.iterable != null) {
 					frame.loops.push(loop.iterable);
 				}
+				Map<String, LispSymbol> pieces = collecting(iteration, frame);
+				frame.collected.putAll(pieces);
 				frame.depth++;
 				List<LispVal> body = statements(iteration.body(), frame);
 				frame.depth--;
+				frame.collected.keySet().removeAll(pieces.keySet());
 				if (loop.iterable != null) {
 					frame.loops.pop();
 				}
 				this.flow = before;
-				yield loop.over(assignment, body);
+				yield collected(loop.over(assignment, body), pieces, scope);
 			}
 			case Return returned -> {
 				LispVal form = returned(returned, frame);
@@ -1841,6 +1866,251 @@ final class StarlarkLowering {
 		LispVal step = constant != null ? integer(constant) : expression(arguments.get(2).value(), scope);
 		boolean ints = (first == null || kind(first, scope) == Kind.INT) && kind(last, scope) == Kind.INT;
 		return new Loop(target, range, start, stop, constant, step, ints);
+	}
+
+	// ---- strings a loop appends to ----
+
+	/**
+	 * A statement appending to a name: {@code s += piece} or {@code s = s + piece}.
+	 *
+	 * @param helper the generic helper of the statement's {@code +}
+	 * @param at the position of that {@code +}
+	 */
+	private record Append(String name, Expression piece, LispSymbol helper, SourceLocation at) {
+	}
+
+	/** What the statement appends to a name, or {@code null}. */
+	private static @Nullable Append append(Statement statement) {
+		return switch (statement) {
+			case AugmentedAssignment assignment when assignment.operator() == BinaryOperator.PLUS
+					&& assignment.target() instanceof Identifier target ->
+				new Append(target.name(), assignment.value(), ADD_IN_PLACE, assignment.at());
+			case Assignment assignment when assignment.target() instanceof Identifier target
+					&& assignment.value() instanceof Binary sum && sum.operator() == BinaryOperator.PLUS
+					&& sum.left() instanceof Identifier left && left.name().equals(target.name()) ->
+				new Append(target.name(), sum.right(), arithmetic(BinaryOperator.PLUS), sum.at());
+			default -> null;
+		};
+	}
+
+	/**
+	 * The locals a loop collects the pieces of, by the variable holding them: a local of
+	 * the function, assigned where the loop starts and not an int or a Boolean, that the
+	 * loop only appends to -- it spells the name nowhere else, its pieces included -- and
+	 * that no def or lambda of the function spells. Such a local is read by nobody while
+	 * the loop runs, so it is joined once, where the loop is left: at its end or by
+	 * {@code break}; a {@code return} or an error leaves a local nobody reads again. Not
+	 * a global: a Common Lisp caller or a session's later buffer reads it.
+	 */
+	private Map<String, LispSymbol> collecting(For loop, Frame frame) {
+		Set<String> appended = new LinkedHashSet<>();
+		Set<String> spelled = new HashSet<>();
+		names(loop.target(), spelled::add);
+		mentions(loop.body(), appended, spelled);
+		Map<String, LispSymbol> pieces = new LinkedHashMap<>();
+		for (String name : appended) {
+			Kind kind = kind(name, frame.scope);
+			if (!spelled.contains(name) && frame.scope.names().contains(name) && !frame.captured.contains(name)
+					&& !frame.collected.containsKey(name) && this.flow.has(name) && kind != Kind.INT
+					&& kind != Kind.BOOL) {
+				pieces.put(name, fresh("PIECES"));
+			}
+		}
+		return pieces;
+	}
+
+	/**
+	 * Sorts the names the statements spell: those they append to, and every other
+	 * spelling -- a piece's included.
+	 */
+	private static void mentions(List<Statement> statements, Set<String> appended, Set<String> spelled) {
+		for (Statement statement : statements) {
+			Append append = append(statement);
+			if (append != null) {
+				appended.add(append.name());
+				names(append.piece(), spelled::add);
+			}
+			else if (statement instanceof If conditional) {
+				names(conditional.condition(), spelled::add);
+				mentions(conditional.then(), appended, spelled);
+				mentions(conditional.otherwise(), appended, spelled);
+			}
+			else if (statement instanceof For loop) {
+				names(loop.target(), spelled::add);
+				names(loop.iterable(), spelled::add);
+				mentions(loop.body(), appended, spelled);
+			}
+			else {
+				names(statement, spelled::add);
+			}
+		}
+	}
+
+	/**
+	 * A loop whose locals are collected: each starts as a list of the string it holds, or
+	 * as {@code nil} -- no collecting -- when what it holds is no string, and is joined
+	 * after the loop.
+	 */
+	private LispVal collected(LispVal loop, Map<String, LispSymbol> pieces, Scope scope) {
+		if (pieces.isEmpty()) {
+			return loop;
+		}
+		List<LispVal> bindings = new ArrayList<>();
+		List<LispVal> forms = new ArrayList<>(List.of(loop));
+		pieces.forEach((name, held) -> {
+			LispSymbol variable = variable(name, scope);
+			boolean known = kind(name, scope) == Kind.STRING;
+			bindings.add(
+					list(held, known ? list(LIST, variable) : list(IF, list(STRINGP, variable), list(LIST, variable))));
+			LispVal join = list(SETQ, variable, list(CONCAT_REVERSED, held));
+			forms.add(known ? join : list(IF, held, join));
+		});
+		return cons(LET, cons(listOf(bindings), listOf(forms)));
+	}
+
+	/**
+	 * An append to a collected local, or {@code null} for any other statement: a string
+	 * piece goes on the pieces; any other piece is the helper's over the string so far,
+	 * which refuses it -- a string and anything else have no {@code +} --, so the
+	 * collecting never resumes. A local not collected, as it held no string, takes the
+	 * {@code +} as it stands.
+	 */
+	private @Nullable LispVal collected(Statement statement, Frame frame) {
+		Append append = append(statement);
+		LispSymbol pieces = append == null ? null : frame.collected.get(append.name());
+		if (append == null || pieces == null) {
+			return null;
+		}
+		Scope scope = frame.scope;
+		String name = append.name();
+		Kind kind = kind(append.piece(), scope);
+		Kind current = kind(name, scope);
+		LispVal piece = expression(append.piece(), scope);
+		List<LispVal> bindings = new ArrayList<>();
+		if (!isSimple(piece) && (kind != Kind.STRING || current != Kind.STRING)) {
+			LispSymbol held = fresh("PIECE");
+			bindings.add(list(held, piece));
+			piece = held;
+		}
+		LispVal push = list(SETQ, pieces, list(CONS, piece, pieces));
+		LispVal collect = kind == Kind.STRING ? push : list(IF, list(STRINGP, piece), push,
+				located(list(append.helper(), list(CONCAT_REVERSED, pieces), piece), append.at()));
+		LispVal form = current == Kind.STRING ? collect
+				: list(IF, pieces, collect,
+						list(SETQ, variable(name, scope),
+								operation(BinaryOperator.PLUS, read(name, scope), current, piece, kind, append.piece(),
+										(left, right) -> list(append.helper(), left, right), append.at())));
+		return bindings.isEmpty() ? form : list(LET, listOf(bindings), form);
+	}
+
+	/**
+	 * The names a def or lambda among the statements spells, at any depth.
+	 */
+	private static Set<String> captured(List<Statement> statements) {
+		Set<String> out = new HashSet<>();
+		statements.forEach(statement -> nested(statement, out));
+		return out;
+	}
+
+	private static void nested(Node node, Set<String> out) {
+		if (node instanceof Def || node instanceof Lambda) {
+			names(node, out::add);
+		}
+		else {
+			children(node).forEach(child -> nested(child, out));
+		}
+	}
+
+	/** Every name the node spells: an identifier, a def's, a parameter's, a load's. */
+	private static void names(Node node, Consumer<String> out) {
+		switch (node) {
+			case Identifier identifier -> out.accept(identifier.name());
+			case Def def -> out.accept(def.name());
+			case Parameter parameter -> {
+				String name = parameter.name();
+				if (name != null) {
+					out.accept(name);
+				}
+			}
+			case LoadBinding binding -> out.accept(binding.local());
+			default -> {
+			}
+		}
+		children(node).forEach(child -> names(child, out));
+	}
+
+	/** The nodes a node is made of. */
+	private static List<Node> children(Node node) {
+		List<Node> out = new ArrayList<>();
+		switch (node) {
+			case Identifier _, IntLiteral _, FloatLiteral _, StringLiteral _, BytesLiteral _, Break _, Continue _,
+					Pass _, LoadBinding _ ->
+				{
+				}
+			case Unary unary -> out.add(unary.operand());
+			case Binary binary -> out.addAll(List.of(binary.left(), binary.right()));
+			case Conditional conditional ->
+				out.addAll(List.of(conditional.condition(), conditional.then(), conditional.otherwise()));
+			case Lambda lambda -> {
+				out.addAll(lambda.parameters());
+				out.add(lambda.body());
+			}
+			case ListLiteral list -> out.addAll(list.elements());
+			case TupleLiteral tuple -> out.addAll(tuple.elements());
+			case DictLiteral dict -> out.addAll(dict.entries());
+			case Entry entry -> out.addAll(List.of(entry.key(), entry.value()));
+			case ListComprehension comprehension -> {
+				out.add(comprehension.element());
+				out.addAll(comprehension.clauses());
+			}
+			case DictComprehension comprehension -> {
+				out.add(comprehension.entry());
+				out.addAll(comprehension.clauses());
+			}
+			case ForClause clause -> out.addAll(List.of(clause.target(), clause.iterable()));
+			case IfClause clause -> out.add(clause.condition());
+			case Call call -> {
+				out.add(call.function());
+				out.addAll(call.arguments());
+			}
+			case Argument argument -> out.add(argument.value());
+			case Dot dot -> out.add(dot.receiver());
+			case Index index -> out.addAll(List.of(index.receiver(), index.index()));
+			case Slice slice -> {
+				out.add(slice.receiver());
+				Stream.of(slice.start(), slice.stop(), slice.step()).filter(Objects::nonNull).forEach(out::add);
+			}
+			case Parameter parameter -> {
+				Expression value = parameter.defaultValue();
+				if (value != null) {
+					out.add(value);
+				}
+			}
+			case ExpressionStatement statement -> out.add(statement.expression());
+			case Assignment assignment -> out.addAll(List.of(assignment.target(), assignment.value()));
+			case AugmentedAssignment assignment -> out.addAll(List.of(assignment.target(), assignment.value()));
+			case Def def -> {
+				out.addAll(def.parameters());
+				out.addAll(def.body());
+			}
+			case If conditional -> {
+				out.add(conditional.condition());
+				out.addAll(conditional.then());
+				out.addAll(conditional.otherwise());
+			}
+			case For loop -> {
+				out.addAll(List.of(loop.target(), loop.iterable()));
+				out.addAll(loop.body());
+			}
+			case Return returned -> {
+				Expression value = returned.value();
+				if (value != null) {
+					out.add(value);
+				}
+			}
+			case Load load -> out.addAll(load.bindings());
+		}
+		return out;
 	}
 
 	/** The int an expression is written as, or {@code null}. */

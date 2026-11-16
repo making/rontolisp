@@ -1264,11 +1264,19 @@
                              (rontolisp::%starlark-concat-pieces
                               (nthcdr half pieces) (- n half)))))))
 
-;; PIECES is a list of strings, the last one first: one string of them in order.
+;; PIECES is a list of strings, the last one first: one string of them in order. Up to
+;; 64 are joined by halves; more -- a loop's appends (.kb/starlark-frontend.md) -- through
+;; a string stream, which copies a character once where halves copy it log N times, at a
+;; fixed cost a few pieces do not repay (a stream of four pieces 1.5 us on wasm, by
+;; halves 0.6).
 (defun rontolisp::%starlark-concat-reversed (pieces)
   (let ((n (length pieces)))
-    (%normalize-string
-     (rontolisp::%starlark-concat-pieces (nreverse pieces) n))))
+    (if (<= n 64)
+        (%normalize-string
+         (rontolisp::%starlark-concat-pieces (nreverse pieces) n))
+        (let ((out (make-string-output-stream)))
+          (dolist (piece (nreverse pieces)) (write-string piece out))
+          (%string-stream-piece out)))))
 
 (defun rontolisp::%starlark-add (a b)
   (cond ((and (stringp a) (stringp b)) (%string-concat a b))

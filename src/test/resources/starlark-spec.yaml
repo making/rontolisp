@@ -168,9 +168,38 @@ cases:
       loop_rows.append([5])
       loop_rows[1].append(6)
       print(loop_rows, loop_sum(), [(i, j) for i in range(3) if i for j in range(i)])
+      def loop_join(xs, s, n):
+          for x in xs:
+              if x == "skip":
+                  continue
+              if x == "stop":
+                  break
+              s += x
+          for i in range(n):
+              for j in range(2):
+                  s = s + str(i)
+          return s
+      def loop_seen(xs):
+          s = ""
+          def peek():
+              return s
+          seen = []
+          for x in xs:
+              s += x
+              seen.append(peek())
+          return seen
+      loop_text = ""
+      def loop_peek():
+          return loop_text
+      loop_texts = []
+      for x in ["a", "b"]:
+          loop_text += x
+          loop_texts.append(loop_peek())
+      print(loop_join(["a", "skip", "b", "stop", "c"], "<", 2), len(loop_join([], "", 100)), loop_join([[1], [2]], [0], 0), loop_join([1, 2], 10, 0), loop_seen(["x", "y"]), loop_texts)
     expected: |
       ([3, 4], 3) None
       [[1, 2], [3, 4, 6], [5]] [22, 9] [(1, 0), (2, 0), (2, 1)]
+      <ab0011 380 [0, 1, 2] 13 ["x", "xy"] ["a", "ab"]
   # What the lowering knows answers as the generic helpers do. An operator over operands
   # that may be ints is the integer one behind a test of them, over known ints the
   # integer one alone (a variable every binding of which is an int, past a machine word
@@ -488,6 +517,12 @@ standalone:
                     fail("stopped at", x)
             xs.append(bad)
             return xs
+        def joined(xs):
+            s = ""
+            for x in xs:
+                s += x
+            return s
+        mixed = ["a", 1]
         text = str
         print(target("a"), target("b", ["a"]), gcd(12, 18), twice(21), emit, each([1, 2], twice), tag("r"))
       sub/more.star: |
@@ -510,6 +545,7 @@ standalone:
         (show (handler-case (rontolisp:starlark-call |fail_at| xs "B") (error (e) (princ-to-string e))))
         (show (rontolisp:starlark-call |fail_at| xs "none")))
       (show (handler-case (rontolisp:starlark-call |target| "c") (error (e) (princ-to-string e))))
+      (show (handler-case (rontolisp:starlark-call |joined| |mixed|) (error (e) (princ-to-string e))))
     stdout: |
       common runs
       emit a NIL
@@ -520,3 +556,4 @@ standalone:
       fail: stopped at B
       ["A", "B", "none"]
       cannot append to frozen list
+      unknown binary op: string + int

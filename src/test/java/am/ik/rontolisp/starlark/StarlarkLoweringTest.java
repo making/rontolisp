@@ -197,6 +197,31 @@ class StarlarkLoweringTest {
 								(LET* ((%SL-LEFT1 ($B-LEN |s|)) (%SL-RIGHT2 ($B-LEN |t|))) (IF (NOT (= %SL-RIGHT2 0)) \
 								(/ (- %SL-LEFT1 (MOD %SL-LEFT1 %SL-RIGHT2)) %SL-RIGHT2) ($FLOORDIV %SL-LEFT1 %SL-RIGHT2))))))
 								(SETQ |g| ($MAKE-FUNCTION "g" '("a" "b" "s") NIL 3 NIL NIL #'|g|))"""),
+				// a local a loop only appends to collects its pieces while the loop runs
+				// and is joined after it: from the start when it is known to be a
+				// string, else when it holds one as the loop starts; a piece that is no
+				// string is the helper's, over the string so far
+				arguments("""
+						def j(xs, s):
+						    t = ""
+						    for x in xs:
+						        t += str(x)
+						        s = s + x
+						    return t + s
+						""",
+						"""
+								(DEFUN |j| (|xs| |s|) (LET ((|t| :%UNBOUND) (|x| :%UNBOUND)) (SETQ |t| "") \
+								(LET ((%SL-PIECES6 (LIST |t|)) (%SL-PIECES7 (IF (STRINGP |s|) (LIST |s|)))) \
+								(LET* ((%SL-SEQ1 |xs|) (%SL-ITEMS2 ($ITERATE %SL-SEQ1)) (%SL-COUNT3 (LENGTH %SL-ITEMS2)) (%SL-INDEX4 0)) \
+								(TAGBODY %SL-TOP5 (IF (< %SL-INDEX4 %SL-COUNT3) (PROGN (SETQ |x| (AREF %SL-ITEMS2 %SL-INDEX4)) \
+								(SETQ %SL-INDEX4 (+ %SL-INDEX4 1)) (SETQ %SL-PIECES6 (CONS ($B-STR |x|) %SL-PIECES6)) \
+								(IF %SL-PIECES7 (IF (STRINGP |x|) (SETQ %SL-PIECES7 (CONS |x| %SL-PIECES7)) \
+								($ADD ($CONCAT-REVERSED %SL-PIECES7) |x|)) \
+								(SETQ |s| (IF (AND (INTEGERP |s|) (INTEGERP |x|)) (+ |s| |x|) ($ADD |s| |x|)))) (GO %SL-TOP5)))) \
+								($ITERATED %SL-SEQ1)) (SETQ |t| ($CONCAT-REVERSED %SL-PIECES6)) \
+								(IF %SL-PIECES7 (SETQ |s| ($CONCAT-REVERSED %SL-PIECES7)))) \
+								(IF (STRINGP |s|) (%STRING-CONCAT |t| |s|) ($ADD |t| |s|))))
+								(SETQ |j| ($MAKE-FUNCTION "j" '("xs" "s") NIL 2 NIL NIL #'|j|))"""),
 				// what the lowering knows: a loop over range counts, its bounds checked
 				// as range checks them unless they are known ints, a step that is no
 				// constant with them; an operator over known ints, the truth of an int
