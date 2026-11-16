@@ -2429,6 +2429,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above shifts, and shaken with its sites.
 	static final int FUNC_VEC_SYNC = FUNC_SLEEP_MS + 1;
 
+	// The bulk primitives (WasmBulkRuntimeBuilder): _str_split, _str_join and _sort_keys,
+	// the wasm halves of %string-split, %string-join and %sort-by-keys, and _str_cat,
+	// what a chain of %string-concat compiles to (WasmStringConcatCompiler) --
+	// WasmBulkRuntimeBuilder.FUNC_COUNT functions at FUNC_BULK_BASE + the builder's
+	// offsets. Each reuses a TYPE_CALLABLE_BASE signature, so no type is added; appended
+	// after the last fixed helper so no index above shifts, and shaken from a module
+	// with no site of them.
+	static final int FUNC_BULK_BASE = FUNC_VEC_SYNC + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -2459,7 +2468,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_VEC_SYNC + 1;
+	static final int FUNC_VEC_BASE = FUNC_BULK_BASE + WasmBulkRuntimeBuilder.FUNC_COUNT;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -2482,12 +2491,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// prefix steps (_rat_add_f64 .. _rat_div_f64), the limb-tier random draw
 	// (_rand_big), the path stat (_file_write_date), the link read (_read_link), the
 	// hash-table runtime (_ht_*), the working directory (_host_getcwd), the terminal
-	// probe (_terminal_p), the wait (_sleep_ms) and the vector fields' writer
-	// (_vec_sync) -- plus,
+	// probe (_terminal_p), the wait (_sleep_ms), the vector fields' writer
+	// (_vec_sync) and the bulk primitives (_str_split, _str_join, _sort_keys, _str_cat)
+	// -- plus,
 	// under --simd, the vec: SIMD block, and the conditional helpers (the _arity_* /
 	// _undefined_function / _unbound_variable / _lit_stage / _funcref chain and the
 	// complex block). Use userFuncBase(), which adds those offsets.
-	static final int FUNC_USER_BASE = FUNC_VEC_SYNC + 1;
+	static final int FUNC_USER_BASE = FUNC_BULK_BASE + WasmBulkRuntimeBuilder.FUNC_COUNT;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -8578,6 +8588,10 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (FUNC_SLEEP_MS)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _vec_sync (cell) -> cell
 															// (FUNC_VEC_SYNC)
+				// the bulk primitives (FUNC_BULK_BASE ..)
+				for (int i = 0; i < WasmBulkRuntimeBuilder.FUNC_COUNT; i++) {
+					fnDef.addFunction(WasmBulkRuntimeBuilder.typeIndexOf(i));
+				}
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -9730,6 +9744,12 @@ public final class WasmLispCompiler implements LispCompiler {
 					.buildSleepMsBody(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + pollOneoffOrdinal));
 				// the vector fields' writer (FUNC_VEC_SYNC): shaken with its sites.
 				code.addFunction(WasmArrayRuntimeBuilder.buildVecSyncBody());
+				// the bulk primitives (FUNC_BULK_BASE ..): shaken with their sites.
+				WasmBulkRuntimeBuilder.Flags bulkFlags = new WasmBulkRuntimeBuilder.Flags(this.usesIdentityHashTables,
+						this.charvecPossible);
+				for (int i = 0; i < WasmBulkRuntimeBuilder.FUNC_COUNT; i++) {
+					code.addFunction(WasmBulkRuntimeBuilder.build(i, bulkFlags));
+				}
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp

@@ -424,6 +424,19 @@ final class WasmExprCompiler {
 	 * position hands it on to its own tail exactly as the {@code if} and {@code let} it
 	 * expands into would.
 	 */
+	// A call of one of WasmBulkRuntimeBuilder's functions over the form's operands.
+	private static void compileBulkCall(LispCons cons, int operands, int function, WasmLispCompiler.Ctx ctx) {
+		java.util.List<LispVal> args = cons.toList();
+		if (args.size() != operands + 1) {
+			throw new UnsupportedOperationException(args.get(0) + " expects " + operands + " arguments");
+		}
+		for (LispVal arg : args.subList(1, operands + 1)) {
+			WasmExprCompiler.compileExpr(arg, ctx);
+		}
+		ctx.writer.write(Instruction.CALL);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_BULK_BASE + function);
+	}
+
 	private static void compileExpansion(LispVal expansion, WasmLispCompiler.Ctx ctx, boolean tail) {
 		ctx.tailPosition = tail;
 		compileExpr(expansion, ctx);
@@ -2365,6 +2378,11 @@ final class WasmExprCompiler {
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_SEARCH);
 			}
+			// The primitives that take a whole sequence at once
+			// (WasmBulkRuntimeBuilder, .kb/bulk-primitives.md).
+			case LispNames.STRING_SPLIT -> compileBulkCall(cons, 3, WasmBulkRuntimeBuilder.SPLIT, ctx);
+			case LispNames.STRING_JOIN -> compileBulkCall(cons, 2, WasmBulkRuntimeBuilder.JOIN, ctx);
+			case LispNames.SORT_BY_KEYS -> compileBulkCall(cons, 4, WasmBulkRuntimeBuilder.SORT, ctx);
 			case LispNames.ARRAY_ROW_MAJOR_INDEX ->
 				compileExpansion(LispMacroExpander.expandArrayRowMajorIndex(cons), ctx, tail);
 			case LispNames.VECTOR -> compileExpansion(LispMacroExpander.expandVector(cons), ctx, tail);

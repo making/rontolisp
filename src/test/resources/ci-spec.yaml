@@ -5734,6 +5734,20 @@ cases:
       (let ((s (concatenate 'string (princ-to-string -120) "é" (prin1-to-string 7) (subseq "a～b😀c" 1 4))))
         (print (list s (length s) (char s 4) (subseq s 3) (position #\7 s) (length (subseq s 2 6))
                      (string-trim "-0" s) (length (string-trim "-0" s)))))
+      ;; a chain of pieces is joined at once: a fixnum at each end of its range and past
+      ;; it, a symbol, a float and a list among them, strings of several bytes, a string
+      ;; nothing wrote and one something did, two pieces and more than four
+      (defun ci-fmt-chain (s i)
+        (list (format nil "~a-~d:~a" s i s)
+              (format nil "~d~d~a~d~a~d" i (- i) s 1073741823 "é" -1073741824)
+              (length (format nil "~a~a~a" s "😀" i))
+              (format nil "~d|~a|~d|~a" 1073741824 'sym 12345678901234567890 2.5)))
+      (defun ci-fmt-mutable (i)
+        (let ((m (make-string 2 :initial-element #\a)))
+          (setf (char m 1) #\é)
+          (list (format nil "~a|~a|~d" m (list 1 "x") i) (format nil "item~d" i) (format nil "~d~d" i i))))
+      (format t "~s~%~s~%~s~%~s~%" (ci-fmt-chain "aé" 42) (ci-fmt-chain "" -7) (ci-fmt-mutable 0)
+              (ci-fmt-mutable -1073741824))
     expected: |
       fmt-nil: WORLD 42 "str" ~
       5
@@ -5742,6 +5756,10 @@ cases:
       "abc"
       ("0" "-1" "9" "10" "-10" "1073741823" "-1073741824" "1073741824")
       ("-120é7～b😀" 9 #\é "0é7～b😀" 5 4 "120é7～b😀" 8)
+      ("aé-42:aé" "42-42aé1073741823é-1073741824" 5 "1073741824|SYM|12345678901234567890|2.5")
+      ("--7:" "-771073741823é-1073741824" 3 "1073741824|SYM|12345678901234567890|2.5")
+      ("aé|(1 x)|0" "item0" "00")
+      ("aé|(1 x)|-1073741824" "item-1073741824" "-1073741824-1073741824")
   - name: format-directives-padding-grouping-fixed
     source: |
       (format t "~:d|~@d|~:@d~%" 1234567 42 1234567)

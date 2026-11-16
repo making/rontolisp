@@ -229,6 +229,8 @@ final class StarlarkLowering {
 	/** Joins two strings into one the program holds. */
 	private static final LispSymbol STRING_CONCAT = new LispSymbol("%STRING-CONCAT");
 
+	private static final LispSymbol DECIMAL_PIECE = new LispSymbol("%DECIMAL-PIECE");
+
 	private static final LispSymbol STRINGP = new LispSymbol("STRINGP");
 
 	/** The most pieces a template written as a literal is joined of in place. */
@@ -2776,6 +2778,12 @@ final class StarlarkLowering {
 			String name = identifier.name();
 			Signature builtin = builtin(identifier, scope);
 			if (builtin != null) {
+				if (name.equals("str") && arguments.size() == 1 && arguments.get(0).kind() == ArgumentKind.POSITIONAL
+						&& kind(arguments.get(0).value(), scope) == Kind.INT) {
+					// str of an int is its decimal text: the helper's own answer for
+					// one, with no call of it
+					return list(DECIMAL_PIECE, expression(arguments.get(0).value(), scope));
+				}
 				LispVal direct = direct(builtin, arguments, scope);
 				return direct != null ? direct : general(builtinValue(builtin), arguments, scope);
 			}
@@ -2947,6 +2955,7 @@ final class StarlarkLowering {
 	private LispVal joined(List<Piece> pieces, List<Expression> arguments, Scope scope) {
 		List<LispVal> bindings = new ArrayList<>();
 		List<LispVal> operands = new ArrayList<>();
+		List<Kind> kinds = new ArrayList<>();
 		for (Expression argument : arguments) {
 			LispVal form = expression(argument, scope);
 			if (!isSimple(form)) {
@@ -2955,18 +2964,23 @@ final class StarlarkLowering {
 				form = held;
 			}
 			operands.add(form);
+			kinds.add(kind(argument, scope));
 		}
 		List<LispVal> parts = new ArrayList<>();
 		for (Piece piece : pieces) {
 			String text = piece.text();
-			// str of a string is the string
-			parts.add(text != null ? string(text) : switch (piece.conversion()) {
-				case 's' -> operands.get(piece.argument()) instanceof LispString literal ? literal
-						: list(runtime("B-STR"), operands.get(piece.argument()));
-				case 'r' -> list(runtime("B-REPR"), operands.get(piece.argument()));
-				default ->
-					list(runtime("CONVERSION"), operands.get(piece.argument()), new LispChar(piece.conversion()));
-			});
+			// str of a string is the string; str, %d and %i of a known int its decimal
+			// text, which is what the helpers answer for one
+			boolean decimal = text == null && kinds.get(piece.argument()) == Kind.INT
+					&& (piece.conversion() == 's' || piece.conversion() == 'd' || piece.conversion() == 'i');
+			parts.add(text != null ? string(text)
+					: decimal ? list(DECIMAL_PIECE, operands.get(piece.argument())) : switch (piece.conversion()) {
+						case 's' -> operands.get(piece.argument()) instanceof LispString literal ? literal
+								: list(runtime("B-STR"), operands.get(piece.argument()));
+						case 'r' -> list(runtime("B-REPR"), operands.get(piece.argument()));
+						default -> list(runtime("CONVERSION"), operands.get(piece.argument()),
+								new LispChar(piece.conversion()));
+					});
 		}
 		LispVal joined = parts.isEmpty() ? string("") : parts.get(0);
 		if (parts.size() > 4) {

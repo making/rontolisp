@@ -3977,6 +3977,39 @@ public final class LispNames {
 	public static final String STRING_ORDER = "%STRING-ORDER";
 
 	/**
+	 * The {@code %string-split} internal primitive: {@code (%string-split string
+	 * separator limit)} answers the pieces of STRING between the leftmost LIMIT
+	 * occurrences of SEPARATOR that do not overlap -- all of them when LIMIT is negative
+	 * -- in a fresh adjustable vector with a fill pointer. Nil -- nothing decided --
+	 * where the backend has no arm (the interpreter and the JVM compile it to constant
+	 * nil; on WASM an empty separator or an operand that is no string), and the caller's
+	 * loop runs. See {@code .kb/bulk-primitives.md}. Never read from source.
+	 */
+	public static final String STRING_SPLIT = "%STRING-SPLIT";
+
+	/**
+	 * The {@code %string-join} internal primitive: {@code (%string-join strings
+	 * separator)} answers the strings of a general vector as one immutable string,
+	 * SEPARATOR between them. Nil -- nothing decided -- where the backend has no arm (the
+	 * interpreter and the JVM compile it to constant nil; on WASM an element that is no
+	 * immutable string), and the caller's loop runs. See {@code .kb/bulk-primitives.md}.
+	 * Never read from source.
+	 */
+	public static final String STRING_JOIN = "%STRING-JOIN";
+
+	/**
+	 * The {@code %sort-by-keys} internal primitive: {@code (%sort-by-keys keys elements
+	 * out descending)} stores into the general vector OUT the ELEMENTS -- the KEYS
+	 * themselves when ELEMENTS is nil -- in the order of their keys, elements of equal
+	 * keys in the order they stood in, and answers OUT. Nil -- nothing decided, OUT as it
+	 * was -- where the backend has no arm (the interpreter and the JVM compile it to
+	 * constant nil; on WASM keys that are not all integers within 64 bits or all
+	 * immutable strings), and the caller's sort runs. See {@code .kb/bulk-primitives.md}.
+	 * Never read from source.
+	 */
+	public static final String SORT_BY_KEYS = "%SORT-BY-KEYS";
+
+	/**
 	 * The {@code %seq-string-result} internal TYPE DESIGNATOR: "a string, built by a
 	 * sequence operator's own result conversion rather than by a program-written
 	 * {@code coerce} / {@code map}". It reads as {@code string} everywhere the two

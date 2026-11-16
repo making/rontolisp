@@ -1964,7 +1964,7 @@ final class WasmJsonRuntimeBuilder {
 	/** The kinds of local the bodies declare. */
 	enum Kind {
 
-		EQ, BYTES, ARR, I32, I64, F64
+		EQ, BYTES, ARR, INTS, I32, I64, F64
 
 	}
 
@@ -2023,6 +2023,7 @@ final class WasmJsonRuntimeBuilder {
 					case EQ -> header.writeRefType(true, Type.EQ.code());
 					case BYTES -> header.writeRefType(true, BYTES);
 					case ARR -> header.writeRefType(true, ARR);
+					case INTS -> header.writeRefType(true, WasmLispCompiler.TYPE_I32ARR);
 					case I32 -> header.write(Type.I32);
 					case I64 -> header.write(Type.I64);
 					case F64 -> header.write(Type.F64);

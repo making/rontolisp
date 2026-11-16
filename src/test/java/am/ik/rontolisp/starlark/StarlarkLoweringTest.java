@@ -159,39 +159,45 @@ class StarlarkLoweringTest {
 						($ITERATED %SL-SEQ3)))) ($LIST-FROM %SL-ACC1))))"""),
 				// a template written as a literal over the arguments the expression
 				// spells is read here: the arguments first, in order, then the pieces
-				// joined; one whose reading ends in an error or needs a name, and any
+				// joined, a known int as its decimal text under %d and %s; one whose
+				// reading ends in an error or needs a name, and any
 				// other template or operand, is the run time's; a dict comprehension
 				// stores into the dict it made
-				arguments("""
-						def f(a, t):
-						    return ["{1}{0!r}".format(a, f(a, t)), "%d: %s%%" % (a, "s"), "{}-{0}".format(a), \
-						"%s" % a, t.format(a), "{k}".format(k = a), "%s %s" % (a,), {k: a for k in t}]
-						""",
+				arguments(
+						"""
+								def f(a, t):
+								    return ["{1}{0!r}".format(a, f(a, t)), "%d: %s%%" % (a, "s"), "%d-%s%r" % (len(t), 7, 8), "{}-{0}".format(a), \
+								"%s" % a, t.format(a), "{k}".format(k = a), "%s %s" % (a,), {k: a for k in t}]
+								""",
 						"""
 								(DEFUN |f| (|a| |t|) ($MAKE-LIST \
 								(LET* ((%SL-ARG1 (|f| |a| |t|))) (%STRING-CONCAT ($B-STR %SL-ARG1) ($B-REPR |a|))) \
 								(%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT ($CONVERSION |a| #\\d) ": ") "s") "%") \
+								(LET* ((%SL-ARG2 ($B-LEN |t|))) (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT \
+								(%DECIMAL-PIECE %SL-ARG2) "-") (%DECIMAL-PIECE 7)) ($B-REPR 8))) \
 								($M-FORMAT "{}-{0}" ($MAKE-TUPLE |a|) ($MAKE-DICT)) ($MOD "%s" |a|) \
 								($M-FORMAT |t| ($MAKE-TUPLE |a|) ($MAKE-DICT)) ($M-FORMAT "{k}" ($MAKE-TUPLE) ($MAKE-DICT "k" |a|)) \
 								($MOD "%s %s" ($MAKE-TUPLE |a|)) \
-								(LET* ((%SL-SEQ3 |t|) (%SL-ITEMS4 ($ITERATE %SL-SEQ3)) (%SL-COUNT5 (LENGTH %SL-ITEMS4)) (%SL-INDEX6 0)) \
-								(LET ((%SL-ACC2 ($EMPTY-DICT)) (|k| :%UNBOUND)) (WHILE (< %SL-INDEX6 %SL-COUNT5) \
-								(SETQ |k| (AREF %SL-ITEMS4 %SL-INDEX6)) (SETQ %SL-INDEX6 (+ %SL-INDEX6 1)) \
-								($DICT-PUT %SL-ACC2 |k| |a|)) ($ITERATED %SL-SEQ3) %SL-ACC2))))
+								(LET* ((%SL-SEQ4 |t|) (%SL-ITEMS5 ($ITERATE %SL-SEQ4)) (%SL-COUNT6 (LENGTH %SL-ITEMS5)) (%SL-INDEX7 0)) \
+								(LET ((%SL-ACC3 ($EMPTY-DICT)) (|k| :%UNBOUND)) (WHILE (< %SL-INDEX7 %SL-COUNT6) \
+								(SETQ |k| (AREF %SL-ITEMS5 %SL-INDEX7)) (SETQ %SL-INDEX7 (+ %SL-INDEX7 1)) \
+								($DICT-PUT %SL-ACC3 |k| |a|)) ($ITERATED %SL-SEQ4) %SL-ACC3))))
 								(SETQ |f| ($MAKE-FUNCTION "f" '("a" "t") NIL 2 NIL NIL #'|f|))"""),
 				// what the lowering knows of a string: two are joined as they stand, one
-				// and an operand that may be one behind a test; a division by a divisor
+				// and an operand that may be one behind a test, str of a known int is
+				// its decimal text; a division by a divisor
 				// that is no constant tests it against zero, over known ints too, and
 				// its quotient is never floor's: what is left of the dividend once the
 				// remainder is taken off, divided exactly
 				arguments("""
 						def g(a, b, s):
 						    t = "x" + str(a)
-						    return [t + "y", t + s, a % b, len(s) // len(t)]
+						    return [t + "y", t + s, str(len(s)) + t, a % b, len(s) // len(t)]
 						""",
 						"""
 								(DEFUN |g| (|a| |b| |s|) (LET ((|t| :%UNBOUND)) (SETQ |t| (%STRING-CONCAT "x" ($B-STR |a|))) \
 								($MAKE-LIST (%STRING-CONCAT |t| "y") (IF (STRINGP |s|) (%STRING-CONCAT |t| |s|) ($ADD |t| |s|)) \
+								(%STRING-CONCAT (%DECIMAL-PIECE ($B-LEN |s|)) |t|) \
 								(IF (AND (INTEGERP |a|) (INTEGERP |b|) (NOT (= |b| 0))) (MOD |a| |b|) ($MOD |a| |b|)) \
 								(LET* ((%SL-LEFT1 ($B-LEN |s|)) (%SL-RIGHT2 ($B-LEN |t|))) (IF (NOT (= %SL-RIGHT2 0)) \
 								(/ (- %SL-LEFT1 (MOD %SL-LEFT1 %SL-RIGHT2)) %SL-RIGHT2) ($FLOORDIV %SL-LEFT1 %SL-RIGHT2))))))

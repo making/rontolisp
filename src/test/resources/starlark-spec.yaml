@@ -208,11 +208,14 @@ cases:
   # defaults and names bound while lowering, a default being the one value the binder
   # hands out too; a tuple of targets takes a tuple of values with none made; a list,
   # tuple or dict of constants is made anew from quoted data each time; insert, pop and
-  # remove move a list's elements in place. sorted of 512 ints or more, or of as many
-  # items by int keys, that span less than 2^32 compares nothing (a radix sort, the
-  # greatest first or the smallest, items of one key in their order); an augmented
-  # assignment to a dict's item reads and stores through the item's cell, and a dict
-  # comprehension stores a key written twice once.
+  # remove move a list's elements in place. sorted of ints or of strings is the backend's
+  # own sort where it has one (the greatest first or the smallest, items of one key in
+  # their order; strings that share more than their first seven bytes, ints past 64
+  # bits), as split by a separator and join are, and extend moves its elements as one
+  # block; str of a known int and a template's %d, %i and {} of one are its decimal text
+  # (an int at either end of the fixnum range and past it, pieces of several bytes, more
+  # than four pieces); an augmented assignment to a dict's item reads and stores through
+  # the item's cell, and a dict comprehension stores a key written twice once.
   - name: what-the-lowering-knows-answers-as-the-generic-paths
     source: |
       def fast_add(a, b):
@@ -313,6 +316,29 @@ cases:
           e[1.0] *= 2
           return [d, e]
       print(fast_items({"a": 5, "l": []}, "a"))
+      def fast_bulk(n):
+          xs = []
+          x = 7
+          for i in range(n):
+              x = (x * 1103515245 + 12345) % 2147483648
+              xs.append(x % 1000)
+          ws = ["w" + str(v) for v in xs]
+          ls = ["a-long-prefix/" + str(v % 7) + "é" for v in xs]
+          by = sorted([(v, i) for i, v in enumerate(xs)], key = lambda p: "k%d" % (p[0] % 3), reverse = True)
+          far = sorted([v - 500 for v in xs] + [1 << 40, -(1 << 62), 1 << 31])
+          line = ", ".join(ws)
+          parts = line.split(", ")
+          parts.extend(parts[:3])
+          parts.append(parts.pop() + parts.pop(0))
+          grown = []
+          for v in xs[:40]:
+              grown.extend([v, v])
+          grown.extend(grown)
+          return [sorted(ws)[:3], sorted(ws, reverse = True)[:3], sorted(ls)[0], sorted(ls, reverse = True)[0], [p[1] for p in by[:4]], sorted(ws, key = lambda w: w[:2]) == sorted(ws, key = lambda w: w[:2], reverse = True)[::-1], far[:2], far[-2:], sorted(xs + [1 << 70])[-1] == 1 << 70, len(line), parts == ws[1:] + ws[:2] + [ws[2] + ws[0]], len(grown), grown[80:82] == xs[:1] * 2, "a--b----c".split("--"), "a--b----c".split("--", 1), "é|ö||".split("|"), len("é|ö||".split("|")[0]), "é".join(["ab"] * 3), len("é".join(["x"] * 70)), "".join([]), "|".join(("é",))]
+      print(fast_bulk(600), fast_bulk(5)[9:13])
+      def fast_text(i, s, big, b):
+          return ["item" + str(i), s + ":" + str(i % 7), "{}-{}".format(i, "x"), "%d:%s" % (i, s), "%d|%s|%i|%r" % (big, big, -i, s), str(b) + "{}{}".format(b, big), "é" + str(-i) + "😀", len("é" + str(-i) + "😀"), "%s%s%s%s%s%s" % (i, s, i, s, big, i)]
+      print(fast_text(42, "s", 1 << 70, True), fast_text(-1073741824, "", -(1 << 31), None))
     expected: |
       3 ab [1, 2] 3.5 9223372036854775808
       [True, True, False, False, False, True, False, True] [False, False, True, True, False, True, False, True] [True, True, False, False, False, True, False, True] [False, True, False, True, True, False, False, True]
@@ -329,6 +355,8 @@ cases:
       [2, 3, 1, -3, 2, 0] [2.5, -4.0, 1, -3, 0.5, -1.0] [2, 168655945816773043346, 0, -7, 0, 0]
       [[-4, -4, -4, -4], [4, 4, 4], [1, 6, 25, 33, 34], True] [[1073610719, 1072588016, 1068574294], [1, 2, 25, 33, 34], True] [[22, 29, 31, 35, 37], True] [-5, 3] [1.5, 2] ["b", "é"]
       [{"a": ["a", 5], "l": 5}, {0: 6, 1: 8, 2: 5}]
+      [["w0", "w10", "w10"], ["w991", "w990", "w982"], "a-long-prefix/0é", "a-long-prefix/6é", [0, 2, 5, 11], False, [-4611686018427387904, -500], [2147483648, 1099511627776], True, 3523, True, 160, True, ["a", "b", "", "c"], ["a", "b----c"], ["é", "ö", "", ""], 1, "abéabéab", 139, "", "é"] [28, True, 20, False]
+      ["item42", "s:0", "42-x", "42:s", "1180591620717411303424|1180591620717411303424|-42|\"s\"", "TrueTrue1180591620717411303424", "é-42😀", 5, "42s42s118059162071741130342442"] ["item-1073741824", ":6", "-1073741824-x", "-1073741824:", "-2147483648|-2147483648|1073741824|\"\"", "NoneNone-2147483648", "é1073741824😀", 12, "-1073741824-1073741824-2147483648-1073741824"]
   # A string's elements are code points; hash is the specification's; equal keys are one
   # dict key, which keeps its place when stored again and goes last once removed; a float
   # prints as Go's %g, NaN equals itself; a function is a key by identity.

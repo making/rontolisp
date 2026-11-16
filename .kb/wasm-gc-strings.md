@@ -99,7 +99,10 @@ round: the count was 8% of a Starlark program of `"item" + str(i)` and `len`
   and the bytes from one GC array to the other -- a loop up to sixteen, `array.copy` past
   them (a call into the engine costs more than the loop does for a few) -- with the count
   the bounds give (`end - start`; a trim leaves it to `length`). It went through the linear
-  scratch and `_str_fresh` before, two byte loops whatever the length.
+  scratch and `_str_fresh` before, two byte loops whatever the length. The loop against
+  `array.copy` was not measured apart here; the same loop in `_string_concat` and in a
+  split's pieces measured no faster or slower than `array.copy` later the same day
+  (`.kb/bulk-primitives.md`, "Measured"), so those call it whatever the length.
 - Not counted: `_str_fresh` (what the capture mode renders: a float, a list), a string
   stream's text, the host boundary's.
 - Sizes (`.wasm`, default level, with the hash table's site of `.kb/hash-tables.md` and
@@ -111,6 +114,42 @@ round: the count was 8% of a Starlark program of `"item" + str(i)` and `len`
 - Pinned by ci-spec `format-nil-princ-to-string-prin1-to` (a fixnum's text at both ends of
   the i31 range and past it, the length, an index and a slice of what is joined from such
   texts, a literal with characters of several bytes and a slice).
+
+## A chain of concatenations is one string (2026-11-16)
+`format nil` and a Starlark template lower to a chain of `%string-concat` whose leaves are
+literals, `(%princ-piece x)` and `(%decimal-piece x)`: each link made a byte array and a
+string, and each number its text first -- five pairs for `"~a-~d:~a"`.
+
+- **`WasmStringConcatCompiler` flattens the chain** where the level trades size for speed
+  and the body is no async resume: the operands of nested `%string-concat` forms, left to
+  right (the order the chain evaluates them in), go four at a time to `_str_cat`
+  (`WasmBulkRuntimeBuilder.CAT`, behind the bulk primitives of
+  `.kb/bulk-primitives.md`; nil pads a call of fewer), the string so far the first piece
+  of the next call. Taken for three pieces or more, or for two when one is a rendered
+  value.
+- **A piece is a string or a fixnum.** `(%princ-piece x)` -- and `(%decimal-piece x)`
+  where it is that -- with no printer control and no `print-object` hook in play
+  (`renderedOperand`: `expandPrintObjectHook` answers null, the program has no
+  `%decimal-text`) hands `x` over as it is when it is an i31, and `_str_cat` writes its
+  digits where they go; any other value is `_princ_to_str` at the site, where it is
+  evaluated. `_str_cat` sums the lengths (and the characters, while every string has its
+  count), makes one array, copies each string's content and writes each fixnum from its
+  last digit back.
+- **A piece is taken as it is when it is evaluated**: a mutable character vector is
+  normalized at the site (the test inline, `_charvec_to_str` behind it), a value that is
+  no fixnum rendered there. So what a later piece's evaluation writes is not read, as
+  the chain did not read it.
+- Measured (user seconds of the precompiled module): Starlark `strings.star` 1.00 -> 0.75
+  s with its `str(i)` and template pieces lowered to `%decimal-piece`
+  (`.kb/starlark-frontend.md`, "A sequence at a time"), `parts/s1` 0.34 -> 0.22,
+  `parts/s3` 0.32 -> 0.20. The ci-spec corpus as one module: 15,644,945 -> 15,662,391 B
+  (a rendered piece's i31 test and a string piece's normalization are inline; a link's
+  call is gone), its 9,976 lines of output the same.
+- Pinned by ci-spec `format-nil-princ-to-string-prin1-to` (`ci-fmt-chain`,
+  `ci-fmt-mutable`: a fixnum at each end of its range and past it, a symbol, a float and
+  a list among the pieces, characters of several bytes with the length, a string
+  something wrote, two pieces and six) and `starlark-spec.yaml`
+  `what-the-lowering-knows-answers-as-the-generic-paths` (`fast_text`).
 
 ## HEAP_PTR is a stack pointer; identity is a counter
 Two disciplines share the linear scratch at `HEAP_PTR_ADDR`:

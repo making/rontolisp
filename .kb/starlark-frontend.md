@@ -87,6 +87,7 @@ and every user surface says so (`--source-language` help, the title of
 | `a + b`, `a == b`, `a[i]`, `a[i:j]`, `x in y` | `(%starlark-add a b)`, `-equal`, `-index`, `-slice`, `-in`: generic, dispatching at run time; `!=` and `not in` are `(not ..)` of them |
 | `+ - * // %`, a comparison, `==`, `!=` over operands that MAY be ints | `(if (and (integerp a) (integerp b)) (+ a b) (%starlark-add a b))`, an operand that is more than a variable bound first; `//` and `%` by a divisor that is no constant test it too, `(if (and (integerp a) (integerp b) (not (= b 0))) (mod a b) (%starlark-mod a b))`, also over known ints ("What the lowering knows") |
 | `s + t` over KNOWN strings; over one known string | `(%string-concat s t)`; `(if (stringp t) (%string-concat s t) (%starlark-add s t))` |
+| `str(i)` over a KNOWN int; a template's `{}`, `%s`, `%d`, `%i` of one | `(%decimal-piece i)`: what `%starlark-b-str` and `%starlark-conversion` answer for an int, with no call of them (2026-11-16). On wasm a chain of `%string-concat` over such pieces is one string made once, the digits written where they go ([wasm-gc-strings.md](wasm-gc-strings.md), "A chain of concatenations is one string") |
 | `"{}-{!r}".format(a, b)`, `"%d: %s" % (a, b)`: a template written as a literal over positional arguments or a tuple expression | `(%string-concat (%string-concat (%starlark-b-str a) "-") (%starlark-b-repr b))`: the template is read while lowering (`format`, `interpolation`), every argument evaluated first, in order (bound when it is more than a variable), then one piece per field -- `%starlark-b-str`, `-b-repr`, `(%starlark-conversion a #\d)` for the other `%` conversions -- joined, past four pieces by `(%starlark-concat-pieces (list ..) n)`; a template whose reading ends in an error, a named field, a format spec, more than 64 pieces, any other template or right operand is the run time's |
 | the same and `& \| ^ << >> ~`, unary `-`/`+`, over KNOWN ints | `(+ a b)`, `(< a b)`, `(= a b)`, `(mod a 7)`, `(ash a -1)` for `a // 2` (a power of two; any other divisor `(/ (- a (mod a 7)) 7)`, never `floor`: "Against CPython"), `(logand a b)`, `(ash a 3)`, `(- a)`: no test, no helper (a shift only by a constant count that is not negative) |
 | `x == None`, `x != True` | `(eq x :none)`, `(not (eq x t))`: `None`, `True` and `False` equal themselves only |
@@ -246,7 +247,7 @@ forms are the ones the backends already fuse ([jvm-int-fusion.md](jvm-int-fusion
 
 ## The run-time library's rules
 
-`starlark.lisp` keeps six, the first four stated at its top:
+`starlark.lisp` keeps seven, the first four stated at its top:
 
 - **A structure accessor is called only behind that structure's predicate.** An accessor
   handed an instance of ANOTHER structure passes the instance check
@@ -287,7 +288,16 @@ forms are the ones the backends already fuse ([jvm-int-fusion.md](jvm-int-fusion
   `_str_lit` and a table read -- so `(%starlark-string-receiver s "split")` made the name
   on every call to hand it to a check that passes; `_str_lit` was 7% of `methods.star`.
   A list or dict method's `-receiver` call sits behind its own test the same way
-  (`%starlark-m-append`).
+  (`%starlark-m-append`; `pop()` of a list's last element since 2026-11-16).
+- **A whole sequence is the backend's when it has a function for it** (2026-11-16):
+  `split` by a separator, `join` and `sorted` ask `%string-split`, `%string-join` and
+  `%sort-by-keys` first ([bulk-primitives.md](bulk-primitives.md)) and run their own
+  loop -- `%starlark-split-vector`, `-join-vector`, `-merge-sorted-vector` -- for nil,
+  which is every call on the interpreter and the JVM. The loop is a `defun` of its own,
+  so on wasm it is one function nothing reaches for a string. `extend` and `+=` of lists
+  give the vector its room once and move the elements with one `replace`
+  (`%starlark-push-all`: a full vector grows at its next push by what the push asks for,
+  here what it lacks and as much again as it has at least).
 
 Also: `isalpha`/`isdigit`/`isalnum`/`isspace` test ASCII codes themselves (`alpha-char-p`
 is ASCII-only on wasm, `.todo/269`), while `islower`/`isupper`/`istitle`/`title` tell a
@@ -722,8 +732,9 @@ to CPython on is below: the `//`, not `flags[j]`.
 time than `python3` on the same file** (best of three, the whole process). Met on
 the JVM for five of the eleven (`fib`, `loop`, `calls`, `mixed`, `listidx`) and on
 wasm and the component for four (`bench`, `fib`, `loop`, `calls`) -- five with `mixed` since
-"The list element on wasm", six with `listidx` since "An int test compiled twice" and
-seven with `dicts` since "Where the time is", all below; where it is not, the cost left is
+"The list element on wasm", six with `listidx` since "An int test compiled twice",
+seven with `dicts` since "Where the time is" and ten with `comps`, `strings` and `sorting`
+since "A sequence at a time", all below; where it is not, the cost left is
 a backend's and is named below with the item that carries it.
 
 The five programs above cover integers, calls and `range`. Six were added, each about a
@@ -1082,17 +1093,14 @@ guest profiler or the hand-edited modules had shown:
 
 Made, in the library and the lowering, so on every backend:
 
-- **`sorted` of ints compares nothing** (`%starlark-radix-sorted`): 512 items or more whose
-  keys -- themselves, or what `key` answers -- are all ints spanning less than 2^32 are
-  sorted by a radix sort from the low digit up (8 bits a digit below 2,048 items, 11 from
-  there) over the keys less the smallest, the greatest less the key for `reverse`. What
-  moves is a key and, under a `key`, the place of its item, both in `(unsigned-byte 32)`
-  vectors; the items are read once at the end. A digit is N steps with no branch the data
-  decides; a merge is N log N of them. Stable both ways, as the merge is. Anything else --
-  fewer items, a float, a string, a span of 2^32 -- is the merge sort, which takes its
-  cells off the front as the recursion reaches them (`%starlark-sort-cells`: no half is
-  walked to be found) and asks `%string-order` first for a list that starts with a string
-  (`%starlark-merge-strings`).
+- **`sorted` of ints compared nothing**: a radix sort in the library
+  (`%starlark-radix-sorted`, 512 items or more whose keys are ints spanning less than
+  2^32, a key and its item's place moved through `(unsigned-byte 32)` vectors). **Gone
+  the same day**: the backend sorts ints and strings itself where it has a sort
+  (`%sort-by-keys`, "A sequence at a time" below), and the library keeps the merge sort
+  alone for everything else -- it takes its cells off the front as the recursion reaches
+  them (`%starlark-sort-cells`: no half is walked to be found) and asks `%string-order`
+  first for a list that starts with a string (`%starlark-merge-strings`).
 - **`a[k] op= v` on a dict is one look-up** (`%starlark-item-cell`, "The lowering table"),
   a dict comprehension's store one (`%starlark-dict-put`), and a key is asked for an int
   before a string (an int failed the string test's two casts first).
@@ -1131,8 +1139,8 @@ before -> after:
 
 - **Seven of the eleven are under CPython on wasm** and on the component (`dicts` with
   them, 0.83 against 0.89); four are not -- `comps` 0.93 / 0.89, `methods` 2.00 / 1.09,
-  `strings` 1.50 / 1.14, `sorting` 2.14 / 1.00 -- and what each still waits on is
-  `.todo/j64`. The JVM column moves with the library: `dicts`, `comps`, `methods` and
+  `strings` 1.50 / 1.14, `sorting` 2.14 / 1.00 -- and what each waited on was made
+  since ("A sequence at a time" below; `methods` is still over). The JVM column moves with the library: `dicts`, `comps`, `methods` and
   `strings` down, `sorting` up (below).
 - Step by step (wasm, user seconds of the precompiled module): `dicts.star` 1.15 -> 0.84
   with the look-ups; `sorting.star` 2.77 -> 1.97 the radix sort -> 1.88 its helpers typed;
@@ -1147,18 +1155,20 @@ before -> after:
 - **A sorted string is four cache misses a comparison.** A third of `_str_order`'s samples
   under `sorted(words)` are the four instructions that first load an operand's header --
   two string structs, two byte arrays; 50,000 strings are 4 MB -- so its walk's shape
-  moved nothing (`.kb/string-search-runtime.md`), and `sorted` of strings stays three
-  times CPython's.
-- **The JVM pays the radix sort's compilation.** Warm, a pass over 50,000 keys is 1.4-2.4
-  ms there; but C2 makes 109 KB of code of the pass's 495 bytes (the packed vector's
-  generic accessors inlined) in 0.7 s and makes it again after each branch it had not
-  seen, ten seconds of compiler threads over `sorting.star`'s 24 rounds: 2.72 -> 3.10 s
-  in the table's run, 2.9-3.6 against 3.2-4.0 over four runs of each in turn. With
-  C1 alone (`-XX:TieredStopAtLevel=1`) the same program is 10.6 -> 8.9 s.
-- **The bytes**: a program that calls `sorted` carries the radix sort (9 KB of wasm) and,
-  with its first packed vector, the arms that vector opens in every generic access of the
-  library (10 KB; over general vectors declared `(vector t)` the sort of ints is a fifth
-  slower, 0.63 against 0.50 s for `parts/o1`, and that much smaller). Sizes (`.class` /
+  moved nothing (`.kb/string-search-runtime.md`), and `sorted` of strings stayed three
+  times CPython's until a key was read once ("A sequence at a time").
+- **The JVM paid the radix sort's compilation** (while the library had it). Warm, a pass
+  over 50,000 keys was 1.4-2.4 ms there; but C2 made 109 KB of code of the pass's 495
+  bytes (the packed vector's generic accessors inlined) in 0.7 s and made it again after
+  each branch it had not seen, ten seconds of compiler threads over `sorting.star`'s 24
+  rounds: 2.72 -> 3.10 s in the table's run, 2.9-3.6 against 3.2-4.0 over four runs of
+  each in turn. With C1 alone (`-XX:TieredStopAtLevel=1`) the same program was 10.6 ->
+  8.9 s.
+- **The bytes** (while the library had it): a program that called `sorted` carried the
+  radix sort (9 KB of wasm) and, with its first packed vector, the arms that vector opens
+  in every generic access of the library (10 KB; over general vectors declared `(vector
+  t)` the sort of ints was a fifth slower, 0.63 against 0.50 s for `parts/o1`, and that
+  much smaller). Sizes (`.class` /
   `.wasm` / component): `examples/starlark/targets.star` 215,209 / 218,785 / 222,841 ->
   253,163 / 246,745 / 250,676, at `--optimize=size` 149,376 -> 166,818 B of wasm;
   `print(1 + 2)` 109,440 / 103,934 / 107,503 -> 109,443 / 104,877 / 108,446. Common Lisp
@@ -1182,6 +1192,106 @@ before -> after:
   (`rust/mutation_during_iteration.star`: `dict[k] += 1` in a loop over it); the backend's
   halves by ci-spec `typed-vector-struct-packs-and-replace-bulk`,
   `format-nil-princ-to-string-prin1-to` and `string-comparison-family`.
+
+### A sequence at a time (2026-11-16)
+
+What "Where the time is" left to `.todo/j64`: four programs over CPython on wasm, with a
+plan -- a primitive each for `sorted` of strings, `split` and `join`, then a loop's
+counter for `comps`. The primitives were made. **The counter's premise overturned**: the
+sampler's instruction counts put `comps.star` in the GROWTH of the vector its
+comprehensions push into, not in its loops' heads, and three things nobody had named
+were in the way of the others -- `stringp` asked of a vector just made, a list extended
+an element a call, a number's text and each link of a concatenation a pair of objects.
+
+Made, in the wasm backend, for every language:
+
+- **`%string-split`, `%string-join`, `%sort-by-keys`** ([bulk-primitives.md](bulk-primitives.md)):
+  one function each over a string's bytes or a vector's storage; nil on the interpreter
+  and the JVM. `sorted` reads a key once -- an int's 64 bits, a string's first seven
+  bytes and its length -- and sorts the keys' places by a radix sort, strings past the
+  prefix by a merge of their runs. The library's own radix sort and its packed vectors
+  are gone (and with them what "Where the time is" wrote of the JVM's compile time and
+  of the 19 KB a `sorted` cost).
+- **`vector-push-extend` grows with one `array.copy`** (`.kb/adjustable-arrays.md`, "The
+  growth policy"): the growth was an element loop that walked the header and cast its
+  counter at every element. `comps.star` 0.86 -> 0.66 s by that alone.
+- **A `make-array` with no element type proves the general kind**
+  (`.kb/declarations-type-checks.md`, source 2), whatever its size and with a fill
+  pointer: `(setf (aref v i) x)` on such a `let`-bound `v` asked `stringp` of it at
+  every store -- 11% of `list(range(n))`.
+- **A chain of `%string-concat` is one string** (`.kb/wasm-gc-strings.md`, "A chain of
+  concatenations is one string"): up to four pieces a call of `_str_cat`, a fixnum's
+  digits written where they go.
+
+In the library and the lowering, on every backend: `str` of a known int and a template's
+`{}`, `%s`, `%d`, `%i` of one are `(%decimal-piece i)` ("The lowering table"); `extend`
+and `+=` of lists take their room once and move one block; `pop()` takes the last
+element at its head ("The run-time library's rules").
+
+Seconds as above (`time.sh`, best of three, same machine, the two builds run in turn),
+before -> after:
+
+| program | JVM | WASM | component | CPython | `.wasm` bytes |
+|---|---|---|---|---|---|
+| `bench.star` | 0.15 -> 0.16 | 0.04 -> 0.05 | 0.04 -> 0.04 | 0.14 | 138,255 -> 138,184 |
+| `fib.star` | 0.27 -> 0.25 | 0.17 -> 0.17 | 0.17 -> 0.22 | 1.46 | 137,416 -> 137,344 |
+| `loop.star` | 0.17 -> 0.20 | 0.37 -> 0.34 | 0.37 -> 0.33 | 1.67 | 105,799 -> 106,627 |
+| `calls.star` | 0.25 -> 0.25 | 0.14 -> 0.14 | 0.13 -> 0.14 | 0.74 | 119,114 -> 119,573 |
+| `mixed.star` | 0.69 -> 0.72 | 0.59 -> 0.52 | 0.53 -> 0.54 | 1.23 | 178,254 -> 177,917 |
+| `listidx.star` | 1.22 -> 1.11 | 0.98 -> 1.02 | 0.94 -> 0.96 | 1.18 | 181,499 -> 181,655 |
+| `dicts.star` | 0.84 -> 0.82 | 0.87 -> 0.87 | 0.88 -> 0.86 | 0.92 | 182,005 -> 182,183 |
+| `comps.star` | 1.75 -> 1.65 | 0.94 -> 0.69 | 0.94 -> 0.70 | 0.90 | 176,608 -> 176,860 |
+| `methods.star` | 1.97 -> 1.72 | 2.24 -> 1.45 | 2.02 -> 1.45 | 1.11 | 174,439 -> 175,832 |
+| `strings.star` | 2.23 -> 2.48 | 1.54 -> 0.91 | 1.62 -> 0.89 | 1.14 | 140,638 -> 124,965 |
+| `sorting.star` | 2.93 -> 3.07 | 1.98 -> 0.73 | 1.99 -> 0.70 | 0.97 | 208,637 -> 195,700 |
+
+- **Ten of the eleven are under CPython on wasm** and on the component; `methods.star`
+  is not (1.45 against 1.11), and what it still waits on is `.todo/j65`. `dicts` is under
+  by a twentieth and was level in one run of three (0.92 / 0.91). The JVM column is its
+  spread from run to run: `strings` 2.28-2.43 before and 2.29-2.55 after over four runs
+  each, `sorting` 3.09-3.31 and 3.30-3.66 over three (its ints are the merge sort's again).
+- Step by step (wasm, user seconds of the precompiled module, a pair measured in turn):
+  `sorting.star` 1.92 -> 0.70 with `%sort-by-keys`; `comps.star` 0.91 -> 0.86 the
+  `make-array` kind -> 0.66 the growth; `strings.star` 1.03 -> 0.95 the growth -> 0.75
+  the chain; `methods.star` 1.67 -> 1.58 the three primitives -> 1.53 `pop` and `extend`
+  -> 1.35 the growth.
+- The parts (`parts/*.star` of the j63 artefacts, user seconds, before -> after against
+  CPython): `sorted` of ints both ways 0.49 -> 0.19 / 0.41, by a key 0.40 -> 0.24 /
+  0.31, of strings 0.97 -> 0.19 / 0.29; `split` 0.52 -> 0.20 / 0.22, `join` 0.44 -> 0.24
+  / 0.16, both of 1,200,000 pieces 0.78 -> 0.36 / 0.23; `+` and `str` 0.36 -> 0.22 /
+  0.43, `format` and `%` 0.28 -> 0.18 / 0.45; `append` through a `def` 0.16 -> 0.12 /
+  0.16, `pop` 0.32 -> 0.22 / 0.13, `list(xs)` and `extend` 0.38 -> 0.11 / 0.24; a dict
+  through a `def` 0.27 -> 0.31 / 0.55, `upper().lower().strip()` 0.21 -> 0.21 / 0.18,
+  `startswith`, `find`, `count` 0.30 -> 0.32 / 0.22.
+- **The bytes**: a program that sorts is smaller (`sorting.star` 12,937 B, the library's
+  radix sort and the arms its packed vectors opened), one that formats ints too
+  (`strings.star` 15,673 B: `str` of a known int no longer reaches `%starlark-b-str`,
+  nor through it `repr`); one that does neither carries `_str_cat` and its sites
+  (`loop.star` 828 B). Sizes (`.class` / `.wasm` / component): `print(1 + 2)` 109,437 /
+  104,877 / 108,446 -> 109,437 / 105,704 / 109,274; `examples/starlark/targets.star`
+  253,157 / 246,745 / 250,676 -> 225,876 / 216,807 / 220,720, at `--optimize=size`
+  166,818 -> 146,696 B of wasm. Common Lisp programs (`.wasm`, default level):
+  `size-report/programs/zlib` 152,940 -> 155,109 (its `format nil` chains),
+  `bench-report/programs/sort.lisp` 21,410 -> 21,748, `string.lisp`, `hash.lisp`,
+  `sieve.lisp`, `list.lisp` and `hello_world` unchanged; their times do not move (`sort`
+  0.33 / 0.35 s, `hash` 0.41 / 0.39, `string` 0.61 / 0.63).
+- **Not made, measured**: `_sort_keys` as a merge over the keys' words (14.5 ms a sort of
+  50,000 ints, the library's radix sort 10, the radix sort made 3.7: a merge mispredicts
+  every other branch); a byte loop for a short operand in `_string_concat` and in a
+  split's pieces (slower than `array.copy`, [bulk-primitives.md](bulk-primitives.md));
+  `StringValuedForms.certainlyString` as the licence to skip a piece's normalization (a
+  piece routed through a printer control is a character vector: the ci-spec corpus
+  trapped).
+- **Left** (`.todo/j65`): `methods.star` -- `find` and `count` 16% of it (`_str_search`'s
+  offsets and its second walk for the index), `split` 12.5% (25 objects a call), a
+  literal evaluated a call (`_str_lit` 6.4%: `:none`, `:%unset`, a string argument), the
+  dict's store and look-up 20%, `append` and `pop` through a `def` 7% each; and the JVM,
+  where the three primitives have no arm.
+- Pinned by `starlark-spec.yaml` `what-the-lowering-knows-answers-as-the-generic-paths`
+  (`fast_bulk`, `fast_text`), `StarlarkLoweringTest` (the rows of a template and of `str`
+  over a known int), ci-spec `format-nil-princ-to-string-prin1-to` (the chain) and the
+  conformance corpus; the backend's halves also by ci-spec `vector-push-extend-growth`
+  and the array suites (`ArefRankAndSubscriptChecksFixture`).
 
 ## Positions
 

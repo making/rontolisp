@@ -1566,27 +1566,42 @@ final class WasmArrayCompiler {
 			return null;
 		}
 		List<LispVal> args = cons.toList();
-		if (args.size() < 2 || !(args.get(1) instanceof LispInteger)) {
-			// Rank-1 with a literal size only; a dims list or computed size keeps the
-			// generic path.
+		if (args.size() < 2 || args.size() % 2 != 0) {
 			return null;
 		}
 		LispVal elementType = null;
+		boolean elementTypeGiven = false;
+		boolean adjustableShape = false;
 		for (int i = 2; i + 1 < args.size(); i += 2) {
 			if (!(args.get(i) instanceof LispSymbol key)) {
 				return null;
 			}
 			switch (key.name()) {
-				case LispNames.ELEMENT_TYPE_KEYWORD -> elementType = args.get(i + 1);
+				case LispNames.ELEMENT_TYPE_KEYWORD -> {
+					elementType = args.get(i + 1);
+					elementTypeGiven = true;
+				}
 				case LispNames.INITIAL_ELEMENT_KEYWORD, LispNames.INITIAL_CONTENTS_KEYWORD -> {
 					// Neither changes the representation.
 				}
+				case LispNames.FILL_POINTER_KEYWORD, LispNames.ADJUSTABLE_KEYWORD -> adjustableShape = true;
 				default -> {
-					// :fill-pointer / :adjustable / :displaced-to (or a computed keyword)
-					// build the general adjustable shapes -- prove nothing here.
+					// :displaced-to (or a computed keyword): a view is what its target
+					// is -- prove nothing here.
 					return null;
 				}
 			}
+		}
+		if (!elementTypeGiven) {
+			// No element type is the general representation whatever the dimensions --
+			// a size, a list of them -- and with a fill pointer or adjustable: what an
+			// access of the GENERAL kind emits checks the rank itself.
+			return DeclaredArrayTypes.Kind.GENERAL;
+		}
+		if (!(args.get(1) instanceof LispInteger) || adjustableShape) {
+			// A packed representation is rank-1 with a literal size only, and has no
+			// fill pointer: a dims list or computed size keeps the generic path.
+			return null;
 		}
 		LispVal resolved = LispMacroExpander.resolveElementTypeAlias(elementType, ctx.closRegistry);
 		if (resolved == null) {
@@ -3811,7 +3826,6 @@ final class WasmArrayCompiler {
 		// counters stay boxed as i31 (temps are (ref null eq)).
 		int newCapSlot = ctx.allocTemp();
 		int newDataSlot = ctx.allocTemp();
-		int idxSlot = ctx.allocTemp();
 		int capSlot = ctx.allocTemp();
 		getLocal(ctx, headerSlot);
 		castConsGet(ctx, 0);
@@ -3848,37 +3862,20 @@ final class WasmArrayCompiler {
 		WasmEmitHelper.castI31GetS(ctx);
 		arrayNew(ctx);
 		setLocal(ctx, newDataSlot);
-		// copy the old elements: for idx in 0..fp-1: newData[idx] = data[idx]
+		// The old elements, the fill pointer's worth of them, as one array.copy: an
+		// element loop here walked the header and cast its counter at every one, and a
+		// vector grown by pushes copies each element once or twice over its life.
+		getBuckets(ctx, newDataSlot);
 		i32Const(ctx, 0);
-		boxI31(ctx);
-		setLocal(ctx, idxSlot);
-		ctx.writer.write(Instruction.BLOCK, 0x40);
-		ctx.writer.write(Instruction.LOOP, 0x40);
-		getLocal(ctx, idxSlot);
-		WasmEmitHelper.castI31GetS(ctx);
+		getLocal(ctx, headerSlot);
+		getData(ctx);
+		i32Const(ctx, 0);
 		getLocal(ctx, metaSlot);
 		castConsGet(ctx, 0);
 		WasmEmitHelper.castI31GetS(ctx);
-		ctx.writer.write(Instruction.I32_GE_S);
-		ctx.writer.write(Instruction.BR_IF, 1);
-		getBuckets(ctx, newDataSlot);
-		getLocal(ctx, idxSlot);
-		WasmEmitHelper.castI31GetS(ctx);
-		getLocal(ctx, headerSlot);
-		getData(ctx);
-		getLocal(ctx, idxSlot);
-		WasmEmitHelper.castI31GetS(ctx);
-		arrayGet(ctx);
-		arraySet(ctx);
-		getLocal(ctx, idxSlot);
-		WasmEmitHelper.castI31GetS(ctx);
-		i32Const(ctx, 1);
-		ctx.writer.write(Instruction.I32_ADD);
-		boxI31(ctx);
-		setLocal(ctx, idxSlot);
-		ctx.writer.write(Instruction.BR, 0);
-		ctx.writer.write(Instruction.END); // loop
-		ctx.writer.write(Instruction.END); // block
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_COPY);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		// (cdr header).cdr = newData; dims[0] = newCap
 		getLocal(ctx, headerSlot);
 		castConsGet(ctx, 1);

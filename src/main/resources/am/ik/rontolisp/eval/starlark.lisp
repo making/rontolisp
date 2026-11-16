@@ -1333,8 +1333,20 @@
       (rontolisp::%starlark-add a b)))
 
 ;; Appends the elements the vector V has now to ITEMS, a list's vector; V may be ITEMS.
+;; The vector takes its room once and the elements move as one block: a full vector
+;; grows at its next push by what the push asks for -- here what it lacks, and as much
+;; again as it has at least, so a loop of appends copies each element a constant number
+;; of times.
 (defun rontolisp::%starlark-push-all (v items)
-  (dotimes (i (length v)) (vector-push-extend (aref v i) items)))
+  (let* ((n (length v)) (old (length items)) (room (array-dimension items 0)))
+    (if (> n 0)
+        (progn
+          (if (> (+ old n) room)
+              (progn
+                (setf (fill-pointer items) room)
+                (vector-push-extend nil items (max n room))))
+          (setf (fill-pointer items) (+ old n))
+          (replace items v :start1 old :end2 n)))))
 
 (defun rontolisp::%starlark-sub (a b)
   (cond ((and (integerp a) (integerp b)) (- a b))
@@ -2321,160 +2333,34 @@
               ((= merge 1) (rontolisp::%starlark-merge-strings a b))
               (t (rontolisp::%starlark-merge-sorted a b descending keys))))))
 
-;; COUNTS takes, per digit the mask DIGITS reads SHIFT bits up, the place of the first
-;; of the SIZE keys of KS with that digit once they stand in the order of their digits.
-(defun rontolisp::%starlark-radix-places (ks counts size shift digits)
-  (declare (type (simple-array (unsigned-byte 32) (*)) ks counts))
-  ;; Each bound and each step is masked: a variable whose range the compiled loop can
-  ;; read off its assignments is kept and stepped unboxed on wasm
-  ;; (.kb/wasm-unboxed-locals.md, "The exact flavour"). No vector is 2^30 long.
-  (let ((n (logand size 1073741823))
-        (mask (logand digits 65535))
-        (down (logand shift 31))
-        (sum 0)
-        (i 0))
-    (loop while (<= i mask)
-          do (setf (aref counts i) 0) (setq i (logand (+ i 1) 1073741823)))
-    (setq i 0)
-    (loop while (< i n)
-          do
-            (let ((d (logand (ash (aref ks i) (- down)) mask)))
-              (setf (aref counts d) (+ (aref counts d) 1)))
-            (setq i (logand (+ i 1) 1073741823)))
-    (setq i 0)
-    (loop while (<= i mask)
-          do
-            (let ((c (aref counts i)))
-              (setf (aref counts i) sum)
-              (setq sum (logand (+ sum c) 1073741823)))
-            (setq i (logand (+ i 1) 1073741823)))))
-
-;; One digit of %starlark-radix-sorted: the SIZE keys of KS, and with them their
-;; places of XS when CARRIED, go to KS2 and XS2 in the order of the digit the mask
-;; DIGITS reads SHIFT bits up, keys of one digit in the order they stood in. COUNTS is
-;; %starlark-radix-places' answer for the digit.
-(defun rontolisp::%starlark-radix-pass
-    (ks ks2 xs xs2 carried counts size shift digits)
-  (declare (type (simple-array (unsigned-byte 32) (*)) ks ks2 xs xs2 counts))
-  (let ((n (logand size 1073741823))
-        (mask (logand digits 65535))
-        (down (logand shift 31))
-        (i 0))
-    (loop while (< i n)
-          do
-            (let* ((k (aref ks i))
-                   (d (logand (ash k (- down)) mask))
-                   (place (aref counts d)))
-              (setf (aref counts d) (+ place 1))
-              (setf (aref ks2 place) k)
-              (if carried (setf (aref xs2 place) (aref xs i))))
-            (setq i (logand (+ i 1) 1073741823)))))
-
-;; The N keys of KEYS, ints between LO and HI, into KS as %starlark-radix-sorted
-;; sorts them: less LO, or HI less the key when DESCENDING. When CARRIED each key's
-;; place goes into XS beside it.
-(defun rontolisp::%starlark-radix-keys (keys ks xs carried n lo hi descending)
-  (declare (type (vector t) keys)
-           (type (simple-array (unsigned-byte 32) (*)) ks xs))
-  (dotimes (i n)
-    (setf (aref ks i) (if descending (- hi (aref keys i)) (- (aref keys i) lo)))
-    (if carried (setf (aref xs i) i))))
-
-;; The list vector %starlark-radix-sorted answers: when CARRIED the items of ELEMENTS
-;; at the places XS holds, in its order, else the ints the keys of KS stand for.
-(defun rontolisp::%starlark-radix-items
-    (ks xs elements carried n lo hi descending)
-  (declare (type (simple-array (unsigned-byte 32) (*)) ks xs))
-  (let ((items (make-array n :adjustable t :fill-pointer n)))
-    (declare (type (vector t) items))
-    (dotimes (i n)
-      (setf (aref items i)
-            (cond (carried (aref elements (aref xs i)))
-                  (descending (- hi (aref ks i)))
-                  (t (+ lo (aref ks i))))))
-    items))
-
-;; KEYS is a vector of N values, N at least 1, and ELEMENTS a vector of the N items
-;; they are the keys of, or nil when the keys are the items themselves. When every key
-;; is an int and they span less than 2^32: a fresh list vector of the items in the order
-;; of their keys -- from the greatest down when DESCENDING --, items of one key in the
-;; order they stood in. Else nil. A radix sort from the low digit up over the keys less
-;; the smallest (the greatest less the key, descending): N steps a digit and not one
-;; comparison, where a merge is N log N of them. What moves is a key and, under a key
-;; function, the place of its item, both in vectors of (unsigned-byte 32); the items
-;; are read once, at the end (.kb/starlark-frontend.md, "Where the time is").
-(defun rontolisp::%starlark-radix-sorted (keys elements n descending)
-  (let ((lo (aref keys 0)) (hi (aref keys 0)) (i 0) (ints t))
-    (loop while (and ints (< i n))
-          do
-            (let ((k (aref keys i)))
-              (if (integerp k)
-                  (progn
-                    (if (< k lo) (setq lo k))
-                    (if (> k hi) (setq hi k)))
-                  (setq ints nil))) (setq i (+ i 1)))
-    (if (and ints (< (- hi lo) 4294967296))
-        (let* ((bits (integer-length (- hi lo)))
-               (width (if (< n 2048) 8 11))
-               (mask (- (ash 1 width) 1))
-               (carried (if elements t nil))
-               (ks (make-array n :element-type '(unsigned-byte 32)))
-               (ks2 (make-array n :element-type '(unsigned-byte 32)))
-               ;; with nothing to carry the passes are handed the keys' own vectors
-               ;; for the places', which they then leave alone
-               (xs
-                (if carried
-                    (make-array n :element-type '(unsigned-byte 32))
-                    ks))
-               (xs2
-                (if carried
-                    (make-array n :element-type '(unsigned-byte 32))
-                    ks2))
-               (counts
-                (make-array (ash 1 width) :element-type '(unsigned-byte 32)))
-               (shift 0))
-          (rontolisp::%starlark-radix-keys keys ks xs carried n lo hi
-                                           descending)
-          (loop while (< shift bits)
-                do (rontolisp::%starlark-radix-places ks counts n shift mask)
-                  (rontolisp::%starlark-radix-pass ks ks2 xs xs2 carried counts
-                                                   n shift mask)
-                  (let ((k ks) (x xs))
-                    (setq ks ks2)
-                    (setq ks2 k)
-                    (setq xs xs2)
-                    (setq xs2 x)) (setq shift (+ shift width)))
-          (rontolisp::%starlark-radix-items ks xs elements carried n lo hi
-                                            descending))
-        nil)))
-
+;; `sorted`: the backend's own sort where it has one for these keys (%sort-by-keys:
+;; on wasm, ints and strings), else the merge sort below.
 (defun rontolisp::%starlark-b-sorted (x key reverse)
   (let* ((v (rontolisp::%starlark-element-vector x))
          (n (length v))
          (descending (rontolisp::%starlark-truth reverse))
          ;; a key function may write the list whose vector this is
          (elements (if (eq key :none) nil (rontolisp::%starlark-copy-vector v)))
-         (keys v))
+         (keys v)
+         (items (make-array n :adjustable t :fill-pointer n)))
     (if elements
         (progn
           (setq keys (make-array n))
           (dotimes (i n)
             (setf (aref keys i)
              (rontolisp::%starlark-call key (list (aref elements i)) nil)))))
-    ;; Below some five hundred items the digits' counts cost what the comparisons do.
-    (let ((radix
-           (if (>= n 512)
-               (rontolisp::%starlark-radix-sorted keys elements n descending)
-               nil)))
-      (if radix
-          (rontolisp::%starlark-new-list radix)
-          (rontolisp::%starlark-new-list
-           (rontolisp::%starlark-merge-sorted-vector keys elements n
-                                                     descending))))))
+    (if (not (%sort-by-keys keys elements items descending))
+        (rontolisp::%starlark-merge-sorted-vector keys elements items n
+                                                  descending))
+    (rontolisp::%starlark-new-list items)))
 
-;; %starlark-radix-sorted's answer for any keys, by a merge sort.
-(defun rontolisp::%starlark-merge-sorted-vector (keys elements n descending)
-  (let ((cells nil) (items (make-array n :adjustable t :fill-pointer n)) (i n))
+;; KEYS is a vector of N values and ELEMENTS a vector of the N items they are the keys
+;; of, or nil when the keys are the items themselves: the items into the vector ITEMS in
+;; the order of their keys -- from the greatest down when DESCENDING --, items of one key
+;; in the order they stood in. A merge sort over a list of them.
+(defun rontolisp::%starlark-merge-sorted-vector
+    (keys elements items n descending)
+  (let ((cells nil) (i n))
     ;; Under a key function an item is (key . element).
     (loop while (> i 0)
           do (setq i (- i 1))
@@ -2618,8 +2504,20 @@
   :none)
 
 ;; list.pop([index]), dict.pop(key[, default]) and set.pop().
+;; `pop`. The last element of a list nothing forbids writing is taken at the head,
+;; with no call that names the method (.kb/starlark-frontend.md, "The run-time
+;; library's rules").
 (defun rontolisp::%starlark-m-pop (x a b)
-  (cond ((rontolisp::%starlark-list-p x)
+  (cond ((and (eq a :%unset) (rontolisp::%starlark-list-p x)
+              (null (car (rontolisp::%starlark-list-mutability x)))
+              (= (rontolisp::%starlark-list-iterating x) 0)
+              (> (length (rontolisp::%starlark-list-items x)) 0))
+         (let* ((items (rontolisp::%starlark-list-items x))
+                (popped (vector-pop items)))
+           ;; the vector lets go of what it held past its fill pointer
+           (setf (aref items (length items)) nil)
+           popped))
+        ((rontolisp::%starlark-list-p x)
          (if (not (eq b :%unset))
              (error "pop: got 2 arguments, want at most 1"))
          (rontolisp::%starlark-list-writable x "pop from")
@@ -2992,9 +2890,16 @@
   (rontolisp::%starlark-trim s (rontolisp::%starlark-cutset cutset "rstrip") nil
                              t))
 
+;; `join`: the backend's own join where it has one (%string-join), else the loop.
 (defun rontolisp::%starlark-m-join (sep xs)
   (if (not (stringp sep)) (rontolisp::%starlark-no-attribute sep "join"))
-  (let* ((items (rontolisp::%starlark-element-vector xs)) (n (length items)))
+  (let ((items (rontolisp::%starlark-element-vector xs)))
+    (or (%string-join items sep) (rontolisp::%starlark-join-vector items sep))))
+
+;; The strings of the vector ITEMS with the string SEP between them; an item that is no
+;; string is refused.
+(defun rontolisp::%starlark-join-vector (items sep)
+  (let ((n (length items)))
     (dotimes (i n)
       (if (not (stringp (aref items i)))
           (error "join: in list, want string, got ~a"
@@ -3071,30 +2976,38 @@
         (t (error "~a: for parameter maxsplit: got ~a, want int" name
                   (rontolisp::%starlark-type maxsplit)))))
 
+;; `split`: by white space, or the backend's own split where it has one
+;; (%string-split), else the loop.
 (defun rontolisp::%starlark-m-split (s sep maxsplit)
   (if (not (stringp s)) (rontolisp::%starlark-no-attribute s "split"))
   (let ((c (rontolisp::%starlark-split-limit maxsplit "split")))
     (if (eq sep :none)
         (rontolisp::%starlark-list-of (rontolisp::%starlark-fields s))
-        (let ((items (make-array 8 :adjustable t :fill-pointer 0))
-              (i 0)
-              (n (length s))
-              (m 0))
+        (progn
           (if (not (stringp sep))
               (rontolisp::%starlark-string-argument sep "split"))
-          (setq m (length sep))
-          (if (= m 0) (error "split: empty separator"))
-          (loop
-            (let ((r (if (= c 0) nil (rontolisp::%starlark-search sep s i n))))
-              (if (null r)
-                  (progn
-                    (vector-push-extend (rontolisp::%starlark-substring s i n)
-                                        items)
-                    (return nil)))
-              (vector-push-extend (rontolisp::%starlark-substring s i r) items)
-              (setq i (+ r m))
-              (setq c (- c 1))))
-          (rontolisp::%starlark-new-list items)))))
+          (rontolisp::%starlark-new-list
+           (or (%string-split s sep c)
+               (rontolisp::%starlark-split-vector s sep c)))))))
+
+;; The pieces of the string S between the leftmost C occurrences of the string SEP, all
+;; of them when C is negative, in a list's vector.
+(defun rontolisp::%starlark-split-vector (s sep c)
+  (let ((items (make-array 8 :adjustable t :fill-pointer 0))
+        (i 0)
+        (n (length s))
+        (m (length sep)))
+    (if (= m 0) (error "split: empty separator"))
+    (loop
+      (let ((r (if (= c 0) nil (rontolisp::%starlark-search sep s i n))))
+        (if (null r)
+            (progn
+              (vector-push-extend (rontolisp::%starlark-substring s i n) items)
+              (return nil)))
+        (vector-push-extend (rontolisp::%starlark-substring s i r) items)
+        (setq i (+ r m))
+        (setq c (- c 1))))
+    items))
 
 (defun rontolisp::%starlark-m-rsplit (s sep maxsplit)
   (if (not (stringp s)) (rontolisp::%starlark-no-attribute s "rsplit"))

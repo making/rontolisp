@@ -3930,6 +3930,11 @@ public final class Environment implements Scope {
 		// could before the prelude body ran (.kb/string-search-runtime.md).
 		env.defineFunction(LispNames.STRING_SEARCH,
 				new LispFunction(LispNames.STRING_SEARCH, args -> am.ik.rontolisp.LispNil.INSTANCE));
+		// %string-split, %string-join, %sort-by-keys: no arm here either, the callers'
+		// loops run (.kb/bulk-primitives.md).
+		for (String bulk : List.of(LispNames.STRING_SPLIT, LispNames.STRING_JOIN, LispNames.SORT_BY_KEYS)) {
+			env.defineFunction(bulk, new LispFunction(bulk, args -> am.ik.rontolisp.LispNil.INSTANCE));
+		}
 		// bfloat16 <-> double: the top sixteen bits of an f32, round-to-nearest-even
 		// on the way down and exact on the way back. Sixteen bits fit a fixnum, so
 		// unlike the quartet above this pair is on all four backends (BFloat16,

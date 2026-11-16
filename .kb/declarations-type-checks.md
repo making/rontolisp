@@ -94,9 +94,14 @@ Four sources (`WasmArrayCompiler.arrayKindOfExpr`):
    lambda list's generated `let*` prologue leaves parameter declarations). Specials never
    registered; skipped at top level and in async bodies.
 2. A binding INITIALIZER this compile chose a representation for (`initExprKind`): a literal
-   packed/general `make-array` (rank-1 literal size, no fill-pointer/adjustable/displacement), a
+   packed `make-array` (rank-1 literal size, no fill-pointer/adjustable/displacement), a
+   `make-array` with NO `:element-type` (`GENERAL` whatever its dimensions -- a computed size, a
+   list of them -- and with `:fill-pointer` / `:adjustable`; not `:displaced-to`: since
+   2026-11-16, what a site of the `GENERAL` kind emits checks the rank itself), a
    slot-typed accessor call, or a kinded outer variable -- only while the body never reassigns the
-   name. Types `do`-bound table variables and `loop with` bindings.
+   name. Types `do`-bound table variables and `loop with` bindings. Before, `(let ((v (make-array
+   n))) .. (setf (aref v i) x))` asked `stringp` of `v` at every store (`_charvec_p`, 11% of a
+   Starlark `list(range(n))`): the init proved an array, not which one.
 3. A `defstruct` slot `:type` read through its accessor, captured by `expandDefstruct` into
    `ClosRegistry.registerStructSlotType` (a side table; `LispLayout` stays type-free), `:include`
    children inheriting parent slot types. Trusted only while the accessor's generated body is the
