@@ -49167,9 +49167,9 @@ public final class LispMacroExpander {
 	/**
 	 * Whether a call of the operator answers exactly one value: a {@code cl} function
 	 * (other than {@link #passesMultipleValues}' -- the caller checks that first), the
-	 * assignment macros, the definers and the other single-valued macros this
-	 * implementation lowers itself. {@code (setf (values ...) form)} is the one
-	 * assignment that is not.
+	 * assignment macros, the definers, the other single-valued macros this implementation
+	 * lowers itself and the instance primitives a structure's reader and predicate are.
+	 * {@code (setf (values ...) form)} is the one assignment that is not.
 	 */
 	private static boolean isSingleValuedOperator(String name, List<LispVal> parts) {
 		if (PackageRegistry.isClFunctionName(name)) {
@@ -49188,7 +49188,8 @@ public final class LispMacroExpander {
 					LispNames.DECLAIM, LispNames.DECLARE, LispNames.DEFPACKAGE, LispNames.IN_PACKAGE,
 					LispNames.CHECK_TYPE, LispNames.ASSERT, LispNames.PPRINT_LOGICAL_BLOCK,
 					LispNames.PRINT_UNREADABLE_OBJECT, LispNames.DO_SYMBOLS, LispNames.DO_EXTERNAL_SYMBOLS,
-					LispNames.DO_ALL_SYMBOLS, LispNames.ASYNC_RUN_QUALIFIED ->
+					LispNames.DO_ALL_SYMBOLS, LispNames.ASYNC_RUN_QUALIFIED, LispNames.OBJ_REF, LispNames.OBJ_IS,
+					LispNames.OBJ_P ->
 				true;
 			// The fresh-string form answers its string; one that names a string to append
 			// to answers the body's values.
@@ -49200,9 +49201,10 @@ public final class LispMacroExpander {
 
 	/**
 	 * Operators whose call publishes nothing when its arguments publish nothing: pure
-	 * primitives that call no user code. A tail call of one over quiet arguments is
-	 * cleared BEFORE it runs (no temporary); anything else single-valued is cleared
-	 * after, through a temporary, because an argument -- or a callback a sequence
+	 * primitives that call no user code, and {@code %struct-type-error}, the checked
+	 * read's failure operand, which never returns. A tail call of one over quiet
+	 * arguments is cleared BEFORE it runs (no temporary); anything else single-valued is
+	 * cleared after, through a temporary, because an argument -- or a callback a sequence
 	 * function or the printer runs -- may have published in between.
 	 */
 	private static final Set<String> QUIET_OPERATORS = Set.of(LispNames.ADD, LispNames.SUB, LispNames.MUL,
@@ -49216,7 +49218,8 @@ public final class LispMacroExpander {
 			LispNames.CHAR, LispNames.SCHAR, LispNames.CHAR_CODE, LispNames.CHAR_INT, LispNames.CODE_CHAR,
 			LispNames.SYMBOL_NAME, LispNames.IDENTITY, LispNames.VECTOR, LispNames.MAKE_ARRAY, LispNames.ABS,
 			LispNames.MIN, LispNames.MAX, LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR, LispNames.ASH,
-			LispNames.FLOAT, LispNames.STRING_EQ, LispNames.CHAR_EQ, LispNames.SETQ);
+			LispNames.FLOAT, LispNames.STRING_EQ, LispNames.CHAR_EQ, LispNames.SETQ, LispNames.OBJ_REF,
+			LispNames.OBJ_IS, LispNames.OBJ_P, LispNames.STRUCT_TYPE_ERROR_INTERNAL);
 
 	/** Whether evaluating the form cannot publish through the channel. */
 	private static boolean quiet(LispVal form) {

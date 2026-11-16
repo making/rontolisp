@@ -298,7 +298,11 @@ publish in a non-tail position -- an argument, a `let` initform, a form before t
   thunk ran -- eagerly, or to completion on Preview 1 -- and left the body's values) get `(let ((__mvN_v form)) (setq %mv-spill
   nil) __mvN_v)` (`clearAfter`: an argument or a callback -- `sort`'s predicate, a `print-object`
   method -- may have published), or `clearBefore` when the operator is one of the pure
-  primitives in `QUIET_OPERATORS` and every argument is quiet; `while`, `tagbody` and a
+  primitives in `QUIET_OPERATORS` and every argument is quiet -- a structure's reader and
+  predicate bodies (`%obj-ref`/`%obj-is`/`%obj-p`) among them, since 2026-11-16: classified as
+  internal helpers they passed an argument's values on (`(pt-x (values p 2))` answered `(1 2)`
+  on the three compile paths; ci-spec
+  `a-structure-reader-or-predicate-answers-one-value-from-a-function-tail`); `while`, `tagbody` and a
   result-less `dotimes` whose body names no `return`/`(return-from nil ..)` get `(progn form
   (setq %mv-spill nil) nil)` (`clearAfterStatement`: a `return`/`go`/`throw` out of them skips
   the clear and keeps its own values). A `dotimes` whose body may `return` gets a cleared nil
