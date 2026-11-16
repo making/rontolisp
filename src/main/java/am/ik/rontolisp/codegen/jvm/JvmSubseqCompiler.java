@@ -319,6 +319,56 @@ final class JvmSubseqCompiler {
 		ctx.body.istore(slot);
 	}
 
+	/**
+	 * Compiles {@code (%substring string start end)}: the characters {@code [start, end)}
+	 * of a string in either representation as an IMMUTABLE string, the slice between the
+	 * two code-unit offsets {@code _cpoff} answers inside fresh framing quotes -- what
+	 * the string lane answered before {@code subseq}'s result became a mutable character
+	 * vector. The bounds are the caller's to keep.
+	 * @param cons the {@code %substring} form
+	 * @param ctx the compilation context
+	 * @param className the generated class name
+	 */
+	static void compileSubstring(LispCons cons, JvmLispCompiler.Ctx ctx, String className) {
+		List<LispVal> args = cons.toList();
+		MethodRefEntry substring = JvmEmitHelper.stringMethod(ctx, "substring", "(II)Ljava/lang/String;");
+		MethodRefEntry concat = JvmEmitHelper.stringMethod(ctx, "concat", "(Ljava/lang/String;)Ljava/lang/String;");
+		MethodRefEntry cpOffset = JvmEmitHelper.selfMethod(ctx, className, JvmStringIndexRuntimeBuilder.OFFSET_METHOD,
+				JvmStringIndexRuntimeBuilder.OFFSET_DESC);
+		StringEntry quote = ctx.cp.stringEntry("\"");
+		MethodCode asm = ctx.body;
+		// each operand into a temp as it is evaluated, in order: nothing of this form
+		// is on the stack while the next one runs
+		JvmExprCompiler.compileExpr(args.get(1), ctx, className);
+		JvmArrayCompiler.emitStrvNormalize(ctx, className);
+		asm.checkcast(ctx.stringClass);
+		int sSlot = ctx.allocTemp();
+		asm.astore(sSlot);
+		JvmExprCompiler.compileExpr(args.get(2), ctx, className);
+		JvmEmitHelper.unboxLong(ctx);
+		asm.l2i();
+		int aSlot = ctx.allocTemp();
+		asm.istore(aSlot);
+		JvmExprCompiler.compileExpr(args.get(3), ctx, className);
+		JvmEmitHelper.unboxLong(ctx);
+		asm.l2i();
+		int bSlot = ctx.allocTemp();
+		asm.istore(bSlot);
+		// "\"" + s.substring(_cpoff(s, start), _cpoff(s, end)) + "\""
+		asm.ldc(quote);
+		asm.aload(sSlot);
+		asm.aload(sSlot);
+		asm.iload(aSlot);
+		asm.invokestatic(cpOffset);
+		asm.aload(sSlot);
+		asm.iload(bSlot);
+		asm.invokestatic(cpOffset);
+		asm.invokevirtual(substring);
+		asm.invokevirtual(concat);
+		asm.ldc(quote);
+		asm.invokevirtual(concat);
+	}
+
 	// The lane's body over the helper's parameters 0 = seq, 1 = start, 2 = end (nil:
 	// to the end); leaves the subsequence on the stack.
 	private static void emitLane(JvmLispCompiler.Ctx ctx, String className) {

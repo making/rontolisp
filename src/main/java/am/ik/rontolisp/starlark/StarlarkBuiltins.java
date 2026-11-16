@@ -32,8 +32,8 @@ import org.jspecify.annotations.Nullable;
  * {@code **kwargs} takes the surplus named arguments. A default is {@code None},
  * {@code True}, {@code False}, an integer, a quoted string, or {@code unset} for an
  * optional parameter with no value of its own: the helper is handed the marker and
- * decides. {@code -> int} or {@code -> bool} after the parameters says what every call
- * that returns answers, which the lowering's typed fast paths read.
+ * decides. {@code -> int}, {@code -> bool} or {@code -> string} after the parameters says
+ * what every call that returns answers, which the lowering's typed fast paths read.
  */
 final class StarlarkBuiltins {
 
@@ -52,8 +52,9 @@ final class StarlarkBuiltins {
 			"getattr(x, name, default=unset, /)", "hasattr(x, name, /) -> bool", "hash(x, /) -> int",
 			"int(x, /, base=unset) -> int", "len(x, /) -> int", "list(x=unset, /)", "max(*args, key=None)",
 			"min(*args, key=None)", "print(*args, sep=' ')", "range(start_or_stop, stop=unset, step=1, /)",
-			"repr(x, /)", "reversed(sequence, /)", "set(x=unset, /)", "sorted(iterable, /, *, key=None, reverse=False)",
-			"str(x, /)", "tuple(x=unset, /)", "type(x, /)", "zip(*args)");
+			"repr(x, /) -> string", "reversed(sequence, /)", "set(x=unset, /)",
+			"sorted(iterable, /, *, key=None, reverse=False)", "str(x, /) -> string", "tuple(x=unset, /)",
+			"type(x, /) -> string", "zip(*args)");
 
 	// A name two types share is one helper that tells the receivers apart: its
 	// parameters are what either takes.
@@ -61,20 +62,21 @@ final class StarlarkBuiltins {
 			"list.extend(x, /)", "list|string.index(x, start=None, end=None, /) -> int", "list.insert(index, x, /)",
 			"list|dict|set.pop(key=unset, default=unset, /)", "list|set.remove(x, /)", "dict.get(key, default=None, /)",
 			"dict.items()", "dict.keys()", "dict.popitem()", "dict.setdefault(key, default=None, /)",
-			"dict|set.update(*args, **kwargs)", "dict.values()", "string.capitalize()", "string.codepoint_ords()",
-			"string.codepoints()", "string.count(sub, start=None, end=None, /) -> int", "string.elem_ords()",
-			"string|bytes.elems()", "string.endswith(suffix, start=None, end=None, /) -> bool",
-			"string.find(sub, start=None, end=None, /) -> int", "string.format(*args, **kwargs)",
+			"dict|set.update(*args, **kwargs)", "dict.values()", "string.capitalize() -> string",
+			"string.codepoint_ords()", "string.codepoints()", "string.count(sub, start=None, end=None, /) -> int",
+			"string.elem_ords()", "string|bytes.elems()", "string.endswith(suffix, start=None, end=None, /) -> bool",
+			"string.find(sub, start=None, end=None, /) -> int", "string.format(*args, **kwargs) -> string",
 			"string.isalnum() -> bool", "string.isalpha() -> bool", "string.isdigit() -> bool",
 			"string.islower() -> bool", "string.isspace() -> bool", "string.istitle() -> bool",
-			"string.isupper() -> bool", "string.join(iterable, /)", "string.lower()", "string.lstrip(cutset=None, /)",
-			"string.partition(sep, /)", "string.removeprefix(prefix, /)", "string.removesuffix(suffix, /)",
-			"string.replace(old, new, count=unset, /)", "string.rfind(sub, start=None, end=None, /) -> int",
+			"string.isupper() -> bool", "string.join(iterable, /) -> string", "string.lower() -> string",
+			"string.lstrip(cutset=None, /) -> string", "string.partition(sep, /)",
+			"string.removeprefix(prefix, /) -> string", "string.removesuffix(suffix, /) -> string",
+			"string.replace(old, new, count=unset, /) -> string", "string.rfind(sub, start=None, end=None, /) -> int",
 			"string.rindex(sub, start=None, end=None, /) -> int", "string.rpartition(sep, /)",
-			"string.rsplit(sep=None, maxsplit=None, /)", "string.rstrip(cutset=None, /)",
+			"string.rsplit(sep=None, maxsplit=None, /)", "string.rstrip(cutset=None, /) -> string",
 			"string.split(sep=None, maxsplit=None, /)", "string.splitlines(keepends=False, /)",
-			"string.startswith(prefix, start=None, end=None, /) -> bool", "string.strip(cutset=None, /)",
-			"string.title()", "string.upper()", "set.add(x, /)", "set.difference(*others)",
+			"string.startswith(prefix, start=None, end=None, /) -> bool", "string.strip(cutset=None, /) -> string",
+			"string.title() -> string", "string.upper() -> string", "set.add(x, /)", "set.difference(*others)",
 			"set.difference_update(*others)", "set.discard(x, /)", "set.intersection(*others)",
 			"set.intersection_update(*others)", "set.isdisjoint(x, /) -> bool", "set.issubset(x, /) -> bool",
 			"set.issuperset(x, /) -> bool", "set.symmetric_difference(x, /)", "set.symmetric_difference_update(x, /)",
@@ -98,8 +100,8 @@ final class StarlarkBuiltins {
 	 * @param namedFrom the index of the first parameter a named argument fills
 	 * @param varargs whether surplus positional arguments are taken, as a tuple
 	 * @param kwargs whether surplus named arguments are taken, as a dict
-	 * @param result {@code "int"} or {@code "bool"} when every call that returns answers
-	 * one, else empty
+	 * @param result {@code "int"}, {@code "bool"} or {@code "string"} when every call
+	 * that returns answers one, else empty
 	 */
 	record Signature(String name, String helper, List<String> kinds, List<String> params,
 			List<@Nullable LispVal> defaults, int positional, int namedFrom, boolean varargs, boolean kwargs,

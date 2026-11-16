@@ -83,10 +83,12 @@ and every user surface says so (`--source-language` help, the title of
 | `for` | `(let* ((seq it) (items (%starlark-iterate seq)) (count (length items)) (index 0)) (tagbody top (if (< index count) (progn assign (setq index (+ index 1)) body.. (go top)))) (%starlark-iterated seq))`; `(block %SL-BREAK ..)` around the tagbody and `(block %SL-CONTINUE ..)` around the body only when the body has that exit |
 | `for i in range(a, b, c)` (the built-in, positional arguments) | `(let* ((next a) (stop (%starlark-loop-stop next b))) (tagbody top (if (< next stop) (progn (setq i next) (setq next (+ next c)) body.. (go top)))))`: no range, no vector, nothing to give back; `>` for a negative constant step; `(stop b)` with no check when both bounds are known ints, a constant `b` in the test itself; a step that is no constant is `(step (%starlark-loop-step next stop c))` and the test `(if (< 0 step) (< next stop) (> next stop))`; a step written `0` stays the generic loop, whose `range` refuses it |
 | `return v` inside loops | `(let ((r v)) (%starlark-iterated seq-inner) .. (return-from %SL-FN r))` -- every loop of the function gives its iterable back first, so no `unwind-protect` and no EH mode on wasm |
-| comprehension | the same loops around `(vector-push-extend elt acc)` / `(%starlark-set-index acc k v)`, its variables in a `let` of its own INSIDE the first loop's `let*`, so the first iterable reads the enclosing block's variables (`[x for x in range(x)]`) |
+| comprehension | the same loops around `(vector-push-extend elt acc)` / `(%starlark-dict-store acc k v)` (the dict is the comprehension's own, so nothing of `a[k] = v`'s dispatch is asked), its variables in a `let` of its own INSIDE the first loop's `let*`, so the first iterable reads the enclosing block's variables (`[x for x in range(x)]`) |
 | `a + b`, `a == b`, `a[i]`, `a[i:j]`, `x in y` | `(%starlark-add a b)`, `-equal`, `-index`, `-slice`, `-in`: generic, dispatching at run time; `!=` and `not in` are `(not ..)` of them |
-| `+ - * // %`, a comparison, `==`, `!=` over operands that MAY be ints | `(if (and (integerp a) (integerp b)) (+ a b) (%starlark-add a b))`, an operand that is more than a variable bound first; `//` and `%` only by a constant that is not zero ("What the lowering knows") |
-| the same and `& \| ^ << >> ~`, unary `-`/`+`, over KNOWN ints | `(+ a b)`, `(< a b)`, `(= a b)`, `(mod a 7)`, `(values (floor a 2))`, `(logand a b)`, `(ash a 3)`, `(- a)`: no test, no helper (a shift only by a constant count that is not negative) |
+| `+ - * // %`, a comparison, `==`, `!=` over operands that MAY be ints | `(if (and (integerp a) (integerp b)) (+ a b) (%starlark-add a b))`, an operand that is more than a variable bound first; `//` and `%` by a divisor that is no constant test it too, `(if (and (integerp a) (integerp b) (not (= b 0))) (mod a b) (%starlark-mod a b))`, also over known ints ("What the lowering knows") |
+| `s + t` over KNOWN strings; over one known string | `(%string-concat s t)`; `(if (stringp t) (%string-concat s t) (%starlark-add s t))` |
+| `"{}-{!r}".format(a, b)`, `"%d: %s" % (a, b)`: a template written as a literal over positional arguments or a tuple expression | `(%string-concat (%string-concat (%starlark-b-str a) "-") (%starlark-b-repr b))`: the template is read while lowering (`format`, `interpolation`), every argument evaluated first, in order (bound when it is more than a variable), then one piece per field -- `%starlark-b-str`, `-b-repr`, `(%starlark-conversion a #\d)` for the other `%` conversions -- joined, past four pieces by `(%starlark-concat-pieces (list ..) n)`; a template whose reading ends in an error, a named field, a format spec, more than 64 pieces, any other template or right operand is the run time's |
+| the same and `& \| ^ << >> ~`, unary `-`/`+`, over KNOWN ints | `(+ a b)`, `(< a b)`, `(= a b)`, `(mod a 7)`, `(ash a -1)` for `a // 2` (a power of two; any other divisor `(/ (- a (mod a 7)) 7)`, never `floor`: "Against CPython"), `(logand a b)`, `(ash a 3)`, `(- a)`: no test, no helper (a shift only by a constant count that is not negative) |
 | `x == None`, `x != True` | `(eq x :none)`, `(not (eq x t))`: `None`, `True` and `False` equal themselves only |
 | `if c:`, `c ? ..` | `(if (%starlark-truth c) ..)`; a known Boolean (a comparison, `not`, `in`, `True`/`False`, a variable only such values are bound to, `bool(..)`, `s.startswith(..)`) is the test as it stands, a known int `(not (= c 0))`; `and`/`or` of tests are `and`/`or` |
 | `a and b` as a value | `(let ((v a)) (if (%starlark-truth v) b v))`; `(if a b nil)` when `a` is a known Boolean |
@@ -208,17 +210,19 @@ taken for, and it is made of core forms: no backend learns a Starlark name.** Th
 forms are the ones the backends already fuse ([jvm-int-fusion.md](jvm-int-fusion.md),
 [wasm-int-fusion.md](wasm-int-fusion.md)).
 
-- **Kinds** (`StarlarkLowering.Kind`, `kind`): INT, BOOL (exactly `T`/`NIL`), OTHER (no
-  int: a float, a string, a list ..), ANY. Read off the spelling -- a literal, an
-  operator's result (`int op int`, a comparison, `not`), a built-in whose every return is
-  one (`StarlarkBuiltins`' `-> int` / `-> bool`: `len`, `int`, `hash`, `find`, `index`,
-  `count`, `bool`, `any`, `all`, `hasattr`, `startswith`, `isdigit` ..) -- and off
-  variables.
+- **Kinds** (`StarlarkLowering.Kind`, `kind`): INT, BOOL (exactly `T`/`NIL`), STRING
+  (2026-11-16), OTHER (no int: a float, a string, a list ..), ANY. Read off the spelling
+  -- a literal, an operator's result (`int op int`, a comparison, `not`, `string +
+  string`, `string % x`), a built-in whose every return is one (`StarlarkBuiltins`'
+  `-> int` / `-> bool` / `-> string`: `len`, `int`, `hash`, `find`, `index`, `count`,
+  `bool`, `any`, `all`, `hasattr`, `startswith`, `isdigit`, `str`, `repr`, `type`,
+  `join`, `format`, `replace`, `strip`, `upper` ..) -- and off variables.
 - **A variable is an int when every binding of it in its block is one** (`bound`, `infer`):
   assignments (pairwise through `a, b = b, a + b`), augmented assignments, `for` and
   comprehension targets (an int over `range(..)`, the index of `for i, x in
   enumerate(..)`). All names of a block are assumed ints and the assumption is dropped
-  name by name until every binding agrees; then the same for Booleans. Sound because
+  name by name until every binding agrees; then the same for Booleans, then for strings
+  (`s = ""` .. `s += "ab"`). Sound because
   nothing outside the block binds its names: Starlark has no `global`/`nonlocal`, so a
   nested function only reads them. A parameter is ANY. A file's globals are inferred the
   same way, a `load`ed name being ANY -- but not in a session, where a later buffer binds
@@ -230,16 +234,18 @@ forms are the ones the backends already fuse ([jvm-int-fusion.md](jvm-int-fusion
   ones, the helper as the other branch (`TESTED`: `+ - * // %`, the comparisons, `==`,
   `!=`); an operand known to be no int -> the helper alone (`"a" + s`, `x * 2.0`).
   Integers are of any size on every backend, so `(+ a b)` IS Starlark's `+`. `//` and
-  `%` only by a constant that is not zero, a shift only by a constant count that is not
-  negative: the errors (`integer modulo by zero`, `negative shift count`) stay the
-  helper's. The bitwise operators are inline over known ints only (`|` is also a dict
-  union).
+  `%` by a constant that is not zero as they stand, by any other divisor behind `(not (=
+  b 0))` (2026-11-16: `(i * 7) % w` over a variable `w` 57 -> 27 ns on wasm, 14 -> 13 on
+  the JVM), a shift only by a constant count that is not negative: the errors (`integer
+  modulo by zero`, `negative shift count`) stay the helper's. The bitwise operators are
+  inline over known ints only (`|` is also a dict union). `+` with a known string is
+  `%string-concat`, behind `(stringp ..)` of an operand that is not known to be one.
 - Not made, not measured: narrowing by a test (`type(x) == "int"`), the kind a `def`
   returns, the kinds of a list's elements, an inline `x[i]`.
 
 ## The run-time library's rules
 
-`starlark.lisp` keeps four, the first three stated at its top:
+`starlark.lisp` keeps five, the first four stated at its top:
 
 - **A structure accessor is called only behind that structure's predicate.** An accessor
   handed an instance of ANOTHER structure passes the instance check
@@ -254,6 +260,19 @@ forms are the ones the backends already fuse ([jvm-int-fusion.md](jvm-int-fusion
 - **What the lowering calls is a `defun`**: the interpreter loads the file on the first
   resolution of one of its functions, which a structure's constructor, predicate or
   accessor is not (`StarlarkLibrary.functionNames`).
+- **A string handed to the program is the host's IMMUTABLE string** (2026-11-16). What
+  Common Lisp's producers answer -- `subseq`, `concatenate`, the case and trim functions,
+  `coerce`, a string stream's contents -- is a fresh MUTABLE one, on the compiled
+  backends a vector with an element per character
+  ([string-write-runtime.md](string-write-runtime.md)) that every later comparison, hash
+  and concatenation of it walks: `"w" + str(i)` took 10 us on wasm through `concatenate`
+  and 0.2 us through `%string-concat`, and a string key so made hashed at 250 ns on the
+  JVM. So two strings are joined by `%string-concat`, a slice is `(%substring s start
+  end)` (the internal this item added: the slice with no character vector made of it),
+  an int is `%decimal-piece`, and what a helper builds any other way is wrapped in
+  `%normalize-string`. Several pieces are joined by halves (`%starlark-concat-pieces`,
+  `-join-range`): no string stream, whose contents come back mutable, and a character is
+  copied log N times.
 - **An `error`'s control is a literal string.** A computed one (`(error message ..)`, a
   `(concatenate ..)` control) bails the condition narrowing and keeps the run-time format
   renderer in every program (~50 KB of wasm, "Measured"): `%starlark-elements-or` takes the
@@ -660,23 +679,138 @@ time), same machine as above:
 
 At `82f86e5ba`, seconds, the best of three runs of the whole process (start-up included),
 `time.sh` for rontolisp; Go Starlark (`go.starlark.net` `4f4267fb140d`, `cmd/starlark
--recursion`; its start-up 0.01 s), Java Starlark (`starlark_deploy.jar`), CPython 3.12.
-Programs: `bench.star` of the prototype, the rest of
-`.todo/artefacts/j51-starlark-typed-fast-paths/`. Every runner printed the same output;
-"--" is Java Starlark refusing recursion (the spec lets an implementation forbid it).
+-recursion`; its start-up 0.01 s), Java Starlark, CPython 3.12. Programs: `bench.star` of
+the prototype, the rest of `.todo/artefacts/j51-starlark-typed-fast-paths/`. Every runner
+printed the same output.
+
+Java Starlark is `starlark_deploy.jar` of bazelbuild/starlark `c0af0ea`'s `test_suite`
+behind `~/.local/bin/starlark-java`, a runner over
+`~/.local/share/starlark-java/RecursiveMain.java`: `cmd.Main`'s file options with
+`StarlarkSemantics`' `allow_recursion` and `experimental_enable_starlark_set` set. Its
+own `cmd.Main` forbids recursion, as the spec lets an implementation, and ends
+`bench.star` and `fib.star` with `function 'fib' called recursively`. Its start-up alone
+is 0.30 s. The Java column was measured through the runner the same day, with the
+"before" run of "Against CPython" below.
 
 | program | JVM | WASM | component | Go | Java | CPython |
 |---|---|---|---|---|---|---|
-| `bench.star` | 0.16 | 0.07 | 0.07 | 0.54 | -- | 0.12 |
-| `fib.star` (`fib(35)`) | 0.28 | 0.45 | 0.44 | 22.02 | -- | 1.48 |
+| `bench.star` | 0.16 | 0.07 | 0.07 | 0.54 | 0.82 | 0.12 |
+| `fib.star` (`fib(35)`) | 0.28 | 0.45 | 0.44 | 22.02 | 4.55 | 1.48 |
 | `loop.star` (`range(30,000,000)`) | 0.20 | 0.69 | 0.64 | 3.80 | 2.41 | 1.82 |
-| `calls.star` | 0.22 | 0.27 | 0.30 | 7.31 | 1.95 | 0.75 |
-| `mixed.star` (Collatz, sieve) | 2.15 | 2.53 | 2.57 | 4.60 | 2.85 | 1.22 |
+| `calls.star` | 0.22 | 0.27 | 0.30 | 7.31 | 2.03 | 0.75 |
+| `mixed.star` (Collatz, sieve) | 2.15 | 2.53 | 2.57 | 4.60 | 3.15 | 1.22 |
 
 Go is the implementation the error texts follow, so it is the one to compare against; Java
 Starlark is a second opinion on semantics only. rontolisp compiles ahead of time and the
-three others interpret, so this is not a like-for-like contest. `mixed.star` loses to
-CPython on `flags[j]`, which stays a generic call.
+three others interpret, so this is not a like-for-like contest. What `mixed.star` lost
+to CPython on is below: the `//`, not `flags[j]`.
+
+### Against CPython (2026-11-16)
+
+**Goal: a program compiled to the JVM, WASM preview 1 and the component runs in less wall
+time than `python3` on the same file** (best of three, the whole process). Met on
+the JVM for five of the eleven (`fib`, `loop`, `calls`, `mixed`, `listidx`) and on
+wasm and the component for four (`bench`, `fib`, `loop`, `calls`); where it is not, the cost left is a backend's and is named below with the item
+that carries it.
+
+The five programs above cover integers, calls and `range`. Six were added, each about a
+second of CPython, each printing a checksum CPython, Go and Java Starlark agree on
+(`.todo/artefacts/j54-starlark-faster-than-cpython/`, with `time.sh`): `listidx.star`
+(`a[i]`, `a[i] = x`, `a[i] += x`), `dicts.star` (get, set, `in`, the three iterations, int
+and string keys), `strings.star` (`+`, `+=`, `str`, `join`, `split`, `format`, `%`),
+`comps.star` (list and dict comprehensions), `sorting.star` (`sorted` of ints and of
+strings, by a key, reversed; `min`, `max`, `reversed`), `methods.star` (methods on
+parameters and list elements). Seconds, before (`72cf29cc8`) -> after; Go and Java
+Starlark do not change:
+
+| program | JVM | WASM | component | CPython | Go | Java |
+|---|---|---|---|---|---|---|
+| `bench.star` | 0.15 -> 0.15 | 0.07 -> 0.07 | 0.07 -> 0.07 | 0.14 | 0.54 | 0.82 |
+| `fib.star` | 0.30 -> 0.31 | 0.46 -> 0.41 | 0.41 -> 0.44 | 1.46 | 21.80 | 4.55 |
+| `loop.star` | 0.19 -> 0.18 | 0.69 -> 0.68 | 0.67 -> 0.62 | 1.63 | 3.86 | 2.41 |
+| `calls.star` | 0.19 -> 0.21 | 0.25 -> 0.28 | 0.27 -> 0.25 | 0.76 | 7.36 | 2.03 |
+| `mixed.star` | 2.08 -> 0.64 | 2.79 -> 1.60 | 2.55 -> 1.58 | 1.21 | 4.58 | 3.15 |
+| `listidx.star` | 1.37 -> 1.08 | 7.10 -> 4.83 | 6.42 -> 4.90 | 1.20 | 3.55 | 2.51 |
+| `dicts.star` | 0.99 -> 1.02 | 2.33 -> 1.67 | 2.16 -> 1.73 | 0.92 | 4.63 | 2.10 |
+| `comps.star` | 1.68 -> 1.95 | 2.45 -> 2.34 | 2.49 -> 2.29 | 0.91 | 7.99 | 1.78 |
+| `methods.star` | 4.13 -> 2.10 | 6.21 -> 3.34 | 6.27 -> 3.36 | 1.12 | 9.31 | 3.64 |
+| `strings.star` | 8.88 -> 2.68 | 26.88 -> 3.30 | 27.78 -> 3.29 | 1.14 | 8.07 | 3.23 |
+| `sorting.star` | 9.59 -> 3.92 | 133.99 -> 5.11 | 133.25 -> 5.13 | 0.98 | 6.65 | 2.49 |
+
+The JVM's `comps.star` ranges from 1.45 to 2.13 over five runs, before and after alike.
+Sizes (`.class` / `.wasm` / component): `print(1 + 2)` 107,727 / 98,133 / 101,658 ->
+108,363 / 99,723 / 103,275; the prototype's `demo.star` 237,576 / 206,596 / 210,570 -> 220,520 / 205,384 / 209,384;
+`examples/starlark/targets.star` 223,512 / 202,923 / 206,857 -> 216,399 / 203,655 / 207,618;
+`strings.star` 172,896 / 153,788 / 157,694 -> 137,934 / 132,151 / 135,952 (no template is read at
+run time); `listidx.star` 167,159 / 156,160 / 160,029 -> 168,790 / 165,246 / 169,145 (`replace`'s
+run time, which a list copy now reaches).
+
+Found, by sample profiles (JFR's `jdk.ExecutionSample` every 1 ms; `wasmtime run
+--profile=guest`, whose function numbers `-Drontolisp.wasm.debug-func-sizes` names) and
+by plain Common Lisp loops over each primitive:
+
+- **Every string the library made was a mutable character vector** ("The run-time
+  library's rules"): `sorting.star` at a third of its size was 44 s on wasm, 79% of it
+  `%string-compare` over two character vectors.
+- **`//` was a ratio.** `(values (floor a b))` is `(floor (/ a b))` on every backend: 142
+  ns for `x // 2` on the JVM and 59 on wasm, against 39 and 17 for `(ash x -1)`; 40% of
+  `mixed.star`'s JVM samples were `BigInteger`. `.todo/j59` is `floor` itself.
+- **The library went through Common Lisp lists**: `[0] * n` (a list, then a push per
+  element, where `make-array .. :initial-element` is one call), `sorted`
+  (`stable-sort` over decorated conses behind a `funcall`, and `string<` then `string>`
+  per comparison), `keys`/`values`/`items`/`list()`/`extend`/`reversed`/`enumerate`
+  through `%starlark-elements`, `join`/`format`/`%` through a string stream.
+- **`search` behind its keywords**: 31% of `methods.star` on wasm was `SEARCH`, of which
+  the backend's own `_str_search` 8.6% and the keyword parsing the rest; on the JVM it is
+  the prelude's `elt` loop. `%starlark-search` calls `%string-search` and, where that
+  declines, scans itself (the interpreter keeps `search`, the host's own scan there).
+- **A template was read on every call**: `"{}-{}".format(i, "x")` and `"%d:%s" % (i, s)`
+  together 4.8 us on the JVM and 5.7 on wasm, 1.5 and 0.9 read while lowering (CPython
+  0.5).
+- **Generic `%` by a variable** was the helper's call: 57 -> 27 ns on wasm tested inline.
+- **The JVM's fixed cost**: `print(1)` is 0.10 s (CPython 0.03, wasm 0.03), and
+  `dicts.star` at a quarter of its size was 0.53 s where four times the work is 0.92: the
+  first 0.4 s is start-up and warm-up. A program CPython runs in a quarter of a second
+  cannot win on the JVM; the six are a second each for that reason.
+- **wasm calls for every generic operation** (ns per iteration of a counting loop, plain
+  Common Lisp): the loop and a `+` alone 9.4, `(aref v i)` of a general vector 28 (three
+  calls: the subscript's check, `_idx_ref`, `_arr_get`), a store 52, a `dolist` step 6.5,
+  a structure's predicate and one accessor 15 (a call each), `(char-code (char s i))`
+  about 30 (a character is an allocation), a comparison of two boxed fixnums a call and a
+  true answer another (`_t_sym`). A Starlark `xs[i]` is some nine calls, 74 ns behind a
+  `funcall`, where CPython's whole loop step is about 35. A `(declare (type (vector t)
+  ..))` of the list's vector changed nothing (368 against 369 ms).
+- **The JVM boxes**: `Long.valueOf` is 32% of `comps.star`'s samples, 13 of them the
+  index `vector-push-extend` answers and a comprehension drops (`.todo/j58`).
+- **A sort is a list's**: 50,000 ints by a merge sort over conses 13 ms on the JVM and 17
+  on wasm, over a simple vector 30 and 139, over packed `(unsigned-byte 32)` vectors 79
+  and 42; CPython's is 9. So `sorted` merges lists, compares ints inline, and keys that
+  are all strings of at most 64 characters as lists of integers read once (four
+  characters to an integer when all are below 127).
+
+Made: the run-time library's strings and vectors ("The run-time library's rules"),
+`%substring` ([string-write-runtime.md](string-write-runtime.md)), the STRING kind, a
+template written as a literal read while lowering, `//` and `%` by a variable tested
+inline, `//` as a shift or an exact division, a dict comprehension storing into its own
+dict ("The lowering table", "What the lowering knows"). `"abc".replace("", "-")` is
+`-a-b-c-` as Go's and CPython's is (it lacked the last one).
+
+Left, each with its reason:
+
+- **`bench.star` on the JVM** (0.15 against 0.11-0.14 over the two runs): the start-up. Restated: on the
+  JVM the goal is for a program of a second of CPython; wasm takes the short ones.
+- **wasm, the six container programs**: the calls above. `.todo/j55` (the vector read
+  and the structure calls), `.todo/j56` (strings: an ordering of two strings by the host,
+  case and stream capture that are not mutable).
+- **The JVM, `comps`, `methods`, `strings`, `sorting`**: boxing (`.todo/j58`), a string
+  framed in quotes (a slice is three allocations), `upper`/`lower`/`strip` through the
+  mutable producers (`.todo/j56`), and a sort that chases conses (30% of `sorting.star`'s
+  samples are `_car`).
+- **`s += piece` in a loop** copies the string so far, as Go's and Java's do; CPython
+  extends in place. 20,000 times `s += "ab"` is 0.60 s on the JVM (a
+  string framed in quotes is copied more than once per join), 0.10 on wasm and 0.03 of
+  CPython; 5,000 times 0.14, 0.04 and 0.03. `strings.star` accumulates 5,000 pieces for that
+  reason. `.todo/j57`.
 
 ## Positions
 

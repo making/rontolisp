@@ -1264,6 +1264,18 @@ final class WasmExprCompiler {
 				WasmExprCompiler.compileExpr(cons.toList().get(1), ctx);
 				WasmEmitHelper.emitCharvecToStrCall(ctx);
 			}
+			// (%substring string start end): the byte-level _subseq of the string's
+			// immutable representation, with no character vector made of the slice as
+			// subseq makes one (.kb/string-write-runtime.md).
+			case LispNames.SUBSTRING_INTERNAL -> {
+				java.util.List<LispVal> operands = cons.toList();
+				WasmExprCompiler.compileExpr(operands.get(1), ctx);
+				WasmEmitHelper.emitCharvecToStrCall(ctx);
+				WasmExprCompiler.compileExpr(operands.get(2), ctx);
+				WasmExprCompiler.compileExpr(operands.get(3), ctx);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_SUBSEQ);
+			}
 			case LispNames.SYMBOL_NAME -> WasmSymbolApiCompiler.compileSymbolName(cons, ctx);
 			case LispNames.INTERN -> WasmSymbolApiCompiler.compileIntern(cons, ctx);
 			case LispNames.FIND_SYMBOL -> WasmSymbolApiCompiler.compileFindSymbol(cons, ctx);

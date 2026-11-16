@@ -5227,6 +5227,19 @@ public final class Environment implements Scope {
 			requireArgCount(LispNames.NORMALIZE_STRING, args, 1);
 			return args.get(0);
 		}));
+		// %substring: the characters [start, end) of a string, as a string nothing
+		// writes. The compile backends answer their immutable representation, where
+		// subseq answers a mutable character vector; here a string is one kind.
+		env.defineFunction(LispNames.SUBSTRING_INTERNAL, new LispFunction(LispNames.SUBSTRING_INTERNAL, args -> {
+			requireArgCount(LispNames.SUBSTRING_INTERNAL, args, 3);
+			if (!(args.get(0) instanceof LispString string)) {
+				throw new LispEvalException(
+						LispNames.SUBSTRING_INTERNAL + " expects a string, got: " + args.get(0).print());
+			}
+			// off the code-point buffer: a slice costs its own width
+			return string.subsequence((int) ((LispInteger) args.get(1)).value(),
+					(int) ((LispInteger) args.get(2)).value());
+		}));
 		// make-symbol: rontolisp has no intern table (symbols compare by name), so
 		// "uninterned" is represented by the same "#:" name prefix gensym uses.
 		env.defineFunction(LispNames.MAKE_SYMBOL, new LispFunction(LispNames.MAKE_SYMBOL, args -> {

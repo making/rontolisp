@@ -1051,6 +1051,7 @@ final class JvmExprCompiler {
 				JvmExprCompiler.compileExpr(cons.toList().get(1), ctx, className);
 				JvmArrayCompiler.emitStrvNormalize(ctx, className);
 			}
+			case LispNames.SUBSTRING_INTERNAL -> JvmSubseqCompiler.compileSubstring(cons, ctx, className);
 			case LispNames.SYMBOL_NAME -> JvmSymbolApiCompiler.compileSymbolName(cons, ctx, className);
 			case LispNames.INTERN -> JvmSymbolApiCompiler.compileIntern(cons, ctx, className);
 			case LispNames.FIND_SYMBOL -> JvmSymbolApiCompiler.compileFindSymbol(cons, ctx, className);

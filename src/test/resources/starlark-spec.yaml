@@ -247,6 +247,20 @@ cases:
       print(fast_xs.pop(), fast_xs.pop(0), fast_xs.pop(-2), fast_xs)
       fast_xs.remove(2)
       print(fast_alias)
+      def fast_fill(log):
+          def note(v):
+              log.append(v)
+              return v
+          t = "{1}|{0!r}|{{}}"
+          u = "%s|%r|%%|%d|%X|%o|%e"
+          return ["{1}|{0!r}|{{}}".format(note("a"), note(2), note(3)) == t.format("a", 2, 3), "%s|%r|%%|%d|%X|%o|%e" % (note("s"), "r", 3.7, 255, 8, note(1)) == u % ("s", "r", 3.7, 255, 8, 1), "{}{}".format(1, "x"), "%d%%" % (5,), "plain".format(), "" % (), log]
+      print(fast_fill([]))
+      print(sorted([(1, "b"), (0, "z"), (1, "a")], key = lambda p: p[0]), sorted([3, 1, 2], reverse = True), sorted(["b", "", "ab", "a"]), sorted([2, 1.5, 3]), "abc".replace("", "-"), "a-b".replace("-", ""), " x ".strip() + "|", "a,b,,c".split(","), ",".join(["x", "y", "z"]), "ab" * 3, [0] * 3 + [1, 2] * 2, min([3, 1, 2]), max("b", "ab"))
+      print("héllo😀x"[1:6], "a😀b".split("😀"), "😀x😀".strip("😀"), "ab😀".replace("😀", "é"), "%s|%s" % ("é", "😀"), "{}😀{}".format(1, 2), sorted(["é", "z", "😀", "a"]), "x😀y".find("y"), "é" + "😀", "😀" in "a😀")
+      def fast_divide(a, b, xs):
+          n = len(xs)
+          return [a % b, a // b, 7 % n, -7 // n, a % n, n // a]
+      print(fast_divide(17, 5, [1, 2, 3]), fast_divide(-17.5, 5, [1, 2, 3]), fast_divide(1 << 70, 7, [1]))
     expected: |
       3 ab [1, 2] 3.5 9223372036854775808
       [True, True, False, False, False, True, False, True] [False, False, True, True, False, True, False, True] [True, True, False, False, False, True, False, True] [False, True, False, True, True, False, False, True]
@@ -257,6 +271,10 @@ cases:
       [[1, 2.5, "s", None, True, False, -3, 4], (1, ("a", [2, 5]), {"k": (3,)}), {"a": 1, 2: [3], "b": 6}] [[1, 2.5, "s", None, True, False, -3], (1, ("a", [2]), {"k": (3,)}), {"a": 1, 2: [3]}]
       8 0 9 [1, 2, 3]
       [1, 3]
+      [True, True, "1x", "5%", "plain", "", ["a", 2, 3, "s", 1]]
+      [(0, "z"), (1, "b"), (1, "a")] [3, 2, 1] ["", "a", "ab", "b"] [1.5, 2, 3] -a-b-c- ab x| ["a", "b", "", "c"] x,y,z ababab [0, 0, 0, 1, 2, 1, 2] 1 b
+      éllo😀 ["a", "b"] x abé é|😀 1😀2 ["a", "z", "é", "😀"] 2 é😀 True
+      [2, 3, 1, -3, 2, 0] [2.5, -4.0, 1, -3, 0.5, -1.0] [2, 168655945816773043346, 0, -7, 0, 0]
   # A string's elements are code points; hash is the specification's; equal keys are one
   # dict key, which keeps its place when stored again and goes last once removed; a float
   # prints as Go's %g, NaN equals itself; a function is a key by identity.

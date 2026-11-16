@@ -124,6 +124,16 @@ PROGRAM-WRITTEN `(map 'string ...)` and `(coerce seq 'string)`, `uiop:getenv`, t
   through `seqResultDispatchForm`, whose generated conversions carry the INTERNAL designator
   `LispNames.SEQ_STRING_RESULT` (`%seq-string-result`) -- reads as `string` everywhere a result
   type is inspected and skips exactly the wrap.
+- **`%substring` is the slice that does not flip** (`LispNames.SUBSTRING_INTERNAL`, 2026-11-16):
+  `(%substring string start end)` answers the IMMUTABLE representation of characters `[start, end)`
+  -- wasm the byte-level `_subseq` of the normalized string, the JVM `String.substring` between two
+  `_cpoff` offsets inside fresh framing quotes (`JvmSubseqCompiler.compileSubstring`), the
+  interpreter `LispString.subsequence` -- for library Lisp whose strings nothing writes (the
+  Starlark run time, [starlark-frontend.md](starlark-frontend.md)). The bounds are the caller's to
+  keep. A 5-character slice of a 43-character string, warm: 66 ns on the JVM and 111 ns on wasm,
+  against 438 and 371 for `(%normalize-string (subseq ..))`. Pinned by `StarlarkSpecE2eTest` (every
+  Starlark slice, `split`, `strip` and one-character index on four backends, astral characters in
+  `what-the-lowering-knows-answers-as-the-generic-paths`).
 - **The print family flips only the PUBLIC names.** `%princ-piece` / `%prin1-piece`
   (`PRINC_PIECE_INTERNAL` / `PRIN1_PIECE_INTERNAL`) are the public conversions minus the wrap, and
   every piece the codegen's expansions build stays an immutable internal value.

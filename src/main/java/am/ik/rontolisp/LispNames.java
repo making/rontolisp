@@ -3936,6 +3936,17 @@ public final class LispNames {
 	public static final String NORMALIZE_STRING = "%NORMALIZE-STRING";
 
 	/**
+	 * The {@code %substring} internal: {@code (%substring string start end)}, the
+	 * characters {@code [start, end)} of a string as an IMMUTABLE string, where
+	 * {@code subseq} answers a fresh mutable one -- on the compile backends a character
+	 * vector every later comparison, hash and concatenation of it walks
+	 * ({@code .kb/string-write-runtime.md}). For library Lisp whose strings nothing
+	 * writes; the caller keeps {@code 0 <= start <= end <= (length string)}. Never read
+	 * from source.
+	 */
+	public static final String SUBSTRING_INTERNAL = "%SUBSTRING";
+
+	/**
 	 * The {@code %seq-string-result} internal TYPE DESIGNATOR: "a string, built by a
 	 * sequence operator's own result conversion rather than by a program-written
 	 * {@code coerce} / {@code map}". It reads as {@code string} everywhere the two

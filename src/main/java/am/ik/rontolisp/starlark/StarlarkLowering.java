@@ -23,6 +23,7 @@ import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import am.ik.rontolisp.LispBigInteger;
+import am.ik.rontolisp.LispChar;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispIntVector;
@@ -203,9 +204,7 @@ final class StarlarkLowering {
 
 	private static final LispSymbol MOD = new LispSymbol("MOD");
 
-	private static final LispSymbol FLOOR = new LispSymbol("FLOOR");
-
-	private static final LispSymbol VALUES = new LispSymbol("VALUES");
+	private static final LispSymbol DIVIDE = new LispSymbol("/");
 
 	private static final LispSymbol ASH = new LispSymbol("ASH");
 
@@ -224,6 +223,14 @@ final class StarlarkLowering {
 	private static final LispSymbol DEFVAR = new LispSymbol("DEFVAR");
 
 	private static final LispSymbol CONSP = new LispSymbol("CONSP");
+
+	/** Joins two strings into one the program holds. */
+	private static final LispSymbol STRING_CONCAT = new LispSymbol("%STRING-CONCAT");
+
+	private static final LispSymbol STRINGP = new LispSymbol("STRINGP");
+
+	/** The most pieces a template written as a literal is joined of in place. */
+	private static final int TEMPLATE_PIECES = 64;
 
 	/** The block a function body is: what {@code return} leaves. */
 	private static final LispSymbol FUNCTION_BLOCK = new LispSymbol("%SL-FN");
@@ -1119,12 +1126,12 @@ final class StarlarkLowering {
 
 	/**
 	 * What the lowering knows of a value before the program runs: that it is an int, that
-	 * it is {@code True} or {@code False} (the Common Lisp booleans), that it is of some
-	 * other type -- no int --, or nothing.
+	 * it is {@code True} or {@code False} (the Common Lisp booleans), that it is a
+	 * string, that it is of some other type -- no int --, or nothing.
 	 */
 	private enum Kind {
 
-		INT, BOOL, OTHER, ANY;
+		INT, BOOL, STRING, OTHER, ANY;
 
 		/** The kind of a value that is of either kind. */
 		static Kind join(Kind a, Kind b) {
@@ -1157,10 +1164,13 @@ final class StarlarkLowering {
 					case AND, OR -> Kind.join(left, right);
 					case EQUALS, NOT_EQUALS, LESS, LESS_EQUALS, GREATER, GREATER_EQUALS, IN, NOT_IN -> Kind.BOOL;
 					case DIVIDE -> Kind.OTHER;
-					// two ints answer an int; with an operand of another type the
+					// two ints answer an int and two strings joined a string, as a
+					// string interpolated does; with an operand of another type the
 					// operator answers no int: a float, a string, a list
 					default -> left == Kind.INT && right == Kind.INT ? Kind.INT
-							: left.mayBeInt() && right.mayBeInt() ? Kind.ANY : Kind.OTHER;
+							: left == Kind.STRING && (binary.operator() == BinaryOperator.MODULO
+									|| binary.operator() == BinaryOperator.PLUS && right == Kind.STRING) ? Kind.STRING
+											: left.mayBeInt() && right.mayBeInt() ? Kind.ANY : Kind.OTHER;
 				};
 			}
 			case Conditional conditional ->
@@ -1171,12 +1181,14 @@ final class StarlarkLowering {
 				yield signature == null ? Kind.ANY : switch (signature.result()) {
 					case "int" -> Kind.INT;
 					case "bool" -> Kind.BOOL;
+					case "string" -> Kind.STRING;
 					default -> Kind.ANY;
 				};
 			}
 			case Dot _, Index _ -> Kind.ANY;
-			case FloatLiteral _, StringLiteral _, BytesLiteral _, Lambda _, ListLiteral _, TupleLiteral _,
-					DictLiteral _, ListComprehension _, DictComprehension _, Slice _ ->
+			case StringLiteral _ -> Kind.STRING;
+			case FloatLiteral _, BytesLiteral _, Lambda _, ListLiteral _, TupleLiteral _, DictLiteral _,
+					ListComprehension _, DictComprehension _, Slice _ ->
 				Kind.OTHER;
 		};
 	}
@@ -1291,7 +1303,7 @@ final class StarlarkLowering {
 	 * @param kinds the block's kinds, filled here; the collected bindings read it
 	 */
 	private static void infer(Map<String, List<Supplier<Kind>>> bound, List<String> handed, Map<String, Kind> kinds) {
-		for (Kind assumed : List.of(Kind.INT, Kind.BOOL)) {
+		for (Kind assumed : List.of(Kind.INT, Kind.BOOL, Kind.STRING)) {
 			for (String name : bound.keySet()) {
 				if (!handed.contains(name)) {
 					kinds.putIfAbsent(name, assumed);
@@ -2158,6 +2170,13 @@ final class StarlarkLowering {
 
 	private LispVal binary(Binary binary, Scope scope) {
 		BinaryOperator operator = binary.operator();
+		if (operator == BinaryOperator.MODULO && binary.left() instanceof StringLiteral template
+				&& binary.right() instanceof TupleLiteral tuple) {
+			List<Piece> pieces = interpolation(template.value(), tuple.elements().size());
+			if (pieces != null) {
+				return joined(pieces, tuple.elements(), scope);
+			}
+		}
 		if (operator == BinaryOperator.AND || operator == BinaryOperator.OR) {
 			// `a and b` is a when a is false, else b; `a or b` the other way round.
 			boolean and = operator == BinaryOperator.AND;
@@ -2210,19 +2229,31 @@ final class StarlarkLowering {
 	 * @param leftKind what the left operand is known to be
 	 * @param right the right operand's form
 	 * @param rightKind what the right operand is known to be
-	 * @param divisor the right operand: a division or a shift is the Common Lisp operator
-	 * only by a constant that cannot fail
+	 * @param divisor the right operand: a division is the Common Lisp operator by a
+	 * constant that is not zero and, behind a test of it, by a divisor that is no
+	 * constant; a shift only by a constant that cannot fail
 	 * @param generic the helper's call over two operand forms
 	 * @param at the operator's position, which the helper's call is located at
 	 * @return the form
 	 */
 	private LispVal operation(BinaryOperator operator, LispVal left, Kind leftKind, LispVal right, Kind rightKind,
 			Expression divisor, BiFunction<LispVal, LispVal, LispVal> generic, SourceLocation at) {
+		if (operator == BinaryOperator.PLUS && (leftKind == Kind.STRING || rightKind == Kind.STRING)) {
+			return concatenation(left, leftKind, right, rightKind, generic, at);
+		}
 		BiFunction<LispVal, LispVal, LispVal> integers = integers(operator, divisor);
 		if (integers == null || !leftKind.mayBeInt() || !rightKind.mayBeInt()) {
 			return generic.apply(left, right);
 		}
-		if (leftKind == Kind.INT && rightKind == Kind.INT) {
+		// a division by anything but a constant is the helper's when the divisor is 0
+		boolean divides = (operator == BinaryOperator.FLOOR_DIVIDE || operator == BinaryOperator.MODULO)
+				&& literalInt(divisor) == null;
+		if (leftKind == Kind.INT && rightKind == Kind.INT && !divides) {
+			// a quotient's form reads the dividend twice
+			if (operator == BinaryOperator.FLOOR_DIVIDE && !isSimple(left)) {
+				LispSymbol held = fresh("LEFT");
+				return list(LET, list(list(held, left)), integers.apply(held, right));
+			}
 			return integers.apply(left, right);
 		}
 		if (!TESTED.contains(operator)) {
@@ -2247,8 +2278,37 @@ final class StarlarkLowering {
 		if (rightKind != Kind.INT) {
 			tests.add(list(INTEGERP, second));
 		}
+		if (divides) {
+			tests.add(list(NOT, list(NUMBER_EQUAL, second, new LispInteger(0))));
+		}
 		LispVal form = list(IF, tests.size() == 1 ? tests.get(0) : cons(AND, listOf(tests)),
 				integers.apply(first, second), located(generic.apply(first, second), at));
+		return bindings.isEmpty() ? form : list(LET_STAR, listOf(bindings), form);
+	}
+
+	/**
+	 * {@code +} over a known string and another operand: two strings are joined as the
+	 * helper joins them; an operand that may be a string is tested, each evaluated once,
+	 * in order, with the helper as the other branch.
+	 */
+	private LispVal concatenation(LispVal left, Kind leftKind, LispVal right, Kind rightKind,
+			BiFunction<LispVal, LispVal, LispVal> generic, SourceLocation at) {
+		if (leftKind == Kind.STRING && rightKind == Kind.STRING) {
+			return list(STRING_CONCAT, left, right);
+		}
+		List<LispVal> bindings = new ArrayList<>();
+		LispVal first = left;
+		LispVal second = right;
+		if (!isSimple(left)) {
+			first = fresh("LEFT");
+			bindings.add(list(first, left));
+		}
+		if (!isSimple(right)) {
+			second = fresh("RIGHT");
+			bindings.add(list(second, right));
+		}
+		LispVal form = list(IF, list(STRINGP, leftKind == Kind.STRING ? second : first),
+				list(STRING_CONCAT, first, second), located(generic.apply(first, second), at));
 		return bindings.isEmpty() ? form : list(LET_STAR, listOf(bindings), form);
 	}
 
@@ -2256,19 +2316,26 @@ final class StarlarkLowering {
 	 * The Common Lisp form of an operator over two ints, which answers what the generic
 	 * helper answers for them and cannot fail: an integer of any size.
 	 * @param operator the operator
-	 * @param right the right operand: {@code //} and {@code %} need a constant that is
-	 * not zero, a shift a constant count that is not negative
+	 * @param right the right operand: {@code //} and {@code %} cannot fail by a constant
+	 * that is not zero and have no form by one that is -- by any other divisor
+	 * {@link #operation} tests it --, a shift needs a constant count that is not negative
 	 * @return the form's builder, or {@code null} when the operator has none
 	 */
 	private static @Nullable BiFunction<LispVal, LispVal, LispVal> integers(BinaryOperator operator, Expression right) {
 		BigInteger constant = literalInt(right);
-		boolean divides = constant != null && constant.signum() != 0;
+		boolean divides = constant == null || constant.signum() != 0;
 		boolean shifts = constant != null && constant.signum() >= 0 && constant.bitLength() < Integer.SIZE;
 		return switch (operator) {
 			case PLUS -> (a, b) -> list(PLUS, a, b);
 			case MINUS -> (a, b) -> list(MINUS, a, b);
 			case MULTIPLY -> (a, b) -> list(TIMES, a, b);
-			case FLOOR_DIVIDE -> divides ? (a, b) -> list(VALUES, list(FLOOR, a, b)) : null;
+			// floor's two-argument form divides into a ratio first on every backend:
+			// by a power of two the quotient is a shift, by anything else what is
+			// left of the dividend once its remainder is taken off, divided exactly
+			case FLOOR_DIVIDE -> !divides ? null
+					: constant != null && constant.signum() > 0 && constant.bitCount() == 1
+							? (a, b) -> list(ASH, a, new LispInteger(1 - constant.bitLength()))
+							: (a, b) -> list(DIVIDE, list(MINUS, a, list(MOD, a, b)), b);
 			case MODULO -> divides ? (a, b) -> list(MOD, a, b) : null;
 			case BIT_AND -> (a, b) -> list(LOGAND, a, b);
 			case BIT_OR -> (a, b) -> list(LOGIOR, a, b);
@@ -2380,7 +2447,8 @@ final class StarlarkLowering {
 			}
 		}
 		LispVal body = dict
-				? list(SET_INDEX, accumulator, expression(produced.get(0), inner), expression(produced.get(1), inner))
+				? list(runtime("DICT-STORE"), accumulator, expression(produced.get(0), inner),
+						expression(produced.get(1), inner))
 				: list(VECTOR_PUSH_EXTEND, expression(produced.get(0), inner), accumulator);
 		this.flow = outer;
 		for (int i = clauses.size() - 1; i > 0; i--) {
@@ -2411,6 +2479,13 @@ final class StarlarkLowering {
 				// no value has it: the receiver is evaluated, the arguments never are
 				return list(NO_ATTRIBUTE, expression(dot.receiver(), scope), string(dot.name()));
 			}
+			if (dot.receiver() instanceof StringLiteral template && dot.name().equals("format")
+					&& arguments.stream().allMatch(argument -> argument.kind() == ArgumentKind.POSITIONAL)) {
+				List<Piece> pieces = format(template.value(), arguments.size());
+				if (pieces != null) {
+					return joined(pieces, arguments.stream().map(Argument::value).toList(), scope);
+				}
+			}
 			// the helper takes the receiver as its first parameter
 			List<Argument> withReceiver = new ArrayList<>();
 			withReceiver.add(new Argument(ArgumentKind.POSITIONAL, null, dot.receiver(), dot.at()));
@@ -2437,6 +2512,194 @@ final class StarlarkLowering {
 			}
 		}
 		return general(expression(callee, scope), arguments, scope);
+	}
+
+	// ---- templates ----
+
+	/**
+	 * A piece of the string a template makes: text as it stands, or what a conversion
+	 * makes of an argument.
+	 *
+	 * @param text the text, or {@code null} for a conversion
+	 * @param conversion {@code s} for {@code str}, {@code r} for {@code repr}, else the
+	 * conversion character of a {@code %} template
+	 * @param argument the index of the argument converted
+	 */
+	private record Piece(@Nullable String text, char conversion, int argument) {
+
+		static Piece text(String text) {
+			return new Piece(text, ' ', -1);
+		}
+
+	}
+
+	/** Adds text to the pieces, onto the text before it when there is one. */
+	private static void text(List<Piece> pieces, String text) {
+		int last = pieces.size() - 1;
+		String before = last < 0 ? null : pieces.get(last).text();
+		if (before != null) {
+			pieces.set(last, Piece.text(before + text));
+		}
+		else {
+			pieces.add(Piece.text(text));
+		}
+	}
+
+	/**
+	 * The pieces of {@code "template" % (a, b)} over as many arguments, read as
+	 * {@code %starlark-interpolate} reads the template when the program runs, or
+	 * {@code null} when that reading ends in an error -- a conversion it does not know,
+	 * one more or one less than the arguments, a {@code %} ending the template -- which
+	 * is then the run time's to report where it stands.
+	 * @param template the template
+	 * @param arguments how many arguments the tuple spells
+	 * @return the pieces, or {@code null}
+	 */
+	private static @Nullable List<Piece> interpolation(String template, int arguments) {
+		List<Piece> pieces = new ArrayList<>();
+		int argument = 0;
+		int from = 0;
+		while (from < template.length()) {
+			int mark = template.indexOf('%', from);
+			if (mark < 0) {
+				text(pieces, template.substring(from));
+				break;
+			}
+			if (mark > from) {
+				text(pieces, template.substring(from, mark));
+			}
+			if (mark + 1 >= template.length()) {
+				return null;
+			}
+			char conversion = template.charAt(mark + 1);
+			if (conversion == '%') {
+				text(pieces, "%");
+			}
+			else if (argument >= arguments || "srdixXoeEfFgG".indexOf(conversion) < 0) {
+				return null;
+			}
+			else {
+				pieces.add(new Piece(null, conversion, argument++));
+			}
+			from = mark + 2;
+		}
+		return argument == arguments && pieces.size() <= TEMPLATE_PIECES ? pieces : null;
+	}
+
+	/**
+	 * The pieces of {@code "template".format(a, b)} over as many positional arguments,
+	 * read as {@code %starlark-m-format} reads the template when the program runs, or
+	 * {@code null} when that reading ends in an error or needs a named argument, which is
+	 * then the run time's.
+	 * @param template the template
+	 * @param arguments how many arguments the call spells
+	 * @return the pieces, or {@code null}
+	 */
+	private static @Nullable List<Piece> format(String template, int arguments) {
+		List<Piece> pieces = new ArrayList<>();
+		// fields numbered as they come (1), by hand (-1), or none yet
+		int numbering = 0;
+		int next = 0;
+		int from = 0;
+		while (from < template.length()) {
+			char c = template.charAt(from);
+			boolean doubled = from + 1 < template.length() && template.charAt(from + 1) == c;
+			if (c != '{' && c != '}') {
+				text(pieces, String.valueOf(c));
+				from++;
+				continue;
+			}
+			if (doubled) {
+				text(pieces, String.valueOf(c));
+				from += 2;
+				continue;
+			}
+			int close = c == '}' ? -1 : template.indexOf('}', from + 1);
+			if (close < 0) {
+				return null;
+			}
+			String field = template.substring(from + 1, close);
+			int bang = field.indexOf('!');
+			String rest = bang < 0 ? "" : field.substring(bang + 1);
+			int colon = bang < 0 ? field.indexOf(':') : rest.indexOf(':');
+			String name = field.substring(0, bang >= 0 ? bang : colon >= 0 ? colon : field.length());
+			String conversion = bang < 0 ? "s" : rest.substring(0, colon >= 0 ? colon : rest.length());
+			// a format spec, a named field and an unknown conversion are the run time's
+			if (colon >= 0 && colon + 1 < (bang < 0 ? field : rest).length()
+					|| !conversion.equals("s") && !conversion.equals("r")) {
+				return null;
+			}
+			int argument;
+			if (name.isEmpty()) {
+				if (numbering < 0) {
+					return null;
+				}
+				numbering = 1;
+				argument = next++;
+			}
+			else if (name.length() <= 9 && name.chars().allMatch(digit -> digit >= '0' && digit <= '9')) {
+				if (numbering > 0) {
+					return null;
+				}
+				numbering = -1;
+				argument = Integer.parseInt(name);
+			}
+			else {
+				return null;
+			}
+			if (argument >= arguments) {
+				return null;
+			}
+			pieces.add(new Piece(null, conversion.charAt(0), argument));
+			from = close + 1;
+		}
+		return pieces.size() <= TEMPLATE_PIECES ? pieces : null;
+	}
+
+	/**
+	 * The string the pieces of a template make of the arguments: every argument is
+	 * evaluated first, in order, as the tuple or the call evaluates them, then each piece
+	 * is converted in order and the pieces are joined -- no template is read and no tuple
+	 * made when the program runs.
+	 * @param pieces the template's pieces
+	 * @param arguments the arguments
+	 * @param scope where the arguments' names resolve
+	 * @return the form
+	 */
+	private LispVal joined(List<Piece> pieces, List<Expression> arguments, Scope scope) {
+		List<LispVal> bindings = new ArrayList<>();
+		List<LispVal> operands = new ArrayList<>();
+		for (Expression argument : arguments) {
+			LispVal form = expression(argument, scope);
+			if (!isSimple(form)) {
+				LispSymbol held = fresh("ARG");
+				bindings.add(list(held, form));
+				form = held;
+			}
+			operands.add(form);
+		}
+		List<LispVal> parts = new ArrayList<>();
+		for (Piece piece : pieces) {
+			String text = piece.text();
+			// str of a string is the string
+			parts.add(text != null ? string(text) : switch (piece.conversion()) {
+				case 's' -> operands.get(piece.argument()) instanceof LispString literal ? literal
+						: list(runtime("B-STR"), operands.get(piece.argument()));
+				case 'r' -> list(runtime("B-REPR"), operands.get(piece.argument()));
+				default ->
+					list(runtime("CONVERSION"), operands.get(piece.argument()), new LispChar(piece.conversion()));
+			});
+		}
+		LispVal joined = parts.isEmpty() ? string("") : parts.get(0);
+		if (parts.size() > 4) {
+			joined = list(runtime("CONCAT-PIECES"), cons(LIST, listOf(parts)), new LispInteger(parts.size()));
+		}
+		else {
+			for (LispVal part : parts.subList(Math.min(1, parts.size()), parts.size())) {
+				joined = list(STRING_CONCAT, joined, part);
+			}
+		}
+		return bindings.isEmpty() ? joined : list(LET_STAR, listOf(bindings), joined);
 	}
 
 	/**
