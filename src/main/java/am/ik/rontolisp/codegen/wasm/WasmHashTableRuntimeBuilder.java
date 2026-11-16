@@ -548,13 +548,25 @@ final class WasmHashTableRuntimeBuilder {
 	private static void emitKeyTest(Asm a, Flags flags, int keyLocal, int entryLocal, int entryKeyLocal, int tagLocal) {
 		a.get(entryLocal).i32(E_KEY).aget().set(entryKeyLocal);
 		if (!flags.identity()) {
-			a.get(keyLocal).get(entryKeyLocal).call(WasmLispCompiler.FUNC_EQUAL);
+			emitEqualTest(a, keyLocal, entryKeyLocal);
 			return;
 		}
 		a.get(tagLocal).i32(2).op(Instruction.I32_GE_S).ifI32();
 		emitEqlTest(a, keyLocal, entryKeyLocal);
 		a.elseArm();
-		a.get(keyLocal).get(entryKeyLocal).call(WasmLispCompiler.FUNC_EQUAL);
+		emitEqualTest(a, keyLocal, entryKeyLocal);
+		a.end();
+	}
+
+	// Leaves the i32 "the keys in the two locals are equal": identity first, which is
+	// what _equal answers true for at once and what a fixnum key, or a string looked up
+	// by the object stored, is -- the call spills the walk's references around it
+	// (measured 2026-11-16: a Starlark program of dict reads and stores 1.23 -> 1.15 s).
+	private static void emitEqualTest(Asm a, int keyLocal, int otherLocal) {
+		a.get(keyLocal).get(otherLocal).refEq().ifI32();
+		a.i32(1);
+		a.elseArm();
+		a.get(keyLocal).get(otherLocal).call(WasmLispCompiler.FUNC_EQUAL);
 		a.end();
 	}
 

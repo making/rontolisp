@@ -249,6 +249,12 @@ compares with `LispEquality`, a compiled program's `_hash*` helpers with `_equal
 rebuilds it over wasm-GC arrays (`WasmHashTableRuntimeBuilder`, the `_ht_*` functions), and
 keeps a table of eight keys or fewer as a vector of pairs (next bullet).
 
+- **WASM: a chain's key is asked `ref.eq` before `_equal`** (2026-11-16,
+  `WasmHashTableRuntimeBuilder.emitEqualTest`, in `_ht_get`/`_ht_put`/`_ht_rem` through
+  `emitKeyTest`): the answer `_equal` gives at once for the same object -- a fixnum key, a
+  string looked up by the object that was stored -- without the call, which spills the
+  walk's references. A Starlark program of dict reads and stores (`dicts.star`) 1.23 ->
+  1.15 s, measured on the hand-edited module first.
 - **WASM: a table of at most `SMALL_MAX` (8) keys is SMALL (2026-11-06)**, a record
   `[count, key0, value0, ...]` of odd length (a flat one's is 4, a trie's 6), what
   `make-hash-table` and `clrhash` answer for every test but `equalp`. The pairs are scanned with

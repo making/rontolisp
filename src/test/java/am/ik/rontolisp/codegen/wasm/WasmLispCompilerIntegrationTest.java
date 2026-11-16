@@ -2117,7 +2117,14 @@ class WasmLispCompilerIntegrationTest {
 		// boundary: i31 overflow into TYPE_BIGNUM, i64 into the limb tier, a ratio, a
 		// float. Expected output: SBCL. A comparison of two such operands has the same
 		// head at its site (WasmComparisonCompiler.emitUnfusedCompare), with
-		// _rat_cmp_bits behind it for any pair that is not two fixnums.
+		// _rat_cmp_bits behind it for any pair that is not two fixnums. An `if` over
+		// integerp tests of variables is compiled twice at the speed levels
+		// (WasmFixnumVersioning), the copy for fixnums over unboxed locals: the v-
+		// functions hold it in value, test, effect and tail position, down a cond, with
+		// a variable it must leave alone (assigned, captured, rebound), and take every
+		// tier and a value that is no integer through both copies; vliteral is a mod,
+		// rem and * by a literal, inline in a fused tree
+		// (WasmIntFusionCompiler.emitInlineLiteralOp).
 		String program = """
 				(defun add (a b) (+ a b))
 				(defun sub (a b) (- a b))
@@ -2139,6 +2146,34 @@ class WasmLispCompilerIntegrationTest {
 				(defun cmp (a b) (list (< a b) (<= a b) (= a b) (>= a b) (> a b)))
 				(print (list (cmp 1 2) (cmp 2 2) (cmp -1073741824 1073741823) (cmp 1073741824 1) (cmp 1 1073741824)
 				             (cmp 1/2 1) (cmp 1 1.5) (cmp 9223372036854775808 1)))
+				(defvar *wide* (expt 2 40))
+				(defvar *big* (expt 2 70))
+				(defun vadd (a b) (if (and (integerp a) (integerp b)) (+ a b) (list a b)))
+				(defun vref (v i) (if (and (integerp i) (>= i 0) (< i (length v))) (aref v i) (list :out i)))
+				(defun vless (a b) (if (if (and (integerp a) (integerp b)) (< a b) (eq a b)) :yes :no))
+				(defun vwhile (n) (let ((i 0) (s 0)) (loop while (if (integerp n) (< i n) nil) do (setq s (+ s i)) (setq i (+ i 1))) s))
+				(defun veffect (a) (let ((s :none)) (if (integerp a) (setq s (* a 2)) (setq s (list a))) s))
+				(defun vassigned (a) (if (integerp a) (progn (setq a (+ a 1)) a) :no))
+				(defun vcaptured (a) (if (integerp a) (funcall (lambda () (+ a 1))) :no))
+				(defun vrebound (a) (if (integerp a) (let ((a (list a))) (car a)) :no))
+				(defun vnested (a b) (if (integerp a) (if (integerp b) (- a b) (list :b b)) (if (integerp b) (list :a a) :neither)))
+				(defun vtail (a b) (if (and (integerp a) (integerp b) (< a b)) (vadd b a) (list a b)))
+				(defun vchain (a) (cond ((null a) :null) ((integerp a) (- a)) ((stringp a) (length a)) (t :other)))
+				(defun vblock (a) (block nil (if (integerp a) (return (* a a)) :no)))
+				(defun vliteral (a) (list (mod a 7) (rem a 7) (* a 100000) (mod (* a 7919) 1000003) (mod a -7) (* a -2147483648)))
+				(print (list (vadd 1 2) (vadd 1073741823 1) (vadd -1073741824 -1073741824) (vadd 1073741823 1073741823) (vadd *wide* 1)
+				             (vadd 1 *wide*) (vadd *big* *big*) (vadd 1 1.5) (vadd 1/2 1) (vadd nil 1) (vadd "a" "b")))
+				(print (list (vref (vector 1 2 3) 2) (vref (vector 1 2 3) 3) (vref (vector 1 2 3) -1) (vref (vector 1 2 3) *big*)
+				             (vref (vector 1 2 3) 1.0) (vref "abc" 1)))
+				(print (list (vless 1 2) (vless 2 1) (vless *wide* *big*) (vless *big* 1) (vless :a :a) (vless 1 :a) (vwhile 5) (vwhile :x)
+				             (vwhile -3)))
+				(print (list (veffect 21) (veffect 1073741823) (veffect *big*) (veffect "s") (vassigned 1) (vassigned 1073741823) (vassigned :k)
+				             (vcaptured 41) (vcaptured *wide*) (vcaptured nil) (vrebound 7) (vrebound "r")))
+				(print (list (vnested 5 3) (vnested 5 :y) (vnested :x 3) (vnested :x :y) (vnested *big* 1) (vnested -1073741824 1073741823)
+				             (vtail 1 2) (vtail 2 1) (vtail 1 *wide*) (vtail 1 :z) (vchain nil) (vchain 5) (vchain -1073741824) (vchain *big*)
+				             (vchain "abc") (vchain 1.5) (vblock 9) (vblock 1073741823) (vblock :q)))
+				(print (list (vliteral 10) (vliteral -10) (vliteral 0) (vliteral 1073741823) (vliteral -1073741824) (vliteral 2147483648)
+				             (vliteral -2147483649) (vliteral 4611686018427387904) (vliteral *big*) (vliteral (- *big*))))
 				""";
 		List<LispVal> parsed = LispReader.readAllFromString(program);
 		String expected = """
@@ -2156,7 +2191,21 @@ class WasmLispCompilerIntegrationTest {
 				-9223372036854775800
 				75025
 				((T T NIL NIL NIL) (NIL T T T NIL) (T T NIL NIL NIL) (NIL NIL NIL T T) (T T NIL NIL NIL) \
-				(T T NIL NIL NIL) (T T NIL NIL NIL) (NIL NIL NIL T T))""";
+				(T T NIL NIL NIL) (T T NIL NIL NIL) (NIL NIL NIL T T))
+				(3 1073741824 -2147483648 2147483646 1099511627777 1099511627777 2361183241434822606848 (1 1.5) \
+				(1/2 1) (NIL 1) ("a" "b"))
+				(3 (:OUT 3) (:OUT -1) (:OUT 1180591620717411303424) (:OUT 1.0) #\\b)
+				(:YES :NO :YES :NO :YES :NO 10 0 0)
+				(42 2147483646 2361183241434822606848 ("s") 2 1073741824 :NO 42 1099511627777 :NO 7 :NO)
+				(2 (:B :Y) (:A :X) :NEITHER 1180591620717411303423 -2147483647 3 (2 1) 1099511627777 (1 :Z) \
+				:NULL -5 1073741824 -1180591620717411303424 3 :OTHER 81 1152921502459363329 :NO)
+				((3 3 1000000 79190 -4 -21474836480) (4 -3 -1000000 920813 -3 21474836480) (0 0 0 0 0 0) (0 0 \
+				107374182300000 987532 0 -2305843007066210304) (6 -1 -107374182400000 4552 -1 \
+				2305843009213693952) (2 2 214748364800000 990899 -5 -4611686018427387904) (4 -3 -214748364900000 \
+				1185 -3 4611686020574871552) (4 4 461168601842738790400000 520507 -3 \
+				-9903520314283042199192993792) (2 2 118059162071741130342400000 249393 -5 \
+				-2535301200456458802993406410752) (5 -2 -118059162071741130342400000 750610 -2 \
+				2535301200456458802993406410752))""";
 		for (OptimizeLevel level : OptimizeLevel.values()) {
 			byte[] module = WasmLispCompiler.builder().optimize(level).build().compile(parsed);
 			assertThat(runModule(module, "i31-head-" + level + ".wasm")).as("at %s", level).isEqualTo(expected);

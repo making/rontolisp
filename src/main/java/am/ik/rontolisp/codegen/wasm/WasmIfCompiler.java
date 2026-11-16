@@ -64,6 +64,11 @@ final class WasmIfCompiler {
 			WasmNameDispatchCompiler.compile(dispatch, ctx, false, false);
 			return;
 		}
+		WasmFixnumVersioning.Plan versions = WasmFixnumVersioning.plan(cons, ctx);
+		if (versions != null) {
+			WasmFixnumVersioning.compile(versions, ctx, false, true);
+			return;
+		}
 		List<LispVal> parts = cons.toList();
 		LispVal test = parts.get(1);
 		LispVal thenForm = parts.get(2);
@@ -138,6 +143,13 @@ final class WasmIfCompiler {
 				// A name dispatch, at the head or down the else spine: a search over
 				// the names' offsets instead of a test per level.
 				WasmNameDispatchCompiler.compile(dispatch, ctx, tail, true);
+				break;
+			}
+			WasmFixnumVersioning.Plan versions = WasmFixnumVersioning.plan(ifCons, ctx);
+			if (versions != null) {
+				// A test of integers, at the head or down the else spine: compiled
+				// twice, the arms in this call's tail position.
+				WasmFixnumVersioning.compile(versions, ctx, tail, false);
 				break;
 			}
 			List<LispVal> parts = ifCons.toList();

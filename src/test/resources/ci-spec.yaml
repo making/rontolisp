@@ -26199,6 +26199,62 @@ cases:
       (:PT3 :PT :OTHER T T (1 2) 9 3)
       CI-VE-PT-X: The value 42 is not of type CI-VE-PT | CI-VE-PT
       CI-VE-PT-X: The value 1 is not of type CI-VE-PT | CI-VE-PT
+  - name: an-if-over-integerp-tests-answers-for-every-tier
+    # (if (and (integerp a) (integerp b) ..) then else): wasm compiles it twice at the speed
+    # levels, the copy for fixnums over unboxed locals, the copy for anything else as written.
+    # In value, test, effect and tail position, down a cond, leaving a block, with a variable
+    # the copy must leave alone (assigned, captured, rebound), over every tier (a fixnum, its
+    # two edges, an integer past 32 and past 64 bits) and values that are no integers. The
+    # last rows are a mod, a rem and a * by a literal, which a fused tree computes inline.
+    source: |
+      (defmacro ci-i2t-check (form)
+        `(handler-case (format t "~s~%" ,form)
+           (type-error (e) (format t "~a | ~s~%" e (type-error-expected-type e)))
+           (error (e) (format t "~a~%" e))))
+      (defvar *ci-i2t-wide* (expt 2 40))
+      (defvar *ci-i2t-big* (expt 2 70))
+      (defun ci-i2t-add (a b) (if (and (integerp a) (integerp b)) (+ a b) (list a b)))
+      (defun ci-i2t-ref (v i) (if (and (integerp i) (>= i 0) (< i (length v))) (aref v i) (list :out i)))
+      (defun ci-i2t-less (a b) (if (if (and (integerp a) (integerp b)) (< a b) (eq a b)) :yes :no))
+      (defun ci-i2t-while (n) (let ((i 0) (s 0)) (loop while (if (integerp n) (< i n) nil) do (setq s (+ s i)) (setq i (+ i 1))) s))
+      (defun ci-i2t-effect (a) (let ((s :none)) (if (integerp a) (setq s (* a 2)) (setq s (list a))) s))
+      (defun ci-i2t-assigned (a) (if (integerp a) (progn (setq a (+ a 1)) a) :no))
+      (defun ci-i2t-captured (a) (if (integerp a) (funcall (lambda () (+ a 1))) :no))
+      (defun ci-i2t-rebound (a) (if (integerp a) (let ((a (list a))) (car a)) :no))
+      (defun ci-i2t-nested (a b) (if (integerp a) (if (integerp b) (- a b) (list :b b)) (if (integerp b) (list :a a) :neither)))
+      (defun ci-i2t-tail (a b) (if (and (integerp a) (integerp b) (< a b)) (ci-i2t-add b a) (list a b)))
+      (defun ci-i2t-chain (a) (cond ((null a) :null) ((integerp a) (- a)) ((stringp a) (length a)) (t :other)))
+      (defun ci-i2t-block (a) (block nil (if (integerp a) (return (* a a)) :no)))
+      (defun ci-i2t-literal (a) (list (mod a 7) (rem a 7) (* a 100000) (mod (* a 7919) 1000003) (mod a -7) (* a -2147483648)))
+      (ci-i2t-check (list (ci-i2t-add 1 2) (ci-i2t-add 1073741823 1) (ci-i2t-add -1073741824 -1073741824) (ci-i2t-add 1073741823 1073741823)
+                         (ci-i2t-add *ci-i2t-wide* 1) (ci-i2t-add 1 *ci-i2t-wide*) (ci-i2t-add *ci-i2t-big* *ci-i2t-big*) (ci-i2t-add 1 1.5) (ci-i2t-add 1/2 1)
+                         (ci-i2t-add nil 1) (ci-i2t-add "a" "b")))
+      (ci-i2t-check (list (ci-i2t-ref (vector 1 2 3) 2) (ci-i2t-ref (vector 1 2 3) 3) (ci-i2t-ref (vector 1 2 3) -1) (ci-i2t-ref (vector 1 2 3) *ci-i2t-big*)
+                         (ci-i2t-ref (vector 1 2 3) 1.0) (ci-i2t-ref "abc" 1)))
+      (ci-i2t-check (ci-i2t-ref (list 5 6) 0))
+      (ci-i2t-check (list (ci-i2t-less 1 2) (ci-i2t-less 2 1) (ci-i2t-less *ci-i2t-wide* *ci-i2t-big*) (ci-i2t-less *ci-i2t-big* 1) (ci-i2t-less :a :a) (ci-i2t-less 1 :a)
+                         (ci-i2t-while 5) (ci-i2t-while :x) (ci-i2t-while -3)))
+      (ci-i2t-check (list (ci-i2t-effect 21) (ci-i2t-effect 1073741823) (ci-i2t-effect *ci-i2t-big*) (ci-i2t-effect "s")
+                         (ci-i2t-assigned 1) (ci-i2t-assigned 1073741823) (ci-i2t-assigned :k) (ci-i2t-captured 41) (ci-i2t-captured *ci-i2t-wide*) (ci-i2t-captured nil)
+                         (ci-i2t-rebound 7) (ci-i2t-rebound "r")))
+      (ci-i2t-check (list (ci-i2t-nested 5 3) (ci-i2t-nested 5 :y) (ci-i2t-nested :x 3) (ci-i2t-nested :x :y) (ci-i2t-nested *ci-i2t-big* 1) (ci-i2t-nested -1073741824 1073741823)
+                         (ci-i2t-tail 1 2) (ci-i2t-tail 2 1) (ci-i2t-tail 1 *ci-i2t-wide*) (ci-i2t-tail 1 :z)
+                         (ci-i2t-chain nil) (ci-i2t-chain 5) (ci-i2t-chain -1073741824) (ci-i2t-chain *ci-i2t-big*) (ci-i2t-chain "abc") (ci-i2t-chain 1.5)
+                         (ci-i2t-block 9) (ci-i2t-block 1073741823) (ci-i2t-block :q)))
+      (ci-i2t-check (list (ci-i2t-literal 10) (ci-i2t-literal -10) (ci-i2t-literal 0) (ci-i2t-literal 1073741823) (ci-i2t-literal -1073741824)
+                         (ci-i2t-literal 2147483648) (ci-i2t-literal -2147483649) (ci-i2t-literal 4611686018427387904) (ci-i2t-literal *ci-i2t-big*) (ci-i2t-literal (- *ci-i2t-big*))))
+      (ci-i2t-check (ci-i2t-literal 1.5))
+      (ci-i2t-check (ci-i2t-literal :k))
+    expected: |
+      (3 1073741824 -2147483648 2147483646 1099511627777 1099511627777 2361183241434822606848 (1 1.5) (1/2 1) (NIL 1) ("a" "b"))
+      (3 (:OUT 3) (:OUT -1) (:OUT 1180591620717411303424) (:OUT 1.0) #\b)
+      AREF: The value (5 6) is not of type ARRAY | ARRAY
+      (:YES :NO :YES :NO :YES :NO 10 0 0)
+      (42 2147483646 2361183241434822606848 ("s") 2 1073741824 :NO 42 1099511627777 :NO 7 :NO)
+      (2 (:B :Y) (:A :X) :NEITHER 1180591620717411303423 -2147483647 3 (2 1) 1099511627777 (1 :Z) :NULL -5 1073741824 -1180591620717411303424 3 :OTHER 81 1152921502459363329 :NO)
+      ((3 3 1000000 79190 -4 -21474836480) (4 -3 -1000000 920813 -3 21474836480) (0 0 0 0 0 0) (0 0 107374182300000 987532 0 -2305843007066210304) (6 -1 -107374182400000 4552 -1 2305843009213693952) (2 2 214748364800000 990899 -5 -4611686018427387904) (4 -3 -214748364900000 1185 -3 4611686020574871552) (4 4 461168601842738790400000 520507 -3 -9903520314283042199192993792) (2 2 118059162071741130342400000 249393 -5 -2535301200456458802993406410752) (5 -2 -118059162071741130342400000 750610 -2 2535301200456458802993406410752))
+      (1.5 1.5 150000.0 11878.5 -5.5 -3.221225472e9)
+      MOD: The value :K is not of type REAL | REAL
   # CLHS 3.5.1.4-6 / .kb/error-handling.md, "Argument-shape errors signal a
   # catchable program-error": a keyword the operator does not accept, an odd
   # keyword tail and a non-keyword in keyword position signal a CATCHABLE

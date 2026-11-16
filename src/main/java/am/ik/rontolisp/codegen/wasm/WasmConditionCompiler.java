@@ -150,6 +150,9 @@ final class WasmConditionCompiler {
 				}
 				return true;
 			}
+			case LispNames.IF -> {
+				return tryCompileIf(cons, args, ctx, negated);
+			}
 			case LispNames.OBJ_IS -> {
 				WasmInstanceCompiler.emitIsI32(cons, ctx);
 				if (negated) {
@@ -163,6 +166,57 @@ final class WasmConditionCompiler {
 						|| WasmComparisonCompiler.tryCompileConditionI32(test, ctx, negated);
 			}
 		}
+	}
+
+	/**
+	 * The most {@code if}s down an else spine a test is compiled through: each level is a
+	 * frame of this compiler, and a longer chain -- a {@code case} of hundreds of keys in
+	 * a test -- is compiled as a value, by the loop of {@link WasmIfCompiler}.
+	 */
+	private static final int MAX_IF_SPINE = 32;
+
+	// (if a b c) as a test: a; if (result i32) [b as a test] else [c as a test] end, so
+	// neither arm's truth is boxed for the consumer to ask ref.is_null of -- what a
+	// comparison behind a type test is (`(if (integerp n) (< n 2) (generic n 2))`). Not
+	// in state-machine mode, whose `if` routes resumes through its arms, and not a name
+	// dispatch, which is a search over the names.
+	private static boolean tryCompileIf(LispCons cons, List<LispVal> args, WasmLispCompiler.Ctx ctx, boolean negated) {
+		if (ctx.asyncResume != null || args.size() < 3 || args.size() > 4) {
+			return false;
+		}
+		int spine = 0;
+		for (LispVal form = cons; form instanceof LispCons level && level.isProperList()
+				&& level.car() instanceof LispSymbol head && LispNames.IF.equals(head.name());) {
+			if (++spine > MAX_IF_SPINE || WasmNameDispatchCompiler.match(level, ctx) != null) {
+				return false;
+			}
+			List<LispVal> parts = level.toList();
+			if (parts.size() < 3 || parts.size() > 4) {
+				return false;
+			}
+			form = parts.size() > 3 ? parts.get(3) : LispNil.INSTANCE;
+		}
+		WasmFixnumVersioning.Plan versions = WasmFixnumVersioning.plan(cons, ctx);
+		if (versions != null) {
+			WasmFixnumVersioning.compileTest(versions, ctx, negated);
+			return true;
+		}
+		LispVal test = args.get(1);
+		LispVal elseForm = args.size() > 3 ? args.get(3) : LispNil.INSTANCE;
+		if (test instanceof LispTrue || test instanceof LispNil) {
+			compile(test instanceof LispTrue ? args.get(2) : elseForm, ctx, negated);
+			return true;
+		}
+		compile(test, ctx, false);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.write(Type.I32);
+		ctx.wasmCtrlDepth++;
+		compile(args.get(2), ctx, negated);
+		ctx.writer.write(Instruction.ELSE);
+		compile(elseForm, ctx, negated);
+		ctx.wasmCtrlDepth--;
+		ctx.writer.write(Instruction.END);
+		return true;
 	}
 
 	// (and a b c) -> a; if (result i32) [b; if (result i32) c else 0 end] else 0 end;

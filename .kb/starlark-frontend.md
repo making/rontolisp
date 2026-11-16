@@ -715,7 +715,8 @@ to CPython on is below: the `//`, not `flags[j]`.
 time than `python3` on the same file** (best of three, the whole process). Met on
 the JVM for five of the eleven (`fib`, `loop`, `calls`, `mixed`, `listidx`) and on
 wasm and the component for four (`bench`, `fib`, `loop`, `calls`) -- five with `mixed` since
-"The list element on wasm" below; where it is not, the cost left is a backend's and is named below with the item
+"The list element on wasm" and six with `listidx` since "An int test compiled twice",
+both below; where it is not, the cost left is a backend's and is named below with the item
 that carries it.
 
 The five programs above cover integers, calls and `range`. Six were added, each about a
@@ -923,14 +924,75 @@ The four programs with no list (`bench`, `fib`, `loop`, `calls`) are the run's n
   iteration of `listidx.star`. The clear of the multiple-value channel an inlined
   structure reader keeps (`.kb/defstruct.md`): 0.02-0.03 s of `listidx.star`'s 1.21 with
   all thirteen of the two index helpers removed.
-- **Left** (`.todo/j62`): `listidx` is CPython's time (1.22-1.27 against 1.20-1.25 over
-  the runs), not under it. Read off the module's text, not measured one by one: an
-  element still pays the call of `%starlark-index` / `-set-index`, the instance test
-  repeated at each reader of one variable (five in a store), the generic `+` behind an
-  `integerp` test of two variables (one call where a fused tree is inline,
-  `.kb/wasm-int-fusion.md`) and the `br_table` of the loop's `tagbody`. `dicts`, `comps`,
-  `methods`, `strings` and `sorting` were not profiled again; the last three are
-  strings, above.
+- **Left then, measured and made since** ("An int test compiled twice" below): `listidx`
+  was CPython's time (1.22-1.27 against 1.20-1.25 over the runs), not under it. Read off
+  the module's text, not measured one by one: an element paid the call of
+  `%starlark-index` / `-set-index`, the instance test repeated at each reader of one
+  variable (five in a store), the generic `+` behind an `integerp` test of two variables
+  (one call where a fused tree is inline, `.kb/wasm-int-fusion.md`) and the `br_table` of
+  the loop's `tagbody`.
+
+### An int test compiled twice (2026-11-16)
+
+What "The cell names its storage" left to `.todo/j62`, each candidate measured first on
+the module of the day edited as text, or read off its machine code (`wasmtime objdump`),
+`.todo/artefacts/j62-wasm-fixnum-versions/`. **The premise overturned: no construct of an
+element access is the cost, their number is.** A hand-written head of sixty instructions
+in front of each index helper was `listidx.star` 1.20 -> 0.79 s, and what the item named
+was little of it: the repeated instance casts and their channel clears 0.01 s, the
+subscript's repeated tests 0.04, the cell's second cast 0.02, all three together 0.14 of
+the 0.41; the compiled helper is two hundred instructions (`.kb/wasm-int-fusion.md`, "An
+integer test compiled twice", for what each costs).
+
+Made, in the wasm backend at the speed levels: an `if` over `integerp` tests of variables
+is compiled twice, the copy for fixnums over unboxed locals -- which is every operator
+the lowering tests (`(if (and (integerp a) (integerp b)) (+ a b) (%starlark-add a b))`:
+six type tests and a call of the generic addition before, two fixnum tests and an
+`i64.add` now) and the subscript test of the index helpers; an `if` in a test is its arms
+as tests, so `if n < 2:` boxes no `t`; a `mod`, `rem` and `*` by a literal are inline in
+a fused tree (`loop.star`'s `i % 7` was a call and a 64-bit division); at every level a
+hash table's chain asks `ref.eq` before `_equal` (`.kb/hash-tables.md`). In the library:
+`%starlark-index` and `%starlark-set-index` hold the list case alone -- a list nothing
+forbids writing, subscripted by an int within it -- and hand everything else to
+`%starlark-index-of` / `%starlark-set-index-of`, the general functions they were, so the
+compiled head is a few tests and one access with no frame of the general function's size
+around them (`listidx.star` 1.23 -> 1.15 s by that alone).
+
+Seconds as above (`time.sh`, best of three, same machine, the two builds run in turn),
+before -> after; the JVM column is the library's heads and its own spread from run to run
+(`sorting.star` 2.70-3.11 before and 2.96-3.39 after over seven runs each):
+
+| program | JVM | WASM | component | CPython | `.wasm` bytes |
+|---|---|---|---|---|---|
+| `bench.star` | 0.15 -> 0.16 | 0.07 -> 0.05 | 0.06 -> 0.05 | 0.11 | 136,334 -> 137,273 |
+| `fib.star` | 0.27 -> 0.27 | 0.43 -> 0.21 | 0.41 -> 0.17 | 1.44 | 135,478 -> 136,407 |
+| `loop.star` | 0.18 -> 0.18 | 0.67 -> 0.39 | 0.66 -> 0.37 | 1.60 | 104,673 -> 104,883 |
+| `calls.star` | 0.27 -> 0.27 | 0.29 -> 0.17 | 0.24 -> 0.14 | 0.75 | 117,532 -> 118,225 |
+| `mixed.star` | 0.69 -> 0.72 | 0.71 -> 0.56 | 0.64 -> 0.51 | 1.20 | 174,162 -> 177,760 |
+| `listidx.star` | 1.15 -> 1.18 | 1.21 -> 0.95 | 1.19 -> 0.93 | 1.18 | 177,050 -> 180,624 |
+| `dicts.star` | 0.99 -> 1.03 | 1.27 -> 1.17 | 1.24 -> 1.15 | 0.89 | 178,573 -> 181,253 |
+| `comps.star` | 2.01 -> 1.76 | 1.11 -> 1.03 | 1.09 -> 1.04 | 0.90 | 174,042 -> 176,817 |
+| `methods.star` | 1.98 -> 1.92 | 2.59 -> 2.54 | 2.63 -> 2.52 | 1.10 | 170,608 -> 173,219 |
+| `strings.star` | 2.39 -> 2.60 | 3.04 -> 3.03 | 3.08 -> 3.03 | 1.13 | 139,227 -> 139,497 |
+| `sorting.star` | 2.70 -> 2.99 | 2.98 -> 2.80 | 2.95 -> 2.77 | 0.98 | 184,463 -> 186,618 |
+
+- Step by step (wasm, user seconds of the precompiled module, best of five): `.kb/wasm-int-fusion.md`.
+- **Six of the eleven are under CPython on wasm** (`bench`, `fib`, `loop`, `calls`,
+  `mixed`, `listidx`) and on the component; five are not.
+- **The bytes**: a module is 0.2-2.1% larger (the copied forms, the two heads). `print(1 + 2)` 103,734 -> 103,934,
+  `examples/starlark/targets.star` 217,397 -> 218,785; Common Lisp programs (`.wasm`, default
+  level): `size-report/programs/zlib` 152,038 -> 151,982, `bench-report/programs/sort.lisp` 20,656 -> 20,654, `hash.lisp` 10,502 -> 10,552, `sieve.lisp` and `hello_world` unchanged.
+- **Not made, measured**: one instance test for several readers of one variable
+  (`.kb/defstruct.md`); `_t_sym`, a call per `t` a function answers, as a `global.get`
+  (`sorting.star` 2.99 -> 2.87 s, and every entry of a module would have to set the
+  global first); the calls on paths the head never takes as tail calls (inside the
+  noise).
+- **Left** (`.todo/j63`): the head at its call site -- the call, the loop variable
+  boxed for it and unboxed in it, `length` boxed, the cell cast twice -- which is what
+  stands between `listidx`'s compiled helpers and the hand-written ones; `dicts`
+  (`d[k] += 1` is three `gethash`), and `strings`, `methods`, `sorting`, where the cost is
+  the string runtime's. The guest profiler is no witness for any of them: it charged 52%
+  of a loop of `gethash` to `puthash`, which the loop never calls.
 
 ### Strings nothing writes, ordered by the backend (2026-11-16)
 

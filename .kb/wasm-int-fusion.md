@@ -253,7 +253,8 @@ measured 28 KB of `update-sha256-block`'s 60 KB). The test runs once per call, a
   (`.kb/optimize-dead-code-elimination.md`).
 - A single fusable op with neither a raw-reading leaf nor a literal operand. It calls
   `_rat_add`/`_rat_sub`/`_rat_mul`, whose i31 head (below) is what makes it fast; a
-  comparison compares two fixnums at its site (below).
+  comparison compares two fixnums at its site (below). Behind `integerp` tests of both
+  operands it is a fused tree over two exact locals ("An integer test compiled twice").
 - More than **64 ops or 32 expression leaves** (the site emits the tree twice;
   `.kb/wasm-function-body-size.md`).
 - A node whose immediate argument is a literal double (the `hasDoubleLiteral` f64 path keeps
@@ -300,6 +301,75 @@ paid `_rat_add -> _big_add -> _int_val x2 -> _int_new`.
   `WasmLispCompilerIntegrationTest.theGenericArithmeticHelpersAnswerEveryTierThroughTheirI31Head`
   (tier boundaries at every level, SBCL output, the five comparisons of two parameters
   too), ci-spec `eql-of-a-literal-and-a-literal-evaluated-twice` (the comparisons).
+
+## An integer test compiled twice (2026-11-16)
+
+**Invariant: `(if (and (integerp a) (integerp b) rest..) then else)` answers what it answers
+compiled once.** At the speed levels `WasmFixnumVersioning` emits it twice: `block $end {
+block $else { block $miss { each variable `br_on_cast_fail $miss i31` into an i64 local; rest
+(complemented) `br_if $else`; then; `br $end` } drop; test (complemented) `br_if $else`;
+then; `br $end` } else }`. In the first copy each tested variable IS an exact unboxed local
+of the i31 range (`RawLocal.exact`, `.kb/wasm-unboxed-locals.md`) -- the name leaves
+`Ctx.locals` and joins `Ctx.rawLocals` for the rest of the test and the then-arm -- so
+every consumer that already reads a raw local reads it: a fused tree's leaf with no guard,
+a `+` of two such variables as `i64.add` with nothing to bail on (their ranges), a
+comparison raw, a subscript with no type check (`answersInteger`). The second copy is the
+`if` as written and runs for a bignum, a bigint and every value the test refuses.
+
+- **Why**: what the test proved was asked again by every operator reading the variable --
+  a type test is about a dozen instructions on wasmtime 49 (below) -- and a single
+  operator over two plain variables is no fused tree, so `(if (and (integerp a) (integerp
+  b)) (+ a b) ..)` was six `ref.test`s and a CALL of `_rat_add`. That form is what the
+  Starlark lowering writes for every operator over operands that may be ints
+  (`.kb/starlark-frontend.md`, "What the lowering knows").
+- **Which variables**: the argument of an `integerp` conjunct (or of the whole test) that
+  is an ordinary local of the function -- in `Ctx.locals`, no cell (`boxedVars`), no
+  special, not unboxed already -- which the copied forms read, do not assign
+  (`WasmLetCompiler.collectAssignedNames`) and do not capture
+  (`FreeVarAnalyzer.findCapturedVars`). A conjunct over any other operand stays in the
+  copy's test.
+- **Which sites**: the copied forms (the other conjuncts and the then-arm) hold at most 32
+  conses (`MAX_COPIED_CONSES`), since they are emitted twice. Not at `--optimize=size`,
+  under `--dynamic`, in an async body or at top level -- where no unboxed local is made
+  either -- and not inside the second copy (`Ctx.declinesFixnumVersions`), so a nest of
+  such tests is copied once per level and not `2^depth` times.
+- **Every position**: value and tail (`WasmIfCompiler.compile`, at the head and down an
+  else spine), effect (`compileForEffect`), and a TEST: `WasmConditionCompiler` compiles
+  `(if a b c)` in a test as `a; if (result i32) [b as a test] else [c as a test]`
+  (`tryCompileIf`, up to `MAX_IF_SPINE` levels, never a name dispatch or an async body),
+  where it was the value boxed -- a call of `_t_sym` for a true comparison -- and
+  `ref.is_null`. `if n < 2:` in Starlark is `(if (if (integerp n) (< n 2) (generic n 2))
+  ..)`.
+- **A literal `mod`, `rem` and `*` is inline in a fused tree**
+  (`emitInlineLiteralOp`): `(rem a k)` with `k > 0` is `i64.rem_s`, `(mod a k)` adds `k`
+  to a negative remainder (`r + ((r >> 63) & k)`), `(* a k)` with `|k| <= 2^31` bails
+  unless `a` is within the i32 range. The helpers were a call each, and `_fx_mod`'s divisor
+  a variable to the engine: a 64-bit division where a division by a constant is a
+  multiplication. 30,000,000 `(mod i 7)`: 0.63 -> 0.35 s (hand-edited `.wat` first, then
+  the build: `loop.star` 0.62 -> 0.39 s).
+- Measured, Starlark programs of `.todo/artefacts/j54-starlark-faster-than-cpython/`, user
+  seconds of a precompiled module, best of five, the build before -> the two copies -> the
+  test position -> the literal operations: `fib.star` 0.36 -> 0.20 -> 0.16, `calls.star`
+  0.22 -> 0.09 -> 0.11, `mixed.star` 0.66 -> 0.50 -> 0.47 -> 0.48, `listidx.star` 1.19 ->
+  1.05 -> 0.99 (with the index helpers' heads, `.kb/starlark-frontend.md`) -> 0.92,
+  `loop.star` 0.62 -> 0.63 -> 0.61 -> 0.39.
+- **What an instruction costs is how many there are.** `wasmtime objdump --filter
+  'function[N]' m.cwasm` prints a function's machine code, which is what to read when the
+  guest profiler's answer is not believable (it charged 52% of a loop of `gethash` to
+  `puthash`, which the loop never calls). On wasmtime 49 x86-64: a struct `ref.test` /
+  `br_on_cast` of a `(ref null eq)` is a null test, an i31 test, the heap base (two loads,
+  again at every test), the object's type id, the expected id out of the vmctx, a compare
+  and a `setcc`/`test`/branch -- about twelve instructions and four loads; an i31 test is
+  one `test`; `array.get` by a CONSTANT index is some fifteen (the length's load and an
+  overflow-checked address); a reference live across a call that is never taken is still
+  stored to its stack-map slot where it is made and reloaded where it is used. The
+  hand-written index helper of sixty instructions against the compiled one of two hundred
+  was 0.41 s of `listidx.star`'s 1.20: no single construct, the sum.
+- Tests: `WasmLispCompilerIntegrationTest.theGenericArithmeticHelpersAnswerEveryTierThroughTheirI31Head`
+  (the `v`-functions: every position, a variable assigned, captured and rebound, every
+  tier and a non-integer through both copies, the literal operations past each boundary;
+  every level, SBCL's output) and ci-spec
+  `an-if-over-integerp-tests-answers-for-every-tier` (the four backends).
 
 ## Mechanics
 

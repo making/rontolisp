@@ -1475,12 +1475,23 @@
     (if (or (< j 0) (>= j n)) (error "~a index ~a out of range" what i))
     j))
 
+;; X[I]. A list subscripted by an int within it is all this function holds, so the
+;; compiled body is a few tests and one read with no frame of the general function's
+;; size around them (.kb/starlark-frontend.md, "An int test compiled twice").
 (defun rontolisp::%starlark-index (x i)
+  (if (rontolisp::%starlark-list-p x)
+      (let* ((items (rontolisp::%starlark-list-items x)) (n (length items)))
+        (if (and (integerp i) (>= i 0) (< i n))
+            (aref items i)
+            (rontolisp::%starlark-index-of x i)))
+      (rontolisp::%starlark-index-of x i)))
+
+;; X[I] for every X and I.
+(defun rontolisp::%starlark-index-of (x i)
   (cond ((rontolisp::%starlark-list-p x)
-         (let* ((items (rontolisp::%starlark-list-items x)) (n (length items)))
-           (if (and (integerp i) (>= i 0) (< i n))
-               (aref items i)
-               (aref items (rontolisp::%starlark-element-index i n "list")))))
+         (let ((items (rontolisp::%starlark-list-items x)))
+           (aref items
+                 (rontolisp::%starlark-element-index i (length items) "list"))))
         ((rontolisp::%starlark-dict-p x)
          (let ((cell (rontolisp::%starlark-dict-cell x i)))
            (if cell
@@ -1507,18 +1518,29 @@
          (error "unhandled index operation ~a[~a]" (rontolisp::%starlark-type x)
                 (rontolisp::%starlark-type i)))))
 
+;; X[I] = V. As %starlark-index: a list nothing forbids writing, subscripted by an int
+;; within it, is stored into here.
 (defun rontolisp::%starlark-set-index (x i v)
+  (if (and (rontolisp::%starlark-list-p x)
+           (not (car (rontolisp::%starlark-list-mutability x)))
+           (eql (rontolisp::%starlark-list-iterating x) 0))
+      ;; ITEMS is known for a general vector by its slot's type, so the compiled
+      ;; store asks nothing of it (.kb/starlark-frontend.md, "Against CPython").
+      (let* ((items (rontolisp::%starlark-list-items x)) (n (length items)))
+        (if (and (integerp i) (>= i 0) (< i n))
+            (setf (aref items i) v)
+            (rontolisp::%starlark-set-index-of x i v)))
+      (rontolisp::%starlark-set-index-of x i v)))
+
+;; X[I] = V for every X and I.
+(defun rontolisp::%starlark-set-index-of (x i v)
   (cond ((rontolisp::%starlark-list-p x)
          (if (or (car (rontolisp::%starlark-list-mutability x))
                  (> (rontolisp::%starlark-list-iterating x) 0))
              (rontolisp::%starlark-list-writable x "assign to element of"))
-         ;; ITEMS is known for a general vector by its slot's type, so the compiled
-         ;; store asks nothing of it (.kb/starlark-frontend.md, "Against CPython").
-         (let* ((items (rontolisp::%starlark-list-items x)) (n (length items)))
+         (let ((items (rontolisp::%starlark-list-items x)))
            (setf (aref items
-                       (if (and (integerp i) (>= i 0) (< i n))
-                           i
-                           (rontolisp::%starlark-element-index i n "list")))
+                  (rontolisp::%starlark-element-index i (length items) "list"))
                  v)))
         ((rontolisp::%starlark-dict-p x)
          (if (or (car (rontolisp::%starlark-dict-mutability x))

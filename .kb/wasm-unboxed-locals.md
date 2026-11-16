@@ -54,6 +54,10 @@ Its slot is authoritative at every point, so a read is the slot (no sentinel tes
 shadow, no `_ub_read`) and the fused sites over it read its range (`.kb/wasm-int-fusion.md`,
 "Ranges, and sites with nothing to bail on").
 
+- **A variable an `integerp` test proved a fixnum is one too** (2026-11-16): over the copy
+  `WasmFixnumVersioning` compiles for fixnums the tested variable is an exact local of the
+  i31 range, unboxed once where the copy starts; nothing in the copy assigns or captures
+  it (`.kb/wasm-int-fusion.md`, "An integer test compiled twice").
 - **Eligibility** (`WasmLetCompiler`, after the counted binding and before the dual one, under the
   dual one's conditions and not at top level): every assignment answers an integer in a range
   WHATEVER path computes it -- `WasmIntFusionCompiler.valueRange`, the fused fast path and the

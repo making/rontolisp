@@ -3491,6 +3491,9 @@ final class WasmIntFusionCompiler {
 						emitInlineCheckedLiteral(LispNames.ADD.equals(op.op()), c.value(), ctx);
 						continue;
 					}
+					if (op.args().get(i) instanceof ConstLeaf c && emitInlineLiteralOp(op.op(), c.value(), ctx)) {
+						continue;
+					}
 					emitFast(op.args().get(i), ctx);
 					emitFastOp(op.op(), ctx);
 				}
@@ -3602,6 +3605,91 @@ final class WasmIntFusionCompiler {
 		ctx.writer.write(Instruction.BR_IF, 0);
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writeI64LocalIndex(ctx.fxLitTempSlot);
+	}
+
+	/**
+	 * A {@code mod}, {@code rem} or {@code *} by a LITERAL, inline over the accumulator
+	 * on the i64 stack, or nothing for any other operator or literal. The helpers were a
+	 * call each, and {@code _fx_mod}'s divisor a variable to the engine: a 64-bit
+	 * division of some 40-90 cycles where a division by a constant is a multiplication
+	 * (measured 2026-11-16, wasmtime 49: 30,000,000 {@code (mod i 7)} 0.63 -> 0.35 s).
+	 * <ul>
+	 * <li>{@code (rem a k)}, {@code k > 0}: {@code i64.rem_s}, which neither traps nor
+	 * overflows for a positive divisor.</li>
+	 * <li>{@code (mod a k)}, {@code k > 0}: the remainder {@code r}, plus {@code k} when
+	 * it is negative -- {@code r + ((r >> 63) & k)}.</li>
+	 * <li>{@code (* a k)}, {@code |k| <= 2^31}: bails unless {@code a} is within the i32
+	 * range, where the product cannot leave i64; {@code _fx_mul} bails on a wider band
+	 * than it must as well, and the fallback is exact.</li>
+	 * </ul>
+	 * @return whether the operation was emitted
+	 */
+	private static boolean emitInlineLiteralOp(String op, long k, WasmLispCompiler.Ctx ctx) {
+		am.ik.wasm.WasmWriter w = ctx.writer;
+		switch (op) {
+			case LispNames.REM -> {
+				if (k <= 0) {
+					return false;
+				}
+				w.write(Instruction.I64_CONST);
+				w.writeSignedLeb128(k);
+				w.write(Instruction.I64_REM_S);
+				return true;
+			}
+			case LispNames.MOD -> {
+				if (k <= 0) {
+					return false;
+				}
+				int slot = literalTemp(ctx);
+				w.write(Instruction.I64_CONST);
+				w.writeSignedLeb128(k);
+				w.write(Instruction.I64_REM_S);
+				w.write(Instruction.TEE_LOCAL);
+				ctx.writeI64LocalIndex(slot);
+				w.write(Instruction.GET_LOCAL);
+				ctx.writeI64LocalIndex(slot);
+				w.write(Instruction.I64_CONST);
+				w.writeSignedLeb128(63);
+				w.write(Instruction.I64_SHR_S);
+				w.write(Instruction.I64_CONST);
+				w.writeSignedLeb128(k);
+				w.write(Instruction.I64_AND);
+				w.write(Instruction.I64_ADD);
+				return true;
+			}
+			case LispNames.MUL -> {
+				if (k < -(1L << 31) || k > 1L << 31) {
+					return false;
+				}
+				int slot = literalTemp(ctx);
+				w.write(Instruction.TEE_LOCAL);
+				ctx.writeI64LocalIndex(slot);
+				w.write(Instruction.I64_CONST);
+				w.writeSignedLeb128(1L << 31);
+				w.write(Instruction.I64_ADD);
+				w.write(Instruction.I64_CONST);
+				w.writeSignedLeb128(1L << 32);
+				w.write(Instruction.I64_GE_U);
+				w.write(Instruction.BR_IF, 0);
+				w.write(Instruction.GET_LOCAL);
+				ctx.writeI64LocalIndex(slot);
+				w.write(Instruction.I64_CONST);
+				w.writeSignedLeb128(k);
+				w.write(Instruction.I64_MUL);
+				return true;
+			}
+			default -> {
+				return false;
+			}
+		}
+	}
+
+	// The site's scratch slot for an inline literal operation, made on first use.
+	private static int literalTemp(WasmLispCompiler.Ctx ctx) {
+		if (ctx.fxLitTempSlot < 0) {
+			ctx.fxLitTempSlot = ctx.allocI64Temp();
+		}
+		return ctx.fxLitTempSlot;
 	}
 
 	private static void emitFastOp(String op, WasmLispCompiler.Ctx ctx) {

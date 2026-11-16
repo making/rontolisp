@@ -665,7 +665,7 @@ final class WasmLetCompiler {
 	 * quoted data. Used to refuse local-function registration for a name that the body
 	 * could reassign.
 	 */
-	private static void collectAssignedNames(LispVal form, Set<String> out) {
+	static void collectAssignedNames(LispVal form, Set<String> out) {
 		if (!(form instanceof LispCons cons)) {
 			return;
 		}

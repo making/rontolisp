@@ -12243,6 +12243,12 @@ public final class WasmLispCompiler implements LispCompiler {
 		Set<String> uncelled = Set.of();
 
 		/**
+		 * Whether an {@code if} over {@code integerp} tests is compiled once here: inside
+		 * the copy {@link WasmFixnumVersioning} makes for the values that are no fixnums.
+		 */
+		boolean declinesFixnumVersions;
+
+		/**
 		 * Whether this copy of a leaf's body declines the speed trades, as
 		 * {@code --optimize=size} does
 		 * ({@link WasmIntFusionCompiler#speedTradesEnabled}): the copy a filled cell runs
