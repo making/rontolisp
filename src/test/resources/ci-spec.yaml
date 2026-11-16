@@ -3096,6 +3096,9 @@ cases:
   # from floor, 0.0999...95 from mod. SBCL answers 10 and 0.0 for BOTH, self-consistently
   # through f64; rontolisp answers 9 and 0.0999...95 for both, self-consistently through
   # the exact rational. See .kb/linalg-simd.md, mod/rem.
+  #
+  # Two integers divide with no ratio made: the signs, round's ties, the i31 and i64
+  # edges and bignums, against SBCL.
   - name: the-floor-family-quotient-is-exact-at-any-magnitude
     source: |
       (defun fq-tr (a b) (multiple-value-bind (q r) (truncate a b) (list q r)))
@@ -3116,6 +3119,19 @@ cases:
       (print (list (floor 3.7) (ceiling 3.2) (round 2.5) (round 3.5) (truncate -3.7)))
       (print (list (fq-fl 7 2) (fq-ro 7.0 2.0) (fq-ce 6.0 3.0)))
       (print (list (fq-fl 1.0 0.1) (mod 1.0 0.1) (fq-fl 0.3 0.1)))
+      (defun fq-all (a b) (list (fq-fl a b) (fq-ce a b) (fq-ro a b) (fq-tr a b)
+                                (list (floor a b) (ceiling a b) (round a b) (truncate a b))))
+      (defvar *fq-min* (- (expt 2 63)))
+      (defvar *fq-big* (expt 10 30))
+      (dolist (row (mapcar #'fq-all '(7 -7 7 -7 6 -6 10 -14 -1073741824) '(2 2 -2 -2 4 4 4 4 -1)))
+        (print row))
+      (print (fq-all *fq-min* -1))
+      (print (fq-all *fq-min* 3))
+      (print (fq-all 5 *fq-min*))
+      (print (fq-all *fq-big* -7))
+      (print (fq-all (* -6 *fq-big*) (* 4 *fq-big*)))
+      (print (fq-all -7 *fq-big*))
+      (print (list (mapcar #'round '(7 -7 5) '(2 2 -2)) (multiple-value-list (funcall #'ceiling -7 *fq-big*))))
     expected: |
       (142857142857142857 1.0)
       (142857142857142858 -6.0)
@@ -3129,6 +3145,22 @@ cases:
       (3 4 2 4 -3)
       ((3 1) (4 -1.0) (2 0.0))
       ((9 0.09999999999999995) 0.09999999999999995 (2 0.09999999999999998))
+      ((3 1) (4 -1) (4 -1) (3 1) (3 4 4 3))
+      ((-4 1) (-3 -1) (-4 1) (-3 -1) (-4 -3 -4 -3))
+      ((-4 -1) (-3 1) (-4 -1) (-3 1) (-4 -3 -4 -3))
+      ((3 -1) (4 1) (4 1) (3 -1) (3 4 4 3))
+      ((1 2) (2 -2) (2 -2) (1 2) (1 2 2 1))
+      ((-2 2) (-1 -2) (-2 2) (-1 -2) (-2 -1 -2 -1))
+      ((2 2) (3 -2) (2 2) (2 2) (2 3 2 2))
+      ((-4 2) (-3 -2) (-4 2) (-3 -2) (-4 -3 -4 -3))
+      ((1073741824 0) (1073741824 0) (1073741824 0) (1073741824 0) (1073741824 1073741824 1073741824 1073741824))
+      ((9223372036854775808 0) (9223372036854775808 0) (9223372036854775808 0) (9223372036854775808 0) (9223372036854775808 9223372036854775808 9223372036854775808 9223372036854775808))
+      ((-3074457345618258603 1) (-3074457345618258602 -2) (-3074457345618258603 1) (-3074457345618258602 -2) (-3074457345618258603 -3074457345618258602 -3074457345618258603 -3074457345618258602))
+      ((-1 -9223372036854775803) (0 5) (0 5) (0 5) (-1 0 0 0))
+      ((-142857142857142857142857142858 -6) (-142857142857142857142857142857 1) (-142857142857142857142857142857 1) (-142857142857142857142857142857 1) (-142857142857142857142857142858 -142857142857142857142857142857 -142857142857142857142857142857 -142857142857142857142857142857))
+      ((-2 2000000000000000000000000000000) (-1 -2000000000000000000000000000000) (-2 2000000000000000000000000000000) (-1 -2000000000000000000000000000000) (-2 -1 -2 -1))
+      ((-1 999999999999999999999999999993) (0 -7) (0 -7) (0 -7) (-1 0 0 0))
+      ((4 -4 -2) (0 -7))
   # ffloor/fceiling/fround/ftruncate: CLHS defines each as its integer twin
   # with a FLOAT primary value -- (ffloor 7 2) is 3.0 and 1, not (floor 7 2)'s 3 and 1.
   # The quotient stays the SAME exact rational the plain family answers (the row above),
@@ -25142,6 +25174,7 @@ cases:
       (print (ci-dz (lambda () (floor 7 *ci-dz-zero*))))
       (print (ci-dz (lambda () (truncate *ci-dz-long* *ci-dz-zero*))))
       (print (ci-dz (lambda () (round *ci-dz-wide* *ci-dz-zero*))))
+      (print (ci-dz (lambda () (multiple-value-list (ceiling -7 *ci-dz-zero*)))))
       (print (ci-dz (lambda () (floor 1/2 *ci-dz-zero*))))
       (print (ci-dz (lambda () (floor 7.5 *ci-dz-zero*))))
       (print (ci-dz (lambda () (ceiling -7.5 *ci-dz-zero*))))
@@ -25181,6 +25214,7 @@ cases:
       (print (ci-dz (lambda () (funcall #'/ 1 *ci-dz-zero*))))
       (print (handler-case (/ 1 *ci-dz-zero*) (arithmetic-error (e) (type-of e))))
     expected: |
+      (:DIVISION-BY-ZERO "Division by zero" T)
       (:DIVISION-BY-ZERO "Division by zero" T)
       (:DIVISION-BY-ZERO "Division by zero" T)
       (:DIVISION-BY-ZERO "Division by zero" T)

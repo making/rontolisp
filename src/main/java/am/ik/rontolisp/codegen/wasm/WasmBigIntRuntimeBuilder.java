@@ -2758,20 +2758,24 @@ final class WasmBigIntRuntimeBuilder {
 	// _big_fdiv(a, b, mode): exact integer division over any tier -- mode 0 =
 	// truncate, 1 = floor, 2 = ceiling, 3 = round to nearest with ties to even. The
 	// fused lowering of `(truncate (/ a b))` and friends for exact-integer operands
-	// (no ratio intermediate is allocated). Composed from the other _big_* helpers;
-	// signals on b = 0 through _big_divrem.
+	// (no ratio intermediate is allocated). Two i64-tier operands divide in place;
+	// the rest is composed from the other _big_* helpers, and signals on b = 0 through
+	// _big_divrem.
 	static byte[] buildBigFdivBody() {
 		BodyWriter b = new BodyWriter();
 		WasmWriter w = b.w;
 		// params 0=a, 1=b, 2=mode. locals: 3=q, 4=r, 5=rm, 6=bm (ref null eq),
-		// 7=sd, 8=c (i32)
-		w.write(2);
+		// 7=sd, 8=c (i32), 9=x, 10=y, 11=xq, 12=xr, 13=xs (i64)
+		w.write(3);
 		w.write(4);
 		w.writeRefType(true, Type.EQ.code());
 		w.write(2);
 		w.write(Type.I32);
+		w.write(5);
+		w.write(Type.I64);
 		final int q = 3, r = 4, rm = 5, bm = 6, sd = 7, c = 8;
 
+		emitI64Fdiv(b);
 		b.get(0);
 		b.get(1);
 		b.i32c(0);
@@ -2902,6 +2906,132 @@ final class WasmBigIntRuntimeBuilder {
 	}
 
 	// Pushes `!(a is TYPE_BIGINT || b is TYPE_BIGINT)` over params 0 and 1.
+	/**
+	 * {@code _big_fdiv}'s i64 arm: two operands below the limb tier divide with one
+	 * {@code i64.div_s}, the truncating quotient stepped one toward the mode's side when
+	 * it left a remainder (the exact quotient is q + r/y, r/y strictly inside (-1, 1)
+	 * with the sign of r^y). A zero divisor and i64.min / -1 fall through to the limb
+	 * path, which signals and widens.
+	 */
+	private static void emitI64Fdiv(BodyWriter b) {
+		WasmWriter w = b.w;
+		final int x = 9, y = 10, xq = 11, xr = 12, xs = 13;
+		emitNeitherBigint(b);
+		b.ifVoid();
+		b.get(0);
+		b.call(WasmLispCompiler.FUNC_INT_VAL);
+		b.set(x);
+		b.get(1);
+		b.call(WasmLispCompiler.FUNC_INT_VAL);
+		b.set(y);
+		b.get(y);
+		w.write(Instruction.I64_EQZ);
+		b.get(x);
+		b.i64c(Long.MIN_VALUE);
+		w.write(Instruction.I64_EQ);
+		b.get(y);
+		b.i64c(-1);
+		w.write(Instruction.I64_EQ);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_EQZ);
+		b.ifVoid();
+		b.get(x);
+		b.get(y);
+		w.write(Instruction.I64_DIV_S);
+		b.set(xq);
+		// r = x - q*y: one hardware division, not a second for rem_s
+		b.get(x);
+		b.get(xq);
+		b.get(y);
+		w.write(Instruction.I64_MUL);
+		w.write(Instruction.I64_SUB);
+		b.set(xr);
+		b.get(xr);
+		w.write(Instruction.I64_EQZ);
+		b.get(2);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.I32_EQZ);
+		b.ifVoid();
+		// xs = ((r ^ y) >> 63) | 1: the direction of the step, -1 or 1
+		b.get(xr);
+		b.get(y);
+		w.write(Instruction.I64_XOR);
+		b.i64c(63);
+		w.write(Instruction.I64_SHR_S);
+		b.i64c(1);
+		w.write(Instruction.I64_OR);
+		b.set(xs);
+		b.get(2);
+		b.i32c(1);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		b.get(xs);
+		b.i64c(0);
+		w.write(Instruction.I64_LT_S);
+		w.write(Instruction.ELSE);
+		b.get(2);
+		b.i32c(2);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.IF);
+		w.write(Type.I32);
+		b.get(xs);
+		b.i64c(0);
+		w.write(Instruction.I64_GT_S);
+		w.write(Instruction.ELSE);
+		// round: |r| against |y| - |r|, unsigned (|y| is 2^63 for i64.min); a tie goes
+		// to the even one of q and q + step
+		emitI64AbsInto(b, xr);
+		emitI64AbsInto(b, y);
+		b.get(y);
+		b.get(xr);
+		w.write(Instruction.I64_SUB);
+		b.set(y);
+		b.get(xr);
+		b.get(y);
+		w.write(Instruction.I64_GT_U);
+		b.get(xr);
+		b.get(y);
+		w.write(Instruction.I64_EQ);
+		b.get(xq);
+		b.i64c(1);
+		w.write(Instruction.I64_AND);
+		w.write(Instruction.I32_WRAP_I64);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.I32_OR);
+		b.end();
+		b.end();
+		b.ifVoid();
+		b.get(xq);
+		b.get(xs);
+		w.write(Instruction.I64_ADD);
+		b.set(xq);
+		b.end();
+		b.end();
+		b.get(xq);
+		b.call(WasmLispCompiler.FUNC_INT_NEW);
+		w.write(Instruction.RETURN);
+		b.end();
+		b.end();
+	}
+
+	// local = |local| as an i64 bit pattern: (v ^ (v >> 63)) - (v >> 63).
+	private static void emitI64AbsInto(BodyWriter b, int slot) {
+		WasmWriter w = b.w;
+		b.get(slot);
+		b.get(slot);
+		b.i64c(63);
+		w.write(Instruction.I64_SHR_S);
+		w.write(Instruction.I64_XOR);
+		b.get(slot);
+		b.i64c(63);
+		w.write(Instruction.I64_SHR_S);
+		w.write(Instruction.I64_SUB);
+		b.set(slot);
+	}
+
 	private static void emitNeitherBigint(BodyWriter b) {
 		WasmWriter w = b.w;
 		b.get(0);

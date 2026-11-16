@@ -262,6 +262,8 @@ measured 28 KB of `update-sha256-block`'s 60 KB). The test runs once per call, a
   `rontolisp:async-defun` -- the name never enters `Ctx.inlinableDefuns` because a call must
   answer the `TYPE_FUTURE` its state machine builds (`.kb/async-await.md`).
 - Division (`/`) is never fused (exact ratios).
+- `floor`/`truncate` of two integers are not ops (measured 2026-11-16): the site's inline i31
+  division already beats a fused `mod` (`.kb/linalg-simd.md`, "Two integers").
 
 ## The generic helpers' i31 head (the unfused single op)
 

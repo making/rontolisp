@@ -180,6 +180,14 @@ final class JvmNumericRuntimeBuilder {
 	static final String FDIV = "_fdiv";
 
 	/**
+	 * The floor family's quotient of two reals under one of the four rounding modes (the
+	 * {@link #FDIV} numbering): two integers divide with no ratio made -- two
+	 * {@code Long}s in place, anything wider in the tail ({@link #TAIL_SUFFIX}) -- and
+	 * every other pair is {@link #FDIV}'s answer, {@code null} included.
+	 */
+	static final String IQUO = "_iquo";
+
+	/**
 	 * A number as the exact rational it is: a finite {@code Double} becomes a
 	 * {@code BigInteger[2]}, an integer answers itself, anything else {@code null}.
 	 */
@@ -242,8 +250,8 @@ final class JvmNumericRuntimeBuilder {
 			Map.entry(CMP, "(" + OBJ + OBJ + ")I"), Map.entry(CMPB, "(" + OBJ + OBJ + ")I"),
 			Map.entry(LOGBITP, "(" + OBJ + OBJ + ")I"), Map.entry(BIG_OP, "(" + OBJ + ")" + BIG),
 			Map.entry(RAT_NUM, "(" + OBJ + ")" + BIG), Map.entry(RAT_DEN, "(" + OBJ + ")" + BIG),
-			Map.entry(FDIV, "(" + OBJ + OBJ + "I)" + OBJ), Map.entry(RANDOM, UNARY_DESC),
-			Map.entry(JvmOperandTypeRuntime.CK_IDX, JvmOperandTypeRuntime.CK_IDX_DESC),
+			Map.entry(FDIV, "(" + OBJ + OBJ + "I)" + OBJ), Map.entry(IQUO, "(" + OBJ + OBJ + "I)" + OBJ),
+			Map.entry(RANDOM, UNARY_DESC), Map.entry(JvmOperandTypeRuntime.CK_IDX, JvmOperandTypeRuntime.CK_IDX_DESC),
 			Map.entry(JvmOperandTypeRuntime.CK_RAT, JvmOperandTypeRuntime.CK_RAT_DESC),
 			Map.entry(JvmOperandTypeRuntime.CK_TAB, JvmOperandTypeRuntime.CK_IDX_DESC),
 			Map.entry(JvmOperandTypeRuntime.CK_CHR, JvmOperandTypeRuntime.CK_IDX_DESC),
@@ -654,6 +662,8 @@ final class JvmNumericRuntimeBuilder {
 		Utf8Entry nRatRound = cp.utf8Entry(RAT_ROUND);
 		Utf8Entry nFdiv = cp.utf8Entry(FDIV);
 		Utf8Entry nFrat = cp.utf8Entry(FRAT);
+		Utf8Entry nIquo = cp.utf8Entry(IQUO);
+		Utf8Entry nIquoTail = cp.utf8Entry(IQUO + TAIL_SUFFIX);
 		Utf8Entry nRational = cp.utf8Entry(RATIONAL);
 		Utf8Entry nLogand = cp.utf8Entry(LOGAND);
 		Utf8Entry nLogior = cp.utf8Entry(LOGIOR);
@@ -701,6 +711,8 @@ final class JvmNumericRuntimeBuilder {
 		Utf8Entry dFdiv = cp.utf8Entry("(" + OBJ + OBJ + "I)" + OBJ);
 		MethodRefEntry rFdiv = cp.methodRef(thisClass, nFdiv, dFdiv);
 		MethodRefEntry rFrat = cp.methodRef(thisClass, nFrat, dUnary);
+		MethodRefEntry rIquo = cp.methodRef(thisClass, nIquo, dFdiv);
+		MethodRefEntry rIquoTail = cp.methodRef(thisClass, nIquoTail, dFdiv);
 		MethodRefEntry rRational = cp.methodRef(thisClass, nRational, dUnary);
 		MethodRefEntry rLogand = cp.methodRef(thisClass, nLogand, dBinary);
 		MethodRefEntry rLogior = cp.methodRef(thisClass, nLogior, dBinary);
@@ -826,6 +838,11 @@ final class JvmNumericRuntimeBuilder {
 		methods.add(buildFdiv(nFdiv, dFdiv, doubleClass, numberClass, numDoubleValue, ratArrClass, rFrat, rDiv,
 				rRatTrunc, rRatFloor, rRatCeil, rRatRound, dblIsInfinite, dblIsFinite, longClass, longValue, bigClass,
 				biSignum, longValueOf, typeErrRefs, roundingNonFiniteStr, divZero));
+		methods.add(buildIquo(nIquo, dFdiv, longClass, longValue, longValueOf, absLong,
+				cp.methodRef(longClass, "compareUnsigned", "(JJ)I"), rNeg, rIquoTail, divZero));
+		methods.add(buildIquoTail(nIquoTail, dFdiv, longClass, bigClass, rBig, rNorm,
+				cp.methodRef(bigClass, "divideAndRemainder", "(" + BIG + ")[" + BIG), biSignum, biAbs, biShiftLeft,
+				biCompareTo, biTestBit, biValueOf, biAdd, rFdiv, divZero));
 		methods
 			.add(buildLogOp(nLogand, dBinary, longClass, longValue, longValueOf, rBig, rNorm, biAnd, MethodCode::land));
 		methods
@@ -878,6 +895,7 @@ final class JvmNumericRuntimeBuilder {
 		ops.put(RAT_CEIL, rRatCeil);
 		ops.put(RAT_ROUND, rRatRound);
 		ops.put(FDIV, rFdiv);
+		ops.put(IQUO, rIquo);
 		ops.put(FRAT, rFrat);
 		ops.put(RATIONAL, rRational);
 		ops.put(LOGAND, rLogand);
@@ -3498,6 +3516,222 @@ final class JvmNumericRuntimeBuilder {
 		c.areturn();
 		// Locals 6 (dividend sign) and 7 (divisor sign) belong to the infinite-divisor
 		// arm above; nothing past it uses a local higher than 5.
+		return new NumericMethod(name, desc, c);
+	}
+
+	// _iquo(Object a, Object b, int mode): two Longs divide in place -- the truncating
+	// LDIV, stepped one toward the mode's side when LREM left a remainder (the exact
+	// quotient is q + r/y, r/y strictly inside (-1, 1) with the sign of r^y). A divisor
+	// of
+	// -1 is _neg, the one quotient past the long range. Anything else takes the tail.
+	private static NumericMethod buildIquo(Utf8Entry name, Utf8Entry desc, ClassEntry longClass,
+			MethodRefEntry longValue, MethodRefEntry longValueOf, MethodRefEntry absLong,
+			MethodRefEntry compareUnsigned, MethodRefEntry rNeg, MethodRefEntry rTail, DivZeroRefs divZero) {
+		MethodCode c = new MethodCode();
+		// locals: 3 x, 5 y, 7 q, 9 r, 11 the step's direction (-1 or 1), 13 |r|, 15 the
+		// comparison
+		MethodCode.Label slow = c.newLabel();
+		emitLongLongGuard(c, longClass, slow);
+		emitLongDivisorCheck(c, longClass, longValue, divZero);
+		emitUnboxLong(c, 0, longClass, longValue);
+		c.lstore(3);
+		emitUnboxLong(c, 1, longClass, longValue);
+		c.lstore(5);
+		c.lload(5);
+		c.lconst_1();
+		c.ladd();
+		c.lconst_0();
+		c.lcmp();
+		MethodCode.Label notMinusOne = c.newLabel();
+		c.ifne(notMinusOne);
+		c.aload(0);
+		c.invokestatic(rNeg);
+		c.areturn();
+		c.labelBinding(notMinusOne);
+		c.lload(3);
+		c.lload(5);
+		c.ldiv();
+		c.lstore(7);
+		c.lload(3);
+		c.lload(5);
+		c.lrem();
+		c.lstore(9);
+		MethodCode.Label quotient = c.newLabel();
+		MethodCode.Label step = c.newLabel();
+		c.lload(9);
+		c.lconst_0();
+		c.lcmp();
+		c.ifeq(quotient);
+		c.iload(2);
+		c.ifeq(quotient);
+		c.lload(9);
+		c.lload(5);
+		c.lxor();
+		c.loadConstant(63);
+		c.lshr();
+		c.lconst_1();
+		c.lor();
+		c.lstore(11);
+		MethodCode.Label notFloor = c.newLabel();
+		c.iload(2);
+		c.iconst_1();
+		c.if_icmpne(notFloor);
+		c.lload(11);
+		c.lconst_0();
+		c.lcmp();
+		c.ifge(quotient);
+		c.goto_(step);
+		c.labelBinding(notFloor);
+		MethodCode.Label round = c.newLabel();
+		c.iload(2);
+		c.iconst_2();
+		c.if_icmpne(round);
+		c.lload(11);
+		c.lconst_0();
+		c.lcmp();
+		c.ifle(quotient);
+		c.goto_(step);
+		// round: |r| against |y| - |r|, unsigned (|y| is 2^63 for MIN_VALUE); a tie
+		// goes to the even one of q and q + step.
+		c.labelBinding(round);
+		c.lload(9);
+		c.invokestatic(absLong);
+		c.lstore(13);
+		c.lload(13);
+		c.lload(5);
+		c.invokestatic(absLong);
+		c.lload(13);
+		c.lsub();
+		c.invokestatic(compareUnsigned);
+		c.istore(15);
+		c.iload(15);
+		c.ifgt(step);
+		c.iload(15);
+		c.iflt(quotient);
+		c.lload(7);
+		c.lconst_1();
+		c.land();
+		c.lconst_0();
+		c.lcmp();
+		c.ifeq(quotient);
+		c.labelBinding(step);
+		c.lload(7);
+		c.lload(11);
+		c.ladd();
+		c.invokestatic(longValueOf);
+		c.areturn();
+		c.labelBinding(quotient);
+		c.lload(7);
+		c.invokestatic(longValueOf);
+		c.areturn();
+		c.labelBinding(slow);
+		c.aload(0);
+		c.aload(1);
+		c.iload(2);
+		c.invokestatic(rTail);
+		c.areturn();
+		return new NumericMethod(name, desc, c);
+	}
+
+	// _iquox(Object a, Object b, int mode): _iquo over integers of any size through
+	// BigInteger.divideAndRemainder, and _fdiv's answer when an operand is not an
+	// integer.
+	private static NumericMethod buildIquoTail(Utf8Entry name, Utf8Entry desc, ClassEntry longClass,
+			ClassEntry bigClass, MethodRefEntry rBig, MethodRefEntry rNorm, MethodRefEntry biDivRem,
+			MethodRefEntry biSignum, MethodRefEntry biAbs, MethodRefEntry biShiftLeft, MethodRefEntry biCompareTo,
+			MethodRefEntry biTestBit, MethodRefEntry biValueOf, MethodRefEntry biAdd, MethodRefEntry rFdiv,
+			DivZeroRefs divZero) {
+		MethodCode c = new MethodCode();
+		// locals: 3 x, 4 y, 5 q, 6 r, 7 the step's direction (r.signum() * y.signum()), 8
+		// the comparison
+		MethodCode.Label decline = c.newLabel();
+		for (int slot = 0; slot < 2; slot++) {
+			c.aload(slot);
+			c.instanceOf(longClass);
+			c.aload(slot);
+			c.instanceOf(bigClass);
+			c.ior();
+			c.ifeq(decline);
+		}
+		c.aload(0);
+		c.invokestatic(rBig);
+		c.astore(3);
+		c.aload(1);
+		c.invokestatic(rBig);
+		c.astore(4);
+		emitBigDivisorCheck(c, 4, divZero);
+		c.aload(3);
+		c.aload(4);
+		c.invokevirtual(biDivRem);
+		c.dup();
+		c.iconst_0();
+		c.aaload();
+		c.astore(5);
+		c.iconst_1();
+		c.aaload();
+		c.astore(6);
+		MethodCode.Label quotient = c.newLabel();
+		MethodCode.Label step = c.newLabel();
+		c.aload(6);
+		c.invokevirtual(biSignum);
+		c.ifeq(quotient);
+		c.iload(2);
+		c.ifeq(quotient);
+		c.aload(6);
+		c.invokevirtual(biSignum);
+		c.aload(4);
+		c.invokevirtual(biSignum);
+		c.imul();
+		c.istore(7);
+		MethodCode.Label notFloor = c.newLabel();
+		c.iload(2);
+		c.iconst_1();
+		c.if_icmpne(notFloor);
+		c.iload(7);
+		c.ifge(quotient);
+		c.goto_(step);
+		c.labelBinding(notFloor);
+		MethodCode.Label round = c.newLabel();
+		c.iload(2);
+		c.iconst_2();
+		c.if_icmpne(round);
+		c.iload(7);
+		c.ifle(quotient);
+		c.goto_(step);
+		c.labelBinding(round);
+		c.aload(6);
+		c.invokevirtual(biAbs);
+		c.iconst_1();
+		c.invokevirtual(biShiftLeft);
+		c.aload(4);
+		c.invokevirtual(biAbs);
+		c.invokevirtual(biCompareTo);
+		c.istore(8);
+		c.iload(8);
+		c.ifgt(step);
+		c.iload(8);
+		c.iflt(quotient);
+		c.aload(5);
+		c.iconst_0();
+		c.invokevirtual(biTestBit);
+		c.ifeq(quotient);
+		c.labelBinding(step);
+		c.aload(5);
+		c.iload(7);
+		c.i2l();
+		c.invokestatic(biValueOf);
+		c.invokevirtual(biAdd);
+		c.astore(5);
+		c.labelBinding(quotient);
+		c.aload(5);
+		c.invokestatic(rNorm);
+		c.areturn();
+		c.labelBinding(decline);
+		c.aload(0);
+		c.aload(1);
+		c.iload(2);
+		c.invokestatic(rFdiv);
+		c.areturn();
 		return new NumericMethod(name, desc, c);
 	}
 

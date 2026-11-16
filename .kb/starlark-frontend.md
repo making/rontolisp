@@ -759,7 +759,8 @@ by plain Common Lisp loops over each primitive:
   `%string-compare` over two character vectors.
 - **`//` was a ratio.** `(values (floor a b))` is `(floor (/ a b))` on every backend: 142
   ns for `x // 2` on the JVM and 59 on wasm, against 39 and 17 for `(ash x -1)`; 40% of
-  `mixed.star`'s JVM samples were `BigInteger`. `.todo/j59` is `floor` itself.
+  `mixed.star`'s JVM samples were `BigInteger`. `floor` itself no longer makes a ratio of two
+  integers (2026-11-16: 16 ns on the JVM, 9 on wasm, `.kb/linalg-simd.md`, "Two integers").
 - **The library went through Common Lisp lists**: `[0] * n` (a list, then a push per
   element, where `make-array .. :initial-element` is one call), `sorted`
   (`stable-sort` over decorated conses behind a `funcall`, and `string<` then `string>`

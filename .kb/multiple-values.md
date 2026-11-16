@@ -23,7 +23,8 @@ moment two threads ran Lisp code.
   (missing-newline-p, "read-line's missing-newline-p" below): on the compile paths ONLY inside
   consumers -- in call position -- and through the walks below; on the interpreter every call
   publishes (since 2026-11-05). Each of them as a FUNCTION object publishes too (below).
-  Two-argument `(floor a b)` elsewhere: `expandFloorFamilyDivisor` -> `(floor (/ a b))`.
+  Two-argument `(floor a b)` elsewhere: `expandFloorFamilyDivisor` -> `(floor (/ a b))`, which no
+  backend divides through a ratio when both are integers (`.kb/linalg-simd.md`, "Two integers").
 
 ## The lowering (`LispMacroExpander`)
 `lowerMvProducer` -> `MvProducer{bindings, values}`: ordered `__mv<id>` temps (`MV_COUNTER`) as

@@ -57,12 +57,13 @@ final class JvmIntConvCompiler {
 		ClassEntry bigClass = ctx.cp.classEntry("java/math/BigInteger");
 		int temp = ctx.allocTemp();
 		// (op (/ a b)) -- which is what both the single-value and the multiple-value
-		// lowerings of the two-argument (op a b) leave behind: a float operand divides
-		// EXACTLY through _fdiv rather than through the rounded double (/ a b), so the
-		// quotient is the mathematical integer CLHS asks for at any magnitude (a bignum
-		// past the long range, like every other numeric operator) and the remainder
-		// beside it stays rem/mod. _fdiv declines with a null for every operand pair it
-		// does not improve on, which falls through to the ordinary division below.
+		// lowerings of the two-argument (op a b) leave behind: two integers divide with
+		// no ratio made, and a float operand EXACTLY through _fdiv rather than through
+		// the rounded double (/ a b), so the quotient is the mathematical integer CLHS
+		// asks for at any magnitude (a bignum past the long range, like every other
+		// numeric operator) and the remainder beside it stays rem/mod. _iquo declines
+		// with a null for every operand pair neither improves on, which falls through to
+		// the ordinary division below.
 		MethodCode.Label fusedEnd = ctx.body.newLabel();
 		List<LispVal> divArgs = divisionOperands(args);
 		if (divArgs != null) {
@@ -73,7 +74,7 @@ final class JvmIntConvCompiler {
 			JvmExprCompiler.compileExpr(divArgs.get(1), ctx, className);
 			ctx.body.astore(bSlot).aload(aSlot).aload(bSlot);
 			JvmEmitHelper.emitIntConst(ctx, mode);
-			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.FDIV)).astore(temp);
+			ctx.body.invokestatic(ctx.numOp(JvmNumericRuntimeBuilder.IQUO)).astore(temp);
 			ctx.body.aload(temp);
 			MethodCode.Label ifDeclined = ctx.body.newLabel();
 			ctx.body.ifnull(ifDeclined);

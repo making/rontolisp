@@ -211,6 +211,8 @@ computed divisor.
   all-Double fast path (`.kb/jvm-double-arithmetic.md`).
 - **Other integer-valued built-ins do not earn a leaf** (measured): `char-code`, `elt` on a packed
   vector, `length` (whose answer IS a three-way dispatch).
+- **`floor`/`truncate` of two integers are not ops** (measured 2026-11-16): a leaf calling `_iquo`
+  already runs as fast as a fused `mod` (`.kb/linalg-simd.md`, "Two integers").
 
 ## Mechanics
 The prologue runs in FOUR passes, because a leaf's raw value can be another leaf's input: random

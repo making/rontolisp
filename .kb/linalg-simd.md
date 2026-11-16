@@ -350,6 +350,34 @@ and wasm-GC's `_f64_fdiv` (`WasmFloatFdivRuntimeBuilder`, handing two rationals 
 `_big_fdiv`). All three DECLINE -- keeping the old f64 route -- for a ratio operand and a non-finite
 dividend; a zero divisor over a finite dividend signals `division-by-zero` (error-handling.md).
 
+**Two integers divide with no ratio made** (2026-11-16). `(floor a b)` used to be `(floor (/ a b))`
+over a ratio and its gcd on every backend. Now: `ExactRounding.quotient`'s integer arm (interpreter);
+the JVM's `_iquo`, which the `(op (/ a b))` site calls in place of `_fdiv` -- two `Long`s by `LDIV`
+and a one-step sign fix (a divisor of -1 is `_neg`), anything wider in the tail `_iquox`
+(`BigInteger.divideAndRemainder`), every non-integer pair `_fdiv`'s answer; wasm-GC divides two
+i31s INLINE at the site (one `i64.div_s`, `r = x - q*y`, the step specialized to the literal mode;
+a zero divisor goes on to `_big_fdiv`, which signals), `_big_fdiv` has the same i64 arm for the boxed
+tier ahead of its limb path, and two literal integers call `_big_fdiv` as a ratio literal does. The
+remainder is still the lowering's `mod`/`rem`. ns per call of a function over a parameter, 5M calls,
+JDK 25.0.5, wasmtime 49, Xeon E5-2697A v4 (`loop` = `(setq s (+ s (op i 7)))` in a `dotimes`):
+
+| form | JVM before | JVM after | wasm before | wasm after |
+|---|---|---|---|---|
+| `(values (floor x 2))` | 156 | 16 | 51 | 9 |
+| `(values (floor x 7))` | 186 | 22 | 58 | 9 |
+| `(values (truncate x 7))` | 161 | 17 | 44 | 7 |
+| `(values (round x 7))` | 222 | 17 | 110 | 10 |
+| `(multiple-value-bind (q r) (floor x 7) (+ q r))` | 185 | 19 | 73 | 23 |
+| `(ash x -1)` | 8 | 9 | 4 | 4 |
+| loop `floor` / `truncate` | 106 / 99 | 3.4 / 2.3 | 63 / 48 | 12 / 12 |
+| loop `mod` (fused) | 1.4 | 3.0 | 18 | 17 |
+
+Integer fusion does not take `floor`/`truncate` (`.kb/jvm-int-fusion.md`): the loop above already
+matches the fused `mod` on the JVM (`_iquo` inlines) and beats it on wasm, where Cranelift turns the
+inline division by a literal into a multiply and the fused `mod` stays a `_fx_mod` call. The wasm arm
+was a call into `_big_fdiv` first: 24-27 ns, and 32-35 with `rem_s` beside `div_s` (one more
+hardware division on this machine).
+
 **An INFINITE divisor is settled by sign, not declined.** With a FINITE NONZERO dividend `a/b` is an
 infinitesimal under 1/2, so `truncate`/`round` are always `0` and `floor`/`ceiling` give `0`/`1` when
 dividend and divisor agree in sign, `-1`/`0` when they do not. An EXACT-ZERO dividend still takes the

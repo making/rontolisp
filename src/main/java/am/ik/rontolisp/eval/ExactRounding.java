@@ -14,7 +14,7 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The exact quotient of the {@code floor}/{@code ceiling}/{@code round}/{@code truncate}
- * family when a float is involved.
+ * family over two integers or when a float is involved.
  * <p>
  * A finite double is an exact binary rational, so {@code a/b} over two of them has one
  * mathematical value and one correctly rounded integer -- which is a BIGNUM past the
@@ -56,10 +56,11 @@ final class ExactRounding {
 
 	/**
 	 * The exact quotient of {@code a/b} under one of the four rounding modes, or
-	 * {@code null} when the operands are not a float paired with a float or an exact
-	 * integer (a ratio operand and a non-finite dividend decline, so the caller keeps its
-	 * ordinary route). A zero divisor, exact or float, over a finite dividend signals
-	 * {@code division-by-zero}, as the integer path does.
+	 * {@code null} when the operands are not two integers or a float paired with a float
+	 * or an exact integer (a ratio operand and a non-finite dividend decline, so the
+	 * caller keeps its ordinary route). Two integers divide with no ratio made. A zero
+	 * divisor, exact or float, over a finite dividend signals {@code division-by-zero},
+	 * as the integer path does.
 	 * <p>
 	 * An INFINITE divisor is settled by sign rather than by the rational route (infinity
 	 * is not a rational, so {@link #rationalOf} declines on it): with a finite nonzero
@@ -73,6 +74,16 @@ final class ExactRounding {
 	 * @return the exact quotient, or {@code null} to decline
 	 */
 	static @Nullable LispVal quotient(LispVal a, LispVal b, int mode) {
+		if (a instanceof LispInteger x && b instanceof LispInteger y) {
+			return longQuotient(x.value(), y.value(), mode);
+		}
+		if (isExactInteger(a) && isExactInteger(b)) {
+			BigInteger divisor = bigOf(b);
+			if (divisor.signum() == 0) {
+				throw LispEvalException.divisionByZero();
+			}
+			return normalize(integerQuotient(bigOf(a), divisor, mode));
+		}
 		if (!(a instanceof LispDouble) && !(b instanceof LispDouble)) {
 			return null;
 		}
@@ -90,13 +101,7 @@ final class ExactRounding {
 		if (ra == null || rb == null || rb[0].signum() == 0) {
 			return null;
 		}
-		BigInteger num = ra[0].multiply(rb[1]);
-		BigInteger den = ra[1].multiply(rb[0]);
-		if (den.signum() < 0) {
-			num = num.negate();
-			den = den.negate();
-		}
-		return normalize(exactQuotient(num, den, mode));
+		return normalize(integerQuotient(ra[0].multiply(rb[1]), ra[1].multiply(rb[0]), mode));
 	}
 
 	/**
@@ -218,32 +223,67 @@ final class ExactRounding {
 	}
 
 	/**
-	 * The exact quotient of {@code num/den} (the denominator positive) under one of the
-	 * four rounding modes -- {@code round} is ties-to-even, as Common Lisp requires.
+	 * The quotient of two fixnums under one of the four rounding modes, with no ratio
+	 * made: the truncating division, stepped one toward the mode's side when it left a
+	 * remainder. Only {@code MIN_VALUE / -1} leaves the {@code long} range.
 	 */
-	private static BigInteger exactQuotient(BigInteger num, BigInteger den, int mode) {
-		BigInteger[] qr = num.divideAndRemainder(den);
-		if (qr[1].signum() == 0) {
-			return qr[0];
+	private static LispVal longQuotient(long x, long y, int mode) {
+		if (y == 0) {
+			throw LispEvalException.divisionByZero();
 		}
-		BigInteger floor = qr[1].signum() < 0 ? qr[0].subtract(BigInteger.ONE) : qr[0];
-		switch (mode) {
-			case TRUNCATE:
-				return qr[0];
-			case FLOOR:
-				return floor;
-			case CEILING:
-				return floor.add(BigInteger.ONE);
-			default:
-				// The floor remainder lies in [0, den); double it to place the fraction
-				// against a half, and settle the tie on the floor quotient's parity.
-				BigInteger rest = num.subtract(floor.multiply(den));
-				int cmp = rest.shiftLeft(1).compareTo(den);
-				if (cmp < 0) {
-					return floor;
-				}
-				return cmp > 0 || floor.testBit(0) ? floor.add(BigInteger.ONE) : floor;
+		if (y == -1) {
+			return x == Long.MIN_VALUE ? new LispBigInteger(BigInteger.valueOf(x).negate()) : new LispInteger(-x);
 		}
+		long q = x / y;
+		long r = x % y;
+		if (r == 0 || mode == TRUNCATE) {
+			return new LispInteger(q);
+		}
+		// The exact quotient is q + r/y, and r/y lies strictly between -1 and 1 with the
+		// sign of r * y.
+		long away = (r ^ y) < 0 ? -1 : 1;
+		long step = switch (mode) {
+			case FLOOR -> away < 0 ? -1 : 0;
+			case CEILING -> away > 0 ? 1 : 0;
+			default -> {
+				// |r| against |y| - |r|, unsigned: |y| is 2^63 for MIN_VALUE.
+				long ar = Math.abs(r);
+				int cmp = Long.compareUnsigned(ar, Math.abs(y) - ar);
+				yield cmp > 0 || (cmp == 0 && (q & 1) != 0) ? away : 0;
+			}
+		};
+		return new LispInteger(q + step);
+	}
+
+	/**
+	 * The quotient of {@code x/y} (the divisor not zero) under one of the four rounding
+	 * modes -- {@code round} is ties-to-even, as Common Lisp requires.
+	 */
+	private static BigInteger integerQuotient(BigInteger x, BigInteger y, int mode) {
+		BigInteger[] qr = x.divideAndRemainder(y);
+		BigInteger q = qr[0];
+		BigInteger r = qr[1];
+		if (r.signum() == 0 || mode == TRUNCATE) {
+			return q;
+		}
+		boolean down = r.signum() != y.signum();
+		boolean step = switch (mode) {
+			case FLOOR -> down;
+			case CEILING -> !down;
+			default -> {
+				int cmp = r.abs().shiftLeft(1).compareTo(y.abs());
+				yield cmp > 0 || (cmp == 0 && q.testBit(0));
+			}
+		};
+		return !step ? q : down ? q.subtract(BigInteger.ONE) : q.add(BigInteger.ONE);
+	}
+
+	private static boolean isExactInteger(LispVal v) {
+		return v instanceof LispInteger || v instanceof LispBigInteger;
+	}
+
+	private static BigInteger bigOf(LispVal v) {
+		return v instanceof LispInteger i ? BigInteger.valueOf(i.value()) : ((LispBigInteger) v).value();
 	}
 
 	/** Demotes a bignum back to a fixnum when it fits, the one-representation rule. */
