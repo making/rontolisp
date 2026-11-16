@@ -32,7 +32,9 @@ Speed-for-size trades, on at `off` and `default` alike. **wasm-GC**: integer exp
 (`.kb/wasm-int-fusion.md`) and unboxed dual-representation locals (`.kb/wasm-unboxed-locals.md`),
 both switched by `WasmIntFusionCompiler.speedTradesEnabled(ctx)` (the three fusion entry points and
 `WasmLetCompiler`'s eligibility scan), and with them, since 2026-11-16, the inline arm of a
-general vector's element access (`.kb/adjustable-arrays.md`, "What an element access costs"), a
+general vector's element access and of its `vector-push-extend` with room
+(`.kb/adjustable-arrays.md`, "What an element access costs"), the inline `length` of a value pinned
+to the general kind (`.kb/length-runtime.md`), a
 structure predicate's or reader's call as its primitive (`.kb/defstruct.md`) and the fixnum arm of
 an unfused comparison (`.kb/wasm-int-fusion.md`); the host string copies eight bytes a round
 (`.kb/wasm-gc-strings.md`) and `_hash`'s string key ahead of its counters

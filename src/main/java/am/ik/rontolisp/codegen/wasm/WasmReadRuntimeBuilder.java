@@ -4275,7 +4275,7 @@ final class WasmReadRuntimeBuilder {
 		getLocal(w, DATA);
 		WasmEmitHelper.emitNewCons(w, ctx.identityHash());
 		WasmEmitHelper.emitNewCons(w, ctx.identityHash());
-		WasmEmitHelper.emitNewCell(w, ctx.identityHash());
+		WasmEmitHelper.emitNewArrayCell(w, ctx.identityHash());
 	}
 
 	// _rd_len (v) -> i32: proper-list length; an improper tail signals.

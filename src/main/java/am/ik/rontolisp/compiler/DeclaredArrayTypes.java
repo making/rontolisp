@@ -11,6 +11,7 @@ import am.ik.rontolisp.LispNames;
 import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.PackageRegistry;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -196,6 +197,11 @@ public final class DeclaredArrayTypes {
 			}
 			// Any other compound element type (signed-byte, (integer lo hi), ...) keeps
 			// the general boxed representation on every backend.
+			return Kind.GENERAL;
+		}
+		if (resolved instanceof LispTrue) {
+			// (vector t): the reader's T is no symbol, and no element type says "boxed"
+			// more plainly.
 			return Kind.GENERAL;
 		}
 		if (resolved instanceof LispSymbol sym) {

@@ -26099,7 +26099,10 @@ cases:
     # own, which wasm reads and stores inline, and everything that arm hands on -- a fill
     # pointer, a view, a packed vector, a string, a subscript out of range, wide or no
     # integer, another rank, no array. A store whose value form leaves the block around it
-    # answered nil on wasm, and never returned from inside a loop. A structure's predicate
+    # answered nil on wasm, and never returned from inside a loop. The same read, store, push
+    # and length of a vector whose storage, dimension or header was replaced under it (a push
+    # that grows, an adjust-array in place, to a view and back, a full view that grows): the
+    # cell of a wasm vector names its storage and an access trusts it. A structure's predicate
     # and reader as the type test and the slot read they are, a reader of anything else
     # reporting as its definition does. The vector rows are ArefRankAndSubscriptChecksFixture's.
     source: |
@@ -26132,6 +26135,29 @@ cases:
       (ci-ve-check (ci-ve-put (vector 1 2 3) 1.5 :x))
       (ci-ve-check (ci-ve-put *ci-ve-m* 0 :x))
       (ci-ve-check (list (ci-ve-exit (vector 1 2 3)) (ci-ve-loop-exit (vector 1 2 3))))
+      (defvar *ci-ve-g* (make-array 2 :adjustable t :fill-pointer 0))
+      (defvar *ci-ve-a* (make-array 3 :adjustable t :initial-contents '(1 2 3)))
+      (defvar *ci-ve-t* (vector 10 20 30 40))
+      (defvar *ci-ve-b* (make-array 2 :adjustable t :initial-element 7))
+      (defvar *ci-ve-d* (make-array 2 :displaced-to *ci-ve-t* :fill-pointer 2 :adjustable t))
+      (defun ci-ve-push (v x) (vector-push-extend x v))
+      (defun ci-ve-len (v) (declare (type (vector t) v)) (length v))
+      (ci-ve-check (list (ci-ve-push *ci-ve-g* :a) (ci-ve-push *ci-ve-g* :b) (ci-ve-get *ci-ve-g* 1) (ci-ve-push *ci-ve-g* :c) (ci-ve-push *ci-ve-g* :d)
+                         (ci-ve-push *ci-ve-g* :e) (ci-ve-put *ci-ve-g* 0 :y) (ci-ve-put *ci-ve-g* 4 :z) (row-major-aref *ci-ve-g* 0)
+                         (ci-ve-get *ci-ve-g* 7) (ci-ve-len *ci-ve-g*) *ci-ve-g*))
+      (ci-ve-check (ci-ve-get *ci-ve-g* 8))
+      (ci-ve-check (list (ci-ve-get *ci-ve-a* 2) (eq *ci-ve-a* (adjust-array *ci-ve-a* 5 :initial-element 0)) (ci-ve-put *ci-ve-a* 4 :w)
+                         (eq *ci-ve-a* (adjust-array *ci-ve-a* 2)) (ci-ve-len *ci-ve-a*) *ci-ve-a*))
+      (ci-ve-check (ci-ve-get *ci-ve-a* 2))
+      (ci-ve-check (ci-ve-put *ci-ve-a* 4 :x))
+      (ci-ve-check (list (ci-ve-get *ci-ve-b* 1) (eq *ci-ve-b* (adjust-array *ci-ve-b* 3 :displaced-to *ci-ve-t* :displaced-index-offset 1))
+                         (ci-ve-get *ci-ve-b* 2) (ci-ve-put *ci-ve-b* 0 :v) (ci-ve-len *ci-ve-b*) *ci-ve-t*))
+      (ci-ve-check (ci-ve-get *ci-ve-b* 3))
+      (ci-ve-check (list (eq *ci-ve-b* (adjust-array *ci-ve-b* 2)) (ci-ve-put *ci-ve-b* 1 :u) *ci-ve-b* *ci-ve-t*))
+      (ci-ve-check (list (ci-ve-push *ci-ve-d* :p) (ci-ve-get *ci-ve-d* 2) (ci-ve-put *ci-ve-d* 0 :q) (ci-ve-len *ci-ve-d*) *ci-ve-d* *ci-ve-t*))
+      (ci-ve-check (list (ci-ve-len *ci-ve-v*) (ci-ve-len *ci-ve-fp*) (ci-ve-push *ci-ve-fp* :r) (ci-ve-len *ci-ve-fp*)))
+      (ci-ve-check (ci-ve-push *ci-ve-v* 4))
+      (ci-ve-check (ci-ve-push 5 4))
       (defstruct ci-ve-pt x y)
       (defstruct (ci-ve-pt3 (:include ci-ve-pt)) z)
       (defun ci-ve-kind (x) (cond ((ci-ve-pt3-p x) :pt3) ((ci-ve-pt-p x) :pt) (t :other)))
@@ -26158,6 +26184,18 @@ cases:
       (SETF AREF): The value 1.5 is not of type INTEGER | INTEGER
       (SETF AREF): The value #2A((1 1) (1 1)) is not of type VECTOR | VECTOR
       (:EXITED #(:SET 2 3))
+      (0 1 :B 2 3 4 (:Y 5) (:Z 5) :Y NIL 5 #(:Y :B :C :D :Z))
+      AREF: The value 8 is not of type (INTEGER 0 (8)) | (INTEGER 0 (8))
+      (3 T (:W 5) T 2 #(1 2))
+      AREF: The value 2 is not of type (INTEGER 0 (2)) | (INTEGER 0 (2))
+      (SETF AREF): The value 4 is not of type (INTEGER 0 (2)) | (INTEGER 0 (2))
+      (7 T 40 (:V 3) 3 #(10 :V 30 40))
+      AREF: The value 3 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
+      (T (:U 2) #(:V :U) #(10 :V 30 40))
+      (2 :P (:Q 3) 3 #(:Q :V :P) #(10 :V 30 40))
+      (3 2 2 3)
+      VECTOR-PUSH-EXTEND: The value #(1 2 :Z) is not of type (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P)) | (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))
+      VECTOR-PUSH-EXTEND: The value 5 is not of type ARRAY | ARRAY
       (:PT3 :PT :OTHER T T (1 2) 9 3)
       CI-VE-PT-X: The value 42 is not of type CI-VE-PT | CI-VE-PT
       CI-VE-PT-X: The value 1 is not of type CI-VE-PT | CI-VE-PT

@@ -78,7 +78,9 @@ array of the same element type), `FLOAT`, `GENERAL`. A string specifier (`simple
 included) and a character element type map to NOTHING: a string is the immutable `TYPE_STRING` or
 the marked general character array `copy-seq`/`subseq`/`make-string` answer, so a `STRING` kind
 casting to `TYPE_STRING` trapped on a correct declaration (plump's `decode-entities`, removed
-2026-10-31). A bare `vector`/`array` proves nothing. Specifier symbols resolve through the
+2026-10-31). A bare `vector`/`array` proves nothing; `(vector t)` and `(simple-array t (*))`
+prove `GENERAL` (since 2026-11-16: the reader's `t` is `LispTrue`, no symbol, and the
+specifier had proved nothing). Specifier symbols resolve through the
 `ClosRegistry` deftype table including the DEFAULTED registration -- an all-`&optional` deftype
 registers its bare-name default expansion, folded by a closed pure evaluator over
 `quote`/`list`/`cons`/`append`/`or`/`let`/`let*` (`LispMacroExpander.defaultedDeftypeExpansion`;
@@ -104,8 +106,9 @@ Four sources (`WasmArrayCompiler.arrayKindOfExpr`):
 
 Emission: `emitKindedAref1` is `ref.cast` + direct read (~19-30 B against 196; u8/u16 box
 `ref.i31` inline, u32 through `_int_new`); `emitKindedAset1` is the same single arm, its packed-int
-arm keeping the raw-value fast path (`tryCompileRaw`); `length` of a packed kind is `ref.cast` + `array.len` + `ref.i31`, other kinds
-keeping the generic chain because a GENERAL vector's length must honour a fill pointer.
+arm keeping the raw-value fast path (`tryCompileRaw`); `length` of a packed kind is `ref.cast` + `array.len` + `ref.i31`; of the
+`GENERAL` kind, at the speed levels, the fill pointer or the storage's length off the cell's
+fields with `_seq_len` behind it (`.kb/length-runtime.md`), the generic call elsewhere.
 
 - **The checks before the access** (2026-11-09). A one-subscript site of a packed kind tests the
   array against that ONE type inline and calls `_arr_check_rank` only when the test fails (a packed

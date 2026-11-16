@@ -8,7 +8,8 @@ Encoding and pipeline invariants shared by the interpreter and both compilers.
   (post-pass at the end of `JvmLispCompiler.compile()`, after the optional shake) adds the
   frames and stamps the version. [stack-map-frames.md](stack-map-frames.md).
 - WASM function types stay OUTSIDE the rec group (wasmtime's WASI host needs plain `(func ...)`
-  for imports); only the cons struct is in one.
+  for imports); the first one holds the cons, string, cell, closure and float structs and the
+  buckets array (`TYPE_HASH_BUCKETS`, its last member: the cell's storage field names it).
 - symbolp/stringp: quoted symbols and string literals share one representation, split by a
   leading `"`; so no symbol is the empty string ([symbol-runtime-api.md](symbol-runtime-api.md),
   "The empty name").

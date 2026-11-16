@@ -21,6 +21,10 @@ shadow, INCLUDING nil". Sentinel: a private `TYPE_CELL` in an immutable module g
   `WasmExprCompiler.compileSymbolRef` -> `emitRawLocalBoxedRead` -> shared out-of-line `_ub_read`
   (`FUNC_UB_READ`/`TYPE_UB_READ`, appended after the last fixed helper and type so no index above
   them shifts; `WasmFxRuntimeBuilder.buildUbReadBody`).
+- **`_ub_read` inline was measured and not made** (2026-11-16): the shadow's test, the fixnum
+  range and `ref.i31` at each of `loop.star`'s 88 sites (24 B each) is 0.69 -> 0.66 s over
+  30,000,000 iterations that read one raw local boxed each
+  (`.todo/artefacts/j61-wasm-vector-cell-fields/sim-inline-ub-read.py`).
 - **Trap**: statement position must propagate -- `WasmExprCompiler.compileForEffect` routes
   `let`/`let*`/`progn` through forEffect overloads (`WasmLetCompiler.compile(cons, ctx, true)`,
   `WasmPrognCompiler.compileForEffect`); otherwise a statement-position `let` tailing in `setf`
@@ -82,6 +86,15 @@ placeholders** in `Ctx.i64LocalRefs` and every body finalizer routes through
 must therefore be ASCENDING** -- they are, and the splice loop throws rather than assume it. A body
 with no i64 locals is byte-identical to the pre-feature emission. `Ctx.nextI64Local` is saved and
 restored per fused site; `maxI64Locals` is the declaration's high-water mark.
+
+**A typed scratch local rides the same list** (`Ctx.Scratch`, `writeScratchIndex`, 2026-11-16): one
+`(ref null $buckets)` and one `(ref null $cell)`, each declared as a run of one behind the i64 run
+and only in a body that names it (a negative slot in `i64LocalRefs`). An inline arm holds a value
+there between a test and a read, because a `(ref null eq)` local is cast again at each use and
+Cranelift does not merge the casts (`.kb/adjustable-arrays.md`, "What an element access costs").
+Never live across a call or a branch out of the arm, so one of each serves every site of a body and
+no landing pad carries it (`WasmLandingPad` pushes the `(ref null eq)` locals only). Like an i64
+local, only where `buildLocalsAndPatch` finishes the body: not in an async resume body.
 
 ## Tests
 

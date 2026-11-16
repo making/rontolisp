@@ -138,7 +138,8 @@ with `setf`/`incf`/`push` without their own case.
   `Integer` in slot 0, a ratio is `BigInteger[]`, a character is `int[]`).
   `JvmLispCompiler.LayoutPool` interns one static field per referenced tag ON DEMAND, filled in a
   `<clinit>` merged with the condition channel's.
-- **WASM-GC**: `TYPE_INSTANCE` = `struct {const i32 layoutAddr, mut eqref slots}` in its own rec
+- **WASM-GC**: `TYPE_INSTANCE` = `struct {mut i32 layoutAddr, mut (ref null $buckets) slots}` (the
+  slots field of the slots array's own type since 2026-11-16, `.kb/defstruct.md`) in its own rec
   group, appended after the fixed types, the `--simd` block and the async block so no existing type
   or `FUNC_*` index moves. Layout records live in a linear-memory blob (`WasmInstanceLayouts`), the
   print name interned as a VIEW into the tag's bytes (`StringTable.addTailOf`, ~600 B on a library

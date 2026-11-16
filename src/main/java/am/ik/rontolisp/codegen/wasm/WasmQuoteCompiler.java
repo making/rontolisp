@@ -1021,7 +1021,7 @@ final class WasmQuoteCompiler {
 		getBuckets(ctx, dataSlot);
 		WasmEmitHelper.emitNewCons(ctx);
 		WasmEmitHelper.emitNewCons(ctx);
-		WasmEmitHelper.emitNewCell(ctx);
+		WasmEmitHelper.emitNewArrayCell(ctx);
 	}
 
 	/**

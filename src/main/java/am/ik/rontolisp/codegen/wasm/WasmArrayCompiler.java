@@ -280,7 +280,7 @@ final class WasmArrayCompiler {
 		getLocal(ctx, dataArrSlot);
 		WasmEmitHelper.emitNewCons(ctx);
 		WasmEmitHelper.emitNewCons(ctx);
-		WasmEmitHelper.emitNewCell(ctx);
+		WasmEmitHelper.emitNewArrayCell(ctx);
 	}
 
 	// (make-array dims :displaced-to target [:displaced-index-offset off]
@@ -516,7 +516,7 @@ final class WasmArrayCompiler {
 		getLocal(ctx, dataArrSlot);
 		WasmEmitHelper.emitNewCons(ctx);
 		WasmEmitHelper.emitNewCons(ctx);
-		WasmEmitHelper.emitNewCell(ctx);
+		WasmEmitHelper.emitNewArrayCell(ctx);
 		ctx.writer.write(Instruction.END);
 	}
 
@@ -640,7 +640,7 @@ final class WasmArrayCompiler {
 		getLocal(ctx, dataArrSlot);
 		WasmEmitHelper.emitNewCons(ctx);
 		WasmEmitHelper.emitNewCons(ctx);
-		WasmEmitHelper.emitNewCell(ctx);
+		WasmEmitHelper.emitNewArrayCell(ctx);
 		for (int i = 0; i < arms; i++) {
 			ctx.writer.write(Instruction.END);
 		}
@@ -2288,17 +2288,21 @@ final class WasmArrayCompiler {
 
 	/**
 	 * A rank-1 access of a general vector with storage of its own, inline, at the speed
-	 * levels: the array in {@code arrSlot} a cell whose header is {@code (dims . (meta .
-	 * data))} with one dimension and the buckets array as its data, the boxed subscript
-	 * in {@code idxSlot} a fixnum below that dimension. Then the element is read, or with
-	 * a {@code valSlot} the value in it stored and answered. Anything else -- another
-	 * representation, a displaced view, another rank, a wide or out-of-range subscript, a
-	 * value that is no array -- runs {@code slow}, the access as the size level makes it,
-	 * which is what checks and reports. Every test of the arm is one that passes for the
-	 * vector, and no call: what the access cost was the type tests of the dispatch over
-	 * every representation, about a nanosecond each, and the live references each call
-	 * spills ({@code .kb/adjustable-arrays.md}, "What an element access costs"). Declined
-	 * at the size level, where {@code slow} is all there is.
+	 * levels: the array in {@code arrSlot} a cell whose storage field is set -- which
+	 * {@code _vec_sync} does for exactly that array
+	 * ({@link WasmArrayRuntimeBuilder#buildVecSyncBody}) -- and the boxed subscript in
+	 * {@code idxSlot} a fixnum below the storage's length. Then the element is read, or
+	 * with a {@code valSlot} the value in it stored and answered. Anything else --
+	 * another representation, a displaced view, another rank, a wide or out-of-range
+	 * subscript, a value that is no array -- runs {@code slow}, the access as the size
+	 * level makes it, which is what checks and reports. Two type tests, the cell's and
+	 * the subscript's, and no call: what the access cost was the type tests of the
+	 * dispatch over every representation, about a nanosecond each, and the live
+	 * references each call spills ({@code .kb/adjustable-arrays.md}, "What an element
+	 * access costs"). The storage is held in the body's storage scratch, a local of its
+	 * own type; an async resume body, whose locals are spilled as {@code (ref null eq)},
+	 * holds it in such a local and casts it twice. Declined at the size level, where
+	 * {@code slow} is all there is.
 	 * @param ctx the compile context
 	 * @param arrSlot the local holding the array
 	 * @param idxSlot the local holding the boxed subscript
@@ -2311,8 +2315,8 @@ final class WasmArrayCompiler {
 			return;
 		}
 		am.ik.wasm.WasmWriter w = ctx.writer;
-		int headerSlot = ctx.allocTemp();
-		int dimsSlot = ctx.allocTemp();
+		boolean typed = ctx.asyncResume == null;
+		int dataSlot = typed ? -1 : ctx.allocTemp();
 		// block $done (result eqref) { block $miss { block $cast (result eqref) {
 		// tests; access; br $done } drop } slow }: a failed cast leaves through $cast
 		// with the value it refused, a failed compare through $miss.
@@ -2321,41 +2325,30 @@ final class WasmArrayCompiler {
 		w.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
 		w.write(Instruction.BLOCK);
 		w.writeRefType(true, Type.EQ.code());
-		// header = arr.0, a cons whose car is the dims array of ONE dimension
+		// data = arr.1, the storage: null in a cell that is no such vector
 		getLocal(ctx, arrSlot);
 		brOnCastFail(w, WasmLispCompiler.TYPE_CELL);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.TEE_LOCAL);
-		w.writeUnsignedLeb128(headerSlot);
-		brOnCastFail(w, WasmLispCompiler.TYPE_CONS);
-		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
-		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
-		w.writeUnsignedLeb128(0);
-		w.write(Instruction.TEE_LOCAL);
-		w.writeUnsignedLeb128(dimsSlot);
-		brOnCastFail(w, WasmLispCompiler.TYPE_HASH_BUCKETS);
-		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
-		i32Const(ctx, 1);
-		w.write(Instruction.I32_NE);
-		w.write(Instruction.BR_IF, 1);
-		// the subscript a fixnum below it (a dimension is one: plain casts from here on
-		// what the header of an array always holds, as _arr_get makes them)
+		w.writeUnsignedLeb128(WasmLispCompiler.CELL_STORAGE_FIELD);
+		if (typed) {
+			w.write(Instruction.TEE_LOCAL);
+			ctx.writeScratchIndex(WasmLispCompiler.Ctx.Scratch.STORAGE);
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.BR_IF, 1);
+		}
+		else {
+			setLocal(ctx, dataSlot);
+		}
+		// the subscript a fixnum below its length
 		getLocal(ctx, idxSlot);
 		brOnCastFail(w, Type.I31.code());
 		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
-		getBuckets(ctx, dimsSlot);
-		i32Const(ctx, 0);
-		arrayGet(ctx);
-		WasmEmitHelper.castI31GetS(ctx);
+		pushStorage(ctx, typed, dataSlot, true);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
 		w.write(Instruction.I32_GE_U);
 		w.write(Instruction.BR_IF, 1);
-		// data = header.cdr.cdr, the buckets array itself: no view, no packed target
-		getLocal(ctx, headerSlot);
-		castConsGet(ctx, 1);
-		castConsGet(ctx, 1);
-		brOnCastFail(w, WasmLispCompiler.TYPE_HASH_BUCKETS);
+		pushStorage(ctx, typed, dataSlot, false);
 		getLocal(ctx, idxSlot);
 		WasmEmitHelper.castI31GetS(ctx);
 		if (valSlot < 0) {
@@ -2374,6 +2367,24 @@ final class WasmArrayCompiler {
 		slow.run();
 		ctx.wasmCtrlDepth--;
 		w.write(Instruction.END);
+	}
+
+	// The storage emitSimpleVectorAccess holds: the typed scratch as it stands, or the
+	// (ref null eq) local cast -- leaving through the cast block when it is null and the
+	// site has not asked yet.
+	private static void pushStorage(WasmLispCompiler.Ctx ctx, boolean typed, int dataSlot, boolean mayBeNull) {
+		if (typed) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writeScratchIndex(WasmLispCompiler.Ctx.Scratch.STORAGE);
+			return;
+		}
+		getLocal(ctx, dataSlot);
+		if (mayBeNull) {
+			brOnCastFail(ctx.writer, WasmLispCompiler.TYPE_HASH_BUCKETS);
+		}
+		else {
+			castBuckets(ctx);
+		}
 	}
 
 	// br_on_cast_fail 0 (ref null eq) (ref type): the operand cast on the stack, or the
@@ -3344,7 +3355,9 @@ final class WasmArrayCompiler {
 		castConsGet(ctx, 1);
 		castConsGet(ctx, 1);
 		structSetCons(ctx, 1);
+		// the dims and the data slot are other arrays now: the cell's fields follow
 		getLocal(ctx, oldCellSlot);
+		callFixed(ctx, WasmLispCompiler.FUNC_VEC_SYNC);
 	}
 
 	static void compileArrayBecomeDisplaced(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -3424,7 +3437,9 @@ final class WasmArrayCompiler {
 		WasmEmitHelper.emitNewCons(ctx);
 		WasmEmitHelper.emitNewCons(ctx);
 		structSetCell(ctx, 0);
+		// a view has no storage of its own: the cell's fields are null from here on
 		getLocal(ctx, aSlot);
+		callFixed(ctx, WasmLispCompiler.FUNC_VEC_SYNC);
 	}
 
 	static void compileArrayJavaComponent(LispCons cons, WasmLispCompiler.Ctx ctx) {
@@ -3648,7 +3663,9 @@ final class WasmArrayCompiler {
 		castCellGet0(ctx);
 		callFixed(ctx, WasmLispCompiler.FUNC_ARR_UNDISPLACE);
 		ctx.writer.write(Instruction.DROP);
+		// the data slot may hold storage of the array's own now
 		getLocal(ctx, cellSlot);
+		callFixed(ctx, WasmLispCompiler.FUNC_VEC_SYNC);
 		ctx.writer.write(Instruction.END);
 	}
 
@@ -3747,6 +3764,15 @@ final class WasmArrayCompiler {
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int valSlot = setTemp(ctx);
 		WasmExprCompiler.compileExpr(args.get(2), ctx);
+		int cellSlot = setTemp(ctx);
+		// With no extension to evaluate, a vector with room takes the element inline;
+		// what the arm refuses is pushed as below, which checks, grows and reports.
+		boolean inline = args.size() == 3 && WasmIntFusionCompiler.speedTradesEnabled(ctx) && ctx.asyncResume == null;
+		if (inline) {
+			emitPushWithRoom(ctx, cellSlot, valSlot);
+			ctx.wasmCtrlDepth++;
+		}
+		getLocal(ctx, cellSlot);
 		emitFillPointerHeader(ctx);
 		int headerSlot = setTemp(ctx);
 		int extSlot = -1;
@@ -3865,8 +3891,95 @@ final class WasmArrayCompiler {
 		i32Const(ctx, 0);
 		getLocal(ctx, newCapSlot);
 		arraySet(ctx);
+		// the storage is another array now: the cell's fields follow
+		getLocal(ctx, cellSlot);
+		callFixed(ctx, WasmLispCompiler.FUNC_VEC_SYNC);
+		ctx.writer.write(Instruction.DROP);
 		ctx.writer.write(Instruction.END); // grow if
 		emitStoreAtFillPointerAndAdvance(ctx, headerSlot, metaSlot, valSlot);
+		if (inline) {
+			ctx.wasmCtrlDepth--;
+			ctx.writer.write(Instruction.END);
+		}
+	}
+
+	/**
+	 * A push onto a vector that has room, inline, at the speed levels: the array in
+	 * {@code cellSlot} a cell naming its storage and its meta cons -- a rank-1 general
+	 * vector with storage of its own ({@link WasmArrayRuntimeBuilder#buildVecSyncBody})
+	 * -- whose fill pointer is below the storage's length. The value in {@code valSlot}
+	 * is stored there, the fill pointer advanced and the old one answered, behind the one
+	 * cast of the array. Opens the block the answer leaves through and falls into the
+	 * code after it for anything else -- a full vector, one without a fill pointer, a
+	 * view, a value that is no array: the caller emits the push that checks, grows and
+	 * reports there, then the block's end. What a push cost was {@code _fp_hdr},
+	 * {@code _arr_set} and the header's walk: 41 ns against a store's 5
+	 * ({@code .kb/adjustable-arrays.md}, "What an element access costs").
+	 */
+	private static void emitPushWithRoom(WasmLispCompiler.Ctx ctx, int cellSlot, int valSlot) {
+		am.ik.wasm.WasmWriter w = ctx.writer;
+		int fpSlot = ctx.allocTemp();
+		Runnable cell = () -> {
+			w.write(Instruction.GET_LOCAL);
+			ctx.writeScratchIndex(WasmLispCompiler.Ctx.Scratch.CELL);
+		};
+		Runnable storage = () -> {
+			cell.run();
+			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+			w.writeUnsignedLeb128(WasmLispCompiler.CELL_STORAGE_FIELD);
+		};
+		Runnable meta = () -> {
+			cell.run();
+			w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+			w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+			w.writeUnsignedLeb128(WasmLispCompiler.CELL_META_FIELD);
+		};
+		// block $done (result eqref) { block $miss { block $cast (result eqref) {
+		// tests; store; br $done } drop } <the caller's push> }
+		w.write(Instruction.BLOCK);
+		w.writeRefType(true, Type.EQ.code());
+		w.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		w.write(Instruction.BLOCK);
+		w.writeRefType(true, Type.EQ.code());
+		getLocal(ctx, cellSlot);
+		brOnCastFail(w, WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.SET_LOCAL);
+		ctx.writeScratchIndex(WasmLispCompiler.Ctx.Scratch.CELL);
+		meta.run();
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.BR_IF, 1);
+		// the fill pointer a fixnum below the storage's length
+		meta.run();
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CONS);
+		w.writeUnsignedLeb128(0);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(fpSlot);
+		brOnCastFail(w, Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		storage.run();
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 1);
+		// storage[fp] = value; meta.car = fp + 1; the answer is fp
+		storage.run();
+		getLocal(ctx, fpSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		getLocal(ctx, valSlot);
+		arraySet(ctx);
+		meta.run();
+		getLocal(ctx, fpSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		i32Const(ctx, 1);
+		w.write(Instruction.I32_ADD);
+		boxI31(ctx);
+		structSetCons(ctx, 0);
+		getLocal(ctx, fpSlot);
+		w.write(Instruction.BR, 2);
+		w.write(Instruction.END);
+		w.write(Instruction.DROP);
+		w.write(Instruction.END);
 	}
 
 	// Leaves on the stack, as i32, the capacity a full vector with the i31 capacity in

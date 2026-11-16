@@ -41,12 +41,12 @@ final class WasmIdentityHashRuntimeBuilder {
 
 	private static final int FMIX_C2 = 0xc2b2ae35;
 
-	// The cons's identity-hash slot is its third field, the cell's its second, the
+	// The cons's identity-hash slot is its third field, the cell's its fourth, the
 	// closure's its third, the instance's its third (the type section in
 	// WasmLispCompiler declares them).
 	static final int CONS_HASH_FIELD = 2;
 
-	static final int CELL_HASH_FIELD = 1;
+	static final int CELL_HASH_FIELD = 3;
 
 	static final int CLOSURE_HASH_FIELD = 2;
 

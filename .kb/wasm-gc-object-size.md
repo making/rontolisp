@@ -44,6 +44,14 @@ reference is 4 bytes, and every shape up to 16 bytes of fields is one 32-byte ob
 doubled reservation confirms the reading.
 **The identity-hash slot costs a cons, a cell and an instance nothing on wasmtime.**
 
+**The cell's storage and meta fields** (2026-11-16, `.kb/adjustable-arrays.md`, "What an
+element access costs"; `cell3.wat` / `cell4.wat` of
+`.todo/artefacts/j61-wasm-vector-cell-fields/`): the cell `{eqref, (ref null $buckets),
+(ref null $cons)}` and the same with the identity-hash slot are 32 B on wasmtime 49.0.0
+(the same count fits the capped heap as of `{eqref}`), 40 and 48 B on V8 13 (node 24.22;
+`{eqref}` 24). So on V8 a hash table, an array and a closure's box each weigh 16 B more;
+not gated, since a module with no array is the only one a gate would spare.
+
 V8 13 (node 24.19, no pointer compression, so a reference is 8 bytes): `used_heap_size`
 delta per object over `n = 1,000,000`.
 

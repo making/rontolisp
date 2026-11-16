@@ -896,13 +896,19 @@ final class WasmEmitHelper {
 	}
 
 	/**
-	 * Emits {@code struct.new TYPE_CELL} over the value on the stack; the cell's
-	 * identity-hash slot rides behind the value exactly as the cons's does behind the
-	 * cdr.
+	 * Emits {@code struct.new TYPE_CELL} over the value on the stack, its storage and
+	 * meta fields null: the cell of an array gets them from {@code _vec_sync}
+	 * ({@link WasmArrayRuntimeBuilder#buildVecSyncBody}) and of anything else never. The
+	 * cell's identity-hash slot rides behind the three exactly as the cons's does behind
+	 * the cdr.
 	 * @param w the writer
 	 * @param identityHash whether the module's cells carry the identity-hash slot
 	 */
 	static void emitNewCell(WasmWriter w, boolean identityHash) {
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
 		if (identityHash) {
 			w.write(Instruction.I32_CONST);
 			w.writeSignedLeb128(0);
@@ -914,6 +920,28 @@ final class WasmEmitHelper {
 	/** {@link #emitNewCell(WasmWriter, boolean)} for the context's writer and shape. */
 	static void emitNewCell(WasmLispCompiler.Ctx ctx) {
 		emitNewCell(ctx.writer, ctx.usesIdentityHashTables);
+	}
+
+	/**
+	 * Emits the cell of a general array over its header {@code (dims . (meta . data))} on
+	 * the stack: {@link #emitNewCell(WasmWriter, boolean)}, then {@code _vec_sync} gives
+	 * a rank-1 array with storage of its own its storage and meta fields
+	 * ({@link WasmArrayRuntimeBuilder#buildVecSyncBody}). An array made without it is
+	 * still an array; its element accesses run as the size level emits them.
+	 * @param w the writer
+	 * @param identityHash whether the module's cells carry the identity-hash slot
+	 */
+	static void emitNewArrayCell(WasmWriter w, boolean identityHash) {
+		emitNewCell(w, identityHash);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_VEC_SYNC);
+	}
+
+	/**
+	 * {@link #emitNewArrayCell(WasmWriter, boolean)} for the context's writer and shape.
+	 */
+	static void emitNewArrayCell(WasmLispCompiler.Ctx ctx) {
+		emitNewArrayCell(ctx.writer, ctx.usesIdentityHashTables);
 	}
 
 	/**
@@ -947,6 +975,9 @@ final class WasmEmitHelper {
 	 * @param identityHash whether the module's instances carry the identity-hash slot
 	 */
 	static void emitNewInstance(WasmWriter w, int instanceTypeIndex, boolean identityHash) {
+		// the field is of the array's own type; a site hands it over as it holds it
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
 		if (identityHash) {
 			w.write(Instruction.I32_CONST);
 			w.writeSignedLeb128(0);

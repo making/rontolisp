@@ -306,7 +306,7 @@ back.
 
 ### Optimizing for Size (`--optimize=size`)
 
-Six wasm-GC emissions deliberately spend bytes to gain speed, and all six
+Eight wasm-GC emissions deliberately spend bytes to gain speed, and all eight
 are on at `--optimize=off` and `--optimize=default` alike:
 
 - an integer expression tree like `(logand (+ (ash x 7) i) #xFFFFFFFF)` compiles
@@ -321,16 +321,21 @@ are on at `--optimize=off` and `--optimize=default` alike:
 - a one-subscript `aref` or `(setf aref)` of an array whose representation
   nothing declares first asks, inline, whether it is a general vector with
   storage of its own and the subscript inside it, and reads or stores the
-  element there — about 110 bytes a read and 80 a store — ahead of the checks
-  and the dispatch over every array representation that anything else still
-  takes;
+  element there — about 60 bytes a site — ahead of the checks and the dispatch
+  over every array representation that anything else still takes;
+- `vector-push-extend` with no extension argument stores into a general vector
+  that has room the same way, about 115 bytes a site, ahead of the push that
+  checks, grows and reports;
+- `length` of a value declared a general vector — `(vector t)`,
+  `simple-vector`, a `defstruct` slot of that `:type` — reads its fill pointer
+  or its size inline, about 60 bytes a site, ahead of the shared length;
 - a call of a `defstruct` predicate or slot reader is the type test or the slot
   read its definition is, 25 to 35 bytes a site more than the call (a reader
   handed anything but an instance still calls the definition, which reports);
 - a comparison of two values neither of which is a literal compares two
   fixnums inline, about 40 bytes a site, ahead of the generic comparison.
 
-`--optimize=size` declines all six. Nothing the program computes changes, nor
+`--optimize=size` declines all eight. Nothing the program computes changes, nor
 the order its output and errors happen in — the fast paths only ever existed as
 alternatives to what stays — but the
 arithmetic now runs through the generic helpers and every `car`/`cdr` is a

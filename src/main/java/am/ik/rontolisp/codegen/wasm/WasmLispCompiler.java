@@ -2420,6 +2420,15 @@ public final class WasmLispCompiler implements LispCompiler {
 	// a Preview 1 sleep was compiled.
 	static final int FUNC_SLEEP_MS = FUNC_TERMINAL_P + 1;
 
+	// _vec_sync ((ref null eq) cell) -> (ref null eq): gives the cell of a general array
+	// its storage and meta fields -- the header's own when the array is rank 1 with
+	// storage of its own, else null -- and answers the cell
+	// (WasmArrayRuntimeBuilder.buildVecSyncBody). The fields' one writer: called where an
+	// array is made and wherever one's dimensions, storage or header are replaced. Reuses
+	// the unary callable signature; appended after the last fixed helper so no index
+	// above shifts, and shaken with its sites.
+	static final int FUNC_VEC_SYNC = FUNC_SLEEP_MS + 1;
+
 	/**
 	 * The fixed function index of an fdlibm function.
 	 * @param fn the function
@@ -2450,7 +2459,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// above keeps its value; the user defuns below shift by
 	// WasmVecSimdRuntimeBuilder.FUNC_COUNT when the block is present. Read the base
 	// through userFuncBase(), never FUNC_USER_BASE.
-	static final int FUNC_VEC_BASE = FUNC_SLEEP_MS + 1;
+	static final int FUNC_VEC_BASE = FUNC_VEC_SYNC + 1;
 
 	// User defuns start after the dispatch functions, the plist helper, the two
 	// hash-table runtime helpers, the two mod/rem helpers, the gensym helper, the
@@ -2473,11 +2482,12 @@ public final class WasmLispCompiler implements LispCompiler {
 	// prefix steps (_rat_add_f64 .. _rat_div_f64), the limb-tier random draw
 	// (_rand_big), the path stat (_file_write_date), the link read (_read_link), the
 	// hash-table runtime (_ht_*), the working directory (_host_getcwd), the terminal
-	// probe (_terminal_p) and the wait (_sleep_ms) -- plus,
+	// probe (_terminal_p), the wait (_sleep_ms) and the vector fields' writer
+	// (_vec_sync) -- plus,
 	// under --simd, the vec: SIMD block, and the conditional helpers (the _arity_* /
 	// _undefined_function / _unbound_variable / _lit_stage / _funcref chain and the
 	// complex block). Use userFuncBase(), which adds those offsets.
-	static final int FUNC_USER_BASE = FUNC_SLEEP_MS + 1;
+	static final int FUNC_USER_BASE = FUNC_VEC_SYNC + 1;
 
 	// Type indices
 	static final int TYPE_FD_WRITE = 0;
@@ -2490,25 +2500,46 @@ public final class WasmLispCompiler implements LispCompiler {
 
 	static final int TYPE_STRING = 4; // in rec group
 
-	static final int TYPE_CELL = 5; // in rec group - {(mut ref null eq)}
+	// in rec group - {(mut ref null eq) value, (mut (ref null TYPE_HASH_BUCKETS))
+	// storage, (mut (ref null TYPE_CONS)) meta}. The two fields behind the value are a
+	// general rank-1 array's with storage of its own -- its buckets array and its
+	// (fillPointer . (adjustable . offset)) cons, the ones its header holds -- and null
+	// in every other cell (WasmArrayRuntimeBuilder.buildVecSyncBody is their one
+	// writer): an element access and a length read them behind one cast of the array
+	// (WasmArrayCompiler.emitSimpleVectorAccess, WasmLengthCompiler).
+	static final int TYPE_CELL = 5;
+
+	/** {@code TYPE_CELL}'s field holding a vector's storage, or null. */
+	static final int CELL_STORAGE_FIELD = 1;
+
+	/** {@code TYPE_CELL}'s field holding a vector's meta cons, or null. */
+	static final int CELL_META_FIELD = 2;
 
 	static final int TYPE_CLOSURE = 6; // in rec group - {i32 funcId, (ref null eq) env}
 
 	static final int TYPE_FLOAT = 7; // in rec group - {f64 value}
 
-	static final int TYPE_WRITE_STR = 8; // (i32, i32) -> ()
+	// Hash-table bucket array: array (mut (ref null eq)), the storage of a general array
+	// too. Each slot of a table holds a bucket alist (a cons chain of (key . value)
+	// entries) or null. A subtype of eq, so a bucket array can be stored in a cons/cell
+	// field and compared with ref.eq. The last member of the rec group, because the
+	// cell's storage field names it and a type may only name one declared before it or
+	// beside it.
+	static final int TYPE_HASH_BUCKETS = 8;
 
-	static final int TYPE_PRINT_VAL = 9; // ((ref null eq)) -> ()
+	static final int TYPE_WRITE_STR = 9; // (i32, i32) -> ()
 
-	static final int TYPE_PRINT_F64 = 10; // (f64) -> ()
+	static final int TYPE_PRINT_VAL = 10; // ((ref null eq)) -> ()
+
+	static final int TYPE_PRINT_F64 = 11; // (f64) -> ()
 
 	// Callable types: arity N = (ref null eq)^(N+1) -> (ref null eq), at index
-	// TYPE_CALLABLE_BASE + N (11..21). Used by the dispatch functions, by user functions
+	// TYPE_CALLABLE_BASE + N (12..22). Used by the dispatch functions, by user functions
 	// (defuns/lambdas) and, as the generic "N+1 eq params -> eq" signature, by most of
 	// the runtime helpers below. A dispatcher past MAX_CALLABLE_ARITY gets its signature
 	// APPENDED after the last conditional type block instead (extraCallableTypeBase), so
 	// no index here moves.
-	static final int TYPE_CALLABLE_BASE = 11;
+	static final int TYPE_CALLABLE_BASE = 12;
 
 	// TYPE_READ_LINE: () -> (ref null eq)
 	static final int TYPE_READ_LINE = TYPE_CALLABLE_BASE + MAX_CALLABLE_ARITY + 1; // 22
@@ -2561,18 +2592,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// an i31 integer so characterp and the accessors can dispatch on it via ref.test.
 	static final int TYPE_CHAR = TYPE_CLOCK_TIME_GET + 1; // 34
 
-	// Hash-table bucket array: array (mut (ref null eq)). Each slot holds a bucket alist
-	// (a cons chain of (key . value) entries) or null. Implicitly a subtype of eq, so a
-	// bucket array can be stored in a cons/cell field and compared with ref.eq.
-	static final int TYPE_HASH_BUCKETS = TYPE_CHAR + 1; // 35
-
 	// Degenerate-future struct {mut i32 kind, mut (ref null eq) value}: the
 	// non-asyncMode runtime representation of a future, distinct from every other value
 	// so futurep and _p1_future_await dispatch on it via ref.test. Its only producer,
 	// %async-run, runs the body to completion and wraps the value as kind 2 (settled);
 	// the kind field stays so the struct's shape cannot structurally canonicalize into
 	// the one-field TYPE_CELL (ref.test could no longer tell them apart).
-	static final int TYPE_P1_FUTURE = TYPE_HASH_BUCKETS + 1; // 36
+	static final int TYPE_P1_FUTURE = TYPE_CHAR + 1; // 36
 
 	// String byte array: array (mut i8) -- the GC-managed byte storage for a
 	// TYPE_STRING's `data` field (field 2). A bare array comptype (implicitly sub
@@ -7365,9 +7391,13 @@ public final class WasmLispCompiler implements LispCompiler {
 						fields.addField(true, w -> w.write(Type.I32));
 						fields.addField(true, w -> w.write(Type.I32));
 					});
-					// type 5: cell struct {(mut ref null eq) value [, (mut i32) ihash]}
+					// type 5: cell struct {(mut ref null eq) value, (mut (ref null
+					// TYPE_HASH_BUCKETS)) storage, (mut (ref null TYPE_CONS)) meta [,
+					// (mut i32) ihash]}
 					rec.addSubFinalStruct(fields -> {
 						fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+						fields.addField(true, w -> w.writeRefType(true, TYPE_HASH_BUCKETS));
+						fields.addField(true, w -> w.writeRefType(true, TYPE_CONS));
 						if (this.usesIdentityHashTables) {
 							fields.addField(true, w -> w.write(Type.I32));
 						}
@@ -7384,6 +7414,13 @@ public final class WasmLispCompiler implements LispCompiler {
 					// type 7: float struct {f64 value}
 					rec.addSubFinalStruct(fields -> {
 						fields.addField(false, w -> w.write(Type.F64));
+					});
+					// type 8 (TYPE_HASH_BUCKETS): array (mut (ref null eq)) -- hash-table
+					// buckets and a general array's storage, which the cell's storage
+					// field names.
+					rec.addSubFinalArray(w -> {
+						w.writeRefType(true, Type.EQ.code());
+						w.write(am.ik.wasm.Mutability.VAR);
 					});
 				});
 				// type 8: _write_str
@@ -7489,15 +7526,6 @@ public final class WasmLispCompiler implements LispCompiler {
 				// type 31 (TYPE_CHAR): character struct {i32 code}
 				types.addRecGroup(
 						rec -> rec.addSubFinalStruct(fields -> fields.addField(false, w -> w.write(Type.I32))));
-				// type 32 (TYPE_HASH_BUCKETS): array (mut (ref null eq)) -- hash-table
-				// buckets. Encoded as a bare array comptype (sugar for sub final),
-				// implicitly
-				// a subtype of eq so it stores in cons/cell fields and supports ref.eq.
-				types.add(w -> {
-					w.write(Type.ARRAY_TYPE);
-					w.writeRefType(true, Type.EQ.code());
-					w.write(am.ik.wasm.Mutability.VAR);
-				});
 				// type 33 (TYPE_P1_FUTURE): degenerate-future struct {mut i32 kind, mut
 				// (ref null eq) value} -- always created settled (kind 2) by %async-run.
 				types.addRecGroup(rec -> rec.addSubFinalStruct(fields -> {
@@ -7923,14 +7951,16 @@ public final class WasmLispCompiler implements LispCompiler {
 				}
 				if (this.usesInstances) {
 					// TYPE_INSTANCE {i32 layout address (MUT -- change-class swaps it),
-					// (ref null eq) slots (mut)} in its OWN rec group, so it can never
+					// (ref null TYPE_HASH_BUCKETS) slots (mut)} in its OWN rec group, so
+					// it can never
 					// canonicalize into TYPE_CLOSURE (member 3 of the group opened
 					// above). The group's SECOND member is a never-instantiated empty
 					// struct: it exists only to give the group a size TYPE_P1_FUTURE's
 					// 1-member group cannot match, since the two structs are otherwise
 					// structurally identical ({mut i32, mut eq}) and ref.test would stop
-					// telling an instance from a future. The slots array is a
-					// TYPE_HASH_BUCKETS.
+					// telling an instance from a future. The slots field is of the
+					// slots array's own type, so a slot read is the instance's cast and
+					// no second one.
 					// With the identity-hash slot (usesIdentityHashTables) the shape is
 					// {mut i32, mut eqref, mut i32}, which nothing else in the module
 					// has either; the twin stays, so the group's size is the same
@@ -7938,7 +7968,7 @@ public final class WasmLispCompiler implements LispCompiler {
 					types.addRecGroup(rec -> {
 						rec.addSubFinalStruct(fields -> {
 							fields.addField(true, w -> w.write(Type.I32));
-							fields.addField(true, w -> w.writeRefType(true, Type.EQ.code()));
+							fields.addField(true, w -> w.writeRefType(true, TYPE_HASH_BUCKETS));
 							if (this.usesIdentityHashTables) {
 								fields.addField(true, w -> w.write(Type.I32));
 							}
@@ -8546,6 +8576,8 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (FUNC_TERMINAL_P)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _sleep_ms (ms) -> value
 															// (FUNC_SLEEP_MS)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 0); // _vec_sync (cell) -> cell
+															// (FUNC_VEC_SYNC)
 				// vec: SIMD block (--simd only): the three element helpers + twelve
 				// kernels
 				if (this.simd) {
@@ -9696,6 +9728,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// where no Preview 1 sleep was compiled.
 				code.addFunction(pollOneoffOrdinal < 0 ? WasmEmitHelper.buildNilBody() : WasmIoRuntimeBuilder
 					.buildSleepMsBody(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + pollOneoffOrdinal));
+				// the vector fields' writer (FUNC_VEC_SYNC): shaken with its sites.
+				code.addFunction(WasmArrayRuntimeBuilder.buildVecSyncBody());
 				// vec: SIMD block bodies (--simd only), in FUNC_VEC_BASE index order.
 				if (this.simd) {
 					// Each helper is handed the function index of the scalar vec.lisp
@@ -11890,7 +11924,8 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * ({@link Ctx#writeI64LocalIndex}): the declaration is one {@code (ref null eq)} run
 	 * for everything past {@code predeclaredSlots} followed by one {@code i64} run, so an
 	 * i64 local's absolute index is {@code ctx.nextLocal + slot}. A body with no i64
-	 * locals is byte-identical to the pre-stage-3 emission.
+	 * locals is byte-identical to the pre-stage-3 emission. A typed scratch local
+	 * ({@link Ctx#writeScratchIndex}) is a run of one behind both, resolved the same way.
 	 * <p>
 	 * The placeholder is SPLICED OUT rather than overwritten in place, so a resolved
 	 * reference costs the LEB length its index actually needs (one byte below 128)
@@ -11915,7 +11950,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		int numI64 = ctx.maxI64Locals;
 		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter writer = new WasmWriter(out);
-		writer.write((extraEq > 0 ? 1 : 0) + (numI64 > 0 ? 1 : 0));
+		writer.write((extraEq > 0 ? 1 : 0) + (numI64 > 0 ? 1 : 0) + ctx.usedScratch.size());
 		if (extraEq > 0) {
 			writer.writeUnsignedLeb128(extraEq);
 			writer.writeRefType(true, Type.EQ.code());
@@ -11923,6 +11958,14 @@ public final class WasmLispCompiler implements LispCompiler {
 		if (numI64 > 0) {
 			writer.writeUnsignedLeb128(numI64);
 			writer.write(Type.I64);
+		}
+		// The typed scratch locals, a run of one each: scratchAt[k] is kind k's index.
+		int[] scratchAt = new int[Ctx.Scratch.values().length];
+		int nextScratch = ctx.nextLocal + numI64;
+		for (Ctx.Scratch scratch : ctx.usedScratch) {
+			writer.writeUnsignedLeb128(1);
+			writer.writeRefType(true, scratch.type);
+			scratchAt[scratch.ordinal()] = nextScratch++;
 		}
 		int header = out.size();
 		// Per placeholder: its body offset, and the bytes the splice has saved up to and
@@ -11939,7 +11982,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			}
 			writer.write((Object) Arrays.copyOfRange(body, cursor, ref[0]));
 			int before = out.size();
-			writer.writeUnsignedLeb128(ctx.nextLocal + ref[1]);
+			writer.writeUnsignedLeb128(ref[1] < 0 ? scratchAt[-1 - ref[1]] : ctx.nextLocal + ref[1]);
 			saved += Ctx.I64_LOCAL_PLACEHOLDER_WIDTH - (out.size() - before);
 			placeholderAt[r] = ref[0];
 			savedThrough[r] = saved;
@@ -14549,6 +14592,50 @@ public final class WasmLispCompiler implements LispCompiler {
 			int slot = this.nextI64Local++;
 			this.maxI64Locals = Math.max(this.maxI64Locals, this.nextI64Local);
 			return slot;
+		}
+
+		/**
+		 * A typed scratch local of a body, declared behind the i64 run in this order and
+		 * only when the body names it. An inline arm holds a value in one between a test
+		 * and a read, since a {@code (ref null eq)} local would have it cast again -- a
+		 * type test, about a nanosecond. Never live across an instruction that can call
+		 * or branch away, so one of each serves every site of a body and no landing pad
+		 * carries it.
+		 */
+		enum Scratch {
+
+			/** A vector's storage, {@code (ref null TYPE_HASH_BUCKETS)}. */
+			STORAGE(TYPE_HASH_BUCKETS),
+
+			/** An array's cell, {@code (ref null TYPE_CELL)}. */
+			CELL(TYPE_CELL);
+
+			final int type;
+
+			Scratch(int type) {
+				this.type = type;
+			}
+
+			/** The slot {@link Ctx#i64LocalRefs} records for this local. */
+			int slot() {
+				return -1 - ordinal();
+			}
+
+		}
+
+		/** The typed scratch locals the body names. */
+		final java.util.EnumSet<Scratch> usedScratch = java.util.EnumSet.noneOf(Scratch.class);
+
+		/**
+		 * Writes a reference to a typed scratch local, a placeholder resolved like
+		 * {@link #writeI64LocalIndex}'s. Only where that one may be written: a body
+		 * {@link WasmLispCompiler#buildLocalsAndPatch} finishes.
+		 * @param scratch the local
+		 */
+		void writeScratchIndex(Scratch scratch) {
+			this.usedScratch.add(scratch);
+			this.i64LocalRefs.add(new int[] { this.bodyStream.size(), scratch.slot() });
+			this.writer.write(0x80, 0x80, 0x00);
 		}
 
 		/**

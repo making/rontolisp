@@ -392,10 +392,11 @@ instaparse's GLL parse table spent the bulk of its grammar load copying.
 object, and only in a module that can key by identity.** In a module that makes an
 `eq`/`eql` table (`Ctx.usesIdentityHashTables`, the same one flag that tags the counts)
 `TYPE_CONS` is `{car, cdr, (mut i32) ihash}`, `TYPE_CELL` (a general array, a hash table, a
-closure's box) `{value, (mut i32) ihash}` and `TYPE_INSTANCE` `{layout, slots, (mut i32)
-ihash}`; the slot is `0` until the object is first keyed. Every other module keeps the
-two-field cons and one-field cell byte for byte (checked by hand on three benchmark
-modules).
+closure's box) `{value, storage, meta, (mut i32) ihash}` (the two fields in the middle are a
+vector's, `.kb/adjustable-arrays.md`, "What an element access costs") and `TYPE_INSTANCE`
+`{layout, slots, (mut i32) ihash}`; the slot is `0` until the object is first keyed. Every
+other module keeps the two-field cons and three-field cell byte for byte (checked by hand
+on three benchmark modules).
 
 - **Every allocation goes through `WasmEmitHelper.emitNewCons/emitNewCell/emitNewInstance`**
   (`(w, identityHash)` for a runtime builder, `(ctx)` for a compile site), which push the

@@ -1292,6 +1292,133 @@ final class WasmArrayRuntimeBuilder {
 		return out.toByteArray();
 	}
 
+	/**
+	 * Builds {@code _vec_sync (cell) -> cell}: the one writer of a cell's storage and
+	 * meta fields ({@link WasmLispCompiler#CELL_STORAGE_FIELD},
+	 * {@link WasmLispCompiler#CELL_META_FIELD}). They hold what the header of a general
+	 * array of rank 1 with storage of its own holds -- its header
+	 * {@code (dims . (meta . data))} with one dimension, the data slot the buckets array
+	 * and that array as long as the dimension says -- and null, both, for anything else:
+	 * a displaced view, another rank, a hash table. An element access at the speed levels
+	 * reads the storage behind one cast and takes the array's own length as the bound
+	 * ({@link WasmArrayCompiler#emitSimpleVectorAccess}), and a length reads the fill
+	 * pointer off the meta cons ({@link WasmLengthCompiler}), so the fields must never
+	 * name what the header no longer does: every site that replaces an array's
+	 * dimensions, its data slot or its header calls this again, and a site that makes an
+	 * array calls it once. The meta cons itself is never replaced in a header that stays
+	 * (a fill pointer is stored into it), so a fill pointer needs no call. Null fields
+	 * are always sound -- the access then runs as the size level emits it.
+	 * @return the function body (signature {@code ((ref null eq)) -> (ref null eq)},
+	 * {@code TYPE_CALLABLE_BASE + 0})
+	 */
+	static byte[] buildVecSyncBody() {
+		ByteArrayOutputStream out = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(out);
+		// locals: 1 = cell (ref null cell); 2 = header, 3 = (meta . data) (ref null
+		// cons); 4 = dims, 5 = data (ref null buckets).
+		w.write(3);
+		w.write(1);
+		w.writeRefType(true, WasmLispCompiler.TYPE_CELL);
+		w.write(2);
+		w.writeRefType(true, WasmLispCompiler.TYPE_CONS);
+		w.write(2);
+		w.writeRefType(true, WasmLispCompiler.TYPE_HASH_BUCKETS);
+		int cellSlot = 1, headerSlot = 2, restSlot = 3, dimsSlot = 4, dataSlot = 5;
+		get(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		set(w, cellSlot);
+		// block $done { block $miss { block $cast (result eqref) { ..; fields = the
+		// header's; br $done } drop } fields = null }: a failed cast leaves through
+		// $cast with the value it refused, a failed compare through $miss.
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.BLOCK);
+		w.writeRefType(true, Type.EQ.code());
+		get(w, cellSlot);
+		structGet(w, WasmLispCompiler.TYPE_CELL, 0);
+		brOnCastFail(w, WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(headerSlot);
+		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
+		brOnCastFail(w, WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(dimsSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		i32(w, 1);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 1);
+		get(w, headerSlot);
+		structGet(w, WasmLispCompiler.TYPE_CONS, 1);
+		brOnCastFail(w, WasmLispCompiler.TYPE_CONS);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(restSlot);
+		structGet(w, WasmLispCompiler.TYPE_CONS, 1);
+		brOnCastFail(w, WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(dataSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		get(w, dimsSlot);
+		i32(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		WasmEmitHelper.castI31GetS(w);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 1);
+		get(w, cellSlot);
+		get(w, dataSlot);
+		structSet(w, WasmLispCompiler.TYPE_CELL, WasmLispCompiler.CELL_STORAGE_FIELD);
+		get(w, cellSlot);
+		get(w, restSlot);
+		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		structSet(w, WasmLispCompiler.TYPE_CELL, WasmLispCompiler.CELL_META_FIELD);
+		w.write(Instruction.BR, 2);
+		w.write(Instruction.END);
+		w.write(Instruction.DROP);
+		w.write(Instruction.END);
+		get(w, cellSlot);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		structSet(w, WasmLispCompiler.TYPE_CELL, WasmLispCompiler.CELL_STORAGE_FIELD);
+		get(w, cellSlot);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		structSet(w, WasmLispCompiler.TYPE_CELL, WasmLispCompiler.CELL_META_FIELD);
+		w.write(Instruction.END);
+		// The cell as the cast left it, not the parameter: what a site holds behind
+		// this call is then a cell to the type fold (am.ik.wasm.WasmRefTypeFolder), as
+		// it was behind the struct.new. Answering the parameter, whose callers also
+		// hand over what an adjust-array was given, left every access of a vector just
+		// made with the dispatch over every representation.
+		get(w, cellSlot);
+		w.write(Instruction.END);
+		return out.toByteArray();
+	}
+
+	private static void structGet(WasmWriter w, int type, int field) {
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(type);
+		w.writeUnsignedLeb128(field);
+	}
+
+	private static void structSet(WasmWriter w, int type, int field) {
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_SET);
+		w.writeUnsignedLeb128(type);
+		w.writeUnsignedLeb128(field);
+	}
+
+	// br_on_cast_fail 0 (ref null eq) (ref type): the operand cast on the stack, or the
+	// branch to the innermost block taken with it as it was.
+	private static void brOnCastFail(WasmWriter w, int type) {
+		w.write(Instruction.GC_PREFIX, Instruction.BR_ON_CAST_FAIL);
+		w.write(0x01); // the operand nullable, the cast not
+		w.writeUnsignedLeb128(0);
+		w.writeHeapType(Type.EQ.code());
+		w.writeHeapType(type);
+	}
+
 	// Pushes buckets[0] of local 1: the size of the rank-1 shape, as an i31.
 	private static void firstDim(WasmWriter w) {
 		buckets(w, 1);
@@ -1660,7 +1787,7 @@ final class WasmArrayRuntimeBuilder {
 		get(w, bucketsSlot);
 		WasmEmitHelper.emitNewCons(w, identityHash);
 		WasmEmitHelper.emitNewCons(w, identityHash);
-		WasmEmitHelper.emitNewCell(w, identityHash);
+		WasmEmitHelper.emitNewArrayCell(w, identityHash);
 	}
 
 	// call <index> -- a fixed runtime helper (indices below FX_FUNC_LAST never shift).

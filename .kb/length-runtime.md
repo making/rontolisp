@@ -2,7 +2,9 @@
 
 **Invariant: no `length` site emits the sequence-type ladder inline on either compile
 path. A site is one call -- `_seq_len` on WASM, `_length` on the JVM -- unless the
-argument's representation is already pinned, in which case it is a direct `array.len`.**
+argument's representation is already pinned: a packed vector is a direct `array.len`, and
+a general one, at the wasm speed levels, the read of its cell's fields with the call
+behind it.**
 Same lesson as `.kb/wasm-shared-coercion.md`, `.kb/sequence-op-runtimes.md`.
 
 - **JVM**: `JvmLengthCompiler` emits one `invokestatic _length`
@@ -16,7 +18,8 @@ Same lesson as `.kb/wasm-shared-coercion.md`, `.kb/sequence-op-runtimes.md`.
 - **The `DeclaredArrayTypes` short-circuit stays at the site**: an argument pinned to a
   packed integer vector compiles to a trapping `ref.cast` + `array.len` and never calls
   (`.kb/declarations-type-checks.md`).
-- Both optimize levels emit the call; not a `prefersSizeOverSpeed()` trade.
+- Both optimize levels emit the call; not a `prefersSizeOverSpeed()` trade, except at a
+  site pinned to the general kind (below).
 - Marginal cost of one more generic site: single-digit bytes. Rows:
   `size-report/results/wasm-flags.md`.
 - Per-site ladders of the same shape (`position`, `assoc`, `reverse`, `elt`, `member`,
@@ -32,7 +35,22 @@ Same lesson as `.kb/wasm-shared-coercion.md`, `.kb/sequence-op-runtimes.md`.
   "Against CPython"); what a test costs: `.kb/adjustable-arrays.md`, "What an element
   access costs".
 
+- **A general vector's length is its cell's meta field** (2026-11-16): the cell of a
+  rank-1 vector with storage of its own names its `(fillPointer . ..)` cons
+  (`.kb/adjustable-arrays.md`, "What an element access costs"), so `_seq_len` answers
+  the fill pointer, or the storage's own length, behind one cast and before the header
+  is walked: 30M `length` of a vector 0.52 -> 0.35 s. A site whose argument is pinned to
+  the `GENERAL` kind -- a declaration, a `(the ..)`, a structure slot's `:type`
+  (`.kb/declarations-type-checks.md`) -- reads the same fields inline at the speed levels
+  (`WasmLengthCompiler.emitGeneralVectorLength`) and calls `_seq_len` for what has none:
+  a view, another rank, a false declaration. 61 B where the call is 3, which is why it is
+  not every site: a length is mostly asked of a list or a string. `listidx.star` 1.35 ->
+  1.30 s over the Starlark library's sites (its list's `items` slot is typed).
+
 ## Tests
+- `WasmLispCompilerIntegrationTest#declaredArrayTypesEmitSingleArmAccessorsWithoutChangingResults`
+  (a `(vector t)` parameter and slot, a fill pointer, before and after a push grows the
+  storage), `ArefRankAndSubscriptChecksFixture.ORDER_SOURCE`'s last rows.
 - `WasmLispCompilerTest.aLengthSiteDoesNotCarryItsOwnCopyOfTheSharedDispatch` -- the
   marginal byte budget; nothing else notices.
 - Length cases in `WasmLispCompilerIntegrationTest` / `JvmLispCompilerTest`, sequence

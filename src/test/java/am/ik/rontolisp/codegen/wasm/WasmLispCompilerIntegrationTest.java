@@ -2174,8 +2174,11 @@ class WasmLispCompilerIntegrationTest {
 		// the inline dispatch chain. The shapes below cover every source and every kind
 		// (packed u8/u16/u32 with mask/readback edges past the i31 range, packed float,
 		// general), plus shapes that must STAY generic and still answer right (a
-		// rank-unknown declaration at a rank-2 site). Both optimize levels must agree
-		// with each other and with the interpreter/JVM text.
+		// rank-unknown declaration at a rank-2 site). A (vector t) is the general kind
+		// too -- the reader's T is no symbol, and the specifier proved nothing -- and
+		// its length honours the fill pointer inline, before and after a push grows the
+		// storage. Both optimize levels must agree with each other and with the
+		// interpreter/JVM text.
 		String program = """
 				(deftype octet-vec (&optional length)
 				  (let ((length (or length '*)))
@@ -2200,6 +2203,13 @@ class WasmLispCompilerIntegrationTest {
 				(defun first-char (s)
 				  (declare (type simple-string s))
 				  (aref s 0))
+				(defstruct bag (items (make-array 2 :adjustable t :fill-pointer 0) :type (vector t)))
+				(defun bag-add (b x)
+				  (vector-push-extend x (bag-items b))
+				  (list (length (bag-items b)) (aref (bag-items b) 0)))
+				(defun count-general (v)
+				  (declare (type (vector t) v))
+				  (+ (aref v 0) (length v)))
 				(let ((u32 (make-array 3 :element-type '(unsigned-byte 32)))
 				      (f (make-array 2 :element-type 'double-float :initial-element 0.5d0))
 				      (gen (make-array 2)))
@@ -2221,6 +2231,9 @@ class WasmLispCompilerIntegrationTest {
 				    (print (read-both w 1))
 				    (print (aref (wide-chunk-data w) 1)))
 				  (print (sum-simple (vector 30 12)))
+				  (let ((b (make-bag)))
+				    (print (list (bag-add b 7) (bag-add b 8) (bag-add b 9)
+				                 (count-general (bag-items b)) (count-general (vector 5 6)))))
 				  (print (list (first-char "xyz") (first-char (copy-seq "xyz")) (first-char (subseq "wxyz" 1))
 				              (first-char (make-string 2 :initial-element #\\q))))
 				  (print (typep (make-array 2 :element-type '(unsigned-byte 8)) 'octet-vec))
@@ -2251,6 +2264,7 @@ class WasmLispCompilerIntegrationTest {
 				65542
 				7
 				42
+				((1 7) (2 7) (3 7) 10 7)
 				(#\\x #\\x #\\x #\\q)
 				T
 				900

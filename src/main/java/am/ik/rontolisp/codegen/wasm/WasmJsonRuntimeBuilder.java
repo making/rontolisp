@@ -650,7 +650,7 @@ final class WasmJsonRuntimeBuilder {
 			this.a.get(this.elements);
 			WasmEmitHelper.emitNewCons(this.a.w, this.flags.identityHash());
 			WasmEmitHelper.emitNewCons(this.a.w, this.flags.identityHash());
-			WasmEmitHelper.emitNewCell(this.a.w, this.flags.identityHash());
+			WasmEmitHelper.emitNewArrayCell(this.a.w, this.flags.identityHash());
 			this.a.set(this.x);
 		}
 

@@ -239,7 +239,6 @@ final class WasmInstanceCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
 		ctx.writer.writeUnsignedLeb128(1);
-		castBuckets(ctx);
 		access.run();
 		ctx.writer.write(Instruction.BR);
 		ctx.writer.writeUnsignedLeb128(1);
@@ -507,7 +506,6 @@ final class WasmInstanceCompiler {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
 		ctx.writer.writeUnsignedLeb128(1);
-		castBuckets(ctx);
 		pushCellIndex(ctx, index);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
 		ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
@@ -825,14 +823,13 @@ final class WasmInstanceCompiler {
 		throw new UnsupportedOperationException(name + " expects a literal integer slot index, got " + form.print());
 	}
 
-	// Consumes an instance on the stack, pushes its slots array (cast to $buckets).
+	// Consumes an instance on the stack, pushes its slots array (the field's own type).
 	private static void pushSlots(WasmLispCompiler.Ctx ctx) {
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
 		ctx.writer.writeHeapType(ctx.instanceTypeIndex);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
 		ctx.writer.writeUnsignedLeb128(ctx.instanceTypeIndex);
 		ctx.writer.writeUnsignedLeb128(1);
-		castBuckets(ctx);
 	}
 
 	// Consumes an instance on the stack, pushes its i32 layout address.

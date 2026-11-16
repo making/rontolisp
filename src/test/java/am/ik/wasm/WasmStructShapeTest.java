@@ -61,7 +61,9 @@ class WasmStructShapeTest {
 			Integer twin = seen.putIfAbsent(members, g);
 			assertThat(twin).as("rec groups %s and %s are one canonical type: %s", twin, g, members).isNull();
 		}
-		assertThat(heapTypes).as("the module declares its struct and array types").isGreaterThanOrEqualTo(14);
+		// 13 groups in the smallest of the three: the bucket array is a member of the
+		// first one, beside the cell whose storage field names it.
+		assertThat(heapTypes).as("the module declares its struct and array types").isGreaterThanOrEqualTo(13);
 	}
 
 }

@@ -44,19 +44,21 @@
 ;; declaration a call of which runs (a cons). %starlark-unwind gives them back.
 (defvar rontolisp::%starlark-frames nil)
 
-;; ITEMS is an adjustable vector with a fill pointer. MUTABILITY is the cell the list
-;; was made under: the list is frozen once its car is true. ITERATING counts the loops
-;; running over the list: a list is not mutated while one runs.
+;; ITEMS is an adjustable vector with a fill pointer, of any element: a compiled read,
+;; store or length of it is the general vector's with no question of what else it could
+;; be. MUTABILITY is the cell the list was made under: the list is frozen once its car
+;; is true. ITERATING counts the loops running over the list: a list is not mutated
+;; while one runs.
 (defstruct (rontolisp::%starlark-list (:%intern-package "RONTOLISP")
             (:constructor rontolisp::%starlark-new-list (items)) (:copier nil))
-  items
+  (items nil :type (vector t))
   (mutability rontolisp::%starlark-mutability)
   (iterating 0))
 
-;; ITEMS is a simple vector, never written after the tuple is made.
+;; ITEMS is a simple vector of any element, never written after the tuple is made.
 (defstruct (rontolisp::%starlark-tuple (:%intern-package "RONTOLISP")
             (:constructor rontolisp::%starlark-new-tuple (items)) (:copier nil))
-  items)
+  (items nil :type (vector t)))
 
 ;; TABLE is an `equal` hash table from a key's normal form (%starlark-key) to the cell
 ;; (key . value). The table walks in insertion order on every backend, a key stored
@@ -1510,11 +1512,10 @@
          (if (or (car (rontolisp::%starlark-list-mutability x))
                  (> (rontolisp::%starlark-list-iterating x) 0))
              (rontolisp::%starlark-list-writable x "assign to element of"))
-         ;; The place is the accessor's value, not a variable holding it: a variable
-         ;; place may hold a string, and a compiled store asks its array that on
-         ;; every element (.kb/starlark-frontend.md, "Against CPython").
-         (let ((n (length (rontolisp::%starlark-list-items x))))
-           (setf (aref (rontolisp::%starlark-list-items x)
+         ;; ITEMS is known for a general vector by its slot's type, so the compiled
+         ;; store asks nothing of it (.kb/starlark-frontend.md, "Against CPython").
+         (let* ((items (rontolisp::%starlark-list-items x)) (n (length items)))
+           (setf (aref items
                        (if (and (integerp i) (>= i 0) (< i n))
                            i
                            (rontolisp::%starlark-element-index i n "list")))

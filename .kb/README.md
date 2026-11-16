@@ -78,7 +78,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [hash-tables.md](hash-tables.md) -- the one representation (flat, a structure-sharing trie once copied, insertion-order walk), `equalp` key fold (an instance's behind a marker), depth cap and work budget, the wasm identity-hash slot and `%identity-hash`
 - [array-literals.md](array-literals.md) -- an array literal is a constructor, not a constant; rank-0 arrays; when `:element-type` specializes
 - [quoted-data.md](quoted-data.md) -- a quoted datum is one shared constant per quote site on all four backends, and a node two literals reach one object (`QuotedSharing`'s units); a long list is built in runs of 16 on wasm-GC (Cranelift time vs. live values across calls)
-- [adjustable-arrays.md](adjustable-arrays.md) -- fill pointers, `:adjustable`, displaced arrays, `vector-push*`, `adjust-array`
+- [adjustable-arrays.md](adjustable-arrays.md) -- fill pointers, `:adjustable`, displaced arrays, `vector-push*`, `adjust-array`; what a wasm element access costs, and the storage and meta fields the cell of a vector names (`_vec_sync`)
 - [packed-integer-vectors.md](packed-integer-vectors.md) -- `(unsigned-byte 8|16|32)` rank-1 packs, `#N@(...)`, per-backend raw paths
 - [bfloat16.md](bfloat16.md) -- bfloat16 conversion pair, the packed `#bf16` width, and the width's account (why bf16, the name, the prefix, the lattice entry)
 - [pathnames.md](pathnames.md) -- a pathname is a distinct value; `#P"..."` in the frontend and both emitted readers; logical hosts as a recorded translation table, `pathname-match-p`

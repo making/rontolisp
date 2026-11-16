@@ -14,8 +14,12 @@ package am.ik.rontolisp;
  * own, which wasm reads and stores inline, and everything that arm hands on -- a fill
  * pointer, a view, a packed vector, a string, a subscript out of range, wide or no
  * integer, another rank, no array -- and a store whose value form leaves the block around
- * it, which wasm answered nil for, or never returned from inside a loop. Shared by the
- * backend suites, so every backend at every optimize level is held to one expected text.
+ * it, which wasm answered nil for, or never returned from inside a loop. Then the same
+ * read, store, push and length of a vector whose storage, dimension or header was
+ * replaced under it -- a push that grows, an {@code adjust-array} in place, to a view and
+ * back, a full view that grows -- since the cell of a wasm vector names its storage and
+ * an access trusts it. Shared by the backend suites, so every backend at every optimize
+ * level is held to one expected text.
  */
 public final class ArefRankAndSubscriptChecksFixture {
 
@@ -145,7 +149,30 @@ public final class ArefRankAndSubscriptChecksFixture {
 			(ao-check (ao-put (vector 1 2 3) 3 :x))
 			(ao-check (ao-put (vector 1 2 3) 1.5 :x))
 			(ao-check (ao-put *ao-m* 0 :x))
-			(ao-check (list (ao-exit (vector 1 2 3)) (ao-loop-exit (vector 1 2 3))))""";
+			(ao-check (list (ao-exit (vector 1 2 3)) (ao-loop-exit (vector 1 2 3))))
+			(defvar *ao-g* (make-array 2 :adjustable t :fill-pointer 0))
+			(defvar *ao-a* (make-array 3 :adjustable t :initial-contents '(1 2 3)))
+			(defvar *ao-t* (vector 10 20 30 40))
+			(defvar *ao-b* (make-array 2 :adjustable t :initial-element 7))
+			(defvar *ao-d* (make-array 2 :displaced-to *ao-t* :fill-pointer 2 :adjustable t))
+			(defun ao-push (v x) (vector-push-extend x v))
+			(defun ao-len (v) (declare (type (vector t) v)) (length v))
+			(ao-check (list (ao-push *ao-g* :a) (ao-push *ao-g* :b) (ao-get *ao-g* 1) (ao-push *ao-g* :c) (ao-push *ao-g* :d)
+			                (ao-push *ao-g* :e) (ao-put *ao-g* 0 :y) (ao-put *ao-g* 4 :z) (row-major-aref *ao-g* 0)
+			                (ao-get *ao-g* 7) (ao-len *ao-g*) *ao-g*))
+			(ao-check (ao-get *ao-g* 8))
+			(ao-check (list (ao-get *ao-a* 2) (eq *ao-a* (adjust-array *ao-a* 5 :initial-element 0)) (ao-put *ao-a* 4 :w)
+			                (eq *ao-a* (adjust-array *ao-a* 2)) (ao-len *ao-a*) *ao-a*))
+			(ao-check (ao-get *ao-a* 2))
+			(ao-check (ao-put *ao-a* 4 :x))
+			(ao-check (list (ao-get *ao-b* 1) (eq *ao-b* (adjust-array *ao-b* 3 :displaced-to *ao-t* :displaced-index-offset 1))
+			                (ao-get *ao-b* 2) (ao-put *ao-b* 0 :v) (ao-len *ao-b*) *ao-t*))
+			(ao-check (ao-get *ao-b* 3))
+			(ao-check (list (eq *ao-b* (adjust-array *ao-b* 2)) (ao-put *ao-b* 1 :u) *ao-b* *ao-t*))
+			(ao-check (list (ao-push *ao-d* :p) (ao-get *ao-d* 2) (ao-put *ao-d* 0 :q) (ao-len *ao-d*) *ao-d* *ao-t*))
+			(ao-check (list (ao-len *ao-v*) (ao-len *ao-fp*) (ao-push *ao-fp* :r) (ao-len *ao-fp*)))
+			(ao-check (ao-push *ao-v* 4))
+			(ao-check (ao-push 5 4))""";
 
 	/** What every backend prints for {@link #ORDER_SOURCE}. */
 	public static final String ORDER_EXPECTED = """
@@ -190,6 +217,18 @@ public final class ArefRankAndSubscriptChecksFixture {
 			(SETF AREF): The value 3 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
 			(SETF AREF): The value 1.5 is not of type INTEGER | INTEGER
 			(SETF AREF): The value #2A((1 1) (1 1)) is not of type VECTOR | VECTOR
-			(:EXITED #(:SET 2 3))""";
+			(:EXITED #(:SET 2 3))
+			(0 1 :B 2 3 4 (:Y 5) (:Z 5) :Y NIL 5 #(:Y :B :C :D :Z))
+			AREF: The value 8 is not of type (INTEGER 0 (8)) | (INTEGER 0 (8))
+			(3 T (:W 5) T 2 #(1 2))
+			AREF: The value 2 is not of type (INTEGER 0 (2)) | (INTEGER 0 (2))
+			(SETF AREF): The value 4 is not of type (INTEGER 0 (2)) | (INTEGER 0 (2))
+			(7 T 40 (:V 3) 3 #(10 :V 30 40))
+			AREF: The value 3 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
+			(T (:U 2) #(:V :U) #(10 :V 30 40))
+			(2 :P (:Q 3) 3 #(:Q :V :P) #(10 :V 30 40))
+			(3 2 2 3)
+			VECTOR-PUSH-EXTEND: The value #(1 2 :Z) is not of type (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P)) | (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))
+			VECTOR-PUSH-EXTEND: The value 5 is not of type ARRAY | ARRAY""";
 
 }
