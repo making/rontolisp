@@ -6123,6 +6123,9 @@ cases:
                    (find "b" '("a" "b" "c") :test #'string=)))
       ;; string designators, non-ASCII (code-point indexing) and first-class use
       (print (list (string< 'abc "abd") (string> "b" #\a) (string< "あい" "あう")))
+      ;; code point order, the index in characters past an astral one, a mutable string
+      (print (list (string< "x😀😀b" "x😀😀c") (string> "a😀" "a～") (string<= "😀é" "😀é")
+                   (string< (copy-seq "ab") "abc")))
       (print (sort (list "pear" "Apple" "banana") #'string-lessp))
     expected: |
       (3 NIL)
@@ -6137,6 +6140,7 @@ cases:
       (T T)
       (T T "b")
       (0 0 1)
+      (3 1 2 2)
       ("Apple" "banana" "pear")
   - name: the-pi-constant-output-kept-backend
     source: |

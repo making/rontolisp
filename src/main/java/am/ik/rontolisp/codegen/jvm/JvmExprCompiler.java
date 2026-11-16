@@ -1052,6 +1052,28 @@ final class JvmExprCompiler {
 				JvmArrayCompiler.emitStrvNormalize(ctx, className);
 			}
 			case LispNames.SUBSTRING_INTERNAL -> JvmSubseqCompiler.compileSubstring(cons, ctx, className);
+			// The case functions and the stream capture without the mutable-string wrap
+			// their public names finish with (.kb/string-write-runtime.md).
+			case LispNames.STRING_UPCASE_PIECE -> JvmStringUpcaseCompiler
+				.compileUpcase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx, className);
+			case LispNames.STRING_DOWNCASE_PIECE -> JvmStringUpcaseCompiler
+				.compileDowncase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx, className);
+			case LispNames.STRING_STREAM_PIECE -> JvmStringStreamCompiler.compileContents(cons, ctx, className);
+			case LispNames.STRING_ORDER -> {
+				// each operand into a temp as it is evaluated: nothing of this form is on
+				// the stack while the next one runs
+				java.util.List<LispVal> operands = cons.toList();
+				JvmExprCompiler.compileExpr(operands.get(1), ctx, className);
+				int first = ctx.allocTemp();
+				ctx.body.astore(first);
+				JvmExprCompiler.compileExpr(operands.get(2), ctx, className);
+				int second = ctx.allocTemp();
+				ctx.body.astore(second);
+				ctx.body.aload(first);
+				ctx.body.aload(second);
+				ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, className,
+						JvmStringIndexRuntimeBuilder.ORDER_METHOD, JvmStringIndexRuntimeBuilder.ORDER_DESC));
+			}
 			case LispNames.SYMBOL_NAME -> JvmSymbolApiCompiler.compileSymbolName(cons, ctx, className);
 			case LispNames.INTERN -> JvmSymbolApiCompiler.compileIntern(cons, ctx, className);
 			case LispNames.FIND_SYMBOL -> JvmSymbolApiCompiler.compileFindSymbol(cons, ctx, className);

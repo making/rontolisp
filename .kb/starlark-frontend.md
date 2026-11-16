@@ -268,9 +268,11 @@ forms are the ones the backends already fuse ([jvm-int-fusion.md](jvm-int-fusion
   and concatenation of it walks: `"w" + str(i)` took 10 us on wasm through `concatenate`
   and 0.2 us through `%string-concat`, and a string key so made hashed at 250 ns on the
   JVM. So two strings are joined by `%string-concat`, a slice is `(%substring s start
-  end)` (the internal this item added: the slice with no character vector made of it),
-  an int is `%decimal-piece`, and what a helper builds any other way is wrapped in
-  `%normalize-string`. Several pieces are joined by halves (`%starlark-concat-pieces`,
+  end)` (the slice with no character vector made of it), a case fold
+  `%string-upcase-piece` / `%string-downcase-piece`, a string stream's text
+  `%string-stream-piece`, an int `%decimal-piece`, two strings are ordered by
+  `%string-order` ([string-search-runtime.md](string-search-runtime.md)), and what a
+  helper builds any other way is wrapped in `%normalize-string`. Several pieces are joined by halves (`%starlark-concat-pieces`,
   `-join-range`): no string stream, whose contents come back mutable, and a character is
   copied log N times.
 - **An `error`'s control is a literal string.** A computed one (`(error message ..)`, a
@@ -802,11 +804,10 @@ Left, each with its reason:
   JVM the goal is for a program of a second of CPython; wasm takes the short ones.
 - **wasm, the six container programs**: the calls above. The vector read and the
   structure calls: "The list element on wasm" below, and `.todo/j61` for what is left of
-  them; `.todo/j56` (strings: an ordering of two strings by the host, case and stream
-  capture that are not mutable).
+  them; strings: "Strings nothing writes, ordered by the backend" below.
 - **The JVM, `comps`, `methods`, `strings`, `sorting`**: boxing (`.todo/j58`), a string
-  framed in quotes (a slice is three allocations), `upper`/`lower`/`strip` through the
-  mutable producers (`.todo/j56`), and a sort that chases conses (30% of `sorting.star`'s
+  framed in quotes (a slice is three allocations), `upper`/`lower` through the mutable
+  producers (made since, below), and a sort that chases conses (30% of `sorting.star`'s
   samples are `_car`).
 - **`s += piece` in a loop** copies the string so far, as Go's and Java's do; CPython
   extends in place. 20,000 times `s += "ab"` is 0.60 s on the JVM (a
@@ -864,6 +865,36 @@ the JVM column moves only with the library's store:
   variable (`_ub_read`), `length` of the items (`_seq_len`: a call and seven tests) and
   the arm's nine tests, three hops through `(ref null eq)` fields. `listidx` is still
   1.7 times CPython on wasm, the JVM under it.
+
+### Strings nothing writes, ordered by the backend (2026-11-16)
+
+`sorted` of strings compared them through `%starlark-compare` and a character loop (on
+wasm an allocation per character), or, for keys of at most 64 characters, as lists of
+their codes read once; `upper`, `lower`, `capitalize` and `title` and `repr` of a
+container went through the public producers and `%normalize-string`, a character vector
+made and rendered back per call. Made: `%starlark-less` asks `%string-order` after the
+int test and before `%starlark-compare` (nil for anything but two strings); the code-list
+sort is gone; the case methods call `%string-upcase-piece` / `-downcase-piece`, `title`
+and `repr` take `%string-stream-piece`
+([string-write-runtime.md](string-write-runtime.md)).
+
+Seconds as above (`time.sh`, best of three), before -> after:
+
+| program | JVM | WASM | component | CPython |
+|---|---|---|---|---|
+| `sorting.star` | 3.77 -> 3.01 | 4.22 -> 3.07 | 4.25 -> 3.13 | 0.94 |
+| `methods.star` | 2.13 -> 2.01 | 2.93 -> 2.92 | 2.93 -> 2.92 | 1.13 |
+| `strings.star` | 2.50 -> 2.55 | 3.36 -> 3.21 | 3.42 -> 3.22 | 1.15 |
+| `sorted(words)` alone, 24 times 50,000 | 1.60 -> 1.08 | 1.92 -> 1.13 | 1.96 -> 1.13 | 0.32 |
+| `s.upper().lower()` of 19 characters, 1,000,000 times | 1.56 -> 0.39 | 2.19 -> 0.92 | 2.19 -> 0.94 | 0.22 |
+
+- `sorted(words)` with `%string-order` only behind `%starlark-compare` (two calls more per
+  comparison): wasm 1.67, the JVM the same 1.02-1.08.
+- `methods.star` folds a word of three to five letters 240,000 times: a few hundredths of
+  a second of its three.
+- Sizes (`.class` / `.wasm` / component): `print(1 + 2)` 108,358 / 104,221 / 107,790 ->
+  108,352 / 104,217 / 107,786; `examples/starlark/targets.star` 216,392 / 222,307 / 226,361
+  -> 213,285 / 219,198 / 223,252.
 
 ## Positions
 

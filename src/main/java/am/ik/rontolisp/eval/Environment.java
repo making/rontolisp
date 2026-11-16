@@ -5240,6 +5240,20 @@ public final class Environment implements Scope {
 			return string.subsequence((int) ((LispInteger) args.get(1)).value(),
 					(int) ((LispInteger) args.get(2)).value());
 		}));
+		// The case functions' twins: here a string is one kind, so the public folds.
+		env.defineFunction(LispNames.STRING_UPCASE_PIECE, new LispFunction(LispNames.STRING_UPCASE_PIECE,
+				args -> boundedCaseConversion(LispNames.STRING_UPCASE_PIECE, args, s -> caseFoldString(s, true))));
+		env.defineFunction(LispNames.STRING_DOWNCASE_PIECE, new LispFunction(LispNames.STRING_DOWNCASE_PIECE,
+				args -> boundedCaseConversion(LispNames.STRING_DOWNCASE_PIECE, args, s -> caseFoldString(s, false))));
+		// %string-order: two strings by code point, answering where they differ; nil for
+		// anything else (the caller's loop decides).
+		env.defineFunction(LispNames.STRING_ORDER, new LispFunction(LispNames.STRING_ORDER, args -> {
+			requireArgCount(LispNames.STRING_ORDER, args, 2);
+			if (!(args.get(0) instanceof LispString a) || !(args.get(1) instanceof LispString b)) {
+				return LispNil.INSTANCE;
+			}
+			return new LispInteger(stringOrder(a, b));
+		}));
 		// make-symbol: rontolisp has no intern table (symbols compare by name), so
 		// "uninterned" is represented by the same "#:" name prefix gensym uses.
 		env.defineFunction(LispNames.MAKE_SYMBOL, new LispFunction(LispNames.MAKE_SYMBOL, args -> {
@@ -6006,6 +6020,22 @@ public final class Environment implements Scope {
 	// String overload applies multi-character special casing (sharp s -> "SS") and the
 	// context-sensitive Greek final-sigma rule, both of which would change the character
 	// count and diverge from char-upcase applied per character.
+	// 0 when A and B are equal, -(k + 1) when A comes first and k + 1 when B does, k the
+	// index of the first character that differs: code point order, the shorter first.
+	static long stringOrder(LispString a, LispString b) {
+		int na = a.length();
+		int nb = b.length();
+		int n = Math.min(na, nb);
+		for (int i = 0; i < n; i++) {
+			int ca = a.charAt(i);
+			int cb = b.charAt(i);
+			if (ca != cb) {
+				return (ca < cb) ? -(i + 1L) : i + 1L;
+			}
+		}
+		return (na == nb) ? 0 : (na < nb) ? -(n + 1L) : n + 1L;
+	}
+
 	private static String caseFoldString(String s, boolean upcase) {
 		StringBuilder sb = new StringBuilder(s.length());
 		int i = 0;
@@ -6752,6 +6782,9 @@ public final class Environment implements Scope {
 		};
 		env.defineFunction(LispNames.STRING_STREAM_CONTENTS_INTERNAL,
 				new LispFunction(LispNames.STRING_STREAM_CONTENTS_INTERNAL, streamContents));
+		// The capture's twin: here a string is one kind.
+		env.defineFunction(LispNames.STRING_STREAM_PIECE,
+				new LispFunction(LispNames.STRING_STREAM_PIECE, streamContents));
 		// The public name takes a string output stream and nothing else, as SBCL: a
 		// stream of another kind -- a synonym stream included -- is its type-error
 		// expecting (AND STRING-STREAM (SATISFIES OUTPUT-STREAM-P)), a non-stream

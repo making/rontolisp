@@ -4327,7 +4327,9 @@ public final class LispPreludeLibrary {
 		// once instead of ten times. Iterative (not recursive) so comparing long strings
 		// cannot exhaust the stack on any backend. Both ranges are checked once, before
 		// the walk, string1's first: a bad one is subseq's type-error (%check-bounds), a
-		// nil start included -- only a nil end defaults, to the length.
+		// nil start included -- only a nil end defaults, to the length. Two whole strings
+		// compared with no fold are ordered by the backend itself (%string-order), which
+		// answers the mismatch index too, unless it declines (a mutable string).
 		SOURCES.put(LispNames.STRING_COMPARE, """
 				(defun %string-compare (a b start1 end1 start2 end2 foldp)
 				  (let* ((sa (string a)) (sb (string b))
@@ -4336,6 +4338,12 @@ public final class LispPreludeLibrary {
 				         (result nil))
 				    (%check-bounds sa start1 end1)
 				    (%check-bounds sb start2 end2)
+				    (when (and (not foldp) (eql start1 0) (eql start2 0) (null end1) (null end2))
+				      (let ((order (%string-order sa sb)))
+				        (when order
+				          (setq result (cond ((< order 0) (cons -1 (- -1 order)))
+				                             ((> order 0) (cons 1 (- order 1)))
+				                             (t (cons 0 e1)))))))
 				    (while (null result)
 				      (cond ((and (>= i e1) (>= j e2)) (setq result (cons 0 i)))
 				            ((>= i e1) (setq result (cons -1 i)))

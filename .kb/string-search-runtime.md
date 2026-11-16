@@ -86,3 +86,26 @@ that never searches is unchanged. `http_body` at `--optimize=size`: 58,948 -> 59
   over 65,536 characters, 23.1 M to build them, 23.9 M with the immutable search, 38.9 M with the
   character vector, 65.4 M through the loop. No pin counts allocations: the loop is the only thing
   that boxes here and fuel tells it apart.
+
+## Ordering two strings: `%string-order` (2026-11-16)
+`(%string-order a b)` (`LispNames.STRING_ORDER`) orders two strings by code point, the shorter
+first: 0 equal, `-(k + 1)` when A comes first, `k + 1` when B does, `k` the character index where
+they differ. Nil when the backend does not compare the operands itself, and the caller's loop runs.
+Callers: the prelude's `%string-compare` for two whole strings with no fold (the whole `string<`
+family; `k` is its mismatch index), and the Starlark library's `%starlark-less` and
+`-string-compare`.
+
+- **wasm-GC**: `_str_order` (`FUNC_STR_ORDER`, `buildStrOrderBody`), two framed `TYPE_STRING`s
+  compared as bytes (UTF-8's byte order is code point order); `k` counts the lead bytes passed, less
+  one when the differing bytes continue a character. Nil for anything else.
+- **JVM**: `_strOrder` (`JvmStringIndexRuntimeBuilder`), UTF-16 units in step; the first pair that
+  differs is moved into code point order (a surrogate above every other BMP unit), and `k` counts
+  the units that are no high surrogate. Nil for a character vector or a symbol's bare String.
+- **Interpreter**: the code-point buffers. Nil for a non-string.
+- A mutable character vector declines on both compilers: rendering it would cost the whole vector
+  per comparison where the loop stops at the first difference.
+- Sorting 50,000 `"w<n>"` strings 10 times with `#'string<`, whole process: JVM 1.33 -> 0.85 s,
+  wasm 3.60 -> 1.31 s. Cost: a program calling `string<` grows 25,431 -> 27,028 B of class and
+  9,624 -> 10,582 B of wasm; one that does not is unchanged (shaken).
+- Pinned by ci-spec `string-comparison-family` (an astral index, U+FF5E against U+1F600, a mutable
+  string) and `starlark-spec.yaml` `what-the-lowering-knows-answers-as-the-generic-paths`.

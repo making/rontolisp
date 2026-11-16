@@ -134,6 +134,12 @@ PROGRAM-WRITTEN `(map 'string ...)` and `(coerce seq 'string)`, `uiop:getenv`, t
   against 438 and 371 for `(%normalize-string (subseq ..))`. Pinned by `StarlarkSpecE2eTest` (every
   Starlark slice, `split`, `strip` and one-character index on four backends, astral characters in
   `what-the-lowering-knows-answers-as-the-generic-paths`).
+- **`%string-upcase-piece`, `%string-downcase-piece` and `%string-stream-piece` are the case
+  functions and the stream capture that do not flip** (2026-11-16): the public case or
+  `%string-stream-contents` compile minus the `_toMutStr` / `_to_mut_str` wrap; the interpreter binds
+  the public folds. For the same library Lisp as `%substring`. `"the quick brown fox".upper().lower()`
+  a million times in Starlark: JVM 1.56 -> 0.39 s, wasm 2.19 -> 0.92 s (the public name converted the
+  fold into a character vector and `%normalize-string` back).
 - **The print family flips only the PUBLIC names.** `%princ-piece` / `%prin1-piece`
   (`PRINC_PIECE_INTERNAL` / `PRIN1_PIECE_INTERNAL`) are the public conversions minus the wrap, and
   every piece the codegen's expansions build stays an immutable internal value.

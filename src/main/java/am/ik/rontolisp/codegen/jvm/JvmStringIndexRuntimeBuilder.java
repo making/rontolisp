@@ -115,6 +115,17 @@ final class JvmStringIndexRuntimeBuilder {
 
 	static final String CHARREF_DESC = "(Ljava/lang/Object;I)I";
 
+	/**
+	 * {@code _strOrder(Object, Object) -> Object}: the {@code %string-order} primitive.
+	 * Two quote-framed strings by code point -- 0, {@code -(k + 1)} or {@code k + 1},
+	 * {@code k} the character index where they differ -- and null for anything else (a
+	 * mutable character vector), so the caller's loop runs. Nothing is allocated but the
+	 * answer's box.
+	 */
+	static final String ORDER_METHOD = "_strOrder";
+
+	static final String ORDER_DESC = "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
+
 	/** The two "this string has no surrogate pair" slots. */
 	static final String[] FIELDS = { "_cpsimple0", "_cpsimple1" };
 
@@ -153,9 +164,126 @@ final class JvmStringIndexRuntimeBuilder {
 		ClassEntry objectClass = cp.classEntry("java/lang/Object");
 		MethodRefEntry indexOf = cp.methodRef(selfClass, INDEX_METHOD, INDEX_DESC);
 		return List.of(buildOffset(cp, offsetByCodePoints, slot0, slot1, indexOf),
-				buildCount(cp, stringLength, slot0, slot1, indexOf), buildIndex(cp, stringLength, codePointCount,
-						offsetByCodePoints, slot0, slot1, wide0, wide1, intArrayClass, objectClass, stringClass),
-				buildCharRef(cp, selfClass, stringClass, usesArrays));
+				buildCount(cp, stringLength, slot0, slot1, indexOf),
+				buildIndex(cp, stringLength, codePointCount, offsetByCodePoints, slot0, slot1, wide0, wide1,
+						intArrayClass, objectClass, stringClass),
+				buildCharRef(cp, selfClass, stringClass, usesArrays), buildOrder(cp, stringClass));
+	}
+
+	// _strOrder(x, y): UTF-16 units compared in step; at the first that differs both are
+	// moved into code point order (a surrogate above every other BMP unit) and k counts
+	// the characters ended before it -- a unit that is no high surrogate ends one.
+	private static StringIndexMethod buildOrder(ConstantPool cp, ClassEntry stringClass) {
+		// Slots: 0 = x, 1 = y, 2 = s, 3 = t, 4 = s's end, 5 = t's end, 6 = i, 7 = k,
+		// 8 = s's unit, 9 = t's unit.
+		MethodRefEntry stringLength = cp.methodRef(stringClass, "length", "()I");
+		MethodRefEntry charAt = cp.methodRef(stringClass, "charAt", "(I)C");
+		MethodRefEntry longValueOf = cp.methodRef(cp.classEntry("java/lang/Long"), "valueOf", "(J)Ljava/lang/Long;");
+		MethodCode a = new MethodCode();
+		MethodCode.Label nil = a.newLabel();
+		MethodCode.Label loop = a.newLabel();
+		MethodCode.Label notEndS = a.newLabel();
+		MethodCode.Label differ = a.newLabel();
+		MethodCode.Label inside = a.newLabel();
+		MethodCode.Label less = a.newLabel();
+		MethodCode.Label greater = a.newLabel();
+		for (int slot = 0; slot < 2; slot++) {
+			a.aload(slot);
+			a.instanceOf(stringClass);
+			a.ifeq(nil);
+			a.aload(slot);
+			a.checkcast(stringClass);
+			a.astore(2 + slot);
+			// a symbol is a bare String: only a framed one is a string
+			a.aload(2 + slot);
+			a.loadConstant(0);
+			a.invokevirtual(charAt);
+			a.loadConstant(34);
+			a.if_icmpne(nil);
+			a.aload(2 + slot);
+			a.invokevirtual(stringLength);
+			a.loadConstant(1);
+			a.isub();
+			a.istore(4 + slot);
+		}
+		a.loadConstant(1);
+		a.istore(6);
+		a.loadConstant(0);
+		a.istore(7);
+		a.labelBinding(loop);
+		a.iload(6);
+		a.iload(4);
+		a.if_icmplt(notEndS);
+		// s has ended: equal when t has too, else s is the shorter
+		a.iload(6);
+		a.iload(5);
+		a.if_icmplt(less);
+		a.loadConstant(0);
+		a.i2l();
+		a.invokestatic(longValueOf);
+		a.areturn();
+		a.labelBinding(notEndS);
+		a.iload(6);
+		a.iload(5);
+		a.if_icmpge(greater);
+		a.aload(2);
+		a.iload(6);
+		a.invokevirtual(charAt);
+		a.istore(8);
+		a.aload(3);
+		a.iload(6);
+		a.invokevirtual(charAt);
+		a.istore(9);
+		a.iload(8);
+		a.iload(9);
+		a.if_icmpne(differ);
+		a.iload(8);
+		a.loadConstant(cp, 0xFC00);
+		a.iand();
+		a.loadConstant(cp, 0xD800);
+		a.if_icmpeq(inside);
+		a.iinc(7, 1);
+		a.labelBinding(inside);
+		a.iinc(6, 1);
+		a.goto_(loop);
+		a.labelBinding(differ);
+		for (int slot = 8; slot < 10; slot++) {
+			MethodCode.Label done = a.newLabel();
+			MethodCode.Label surrogate = a.newLabel();
+			a.iload(slot);
+			a.loadConstant(cp, 0xD800);
+			a.if_icmplt(done);
+			a.iload(slot);
+			a.loadConstant(cp, 0xE000);
+			a.if_icmplt(surrogate);
+			a.iinc(slot, -0x800);
+			a.goto_(done);
+			a.labelBinding(surrogate);
+			a.iinc(slot, 0x2000);
+			a.labelBinding(done);
+		}
+		a.iload(8);
+		a.iload(9);
+		a.if_icmplt(less);
+		a.labelBinding(greater);
+		a.iload(7);
+		a.loadConstant(1);
+		a.iadd();
+		a.i2l();
+		a.invokestatic(longValueOf);
+		a.areturn();
+		a.labelBinding(less);
+		a.iload(7);
+		a.loadConstant(1);
+		a.iadd();
+		a.ineg();
+		a.i2l();
+		a.invokestatic(longValueOf);
+		a.areturn();
+		a.labelBinding(nil);
+		a.aconst_null();
+		a.areturn();
+		return new StringIndexMethod(cp.utf8Entry(ORDER_METHOD), cp.utf8Entry(ORDER_DESC), a);
 	}
 
 	// _charRef(o, i): the element read for a mutable character vector (only when the

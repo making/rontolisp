@@ -26,8 +26,11 @@
 ;;    producers answer (subseq, concatenate, the case and trim functions, coerce, a
 ;;    string stream's contents) is a fresh MUTABLE one, on the compiled backends a
 ;;    vector with an element per character that every later comparison, hash and
-;;    concatenation of it walks (.kb/string-write-runtime.md): a helper answering one
-;;    wraps it in %normalize-string, and two strings are joined by %string-concat.
+;;    concatenation of it walks (.kb/string-write-runtime.md). So two strings are
+;;    joined by %string-concat, sliced by %substring, case-folded by
+;;    %string-upcase-piece and %string-downcase-piece and taken from a string stream by
+;;    %string-stream-piece; a helper answering anything else wraps it in
+;;    %normalize-string.
 
 ;; --- values ---------------------------------------------------------------------
 
@@ -600,15 +603,24 @@
       (setq i (+ i 1)))))
 
 ;; A and B are strings: -1, 0 or 1, code point by code point, then the shorter first.
+;; The backend orders two strings itself (%string-order); this loop reads the
+;; characters of a mutable one, which a value from Common Lisp may be.
 (defun rontolisp::%starlark-string-compare (a b)
-  (let* ((na (length a)) (nb (length b)) (n (if (< na nb) na nb)) (i 0) (r 0))
-    (loop while (and (< i n) (= r 0))
-          do
-            (let ((ca (char-code (char a i))) (cb (char-code (char b i))))
-              (cond ((< ca cb) (setq r -1))
-                    ((> ca cb) (setq r 1))
-                    (t (setq i (+ i 1))))))
-    (cond ((/= r 0) r) ((< na nb) -1) ((> na nb) 1) (t 0))))
+  (let ((order (%string-order a b)))
+    (if order
+        (cond ((< order 0) -1) ((> order 0) 1) (t 0))
+        (let* ((na (length a))
+               (nb (length b))
+               (n (if (< na nb) na nb))
+               (i 0)
+               (r 0))
+          (loop while (and (< i n) (= r 0))
+                do
+                  (let ((ca (char-code (char a i))) (cb (char-code (char b i))))
+                    (cond ((< ca cb) (setq r -1))
+                          ((> ca cb) (setq r 1))
+                          (t (setq i (+ i 1))))))
+          (cond ((/= r 0) r) ((< na nb) -1) ((> na nb) 1) (t 0))))))
 
 (defun rontolisp::%starlark-compare (a b)
   (cond ((and (integerp a) (integerp b)) (cond ((< a b) -1) ((> a b) 1) (t 0)))
@@ -628,10 +640,13 @@
    (t (error "unsupported comparison: ~a <=> ~a" (rontolisp::%starlark-type a)
              (rontolisp::%starlark-type b)))))
 
+;; What `sorted`, `min` and `max` compare with: two ints inline, two strings by the
+;; backend's own order (nil for anything else), the rest through %starlark-compare.
 (defun rontolisp::%starlark-less (a b)
   (if (and (integerp a) (integerp b))
       (< a b)
-      (< (rontolisp::%starlark-compare a b) 0)))
+      (let ((order (%string-order a b)))
+        (if order (< order 0) (< (rontolisp::%starlark-compare a b) 0)))))
 
 (defun rontolisp::%starlark-less-equal (a b)
   (<= (rontolisp::%starlark-compare a b) 0))
@@ -1196,8 +1211,11 @@
 (defun rontolisp::%starlark-b-repr (x)
   (if (integerp x)
       (%decimal-piece x)
-      (%normalize-string
-       (with-output-to-string (s) (rontolisp::%starlark-write x s)))))
+      (let ((s (make-string-output-stream)))
+        (unwind-protect (progn
+                          (rontolisp::%starlark-write x s)
+                          (%string-stream-piece s))
+          (close s)))))
 
 (defun rontolisp::%starlark-b-str (x)
   (cond ((stringp x) x)
@@ -2166,46 +2184,19 @@
       nil
       (lambda (x) (rontolisp::%starlark-call key (list x) nil))))
 
-;; S is a string: the codes of its characters as a list of integers that orders as the
-;; string does (%starlark-codes-less). One code an integer; or, when PACKED, four
-;; characters an integer -- each code plus one in seven bits, nothing where the string
-;; has ended -- and T when a code does not fit, 127 or above.
-(defun rontolisp::%starlark-string-codes (s packed)
-  (let ((acc nil) (n (length s)) (i 0) (fits t))
-    (if packed
-        (loop while (and fits (< i n))
-              do
-                (let ((chunk 0) (j i) (end (+ i 4)))
-                  (loop while (< j end)
-                        do
-                          (let ((c (if (< j n) (+ (char-code (char s j)) 1) 0)))
-                            (if (> c 127) (setq fits nil))
-                            (setq chunk (+ (* chunk 128) c))) (setq j (+ j 1)))
-                  (push chunk acc)
-                  (setq i end)))
-        (dotimes (k n) (push (char-code (char s k)) acc)))
-    (if fits (nreverse acc) t)))
-
-;; A and B are lists %starlark-string-codes made, both packed or neither: whether the
-;; string of A's comes before the string of B's.
-(defun rontolisp::%starlark-codes-less (a b)
-  (loop while (and a b (= (car a) (car b)))
-        do (setq a (cdr a)) (setq b (cdr b)))
-  (cond ((null b) nil) ((null a) t) (t (< (car a) (car b)))))
-
 ;; A and B are sorted lists, neither empty: one sorted list of their cells, B's item
 ;; before A's only when it comes strictly first -- last, when DESCENDING --, so items
-;; that compare equal keep their order. What is compared is the item itself (KEYS 0),
-;; the key of an item (key . element) (1), or such a key that is a list of codes (2).
+;; that compare equal keep their order. What is compared is the item itself (KEYS 0)
+;; or the key of an item (key . element) (1).
 (defun rontolisp::%starlark-merge-sorted (a b descending keys)
   (let* ((head (cons nil nil)) (tail head))
     (loop while (and a b)
           do
             (if (let ((x (car (if descending a b)))
                       (y (car (if descending b a))))
-                  (cond ((= keys 0) (rontolisp::%starlark-less x y))
-                        ((= keys 1) (rontolisp::%starlark-less (car x) (car y)))
-                        (t (rontolisp::%starlark-codes-less (car x) (car y)))))
+                  (if (= keys 0)
+                      (rontolisp::%starlark-less x y)
+                      (rontolisp::%starlark-less (car x) (car y))))
                 (progn
                   (rplacd tail b)
                   (setq tail b)
@@ -2262,9 +2253,7 @@
          (keys 0)
          (i n))
     (loop while (> i 0) do (setq i (- i 1)) (push (aref v i) elements))
-    ;; Under a key function an item is (key . element). So it is when the keys are all
-    ;; short strings, which are then compared as the lists of their characters' codes,
-    ;; read once: a comparison reads no character, which on wasm is an allocation each.
+    ;; Under a key function an item is (key . element).
     (if (not (eq key :none))
         (let ((cells elements))
           (setq keys 1)
@@ -2275,33 +2264,6 @@
                                                            (list (car cells))
                                                            nil) (car cells)))
                   (setq cells (cdr cells)))))
-    (let ((coded (> n 1)))
-      (dolist (item elements)
-        (let ((k (if (= keys 1) (car item) item)))
-          (if (not (and (stringp k) (<= (length k) 64))) (setq coded nil))))
-      (if coded
-          (let ((packed t) (codes nil) (cells elements))
-            ;; four characters to an integer when every key allows it
-            (dolist (item elements)
-              (let ((c
-                     (rontolisp::%starlark-string-codes
-                      (if (= keys 1) (car item) item) t)))
-                (if (eq c t) (setq packed nil))
-                (push c codes)))
-            (setq codes (nreverse codes))
-            (loop while cells
-                  do
-                    (let* ((item (car cells))
-                           (c
-                            (if packed
-                                (car codes)
-                                (rontolisp::%starlark-string-codes
-                                 (if (= keys 1) (car item) item) nil))))
-                      (if (= keys 1)
-                          (rplaca item c)
-                          (rplaca cells (cons c item))))
-                    (setq cells (cdr cells)) (setq codes (cdr codes)))
-            (setq keys 2))))
     (setq i 0)
     (dolist (item
              (rontolisp::%starlark-sort-list elements n
@@ -2762,12 +2724,10 @@
   (rontolisp::%starlark-affix s p start end t "endswith"))
 
 (defun rontolisp::%starlark-m-upper (s)
-  (%normalize-string
-   (string-upcase (rontolisp::%starlark-string-receiver s "upper"))))
+  (%string-upcase-piece (rontolisp::%starlark-string-receiver s "upper")))
 
 (defun rontolisp::%starlark-m-lower (s)
-  (%normalize-string
-   (string-downcase (rontolisp::%starlark-string-receiver s "lower"))))
+  (%string-downcase-piece (rontolisp::%starlark-string-receiver s "lower")))
 
 ;; The characters a strip removes: white space, or those of the string CUTSET.
 (defun rontolisp::%starlark-cutset (cutset name)
@@ -3024,16 +2984,17 @@
 ;; uppercased.
 (defun rontolisp::%starlark-m-title (s)
   (rontolisp::%starlark-string-receiver s "title")
-  (let ((previous nil))
-    (%normalize-string
-     (with-output-to-string (out)
-       (dotimes (i (length s))
-         (let ((c
-                (if previous
-                    (char-downcase (char s i))
-                    (char-upcase (char s i)))))
-           (write-char c out)
-           (setq previous (rontolisp::%starlark-char-case c))))))))
+  (let ((previous nil) (out (make-string-output-stream)))
+    (unwind-protect (progn
+                      (dotimes (i (length s))
+                        (let ((c
+                               (if previous
+                                   (char-downcase (char s i))
+                                   (char-upcase (char s i)))))
+                          (write-char c out)
+                          (setq previous (rontolisp::%starlark-char-case c))))
+                      (%string-stream-piece out))
+      (close out))))
 
 (defun rontolisp::%starlark-m-removeprefix (s prefix)
   (rontolisp::%starlark-string-receiver s "removeprefix")
@@ -3055,9 +3016,10 @@
   (rontolisp::%starlark-string-receiver s "capitalize")
   (if (= (length s) 0)
       s
-      (%normalize-string
-       (concatenate 'string (string-upcase (subseq s 0 1))
-                    (string-downcase (subseq s 1))))))
+      (%string-concat
+       (%string-upcase-piece (rontolisp::%starlark-substring s 0 1))
+       (%string-downcase-piece
+        (rontolisp::%starlark-substring s 1 (length s))))))
 
 ;; Whether S is non-empty and every character of it is of a class: ASCII letters
 ;; (CLASS 0), digits (1), letters and digits (2) or white space (3). The Common Lisp

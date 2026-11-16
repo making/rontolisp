@@ -2382,6 +2382,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// never searches.
 	static final int FUNC_STR_SEARCH = FUNC_READ_LINK + 1;
 
+	// _str_order (a, b) -> (ref null eq): the %string-order primitive, two immutable
+	// strings ordered by their bytes with nothing allocated
+	// (WasmStringRuntimeBuilder.buildStrOrderBody). Reuses the two-argument callable
+	// signature; appended after the last fixed helper so no index above shifts, and
+	// shaken from a program that never orders two strings.
+	static final int FUNC_STR_ORDER = FUNC_STR_SEARCH + 1;
+
 	// The hash-table runtime (WasmHashTableRuntimeBuilder): gethash, puthash, remhash
 	// and the structure-sharing copy over a chained table that becomes a trie of hash
 	// chains once copied, each keeping the insertion order --
@@ -2389,7 +2396,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// offsets. Each reuses a TYPE_CALLABLE_BASE signature, so no type is added; appended
 	// after the last fixed helper so no index above shifts, and shaken from a module
 	// that makes no table.
-	static final int FUNC_HT_BASE = FUNC_STR_SEARCH + 1;
+	static final int FUNC_HT_BASE = FUNC_STR_ORDER + 1;
 
 	// _host_getcwd () -> (ref null eq): the working directory, fd 3's preopen name when
 	// the host spells it absolute, else nil (WasmIoRuntimeBuilder.buildHostGetcwdBody,
@@ -8527,6 +8534,8 @@ public final class WasmLispCompiler implements LispCompiler {
 															// (FUNC_READ_LINK)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 5); // _str_search (six values) ->
 															// value (FUNC_STR_SEARCH)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _str_order (a, b) -> value
+															// (FUNC_STR_ORDER)
 				// the hash-table runtime block (FUNC_HT_BASE ..)
 				for (int i = 0; i < WasmHashTableRuntimeBuilder.FUNC_COUNT; i++) {
 					fnDef.addFunction(WasmHashTableRuntimeBuilder.typeIndexOf(i));
@@ -9665,6 +9674,8 @@ public final class WasmLispCompiler implements LispCompiler {
 					.buildReadLinkBody(WasmImportCompiler.PLACEHOLDER_FUNC_BASE + readLinkOrdinal));
 				// search's string arm (FUNC_STR_SEARCH): shaken when nothing searches.
 				code.addFunction(WasmStringRuntimeBuilder.buildStrSearchBody());
+				// the string order (FUNC_STR_ORDER): shaken when nothing orders.
+				code.addFunction(WasmStringRuntimeBuilder.buildStrOrderBody());
 				// the hash-table runtime block (FUNC_HT_BASE ..): shaken from a module
 				// that makes no table.
 				WasmHashTableRuntimeBuilder.Flags tableFlags = new WasmHashTableRuntimeBuilder.Flags(

@@ -3947,6 +3947,36 @@ public final class LispNames {
 	public static final String SUBSTRING_INTERNAL = "%SUBSTRING";
 
 	/**
+	 * The {@code %string-upcase-piece} internal: {@code string-upcase} of one whole
+	 * string as an IMMUTABLE string, the way {@link #SUBSTRING_INTERNAL} is
+	 * {@code subseq}'s: the public name answers a fresh mutable one. For library Lisp
+	 * whose strings nothing writes. Never read from source.
+	 */
+	public static final String STRING_UPCASE_PIECE = "%STRING-UPCASE-PIECE";
+
+	/** The {@code string-downcase} twin of {@link #STRING_UPCASE_PIECE}. */
+	public static final String STRING_DOWNCASE_PIECE = "%STRING-DOWNCASE-PIECE";
+
+	/**
+	 * The {@code %string-stream-piece} internal: what
+	 * {@link #STRING_STREAM_CONTENTS_INTERNAL} answers (and clears), as an IMMUTABLE
+	 * string -- the capture without the mutable-string wrap. For library Lisp whose
+	 * strings nothing writes. Never read from source.
+	 */
+	public static final String STRING_STREAM_PIECE = "%STRING-STREAM-PIECE";
+
+	/**
+	 * The {@code %string-order} internal primitive: {@code (%string-order a b)} over two
+	 * strings orders them by code point, the shorter first when one begins the other, and
+	 * answers where: 0 when they are equal, {@code -(k + 1)} when A comes first and
+	 * {@code k + 1} when B does, {@code k} the index of the first character that differs
+	 * (the shorter one's length when one begins the other). Nil -- nothing decided --
+	 * when the backend does not compare the operands itself (a mutable character vector
+	 * on either side), and the caller's loop runs. Never read from source.
+	 */
+	public static final String STRING_ORDER = "%STRING-ORDER";
+
+	/**
 	 * The {@code %seq-string-result} internal TYPE DESIGNATOR: "a string, built by a
 	 * sequence operator's own result conversion rather than by a program-written
 	 * {@code coerce} / {@code map}". It reads as {@code string} everywhere the two

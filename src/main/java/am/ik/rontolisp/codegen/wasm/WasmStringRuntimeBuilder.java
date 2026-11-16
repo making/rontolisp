@@ -2333,6 +2333,155 @@ final class WasmStringRuntimeBuilder {
 		return body.toByteArray();
 	}
 
+	/**
+	 * Builds {@code _str_order} (FUNC_STR_ORDER), the {@code %string-order} primitive:
+	 * two quote-framed {@code TYPE_STRING}s ordered by code point -- 0 when equal,
+	 * {@code -(k + 1)} when the first comes first, {@code k + 1} when the second does,
+	 * {@code k} the character index where they differ -- and nil for anything else (a
+	 * mutable character vector), whose caller then loops. UTF-8's byte order is code
+	 * point order, so the bytes are compared as they stand; {@code k} counts the lead
+	 * bytes passed, less one when the bytes that differ continue a character. Nothing is
+	 * allocated.
+	 * @return the function body (signature {@code TYPE_CALLABLE_BASE + 1})
+	 */
+	static byte[] buildStrOrderBody() {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		int a = 0, b = 1, x = 2, y = 3, endX = 4, endY = 5, i = 6, k = 7, cx = 8, cy = 9;
+		w.write(2);
+		w.write(2);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(6);
+		w.write(Type.I32);
+		get(w, a);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		get(w, b);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STRING);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		setStrArray(w, a, x);
+		setStrArray(w, b, y);
+		w.write(Instruction.ELSE);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		for (int[] pair : new int[][] { { x, endX }, { y, endY } }) {
+			get(w, pair[0]);
+			w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+			i32(w, 1);
+			w.write(Instruction.I32_SUB);
+			set(w, pair[1]);
+		}
+		// a symbol's name is an unframed TYPE_STRING, which may even be empty
+		get(w, endX);
+		get(w, endY);
+		w.write(Instruction.I32_OR);
+		i32(w, 0);
+		w.write(Instruction.I32_LE_S);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		i32(w, 0);
+		set(w, i);
+		arrGetLocal(w, x, i);
+		i32(w, 34);
+		w.write(Instruction.I32_NE);
+		arrGetLocal(w, y, i);
+		i32(w, 34);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_OR);
+		w.write(Instruction.IF, 0x40);
+		w.write(Instruction.REF_NULL);
+		w.writeHeapType(Type.EQ.code());
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		i32(w, 1);
+		set(w, i);
+		w.write(Instruction.BLOCK, 0x40);
+		w.write(Instruction.LOOP, 0x40);
+		// the first has ended: 0 when the second has too, else the first is shorter
+		get(w, i);
+		get(w, endX);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		get(w, i);
+		get(w, endY);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		i32(w, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		i32(w, -1);
+		get(w, k);
+		w.write(Instruction.I32_SUB);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		get(w, i);
+		get(w, endY);
+		w.write(Instruction.I32_GE_S);
+		w.write(Instruction.IF, 0x40);
+		get(w, k);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		arrGetLocal(w, x, i);
+		set(w, cx);
+		arrGetLocal(w, y, i);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(cy);
+		get(w, cx);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.BR_IF, 1);
+		// k += cx is a lead byte
+		get(w, k);
+		get(w, cx);
+		i32(w, 0xC0);
+		w.write(Instruction.I32_AND);
+		i32(w, 0x80);
+		w.write(Instruction.I32_NE);
+		w.write(Instruction.I32_ADD);
+		set(w, k);
+		get(w, i);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, i);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END); // loop
+		w.write(Instruction.END); // block
+		// the bytes differ at i: k -= cx continues a character
+		get(w, k);
+		get(w, cx);
+		i32(w, 0xC0);
+		w.write(Instruction.I32_AND);
+		i32(w, 0x80);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_SUB);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		set(w, k);
+		// (cx < cy) ? -k : k
+		i32(w, 0);
+		get(w, k);
+		w.write(Instruction.I32_SUB);
+		get(w, k);
+		get(w, cx);
+		get(w, cy);
+		w.write(Instruction.I32_LT_U);
+		w.write(Instruction.SELECT);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.END); // function
+		return body.toByteArray();
+	}
+
 	// Pushes the byte offset of the character the fixnum in indexLocal names.
 	private static void emitByteOffset(WasmWriter w, int strLocal, int indexLocal) {
 		get(w, strLocal);

@@ -1280,6 +1280,22 @@ final class WasmExprCompiler {
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_SUBSEQ);
 			}
+			// The case functions and the stream capture without the mutable-string wrap
+			// their public names finish with (.kb/string-write-runtime.md).
+			case LispNames.STRING_UPCASE_PIECE ->
+				WasmStringUpcaseCompiler.compileUpcase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx);
+			case LispNames.STRING_DOWNCASE_PIECE ->
+				WasmStringUpcaseCompiler.compileDowncase(LispMacroExpander.normalizeStringDesignatorArg(cons, 1), ctx);
+			case LispNames.STRING_STREAM_PIECE -> WasmWriteStringCompiler.compileContents(cons, ctx);
+			// (%string-order a b): two immutable strings compared as bytes, nothing
+			// allocated (WasmStringRuntimeBuilder.buildStrOrderBody).
+			case LispNames.STRING_ORDER -> {
+				java.util.List<LispVal> operands = cons.toList();
+				WasmExprCompiler.compileExpr(operands.get(1), ctx);
+				WasmExprCompiler.compileExpr(operands.get(2), ctx);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_ORDER);
+			}
 			case LispNames.SYMBOL_NAME -> WasmSymbolApiCompiler.compileSymbolName(cons, ctx);
 			case LispNames.INTERN -> WasmSymbolApiCompiler.compileIntern(cons, ctx);
 			case LispNames.FIND_SYMBOL -> WasmSymbolApiCompiler.compileFindSymbol(cons, ctx);
