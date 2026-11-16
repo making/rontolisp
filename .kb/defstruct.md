@@ -108,7 +108,7 @@ instance, got 42` (a `simple-error`), the JVM a `ClassCastException` -- and, a c
 - **A reader handed anything but an instance calls the definition**, whose check and report it is: `br_on_cast_fail` to the instance, the slot read, and on the miss `call` of the defun -- so the report, the datum and the expected type are the definition's ("Accessors check their object"), and the site carries no report text.
 - **The argument is evaluated once, then the multiple-value channel is cleared where the definition's settled tail clears it** (`clearOf`), as the call did; a test position clears nothing, no consumer reads the channel behind a test (`.kb/multiple-values.md`). The definitions do not clear today: `.todo/j60`.
 - The definition stays for `#'point-x` and the tree-shaker drops it when nothing reaches it. The size level keeps the call.
-- Cost: about 20 B a site over the call for a reader, none for a predicate in a test. Measured: `listidx.star` 3.15 -> 2.82 s on wasm with the array arm already in (four structure reads per element store, two per read).
+- Cost: 34 B a site over the call for a reader, 23 B for a predicate in a test (one type test where the smaller shape makes two). Measured: `listidx.star` 3.15 -> 2.82 s on wasm with the array arm already in (four structure reads per element store, two per read).
 - Pinned by `WasmLispCompilerIntegrationTest.ehAStructAccessorOnANonInstanceSignalsATypeError` (every level and the component; a program holding `eval` replaces a reader and a predicate at run time and the call answers the replacement; the fuel budget) and ci-spec `a-vector-element-and-a-structure-slot-through-a-parameter`.
 
 ## `:include` (single inheritance)

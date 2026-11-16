@@ -289,7 +289,7 @@ paid `_rat_add -> _big_add -> _int_val x2 -> _int_new`.
   `WasmComparisonCompiler.emitUnfusedCompare`, speed levels, value and test positions):
   both operands in temps, two `br_on_cast_fail` to i31 and the i32 compare, the generic
   comparison behind them for any other pair. The both-plain-leaves shape stays out of
-  `tryCompileCompare` (its fallback would be this again, twice the bytes). About 30 B a
+  `tryCompileCompare` (its fallback would be this again, twice the bytes). 38 B a
   site. Measured with and without it, everything else equal: `listidx.star` 2.17 -> 2.07 s
   and `sorting.star` 4.28 -> 4.01 s on wasm, `dicts` / `methods` / `comps` / `mixed`
   within noise, the modules 0.7-0.8% larger. The call it saves spills the live references

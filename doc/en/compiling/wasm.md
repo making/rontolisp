@@ -321,13 +321,14 @@ are on at `--optimize=off` and `--optimize=default` alike:
 - a one-subscript `aref` or `(setf aref)` of an array whose representation
   nothing declares first asks, inline, whether it is a general vector with
   storage of its own and the subscript inside it, and reads or stores the
-  element there — about 110 bytes a site — ahead of the checks and the
-  dispatch over every array representation that anything else still takes;
+  element there — about 110 bytes a read and 80 a store — ahead of the checks
+  and the dispatch over every array representation that anything else still
+  takes;
 - a call of a `defstruct` predicate or slot reader is the type test or the slot
-  read its definition is, some 20 bytes a site more than the call (a reader
+  read its definition is, 25 to 35 bytes a site more than the call (a reader
   handed anything but an instance still calls the definition, which reports);
 - a comparison of two values neither of which is a literal compares two
-  fixnums inline, about 30 bytes a site, ahead of the generic comparison.
+  fixnums inline, about 40 bytes a site, ahead of the generic comparison.
 
 `--optimize=size` declines all six. Nothing the program computes changes, nor
 the order its output and errors happen in — the fast paths only ever existed as
