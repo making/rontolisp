@@ -710,7 +710,8 @@ the spike's lowering (JVM, precompiled wasm) / this front end's:
 
 The programs are `.todo/artefacts/j68-java-front-end-spike/programs/`. A step at 300,000,000
 steps (j72, the start subtracted): `WrapLong` 1.3 / 1.2 ns, `WrapInt` 2.8 / 2.4 ns. The corpus (47 cases,
-5 standalone, 22 refused, 2026-11-17) and `examples/java/Orders.java` print what the JDK
+5 standalone, 22 refused, 2026-11-17) and `examples/java/shop/Main.java` (six packages
+of one class to a file, threads joined before it prints) print what the JDK
 prints on four backends. After j71 the four programs are byte-identical but `Sieve`
 (10,380 -> 10,497: `Math.sqrt` is `%strict-math`).
 
@@ -748,4 +749,4 @@ below its package's directories (`a-program-of-several-files-finds-its-classes-b
 `RontoLispCliStreamsTest#aJavaFileRunsCompilesAndIsRefusedWhereItCannot`,
 `SchemeLibraryTest#aCommonLispProgramReadsNoFrontEndsLibrary` (the gate), `DocExamplesTest` (a
 ` ```java ` fence is a whole program, its output the plain block after it), `ExamplesE2eTest`
-(`examples/java/Orders.java`).
+(`examples/java/shop/Main.java`, read with the files of its source tree).

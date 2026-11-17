@@ -23,7 +23,7 @@ rontolisp -e 'void main() { IO.println(1 + 2); }' --source-language java
 REPL: `--source-language java` with no program is an error.
 
 [`examples/java/`](https://github.com/making/rontolisp/tree/develop/examples/java) holds a
-runnable program with its expected output.
+program of several packages with its expected output.
 
 ```java
 interface Shape {

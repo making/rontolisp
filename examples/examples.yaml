@@ -253,10 +253,10 @@ examples:
       file: .expected/starlark-targets.txt
 
   # --- java: the experimental subset of the Java language (.java) ------------
-  - path: java/Orders.java
+  - path: java/shop/Main.java
     backends: [interpreter, jvm, wasm, wasm-component-run]
     expect:
-      file: .expected/java-orders.txt
+      file: .expected/java-shop.txt
 
   # --- clojure: the experimental Clojure front end (.clj) --------------------
   - path: clojure/demo.clj

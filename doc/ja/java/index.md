@@ -23,7 +23,7 @@ rontolisp -e 'void main() { IO.println(1 + 2); }' --source-language java
 REPL はありません。プログラムを与えずに `--source-language java` を指定するとエラーになります。
 
 [`examples/java/`](https://github.com/making/rontolisp/tree/develop/examples/java) に、
-期待される出力を添えた実行可能なプログラムがあります。
+複数のパッケージからなるプログラムと、その期待される出力があります。
 
 ```java
 interface Shape {
