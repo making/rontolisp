@@ -49,6 +49,7 @@ import am.ik.rontolisp.compiler.DefvarGuards;
 import am.ik.rontolisp.compiler.ConcatenateForms;
 import am.ik.rontolisp.compiler.MutableStringProducers;
 import am.ik.rontolisp.compiler.AstOutliner;
+import am.ik.rontolisp.compiler.UncaughtReport;
 import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.DesignatorSpellings;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
@@ -3736,7 +3737,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		}
 		final boolean recordsAsyncBoundaries = asyncCrossRef != null;
 		if (uncaughtHandler != null) {
-			uncaughtHandler.append(whereRef);
+			uncaughtHandler.append(whereRef, UncaughtReport.reporter(program), this.className);
 		}
 
 		// Pass 2d: emit the outlined fused-site method bodies (JvmIntFusionCompiler).

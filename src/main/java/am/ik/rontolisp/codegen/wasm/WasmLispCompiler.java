@@ -41,6 +41,7 @@ import am.ik.rontolisp.macro.SpecialVarCollector;
 import am.ik.rontolisp.PackageResolver;
 import am.ik.rontolisp.SourceProvenance;
 import am.ik.rontolisp.compiler.AstOutliner;
+import am.ik.rontolisp.compiler.UncaughtReport;
 import am.ik.rontolisp.compiler.DeadTypeBranchPruner;
 import am.ik.rontolisp.compiler.EvalReferences;
 import am.ik.rontolisp.compiler.ToplevelStatements;
@@ -5770,7 +5771,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			startWriter.writeSignedLeb128(0);
 		}
 		if (uncaughtReportPad) {
-			WasmUncaughtReportCompiler.emitEpilogue(ctx);
+			WasmUncaughtReportCompiler.emitEpilogue(ctx, UncaughtReport.reporter(topLevelExprs));
 		}
 		else if (uncaughtTrapPad) {
 			WasmEmitHelper.emitCatchAllEpilogue(ctx);
@@ -11301,6 +11302,9 @@ public final class WasmLispCompiler implements LispCompiler {
 					case LispNames.HANDLER_CASE, LispNames.IGNORE_ERRORS, LispNames.UNWIND_PROTECT,
 							LispNames.WITH_OPEN_FILE, LispNames.WITH_OUTPUT_TO_STRING, LispNames.WITH_INPUT_FROM_STRING,
 							LispNames.CATCH, LispNames.THROW,
+							// a program reporting what nothing caught by its own line
+							// reads it in the entry's landing pad
+							LispNames.REPORTING_UNCAUGHT_INTERNAL,
 							// progv's lowering rides unwind-protect for its restores
 							// (LispMacroExpander.expandProgvForCompile), so it needs the
 							// EH

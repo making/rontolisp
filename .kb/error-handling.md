@@ -645,9 +645,26 @@ report-less class, "Known gap" below). A struct accessor on a non-instance agree
 ([defstruct.md](defstruct.md), "Accessors check their object"), and so does an out-of-range
 subscript ("An out-of-range subscript is a type-error naming its bound").
 
-A program of the Java front end never reaches it: its entry is a `handler-case` writing a JDK's
-`Exception in thread "main" ..` and exiting with 1 through `%host-exit` -- no location lines
-([java-frontend.md](java-frontend.md), "Exceptions").
+**A program's own line** (2026-11-17): the top-level form
+`(%reporting-uncaught #'line after body...)` (`LispNames.REPORTING_UNCAUGHT_INTERNAL`,
+`UncaughtReport.Reporter`) is `body` as a `progn`, and makes the report of what escapes the
+program `(line condition text)` instead of `PREFIX` and the report: `condition` the instance
+the backend has at hand, nil where it has none (a plain error's text, a host failure; with the
+routing gate off, every condition but a typed signal's), `text` the report. The location lines
+follow unchanged, then `after` is evaluated -- `(%host-exit 1)`; where it lets go on, the
+program ends as any uncaught condition ends it. It is no handler, so it holds no condition for
+the routing gate and no signal site builds an instance for it; it is an EH form on wasm-GC
+(`usesEhForm`). Per backend: the interpreter catches around the body (`evalReportingUncaught`)
+and raises `after`'s `LispExitSignal`; the JVM's last handler of `main` reads the reporter off
+the program, takes the condition from `_condTake` where the class has the channel, and
+compiles the line's write and `after` as forms over pseudo-locals
+(`JvmUncaughtHandler.emitOwnLine`); the wasm-GC entry pad compiles `(%warn (line cond text))`
+in place of the prefixed line and `after` ahead of the trap (`WasmUncaughtReportCompiler`).
+`after` is written in the program so that what it names is spliced as any reference is
+(`exit.lisp` behind `%host-exit`). The Java front end's entry is the one user
+([java-frontend.md](java-frontend.md), "Exceptions"): its handler holding the condition cost
+every program ~38 KB of wasm (`Fib.wasm` 41,656 -> 2,868 B). Pinned by `java-spec.yaml`'s
+`standalone:` cases with `error:` and `at:` on four backends.
 
 **Under it, location lines** (`UncaughtReport.atLine` / `asyncLine`, two-space indented):
 `  at FILE:LINE in FUNCTION` -- the innermost form read from a named file that the condition passed

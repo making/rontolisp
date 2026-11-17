@@ -89,11 +89,14 @@ class JavaSpecE2eTest {
 	 * it ends normally
 	 * @param stderr the whole of its standard error but a JDK's frame lines, or
 	 * {@code null} when only the report of {@code error} is checked
+	 * @param at where {@code error} was raised, as the line under the report ends on the
+	 * interpreter and the JVM ({@code File.java:line in Class.method(types)}), or
+	 * {@code null} when it is not checked
 	 * @param files the other files of its source tree, by path, or {@code null}
 	 * @param stdin what it reads from the standard input, or {@code null} for nothing
 	 */
 	record Standalone(String name, String file, String source, String stdout, @Nullable String error,
-			@Nullable String stderr, @Nullable Map<String, String> files, @Nullable String stdin) {
+			@Nullable String stderr, @Nullable String at, @Nullable Map<String, String> files, @Nullable String stdin) {
 
 		String stem() {
 			return "Standalone" + this.file.replaceFirst("\\.[^./]*$", "").replace('/', '_');
@@ -382,6 +385,10 @@ class JavaSpecE2eTest {
 		// the report first; the JDK's stack trace follows
 		assertThat(splitLines(ended.stderr())).as("%s", where).first().isEqualTo(UNCAUGHT + s.error());
 		assertThat(ended.exit()).as("%s: expected the status 1", where).isEqualTo(1);
+		if (s.at() != null && (leg.equals("INTERPRETER") || leg.equals("JVM"))) {
+			// where it was raised, under the report: the pipeline's own location line
+			assertThat(splitLines(ended.stderr()).get(1)).as("%s", where).startsWith("  at ").endsWith(s.at());
+		}
 	}
 
 	private static final String UNCAUGHT = "Exception in thread \"main\" ";

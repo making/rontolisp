@@ -12611,6 +12611,8 @@ public final class LispEvaluator {
 				return evalJavaSite(cons, env, name);
 			case LispNames.HB_GUARD_INTERNAL:
 				return evalHbGuard(cons, env);
+			case LispNames.REPORTING_UNCAUGHT_INTERNAL:
+				return evalReportingUncaught(cons, env);
 			case LispNames.PROGRAM_ERROR_INTERNAL: {
 				// The lowered argument-shape rejection: a class-named error with no
 				// instance until a handler synthesizes one (LispEvalException.ofClass).
@@ -18512,6 +18514,37 @@ public final class LispEvaluator {
 		}
 		catch (LispEvalException e) {
 			throw withHandlerBindHandlersRun(e);
+		}
+	}
+
+	/**
+	 * {@code (%reporting-uncaught #'line after body...)}: the body, where a condition
+	 * nothing caught is reported by the program's own line -- the instance it carries
+	 * (nil for a plain error or a host failure) and its report text handed to
+	 * {@code line} -- with the location lines under it, and {@code after} evaluated then
+	 * ({@code compiler.UncaughtReport.Reporter}). A condition {@code after} lets go on
+	 * leaves as it came, for whoever runs the program to report.
+	 */
+	private LispVal evalReportingUncaught(LispCons cons, Environment env) {
+		UncaughtReport.Reporter reporter = UncaughtReport.reporterOf(cons);
+		try {
+			return eval(UncaughtReport.reportingBody(cons), env);
+		}
+		catch (LispEvalException e) {
+			String message = e.getMessage();
+			LispVal condition = e.condition();
+			LispVal function = eval(
+					new LispCons(new LispSymbol(LispNames.FUNCTION), new LispCons(reporter.line(), LispNil.INSTANCE)),
+					env);
+			LispVal line = apply(function, List.of(condition != null ? condition : LispNil.INSTANCE,
+					new LispString(message != null ? message : "NIL")), env);
+			LispVal warn = this.globalEnv.lookupFunction(LispNames.WARN_INTERNAL);
+			apply(warn, List.of(line), env);
+			for (String location : e.locationLines()) {
+				apply(warn, List.of(new LispString(location)), env);
+			}
+			eval(reporter.after(), env);
+			throw e;
 		}
 	}
 

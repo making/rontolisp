@@ -128,32 +128,70 @@
 (defun rontolisp::%java-condition-text (condition)
   (%normalize-string (princ-to-string condition)))
 
-;; What nothing caught: the line a JDK writes first, and the status 1. An error of
-;; rontolisp's own is a RuntimeException of its text where it is a simple error, else of
-;; no message: re-signalling it, or printing it, would bring every condition class and
-;; the printer into every program (.kb/java-frontend.md, "Exceptions").
-(defun rontolisp::%java-uncaught (condition)
-  (let ((text (rontolisp::%java-raised-text condition)))
-    (if (null text) (setq text (rontolisp::%java-host-text condition)))
-    (rontolisp::%java-report-uncaught
-     (cond (text text)
-           ((typep condition 'simple-error)
-            (%string-concat "java.lang.RuntimeException: "
-                            (simple-condition-format-control condition)))
-           (t "java.lang.RuntimeException")))))
+;; Where PART first is in TEXT, -1 when nowhere: the backend's own search of two
+;; whole strings, the one string operation the report of an uncaught condition reads
+;; its text with (`search` brings its keywords and the sequence arms into every
+;; program, a loop over the characters its signal sites). Both are the host's
+;; immutable strings, which every backend decides.
+(defun rontolisp::%java-text-at (part text)
+  (%string-search part text 0 nil 0 nil))
 
-;; The same in a program that throws objects: one is reported by its toString().
-(defun rontolisp::%java-uncaught-thrown (condition)
-  (if (typep condition 'rontolisp::%java-throwable)
-      (rontolisp::%java-report-uncaught
-       (funcall (rontolisp::%java-throwable-describe condition)
-                (rontolisp::%java-throwable-object condition)))
-      (rontolisp::%java-uncaught condition)))
+;; The text of the exception a report of the host is: the same three failures
+;; rontolisp::%java-host-text reads off a condition, read off the one line every backend
+;; reports them by (.kb/error-handling.md, "An uncaught condition reports ONE line"),
+;; where no condition is held. Else nil.
+(defun rontolisp::%java-host-report (text)
+  (let ((value (rontolisp::%java-text-at "The value " text))
+        (type (rontolisp::%java-text-at " is not of type " text)))
+    (cond ((and (eql (rontolisp::%java-text-at "Division by zero" text) 0)
+                (eql (length text) 16))
+           "java.lang.ArithmeticException: / by zero")
+          ((and (< -1 value type)
+                (or (eql value 0)
+                    (eql (rontolisp::%java-text-at ": The value " text)
+                         (- value 2))))
+           (rontolisp::%java-type-report (%substring text (+ value 10) type)
+            (%substring text (+ type 16) (length text))))
+          (t nil))))
 
-(defun rontolisp::%java-report-uncaught (text)
+;; A type error's report, by the value and the type it names: nil is null, an integer
+;; outside (INTEGER 0 (length)) an index outside an array.
+(defun rontolisp::%java-type-report (value type)
+  (cond ((and (eql (rontolisp::%java-text-at "NIL" value) 0)
+              (eql (length value) 3))
+         "java.lang.NullPointerException")
+        ((and (eql (rontolisp::%java-text-at "(INTEGER 0 (" type) 0)
+              (eql (rontolisp::%java-text-at "))" type) (- (length type) 2)))
+         (%string-concat (%string-concat
+                          (%string-concat
+                           "java.lang.ArrayIndexOutOfBoundsException: Index "
+                           value) " out of bounds for length ")
+                         (%substring type 12 (- (length type) 2))))
+        (t nil)))
+
+;; What nothing caught, as the line a JDK writes first, for the pipeline's report of
+;; an uncaught condition to write (%reporting-uncaught; the status 1 follows it). TEXT
+;; is the condition's report: what the run time raised is its own text, a failure of
+;; the host the exception it is, any other error of rontolisp's own a RuntimeException
+;; of its text. No condition is held, so no signal site builds one
+;; (.kb/java-frontend.md, "Exceptions").
+(defun rontolisp::%java-uncaught-line (condition text)
   (finish-output)
-  (%warn (%string-concat "Exception in thread \"main\" " text))
-  (%host-exit 1))
+  (let ((text (%normalize-string text)))
+    (%string-concat "Exception in thread \"main\" "
+                    (cond ((eql (rontolisp::%java-text-at "java." text) 0) text)
+                          ((rontolisp::%java-host-report text))
+                          (t (%string-concat "java.lang.RuntimeException: "
+                                             text))))))
+
+;; The same in a program that throws objects: one is reported by its toString(), which
+;; is its condition's report.
+(defun rontolisp::%java-uncaught-thrown-line (condition text)
+  (if (and condition (typep condition 'rontolisp::%java-throwable))
+      (progn
+        (finish-output)
+        (%string-concat "Exception in thread \"main\" " text))
+      (rontolisp::%java-uncaught-line condition text)))
 
 ;; What a session's step left uncaught, signalled again as one line naming the
 ;; exception: the REPL reports it and reads the next buffer (.kb/java-frontend.md,
@@ -2064,7 +2102,7 @@
           found))))
 
 ;; The line a thread that left a condition uncaught writes after its name: what
-;; rontolisp::%java-uncaught-thrown writes of it for the thread the program started on.
+;; rontolisp::%java-uncaught-thrown-line answers of it for the thread the program started on.
 (defun rontolisp::%java-thrown-text (condition)
   (if (typep condition 'rontolisp::%java-throwable)
       (funcall (rontolisp::%java-throwable-describe condition)

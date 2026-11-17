@@ -12,6 +12,8 @@ import am.ik.rontolisp.compiler.UncaughtReport;
 import am.ik.wasm.Instruction;
 import am.ik.wasm.Type;
 
+import org.jspecify.annotations.Nullable;
+
 /**
  * The entry function's EH-mode landing pad: a condition nobody caught writes
  * {@link UncaughtReport#PREFIX} plus its report to file descriptor 2 and only then traps.
@@ -99,8 +101,10 @@ final class WasmUncaughtReportCompiler {
 	 * {@code unreachable} both landings share. The caller still writes the function's own
 	 * final {@code end}.
 	 * @param ctx the compilation context
+	 * @param reporter the program's own report of what nothing caught, or {@code null}
+	 * for {@link UncaughtReport#PREFIX} and the trap
 	 */
-	static void emitEpilogue(WasmLispCompiler.Ctx ctx) {
+	static void emitEpilogue(WasmLispCompiler.Ctx ctx, UncaughtReport.@Nullable Reporter reporter) {
 		ctx.writer.write(Instruction.RETURN);
 		ctx.writer.write(Instruction.END); // try_table
 		ctx.wasmCtrlDepth--;
@@ -110,7 +114,7 @@ final class WasmUncaughtReportCompiler {
 		ctx.writer.write(Instruction.UNREACHABLE);
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END); // block $cond -- the payload is on the stack
-		emitReport(ctx);
+		emitReport(ctx, reporter);
 		ctx.writer.write(Instruction.UNREACHABLE);
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END); // block $trap
@@ -133,7 +137,7 @@ final class WasmUncaughtReportCompiler {
 	 * per-signal message renders stay deleted ({@code .kb/error-handling.md}) -- and a
 	 * plain message is already the rendered text.
 	 */
-	private static void emitReport(WasmLispCompiler.Ctx ctx) {
+	private static void emitReport(WasmLispCompiler.Ctx ctx, UncaughtReport.@Nullable Reporter reporter) {
 		int payloadSlot = ctx.allocTemp();
 		int condSlot = ctx.allocTemp();
 		int msgSlot = ctx.allocTemp();
@@ -150,7 +154,8 @@ final class WasmUncaughtReportCompiler {
 		ctx.locals.put(condVar, condSlot);
 		ctx.locals.put(msgVar, msgSlot);
 		try {
-			WasmExprCompiler.compileExpr(reportForm(new LispSymbol(condVar), new LispSymbol(msgVar), ctx), ctx);
+			WasmExprCompiler.compileExpr(reportForm(new LispSymbol(condVar), new LispSymbol(msgVar), ctx, reporter),
+					ctx);
 		}
 		finally {
 			ctx.locals.remove(condVar);
@@ -160,6 +165,12 @@ final class WasmUncaughtReportCompiler {
 		ctx.writer.write(Instruction.DROP);
 		// --report-locations: where it happened, under the report.
 		WasmUncaughtLocations.emitReportLines(ctx, payloadSlot);
+		if (reporter != null) {
+			// What the program does once its line is written: where that lets go on,
+			// the trap below ends the program as it ends any other.
+			WasmExprCompiler.compileExpr(reporter.after(), ctx);
+			ctx.writer.write(Instruction.DROP);
+		}
 	}
 
 	/** Stores {@code (car payload)} (field 0) or {@code (cdr payload)} (field 1). */
@@ -188,7 +199,8 @@ final class WasmUncaughtReportCompiler {
 	 * without a condition class there is no typed signal either, so the car is always nil
 	 * and the arm would be dead code that drags the whole report machinery in.
 	 */
-	private static LispVal reportForm(LispSymbol condVar, LispSymbol msgVar, WasmLispCompiler.Ctx ctx) {
+	private static LispVal reportForm(LispSymbol condVar, LispSymbol msgVar, WasmLispCompiler.Ctx ctx,
+			UncaughtReport.@Nullable Reporter reporter) {
 		// A message is a string, a character vector or nil, and %string-concat takes only
 		// the first two: a nil message renders as princ writes it, which is what the
 		// interpreter and the JVM print.
@@ -198,6 +210,10 @@ final class WasmUncaughtReportCompiler {
 			// (if cond (%signal-text cond msg) message)
 			text = list(new LispSymbol(LispNames.IF), condVar,
 					list(new LispSymbol(LispNames.SIGNAL_TEXT_INTERNAL), condVar, msgVar), message);
+		}
+		if (reporter != null) {
+			// The program's own line, of the instance the payload carries and the text.
+			return list(new LispSymbol(LispNames.WARN_INTERNAL), reporter.lineForm(condVar, text));
 		}
 		return list(new LispSymbol(LispNames.WARN_INTERNAL),
 				list(new LispSymbol(LispNames.STRING_CONCAT), new LispString(UncaughtReport.PREFIX), text));

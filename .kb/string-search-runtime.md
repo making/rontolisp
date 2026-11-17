@@ -25,8 +25,11 @@ match, or nil for "not decided", which runs the loop. Same shape as `%replace-bu
 - **A character vector on either side compares code points through `_str_char_ref`.** Rendering it
   would be one scan's cost per bounded call, quadratic in a tokenizer's loop over a buffer
   (`.kb/string-index-cost.md`).
-- **The interpreter answers constant nil**: `SequenceScanFast` has already served its call
-  (`.kb/seq-coerce-runtime.md`). `--no-gc` refuses `search` for its `&key`.
+- **The interpreter decides two whole strings** (no bound but the defaults: 2026-11-17, for a
+  caller asking the primitive itself -- the Java front end's reading of a report,
+  `.kb/java-frontend.md`, "Exceptions") and answers nil for any other call: `SequenceScanFast`
+  has already served `search` (`.kb/seq-coerce-runtime.md`). `--no-gc` refuses `search` for its
+  `&key`.
 - **The JVM scans two immutable strings as UTF-16 units** (`_strSearch`,
   `JvmBulkRuntimeBuilder`, 2026-11-16; `.kb/bulk-primitives.md`, "JVM"): the bounds through
   `_cpoff`, the needle's first unit by `String.indexOf` and the rest by `regionMatches`, the answer

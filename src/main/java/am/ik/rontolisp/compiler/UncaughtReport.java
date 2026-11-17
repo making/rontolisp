@@ -3,6 +3,8 @@ package am.ik.rontolisp.compiler;
 import am.ik.rontolisp.ClosRegistry;
 import am.ik.rontolisp.LambdaLists;
 import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.macro.LispMacroExpander;
@@ -181,6 +183,84 @@ public final class UncaughtReport {
 	 */
 	public static String asyncHead(@Nullable String function) {
 		return function == null ? "an async lambda" : function + " (async)";
+	}
+
+	/**
+	 * A program's own report of what nothing caught, written as the top-level form
+	 * {@code (%reporting-uncaught #'line after body...)}
+	 * ({@link LispNames#REPORTING_UNCAUGHT_INTERNAL}): the line replaces {@link #PREFIX}
+	 * and the report, the location lines follow it unchanged, and {@code after} then
+	 * runs. Every backend reads it here, so the three agree on the shape and on the
+	 * order.
+	 *
+	 * @param line the function answering the line, called with the condition instance
+	 * (nil where the backend holds none) and the condition's report text
+	 * @param after the form evaluated after the report is written
+	 */
+	public record Reporter(LispSymbol line, LispVal after) {
+
+		/**
+		 * The form answering the line to write.
+		 * @param condition the form answering the instance, or nil
+		 * @param text the form answering the report text
+		 * @return {@code (line condition text)}
+		 */
+		public LispVal lineForm(LispVal condition, LispVal text) {
+			return new LispCons(this.line, new LispCons(condition, new LispCons(text, LispNil.INSTANCE)));
+		}
+
+	}
+
+	/**
+	 * The reporter a program's top level establishes, looked for in its top-level forms
+	 * and the {@code progn}s among them: the first one found.
+	 * @param program the program's top-level forms
+	 * @return the reporter, or {@code null} for the pipeline's own report
+	 */
+	public static @Nullable Reporter reporter(Iterable<? extends LispVal> program) {
+		for (LispVal form : program) {
+			if (!(form instanceof LispCons cons && cons.car() instanceof LispSymbol head)) {
+				continue;
+			}
+			if (LispNames.REPORTING_UNCAUGHT_INTERNAL.equals(head.name())) {
+				return reporterOf(cons);
+			}
+			if (LispNames.PROGN.equals(head.name()) && cons.cdr() instanceof LispCons body) {
+				Reporter nested = reporter(body.toList());
+				if (nested != null) {
+					return nested;
+				}
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The reporter a {@code %reporting-uncaught} form names.
+	 * @param form the form
+	 * @return its reporter
+	 * @throws IllegalArgumentException when the form is not
+	 * {@code (%reporting-uncaught #'name after body...)}
+	 */
+	public static Reporter reporterOf(LispCons form) {
+		if (form.cdr() instanceof LispCons lineCell && lineCell.cdr() instanceof LispCons afterCell
+				&& lineCell.car() instanceof LispCons function && function.car() instanceof LispSymbol quote
+				&& LispNames.FUNCTION.equals(quote.name()) && function.cdr() instanceof LispCons named
+				&& named.car() instanceof LispSymbol line) {
+			return new Reporter(line, afterCell.car());
+		}
+		throw new IllegalArgumentException(
+				LispNames.REPORTING_UNCAUGHT_INTERNAL + " expects #'name, a form and a body: " + form.print());
+	}
+
+	/**
+	 * What a {@code %reporting-uncaught} form evaluates: its body.
+	 * @param form the form
+	 * @return {@code (progn body...)}
+	 */
+	public static LispVal reportingBody(LispCons form) {
+		reporterOf(form);
+		return new LispCons(new LispSymbol(LispNames.PROGN), ((LispCons) ((LispCons) form.cdr()).cdr()).cdr());
 	}
 
 	/**

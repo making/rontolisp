@@ -7,7 +7,8 @@
 # whose main calls each case's `main` class in order, and the output is sliced back per
 # case -- the ci-spec.yaml idea. So every class of a case carries the case's name. A
 # `standalone` case is a file of its own, named `file`: one that starts another way, or
-# one that ENDS with an uncaught exception -- it prints `stdout`, then reports `error`.
+# one that ENDS with an uncaught exception -- it prints `stdout`, then reports `error`,
+# under which the interpreter and the JVM say where it was raised (`at`).
 # `files` holds the other files of its source tree by path, written beside it; `stdin`
 # is what it reads from the standard input.
 #
@@ -4733,7 +4734,8 @@ cases:
       wrapped java.io.IOException: inner
 standalone:
   # An uncaught exception is the line a JDK writes on standard error -- the exception's
-  # toString() -- and the status 1; no stack trace follows.
+  # toString() -- and the status 1; where a JDK's stack trace follows, the interpreter and
+  # the JVM name where it was raised (`at`).
   - name: an-uncaught-exception-reports-its-class-and-message
     file: Uncaught.java
     source: |
@@ -4759,6 +4761,7 @@ standalone:
       withdrew 30
       finally
     error: "java.lang.IllegalStateException: insufficient funds: 30"
+    at: "Uncaught.java:4 in Uncaught.check(int,int)"
   # The report asks the thrown object's own toString().
   - name: an-uncaught-exception-of-the-program-s-own-class
     file: Own.java
@@ -4798,6 +4801,7 @@ standalone:
     stdout: |
       before
     error: "java.lang.ArrayIndexOutOfBoundsException: Index 3 out of bounds for length 2"
+    at: "OutOfBounds.java:5 in OutOfBounds.main(String[])"
   # printStackTrace writes the exception, its suppressed ones and its causes as a JDK
   # does, without a JDK's frame lines.
   - name: print-stack-trace-writes-the-causes-and-the-suppressed
@@ -5068,7 +5072,9 @@ standalone:
   # their Lisp names, which carry the signature; a Java object is a structure it hands back,
   # a Lisp vector an Object[]. A native method of the Java file is the Common Lisp function
   # its name spells (stringUpcase is STRING-UPCASE): a char crosses as a character, a
-  # boolean comes back T or NIL, a string the program's own.
+  # boolean comes back T or NIL, a string the program's own. A failure of the host is one
+  # exception whichever way the run time reads it: off the condition, as a catch does,
+  # and off the condition's report, as the line of what nothing caught does.
   - name: common-lisp-and-java-call-each-other
     file: main.lisp
     source: |
@@ -5079,11 +5085,28 @@ standalone:
       (let ((p (|Point.new(int,int)| 3 4)))
         (format t "~a ~a~%" (|Point.toString()| p) (|Geometry.norm2(Point)| p)))
       (format t "~a~%" (|Geometry.join(Object[])| (vector "a" 1 "b")))
+      (defstruct cell value)
+      (defun at (v i) (aref v i))
+      (defun both (thunk)
+        (handler-case (funcall thunk)
+          (error (c)
+            (let ((e (rontolisp::%java-exception-of c)))
+              (if (cdr e) (format t "~a: ~a~%" (car e) (cdr e)) (format t "~a~%" (car e)))
+              (format t "~a~%" (rontolisp::%java-uncaught-line nil (princ-to-string c)))))))
+      (both (lambda () (at (vector 1 2) 3)))
+      (both (lambda () (truncate (square 3) (at (vector 0) 0))))
+      (both (lambda () (cell-value (at (vector nil) 0))))
     stdout: |
       12
       HI! 49 true Q
       Point[x=3, y=4] 25
       a1b
+      java.lang.ArrayIndexOutOfBoundsException: Index 3 out of bounds for length 2
+      Exception in thread "main" java.lang.ArrayIndexOutOfBoundsException: Index 3 out of bounds for length 2
+      java.lang.ArithmeticException: / by zero
+      Exception in thread "main" java.lang.ArithmeticException: / by zero
+      java.lang.NullPointerException
+      Exception in thread "main" java.lang.NullPointerException
     files:
       Geometry.java: |
         record Point(int x, int y) { }

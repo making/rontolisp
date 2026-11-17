@@ -2162,6 +2162,10 @@ final class WasmExprCompiler {
 			case LispNames.UNWIND_PROTECT -> WasmUnwindProtectCompiler.compile(cons, ctx);
 			case LispNames.HANDLER_CASE -> WasmHandlerCaseCompiler.compile(cons, ctx);
 			case LispNames.HB_GUARD_INTERNAL -> WasmHandlerCaseCompiler.compileGuard(cons, ctx);
+			// The entry's landing pad reads the reporter off the program
+			// (WasmUncaughtReportCompiler); where it is written, the form is its body.
+			case LispNames.REPORTING_UNCAUGHT_INTERNAL ->
+				WasmExprCompiler.compileExpr(UncaughtReport.reportingBody(cons), ctx);
 			case LispNames.PROGRAM_ERROR_INTERNAL -> {
 				CompileWarnings.warnStaticProgramError(cons);
 				WasmExprCompiler.compileExpr(LispMacroExpander.lowerProgramError(cons, ctx.closRegistry,

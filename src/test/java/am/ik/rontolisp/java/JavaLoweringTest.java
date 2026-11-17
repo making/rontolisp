@@ -133,9 +133,13 @@ class JavaLoweringTest {
 							+ "\"class \" (|%class-name| |%t0|)) \" cannot be cast to class Circle\"))) #'|Throwable.toString()|))))) "
 							+ "(RETURN-FROM |%fn| "
 							+ "(- (LOGAND (+ (TRUNCATE (RONTOLISP::%JAVA-DOUBLE-TO-INT (|Circle.r| |c|)) |d|) 2147483648) "
-							+ "4294967295) 2147483648))) (ERROR (|%t1|) (LET ((|%t2| (OR (RONTOLISP::%JAVA-THROWN |%t1|) "
-							+ "(|%lisp-error| |%t1|)))) (COND ((|ArithmeticException?| |%t2|) (LET ((|e| |%t2|)) (RETURN-FROM "
-							+ "|%fn| -1))) (T (ERROR |%t1|)))))) (SETQ |Base.count| 10))))",
+							+ "4294967295) 2147483648))) ((SATISFIES |%catch0|) (|%t1|) (LET ((|e| (OR "
+							+ "(RONTOLISP::%JAVA-THROWN |%t1|) (|%lisp-error| |%t1|)))) (RETURN-FROM |%fn| -1)))) "
+							+ "(SETQ |Base.count| 10))))",
+					// a catch clause's type is its test: a condition no clause takes goes
+					// on as it came, signalled by nothing
+					"(DEFUN |%catch0| (|%c|) (|ArithmeticException?| (OR (RONTOLISP::%JAVA-THROWN |%c|) "
+							+ "(|%lisp-error| |%c|))))",
 					"(DEFUN |L1.adder(int)| (|n|) (LAMBDA (|x|) (- (LOGAND (+ (+ |x| |n|) 2147483648) 4294967295) "
 							+ "2147483648)))",
 					"(DEFUN |L1.main(String[])| (|args|) (LET ((|s| (|Circle.new(double)| 1.5))) (LET ((|boxed| "
@@ -161,8 +165,10 @@ class JavaLoweringTest {
 							+ "(|Throwable.toString()| |%o|)) (T (RONTOLISP::%JAVA-TO-STRING |%o|))))",
 					"(DEFUN |%lisp-error| (|%c|) (LET ((|%e| (RONTOLISP::%JAVA-EXCEPTION-OF |%c|))) (COND ((EQUAL "
 							+ "(CAR |%e|) \"java.lang.ArithmeticException\") (|ArithmeticException.new(String)| (CDR |%e|))))))",
-					"(HANDLER-CASE (PROGN (SETQ |Base.count| 0) (SETQ |Base.LIMIT| 10) (|L1.main(String[])| (VECTOR))) "
-							+ "(ERROR (|%c|) (RONTOLISP::%JAVA-UNCAUGHT-THROWN |%c|)))");
+					// what nothing caught is the pipeline's own report with the program's
+					// line in it: no handler holds the condition
+					"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-THROWN-LINE (%HOST-EXIT 1) (SETQ |Base.count| 0) "
+							+ "(SETQ |Base.LIMIT| 10) (|L1.main(String[])| (VECTOR)))");
 		// every exception class the run time's table names is one the lowering can make
 		Matcher named = Pattern.compile("\"(java\\.(?:lang|util)\\.\\w+Exception)\"").matcher(runtimeLibrary());
 		while (named.find()) {
@@ -264,10 +270,10 @@ class JavaLoweringTest {
 							+ "|this|) |%outer|) |this|))",
 					"(DEFUN |Log.<clinit>| NIL (IF |Log.<clinit>%done| NIL (PROGN (SETQ |Log.<clinit>%done| T) "
 							+ "(WRITE-LINE \"log\"))))",
-					"(HANDLER-CASE (PROGN (SETQ |Level.$VALUES| NIL) (SETQ |Log.lines| 0) (SETQ |Level.LOW| (|Level.new(String,int)| "
+					"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (SETQ |Level.$VALUES| NIL) (SETQ |Log.lines| 0) (SETQ |Level.LOW| (|Level.new(String,int)| "
 							+ "\"LOW\" 0)) (SETQ |Level.HIGH| (|Level.new(String,int)| \"HIGH\" 1)) (SETQ |Level.$VALUES| (VECTOR "
 							+ "|Level.LOW| |Level.HIGH|)) (SETQ |Level.ALL| (|Level.values()|)) (SETQ |Log.<clinit>%done| "
-							+ "NIL) (|L2.main(String[])| (VECTOR))) (ERROR (|%c|) (RONTOLISP::%JAVA-UNCAUGHT |%c|)))");
+							+ "NIL) (|L2.main(String[])| (VECTOR)))");
 	}
 
 	@Test
@@ -484,8 +490,8 @@ class JavaLoweringTest {
 						+ "(%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT (%DECIMAL-PIECE (|demo.app.T.CDR(int)| (OR "
 						+ "|j%T| (RONTOLISP::%JAVA-NPE)) 2)) \"n=16y\") (RONTOLISP::%JAVA-CHAR-STRING |c|)) (%DECIMAL-PIECE "
 						+ "|big|)) \"2147483647\") \"-0.0\") \"4.5\"))))))",
-				"(HANDLER-CASE (PROGN (SETQ |demo.app.T.NIL| 16) (SETQ |demo.app.T.TEXT| \"n=16y\") (|demo.app.Main.main(String[])| "
-						+ "(VECTOR))) (ERROR (|%c|) (RONTOLISP::%JAVA-UNCAUGHT |%c|)))");
+				"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (SETQ |demo.app.T.NIL| 16) "
+						+ "(SETQ |demo.app.T.TEXT| \"n=16y\") (|demo.app.Main.main(String[])| (VECTOR)))");
 	}
 
 	@Test
@@ -579,8 +585,8 @@ class JavaLoweringTest {
 						+ "2147483648) 4294967295) 2147483648)))))",
 				"(DEFUN |Lazy.<clinit>| NIL (IF |Lazy.<clinit>%done| NIL (PROGN (SETQ |Lazy.<clinit>%done| T) "
 						+ "(WRITE-LINE \"made\"))))",
-				"(HANDLER-CASE (PROGN (SETQ |Lazy.made| 0) (SETQ |Lazy.<clinit>%done| NIL) (|T2.main()|)) (ERROR "
-						+ "(|%c|) (RONTOLISP::%JAVA-UNCAUGHT |%c|)))");
+				"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (SETQ |Lazy.made| 0) "
+						+ "(SETQ |Lazy.<clinit>%done| NIL) (|T2.main()|))");
 	}
 
 	@Test

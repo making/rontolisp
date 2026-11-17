@@ -144,13 +144,19 @@ their modules and class loaders. A stack overflow is no `StackOverflowError` a p
 
 **An uncaught exception is reported without a stack trace.** Standard error gets the line a
 JDK writes first, `Exception in thread "main"` and the exception's `toString()`, and the
-program exits with the status 1. No frame and no cause follows. `printStackTrace()` writes
-an exception, the exceptions it suppressed and its causes as a JDK does, without the frame
-lines.
+program exits with the status 1. One line follows it where a JDK writes its frames: the
+file and the line of the statement the exception was raised in, and the method that
+statement is written in. The interpreter and a JVM output write it; a `.wasm` output
+writes it when compiled with
+[`--report-locations`](../compiling/wasm.md#uncaught-condition-locations---report-locations).
+No cause follows. `printStackTrace()`
+writes an exception, the exceptions it suppressed and its causes as a JDK does, without
+the frame lines.
 
 ```console
 $ rontolisp Uncaught.java
 Exception in thread "main" java.lang.IllegalStateException: insufficient funds: 30
+  at Uncaught.java:4 in Uncaught.check(int,int)
 ```
 
 **Some errors a compiler reports are not reported**, and such a program runs. `throws`

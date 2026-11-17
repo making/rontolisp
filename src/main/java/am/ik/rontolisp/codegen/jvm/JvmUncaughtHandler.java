@@ -9,6 +9,11 @@ import java.util.List;
 
 import am.ik.jvm.ConstantPool;
 import am.ik.jvm.MethodCode;
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispNames;
+import am.ik.rontolisp.LispNil;
+import am.ik.rontolisp.LispSymbol;
+import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.compiler.UncaughtReport;
 
 import org.jspecify.annotations.Nullable;
@@ -216,14 +221,18 @@ final class JvmUncaughtHandler {
 		 * this.
 		 * @param where {@code _where}, which prints the location lines after the report
 		 * line, or {@code null} when nothing in the class was located
+		 * @param reporter the program's own report of what nothing caught, or
+		 * {@code null} for {@link UncaughtReport#PREFIX} and the report
+		 * @param className the generated class
 		 */
-		void append(@Nullable MethodRefEntry where) {
-			appendHandler(this, where);
+		void append(@Nullable MethodRefEntry where, UncaughtReport.@Nullable Reporter reporter, String className) {
+			appendHandler(this, where, reporter, className);
 		}
 
 	}
 
-	private static void appendHandler(Prepared p, @Nullable MethodRefEntry where) {
+	private static void appendHandler(Prepared p, @Nullable MethodRefEntry where,
+			UncaughtReport.@Nullable Reporter reporter, String className) {
 		JvmLispCompiler.Ctx mainCtx = p.mainCtx();
 		MethodCode code = mainCtx.body;
 		MethodCode.Label bodyEnd = code.newBoundLabel();
@@ -231,17 +240,28 @@ final class JvmUncaughtHandler {
 		// The handler is entered with the exception as the sole operand.
 		mainCtx.stack.enterHandler();
 		code.astore(exSlot);
-		// System.err.println(PREFIX.concat(String.valueOf(ex.getMessage())))
-		code.getstatic(p.systemErr())
-			.ldc(p.prefix())
-			.aload(exSlot)
-			.invokevirtual(p.getMessage())
-			.invokestatic(p.valueOf())
-			.invokevirtual(p.concat())
-			.invokevirtual(mainCtx.printlnStr);
+		if (reporter != null) {
+			emitOwnLine(p, reporter, className);
+		}
+		else {
+			// System.err.println(PREFIX.concat(String.valueOf(ex.getMessage())))
+			code.getstatic(p.systemErr())
+				.ldc(p.prefix())
+				.aload(exSlot)
+				.invokevirtual(p.getMessage())
+				.invokestatic(p.valueOf())
+				.invokevirtual(p.concat())
+				.invokevirtual(mainCtx.printlnStr);
+		}
 		// _where(ex): the location lines, read off the trace before it is emptied.
 		if (where != null) {
 			code.aload(exSlot).invokestatic(where);
+		}
+		if (reporter != null) {
+			// What the program does once its line is written; where that lets go on,
+			// the condition leaves as any other.
+			JvmExprCompiler.compileExpr(reporter.after(), mainCtx, className);
+			code.pop();
 		}
 		// if (System.getenv("RONTOLISP_DEBUG") == null) ex.setStackTrace(new
 		// StackTraceElement[0]);
@@ -257,6 +277,50 @@ final class JvmUncaughtHandler {
 		// Rethrow: the launcher's exit code is 1 and its echo is now one line.
 		code.aload(exSlot).athrow();
 		code.exceptionCatch(mainCtx.bodyStart, bodyEnd, bodyEnd, p.runtimeException());
+	}
+
+	/**
+	 * Writes the program's own line ({@link UncaughtReport.Reporter}): the condition the
+	 * throwable was recorded with -- nil when no site of the class records one, or this
+	 * throwable carries none -- and its message as a string of the program ride
+	 * pseudo-locals, so the line and its write compile as ordinary forms.
+	 */
+	private static void emitOwnLine(Prepared p, UncaughtReport.Reporter reporter, String className) {
+		JvmLispCompiler.Ctx ctx = p.mainCtx();
+		MethodCode code = ctx.body;
+		JvmLispCompiler.ConditionChannel channel = ctx.conditionChannel;
+		int conditionSlot = ctx.allocTemp();
+		if (channel.condTake != null) {
+			code.aload(p.exSlot()).invokestatic(channel.condTake);
+			if (channel.condOf != null) {
+				code.invokestatic(channel.condOf);
+			}
+		}
+		else {
+			code.aconst_null();
+		}
+		code.astore(conditionSlot);
+		// "\"" + String.valueOf(ex.getMessage()) + "\"": the quote-framed string.
+		int textSlot = ctx.allocTemp();
+		JvmEmitHelper.compileStringLiteral("\"", ctx);
+		code.aload(p.exSlot()).invokevirtual(p.getMessage()).invokestatic(p.valueOf()).invokevirtual(p.concat());
+		JvmEmitHelper.compileStringLiteral("\"", ctx);
+		code.invokevirtual(p.concat()).astore(textSlot);
+		String conditionVar = "__uc_cond$" + conditionSlot;
+		String textVar = "__uc_text$" + textSlot;
+		ctx.locals.put(conditionVar, conditionSlot);
+		ctx.locals.put(textVar, textSlot);
+		try {
+			LispVal line = reporter.lineForm(new LispSymbol(conditionVar), new LispSymbol(textVar));
+			JvmExprCompiler.compileExpr(
+					new LispCons(new LispSymbol(LispNames.WARN_INTERNAL), new LispCons(line, LispNil.INSTANCE)), ctx,
+					className);
+		}
+		finally {
+			ctx.locals.remove(conditionVar);
+			ctx.locals.remove(textVar);
+		}
+		code.pop();
 	}
 
 	/**

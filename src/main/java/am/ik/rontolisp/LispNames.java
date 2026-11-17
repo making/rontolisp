@@ -3007,6 +3007,19 @@ public final class LispNames {
 	public static final String HB_GUARD_INTERNAL = "%HB-GUARD";
 
 	/**
+	 * The internal top-level form {@code (%reporting-uncaught #'line after body...)}:
+	 * {@code body} as a {@code progn}, where a condition nothing caught is reported by
+	 * the program's own line instead of {@code Unhandled condition: ...}. {@code line} is
+	 * called with the condition instance, or nil where the backend holds none (a plain
+	 * error's text, a host failure), and the condition's report text, and answers the
+	 * line to write to standard error; the location lines follow it as under any report,
+	 * and then {@code after} is evaluated -- a {@code (%host-exit 1)}, without which the
+	 * program ends as an uncaught condition ends it. No clause holds the condition, so no
+	 * signal site builds an instance for it ({@code compiler.UncaughtReport}).
+	 */
+	public static final String REPORTING_UNCAUGHT_INTERNAL = "%REPORTING-UNCAUGHT";
+
+	/**
 	 * The dynamic {@code handler-bind} cluster stack: a top-level global holding a list
 	 * of clusters, each a list of {@code (test-closure . handler-function)} entries.
 	 * Mutated with plain {@code setq} and restored through {@code unwind-protect} (never

@@ -13,8 +13,9 @@ several files, a session, the calls across languages, the tools and annotations:
 (2026-11-17); threads: j76 (2026-11-17); the flow, outer instances and qualified `super`: j77
 (2026-11-17); inner class types, intersections, the inference j70 left: j78 (2026-11-17);
 `java.io`, the charsets and the members j71 left: j79 (2026-11-17); the class of an array and
-the `Math` members j72 left: j81 (2026-11-17); what comes after is `.todo/j82`, `j83`, `j86`
-and `j87` (what j73, j76, j78 and j79 left).
+the `Math` members j72 left: j81 (2026-11-17); the uncaught report without a held condition
+and the catch that signals nothing again: j82 (2026-11-17); what comes after is `.todo/j83`,
+`j86`, `j87` and `j88` (what j76, j78, j79 and j82 left).
 
 ## Where it sits
 
@@ -70,7 +71,7 @@ and `j87` (what j73, j76, j78 and j79 left).
   its qualified name, a `java.lang` class its simple one; a program's class named as a
   `java.lang` class the program also uses is refused. An accessor is `Class.` + the slot.
   Generated: `%t<n>`, `%fn`, `%break`, `%continue`, `%string`, `%equals`, `%hash`, `%class-name`,
-  `%simple-name`, `%lisp-error`, `Class.m(sig)%v`, `Iface%is`.
+  `%simple-name`, `%lisp-error`, `%catch<n>`, `Class.m(sig)%v`, `Iface%is`.
 - **The program is closed, so a call is direct when it can be.** One body under the receiver's
   static type: a plain call. Several: one `cond` over the structure predicates, deepest owner
   first, made once per (static type, signature), ending in `%java-no-receiver`. A receiver that
@@ -87,12 +88,14 @@ and `j87` (what j73, j76, j78 and j79 left).
   ("Static initialization" below).
 - **An exception is one condition type holding the object** (`%java-throwable`), `throw` is
   `(%java-throw obj #'describe)`, `describe` the program's `Throwable.toString()` target, which
-  the condition's `:report` calls. `try`: ONE `handler-case` clause on `error` binding
-  `(%java-thrown c)`, a `cond` over the clause types (each its own parameter), `(error c)` again
-  when none takes it; `finally` is `unwind-protect`. What the run time raises is converted AT
-  THE CATCH ("Exceptions" below).
-- **The program runs inside `(handler-case (progn init.. (main)) (error (c) (%java-uncaught c)))`**:
-  what nothing caught is a JDK's line and the status 1 on four backends ("Exceptions" below).
+  the condition's `:report` calls. `try`: a `handler-case` clause per `catch`, its type
+  `(satisfies %catch<n>)` -- the generated test of the thrown object's class -- and its
+  variable bound to `(%java-thrown c)`; a condition no clause takes goes on as it came;
+  `finally` is `unwind-protect`. What the run time raises is converted AT THE CATCH
+  ("Exceptions" below).
+- **The program runs inside `(%reporting-uncaught #'%java-uncaught-line (%host-exit 1) init.. (main))`**:
+  what nothing caught is a JDK's line, the pipeline's location lines under it and the status 1
+  on four backends, with no handler holding the condition ("Exceptions" below).
 - **`instanceof` / a cast**: a class is its predicate; an interface the generated `Iface%is`
   (the predicates of the topmost classes implementing it, of the library's values that are it,
   and of its lambdas: "Lambdas" below); a library class its own (`simple-string-p`, `integerp`,
@@ -822,7 +825,7 @@ virtual call can run --, classes used):
   an exception out of a static initializer is not wrapped in `ExceptionInInitializerError`, and
   a later use does not raise `NoClassDefFoundError` (stated in `deviations.md`, `.todo/j82`).
 
-## Exceptions (2026-11-17, j73)
+## Exceptions (2026-11-17, j73; the entry and the catch: j82)
 
 - **What the run time raises is TEXT, `(error "~A" "java.lang.X: message")`** (`%java-raise`,
   `%java-npe`): a simple error whose format control is that text on four backends (the site
@@ -836,12 +839,35 @@ virtual call can run --, classes used):
   datum is NIL -- a structure's accessor, an array's element read on null -- is
   `NullPointerException`), else `RuntimeException` of the condition's text.
   `JavaLowering.RAISED` lists the classes the table can answer; `JavaLoweringTest` checks that
-  every `java.*Exception` `java.lisp` names is in it.
+  every `java.*Exception` `java.lisp` names is in it. **The same three host failures are read a
+  second way, off the report TEXT** (`%java-host-report`), where no condition is held -- the
+  entry's line, below: `Division by zero`, `OP: The value NIL is not of type T`,
+  `OP: The value I is not of type (INTEGER 0 (N))`, the one line every backend reports them by
+  ([error-handling.md](error-handling.md), "An uncaught condition reports ONE line"). java-spec
+  `common-lisp-and-java-call-each-other` prints both readings of each on four backends.
 - **Converted at the CATCH, not where raised.** A clause whose class is above one of `RAISED`
   marks it (`caughtRaised`); the generated `%lisp-error` makes the program's object of the
   table's class by its constructor of a message (or of a message and a cause) for those
   classes only, nil for any other, and a clause below lets the condition pass. So a field read
   costs nothing: no test, the host's type error over NIL is the `NullPointerException`.
+  **Raising them at the site instead was measured and not made** (j82, 2026-11-17, IR edited
+  by hand, JVM / precompiled wasm seconds): an index test ahead of every `aref` / `%aset`
+  (132,000,000 accesses of an `int[]`) 2.28 / 1.58 -> 1.73 / 2.79 -- 9 ns an access on wasm,
+  the host's own check being an inline compare already; `(if (eql d 0) ..)` ahead of
+  `truncate` and `rem` (4*10^8 divisions) 3.39 / 7.63 -> 3.42 / 8.68, 2.6 ns a division on
+  wasm; `(or p (%java-npe))` at a field read (4*10^8 reads) 0.72 / 1.81 -> 0.69 / 1.93, free.
+  The array test alone decides it: the host's conditions stay what a Java program raises.
+- **A `catch` is a `handler-case` clause of type `(satisfies %catch<n>)`** (j82):
+  `JavaLowering.catchTest` generates one test per set of classes,
+  `(defun %catch0 (c) (A? (or (%java-thrown c) (%lisp-error c))))`, and the clause binds its
+  parameter to that object again. A condition no clause takes is not signalled again: the
+  landing passes it on as it came, so the entry's location lines name where it was raised.
+  Before, one clause on `error` ended in `(error c)` -- a computed datum, on which the
+  condition narrowing bails ([error-handling.md](error-handling.md), "The condition floor"),
+  so a program with any `try`/`catch` carried every condition class. Rejected: a
+  `handler-bind` whose handler exits for a class it takes (85,071 B of wasm against this
+  shape's 81,402 on the same IR, and 26 ns a `try` entered on both backends: 0.78 / 1.37 ->
+  3.39 / 3.98 s over 10^8 rounds, where this shape measures 0.73 / 1.35).
   Raised at the site, where the host would say nothing or the wrong thing: a call going
   straight to a body through a reference that can be null, an intrinsic's receiver and an
   array's length (`(or x (%java-npe))`; `this`, a literal, a `new`, a concatenation are not
@@ -856,15 +882,28 @@ virtual call can run --, classes used):
 - **A `NullPointerException` the run time raises has no message.** A JDK's describes the null
   expression by its class file's names: `"<local4>"` under the source launcher, `"p"` under
   `javac -g` (measured): no one text to match.
-- **Uncaught: the entry is `(handler-case (progn init.. start) (error (c) (%java-uncaught c)))`**,
-  `%java-uncaught-thrown` in a program that throws objects (it alone asks for
-  `%java-throwable`): `finish-output`, `%warn` of `Exception in thread "main" <text>`, then
-  `%host-exit 1` -- on the JVM `System.exit`, so a compiled Java class invoked in process ends
-  its JVM, as `System.exit` does (`UncaughtReportParityTest` runs compiled classes in process,
-  hence no Java case there: `JavaSpecE2eTest`'s `standalone:` legs run each in a process). An
-  error of rontolisp's own is `RuntimeException` of a simple error's text, else of no message:
-  printing it (`princ`) cost +24 KB, re-signalling it (a computed datum: the condition
-  narrowing bails) Fib 142 KB. No location lines, no stack trace.
+- **Uncaught: the entry is `(%reporting-uncaught #'%java-uncaught-line (%host-exit 1) init.. start)`**
+  (j82), the pipeline's own report of an uncaught condition with the program's line in it
+  ([error-handling.md](error-handling.md), "A program's own line"): the function is called
+  with the condition instance the backend has at hand, or nil, and the condition's report
+  text, and answers `Exception in thread "main" <text>`; the location lines follow
+  (`  at File.java:4 in Uncaught.check(int,int)`: the interpreter and the JVM, wasm under
+  `--report-locations`); then `%host-exit 1` -- on the JVM `System.exit`, so a compiled Java
+  class invoked in process ends its JVM, as `System.exit` does (`UncaughtReportParityTest`
+  runs compiled classes in process, hence no Java case there: `JavaSpecE2eTest`'s
+  `standalone:` legs run each in a process, and check the location line by `at:`). The text:
+  one starting `java.` is the run time's own; a host failure is read off its report
+  (`%java-host-report`, above); any other error of rontolisp's own is `RuntimeException` of
+  its text. `%java-uncaught-thrown-line`, in a program that throws objects, takes a
+  `%java-throwable`'s report -- its `toString()` -- as it is; that `typep` is why the function
+  takes the instance: a `toString()` may answer any text, a host report's included. The text
+  is read with `%string-search` alone (`%java-text-at`): `search` brought its keywords and
+  sequence arms (+10.6 KB of wasm, +15.6 KB with `:start2`), a loop over the characters its
+  signal sites (+11.5 KB in `Fib`, which has none of its own).
+  No handler holds the condition, so no signal site builds one: that was the j73 entry's
+  cost ("Measured" below). A `return` in tail position is located as the statement it is,
+  so the line names the statement that raised. A program that starts threads keeps
+  `%java-thread-main` and its `handler-case`.
 - **`try`-with-resources is written by the parser as JLS 14.20.3.1 spells it**
   (`JavaParser.withResources`: the resource, a `%primary` local, `catch (Throwable)` keeping it
   and rethrowing, a `finally` closing): the lowering sees only `Close`, which checks the type
@@ -902,8 +941,27 @@ virtual call can run --, classes used):
   design (a `%java-error` class, `princ` for the rest) 52,201 B. The `charAt` loop pays EH
   mode (~0.4 s: `_str_char_ref`'s string test in EH mode, the old forms under a `handler-case`
   1.18 s) and the index test (~0.25 s). A `try` in a loop costs the JVM ~13 ns a round (the
-  `handler-case`), wasm nothing measurable. What would take the size back is
-  `.todo/j82`'s.
+  `handler-case`), wasm nothing measurable.
+- **Measured after j82** (2026-11-17, same box and method; `.wasm` / `.class` bytes, before ->
+  after; the times did not move: `Fib` 0.19 / 0.19, `Sieve` 0.63 / 0.55, the `charAt` loop
+  0.27 / 1.38, a `try` in a loop 0.69 / 1.39 s):
+
+  | program | j73 | j82 |
+  |---|---|---|
+  | `Fib` | 41,656 / 61,704 | 2,868 / 25,005 |
+  | `WrapInt` | 41,536 / 62,767 | 2,648 / 26,275 |
+  | `WrapLong` | 41,465 / 62,298 | 2,679 / 25,806 |
+  | `Sieve` | 48,675 / 74,257 | 22,493 / 42,208 |
+  | the `charAt` loop | 42,015 / 63,331 | 12,747 / 28,264 |
+  | a loop calling a method that throws, no `try` | 64,572 / 120,614 | 60,901 / 118,957 |
+  | the same with a `try`/`catch` in the loop | 183,852 / 200,403 | 64,019 / 119,680 |
+  | three `try`/`catch`, one taking a host error | 199,737 / 244,147 | 79,463 / 165,028 |
+
+  `Sieve` over `Fib` is EH mode with signal sites: 8,639 B with no entry at all, 19,522 B
+  with an `unwind-protect` around `main` (IR edited by hand). The programs and how each
+  variant was made: `.todo/artefacts/j82-java-front-end-what-the-exceptions-slice-left/`. What is left of the list j73
+  made is `.todo/j88`'s: the string reads EH mode slows on wasm, `StackOverflowError`,
+  `ExceptionInInitializerError`, checked exceptions, the `NullPointerException` message.
 
 ## Threads (2026-11-17, j76)
 
@@ -1032,7 +1090,7 @@ under a monitor prints the same on four backends.
 | `above(T o)` with `T extends Comparable<T>` | `(defun Box.above(Comparable) (this o) ..)`; `held.compareTo(o)` is `(Comparable.compareTo(Object)%v held o)` |
 | `xs.get(i)` on a `List` | `(java.util.ArrayList.get(int) xs i)` while `ArrayList` is the one list the program makes, else `(java.util.List.get(int)%v xs i)` |
 | `a == b` (strings) | `(eq a b)`; every string constant of such a program is a global `%string<n>` set to `(%java-intern "text")` before `main` |
-| `try { .. } catch (A \| B e) { .. }` | `(handler-case .. (error (%t1) (let ((%t2 (or (%java-thrown %t1) (%lisp-error %t1)))) (cond ((or (A? %t2) (B? %t2)) (let ((e %t2)) ..)) (t (error %t1))))))` |
+| `try { .. } catch (A \| B e) { .. }` | `(handler-case .. ((satisfies %catch0) (%t1) (let ((e (or (%java-thrown %t1) (%lisp-error %t1)))) ..)))`, `(defun %catch0 (%c) (let ((%thrown (or (%java-thrown %c) (%lisp-error %c)))) (or (A? %thrown) (B? %thrown))))` |
 | `p.get()`, `xs.length`, `s.charAt(i)` | `(C.get() (or p (%java-npe)))`; `(length (or xs (%java-npe)))`; `(progn (if (or (< i 0) (>= i (length s))) (%java-string-index i s)) (char-code (char s i)))` |
 | `synchronized (o) { .. }`, a `synchronized` method | `(let ((%t1 (%java-monitor-enter o))) (unwind-protect (progn ..) (%java-monitor-exit %t1)))`, the lock `this`, `'Class` for a static method and `Class.class`; `(progn (or o (%java-npe)) ..)` in a program reaching no member of `Thread` |
 | a `volatile` field read, written | `(rontolisp:with-mutex ((%java-volatile)) (C.f o))`; `(let* ((%t0 v)) (rontolisp:with-mutex ((%java-volatile)) (setf (C.f o) %t0)))`; the plain access in a program reaching no member of `Thread` |
@@ -1118,7 +1176,8 @@ of modules and loaders ("Exceptions").
 calling each case's `main`, run under the JDK running the test (the oracle leg: an expectation
 that is not the JDK's fails there), the interpreter, the JVM, wasm and the component; a
 `standalone:` case is a file of its own (the launch rules, an uncaught exception: the JDK's
-first line and the status 1 on every leg; `stderr:` the whole standard error but a JDK's frame
+first line and the status 1 on every leg, `at:` the end of the location line under it on the
+interpreter and the JVM; `stderr:` the whole standard error but a JDK's frame
 lines); a `refused:` case is the scaffold with the case's statements, which the JDK has to refuse with
 `error` at that line and the front end at the same line with a message starting the same. In
 process, part of `./mvnw test`. `JavaLoweringTest` (the table as emitted forms, names and constants, the

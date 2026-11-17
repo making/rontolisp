@@ -2303,6 +2303,11 @@ final class JvmExprCompiler {
 			case LispNames.HC_DEPTH_DEC_INTERNAL -> JvmHandlerCaseCompiler.compileDepthDec(ctx, className);
 			case LispNames.DYN_RESTORE_INTERNAL -> JvmLetCompiler.compileDynRestore(cons, ctx);
 			case LispNames.HB_GUARD_INTERNAL -> JvmHandlerCaseCompiler.compileGuard(cons, ctx, className);
+			// main's last handler reads the reporter off the program
+			// (JvmUncaughtHandler);
+			// where it is written, the form is its body.
+			case LispNames.REPORTING_UNCAUGHT_INTERNAL ->
+				JvmExprCompiler.compileExpr(UncaughtReport.reportingBody(cons), ctx, className);
 			case LispNames.PROGRAM_ERROR_INTERNAL -> {
 				CompileWarnings.warnStaticProgramError(cons);
 				JvmExprCompiler.compileExpr(LispMacroExpander.lowerProgramError(cons, ctx.closRegistry,

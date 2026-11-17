@@ -117,7 +117,7 @@ class SourceLanguageTest {
 					"(DEFSTRUCT (|Main| (:CONC-NAME |Main.|) (:CONSTRUCTOR |%make-Main| NIL) (:PREDICATE |Main?|)"
 							+ " (:COPIER NIL)))",
 					"(DEFUN |Main.main()| (|this|) (WRITE-LINE \"#.\"))", "(DEFUN |Main.new()| NIL (|%make-Main|))",
-					"(HANDLER-CASE (|Main.main()| (|Main.new()|)) (ERROR (|%c|) (RONTOLISP::%JAVA-UNCAUGHT |%c|)))");
+					"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (|Main.main()| (|Main.new()|)))");
 		// At the prompt an open bracket, string or statement continues a buffer; a
 		// missing
 		// ; at its end does not, and a wrong buffer is complete, to be reported.

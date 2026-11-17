@@ -142,12 +142,17 @@ static 初期化子が投げた例外は、`ExceptionInInitializerError` に包�
 
 **捕捉されなかった例外は、スタックトレースなしで報告されます。** 標準エラー出力に、JDK が
 最初に書く行、つまり `Exception in thread "main"` と例外の `toString()` を書き、終了ステータス
-1 で終了します。フレームと原因（cause）の行は続きません。`printStackTrace()` は、例外、
-その例外が抑制した例外、原因を JDK と同じ形で書きますが、フレームの行は書きません。
+1 で終了します。JDK がフレームを書く位置には 1 行だけ続きます。例外が発生した文のファイルと
+行、その文が書かれているメソッドです。インタプリタと JVM 出力はこの行を書きます。`.wasm`
+出力は [`--report-locations`](../compiling/wasm.md#uncaught-condition-locations---report-locations)
+を付けてコンパイルしたときに書きます。原因（cause）の行は
+続きません。`printStackTrace()` は、例外、その例外が抑制した例外、原因を JDK と同じ形で
+書きますが、フレームの行は書きません。
 
 ```console
 $ rontolisp Uncaught.java
 Exception in thread "main" java.lang.IllegalStateException: insufficient funds: 30
+  at Uncaught.java:4 in Uncaught.check(int,int)
 ```
 
 **コンパイラが報告するエラーの一部は報告されません。** そのようなプログラムは実行されます。

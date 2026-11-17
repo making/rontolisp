@@ -301,6 +301,8 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private static final LispSymbol LISP_ERROR = new LispSymbol("%lisp-error");
 
+	private static final LispSymbol THROWN = new LispSymbol("%thrown");
+
 	/**
 	 * The classes of the exceptions the run time raises as Lisp conditions, which
 	 * {@code %java-exception-of} in {@code java.lisp} -- the one table from a condition
@@ -361,6 +363,11 @@ final class JavaLowering implements JavaEmitter.Context {
 	private final Set<JavaClass> interfaceTests = new LinkedHashSet<>();
 
 	private final Set<LispSymbol> generated = new LinkedHashSet<>();
+
+	/** The test of each catch clause's classes, by the classes ({@link #catchTest}). */
+	private final Map<String, LispSymbol> catchTestNames = new HashMap<>();
+
+	private final Map<String, LispVal> catchTests = new LinkedHashMap<>();
 
 	/**
 	 * The classes of {@link #RAISED} some {@code catch} of the program takes: the ones
@@ -712,6 +719,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		made.addAll(this.variables);
 		made.addAll(this.functions);
 		made.addAll(this.dispatchers.values());
+		made.addAll(this.catchTests.values());
 		made.addAll(generated);
 		made.add(runs ? uncaught(initialization, entry) : progn(initialization));
 		Set<String> named = new HashSet<>();
@@ -1615,24 +1623,26 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/**
-	 * The static initialization before {@code main} and {@code main}, inside the handler
-	 * of what nothing caught: the line a JDK writes and the status 1. Only a program that
-	 * throws objects asks the condition for one.
+	 * The static initialization before {@code main} and {@code main}, where what nothing
+	 * caught is reported by the line a JDK writes, and the status 1: the pipeline's own
+	 * report of an uncaught condition with the program's line in it, so no handler holds
+	 * the condition. Only a program that throws objects asks the condition for one.
 	 */
 	private LispVal uncaught(List<LispVal> initialization, LispVal start) {
-		LispSymbol condition = new LispSymbol("%c");
 		List<LispVal> body = new ArrayList<>(initialization);
 		body.add(start);
-		LispVal run = body.size() == 1 ? start : form(cl("progn"), body);
 		if (startsThreads()) {
 			// the program ends when its threads that are no daemons have: the run time
 			// reports what main left uncaught, then waits for them
 			LispSymbol ended = new LispSymbol("%t");
-			return runtimeCall("thread-main", list(cl("lambda"), NIL, run),
+			return runtimeCall("thread-main", list(cl("lambda"), NIL, progn(body)),
 					list(cl("lambda"), list(ended), library(THREAD, "finish", List.of(ended))));
 		}
-		return list(cl("handler-case"), run, list(cl("error"), list(condition),
-				runtimeCall(this.raises ? "uncaught-thrown" : "uncaught", condition)));
+		List<LispVal> reporting = new ArrayList<>();
+		reporting.add(function(JavaForms.runtime(this.raises ? "uncaught-thrown-line" : "uncaught-line")));
+		reporting.add(call("%host-exit", integer(1)));
+		reporting.addAll(body);
+		return form(cl("%reporting-uncaught"), reporting);
 	}
 
 	private static final String THREAD = "java.lang.Thread";
@@ -6242,7 +6252,9 @@ final class JavaLowering implements JavaEmitter.Context {
 							: "incompatible types: missing return value");
 				}
 				if (tail) {
-					return exit.value() == null ? List.of() : List.of(value);
+					// located as the statement it is: what its value raises is reported
+					// at this line
+					return exit.value() == null ? List.of() : List.of(located(value, exit.pos()));
 				}
 				Objects.requireNonNull(this.frames.peek()).exits = true;
 				return List.of(located(list(cl("return-from"), FUNCTION_BLOCK, value), exit.pos()));
@@ -6410,23 +6422,24 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/**
-	 * {@code try}: the catch clauses are one {@code handler-case} clause testing the
-	 * thrown object's class, clause by clause, and signalling again when none takes it;
-	 * {@code finally} is an {@code unwind-protect}. A condition that is no thrown object
-	 * -- one the run time or the host raised -- is made the program's exception by
+	 * {@code try}: each catch clause is a {@code handler-case} clause whose type is
+	 * {@code (satisfies test)}, the test ({@link #catchTest}) asking whether the thrown
+	 * object is of the clause's classes; {@code finally} is an {@code unwind-protect}. A
+	 * condition no clause takes goes on as it came -- nothing signals it again, which
+	 * would be a signal of a computed datum (the pipeline then keeps every condition
+	 * class) and would lose where it was raised. A condition that is no thrown object --
+	 * one the run time or the host raised -- is made the program's exception by
 	 * {@code %lisp-error} when a clause can take that exception.
 	 */
 	private LispVal attempt(Try attempt) {
 		LispVal body = progn(scoped(attempt.body(), false));
 		if (!attempt.catches().isEmpty()) {
 			LispSymbol condition = temporary();
-			LispSymbol thrown = temporary();
-			boolean takesLispErrors = false;
-			List<LispVal> arms = new ArrayList<>();
-			arms.add(cl("cond"));
+			List<LispVal> clauses = new ArrayList<>();
 			for (Catch clause : attempt.catches()) {
 				List<JavaClass> taken = new ArrayList<>();
 				JavaType type = null;
+				boolean takesLispErrors = false;
 				for (TypeName written : clause.types()) {
 					JavaClass one = caught(written);
 					for (JavaClass other : taken) {
@@ -6443,27 +6456,59 @@ final class JavaLowering implements JavaEmitter.Context {
 				Local bound = bind(clause.name(), Objects.requireNonNull(type), clause.pos(), clause);
 				List<LispVal> handler = sequence(clause.body().statements(), 0, false);
 				this.scopes.pop();
-				List<LispVal> tests = new ArrayList<>();
-				for (JavaClass one : taken) {
-					tests.add(list(JavaNames.predicate(one), thrown));
-				}
-				arms.add(list(tests.size() == 1 ? tests.get(0) : form(cl("or"), tests),
-						JavaForms.let(bound.symbol(), thrown, handler)));
+				clauses.add(list(list(cl("satisfies"), catchTest(taken, takesLispErrors)), list(condition),
+						JavaForms.let(bound.symbol(), thrownObject(condition, takesLispErrors), handler)));
 			}
-			arms.add(list(T, call("error", condition)));
-			LispVal object = runtimeCall("thrown", condition);
-			if (takesLispErrors) {
-				this.generated.add(LISP_ERROR);
-				object = call("or", object, list(LISP_ERROR, condition));
-			}
-			body = list(cl("handler-case"), body,
-					list(cl("error"), list(condition), JavaForms.let(thrown, object, List.of(list(arms)))));
+			body = form(cl("handler-case"), prepend(body, clauses));
 		}
 		if (attempt.finallyBlock() != null) {
 			List<LispVal> cleanup = scoped(attempt.finallyBlock(), false);
 			body = form(cl("unwind-protect"), prepend(body, cleanup));
 		}
 		return body;
+	}
+
+	/**
+	 * The object a condition stands for: the one it holds, else -- where the clause can
+	 * take an exception of the run time's -- the one {@code %lisp-error} makes of it.
+	 */
+	private LispVal thrownObject(LispSymbol condition, boolean takesLispErrors) {
+		LispVal object = runtimeCall("thrown", condition);
+		if (takesLispErrors) {
+			this.generated.add(LISP_ERROR);
+			object = call("or", object, list(LISP_ERROR, condition));
+		}
+		return object;
+	}
+
+	/**
+	 * The function a catch clause's {@code satisfies} type names: whether a condition's
+	 * object is of one of the clause's classes. One per set of classes, made once.
+	 */
+	private LispSymbol catchTest(List<JavaClass> taken, boolean takesLispErrors) {
+		StringBuilder key = new StringBuilder(takesLispErrors ? "+" : "-");
+		for (JavaClass one : taken) {
+			key.append(' ').append(JavaNames.predicate(one).name());
+		}
+		LispSymbol name = this.catchTestNames.computeIfAbsent(key.toString(),
+				k -> new LispSymbol("%catch" + this.catchTestNames.size()));
+		if (!this.catchTests.containsKey(name.name())) {
+			LispSymbol condition = new LispSymbol("%c");
+			LispVal object = thrownObject(condition, takesLispErrors);
+			LispVal test;
+			if (taken.size() == 1) {
+				test = list(JavaNames.predicate(taken.get(0)), object);
+			}
+			else {
+				List<LispVal> tests = new ArrayList<>();
+				for (JavaClass one : taken) {
+					tests.add(list(JavaNames.predicate(one), THROWN));
+				}
+				test = JavaForms.let(THROWN, object, List.of(form(cl("or"), tests)));
+			}
+			this.catchTests.put(name.name(), list(cl("defun"), name, list(condition), test));
+		}
+		return name;
 	}
 
 	/**

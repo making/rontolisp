@@ -3926,10 +3926,21 @@ public final class Environment implements Scope {
 			return new LispInteger(
 					System.identityHashCode(x instanceof am.ik.rontolisp.LispJavaObject host ? host.ref() : x));
 		}));
-		// search's string arm decides nothing here: SequenceScanFast answered what it
-		// could before the prelude body ran (.kb/string-search-runtime.md).
-		env.defineFunction(LispNames.STRING_SEARCH,
-				new LispFunction(LispNames.STRING_SEARCH, args -> am.ik.rontolisp.LispNil.INSTANCE));
+		// search's string arm decides nothing here for a bounded search:
+		// SequenceScanFast answered what it could before the prelude body ran
+		// (.kb/string-search-runtime.md). Two whole strings are decided, as on the
+		// compiled backends, for a caller that asks the primitive itself.
+		env.defineFunction(LispNames.STRING_SEARCH, new LispFunction(LispNames.STRING_SEARCH, args -> {
+			if (args.size() == 6 && args.get(0) instanceof LispString part && args.get(1) instanceof LispString whole
+					&& args.get(2) instanceof LispInteger from1 && from1.value() == 0
+					&& args.get(3) == am.ik.rontolisp.LispNil.INSTANCE && args.get(4) instanceof LispInteger from2
+					&& from2.value() == 0 && args.get(5) == am.ik.rontolisp.LispNil.INSTANCE) {
+				String text = whole.value();
+				int at = text.indexOf(part.value());
+				return new LispInteger(at < 0 ? -1 : text.codePointCount(0, at));
+			}
+			return am.ik.rontolisp.LispNil.INSTANCE;
+		}));
 		// %string-split, %string-join, %string-count, %sort-by-keys: no arm here either,
 		// the callers' loops run (.kb/bulk-primitives.md).
 		for (String bulk : List.of(LispNames.STRING_SPLIT, LispNames.STRING_JOIN, LispNames.STRING_COUNT,
