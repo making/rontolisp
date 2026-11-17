@@ -487,6 +487,39 @@ cases:
               return -1;
           }
 
+          static final boolean ALWAYS = true;
+
+          // A variable is assigned where every path to it assigns it, as the language
+          // follows them: a loop whose condition is a constant, a switch with a default,
+          // a try, && and ?:, a labeled block; a blank final assigned once is captured.
+          static String assigned(int k, boolean b) {
+              int looped;
+              while (ALWAYS) { looped = k; break; }
+              final boolean stop = true;
+              int counted;
+              do { counted = k + 1; } while (!stop);
+              int picked;
+              switch (k) { case 1: picked = 10; break; default: picked = 20; }
+              int tried;
+              try { tried = k * 2; } finally { k++; }
+              int both;
+              String shown = b && (both = 5) > 0 ? "both" + both : "none";
+              int chosen;
+              int either = b ? (chosen = 1) : (chosen = 2);
+              int labeled;
+              block: { if (b) { labeled = 1; break block; } labeled = 2; }
+              final int captured;
+              if (b) captured = 1; else captured = 2;
+              Supplier<Integer> read = () -> captured * 100;
+              return looped + " " + counted + " " + picked + " " + tried + " " + shown + " " + chosen + either + " " + labeled + " " + read.get();
+          }
+
+          static int spin(int n) {
+              do {
+                  if (n-- < 0) return n;
+              } while (true);
+          }
+
           public static void main(String[] args) {
               int n = 0, i = 0;
               while (true) {
@@ -538,12 +571,14 @@ cases:
               var count = total;
               if (count > 0) ; else count = -1;
               System.out.println(total + " " + text + count);
+              System.out.println(assigned(1, true) + " | " + assigned(2, false) + " | " + spin(2));
           }
       }
     expected: |
       25 11 20 1
       8 105 5 ABC 1 -1
       26 t26
+      1 2 10 2 both5 11 1 100 | 2 3 20 4 none 22 2 200 | -2
   # extends is :include, a field a slot with its type's default, a constructor a
   # function run on a made instance: this(..) or super(..) first, then the field
   # initializers, then its body.
@@ -1932,6 +1967,7 @@ cases:
               return switch (c) {
                   case 'a':
                   case 'e': yield 1;
+                  case 'y': System.out.print("y runs into z, ");
                   case 'z': { int v = c - 'a'; yield v; }
                   default: yield 0;
               };
@@ -1939,7 +1975,7 @@ cases:
 
           public static void main(String[] args) {
               for (int i = 0; i < 6; i++) System.out.print(name(i) + " " + fall(i) + (i < 5 ? ", " : "\n"));
-              System.out.println(fall(9) + " " + arrow("a") + arrow("c") + arrow("z") + " " + old('e') + old('z') + old('q'));
+              System.out.println(fall(9) + " " + arrow("a") + arrow("c") + arrow("z") + " " + old('e') + old('z') + old('q') + old('y'));
               for (SwitchColor c : SwitchColor.values()) System.out.print(color(c) + covered(c) + " ");
               System.out.println(day(6) + ", " + day(5) + ", " + day(1) + " " + nested(1, "y") + " " + nested(2, "") + " " + nested(3, "") + " " + nested(3, "abc"));
               try { day(9); } catch (IllegalArgumentException e) { System.out.println(e.getMessage()); }
@@ -1976,7 +2012,7 @@ cases:
       }
     expected: |
       many 999, one 111, few 110, few 100, many 999, many 999
-      1000 abccother 1250
+      y runs into z, 1000 abccother 125024
       1r 2g 3b weekend, last weekday, weekday 20 300 0 3
       day 9
       zero5|one7twotwo one7twotwo two d|d|d|
@@ -2161,6 +2197,19 @@ cases:
 
           class Wide extends Inner {
               int reveal() { return super.reveal() * 2 + secret; }
+
+              class Peek {
+                  int up() { return Wide.super.reveal() * 1000 + Wide.this.reveal(); }
+              }
+          }
+
+          class Early extends Inner {
+              final int seen;
+
+              Early(int k) {
+                  seen = NestedOuter.this.secret + k;
+                  super();
+              }
           }
 
           int count() { return cells.length; }
@@ -2168,6 +2217,17 @@ cases:
           Inner inner() { return new Inner(); }
 
           static int peek(NestedOuter o) { return o.secret + new Counter(1).v; }
+      }
+
+      class NestedFar extends NestedOuter.Inner {
+          NestedFar(NestedOuter o) {
+              o.super();
+              bonus = 3;
+          }
+
+          NestedFar() {
+              this(new NestedOuter());
+          }
       }
 
       class Nested {
@@ -2182,11 +2242,18 @@ cases:
               far.bonus = 10;
               System.out.println(n.twice() + " " + in.reveal() + " " + far.reveal() + " " + wide.reveal() + " " + deep.all() + " " + NestedOuter.peek(o) + " " + in.accept(inner -> inner.bonus + 100));
               System.out.println(n.getClass().getName() + " " + in.getClass().getName() + " " + deep.getClass().getName() + " " + deep.getClass().getSimpleName() + " " + (wide instanceof NestedOuter.Wide) + " " + (in instanceof NestedOuter.Wide));
+              NestedOuter.Inner given = other.new Inner() { int reveal() { return super.reveal() + 1000; } };
+              NestedOuter.Wide wider = o.new Wide();
+              NestedOuter none = null;
+              System.out.println(given.reveal() + " " + new NestedFar(other).reveal() + " " + new NestedFar().reveal() + " " + wider.new Peek().up() + " " + o.new Early(8).seen + " " + given.getClass().getName());
+              try { new NestedFar(none); } catch (NullPointerException e) { System.out.println("outer.super(..) of null throws"); }
           }
       }
     expected: |
       44 45 57 132 7 1 42 1 2 43 101
       NestedOuter$Counter NestedOuter$Inner NestedOuter$Inner$Deep Deep true false
+      1048 50 47 45132 50 Nested$1
+      outer.super(..) of null throws
   # A class declared in a method is lowered where it stands: each local it reads is a
   # slot set where an instance is made, through a class declared inside another too;
   # an anonymous class's constructor hands its arguments to its superclass's.
@@ -2271,14 +2338,16 @@ cases:
                   runs.add(() -> System.out.print(new Object() { int twice() { return copy * 2; } }.twice() + " "));
               }
               for (Runnable r : runs) r.run();
-              System.out.println("done");
+              Supplier<Object> made = () -> new Object() { };
+              Object after = new Object() { };
+              System.out.println("done " + made.get().getClass().getName() + " " + after.getClass().getName());
           }
       }
     expected: |
       102 L2 302 L1 Pair[a=1, b=2] 107 OFF2
       p:a1 p:b2 f5 14
       anon=150 anon Locals$1Counter Locals$2 Locals$3 Locals$1Pair
-      run 0L100 0 run 1L100 2 run 2L100 4 done
+      run 0L100 0 run 1L100 2 run 2L100 4 done Locals$6 Locals$7
   # A pattern's binding is a variable of its statement set where the test holds, in
   # scope where the language says: through &&, past a ! and an early exit, after a loop;
   # a record pattern reads the components; a sealed type's cases need no default.
@@ -2572,6 +2641,8 @@ cases:
 
       interface FaceLoud extends FaceGreeter {
           default String twice(String name) { return greet(name).toUpperCase() + "!"; }
+
+          default String help() { return "loud " + FaceGreeter.super.help(); }
       }
 
       class FacePlain implements FaceGreeter {
@@ -2580,6 +2651,8 @@ cases:
 
       class FaceShout extends FacePlain implements FaceLoud {
           public String greet(String name) { return "hey " + name; }
+
+          public String help() { return FaceLoud.super.help() + "?"; }
       }
 
       class FaceQuiet extends FaceShout {
@@ -2597,7 +2670,7 @@ cases:
       }
     expected: |
       Hi aHi a | HEY B! | (hey c) | <d><d> | PSST E!
-      h6Hi xHi x | h6HEY X! | h6<x><x> | Hi dear q | Hi 6Hi 6
+      h6Hi xHi x | loud h6HEY X!? | h6<x><x> | Hi dear q | Hi 6Hi 6
   # A variable arity call fits last and makes the array; new T[n][m] makes every level;
   # a text block loses the indentation its lines share; _ names nothing; the
   # conditional's type is the one its operands share; a compound assignment casts.
@@ -5082,6 +5155,47 @@ refused:
     - name: an-unreachable-statement
       body: 'return; int x = 1;'
       error: "unreachable statement"
+    # What is assigned and reached follows every branch as the language does: an
+    # assignment on one path of a switch, a try, a do, && or ?: is no assignment after it.
+    - name: a-switch-without-a-default-may-assign-nothing
+      body: 'int x; switch (args.length) { case 1: x = 1; } int y = x;'
+      error: "variable x might not have been initialized"
+    - name: a-try-may-stop-before-it-assigns
+      body: 'int x; try { x = Integer.parseInt("1"); } catch (RuntimeException e) { } int y = x;'
+      error: "variable x might not have been initialized"
+    - name: a-do-may-break-before-it-assigns
+      body: 'int x; do { if (args.length > 0) break; x = 1; } while (false); int y = x;'
+      error: "variable x might not have been initialized"
+    - name: an-or-may-skip-its-assignment
+      body: 'int x; boolean b = args.length > 0 || (x = 1) > 0; int y = x;'
+      error: "variable x might not have been initialized"
+    - name: a-blank-final-assigned-twice
+      body: 'final int x; if (args.length > 0) x = 1; x = 2;'
+      error: "variable x might already have been assigned"
+    - name: a-blank-final-assigned-in-a-loop
+      body: 'final int x; for (String a : args) x = 1;'
+      error: "variable x might be assigned in loop"
+    - name: a-blank-local-assigned-twice-is-not-effectively-final
+      body: 'int x; x = 1; x = 2; Runnable r = () -> System.out.println(x);'
+      error: "local variables referenced from a lambda expression must be final or effectively final"
+    - name: a-do-loop-that-completes-misses-its-return
+      body: 'class L { int f(boolean b) { do { b = !b; } while (b); } }'
+      error: "missing return statement"
+    - name: a-labeled-block-left-by-a-break-misses-its-return
+      body: 'class L { int f(boolean b) { a: { if (b) break a; return 1; } } }'
+      error: "missing return statement"
+    - name: a-switch-without-a-default-misses-its-return
+      body: 'class L { int f(int k) { switch (k) { case 1: return 1; } } }'
+      error: "missing return statement"
+    - name: a-blank-final-field-no-constructor-assigns
+      body: 'class L { final int f; }'
+      error: "variable f not initialized in the default constructor"
+    - name: a-switch-rule-that-gives-no-value
+      body: 'int k = switch (args.length) { case 0 -> { } default -> 1; };'
+      error: "switch rule completes without providing a value"
+    - name: an-inner-superclass-with-no-instance-around-it
+      body: 'class O { class I { } } class S extends O.I { }'
+      error: "an enclosing instance that contains O.I is required"
     - name: a-type-argument-is-no-subtype-of-another
       body: 'Box<String> b = new Box<String>("a"); Box<Object> o = b;'
       error: "incompatible types: Box<String> cannot be converted to Box<Object>"

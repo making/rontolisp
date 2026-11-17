@@ -155,8 +155,16 @@ final class JavaSyntax {
 	 * @param pos the keyword
 	 * @param onSuper whether it is {@code super(..)}
 	 * @param arguments the arguments
+	 * @param outer the instance before {@code .super(..)}, which the superclass, an inner
+	 * class, gets as its outer instance; or {@code null}
 	 */
-	record ConstructorCall(int pos, boolean onSuper, List<Expression> arguments) implements Expression {
+	record ConstructorCall(int pos, boolean onSuper, List<Expression> arguments,
+			@Nullable Expression outer) implements Expression {
+
+		ConstructorCall(int pos, boolean onSuper, List<Expression> arguments) {
+			this(pos, onSuper, arguments, null);
+		}
+
 	}
 
 	/**
@@ -276,9 +284,15 @@ final class JavaSyntax {
 	 * @param selector what it switches over
 	 * @param cases its cases, in order
 	 * @param arrow whether its cases are written with {@code ->}
+	 * @param end its closing brace
 	 */
-	record Switch(int pos, Expression selector, List<SwitchCase> cases,
-			boolean arrow) implements Expression, Statement {
+	record Switch(int pos, Expression selector, List<SwitchCase> cases, boolean arrow,
+			int end) implements Expression, Statement {
+
+		Switch(int pos, Expression selector, List<SwitchCase> cases, boolean arrow) {
+			this(pos, selector, cases, arrow, pos);
+		}
+
 	}
 
 	/**
@@ -342,7 +356,19 @@ final class JavaSyntax {
 	record Continue(int pos, @Nullable String label) implements Statement {
 	}
 
-	record Block(int pos, List<Statement> statements) implements Statement {
+	/**
+	 * A block.
+	 *
+	 * @param pos its opening brace
+	 * @param statements its statements
+	 * @param end its closing brace, where what is said of its end points
+	 */
+	record Block(int pos, List<Statement> statements, int end) implements Statement {
+
+		Block(int pos, List<Statement> statements) {
+			this(pos, statements, pos);
+		}
+
 	}
 
 	record Throw(int pos, Expression value) implements Statement {

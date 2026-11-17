@@ -127,15 +127,8 @@ Exception in thread "main" java.lang.IllegalStateException: insufficient funds: 
 
 **Some errors a compiler reports are not reported**, and such a program runs. `throws`
 clauses are read and not checked: a checked exception that is neither caught nor declared
-is not reported, nor is a `catch` of one its `try` cannot throw. A local read before it is assigned is
-reported when no path assigns it, following `if`, `while` and `for`; an assignment anywhere
-inside a `switch`, a `try`, a `do` loop or a conditional expression counts as made. A
-statement that cannot be reached is reported after a `return`, a `throw`, a `break`, a
-`continue` and a loop that never ends, and a missing `return` where a method's last
-statement surely completes; the cases a compiler finds beyond those are not. A local
-declared without a value, assigned twice and then read by a lambda or a local class is not
-refused. A type argument outside the bound of its type parameter is not reported, and no
-unchecked warning is printed. A `protected` member is reached from every class under its
+is not reported, nor is a `catch` of one its `try` cannot throw. A type argument outside
+the bound of its type parameter is not reported, and no unchecked warning is printed. A `protected` member is reached from every class under its
 class, where the language allows an instance member only through a reference of that
 class's own type and a constructor only through `super(..)`.
 
@@ -204,9 +197,8 @@ Each of these is an error naming the construct and its position.
 
 - Annotation types, `assert`.
 - Class literals, but as the lock of a `synchronized` statement.
-- A `switch` over a `long`, a `float`, a `double` or a `boolean`; a switch expression whose colon
-  cases run into the next; `Interface.super.m()`; a class extending an inner class from
-  outside that class's outer class; an anonymous class made with `outer.new` or with `<>`.
+- A `switch` over a `long`, a `float`, a `double` or a `boolean`; a method reference through a
+  qualified `super` (`Interface.super::m`); an anonymous class made with `<>`.
 - A field hiding one of a superclass.
 - A type written `Outer<A>.Inner`, and a member of an inner class of a parameterized class
   read from outside that class; a cast to several types (`(A & B) x`); a cast or an

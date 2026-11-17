@@ -751,11 +751,6 @@ final class JavaClasses {
 			if (superclass.isEnum) {
 				throw error(source, extended.pos(), "cannot inherit from final " + superclass.simpleName());
 			}
-			if (superclass.hasOuterInstance() && !superclass.isLocal
-					&& !(made.hasOuterInstance() && encloses(superclass.outer, made))) {
-				throw unsupported(source, extended.pos(), "a class extending the inner class " + superclass.simpleName()
-						+ " from outside its outer class");
-			}
 			made.superclass = superclass.intrinsic ? null : superclass;
 		}
 		else if (made.isEnum) {
@@ -781,18 +776,6 @@ final class JavaClasses {
 			}
 			made.permits.add(require(permitted.name(), permitted.pos(), made, unit));
 		}
-	}
-
-	/**
-	 * Whether a class is, or extends, one of the classes another's declaration stands in.
-	 */
-	private static boolean encloses(@Nullable JavaClass outer, JavaClass inner) {
-		for (JavaClass up = inner.outer; up != null; up = up.outer) {
-			if (outer != null && up.isSubclassOf(outer)) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	private static TypeName simpleType(JavaClass made, int pos, int dimensions) {

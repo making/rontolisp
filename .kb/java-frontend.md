@@ -10,8 +10,9 @@ rules: [java-frontend-provenance.md](java-frontend-provenance.md). `--no-gc` is 
 it: j69 (2026-11-17); type parameters, inference, lambdas and boxes: j70 (2026-11-17); the
 library: j71 (2026-11-17); the numbers: j72 (2026-11-17); the exceptions: j73 (2026-11-17);
 several files, a session, the calls across languages, the tools and annotations: j74
-(2026-11-17); threads: j76 (2026-11-17); what comes after is `.todo/j77`, `j78`, `j79`, `j81`,
-`j82` and `j83` (what j69, j70, j71, j72, j73 and j76 left).
+(2026-11-17); threads: j76 (2026-11-17); the flow, outer instances and qualified `super`: j77
+(2026-11-17); what comes after is `.todo/j78`, `j79`, `j81`, `j82` and `j83` (what j70, j71,
+j72, j73 and j76 left).
 
 ## Where it sits
 
@@ -20,9 +21,10 @@ several files, a session, the calls across languages, the tools and annotations:
   `JavaClasses` (the class table of one program), `JavaClass` / `JavaType` (members, static
   types), `JavaTypes` (the relations between types: substitution, subtyping, capture,
   inference), `JavaIntrinsics` (the library classes whose values are Lisp values), `JavaLowering`
-  (tree -> core forms, typing as it goes), `JavaInitOrder` (when a class's static initialization
-  runs), `JavaPatterns` (what a switch's patterns cover), `JavaNames` (spelling), `JavaForms`,
-  `Java` (facade).
+  (tree -> core forms, typing as it goes), `JavaFlow` (what the flow of a class's bodies
+  decides: reachability, definite assignment, effective finality), `JavaInitOrder` (when a
+  class's static initialization runs), `JavaPatterns` (what a switch's patterns cover),
+  `JavaNames` (spelling), `JavaForms`, `Java` (facade).
 - Reached ONLY through the seam: `eval/SourceLanguage.JAVA`, `.java` or `--source-language java`
   ([source-language.md](source-language.md)). A program is the file it starts at and the files
   of its source tree it names, lowered whole together ("A program of several files" below). A
@@ -259,14 +261,24 @@ program compiled to a class of the same name would collide with it.
   its `extends` chain, so the slots of a class and its superclass never meet), set by the
   function making the instance ahead of the constructor; a superclass that is an inner class
   gets the instance of ITS outer class found from the subclass's (`outerInstance`). A member of
-  a class around is read through the chain of those slots.
+  a class around is read through the chain of those slots. Where the subclass's own outer
+  instance does not hold one (`givesSuperOuter`), its constructors give it: `o.super(..)` stores
+  `(or o (%java-npe))` in the superclass's slot ahead of the superclass's constructor, and a
+  constructor with neither that nor `this(..)` is the compiler's `an enclosing instance that
+  contains O.I is required`; an anonymous class made with `o.new I() { }` takes it as an argument
+  of the function making it (`JavaClass.superOuterGiven`, `%super-outer`). Ahead of `this(..)` or
+  `super(..)` the instance is out of reach but its outer instance is set already, so
+  `Outer.this` reads it there (`enclosing`).
+- **`super.m()`, `Outer.super.m()`, `I.super.m()`** call one body directly (`superCall`): the
+  superclass's, the superclass's of the class around on the instance around, the default of an
+  interface the class names in its `implements`. `I.super::m` stays refused.
 - **A local and an anonymous class are lowered where they are declared**, once a pass, behind a
   scope that marks the class's boundary. A local read across the boundary is a CAPTURE: a slot
   `val$<name>$<depth>` of the class, set where an instance is made from the value the name has
   there (which is the enclosing local class's own slot when the creation stands in one). By
-  value, so the local must be effectively final: a local with an initializer that is assigned
-  again is refused where a lambda or a class reads it. Rejected: lowering the class's methods as
-  closures (a method is a `defun` taking `this`; dispatch and `super` calls name it).
+  value, so the local must be effectively final -- which the flow decides ("The flow" below).
+  Rejected: lowering the class's methods as closures (a method is a `defun` taking `this`;
+  dispatch and `super` calls name it).
 - **An anonymous class's constructor** takes the parameters of the superclass constructor its
   arguments pick and hands them on (`Method.passesTo`); it is made where the class is created.
 - **An enum** extends the library's `Enum` (source); a constant is a `static final` field whose
@@ -287,12 +299,19 @@ program compiled to a class of the same name would collide with it.
   wherever it is written. Colon cases none of which runs into the next are the same `cond`, an
   empty case giving its labels to the next. Cases that do run on are numbered: the selector
   picks the first to run and each runs under `(if (<= picked i) ..)`, inside `(block %break ..)`
-  -- no `tagbody`. A local declared in a colon case is the whole switch's: hoisted to one `let`.
-  A `null` selector reaches `%java-null-switch` unless a case names `null`. A switch expression
-  with no target type is lowered twice: once to find the type its arms share.
+  -- no `tagbody`; a switch expression's the same, its `yield`s leaving `(block %yield ..)`, the
+  last case falling into `%java-no-match` (`runOn`). A local declared in a colon case is the
+  whole switch's: hoisted to one `let`. A `null` selector reaches `%java-null-switch` unless a
+  case names `null`. A switch expression with no target type is lowered twice: once to find the
+  type its arms share. `case` would be no faster than this `cond`: it expands to the same chain
+  of `eql` tests (measured below).
 - **A pattern's binding is a variable of the statement the pattern stands in**, declared by a
   `let` around the statement and set where the test holds:
-  `(and (Circle? o) (progn (setq c o) t))`. Where it is in SCOPE is the language's: `flow`
+  `(and (Circle? o) (progn (setq c o) t))`; an `if` or a `?:` testing it runs the stores at the
+  head of its branch instead, `(if (Circle? o) (progn (setq c o) ..) ..)` (`branch`): the truth
+  value the `and` makes and the `if` tests again cost a loop of pattern tests 9% on wasm and
+  the component, nothing on the JVM, and binding `c` by a `let` in the branch measured the same
+  as the variable once that value was gone (below). Where it is in SCOPE is the language's: `flow`
   answers the bindings a condition leaves when true and when false, `&&`/`||`/`!`/`?:` and
   `if`/`while`/`for` put them in scope, and a statement whose branch never completes leaves the
   other's bindings to the end of its block (`introduced`). Rejected: a `let` per binding nested
@@ -305,11 +324,49 @@ program compiled to a class of the same name would collide with it.
   `<label>%continue`; an unlabeled `break` of a labeled loop goes to the same block.
 - **`this(..)`/`super(..)` after statements**: the constructor's body is lowered as written, the
   call where it stands, followed for `super(..)` by the instance initializers; ahead of it the
-  instance is refused (`early`) but for the store of a field.
+  instance is refused (`early`) but for the store of a field and the instance around it.
+- **A `final` local with a constant initializer is a constant variable**: its reads carry the
+  value (`Local.constant`, `constantValue`), so `while (DONE)` and a `case` label read it as the
+  language does.
 - **A default method** is the body `implementation` answers when no class above declares one;
   a dispatcher tests the topmost class inheriting it. A lambda called through a default runs
   the default (`functionp` arm).
 - **A variable arity method** fits in a third phase, after the fits without and with boxing.
+
+## The flow (2026-11-17, j77)
+
+**What a compiler decides from the flow is decided after the lowering, per class, over the
+tree (`JavaFlow`), as a compiler's flow analysis follows its attributed tree:** reachability and
+normal completion (JLS 14.22), definite assignment and unassignment (16), effective finality
+(4.12.4). `lowerClass` runs `JavaFlow.check` once the class's members and static
+initialization are lowered; a library class is not checked. Reported as the compiler reports,
+the first problem of the kind it reports first: reachability, then assignment, then captures.
+
+- **What only typing knows comes from the lowering (`JavaFlow.Facts`)**, recorded by node
+  identity: the variable each `Name` and `this.f` it resolved stands for (a local's declaring
+  node -- declarator, parameter, pattern, enhanced `for`, `catch` -- or a `Field`, `Local.key`),
+  the value of each constant condition (`flow`), the enhanced switches (a pattern, `null`, or a
+  selector no constant switch takes: they need no default to cover), and the locals each local or
+  anonymous class reads (`variable`, at the OUTERMOST class boundary crossed).
+- **The walk mirrors javac's analyzers**: bit sets of definitely assigned and unassigned blank
+  variables (a local with no initializer, a blank final field), a dead state vacuous in both,
+  jumps carried to their targets (a `finally` that completes adds what it assigns, one that does
+  not drops them), a loop walked again with what its body assigns unassigned (`might be assigned
+  in loop`), a switch case starting from the selector's state, `uninitsTry` for a `catch` and a
+  `finally`. A lambda's body sees what is assigned before it and nothing around it unassigned;
+  a class declared in a body checks its captures where it is declared. A constructor runs the
+  instance initializers at its `super(..)` (or first), all fields assigned after `this(..)`; each
+  blank final field is assigned at its end and every `return`; a class with no constructor
+  checks its initializers (`not initialized in the default constructor`); the static
+  initialization checks the static blank finals.
+- **`exits` is the flow's `completes`** over a statement alone: the lowering asks it for a
+  pattern binding's scope after an `if`, a `switch`'s run-on cases and a lambda body's shape. A
+  condition the lowering has not met yet is no constant there, which can only make a statement
+  look like it completes.
+- **Rejected: following assignments inside the lowering**, as the first slices did: a lambda's
+  body is lowered for each candidate of an overload and again for its type, a switch expression
+  twice, initializers once per constructor, and the order of the lowering is not the source's
+  (methods before initializers), so what one pass assigned was neither one path nor all of them.
 
 ## Type parameters (2026-11-17, j70)
 
@@ -765,7 +822,7 @@ under a monitor prints the same on four backends.
 | `return v` | the value in tail position, else `(return-from %fn v)` and a `(block %fn ..)` |
 | `switch (n) { case 1 -> a; default -> b; }` | `(cond ((eql n 1) a) (t b))`; a statement's `break` is `(return-from %break nil)` |
 | `yield v` | the value in tail position of its arm, else `(return-from %yield v)` |
-| `o instanceof Circle c` | `(and (Circle? o) (progn (setq c o) t))`, `c` a `let` of the statement |
+| `o instanceof Circle c` | `(and (Circle? o) (progn (setq c o) t))`, `c` a `let` of the statement; `if (o instanceof Circle c) a` is `(if (Circle? o) (progn (setq c o) a))` |
 | `new Inner()`, a local class | `(Outer.Inner.new outer args.. captured..)` |
 | `new int[n][m]` | `(%java-new-array (list n m) kind default)` |
 | `f(1, 2)` to `f(int...)` | `(f (make-array 2 .. :initial-contents (list 1 2)))` |
@@ -801,17 +858,41 @@ of one class to a file, threads joined before it prints) print what the JDK
 prints on four backends. After j71 the four programs are byte-identical but `Sieve`
 (10,380 -> 10,497: `Math.sqrt` is `%strict-math`).
 
+### j77 (2026-11-17)
+
+Same box, best of three (the box's load moved absolute times by up to 15% between runs, so
+each pair was run interleaved); each program's IR (`--dump-ir`) edited by hand for the variant.
+JVM / precompiled wasm / precompiled component, seconds:
+
+| question | as lowered | variant | verdict |
+|---|---|---|---|
+| a pattern's binding, 100,000,000 tests `if (s instanceof Circle c) .. else if (s instanceof Square q) ..` | 1.08 / 3.57 / 3.62 | `let` in the taken branch 1.09 / 3.25 / 3.37; the variable kept, its stores at the head of the branch 1.05 / 3.24 / 3.38 | the cost is the `and`'s truth value, not the variable: `branch` |
+| a dense `int` switch, 100,000,000 `step(i % 12, acc)` over 12 cases | 2.30 / 1.02 / 1.02 | `case`: the same IR, it expands to the same `eql` chain | nothing to choose |
+| a lazy class's test, 300,000,000 static calls of `x * 31 + base` | 0.96 / 5.31 / 5.31 | the class eager 0.99 / 4.93 / 4.93 | 1.3 ns a call on wasm, none on the JVM |
+
+- The switch: a comparison costs 0.56 ns on wasm (the case taken always the first 0.75 s,
+  always the last 1.37 s). javac's class runs it in 0.28-0.36 s, its if-chain and its
+  `tableswitch` alike; the JVM's 2.30 s is not the chain's: 0.36 s when only 8 of the cases are
+  taken (`i & 7`), 1.95 s with 16 (`i & 15`) -- the method once every arm of it runs
+  ([hot-path-method-size.md](hot-path-method-size.md)).
+- Lazy in a real program: `examples/java/shop` leaves one class lazy, `Discounts`, whose
+  initializer makes a method reference: the lowering records a lambda body's effects into the
+  function making it, so what `Line.listPrice()` reaches is counted as run by the initializer.
+  Not changed: leaving them out needs every call through a functional interface -- an
+  intrinsic's `funcall` of a lambda argument included -- to count the bodies of its lambdas, to
+  save the 1.3 ns above on wasm only.
+- An anonymous class inside a lambda: a JDK 25 numbers it in the order written, with the call
+  around it resolved among overloads, a generic method's call and nested lambdas included, and so
+  does the front end (pinned: `a-local-and-an-anonymous-class-keep-the-locals-they-read`).
+
 ## What a compiler reports and this does not, stated in `doc/*/java/deviations.md`
 
 Checked: `private` (the unit is the top-level class), the access of a class or member from
-another package ("A program of several files"), assignment to a `final` field or local,
-effectively final captures, a missing `return` and an unreachable statement where it is SURE
-(`completes` / `exits`), and definite assignment through `if`, `while` and `for`. The rule for
-each is to refuse only what a compiler refuses: where the lowering does not follow the branches
-(`switch`, `try`, `do`, `&&`, `?:`) an assignment on any path counts. Not checked: checked
-exceptions; a blank local assigned twice and then captured (`.todo/j77`, with what is still
-refused by name); a type argument outside its parameter's bound and the unchecked warnings
-(`.todo/j78`). A value read through a type argument is trusted (no cast where it is used),
+another package ("A program of several files"), assignment to a `final` field or local, and
+what the flow decides ("The flow"): unreachable statements, a missing `return`, definite
+assignment and unassignment of locals and blank final fields, effectively final captures. Not
+checked: checked exceptions; a type argument outside its parameter's bound and the unchecked
+warnings (`.todo/j78`). A value read through a type argument is trusted (no cast where it is used),
 and a store into an array of references is not checked. The run time's exceptions are the
 language's, but a `NullPointerException` has no message and a `ClassCastException` says nothing
 of modules and loaders ("Exceptions").
@@ -835,7 +916,14 @@ below its package's directories (`a-program-of-several-files-finds-its-classes-b
 `RontoLispCliStreamsTest#aJavaFileRunsCompilesAndIsRefusedWhereItCannot` (a session on a pipe:
 the late binding, a subclass added, static state, the echoes, a step's exception; `test` and
 `format` refusing), `PlaygroundReplTest#theJavaPickKeepsItsDeclarationsAcrossBuffersAndRunsAProgram`,
-java-spec `refused:` cases of the annotations,
+java-spec `refused:` cases of the annotations and of the flow (each kind of branch an
+assignment may be skipped on, a blank final assigned twice and in a loop, a blank local
+captured, a missing `return` past a `do`, a labeled block and a switch with no default, a blank
+field no constructor assigns, a switch rule with no value, an inner superclass with no instance
+around it), the corpus cases `a-loop-is-a-while-and-its-exits-are-blocks` (what the flow
+accepts), `a-nested-class-is-static-or-holds-the-instance-around-it` (`o.super(..)`, `o.new I()
+{ }`, `Outer.super.m()`, `Outer.this` ahead of `super(..)`) and
+`an-interface-has-defaults-static-and-private-methods-and-constants` (`I.super.m()`),
 `SchemeLibraryTest#aCommonLispProgramReadsNoFrontEndsLibrary` (the gate), `DocExamplesTest` (a
 ` ```java ` fence is a whole program, its output the plain block after it), `ExamplesE2eTest`
 (`examples/java/shop/Main.java`, read with the files of its source tree).

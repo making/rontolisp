@@ -995,7 +995,7 @@ final class JavaParser {
 			}
 			statement(statements);
 		}
-		return new Block(pos, statements);
+		return new Block(pos, statements, this.tokens.get(this.p - 1).offset());
 	}
 
 	private Statement single() {
@@ -1317,7 +1317,7 @@ final class JavaParser {
 			}
 			cases.add(new JavaSyntax.SwitchCase(at, constants, patterns, hasNull, hasDefault, guard, body, value));
 		}
-		return new JavaSyntax.Switch(pos, selector, cases, arrow);
+		return new JavaSyntax.Switch(pos, selector, cases, arrow, this.tokens.get(this.p - 1).offset());
 	}
 
 	/** Whether a pattern, and no constant expression, stands here. */
@@ -1911,7 +1911,25 @@ final class JavaParser {
 					continue;
 				}
 				if (at("super")) {
-					throw unsupported("a method of an interface called through super");
+					int at = this.tokens.get(this.p++).offset();
+					if (at("(")) {
+						// outer.super(..): the instance around an inner superclass
+						expression = new ConstructorCall(at, true, arguments(), expression);
+						continue;
+					}
+					if (at("::")) {
+						throw unsupported("a method reference through a qualified super");
+					}
+					// I.super.m(..), Outer.super.m(..)
+					expect(".");
+					List<TypeName> superArguments = typeArguments();
+					int named = current().offset();
+					String name = identifier();
+					if (!at("(")) {
+						throw unsupported("a field read through super", named);
+					}
+					expression = new Call(named, expression, name, arguments(), true, superArguments);
+					continue;
 				}
 				if (at("class")) {
 					throw unsupported("a class literal");

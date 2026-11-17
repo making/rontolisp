@@ -152,21 +152,25 @@ final class JavaLowering implements JavaEmitter.Context {
 
 		final JavaType type;
 
+		/**
+		 * What declares it, which names it to the flow ({@link JavaFlow.Facts}): a
+		 * declarator, a parameter, a pattern, an enhanced {@code for}, a {@code catch}.
+		 */
+		final Object key;
+
 		/** Whether it is {@code final} and has its value where it is declared. */
 		boolean isFinal;
 
-		/** Whether it has its value where it is declared: a later one is a second. */
-		boolean initialized;
+		/**
+		 * Its value when it is a constant variable: {@code final}, of a primitive type or
+		 * {@code String}, with a constant initializer.
+		 */
+		@Nullable Object constant;
 
-		/** Where it is assigned after its declaration, or -1. */
-		int reassigned = -1;
-
-		/** Whether a lambda or a local class reads it. */
-		boolean captured;
-
-		Local(LispSymbol symbol, JavaType type) {
+		Local(LispSymbol symbol, JavaType type, Object key) {
 			this.symbol = symbol;
 			this.type = type;
+			this.key = key;
 		}
 
 		LispSymbol symbol() {
@@ -180,8 +184,8 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/**
-	 * A scope of names: a block's locals and local classes. A scope that starts a
-	 * lambda's body or a local class's marks where a read from inside becomes a capture.
+	 * A scope of names: a block's locals and local classes. A scope that starts a local
+	 * class's body marks where a read from inside becomes a capture.
 	 */
 	private static final class Scope {
 
@@ -192,12 +196,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		/** The local or anonymous class whose body starts here, or {@code null}. */
 		final @Nullable JavaClass boundary;
 
-		/** Whether a lambda's body starts here. */
-		final boolean lambda;
-
-		Scope(@Nullable JavaClass boundary, boolean lambda) {
+		Scope(@Nullable JavaClass boundary) {
 			this.boundary = boundary;
-			this.lambda = lambda;
 		}
 
 	}
@@ -308,6 +308,9 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private static final LispSymbol OUTER = new LispSymbol("%outer");
 
+	/** The instance around an anonymous class's superclass, given where it is made. */
+	private static final LispSymbol SUPER_OUTER = new LispSymbol("%super-outer");
+
 	/** The names an enum constructor's first two parameters have. */
 	private static final List<String> ENUM_PARAMETERS = List.of("%name", "%ordinal");
 
@@ -413,12 +416,8 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private final Map<JavaClass, Effects> initEffects = new HashMap<>();
 
-	/**
-	 * The locals declared with no value that have one for sure where the lowering stands.
-	 * A statement the lowering does not follow branch by branch leaves here what any of
-	 * its branches assigned, so a read is refused only where no path assigned.
-	 */
-	private Set<Local> assigned = new HashSet<>();
+	/** What the flow of the classes lowered reads ({@link JavaFlow}). */
+	private final JavaFlow.Facts facts = new JavaFlow.Facts();
 
 	/** The local and anonymous classes lowered already in this pass. */
 	private final Set<JavaClass> loweredLocals = new HashSet<>();
@@ -979,6 +978,14 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 		}
 		staticInitialization(declaration);
+		if (!isLibrary(declaration)) {
+			JavaFlow.Problem problem = JavaFlow.check(declaration, this.facts);
+			if (problem != null) {
+				this.currentClass = declaration;
+				this.unit = this.classes.unit(declaration);
+				throw error(problem.pos(), problem.message());
+			}
+		}
 	}
 
 	/**
@@ -1073,7 +1080,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		this.returns = null;
 		this.lambdaBody = false;
 		this.scopes = scopesAround(declaration);
-		this.scopes.push(new Scope(null, false));
+		this.scopes.push(new Scope(null));
 		this.currentClass = declaration;
 		this.unit = this.classes.unit(declaration);
 		this.staticContext = isStatic;
@@ -1167,7 +1174,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * A local class and the member types declared in it, each behind its own boundary.
 	 */
 	private void lowerMembers(JavaClass made) {
-		this.scopes.push(new Scope(made, false));
+		this.scopes.push(new Scope(made));
 		implementations(made);
 		lowerClass(made);
 		for (JavaClass member : made.members.values()) {
@@ -1188,14 +1195,13 @@ final class JavaLowering implements JavaEmitter.Context {
 				// an enum constructor's name and ordinal; what an anonymous class's
 				// constructor hands on
 				String name = method.owner.isEnum && i < method.hidden ? ENUM_PARAMETERS.get(i) : "%a" + i;
-				local = bind(name, method.parameters.get(i), 0);
+				local = bind(name, method.parameters.get(i), 0, new Object());
 			}
 			else {
 				Parameter parameter = written.parameters().get(i - method.hidden);
-				local = bind(parameter.name(), method.parameters.get(i), parameter.pos());
+				local = bind(parameter.name(), method.parameters.get(i), parameter.pos(), parameter);
 				local.isFinal = parameter.isFinal();
 			}
-			local.initialized = true;
 			symbols.add(local.symbol());
 		}
 		return symbols;
@@ -1227,15 +1233,12 @@ final class JavaLowering implements JavaEmitter.Context {
 		Effects saved = this.effects;
 		this.effects = new Effects();
 		this.methodEffects.put(method, this.effects);
-		this.scopes.push(new Scope(null, false));
+		this.scopes.push(new Scope(null));
 		List<LispVal> parameters = new ArrayList<>();
 		if (!method.isStatic) {
 			parameters.add(THIS);
 		}
 		parameters.addAll(bindParameters(method));
-		if (method.returnType != Primitive.VOID && completes(Objects.requireNonNull(written.body()))) {
-			throw error(written.pos(), "missing return statement");
-		}
 		LispVal body = functionBody(Objects.requireNonNull(written.body()));
 		this.scopes.pop();
 		this.effects = saved;
@@ -1344,7 +1347,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		Effects saved = this.effects;
 		this.effects = new Effects();
 		this.methodEffects.put(constructor, this.effects);
-		this.scopes.push(new Scope(null, false));
+		this.scopes.push(new Scope(null));
 		List<LispSymbol> parameters = bindParameters(constructor);
 		List<Statement> statements = written == null ? List.of() : Objects.requireNonNull(written.body()).statements();
 		ConstructorCall explicit = null;
@@ -1353,6 +1356,16 @@ final class JavaLowering implements JavaEmitter.Context {
 				explicit = call;
 				break;
 			}
+		}
+		if (constructor.passesTo == null && givesSuperOuter(owner)
+				&& (explicit == null || (explicit.onSuper() && explicit.outer() == null))) {
+			// the instance around an inner superclass the instance around this one does
+			// not hold is given by outer.super(..)
+			throw error(
+					explicit != null ? explicit.pos()
+							: written != null ? Objects.requireNonNull(written.body()).pos() : pos,
+					"an enclosing instance that contains " + innerName(Objects.requireNonNull(owner.superclass))
+							+ " is required");
 		}
 		Frame frame = new Frame();
 		this.frames.push(frame);
@@ -1415,17 +1428,20 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (owner.hasOuterInstance()) {
 			arguments.add(OUTER);
 		}
+		if (owner.superOuterGiven) {
+			arguments.add(SUPER_OUTER);
+		}
 		for (JavaClass type = owner; type != null; type = type.superclass) {
 			if (!type.hasOuterInstance()) {
 				continue;
 			}
-			LispVal outer = type == owner ? OUTER : outerInstance(Objects.requireNonNull(type.outer), owner.outer,
-					owner.hasOuterInstance() ? OUTER : null);
-			if (outer == null) {
-				throw unsupported(pos, "a class extending the inner class " + type.simpleName()
-						+ " where no instance of " + Objects.requireNonNull(type.outer).simpleName() + " is around it");
+			LispVal outer = type == owner ? OUTER
+					: owner.superOuterGiven && type == owner.superclass ? SUPER_OUTER : outerInstance(
+							Objects.requireNonNull(type.outer), owner.outer, owner.hasOuterInstance() ? OUTER : null);
+			if (outer != null) {
+				// else the constructor of the class under it gives it, by outer.super(..)
+				setup.add(call("setf", list(slotAccessor(type, outerSlot(type)), THIS), outer));
 			}
-			setup.add(call("setf", list(slotAccessor(type, outerSlot(type)), THIS), outer));
 		}
 		arguments.addAll(parameters);
 		int captured = 0;
@@ -1450,6 +1466,22 @@ final class JavaLowering implements JavaEmitter.Context {
 			instance = call("progn", first, instance);
 		}
 		this.functions.add(list(cl("defun"), JavaNames.creator(constructor), list(arguments), instance));
+	}
+
+	/**
+	 * Whether a class's superclass is an inner class whose outer instance the instance
+	 * around the class does not hold: a constructor gives it with
+	 * {@code outer.super(..)}, an anonymous class takes it from its {@code outer.new}.
+	 */
+	private static boolean givesSuperOuter(JavaClass owner) {
+		JavaClass above = owner.superclass;
+		return above != null && above.hasOuterInstance() && outerInstance(Objects.requireNonNull(above.outer),
+				owner.outer, owner.hasOuterInstance() ? OUTER : null) == null;
+	}
+
+	/** An inner class's name as a compiler says it: {@code Outer.Inner}. */
+	private static String innerName(JavaClass inner) {
+		return Objects.requireNonNull(inner.outer).simpleName() + "." + inner.simpleName();
 	}
 
 	/**
@@ -1502,7 +1534,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		this.targets.clear();
 		List<Local> savedPatterns = this.patternVariables;
 		this.patternVariables = new ArrayList<>();
-		this.scopes.push(new Scope(null, false));
+		this.scopes.push(new Scope(null));
 		List<LispVal> forms = sequence(body.statements(), 0, true);
 		this.scopes.pop();
 		this.patternVariables = savedPatterns;
@@ -1816,10 +1848,10 @@ final class JavaLowering implements JavaEmitter.Context {
 		return null;
 	}
 
-	private Local bind(String name, JavaType type, int pos) {
+	private Local bind(String name, JavaType type, int pos, Object key) {
 		if (name.equals("_")) {
 			// the unnamed variable: a value kept nowhere a name reaches
-			return new Local(temporary(), type);
+			return new Local(temporary(), type, key);
 		}
 		for (Scope scope : this.scopes) {
 			if (scope.locals.containsKey(name)) {
@@ -1829,7 +1861,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				break;
 			}
 		}
-		Local bound = new Local(JavaNames.symbol(name), type);
+		Local bound = new Local(JavaNames.symbol(name), type, key);
 		Objects.requireNonNull(this.scopes.peek()).locals.put(name, bound);
 		return bound;
 	}
@@ -1855,37 +1887,27 @@ final class JavaLowering implements JavaEmitter.Context {
 	private @Nullable Named variable(String name, int pos, boolean probe) {
 		JavaClass type = this.currentClass;
 		LispVal path = this.staticContext ? null : THIS;
-		boolean lambda = false;
 		JavaClass reader = null;
+		JavaClass crossed = null;
 		for (Scope scope : this.scopes) {
 			Local local = scope.locals.get(name);
 			if (local != null) {
-				if (reader == null && !lambda) {
+				if (reader == null || probe) {
 					return new LocalRef(local);
 				}
-				if (probe) {
-					return new LocalRef(local);
-				}
-				if (local.reassigned >= 0) {
-					throw error(pos,
-							"local variables referenced from "
-									+ (reader != null ? "an inner class" : "a lambda expression")
-									+ " must be final or effectively final");
-				}
-				local.captured = true;
-				if (!local.initialized && !this.assigned.contains(local)) {
-					throw error(pos, "variable " + name + " might not have been initialized");
-				}
-				if (reader == null) {
-					return new LocalRef(local);
-				}
+				// a local of a method around a local class: what the class reads is
+				// assigned where it is declared and effectively final (JavaFlow)
+				this.facts.captured(Objects.requireNonNull(Objects.requireNonNull(crossed).declaration), local.key,
+						pos);
 				if (this.staticContext) {
 					throw error(pos, "non-static variable " + name + " cannot be referenced from a static context");
 				}
 				JavaClass.Capture capture = capture(reader, name, local);
 				return new CaptureRef(new Typed(list(slotAccessor(reader, capture.slot()), THIS), local.type()));
 			}
-			lambda |= scope.lambda;
+			if (scope.boundary != null) {
+				crossed = scope.boundary;
+			}
 			if (scope.boundary != null && type != null) {
 				Field field = field(type, name);
 				if (field != null) {
@@ -1923,7 +1945,17 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	/** The instance of a class around the one the lowering stands in, or {@code null}. */
 	private @Nullable LispVal enclosing(JavaClass wanted) {
-		return outerInstance(wanted, this.currentClass, this.staticContext || this.early ? null : THIS);
+		if (this.staticContext) {
+			return null;
+		}
+		JavaClass current = this.currentClass;
+		if (this.early) {
+			// ahead of this(..) or super(..) the instance is out of reach, but the one
+			// around it was set where it was made
+			return current.isSubclassOf(wanted) || !current.hasOuterInstance() ? null
+					: outerInstance(wanted, current.outer, list(slotAccessor(current, outerSlot(current)), THIS));
+		}
+		return outerInstance(wanted, current, THIS);
 	}
 
 	// ---- the class table
@@ -2361,7 +2393,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (bindings.isEmpty()) {
 			return lowering.get();
 		}
-		Scope scope = new Scope(null, false);
+		Scope scope = new Scope(null);
 		scope.locals.putAll(bindings);
 		this.scopes.push(scope);
 		try {
@@ -2390,6 +2422,15 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * sets, {@code a || b} binds when false.
 	 */
 	private Flow flow(Expression expression) {
+		Flow flow = condition(expression);
+		if (flow.value().constant() instanceof Boolean truth) {
+			// what is reached and what is assigned depend on it (JavaFlow)
+			this.facts.constants.put(expression, truth);
+		}
+		return flow;
+	}
+
+	private Flow condition(Expression expression) {
 		if (expression instanceof InstanceOf test && test.pattern() != null) {
 			return matching(test);
 		}
@@ -2427,7 +2468,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/** A binding of a pattern: a variable of the statement the pattern stands in. */
-	private Local patternVariable(String name, JavaType type, int pos) {
+	private Local patternVariable(String name, JavaType type, int pos, Object key) {
 		if (variable(name, 0, true) instanceof LocalRef) {
 			throw error(pos, "variable " + name + " is already defined");
 		}
@@ -2438,8 +2479,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				break;
 			}
 		}
-		Local bound = new Local(new LispSymbol(symbol), type);
-		bound.initialized = true;
+		Local bound = new Local(new LispSymbol(symbol), type, key);
 		this.patternVariables.add(bound);
 		return bound;
 	}
@@ -2495,7 +2535,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 				if (!written.name().equals("_")) {
 					Local bound = patternVariable(written.name(), to == JavaType.Null.NULL ? this.objectType : to,
-							written.pos());
+							written.pos(), written);
 					stores.add(call("setq", bound.symbol(), value));
 					bindings.put(written.name(), bound);
 				}
@@ -2573,6 +2613,37 @@ final class JavaLowering implements JavaEmitter.Context {
 			all.add(progn(stored));
 		}
 		return all.isEmpty() ? T : all.size() == 1 ? all.get(0) : form(cl("and"), all);
+	}
+
+	/**
+	 * {@code (if test then otherwise)}. A pattern's test, {@code (and tests.. (progn
+	 * stores.. t))}, runs its stores at the head of the branch taken instead: no truth
+	 * value is made to be tested again (measured 2026-11-17: a tenth of a loop of pattern
+	 * tests on wasm, nothing on the JVM).
+	 */
+	private static LispVal branch(LispVal test, LispVal then, @Nullable LispVal otherwise) {
+		List<LispVal> parts = elements(test);
+		boolean and = parts.size() > 2 && cl("and").equals(parts.get(0));
+		List<LispVal> stored = elements(and ? parts.get(parts.size() - 1) : test);
+		if (stored.size() < 3 || !cl("progn").equals(stored.get(0)) || !T.equals(stored.get(stored.size() - 1))) {
+			return otherwise == null ? call("if", test, then) : call("if", test, then, otherwise);
+		}
+		List<LispVal> tests = and ? parts.subList(1, parts.size() - 1) : List.of();
+		List<LispVal> body = new ArrayList<>(stored.subList(1, stored.size() - 1));
+		body.add(then);
+		LispVal condition = tests.isEmpty() ? T : tests.size() == 1 ? tests.get(0) : form(cl("and"), tests);
+		return otherwise == null ? call("if", condition, progn(body)) : call("if", condition, progn(body), otherwise);
+	}
+
+	/** The elements of a form that is a list; none of any other. */
+	private static List<LispVal> elements(LispVal form) {
+		List<LispVal> elements = new ArrayList<>();
+		LispVal rest = form;
+		while (rest instanceof LispCons cons) {
+			elements.add(cons.car());
+			rest = cons.cdr();
+		}
+		return elements;
 	}
 
 	/** A value as text, as string concatenation and {@code String.valueOf} make it. */
@@ -2725,17 +2796,20 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/** A simple name read as a value. */
-	private Typed read(String name, int pos) {
+	private Typed read(Name written) {
+		String name = written.identifier();
+		int pos = written.pos();
 		Named variable = variable(name, pos, false);
 		return switch (variable) {
 			case null -> throw error(pos, "cannot find symbol: variable " + name);
 			case LocalRef found -> {
-				requireAssigned(found.local(), name, pos);
-				yield new Typed(found.local().symbol(), found.local().type());
+				this.facts.variables.put(written, found.local().key);
+				yield new Typed(found.local().symbol(), found.local().type(), found.local().constant);
 			}
 			case CaptureRef found -> found.read();
 			case FieldRef found -> {
 				Field field = found.field();
+				this.facts.variables.put(written, field);
 				if (!field.isStatic) {
 					requireInstance(field, found.object(), pos);
 				}
@@ -2745,12 +2819,6 @@ final class JavaLowering implements JavaEmitter.Context {
 				yield fieldRead(field, found.object(), pos, found.through().self());
 			}
 		};
-	}
-
-	private void requireAssigned(Local local, String name, int pos) {
-		if (!local.initialized && !this.assigned.contains(local)) {
-			throw error(pos, "variable " + name + " might not have been initialized");
-		}
 	}
 
 	/** Refuses an instance field named where no instance holds it. */
@@ -2821,7 +2889,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			case This self:
 				return thisValue(self.pos());
 			case Name name:
-				return read(name.identifier(), name.pos());
+				return read(name);
 			case QualifiedThis self: {
 				JavaClass named = classNamed(self.qualifier());
 				if (named == null) {
@@ -2832,7 +2900,10 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 				LispVal instance = enclosing(named);
 				if (instance == null) {
-					throw error(self.pos(), "not an enclosing class: " + named.simpleName());
+					throw error(self.pos(),
+							this.early && this.currentClass.isSubclassOf(named)
+									? "cannot reference this before supertype constructor has been called"
+									: "not an enclosing class: " + named.simpleName());
 				}
 				return new Typed(instance, named.self());
 			}
@@ -3126,22 +3197,32 @@ final class JavaLowering implements JavaEmitter.Context {
 				if (!constantShape(initializer)) {
 					return NOT_CONSTANT;
 				}
-				Typed value = expression(initializer, field.type);
-				Object constant = value.constant();
-				if (constant == null || conversion(value, field.type, false, true) == null) {
-					return NOT_CONSTANT;
-				}
-				if (field.type.isPrimitive() && value.type() != field.type) {
-					constant = widens(value.type(), field.type) ? widen(value, field.type).constant()
-							: narrowed(constant, (Primitive) field.type);
-				}
-				return Objects.requireNonNull(constant);
+				Object constant = constantValue(expression(initializer, field.type), field.type);
+				return constant == null ? NOT_CONSTANT : constant;
 			});
 			this.effects = saved;
 			this.patternVariables = savedPatterns;
 			this.constants.put(field, known);
 		}
 		return known == NOT_CONSTANT ? null : known;
+	}
+
+	/**
+	 * The value a constant variable of a type holds when its initializer has a value: the
+	 * initializer's, converted; {@code null} when it is no constant expression or the
+	 * type no constant variable's.
+	 */
+	private @Nullable Object constantValue(Typed value, JavaType type) {
+		Object constant = value.constant();
+		if (constant == null || !(type.isPrimitive() || type.equals(this.stringType))
+				|| conversion(value, type, false, true) == null) {
+			return null;
+		}
+		if (type.isPrimitive() && value.type() != type) {
+			constant = widens(value.type(), type) ? widen(value, type).constant()
+					: narrowed(constant, (Primitive) type);
+		}
+		return constant;
 	}
 
 	/**
@@ -3199,20 +3280,10 @@ final class JavaLowering implements JavaEmitter.Context {
 				Named variable = variable(name.identifier(), name.pos(), false);
 				if (variable instanceof LocalRef found) {
 					Local local = found.local();
-					if (!assigning) {
-						requireAssigned(local, name.identifier(), name.pos());
-					}
+					this.facts.variables.put(name, local.key);
 					return new Place(local.type(), local.symbol(), value -> {
-						this.assigned.add(local);
 						if (local.isFinal) {
 							throw error(name.pos(), "cannot assign a value to final variable " + name.identifier());
-						}
-						if (local.captured) {
-							throw error(name.pos(), "local variables referenced from a lambda expression or an"
-									+ " inner class must be final or effectively final");
-						}
-						if (local.initialized || !assigning) {
-							local.reassigned = name.pos();
 						}
 						return call("setq", local.symbol(), value);
 					}, bindings);
@@ -3227,6 +3298,7 @@ final class JavaLowering implements JavaEmitter.Context {
 					throw error(name.pos(), "cannot find symbol: variable " + name.identifier());
 				}
 				Field field = found.field();
+				this.facts.variables.put(name, field);
 				if (!field.isStatic && !(assigning && this.early && found.object() == THIS)) {
 					requireInstance(field, found.object(), name.pos());
 				}
@@ -3255,6 +3327,9 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 				ClassType type = this.types.site(object.type());
 				Field field = field(type.declaration(), select.name());
+				if (field != null && select.target() instanceof This) {
+					this.facts.variables.put(select, field);
+				}
 				if (field == null) {
 					throw type.declaration().intrinsic || isLibrary(type.declaration())
 							? unsupported(select.pos(), type.declaration().simpleName() + "." + select.name())
@@ -3717,7 +3792,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				return new Typed(truth ? whenTrue : whenFalse, type, constant);
 			}
 		}
-		LispVal form = call("if", test.form(), whenTrue, whenFalse);
+		LispVal form = branch(test.form(), whenTrue, whenFalse);
 		if (type.equals(this.stringType) && this.nonNull.contains(whenTrue) && this.nonNull.contains(whenFalse)) {
 			this.nonNull.add(form);
 		}
@@ -4019,7 +4094,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			throw error(lambda.pos(), "incompatible types: incompatible parameter types in lambda expression");
 		}
 		JavaClass target = lambdaTarget(function);
-		this.scopes.push(new Scope(null, true));
+		this.scopes.push(new Scope(null));
 		Initializing savedInitializing = this.initializing;
 		this.initializing = null;
 		List<LispVal> parameters = new ArrayList<>();
@@ -4034,8 +4109,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 				type = declared;
 			}
-			Local bound = bind(parameter.name(), this.types.ground(type), parameter.pos());
-			bound.initialized = true;
+			Local bound = bind(parameter.name(), this.types.ground(type), parameter.pos(), parameter);
 			parameters.add(bound.symbol());
 		}
 		JavaType wanted = function.returnType();
@@ -4054,7 +4128,7 @@ final class JavaLowering implements JavaEmitter.Context {
 					"incompatible types: lambda body is not compatible with a void functional interface");
 		}
 		if (wanted != Primitive.VOID && !inferring && written == null
-				&& completes(Objects.requireNonNull(lambda.block()))) {
+				&& JavaFlow.completes(Objects.requireNonNull(lambda.block()), this.facts)) {
 			throw error(lambda.pos(), "incompatible types: bad return type in lambda expression");
 		}
 		if (written != null) {
@@ -4276,7 +4350,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * Whether a lambda's body can be a function of a kind: one giving a value, or one
 	 * giving none.
 	 */
-	private static boolean fits(Lambda lambda, boolean isVoid) {
+	private boolean fits(Lambda lambda, boolean isVoid) {
 		Expression value = lambda.expression();
 		if (value != null) {
 			return !isVoid || value instanceof Assign || value instanceof Call || value instanceof New
@@ -4284,7 +4358,7 @@ final class JavaLowering implements JavaEmitter.Context {
 							&& (unary.operator().equals("++") || unary.operator().equals("--")));
 		}
 		Block block = Objects.requireNonNull(lambda.block());
-		return isVoid ? !returnsValue(block) : returnsValue(block) || !completes(block);
+		return isVoid ? !returnsValue(block) : returnsValue(block) || exits(block);
 	}
 
 	/** Whether each lambda met so far gives no value, where that was looked for. */
@@ -4310,15 +4384,13 @@ final class JavaLowering implements JavaEmitter.Context {
 		List<JavaType> savedReturns = this.returns;
 		boolean savedLambda = this.lambdaBody;
 		Initializing savedInitializing = this.initializing;
-		Set<Local> savedAssigned = new HashSet<>(this.assigned);
 		this.patternVariables = new ArrayList<>();
-		this.scopes.push(new Scope(null, true));
+		this.scopes.push(new Scope(null));
 		this.initializing = null;
 		boolean nothing;
 		try {
 			for (Parameter parameter : lambda.parameters()) {
-				bind(parameter.name(), type(Objects.requireNonNull(parameter.type())),
-						parameter.pos()).initialized = true;
+				bind(parameter.name(), type(Objects.requireNonNull(parameter.type())), parameter.pos(), parameter);
 			}
 			nothing = expression(body, null).type() == Primitive.VOID;
 		}
@@ -4338,7 +4410,6 @@ final class JavaLowering implements JavaEmitter.Context {
 			this.returns = savedReturns;
 			this.lambdaBody = savedLambda;
 			this.initializing = savedInitializing;
-			this.assigned = savedAssigned;
 			this.flexible = false;
 		}
 		this.givesNothing.put(lambda, nothing);
@@ -4726,23 +4797,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			explicit.add(type(written));
 		}
 		if (call.onSuper()) {
-			JavaClass above = this.currentClass.superclass;
-			if (above == null) {
-				throw unsupported(pos, "a call of one of Object's methods through super");
-			}
-			Resolved resolved = resolve(methods(above, call.name()), this.currentClass.supertype(above), explicit,
-					call.arguments(), expected, "method " + call.name(), above, pos);
-			Method body = implementation(above, resolved.method());
-			if (body == null || resolved.method().emitter != null) {
-				throw resolved.method().emitter != null
-						? unsupported(pos, "a call of one of Object's methods through super") : error(pos,
-								"abstract method " + resolved.method().signature() + " cannot be accessed directly");
-			}
-			checkAccess(body.isPrivate, body.declaration, body.owner, body.signature(), pos);
-			called(body);
-			return new Typed(
-					located(form(JavaNames.function(body), prepend(thisValue(pos).form(), resolved.forms())), pos),
-					resolved.returnType());
+			return superCall(call, explicit, expected);
 		}
 		Typed receiver = null;
 		JavaClass in = this.currentClass;
@@ -4856,6 +4911,61 @@ final class JavaLowering implements JavaEmitter.Context {
 			form = virtual(in, method, call.target() != null ? object : null, object, resolved.forms());
 		}
 		return new Typed(located(form, pos), resolved.returnType());
+	}
+
+	/**
+	 * {@code super.m(..)}, {@code Outer.super.m(..)} and {@code I.super.m(..)}: the body
+	 * the superclass of this class or of the class around it has, or the default an
+	 * interface this class implements has, called directly.
+	 */
+	private Typed superCall(Call call, List<JavaType> explicit, @Nullable JavaType expected) {
+		int pos = call.pos();
+		JavaClass self = this.currentClass;
+		LispVal object = null;
+		JavaClass above;
+		ClassType site;
+		Expression qualifier = call.target();
+		JavaClass named = qualifier == null ? null : classNamed(qualifier);
+		if (qualifier != null && named == null) {
+			throw error(qualifier.pos(), "cannot find symbol: class " + dotted(qualifier));
+		}
+		if (named != null && named.isInterface) {
+			// I.super.m(): a default of an interface the class names in its implements
+			if (!self.interfaces.contains(named)) {
+				throw error(pos, "not an enclosing class: " + named.simpleName());
+			}
+			above = named;
+			site = Objects.requireNonNull(this.types.asSuper(self.self(), named));
+		}
+		else {
+			if (named != null && named != self) {
+				// Outer.super.m(): the superclass's body, on the instance around
+				object = enclosing(named);
+				if (object == null) {
+					throw error(pos, "not an enclosing class: " + named.simpleName());
+				}
+				self = named;
+			}
+			JavaClass superclass = self.superclass;
+			if (superclass == null) {
+				throw unsupported(pos, "a call of one of Object's methods through super");
+			}
+			above = superclass;
+			site = self.supertype(above);
+		}
+		Resolved resolved = resolve(methods(above, call.name()), site, explicit, call.arguments(), expected,
+				"method " + call.name(), above, pos);
+		Method body = implementation(above, resolved.method());
+		if (body == null || resolved.method().emitter != null) {
+			throw resolved.method().emitter != null
+					? unsupported(pos, "a call of one of Object's methods through super")
+					: error(pos, "abstract method " + resolved.method().signature() + " cannot be accessed directly");
+		}
+		checkAccess(body.isPrivate, body.declaration, body.owner, body.signature(), pos);
+		called(body);
+		LispVal receiver = object != null ? object : thisValue(pos).form();
+		return new Typed(located(form(JavaNames.function(body), prepend(receiver, resolved.forms())), pos),
+				resolved.returnType());
 	}
 
 	/**
@@ -5062,38 +5172,53 @@ final class JavaLowering implements JavaEmitter.Context {
 	private List<LispVal> instanceArguments(JavaClass made, @Nullable Expression outer, List<LispVal> arguments,
 			int pos) {
 		List<LispVal> all = new ArrayList<>();
+		Expression given = made.superOuterGiven ? null : outer;
 		if (made.hasOuterInstance()) {
 			JavaClass around = Objects.requireNonNull(made.outer);
 			LispVal instance;
-			if (outer != null) {
-				Typed given = expression(outer, null);
-				if (!(given.type() instanceof ClassType type) || !type.declaration().isSubclassOf(around)) {
-					throw error(outer.pos(),
-							"incompatible types: " + given.type() + " cannot be converted to " + around.simpleName());
-				}
-				instance = given.form();
+			if (given != null) {
+				instance = outerOf(given, around);
 			}
 			else {
 				instance = enclosing(around);
 				if (instance == null) {
 					throw error(pos,
 							this.staticContext ? "non-static variable this cannot be referenced from a static context"
-									: "an enclosing instance that contains " + around.simpleName() + "."
-											+ made.simpleName() + " is required");
+									: this.early && this.currentClass.isSubclassOf(around)
+											? "cannot reference this before supertype constructor has been called"
+											: "an enclosing instance that contains " + around.simpleName() + "."
+													+ made.simpleName() + " is required");
 				}
 			}
 			all.add(instance);
 		}
-		else if (outer != null) {
+		else if (given != null) {
 			throw error(pos, "qualified new of static class");
+		}
+		if (made.superOuterGiven) {
+			all.add(outerOf(Objects.requireNonNull(outer),
+					Objects.requireNonNull(Objects.requireNonNull(made.superclass).outer)));
 		}
 		all.addAll(arguments);
 		for (JavaClass type = made; type != null; type = type.superclass) {
 			for (JavaClass.Capture capture : List.copyOf(type.captures.values())) {
-				all.add(read(capture.name(), pos).form());
+				all.add(read(new Name(pos, capture.name())).form());
 			}
 		}
 		return all;
+	}
+
+	/**
+	 * The instance an inner class is made in, written before {@code .new} or
+	 * {@code .super}.
+	 */
+	private LispVal outerOf(Expression outer, JavaClass around) {
+		Typed given = expression(outer, null);
+		if (!(given.type() instanceof ClassType type) || !type.declaration().isSubclassOf(around)) {
+			throw error(outer.pos(),
+					"incompatible types: " + given.type() + " cannot be converted to " + around.simpleName());
+		}
+		return dereferenced(given.form());
 	}
 
 	private Typed creation(New creation, @Nullable JavaType expected) {
@@ -5175,14 +5300,16 @@ final class JavaLowering implements JavaEmitter.Context {
 	private Typed anonymous(New creation, ClassType extendedType) {
 		JavaClass extended = extendedType.declaration();
 		int pos = creation.pos();
-		if (creation.outer() != null) {
-			throw unsupported(pos, "an anonymous class made with an outer instance");
-		}
 		if (extended.intrinsic && !extended.name.equals("java.lang.Object")) {
 			throw unsupported(pos, "an anonymous class of " + extended.name);
 		}
 		JavaClass made = this.classes.local(Objects.requireNonNull(creation.body()), this.currentClass,
 				this.staticContext || this.early, extendedType);
+		// outer.new Inner() { .. }: the instance around its superclass is the one given
+		made.superOuterGiven = creation.outer() != null;
+		if (!made.superOuterGiven && givesSuperOuter(made)) {
+			throw error(pos, "an enclosing instance that contains " + innerName(extended) + " is required");
+		}
 		Method above = null;
 		List<LispVal> arguments = List.of();
 		if (extended.isInterface || extended.intrinsic) {
@@ -5217,101 +5344,19 @@ final class JavaLowering implements JavaEmitter.Context {
 		uses(made);
 		makes(made);
 		return new Typed(
-				located(form(JavaNames.creator(constructor), instanceArguments(made, null, arguments, pos)), pos),
+				located(form(JavaNames.creator(constructor), instanceArguments(made, creation.outer(), arguments, pos)),
+						pos),
 				new ClassType(made, List.of()));
 	}
 
 	// ---- statements
 
-	private static boolean isTrue(@Nullable Expression condition) {
-		return condition == null || (condition instanceof BooleanLiteral literal && literal.value());
-	}
-
 	/**
-	 * Whether a {@code break} in a statement can leave a loop or a switch around the
-	 * statement: one with no label that no loop or switch inside takes, or any with a
-	 * label.
+	 * Whether a statement cannot complete normally (JLS 14.22): what follows it is not
+	 * reached. A condition the lowering has not met yet is no constant.
 	 */
-	private static boolean breaksOut(Statement statement, boolean nested) {
-		return switch (statement) {
-			case Break exit -> exit.label() != null || !nested;
-			case Block block -> block.statements().stream().anyMatch(inner -> breaksOut(inner, nested));
-			case If branch -> breaksOut(branch.then(), nested)
-					|| (branch.otherwise() != null && breaksOut(branch.otherwise(), nested));
-			case JavaSyntax.Labeled labeled -> breaksOut(labeled.body(), nested);
-			case JavaSyntax.Synchronized held -> breaksOut(held.body(), nested);
-			case While loop -> breaksOut(loop.body(), true);
-			case DoWhile loop -> breaksOut(loop.body(), true);
-			case For loop -> breaksOut(loop.body(), true);
-			case ForEach loop -> breaksOut(loop.body(), true);
-			case JavaSyntax.Switch block -> block.cases()
-				.stream()
-				.anyMatch(written -> written.body().stream().anyMatch(inner -> breaksOut(inner, true)));
-			case Try attempt -> breaksOut(attempt.body(), nested)
-					|| attempt.catches().stream().anyMatch(clause -> breaksOut(clause.body(), nested))
-					|| (attempt.finallyBlock() != null && breaksOut(attempt.finallyBlock(), nested));
-			default -> false;
-		};
-	}
-
-	/**
-	 * Whether a statement never completes normally, for sure: what follows it is not
-	 * reached.
-	 */
-	private static boolean exits(Statement statement) {
-		return switch (statement) {
-			case Return exit -> true;
-			case Throw exit -> true;
-			case Break exit -> true;
-			case Continue exit -> true;
-			case JavaSyntax.Yield exit -> true;
-			case Block block ->
-				!block.statements().isEmpty() && exits(block.statements().get(block.statements().size() - 1));
-			case If branch -> branch.otherwise() != null && exits(branch.then()) && exits(branch.otherwise());
-			case While loop -> isTrue(loop.condition()) && !breaksOut(loop.body(), false);
-			case DoWhile loop -> isTrue(loop.condition()) && !breaksOut(loop.body(), false);
-			case For loop -> isTrue(loop.condition()) && !breaksOut(loop.body(), false);
-			case JavaSyntax.Labeled labeled -> exits(labeled.body()) && !breaksOut(labeled.body(), true);
-			case JavaSyntax.Synchronized held -> exits(held.body());
-			case JavaSyntax.Switch block ->
-				block.cases().stream().anyMatch(JavaSyntax.SwitchCase::hasDefault) && !block.cases().isEmpty()
-						&& block.cases()
-							.stream()
-							.noneMatch(written -> written.body().stream().anyMatch(inner -> breaksOut(inner, false)))
-						&& (block.arrow()
-								? block.cases()
-									.stream()
-									.allMatch(written -> written.value() == null && exits(written.body().get(0)))
-								: !block.cases().get(block.cases().size() - 1).body().isEmpty() && block.cases()
-									.stream()
-									.allMatch(written -> written.body().isEmpty()
-											|| exits(written.body().get(written.body().size() - 1))));
-			case Try attempt -> (attempt.finallyBlock() != null && exits(attempt.finallyBlock()))
-					|| (exits(attempt.body()) && attempt.catches().stream().allMatch(clause -> exits(clause.body())));
-			default -> false;
-		};
-	}
-
-	/**
-	 * Whether a statement completes normally, for sure: a method returning a value whose
-	 * body does is missing a {@code return}.
-	 */
-	private static boolean completes(Statement statement) {
-		return switch (statement) {
-			case ExpressionStatement plain -> true;
-			case LocalVariable plain -> true;
-			case JavaSyntax.LocalClass plain -> true;
-			case Empty plain -> true;
-			case Block block ->
-				block.statements().stream().noneMatch(JavaLowering::exits) && (block.statements().isEmpty()
-						|| completes(block.statements().get(block.statements().size() - 1)));
-			case If branch -> branch.otherwise() == null || completes(branch.then()) || completes(branch.otherwise());
-			case While loop -> !isTrue(loop.condition());
-			case For loop -> !isTrue(loop.condition());
-			case ForEach loop -> true;
-			case JavaSyntax.Synchronized held -> completes(held.body());
-			default -> false;
-		};
+	private boolean exits(Statement statement) {
+		return !JavaFlow.completes(statement, this.facts);
 	}
 
 	/** The pattern bindings the statement just lowered leaves in scope after it. */
@@ -5347,9 +5392,6 @@ final class JavaLowering implements JavaEmitter.Context {
 		for (int i = from; i < statements.size(); i++) {
 			Statement statement = statements.get(i);
 			boolean last = i == statements.size() - 1;
-			if (i > 0 && exits(statements.get(i - 1))) {
-				throw error(statement.pos(), "unreachable statement");
-			}
 			if (statement instanceof LocalVariable variable) {
 				if (hoisted != null) {
 					for (Declarator declarator : variable.declarators()) {
@@ -5373,12 +5415,10 @@ final class JavaLowering implements JavaEmitter.Context {
 			if (tail && !last && hoisted == null && statement instanceof If branch && branch.otherwise() == null
 					&& exits(branch.then())) {
 				Flow flow = test(branch.condition());
-				Set<Local> before = new HashSet<>(this.assigned);
 				LispVal then = progn(within(flow.whenTrue(), () -> scoped(branch.then(), true)));
-				this.assigned = before;
 				Objects.requireNonNull(this.scopes.peek()).locals.putAll(flow.whenFalse());
-				lowered = List.of(located(
-						call("if", flow.value().form(), then, progn(sequence(statements, i + 1, true))), branch.pos()));
+				lowered = List.of(located(branch(flow.value().form(), then, progn(sequence(statements, i + 1, true))),
+						branch.pos()));
 				rest = true;
 			}
 			else {
@@ -5418,6 +5458,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		boolean inferred = variable.type().name().equals("var") && variable.type().dimensions() == 0;
 		JavaType type = inferred ? null : type(variable.type());
 		LispVal value;
+		Object constant = null;
 		Expression initializer = declarator.initializer();
 		if (initializer == null) {
 			if (type == null) {
@@ -5440,10 +5481,11 @@ final class JavaLowering implements JavaEmitter.Context {
 				value = declared(this.patternVariables, List.of(value));
 			}
 			this.patternVariables = saved;
+			constant = variable.isFinal() ? constantValue(initial, type) : null;
 		}
-		Local local = bind(declarator.name(), type, declarator.pos());
-		local.initialized = initializer != null;
+		Local local = bind(declarator.name(), type, declarator.pos(), declarator);
 		local.isFinal = variable.isFinal() && initializer != null;
+		local.constant = constant;
 		return new Declared(local, value);
 	}
 
@@ -5461,7 +5503,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	private List<LispVal> scoped(Statement statement, boolean tail) {
-		this.scopes.push(new Scope(null, false));
+		this.scopes.push(new Scope(null));
 		try {
 			return statement instanceof Block block ? sequence(block.statements(), 0, tail)
 					: sequence(List.of(statement), 0, tail);
@@ -5503,6 +5545,16 @@ final class JavaLowering implements JavaEmitter.Context {
 		arguments.addAll(call.arguments());
 		List<LispVal> forms = new ArrayList<>();
 		JavaClass target = call.onSuper() ? owner.superclass : owner;
+		Expression outer = call.outer();
+		if (outer != null) {
+			// outer.super(..): the instance around the superclass, an inner class
+			if (target == null || !target.hasOuterInstance()) {
+				throw error(call.pos(), "illegal qualifier; " + (target == null ? "Object" : target.simpleName())
+						+ " is not an inner class");
+			}
+			forms.add(call("setf", list(slotAccessor(target, outerSlot(target)), THIS),
+					outerOf(outer, Objects.requireNonNull(target.outer))));
+		}
 		if (target == null) {
 			if (!call.arguments().isEmpty()) {
 				throw error(call.pos(), "constructor Object in class Object cannot be applied to given types");
@@ -5586,25 +5638,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			case If branch: {
 				Flow flow = test(branch.condition());
 				Statement otherwise = branch.otherwise();
-				Set<Local> before = new HashSet<>(this.assigned);
 				LispVal then = progn(within(flow.whenTrue(), () -> scoped(branch.then(), tail)));
-				Set<Local> afterThen = this.assigned;
-				this.assigned = new HashSet<>(before);
-				LispVal form = otherwise == null ? call("if", flow.value().form(), then) : call("if",
-						flow.value().form(), then, progn(within(flow.whenFalse(), () -> scoped(otherwise, tail))));
-				// assigned after it: by both branches, a branch that never completes
-				// aside
-				if (exits(branch.then())) {
-					if (otherwise != null && exits(otherwise)) {
-						this.assigned.addAll(afterThen);
-					}
-				}
-				else if (otherwise != null && exits(otherwise)) {
-					this.assigned = afterThen;
-				}
-				else {
-					this.assigned.retainAll(afterThen);
-				}
+				LispVal form = branch(flow.value().form(), then,
+						otherwise == null ? null : progn(within(flow.whenFalse(), () -> scoped(otherwise, tail))));
 				// a branch that never completes leaves the other's bindings in scope
 				if (exits(branch.then()) && (otherwise == null || !exits(otherwise))) {
 					this.introduced = flow.whenFalse();
@@ -5620,13 +5656,8 @@ final class JavaLowering implements JavaEmitter.Context {
 			case While loop: {
 				Target target = loopTarget();
 				Flow flow = test(loop.condition());
-				Set<Local> before = new HashSet<>(this.assigned);
 				LispVal form = loop(flow.value().form(),
 						() -> within(flow.whenTrue(), () -> scoped(loop.body(), false)), List::of, target);
-				if (!isTrue(loop.condition())) {
-					// the body may not run
-					this.assigned = before;
-				}
 				this.introduced = target.breaks ? Map.of() : flow.whenFalse();
 				return List.of(located(form, loop.pos()));
 			}
@@ -5645,7 +5676,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 			case For loop: {
 				Target target = loopTarget();
-				this.scopes.push(new Scope(null, false));
+				this.scopes.push(new Scope(null));
 				List<LispVal> before = new ArrayList<>();
 				List<LispVal> bindings = new ArrayList<>();
 				for (Statement initializer : loop.initializers()) {
@@ -5661,7 +5692,6 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 				Flow flow = loop.condition() == null ? new Flow(constant(true), Map.of(), Map.of())
 						: test(loop.condition());
-				Set<Local> ahead = new HashSet<>(this.assigned);
 				before.add(loop(flow.value().form(), () -> within(flow.whenTrue(), () -> scoped(loop.body(), false)),
 						() -> within(flow.whenTrue(), () -> {
 							List<LispVal> forms = new ArrayList<>();
@@ -5670,10 +5700,6 @@ final class JavaLowering implements JavaEmitter.Context {
 							}
 							return forms;
 						}), target));
-				if (!isTrue(loop.condition())) {
-					// the body may not run
-					this.assigned = ahead;
-				}
 				this.scopes.pop();
 				LispVal form = bindings.isEmpty() ? progn(before) : form(cl("let*"), prepend(list(bindings), before));
 				return List.of(located(form, loop.pos()));
@@ -5841,21 +5867,18 @@ final class JavaLowering implements JavaEmitter.Context {
 		LispSymbol index = temporary();
 		LispSymbol count = temporary();
 		JavaType type = loop.type().name().equals("var") && loop.type().dimensions() == 0 ? element : type(loop.type());
-		this.scopes.push(new Scope(null, false));
-		Local bound = bind(loop.name(), type, loop.pos());
-		bound.initialized = true;
+		this.scopes.push(new Scope(null));
+		Local bound = bind(loop.name(), type, loop.pos(), loop);
 		LispSymbol variable = bound.symbol();
 		// an array is read by a counter; anything else is asked for its iterator
 		LispVal next = through == null ? elementRead(element, call("aref", items, index))
 				: virtual(this.classes.library("java.util.Iterator"),
 						iteratorMethod(this.classes.library("java.util.Iterator"), "next"), items, List.of());
 		LispVal value = assign(new Typed(next, element), type, loop.pos());
-		Set<Local> before = new HashSet<>(this.assigned);
 		this.targets.push(target);
 		List<LispVal> body = scoped(loop.body(), false);
 		this.targets.pop();
 		this.scopes.pop();
-		this.assigned = before;
 		List<LispVal> round = loopBody(List.of(JavaForms.let(variable, value, body)), target);
 		List<LispVal> bindings = new ArrayList<>();
 		LispVal test;
@@ -5916,9 +5939,8 @@ final class JavaLowering implements JavaEmitter.Context {
 					type = type == null ? one.self() : this.types.lub(type, one.self());
 					takesLispErrors |= takesRaised(one);
 				}
-				this.scopes.push(new Scope(null, false));
-				Local bound = bind(clause.name(), Objects.requireNonNull(type), clause.pos());
-				bound.initialized = true;
+				this.scopes.push(new Scope(null));
+				Local bound = bind(clause.name(), Objects.requireNonNull(type), clause.pos(), clause);
 				List<LispVal> handler = sequence(clause.body().statements(), 0, false);
 				this.scopes.pop();
 				List<LispVal> tests = new ArrayList<>();
@@ -6203,6 +6225,10 @@ final class JavaLowering implements JavaEmitter.Context {
 			throw error(block.pos(), "the switch " + (mustCover ? "expression" : "statement")
 					+ " does not cover all possible input values");
 		}
+		if (patterns || hasNull || !(integral || strings || constants != null)) {
+			// an enhanced switch takes every value (JavaFlow)
+			this.facts.enhanced.add(block);
+		}
 		LispVal refusesNull = type.isReference() && !hasNull ? list(call("null", subject), runtimeCall("null-switch"))
 				: null;
 		return new Selection(held, value, arms, refusesNull, patterns, covered);
@@ -6224,7 +6250,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * Whether no case written with a colon runs into the next: each is empty -- its
 	 * labels are the next one's too -- or ends where it cannot go on.
 	 */
-	private static boolean separate(List<Arm> arms) {
+	private boolean separate(List<Arm> arms) {
 		for (int i = 0; i < arms.size() - 1; i++) {
 			List<Statement> body = arms.get(i).written().body();
 			if (!body.isEmpty() && !exits(body.get(body.size() - 1))) {
@@ -6263,7 +6289,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		Selection selection = selection(block, false);
 		List<LispVal> hoisted = new ArrayList<>();
 		this.targets.push(target);
-		this.scopes.push(new Scope(null, false));
+		this.scopes.push(new Scope(null));
 		LispVal form;
 		if (block.arrow()) {
 			form = list(selection.clauses(arm -> within(arm.bindings(), () -> {
@@ -6279,31 +6305,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				.clauses(arm -> within(arm.bindings(), () -> sequence(group(arm.written()), 0, tail, hoisted)), null));
 		}
 		else {
-			// a case runs into the next: the cases are numbered, the selector picks the
-			// first to run, and each runs when the one picked is no later than it
-			LispSymbol first = temporary();
-			List<LispVal> picks = new ArrayList<>();
-			picks.add(cl("cond"));
-			if (selection.refusesNull() != null) {
-				picks.add(selection.refusesNull());
-			}
-			int fallback = selection.arms().size();
-			List<LispVal> bodies = new ArrayList<>();
-			for (int i = 0; i < selection.arms().size(); i++) {
-				Arm arm = selection.arms().get(i);
-				if (arm.isDefault()) {
-					fallback = i;
-				}
-				else {
-					picks.add(list(arm.test(), integer(i)));
-				}
-				List<LispVal> body = sequence(arm.written().body(), 0, false, hoisted);
-				if (!body.isEmpty()) {
-					bodies.add(call("if", call("<=", first, integer(i)), progn(body)));
-				}
-			}
-			picks.add(list(T, integer(fallback)));
-			form = JavaForms.let(first, list(picks), bodies);
+			form = runOn(selection, hoisted, null);
 		}
 		this.scopes.pop();
 		this.targets.pop();
@@ -6314,6 +6316,41 @@ final class JavaLowering implements JavaEmitter.Context {
 			form = list(cl("block"), target.breakBlock, form);
 		}
 		return List.of(located(selection.bound(form), block.pos()));
+	}
+
+	/**
+	 * The cases of a switch written with colons where one runs into the next: they are
+	 * numbered, the selector picks the first to run, and each runs when the one picked is
+	 * no later than it. A {@code break} or a {@code yield} leaves the block around.
+	 * @param otherwise what runs after the last case, or {@code null}
+	 */
+	private LispVal runOn(Selection selection, List<LispVal> hoisted, @Nullable LispVal otherwise) {
+		LispSymbol first = temporary();
+		List<LispVal> picks = new ArrayList<>();
+		picks.add(cl("cond"));
+		if (selection.refusesNull() != null) {
+			picks.add(selection.refusesNull());
+		}
+		int fallback = selection.arms().size();
+		List<LispVal> bodies = new ArrayList<>();
+		for (int i = 0; i < selection.arms().size(); i++) {
+			Arm arm = selection.arms().get(i);
+			if (arm.isDefault()) {
+				fallback = i;
+			}
+			else {
+				picks.add(list(arm.test(), integer(i)));
+			}
+			List<LispVal> body = sequence(arm.written().body(), 0, false, hoisted);
+			if (!body.isEmpty()) {
+				bodies.add(call("if", call("<=", first, integer(i)), progn(body)));
+			}
+		}
+		picks.add(list(T, integer(fallback)));
+		if (otherwise != null) {
+			bodies.add(otherwise);
+		}
+		return JavaForms.let(first, list(picks), bodies);
 	}
 
 	/** The value of a switch expression's arm, as the expression's type takes it. */
@@ -6349,29 +6386,28 @@ final class JavaLowering implements JavaEmitter.Context {
 	private LispVal switchArms(JavaSyntax.Switch block, @Nullable JavaType type, @Nullable List<Typed> results) {
 		Target target = new Target(null, false, false, true);
 		Selection selection = selection(block, true);
-		if (!block.arrow() && !separate(selection.arms())) {
-			throw unsupported(block.pos(), "a switch expression whose cases run into the next");
-		}
+		boolean runsOn = !block.arrow() && !separate(selection.arms());
 		JavaType savedType = this.yieldType;
 		List<Typed> savedYields = this.yields;
 		this.yieldType = type;
 		this.yields = results;
 		List<LispVal> hoisted = new ArrayList<>();
 		this.targets.push(target);
-		this.scopes.push(new Scope(null, false));
+		this.scopes.push(new Scope(null));
 		Selection arms = block.arrow() ? selection : new Selection(selection.held(), selection.value(),
 				merged(selection.arms()), selection.refusesNull(), selection.early(), selection.covered());
-		LispVal form = list(arms.clauses(arm -> within(arm.bindings(), () -> {
-			JavaSyntax.SwitchCase written = arm.written();
-			if (written.value() != null) {
-				Expression value = written.value();
-				return List.of(yielded(expression(value, this.yieldType), value.pos()));
-			}
-			if (!block.arrow()) {
-				return sequence(written.body(), 0, true, hoisted);
-			}
-			return scoped(written.body().get(0), true);
-		}), runtimeCall("no-match")));
+		LispVal form = runsOn ? runOn(selection, hoisted, runtimeCall("no-match"))
+				: list(arms.clauses(arm -> within(arm.bindings(), () -> {
+					JavaSyntax.SwitchCase written = arm.written();
+					if (written.value() != null) {
+						Expression value = written.value();
+						return List.of(yielded(expression(value, this.yieldType), value.pos()));
+					}
+					if (!block.arrow()) {
+						return sequence(written.body(), 0, true, hoisted);
+					}
+					return scoped(written.body().get(0), true);
+				}), runtimeCall("no-match")));
 		this.scopes.pop();
 		this.targets.pop();
 		this.yieldType = savedType;

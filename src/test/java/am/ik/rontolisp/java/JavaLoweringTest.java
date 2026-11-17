@@ -331,8 +331,8 @@ class JavaLoweringTest {
 							+ "(LET ((|n| NIL)) (WRITE-LINE (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT "
 							+ "(%STRING-CONCAT (IF (|Box.above(Comparable)| (OR |v| (RONTOLISP::%JAVA-NPE)) (|Version.new(int)| "
 							+ "1)) \"true\" \"false\") \" \") (IF (|Box.above(Comparable)| (OR |s| (RONTOLISP::%JAVA-NPE)) \"a\") "
-							+ "\"true\" \"false\")) (OR (IF (AND (|Named%is| |o|) (PROGN (SETQ |n| |o|) T)) (|Named.greet()%v| "
-							+ "|n|) \"\") \"null\")) (%DECIMAL-PIECE (|L3.sum(Long,Integer)| |big| |len|))) (RONTOLISP::%JAVA-TO-STRING "
+							+ "\"true\" \"false\")) (OR (IF (|Named%is| |o|) (PROGN (SETQ |n| |o|) (|Named.greet()%v| "
+							+ "|n|)) \"\") \"null\")) (%DECIMAL-PIECE (|L3.sum(Long,Integer)| |big| |len|))) (RONTOLISP::%JAVA-TO-STRING "
 							+ "(|L3.pick(Object,Object)| 1 2))))) (FUNCALL (OR |task| (RONTOLISP::%JAVA-NPE)))))))))))",
 					"(DEFUN |Named.name()%v| (|%o|) (COND ((|Named%lambda?| |%o|) (FUNCALL (|Named%lambda-%f| "
 							+ "|%o|))) (T (RONTOLISP::%JAVA-NO-RECEIVER |%o| \"name()\"))))",
@@ -526,8 +526,6 @@ class JavaLoweringTest {
 				{ "import module java.sql; void main() { }", "1:1: the module java.sql" },
 				{ "void main() { assert true; }", "1:15: an assert statement" },
 				{ "void main() { switch (1L) { default -> { } } }", "1:15: a switch over long" },
-				{ "void main() { int k = switch (1) { case 1: yield 1; default: IO.println(); case 2: yield 2; }; }",
-						"1:23: a switch expression whose cases run into the next" },
 				{ "void main() { java.util.function.Supplier<Integer> s = List<String>::size; }",
 						"1:68: a method reference through a parameterized type" },
 				{ "class O<T> { class I { } } void main() { O<String>.I i = null; }",
@@ -542,12 +540,8 @@ class JavaLoweringTest {
 				{ "class A { transient int x; } void main() { }", "1:11: the modifier transient" },
 				{ "import java.util.concurrent.locks.ReentrantLock; void main() { ReentrantLock l = null; }",
 						"1:64: the class java.util.concurrent.locks.ReentrantLock" },
-				{ "interface I { default void m() { } } class A implements I { public void m() { I.super.m(); } } void main() { }",
-						"1:81: a method of an interface called through super" },
-				{ "class O { class I { } } void main() { O o = new O(); Object x = o.new I() { }; }",
-						"1:67: an anonymous class made with an outer instance" },
-				{ "class O { class I { } } class S extends O.I { } void main() { }",
-						"1:41: a class extending the inner class I from outside its outer class" },
+				{ "interface I { default void m() { } } class A implements I { Runnable r = I.super::m; } void main() { }",
+						"1:81: a method reference through a qualified super" },
 				{ "import java.util.Scanner; void main() { Scanner s = null; }", "1:41: the class java.util.Scanner" },
 				{ "void main() { var xs = new ArrayList<String>(); IO.println(xs.stream()); }",
 						"1:63: ArrayList.stream()" },
@@ -618,7 +612,7 @@ class JavaLoweringTest {
 						"1:92: local variables referenced from an inner class must be final or effectively final" },
 				{ "void main() { int x; if (\"a\".isEmpty()) x = 1; IO.println(x); }",
 						"1:59: variable x might not have been initialized" },
-				{ "int f(int a) { if (a > 0) return 1; } void main() { }", "1:5: missing return statement" },
+				{ "int f(int a) { if (a > 0) return 1; } void main() { }", "1:37: missing return statement" },
 				{ "void main() { return; IO.println(); }", "1:23: unreachable statement" },
 				{ "class A { A() { int y = f(); super(); } int f() { return 1; } } void main() { }",
 						"1:25: cannot reference this before supertype constructor has been called" },

@@ -239,6 +239,12 @@ final class JavaClass {
 	/** Whether it is a local or an anonymous class: lowered where it is declared. */
 	boolean isLocal;
 
+	/**
+	 * Whether the instance around its superclass, an inner class, is given where an
+	 * instance is made: an anonymous class made with {@code outer.new}.
+	 */
+	boolean superOuterGiven;
+
 	/** The type parameters of the method a local class is declared in. */
 	List<TypeParameter> scope = List.of();
 
