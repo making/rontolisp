@@ -130,6 +130,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 - [tcp-sockets.md](tcp-sockets.md) -- `rontolisp:tcp-*` sockets and TLS; the three WASM dispatch providers (component, stdin, the `--native` runner's `rltcp` host); read deadlines and the component's `listen` probe
 - [dexador.md](dexador.md) -- unpatched dexador: what the usocket/cl+ssl shims and the trivial-mimes derived form owe it (a stream or a signal), the measured legs and run flags, what no test runs
 - [url.md](url.md) -- `rontolisp:url-*`/`query-param*`
+- [java-frontend-provenance.md](java-frontend-provenance.md) -- the Java front end's licence and naming rules: no JDK jar, source, Javadoc text or test copied or translated; the library written from the specification (it is embedded in every compiled program); ports only from Apache-2.0 code with notice; "an experimental subset of the Java language", never "Java compatible"
 - [json.md](json.md) -- `rontolisp:json-parse`/`json-stringify`; `json-span`/`json-value` over a document's bytes (a string, octets, linear memory in place), the path and value shapes decided with sluice, the wasm-GC scan, the measured edits
 - [lack.md](lack.md) -- the lack request/response + middleware ecosystem
 - [clack.md](clack.md) -- Clack support, the late-bound `clack-handler-rontolisp` shim, and `http-serve.lisp`, the transport legs it shares with the Clojure Ring adapter
