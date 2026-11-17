@@ -15884,6 +15884,42 @@ cases:
       (1 2)
       (1 2)
       (2 9)
+  - name: a-cleanup-a-return-from-runs-is-outside-every-handler-it-left
+    source: |
+      ; A return-from leaving an unwind-protect runs the cleanup once, outside the
+      ; handlers between the exit and the unwind-protect -- the region's own and a
+      ; handler-case's -- so an error of the cleanup reaches the handler outside.
+      ; wasm-GC inlined the cleanup at the exit, inside them: it ran twice, and the
+      ; inner handler-case took its error.
+      (defun ci-crf-inner ()
+        (unwind-protect
+             (handler-case (return-from ci-crf-inner :done)
+               (error (c) (format t "inner caught ~a~%" c) :inner))
+          (format t "cleanup~%")
+          (error "from cleanup")))
+      (defun ci-crf-own ()
+        (block b
+          (unwind-protect (return-from b :done)
+            (format t "own cleanup~%")
+            (error "from own cleanup"))))
+      (defun ci-crf-nested ()
+        (block outer
+          (unwind-protect
+               (block inner
+                 (unwind-protect (if (> (random 2) -1) (return-from outer :out) (return-from inner :in))
+                   (format t "first~%")))
+            (format t "second~%"))))
+      (print (handler-case (ci-crf-inner) (error (c) (list :outer (princ-to-string c)))))
+      (print (handler-case (ci-crf-own) (error (c) (list :outer (princ-to-string c)))))
+      (print (ci-crf-nested))
+    expected: |
+      cleanup
+      (:OUTER "from cleanup")
+      own cleanup
+      (:OUTER "from own cleanup")
+      first
+      second
+      :OUT
   - name: unwind-protect-values
     source: |
       ; An unwind-protect cleanup runs for effect: its values -- and its value

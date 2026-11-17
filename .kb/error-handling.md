@@ -47,6 +47,18 @@ signals replaces the pending unwind (CL: newer exit wins).
   an `UnwindScope{cleanupForms, blockDepth, trampolineDepth}` and `WasmReturnCompiler` branches to a
   trampoline block emitted lexically OUTSIDE the try_table (the structural equivalent of `holes`),
   cascading innermost-first.
+- **A named `return-from` takes a trampoline too, on wasm** (2026-11-17, `.todo/j73`): it INLINED
+  the escaped cleanups at the exit, inside every try_table between the exit and the
+  `unwind-protect` -- the region's own and a `handler-case`'s -- so a cleanup that signalled ran
+  twice (its own pad ran it again) or was taken by the inner `handler-case`; a Java
+  `try (r) { return x; }` whose `close()` threw hit it. A region whose protected form holds a named
+  `return-from` (`WasmReturnFromCompiler.holdsNamedExit`, syntactic) opens `block $ntramp` inside
+  `$tramp`; the exit stores its target's block-stack depth as an i31 in the scope's selector
+  local and branches there; the landing runs the cleanups and, per target the exits named
+  (`UnwindScope.namedTargets`), goes on through the next such scope or to the block
+  (`WasmReturnFromCompiler.exit`). Cleanups that throw nothing are still inlined. `go` keeps the
+  inlining. Pinned by `ci-spec.yaml` `a-cleanup-a-return-from-runs-is-outside-every-handler-it-left`
+  and `java-spec.yaml` `try-with-resources-finally-exits-and-causes`.
 - **A cleanup's VALUES are discarded, its value COUNT included**: the cleanup sequence is bracketed
   by a save/restore of the `%mv-spill` channel on all three backends, and the save lives in each
   backend's SHARED cleanup emitter so `return`/`go`-inlined copies get it too
@@ -632,6 +644,10 @@ the one `princ` writes, and nothing below changes it. One report still differs o
 report-less class, "Known gap" below). A struct accessor on a non-instance agrees since 2026-09-26
 ([defstruct.md](defstruct.md), "Accessors check their object"), and so does an out-of-range
 subscript ("An out-of-range subscript is a type-error naming its bound").
+
+A program of the Java front end never reaches it: its entry is a `handler-case` writing a JDK's
+`Exception in thread "main" ..` and exiting with 1 through `%host-exit` -- no location lines
+([java-frontend.md](java-frontend.md), "Exceptions").
 
 **Under it, location lines** (`UncaughtReport.atLine` / `asyncLine`, two-space indented):
 `  at FILE:LINE in FUNCTION` -- the innermost form read from a named file that the condition passed

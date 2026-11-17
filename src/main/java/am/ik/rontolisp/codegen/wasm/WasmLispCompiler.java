@@ -11846,16 +11846,31 @@ public final class WasmLispCompiler implements LispCompiler {
 	 * {@code wasmCtrlDepth} marker of the scope's exit-trampoline block, lexically
 	 * outside its try_table (so a throw from a cleanup cannot re-enter the scope's own
 	 * handler); -1 when the scope has no trampoline (no enclosing plain-{@code return}
-	 * boundary, so no {@code return} can escape it). A named {@code return-from} does not
-	 * use the trampolines: it inlines the escaped cleanups at the exit site like
-	 * {@code go} (see {@link WasmReturnFromCompiler}).
+	 * boundary, so no {@code return} can escape it). A named {@code return-from} leaving
+	 * an {@code unwind-protect} whose protected form holds one branches to the scope's
+	 * NAMED trampoline, likewise outside its try_table, with the target named in
+	 * {@code selectorSlot}; any other scope it leaves (a handler-case's depth counter, a
+	 * special let's restores, which throw nothing) has its cleanups inlined at the exit
+	 * like {@code go} (see {@link WasmReturnFromCompiler}).
 	 *
 	 * @param cleanupForms the cleanup forms to run when a {@code return} exits the scope
 	 * @param blockDepth the block-stack size at scope entry
 	 * @param trampolineDepth the {@code wasmCtrlDepth} marker of the exit trampoline, or
 	 * -1
+	 * @param namedTrampolineDepth the {@code wasmCtrlDepth} marker of the named exits'
+	 * trampoline, or -1
+	 * @param selectorSlot the local naming the target of a named exit on its way through
+	 * the named trampoline, or -1
+	 * @param namedTargets the blocks the named exits through this scope go to, in the
+	 * order first met
 	 */
-	record UnwindScope(List<LispVal> cleanupForms, int blockDepth, int trampolineDepth) {
+	record UnwindScope(List<LispVal> cleanupForms, int blockDepth, int trampolineDepth, int namedTrampolineDepth,
+			int selectorSlot, List<BlockMarker> namedTargets) {
+
+		UnwindScope(List<LispVal> cleanupForms, int blockDepth, int trampolineDepth) {
+			this(cleanupForms, blockDepth, trampolineDepth, -1, -1, List.of());
+		}
+
 	}
 
 	/**

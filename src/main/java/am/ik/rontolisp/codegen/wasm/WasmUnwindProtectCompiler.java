@@ -34,7 +34,11 @@ import org.jspecify.annotations.Nullable;
  * branches onward to the next escaped scope's trampoline (or the target {@code %block}),
  * innermost first -- the CL unwinding order. Because the trampoline is lexically outside
  * the try_table, a throw from an inlined cleanup cannot re-enter this scope's own
- * handler: the structural equivalent of the JVM {@code holes} mechanism.
+ * handler: the structural equivalent of the JVM {@code holes} mechanism. A protected form
+ * holding a named {@code return-from} gets a second one, {@code block $ntramp}, inside
+ * {@code $tramp}: the exit stores its target block in a selector local and branches
+ * there, and the landing runs the cleanups and goes on toward each target the exits named
+ * ({@link WasmReturnFromCompiler#exit}).
  *
  * <p>
  * The region is also how a special {@code let} restores its dynamic bindings on every
@@ -68,7 +72,8 @@ final class WasmUnwindProtectCompiler {
 		// State-machine mode: the protected form is a spine child; a suspension inside
 		// it returns straight out (skipping the cleanups) and the resume re-enters this
 		// try_table from the top, re-arming them.
-		compileRegion(() -> WasmAsyncEmit.spine(protectedForm, ctx), cleanups, ctx, true, null);
+		compileRegion(() -> WasmAsyncEmit.spine(protectedForm, ctx), cleanups, ctx, true, null,
+				ctx.asyncResume == null && !cleanups.isEmpty() && WasmReturnFromCompiler.holdsNamedExit(protectedForm));
 	}
 
 	/**
@@ -89,9 +94,11 @@ final class WasmUnwindProtectCompiler {
 	 * @param keptSlots the locals the landing pads refresh
 	 * ({@code .kb/wasm-landing-pad-refresh.md}), or null for every local declared so far
 	 * -- a region whose pads read nothing but their own save slots keeps only those
+	 * @param namedExits whether a named {@code return-from} can leave the body: it gets
+	 * the named trampoline, which only a catching region needs
 	 */
 	static void compileRegion(Runnable body, List<LispVal> cleanups, WasmLispCompiler.Ctx ctx, boolean catching,
-			int @Nullable [] keptSlots) {
+			int @Nullable [] keptSlots, boolean namedExits) {
 		// block $tramp (result (ref null eq)) -- the return-exit trampoline, only when
 		// an enclosing plain-return boundary exists (otherwise no return can escape
 		// this scope; a named return-from inlines its escaped cleanups instead).
@@ -122,6 +129,17 @@ final class WasmUnwindProtectCompiler {
 			ctx.writer.writeRefType(true, Type.EQ.code());
 			ctx.wasmCtrlDepth++;
 			trampolineDepth = ctx.wasmCtrlDepth;
+		}
+		// block $ntramp (result (ref null eq)) -- the named exits' trampoline
+		boolean named = catching && namedExits;
+		int namedDepth = -1;
+		int selectorSlot = -1;
+		if (named) {
+			selectorSlot = ctx.allocTemp();
+			ctx.writer.write(Instruction.BLOCK);
+			ctx.writer.writeRefType(true, Type.EQ.code());
+			ctx.wasmCtrlDepth++;
+			namedDepth = ctx.wasmCtrlDepth;
 		}
 		// The landing-pad discipline (WasmLandingPad): every live local rides the
 		// operand stack across the protected body, pushed inside the innermost block
@@ -182,7 +200,9 @@ final class WasmUnwindProtectCompiler {
 			}
 			ctx.wasmCtrlDepth++;
 		}
-		ctx.unwindScopes.push(new WasmLispCompiler.UnwindScope(cleanups, ctx.blockMarkers.size(), trampolineDepth));
+		WasmLispCompiler.UnwindScope scope = new WasmLispCompiler.UnwindScope(cleanups, ctx.blockMarkers.size(),
+				trampolineDepth, namedDepth, selectorSlot, new java.util.ArrayList<>());
+		ctx.unwindScopes.push(scope);
 		body.run();
 		ctx.unwindScopes.pop();
 		if (catching) {
@@ -252,6 +272,12 @@ final class WasmUnwindProtectCompiler {
 				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.TAG_LISP_COND);
 			}
 		}
+		if (named) {
+			ctx.wasmCtrlDepth--;
+			ctx.writer.write(Instruction.END); // block $ntramp -- the exit's value is on
+												// the stack
+			namedLanding(scope, cleanups, ctx);
+		}
 		if (needTrampoline) {
 			ctx.wasmCtrlDepth--;
 			ctx.writer.write(Instruction.END); // block $tramp
@@ -263,6 +289,44 @@ final class WasmUnwindProtectCompiler {
 		}
 		ctx.wasmCtrlDepth--;
 		ctx.writer.write(Instruction.END); // block $done
+	}
+
+	/**
+	 * The named trampoline's landing: the value of the exit in a local, the cleanups,
+	 * then on toward the block the selector names -- through the next scope's named
+	 * trampoline when it too lies inside that block. Never falls through.
+	 */
+	private static void namedLanding(WasmLispCompiler.UnwindScope scope, List<LispVal> cleanups,
+			WasmLispCompiler.Ctx ctx) {
+		List<WasmLispCompiler.BlockMarker> targets = scope.namedTargets();
+		if (targets.isEmpty()) {
+			// no exit came this way: the landing is never reached
+			ctx.writer.write(Instruction.UNREACHABLE);
+			return;
+		}
+		int valueSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(valueSlot);
+		compileCleanups(cleanups, ctx);
+		for (int i = 0; i < targets.size(); i++) {
+			WasmLispCompiler.BlockMarker target = targets.get(i);
+			boolean last = i == targets.size() - 1;
+			if (!last) {
+				ctx.writer.write(Instruction.GET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(scope.selectorSlot());
+				WasmReturnFromCompiler.selector(WasmReturnCompiler.blockStackDepthOf(ctx, target), ctx);
+				ctx.writer.write(Instruction.REF_EQ);
+				ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+				ctx.wasmCtrlDepth++;
+			}
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(valueSlot);
+			WasmReturnFromCompiler.exit(target, ctx.unwindScopes, ctx);
+			if (!last) {
+				ctx.wasmCtrlDepth--;
+				ctx.writer.write(Instruction.END); // if
+			}
+		}
 	}
 
 	/**

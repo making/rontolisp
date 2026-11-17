@@ -48,9 +48,13 @@ operands for free.
   back to the nearest `functionBoundary` (`Jvm`/`WasmReturnFromCompiler`;
   `LispMacroExpander.blockName` handles designators).
 - Unwind: `JvmReturnCompiler.emitExit` generalizes the exit to any target depth (comparisons
-  use the target's 1-based block-stack depth, not the stack size); wasm INLINES escaped
-  cleanups for `return-from` — same limit as `go` (a throw from an inlined cleanup can re-enter
-  its own handler).
+  use the target's 1-based block-stack depth, not the stack size). wasm: a `return-from` leaving
+  an `unwind-protect` whose protected form holds a named exit branches to that region's NAMED
+  trampoline (`$ntramp`, outside its try_table), the target in a selector local, and the
+  trampolines cascade to the block; only the stack-neutral cleanups that throw nothing (a
+  `handler-case`'s depth counter, a special `let`'s restores) are inlined at the exit
+  ([error-handling.md](error-handling.md), Phase 1). `go` still inlines every escaped cleanup:
+  a throw from one can re-enter its own handler.
 
 ### Cross-lambda `return-from` / `return` = a real non-local exit (EH-based)
 `compiler/CrossLambdaExitLowering` (compile-path only, before `desugarProgram`) rewrites the

@@ -538,7 +538,7 @@ final class WasmLetCompiler {
 						WasmExprCompiler.compileExpr(parts.get(i), ctx);
 					}
 				}
-			}, restoreForms(restores), ctx, ctx.ehMode, saveSlots);
+			}, restoreForms(restores), ctx, ctx.ehMode, saveSlots, false);
 			if (forEffect) {
 				ctx.writer.write(Instruction.DROP);
 			}

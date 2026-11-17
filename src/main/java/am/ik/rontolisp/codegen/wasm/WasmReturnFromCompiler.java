@@ -23,12 +23,15 @@ import org.jspecify.annotations.Nullable;
  * {@link WasmReturnCompiler}.
  *
  * <p>
- * EH mode: unlike plain {@code return} (whose escaped {@code unwind-protect} cleanups run
- * through the pre-built trampoline cascade, which always ends at the nearest
- * plain-{@code return} boundary), a named exit inlines the cleanup forms of every escaped
- * scope at the exit site, innermost first, then branches straight to the target block --
- * the same strategy (and the same documented lite limit) as {@code go}: a throw from such
- * an inlined cleanup can re-enter its own scope's handler.
+ * EH mode: an escaped {@code unwind-protect} whose protected form holds a named exit has
+ * a NAMED trampoline lexically outside every handler inside it
+ * ({@link WasmUnwindProtectCompiler}): the exit names its target in the scope's selector
+ * and branches there, and the trampoline runs the cleanups and goes on toward the target,
+ * through the next such scope. The cleanups of the scopes before the first such one -- a
+ * {@code handler-case}'s depth counter, a special {@code let}'s restores, none of which
+ * throws -- are inlined at the exit site, innermost first. Inlining a user cleanup there,
+ * as {@code go} still does, left it inside the handlers the exit was leaving: an error of
+ * the cleanup was taken by them, the region's own pad running the cleanup a second time.
  */
 final class WasmReturnFromCompiler {
 
@@ -75,17 +78,73 @@ final class WasmReturnFromCompiler {
 			ctx.writer.write(Instruction.REF_NULL);
 			ctx.writer.writeHeapType(Type.EQ.code());
 		}
-		// Inline the cleanups of every unwind scope entered inside the target block,
-		// innermost first -- the exit leaves their protected regions (an unwind-protect's
-		// cleanups, a special let's binding restores). The value stays beneath on the
-		// operand stack (each cleanup's value is dropped).
-		for (WasmLispCompiler.UnwindScope scope : ctx.unwindScopes) {
+		exit(target, ctx.unwindScopes, ctx);
+	}
+
+	/**
+	 * Leaves the scopes entered inside the target block, innermost first, with the value
+	 * on the operand stack: to the named trampoline of the first that has one, which goes
+	 * on from there, else straight to the block. The cleanups of the scopes before it are
+	 * inlined (each cleanup's value is dropped; the value stays beneath).
+	 * @param target the block the exit goes to
+	 * @param scopes the unwind scopes around the exit, innermost first
+	 * @param ctx the compilation context
+	 */
+	static void exit(WasmLispCompiler.BlockMarker target, Iterable<WasmLispCompiler.UnwindScope> scopes,
+			WasmLispCompiler.Ctx ctx) {
+		int targetDepth = WasmReturnCompiler.blockStackDepthOf(ctx, target);
+		for (WasmLispCompiler.UnwindScope scope : scopes) {
 			if (scope.blockDepth() < targetDepth) {
 				break;
+			}
+			if (scope.namedTrampolineDepth() >= 0) {
+				if (!scope.namedTargets().contains(target)) {
+					scope.namedTargets().add(target);
+				}
+				selector(targetDepth, ctx);
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(scope.selectorSlot());
+				ctx.writer.write(Instruction.BR, ctx.wasmCtrlDepth - scope.namedTrampolineDepth());
+				return;
 			}
 			WasmUnwindProtectCompiler.compileCleanups(scope.cleanupForms(), ctx);
 		}
 		ctx.writer.write(Instruction.BR, ctx.wasmCtrlDepth - target.depth());
+	}
+
+	/**
+	 * Pushes the selector naming a target block: its block-stack depth as an
+	 * {@code i31ref}, which {@code ref.eq} compares.
+	 */
+	static void selector(int targetDepth, WasmLispCompiler.Ctx ctx) {
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(targetDepth);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+	}
+
+	/**
+	 * Whether a form holds a named {@code return-from}: an {@code unwind-protect} around
+	 * it gives such exits a named trampoline. Quoted data and nested lambdas are walked
+	 * too; a trampoline nothing branches to costs bytes only.
+	 * @param form the protected form
+	 * @return whether some {@code (return-from name ...)} with a name stands in it
+	 */
+	static boolean holdsNamedExit(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return false;
+		}
+		if (cons.car() instanceof am.ik.rontolisp.LispSymbol head && LispNames.RETURN_FROM.equals(head.name())
+				&& cons.cdr() instanceof LispCons rest && LispMacroExpander.blockName(rest.car()) != null) {
+			return true;
+		}
+		LispVal rest = cons;
+		while (rest instanceof LispCons each) {
+			if (holdsNamedExit(each.car())) {
+				return true;
+			}
+			rest = each.cdr();
+		}
+		return false;
 	}
 
 	/**
