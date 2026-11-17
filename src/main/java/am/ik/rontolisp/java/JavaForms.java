@@ -14,6 +14,7 @@ import am.ik.rontolisp.LispString;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispTrue;
 import am.ik.rontolisp.LispVal;
+import org.jspecify.annotations.Nullable;
 
 /** The core forms the Java lowering builds, and the names it builds them of. */
 final class JavaForms {
@@ -27,6 +28,18 @@ final class JavaForms {
 
 	/** What a {@code Long} box holds beside its number: {@code (number . :long)}. */
 	static final LispSymbol BOXED_LONG = new LispSymbol(":LONG");
+
+	/**
+	 * What the box of a primitive holds beside its value when the value alone does not
+	 * tell the box -- a {@code long}, a {@code byte}, a {@code short} and a {@code float}
+	 * are an integer or a double as an {@code int} or a {@code double} is -- or
+	 * {@code null} for a box that is its value.
+	 */
+	static @Nullable LispSymbol boxTag(JavaType type) {
+		return type == JavaType.Primitive.LONG ? BOXED_LONG
+				: type == JavaType.Primitive.BYTE ? new LispSymbol(":BYTE") : type == JavaType.Primitive.SHORT
+						? new LispSymbol(":SHORT") : type == JavaType.Primitive.FLOAT ? new LispSymbol(":FLOAT") : null;
+	}
 
 	static final LispSymbol THIS = new LispSymbol("this");
 
@@ -116,16 +129,30 @@ final class JavaForms {
 
 	/**
 	 * The mask keeping an integer in the range of its type, a shape the backends compile
-	 * raw; a double is left as it is.
+	 * raw; a double is left as it is. A {@code long} is the low 64 bits as a signed
+	 * field, one wrapping machine operation on both compilers where the masks of an
+	 * {@code int} would need a bignum literal.
 	 */
 	static LispVal wrap(JavaType type, LispVal form) {
-		if (type == JavaType.Primitive.DOUBLE) {
+		if (type.isFloating()) {
 			return form;
 		}
-		BigInteger half = BigInteger.ONE.shiftLeft(type == JavaType.Primitive.LONG ? 63 : 31);
+		if (type == JavaType.Primitive.LONG) {
+			return call("%mask-signed-field", integer(64), form);
+		}
+		BigInteger half = BigInteger.ONE.shiftLeft(31);
 		LispVal offset = integer(half);
 		return call("-", call("logand", call("+", form, offset), integer(half.shiftLeft(1).subtract(BigInteger.ONE))),
 				offset);
+	}
+
+	/**
+	 * The low bits of an integer read as a signed number of that width, in the shape the
+	 * backends compile raw.
+	 */
+	static LispVal signed(LispVal form, int bits) {
+		long half = 1L << (bits - 1);
+		return call("-", call("logand", call("+", form, integer(half)), integer((half << 1) - 1)), integer(half));
 	}
 
 	/**

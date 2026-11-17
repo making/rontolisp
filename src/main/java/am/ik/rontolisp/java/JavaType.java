@@ -15,7 +15,8 @@ sealed interface JavaType {
 	/** A primitive type, or {@code void}. */
 	enum Primitive implements JavaType {
 
-		BOOLEAN("boolean"), CHAR("char"), INT("int"), LONG("long"), DOUBLE("double"), VOID("void");
+		BOOLEAN("boolean"), BYTE("byte"), SHORT("short"), CHAR("char"), INT("int"), LONG("long"), FLOAT("float"),
+		DOUBLE("double"), VOID("void");
 
 		private final String spelling;
 
@@ -146,11 +147,24 @@ sealed interface JavaType {
 	}
 
 	default boolean isNumeric() {
-		return this == Primitive.INT || this == Primitive.LONG || this == Primitive.DOUBLE || this == Primitive.CHAR;
+		return isIntegral() || isFloating();
 	}
 
 	default boolean isIntegral() {
-		return this == Primitive.INT || this == Primitive.LONG || this == Primitive.CHAR;
+		return this == Primitive.INT || this == Primitive.LONG || this == Primitive.CHAR || this == Primitive.BYTE
+				|| this == Primitive.SHORT;
+	}
+
+	default boolean isFloating() {
+		return this == Primitive.DOUBLE || this == Primitive.FLOAT;
+	}
+
+	/**
+	 * Whether a value of the type is an {@code int} once an operator promotes it:
+	 * {@code byte}, {@code short}, {@code char}.
+	 */
+	default boolean isBelowInt() {
+		return this == Primitive.BYTE || this == Primitive.SHORT || this == Primitive.CHAR;
 	}
 
 	default boolean isPrimitive() {

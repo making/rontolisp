@@ -7,7 +7,8 @@
 
 **文字列はコードポイントの列です。** `length`、`charAt`、`substring` は Unicode の
 コードポイントを数えます。言語仕様は UTF-16 のコード単位を数えるので、基本多言語面の外の
-文字を含む文字列では結果が変わります。`hashCode` は仕様どおりの値です。
+文字を含む文字列では結果が変わります。`hashCode` は仕様どおりの値です。`toCharArray` は
+UTF-16 のコード単位を返し、`new String(char[])` はそれを元の文字列に読み戻します。
 
 ```java
 void main() {
@@ -47,7 +48,7 @@ JDK は `false false true` を表示します。
 `ClassCastException` になる箇所でも、そのまま使われます。型変数へのキャストはその境界を、
 型引数付きの型へのキャストはそのクラスを検査します。
 
-**配列への格納は検査しません。** 配列は要素の型を記録していません。そのため、配列自身の型
+**配列への格納は検査しません。** 参照型の配列は要素の型を記録していません。そのため、配列自身の型
 より上の配列型を通して格納した値（`Object[] a = new String[1]; a[0] = 1;`）は、言語仕様では
 `ArrayStoreException` になる場合でも格納されます。
 
@@ -100,10 +101,11 @@ static 初期化子が投げた例外は、`ExceptionInInitializerError` に包�
 届きます。
 
 **実行時のエラーは言語仕様の例外ではありません。** 0 による整数の除算は、メッセージが
-`/ by zero` の `ArithmeticException` です。コレクション、`Integer.parseInt`、
+`/ by zero` の `ArithmeticException` です。配列の範囲外の添字は、言語仕様のメッセージを持つ
+`ArrayIndexOutOfBoundsException` です。コレクション、`Integer.parseInt`、
 `Double.parseDouble`、`Objects.requireNonNull`、`Math.addExact` が失敗したときに投げる例外は、
 クラスもメッセージも言語仕様のものです。`null` に対する呼び出し、`null` に対する `switch`、
-`null` のボックスのアンボクシング、配列・文字列・`StringBuilder` の範囲外の添字、引数と変換が
+`null` のボックスのアンボクシング、文字列・`StringBuilder` の範囲外の添字、引数と変換が
 合わない `String.format` は、`RuntimeException`、`Exception`、`Throwable` の `catch` で捕捉
 できるエラーになりますが、クラスとメッセージは言語仕様のものと異なります。`null` に対する
 呼び出しやフィールドの読み出しは、検出されない場合があります。失敗したキャストは、メッセージの
@@ -161,12 +163,13 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 - static import、アノテーション型、`assert`。
 - クラスリテラル、`try`-with-resources、マルチキャッチ、`finally` ブロックから抜ける
   `return`、`break`、`continue`、`yield`。
-- `long`、`double`、`boolean` に対する `switch`。コロン形式の `case` が次の `case` に
+- `long`、`float`、`double`、`boolean` に対する `switch`。コロン形式の `case` が次の `case` に
   フォールスルーする `switch` 式。`Interface.super.m()`。内部クラスを、その外側のクラスの外で
   継承するクラス。`outer.new` または `<>` で作る匿名クラス。
-- スーパークラスのフィールドを隠すフィールド。`float`、`byte`、`short`。
+- スーパークラスのフィールドを隠すフィールド。
 - `Outer<A>.Inner` と書く型。型パラメータを持つクラスの内部クラスのメンバーを、そのクラスの
-  外から読むこと。複数の型へのキャスト（`(A & B) x`）。配列型へのナローイングキャスト。
+  外から読むこと。複数の型へのキャスト（`(A & B) x`）。`int[]`、`byte[]`、`float[]`、
+  `double[]`、`boolean[]` 以外の配列型へのナローイングキャストと `instanceof`。
   型に型引数があるメソッド参照（`List<String>::size`）と、自身の型引数を書くメソッド参照
   （`this::<T>m`）。
 - `String`、`StringBuilder`、ボックスを継承するクラス。

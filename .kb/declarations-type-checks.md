@@ -27,8 +27,11 @@ Seven `LispMacroExpander` expansions (no per-backend codegen), in `PackageRegist
 `expandBuiltinMacro` cases so `macroexpand-1` works:
 
 - `declare`/`declaim`/`proclaim` -> `nil`, arguments never evaluated or validated (`proclaim`
-  deviates from CL); `the` -> its value form; `eval-when` -> `progn` of the body for `:execute`,
-  `nil` otherwise ("An eval-when's position" below).
+  deviates from CL); `the` -> its value form (but a wasm classifier reads the form before the
+  expansion: `(setq h (the fixnum <integer tree>))` in a 30,000,000-step loop is 0.53 s on wasm
+  against 0.11 s without the `the`, the JVM 0.18 both, measured 2026-11-17, `.todo/j80`);
+  `eval-when` -> `progn` of the body for `:execute`, `nil` otherwise ("An eval-when's position"
+  below).
 - `check-type` -> `(let ((__check-type place)) (if <type-test> nil (let ((__report <"...~S..."
   rendered over __check-type>)) (error 'simple-type-error :datum __check-type :expected-type 'spec
   :format-control (%text-control __report)))))` (2026-10-30; was a plain `simple-error`, so

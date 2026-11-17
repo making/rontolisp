@@ -32,5 +32,5 @@ that this refuses with a compiler's wording.
 - **To measure, not assume** (four backends, the `bench.sh` method): the cast a compiler puts
   where a value is read through a type argument, against trusting the type (today: trusted,
   a polluted heap passes); `(or box (%java-null-unbox))` dropped where the box was just made;
-  the `Long` cons on wasm once `.todo/j72` makes `long` arithmetic cheap (`List<Long>` summed:
-  32.90 -> 41.14 s with the arithmetic owning both).
+  the `Long` cons on wasm now that `long` arithmetic is one machine operation (j72: a
+  `List<Long>` summed, 28.02 -> 1.35 s on wasm, `.kb/java-frontend.md`, "Boxes").

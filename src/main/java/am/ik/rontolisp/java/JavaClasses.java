@@ -891,7 +891,8 @@ final class JavaClasses {
 				String mine = "this." + name;
 				String theirs = "$that." + name;
 				text.append(" && ");
-				if (type == Primitive.DOUBLE) {
+				if (type.isFloating()) {
+					// a float widens to the double of its value: one comparison for both
 					text.append("Double.compare(").append(mine).append(", ").append(theirs).append(") == 0");
 				}
 				else if (type.isPrimitive()) {
@@ -916,11 +917,12 @@ final class JavaClasses {
 			for (int i = 0; i < components.size(); i++) {
 				String mine = "this." + components.get(i).name();
 				JavaType type = componentTypes.get(i);
-				String hash = type == Primitive.INT || type == Primitive.CHAR ? mine
+				String hash = type == Primitive.INT || type.isBelowInt() ? mine
 						: type == Primitive.LONG ? "Long.hashCode(" + mine + ")"
-								: type == Primitive.DOUBLE ? "Double.hashCode(" + mine + ")"
-										: type == Primitive.BOOLEAN ? "Boolean.hashCode(" + mine + ")"
-												: "(" + mine + " == null ? 0 : " + mine + ".hashCode())";
+								: type == Primitive.FLOAT ? "rontolisp.internal.Support.floatHash(" + mine + ")"
+										: type == Primitive.DOUBLE ? "Double.hashCode(" + mine + ")"
+												: type == Primitive.BOOLEAN ? "Boolean.hashCode(" + mine + ")"
+														: "(" + mine + " == null ? 0 : " + mine + ".hashCode())";
 				text.append(" $h = 31 * $h + ").append(hash).append(";");
 			}
 			text.append(" return $h; }\n");
@@ -1142,8 +1144,9 @@ final class JavaClasses {
 			case "double" -> Primitive.DOUBLE;
 			case "boolean" -> Primitive.BOOLEAN;
 			case "char" -> Primitive.CHAR;
-			case "byte", "short", "float" ->
-				throw unsupported(unit.source(), written.pos(), "the type " + written.name());
+			case "byte" -> Primitive.BYTE;
+			case "short" -> Primitive.SHORT;
+			case "float" -> Primitive.FLOAT;
 			case "void" -> throw error(unit.source(), written.pos(), "void is not allowed here");
 			case "var" -> throw error(unit.source(), written.pos(), "var is not allowed here");
 			case "?", "? extends", "? super" ->

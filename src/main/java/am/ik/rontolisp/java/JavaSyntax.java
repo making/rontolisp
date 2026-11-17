@@ -55,7 +55,10 @@ final class JavaSyntax {
 	record IntLiteral(int pos, long value, boolean isLong) implements Expression {
 	}
 
-	record DoubleLiteral(int pos, double value) implements Expression {
+	/**
+	 * A floating-point literal: a {@code double}, or a {@code float} holding its value.
+	 */
+	record DoubleLiteral(int pos, double value, boolean isFloat) implements Expression {
 	}
 
 	record CharLiteral(int pos, int value) implements Expression {

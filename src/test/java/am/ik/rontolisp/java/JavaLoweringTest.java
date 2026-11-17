@@ -94,18 +94,19 @@ class JavaLoweringTest {
 					"(DEFUN |Circle.area()| (|this|) (* (* 3.0 (|Circle.r| |this|)) (|Circle.r| |this|)))",
 					"(DEFUN |Rect.new()| NIL (LET ((|this| (|%make-Rect|))) (|Rect.<init>()| |this|) |this|))",
 					"(DEFUN |L1.twice(int)| (|x|) (- (LOGAND (+ (* |x| 2) 2147483648) 4294967295) 2147483648)" + ")",
-					"(DEFUN |L1.wide(long,int)| (|x| |y|) (- (LOGAND (+ (ASH (- (LOGAND (+ (+ |x| |y|) 922337"
-							+ "2036854775808) 18446744073709551615) 9223372036854775808) 3) 9223372036854775808) 184467"
-							+ "44073709551615) 9223372036854775808))",
+					"(DEFUN |L1.wide(long,int)| (|x| |y|) (%MASK-SIGNED-FIELD 64 (ASH (%MASK-SIGNED-FIELD 64 (+ |x| "
+							+ "|y|)) 3)))",
 					"(DEFUN |L1.show(Shape,Object,char,boolean)| (|s| |o| |c| |b|) (%STRING-CONCAT (%STRING-C"
 							+ "ONCAT (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT \"s=\" (|%string| |s|)) (|%string| |"
 							+ "o|)) (RONTOLISP::%JAVA-CHAR-STRING |c|)) (IF |b| \"true\" \"false\")) (RONTOLISP::%JAVA-DOUB"
 							+ "LE-STRING (|Shape.area()%v| |s|))))",
 					"(DEFUN |L1.loop(int[])| (|xs|) (LET ((|sum| 0)) (LET* ((|i| 0)) (BLOCK |%break| (WHILE ("
-							+ "< |i| (LENGTH |xs|)) (BLOCK |%continue| (IF (< (AREF |xs| |i|) 0) (RETURN-FROM |%continu"
-							+ "e| NIL)) (IF (> (AREF |xs| |i|) 99) (RETURN-FROM |%break| NIL)) (SETQ |sum| (- (LOGAND ("
-							+ "+ (+ |sum| (AREF |xs| |i|)) 2147483648) 4294967295) 2147483648))) (SETQ |i| (- (LOGAND ("
-							+ "+ (+ |i| 1) 2147483648) 4294967295) 2147483648))))) |sum|))",
+							+ "< |i| (LENGTH |xs|)) (BLOCK |%continue| (IF (< (- (LOGAND (+ (AREF |xs| |i|) 2147483648)"
+							+ " 4294967295) 2147483648) 0) (RETURN-FROM |%continue| NIL)) (IF (> (- (LOGAND (+ (AREF |x"
+							+ "s| |i|) 2147483648) 4294967295) 2147483648) 99) (RETURN-FROM |%break| NIL)) (SETQ |sum| "
+							+ "(- (LOGAND (+ (+ |sum| (- (LOGAND (+ (AREF |xs| |i|) 2147483648) 4294967295) 2147483648)"
+							+ ") 2147483648) 4294967295) 2147483648))) (SETQ |i| (- (LOGAND (+ (+ |i| 1) 2147483648) 42"
+							+ "94967295) 2147483648))))) |sum|))",
 					"(DEFUN |L1.guarded(Object,int)| (|o| |d|) (BLOCK |%fn| (UNWIND-PROTECT (HANDLER-CASE (LE"
 							+ "T ((|c| (LET ((|%t0| |o|)) (IF (OR (NULL |%t0|) (|Circle?| |%t0|)) |%t0| (RONTOLISP::%JA"
 							+ "VA-THROW (|ClassCastException.new()|) #'|Throwable.toString()|))))) (RETURN-FROM |%fn| ("
@@ -120,7 +121,7 @@ class JavaLoweringTest {
 							+ "G-CONCAT (%STRING-CONCAT (%STRING-CONCAT (OR (|L1.show(Shape,Object,char,boolean)| |s| |"
 							+ "boxed| 99 (RONTOLISP::%JAVA-UNBOX-BOOLEAN |flag|)) \"null\") (%DECIMAL-PIECE (FUNCALL (|L1"
 							+ ".adder(int)| 1) 2))) (IF (|Rect?| |s|) \"true\" \"false\")) (IF (NOT (NULL |s|)) \"true\" \"fal"
-							+ "se\"))) (IF (= (|L1.loop(int[])| (MAKE-ARRAY 2 :ELEMENT-TYPE '(SIGNED-BYTE 32) :INITIAL-C"
+							+ "se\"))) (IF (= (|L1.loop(int[])| (MAKE-ARRAY 2 :ELEMENT-TYPE '(UNSIGNED-BYTE 32) :INITIAL-C"
 							+ "ONTENTS (LIST 1 2))) 3) (RONTOLISP::%JAVA-THROW (|IllegalStateException.new(String)| \"x\""
 							+ ") #'|Throwable.toString()|))))))",
 					"(DEFUN |ClassCastException.new()| NIL (|%make-ClassCastException|))",
@@ -134,8 +135,9 @@ class JavaLoweringTest {
 					"(DEFUN |%string| (|%o|) (COND ((|Base?| |%o|) (|Base.toString()| |%o|)) ((|Throwable?| |"
 							+ "%o|) (|Throwable.toString()| |%o|)) (T (RONTOLISP::%JAVA-TO-STRING |%o|))))",
 					"(DEFUN |%lisp-error| (|%c|) (IF (RONTOLISP::%JAVA-DIVISION-BY-ZERO-P |%c|) (|ArithmeticE"
-							+ "xception.new(String)| \"/ by zero\") (|RuntimeException.new(String)| (RONTOLISP::%JAVA-CON"
-							+ "DITION-TEXT |%c|))))",
+							+ "xception.new(String)| \"/ by zero\") (LET ((|%m| (RONTOLISP::%JAVA-INDEX-ERROR |%c|))) (IF"
+							+ " |%m| (|ArrayIndexOutOfBoundsException.new(String)| |%m|) (|RuntimeException.new(String)|"
+							+ " (RONTOLISP::%JAVA-CONDITION-TEXT |%c|))))))",
 					"(SETQ |Base.count| 0)", "(UNWIND-PROTECT (|L1.main(String[])| (VECTOR)) NIL)");
 	}
 
@@ -220,8 +222,8 @@ class JavaLoweringTest {
 					"(DEFUN |L2.size(Object)| (|o|) (LET ((|s| NIL)) (IF (NOT (AND (SIMPLE-STRING-P |o|) (PRO"
 							+ "GN (SETQ |s| |o|) T))) -1 (LENGTH |s|))))",
 					"(DEFUN |L2.sum(int[])| (|xs|) (LET ((|t| 0)) (BLOCK |outer%break| (LET* ((|%t1| |xs|) (|"
-							+ "%t3| (LENGTH |%t1|)) (|%t2| 0)) (WHILE (< |%t2| |%t3|) (LET ((|x| (AREF |%t1| |%t2|))) ("
-							+ "IF (< |x| 0) (RETURN-FROM |outer%break| NIL)) (SETQ |t| (- (LOGAND (+ (+ |t| |x|) 214748"
+							+ "%t3| (LENGTH |%t1|)) (|%t2| 0)) (WHILE (< |%t2| |%t3|) (LET ((|x| (- (LOGAND (+ (AREF |%t1| |%t2|"
+							+ ") 2147483648) 4294967295) 2147483648))) (IF (< |x| 0) (RETURN-FROM |outer%break| NIL)) (SETQ |t| (- (LOGAND (+ (+ |t| |x|) 214748"
 							+ "3648) 4294967295) 2147483648))) (SETQ |%t2| (+ |%t2| 1))))) |t|))",
 					"(DEFUN |L2$1.run()| (|this|) (PROGN (|Log.line()|) (WRITE-LINE (%DECIMAL-PIECE (|L2$1.va"
 							+ "l$step$0| |this|)))))",
@@ -288,9 +290,8 @@ class JavaLoweringTest {
 							+ " |this|) |other|) 0))",
 					"(DEFUN |Box.with(java.util.function.Function)| (|this| |f|) (FUNCALL |f| (|Box.held| |this|)))",
 					"(DEFUN |L3.pick(Object,Object)| (|a| |b|) (IF (NOT (NULL |a|)) |a| |b|))",
-					"(DEFUN |L3.sum(Long,Integer)| (|a| |b|) (- (LOGAND (+ (+ (CAR (OR |a| (RONTOLISP::%JAVA-NULL-UNBOX)))"
-							+ " (OR |b| (RONTOLISP::%JAVA-NULL-UNBOX))) 9223372036854775808) 18446744073709551615)"
-							+ " 9223372036854775808))",
+					"(DEFUN |L3.sum(Long,Integer)| (|a| |b|) (%MASK-SIGNED-FIELD 64 (+ (CAR (OR |a|"
+							+ " (RONTOLISP::%JAVA-NULL-UNBOX))) (OR |b| (RONTOLISP::%JAVA-NULL-UNBOX)))))",
 					"(DEFUN |L3.main(String[])| (|args|) (LET ((|v| (|Box.new(Comparable)| (|Version.new(int)| 2))))"
 							+ " (LET ((|s| (|Box.new(Comparable)| \"b\"))) (LET ((|named| (|%make-Named%lambda| (LAMBDA"
 							+ " NIL \"n\")))) (LET ((|task| (LAMBDA NIL NIL))) (LET ((|o| |named|)) (LET ((|big| (CONS 5"
@@ -306,7 +307,7 @@ class JavaLoweringTest {
 							+ " (T (RONTOLISP::%JAVA-NO-RECEIVER |%o| \"name()\"))))",
 					"(DEFUN |Comparable.compareTo(Object)%v| (|%o| |%a0|) (COND ((|Version?| |%o|)"
 							+ " (|Version.compareTo(Version)| |%o| |%a0|)) ((SIMPLE-STRING-P |%o|)"
-							+ " (RONTOLISP::%JAVA-STRING-COMPARE |%o| |%a0|)) ((CONSP |%o|) (RONTOLISP::%JAVA-COMPARE (CAR"
+							+ " (RONTOLISP::%JAVA-STRING-COMPARE |%o| |%a0|)) ((RONTOLISP::%JAVA-LONG-P |%o|) (RONTOLISP::%JAVA-COMPARE (CAR"
 							+ " |%o|) (CAR |%a0|))) ((INTEGERP |%o|) (RONTOLISP::%JAVA-COMPARE |%o| |%a0|)) (T"
 							+ " (RONTOLISP::%JAVA-NO-RECEIVER |%o| \"compareTo(Object)\"))))",
 					"(DEFUN |Named%is| (|%o|) (OR (|Named%lambda?| |%o|)))");
@@ -347,11 +348,11 @@ class JavaLoweringTest {
 						+ "(|Bag.items| |bag|) |%string0|) (LET ((|first| |%string0|)) (LET* ((|%t0| (|Bag.iterator()| |ba"
 						+ "g|))) (WHILE (|java.util.ArrayList.Each.hasNext()| |%t0|) (LET ((|item| (|java.util.ArrayList.E"
 						+ "ach.next()| |%t0|))) (WRITE-LINE (IF (EQ |item| |first|) \"true\" \"false\"))))) (LET ((|ns| (M"
-						+ "AKE-ARRAY 2 :ELEMENT-TYPE '(SIGNED-BYTE 32) :INITIAL-CONTENTS (LIST 2 1)))) (|java.util.Arrays.s"
-						+ "ort(int[])| |ns|) (WRITE-LINE (RONTOLISP::%JAVA-DOUBLE-STRING (+ (FLOAT (|rontolisp.internal.Sup"
-						+ "port.parseInt(String,int)| |%string1| 10) 1.0) (%STRICT-MATH :SQRT (FLOAT (AREF |ns| 0) 1.0)))))"
-						+ "))))",
-				"(DEFUN |java.util.Arrays.sort(int[])| (|a|) (RONTOLISP::%JAVA-SORT-NUMBERS |a| 0 (LENGTH |a|)))",
+						+ "AKE-ARRAY 2 :ELEMENT-TYPE '(UNSIGNED-BYTE 32) :INITIAL-CONTENTS (LIST 2 1)))) (|java.util.Arrays"
+						+ ".sort(int[])| |ns|) (WRITE-LINE (RONTOLISP::%JAVA-DOUBLE-STRING (+ (FLOAT (|rontolisp.internal.S"
+						+ "upport.parseInt(String,int)| |%string1| 10) 1.0) (%STRICT-MATH :SQRT (FLOAT (- (LOGAND (+ (AREF"
+						+ " |ns| 0) 2147483648) 4294967295) 2147483648) 1.0)))))))))",
+				"(DEFUN |java.util.Arrays.sort(int[])| (|a|) (RONTOLISP::%JAVA-SORT-INTS |a| 0 (LENGTH |a|)))",
 				"(SETQ |%string0| (RONTOLISP::%JAVA-INTERN \"a\"))",
 				"(UNWIND-PROTECT (|L4.main(String[])| (VECTOR)) NIL)");
 		assertThat(forms).noneMatch(form -> form.contains("ArrayList.remove") || form.contains("java.util.HashMap")
@@ -403,9 +404,6 @@ class JavaLoweringTest {
 				{ "class A { volatile int x; }", "1:11: the modifier volatile" },
 				{ "import static java.lang.Math.max; void main() { }", "1:8: a static import" },
 				{ "import module java.sql; void main() { }", "1:1: the module java.sql" },
-				{ "void main() { float f = 1; }", "1:15: the type float" },
-				{ "void main() { double f = 1.0f; }", "1:26: the type float" },
-				{ "void main() { byte b = 1; }", "1:15: the type byte" },
 				{ "void main() { synchronized (this) { } }", "1:15: a synchronized statement" },
 				{ "void main() { assert true; }", "1:15: an assert statement" },
 				{ "void main() { switch (1L) { default -> { } } }", "1:15: a switch over long" },
@@ -425,6 +423,7 @@ class JavaLoweringTest {
 				{ "interface G<T> { T g(); } void main() { G<String> g = new G<>() { public String g() { return \"\"; } }; }",
 						"1:55: an anonymous class made with <>" },
 				{ "void main() { Object o = null; String[] a = (String[]) o; }", "1:45: a cast to String[]" },
+				{ "void main() { Object o = null; long[] a = (long[]) o; }", "1:43: a cast to long[]" },
 				{ "class O<T> { class I { T v; } I make(T v) { I i = new I(); i.v = v; return i; } } void main() { O<String> o = new O<>(); String s = o.make(\"x\").v; }",
 						"1:145: a member of an inner class of the parameterized class O read from outside that class" },
 				{ "void main() { Object o = int.class; }", "1:26: a class literal" },

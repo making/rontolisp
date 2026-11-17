@@ -154,18 +154,14 @@ final class JavaLexer {
 			throw error("a hexadecimal floating-point literal is not supported by the experimental Java subset yet",
 					start);
 		}
-		if (suffix == 'f' || suffix == 'F') {
-			if (radix == 10) {
-				throw error("the type float is not supported by the experimental Java subset yet", start);
-			}
-		}
-		if (radix == 10 && (floating || suffix == 'd' || suffix == 'D')) {
-			if (suffix == 'd' || suffix == 'D') {
+		boolean isFloat = radix == 10 && (suffix == 'f' || suffix == 'F');
+		if (radix == 10 && (floating || isFloat || suffix == 'd' || suffix == 'D')) {
+			if (isFloat || suffix == 'd' || suffix == 'D') {
 				this.at++;
 			}
 			double value;
 			try {
-				value = Double.parseDouble(text);
+				value = isFloat ? Float.parseFloat(text) : Double.parseDouble(text);
 			}
 			catch (NumberFormatException ex) {
 				throw error("malformed floating-point literal", start);
@@ -173,7 +169,10 @@ final class JavaLexer {
 			if (Double.isInfinite(value)) {
 				throw error("floating-point number too large", start);
 			}
-			this.tokens.add(new JavaToken(Kind.DOUBLE, text, null, false, value, start));
+			if (value == 0 && !zero(text)) {
+				throw error("floating-point number too small", start);
+			}
+			this.tokens.add(new JavaToken(isFloat ? Kind.FLOAT : Kind.DOUBLE, text, null, false, value, start));
 			endOfNumber(start);
 			return;
 		}
@@ -193,6 +192,20 @@ final class JavaLexer {
 		}
 		this.tokens.add(new JavaToken(isLong ? Kind.LONG : Kind.INT, text, value, radix == 10, 0, start));
 		endOfNumber(start);
+	}
+
+	/** Whether a floating-point literal's digits are all zeros. */
+	private static boolean zero(String text) {
+		for (int i = 0; i < text.length(); i++) {
+			char c = text.charAt(i);
+			if (c == 'e' || c == 'E') {
+				return true;
+			}
+			if (c >= '1' && c <= '9') {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private void endOfNumber(int start) {

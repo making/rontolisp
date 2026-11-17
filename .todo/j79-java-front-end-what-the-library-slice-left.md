@@ -16,8 +16,8 @@ program reaches them; `String`, `StringBuilder`, the boxes, `Math`, `System`, `I
 - **`java.io`, the byte and character streams** (`InputStream`/`OutputStream`, the
   `ByteArray` pair, `DataInput`/`DataOutput` and their streams, `Reader`/`Writer`,
   `InputStreamReader`/`OutputStreamWriter`, `PrintStream` as a class a program can make,
-  `System.in`, `IOException`). Blocked on `byte` (`.todo/j72`): the subset has no `byte`,
-  `short` or `float`.
+  `System.in`, `IOException`). `byte`, `short` and `float` exist since j72; a `byte[]` is an
+  `(unsigned-byte 8)` vector read back signed (`.kb/java-frontend.md`, "Numbers").
 - **Regular expressions**: `String.split` reads a text or one character class
   (`%java-split-pattern`); `matches`, `replaceAll`, `replaceFirst`, `Pattern` are refused.
   The Clojure front end has an engine in Lisp (`.kb/clojure-frontend.md`): check its

@@ -8,7 +8,8 @@ backend.
 
 **A string's elements are code points.** `length`, `charAt` and `substring` count Unicode
 code points where the language counts UTF-16 units, so they differ for a character outside
-the Basic Multilingual Plane. `hashCode` is the specified number.
+the Basic Multilingual Plane. `hashCode` is the specified number, and `toCharArray` answers
+the UTF-16 units, which `new String(char[])` reads back.
 
 ```java
 void main() {
@@ -48,9 +49,10 @@ class gets there only through a raw type or a cast a compiler warns of as unchec
 is then used as it is, where the language throws `ClassCastException`. A cast to a type
 variable tests its bound, a cast to a parameterized type its class.
 
-**A store into an array is not checked.** An array does not record its element type, so a
-value stored through an array type above the array's own (`Object[] a = new String[1];
-a[0] = 1;`) is stored, where the language throws `ArrayStoreException`.
+**A store into an array is not checked.** An array of references does not record its
+element type, so a value stored through an array type above the array's own
+(`Object[] a = new String[1]; a[0] = 1;`) is stored, where the language throws
+`ArrayStoreException`.
 
 **A class is initialized at its first use only where a program can tell.** The language
 initializes a class when it is first used, and so does rontolisp for a class whose static
@@ -101,11 +103,12 @@ starts. An exception thrown by a static initializer reaches the program as itsel
 inside an `ExceptionInInitializerError`.
 
 **An error of the run time is not the language's exception.** A division by zero is an
-`ArithmeticException` with the message `/ by zero`, and what a collection, `Integer.parseInt`,
-`Double.parseDouble`, `Objects.requireNonNull` and `Math.addExact` refuse is the language's
-exception with its message. A `null` receiver, a `switch` over `null`, a box that is `null`
-read as its primitive, an index outside an array, a string or a `StringBuilder`, and a
-mismatched `String.format` are errors a `catch` of `RuntimeException`, `Exception` or
+`ArithmeticException` with the message `/ by zero`, an index outside an array an
+`ArrayIndexOutOfBoundsException` with the language's message, and what a collection,
+`Integer.parseInt`, `Double.parseDouble`, `Objects.requireNonNull` and `Math.addExact` refuse
+is the language's exception with its message. A `null` receiver, a `switch` over `null`, a
+box that is `null` read as its primitive, an index outside a string or a `StringBuilder`, and
+a mismatched `String.format` are errors a `catch` of `RuntimeException`, `Exception` or
 `Throwable` takes, with another class and message than the language's. A call or a field
 read on `null` is not always detected. A failed cast throws `ClassCastException` with no
 message.
@@ -163,13 +166,14 @@ Each of these is an error naming the construct and its position.
 - Static imports, annotation types, `assert`.
 - Class literals, `try`-with-resources, multi-catch, `return`, `break`, `continue` or
   `yield` leaving a `finally` block.
-- A `switch` over a `long`, a `double` or a `boolean`; a switch expression whose colon
+- A `switch` over a `long`, a `float`, a `double` or a `boolean`; a switch expression whose colon
   cases run into the next; `Interface.super.m()`; a class extending an inner class from
   outside that class's outer class; an anonymous class made with `outer.new` or with `<>`.
-- A field hiding one of a superclass; `float`, `byte`, `short`.
+- A field hiding one of a superclass.
 - A type written `Outer<A>.Inner`, and a member of an inner class of a parameterized class
-  read from outside that class; a cast to several types (`(A & B) x`); a cast narrowing
-  to an array type; a method reference whose type has type arguments (`List<String>::size`) or that
+  read from outside that class; a cast to several types (`(A & B) x`); a cast or an
+  `instanceof` narrowing to an array type other than `int[]`, `byte[]`, `float[]`,
+  `double[]` and `boolean[]`; a method reference whose type has type arguments (`List<String>::size`) or that
   writes its own (`this::<T>m`).
 - A class extending `String`, `StringBuilder` or a box.
 - Threads, `synchronized`, `volatile`.

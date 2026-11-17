@@ -62,6 +62,38 @@ public final class Support {
 
     private static native Double readDouble(String s);
 
+    // Float.hashCode: the bits of the float, one NaN
+    public static native int floatHash(float f);
+
+    private static native Float readFloat(String s);
+
+    public static float parseFloat(String s) {
+        if (s == null) {
+            throw new NullPointerException();
+        }
+        Float value = readFloat(s);
+        if (value == null) {
+            throw new NumberFormatException(s.isBlank() ? "empty String" : "For input string: \"" + s + "\"");
+        }
+        return value;
+    }
+
+    public static byte parseByte(String s, int radix) {
+        int value = parseInt(s, radix);
+        if (value < -128 || value > 127) {
+            throw new NumberFormatException("Value out of range. Value:\"" + s + "\" Radix:" + radix);
+        }
+        return (byte) value;
+    }
+
+    public static short parseShort(String s, int radix) {
+        int value = parseInt(s, radix);
+        if (value < -32768 || value > 32767) {
+            throw new NumberFormatException("Value out of range. Value:\"" + s + "\" Radix:" + radix);
+        }
+        return (short) value;
+    }
+
     public static double parseDouble(String s) {
         if (s == null) {
             throw new NullPointerException();

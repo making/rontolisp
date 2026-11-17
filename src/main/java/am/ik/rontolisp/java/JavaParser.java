@@ -1278,7 +1278,7 @@ final class JavaParser {
 				return false;
 			}
 			return switch (next.kind()) {
-				case STRING, CHAR, INT, LONG, DOUBLE -> true;
+				case STRING, CHAR, INT, LONG, FLOAT, DOUBLE -> true;
 				case IDENTIFIER -> !next.text().equals("instanceof");
 				case OPERATOR -> next.text().equals("(") || next.text().equals("!") || next.text().equals("~");
 				default -> false;
@@ -1398,9 +1398,9 @@ final class JavaParser {
 		switch (token.kind()) {
 			case INT, LONG:
 				return integer(false);
-			case DOUBLE:
+			case DOUBLE, FLOAT:
 				this.p++;
-				return new DoubleLiteral(pos, token.number());
+				return new DoubleLiteral(pos, token.number(), token.kind() == JavaToken.Kind.FLOAT);
 			case CHAR:
 				this.p++;
 				return new CharLiteral(pos, (int) token.number());

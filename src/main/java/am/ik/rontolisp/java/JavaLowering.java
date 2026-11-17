@@ -328,6 +328,11 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private final Set<LispSymbol> generated = new LinkedHashSet<>();
 
+	/**
+	 * Whether the program reads or writes an array by an index: a Lisp error may be one.
+	 */
+	private boolean indexes;
+
 	private final Map<Field, Object> constants = new HashMap<>();
 
 	/** The string forms known to be no {@code null}. */
@@ -773,7 +778,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	private static LispVal defaultValue(JavaType type) {
-		if (type == Primitive.DOUBLE) {
+		if (type.isFloating()) {
 			return new LispDouble(0.0);
 		}
 		return type.isIntegral() ? integer(0) : NIL;
@@ -1487,10 +1492,17 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		if (this.generated.contains(LISP_ERROR)) {
 			LispSymbol condition = new LispSymbol("%c");
+			LispVal other = list(creator("java.lang.RuntimeException"), runtimeCall("condition-text", condition));
+			if (this.indexes) {
+				// an index outside an array is the host's type error, which tells the
+				// index and the length
+				LispSymbol message = new LispSymbol("%m");
+				other = JavaForms.let(message, runtimeCall("index-error", condition), List.of(call("if", message,
+						list(creator("java.lang.ArrayIndexOutOfBoundsException"), message), other)));
+			}
 			forms.add(list(cl("defun"), LISP_ERROR, list(condition),
 					call("if", runtimeCall("division-by-zero-p", condition),
-							list(creator("java.lang.ArithmeticException"), string("/ by zero")),
-							list(creator("java.lang.RuntimeException"), runtimeCall("condition-text", condition)))));
+							list(creator("java.lang.ArithmeticException"), string("/ by zero")), other)));
 		}
 		return forms;
 	}
@@ -1868,9 +1880,20 @@ final class JavaLowering implements JavaEmitter.Context {
 		return this.types.isSubtype(from, to);
 	}
 
-	private static int rank(JavaType type) {
-		return type == Primitive.CHAR ? 0
-				: type == Primitive.INT ? 1 : type == Primitive.LONG ? 2 : type == Primitive.DOUBLE ? 3 : -1;
+	/** Whether a widening primitive conversion takes one type to another. */
+	private static boolean widens(JavaType from, JavaType to) {
+		if (!(from instanceof Primitive source) || !(to instanceof Primitive target) || from == to) {
+			return false;
+		}
+		return switch (source) {
+			case BYTE ->
+				target == Primitive.SHORT || target == Primitive.INT || target == Primitive.LONG || target.isFloating();
+			case SHORT, CHAR -> target == Primitive.INT || target == Primitive.LONG || target.isFloating();
+			case INT -> target == Primitive.LONG || target.isFloating();
+			case LONG -> target.isFloating();
+			case FLOAT -> target == Primitive.DOUBLE;
+			default -> false;
+		};
 	}
 
 	/** A primitive value widened to another primitive type. */
@@ -1879,15 +1902,29 @@ final class JavaLowering implements JavaEmitter.Context {
 			return value;
 		}
 		Object constant = value.constant();
+		JavaType from = value.type();
 		if (to == Primitive.DOUBLE) {
 			if (constant != null) {
 				return constant(((Number) number(constant)).doubleValue());
 			}
-			return new Typed(call("float", value.form(), new LispDouble(1.0)), to);
+			return from == Primitive.FLOAT ? new Typed(value.form(), to)
+					: new Typed(call("float", value.form(), new LispDouble(1.0)), to);
+		}
+		if (to == Primitive.FLOAT) {
+			if (constant != null) {
+				return constant(((Number) number(constant)).floatValue());
+			}
+			// a long past 2^53 is rounded once, to the float, not through the double
+			return new Typed(from == Primitive.LONG ? runtimeCall("long-float", value.form())
+					: call("%single-float", call("float", value.form(), new LispDouble(1.0))), to);
 		}
 		if (constant != null) {
 			long number = ((Number) number(constant)).longValue();
-			return to == Primitive.LONG ? constant(number) : constant((int) number);
+			return switch ((Primitive) to) {
+				case LONG -> constant(number);
+				case SHORT -> constant((short) number);
+				default -> constant((int) number);
+			};
 		}
 		return new Typed(value.form(), to);
 	}
@@ -1900,6 +1937,9 @@ final class JavaLowering implements JavaEmitter.Context {
 	private static Typed constant(Object value) {
 		return switch (value) {
 			case Integer number -> new Typed(integer(number), Primitive.INT, value);
+			case Byte number -> new Typed(integer(number), Primitive.BYTE, value);
+			case Short number -> new Typed(integer(number), Primitive.SHORT, value);
+			case Float number -> new Typed(new LispDouble(number), Primitive.FLOAT, value);
 			case Long number -> new Typed(integer(number), Primitive.LONG, value);
 			case Double number -> new Typed(new LispDouble(number), Primitive.DOUBLE, value);
 			case Boolean truth -> new Typed(truth ? T : NIL, Primitive.BOOLEAN, value);
@@ -1932,8 +1972,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		else if (primitive == Primitive.CHAR) {
 			form = call("code-char", form);
 		}
-		else if (primitive == Primitive.LONG) {
-			form = call("cons", form, JavaForms.BOXED_LONG);
+		else if (JavaForms.boxTag(primitive) instanceof LispSymbol tag) {
+			form = call("cons", form, tag);
 		}
 		return new Typed(form, box);
 	}
@@ -1958,7 +1998,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			if (primitive == Primitive.CHAR) {
 				form = call("char-code", form);
 			}
-			else if (primitive == Primitive.LONG) {
+			else if (JavaForms.boxTag(primitive) != null) {
 				form = call("car", form);
 			}
 		}
@@ -1977,11 +2017,10 @@ final class JavaLowering implements JavaEmitter.Context {
 			return value.form();
 		}
 		if (from.isPrimitive() && to.isPrimitive()) {
-			if (rank(from) >= 0 && rank(from) < rank(to)) {
+			if (widens(from, to)) {
 				return widen(value, to).form();
 			}
-			if (narrowing && to == Primitive.CHAR && value.constant() instanceof Integer number && number >= 0
-					&& number <= Character.MAX_VALUE) {
+			if (narrowing && fits(value, to)) {
 				return value.form();
 			}
 			return null;
@@ -2012,6 +2051,24 @@ final class JavaLowering implements JavaEmitter.Context {
 			return conversion(unboxed, to, false, false);
 		}
 		return isSubtype(from, to) ? value.form() : null;
+	}
+
+	/**
+	 * Whether a constant of type {@code int}, {@code short}, {@code char} or {@code byte}
+	 * is a value of a narrower one of those, which an assignment then takes as it is.
+	 */
+	private static boolean fits(Typed value, JavaType to) {
+		if (!(value.constant() instanceof Number) && !(value.constant() instanceof Character)
+				|| !value.type().isIntegral() || value.type() == Primitive.LONG) {
+			return false;
+		}
+		long number = ((Number) number(Objects.requireNonNull(value.constant()))).longValue();
+		return switch (to) {
+			case Primitive.CHAR -> number >= 0 && number <= Character.MAX_VALUE;
+			case Primitive.BYTE -> number >= Byte.MIN_VALUE && number <= Byte.MAX_VALUE;
+			case Primitive.SHORT -> number >= Short.MIN_VALUE && number <= Short.MAX_VALUE;
+			default -> false;
+		};
 	}
 
 	private static boolean isOpen(JavaType type) {
@@ -2275,8 +2332,11 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (type.equals(this.stringType)) {
 			return this.nonNull.contains(form) ? form : call("or", form, string("null"));
 		}
-		else if (type == Primitive.INT || type == Primitive.LONG) {
+		else if (type == Primitive.INT || type == Primitive.LONG || type == Primitive.BYTE || type == Primitive.SHORT) {
 			text = call("%decimal-piece", form);
+		}
+		else if (type == Primitive.FLOAT) {
+			text = runtimeCall("float-string", form);
 		}
 		else if (type == Primitive.CHAR) {
 			text = runtimeCall("char-string", form);
@@ -2464,7 +2524,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			case IntLiteral literal:
 				return literal.isLong() ? constant(literal.value()) : constant((int) literal.value());
 			case DoubleLiteral literal:
-				return constant(literal.value());
+				return literal.isFloat() ? constant((float) literal.value()) : constant(literal.value());
 			case CharLiteral literal:
 				return constant((char) literal.value());
 			case StringLiteral literal:
@@ -2508,7 +2568,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				JavaType leaf = type;
 				for (Expression written : creation.lengths()) {
 					Typed length = unbox(expression(written, null));
-					if (length.type() != Primitive.INT && length.type() != Primitive.CHAR) {
+					if (length.type() != Primitive.INT && !length.type().isBelowInt()) {
 						throw error(written.pos(),
 								"incompatible types: " + length.type() + " cannot be converted to int");
 					}
@@ -2517,14 +2577,13 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 				if (lengths.size() > 1) {
 					// every level but the last holds arrays; the last, the leaf's default
-					return new Typed(runtimeCall("new-array", form(cl("list"), lengths),
-							integer(leaf == Primitive.INT ? 1 : leaf == Primitive.DOUBLE ? 2 : 0), defaultValue(leaf)),
-							type);
+					return new Typed(runtimeCall("new-array", form(cl("list"), lengths), integer(arrayKind(leaf)),
+							defaultValue(leaf)), type);
 				}
 				List<LispVal> made = new ArrayList<>(List.of(cl("make-array"), lengths.get(0)));
 				made.addAll(elementType(type.element()));
 				made.add(new LispSymbol(":INITIAL-ELEMENT"));
-				made.add(defaultValue(type.element()));
+				made.add(type.element() == Primitive.BOOLEAN ? integer(0) : defaultValue(type.element()));
 				return new Typed(list(made), type);
 			}
 			case ArrayInitializer initializer:
@@ -2560,20 +2619,65 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 	}
 
+	/**
+	 * The element type an array of a primitive type is made with: each has one of its
+	 * own, which {@code instanceof} reads, but a {@code short} and a {@code char} share
+	 * one and a {@code long} has none. An integer type's array holds the low bits of its
+	 * values, which a read takes back signed ({@link #elementRead}); a {@code boolean}'s
+	 * holds bits.
+	 */
+	private static @Nullable LispVal elementSpecifier(JavaType element) {
+		if (!(element instanceof Primitive primitive)) {
+			return null;
+		}
+		return switch (primitive) {
+			case INT -> list(cl("unsigned-byte"), integer(32));
+			case BYTE -> list(cl("unsigned-byte"), integer(8));
+			case SHORT, CHAR -> list(cl("unsigned-byte"), integer(16));
+			case FLOAT -> cl("single-float");
+			case DOUBLE -> cl("double-float");
+			case BOOLEAN -> cl("bit");
+			default -> null;
+		};
+	}
+
+	/** The leaf of {@code %java-new-array}: which element type it makes. */
+	private static int arrayKind(JavaType element) {
+		return element == Primitive.INT ? 1
+				: element == Primitive.DOUBLE ? 2
+						: element == Primitive.BYTE ? 3 : element == Primitive.SHORT || element == Primitive.CHAR ? 4
+								: element == Primitive.FLOAT ? 5 : element == Primitive.BOOLEAN ? 6 : 0;
+	}
+
 	private static List<LispVal> elementType(JavaType element) {
+		LispVal specifier = elementSpecifier(element);
+		return specifier == null ? List.of() : List.of(new LispSymbol(":ELEMENT-TYPE"), quote(specifier));
+	}
+
+	/** An element read from an array: as the array holds it, taken back as its type. */
+	private static LispVal elementRead(JavaType element, LispVal read) {
 		if (element == Primitive.INT) {
-			return List.of(new LispSymbol(":ELEMENT-TYPE"), quote(list(cl("signed-byte"), integer(32))));
+			return JavaForms.wrap(Primitive.INT, read);
 		}
-		if (element == Primitive.DOUBLE) {
-			return List.of(new LispSymbol(":ELEMENT-TYPE"), quote(cl("double-float")));
+		if (element == Primitive.SHORT || element == Primitive.BYTE) {
+			return JavaForms.signed(read, element == Primitive.SHORT ? 16 : 8);
 		}
-		return List.of();
+		return element == Primitive.BOOLEAN ? call("=", read, integer(1)) : read;
+	}
+
+	/** A value as an array of its type holds it: a {@code boolean} as a bit. */
+	private static LispVal elementStored(JavaType element, LispVal value) {
+		if (element != Primitive.BOOLEAN) {
+			return value;
+		}
+		return value == T ? integer(1) : value == NIL ? integer(0) : call("if", value, integer(1), integer(0));
 	}
 
 	private Typed arrayInitializer(ArrayInitializer initializer, ArrayType type) {
 		List<LispVal> elements = new ArrayList<>();
 		for (Expression element : initializer.elements()) {
-			elements.add(assign(expression(element, type.element()), type.element(), element.pos()));
+			elements.add(elementStored(type.element(),
+					assign(expression(element, type.element()), type.element(), element.pos())));
 		}
 		return new Typed(arrayOf(type, elements), type);
 	}
@@ -2612,9 +2716,9 @@ final class JavaLowering implements JavaEmitter.Context {
 	 */
 	private Typed fieldRead(Field field, @Nullable LispVal object, int pos, @Nullable JavaType site) {
 		if (field.form != null) {
-			Object constant = field.form instanceof LispInteger number
-					? (field.type == Primitive.LONG ? (Object) number.value() : (Object) (int) number.value())
-					: field.form instanceof LispDouble number ? (Object) number.value() : null;
+			Object constant = !(field.type instanceof Primitive type) ? null
+					: field.form instanceof LispInteger number ? narrowed(number.value(), type)
+							: field.form instanceof LispDouble number ? narrowed(number.value(), type) : null;
 			return new Typed(field.form, field.type, constant);
 		}
 		checkAccess(field.isPrivate, field.owner, field.name, pos);
@@ -2705,8 +2809,8 @@ final class JavaLowering implements JavaEmitter.Context {
 					return NOT_CONSTANT;
 				}
 				if (field.type.isPrimitive() && value.type() != field.type) {
-					constant = field.type == Primitive.CHAR ? (Object) (char) ((Number) number(constant)).intValue()
-							: widen(value, field.type).constant();
+					constant = widens(value.type(), field.type) ? widen(value, field.type).constant()
+							: narrowed(constant, (Primitive) field.type);
 				}
 				return Objects.requireNonNull(constant);
 			});
@@ -2843,13 +2947,15 @@ final class JavaLowering implements JavaEmitter.Context {
 					throw error(index.pos(), "array required, but " + array.type() + " found");
 				}
 				Typed at = unbox(expression(index.index(), null));
-				if (at.type() != Primitive.INT && at.type() != Primitive.CHAR) {
+				if (at.type() != Primitive.INT && !at.type().isBelowInt()) {
 					throw error(index.index().pos(),
 							"incompatible types: " + at.type() + " cannot be converted to int");
 				}
 				LispVal element = call("aref", stabilized(array.form(), stable, bindings),
 						stabilized(at.form(), stable, bindings));
-				return new Place(type.element(), element, value -> call("setf", element, value), bindings);
+				this.indexes = true;
+				return new Place(type.element(), elementRead(type.element(), element),
+						value -> call("setf", element, elementStored(type.element(), value)), bindings);
 			}
 			default:
 				throw error(expression.pos(), "unexpected type; required: variable, found: value");
@@ -2932,11 +3038,14 @@ final class JavaLowering implements JavaEmitter.Context {
 				if (!type.isNumeric() || (operator.equals("~") && !type.isIntegral())) {
 					break;
 				}
-				Typed promoted = type == Primitive.CHAR ? widen(operand, Primitive.INT) : operand;
+				Typed promoted = type.isBelowInt() ? widen(operand, Primitive.INT) : operand;
 				if (operator.equals("+")) {
 					return promoted;
 				}
 				if (promoted.constant() instanceof Double number) {
+					return constant(-number);
+				}
+				if (promoted.constant() instanceof Float number) {
 					return constant(-number);
 				}
 				if (promoted.constant() != null) {
@@ -2957,7 +3066,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	private static Object zero(JavaType type) {
-		return type == Primitive.DOUBLE ? (Object) 0.0 : type == Primitive.LONG ? (Object) 0L : (Object) 0;
+		return type == Primitive.LONG ? (Object) 0L : (Object) 0;
 	}
 
 	private static Object minusOne(JavaType type) {
@@ -3037,7 +3146,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				if (!lt.isIntegral() || !rt.isIntegral()) {
 					break;
 				}
-				return shift(operator, lt == Primitive.CHAR ? widen(a, Primitive.INT) : a, b);
+				return shift(operator, lt.isBelowInt() ? widen(a, Primitive.INT) : a, b);
 			}
 			default:
 		}
@@ -3048,6 +3157,9 @@ final class JavaLowering implements JavaEmitter.Context {
 	private static JavaType promote(JavaType left, JavaType right) {
 		if (left == Primitive.DOUBLE || right == Primitive.DOUBLE) {
 			return Primitive.DOUBLE;
+		}
+		if (left == Primitive.FLOAT || right == Primitive.FLOAT) {
+			return Primitive.FLOAT;
 		}
 		return left == Primitive.LONG || right == Primitive.LONG ? Primitive.LONG : Primitive.INT;
 	}
@@ -3063,10 +3175,16 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		LispVal x = a.form();
 		LispVal y = b.form();
+		if (type == Primitive.FLOAT) {
+			// the binary64 result of two binary32 operands, rounded once more, is the
+			// binary32 result: the double holds every bit the rounding reads
+			return new Typed(call("%single-float",
+					operator.equals("%") ? runtimeCall("double-rem", x, y) : call(operator, x, y)), type);
+		}
 		LispVal form = switch (operator) {
 			case "+", "-", "*" -> JavaForms.wrap(type, call(operator, x, y));
 			case "/" -> type == Primitive.DOUBLE ? call("/", x, y) : JavaForms.wrap(type, call("truncate", x, y));
-			case "%" -> call("rem", x, y);
+			case "%" -> type == Primitive.DOUBLE ? runtimeCall("double-rem", x, y) : call("rem", x, y);
 			case "&" -> call("logand", x, y);
 			case "|" -> call("logior", x, y);
 			default -> call("logxor", x, y);
@@ -3087,6 +3205,13 @@ final class JavaLowering implements JavaEmitter.Context {
 		LispVal distance = by != null ? integer(((Number) by).longValue() & mask)
 				: call("logand", count.form(), integer(mask));
 		LispVal back = by != null ? integer(-(((Number) by).longValue() & mask)) : call("-", distance);
+		if (operator.equals(">>>") && by != null) {
+			// A shift by a known count keeps the bits below the sign's copies: no bignum.
+			long d = ((Number) by).longValue() & mask;
+			return new Typed(d == 0 ? value.form()
+					: call("logand", call("ash", value.form(), integer(-d)), integer((1L << (mask + 1 - d)) - 1)),
+					type);
+		}
 		LispVal form = switch (operator) {
 			case "<<" -> JavaForms.wrap(type, call("ash", value.form(), distance));
 			case ">>" -> call("ash", value.form(), back);
@@ -3107,6 +3232,22 @@ final class JavaLowering implements JavaEmitter.Context {
 	private static @Nullable Object fold(String operator, Object left, Object right, JavaType type) {
 		Number a = (Number) number(left);
 		Number b = (Number) number(right);
+		if (type == Primitive.FLOAT) {
+			float x = a.floatValue();
+			float y = b.floatValue();
+			return switch (operator) {
+				case "+" -> x + y;
+				case "-" -> x - y;
+				case "*" -> x * y;
+				case "<" -> x < y;
+				case ">" -> x > y;
+				case "<=" -> x <= y;
+				case ">=" -> x >= y;
+				case "==" -> x == y;
+				case "!=" -> x != y;
+				default -> null;
+			};
+		}
 		if (type == Primitive.DOUBLE) {
 			double x = a.doubleValue();
 			double y = b.doubleValue();
@@ -3196,7 +3337,8 @@ final class JavaLowering implements JavaEmitter.Context {
 			// language
 			// promises of the small values, and allows of every other
 			String identity = !leftBox || !rightBox ? "eq"
-					: JavaIntrinsics.unboxed(left.type()) == Primitive.LONG ? "equal" : "eql";
+					: JavaForms.boxTag(Objects.requireNonNull(JavaIntrinsics.unboxed(left.type()))) != null ? "equal"
+							: "eql";
 			test = left.type() == JavaType.Null.NULL ? call("null", right.form()) : right.type() == JavaType.Null.NULL
 					? call("null", left.form()) : call(identity, left.form(), right.form());
 		}
@@ -3257,11 +3399,13 @@ final class JavaLowering implements JavaEmitter.Context {
 		JavaType ap = unbox(a).type();
 		JavaType bp = unbox(b).type();
 		if (ap.isNumeric() && bp.isNumeric()) {
-			if (ap == Primitive.CHAR && conversion(b, Primitive.CHAR, false, true) != null) {
-				return Primitive.CHAR;
+			// a byte, a short or a char beside a constant it holds, or a byte beside a
+			// short
+			if (ap.isBelowInt() && conversion(unbox(b), ap, false, true) != null) {
+				return ap;
 			}
-			if (bp == Primitive.CHAR && conversion(a, Primitive.CHAR, false, true) != null) {
-				return Primitive.CHAR;
+			if (bp.isBelowInt() && conversion(unbox(a), bp, false, true) != null) {
+				return bp;
 			}
 			return ap == bp ? ap : promote(ap, bp);
 		}
@@ -3317,31 +3461,13 @@ final class JavaLowering implements JavaEmitter.Context {
 			if (!from.isNumeric() || !to.isNumeric()) {
 				throw error(pos, "incompatible types: " + from + " cannot be converted to " + to);
 			}
-			if (rank(from) < rank(to)) {
+			if (widens(from, to)) {
 				return widen(operand, to);
 			}
-			Object constant = operand.constant() == null ? null : number(operand.constant());
-			if (constant != null) {
-				Number number = (Number) constant;
-				return switch ((Primitive) to) {
-					case INT ->
-						constant(from == Primitive.DOUBLE ? (int) number.doubleValue() : (int) number.longValue());
-					case LONG -> constant((long) number.doubleValue());
-					default ->
-						constant(from == Primitive.DOUBLE ? (char) number.doubleValue() : (char) number.longValue());
-				};
+			if (operand.constant() != null) {
+				return constant(narrowed(operand.constant(), (Primitive) to));
 			}
-			LispVal form = operand.form();
-			if (from == Primitive.DOUBLE) {
-				form = runtimeCall(to == Primitive.LONG ? "double-to-long" : "double-to-int", form);
-			}
-			if (to == Primitive.INT && from == Primitive.LONG) {
-				form = JavaForms.wrap(Primitive.INT, form);
-			}
-			else if (to == Primitive.CHAR) {
-				form = call("logand", form, integer(0xFFFF));
-			}
-			return new Typed(form, to);
+			return new Typed(narrowing(operand.form(), from, (Primitive) to), to);
 		}
 		LispVal converted = conversion(value, to, true, false);
 		if (converted != null) {
@@ -3370,6 +3496,56 @@ final class JavaLowering implements JavaEmitter.Context {
 				List.of(call("if", call("or", call("null", checked), test), checked, failure))), to);
 	}
 
+	/**
+	 * A constant converted to a primitive type as a cast converts it: a floating value to
+	 * an integral type through {@code int} or {@code long}, toward zero and saturating.
+	 */
+	private static Object narrowed(Object constant, Primitive to) {
+		Object value = number(constant);
+		if (value instanceof Double || value instanceof Float) {
+			double d = ((Number) value).doubleValue();
+			return switch (to) {
+				case DOUBLE -> d;
+				case FLOAT -> (float) d;
+				case LONG -> (long) d;
+				case INT -> (int) d;
+				case SHORT -> (short) (int) d;
+				case BYTE -> (byte) (int) d;
+				default -> (char) (int) d;
+			};
+		}
+		long n = ((Number) value).longValue();
+		return switch (to) {
+			case DOUBLE -> (double) n;
+			case FLOAT -> (float) n;
+			case LONG -> n;
+			case INT -> (int) n;
+			case SHORT -> (short) n;
+			case BYTE -> (byte) n;
+			default -> (char) n;
+		};
+	}
+
+	/**
+	 * A narrowing primitive conversion: a floating value to {@code int} or {@code long}
+	 * first, then the integer to the low bits of the type.
+	 */
+	private static LispVal narrowing(LispVal form, JavaType from, Primitive to) {
+		if (from.isFloating()) {
+			if (to == Primitive.FLOAT) {
+				return call("%single-float", form);
+			}
+			form = runtimeCall(to == Primitive.LONG ? "double-to-long" : "double-to-int", form);
+			from = to == Primitive.LONG ? Primitive.LONG : Primitive.INT;
+		}
+		return switch (to) {
+			case INT -> from == Primitive.LONG ? JavaForms.wrap(Primitive.INT, form) : form;
+			case CHAR -> call("logand", form, integer(0xFFFF));
+			case SHORT, BYTE -> JavaForms.signed(form, to == Primitive.SHORT ? 16 : 8);
+			default -> form;
+		};
+	}
+
 	private Typed cast(Cast cast) {
 		JavaType to = type(cast.type());
 		return castTo(to, expression(cast.operand(), to), cast.pos());
@@ -3388,6 +3564,12 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 			JavaType bound = this.types.erased(to);
 			return bound.equals(this.objectType) ? T : instanceTest(value, from, bound, pos, what);
+		}
+		if (to instanceof ArrayType array && !(from instanceof ArrayType)
+				&& elementSpecifier(array.element()) instanceof LispVal element && array.element() != Primitive.SHORT
+				&& array.element() != Primitive.CHAR) {
+			// an array of a primitive type other than short, char and long knows its type
+			return call("typep", value, quote(list(cl("simple-array"), element, list(cl("*")))));
 		}
 		if (!(to instanceof ClassType target)) {
 			throw unsupported(pos, what + " to " + to);
@@ -4140,7 +4322,10 @@ final class JavaLowering implements JavaEmitter.Context {
 			int fixed = chosen.parameters.size() - 1;
 			ArrayType rest = (ArrayType) this.types.erased(JavaTypes
 				.substitute(this.types.memberType(chosen.parameters.get(fixed), site, chosen.owner), solution));
-			List<LispVal> elements = converted.subList(fixed, converted.size()).stream().map(Typed::form).toList();
+			List<LispVal> elements = converted.subList(fixed, converted.size())
+				.stream()
+				.map(element -> elementStored(rest.element(), element.form()))
+				.toList();
 			converted = new ArrayList<>(converted.subList(0, fixed));
 			converted.add(new Typed(arrayOf(rest, elements), rest));
 		}
@@ -5232,7 +5417,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		bound.initialized = true;
 		LispSymbol variable = bound.symbol();
 		// an array is read by a counter; anything else is asked for its iterator
-		LispVal next = through == null ? call("aref", items, index)
+		LispVal next = through == null ? elementRead(element, call("aref", items, index))
 				: virtual(this.classes.library("java.util.Iterator"),
 						iteratorMethod(this.classes.library("java.util.Iterator"), "next"), items, List.of());
 		LispVal value = assign(new Typed(next, element), type, loop.pos());
@@ -5295,7 +5480,9 @@ final class JavaLowering implements JavaEmitter.Context {
 							"incompatible types: " + clause.type().name() + " cannot be converted to Throwable");
 				}
 				takesLispErrors |= arithmetic.isSubclassOf(type.declaration())
-						|| runtime.isSubclassOf(type.declaration());
+						|| runtime.isSubclassOf(type.declaration())
+						|| type.declaration().name.equals("java.lang.IndexOutOfBoundsException")
+						|| type.declaration().name.equals("java.lang.ArrayIndexOutOfBoundsException");
 				this.scopes.push(new Scope(null, false));
 				Local bound = bind(clause.name(), type, clause.pos());
 				bound.initialized = true;
@@ -5414,7 +5601,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		JavaType type = selector.type();
 		boolean patterns = block.cases().stream().anyMatch(written -> !written.patterns().isEmpty());
 		Typed plain = patterns ? selector : unbox(selector);
-		boolean integral = plain.type() == Primitive.INT || plain.type() == Primitive.CHAR;
+		boolean integral = plain.type() == Primitive.INT || plain.type().isBelowInt();
 		boolean strings = type.equals(this.stringType);
 		JavaClass constants = type instanceof ClassType named && named.declaration().isEnum ? named.declaration()
 				: null;

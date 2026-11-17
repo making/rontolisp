@@ -11,9 +11,10 @@
 ;; The value model these helpers share with the lowering (.kb/java-frontend.md): null
 ;; is NIL, a boolean T or NIL, an int and a long an integer kept in range by the
 ;; lowering, a char an integer, a double a double, a String the host's immutable string,
-;; an array a simple vector, an object a structure. A boxed int or double is the number,
-;; a boxed long the cons (number . :long) -- so an Integer and a Long of one number are
-;; two values, and equal tells them apart as equals does --, a boxed char a character,
+;; an array a vector, an object a structure. A boxed int or double is the number, a
+;; boxed long, byte, short or float the cons (number . tag), the tag :long, :byte, :short
+;; or :float -- so an Integer and a Long of one number are two values, and equal tells
+;; them apart as equals does --, a boxed char a character,
 ;; a boxed true T and a boxed false :false, so that no box is null. No other value of
 ;; a program is a cons. A StringBuilder is an adjustable character vector, a lambda a
 ;; function, an Object made by `new Object()` an empty vector with a fill pointer. Every
@@ -53,6 +54,21 @@
 
 (defun rontolisp::%java-division-by-zero-p (condition)
   (if (typep condition 'division-by-zero) t nil))
+
+;; The message of ArrayIndexOutOfBoundsException for a condition that is an index
+;; outside an array -- a type error whose type is (integer 0 (length)) -- else nil.
+(defun rontolisp::%java-index-error (condition)
+  (if (typep condition 'type-error)
+      (let ((type (type-error-expected-type condition))
+            (index (type-error-datum condition)))
+        (if (and (consp type) (eq (car type) 'integer) (eql (cadr type) 0)
+                 (consp (cddr type)) (consp (caddr type)) (integerp index))
+            (%string-concat (%string-concat
+                             (%string-concat "Index " (%decimal-piece index))
+                             " out of bounds for length ")
+                            (%decimal-piece (car (caddr type))))
+            nil))
+      nil))
 
 (defun rontolisp::%java-condition-text (condition)
   (%normalize-string (princ-to-string condition)))
@@ -117,7 +133,10 @@
         ((stringp x) (if (simple-string-p x) x (rontolisp::%java-sb-string x)))
         ((integerp x) (%decimal-piece x))
         ((floatp x) (rontolisp::%java-double-string x))
-        ((consp x) (%decimal-piece (car x)))
+        ((consp x)
+         (if (eq (cdr x) :float)
+             (rontolisp::%java-float-string (car x))
+             (%decimal-piece (car x))))
         ((eq x t) "true")
         ((eq x :false) "false")
         ((characterp x) (%normalize-string (string x)))
@@ -137,7 +156,9 @@
         (if qualified "java.lang.String" "String")
         (if qualified "java.lang.StringBuilder" "StringBuilder")))
    ((integerp x) (if qualified "java.lang.Integer" "Integer"))
-   ((consp x) (if qualified "java.lang.Long" "Long"))
+   ((consp x)
+    (let ((name (rontolisp::%java-box-name x)))
+      (if qualified (%string-concat "java.lang." name) name)))
    ((floatp x) (if qualified "java.lang.Double" "Double"))
    ((or (eq x t) (eq x :false)) (if qualified "java.lang.Boolean" "Boolean"))
    ((characterp x) (if qualified "java.lang.Character" "Character"))
@@ -145,6 +166,25 @@
     (if qualified "java.lang.Object" "Object"))
    (t (error
        "getClass() of this value is not supported by the experimental Java subset yet"))))
+
+;; The simple name of the class of a box that is a cons.
+(defun rontolisp::%java-box-name (x)
+  (cond ((eq (cdr x) :long) "Long")
+        ((eq (cdr x) :float) "Float")
+        ((eq (cdr x) :byte) "Byte")
+        (t "Short")))
+
+(defun rontolisp::%java-long-p (x)
+  (if (and (consp x) (eq (cdr x) :long)) t nil))
+
+(defun rontolisp::%java-byte-p (x)
+  (if (and (consp x) (eq (cdr x) :byte)) t nil))
+
+(defun rontolisp::%java-short-p (x)
+  (if (and (consp x) (eq (cdr x) :short)) t nil))
+
+(defun rontolisp::%java-float-p (x)
+  (if (and (consp x) (eq (cdr x) :float)) t nil))
 
 ;; --- Object.equals and hashCode ---------------------------------------------------
 
@@ -160,7 +200,13 @@
         ((stringp a)
          (if (simple-string-p a) (rontolisp::%java-string-equals a b) (eq a b)))
         ((integerp a) (if (integerp b) (= a b) nil))
-        ((consp a) (equal a b))
+        ((consp a)
+         (if (eq (cdr a) :float)
+             (if (rontolisp::%java-float-p b)
+                 (= (rontolisp::%java-float-bits (car a))
+                    (rontolisp::%java-float-bits (car b)))
+                 nil)
+             (equal a b)))
         ((floatp a)
          (if (floatp b)
              (= (rontolisp::%java-double-bits a)
@@ -195,7 +241,10 @@
              (rontolisp::%java-string-hash x)
              (rontolisp::%java-identity-hash x)))
         ((integerp x) x)
-        ((consp x) (rontolisp::%java-long-hash (car x)))
+        ((consp x)
+         (cond ((eq (cdr x) :long) (rontolisp::%java-long-hash (car x)))
+               ((eq (cdr x) :float) (rontolisp::%java-float-bits (car x)))
+               (t (car x))))
         ((eq x t) 1231)
         ((eq x :false) 1237)
         ((characterp x) (char-code x))
@@ -249,18 +298,25 @@
 
 ;; --- arrays, switch -----------------------------------------------------------------
 
-;; new T[n][m]..: every level but the last holds arrays. KIND is 1 for an int leaf,
-;; 2 for a double one, 0 for any other, which starts as INITIAL.
+;; new T[n][m]..: every level but the last holds arrays. KIND is the leaf's element
+;; type (JavaLowering.arrayKind): 1 an int, 2 a double, 3 a byte, 4 a short or a char,
+;; 5 a float, 6 a boolean; 0 any other, which starts as INITIAL.
 (defun rontolisp::%java-new-array (lengths kind initial)
   (let ((n (car lengths)))
     (if (null (cdr lengths))
-        (cond ((eql kind 1)
-               (make-array n
-                           :element-type '(signed-byte 32)
-                           :initial-element 0))
-              ((eql kind 2)
-               (make-array n :element-type 'double-float :initial-element 0d0))
-              (t (make-array n :initial-element initial)))
+        (cond
+         ((eql kind 1)
+          (make-array n :element-type '(unsigned-byte 32) :initial-element 0))
+         ((eql kind 2)
+          (make-array n :element-type 'double-float :initial-element 0d0))
+         ((eql kind 3)
+          (make-array n :element-type '(unsigned-byte 8) :initial-element 0))
+         ((eql kind 4)
+          (make-array n :element-type '(unsigned-byte 16) :initial-element 0))
+         ((eql kind 5)
+          (make-array n :element-type 'single-float :initial-element 0d0))
+         ((eql kind 6) (make-array n :element-type 'bit :initial-element 0))
+         (t (make-array n :initial-element initial)))
         (let ((rows (make-array n :initial-element nil)) (i 0))
           (while (< i n)
             (setf (aref rows i)
@@ -334,12 +390,18 @@
 
 (defun rontolisp::%java-number-int (x)
   (cond ((integerp x) x)
-        ((consp x) (- (logand (+ (car x) 2147483648) 4294967295) 2147483648))
+        ((consp x)
+         (if (floatp (car x))
+             (rontolisp::%java-double-to-int (car x))
+             (- (logand (+ (car x) 2147483648) 4294967295) 2147483648)))
         (t (rontolisp::%java-double-to-int x))))
 
 (defun rontolisp::%java-number-long (x)
   (cond ((integerp x) x)
-        ((consp x) (car x))
+        ((consp x)
+         (if (floatp (car x))
+             (rontolisp::%java-double-to-long (car x))
+             (car x)))
         (t (rontolisp::%java-double-to-long x))))
 
 (defun rontolisp::%java-number-double (x)
@@ -395,6 +457,96 @@
         ((< (rontolisp::%java-double-compare a b) 0) a)
         (t b)))
 
+;; The remainder of two doubles, as the language specifies %: the dividend's sign, a
+;; NaN for a zero divisor or an infinite dividend. The host's rem is exact elsewhere.
+(defun rontolisp::%java-double-rem (x y)
+  (if (or (= y 0d0) (/= x x) (/= y y) (rontolisp::%java-infinite-p x))
+      (rontolisp::%java-nan)
+      (let ((r (rem x y))) (if (= r 0d0) (* 0d0 x) r))))
+
+;; --- float ------------------------------------------------------------------------
+;; A float is the double of its value: every binary32 is a binary64, and the lowering
+;; rounds each operation's result to the float (%single-float).
+
+;; A long as a float: the nearest, rounded once.
+(defun rontolisp::%java-long-float (n)
+  (cond ((< (abs n) 16777216) (float n 1d0))
+        ((> n 0) (rontolisp::%java-nearest-binary n 1 24 -149 128))
+        (t (- (rontolisp::%java-nearest-binary (- n) 1 24 -149 128)))))
+
+;; Float.floatToIntBits as the API specifies it: the sign, the eight bits of the
+;; exponent and the twenty-three of the fraction; one NaN.
+(defun rontolisp::%java-float-bits (f)
+  (cond ((/= f f) 2143289344)
+        ((> f 3.4028234663852886d38) 2139095040)
+        ((< f -3.4028234663852886d38) -8388608)
+        ((= f 0d0) (if (< (/ 1d0 f) 0d0) -2147483648 0))
+        (t
+         (multiple-value-bind (mantissa exponent sign) (integer-decode-float f)
+           (let ((digits (integer-length mantissa)))
+             (let ((biased (+ exponent digits 126))
+                   (fraction (ash mantissa (- 24 digits))))
+               (let ((bits
+                      (if (<= biased 0)
+                          (ash fraction (- biased 1))
+                          (+ (ash biased 23) (- fraction 8388608)))))
+                 (if (< sign 0) (- bits 2147483648) bits))))))))
+
+;; The integers C with C * SCALE between LO and HI, the ends included when INCLUSIVE:
+;; (first . last).
+(defun rontolisp::%java-scaled-range (lo hi scale inclusive)
+  (let ((a (/ lo scale)) (b (/ hi scale)))
+    (let ((first (ceiling a)) (last (floor b)))
+      (if (and (null inclusive) (= first a)) (setq first (+ first 1)))
+      (if (and (null inclusive) (= last b)) (setq last (- last 1)))
+      (cons first last))))
+
+;; Float.toString as the API specifies it: of the decimals that read back as the
+;; float, the shortest -- of two digits at least -- and of those the nearest, a tie to
+;; the even last digit; laid out as a double's text, which that decimal's nearest
+;; double prints.
+(defun rontolisp::%java-float-string (f)
+  (if (or (/= f f) (= f 0d0) (rontolisp::%java-infinite-p f))
+      (rontolisp::%java-double-string f)
+      (let ((v (rational (abs f))))
+        (multiple-value-bind (mantissa exponent) (integer-decode-float (abs f))
+          (let ((k (+ (integer-length mantissa) exponent -1)))
+            ;; the last place of the float, and the gap to the float below it
+            (let ((ulp (expt 2 (- (max k -126) 23)))
+                  (e (floor (* k 0.3010299956639812d0))))
+              (while (> (expt 10 e) v) (setq e (- e 1)))
+              (while (<= (expt 10 (+ e 1)) v) (setq e (+ e 1)))
+              (let ((below (if (and (> k -126) (= v (expt 2 k))) (/ ulp 2) ulp))
+                    (inclusive (evenp (/ v ulp)))
+                    (n 1)
+                    (range nil))
+                (let ((lo (- v (/ below 2))) (hi (+ v (/ ulp 2))))
+                  (while (null range)
+                    (let ((r
+                           (rontolisp::%java-scaled-range lo hi
+                                                          (expt 10 (- e n -1))
+                                                          inclusive)))
+                      (if (<= (car r) (cdr r))
+                          (setq range r)
+                          (setq n (+ n 1)))))
+                  (if (= n 1)
+                      (progn
+                        (setq n 2)
+                        (setq range
+                              (rontolisp::%java-scaled-range lo hi
+                                                             (expt 10 (- e 1))
+                                                             inclusive))))
+                  (let ((scale (expt 10 (- e n -1))))
+                    (let ((c (round (/ v scale))))
+                      (if (< c (car range)) (setq c (car range)))
+                      (if (> c (cdr range)) (setq c (cdr range)))
+                      (let ((value (* c scale)))
+                        (let ((d
+                               (rontolisp::%java-nearest-double
+                                (numerator value) (denominator value))))
+                          (rontolisp::%java-double-string
+                           (if (< f 0d0) (- d) d))))))))))))))
+
 ;; Math.round: the nearest long, a tie toward positive infinity.
 (defun rontolisp::%java-round (d)
   (cond ((/= d d) 0)
@@ -421,6 +573,13 @@
 ;; with at most one point, an optional exponent; or Infinity or NaN. Exact arithmetic
 ;; over the digits, then the nearest double.
 (defun rontolisp::%java-read-double (text)
+  (rontolisp::%java-read-number text 53 -1074 1024))
+
+;; The same text as a float: the nearest binary32 to the digits, rounded once.
+(defun rontolisp::%java-read-float (text)
+  (rontolisp::%java-read-number text 24 -149 128))
+
+(defun rontolisp::%java-read-number (text precision least most)
   (let ((s (rontolisp::%java-strip text t t)))
     (let ((n (length s))
           (i 0)
@@ -481,28 +640,40 @@
                                  (rontolisp::%java-infinity nil))
                                 ((< (+ power digits) -400) 0d0)
                                 ((>= power 0)
-                                 (rontolisp::%java-nearest-double
-                                  (* mantissa (expt 10 power)) 1))
-                                (t (rontolisp::%java-nearest-double mantissa
-                                    (expt 10 (- power)))))))
+                                 (rontolisp::%java-nearest-binary
+                                  (* mantissa (expt 10 power)) 1 precision least
+                                  most))
+                                (t
+                                 (rontolisp::%java-nearest-binary mantissa
+                                  (expt 10 (- power)) precision least most)))))
                      (if negative (- value) value)))))))))
 
-;; The double nearest to a positive ratio of two integers, a tie to the even one:
-;; fifty-three bits of the quotient and what is left of it.
+;; The double nearest to a positive ratio of two integers, a tie to the even one.
 (defun rontolisp::%java-nearest-double (numerator denominator)
-  (let ((shift (- (integer-length numerator) (integer-length denominator) 54)))
+  (rontolisp::%java-nearest-binary numerator denominator 53 -1074 1024))
+
+;; The binary floating-point value of PRECISION bits nearest to a positive ratio of two
+;; integers, a tie to the even one, as the double holding it: PRECISION bits of the
+;; quotient and what is left of it. LEAST is the exponent of the last place of the
+;; smallest subnormal, MOST the exponent past which the value is infinite.
+(defun rontolisp::%java-nearest-binary
+    (numerator denominator precision least most)
+  (let ((shift
+         (- (integer-length numerator) (integer-length denominator)
+            (+ precision 1))))
     (let ((scaled
            (if (>= shift 0)
                (floor numerator (ash denominator shift))
                (floor (ash numerator (- shift)) denominator))))
-      ;; SCALED has 54 or 55 bits; the value is SCALED * 2^SHIFT and something below
+      ;; SCALED has PRECISION + 1 or + 2 bits; the value is SCALED * 2^SHIFT and
+      ;; something below
       (let ((exact
              (if (>= shift 0)
                  (= (* scaled (ash denominator shift)) numerator)
                  (= (* scaled denominator) (ash numerator (- shift))))))
-        (let ((extra (- (integer-length scaled) 53)))
-          ;; a subnormal keeps fewer bits: its last place is 2^-1074
-          (if (< (+ shift extra) -1074) (setq extra (- -1074 shift)))
+        (let ((extra (- (integer-length scaled) precision)))
+          ;; a subnormal keeps fewer bits: its last place is 2^LEAST
+          (if (< (+ shift extra) least) (setq extra (- least shift)))
           (if (> extra 60)
               0d0
               (let ((kept (ash scaled (- extra)))
@@ -511,7 +682,7 @@
                 (if (or (> rest half)
                         (and (= rest half) (or (null exact) (oddp kept))))
                     (setq kept (+ kept 1)))
-                (if (> (+ (integer-length kept) shift extra) 1024)
+                (if (> (+ (integer-length kept) shift extra) most)
                     (rontolisp::%java-infinity nil)
                     (scale-float (float kept 1d0) (+ shift extra))))))))))
 
@@ -673,12 +844,31 @@
           (rontolisp::%java-sb-append builder (%substring s i n))))
     (rontolisp::%java-sb-string builder)))
 
+;; String.toCharArray: the UTF-16 form, a character outside the BMP its two
+;; surrogates.
 (defun rontolisp::%java-to-chars (s)
-  (let ((codes (make-array (length s) :initial-element 0)) (i 0) (n (length s)))
+  (let ((count 0) (i 0) (n (length s)))
     (while (< i n)
-      (%aset codes i (char-code (char s i)))
+      (setq count (+ count (if (< (char-code (char s i)) 65536) 1 2)))
       (setq i (+ i 1)))
-    codes))
+    (let ((codes
+           (make-array count
+                       :element-type '(unsigned-byte 16)
+                       :initial-element 0))
+          (j 0))
+      (setq i 0)
+      (while (< i n)
+        (let ((code (char-code (char s i))))
+          (if (< code 65536)
+              (progn
+                (%aset codes j code)
+                (setq j (+ j 1)))
+              (let ((v (- code 65536)))
+                (%aset codes j (+ 55296 (ash v -10)))
+                (%aset codes (+ j 1) (+ 56320 (logand v 1023)))
+                (setq j (+ j 2)))))
+        (setq i (+ i 1)))
+      codes)))
 
 ;; String.valueOf(char[]) and new String(char[], offset, count).
 (defun rontolisp::%java-chars-string (codes offset count)
@@ -687,9 +877,19 @@
   (let ((builder (rontolisp::%java-sb-new))
         (i offset)
         (end (if count (+ offset count) (length codes))))
+    ;; a surrogate pair is the one character it encodes
     (while (< i end)
-      (vector-push-extend (code-char (aref codes i)) builder)
-      (setq i (+ i 1)))
+      (let ((code (aref codes i)))
+        (if (and (>= code 55296) (< code 56320) (< (+ i 1) end)
+                 (>= (aref codes (+ i 1)) 56320) (< (aref codes (+ i 1)) 57344))
+            (progn
+              (vector-push-extend (code-char
+                                   (+ 65536 (ash (- code 55296) 10)
+                                      (- (aref codes (+ i 1)) 56320))) builder)
+              (setq i (+ i 2)))
+            (progn
+              (vector-push-extend (code-char code) builder)
+              (setq i (+ i 1))))))
     (rontolisp::%java-sb-string builder)))
 
 ;; What a regular expression String.split takes can be: a text with no operator, each
@@ -981,6 +1181,19 @@
       (setq i (+ i 1))))
   nil)
 
+;; Arrays.sort of an int[], whose elements are held as their unsigned 32 bits.
+(defun rontolisp::%java-sort-ints (items from to)
+  (let ((sorted
+         (sort (subseq items from to)
+               (lambda (a b)
+                 (< (- (logand (+ a 2147483648) 4294967295) 2147483648)
+                    (- (logand (+ b 2147483648) 4294967295) 2147483648)))))
+        (i from))
+    (while (< i to)
+      (%aset items i (aref sorted (- i from)))
+      (setq i (+ i 1))))
+  nil)
+
 ;; Arrays.sort of doubles orders them as Double.compare does.
 (defun rontolisp::%java-sort-doubles (items from to)
   (let ((sorted
@@ -1132,7 +1345,7 @@
 (defun rontolisp::%java-class-name-or (x)
   (cond ((stringp x) "java.lang.String")
         ((integerp x) "java.lang.Integer")
-        ((consp x) "java.lang.Long")
+        ((consp x) (%string-concat "java.lang." (rontolisp::%java-box-name x)))
         ((floatp x) "java.lang.Double")
         ((or (eq x t) (eq x :false)) "java.lang.Boolean")
         ((characterp x) "java.lang.Character")
@@ -1156,7 +1369,8 @@
                (rontolisp::%java-pad "null" width left nil)
                (let ((n
                       (cond ((integerp argument) argument)
-                       ((consp argument) (car argument))
+                       ((and (consp argument) (integerp (car argument)))
+                        (car argument))
                        (t (rontolisp::%java-format-mismatch "d" argument)))))
                  (let ((digits (%decimal-piece (abs n))))
                    (rontolisp::%java-pad (rontolisp::%java-format-sign (< n 0)
@@ -1170,8 +1384,11 @@
                (rontolisp::%java-pad "null" width left nil)
                (let ((n
                       (cond ((integerp argument) (logand argument 4294967295))
-                            ((consp argument)
-                             (logand (car argument) 18446744073709551615))
+                            ((and (consp argument) (integerp (car argument)))
+                             (logand (car argument)
+                                     (cond ((eq (cdr argument) :byte) 255)
+                                           ((eq (cdr argument) :short) 65535)
+                                           (t 18446744073709551615))))
                             (t (rontolisp::%java-format-mismatch
                                 (%normalize-string (string conversion))
                                 argument)))))
@@ -1191,6 +1408,7 @@
                (rontolisp::%java-pad "null" width left nil)
                (let ((d
                       (cond ((floatp argument) argument)
+                            ((rontolisp::%java-float-p argument) (car argument))
                             (t (rontolisp::%java-format-mismatch
                                 (%normalize-string (string conversion))
                                 argument)))))

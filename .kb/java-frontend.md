@@ -8,9 +8,9 @@ so (`--source-language` help, `doc/*/java/`, `examples/java/README.md`). Provena
 rules: [java-frontend-provenance.md](java-frontend-provenance.md). `--no-gc` is refused by name
 (`CompileFrontend.run`). First slice: j68 (2026-11-17); the declarations and statements past
 it: j69 (2026-11-17); type parameters, inference, lambdas and boxes: j70 (2026-11-17); the
-library: j71 (2026-11-17); what comes after is `.todo/j72` (numbers), `j73` (exceptions),
-`j74` (several files, a session), `j76` (threads), `j77`, `j78` and `j79` (what j69, j70 and
-j71 left).
+library: j71 (2026-11-17); the numbers: j72 (2026-11-17); what comes after is `.todo/j73`
+(exceptions), `j74` (several files, a session), `j76` (threads), `j77`, `j78`, `j79` and `j81`
+(what j69, j70, j71 and j72 left).
 
 ## Where it sits
 
@@ -45,10 +45,12 @@ j71 left).
   boxed `char` a Lisp CHARACTER (so `Object o = 'c'` prints `c`), a boxed `true` `T`, a boxed
   `false` `:false` -- so `Map<String, Boolean>.get` tells a stored false from a missing key.
   Rejected: `null` as `:null` (every reference test and every slot default pays, where only a
-  `Boolean` box does now). A boxed `long` is the cons `(number . :long)` ("Boxes" below).
+  `Boolean` box does now). A boxed `long`, `byte`, `short` and `float` is the cons
+  `(value . tag)` ("Boxes" below).
 - **`int` is an integer kept in range** by the unconditional mask
-  `(- (logand (+ x 2^31) (2^32 - 1)) 2^31)`, `long` the same at 64 bits (a bignum in between:
-  `.todo/j72`); `char` an integer whose static type prints it. No declaration is emitted.
+  `(- (logand (+ x 2^31) (2^32 - 1)) 2^31)`, `short` and `byte` the same at 16 and 8 bits;
+  `long` is `(%mask-signed-field 64 x)`; `char` an integer whose static type prints it, a
+  `float` the double of its value. No declaration is emitted ("Numbers" below).
 - **A class is a `defstruct`**, `extends` its `:include`, a field a slot defaulting by type, a
   static field a `defvar` global set before `main`, an instance method
   `(defun |C.m(int,String)| (this ..))`. A constructor is two functions: `|C.<init>(..)|` on a
@@ -96,10 +98,10 @@ j71 left).
   tests its bound, to a parameterized type its class; a cast only the type arguments tell from
   no cast has no test. `instanceof` of a type the erased program cannot answer is the
   compiler's `X cannot be safely cast to Y`. A failing cast throws `ClassCastException()`.
-  A narrowing cast to an array type stays refused: `(signed-byte 32)` upgrades to `T` on every
-  backend (measured 2026-11-17: `array-element-type` of an `int[]` is `T` on the interpreter,
-  the JVM and wasm; only `double-float` is kept), so an `int[]` is not told from an `Object[]`,
-  and no array knows its element type -- the store check is `.todo/j72`'s with the arrays.
+  A narrowing cast or `instanceof` to `int[]`, `byte[]`, `float[]`, `double[]`, `boolean[]` is
+  `typep` of the array's element type ("Numbers" below); to `short[]`, `char[]` (one element
+  type), `long[]` and an array of references (`T`, as an `Object[]`) it stays refused, and no
+  array of references knows its element type: the store check is not made.
 - **`Object`'s methods**: a class declaring one is called as any method; through a type none of
   whose classes declares it, the program-wide `%string` / `%equals` / `%hash` test the classes
   declaring one, deepest first, then `%java-to-string` / `-equals` / `-hash-code` answer for
@@ -273,8 +275,10 @@ lub of the lowers, else an upper, else OPEN.
 
 ## Boxes (2026-11-17, j70)
 
-- **A boxed `long` is `(number . :long)`**; no other value of a program is a cons. So an
-  `Integer` and a `Long` are told apart by `integerp` / `consp`, by `equals`, `hashCode`,
+- **A boxed `long` is `(number . :long)`**, a `byte`, `short`, `float` the same with `:byte`,
+  `:short`, `:float` (j72); no other value of a program is a cons, and a box's predicate is
+  `%java-long-p` (was `consp`) and its kin. So an
+  `Integer` and a `Long` are told apart by `integerp` / `%java-long-p`, by `equals`, `hashCode`,
   `getClass()` and a pattern switch over `Object`, and `equal` -- the `HashMap`'s test -- tells
   a `Long` key from an `Integer` one as `equals` does. Rejected: one value for both (j68;
   `case Integer i` took a `Long`, silently) and a structure in `java.lisp` (the pruner keys a
@@ -287,9 +291,10 @@ lub of the lowers, else an upper, else OPEN.
   "The library" below.
 - Measured 2026-11-17, before / after the two changes (a 1,000,000-element list summed 20
   times plus 30,000,000 unboxings in a loop): `List<Integer>` JVM 2.47 / 2.75 s, wasm 9.95 /
-  9.60 s; `List<Long>` JVM 9.85 / 10.35 s, wasm 32.90 / 41.14 s (the `long` arithmetic owns
-  that program: `.todo/j72`). `Fib`, `WrapInt`, `Sieve`, `WrapLong` are unchanged in time and
-  in wasm bytes (2,728 / 2,508 / 10,380 / 4,544).
+  9.60 s; `List<Long>` JVM 9.85 / 10.35 s, wasm 32.90 / 41.14 s (the `long` arithmetic owned
+  that program). `Fib`, `WrapInt`, `Sieve`, `WrapLong` are unchanged in time and in wasm bytes
+  (2,728 / 2,508 / 10,380 / 4,544). After j72's `long` (a program of that shape, 2026-11-17,
+  `ListLong` in the j72 measurements): JVM 5.14 -> 1.44 s, wasm 28.02 -> 1.35 s.
 
 ## The library (2026-11-17, j71)
 
@@ -359,6 +364,50 @@ lub of the lowers, else an upper, else OPEN.
   printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/j79` holds what is
   left and the leads.
 
+## Numbers (2026-11-17, j72)
+
+- **`long` is `(%mask-signed-field 64 x)`** (`JavaForms.wrap`), the primitive the Clojure
+  front end's unchecked verbs use (`.kb/clojure-frontend.md`): both compilers fuse it with the
+  operation under it into one wrapping `ladd`/`lmul`, `i64.add`/`i64.mul`
+  (`.kb/jvm-int-fusion.md`, `.kb/wasm-int-fusion.md`), where the mask of an `int` at 64 bits
+  needs the bignum literal `2^63`, which declines fusion: every step built a bignum. `x >>> k`
+  with a literal `k` is `(logand (ash x -k) (2^(w-k) - 1))`, no bignum either.
+- **`int` keeps the unconditional mask.** `(%mask-signed-field 32 x)` measured the same time
+  (`WrapInt` x10: 0.85 / 0.77 s against 0.91 / 0.74) and `Sieve.wasm` 10,380 -> 10,988 bytes
+  (its fallback is `logxor`'s): not made. A mask in a `let` or behind a test loses 4x (the j68
+  artefact README).
+- **`byte` and `short`** are integers an operator promotes to `int` and an assignment of a
+  constant that fits, a cast or a compound assignment narrows (`JavaForms.signed`).
+  **`float` is the double of its value** -- every binary32 is a binary64 -- and each operation's
+  result is `(%single-float (op a b))`: rounded from the binary64 result, which is the binary32
+  result for `+ - * /` (the double holds every bit the rounding reads). A `long` widens to it
+  through `%java-long-float`, rounded once. `Float.toString` is `%java-float-string`: of the
+  decimals inside the float's rounding interval the shortest (two digits at least), the nearest
+  of those, laid out by the nearest double's own text. `Float.parseFloat` reads the digits
+  exactly to the nearest binary32 (`%java-nearest-binary`, the double reader's, with the
+  precision and the exponent range as arguments).
+- **`%` of doubles** (and floats) is `%java-double-rem`: the host's `rem` is the exact fmod on
+  four backends (measured), but signals for a zero divisor and gives `0.0` for `-4.0 % 2`.
+- **An array of a primitive type has the element type that holds its values**
+  (`elementSpecifier`): `int[]` `(unsigned-byte 32)`, `byte[]` `(unsigned-byte 8)`, `short[]`
+  and `char[]` `(unsigned-byte 16)`, `float[]` `single-float`, `double[]` `double-float`,
+  `boolean[]` `bit`; `long[]` and an array of references `T`. A store masks to the width (all
+  four backends), a read takes the low bits back signed (`elementRead`), a `boolean` is a bit.
+  So an `int[]` is a packed vector: on the JVM `%aset` of one runs the `_iv` arms instead of the
+  general array's, and `SieveLoop` (the sieve half of `Sieve`) went 0.98 -> 0.48 s (wasm 0.37 ->
+  0.27). `toCharArray` gives UTF-16 units; `new String(char[])` reads a surrogate pair as its
+  character. `Arrays.sort(int[])` is `%java-sort-ints` (signed order over the stored bits).
+- **An index outside an array is `ArrayIndexOutOfBoundsException`** with the language's message:
+  the backends' error is a `type-error` of `(integer 0 (length))` on four backends, which
+  `%lisp-error` reads (`%java-index-error`) in a program that indexes an array; a `catch` of
+  `IndexOutOfBoundsException` or of the class itself takes Lisp errors.
+- **The virtual call keeps the `cond`.** Measured on `SieveTree` (2^18 leaves, 20 walks), JVM /
+  wasm: the `cond` over the structure predicates 0.28 / 0.41 s, a generic function with three
+  methods 0.27 / 0.45, a per-class vector of functions in a slot 0.32 / 0.84.
+- **Not done** (`.todo/j81`): the store check (an array of references records no element
+  type); a cast to `short[]`, `char[]`, `long[]`; an array's class name; `Float.intBitsToFloat`,
+  `Math` over floats beyond `abs`, `max`, `min`, `round`, `signum`.
+
 ## Static initialization (2026-11-17)
 
 The language initializes a class at its first use. Running every initializer before `main` (the
@@ -401,8 +450,10 @@ virtual call can run --, classes used):
 | `s + x` | `(%string-concat s' x')`, each operand by its type: `(or s "null")`, `(%decimal-piece i)`, `(%java-char-string c)`, `(if b "true" "false")`, `(%java-double-string d)`, `(%string o)` |
 | `a && b`, `a & b` (boolean) | `(and a b)`; both operands bound first unless the second runs nothing |
 | `x op= v`, `x++` | the place's operands bound once (`let*`) when more than a variable; the result cast to the place's type |
-| `(int) d` | `(%java-double-to-int d)`: toward zero, the type's ends outside it |
-| `new int[n]`, `{1, 2}` | `(make-array n :element-type '(signed-byte 32) :initial-element 0)` (`double-float` for `double`, untyped otherwise); `(vector ..)` / `:initial-contents` |
+| `a * b` (long), `a >>> 3` | `(%mask-signed-field 64 (* a b))`; `(logand (ash a -3) 2305843009213693951)` |
+| `f * g` (float), `x % y` (double) | `(%single-float (* f g))`; `(%java-double-rem x y)` |
+| `(int) d`, `(byte) i` | `(%java-double-to-int d)`: toward zero, the type's ends outside it; `(- (logand (+ i 128) 255) 128)` |
+| `new int[n]`, `{1, 2}`, `xs[i]` | `(make-array n :element-type '(unsigned-byte 32) :initial-element 0)` (each primitive its own, "Numbers"); `(vector ..)` / `:initial-contents`; `(- (logand (+ (aref xs i) 2147483648) 4294967295) 2147483648)` |
 | `while`, `for`, `do` | `(while test body.. update..)`; `(block %break ..)` around it and `(block %continue ..)` around the body only when the body has that exit; `do` tests a flag set after the body |
 | `for (T x : xs)` | an array: a counter, the length taken once; an `Iterable`: `(let* ((it (iterator xs))) (while (hasNext it) (let ((x (next it))) ..)))`, each call direct or dispatched as any call |
 | `return v` | the value in tail position, else `(return-from %fn v)` and a `(block %fn ..)` |
@@ -425,14 +476,15 @@ virtual call can run --, classes used):
 Linux x86-64 (64 threads), GraalVM JDK 25.0.5, wasmtime 49.0.0, best of three; javac's class /
 the spike's lowering (JVM, precompiled wasm) / this front end's:
 
-| program | javac | spike | front end | `.class` / `.wasm` bytes (spike -> front end) |
-|---|---|---|---|---|
-| `Fib` | 0.14 | 0.21 / 0.18 | 0.19 / 0.18 | 25,978 / 5,194 -> 20,749 / 2,728 |
-| `WrapInt` | 0.18 | 0.23 / 0.11 | 0.21 / 0.11 | 28,119 / 5,017 -> 21,998 / 2,508 |
-| `Sieve` | 0.21 | 1.20 / 0.57 | 1.22 / 0.61 | 41,446 / 11,136 -> 35,936 / 10,380 |
-| `WrapLong` | 0.12 | 3.57 / 7.74 | 3.46 / 7.46 | 27,604 / 7,049 -> 21,519 / 4,544 |
+| program | javac | spike | front end | after j72 | `.class` / `.wasm` bytes (spike -> front end -> j72) |
+|---|---|---|---|---|---|
+| `Fib` | 0.14 | 0.21 / 0.18 | 0.19 / 0.18 | 0.20 / 0.17 | 25,978 / 5,194 -> 20,749 / 2,728 -> 20,746 / 2,728 |
+| `WrapInt` | 0.18 | 0.23 / 0.11 | 0.21 / 0.11 | 0.20 / 0.11 | 28,119 / 5,017 -> 21,998 / 2,508 -> 21,995 / 2,508 |
+| `Sieve` | 0.21 | 1.20 / 0.57 | 1.22 / 0.61 | 0.59 / 0.53 | 41,446 / 11,136 -> 35,936 / 10,380 -> 37,366 / 10,819 |
+| `WrapLong` | 0.12 | 3.57 / 7.74 | 3.46 / 7.46 | 0.14 / 0.04 | 27,604 / 7,049 -> 21,519 / 4,544 -> 21,534 / 2,539 |
 
-The programs are `.todo/artefacts/j68-java-front-end-spike/programs/`. The corpus (47 cases,
+The programs are `.todo/artefacts/j68-java-front-end-spike/programs/`. A step at 300,000,000
+steps (j72, the start subtracted): `WrapLong` 1.3 / 1.2 ns, `WrapInt` 2.8 / 2.4 ns. The corpus (47 cases,
 5 standalone, 22 refused, 2026-11-17) and `examples/java/Orders.java` print what the JDK
 prints on four backends. After j71 the four programs are byte-identical but `Sieve`
 (10,380 -> 10,497: `Math.sqrt` is `%strict-math`).
@@ -447,8 +499,9 @@ each is to refuse only what a compiler refuses: where the lowering does not foll
 exceptions; a blank local assigned twice and then captured (`.todo/j77`, with what is still
 refused by name); a type argument outside its parameter's bound and the unchecked warnings
 (`.todo/j78`). A value read through a type argument is trusted (no cast where it is used),
-and a store into an array is not checked. A `null` receiver of a direct call
-runs the body. The run time's errors keep their Lisp class and text.
+and a store into an array of references is not checked. A `null` receiver of a direct call
+runs the body. The run time's errors keep their Lisp class and text, but for a division by zero
+and an index outside an array.
 
 ## Tests
 

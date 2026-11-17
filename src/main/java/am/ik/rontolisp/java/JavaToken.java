@@ -20,7 +20,7 @@ record JavaToken(Kind kind, String text, @Nullable BigInteger integer, boolean d
 
 	enum Kind {
 
-		IDENTIFIER, INT, LONG, DOUBLE, CHAR, STRING, OPERATOR, END
+		IDENTIFIER, INT, LONG, FLOAT, DOUBLE, CHAR, STRING, OPERATOR, END
 
 	}
 
@@ -38,7 +38,7 @@ record JavaToken(Kind kind, String text, @Nullable BigInteger integer, boolean d
 			case END -> "the end of the file";
 			case STRING -> "a string literal";
 			case CHAR -> "a character literal";
-			case INT, LONG, DOUBLE -> "a number";
+			case INT, LONG, FLOAT, DOUBLE -> "a number";
 			default -> "'" + this.text + "'";
 		};
 	}

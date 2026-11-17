@@ -89,13 +89,14 @@ an interface.
 
 | | |
 |---|---|
-| Types | `int`, `long`, `double`, `boolean`, `char`, `String`, classes, interfaces, enums, records, arrays; `var` for a local; type arguments, wildcards (`?`, `? extends T`, `? super T`) and raw types |
+| Types | `int`, `long`, `short`, `byte`, `char`, `double`, `float`, `boolean`, `String`, classes, interfaces, enums, records, arrays; `var` for a local; type arguments, wildcards (`?`, `? extends T`, `? super T`) and raw types |
 | Declarations | classes with `extends` and `implements`, abstract classes and methods; classes, interfaces, records and methods with type parameters and their bounds; enums with fields, constructors, methods and constants that have a body; records with compact and canonical constructors; interfaces with abstract, `default`, `static` and `private` methods and constants; `sealed`, `permits` and `non-sealed`; static nested, inner, local and anonymous classes; fields, static fields, static and instance initializer blocks; constructors with `this(..)` and `super(..)` and statements ahead of them; overloaded and variable arity methods; `package` and `import` |
 | Statements | local variables (`final`, the unnamed `_`), `if`, `while`, `do`, `for`, the enhanced `for` over an array or an `Iterable`, `switch` with colon or arrow cases, patterns and guards, labeled statements, `break` and `continue` with or without a label, `yield`, `return`, `throw`, `try` with `catch` and `finally` |
 | Expressions | every operator of the primitive types with its conversions, string concatenation, the conditional, assignments and compound assignments, casts, `instanceof` with a type, a type pattern or a record pattern, `switch` expressions, `new`, `outer.new Inner()`, `Outer.this`, array creation with one or several lengths and initializers, text blocks, method calls with or without type arguments, `super.m(..)`, `new Box<>(..)`, lambdas and method references (`Type::name`, `expression::name`, `super::name`, `Type::new`, `int[]::new`) for any functional interface |
 
-Annotations are read and dropped. An `int` and a `long` wrap as two's complement; a
-`double` prints as the shortest text that reads back.
+Annotations are read and dropped. An `int`, a `long`, a `short` and a `byte` wrap as two's
+complement; a `float` is rounded to single precision at every operation. A `double` and a
+`float` print as the shortest text that reads back as the same value of their type.
 
 ```java
 sealed interface Shape permits Circle, Rect { }
@@ -215,9 +216,11 @@ as far as the program reaches it, so a class of the program can extend or implem
 | `StringBuilder`, `StringBuffer` | the constructors of nothing, a capacity or a text; `append`, `insert`, `reverse`, `setLength`, `setCharAt`, `deleteCharAt`, `delete`, `replace`, `indexOf`, `toString`, `length`, `isEmpty`, `charAt`, `substring`, `subSequence` |
 | `CharSequence` | `length`, `charAt`, `subSequence`, `isEmpty`; a `String` and a `StringBuilder` are one |
 | `Integer`, `Long` | boxing and unboxing; `MAX_VALUE`, `MIN_VALUE`, `parseInt` / `parseLong` with or without a radix, `valueOf`, `toString` with or without a radix, `toBinaryString`, `toHexString`, `Integer.toOctalString`, `compare`, `signum`, `sum`, `max`, `min`, `bitCount`, `hashCode`, `intValue`, `longValue`, `doubleValue`, `compareTo` |
+| `Byte`, `Short` | boxing and unboxing; `MAX_VALUE`, `MIN_VALUE`, `parseByte` / `parseShort` with or without a radix, `valueOf`, `toString`, `compare`, `hashCode`, `toUnsignedInt`, `byteValue` / `shortValue`, `intValue`, `longValue`, `floatValue`, `doubleValue`, `compareTo` |
+| `Float` | `MAX_VALUE`, `MIN_VALUE`, `MIN_NORMAL`, `POSITIVE_INFINITY`, `NEGATIVE_INFINITY`, `NaN`, `parseFloat`, `valueOf`, `toString`, `compare`, `hashCode`, `floatToIntBits`, `isNaN`, `isInfinite`, `isFinite`, `sum`, `max`, `min`, `floatValue`, `doubleValue`, `intValue`, `longValue`, `compareTo` |
 | `Double` | `MAX_VALUE`, `MIN_VALUE`, `POSITIVE_INFINITY`, `NEGATIVE_INFINITY`, `NaN`, `parseDouble`, `valueOf`, `toString`, `compare`, `hashCode`, `doubleToLongBits`, `isNaN`, `isInfinite`, `isFinite`, `sum`, `max`, `min`, `intValue`, `longValue`, `doubleValue`, `compareTo` |
 | `Boolean`, `Character` | `Boolean.TRUE`, `FALSE`, `parseBoolean`, `valueOf`, `toString`, `hashCode`, `compare`, `logicalAnd`, `logicalOr`, `logicalXor`, `booleanValue`, `compareTo`; `Character.MAX_VALUE`, `MIN_VALUE`, `valueOf`, `toString`, `compare`, `hashCode`, `isDigit`, `isLetter`, `isLetterOrDigit`, `isAlphabetic`, `isWhitespace`, `isSpaceChar`, `isUpperCase`, `isLowerCase`, `toUpperCase`, `toLowerCase`, `getNumericValue`, `digit`, `forDigit`, `charValue`, `compareTo` |
-| `Number` | `intValue`, `longValue`, `doubleValue` |
+| `Number` | `intValue`, `longValue`, `floatValue`, `doubleValue`, `byteValue`, `shortValue` |
 | `Math` | `PI`, `E`, `abs`, `max`, `min`, `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log10`, `floor`, `ceil`, `rint`, `round`, `signum`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `hypot`, `toRadians`, `toDegrees`, `floorDiv`, `floorMod`, `random`, `addExact`, `subtractExact`, `multiplyExact`, `negateExact`, `toIntExact` |
 | `System` | `out`, `err` (`println`, `print`, `printf`, `format`, `flush`), `currentTimeMillis`, `nanoTime`, `exit`, `arraycopy`, `identityHashCode`, `lineSeparator` |
 | `IO` | `println`, `print`, `readln` |

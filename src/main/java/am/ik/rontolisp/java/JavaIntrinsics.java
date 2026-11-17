@@ -55,7 +55,8 @@ final class JavaIntrinsics {
 	/** The boxes, and what each holds. */
 	private static final Map<String, Primitive> BOXES = Map.of("java.lang.Integer", Primitive.INT, "java.lang.Long",
 			Primitive.LONG, "java.lang.Double", Primitive.DOUBLE, "java.lang.Boolean", Primitive.BOOLEAN,
-			"java.lang.Character", Primitive.CHAR);
+			"java.lang.Character", Primitive.CHAR, "java.lang.Byte", Primitive.BYTE, "java.lang.Short", Primitive.SHORT,
+			"java.lang.Float", Primitive.FLOAT);
 
 	private static final LispSymbol OUT = cl("*standard-output*");
 
@@ -104,9 +105,12 @@ final class JavaIntrinsics {
 	static @Nullable LispSymbol predicate(JavaClass declaration) {
 		return switch (declaration.name) {
 			case STRING -> cl("simple-string-p");
-			// a boxed int is the number, a boxed long the number in a cons
+			// a boxed int is the number, a boxed long the number in a cons with its tag
 			case "java.lang.Integer" -> cl("integerp");
-			case "java.lang.Long" -> cl("consp");
+			case "java.lang.Long" -> JavaForms.runtime("long-p");
+			case "java.lang.Byte" -> JavaForms.runtime("byte-p");
+			case "java.lang.Short" -> JavaForms.runtime("short-p");
+			case "java.lang.Float" -> JavaForms.runtime("float-p");
 			case "java.lang.Double" -> cl("floatp");
 			case "java.lang.Character" -> cl("characterp");
 			case "java.lang.Boolean" -> JavaForms.runtime("boolean-p");
@@ -288,13 +292,25 @@ final class JavaIntrinsics {
 			case NUMBER:
 				return new Builder(name, true, classes).method("intValue", Primitive.INT, runtime("number-int"))
 					.method("longValue", Primitive.LONG, runtime("number-long"))
-					.method("doubleValue", Primitive.DOUBLE, runtime("number-double")).made;
+					.method("floatValue", Primitive.FLOAT,
+							(lowering, call) -> call("%single-float", runtimeCall("number-double", call.self())))
+					.method("doubleValue", Primitive.DOUBLE, runtime("number-double"))
+					.method("byteValue", Primitive.BYTE,
+							(lowering, call) -> JavaForms.signed(runtimeCall("number-int", call.self()), 8))
+					.method("shortValue", Primitive.SHORT,
+							(lowering, call) -> JavaForms.signed(runtimeCall("number-int", call.self()), 16)).made;
 			case "java.lang.Integer":
 				return integerClass(new Builder(name, false, classes), classes);
 			case "java.lang.Long":
 				return longClass(new Builder(name, false, classes), classes);
 			case "java.lang.Double":
 				return doubleClass(new Builder(name, false, classes), classes);
+			case "java.lang.Float":
+				return floatClass(new Builder(name, false, classes), classes);
+			case "java.lang.Byte":
+				return smallClass(new Builder(name, false, classes), classes, Primitive.BYTE);
+			case "java.lang.Short":
+				return smallClass(new Builder(name, false, classes), classes, Primitive.SHORT);
 			case "java.lang.Boolean":
 				return booleanClass(new Builder(name, false, classes), classes);
 			case "java.lang.Character":
@@ -619,6 +635,100 @@ final class JavaIntrinsics {
 			.method("doubleValue", d, (lowering, call) -> call.self()).made;
 	}
 
+	/**
+	 * {@code Byte} and {@code Short}: the number in a cons with its tag, {@code :byte} or
+	 * {@code :short}.
+	 */
+	private static JavaClass smallClass(Builder builder, JavaClasses classes, Primitive held) {
+		ClassType string = classes.libraryType(STRING);
+		ClassType self = new ClassType(builder.made, List.of());
+		builder.made.superclass = classes.library(NUMBER);
+		Primitive i = Primitive.INT;
+		boolean isByte = held == Primitive.BYTE;
+		LispSymbol tag = java.util.Objects.requireNonNull(JavaForms.boxTag(held));
+		String parse = isByte ? "parseByte" : "parseShort";
+		JavaEmitter box = (lowering, call) -> call("cons", call.argument(0), tag);
+		JavaEmitter value = (lowering, call) -> call("car", call.self());
+		return builder.field("MAX_VALUE", held, integer(isByte ? Byte.MAX_VALUE : Short.MAX_VALUE))
+			.field("MIN_VALUE", held, integer(isByte ? Byte.MIN_VALUE : Short.MIN_VALUE))
+			.statik(parse, held,
+					(lowering, call) -> lowering.library(SUPPORT, parse, List.of(call.argument(0), integer(10))),
+					string)
+			.statik(parse, held, support(parse), string, i)
+			.statik("valueOf", self,
+					(lowering, call) -> call("cons",
+							lowering.library(SUPPORT, parse, List.of(call.argument(0), integer(10))), tag),
+					string)
+			.statik("valueOf", self, box, held)
+			.statik("toString", string, host("%decimal-piece"), held)
+			.statik("compare", i, host("-"), held, held)
+			.statik("hashCode", i, (lowering, call) -> call.argument(0), held)
+			.statik("toUnsignedInt", i,
+					(lowering, call) -> call("logand", call.argument(0), integer(isByte ? 0xFF : 0xFFFF)), held)
+			.method("compareTo", i,
+					(lowering, call) -> call("-", call("car", call.self()), call("car", call.argument(0))), self)
+			.method(isByte ? "byteValue" : "shortValue", held, value)
+			.method("intValue", i, value)
+			.method("longValue", Primitive.LONG, value)
+			.method("floatValue", Primitive.FLOAT,
+					(lowering, call) -> call("float", call("car", call.self()), new LispDouble(1.0)))
+			.method("doubleValue", Primitive.DOUBLE,
+					(lowering, call) -> call("float", call("car", call.self()), new LispDouble(1.0))).made;
+	}
+
+	/**
+	 * {@code Float}: the float, a double holding a binary32, in a cons with
+	 * {@code :float}.
+	 */
+	private static JavaClass floatClass(Builder builder, JavaClasses classes) {
+		ClassType string = classes.libraryType(STRING);
+		ClassType self = new ClassType(builder.made, List.of());
+		builder.made.superclass = classes.library(NUMBER);
+		Primitive i = Primitive.INT;
+		Primitive f = Primitive.FLOAT;
+		Primitive b = Primitive.BOOLEAN;
+		LispSymbol tag = java.util.Objects.requireNonNull(JavaForms.boxTag(f));
+		JavaEmitter value = (lowering, call) -> call("car", call.self());
+		return builder.field("MAX_VALUE", f, new LispDouble(Float.MAX_VALUE))
+			.field("MIN_VALUE", f, new LispDouble(Float.MIN_VALUE))
+			.field("MIN_NORMAL", f, new LispDouble(Float.MIN_NORMAL))
+			.field("POSITIVE_INFINITY", f, runtimeCall("infinity", JavaForms.NIL))
+			.field("NEGATIVE_INFINITY", f, runtimeCall("infinity", JavaForms.T))
+			.field("NaN", f, runtimeCall("nan"))
+			.statik("parseFloat", f, support("parseFloat"), string)
+			.statik("valueOf", self,
+					(lowering, call) -> call("cons", lowering.library(SUPPORT, "parseFloat", List.of(call.argument(0))),
+							tag),
+					string)
+			.statik("valueOf", self, (lowering, call) -> call("cons", call.argument(0), tag), f)
+			.statik("toString", string, runtime("float-string"), f)
+			.statik("compare", i, runtime("double-compare"), f, f)
+			.statik("hashCode", i, runtime("float-bits"), f)
+			.statik("floatToIntBits", i, runtime("float-bits"), f)
+			.statik("isNaN", b, runtime("nan-p"), f)
+			.statik("isInfinite", b, runtime("infinite-p"), f)
+			.statik("isFinite", b,
+					(lowering, call) -> call("not",
+							call("or", runtimeCall("nan-p", call.argument(0)),
+									runtimeCall("infinite-p", call.argument(0)))),
+					f)
+			.statik("sum", f, (lowering, call) -> call("%single-float", call("+", call.argument(0), call.argument(1))),
+					f, f)
+			.statik("max", f, runtime("double-max"), f, f)
+			.statik("min", f, runtime("double-min"), f, f)
+			.method("isNaN", b, (lowering, call) -> runtimeCall("nan-p", call("car", call.self())))
+			.method("isInfinite", b, (lowering, call) -> runtimeCall("infinite-p", call("car", call.self())))
+			.method("compareTo", i,
+					(lowering, call) -> runtimeCall("double-compare", call("car", call.self()),
+							call("car", call.argument(0))),
+					self)
+			.method("floatValue", f, value)
+			.method("doubleValue", Primitive.DOUBLE, value)
+			.method("intValue", i, (lowering, call) -> runtimeCall("double-to-int", call("car", call.self())))
+			.method("longValue", Primitive.LONG,
+					(lowering, call) -> runtimeCall("double-to-long", call("car", call.self()))).made;
+	}
+
 	private static JavaClass booleanClass(Builder builder, JavaClasses classes) {
 		ClassType string = classes.libraryType(STRING);
 		ClassType self = new ClassType(builder.made, List.of());
@@ -689,6 +799,7 @@ final class JavaIntrinsics {
 	private static JavaClass math(Builder builder) {
 		Primitive i = Primitive.INT;
 		Primitive l = Primitive.LONG;
+		Primitive f = Primitive.FLOAT;
 		Primitive d = Primitive.DOUBLE;
 		builder.field("PI", d, new LispDouble(Math.PI))
 			.field("E", d, new LispDouble(Math.E))
@@ -698,7 +809,13 @@ final class JavaIntrinsics {
 			.statik("abs", i, (lowering, call) -> JavaForms.wrap(i, call("abs", call.argument(0))), i)
 			.statik("abs", l, (lowering, call) -> JavaForms.wrap(l, call("abs", call.argument(0))), l)
 			.statik("abs", d, host("abs"), d)
+			.statik("abs", f, host("abs"), f)
 			.statik("round", l, runtime("round"), d)
+			.statik("round", i,
+					(lowering, call) -> call("max", integer(Integer.MIN_VALUE),
+							call("min", integer(Integer.MAX_VALUE), runtimeCall("round", call.argument(0)))),
+					f)
+			.statik("signum", f, strict("signum"), f)
 			.statik("random", d, (lowering, call) -> call("random", new LispDouble(1.0)))
 			.statik("toRadians", d,
 					(lowering, call) -> call("*", call.argument(0), new LispDouble(0.017453292519943295)), d)
@@ -722,6 +839,7 @@ final class JavaIntrinsics {
 			for (Primitive type : List.of(i, l)) {
 				builder.statik(name, type, host(name), type, type);
 			}
+			builder.statik(name, f, runtime("double-" + name), f, f);
 			builder.statik(name, d, runtime("double-" + name), d, d);
 		}
 		for (String name : List.of("addExact", "subtractExact", "multiplyExact")) {
@@ -745,11 +863,20 @@ final class JavaIntrinsics {
 		// an array of references is an untyped vector whatever its element type
 		natives.put(arrays + "newArray(Object[],int)", (lowering, call) -> call("make-array", call.argument(1),
 				new LispSymbol(":INITIAL-ELEMENT"), JavaForms.NIL));
-		natives.put(arrays + "sortRange(int[],int,int)", runtime("sort-numbers"));
+		natives.put(arrays + "sortRange(int[],int,int)", runtime("sort-ints"));
 		natives.put(arrays + "sortRange(long[],int,int)", runtime("sort-numbers"));
 		natives.put(arrays + "sortRange(double[],int,int)", runtime("sort-doubles"));
 		natives.put(arrays + "sortRange(char[],int,int)", runtime("sort-numbers"));
 		natives.put("rontolisp.internal.Support.readDouble(String)", runtime("read-double"));
+		natives.put("rontolisp.internal.Support.floatHash(float)", runtime("float-bits"));
+		// a Float is the float in a cons with its tag
+		natives.put("rontolisp.internal.Support.readFloat(String)", (lowering, call) -> {
+			LispSymbol read = new LispSymbol("%float");
+			return JavaForms.let(read, runtimeCall("read-float", call.argument(0)),
+					List.of(call("if", read,
+							call("cons", read, java.util.Objects.requireNonNull(JavaForms.boxTag(Primitive.FLOAT))),
+							JavaForms.NIL)));
+		});
 		return Map.copyOf(natives);
 	}
 
