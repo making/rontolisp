@@ -1,0 +1,17 @@
+// Written for rontolisp's experimental Java subset from the API specification's names
+// and behaviour; nothing here is copied or translated from a JDK
+// (.kb/java-frontend-provenance.md). Lowered with every program that names it.
+package java.lang;
+
+public interface CharSequence {
+
+    int length();
+
+    char charAt(int index);
+
+    CharSequence subSequence(int start, int end);
+
+    default boolean isEmpty() {
+        return length() == 0;
+    }
+}

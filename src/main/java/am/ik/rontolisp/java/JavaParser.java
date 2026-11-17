@@ -106,6 +106,9 @@ final class JavaParser {
 	private static final Set<String> ASSIGNMENTS = Set.of("=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=",
 			">>=", ">>>=");
 
+	/** Where the files of the library's Java source are found, and how each is named. */
+	static final String LIBRARY = "library/";
+
 	private static final BigInteger INT_LIMIT = BigInteger.ONE.shiftLeft(31);
 
 	private static final BigInteger LONG_LIMIT = BigInteger.ONE.shiftLeft(63);
@@ -376,6 +379,11 @@ final class JavaParser {
 			else if (token.text().equals("non") && peekIs(1, "-") && peekIs(2, "sealed")) {
 				modifiers.add("non-sealed");
 				this.p += 3;
+			}
+			else if (token.text().equals("native") && this.file != null && this.file.startsWith(LIBRARY)) {
+				// a member of the library's own source that is a form, not Java
+				modifiers.add("native");
+				this.p++;
 			}
 			else if (REFUSED_MODIFIERS.contains(token.text())) {
 				throw unsupported("the modifier " + token.text());

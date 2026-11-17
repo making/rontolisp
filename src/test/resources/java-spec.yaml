@@ -17,11 +17,30 @@
 # the statements of main. The JDK leg checks the error and its line, the front end leg
 # that it refuses at the same line with a message starting the same.
 imports: |
+  import java.util.AbstractList;
+  import java.util.ArrayDeque;
   import java.util.ArrayList;
+  import java.util.Arrays;
+  import java.util.Collection;
+  import java.util.Collections;
   import java.util.Comparator;
+  import java.util.ConcurrentModificationException;
+  import java.util.Deque;
+  import java.util.Enumeration;
   import java.util.HashMap;
+  import java.util.HashSet;
+  import java.util.Hashtable;
+  import java.util.Iterator;
   import java.util.List;
   import java.util.Map;
+  import java.util.NoSuchElementException;
+  import java.util.Objects;
+  import java.util.Optional;
+  import java.util.Queue;
+  import java.util.Random;
+  import java.util.Set;
+  import java.util.Stack;
+  import java.util.Vector;
   import java.util.function.*;
 cases:
   # An int is an integer kept in range by an unconditional mask; a constant expression
@@ -272,13 +291,13 @@ cases:
   # new T[n] is filled with the default of T; an initializer lists the elements, nested
   # for an array of arrays.
   - name: an-array-is-a-vector-with-the-default-of-its-element-type
-    main: Arrays
+    main: ArrayBasics
     source: |
-      class ArraysItem {
+      class ArrayBasicsItem {
           int v;
       }
 
-      class Arrays {
+      class ArrayBasics {
           static int sum(int[] xs) {
               int s = 0;
               for (int x : xs) s += x;
@@ -292,7 +311,7 @@ cases:
               boolean[] flags = new boolean[2];
               char[] chars = new char[2];
               String[] strings = new String[2];
-              ArraysItem[] items = new ArraysItem[2];
+              ArrayBasicsItem[] items = new ArrayBasicsItem[2];
               System.out.println(ints[0] + " " + longs[1] + " " + doubles[0] + " " + flags[1] + " " + (int) chars[0] + " " + strings[1] + " " + items[0] + " " + args.length);
               int[] xs = {3, 1, 4, 1, 5, 9, 2, 6};
               for (int i = 0; i < xs.length; i++) {
@@ -317,7 +336,7 @@ cases:
               for (int[] row : grid) cells += row.length;
               grid[1][0] += 10;
               System.out.println(cells + " " + grid[1][0] + " " + grid[0][2] + " " + rows[0] + " " + rows[1][1] + " " + names[1][1] + names.length);
-              items[1] = new ArraysItem();
+              items[1] = new ArrayBasicsItem();
               items[1].v = 5;
               doubles[1] = 3;
               longs[0] = ints.length;
@@ -1139,13 +1158,13 @@ cases:
       no number
   # A missing key is null and a boxed false is not: get of a map of Boolean tells the
   # two apart. put and set answer the value before.
-  - name: an-array-list-is-a-vector-and-a-hash-map-an-equal-table
-    main: Collections
+  - name: a-list-and-a-map-hold-boxes-strings-and-objects
+    main: ListsAndMaps
     source: |
-      class CollectionsItem {
+      class ListsAndMapsItem {
           final String name;
 
-          CollectionsItem(String name) {
+          ListsAndMapsItem(String name) {
               this.name = name;
           }
 
@@ -1154,7 +1173,7 @@ cases:
           }
       }
 
-      class Collections {
+      class ListsAndMaps {
           static int total(List<Integer> xs) {
               int sum = 0;
               for (int x : xs) sum += x;
@@ -1169,10 +1188,10 @@ cases:
               int sum = 0;
               for (Integer v : nums) sum += v;
               System.out.println(nums.size() + " " + nums.get(4) + " " + before + " " + added + " " + sum + " " + total(nums) + " " + nums.isEmpty() + " " + new ArrayList<String>().isEmpty() + " " + nums);
-              ArrayList<CollectionsItem> items = new ArrayList<>();
-              items.add(new CollectionsItem("a"));
+              ArrayList<ListsAndMapsItem> items = new ArrayList<>();
+              items.add(new ListsAndMapsItem("a"));
               items.add(null);
-              items.add(new CollectionsItem("b"));
+              items.add(new ListsAndMapsItem("b"));
               List<String> words = new ArrayList<>();
               words.add("x");
               words.add("y");
@@ -1203,7 +1222,7 @@ cases:
               HashMap<Integer, String> names = new HashMap<>();
               names.put(1, "one");
               names.put(1000000, "million");
-              Map<Long, CollectionsItem> byId = new HashMap<>();
+              Map<Long, ListsAndMapsItem> byId = new HashMap<>();
               byId.put(5L, items.get(2));
               System.out.println(seen.get('l') + " " + seen.get('h') + " " + seen.get('z') + " " + seen.size() + " " + names.get(1) + " " + names.get(999999 + 1) + " " + names.get(2) + " " + byId.get(5L) + " " + byId.get(6L));
           }
@@ -3324,6 +3343,480 @@ cases:
     expected: |
       [s] 1 2 held true 1 true false true false held
       text Dot[x=1] refused refused refused refused refused ok unchecked ok [s] refused ok 42
+  # The collections are Java source of the library, lowered with the program as far as
+  # it reaches them: a list is found by equals, a class of the program is a list or an
+  # Iterable the enhanced for asks for its iterator, and what goes wrong is the
+  # library's exception.
+  - name: a-collection-is-java-source-and-a-program-s-class-can-be-one
+    main: SourceLists
+    source: |
+      record SourceListsPoint(int x, String label) {
+      }
+
+      class SourceListsBag implements Iterable<String> {
+          private final List<String> items = new ArrayList<>();
+
+          SourceListsBag add(String item) {
+              items.add(item);
+              return this;
+          }
+
+          public Iterator<String> iterator() {
+              return items.iterator();
+          }
+      }
+
+      class SourceListsSquares extends AbstractList<Integer> {
+          public Integer get(int index) {
+              return index * index;
+          }
+
+          public int size() {
+              return 4;
+          }
+      }
+
+      class SourceListsCountdown implements Iterator<Integer> {
+          private int left;
+
+          SourceListsCountdown(int left) {
+              this.left = left;
+          }
+
+          public boolean hasNext() {
+              return left > 0;
+          }
+
+          public Integer next() {
+              return left--;
+          }
+      }
+
+      class SourceLists {
+          public static void main(String[] args) {
+              List<String> xs = new ArrayList<>();
+              xs.add("pear");
+              xs.add("fig");
+              xs.add("apple");
+              xs.add(1, "kiwi");
+              System.out.println(xs + " " + xs.size() + " " + xs.contains("fig") + " " + xs.indexOf("apple") + " " + xs.remove("fig") + " " + xs.remove(0) + " " + xs + " " + xs.isEmpty());
+              xs.sort(null);
+              xs.addAll(List.of("zebra", "kiwi"));
+              xs.addAll(0, List.of("first"));
+              System.out.println(xs + " " + xs.lastIndexOf("kiwi") + " " + xs.equals(List.of("first", "apple", "kiwi", "zebra", "kiwi")) + " " + xs.hashCode() + " " + xs.subList(1, 3) + " " + xs.getFirst() + xs.getLast() + " " + xs.reversed() + " " + String.join("+", xs));
+              xs.replaceAll(String::toUpperCase);
+              xs.removeIf(s -> s.startsWith("K"));
+              Iterator<String> each = xs.iterator();
+              each.next();
+              each.remove();
+              System.out.println(xs + " " + xs.containsAll(List.of("APPLE")) + " " + new ArrayList<>(xs).retainAll(List.of("ZEBRA")) + " " + Arrays.toString(xs.toArray(new String[0])) + " " + xs.toArray().length + " " + List.copyOf(xs) + " " + new ArrayList<String>(4).isEmpty());
+              List<SourceListsPoint> points = new ArrayList<>(List.of(new SourceListsPoint(2, "b"), new SourceListsPoint(1, "c"), new SourceListsPoint(2, "a")));
+              System.out.println(points.contains(new SourceListsPoint(1, "c")) + " " + points.indexOf(new SourceListsPoint(9, "z")) + " " + points.remove(new SourceListsPoint(2, "b")) + " " + points.size());
+              points.sort(Comparator.comparingInt(SourceListsPoint::x).thenComparing(SourceListsPoint::label));
+              System.out.println(points + " " + Collections.max(points, Comparator.comparing(SourceListsPoint::label)).label());
+              int total = 0;
+              for (String item : new SourceListsBag().add("x").add("yz")) {
+                  total += item.length();
+              }
+              StringBuilder seen = new StringBuilder();
+              new SourceListsBag().add("p").add("q").forEach(s -> seen.append(s.toUpperCase()));
+              Iterator<Integer> down = new SourceListsCountdown(3);
+              while (down.hasNext()) {
+                  seen.append(down.next());
+              }
+              List<Integer> squares = new SourceListsSquares();
+              System.out.println(total + " " + seen + " " + squares + " " + squares.contains(9) + " " + squares.indexOf(4) + " " + squares.subList(1, 3) + " " + new ArrayList<>(squares).equals(squares) + " " + squares.hashCode());
+              List<Integer> fixed = List.of(1, 2, 3);
+              List<Integer> nums = new ArrayList<>(fixed);
+              try {
+                  xs.get(5);
+              } catch (IndexOutOfBoundsException e) {
+                  System.out.println(e.getMessage());
+              }
+              try {
+                  fixed.add(4);
+              } catch (UnsupportedOperationException e) {
+                  System.out.println("fixed " + e.getMessage());
+              }
+              try {
+                  for (int n : nums) {
+                      nums.add(n);
+                  }
+              } catch (ConcurrentModificationException e) {
+                  System.out.println("changed " + nums);
+              }
+              try {
+                  new ArrayList<Integer>().iterator().next();
+              } catch (NoSuchElementException e) {
+                  System.out.println("none " + e.getMessage());
+              }
+              Object asObject = nums;
+              System.out.println((asObject instanceof List<?> list ? list.size() : -1) + " " + (asObject instanceof Collection) + " " + (asObject instanceof Set) + " " + nums.getClass().getName() + " " + asObject.equals(List.of(1, 2, 3, 1)));
+          }
+      }
+    expected: |
+      [pear, kiwi, fig, apple] 4 true 3 true pear [kiwi, apple] false
+      [first, apple, kiwi, zebra, kiwi] 4 true -495309617 [apple, kiwi] firstkiwi [kiwi, zebra, kiwi, apple, first] first+apple+kiwi+zebra+kiwi
+      [APPLE, ZEBRA] true true [APPLE, ZEBRA] 2 [APPLE, ZEBRA] true
+      true -1 true 2
+      [SourceListsPoint[x=1, label=c], SourceListsPoint[x=2, label=a]] c
+      3 PQ321 [0, 1, 4, 9] true 2 [1, 4] true 924615
+      Index 5 out of bounds for length 2
+      fixed null
+      changed [1, 2, 3, 1]
+      none null
+      4 true false java.util.ArrayList true
+  # A HashMap finds a key by its hashCode and equals, a class of the program included,
+  # and walks its table in the order the JDK's does: the folded hash, a table that
+  # doubles, chains in the order put (compute and merge put ahead), and the lengths a
+  # copy, a putAll and a set made from a collection start with.
+  - name: a-hash-map-finds-a-key-by-equals-and-keeps-the-order-a-program-sees
+    main: HashOrder
+    source: |
+      record HashOrderKey(int id, String name) {
+      }
+
+      class HashOrderTag {
+          final String text;
+
+          HashOrderTag(String text) {
+              this.text = text;
+          }
+
+          public boolean equals(Object o) {
+              return o instanceof HashOrderTag other && other.text.equalsIgnoreCase(text);
+          }
+
+          public int hashCode() {
+              return text.toLowerCase().hashCode();
+          }
+
+          public String toString() {
+              return "#" + text;
+          }
+      }
+
+      enum HashOrderColor {
+          RED, GREEN
+      }
+
+      class HashOrder {
+          public static void main(String[] args) {
+              Map<String, Integer> counts = new HashMap<>();
+              for (String w : "it was the best of times it was the worst of times it was the age of wisdom".split(" ")) {
+                  counts.put(w, counts.getOrDefault(w, 0) + 1);
+              }
+              System.out.println(counts + " " + counts.size() + " " + counts.get("the") + " " + counts.get("cat") + " " + counts.containsKey("age") + " " + counts.containsValue(4) + " " + counts.keySet() + " " + counts.values());
+              Map<String, Integer> merged = new HashMap<>();
+              for (String w : "the quick brown fox jumps over the lazy dog the end".split(" ")) {
+                  merged.merge(w, 1, Integer::sum);
+              }
+              StringBuilder walked = new StringBuilder();
+              for (Map.Entry<String, Integer> entry : merged.entrySet()) {
+                  walked.append(entry.getKey()).append(entry.getValue());
+              }
+              System.out.println(merged + " " + walked);
+              Map<HashOrderKey, String> byKey = new HashMap<>();
+              byKey.put(new HashOrderKey(1, "a"), "one");
+              byKey.put(new HashOrderKey(2, "b"), "two");
+              Map<HashOrderTag, Integer> byTag = new HashMap<>();
+              byTag.put(new HashOrderTag("Java"), 1);
+              byTag.put(new HashOrderTag("JAVA"), 2);
+              Map<HashOrderColor, Integer> byColor = new HashMap<>();
+              byColor.put(HashOrderColor.RED, 1);
+              Map<Double, String> byDouble = new HashMap<>();
+              byDouble.put(0.5, "half");
+              byDouble.put(null, "none");
+              System.out.println(byKey.get(new HashOrderKey(1, "a")) + " " + byKey.get(new HashOrderKey(3, "c")) + " " + byKey + " " + byTag + " " + byTag.get(new HashOrderTag("java")) + " " + byColor.get(HashOrderColor.RED) + " " + byColor.get(HashOrderColor.GREEN) + " " + byDouble.get(0.5) + byDouble.get(null) + byDouble.get(1.5));
+              // the order tells the table's length: a copy, a putAll and a set are sized
+              // from what they take
+              for (int size : new int[] {1, 3, 12, 13, 25}) {
+                  Map<Integer, Integer> source = new HashMap<>();
+                  for (int i = 0; i < size; i++) {
+                      source.put(i * 16 + (i % 3), i);
+                  }
+                  Map<Integer, Integer> filled = new HashMap<>();
+                  filled.put(1000, 0);
+                  filled.putAll(source);
+                  Map<Integer, Integer> sized = new HashMap<>(size);
+                  sized.putAll(source);
+                  System.out.println(source.keySet() + " " + new HashMap<>(source).keySet() + " " + filled.keySet() + " " + new HashSet<>(source.keySet()) + " " + sized.keySet());
+              }
+              Set<Long> longs = new HashSet<>();
+              for (long i = 0; i < 12; i++) {
+                  longs.add(i * 4294967311L);
+              }
+              Set<Character> chars = new HashSet<>();
+              for (char ch : "hello world".toCharArray()) {
+                  chars.add(ch);
+              }
+              Set<Integer> ints = new HashSet<>();
+              for (int i = 0; i < 40; i += 3) {
+                  ints.add(i * 7 % 50);
+              }
+              System.out.println(longs + " " + chars + " " + new HashSet<>(List.of(0.5, 1.5, -2.25, 100.0, 1e10)) + " " + new HashSet<>(List.of(true, false)) + " " + ints + " " + ints.contains(21) + ints.remove(21) + ints.add(0) + ints.size());
+              Map<String, Integer> m = new HashMap<>();
+              m.put("x", 1);
+              m.putIfAbsent("x", 5);
+              m.putIfAbsent("y", 2);
+              m.compute("x", (k, v) -> v + 10);
+              m.computeIfPresent("y", (k, v) -> null);
+              m.merge("z", 3, Integer::sum);
+              m.replaceAll((k, v) -> v * 2);
+              Map<String, List<Integer>> groups = new HashMap<>();
+              for (int n : new int[] {5, 12, 7, 30}) {
+                  groups.computeIfAbsent(n > 10 ? "big" : "small", k -> new ArrayList<>()).add(n);
+              }
+              StringBuilder each = new StringBuilder();
+              m.forEach((k, v) -> each.append(k).append(v));
+              m.entrySet().removeIf(e -> e.getValue() > 10);
+              m.keySet().remove("nope");
+              System.out.println(each + " " + m + " " + m.remove("z") + " " + m.isEmpty() + " " + m.getOrDefault("q", -1) + " " + groups + " " + m.equals(new HashMap<String, Integer>()) + " " + new HashMap<>(Map.of("a", 1)).hashCode() + " " + Map.of("a", 1).equals(new HashMap<>(Map.of("a", 1))));
+              Set<String> set = new HashSet<>(List.of("b", "a", "c"));
+              set.removeIf(s -> s.equals("b"));
+              Iterator<String> it = set.iterator();
+              it.next();
+              it.remove();
+              List<Map.Entry<String, Integer>> entries = new ArrayList<>(Map.of("b", 2).entrySet());
+              entries.add(Map.entry("a", 1));
+              entries.sort(Map.Entry.comparingByKey());
+              System.out.println(set + " " + set.equals(Set.of("c")) + " " + new HashSet<>(List.of(1, 2)).hashCode() + " " + Set.of(1, 2).containsAll(List.of(1)) + " " + entries + " " + Map.of("k", 1).get("k") + " " + Map.of().isEmpty());
+              try {
+                  Map.of("k", 1).put("j", 2);
+              } catch (UnsupportedOperationException e) {
+                  System.out.println("fixed");
+              }
+          }
+      }
+    expected: |
+      {the=3, times=2, of=3, was=3, best=1, worst=1, it=3, age=1, wisdom=1} 9 3 null true false [the, times, of, was, best, worst, it, age, wisdom] [3, 2, 3, 3, 1, 1, 3, 1, 1]
+      {over=1, the=3, quick=1, lazy=1, jumps=1, end=1, brown=1, dog=1, fox=1} over1the3quick1lazy1jumps1end1brown1dog1fox1
+      one null {HashOrderKey[id=1, name=a]=one, HashOrderKey[id=2, name=b]=two} {#Java=2} 2 1 null halfnonenull
+      [0] [0] [0, 1000] [0] [0]
+      [0, 17, 34] [0, 17, 34] [0, 17, 34, 1000] [0, 17, 34] [0, 17, 34]
+      [0, 48, 96, 144, 17, 65, 113, 161, 34, 82, 130, 178] [0, 48, 96, 144, 17, 65, 113, 161, 34, 82, 130, 178] [0, 96, 65, 161, 34, 130, 1000, 48, 144, 17, 113, 82, 178] [0, 48, 96, 144, 17, 65, 113, 161, 34, 82, 130, 178] [0, 48, 96, 144, 17, 65, 113, 161, 34, 82, 130, 178]
+      [0, 96, 192, 65, 161, 34, 130, 48, 144, 17, 113, 82, 178] [0, 96, 192, 65, 161, 34, 130, 48, 144, 17, 113, 82, 178] [0, 96, 192, 65, 161, 34, 130, 1000, 48, 144, 17, 113, 82, 178] [0, 96, 192, 65, 161, 34, 130, 48, 144, 17, 113, 82, 178] [0, 96, 192, 65, 161, 34, 130, 48, 144, 17, 113, 82, 178]
+      [0, 192, 384, 65, 257, 130, 322, 144, 336, 17, 209, 82, 274, 96, 288, 161, 353, 34, 226, 48, 240, 113, 305, 178, 370] [0, 192, 384, 65, 257, 130, 322, 144, 336, 17, 209, 82, 274, 96, 288, 161, 353, 34, 226, 48, 240, 113, 305, 178, 370] [0, 192, 384, 65, 257, 130, 322, 144, 336, 17, 209, 82, 274, 96, 288, 161, 353, 34, 226, 1000, 48, 240, 113, 305, 178, 370] [0, 192, 384, 65, 257, 130, 322, 144, 336, 17, 209, 82, 274, 96, 288, 161, 353, 34, 226, 48, 240, 113, 305, 178, 370] [0, 192, 384, 65, 257, 130, 322, 144, 336, 17, 209, 82, 274, 96, 288, 161, 353, 34, 226, 48, 240, 113, 305, 178, 370]
+      [0, 34359738488, 17179869244, 8589934622, 25769803866, 42949673110, 4294967311, 12884901933, 21474836555, 30064771177, 38654705799, 47244640421] [ , r, d, e, w, h, l, o] [0.5, -2.25, 1.5, 100.0, 1.0E10] [false, true] [0, 34, 2, 5, 39, 42, 10, 13, 47, 18, 21, 23, 26, 31] truetruefalse13
+      x22z6 {z=6} 6 true -1 {small=[5, 7], big=[12, 30]} true 96 true
+      [c] true 3 true [a=1, b=2] 1 true
+      fixed
+  # ArrayDeque, Optional, Objects, Collections, Arrays over each array type, Vector,
+  # Stack, Enumeration, StringBuffer and Hashtable, which walks its keys in its own
+  # order; Random gives the specified sequence, so a seeded shuffle is the JDK's.
+  - name: a-deque-an-optional-the-utilities-and-the-older-classes
+    main: OlderAndUtil
+    source: |
+      class OlderAndUtil {
+          public static void main(String[] args) {
+              Deque<Integer> deque = new ArrayDeque<>();
+              for (int i = 0; i < 20; i++) {
+                  if (i % 2 == 0) {
+                      deque.addFirst(i);
+                  } else {
+                      deque.addLast(i);
+                  }
+              }
+              Queue<Integer> queue = new ArrayDeque<>(List.of(1, 2, 3));
+              Deque<String> stack = new ArrayDeque<>();
+              stack.push("a");
+              stack.push("b");
+              System.out.println(deque + " " + deque.pollFirst() + " " + deque.pollLast() + " " + deque.peek() + " " + queue.poll() + queue.peek() + queue.size() + " " + deque.contains(5) + " " + deque.remove(5) + " " + deque.size() + " " + stack.pop() + stack.peekLast() + stack + " " + new ArrayDeque<String>().poll());
+              Vector<String> vector = new Vector<>();
+              vector.addElement("a");
+              vector.add("b");
+              Enumeration<String> elements = vector.elements();
+              StringBuffer buffer = new StringBuffer();
+              while (elements.hasMoreElements()) {
+                  buffer.append(elements.nextElement()).append(',');
+              }
+              Stack<Integer> pile = new Stack<>();
+              pile.push(1);
+              pile.push(2);
+              System.out.println(buffer + " " + vector.firstElement() + vector.lastElement() + " " + pile.pop() + pile.peek() + pile + pile.empty() + pile.search(1));
+              Hashtable<String, Integer> table = new Hashtable<>();
+              for (String w : "it was the best of times it was the worst of times it was the age of wisdom".split(" ")) {
+                  Integer n = table.get(w);
+                  table.put(w, n == null ? 1 : n + 1);
+              }
+              StringBuilder keys = new StringBuilder();
+              for (Enumeration<String> each = table.keys(); each.hasMoreElements();) {
+                  keys.append(each.nextElement()).append(' ');
+              }
+              Hashtable<Integer, String> numbered = new Hashtable<>();
+              for (int i = 0; i < 20; i++) {
+                  numbered.put(i * 7 - 50, "v" + i);
+              }
+              System.out.println(table + " " + keys + table.contains(3) + " " + table.remove("was") + " " + numbered.keySet() + " " + new Hashtable<>(numbered).keySet() + " " + numbered.equals(new HashMap<>(numbered)));
+              Optional<String> none = Optional.ofNullable(null);
+              System.out.println(Optional.of("x").map(s -> s + "!").orElse("none") + " " + Optional.empty() + " " + none.isPresent() + " " + none.or(() -> Optional.of("alt")).get() + " " + Optional.of(5).filter(x -> x > 3).map(x -> x * 2) + " " + Optional.of("a").equals(Optional.of("a")) + " " + none.orElseGet(() -> "made") + " " + Optional.of(1).isEmpty());
+              try {
+                  none.orElseThrow(() -> new IllegalStateException("absent"));
+              } catch (IllegalStateException e) {
+                  System.out.println(e.getMessage());
+              }
+              try {
+                  Objects.requireNonNull(null, "nope");
+              } catch (NullPointerException e) {
+                  System.out.println(e.getMessage());
+              }
+              System.out.println(Objects.equals(null, null) + " " + Objects.equals("a", "a") + " " + Objects.hash(1, "a") + " " + Objects.toString(null) + " " + Objects.requireNonNullElse(null, "d") + " " + Objects.hashCode(null) + " " + Objects.isNull(none) + " " + Objects.toString(null, "dflt"));
+              List<Integer> nums = new ArrayList<>(List.of(5, 3, 9, 1));
+              Collections.sort(nums);
+              Collections.reverse(nums);
+              Collections.swap(nums, 0, 3);
+              List<String> names = new ArrayList<>();
+              Collections.addAll(names, "z", "y");
+              Collections.sort(names, Collections.reverseOrder());
+              System.out.println(nums + " " + Collections.max(nums) + " " + Collections.min(nums) + " " + names + " " + Collections.nCopies(3, "ab") + Collections.emptyList() + Collections.singletonList(1) + Collections.frequency(List.of(1, 2, 1), 1) + Collections.unmodifiableList(nums) + Collections.emptyMap());
+              Integer[] boxed = {3, 1, 2};
+              Arrays.sort(boxed, Comparator.reverseOrder());
+              String[] words = {"pear", "fig", "apple"};
+              Arrays.sort(words);
+              double[] ds = {2.5, -1.0, 0.0};
+              Arrays.sort(ds);
+              int[] ints = {9, 3, 7, 1};
+              Arrays.sort(ints, 1, 3);
+              int[] copy = Arrays.copyOf(new int[] {1, 2, 3}, 5);
+              int[] filled = new int[3];
+              Arrays.fill(filled, 7);
+              long[] longs = {3L, 1L};
+              Arrays.sort(longs);
+              char[] letters = {'c', 'a', 'b'};
+              Arrays.sort(letters);
+              System.out.println(Arrays.toString(boxed) + Arrays.toString(words) + Arrays.toString(ds) + Arrays.toString(ints) + Arrays.toString(copy) + Arrays.toString(filled) + Arrays.equals(copy, filled) + Arrays.binarySearch(new int[] {1, 3, 5}, 3) + Arrays.toString(Arrays.copyOfRange(words, 1, 3)) + Arrays.asList(1, 2) + Arrays.hashCode(new int[] {1, 2}) + Arrays.toString(longs) + Arrays.toString(letters) + Arrays.toString(new boolean[2]) + Arrays.asList(words).indexOf("fig"));
+              Random random = new Random(42);
+              System.out.println(random.nextInt(100) + " " + random.nextInt() + " " + random.nextDouble() + " " + random.nextBoolean() + " " + random.nextLong() + " " + random.nextGaussian() + " " + random.nextInt(16) + " " + random.nextGaussian());
+              Collections.shuffle(nums, new Random(7));
+              System.out.println(nums);
+          }
+      }
+    expected: |
+      [18, 16, 14, 12, 10, 8, 6, 4, 2, 0, 1, 3, 5, 7, 9, 11, 13, 15, 17, 19] 18 19 16 122 true true 17 ba[a] null
+      a,b, ab 21[1]false1
+      {times=2, was=3, best=1, it=3, worst=1, the=3, wisdom=1, age=1, of=3} times was best it worst the wisdom age of true 3 [-22, 41, -29, 83, 34, -36, 76, 27, -43, 69, -1, 20, -50, 62, 13, -8, 55, 6, -15, 48] [-50, 76, 34, -15, 69, 27, -22, 62, 20, -29, 55, 13, -36, 48, -1, 6, -43, 83, 41, -8] true
+      x! Optional.empty false alt Optional[10] true made false
+      absent
+      nope
+      true true 1089 null d 0 false dflt
+      [1, 5, 3, 9] 9 1 [z, y] [ab, ab, ab][][1]2[1, 5, 3, 9]{}
+      [3, 2, 1][apple, fig, pear][-1.0, 0.0, 2.5][9, 3, 7, 1][1, 2, 3, 0, 0][7, 7, 7]false1[fig, pear][1, 2]994[1, 3][a, b, c][false, false]1
+      30 234785527 0.6832234717598454 false -1068554554583376509 0.2669736057242196 7 -0.5252767454241688
+      [1, 5, 9, 3]
+  # == of two strings compares references: the constants of one text are one object, a
+  # computed string another, intern the constant's. split takes a text or one character
+  # class; a StringBuilder is edited in place and is a CharSequence, as a string is.
+  - name: a-string-has-its-everyday-surface-and-two-constants-of-a-text-are-one
+    main: StringSurface
+    source: |
+      class StringSurface {
+          static final String NAME = "abc";
+
+          public static void main(String[] args) {
+              String a = "abc", b = "ab" + "c", c = new String("abc"), part = "ab";
+              String e = part + "c";
+              System.out.println((a == b) + " " + (a == c) + " " + (a == c.intern()) + " " + (a == NAME) + " " + (a == e) + " " + (a != e) + " " + a.equals(e) + " " + (e.intern() == a));
+              System.out.println("Hello".contains("ell") + " " + "Hello".startsWith("He") + " " + "Hello".startsWith("l", 2) + " " + "Hello".endsWith("lo") + " " + "Hello".indexOf('l') + " " + "Hello".indexOf('l', 3) + " " + "Hello".lastIndexOf('l') + " " + "Hello".indexOf("l", 3) + " " + "Hello".lastIndexOf("l") + " " + "Hello".indexOf("z") + " " + "Hello".equalsIgnoreCase("hELLO") + " " + "b".compareToIgnoreCase("A") + " " + " \t".isBlank() + " " + "x".concat("y") + " " + String.join("/", "a", "b", "c") + " " + "abc".charAt(1) + " " + "".isEmpty());
+              System.out.println("|" + "  pad ".trim() + "|" + " x ".strip() + "|" + " x ".stripLeading() + "|" + " x ".stripTrailing() + "|" + "ab".repeat(3) + "|" + "a-b-c".replace('-', '+') + "|" + "aXbXc".replace("X", "--") + "|" + "ab".replace("", "-") + "|" + "Hello".toCharArray().length + "|" + String.valueOf(new char[] {'h', 'i'}) + "|" + new String(new char[] {'a', 'b', 'c'}, 1, 2) + "|" + "Hello".substring(1, 3) + "Hello".substring(3) + "|" + "MiXed".toUpperCase() + "MiXed".toLowerCase() + "|" + String.valueOf(3.5) + String.valueOf(true) + String.valueOf('c') + String.valueOf(7L));
+              System.out.println(Arrays.toString("a,b,,c,,".split(",")) + Arrays.toString(" a  b ".split("\\s+")) + Arrays.toString("a1b22c".split("[0-9]+")) + Arrays.toString("a.b".split("\\.")) + Arrays.toString("a,b,c".split(",", 2)) + Arrays.toString("a,b,,".split(",", -1)) + Arrays.toString("".split(",")) + Arrays.toString("abc".split("")) + Arrays.toString("k=v; x=y".split("; ")) + Arrays.toString("a-b_c".split("[-_]")));
+              StringBuilder sb = new StringBuilder("hello");
+              sb.insert(0, "[").append(']').append(1.5).append(true).append(new char[] {'!'}).reverse().setCharAt(0, 'E');
+              sb.reverse();
+              sb.deleteCharAt(sb.length() - 1).delete(0, 1).replace(0, 1, "J");
+              CharSequence chars = sb;
+              System.out.println(sb + " " + sb.length() + " " + sb.indexOf("l") + " " + chars.length() + " " + chars.charAt(1) + " " + chars.subSequence(1, 3) + " " + "abc".subSequence(0, 2) + " " + sb.substring(2) + " " + sb.substring(1, 3) + " " + sb.isEmpty() + " " + chars.isEmpty() + " " + sb.charAt(0));
+              sb.setLength(2);
+              StringBuilder other = new StringBuilder(sb).append(sb).insert(1, 42).insert(0, 'c');
+              System.out.println(sb + " " + other + " " + new StringBuilder(8).append("x").append(1L).append((Object) null).append((String) null) + " " + new StringBuffer("buf").reverse());
+          }
+      }
+    expected: |
+      true false true true false true true true
+      true true true true 2 3 3 3 3 -1 true 1 true xy a/b/c b true
+      |pad|x|x | x|ababab|a+b+c|a--b--c|-a-b-|5|hi|bc|ello|MIXEDmixed|3.5truec7
+      [a, b, , c][, a, b][a, b, c][a, b][a, b,c][a, b, , ][][a, b, c][k=v, x=y][a, b, c]
+      Jello]1.5true 13 2 13 e el ab llo]1.5true el false false J
+      Je cJ42eJe x1nullnull fub
+  # String.format, formatted and printf: %d %s %f %e %x %o %c %b %n %% with flags, width,
+  # precision and an argument index; %f rounds the shortest digits half up.
+  - name: format-renders-the-conversions-programs-write
+    main: Formats
+    source: |
+      class Formats {
+          public static void main(String[] args) {
+              System.out.printf("%s has %d items, %.1f%%%n", "bag", 3, 99.5);
+              System.out.println(String.format("|%10.3f|%-8s|%08d|%+d|%x|%X|%o|%c|%b|%5s|%.3s|%e|%,.2f|%(d|%s|%S|", Math.PI, "left", 42, 7, 255, 255, 8, 65, null, true, "abcdef", 123456.789, 1234567.891, -5, List.of(1, 2), "up"));
+              System.out.println(String.format("%.1f %.2f %.0f %.3f %.2f %10.4f|%-10.1f|%f", 0.15, 1.005, 2.5, 1e-5, -0.001, 1e10, 1.25, 1.0 / 3) + "|" + "%d items".formatted(3) + "|" + String.format("%5d|%-5d|%05d|%,d|% d|%x|%d", -42, 42, -42, -1234567, 42, -1, 123456789012L));
+              System.out.println(String.format("%2$s %1$s %1$s|", "a", "b") + String.format("%c%c|%b %b|%10s|%-10s|%s %s %s|%.3e|%E|%08.2f|%+.1f|%x", 'x', (char) 121, null, "s", "right", "left", 1.5, 'c', 10L, 0.000123456, 1e100, -3.14159, 2.0, 255L));
+              try {
+                  String.format("%d", "text");
+              } catch (RuntimeException e) {
+                  System.out.println("refused");
+              }
+          }
+      }
+    expected: |
+      bag has 3 items, 99.5%
+      |     3.142|left    |00000042|+7|ff|FF|10|A|false| true|abc|1.234568e+05|1,234,567.89|(5)|[1, 2]|UP|
+      0.2 1.01 3 0.000 -0.00 10000000000.0000|1.3       |0.333333|3 items|  -42|42   |-0042|-1,234,567| 42|ffffffff|123456789012
+      b a a|xy|false true|     right|left      |1.5 c 10|1.235e-04|1.000000E+100|-0003.14|+2.0|ff
+      refused
+  # The members of the boxes and of Math; a failed parse and an exact operation that
+  # overflows throw the library's exceptions; a double's bits and hash are the
+  # specified ones; new Object() is a value of no other class.
+  - name: the-boxes-parse-print-and-compare-and-math-is-strict
+    main: BoxMembers
+    source: |
+      class BoxMembers {
+          public static void main(String[] args) {
+              System.out.println(Integer.toBinaryString(10) + " " + Integer.toHexString(-1) + " " + Integer.toOctalString(8) + " " + Integer.toString(255, 16) + " " + Integer.toString(-255, 2) + " " + Integer.parseInt("ff", 16) + " " + Integer.parseInt("+12") + " " + Integer.valueOf("12") + " " + Long.parseLong("-9000000000") + " " + Long.toBinaryString(5L) + " " + Long.toHexString(-1L) + " " + Integer.bitCount(255) + " " + Long.bitCount(-1L) + " " + Integer.signum(-9) + " " + Integer.compare(1, 2) + " " + Integer.sum(1, 2) + Integer.max(1, 2) + Integer.min(1, 2) + " " + Long.MAX_VALUE + " " + Integer.MIN_VALUE);
+              System.out.println(Double.parseDouble("3.25e2") + " " + Double.parseDouble("0.1") + " " + Double.parseDouble(" -1.5 ") + " " + Double.parseDouble("1e-320") + " " + Double.parseDouble("1.7976931348623157e308") + " " + Double.parseDouble("123456789012345678901234567890") + " " + Double.valueOf("1.5") + " " + Double.MAX_VALUE + " " + Double.MIN_VALUE + " " + Double.POSITIVE_INFINITY + " " + Double.NEGATIVE_INFINITY + " " + Double.NaN + " " + Double.isNaN(0.0 / 0.0) + " " + Double.isInfinite(1 / 0.0) + " " + Double.isFinite(1.5) + " " + Double.compare(0.0, -0.0) + " " + Double.toString(1e21) + " " + Double.sum(1.5, 2) + " " + Double.max(-0.0, 0.0) + " " + Double.min(-0.0, 0.0));
+              System.out.println(Double.doubleToLongBits(1.0) + " " + Double.doubleToLongBits(-0.0) + " " + Double.doubleToLongBits(5e-324) + " " + Double.doubleToLongBits(-2.5) + " " + Double.doubleToLongBits(1e308) + " " + Double.valueOf(2.5).hashCode() + " " + Double.hashCode(0.1) + " " + Double.valueOf(0.0).equals(-0.0) + " " + Double.valueOf(Double.NaN).equals(Double.NaN) + " " + new SourceListsPoint(1, "a").hashCode());
+              System.out.println(Boolean.parseBoolean("TRUE") + " " + Boolean.parseBoolean("yes") + " " + Boolean.TRUE + " " + Boolean.valueOf("true").compareTo(false) + " " + Boolean.logicalXor(true, false) + " " + Boolean.toString(false) + " " + Character.isDigit('7') + " " + Character.isLetter('x') + " " + Character.isLetterOrDigit('_') + " " + Character.isWhitespace(' ') + " " + Character.isUpperCase('Q') + " " + Character.isLowerCase('Q') + " " + Character.toUpperCase('q') + Character.toLowerCase('Q') + " " + Character.getNumericValue('9') + " " + Character.digit('f', 16) + " " + (int) Character.forDigit(11, 16) + " " + Character.valueOf('x').compareTo('y') + " " + Character.toString('c') + " " + (int) Character.MAX_VALUE);
+              Number n = 42;
+              Number m = 2.5;
+              Number l = 7L;
+              Object boxed = 5;
+              System.out.println(n.intValue() + " " + m.intValue() + " " + l.doubleValue() + " " + n.doubleValue() + " " + m.longValue() + " " + (boxed instanceof Number) + " " + ("s" instanceof Object o && o instanceof Number) + " " + Integer.valueOf(5).equals(5) + " " + Long.valueOf(5).hashCode() + " " + Integer.valueOf(7).doubleValue() + " " + Long.valueOf(7).intValue() + " " + Double.valueOf(7.9).intValue() + " " + Integer.valueOf(3).compareTo(4));
+              System.out.println(Math.round(2.5) + " " + Math.round(-2.5) + " " + Math.round(0.49999999999999994) + " " + Math.floor(-1.5) + " " + Math.ceil(1.2) + " " + Math.rint(2.5) + " " + Math.pow(2, 10) + " " + Math.pow(-8, 1.0 / 3) + " " + Math.sqrt(2) + " " + Math.sqrt(-1) + " " + Math.floorMod(-7, 3) + " " + Math.floorDiv(-7, 2) + " " + Math.hypot(3, 4) + " " + Math.abs(-2.5) + " " + Math.abs(-7) + " " + Math.max(1, 2L) + " " + Math.min(1.5, 2) + " " + Math.signum(-3.0) + " " + Math.cbrt(27) + " " + Math.exp(0) + " " + Math.log(Math.E) + " " + Math.log10(1000) + " " + Math.log(-1) + " " + Math.sin(0) + " " + Math.cos(0) + " " + Math.atan2(1, 1) + " " + Math.toDegrees(Math.PI) + " " + Math.toRadians(180) + " " + (Math.random() < 1.0));
+              try {
+                  Math.addExact(Integer.MAX_VALUE, 1);
+              } catch (ArithmeticException ex) {
+                  System.out.println(ex.getMessage() + " " + Math.addExact(1, 2) + " " + Math.multiplyExact(3L, 4L) + " " + Math.toIntExact(5L) + " " + Math.subtractExact(1, 2) + " " + Math.negateExact(5));
+              }
+              for (String text : new String[] {"4x", "", "99999999999", "-", null}) {
+                  try {
+                      Integer.parseInt(text);
+                  } catch (NumberFormatException ex) {
+                      System.out.println(ex.getMessage());
+                  }
+              }
+              try {
+                  Double.parseDouble("x1");
+              } catch (NumberFormatException ex) {
+                  System.out.println(ex.getMessage() + " " + (System.currentTimeMillis() > 1700000000000L) + " " + (System.nanoTime() != 0) + " " + (System.identityHashCode(n) == System.identityHashCode(n)) + " " + System.lineSeparator().length());
+              }
+              Object plain = new Object(), another = new Object();
+              int[] source = {1, 2, 3, 4, 5};
+              System.arraycopy(source, 0, source, 1, 4);
+              System.out.println(plain.equals(plain) + " " + plain.equals(another) + " " + (plain == another) + " " + (plain.hashCode() == plain.hashCode()) + " " + plain.getClass().getName() + " " + plain.toString().startsWith("java.lang.Object@") + " " + Arrays.toString(source));
+          }
+      }
+    expected: |
+      1010 ffffffff 10 ff -11111111 255 12 12 -9000000000 101 ffffffffffffffff 8 64 -1 -1 321 9223372036854775807 -2147483648
+      325.0 0.1 -1.5 1.0E-320 1.7976931348623157E308 1.2345678901234568E29 1.5 1.7976931348623157E308 4.9E-324 Infinity -Infinity NaN true true true 1 1.0E21 3.5 0.0 -0.0
+      4607182418800017408 -9223372036854775808 1 -4610560118520545280 9214871658872686752 1074003968 -1507852285 false true 128
+      true false true 1 true false true true false true true false Qq 9 15 98 -1 c 65535
+      42 2 7.0 42.0 2 true false true 5 7.0 7 7 -1
+      3 -2 0 -2.0 2.0 2.0 1024.0 NaN 1.4142135623730951 NaN 2 -4 5.0 2.5 7 2 1.5 -1.0 3.0 1.0 1.0 3.0 NaN 0.0 1.0 0.7853981633974483 180.0 3.141592653589793 true
+      integer overflow 3 12 5 -1 -5
+      For input string: "4x"
+      For input string: ""
+      For input string: "99999999999"
+      For input string: "-"
+      Cannot parse null string
+      For input string: "x1" true true true 1
+      true false false true java.lang.Object true [1, 1, 2, 3, 4]
 standalone:
   # An uncaught exception's report is its toString(): the pipeline's line on standard
   # error and a non-zero exit, where the JDK names the thread.
@@ -3578,6 +4071,9 @@ refused:
     - name: a-member-typed-through-its-type-argument
       body: 'Box<String> b = new Box<>("a"); Integer i = b.get();'
       error: "incompatible types: String cannot be converted to Integer"
+    - name: an-enhanced-for-over-what-is-neither-an-array-nor-iterable
+      body: 'for (char c : "text") { }'
+      error: "for-each not applicable to expression type"
     - name: a-type-variable-out-of-scope
       body: 'T t = null;'
       error: "cannot find symbol"

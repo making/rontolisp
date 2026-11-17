@@ -831,6 +831,10 @@ class RontoLispCliStreamsTest {
 		// --source-language reads any other source as Java: here a compact source file
 		assertThat(runReporting("-e", "void main() { IO.println(1 + 2); }", "--source-language", "java")[1])
 			.isEqualTo("3\n");
+		// System.exit ends the program with its status, after what it printed
+		assertThat(runReporting("-e", "void main() { IO.println(\"out\"); System.exit(3); IO.println(\"no\"); }",
+				"--source-language", "java"))
+			.containsExactly("3", "out\n", "");
 		// a construct the subset does not have is refused by name before anything runs,
 		// at its position, on the interpreter and the compile path alike
 		Path broken = this.tempDir.resolve("Broken.java");

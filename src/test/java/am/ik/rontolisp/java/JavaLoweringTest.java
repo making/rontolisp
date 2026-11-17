@@ -132,7 +132,7 @@ class JavaLoweringTest {
 					"(DEFUN |Shape.area()%v| (|%o|) (COND ((|Circle?| |%o|) (|Circle.area()| |%o|)) ((|Rect?| "
 							+ "|%o|) (|Rect.area()| |%o|)) (T (RONTOLISP::%JAVA-NO-RECEIVER |%o| \"area()\"))))",
 					"(DEFUN |%string| (|%o|) (COND ((|Base?| |%o|) (|Base.toString()| |%o|)) ((|Throwable?| |"
-							+ "%o|) (|Throwable.toString()| |%o|)) (T (RONTOLISP::%JAVA-TO-STRING |%o| #'|%string|))))",
+							+ "%o|) (|Throwable.toString()| |%o|)) (T (RONTOLISP::%JAVA-TO-STRING |%o|))))",
 					"(DEFUN |%lisp-error| (|%c|) (IF (RONTOLISP::%JAVA-DIVISION-BY-ZERO-P |%c|) (|ArithmeticE"
 							+ "xception.new(String)| \"/ by zero\") (|RuntimeException.new(String)| (RONTOLISP::%JAVA-CON"
 							+ "DITION-TEXT |%c|))))",
@@ -301,7 +301,7 @@ class JavaLoweringTest {
 							+ " (|Box.above(Comparable)| |s| \"a\") \"true\" \"false\")) (OR (IF (AND (|Named%is| |o|)"
 							+ " (PROGN (SETQ |n| |o|) T)) (|Named.greet()%v| |n|) \"\") \"null\")) (%DECIMAL-PIECE"
 							+ " (|L3.sum(Long,Integer)| |big| |len|))) (RONTOLISP::%JAVA-TO-STRING"
-							+ " (|L3.pick(Object,Object)| 1 2) NIL)))) (FUNCALL |task|)))))))))",
+							+ " (|L3.pick(Object,Object)| 1 2))))) (FUNCALL |task|)))))))))",
 					"(DEFUN |Named.name()%v| (|%o|) (COND ((|Named%lambda?| |%o|) (FUNCALL (|Named%lambda-%f| |%o|)))"
 							+ " (T (RONTOLISP::%JAVA-NO-RECEIVER |%o| \"name()\"))))",
 					"(DEFUN |Comparable.compareTo(Object)%v| (|%o| |%a0|) (COND ((|Version?| |%o|)"
@@ -310,6 +310,52 @@ class JavaLoweringTest {
 							+ " |%o|) (CAR |%a0|))) ((INTEGERP |%o|) (RONTOLISP::%JAVA-COMPARE |%o| |%a0|)) (T"
 							+ " (RONTOLISP::%JAVA-NO-RECEIVER |%o| \"compareTo(Object)\"))))",
 					"(DEFUN |Named%is| (|%o|) (OR (|Named%lambda?| |%o|)))");
+	}
+
+	@Test
+	void theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches() {
+		// A collection is a class of the library's Java source: of ArrayList the program
+		// holds the methods it reaches and no other, a call of one is direct while one
+		// class can take it, the enhanced for asks an Iterable for its iterator, a
+		// native member is its form, a member of a box written in Java a call of the
+		// library's own class; the constants of a program comparing two strings by
+		// reference are one object a text.
+		List<String> forms = lower("""
+				import java.util.*;
+				class Bag implements Iterable<String> {
+				    final List<String> items = new ArrayList<>();
+				    public Iterator<String> iterator() { return items.iterator(); }
+				}
+				class L4 {
+				    public static void main(String[] args) {
+				        Bag bag = new Bag();
+				        bag.items.add("a");
+				        String first = "a";
+				        for (String item : bag) { System.out.println(item == first); }
+				        int[] ns = {2, 1};
+				        Arrays.sort(ns);
+				        System.out.println(Integer.parseInt("7") + Math.sqrt(ns[0]));
+				    }
+				}
+				""", "L4.java");
+		assertThat(forms).contains(
+				"(DEFSTRUCT (|java.util.ArrayList| (:INCLUDE |java.util.AbstractList|) (:CONC-NAME |java.util.Arra"
+						+ "yList.|) (:CONSTRUCTOR |%make-java.util.ArrayList| NIL) (:PREDICATE |java.util.ArrayList?|) (:"
+						+ "COPIER NIL)) (|items| NIL) (|count| 0) (|changes| 0))",
+				"(DEFUN |Bag.iterator()| (|this|) (|java.util.ArrayList.iterator()| (|Bag.items| |this|)))",
+				"(DEFUN |L4.main(String[])| (|args|) (LET ((|bag| (|Bag.new()|))) (|java.util.ArrayList.add(Object)| "
+						+ "(|Bag.items| |bag|) |%string0|) (LET ((|first| |%string0|)) (LET* ((|%t0| (|Bag.iterator()| |ba"
+						+ "g|))) (WHILE (|java.util.ArrayList.Each.hasNext()| |%t0|) (LET ((|item| (|java.util.ArrayList.E"
+						+ "ach.next()| |%t0|))) (WRITE-LINE (IF (EQ |item| |first|) \"true\" \"false\"))))) (LET ((|ns| (M"
+						+ "AKE-ARRAY 2 :ELEMENT-TYPE '(SIGNED-BYTE 32) :INITIAL-CONTENTS (LIST 2 1)))) (|java.util.Arrays.s"
+						+ "ort(int[])| |ns|) (WRITE-LINE (RONTOLISP::%JAVA-DOUBLE-STRING (+ (FLOAT (|rontolisp.internal.Sup"
+						+ "port.parseInt(String,int)| |%string1| 10) 1.0) (%STRICT-MATH :SQRT (FLOAT (AREF |ns| 0) 1.0)))))"
+						+ "))))",
+				"(DEFUN |java.util.Arrays.sort(int[])| (|a|) (RONTOLISP::%JAVA-SORT-NUMBERS |a| 0 (LENGTH |a|)))",
+				"(SETQ |%string0| (RONTOLISP::%JAVA-INTERN \"a\"))",
+				"(UNWIND-PROTECT (|L4.main(String[])| (VECTOR)) NIL)");
+		assertThat(forms).noneMatch(form -> form.contains("ArrayList.remove") || form.contains("java.util.HashMap")
+				|| form.contains("AbstractList.IndexIterator"));
 	}
 
 	@Test
@@ -379,7 +425,6 @@ class JavaLoweringTest {
 				{ "interface G<T> { T g(); } void main() { G<String> g = new G<>() { public String g() { return \"\"; } }; }",
 						"1:55: an anonymous class made with <>" },
 				{ "void main() { Object o = null; String[] a = (String[]) o; }", "1:45: a cast to String[]" },
-				{ "class C<K> { Map<K, String> m; } void main() { }", "1:14: a map keyed by K" },
 				{ "class O<T> { class I { T v; } I make(T v) { I i = new I(); i.v = v; return i; } } void main() { O<String> o = new O<>(); String s = o.make(\"x\").v; }",
 						"1:145: a member of an inner class of the parameterized class O read from outside that class" },
 				{ "void main() { Object o = int.class; }", "1:26: a class literal" },
@@ -389,22 +434,16 @@ class JavaLoweringTest {
 						"1:67: an anonymous class made with an outer instance" },
 				{ "class O { class I { } } class S extends O.I { } void main() { }",
 						"1:41: a class extending the inner class I from outside its outer class" },
-				{ "void main() { String a = \"a\", b = \"b\"; IO.println(a == b); }",
-						"1:53: == of two strings, which compares references (equals compares text)," },
 				{ "import java.util.Scanner; void main() { Scanner s = null; }", "1:41: the class java.util.Scanner" },
-				{ "void main() { var xs = new ArrayList<String>(); xs.forEach(x -> IO.println(x)); }",
-						"1:52: ArrayList.forEach(<lambda>)" },
-				{ "void main() { List<String> xs = List.of(\"a\"); }", "1:38: List.of(String)" },
-				{ "void main() { var s = new String(\"a\"); }", "1:23: new String(String)" },
-				{ "void main() { Map<Double, String> m = new HashMap<>(); }", "1:15: a map keyed by Double" },
-				{ "void main() { var m = new HashMap<String, Integer>(); IO.println(m); }", "1:58: the text of a map" },
-				{ "void main() { var xs = new ArrayList<String>(); IO.println(xs.equals(xs)); }",
-						"1:63: ArrayList.equals(Object)" },
+				{ "void main() { var xs = new ArrayList<String>(); IO.println(xs.stream()); }",
+						"1:63: ArrayList.stream()" },
+				{ "void main() { IO.println(\"a\".chars()); }", "1:30: String.chars()" },
+				{ "void main() { IO.println(Collections.EMPTY_LIST); }", "1:38: Collections.EMPTY_LIST" },
+				{ "void main() { var s = new StringBuilder(); s.appendCodePoint(65); }",
+						"1:46: StringBuilder.appendCodePoint(int)" },
 				{ "void main() { IO.println(getClass()); }",
 						"1:26: getClass() but for its getName() and getSimpleName()" },
 				{ "class A { int x; } class B extends A { int x; } void main() { }", "1:44: a field hiding A.x" },
-				{ "class A extends ArrayList<String> { } void main() { }",
-						"1:17: a class extending java.util.ArrayList" },
 				{ "class String { } class Refused { static void main() { } }",
 						"1:7: a class named as java.lang.String, which the program also uses," } };
 		for (String[] refusal : refusals) {

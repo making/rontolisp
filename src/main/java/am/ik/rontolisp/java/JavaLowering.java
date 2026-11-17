@@ -520,17 +520,42 @@ final class JavaLowering implements JavaEmitter.Context {
 	private List<LispVal> program() {
 		this.launched = launched();
 		for (JavaClass declaration : List.copyOf(this.classes.all())) {
-			if (!declaration.intrinsic && !declaration.isLocal) {
+			if (!declaration.intrinsic && !declaration.isLocal && !isLibrary(declaration)) {
 				implementations(declaration);
 				lowerClass(declaration);
 			}
 		}
+		// the library's Java source: what the program reaches of it, and what that
+		// reaches
+		List<LispVal> generated;
+		int reached;
+		do {
+			reached = this.loweredMethods.size() + this.loweredInits.size();
+			lowerReached();
+			generated = generatedFunctions();
+			lowerReached();
+		}
+		while (reached != this.loweredMethods.size() + this.loweredInits.size());
+		// after the library: whether the program throws is known once it is lowered
 		LispVal entry = entry();
 		List<LispVal> initialization = initialization();
+		List<LispVal> made = new ArrayList<>();
+		made.addAll(this.variables);
+		made.addAll(this.functions);
+		made.addAll(this.dispatchers.values());
+		made.addAll(generated);
+		made.addAll(initialization);
+		made.add(entry);
+		Set<String> named = new HashSet<>();
+		for (LispVal form : made) {
+			names(form, named);
+		}
 		List<LispVal> forms = new ArrayList<>();
 		Set<JavaClass> defined = new HashSet<>();
 		for (JavaClass declaration : List.copyOf(this.classes.all())) {
-			structure(declaration, defined, forms);
+			if (!isLibrary(declaration) || isLive(declaration) || isNamed(declaration, named)) {
+				structure(declaration, defined, forms);
+			}
 		}
 		for (JavaClass target : this.classes.taggedLambdas) {
 			forms.add(list(cl("defstruct"), list(lambdaStructure(target),
@@ -538,13 +563,143 @@ final class JavaLowering implements JavaEmitter.Context {
 					list(new LispSymbol(":PREDICATE"), lambdaTest(target)), list(new LispSymbol(":COPIER"), NIL)),
 					LAMBDA_FUNCTION));
 		}
-		forms.addAll(this.variables);
-		forms.addAll(this.functions);
-		forms.addAll(this.dispatchers.values());
-		forms.addAll(generatedFunctions());
-		forms.addAll(initialization);
-		forms.add(entry);
+		forms.addAll(made);
 		return List.copyOf(forms);
+	}
+
+	// ---- what the program reaches of the library
+
+	/** The library methods and static initializations lowered already in this pass. */
+	private final Set<Method> loweredMethods = new HashSet<>();
+
+	private final Set<JavaClass> loweredInits = new HashSet<>();
+
+	/** Whether a class is Java source of the library, and no class of the program. */
+	private boolean isLibrary(JavaClass declaration) {
+		return !declaration.intrinsic && declaration.source != this.program;
+	}
+
+	/**
+	 * Whether the program can hold an instance of a class: any class of the program, and
+	 * a class of the library the program makes an instance of.
+	 */
+	private boolean isMade(JavaClass declaration) {
+		return !declaration.intrinsic && !declaration.isInterface
+				&& (!isLibrary(declaration) || this.classes.made.contains(declaration));
+	}
+
+	/** Whether the program can hold an instance of a class or of a class under it. */
+	private boolean isLive(JavaClass declaration) {
+		for (JavaClass candidate : this.classes.all()) {
+			if (isMade(candidate) && candidate.isSubclassOf(declaration)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Records a call; a method of the library's Java source is lowered because of it. */
+	private void called(Method method) {
+		this.effects.calls.add(method);
+		reach(method);
+	}
+
+	private void reach(Method method) {
+		if (method.emitter == null && isLibrary(method.owner)) {
+			this.classes.reached.add(method);
+			use(method.owner);
+		}
+	}
+
+	/** Records that a class is initialized by what is being lowered. */
+	private void uses(JavaClass declaration) {
+		this.effects.uses.add(declaration);
+		use(declaration);
+	}
+
+	private void use(JavaClass declaration) {
+		for (JavaClass type = declaration; type != null; type = type.superclass) {
+			if (isLibrary(type)) {
+				this.classes.used.add(type);
+			}
+		}
+	}
+
+	/**
+	 * Records that an instance of a class is made. The first one of a class of the
+	 * library changes which bodies a call can run, so the program is lowered again.
+	 */
+	private void makes(JavaClass declaration) {
+		if (isLibrary(declaration) && this.classes.made.add(declaration)) {
+			this.classes.changed();
+		}
+	}
+
+	/**
+	 * Lowers the methods of the library's Java source called so far and the static
+	 * initialization of its classes used so far, until none is left: each reaches more. A
+	 * local or an anonymous class is lowered whole where it is declared.
+	 */
+	private void lowerReached() {
+		boolean more = true;
+		while (more) {
+			more = false;
+			for (Method method : List.copyOf(this.classes.reached)) {
+				if (method.owner.isLocal || method.isAbstract || !this.loweredMethods.add(method)) {
+					continue;
+				}
+				more = true;
+				this.currentClass = method.owner;
+				this.unit = this.classes.unit(method.owner);
+				if (method.isConstructor()) {
+					constructor(method);
+				}
+				else {
+					method(method);
+				}
+			}
+			for (JavaClass declaration : List.copyOf(this.classes.used)) {
+				if (declaration.isLocal || !this.loweredInits.add(declaration)) {
+					continue;
+				}
+				more = true;
+				this.currentClass = declaration;
+				this.unit = this.classes.unit(declaration);
+				staticInitialization(declaration);
+			}
+		}
+	}
+
+	/** The names of the symbols of a form. */
+	private static void names(LispVal form, Set<String> into) {
+		LispVal rest = form;
+		while (rest instanceof LispCons cons) {
+			names(cons.car(), into);
+			rest = cons.cdr();
+		}
+		if (rest instanceof LispSymbol symbol) {
+			into.add(symbol.name());
+		}
+	}
+
+	/**
+	 * Whether the forms name the structure of a class the program makes no instance of:
+	 * its predicate, by an {@code instanceof} or a {@code catch}, or one of its slots.
+	 */
+	private static boolean isNamed(JavaClass declaration, Set<String> named) {
+		if (declaration.intrinsic || declaration.isInterface) {
+			return false;
+		}
+		if (named.contains(JavaNames.predicate(declaration).name())
+				|| named.contains(JavaNames.allocator(declaration).name())) {
+			return true;
+		}
+		for (Field field : declaration.fields) {
+			if (!field.isStatic && named.contains(JavaNames.accessor(field).name())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static final LispSymbol LAMBDA_FUNCTION = new LispSymbol("%f");
@@ -1050,7 +1205,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			if (constructor.passesTo != null) {
 				// an anonymous class's constructor hands its arguments to its
 				// superclass's
-				this.effects.calls.add(constructor.passesTo);
+				called(constructor.passesTo);
 				if (!isTrivial(constructor.passesTo)) {
 					forms.add(form(JavaNames.function(constructor.passesTo), prepend(THIS, List.copyOf(parameters))));
 				}
@@ -1089,7 +1244,8 @@ final class JavaLowering implements JavaEmitter.Context {
 			LispVal body = frame.exits ? form(cl("block"), prepend(FUNCTION_BLOCK, forms)) : progn(forms);
 			this.functions.add(list(cl("defun"), JavaNames.function(constructor), list(all), body));
 		}
-		if (owner.isAbstract && !owner.isEnum) {
+		if ((owner.isAbstract && !owner.isEnum) || (isLibrary(owner) && !this.classes.made.contains(owner))) {
+			// no instance is made: the constructor is reached from a subclass's only
 			return;
 		}
 		// the function making an instance: the slots a nested class starts with -- the
@@ -1172,7 +1328,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				"constructor " + target.simpleName(), target, pos);
 		checkAccess(resolved.method().isPrivate, resolved.method().owner,
 				target.simpleName() + resolved.method().parameterList(), pos);
-		this.effects.calls.add(resolved.method());
+		called(resolved.method());
 		if (isTrivial(resolved.method())) {
 			return NIL;
 		}
@@ -1295,7 +1451,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		List<LispVal> forms = new ArrayList<>();
 		List<JavaClass> deepestFirst = this.classes.all()
 			.stream()
-			.filter(declaration -> !declaration.intrinsic && !declaration.isInterface)
+			.filter(declaration -> !declaration.intrinsic && !declaration.isInterface && isLive(declaration))
 			.sorted(Comparator.comparingInt(JavaClass::depth).reversed())
 			.toList();
 		for (JavaClass tested : this.interfaceTests) {
@@ -1303,7 +1459,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		if (this.generated.contains(OBJECT_STRING)) {
 			forms.add(objectFunction(OBJECT_STRING, "toString()", List.of(), deepestFirst,
-					runtimeCall("to-string", RECEIVER, function(OBJECT_STRING))));
+					runtimeCall("to-string", RECEIVER)));
 		}
 		if (this.generated.contains(OBJECT_EQUALS)) {
 			LispSymbol other = new LispSymbol("%a0");
@@ -1321,7 +1477,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			List<LispVal> arms = new ArrayList<>();
 			arms.add(cl("cond"));
 			for (JavaClass declaration : deepestFirst) {
-				if (!declaration.isAbstract) {
+				if (!declaration.isAbstract && isMade(declaration)) {
 					arms.add(list(list(JavaNames.predicate(declaration), RECEIVER),
 							string(name == CLASS_NAME ? declaration.binaryName : declaration.simpleName())));
 				}
@@ -1343,6 +1499,8 @@ final class JavaLowering implements JavaEmitter.Context {
 	private LispSymbol creator(String exception) {
 		for (Method constructor : constructors(this.classes.library(exception))) {
 			if (constructor.parameters.equals(List.of(this.stringType))) {
+				reach(constructor);
+				makes(constructor.owner);
 				return JavaNames.creator(constructor);
 			}
 		}
@@ -1364,6 +1522,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		for (JavaClass declaration : deepestFirst) {
 			for (Method method : declaration.methods) {
 				if (!method.isStatic && !method.isAbstract && method.signature().equals(signature)) {
+					reach(method);
 					arms.add(list(list(JavaNames.predicate(declaration), RECEIVER),
 							form(JavaNames.function(method), all)));
 				}
@@ -1414,7 +1573,8 @@ final class JavaLowering implements JavaEmitter.Context {
 					tests.add(list(predicate, RECEIVER));
 				}
 			}
-			else if (candidate.superclass == null || !candidate.superclass.isSubclassOf(declaration)) {
+			else if (isLive(candidate)
+					&& (candidate.superclass == null || !candidate.superclass.isSubclassOf(declaration))) {
 				tests.add(list(JavaNames.predicate(candidate), RECEIVER));
 			}
 		}
@@ -1749,10 +1909,18 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	private Typed constantString(String value) {
-		LispVal form = string(value);
+		LispVal form = this.classes.identicalStrings
+				? this.interned.computeIfAbsent(value, text -> new LispSymbol("%string" + this.interned.size()))
+				: string(value);
 		this.nonNull.add(form);
 		return new Typed(form, this.stringType, value);
 	}
+
+	/**
+	 * The constant strings of a program that compares strings by reference, each a global
+	 * holding the one object its text is.
+	 */
+	private final Map<String, LispSymbol> interned = new LinkedHashMap<>();
 
 	private Typed box(Typed value) {
 		Primitive primitive = (Primitive) value.type();
@@ -2125,24 +2293,47 @@ final class JavaLowering implements JavaEmitter.Context {
 		else if (type == Primitive.VOID) {
 			throw error(pos, "'void' type not allowed here");
 		}
-		else if (JavaIntrinsics.unboxed(type) != null || type instanceof ArrayType || (type instanceof ClassType builder
-				&& builder.declaration().name.equals("java.lang.StringBuilder"))) {
-			text = runtimeCall("to-string", form, NIL);
+		else if (isPlain(type)) {
+			text = runtimeCall("to-string", form);
 		}
 		else {
-			text = objectString(value, pos);
+			text = objectString(value);
 		}
 		this.nonNull.add(text);
 		return text;
 	}
 
-	private LispVal objectString(Typed value, int pos) {
-		if (value.type() instanceof ClassType collection && collection.declaration().name.endsWith("Map")
-				&& collection.declaration().intrinsic) {
-			throw unsupported(pos, "the text of a map");
-		}
+	private LispVal objectString(Typed value) {
 		this.generated.add(OBJECT_STRING);
 		return list(OBJECT_STRING, value.form());
+	}
+
+	/**
+	 * Whether every value of a type is one the run-time library answers {@code Object}'s
+	 * methods for: a box, an array, a {@code StringBuilder}.
+	 */
+	private static boolean isPlain(JavaType type) {
+		return JavaIntrinsics.unboxed(type) != null || type instanceof ArrayType || (type instanceof ClassType named
+				&& named.declaration().intrinsic && JavaIntrinsics.isPlain(named.declaration()));
+	}
+
+	@Override
+	public LispVal stringFunction() {
+		this.generated.add(OBJECT_STRING);
+		return function(OBJECT_STRING);
+	}
+
+	@Override
+	public LispVal library(String className, String name, List<LispVal> arguments) {
+		JavaClass owner = this.classes.library(className);
+		for (Method method : owner.methods) {
+			if (method.isStatic && method.name.equals(name) && method.parameters.size() == arguments.size()) {
+				called(method);
+				uses(owner);
+				return form(JavaNames.function(method), arguments);
+			}
+		}
+		throw new IllegalStateException(className + " has no " + name + " of " + arguments.size() + " arguments");
 	}
 
 	/**
@@ -2150,16 +2341,10 @@ final class JavaLowering implements JavaEmitter.Context {
 	 */
 	@Override
 	public LispVal objectMethod(String signature, Typed receiver, Invocation call) {
-		JavaType type = receiver.type();
-		boolean plain = JavaIntrinsics.unboxed(type) != null || type instanceof ArrayType
-				|| (type instanceof ClassType builder && builder.declaration().name.equals("java.lang.StringBuilder"));
-		if (type instanceof ClassType collection && collection.declaration().intrinsic
-				&& !collection.declaration().typeParameters.isEmpty() && !signature.equals("toString()")) {
-			throw unsupported(call.pos(), collection.declaration().simpleName() + "." + signature);
-		}
+		boolean plain = isPlain(receiver.type());
 		switch (signature) {
 			case "toString()":
-				return plain ? runtimeCall("to-string", receiver.form(), NIL) : objectString(receiver, call.pos());
+				return plain ? runtimeCall("to-string", receiver.form()) : objectString(receiver);
 			case "equals(Object)":
 				if (plain) {
 					return runtimeCall("equals", receiver.form(), call.argument(0));
@@ -2442,7 +2627,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			return constant instanceof String text ? constantString(text) : constant(constant);
 		}
 		this.effects.reads.add(field);
-		this.effects.uses.add(field.owner);
+		uses(field.owner);
 		if (forward(field)) {
 			this.effects.forward.add(field);
 		}
@@ -2561,8 +2746,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (named != null) {
 			Field field = field(named, select.name());
 			if (field == null) {
-				throw named.intrinsic ? unsupported(select.pos(), named.simpleName() + "." + select.name())
-						: error(select.pos(),
+				throw named.intrinsic || isLibrary(named)
+						? unsupported(select.pos(), named.simpleName() + "." + select.name()) : error(select.pos(),
 								"cannot find symbol: variable " + select.name() + " in class " + named.simpleName());
 			}
 			if (!field.isStatic) {
@@ -2644,7 +2829,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				ClassType type = this.types.site(object.type());
 				Field field = field(type.declaration(), select.name());
 				if (field == null) {
-					throw type.declaration().intrinsic
+					throw type.declaration().intrinsic || isLibrary(type.declaration())
 							? unsupported(select.pos(), type.declaration().simpleName() + "." + select.name())
 							: error(select.pos(), "cannot find symbol: variable " + select.name() + " in class "
 									+ type.declaration().simpleName());
@@ -2992,8 +3177,14 @@ final class JavaLowering implements JavaEmitter.Context {
 		boolean rightBox = JavaIntrinsics.unboxed(right.type()) != null;
 		LispVal test;
 		if (left.type().isReference() && right.type().isReference()) {
-			if (isString(left) && isString(right)) {
-				throw unsupported(pos, operator + " of two strings, which compares references (equals compares text),");
+			if (isString(left) && isString(right) && !this.classes.identicalStrings) {
+				// two constants of one text are one object: every constant of such a
+				// program is a global, and the program is lowered again
+				this.classes.identicalStrings = true;
+				this.classes.changed();
+			}
+			if (left.constant() instanceof String a && right.constant() instanceof String b) {
+				return constant(a.equals(b) == operator.equals("=="));
 			}
 			JavaType a = this.types.erased(this.types.upward(left.type()));
 			JavaType b = this.types.erased(this.types.upward(right.type()));
@@ -3168,12 +3359,13 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (test == T) {
 			return new Typed(value.form(), to);
 		}
-		this.classes.library("java.lang.ClassCastException");
-		LispVal failure = raise(
-				list(JavaNames.creator(constructors(this.classes.library("java.lang.ClassCastException")).stream()
-					.filter(constructor -> constructor.parameters.isEmpty())
-					.findFirst()
-					.orElseThrow())));
+		Method failed = constructors(this.classes.library("java.lang.ClassCastException")).stream()
+			.filter(constructor -> constructor.parameters.isEmpty())
+			.findFirst()
+			.orElseThrow();
+		called(failed);
+		makes(failed.owner);
+		LispVal failure = raise(list(JavaNames.creator(failed)));
 		return new Typed(JavaForms.let(checked, value.form(),
 				List.of(call("if", call("or", call("null", checked), test), checked, failure))), to);
 	}
@@ -3626,14 +3818,39 @@ final class JavaLowering implements JavaEmitter.Context {
 				return !contested || function.returnType() == Primitive.VOID || !(lambda.expression() instanceof Call)
 						|| lambda.parameters().stream().anyMatch(each -> each.type() == null) || !givesNothing(lambda);
 			}
-			case JavaSyntax.MethodReference reference:
-				return functional(parameter) != null;
+			case JavaSyntax.MethodReference reference: {
+				Descriptor function = functional(parameter);
+				return function != null && (!contested || takes(reference, function.parameters().size()));
+			}
 			case Conditional conditional:
 				return accepts(parameter, conditional.whenTrue(), contested)
 						&& accepts(parameter, conditional.whenFalse(), contested);
 			default:
 				return false;
 		}
+	}
+
+	/**
+	 * Whether a method reference naming a class can be a function of so many parameters:
+	 * a static method or a constructor taking them, or an instance method taking all but
+	 * the first. One through an expression is not asked, its type being unknown here.
+	 */
+	private boolean takes(JavaSyntax.MethodReference reference, int count) {
+		Expression written = reference.target();
+		JavaClass named = written == null || reference.onSuper() ? null : classNamed(written);
+		if (named == null) {
+			return true;
+		}
+		List<Method> candidates = reference.name().equals("new") ? constructors(named)
+				: methods(named, reference.name());
+		for (Method candidate : candidates) {
+			int declared = candidate.parameters.size() - candidate.hidden;
+			int given = candidate.isStatic || candidate.isConstructor() ? count : count - 1;
+			if (given >= 0 && (given == declared || (candidate.varargs && given >= declared - 1))) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -3827,7 +4044,7 @@ final class JavaLowering implements JavaEmitter.Context {
 							: arguments.get(i) instanceof Lambda ? "<lambda>" : "<method reference>");
 			}
 			int count = arguments.size();
-			if (in.intrinsic && candidates.stream()
+			if ((in.intrinsic || isLibrary(in)) && candidates.stream()
 				.noneMatch(candidate -> candidate.parameters.size() == count
 						|| (candidate.varargs && count >= candidate.parameters.size() - 1))) {
 				// a member the library does not have yet
@@ -3975,7 +4192,7 @@ final class JavaLowering implements JavaEmitter.Context {
 								"abstract method " + resolved.method().signature() + " cannot be accessed directly");
 			}
 			checkAccess(body.isPrivate, body.owner, body.signature(), pos);
-			this.effects.calls.add(body);
+			called(body);
 			return new Typed(
 					located(form(JavaNames.function(body), prepend(thisValue(pos).form(), resolved.forms())), pos),
 					resolved.returnType());
@@ -4059,8 +4276,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		LispVal form;
 		if (method.isStatic) {
-			this.effects.calls.add(method);
-			this.effects.uses.add(method.owner);
+			called(method);
+			uses(method.owner);
 			form = form(JavaNames.function(method), resolved.forms());
 		}
 		else {
@@ -4083,7 +4300,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	private List<Body> bodies(JavaClass receiver, Method method) {
 		Map<JavaClass, Method> tested = new LinkedHashMap<>();
 		for (JavaClass candidate : this.classes.all()) {
-			if (candidate.intrinsic || candidate.isAbstract || !candidate.isSubclassOf(receiver)) {
+			if (candidate.isAbstract || !isMade(candidate) || !candidate.isSubclassOf(receiver)) {
 				continue;
 			}
 			Method body = implementation(candidate, method);
@@ -4129,12 +4346,12 @@ final class JavaLowering implements JavaEmitter.Context {
 	 */
 	private @Nullable LispSymbol target(JavaClass receiver, Method method) {
 		if (method.isPrivate) {
-			this.effects.calls.add(method);
+			called(method);
 			return JavaNames.function(method);
 		}
 		List<Body> bodies = bodies(receiver, method);
 		for (Body body : bodies) {
-			this.effects.calls.add(body.method());
+			called(body.method());
 		}
 		// the classes of the library whose values are Lisp values and implement the
 		// method
@@ -4165,7 +4382,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 			Method body = lambdaBody(made, method);
 			if (body != null) {
-				this.effects.calls.add(body);
+				called(body);
 			}
 			if (this.classes.taggedLambdas.contains(made)) {
 				tagged.add(made);
@@ -4333,7 +4550,6 @@ final class JavaLowering implements JavaEmitter.Context {
 			resolved = resolve(constructors(made), type, List.of(), creation.arguments(), expected,
 					"constructor " + made.simpleName(), made, pos, made.typeParameters, type);
 			type = (ClassType) resolved.returnType();
-			this.classes.check(type, this.unit.source(), pos);
 		}
 		else {
 			resolved = resolve(constructors(made), type, List.of(), creation.arguments(), null,
@@ -4346,8 +4562,9 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (!constant) {
 			checkAccess(resolved.method().isPrivate, made, made.simpleName() + resolved.method().parameterList(), pos);
 		}
-		this.effects.calls.add(resolved.method());
-		this.effects.uses.add(made);
+		called(resolved.method());
+		uses(made);
+		makes(made);
 		return new Typed(located(form(JavaNames.creator(resolved.method()),
 				instanceArguments(made, creation.outer(), resolved.forms(), pos)), pos), type);
 	}
@@ -4397,8 +4614,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			this.classes.changed();
 		}
 		lowerLocal(made);
-		this.effects.calls.add(constructor);
-		this.effects.uses.add(made);
+		called(constructor);
+		uses(made);
+		makes(made);
 		return new Typed(
 				located(form(JavaNames.creator(constructor), instanceArguments(made, null, arguments, pos)), pos),
 				new ClassType(made, List.of()));
@@ -4990,18 +5208,20 @@ final class JavaLowering implements JavaEmitter.Context {
 		Target target = loopTarget();
 		Typed iterable = expression(loop.iterable(), null);
 		JavaType element;
-		boolean array = iterable.type() instanceof ArrayType;
+		ClassType through = null;
 		if (iterable.type() instanceof ArrayType type) {
 			element = type.element();
 		}
 		else {
-			ClassType list = iterable.type() instanceof ClassType || iterable.type() instanceof Variable
-					? this.types.asSuper(this.types.site(iterable.type()), this.classes.library("java.util.List"))
-					: null;
-			if (list == null) {
-				throw unsupported(loop.pos(), "an enhanced for over " + iterable.type());
+			ClassType site = iterable.type() instanceof ClassType || iterable.type() instanceof Variable
+					? this.types.site(iterable.type()) : null;
+			ClassType iterated = site == null ? null
+					: this.types.asSuper(site, this.classes.library("java.lang.Iterable"));
+			if (iterated == null) {
+				throw error(loop.iterable().pos(), "for-each not applicable to expression type");
 			}
-			element = list.arguments().isEmpty() ? this.objectType : this.types.upward(list.arguments().get(0));
+			through = site;
+			element = iterated.arguments().isEmpty() ? this.objectType : this.types.upward(iterated.arguments().get(0));
 		}
 		LispSymbol items = temporary();
 		LispSymbol index = temporary();
@@ -5011,7 +5231,11 @@ final class JavaLowering implements JavaEmitter.Context {
 		Local bound = bind(loop.name(), type, loop.pos());
 		bound.initialized = true;
 		LispSymbol variable = bound.symbol();
-		LispVal value = assign(new Typed(call("aref", items, index), element), type, loop.pos());
+		// an array is read by a counter; anything else is asked for its iterator
+		LispVal next = through == null ? call("aref", items, index)
+				: virtual(this.classes.library("java.util.Iterator"),
+						iteratorMethod(this.classes.library("java.util.Iterator"), "next"), items, List.of());
+		LispVal value = assign(new Typed(next, element), type, loop.pos());
 		Set<Local> before = new HashSet<>(this.assigned);
 		this.targets.push(target);
 		List<LispVal> body = scoped(loop.body(), false);
@@ -5019,16 +5243,33 @@ final class JavaLowering implements JavaEmitter.Context {
 		this.scopes.pop();
 		this.assigned = before;
 		List<LispVal> round = loopBody(List.of(JavaForms.let(variable, value, body)), target);
-		round.add(call("setq", index, call("+", index, integer(1))));
 		List<LispVal> bindings = new ArrayList<>();
-		bindings.add(list(items, iterable.form()));
-		if (array) {
+		LispVal test;
+		if (through == null) {
+			round.add(call("setq", index, call("+", index, integer(1))));
+			bindings.add(list(items, iterable.form()));
 			bindings.add(list(count, call("length", items)));
+			bindings.add(list(index, integer(0)));
+			test = call("<", index, count);
 		}
-		bindings.add(list(index, integer(0)));
-		LispVal test = call("<", index, array ? count : call("length", items));
+		else {
+			bindings.add(list(items, virtual(through.declaration(), iteratorMethod(through.declaration(), "iterator"),
+					iterable.form(), List.of())));
+			test = virtual(this.classes.library("java.util.Iterator"),
+					iteratorMethod(this.classes.library("java.util.Iterator"), "hasNext"), items, List.of());
+		}
 		LispVal form = list(cl("let*"), list(bindings), form(cl("while"), prepend(test, round)));
 		return target.breaks ? list(cl("block"), target.breakBlock, form) : form;
+	}
+
+	/** A method of no argument the enhanced {@code for} calls: of a class, by name. */
+	private Method iteratorMethod(JavaClass declaration, String name) {
+		for (Method method : methods(declaration, name)) {
+			if (method.parameters.isEmpty() && !method.isStatic) {
+				return method;
+			}
+		}
+		throw new IllegalStateException(declaration + " has no " + name + "()");
 	}
 
 	/**
@@ -5507,7 +5748,22 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		List<LispVal> forms = new ArrayList<>();
 		for (JavaClass declaration : this.classes.all()) {
-			if (declaration.intrinsic) {
+			if (declaration.intrinsic || (isLibrary(declaration) && !this.classes.used.contains(declaration))) {
+				continue;
+			}
+			for (Field field : declaration.fields) {
+				// a constant string read by reference is one of the program's globals
+				if (field.isStatic && constantOf(field) instanceof String text) {
+					constantString(text);
+				}
+			}
+		}
+		for (Map.Entry<String, LispSymbol> constant : this.interned.entrySet()) {
+			this.variables.add(list(cl("defvar"), constant.getValue()));
+			forms.add(call("setq", constant.getValue(), runtimeCall("intern", string(constant.getKey()))));
+		}
+		for (JavaClass declaration : this.classes.all()) {
+			if (declaration.intrinsic || (isLibrary(declaration) && !this.classes.used.contains(declaration))) {
 				continue;
 			}
 			Effects effects = this.initEffects.get(declaration);
@@ -5526,7 +5782,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				Object constant = constantOf(field);
 				if (constant != null) {
 					forms.add(call("setq", JavaNames.global(field),
-							constant instanceof String text ? string(text) : constant(constant).form()));
+							constant instanceof String text ? constantString(text).form() : constant(constant).form()));
 				}
 				else if (field.initializer == null || this.order.isLazy(declaration) || called.reads.contains(field)) {
 					// a field read ahead of its initializer holds its type's default

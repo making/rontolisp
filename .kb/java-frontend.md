@@ -7,9 +7,10 @@ experimental subset of the Java language", no compatibility claim -- and every u
 so (`--source-language` help, `doc/*/java/`, `examples/java/README.md`). Provenance and naming
 rules: [java-frontend-provenance.md](java-frontend-provenance.md). `--no-gc` is refused by name
 (`CompileFrontend.run`). First slice: j68 (2026-11-17); the declarations and statements past
-it: j69 (2026-11-17); type parameters, inference, lambdas and boxes: j70 (2026-11-17); what
-comes after is `.todo/j71` (library), `j72` (numbers), `j73` (exceptions), `j74` (several
-files, a session), `j76` (threads), `j77` and `j78` (what j69 and j70 left).
+it: j69 (2026-11-17); type parameters, inference, lambdas and boxes: j70 (2026-11-17); the
+library: j71 (2026-11-17); what comes after is `.todo/j72` (numbers), `j73` (exceptions),
+`j74` (several files, a session), `j76` (threads), `j77`, `j78` and `j79` (what j69, j70 and
+j71 left).
 
 ## Where it sits
 
@@ -28,16 +29,12 @@ files, a session), `j76` (threads), `j77` and `j78` (what j69 and j70 left).
   the interpreter loads it on the first resolution of a `rontolisp::%java-` FUNCTION,
   `CompileFrontend.expand` splices it inside `StarlarkLibrary.process`, `LibraryDefunPruner`
   drops what stays unreachable. Name gate: a member starting `%JAVA-`.
-- **Library classes are of two kinds.** One whose representation is a Lisp value is an
-  INTRINSIC (`JavaIntrinsics`): its members are emitters of forms, resolved by the same overload
-  resolution as a program's methods. Any other is JAVA SOURCE in the jar
-  (`src/main/resources/am/ik/rontolisp/java/library/java/lang/Throwable.java`, one class a file,
-  found by qualified name), parsed and lowered with the program naming it, in the subset itself.
-  `resource-config.json` carries both for the native image. `java.util.function` (34
-  interfaces), `Comparable` and `Comparator` are source. An intrinsic class implements a
-  source interface (`String`, the boxes and `Enum` are `Comparable`) only in a program naming
-  that interface (`JavaClasses.compares`): eagerly, every program would hold `Comparable` and a
-  program's own class of that name would be refused.
+- **Library classes are of two kinds** ("The library" below). One whose representation is a
+  Lisp value, or that holds no value, is an INTRINSIC (`JavaIntrinsics`): its members are
+  emitters of forms, resolved by the same overload resolution as a program's methods. Any other
+  is JAVA SOURCE in the jar (`src/main/resources/am/ik/rontolisp/java/library/`, one class a
+  file, found by qualified name), parsed with the program naming it and lowered as far as the
+  program reaches it. `resource-config.json` carries both for the native image.
 
 ## The decisions (2026-11-17)
 
@@ -95,7 +92,7 @@ files, a session), `j76` (threads), `j77` and `j78` (what j69 and j70 left).
 - **`instanceof` / a cast**: a class is its predicate; an interface the generated `Iface%is`
   (the predicates of the topmost classes implementing it, of the library's values that are it,
   and of its lambdas: "Lambdas" below); a library class its own (`simple-string-p`, `integerp`,
-  `consp` for a `Long`, `%java-list-p`, `hash-table-p`, `%java-sb-p`). A cast to a type variable
+  `consp` for a `Long`, `%java-number-p`, `%java-sb-p`). A cast to a type variable
   tests its bound, to a parameterized type its class; a cast only the type arguments tell from
   no cast has no test. `instanceof` of a type the erased program cannot answer is the
   compiler's `X cannot be safely cast to Y`. A failing cast throws `ClassCastException()`.
@@ -159,7 +156,7 @@ files, a session), `j76` (threads), `j77` and `j78` (what j69 and j70 left).
   members in the subset itself, the last three parsed from text the class table writes
   (`JavaParser.synthetic`, every node at the record's position). `equals` compares a `double`
   by `Double.compare`; `hashCode` is `31 * h + hash` over the components (unspecified by the
-  language; a `double` component has none until `.todo/j72`).
+  language; a `double` component's is `Double.hashCode`, since j71).
 - **A switch is a `cond` over the selector**: `eql` for an `int`/`char`, `equal` for a string,
   `eq` to the constant's field for an enum, a pattern's own test; the default clause last
   wherever it is written. Colon cases none of which runs into the next are the same `cond`, an
@@ -286,13 +283,81 @@ lub of the lowers, else an upper, else OPEN.
   `char-code` for a `char`; a literal is not tested. It raises a Lisp error with the text
   `NullPointerException: ..`; the class is `.todo/j73`'s.
 - **`==` of two boxes compares the values** (`eql`, `equal` for `Long`): a box is its value.
-  The language promises it from -128 to 127 and allows it elsewhere. `==` of two strings
-  stays refused (`.todo/j71`: constants would have to be one object each).
+  The language promises it from -128 to 127 and allows it elsewhere. `==` of two strings:
+  "The library" below.
 - Measured 2026-11-17, before / after the two changes (a 1,000,000-element list summed 20
   times plus 30,000,000 unboxings in a loop): `List<Integer>` JVM 2.47 / 2.75 s, wasm 9.95 /
   9.60 s; `List<Long>` JVM 9.85 / 10.35 s, wasm 32.90 / 41.14 s (the `long` arithmetic owns
   that program: `.todo/j72`). `Fib`, `WrapInt`, `Sieve`, `WrapLong` are unchanged in time and
   in wasm bytes (2,728 / 2,508 / 10,380 / 4,544).
+
+## The library (2026-11-17, j71)
+
+- **The split.** INTRINSIC: `Object`, `String`, `StringBuilder`/`StringBuffer` (one
+  representation, one predicate), `Number` and the five boxes, `Math`, `System`,
+  `PrintStream`, `IO`. SOURCE: everything else -- the collections, `Arrays`, `Collections`,
+  `Objects`, `Optional`, `Random`, `Comparator`, `java.util.function`, the `Throwable` family,
+  `Iterable`, `CharSequence`. Three bridges: a `native` method of the source is a form
+  (`JavaIntrinsics.NATIVES`, keyed `class.name(erased parameters)`; the parser takes `native`
+  only under `library/`); an intrinsic member written in Java is a static method of
+  `rontolisp.internal.Support` reached through `Context.library` (`parseInt`, `addExact`: they
+  throw the library's exceptions); an intrinsic class implements a source interface, and gains
+  the members naming it, once a program names that interface (`Library.implemented` / `meets`:
+  `Comparable`, `CharSequence`, `String.join(.., Iterable)`).
+- **Measured both ways before choosing** (`ArrayList` as an adjustable vector, j68, against
+  Java over `Object[]`; 20,000,000 `add` then 100,000,000 of one operation, best of three, ns
+  an operation): wasm `add` 11 / 46, `get` 17 / 24, the enhanced `for` 16 / 50 to 65, `set`
+  32 / 35; JVM `add` 66 / 75, `get` 5 / 6, `for` 6 / 16 (34 when every loop stands in one
+  `main`: the JIT, not the form), `set` 10 / 7. The same shapes written by hand in Lisp cost the same. Source
+  was chosen: only it finds a key by a program's `equals`/`hashCode`, lets a class of the
+  program be a `List` or an `Iterable`, and keeps the JDK's order; the vector answered none.
+  Two findings the measurement gave: a Lisp loop of `(setf (aref b i) (aref a i))` is 56 ns an
+  element on wasm, so `System.arraycopy` is `replace` (through a `subseq` inside one array);
+  the run-time library stores into a non-string vector with `%aset`.
+- **Lowered as far as the program reaches** (`lowerReached`): of the source classes only the
+  methods a pass CALLED (`JavaClasses.reached`, recorded where `Effects.calls` is), the static
+  initialization of the classes it USED, and in a dispatcher, in `%string`/`%equals`/`%hash`,
+  `%class-name` and an interface test only the classes it MADE an instance of (`made`; the first
+  instance of a class lowers the program again). The three sets persist over the passes. A
+  structure is emitted for a made class, the classes above it, and one whose predicate or slot
+  the forms name. A program's own classes are lowered whole, as before. A local or anonymous
+  class of the library is lowered where its method is.
+- **A missing member of a library class is refused by name**, source or intrinsic
+  (`ArrayList.stream()`), never `cannot find symbol`.
+- **`HashMap` keeps the order a program sees** (the JDK 25 running the corpus is the oracle,
+  `a-hash-map-finds-a-key-by-equals-and-keeps-the-order-a-program-sees`): hash folded with its
+  upper half, masked by a power of two that doubles past three quarters, the table made at the
+  first `put` (16, or the power of two above the capacity asked); a chain in the order put,
+  `compute`/`computeIfAbsent`/`merge` putting AHEAD of it; a ninth key of one chain (an eighth
+  for those three) doubling a table shorter than 64; `putAll` and the copy constructor sizing
+  for `ceil(n / 0.75)`, `HashSet(Collection)` for `max(n, 12)`. Not kept: the tree a longer
+  chain becomes in a table of 64 or more. `Set.of`/`Map.of` wrap a `HashSet`/`HashMap`.
+  `Hashtable` has its own rules, a class of its own (11 slots, `2n + 1`, a key put ahead of its
+  chain, read from the last chain; `a-deque-an-optional-the-utilities-and-the-older-classes`);
+  `Vector` extends `ArrayList` and `StringBuffer` is `StringBuilder`'s representation.
+- **`==` of two strings is `eq`**, and the constants of a program holding one are globals set
+  through `%java-intern` (`JavaClasses.identicalStrings`; the program is lowered again), so two
+  constants of a text are one object and `intern()` answers it. A program with no such
+  comparison is unchanged. `new Object()` is `(make-array 0 :fill-pointer 0)`: no other value
+  of a program is a vector with a fill pointer that is no string.
+- **`String.format`** is `%java-format` over the argument array and the program's `%string`;
+  `%f`/`%e` round the SHORTEST digits half up (`0.15` at one place is `0.2`, measured against
+  the JDK), which is why they start from `%java-double-string`. `Double.parseDouble` is exact
+  integer arithmetic then `%java-nearest-double` (ties to even, subnormals); `doubleToLongBits`
+  is `integer-decode-float`, which loses the sign of -0.0 (tested by the reciprocal).
+- **`Math` is `%strict-math`**: the same bits on every backend; a JDK's `Math` may differ in
+  the last digit. `System.exit` is `%host-exit` after `finish-output` (not `uiop:quit`: the
+  interpreter has no `uiop` in a Java program).
+- **Decided: a class we do not have never falls through to the host's.** Probed 2026-11-17:
+  `java:call` of `TreeMap.put` with a boxed `long` fails on the interpreter and the JVM
+  (`LispCons cannot be cast`), and wasm has no `java:`. This front end's values are not the
+  host's objects, so a host class would take a few of them and the program would not compile
+  to wasm. Refused by name on every backend.
+- A method reference naming a class fits a functional interface by its arity when a call has
+  several candidates (`takes`): `thenComparing(Point::label)` against `thenComparing(Comparator)`.
+- Sizes on wasm (2026-11-17, before / after): a list added to and read 3,732 / 25,592; one
+  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/j79` holds what is
+  left and the leads.
 
 ## Static initialization (2026-11-17)
 
@@ -339,7 +404,7 @@ virtual call can run --, classes used):
 | `(int) d` | `(%java-double-to-int d)`: toward zero, the type's ends outside it |
 | `new int[n]`, `{1, 2}` | `(make-array n :element-type '(signed-byte 32) :initial-element 0)` (`double-float` for `double`, untyped otherwise); `(vector ..)` / `:initial-contents` |
 | `while`, `for`, `do` | `(while test body.. update..)`; `(block %break ..)` around it and `(block %continue ..)` around the body only when the body has that exit; `do` tests a flag set after the body |
-| `for (T x : xs)` | a counter over the vector, the length taken once for an array |
+| `for (T x : xs)` | an array: a counter, the length taken once; an `Iterable`: `(let* ((it (iterator xs))) (while (hasNext it) (let ((x (next it))) ..)))`, each call direct or dispatched as any call |
 | `return v` | the value in tail position, else `(return-from %fn v)` and a `(block %fn ..)` |
 | `switch (n) { case 1 -> a; default -> b; }` | `(cond ((eql n 1) a) (t b))`; a statement's `break` is `(return-from %break nil)` |
 | `yield v` | the value in tail position of its arm, else `(return-from %yield v)` |
@@ -351,7 +416,9 @@ virtual call can run --, classes used):
 | `String::length`, `obj::m` | `(lambda (%t0) (length %t0))`; `(let ((%t1 obj)) (lambda (%t0) (m %t1 %t0)))` |
 | `Long b = 5L`, `long n = b`, `int i = boxed` | `(cons 5 :long)`; `(car (or b (%java-null-unbox)))`; `(or boxed (%java-null-unbox))` |
 | `above(T o)` with `T extends Comparable<T>` | `(defun Box.above(Comparable) (this o) ..)`; `held.compareTo(o)` is `(Comparable.compareTo(Object)%v held o)` |
-| `List.get(i)`, `Map.put(k, v)` | `(%java-list-get xs i)` (aref reads past a fill pointer); `(setf (gethash k m) v)` as a statement, `(%java-map-put m k v)` for its value |
+| `xs.get(i)` on a `List` | `(java.util.ArrayList.get(int) xs i)` while `ArrayList` is the one list the program makes, else `(java.util.List.get(int)%v xs i)` |
+| `a == b` (strings) | `(eq a b)`; every string constant of such a program is a global `%string<n>` set to `(%java-intern "text")` before `main` |
+| `Arrays.sort(ns)`, `Integer.parseInt(s)` | `(java.util.Arrays.sort(int[]) ns)` whose body is the native `(%java-sort-numbers a 0 (length a))`; `(rontolisp.internal.Support.parseInt(String,int) s 10)` |
 
 ## Measured (2026-11-17)
 
@@ -365,9 +432,10 @@ the spike's lowering (JVM, precompiled wasm) / this front end's:
 | `Sieve` | 0.21 | 1.20 / 0.57 | 1.22 / 0.61 | 41,446 / 11,136 -> 35,936 / 10,380 |
 | `WrapLong` | 0.12 | 3.57 / 7.74 | 3.46 / 7.46 | 27,604 / 7,049 -> 21,519 / 4,544 |
 
-The programs are `.todo/artefacts/j68-java-front-end-spike/programs/`. The corpus (41 cases,
-5 standalone, 21 refused, 3,583 lines, 2026-11-17) and `examples/java/Orders.java` print what
-the JDK prints on four backends.
+The programs are `.todo/artefacts/j68-java-front-end-spike/programs/`. The corpus (47 cases,
+5 standalone, 22 refused, 2026-11-17) and `examples/java/Orders.java` print what the JDK
+prints on four backends. After j71 the four programs are byte-identical but `Sieve`
+(10,380 -> 10,497: `Math.sqrt` is `%strict-math`).
 
 ## What a compiler reports and this does not, stated in `doc/*/java/deviations.md`
 
@@ -391,7 +459,8 @@ that is not the JDK's fails there), the interpreter, the JVM, wasm and the compo
 `refused:` case is the scaffold with the case's statements, which the JDK has to refuse with
 `error` at that line and the front end at the same line with a message starting the same. In
 process, part of `./mvnw test`. `JavaLoweringTest` (the table as emitted forms, names and constants, the
-refusals and the compile errors with their positions). `SourceLanguageTest#javaClaimsItsExtension`,
+refusals and the compile errors with their positions;
+`theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`). `SourceLanguageTest#javaClaimsItsExtension`,
 `RontoLispCliStreamsTest#aJavaFileRunsCompilesAndIsRefusedWhereItCannot`,
 `SchemeLibraryTest#aCommonLispProgramReadsNoFrontEndsLibrary` (the gate),
 `UncaughtReportParityTest#aFrontEndsSourceIsLocatedTheSameWay`,

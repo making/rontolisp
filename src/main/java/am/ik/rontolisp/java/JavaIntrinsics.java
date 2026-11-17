@@ -1,21 +1,20 @@
 package am.ik.rontolisp.java;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.java.JavaClass.Source;
 import am.ik.rontolisp.java.JavaEmitter.Context;
 import am.ik.rontolisp.java.JavaEmitter.Invocation;
 import am.ik.rontolisp.java.JavaEmitter.Typed;
 import am.ik.rontolisp.java.JavaType.ArrayType;
 import am.ik.rontolisp.java.JavaType.ClassType;
 import am.ik.rontolisp.java.JavaType.Primitive;
-import am.ik.rontolisp.java.JavaType.TypeParameter;
 import am.ik.rontolisp.java.JavaType.Variable;
 import org.jspecify.annotations.Nullable;
 
@@ -29,11 +28,14 @@ import static am.ik.rontolisp.java.JavaForms.runtimeCall;
 /**
  * The classes of the library whose values are Lisp values, so that their members are
  * forms and not Java source: a {@code String} is the host's string, a boxed {@code int}
- * the number and a boxed {@code long} the number in a cons, a {@code StringBuilder} and
- * an {@code ArrayList} adjustable vectors, a {@code HashMap} an {@code equal} hash table.
- * Written here from the API specification's names and signatures; nothing of a JDK is
- * read ({@code .kb/java-frontend-provenance.md}). Each class has the members programs
- * reached so far, not its whole surface: a member missing here is refused by name.
+ * the number and a boxed {@code long} the number in a cons, a {@code StringBuilder} an
+ * adjustable character vector; and the classes that hold no value at all ({@code Math},
+ * {@code System}). Every other class of the library is Java source in the jar, and a
+ * member of one that Java cannot say is declared {@code native} there and is a form here
+ * ({@link #NATIVES}). Written here from the API specification's names and signatures;
+ * nothing of a JDK is read ({@code .kb/java-frontend-provenance.md}). Each class has the
+ * members programs reach, not its whole surface: a member missing here is refused by
+ * name.
  */
 final class JavaIntrinsics {
 
@@ -41,14 +43,21 @@ final class JavaIntrinsics {
 
 	private static final String STRING = "java.lang.String";
 
+	private static final String NUMBER = "java.lang.Number";
+
+	private static final String CHARS = "java.lang.CharSequence";
+
+	private static final String COMPARABLE = "java.lang.Comparable";
+
+	/** The source class holding the members of these classes that are written in Java. */
+	private static final String SUPPORT = "rontolisp.internal.Support";
+
 	/** The boxes, and what each holds. */
 	private static final Map<String, Primitive> BOXES = Map.of("java.lang.Integer", Primitive.INT, "java.lang.Long",
 			Primitive.LONG, "java.lang.Double", Primitive.DOUBLE, "java.lang.Boolean", Primitive.BOOLEAN,
 			"java.lang.Character", Primitive.CHAR);
 
-	/** What a map's key may be: a value {@code equal} compares as {@code equals} does. */
-	private static final Set<String> KEYS = Set.of(STRING, "java.lang.Integer", "java.lang.Long", "java.lang.Character",
-			"java.lang.Boolean");
+	private static final LispSymbol OUT = cl("*standard-output*");
 
 	private JavaIntrinsics() {
 	}
@@ -80,9 +89,17 @@ final class JavaIntrinsics {
 		throw new IllegalStateException("no box of " + primitive);
 	}
 
+	/** Whether a class's values are told from every other's by {@link #predicate}. */
+	static boolean isPlain(JavaClass declaration) {
+		return switch (declaration.name) {
+			case "java.lang.StringBuilder", "java.lang.StringBuffer", NUMBER -> true;
+			default -> BOXES.containsKey(declaration.name);
+		};
+	}
+
 	/**
 	 * The function testing that a value is an instance of an intrinsic class, or
-	 * {@code null} where the subset has no test yet.
+	 * {@code null} for a class holding no value.
 	 */
 	static @Nullable LispSymbol predicate(JavaClass declaration) {
 		return switch (declaration.name) {
@@ -93,9 +110,8 @@ final class JavaIntrinsics {
 			case "java.lang.Double" -> cl("floatp");
 			case "java.lang.Character" -> cl("characterp");
 			case "java.lang.Boolean" -> JavaForms.runtime("boolean-p");
-			case "java.lang.StringBuilder" -> JavaForms.runtime("sb-p");
-			case "java.util.ArrayList", "java.util.List" -> JavaForms.runtime("list-p");
-			case "java.util.HashMap", "java.util.Map" -> cl("hash-table-p");
+			case NUMBER -> JavaForms.runtime("number-p");
+			case "java.lang.StringBuilder", "java.lang.StringBuffer" -> JavaForms.runtime("sb-p");
 			default -> null;
 		};
 	}
@@ -108,62 +124,96 @@ final class JavaIntrinsics {
 		}
 
 		@Override
-		public void check(ClassType type, Source source, int pos) {
-			checkArguments(type, source, pos);
+		public List<String> implemented(String name) {
+			return switch (name) {
+				case STRING -> List.of(COMPARABLE, CHARS);
+				case "java.lang.StringBuilder", "java.lang.StringBuffer" -> List.of(CHARS);
+				default -> BOXES.containsKey(name) ? List.of(COMPARABLE) : List.of();
+			};
 		}
 
 		@Override
-		public boolean isComparable(String name) {
-			return name.equals(STRING) || (BOXES.containsKey(name) && !name.equals("java.lang.Boolean"));
+		public @Nullable JavaEmitter emitter(String member) {
+			return NATIVES.get(member);
+		}
+
+		@Override
+		public void meets(JavaClass intrinsic, JavaClass named, JavaClasses classes) {
+			JavaIntrinsics.meets(intrinsic, named, classes);
 		}
 	};
 
-	private static void checkArguments(ClassType type, Source source, int pos) {
-		String name = type.declaration().name;
-		if ((!name.equals("java.util.HashMap") && !name.equals("java.util.Map")) || type.arguments().isEmpty()) {
-			return;
+	/**
+	 * Adds to an intrinsic class the members whose types name an interface of the
+	 * library's Java source, once a program names that interface: named from the start,
+	 * every program would hold the interface.
+	 */
+	private static void meets(JavaClass intrinsic, JavaClass named, JavaClasses classes) {
+		boolean text = intrinsic.name.equals(STRING);
+		boolean builder = intrinsic.name.equals("java.lang.StringBuilder")
+				|| intrinsic.name.equals("java.lang.StringBuffer");
+		if (named.name.equals(CHARS) && (text || builder)) {
+			intrinsic.methods.add(new JavaClass.Method(intrinsic, "subSequence", List.of(Primitive.INT, Primitive.INT),
+					new ClassType(named, List.of()), false, false, null, runtime(text ? "substring" : "sb-substring"),
+					false));
 		}
-		JavaType key = type.arguments().get(0);
-		if (key instanceof JavaType.Wildcard wildcard) {
-			key = wildcard.upper() != null ? wildcard.upper() : wildcard.lower();
+		if (named.name.equals("java.lang.Iterable") && text) {
+			intrinsic.methods.add(new JavaClass.Method(intrinsic, "join",
+					List.of(classes.libraryType(OBJECT), new ClassType(named, List.of())),
+					new ClassType(intrinsic, List.of()), true, false, null, (lowering, call) -> lowering
+						.library(SUPPORT, "join", List.of(text(lowering, call, 0), call.argument(1))),
+					false));
 		}
-		if (key instanceof Variable variable && variable.parameter().open) {
-			// what the map is used as says
-			return;
+	}
+
+	// ---- emitters
+
+	/** A member that is a call of a run-time function: its receiver, its arguments. */
+	private static JavaEmitter runtime(String name) {
+		return (lowering, call) -> JavaForms.form(JavaForms.runtime(name), operands(call));
+	}
+
+	/** A member that is a call of a host operator: its receiver, its arguments. */
+	private static JavaEmitter host(String name) {
+		return (lowering, call) -> JavaForms.form(cl(name), operands(call));
+	}
+
+	/** A member written in Java, in the library's own source. */
+	private static JavaEmitter support(String name) {
+		return (lowering, call) -> lowering.library(SUPPORT, name, operands(call));
+	}
+
+	/** A member that is one of fdlibm's functions over doubles. */
+	private static JavaEmitter strict(String name) {
+		return (lowering, call) -> JavaForms.form(cl("%strict-math"),
+				prepend(new LispSymbol(":" + name.toUpperCase(java.util.Locale.ROOT)), operands(call)));
+	}
+
+	private static List<LispVal> operands(Invocation call) {
+		List<LispVal> operands = new ArrayList<>();
+		if (call.receiver() != null) {
+			operands.add(call.self());
 		}
-		// a key is found by equal: a key of a class of the program, or of a type the
-		// map's
-		// own code does not know, would be found by identity
-		if (key instanceof ClassType named ? !KEYS.contains(named.declaration().name) : key != null) {
-			throw JavaClasses.unsupported(source, pos, "a map keyed by " + key);
+		for (Typed argument : call.arguments()) {
+			operands.add(argument.form());
 		}
+		return operands;
+	}
+
+	private static List<LispVal> prepend(LispVal first, List<LispVal> rest) {
+		List<LispVal> all = new ArrayList<>();
+		all.add(first);
+		all.addAll(rest);
+		return all;
 	}
 
 	private static final class Builder {
 
 		private final JavaClass made;
 
-		Builder(String name, boolean isInterface, JavaClasses classes, String... typeParameters) {
-			this.made = new JavaClass(name, isInterface, isInterface, true, null, null);
-			for (String parameter : typeParameters) {
-				TypeParameter declared = new TypeParameter(parameter, false, false);
-				declared.owner = this.made;
-				this.made.typeParameters.add(declared);
-			}
+		Builder(String name, boolean isAbstract, JavaClasses classes) {
+			this.made = new JavaClass(name, false, isAbstract, true, null, null);
 			classes.register(this.made);
-		}
-
-		/** A type parameter of the class as a member's signature names it. */
-		Variable variable(int index) {
-			return new Variable(this.made.typeParameters.get(index));
-		}
-
-		/** The interface of the library the class implements with its own parameters. */
-		void implement(JavaClass implemented) {
-			this.made.interfaces.add(implemented);
-			if (!this.made.typeParameters.isEmpty()) {
-				this.made.parameterized.put(implemented, new ClassType(implemented, this.made.self().arguments()));
-			}
 		}
 
 		Builder method(String name, JavaType returnType, JavaEmitter emitter, JavaType... parameters) {
@@ -182,6 +232,12 @@ final class JavaIntrinsics {
 		Builder any(String name, boolean isStatic, JavaType returnType, JavaType parameter, JavaEmitter emitter) {
 			this.made.methods.add(new JavaClass.Method(this.made, name, List.of(parameter), returnType, isStatic, false,
 					null, emitter, true));
+			return this;
+		}
+
+		/** The member added last takes the arguments past its others as an array. */
+		Builder varargs() {
+			this.made.methods.get(this.made.methods.size() - 1).varargs = true;
 			return this;
 		}
 
@@ -207,7 +263,10 @@ final class JavaIntrinsics {
 			case OBJECT: {
 				Builder builder = new Builder(name, false, classes);
 				ClassType object = new ClassType(builder.made, List.of());
+				// an Object that is no other class's is a vector nothing else makes
 				builder
+					.constructor((lowering, call) -> list(cl("make-array"), integer(0), new LispSymbol(":FILL-POINTER"),
+							integer(0)))
 					.method("toString", classes.libraryType(STRING),
 							(lowering, call) -> lowering.objectMethod("toString()",
 									java.util.Objects.requireNonNull(call.receiver()), call))
@@ -222,105 +281,68 @@ final class JavaIntrinsics {
 			case STRING:
 				return string(new Builder(name, false, classes), classes);
 			case "java.lang.StringBuilder":
+			case "java.lang.StringBuffer":
 				return stringBuilder(new Builder(name, false, classes), classes);
-			case "java.util.ArrayList":
-			case "java.util.List":
-				return listClass(new Builder(name, name.endsWith(".List"), classes, "E"), classes);
-			case "java.util.HashMap":
-			case "java.util.Map":
-				return map(new Builder(name, name.endsWith(".Map"), classes, "K", "V"), classes);
 			case "java.lang.Math":
 				return math(new Builder(name, false, classes));
-			case "java.lang.Integer": {
-				ClassType string = classes.libraryType(STRING);
-				Builder builder = new Builder(name, false, classes);
-				ClassType self = new ClassType(builder.made, List.of());
-				return builder.field("MAX_VALUE", Primitive.INT, integer(Integer.MAX_VALUE))
-					.field("MIN_VALUE", Primitive.INT, integer(Integer.MIN_VALUE))
-					.statik("parseInt", Primitive.INT, (lowering, call) -> runtimeCall("parse-int", call.argument(0)),
-							string)
-					.statik("toString", string, (lowering, call) -> call("%decimal-piece", call.argument(0)),
-							Primitive.INT)
-					.statik("valueOf", self, (lowering, call) -> call.argument(0), Primitive.INT)
-					.statik("compare", Primitive.INT,
-							(lowering, call) -> runtimeCall("compare", call.argument(0), call.argument(1)),
-							Primitive.INT, Primitive.INT)
-					.method("compareTo", Primitive.INT,
-							(lowering, call) -> runtimeCall("compare", call.self(), call.argument(0)), self)
-					.method("intValue", Primitive.INT, (lowering, call) -> call.self()).made;
-			}
-			case "java.lang.Long": {
-				Builder builder = new Builder(name, false, classes);
-				ClassType self = new ClassType(builder.made, List.of());
-				return builder.field("MAX_VALUE", Primitive.LONG, integer(Long.MAX_VALUE))
-					.field("MIN_VALUE", Primitive.LONG, integer(Long.MIN_VALUE))
-					.statik("hashCode", Primitive.INT, (lowering, call) -> runtimeCall("long-hash", call.argument(0)),
-							Primitive.LONG)
-					.statik("valueOf", self, (lowering, call) -> call("cons", call.argument(0), JavaForms.BOXED_LONG),
-							Primitive.LONG)
-					.statik("compare", Primitive.INT,
-							(lowering, call) -> runtimeCall("compare", call.argument(0), call.argument(1)),
-							Primitive.LONG, Primitive.LONG)
-					.method("compareTo", Primitive.INT,
-							(lowering, call) -> runtimeCall("compare", call("car", call.self()),
-									call("car", call.argument(0))),
-							self)
-					.method("longValue", Primitive.LONG, (lowering, call) -> call("car", call.self())).made;
-			}
-			case "java.lang.Double": {
-				Builder builder = new Builder(name, false, classes);
-				ClassType self = new ClassType(builder.made, List.of());
-				return builder
-					.statik("compare", Primitive.INT,
-							(lowering, call) -> runtimeCall("double-compare", call.argument(0), call.argument(1)),
-							Primitive.DOUBLE, Primitive.DOUBLE)
-					.statik("hashCode", Primitive.INT, (lowering, call) -> runtimeCall("hash-code", call.argument(0)),
-							Primitive.DOUBLE)
-					.statik("valueOf", self, (lowering, call) -> call.argument(0), Primitive.DOUBLE)
-					.method("compareTo", Primitive.INT,
-							(lowering, call) -> runtimeCall("double-compare", call.self(), call.argument(0)), self)
-					.method("doubleValue", Primitive.DOUBLE, (lowering, call) -> call.self()).made;
-			}
+			case NUMBER:
+				return new Builder(name, true, classes).method("intValue", Primitive.INT, runtime("number-int"))
+					.method("longValue", Primitive.LONG, runtime("number-long"))
+					.method("doubleValue", Primitive.DOUBLE, runtime("number-double")).made;
+			case "java.lang.Integer":
+				return integerClass(new Builder(name, false, classes), classes);
+			case "java.lang.Long":
+				return longClass(new Builder(name, false, classes), classes);
+			case "java.lang.Double":
+				return doubleClass(new Builder(name, false, classes), classes);
 			case "java.lang.Boolean":
-				return new Builder(name, false, classes).statik("hashCode", Primitive.INT,
-						(lowering, call) -> call("if", call.argument(0), integer(1231), integer(1237)),
-						Primitive.BOOLEAN).made;
-			case "java.lang.Character": {
-				Builder builder = new Builder(name, false, classes);
-				ClassType self = new ClassType(builder.made, List.of());
-				// a boxed char is a character, a char its code
-				return builder
-					.statik("compare", Primitive.INT, (lowering, call) -> call("-", call.argument(0), call.argument(1)),
-							Primitive.CHAR, Primitive.CHAR)
-					.method("compareTo", Primitive.INT,
-							(lowering, call) -> call("-", call("char-code", call.self()),
-									call("char-code", call.argument(0))),
-							self)
-					.method("charValue", Primitive.CHAR, (lowering, call) -> call("char-code", call.self())).made;
-			}
+				return booleanClass(new Builder(name, false, classes), classes);
+			case "java.lang.Character":
+				return character(new Builder(name, false, classes), classes);
 			case "java.lang.System": {
 				ClassType stream = classes.libraryType("java.io.PrintStream");
-				return new Builder(name, false, classes).field("out", stream, cl("*standard-output*"))
-					.field("err", stream, cl("*error-output*")).made;
+				ClassType object = classes.libraryType(OBJECT);
+				return new Builder(name, false, classes).field("out", stream, OUT)
+					.field("err", stream, cl("*error-output*"))
+					.statik("currentTimeMillis", Primitive.LONG,
+							(lowering, call) -> call("values",
+									call("floor", call("%unix-nano-time"), integer(1000000))))
+					.statik("nanoTime", Primitive.LONG, host("%nano-time"))
+					.statik("exit", Primitive.VOID, runtime("exit"), Primitive.INT)
+					.statik("arraycopy", Primitive.VOID, runtime("arraycopy"), object, Primitive.INT, object,
+							Primitive.INT, Primitive.INT)
+					.statik("identityHashCode", Primitive.INT, runtime("identity-hash-code"), object)
+					.statik("lineSeparator", classes.libraryType(STRING),
+							(lowering, call) -> JavaForms.string("\n")).made;
 			}
 			case "java.io.PrintStream": {
 				ClassType object = classes.libraryType(OBJECT);
-				return new Builder(name, false, classes)
+				Builder builder = new Builder(name, false, classes);
+				ClassType self = new ClassType(builder.made, List.of());
+				return builder
 					.any("println", false, Primitive.VOID, object,
 							(lowering, call) -> print(lowering, call, "write-line", call.self()))
 					.method("println", Primitive.VOID, (lowering, call) -> newline(call.self()))
 					.any("print", false, Primitive.VOID, object,
-							(lowering, call) -> print(lowering, call, "write-string", call.self())).made;
+							(lowering, call) -> print(lowering, call, "write-string", call.self()))
+					.method("printf", self, JavaIntrinsics::printf, classes.libraryType(STRING), new ArrayType(object))
+					.varargs()
+					.method("format", self, JavaIntrinsics::printf, classes.libraryType(STRING), new ArrayType(object))
+					.varargs()
+					.method("flush", Primitive.VOID, host("finish-output")).made;
 			}
 			case "java.lang.IO": {
 				ClassType object = classes.libraryType(OBJECT);
-				LispSymbol out = cl("*standard-output*");
+				ClassType string = classes.libraryType(STRING);
 				return new Builder(name, false, classes)
 					.any("println", true, Primitive.VOID, object,
-							(lowering, call) -> print(lowering, call, "write-line", out))
-					.statik("println", Primitive.VOID, (lowering, call) -> newline(out))
+							(lowering, call) -> print(lowering, call, "write-line", OUT))
+					.statik("println", Primitive.VOID, (lowering, call) -> newline(OUT))
 					.any("print", true, Primitive.VOID, object,
-							(lowering, call) -> print(lowering, call, "write-string", out)).made;
+							(lowering, call) -> print(lowering, call, "write-string", OUT))
+					.statik("readln", string, runtime("readln"))
+					.statik("readln", string, (lowering, call) -> call("progn", call("write-string", call.argument(0)),
+							call("finish-output"), runtimeCall("readln")), string).made;
 			}
 			default:
 				return null;
@@ -328,19 +350,25 @@ final class JavaIntrinsics {
 	}
 
 	private static LispVal newline(LispVal stream) {
-		return stream.equals(cl("*standard-output*")) ? call("terpri") : call("terpri", stream);
+		return stream.equals(OUT) ? call("terpri") : call("terpri", stream);
 	}
 
 	private static LispVal print(Context lowering, Invocation call, String writer, LispVal stream) {
 		LispVal text = text(lowering, call, 0);
-		return stream.equals(cl("*standard-output*")) ? call(writer, text) : call(writer, text, stream);
+		return stream.equals(OUT) ? call(writer, text) : call(writer, text, stream);
+	}
+
+	private static LispVal printf(Context lowering, Invocation call) {
+		LispVal text = runtimeCall("format", call.argument(0), call.argument(1), lowering.stringFunction());
+		LispSymbol stream = new LispSymbol("%stream");
+		return JavaForms.let(stream, call.self(), List.of(call("write-string", text, stream), stream));
 	}
 
 	/** An argument as the text {@code String.valueOf} makes of it. */
 	private static LispVal text(Context lowering, Invocation call, int index) {
 		Typed argument = call.arguments().get(index);
 		if (argument.type().equals(new ArrayType(Primitive.CHAR))) {
-			throw lowering.unsupported(call.pos(), "the text of a char[]");
+			return runtimeCall("chars-string", argument.form(), integer(0), JavaForms.NIL);
 		}
 		return lowering.stringOf(argument, call.pos());
 	}
@@ -348,31 +376,84 @@ final class JavaIntrinsics {
 	private static JavaClass string(Builder builder, JavaClasses classes) {
 		ClassType string = new ClassType(builder.made, List.of());
 		ClassType object = classes.libraryType(OBJECT);
-		return builder.method("length", Primitive.INT, (lowering, call) -> call("length", call.self()))
+		Primitive i = Primitive.INT;
+		Primitive b = Primitive.BOOLEAN;
+		ArrayType characters = new ArrayType(Primitive.CHAR);
+		JavaEmitter format = (lowering, call) -> runtimeCall("format", call.self(), call.argument(0),
+				lowering.stringFunction());
+		return builder.constructor((lowering, call) -> JavaForms.string(""))
+			.constructor(runtime("string-copy"), string)
+			.constructor((lowering, call) -> runtimeCall("chars-string", call.argument(0), integer(0), JavaForms.NIL),
+					characters)
+			.constructor((lowering, call) -> runtimeCall("chars-string", call.argument(0), call.argument(1),
+					call.argument(2)), characters, i, i)
+			.method("length", i, host("length"))
 			.method("charAt", Primitive.CHAR,
-					(lowering, call) -> call("char-code", call("char", call.self(), call.argument(0))), Primitive.INT)
-			.method("isEmpty", Primitive.BOOLEAN,
-					(lowering, call) -> call("=", call("length", call.self()), integer(0)))
-			.method("equals", Primitive.BOOLEAN, (lowering, call) -> {
+					(lowering, call) -> call("char-code", call("char", call.self(), call.argument(0))), i)
+			.method("isEmpty", b, (lowering, call) -> call("=", call("length", call.self()), integer(0)))
+			.method("isBlank", b, runtime("blank-p"))
+			.method("equals", b, (lowering, call) -> {
 				JavaType other = call.arguments().get(0).type();
 				return other.equals(string) || other == JavaType.Null.NULL
 						? call("equal", call.self(), call.argument(0))
 						: runtimeCall("string-equals", call.self(), call.argument(0));
 			}, object)
-			.method("hashCode", Primitive.INT, (lowering, call) -> runtimeCall("string-hash", call.self()))
-			.method("compareTo", Primitive.INT,
-					(lowering, call) -> runtimeCall("string-compare", call.self(), call.argument(0)), string)
+			.method("equalsIgnoreCase", b, runtime("string-equals-ignore-case"), string)
+			.method("hashCode", i, runtime("string-hash"))
+			.method("compareTo", i, runtime("string-compare"), string)
+			.method("compareToIgnoreCase", i, runtime("string-compare-ignore-case"), string)
 			.method("toString", string, (lowering, call) -> call.self())
+			.method("intern", string, runtime("intern"))
 			.method("substring", string,
-					(lowering, call) -> runtimeCall("substring", call.self(), call.argument(0), JavaForms.NIL),
-					Primitive.INT)
-			.method("substring", string,
-					(lowering, call) -> runtimeCall("substring", call.self(), call.argument(0), call.argument(1)),
-					Primitive.INT, Primitive.INT)
-			.method("indexOf", Primitive.INT,
+					(lowering, call) -> runtimeCall("substring", call.self(), call.argument(0), JavaForms.NIL), i)
+			.method("substring", string, runtime("substring"), i, i)
+			.method("indexOf", i,
 					(lowering, call) -> call("or", call("search", call.argument(0), call.self()), integer(-1)), string)
-			.method("toUpperCase", string, (lowering, call) -> call("%string-upcase-piece", call.self()))
-			.method("toLowerCase", string, (lowering, call) -> call("%string-downcase-piece", call.self()))
+			.method("indexOf", i, runtime("index-of"), string, i)
+			.method("indexOf", i,
+					(lowering, call) -> runtimeCall("index-of-char", call.self(), call.argument(0), integer(0)), i)
+			.method("indexOf", i, runtime("index-of-char"), i, i)
+			.method("lastIndexOf", i, runtime("last-index-of"), string)
+			.method("lastIndexOf", i, runtime("last-index-of-char"), i)
+			.method("contains", b,
+					(lowering, call) -> call("if", call("search", text(lowering, call, 0), call.self()), JavaForms.T,
+							JavaForms.NIL),
+					object)
+			.method("startsWith", b,
+					(lowering, call) -> runtimeCall("starts-with", call.self(), call.argument(0), integer(0)), string)
+			.method("startsWith", b, runtime("starts-with"), string, i)
+			.method("endsWith", b, runtime("ends-with"), string)
+			.method("toUpperCase", string, host("%string-upcase-piece"))
+			.method("toLowerCase", string, host("%string-downcase-piece"))
+			.method("trim", string, runtime("trim"))
+			.method("strip", string, (lowering, call) -> runtimeCall("strip", call.self(), JavaForms.T, JavaForms.T))
+			.method("stripLeading", string,
+					(lowering, call) -> runtimeCall("strip", call.self(), JavaForms.T, JavaForms.NIL))
+			.method("stripTrailing", string,
+					(lowering, call) -> runtimeCall("strip", call.self(), JavaForms.NIL, JavaForms.T))
+			.method("repeat", string, runtime("repeat"), i)
+			.method("replace", string, runtime("replace-char"), Primitive.CHAR, Primitive.CHAR)
+			.method("replace", string,
+					(lowering, call) -> runtimeCall("replace-text", call.self(), text(lowering, call, 0),
+							text(lowering, call, 1)),
+					object, object)
+			.method("concat", string, (lowering, call) -> call("%string-concat", call.self(), call.argument(0)), string)
+			.method("toCharArray", characters, runtime("to-chars"))
+			.method("split", new ArrayType(string),
+					(lowering, call) -> runtimeCall("split", call.self(), call.argument(0), integer(0)), string)
+			.method("split", new ArrayType(string), runtime("split"), string, i)
+			.method("formatted", string, format, new ArrayType(object))
+			.varargs()
+			.statik("format", string,
+					(lowering, call) -> runtimeCall("format", call.argument(0), call.argument(1),
+							lowering.stringFunction()),
+					string, new ArrayType(object))
+			.varargs()
+			.statik("join", string,
+					(lowering, call) -> runtimeCall("join", text(lowering, call, 0), call.argument(1),
+							lowering.stringFunction()),
+					object, new ArrayType(object))
+			.varargs()
 			.any("valueOf", true, string, object, (lowering, call) -> text(lowering, call, 0)).made;
 	}
 
@@ -384,63 +465,225 @@ final class JavaIntrinsics {
 	private static JavaClass stringBuilder(Builder builder, JavaClasses classes) {
 		ClassType self = new ClassType(builder.made, List.of());
 		ClassType string = classes.libraryType(STRING);
+		ClassType object = classes.libraryType(OBJECT);
+		Primitive i = Primitive.INT;
 		return builder.constructor((lowering, call) -> characters())
+			.constructor((lowering, call) -> characters(), i)
 			.constructor((lowering, call) -> runtimeCall("sb-append", characters(), call.argument(0)), string)
-			.any("append", false, self, classes.libraryType(OBJECT),
+			.constructor((lowering, call) -> runtimeCall("sb-append", characters(), text(lowering, call, 0)), object)
+			.any("append", false, self, object,
 					(lowering, call) -> call.arguments().get(0).type() == Primitive.CHAR
 							? runtimeCall("sb-append-char", call.self(), call.argument(0))
 							: runtimeCall("sb-append", call.self(), text(lowering, call, 0)))
-			.method("toString", string, (lowering, call) -> runtimeCall("sb-string", call.self()))
-			.method("length", Primitive.INT, (lowering, call) -> call("length", call.self()))
-			.method("charAt", Primitive.CHAR, (lowering, call) -> runtimeCall("sb-char", call.self(), call.argument(0)),
-					Primitive.INT).made;
+			.method("insert", self,
+					(lowering, call) -> runtimeCall("sb-insert", call.self(), call.argument(0), text(lowering,
+							new Invocation(call.receiver(), call.arguments().subList(1, 2), false, call.pos()), 0)),
+					i, object)
+			.method("reverse", self, runtime("sb-reverse"))
+			.method("setLength", Primitive.VOID, runtime("sb-set-length"), i)
+			.method("setCharAt", Primitive.VOID, runtime("sb-set-char"), i, Primitive.CHAR)
+			.method("deleteCharAt", self,
+					(lowering, call) -> runtimeCall("sb-delete-char", call.self(), call.argument(0)), i)
+			.method("delete", self, runtime("sb-delete"), i, i)
+			.method("replace", self, runtime("sb-replace"), i, i, string)
+			.method("indexOf", i, runtime("sb-index-of"), string)
+			.method("toString", string, runtime("sb-string"))
+			.method("length", i, host("length"))
+			.method("isEmpty", Primitive.BOOLEAN,
+					(lowering, call) -> call("=", call("length", call.self()), integer(0)))
+			.method("charAt", Primitive.CHAR, runtime("sb-char"), i)
+			.method("substring", string,
+					(lowering, call) -> runtimeCall("sb-substring", call.self(), call.argument(0), JavaForms.NIL), i)
+			.method("substring", string, runtime("sb-substring"), i, i).made;
 	}
 
-	private static JavaClass listClass(Builder builder, JavaClasses classes) {
-		if (!builder.made.isInterface) {
-			builder.constructor((lowering, call) -> list(cl("make-array"), integer(8), new LispSymbol(":ADJUSTABLE"),
-					JavaForms.T, new LispSymbol(":FILL-POINTER"), integer(0)));
-			builder.implement(classes.library("java.util.List"));
-		}
-		Variable element = builder.variable(0);
-		return builder.method("add", Primitive.BOOLEAN, (lowering, call) -> {
-			LispVal push = call("vector-push-extend", call.argument(0), call.self());
-			return call.discard() ? push : call("progn", push, JavaForms.T);
-		}, element)
-			.method("get", element, (lowering, call) -> runtimeCall("list-get", call.self(), call.argument(0)),
-					Primitive.INT)
-			.method("set", element,
-					(lowering, call) -> runtimeCall("list-set", call.self(), call.argument(0), call.argument(1)),
-					Primitive.INT, element)
-			.method("size", Primitive.INT, (lowering, call) -> call("length", call.self()))
-			.method("isEmpty", Primitive.BOOLEAN,
-					(lowering, call) -> call("=", call("length", call.self()), integer(0))).made;
+	private static JavaClass integerClass(Builder builder, JavaClasses classes) {
+		ClassType string = classes.libraryType(STRING);
+		ClassType self = new ClassType(builder.made, List.of());
+		builder.made.superclass = classes.library(NUMBER);
+		Primitive i = Primitive.INT;
+		return builder.field("MAX_VALUE", i, integer(Integer.MAX_VALUE))
+			.field("MIN_VALUE", i, integer(Integer.MIN_VALUE))
+			.statik("parseInt", i,
+					(lowering, call) -> lowering.library(SUPPORT, "parseInt", List.of(call.argument(0), integer(10))),
+					string)
+			.statik("parseInt", i, support("parseInt"), string, i)
+			.statik("valueOf", self,
+					(lowering, call) -> lowering.library(SUPPORT, "parseInt", List.of(call.argument(0), integer(10))),
+					string)
+			.statik("toString", string, host("%decimal-piece"), i)
+			.statik("toString", string, runtime("radix-string"), i, i)
+			.statik("toBinaryString", string,
+					(lowering, call) -> runtimeCall("unsigned-string", call.argument(0), integer(2), integer(32)), i)
+			.statik("toHexString", string,
+					(lowering, call) -> runtimeCall("unsigned-string", call.argument(0), integer(16), integer(32)), i)
+			.statik("toOctalString", string,
+					(lowering, call) -> runtimeCall("unsigned-string", call.argument(0), integer(8), integer(32)), i)
+			.statik("valueOf", self, (lowering, call) -> call.argument(0), i)
+			.statik("compare", i, runtime("compare"), i, i)
+			.statik("signum", i, host("signum"), i)
+			.statik("sum", i, (lowering, call) -> JavaForms.wrap(i, call("+", call.argument(0), call.argument(1))), i,
+					i)
+			.statik("max", i, host("max"), i, i)
+			.statik("min", i, host("min"), i, i)
+			.statik("bitCount", i,
+					(lowering, call) -> call("logcount", call("logand", call.argument(0), integer(0xFFFFFFFFL))), i)
+			.statik("hashCode", i, (lowering, call) -> call.argument(0), i)
+			.method("compareTo", i, runtime("compare"), self)
+			.method("intValue", i, (lowering, call) -> call.self())
+			.method("longValue", Primitive.LONG, (lowering, call) -> call.self())
+			.method("doubleValue", Primitive.DOUBLE,
+					(lowering, call) -> call("float", call.self(), new LispDouble(1.0))).made;
 	}
 
-	private static JavaClass map(Builder builder, JavaClasses classes) {
-		ClassType object = classes.libraryType(OBJECT);
-		if (!builder.made.isInterface) {
-			builder.constructor(
-					(lowering, call) -> list(cl("make-hash-table"), new LispSymbol(":TEST"), quote(cl("equal"))));
-			builder.implement(classes.library("java.util.Map"));
+	private static JavaClass longClass(Builder builder, JavaClasses classes) {
+		ClassType string = classes.libraryType(STRING);
+		ClassType self = new ClassType(builder.made, List.of());
+		builder.made.superclass = classes.library(NUMBER);
+		Primitive i = Primitive.INT;
+		Primitive l = Primitive.LONG;
+		return builder.field("MAX_VALUE", l, integer(Long.MAX_VALUE))
+			.field("MIN_VALUE", l, integer(Long.MIN_VALUE))
+			.statik("parseLong", l,
+					(lowering, call) -> lowering.library(SUPPORT, "parseLong", List.of(call.argument(0), integer(10))),
+					string)
+			.statik("parseLong", l, support("parseLong"), string, i)
+			.statik("valueOf", self,
+					(lowering, call) -> call("cons",
+							lowering.library(SUPPORT, "parseLong", List.of(call.argument(0), integer(10))),
+							JavaForms.BOXED_LONG),
+					string)
+			.statik("toString", string, host("%decimal-piece"), l)
+			.statik("toString", string, runtime("radix-string"), l, i)
+			.statik("toBinaryString", string,
+					(lowering, call) -> runtimeCall("unsigned-string", call.argument(0), integer(2), integer(64)), l)
+			.statik("toHexString", string,
+					(lowering, call) -> runtimeCall("unsigned-string", call.argument(0), integer(16), integer(64)), l)
+			.statik("hashCode", i, runtime("long-hash"), l)
+			.statik("valueOf", self, (lowering, call) -> call("cons", call.argument(0), JavaForms.BOXED_LONG), l)
+			.statik("compare", i, runtime("compare"), l, l)
+			.statik("signum", i, host("signum"), l)
+			.statik("sum", l, (lowering, call) -> JavaForms.wrap(l, call("+", call.argument(0), call.argument(1))), l,
+					l)
+			.statik("max", l, host("max"), l, l)
+			.statik("min", l, host("min"), l, l)
+			.statik("bitCount", i,
+					(lowering, call) -> call("logcount", call("logand", call.argument(0),
+							integer(java.math.BigInteger.ONE.shiftLeft(64).subtract(java.math.BigInteger.ONE)))),
+					l)
+			.method("compareTo", i,
+					(lowering, call) -> runtimeCall("compare", call("car", call.self()), call("car", call.argument(0))),
+					self)
+			.method("intValue", i, (lowering, call) -> JavaForms.wrap(i, call("car", call.self())))
+			.method("longValue", l, (lowering, call) -> call("car", call.self()))
+			.method("doubleValue", Primitive.DOUBLE,
+					(lowering, call) -> call("float", call("car", call.self()), new LispDouble(1.0))).made;
+	}
+
+	private static JavaClass doubleClass(Builder builder, JavaClasses classes) {
+		ClassType string = classes.libraryType(STRING);
+		ClassType self = new ClassType(builder.made, List.of());
+		builder.made.superclass = classes.library(NUMBER);
+		Primitive i = Primitive.INT;
+		Primitive d = Primitive.DOUBLE;
+		Primitive b = Primitive.BOOLEAN;
+		JavaEmitter nan = (lowering, call) -> runtimeCall("nan-p", operands(call).get(0));
+		JavaEmitter infinite = (lowering, call) -> runtimeCall("infinite-p", operands(call).get(0));
+		return builder.field("MAX_VALUE", d, new LispDouble(Double.MAX_VALUE))
+			.field("MIN_VALUE", d, new LispDouble(Double.MIN_VALUE))
+			.field("POSITIVE_INFINITY", d, runtimeCall("infinity", JavaForms.NIL))
+			.field("NEGATIVE_INFINITY", d, runtimeCall("infinity", JavaForms.T))
+			.field("NaN", d, runtimeCall("nan"))
+			.statik("parseDouble", d, support("parseDouble"), string)
+			.statik("valueOf", self, support("parseDouble"), string)
+			.statik("toString", string, runtime("double-string"), d)
+			.statik("compare", i, runtime("double-compare"), d, d)
+			.statik("hashCode", i, runtime("double-hash"), d)
+			.statik("doubleToLongBits", Primitive.LONG, runtime("double-bits"), d)
+			.statik("valueOf", self, (lowering, call) -> call.argument(0), d)
+			.statik("isNaN", b, nan, d)
+			.statik("isInfinite", b, infinite, d)
+			.statik("isFinite", b,
+					(lowering, call) -> call("not",
+							call("or", runtimeCall("nan-p", call.argument(0)),
+									runtimeCall("infinite-p", call.argument(0)))),
+					d)
+			.statik("sum", d, host("+"), d, d)
+			.statik("max", d, runtime("double-max"), d, d)
+			.statik("min", d, runtime("double-min"), d, d)
+			.method("isNaN", b, nan)
+			.method("isInfinite", b, infinite)
+			.method("compareTo", i, runtime("double-compare"), self)
+			.method("intValue", i, runtime("double-to-int"))
+			.method("longValue", Primitive.LONG, runtime("double-to-long"))
+			.method("doubleValue", d, (lowering, call) -> call.self()).made;
+	}
+
+	private static JavaClass booleanClass(Builder builder, JavaClasses classes) {
+		ClassType string = classes.libraryType(STRING);
+		ClassType self = new ClassType(builder.made, List.of());
+		Primitive i = Primitive.INT;
+		Primitive b = Primitive.BOOLEAN;
+		JavaEmitter compare = (lowering, call) -> {
+			List<LispVal> operands = operands(call);
+			return call("-", call("if", operands.get(0), integer(1), integer(0)),
+					call("if", operands.get(1), integer(1), integer(0)));
+		};
+		return builder.field("TRUE", self, JavaForms.T)
+			.field("FALSE", self, JavaForms.BOXED_FALSE)
+			.statik("parseBoolean", b, runtime("parse-boolean"), string)
+			.statik("valueOf", self, (lowering, call) -> call.argument(0), b)
+			.statik("valueOf", self,
+					(lowering, call) -> call("if", runtimeCall("parse-boolean", call.argument(0)), JavaForms.T,
+							JavaForms.BOXED_FALSE),
+					string)
+			.statik("toString", string,
+					(lowering, call) -> call("if", call.argument(0), JavaForms.string("true"),
+							JavaForms.string("false")),
+					b)
+			.statik("hashCode", i, (lowering, call) -> call("if", call.argument(0), integer(1231), integer(1237)), b)
+			.statik("compare", i, compare, b, b)
+			.statik("logicalAnd", b, host("and"), b, b)
+			.statik("logicalOr", b, host("or"), b, b)
+			.statik("logicalXor", b, (lowering, call) -> call("not", call("eq", call.argument(0), call.argument(1))), b,
+					b)
+			.method("booleanValue", b, (lowering, call) -> runtimeCall("unbox-boolean", call.self()))
+			.method("compareTo", i,
+					(lowering, call) -> call("-",
+							call("if", runtimeCall("unbox-boolean", call.self()), integer(1), integer(0)),
+							call("if", runtimeCall("unbox-boolean", call.argument(0)), integer(1), integer(0))),
+					self).made;
+	}
+
+	private static JavaClass character(Builder builder, JavaClasses classes) {
+		ClassType string = classes.libraryType(STRING);
+		ClassType self = new ClassType(builder.made, List.of());
+		Primitive i = Primitive.INT;
+		Primitive c = Primitive.CHAR;
+		Primitive b = Primitive.BOOLEAN;
+		// a boxed char is a character, a char its code
+		builder.field("MAX_VALUE", c, integer(0xFFFF))
+			.field("MIN_VALUE", c, integer(0))
+			.statik("valueOf", self, (lowering, call) -> call("code-char", call.argument(0)), c)
+			.statik("toString", string, runtime("char-string"), c)
+			.statik("compare", i, host("-"), c, c)
+			.statik("hashCode", i, (lowering, call) -> call.argument(0), c)
+			.statik("getNumericValue", i, runtime("numeric-value"), c)
+			.statik("digit", i, runtime("digit"), c, i)
+			.statik("forDigit", c, runtime("for-digit"), i, i)
+			.statik("toUpperCase", c, runtime("char-upcase"), c)
+			.statik("toLowerCase", c, runtime("char-downcase"), c)
+			.method("compareTo", i,
+					(lowering, call) -> call("-", call("char-code", call.self()), call("char-code", call.argument(0))),
+					self)
+			.method("charValue", c, (lowering, call) -> call("char-code", call.self()));
+		for (String test : List.of("isDigit", "isLetter", "isLetterOrDigit", "isAlphabetic", "isWhitespace",
+				"isSpaceChar", "isUpperCase", "isLowerCase")) {
+			String name = "char-"
+					+ test.substring(2).replaceAll("([a-z])([A-Z])", "$1-$2").toLowerCase(java.util.Locale.ROOT) + "-p";
+			builder.statik(test, b, runtime(name), c);
 		}
-		Variable key = builder.variable(0);
-		Variable value = builder.variable(1);
-		return builder
-			.method("put", value,
-					(lowering, call) -> call.discard()
-							? call("setf", call("gethash", call.argument(0), call.self()), call.argument(1))
-							: runtimeCall("map-put", call.self(), call.argument(0), call.argument(1)),
-					key, value)
-			.method("get", value, (lowering, call) -> call("gethash", call.argument(0), call.self()), object)
-			.method("getOrDefault", value,
-					(lowering, call) -> call("gethash", call.argument(0), call.self(), call.argument(1)), object, value)
-			.method("containsKey", Primitive.BOOLEAN,
-					(lowering, call) -> call("nth-value", integer(1), call("gethash", call.argument(0), call.self())),
-					object)
-			.method("size", Primitive.INT, (lowering, call) -> call("hash-table-count", call.self()))
-			.method("isEmpty", Primitive.BOOLEAN,
-					(lowering, call) -> call("=", call("hash-table-count", call.self()), integer(0))).made;
+		return builder.made;
 	}
 
 	private static JavaClass math(Builder builder) {
@@ -449,19 +692,65 @@ final class JavaIntrinsics {
 		Primitive d = Primitive.DOUBLE;
 		builder.field("PI", d, new LispDouble(Math.PI))
 			.field("E", d, new LispDouble(Math.E))
-			.statik("sqrt", d, (lowering, call) -> runtimeCall("sqrt", call.argument(0)), d)
-			.statik("floor", d, (lowering, call) -> call("ffloor", call.argument(0)), d)
-			.statik("pow", d, (lowering, call) -> call("expt", call.argument(0), call.argument(1)), d, d)
+			.statik("pow", d, strict("pow"), d, d)
+			.statik("atan2", d, strict("atan2"), d, d)
+			.statik("hypot", d, strict("hypot"), d, d)
 			.statik("abs", i, (lowering, call) -> JavaForms.wrap(i, call("abs", call.argument(0))), i)
 			.statik("abs", l, (lowering, call) -> JavaForms.wrap(l, call("abs", call.argument(0))), l)
-			.statik("abs", d, (lowering, call) -> call("abs", call.argument(0)), d);
-		for (String name : List.of("max", "min")) {
-			for (Primitive type : List.of(i, l, d)) {
-				builder.statik(name, type, (lowering, call) -> call(name, call.argument(0), call.argument(1)), type,
-						type);
-			}
+			.statik("abs", d, host("abs"), d)
+			.statik("round", l, runtime("round"), d)
+			.statik("random", d, (lowering, call) -> call("random", new LispDouble(1.0)))
+			.statik("toRadians", d,
+					(lowering, call) -> call("*", call.argument(0), new LispDouble(0.017453292519943295)), d)
+			.statik("toDegrees", d, (lowering, call) -> call("*", call.argument(0), new LispDouble(57.29577951308232)),
+					d)
+			.statik("floorDiv", i,
+					(lowering, call) -> JavaForms.wrap(i,
+							call("values", call("floor", call.argument(0), call.argument(1)))),
+					i, i)
+			.statik("floorDiv", l,
+					(lowering, call) -> JavaForms.wrap(l,
+							call("values", call("floor", call.argument(0), call.argument(1)))),
+					l, l)
+			.statik("floorMod", i, host("mod"), i, i)
+			.statik("floorMod", l, host("mod"), l, l);
+		for (String name : List.of("sqrt", "cbrt", "floor", "ceil", "rint", "exp", "log", "log10", "sin", "cos", "tan",
+				"asin", "acos", "atan", "sinh", "cosh", "tanh", "signum")) {
+			builder.statik(name, d, strict(name), d);
 		}
+		for (String name : List.of("max", "min")) {
+			for (Primitive type : List.of(i, l)) {
+				builder.statik(name, type, host(name), type, type);
+			}
+			builder.statik(name, d, runtime("double-" + name), d, d);
+		}
+		for (String name : List.of("addExact", "subtractExact", "multiplyExact")) {
+			builder.statik(name, i, support(name), i, i).statik(name, l, support(name + "Long"), l, l);
+		}
+		builder.statik("negateExact", i, support("negateExact"), i).statik("toIntExact", i, support("toIntExact"), l);
 		return builder.made;
+	}
+
+	// ---- the native members of the library's Java source
+
+	/**
+	 * The {@code native} members of the library's Java source, by class, name and erased
+	 * parameter types: what Java cannot say, or says slowly, over the value model.
+	 */
+	private static final Map<String, JavaEmitter> NATIVES = natives();
+
+	private static Map<String, JavaEmitter> natives() {
+		Map<String, JavaEmitter> natives = new HashMap<>();
+		String arrays = "java.util.Arrays.";
+		// an array of references is an untyped vector whatever its element type
+		natives.put(arrays + "newArray(Object[],int)", (lowering, call) -> call("make-array", call.argument(1),
+				new LispSymbol(":INITIAL-ELEMENT"), JavaForms.NIL));
+		natives.put(arrays + "sortRange(int[],int,int)", runtime("sort-numbers"));
+		natives.put(arrays + "sortRange(long[],int,int)", runtime("sort-numbers"));
+		natives.put(arrays + "sortRange(double[],int,int)", runtime("sort-doubles"));
+		natives.put(arrays + "sortRange(char[],int,int)", runtime("sort-numbers"));
+		natives.put("rontolisp.internal.Support.readDouble(String)", runtime("read-double"));
+		return Map.copyOf(natives);
 	}
 
 }

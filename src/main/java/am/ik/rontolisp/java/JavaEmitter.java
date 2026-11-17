@@ -65,6 +65,18 @@ interface JavaEmitter {
 
 		LispReadException unsupported(int pos, String what);
 
+		/**
+		 * The function answering any value's {@code toString()}: what a member taking
+		 * values of any class makes their text with.
+		 */
+		LispVal stringFunction();
+
+		/**
+		 * A call of a static method of the library's Java source: a member written in
+		 * Java, found by its class, its name and how many arguments it takes.
+		 */
+		LispVal library(String className, String name, List<LispVal> arguments);
+
 	}
 
 	LispVal emit(Context context, Invocation invocation);

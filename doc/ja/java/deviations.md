@@ -100,9 +100,12 @@ static 初期化子が投げた例外は、`ExceptionInInitializerError` に包�
 届きます。
 
 **実行時のエラーは言語仕様の例外ではありません。** 0 による整数の除算は、メッセージが
-`/ by zero` の `ArithmeticException` です。`null` に対する呼び出し、`null` に対する `switch`、
-`null` のボックスのアンボクシング、配列の範囲外の添字、`Integer.parseInt` の失敗などは、`RuntimeException`、`Exception`、`Throwable` の `catch` で
-捕捉できるエラーになりますが、クラスとメッセージは言語仕様のものと異なります。`null` に対する
+`/ by zero` の `ArithmeticException` です。コレクション、`Integer.parseInt`、
+`Double.parseDouble`、`Objects.requireNonNull`、`Math.addExact` が失敗したときに投げる例外は、
+クラスもメッセージも言語仕様のものです。`null` に対する呼び出し、`null` に対する `switch`、
+`null` のボックスのアンボクシング、配列・文字列・`StringBuilder` の範囲外の添字、引数と変換が
+合わない `String.format` は、`RuntimeException`、`Exception`、`Throwable` の `catch` で捕捉
+できるエラーになりますが、クラスとメッセージは言語仕様のものと異なります。`null` に対する
 呼び出しやフィールドの読み出しは、検出されない場合があります。失敗したキャストは、メッセージの
 ない `ClassCastException` を投げます。
 
@@ -128,11 +131,28 @@ unchecked の警告も表示しません。アクセス修飾子のうち検査�
 プログラムは 1 つのファイルなので、ほかの修飾子によってアクセスが制限されることはありません。
 
 **レコードの `hashCode`** は、コンポーネントを宣言順に `31 * h + hash` で畳み込んだ値です。
-言語仕様はこの値を定めていません。`double` のコンポーネントを持つレコードには、まだ `hashCode`
-がありません。
+言語仕様はこの値を定めていません。
 
 **`hashCode` も `toString` も宣言していないオブジェクトの `hashCode` と `toString`** は、
 rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進表記を続けた文字列です。
+このようなオブジェクト（列挙型の定数を含みます）をキーにした `HashMap` は、JDK と異なる順序で
+キーをたどります。JDK でも、この順序は実行のたびに変わります。
+
+**`HashMap` の順序が JDK と異なる場合が 2 つあります。** バケットが 64 個以上の表で、ハッシュ
+コードが 1 つのバケットに集まるキーが 8 個を超えると、それらのキーは追加した順にたどられます。
+`Set.of` と `Map.of` の順序は 1 つに決まっています。JDK は起動のたびに別の順序を選びます。
+
+**`Math` の関数は `StrictMath` の関数です。** そのため、結果はどのバックエンドとプロセッサでも
+同じです。JDK の `Math.sin`、`Math.exp` などは、最後の桁がこれと異なることがあります。
+
+**`String.split` が読む正規表現は一部だけです。** 演算子を含まない文字列か、1 つの文字クラス
+（`+` を続けられます）を受け付けます。それ以外の正規表現は実行時のエラーになります。
+`String.format` の変換は[概要](index.md)に挙げたものだけで、それ以外の変換は名前を示す
+エラーになります。
+
+**古い 2 つのクラスは新しいクラスと同じものです。** `StringBuffer` は `StringBuilder` であり、
+`getClass().getName()` も `StringBuilder` の名前を返します。`Vector` は `instanceof` で
+`ArrayList` と判定されます。
 
 ## 拒否される構文
 
@@ -145,12 +165,12 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
   フォールスルーする `switch` 式。`Interface.super.m()`。内部クラスを、その外側のクラスの外で
   継承するクラス。`outer.new` または `<>` で作る匿名クラス。
 - スーパークラスのフィールドを隠すフィールド。`float`、`byte`、`short`。
-- 2 つの文字列の `==` と `!=`。これらは参照を比較します。`equals` で比較してください。
 - `Outer<A>.Inner` と書く型。型パラメータを持つクラスの内部クラスのメンバーを、そのクラスの
   外から読むこと。複数の型へのキャスト（`(A & B) x`）。配列型へのナローイングキャスト。
   型に型引数があるメソッド参照（`List<String>::size`）と、自身の型引数を書くメソッド参照
   （`this::<T>m`）。
-- ライブラリのコレクションを継承または実装するクラス。キーが `String`、`Integer`、`Long`、
-  `Character`、`Boolean` 以外（型パラメータを含む）の `HashMap`。
+- `String`、`StringBuilder`、ボックスを継承するクラス。
 - スレッド、`synchronized`、`volatile`。
-- [概要](index.md)の表にないライブラリのクラスとメンバー、および `HashMap` の文字列表現。
+- [概要](index.md)の表にないライブラリのクラスとメンバー。ストリーム、`LinkedList`、
+  `LinkedHashMap`、`TreeMap`、`Scanner`、`java.io`、`java.time`、`BigInteger`、
+  `BigDecimal`、正規表現、リフレクションなどです。

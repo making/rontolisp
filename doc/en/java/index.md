@@ -91,7 +91,7 @@ an interface.
 |---|---|
 | Types | `int`, `long`, `double`, `boolean`, `char`, `String`, classes, interfaces, enums, records, arrays; `var` for a local; type arguments, wildcards (`?`, `? extends T`, `? super T`) and raw types |
 | Declarations | classes with `extends` and `implements`, abstract classes and methods; classes, interfaces, records and methods with type parameters and their bounds; enums with fields, constructors, methods and constants that have a body; records with compact and canonical constructors; interfaces with abstract, `default`, `static` and `private` methods and constants; `sealed`, `permits` and `non-sealed`; static nested, inner, local and anonymous classes; fields, static fields, static and instance initializer blocks; constructors with `this(..)` and `super(..)` and statements ahead of them; overloaded and variable arity methods; `package` and `import` |
-| Statements | local variables (`final`, the unnamed `_`), `if`, `while`, `do`, `for`, the enhanced `for` over an array or a list, `switch` with colon or arrow cases, patterns and guards, labeled statements, `break` and `continue` with or without a label, `yield`, `return`, `throw`, `try` with `catch` and `finally` |
+| Statements | local variables (`final`, the unnamed `_`), `if`, `while`, `do`, `for`, the enhanced `for` over an array or an `Iterable`, `switch` with colon or arrow cases, patterns and guards, labeled statements, `break` and `continue` with or without a label, `yield`, `return`, `throw`, `try` with `catch` and `finally` |
 | Expressions | every operator of the primitive types with its conversions, string concatenation, the conditional, assignments and compound assignments, casts, `instanceof` with a type, a type pattern or a record pattern, `switch` expressions, `new`, `outer.new Inner()`, `Outer.this`, array creation with one or several lengths and initializers, text blocks, method calls with or without type arguments, `super.m(..)`, `new Box<>(..)`, lambdas and method references (`Type::name`, `expression::name`, `super::name`, `Type::new`, `int[]::new`) for any functional interface |
 
 Annotations are read and dropped. An `int` and a `long` wrap as two's complement; a
@@ -199,25 +199,91 @@ void main() {
 
 ## The library
 
-Each class has the members listed and no others; a missing one is refused by name.
+Each class has the members listed and no others; a missing class or member is refused by
+name. `String`, `StringBuilder`, the boxes, `Math`, `System` and `IO` are part of the
+front end. Every other class is written in the subset itself and compiled with the program
+as far as the program reaches it, so a class of the program can extend or implement one
+(`AbstractList`, `Iterable`, `Comparator`).
 
 | Class | Members |
 |---|---|
-| `Object` | `toString`, `equals`, `hashCode`, `getClass().getName()`, `getClass().getSimpleName()` |
+| `Object` | `new Object()`, `toString`, `equals`, `hashCode`, `getClass().getName()`, `getClass().getSimpleName()` |
 | An enum | `values()`, `valueOf(String)`, `name`, `ordinal`, `compareTo`, `toString` |
 | A record | the accessors, `equals`, `hashCode`, `toString` |
 | An array | `length`, `clone()` |
-| `String` | `length`, `charAt`, `substring`, `indexOf(String)`, `equals`, `compareTo`, `isEmpty`, `toUpperCase`, `toLowerCase`, `hashCode`, `String.valueOf` |
-| `StringBuilder` | `new StringBuilder()`, `new StringBuilder(String)`, `append`, `toString`, `length`, `charAt` |
-| `Integer`, `Long`, `Double`, `Boolean`, `Character` | boxing and unboxing; `Integer.MAX_VALUE`, `MIN_VALUE`, `parseInt`, `toString(int)`, `valueOf(int)`, `compare`, `intValue`, `compareTo`; `Long.MAX_VALUE`, `MIN_VALUE`, `Long.hashCode(long)`, `valueOf(long)`, `compare`, `longValue`, `compareTo`; `Double.compare`, `valueOf(double)`, `doubleValue`, `compareTo`; `Character.compare`, `charValue`, `compareTo`; `Boolean.hashCode(boolean)` |
-| `Math` | `sqrt`, `floor`, `pow`, `abs`, `max`, `min`, `PI`, `E` |
-| `System.out`, `System.err`, `IO` | `println`, `print` |
-| `ArrayList`, `List` | `new ArrayList<>()`, `add`, `get`, `set`, `size`, `isEmpty` |
-| `HashMap`, `Map` | `new HashMap<>()`, `put`, `get`, `getOrDefault`, `containsKey`, `size`, `isEmpty`; keys of `String`, `Integer`, `Long`, `Character` or `Boolean` |
-| Exceptions | `Throwable`, `Exception`, `Error`, `RuntimeException`, `IllegalArgumentException`, `IllegalStateException`, `ArithmeticException`, `NullPointerException`, `ClassCastException`, `IndexOutOfBoundsException`, `ArrayIndexOutOfBoundsException`, `UnsupportedOperationException`, `NumberFormatException`: the constructors of no argument and of a message, `getMessage`, `toString` |
-| `Runnable`, `Comparable` | `run`; `compareTo`, which a `String`, an `Integer`, a `Long`, a `Double`, a `Character` and an enum constant have too |
+| `String` | `length`, `charAt`, `isEmpty`, `isBlank`, `equals`, `equalsIgnoreCase`, `compareTo`, `compareToIgnoreCase`, `hashCode`, `substring`, `subSequence`, `indexOf` and `lastIndexOf` of a string or a character, `contains`, `startsWith`, `endsWith`, `toUpperCase`, `toLowerCase`, `trim`, `strip`, `stripLeading`, `stripTrailing`, `repeat`, `replace`, `concat`, `toCharArray`, `split`, `intern`, `formatted`; `String.valueOf`, `String.join`, `String.format`; `new String()`, `new String(String)`, `new String(char[])`, `new String(char[], int, int)` |
+| `StringBuilder`, `StringBuffer` | the constructors of nothing, a capacity or a text; `append`, `insert`, `reverse`, `setLength`, `setCharAt`, `deleteCharAt`, `delete`, `replace`, `indexOf`, `toString`, `length`, `isEmpty`, `charAt`, `substring`, `subSequence` |
+| `CharSequence` | `length`, `charAt`, `subSequence`, `isEmpty`; a `String` and a `StringBuilder` are one |
+| `Integer`, `Long` | boxing and unboxing; `MAX_VALUE`, `MIN_VALUE`, `parseInt` / `parseLong` with or without a radix, `valueOf`, `toString` with or without a radix, `toBinaryString`, `toHexString`, `Integer.toOctalString`, `compare`, `signum`, `sum`, `max`, `min`, `bitCount`, `hashCode`, `intValue`, `longValue`, `doubleValue`, `compareTo` |
+| `Double` | `MAX_VALUE`, `MIN_VALUE`, `POSITIVE_INFINITY`, `NEGATIVE_INFINITY`, `NaN`, `parseDouble`, `valueOf`, `toString`, `compare`, `hashCode`, `doubleToLongBits`, `isNaN`, `isInfinite`, `isFinite`, `sum`, `max`, `min`, `intValue`, `longValue`, `doubleValue`, `compareTo` |
+| `Boolean`, `Character` | `Boolean.TRUE`, `FALSE`, `parseBoolean`, `valueOf`, `toString`, `hashCode`, `compare`, `logicalAnd`, `logicalOr`, `logicalXor`, `booleanValue`, `compareTo`; `Character.MAX_VALUE`, `MIN_VALUE`, `valueOf`, `toString`, `compare`, `hashCode`, `isDigit`, `isLetter`, `isLetterOrDigit`, `isAlphabetic`, `isWhitespace`, `isSpaceChar`, `isUpperCase`, `isLowerCase`, `toUpperCase`, `toLowerCase`, `getNumericValue`, `digit`, `forDigit`, `charValue`, `compareTo` |
+| `Number` | `intValue`, `longValue`, `doubleValue` |
+| `Math` | `PI`, `E`, `abs`, `max`, `min`, `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log10`, `floor`, `ceil`, `rint`, `round`, `signum`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `hypot`, `toRadians`, `toDegrees`, `floorDiv`, `floorMod`, `random`, `addExact`, `subtractExact`, `multiplyExact`, `negateExact`, `toIntExact` |
+| `System` | `out`, `err` (`println`, `print`, `printf`, `format`, `flush`), `currentTimeMillis`, `nanoTime`, `exit`, `arraycopy`, `identityHashCode`, `lineSeparator` |
+| `IO` | `println`, `print`, `readln` |
+| `Iterable`, `Iterator` | `iterator`, `forEach`; `hasNext`, `next`, `remove`, `forEachRemaining` |
+| `Collection` | `size`, `isEmpty`, `contains`, `add`, `remove`, `containsAll`, `addAll`, `removeAll`, `retainAll`, `removeIf`, `clear`, `toArray`, `iterator`, `forEach`, `equals`, `hashCode`, `toString` |
+| `List`, `ArrayList` | the members of `Collection`; `get`, `set`, `add` and `addAll` at an index, `remove` at an index, `indexOf`, `lastIndexOf`, `subList`, `sort`, `replaceAll`, `getFirst`, `getLast`, `removeFirst`, `removeLast`, `addFirst`, `addLast`, `reversed`; `List.of`, `List.copyOf`; `new ArrayList<>()` of nothing, a capacity or a collection, `ensureCapacity`, `trimToSize` |
+| `Set`, `HashSet` | the members of `Collection`; `Set.of`, `Set.copyOf`; `new HashSet<>()` of nothing, a capacity or a collection |
+| `Map`, `HashMap`, `Map.Entry` | `size`, `isEmpty`, `containsKey`, `containsValue`, `get`, `getOrDefault`, `put`, `putIfAbsent`, `putAll`, `remove`, `replace`, `clear`, `keySet`, `values`, `entrySet`, `forEach`, `replaceAll`, `computeIfAbsent`, `computeIfPresent`, `compute`, `merge`, `equals`, `hashCode`, `toString`; `Map.of` up to ten pairs, `Map.entry`, `Map.ofEntries`, `Map.copyOf`; `new HashMap<>()` of nothing, a capacity or a map; `getKey`, `getValue`, `setValue`, `Map.Entry.comparingByKey`, `comparingByValue` |
+| `Queue`, `Deque`, `ArrayDeque` | the members of `Collection`; `offer`, `poll`, `peek`, `element`, `remove`; `addFirst`, `addLast`, `offerFirst`, `offerLast`, `removeFirst`, `removeLast`, `pollFirst`, `pollLast`, `getFirst`, `getLast`, `peekFirst`, `peekLast`, `push`, `pop`, `descendingIterator` |
+| `AbstractCollection`, `AbstractList`, `AbstractSet`, `AbstractMap` | what a class of the program extends to be a collection |
+| `Vector`, `Stack`, `Enumeration` | the members of `ArrayList`; `addElement`, `elementAt`, `firstElement`, `lastElement`, `setElementAt`, `insertElementAt`, `removeElementAt`, `removeElement`, `removeAllElements`, `elements`; `push`, `pop`, `peek`, `empty`, `search`; `hasMoreElements`, `nextElement` |
+| `Hashtable` | the members of `Map`; `keys`, `elements`, `contains`; no `null` key or value |
+| `Arrays` | `asList`, `toString`, `fill`, `equals`, `copyOf`, `copyOfRange`, `sort` of a whole array or a range, with or without a comparator, `binarySearch`, `hashCode` of an `int[]` or an `Object[]`; over arrays of `int`, `long`, `double`, `char`, `boolean` and of objects |
+| `Collections` | `sort`, `reverse`, `shuffle`, `swap`, `max`, `min`, `frequency`, `addAll`, `fill`, `nCopies`, `emptyList`, `emptySet`, `emptyMap`, `singletonList`, `singleton`, `unmodifiableList`, `unmodifiableSet`, `unmodifiableCollection`, `unmodifiableMap`, `reverseOrder` |
+| `Objects` | `equals`, `hashCode`, `hash`, `toString`, `isNull`, `nonNull`, `requireNonNull`, `requireNonNullElse`, `compare`, `checkIndex` |
+| `Optional` | `empty`, `of`, `ofNullable`, `isPresent`, `isEmpty`, `get`, `orElse`, `orElseGet`, `orElseThrow`, `ifPresent`, `ifPresentOrElse`, `filter`, `map`, `flatMap`, `or`, `equals`, `hashCode`, `toString` |
+| `Random` | `new Random()`, `new Random(long)`, `setSeed`, `nextInt()`, `nextInt(int)`, `nextLong`, `nextDouble`, `nextBoolean`, `nextGaussian`; a seed gives the specified sequence |
+| `Comparator` | `compare`, `reversed`, `thenComparing` of a comparator or a key, `thenComparingInt`, `Comparator.naturalOrder`, `reverseOrder`, `comparing` with or without a comparator of the key, `comparingInt`, `comparingLong`, `comparingDouble`, `nullsFirst`, `nullsLast` |
+| Exceptions | `Throwable`, `Exception`, `Error`, `RuntimeException`, `IllegalArgumentException`, `IllegalStateException`, `ArithmeticException`, `NullPointerException`, `ClassCastException`, `IndexOutOfBoundsException`, `ArrayIndexOutOfBoundsException`, `StringIndexOutOfBoundsException`, `NegativeArraySizeException`, `UnsupportedOperationException`, `NumberFormatException`, `CloneNotSupportedException`, `InterruptedException`, `NoSuchElementException`, `ConcurrentModificationException`, `EmptyStackException`: the constructors of no argument and of a message, `getMessage`, `toString` |
+| `Runnable`, `Comparable`, `AutoCloseable` | `run`; `compareTo`, which a `String`, a box and an enum constant have too; `close` |
 | `java.util.function` | `Function`, `BiFunction`, `UnaryOperator`, `BinaryOperator`, `Supplier`, `Consumer`, `BiConsumer`, `Predicate`, `BiPredicate`, `BooleanSupplier`; for `Int`, `Long` and `Double`: `IntFunction`, `IntPredicate`, `IntUnaryOperator`, `IntBinaryOperator`, `IntSupplier`, `IntConsumer`, `ToIntFunction`, `ToIntBiFunction`; each with its abstract method and its `andThen`, `compose`, `and`, `or`, `negate`, `identity`, `not`, `isEqual` |
-| `Comparator` | `compare`, `reversed`, `thenComparing(Comparator)`, `Comparator.naturalOrder`, `reverseOrder`, `comparing(Function)`, `comparingInt` |
+
+`String.format`, `formatted` and `printf` take `%d`, `%s`, `%S`, `%f`, `%e`, `%E`, `%x`,
+`%X`, `%o`, `%c`, `%b`, `%n` and `%%`, with the flags `-`, `0`, `+`, a space, `,`, `(` and
+`#`, a width, a precision and an argument index (`%2$s`). `String.split` takes a text, or
+one character class (`\\s`, `\\d`, `\\w`, `[,;]`, `[0-9]`) alone or followed by `+`.
+
+A `HashMap`, a `HashSet` and a `Hashtable` find a key by its `equals` and `hashCode`, and
+walk their keys in the order a JDK's do.
+
+```java
+record Point(int x, int y) {
+}
+
+class Grid implements Iterable<Point> {
+    private final List<Point> points = new ArrayList<>();
+
+    Grid add(int x, int y) {
+        points.add(new Point(x, y));
+        return this;
+    }
+
+    public Iterator<Point> iterator() {
+        return points.iterator();
+    }
+}
+
+void main() {
+    Map<Point, String> names = new HashMap<>();
+    names.put(new Point(0, 0), "origin");
+    Map<Integer, List<Point>> byRow = new HashMap<>();
+    for (Point p : new Grid().add(0, 0).add(3, 1).add(1, 1)) {
+        byRow.computeIfAbsent(p.y(), row -> new ArrayList<>()).add(p);
+    }
+    List<Point> row = byRow.get(1);
+    row.sort(Comparator.comparingInt(Point::x));
+    Set<String> words = new HashSet<>(Arrays.asList("to be or not to be".split(" ")));
+    IO.println(names.get(new Point(0, 0)) + " " + byRow.keySet() + " " + row + " " + words);
+    IO.println(String.format("%-6s|%5.2f|%04d|%x", "pi", Math.PI, 42, 255));
+}
+```
+
+```
+origin [0, 1] [Point[x=1, y=1], Point[x=3, y=1]] [not, be, or, to]
+pi    | 3.14|0042|ff
+```
 
 ```java
 class Account {

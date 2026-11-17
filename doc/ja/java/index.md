@@ -91,7 +91,7 @@ circle 1.5, 2 shapes, total 11.068583470577035
 |---|---|
 | 型 | `int`、`long`、`double`、`boolean`、`char`、`String`、クラス、インターフェース、列挙型、レコード、配列。ローカル変数の `var`。型引数、ワイルドカード（`?`、`? extends T`、`? super T`）、raw 型 |
 | 宣言 | `extends` と `implements` を持つクラス、抽象クラスと抽象メソッド。型パラメータとその境界を持つクラス、インターフェース、レコード、メソッド。フィールド、コンストラクタ、メソッド、本体付きの定数を持つ列挙型。コンパクトコンストラクタと標準コンストラクタを持つレコード。抽象メソッド、`default` メソッド、`static` メソッド、`private` メソッド、定数を持つインターフェース。`sealed`、`permits`、`non-sealed`。static なネストクラス、内部クラス、ローカルクラス、匿名クラス。フィールド、static フィールド、static 初期化ブロックとインスタンス初期化ブロック。`this(..)` と `super(..)`、およびその前の文を持つコンストラクタ。メソッドのオーバーロードと可変長引数。`package` と `import` |
-| 文 | ローカル変数（`final`、無名変数 `_`）、`if`、`while`、`do`、`for`、配列またはリストに対する拡張 `for`、コロン形式または矢印形式の `case`・パターン・ガードを持つ `switch`、ラベル付きの文、ラベルの有無を問わない `break` と `continue`、`yield`、`return`、`throw`、`catch` と `finally` を持つ `try` |
+| 文 | ローカル変数（`final`、無名変数 `_`）、`if`、`while`、`do`、`for`、配列または `Iterable` に対する拡張 `for`、コロン形式または矢印形式の `case`・パターン・ガードを持つ `switch`、ラベル付きの文、ラベルの有無を問わない `break` と `continue`、`yield`、`return`、`throw`、`catch` と `finally` を持つ `try` |
 | 式 | プリミティブ型のすべての演算子とその変換、文字列連結、条件演算子、代入と複合代入、キャスト、型・型パターン・レコードパターンに対する `instanceof`、`switch` 式、`new`、`outer.new Inner()`、`Outer.this`、長さを 1 つ以上指定する配列の生成と初期化子、テキストブロック、型引数の有無を問わないメソッド呼び出し、`super.m(..)`、`new Box<>(..)`、任意の関数型インターフェースに対するラムダとメソッド参照（`Type::name`、`expression::name`、`super::name`、`Type::new`、`int[]::new`） |
 
 アノテーションは読み飛ばします。`int` と `long` は 2 の補数として桁あふれします。`double` は、
@@ -198,25 +198,92 @@ void main() {
 
 ## ライブラリ
 
-各クラスにあるメンバーは次の表のものだけです。表にないメンバーは名前を示して拒否します。
+各クラスにあるメンバーは次の表のものだけです。表にないクラスとメンバーは名前を示して拒否します。
+`String`、`StringBuilder`、ボックス、`Math`、`System`、`IO` はフロントエンドの一部です。
+それ以外のクラスはこのサブセット自身で書かれていて、プログラムが使う部分だけがプログラムと
+一緒にコンパイルされます。そのため、プログラムのクラスはライブラリのクラスを継承または実装
+できます（`AbstractList`、`Iterable`、`Comparator`）。
 
 | クラス | メンバー |
 |---|---|
-| `Object` | `toString`、`equals`、`hashCode`、`getClass().getName()`、`getClass().getSimpleName()` |
+| `Object` | `new Object()`、`toString`、`equals`、`hashCode`、`getClass().getName()`、`getClass().getSimpleName()` |
 | 列挙型 | `values()`、`valueOf(String)`、`name`、`ordinal`、`compareTo`、`toString` |
 | レコード | アクセサ、`equals`、`hashCode`、`toString` |
 | 配列 | `length`、`clone()` |
-| `String` | `length`、`charAt`、`substring`、`indexOf(String)`、`equals`、`compareTo`、`isEmpty`、`toUpperCase`、`toLowerCase`、`hashCode`、`String.valueOf` |
-| `StringBuilder` | `new StringBuilder()`、`new StringBuilder(String)`、`append`、`toString`、`length`、`charAt` |
-| `Integer`、`Long`、`Double`、`Boolean`、`Character` | ボクシングとアンボクシング。`Integer.MAX_VALUE`、`MIN_VALUE`、`parseInt`、`toString(int)`、`valueOf(int)`、`compare`、`intValue`、`compareTo`。`Long.MAX_VALUE`、`MIN_VALUE`、`Long.hashCode(long)`、`valueOf(long)`、`compare`、`longValue`、`compareTo`。`Double.compare`、`valueOf(double)`、`doubleValue`、`compareTo`。`Character.compare`、`charValue`、`compareTo`。`Boolean.hashCode(boolean)` |
-| `Math` | `sqrt`、`floor`、`pow`、`abs`、`max`、`min`、`PI`、`E` |
-| `System.out`、`System.err`、`IO` | `println`、`print` |
-| `ArrayList`、`List` | `new ArrayList<>()`、`add`、`get`、`set`、`size`、`isEmpty` |
-| `HashMap`、`Map` | `new HashMap<>()`、`put`、`get`、`getOrDefault`、`containsKey`、`size`、`isEmpty`。キーは `String`、`Integer`、`Long`、`Character`、`Boolean` |
-| 例外 | `Throwable`、`Exception`、`Error`、`RuntimeException`、`IllegalArgumentException`、`IllegalStateException`、`ArithmeticException`、`NullPointerException`、`ClassCastException`、`IndexOutOfBoundsException`、`ArrayIndexOutOfBoundsException`、`UnsupportedOperationException`、`NumberFormatException`。引数のないコンストラクタとメッセージを取るコンストラクタ、`getMessage`、`toString` |
-| `Runnable`、`Comparable` | `run`。`compareTo`（`String`、`Integer`、`Long`、`Double`、`Character`、列挙型の定数にもあります） |
+| `String` | `length`、`charAt`、`isEmpty`、`isBlank`、`equals`、`equalsIgnoreCase`、`compareTo`、`compareToIgnoreCase`、`hashCode`、`substring`、`subSequence`、文字列または文字の `indexOf` と `lastIndexOf`、`contains`、`startsWith`、`endsWith`、`toUpperCase`、`toLowerCase`、`trim`、`strip`、`stripLeading`、`stripTrailing`、`repeat`、`replace`、`concat`、`toCharArray`、`split`、`intern`、`formatted`。`String.valueOf`、`String.join`、`String.format`。`new String()`、`new String(String)`、`new String(char[])`、`new String(char[], int, int)` |
+| `StringBuilder`、`StringBuffer` | 引数なし、容量、文字列を取るコンストラクタ。`append`、`insert`、`reverse`、`setLength`、`setCharAt`、`deleteCharAt`、`delete`、`replace`、`indexOf`、`toString`、`length`、`isEmpty`、`charAt`、`substring`、`subSequence` |
+| `CharSequence` | `length`、`charAt`、`subSequence`、`isEmpty`。`String` と `StringBuilder` は `CharSequence` です |
+| `Integer`、`Long` | ボクシングとアンボクシング。`MAX_VALUE`、`MIN_VALUE`、基数の指定がある、またはない `parseInt` / `parseLong`、`valueOf`、基数の指定がある、またはない `toString`、`toBinaryString`、`toHexString`、`Integer.toOctalString`、`compare`、`signum`、`sum`、`max`、`min`、`bitCount`、`hashCode`、`intValue`、`longValue`、`doubleValue`、`compareTo` |
+| `Double` | `MAX_VALUE`、`MIN_VALUE`、`POSITIVE_INFINITY`、`NEGATIVE_INFINITY`、`NaN`、`parseDouble`、`valueOf`、`toString`、`compare`、`hashCode`、`doubleToLongBits`、`isNaN`、`isInfinite`、`isFinite`、`sum`、`max`、`min`、`intValue`、`longValue`、`doubleValue`、`compareTo` |
+| `Boolean`、`Character` | `Boolean.TRUE`、`FALSE`、`parseBoolean`、`valueOf`、`toString`、`hashCode`、`compare`、`logicalAnd`、`logicalOr`、`logicalXor`、`booleanValue`、`compareTo`。`Character.MAX_VALUE`、`MIN_VALUE`、`valueOf`、`toString`、`compare`、`hashCode`、`isDigit`、`isLetter`、`isLetterOrDigit`、`isAlphabetic`、`isWhitespace`、`isSpaceChar`、`isUpperCase`、`isLowerCase`、`toUpperCase`、`toLowerCase`、`getNumericValue`、`digit`、`forDigit`、`charValue`、`compareTo` |
+| `Number` | `intValue`、`longValue`、`doubleValue` |
+| `Math` | `PI`、`E`、`abs`、`max`、`min`、`sqrt`、`cbrt`、`pow`、`exp`、`log`、`log10`、`floor`、`ceil`、`rint`、`round`、`signum`、`sin`、`cos`、`tan`、`asin`、`acos`、`atan`、`atan2`、`sinh`、`cosh`、`tanh`、`hypot`、`toRadians`、`toDegrees`、`floorDiv`、`floorMod`、`random`、`addExact`、`subtractExact`、`multiplyExact`、`negateExact`、`toIntExact` |
+| `System` | `out`、`err`（`println`、`print`、`printf`、`format`、`flush`）、`currentTimeMillis`、`nanoTime`、`exit`、`arraycopy`、`identityHashCode`、`lineSeparator` |
+| `IO` | `println`、`print`、`readln` |
+| `Iterable`、`Iterator` | `iterator`、`forEach`。`hasNext`、`next`、`remove`、`forEachRemaining` |
+| `Collection` | `size`、`isEmpty`、`contains`、`add`、`remove`、`containsAll`、`addAll`、`removeAll`、`retainAll`、`removeIf`、`clear`、`toArray`、`iterator`、`forEach`、`equals`、`hashCode`、`toString` |
+| `List`、`ArrayList` | `Collection` のメンバー。`get`、`set`、添字を指定する `add` と `addAll`、添字を指定する `remove`、`indexOf`、`lastIndexOf`、`subList`、`sort`、`replaceAll`、`getFirst`、`getLast`、`removeFirst`、`removeLast`、`addFirst`、`addLast`、`reversed`。`List.of`、`List.copyOf`。引数なし、容量、コレクションを取る `new ArrayList<>()`、`ensureCapacity`、`trimToSize` |
+| `Set`、`HashSet` | `Collection` のメンバー。`Set.of`、`Set.copyOf`。引数なし、容量、コレクションを取る `new HashSet<>()` |
+| `Map`、`HashMap`、`Map.Entry` | `size`、`isEmpty`、`containsKey`、`containsValue`、`get`、`getOrDefault`、`put`、`putIfAbsent`、`putAll`、`remove`、`replace`、`clear`、`keySet`、`values`、`entrySet`、`forEach`、`replaceAll`、`computeIfAbsent`、`computeIfPresent`、`compute`、`merge`、`equals`、`hashCode`、`toString`。10 組までの `Map.of`、`Map.entry`、`Map.ofEntries`、`Map.copyOf`。引数なし、容量、マップを取る `new HashMap<>()`。`getKey`、`getValue`、`setValue`、`Map.Entry.comparingByKey`、`comparingByValue` |
+| `Queue`、`Deque`、`ArrayDeque` | `Collection` のメンバー。`offer`、`poll`、`peek`、`element`、`remove`。`addFirst`、`addLast`、`offerFirst`、`offerLast`、`removeFirst`、`removeLast`、`pollFirst`、`pollLast`、`getFirst`、`getLast`、`peekFirst`、`peekLast`、`push`、`pop`、`descendingIterator` |
+| `AbstractCollection`、`AbstractList`、`AbstractSet`、`AbstractMap` | プログラムのクラスがコレクションになるために継承するクラス |
+| `Vector`、`Stack`、`Enumeration` | `ArrayList` のメンバー。`addElement`、`elementAt`、`firstElement`、`lastElement`、`setElementAt`、`insertElementAt`、`removeElementAt`、`removeElement`、`removeAllElements`、`elements`。`push`、`pop`、`peek`、`empty`、`search`。`hasMoreElements`、`nextElement` |
+| `Hashtable` | `Map` のメンバー。`keys`、`elements`、`contains`。キーにも値にも `null` は使えません |
+| `Arrays` | `asList`、`toString`、`fill`、`equals`、`copyOf`、`copyOfRange`、配列全体または範囲に対する、コンパレータの指定がある、またはない `sort`、`binarySearch`、`int[]` と `Object[]` の `hashCode`。対象は `int`、`long`、`double`、`char`、`boolean`、オブジェクトの配列 |
+| `Collections` | `sort`、`reverse`、`shuffle`、`swap`、`max`、`min`、`frequency`、`addAll`、`fill`、`nCopies`、`emptyList`、`emptySet`、`emptyMap`、`singletonList`、`singleton`、`unmodifiableList`、`unmodifiableSet`、`unmodifiableCollection`、`unmodifiableMap`、`reverseOrder` |
+| `Objects` | `equals`、`hashCode`、`hash`、`toString`、`isNull`、`nonNull`、`requireNonNull`、`requireNonNullElse`、`compare`、`checkIndex` |
+| `Optional` | `empty`、`of`、`ofNullable`、`isPresent`、`isEmpty`、`get`、`orElse`、`orElseGet`、`orElseThrow`、`ifPresent`、`ifPresentOrElse`、`filter`、`map`、`flatMap`、`or`、`equals`、`hashCode`、`toString` |
+| `Random` | `new Random()`、`new Random(long)`、`setSeed`、`nextInt()`、`nextInt(int)`、`nextLong`、`nextDouble`、`nextBoolean`、`nextGaussian`。シードを指定すると仕様どおりの列になります |
+| `Comparator` | `compare`、`reversed`、コンパレータまたはキーを取る `thenComparing`、`thenComparingInt`、`Comparator.naturalOrder`、`reverseOrder`、キーのコンパレータの指定がある、またはない `comparing`、`comparingInt`、`comparingLong`、`comparingDouble`、`nullsFirst`、`nullsLast` |
+| 例外 | `Throwable`、`Exception`、`Error`、`RuntimeException`、`IllegalArgumentException`、`IllegalStateException`、`ArithmeticException`、`NullPointerException`、`ClassCastException`、`IndexOutOfBoundsException`、`ArrayIndexOutOfBoundsException`、`StringIndexOutOfBoundsException`、`NegativeArraySizeException`、`UnsupportedOperationException`、`NumberFormatException`、`CloneNotSupportedException`、`InterruptedException`、`NoSuchElementException`、`ConcurrentModificationException`、`EmptyStackException`。引数のないコンストラクタとメッセージを取るコンストラクタ、`getMessage`、`toString` |
+| `Runnable`、`Comparable`、`AutoCloseable` | `run`。`compareTo`（`String`、ボックス、列挙型の定数にもあります）。`close` |
 | `java.util.function` | `Function`、`BiFunction`、`UnaryOperator`、`BinaryOperator`、`Supplier`、`Consumer`、`BiConsumer`、`Predicate`、`BiPredicate`、`BooleanSupplier`。`Int`、`Long`、`Double` のそれぞれに `IntFunction`、`IntPredicate`、`IntUnaryOperator`、`IntBinaryOperator`、`IntSupplier`、`IntConsumer`、`ToIntFunction`、`ToIntBiFunction`。各インターフェースの抽象メソッドと `andThen`、`compose`、`and`、`or`、`negate`、`identity`、`not`、`isEqual` |
-| `Comparator` | `compare`、`reversed`、`thenComparing(Comparator)`、`Comparator.naturalOrder`、`reverseOrder`、`comparing(Function)`、`comparingInt` |
+
+`String.format`、`formatted`、`printf` が受け付ける変換は `%d`、`%s`、`%S`、`%f`、`%e`、`%E`、
+`%x`、`%X`、`%o`、`%c`、`%b`、`%n`、`%%` です。フラグ `-`、`0`、`+`、空白、`,`、`(`、`#` と、
+幅、精度、引数の番号（`%2$s`）を指定できます。`String.split` が受け付けるのは、演算子を
+含まない文字列か、1 つの文字クラス（`\\s`、`\\d`、`\\w`、`[,;]`、`[0-9]`）です。文字クラスには
+`+` を続けられます。
+
+`HashMap`、`HashSet`、`Hashtable` は、キーを `equals` と `hashCode` で探し、JDK と同じ順序で
+キーをたどります。
+
+```java
+record Point(int x, int y) {
+}
+
+class Grid implements Iterable<Point> {
+    private final List<Point> points = new ArrayList<>();
+
+    Grid add(int x, int y) {
+        points.add(new Point(x, y));
+        return this;
+    }
+
+    public Iterator<Point> iterator() {
+        return points.iterator();
+    }
+}
+
+void main() {
+    Map<Point, String> names = new HashMap<>();
+    names.put(new Point(0, 0), "origin");
+    Map<Integer, List<Point>> byRow = new HashMap<>();
+    for (Point p : new Grid().add(0, 0).add(3, 1).add(1, 1)) {
+        byRow.computeIfAbsent(p.y(), row -> new ArrayList<>()).add(p);
+    }
+    List<Point> row = byRow.get(1);
+    row.sort(Comparator.comparingInt(Point::x));
+    Set<String> words = new HashSet<>(Arrays.asList("to be or not to be".split(" ")));
+    IO.println(names.get(new Point(0, 0)) + " " + byRow.keySet() + " " + row + " " + words);
+    IO.println(String.format("%-6s|%5.2f|%04d|%x", "pi", Math.PI, 42, 255));
+}
+```
+
+```
+origin [0, 1] [Point[x=1, y=1], Point[x=3, y=1]] [not, be, or, to]
+pi    | 3.14|0042|ff
+```
 
 ```java
 class Account {

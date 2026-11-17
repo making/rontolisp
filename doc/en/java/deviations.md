@@ -101,11 +101,14 @@ starts. An exception thrown by a static initializer reaches the program as itsel
 inside an `ExceptionInInitializerError`.
 
 **An error of the run time is not the language's exception.** A division by zero is an
-`ArithmeticException` with the message `/ by zero`. A `null` receiver, a `switch` over
-`null`, a box that is `null` read as its primitive, an array index out of bounds, a failed `Integer.parseInt` and the like are errors a `catch` of
-`RuntimeException`, `Exception` or `Throwable` takes, with another class and message than
-the language's. A call or a field read on `null` is not always detected. A failed cast
-throws `ClassCastException` with no message.
+`ArithmeticException` with the message `/ by zero`, and what a collection, `Integer.parseInt`,
+`Double.parseDouble`, `Objects.requireNonNull` and `Math.addExact` refuse is the language's
+exception with its message. A `null` receiver, a `switch` over `null`, a box that is `null`
+read as its primitive, an index outside an array, a string or a `StringBuilder`, and a
+mismatched `String.format` are errors a `catch` of `RuntimeException`, `Exception` or
+`Throwable` takes, with another class and message than the language's. A call or a field
+read on `null` is not always detected. A failed cast throws `ClassCastException` with no
+message.
 
 **An uncaught exception is reported in rontolisp's form**: `Unhandled condition:` and the
 exception's `toString()` on standard error, then a non-zero exit. There is no stack trace.
@@ -129,11 +132,29 @@ unchecked warning is printed. Of the access modifiers `private` is checked; a pr
 file, so the others never restrict.
 
 **A record's `hashCode`** is computed from its components in order, `31 * h + hash`; the
-language leaves the number unspecified. A record with a `double` component has no
-`hashCode` yet.
+language leaves the number unspecified.
 
 **`hashCode` and `toString` of an object declaring neither** are an identity number of
-rontolisp's own, `Name@` and that number in hexadecimal.
+rontolisp's own, `Name@` and that number in hexadecimal. A `HashMap` keyed by such objects,
+enum constants included, walks them in another order than a JDK, whose own order changes
+from run to run.
+
+**The order of a `HashMap` differs from a JDK's in two cases.** More than eight keys whose
+hash codes fall into one bucket of a table of 64 buckets or more are walked in the order
+they were put. `Set.of` and `Map.of` have one fixed order, where a JDK picks another at
+every start.
+
+**The functions of `Math` are those of `StrictMath`**, so a result is the same on every
+backend and processor. A JDK's `Math.sin`, `Math.exp` and the like may differ from it in
+the last digit.
+
+**`String.split` reads a small part of the regular expressions**: a text with no operator,
+or one character class alone or followed by `+`. Any other expression is an error when the
+program runs. `String.format` has the conversions the [overview](index.md) lists; any other
+is an error naming it.
+
+**Two older classes are the newer ones.** A `StringBuffer` is a `StringBuilder` and
+`getClass().getName()` says so; a `Vector` is an `ArrayList` to `instanceof`.
 
 ## What is refused
 
@@ -146,14 +167,12 @@ Each of these is an error naming the construct and its position.
   cases run into the next; `Interface.super.m()`; a class extending an inner class from
   outside that class's outer class; an anonymous class made with `outer.new` or with `<>`.
 - A field hiding one of a superclass; `float`, `byte`, `short`.
-- `==` and `!=` between two strings: they compare references. Compare with `equals`.
 - A type written `Outer<A>.Inner`, and a member of an inner class of a parameterized class
   read from outside that class; a cast to several types (`(A & B) x`); a cast narrowing
   to an array type; a method reference whose type has type arguments (`List<String>::size`) or that
   writes its own (`this::<T>m`).
-- A class extending or implementing a collection of the library; a `HashMap` keyed by
-  anything but `String`, `Integer`, `Long`, `Character` or `Boolean`, a type parameter
-  included.
+- A class extending `String`, `StringBuilder` or a box.
 - Threads, `synchronized`, `volatile`.
-- Any class or member of the library not listed in the [overview](index.md), and the text
-  of a `HashMap`.
+- Any class or member of the library not listed in the [overview](index.md): streams,
+  `LinkedList`, `LinkedHashMap`, `TreeMap`, `Scanner`, `java.io`, `java.time`,
+  `BigInteger`, `BigDecimal`, regular expressions, reflection.

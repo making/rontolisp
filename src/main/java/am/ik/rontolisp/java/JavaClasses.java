@@ -45,6 +45,8 @@ final class JavaClasses {
 
 	private static final String COMPARABLE = "java.lang.Comparable";
 
+	private static final String ENUM = "java.lang.Enum";
+
 	/**
 	 * The file a class was declared in: what a simple name is resolved against.
 	 *
@@ -96,6 +98,26 @@ final class JavaClasses {
 	 */
 	final Set<JavaClass> taggedLambdas = new java.util.LinkedHashSet<>();
 
+	/**
+	 * The methods of the library's Java source a pass called: only these are lowered.
+	 * Kept over the passes, as the two sets after it.
+	 */
+	final Set<JavaClass.Method> reached = new java.util.LinkedHashSet<>();
+
+	/** The classes of the library's Java source a pass makes an instance of. */
+	final Set<JavaClass> made = new java.util.LinkedHashSet<>();
+
+	/**
+	 * The classes of the library's Java source whose static initialization a pass needs.
+	 */
+	final Set<JavaClass> used = new java.util.LinkedHashSet<>();
+
+	/**
+	 * Whether the program compares two strings by reference: its constant strings are
+	 * then one object a text.
+	 */
+	boolean identicalStrings;
+
 	private final Library library;
 
 	/**
@@ -106,13 +128,24 @@ final class JavaClasses {
 		/** Makes the class of a qualified name and adds it, or answers {@code null}. */
 		@Nullable JavaClass create(String name, JavaClasses classes);
 
-		/** Refuses the type arguments a class of the library does not take yet. */
-		void check(ClassType type, Source source, int pos);
+		/**
+		 * Tells that a class which is no Java source and an interface of the library's
+		 * Java source are both in the table: the class may gain members naming it.
+		 */
+		void meets(JavaClass intrinsic, JavaClass named, JavaClasses classes);
 
 		/**
-		 * Whether a class of the library that is no Java source is {@code Comparable}.
+		 * The interfaces of the library's Java source that a class which is no Java
+		 * source implements, by qualified name: each with the class itself as its
+		 * argument when it takes one.
 		 */
-		boolean isComparable(String name);
+		List<String> implemented(String name);
+
+		/**
+		 * The form a {@code native} member of the library's Java source is, or
+		 * {@code null}: found by its class's name, its own and its erased parameters.
+		 */
+		@Nullable JavaEmitter emitter(String member);
 
 	}
 
@@ -169,30 +202,42 @@ final class JavaClasses {
 		this.classes.put(declaration.name, declaration);
 		this.lispNames.put(declaration.lispName(), declaration);
 		this.version++;
-		if (declaration.name.equals(COMPARABLE)) {
+		if (declaration.isInterface && !declaration.intrinsic) {
 			for (JavaClass known : List.copyOf(this.classes.values())) {
-				compares(known, declaration);
+				implement(known, declaration);
 			}
 		}
-		else if (this.classes.get(COMPARABLE) instanceof JavaClass comparable) {
-			compares(declaration, comparable);
+		else if (declaration.intrinsic || declaration.name.equals(ENUM)) {
+			for (JavaClass known : List.copyOf(this.classes.values())) {
+				implement(declaration, known);
+			}
 		}
 	}
 
 	/**
-	 * Makes a class of the library {@code Comparable} to itself when it is: an enum's
-	 * superclass, a string, a box. Only in a program that names {@code Comparable}, so
+	 * Makes a class of the library implement an interface of the library's Java source
+	 * when it does: an enum's superclass and a box are {@code Comparable} to themselves,
+	 * a string a {@code CharSequence} too. Only in a program that names the interface, so
 	 * that every other program holds no interface it does not name.
 	 */
-	private void compares(JavaClass declaration, JavaClass comparable) {
-		boolean enumeration = declaration.name.equals("java.lang.Enum");
-		if ((!enumeration && !(declaration.intrinsic && this.library.isComparable(declaration.name)))
-				|| declaration.interfaces.contains(comparable)) {
+	private void implement(JavaClass declaration, JavaClass implemented) {
+		if (!implemented.isInterface || implemented.intrinsic) {
 			return;
 		}
-		declaration.interfaces.add(comparable);
-		declaration.parameterized.put(comparable, new ClassType(comparable, List.of(enumeration
-				? new Variable(declaration.typeParameters.get(0)) : new ClassType(declaration, List.of()))));
+		if (declaration.intrinsic) {
+			this.library.meets(declaration, implemented, this);
+		}
+		boolean enumeration = declaration.name.equals(ENUM) && implemented.name.equals(COMPARABLE);
+		if ((!enumeration
+				&& !(declaration.intrinsic && this.library.implemented(declaration.name).contains(implemented.name)))
+				|| declaration.interfaces.contains(implemented)) {
+			return;
+		}
+		declaration.interfaces.add(implemented);
+		if (!implemented.typeParameters.isEmpty()) {
+			declaration.parameterized.put(implemented, new ClassType(implemented, List.of(enumeration
+					? new Variable(declaration.typeParameters.get(0)) : new ClassType(declaration, List.of()))));
+		}
 		this.version++;
 	}
 
@@ -696,10 +741,21 @@ final class JavaClasses {
 			}
 			Set<String> modifiers = method.modifiers();
 			boolean isStatic = modifiers.contains("static");
-			boolean isAbstract = method.body() == null;
+			JavaEmitter emitter = null;
+			if (modifiers.contains("native")) {
+				StringBuilder member = new StringBuilder(made.name).append('.').append(method.name()).append('(');
+				for (int i = 0; i < parameters.size(); i++) {
+					member.append(i > 0 ? "," : "").append(parameters.get(i).erasure());
+				}
+				emitter = this.library.emitter(member.append(')').toString());
+				if (emitter == null || method.body() != null) {
+					throw new IllegalStateException(member + " is native and has no form, or has a body");
+				}
+			}
+			boolean isAbstract = method.body() == null && emitter == null;
 			if (made.isInterface) {
 				boolean bodied = modifiers.contains("default") || isStatic || modifiers.contains("private");
-				if (!isAbstract && !bodied) {
+				if (!isAbstract && !bodied && emitter == null) {
 					throw error(source, method.pos(), "interface abstract methods cannot have body");
 				}
 				if (isAbstract && bodied) {
@@ -724,7 +780,7 @@ final class JavaClasses {
 						made.simpleName() + " is not abstract and declares the abstract method " + method.name());
 			}
 			JavaClass.Method member = new JavaClass.Method(made, method.name(), parameters, returnType, isStatic,
-					isAbstract, method, null, false);
+					isAbstract, method, emitter, false);
 			member.typeParameters = List.copyOf(typeParameters);
 			if (made.isEnum && isConstructor) {
 				member.hidden = 2;
@@ -1007,11 +1063,6 @@ final class JavaClasses {
 		return null;
 	}
 
-	/** Refuses the type arguments a class of the library does not take yet. */
-	void check(ClassType type, Source source, int pos) {
-		this.library.check(type, source, pos);
-	}
-
 	/** {@link #find}, or the error a compiler reports. */
 	JavaClass require(String name, int pos, @Nullable JavaClass context, Unit unit) {
 		JavaClass found = find(name, context, unit);
@@ -1036,7 +1087,7 @@ final class JavaClasses {
 		if (intrinsic != null) {
 			return intrinsic;
 		}
-		String path = "library/" + name.replace('.', '/') + ".java";
+		String path = JavaParser.LIBRARY + name.replace('.', '/') + ".java";
 		String text;
 		try (InputStream in = JavaClasses.class.getResourceAsStream(path)) {
 			if (in == null) {
@@ -1180,9 +1231,7 @@ final class JavaClasses {
 			}
 			arguments.add(type);
 		}
-		ClassType type = new ClassType(declaration, List.copyOf(arguments));
-		this.library.check(type, source, written.pos());
-		return type;
+		return new ClassType(declaration, List.copyOf(arguments));
 	}
 
 }
