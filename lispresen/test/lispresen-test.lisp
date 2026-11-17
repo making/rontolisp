@@ -161,6 +161,17 @@ widens its first and last character"
       ;; Its short lines leave the Run and Reset buttons room beside them.
       (ok (contains (lispresen:render slide) "--code:44px"))
       (ok (contains (lispresen:render slide) "class=\"codebox runnable\""))
+      ;; Starlark runs too, in its own language and its own syntax.
+      (dolist (lang '("starlark" "star"))
+        (let ((html
+               (lispresen:render
+                (format nil
+                        "(slide :title \"t\" (code :lang ~s \"def f(x):~%  return x\"))"
+                        lang))))
+          (ok (contains html (format nil "data-lang=\"~a\"" lang)))
+          (ok (contains html "class=\"codebox runnable\""))
+          (ok (contains html "<span class=\"hl-k\">def</span>"))
+          (ok (not (contains html "<span class=\"hl-d\">")))))
       ;; A console's output wraps at the panel's edge instead of stepping the code down:
       ;; 300 characters at 44px take 5 rows of 61.
       (let ((html
@@ -660,6 +671,12 @@ b */")))
 'b'\"\"\" if s else None"
                 (("k" "def") ("s" "'#'") ("c" "# it's") ("k" "return") ("s" "\"\"\"a
 'b'\"\"\"") ("k" "if") ("k" "else") ("n" "None")))
+               ("starlark" "def f(x):  # it's
+    s = '#' + \"\"\"a
+# b\"\"\"
+    return True if x else None"
+                (("k" "def") ("c" "# it's") ("s" "'#'") ("s" "\"\"\"a
+# b\"\"\"") ("k" "return") ("n" "True") ("k" "if") ("k" "else") ("n" "None")))
                ("bash" "for f in *.txt; do echo \"$f # no\" ${#f} 'a\\' # yes
 done" (("k" "for") ("k" "in") ("k" "do") ("s" "\"$f # no\"") ("s" "'a\\'")
        ("c" "# yes") ("k" "done")))
@@ -854,8 +871,9 @@ a large video and a frame's relative URL are reported"
                               (cond ((string= path "a.clj") a)
                                     ((string= path "b.txt") (vector 255)))))
         (ok (contains html "data-lang=\"clojure\""))
-        (ok (equal (mapcar #'lispresen::code-file-lang '("A.java" "b.yml" "c.txt"))
-                   '("java" "yaml" nil)))
+        (ok (equal (mapcar #'lispresen::code-file-lang
+                           '("A.java" "b.yml" "c.txt" "d.star" "e.bzl"))
+                   '("java" "yaml" nil "starlark" "starlark")))
         (ok (contains html "é→𝄞"))
         (ok
          (equal (mapcar #'lispresen::diagnostic-message diagnostics)

@@ -99,7 +99,10 @@ top right corner.")
           (make-text-run (item-inlines it) :bold (item-current it)))
     (when (item-sublist it) (prepare-list (item-sublist it)))))
 
-(defparameter *runnable-langs* '("lisp" "scheme" "clojure"))
+(defparameter *runnable-langs*
+  '("lisp" "scheme" "clojure" "starlark" "star")
+  "Languages the runtime runs. Starlark is not a Lisp, so it is tokenized by the rules of
+its own syntax (`highlight.lisp`), not as a Lisp form.")
 
 (defun runnable-lang-p (b)
   "True when the code block B is in a language the runtime runs. Code in any other
