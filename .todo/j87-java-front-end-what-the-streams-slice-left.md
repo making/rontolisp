@@ -28,9 +28,6 @@ compiles the library (`JavaLoweringTest#theLibrarysSourceIsJavaAJdkCompiles`).
   can only be derived from outputs (which node heads the chain after each put, remove and
   resize, for comparable and for incomparable keys). Decide whether that derivation is worth
   an unspecified order before starting it.
-- **`Arrays.deepToString`**: an `Object[]` holding a `short[]` cannot tell it from a
-  `char[]` (one element type). A `short[]` of `(signed-byte 16)` settles it together with the
-  cast to `short[]` / `char[]` that `.todo/j81` lists: do them as one change.
 - `String.chars` / `lines`, `BufferedReader.lines` (streams), `Reader.nullReader`,
   `InputStream.nullInputStream`, `CharArrayReader` / `CharArrayWriter`, `PushbackReader`,
   `SequenceInputStream`, `Appendable` / `Readable`, the UTF-16 charsets, `Locale` forms of

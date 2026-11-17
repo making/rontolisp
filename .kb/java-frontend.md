@@ -12,8 +12,9 @@ library: j71 (2026-11-17); the numbers: j72 (2026-11-17); the exceptions: j73 (2
 several files, a session, the calls across languages, the tools and annotations: j74
 (2026-11-17); threads: j76 (2026-11-17); the flow, outer instances and qualified `super`: j77
 (2026-11-17); inner class types, intersections, the inference j70 left: j78 (2026-11-17);
-`java.io`, the charsets and the members j71 left: j79 (2026-11-17); what comes after is
-`.todo/j81`, `j82`, `j83`, `j86` and `j87` (what j72, j73, j76, j78 and j79 left).
+`java.io`, the charsets and the members j71 left: j79 (2026-11-17); the class of an array and
+the `Math` members j72 left: j81 (2026-11-17); what comes after is `.todo/j82`, `j83`, `j86`
+and `j87` (what j73, j76, j78 and j79 left).
 
 ## Where it sits
 
@@ -99,10 +100,10 @@ several files, a session, the calls across languages, the tools and annotations:
   tests its bound, to a parameterized type its class; a cast only the type arguments tell from
   no cast has no test. `instanceof` of a type the erased program cannot answer is the
   compiler's `X cannot be safely cast to Y`. A failing cast throws `ClassCastException()`.
-  A narrowing cast or `instanceof` to `int[]`, `byte[]`, `float[]`, `double[]`, `boolean[]` is
-  `typep` of the array's element type ("Numbers" below); to `short[]`, `char[]` (one element
-  type), `long[]` and an array of references (`T`, as an `Object[]`) it stays refused, and no
-  array of references knows its element type: the store check is not made.
+  A narrowing cast or `instanceof` from a non-array type to `int[]`, `byte[]`, `float[]`,
+  `double[]`, `boolean[]` is `typep` of the array's element type ("Numbers" below); to any
+  other array type, or from an array type, it is `%java-array-is` over the class a widening
+  recorded ("The class of an array" below). The store check is not made (measured there).
 - **`Object`'s methods**: a class declaring one is called as any method; through a type none of
   whose classes declares it, the program-wide `%string` / `%equals` / `%hash` test the classes
   declaring one, deepest first, then `%java-to-string` / `-equals` / `-hash-code` answer for
@@ -622,9 +623,8 @@ lub of the lowers, else an upper, else OPEN.
   25 ported method by method (`Pattern.java` read), which rule 2 of the provenance file
   forbids under this front end. An engine for `matches`/`replaceAll`/`Pattern` is written
   from the API's own description of the syntax or not at all (`.todo/j87`).
-- **`Arrays.deepToString` stays refused**: a `short[]` and a `char[]` are one element type
-  (`(unsigned-byte 16)`), so an `Object[]` holding one cannot say which it prints; a
-  `short[]` of `(signed-byte 16)` would settle it and the cast `.todo/j81` lists.
+- **`Arrays.deepToString`** is Java source (j81): `instanceof` over the element, which the
+  recorded class answers ("The class of an array").
 
 ## java.io (2026-11-17, j79)
 
@@ -728,9 +728,64 @@ holds none of it.** No files: `File`, `FileReader`, `java.nio.file` stay refused
 - **The virtual call keeps the `cond`.** Measured on `SieveTree` (2^18 leaves, 20 walks), JVM /
   wasm: the `cond` over the structure predicates 0.28 / 0.41 s, a generic function with three
   methods 0.27 / 0.45, a per-class vector of functions in a slot 0.32 / 0.84.
-- **Not done** (`.todo/j81`): the store check (an array of references records no element
-  type); a cast to `short[]`, `char[]`, `long[]`; an array's class name; `Math` over floats
-  beyond `abs`, `max`, `min`, `round`, `signum` (`Float.intBitsToFloat`: j79).
+- **`Math.ulp`, `nextUp`, `nextDown`, `fma`, `scalb`** of a double and of a float are
+  `%java-ulp` / `-next` / `-fma` / `-scalb`, WIDE `t` for a double: `ulp` and the neighbours
+  over the bits, `fma` the exact `a * b + c` from `integer-decode-float` rounded once by
+  `%java-nearest-binary` (`%java-scaled-binary`), `scalb` the same with the exponent moved
+  (clamped to +-2200: past it the result is an infinity or a zero). `floatToRawIntBits` and
+  `doubleToRawLongBits` are the plain bits: the value model has one NaN (`deviations.md`).
+
+## The class of an array (2026-11-17, j81)
+
+**Invariant: an array's vector tells the class of an array of `int`, `byte`, `char`, `float`,
+`double`, `boolean` and `Object`; the class of any other -- of `long`, of `short`, of
+references -- is what the run time recorded where its static type was widened, in a program
+that can ask it; the store into an array is not checked.**
+
+- **Where it is recorded.** `JavaLowering.widened`: a conversion (`conversion`'s reference arm:
+  an assignment, an argument, a return, an upward cast) from an array type `isUntold` to a
+  type whose erasure differs, and an argument whose method's DECLARED parameter erases to
+  another type (`List<long[]>.add(E)`: the library sees `Object`), wraps the value in
+  `(%java-array-widened form '(levels..))`. A level is `(simple-name binary-name
+  supertype-names..)` (`arrayClass`, the names as a JDK's `getName` spells them); the levels
+  go as deep as the element type is untold, and the run time walks the elements of a
+  multi-dimensional array with them (`Object[][] g = new String[2][2]` records the rows). The
+  first record wins: the array met its exact type first. `Arrays.copyOf`'s `newArray` and an
+  array's `clone()` copy the original's record (`arrayLike`, `%java-array-like`).
+- **Who reads it.** `%java-array-class` (the record, else the static type's class when that
+  is an array type, else the vector's `array-element-type`), under `%java-guard` through
+  `%java-among-threads :array` once a thread was started; `%java-array-is` for a cast and
+  `instanceof`, `%java-array-class-name` for `getClass().getName()`/`getSimpleName()` on an
+  array type, `%java-class-name`'s and `%java-to-string`'s vector arms for any other.
+- **The gate**: `JavaClasses.arrayTypes`, set by a cast or `instanceof` that reads a record
+  and by `getClass()` on a type that can hold an untold array (`asksArrayTypes`; the program
+  is lowered again). Until then no conversion records, so a program that never asks pays
+  nothing and `toString()` of a `String[]` read as an `Object` names `Object[]`
+  (`deviations.md`). A session always records. `toString()` does not arm it: every program
+  printing an object would record every array it widens and keep it (below).
+  `Arrays.deepToString` is Java source over `instanceof`, so a program calling it records.
+- **Measured** (2026-11-17, Lisp prototypes; JVM / precompiled wasm, best of two):
+  - the store check through an identity table, 10^8 stores into a 1,024-element vector: plain
+    0.41-0.48 / 2.42-2.77 s, a table look before each (a miss) 1.35-1.36 / 5.51-5.53 s:
+    +9.5 / +31 ns a store. Its gate cannot be narrow: `Arrays.sort(String[])`,
+    `Arrays.toString(String[])`, `Arrays.fill` pass an `S[]` as an `Object[]`, after which
+    every store through an `Object[]` -- `ArrayList.add`'s own -- may be one into an `S[]`.
+    Not made.
+  - a record, 10^6 fresh two-element vectors each recorded: 0.15-0.16 / 0.08-0.09 s without,
+    0.77 / 2.87-3.23 s with (0.6 / 2.8 us a record at that table size), and every recorded
+    array is kept for the program's life: no backend has a weak table, and wasm-GC has no
+    weak reference to build one from.
+  - a header slot as a displaced view (the class in slot 0 of the target), 10^8 read and
+    store rounds: 0.36-0.38 / 6.99-7.07 s plain, 3.03-3.10 / 18.3-18.5 s displaced (8x /
+    2.6x). A slot in the backends' own array header (the remembered element type's,
+    `.kb/array-literals.md`) is the alternative left: a representation change on four
+    backends, its cost unmeasured.
+  - sizes: `Fib`, `WrapInt`, `Sieve`, `WrapLong`, `Basics` byte-identical on both targets;
+    `Shapes`, which prints an object (`%java-to-string`'s vector arm), 333,863 -> 335,671 B
+    of class and 285,005 -> 286,859 B of wasm.
+- **A cast is no inference context** (JLS 15.16): `(String[]) Arrays.copyOf(objects, n)`
+  infers `T` from the arguments alone; the cast's type reaches only a lambda or a method
+  reference (`needsTarget`). Before, the cast's type bounded `T` and the call failed.
 
 ## Static initialization (2026-11-17)
 
@@ -1053,7 +1108,7 @@ assignment and unassignment of locals and blank final fields, effectively final 
 written type argument outside its parameter's bound and a field written through `? extends`
 (j78). Not checked: checked exceptions; the unchecked warnings (`.todo/j86`). A value read
 through a type argument is trusted (no cast where it is used: measured below, "j78"), and a
-store into an array of references is not checked. The run time's exceptions are the
+store into an array of references is not checked (measured: "The class of an array"). The run time's exceptions are the
 language's, but a `NullPointerException` has no message and a `ClassCastException` says nothing
 of modules and loaders ("Exceptions").
 
@@ -1093,6 +1148,12 @@ java-spec `a-byte-stream-reads-and-writes-bytes-and-a-string-is-its-bytes`,
 `stdin:` is what every leg reads), `ListIterator`, `Collections.binarySearch` and
 `parseUnsignedInt` in the cases of the utilities and of the boxes,
 `JavaLoweringTest#theLibrarysSourceIsJavaAJdkCompiles`,
-`SchemeLibraryTest#aCommonLispProgramReadsNoFrontEndsLibrary` (the gate), `DocExamplesTest` (a
-` ```java ` fence is a whole program, its output the plain block after it), `ExamplesE2eTest`
+`SchemeLibraryTest#aCommonLispProgramReadsNoFrontEndsLibrary` (the gate), java-spec
+`an-array-is-a-vector-with-the-default-of-its-element-type` (each array's class through
+`Object`, a generic method's `instanceof`, a row of a widened grid, `copyOf` and `clone`, the
+cast inferring alone, `deepToString`) and `the-boxes-parse-print-and-compare-and-math-is-strict`
+(`ulp` .. `scalb`), `JavaLoweringTest#anErrorTheLoweringDependsOnIsReportedAtItsPosition` (an
+array cast no value passes), `DocExamplesTest` (a
+` ```java ` fence is a whole program, its output the plain block after it; `deviations.md`'s
+pins the class of an array no record names), `ExamplesE2eTest`
 (`examples/java/shop/Main.java`, read with the files of its source tree).

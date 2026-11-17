@@ -55,9 +55,30 @@ JDK は `false false true` を表示します。
 `show(Runnable)` を宣言したプログラムでは、`show(Comparator.comparing(s -> s.length()))` が
 `s.length()` で拒否されます。そこでの `s` は `Object` だからです。
 
-**配列への格納は検査しません。** 参照型の配列は要素の型を記録していません。そのため、配列自身の型
-より上の配列型を通して格納した値（`Object[] a = new String[1]; a[0] = 1;`）は、言語仕様では
-`ArrayStoreException` になる場合でも格納されます。
+**配列への格納は検査しません。** 配列自身の型より上の配列型を通して格納した値
+（`Object[] a = new String[1]; a[0] = 1;`）は、言語仕様では `ArrayStoreException` になる場合でも
+格納されます。
+
+**`long`、`short`、参照型の配列のクラスは、拡大変換で記録したクラスです。** 値をこれらの配列型へ
+キャストまたは判定（`instanceof`）するプログラムと、これらの配列でありうる値のクラス名
+（`getClass()`）を求めるプログラムでは、配列の型を拡大したとき（`Object` や自身より上の配列型への
+代入、型パラメーターの位置への受け渡し）にクラスを記録します。それ以外のプログラムでは、
+`Object` として読んだこれらの配列の `toString()` は、`long` と参照型の配列を `Object[]`、
+`short` の配列を `char[]` と名付けます。
+
+```java
+void main() {
+    Object names = new String[] {"a"};
+    String text = names.toString();
+    IO.println(text.substring(0, text.indexOf('@')));
+}
+```
+
+```
+[Ljava.lang.Object;
+```
+
+JDK は `[Ljava.lang.String;` と出力します。
 
 **クラスが最初の使用時に初期化されるのは、プログラムからその違いを観測できる場合だけです。**
 言語仕様では、クラスは最初に使われたときに初期化されます。rontolisp も、static 初期化が
@@ -154,6 +175,10 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 **`Math` の関数は `StrictMath` の関数です。** そのため、結果はどのバックエンドとプロセッサでも
 同じです。JDK の `Math.sin`、`Math.exp` などは、最後の桁がこれと異なることがあります。
 
+**NaN はペイロードを持ちません。** NaN はすべて 1 つの値です。`floatToRawIntBits` と
+`doubleToRawLongBits` は `floatToIntBits` と `doubleToLongBits` と同じビットを返し、
+`intBitsToFloat` と `longBitsToDouble` はどの NaN のビットからもその NaN を返します。
+
 **`String.split` が読む正規表現は一部だけです。** 演算子を含まない文字列か、1 つの文字クラス
 （`+` を続けられます）を受け付けます。それ以外の正規表現は実行時のエラーになります。
 `String.format` の変換は[概要](index.md)に挙げたものだけで、それ以外の変換は名前を示す
@@ -223,9 +248,7 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 - `long`、`float`、`double`、`boolean` に対する `switch`。修飾した `super` を通すメソッド参照
   （`Interface.super::m`）。型引数を書くコンストラクタ参照（`Box::<T>new`）。
 - スーパークラスのフィールドを隠すフィールド。
-- 複数の型へのラムダとメソッド参照のキャスト（`(Runnable & Marker) () -> ..`）。`int[]`、
-  `byte[]`、`float[]`、`double[]`、`boolean[]` 以外の配列型へのナローイングキャストと
-  `instanceof`。
+- 複数の型へのラムダとメソッド参照のキャスト（`(Runnable & Marker) () -> ..`）。
 - `String`、`StringBuilder`、ボックスを継承するクラス。
 - 4 つのアトミッククラスを除く `java.util.concurrent`。ロック、エグゼキューター、並行
   コレクション、`CompletableFuture` などです。`Thread.getState`、スレッドグループ、未捕捉例外

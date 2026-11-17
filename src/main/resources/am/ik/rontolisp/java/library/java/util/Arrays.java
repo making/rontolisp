@@ -10,7 +10,7 @@ public final class Arrays {
     private Arrays() {
     }
 
-    // an array of the element type of another: an array of references does not record it
+    // an array of the class of another
     static native <T> T[] newArray(T[] like, int length);
 
     private static void range(int length, int from, int to) {
@@ -620,6 +620,88 @@ public final class Arrays {
         int end = original.length < to ? original.length : to;
         System.arraycopy(original, from, copy, 0, end - from);
         return copy;
+    }
+
+    public static String toString(short[] a) {
+        if (a == null) {
+            return "null";
+        }
+        StringBuilder text = new StringBuilder();
+        text.append('[');
+        for (int i = 0; i < a.length; i++) {
+            if (i > 0) {
+                text.append(", ");
+            }
+            text.append(a[i]);
+        }
+        return text.append(']').toString();
+    }
+
+    public static String toString(float[] a) {
+        if (a == null) {
+            return "null";
+        }
+        StringBuilder text = new StringBuilder();
+        text.append('[');
+        for (int i = 0; i < a.length; i++) {
+            if (i > 0) {
+                text.append(", ");
+            }
+            text.append(a[i]);
+        }
+        return text.append(']').toString();
+    }
+
+    public static String deepToString(Object[] a) {
+        if (a == null) {
+            return "null";
+        }
+        StringBuilder text = new StringBuilder();
+        deepAppend(a, null, text);
+        return text.toString();
+    }
+
+    // OPEN is the arrays being written around A, each {array, the one around it}: an
+    // array met again inside itself is written [...]
+    private static void deepAppend(Object[] a, Object[] open, StringBuilder text) {
+        Object[] inside = {a, open};
+        text.append('[');
+        for (int i = 0; i < a.length; i++) {
+            if (i > 0) {
+                text.append(", ");
+            }
+            Object e = a[i];
+            if (e instanceof Object[] nested) {
+                boolean again = false;
+                for (Object[] o = inside; o != null && !again; o = (Object[]) o[1]) {
+                    again = o[0] == nested;
+                }
+                if (again) {
+                    text.append("[...]");
+                } else {
+                    deepAppend(nested, inside, text);
+                }
+            } else if (e instanceof int[] v) {
+                text.append(toString(v));
+            } else if (e instanceof long[] v) {
+                text.append(toString(v));
+            } else if (e instanceof short[] v) {
+                text.append(toString(v));
+            } else if (e instanceof char[] v) {
+                text.append(toString(v));
+            } else if (e instanceof byte[] v) {
+                text.append(toString(v));
+            } else if (e instanceof boolean[] v) {
+                text.append(toString(v));
+            } else if (e instanceof float[] v) {
+                text.append(toString(v));
+            } else if (e instanceof double[] v) {
+                text.append(toString(v));
+            } else {
+                text.append(e);
+            }
+        }
+        text.append(']');
     }
 
     public static String toString(byte[] a) {

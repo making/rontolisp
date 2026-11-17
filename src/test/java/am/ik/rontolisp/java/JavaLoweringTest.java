@@ -591,8 +591,6 @@ class JavaLoweringTest {
 				{ "void main() { switch (1L) { default -> { } } }", "1:15: a switch over long" },
 				{ "interface M { } void main() { Runnable r = (Runnable & M) () -> { }; }",
 						"1:44: a lambda or a method reference cast to an intersection type" },
-				{ "void main() { Object o = null; String[] a = (String[]) o; }", "1:45: a cast to String[]" },
-				{ "void main() { Object o = null; long[] a = (long[]) o; }", "1:43: a cast to long[]" },
 				{ "void main() { Object o = int.class; }", "1:26: a class literal" },
 				{ "class A { transient int x; } void main() { }", "1:11: the modifier transient" },
 				{ "import java.util.concurrent.locks.ReentrantLock; void main() { ReentrantLock l = null; }",
@@ -623,6 +621,8 @@ class JavaLoweringTest {
 		String[][] errors = {
 				{ "void main() { int x = \"s\"; }", "1:19: incompatible types: String cannot be converted to int" },
 				{ "void main() { int x = 1L; }", "1:19: incompatible types: long cannot be converted to int" },
+				{ "void main() { Integer i = 1; String[] a = (String[]) i; }",
+						"1:43: incompatible types: Integer cannot be converted to String[]" },
 				{ "void main() { char c = 70000; }", "1:20: incompatible types: int cannot be converted to char" },
 				{ "void main() { foo(); }", "1:15: cannot find symbol: method foo()" },
 				{ "void main() { IO.println(y); }", "1:26: cannot find symbol: variable y" },

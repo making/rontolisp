@@ -131,6 +131,15 @@ final class JavaClasses {
 	boolean monitors;
 
 	/**
+	 * Whether the program can ask the class of an array whose vector does not say it --
+	 * an array of {@code long}, of {@code short} or of references other than
+	 * {@code Object}: it casts or tests such a type, or asks the class name of a value
+	 * that can be one. Until a pass finds it does, a conversion that widens such an
+	 * array's type records nothing; a session always records.
+	 */
+	boolean arrayTypes;
+
+	/**
 	 * The classes of the library's Java source whose static initialization a pass needs.
 	 */
 	final Set<JavaClass> used = new java.util.LinkedHashSet<>();

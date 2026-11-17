@@ -746,6 +746,7 @@ final class JavaIntrinsics {
 			.statik("compare", i, runtime("double-compare"), d, d)
 			.statik("hashCode", i, runtime("double-hash"), d)
 			.statik("doubleToLongBits", Primitive.LONG, runtime("double-bits"), d)
+			.statik("doubleToRawLongBits", Primitive.LONG, runtime("double-bits"), d)
 			.statik("longBitsToDouble", d, runtime("bits-double"), Primitive.LONG)
 			.statik("valueOf", self, (lowering, call) -> call.argument(0), d)
 			.statik("isNaN", b, nan, d)
@@ -836,6 +837,7 @@ final class JavaIntrinsics {
 			.statik("compare", i, runtime("double-compare"), f, f)
 			.statik("hashCode", i, runtime("float-bits"), f)
 			.statik("floatToIntBits", i, runtime("float-bits"), f)
+			.statik("floatToRawIntBits", i, runtime("float-bits"), f)
 			.statik("intBitsToFloat", f, runtime("bits-float"), i)
 			.statik("isNaN", b, runtime("nan-p"), f)
 			.statik("isInfinite", b, runtime("infinite-p"), f)
@@ -978,6 +980,21 @@ final class JavaIntrinsics {
 			builder.statik(name, i, support(name), i, i).statik(name, l, support(name + "Long"), l, l);
 		}
 		builder.statik("negateExact", i, support("negateExact"), i).statik("toIntExact", i, support("toIntExact"), l);
+		// over the bits: a double's and a float's, the float rounded as one
+		for (Primitive type : List.of(d, f)) {
+			LispVal wide = type == d ? JavaForms.T : JavaForms.NIL;
+			builder.statik("ulp", type, (lowering, call) -> runtimeCall("ulp", call.argument(0), wide), type)
+				.statik("nextUp", type, (lowering, call) -> runtimeCall("next", call.argument(0), JavaForms.T, wide),
+						type)
+				.statik("nextDown", type,
+						(lowering, call) -> runtimeCall("next", call.argument(0), JavaForms.NIL, wide), type)
+				.statik("fma", type,
+						(lowering, call) -> runtimeCall("fma", call.argument(0), call.argument(1), call.argument(2),
+								wide),
+						type, type, type)
+				.statik("scalb", type,
+						(lowering, call) -> runtimeCall("scalb", call.argument(0), call.argument(1), wide), type, i);
+		}
 		return builder.made;
 	}
 
@@ -998,8 +1015,10 @@ final class JavaIntrinsics {
 		Map<String, JavaEmitter> natives = new HashMap<>();
 		String arrays = "java.util.Arrays.";
 		// an array of references is an untyped vector whatever its element type
-		natives.put(arrays + "newArray(Object[],int)", (lowering, call) -> call("make-array", call.argument(1),
-				new LispSymbol(":INITIAL-ELEMENT"), JavaForms.NIL));
+		natives.put(arrays + "newArray(Object[],int)",
+				(lowering, call) -> lowering.arrayLike(
+						call("make-array", call.argument(1), new LispSymbol(":INITIAL-ELEMENT"), JavaForms.NIL),
+						call.argument(0)));
 		natives.put(arrays + "sortRange(int[],int,int)", runtime("sort-ints"));
 		natives.put(arrays + "sortRange(long[],int,int)", runtime("sort-numbers"));
 		natives.put(arrays + "sortRange(double[],int,int)", runtime("sort-doubles"));

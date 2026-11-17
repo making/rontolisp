@@ -386,7 +386,10 @@ cases:
   - name: an-array-is-a-vector-with-the-default-of-its-element-type
     main: ArrayBasics
     source: |
-      class ArrayBasicsItem {
+      interface ArrayBasicsShape {
+      }
+
+      class ArrayBasicsItem implements ArrayBasicsShape {
           int v;
       }
 
@@ -395,6 +398,18 @@ cases:
               int s = 0;
               for (int x : xs) s += x;
               return s;
+          }
+
+          static <T> boolean isText(T x) {
+              return x instanceof String[];
+          }
+
+          static String cast(Object o) {
+              try {
+                  return "" + ((CharSequence[]) o).length;
+              } catch (ClassCastException e) {
+                  return "refused";
+              }
           }
 
           public static void main(String[] args) {
@@ -445,6 +460,19 @@ cases:
               char[] text = "h\uD83D\uDE00i".toCharArray();
               Object some = signed;
               System.out.println(bytes[0] + " " + bytes[1] + " " + (shorts[0] + shorts[1]) + " " + floats[0] + " " + floats[1] + " " + Arrays.toString(signed) + " " + flags[0] + Arrays.toString(new boolean[] {true, false}) + " " + text.length + " " + new String(text) + " " + (int) text[1] + " " + (some instanceof int[]) + " " + (some instanceof double[]) + " " + new byte[2][3][1].length);
+              Object[] made = {longs, shorts, chars, strings, new Integer[0], grid, new ArrayBasicsShape[] {items[1]}, items};
+              StringBuilder kinds = new StringBuilder();
+              for (Object o : made) kinds.append(o.getClass().getName()).append(o instanceof Object[] ? '+' : '-').append(o instanceof ArrayBasicsShape[] ? '+' : '-').append(o instanceof short[] ? 's' : o instanceof char[] ? 'c' : o instanceof long[] ? 'j' : '.').append(' ');
+              CharSequence[] texts = new String[] {"x", "y"};
+              Object back = texts;
+              Object[][] table = new String[1][1];
+              Object cell = table[0];
+              String[] copied = (String[]) Arrays.copyOf((Object[]) back, 3);
+              Object cloned = ((Object[]) back).clone();
+              System.out.println(kinds + texts.getClass().getSimpleName() + " " + grid.getClass().getSimpleName() + " " + (back instanceof String[] t ? t[1] : "-") + " " + isText(strings) + isText(texts) + isText(table) + " " + (cell instanceof String[]) + " " + copied.length + cloned.getClass().getSimpleName() + " " + cast(back) + " " + cast(new Object[2]) + " " + cast(table) + " " + String.valueOf(cell).startsWith("[Ljava.lang.String;@") + String.valueOf(some).startsWith("[I@"));
+              Object[] nest = {shorts, new char[] {'a', 'b'}, strings, grid, null};
+              nest[4] = nest;
+              System.out.println(Arrays.deepToString(nest) + " " + Arrays.deepToString(new long[][] {{1}, {}}) + " " + Arrays.deepToString(new Object[] {new float[] {0.5f}, new byte[] {-1}, new boolean[] {true}, new double[] {2}, 'c', null}));
               try {
                   ints[3] = 1;
               } catch (ArrayIndexOutOfBoundsException e) {
@@ -463,6 +491,8 @@ cases:
       5 14 3 null 8 c2
       5 3.0 3
       -55 -1 -5 1.1 0.2 [-2147483648, -1, 2, 3] false[true, false] 4 h😀i 55357 true false 2
+      [J--j [S--s [C--c [Ljava.lang.String;+-. [Ljava.lang.Integer;+-. [[I+-. [LArrayBasicsShape;++. [LArrayBasicsItem;++. String[] int[][] y truetruefalse true 3String[] 2 refused refused truetrue
+      [[0, -5], [a, b], [null, null], [[1, 2, 3], [14, 5], []], [...]] [[1], []] [[0.5], [-1], [true], [2.0], c, null]
       Index 3 out of bounds for length 3
       java.lang.ArrayIndexOutOfBoundsException: Index -1 out of bounds for length 8
   # while, do, for and the enhanced for; break and continue leave a block only a body
@@ -4371,6 +4401,7 @@ cases:
               System.arraycopy(source, 0, source, 1, 4);
               System.out.println(plain.equals(plain) + " " + plain.equals(another) + " " + (plain == another) + " " + (plain.hashCode() == plain.hashCode()) + " " + plain.getClass().getName() + " " + plain.toString().startsWith("java.lang.Object@") + " " + Arrays.toString(source));
               System.out.println(Integer.parseUnsignedInt("4294967295") + " " + Integer.parseUnsignedInt("ff", 16) + " " + Integer.toUnsignedString(-1) + " " + Integer.toUnsignedLong(-1) + " " + Double.longBitsToDouble(Double.doubleToLongBits(-0.0)) + " " + Double.longBitsToDouble(0x7ff0000000000000L) + " " + Double.longBitsToDouble(1L) + " " + Double.longBitsToDouble(0x400921fb54442d18L) + " " + Float.intBitsToFloat(0x7fc00000) + " " + Float.intBitsToFloat(1) + " " + Float.intBitsToFloat(0x40490fdb) + " " + Float.intBitsToFloat(0x80000000));
+              System.out.println(Math.ulp(1.0) + " " + Math.ulp(0.1f) + " " + Math.ulp(Double.MAX_VALUE) + " " + Math.ulp(-0.0f) + " " + Math.nextUp(1.0f) + " " + Math.nextDown(-Double.MIN_VALUE) + " " + Math.nextUp(Float.NEGATIVE_INFINITY) + " " + Math.nextDown(0.0) + " " + Math.fma(0.1, 10.0, -1.0) + " " + Math.fma(0.1f, 10.0f, -1.0f) + " " + Math.fma(1e308, 10.0, -1e308) + " " + Math.fma(-0.0, 1.0, -0.0) + " " + Math.scalb(1.5f, 2) + " " + Math.scalb(3.0, -1075) + " " + Math.scalb(1e-40f, 10) + " " + Math.scalb(1.0, Integer.MAX_VALUE) + " " + Float.floatToRawIntBits(-2.5f) + " " + Double.doubleToRawLongBits(0.5));
               for (String text : new String[] {"-1", "4294967296"}) {
                   try {
                       Integer.parseUnsignedInt(text);
@@ -4396,6 +4427,7 @@ cases:
       For input string: "x1" true true true 1
       true false false true java.lang.Object true [1, 1, 2, 3, 4]
       -1 255 4294967295 4294967295 -0.0 Infinity 4.9E-324 3.141592653589793 NaN 1.4E-45 3.1415927 -0.0
+      2.220446049250313E-16 7.450581E-9 1.99584030953472E292 1.4E-45 1.0000001 -9.9E-324 -3.4028235E38 -4.9E-324 5.551115123125783E-17 1.4901161E-8 Infinity -0.0 6.0 9.9E-324 1.0239945E-37 Infinity -1071644672 4602678819172646912
       Illegal leading minus sign on unsigned string -1.
       String value 4294967296 exceeds range of unsigned int.
   # java.io's byte streams are Java source over byte[]: the array pair, the data pair

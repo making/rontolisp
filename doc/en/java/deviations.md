@@ -56,10 +56,31 @@ arguments whose parameter types only the method around could give is an error: w
 `show(Comparator.comparing(s -> s.length()))` is refused at `s.length()`, `s` being an
 `Object` there.
 
-**A store into an array is not checked.** An array of references does not record its
-element type, so a value stored through an array type above the array's own
-(`Object[] a = new String[1]; a[0] = 1;`) is stored, where the language throws
+**A store into an array is not checked.** A value stored through an array type above the
+array's own (`Object[] a = new String[1]; a[0] = 1;`) is stored, where the language throws
 `ArrayStoreException`.
+
+**The class of an array of `long`, of `short` or of references is the one a widening
+recorded.** In a program that casts or tests (`instanceof`) a value to such an array type,
+or asks the class name (`getClass()`) of a value that can be one, the class is recorded
+where the array's type is widened: assigned to `Object` or to an array type above its own,
+or passed where a type parameter stands. In any other program, `toString()` of such an
+array read as an `Object` names `Object[]` for an array of `long` or of references and
+`char[]` for an array of `short`.
+
+```java
+void main() {
+    Object names = new String[] {"a"};
+    String text = names.toString();
+    IO.println(text.substring(0, text.indexOf('@')));
+}
+```
+
+```
+[Ljava.lang.Object;
+```
+
+A JDK prints `[Ljava.lang.String;`.
 
 **A class is initialized at its first use only where a program can tell.** The language
 initializes a class when it is first used, and so does rontolisp for a class whose static
@@ -158,6 +179,10 @@ one fixed order, where a JDK picks another at every start.
 backend and processor. A JDK's `Math.sin`, `Math.exp` and the like may differ from it in
 the last digit.
 
+**A NaN has no payload.** Every NaN is one value: `floatToRawIntBits` and
+`doubleToRawLongBits` give the bits `floatToIntBits` and `doubleToLongBits` give, and
+`intBitsToFloat` and `longBitsToDouble` of any NaN's bits give that NaN.
+
 **`String.split` reads a small part of the regular expressions**: a text with no operator,
 or one character class alone or followed by `+`. Any other expression is an error when the
 program runs. `String.format` has the conversions the [overview](index.md) lists; any other
@@ -222,9 +247,7 @@ Each of these is an error naming the construct and its position.
   qualified `super` (`Interface.super::m`); a constructor reference with type arguments
   (`Box::<T>new`).
 - A field hiding one of a superclass.
-- A lambda or a method reference cast to several types (`(Runnable & Marker) () -> ..`); a
-  cast or an `instanceof` narrowing to an array type other than `int[]`, `byte[]`,
-  `float[]`, `double[]` and `boolean[]`.
+- A lambda or a method reference cast to several types (`(Runnable & Marker) () -> ..`).
 - A class extending `String`, `StringBuilder` or a box.
 - `java.util.concurrent` but for the four atomic classes: locks, executors, concurrent
   collections, `CompletableFuture`. `Thread.getState`, thread groups and uncaught-exception

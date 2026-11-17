@@ -314,7 +314,8 @@
         ((vectorp x)
          (if (array-has-fill-pointer-p x)
              (rontolisp::%java-identity-string "java.lang.Object" x)
-             (rontolisp::%java-identity-string "[" x)))
+             (rontolisp::%java-identity-string
+              (car (cdr (rontolisp::%java-array-class x nil))) x)))
         (t (rontolisp::%java-identity-string (rontolisp::%java-structure-name x)
                                              x))))
 
@@ -334,8 +335,93 @@
    ((characterp x) (if qualified "java.lang.Character" "Character"))
    ((and (vectorp x) (array-has-fill-pointer-p x))
     (if qualified "java.lang.Object" "Object"))
+   ((vectorp x)
+    (let ((class (rontolisp::%java-array-class x nil)))
+      (if qualified (car (cdr class)) (car class))))
    (t (error
        "getClass() of this value is not supported by the experimental Java subset yet"))))
+
+;; --- the class of an array ------------------------------------------------------------
+;; An array is a vector, which tells the class of an array of int, byte, char, float,
+;; double and boolean by its element type and reads as an Object[] otherwise. The class
+;; of an array of long, of short or of references other than Object is what the run
+;; time recorded where a program that asks an array's class widened its type: a CLASS
+;; is the array's simple name, then the names of the array types it is an instance of,
+;; its own first.
+
+(defvar rontolisp::%java-array-classes nil)
+
+;; An array whose type is widened: its class is recorded, and the classes of the arrays
+;; it holds as deep as LEVELS goes, but where one is recorded already.
+(defun rontolisp::%java-array-widened (array levels)
+  (if array
+      (if rontolisp::%java-shared
+          (funcall rontolisp::%java-shared :array (cons array levels))
+          (rontolisp::%java-record-array array levels)))
+  array)
+
+(defun rontolisp::%java-record-array (array levels)
+  (if (null rontolisp::%java-array-classes)
+      (setq rontolisp::%java-array-classes (make-hash-table :test 'eq)))
+  (if (null (gethash array rontolisp::%java-array-classes))
+      (progn
+        (setf (gethash array rontolisp::%java-array-classes) (car levels))
+        (if (cdr levels)
+            (let ((i 0) (n (length array)))
+              (while (< i n)
+                (let ((element (aref array i)))
+                  (if element
+                      (rontolisp::%java-record-array element (cdr levels))))
+                (setq i (+ i 1)))))))
+  nil)
+
+;; The class of an array: what was recorded, else FALLBACK -- the class of its static
+;; type when that is an array type --, else what its vector tells.
+(defun rontolisp::%java-array-class (array fallback)
+  (let ((recorded (rontolisp::%java-array-recorded array)))
+    (if recorded
+        recorded
+        (if fallback
+            fallback
+            (let ((type (array-element-type array)))
+              (cond ((equal type '(unsigned-byte 32)) '("int[]" "[I"))
+                    ((equal type '(unsigned-byte 16)) '("char[]" "[C"))
+                    ((equal type '(unsigned-byte 8)) '("byte[]" "[B"))
+                    ((eq type 'double-float) '("double[]" "[D"))
+                    ((eq type 'single-float) '("float[]" "[F"))
+                    ((eq type 'bit) '("boolean[]" "[Z"))
+                    (t '("Object[]" "[Ljava.lang.Object;"))))))))
+
+(defun rontolisp::%java-array-recorded (array)
+  (if rontolisp::%java-array-classes
+      (if rontolisp::%java-shared
+          (funcall rontolisp::%java-shared :array array)
+          (gethash array rontolisp::%java-array-classes))
+      nil))
+
+;; Whether a value is an instance of the array type NAMED, FALLBACK as
+;; %java-array-class takes it.
+(defun rontolisp::%java-array-is (value name fallback)
+  (if (and (vectorp value) (not (stringp value))
+           (not (array-has-fill-pointer-p value)))
+      (if (member name (cdr (rontolisp::%java-array-class value fallback))
+                  :test #'equal)
+          t
+          nil)
+      nil))
+
+;; getClass().getName() and getSimpleName() of an array whose static type is an array
+;; type of the class FALLBACK.
+(defun rontolisp::%java-array-class-name (array fallback qualified)
+  (if (null array) (rontolisp::%java-npe))
+  (let ((class (rontolisp::%java-array-class array fallback)))
+    (if qualified (car (cdr class)) (car class))))
+
+;; An array made as a copy of ORIGINAL: of its class.
+(defun rontolisp::%java-array-like (made original)
+  (let ((class (rontolisp::%java-array-recorded original)))
+    (if class (rontolisp::%java-array-widened made (list class))))
+  made)
 
 ;; The simple name of the class of a box that is a cons.
 (defun rontolisp::%java-box-name (x)
@@ -661,6 +747,92 @@
                           (ash fraction (- biased 1))
                           (+ (ash biased 23) (- fraction 8388608)))))
                  (if (< sign 0) (- bits 2147483648) bits))))))))
+
+;; --- Math over the bits of a double or a float ---------------------------------------
+;; WIDE is t for a double and nil for a float, whose value is the double holding it.
+
+(defun rontolisp::%java-binary-bits (x wide)
+  (if wide (rontolisp::%java-double-bits x) (rontolisp::%java-float-bits x)))
+
+(defun rontolisp::%java-binary-of-bits (bits wide)
+  (if wide
+      (rontolisp::%java-bits-double bits)
+      (rontolisp::%java-bits-float bits)))
+
+;; Math.ulp: the distance from a finite value to the next one away from zero, as the
+;; API specifies it at the ends: of a NaN a NaN, of an infinity the positive one.
+(defun rontolisp::%java-ulp (x wide)
+  (cond ((/= x x) x)
+        ((rontolisp::%java-infinite-p x) (rontolisp::%java-infinity nil))
+        (t (let* ((fraction (if wide 52 23))
+                  (biased
+                   (logand
+                    (ash (rontolisp::%java-binary-bits x wide) (- fraction))
+                    (if wide 2047 255))))
+             (rontolisp::%java-binary-of-bits (cond ((> biased fraction)
+                                                     (ash (- biased fraction)
+                                                          fraction))
+                                                    ((= biased 0) 1)
+                                                    (t (ash 1 (- biased 1))))
+                                              wide)))))
+
+;; Math.nextUp (UP t) and Math.nextDown: the neighbour toward an infinity.
+(defun rontolisp::%java-next (x up wide)
+  (cond ((/= x x) x)
+        ((and (rontolisp::%java-infinite-p x) (eq up (> x 0d0))) x)
+        ((= x 0d0)
+         (rontolisp::%java-binary-of-bits
+          (if up 1 (if wide -9223372036854775807 -2147483647)) wide))
+        (t (rontolisp::%java-binary-of-bits (if (eq up (> x 0d0))
+                                                (+ (rontolisp::%java-binary-bits
+                                                    x wide) 1)
+                                                (- (rontolisp::%java-binary-bits
+                                                    x wide) 1)) wide))))
+
+;; The value of the integer N times 2^POWER, rounded once to the format: a double
+;; (WIDE) or a float.
+(defun rontolisp::%java-scaled-binary (n power wide)
+  (let ((magnitude
+         (if (>= power 0)
+             (rontolisp::%java-nearest-binary (ash (abs n) power) 1
+                                              (if wide 53 24)
+                                              (if wide -1074 -149)
+                                              (if wide 1024 128))
+             (rontolisp::%java-nearest-binary (abs n) (ash 1 (- power))
+                                              (if wide 53 24)
+                                              (if wide -1074 -149)
+                                              (if wide 1024 128)))))
+    (if (< n 0) (- magnitude) magnitude)))
+
+;; Math.fma: a * b + c computed exactly and rounded once.
+(defun rontolisp::%java-fma (a b c wide)
+  (cond ((or (/= a a) (/= b b) (/= c c) (rontolisp::%java-infinite-p a)
+             (rontolisp::%java-infinite-p b))
+         (+ (* a b) c))
+        ((rontolisp::%java-infinite-p c) c)
+        (t (multiple-value-bind (ma ea sa) (integer-decode-float a)
+             (multiple-value-bind (mb eb sb) (integer-decode-float b)
+               (multiple-value-bind (mc ec sc) (integer-decode-float c)
+                 (let* ((product (* sa ma sb mb))
+                        (pe (+ ea eb))
+                        (least (min pe ec))
+                        (sum
+                         (+ (ash product (- pe least))
+                            (ash (* sc mc) (- ec least)))))
+                   (cond
+                    ((/= sum 0) (rontolisp::%java-scaled-binary sum least wide))
+                    ;; an exact zero: -0.0 only from two zeros of that sign
+                    ((and (= product 0) (= mc 0)) (+ (* a b) c))
+                    (t 0d0)))))))))
+
+;; Math.scalb: x * 2^n rounded once; a NaN, an infinity and a zero are themselves.
+(defun rontolisp::%java-scalb (x n wide)
+  (if (or (/= x x) (= x 0d0) (rontolisp::%java-infinite-p x))
+      x
+      (multiple-value-bind (m e s) (integer-decode-float x)
+        ;; past these the result is an infinity or a zero whatever n is
+        (let ((power (+ e (max -2200 (min 2200 n)))))
+          (rontolisp::%java-scaled-binary (* s m) power wide)))))
 
 ;; The integers C with C * SCALE between LO and HI, the ends included when INCLUSIVE:
 ;; (first . last).
@@ -1870,8 +2042,9 @@
 (defvar rontolisp::%java-main nil)
 
 ;; What a program that started a thread does of the run time's own state: WHAT is t
-;; for an object's identity number and nil for the one object a text is, each read one
-;; thread at a time, and :exit for the status System.exit was given.
+;; for an object's identity number, nil for the one object a text is and :array for
+;; the class of an array -- KEY the array, or (array . levels) to record it --, each
+;; read one thread at a time, and :exit for the status System.exit was given.
 (defun rontolisp::%java-among-threads (what key)
   (if (eq what :exit)
       (progn
@@ -1881,9 +2054,12 @@
       (progn
         (rontolisp:mutex-acquire rontolisp::%java-guard)
         (let ((found
-               (if what
-                   (rontolisp::%java-identity-number key)
-                   (rontolisp::%java-interned-of key))))
+               (cond ((eq what :array)
+                      (if (consp key)
+                          (rontolisp::%java-record-array (car key) (cdr key))
+                          (gethash key rontolisp::%java-array-classes)))
+                     (what (rontolisp::%java-identity-number key))
+                     (t (rontolisp::%java-interned-of key)))))
           (rontolisp:mutex-release rontolisp::%java-guard)
           found))))
 

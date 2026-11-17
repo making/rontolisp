@@ -81,6 +81,12 @@ interface JavaEmitter {
 		 */
 		LispVal library(String className, String name, List<LispVal> arguments);
 
+		/**
+		 * An array made of another's class, as {@code Arrays.copyOf} makes one: in a
+		 * program that records the class of an array, with the original's.
+		 */
+		LispVal arrayLike(LispVal made, LispVal original);
+
 	}
 
 	LispVal emit(Context context, Invocation invocation);

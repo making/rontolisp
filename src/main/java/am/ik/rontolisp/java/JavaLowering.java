@@ -595,6 +595,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		JavaClasses classes = new JavaClasses(JavaIntrinsics.LIBRARY, files, file, root, JavaTypes::new);
 		classes.session = session != null;
+		// a later buffer may ask the class of an array an earlier one widened
+		classes.arrayTypes = session != null;
 		List<JavaClass> declared = classes.declare(tree, program);
 		if (session != null) {
 			// a class the buffer declares reads the session's variables and methods as
@@ -2373,7 +2375,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 			return conversion(unboxed, to, false, false);
 		}
-		return isSubtype(from, to) ? value.form() : null;
+		return isSubtype(from, to) ? widened(value.form(), from, to) : null;
 	}
 
 	/**
@@ -2747,6 +2749,11 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	@Override
+	public LispVal arrayLike(LispVal made, LispVal original) {
+		return this.classes.arrayTypes ? runtimeCall("array-like", made, original) : made;
+	}
+
+	@Override
 	public LispVal library(String className, String name, List<LispVal> arguments) {
 		JavaClass owner = this.classes.library(className);
 		for (Method method : owner.methods) {
@@ -3038,6 +3045,173 @@ final class JavaLowering implements JavaEmitter.Context {
 			case BOOLEAN -> cl("bit");
 			default -> null;
 		};
+	}
+
+	// ---- the class of an array
+
+	/**
+	 * Whether an array type is one its vector does not tell: an array of {@code long} or
+	 * {@code short} (a {@code long[]} is the general vector an {@code Object[]} is, a
+	 * {@code short[]} the packed one of a {@code char[]}) or of references other than
+	 * {@code Object}. Such an array's class is what the run time recorded of it where its
+	 * type was widened ({@code %java-array-widened}).
+	 */
+	private boolean isUntold(ArrayType array) {
+		JavaType element = this.types.erased(array.element());
+		if (element instanceof Primitive primitive) {
+			return primitive == Primitive.LONG || primitive == Primitive.SHORT;
+		}
+		return !element.equals(this.objectType);
+	}
+
+	/**
+	 * The name of a type as the name of an array type spells it: {@code I}, {@code [J},
+	 * {@code Ljava.lang.String;}.
+	 */
+	private String descriptor(JavaType type) {
+		JavaType erased = this.types.erased(type);
+		return switch (erased) {
+			case Primitive primitive -> switch (primitive) {
+				case BOOLEAN -> "Z";
+				case BYTE -> "B";
+				case SHORT -> "S";
+				case CHAR -> "C";
+				case INT -> "I";
+				case LONG -> "J";
+				case FLOAT -> "F";
+				case DOUBLE -> "D";
+				default -> throw new IllegalStateException(erased.toString());
+			};
+			case ArrayType array -> "[" + descriptor(array.element());
+			case ClassType named -> "L" + named.declaration().binaryName + ";";
+			default -> throw new IllegalStateException(erased.toString());
+		};
+	}
+
+	private String simpleArrayName(ArrayType array) {
+		JavaType element = this.types.erased(array.element());
+		return (element instanceof ArrayType inner ? simpleArrayName(inner)
+				: element instanceof ClassType named ? named.declaration().simpleName() : element.toString()) + "[]";
+	}
+
+	/**
+	 * The names of the array types an array of a type is an instance of, its own first:
+	 * the arrays of its element type's supertypes, {@code Object[]} for an array of
+	 * arrays.
+	 */
+	private List<String> arraySupertypes(ArrayType array) {
+		JavaType element = this.types.erased(array.element());
+		Set<String> names = new LinkedHashSet<>();
+		names.add(descriptor(array));
+		if (element instanceof ArrayType inner) {
+			for (String name : arraySupertypes(inner)) {
+				names.add("[" + name);
+			}
+			names.add(descriptor(new ArrayType(this.objectType)));
+		}
+		else if (element instanceof ClassType named) {
+			List<JavaClass> pending = new ArrayList<>(List.of(named.declaration()));
+			Set<JavaClass> seen = new HashSet<>();
+			while (!pending.isEmpty()) {
+				JavaClass type = pending.remove(0);
+				if (seen.add(type)) {
+					names.add("[L" + type.binaryName + ";");
+					if (type.superclass != null) {
+						pending.add(type.superclass);
+					}
+					pending.addAll(type.interfaces);
+				}
+			}
+			names.add(descriptor(new ArrayType(this.objectType)));
+		}
+		return List.copyOf(names);
+	}
+
+	/**
+	 * What the run time keeps of an array's class: its simple name, then the names of the
+	 * array types it is an instance of, its own first.
+	 */
+	private LispVal arrayClass(ArrayType array) {
+		List<LispVal> names = new ArrayList<>();
+		names.add(string(simpleArrayName(array)));
+		for (String name : arraySupertypes(array)) {
+			names.add(string(name));
+		}
+		return list(names);
+	}
+
+	/**
+	 * Whether every array of a type is of that type: one of a primitive type, or of such
+	 * arrays.
+	 */
+	private boolean isExact(ArrayType array) {
+		JavaType element = this.types.erased(array.element());
+		return element.isPrimitive() || element instanceof ArrayType inner && isExact(inner);
+	}
+
+	/** Records that the program asks the class of an array its vector does not tell. */
+	private void asksArrayTypes() {
+		if (!this.classes.arrayTypes) {
+			// what was lowered recording nothing is lowered again recording
+			this.classes.arrayTypes = true;
+			this.classes.changed();
+		}
+	}
+
+	/**
+	 * A value whose type is converted to another: an array its vector does not tell the
+	 * class of, its type widened, has its class recorded -- and the arrays it holds
+	 * theirs, as deep as their vectors do not tell either -- in a program that asks.
+	 */
+	private LispVal widened(LispVal form, JavaType from, JavaType to) {
+		if (!this.classes.arrayTypes || !(from instanceof ArrayType array) || !isUntold(array)
+				|| this.types.erased(to).equals(this.types.erased(from))
+				|| form instanceof LispCons cons && cons.car().equals(JavaForms.runtime("array-widened"))) {
+			return form;
+		}
+		List<LispVal> levels = new ArrayList<>();
+		for (JavaType level = array; level instanceof ArrayType type
+				&& isUntold(type); level = this.types.erased(type.element())) {
+			levels.add(arrayClass(type));
+		}
+		return runtimeCall("array-widened", form, quote(list(levels)));
+	}
+
+	/**
+	 * The test that a value of one static type is an instance of an array type: of a
+	 * primitive type the vector tells, its element type; else the class the run time
+	 * recorded, or the static type's when it is an array type.
+	 */
+	private LispVal arrayTest(LispVal value, JavaType from, ArrayType to, int pos) {
+		JavaType source = this.types.erased(this.types.upward(from));
+		if (!(source instanceof ArrayType) && !source.equals(this.objectType)
+				|| source instanceof ArrayType array && !castable(array, to)) {
+			throw error(pos, "incompatible types: " + from + " cannot be converted to " + to);
+		}
+		if (!(source instanceof ArrayType) && elementSpecifier(to.element()) instanceof LispVal element
+				&& to.element() != Primitive.SHORT && to.element() != Primitive.CHAR) {
+			return call("typep", value, quote(list(cl("simple-array"), element, list(cl("*")))));
+		}
+		asksArrayTypes();
+		return runtimeCall("array-is", value, string(descriptor(to)),
+				source instanceof ArrayType array ? quote(arrayClass(array)) : NIL);
+	}
+
+	/** Whether a cast can take a value of one array type to another. */
+	private boolean castable(ArrayType from, ArrayType to) {
+		JavaType a = this.types.erased(from.element());
+		JavaType b = this.types.erased(to.element());
+		if (a.isPrimitive() || b.isPrimitive()) {
+			return a.equals(b);
+		}
+		if (a instanceof ArrayType inner && b instanceof ArrayType other) {
+			return castable(inner, other);
+		}
+		if (a instanceof ArrayType || b instanceof ArrayType) {
+			return a.equals(this.objectType) || b.equals(this.objectType);
+		}
+		return ((ClassType) a).declaration().isInterface || ((ClassType) b).declaration().isInterface || isSubtype(a, b)
+				|| isSubtype(b, a);
 	}
 
 	/** The leaf of {@code %java-new-array}: which element type it makes. */
@@ -3966,7 +4140,8 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * loaders; a cast to an array type has none.
 	 */
 	private LispVal castFailure(LispSymbol value, JavaType to) {
-		String target = to instanceof ClassType type ? type.declaration().binaryName : null;
+		String target = to instanceof ClassType type ? type.declaration().binaryName
+				: to instanceof ArrayType array ? descriptor(array) : null;
 		if (target == null) {
 			Method failed = constructors(this.classes.library("java.lang.ClassCastException")).stream()
 				.filter(constructor -> constructor.parameters.isEmpty())
@@ -4063,7 +4238,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 			to = JavaTypes.intersection(bounds);
 		}
-		return castTo(to, expression(cast.operand(), to), cast.pos());
+		// a cast is no context a call infers its type arguments from: only a lambda's
+		// type is the cast's
+		return castTo(to, expression(cast.operand(), needsTarget(cast.operand()) ? to : null), cast.pos());
 	}
 
 	/**
@@ -4080,11 +4257,8 @@ final class JavaLowering implements JavaEmitter.Context {
 			JavaType bound = this.types.erased(to);
 			return bound.equals(this.objectType) ? T : instanceTest(value, from, bound, pos, what);
 		}
-		if (to instanceof ArrayType array && !(from instanceof ArrayType)
-				&& elementSpecifier(array.element()) instanceof LispVal element && array.element() != Primitive.SHORT
-				&& array.element() != Primitive.CHAR) {
-			// an array of a primitive type other than short, char and long knows its type
-			return call("typep", value, quote(list(cl("simple-array"), element, list(cl("*")))));
+		if (to instanceof ArrayType array) {
+			return arrayTest(value, from, array, pos);
 		}
 		if (!(to instanceof ClassType target)) {
 			throw unsupported(pos, what + " to " + to);
@@ -5010,8 +5184,15 @@ final class JavaLowering implements JavaEmitter.Context {
 				converted.add(new Typed(argument.form(), parameter));
 			}
 			else {
+				// the method sees the argument as its declared type erases, which a type
+				// argument may hide
+				int last = chosen.parameters.size() - 1;
+				JavaType declared = spread && i >= last ? ((ArrayType) chosen.parameters.get(last)).element()
+						: chosen.parameters.get(i);
 				converted
-					.add(new Typed(chosen.raw ? argument.form() : assign(argument, parameter, arguments.get(i).pos()),
+					.add(new Typed(
+							chosen.raw ? argument.form() : widened(assign(argument, parameter, arguments.get(i).pos()),
+									argument.type(), declared),
 							this.types.ground(argument.type()), argument.constant()));
 			}
 		}
@@ -5048,9 +5229,23 @@ final class JavaLowering implements JavaEmitter.Context {
 			if (!object.type().isReference()) {
 				throw error(inner.pos(), object.type() + " cannot be dereferenced");
 			}
-			LispSymbol name = call.name().equals("getName") ? CLASS_NAME : SIMPLE_NAME;
-			this.generated.add(name);
-			LispVal text = list(name, object.form());
+			boolean qualified = call.name().equals("getName");
+			JavaType erased = this.types.erased(this.types.upward(object.type()));
+			LispVal text;
+			if (erased instanceof ArrayType array) {
+				if (!isExact(array)) {
+					asksArrayTypes();
+				}
+				text = runtimeCall("array-class-name", object.form(), quote(arrayClass(array)), qualified ? T : NIL);
+			}
+			else {
+				if (erased.equals(this.objectType)) {
+					asksArrayTypes();
+				}
+				LispSymbol name = qualified ? CLASS_NAME : SIMPLE_NAME;
+				this.generated.add(name);
+				text = list(name, object.form());
+			}
 			this.nonNull.add(text);
 			return new Typed(text, this.stringType);
 		}
@@ -5096,7 +5291,12 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 				else if (receiver.type() instanceof ArrayType array) {
 					if (call.name().equals("clone") && call.arguments().isEmpty()) {
-						return new Typed(call("copy-seq", receiver.form()), array);
+						if (isExact(array) || !this.classes.arrayTypes) {
+							return new Typed(call("copy-seq", receiver.form()), array);
+						}
+						LispSymbol original = temporary();
+						return new Typed(JavaForms.let(original, receiver.form(),
+								List.of(arrayLike(call("copy-seq", original), original))), array);
 					}
 					in = this.objectType.declaration();
 				}
