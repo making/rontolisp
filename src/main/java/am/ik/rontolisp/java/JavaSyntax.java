@@ -135,6 +135,21 @@ final class JavaSyntax {
 	}
 
 	/**
+	 * What a session shows of a top-level expression or variable: the text
+	 * {@code label ==> value}, a {@code String} written by the value's static type. Only
+	 * a session's parser writes one.
+	 *
+	 * @param pos the expression or the variable's name
+	 * @param label the name the value is shown under
+	 * @param field the session's variable the value is stored in, or {@code null}: an
+	 * assignment stores it itself
+	 * @param value the value, or {@code null} for a variable declared with none, which
+	 * holds its type's default
+	 */
+	record Echo(int pos, String label, @Nullable String field, @Nullable Expression value) implements Expression {
+	}
+
+	/**
 	 * {@code this(..)} or {@code super(..)}.
 	 *
 	 * @param pos the keyword

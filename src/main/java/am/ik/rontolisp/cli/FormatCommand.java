@@ -12,6 +12,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Stream;
 
+import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.format.IndentRules;
 import am.ik.rontolisp.format.LispFormatter;
 
@@ -20,9 +21,10 @@ import am.ik.rontolisp.format.LispFormatter;
  * <p>
  * A directory argument is walked for {@code .lisp}, {@code .asd} and {@code .scm} files;
  * a file named explicitly is formatted whatever its extension, so a {@code .cl} or a
- * script can be passed by name. A {@code .scm} file takes the Scheme indent rules,
- * anything else the Common Lisp ones. Files are visited in sorted order and each is
- * written only when its content actually changes, so the command is safe to re-run and
+ * script can be passed by name -- but a {@code .java} or a {@code .star} file, whose
+ * source is no S-expression, is refused. A {@code .scm} file takes the Scheme indent
+ * rules, anything else the Common Lisp ones. Files are visited in sorted order and each
+ * is written only when its content actually changes, so the command is safe to re-run and
  * leaves timestamps alone on an already-formatted tree.
  */
 final class FormatCommand {
@@ -179,7 +181,15 @@ final class FormatCommand {
 		for (String path : paths) {
 			Path start = Path.of(path);
 			if (Files.isRegularFile(start)) {
-				// Named explicitly, so the extension is the caller's business, not ours.
+				// Named explicitly, so the extension is the caller's business, not ours
+				// --
+				// but for a front end whose source is no S-expression, which re-indenting
+				// would change
+				SourceLanguage language = SourceLanguage.forFile(path, null);
+				if (language == SourceLanguage.JAVA || language == SourceLanguage.STARLARK) {
+					throw new IOException(path + " is " + (language == SourceLanguage.JAVA ? "Java" : "Starlark")
+							+ " source, which has no S-expression to re-indent");
+				}
 				files.add(start);
 				continue;
 			}
@@ -217,7 +227,8 @@ final class FormatCommand {
 		this.out.println();
 		this.out.println("Re-indents Lisp source in place. A directory is walked for");
 		this.out.println(".lisp, .asd and .scm files; a file named explicitly is formatted");
-		this.out.println("whatever its extension. '-' formats standard input to stdout.");
+		this.out.println("whatever its extension, but for a .java or a .star file, which");
+		this.out.println("holds no S-expression. '-' formats standard input to stdout.");
 		this.out.println("A .scm file is indented with the Scheme rules, anything else");
 		this.out.println("with the Common Lisp ones.");
 		this.out.println();

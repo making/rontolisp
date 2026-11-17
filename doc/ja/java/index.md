@@ -20,7 +20,8 @@ rontolisp -e 'void main() { IO.println(1 + 2); }' --source-language java
 ```
 
 `--no-gc` は拒否されます。そのバックエンドには構造体も文字列もクロージャもないからです。
-REPL はありません。プログラムを与えずに `--source-language java` を指定するとエラーになります。
+プログラムを与えずに `--source-language java` を指定すると REPL が起動します
+（[プロンプトで](#at-the-prompt)）。
 
 [`examples/java/`](https://github.com/making/rontolisp/tree/develop/examples/java) に、
 複数のパッケージからなるプログラムと、その期待される出力があります。
@@ -95,7 +96,7 @@ circle 1.5, 2 shapes, total 11.068583470577035
 `app/Helper.java` です。読んだファイルのクラスはすべてプログラムに加わり、プログラム全体を
 まとめてコンパイルします。開始するファイルの上のディレクトリは、そのパッケージと一致して
 いなければなりません。Common Lisp から `(load "app/Main.java")` すると、
-`rontolisp app/Main.java` と同じようにプログラムを実行します。
+`rontolisp app/Main.java` と同じようにプログラムを実行します（[言語をまたぐ呼び出し](#across-languages)）。
 
 ```console
 $ rontolisp app/Main.java
@@ -108,6 +109,81 @@ $ rontolisp app/Main.java -o main.wasm
 パッケージからだけアクセスできます。`protected` のメンバーには、同じパッケージと、そのクラスの
 サブクラスからアクセスできます。
 
+## プロンプトで
+
+プログラムを与えずに `--source-language java` を指定したときと、プレイグラウンドで Java を
+選んだときは、バッファを 1 つずつ読みます。バッファに書けるのは、文、式、変数、メソッド、
+クラス、import です。文の `;` は省略できます。式の値は `$1`、`$2`、... という生成された名前で
+表示され、後のバッファはその名前で式の型のまま値を読めます。変数の値はその変数の名前で
+表示されます。文字列と `char` はリテラルの形で、配列は型と要素で表示されます。
+
+```console
+java> int twice(int n) { return 2 * n; }
+java> int quad(int n) { return twice(twice(n)); }
+java> quad(1)
+$1 ==> 4
+java> int twice(int n) { return n + 1; }
+java> quad(1)
+$2 ==> 3
+java> var names = new String[] { "a", "b" }
+names ==> String[2] { "a", "b" }
+java> 1 / 0
+Error: Exception java.lang.ArithmeticException: / by zero
+```
+
+宣言は、同じ名前（メソッドは名前と引数の型）の以前の宣言を置き換えます。以前に宣言したものは
+新しい宣言を呼びます。後から加えたメソッド、オーバーライド、サブクラスにも、すべての呼び出しが
+届きます。クラスの static フィールドは、そのクラスを宣言し直すまで値を保ちます。宣言し直すと、
+そのクラスを型に含む変数は `null` になります。セッションは他のファイルを読みません。
+
+## 言語をまたぐ呼び出し
+
+Common Lisp のプログラムは `.java` ファイルを load できます。`main` のあるファイルは `main` を
+実行します。`main` のないファイルはクラスを定義するだけで、何も実行しません。static メソッドは、
+クラス名、メソッド名、引数の型からなる名前の関数です。たとえば `|Geometry.area(int)|`、
+パッケージ内なら `|app.Geometry.area(int)|`、コンストラクタなら `|Point.new(int,int)|` です。
+Java プログラムの `native` な static メソッドは、名前の各大文字の前にハイフンを入れた名前の
+Common Lisp 関数です。`stringUpcase` は `string-upcase` で、プログラムを load したパッケージで
+読まれます。
+
+```console
+$ cat Geometry.java
+record Point(int x, int y) { }
+
+class Geometry {
+    static native int square(int n);
+    static native String stringUpcase(String s);
+
+    static int norm2(Point p) {
+        return square(p.x()) + square(p.y());
+    }
+
+    static String shout(String s) {
+        return stringUpcase(s) + "!";
+    }
+}
+$ cat main.lisp
+(defun square (n) (* n n))
+(load "Geometry.java")
+(print (|Geometry.norm2(Point)| (|Point.new(int,int)| 3 4)))
+(print (|Geometry.shout(String)| "hi"))
+$ rontolisp main.lisp
+25
+"HI!"
+```
+
+値は変換しません。例外は 2 つだけで、`char` は文字として渡り、`boolean` は `T` か `NIL` として
+戻ります。数値は数値、文字列は文字列、`null` は `NIL`、プログラムのオブジェクトは構造体、
+`Object[]` はベクタです。Common Lisp のリストは `List` ではありません。Java のメソッドには
+ベクタを渡します。
+
+## ツール
+
+`rontolisp test` は `.java` ファイルを拒否します。このサブセットにはテストフレームワークがなく、
+プログラムの終了ステータスがそのまま結果になるからです。`rontolisp format` も拒否します。
+このコマンドが整形するのは S 式です。Maven プラグインがコンパイルするのは `src/main/lisp` で、
+`src/main/java` は引き続き Java コンパイラのものです。
+
 ## 読める構文
 
 | | |
@@ -117,7 +193,10 @@ $ rontolisp app/Main.java -o main.wasm
 | 文 | ローカル変数（`final`、無名変数 `_`）、`if`、`while`、`do`、`for`、配列または `Iterable` に対する拡張 `for`、コロン形式または矢印形式の `case`・パターン・ガードを持つ `switch`、ラベル付きの文、ラベルの有無を問わない `break` と `continue`、`yield`、`return`、`throw`、`catch`（1 つまたは複数の型）と `finally` を持つ `try`、`try`-with-resources、オブジェクトまたはクラスリテラルに対する `synchronized` |
 | 式 | プリミティブ型のすべての演算子とその変換、文字列連結、条件演算子、代入と複合代入、キャスト、型・型パターン・レコードパターンに対する `instanceof`、`switch` 式、`new`、`outer.new Inner()`、`Outer.this`、長さを 1 つ以上指定する配列の生成と初期化子、テキストブロック、型引数の有無を問わないメソッド呼び出し、`super.m(..)`、`new Box<>(..)`、任意の関数型インターフェースに対するラムダとメソッド参照（`Type::name`、`expression::name`、`super::name`、`Type::new`、`int[]::new`） |
 
-アノテーションは読み飛ばします。`int`、`long`、`short`、`byte` は 2 の補数として桁あふれします。
+`java.lang` のアノテーション（`@Override`、`@FunctionalInterface`、`@SuppressWarnings`、
+`@SafeVarargs`、`@Deprecated`）は読み飛ばします。ただし `@Override` と `@FunctionalInterface` は
+コンパイラと同じように検査します。それ以外の名前はプログラムのどのアノテーション型でもないので、
+コンパイラと同じように拒否します。`int`、`long`、`short`、`byte` は 2 の補数として桁あふれします。
 `float` は演算のたびに単精度へ丸めます。`double` と `float` は、読み戻すとその型の同じ値になる
 最短の文字列で表示されます。
 

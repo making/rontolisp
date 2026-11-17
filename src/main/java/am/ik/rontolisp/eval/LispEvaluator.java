@@ -5467,7 +5467,7 @@ public final class LispEvaluator {
 					.readingTOrNil(this.packageResolver::readsClTOrNil), resolved, source, markers);
 				return;
 			}
-			LispReader.ReadPrefix read = language.readUntilError(source, features, resolved, this.sourceStandards,
+			LispReader.ReadPrefix read = language.readLoaded(source, features, resolved, this.sourceStandards,
 					this.sourceLoader);
 			for (LispVal form : read.forms()) {
 				eval(markers ? resolveReadTimeEvalInCode(form) : form);

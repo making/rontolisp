@@ -2075,7 +2075,7 @@ public final class RontoLispCli {
 		this.out.println("  --source-language NAME");
 		this.out.println("                     The entry source's language, overriding the pick from");
 		this.out.println("                     its extension; with no file, the REPL's language (a");
-		this.out.println("                     scheme>, clojure> or starlark> prompt). A (load ...)ed");
+		this.out.println("                     scheme>, clojure>, starlark> or java> prompt). A (load ...)ed");
 		this.out.println("                     file is still picked by its own extension, so one");
 		this.out.println("                     program may mix languages file by file. common-lisp");
 		this.out.println("                     is every extension's default;");
@@ -2087,9 +2087,9 @@ public final class RontoLispCli {
 		this.out.println("                     EXPERIMENTAL: partial conformance and no compatibility");
 		this.out.println("                     promise; at its prompt a blank line ends a block. java");
 		this.out.println("                     (.java) is an EXPERIMENTAL subset of the Java language:");
-		this.out.println("                     one file, what it does not have yet refused by name, no");
-		this.out.println("                     compatibility promise and no prompt. None of the four");
-		this.out.println("                     with --no-gc.");
+		this.out.println("                     what it does not have yet refused by name and no");
+		this.out.println("                     compatibility promise; at its prompt a statement needs");
+		this.out.println("                     no ';'. None of the four with --no-gc.");
 		this.out.println("  --scheme-standard NAME");
 		this.out.println("                     What every Scheme file of the program is read against:");
 		this.out.println("                     the entry file, a (load ...)ed one and the REPL.");

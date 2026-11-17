@@ -5,7 +5,8 @@ import java.util.regex.Pattern;
 
 /**
  * Rewrites rendered {@code lisp}, {@code scheme}, {@code clojure} and {@code starlark}
- * code blocks into interactive, runnable cells.
+ * code blocks, and the {@code java} ones of the pages of the Java subset, into
+ * interactive, runnable cells.
  *
  * <p>
  * flexmark renders a fenced {@code ```lisp} block as
@@ -17,10 +18,10 @@ import java.util.regex.Pattern;
  * <ul>
  * <li>A {@code lisp} cell runs in the page's one shared interpreter ({@code rontoEval}):
  * a definition in an earlier cell is visible to later ones.</li>
- * <li>A {@code scheme}, {@code clojure} or {@code starlark} cell is a whole program on a
- * fresh interpreter, or -- a {@code scheme} or {@code clojure} one carrying a
- * {@code ; =>} annotation -- a REPL session of its own. The {@code ```stdin} block right
- * before it is its standard input, carried in the cell as a hidden
+ * <li>A {@code scheme}, {@code clojure}, {@code starlark} or {@code java} cell is a whole
+ * program on a fresh interpreter, or -- a {@code scheme} or {@code clojure} one carrying
+ * a {@code ; =>} annotation -- a REPL session of its own. The {@code ```stdin} block
+ * right before it is its standard input, carried in the cell as a hidden
  * {@code textarea.cell-stdin}. A {@code scheme} block whose first line is
  * {@code ; file: NAME} is a file the page's other Scheme blocks read, not a program: it
  * stays static, and {@code docs.js} hands it to the runtime as that file.</li>
@@ -49,6 +50,15 @@ public final class RunnableBlockTransformer {
 	 * {@code starlark} blocks in {@code html} with cells.
 	 */
 	public static String transform(String html) {
+		return transform(html, false);
+	}
+
+	/**
+	 * Replaces runnable blocks in {@code html} with cells, its {@code java} blocks too
+	 * when it is a page of the Java subset: anywhere else a {@code java} block is host
+	 * code, which nothing runs.
+	 */
+	public static String transform(String html, boolean javaSubset) {
 		Matcher matcher = BLOCK.matcher(html);
 		StringBuilder out = new StringBuilder();
 		String stdin = null;
@@ -59,8 +69,9 @@ public final class RunnableBlockTransformer {
 			if (language.equals("lisp") && !isTranscript(escapedCode)) {
 				replacement = runnableCell(escapedCode, "lisp", null);
 			}
-			else if ((language.equals("scheme") || language.equals("clojure") || language.equals("starlark"))
-					&& !isTranscript(escapedCode) && !FILE_BLOCK.matcher(escapedCode).lookingAt()) {
+			else if ((language.equals("scheme") || language.equals("clojure") || language.equals("starlark")
+					|| (javaSubset && language.equals("java"))) && !isTranscript(escapedCode)
+					&& !FILE_BLOCK.matcher(escapedCode).lookingAt()) {
 				replacement = runnableCell(escapedCode, language, stdin);
 			}
 			// A stdin block feeds the ONE block after it; every other block reads none.

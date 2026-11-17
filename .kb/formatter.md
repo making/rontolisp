@@ -86,7 +86,9 @@ the lambda list; an operator that matters belongs in `RULES`.
 ## Scheme sources (`.todo/848`)
 
 `FormatCommand` walks `.scm` beside `.lisp`/`.asd` and picks the rules by extension
-(`IndentRules.Dialect`, `.scm` named explicitly included, `-` stdin excluded); a
+(`IndentRules.Dialect`, `.scm` named explicitly included, `-` stdin excluded; a `.java` or a
+`.star` named explicitly is refused, its source no S-expression: `.kb/java-frontend.md`, "The
+tools"); a
 `.lisp` file reads exactly as before, pinned by the unchanged corpus tests. A Scheme
 file consults `SCHEME_RULES` first, then the shared table, and an unknown head is a
 procedure call -- the Common Lisp naming guess is skipped, since the subset has no

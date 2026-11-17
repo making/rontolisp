@@ -488,7 +488,13 @@ public final class LoadInliner {
 	private static FormSource read(SourceLanguage language, String source, @Nullable String path, Ctx ctx,
 			List<LispVal> out) {
 		if (language != SourceLanguage.COMMON_LISP) {
-			return FormSource.of(language.read(source, ctx.features(), path, ctx.standards(), ctx.loader()));
+			am.ik.rontolisp.reader.LispReader.ReadPrefix read = language.readLoaded(source, ctx.features(),
+					Objects.requireNonNull(path), ctx.standards(), ctx.loader());
+			am.ik.rontolisp.reader.LispReadException error = read.error();
+			if (error != null) {
+				throw error;
+			}
+			return FormSource.of(read.forms());
 		}
 		Reading reading = ctx.reading();
 		// The read starts from what the forms spliced before it pushed, in any file.

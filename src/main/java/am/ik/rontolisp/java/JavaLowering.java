@@ -474,6 +474,87 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * the first error a compiler reports that the lowering depends on
 	 */
 	static List<LispVal> lower(CompilationUnit tree, String source, @Nullable String file, JavaFiles files) {
+		return lower(tree, source, file, files, null, false);
+	}
+
+	/**
+	 * What a session's buffer asks of the lowering ({@link JavaSession}) and what the
+	 * lowering tells it back. A session's program is lowered whole for every buffer, so a
+	 * call and a dispatch see every class and method declared so far; what must not run
+	 * again is the static initialization of a class an earlier buffer initialized.
+	 */
+	static final class Session {
+
+		/** The classes the buffer declares: their static initialization starts over. */
+		final Set<String> declared;
+
+		/** The classes whose static state an earlier buffer set up. */
+		final Set<String> initialized;
+
+		/** The classes whose static state this buffer sets up, or has from before. */
+		final Set<String> initializing = new HashSet<>();
+
+		/**
+		 * The type each variable of the session's class declared with {@code var} got.
+		 */
+		final Map<String, JavaType> inferred = new LinkedHashMap<>();
+
+		/**
+		 * What an earlier buffer's values may be, which a later buffer's dispatch must
+		 * reach although it makes none: the classes of the library's Java source an
+		 * instance of was made, and the interfaces a lambda was made for -- every one of
+		 * them a structure holding the function, so that no later buffer finds a lambda
+		 * of an interface it tells from another untagged. What this buffer makes is
+		 * added.
+		 */
+		final Set<String> made;
+
+		final Set<String> lambdas;
+
+		/**
+		 * Whether a buffer reached {@code Thread}: a thread it started may hold a
+		 * monitor.
+		 */
+		boolean monitors;
+
+		Session(Set<String> declared, Set<String> initialized, Set<String> made, Set<String> lambdas,
+				boolean monitors) {
+			this.declared = declared;
+			this.initialized = initialized;
+			this.made = new LinkedHashSet<>(made);
+			this.lambdas = new LinkedHashSet<>(lambdas);
+			this.monitors = monitors;
+		}
+
+	}
+
+	/** A class of the library by its canonical name, a member class's included. */
+	private static @Nullable JavaClass known(JavaClasses classes, String name) {
+		JavaClass found = classes.qualified(name);
+		int dot = name.lastIndexOf('.');
+		if (found != null || dot < 0) {
+			return found;
+		}
+		JavaClass outer = known(classes, name.substring(0, dot));
+		return outer == null ? null : outer.members.get(name.substring(dot + 1));
+	}
+
+	/**
+	 * Whether the program is a file Common Lisp loads: one with no {@code main} defines
+	 * its classes and runs nothing.
+	 */
+	private boolean loaded;
+
+	/** The buffer of a session being lowered, or {@code null} for a file's program. */
+	private @Nullable Session session;
+
+	/**
+	 * Lowers a program, a session's buffer when {@code session} is given: then no
+	 * {@code main} is looked for, every class is initialized at its first use, and only
+	 * the classes the buffer declares or never initialized are set up.
+	 */
+	static List<LispVal> lower(CompilationUnit tree, String source, @Nullable String file, JavaFiles files,
+			@Nullable Session session, boolean loaded) {
 		Source program = new Source(file, source, false);
 		if (tree.classes().isEmpty()) {
 			throw JavaClasses.error(program, 0, "the file declares no class");
@@ -495,15 +576,43 @@ final class JavaLowering implements JavaEmitter.Context {
 			root = "../".repeat(names.length);
 		}
 		JavaClasses classes = new JavaClasses(JavaIntrinsics.LIBRARY, files, file, root);
+		classes.session = session != null;
 		List<JavaClass> declared = classes.declare(tree, program);
+		if (session != null) {
+			// a class the buffer declares reads the session's variables and methods as
+			// statically imported ones
+			classes.unit(declared.get(0)).staticOnDemand().add(declared.get(0));
+			for (String name : session.made) {
+				JavaClass made = known(classes, name);
+				if (made != null) {
+					classes.made.add(made);
+				}
+			}
+			for (String name : session.lambdas) {
+				JavaClass target = known(classes, name);
+				if (target != null) {
+					classes.lambdaTargets.add(target);
+					classes.taggedLambdas.add(target);
+				}
+			}
+			classes.monitors |= session.monitors;
+		}
 		Map<Source, SourceProvenance.@Nullable Unit> provenance = new IdentityHashMap<>();
 		JavaInitOrder order = new JavaInitOrder();
+		order.allLazy = session != null;
 		while (true) {
 			int version = classes.version();
 			JavaLowering lowering = new JavaLowering(classes, declared, program, order);
 			lowering.provenance = provenance;
+			lowering.session = session;
+			lowering.loaded = loaded;
 			List<LispVal> forms = lowering.program();
 			if (classes.version() == version) {
+				if (session != null) {
+					classes.made.forEach(made -> session.made.add(made.name));
+					classes.lambdaTargets.forEach(target -> session.lambdas.add(target.name));
+					session.monitors = classes.monitors;
+				}
 				return forms;
 			}
 		}
@@ -576,14 +685,15 @@ final class JavaLowering implements JavaEmitter.Context {
 			lowerReached();
 		}
 		while (reached != this.loweredMethods.size() + this.loweredInits.size());
-		LispVal entry = entry();
+		boolean runs = this.session == null && !(this.loaded && mainOf(launched()) == null);
+		LispVal entry = runs ? entry() : NIL;
 		List<LispVal> initialization = initialization();
 		List<LispVal> made = new ArrayList<>();
 		made.addAll(this.variables);
 		made.addAll(this.functions);
 		made.addAll(this.dispatchers.values());
 		made.addAll(generated);
-		made.add(uncaught(initialization, entry));
+		made.add(runs ? uncaught(initialization, entry) : progn(initialization));
 		Set<String> named = new HashSet<>();
 		for (LispVal form : made) {
 			names(form, named);
@@ -857,13 +967,14 @@ final class JavaLowering implements JavaEmitter.Context {
 	private void lowerClass(JavaClass declaration) {
 		this.currentClass = declaration;
 		this.unit = this.classes.unit(declaration);
+		checkFunctional(declaration);
 		for (Method method : List.copyOf(declaration.methods)) {
 			this.currentClass = declaration;
 			this.unit = this.classes.unit(declaration);
 			if (method.isConstructor()) {
 				constructor(method);
 			}
-			else if (!method.isAbstract) {
+			else if (!method.isAbstract && method.emitter == null) {
 				method(method);
 			}
 		}
@@ -883,7 +994,11 @@ final class JavaLowering implements JavaEmitter.Context {
 			if (!field.isStatic) {
 				continue;
 			}
-			this.variables.add(list(cl("defvar"), JavaNames.global(field)));
+			// a session's variable holds its type's default from its declaration on, also
+			// when the step giving it its value fails
+			this.variables.add(this.session != null && declaration == this.declared.get(0)
+					? list(cl("defvar"), JavaNames.global(field), defaultValue(field.type))
+					: list(cl("defvar"), JavaNames.global(field)));
 			if (field.initializer != null && constantOf(field) == null) {
 				items.add(new Item(field.pos, field, null));
 			}
@@ -1002,6 +1117,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (!this.loweredLocals.add(made)) {
 			return;
 		}
+		checkFunctional(made);
 		JavaClass savedClass = this.currentClass;
 		JavaClasses.Unit savedUnit = this.unit;
 		boolean savedStatic = this.staticContext;
@@ -1101,6 +1217,9 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private void method(Method method) {
 		JavaSyntax.Method written = Objects.requireNonNull(method.declaration);
+		if (written.modifiers().contains("@Override") && !isLibrary(method.owner) && !overrides(method)) {
+			throw error(written.pos(), "method does not override or implement a method from a supertype");
+		}
 		this.staticContext = method.isStatic;
 		this.returnType = method.returnType;
 		this.constructing = null;
@@ -1909,6 +2028,47 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 		}
 		return found;
+	}
+
+	/** What a compiler checks of {@code @FunctionalInterface}: the type is one. */
+	private void checkFunctional(JavaClass declaration) {
+		JavaSyntax.ClassDeclaration written = Objects.requireNonNull(declaration.declaration);
+		if (written.modifiers().contains("@FunctionalInterface") && functionalMethod(declaration) == null) {
+			throw error(written.pos(), "Unexpected @FunctionalInterface annotation: " + declaration.simpleName()
+					+ " is not a functional interface");
+		}
+	}
+
+	/**
+	 * Whether an instance method overrides or implements one of a supertype -- every type
+	 * has {@code Object}'s --, or is a record's accessor: what {@code @Override} asks.
+	 */
+	private boolean overrides(Method method) {
+		JavaClass owner = method.owner;
+		if (method.isStatic) {
+			return false;
+		}
+		if (owner.isRecord && method.parameters.isEmpty()
+				&& Objects.requireNonNull(owner.declaration)
+					.components()
+					.stream()
+					.anyMatch(component -> component.name().equals(method.name))) {
+			return true;
+		}
+		Set<JavaClass> above = new LinkedHashSet<>();
+		supertypes(owner, above);
+		above.remove(owner);
+		above.add(this.objectType.declaration());
+		String signature = signatureIn(owner, method);
+		for (JavaClass type : above) {
+			for (Method candidate : type.methods) {
+				if (!candidate.isStatic && !candidate.isPrivate && !candidate.isConstructor()
+						&& candidate.name.equals(method.name) && signatureIn(owner, candidate).equals(signature)) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -2744,6 +2904,8 @@ final class JavaLowering implements JavaEmitter.Context {
 				return methodReference(reference, expected, null);
 			case JavaSyntax.Lowered lowered:
 				return (Typed) lowered.value();
+			case JavaSyntax.Echo echo:
+				return echo(echo);
 			case JavaSyntax.Switch block:
 				return switchExpression(block, expected);
 		}
@@ -3823,6 +3985,9 @@ final class JavaLowering implements JavaEmitter.Context {
 		JavaClass target = function.target().declaration();
 		if (this.classes.lambdaTargets.add(target)) {
 			this.classes.changed();
+		}
+		if (this.session != null) {
+			tag(List.of(target));
 		}
 		return target;
 	}
@@ -6276,6 +6441,132 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * static methods, the functions making its instances and the reads of its fields from
 	 * other classes call first.
 	 */
+	/**
+	 * What a session shows of a top-level expression or variable: its value stored in the
+	 * variable it is shown under, when it has one, then {@code label ==> value}, a string
+	 * written as a literal, a {@code char} too, every other value as string conversion
+	 * writes it. A {@code void} expression shows nothing.
+	 */
+	private Typed echo(JavaSyntax.Echo echo) {
+		Session buffer = Objects.requireNonNull(this.session);
+		Field field = echo.field() == null ? null : field(this.declared.get(0), Objects.requireNonNull(echo.field()));
+		Expression written = echo.value();
+		Typed value;
+		if (written == null) {
+			Field declared = Objects.requireNonNull(field);
+			if (declared.inferred) {
+				throw error(echo.pos(), "cannot infer type for variable " + echo.label());
+			}
+			value = new Typed(defaultValue(declared.type), declared.type);
+		}
+		else {
+			value = expression(written, field == null || field.inferred ? null : field.type);
+		}
+		if (value.type() == Primitive.VOID) {
+			if (field != null && !field.inferred) {
+				throw error(echo.pos(), "incompatible types: void cannot be converted to " + field.type);
+			}
+			if (field != null) {
+				buffer.inferred.remove(field.name);
+			}
+			return new Typed(call("progn", value.form(), NIL), this.stringType);
+		}
+		List<LispVal> body = new ArrayList<>();
+		Typed shown;
+		if (field != null) {
+			if (field.inferred) {
+				JavaType type = this.types.ground(value.type());
+				if (type == JavaType.Null.NULL) {
+					if (!field.name.startsWith("$")) {
+						throw error(echo.pos(), "cannot infer type for variable " + echo.label());
+					}
+					type = this.objectType;
+				}
+				if (!type.equals(field.type)) {
+					field.type = type;
+					this.classes.changed();
+				}
+				buffer.inferred.put(field.name, type);
+			}
+			LispSymbol global = JavaNames.global(field);
+			body.add(call("setq", global, assign(value, field.type, echo.pos())));
+			shown = new Typed(global, field.type);
+		}
+		else {
+			LispSymbol held = temporary();
+			shown = new Typed(held, value.type());
+			LispVal text = call("%string-concat", string(echo.label() + " ==> "), shown(shown, echo.pos()));
+			return new Typed(JavaForms.let(held, value.form(), List.of(text)), this.stringType);
+		}
+		body.add(call("%string-concat", string(echo.label() + " ==> "), shown(shown, echo.pos())));
+		return new Typed(progn(body), this.stringType);
+	}
+
+	/**
+	 * A value as a session shows it: a string or a {@code char} as its literal, an array
+	 * as its type, its length and each element shown so.
+	 */
+	private LispVal shown(Typed value, int pos) {
+		if (value.type() instanceof ArrayType array) {
+			LispSymbol element = temporary();
+			JavaType leaf = array.element();
+			StringBuilder below = new StringBuilder();
+			while (leaf instanceof ArrayType inner) {
+				leaf = inner.element();
+				below.append("[]");
+			}
+			String name = leaf instanceof ClassType type ? type.declaration().simpleName() : leaf.toString();
+			LispVal show = list(cl("lambda"), list(element),
+					shown(new Typed(elementRead(array.element(), element), array.element()), pos));
+			return runtimeCall("echo-array", value.form(), string(name), string(below.toString()), show);
+		}
+		if (value.type() == Primitive.CHAR) {
+			return runtimeCall("echo-char", value.form());
+		}
+		if (value.type() instanceof ClassType type && type.declaration() == this.stringType.declaration()) {
+			return runtimeCall("echo-string", value.form());
+		}
+		return stringOf(value, pos);
+	}
+
+	/** Whether a type names one of some classes, or a class declared inside one. */
+	private static boolean names(JavaType type, Set<String> classes) {
+		return switch (type) {
+			case ArrayType array -> names(array.element(), classes);
+			case ClassType named -> {
+				for (JavaClass around = named.declaration(); around != null; around = around.outer) {
+					if (classes.contains(around.name)) {
+						yield true;
+					}
+				}
+				yield named.arguments().stream().anyMatch(argument -> names(argument, classes));
+			}
+			default -> false;
+		};
+	}
+
+	/**
+	 * Whether a class's static state is set up by what is lowered: always for a file's
+	 * program; in a session, for a class the buffer declares or no earlier buffer set up,
+	 * never for the session's own class, whose variables are set by their steps.
+	 */
+	private boolean isFresh(JavaClass declaration) {
+		Session buffer = this.session;
+		if (buffer == null) {
+			return true;
+		}
+		if (declaration == this.declared.get(0)) {
+			return false;
+		}
+		buffer.initializing.add(declaration.name);
+		for (JavaClass around = declaration; around != null; around = around.outer) {
+			if (buffer.declared.contains(around.name)) {
+				return true;
+			}
+		}
+		return !buffer.initialized.contains(declaration.name);
+	}
+
 	private List<LispVal> initialization() {
 		if (this.order.decide(this.initEffects, this.methodEffects, type -> immutable(type, new HashSet<>()))) {
 			this.classes.changed();
@@ -6293,6 +6584,17 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 			}
 		}
+		Session buffer = this.session;
+		if (buffer != null) {
+			// a variable of a class the buffer declares again held an instance of the
+			// class
+			// replaced: it holds null
+			for (Field field : this.declared.get(0).fields) {
+				if (names(field.type, buffer.declared)) {
+					forms.add(call("setq", JavaNames.global(field), defaultValue(field.type)));
+				}
+			}
+		}
 		for (Map.Entry<String, LispSymbol> constant : this.interned.entrySet()) {
 			this.variables.add(list(cl("defvar"), constant.getValue()));
 			forms.add(call("setq", constant.getValue(), runtimeCall("intern", string(constant.getKey()))));
@@ -6301,6 +6603,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			if (declaration.intrinsic || (isLibrary(declaration) && !this.classes.used.contains(declaration))) {
 				continue;
 			}
+			boolean fresh = isFresh(declaration);
 			Effects effects = this.initEffects.get(declaration);
 			// what the methods the initialization calls read: read ahead of an
 			// initializer
@@ -6319,7 +6622,8 @@ final class JavaLowering implements JavaEmitter.Context {
 					forms.add(call("setq", JavaNames.global(field),
 							constant instanceof String text ? constantString(text).form() : constant(constant).form()));
 				}
-				else if (field.initializer == null || this.order.isLazy(declaration) || called.reads.contains(field)) {
+				else if (fresh && (field.initializer == null || this.order.isLazy(declaration)
+						|| called.reads.contains(field))) {
 					// a field read ahead of its initializer holds its type's default
 					forms.add(call("setq", JavaNames.global(field), defaultValue(field.type)));
 				}
@@ -6334,7 +6638,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 			LispSymbol done = JavaNames.initialized(declaration);
 			this.variables.add(list(cl("defvar"), done));
-			forms.add(call("setq", done, NIL));
+			if (isFresh(declaration)) {
+				forms.add(call("setq", done, NIL));
+			}
 			List<LispVal> body = new ArrayList<>();
 			body.add(call("setq", done, T));
 			LispVal above = declaration.superclass == null ? null : initializationOf(declaration.superclass);

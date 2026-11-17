@@ -1,5 +1,5 @@
 /*
- * Runnable Lisp, Scheme, Clojure and Starlark cells and the search dialog for the documentation site.
+ * Runnable Lisp, Scheme, Clojure, Starlark and Java cells and the search dialog for the documentation site.
  *
  * Each ".code-cell" is an editable textarea plus a Run button. The rontolisp
  * runtime (the same WebAssembly build that powers the playground,
@@ -69,18 +69,18 @@
 
 	// What a cell runs, as DocExamplesTest checks it. A lisp cell (and one from a site
 	// built before cells carried a language) shares the page's one interpreter. A scheme,
-	// clojure or starlark cell runs on a fresh interpreter reading the cell's stdin: a
+	// clojure, starlark or java cell runs on a fresh interpreter reading the cell's stdin: a
 	// whole program, or, for scheme and clojure with a "; =>" annotation, a REPL session
 	// echoing every form. The page's "; file: NAME" blocks are the files it includes,
 	// handed over first.
 	function evalCell(cell, src) {
 		var lang = cell.getAttribute("data-lang") || "lisp";
 		globalThis.rontoSetLanguage(lang);
-		if (lang !== "scheme" && lang !== "clojure" && lang !== "starlark") return globalThis.rontoEval(src);
+		if (lang !== "scheme" && lang !== "clojure" && lang !== "starlark" && lang !== "java") return globalThis.rontoEval(src);
 		putPageFiles();
 		var stdinEl = cell.querySelector(".cell-stdin");
 		var stdin = stdinEl ? stdinEl.value : "";
-		return lang !== "starlark" && src.indexOf("; =>") >= 0 ? globalThis.rontoRunSession(src, stdin)
+		return lang !== "starlark" && lang !== "java" && src.indexOf("; =>") >= 0 ? globalThis.rontoRunSession(src, stdin)
 			: globalThis.rontoRunProgram(src, stdin);
 	}
 

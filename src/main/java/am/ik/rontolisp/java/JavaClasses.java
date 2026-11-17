@@ -160,6 +160,12 @@ final class JavaClasses {
 
 	}
 
+	/**
+	 * Whether the program is a session's: its implicit class's variables may be declared
+	 * with {@code var} ({@code JavaSession}).
+	 */
+	boolean session;
+
 	/** Where the files of the program's source tree are read. */
 	private final JavaFiles files;
 
@@ -605,6 +611,7 @@ final class JavaClasses {
 				declared(held.lock(), into);
 				declared(held.body(), into);
 			}
+			case JavaSyntax.Echo echo -> declared(echo.value(), into);
 			default -> {
 			}
 		}
@@ -841,8 +848,13 @@ final class JavaClasses {
 			if (made.isRecord && !isStatic) {
 				throw error(source, field.pos(), "field declaration must be static");
 			}
-			made.fields.add(new JavaClass.Field(made, field.name(), type(field.type(), made, unit), isStatic,
-					field.modifiers().contains("final") || made.isInterface, field, null));
+			// a session's variable declared with var has the type its first value has
+			boolean inferred = this.session && declaration.implicit() && field.type().name().equals("var");
+			JavaClass.Field declared = new JavaClass.Field(made, field.name(),
+					inferred ? libraryType("java.lang.Object") : type(field.type(), made, unit), isStatic,
+					field.modifiers().contains("final") || made.isInterface, field, null);
+			declared.inferred = inferred;
+			made.fields.add(declared);
 		}
 		Set<String> signatures = new HashSet<>();
 		boolean constructed = false;
@@ -875,7 +887,15 @@ final class JavaClasses {
 			Set<String> modifiers = method.modifiers();
 			boolean isStatic = modifiers.contains("static");
 			JavaEmitter emitter = null;
-			if (modifiers.contains("native")) {
+			if (modifiers.contains("native") && !source.library()) {
+				// a Common Lisp function, called with the program's values
+				if (!isStatic || method.body() != null) {
+					throw error(source, method.pos(), isStatic ? "native methods cannot have a body"
+							: "a native method of a program is static: it is a Common Lisp function");
+				}
+				emitter = JavaForms.lispFunction(method.name(), parameters, returnType);
+			}
+			else if (modifiers.contains("native")) {
 				StringBuilder member = new StringBuilder(made.name).append('.').append(method.name()).append('(');
 				for (int i = 0; i < parameters.size(); i++) {
 					member.append(i > 0 ? "," : "").append(parameters.get(i).erasure());

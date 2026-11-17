@@ -19,8 +19,8 @@ rontolisp Hello.java -o hello-c.wasm --component && wasmtime run hello-c.wasm
 rontolisp -e 'void main() { IO.println(1 + 2); }' --source-language java
 ```
 
-`--no-gc` is refused: that backend has no structures, strings or closures. There is no
-REPL: `--source-language java` with no program is an error.
+`--no-gc` is refused: that backend has no structures, strings or closures. With no program,
+`--source-language java` starts a REPL ([At the prompt](#at-the-prompt)).
 
 [`examples/java/`](https://github.com/making/rontolisp/tree/develop/examples/java) holds a
 program of several packages with its expected output.
@@ -94,7 +94,7 @@ starting file's package: for `app/Main.java` declaring `package app;`, `util.Str
 `util/Strings.java` and `Helper` of the package `app` is `app/Helper.java`. Every class of a
 file read joins the program, and the program is compiled whole. The directories above the
 starting file must spell its package. A `(load "app/Main.java")` from Common Lisp runs the
-program as `rontolisp app/Main.java` does.
+program as `rontolisp app/Main.java` does ([Across languages](#across-languages)).
 
 ```console
 $ rontolisp app/Main.java
@@ -106,6 +106,78 @@ library), or with `static` a static member of a class, or all of them on demand.
 that is not `public` and a member with no access modifier are reached from their own
 package only, a `protected` member from its package and from the classes under its class.
 
+## At the prompt
+
+`--source-language java` with no program, and the playground's Java pick, read a buffer at a
+time: a statement, an expression, a variable, a method, a class or an import. A statement
+needs no `;`. An expression is shown under a generated name, `$1`, `$2`, ..., which a later
+buffer can read with the expression's type; a variable under its own name. A string and a
+`char` are shown as literals, an array with its type and elements.
+
+```console
+java> int twice(int n) { return 2 * n; }
+java> int quad(int n) { return twice(twice(n)); }
+java> quad(1)
+$1 ==> 4
+java> int twice(int n) { return n + 1; }
+java> quad(1)
+$2 ==> 3
+java> var names = new String[] { "a", "b" }
+names ==> String[2] { "a", "b" }
+java> 1 / 0
+Error: Exception java.lang.ArithmeticException: / by zero
+```
+
+A declaration replaces the earlier one of its name (a method: of its name and parameter types),
+and what was declared before calls the new one: a method, an override, a subclass added later
+is reached by every call. A class keeps its static fields until it is declared again; then the
+variables whose type names it hold `null`. The session reads no other file.
+
+## Across languages
+
+A Common Lisp program loads a `.java` file. A file with a `main` runs it; a file with none
+defines its classes and runs nothing. A static method is the function named by its class, its
+name and its parameter types: `|Geometry.area(int)|`, `|app.Geometry.area(int)|` in a package,
+`|Point.new(int,int)|` for a constructor. A `native` static method of a Java program is the
+Common Lisp function its name spells, a hyphen before each capital: `stringUpcase` is
+`string-upcase`, read in the package the program is loaded in.
+
+```console
+$ cat Geometry.java
+record Point(int x, int y) { }
+
+class Geometry {
+    static native int square(int n);
+    static native String stringUpcase(String s);
+
+    static int norm2(Point p) {
+        return square(p.x()) + square(p.y());
+    }
+
+    static String shout(String s) {
+        return stringUpcase(s) + "!";
+    }
+}
+$ cat main.lisp
+(defun square (n) (* n n))
+(load "Geometry.java")
+(print (|Geometry.norm2(Point)| (|Point.new(int,int)| 3 4)))
+(print (|Geometry.shout(String)| "hi"))
+$ rontolisp main.lisp
+25
+"HI!"
+```
+
+Nothing is converted but this: a `char` crosses as a character, a `boolean` comes back as `T`
+or `NIL`. A number is a number, a string a string, `null` is `NIL`, an object of the program a
+structure, an `Object[]` a vector. A Common Lisp list is no `List`: hand a Java method a vector.
+
+## The tools
+
+`rontolisp test` refuses a `.java` file: the subset has no test framework, and a program's
+exit status is its verdict. `rontolisp format` refuses one: it re-indents S-expressions. The
+Maven plugin compiles `src/main/lisp`; `src/main/java` stays the Java compiler's.
+
 ## What is read
 
 | | |
@@ -115,7 +187,10 @@ package only, a `protected` member from its package and from the classes under i
 | Statements | local variables (`final`, the unnamed `_`), `if`, `while`, `do`, `for`, the enhanced `for` over an array or an `Iterable`, `switch` with colon or arrow cases, patterns and guards, labeled statements, `break` and `continue` with or without a label, `yield`, `return`, `throw`, `try` with `catch` (of one type or several) and `finally`, `try`-with-resources, `synchronized` over an object or a class literal |
 | Expressions | every operator of the primitive types with its conversions, string concatenation, the conditional, assignments and compound assignments, casts, `instanceof` with a type, a type pattern or a record pattern, `switch` expressions, `new`, `outer.new Inner()`, `Outer.this`, array creation with one or several lengths and initializers, text blocks, method calls with or without type arguments, `super.m(..)`, `new Box<>(..)`, lambdas and method references (`Type::name`, `expression::name`, `super::name`, `Type::new`, `int[]::new`) for any functional interface |
 
-Annotations are read and dropped. An `int`, a `long`, a `short` and a `byte` wrap as two's
+The annotations of `java.lang` (`@Override`, `@FunctionalInterface`, `@SuppressWarnings`,
+`@SafeVarargs`, `@Deprecated`) are read and dropped, but for what a compiler checks of
+`@Override` and `@FunctionalInterface`. Any other name is no annotation type of the program,
+and is refused as a compiler refuses it. An `int`, a `long`, a `short` and a `byte` wrap as two's
 complement; a `float` is rounded to single precision at every operation. A `double` and a
 `float` print as the shortest text that reads back as the same value of their type.
 

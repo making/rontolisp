@@ -152,6 +152,31 @@ public enum SourceLanguage {
 	 * @param loader where named files are read from, or {@code null} when none can be
 	 * @return the parsed top-level forms
 	 */
+	/**
+	 * Reads a file a program loads ({@code load}, on both paths): as
+	 * {@link #readUntilError}, but a Java file with no {@code main} is one whose classes
+	 * the loading program calls, defined and nothing run ({@code .kb/java-frontend.md},
+	 * "Across languages").
+	 * @param source the file's text
+	 * @param features the active reader features
+	 * @param file the file
+	 * @param standards what each language is read against
+	 * @param loader where named files are read from
+	 * @return the forms read before an error, and the error
+	 */
+	public LispReader.ReadPrefix readLoaded(String source, Features features, String file, SourceStandards standards,
+			@Nullable SourceLoader loader) {
+		if (this != JAVA) {
+			return readUntilError(source, features, file, standards, loader);
+		}
+		try {
+			return new LispReader.ReadPrefix(Java.load(source, file, javaFiles(loader)), null);
+		}
+		catch (LispReadException ex) {
+			return new LispReader.ReadPrefix(List.of(), ex);
+		}
+	}
+
 	public List<LispVal> read(String source, Features features, @Nullable String file, SourceStandards standards,
 			@Nullable SourceLoader loader) {
 		LispReader.ReadPrefix read = readUntilError(source, features, file, standards, loader);

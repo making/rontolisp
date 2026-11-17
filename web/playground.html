@@ -405,6 +405,7 @@
 					<option value="scheme">Scheme (experimental)</option>
 					<option value="clojure">Clojure (experimental)</option>
 					<option value="starlark">Starlark (experimental)</option>
+					<option value="java">Java (an experimental subset)</option>
 				</select>
 				<label for="samples">sample</label>
 				<select id="samples">
@@ -515,12 +516,23 @@
 			"kwargs": 'def describe(name, *args, sep = ", ", **kwargs):\n    parts = [str(a) for a in args] + ["%s=%r" % (k, v) for k, v in kwargs.items()]\n    return "{}({})".format(name, sep.join(parts))\n\nprint(describe("f", 1, 2, mode = "fast"))',
 		};
 
+		// An experimental subset of the Java language: see the docs' Java section. "Run
+		// source" runs a whole program; at the REPL a buffer is a statement, an expression
+		// or a declaration, and a statement needs no ";".
+		const JAVA_SAMPLES = {
+			"hello": 'void main() {\n    IO.println("hello, rontolisp");\n}',
+			"fibonacci": 'int fib(int n) {\n    return n < 2 ? n : fib(n - 1) + fib(n - 2);\n}\n\nvoid main() {\n    IO.println(fib(20));\n}',
+			"records": 'sealed interface Shape permits Circle, Rect { }\nrecord Circle(double r) implements Shape { }\nrecord Rect(double w, double h) implements Shape { }\n\ndouble area(Shape s) {\n    return switch (s) {\n        case Circle c -> 3.0 * c.r() * c.r();\n        case Rect(double w, double h) -> w * h;\n    };\n}\n\nvoid main() {\n    for (Shape s : new Shape[] { new Circle(1), new Rect(2, 3) }) {\n        IO.println(s + " " + area(s));\n    }\n}',
+			"collections": 'void main() {\n    Map<String, Integer> counts = new HashMap<>();\n    for (String w : "the cat and the hat".split(" ")) {\n        counts.merge(w, 1, Integer::sum);\n    }\n    IO.println(counts);\n    List<String> words = new ArrayList<>(counts.keySet());\n    words.sort(Comparator.comparing(String::length));\n    IO.println(words);\n}',
+		};
+
 		// Per language: the samples, the REPL placeholder and how an uploaded file is used.
 		const LANGUAGES = {
 			lisp: { samples: LISP_SAMPLES, first: "fibonacci", placeholder: "(+ 1 2 3)", fileHint: '(load "name.lisp")' },
 			scheme: { samples: SCHEME_SAMPLES, first: "fibonacci", placeholder: "(+ 1 2 3)", fileHint: '(include "name.scm")' },
 			clojure: { samples: CLOJURE_SAMPLES, first: "fibonacci", placeholder: "(+ 1 2 3)", fileHint: '(load "name.clj")' },
 			starlark: { samples: STARLARK_SAMPLES, first: "fibonacci", placeholder: "1 + 2 + 3", fileHint: 'load("name.star", "f")' },
+			java: { samples: JAVA_SAMPLES, first: "fibonacci", placeholder: "1 + 2 + 3", fileHint: '(load "Main.java") at the lisp pick' },
 		};
 		const LANGUAGE_KEY = "rontolisp-language";
 

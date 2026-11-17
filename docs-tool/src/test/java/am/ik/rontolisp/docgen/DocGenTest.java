@@ -144,6 +144,11 @@ class DocGenTest {
 		assertThat(RunnableBlockTransformer.transform(html))
 			.contains("<div class=\"code-cell\" data-lang=\"starlark\">")
 			.contains("print(1 + 2)");
+		// a java block is a cell on a page of the Java subset only: elsewhere host code
+		html = "<pre><code class=\"language-java\">void main() { }</code></pre>";
+		assertThat(RunnableBlockTransformer.transform(html, true))
+			.contains("<div class=\"code-cell\" data-lang=\"java\">");
+		assertThat(RunnableBlockTransformer.transform(html)).isEqualTo(html);
 	}
 
 	@Test

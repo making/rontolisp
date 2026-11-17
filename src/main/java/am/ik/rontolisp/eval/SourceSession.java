@@ -10,6 +10,8 @@ import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.clojure.ClojureMacroEvaluator;
 import am.ik.rontolisp.clojure.ClojureSession;
 import am.ik.rontolisp.clojure.ClojureTopLevel;
+import am.ik.rontolisp.java.JavaSession;
+import am.ik.rontolisp.java.JavaTopLevel;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.reader.LispReader;
@@ -30,8 +32,9 @@ import am.ik.rontolisp.starlark.StarlarkTopLevel;
  * It is a session, not a function, because a language may need to remember what earlier
  * buffers defined: Scheme's lowering decides how a name is called from what defined it
  * ({@code .kb/scheme-frontend.md}, "A session"), Starlark's resolves a name against the
- * globals bound so far ({@code .kb/starlark-frontend.md}, "A session"). Common Lisp keeps
- * nothing here; its state is the evaluator's.
+ * globals bound so far ({@code .kb/starlark-frontend.md}, "A session"), Java's lowers the
+ * declarations of every buffer so far again ({@code .kb/java-frontend.md}, "A session").
+ * Common Lisp keeps nothing here; its state is the evaluator's.
  */
 public final class SourceSession {
 
@@ -65,6 +68,8 @@ public final class SourceSession {
 	private final @Nullable ClojureSession clojure;
 
 	private final @Nullable StarlarkSession starlark;
+
+	private final @Nullable JavaSession java;
 
 	private final @Nullable ClojureMacroEvaluator clojureMacros;
 
@@ -100,12 +105,9 @@ public final class SourceSession {
 	 * @param loader where named files are read from, or {@code null} for none
 	 */
 	public SourceSession(SourceLanguage language, SourceStandards standards, @Nullable SourceLoader loader) {
-		if (language == SourceLanguage.JAVA) {
-			// a program is a whole file: its class table decides every call
-			throw new IllegalArgumentException(
-					"--source-language java has no prompt yet: give it a file, or a" + " whole program with -e");
-		}
 		this.language = language;
+		// a session reads no other file of a source tree, as a program given with -e
+		this.java = language == SourceLanguage.JAVA ? new JavaSession() : null;
 		this.scheme = language == SourceLanguage.SCHEME
 				? Scheme.session(standards.scheme(), SourceLanguage.schemeFiles(loader)) : null;
 		this.clojure = language == SourceLanguage.CLOJURE
@@ -162,6 +164,9 @@ public final class SourceSession {
 		if (this.starlark != null) {
 			return StarlarkSession.isComplete(buffer);
 		}
+		if (this.java != null) {
+			return JavaSession.isComplete(buffer);
+		}
 		return isBalanced(buffer);
 	}
 
@@ -190,6 +195,12 @@ public final class SourceSession {
 		}
 		if (this.starlark != null) {
 			for (StarlarkTopLevel topLevel : this.starlark.read(buffer)) {
+				steps.add(new Step(topLevel.forms(), topLevel.echoes()));
+			}
+			return steps;
+		}
+		if (this.java != null) {
+			for (JavaTopLevel topLevel : this.java.read(buffer)) {
 				steps.add(new Step(topLevel.forms(), topLevel.echoes()));
 			}
 			return steps;
@@ -223,6 +234,9 @@ public final class SourceSession {
 		if (this.starlark != null) {
 			return "starlark> ";
 		}
+		if (this.java != null) {
+			return "java> ";
+		}
 		return evaluator.currentPackageName() + "> ";
 	}
 
@@ -231,13 +245,17 @@ public final class SourceSession {
 	 * through the {@code print-object} route for Common Lisp, the Scheme printer
 	 * ({@code #t}, {@code #f}, {@code ()}, case-sensitive symbols) for Scheme, the
 	 * Clojure printer ({@code [...]}, {@code {...}}, {@code #{...}}, demangled symbols)
-	 * for Clojure, {@code repr} for Starlark -- or nothing, for the unspecified object a
-	 * Scheme effect answers and Starlark's {@code None}.
+	 * for Clojure, {@code repr} for Starlark, the {@code label ==> value} text a Java
+	 * step made by its value's static type -- or nothing, for the unspecified object a
+	 * Scheme effect answers, Starlark's {@code None} and a {@code void} Java expression.
 	 * @param value the value to show
 	 * @param evaluator the session's evaluator
 	 * @return the text, or {@code null} when the value is not shown
 	 */
 	public @Nullable String echo(LispVal value, LispEvaluator evaluator) {
+		if (this.java != null) {
+			return value instanceof LispString shown ? shown.value() : null;
+		}
 		if (this.scheme == null && this.clojure == null && this.starlark == null) {
 			return evaluator.prin1ToStringRouted(value);
 		}

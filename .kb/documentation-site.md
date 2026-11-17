@@ -72,8 +72,11 @@ playground's WebAssembly runtime, so `lisp` and `scheme` examples run in-page.
 - ` ```java ` ON A PAGE UNDER `java/` = a whole program in the experimental subset of the Java
   language (a compact source file, or classes the first of which has the `main`), stdout
   asserted by a following plain block (`DocExamplesTest`, through `PlaygroundRepl.run`). On
-  any other page it is host code for the JVM backend's interop and is not run. Never a Run
-  cell: docgen renders it as static code until the playground has the pick (`.todo/j74`).
+  any other page it is host code for the JVM backend's interop and is not run. A Run cell on
+  those pages only (`RunnableBlockTransformer.transform(html, javaSubset)`, `DocGen` passing
+  whether the page's path holds `/java/`), run as the starlark cell is (`rontoRunProgram`,
+  never `rontoRunSession`). A Java file that is no program (no `main`, read by a `.lisp`) goes
+  in a ` ```console ` block, which nothing runs.
 - ` ```console ` = static transcript or anything needing stdin/files/network or that signals
   (`read`, `open`, `load`, `with-open-file`, `error`, `rontolisp:fetch`); not executed.
   ` ```bash ` = shell. Plain ` ``` ` = expected output.

@@ -156,6 +156,53 @@ final class JavaForms {
 	}
 
 	/**
+	 * The Common Lisp symbol a {@code native} method of a program names: its name with a
+	 * hyphen ahead of each capital letter after a lowercase letter or a digit, upcased --
+	 * {@code fact} is {@code FACT}, {@code stringUpcase} {@code STRING-UPCASE},
+	 * {@code toJSON} {@code TO-JSON} -- read in the package the program is evaluated in.
+	 */
+	static String lispName(String method) {
+		StringBuilder name = new StringBuilder();
+		for (int i = 0; i < method.length(); i++) {
+			char c = method.charAt(i);
+			if (Character.isUpperCase(c) && i > 0
+					&& (Character.isLowerCase(method.charAt(i - 1)) || Character.isDigit(method.charAt(i - 1)))) {
+				name.append('-');
+			}
+			name.append(c);
+		}
+		return name.toString().toUpperCase(Locale.ROOT);
+	}
+
+	/**
+	 * A {@code native} method of a program: a call of the Common Lisp function its name
+	 * names. A {@code char} crosses as a character, a {@code boolean} back as {@code T}
+	 * or {@code NIL}, a string back as the program's immutable string; every other value
+	 * as it is.
+	 */
+	static JavaEmitter lispFunction(String method, List<JavaType> parameters, JavaType returnType) {
+		LispSymbol function = new LispSymbol(lispName(method));
+		return (context, call) -> {
+			List<LispVal> arguments = new ArrayList<>();
+			for (int i = 0; i < parameters.size(); i++) {
+				LispVal argument = call.argument(i);
+				arguments.add(parameters.get(i) == JavaType.Primitive.CHAR ? call("code-char", argument) : argument);
+			}
+			LispVal result = form(function, arguments);
+			if (returnType == JavaType.Primitive.CHAR) {
+				return call("char-code", result);
+			}
+			if (returnType == JavaType.Primitive.BOOLEAN) {
+				return call("if", result, LispTrue.INSTANCE, LispNil.INSTANCE);
+			}
+			if (returnType instanceof JavaType.ClassType type && type.declaration().name.equals("java.lang.String")) {
+				return runtimeCall("lisp-string", result);
+			}
+			return result;
+		};
+	}
+
+	/**
 	 * Whether evaluating the form twice is evaluating it once: a variable or a literal.
 	 */
 	static boolean isSimple(LispVal form) {

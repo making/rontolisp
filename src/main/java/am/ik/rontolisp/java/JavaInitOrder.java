@@ -55,6 +55,12 @@ final class JavaInitOrder {
 
 	private Set<JavaClass> lazy = Set.of();
 
+	/**
+	 * Whether every class is initialized at its first use: a session's, whose buffers
+	 * have no {@code main} to initialize a class before.
+	 */
+	boolean allLazy;
+
 	private List<JavaClass> eager = List.of();
 
 	/** Whether a class's static initialization runs at its first use. */
@@ -80,7 +86,7 @@ final class JavaInitOrder {
 		for (Map.Entry<JavaClass, Effects> init : inits.entrySet()) {
 			JavaClass declaration = init.getKey();
 			Effects all = reached(init.getValue(), methods);
-			boolean shows = all.visible;
+			boolean shows = all.visible || this.allLazy;
 			for (Field written : all.writes) {
 				shows |= written.owner != declaration;
 			}

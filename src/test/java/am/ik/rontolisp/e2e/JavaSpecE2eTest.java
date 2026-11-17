@@ -58,9 +58,10 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * {@code standalone:} case is a file of its own, per leg: one that starts another way, or
  * one that ENDS with an uncaught exception -- it prints {@code stdout}, then reports
  * {@code error} after {@code Exception in thread "main"} on standard error and exits with
- * the status 1, on every leg. A {@code refused:} case is a program a compiler refuses:
- * the JDK has to report {@code error} at {@code line}, and the front end the same line
- * and a message starting with it.
+ * the status 1, on every leg; one whose file is a {@code .lisp} is a Common Lisp program
+ * loading the Java files beside it, which has no JDK leg. A {@code refused:} case is a
+ * program a compiler refuses: the JDK has to report {@code error} at {@code line}, and
+ * the front end the same line and a message starting with it.
  *
  * <p>
  * Like {@code StarlarkSpecE2eTest} this needs no native binary: every leg goes through
@@ -92,7 +93,12 @@ class JavaSpecE2eTest {
 			@Nullable String stderr, @Nullable Map<String, String> files) {
 
 		String stem() {
-			return "Standalone" + this.file.replace(".java", "").replace('/', '_');
+			return "Standalone" + this.file.replaceFirst("\\.[^./]*$", "").replace('/', '_');
+		}
+
+		/** Whether the program is a Common Lisp one, which no JDK runs. */
+		boolean isLisp() {
+			return this.file.endsWith(".lisp");
 		}
 
 		/**
@@ -182,9 +188,11 @@ class JavaSpecE2eTest {
 		List<DynamicNode> legs = new ArrayList<>();
 		List<Standalone> cases = loadSpec().standalone();
 		for (Standalone s : cases == null ? List.<Standalone>of() : cases) {
-			legs.add(dynamicTest(s.name() + " JDK", () -> {
-				assertEnded(s, "JDK", runOnJdk(s.file(), s.write(s.stem() + "-JDK")));
-			}));
+			if (!s.isLisp()) {
+				legs.add(dynamicTest(s.name() + " JDK", () -> {
+					assertEnded(s, "JDK", runOnJdk(s.file(), s.write(s.stem() + "-JDK")));
+				}));
+			}
 			legs.add(dynamicTest(s.name() + " INTERPRETER", () -> standaloneOnInterpreter(s)));
 			legs.add(dynamicTest(s.name() + " JVM", () -> standaloneOnJvm(s)));
 			for (boolean component : List.of(false, true)) {
@@ -378,6 +386,11 @@ class JavaSpecE2eTest {
 		try (ThreadStdio.Scope _ = ThreadStdio.err(err)) {
 			CliStack.call("java-spec", () -> {
 				LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+				if (s.isLisp()) {
+					// what the program loads is beside it, as the compiled legs' splice
+					// reads it
+					evaluator.setLoadBaseDir(java.util.Objects.requireNonNull(file.getParent()).toString());
+				}
 				try {
 					for (LispVal form : SourceLanguage.forFile(file.toString(), null)
 						.read(s.source(), Features.INTERPRETER, file.toString(), SourceStandards.DEFAULT,
@@ -402,7 +415,9 @@ class JavaSpecE2eTest {
 		Path file = s.write(s.stem() + "-JVM");
 		Path dir = workDir.resolve(s.stem());
 		Files.createDirectories(dir);
-		JvmSourceCompiler.Result compiled = new JvmSourceCompiler(s.stem()).compile(s.source(), file.toString());
+		JvmSourceCompiler.Result compiled = new JvmSourceCompiler(s.stem())
+			.baseDir(java.util.Objects.requireNonNull(file.getParent()).toString())
+			.compile(s.source(), file.toString());
 		Files.write(dir.resolve(s.stem() + ".class"), compiled.classBytes());
 		for (Map.Entry<String, byte[]> runtime : compiled.runtimeClasses().entrySet()) {
 			Path travelling = dir.resolve(runtime.getKey());

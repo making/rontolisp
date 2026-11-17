@@ -4505,6 +4505,57 @@ standalone:
       registry ready
       1
       1
+  # Across languages, a Common Lisp program (no JDK leg): it loads a Java file with no
+  # main, which defines its classes and runs nothing, and calls their static methods by
+  # their Lisp names, which carry the signature; a Java object is a structure it hands back,
+  # a Lisp vector an Object[]. A native method of the Java file is the Common Lisp function
+  # its name spells (stringUpcase is STRING-UPCASE): a char crosses as a character, a
+  # boolean comes back T or NIL, a string the program's own.
+  - name: common-lisp-and-java-call-each-other
+    file: main.lisp
+    source: |
+      (defun square (n) (* n n))
+      (load "Geometry.java")
+      (format t "~a~%" (|Geometry.area(int)| 2))
+      (format t "~a~%" (|Geometry.shout(String)| "hi"))
+      (let ((p (|Point.new(int,int)| 3 4)))
+        (format t "~a ~a~%" (|Point.toString()| p) (|Geometry.norm2(Point)| p)))
+      (format t "~a~%" (|Geometry.join(Object[])| (vector "a" 1 "b")))
+    stdout: |
+      12
+      HI! 49 true Q
+      Point[x=3, y=4] 25
+      a1b
+    files:
+      Geometry.java: |
+        record Point(int x, int y) { }
+
+        class Geometry {
+            static native int square(int n);
+            static native String stringUpcase(String s);
+            static native boolean evenp(int n);
+            static native char charUpcase(char c);
+
+            static int area(int r) {
+                return 3 * square(r);
+            }
+
+            static String shout(String s) {
+                return stringUpcase(s) + "! " + square(7) + " " + evenp(4) + " " + charUpcase('q');
+            }
+
+            static int norm2(Point p) {
+                return square(p.x()) + square(p.y());
+            }
+
+            static String join(Object[] parts) {
+                StringBuilder joined = new StringBuilder();
+                for (Object part : parts) {
+                    joined.append(part);
+                }
+                return joined.toString();
+            }
+        }
   # A thread is the host's where the target has threads and runs on the stack of the
   # thread that waits for it where it has one (wasm): a program whose threads are
   # joined prints the same on every leg. synchronized -- a block, a method, a static
@@ -5014,6 +5065,17 @@ refused:
     - name: an-incompatible-type
       body: 'int x = "s";'
       error: "incompatible types: String cannot be converted to int"
+    # Annotations are dropped, but a name no annotation type of the library has is
+    # unknown, and @Override and @FunctionalInterface are checked
+    - name: an-annotation-of-no-type-the-program-sees
+      body: '@Data class P { }'
+      error: "cannot find symbol"
+    - name: an-override-of-nothing
+      body: 'class P { @Override public String toStrin() { return ""; } }'
+      error: "method does not override or implement a method from a supertype"
+    - name: a-functional-interface-of-two-methods
+      body: '@FunctionalInterface interface F { void a(); void b(); }'
+      error: "Unexpected @FunctionalInterface annotation"
     - name: an-unresolved-name
       body: 'int x = y;'
       error: "cannot find symbol"

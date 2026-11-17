@@ -45,6 +45,24 @@ public final class Java {
 	 * with its position
 	 */
 	public static List<LispVal> read(String source, @Nullable String file, JavaFiles files) {
+		return read(source, file, files, false);
+	}
+
+	/**
+	 * Reads the Java program a file Common Lisp loads starts: as {@link #read}, but a
+	 * file with no {@code main} is one whose classes the loading program calls, defined
+	 * and nothing run.
+	 * @param source the file's text
+	 * @param file the origin file
+	 * @param files where the other files of the source tree are read
+	 * @return the top-level forms
+	 * @throws LispReadException as {@link #read}
+	 */
+	public static List<LispVal> load(String source, @Nullable String file, JavaFiles files) {
+		return read(source, file, files, true);
+	}
+
+	private static List<LispVal> read(String source, @Nullable String file, JavaFiles files, boolean loaded) {
 		String name = "Main";
 		if (file != null) {
 			String path = file.replace('\\', '/');
@@ -54,7 +72,7 @@ public final class Java {
 				name = base;
 			}
 		}
-		return JavaLowering.lower(JavaParser.parse(source, file, name), source, file, files);
+		return JavaLowering.lower(JavaParser.parse(source, file, name), source, file, files, null, loaded);
 	}
 
 }

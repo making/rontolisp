@@ -155,6 +155,71 @@
   (%warn (%string-concat "Exception in thread \"main\" " text))
   (%host-exit 1))
 
+;; What a session's step left uncaught, signalled again as one line naming the
+;; exception: the REPL reports it and reads the next buffer (.kb/java-frontend.md,
+;; "A session").
+(defun rontolisp::%java-session-error (condition)
+  (error "~A"
+         (%string-concat "Exception "
+                         (if (typep condition 'rontolisp::%java-throwable)
+                             (funcall
+                              (rontolisp::%java-throwable-describe condition)
+                              (rontolisp::%java-throwable-object condition))
+                             (let ((exception
+                                    (rontolisp::%java-exception-of condition)))
+                               (if (cdr exception)
+                                   (%string-concat
+                                    (%string-concat (car exception) ": ")
+                                    (cdr exception))
+                                   (car exception)))))))
+
+;; What a Common Lisp function a native method names answers for a String: the
+;; program's immutable string.
+(defun rontolisp::%java-lisp-string (s) (if (null s) nil (%normalize-string s)))
+
+;; A session shows a string and a char as their literals.
+(defun rontolisp::%java-echo-string (s)
+  (if (null s)
+      "null"
+      (%normalize-string
+       (with-output-to-string (out)
+         (write-char #\" out)
+         (loop for c across s do (rontolisp::%java-echo-escape c #\" out))
+         (write-char #\" out)))))
+
+(defun rontolisp::%java-echo-char (code)
+  (%normalize-string
+   (with-output-to-string (out)
+     (write-char #\' out)
+     (rontolisp::%java-echo-escape (code-char code) #\' out)
+     (write-char #\' out))))
+
+;; A session shows an array as int[2] { 1, 2 }: SHOW writes an element.
+(defun rontolisp::%java-echo-array (array name below show)
+  (if (null array)
+      "null"
+      (%normalize-string
+       (with-output-to-string (out)
+         (write-string name out)
+         (write-char #\[ out)
+         (write-string (%decimal-piece (length array)) out)
+         (write-char #\] out)
+         (write-string below out)
+         (write-string " {" out)
+         (let ((first t))
+           (loop for e across array
+                 do (write-string (if first " " ", ") out) (setq first nil)
+                   (write-string (funcall show e) out)))
+         (write-string " }" out)))))
+
+(defun rontolisp::%java-echo-escape (c quote out)
+  (cond ((char= c #\Newline) (write-string "\\n" out))
+        ((char= c #\Tab) (write-string "\\t" out))
+        ((char= c #\Return) (write-string "\\r" out))
+        (t
+         (if (or (char= c quote) (char= c #\\)) (write-char #\\ out))
+         (write-char c out))))
+
 (defun rontolisp::%java-no-receiver (object signature)
   (if (null object)
       (rontolisp::%java-npe)

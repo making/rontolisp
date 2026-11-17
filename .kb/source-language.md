@@ -38,7 +38,7 @@ Common Lisp keeps none here. Two consumers:
 ## The browser (`eval/PlaygroundRepl`, 2026-09-19, `.todo/893`)
 
 The playground's REPL and the doc site's Run cells, in the language picked by
-`rontoSetLanguage` (`"lisp"`, `"scheme"`, `"clojure"`, `"starlark"`; `parse` names). In the main tree, not beside the
+`rontoSetLanguage` (`"lisp"`, `"scheme"`, `"clojure"`, `"starlark"`, `"java"`; `parse` names). In the main tree, not beside the
 `@JS` bootstrap (`src/web/java/.../RontoPlayground`, now a thin adapter), so the JVM suite
 runs what the browser runs (`PlaygroundReplTest`, and `DocExamplesTest.runScheme`).
 
@@ -146,10 +146,12 @@ programs and read through `read`.
 `am.ik.rontolisp.java.Java.read` -- the reader, the class table, static typing and the lowering
 to core forms in one step, with no `#.` and no reader features; the file name picks the class a
 program starts at (`.kb/java-frontend.md`). `CompileFrontend.run` refuses the entry language
-under `--no-gc`. It has NO `SourceSession` (the constructor refuses, so the REPL and the
-playground do): a program is a whole file and the files of its source tree it names, or `-e`
-with one file. `isSourceFile` answers true for
-`.java`; what `rontolisp test`, the formatter and the Maven plugin make of one is `.todo/j74`.
+under `--no-gc`. A program is a whole file and the files of its source tree it names, or `-e`
+with one file; a file `load` reads (`readLoaded`, both paths) may have no `main` and then runs
+nothing. Its `SourceSession` is `java/JavaSession` (prompt `java> `, the playground's pick):
+every buffer lowers the earlier ones' declarations again (`.kb/java-frontend.md`, "A
+session"). `isSourceFile` answers true for `.java`; `rontolisp test` and `format` refuse one,
+the Maven plugin compiles `.lisp` only (`.kb/java-frontend.md`, "The tools").
 
 ## The run-time libraries' name gate (2026-10-23)
 

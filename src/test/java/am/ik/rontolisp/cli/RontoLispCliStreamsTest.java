@@ -853,8 +853,53 @@ class RontoLispCliStreamsTest {
 		assertThat(refused[2].trim()).isEqualTo(expected);
 		assertThat(runReporting(broken.toString(), "-o", this.tempDir.resolve("Broken.class").toString())[2].trim())
 			.isEqualTo(expected);
-		// a program is a whole file: no prompt
-		assertThat(runReporting("--source-language", "java")[2]).contains("--source-language java has no prompt yet");
+		// a session lowers every buffer with the declarations of the earlier ones: a
+		// subclass, a body declared later reaches an earlier caller; a class's static
+		// state lives on; a value shows by its static type; what a step left uncaught
+		// is reported and the session goes on
+		String[] session = runSession(false, """
+				interface Shape { double area(); }
+				record Sq(double s) implements Shape { public double area() { return s * s; } }
+				double total(List<Shape> shapes) { double t = 0; for (Shape s : shapes) t += s.area(); return t; }
+				List<Shape> shapes = new ArrayList<>()
+				shapes.add(new Sq(2))
+				record Circle(double r) implements Shape { public double area() { return 3 * r * r; } }
+				shapes.add(new Circle(1))
+				total(shapes)
+				int twice(int n) { return 2 * n; }
+				int quad(int n) { return twice(twice(n)); }
+				quad(1)
+				int twice(int n) { return n + 1; }
+				quad(1)
+				class Counter { static int n; static int next() { return ++n; } }
+				Counter.next()
+				Counter.next()
+				1 / 0
+				"a\\"b"
+				'c'
+				int[] xs = {1,
+				    2}
+				System.out.println(xs.length)
+				""", "--source-language", "java");
+		assertThat(session[1]).isEqualTo("""
+				shapes ==> []
+				$1 ==> true
+				$2 ==> true
+				$3 ==> 7.0
+				$4 ==> 4
+				$5 ==> 3
+				$6 ==> 1
+				$7 ==> 2
+				$9 ==> "a\\"b"
+				$10 ==> 'c'
+				xs ==> int[2] { 1, 2 }
+				2
+				""");
+		assertThat(session[2]).contains("Exception java.lang.ArithmeticException: / by zero");
+		// a Java file is no test and holds no S-expression to re-indent
+		assertThat(runReporting("test", program.toString())[2])
+			.contains("is a Java program, which has no test framework");
+		assertThat(runReporting("format", program.toString())[2]).contains("is Java source, which has no S-expression");
 		// the scalar backend has none of its values
 		assertThat(runReporting(program.toString(), "-o", this.tempDir.resolve("scalar.wasm").toString(), "--no-gc")[2]
 			.trim())

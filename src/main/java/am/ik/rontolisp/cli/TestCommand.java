@@ -108,6 +108,12 @@ final class TestCommand {
 		}
 		boolean colors = colors(options);
 		Path path = Path.of(target);
+		if (SourceLanguage.forFile(target, null) == SourceLanguage.JAVA) {
+			// the subset has no test framework: a test is a program, its status the
+			// verdict
+			return fail(target + " is a Java program, which has no test framework here: run it with 'rontolisp "
+					+ target + "', whose exit status is its verdict");
+		}
 		boolean asd = target.endsWith(".asd");
 		if (Files.isRegularFile(path)) {
 			String baseDir = SourceLoader.parentDir(path.toAbsolutePath().toString());

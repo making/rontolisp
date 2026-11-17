@@ -36,7 +36,8 @@ final class JavaClass {
 
 		final String name;
 
-		final JavaType type;
+		/** Its type: a session's variable declared with {@code var} gets one late. */
+		JavaType type;
 
 		final boolean isStatic;
 
@@ -57,6 +58,12 @@ final class JavaClass {
 
 		/** Whether it is an enum constant. */
 		boolean isConstant;
+
+		/**
+		 * Whether it is a session's variable declared with {@code var}, or the variable a
+		 * session's expression is shown under: its type is its value's.
+		 */
+		boolean inferred;
 
 		/**
 		 * Whether nothing can change what it holds once it is set: the array an enum's

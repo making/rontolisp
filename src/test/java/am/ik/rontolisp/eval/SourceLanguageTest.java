@@ -118,9 +118,14 @@ class SourceLanguageTest {
 							+ " (:COPIER NIL)))",
 					"(DEFUN |Main.main()| (|this|) (WRITE-LINE \"#.\"))", "(DEFUN |Main.new()| NIL (|%make-Main|))",
 					"(HANDLER-CASE (|Main.main()| (|Main.new()|)) (ERROR (|%c|) (RONTOLISP::%JAVA-UNCAUGHT |%c|)))");
-		// A program is a whole file: there is no prompt to read a buffer at.
-		assertThatThrownBy(() -> new SourceSession(SourceLanguage.JAVA)).isInstanceOf(IllegalArgumentException.class)
-			.hasMessageContaining("--source-language java has no prompt yet");
+		// At the prompt an open bracket, string or statement continues a buffer; a
+		// missing
+		// ; at its end does not, and a wrong buffer is complete, to be reported.
+		SourceSession session = new SourceSession(SourceLanguage.JAVA);
+		assertThat(List.of("int f() {\n", "String t = \"\"\"\n", "if (true)\n", "f(\n", "/* a\n"))
+			.noneMatch(session::isComplete);
+		assertThat(List.of("1 + 1\n", "int x = 1\n", "class A { }\n", "foo bar\n", "f(1); f(2)\n"))
+			.allMatch(session::isComplete);
 	}
 
 	@Test

@@ -348,7 +348,7 @@ public final class DocGen {
 		body = alignHeadingIds(body, mdFile, lang);
 		body = rewriteMarkdownLinks(body);
 		this.searchIndex.addPage(docPath.substring(lang.length() + 1), title, body, operator, label);
-		return RunnableBlockTransformer.transform(body);
+		return RunnableBlockTransformer.transform(body, ("/" + docPath).contains("/java/"));
 	}
 
 	/**

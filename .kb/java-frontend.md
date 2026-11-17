@@ -9,9 +9,9 @@ rules: [java-frontend-provenance.md](java-frontend-provenance.md). `--no-gc` is 
 (`CompileFrontend.run`). First slice: j68 (2026-11-17); the declarations and statements past
 it: j69 (2026-11-17); type parameters, inference, lambdas and boxes: j70 (2026-11-17); the
 library: j71 (2026-11-17); the numbers: j72 (2026-11-17); the exceptions: j73 (2026-11-17);
-several files: j74 (2026-11-17); threads: j76 (2026-11-17); what comes after is `.todo/j74` (a
-session, the calls across languages, the tools), `j77`, `j78`, `j79`, `j81`, `j82` and `j83`
-(what j69, j70, j71, j72, j73 and j76 left).
+several files, a session, the calls across languages, the tools and annotations: j74
+(2026-11-17); threads: j76 (2026-11-17); what comes after is `.todo/j77`, `j78`, `j79`, `j81`,
+`j82` and `j83` (what j69, j70, j71, j72, j73 and j76 left).
 
 ## Where it sits
 
@@ -25,8 +25,9 @@ session, the calls across languages, the tools), `j77`, `j78`, `j79`, `j81`, `j8
   `Java` (facade).
 - Reached ONLY through the seam: `eval/SourceLanguage.JAVA`, `.java` or `--source-language java`
   ([source-language.md](source-language.md)). A program is the file it starts at and the files
-  of its source tree it names, lowered whole together ("A program of several files" below). No
-  `SourceSession`: the REPL and the playground refuse it (`.todo/j74`).
+  of its source tree it names, lowered whole together ("A program of several files" below). A
+  session (`JavaSession`, the REPL's `java> ` and the playground's pick) lowers every buffer with
+  the declarations of the earlier ones ("A session" below).
 - The run-time half is `eval/java.lisp`, spliced by `eval/JavaLibrary` the `StarlarkLibrary` way:
   the interpreter loads it on the first resolution of a `rontolisp::%java-` FUNCTION,
   `CompileFrontend.expand` splices it inside `StarlarkLibrary.process`, `LibraryDefunPruner`
@@ -156,6 +157,91 @@ session, the calls across languages, the tools), `j77`, `j78`, `j79`, `j81`, `j8
   subclass (`deviations.md`). javac drops an inaccessible candidate from the overloads
   (`no suitable constructor found for A(no arguments)`); ours is chosen, then refused by its
   access.
+
+## A session (2026-11-17, j74)
+
+**Every buffer lowers the whole session again**: the declarations the earlier buffers left, kept
+as TEXT, after the buffer (`JavaSession.read`: `buffer + "\n;\n" + earlier`, the buffer's
+positions its own; `JavaParser.session`, statements allowed below the boundary only), and the
+setup step defines every function again. So a call and a dispatch see every class and body
+declared so far, and a later buffer's subclass, overload or new body reaches an earlier caller
+by name (the interpreter calls a function by its name). Rejected: a call table a later buffer
+replaces (every call of a closed program indirect, two lowerings to keep) and lowering the
+affected declarations again (the closure of what a change reaches is the program). Measured
+2026-11-17, the interpreter, a buffer after N declarations (a method and a class calling it,
+alternating, then a call, 100 buffers timed): 120 declarations 10 ms a buffer, 480: 28 ms.
+- **What a buffer holds** (`Snippet`): an import, a type (a top-level class), a method (static,
+  of the session's class `$Session`), a variable (a static field of it, no initializer), a
+  statement, an expression. A statement or an expression is a step method `$step<k>`, called by
+  its own step inside `(handler-case .. (error (c) (%java-session-error c)))`: what it left
+  uncaught is one line, `Exception java.lang.X: message`, and the REPL goes on. The buffer ends
+  in a made-up `;`, so the last statement needs none; `isComplete` reads the buffer alone and
+  takes a missing `;` at its end for complete, any other end of input for more.
+- **Replacement** is by key: a type by name, a method by name and erased parameters as written,
+  a variable by name, an import by its text; a buffer's declarations drop the earlier ones of
+  their keys BEFORE the text is put together. The session's state changes only once the buffer
+  lowered: a buffer that fails leaves it as it was.
+- **Echo** (`JavaSyntax.Echo`, a step answering a string): `label ==> value` by the static type
+  -- a string and a `char` as literals (`%java-echo-string`, `-char`), an array as
+  `int[2] { 1, 2 }` (`%java-echo-array`), anything else as string conversion writes it. An
+  expression is stored in `$<n>` (numbered per expression, a `void` one included, as a snippet
+  shell numbers snippets), a variable in itself, an assignment `x = v` shows under `x`.
+- **Inferred types**: a `var` variable and `$<n>` are fields whose type the Echo sets (the step
+  methods are first in the class, so a later step reads it typed; the table moves, the pass is
+  lowered again). The next buffer's text spells the type (`JavaSession.spell`: qualified, a
+  local or an anonymous class as its supertype, a captured wildcard as the wildcard).
+- **What does not run again**: every class is lazy (`JavaInitOrder.allLazy`); a class's
+  defaults and its `<clinit>%done` are set only when the buffer declares it or no buffer set it up
+  (`Session.declared`, `initialized`), so a static field lives on. A session variable is a
+  `defvar` with its type's default (it holds one when its step failed); a variable whose type
+  names a class the buffer declares again is set to `null` in the setup (its instance has the old
+  slots). What an earlier buffer's values may be is carried: the library classes made
+  (`Session.made`, a dispatch must reach an `ArrayList` no later buffer names), the interfaces a
+  lambda was made for, every one tagged in a session (no later buffer may find an untagged one
+  it must tell apart), and whether `Thread` was reached (`monitors`).
+- **No other file**: a session has no source tree, as `-e` (the REPL's working directory is no
+  package root, and a snippet shell reads none either).
+
+## Across languages (2026-11-17, j74)
+
+**Nothing is converted but a `char` and a `boolean`; the door is a call, both ways**, as
+[starlark-frontend.md](starlark-frontend.md)'s.
+- **Common Lisp -> Java**: `(load "Geometry.java")` (`SourceLanguage.readLoaded`, both load
+  paths): a file with a `main` runs it, one with none defines its classes and runs nothing
+  (`Java.load`, `JavaLowering.loaded`; the CLI entry still refuses no `main`). A static method
+  is the function `|Class.name(erased,params)|` (`JavaNames.function`: the class's Lisp name,
+  `java.lang` simple, a package's qualified), a constructor `|Class.new(params)|`.
+- **Java -> Common Lisp**: a `native` static method of a program (`JavaForms.lispFunction`, an
+  emitter as the library's native members are): the function named by `JavaForms.lispName`, a
+  hyphen before a capital after a lowercase letter or a digit, upcased (`stringUpcase` ->
+  `STRING-UPCASE`, `toJSON` -> `TO-JSON`), resolved where the forms are evaluated. A `char`
+  argument is `code-char`ed, a `char` result `char-code`d, a `boolean` result `(if r t nil)`, a
+  `String` result `%java-lisp-string`. An instance `native` method is refused.
+- **Values**: a number is a number, a string a string, `null` `NIL`, a program's object a
+  structure, an `Object[]` a simple vector. A Lisp list is no `List` (its dispatch has no arm for
+  a cons): a vector crosses. Pinned by java-spec `common-lisp-and-java-call-each-other` (a
+  `.lisp` standalone, no JDK leg; four backends).
+
+## Annotations (2026-11-17, j74)
+
+Parsed and dropped (`JavaParser.annotations`), but a name that is no annotation type of the
+library -- `java.lang`'s five, simple or qualified -- is `cannot find symbol: class X` (a
+`Known` error, which a probe looking ahead reports): the subset has no annotation type of a
+program, so such a name is javac's error too, and it is the kind a processor or a framework
+gives a meaning whose absence would change the program. None of the five changes a program
+that compiles. `@Override` and `@FunctionalInterface` ride in the modifiers and are checked
+(`JavaLowering.overrides`: a supertype's or `Object`'s instance method of the signature seen
+from the class, or a record's accessor; `checkFunctional`).
+
+## The tools (2026-11-17, j74)
+
+`SourceLanguage.isSourceFile`'s readers: `rontolisp build` names no system (as before);
+`rontolisp test` refuses a `.java` file (no test framework; a program's status is its verdict:
+it used to read the file as Lisp, run it and report no tests); `rontolisp format` refuses a
+`.java` and a `.star` named explicitly (re-indenting is no whitespace-only change there; a
+directory walk never took them). The Maven plugin compiles `.lisp` under `src/main/lisp` only
+(`LispSourceSet.EXTENSION`): a `.java` file of a Maven project is javac's, and a subset
+program compiled to a class of the same name would collide with it.
 
 ## Declarations and statements past the first slice (2026-11-17)
 
@@ -745,8 +831,11 @@ refusals and the compile errors with their positions;
 an in-memory `JavaFiles`: the refusals of the source tree, the imports and the access). A
 `standalone:` case may carry `files:` (path to text) written beside it, its `file:` a path
 below its package's directories (`a-program-of-several-files-finds-its-classes-by-package`).
-`SourceLanguageTest#javaClaimsItsExtension`,
-`RontoLispCliStreamsTest#aJavaFileRunsCompilesAndIsRefusedWhereItCannot`,
+`SourceLanguageTest#javaClaimsItsExtension` (`isComplete`),
+`RontoLispCliStreamsTest#aJavaFileRunsCompilesAndIsRefusedWhereItCannot` (a session on a pipe:
+the late binding, a subclass added, static state, the echoes, a step's exception; `test` and
+`format` refusing), `PlaygroundReplTest#theJavaPickKeepsItsDeclarationsAcrossBuffersAndRunsAProgram`,
+java-spec `refused:` cases of the annotations,
 `SchemeLibraryTest#aCommonLispProgramReadsNoFrontEndsLibrary` (the gate), `DocExamplesTest` (a
 ` ```java ` fence is a whole program, its output the plain block after it), `ExamplesE2eTest`
 (`examples/java/shop/Main.java`, read with the files of its source tree).

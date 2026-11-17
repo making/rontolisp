@@ -158,6 +158,18 @@ class PlaygroundReplTest {
 	}
 
 	@Test
+	void theJavaPickKeepsItsDeclarationsAcrossBuffersAndRunsAProgram() {
+		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.JAVA);
+		assertThat(repl.eval("int twice(int n) { return 2 * n; }\nSystem.out.println(twice(2))")).isEqualTo("4\n");
+		assertThat(repl.eval("var xs = new int[] { twice(3) }")).isEqualTo("xs ==> int[1] { 6 }");
+		assertThatThrownBy(() -> repl.eval("xs[1]")).hasMessageContaining(
+				"Exception java.lang.ArrayIndexOutOfBoundsException: Index 1 out of bounds for length 1");
+		assertThat(repl.eval("String.valueOf(xs[0])")).isEqualTo("$3 ==> \"6\"");
+		assertThat(new PlaygroundRepl(NO_FILES).pick(SourceLanguage.JAVA).run("void main() { IO.println(1 + 2); }"))
+			.isEqualTo("3\n");
+	}
+
+	@Test
 	void aFailureCarriesTheConditionsOwnText() {
 		PlaygroundRepl repl = new PlaygroundRepl(NO_FILES).pick(SourceLanguage.SCHEME);
 		assertThatThrownBy(() -> repl.eval("(3 4)")).hasMessageContaining("The object is not applicable: 3");

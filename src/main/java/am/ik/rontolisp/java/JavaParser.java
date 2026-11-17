@@ -3,6 +3,7 @@ package am.ik.rontolisp.java;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.Objects;
 import java.util.List;
 import java.util.Set;
 
@@ -85,6 +86,20 @@ final class JavaParser {
 
 	}
 
+	/**
+	 * An error that holds wherever the text is read from, which a probe looking ahead
+	 * reports rather than taking it for another construct: an annotation of no type.
+	 */
+	static final class Known extends LispReadException {
+
+		private static final long serialVersionUID = 1L;
+
+		Known(String message, SourceLocation at) {
+			super(message, at);
+		}
+
+	}
+
 	private static final Set<String> RESERVED = Set.of("abstract", "assert", "boolean", "break", "byte", "case",
 			"catch", "char", "class", "const", "continue", "default", "do", "double", "else", "enum", "extends",
 			"final", "finally", "float", "for", "goto", "if", "implements", "import", "instanceof", "int", "interface",
@@ -98,7 +113,7 @@ final class JavaParser {
 	private static final Set<String> MODIFIERS = Set.of("public", "protected", "private", "static", "final", "abstract",
 			"synchronized", "volatile");
 
-	private static final Set<String> REFUSED_MODIFIERS = Set.of("native", "transient", "strictfp");
+	private static final Set<String> REFUSED_MODIFIERS = Set.of("transient", "strictfp");
 
 	private static final List<List<String>> LEVELS = List.of(List.of("||"), List.of("&&"), List.of("|"), List.of("^"),
 			List.of("&"), List.of("==", "!="), List.of("<", ">", "<=", ">=", "instanceof"), List.of("<<", ">>", ">>>"),
@@ -298,6 +313,193 @@ final class JavaParser {
 		return new CompilationUnit(packageName, imports, classes);
 	}
 
+	/** What a top-level item of a session's buffer is. */
+	enum SnippetKind {
+
+		IMPORT, TYPE, METHOD, VARIABLE, STATEMENT, EXPRESSION
+
+	}
+
+	/**
+	 * A top-level item of a session's buffer.
+	 *
+	 * @param kind what it is
+	 * @param key what a later item replacing it has the same of: a class's name, a
+	 * method's name and erased parameters, a variable's name, an import's text
+	 * @param start where its text starts
+	 * @param end where its text ends
+	 * @param type a variable's type as written, {@code var} when it is inferred
+	 * @param variable the variable it declares, {@code null} for none
+	 * @param step the method of the session's class it runs as, {@code null} for none
+	 */
+	record Snippet(SnippetKind kind, String key, int start, int end, @Nullable String type, @Nullable String variable,
+			@Nullable String step) {
+	}
+
+	/**
+	 * A session's text, read: the buffer, then the declarations the earlier buffers left.
+	 *
+	 * @param unit the program: the session's class, holding its variables, methods and
+	 * the buffer's steps, then the classes
+	 * @param snippets the buffer's items, in order
+	 * @param echoes the number the last generated variable has
+	 */
+	record SessionTree(CompilationUnit unit, List<Snippet> snippets, int echoes) {
+	}
+
+	/**
+	 * Parses a session's text: below {@code boundary} a buffer, whose top level may hold
+	 * statements and expressions; above it the declarations of the earlier buffers. A
+	 * variable is a static field of the session's class, set by its step; a method is
+	 * static; a type is a top-level class.
+	 * @param text the text
+	 * @param boundary where the buffer ends
+	 * @param className the session's class
+	 * @param echoes the number of the last generated variable ({@code $1}, ...) so far
+	 * @return the tree
+	 */
+	static SessionTree session(String text, int boundary, String className, int echoes) {
+		return new JavaParser(text, null).sessionUnit(boundary, className, echoes);
+	}
+
+	private SessionTree sessionUnit(int boundary, String className, int echoes) {
+		List<Import> imports = new ArrayList<>();
+		List<ClassDeclaration> classes = new ArrayList<>();
+		List<Snippet> snippets = new ArrayList<>();
+		List<Field> fields = new ArrayList<>();
+		List<Method> steps = new ArrayList<>();
+		Body members = new Body();
+		int echo = echoes;
+		while (current().kind() != Kind.END) {
+			if (eat(";")) {
+				continue;
+			}
+			boolean buffer = current().offset() < boundary;
+			int start = current().offset();
+			if (at("package")) {
+				throw error("a session has no package declaration");
+			}
+			if (at("import")) {
+				Import imported = importDeclaration();
+				imports.add(imported);
+				String key = "import " + (imported.isStatic() ? "static " : "") + imported.name()
+						+ (imported.onDemand() ? ".*" : "");
+				snippets.add(new Snippet(SnippetKind.IMPORT, key, start, end(), null, null, null));
+				continue;
+			}
+			if (atLocalClass()) {
+				ClassDeclaration declared = typeDeclaration(modifiers());
+				classes.add(declared);
+				snippets.add(new Snippet(SnippetKind.TYPE, "type " + declared.name(), start, end(), null, null, null));
+				continue;
+			}
+			if (atMethod()) {
+				member(className, JavaSyntax.Kind.CLASS, members);
+				Method method = members.methods.removeLast();
+				Set<String> modifiers = new LinkedHashSet<>(method.modifiers());
+				modifiers.add("static");
+				members.methods.add(new Method(method.pos(), modifiers, method.returnType(), method.name(),
+						method.parameters(), method.body(), false, method.typeParameters()));
+				StringBuilder key = new StringBuilder("method ").append(method.name()).append('(');
+				for (Parameter parameter : method.parameters()) {
+					TypeName type = Objects.requireNonNull(parameter.type());
+					key.append(type.name()).append("[]".repeat(type.dimensions())).append(',');
+				}
+				snippets
+					.add(new Snippet(SnippetKind.METHOD, key.append(')').toString(), start, end(), null, null, null));
+				continue;
+			}
+			if (atDeclaration()) {
+				finalModifier();
+				int typeAt = current().offset();
+				LocalVariable variable = localVariable();
+				expect(";");
+				for (Declarator declarator : variable.declarators()) {
+					String type = this.source.substring(typeAt, variable.declarators().get(0).pos()).strip();
+					fields.add(new Field(declarator.pos(), Set.of("static"), variable.type(), declarator.name(), null));
+					String step = null;
+					if (buffer) {
+						step = "$step" + (steps.size() + 1);
+						steps.add(echoStep(step, new JavaSyntax.Echo(declarator.pos(), declarator.name(),
+								declarator.name(), declarator.initializer())));
+					}
+					snippets.add(new Snippet(SnippetKind.VARIABLE, "var " + declarator.name(), start, end(), type,
+							declarator.name(), step));
+				}
+				continue;
+			}
+			if (!buffer) {
+				throw error("expected a declaration but found " + current().shown());
+			}
+			List<Statement> out = new ArrayList<>();
+			statement(out);
+			String step = "$step" + (steps.size() + 1);
+			if (out.size() == 1 && out.get(0) instanceof ExpressionStatement statement) {
+				Expression value = statement.expression();
+				if (value instanceof JavaSyntax.Assign assign && assign.operator().equals("=")
+						&& assign.target() instanceof JavaSyntax.Name name) {
+					steps.add(echoStep(step, new JavaSyntax.Echo(value.pos(), name.identifier(), null, value)));
+					snippets.add(new Snippet(SnippetKind.EXPRESSION, "", start, end(), null, null, step));
+				}
+				else {
+					String generated = "$" + (++echo);
+					fields.add(new Field(value.pos(), Set.of("static"),
+							new TypeName(value.pos(), "var", List.of(), false, 0), generated, null));
+					steps.add(echoStep(step, new JavaSyntax.Echo(value.pos(), generated, generated, value)));
+					snippets.add(new Snippet(SnippetKind.EXPRESSION, "var " + generated, start, end(), "var", generated,
+							step));
+				}
+				continue;
+			}
+			Block body = out.size() == 1 && out.get(0) instanceof Block block ? block
+					: new Block(start, List.copyOf(out));
+			steps.add(new Method(start, Set.of("static"), new TypeName(start, "void", List.of(), false, 0), step,
+					List.of(), body));
+			snippets.add(new Snippet(SnippetKind.STATEMENT, "", start, end(), null, null, step));
+		}
+		// the steps first: a step infers the type of the variable it declares before a
+		// later one reads it
+		List<Method> methods = new ArrayList<>(steps);
+		methods.addAll(members.methods);
+		ClassDeclaration session = new ClassDeclaration(0, Set.of("final"), JavaSyntax.Kind.CLASS, className, null,
+				List.of(), List.of(), List.of(), List.of(), fields, methods, List.of(), List.of(), true);
+		List<ClassDeclaration> all = new ArrayList<>(List.of(session));
+		all.addAll(classes);
+		return new SessionTree(new CompilationUnit(null, imports, all), snippets, echo);
+	}
+
+	/** Where the item read last ends: where the next token starts. */
+	private int end() {
+		return current().offset();
+	}
+
+	private static Method echoStep(String name, JavaSyntax.Echo echo) {
+		return new Method(echo.pos(), Set.of("static"), new TypeName(echo.pos(), "String", List.of(), false, 0), name,
+				List.of(), new Block(echo.pos(), List.of(new JavaSyntax.Return(echo.pos(), echo))));
+	}
+
+	/** Whether a method is declared here; the position is left as it was. */
+	private boolean atMethod() {
+		int save = this.p;
+		try {
+			modifiers();
+			typeParameters();
+			if (!eat("void")) {
+				typeName();
+			}
+			return atIdentifier() && peekIs(1, "(");
+		}
+		catch (Unsupported | Known ex) {
+			throw ex;
+		}
+		catch (LispReadException ex) {
+			return false;
+		}
+		finally {
+			this.p = save;
+		}
+	}
+
 	private Import importDeclaration() {
 		int pos = expect("import").offset();
 		boolean isStatic = eat("static");
@@ -328,11 +530,32 @@ final class JavaParser {
 		return name.toString();
 	}
 
-	/** Skips annotations: they are parsed and dropped. */
-	private void annotations() {
+	/**
+	 * The annotation types of the library, all of {@code java.lang}: none changes what a
+	 * program that compiles does. Any other name is no type the program can see -- the
+	 * subset has no annotation type of a program's own --, which a compiler refuses, and
+	 * it is the kind whose meaning a processor or a framework would give.
+	 */
+	private static final Set<String> ANNOTATIONS = Set.of("Override", "Deprecated", "SuppressWarnings", "SafeVarargs",
+			"FunctionalInterface");
+
+	/**
+	 * Reads annotations, which are dropped but for what a compiler checks of
+	 * {@code @Override} and {@code @FunctionalInterface}: the modifiers of a declaration
+	 * carry those as {@code @Override} and {@code @FunctionalInterface}.
+	 * @return the simple names of the annotations read
+	 */
+	private List<String> annotations() {
+		List<String> names = new ArrayList<>();
 		while (at("@") && !peekIs(1, "interface")) {
+			int pos = current().offset();
 			this.p++;
-			qualifiedName();
+			String name = qualifiedName();
+			String simple = name.startsWith("java.lang.") ? name.substring("java.lang.".length()) : name;
+			if (!ANNOTATIONS.contains(simple)) {
+				throw new Known("cannot find symbol: class " + name, location(pos));
+			}
+			names.add(simple);
 			if (at("(")) {
 				int depth = 0;
 				do {
@@ -350,6 +573,7 @@ final class JavaParser {
 				while (depth > 0);
 			}
 		}
+		return names;
 	}
 
 	/** Whether a token can follow the contextual modifier {@code sealed}. */
@@ -361,7 +585,9 @@ final class JavaParser {
 	private Set<String> modifiers() {
 		Set<String> modifiers = new LinkedHashSet<>();
 		while (true) {
-			annotations();
+			for (String annotation : annotations()) {
+				modifiers.add("@" + annotation);
+			}
 			JavaToken token = current();
 			if (token.kind() != Kind.IDENTIFIER) {
 				return modifiers;
@@ -379,8 +605,9 @@ final class JavaParser {
 				modifiers.add("non-sealed");
 				this.p += 3;
 			}
-			else if (token.text().equals("native") && this.file != null && this.file.startsWith(LIBRARY)) {
-				// a member of the library's own source that is a form, not Java
+			else if (token.text().equals("native")) {
+				// a member of the library's own source that is a form, not Java; of a
+				// program, a Common Lisp function
 				modifiers.add("native");
 				this.p++;
 			}
@@ -797,7 +1024,7 @@ final class JavaParser {
 			}
 			return peekIs(1, "=") || peekIs(1, ";") || peekIs(1, ",") || peekIs(1, ":") || peekIs(1, "[");
 		}
-		catch (Unsupported ex) {
+		catch (Unsupported | Known ex) {
 			throw ex;
 		}
 		catch (LispReadException ex) {
@@ -857,6 +1084,12 @@ final class JavaParser {
 		}
 		if (eat(";")) {
 			out.add(new Empty(pos));
+			return;
+		}
+		if (at("@") && atLocalClass()) {
+			// an annotated local class
+			ClassDeclaration declaration = typeDeclaration(modifiers());
+			out.add(new LocalClass(declaration.pos(), declaration));
 			return;
 		}
 		if (token.kind() == Kind.IDENTIFIER) {
@@ -1412,7 +1645,7 @@ final class JavaParser {
 				default -> false;
 			};
 		}
-		catch (Unsupported ex) {
+		catch (Unsupported | Known ex) {
 			throw ex;
 		}
 		catch (LispReadException ex) {
@@ -1612,7 +1845,7 @@ final class JavaParser {
 				return type;
 			}
 		}
-		catch (Unsupported ex) {
+		catch (Unsupported | Known ex) {
 			// read again as an expression, which says what it is
 		}
 		catch (LispReadException ex) {
