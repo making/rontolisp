@@ -49,6 +49,12 @@ JDK は `false false true` を表示します。
 `ClassCastException` になる箇所でも、そのまま使われます。型変数へのキャストはその境界を、
 型引数付きの型へのキャストはそのクラスを検査します。
 
+**オーバーロードされたメソッドの引数になった呼び出しは、自身の引数だけで型が決まります。**
+同じ数の引数を取るオーバーロードが複数あるメソッドの場合、その呼び出しの引数のラムダの引数型を
+外側のメソッドしか与えられないと、エラーになります。`show(Comparator<String>)` と
+`show(Runnable)` を宣言したプログラムでは、`show(Comparator.comparing(s -> s.length()))` が
+`s.length()` で拒否されます。そこでの `s` は `Object` だからです。
+
 **配列への格納は検査しません。** 参照型の配列は要素の型を記録していません。そのため、配列自身の型
 より上の配列型を通して格納した値（`Object[] a = new String[1]; a[0] = 1;`）は、言語仕様では
 `ArrayStoreException` になる場合でも格納されます。
@@ -125,8 +131,8 @@ Exception in thread "main" java.lang.IllegalStateException: insufficient funds: 
 
 **コンパイラが報告するエラーの一部は報告されません。** そのようなプログラムは実行されます。
 `throws` 節は読みますが検査しません。捕捉も宣言もされていないチェック例外と、`try` が投げ
-得ないチェック例外の `catch` は報告しません。型パラメータの境界を満たさない型引数は報告せず、
-unchecked の警告も表示しません。`protected` のメンバーには、そのクラスのサブクラスならどこからでも
+得ないチェック例外の `catch` は報告しません。unchecked の警告は表示しません。
+`protected` のメンバーには、そのクラスのサブクラスならどこからでも
 アクセスできます。言語仕様では、インスタンスメンバーにはサブクラス自身の型の参照を通してだけ、
 コンストラクタには `super(..)` を通してだけアクセスできます。
 
@@ -200,13 +206,11 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 - アノテーション型、`assert`。
 - `synchronized` 文のロック以外のクラスリテラル。
 - `long`、`float`、`double`、`boolean` に対する `switch`。修飾した `super` を通すメソッド参照
-  （`Interface.super::m`）。`<>` で作る匿名クラス。
+  （`Interface.super::m`）。型引数を書くコンストラクタ参照（`Box::<T>new`）。
 - スーパークラスのフィールドを隠すフィールド。
-- `Outer<A>.Inner` と書く型。型パラメータを持つクラスの内部クラスのメンバーを、そのクラスの
-  外から読むこと。複数の型へのキャスト（`(A & B) x`）。`int[]`、`byte[]`、`float[]`、
-  `double[]`、`boolean[]` 以外の配列型へのナローイングキャストと `instanceof`。
-  型に型引数があるメソッド参照（`List<String>::size`）と、自身の型引数を書くメソッド参照
-  （`this::<T>m`）。
+- 複数の型へのラムダとメソッド参照のキャスト（`(Runnable & Marker) () -> ..`）。`int[]`、
+  `byte[]`、`float[]`、`double[]`、`boolean[]` 以外の配列型へのナローイングキャストと
+  `instanceof`。
 - `String`、`StringBuilder`、ボックスを継承するクラス。
 - 4 つのアトミッククラスを除く `java.util.concurrent`。ロック、エグゼキューター、並行
   コレクション、`CompletableFuture` などです。`Thread.getState`、スレッドグループ、未捕捉例外

@@ -11,8 +11,9 @@ it: j69 (2026-11-17); type parameters, inference, lambdas and boxes: j70 (2026-1
 library: j71 (2026-11-17); the numbers: j72 (2026-11-17); the exceptions: j73 (2026-11-17);
 several files, a session, the calls across languages, the tools and annotations: j74
 (2026-11-17); threads: j76 (2026-11-17); the flow, outer instances and qualified `super`: j77
-(2026-11-17); what comes after is `.todo/j78`, `j79`, `j81`, `j82` and `j83` (what j70, j71,
-j72, j73 and j76 left).
+(2026-11-17); inner class types, intersections, the inference j70 left: j78 (2026-11-17);
+what comes after is `.todo/j79`, `j81`, `j82`, `j83` and `j86` (what j71, j72, j73, j76 and
+j78 left).
 
 ## Where it sits
 
@@ -393,9 +394,35 @@ the first problem of the kind it reports first: reachability, then assignment, t
 - **A local class sees the type parameters of the method around it** through `JavaClass.scope`,
   taken where the class is declared; `JavaClasses.methodParameters` is the method being read
   or lowered, empty inside `inContext`.
-- **Not done** (`.todo/j78`): the arguments of the class around an inner class are no part
-  of the inner class's type, so a member typed by them read from OUTSIDE that class is refused
-  by name (`inScope`); a type argument is not checked against its parameter's bound.
+- **A type of an inner member class carries the arguments of the classes around it** (j78),
+  after its own: `JavaClass.allTypeParameters` is its own then the outer's (an inner member
+  only; a local or an anonymous class reads the parameters around it as they are), and every
+  relation that pairs `ClassType.arguments` with parameters (`bindings`, `capture`, `refine`,
+  `isRaw`, `self`) reads that list. So `Stack<String>.Cell` (`TypeName.enclosing`),
+  `Cell` written in `Stack<T>`'s body or a subclass's (`JavaClasses.enclosingArguments`: the
+  class around that is under the declaring one), `s.new Cell()` and `new Cell<>()` give
+  `value` the type `String` -- before, it was refused from outside and wrongly `T` inside
+  through another parameterization. Rejected: an `outer` component of `ClassType` (every
+  relation would have learnt a second list; javac's `allparams` is this flattening). `inScope`
+  stays as the guard of a local class's member read from where no type gave the argument.
+  Errors as javac's: `cannot select a static class from a parameterized type`, `improperly
+  formed type, some parameters are missing` / `type arguments given on a raw type`.
+- **A written type argument is checked against its parameter's bounds** (j78,
+  `JavaClasses.withinBounds`): where written in a body, at once; in a declaration, once the
+  declarations read with it have set their bounds (`boundChecks`, at the end of
+  `complete`). A wildcard is not checked. `type argument String is not within bounds of
+  type-variable T`.
+- **A field written through a wildcard takes the capture** (`Place.stored`): read as the
+  bound, written only with what converts to `CAP#1` (`JavaTypes.diagnostic` names captures
+  as javac does in a message).
+- **An intersection is a type variable no declaration names** (`JavaTypes.intersection`,
+  `TypeParameter.intersection`): bounded by each type, so members and subtyping come from the
+  bounds (a field too, through any bound: `t.PREFIX` of `T extends A & B`); two are one type
+  when their bounds are. A cast `(A & B) x` casts to each in turn (the failing one names
+  itself in the exception); a lub of types sharing several least supertypes is their
+  intersection, the class first (two records implementing `S` are `Record & S`, which was
+  `Record`). A lambda or a method reference cast to one is refused by name: the marker
+  interfaces would need the lambda tagged for each.
 
 ## Inference (2026-11-17, j70)
 
@@ -420,6 +447,22 @@ lub of the lowers, else an upper, else OPEN.
   (the specification's; the forms do not depend on type arguments, only the conversions do).
 - **Through the declared bound** (`incorporate`): a `Leaf` given for `T extends Comparable<T>`
   makes `T` the `Node<Integer>` that `Leaf` is comparable to.
+- **A call that is an argument and fails without a target is lowered after the inference**
+  (j78, `mayNeedTarget`, `late`): a call whose own arguments hold a lambda or a method
+  reference is lowered once with no target as before; when that fails, the state is put
+  back (`Standing`) and the call waits like a lambda, lowered against its parameter's type
+  once this call's inference has run, its type then told to the inference.
+  `words.sort(Comparator.comparing(s -> s.length()))`, `filter(xs, not(s -> s.isEmpty()))`.
+  Only with one candidate of the arity: with several the first error stands (`deviations.md`).
+  A failure, not a success, marks it, so a program that lowered keeps its forms and its
+  cost. Rejected as before: lowering every such argument a second time.
+- **An exact method reference says what the function takes** (`exact`: one method of the
+  name in a class that is not generic, itself not generic nor of variable arity, as JLS
+  15.13.1 has it): its parameter types are upper bounds of the function's
+  (`fn(B::twice)` finds `Function<Integer, Integer>`); an unbound one's first parameter is
+  the class, as before.
+- **A switch expression whose arms are lambdas waits for its parameter's type** like a
+  conditional of them (`needsTarget`, `accepts`).
 - **A lambda's shape picks among overloads**: its parameter count, and whether its body can
   give a value or none. Only where several candidates remain is a body that is a call asked
   whether it gives nothing (`givesNothing`: lowered once and dropped, state restored), and only
@@ -439,6 +482,12 @@ lub of the lowers, else an upper, else OPEN.
   read as its bound). A method reference is the lambda calling the method: `Type::name` is
   lowered as the static call and, when that is refused, as the call on the first parameter;
   `expression::name` binds the expression once around the lambda; `Type::new` is a creation.
+  `List<String>::size` is the call on the first parameter seen as the type written;
+  `Type::<T>name` passes its type arguments to the call (j78; `Type::<T>new` stays refused).
+- **An anonymous class made with `<>`** (j78, `anonymousType`) extends the type a creation
+  with `<>` finds -- from the target for an interface, from the constructor's arguments
+  (lowered a second time with the class's constructor) for a class --, refused as javac
+  refuses when an argument found is a capture (`cannot infer type arguments for G<>`).
 - **Measured: `functionp` first is kept.** 20,000,000 calls of a lambda and 20,000,000 of a
   class through one interface, the lambda a function / a structure holding it: JVM 0.76 /
   1.57 s, wasm 1.35 / 1.41 s (2026-11-17, the `bench.sh` method, best of three).
@@ -885,15 +934,28 @@ JVM / precompiled wasm / precompiled component, seconds:
   around it resolved among overloads, a generic method's call and nested lambdas included, and so
   does the front end (pinned: `a-local-and-an-anonymous-class-keep-the-locals-they-read`).
 
+### j78 (2026-11-17)
+
+Same box and method (`--dump-ir` edited for the variant; JVM / precompiled wasm / precompiled
+component seconds, best of three; the interpreter on the same IR at a fiftieth to a tenth of
+the rounds):
+
+| question | as lowered | variant | verdict |
+|---|---|---|---|
+| the cast a compiler puts where a value is read through a type argument: 5*10^7 rounds of `xs.get(i).length()` and `ns.get(i)` (`List<String>`, `List<Integer>`) | 1.20 / 2.69 / 2.76; interpreter 4.15 | `(or (null v) (simple-string-p v))` / `integerp` before each use: 1.07 / 3.79 / 3.66; 5.08 | trusted: the JVM pays nothing, wasm 6 ns an `integerp` and 18 ns a `simple-string-p` (+40% on this loop) for a heap only a raw type or an unchecked cast pollutes |
+| `(or box (%java-null-unbox))` where the box was just made: 3*10^8 rounds of `Integer b = i & 1023; Long l = ..; total += b + l` | 0.39 / 1.93 / 1.90; 8.65 | the test dropped: 0.35 / 1.82 / 1.83; 7.15 | kept: 0.17 ns a test on wasm, none on the JVM; only the interpreter would gain, for a flow analysis of where a box was made |
+| the `Long` cons now that `long` arithmetic is one machine operation: a 10^6-element `List<Long>` summed 20 times plus 3*10^7 boxings and unboxings | 1.56-1.69 / 1.78-1.82 / 1.83; 11.33 | a `Long` the bare integer (no `cons`, no `car`): 1.44-1.46 / 1.46-1.61 / 1.49-1.51; 10.73 | kept: 10-20% of a loop that does nothing but box, and the cons is what tells a `Long` from an `Integer` (`equals`, `getClass`, a pattern, a `HashMap` key) |
+
 ## What a compiler reports and this does not, stated in `doc/*/java/deviations.md`
 
 Checked: `private` (the unit is the top-level class), the access of a class or member from
 another package ("A program of several files"), assignment to a `final` field or local, and
 what the flow decides ("The flow"): unreachable statements, a missing `return`, definite
-assignment and unassignment of locals and blank final fields, effectively final captures. Not
-checked: checked exceptions; a type argument outside its parameter's bound and the unchecked
-warnings (`.todo/j78`). A value read through a type argument is trusted (no cast where it is used),
-and a store into an array of references is not checked. The run time's exceptions are the
+assignment and unassignment of locals and blank final fields, effectively final captures; a
+written type argument outside its parameter's bound and a field written through `? extends`
+(j78). Not checked: checked exceptions; the unchecked warnings (`.todo/j86`). A value read
+through a type argument is trusted (no cast where it is used: measured below, "j78"), and a
+store into an array of references is not checked. The run time's exceptions are the
 language's, but a `NullPointerException` has no message and a `ClassCastException` says nothing
 of modules and loaders ("Exceptions").
 
@@ -912,6 +974,9 @@ refusals and the compile errors with their positions;
 an in-memory `JavaFiles`: the refusals of the source tree, the imports and the access). A
 `standalone:` case may carry `files:` (path to text) written beside it, its `file:` a path
 below its package's directories (`a-program-of-several-files-finds-its-classes-by-package`).
+java-spec `refused:` cases of the inner class types and the bounds
+(`a-member-of-an-inner-class-typed-through-the-arguments-around-it`,
+`a-type-argument-outside-its-parameter-s-bound`, `a-field-written-through-an-extends-wildcard`),
 `SourceLanguageTest#javaClaimsItsExtension` (`isComplete`),
 `RontoLispCliStreamsTest#aJavaFileRunsCompilesAndIsRefusedWhereItCannot` (a session on a pipe:
 the late binding, a subclass added, static state, the echoes, a step's exception; `test` and

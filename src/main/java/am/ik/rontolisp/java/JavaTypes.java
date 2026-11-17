@@ -37,7 +37,7 @@ import org.jspecify.annotations.Nullable;
  * inference a compiler finishes from the target type.</li>
  * </ul>
  */
-final class JavaTypes {
+final class JavaTypes implements JavaClasses.Relations {
 
 	private final JavaClasses classes;
 
@@ -82,6 +82,11 @@ final class JavaTypes {
 		};
 	}
 
+	@Override
+	public JavaType substituted(JavaType type, Map<TypeParameter, JavaType> bindings) {
+		return substitute(type, bindings);
+	}
+
 	/** Whether a type names one of some type parameters. */
 	static boolean mentions(JavaType type, Set<TypeParameter> parameters) {
 		return switch (type) {
@@ -94,9 +99,50 @@ final class JavaTypes {
 		};
 	}
 
+	/**
+	 * A message naming types as a compiler does: each captured wildcard is {@code CAP#1},
+	 * {@code CAP#2} in the order the message names them.
+	 */
+	static String diagnostic(String message, JavaType... types) {
+		Set<TypeParameter> captures = new LinkedHashSet<>();
+		for (JavaType type : types) {
+			captures(type, captures);
+		}
+		List<String> names = new ArrayList<>();
+		for (TypeParameter capture : captures) {
+			if (message.contains(capture.name)) {
+				names.add(capture.name);
+			}
+		}
+		names.sort(java.util.Comparator.comparingInt(message::indexOf));
+		String shown = message;
+		for (int i = 0; i < names.size(); i++) {
+			shown = shown.replace(names.get(i), "CAP#" + (i + 1));
+		}
+		return shown;
+	}
+
+	private static void captures(JavaType type, Set<TypeParameter> into) {
+		switch (type) {
+			case Variable variable when variable.parameter().captured != null -> into.add(variable.parameter());
+			case ClassType named -> named.arguments().forEach(argument -> captures(argument, into));
+			case ArrayType array -> captures(array.element(), into);
+			case Wildcard wildcard -> {
+				if (wildcard.upper() != null) {
+					captures(wildcard.upper(), into);
+				}
+				if (wildcard.lower() != null) {
+					captures(wildcard.lower(), into);
+				}
+			}
+			default -> {
+			}
+		}
+	}
+
 	/** Whether a parameterized class is named with no argument. */
 	static boolean isRaw(ClassType type) {
-		return type.arguments().isEmpty() && !type.declaration().typeParameters.isEmpty();
+		return type.arguments().isEmpty() && !type.declaration().allTypeParameters().isEmpty();
 	}
 
 	/** A type as the program that runs has it: no argument, a variable its bound. */
@@ -116,7 +162,7 @@ final class JavaTypes {
 	 * parameter's bound for a raw type.
 	 */
 	Map<TypeParameter, JavaType> bindings(ClassType type) {
-		List<TypeParameter> parameters = type.declaration().typeParameters;
+		List<TypeParameter> parameters = type.declaration().allTypeParameters();
 		if (parameters.isEmpty()) {
 			return Map.of();
 		}
@@ -134,7 +180,8 @@ final class JavaTypes {
 	 * The supertype of a type that is of a class, with the arguments the type gives it,
 	 * or {@code null} when the type is not under the class.
 	 */
-	@Nullable ClassType asSuper(JavaType type, JavaClass above) {
+	@Override
+	public @Nullable ClassType asSuper(JavaType type, JavaClass above) {
 		switch (type) {
 			case ClassType named: {
 				JavaClass declaration = named.declaration();
@@ -186,7 +233,7 @@ final class JavaTypes {
 	 * @param owner the class declaring it
 	 */
 	JavaType memberType(JavaType declared, @Nullable JavaType site, JavaClass owner) {
-		if (site == null || owner.typeParameters.isEmpty()) {
+		if (site == null || owner.allTypeParameters().isEmpty()) {
 			return declared;
 		}
 		ClassType above = asSuper(site, owner);
@@ -217,7 +264,7 @@ final class JavaTypes {
 		if (type.arguments().stream().noneMatch(Wildcard.class::isInstance)) {
 			return type;
 		}
-		List<TypeParameter> declared = type.declaration().typeParameters;
+		List<TypeParameter> declared = type.declaration().allTypeParameters();
 		List<JavaType> arguments = new ArrayList<>();
 		Map<TypeParameter, JavaType> bindings = new HashMap<>();
 		List<TypeParameter> captured = new ArrayList<>();
@@ -336,6 +383,25 @@ final class JavaTypes {
 		return new Variable(open);
 	}
 
+	/**
+	 * An intersection type, {@code A & B}: a variable bounded by each type, the class
+	 * first, which a cast names and a lub of types sharing several supertypes is.
+	 */
+	static Variable intersection(List<JavaType> bounds) {
+		StringBuilder name = new StringBuilder();
+		for (JavaType bound : bounds) {
+			name.append(name.isEmpty() ? "" : "&").append(bound);
+		}
+		TypeParameter parameter = new TypeParameter(name.toString(), false, false);
+		parameter.bounds = List.copyOf(bounds);
+		parameter.intersection = true;
+		return new Variable(parameter);
+	}
+
+	private static boolean isIntersection(JavaType type) {
+		return type instanceof Variable variable && variable.parameter().intersection;
+	}
+
 	private static boolean isOpen(JavaType type) {
 		return type instanceof Variable variable && variable.parameter().open;
 	}
@@ -376,6 +442,12 @@ final class JavaTypes {
 		if (a instanceof ArrayType left && b instanceof ArrayType right) {
 			return sameType(left.element(), right.element());
 		}
+		if (isIntersection(a) && isIntersection(b)) {
+			List<JavaType> left = ((Variable) a).parameter().bounds;
+			List<JavaType> right = ((Variable) b).parameter().bounds;
+			return left.size() == right.size()
+					&& left.stream().allMatch(bound -> right.stream().anyMatch(other -> sameType(bound, other)));
+		}
 		if (a instanceof Wildcard left && b instanceof Wildcard right) {
 			return sameType(left.upper(), right.upper()) && sameType(left.lower(), right.lower());
 		}
@@ -386,7 +458,8 @@ final class JavaTypes {
 	 * Whether a value of one type is a value of another with no conversion but the
 	 * unchecked one a raw type allows.
 	 */
-	boolean isSubtype(JavaType from, JavaType to) {
+	@Override
+	public boolean isSubtype(JavaType from, JavaType to) {
 		if (sameType(from, to)) {
 			return true;
 		}
@@ -395,6 +468,9 @@ final class JavaTypes {
 		}
 		if (from == JavaType.Null.NULL) {
 			return true;
+		}
+		if (isIntersection(to)) {
+			return ((Variable) to).parameter().bounds.stream().allMatch(bound -> isSubtype(from, bound));
 		}
 		if (to instanceof Variable variable) {
 			TypeParameter parameter = variable.parameter();
@@ -510,14 +586,26 @@ final class JavaTypes {
 		supertypes(right.declaration(), shared);
 		shared.retainAll(above);
 		shared.remove(this.object.declaration());
-		List<JavaClass> least = shared.stream()
+		// the least of them, the class first: several are their intersection
+		List<JavaClass> least = new ArrayList<>(shared.stream()
 			.filter(type -> shared.stream().noneMatch(other -> other != type && other.isSubclassOf(type)))
-			.toList();
-		List<JavaClass> concrete = least.stream().filter(type -> !type.isInterface).toList();
-		JavaClass chosen = concrete.size() == 1 ? concrete.get(0) : least.size() == 1 ? least.get(0) : null;
-		if (chosen == null) {
+			.toList());
+		least.sort(java.util.Comparator.comparing(type -> type.isInterface));
+		if (least.isEmpty()) {
 			return this.object;
 		}
+		List<JavaType> bounds = new ArrayList<>();
+		for (JavaClass chosen : least) {
+			bounds.add(shared(left, right, chosen));
+		}
+		return bounds.size() == 1 ? bounds.get(0) : intersection(bounds);
+	}
+
+	/**
+	 * A supertype two class types share: its arguments where the two give it the same, a
+	 * wildcard where they do not, none where either is raw.
+	 */
+	private ClassType shared(ClassType left, ClassType right, JavaClass chosen) {
 		ClassType mine = java.util.Objects.requireNonNull(asSuper(left, chosen));
 		ClassType theirs = java.util.Objects.requireNonNull(asSuper(right, chosen));
 		if (mine.arguments().isEmpty() || theirs.arguments().isEmpty()) {
@@ -538,11 +626,12 @@ final class JavaTypes {
 	 * type's permitted class is under one of its parameterizations.
 	 */
 	ClassType refine(JavaClass declaration, JavaType from) {
-		if (declaration.typeParameters.isEmpty()) {
+		List<TypeParameter> parameters = declaration.allTypeParameters();
+		if (parameters.isEmpty()) {
 			return new ClassType(declaration, List.of());
 		}
 		ClassType self = declaration.self();
-		Inference inference = new Inference(declaration.typeParameters);
+		Inference inference = new Inference(parameters);
 		JavaType source = from instanceof Variable variable ? site(variable) : from;
 		if (source instanceof ClassType named && !named.arguments().isEmpty()) {
 			ClassType above = asSuper(self, named.declaration());
@@ -555,7 +644,7 @@ final class JavaTypes {
 			}
 		}
 		List<JavaType> arguments = new ArrayList<>();
-		for (TypeParameter parameter : declaration.typeParameters) {
+		for (TypeParameter parameter : parameters) {
 			JavaType found = inference.resolved(parameter);
 			arguments.add(found != null ? found : new Wildcard(null, null));
 		}

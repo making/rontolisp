@@ -874,7 +874,7 @@ final class JavaParser {
 			TypeName type = typeName();
 			boolean varargs = eat("...");
 			if (varargs) {
-				type = new TypeName(type.pos(), type.name(), type.arguments(), type.diamond(), type.dimensions() + 1);
+				type = type.withDimensions(type.dimensions() + 1);
 			}
 			if (at("this")) {
 				throw unsupported("a receiver parameter");
@@ -946,42 +946,52 @@ final class JavaParser {
 
 	private TypeName typeName() {
 		int pos = current().offset();
-		String name;
 		if (current().kind() == Kind.IDENTIFIER && PRIMITIVES.contains(current().text())) {
-			name = this.tokens.get(this.p++).text();
+			String name = this.tokens.get(this.p++).text();
+			return new TypeName(pos, name, List.of(), false, dimensions());
 		}
-		else {
-			StringBuilder qualified = new StringBuilder(identifier());
+		// Outer<A>.Inner<B>: the name is the whole dotted name, the prefix written with
+		// arguments its enclosing type
+		StringBuilder qualified = new StringBuilder(identifier());
+		TypeName enclosing = null;
+		while (true) {
 			while (at(".") && peek(1).kind() == Kind.IDENTIFIER && !RESERVED.contains(peek(1).text())) {
 				this.p++;
 				qualified.append('.').append(identifier());
 			}
-			name = qualified.toString();
-		}
-		List<TypeName> arguments = new ArrayList<>();
-		boolean diamond = false;
-		if (at("<") && !PRIMITIVES.contains(name)) {
-			this.p++;
-			if (eat(">")) {
-				diamond = true;
-			}
-			else {
-				do {
-					arguments.add(typeArgument());
+			List<TypeName> arguments = new ArrayList<>();
+			boolean diamond = false;
+			if (at("<")) {
+				this.p++;
+				if (eat(">")) {
+					diamond = true;
 				}
-				while (eat(","));
-				expect(">");
+				else {
+					do {
+						arguments.add(typeArgument());
+					}
+					while (eat(","));
+					expect(">");
+				}
+				if (at(".") && peek(1).kind() == Kind.IDENTIFIER && !RESERVED.contains(peek(1).text())) {
+					if (diamond) {
+						throw error("illegal start of type");
+					}
+					enclosing = new TypeName(pos, qualified.toString(), List.copyOf(arguments), false, 0, enclosing);
+					continue;
+				}
 			}
-			if (at(".") && peek(1).kind() == Kind.IDENTIFIER && !RESERVED.contains(peek(1).text())) {
-				throw unsupported("a type nested in a parameterized type");
-			}
+			return new TypeName(pos, qualified.toString(), arguments, diamond, dimensions(), enclosing);
 		}
+	}
+
+	private int dimensions() {
 		int dimensions = 0;
 		while (at("[") && peekIs(1, "]")) {
 			this.p += 2;
 			dimensions++;
 		}
-		return new TypeName(pos, name, arguments, diamond, dimensions);
+		return dimensions;
 	}
 
 	// ---- statements
@@ -1605,8 +1615,12 @@ final class JavaParser {
 					if (!atLambda() && atCast()) {
 						this.p++;
 						TypeName type = typeName();
+						List<TypeName> also = new ArrayList<>();
+						while (eat("&")) {
+							also.add(typeName());
+						}
 						expect(")");
-						return new Cast(pos, type, atLambda() ? lambda() : unary());
+						return new Cast(pos, type, atLambda() ? lambda() : unary(), List.copyOf(also));
 					}
 					break;
 				default:
@@ -1633,10 +1647,7 @@ final class JavaParser {
 			JavaToken next = current();
 			if (intersection) {
 				// (a & b) is an expression unless an operand follows it
-				if (next.kind() == Kind.IDENTIFIER && !next.text().equals("instanceof") || next.is("(")) {
-					throw unsupported("an intersection type", this.tokens.get(save).offset());
-				}
-				return false;
+				return next.kind() == Kind.IDENTIFIER && !next.text().equals("instanceof") || next.is("(");
 			}
 			return switch (next.kind()) {
 				case STRING, CHAR, INT, LONG, FLOAT, DOUBLE -> true;
@@ -1797,7 +1808,8 @@ final class JavaParser {
 				}
 				if (at("::")) {
 					int at = this.tokens.get(this.p++).offset();
-					return new JavaSyntax.MethodReference(at, null, null, identifier(), true);
+					List<TypeName> typeArguments = typeArguments();
+					return new JavaSyntax.MethodReference(at, null, null, identifier(), true, typeArguments);
 				}
 				expect(".");
 				List<TypeName> typeArguments = typeArguments();
@@ -1818,8 +1830,9 @@ final class JavaParser {
 		TypeName referenced = referencedType();
 		if (referenced != null) {
 			int at = expect("::").offset();
+			List<TypeName> typeArguments = typeArguments();
 			return new JavaSyntax.MethodReference(at, null, referenced,
-					at("new") ? this.tokens.get(this.p++).text() : identifier(), false);
+					at("new") ? this.tokens.get(this.p++).text() : identifier(), false, typeArguments);
 		}
 		if (PRIMITIVES.contains(token.text()) || token.text().equals("void")) {
 			throw unsupported("a class literal");
@@ -1841,7 +1854,7 @@ final class JavaParser {
 		int save = this.p;
 		try {
 			TypeName type = typeName();
-			if (at("::") && (type.dimensions() > 0 || !type.arguments().isEmpty())) {
+			if (at("::") && (type.dimensions() > 0 || !type.arguments().isEmpty() || type.enclosing() != null)) {
 				return type;
 			}
 		}
@@ -1878,7 +1891,8 @@ final class JavaParser {
 				this.p += 2;
 				dimensions++;
 			}
-			return new NewArray(pos, new TypeName(type.pos(), type.name(), type.arguments(), false, dimensions),
+			return new NewArray(pos,
+					new TypeName(type.pos(), type.name(), type.arguments(), false, dimensions, type.enclosing()),
 					lengths, null);
 		}
 		List<Expression> arguments = arguments();
@@ -1952,11 +1966,9 @@ final class JavaParser {
 			}
 			else if (at("::")) {
 				int at = this.tokens.get(this.p++).offset();
-				if (at("<")) {
-					throw unsupported("an explicit type argument of a method reference");
-				}
+				List<TypeName> typeArguments = typeArguments();
 				expression = new JavaSyntax.MethodReference(at, expression, null,
-						at("new") ? this.tokens.get(this.p++).text() : identifier(), false);
+						at("new") ? this.tokens.get(this.p++).text() : identifier(), false, typeArguments);
 			}
 			else {
 				return expression;

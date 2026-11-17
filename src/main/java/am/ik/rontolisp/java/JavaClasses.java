@@ -83,6 +83,17 @@ final class JavaClasses {
 
 	private int version;
 
+	private final Function<JavaClasses, Relations> relationsMaker;
+
+	private @Nullable Relations relations;
+
+	/**
+	 * The bound checks of the type arguments written in the declarations being read, made
+	 * once their bounds are set; {@code null} outside a declaration, where a type
+	 * argument is checked where it is written.
+	 */
+	private @Nullable List<Runnable> boundChecks;
+
 	/** The local classes in scope where the lowering stands, by simple name. */
 	@Nullable Function<String, @Nullable JavaClass> localScope;
 
@@ -182,12 +193,30 @@ final class JavaClasses {
 	 * no other file is read
 	 * @param root the path from the starting file's directory up to the root of its
 	 * source tree: a {@code ../} for each name of its package
+	 * @param relations makes what the table asks of the relations between its types
 	 */
-	JavaClasses(Library library, JavaFiles files, @Nullable String entry, String root) {
+	JavaClasses(Library library, JavaFiles files, @Nullable String entry, String root,
+			Function<JavaClasses, Relations> relations) {
 		this.library = library;
 		this.files = files;
 		this.entry = entry;
 		this.root = root;
+		this.relationsMaker = relations;
+	}
+
+	/**
+	 * What the table asks of the relations between its types, which the lowering's type
+	 * relations answer: the arguments of an inner class's enclosing type, a type
+	 * argument's bounds.
+	 */
+	interface Relations {
+
+		@Nullable ClassType asSuper(JavaType type, JavaClass above);
+
+		boolean isSubtype(JavaType from, JavaType to);
+
+		JavaType substituted(JavaType type, Map<TypeParameter, JavaType> bindings);
+
 	}
 
 	static LispReadException error(@Nullable Source source, int pos, String message) {
@@ -650,8 +679,26 @@ final class JavaClasses {
 		return made;
 	}
 
-	/** What each new class extends, what a sealed one permits, then the members. */
+	/**
+	 * What each new class extends, what a sealed one permits, then the members; then
+	 * whether each type argument their declarations wrote is within its parameter's
+	 * bounds, which the declarations set.
+	 */
 	private void complete(List<JavaClass> all, Unit unit) {
+		List<Runnable> outer = this.boundChecks;
+		this.boundChecks = new ArrayList<>();
+		try {
+			declareMembers(all, unit);
+			for (Runnable check : this.boundChecks) {
+				check.run();
+			}
+		}
+		finally {
+			this.boundChecks = outer;
+		}
+	}
+
+	private void declareMembers(List<JavaClass> all, Unit unit) {
 		Source source = unit.source();
 		for (JavaClass made : all) {
 			bounds(made.typeParameters, declaration(made).typeParameters(), made, unit);
@@ -1388,15 +1435,23 @@ final class JavaClasses {
 			throw error(source, written.pos(), "cannot infer type arguments for " + declaration.simpleName() + " here");
 		}
 		int declared = declaration.typeParameters.size();
+		List<JavaType> enclosing = enclosingArguments(written, declaration, context, variables, unit);
 		if (written.arguments().isEmpty()) {
-			// a class with no parameter, or a raw type
-			return new ClassType(declaration, List.of());
+			if (declared > 0 && written.enclosing() != null && !enclosing.isEmpty()) {
+				throw error(source, written.pos(), "improperly formed type, some parameters are missing");
+			}
+			// a class with no parameter, an inner class of a parameterized one, or a raw
+			// type
+			return new ClassType(declaration, declared > 0 ? List.of() : enclosing);
 		}
 		if (declared == 0) {
 			throw error(source, written.pos(), "type " + declaration.simpleName() + " does not take parameters");
 		}
 		if (declared != written.arguments().size()) {
 			throw error(source, written.pos(), "wrong number of type arguments; required " + declared);
+		}
+		if (enclosing.isEmpty() && declaration.allTypeParameters().size() > declared) {
+			throw error(source, written.pos(), "improperly formed type, type arguments given on a raw type");
 		}
 		List<JavaType> arguments = new ArrayList<>();
 		for (TypeName argument : written.arguments()) {
@@ -1417,7 +1472,102 @@ final class JavaClasses {
 			}
 			arguments.add(type);
 		}
+		ClassType type = new ClassType(declaration, List.copyOf(arguments));
+		Runnable check = () -> withinBounds(type, written, unit);
+		if (this.boundChecks != null) {
+			this.boundChecks.add(check);
+		}
+		else {
+			check.run();
+		}
+		arguments.addAll(enclosing);
 		return new ClassType(declaration, List.copyOf(arguments));
+	}
+
+	/**
+	 * Refuses a type argument that is not under the bounds its parameter declares, as a
+	 * compiler does. A wildcard is not checked.
+	 * @param type the class with its own arguments as written
+	 */
+	private void withinBounds(ClassType type, TypeName written, Unit unit) {
+		List<TypeParameter> parameters = type.declaration().typeParameters;
+		Map<TypeParameter, JavaType> bindings = new HashMap<>();
+		for (int i = 0; i < parameters.size(); i++) {
+			bindings.put(parameters.get(i), type.arguments().get(i));
+		}
+		for (int i = 0; i < parameters.size(); i++) {
+			JavaType argument = type.arguments().get(i);
+			if (argument instanceof Wildcard) {
+				continue;
+			}
+			for (JavaType bound : parameters.get(i).bounds) {
+				if (!types().isSubtype(argument, types().substituted(bound, bindings))) {
+					throw error(unit.source(), written.arguments().get(i).pos(), "type argument " + argument
+							+ " is not within bounds of type-variable " + parameters.get(i).name);
+				}
+			}
+		}
+	}
+
+	/**
+	 * The arguments the type parameters of the classes around an inner member class have
+	 * in a type of it: those its enclosing type is written with
+	 * ({@code Outer<String>.Inner}), else those of the class around where it is written,
+	 * which is or is under the class declaring it ({@code Inner} in {@code Outer<T>}'s
+	 * body is {@code Outer<T>.Inner}); none for a raw type.
+	 */
+	private List<JavaType> enclosingArguments(TypeName written, JavaClass declaration, @Nullable JavaClass context,
+			@Nullable JavaClass variables, Unit unit) {
+		List<TypeParameter> all = declaration.allTypeParameters();
+		int own = declaration.typeParameters.size();
+		JavaClass outer = declaration.outer;
+		TypeName prefix = written.enclosing();
+		if (all.size() == own || outer == null) {
+			if (prefix != null && !prefix.arguments().isEmpty() && outer != null) {
+				throw error(unit.source(), written.pos(), "cannot select a static class from a parameterized type");
+			}
+			return List.of();
+		}
+		if (prefix != null) {
+			JavaType type = resolve(prefix, context, variables, unit);
+			ClassType above = type instanceof ClassType named ? types().asSuper(named, outer) : null;
+			if (above == null) {
+				throw error(unit.source(), prefix.pos(), "unexpected type; required: class, found: " + type);
+			}
+			return above.arguments();
+		}
+		return enclosingArguments(declaration, variables);
+	}
+
+	/**
+	 * The arguments the type parameters of the classes around an inner member class have
+	 * where its simple name is written: those of the class around that place which is or
+	 * is under the class declaring it; none when no such class is around.
+	 */
+	List<JavaType> enclosingArguments(JavaClass declaration, @Nullable JavaClass from) {
+		JavaClass outer = declaration.outer;
+		if (outer == null || declaration.allTypeParameters().size() == declaration.typeParameters.size()) {
+			return List.of();
+		}
+		for (JavaClass around = from; around != null; around = around.outer) {
+			if (around.isSubclassOf(outer)) {
+				ClassType above = types().asSuper(around.self(), outer);
+				return above == null ? List.of() : above.arguments();
+			}
+			if (around.isStatic && !around.isLocal) {
+				break;
+			}
+		}
+		return List.of();
+	}
+
+	private Relations types() {
+		Relations relations = this.relations;
+		if (relations == null) {
+			relations = this.relationsMaker.apply(this);
+			this.relations = relations;
+		}
+		return relations;
 	}
 
 }

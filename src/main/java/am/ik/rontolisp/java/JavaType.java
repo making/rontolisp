@@ -47,15 +47,25 @@ sealed interface JavaType {
 	 * A class or interface type.
 	 *
 	 * @param declaration the class
-	 * @param arguments its type arguments, one for each parameter the class declares;
-	 * none for a class declaring none and for a raw type, whose members are read erased
+	 * @param arguments its type arguments, one for each of the class's
+	 * {@link JavaClass#allTypeParameters()}: its own, then those of the class around an
+	 * inner member class; none for a class with none and for a raw type, whose members
+	 * are read erased
 	 */
 	record ClassType(JavaClass declaration, List<JavaType> arguments) implements JavaType {
 
 		@Override
 		public String toString() {
-			return this.declaration.simpleName() + (this.arguments.isEmpty() ? ""
-					: this.arguments.stream().map(JavaType::toString).collect(Collectors.joining(",", "<", ">")));
+			int own = this.declaration.typeParameters.size();
+			JavaClass outer = this.declaration.outer;
+			String prefix = "";
+			List<JavaType> shown = this.arguments;
+			if (outer != null && this.arguments.size() > own) {
+				prefix = new ClassType(outer, this.arguments.subList(own, this.arguments.size())) + ".";
+				shown = this.arguments.subList(0, own);
+			}
+			return prefix + this.declaration.simpleName() + (shown.isEmpty() ? ""
+					: shown.stream().map(JavaType::toString).collect(Collectors.joining(",", "<", ">")));
 		}
 
 	}
@@ -102,6 +112,12 @@ sealed interface JavaType {
 
 		/** Whether a method declares it: an inference finds it at every call. */
 		final boolean ofMethod;
+
+		/**
+		 * Whether it stands for an intersection type, {@code A & B}: a type under each of
+		 * its bounds, which no declaration names.
+		 */
+		boolean intersection;
 
 		TypeParameter(String name, boolean ofMethod, boolean open) {
 			this.name = name;

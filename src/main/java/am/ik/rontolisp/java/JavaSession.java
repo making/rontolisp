@@ -180,13 +180,24 @@ public final class JavaSession {
 					}
 					yield above == null ? "Object" : spell(declaration.supertype(above));
 				}
-				yield declaration.name + (named.arguments().isEmpty() ? "" : named.arguments()
-					.stream()
-					.map(argument -> argument instanceof Variable variable && variable.parameter().captured != null
-							? spell(variable.parameter().captured) : spell(argument))
-					.collect(Collectors.joining(", ", "<", ">")));
+				int own = declaration.typeParameters.size();
+				JavaClass outer = declaration.outer;
+				if (outer != null && named.arguments().size() > own) {
+					// Outer<String>.Inner
+					yield spell(new ClassType(outer, named.arguments().subList(own, named.arguments().size()))) + "."
+							+ declaration.simpleName() + arguments(named.arguments().subList(0, own));
+				}
+				yield declaration.name + arguments(named.arguments());
 			}
 		};
+	}
+
+	private static String arguments(List<JavaType> arguments) {
+		return arguments.isEmpty() ? ""
+				: arguments.stream()
+					.map(argument -> argument instanceof Variable variable && variable.parameter().captured != null
+							? spell(variable.parameter().captured) : spell(argument))
+					.collect(Collectors.joining(", ", "<", ">"));
 	}
 
 }

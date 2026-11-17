@@ -335,10 +335,31 @@ final class JavaClass {
 		return written != null ? written : new ClassType(above, List.of());
 	}
 
+	/**
+	 * The type parameters a type of the class gives arguments to: its own, then, for an
+	 * inner member class, those of the class around it, whose instance it holds -- so
+	 * {@code Outer<String>.Inner} is {@code Inner} with the argument {@code String}. A
+	 * local or an anonymous class reads the parameters around it as they are: no type of
+	 * it is written outside the body declaring it.
+	 */
+	List<TypeParameter> allTypeParameters() {
+		JavaClass around = this.outer;
+		if (around == null || this.isStatic || around.members.get(this.simple) != this) {
+			return this.typeParameters;
+		}
+		List<TypeParameter> outer = around.allTypeParameters();
+		if (outer.isEmpty()) {
+			return this.typeParameters;
+		}
+		List<TypeParameter> all = new ArrayList<>(this.typeParameters);
+		all.addAll(outer);
+		return all;
+	}
+
 	/** The class as a type inside its own body: its parameters are its arguments. */
 	ClassType self() {
 		List<JavaType> arguments = new ArrayList<>();
-		for (TypeParameter parameter : this.typeParameters) {
+		for (TypeParameter parameter : allTypeParameters()) {
 			arguments.add(new JavaType.Variable(parameter));
 		}
 		return new ClassType(this, List.copyOf(arguments));

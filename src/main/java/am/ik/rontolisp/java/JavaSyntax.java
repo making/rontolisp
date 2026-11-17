@@ -23,11 +23,23 @@ final class JavaSyntax {
 	 * @param arguments its type arguments; a wildcard's bound
 	 * @param diamond whether it is written with an empty {@code <>}
 	 * @param dimensions how many {@code []} follow it
+	 * @param enclosing the type a qualified name's prefix spells when it is written with
+	 * type arguments, {@code Outer<String>} of {@code Outer<String>.Inner}, or
+	 * {@code null}
 	 */
-	record TypeName(int pos, String name, List<TypeName> arguments, boolean diamond, int dimensions) {
+	record TypeName(int pos, String name, List<TypeName> arguments, boolean diamond, int dimensions,
+			@Nullable TypeName enclosing) {
+
+		TypeName(int pos, String name, List<TypeName> arguments, boolean diamond, int dimensions) {
+			this(pos, name, arguments, diamond, dimensions, null);
+		}
 
 		TypeName element() {
-			return new TypeName(this.pos, this.name, this.arguments, this.diamond, this.dimensions - 1);
+			return withDimensions(this.dimensions - 1);
+		}
+
+		TypeName withDimensions(int dimensions) {
+			return new TypeName(this.pos, this.name, this.arguments, this.diamond, dimensions, this.enclosing);
 		}
 
 		boolean isWildcard() {
@@ -119,9 +131,10 @@ final class JavaSyntax {
 	 * array type, a parameterized type
 	 * @param name the method's name, {@code new} for a constructor
 	 * @param onSuper whether it is {@code super::name}
+	 * @param typeArguments the method's type arguments as written, {@code ::<T>name}
 	 */
-	record MethodReference(int pos, @Nullable Expression target, @Nullable TypeName type, String name,
-			boolean onSuper) implements Expression {
+	record MethodReference(int pos, @Nullable Expression target, @Nullable TypeName type, String name, boolean onSuper,
+			List<TypeName> typeArguments) implements Expression {
 	}
 
 	/**
@@ -219,7 +232,15 @@ final class JavaSyntax {
 	record Conditional(int pos, Expression condition, Expression whenTrue, Expression whenFalse) implements Expression {
 	}
 
-	record Cast(int pos, TypeName type, Expression operand) implements Expression {
+	/**
+	 * A cast.
+	 *
+	 * @param pos the {@code (}
+	 * @param type the type cast to
+	 * @param operand what is cast
+	 * @param also the further types of a cast to an intersection, {@code (A & B) x}
+	 */
+	record Cast(int pos, TypeName type, Expression operand, List<TypeName> also) implements Expression {
 	}
 
 	/**
