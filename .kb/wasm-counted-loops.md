@@ -49,7 +49,8 @@ Anything failing falls back to the ordinary representation.
   `while`'s test bounds the variable against a literal integer, under any number of `not`s,
   possibly as one conjunct of an `and` (recursion into `and` only on the POSITIVE side); and
   both the init and ONE STEP PAST the bound must box exactly as an i31, that value being
-  observable (`(loop for i from 1 to 4 finally (return i))` is 5).
+  observable (`(loop for i from 1 to 4 finally (return i))` is 5). The init, the step's value
+  and operands and the test's operands are each read through `the`.
 - Both: non-keyword symbol, not special, not duplicated in the binding list, not captured by
   a nested lambda (`FreeVarAnalyzer` / `capturedInLet`).
 - Both: **nothing else assigns it.** Every user macro is already expanded, so the

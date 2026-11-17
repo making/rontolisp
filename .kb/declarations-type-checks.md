@@ -27,9 +27,13 @@ Seven `LispMacroExpander` expansions (no per-backend codegen), in `PackageRegist
 `expandBuiltinMacro` cases so `macroexpand-1` works:
 
 - `declare`/`declaim`/`proclaim` -> `nil`, arguments never evaluated or validated (`proclaim`
-  deviates from CL); `the` -> its value form (but a wasm classifier reads the form before the
-  expansion: `(setq h (the fixnum <integer tree>))` in a 30,000,000-step loop is 0.53 s on wasm
-  against 0.11 s without the `the`, the JVM 0.18 both, measured 2026-11-17, `.todo/j80`);
+  deviates from CL); `the` -> its value form. A backend classifier that reads a form before its
+  expansion must read through `the` (wasm: `WasmIntFusionCompiler.withoutThe`, used by the fusion
+  classifier, the unboxed-local eligibility and store, the counted-loop recognizer): a declared
+  integer loop compiles to the bare one's bytes. Before that, `(setq h (the fixnum <tree>))` in a
+  30,000,000-step loop was 0.53-0.60 s on wasm against 0.10 s bare, with `the` inside the tree too
+  1.2 s. The JVM's classifiers do not read through it and need not: 0.20 s with and without, both
+  shapes (HotSpot, 2026-11-17);
   `eval-when` -> `progn` of the body for `:execute`, `nil` otherwise ("An eval-when's position"
   below).
 - `check-type` -> `(let ((__check-type place)) (if <type-test> nil (let ((__report <"...~S..."

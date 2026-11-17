@@ -1832,6 +1832,41 @@ class WasmLispCompilerIntegrationTest {
 		assertThat(runModule(boxed, "counted-numeric-for-computed.wasm")).isEqualTo("499500");
 		assertThat(counted.length).as("the counted loop head is smaller than the boxed one it replaces")
 			.isLessThan(boxed.length);
+		// `the` compiles to its form, so every classifier reads through it: the counted
+		// head's start, test and step, the unboxed local's assignment, the fused tree
+		// under it and an inlinable defun's body. A declared program compiles to the very
+		// bytes of the bare one.
+		String bare = """
+				(defun mix (a b) (logand (+ a b) 4294967295))
+				(defun f (n)
+				  (let ((h 0) (i 0))
+				    (while (< i n)
+				      (setq h (- (mix (* 31 h) (rem i 7)) 2147483648))
+				      (setq i (+ i 1)))
+				    h))
+				(let ((h 0) (i 0))
+				  (while (< i 1000)
+				    (setq h (- (logand (+ (+ (* 31 h) (rem i 7)) 2147483648) 4294967295) 2147483648))
+				    (setq i (+ i 1)))
+				  (print (list h (f 1000))))
+				""";
+		String declared = """
+				(defun mix (a b) (the (unsigned-byte 32) (logand (the fixnum (+ a b)) 4294967295)))
+				(defun f (n)
+				  (let ((h 0) (i 0))
+				    (while (< (the fixnum i) n)
+				      (setq h (the fixnum (- (mix (* 31 (the fixnum h)) (rem i 7)) 2147483648)))
+				      (setq i (the fixnum (+ i 1))))
+				    h))
+				(let ((h (the fixnum 0)) (i (the fixnum 0)))
+				  (while (< (the fixnum i) (the fixnum 1000))
+				    (setq h (the fixnum (- (logand (+ (the fixnum (+ (* 31 h) (the fixnum (rem i 7))))
+				                                      2147483648) 4294967295) 2147483648)))
+				    (setq i (the fixnum (+ (the fixnum i) 1))))
+				  (print (list h (f 1000))))
+				""";
+		assertThat(new WasmLispCompiler().compile(LispReader.readAllFromString(declared)))
+			.isEqualTo(new WasmLispCompiler().compile(LispReader.readAllFromString(bare)));
 	}
 
 	@Test

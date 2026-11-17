@@ -562,6 +562,9 @@ final class WasmIntFusionCompiler {
 		List<LispVal> parts = cons.toList();
 		int arity = parts.size() - 1;
 		switch (head.name()) {
+			case LispNames.THE -> {
+				return arity == 2 && answersInteger(parts.get(2), ctx);
+			}
 			case LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH,
 					LispNames.LDB -> {
 				return true;
@@ -1146,7 +1149,8 @@ final class WasmIntFusionCompiler {
 	 * {@link #compileRawStore} falls back to a boxed shadow store for anything that does
 	 * not actually classify.
 	 */
-	static boolean isRawAssignShaped(LispVal expr, WasmLispCompiler.Ctx ctx) {
+	static boolean isRawAssignShaped(LispVal form, WasmLispCompiler.Ctx ctx) {
+		LispVal expr = withoutThe(form);
 		if (expr instanceof LispInteger) {
 			return true;
 		}
@@ -1167,6 +1171,20 @@ final class WasmIntFusionCompiler {
 	}
 
 	/**
+	 * The form a {@code (the type form)} wraps, through any nesting, or the form itself:
+	 * {@code the} compiles to its value form, so every shape test reads that one
+	 * (.kb/declarations-type-checks.md).
+	 */
+	static LispVal withoutThe(LispVal form) {
+		LispVal expr = form;
+		while (expr instanceof LispCons cons && cons.car() instanceof LispSymbol head
+				&& LispNames.THE.equals(head.name()) && cons.isProperList() && cons.toList().size() == 3) {
+			expr = cons.toList().get(2);
+		}
+		return expr;
+	}
+
+	/**
 	 * Compiles an assignment into an unboxed local: the fused fast path stores the raw
 	 * i64 into {@code target.i64Slot()} and NULLS the shadow; a bail (or a value that
 	 * does not classify as an integer tree at all) stores the BOXED result into the
@@ -1177,7 +1195,8 @@ final class WasmIntFusionCompiler {
 	 * ({@link #emitUnboxExact}). Leaves NOTHING on the stack; the caller re-reads through
 	 * {@link #emitRawLocalBoxedRead} when the assignment's value is needed.
 	 */
-	static void compileRawStore(LispVal expr, WasmLispCompiler.Ctx ctx, RawLocal target) {
+	static void compileRawStore(LispVal form, WasmLispCompiler.Ctx ctx, RawLocal target) {
+		LispVal expr = withoutThe(form);
 		if (target.counted()) {
 			// A counted induction variable has no shadow to bail into, which is exactly
 			// why WasmDotimesCompiler refuses the shape when anything in the loop could
@@ -1523,8 +1542,9 @@ final class WasmIntFusionCompiler {
 	 * Whether the expression is a closed integer tree over the parameters, a call of a
 	 * defun in {@code inlinable} counting as a node.
 	 */
-	private static boolean isClosedIntTree(LispVal expr, List<String> params,
+	private static boolean isClosedIntTree(LispVal form, List<String> params,
 			java.util.Map<String, WasmLispCompiler.DefunDecl> inlinable) {
+		LispVal expr = withoutThe(form);
 		if (expr instanceof LispInteger) {
 			return true;
 		}
@@ -1658,6 +1678,10 @@ final class WasmIntFusionCompiler {
 		List<LispVal> parts = cons.toList();
 		int arity = parts.size() - 1;
 		String op = sym.name();
+		if (LispNames.THE.equals(op) && arity == 2) {
+			// (the type form) compiles to its form; the type is not evaluated.
+			return classify(parts.get(2), ctx, env, site, depth);
+		}
 		if (LispNames.AREF.equals(op) && arity == 2 && env.isEmpty()) {
 			// A rank-1 aref: the fast path reads a packed integer vector's element raw
 			// (no _int_new box); any other array bails to the generic aref fallback.

@@ -96,7 +96,7 @@ final class WasmCountedLoopCompiler {
 			}
 			List<LispVal> pairParts = pair.toList();
 			if (pairParts.size() != 2 || !(pairParts.get(0) instanceof LispSymbol varSym)
-					|| !(pairParts.get(1) instanceof LispInteger start)) {
+					|| !(WasmIntFusionCompiler.withoutThe(pairParts.get(1)) instanceof LispInteger start)) {
 				continue;
 			}
 			String name = varSym.name();
@@ -173,10 +173,10 @@ final class WasmCountedLoopCompiler {
 	 * an unboxed counter).
 	 */
 	private static long stepDelta(LispVal valueExpr, String name) {
-		if (!(valueExpr instanceof LispCons value) || !value.isProperList()) {
+		if (!(WasmIntFusionCompiler.withoutThe(valueExpr) instanceof LispCons value) || !value.isProperList()) {
 			return 0;
 		}
-		List<LispVal> parts = value.toList();
+		List<LispVal> parts = operands(value);
 		if (parts.size() != 3 || !(parts.get(0) instanceof LispSymbol op)) {
 			return 0;
 		}
@@ -193,6 +193,18 @@ final class WasmCountedLoopCompiler {
 			return fits(by.value()) ? by.value() : 0;
 		}
 		return 0;
+	}
+
+	/**
+	 * The elements of a form, each read through the {@code the} around it
+	 * ({@link WasmIntFusionCompiler#withoutThe}).
+	 */
+	private static List<LispVal> operands(LispCons form) {
+		List<LispVal> parts = new ArrayList<>();
+		for (LispVal part : form.toList()) {
+			parts.add(WasmIntFusionCompiler.withoutThe(part));
+		}
+		return parts;
 	}
 
 	private static boolean isVar(LispVal form, String name) {
@@ -238,10 +250,11 @@ final class WasmCountedLoopCompiler {
 	 */
 	@org.jspecify.annotations.Nullable
 	private static Long boundAtLoopTop(LispVal test, String name, boolean ascending, boolean negated) {
-		if (!(test instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
+		if (!(WasmIntFusionCompiler.withoutThe(test) instanceof LispCons cons) || !cons.isProperList()
+				|| !(cons.car() instanceof LispSymbol head)) {
 			return null;
 		}
-		List<LispVal> parts = cons.toList();
+		List<LispVal> parts = operands(cons);
 		String op = head.name();
 		if ((LispNames.NOT.equals(op) || LispNames.NULL.equals(op)) && parts.size() == 2) {
 			return boundAtLoopTop(parts.get(1), name, ascending, !negated);
