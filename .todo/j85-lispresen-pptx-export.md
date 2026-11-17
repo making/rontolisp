@@ -140,8 +140,8 @@ fails on them. `--check` reports without writing.
 
 ## Verification
 
-- `check.sh` gains a PPTX leg: every backend renders `examples/intro.lisp` to a byte-equal
-  `examples/intro.pptx`; python3's `zipfile`/`ElementTree` (already a check.sh dependency)
+- `check.sh` gains a PPTX leg: every backend renders `lispresen/examples/intro.lisp` to a
+  byte-equal `intro.pptx` beside it; python3's `zipfile`/`ElementTree` (already a check.sh dependency)
   validates well-formed XML, content-type coverage and that every rels target exists.
 - Unit tests: ZIP headers, CRC and sizes, EMU/point conversion, image-size readers, XML
   escaping, a small deck's part contents, geometry records for one slide.
