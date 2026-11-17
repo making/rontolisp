@@ -339,17 +339,26 @@ as far as the program reaches it, so a class of the program can extend or implem
 | `Vector`, `Stack`, `Enumeration` | the members of `ArrayList`; `addElement`, `elementAt`, `firstElement`, `lastElement`, `setElementAt`, `insertElementAt`, `removeElementAt`, `removeElement`, `removeAllElements`, `elements`; `push`, `pop`, `peek`, `empty`, `search`; `hasMoreElements`, `nextElement` |
 | `Hashtable` | the members of `Map`; `keys`, `elements`, `contains`; no `null` key or value |
 | `Arrays` | `asList`, `toString`, `fill`, `equals`, `copyOf`, `copyOfRange`, `sort` of a whole array or a range, with or without a comparator, `binarySearch`, `hashCode` of an `int[]` or an `Object[]`; over arrays of `int`, `long`, `double`, `char`, `boolean` and of objects; `toString`, `fill`, `equals`, `copyOf`, `copyOfRange` and `hashCode` of a `byte[]`; `toString` of a `short[]` and a `float[]`; `deepToString` |
-| `Collections` | `sort`, `binarySearch` with or without a comparator, `reverse`, `shuffle`, `swap`, `max`, `min`, `frequency`, `addAll`, `fill`, `nCopies`, `emptyList`, `emptySet`, `emptyMap`, `singletonList`, `singleton`, `unmodifiableList`, `unmodifiableSet`, `unmodifiableCollection`, `unmodifiableMap`, `reverseOrder` |
+| `Collections` | `sort`, `binarySearch` with or without a comparator, `reverse`, `shuffle`, `swap`, `max`, `min`, `frequency`, `addAll`, `fill`, `nCopies`, `emptyList`, `emptySet`, `emptyMap`, `singletonList`, `singleton`, `unmodifiableList`, `unmodifiableSet`, `unmodifiableCollection`, `unmodifiableMap`, `synchronizedList`, `synchronizedSet`, `synchronizedCollection`, `synchronizedMap`, `reverseOrder` |
 | `Objects` | `equals`, `hashCode`, `hash`, `toString`, `isNull`, `nonNull`, `requireNonNull`, `requireNonNullElse`, `compare`, `checkIndex`, `checkFromIndexSize`, `checkFromToIndex` |
 | `Optional` | `empty`, `of`, `ofNullable`, `isPresent`, `isEmpty`, `get`, `orElse`, `orElseGet`, `orElseThrow`, `ifPresent`, `ifPresentOrElse`, `filter`, `map`, `flatMap`, `or`, `equals`, `hashCode`, `toString` |
 | `Random` | `new Random()`, `new Random(long)`, `setSeed`, `nextInt()`, `nextInt(int)`, `nextLong`, `nextDouble`, `nextBoolean`, `nextGaussian`; a seed gives the specified sequence |
 | `Comparator` | `compare`, `reversed`, `thenComparing` of a comparator or a key, `thenComparingInt`, `Comparator.naturalOrder`, `reverseOrder`, `comparing` with or without a comparator of the key, `comparingInt`, `comparingLong`, `comparingDouble`, `nullsFirst`, `nullsLast` |
-| Exceptions | `Throwable`, `Exception`, `Error`, `RuntimeException`, `IllegalArgumentException`, `IllegalStateException`, `ArithmeticException`, `NullPointerException`, `ClassCastException`, `IndexOutOfBoundsException`, `ArrayIndexOutOfBoundsException`, `StringIndexOutOfBoundsException`, `NegativeArraySizeException`, `UnsupportedOperationException`, `NumberFormatException`, `CloneNotSupportedException`, `InterruptedException`, `IllegalMonitorStateException`, `IllegalThreadStateException`, `NoSuchElementException`, `ConcurrentModificationException`, `EmptyStackException`, `MatchException`, `IOException`, `EOFException`, `UTFDataFormatException`, `UnsupportedEncodingException`, `UncheckedIOException`, `UnsupportedCharsetException`, `IllegalCharsetNameException`: the constructors of the API -- of no argument, of a message, of a message and a cause, of a cause, of an index --, `getMessage`, `getLocalizedMessage`, `getCause`, `initCause`, `addSuppressed`, `getSuppressed`, `printStackTrace()`, `toString`. `IllegalFormatException` and three subclasses the run time raises, with no constructor: `IllegalFormatConversionException`, `UnknownFormatConversionException`, `MissingFormatArgumentException` |
+| Exceptions | `Throwable`, `Exception`, `Error`, `RuntimeException`, `IllegalArgumentException`, `IllegalStateException`, `ArithmeticException`, `NullPointerException`, `ClassCastException`, `IndexOutOfBoundsException`, `ArrayIndexOutOfBoundsException`, `StringIndexOutOfBoundsException`, `NegativeArraySizeException`, `UnsupportedOperationException`, `NumberFormatException`, `CloneNotSupportedException`, `InterruptedException`, `IllegalMonitorStateException`, `IllegalThreadStateException`, `NoSuchElementException`, `ConcurrentModificationException`, `EmptyStackException`, `MatchException`, `IOException`, `EOFException`, `UTFDataFormatException`, `UnsupportedEncodingException`, `UncheckedIOException`, `UnsupportedCharsetException`, `IllegalCharsetNameException`: the constructors of the API -- of no argument, of a message, of a message and a cause, of a cause, of an index --, `getMessage`, `getLocalizedMessage`, `getCause`, `initCause`, `addSuppressed`, `getSuppressed`, `printStackTrace()`, `toString`. `IllegalFormatException` and three subclasses the run time raises, with no constructor: `IllegalFormatConversionException`, `UnknownFormatConversionException`, `MissingFormatArgumentException`. Of `java.util.concurrent`: `ExecutionException`, `TimeoutException`, `CancellationException`, `RejectedExecutionException`, `CompletionException` |
 | `Runnable`, `Comparable`, `AutoCloseable`, `Closeable`, `Flushable` | `run`; `compareTo`, which a `String`, a box and an enum constant have too; `close`; `flush` |
-| `Thread` | the constructors of nothing, a `Runnable`, a name or both; a class extending it; `start`, `run`, `join()`, `join(long)`, `interrupt`, `isInterrupted`, `isAlive`, `getName`, `setName`, `isDaemon`, `setDaemon`, `getPriority`, `setPriority`, `isVirtual`, `threadId`, `getId`, `toString`; `Thread.currentThread`, `sleep(long)`, `sleep(long, int)`, `yield`, `onSpinWait`, `interrupted`, `holdsLock`, `startVirtualThread`; `Thread.ofPlatform()` and `ofVirtual()` with `name`, `daemon`, `priority`, `start`, `unstarted` |
-| `ThreadLocal` | `new ThreadLocal<>()`, `withInitial`, `get`, `set`, `remove`, `initialValue` |
+| `Thread` | the constructors of nothing, a `Runnable`, a name or both; a class extending it; `start`, `run`, `join()`, `join(long)`, `interrupt`, `isInterrupted`, `isAlive`, `getName`, `setName`, `isDaemon`, `setDaemon`, `getPriority`, `setPriority`, `isVirtual`, `threadId`, `getId`, `toString`; `Thread.currentThread`, `sleep(long)`, `sleep(long, int)`, `yield`, `onSpinWait`, `interrupted`, `holdsLock`, `startVirtualThread`; `Thread.ofPlatform()` and `ofVirtual()` with `name`, `daemon`, `priority`, `start`, `unstarted`, `factory`; `getState` and `Thread.State`; `setUncaughtExceptionHandler`, `getUncaughtExceptionHandler`, `Thread.setDefaultUncaughtExceptionHandler`, `getDefaultUncaughtExceptionHandler` |
+| `ThreadLocal`, `InheritableThreadLocal` | `new ThreadLocal<>()`, `withInitial`, `get`, `set`, `remove`, `initialValue`; `childValue` |
 | `AtomicInteger`, `AtomicLong` | `get`, `set`, `lazySet`, `getAndSet`, `compareAndSet`, `getAndAdd`, `addAndGet`, `getAndIncrement`, `getAndDecrement`, `incrementAndGet`, `decrementAndGet`, `getAndUpdate`, `updateAndGet`, `getAndAccumulate`, `accumulateAndGet`, `intValue`, `longValue`, `doubleValue`, `toString` |
 | `AtomicBoolean`, `AtomicReference` | `get`, `set`, `lazySet`, `getAndSet`, `compareAndSet`, `toString`; of a reference also `getAndUpdate`, `updateAndGet`, `getAndAccumulate`, `accumulateAndGet` |
+| `TimeUnit` | the seven units; `convert`, `toNanos`, `toMicros`, `toMillis`, `toSeconds`, `toMinutes`, `toHours`, `toDays`, `sleep`, `timedJoin`, `timedWait` |
+| `Lock`, `ReentrantLock`, `Condition` | `lock`, `lockInterruptibly`, `tryLock` with or without a limit, `unlock`, `newCondition`, `isLocked`, `isHeldByCurrentThread`, `getHoldCount`, `isFair`, `hasQueuedThreads`, `getQueueLength`; `await` with or without a limit, `awaitNanos`, `awaitUninterruptibly`, `signal`, `signalAll` |
+| `CountDownLatch`, `Semaphore` | `await` with or without a limit, `countDown`, `getCount`; `acquire`, `acquireUninterruptibly`, `tryAcquire` with or without a limit, `release`, each of one permit or several, `availablePermits`, `drainPermits`, `isFair` |
+| `BlockingQueue`, `ArrayBlockingQueue`, `LinkedBlockingQueue`, `ConcurrentLinkedQueue` | the members of `Queue`; of a blocking queue also `put`, `take`, `offer` and `poll` with a limit, `remainingCapacity`, `drainTo` |
+| `ConcurrentMap`, `ConcurrentHashMap` | the members of `Map`; `remove` of a key and its value, `replace` of an old value, `mappingCount`, `contains`, `keys`, `elements`, `keySet` of a value, `ConcurrentHashMap.newKeySet`; of nothing, a capacity or a map; no `null` key or value |
+| `CopyOnWriteArrayList` | the members of `List`; `addIfAbsent`, `addAllAbsent`; an iterator walks the list there was when it was made and changes nothing |
+| `Executor`, `ExecutorService`, `Executors` | `execute`, `submit` of a `Callable` or a `Runnable`, `invokeAll`, `shutdown`, `shutdownNow`, `isShutdown`, `isTerminated`, `awaitTermination`, `close`; `newFixedThreadPool`, `newSingleThreadExecutor`, `newCachedThreadPool`, each with or without a `ThreadFactory`, `newVirtualThreadPerTaskExecutor`, `newThreadPerTaskExecutor`, `defaultThreadFactory`, `callable` |
+| `Callable`, `Future`, `FutureTask`, `ThreadFactory` | `call`; `get` with or without a limit, `isDone`, `cancel`, `isCancelled`; `run`; `newThread` |
+| `CompletableFuture`, `CompletionStage` | `supplyAsync` and `runAsync` with or without an executor, `completedFuture`, `failedFuture`, `allOf`, `anyOf`; `thenApply`, `thenAccept`, `thenRun`, `thenCompose`, `handle`, `whenComplete`, each also `Async` with or without an executor, `thenCombine`, `exceptionally`; `complete`, `completeExceptionally`, `cancel`, `join`, `get` with or without a limit, `getNow`, `isDone`, `isCancelled`, `isCompletedExceptionally` |
 | `java.util.function` | `Function`, `BiFunction`, `UnaryOperator`, `BinaryOperator`, `Supplier`, `Consumer`, `BiConsumer`, `Predicate`, `BiPredicate`, `BooleanSupplier`; for `Int`, `Long` and `Double`: `IntFunction`, `IntPredicate`, `IntUnaryOperator`, `IntBinaryOperator`, `IntSupplier`, `IntConsumer`, `ToIntFunction`, `ToIntBiFunction`; each with its abstract method and its `andThen`, `compose`, `and`, `or`, `negate`, `identity`, `not`, `isEqual` |
 
 `String.format`, `formatted` and `printf` take `%d`, `%s`, `%S`, `%f`, `%e`, `%E`, `%x`,
@@ -515,5 +524,28 @@ in parallel. A `.wasm` has one stack, and its threads take turns on it: a thread
 runs when the running thread waits, sleeps, yields or ends. A program whose threads are
 joined and share what they share under a monitor prints the same on every backend; what one
 stack changes for any other is in [Deviations](deviations.md#threads).
+
+`java.util.concurrent` has locks, latches, queues, a concurrent map, executors and
+`CompletableFuture`, written over the same monitors. `Vector`, `Hashtable`, `StringBuffer`
+and the wrappers of `Collections.synchronizedList` and the like hold their own monitor
+in every member.
+
+```java
+void main() {
+    Map<String, Integer> lengths = new ConcurrentHashMap<>();
+    try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
+        for (String word : List.of("one", "three", "seven")) {
+            pool.execute(() -> lengths.put(word, word.length()));
+        }
+    }
+    CompletableFuture<Integer> total = CompletableFuture.supplyAsync(() -> lengths.get("three"))
+        .thenApply(n -> n + lengths.size());
+    IO.println(lengths + " " + total.join());
+}
+```
+
+```
+{one=3, seven=5, three=5} 8
+```
 
 What differs from the language and what is refused: [Deviations](deviations.md).

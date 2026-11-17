@@ -87,6 +87,13 @@ interface JavaEmitter {
 		 */
 		LispVal arrayLike(LispVal made, LispVal original);
 
+		/**
+		 * A member's form run holding its receiver's monitor, the receiver and the
+		 * arguments evaluated ahead of it; the member's own form in a program that cannot
+		 * tell a monitor held from one that is not.
+		 */
+		LispVal holding(Invocation call, JavaEmitter member);
+
 	}
 
 	LispVal emit(Context context, Invocation invocation);

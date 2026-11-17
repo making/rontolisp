@@ -8,7 +8,61 @@
 // tell of a thread is written here over them.
 package java.lang;
 
+import java.util.concurrent.ThreadFactory;
+
 public class Thread implements Runnable {
+
+    /** What a thread is doing, as far as the library's own waits tell. */
+    public enum State {
+        NEW, RUNNABLE, BLOCKED, WAITING, TIMED_WAITING, TERMINATED
+    }
+
+    @FunctionalInterface
+    public interface UncaughtExceptionHandler {
+
+        void uncaughtException(Thread t, Throwable e);
+    }
+
+    /** The values of a thread's InheritableThreadLocals, which a thread it makes takes over. */
+    interface Inherited {
+
+        Inherited child();
+    }
+
+    /** What runs a thread whose uncaught exception a handler is asked for. */
+    private interface Guarding {
+
+        void run(Thread thread);
+    }
+
+    /**
+     * Made by a program that sets a handler, so a program that sets none holds no
+     * catch of every exception.
+     */
+    private static final class Guard implements Guarding {
+
+        public void run(Thread thread) {
+            try {
+                thread.run();
+            }
+            catch (Throwable thrown) {
+                UncaughtExceptionHandler handler = thread.handler != null ? thread.handler : defaultHandler;
+                try {
+                    handler.uncaughtException(thread, thrown);
+                }
+                catch (Throwable dropped) {
+                    // what a handler throws ends there, said as a JDK says it
+                    System.err.println();
+                    System.err.println("Exception: " + dropped.getClass().getName()
+                            + " thrown from the UncaughtExceptionHandler in thread \"" + thread.name + "\"");
+                }
+            }
+        }
+    }
+
+    private static volatile UncaughtExceptionHandler defaultHandler;
+
+    private static volatile Guarding guarding;
 
     public static final int MIN_PRIORITY = 1;
 
@@ -40,8 +94,15 @@ public class Thread implements Runnable {
 
     private volatile boolean alive;
 
+    /** 1 while the thread waits with no limit, 2 while it waits or sleeps with one. */
+    private volatile int parked;
+
+    private volatile UncaughtExceptionHandler handler;
+
     /** What each ThreadLocal holds for this thread, which alone reads it. */
     java.util.HashMap<ThreadLocal<?>, Object> locals;
+
+    Inherited inherited;
 
     public Thread() {
         this(null, null, false, false);
@@ -80,6 +141,9 @@ public class Thread implements Runnable {
             this.daemon = virtual || maker.daemon;
             this.priority = virtual ? NORM_PRIORITY : maker.priority;
             this.carrier = carrier0(this);
+            if (maker.inherited != null) {
+                this.inherited = maker.inherited.child();
+            }
         }
     }
 
@@ -134,7 +198,42 @@ public class Thread implements Runnable {
 
     /** What a started thread runs: called by the run time on the thread itself. */
     private static void body(Thread thread) {
-        thread.run();
+        Guarding guard = guarding;
+        if (guard != null && (thread.handler != null || defaultHandler != null)) {
+            guard.run(thread);
+        }
+        else {
+            thread.run();
+        }
+    }
+
+    public UncaughtExceptionHandler getUncaughtExceptionHandler() {
+        return this.handler;
+    }
+
+    public void setUncaughtExceptionHandler(UncaughtExceptionHandler handler) {
+        this.handler = handler;
+        guarding = new Guard();
+    }
+
+    public static UncaughtExceptionHandler getDefaultUncaughtExceptionHandler() {
+        return defaultHandler;
+    }
+
+    public static void setDefaultUncaughtExceptionHandler(UncaughtExceptionHandler handler) {
+        defaultHandler = handler;
+        guarding = new Guard();
+    }
+
+    public State getState() {
+        if (!this.started) {
+            return State.NEW;
+        }
+        if (!this.alive) {
+            return State.TERMINATED;
+        }
+        int waits = this.parked;
+        return waits == 0 ? State.RUNNABLE : waits == 1 ? State.WAITING : State.TIMED_WAITING;
     }
 
     /** What a thread no handler of which took an exception writes. */
@@ -187,7 +286,11 @@ public class Thread implements Runnable {
         if (nanos < 0 || nanos > 999999) {
             throw new IllegalArgumentException("nanosecond timeout value out of range");
         }
-        if (sleep0(millis * 1000000L + nanos)) {
+        Thread current = currentThread();
+        current.parked = 2;
+        boolean interrupted = sleep0(millis * 1000000L + nanos);
+        current.parked = 0;
+        if (interrupted) {
             throw new InterruptedException("sleep interrupted");
         }
     }
@@ -287,7 +390,10 @@ public class Thread implements Runnable {
         if (millis < 0) {
             throw new IllegalArgumentException("timeout value is negative");
         }
+        Thread current = currentThread();
+        current.parked = millis == 0 ? 1 : 2;
         int ended = wait0(object, millis);
+        current.parked = 0;
         if (ended == 1) {
             throw new InterruptedException();
         }
@@ -334,6 +440,8 @@ public class Thread implements Runnable {
         Thread unstarted(Runnable task);
 
         Thread start(Runnable task);
+
+        ThreadFactory factory();
 
         interface OfPlatform extends Builder {
 
@@ -428,6 +536,10 @@ public class Thread implements Runnable {
             Thread made = unstarted(task);
             made.start();
             return made;
+        }
+
+        public ThreadFactory factory() {
+            return (Runnable task) -> unstarted(task);
         }
     }
 }

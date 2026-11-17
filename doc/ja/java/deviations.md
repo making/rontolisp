@@ -235,14 +235,25 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 古い値が読まれることがあります。これは言語仕様が許す動作です。`volatile`、`synchronized`、
 `Thread.start`、`join` による順序付けは言語仕様のとおりです。
 
-**JDK が同期しているクラスは、ロックを取りません。** `StringBuffer`、`Vector`、`Hashtable` は
-同期しないクラスとして実装されているため、スレッド間で共有するときは `synchronized` で保護
-します。`AtomicInteger` と `AtomicLong` は `Number` ではありません。
+**`.wasm` では、プールのスレッドはタスクがなくなると終了します。** `.wasm` のエグゼキューターの
+スレッドは、次のタスクを待機できません。次のタスクを渡せるのが、そのスレッドの下で中断
+されているスレッドだけだからです。あとからタスクを渡すと、同じ名前のスレッドが新しく
+開始されるため、プールのスレッドの `ThreadLocal` は初期値に戻ります。シャットダウンしない
+プールがあると、JDK ではプログラムが終了しませんが、`.wasm` では終了します。
+
+**`ConcurrentHashMap` の走査順は JDK 25 と同じです。** ただし、チェーンが 64 本以上ある
+テーブルで、1 本のチェーンに 9 個のキーが入った場合の順序は一致しません。エグゼキューターが
+タスクを拒否したときの `RejectedExecutionException` にはメッセージがありません。
+
+**スレッドの状態が `BLOCKED` になることはありません。** `getState` で分かるのは、スレッドが
+待機中またはスリープ中であることです。モニターに入るのを待っているスレッドの状態は
+`RUNNABLE` です。未捕捉例外ハンドラーが呼ばれるのはプログラムが開始したスレッドだけで、
+`main` のスレッドでは呼ばれません。`AtomicInteger` と `AtomicLong` は `Number` では
+ありません。
 
 **スレッドの番号は rontolisp 独自のものです。** `threadId()` と `toString()` に含まれる番号は、
 プログラムのスレッドを 1 から数えた値です。クラスリテラルは `synchronized` 文のロックとして
-だけ読めます。すべてのクラスの static 初期化を 1 つのロックで保護しているため、別のクラスを
-初期化するスレッドを待つ static 初期化子は終了しません。
+だけ読めます。
 
 ## 拒否される構文
 
@@ -255,9 +266,10 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 - スーパークラスのフィールドを隠すフィールド。
 - 複数の型へのラムダとメソッド参照のキャスト（`(Runnable & Marker) () -> ..`）。
 - `String`、`StringBuilder`、ボックスを継承するクラス。
-- 4 つのアトミッククラスを除く `java.util.concurrent`。ロック、エグゼキューター、並行
-  コレクション、`CompletableFuture` などです。`Thread.getState`、スレッドグループ、未捕捉例外
-  ハンドラーも拒否されます。
+- `java.util.concurrent` のうち、[概要](index.md)の表にないもの。読み書きロックとスタンプ付き
+  ロック、`CyclicBarrier`、`Phaser`、`Exchanger`、スケジュール実行のエグゼキューター、
+  `ForkJoinPool`、表にないキューとマップ、表にないアトミッククラスです。スレッドグループと、
+  `Duration` を取る `sleep` と `join` も拒否されます。
 - [概要](index.md)の表にないライブラリのクラスとメンバー。ストリーム（`java.util.stream`）、
   `LinkedList`、`LinkedHashMap`、`TreeMap`、`Scanner`、ファイル（`File`、`FileReader`、
   `java.nio.file`）、`java.time`、`BigInteger`、`BigDecimal`、正規表現、リフレクションなどです。

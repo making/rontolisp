@@ -344,17 +344,26 @@ void main() {
 | `Vector`、`Stack`、`Enumeration` | `ArrayList` のメンバー。`addElement`、`elementAt`、`firstElement`、`lastElement`、`setElementAt`、`insertElementAt`、`removeElementAt`、`removeElement`、`removeAllElements`、`elements`。`push`、`pop`、`peek`、`empty`、`search`。`hasMoreElements`、`nextElement` |
 | `Hashtable` | `Map` のメンバー。`keys`、`elements`、`contains`。キーにも値にも `null` は使えません |
 | `Arrays` | `asList`、`toString`、`fill`、`equals`、`copyOf`、`copyOfRange`、配列全体または範囲に対する、コンパレータの指定がある、またはない `sort`、`binarySearch`、`int[]` と `Object[]` の `hashCode`。対象は `int`、`long`、`double`、`char`、`boolean`、オブジェクトの配列。`byte[]` には `toString`、`fill`、`equals`、`copyOf`、`copyOfRange`、`hashCode`。`short[]` と `float[]` には `toString`。`deepToString` |
-| `Collections` | `sort`、コンパレータの指定がある、またはない `binarySearch`、`reverse`、`shuffle`、`swap`、`max`、`min`、`frequency`、`addAll`、`fill`、`nCopies`、`emptyList`、`emptySet`、`emptyMap`、`singletonList`、`singleton`、`unmodifiableList`、`unmodifiableSet`、`unmodifiableCollection`、`unmodifiableMap`、`reverseOrder` |
+| `Collections` | `sort`、コンパレータの指定がある、またはない `binarySearch`、`reverse`、`shuffle`、`swap`、`max`、`min`、`frequency`、`addAll`、`fill`、`nCopies`、`emptyList`、`emptySet`、`emptyMap`、`singletonList`、`singleton`、`unmodifiableList`、`unmodifiableSet`、`unmodifiableCollection`、`unmodifiableMap`、`synchronizedList`、`synchronizedSet`、`synchronizedCollection`、`synchronizedMap`、`reverseOrder` |
 | `Objects` | `equals`、`hashCode`、`hash`、`toString`、`isNull`、`nonNull`、`requireNonNull`、`requireNonNullElse`、`compare`、`checkIndex`、`checkFromIndexSize`、`checkFromToIndex` |
 | `Optional` | `empty`、`of`、`ofNullable`、`isPresent`、`isEmpty`、`get`、`orElse`、`orElseGet`、`orElseThrow`、`ifPresent`、`ifPresentOrElse`、`filter`、`map`、`flatMap`、`or`、`equals`、`hashCode`、`toString` |
 | `Random` | `new Random()`、`new Random(long)`、`setSeed`、`nextInt()`、`nextInt(int)`、`nextLong`、`nextDouble`、`nextBoolean`、`nextGaussian`。シードを指定すると仕様どおりの列になります |
 | `Comparator` | `compare`、`reversed`、コンパレータまたはキーを取る `thenComparing`、`thenComparingInt`、`Comparator.naturalOrder`、`reverseOrder`、キーのコンパレータの指定がある、またはない `comparing`、`comparingInt`、`comparingLong`、`comparingDouble`、`nullsFirst`、`nullsLast` |
-| 例外 | `Throwable`、`Exception`、`Error`、`RuntimeException`、`IllegalArgumentException`、`IllegalStateException`、`ArithmeticException`、`NullPointerException`、`ClassCastException`、`IndexOutOfBoundsException`、`ArrayIndexOutOfBoundsException`、`StringIndexOutOfBoundsException`、`NegativeArraySizeException`、`UnsupportedOperationException`、`NumberFormatException`、`CloneNotSupportedException`、`InterruptedException`、`IllegalMonitorStateException`、`IllegalThreadStateException`、`NoSuchElementException`、`ConcurrentModificationException`、`EmptyStackException`、`MatchException`、`IOException`、`EOFException`、`UTFDataFormatException`、`UnsupportedEncodingException`、`UncheckedIOException`、`UnsupportedCharsetException`、`IllegalCharsetNameException`。API のコンストラクタ（引数なし、メッセージ、メッセージと原因、原因、添字）、`getMessage`、`getLocalizedMessage`、`getCause`、`initCause`、`addSuppressed`、`getSuppressed`、`printStackTrace()`、`toString`。実行時に起きる `IllegalFormatException` とその 3 つのサブクラス（コンストラクタなし）：`IllegalFormatConversionException`、`UnknownFormatConversionException`、`MissingFormatArgumentException` |
+| 例外 | `Throwable`、`Exception`、`Error`、`RuntimeException`、`IllegalArgumentException`、`IllegalStateException`、`ArithmeticException`、`NullPointerException`、`ClassCastException`、`IndexOutOfBoundsException`、`ArrayIndexOutOfBoundsException`、`StringIndexOutOfBoundsException`、`NegativeArraySizeException`、`UnsupportedOperationException`、`NumberFormatException`、`CloneNotSupportedException`、`InterruptedException`、`IllegalMonitorStateException`、`IllegalThreadStateException`、`NoSuchElementException`、`ConcurrentModificationException`、`EmptyStackException`、`MatchException`、`IOException`、`EOFException`、`UTFDataFormatException`、`UnsupportedEncodingException`、`UncheckedIOException`、`UnsupportedCharsetException`、`IllegalCharsetNameException`。API のコンストラクタ（引数なし、メッセージ、メッセージと原因、原因、添字）、`getMessage`、`getLocalizedMessage`、`getCause`、`initCause`、`addSuppressed`、`getSuppressed`、`printStackTrace()`、`toString`。実行時に起きる `IllegalFormatException` とその 3 つのサブクラス（コンストラクタなし）：`IllegalFormatConversionException`、`UnknownFormatConversionException`、`MissingFormatArgumentException`。`java.util.concurrent` の `ExecutionException`、`TimeoutException`、`CancellationException`、`RejectedExecutionException`、`CompletionException` |
 | `Runnable`、`Comparable`、`AutoCloseable`、`Closeable`、`Flushable` | `run`。`compareTo`（`String`、ボックス、列挙型の定数にもあります）。`close`。`flush` |
-| `Thread` | 引数なし、`Runnable`、名前、その両方を取るコンストラクタ。`Thread` を継承するクラス。`start`、`run`、`join()`、`join(long)`、`interrupt`、`isInterrupted`、`isAlive`、`getName`、`setName`、`isDaemon`、`setDaemon`、`getPriority`、`setPriority`、`isVirtual`、`threadId`、`getId`、`toString`。`Thread.currentThread`、`sleep(long)`、`sleep(long, int)`、`yield`、`onSpinWait`、`interrupted`、`holdsLock`、`startVirtualThread`。`Thread.ofPlatform()` と `ofVirtual()`（`name`、`daemon`、`priority`、`start`、`unstarted`） |
-| `ThreadLocal` | `new ThreadLocal<>()`、`withInitial`、`get`、`set`、`remove`、`initialValue` |
+| `Thread` | 引数なし、`Runnable`、名前、その両方を取るコンストラクタ。`Thread` を継承するクラス。`start`、`run`、`join()`、`join(long)`、`interrupt`、`isInterrupted`、`isAlive`、`getName`、`setName`、`isDaemon`、`setDaemon`、`getPriority`、`setPriority`、`isVirtual`、`threadId`、`getId`、`toString`。`Thread.currentThread`、`sleep(long)`、`sleep(long, int)`、`yield`、`onSpinWait`、`interrupted`、`holdsLock`、`startVirtualThread`。`Thread.ofPlatform()` と `ofVirtual()`（`name`、`daemon`、`priority`、`start`、`unstarted`、`factory`）。`getState` と `Thread.State`。`setUncaughtExceptionHandler`、`getUncaughtExceptionHandler`、`Thread.setDefaultUncaughtExceptionHandler`、`getDefaultUncaughtExceptionHandler` |
+| `ThreadLocal`、`InheritableThreadLocal` | `new ThreadLocal<>()`、`withInitial`、`get`、`set`、`remove`、`initialValue`。`childValue` |
 | `AtomicInteger`、`AtomicLong` | `get`、`set`、`lazySet`、`getAndSet`、`compareAndSet`、`getAndAdd`、`addAndGet`、`getAndIncrement`、`getAndDecrement`、`incrementAndGet`、`decrementAndGet`、`getAndUpdate`、`updateAndGet`、`getAndAccumulate`、`accumulateAndGet`、`intValue`、`longValue`、`doubleValue`、`toString` |
 | `AtomicBoolean`、`AtomicReference` | `get`、`set`、`lazySet`、`getAndSet`、`compareAndSet`、`toString`。`AtomicReference` には `getAndUpdate`、`updateAndGet`、`getAndAccumulate`、`accumulateAndGet` もあります |
+| `TimeUnit` | 7 つの単位。`convert`、`toNanos`、`toMicros`、`toMillis`、`toSeconds`、`toMinutes`、`toHours`、`toDays`、`sleep`、`timedJoin`、`timedWait` |
+| `Lock`、`ReentrantLock`、`Condition` | `lock`、`lockInterruptibly`、制限時間の指定がある、またはない `tryLock`、`unlock`、`newCondition`、`isLocked`、`isHeldByCurrentThread`、`getHoldCount`、`isFair`、`hasQueuedThreads`、`getQueueLength`。制限時間の指定がある、またはない `await`、`awaitNanos`、`awaitUninterruptibly`、`signal`、`signalAll` |
+| `CountDownLatch`、`Semaphore` | 制限時間の指定がある、またはない `await`、`countDown`、`getCount`。`acquire`、`acquireUninterruptibly`、制限時間の指定がある、またはない `tryAcquire`、`release`（いずれも許可 1 つ、または複数）、`availablePermits`、`drainPermits`、`isFair` |
+| `BlockingQueue`、`ArrayBlockingQueue`、`LinkedBlockingQueue`、`ConcurrentLinkedQueue` | `Queue` のメンバー。ブロッキングキューには `put`、`take`、制限時間を指定する `offer` と `poll`、`remainingCapacity`、`drainTo` もあります |
+| `ConcurrentMap`、`ConcurrentHashMap` | `Map` のメンバー。キーと値を指定する `remove`、古い値を指定する `replace`、`mappingCount`、`contains`、`keys`、`elements`、値を指定する `keySet`、`ConcurrentHashMap.newKeySet`。引数なし、容量、マップを取るコンストラクタ。キーと値に `null` は使えません |
+| `CopyOnWriteArrayList` | `List` のメンバー。`addIfAbsent`、`addAllAbsent`。イテレータは作られた時点のリストをたどり、リストを変更しません |
+| `Executor`、`ExecutorService`、`Executors` | `execute`、`Callable` または `Runnable` を取る `submit`、`invokeAll`、`shutdown`、`shutdownNow`、`isShutdown`、`isTerminated`、`awaitTermination`、`close`。`newFixedThreadPool`、`newSingleThreadExecutor`、`newCachedThreadPool`（いずれも `ThreadFactory` の指定がある、またはない）、`newVirtualThreadPerTaskExecutor`、`newThreadPerTaskExecutor`、`defaultThreadFactory`、`callable` |
+| `Callable`、`Future`、`FutureTask`、`ThreadFactory` | `call`。制限時間の指定がある、またはない `get`、`isDone`、`cancel`、`isCancelled`。`run`。`newThread` |
+| `CompletableFuture`、`CompletionStage` | エグゼキューターの指定がある、またはない `supplyAsync` と `runAsync`、`completedFuture`、`failedFuture`、`allOf`、`anyOf`。`thenApply`、`thenAccept`、`thenRun`、`thenCompose`、`handle`、`whenComplete`（いずれも、エグゼキューターの指定がある、またはない `Async` 版があります）、`thenCombine`、`exceptionally`。`complete`、`completeExceptionally`、`cancel`、`join`、制限時間の指定がある、またはない `get`、`getNow`、`isDone`、`isCancelled`、`isCompletedExceptionally` |
 | `java.util.function` | `Function`、`BiFunction`、`UnaryOperator`、`BinaryOperator`、`Supplier`、`Consumer`、`BiConsumer`、`Predicate`、`BiPredicate`、`BooleanSupplier`。`Int`、`Long`、`Double` のそれぞれに `IntFunction`、`IntPredicate`、`IntUnaryOperator`、`IntBinaryOperator`、`IntSupplier`、`IntConsumer`、`ToIntFunction`、`ToIntBiFunction`。各インターフェースの抽象メソッドと `andThen`、`compose`、`and`、`or`、`negate`、`identity`、`not`、`isEqual` |
 
 `String.format`、`formatted`、`printf` が受け付ける変換は `%d`、`%s`、`%S`、`%f`、`%e`、`%E`、
@@ -522,5 +531,28 @@ void main() throws InterruptedException {
 動きます。スレッドを `join` し、共有するデータをモニターで保護しているプログラムは、
 どのバックエンドでも同じ出力になります。それ以外のプログラムでスタックが 1 本であることから
 生じる違いは[言語との差異](deviations.md#threads)にあります。
+
+`java.util.concurrent` には、ロック、ラッチ、キュー、並行マップ、エグゼキューター、
+`CompletableFuture` があり、どれも同じモニターの上に実装されています。`Vector`、`Hashtable`、
+`StringBuffer` と、`Collections.synchronizedList` などが返すラッパーは、どのメンバーも
+自身のモニターを保持して実行します。
+
+```java
+void main() {
+    Map<String, Integer> lengths = new ConcurrentHashMap<>();
+    try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
+        for (String word : List.of("one", "three", "seven")) {
+            pool.execute(() -> lengths.put(word, word.length()));
+        }
+    }
+    CompletableFuture<Integer> total = CompletableFuture.supplyAsync(() -> lengths.get("three"))
+        .thenApply(n -> n + lengths.size());
+    IO.println(lengths + " " + total.join());
+}
+```
+
+```
+{one=3, seven=5, three=5} 8
+```
 
 言語と動作が異なる点と、拒否される構文は[言語との差異](deviations.md)にあります。

@@ -13,14 +13,14 @@ public class Stack<E> extends Vector<E> {
         return e;
     }
 
-    public E pop() {
+    public synchronized E pop() {
         if (isEmpty()) {
             throw new EmptyStackException();
         }
         return remove(size() - 1);
     }
 
-    public E peek() {
+    public synchronized E peek() {
         if (isEmpty()) {
             throw new EmptyStackException();
         }
@@ -31,7 +31,7 @@ public class Stack<E> extends Vector<E> {
         return isEmpty();
     }
 
-    public int search(Object o) {
+    public synchronized int search(Object o) {
         int index = lastIndexOf(o);
         return index < 0 ? -1 : size() - index;
     }

@@ -3,11 +3,16 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
+import java.util.function.Function;
+
 // The older table. Its order is its own, kept as a program sees it: a key's place is its
 // hash code without its sign modulo the table's length, 11 at first and twice plus one
 // when three quarters are used; a key is put ahead of its chain, a growth walks the
 // chains from the last and puts each key ahead again, and the table is read from its
-// last chain to its first. Neither a key nor a value is null.
+// last chain to its first. Neither a key nor a value is null. Every member holds the
+// table's monitor, the ones Map and AbstractMap write over others included.
 public class Hashtable<K, V> extends AbstractMap<K, V> {
 
     static final class Slot<K, V> implements Map.Entry<K, V> {
@@ -117,19 +122,19 @@ public class Hashtable<K, V> extends AbstractMap<K, V> {
         limit = length * 3 / 4;
     }
 
-    public int size() {
+    public synchronized int size() {
         return count;
     }
 
-    public boolean isEmpty() {
+    public synchronized boolean isEmpty() {
         return count == 0;
     }
 
-    public boolean containsKey(Object key) {
+    public synchronized boolean containsKey(Object key) {
         return find(key) != null;
     }
 
-    public boolean contains(Object value) {
+    public synchronized boolean contains(Object value) {
         if (value == null) {
             throw new NullPointerException();
         }
@@ -143,16 +148,16 @@ public class Hashtable<K, V> extends AbstractMap<K, V> {
         return false;
     }
 
-    public boolean containsValue(Object value) {
+    public synchronized boolean containsValue(Object value) {
         return contains(value);
     }
 
-    public V get(Object key) {
+    public synchronized V get(Object key) {
         Slot<K, V> slot = find(key);
         return slot == null ? null : slot.value;
     }
 
-    public V put(K key, V value) {
+    public synchronized V put(K key, V value) {
         if (value == null) {
             throw new NullPointerException();
         }
@@ -173,7 +178,7 @@ public class Hashtable<K, V> extends AbstractMap<K, V> {
         return null;
     }
 
-    public V remove(Object key) {
+    public synchronized V remove(Object key) {
         int hash = key.hashCode();
         int index = (hash & 0x7FFFFFFF) % table.length;
         Slot<K, V> before = null;
@@ -194,7 +199,7 @@ public class Hashtable<K, V> extends AbstractMap<K, V> {
         return null;
     }
 
-    public void clear() {
+    public synchronized void clear() {
         for (int i = 0; i < table.length; i++) {
             table[i] = null;
         }
@@ -202,16 +207,68 @@ public class Hashtable<K, V> extends AbstractMap<K, V> {
         changes++;
     }
 
-    public Enumeration<K> keys() {
+    public synchronized Enumeration<K> keys() {
         return new Listing<>(new Walk<>(this), true);
     }
 
-    public Enumeration<V> elements() {
+    public synchronized Enumeration<V> elements() {
         return new Listing<>(new Walk<>(this), false);
     }
 
-    public Set<Map.Entry<K, V>> entrySet() {
+    public synchronized Set<Map.Entry<K, V>> entrySet() {
         return new Entries<>(this);
+    }
+
+    public synchronized void putAll(Map<? extends K, ? extends V> m) {
+        super.putAll(m);
+    }
+
+    public synchronized boolean equals(Object o) {
+        return super.equals(o);
+    }
+
+    public synchronized int hashCode() {
+        return super.hashCode();
+    }
+
+    public synchronized String toString() {
+        return super.toString();
+    }
+
+    public synchronized V getOrDefault(Object key, V other) {
+        return super.getOrDefault(key, other);
+    }
+
+    public synchronized void forEach(BiConsumer<? super K, ? super V> action) {
+        super.forEach(action);
+    }
+
+    public synchronized void replaceAll(BiFunction<? super K, ? super V, ? extends V> function) {
+        super.replaceAll(function);
+    }
+
+    public synchronized V putIfAbsent(K key, V value) {
+        return super.putIfAbsent(key, value);
+    }
+
+    public synchronized V replace(K key, V value) {
+        return super.replace(key, value);
+    }
+
+    public synchronized V computeIfAbsent(K key, Function<? super K, ? extends V> function) {
+        return super.computeIfAbsent(key, function);
+    }
+
+    public synchronized V computeIfPresent(K key, BiFunction<? super K, ? super V, ? extends V> function) {
+        return super.computeIfPresent(key, function);
+    }
+
+    public synchronized V compute(K key, BiFunction<? super K, ? super V, ? extends V> function) {
+        return super.compute(key, function);
+    }
+
+    public synchronized V merge(K key, V value, BiFunction<? super V, ? super V, ? extends V> function) {
+        return super.merge(key, value, function);
     }
 
     // The slots from the last chain to the first.

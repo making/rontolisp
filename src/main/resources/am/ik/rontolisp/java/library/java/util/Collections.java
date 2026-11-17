@@ -213,6 +213,22 @@ public final class Collections {
         return new ImmutableCollections.MapN<>(held);
     }
 
+    public static <T> Collection<T> synchronizedCollection(Collection<T> c) {
+        return new Synchronized.Each<>(c, null);
+    }
+
+    public static <T> List<T> synchronizedList(List<T> list) {
+        return new Synchronized.Listed<>(list, null);
+    }
+
+    public static <T> Set<T> synchronizedSet(Set<T> set) {
+        return new Synchronized.SetOf<>(set, null);
+    }
+
+    public static <K, V> Map<K, V> synchronizedMap(Map<K, V> map) {
+        return new Synchronized.MapOf<>(map);
+    }
+
     public static <T> Comparator<T> reverseOrder() {
         return (T a, T b) -> ((Comparable) b).compareTo(a);
     }

@@ -42,7 +42,8 @@ final class JavaClasses {
 
 	/** The packages of the library: what {@code import module java.base} imports. */
 	private static final List<String> LIBRARY_PACKAGES = List.of("java.lang", "java.util", "java.util.function",
-			"java.io", "java.nio.charset");
+			"java.io", "java.nio.charset", "java.util.concurrent", "java.util.concurrent.atomic",
+			"java.util.concurrent.locks");
 
 	private static final String COMPARABLE = "java.lang.Comparable";
 

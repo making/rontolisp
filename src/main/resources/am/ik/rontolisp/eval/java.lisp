@@ -2117,11 +2117,43 @@
 
 (defvar rontolisp::%java-monitors nil)
 
-;; What the static initialization of a class holds in a program that starts threads:
-;; one thread initializes a class, and any other asking for it waits until it has.
+;; The static initialization of a class in a program that starts threads: one thread
+;; initializes a class, and any other asking for THAT class waits until it has. A
+;; class's state -- nil, the carrier of the thread initializing it, :ended -- is read
+;; and written under this lock, which no initializer runs under.
 (defvar rontolisp::%java-initializing-lock (rontolisp:make-mutex))
 
-(defun rontolisp::%java-initializing () rontolisp::%java-initializing-lock)
+#-rontolisp-wasm
+(defvar rontolisp::%java-initialized (rontolisp::%condition-variable-new))
+
+(defun rontolisp::%java-init-enter ()
+  (rontolisp:mutex-acquire rontolisp::%java-initializing-lock))
+
+;; Whether the thread asking for a class in STATE had to wait: another thread
+;; initializes it, and this one holds the lock again once some class ended. One stack:
+;; the thread initializing it is suspended under this one, which reads the class as
+;; initialized.
+#-rontolisp-wasm
+(defun rontolisp::%java-init-busy (state)
+  (if (or (null state) (eq state :ended))
+      nil
+      (progn
+        (rontolisp::%condition-wait rontolisp::%java-initialized
+                                    rontolisp::%java-initializing-lock nil)
+        t)))
+
+#+rontolisp-wasm (defun rontolisp::%java-init-busy (state) nil)
+
+;; Gives the lock up; ENDED once a class's initialization has, which the threads
+;; waiting for a class are told.
+#-rontolisp-wasm
+(defun rontolisp::%java-init-leave (ended)
+  (if ended (rontolisp::%condition-notify rontolisp::%java-initialized t))
+  (rontolisp:mutex-release rontolisp::%java-initializing-lock))
+
+#+rontolisp-wasm
+(defun rontolisp::%java-init-leave (ended)
+  (rontolisp:mutex-release rontolisp::%java-initializing-lock))
 
 ;; What a read or a write of a volatile field holds: one access at a time, so each sees
 ;; what the one before it left, whatever the host does with a field no lock guards.
@@ -2297,6 +2329,12 @@
         (setq rontolisp::%java-started (cdr rontolisp::%java-started))
         (rontolisp::%java-thread-run entry))
       nil))
+
+;; Whether the threads of the program run on one stack: what the library's Java asks
+;; where a thread would wait for one that could only be suspended under it.
+#-rontolisp-wasm (defun rontolisp::%java-one-stack-p () nil)
+
+#+rontolisp-wasm (defun rontolisp::%java-one-stack-p () t)
 
 ;; What one stack cannot run is refused by name, and ends the program: no handler of
 ;; the program takes it, and nothing goes on as if the wait had ended.

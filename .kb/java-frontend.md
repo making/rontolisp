@@ -14,8 +14,10 @@ several files, a session, the calls across languages, the tools and annotations:
 (2026-11-17); inner class types, intersections, the inference j70 left: j78 (2026-11-17);
 `java.io`, the charsets and the members j71 left: j79 (2026-11-17); the class of an array and
 the `Math` members j72 left: j81 (2026-11-17); the uncaught report without a held condition
-and the catch that signals nothing again: j82 (2026-11-17); what comes after is `.todo/j83`,
-`j86`, `j87` and `j88` (what j76, j78, j79 and j82 left).
+and the catch that signals nothing again: j82 (2026-11-17); the classes a JDK synchronizes, a
+class's own initialization, `java.util.concurrent` and the two leads for a suspended thread
+measured: j83 (2026-11-17); what comes after is `.todo/j86`, `j87`, `j88` and `j89` (what j78,
+j79, j82 and j83 left).
 
 ## Where it sits
 
@@ -578,7 +580,8 @@ lub of the lowers, else an upper, else OPEN.
   chain becomes in a table of 64 or more. `Set.of`/`Map.of` wrap a `HashSet`/`HashMap`.
   `Hashtable` has its own rules, a class of its own (11 slots, `2n + 1`, a key put ahead of its
   chain, read from the last chain; `a-deque-an-optional-the-utilities-and-the-older-classes`);
-  `Vector` extends `ArrayList` and `StringBuffer` is `StringBuilder`'s representation.
+  `Vector` extends `ArrayList` and `StringBuffer` is `StringBuilder`'s representation; each
+  holds its monitor since j83 ("java.util.concurrent").
 - **`==` of two strings is `eq`**, and the constants of a program holding one are globals set
   through `%java-intern` (`JavaClasses.identicalStrings`; the program is lowered again), so two
   constants of a text are one object and `intern()` answers it. A program with no such
@@ -643,7 +646,8 @@ holds none of it.** No files: `File`, `FileReader`, `java.nio.file` stay refused
   `EOFException`, `UTFDataFormatException`, `UnsupportedEncodingException`,
   `UncheckedIOException`; `java.nio.charset.Charset`/`StandardCharsets` (UTF-8, the default,
   ISO-8859-1, US-ASCII) with its two exceptions. `import module java.base` and a compact
-  source file bring `java.io` and `java.nio.charset` (`LIBRARY_PACKAGES`).
+  source file bring `java.io` and `java.nio.charset` (`LIBRARY_PACKAGES`; since j83 the three
+  packages of `java.util.concurrent` too).
 - **`System.out`, `System.err`, `System.in` are two things** (`JavaClass.Field.accessor`,
   `direct`). As the receiver of `print`/`println`/`flush`, and of a `printf`/`format` whose
   value is dropped, `System.out` is the host's stream (`JavaLowering.directReceiver`, the
@@ -1004,8 +1008,8 @@ under a monitor prints the same on four backends.
   sleeping then reading without a `join` prints what the thread had not written yet -- a
   silent difference where the other choice has none but the order of timed prints. Neither
   can be told apart by the run time: what would is a thread suspended and resumed, which
-  wasm has no way to do (stack switching is not in wasmtime 49; an async transform of every
-  method that can block is `.todo/j83`'s lead). A daemon is never run by the program's end.
+  wasm has no way to do yet ("A thread suspended and resumed: the two leads measured" below).
+  A daemon is never run by the program's end.
 - **A monitor lives in a side table keyed by identity, not in a slot** (measured, Lisp
   prototypes of both, 20,000,000 uncontended rounds, JVM / wasm): no lock 0.31 / 0.22 s,
   the table 1.28-1.52 / 3.3-3.5 s, a slot 1.06-1.21 / 2.4-2.6 s; and 50,000,000 objects never
@@ -1029,10 +1033,19 @@ under a monitor prints the same on four backends.
   a JIT may read once for a loop, and a lock is what the pipeline has to order two
   accesses (bt2's atomic integer is the precedent, [threads.md](threads.md)). The atomics are
   Java source whose methods are `synchronized`, for the same reason.
-- **Static initialization in a program that starts threads** holds `%java-initializing`:
-  `(if (eq done :ended) nil (with-mutex .. (if done nil ..)))`, so one thread initializes a
-  class and the others wait; ONE lock for every class, so an initializer waiting for a
-  thread that initializes another class never ends (a JDK's lock is the class's own).
+- **Static initialization in a program that starts threads is the class's own** (j83). A
+  class's `<clinit>%done` is `nil`, the carrier of the thread initializing it, then `:ended`,
+  read and written under one lock no initializer runs under (`%java-init-enter` / `-leave`):
+  `(if (eq done :ended) nil (let ((self (%java-self))) (if (eq done self) nil (progn (enter)
+  (while (%java-init-busy done)) (if done (leave) (progn (setq done self) (leave)
+  (unwind-protect body (progn (enter) (setq done :ended) (leave t)))))))))`. A thread asking
+  for a class another initializes waits on one condition variable (`%java-init-busy`), the
+  thread initializing it asking again goes on, and an initializer that throws still ends the
+  class. On one stack `%java-init-busy` answers nil: the thread initializing the class is
+  suspended under the one asking, which reads the class as initialized. Until j83 it was
+  `(with-mutex ((%java-initializing)) ..)`, ONE lock for every class: an initializer joining
+  a thread that initialized another class never ended on the interpreter and the JVM
+  (measured: 20 s and killed; the corpus case's `Loud`).
 - **The entry of a program that starts threads** is `(%java-thread-main main finish)`: what
   `main` leaves uncaught is reported, the thread's object ends (`Thread.finish`), the threads
   that are no daemons end, then the status. A thread's body is
@@ -1054,13 +1067,142 @@ under a monitor prints the same on four backends.
   `Shapes` +226 B of class and +16 B of wasm (the test in the identity hash). A counter
   under four threads is 168,841 B of class and 98,004 B of wasm.
 - **Stated in `deviations.md`**: the one stack; what is shared with no monitor is the
-  host's; `StringBuffer`, `Vector`, `Hashtable` take no lock; an atomic is no `Number`;
-  thread numbers are ours; a class literal only as a `synchronized` statement's lock (the
-  quoted structure name, the object a `static synchronized` method holds).
-- **Pinned by** `java-spec.yaml`'s four `standalone:` thread cases (a `standalone:` case so
+  host's; a pool's thread ending for want of a task on one stack; a `ConcurrentHashMap`'s
+  long chain; no `BLOCKED` state; the handlers not asked for `main`'s thread; an atomic is no
+  `Number`; thread numbers are ours; a class literal only as a `synchronized` statement's
+  lock (the quoted structure name, the object a `static synchronized` method holds).
+- **Pinned by** `java-spec.yaml`'s six `standalone:` thread cases (a `standalone:` case so
   that the corpus program starts no thread and keeps the thread-free lowering),
   `JavaSpecE2eTest#aWaitOnlyAThreadSuspendedUnderItCouldEndIsRefusedOnOneStack` (the two
   wasm legs) and `JavaLoweringTest#aMonitorIsEnteredAndLeftAndAThreadIsTheRunTimes`.
+
+## java.util.concurrent (2026-11-17, j83)
+
+**Invariant: everything of `java.util.concurrent` is Java source over the monitors of
+"Threads" -- no primitive, no backend change -- and a member that would wait for a thread
+that can only be suspended under it asks `Support.oneStack()` and does what one stack can.**
+
+- **The classes a JDK synchronizes hold their monitor.** `Vector`, `Stack` and `Hashtable`
+  declare each member `synchronized` over the unsynchronized body above them (`super.m()`;
+  `Hashtable` reaches `Map`'s defaults through `AbstractMap`: `Map.super.m()` there is no
+  Java -- javac refuses the qualifier of an interface the superclass already has, found by
+  `theLibrarysSourceIsJavaAJdkCompiles`). `Collections.synchronizedList` / `Set` /
+  `Collection` / `Map` are `java.util.Synchronized`'s wrappers, the lock the wrapper or,
+  for a map's views, the map. `StringBuffer` stays `StringBuilder`'s representation: its
+  intrinsic members are emitted through `Context.holding` (`JavaIntrinsics.guarded`), which
+  binds the receiver and the arguments and holds the receiver's monitor around the same
+  form -- the member's own form in a program that holds no monitor, so a thread-free program
+  pays nothing (`Sb`, a thread-free program over the three: +932 B of class and +227 B of
+  wasm, the overrides alone). Four threads adding 2,000 elements each lost elements and
+  raised `ArrayIndexOutOfBoundsException` before (interpreter and JVM).
+- **What is there**: `TimeUnit`; `Lock` / `ReentrantLock` / `Condition`; `CountDownLatch`;
+  `Semaphore`; `BlockingQueue` with `ArrayBlockingQueue` and `LinkedBlockingQueue` (one
+  class, `Bounded`, over an `ArrayDeque`), `ConcurrentLinkedQueue`; `ConcurrentMap` /
+  `ConcurrentHashMap`; `CopyOnWriteArrayList`; `Executor` / `ExecutorService` / `Executors`
+  / `ThreadPoolExecutor` (made by `Executors` alone) / `Callable` / `Future` / `FutureTask`
+  / `ThreadFactory`; `CompletableFuture` / `CompletionStage`; the five exceptions. Beside
+  them `Thread.State` and `getState`, the uncaught-exception handlers,
+  `InheritableThreadLocal`, `Thread.Builder.factory()`, `java.lang.Void`.
+- **A lock is a monitor's protocol, not a monitor**: `ReentrantLock` holds an owner and a
+  count under its own monitor, on which a thread waiting for the lock waits; a `Condition`
+  queues a ticket per waiting thread under the lock and each thread waits on its own ticket,
+  so `signal` wakes the thread that waited longest and a signal between the lock given up
+  and the wait is not lost.
+- **An executor on one stack.** A worker with no task left cannot wait for one: the thread
+  to hand it one is under it. `ThreadPoolExecutor.next` puts the worker in `resting` and
+  ends the thread; `execute` then queues the task and starts a thread of the SAME NAME over
+  that worker (a JDK's idle thread takes the task, so a task printing its thread's name
+  prints the same; the `Thread` object is another, so a `ThreadLocal` starts again --
+  `deviations.md`). A task runs where a thread first waits: `Future.get`,
+  `awaitTermination`, `close`, a latch, the program's end. The first `core` tasks each get
+  a worker of the next number, as a JDK's do; a worker a task's exception ended is replaced
+  by a thread of the next name, started with the next task or kept in `resting` until one
+  comes (a JDK does the same: `pool-3-thread-2` in the corpus). `CompletableFuture`'s tasks
+  with no executor run on a growing pool of daemons named as a JDK's common pool's.
+- **`ConcurrentHashMap` keeps the order a JDK 25 walks it in, derived from outputs alone**
+  (rule 2 of the provenance file: no source was read; each rule below is the reading of a
+  probe run under the JDK, then checked by differential runs: 80 seeds of 300 random
+  operations, the walk printed after every step -- 52 seeds print the JDK's at every step,
+  and each of the other 28 first departs at a step where a chain holds nine keys or more in
+  a table of 64 or more; 17,396 steps identical. The probes and the runs:
+  `.todo/artefacts/j83-java-front-end-what-the-threads-slice-left/`). The index is the
+  hash folded with its upper half and masked; a new key goes to the END of its chain
+  (`put`, `putIfAbsent`, `computeIfAbsent`, `compute`, `merge` alike; a `HashMap`'s three
+  put AHEAD); the table starts at 16, or for
+  `new ConcurrentHashMap(n)` -- and for a copy of a map of `n` keys -- at the power of two
+  at or above `1 + n / 0.75` (0..70 probed); it doubles when the count REACHES three
+  quarters (12, not 13 as a `HashMap`); a doubling keeps the chain's last run of keys going
+  the same way as it is and puts each key ahead of that run at the HEAD of its new chain, in
+  turn (so `[0, 16, 32, 48]` becomes `[32, 0]` and `[16, 48]`); a walk of eight keys of a
+  chain by one of the five members above -- a ninth key added, or the eighth found -- in a
+  table shorter than 64 doubles the table until three quarters of it is at least the power
+  of two at or above `3 * length + 1` (16 becomes 128); `putAll` into a map that has a table
+  first grows it the same way for `size() + m.size()` keys (`1.5 n + 1`), into one that has
+  none it does not. Not kept, as a `HashMap`'s: a chain of more than eight keys in a table
+  of 64 or more (a JDK puts the tenth key at the head of what is then a tree; its order
+  after a removal depends on the tree's shape). Every member is `synchronized` on the map;
+  an iterator walks the table there was when it was made, and a doubling makes nodes of its
+  own for the keys it moves so that walk stays whole.
+- **What a program can tell of a JDK's messages, measured**: a cancelled
+  `CompletableFuture`'s `join` / `get` throw a NEW `CancellationException` whose message is
+  the member's name and whose cause is the cancelling; a stage's own exception and one taken
+  over from the stage before it are held in a `CompletionException`, one given to
+  `completeExceptionally` as it is (so `exceptionally` after a `thenApply` reads the
+  wrapper); `allOf` fails as the first in the order given that failed; what a handler throws
+  is `Exception: <class> thrown from the UncaughtExceptionHandler in thread "<name>"` after
+  an empty line.
+- **A program that sets no handler holds no catch of every exception**: `Thread.body` calls
+  the `Guarding` interface, whose one class is made by the two setters, so the catch of
+  `Throwable` -- and with it the run time's exceptions as classes -- is lowered only for a
+  program that sets a handler ("Lowered as far as the program reaches"). The same for
+  `InheritableThreadLocal`: `Thread`'s constructor calls `Inherited.child()`, whose one class
+  that thread local makes.
+- **A library enum needs `java.lang.Class`**: the `valueOf` javac writes for an enum calls
+  `Enum.valueOf(Class, String)`, so the library's own compile under a JDK needs the member,
+  and this front end types every signature of a class it reads. `Class` is a type with no
+  value: a class literal and a `getClass()` kept are refused as before.
+- **A compact source file brings the three packages** (`LIBRARY_PACKAGES`): the atomics were
+  not brought before.
+- **Cost to a program that starts threads** (the members `Thread` gained; class / wasm
+  bytes): a counter under four threads 172,141 / 99,263 -> 174,715 / 100,731;
+  `examples/java/shop` 414,747 / 301,780 -> 418,004 / 303,382. `Fib` and `Sieve` are
+  byte-identical.
+
+### A thread suspended and resumed: the two leads measured (2026-11-17, j83)
+
+Neither is made; `.todo/j89` holds the plan.
+
+- **Wasm stack switching is in wasmtime 49.0.0 and cannot be used.** It is off by default
+  (`-W stack-switching=y`), only on x86-64 Linux and macOS (`Config`'s check: any other
+  target, aarch64 and Pulley included, is unsupported -- the native outputs target
+  `macos-aarch64`), and turns the compiler's inlining off. A hand-written module (`cont.new`
+  / `resume` / `suspend` over a GC struct held on the suspended stack, 20 frames deep) runs
+  1,000,000 round trips in 0.19 to 0.25 s and an exception thrown in a continuation reaches
+  the `try_table` around its `resume`; but a COLLECTION WHILE A CONTINUATION IS SUSPENDED
+  ABORTS THE HOST (`expected one more VMStackLimits than continuations`,
+  `traphandlers/backtrace.rs:340`, the DRC and the copying collector alike; the null
+  collector runs it). So j76's "not in wasmtime 49" was wrong in the letter and right in the
+  effect. Re-measure on each wasmtime the project moves to: the three conditions are the
+  flag's default, aarch64, a collection with a suspended stack.
+- **Resumable bodies: how much of a program would be lowered twice.** The functions of the
+  program and the library (`--dump-ir`, direct calls and dispatchers by name; a call through
+  a function value is not followed) that can reach a point where a thread is suspended:
+
+  | program | functions | reach `wait` / `sleep` / `yield` | or a monitor's entry |
+  |---|---|---|---|
+  | a bounded buffer (two methods, two threads) | 59 | 6 | 15 |
+  | `examples/java/shop` | 254 | 4 | 17 |
+  | the corpus's `Monitors` | 309 | 7 | 139 |
+  | the corpus's `Handing` (locks, queues, executors) | 334 | 53 | 137 |
+  | the corpus's `Sharing` (`ConcurrentHashMap`, futures) | 484 | 40 | 229 |
+
+  A monitor's entry has to count: a thread suspended in `wait` still holds every OTHER
+  monitor it entered, so another thread's `synchronized` can find one held. With it, a
+  program over the concurrent library has 40 to 47% of its functions resumable; without,
+  2 to 16%. What decides it is whether a `synchronized` region can be held across a
+  suspension, which the closed program can answer per region (no call in it reaches a
+  suspension -- every atomic, every `ConcurrentHashMap` member).
+
 
 ## The lowering table
 
@@ -1092,6 +1234,7 @@ under a monitor prints the same on four backends.
 | `a == b` (strings) | `(eq a b)`; every string constant of such a program is a global `%string<n>` set to `(%java-intern "text")` before `main` |
 | `try { .. } catch (A \| B e) { .. }` | `(handler-case .. ((satisfies %catch0) (%t1) (let ((e (or (%java-thrown %t1) (%lisp-error %t1)))) ..)))`, `(defun %catch0 (%c) (let ((%thrown (or (%java-thrown %c) (%lisp-error %c)))) (or (A? %thrown) (B? %thrown))))` |
 | `p.get()`, `xs.length`, `s.charAt(i)` | `(C.get() (or p (%java-npe)))`; `(length (or xs (%java-npe)))`; `(progn (if (or (< i 0) (>= i (length s))) (%java-string-index i s)) (char-code (char s i)))` |
+| `sb.append(x)` on a `StringBuffer` | `(let* ((%t0 sb) (%t1 x')) (let ((%t2 (%java-monitor-enter %t0))) (unwind-protect (progn (%java-sb-append %t0 %t1)) (%java-monitor-exit %t2))))`; a `StringBuilder`'s form in a program reaching no member of `Thread` |
 | `synchronized (o) { .. }`, a `synchronized` method | `(let ((%t1 (%java-monitor-enter o))) (unwind-protect (progn ..) (%java-monitor-exit %t1)))`, the lock `this`, `'Class` for a static method and `Class.class`; `(progn (or o (%java-npe)) ..)` in a program reaching no member of `Thread` |
 | a `volatile` field read, written | `(rontolisp:with-mutex ((%java-volatile)) (C.f o))`; `(let* ((%t0 v)) (rontolisp:with-mutex ((%java-volatile)) (setf (C.f o) %t0)))`; the plain access in a program reaching no member of `Thread` |
 | `o.wait()`, `o.notifyAll()`, `t.start()` | `(Thread.await(Object,long) (or o (%java-npe)) 0)`; `(Thread.signal(Object,boolean) (or o (%java-npe)) t)`; `(Thread.start() t)`, whose body ends in `(%java-thread-start carrier daemon (lambda () ..))` |
@@ -1215,4 +1358,10 @@ cast inferring alone, `deepToString`) and `the-boxes-parse-print-and-compare-and
 array cast no value passes), `DocExamplesTest` (a
 ` ```java ` fence is a whole program, its output the plain block after it; `deviations.md`'s
 pins the class of an array no record names), `ExamplesE2eTest`
-(`examples/java/shop/Main.java`, read with the files of its source tree).
+(`examples/java/shop/Main.java`, read with the files of its source tree), the `standalone:`
+cases `threads-are-started-joined-and-hold-monitors` (the classes a JDK synchronizes, a class
+initialized while another thread initializes another, `getState`, `InheritableThreadLocal`),
+`an-uncaught-exception-ends-its-thread-alone` (the handlers),
+`locks-latches-queues-and-executors-hand-work-between-threads` and
+`threads-share-concurrent-collections-and-completable-futures` (j83; each waits only for what
+one stack can run, so the four legs print the same).

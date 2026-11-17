@@ -234,14 +234,24 @@ the JVM a field two threads read and write with neither may be read stale, as th
 allows. `volatile`, `synchronized`, `Thread.start` and `join` order what they order in the
 language.
 
-**The classes a JDK synchronizes take no lock.** `StringBuffer`, `Vector` and `Hashtable`
-are the unsynchronized classes: a program sharing one between threads guards it with
-`synchronized`. An `AtomicInteger` and an `AtomicLong` are no `Number`.
+**A pool's thread ends when it has no task left, in a `.wasm`.** A thread of an executor
+cannot wait there for the next task, which only a thread suspended under it could hand
+over. A task given later starts a thread of the same name in its place, so a
+`ThreadLocal` of the pool's thread starts again from its initial value. A pool that is
+never shut down keeps a JDK's program running; a `.wasm` ends.
+
+**A `ConcurrentHashMap` keeps the order a JDK 25 walks it in**, but for a table of 64
+chains or more in which nine keys share one chain. An executor that refuses a task
+throws a `RejectedExecutionException` with no message.
+
+**A thread's state is never `BLOCKED`.** `getState` tells a thread that waits or sleeps;
+one waiting to enter a monitor is `RUNNABLE`. An uncaught-exception handler is asked for
+the threads a program starts, not for the thread of `main`. An `AtomicInteger` and an
+`AtomicLong` are no `Number`.
 
 **A thread's number is rontolisp's own.** `threadId()` and the number in `toString()` count
 the threads of the program from 1. A class literal is read only as the lock of a
-`synchronized` statement. One lock guards the static initialization of every class, so a
-static initializer that waits for a thread initializing another class never ends.
+`synchronized` statement.
 
 ## What is refused
 
@@ -255,9 +265,10 @@ Each of these is an error naming the construct and its position.
 - A field hiding one of a superclass.
 - A lambda or a method reference cast to several types (`(Runnable & Marker) () -> ..`).
 - A class extending `String`, `StringBuilder` or a box.
-- `java.util.concurrent` but for the four atomic classes: locks, executors, concurrent
-  collections, `CompletableFuture`. `Thread.getState`, thread groups and uncaught-exception
-  handlers.
+- Of `java.util.concurrent`, what the [overview](index.md) does not list: read-write and
+  stamped locks, `CyclicBarrier`, `Phaser`, `Exchanger`, scheduled executors,
+  `ForkJoinPool`, the other queues and maps, the other atomic classes. Thread groups,
+  `sleep` and `join` of a `Duration`.
 - Any class or member of the library not listed in the [overview](index.md): streams
   (`java.util.stream`), `LinkedList`, `LinkedHashMap`, `TreeMap`, `Scanner`, files
   (`File`, `FileReader`, `java.nio.file`), `java.time`, `BigInteger`, `BigDecimal`, regular

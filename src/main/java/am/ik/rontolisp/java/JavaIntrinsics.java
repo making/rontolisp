@@ -43,6 +43,8 @@ final class JavaIntrinsics {
 
 	private static final String STRING = "java.lang.String";
 
+	private static final String STRING_BUFFER = "java.lang.StringBuffer";
+
 	private static final String NUMBER = "java.lang.Number";
 
 	private static final String CHARS = "java.lang.CharSequence";
@@ -107,7 +109,7 @@ final class JavaIntrinsics {
 	/** Whether a class's values are told from every other's by {@link #predicate}. */
 	static boolean isPlain(JavaClass declaration) {
 		return switch (declaration.name) {
-			case "java.lang.StringBuilder", "java.lang.StringBuffer", NUMBER -> true;
+			case "java.lang.StringBuilder", STRING_BUFFER, NUMBER -> true;
 			default -> BOXES.containsKey(declaration.name);
 		};
 	}
@@ -129,7 +131,7 @@ final class JavaIntrinsics {
 			case "java.lang.Character" -> cl("characterp");
 			case "java.lang.Boolean" -> JavaForms.runtime("boolean-p");
 			case NUMBER -> JavaForms.runtime("number-p");
-			case "java.lang.StringBuilder", "java.lang.StringBuffer" -> JavaForms.runtime("sb-p");
+			case "java.lang.StringBuilder", STRING_BUFFER -> JavaForms.runtime("sb-p");
 			default -> null;
 		};
 	}
@@ -145,7 +147,7 @@ final class JavaIntrinsics {
 		public List<String> implemented(String name) {
 			return switch (name) {
 				case STRING -> List.of(COMPARABLE, CHARS);
-				case "java.lang.StringBuilder", "java.lang.StringBuffer" -> List.of(CHARS);
+				case "java.lang.StringBuilder", STRING_BUFFER -> List.of(CHARS);
 				default -> BOXES.containsKey(name) ? List.of(COMPARABLE) : List.of();
 			};
 		}
@@ -167,7 +169,7 @@ final class JavaIntrinsics {
 	 * in the table.
 	 */
 	static List<String> named(String intrinsic, String member) {
-		boolean builder = intrinsic.equals("java.lang.StringBuilder") || intrinsic.equals("java.lang.StringBuffer");
+		boolean builder = intrinsic.equals("java.lang.StringBuilder") || intrinsic.equals(STRING_BUFFER);
 		if (member.equals("subSequence") && (intrinsic.equals(STRING) || builder)) {
 			return List.of(CHARS);
 		}
@@ -184,12 +186,12 @@ final class JavaIntrinsics {
 	 */
 	private static void meets(JavaClass intrinsic, JavaClass named, JavaClasses classes) {
 		boolean text = intrinsic.name.equals(STRING);
-		boolean builder = intrinsic.name.equals("java.lang.StringBuilder")
-				|| intrinsic.name.equals("java.lang.StringBuffer");
+		boolean builder = intrinsic.name.equals("java.lang.StringBuilder") || intrinsic.name.equals(STRING_BUFFER);
 		if (named.name.equals(CHARS) && (text || builder)) {
+			JavaEmitter emitter = runtime(text ? "substring" : "sb-substring");
 			intrinsic.methods.add(new JavaClass.Method(intrinsic, "subSequence", List.of(Primitive.INT, Primitive.INT),
-					new ClassType(named, List.of()), false, false, null, runtime(text ? "substring" : "sb-substring"),
-					false));
+					new ClassType(named, List.of()), false, false, null,
+					intrinsic.name.equals(STRING_BUFFER) ? guarded(emitter) : emitter, false));
 		}
 		if (named.name.equals(CHARSET) && text) {
 			ClassType charset = new ClassType(named, List.of());
@@ -252,19 +254,35 @@ final class JavaIntrinsics {
 		return all;
 	}
 
+	/**
+	 * A member of a class every member of which holds its receiver's monitor
+	 * ({@code StringBuffer}): the same form, held in a program that can tell.
+	 */
+	private static JavaEmitter guarded(JavaEmitter emitter) {
+		return (lowering, call) -> lowering.holding(call, emitter);
+	}
+
 	private static final class Builder {
 
 		private final JavaClass made;
 
+		/** Whether every instance member holds its receiver's monitor. */
+		private final boolean guarded;
+
 		Builder(String name, boolean isAbstract, JavaClasses classes) {
 			this.made = new JavaClass(name, false, isAbstract, true, null, null);
+			this.guarded = name.equals(STRING_BUFFER);
 			classes.register(this.made);
 		}
 
 		Builder method(String name, JavaType returnType, JavaEmitter emitter, JavaType... parameters) {
 			this.made.methods.add(new JavaClass.Method(this.made, name, Arrays.asList(parameters), returnType, false,
-					false, null, emitter, false));
+					false, null, guarded(name, emitter), false));
 			return this;
+		}
+
+		private JavaEmitter guarded(String name, JavaEmitter emitter) {
+			return this.guarded && !name.equals("<init>") ? JavaIntrinsics.guarded(emitter) : emitter;
 		}
 
 		Builder statik(String name, JavaType returnType, JavaEmitter emitter, JavaType... parameters) {
@@ -276,7 +294,7 @@ final class JavaIntrinsics {
 		/** A member of one argument of any type, which it takes as it is typed. */
 		Builder any(String name, boolean isStatic, JavaType returnType, JavaType parameter, JavaEmitter emitter) {
 			this.made.methods.add(new JavaClass.Method(this.made, name, List.of(parameter), returnType, isStatic, false,
-					null, emitter, true));
+					null, isStatic ? emitter : guarded(name, emitter), true));
 			return this;
 		}
 
@@ -353,7 +371,7 @@ final class JavaIntrinsics {
 			case STRING:
 				return string(new Builder(name, false, classes), classes);
 			case "java.lang.StringBuilder":
-			case "java.lang.StringBuffer":
+			case STRING_BUFFER:
 				return stringBuilder(new Builder(name, false, classes), classes);
 			case "java.lang.Math":
 				return math(new Builder(name, false, classes));
@@ -1061,6 +1079,7 @@ final class JavaIntrinsics {
 			return JavaForms.let(started, call.argument(0),
 					List.of(runtimeCall("thread-start", call.argument(1), call.argument(2), body)));
 		});
+		natives.put("rontolisp.internal.Support.oneStack()", runtime("one-stack-p"));
 		natives.put("rontolisp.internal.Support.floatHash(float)", runtime("float-bits"));
 		// a Float is the float in a cons with its tag
 		natives.put("rontolisp.internal.Support.readFloat(String)", (lowering, call) -> {

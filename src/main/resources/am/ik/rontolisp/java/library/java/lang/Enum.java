@@ -29,4 +29,12 @@ public abstract class Enum<E extends Enum<E>> {
     public final int compareTo(E other) {
         return ordinal - other.ordinal();
     }
+
+    /**
+     * What the valueOf(String) a JDK's compiler writes for an enum calls: this front
+     * end writes an enum's own, and has no class object to call this one with.
+     */
+    public static <T extends Enum<T>> T valueOf(Class<T> enumClass, String name) {
+        throw new IllegalArgumentException("No enum constant " + name);
+    }
 }

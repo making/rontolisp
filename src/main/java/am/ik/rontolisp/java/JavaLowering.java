@@ -2764,6 +2764,29 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	@Override
+	public LispVal holding(Invocation call, JavaEmitter member) {
+		Typed receiver = Objects.requireNonNull(call.receiver());
+		if (!this.classes.monitors) {
+			return member.emit(this, call);
+		}
+		List<LispVal> bindings = new ArrayList<>();
+		LispSymbol self = temporary();
+		bindings.add(list(self, receiver.form()));
+		List<Typed> arguments = new ArrayList<>();
+		for (Typed argument : call.arguments()) {
+			if (isSimple(argument.form())) {
+				arguments.add(argument);
+				continue;
+			}
+			LispSymbol held = temporary();
+			bindings.add(list(held, argument.form()));
+			arguments.add(new Typed(held, argument.type(), argument.constant()));
+		}
+		Invocation bound = new Invocation(new Typed(self, receiver.type()), arguments, call.discard(), call.pos());
+		return list(cl("let*"), list(bindings), holding(self, List.of(member.emit(this, bound))));
+	}
+
+	@Override
 	public LispVal library(String className, String name, List<LispVal> arguments) {
 		JavaClass owner = this.classes.library(className);
 		for (Method method : owner.methods) {
@@ -7231,12 +7254,25 @@ final class JavaLowering implements JavaEmitter.Context {
 			body.addAll(Objects.requireNonNull(this.staticInits.get(declaration)));
 			LispVal run = call("if", done, NIL, progn(body));
 			if (threads) {
-				// one thread initializes a class and every other waits until it has: the
-				// test outside the lock is of an initialization that ended
+				// one thread initializes a class and every other asking for that class
+				// waits until it has: the class's state is nil, the thread initializing
+				// it, then :ended, written under a lock no initializer runs under. The
+				// first test is of an initialization that ended, the second of the
+				// thread initializing the class asking for it again
 				LispVal ended = new LispSymbol(":ENDED");
-				body.add(call("setq", done, ended));
-				run = call("if", call("eq", done, ended), NIL, list(new LispSymbol("RONTOLISP:WITH-MUTEX"),
-						list(runtimeCall("initializing")), call("if", done, NIL, progn(body))));
+				LispSymbol self = temporary();
+				body.set(0, call("setq", done, self));
+				body.add(1, runtimeCall("init-leave", NIL));
+				LispVal end = progn(
+						List.of(runtimeCall("init-enter"), call("setq", done, ended), runtimeCall("init-leave", T)));
+				LispVal claim = progn(List.of(body.get(0), body.get(1),
+						list(cl("unwind-protect"), progn(body.subList(2, body.size())), end)));
+				run = call("if", call("eq", done, ended), NIL,
+						JavaForms.let(self, runtimeCall("self"),
+								List.of(call("if", call("eq", done, self), NIL,
+										progn(List.of(runtimeCall("init-enter"),
+												form(cl("while"), List.of(runtimeCall("init-busy", done))),
+												call("if", done, runtimeCall("init-leave", NIL), claim)))))));
 			}
 			this.functions.add(list(cl("defun"), JavaNames.initializer(declaration), NIL, run));
 		}

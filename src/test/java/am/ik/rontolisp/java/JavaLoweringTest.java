@@ -501,8 +501,9 @@ class JavaLoweringTest {
 		// field is read and written one access at a time; wait and notify are
 		// Thread.java's
 		// over the run time's; a started thread runs its run(), reports what it leaves
-		// uncaught and ends; a program that starts one initializes a class under a lock
-		// and ends when its threads have.
+		// uncaught and ends; a program that starts one initializes a class on one thread,
+		// its state written under a lock no initializer runs under, and ends when its
+		// threads have.
 		assertThat(lower("""
 				class Cell {
 				    static volatile int hits;
@@ -544,22 +545,27 @@ class JavaLoweringTest {
 						+ "(|Thread.await(Object,long)| (OR |lock| (RONTOLISP::%JAVA-NPE)) 0) "
 						+ "(|Thread.signal(Object,boolean)| (OR |lock| (RONTOLISP::%JAVA-NPE)) T)) "
 						+ "(RONTOLISP::%JAVA-MONITOR-EXIT |%t5|))))",
-				"(DEFUN |Thread.start()| (|this|) (PROGN (LET ((|%t6| (RONTOLISP::%JAVA-MONITOR-ENTER |this|))) "
+				"(DEFUN |Thread.start()| (|this|) (PROGN (LET ((|%t7| (RONTOLISP::%JAVA-MONITOR-ENTER |this|))) "
 						+ "(UNWIND-PROTECT (PROGN (IF (|Thread.started| |this|) (RONTOLISP::%JAVA-THROW "
 						+ "(|IllegalThreadStateException.new()|) #'|Throwable.toString()|)) (SETF (|Thread.started| "
 						+ "|this|) T) (RONTOLISP:WITH-MUTEX ((RONTOLISP::%JAVA-VOLATILE)) (SETF (|Thread.alive| |this|) "
-						+ "T))) (RONTOLISP::%JAVA-MONITOR-EXIT |%t6|))) (LET ((|%t7| |this|)) "
+						+ "T))) (RONTOLISP::%JAVA-MONITOR-EXIT |%t7|))) (LET ((|%t8| |this|)) "
 						+ "(RONTOLISP::%JAVA-THREAD-START (|Thread.carrier| |this|) (|Thread.daemon| |this|) (LAMBDA "
-						+ "NIL (UNWIND-PROTECT (HANDLER-CASE (|Thread.body(Thread)| |%t7|) (ERROR (|%t8|) "
-						+ "(|Thread.report(Thread,String)| |%t7| (RONTOLISP::%JAVA-THROWN-TEXT |%t8|)))) "
-						+ "(|Thread.finish(Thread)| |%t7|)))))))",
-				"(DEFUN |Lazy.<clinit>| NIL (IF (EQ |Lazy.<clinit>%done| :ENDED) NIL (RONTOLISP:WITH-MUTEX "
-						+ "((RONTOLISP::%JAVA-INITIALIZING)) (IF |Lazy.<clinit>%done| NIL (PROGN (SETQ "
-						+ "|Lazy.<clinit>%done| T) (WRITE-LINE \"made\") (SETQ |Lazy.<clinit>%done| :ENDED))))))",
+						+ "NIL (UNWIND-PROTECT (HANDLER-CASE (|Thread.body(Thread)| |%t8|) (ERROR (|%t9|) "
+						+ "(|Thread.report(Thread,String)| |%t8| (RONTOLISP::%JAVA-THROWN-TEXT |%t9|)))) "
+						+ "(|Thread.finish(Thread)| |%t8|)))))))",
+				"(DEFUN |Lazy.<clinit>| NIL (IF (EQ |Lazy.<clinit>%done| :ENDED) NIL (LET ((|%t15| "
+						+ "(RONTOLISP::%JAVA-SELF))) (IF (EQ |Lazy.<clinit>%done| |%t15|) NIL (PROGN "
+						+ "(RONTOLISP::%JAVA-INIT-ENTER) (WHILE (RONTOLISP::%JAVA-INIT-BUSY |Lazy.<clinit>%done|)) "
+						+ "(IF |Lazy.<clinit>%done| (RONTOLISP::%JAVA-INIT-LEAVE NIL) (PROGN (SETQ "
+						+ "|Lazy.<clinit>%done| |%t15|) (RONTOLISP::%JAVA-INIT-LEAVE NIL) (UNWIND-PROTECT "
+						+ "(WRITE-LINE \"made\") (PROGN (RONTOLISP::%JAVA-INIT-ENTER) (SETQ |Lazy.<clinit>%done| "
+						+ ":ENDED) (RONTOLISP::%JAVA-INIT-LEAVE T))))))))))",
 				"(RONTOLISP::%JAVA-THREAD-MAIN (LAMBDA NIL (PROGN (SETQ |Cell.hits| 0) (SETQ |Lazy.made| 0) (SETQ "
-						+ "|Thread.MIN_PRIORITY| 1) (SETQ |Thread.NORM_PRIORITY| 5) (SETQ |Thread.MAX_PRIORITY| 10) "
-						+ "(SETQ |Thread.unnamed| 0) (SETQ |Thread.identifiers| 1) (SETQ |Lazy.<clinit>%done| NIL) "
-						+ "(|T1.main(String[])| (VECTOR)))) (LAMBDA (|%t|) (|Thread.finish(Thread)| |%t|)))");
+						+ "|Thread.defaultHandler| NIL) (SETQ |Thread.guarding| NIL) (SETQ |Thread.MIN_PRIORITY| 1) "
+						+ "(SETQ |Thread.NORM_PRIORITY| 5) (SETQ |Thread.MAX_PRIORITY| 10) (SETQ |Thread.unnamed| 0) "
+						+ "(SETQ |Thread.identifiers| 1) (SETQ |Lazy.<clinit>%done| NIL) (|T1.main(String[])| "
+						+ "(VECTOR)))) (LAMBDA (|%t|) (|Thread.finish(Thread)| |%t|)))");
 		// a program that starts no thread and neither waits nor asks cannot tell a
 		// monitor
 		// held from one that is not: synchronized leaves the exception a null has, the
@@ -599,8 +605,8 @@ class JavaLoweringTest {
 						"1:44: a lambda or a method reference cast to an intersection type" },
 				{ "void main() { Object o = int.class; }", "1:26: a class literal" },
 				{ "class A { transient int x; } void main() { }", "1:11: the modifier transient" },
-				{ "import java.util.concurrent.locks.ReentrantLock; void main() { ReentrantLock l = null; }",
-						"1:64: the class java.util.concurrent.locks.ReentrantLock" },
+				{ "import java.util.concurrent.locks.StampedLock; void main() { StampedLock l = null; }",
+						"1:62: the class java.util.concurrent.locks.StampedLock" },
 				{ "interface I { default void m() { } } class A implements I { Runnable r = I.super::m; } void main() { }",
 						"1:81: a method reference through a qualified super" },
 				{ "import java.util.Scanner; void main() { Scanner s = null; }", "1:41: the class java.util.Scanner" },

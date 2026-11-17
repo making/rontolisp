@@ -96,6 +96,9 @@ public final class Support {
         return charset == StandardCharsets.UTF_8 ? "UTF8" : charset == StandardCharsets.ISO_8859_1 ? "ISO8859_1" : "ASCII";
     }
 
+    /** Whether the target runs the threads of a program on one stack. */
+    public static native boolean oneStack();
+
     private static native byte[] utf8(String s);
 
     private static native String utf8String(byte[] b, int offset, int count);
