@@ -369,6 +369,19 @@ cases:
           line = "😀".join(ws)
           return [up[:3], up[-2:], sorted(ws, reverse = True) == up[::-1], [p[1] for p in by[:6]], line.count("😀"), line.count("😀", 20, 60), line.find("z", 1), line.find("😀", 12), line.find("～😀", 3, len(line) - 2), len(line.split("😀")), line.split("😀", 2)[2][:5], "😀".join(line.split("😀")) == line, line.split("-long-suffix")[1][:4]]
       print(fast_wide(40), fast_wide(6), sorted((5, 3, 1)), sorted((3, False, 1, True), key = lambda v: 0 if type(v) == "bool" else v), list((1, False, 2)), sorted(range(40), key = lambda v: v % 3, reverse = True)[12:16])
+      def fast_graph(n, k, one, many):
+          names = ["t%d" % i for i in range(n)]
+          t = {"name": "n" + k, "srcs": [k], "deps": []}
+          for i in range(9):
+              t["deps"].append("t%d" % (i * n))
+          by = {name: len(name) for name in names}
+          doubled = [x * 2 for x in t["deps"]]
+          doubled.append(k)
+          keys = [key for key in t]
+          pairs = [(key, len(key)) for key in by]
+          pairs.append(by["t" + str(n - 1)])
+          return ["%s" % one, "%d|" % n, "<%r>" % k, "%s%%" % n, "%s" % [k], "%s" % None, "%s|" % (n == 1), "%s-%s" % many, t["na" + "me"[:2]], t["de" + k[:0] + "ps"][7:], "dep" + "s" in t, "sr" + k in t, t.get("src" + "s"), by["t" + str(n // 2)], "t" + str(n) in by, by.get("t" + k), len(doubled), doubled[8:], keys, pairs[-2:], "%s: %d source%s, needs %s" % (k, n, "" if n == 1 else "s", one), "%s%d%s%d%s%d%s%d%s" % (k, 1, k, 2, k, 3, k, 4, k), "{}/{}/{}/{}/{}".format(n, k, n, k, n)]
+      print(fast_graph(12, "c", "o", (1, "two")), fast_graph(1, "", (3,), ((), [])))
     expected: |
       3 ab [1, 2] 3.5 9223372036854775808
       [True, True, False, False, False, True, False, True] [False, False, True, True, False, True, False, True] [True, True, False, False, False, True, False, True] [False, True, False, True, True, False, False, True]
@@ -389,6 +402,7 @@ cases:
       ["item42", "s:0", "42-x", "42:s", "1180591620717411303424|1180591620717411303424|-42|\"s\"", "TrueTrue1180591620717411303424", "é-42😀", 5, "42s42s118059162071741130342442"] ["item-1073741824", ":6", "-1073741824-x", "-1073741824:", "-2147483648|-2147483648|1073741824|\"\"", "NoneNone-2147483648", "é1073741824😀", 12, "-1073741824-1073741824-2147483648-1073741824"]
       [4, 2, 2, 44, 2, 3, 2, 1, 69, 2, 16, -1, 17, 12, 10, 7, -1, True, True, True, True, True, "pad|", "pad  |", "  pad|", "pad", "pad", "abc", "|", "HELLO WORLD 123", "hello world 123", "HÉLLO WÖRLD", "héllo", 3, 209, ["A", "BB", "CCCCCCCC", "CCCCCCCCC", "É", "ÉÉÉÉÉ", ""], 3, 2, 1, [], 2, "TWO", 3, "dflt", 3]
       [["aaaa", "aaaĀ-long-suffix", "aaa～"], ["😀😀😀Ā", "😀😀😀Ā-long-suffix"], True, [5, 8, 19, 18, 2, 22], 52, 14, 1, 14, 17, 53, "～～～Ā😀", True, "😀zz～"] [["zz-long-suffix", "zz～", "éĀ"], ["～～～Ā", "😀😀😀Ā-long-suffix"], True, [5, 2, 4, 3, 0, 1], 8, 6, 1, 14, 17, 9, "～～～Ā😀", True, "😀zz～"] [1, 3, 5] [False, True, 1, 3] [1, False, 2] [38, 1, 4, 7]
+      ["o", "12|", "<\"c\">", "12%", "[\"c\"]", "None", "False|", "1-two", "nc", ["t84", "t96"], True, False, ["c"], 2, False, None, 10, ["t96t96", "c"], ["name", "srcs", "deps"], [("t11", 3), 3], "c: 12 sources, needs o", "c1c2c3c4c", "12/c/12/c/12"] ["3", "1|", "<\"\">", "1%", "[\"\"]", "None", "True|", "()-[]", "n", ["t7", "t8"], True, False, [""], 2, False, None, 10, ["t8t8", ""], ["name", "srcs", "deps"], [("t0", 2), 2], ": 1 source, needs (3,)", "1234", "1//1//1"]
   # A string's elements are code points; hash is the specification's; equal keys are one
   # dict key, which keeps its place when stored again and goes last once removed; a float
   # prints as Go's %g, NaN equals itself; a function is a key by identity.

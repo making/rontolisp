@@ -127,8 +127,16 @@
   kind
   self)
 
+;; An empty vector a list is to grow in, with room for four elements: one made with
+;; none grows at its first, second and third push (.kb/adjustable-arrays.md, "The
+;; growth policy"), and most lists a program appends to stay that short.
 (defun rontolisp::%starlark-vector ()
-  (make-array 0 :adjustable t :fill-pointer 0))
+  (make-array 4 :adjustable t :fill-pointer 0))
+
+;; An empty vector with room for N elements: what a comprehension that pushes one
+;; element for each of N accumulates into, so no push grows it.
+(defun rontolisp::%starlark-vector-of (n)
+  (make-array n :adjustable t :fill-pointer 0))
 
 ;; A list over VECTOR, an adjustable vector with a fill pointer nothing else holds:
 ;; what a comprehension accumulates into.
@@ -136,9 +144,12 @@
   (rontolisp::%starlark-new-list vector))
 
 ;; A fresh list of the elements of a Common Lisp list: its vector is made at their
-;; number, where a push an element grew it from nothing three times for five.
+;; number, where a push an element grew it from nothing three times for five. `[]` is
+;; written to be appended to, so it starts as %starlark-vector does.
 (defun rontolisp::%starlark-list-of (xs)
-  (let* ((n (length xs)) (v (make-array n :adjustable t :fill-pointer n)) (i 0))
+  (let* ((n (length xs))
+         (v (make-array (if (= n 0) 4 n) :adjustable t :fill-pointer n))
+         (i 0))
     (dolist (x xs)
       (setf (aref v i) x)
       (setq i (+ i 1)))
@@ -1508,16 +1519,20 @@
     (if (or (< j 0) (>= j n)) (error "~a index ~a out of range" what i))
     j))
 
-;; X[I]. A list subscripted by an int within it is all this function holds, so the
-;; compiled body is a few tests and one read with no frame of the general function's
-;; size around them (.kb/starlark-frontend.md, "An int test compiled twice").
+;; X[I]. A list subscripted by an int within it and a dict's item are all this function
+;; holds, so the compiled body is a few tests and one read, or one call, with no frame
+;; of the general function's size around them (.kb/starlark-frontend.md, "An int test
+;; compiled twice"); a key a dict does not hold is the general function's to report.
 (defun rontolisp::%starlark-index (x i)
-  (if (rontolisp::%starlark-list-p x)
-      (let* ((items (rontolisp::%starlark-list-items x)) (n (length items)))
-        (if (and (integerp i) (>= i 0) (< i n))
-            (aref items i)
-            (rontolisp::%starlark-index-of x i)))
-      (rontolisp::%starlark-index-of x i)))
+  (cond ((rontolisp::%starlark-list-p x)
+         (let* ((items (rontolisp::%starlark-list-items x)) (n (length items)))
+           (if (and (integerp i) (>= i 0) (< i n))
+               (aref items i)
+               (rontolisp::%starlark-index-of x i))))
+        ((rontolisp::%starlark-dict-p x)
+         (let ((cell (rontolisp::%starlark-dict-cell x i)))
+           (if cell (cdr cell) (rontolisp::%starlark-index-of x i))))
+        (t (rontolisp::%starlark-index-of x i))))
 
 ;; X[I] for every X and I.
 (defun rontolisp::%starlark-index-of (x i)
@@ -3396,6 +3411,11 @@
                    ((char= d #\x) (%normalize-string (format nil "~(~x~)" v)))
                    ((char= d #\X) (%normalize-string (format nil "~:@(~x~)" v)))
                    (t (%normalize-string (format nil "~o" v))))))))
+
+;; Whether B, the right operand of `template % b`, is the template's one argument: a
+;; tuple is its arguments instead.
+(defun rontolisp::%starlark-one-argument-p (b)
+  (not (rontolisp::%starlark-tuple-p b)))
 
 ;; "%s %d %r" % args: FMT is a string, ARGS a Common Lisp list.
 (defun rontolisp::%starlark-interpolate (fmt args)

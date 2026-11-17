@@ -236,6 +236,12 @@ final class StarlarkLowering {
 	/** The most pieces a template written as a literal is joined of in place. */
 	private static final int TEMPLATE_PIECES = 64;
 
+	/**
+	 * The most pieces joined as a chain of {@code %string-concat}; more are a list joined
+	 * by halves.
+	 */
+	private static final int CHAINED_PIECES = 8;
+
 	/** The block a function body is: what {@code return} leaves. */
 	private static final LispSymbol FUNCTION_BLOCK = new LispSymbol("%SL-FN");
 
@@ -1701,6 +1707,12 @@ final class StarlarkLowering {
 		 */
 		private final @Nullable LispSymbol iterable;
 
+		/**
+		 * The variable holding how many elements the loop walks, or {@code null} for a
+		 * loop that counts.
+		 */
+		private final @Nullable LispSymbol count;
+
 		/** Whether an element is left. */
 		private final LispVal test;
 
@@ -1729,6 +1741,7 @@ final class StarlarkLowering {
 			this.bindings.addAll(List.of(list(iterable, iterated), list(items, list(ITERATE, iterable)),
 					list(count, list(LENGTH, items)), list(index, new LispInteger(0))));
 			this.iterable = iterable;
+			this.count = count;
 			this.test = list(LESS, index, count);
 			this.element = list(AREF, items, index);
 			this.step = list(SETQ, index, list(PLUS, index, new LispInteger(1)));
@@ -1767,6 +1780,7 @@ final class StarlarkLowering {
 				this.bindings.add(list(by, located(list(LOOP_STEP, next, limit, step), range.at())));
 			}
 			this.iterable = null;
+			this.count = null;
 			this.test = constant != null ? list(constant.signum() > 0 ? LESS : GREATER, next, limit)
 					: list(IF, list(LESS, new LispInteger(0), by), list(LESS, next, limit), list(GREATER, next, limit));
 			this.element = next;
@@ -2450,11 +2464,18 @@ final class StarlarkLowering {
 
 	private LispVal binary(Binary binary, Scope scope) {
 		BinaryOperator operator = binary.operator();
-		if (operator == BinaryOperator.MODULO && binary.left() instanceof StringLiteral template
-				&& binary.right() instanceof TupleLiteral tuple) {
-			List<Piece> pieces = interpolation(template.value(), tuple.elements().size());
-			if (pieces != null) {
-				return joined(pieces, tuple.elements(), scope);
+		if (operator == BinaryOperator.MODULO && binary.left() instanceof StringLiteral template) {
+			if (binary.right() instanceof TupleLiteral tuple) {
+				List<Piece> pieces = interpolation(template.value(), tuple.elements().size());
+				if (pieces != null) {
+					return joined(pieces, tuple.elements(), scope);
+				}
+			}
+			else {
+				LispVal single = interpolationOfOne(template, binary, scope);
+				if (single != null) {
+					return single;
+				}
 			}
 		}
 		if (operator == BinaryOperator.AND || operator == BinaryOperator.OR) {
@@ -2736,7 +2757,10 @@ final class StarlarkLowering {
 			body = loop == null ? list(IF, heads.get(i), body) : loop.over(heads.get(i), List.of(body));
 		}
 		List<LispVal> bindings = new ArrayList<>();
-		bindings.add(list(accumulator, list(dict ? EMPTY_DICT : VECTOR)));
+		// one loop and no condition push an element for each the loop walks
+		LispVal room = !dict && clauses.size() == 1 ? first.count : null;
+		bindings.add(list(accumulator,
+				dict ? list(EMPTY_DICT) : room != null ? list(runtime("VECTOR-OF"), room) : list(VECTOR)));
 		for (String name : bound.keySet()) {
 			bindings.add(list(StarlarkNames.symbol(name), UNBOUND));
 		}
@@ -2873,6 +2897,33 @@ final class StarlarkLowering {
 	}
 
 	/**
+	 * {@code "template" % b} over a right operand that is no tuple expression: the
+	 * template read for one argument, which {@code b} is unless it is a tuple -- known
+	 * while lowering for an int, a Boolean or a string, asked of the value otherwise,
+	 * with the run time's reading as the other branch.
+	 * @param template the template
+	 * @param binary the operation
+	 * @param scope where it stands
+	 * @return the form, or {@code null} when the template does not read for one argument
+	 */
+	private @Nullable LispVal interpolationOfOne(StringLiteral template, Binary binary, Scope scope) {
+		List<Piece> pieces = interpolation(template.value(), 1);
+		if (pieces == null) {
+			return null;
+		}
+		Kind kind = kind(binary.right(), scope);
+		if (kind == Kind.INT || kind == Kind.BOOL || kind == Kind.STRING) {
+			return joined(pieces, List.of(binary.right()), scope);
+		}
+		LispVal operand = expression(binary.right(), scope);
+		LispVal held = isSimple(operand) ? operand : fresh("ARG");
+		LispVal either = list(IF, list(runtime("ONE-ARGUMENT-P"), held),
+				joinedForms(pieces, List.of(held), List.of(kind)),
+				list(arithmetic(BinaryOperator.MODULO), string(template.value()), held));
+		return held == operand ? either : list(LET, list(list(held, operand)), either);
+	}
+
+	/**
 	 * The pieces of {@code "template".format(a, b)} over as many positional arguments,
 	 * read as {@code %starlark-m-format} reads the template when the program runs, or
 	 * {@code null} when that reading ends in an error or needs a named argument, which is
@@ -2966,6 +3017,12 @@ final class StarlarkLowering {
 			operands.add(form);
 			kinds.add(kind(argument, scope));
 		}
+		LispVal joined = joinedForms(pieces, operands, kinds);
+		return bindings.isEmpty() ? joined : list(LET_STAR, listOf(bindings), joined);
+	}
+
+	/** The pieces of a template joined over operands that are variables or constants. */
+	private LispVal joinedForms(List<Piece> pieces, List<LispVal> operands, List<Kind> kinds) {
 		List<LispVal> parts = new ArrayList<>();
 		for (Piece piece : pieces) {
 			String text = piece.text();
@@ -2983,7 +3040,7 @@ final class StarlarkLowering {
 					});
 		}
 		LispVal joined = parts.isEmpty() ? string("") : parts.get(0);
-		if (parts.size() > 4) {
+		if (parts.size() > CHAINED_PIECES) {
 			joined = list(runtime("CONCAT-PIECES"), cons(LIST, listOf(parts)), new LispInteger(parts.size()));
 		}
 		else {
@@ -2991,7 +3048,7 @@ final class StarlarkLowering {
 				joined = list(STRING_CONCAT, joined, part);
 			}
 		}
-		return bindings.isEmpty() ? joined : list(LET_STAR, listOf(bindings), joined);
+		return joined;
 	}
 
 	/**

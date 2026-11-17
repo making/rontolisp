@@ -83,12 +83,13 @@ and every user surface says so (`--source-language` help, the title of
 | `for` | `(let* ((seq it) (items (%starlark-iterate seq)) (count (length items)) (index 0)) (while (< index count) assign (setq index (+ index 1)) body..) (%starlark-iterated seq))`; `(block %SL-BREAK ..)` around the `while` and `(block %SL-CONTINUE ..)` around the body only when the body has that exit. `while` is the core form `loop` expands to; until 2026-11-16 the loop was a `tagbody` and a `go`, on wasm a `br_table` over a boxed counter every round |
 | `for i in range(a, b, c)` (the built-in, positional arguments) | `(let* ((next a) (stop (%starlark-loop-stop next b))) (while (< next stop) (setq i next) (setq next (+ next c)) body..))`: no range, no vector, nothing to give back; `>` for a negative constant step; `(stop b)` with no check when both bounds are known ints, a constant `b` in the test itself; a step that is no constant is `(step (%starlark-loop-step next stop c))` and the test `(if (< 0 step) (< next stop) (> next stop))`; a step written `0` stays the generic loop, whose `range` refuses it |
 | `return v` inside loops | `(let ((r v)) (%starlark-iterated seq-inner) .. (return-from %SL-FN r))` -- every loop of the function gives its iterable back first, so no `unwind-protect` and no EH mode on wasm |
-| comprehension | the same loops around `(vector-push-extend elt acc)` / `(%starlark-dict-put acc k v)` (the dict is the comprehension's own, so nothing of `a[k] = v`'s dispatch is asked, and an int or a string key is stored with one look-up: `(setf (gethash k table) (cons k v))`, the cell made anew for a key stored before), its variables in a `let` of its own INSIDE the first loop's `let*`, so the first iterable reads the enclosing block's variables (`[x for x in range(x)]`) |
+| comprehension | the same loops around `(vector-push-extend elt acc)` / `(%starlark-dict-put acc k v)` (the dict is the comprehension's own, so nothing of `a[k] = v`'s dispatch is asked, and an int or a string key is stored with one look-up: `(setf (gethash k table) (cons k v))`, the cell made anew for a key stored before), its variables in a `let` of its own INSIDE the first loop's `let*`, so the first iterable reads the enclosing block's variables (`[x for x in range(x)]`). `acc` is `(%starlark-vector)`, room for four; a list comprehension of ONE loop over an iterable and no condition pushes an element for each the loop walks, so its `acc` is `(%starlark-vector-of count)`, the loop's own count, and no push grows it (2026-11-17, "A program a user wrote") |
 | `a + b`, `a == b`, `a[i]`, `a[i:j]`, `x in y` | `(%starlark-add a b)`, `-equal`, `-index`, `-slice`, `-in`: generic, dispatching at run time; `!=` and `not in` are `(not ..)` of them |
 | `+ - * // %`, a comparison, `==`, `!=` over operands that MAY be ints | `(if (and (integerp a) (integerp b)) (+ a b) (%starlark-add a b))`, an operand that is more than a variable bound first; `//` and `%` by a divisor that is no constant test it too, `(if (and (integerp a) (integerp b) (not (= b 0))) (mod a b) (%starlark-mod a b))`, also over known ints ("What the lowering knows") |
 | `s + t` over KNOWN strings; over one known string | `(%string-concat s t)`; `(if (stringp t) (%string-concat s t) (%starlark-add s t))` |
 | `str(i)` over a KNOWN int; a template's `{}`, `%s`, `%d`, `%i` of one | `(%decimal-piece i)`: what `%starlark-b-str` and `%starlark-conversion` answer for an int, with no call of them (2026-11-16). On wasm a chain of `%string-concat` over such pieces is one string made once, the digits written where they go ([wasm-gc-strings.md](wasm-gc-strings.md), "A chain of concatenations is one string") |
-| `"{}-{!r}".format(a, b)`, `"%d: %s" % (a, b)`: a template written as a literal over positional arguments or a tuple expression | `(%string-concat (%string-concat (%starlark-b-str a) "-") (%starlark-b-repr b))`: the template is read while lowering (`format`, `interpolation`), every argument evaluated first, in order (bound when it is more than a variable), then one piece per field -- `%starlark-b-str`, `-b-repr`, `(%starlark-conversion a #\d)` for the other `%` conversions -- joined, past four pieces by `(%starlark-concat-pieces (list ..) n)`; a template whose reading ends in an error, a named field, a format spec, more than 64 pieces, any other template or right operand is the run time's |
+| `"{}-{!r}".format(a, b)`, `"%d: %s" % (a, b)`: a template written as a literal over positional arguments or a tuple expression | `(%string-concat (%string-concat (%starlark-b-str a) "-") (%starlark-b-repr b))`: the template is read while lowering (`format`, `interpolation`), every argument evaluated first, in order (bound when it is more than a variable), then one piece per field -- `%starlark-b-str`, `-b-repr`, `(%starlark-conversion a #\d)` for the other `%` conversions -- joined, past eight pieces by `(%starlark-concat-pieces (list ..) n)` (four until 2026-11-17: wasm takes a chain four pieces a call of `_str_cat`, so five to eight are two or three calls and no list); a template whose reading ends in an error, a named field, a format spec, more than 64 pieces, any other template is the run time's |
+| `"t%d" % x`, the right operand no tuple expression (2026-11-17) | the template read for ONE argument, which `x` is unless its value is a tuple: `(%string-concat "t" (%decimal-piece x))` for a known int, Boolean or string, else `(if (%starlark-one-argument-p x) <the pieces over x> (%starlark-mod "t%d" x))`, `x` bound first when it is more than a variable; a template that does not read for one argument is the run time's |
 | the same and `& \| ^ << >> ~`, unary `-`/`+`, over KNOWN ints | `(+ a b)`, `(< a b)`, `(= a b)`, `(mod a 7)`, `(ash a -1)` for `a // 2` (a power of two; any other divisor `(/ (- a (mod a 7)) 7)`, never `floor`: "Against CPython"), `(logand a b)`, `(ash a 3)`, `(- a)`: no test, no helper (a shift only by a constant count that is not negative) |
 | `x == None`, `x != True` | `(eq x :none)`, `(not (eq x t))`: `None`, `True` and `False` equal themselves only |
 | `if c:`, `c ? ..` | `(if (%starlark-truth c) ..)`; a known Boolean (a comparison, `not`, `in`, `True`/`False`, a variable only such values are bound to, `bool(..)`, `s.startswith(..)`) is the test as it stands, a known int `(not (= c 0))`; `and`/`or` of tests are `and`/`or` |
@@ -247,7 +248,7 @@ forms are the ones the backends already fuse ([jvm-int-fusion.md](jvm-int-fusion
 
 ## The run-time library's rules
 
-`starlark.lisp` keeps seven, the first four stated at its top:
+`starlark.lisp` keeps eight, the first four stated at its top:
 
 - **A structure accessor is called only behind that structure's predicate.** An accessor
   handed an instance of ANOTHER structure passes the instance check
@@ -301,6 +302,13 @@ forms are the ones the backends already fuse ([jvm-int-fusion.md](jvm-int-fusion
   give the vector its room once and move the elements with one `replace`
   (`%starlark-push-all`: a full vector grows at its next push by what the push asks for,
   here what it lacks and as much again as it has at least).
+- **A list written to be appended to starts with room for four** (2026-11-17):
+  `%starlark-vector` and `[]` (`%starlark-list-of` of no element). A vector made with no
+  room grows at its first, second and third push -- the growth policy doubles from a
+  floor of one (`.kb/adjustable-arrays.md`, "The growth policy"), and that capacity is
+  what Common Lisp's `array-dimension` reads, so the policy stays -- and the lists a
+  build file appends to mostly hold three elements or fewer. A literal with elements is
+  made at their number.
 
 Also: `isalpha`/`isdigit`/`isalnum`/`isspace` test ASCII codes themselves (`alpha-char-p`
 is ASCII-only on wasm, `.todo/269`), while `islower`/`isupper`/`istitle`/`title` tell a
@@ -741,6 +749,9 @@ since "A sequence at a time" and all eleven with `methods` since "A literal is a
 all below; on the JVM six with `dicts` since "Where the time is", and no more since "The
 JVM's arms", which brought three of the other five nearer. Where it is not -- the JVM's
 five -- the cost left is a backend's and is named below with the item that carries it.
+**The eleven are not what a build file does**: a program in the shape of
+`examples/starlark/targets.star` is 2.3 times CPython on wasm and 3.8 on the JVM ("A
+program a user wrote").
 
 The five programs above cover integers, calls and `range`. Six were added, each about a
 second of CPython, each printing a checksum CPython, Go and Java Starlark agree on
@@ -1478,6 +1489,120 @@ before -> after:
   conformance corpus, and for the two Common Lisp primitives ci-spec
   `search-over-strings-answers-characters-in-either-representation`,
   `typed-vector-struct-packs-and-replace-bulk` and the array suites.
+
+### A program a user wrote (2026-11-17)
+
+What "The JVM's arms" left to `.todo/j67`: the JVM's `comps.star` first (its pushes and its
+dict's growth), then what a wasm operation costs, with the order to pick by what a program
+a user wrote waits on and to profile first. **Both premises overturned.**
+
+- **The JVM's `comps.star` waits on the compiler, not on a push.** 800 rounds are 5.6-5.9 s
+  where 80 are 1.5-1.6: a round is 7 ms once the code is compiled, CPython's 11-12, and a
+  second of the 80-round run is spent in the first-tier code. JFR's `jdk.Compilation` and
+  `jdk.Deoptimization` (`jfrcomp.py` of `.todo/artefacts/j67-starlark-a-program-a-user-wrote/`;
+  the machine's `java` is Oracle GraalVM 25, so the top tier is Graal): `run`, 2,273
+  bytes with its five loops, is compiled on-stack three times, 107 ms and 21 KB of code
+  while only two loops have run, then 450-660 ms and 165-198 KB once all have, the code
+  before each thrown away by a type check its profile had not seen.
+- **A program in the shape of the repository's own example is not under CPython
+  anywhere.** `graph.star` of the artefacts is `examples/starlark/targets.star` at size:
+  2,000 targets made by a loop (dicts of three string keys, lists of up to three names,
+  `"t%d" % i`), their build order, what a change rebuilds, a line of text a target, 40
+  times. CPython 0.48-0.53 s, wasm 1.40, the component 1.42, the JVM 1.90-1.98, Go 4.91,
+  Java Starlark 1.92. The eleven programs build a few large collections; this one makes
+  many small ones, and what it waits on is what making and reading them costs:
+
+| part (`parts/*.star`) | where its wasm samples were, the build before |
+|---|---|
+| the targets made | `%starlark-interpolate` 26% (`"t%d" % j`: the template read at every call, since the right operand is no tuple expression), `%starlark-concat-pieces` 17% (a template of five pieces or more), `%starlark-m-append` 9% and the growth it calls |
+| `build_order` | a dict look-up by a string 31% (`%starlark-dict-cell` 12% itself, `_ht_get` 12%, `_string_eq` 6%), `append` 10%, `[]` 6% |
+| `rebuilt_by` | its own body 21%, the look-ups 28%, a comprehension's vector grown at each of its first pushes 15% (`_arr_set`, `_vec_sync`, `_fp_hdr`, `_arr_undisplace` under the growth) |
+
+Made, in the library and the lowering, so on every backend ("The lowering table", "The
+run-time library's rules"): a list written to be appended to starts with room for four
+and a list comprehension of one loop and no condition with room for the loop's count;
+`"t%d" % x` over a right operand that is no tuple expression is read while lowering;
+five to eight pieces of a template are a chain; `x[k]` of a dict is asked in
+`%starlark-index`, where it went on to `%starlark-index-of` past a second test of a
+list. In the wasm backend, for every language (`.kb/hash-tables.md`,
+"Representation"): two string keys compare their bytes where the chain stands, and a
+small record's string key is looked for by identity first.
+
+Seconds (`time.sh`, best of three, the whole process, same machine; the eleven's two
+builds an hour apart, `graph.star`'s in turn), before -> after; Go and Java Starlark for
+`graph.star` above:
+
+| program | JVM | WASM | component | CPython | `.wasm` bytes |
+|---|---|---|---|---|---|
+| `bench.star` | 0.16 -> 0.16 | 0.05 -> 0.05 | 0.05 -> 0.04 | 0.14 | 139,229 -> 139,419 |
+| `fib.star` | 0.31 -> 0.32 | 0.20 -> 0.17 | 0.21 -> 0.19 | 1.46 | 138,376 -> 138,566 |
+| `loop.star` | 0.18 -> 0.18 | 0.35 -> 0.32 | 0.33 -> 0.32 | 1.63 | 107,597 -> 107,597 |
+| `calls.star` | 0.26 -> 0.27 | 0.14 -> 0.13 | 0.13 -> 0.14 | 0.75 | 120,547 -> 120,547 |
+| `mixed.star` | 0.70 -> 0.72 | 0.55 -> 0.50 | 0.49 -> 0.47 | 1.21 | 179,126 -> 179,422 |
+| `listidx.star` | 1.17 -> 1.13 | 1.04 -> 0.94 | 1.03 -> 0.94 | 1.19 | 182,824 -> 183,120 |
+| `dicts.star` | 0.83 -> 0.86 | 0.80 -> 0.80 | 0.78 -> 0.80 | 0.90 | 183,764 -> 184,060 |
+| `comps.star` | 1.64 -> 1.52 | 0.71 -> 0.67 | 0.75 -> 0.67 | 0.88 | 177,838 -> 178,203 |
+| `methods.star` | 1.38 -> 1.44 | 1.08 -> 1.06 | 1.12 -> 1.04 | 1.10 | 179,502 -> 179,854 |
+| `strings.star` | 1.82 -> 1.80 | 0.81 -> 0.84 | 0.85 -> 0.84 | 1.16 | 126,895 -> 126,974 |
+| `sorting.star` | 1.36 -> 1.34 | 0.69 -> 0.71 | 0.68 -> 0.69 | 0.98 | 197,276 -> 197,544 |
+| `graph.star` | 1.90 -> 1.80 | 1.40 -> 1.12 | 1.42 -> 1.09 | 0.48 | 259,665 -> 260,268 |
+
+- **`graph.star` on wasm is 2.3 times CPython where it was 2.9**, and the eleven stay
+  under it there (`methods.star` by a twentieth, as before). The JVM's column is its
+  spread: no JVM code changed.
+- The parts (wasm, user seconds of the precompiled module, before -> after against
+  CPython; parts two to five make the targets once): the targets made 0.43 -> 0.24 /
+  0.22, `build_order` 0.30 -> 0.27 / 0.11, `rebuilt_by` 0.49 -> 0.33 / 0.15, `describe`
+  0.11 -> 0.10 / 0.08, `max`, `format(**d)` and `sorted` 0.10 -> 0.10 / 0.05. Step by
+  step on the whole program: 1.38 -> 1.00 the library and the lowering, -> 0.94-1.01 the
+  table's two arms; the chain of eight took `describe` from 0.13 to 0.08 and the
+  targets from 0.30 to 0.22.
+- **A whole-program time on wasm moves with where its collections fall.** At 1,500 /
+  2,000 / 2,500 / 3,000 targets the program was 1.04 / 1.40 / 1.76 / 2.17 s before and
+  0.72 / 1.12 / 1.08 / 1.50 after, CPython 0.38 / 0.48 / 0.62 / 0.73: the last change
+  made it slower at 2,000 (0.94 -> 1.07) and faster at the three other sizes and on
+  every part. With no collection (`-C collector=null`, 345 MB) it is 0.92 s against
+  1.16: the copying collector is a fifth of the run. Compare builds on the parts or at
+  several sizes.
+- **The samples of `graph.star` on wasm now**: a dict look-up by a string 25%
+  (`%starlark-dict-cell` 10% itself -- some 110 machine instructions for a string key:
+  `integerp`'s two failed struct tests, `stringp`'s test and then cast of the same
+  value, its bytes' cast and a bounds-checked byte, the table's accessor, `gethash`'s
+  three tests of its operand --, `_ht_get` 10%, `_string_eq` 5%, `_ht_sfind` 3%, `_hash`
+  2%), `_string_concat` and the pieces 9% (sampled before the chain of eight),
+  `rebuilt_by`'s own body 4%, `%starlark-index` 4%, a sort 3%, and 30 functions under 2%
+  each.
+- **The JVM** (JFR over `graph.star`, 1.9 s of wall time and 10 s of CPU): 18
+  compilations of 60 ms or more at the top tier, 5.6 s between them; each of the
+  program's five functions compiled two to four times at 60-100 KB of code
+  (`make_targets` 536 ms, 101 KB). At ten times the rounds it is 8.0 s against CPython's
+  5.4 (wasm 16.7 before this section), so it is over CPython compiled as well: the
+  main thread's samples are `make_targets` 15% itself, `%starlark-concat-pieces` 7%,
+  `String.concat` 6%, `build_order` 7%, `_length` 4%, `RontoHashTable$Flat.find` 4%,
+  `%starlark-list-p` 3%. C2 (`-XX:-UseJVMCICompiler`) is 1.75-1.83 s on the 40 rounds
+  and 9.3 on the 400.
+- **Not made, measured**: `_vectorPushExtend` storing where it stands for a vector with
+  its own boxed elements, with one `ensureCapacity` ahead of the growth's adds (the
+  item's plan) -- `comps.star` at 800 rounds 5.69-5.94 -> 5.46-5.70 s, but at its 80
+  rounds 1.74-2.11 -> 1.81-2.29 and `methods.star` 1.38-1.45 -> 1.43-1.61 over seven
+  runs of each in turn, and `run`'s compilations the same 165-191 KB and 450-600 ms:
+  what the 80 rounds wait on is not in the push. A string key asked before an int in
+  `%starlark-dict-cell` (nothing measurable on wasm; measured on the JVM only together
+  with the push). `wasmtime compile -C inlining=y` (1.09 -> 1.16-1.25 s, the module's
+  code 1.76 -> 2.55 MB).
+- **The bytes**: a Starlark program that subscripts or formats is 0.2-0.6 KB larger
+  (`graph.star` 603 B of wasm). Sizes (`.class` / `.wasm` / component): `print(1 + 2)`
+  111,713 / 106,669 / 110,204 before and after; `examples/starlark/targets.star`
+  231,478 / 218,468 / 222,245 -> 231,743 / 218,986 / 222,764, at `--optimize=size`
+  148,217 -> 148,591 B of wasm. `bench-report/programs/hash.lisp` is the same 10,572 B.
+- **Left** (`.todo/j75`): the dict look-up by a string, the collector's fifth and what
+  the JVM compiles, with what `.todo/j67` listed for wasm and did not reach.
+- Pinned by `starlark-spec.yaml` `what-the-lowering-knows-answers-as-the-generic-paths`
+  (`fast_graph`: `%` over an int, a string, a list, None, a Boolean and a tuple held by
+  a variable; a small dict and one of twelve keys read by strings made at run time,
+  hits and misses; `[]` appended to past its room, a comprehension's list appended to;
+  templates of seven and nine pieces), `StarlarkLoweringTest` (the rows of the template
+  and of the comprehension), the conformance corpus, and ci-spec's hash-table cases.
 
 ## Positions
 

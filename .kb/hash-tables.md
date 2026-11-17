@@ -255,6 +255,18 @@ keeps a table of eight keys or fewer as a vector of pairs (next bullet).
   string looked up by the object that was stored -- without the call, which spills the
   walk's references. A Starlark program of dict reads and stores (`dicts.star`) 1.23 ->
   1.15 s, measured on the hand-edited module first.
+- **WASM: two strings compare their bytes where the chain stands, and a small record's
+  string key is looked for by identity first** (2026-11-17). `emitEqualTest`'s second arm:
+  two `TYPE_STRING`s go to `_string_eq`, the arm of `_equal` they would take behind its
+  tests of everything else a key can be (a string against a mutable character vector
+  stays `_equal`'s). `_ht_sfind` under `equal` walks the pairs once with `ref.eq` alone
+  for a string key before it compares any pair's bytes: a dict written with literal
+  keys and read by the same literals (`t["deps"]` past `name` and `srcs`, all of one
+  length) called `_string_eq` for each pair before its own. Measured on a Starlark
+  build graph (`.kb/starlark-frontend.md`, "A program a user wrote"): within the noise
+  of its collections on the whole program (1.05 -> 1.01 s), `_string_eq` from 6.2% of
+  the part that looks up to 4.6%. What a store into a small record still compares --
+  each new key against the keys before it -- is content, not identity.
 - **WASM: a table operand is walked once and a fixnum is hashed where it is read**
   (2026-11-16). A site in EH mode asked `hash-table-p` -- the cell's test and cast, the header
   cons's test and cast, the count's i31 test -- and then cast the cell again for the header:

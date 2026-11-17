@@ -572,11 +572,20 @@ final class WasmHashTableRuntimeBuilder {
 	// what _equal answers true for at once and what a fixnum key, or a string looked up
 	// by the object stored, is -- the call spills the walk's references around it
 	// (measured 2026-11-16: a Starlark program of dict reads and stores 1.23 -> 1.15 s).
+	// Two strings then compare their bytes (_string_eq, the arm of _equal they would
+	// take behind its tests of everything else a key can be).
 	private static void emitEqualTest(Asm a, int keyLocal, int otherLocal) {
 		a.get(keyLocal).get(otherLocal).refEq().ifI32();
 		a.i32(1);
 		a.elseArm();
+		a.get(keyLocal).refTest(WasmLispCompiler.TYPE_STRING).ifI32();
+		a.get(otherLocal).refTest(WasmLispCompiler.TYPE_STRING);
+		a.elseArm().i32(0).end();
+		a.ifI32();
+		a.get(keyLocal).get(otherLocal).call(WasmLispCompiler.FUNC_STRING_EQ).isNull().op(Instruction.I32_EQZ);
+		a.elseArm();
 		a.get(keyLocal).get(otherLocal).call(WasmLispCompiler.FUNC_EQUAL);
+		a.end();
 		a.end();
 	}
 
@@ -634,6 +643,18 @@ final class WasmHashTableRuntimeBuilder {
 		a.get(1).refTest(WasmLispCompiler.TYPE_STRING).ifVoid();
 		a.i32(2).set(7);
 		a.get(1).stringLen().set(8);
+		// The object that was stored is found before any pair's bytes are read: a
+		// literal key looked up by the same literal, past the pairs of other keys of
+		// its length (name, srcs, deps).
+		a.block().loop();
+		a.get(5).get(4).op(Instruction.I32_GE_S).brIf(1);
+		a.get(1).get(3);
+		emitPairSlot(a, 5, 0);
+		a.aget().refEq().ifVoid().get(5).i31().ret().end();
+		a.get(5).i32(1).op(Instruction.I32_ADD).set(5);
+		a.br(0);
+		a.end().end();
+		a.i32(0).set(5);
 		a.end();
 		a.end();
 		a.block().loop();
