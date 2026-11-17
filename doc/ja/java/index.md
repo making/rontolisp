@@ -113,8 +113,8 @@ $ rontolisp app/Main.java -o main.wasm
 | | |
 |---|---|
 | 型 | `int`、`long`、`short`、`byte`、`char`、`double`、`float`、`boolean`、`String`、クラス、インターフェース、列挙型、レコード、配列。ローカル変数の `var`。型引数、ワイルドカード（`?`、`? extends T`、`? super T`）、raw 型 |
-| 宣言 | `extends` と `implements` を持つクラス、抽象クラスと抽象メソッド。型パラメータとその境界を持つクラス、インターフェース、レコード、メソッド。フィールド、コンストラクタ、メソッド、本体付きの定数を持つ列挙型。コンパクトコンストラクタと標準コンストラクタを持つレコード。抽象メソッド、`default` メソッド、`static` メソッド、`private` メソッド、定数を持つインターフェース。`sealed`、`permits`、`non-sealed`。static なネストクラス、内部クラス、ローカルクラス、匿名クラス。フィールド、static フィールド、static 初期化ブロックとインスタンス初期化ブロック。`this(..)` と `super(..)`、およびその前の文を持つコンストラクタ。メソッドのオーバーロードと可変長引数。`package` と `import` |
-| 文 | ローカル変数（`final`、無名変数 `_`）、`if`、`while`、`do`、`for`、配列または `Iterable` に対する拡張 `for`、コロン形式または矢印形式の `case`・パターン・ガードを持つ `switch`、ラベル付きの文、ラベルの有無を問わない `break` と `continue`、`yield`、`return`、`throw`、`catch`（1 つまたは複数の型）と `finally` を持つ `try`、`try`-with-resources |
+| 宣言 | `extends` と `implements` を持つクラス、抽象クラスと抽象メソッド。型パラメータとその境界を持つクラス、インターフェース、レコード、メソッド。フィールド、コンストラクタ、メソッド、本体付きの定数を持つ列挙型。コンパクトコンストラクタと標準コンストラクタを持つレコード。抽象メソッド、`default` メソッド、`static` メソッド、`private` メソッド、定数を持つインターフェース。`sealed`、`permits`、`non-sealed`。static なネストクラス、内部クラス、ローカルクラス、匿名クラス。フィールド、static フィールド、static 初期化ブロックとインスタンス初期化ブロック。`this(..)` と `super(..)`、およびその前の文を持つコンストラクタ。メソッドのオーバーロードと可変長引数。`synchronized` メソッドと `volatile` フィールド。`package` と `import` |
+| 文 | ローカル変数（`final`、無名変数 `_`）、`if`、`while`、`do`、`for`、配列または `Iterable` に対する拡張 `for`、コロン形式または矢印形式の `case`・パターン・ガードを持つ `switch`、ラベル付きの文、ラベルの有無を問わない `break` と `continue`、`yield`、`return`、`throw`、`catch`（1 つまたは複数の型）と `finally` を持つ `try`、`try`-with-resources、オブジェクトまたはクラスリテラルに対する `synchronized` |
 | 式 | プリミティブ型のすべての演算子とその変換、文字列連結、条件演算子、代入と複合代入、キャスト、型・型パターン・レコードパターンに対する `instanceof`、`switch` 式、`new`、`outer.new Inner()`、`Outer.this`、長さを 1 つ以上指定する配列の生成と初期化子、テキストブロック、型引数の有無を問わないメソッド呼び出し、`super.m(..)`、`new Box<>(..)`、任意の関数型インターフェースに対するラムダとメソッド参照（`Type::name`、`expression::name`、`super::name`、`Type::new`、`int[]::new`） |
 
 アノテーションは読み飛ばします。`int`、`long`、`short`、`byte` は 2 の補数として桁あふれします。
@@ -230,7 +230,7 @@ void main() {
 
 | クラス | メンバー |
 |---|---|
-| `Object` | `new Object()`、`toString`、`equals`、`hashCode`、`getClass().getName()`、`getClass().getSimpleName()` |
+| `Object` | `new Object()`、`toString`、`equals`、`hashCode`、`getClass().getName()`、`getClass().getSimpleName()`、`wait()`、`wait(long)`、`notify`、`notifyAll` |
 | 列挙型 | `values()`、`valueOf(String)`、`name`、`ordinal`、`compareTo`、`toString` |
 | レコード | アクセサ、`equals`、`hashCode`、`toString` |
 | 配列 | `length`、`clone()` |
@@ -261,8 +261,12 @@ void main() {
 | `Optional` | `empty`、`of`、`ofNullable`、`isPresent`、`isEmpty`、`get`、`orElse`、`orElseGet`、`orElseThrow`、`ifPresent`、`ifPresentOrElse`、`filter`、`map`、`flatMap`、`or`、`equals`、`hashCode`、`toString` |
 | `Random` | `new Random()`、`new Random(long)`、`setSeed`、`nextInt()`、`nextInt(int)`、`nextLong`、`nextDouble`、`nextBoolean`、`nextGaussian`。シードを指定すると仕様どおりの列になります |
 | `Comparator` | `compare`、`reversed`、コンパレータまたはキーを取る `thenComparing`、`thenComparingInt`、`Comparator.naturalOrder`、`reverseOrder`、キーのコンパレータの指定がある、またはない `comparing`、`comparingInt`、`comparingLong`、`comparingDouble`、`nullsFirst`、`nullsLast` |
-| 例外 | `Throwable`、`Exception`、`Error`、`RuntimeException`、`IllegalArgumentException`、`IllegalStateException`、`ArithmeticException`、`NullPointerException`、`ClassCastException`、`IndexOutOfBoundsException`、`ArrayIndexOutOfBoundsException`、`StringIndexOutOfBoundsException`、`NegativeArraySizeException`、`UnsupportedOperationException`、`NumberFormatException`、`CloneNotSupportedException`、`InterruptedException`、`NoSuchElementException`、`ConcurrentModificationException`、`EmptyStackException`、`MatchException`。API のコンストラクタ（引数なし、メッセージ、メッセージと原因、原因、添字）、`getMessage`、`getLocalizedMessage`、`getCause`、`initCause`、`addSuppressed`、`getSuppressed`、`printStackTrace()`、`toString`。実行時に起きる `IllegalFormatException` とその 3 つのサブクラス（コンストラクタなし）：`IllegalFormatConversionException`、`UnknownFormatConversionException`、`MissingFormatArgumentException` |
+| 例外 | `Throwable`、`Exception`、`Error`、`RuntimeException`、`IllegalArgumentException`、`IllegalStateException`、`ArithmeticException`、`NullPointerException`、`ClassCastException`、`IndexOutOfBoundsException`、`ArrayIndexOutOfBoundsException`、`StringIndexOutOfBoundsException`、`NegativeArraySizeException`、`UnsupportedOperationException`、`NumberFormatException`、`CloneNotSupportedException`、`InterruptedException`、`IllegalMonitorStateException`、`IllegalThreadStateException`、`NoSuchElementException`、`ConcurrentModificationException`、`EmptyStackException`、`MatchException`。API のコンストラクタ（引数なし、メッセージ、メッセージと原因、原因、添字）、`getMessage`、`getLocalizedMessage`、`getCause`、`initCause`、`addSuppressed`、`getSuppressed`、`printStackTrace()`、`toString`。実行時に起きる `IllegalFormatException` とその 3 つのサブクラス（コンストラクタなし）：`IllegalFormatConversionException`、`UnknownFormatConversionException`、`MissingFormatArgumentException` |
 | `Runnable`、`Comparable`、`AutoCloseable` | `run`。`compareTo`（`String`、ボックス、列挙型の定数にもあります）。`close` |
+| `Thread` | 引数なし、`Runnable`、名前、その両方を取るコンストラクタ。`Thread` を継承するクラス。`start`、`run`、`join()`、`join(long)`、`interrupt`、`isInterrupted`、`isAlive`、`getName`、`setName`、`isDaemon`、`setDaemon`、`getPriority`、`setPriority`、`isVirtual`、`threadId`、`getId`、`toString`。`Thread.currentThread`、`sleep(long)`、`sleep(long, int)`、`yield`、`onSpinWait`、`interrupted`、`holdsLock`、`startVirtualThread`。`Thread.ofPlatform()` と `ofVirtual()`（`name`、`daemon`、`priority`、`start`、`unstarted`） |
+| `ThreadLocal` | `new ThreadLocal<>()`、`withInitial`、`get`、`set`、`remove`、`initialValue` |
+| `AtomicInteger`、`AtomicLong` | `get`、`set`、`lazySet`、`getAndSet`、`compareAndSet`、`getAndAdd`、`addAndGet`、`getAndIncrement`、`getAndDecrement`、`incrementAndGet`、`decrementAndGet`、`getAndUpdate`、`updateAndGet`、`getAndAccumulate`、`accumulateAndGet`、`intValue`、`longValue`、`doubleValue`、`toString` |
+| `AtomicBoolean`、`AtomicReference` | `get`、`set`、`lazySet`、`getAndSet`、`compareAndSet`、`toString`。`AtomicReference` には `getAndUpdate`、`updateAndGet`、`getAndAccumulate`、`accumulateAndGet` もあります |
 | `java.util.function` | `Function`、`BiFunction`、`UnaryOperator`、`BinaryOperator`、`Supplier`、`Consumer`、`BiConsumer`、`Predicate`、`BiPredicate`、`BooleanSupplier`。`Int`、`Long`、`Double` のそれぞれに `IntFunction`、`IntPredicate`、`IntUnaryOperator`、`IntBinaryOperator`、`IntSupplier`、`IntConsumer`、`ToIntFunction`、`ToIntBiFunction`。各インターフェースの抽象メソッドと `andThen`、`compose`、`and`、`or`、`negate`、`identity`、`not`、`isEqual` |
 
 `String.format`、`formatted`、`printf` が受け付ける変換は `%d`、`%s`、`%S`、`%f`、`%e`、`%E`、
@@ -353,5 +357,56 @@ tried 100
 tried 50
 2 ok, 1 refused, null
 ```
+
+## スレッド
+
+`Thread` の開始、`join`、割り込み、名前は言語仕様のとおりに動きます。`synchronized` は
+オブジェクトのモニターを保持し、`wait` と `notify` はモニターをスレッドからスレッドへ
+受け渡します。`volatile` フィールドを読むと、最後に書き込まれた値が得られます。スレッドが
+捕捉しなかった例外は、スレッド名とともに標準エラーに書き出され、そのスレッドだけが
+終了します。プログラムは、デーモンでないスレッドがすべて終了したときに終了します。
+
+```java
+class Counter {
+    private int count;
+
+    synchronized void add() {
+        count++;
+    }
+
+    synchronized int get() {
+        return count;
+    }
+}
+
+void main() throws InterruptedException {
+    Counter counter = new Counter();
+    List<Thread> workers = new ArrayList<>();
+    for (int i = 0; i < 4; i++) {
+        Thread worker = new Thread(() -> {
+            for (int k = 0; k < 1000; k++) {
+                counter.add();
+            }
+        }, "worker-" + i);
+        workers.add(worker);
+        worker.start();
+    }
+    for (Thread worker : workers) {
+        worker.join();
+    }
+    IO.println(counter.get() + " after " + workers.get(3).getName());
+}
+```
+
+```
+4000 after worker-3
+```
+
+インタープリターと JVM では、スレッドはホストの仮想スレッドであり、複数のスレッドが並列に
+動きます。`.wasm` にはスタックが 1 本しかないため、スレッドはそのスタックを交代で使います。
+開始されたスレッドは、実行中のスレッドが待機、スリープ、`yield`、終了のいずれかをしたときに
+動きます。スレッドを `join` し、共有するデータをモニターで保護しているプログラムは、
+どのバックエンドでも同じ出力になります。それ以外のプログラムでスタックが 1 本であることから
+生じる違いは[言語との差異](deviations.md#threads)にあります。
 
 言語と動作が異なる点と、拒否される構文は[言語との差異](deviations.md)にあります。

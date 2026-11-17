@@ -835,6 +835,13 @@ class RontoLispCliStreamsTest {
 		assertThat(runReporting("-e", "void main() { IO.println(\"out\"); System.exit(3); IO.println(\"no\"); }",
 				"--source-language", "java"))
 			.containsExactly("3", "out\n", "");
+		// and so it does called on a thread the program started, while the thread the
+		// program started on waits
+		assertThat(runReporting("-e",
+				"void main() throws InterruptedException { Thread t = new Thread(() -> { IO.println(\"out\");"
+						+ " System.exit(4); }); t.start(); t.join(); IO.println(\"no\"); }",
+				"--source-language", "java"))
+			.containsExactly("4", "out\n", "");
 		// a construct the subset does not have is refused by name before anything runs,
 		// at its position, on the interpreter and the compile path alike
 		Path broken = this.tempDir.resolve("Broken.java");

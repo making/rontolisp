@@ -42,30 +42,61 @@ public final class JavaLibrary {
 
 	@Nullable private static volatile List<LispVal> forms;
 
+	@Nullable private static volatile List<LispVal> oneStackForms;
+
 	@Nullable private static volatile Set<String> functionNames;
 
 	private JavaLibrary() {
 	}
 
 	/**
-	 * Returns the parsed library definitions. The source is written in canonical shape
-	 * (internal double-colon {@code rontolisp::} helpers, bare {@code cl} names), so it
-	 * needs no package resolution, and it reads the same for every target. Parsed once
-	 * and cached.
+	 * Returns the parsed library definitions for a target that has threads: the
+	 * interpreter and the JVM. The source is written in canonical shape (internal
+	 * double-colon {@code rontolisp::} helpers, bare {@code cl} names), so it needs no
+	 * package resolution. Parsed once and cached.
 	 * @return the library forms
+	 * @see #forms(boolean)
 	 */
 	public static List<LispVal> forms() {
-		List<LispVal> cached = forms;
+		return forms(false);
+	}
+
+	/**
+	 * Returns the parsed library definitions for a target. The two variants differ in the
+	 * thread functions alone, under the same names: a thread is the host's where the
+	 * target has threads, and runs on the stack of the thread that waits for it where the
+	 * target has one stack ({@code .kb/java-frontend.md}, "Threads").
+	 * @param oneStack whether the target runs a program on one stack: the wasm backends
+	 * @return the library forms
+	 */
+	public static List<LispVal> forms(boolean oneStack) {
+		List<LispVal> cached = oneStack ? oneStackForms : forms;
 		if (cached == null) {
 			synchronized (JavaLibrary.class) {
-				cached = forms;
+				cached = oneStack ? oneStackForms : forms;
 				if (cached == null) {
-					cached = List.copyOf(LispReader.readAllFromString(readSource(), Features.INTERPRETER));
-					forms = cached;
+					cached = List.copyOf(LispReader.readAllFromString(readSource(),
+							oneStack ? Features.WASM : Features.INTERPRETER));
+					if (oneStack) {
+						oneStackForms = cached;
+					}
+					else {
+						forms = cached;
+					}
 				}
 			}
 		}
 		return cached;
+	}
+
+	/**
+	 * The definitions of both variants: every name the library can define.
+	 * @return the forms of the two variants, one after the other
+	 */
+	public static List<LispVal> everyVariantForms() {
+		List<LispVal> all = new ArrayList<>(forms(false));
+		all.addAll(forms(true));
+		return all;
 	}
 
 	private static String readSource() {
@@ -106,7 +137,7 @@ public final class JavaLibrary {
 		Set<String> names = functionNames;
 		if (names == null) {
 			names = new HashSet<>();
-			for (LispVal form : forms()) {
+			for (LispVal form : everyVariantForms()) {
 				if (form instanceof LispCons cons && cons.cdr() instanceof LispCons rest
 						&& rest.car() instanceof LispSymbol name) {
 					names.add(name.name());
@@ -126,17 +157,53 @@ public final class JavaLibrary {
 	 * The compile-path pre-pass: prepends the library definitions when the program
 	 * references one of its functions. A program that does not is returned unchanged.
 	 * @param program the top-level forms (after load inlining and user-macro expansion)
+	 * @param oneStack whether the target runs a program on one stack: the wasm backends
 	 * @return the program with the library spliced in when used
 	 */
-	public static List<LispVal> process(List<LispVal> program) {
+	public static List<LispVal> process(List<LispVal> program, boolean oneStack) {
 		for (LispVal form : program) {
 			if (references(form)) {
-				List<LispVal> out = new ArrayList<>(forms());
+				List<LispVal> out = new ArrayList<>(forms(oneStack));
 				out.addAll(program);
 				return out;
 			}
 		}
 		return program;
+	}
+
+	/**
+	 * The functions a lowered program calls whose one-stack definitions call
+	 * {@code sleep}.
+	 */
+	private static final Set<String> SLEEPING = Set.of("RONTOLISP::%JAVA-THREAD-SLEEP",
+			"RONTOLISP::%JAVA-MONITOR-WAIT");
+
+	/**
+	 * Whether a lowered program can sleep through the library: a thread's sleep and a
+	 * timed wait pass the time by {@code sleep} where the target has one stack. The
+	 * library is spliced after the pass that binds {@code sleep} for a component
+	 * ({@link WaitForLibrary}), so that pass asks here.
+	 * @param program the top-level forms, before the library is spliced
+	 * @return {@code true} when the program names one of those functions
+	 */
+	static boolean sleeps(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (namesSleeping(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean namesSleeping(LispVal form) {
+		LispVal rest = form;
+		while (rest instanceof LispCons cons) {
+			if (namesSleeping(cons.car())) {
+				return true;
+			}
+			rest = cons.cdr();
+		}
+		return rest instanceof LispSymbol symbol && SLEEPING.contains(symbol.name());
 	}
 
 	private static boolean references(LispVal form) {

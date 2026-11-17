@@ -49,6 +49,11 @@ final class JavaIntrinsics {
 
 	private static final String COMPARABLE = "java.lang.Comparable";
 
+	/**
+	 * The source class a thread is, which holds what the monitor members are written in.
+	 */
+	private static final String THREAD = "java.lang.Thread";
+
 	/** The source class holding the members of these classes that are written in Java. */
 	private static final String SUPPORT = "rontolisp.internal.Support";
 
@@ -278,8 +283,22 @@ final class JavaIntrinsics {
 							(lowering, call) -> lowering.objectMethod("equals(Object)",
 									java.util.Objects.requireNonNull(call.receiver()), call),
 							object)
-					.method("hashCode", Primitive.INT, (lowering, call) -> lowering.objectMethod("hashCode()",
-							java.util.Objects.requireNonNull(call.receiver()), call));
+					.method("hashCode", Primitive.INT,
+							(lowering, call) -> lowering.objectMethod("hashCode()",
+									java.util.Objects.requireNonNull(call.receiver()), call))
+					// the monitor members are Java over the run time's: Thread.java
+					// throws
+					// their exceptions
+					.method("wait", Primitive.VOID,
+							(lowering, call) -> lowering.library(THREAD, "await", List.of(call.self(), integer(0))))
+					.method("wait", Primitive.VOID,
+							(lowering, call) -> lowering.library(THREAD, "await",
+									List.of(call.self(), call.argument(0))),
+							Primitive.LONG)
+					.method("notify", Primitive.VOID,
+							(lowering, call) -> lowering.library(THREAD, "signal", List.of(call.self(), JavaForms.NIL)))
+					.method("notifyAll", Primitive.VOID,
+							(lowering, call) -> lowering.library(THREAD, "signal", List.of(call.self(), JavaForms.T)));
 				return builder.made;
 			}
 			case STRING:
@@ -907,6 +926,31 @@ final class JavaIntrinsics {
 		natives.put(arrays + "sortRange(double[],int,int)", runtime("sort-doubles"));
 		natives.put(arrays + "sortRange(char[],int,int)", runtime("sort-numbers"));
 		natives.put("rontolisp.internal.Support.readDouble(String)", runtime("read-double"));
+		String thread = THREAD + ".";
+		natives.put(thread + "carrier0(Thread)", runtime("thread-carrier"));
+		natives.put(thread + "adopt0(Thread)", runtime("thread-adopt"));
+		natives.put(thread + "current0()", runtime("thread-current"));
+		natives.put(thread + "sleep0(long)", runtime("thread-sleep"));
+		natives.put(thread + "yield0()", runtime("thread-yield"));
+		natives.put(thread + "interrupt0(Object)", runtime("thread-interrupt"));
+		natives.put(thread + "interrupted0(Object,boolean)", runtime("thread-interrupted"));
+		natives.put(thread + "holds0(Object)", runtime("monitor-held"));
+		natives.put(thread + "wait0(Object,long)", runtime("monitor-wait"));
+		natives.put(thread + "notify0(Object,boolean)", runtime("monitor-notify"));
+		// what a started thread runs: its run(), what it leaves uncaught written as a JDK
+		// writes it, and its end, which the threads in join() wait for
+		natives.put(thread + "start0(Thread,Object,boolean)", (lowering, call) -> {
+			LispSymbol started = lowering.temporary();
+			LispSymbol condition = lowering.temporary();
+			LispVal uncaught = list(cl("error"), list(condition),
+					lowering.library(THREAD, "report", List.of(started, runtimeCall("thrown-text", condition))));
+			LispVal body = list(cl("lambda"), JavaForms.NIL,
+					list(cl("unwind-protect"),
+							list(cl("handler-case"), lowering.library(THREAD, "body", List.of(started)), uncaught),
+							lowering.library(THREAD, "finish", List.of(started))));
+			return JavaForms.let(started, call.argument(0),
+					List.of(runtimeCall("thread-start", call.argument(1), call.argument(2), body)));
+		});
 		natives.put("rontolisp.internal.Support.floatHash(float)", runtime("float-bits"));
 		// a Float is the float in a cons with its tag
 		natives.put("rontolisp.internal.Support.readFloat(String)", (lowering, call) -> {

@@ -4,7 +4,8 @@
 `thread-alive-p`, `destroy-thread`, `current-thread`, internal `%thread-name` — interpreter and
 JVM only. Driving
 consumers: clack `src/handler.lisp` (`:use-thread t`); Scheme `parallel-execute`
-(`.kb/scheme-frontend.md`).
+(`.kb/scheme-frontend.md`); a Java program's `Thread` on the interpreter and the JVM
+(`.kb/java-frontend.md`, "Threads": wasm runs those on one stack and calls none of this).
 **Invariant: a thread handle is OPAQUE** (`.kb/mutexes.md`); only `threadp` and the join
 round-trip are portable.
 

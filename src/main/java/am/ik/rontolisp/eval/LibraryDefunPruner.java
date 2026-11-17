@@ -1378,7 +1378,7 @@ public final class LibraryDefunPruner {
 	private static Set<String> javaDefinitionNames() {
 		Set<String> cached = javaDefinitionNames;
 		if (cached == null) {
-			cached = definitionNames(JavaLibrary.forms(), JavaLibrary::mayDefine, "java.lisp");
+			cached = definitionNames(JavaLibrary.everyVariantForms(), JavaLibrary::mayDefine, "java.lisp");
 			javaDefinitionNames = cached;
 		}
 		return cached;

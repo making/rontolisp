@@ -238,6 +238,69 @@ class JavaSpecE2eTest {
 		return legs.stream();
 	}
 
+	/**
+	 * Where the target has one stack a started thread runs on the stack of the thread
+	 * that waits for it, so a wait that only a thread suspended under the waiting one
+	 * could end -- two threads taking turns -- cannot end: refused by name with the
+	 * status 1, never gone on from as if it had. The JDK, the interpreter and the JVM run
+	 * such a program (the corpus's {@code threads-wait-are-notified-and-interrupted}).
+	 */
+	@TestFactory
+	Stream<DynamicNode> aWaitOnlyAThreadSuspendedUnderItCouldEndIsRefusedOnOneStack() {
+		String source = """
+				public class Turns {
+				    static int turn;
+				    static final Object table = new Object();
+
+				    static Thread player(String word, int mine) {
+				        return new Thread(() -> {
+				            try {
+				                for (int i = 0; i < 2; i++) {
+				                    synchronized (table) {
+				                        while (turn != mine) {
+				                            table.wait();
+				                        }
+				                        System.out.println(word);
+				                        turn = 1 - mine;
+				                        table.notifyAll();
+				                    }
+				                }
+				            }
+				            catch (InterruptedException e) {
+				                System.out.println("interrupted");
+				            }
+				        });
+				    }
+
+				    public static void main(String[] args) throws InterruptedException {
+				        Thread ping = player("ping", 0);
+				        Thread pong = player("pong", 1);
+				        ping.start();
+				        pong.start();
+				        ping.join();
+				        pong.join();
+				        System.out.println("not reached");
+				    }
+				}
+				""";
+		return Stream.of(false, true).map(component -> {
+			String leg = component ? "WASM_COMPONENT" : "WASM";
+			return dynamicTest(leg, () -> {
+				if (!HostWasmtime.isAvailable()) {
+					abort("no usable wasmtime on PATH");
+				}
+				Path module = compileWasm(write("Turns-" + leg, "Turns.java", source), source, component, "turns");
+				Ended ended = ended(
+						new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", module.toString())
+							.start());
+				assertThat(ended.stdout()).as("%s", ended.stderr()).isEqualTo("ping\npong\n");
+				assertThat(ended.stderr()).contains("a thread waiting for a thread suspended under it",
+						"is not supported by the experimental Java subset yet");
+				assertThat(ended.exit()).isEqualTo(1);
+			});
+		});
+	}
+
 	/** What a process printed and how it ended. */
 	record Ended(String stdout, String stderr, int exit) {
 	}

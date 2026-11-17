@@ -111,6 +111,14 @@ final class JavaClasses {
 	final Set<JavaClass> made = new java.util.LinkedHashSet<>();
 
 	/**
+	 * Whether the program can tell a monitor that is held from one that is not: it
+	 * reaches {@code Thread}, which is where a thread is started and where {@code wait},
+	 * {@code notify} and {@code holdsLock} are written. Until a pass finds it does,
+	 * {@code synchronized} holds nothing and a {@code volatile} field is any field.
+	 */
+	boolean monitors;
+
+	/**
 	 * The classes of the library's Java source whose static initialization a pass needs.
 	 */
 	final Set<JavaClass> used = new java.util.LinkedHashSet<>();
@@ -592,6 +600,10 @@ final class JavaClasses {
 				declared(attempt.body(), into);
 				attempt.catches().forEach(clause -> declared(clause.body(), into));
 				declared(attempt.finallyBlock(), into);
+			}
+			case JavaSyntax.Synchronized held -> {
+				declared(held.lock(), into);
+				declared(held.body(), into);
 			}
 			default -> {
 			}

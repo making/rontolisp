@@ -646,6 +646,11 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (method.emitter == null && isLibrary(method.owner)) {
 			this.classes.reached.add(method);
 			use(method.owner);
+			if (!this.classes.monitors && method.owner.name.equals(THREAD)) {
+				// what was lowered holding no monitor is lowered again holding one
+				this.classes.monitors = true;
+				this.classes.changed();
+			}
 		}
 	}
 
@@ -1116,6 +1121,10 @@ final class JavaLowering implements JavaEmitter.Context {
 		this.scopes.pop();
 		this.effects = saved;
 		this.classes.methodParameters = List.of();
+		if (written.modifiers().contains("synchronized")) {
+			// an instance method holds its object's monitor, a static one its class's
+			body = holding(method.isStatic ? JavaForms.quote(JavaNames.structure(method.owner)) : THIS, List.of(body));
+		}
 		LispVal first = method.isStatic ? initializationOf(method.owner) : null;
 		if (first != null) {
 			body = call("progn", first, body);
@@ -1442,8 +1451,30 @@ final class JavaLowering implements JavaEmitter.Context {
 		LispSymbol condition = new LispSymbol("%c");
 		List<LispVal> body = new ArrayList<>(initialization);
 		body.add(start);
-		return list(cl("handler-case"), body.size() == 1 ? start : form(cl("progn"), body), list(cl("error"),
-				list(condition), runtimeCall(this.raises ? "uncaught-thrown" : "uncaught", condition)));
+		LispVal run = body.size() == 1 ? start : form(cl("progn"), body);
+		if (startsThreads()) {
+			// the program ends when its threads that are no daemons have: the run time
+			// reports what main left uncaught, then waits for them
+			LispSymbol ended = new LispSymbol("%t");
+			return runtimeCall("thread-main", list(cl("lambda"), NIL, run),
+					list(cl("lambda"), list(ended), library(THREAD, "finish", List.of(ended))));
+		}
+		return list(cl("handler-case"), run, list(cl("error"), list(condition),
+				runtimeCall(this.raises ? "uncaught-thrown" : "uncaught", condition)));
+	}
+
+	private static final String THREAD = "java.lang.Thread";
+
+	/**
+	 * Whether the program can start a thread: some call reaches {@code Thread.start()}.
+	 */
+	private boolean startsThreads() {
+		for (Method method : this.loweredMethods) {
+			if (method.name.equals("start") && method.owner.name.equals(THREAD)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -2822,7 +2853,13 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		checkAccess(field.isPrivate, field.declaration, field.owner, field.name, pos);
 		if (!field.isStatic) {
-			return new Typed(list(JavaNames.accessor(field), Objects.requireNonNull(object)),
+			LispVal read = list(JavaNames.accessor(field), Objects.requireNonNull(object));
+			if (isVolatile(field)) {
+				// the object first: only the read itself is ordered among the threads
+				List<LispVal> bindings = new ArrayList<>();
+				read = bound(bindings, ordered(list(JavaNames.accessor(field), stabilized(object, true, bindings))));
+			}
+			return new Typed(read,
 					inScope(this.types.upward(this.types.memberType(field.type, site, field.owner)), pos));
 		}
 		Object constant = constantOf(field);
@@ -2835,10 +2872,35 @@ final class JavaLowering implements JavaEmitter.Context {
 			this.effects.forward.add(field);
 		}
 		LispVal global = JavaNames.global(field);
-		if (this.order.isLazy(field.owner) && !initialized(field.owner)) {
-			return new Typed(call("progn", list(JavaNames.initializer(field.owner)), global), field.type);
+		LispVal read = isVolatile(field) ? ordered(global) : global;
+		if (lazilyRead(field)) {
+			return new Typed(call("progn", list(JavaNames.initializer(field.owner)), read), field.type);
 		}
-		return new Typed(global, field.type);
+		return new Typed(read, field.type);
+	}
+
+	/**
+	 * Whether a read or a write of a static field runs its class's initialization first.
+	 */
+	private boolean lazilyRead(Field field) {
+		return this.order.isLazy(field.owner) && !initialized(field.owner);
+	}
+
+	private static boolean isVolatile(Field field) {
+		return field.declaration != null && field.declaration.modifiers().contains("volatile");
+	}
+
+	/**
+	 * A read or a write of a {@code volatile} field: one at a time among the threads, so
+	 * that each sees what the one before it left ({@code .kb/java-frontend.md},
+	 * "Threads"). Nothing but the access itself runs inside. A program with no thread
+	 * ({@link JavaClasses#monitors}) reads and writes the field as any other.
+	 */
+	private LispVal ordered(LispVal access) {
+		if (!this.classes.monitors) {
+			return access;
+		}
+		return list(new LispSymbol("RONTOLISP:WITH-MUTEX"), list(runtimeCall("volatile")), access);
 	}
 
 	/**
@@ -3080,13 +3142,25 @@ final class JavaLowering implements JavaEmitter.Context {
 				throw error(pos, "cannot assign a value to final variable " + field.name);
 			}
 			if (!field.isStatic) {
+				if (isVolatile(field)) {
+					// the object, then the value, then the store alone ordered
+					List<LispVal> held = new ArrayList<>();
+					LispVal target = stabilized(Objects.requireNonNull(object), true, held);
+					LispVal stored = stabilized(value, true, held);
+					return bound(held, ordered(call("setf", list(JavaNames.accessor(field), target), stored)));
+				}
 				return call("setf", read.form(), value);
 			}
 			this.effects.writes.add(field);
 			LispVal global = JavaNames.global(field);
 			// the value first, then the class's initialization, then the store
-			return read.form() instanceof LispSymbol ? call("setq", global, value)
-					: call("setq", global, call("prog1", value, list(JavaNames.initializer(field.owner))));
+			LispVal given = lazilyRead(field) ? call("prog1", value, list(JavaNames.initializer(field.owner))) : value;
+			if (isVolatile(field)) {
+				List<LispVal> held = new ArrayList<>();
+				LispVal stored = stabilized(given, true, held);
+				return bound(held, ordered(call("setq", global, stored)));
+			}
+			return call("setq", global, given);
 		};
 		return new Place(read.type(), read.form(), write, bindings);
 	}
@@ -4022,6 +4096,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			case For loop -> returnsValue(loop.body());
 			case ForEach loop -> returnsValue(loop.body());
 			case JavaSyntax.Labeled labeled -> returnsValue(labeled.body());
+			case JavaSyntax.Synchronized held -> returnsValue(held.body());
 			case Try attempt -> returnsValue(attempt.body())
 					|| attempt.catches().stream().anyMatch(clause -> returnsValue(clause.body()))
 					|| returnsValue(attempt.finallyBlock());
@@ -4999,6 +5074,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			case If branch -> breaksOut(branch.then(), nested)
 					|| (branch.otherwise() != null && breaksOut(branch.otherwise(), nested));
 			case JavaSyntax.Labeled labeled -> breaksOut(labeled.body(), nested);
+			case JavaSyntax.Synchronized held -> breaksOut(held.body(), nested);
 			case While loop -> breaksOut(loop.body(), true);
 			case DoWhile loop -> breaksOut(loop.body(), true);
 			case For loop -> breaksOut(loop.body(), true);
@@ -5031,6 +5107,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			case DoWhile loop -> isTrue(loop.condition()) && !breaksOut(loop.body(), false);
 			case For loop -> isTrue(loop.condition()) && !breaksOut(loop.body(), false);
 			case JavaSyntax.Labeled labeled -> exits(labeled.body()) && !breaksOut(labeled.body(), true);
+			case JavaSyntax.Synchronized held -> exits(held.body());
 			case JavaSyntax.Switch block ->
 				block.cases().stream().anyMatch(JavaSyntax.SwitchCase::hasDefault) && !block.cases().isEmpty()
 						&& block.cases()
@@ -5067,6 +5144,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			case While loop -> !isTrue(loop.condition());
 			case For loop -> !isTrue(loop.condition());
 			case ForEach loop -> true;
+			case JavaSyntax.Synchronized held -> completes(held.body());
 			default -> false;
 		};
 	}
@@ -5517,6 +5595,25 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 			case Try attempt:
 				return List.of(located(attempt(attempt), attempt.pos()));
+			case JavaSyntax.Synchronized held: {
+				LispVal lock;
+				if (held.type() != null) {
+					// a class's monitor: what its static synchronized methods hold
+					if (!(type(held.type()) instanceof ClassType named)) {
+						throw unsupported(held.type().pos(), "a class literal");
+					}
+					lock = quote(JavaNames.structure(named.declaration()));
+				}
+				else {
+					Expression written = Objects.requireNonNull(held.lock());
+					Typed value = expression(written, null);
+					if (value.type() instanceof Primitive) {
+						throw error(written.pos(), "unexpected type: a reference is required, found " + value.type());
+					}
+					lock = value.form();
+				}
+				return List.of(located(holding(lock, scoped(held.body(), false)), held.pos()));
+			}
 			case Close close:
 				return close(close);
 			case JavaSyntax.Switch block:
@@ -5680,6 +5777,25 @@ final class JavaLowering implements JavaEmitter.Context {
 			body = form(cl("unwind-protect"), prepend(body, cleanup));
 		}
 		return body;
+	}
+
+	/**
+	 * The forms run holding an object's monitor: entered ahead of them -- a {@code null}
+	 * is the language's exception there -- and left however they end. In a program that
+	 * cannot tell a monitor held from one that is not ({@link JavaClasses#monitors}) only
+	 * the exception is left.
+	 */
+	private LispVal holding(LispVal lock, List<LispVal> body) {
+		if (!this.classes.monitors) {
+			// no thread is started and nothing waits or asks: what is left of a monitor
+			// is the exception a null has
+			boolean ofClass = lock instanceof LispCons quoted && quoted.car().equals(cl("quote"));
+			LispVal tested = ofClass ? lock : dereferenced(lock);
+			return tested == lock && (ofClass || isSimple(lock)) ? progn(body) : progn(prepend(tested, body));
+		}
+		LispSymbol monitor = temporary();
+		return JavaForms.let(monitor, runtimeCall("monitor-enter", lock),
+				List.of(list(cl("unwind-protect"), progn(body), runtimeCall("monitor-exit", monitor))));
 	}
 
 	/** The class a {@code catch} names, which is a {@code Throwable}. */
@@ -6164,6 +6280,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (this.order.decide(this.initEffects, this.methodEffects, type -> immutable(type, new HashSet<>()))) {
 			this.classes.changed();
 		}
+		boolean threads = startsThreads();
 		List<LispVal> forms = new ArrayList<>();
 		for (JavaClass declaration : this.classes.all()) {
 			if (declaration.intrinsic || (isLibrary(declaration) && !this.classes.used.contains(declaration))) {
@@ -6225,8 +6342,16 @@ final class JavaLowering implements JavaEmitter.Context {
 				body.add(above);
 			}
 			body.addAll(Objects.requireNonNull(this.staticInits.get(declaration)));
-			this.functions
-				.add(list(cl("defun"), JavaNames.initializer(declaration), NIL, call("if", done, NIL, progn(body))));
+			LispVal run = call("if", done, NIL, progn(body));
+			if (threads) {
+				// one thread initializes a class and every other waits until it has: the
+				// test outside the lock is of an initialization that ended
+				LispVal ended = new LispSymbol(":ENDED");
+				body.add(call("setq", done, ended));
+				run = call("if", call("eq", done, ended), NIL, list(new LispSymbol("RONTOLISP:WITH-MUTEX"),
+						list(runtimeCall("initializing")), call("if", done, NIL, progn(body))));
+			}
+			this.functions.add(list(cl("defun"), JavaNames.initializer(declaration), NIL, run));
 		}
 		return forms;
 	}

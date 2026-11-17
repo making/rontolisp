@@ -111,8 +111,8 @@ package only, a `protected` member from its package and from the classes under i
 | | |
 |---|---|
 | Types | `int`, `long`, `short`, `byte`, `char`, `double`, `float`, `boolean`, `String`, classes, interfaces, enums, records, arrays; `var` for a local; type arguments, wildcards (`?`, `? extends T`, `? super T`) and raw types |
-| Declarations | classes with `extends` and `implements`, abstract classes and methods; classes, interfaces, records and methods with type parameters and their bounds; enums with fields, constructors, methods and constants that have a body; records with compact and canonical constructors; interfaces with abstract, `default`, `static` and `private` methods and constants; `sealed`, `permits` and `non-sealed`; static nested, inner, local and anonymous classes; fields, static fields, static and instance initializer blocks; constructors with `this(..)` and `super(..)` and statements ahead of them; overloaded and variable arity methods; `package` and `import` |
-| Statements | local variables (`final`, the unnamed `_`), `if`, `while`, `do`, `for`, the enhanced `for` over an array or an `Iterable`, `switch` with colon or arrow cases, patterns and guards, labeled statements, `break` and `continue` with or without a label, `yield`, `return`, `throw`, `try` with `catch` (of one type or several) and `finally`, `try`-with-resources |
+| Declarations | classes with `extends` and `implements`, abstract classes and methods; classes, interfaces, records and methods with type parameters and their bounds; enums with fields, constructors, methods and constants that have a body; records with compact and canonical constructors; interfaces with abstract, `default`, `static` and `private` methods and constants; `sealed`, `permits` and `non-sealed`; static nested, inner, local and anonymous classes; fields, static fields, static and instance initializer blocks; constructors with `this(..)` and `super(..)` and statements ahead of them; overloaded and variable arity methods; `synchronized` methods and `volatile` fields; `package` and `import` |
+| Statements | local variables (`final`, the unnamed `_`), `if`, `while`, `do`, `for`, the enhanced `for` over an array or an `Iterable`, `switch` with colon or arrow cases, patterns and guards, labeled statements, `break` and `continue` with or without a label, `yield`, `return`, `throw`, `try` with `catch` (of one type or several) and `finally`, `try`-with-resources, `synchronized` over an object or a class literal |
 | Expressions | every operator of the primitive types with its conversions, string concatenation, the conditional, assignments and compound assignments, casts, `instanceof` with a type, a type pattern or a record pattern, `switch` expressions, `new`, `outer.new Inner()`, `Outer.this`, array creation with one or several lengths and initializers, text blocks, method calls with or without type arguments, `super.m(..)`, `new Box<>(..)`, lambdas and method references (`Type::name`, `expression::name`, `super::name`, `Type::new`, `int[]::new`) for any functional interface |
 
 Annotations are read and dropped. An `int`, a `long`, a `short` and a `byte` wrap as two's
@@ -229,7 +229,7 @@ as far as the program reaches it, so a class of the program can extend or implem
 
 | Class | Members |
 |---|---|
-| `Object` | `new Object()`, `toString`, `equals`, `hashCode`, `getClass().getName()`, `getClass().getSimpleName()` |
+| `Object` | `new Object()`, `toString`, `equals`, `hashCode`, `getClass().getName()`, `getClass().getSimpleName()`, `wait()`, `wait(long)`, `notify`, `notifyAll` |
 | An enum | `values()`, `valueOf(String)`, `name`, `ordinal`, `compareTo`, `toString` |
 | A record | the accessors, `equals`, `hashCode`, `toString` |
 | An array | `length`, `clone()` |
@@ -260,8 +260,12 @@ as far as the program reaches it, so a class of the program can extend or implem
 | `Optional` | `empty`, `of`, `ofNullable`, `isPresent`, `isEmpty`, `get`, `orElse`, `orElseGet`, `orElseThrow`, `ifPresent`, `ifPresentOrElse`, `filter`, `map`, `flatMap`, `or`, `equals`, `hashCode`, `toString` |
 | `Random` | `new Random()`, `new Random(long)`, `setSeed`, `nextInt()`, `nextInt(int)`, `nextLong`, `nextDouble`, `nextBoolean`, `nextGaussian`; a seed gives the specified sequence |
 | `Comparator` | `compare`, `reversed`, `thenComparing` of a comparator or a key, `thenComparingInt`, `Comparator.naturalOrder`, `reverseOrder`, `comparing` with or without a comparator of the key, `comparingInt`, `comparingLong`, `comparingDouble`, `nullsFirst`, `nullsLast` |
-| Exceptions | `Throwable`, `Exception`, `Error`, `RuntimeException`, `IllegalArgumentException`, `IllegalStateException`, `ArithmeticException`, `NullPointerException`, `ClassCastException`, `IndexOutOfBoundsException`, `ArrayIndexOutOfBoundsException`, `StringIndexOutOfBoundsException`, `NegativeArraySizeException`, `UnsupportedOperationException`, `NumberFormatException`, `CloneNotSupportedException`, `InterruptedException`, `NoSuchElementException`, `ConcurrentModificationException`, `EmptyStackException`, `MatchException`: the constructors of the API -- of no argument, of a message, of a message and a cause, of a cause, of an index --, `getMessage`, `getLocalizedMessage`, `getCause`, `initCause`, `addSuppressed`, `getSuppressed`, `printStackTrace()`, `toString`. `IllegalFormatException` and three subclasses the run time raises, with no constructor: `IllegalFormatConversionException`, `UnknownFormatConversionException`, `MissingFormatArgumentException` |
+| Exceptions | `Throwable`, `Exception`, `Error`, `RuntimeException`, `IllegalArgumentException`, `IllegalStateException`, `ArithmeticException`, `NullPointerException`, `ClassCastException`, `IndexOutOfBoundsException`, `ArrayIndexOutOfBoundsException`, `StringIndexOutOfBoundsException`, `NegativeArraySizeException`, `UnsupportedOperationException`, `NumberFormatException`, `CloneNotSupportedException`, `InterruptedException`, `IllegalMonitorStateException`, `IllegalThreadStateException`, `NoSuchElementException`, `ConcurrentModificationException`, `EmptyStackException`, `MatchException`: the constructors of the API -- of no argument, of a message, of a message and a cause, of a cause, of an index --, `getMessage`, `getLocalizedMessage`, `getCause`, `initCause`, `addSuppressed`, `getSuppressed`, `printStackTrace()`, `toString`. `IllegalFormatException` and three subclasses the run time raises, with no constructor: `IllegalFormatConversionException`, `UnknownFormatConversionException`, `MissingFormatArgumentException` |
 | `Runnable`, `Comparable`, `AutoCloseable` | `run`; `compareTo`, which a `String`, a box and an enum constant have too; `close` |
+| `Thread` | the constructors of nothing, a `Runnable`, a name or both; a class extending it; `start`, `run`, `join()`, `join(long)`, `interrupt`, `isInterrupted`, `isAlive`, `getName`, `setName`, `isDaemon`, `setDaemon`, `getPriority`, `setPriority`, `isVirtual`, `threadId`, `getId`, `toString`; `Thread.currentThread`, `sleep(long)`, `sleep(long, int)`, `yield`, `onSpinWait`, `interrupted`, `holdsLock`, `startVirtualThread`; `Thread.ofPlatform()` and `ofVirtual()` with `name`, `daemon`, `priority`, `start`, `unstarted` |
+| `ThreadLocal` | `new ThreadLocal<>()`, `withInitial`, `get`, `set`, `remove`, `initialValue` |
+| `AtomicInteger`, `AtomicLong` | `get`, `set`, `lazySet`, `getAndSet`, `compareAndSet`, `getAndAdd`, `addAndGet`, `getAndIncrement`, `getAndDecrement`, `incrementAndGet`, `decrementAndGet`, `getAndUpdate`, `updateAndGet`, `getAndAccumulate`, `accumulateAndGet`, `intValue`, `longValue`, `doubleValue`, `toString` |
+| `AtomicBoolean`, `AtomicReference` | `get`, `set`, `lazySet`, `getAndSet`, `compareAndSet`, `toString`; of a reference also `getAndUpdate`, `updateAndGet`, `getAndAccumulate`, `accumulateAndGet` |
 | `java.util.function` | `Function`, `BiFunction`, `UnaryOperator`, `BinaryOperator`, `Supplier`, `Consumer`, `BiConsumer`, `Predicate`, `BiPredicate`, `BooleanSupplier`; for `Int`, `Long` and `Double`: `IntFunction`, `IntPredicate`, `IntUnaryOperator`, `IntBinaryOperator`, `IntSupplier`, `IntConsumer`, `ToIntFunction`, `ToIntBiFunction`; each with its abstract method and its `andThen`, `compose`, `and`, `or`, `negate`, `identity`, `not`, `isEqual` |
 
 `String.format`, `formatted` and `printf` take `%d`, `%s`, `%S`, `%f`, `%e`, `%E`, `%x`,
@@ -351,5 +355,55 @@ tried 100
 tried 50
 2 ok, 1 refused, null
 ```
+
+## Threads
+
+A `Thread` is started, joined, interrupted and named as the language says. `synchronized`
+holds the monitor of an object, `wait` and `notify` hand it from one thread to another,
+and a `volatile` field is read as the last write left it. What a thread leaves uncaught is
+written to standard error with the thread's name and ends that thread alone. The program
+ends when every thread that is no daemon has.
+
+```java
+class Counter {
+    private int count;
+
+    synchronized void add() {
+        count++;
+    }
+
+    synchronized int get() {
+        return count;
+    }
+}
+
+void main() throws InterruptedException {
+    Counter counter = new Counter();
+    List<Thread> workers = new ArrayList<>();
+    for (int i = 0; i < 4; i++) {
+        Thread worker = new Thread(() -> {
+            for (int k = 0; k < 1000; k++) {
+                counter.add();
+            }
+        }, "worker-" + i);
+        workers.add(worker);
+        worker.start();
+    }
+    for (Thread worker : workers) {
+        worker.join();
+    }
+    IO.println(counter.get() + " after " + workers.get(3).getName());
+}
+```
+
+```
+4000 after worker-3
+```
+
+On the interpreter and the JVM a thread is a virtual thread of the host, and threads run
+in parallel. A `.wasm` has one stack, and its threads take turns on it: a thread started
+runs when the running thread waits, sleeps, yields or ends. A program whose threads are
+joined and share what they share under a monitor prints the same on every backend; what one
+stack changes for any other is in [Deviations](deviations.md#threads).
 
 What differs from the language and what is refused: [Deviations](deviations.md).

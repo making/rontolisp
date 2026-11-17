@@ -361,6 +361,18 @@ final class JavaSyntax {
 	record Try(int pos, Block body, List<Catch> catches, @Nullable Block finallyBlock) implements Statement {
 	}
 
+	/**
+	 * A {@code synchronized} statement.
+	 *
+	 * @param pos the keyword
+	 * @param lock the object whose monitor the body holds, or {@code null}
+	 * @param type the class whose monitor it holds when the lock is written as the class
+	 * literal {@code Name.class}, or {@code null}
+	 * @param body the block
+	 */
+	record Synchronized(int pos, @Nullable Expression lock, @Nullable TypeName type, Block body) implements Statement {
+	}
+
 	record Empty(int pos) implements Statement {
 	}
 

@@ -9,9 +9,9 @@ rules: [java-frontend-provenance.md](java-frontend-provenance.md). `--no-gc` is 
 (`CompileFrontend.run`). First slice: j68 (2026-11-17); the declarations and statements past
 it: j69 (2026-11-17); type parameters, inference, lambdas and boxes: j70 (2026-11-17); the
 library: j71 (2026-11-17); the numbers: j72 (2026-11-17); the exceptions: j73 (2026-11-17);
-several files: j74 (2026-11-17); what comes after is `.todo/j74` (a session, the calls across
-languages, the tools), `j76` (threads), `j77`, `j78`, `j79`,
-`j81` and `j82` (what j69, j70, j71, j72 and j73 left).
+several files: j74 (2026-11-17); threads: j76 (2026-11-17); what comes after is `.todo/j74` (a
+session, the calls across languages, the tools), `j77`, `j78`, `j79`, `j81`, `j82` and `j83`
+(what j69, j70, j71, j72, j73 and j76 left).
 
 ## Where it sits
 
@@ -562,6 +562,105 @@ virtual call can run --, classes used):
   `handler-case`), wasm nothing measurable. What would take the size back is
   `.todo/j82`'s.
 
+## Threads (2026-11-17, j76)
+
+**Invariant: a thread is the host's where the target has threads (the interpreter, the JVM)
+and runs on the stack of the thread that cannot go on without it where the target has one
+stack (wasm); the lowering is the same for both, and a wait one stack cannot end is refused by
+name with the status 1, never gone on from.** A program whose threads are joined and share
+under a monitor prints the same on four backends.
+
+- **Where it sits.** `Thread` is Java source (`library/java/lang/Thread.java`: names, the
+  daemon flag, `join` as a loop of `wait` on the thread, the exceptions) over `native`
+  members that are `java.lisp`'s "threads" section, which has TWO variants under the same
+  names, `#-rontolisp-wasm` and `#+rontolisp-wasm`: `JavaLibrary.forms(oneStack)`,
+  `CompileFrontend.expand` passes `wasm`, the interpreter reads the host one, the pruner
+  takes the names of both (`everyVariantForms`). `Object.wait`/`notify`/`notifyAll` are
+  intrinsics calling `Thread.await`/`signal`, which throw (`IllegalMonitorStateException`,
+  `InterruptedException`): the run time answers a status, so `RAISED` did not grow and a
+  `catch (Exception e)` of a thread-free program makes no new class.
+- **The host variant**: a CARRIER per thread, `#(thread mutex condition interrupted monitor)`,
+  the value of `%java-carrier` -- bound in the thread by `make-thread`'s alist, made at the
+  first ask for the thread the program started on ([threads.md](threads.md)). `sleep` and
+  `wait` park on the carrier's own condition variable until a ticket is taken, the thread is
+  interrupted or the time is up, so `interrupt` is a flag and a notify of that variable and
+  needs no host interrupt. The threads that are no daemons are kept and joined at the end.
+- **The one-stack variant, measured against the alternative.** Sixteen small programs
+  (fork/join, a synchronized counter, producer/consumer, a gate, a hand-off, a worker pool,
+  names, an uncaught exception, polling with `sleep` and with `yield`, sleeping then reading,
+  staggered sleeps, a bounded buffer, ping-pong, a loop stopped by `interrupt`, one stopped by
+  a `volatile` flag), each against the JDK 25's output: the interpreter and the JVM print it
+  for all 16. On wasm and the component, REFUSED AT COMPILE TIME runs 0 of 16; ONE STACK
+  prints the JDK's output for 11, refuses 2 when they run (bounded buffer, ping-pong: a thread
+  waits for one suspended under it), never ends for 2 (the two loops: the thread to stop them
+  is under them) and prints the staggered sleeps in another order. One stack was taken. A
+  started thread is queued; `wait`, `sleep`, `yield` and the program's end run the queue on
+  the waiting thread's stack, oldest first, each to its end (`%java-thread-wait`); the queue
+  empty and the ticket not taken is `%java-one-stack`: the message and `%host-exit 1`, which
+  no handler of the program takes. A monitor another thread holds is the same refusal.
+- **`sleep` runs the queue** (decided between two; neither covers the corpus). With `sleep`
+  only passing the time the two stop-loops end and polling with `sleep` never does, and
+  sleeping then reading without a `join` prints what the thread had not written yet -- a
+  silent difference where the other choice has none but the order of timed prints. Neither
+  can be told apart by the run time: what would is a thread suspended and resumed, which
+  wasm has no way to do (stack switching is not in wasmtime 49; an async transform of every
+  method that can block is `.todo/j83`'s lead). A daemon is never run by the program's end.
+- **A monitor lives in a side table keyed by identity, not in a slot** (measured, Lisp
+  prototypes of both, 20,000,000 uncontended rounds, JVM / wasm): no lock 0.31 / 0.22 s,
+  the table 1.28-1.52 / 3.3-3.5 s, a slot 1.06-1.21 / 2.4-2.6 s; and 50,000,000 objects never
+  locked, two slots against three: 3.2-3.6 against 3.6-3.7 s on the JVM, 16.8-17.1 against
+  18.9-19.5 s on wasm (44 ns an object). So a slot costs every object for 10 to 45 ns a
+  `synchronized`, and cannot hold the monitor of an array, a string or a `new Object()`: the
+  table. A thread keeps the monitor it entered last (carrier slot 4), so one lock taken again
+  and again is found with no look in the table. A table past 4,096 monitors drops one at its
+  last exit when nothing waits in it, said under the monitor's own mutex (slot 4 nil), which
+  a thread that found it earlier reads after taking that mutex -- an object locked once is
+  not kept for ever, and more than 4,096 objects locked in turn pay a monitor made each time
+  (at 256 the bound cost 1,000 objects 337 against 135 ns a round on the JVM). A weak
+  identity table in the backends would retire the bound, and the identity hash's retention.
+- **A program that cannot tell a monitor held from one that is not holds none.** Until a
+  pass reaches a member of `Thread` (`JavaClasses.monitors`; the program is lowered again when
+  one does) `synchronized` is the null test alone and a `volatile` field any field: a class
+  that is only thread-safe costs nothing (`synchronized` methods and no thread: 64,060 B of class / 42,587 B of wasm
+  against 64,015 / 42,581 without the modifier; 70,820 / 56,280 holding monitors).
+- **`volatile` is an access under one lock** (`(with-mutex ((%java-volatile)) access)`, the
+  object and the value bound first): the JVM backend's globals and slots are plain fields
+  a JIT may read once for a loop, and a lock is what the pipeline has to order two
+  accesses (bt2's atomic integer is the precedent, [threads.md](threads.md)). The atomics are
+  Java source whose methods are `synchronized`, for the same reason.
+- **Static initialization in a program that starts threads** holds `%java-initializing`:
+  `(if (eq done :ended) nil (with-mutex .. (if done nil ..)))`, so one thread initializes a
+  class and the others wait; ONE lock for every class, so an initializer waiting for a
+  thread that initializes another class never ends (a JDK's lock is the class's own).
+- **The entry of a program that starts threads** is `(%java-thread-main main finish)`: what
+  `main` leaves uncaught is reported, the thread's object ends (`Thread.finish`), the threads
+  that are no daemons end, then the status. A thread's body is
+  `(unwind-protect (handler-case (Thread.body t) (error (c) (Thread.report t text))) (Thread.finish t))`.
+- **The run time's own tables** (the identity numbers, `intern`) are read under
+  `%java-guard` once a thread was started: `%java-shared` holds the function doing it
+  (`%java-among-threads`), set by `%java-thread-start`, so a program starting none
+  references no mutex.
+- **`System.exit` on a started thread**: the interpreter's exit ends the thread it is called
+  on (`eval/LispExitSignal`), so the same function records the status and
+  wakes the thread the program started on, which exits where it parks or at the program's
+  end (`RontoLispCliStreamsTest#aJavaFileRunsCompilesAndIsRefusedWhereItCannot`; it waited
+  for ever in `join`). The compiled backends end at the call.
+- **Measured** (2026-11-17, the machine and method of "Measured" below; ns a round over the
+  loop alone, in a program reaching `Thread`; javac's class / this front end's JVM class /
+  wasm): `synchronized` over one object 19 / 50 to 60 / 90, over 1,000 objects in turn
+  18 / 121 to 134 / 172 to 180; a `volatile` read and write 6 / 24 / 1. The same loops in a
+  program reaching no member of `Thread` cost what the loop without the keyword costs. `Fib`, `WrapInt`, `Sieve`, `WrapLong` are byte-identical on both targets;
+  `Shapes` +226 B of class and +16 B of wasm (the test in the identity hash). A counter
+  under four threads is 168,841 B of class and 98,004 B of wasm.
+- **Stated in `deviations.md`**: the one stack; what is shared with no monitor is the
+  host's; `StringBuffer`, `Vector`, `Hashtable` take no lock; an atomic is no `Number`;
+  thread numbers are ours; a class literal only as a `synchronized` statement's lock (the
+  quoted structure name, the object a `static synchronized` method holds).
+- **Pinned by** `java-spec.yaml`'s four `standalone:` thread cases (a `standalone:` case so
+  that the corpus program starts no thread and keeps the thread-free lowering),
+  `JavaSpecE2eTest#aWaitOnlyAThreadSuspendedUnderItCouldEndIsRefusedOnOneStack` (the two
+  wasm legs) and `JavaLoweringTest#aMonitorIsEnteredAndLeftAndAThreadIsTheRunTimes`.
+
 ## The lowering table
 
 | Java | core forms |
@@ -592,6 +691,9 @@ virtual call can run --, classes used):
 | `a == b` (strings) | `(eq a b)`; every string constant of such a program is a global `%string<n>` set to `(%java-intern "text")` before `main` |
 | `try { .. } catch (A \| B e) { .. }` | `(handler-case .. (error (%t1) (let ((%t2 (or (%java-thrown %t1) (%lisp-error %t1)))) (cond ((or (A? %t2) (B? %t2)) (let ((e %t2)) ..)) (t (error %t1))))))` |
 | `p.get()`, `xs.length`, `s.charAt(i)` | `(C.get() (or p (%java-npe)))`; `(length (or xs (%java-npe)))`; `(progn (if (or (< i 0) (>= i (length s))) (%java-string-index i s)) (char-code (char s i)))` |
+| `synchronized (o) { .. }`, a `synchronized` method | `(let ((%t1 (%java-monitor-enter o))) (unwind-protect (progn ..) (%java-monitor-exit %t1)))`, the lock `this`, `'Class` for a static method and `Class.class`; `(progn (or o (%java-npe)) ..)` in a program reaching no member of `Thread` |
+| a `volatile` field read, written | `(rontolisp:with-mutex ((%java-volatile)) (C.f o))`; `(let* ((%t0 v)) (rontolisp:with-mutex ((%java-volatile)) (setf (C.f o) %t0)))`; the plain access in a program reaching no member of `Thread` |
+| `o.wait()`, `o.notifyAll()`, `t.start()` | `(Thread.await(Object,long) (or o (%java-npe)) 0)`; `(Thread.signal(Object,boolean) (or o (%java-npe)) t)`; `(Thread.start() t)`, whose body ends in `(%java-thread-start carrier daemon (lambda () ..))` |
 | `Arrays.sort(ns)`, `Integer.parseInt(s)` | `(java.util.Arrays.sort(int[]) ns)` whose body is the native `(%java-sort-numbers a 0 (length a))`; `(rontolisp.internal.Support.parseInt(String,int) s 10)` |
 
 ## Measured (2026-11-17)

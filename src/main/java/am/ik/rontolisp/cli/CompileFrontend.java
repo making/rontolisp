@@ -862,13 +862,9 @@ final class CompileFrontend {
 		// body reaches the prelude. Not on --no-gc, which has no eval runtime.
 		List<LispVal> expanded = CurrentPackageIntern
 			.rewrite(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded), programHead, features));
-		List<LispVal> languages = InflateLibrary
-			.process(
-					ClojureLibrary.process(SchemeLibrary.process(
-							StarlarkLibrary
-								.process(JavaLibrary.process(noGc ? expanded : EvalReferences.process(expanded))),
-							features, input.standards()), !wasm, input.lowersAtRunTime(), input.linked()),
-					witBackend);
+		List<LispVal> languages = InflateLibrary.process(ClojureLibrary.process(SchemeLibrary.process(
+				StarlarkLibrary.process(JavaLibrary.process(noGc ? expanded : EvalReferences.process(expanded), wasm)),
+				features, input.standards()), !wasm, input.lowersAtRunTime(), input.linked()), witBackend);
 		List<LispVal> macos = ObjcLibrary.process(AppKitLibrary.process(JsonLibrary.process(
 				LinalgLibrary.process(GeomLibrary
 					.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary.process(

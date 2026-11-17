@@ -89,6 +89,9 @@ public final class WaitForLibrary {
 		// the pipeline too: its sleep call site counts where the program can make such a
 		// future and waits on one with a timeout.
 		referenced |= ClojureArms.sleepsOnAFuture(program);
+		// A Java program's thread that sleeps, or waits with a limit, passes the time by
+		// sleep in java.lisp, spliced later as well.
+		referenced |= JavaLibrary.sleeps(program);
 		if (!referenced || definesWaitFor(program)) {
 			return program;
 		}

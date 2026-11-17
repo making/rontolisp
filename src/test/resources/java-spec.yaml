@@ -4505,6 +4505,469 @@ standalone:
       registry ready
       1
       1
+  # A thread is the host's where the target has threads and runs on the stack of the
+  # thread that waits for it where it has one (wasm): a program whose threads are
+  # joined prints the same on every leg. synchronized -- a block, a method, a static
+  # method, a class literal -- holds an object's monitor, taken again by the thread
+  # holding it; a volatile field, the atomics and a ThreadLocal; a thread's name,
+  # daemon flag and second start; the program ends when its threads have.
+  - name: threads-are-started-joined-and-hold-monitors
+    file: Monitors.java
+    source: |
+      import java.util.concurrent.atomic.AtomicBoolean;
+      import java.util.concurrent.atomic.AtomicInteger;
+      import java.util.concurrent.atomic.AtomicLong;
+      import java.util.concurrent.atomic.AtomicReference;
+
+      public class Monitors {
+          static final ThreadLocal<Integer> slot = ThreadLocal.withInitial(() -> 7);
+          static final Object lock = new Object();
+          static int inBlock, inStatic, inLiteral;
+          static volatile boolean seen;
+          private int inMethod;
+          private volatile String label = "none";
+
+          synchronized void add() {
+              inMethod++;
+              // a monitor is taken again by the thread holding it
+              synchronized (this) {
+                  inMethod++;
+              }
+          }
+
+          static synchronized void addStatic() {
+              inStatic++;
+          }
+
+          static class Summer extends Thread {
+              final int from;
+              long sum;
+
+              Summer(int from) {
+                  super("summer-" + from);
+                  this.from = from;
+              }
+
+              @Override
+              public void run() {
+                  for (int i = from; i < from + 1000; i++) {
+                      sum += i;
+                  }
+              }
+          }
+
+          public static void main(String[] args) throws InterruptedException {
+              Thread main = Thread.currentThread();
+              System.out.println(main.getName() + " " + main.isAlive() + " " + main.isDaemon() + " " + main.getPriority()
+                      + " " + (main == Thread.currentThread()));
+              Monitors shared = new Monitors();
+              AtomicInteger hits = new AtomicInteger();
+              AtomicLong total = new AtomicLong(10);
+              AtomicBoolean once = new AtomicBoolean();
+              AtomicReference<String> first = new AtomicReference<>("none");
+              Thread[] workers = new Thread[4];
+              for (int i = 0; i < workers.length; i++) {
+                  int id = i;
+                  workers[i] = new Thread(() -> {
+                      for (int k = 0; k < 500; k++) {
+                          synchronized (lock) {
+                              inBlock++;
+                          }
+                          synchronized (Monitors.class) {
+                              inLiteral++;
+                          }
+                          shared.add();
+                          addStatic();
+                          hits.incrementAndGet();
+                          total.addAndGet(k);
+                      }
+                      if (once.compareAndSet(false, true)) {
+                          first.set("set once");
+                      }
+                      slot.set(slot.get() + id);
+                      if (slot.get() != 7 + id || !Thread.currentThread().getName().equals("worker-" + id)) {
+                          hits.set(-1);
+                      }
+                      shared.label = "written";
+                      seen = true;
+                  }, "worker-" + i);
+              }
+              System.out.println(workers[0].getName() + " " + workers[0].isAlive() + " " + workers[0].isDaemon());
+              workers[0].join();
+              for (Thread worker : workers) {
+                  worker.start();
+              }
+              for (Thread worker : workers) {
+                  worker.join();
+              }
+              System.out.println(inBlock + " " + inLiteral + " " + shared.inMethod + " " + inStatic + " " + hits + " "
+                      + total.get() + " " + once.get() + " " + first.get() + " " + seen + " " + shared.label);
+              System.out.println(slot.get() + " " + workers[3].isAlive() + " " + Thread.holdsLock(lock));
+              synchronized (lock) {
+                  System.out.println(Thread.holdsLock(lock) + " " + hits.getAndUpdate(n -> n * 2) + " "
+                          + hits.accumulateAndGet(5, (a, b) -> a + b));
+              }
+              try {
+                  workers[0].start();
+              }
+              catch (IllegalThreadStateException e) {
+                  System.out.println(e);
+              }
+              Summer[] parts = { new Summer(0), new Summer(1000), new Summer(2000) };
+              long sum = 0;
+              for (Summer part : parts) {
+                  part.start();
+              }
+              for (Summer part : parts) {
+                  part.join();
+                  sum += part.sum;
+              }
+              System.out.println(sum + " " + parts[1].getName());
+              Thread daemon = new Thread(() -> System.out.println("daemon " + Thread.currentThread().isDaemon() + " "
+                      + new Thread(() -> { }).isDaemon()));
+              daemon.setDaemon(true);
+              daemon.start();
+              daemon.join();
+              Thread virtual = Thread.ofVirtual().name("virtual").unstarted(() -> System.out.println(
+                      Thread.currentThread().getName() + " " + Thread.currentThread().isDaemon() + " "
+                              + Thread.currentThread().isVirtual()));
+              virtual.start();
+              virtual.join();
+              Thread.ofPlatform().name("numbered-", 3).start(() -> System.out.println(Thread.currentThread().getName()))
+                  .join();
+              Thread.startVirtualThread(() -> System.out.println("[" + Thread.currentThread().getName() + "]")).join();
+              Object nothing = null;
+              try {
+                  synchronized (nothing) {
+                      System.out.println("not reached");
+                  }
+              }
+              catch (NullPointerException e) {
+                  System.out.println("a null has no monitor");
+              }
+              try {
+                  new Thread((String) null);
+              }
+              catch (NullPointerException e) {
+                  System.out.println(e.getMessage());
+              }
+              // a thread started and not waited for ends before the program does
+              new Thread(() -> System.out.println("last")).start();
+          }
+      }
+    stdout: |
+      main true false 5 true
+      worker-0 false false
+      2000 2000 4000 2000 2000 499010 true set once true written
+      7 false false
+      true 2000 4005
+      java.lang.IllegalThreadStateException
+      4498500 summer-1000
+      daemon true true
+      virtual true true
+      numbered-3
+      []
+      a null has no monitor
+      'name' is null
+      last
+  # wait gives up the monitor until a notify, a limit or an interrupt; a thread that
+  # does not hold the monitor is refused; an interrupt is found where a thread sleeps
+  # or waits, before it starts or while it waits.
+  - name: threads-wait-are-notified-and-interrupted
+    file: Waits.java
+    source: |
+      import java.util.ArrayDeque;
+
+      public class Waits {
+          static final ArrayDeque<Integer> queue = new ArrayDeque<>();
+          static final Object gate = new Object();
+          static boolean open;
+          static Integer handed;
+
+          static int take() throws InterruptedException {
+              synchronized (queue) {
+                  while (queue.isEmpty()) {
+                      queue.wait();
+                  }
+                  return queue.removeFirst();
+              }
+          }
+
+          static void put(int item) {
+              synchronized (queue) {
+                  queue.addLast(item);
+                  queue.notify();
+              }
+          }
+
+          public static void main(String[] args) throws InterruptedException {
+              // a consumer waits for what a producer puts
+              long[] consumed = new long[1];
+              Thread consumer = new Thread(() -> {
+                  try {
+                      for (int item = take(); item >= 0; item = take()) {
+                          consumed[0] += item;
+                      }
+                  }
+                  catch (InterruptedException e) {
+                      consumed[0] = -1;
+                  }
+              });
+              Thread producer = new Thread(() -> {
+                  for (int i = 1; i <= 100; i++) {
+                      put(i);
+                  }
+                  put(-1);
+              });
+              consumer.start();
+              producer.start();
+              producer.join();
+              consumer.join();
+              System.out.println("consumed " + consumed[0]);
+              // every thread waiting at a gate goes on when it is opened
+              int[] passed = new int[3];
+              Thread[] waiting = new Thread[3];
+              for (int i = 0; i < waiting.length; i++) {
+                  int id = i;
+                  waiting[i] = new Thread(() -> {
+                      synchronized (gate) {
+                          while (!open) {
+                              try {
+                                  gate.wait();
+                              }
+                              catch (InterruptedException e) {
+                                  return;
+                              }
+                          }
+                      }
+                      passed[id] = id + 1;
+                  });
+                  waiting[i].start();
+              }
+              synchronized (gate) {
+                  open = true;
+                  gate.notifyAll();
+              }
+              for (Thread thread : waiting) {
+                  thread.join();
+              }
+              System.out.println("passed " + (passed[0] + passed[1] + passed[2]));
+              // the thread the program started on waits for a value another hands it
+              new Thread(() -> {
+                  synchronized (gate) {
+                      handed = 7;
+                      gate.notifyAll();
+                  }
+              }).start();
+              synchronized (gate) {
+                  while (handed == null) {
+                      gate.wait();
+                  }
+              }
+              System.out.println("handed " + handed);
+              // a wait gives up every hold of the monitor and takes them again
+              Thread opener = new Thread(() -> {
+                  synchronized (gate) {
+                      open = false;
+                      gate.notify();
+                  }
+              });
+              synchronized (gate) {
+                  synchronized (gate) {
+                      opener.start();
+                      while (open) {
+                          gate.wait();
+                      }
+                      System.out.println("held again " + Thread.holdsLock(gate));
+                  }
+              }
+              opener.join();
+              // a wait with a limit ends when nothing notifies it
+              synchronized (gate) {
+                  gate.wait(1);
+              }
+              System.out.println("timed out");
+              Thread finished = new Thread(() -> { });
+              finished.start();
+              finished.join(1000);
+              System.out.println("joined " + finished.isAlive());
+              // the monitor members are refused to a thread that does not hold the monitor
+              try {
+                  gate.wait();
+              }
+              catch (IllegalMonitorStateException e) {
+                  System.out.println(e);
+              }
+              try {
+                  gate.notify();
+              }
+              catch (IllegalMonitorStateException e) {
+                  System.out.println(e);
+              }
+              try {
+                  gate.notifyAll();
+              }
+              catch (IllegalMonitorStateException e) {
+                  System.out.println(e);
+              }
+              try {
+                  synchronized (gate) {
+                      gate.wait(-1);
+                  }
+              }
+              catch (IllegalArgumentException e) {
+                  System.out.println(e);
+              }
+              // a thread interrupted before it starts finds it out where it first sleeps
+              Thread sleeper = new Thread(() -> {
+                  System.out.println("starts interrupted " + Thread.currentThread().isInterrupted());
+                  try {
+                      Thread.sleep(10000);
+                      System.out.println("slept");
+                  }
+                  catch (InterruptedException e) {
+                      System.out.println(e + " " + Thread.currentThread().isInterrupted());
+                  }
+              });
+              sleeper.interrupt();
+              System.out.println(sleeper.isInterrupted());
+              sleeper.start();
+              sleeper.join();
+              // a thread waiting is interrupted by another
+              Thread waiter = new Thread(() -> {
+                  Thread self = Thread.currentThread();
+                  synchronized (gate) {
+                      new Thread(self::interrupt).start();
+                      try {
+                          while (true) {
+                              gate.wait();
+                          }
+                      }
+                      catch (InterruptedException e) {
+                          System.out.println(e + " " + self.isInterrupted() + " " + Thread.holdsLock(gate));
+                      }
+                  }
+              });
+              waiter.start();
+              waiter.join();
+              // the thread the program started on interrupts itself
+              Thread.currentThread().interrupt();
+              try {
+                  synchronized (gate) {
+                      gate.wait();
+                  }
+              }
+              catch (InterruptedException e) {
+                  System.out.println("wait " + e.getMessage());
+              }
+              Thread.currentThread().interrupt();
+              try {
+                  sleeper.join();
+              }
+              catch (InterruptedException e) {
+                  System.out.println("join " + e.getMessage());
+              }
+              Thread.currentThread().interrupt();
+              System.out.println(Thread.interrupted() + " " + Thread.interrupted());
+              Thread.sleep(0);
+              try {
+                  Thread.sleep(-1);
+              }
+              catch (IllegalArgumentException e) {
+                  System.out.println(e);
+              }
+              try {
+                  sleeper.join(-1);
+              }
+              catch (IllegalArgumentException e) {
+                  System.out.println(e);
+              }
+              Thread.yield();
+              System.out.println("done");
+          }
+      }
+    stdout: |
+      consumed 5050
+      passed 6
+      handed 7
+      held again true
+      timed out
+      joined false
+      java.lang.IllegalMonitorStateException: current thread is not owner
+      java.lang.IllegalMonitorStateException: current thread is not owner
+      java.lang.IllegalMonitorStateException: current thread is not owner
+      java.lang.IllegalArgumentException: timeout value is negative
+      true
+      starts interrupted true
+      java.lang.InterruptedException: sleep interrupted false
+      java.lang.InterruptedException false true
+      wait null
+      true false
+      java.lang.IllegalArgumentException: timeout value is negative
+      java.lang.IllegalArgumentException: timeout value is negative
+      done
+  # What a thread leaves uncaught ends that thread alone: the line a JDK writes, with
+  # the thread's name, and the program goes on to the status 0.
+  - name: an-uncaught-exception-ends-its-thread-alone
+    file: Dies.java
+    source: |
+      public class Dies {
+          static class Failing extends Thread {
+              Failing() {
+                  super("failing");
+              }
+
+              @Override
+              public void run() {
+                  int[] none = new int[0];
+                  System.out.println("about to fail");
+                  none[1] = 1;
+              }
+          }
+
+          public static void main(String[] args) throws InterruptedException {
+              Thread thrower = new Thread(() -> {
+                  throw new IllegalStateException("boom");
+              }, "thrower");
+              thrower.start();
+              thrower.join();
+              System.out.println("thrower ended " + thrower.isAlive());
+              Failing failing = new Failing();
+              failing.start();
+              failing.join();
+              System.out.println("main goes on");
+          }
+      }
+    stdout: |
+      thrower ended false
+      about to fail
+      main goes on
+    stderr: |
+      Exception in thread "thrower" java.lang.IllegalStateException: boom
+      Exception in thread "failing" java.lang.ArrayIndexOutOfBoundsException: Index 1 out of bounds for length 0
+  # The thread the program started on dies and the threads it started still end: the
+  # status is 1 once they have.
+  - name: the-program-ends-when-its-threads-have
+    file: MainDies.java
+    source: |
+      public class MainDies {
+          public static void main(String[] args) {
+              Object lock = new Object();
+              synchronized (lock) {
+                  new Thread(() -> {
+                      synchronized (lock) {
+                          System.out.println("the thread ends after main died");
+                      }
+                  }).start();
+                  System.out.println("main dies");
+              }
+              throw new IllegalStateException("main is gone");
+          }
+      }
+    stdout: |
+      main dies
+      the thread ends after main died
+    error: "java.lang.IllegalStateException: main is gone"
 # Programs a compiler refuses, each the scaffold with the case's statements in its main.
 # The JDK has to report `error` at the statements' line, and the front end the same line
 # and a message starting with it.
@@ -4620,3 +5083,18 @@ refused:
     - name: a-resource-that-is-no-auto-closeable
       body: 'try (String s = "x") { }'
       error: "incompatible types: try-with-resources not applicable to variable type"
+    - name: a-monitor-of-a-primitive
+      body: 'synchronized (1) { }'
+      error: "unexpected type"
+    - name: a-synchronized-field
+      body: 'class Local { synchronized int held; }'
+      error: "modifier synchronized not allowed here"
+    - name: a-volatile-method
+      body: 'class Local { volatile void run() { } }'
+      error: "modifier volatile not allowed here"
+    - name: a-final-volatile-field
+      body: 'class Local { final volatile int held = 1; }'
+      error: "illegal combination of modifiers: final and volatile"
+    - name: an-abstract-synchronized-method
+      body: 'abstract class Local { abstract synchronized void run(); }'
+      error: "illegal combination of modifiers: abstract and synchronized"

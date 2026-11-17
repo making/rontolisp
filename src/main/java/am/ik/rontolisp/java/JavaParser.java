@@ -57,6 +57,7 @@ import am.ik.rontolisp.java.JavaSyntax.Select;
 import am.ik.rontolisp.java.JavaSyntax.Statement;
 import am.ik.rontolisp.java.JavaSyntax.StringLiteral;
 import am.ik.rontolisp.java.JavaSyntax.This;
+import am.ik.rontolisp.java.JavaSyntax.Synchronized;
 import am.ik.rontolisp.java.JavaSyntax.Throw;
 import am.ik.rontolisp.java.JavaSyntax.Try;
 import am.ik.rontolisp.java.JavaSyntax.TypeName;
@@ -94,11 +95,10 @@ final class JavaParser {
 	private static final Set<String> PRIMITIVES = Set.of("boolean", "byte", "char", "short", "int", "long", "float",
 			"double");
 
-	private static final Set<String> MODIFIERS = Set.of("public", "protected", "private", "static", "final",
-			"abstract");
+	private static final Set<String> MODIFIERS = Set.of("public", "protected", "private", "static", "final", "abstract",
+			"synchronized", "volatile");
 
-	private static final Set<String> REFUSED_MODIFIERS = Set.of("synchronized", "native", "volatile", "transient",
-			"strictfp");
+	private static final Set<String> REFUSED_MODIFIERS = Set.of("native", "transient", "strictfp");
 
 	private static final List<List<String>> LEVELS = List.of(List.of("||"), List.of("&&"), List.of("|"), List.of("^"),
 			List.of("&"), List.of("==", "!="), List.of("<", ">", "<=", ">=", "instanceof"), List.of("<<", ">>", ">>>"),
@@ -393,6 +393,17 @@ final class JavaParser {
 		}
 	}
 
+	/**
+	 * Refuses the modifiers a declaration of this kind does not take, as a compiler does.
+	 */
+	private void allowed(Set<String> modifiers, int pos, String... refused) {
+		for (String modifier : refused) {
+			if (modifiers.contains(modifier)) {
+				throw new LispReadException("modifier " + modifier + " not allowed here", location(pos));
+			}
+		}
+	}
+
 	private boolean atTypeDeclaration() {
 		if (at("class") || at("interface") || at("enum") || at("@")) {
 			return true;
@@ -408,6 +419,7 @@ final class JavaParser {
 				: at("interface") ? JavaSyntax.Kind.INTERFACE : JavaSyntax.Kind.CLASS;
 		this.p++;
 		int pos = current().offset();
+		allowed(modifiers, pos, "synchronized", "volatile");
 		String name = identifier();
 		List<JavaSyntax.TypeParameter> typeParameters = typeParameters();
 		if (kind == JavaSyntax.Kind.ENUM && !typeParameters.isEmpty()) {
@@ -536,6 +548,7 @@ final class JavaParser {
 				throw error("an interface has no initializer block");
 			}
 			int pos = current().offset();
+			allowed(modifiers, pos, "synchronized", "volatile");
 			into.initializers.add(new Initializer(pos, modifiers.contains("static"), block()));
 			return;
 		}
@@ -549,6 +562,7 @@ final class JavaParser {
 				throw error("an interface has no constructor");
 			}
 			int pos = current().offset();
+			allowed(modifiers, pos, "synchronized", "volatile");
 			this.p++;
 			if (at("{")) {
 				if (kind != JavaSyntax.Kind.RECORD) {
@@ -567,6 +581,11 @@ final class JavaParser {
 		int pos = current().offset();
 		String name = identifier();
 		if (at("(")) {
+			allowed(modifiers, pos, "volatile");
+			if (modifiers.contains("synchronized") && (inInterface || modifiers.contains("abstract"))) {
+				throw new LispReadException(inInterface ? "modifier synchronized not allowed here"
+						: "illegal combination of modifiers: abstract and synchronized", location(pos));
+			}
 			List<Parameter> parameters = parameters(false);
 			if (at("[")) {
 				throw unsupported("an array dimension after a method's parameters");
@@ -584,6 +603,10 @@ final class JavaParser {
 		}
 		if (type.name().equals("void")) {
 			throw error("expected '(' but found " + current().shown());
+		}
+		allowed(modifiers, pos, "synchronized");
+		if (modifiers.contains("volatile") && modifiers.contains("final")) {
+			throw new LispReadException("illegal combination of modifiers: final and volatile", location(pos));
 		}
 		while (true) {
 			if (at("[")) {
@@ -894,7 +917,15 @@ final class JavaParser {
 					out.add(switchBlock());
 					return;
 				case "synchronized":
-					throw unsupported("a synchronized statement");
+					if (peekIs(1, "(")) {
+						this.p += 2;
+						TypeName literal = classLock();
+						Expression lock = literal != null ? null : expression();
+						expect(")");
+						out.add(new Synchronized(pos, lock, literal, block()));
+						return;
+					}
+					break;
 				case "assert":
 					throw unsupported("an assert statement");
 				case "yield":
@@ -939,6 +970,30 @@ final class JavaParser {
 		Expression expression = expression();
 		expect(";");
 		out.add(new ExpressionStatement(pos, expression));
+	}
+
+	/**
+	 * The class a literal {@code Name.class} names when one stands here as the whole lock
+	 * of a {@code synchronized} statement, else {@code null}: the one place the subset
+	 * has a class literal, where it is the object a {@code static synchronized} method of
+	 * the class holds.
+	 */
+	private @Nullable TypeName classLock() {
+		int save = this.p;
+		if (current().kind() == Kind.IDENTIFIER && !RESERVED.contains(current().text())) {
+			int pos = current().offset();
+			StringBuilder qualified = new StringBuilder(identifier());
+			while (at(".") && peek(1).kind() == Kind.IDENTIFIER && !RESERVED.contains(peek(1).text())) {
+				this.p++;
+				qualified.append('.').append(identifier());
+			}
+			if (at(".") && peekIs(1, "class") && peekIs(2, ")")) {
+				this.p += 2;
+				return new TypeName(pos, qualified.toString(), List.of(), false, 0);
+			}
+		}
+		this.p = save;
+		return null;
 	}
 
 	/** Whether a local class, interface, enum or record is declared here. */

@@ -2,7 +2,7 @@
 
 The subset is partial by design. Where a program that the subset accepts behaves
 differently from the language specification is listed here, and it is the same on every
-backend.
+backend but for the [threads](#threads) of a `.wasm`.
 
 ## What differs
 
@@ -164,12 +164,46 @@ is an error naming it.
 **Two older classes are the newer ones.** A `StringBuffer` is a `StringBuilder` and
 `getClass().getName()` says so; a `Vector` is an `ArrayList` to `instanceof`.
 
+## Threads
+
+**A `.wasm` runs the threads of a program on one stack.** A thread started does not run
+until the running thread cannot go on: it waits in `wait` or `join`, sleeps, yields, or is
+the thread of `main` and ends. The threads started then run on that thread's stack, one
+after another in the order started, each to its end. Every such execution is one the
+language allows, which promises no thread a turn; a JDK seldom produces it. Three kinds of
+program show it.
+
+- A thread suspended that way goes on only once every thread run above it has ended. A wait
+  that only a suspended thread could end is refused where it happens, with a message naming
+  it on standard error and the status 1: two threads taking turns through `wait` and
+  `notify`, a bounded buffer whose producer waits for its consumer.
+- Nothing interrupts a running thread. A thread that runs until another one tells it to
+  stop, by a flag or an interrupt, never ends when the one to tell it is suspended under it.
+- `sleep` lasts at least its time. A thread sleeping under another goes on when that one
+  has ended, so two threads sleeping different times can print in the other order.
+
+A daemon thread not yet run when the last other thread ends never runs.
+
+**What is shared without a monitor or `volatile` is the host's.** On the interpreter and
+the JVM a field two threads read and write with neither may be read stale, as the language
+allows. `volatile`, `synchronized`, `Thread.start` and `join` order what they order in the
+language.
+
+**The classes a JDK synchronizes take no lock.** `StringBuffer`, `Vector` and `Hashtable`
+are the unsynchronized classes: a program sharing one between threads guards it with
+`synchronized`. An `AtomicInteger` and an `AtomicLong` are no `Number`.
+
+**A thread's number is rontolisp's own.** `threadId()` and the number in `toString()` count
+the threads of the program from 1. A class literal is read only as the lock of a
+`synchronized` statement. One lock guards the static initialization of every class, so a
+static initializer that waits for a thread initializing another class never ends.
+
 ## What is refused
 
 Each of these is an error naming the construct and its position.
 
 - Annotation types, `assert`.
-- Class literals.
+- Class literals, but as the lock of a `synchronized` statement.
 - A `switch` over a `long`, a `float`, a `double` or a `boolean`; a switch expression whose colon
   cases run into the next; `Interface.super.m()`; a class extending an inner class from
   outside that class's outer class; an anonymous class made with `outer.new` or with `<>`.
@@ -180,7 +214,9 @@ Each of these is an error naming the construct and its position.
   `double[]` and `boolean[]`; a method reference whose type has type arguments (`List<String>::size`) or that
   writes its own (`this::<T>m`).
 - A class extending `String`, `StringBuilder` or a box.
-- Threads, `synchronized`, `volatile`.
+- `java.util.concurrent` but for the four atomic classes: locks, executors, concurrent
+  collections, `CompletableFuture`. `Thread.getState`, thread groups and uncaught-exception
+  handlers.
 - Any class or member of the library not listed in the [overview](index.md): streams,
   `LinkedList`, `LinkedHashMap`, `TreeMap`, `Scanner`, `java.io`, `java.time`,
   `BigInteger`, `BigDecimal`, regular expressions, reflection.

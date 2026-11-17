@@ -426,12 +426,104 @@ class JavaLoweringTest {
 	}
 
 	@Test
+	void aMonitorIsEnteredAndLeftAndAThreadIsTheRunTimes() {
+		// synchronized enters the monitor of its object -- the class's for a static
+		// method and a class literal -- and leaves it however the body ends; a volatile
+		// field is read and written one access at a time; wait and notify are
+		// Thread.java's
+		// over the run time's; a started thread runs its run(), reports what it leaves
+		// uncaught and ends; a program that starts one initializes a class under a lock
+		// and ends when its threads have.
+		assertThat(lower("""
+				class Cell {
+				    static volatile int hits;
+				    volatile Cell next;
+				    int held;
+				    synchronized void add(Cell other) { held++; next = other.next; }
+				    static synchronized int bump() { return hits++; }
+				    void twice(Object lock) throws InterruptedException {
+				        synchronized (lock) { synchronized (Cell.class) { held += 2; } lock.wait(); lock.notifyAll(); }
+				    }
+				}
+				class Lazy { static int made; static { System.out.println("made"); } }
+				class T1 {
+				    public static void main(String[] args) throws InterruptedException {
+				        Cell cell = new Cell();
+				        Thread worker = new Thread(() -> cell.add(cell));
+				        worker.start();
+				        worker.join();
+				        cell.twice(cell);
+				        System.out.println(Cell.bump() + cell.held + Lazy.made);
+				    }
+				}
+				""", "T1.java")).contains(
+				"(DEFUN |Cell.add(Cell)| (|this| |other|) (LET ((|%t1| (RONTOLISP::%JAVA-MONITOR-ENTER |this|))) "
+						+ "(UNWIND-PROTECT (PROGN (SETF (|Cell.held| |this|) (- (LOGAND (+ (+ (|Cell.held| |this|) 1) "
+						+ "2147483648) 4294967295) 2147483648)) (LET* ((|%t0| (RONTOLISP:WITH-MUTEX "
+						+ "((RONTOLISP::%JAVA-VOLATILE)) (|Cell.next| |other|)))) (RONTOLISP:WITH-MUTEX "
+						+ "((RONTOLISP::%JAVA-VOLATILE)) (SETF (|Cell.next| |this|) |%t0|)))) "
+						+ "(RONTOLISP::%JAVA-MONITOR-EXIT |%t1|))))",
+				"(DEFUN |Cell.bump()| NIL (LET ((|%t3| (RONTOLISP::%JAVA-MONITOR-ENTER '|Cell|))) (UNWIND-PROTECT "
+						+ "(PROG1 (RONTOLISP:WITH-MUTEX ((RONTOLISP::%JAVA-VOLATILE)) |Cell.hits|) (LET* ((|%t2| (- "
+						+ "(LOGAND (+ (+ (RONTOLISP:WITH-MUTEX ((RONTOLISP::%JAVA-VOLATILE)) |Cell.hits|) 1) "
+						+ "2147483648) 4294967295) 2147483648))) (RONTOLISP:WITH-MUTEX ((RONTOLISP::%JAVA-VOLATILE)) "
+						+ "(SETQ |Cell.hits| |%t2|)))) (RONTOLISP::%JAVA-MONITOR-EXIT |%t3|))))",
+				"(DEFUN |Cell.twice(Object)| (|this| |lock|) (LET ((|%t5| (RONTOLISP::%JAVA-MONITOR-ENTER |lock|))) "
+						+ "(UNWIND-PROTECT (PROGN (LET ((|%t4| (RONTOLISP::%JAVA-MONITOR-ENTER '|Cell|))) "
+						+ "(UNWIND-PROTECT (SETF (|Cell.held| |this|) (- (LOGAND (+ (+ (|Cell.held| |this|) 2) "
+						+ "2147483648) 4294967295) 2147483648)) (RONTOLISP::%JAVA-MONITOR-EXIT |%t4|))) "
+						+ "(|Thread.await(Object,long)| (OR |lock| (RONTOLISP::%JAVA-NPE)) 0) "
+						+ "(|Thread.signal(Object,boolean)| (OR |lock| (RONTOLISP::%JAVA-NPE)) T)) "
+						+ "(RONTOLISP::%JAVA-MONITOR-EXIT |%t5|))))",
+				"(DEFUN |Thread.start()| (|this|) (PROGN (LET ((|%t6| (RONTOLISP::%JAVA-MONITOR-ENTER |this|))) "
+						+ "(UNWIND-PROTECT (PROGN (IF (|Thread.started| |this|) (RONTOLISP::%JAVA-THROW "
+						+ "(|IllegalThreadStateException.new()|) #'|Throwable.toString()|)) (SETF (|Thread.started| "
+						+ "|this|) T) (RONTOLISP:WITH-MUTEX ((RONTOLISP::%JAVA-VOLATILE)) (SETF (|Thread.alive| |this|) "
+						+ "T))) (RONTOLISP::%JAVA-MONITOR-EXIT |%t6|))) (LET ((|%t7| |this|)) "
+						+ "(RONTOLISP::%JAVA-THREAD-START (|Thread.carrier| |this|) (|Thread.daemon| |this|) (LAMBDA "
+						+ "NIL (UNWIND-PROTECT (HANDLER-CASE (|Thread.body(Thread)| |%t7|) (ERROR (|%t8|) "
+						+ "(|Thread.report(Thread,String)| |%t7| (RONTOLISP::%JAVA-THROWN-TEXT |%t8|)))) "
+						+ "(|Thread.finish(Thread)| |%t7|)))))))",
+				"(DEFUN |Lazy.<clinit>| NIL (IF (EQ |Lazy.<clinit>%done| :ENDED) NIL (RONTOLISP:WITH-MUTEX "
+						+ "((RONTOLISP::%JAVA-INITIALIZING)) (IF |Lazy.<clinit>%done| NIL (PROGN (SETQ "
+						+ "|Lazy.<clinit>%done| T) (WRITE-LINE \"made\") (SETQ |Lazy.<clinit>%done| :ENDED))))))",
+				"(RONTOLISP::%JAVA-THREAD-MAIN (LAMBDA NIL (PROGN (SETQ |Cell.hits| 0) (SETQ |Lazy.made| 0) (SETQ "
+						+ "|Thread.MIN_PRIORITY| 1) (SETQ |Thread.NORM_PRIORITY| 5) (SETQ |Thread.MAX_PRIORITY| 10) "
+						+ "(SETQ |Thread.unnamed| 0) (SETQ |Thread.identifiers| 1) (SETQ |Lazy.<clinit>%done| NIL) "
+						+ "(|T1.main(String[])| (VECTOR)))) (LAMBDA (|%t|) (|Thread.finish(Thread)| |%t|)))");
+		// a program that starts no thread and neither waits nor asks cannot tell a
+		// monitor
+		// held from one that is not: synchronized leaves the exception a null has, the
+		// program ends as any other and its classes are initialized under no lock
+		assertThat(lower("""
+				class Lazy { static int made; static { System.out.println("made"); } }
+				class T2 {
+				    int n;
+				    synchronized void add(Object lock, T2 other) {
+				        synchronized (lock) { n++; }
+				        synchronized (T2.class) { n++; }
+				        synchronized (other.self()) { n++; }
+				    }
+				    T2 self() { return this; }
+				    static synchronized void main() { System.out.println(Lazy.made); new T2().add("x", new T2()); }
+				}
+				""", "T2.java")).contains(
+				"(DEFUN |T2.add(Object,T2)| (|this| |lock| |other|) (PROGN (PROGN (OR |lock| (RONTOLISP::%JAVA-NPE)) "
+						+ "(SETF (|T2.n| |this|) (- (LOGAND (+ (+ (|T2.n| |this|) 1) 2147483648) 4294967295) "
+						+ "2147483648))) (SETF (|T2.n| |this|) (- (LOGAND (+ (+ (|T2.n| |this|) 1) 2147483648) "
+						+ "4294967295) 2147483648)) (PROGN (OR (|T2.self()| (OR |other| (RONTOLISP::%JAVA-NPE))) "
+						+ "(RONTOLISP::%JAVA-NPE)) (SETF (|T2.n| |this|) (- (LOGAND (+ (+ (|T2.n| |this|) 1) "
+						+ "2147483648) 4294967295) 2147483648)))))",
+				"(DEFUN |Lazy.<clinit>| NIL (IF |Lazy.<clinit>%done| NIL (PROGN (SETQ |Lazy.<clinit>%done| T) "
+						+ "(WRITE-LINE \"made\"))))",
+				"(HANDLER-CASE (PROGN (SETQ |Lazy.made| 0) (SETQ |Lazy.<clinit>%done| NIL) (|T2.main()|)) (ERROR "
+						+ "(|%c|) (RONTOLISP::%JAVA-UNCAUGHT |%c|)))");
+	}
+
+	@Test
 	void aConstructTheSubsetDoesNotHaveIsRefusedByNameAtItsPosition() {
 		String[][] refusals = { { "record P(int... xs) {}", "1:17: a variable arity record component" },
-				{ "class A { synchronized void m() { } }", "1:11: the modifier synchronized" },
-				{ "class A { volatile int x; }", "1:11: the modifier volatile" },
 				{ "import module java.sql; void main() { }", "1:1: the module java.sql" },
-				{ "void main() { synchronized (this) { } }", "1:15: a synchronized statement" },
 				{ "void main() { assert true; }", "1:15: an assert statement" },
 				{ "void main() { switch (1L) { default -> { } } }", "1:15: a switch over long" },
 				{ "void main() { int k = switch (1) { case 1: yield 1; default: IO.println(); case 2: yield 2; }; }",
@@ -447,6 +539,9 @@ class JavaLoweringTest {
 				{ "class O<T> { class I { T v; } I make(T v) { I i = new I(); i.v = v; return i; } } void main() { O<String> o = new O<>(); String s = o.make(\"x\").v; }",
 						"1:145: a member of an inner class of the parameterized class O read from outside that class" },
 				{ "void main() { Object o = int.class; }", "1:26: a class literal" },
+				{ "class A { transient int x; } void main() { }", "1:11: the modifier transient" },
+				{ "import java.util.concurrent.locks.ReentrantLock; void main() { ReentrantLock l = null; }",
+						"1:64: the class java.util.concurrent.locks.ReentrantLock" },
 				{ "interface I { default void m() { } } class A implements I { public void m() { I.super.m(); } } void main() { }",
 						"1:81: a method of an interface called through super" },
 				{ "class O { class I { } } void main() { O o = new O(); Object x = o.new I() { }; }",
@@ -481,8 +576,14 @@ class JavaLoweringTest {
 				{ "void main() { foo(); }", "1:15: cannot find symbol: method foo()" },
 				{ "void main() { IO.println(y); }", "1:26: cannot find symbol: variable y" },
 				{ "void main() { Foo f = null; }", "1:15: cannot find symbol: class Foo" },
-				{ "class A extends Thread { } void main() { }", "1:17: cannot find symbol: class Thread" },
 				{ "void main() { int x = 1; int x = 2; }", "1:30: variable x is already defined" },
+				{ "class A { synchronized int x; } void main() { }", "1:28: modifier synchronized not allowed here" },
+				{ "class A { volatile void m() { } } void main() { }", "1:25: modifier volatile not allowed here" },
+				{ "interface I { synchronized void m(); } void main() { }",
+						"1:33: modifier synchronized not allowed here" },
+				{ "class A { final volatile int x = 1; } void main() { }",
+						"1:30: illegal combination of modifiers: final and volatile" },
+				{ "void main() { synchronized (1) { } }", "1:29: unexpected type: a reference is required, found int" },
 				{ "void main() { break; }", "1:15: break outside switch or loop" },
 				{ "void main() { a: { continue a; } }", "1:20: not a loop label: a" },
 				{ "void main() { break b; }", "1:15: undefined label: b" },
