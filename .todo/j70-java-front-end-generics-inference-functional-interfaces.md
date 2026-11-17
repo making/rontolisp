@@ -35,3 +35,19 @@ written in Java:
 The errors a Java compiler reports (an incompatible type, an unresolved name, an
 unreachable statement where it matters to a lowering) are reported with a position, in
 the JDK's wording where it has one; the corpus holds programs that must be refused.
+
+## State after j68 (2026-11-17, `.kb/java-frontend.md`)
+
+- The box is decided for what j68 needed: a boxed number is the number, a boxed `char` a Lisp
+  character, a boxed `true` `T`, a boxed `false` `:false`, `null` `NIL`. Left here: a `Long`
+  and an `Integer` box of one number are one value; `==` of two boxes (and of two strings) is
+  refused; unboxing `null` is a Lisp type error but for `Boolean`.
+- Type arguments exist only on the intrinsic `ArrayList`/`List`/`HashMap`/`Map`
+  (`JavaType.Variable`); the diamond takes its arguments from the target type; a raw type, a
+  wildcard, a generic declaration are refused.
+- Overloads: fit without boxing, then with it, then the most specific; no varargs phase.
+- A lambda does not record its interface: the dispatcher tests `functionp` first (kept from
+  the spike, unmeasured), and `instanceof`/a cast to an interface that some lambdas of the
+  program implement and others do not is refused. A lambda's target must be an interface of
+  the program or `Runnable`.
+- Reference casts check (`ClassCastException`); to an intrinsic class only `String` has a test.

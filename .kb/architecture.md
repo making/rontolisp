@@ -28,7 +28,11 @@ run-time helpers are Common Lisp source spliced like any other library
 for `.clj` and `.cljc`, lowered to the same core forms so no backend learns a Clojure name
 (`.kb/clojure-frontend.md`). The fourth is `starlark` -- EXPERIMENTAL, `.star`, the first
 that is no Lisp: its own lexer and parser, then the same lowering to core forms and the
-same kind of spliced run-time library (`.kb/starlark-frontend.md`).
+same kind of spliced run-time library (`.kb/starlark-frontend.md`). The fifth is `java` --
+EXPERIMENTAL, `.java`, a subset of the Java language: its own lexer and parser, static types,
+then the same lowering to core forms and a spliced run-time library; its library classes that
+are plain Java are source in the jar, lowered with the program behind the seam
+(`.kb/java-frontend.md`).
 
 ## Language-independent libraries
 
@@ -71,10 +75,11 @@ cli -> eval, compiler, codegen.*, macro, reader, format, am.ik.wit, am.ik.maven
 codegen.jvm -> compiler, macro, runtime, am.ik.jvm, am.ik.gpu, am.ik.objc
 codegen.wasm -> compiler, macro, am.ik.wasm, am.ik.wit
 compiler -> macro, runtime, rontolisp (AST types only), am.ik.wit
-eval -> macro, compiler, reader, scheme, clojure, starlark, runtime, rontolisp (AST types only), am.ik.gpu, am.ik.objc, am.ik.artifact, am.ik.maven
+eval -> macro, compiler, reader, scheme, clojure, starlark, java, runtime, rontolisp (AST types only), am.ik.gpu, am.ik.objc, am.ik.artifact, am.ik.maven
 scheme -> reader, rontolisp (AST types only)
 clojure -> reader, rontolisp (AST types only)
 starlark -> reader, rontolisp (AST types only)
+java -> reader, rontolisp (AST types only)
 macro -> reader, rontolisp (AST types only)
 reader -> rontolisp (AST types only)
 format -> (nothing)

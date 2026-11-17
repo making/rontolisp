@@ -44,3 +44,11 @@ After j68, which reads one file.
   with j68 and every site reading it is checked here.
 - Annotations are parsed and dropped; say so, and refuse the ones whose absence changes a
   program's meaning.
+
+## State after j68 (2026-11-17, `.kb/java-frontend.md`)
+
+One file. `package` is part of every Lisp name of its classes; single-type, on-demand and
+`import module java.base` imports resolve against the file and the library only; a static
+import is refused. `SourceSession` refuses `JAVA` (no REPL, no playground pick); a ` ```java `
+doc fence is checked by `DocExamplesTest` and rendered as static code.
+`SourceLanguage.isSourceFile` answers true for `.java`; its readers are not checked yet.

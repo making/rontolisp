@@ -220,6 +220,29 @@ class WasmReportLocationsTest {
 		assertThat(interpreterReport(starlark)).isEqualTo(located);
 		assertThat(wasmReport(starlark, "--report-locations=line")).isEqualTo(located);
 		assertThat(wasmReport(starlark, "--report-locations=line", "--component")).isEqualTo(located);
+		Path java = write("App.java", """
+				class Account {
+				    int balance;
+
+				    void withdraw(int amount) {
+				        if (amount > balance) {
+				            throw new IllegalStateException("insufficient funds");
+				        }
+				        balance -= amount;
+				    }
+				}
+
+				public class App {
+				    public static void main(String[] args) {
+				        new Account().withdraw(5);
+				    }
+				}
+				""");
+		List<String> thrown = List.of("Unhandled condition: java.lang.IllegalStateException: insufficient funds",
+				"  at " + java + ":6 in Account.withdraw(int)");
+		assertThat(interpreterReport(java)).isEqualTo(thrown);
+		assertThat(wasmReport(java, "--report-locations=line")).isEqualTo(thrown);
+		assertThat(wasmReport(java, "--report-locations=line", "--component")).isEqualTo(thrown);
 	}
 
 	@Test

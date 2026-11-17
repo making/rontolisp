@@ -36,3 +36,18 @@ take one. Left:
   `%jlisp-error`): fix the mapping in one table.
 - What a non-local exit costs: `try` compiles in EH mode on wasm
   (`.kb/running-backends.md`); measure a loop with a `try` inside it.
+
+## State after j68 (2026-11-17, `.kb/java-frontend.md`)
+
+- The conversion sits at the `catch` (the generated `%lisp-error`: a `division-by-zero` is an
+  `ArithmeticException("/ by zero")`, any other Lisp error a `RuntimeException` of its text),
+  reached only by a clause above those two; a clause below lets the condition pass.
+- A catch parameter per clause, rethrow, `finally` with `return`/`break`/`continue` leaving
+  through it are lowered; a `return`/`break`/`continue` INSIDE a `finally` block, multi-catch and
+  `try`-with-resources are refused.
+- Uncaught: the condition's `:report` calls the program's `Throwable.toString()`, so the line
+  is `Unhandled condition: java.lang.IllegalStateException: msg` plus the location lines.
+  A wasm module reports only in EH mode, so a program holding a `throw` starts inside
+  `(unwind-protect (main) nil)`; wrapping EVERY program cost `Sieve.wasm` 10,380 -> 18,170
+  bytes and no time. A program whose only errors are the run time's is silent on wasm.
+- `ClassCastException` has no message; a `null` receiver of a direct call runs the body.

@@ -347,3 +347,9 @@ sections:
         title: Mixing with Common Lisp
       - file: starlark/deviations.md
         title: Deviations
+  - title: A subset of the Java language (experimental)
+    pages:
+      - file: java/index.md
+        title: Overview
+      - file: java/deviations.md
+        title: Deviations

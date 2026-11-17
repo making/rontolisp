@@ -304,6 +304,8 @@ public final class LispEvaluator {
 
 	private boolean starlarkLibraryLoaded = false;
 
+	private boolean javaLibraryLoaded = false;
+
 	private boolean clojureLibraryLoaded = false;
 
 	/** Whether the Clojure library came from {@link #clojureProgram}, stripped. */
@@ -16954,6 +16956,19 @@ public final class LispEvaluator {
 			if (!this.starlarkLibraryLoaded && StarlarkLibrary.isStarlarkFunction(name)) {
 				this.starlarkLibraryLoaded = true;
 				for (LispVal form : StarlarkLibrary.forms()) {
+					evalResolved(form);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The run-time half of the experimental Java front end (java.lisp) loads the
+			// same way on the first resolution of a rontolisp::%java- helper, which
+			// only a lowered Java program names.
+			if (!this.javaLibraryLoaded && JavaLibrary.isJavaFunction(name)) {
+				this.javaLibraryLoaded = true;
+				for (LispVal form : JavaLibrary.forms()) {
 					evalResolved(form);
 				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);

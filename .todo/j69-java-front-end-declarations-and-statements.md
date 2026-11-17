@@ -38,3 +38,16 @@ The first slice refuses these by name; each is a lowering over forms that alread
   conditional operator's typing table, the remaining compound operators.
 
 Each lands with its `java-spec.yaml` cases, expectations from the JDK, on four backends.
+
+## State after j68 (2026-11-17, `.kb/java-frontend.md`)
+
+- Every construct above is refused by name with its position (`JavaLoweringTest`'s table), but:
+  `do`/`while` with `continue`, a `for` with several declarators and a comma update, nested
+  array initializers and `new int[n][]`, octal and binary literals and every `char` escape
+  are lowered already.
+- Static initialization is EAGER, class by class in table order, before `main`. To stay
+  right, an initializer that runs program code (`static Foo F = new Foo()`) or reads a
+  non-constant static of another class or below it is refused. Lifting that refusal is the
+  order decision of this item; constant variables are inlined already.
+- Not checked: definite assignment (a local with no initializer gets its type's default),
+  unreachable code, a missing `return`, access modifiers, `final`.

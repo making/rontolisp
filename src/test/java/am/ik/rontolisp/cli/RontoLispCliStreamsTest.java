@@ -811,6 +811,47 @@ class RontoLispCliStreamsTest {
 	}
 
 	@Test
+	void aJavaFileRunsCompilesAndIsRefusedWhereItCannot() throws Exception {
+		Path program = this.tempDir.resolve("Hello.java");
+		Files.writeString(program, """
+				public class Hello {
+				    static String greet(String name) {
+				        return "hello, " + name;
+				    }
+
+				    public static void main(String[] args) {
+				        System.out.println(greet("java"));
+				    }
+				}
+				""");
+		assertThat(runReporting(program.toString())).containsExactly("0", "hello, java\n", "");
+		Path compiled = this.tempDir.resolve("HelloJava.class");
+		assertThat(runReporting(program.toString(), "-o", compiled.toString())[0]).isEqualTo("0");
+		assertThat(compiled).exists();
+		// --source-language reads any other source as Java: here a compact source file
+		assertThat(runReporting("-e", "void main() { IO.println(1 + 2); }", "--source-language", "java")[1])
+			.isEqualTo("3\n");
+		// a construct the subset does not have is refused by name before anything runs,
+		// at its position, on the interpreter and the compile path alike
+		Path broken = this.tempDir.resolve("Broken.java");
+		Files.writeString(broken, "void main() {\n    IO.println(\"never\");\n    switch (1) { default: }\n}\n");
+		String expected = "error: " + broken + ":3:5: a switch is not supported by the experimental Java subset yet";
+		String[] refused = runReporting(broken.toString());
+		assertThat(refused[1]).isEmpty();
+		assertThat(refused[2].trim()).isEqualTo(expected);
+		assertThat(runReporting(broken.toString(), "-o", this.tempDir.resolve("Broken.class").toString())[2].trim())
+			.isEqualTo(expected);
+		// a program is a whole file: no prompt
+		assertThat(runReporting("--source-language", "java")[2]).contains("--source-language java has no prompt yet");
+		// the scalar backend has none of its values
+		assertThat(runReporting(program.toString(), "-o", this.tempDir.resolve("scalar.wasm").toString(), "--no-gc")[2]
+			.trim())
+			.isEqualTo("error: Cannot compile: a Java program needs the GC backend -- --no-gc has no structure,"
+					+ " no string and no closure (drop --no-gc)");
+		assertThat(runCli("", "-h")).contains("java", "EXPERIMENTAL subset of the Java language");
+	}
+
+	@Test
 	void anUncaughtSchemeErrorReportsItsMessageAndIrritants() throws Exception {
 		// The message is built under a rebound *standard-output*, inside a helper the
 		// interpreter loads lazily: loaded without registering its special bindings,

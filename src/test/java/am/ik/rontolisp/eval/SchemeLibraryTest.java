@@ -99,6 +99,10 @@ class SchemeLibraryTest {
 				eval.invoke(evaluator, form);
 			}
 			assertThat(loader.libraries()).containsExactlyInAnyOrder("scheme.lisp", "starlark.lisp");
+			for (Object form : (List<?>) readAll.invoke(null, "#'rontolisp::%java-throw")) {
+				eval.invoke(evaluator, form);
+			}
+			assertThat(loader.libraries()).containsExactlyInAnyOrder("scheme.lisp", "starlark.lisp", "java.lisp");
 		}
 	}
 
@@ -109,7 +113,7 @@ class SchemeLibraryTest {
 	private static final class ResourceRecordingLoader extends URLClassLoader {
 
 		private static final Set<String> LIBRARIES = Set.of("scheme.lisp", "clojure.lisp", "clojure-unicode.lisp",
-				"starlark.lisp");
+				"starlark.lisp", "java.lisp");
 
 		private final Set<String> read = ConcurrentHashMap.newKeySet();
 

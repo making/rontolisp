@@ -8,7 +8,7 @@
   and it reaches a `@TestFactory`'s dynamic tests too): today
   `WasmLispCompilerIntegrationTest`, `RoveTestCommandE2eTest`, every subclass of
   `AsdfLibraryE2eSupport` (Ironclad, Jose, Rove, Sxql, ...), `ClPostgresE2eTest`,
-  `SchemeSpecE2eTest`, `StarlarkSpecE2eTest`, `UnclosedOutputFileE2eTest`, `eval.LinalgGpuDeclineTest` (its
+  `SchemeSpecE2eTest`, `StarlarkSpecE2eTest`, `JavaSpecE2eTest`, `UnclosedOutputFileE2eTest`, `eval.LinalgGpuDeclineTest` (its
   flag-on runs take a lock when a device answered the probe: `DeviceResidency` is not
   thread-safe), `WasmLispCompilerTest`, `cli/RontoLispCliTest`, `WasmTreeShakerCorpusTest`,
   `JvmDeadMethodEliminationCorpusTest` ("Concurrent methods" below) and the in-process JVM-backend

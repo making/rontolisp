@@ -101,6 +101,29 @@ class SourceLanguageTest {
 	}
 
 	@Test
+	void javaClaimsItsExtension() {
+		assertThat(SourceLanguage.forFile("Hello.java", null)).isEqualTo(SourceLanguage.JAVA);
+		assertThat(SourceLanguage.forFile("hello.txt", "java")).isEqualTo(SourceLanguage.JAVA);
+		assertThat(SourceLanguage.forFile("Hello.java", "common-lisp")).isEqualTo(SourceLanguage.COMMON_LISP);
+		assertThat(SourceLanguage.isSourceFile("Hello.java")).isTrue();
+		assertThat(SourceLanguage.JAVA.defaultExtension()).isEqualTo(".java");
+		// The seam's read is the whole front end: read, type and lower to core forms. It
+		// has no #., so the strict read is the same one.
+		String program = "void main() { IO.println(\"#.\"); }\n";
+		assertThat(SourceLanguage.JAVA.read(program, Features.INTERPRETER, null))
+			.isEqualTo(SourceLanguage.JAVA.readStrict(program, Features.INTERPRETER))
+			.extracting(LispVal::print)
+			.containsExactly(
+					"(DEFSTRUCT (|Main| (:CONC-NAME |Main.|) (:CONSTRUCTOR |%make-Main| NIL) (:PREDICATE |Main?|)"
+							+ " (:COPIER NIL)))",
+					"(DEFUN |Main.main()| (|this|) (WRITE-LINE \"#.\"))", "(DEFUN |Main.new()| NIL (|%make-Main|))",
+					"(|Main.main()| (|Main.new()|))");
+		// A program is a whole file: there is no prompt to read a buffer at.
+		assertThatThrownBy(() -> new SourceSession(SourceLanguage.JAVA)).isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--source-language java has no prompt yet");
+	}
+
+	@Test
 	void theOverrideNamesTheEntryLanguage() {
 		assertThat(SourceLanguage.forFile("hello.lisp", "common-lisp")).isEqualTo(SourceLanguage.COMMON_LISP);
 		assertThat(SourceLanguage.forFile("hello.lisp", "cl")).isEqualTo(SourceLanguage.COMMON_LISP);

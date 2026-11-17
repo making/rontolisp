@@ -100,6 +100,11 @@ public final class SourceSession {
 	 * @param loader where named files are read from, or {@code null} for none
 	 */
 	public SourceSession(SourceLanguage language, SourceStandards standards, @Nullable SourceLoader loader) {
+		if (language == SourceLanguage.JAVA) {
+			// a program is a whole file: its class table decides every call
+			throw new IllegalArgumentException(
+					"--source-language java has no prompt yet: give it a file, or a" + " whole program with -e");
+		}
 		this.language = language;
 		this.scheme = language == SourceLanguage.SCHEME
 				? Scheme.session(standards.scheme(), SourceLanguage.schemeFiles(loader)) : null;

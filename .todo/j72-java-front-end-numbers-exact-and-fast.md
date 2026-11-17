@@ -44,3 +44,12 @@ After j68. Measured by the spike (`.todo/artefacts/j68-java-front-end-spike/`, `
   per-class method table against the `cond` before choosing.
 
 Each number above is rewritten in `.kb/java-frontend.md` with its date when it moves.
+
+## State after j68 (2026-11-17, `.kb/java-frontend.md`, "Measured")
+
+The front end's lowering measures as the spike's on Linux x86-64 (`Fib` 0.19 / 0.18 s, `WrapInt`
+0.21 / 0.11, `Sieve` 1.22 / 0.61, `WrapLong` 3.46 / 7.46). Already exact: `(int)`/`(long)` of a
+double (toward zero, the type's ends, `%java-double-to-int`), a double division by zero and
+`0.0 / 0.0` (the host's own `Infinity`/`NaN`, four backends), `Math.sqrt` of a negative,
+`Integer.MIN_VALUE / -1`, shift counts, `Double`'s text. `float`, `byte`, `short` are refused.
+`long[]`, `char[]`, `boolean[]` are untyped vectors.

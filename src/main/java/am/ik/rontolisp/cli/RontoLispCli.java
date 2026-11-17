@@ -2085,8 +2085,11 @@ public final class RontoLispCli {
 		this.out.println("                     a small subset lowered to the same core forms, no subset");
 		this.out.println("                     or compatibility promise yet. starlark (.star) is");
 		this.out.println("                     EXPERIMENTAL: partial conformance and no compatibility");
-		this.out.println("                     promise; at its prompt a blank line ends a block. None");
-		this.out.println("                     of the three with --no-gc.");
+		this.out.println("                     promise; at its prompt a blank line ends a block. java");
+		this.out.println("                     (.java) is an EXPERIMENTAL subset of the Java language:");
+		this.out.println("                     one file, what it does not have yet refused by name, no");
+		this.out.println("                     compatibility promise and no prompt. None of the four");
+		this.out.println("                     with --no-gc.");
 		this.out.println("  --scheme-standard NAME");
 		this.out.println("                     What every Scheme file of the program is read against:");
 		this.out.println("                     the entry file, a (load ...)ed one and the REPL.");

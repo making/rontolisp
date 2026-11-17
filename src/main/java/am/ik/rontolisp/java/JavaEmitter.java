@@ -1,0 +1,72 @@
+package am.ik.rontolisp.java;
+
+import java.util.List;
+
+import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.reader.LispReadException;
+import org.jspecify.annotations.Nullable;
+
+/**
+ * What a call of an intrinsic member of the library lowers to: the member's own form over
+ * the forms of its receiver and arguments.
+ */
+@FunctionalInterface
+interface JavaEmitter {
+
+	/**
+	 * A lowered expression.
+	 *
+	 * @param form its form
+	 * @param type its static type
+	 * @param constant its value when it is a constant expression: an {@code Integer}, a
+	 * {@code Long}, a {@code Double}, a {@code Boolean}, a {@code Character} or a
+	 * {@code String}
+	 */
+	record Typed(LispVal form, JavaType type, @Nullable Object constant) {
+
+		Typed(LispVal form, JavaType type) {
+			this(form, type, null);
+		}
+
+	}
+
+	/**
+	 * A call of an intrinsic member.
+	 *
+	 * @param receiver what it is called on, or {@code null} for a static member or a
+	 * constructor
+	 * @param arguments the arguments: each form converted to its parameter's type, each
+	 * type the argument's own
+	 * @param discard whether the call's value is not used
+	 * @param pos the call's position
+	 */
+	record Invocation(@Nullable Typed receiver, List<Typed> arguments, boolean discard, int pos) {
+
+		LispVal self() {
+			return java.util.Objects.requireNonNull(this.receiver).form();
+		}
+
+		LispVal argument(int index) {
+			return this.arguments.get(index).form();
+		}
+
+	}
+
+	/** What a member asks of the lowering it is called from. */
+	interface Context {
+
+		/** A value as text, as string concatenation makes it. */
+		LispVal stringOf(Typed value, int pos);
+
+		/**
+		 * A call of one of {@code Object}'s methods no class of the receiver declares.
+		 */
+		LispVal objectMethod(String signature, Typed receiver, Invocation call);
+
+		LispReadException unsupported(int pos, String what);
+
+	}
+
+	LispVal emit(Context context, Invocation invocation);
+
+}

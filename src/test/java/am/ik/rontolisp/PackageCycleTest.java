@@ -94,6 +94,10 @@ class PackageCycleTest {
 		assertThat(graph.getOrDefault("am.ik.rontolisp.starlark", Set.of())).containsOnly("am.ik.rontolisp",
 				"am.ik.rontolisp.reader");
 		assertThat(graph.getOrDefault("am.ik.rontolisp.eval", Set.of())).contains("am.ik.rontolisp.starlark");
+		// And the Java one.
+		assertThat(graph.getOrDefault("am.ik.rontolisp.java", Set.of())).containsOnly("am.ik.rontolisp",
+				"am.ik.rontolisp.reader");
+		assertThat(graph.getOrDefault("am.ik.rontolisp.eval", Set.of())).contains("am.ik.rontolisp.java");
 	}
 
 	/**
@@ -104,24 +108,29 @@ class PackageCycleTest {
 	 * package boundary, and when a listed hub no longer sits in any cycle (a stale
 	 * exemption -- delete it).
 	 */
-	private static final Map<String, String> DESIGNED_MUTUAL_RECURSIONS = Map.of("am.ik.rontolisp.LispVal",
-			"the sealed value model: LispVal permits its implementations, and the symbol/package registries deal in the values that name them",
-			"am.ik.gpu.GpuDevice",
-			"sealed dispatch seam: GpuDevice permits the device implementations Gpu selects among",
-			"am.ik.wasm.WasmWriter",
-			"counted-section DSL: the writer serializes the section defs, and a def collects its entries through nested writers",
-			"am.ik.rontolisp.reader.LispReader",
-			"the reader re-enters itself: feature widening re-reads the source (FeaturePushes) and #. datum validation re-parses (LispLexer)",
-			"am.ik.rontolisp.eval.LispEvaluator",
-			"installed builtins (linalg, ironclad, user macros) call back into the evaluator that installed them",
-			"am.ik.rontolisp.codegen.jvm.JvmExprCompiler",
-			"recursive-descent dispatch: a per-form compiler compiles its subexpressions through the dispatcher",
-			"am.ik.rontolisp.codegen.wasm.WasmExprCompiler", "recursive-descent dispatch, same shape as codegen.jvm",
-			"am.ik.rontolisp.compiler.JavaType",
-			"the java: type model: a type answers its members and a member its declaring and parameter types, the cycle java.lang.Class and java.lang.reflect.Method form",
-			"am.ik.rontolisp.clojure.ClojureLowering",
-			"recursive-descent lowering: the per-form helpers lower their subforms through the hub dispatcher",
-			"am.ik.rontolisp.scheme.SchemeLowering", "recursive-descent lowering, same shape as the clojure front end");
+	private static final Map<String, String> DESIGNED_MUTUAL_RECURSIONS = Map.ofEntries(Map.entry(
+			"am.ik.rontolisp.LispVal",
+			"the sealed value model: LispVal permits its implementations, and the symbol/package registries deal in the values that name them"),
+			Map.entry("am.ik.gpu.GpuDevice",
+					"sealed dispatch seam: GpuDevice permits the device implementations Gpu selects among"),
+			Map.entry("am.ik.wasm.WasmWriter",
+					"counted-section DSL: the writer serializes the section defs, and a def collects its entries through nested writers"),
+			Map.entry("am.ik.rontolisp.reader.LispReader",
+					"the reader re-enters itself: feature widening re-reads the source (FeaturePushes) and #. datum validation re-parses (LispLexer)"),
+			Map.entry("am.ik.rontolisp.eval.LispEvaluator",
+					"installed builtins (linalg, ironclad, user macros) call back into the evaluator that installed them"),
+			Map.entry("am.ik.rontolisp.codegen.jvm.JvmExprCompiler",
+					"recursive-descent dispatch: a per-form compiler compiles its subexpressions through the dispatcher"),
+			Map.entry("am.ik.rontolisp.codegen.wasm.WasmExprCompiler",
+					"recursive-descent dispatch, same shape as codegen.jvm"),
+			Map.entry("am.ik.rontolisp.compiler.JavaType",
+					"the java: type model: a type answers its members and a member its declaring and parameter types, the cycle java.lang.Class and java.lang.reflect.Method form"),
+			Map.entry("am.ik.rontolisp.clojure.ClojureLowering",
+					"recursive-descent lowering: the per-form helpers lower their subforms through the hub dispatcher"),
+			Map.entry("am.ik.rontolisp.scheme.SchemeLowering",
+					"recursive-descent lowering, same shape as the clojure front end"),
+			Map.entry("am.ik.rontolisp.java.JavaType",
+					"the Java subset's type model: a class type names its class, whose members name their types and, for a library class, the emitter typed over them"));
 
 	@Test
 	void classCyclesAreOnlyTheDesignedMutualRecursions() throws IOException {

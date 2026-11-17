@@ -102,6 +102,8 @@ public final class LibraryDefunPruner {
 
 	@Nullable private static volatile Set<String> starlarkDefinitionNames;
 
+	@Nullable private static volatile Set<String> javaDefinitionNames;
+
 	private LibraryDefunPruner() {
 	}
 
@@ -1326,7 +1328,7 @@ public final class LibraryDefunPruner {
 
 	/**
 	 * Whether the name is a definition of a prunable bundled library: one of
-	 * {@link #prunableNames()}, or of the Scheme, Clojure or Starlark front end's
+	 * {@link #prunableNames()}, or of the Scheme, Clojure, Starlark or Java front end's
 	 * run-time library. Those are asked only for a name that can be theirs
 	 * ({@code mayDefine}), so a program of none of the languages never reads them: the
 	 * read of the first two was 0.33 s of a 0.9 s compile
@@ -1340,6 +1342,7 @@ public final class LibraryDefunPruner {
 				|| SchemeLibrary.mayDefine(name) && schemeDefinitionNames().contains(name)
 				|| ClojureLibrary.mayDefine(name) && clojureDefinitionNames().contains(name)
 				|| StarlarkLibrary.mayDefine(name) && starlarkDefinitionNames().contains(name)
+				|| JavaLibrary.mayDefine(name) && javaDefinitionNames().contains(name)
 				|| ClojureLowering.isCoreMacroDefinition(name);
 	}
 
@@ -1368,6 +1371,15 @@ public final class LibraryDefunPruner {
 		if (cached == null) {
 			cached = definitionNames(ClojureLibrary.forms(), ClojureLibrary::mayDefine, "clojure.lisp");
 			clojureDefinitionNames = cached;
+		}
+		return cached;
+	}
+
+	private static Set<String> javaDefinitionNames() {
+		Set<String> cached = javaDefinitionNames;
+		if (cached == null) {
+			cached = definitionNames(JavaLibrary.forms(), JavaLibrary::mayDefine, "java.lisp");
+			javaDefinitionNames = cached;
 		}
 		return cached;
 	}

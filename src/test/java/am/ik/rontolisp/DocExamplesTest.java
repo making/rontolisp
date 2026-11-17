@@ -68,6 +68,10 @@ import static org.assertj.core.api.Assertions.fail;
  * compared with what that REPL echoes for its form: the language's {@code write} text,
  * nothing for a definition or an effect, several values joined by {@code ", "}. An
  * {@code exit} ends the block's program, keeping what it printed.</li>
+ * <li>A <code>```java</code> block on a page under <code>java/</code> is a WHOLE program
+ * for the experimental subset of the Java language -- a compact source file, or classes
+ * the first of which has the <code>main</code> --, its standard output asserted by the
+ * plain block after it. Anywhere else it is host code and is not run.</li>
  * <li>A <code>```starlark</code> block is a WHOLE program for the experimental Starlark
  * front end, on a fresh evaluator: it must run, and a plain block right after it is its
  * asserted standard output, and no annotation. On the site it is a Run cell running the
@@ -223,14 +227,31 @@ class DocExamplesTest {
 				```
 				42 ; => is no annotation here
 				```
+
+				```java
+				int twice(int x) {
+				    return x * 2;
+				}
+
+				void main() {
+				    IO.println(twice(21) + " ; => is no annotation here either");
+				}
+				```
+
+				```
+				42 ; => is no annotation here either
+				```
 				""";
-		checkMarkdown(right, "right.md");
+		checkMarkdown(right, "java/right.md");
 		assertThatThrownBy(() -> checkMarkdown(right.replace("=> 42", "=> 43"), "wrong.md"))
 			.isInstanceOf(AssertionError.class)
 			.hasMessageContaining("43");
 		assertThatThrownBy(() -> checkMarkdown(right.replace("42 ;", "43 ;"), "wrong.md"))
 			.isInstanceOf(AssertionError.class)
 			.hasMessageContaining("43 ;");
+		assertThatThrownBy(() -> checkMarkdown(right.replace("either\n```\n", "neither\n```\n"), "java/wrong.md"))
+			.isInstanceOf(AssertionError.class)
+			.hasMessageContaining("neither");
 	}
 
 	/**
@@ -276,14 +297,16 @@ class DocExamplesTest {
 			}
 			String blockStdin = stdin;
 			stdin = "";
-			if (block.isScheme() || block.isClojure() || block.isStarlark()) {
-				SourceLanguage language = block.isScheme() ? SourceLanguage.SCHEME
-						: block.isClojure() ? SourceLanguage.CLOJURE : SourceLanguage.STARLARK;
-				if (!block.isStarlark() && noteFile(block.content(), files)) {
+			boolean java = block.isJava() && isJavaSubsetPage(markdown);
+			if (block.isScheme() || block.isClojure() || block.isStarlark() || java) {
+				SourceLanguage language = block.isScheme() ? SourceLanguage.SCHEME : block.isClojure()
+						? SourceLanguage.CLOJURE : block.isStarlark() ? SourceLanguage.STARLARK : SourceLanguage.JAVA;
+				boolean program = block.isStarlark() || java;
+				if (!program && noteFile(block.content(), files)) {
 					continue;
 				}
 				String actual;
-				if (!block.isStarlark() && block.content().contains(ARROW)) {
+				if (!program && block.content().contains(ARROW)) {
 					SchemeRun run = runSession(language, block.content(), blockStdin, markdown, files);
 					for (int f = 0; f < run.forms().size(); f++) {
 						String source = String.join("\n", run.forms().get(f));
@@ -348,6 +371,12 @@ class DocExamplesTest {
 			return fail("%s example in %s failed to evaluate:%n%s%n-> %s".formatted(language.name().toLowerCase(), page,
 					source, ex), ex);
 		}
+	}
+
+	// A java block is a program of the subset only on the subset's own pages: anywhere
+	// else it is host code for the JVM backend's interop, which nothing here runs.
+	private static boolean isJavaSubsetPage(String page) {
+		return ("/" + page.replace('\\', '/')).contains("/java/");
 	}
 
 	private static final Pattern FILE_BLOCK = Pattern.compile("\\A;+ file: (\\S+)");
@@ -564,9 +593,9 @@ class DocExamplesTest {
 						pendingStdout = runProgram(language, rewriteFetchUrls(source), stdin, page.toString(), files);
 					}
 				}
-				else if (info.equals("starlark")) {
-					pendingStdout = runProgram(SourceLanguage.STARLARK, String.join("\n", content), stdin,
-							page.toString(), files);
+				else if (info.equals("starlark") || (info.equals("java") && isJavaSubsetPage(page.toString()))) {
+					pendingStdout = runProgram(info.equals("java") ? SourceLanguage.JAVA : SourceLanguage.STARLARK,
+							String.join("\n", content), stdin, page.toString(), files);
 				}
 				else if (isOutputInfo(info) && pendingStdout != null) {
 					content = pendingStdout.isEmpty() ? List.of()
@@ -725,6 +754,10 @@ class DocExamplesTest {
 
 		boolean isStarlark() {
 			return this.info.equals("starlark");
+		}
+
+		boolean isJava() {
+			return this.info.equals("java");
 		}
 
 		boolean isStdin() {

@@ -69,6 +69,11 @@ playground's WebAssembly runtime, so `lisp` and `scheme` examples run in-page.
   doing the same (`rontoRunProgram`; the stdin block rule as scheme). No annotation: its
   comment is `#`, and `docs.js` never takes it to `rontoRunSession`. Only a fence at column
   0 is checked, and an indented one would not parse anyway.
+- ` ```java ` ON A PAGE UNDER `java/` = a whole program in the experimental subset of the Java
+  language (a compact source file, or classes the first of which has the `main`), stdout
+  asserted by a following plain block (`DocExamplesTest`, through `PlaygroundRepl.run`). On
+  any other page it is host code for the JVM backend's interop and is not run. Never a Run
+  cell: docgen renders it as static code until the playground has the pick (`.todo/j74`).
 - ` ```console ` = static transcript or anything needing stdin/files/network or that signals
   (`read`, `open`, `load`, `with-open-file`, `error`, `rontolisp:fetch`); not executed.
   ` ```bash ` = shell. Plain ` ``` ` = expected output.

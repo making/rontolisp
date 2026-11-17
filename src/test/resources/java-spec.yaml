@@ -1,0 +1,1458 @@
+# The corpus of the EXPERIMENTAL front end for a subset of the Java language
+# (JavaSpecE2eTest): one case per decision of the lowering in .kb/java-frontend.md.
+# Written here; nothing is copied or translated from a JDK or its tests
+# (.kb/java-frontend-provenance.md).
+#
+# The cases are concatenated into ONE program per backend, behind `imports` and a class
+# whose main calls each case's `main` class in order, and the output is sliced back per
+# case -- the ci-spec.yaml idea. So every class of a case carries the case's name. A
+# `standalone` case is a file of its own, named `file`: one that starts another way, or
+# one that ENDS with an uncaught exception -- it prints `stdout`, then reports `error`.
+#
+# Every expectation is what a JDK 25 prints, and the test runs the corpus under the JDK
+# running it as its first leg: an expectation that is not the JDK's fails there. Every
+# case must print the same on the interpreter, the JVM, wasm and the component.
+imports: |
+  import java.util.ArrayList;
+  import java.util.HashMap;
+  import java.util.List;
+  import java.util.Map;
+cases:
+  # An int is an integer kept in range by an unconditional mask; a constant expression
+  # is folded as the language computes it.
+  - name: an-int-wraps-as-two-s-complement
+    main: IntWraps
+    source: |
+      class IntWraps {
+          static int hash(String s) {
+              int h = 0;
+              for (int i = 0; i < s.length(); i++) {
+                  h = 31 * h + s.charAt(i);
+              }
+              return h;
+          }
+
+          public static void main(String[] args) {
+              int max = Integer.MAX_VALUE, min = Integer.MIN_VALUE, a = 7, b = -3;
+              System.out.println((max + 1) + " " + (min - 1) + " " + (max * 2) + " " + (min / -1) + " " + -min + " " + Math.abs(min));
+              System.out.println(a / b + " " + a % b + " " + -a / 2 + " " + -a % 2 + " " + hash("The quick brown fox jumps over the lazy dog"));
+              System.out.println((a << 30) + " " + (1 << 31) + " " + (1 << 32) + " " + (b >> 1) + " " + (b >>> 28) + " " + (b >>> 32) + " " + (a << b));
+              System.out.println((a & b) + " " + (a | b) + " " + (a ^ b) + " " + ~a + " " + ~b + " " + +a + " " + -(-a));
+              System.out.println(0x7fffffff + " " + 0xffffffff + " " + 0x80000000 + " " + 0b1010 + " " + 017 + " " + 1_000_000 + " " + -2147483648 + " " + (2147483647 + 1));
+              int i = 5;
+              i += 3.7;
+              i -= 1;
+              i *= 2;
+              i /= 3;
+              i %= 4;
+              i <<= 3;
+              i >>= 1;
+              i >>>= 1;
+              i ^= 5;
+              i |= 16;
+              i &= 0x1F;
+              System.out.println(i + " " + (i++ + ++i) + " " + i-- + " " + --i + " " + i);
+          }
+      }
+    expected: |
+      -2147483648 2147483647 -2 -2147483648 -2147483648 -2147483648
+      -2 1 -3 -1 -609428141
+      -1073741824 -2147483648 1 -2 15 -3 -536870912
+      5 -1 -6 -8 2 7 7
+      2147483647 -1 -2147483648 10 15 1000000 -2147483648 -2147483648
+      21 44 23 21 21
+  # The same mask at 64 bits; an int operand is widened, never the result narrowed.
+  - name: a-long-wraps-at-64-bits
+    main: LongWraps
+    source: |
+      class LongWraps {
+          static long fact(int n) {
+              return n <= 1 ? 1 : n * fact(n - 1);
+          }
+
+          public static void main(String[] args) {
+              long big = 1L << 62, seed = 42;
+              int i = 3;
+              System.out.println(big * 4 + " " + (big + big) + " " + Long.MAX_VALUE + " " + (Long.MIN_VALUE - 1) + " " + (Long.MAX_VALUE + i));
+              System.out.println(fact(20) + " " + fact(21) + " " + (1L << 40) * 3 + " " + (int) (1L << 40) + " " + (int) 0x1FFFFFFFFL + " " + 0xFFFFFFFFFFL);
+              seed = seed * 6364136223846793005L + 1442695040888963407L;
+              System.out.println(seed + " " + (seed >> 60) + " " + (seed >>> 60) + " " + (seed << 4) + " " + (i << 33) + " " + (1L << 33) + " " + ~seed);
+              System.out.println(seed / 7 + " " + seed % 7 + " " + (seed & 0xFF) + " " + (seed ^ -1L) + " " + Math.abs(-9L) + " " + Math.max(3, 7L) + " " + Math.min(i, -7L));
+          }
+      }
+    expected: |
+      0 -9223372036854775808 9223372036854775807 9223372036854775807 -9223372036854775806
+      2432902008176640000 -4249290049419214848 3298534883328 0 -1 1099511627775
+      -7964744663189004623 -7 9 1691293904942787344 6 8589934592 7964744663189004622
+      -1137820666169857803 -2 177 7964744663189004622 9 7 -7
+  # The host's printer has the JDK's digits and layout; a cast to int goes toward zero
+  # and stops at the type's ends; a division by zero is an infinity.
+  - name: a-double-prints-as-the-shortest-text-that-reads-back
+    main: Doubles
+    source: |
+      class Doubles {
+          static double average(int[] xs) {
+              double sum = 0;
+              for (int x : xs) sum += x;
+              return sum / xs.length;
+          }
+
+          public static void main(String[] args) {
+              double d = 10 / 4 + 10 / 4.0, zero = 0;
+              int n = 7;
+              System.out.println(d + " " + 7.0 / 2 + " " + n / 2 + " " + n / 2.0 + " " + (0.1 + 0.2) + " " + 1.0 / 3 + " " + average(new int[] {3, 1, 4, 1}));
+              System.out.println(1e10 + " " + 100.0 + " " + 0.001 + " " + 1.0E-5 + " " + 1e7 + " " + 9999999.0 + " " + 123456789.125 + " " + 1e23 + " " + .5 + " " + 5. + " " + 1.5e-7 + " " + -0.0 + " " + 4.9e-324);
+              System.out.println((int) 3.99 + " " + (int) -3.99 + " " + (int) 1e20 + " " + (int) -1e20 + " " + (long) 1e30 + " " + (long) -2.5 + " " + (char) 97.9 + " " + (double) n + " " + (double) (1L << 53));
+              System.out.println(Math.sqrt(2) + " " + Math.sqrt(-1) + " " + Math.pow(2, 10) + " " + Math.floor(-2.5) + " " + Math.abs(-2.5) + " " + Math.max(1.5, n) + " " + Math.min(1.5, n) + " " + Math.PI);
+              System.out.println(1 / zero + " " + -1 / zero + " " + zero / zero + " " + 5.5 % 2 + " " + -5.5 % 2 + " " + (d > n) + " " + (n == 7.0) + " " + (d != d));
+              d += 1;
+              d *= 2;
+              d -= n;
+              d /= 4;
+              d++;
+              System.out.println(d + " " + -d + " " + (d < 0 ? -d : d));
+          }
+      }
+    expected: |
+      4.5 3.5 3 3.5 0.30000000000000004 0.3333333333333333 2.25
+      1.0E10 100.0 0.001 1.0E-5 1.0E7 9999999.0 1.23456789125E8 1.0E23 0.5 5.0 1.5E-7 -0.0 4.9E-324
+      3 -3 2147483647 -2147483648 9223372036854775807 -2 a 7.0 9.007199254740992E15
+      1.4142135623730951 NaN 1024.0 -3.0 2.5 7.0 1.5 3.141592653589793
+      Infinity -Infinity NaN 1.5 -1.5 false true false
+      2.0 -2.0 2.0
+  # A char is an integer whose static type prints it; arithmetic promotes it to int, and
+  # an int constant that fits is a char.
+  - name: a-char-is-a-number-printed-as-a-character
+    main: Chars
+    source: |
+      class Chars {
+          static final char FIRST = 'a';
+          static final char NEXT = FIRST + 1;
+
+          public static void main(String[] args) {
+              char c = 'x', sixtyFive = 65, tab = '\t', quote = '\'', e = 'é';
+              c++;
+              c += 1;
+              System.out.println(c + " " + (c + 1) + " " + (char) (c + 1) + " " + 'a' + 'b' + " " + (char) ('a' + 1) + " " + (int) c + " " + sixtyFive + NEXT);
+              System.out.println((c > 'b') + " " + (c == 'z') + " " + (c - 'a') + " " + (char) (c - 25) + " " + (c > 100 ? 'y' : 'n') + " " + (c > 200 ? 1 : 'q') + "|" + tab + "|" + quote + e + '\101' + '\\');
+              String word = "Zebra";
+              int upper = 0;
+              for (int i = 0; i < word.length(); i++) {
+                  char at = word.charAt(i);
+                  if (at >= 'A' && at <= 'Z') upper++;
+              }
+              char[] letters = {'o', 'k'};
+              letters[0] -= 32;
+              System.out.println(upper + " " + letters[0] + letters[1] + " " + letters.length + " " + (letters[0] + letters[1]) + " " + (char) 0x263A + " " + (int) (char) -1 + " " + (int) (char) 65536L);
+          }
+      }
+    expected: |
+      z 123 { ab b 122 Ab
+      true true 25 a y q|	|'éA\
+      1 Ok 2 186 ☺ 65535 0
+  # && and || are and/or; & | ^ run both operands.
+  - name: a-boolean-operator-short-circuits-or-evaluates-both
+    main: Booleans
+    source: |
+      class Booleans {
+          static int calls = 0;
+
+          static boolean yes() {
+              calls++;
+              return true;
+          }
+
+          public static void main(String[] args) {
+              boolean t = true, f = false;
+              System.out.println((t & f) + " " + (t | f) + " " + (t ^ f) + " " + (t ^ t) + " " + !t + " " + (t == f) + " " + (t != f));
+              System.out.println((f || yes()) + " " + (f && yes()) + " " + (f & yes()) + " " + (t | yes()) + " " + (t ^ yes()) + " " + calls);
+              boolean b = t;
+              b &= f;
+              b |= yes();
+              b ^= t;
+              int n = 5;
+              boolean big = n > 3 && !(n < 2) || n == 0;
+              System.out.println(b + " " + big + " " + (big ? "yes" : "no") + " " + (n > 3 == big) + " " + calls);
+          }
+      }
+    expected: |
+      false true true false false false true
+      true false false true false 4
+      false true yes true 5
+  # Each operand's text is made by its static type; the host's string is immutable and
+  # its elements are code points.
+  - name: a-string-concatenation-converts-by-static-type
+    main: Strings
+    source: |
+      class Strings {
+          public static void main(String[] args) {
+              String s = "Hello, World", n = null;
+              Object o = null;
+              System.out.println("null: " + n + " " + null + " " + o + " " + 'c' + 1 + 2L + 1.5 + true + " \t|\"q\"\\ é \101" + (1 + 2) + 1 + 2);
+              System.out.println(s.length() + " " + s.charAt(4) + " " + s.substring(7) + " " + s.substring(0, 5) + " " + s.indexOf("World") + " " + s.indexOf("xyz") + " " + s.toUpperCase() + " " + s.toLowerCase());
+              System.out.println(s.isEmpty() + " " + "".isEmpty() + " " + s.equals("Hello, World") + " " + s.equals(null) + " " + s.equals(o) + " " + "ab".equals("a" + "b") + " " + s.hashCode() + " " + "".hashCode() + " " + s.toString());
+              s += 1;
+              s += 'c';
+              s += null;
+              s += 2.5;
+              System.out.println(s + " " + String.valueOf(42) + String.valueOf('x') + String.valueOf(1.0) + String.valueOf(true) + Integer.toString(-7) + Integer.parseInt("-123") + Integer.parseInt("+45"));
+              StringBuilder sb = new StringBuilder("seed:");
+              sb.append(1).append('c').append("s").append(2.5).append(true).append(n).append(3L);
+              String built = sb.toString();
+              System.out.println(built + " " + sb.length() + " " + sb.charAt(0) + " " + sb + " " + built.equals("seed:1cs2.5truenull3") + " " + new StringBuilder().append("x").toString().length());
+              System.out.print("no newline;");
+              System.out.print(1);
+              System.out.println();
+              System.out.println('c');
+              System.out.println(1.5);
+              System.out.println(n);
+          }
+      }
+    expected: |
+      null: null null null c121.5true 	|"q"\ é A312
+      12 o World Hello 7 -1 HELLO, WORLD hello, world
+      false true true false false true -505841268 0 Hello, World
+      Hello, World1cnull2.5 42x1.0true-7-12345
+      seed:1cs2.5truenull3 20 s seed:1cs2.5truenull3 true 1
+      no newline;1
+      c
+      1.5
+      null
+  # A static final field of a primitive type or String with a constant initializer is
+  # inlined, so the order of the classes does not matter; any other static field is set
+  # before main, in order.
+  - name: a-constant-variable-is-its-value-and-static-fields-are-set-in-order
+    main: Statics
+    source: |
+      class StaticsEarly {
+          static final int DOUBLE = StaticsLate.BASE * 2;
+          static final String LABEL = "n=" + StaticsLate.BASE + StaticsLate.SUFFIX;
+      }
+
+      class StaticsLate {
+          static final int BASE = 21;
+          static final String SUFFIX = "!";
+          static final long BIG = 1L << 40;
+          static final boolean ON = BASE > 20;
+          static final double HALF = BASE / 2.0;
+      }
+
+      class Statics {
+          static final int LIMIT = 10;
+          static int counter = LIMIT * 2;
+          static int next = counter + 1;
+          static int[] table = {1, 2, 3};
+          static String unset;
+          static boolean flag;
+          static double ratio;
+
+          static int bump() {
+              return ++counter;
+          }
+
+          public static void main(String[] args) {
+              System.out.println(StaticsEarly.DOUBLE + " " + StaticsEarly.LABEL + " " + StaticsLate.BIG + " " + StaticsLate.ON + " " + StaticsLate.HALF);
+              System.out.println(counter + " " + next + " " + bump() + " " + Statics.counter + " " + table.length + " " + unset + " " + flag + " " + ratio);
+              Statics.counter += 5;
+              table[0] = counter;
+              unset = "set";
+              System.out.println(counter + " " + table[0] + " " + unset);
+          }
+      }
+    expected: |
+      42 n=21! 1099511627776 true 10.5
+      20 21 21 21 3 null false 0.0
+      26 26 set
+  # new T[n] is filled with the default of T; an initializer lists the elements, nested
+  # for an array of arrays.
+  - name: an-array-is-a-vector-with-the-default-of-its-element-type
+    main: Arrays
+    source: |
+      class ArraysItem {
+          int v;
+      }
+
+      class Arrays {
+          static int sum(int[] xs) {
+              int s = 0;
+              for (int x : xs) s += x;
+              return s;
+          }
+
+          public static void main(String[] args) {
+              int[] ints = new int[3];
+              long[] longs = new long[2];
+              double[] doubles = new double[2];
+              boolean[] flags = new boolean[2];
+              char[] chars = new char[2];
+              String[] strings = new String[2];
+              ArraysItem[] items = new ArraysItem[2];
+              System.out.println(ints[0] + " " + longs[1] + " " + doubles[0] + " " + flags[1] + " " + (int) chars[0] + " " + strings[1] + " " + items[0] + " " + args.length);
+              int[] xs = {3, 1, 4, 1, 5, 9, 2, 6};
+              for (int i = 0; i < xs.length; i++) {
+                  for (int j = 0; j + 1 < xs.length - i; j++) {
+                      if (xs[j] > xs[j + 1]) {
+                          int t = xs[j];
+                          xs[j] = xs[j + 1];
+                          xs[j + 1] = t;
+                      }
+                  }
+              }
+              StringBuilder sb = new StringBuilder();
+              for (int x : xs) sb.append(x).append(',');
+              int[] alias = xs;
+              alias[0] = 100;
+              System.out.println(sb + " " + sum(xs) + " " + sum(new int[] {1, 2, 3}) + " " + xs[0] + " " + new int[0].length);
+              int[][] grid = {{1, 2, 3}, {4, 5}, {}};
+              int[][] rows = new int[2][];
+              rows[1] = new int[] {7, 8};
+              String[][] names = {{"a"}, {"b", "c"}};
+              int cells = 0;
+              for (int[] row : grid) cells += row.length;
+              grid[1][0] += 10;
+              System.out.println(cells + " " + grid[1][0] + " " + grid[0][2] + " " + rows[0] + " " + rows[1][1] + " " + names[1][1] + names.length);
+              items[1] = new ArraysItem();
+              items[1].v = 5;
+              doubles[1] = 3;
+              longs[0] = ints.length;
+              System.out.println(items[1].v + " " + doubles[1] + " " + longs[0]);
+          }
+      }
+    expected: |
+      0 0 0.0 false 0 null null 0
+      1,1,2,3,4,5,6,9, 130 6 100 0
+      5 14 3 null 8 c2
+      5 3.0 3
+  # while, do, for and the enhanced for; break and continue leave a block only a body
+  # with that exit is wrapped in; a local declared with no value is assigned on every
+  # path.
+  - name: a-loop-is-a-while-and-its-exits-are-blocks
+    main: Loops
+    source: |
+      class Loops {
+          static String grade(int score) {
+              String grade;
+              if (score >= 90) {
+                  grade = "A";
+              } else if (score >= 80) {
+                  grade = "B";
+              } else {
+                  grade = "C";
+              }
+              return grade;
+          }
+
+          static int firstNegative(int[] xs) {
+              for (int i = 0; i < xs.length; i++) {
+                  if (xs[i] < 0) return i;
+              }
+              return -1;
+          }
+
+          public static void main(String[] args) {
+              int n = 0, i = 0;
+              while (true) {
+                  i++;
+                  if (i % 2 == 0) continue;
+                  if (i > 10) break;
+                  n += i;
+              }
+              int w = 0;
+              do {
+                  w += 3;
+                  if (w == 6) continue;
+                  w++;
+              } while (w < 20);
+              int once = 0;
+              do once++; while (once < 0);
+              System.out.println(n + " " + i + " " + w + " " + once);
+              int pairs = 0;
+              for (int a = 0, b = 10; a < b; a++, b--) {
+                  for (int c = 0; c < 3; c++) {
+                      if (c == 1) continue;
+                      if (a == 3) break;
+                      pairs++;
+                  }
+              }
+              int k;
+              for (k = 0; k < 100; k += 7) {
+              }
+              int spins = 0;
+              for (;;) {
+                  if (++spins == 5) break;
+              }
+              System.out.println(pairs + " " + k + " " + spins + " " + grade(95) + grade(85) + grade(10) + " " + firstNegative(new int[] {1, -2}) + " " + firstNegative(new int[0]));
+              int total = 0;
+              {
+                  int x = 1;
+                  total += x;
+              }
+              {
+                  double x = 2.5;
+                  total += x;
+              }
+              for (int x = 0; x < 3; x++) total += x;
+              for (var x : new int[] {10, 20}) {
+                  if (x == 10) continue;
+                  total += x;
+              }
+              var text = "t";
+              var count = total;
+              if (count > 0) ; else count = -1;
+              System.out.println(total + " " + text + count);
+          }
+      }
+    expected: |
+      25 11 20 1
+      8 105 5 ABC 1 -1
+      26 t26
+  # extends is :include, a field a slot with its type's default, a constructor a
+  # function run on a made instance: this(..) or super(..) first, then the field
+  # initializers, then its body.
+  - name: a-class-is-a-structure-and-a-constructor-a-function
+    main: Classes
+    source: |
+      class ClassesBase {
+          static int made;
+          protected String label = "unnamed";
+          int id;
+          double weight;
+          boolean heavy;
+          ClassesBase other;
+
+          ClassesBase() {
+              made++;
+              id = made;
+          }
+
+          ClassesBase(String label) {
+              this();
+              this.label = label;
+          }
+
+          String describe() {
+              return label + "#" + id;
+          }
+      }
+
+      class ClassesChild extends ClassesBase {
+          int extra = id * 10;
+          final int[] slots = new int[2];
+
+          ClassesChild(String label, int extra) {
+              super(label);
+              this.extra += extra;
+          }
+
+          ClassesChild() {
+              this("default", 1);
+          }
+
+          int extra() {
+              return extra;
+          }
+      }
+
+      class ClassesPlain {
+          int v;
+          String name;
+      }
+
+      class Classes {
+          int count;
+
+          void add(int count) {
+              this.count += count;
+              count = 0;
+          }
+
+          Classes self() {
+              return this;
+          }
+
+          public static void main(String[] args) {
+              ClassesBase a = new ClassesBase(), b = new ClassesBase("b");
+              ClassesChild c = new ClassesChild("c", 5), d = new ClassesChild();
+              System.out.println(a.describe() + " " + b.describe() + " " + c.describe() + " " + d.describe() + " " + ClassesBase.made);
+              System.out.println(c.extra() + " " + d.extra + " " + c.slots.length + " " + a.weight + " " + a.heavy + " " + a.other + " " + c.label);
+              a.other = c;
+              a.other.id += 100;
+              ClassesPlain p = new ClassesPlain();
+              p.v++;
+              Classes k = new Classes();
+              k.add(2);
+              k.self().self().add(3);
+              System.out.println(c.id + " " + p.v + " " + p.name + " " + k.count + " " + (a.other == c) + " " + (a.other != d) + " " + (p.name == null));
+          }
+      }
+    expected: |
+      unnamed#1 b#2 c#3 default#4 4
+      35 41 2 0.0 false null c
+      103 1 null 5 true true true
+  # The signature is in the function's name; the candidates an argument list fits with
+  # no boxing come first, and among them the most specific wins.
+  - name: an-overload-is-chosen-by-the-static-types-of-the-arguments
+    main: Overloads
+    source: |
+      class OverloadsShape {
+      }
+
+      class OverloadsSquare extends OverloadsShape {
+      }
+
+      class Overloads {
+          static String f(int x) { return "int"; }
+          static String f(long x) { return "long"; }
+          static String f(double x) { return "double"; }
+          static String f(char x) { return "char"; }
+          static String f(boolean x) { return "boolean"; }
+          static String f(String x) { return "String"; }
+          static String f(Object x) { return "Object"; }
+          static String f(int[] x) { return "int[]"; }
+          static String f(OverloadsShape x) { return "Shape"; }
+          static String f(int x, double y) { return "int,double"; }
+          static String f(double x, double y) { return "double,double"; }
+
+          static String g(long x) { return "long"; }
+          static String g(Integer x) { return "Integer"; }
+          static String h(double x) { return "double"; }
+          static String h(Object x) { return "Object"; }
+
+          static int add(int a, int b) { return a + b; }
+          static double add(double a, double b) { return a + b; }
+          static String add(String a, String b) { return a + b; }
+
+          String m(Object o) { return "instance Object"; }
+          String m(String s) { return "instance String"; }
+
+          public static void main(String[] args) {
+              Object o = "s";
+              Integer boxed = 3;
+              OverloadsShape shape = new OverloadsSquare();
+              System.out.println(f(1) + " " + f(1L) + " " + f(1.5) + " " + f('c') + " " + f(true) + " " + f("s") + " " + f(o) + " " + f(new int[0]));
+              System.out.println(f(new OverloadsSquare()) + " " + f(shape) + " " + f(boxed) + " " + f(1, 2) + " " + f(1.0, 2) + " " + f('a' + 1) + " " + f((long) 1) + " " + f((Object) "s"));
+              System.out.println(g(1) + " " + g(boxed) + " " + h(1) + " " + h(boxed) + " " + h('c') + " " + h("s"));
+              System.out.println(add(1, 2) + " " + add(1.5, 2) + " " + add("a", "b") + " " + new Overloads().m("s") + " " + new Overloads().m(o) + " " + new Overloads().m(null));
+          }
+      }
+    expected: |
+      int long double char boolean String Object int[]
+      Shape Shape Object int,double double,double int long Object
+      long Integer double Object double Object
+      3 3.5 ab instance String instance Object instance String
+  # One implementation under the receiver's static type is a plain call; several are one
+  # function testing the structure predicates, deepest class first. super.m() and a
+  # private method are direct.
+  - name: a-call-is-direct-when-one-body-can-run-and-dispatched-otherwise
+    main: Dispatch
+    source: |
+      interface DispatchShape {
+          double area();
+
+          String name();
+      }
+
+      interface DispatchScaled extends DispatchShape {
+          DispatchShape scaled(double factor);
+      }
+
+      abstract class DispatchBase implements DispatchShape {
+          static int count = 0;
+          protected final String label;
+
+          DispatchBase(String label) {
+              this.label = label;
+              count++;
+          }
+
+          public String name() {
+              return label;
+          }
+
+          abstract int corners();
+
+          String describe() {
+              return name() + "[" + area() + "]/" + corners() + secret();
+          }
+
+          private String secret() {
+              return "~";
+          }
+      }
+
+      class DispatchCircle extends DispatchBase {
+          private final double r;
+
+          DispatchCircle(double r) {
+              super("circle");
+              this.r = r;
+          }
+
+          public double area() {
+              return 3 * r * r;
+          }
+
+          int corners() {
+              return 0;
+          }
+      }
+
+      class DispatchRect extends DispatchBase implements DispatchScaled {
+          final double w, h;
+
+          DispatchRect(double w, double h) {
+              this("rect", w, h);
+          }
+
+          DispatchRect(String label, double w, double h) {
+              super(label);
+              this.w = w;
+              this.h = h;
+          }
+
+          public double area() {
+              return w * h;
+          }
+
+          int corners() {
+              return 4;
+          }
+
+          public DispatchShape scaled(double factor) {
+              return new DispatchRect(w * factor, h * factor);
+          }
+      }
+
+      class DispatchSquare extends DispatchRect {
+          DispatchSquare(double s) {
+              super("square", s, s);
+          }
+
+          @Override
+          public String name() {
+              return "SQUARE/" + super.name();
+          }
+
+          public DispatchShape scaled(double factor) {
+              return new DispatchSquare(w * factor);
+          }
+      }
+
+      class DispatchNode {
+          DispatchNode next;
+          int value;
+
+          DispatchNode(int value, DispatchNode next) {
+              this.value = value;
+              this.next = next;
+          }
+
+          int sum() {
+              return next == null ? value : value + next.sum();
+          }
+      }
+
+      class Dispatch {
+          public static void main(String[] args) {
+              DispatchShape[] shapes = {new DispatchCircle(1.5), new DispatchRect(2, 3), new DispatchSquare(4)};
+              double total = 0;
+              for (DispatchShape s : shapes) {
+                  System.out.println(s.name() + " " + s.area() + " " + (s instanceof DispatchRect) + " " + (s instanceof DispatchScaled));
+                  total += s.area();
+              }
+              DispatchBase base = new DispatchSquare(2);
+              DispatchScaled scaled = new DispatchSquare(3);
+              DispatchRect rect = new DispatchSquare(1);
+              System.out.println(total + " " + DispatchBase.count + " " + base.describe() + " " + scaled.scaled(2).area() + " " + scaled.scaled(2).name() + " " + rect.scaled(3).area() + " " + rect.name());
+              System.out.println(new DispatchNode(1, new DispatchNode(2, new DispatchNode(3, null))).sum());
+          }
+      }
+    expected: |
+      circle 6.75 false false
+      rect 6.0 true true
+      SQUARE/square 16.0 true true
+      28.75 6 SQUARE/square[4.0]/4~ 36.0 SQUARE/square 9.0 SQUARE/square
+      6
+  # instanceof of a class is its structure predicate, of an interface the predicates of
+  # the classes implementing it; a cast that can fail tests the same and throws
+  # ClassCastException; null passes a cast and fails instanceof.
+  - name: instanceof-and-a-cast-test-the-class-or-the-classes-of-an-interface
+    main: Casts
+    source: |
+      interface CastsShape {
+          double area();
+      }
+
+      interface CastsNamed {
+          String name();
+      }
+
+      abstract class CastsBase implements CastsShape, CastsNamed {
+          public String name() {
+              return "base";
+          }
+      }
+
+      class CastsSquare extends CastsBase {
+          double s;
+
+          CastsSquare(double s) {
+              this.s = s;
+          }
+
+          public double area() {
+              return s * s;
+          }
+
+          public String name() {
+              return "square";
+          }
+      }
+
+      class CastsCircle extends CastsBase {
+          public double area() {
+              return 3.0;
+          }
+      }
+
+      class CastsOther {
+      }
+
+      class Casts {
+          static String kind(Object o) {
+              if (o instanceof String) return "string";
+              if (o instanceof CastsSquare) return "square";
+              if (o instanceof CastsShape) return "shape";
+              if (o instanceof CastsOther) return "other";
+              return "unknown";
+          }
+
+          public static void main(String[] args) {
+              Object o = new CastsSquare(2), nothing = null;
+              CastsShape shape = (CastsShape) o;
+              CastsNamed named = (CastsNamed) shape;
+              CastsBase base = (CastsBase) named;
+              CastsSquare square = (CastsSquare) base;
+              CastsShape none = (CastsShape) nothing;
+              String text = (String) (Object) "text";
+              System.out.println(shape.area() + " " + named.name() + " " + base.name() + " " + square.s + " " + text + " " + (none == null));
+              System.out.println((o instanceof CastsShape) + " " + (o instanceof CastsNamed) + " " + (o instanceof Object) + " " + (named instanceof CastsCircle) + " " + (nothing instanceof CastsShape) + " " + (nothing instanceof Object));
+              System.out.println(kind("s") + " " + kind(o) + " " + kind(new CastsCircle()) + " " + kind(new CastsOther()) + " " + kind(null) + " " + kind(new int[0]) + " " + kind(new StringBuilder()));
+              try {
+                  CastsCircle circle = (CastsCircle) base;
+                  System.out.println("not reached " + circle);
+              } catch (ClassCastException e) {
+                  System.out.println("a square is no circle");
+              }
+              try {
+                  Object s = "s";
+                  CastsShape wrong = (CastsShape) s;
+                  System.out.println("not reached " + wrong);
+              } catch (ClassCastException e) {
+                  System.out.println("a string is no shape");
+              }
+              try {
+                  String wrong = (String) o;
+                  System.out.println("not reached " + wrong);
+              } catch (RuntimeException e) {
+                  System.out.println("a square is no string " + (e instanceof ClassCastException));
+              }
+          }
+      }
+    expected: |
+      4.0 square square 2.0 text true
+      true true true false false false
+      string square shape other unknown unknown unknown
+      a square is no circle
+      a string is no shape
+      a square is no string true
+  # equals, hashCode and toString of a class declaring none are identity; through Object
+  # the program's classes declaring one are tested first, then the run-time library
+  # answers for every other value.
+  - name: the-methods-of-object-on-a-class-that-declares-them-and-on-one-that-does-not
+    main: ObjectMethods
+    source: |
+      class ObjectMethodsPoint {
+          final int x, y;
+
+          ObjectMethodsPoint(int x, int y) {
+              this.x = x;
+              this.y = y;
+          }
+
+          public boolean equals(Object o) {
+              if (!(o instanceof ObjectMethodsPoint)) return false;
+              ObjectMethodsPoint p = (ObjectMethodsPoint) o;
+              return x == p.x && y == p.y;
+          }
+
+          public int hashCode() {
+              return 31 * x + y;
+          }
+
+          public String toString() {
+              return "(" + x + ", " + y + ")";
+          }
+      }
+
+      class ObjectMethodsPoint3 extends ObjectMethodsPoint {
+          final int z;
+
+          ObjectMethodsPoint3(int x, int y, int z) {
+              super(x, y);
+              this.z = z;
+          }
+
+          public String toString() {
+              return super.toString() + "^" + z + " " + hashCode() + equals(this);
+          }
+      }
+
+      class ObjectMethodsPlain {
+          String tag() {
+              return toString().substring(0, 19) + (hashCode() == hashCode()) + equals(this);
+          }
+      }
+
+      class ObjectMethods {
+          public static void main(String[] args) {
+              ObjectMethodsPoint p = new ObjectMethodsPoint(1, 2), q = new ObjectMethodsPoint(1, 2);
+              Object o = p, third = new ObjectMethodsPoint3(1, 2, 3);
+              System.out.println(p.equals(q) + " " + (p == q) + " " + o.equals(q) + " " + q.equals(third) + " " + p.equals(null) + " " + p.equals("p") + " " + p.hashCode() + " " + o.hashCode() + " " + o + " " + p.toString().length() + " " + third);
+              ObjectMethodsPlain plain = new ObjectMethodsPlain(), other = new ObjectMethodsPlain();
+              Object asObject = plain;
+              System.out.println(plain.equals(plain) + " " + plain.equals(other) + " " + asObject.equals(plain) + " " + (plain.hashCode() == asObject.hashCode()) + " " + (plain.toString().equals(asObject.toString())) + " " + plain.toString().equals(other.toString()) + " " + plain.tag());
+              Object text = "text", number = 42, real = 2.5, yes = true, letter = 'c', none = null;
+              System.out.println(text + " " + number + " " + real + " " + yes + " " + letter + " " + none + " " + text.equals("text") + " " + number.equals(42) + " " + number.equals("42") + " " + real.equals(2.5) + " " + yes.equals(true) + " " + letter.equals('c') + " " + text.equals(number));
+              System.out.println(text.hashCode() + " " + number.hashCode() + " " + yes.hashCode() + " " + letter.hashCode() + " " + text.toString() + number.toString() + " " + "é☺".hashCode());
+              System.out.println(p.getClass().getName() + " " + third.getClass().getSimpleName() + " " + text.getClass().getName() + " " + number.getClass().getSimpleName() + " " + new IllegalStateException("x").getClass().getName() + " " + new IllegalStateException().getClass().getSimpleName());
+          }
+      }
+    expected: |
+      true false true true false false 33 33 (1, 2) 6 (1, 2)^3 33true
+      true false true true true false ObjectMethodsPlain@truetrue
+      text 42 2.5 true c null true true false true true true false
+      3556653 42 1231 99 text42 17009
+      ObjectMethodsPoint ObjectMethodsPoint3 java.lang.String Integer java.lang.IllegalStateException IllegalStateException
+  # A lambda is a lambda capturing its variables; an interface no class implements is
+  # called with funcall, one a class implements too by a function testing for a function
+  # first.
+  - name: a-lambda-is-a-function-called-through-its-interface
+    main: Lambdas
+    source: |
+      interface LambdasScorer {
+          int score(String word, int base);
+      }
+
+      interface LambdasCounter {
+          int next();
+      }
+
+      interface LambdasVisitor {
+          void visit(int x);
+      }
+
+      interface LambdasMaker {
+          LambdasCounter from(int start);
+      }
+
+      class LambdasLength implements LambdasScorer {
+          public int score(String word, int base) {
+              return word.length() + base;
+          }
+      }
+
+      class Lambdas {
+          int factor = 3;
+
+          static int apply(LambdasScorer s, String w) {
+              return s.score(w, 10);
+          }
+
+          static void each(int[] xs, LambdasVisitor v) {
+              for (int x : xs) v.visit(x);
+          }
+
+          LambdasCounter times(int n) {
+              return () -> n * factor;
+          }
+
+          static LambdasCounter counter(int start) {
+              int[] state = {start};
+              return () -> state[0]++;
+          }
+
+          public static void main(String[] args) {
+              int bonus = 5;
+              LambdasScorer byLength = (w, base) -> w.length() * base + bonus;
+              LambdasScorer block = (String w, int base) -> {
+                  if (w.isEmpty()) return 0;
+                  return base + w.charAt(0);
+              };
+              System.out.println(apply(byLength, "hello") + " " + apply(block, "A") + " " + apply(block, "") + " " + apply(new LambdasLength(), "abc") + " " + apply((w, b) -> b, "x"));
+              int[] acc = new int[1];
+              each(new int[] {1, 2, 3}, x -> acc[0] += x * x);
+              LambdasCounter c = counter(7), d = counter(100);
+              LambdasMaker maker = start -> counter(start * 2);
+              LambdasCounter made = maker.from(4);
+              Lambdas self = new Lambdas();
+              LambdasCounter tripled = self.times(4);
+              self.factor = 5;
+              System.out.println(acc[0] + " " + c.next() + c.next() + " " + d.next() + " " + c.next() + " " + made.next() + " " + tripled.next());
+              Runnable r = () -> System.out.println("ran " + acc[0]);
+              r.run();
+              Runnable twice = () -> {
+                  r.run();
+                  r.run();
+              };
+              twice.run();
+          }
+      }
+    expected: |
+      55 75 0 13 10
+      14 78 100 9 8 20
+      ran 14
+      ran 14
+      ran 14
+  # The operands of the place of op= and ++ are evaluated once: one that is more than a
+  # variable is bound first.
+  - name: a-compound-assignment-evaluates-its-place-once
+    main: Places
+    source: |
+      class PlacesBox {
+          int v;
+          int[] cells = new int[3];
+          PlacesBox next;
+      }
+
+      class Places {
+          static int calls = 0;
+          static int total = 0;
+          static PlacesBox shared;
+
+          static int index() {
+              return calls++;
+          }
+
+          static PlacesBox box() {
+              calls++;
+              return shared;
+          }
+
+          public static void main(String[] args) {
+              shared = new PlacesBox();
+              int[] arr = {10, 20, 30};
+              int k = 0;
+              arr[k++] += 5;
+              arr[index()] *= 2;
+              arr[index()]++;
+              --arr[index()];
+              System.out.println(arr[0] + " " + arr[1] + " " + arr[2] + " " + k + " " + calls);
+              box().v += 7;
+              box().v++;
+              box().cells[index() % 3] -= 4;
+              shared.next = new PlacesBox();
+              box().next.v = box().v * 2;
+              int post = box().next.v++;
+              int pre = ++box().next.v;
+              System.out.println(shared.v + " " + shared.cells[0] + shared.cells[1] + shared.cells[2] + " " + shared.next.v + " " + post + " " + pre + " " + calls);
+              total += index();
+              Places.total -= 1;
+              String s = "a";
+              s += s += "b";
+              int x = 3;
+              x += x++ * 2;
+              int y = (x = 4) + x;
+              int z = k = x;
+              System.out.println(total + " " + s + " " + x + " " + y + " " + z + k);
+          }
+      }
+    expected: |
+      30 21 29 1 3
+      8 -400 18 16 18 11
+      10 aab 4 8 44
+  # throw signals one condition type holding the object; the catch clauses are one
+  # handler-case clause testing its class, each with its own parameter, signalling again
+  # when none takes it; finally is unwind-protect.
+  - name: try-catch-finally-over-one-condition-holding-the-thrown-object
+    main: Exceptions
+    source: |
+      class ExceptionsApp extends Exception {
+          final int code;
+
+          ExceptionsApp(String message, int code) {
+              super(message);
+              this.code = code;
+          }
+      }
+
+      class ExceptionsFatal extends RuntimeException {
+          ExceptionsFatal() {
+          }
+      }
+
+      class Exceptions {
+          static String log = "";
+
+          static int risky(int n) throws ExceptionsApp {
+              if (n == 1) throw new ExceptionsApp("one", 11);
+              if (n == 2) throw new IllegalStateException("two");
+              if (n == 3) throw new ExceptionsFatal();
+              if (n == 4) throw new IllegalArgumentException();
+              return n;
+          }
+
+          static String attempt(int n) {
+              try {
+                  return "ok " + risky(n);
+              } catch (ExceptionsApp e) {
+                  return "app " + e.getMessage() + " " + e.code;
+              } catch (IllegalStateException ex) {
+                  return "ise " + ex.getMessage();
+              } catch (RuntimeException re) {
+                  return "rt " + (re instanceof ExceptionsFatal) + " " + re.getMessage();
+              } finally {
+                  log += n;
+              }
+          }
+
+          static int nested() {
+              int r = 0;
+              for (int i = 0; i < 5; i++) {
+                  try {
+                      try {
+                          if (i == 1) continue;
+                          if (i == 3) break;
+                          if (i == 2) throw new IllegalArgumentException("inner");
+                          r += 1;
+                      } finally {
+                          r += 10;
+                      }
+                  } catch (IllegalArgumentException e) {
+                      r += 100;
+                  }
+              }
+              return r;
+          }
+
+          static int early() {
+              try {
+                  return 1;
+              } finally {
+                  log += "F";
+              }
+          }
+
+          static String rethrown() {
+              try {
+                  try {
+                      throw new IllegalStateException("first");
+                  } catch (IllegalArgumentException e) {
+                      return "wrong clause";
+                  } finally {
+                      log += "G";
+                  }
+              } catch (RuntimeException e) {
+                  try {
+                      throw new ExceptionsApp(e.getMessage() + " again", 2);
+                  } catch (Exception inner) {
+                      return inner.getMessage();
+                  }
+              }
+          }
+
+          public static void main(String[] args) {
+              for (int i = 0; i <= 4; i++) System.out.println(attempt(i));
+              System.out.println(log + " " + nested() + " " + early() + " " + rethrown() + " " + log);
+              try {
+                  throw new Error("err");
+              } catch (Throwable th) {
+                  System.out.println(th + " | " + th.getMessage() + " | " + new ExceptionsFatal() + " | " + new ExceptionsApp("m", 1) + " | " + new RuntimeException().getMessage());
+              }
+          }
+      }
+    expected: |
+      ok 0
+      app one 11
+      ise two
+      rt true null
+      rt false null
+      01234 141 1 first again 01234FG
+      java.lang.Error: err | err | ExceptionsFatal | ExceptionsApp: m | null
+  # A division by zero is an ArithmeticException to a clause above it, any other Lisp
+  # error a RuntimeException; a clause below those lets it pass.
+  - name: a-lisp-error-reaches-the-catch-of-the-exception-it-is
+    main: LispErrors
+    source: |
+      class LispErrors {
+          static int divide(int a, int b) {
+              try {
+                  return a / b;
+              } catch (ArithmeticException e) {
+                  System.out.println("caught: " + e.getMessage());
+                  return -1;
+              } finally {
+                  System.out.println("finally " + a);
+              }
+          }
+
+          static String read(int[] xs, int i) {
+              try {
+                  try {
+                      return "read " + xs[i];
+                  } catch (IllegalStateException e) {
+                      return "not this clause";
+                  }
+              } catch (RuntimeException e) {
+                  return "out of bounds";
+              }
+          }
+
+          public static void main(String[] args) {
+              System.out.println(divide(7, 2) + " " + divide(1, 0));
+              System.out.println(read(new int[] {5}, 0) + " " + read(new int[] {5}, 1) + " " + read(new int[] {5}, -1));
+              try {
+                  System.out.println(10 % (args.length));
+              } catch (Exception e) {
+                  System.out.println(e.getMessage() + " " + (e instanceof ArithmeticException) + " " + e);
+              }
+              try {
+                  System.out.println(Integer.parseInt("12x"));
+              } catch (RuntimeException e) {
+                  System.out.println("no number");
+              }
+          }
+      }
+    expected: |
+      finally 7
+      caught: / by zero
+      finally 1
+      3 -1
+      read 5 out of bounds out of bounds
+      / by zero true java.lang.ArithmeticException: / by zero
+      no number
+  # A missing key is null and a boxed false is not: get of a map of Boolean tells the
+  # two apart. put and set answer the value before.
+  - name: an-array-list-is-a-vector-and-a-hash-map-an-equal-table
+    main: Collections
+    source: |
+      class CollectionsItem {
+          final String name;
+
+          CollectionsItem(String name) {
+              this.name = name;
+          }
+
+          public String toString() {
+              return "<" + name + ">";
+          }
+      }
+
+      class Collections {
+          static int total(List<Integer> xs) {
+              int sum = 0;
+              for (int x : xs) sum += x;
+              return sum;
+          }
+
+          public static void main(String[] args) {
+              List<Integer> nums = new ArrayList<>();
+              for (int j = 0; j < 5; j++) nums.add(j * j);
+              int before = nums.set(0, 100);
+              boolean added = nums.add(7);
+              int sum = 0;
+              for (Integer v : nums) sum += v;
+              System.out.println(nums.size() + " " + nums.get(4) + " " + before + " " + added + " " + sum + " " + total(nums) + " " + nums.isEmpty() + " " + new ArrayList<String>().isEmpty() + " " + nums);
+              ArrayList<CollectionsItem> items = new ArrayList<>();
+              items.add(new CollectionsItem("a"));
+              items.add(null);
+              items.add(new CollectionsItem("b"));
+              List<String> words = new ArrayList<>();
+              words.add("x");
+              words.add("y");
+              var chars = new ArrayList<Character>();
+              chars.add('c');
+              List<Boolean> flags = new ArrayList<>();
+              flags.add(false);
+              flags.add(true);
+              List<Double> reals = new ArrayList<>();
+              reals.add(1.5);
+              reals.add(2.0);
+              System.out.println(items + " " + items.get(0).name + " " + words + " " + words.get(1).length() + " " + chars + chars.get(0) + " " + flags + " " + reals + " " + (reals.get(0) + reals.get(1)));
+              Map<String, Integer> counts = new HashMap<>();
+              String[] text = {"a", "b", "a", "c", "b", "a"};
+              for (String w : text) {
+                  counts.put(w, counts.getOrDefault(w, 0) + 1);
+              }
+              System.out.println(counts.get("a") + " " + counts.get("b") + " " + counts.get("z") + " " + counts.containsKey("z") + " " + counts.containsKey("c") + " " + counts.size() + " " + counts.put("a", 10) + " " + counts.put("new", 1) + " " + counts.get("a") + " " + counts.isEmpty());
+              Map<String, Boolean> switches = new HashMap<>();
+              switches.put("on", true);
+              switches.put("off", false);
+              System.out.println(switches.get("on") + " " + switches.get("off") + " " + switches.get("none") + " " + (switches.get("none") == null) + " " + (switches.get("off") == null) + " " + switches.containsKey("off") + " " + switches.getOrDefault("none", true) + " " + switches.put("on", false) + " " + switches.get("on"));
+              Map<Character, Integer> seen = new HashMap<>();
+              for (int j = 0; j < "hello".length(); j++) {
+                  char ch = "hello".charAt(j);
+                  seen.put(ch, seen.getOrDefault(ch, 0) + 1);
+              }
+              HashMap<Integer, String> names = new HashMap<>();
+              names.put(1, "one");
+              names.put(1000000, "million");
+              Map<Long, CollectionsItem> byId = new HashMap<>();
+              byId.put(5L, items.get(2));
+              System.out.println(seen.get('l') + " " + seen.get('h') + " " + seen.get('z') + " " + seen.size() + " " + names.get(1) + " " + names.get(999999 + 1) + " " + names.get(2) + " " + byId.get(5L) + " " + byId.get(6L));
+          }
+      }
+    expected: |
+      6 16 0 true 137 137 false true [100, 1, 4, 9, 16, 7]
+      [<a>, null, <b>] a [x, y] 1 [c]c [false, true] [1.5, 2.0] 3.5
+      3 2 null false true 3 3 null 10 false
+      true false null true false true true true false
+      2 1 null 4 one million null <b> null
+  # A boxed number is the number, a boxed char a character, a boxed true T and a boxed
+  # false :false; a boxing and an unboxing are made where the static types say.
+  - name: a-box-is-the-value-itself-and-none-is-null
+    main: Boxes
+    source: |
+      class Boxes {
+          static Integer twice(Integer x) {
+              return x * 2;
+          }
+
+          static int unboxed(Integer x) {
+              return x;
+          }
+
+          static String show(Object o) {
+              return "<" + o + ">";
+          }
+
+          public static void main(String[] args) {
+              Integer i = 5, none = null;
+              int j = i + 1;
+              Long big = 1L << 40;
+              Double half = 0.5;
+              Boolean yes = true, no = false, unknown = null;
+              Character letter = 'q';
+              char plain = letter;
+              i++;
+              i += 10;
+              System.out.println(i + " " + j + " " + twice(i) + " " + unboxed(i) + " " + twice(21) + " " + (big + 1) + " " + (half * 4) + " " + (i > 3) + " " + (i == 16) + " " + (none == null) + " " + (i != null));
+              System.out.println(yes + " " + no + " " + unknown + " " + (no == null) + " " + (unknown == null) + " " + (yes && !no) + " " + (no ? 1 : 2) + " " + letter + " " + plain + " " + (letter + 1) + " " + (char) (letter + 1) + " " + (letter == 'q'));
+              System.out.println(show(1) + show(2L) + show(1.5) + show(true) + show(false) + show('c') + show("s") + show(null) + show(i) + show(no) + show(letter));
+              Object o = 42;
+              Integer back = Integer.valueOf(7);
+              int value = back.intValue();
+              double widened = back;
+              long sum = i + big;
+              Integer chosen = i > 0 ? i : null;
+              int picked = no ? 1 : i;
+              System.out.println(o + " " + value + " " + widened + " " + sum + " " + chosen + " " + picked + " " + i.equals(16) + " " + i.equals(17) + " " + i.hashCode() + " " + yes.equals(true) + " " + no.equals(true) + " " + letter.equals('q') + " " + letter.hashCode() + " " + i.toString() + no.toString() + letter.toString());
+          }
+      }
+    expected: |
+      16 6 32 16 42 1099511627777 2.0 true true true true
+      true false null false true true 2 q q 114 r true
+      <1><2><1.5><true><false><c><s><null><16><false><q>
+      42 7 7.0 1099511627792 16 16 true false 16 true false true 113 16falseq
+  # A name holding no lowercase letter is escaped, so T, NIL, LIST and a class named
+  # PRINT are the program's and never the pipeline's.
+  - name: a-name-that-is-a-common-lisp-symbol-stays-the-program-s
+    main: LispNames
+    source: |
+      class T {
+          static int NIL = 1;
+          int CAR = 2;
+
+          static int LIST(int T) {
+              return T + NIL;
+          }
+
+          int CDR() {
+              return CAR * 2;
+          }
+      }
+
+      class PRINT {
+          final T T = new T();
+
+          public String toString() {
+              return "PRINT" + T.CDR();
+          }
+      }
+
+      class LispNames {
+          static final int QUOTE = 7;
+          static int LAMBDA = 8;
+
+          public static void main(String[] args) {
+              int t = 1, nil = 2, list = 3, NIL = 5, IF = 6, X = 9;
+              T LET = new T();
+              LET.CAR += X;
+              String string = "s", length = "l";
+              PRINT PROGN = new PRINT();
+              System.out.println(t + nil + list + NIL + IF + " " + T.NIL + " " + T.LIST(10) + " " + LET.CAR + " " + LET.CDR() + " " + QUOTE + LAMBDA + " " + string + length + " " + PROGN + " " + (LET instanceof T) + " " + PROGN.getClass().getName() + " " + LET.toString().substring(0, 2));
+          }
+      }
+    expected: |
+      17 1 11 11 22 78 sl PRINT4 true PRINT T@
+  # A class is found by its simple name through java.lang, the imports and the file, or
+  # by its qualified name.
+  - name: a-qualified-name-names-its-class
+    main: Qualified
+    source: |
+      class Qualified {
+          static java.lang.String join(java.util.List<java.lang.String> parts) {
+              java.lang.StringBuilder sb = new java.lang.StringBuilder();
+              for (String part : parts) sb.append(part).append(java.lang.String.valueOf('/'));
+              return sb.toString();
+          }
+
+          public static void main(java.lang.String[] args) {
+              java.util.ArrayList<String> parts = new java.util.ArrayList<>();
+              parts.add("a");
+              parts.add("b");
+              java.util.Map<String, java.lang.Integer> sizes = new java.util.HashMap<String, Integer>();
+              sizes.put("k", java.lang.Integer.MAX_VALUE);
+              java.lang.Object o = join(parts);
+              try {
+                  throw new java.lang.IllegalStateException("q");
+              } catch (java.lang.RuntimeException e) {
+                  java.lang.System.out.println(o + " " + sizes.get("k") + " " + java.lang.Math.max(1, 2) + " " + e.getMessage() + " " + java.lang.Math.PI + " " + Qualified.join(parts).length());
+              }
+          }
+      }
+    expected: |
+      a/b/ 2147483647 2 q 3.141592653589793 4
+standalone:
+  # An uncaught exception's report is its toString(): the pipeline's line on standard
+  # error and a non-zero exit, where the JDK names the thread.
+  - name: an-uncaught-exception-reports-its-class-and-message
+    file: Uncaught.java
+    source: |
+      public class Uncaught {
+          static void check(int balance, int amount) {
+              if (amount > balance) {
+                  throw new IllegalStateException("insufficient funds: " + (amount - balance));
+              }
+              System.out.println("withdrew " + amount);
+          }
+
+          public static void main(String[] args) {
+              check(100, 30);
+              try {
+                  check(70, 100);
+              } finally {
+                  System.out.println("finally");
+              }
+              System.out.println("not reached");
+          }
+      }
+    stdout: |
+      withdrew 30
+      finally
+    error: "java.lang.IllegalStateException: insufficient funds: 30"
+  # The report asks the thrown object's own toString().
+  - name: an-uncaught-exception-of-the-program-s-own-class
+    file: Own.java
+    source: |
+      class Rejected extends Exception {
+          final int code;
+
+          Rejected(int code) {
+              this.code = code;
+          }
+
+          public String toString() {
+              return "Rejected with code " + code;
+          }
+      }
+
+      public class Own {
+          public static void main(String[] args) throws Rejected {
+              System.out.println("before");
+              throw new Rejected(7);
+          }
+      }
+    stdout: |
+      before
+    error: "Rejected with code 7"
+  # Top-level methods and fields are the members of a class named as the file; java.base
+  # is imported, IO is java.lang's.
+  - name: a-compact-source-file-starts-at-its-instance-main
+    file: Compact.java
+    source: |
+      int calls;
+
+      int square(int x) {
+          calls++;
+          return x * x;
+      }
+
+      String label() {
+          return "sum of squares";
+      }
+
+      void main() {
+          var total = 0;
+          for (var i = 1; i <= 10; i++) total += square(i);
+          List<String> parts = new ArrayList<>();
+          parts.add(label());
+          IO.print(parts.get(0));
+          IO.println(": " + total + " in " + calls + " calls");
+          IO.println();
+          IO.println(this.calls > 0);
+      }
+    stdout: |
+      sum of squares: 385 in 10 calls
+
+      true
+  # The launch protocol: the first class of the file when it has a main, else the class
+  # named as the file; main(String[]) before main(), an instance main on an instance
+  # made with no argument.
+  - name: the-class-named-as-the-file-starts-when-the-first-has-no-main
+    file: Launch.java
+    source: |
+      import java.util.ArrayList;
+
+      interface Greeter {
+          String greet(String name);
+      }
+
+      class Helper {
+          static String twice(String s) {
+              return s + s;
+          }
+      }
+
+      class Parent {
+          void main() {
+              System.out.println("an inherited instance main of " + getClass().getName() + " " + made);
+          }
+
+          static int made = 0;
+
+          Parent() {
+              made++;
+          }
+      }
+
+      public class Launch extends Parent {
+      }
+    stdout: |
+      an inherited instance main of Parent 1
+  # main(String[]) is chosen over main() of the same class; the arguments are an empty
+  # array.
+  - name: a-main-with-arguments-is-chosen-over-one-without
+    file: Chosen.java
+    source: |
+      class Chosen {
+          static void main() {
+              System.out.println("no arguments");
+          }
+
+          void main(String[] args) {
+              System.out.println("an instance main with " + args.length + " arguments");
+          }
+      }
+    stdout: |
+      an instance main with 0 arguments

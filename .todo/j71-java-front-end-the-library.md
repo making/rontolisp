@@ -66,3 +66,14 @@ reflection, weak references, `Thread` and the concurrent classes (j76).
   the same program would then not compile to wasm. Decide whether that is offered at all.
 
 A class or member we do not have is refused at the `import` or the call, by name.
+
+## State after j68 (2026-11-17, `.kb/java-frontend.md`)
+
+The split exists: `JavaIntrinsics` (members as emitters of forms over `eval/java.lisp`) and Java
+source in the jar under `src/main/resources/am/ik/rontolisp/java/library/`, one class a file,
+read by qualified name where a program first names it. Intrinsic now: `Object`, `String`,
+`StringBuilder`, the five boxes, `Math`, `System`, `PrintStream`, `IO`, `ArrayList`/`List`,
+`HashMap`/`Map` (keys `String`, `Integer`, `Long`, `Character`, `Boolean`; no iteration, no
+text); source: the `Throwable` family of thirteen and `Runnable`. The members are the ones listed
+in `doc/en/java/index.md`; any other is refused by name. `ArrayList` as an adjustable vector
+against Java over `Object[]` is not measured yet.

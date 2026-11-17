@@ -11,6 +11,7 @@ documented here: [`size-report/`](../size-report).
 | [`console/`](console) | Algorithms and console I/O — pure, cross-backend |
 | [`scheme/`](scheme) | Scheme (`.scm`) programs for the experimental Scheme front end: symbolic differentiation, eight queens, Huffman trees, streams, a metacircular evaluator |
 | [`starlark/`](starlark) | Starlark (`.star`) programs for the experimental Starlark front end: a build graph |
+| [`java/`](java) | Programs for the experimental subset of the Java language (`.java`): an order book |
 | [`clojure/`](clojure) | Clojure (`.clj`, `.cljc`) programs for the experimental Clojure front end: the core language, a `deps.edn` project, the bundled namespaces, macros, Ring and the HTTP client, Java interop, the WASM and WIT boundary |
 | [`ml/`](ml) | Numerical computing and machine learning (arrays, `linalg`, `--simd`, `--gpu`) |
 | [`deep-learning-from-scratch/`](deep-learning-from-scratch) | The book *Deep Learning from Scratch* (ゼロから作るDeep Learning) ch02–ch08, ported |

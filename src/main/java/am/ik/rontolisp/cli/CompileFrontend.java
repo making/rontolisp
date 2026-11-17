@@ -45,6 +45,7 @@ import am.ik.rontolisp.eval.SocketsLibrary;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.eval.SourceLoader;
+import am.ik.rontolisp.eval.JavaLibrary;
 import am.ik.rontolisp.eval.StarlarkLibrary;
 import am.ik.rontolisp.eval.StdinLibrary;
 import am.ik.rontolisp.eval.TlsLibrary;
@@ -544,6 +545,11 @@ final class CompileFrontend {
 			throw new IllegalArgumentException("Cannot compile: a Starlark program needs the GC backend -- --no-gc"
 					+ " has no structure, no hash table and no closure (drop --no-gc)");
 		}
+		if (language == SourceLanguage.JAVA && noGc) {
+			// An object is a structure, a string a string, a lambda a closure.
+			throw new IllegalArgumentException("Cannot compile: a Java program needs the GC backend -- --no-gc"
+					+ " has no structure, no string and no closure (drop --no-gc)");
+		}
 		SourceLoader files = SourceLoader.fileSystem(request.javaClassLoader(), request.javaClassLookup(),
 				request.javaClassPath());
 		if (language == SourceLanguage.COMMON_LISP) {
@@ -834,7 +840,8 @@ final class CompileFrontend {
 		// string comparisons the helpers are written over. ClojureLibrary sits beside
 		// SchemeLibrary for the same reason -- only a lowered Clojure program names a
 		// rontolisp::%clojure- helper -- and StarlarkLibrary beside both, for the
-		// rontolisp::%starlark- helpers of a lowered Starlark program.
+		// rontolisp::%starlark- helpers of a lowered Starlark program, and JavaLibrary
+		// for the rontolisp::%java- helpers of a lowered Java program.
 		// ObjcLibrary (objc and cocoa, objc.lisp) right OUTSIDE AppKitLibrary: a library
 		// written over objc is seen too. Its defining
 		// macros (define-objc-class and the rest, objc-macros.lisp) go in front of
@@ -855,10 +862,13 @@ final class CompileFrontend {
 		// body reaches the prelude. Not on --no-gc, which has no eval runtime.
 		List<LispVal> expanded = CurrentPackageIntern
 			.rewrite(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded), programHead, features));
-		List<LispVal> languages = InflateLibrary.process(ClojureLibrary
-			.process(SchemeLibrary.process(StarlarkLibrary.process(noGc ? expanded : EvalReferences.process(expanded)),
-					features, input.standards()), !wasm, input.lowersAtRunTime(), input.linked()),
-				witBackend);
+		List<LispVal> languages = InflateLibrary
+			.process(
+					ClojureLibrary.process(SchemeLibrary.process(
+							StarlarkLibrary
+								.process(JavaLibrary.process(noGc ? expanded : EvalReferences.process(expanded))),
+							features, input.standards()), !wasm, input.lowersAtRunTime(), input.linked()),
+					witBackend);
 		List<LispVal> macos = ObjcLibrary.process(AppKitLibrary.process(JsonLibrary.process(
 				LinalgLibrary.process(GeomLibrary
 					.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary.process(

@@ -138,11 +138,21 @@ and everything downstream is unchanged (`.kb/starlark-frontend.md`). `CompileFro
 ending a block (`.kb/starlark-frontend.md`, "A session"); `-e` and a file are whole
 programs and read through `read`.
 
+## The fifth language: `JAVA` (experimental)
+
+`.java`, or `--source-language java`: a subset of the Java language. `read` hands the text to
+`am.ik.rontolisp.java.Java.read` -- the reader, the class table, static typing and the lowering
+to core forms in one step, with no `#.` and no reader features; the file name picks the class a
+program starts at (`.kb/java-frontend.md`). `CompileFrontend.run` refuses the entry language
+under `--no-gc`. It has NO `SourceSession` (the constructor refuses, so the REPL and the
+playground do): a program is a whole file, or `-e` with one. `isSourceFile` answers true for
+`.java`; what `rontolisp test`, the formatter and the Maven plugin make of one is `.todo/j74`.
+
 ## The run-time libraries' name gate (2026-10-23)
 
 The front ends' run-time libraries (`scheme.lisp`, `clojure.lisp`, and since 2026-11-15
 `starlark.lisp`, whose gate is the member prefix `%STARLARK-` and the one public name
-`rontolisp:starlark-call`) are Common Lisp
+`rontolisp:starlark-call`, and since 2026-11-17 `java.lisp`, gate `%JAVA-`) are Common Lisp
 loaded on demand, and the question "is this name one of yours" is asked about names of
 EVERY program:
 
@@ -150,7 +160,8 @@ EVERY program:
   does not bind yet, asks after the wrappers and special operators, in order: keyword
   helpers, linalg, objc, appkit, geom, checkpoint, safetensors, metal, scene, torch,
   tokenizer, gguf, vec, url, `SchemeLibrary.isSchemeFunction`,
-  `StarlarkLibrary.isStarlarkFunction`, `ClojureLibrary.isClojureFunction`, usocket, wit,
+  `StarlarkLibrary.isStarlarkFunction`, `JavaLibrary.isJavaFunction`,
+  `ClojureLibrary.isClojureFunction`, usocket, wit,
   the prelude (one defun at a time),
   uiop, asdf, the generated slot/struct helpers. The name sets are disjoint (packages,
   `%scheme-`/`%clojure-` helpers), so the order decides only which gates a name pays
@@ -189,8 +200,8 @@ four `examples/console` programs print the same and compile to byte-identical `.
 loads the classes afresh in a loader that records resource reads (the JVM's other tests
 fill the static caches), runs a Common Lisp program through the interpreter and the
 compile front end, and asserts no front end's library was read -- then that
-`#'rontolisp::%scheme-acos` reads `scheme.lisp` and `#'rontolisp::%starlark-truth`
-`starlark.lisp`. Rejected: resolving the prelude first (an undefined name still pays,
+`#'rontolisp::%scheme-acos` reads `scheme.lisp`, `#'rontolisp::%starlark-truth`
+`starlark.lisp` and `#'rontolisp::%java-throw` `java.lisp`. Rejected: resolving the prelude first (an undefined name still pays,
 and the order was never the cause); asking only after a `.scm`/`.clj` file was read (state
 in the evaluator, while a REPL, a `load` from Common Lisp and Scheme `eval` reach the
 helpers by other paths); a build-time name index (a generated table to keep in sync, where

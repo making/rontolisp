@@ -347,3 +347,9 @@ sections:
         title: Common Lisp との混在
       - file: starlark/deviations.md
         title: 仕様との差異
+  - title: Java 言語のサブセット（実験的）
+    pages:
+      - file: java/index.md
+        title: 概要
+      - file: java/deviations.md
+        title: 言語との差異

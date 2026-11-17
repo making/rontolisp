@@ -18,6 +18,7 @@ import am.ik.rontolisp.clojure.ClojureFiles;
 import am.ik.rontolisp.clojure.ClojureJavaClasses;
 import am.ik.rontolisp.clojure.ClojureRepositories;
 import am.ik.rontolisp.compiler.JavaClassLookup;
+import am.ik.rontolisp.java.Java;
 import am.ik.rontolisp.scheme.Scheme;
 import am.ik.rontolisp.scheme.SchemeFiles;
 import am.ik.rontolisp.starlark.Starlark;
@@ -84,7 +85,16 @@ public enum SourceLanguage {
 	 * promise. It has no {@code #.} and no reader features; at a prompt a blank line ends
 	 * a block ({@link SourceSession}).
 	 */
-	STARLARK(".star");
+	STARLARK(".star"),
+
+	/**
+	 * An EXPERIMENTAL subset of the Java language: one file read by the language
+	 * specification's grammar, its expressions typed, and the program lowered to the same
+	 * core forms by the {@code java} package ({@code .kb/java-frontend.md}). A subset by
+	 * design, no compatibility promise. It has no {@code #.}, no reader features and no
+	 * prompt: a program is a whole file.
+	 */
+	JAVA(".java");
 
 	/**
 	 * The extension of a Clojure file shared between platforms, whose reader conditionals
@@ -154,8 +164,9 @@ public enum SourceLanguage {
 	/**
 	 * Reads user source text into core forms up to its first read error rather than
 	 * throwing it -- what a form-at-a-time {@code load} evaluates before it signals. A
-	 * Common Lisp source answers every form before the bad one; a Scheme, Clojure or
-	 * Starlark source is lowered as a whole, so a read error there answers no form.
+	 * Common Lisp source answers every form before the bad one; a Scheme, Clojure,
+	 * Starlark or Java source is lowered as a whole, so a read error there answers no
+	 * form.
 	 * @param source the program text
 	 * @param features the active reader features
 	 * @param file the origin file for diagnostics and for what the source's file names
@@ -212,6 +223,9 @@ public enum SourceLanguage {
 			if (this == STARLARK) {
 				return new LispReader.ReadPrefix(
 						Starlark.read(source, file, standards.starlark(), starlarkFiles(loader)), null);
+			}
+			if (this == JAVA) {
+				return new LispReader.ReadPrefix(Java.read(source, file), null);
 			}
 			return new LispReader.ReadPrefix(clojure(source, features, file, standards, loader, false, null).forms(),
 					null);
@@ -659,6 +673,9 @@ public enum SourceLanguage {
 		if (path != null && path.endsWith(STARLARK.defaultExtension())) {
 			return STARLARK;
 		}
+		if (path != null && path.endsWith(JAVA.defaultExtension())) {
+			return JAVA;
+		}
 		return COMMON_LISP;
 	}
 
@@ -684,7 +701,7 @@ public enum SourceLanguage {
 	public static boolean isSourceFile(String path) {
 		return path.endsWith(COMMON_LISP.defaultExtension()) || path.endsWith(SCHEME.defaultExtension())
 				|| path.endsWith(CLOJURE.defaultExtension()) || path.endsWith(CLOJURE_COMMON_EXTENSION)
-				|| path.endsWith(STARLARK.defaultExtension());
+				|| path.endsWith(STARLARK.defaultExtension()) || path.endsWith(JAVA.defaultExtension());
 	}
 
 	/**
@@ -718,8 +735,12 @@ public enum SourceLanguage {
 		if (name.equals("starlark") || name.equals("star")) {
 			return STARLARK;
 		}
+		if (name.equals("java")) {
+			return JAVA;
+		}
 		throw new IllegalArgumentException("--source-language '" + override
-				+ "' names no language this build reads (try common-lisp, or the experimental scheme, clojure, starlark)");
+				+ "' names no language this build reads (try common-lisp, or the experimental scheme, clojure, starlark,"
+				+ " java)");
 	}
 
 }
