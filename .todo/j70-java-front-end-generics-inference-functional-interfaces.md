@@ -51,3 +51,11 @@ the JDK's wording where it has one; the corpus holds programs that must be refus
   program implement and others do not is refused. A lambda's target must be an interface of
   the program or `Runnable`.
 - Reference casts check (`ClassCastException`); to an intrinsic class only `String` has a test.
+
+## State after j69 (2026-11-17, `.kb/java-frontend.md`)
+
+- Overloads have the variable arity phase (`resolve`, third after the fits without and with
+  boxing); a generic class, record or method is still refused.
+- `instanceof`, a cast and a type pattern to `Integer`/`Long` (`integerp`), `Double`, `Character`
+  and `Boolean` have a test; an `Integer` pattern takes a boxed `long` (one value, as above).
+- A lambda called through an interface's default method runs the default (`functionp` arm).

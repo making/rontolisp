@@ -25,6 +25,7 @@ import am.ik.rontolisp.java.JavaSyntax.Continue;
 import am.ik.rontolisp.java.JavaSyntax.Declarator;
 import am.ik.rontolisp.java.JavaSyntax.DoWhile;
 import am.ik.rontolisp.java.JavaSyntax.DoubleLiteral;
+import am.ik.rontolisp.java.JavaSyntax.EnumConstant;
 import am.ik.rontolisp.java.JavaSyntax.Empty;
 import am.ik.rontolisp.java.JavaSyntax.Expression;
 import am.ik.rontolisp.java.JavaSyntax.ExpressionStatement;
@@ -34,15 +35,21 @@ import am.ik.rontolisp.java.JavaSyntax.ForEach;
 import am.ik.rontolisp.java.JavaSyntax.If;
 import am.ik.rontolisp.java.JavaSyntax.Import;
 import am.ik.rontolisp.java.JavaSyntax.Index;
+import am.ik.rontolisp.java.JavaSyntax.Initializer;
 import am.ik.rontolisp.java.JavaSyntax.InstanceOf;
 import am.ik.rontolisp.java.JavaSyntax.IntLiteral;
+import am.ik.rontolisp.java.JavaSyntax.Labeled;
 import am.ik.rontolisp.java.JavaSyntax.Lambda;
+import am.ik.rontolisp.java.JavaSyntax.LocalClass;
 import am.ik.rontolisp.java.JavaSyntax.LocalVariable;
 import am.ik.rontolisp.java.JavaSyntax.Method;
 import am.ik.rontolisp.java.JavaSyntax.Name;
 import am.ik.rontolisp.java.JavaSyntax.New;
 import am.ik.rontolisp.java.JavaSyntax.NewArray;
 import am.ik.rontolisp.java.JavaSyntax.NullLiteral;
+import am.ik.rontolisp.java.JavaSyntax.Pattern;
+import am.ik.rontolisp.java.JavaSyntax.QualifiedThis;
+import am.ik.rontolisp.java.JavaSyntax.RecordPattern;
 import am.ik.rontolisp.java.JavaSyntax.Parameter;
 import am.ik.rontolisp.java.JavaSyntax.Return;
 import am.ik.rontolisp.java.JavaSyntax.Select;
@@ -90,7 +97,7 @@ final class JavaParser {
 			"abstract");
 
 	private static final Set<String> REFUSED_MODIFIERS = Set.of("synchronized", "native", "volatile", "transient",
-			"strictfp", "default", "sealed");
+			"strictfp");
 
 	private static final List<List<String>> LEVELS = List.of(List.of("||"), List.of("&&"), List.of("|"), List.of("^"),
 			List.of("&"), List.of("==", "!="), List.of("<", ">", "<=", ">=", "instanceof"), List.of("<<", ">>", ">>>"),
@@ -133,6 +140,27 @@ final class JavaParser {
 		return new JavaParser(source, file).unit(implicitName);
 	}
 
+	/**
+	 * Parses members the front end writes for a class itself -- a record's
+	 * {@code equals}, an enum's {@code values()} --, every node at one position of the
+	 * program.
+	 * @param text the members, in the subset
+	 * @param className the class they belong to
+	 * @param kind what the class is
+	 * @param pos the position every node gets
+	 * @return the methods
+	 */
+	static List<Method> synthetic(String text, String className, JavaSyntax.Kind kind, int pos) {
+		JavaParser parser = new JavaParser(text, null);
+		parser.tokens.replaceAll(token -> new JavaToken(token.kind(), token.text(), token.integer(), token.decimal(),
+				token.number(), pos));
+		Body body = new Body();
+		while (parser.current().kind() != Kind.END) {
+			parser.member(className, kind, body);
+		}
+		return body.methods;
+	}
+
 	// ---- tokens
 
 	private JavaToken current() {
@@ -172,7 +200,8 @@ final class JavaParser {
 
 	private String identifier() {
 		if (current().kind() == Kind.IDENTIFIER && current().text().equals("_")) {
-			throw unsupported("the unnamed variable _");
+			throw error("the unnamed _ is allowed only where a local, a parameter of a lambda or of a catch,"
+					+ " or a pattern is declared");
 		}
 		if (!atIdentifier()) {
 			throw error("expected an identifier but found " + current().shown());
@@ -198,12 +227,26 @@ final class JavaParser {
 
 	// ---- declarations
 
+	/** The members of a type's body, as they are read. */
+	private static final class Body {
+
+		final List<EnumConstant> constants = new ArrayList<>();
+
+		final List<Field> fields = new ArrayList<>();
+
+		final List<Method> methods = new ArrayList<>();
+
+		final List<Initializer> initializers = new ArrayList<>();
+
+		final List<ClassDeclaration> nested = new ArrayList<>();
+
+	}
+
 	private CompilationUnit unit(String implicitName) {
 		String packageName = null;
 		List<Import> imports = new ArrayList<>();
 		List<ClassDeclaration> classes = new ArrayList<>();
-		List<Field> fields = new ArrayList<>();
-		List<Method> methods = new ArrayList<>();
+		Body implicit = new Body();
 		int implicitAt = -1;
 		while (current().kind() != Kind.END) {
 			if (eat(";")) {
@@ -232,14 +275,21 @@ final class JavaParser {
 			if (implicitAt < 0) {
 				implicitAt = current().offset();
 			}
-			member(implicitName, false, fields, methods);
+			member(implicitName, JavaSyntax.Kind.CLASS, implicit);
 		}
 		if (implicitAt >= 0) {
 			if (packageName != null) {
 				throw new LispReadException("a compact source file has no package declaration", location(implicitAt));
 			}
-			classes.add(0, new ClassDeclaration(implicitAt, Set.of("final"), false, implicitName, null, List.of(),
-					fields, methods, true));
+			if (!implicit.initializers.isEmpty()) {
+				throw new LispReadException("an initializer block is not allowed at the top level of a file",
+						location(implicit.initializers.get(0).pos()));
+			}
+			// the types declared beside the members are the implicit class's member types
+			ClassDeclaration declared = new ClassDeclaration(implicitAt, Set.of("final"), JavaSyntax.Kind.CLASS,
+					implicitName, null, List.of(), List.of(), List.of(), List.of(), implicit.fields, implicit.methods,
+					List.of(), List.copyOf(classes), true);
+			return new CompilationUnit(null, imports, List.of(declared));
 		}
 		return new CompilationUnit(packageName, imports, classes);
 	}
@@ -300,27 +350,35 @@ final class JavaParser {
 		}
 	}
 
+	/** Whether a token can follow the contextual modifier {@code sealed}. */
+	private boolean startsDeclaration(JavaToken token) {
+		return token.kind() == Kind.IDENTIFIER && (MODIFIERS.contains(token.text()) || token.text().equals("class")
+				|| token.text().equals("interface") || token.text().equals("sealed") || token.text().equals("non"));
+	}
+
 	private Set<String> modifiers() {
 		Set<String> modifiers = new LinkedHashSet<>();
 		while (true) {
 			annotations();
 			JavaToken token = current();
-			if (token.kind() == Kind.IDENTIFIER && MODIFIERS.contains(token.text())) {
+			if (token.kind() != Kind.IDENTIFIER) {
+				return modifiers;
+			}
+			if (token.text().equals("default") ? !peekIs(1, ":") && !peekIs(1, "->")
+					: MODIFIERS.contains(token.text())) {
 				modifiers.add(token.text());
 				this.p++;
 			}
-			else if (token.kind() == Kind.IDENTIFIER
-					&& REFUSED_MODIFIERS.contains(token.text()) && !(token.text().equals("sealed")
-							&& !peekIs(1, "class") && !peekIs(1, "interface") && !peekIs(1, "abstract"))
-					&& !(token.text().equals("default") && peekIs(1, ":"))) {
-				throw unsupported(switch (token.text()) {
-					case "default" -> "a default method";
-					case "sealed" -> "a sealed type";
-					default -> "the modifier " + token.text();
-				});
+			else if (token.text().equals("sealed") && startsDeclaration(peek(1))) {
+				modifiers.add("sealed");
+				this.p++;
 			}
-			else if (token.is("non") && peekIs(1, "-") && peekIs(2, "sealed")) {
-				throw unsupported("a sealed type");
+			else if (token.text().equals("non") && peekIs(1, "-") && peekIs(2, "sealed")) {
+				modifiers.add("non-sealed");
+				this.p += 3;
+			}
+			else if (REFUSED_MODIFIERS.contains(token.text())) {
+				throw unsupported("the modifier " + token.text());
 			}
 			else {
 				return modifiers;
@@ -336,26 +394,36 @@ final class JavaParser {
 	}
 
 	private ClassDeclaration typeDeclaration(Set<String> modifiers) {
-		if (at("enum")) {
-			throw unsupported("an enum");
-		}
-		if (at("record")) {
-			throw unsupported("a record");
-		}
 		if (at("@")) {
 			throw unsupported("an annotation type");
 		}
-		boolean isInterface = at("interface");
+		JavaSyntax.Kind kind = at("enum") ? JavaSyntax.Kind.ENUM : at("record") ? JavaSyntax.Kind.RECORD
+				: at("interface") ? JavaSyntax.Kind.INTERFACE : JavaSyntax.Kind.CLASS;
 		this.p++;
 		int pos = current().offset();
 		String name = identifier();
 		if (at("<")) {
-			throw unsupported(isInterface ? "a generic interface" : "a generic class");
+			throw unsupported(switch (kind) {
+				case INTERFACE -> "a generic interface";
+				case RECORD -> "a generic record";
+				default -> "a generic class";
+			});
+		}
+		List<Parameter> components = kind == JavaSyntax.Kind.RECORD ? parameters(false) : List.of();
+		for (Parameter component : components) {
+			if (component.varargs()) {
+				throw unsupported("a variable arity record component", component.pos());
+			}
 		}
 		TypeName superclass = null;
 		List<TypeName> interfaces = new ArrayList<>();
-		if (eat("extends")) {
-			if (isInterface) {
+		List<TypeName> permits = new ArrayList<>();
+		if (at("extends")) {
+			if (kind == JavaSyntax.Kind.ENUM || kind == JavaSyntax.Kind.RECORD) {
+				throw error("no extends clause allowed here");
+			}
+			this.p++;
+			if (kind == JavaSyntax.Kind.INTERFACE) {
 				do {
 					interfaces.add(supertype());
 				}
@@ -366,7 +434,7 @@ final class JavaParser {
 			}
 		}
 		if (eat("implements")) {
-			if (isInterface) {
+			if (kind == JavaSyntax.Kind.INTERFACE) {
 				throw error("an interface extends its interfaces");
 			}
 			do {
@@ -374,19 +442,50 @@ final class JavaParser {
 			}
 			while (eat(","));
 		}
-		if (at("permits")) {
-			throw unsupported("a sealed type");
+		if (eat("permits")) {
+			do {
+				permits.add(supertype());
+			}
+			while (eat(","));
 		}
+		Body body = body(name, kind);
+		return new ClassDeclaration(pos, modifiers, kind, name, superclass, interfaces, permits, components,
+				body.constants, body.fields, body.methods, body.initializers, body.nested, false);
+	}
+
+	/** A type's body, from its opening brace to its closing one. */
+	private Body body(String name, JavaSyntax.Kind kind) {
 		expect("{");
-		List<Field> fields = new ArrayList<>();
-		List<Method> methods = new ArrayList<>();
+		Body body = new Body();
+		if (kind == JavaSyntax.Kind.ENUM) {
+			while (!at(";") && !at("}")) {
+				annotations();
+				int pos = current().offset();
+				String constant = identifier();
+				List<Expression> arguments = at("(") ? arguments() : List.of();
+				ClassDeclaration constantBody = null;
+				if (at("{")) {
+					Body members = body("", JavaSyntax.Kind.CLASS);
+					constantBody = new ClassDeclaration(pos, Set.of(), JavaSyntax.Kind.CLASS, "", null, List.of(),
+							List.of(), List.of(), List.of(), members.fields, members.methods, members.initializers,
+							members.nested, false);
+				}
+				body.constants.add(new EnumConstant(pos, constant, arguments, constantBody));
+				if (!eat(",")) {
+					break;
+				}
+			}
+			if (!at("}")) {
+				expect(";");
+			}
+		}
 		while (!eat("}")) {
 			if (current().kind() == Kind.END) {
 				throw error("expected '}' but found the end of the file");
 			}
-			member(name, isInterface, fields, methods);
+			member(name, kind, body);
 		}
-		return new ClassDeclaration(pos, modifiers, isInterface, name, superclass, interfaces, fields, methods, false);
+		return body;
 	}
 
 	private TypeName supertype() {
@@ -398,29 +497,43 @@ final class JavaParser {
 		return type;
 	}
 
-	private void member(String className, boolean inInterface, List<Field> fields, List<Method> methods) {
+	private void member(String className, JavaSyntax.Kind kind, Body into) {
 		if (eat(";")) {
 			return;
 		}
+		boolean inInterface = kind == JavaSyntax.Kind.INTERFACE;
 		Set<String> modifiers = modifiers();
 		if (at("{")) {
-			throw unsupported("an initializer block");
+			if (inInterface) {
+				throw error("an interface has no initializer block");
+			}
+			int pos = current().offset();
+			into.initializers.add(new Initializer(pos, modifiers.contains("static"), block()));
+			return;
 		}
 		if (atTypeDeclaration()) {
-			throw unsupported("a nested class");
+			into.nested.add(typeDeclaration(modifiers));
+			return;
 		}
 		if (at("<")) {
 			throw unsupported("a generic method");
 		}
-		if (atIdentifier() && current().text().equals(className) && peekIs(1, "(")) {
+		if (atIdentifier() && current().text().equals(className) && (peekIs(1, "(") || peekIs(1, "{"))) {
 			if (inInterface) {
 				throw error("an interface has no constructor");
 			}
 			int pos = current().offset();
 			this.p++;
-			List<Parameter> parameters = parameters();
+			if (at("{")) {
+				if (kind != JavaSyntax.Kind.RECORD) {
+					throw error("expected '(' but found '{'");
+				}
+				into.methods.add(new Method(pos, modifiers, null, "<init>", List.of(), block(), true));
+				return;
+			}
+			List<Parameter> parameters = parameters(false);
 			throwsClause();
-			methods.add(new Method(pos, modifiers, null, "<init>", parameters, block()));
+			into.methods.add(new Method(pos, modifiers, null, "<init>", parameters, block()));
 			return;
 		}
 		TypeName type = at("void") ? new TypeName(this.tokens.get(this.p++).offset(), "void", List.of(), false, 0)
@@ -428,27 +541,17 @@ final class JavaParser {
 		int pos = current().offset();
 		String name = identifier();
 		if (at("(")) {
-			List<Parameter> parameters = parameters();
+			List<Parameter> parameters = parameters(false);
 			if (at("[")) {
 				throw unsupported("an array dimension after a method's parameters");
 			}
 			throwsClause();
 			Block body = null;
 			if (!eat(";")) {
-				if (inInterface) {
-					throw unsupported(modifiers.contains("static") ? "a static interface method"
-							: modifiers.contains("private") ? "a private interface method" : "a default method");
-				}
 				body = block();
 			}
-			else if (inInterface && modifiers.contains("static")) {
-				throw error("a static method needs a body");
-			}
-			methods.add(new Method(pos, modifiers, type, name, parameters, body));
+			into.methods.add(new Method(pos, modifiers, type, name, parameters, body));
 			return;
-		}
-		if (inInterface) {
-			throw unsupported("an interface constant", pos);
 		}
 		if (type.name().equals("void")) {
 			throw error("expected '(' but found " + current().shown());
@@ -458,7 +561,7 @@ final class JavaParser {
 				throw unsupported("an array dimension after a variable's name");
 			}
 			Expression initializer = eat("=") ? variableInitializer() : null;
-			fields.add(new Field(pos, modifiers, type, name, initializer));
+			into.fields.add(new Field(pos, modifiers, type, name, initializer));
 			if (eat(";")) {
 				return;
 			}
@@ -477,32 +580,58 @@ final class JavaParser {
 		}
 	}
 
-	private List<Parameter> parameters() {
+	/**
+	 * A parenthesized parameter list.
+	 * @param unnamed whether a parameter may be the unnamed {@code _}
+	 */
+	private List<Parameter> parameters(boolean unnamed) {
 		expect("(");
 		List<Parameter> parameters = new ArrayList<>();
 		while (!eat(")")) {
 			if (!parameters.isEmpty()) {
 				expect(",");
 			}
-			annotations();
-			while (eat("final")) {
-				annotations();
-			}
+			boolean isFinal = finalModifier();
 			TypeName type = typeName();
-			if (at("...")) {
-				throw unsupported("a variable arity parameter");
+			boolean varargs = eat("...");
+			if (varargs) {
+				type = new TypeName(type.pos(), type.name(), type.arguments(), type.diamond(), type.dimensions() + 1);
 			}
 			if (at("this")) {
 				throw unsupported("a receiver parameter");
 			}
 			int pos = current().offset();
-			String name = identifier();
+			String name = unnamed ? identifierOrUnnamed() : identifier();
 			if (at("[")) {
 				throw unsupported("an array dimension after a variable's name");
 			}
-			parameters.add(new Parameter(pos, type, name));
+			if (varargs && !at(")")) {
+				throw error("a variable arity parameter must be the last parameter");
+			}
+			parameters.add(new Parameter(pos, type, name, varargs, isFinal));
 		}
 		return parameters;
+	}
+
+	/**
+	 * Annotations and {@code final} ahead of a variable: whether {@code final} was there.
+	 */
+	private boolean finalModifier() {
+		boolean isFinal = false;
+		annotations();
+		while (eat("final")) {
+			isFinal = true;
+			annotations();
+		}
+		return isFinal;
+	}
+
+	private String identifierOrUnnamed() {
+		if (at("_")) {
+			this.p++;
+			return "_";
+		}
+		return identifier();
 	}
 
 	private TypeName typeName() {
@@ -582,10 +711,7 @@ final class JavaParser {
 	private boolean atDeclaration() {
 		int save = this.p;
 		try {
-			annotations();
-			while (eat("final")) {
-				annotations();
-			}
+			finalModifier();
 			typeName();
 			if (!atIdentifier() && !at("_")) {
 				return false;
@@ -604,23 +730,20 @@ final class JavaParser {
 	}
 
 	private LocalVariable localVariable() {
-		annotations();
-		while (eat("final")) {
-			annotations();
-		}
+		boolean isFinal = finalModifier();
 		int pos = current().offset();
 		TypeName type = typeName();
 		List<Declarator> declarators = new ArrayList<>();
 		do {
 			int at = current().offset();
-			String name = identifier();
+			String name = identifierOrUnnamed();
 			if (at("[")) {
 				throw unsupported("an array dimension after a variable's name");
 			}
 			declarators.add(new Declarator(at, name, eat("=") ? variableInitializer() : null));
 		}
 		while (eat(","));
-		return new LocalVariable(pos, type, declarators);
+		return new LocalVariable(pos, type, declarators, isFinal);
 	}
 
 	private Expression variableInitializer() {
@@ -695,11 +818,9 @@ final class JavaParser {
 				case "break":
 				case "continue": {
 					this.p++;
-					if (!at(";")) {
-						throw unsupported("a labeled " + token.text());
-					}
+					String label = at(";") ? null : identifier();
 					expect(";");
-					out.add(token.text().equals("break") ? new Break(pos) : new Continue(pos));
+					out.add(token.text().equals("break") ? new Break(pos, label) : new Continue(pos, label));
 					return;
 				}
 				case "throw": {
@@ -714,28 +835,44 @@ final class JavaParser {
 					out.add(tryStatement(pos));
 					return;
 				case "switch":
-					throw unsupported("a switch");
+					out.add(switchBlock());
+					return;
 				case "synchronized":
 					throw unsupported("a synchronized statement");
 				case "assert":
 					throw unsupported("an assert statement");
-				case "class", "interface", "enum", "abstract", "static":
-					throw unsupported("a local class");
 				case "yield":
 					if (!peekIs(1, "=") && !peekIs(1, ".") && !peekIs(1, "(") && !peekIs(1, "[") && !peekIs(1, "++")
-							&& !peekIs(1, "--")) {
-						throw unsupported("a yield statement");
-					}
-					break;
-				case "record":
-					if (peek(1).kind() == Kind.IDENTIFIER && peekIs(2, "(")) {
-						throw unsupported("a local record");
+							&& !peekIs(1, "--") && !peekIs(1, ":")) {
+						this.p++;
+						Expression value = expression();
+						expect(";");
+						out.add(new JavaSyntax.Yield(pos, value));
+						return;
 					}
 					break;
 				default:
-					if (atIdentifier() && peekIs(1, ":")) {
-						throw unsupported("a labeled statement");
-					}
+			}
+			if (atLocalClass()) {
+				Set<String> modifiers = modifiers();
+				if (modifiers.contains("static")) {
+					throw new LispReadException("modifier static not allowed here", location(pos));
+				}
+				ClassDeclaration declaration = typeDeclaration(modifiers);
+				out.add(new LocalClass(declaration.pos(), declaration));
+				return;
+			}
+			if (atIdentifier() && peekIs(1, ":")) {
+				String label = identifier();
+				this.p++;
+				List<Statement> labeled = new ArrayList<>();
+				statement(labeled);
+				if (labeled.size() != 1 || labeled.get(0) instanceof LocalVariable
+						|| labeled.get(0) instanceof LocalClass) {
+					throw new LispReadException("a declaration is not allowed here", location(pos));
+				}
+				out.add(new Labeled(pos, label, labeled.get(0)));
+				return;
 			}
 		}
 		if ((token.kind() == Kind.IDENTIFIER || at("@")) && atDeclaration()) {
@@ -746,6 +883,140 @@ final class JavaParser {
 		Expression expression = expression();
 		expect(";");
 		out.add(new ExpressionStatement(pos, expression));
+	}
+
+	/** Whether a local class, interface, enum or record is declared here. */
+	private boolean atLocalClass() {
+		int save = this.p;
+		try {
+			modifiers();
+			return atTypeDeclaration() && !at("@");
+		}
+		finally {
+			this.p = save;
+		}
+	}
+
+	/** A switch, from its keyword to the brace closing its block. */
+	private JavaSyntax.Switch switchBlock() {
+		int pos = expect("switch").offset();
+		Expression selector = parenthesized();
+		expect("{");
+		List<JavaSyntax.SwitchCase> cases = new ArrayList<>();
+		boolean arrow = false;
+		boolean first = true;
+		while (!eat("}")) {
+			int at = current().offset();
+			List<Expression> constants = new ArrayList<>();
+			List<Pattern> patterns = new ArrayList<>();
+			boolean hasNull = false;
+			boolean hasDefault = false;
+			Expression guard = null;
+			if (eat("default")) {
+				hasDefault = true;
+			}
+			else {
+				expect("case");
+				do {
+					if (at("null")) {
+						this.p++;
+						hasNull = true;
+					}
+					else if (at("default")) {
+						this.p++;
+						hasDefault = true;
+					}
+					else if (atPattern()) {
+						patterns.add(pattern());
+					}
+					else {
+						constants.add(conditional());
+					}
+				}
+				while (eat(","));
+				if (at("when") && !patterns.isEmpty()) {
+					this.p++;
+					guard = binary(0);
+				}
+			}
+			boolean arrowHere = at("->");
+			if (!arrowHere && !at(":")) {
+				throw error("expected '->' or ':' but found " + current().shown());
+			}
+			if (!first && arrowHere != arrow) {
+				throw error("different case kinds used in the switch");
+			}
+			arrow = arrowHere;
+			first = false;
+			this.p++;
+			List<Statement> body = new ArrayList<>();
+			Expression value = null;
+			if (arrow) {
+				if (at("{")) {
+					body.add(block());
+				}
+				else if (at("throw")) {
+					statement(body);
+				}
+				else {
+					value = expression();
+					expect(";");
+				}
+			}
+			else {
+				while (!at("case") && !at("default") && !at("}")) {
+					if (current().kind() == Kind.END) {
+						throw error("expected '}' but found the end of the file");
+					}
+					statement(body);
+				}
+			}
+			cases.add(new JavaSyntax.SwitchCase(at, constants, patterns, hasNull, hasDefault, guard, body, value));
+		}
+		return new JavaSyntax.Switch(pos, selector, cases, arrow);
+	}
+
+	/** Whether a pattern, and no constant expression, stands here. */
+	private boolean atPattern() {
+		if (at("final") || at("@")) {
+			return true;
+		}
+		if (at("_")) {
+			return true;
+		}
+		int save = this.p;
+		try {
+			typeName();
+			return atIdentifier() || at("_") || at("(");
+		}
+		catch (LispReadException ex) {
+			return false;
+		}
+		finally {
+			this.p = save;
+		}
+	}
+
+	private Pattern pattern() {
+		int pos = current().offset();
+		if (at("_")) {
+			this.p++;
+			return new JavaSyntax.TypePattern(pos, new TypeName(pos, "var", List.of(), false, 0), "_");
+		}
+		finalModifier();
+		TypeName type = typeName();
+		if (at("(")) {
+			this.p++;
+			List<Pattern> components = new ArrayList<>();
+			while (!eat(")")) {
+				if (!components.isEmpty()) {
+					expect(",");
+				}
+				components.add(pattern());
+			}
+			return new RecordPattern(pos, type, components);
+		}
+		return new JavaSyntax.TypePattern(pos, type, identifierOrUnnamed());
 	}
 
 	private Statement forStatement(int pos) {
@@ -796,15 +1067,12 @@ final class JavaParser {
 		while (at("catch")) {
 			int at = this.tokens.get(this.p++).offset();
 			expect("(");
-			annotations();
-			while (eat("final")) {
-				annotations();
-			}
+			finalModifier();
 			TypeName type = typeName();
 			if (at("|")) {
 				throw unsupported("a multi-catch");
 			}
-			String name = identifier();
+			String name = identifierOrUnnamed();
 			expect(")");
 			catches.add(new Catch(at, type, name, block()));
 		}
@@ -888,14 +1156,12 @@ final class JavaParser {
 			int pos = current().offset();
 			this.p += this.operatorWidth;
 			if (operator.equals("instanceof")) {
-				if (at("final") || at("@")) {
-					throw unsupported("a pattern");
+				if (atPattern() && !at("_")) {
+					left = new InstanceOf(pos, left, null, pattern());
 				}
-				TypeName type = typeName();
-				if (current().kind() == Kind.IDENTIFIER && !at("instanceof") || at("(")) {
-					throw unsupported("a pattern");
+				else {
+					left = new InstanceOf(pos, left, typeName(), null);
 				}
-				left = new InstanceOf(pos, left, type);
 			}
 			else {
 				left = new Binary(pos, operator, left, binary(level + 1));
@@ -1006,23 +1272,20 @@ final class JavaParser {
 				if (!parameters.isEmpty()) {
 					expect(",");
 				}
-				annotations();
-				while (eat("final")) {
-					annotations();
-				}
+				finalModifier();
 				int at = current().offset();
-				if (atIdentifier() && (peekIs(1, ",") || peekIs(1, ")"))) {
-					parameters.add(new Parameter(at, null, identifier()));
+				if ((atIdentifier() || at("_")) && (peekIs(1, ",") || peekIs(1, ")"))) {
+					parameters.add(new Parameter(at, null, identifierOrUnnamed()));
 				}
 				else {
 					TypeName type = typeName();
 					at = current().offset();
-					parameters.add(new Parameter(at, type.name().equals("var") ? null : type, identifier()));
+					parameters.add(new Parameter(at, type.name().equals("var") ? null : type, identifierOrUnnamed()));
 				}
 			}
 		}
 		else {
-			parameters.add(new Parameter(pos, null, identifier()));
+			parameters.add(new Parameter(pos, null, identifierOrUnnamed()));
 		}
 		expect("->");
 		return at("{") ? new Lambda(pos, parameters, null, block()) : new Lambda(pos, parameters, expression(), null);
@@ -1127,9 +1390,9 @@ final class JavaParser {
 			}
 			case "new":
 				this.p++;
-				return creation(pos);
+				return creation(pos, null);
 			case "switch":
-				throw unsupported("a switch");
+				return switchBlock();
 			default:
 		}
 		if (PRIMITIVES.contains(token.text()) || token.text().equals("void")) {
@@ -1139,7 +1402,7 @@ final class JavaParser {
 		return at("(") ? new Call(pos, null, name, arguments(), false) : new Name(pos, name);
 	}
 
-	private Expression creation(int pos) {
+	private Expression creation(int pos, @Nullable Expression outer) {
 		annotations();
 		TypeName type = typeName();
 		if (type.dimensions() > 0) {
@@ -1147,28 +1410,32 @@ final class JavaParser {
 			if (!at("{")) {
 				throw error("expected '{' but found " + current().shown());
 			}
-			return new NewArray(pos, type, null, arrayInitializer());
+			return new NewArray(pos, type, List.of(), arrayInitializer());
 		}
-		if (at("[")) {
-			this.p++;
-			Expression length = expression();
-			expect("]");
-			int dimensions = 1;
-			while (at("[")) {
-				if (!peekIs(1, "]")) {
-					throw unsupported("an array of several dimensions made with its lengths");
-				}
+		if (at("[") && outer == null) {
+			List<Expression> lengths = new ArrayList<>();
+			int dimensions = 0;
+			while (at("[") && !peekIs(1, "]")) {
+				this.p++;
+				lengths.add(expression());
+				expect("]");
+				dimensions++;
+			}
+			while (at("[") && peekIs(1, "]")) {
 				this.p += 2;
 				dimensions++;
 			}
-			return new NewArray(pos, new TypeName(type.pos(), type.name(), type.arguments(), false, dimensions), length,
-					null);
+			return new NewArray(pos, new TypeName(type.pos(), type.name(), type.arguments(), false, dimensions),
+					lengths, null);
 		}
 		List<Expression> arguments = arguments();
+		ClassDeclaration body = null;
 		if (at("{")) {
-			throw unsupported("an anonymous class");
+			Body members = body("", JavaSyntax.Kind.CLASS);
+			body = new ClassDeclaration(pos, Set.of(), JavaSyntax.Kind.CLASS, "", null, List.of(), List.of(), List.of(),
+					List.of(), members.fields, members.methods, members.initializers, members.nested, false);
 		}
-		return new New(pos, type, arguments);
+		return new New(pos, type, arguments, body, outer);
 	}
 
 	private Expression postfix(Expression expression) {
@@ -1179,10 +1446,16 @@ final class JavaParser {
 					throw unsupported("an explicit type argument");
 				}
 				if (at("new")) {
-					throw unsupported("an inner class creation");
+					int at = this.tokens.get(this.p++).offset();
+					expression = creation(at, expression);
+					continue;
 				}
-				if (at("this") || at("super")) {
-					throw unsupported("a qualified this");
+				if (at("this")) {
+					expression = new QualifiedThis(this.tokens.get(this.p++).offset(), expression);
+					continue;
+				}
+				if (at("super")) {
+					throw unsupported("a method of an interface called through super");
 				}
 				if (at("class")) {
 					throw unsupported("a class literal");

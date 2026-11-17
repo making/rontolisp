@@ -78,7 +78,16 @@ final class JavaIntrinsics {
 	 * {@code null} where the subset has no test yet.
 	 */
 	static @Nullable LispSymbol predicate(JavaClass declaration) {
-		return declaration.name.equals(STRING) ? cl("simple-string-p") : null;
+		return switch (declaration.name) {
+			case STRING -> cl("simple-string-p");
+			// a boxed number is the number: an Integer and a Long of one number are one
+			// value
+			case "java.lang.Integer", "java.lang.Long" -> cl("integerp");
+			case "java.lang.Double" -> cl("floatp");
+			case "java.lang.Character" -> cl("characterp");
+			case "java.lang.Boolean" -> JavaForms.runtime("boolean-p");
+			default -> null;
+		};
 	}
 
 	/** The intrinsic classes, as the class table asks for them. */
@@ -191,9 +200,20 @@ final class JavaIntrinsics {
 			}
 			case "java.lang.Long":
 				return new Builder(name, false, 0, classes).field("MAX_VALUE", Primitive.LONG, integer(Long.MAX_VALUE))
-					.field("MIN_VALUE", Primitive.LONG, integer(Long.MIN_VALUE)).made;
+					.field("MIN_VALUE", Primitive.LONG, integer(Long.MIN_VALUE))
+					.statik("hashCode", Primitive.INT, (lowering, call) -> runtimeCall("long-hash", call.argument(0)),
+							Primitive.LONG).made;
 			case "java.lang.Double":
+				return new Builder(name, false, 0, classes)
+					.statik("compare", Primitive.INT,
+							(lowering, call) -> runtimeCall("double-compare", call.argument(0), call.argument(1)),
+							Primitive.DOUBLE, Primitive.DOUBLE)
+					.statik("hashCode", Primitive.INT, (lowering, call) -> runtimeCall("hash-code", call.argument(0)),
+							Primitive.DOUBLE).made;
 			case "java.lang.Boolean":
+				return new Builder(name, false, 0, classes).statik("hashCode", Primitive.INT,
+						(lowering, call) -> call("if", call.argument(0), integer(1231), integer(1237)),
+						Primitive.BOOLEAN).made;
 			case "java.lang.Character":
 				return new Builder(name, false, 0, classes).made;
 			case "java.lang.System": {

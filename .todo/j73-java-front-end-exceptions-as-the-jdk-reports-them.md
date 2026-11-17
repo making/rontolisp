@@ -51,3 +51,10 @@ take one. Left:
   `(unwind-protect (main) nil)`; wrapping EVERY program cost `Sieve.wasm` 10,380 -> 18,170
   bytes and no time. A program whose only errors are the run time's is silent on wasm.
 - `ClassCastException` has no message; a `null` receiver of a direct call runs the body.
+
+After j69 (2026-11-17): a `switch` over `null` is `%java-null-switch` (a Lisp error, no
+`NullPointerException`); a switch that covers its type ends in `%java-no-match` (no
+`MatchException`); an exception out of a static initializer is not wrapped in
+`ExceptionInInitializerError`, and a run-time error inside an initialization that runs before
+`main` surfaces before `main` (`.kb/java-frontend.md`, "Static initialization"); a `yield`
+leaving a `finally` block is refused like `break` and `continue`.

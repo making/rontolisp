@@ -82,6 +82,16 @@ final class JavaNames {
 		return symbol(method.owner.lispName() + "." + method.signature());
 	}
 
+	/** The function running a class's static initialization at its first use. */
+	static LispSymbol initializer(JavaClass declaration) {
+		return symbol(declaration.lispName() + ".<clinit>");
+	}
+
+	/** The variable telling that a class's static initialization has started. */
+	static LispSymbol initialized(JavaClass declaration) {
+		return symbol(declaration.lispName() + ".<clinit>%done");
+	}
+
 	/** The function making an instance and running a constructor on it. */
 	static LispSymbol creator(JavaClass.Method constructor) {
 		return symbol(constructor.owner.lispName() + ".new" + constructor.parameterList());

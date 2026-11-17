@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 import am.ik.rontolisp.SourceLocation;
 import am.ik.rontolisp.java.JavaClass.Source;
@@ -60,6 +61,21 @@ final class JavaClasses {
 
 	private final Set<String> missing = new HashSet<>();
 
+	/** The local and anonymous classes, by declaration: a pass made again finds them. */
+	private final Map<ClassDeclaration, JavaClass> locals = new IdentityHashMap<>();
+
+	private final Map<String, Integer> localNumbers = new HashMap<>();
+
+	private final Map<ClassDeclaration, Integer> numbers = new IdentityHashMap<>();
+
+	/** The classes whose bodies' local and anonymous classes are numbered. */
+	private final Set<ClassDeclaration> numbered = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+
+	private int version;
+
+	/** The local classes in scope where the lowering stands, by simple name. */
+	@Nullable Function<String, @Nullable JavaClass> localScope;
+
 	private final Library library;
 
 	/**
@@ -92,8 +108,16 @@ final class JavaClasses {
 		return this.classes.values();
 	}
 
-	int size() {
-		return this.classes.size();
+	/**
+	 * How many times the table changed: a class added, a local found to be read by a
+	 * local class. A lowering made while it moved is made again.
+	 */
+	int version() {
+		return this.version;
+	}
+
+	void changed() {
+		this.version++;
 	}
 
 	Unit unit(JavaClass declaration) {
@@ -119,6 +143,7 @@ final class JavaClasses {
 		}
 		this.classes.put(declaration.name, declaration);
 		this.lispNames.put(declaration.lispName(), declaration);
+		this.version++;
 	}
 
 	/**
@@ -126,7 +151,7 @@ final class JavaClasses {
 	 * then what each extends and its members.
 	 * @param tree the file
 	 * @param source its text
-	 * @return the classes, in the file's order
+	 * @return the top-level classes, in the file's order
 	 */
 	List<JavaClass> declare(CompilationUnit tree, Source source) {
 		Map<String, Import> imports = new HashMap<>();
@@ -151,32 +176,277 @@ final class JavaClasses {
 		}
 		Unit unit = new Unit(source, tree.packageName(), imports, onDemand, new LinkedHashMap<>());
 		List<JavaClass> declared = new ArrayList<>();
+		List<JavaClass> all = new ArrayList<>();
 		for (ClassDeclaration declaration : tree.classes()) {
 			String name = tree.packageName() == null ? declaration.name()
 					: tree.packageName() + "." + declaration.name();
-			JavaClass made = new JavaClass(name, declaration.isInterface(),
-					declaration.isInterface() || declaration.modifiers().contains("abstract"), false, 0, declaration,
-					source);
 			if (this.classes.containsKey(name) || unit.declared().containsKey(declaration.name())) {
 				throw error(source, declaration.pos(), "duplicate class: " + name);
 			}
+			JavaClass made = create(declaration, name, name, null, true, unit, all);
 			unit.declared().put(declaration.name(), made);
-			this.units.put(made, unit);
-			register(made);
 			declared.add(made);
 		}
-		for (JavaClass made : declared) {
+		complete(all, unit);
+		return declared;
+	}
+
+	/**
+	 * Adds a local or an anonymous class, once: a lowering made again finds the class its
+	 * first pass made.
+	 * @param declaration the class's declaration
+	 * @param outer the class whose body it stands in
+	 * @param isStatic whether it stands in a static context
+	 * @param extended the type an anonymous class is made of, or {@code null} for a local
+	 * class
+	 * @return the class
+	 */
+	JavaClass local(ClassDeclaration declaration, JavaClass outer, boolean isStatic, @Nullable JavaClass extended) {
+		JavaClass known = this.locals.get(declaration);
+		if (known != null) {
+			return known;
+		}
+		Unit unit = unit(outer);
+		String name = outer.binaryName + "$" + number(declaration, outer) + declaration.name();
+		List<JavaClass> all = new ArrayList<>();
+		JavaClass made = create(declaration, name, name, outer, isStatic || declaration.kind() != JavaSyntax.Kind.CLASS,
+				unit, all);
+		made.isLocal = true;
+		this.locals.put(declaration, made);
+		if (extended != null) {
+			if (extended.isFinal && !extended.isEnum) {
+				throw error(unit.source(), declaration.pos(), "cannot inherit from final " + extended.simpleName());
+			}
+			if (extended.isSealed && !extended.isEnum) {
+				throw error(unit.source(), declaration.pos(), "local classes must not extend sealed classes");
+			}
+			if (extended.isInterface) {
+				made.interfaces.add(extended);
+			}
+			else {
+				made.superclass = extended.intrinsic ? null : extended;
+			}
+		}
+		complete(all, unit);
+		return made;
+	}
+
+	/**
+	 * The number in a local or an anonymous class's name: the classes of one simple name
+	 * declared in a class's body are counted in the order they are written, as a compiler
+	 * names them.
+	 */
+	private int number(ClassDeclaration declaration, JavaClass outer) {
+		Integer known = this.numbers.get(declaration);
+		if (known == null && outer.declaration != null && this.numbered.add(outer.declaration)) {
+			ClassDeclaration around = outer.declaration;
+			List<Object> members = new ArrayList<>();
+			members.addAll(around.constants());
+			members.addAll(around.fields());
+			members.addAll(around.methods());
+			members.addAll(around.initializers());
+			members.sort(java.util.Comparator.comparingInt(member -> switch (member) {
+				case JavaSyntax.EnumConstant constant -> constant.pos();
+				case JavaSyntax.Field field -> field.pos();
+				case JavaSyntax.Method method -> method.pos();
+				case JavaSyntax.Initializer block -> block.pos();
+				default -> 0;
+			}));
+			List<ClassDeclaration> found = new ArrayList<>();
+			for (Object member : members) {
+				declared(member, found);
+			}
+			for (ClassDeclaration local : found) {
+				this.numbers.put(local,
+						this.localNumbers.merge(outer.binaryName + "$" + local.name(), 1, Integer::sum));
+			}
+			known = this.numbers.get(declaration);
+		}
+		return known != null ? known
+				: this.localNumbers.merge(outer.binaryName + "$" + declaration.name(), 1, Integer::sum);
+	}
+
+	/**
+	 * The local and anonymous classes declared in a part of a class's body, in the order
+	 * written; the ones declared inside them are theirs to count.
+	 */
+	private static void declared(@Nullable Object node, List<ClassDeclaration> into) {
+		switch (node) {
+			case null -> {
+			}
+			case List<?> nodes -> nodes.forEach(each -> declared(each, into));
+			case JavaSyntax.EnumConstant constant -> {
+				declared(constant.arguments(), into);
+				declared(constant.body(), into);
+			}
+			case ClassDeclaration local -> into.add(local);
+			case JavaSyntax.Field field -> declared(field.initializer(), into);
+			case JavaSyntax.Method method -> declared(method.body(), into);
+			case JavaSyntax.Initializer block -> declared(block.body(), into);
+			case JavaSyntax.New creation -> {
+				declared(creation.outer(), into);
+				declared(creation.arguments(), into);
+				declared(creation.body(), into);
+			}
+			case JavaSyntax.LocalClass local -> into.add(local.declaration());
+			case JavaSyntax.Select select -> declared(select.target(), into);
+			case JavaSyntax.QualifiedThis self -> {
+			}
+			case JavaSyntax.Call call -> {
+				declared(call.target(), into);
+				declared(call.arguments(), into);
+			}
+			case JavaSyntax.ConstructorCall call -> declared(call.arguments(), into);
+			case JavaSyntax.NewArray creation -> {
+				declared(creation.lengths(), into);
+				declared(creation.initializer(), into);
+			}
+			case JavaSyntax.ArrayInitializer initializer -> declared(initializer.elements(), into);
+			case JavaSyntax.Index index -> {
+				declared(index.array(), into);
+				declared(index.index(), into);
+			}
+			case JavaSyntax.Unary unary -> declared(unary.operand(), into);
+			case JavaSyntax.Binary binary -> {
+				declared(binary.left(), into);
+				declared(binary.right(), into);
+			}
+			case JavaSyntax.Assign assignment -> {
+				declared(assignment.target(), into);
+				declared(assignment.value(), into);
+			}
+			case JavaSyntax.Conditional conditional -> {
+				declared(conditional.condition(), into);
+				declared(conditional.whenTrue(), into);
+				declared(conditional.whenFalse(), into);
+			}
+			case JavaSyntax.Cast cast -> declared(cast.operand(), into);
+			case JavaSyntax.InstanceOf test -> declared(test.operand(), into);
+			case JavaSyntax.Lambda lambda -> {
+				declared(lambda.expression(), into);
+				declared(lambda.block(), into);
+			}
+			case JavaSyntax.Switch block -> {
+				declared(block.selector(), into);
+				for (JavaSyntax.SwitchCase written : block.cases()) {
+					declared(written.constants(), into);
+					declared(written.guard(), into);
+					declared(written.body(), into);
+					declared(written.value(), into);
+				}
+			}
+			case JavaSyntax.LocalVariable variable ->
+				variable.declarators().forEach(declarator -> declared(declarator.initializer(), into));
+			case JavaSyntax.ExpressionStatement statement -> declared(statement.expression(), into);
+			case JavaSyntax.If branch -> {
+				declared(branch.condition(), into);
+				declared(branch.then(), into);
+				declared(branch.otherwise(), into);
+			}
+			case JavaSyntax.While loop -> {
+				declared(loop.condition(), into);
+				declared(loop.body(), into);
+			}
+			case JavaSyntax.DoWhile loop -> {
+				declared(loop.body(), into);
+				declared(loop.condition(), into);
+			}
+			case JavaSyntax.For loop -> {
+				declared(loop.initializers(), into);
+				declared(loop.condition(), into);
+				declared(loop.updates(), into);
+				declared(loop.body(), into);
+			}
+			case JavaSyntax.ForEach loop -> {
+				declared(loop.iterable(), into);
+				declared(loop.body(), into);
+			}
+			case JavaSyntax.Return exit -> declared(exit.value(), into);
+			case JavaSyntax.Yield exit -> declared(exit.value(), into);
+			case JavaSyntax.Throw exit -> declared(exit.value(), into);
+			case JavaSyntax.Labeled labeled -> declared(labeled.body(), into);
+			case JavaSyntax.Block block -> declared(block.statements(), into);
+			case JavaSyntax.Try attempt -> {
+				declared(attempt.body(), into);
+				attempt.catches().forEach(clause -> declared(clause.body(), into));
+				declared(attempt.finallyBlock(), into);
+			}
+			default -> {
+			}
+		}
+	}
+
+	private JavaClass create(ClassDeclaration declaration, String name, String binaryName, @Nullable JavaClass outer,
+			boolean isStatic, Unit unit, List<JavaClass> all) {
+		Set<String> modifiers = declaration.modifiers();
+		boolean isInterface = declaration.isInterface();
+		JavaClass made = new JavaClass(name, binaryName, declaration.name(), isInterface,
+				isInterface || modifiers.contains("abstract"), false, 0, declaration, unit.source());
+		made.outer = outer;
+		made.isStatic = isStatic;
+		made.isEnum = declaration.kind() == JavaSyntax.Kind.ENUM;
+		made.isRecord = declaration.kind() == JavaSyntax.Kind.RECORD;
+		made.isSealed = modifiers.contains("sealed");
+		made.isFinal = modifiers.contains("final") || made.isRecord
+				|| (made.isEnum && declaration.constants().stream().noneMatch(constant -> constant.body() != null));
+		this.units.put(made, unit);
+		register(made);
+		all.add(made);
+		for (ClassDeclaration nested : declaration.nested()) {
+			if (made.members.containsKey(nested.name())) {
+				throw error(unit.source(), nested.pos(), "duplicate class: " + nested.name());
+			}
+			boolean nestedStatic = nested.modifiers().contains("static") || nested.kind() != JavaSyntax.Kind.CLASS
+					|| isInterface;
+			made.members.put(nested.name(), create(nested, name + "." + nested.name(), binaryName + "$" + nested.name(),
+					made, nestedStatic, unit, all));
+		}
+		return made;
+	}
+
+	/** What each new class extends, what a sealed one permits, then the members. */
+	private void complete(List<JavaClass> all, Unit unit) {
+		Source source = unit.source();
+		for (JavaClass made : all) {
 			supertypes(made, unit);
 		}
-		for (JavaClass made : declared) {
+		for (JavaClass made : all) {
 			for (JavaClass up = made.superclass; up != null; up = up.superclass) {
 				if (up == made) {
 					throw error(source, declaration(made).pos(), "cyclic inheritance involving " + made.name);
 				}
 			}
+			List<JavaClass> above = new ArrayList<>(made.interfaces);
+			if (made.superclass != null) {
+				above.add(made.superclass);
+			}
+			for (JavaClass parent : above) {
+				if (parent.isFinal && !(parent.isEnum && made.isLocal)) {
+					throw error(source, declaration(made).pos(), "cannot inherit from final " + parent.simpleName());
+				}
+				if (!parent.isSealed || parent.isEnum) {
+					continue;
+				}
+				if (declaration(parent).permits().isEmpty()) {
+					if (unit(parent) != unit) {
+						throw error(source, declaration(made).pos(),
+								"class is not allowed to extend sealed class: " + parent.simpleName());
+					}
+					parent.permits.add(made);
+				}
+				else if (!parent.permits.contains(made)) {
+					throw error(source, declaration(made).pos(), "class is not allowed to extend sealed class: "
+							+ parent.simpleName() + " (as it is not listed in its 'permits' clause)");
+				}
+				Set<String> modifiers = declaration(made).modifiers();
+				if (!made.isFinal && !made.isSealed && !modifiers.contains("non-sealed")) {
+					throw error(source, declaration(made).pos(), "sealed, non-sealed or final modifiers expected");
+				}
+			}
+		}
+		for (JavaClass made : all) {
 			members(made, unit);
 		}
-		return declared;
 	}
 
 	private static ClassDeclaration declaration(JavaClass made) {
@@ -188,17 +458,31 @@ final class JavaClasses {
 		Source source = unit.source();
 		TypeName extended = declaration.superclass();
 		if (extended != null) {
-			JavaClass superclass = require(extended.name(), extended.pos(), unit);
+			JavaClass superclass = require(extended.name(), extended.pos(), made.outer, unit);
 			if (superclass.isInterface) {
 				throw error(source, extended.pos(), "no interface expected here");
 			}
 			if (superclass.intrinsic && !superclass.name.equals("java.lang.Object")) {
 				throw unsupported(source, extended.pos(), "a class extending " + superclass.name);
 			}
+			if (superclass.isEnum) {
+				throw error(source, extended.pos(), "cannot inherit from final " + superclass.simpleName());
+			}
+			if (superclass.hasOuterInstance() && !superclass.isLocal
+					&& !(made.hasOuterInstance() && encloses(superclass.outer, made))) {
+				throw unsupported(source, extended.pos(), "a class extending the inner class " + superclass.simpleName()
+						+ " from outside its outer class");
+			}
 			made.superclass = superclass.intrinsic ? null : superclass;
 		}
+		else if (made.isEnum) {
+			made.superclass = library("java.lang.Enum");
+		}
+		else if (made.isRecord) {
+			made.superclass = library("java.lang.Record");
+		}
 		for (TypeName implemented : declaration.interfaces()) {
-			JavaClass type = require(implemented.name(), implemented.pos(), unit);
+			JavaClass type = require(implemented.name(), implemented.pos(), made.outer, unit);
 			if (!type.isInterface) {
 				throw error(source, implemented.pos(), "interface expected here");
 			}
@@ -207,37 +491,121 @@ final class JavaClasses {
 			}
 			made.interfaces.add(type);
 		}
+		for (TypeName permitted : declaration.permits()) {
+			if (!made.isSealed) {
+				throw error(source, permitted.pos(), "invalid permits clause: " + made.simpleName() + " is not sealed");
+			}
+			made.permits.add(require(permitted.name(), permitted.pos(), made, unit));
+		}
+	}
+
+	/**
+	 * Whether a class is, or extends, one of the classes another's declaration stands in.
+	 */
+	private static boolean encloses(@Nullable JavaClass outer, JavaClass inner) {
+		for (JavaClass up = inner.outer; up != null; up = up.outer) {
+			if (outer != null && up.isSubclassOf(outer)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static TypeName simpleType(JavaClass made, int pos, int dimensions) {
+		return new TypeName(pos, made.name, List.of(), false, dimensions);
 	}
 
 	private void members(JavaClass made, Unit unit) {
 		ClassDeclaration declaration = declaration(made);
 		Source source = unit.source();
 		Set<String> fieldNames = new HashSet<>();
+		List<JavaSyntax.Method> methods = new ArrayList<>(declaration.methods());
+		ClassType self = new ClassType(made, List.of());
+		// an enum's constants: static fields made once, by the constructor the arguments
+		// pick, behind the name and the ordinal every constructor takes first
+		int ordinal = 0;
+		for (JavaSyntax.EnumConstant constant : declaration.constants()) {
+			if (!fieldNames.add(constant.name())) {
+				throw error(source, constant.pos(),
+						"variable " + constant.name() + " is already defined in class " + made.simpleName());
+			}
+			JavaClass.Field field = new JavaClass.Field(made, constant.name(), self, true, true, null, null);
+			List<JavaSyntax.Expression> arguments = new ArrayList<>();
+			arguments.add(new JavaSyntax.StringLiteral(constant.pos(), constant.name()));
+			arguments.add(new JavaSyntax.IntLiteral(constant.pos(), ordinal++, false));
+			arguments.addAll(constant.arguments());
+			field.initializer = new JavaSyntax.New(constant.pos(), simpleType(made, constant.pos(), 0), arguments,
+					constant.body(), null);
+			field.pos = constant.pos();
+			field.isConstant = true;
+			made.fields.add(field);
+		}
+		// a record's components: a private final field, an accessor and the canonical
+		// constructor each, unless the record declares its own
+		for (Parameter component : declaration.components()) {
+			if (!fieldNames.add(component.name())) {
+				throw error(source, component.pos(), "record component " + component.name() + " is already defined");
+			}
+			JavaClass.Field field = new JavaClass.Field(made, component.name(),
+					type(java.util.Objects.requireNonNull(component.type()), made, unit), false, true, null, null);
+			field.pos = component.pos();
+			field.isPrivate = true;
+			made.fields.add(field);
+		}
+		if (made.isRecord) {
+			methods = recordMethods(made, declaration, methods, unit);
+		}
 		for (JavaSyntax.Field field : declaration.fields()) {
 			if (!fieldNames.add(field.name())) {
 				throw error(source, field.pos(),
 						"variable " + field.name() + " is already defined in class " + made.simpleName());
 			}
-			made.fields.add(new JavaClass.Field(made, field.name(), type(field.type(), unit),
-					field.modifiers().contains("static"), field.modifiers().contains("final"), field, null));
+			boolean isStatic = field.modifiers().contains("static") || made.isInterface;
+			if (made.isRecord && !isStatic) {
+				throw error(source, field.pos(), "field declaration must be static");
+			}
+			made.fields.add(new JavaClass.Field(made, field.name(), type(field.type(), made, unit), isStatic,
+					field.modifiers().contains("final") || made.isInterface, field, null));
 		}
 		Set<String> signatures = new HashSet<>();
 		boolean constructed = false;
-		for (JavaSyntax.Method method : declaration.methods()) {
+		for (JavaSyntax.Method method : methods) {
 			List<JavaType> parameters = new ArrayList<>();
+			boolean isConstructor = method.name().equals("<init>");
+			if (made.isEnum && isConstructor) {
+				parameters.add(libraryType("java.lang.String"));
+				parameters.add(Primitive.INT);
+			}
 			for (Parameter parameter : method.parameters()) {
-				parameters.add(type(java.util.Objects.requireNonNull(parameter.type()), unit));
+				parameters.add(type(java.util.Objects.requireNonNull(parameter.type()), made, unit));
 			}
 			TypeName returned = method.returnType();
 			JavaType returnType = returned == null || returned.name().equals("void") ? Primitive.VOID
-					: type(returned, unit);
-			boolean isStatic = method.modifiers().contains("static");
+					: type(returned, made, unit);
+			Set<String> modifiers = method.modifiers();
+			boolean isStatic = modifiers.contains("static");
 			boolean isAbstract = method.body() == null;
-			if (isAbstract && !made.isInterface && !method.modifiers().contains("abstract")) {
+			if (made.isInterface) {
+				boolean bodied = modifiers.contains("default") || isStatic || modifiers.contains("private");
+				if (!isAbstract && !bodied) {
+					throw error(source, method.pos(), "interface abstract methods cannot have body");
+				}
+				if (isAbstract && bodied) {
+					throw error(source, method.pos(), "missing method body, or declare abstract");
+				}
+			}
+			else if (modifiers.contains("default")) {
+				throw error(source, method.pos(), "modifier default not allowed here");
+			}
+			if (isAbstract && !made.isInterface && !modifiers.contains("abstract")) {
 				throw error(source, method.pos(), "missing method body, or declare abstract");
 			}
-			if (!isAbstract && method.modifiers().contains("abstract")) {
+			if (!isAbstract && modifiers.contains("abstract")) {
 				throw error(source, method.pos(), "abstract methods cannot have a body");
+			}
+			if (isAbstract && made.isEnum) {
+				// every constant of such an enum has a body of its own
+				made.isAbstract = true;
 			}
 			if (isAbstract && !made.isAbstract) {
 				throw error(source, method.pos(),
@@ -245,6 +613,10 @@ final class JavaClasses {
 			}
 			JavaClass.Method member = new JavaClass.Method(made, method.name(), parameters, returnType, isStatic,
 					isAbstract, method, null, false);
+			if (made.isEnum && isConstructor) {
+				member.hidden = 2;
+				member.isPrivate = true;
+			}
 			if (!signatures.add(member.signature())) {
 				throw error(source, method.pos(),
 						"method " + member.signature() + " is already defined in class " + made.simpleName());
@@ -256,20 +628,241 @@ final class JavaClasses {
 			}
 			made.methods.add(member);
 		}
+		if (made.isLocal && declaration.name().isEmpty()) {
+			// an anonymous class: its constructors are made where it is created, one for
+			// each constructor of its superclass an instance creation picks
+			return;
+		}
 		if (!made.isInterface && !constructed) {
-			made.methods
-				.add(new JavaClass.Method(made, "<init>", List.of(), Primitive.VOID, false, false, null, null, false));
+			JavaClass.Method constructor = new JavaClass.Method(made, "<init>",
+					made.isEnum ? List.of(libraryType("java.lang.String"), Primitive.INT) : List.of(), Primitive.VOID,
+					false, false, null, null, false);
+			constructor.hidden = made.isEnum ? 2 : 0;
+			made.methods.add(constructor);
 		}
 	}
 
 	/**
-	 * The class a name written in a file means, or {@code null}: a class of the file, a
-	 * single-type import, a class of the file's package, of {@code java.lang}, of a
-	 * package imported on demand; a qualified name is the class itself.
+	 * The methods of a record: its own, the canonical constructor, the accessors and
+	 * {@code toString}, {@code equals} and {@code hashCode} it does not declare.
 	 */
-	@Nullable JavaClass find(String name, Unit unit) {
-		if (name.indexOf('.') >= 0) {
-			return qualified(name);
+	private List<JavaSyntax.Method> recordMethods(JavaClass made, ClassDeclaration declaration,
+			List<JavaSyntax.Method> declared, Unit unit) {
+		int at = declaration.pos();
+		List<Parameter> components = declaration.components();
+		List<JavaSyntax.Statement> stores = new ArrayList<>();
+		for (Parameter component : components) {
+			stores.add(new JavaSyntax.ExpressionStatement(at,
+					new JavaSyntax.Assign(at, "=", new JavaSyntax.Select(at, new JavaSyntax.This(at), component.name()),
+							new JavaSyntax.Name(at, component.name()))));
+		}
+		List<JavaType> componentTypes = new ArrayList<>();
+		for (JavaClass.Field field : made.fields) {
+			componentTypes.add(field.type);
+		}
+		List<JavaSyntax.Method> methods = new ArrayList<>();
+		boolean canonical = false;
+		Set<String> names = new HashSet<>();
+		for (JavaSyntax.Method method : declared) {
+			if (method.compact()) {
+				if (canonical) {
+					throw error(unit.source(), method.pos(), "constructor is already defined in the record");
+				}
+				List<JavaSyntax.Statement> body = new ArrayList<>(
+						java.util.Objects.requireNonNull(method.body()).statements());
+				body.addAll(stores);
+				methods.add(new JavaSyntax.Method(method.pos(), method.modifiers(), null, "<init>", components,
+						new JavaSyntax.Block(method.pos(), body)));
+				canonical = true;
+				continue;
+			}
+			if (method.name().equals("<init>")) {
+				List<JavaType> parameters = new ArrayList<>();
+				for (Parameter parameter : method.parameters()) {
+					parameters.add(type(java.util.Objects.requireNonNull(parameter.type()), made, unit));
+				}
+				canonical |= parameters.equals(componentTypes);
+			}
+			else if (method.parameters().isEmpty()) {
+				names.add(method.name());
+			}
+			else if (method.name().equals("equals") && method.parameters().size() == 1) {
+				names.add("equals");
+			}
+			methods.add(method);
+		}
+		if (!canonical) {
+			methods.add(new JavaSyntax.Method(at, Set.of("public"), null, "<init>", components,
+					new JavaSyntax.Block(at, stores)));
+		}
+		for (Parameter component : components) {
+			if (!names.contains(component.name())) {
+				methods.add(new JavaSyntax.Method(at, Set.of("public"), component.type(), component.name(), List.of(),
+						new JavaSyntax.Block(at, List.of(new JavaSyntax.Return(at,
+								new JavaSyntax.Select(at, new JavaSyntax.This(at), component.name()))))));
+			}
+		}
+		String simple = made.simpleName();
+		StringBuilder text = new StringBuilder();
+		if (!names.contains("toString")) {
+			text.append("public String toString() { return \"").append(simple).append("[\"");
+			for (int i = 0; i < components.size(); i++) {
+				String name = components.get(i).name();
+				text.append(" + \"").append(i > 0 ? ", " : "").append(name).append("=\" + this.").append(name);
+			}
+			text.append(" + \"]\"; }\n");
+		}
+		if (!names.contains("equals")) {
+			text.append("public boolean equals(Object $o) { return $o instanceof ")
+				.append(simple)
+				.append(components.isEmpty() ? "" : " $that");
+			for (int i = 0; i < components.size(); i++) {
+				String name = components.get(i).name();
+				JavaType type = componentTypes.get(i);
+				String mine = "this." + name;
+				String theirs = "$that." + name;
+				text.append(" && ");
+				if (type == Primitive.DOUBLE) {
+					text.append("Double.compare(").append(mine).append(", ").append(theirs).append(") == 0");
+				}
+				else if (type.isPrimitive()) {
+					text.append(mine).append(" == ").append(theirs);
+				}
+				else {
+					text.append("(")
+						.append(mine)
+						.append(" == null ? ")
+						.append(theirs)
+						.append(" == null : ")
+						.append(mine)
+						.append(".equals(")
+						.append(theirs)
+						.append("))");
+				}
+			}
+			text.append("; }\n");
+		}
+		if (!names.contains("hashCode")) {
+			text.append("public int hashCode() { int $h = 0;");
+			for (int i = 0; i < components.size(); i++) {
+				String mine = "this." + components.get(i).name();
+				JavaType type = componentTypes.get(i);
+				String hash = type == Primitive.INT || type == Primitive.CHAR ? mine
+						: type == Primitive.LONG ? "Long.hashCode(" + mine + ")"
+								: type == Primitive.DOUBLE ? "Double.hashCode(" + mine + ")"
+										: type == Primitive.BOOLEAN ? "Boolean.hashCode(" + mine + ")"
+												: "(" + mine + " == null ? 0 : " + mine + ".hashCode())";
+				text.append(" $h = 31 * $h + ").append(hash).append(";");
+			}
+			text.append(" return $h; }\n");
+		}
+		methods.addAll(JavaParser.synthetic(text.toString(), simple, JavaSyntax.Kind.RECORD, at));
+		return methods;
+	}
+
+	/**
+	 * Adds an enum's {@code values()} or {@code valueOf(String)}, and the array both
+	 * read, where a program first names one: the second throws, and a program that does
+	 * not name it holds no exception class for it.
+	 * @param made the enum
+	 * @param name {@code values} or {@code valueOf}
+	 */
+	void enumMethod(JavaClass made, String name) {
+		if (!made.isEnum || made.declaration == null
+				|| made.methods.stream().anyMatch(method -> method.name.equals(name))) {
+			return;
+		}
+		ClassDeclaration declaration = made.declaration;
+		Unit unit = unit(made);
+		int at = declaration.pos();
+		if (made.fields.stream().noneMatch(field -> field.name.equals("$VALUES"))) {
+			List<JavaSyntax.Expression> constants = new ArrayList<>();
+			for (JavaSyntax.EnumConstant constant : declaration.constants()) {
+				constants.add(new JavaSyntax.Name(at, constant.name()));
+			}
+			JavaClass.Field values = new JavaClass.Field(made, "$VALUES", new ArrayType(new ClassType(made, List.of())),
+					true, true, null, null);
+			values.initializer = new JavaSyntax.ArrayInitializer(at, constants);
+			// set right after the constants: an initializer below them may ask for
+			// values()
+			values.pos = declaration.constants().isEmpty() ? at
+					: declaration.constants().get(declaration.constants().size() - 1).pos();
+			values.isPrivate = true;
+			values.frozen = true;
+			made.fields.add(values);
+		}
+		String type = made.simpleName();
+		String text = name.equals("values") ? "public static " + type + "[] values() { return $VALUES.clone(); }\n"
+				: "public static " + type + " valueOf(String name) { for (" + type
+						+ " constant : $VALUES) { if (constant.name().equals(name)) { return constant; } }"
+						+ " throw new IllegalArgumentException(\"No enum constant " + made.name + ".\" + name); }\n";
+		for (JavaSyntax.Method method : JavaParser.synthetic(text, type, JavaSyntax.Kind.ENUM, at)) {
+			List<JavaType> parameters = new ArrayList<>();
+			for (Parameter parameter : method.parameters()) {
+				parameters.add(type(java.util.Objects.requireNonNull(parameter.type()), made, unit));
+			}
+			made.methods.add(new JavaClass.Method(made, method.name(), parameters,
+					type(java.util.Objects.requireNonNull(method.returnType()), made, unit), true, false, method, null,
+					false));
+		}
+		this.version++;
+	}
+
+	/** The member type of a name a class has: its own, or one it inherits. */
+	private static @Nullable JavaClass member(JavaClass declaration, String name, Set<JavaClass> seen) {
+		if (!seen.add(declaration)) {
+			return null;
+		}
+		JavaClass found = declaration.members.get(name);
+		if (found == null && declaration.superclass != null) {
+			found = member(declaration.superclass, name, seen);
+		}
+		for (int i = 0; found == null && i < declaration.interfaces.size(); i++) {
+			found = member(declaration.interfaces.get(i), name, seen);
+		}
+		return found;
+	}
+
+	/**
+	 * The class a name written in a class's body means, or {@code null}: a local class in
+	 * scope, the class itself or a member type of it or of a class around it, a class of
+	 * the file, a single-type import, a class of the file's package, of
+	 * {@code java.lang}, of a package imported on demand. A qualified name is a class and
+	 * the member types under it.
+	 */
+	@Nullable JavaClass find(String name, @Nullable JavaClass context, Unit unit) {
+		int dot = name.indexOf('.');
+		if (dot >= 0) {
+			JavaClass whole = qualified(name);
+			if (whole != null) {
+				return whole;
+			}
+			// the longest prefix that is a class, then member types
+			for (int end = name.lastIndexOf('.'); end > 0; end = name.lastIndexOf('.', end - 1)) {
+				String prefix = name.substring(0, end);
+				JavaClass outer = prefix.indexOf('.') < 0 ? find(prefix, context, unit) : qualified(prefix);
+				if (outer == null) {
+					continue;
+				}
+				for (String segment : name.substring(end + 1).split("\\.")) {
+					outer = outer == null ? null : member(outer, segment, new HashSet<>());
+				}
+				return outer;
+			}
+			return null;
+		}
+		JavaClass local = this.localScope == null ? null : this.localScope.apply(name);
+		if (local != null) {
+			return local;
+		}
+		for (JavaClass around = context; around != null; around = around.outer) {
+			if (around.simpleName().equals(name)) {
+				return around;
+			}
+			JavaClass member = member(around, name, new HashSet<>());
+			if (member != null) {
+				return member;
+			}
 		}
 		JavaClass declared = unit.declared().get(name);
 		if (declared != null) {
@@ -302,8 +895,8 @@ final class JavaClasses {
 	}
 
 	/** {@link #find}, or the error a compiler reports. */
-	JavaClass require(String name, int pos, Unit unit) {
-		JavaClass found = find(name, unit);
+	JavaClass require(String name, int pos, @Nullable JavaClass context, Unit unit) {
+		JavaClass found = find(name, context, unit);
 		if (found != null) {
 			return found;
 		}
@@ -338,7 +931,15 @@ final class JavaClasses {
 			throw new UncheckedIOException(ex);
 		}
 		String simpleName = name.substring(name.lastIndexOf('.') + 1);
-		declare(JavaParser.parse(text, path, simpleName), new Source(path, text));
+		// a class of the library names no local class of the program
+		Function<String, @Nullable JavaClass> scope = this.localScope;
+		this.localScope = null;
+		try {
+			declare(JavaParser.parse(text, path, simpleName), new Source(path, text));
+		}
+		finally {
+			this.localScope = scope;
+		}
 		return java.util.Objects.requireNonNull(this.classes.get(name), () -> path + " does not declare " + name);
 	}
 
@@ -351,8 +952,8 @@ final class JavaClasses {
 		return new ClassType(library(name), List.of());
 	}
 
-	/** The type a written type means. */
-	JavaType type(TypeName written, Unit unit) {
+	/** The type a type written in a class's body means. */
+	JavaType type(TypeName written, @Nullable JavaClass context, Unit unit) {
 		JavaType type = switch (written.name()) {
 			case "int" -> Primitive.INT;
 			case "long" -> Primitive.LONG;
@@ -363,7 +964,7 @@ final class JavaClasses {
 				throw unsupported(unit.source(), written.pos(), "the type " + written.name());
 			case "void" -> throw error(unit.source(), written.pos(), "void is not allowed here");
 			case "var" -> throw error(unit.source(), written.pos(), "var is not allowed here");
-			default -> classType(written, unit);
+			default -> classType(written, context, unit);
 		};
 		for (int i = 0; i < written.dimensions(); i++) {
 			type = new ArrayType(type);
@@ -371,8 +972,8 @@ final class JavaClasses {
 		return type;
 	}
 
-	private ClassType classType(TypeName written, Unit unit) {
-		JavaClass declaration = require(written.name(), written.pos(), unit);
+	private ClassType classType(TypeName written, @Nullable JavaClass context, Unit unit) {
+		JavaClass declaration = require(written.name(), written.pos(), context, unit);
 		Source source = unit.source();
 		if (written.diamond()) {
 			throw error(source, written.pos(), "cannot infer type arguments for " + declaration.simpleName() + " here");
@@ -388,7 +989,7 @@ final class JavaClasses {
 		}
 		List<JavaType> arguments = new ArrayList<>();
 		for (TypeName argument : written.arguments()) {
-			JavaType type = type(argument, unit);
+			JavaType type = type(argument, context, unit);
 			if (type.isPrimitive()) {
 				throw error(source, argument.pos(), "unexpected type; required: reference, found: " + type);
 			}

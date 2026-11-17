@@ -82,7 +82,7 @@ final class JavaLexer {
 				number();
 			}
 			else if (this.source.startsWith("\"\"\"", this.at)) {
-				throw error("a text block is not supported by the experimental Java subset yet", this.at);
+				textBlock();
 			}
 			else if (c == '"') {
 				string();
@@ -215,6 +215,94 @@ final class JavaLexer {
 			}
 			value.append(c == '\\' ? escape() : (char) next());
 		}
+		this.tokens.add(JavaToken.of(Kind.STRING, value.toString(), start));
+	}
+
+	/**
+	 * A text block: the lines between the delimiters, the indentation every one of them
+	 * and the closing delimiter's line share removed, trailing spaces removed, the line
+	 * ends {@code \n}, and the escapes read after that.
+	 */
+	private void textBlock() {
+		int start = this.at;
+		int n = this.source.length();
+		this.at += 3;
+		while (this.at < n && (this.source.charAt(this.at) == ' ' || this.source.charAt(this.at) == '\t'
+				|| this.source.charAt(this.at) == '\f')) {
+			this.at++;
+		}
+		if (this.at < n && this.source.charAt(this.at) == '\r') {
+			this.at++;
+		}
+		if (this.at >= n || this.source.charAt(this.at) != '\n') {
+			throw error("illegal text block open delimiter sequence, missing line terminator", start);
+		}
+		this.at++;
+		int content = this.at;
+		int end = -1;
+		for (int i = content; i < n; i++) {
+			char c = this.source.charAt(i);
+			if (c == '\\') {
+				i++;
+			}
+			else if (this.source.startsWith("\"\"\"", i)) {
+				end = i;
+				break;
+			}
+		}
+		if (end < 0) {
+			throw error("unterminated text block", n);
+		}
+		List<String> lines = new ArrayList<>(
+				List.of(this.source.substring(content, end).replace("\r\n", "\n").replace('\r', '\n').split("\n", -1)));
+		int indentation = Integer.MAX_VALUE;
+		for (int i = 0; i < lines.size(); i++) {
+			String line = lines.get(i);
+			boolean last = i == lines.size() - 1;
+			if (line.isBlank() && !last) {
+				continue;
+			}
+			int leading = 0;
+			while (leading < line.length() && Character.isWhitespace(line.charAt(leading))) {
+				leading++;
+			}
+			indentation = Math.min(indentation, leading);
+		}
+		StringBuilder raw = new StringBuilder();
+		for (int i = 0; i < lines.size(); i++) {
+			String line = lines.get(i);
+			line = line.length() <= indentation ? "" : line.substring(indentation);
+			int trimmed = line.length();
+			while (trimmed > 0 && Character.isWhitespace(line.charAt(trimmed - 1))) {
+				trimmed--;
+			}
+			raw.append(line, 0, trimmed);
+			if (i < lines.size() - 1) {
+				raw.append('\n');
+			}
+		}
+		// the escapes are read in the stripped text: a lexer over it shares escape()
+		JavaLexer inner = new JavaLexer(raw.toString(), this.file);
+		StringBuilder value = new StringBuilder();
+		while (inner.at < raw.length()) {
+			char c = raw.charAt(inner.at);
+			if (c == '\\' && inner.at + 1 < raw.length() && raw.charAt(inner.at + 1) == '\n') {
+				inner.at += 2;
+			}
+			else if (c == '\\') {
+				try {
+					value.append(inner.escape());
+				}
+				catch (LispReadException ex) {
+					throw error("illegal escape character in a text block", start);
+				}
+			}
+			else {
+				value.append(c);
+				inner.at++;
+			}
+		}
+		this.at = end + 3;
 		this.tokens.add(JavaToken.of(Kind.STRING, value.toString(), start));
 	}
 

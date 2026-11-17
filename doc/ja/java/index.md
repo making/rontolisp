@@ -81,19 +81,69 @@ circle 1.5, 2 shapes, total 11.068583470577035
 始まります。`main()` より `main(String[])` が優先されます。インスタンスメソッドの `main` は、
 引数のないコンストラクタで作ったインスタンスに対して呼ばれます。引数の配列は空です。
 トップレベルにメソッドやフィールドを書いたファイルはコンパクトソースファイルです。それらは
-1 つのクラスのメンバーになり、ライブラリのクラスはすべて import なしで使えます。
+1 つのクラスのメンバーになり、ライブラリのクラスはすべて import なしで使えます。同じファイルに
+書いたクラスも、そのクラスのメンバーになります。`static` を付けたクラス、レコード、列挙型、
+インターフェース以外は内部クラスです。
 
 ## 読める構文
 
 | | |
 |---|---|
-| 型 | `int`、`long`、`double`、`boolean`、`char`、`String`、クラス、インターフェース、配列。ローカル変数の `var` |
-| 宣言 | `extends` と `implements` を持つクラス、抽象クラスと抽象メソッド、抽象メソッドを持つインターフェース、フィールド、static フィールド、`this(..)` と `super(..)` を持つコンストラクタ、メソッドのオーバーロード、`package` と `import` |
-| 文 | ローカル変数、`if`、`while`、`do`、`for`、配列またはリストに対する拡張 `for`、`break`、`continue`、`return`、`throw`、`catch` と `finally` を持つ `try` |
-| 式 | プリミティブ型のすべての演算子とその変換、文字列連結、条件演算子、代入と複合代入、キャスト、`instanceof`、`new`、配列の生成と初期化子、メソッド呼び出し、`super.m(..)`、抽象メソッドを 1 つ持つプログラム内のインターフェースに対するラムダ |
+| 型 | `int`、`long`、`double`、`boolean`、`char`、`String`、クラス、インターフェース、列挙型、レコード、配列。ローカル変数の `var` |
+| 宣言 | `extends` と `implements` を持つクラス、抽象クラスと抽象メソッド。フィールド、コンストラクタ、メソッド、本体付きの定数を持つ列挙型。コンパクトコンストラクタと標準コンストラクタを持つレコード。抽象メソッド、`default` メソッド、`static` メソッド、`private` メソッド、定数を持つインターフェース。`sealed`、`permits`、`non-sealed`。static なネストクラス、内部クラス、ローカルクラス、匿名クラス。フィールド、static フィールド、static 初期化ブロックとインスタンス初期化ブロック。`this(..)` と `super(..)`、およびその前の文を持つコンストラクタ。メソッドのオーバーロードと可変長引数。`package` と `import` |
+| 文 | ローカル変数（`final`、無名変数 `_`）、`if`、`while`、`do`、`for`、配列またはリストに対する拡張 `for`、コロン形式または矢印形式の `case`・パターン・ガードを持つ `switch`、ラベル付きの文、ラベルの有無を問わない `break` と `continue`、`yield`、`return`、`throw`、`catch` と `finally` を持つ `try` |
+| 式 | プリミティブ型のすべての演算子とその変換、文字列連結、条件演算子、代入と複合代入、キャスト、型・型パターン・レコードパターンに対する `instanceof`、`switch` 式、`new`、`outer.new Inner()`、`Outer.this`、長さを 1 つ以上指定する配列の生成と初期化子、テキストブロック、メソッド呼び出し、`super.m(..)`、抽象メソッドを 1 つ持つプログラム内のインターフェースに対するラムダ |
 
 アノテーションは読み飛ばします。`int` と `long` は 2 の補数として桁あふれします。`double` は、
 読み戻すと同じ値になる最短の文字列で表示されます。
+
+```java
+sealed interface Shape permits Circle, Rect { }
+
+record Circle(double r) implements Shape { }
+
+record Rect(double w, double h) implements Shape { }
+
+enum Unit {
+    CM(1), M(100);
+
+    final int scale;
+
+    Unit(int scale) {
+        this.scale = scale;
+    }
+}
+
+double area(Shape shape) {
+    return switch (shape) {
+        case Circle c -> Math.PI * c.r() * c.r();
+        case Rect(double w, double h) -> w * h;
+    };
+}
+
+void main() {
+    Shape[] shapes = {new Circle(1), new Rect(2, 2), new Rect(2, 3)};
+    for (Shape shape : shapes) {
+        String kind = shape instanceof Rect r && r.w() == r.h() ? "square" : "shape";
+        IO.println(shape + " is a " + kind + " of area " + area(shape));
+    }
+    for (Unit unit : Unit.values()) {
+        String size = switch (unit) {
+            case CM -> "small";
+            case M -> "large";
+        };
+        IO.println(unit + " " + unit.ordinal() + " " + unit.scale + " " + size);
+    }
+}
+```
+
+```
+Circle[r=1.0] is a shape of area 3.141592653589793
+Rect[w=2.0, h=2.0] is a square of area 4.0
+Rect[w=2.0, h=3.0] is a shape of area 6.0
+CM 0 1 small
+M 1 100 large
+```
 
 ## ライブラリ
 
@@ -102,9 +152,12 @@ circle 1.5, 2 shapes, total 11.068583470577035
 | クラス | メンバー |
 |---|---|
 | `Object` | `toString`、`equals`、`hashCode`、`getClass().getName()`、`getClass().getSimpleName()` |
+| 列挙型 | `values()`、`valueOf(String)`、`name`、`ordinal`、`compareTo`、`toString` |
+| レコード | アクセサ、`equals`、`hashCode`、`toString` |
+| 配列 | `length`、`clone()` |
 | `String` | `length`、`charAt`、`substring`、`indexOf(String)`、`equals`、`isEmpty`、`toUpperCase`、`toLowerCase`、`hashCode`、`String.valueOf` |
 | `StringBuilder` | `new StringBuilder()`、`new StringBuilder(String)`、`append`、`toString`、`length`、`charAt` |
-| `Integer`、`Long`、`Double`、`Boolean`、`Character` | ボクシングとアンボクシング。`Integer.MAX_VALUE`、`MIN_VALUE`、`parseInt`、`toString(int)`、`valueOf(int)`、`intValue`。`Long.MAX_VALUE`、`MIN_VALUE` |
+| `Integer`、`Long`、`Double`、`Boolean`、`Character` | ボクシングとアンボクシング。`Integer.MAX_VALUE`、`MIN_VALUE`、`parseInt`、`toString(int)`、`valueOf(int)`、`intValue`。`Long.MAX_VALUE`、`MIN_VALUE`、`Long.hashCode(long)`。`Double.compare`。`Boolean.hashCode(boolean)` |
 | `Math` | `sqrt`、`floor`、`pow`、`abs`、`max`、`min`、`PI`、`E` |
 | `System.out`、`System.err`、`IO` | `println`、`print` |
 | `ArrayList`、`List` | `new ArrayList<>()`、`add`、`get`、`set`、`size`、`isEmpty` |

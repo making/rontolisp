@@ -140,6 +140,105 @@ class JavaLoweringTest {
 	}
 
 	@Test
+	void theDeclarationsAndStatementsPastTheFirstSlice() {
+		// A record and an enum are classes with the members the language gives them; an
+		// inner class holds the instance around it and a class declared in a method the
+		// locals it reads, each a slot set where the instance is made; a switch is a cond
+		// over the selector, cases that run into the next numbered; a pattern's binding
+		// is a variable of its statement, set where the test holds; a labeled loop's
+		// block has the label's name; a variable arity call makes the array; a class
+		// whose static initialization shows is initialized at its first use, any other
+		// before main.
+		assertThat(
+				lower("""
+						sealed interface Shape permits Circle, Square { }
+						record Circle(double r) implements Shape { }
+						record Square(int side) implements Shape { }
+						enum Level { LOW, HIGH; static final Level[] ALL = values(); }
+						class Log { static int lines; static { System.out.println("log"); } static void line() { lines++; } }
+						class L2 {
+						    int base = 1;
+						    class Inner { int twice() { return base * 2; } }
+						    static String name(int n) {
+						        switch (n) {
+						            case 1: return "one";
+						            case 2:
+						            case 3: return "few";
+						            default: return "many";
+						        }
+						    }
+						    static int fall(int n) {
+						        int acc = 0;
+						        switch (n) { case 1: acc += 1; case 2: acc += 10; break; default: acc = -1; }
+						        return acc;
+						    }
+						    static double area(Shape s) {
+						        return switch (s) { case Circle c -> 3 * c.r() * c.r(); case Square(int side) when side > 1 -> side * side; case Square q -> 1; };
+						    }
+						    static int rank(Level l) { return switch (l) { case LOW -> 1; case HIGH -> { int r = 2; yield r * 2; } }; }
+						    static int size(Object o) { if (!(o instanceof String s)) return -1; return s.length(); }
+						    static int sum(int... xs) { int t = 0; outer: for (int x : xs) { if (x < 0) break outer; t += x; } return t; }
+						    public static void main(String[] args) {
+						        int step = 3;
+						        Runnable r = new Runnable() { public void run() { Log.line(); System.out.println(step); } };
+						        r.run();
+						        System.out.println(name(2) + fall(1) + area(new Square(2)) + rank(Level.HIGH) + size("abc") + sum(1, 2) + new L2().new Inner().twice() + Level.ALL.length + Log.lines);
+						    }
+						}
+						""",
+						"L2.java"))
+			.contains(
+					"(DEFSTRUCT (|Circle| (:INCLUDE |Record|) (:CONC-NAME |Circle.|) (:CONSTRUCTOR |%make-Cir"
+							+ "cle| NIL) (:PREDICATE |Circle?|) (:COPIER NIL)) (|r| 0.0))",
+					"(DEFSTRUCT (|L2.Inner| (:CONC-NAME |L2.Inner.|) (:CONSTRUCTOR |%make-L2.Inner| NIL) (:PR"
+							+ "EDICATE |L2.Inner?|) (:COPIER NIL)) (|this$0| NIL))",
+					"(DEFSTRUCT (|j%L2$1| (:CONC-NAME L2$1.) (:CONSTRUCTOR |%make-L2$1| NIL) (:PREDICATE |j%L"
+							+ "2$1?|) (:COPIER NIL)) (|val$step$0| NIL))",
+					"(DEFUN |Circle.toString()| (|this|) (%STRING-CONCAT (%STRING-CONCAT \"Circle[r=\" (RONTOLI"
+							+ "SP::%JAVA-DOUBLE-STRING (|Circle.r| |this|))) \"]\"))",
+					"(DEFUN |Circle.equals(Object)| (|this| |$o|) (LET ((|$that| NIL)) (AND (AND (|Circle?| |"
+							+ "$o|) (PROGN (SETQ |$that| |$o|) T)) (= (RONTOLISP::%JAVA-DOUBLE-COMPARE (|Circle.r| |thi"
+							+ "s|) (|Circle.r| |$that|)) 0))))",
+					"(DEFUN |Log.line()| NIL (PROGN (|Log.<clinit>|) (SETQ |Log.lines| (- (LOGAND (+ (+ |Log."
+							+ "lines| 1) 2147483648) 4294967295) 2147483648))))",
+					"(DEFUN |L2.name(int)| (|n|) (COND ((EQL |n| 1) \"one\") ((OR (EQL |n| 2) (EQL |n| 3)) \"few"
+							+ "\") (T \"many\")))",
+					"(DEFUN |L2.fall(int)| (|n|) (LET ((|acc| 0)) (BLOCK |%break| (LET ((|%t0| (COND ((EQL |n"
+							+ "| 1) 0) ((EQL |n| 2) 1) (T 2)))) (IF (<= |%t0| 0) (SETQ |acc| (- (LOGAND (+ (+ |acc| 1) "
+							+ "2147483648) 4294967295) 2147483648))) (IF (<= |%t0| 1) (PROGN (SETQ |acc| (- (LOGAND (+ "
+							+ "(+ |acc| 10) 2147483648) 4294967295) 2147483648)) (RETURN-FROM |%break| NIL))) (IF (<= |"
+							+ "%t0| 2) (SETQ |acc| -1)))) |acc|))",
+					"(DEFUN |L2.area(Shape)| (|s|) (LET ((|c| NIL) (|side| 0) (|q| NIL)) (COND ((NULL |s|) (R"
+							+ "ONTOLISP::%JAVA-NULL-SWITCH)) ((AND (|Circle?| |s|) (PROGN (SETQ |c| |s|) T)) (* (* 3.0 "
+							+ "(|Circle.r()| |c|)) (|Circle.r()| |c|))) ((AND (AND (|Square?| |s|) (PROGN (SETQ |side| "
+							+ "(|Square.side| |s|)) T)) (> |side| 1)) (FLOAT (- (LOGAND (+ (* |side| |side|) 2147483648"
+							+ ") 4294967295) 2147483648) 1.0)) ((AND (|Square?| |s|) (PROGN (SETQ |q| |s|) T)) 1.0) (T "
+							+ "(RONTOLISP::%JAVA-NO-MATCH)))))",
+					"(DEFUN |L2.rank(Level)| (|l|) (COND ((EQ |l| |Level.LOW|) 1) ((EQ |l| |Level.HIGH|) (LET"
+							+ " ((|r| 2)) (- (LOGAND (+ (* |r| 2) 2147483648) 4294967295) 2147483648))) ((NULL |l|) (RO"
+							+ "NTOLISP::%JAVA-NULL-SWITCH)) (T (RONTOLISP::%JAVA-NO-MATCH))))",
+					"(DEFUN |L2.size(Object)| (|o|) (LET ((|s| NIL)) (IF (NOT (AND (SIMPLE-STRING-P |o|) (PRO"
+							+ "GN (SETQ |s| |o|) T))) -1 (LENGTH |s|))))",
+					"(DEFUN |L2.sum(int[])| (|xs|) (LET ((|t| 0)) (BLOCK |outer%break| (LET* ((|%t1| |xs|) (|"
+							+ "%t3| (LENGTH |%t1|)) (|%t2| 0)) (WHILE (< |%t2| |%t3|) (LET ((|x| (AREF |%t1| |%t2|))) ("
+							+ "IF (< |x| 0) (RETURN-FROM |outer%break| NIL)) (SETQ |t| (- (LOGAND (+ (+ |t| |x|) 214748"
+							+ "3648) 4294967295) 2147483648))) (SETQ |%t2| (+ |%t2| 1))))) |t|))",
+					"(DEFUN |L2$1.run()| (|this|) (PROGN (|Log.line()|) (WRITE-LINE (%DECIMAL-PIECE (|L2$1.va"
+							+ "l$step$0| |this|)))))",
+					"(DEFUN |L2$1.new()| (|%c0|) (LET ((|this| (|%make-L2$1|))) (SETF (|L2$1.val$step$0| |thi"
+							+ "s|) |%c0|) |this|))",
+					"(DEFUN |L2.Inner.twice()| (|this|) (- (LOGAND (+ (* (|L2.base| (|L2.Inner.this$0| |this|"
+							+ ")) 2) 2147483648) 4294967295) 2147483648))",
+					"(DEFUN |L2.Inner.new()| (|%outer|) (LET ((|this| (|%make-L2.Inner|))) (SETF (|L2.Inner.t"
+							+ "his$0| |this|) |%outer|) |this|))",
+					"(DEFUN |Log.<clinit>| NIL (IF |Log.<clinit>%done| NIL (PROGN (SETQ |Log.<clinit>%done| T"
+							+ ") (WRITE-LINE \"log\"))))",
+					"(SETQ |Level.LOW| (|Level.new(String,int)| \"LOW\" 0))",
+					"(SETQ |Level.$VALUES| (VECTOR |Level.LOW| |Level.HIGH|))", "(SETQ |Level.ALL| (|Level.values()|))",
+					"(SETQ |Log.<clinit>%done| NIL)");
+	}
+
+	@Test
 	void aNameIsEscapedAndAConstantIsFolded() {
 		// A name holding no lowercase letter never meets the pipeline's own; a
 		// constant variable is its value wherever it is read; a package is part of the
@@ -179,41 +278,37 @@ class JavaLoweringTest {
 
 	@Test
 	void aConstructTheSubsetDoesNotHaveIsRefusedByNameAtItsPosition() {
-		String[][] refusals = { { "void main() { switch (1) { default: } }", "1:15: a switch" },
-				{ "enum E { A }", "1:1: an enum" }, { "record P(int x) {}", "1:1: a record" },
-				{ "class A<T> {}", "1:8: a generic class" },
+		String[][] refusals = { { "class A<T> {}", "1:8: a generic class" },
+				{ "record P<T>(T x) {}", "1:9: a generic record" },
 				{ "class A { <T> void m() { } }", "1:11: a generic method" },
-				{ "class A { class B {} }", "1:11: a nested class" },
-				{ "class A { { } }", "1:11: an initializer block" },
-				{ "interface I { default void m() { } }", "1:15: a default method" },
-				{ "interface I { int N = 1; }", "1:19: an interface constant" },
-				{ "sealed interface I permits A { }", "1:1: a sealed type" },
+				{ "record P(int... xs) {}", "1:17: a variable arity record component" },
 				{ "class A { synchronized void m() { } }", "1:11: the modifier synchronized" },
 				{ "class A { volatile int x; }", "1:11: the modifier volatile" },
-				{ "void m(int... xs) { }", "1:11: a variable arity parameter" },
 				{ "import static java.lang.Math.max; void main() { }", "1:8: a static import" },
 				{ "import module java.sql; void main() { }", "1:1: the module java.sql" },
-				{ "void main() { var r = new Object() { }; }", "1:36: an anonymous class" },
-				{ "void main() { class Local { } }", "1:15: a local class" },
 				{ "void main() { float f = 1; }", "1:15: the type float" },
 				{ "void main() { double f = 1.0f; }", "1:26: the type float" },
 				{ "void main() { byte b = 1; }", "1:15: the type byte" },
-				{ "void main() { String s = \"\"\"\n x\"\"\"; }", "1:26: a text block" },
-				{ "void main() { int[][] g = new int[2][3]; }",
-						"1:37: an array of several dimensions made with its lengths" },
 				{ "void main() { synchronized (this) { } }", "1:15: a synchronized statement" },
 				{ "void main() { assert true; }", "1:15: an assert statement" },
-				{ "void main() { l: for (;;) { break l; } }", "1:15: a labeled statement" },
-				{ "void main() { for (;;) { continue l; } }", "1:35: a labeled continue" },
+				{ "void main() { switch (1L) { default -> { } } }", "1:15: a switch over long" },
+				{ "void main() { int k = switch (1) { case 1: yield 1; default: IO.println(); case 2: yield 2; }; }",
+						"1:23: a switch expression whose cases run into the next" },
 				{ "void main() { try (var r = open()) { } }", "1:19: a try-with-resources statement" },
 				{ "void main() { try { } catch (IllegalStateException | ArithmeticException e) { } }",
 						"1:52: a multi-catch" },
 				{ "void main() { try { } finally { return; } }", "1:33: a return inside a finally block" },
 				{ "void main() { for (;;) { try { } finally { break; } } }", "1:44: a break leaving a finally block" },
-				{ "void main() { int _ = 1; }", "1:19: the unnamed variable _" },
-				{ "void main() { Object o = \"s\"; if (o instanceof String s) { } }", "1:55: a pattern" },
+				{ "void main() { int k = switch (1) { default -> { try { } finally { yield 1; } } }; }",
+						"1:67: a yield leaving a finally block" },
 				{ "void main() { Runnable r = this::main; }", "1:32: a method reference" },
 				{ "void main() { Object o = int.class; }", "1:26: a class literal" },
+				{ "interface I { default void m() { } } class A implements I { public void m() { I.super.m(); } } void main() { }",
+						"1:81: a method of an interface called through super" },
+				{ "class O { class I { } } void main() { O o = new O(); Object x = o.new I() { }; }",
+						"1:67: an anonymous class made with an outer instance" },
+				{ "class O { class I { } } class S extends O.I { } void main() { }",
+						"1:41: a class extending the inner class I from outside its outer class" },
 				{ "void main() { String a = \"a\", b = \"b\"; IO.println(a == b); }",
 						"1:53: == of two strings, which compares references (equals compares text)," },
 				{ "void main() { Integer a = 1, b = 1; IO.println(a != b); }",
@@ -233,14 +328,8 @@ class JavaLoweringTest {
 				{ "void main() { IO.println(getClass()); }",
 						"1:26: getClass() but for its getName() and getSimpleName()" },
 				{ "class A { int x; } class B extends A { int x; } void main() { }", "1:44: a field hiding A.x" },
-				{ "class A { static int x = f(); static int f() { return 1; } } void main() { }",
-						"1:26: a static field initializer that runs the program's code" },
-				{ "class A { static int x = B.y; } class B { static int y = 2; } void main() { }",
-						"1:28: a static field initializer reading B.y, which is set by the time it runs only if the class was initialized first," },
-				{ "class A { A() { int x = 1; this(x); } A(int x) { } } void main() { }",
-						"1:28: a statement ahead of this(..) or super(..)" },
 				{ "class A extends ArrayList<String> { } void main() { }", "1:17: a parameterized supertype" },
-				{ "class String { } void main() { }",
+				{ "class String { } class Refused { static void main() { } }",
 						"1:7: a class named as java.lang.String, which the program also uses," },
 				{ "interface F { void f(); } interface G { void g(); } void main() { F f = () -> { }; G g = () -> { }; Object o = f; IO.println(o instanceof F); }",
 						"1:128: instanceof or a cast to F, which some lambdas of the program implement and others do not," } };
@@ -262,7 +351,62 @@ class JavaLoweringTest {
 				{ "void main() { Foo f = null; }", "1:15: cannot find symbol: class Foo" },
 				{ "class A extends Thread { } void main() { }", "1:17: cannot find symbol: class Thread" },
 				{ "void main() { int x = 1; int x = 2; }", "1:30: variable x is already defined" },
-				{ "void main() { break; }", "1:15: break outside of loop" },
+				{ "void main() { break; }", "1:15: break outside switch or loop" },
+				{ "void main() { a: { continue a; } }", "1:20: not a loop label: a" },
+				{ "void main() { break b; }", "1:15: undefined label: b" },
+				{ "void main() { yield 1; }", "1:15: yield outside of switch expression" },
+				{ "void main() { int x = switch (1) { default -> { return; } }; }",
+						"1:49: attempt to return out of a switch expression" },
+				{ "void main() { int k = 1; switch (k) { case 1 -> { } case 1 -> { } } }",
+						"1:58: duplicate case label" },
+				{ "enum E { X, Y } void main() { int k = switch (E.X) { case X -> 1; }; }",
+						"1:39: the switch expression does not cover all possible input values" },
+				{ "sealed interface S { } record A() implements S { } record B() implements S { } void main() { S s = new A(); int k = switch (s) { case A a -> 1; }; }",
+						"1:117: the switch expression does not cover all possible input values" },
+				{ "sealed interface S permits A { } record A() implements S { } record B() implements S { } void main() { }",
+						"1:69: class is not allowed to extend sealed class: S (as it is not listed in its 'permits' clause)" },
+				{ "sealed interface S { } class A implements S { } void main() { }",
+						"1:30: sealed, non-sealed or final modifiers expected" },
+				{ "final class A { } class B extends A { } void main() { }", "1:25: cannot inherit from final A" },
+				{ "enum E { X, Y } void main() { E e = new E(); }", "1:37: enum classes may not be instantiated" },
+				{ "record R(int x) { int y; } void main() { }", "1:23: field declaration must be static" },
+				{ "record P(int x, int y) { } void main() { Object o = null; if (o instanceof P(int a)) { } }",
+						"1:76: incorrect number of nested patterns" },
+				{ "void main() { Object o = \"s\"; if (o instanceof String s) { } IO.println(s); }",
+						"1:73: cannot find symbol: variable s" },
+				{ "void main() { Object o = \"s\"; if (o instanceof String s || s.isEmpty()) { } }",
+						"1:60: cannot find symbol: variable s" },
+				{ "class A { private int x; } class B { int f(A a) { return a.x; } } public class Wrong { public static void main(String[] args) { } }",
+						"1:60: x has private access in A" },
+				{ "class A { final int x = 1; void f() { x = 2; } } void main() { }",
+						"1:39: cannot assign a value to final variable x" },
+				{ "void main() { final int x = 1; x = 2; }", "1:32: cannot assign a value to final variable x" },
+				{ "void main() { int x = 1; x++; Runnable r = new Runnable() { public void run() { IO.println(x); } }; }",
+						"1:92: local variables referenced from an inner class must be final or effectively final" },
+				{ "void main() { int x; if (\"a\".isEmpty()) x = 1; IO.println(x); }",
+						"1:59: variable x might not have been initialized" },
+				{ "int f(int a) { if (a > 0) return 1; } void main() { }", "1:5: missing return statement" },
+				{ "void main() { return; IO.println(); }", "1:23: unreachable statement" },
+				{ "class A { A() { int y = f(); super(); } int f() { return 1; } } void main() { }",
+						"1:25: cannot reference this before supertype constructor has been called" },
+				{ "class A { void f() { super(); } } void main() { }",
+						"1:22: explicit constructor invocation may only appear within a constructor body" },
+				{ "interface I { void m() { } } void main() { }", "1:20: interface abstract methods cannot have body" },
+				{ "abstract class A { abstract void m(); } void main() { A a = new A() { }; }",
+						"1:61: <anonymous Wrong$1> is not abstract and does not override abstract method m() in A" },
+				{ "class O { class I { } static void f() { new I(); } } void main() { }",
+						"1:41: non-static variable this cannot be referenced from a static context" },
+				{ "class O { int x; static class N { int f() { return x; } } } void main() { }",
+						"1:52: non-static variable x cannot be referenced from a static context" },
+				{ "class A { static int a = b; static int b = 2; } void main() { }",
+						"1:26: illegal forward reference" },
+				{ "class A { static { return; } } void main() { }", "1:20: return outside method" },
+				{ "class A { void f(int... xs, int y) { } } void main() { }",
+						"1:27: a variable arity parameter must be the last parameter" },
+				{ "void main() { IO.println(_); }",
+						"1:26: the unnamed _ is allowed only where a local, a parameter of a lambda or of a catch, or a pattern is declared" },
+				{ "void main() { String s = \"\"\"x\"\"\"; }",
+						"1:26: illegal text block open delimiter sequence, missing line terminator" },
 				{ "void main() { 1 + 2; }", "1:17: not a statement" },
 				{ "int f() { return; } void main() { }", "1:11: incompatible types: missing return value" },
 				{ "void main() { String s = (String) 1; }",

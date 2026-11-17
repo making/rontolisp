@@ -61,6 +61,15 @@ final class JavaSyntax {
 	record This(int pos) implements Expression {
 	}
 
+	/**
+	 * {@code Outer.this}.
+	 *
+	 * @param pos the {@code this}
+	 * @param qualifier the class named before it
+	 */
+	record QualifiedThis(int pos, Expression qualifier) implements Expression {
+	}
+
 	record Select(int pos, Expression target, String name) implements Expression {
 	}
 
@@ -87,7 +96,17 @@ final class JavaSyntax {
 	record ConstructorCall(int pos, boolean onSuper, List<Expression> arguments) implements Expression {
 	}
 
-	record New(int pos, TypeName type, List<Expression> arguments) implements Expression {
+	/**
+	 * An instance creation.
+	 *
+	 * @param pos the {@code new}
+	 * @param type the class made, or the one an anonymous class extends or implements
+	 * @param arguments the constructor's arguments
+	 * @param body the anonymous class's body, or {@code null}
+	 * @param outer the instance before {@code .new}, or {@code null}
+	 */
+	record New(int pos, TypeName type, List<Expression> arguments, @Nullable ClassDeclaration body,
+			@Nullable Expression outer) implements Expression {
 	}
 
 	/**
@@ -95,10 +114,10 @@ final class JavaSyntax {
 	 *
 	 * @param pos the {@code new}
 	 * @param type the array's type
-	 * @param length the length, or {@code null} with an initializer
-	 * @param initializer the initializer, or {@code null} with a length
+	 * @param lengths the lengths written, empty with an initializer
+	 * @param initializer the initializer, or {@code null} with lengths
 	 */
-	record NewArray(int pos, TypeName type, @Nullable Expression length,
+	record NewArray(int pos, TypeName type, List<Expression> lengths,
 			@Nullable ArrayInitializer initializer) implements Expression {
 	}
 
@@ -132,7 +151,71 @@ final class JavaSyntax {
 	record Cast(int pos, TypeName type, Expression operand) implements Expression {
 	}
 
-	record InstanceOf(int pos, Expression operand, TypeName type) implements Expression {
+	/**
+	 * {@code instanceof}.
+	 *
+	 * @param pos the operator
+	 * @param operand what is tested
+	 * @param type the type tested for, when no pattern is written
+	 * @param pattern the pattern, or {@code null}
+	 */
+	record InstanceOf(int pos, Expression operand, @Nullable TypeName type,
+			@Nullable Pattern pattern) implements Expression {
+	}
+
+	sealed interface Pattern {
+
+		int pos();
+
+	}
+
+	/**
+	 * A type pattern, {@code Circle c}; {@code var c}; the unnamed {@code _}.
+	 *
+	 * @param pos its first token
+	 * @param type the type, {@code var} when inferred
+	 * @param name the variable, {@code _} when unnamed
+	 */
+	record TypePattern(int pos, TypeName type, String name) implements Pattern {
+	}
+
+	/**
+	 * A record pattern, {@code Point(int x, var y)}.
+	 *
+	 * @param pos its first token
+	 * @param type the record
+	 * @param components the patterns of its components
+	 */
+	record RecordPattern(int pos, TypeName type, List<Pattern> components) implements Pattern {
+	}
+
+	/**
+	 * One {@code case} of a switch.
+	 *
+	 * @param pos the {@code case} or {@code default}
+	 * @param constants the constants it names
+	 * @param patterns the patterns it names
+	 * @param hasNull whether it names {@code null}
+	 * @param hasDefault whether it is, or includes, {@code default}
+	 * @param guard what follows {@code when}, or {@code null}
+	 * @param body the statements after a colon; after an arrow the one block or
+	 * {@code throw}, or nothing when {@link #value} is the arm
+	 * @param value the expression after an arrow, or {@code null}
+	 */
+	record SwitchCase(int pos, List<Expression> constants, List<Pattern> patterns, boolean hasNull, boolean hasDefault,
+			@Nullable Expression guard, List<Statement> body, @Nullable Expression value) {
+	}
+
+	/**
+	 * A switch, as a statement or as an expression.
+	 *
+	 * @param pos the {@code switch}
+	 * @param selector what it switches over
+	 * @param cases its cases, in order
+	 * @param arrow whether its cases are written with {@code ->}
+	 */
+	record Switch(int pos, Expression selector, List<SwitchCase> cases,
+			boolean arrow) implements Expression, Statement {
 	}
 
 	/**
@@ -156,7 +239,16 @@ final class JavaSyntax {
 	record Declarator(int pos, String name, @Nullable Expression initializer) {
 	}
 
-	record LocalVariable(int pos, TypeName type, List<Declarator> declarators) implements Statement {
+	record LocalVariable(int pos, TypeName type, List<Declarator> declarators, boolean isFinal) implements Statement {
+	}
+
+	record LocalClass(int pos, ClassDeclaration declaration) implements Statement {
+	}
+
+	record Labeled(int pos, String label, Statement body) implements Statement {
+	}
+
+	record Yield(int pos, Expression value) implements Statement {
 	}
 
 	record ExpressionStatement(int pos, Expression expression) implements Statement {
@@ -181,10 +273,10 @@ final class JavaSyntax {
 	record Return(int pos, @Nullable Expression value) implements Statement {
 	}
 
-	record Break(int pos) implements Statement {
+	record Break(int pos, @Nullable String label) implements Statement {
 	}
 
-	record Continue(int pos) implements Statement {
+	record Continue(int pos, @Nullable String label) implements Statement {
 	}
 
 	record Block(int pos, List<Statement> statements) implements Statement {
@@ -202,7 +294,43 @@ final class JavaSyntax {
 	record Empty(int pos) implements Statement {
 	}
 
-	record Parameter(int pos, @Nullable TypeName type, String name) {
+	/**
+	 * A parameter of a method, a constructor, a lambda or a record.
+	 *
+	 * @param pos its name
+	 * @param type its type, {@code null} when a lambda leaves it out; an array for a
+	 * variable arity parameter
+	 * @param name its name, {@code _} when unnamed
+	 * @param varargs whether it is written with {@code ...}
+	 * @param isFinal whether it is declared {@code final}
+	 */
+	record Parameter(int pos, @Nullable TypeName type, String name, boolean varargs, boolean isFinal) {
+
+		Parameter(int pos, @Nullable TypeName type, String name) {
+			this(pos, type, name, false, false);
+		}
+
+	}
+
+	/**
+	 * An initializer block.
+	 *
+	 * @param pos its brace
+	 * @param isStatic whether it is {@code static}
+	 * @param body the block
+	 */
+	record Initializer(int pos, boolean isStatic, Block body) {
+	}
+
+	/**
+	 * An enum constant.
+	 *
+	 * @param pos its name
+	 * @param name its name
+	 * @param arguments the constructor's arguments
+	 * @param body its class body, or {@code null}
+	 */
+	record EnumConstant(int pos, String name, List<Expression> arguments, @Nullable ClassDeclaration body) {
 	}
 
 	record Field(int pos, Set<String> modifiers, TypeName type, String name, @Nullable Expression initializer) {
@@ -217,27 +345,56 @@ final class JavaSyntax {
 	 * @param name its name
 	 * @param parameters its parameters
 	 * @param body its body, or {@code null} for an abstract method
+	 * @param compact whether it is a record's compact constructor
 	 */
 	record Method(int pos, Set<String> modifiers, @Nullable TypeName returnType, String name,
-			List<Parameter> parameters, @Nullable Block body) {
+			List<Parameter> parameters, @Nullable Block body, boolean compact) {
+
+		Method(int pos, Set<String> modifiers, @Nullable TypeName returnType, String name, List<Parameter> parameters,
+				@Nullable Block body) {
+			this(pos, modifiers, returnType, name, parameters, body, false);
+		}
+
+		boolean varargs() {
+			return !this.parameters.isEmpty() && this.parameters.get(this.parameters.size() - 1).varargs();
+		}
+
+	}
+
+	/** What a type declaration declares. */
+	enum Kind {
+
+		CLASS, INTERFACE, ENUM, RECORD
+
 	}
 
 	/**
-	 * A class or an interface.
+	 * A class, an interface, an enum or a record.
 	 *
-	 * @param pos its name
+	 * @param pos its name; the {@code new} of an anonymous class
 	 * @param modifiers its modifiers
-	 * @param isInterface whether it is an interface
-	 * @param name its name
+	 * @param kind what it declares
+	 * @param name its name, empty for an anonymous class
 	 * @param superclass what it extends, or {@code null}
 	 * @param interfaces what a class implements or an interface extends
+	 * @param permits what a sealed type permits
+	 * @param components a record's components
+	 * @param constants an enum's constants
 	 * @param fields its fields, in order
 	 * @param methods its methods and constructors, in order
+	 * @param initializers its initializer blocks, in order
+	 * @param nested the types declared in its body
 	 * @param implicit whether it is the class of a compact source file
 	 */
-	record ClassDeclaration(int pos, Set<String> modifiers, boolean isInterface, String name,
-			@Nullable TypeName superclass, List<TypeName> interfaces, List<Field> fields, List<Method> methods,
+	record ClassDeclaration(int pos, Set<String> modifiers, Kind kind, String name, @Nullable TypeName superclass,
+			List<TypeName> interfaces, List<TypeName> permits, List<Parameter> components, List<EnumConstant> constants,
+			List<Field> fields, List<Method> methods, List<Initializer> initializers, List<ClassDeclaration> nested,
 			boolean implicit) {
+
+		boolean isInterface() {
+			return this.kind == Kind.INTERFACE;
+		}
+
 	}
 
 	/**

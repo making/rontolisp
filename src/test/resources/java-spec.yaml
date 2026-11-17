@@ -1323,6 +1323,875 @@ cases:
       }
     expected: |
       a/b/ 2147483647 2 q 3.141592653589793 4
+  # A switch is a cond over the selector: an int and a char by eql, a string by equal,
+  # an enum constant by eq; cases that run into the next are numbered and each runs
+  # when the one picked is no later; a switch expression's value is its clause's, a
+  # yield from the middle a block's; a labeled break and continue name their block.
+  - name: a-switch-is-a-cond-over-its-selector
+    main: Switches
+    source: |
+      enum SwitchColor { RED, GREEN, BLUE }
+
+      class Switches {
+          static String name(int n) {
+              switch (n) {
+                  case 1: return "one";
+                  case 2:
+                  case 3: return "few";
+                  default: return "many";
+              }
+          }
+
+          static int fall(int n) {
+              int acc = 0;
+              switch (n) {
+                  case 1: acc += 1;
+                  case 2: acc += 10;
+                  case 3: acc += 100; break;
+                  default: acc = -1;
+                  case 9: acc += 1000;
+              }
+              return acc;
+          }
+
+          static String arrow(String s) {
+              return switch (s) {
+                  case "a", "b" -> "ab";
+                  case "c" -> { String t = s + s; yield t; }
+                  default -> "other";
+              };
+          }
+
+          static int color(SwitchColor c) {
+              switch (c) {
+                  case RED -> { return 1; }
+                  case GREEN -> { return 2; }
+                  default -> { return 3; }
+              }
+          }
+
+          static String covered(SwitchColor c) {
+              return switch (c) { case RED -> "r"; case GREEN -> "g"; case BLUE -> "b"; };
+          }
+
+          static String day(int d) {
+              String kind;
+              switch (d) {
+                  case 6, 7 -> kind = "weekend";
+                  case 1, 2, 3, 4, 5 -> {
+                      String prefix = d == 5 ? "last " : "";
+                      kind = prefix + "weekday";
+                  }
+                  default -> throw new IllegalArgumentException("day " + d);
+              }
+              return kind;
+          }
+
+          static int nested(int a, String b) {
+              return switch (a) {
+                  case 1 -> switch (b) { case "x" -> 10; case "y" -> 20; default -> 30; };
+                  case 2 -> {
+                      int acc = 0;
+                      for (int i = 0; i < 5; i++) {
+                          if (i == 3) yield acc * 100;
+                          acc += i;
+                      }
+                      yield -1;
+                  }
+                  default -> { if (b.isEmpty()) yield 0; yield b.length(); }
+              };
+          }
+
+          static String groups(int k) {
+              StringBuilder sb = new StringBuilder();
+              loop:
+              for (int i = 0; i < 3; i++) {
+                  switch (k + i) {
+                      case 0:
+                          int local = 5;
+                          sb.append("zero").append(local);
+                          break;
+                      case 1:
+                          local = 7;
+                          sb.append("one").append(local);
+                      case 2:
+                          sb.append("two");
+                          continue loop;
+                      case 3:
+                          break loop;
+                      default:
+                          sb.append("d");
+                  }
+                  sb.append("|");
+              }
+              return sb.toString();
+          }
+
+          static int old(char c) {
+              return switch (c) {
+                  case 'a':
+                  case 'e': yield 1;
+                  case 'z': { int v = c - 'a'; yield v; }
+                  default: yield 0;
+              };
+          }
+
+          public static void main(String[] args) {
+              for (int i = 0; i < 6; i++) System.out.print(name(i) + " " + fall(i) + (i < 5 ? ", " : "\n"));
+              System.out.println(fall(9) + " " + arrow("a") + arrow("c") + arrow("z") + " " + old('e') + old('z') + old('q'));
+              for (SwitchColor c : SwitchColor.values()) System.out.print(color(c) + covered(c) + " ");
+              System.out.println(day(6) + ", " + day(5) + ", " + day(1) + " " + nested(1, "y") + " " + nested(2, "") + " " + nested(3, "") + " " + nested(3, "abc"));
+              try { day(9); } catch (IllegalArgumentException e) { System.out.println(e.getMessage()); }
+              System.out.println(groups(0) + " " + groups(1) + " " + groups(2) + " " + groups(5));
+              char ch = 'x';
+              Integer boxed = 3;
+              String word = "b";
+              int k = switch (ch) { case 'x' -> 1; case 'y' -> 2; default -> 0; };
+              int score = switch (word) { case "a" -> 1; case "b" -> { int twice = k * 2; yield twice * 10; } default -> 0; };
+              System.out.println(k + " " + score + " " + switch (score) { case 20 -> "twenty"; default -> "?"; } + "!");
+              switch (boxed) { case 3 -> System.out.println("three"); default -> System.out.println("no"); }
+              String missing = null;
+              SwitchColor none = null;
+              try { switch (missing) { case "a" -> System.out.println("a"); default -> System.out.println("default"); } }
+              catch (RuntimeException e) { System.out.println("a switch over null throws"); }
+              try { switch (none) { case RED: System.out.println("red"); break; default: System.out.println("default"); } }
+              catch (RuntimeException e) { System.out.println("so does one over an enum"); }
+              outer:
+              for (int i = 0; i < 3; i++) {
+                  for (int j = 0; j < 3; j++) {
+                      if (j == 2) continue outer;
+                      if (i == 2) break outer;
+                      System.out.print(i + "," + j + " ");
+                  }
+              }
+              block: {
+                  if (k == 1) break block;
+                  System.out.print("not reached");
+              }
+              int n = 0;
+              do { n++; if (n % 2 == 0) continue; System.out.print("odd" + n + " "); } while (n < 5);
+              System.out.println("end");
+          }
+      }
+    expected: |
+      many 999, one 111, few 110, few 100, many 999, many 999
+      1000 abccother 1250
+      1r 2g 3b weekend, last weekday, weekday 20 300 0 3
+      day 9
+      zero5|one7twotwo one7twotwo two d|d|d|
+      1 20 twenty!
+      three
+      a switch over null throws
+      so does one over an enum
+      0,0 0,1 1,0 1,1 odd1 odd3 odd5 end
+  # An enum's constants are static fields made once behind the name and the ordinal
+  # every constructor takes first; a constant with a body is an anonymous class under
+  # the enum; values() copies the array and valueOf throws by the constant's name.
+  - name: an-enum-is-a-class-whose-constants-are-made-once
+    main: Enums
+    source: |
+      interface EnumLabeled { String label(); }
+
+      enum EnumOp implements EnumLabeled {
+          ADD("+") { int apply(int a, int b) { return a + b; } },
+          MUL("*") { int apply(int a, int b) { return a * b; } },
+          NEG("-") {
+              int apply(int a, int b) { return -a; }
+              boolean unary() { return true; }
+          };
+
+          private final String symbol;
+          private static int uses;
+
+          EnumOp(String symbol) { this.symbol = symbol; }
+
+          abstract int apply(int a, int b);
+
+          boolean unary() { return false; }
+
+          public String label() { uses++; return symbol; }
+
+          static int uses() { return uses; }
+      }
+
+      enum EnumPlanet {
+          MERCURY(3.303e+23, 2.4397e6), EARTH(5.976e+24, 6.37814e6);
+
+          private final double mass, radius;
+          static final EnumPlanet HOME = EARTH;
+          static final EnumPlanet[] ALL = values();
+
+          EnumPlanet(double mass, double radius) { this.mass = mass; this.radius = radius; }
+
+          EnumPlanet(double mass) { this(mass, 1); }
+
+          double surfaceGravity() { return 6.67300E-11 * mass / (radius * radius); }
+
+          public String toString() { return name().charAt(0) + name().substring(1).toLowerCase(); }
+      }
+
+      enum EnumLevel { LOW, MID, HIGH }
+
+      class Enums {
+          static EnumLevel next(EnumLevel level) {
+              return switch (level) {
+                  case LOW -> EnumLevel.MID;
+                  case MID, HIGH -> EnumLevel.HIGH;
+              };
+          }
+
+          public static void main(String[] args) {
+              for (EnumOp op : EnumOp.values()) System.out.print(op + op.label() + op.apply(6, 7) + op.unary() + op.ordinal() + " ");
+              System.out.println(EnumOp.uses() + " " + EnumOp.valueOf("MUL").apply(2, 3) + " " + EnumOp.ADD.name() + " " + EnumOp.ADD.compareTo(EnumOp.NEG));
+              System.out.println(EnumPlanet.EARTH.surfaceGravity() + " " + EnumPlanet.valueOf("MERCURY") + " " + EnumPlanet.HOME + " " + EnumPlanet.ALL.length + " " + EnumPlanet.MERCURY.name());
+              try { EnumOp.valueOf("DIV"); } catch (IllegalArgumentException e) { System.out.println(e.getMessage()); }
+              EnumLevel level = EnumLevel.LOW;
+              EnumLabeled labeled = EnumOp.MUL;
+              Object any = EnumLevel.HIGH;
+              System.out.println(next(level) + " " + next(next(level)) + " " + (level == EnumLevel.LOW) + " " + (next(level) != EnumLevel.LOW) + " " + level.equals(EnumLevel.LOW) + " " + labeled.label() + " " + any + " " + (any instanceof EnumLevel) + " " + EnumLevel.values()[1] + " " + EnumOp.NEG.getClass().getName() + " " + level.getClass().getName());
+              EnumLevel[] copy = EnumLevel.values();
+              copy[0] = null;
+              System.out.println(EnumLevel.values()[0] + " " + copy.length + " " + EnumLevel.valueOf("HIGH").ordinal());
+          }
+      }
+    expected: |
+      ADD+13false0 MUL*42false1 NEG--6true2 3 6 ADD -2
+      9.802652743337129 Mercury Earth 2 MERCURY
+      No enum constant EnumOp.DIV
+      MID HIGH true true true * HIGH true MID EnumOp$3 EnumLevel
+      LOW 3 2
+  # A record's components are final fields with an accessor each, a canonical
+  # constructor -- a compact one runs ahead of the stores -- and equals, hashCode and
+  # toString over the components, unless the record declares its own.
+  - name: a-record-has-the-members-its-components-give-it
+    main: Records
+    source: |
+      record RecordPoint(int x, int y) {
+          static final RecordPoint ORIGIN = new RecordPoint(0, 0);
+
+          RecordPoint(int both) { this(both, both); }
+
+          int sum() { return x + y; }
+
+          static RecordPoint of(int x) { return new RecordPoint(x, -x); }
+
+          public String toString() { return "(" + x + ", " + y + ")"; }
+      }
+
+      record RecordRange(int low, int high) {
+          RecordRange {
+              if (low > high) throw new IllegalArgumentException("low " + low + " is above high " + high);
+              low = low < 0 ? 0 : low;
+          }
+
+          public int high() { return high + 1000; }
+      }
+
+      record RecordNamed(String name, long id, boolean flag, char tag, double weight, int[] data, RecordPoint at) { }
+
+      record RecordEmpty() { }
+
+      class Records {
+          record Pair(Object first, Object second) {
+              Pair swap() { return new Pair(second, first); }
+          }
+
+          public static void main(String[] args) {
+              RecordPoint p = new RecordPoint(1, 2), q = new RecordPoint(1, 2), d = new RecordPoint(7);
+              System.out.println(p + " " + p.equals(q) + " " + (p.hashCode() == q.hashCode()) + " " + p.equals(d) + " " + p.equals("p") + " " + d + " " + RecordPoint.ORIGIN + " " + p.x() + p.y() + " " + p.sum() + " " + RecordPoint.of(3));
+              RecordRange range = new RecordRange(-5, 5);
+              System.out.println(range + " " + range.low() + " " + range.high() + " " + range.equals(new RecordRange(0, 5)) + " " + new RecordEmpty() + " " + new RecordEmpty().equals(new RecordEmpty()) + " " + new RecordEmpty().hashCode());
+              try {
+                  new RecordRange(3, 1);
+              }
+              catch (IllegalArgumentException e) {
+                  System.out.println(e.getMessage());
+              }
+              int[] data = {1};
+              RecordNamed n = new RecordNamed("n", 5L, true, 'x', 0.0, data, p);
+              System.out.println(n.name() + n.id() + n.flag() + n.tag() + n.weight() + n.at() + " " + n.equals(new RecordNamed("n", 5L, true, 'x', 0.0, data, q)) + " " + n.equals(new RecordNamed("n", 5L, true, 'x', -0.0, data, q)) + " " + n.equals(new RecordNamed("n", 5L, true, 'x', 0.0, new int[] {1}, q)) + " " + n.equals(new RecordNamed(null, 5L, true, 'x', 0.0, data, q)) + " " + new RecordNamed(null, 1, false, 'c', 1.5, null, null));
+              Pair pair = new Pair("a", 1);
+              Object o = pair.swap();
+              System.out.println(pair + " " + o + " " + pair.equals(pair.swap().swap()) + " " + (pair.hashCode() == pair.swap().swap().hashCode()) + " " + pair.getClass().getName() + " " + (o instanceof Pair) + " " + new Pair(null, pair).first());
+          }
+      }
+    expected: |
+      (1, 2) true true false false (7, 7) (0, 0) 12 3 (3, -3)
+      RecordRange[low=0, high=5] 0 1005 true RecordEmpty[] true 0
+      low 3 is above high 1
+      n5truex0.0(1, 2) true false false false RecordNamed[name=null, id=1, flag=false, tag=c, weight=1.5, data=null, at=null]
+      Pair[first=a, second=1] Pair[first=1, second=a] true true Records$Pair true null
+  # A static nested class is a class of its own under its outer's name; an inner class
+  # holds the instance it was made in and reaches the outer's members through it, a
+  # private one included; Outer.this, outer.new Inner() and getName()'s binary name.
+  - name: a-nested-class-is-static-or-holds-the-instance-around-it
+    main: Nested
+    source: |
+      class NestedOuter {
+          private int secret = 42;
+          private static int made;
+          int[] cells = {1, 2};
+
+          NestedOuter() { made++; }
+
+          static class Counter {
+              private int v;
+
+              Counter(int v) { this.v = v; }
+
+              int twice() { return v * 2 + made; }
+          }
+
+          interface Visitor { int visit(Inner inner); }
+
+          class Inner {
+              int bonus = 1;
+
+              int reveal() { return secret + bonus + count(); }
+
+              class Deep {
+                  int secret = 7;
+
+                  String all() { return secret + " " + bonus + " " + NestedOuter.this.secret + " " + Inner.this.bonus + " " + count(); }
+              }
+
+              int accept(Visitor v) { return v.visit(this); }
+          }
+
+          class Wide extends Inner {
+              int reveal() { return super.reveal() * 2 + secret; }
+          }
+
+          int count() { return cells.length; }
+
+          Inner inner() { return new Inner(); }
+
+          static int peek(NestedOuter o) { return o.secret + new Counter(1).v; }
+      }
+
+      class Nested {
+          public static void main(String[] args) {
+              NestedOuter o = new NestedOuter(), other = new NestedOuter();
+              other.cells = new int[5];
+              NestedOuter.Counter n = new NestedOuter.Counter(21);
+              NestedOuter.Inner in = o.inner();
+              NestedOuter.Inner far = other.new Inner();
+              NestedOuter.Inner.Deep deep = in.new Deep();
+              NestedOuter.Inner wide = o.new Wide();
+              far.bonus = 10;
+              System.out.println(n.twice() + " " + in.reveal() + " " + far.reveal() + " " + wide.reveal() + " " + deep.all() + " " + NestedOuter.peek(o) + " " + in.accept(inner -> inner.bonus + 100));
+              System.out.println(n.getClass().getName() + " " + in.getClass().getName() + " " + deep.getClass().getName() + " " + deep.getClass().getSimpleName() + " " + (wide instanceof NestedOuter.Wide) + " " + (in instanceof NestedOuter.Wide));
+          }
+      }
+    expected: |
+      44 45 57 132 7 1 42 1 2 43 101
+      NestedOuter$Counter NestedOuter$Inner NestedOuter$Inner$Deep Deep true false
+  # A class declared in a method is lowered where it stands: each local it reads is a
+  # slot set where an instance is made, through a class declared inside another too;
+  # an anonymous class's constructor hands its arguments to its superclass's.
+  - name: a-local-and-an-anonymous-class-keep-the-locals-they-read
+    main: Locals
+    source: |
+      interface LocalGreeter {
+          String greet(String name);
+      }
+
+      abstract class LocalBase {
+          final String id;
+
+          LocalBase(String id) { this.id = id; }
+
+          abstract int value();
+
+          public String toString() { return id + "=" + value(); }
+      }
+
+      class Locals {
+          int field = 5;
+          LocalGreeter fromField = new LocalGreeter() {
+              public String greet(String name) { return name + field; }
+          };
+
+          static LocalGreeter prefixed(String prefix) {
+              return new LocalGreeter() {
+                  int calls;
+
+                  public String greet(String name) { calls++; return prefix + name + calls; }
+              };
+          }
+
+          int walk(int depth) {
+              class Step {
+                  int down(int n) { return n == 0 ? field : new Step().down(n - 1) + depth; }
+              }
+              return new Step().down(depth);
+          }
+
+          public static void main(String[] args) {
+              int base = 100;
+              String label = "L";
+              class Counter {
+                  int n;
+
+                  int next() { n++; return base + n; }
+
+                  public String toString() { return label + n; }
+              }
+              class Doubling extends Counter {
+                  int next() { return super.next() * 2 + base; }
+              }
+              record Pair(int a, int b) { int sum() { return a + b; } }
+              enum Mode { ON, OFF }
+              interface Scorer { int score(Pair pair); }
+              Counter c = new Counter();
+              c.next();
+              Counter twice = new Doubling();
+              Scorer scorer = pair -> pair.sum() + base;
+              System.out.println(c.next() + " " + c + " " + twice.next() + " " + twice + " " + new Pair(1, 2) + " " + scorer.score(new Pair(3, 4)) + " " + Mode.OFF + Mode.values().length);
+              LocalGreeter g = prefixed("p:");
+              System.out.println(g.greet("a") + " " + g.greet("b") + " " + new Locals().fromField.greet("f") + " " + new Locals().walk(3));
+              LocalBase b = new LocalBase("anon") {
+                  int extra = base / 2;
+
+                  int value() { return base + extra; }
+              };
+              System.out.println(b + " " + b.id + " " + c.getClass().getName() + " " + g.getClass().getName() + " " + b.getClass().getName() + " " + new Pair(0, 0).getClass().getName());
+              ArrayList<Runnable> runs = new ArrayList<>();
+              for (int i = 0; i < 3; i++) {
+                  int copy = i;
+                  runs.add(new Runnable() {
+                      public void run() {
+                          Runnable inner = new Runnable() {
+                              public void run() { System.out.print("run " + copy + label + base + " "); }
+                          };
+                          inner.run();
+                      }
+                  });
+                  runs.add(() -> System.out.print(new Object() { int twice() { return copy * 2; } }.twice() + " "));
+              }
+              for (Runnable r : runs) r.run();
+              System.out.println("done");
+          }
+      }
+    expected: |
+      102 L2 302 L1 Pair[a=1, b=2] 107 OFF2
+      p:a1 p:b2 f5 14
+      anon=150 anon Locals$1Counter Locals$2 Locals$3 Locals$1Pair
+      run 0L100 0 run 1L100 2 run 2L100 4 done
+  # A pattern's binding is a variable of its statement set where the test holds, in
+  # scope where the language says: through &&, past a ! and an early exit, after a loop;
+  # a record pattern reads the components; a sealed type's cases need no default.
+  - name: a-pattern-binds-where-its-test-holds
+    main: Patterns
+    source: |
+      sealed interface PatternShape permits PatternCircle, PatternSquare, PatternGroup { }
+
+      record PatternCircle(double r) implements PatternShape { }
+
+      record PatternSquare(double side) implements PatternShape { }
+
+      record PatternGroup(PatternShape first, PatternShape second) implements PatternShape { }
+
+      record PatternPoint(int x, int y) { }
+
+      abstract sealed class PatternNode permits PatternLeaf, PatternFork { }
+
+      final class PatternLeaf extends PatternNode {
+          final int value;
+
+          PatternLeaf(int value) { this.value = value; }
+      }
+
+      non-sealed class PatternFork extends PatternNode {
+          final PatternNode left, right;
+
+          PatternFork(PatternNode left, PatternNode right) { this.left = left; this.right = right; }
+      }
+
+      class Patterns {
+          static double area(PatternShape s) {
+              return switch (s) {
+                  case PatternCircle c -> 3 * c.r() * c.r();
+                  case PatternSquare q -> q.side() * q.side();
+                  case PatternGroup(PatternCircle a, var b) -> area(a) + area(b) + 1000;
+                  case PatternGroup(PatternShape a, PatternShape b) -> area(a) + area(b);
+              };
+          }
+
+          static int depth(PatternNode n) {
+              return switch (n) {
+                  case PatternLeaf l -> 1;
+                  case PatternFork f -> 1 + Math.max(depth(f.left), depth(f.right));
+              };
+          }
+
+          static String describe(Object o) {
+              if (o instanceof PatternPoint p && p.x() > 0) {
+                  return "point " + (p.x() + p.y());
+              }
+              if (!(o instanceof String s)) {
+                  return "other " + o;
+              }
+              return "string " + s.length();
+          }
+
+          static String kind(Object o) {
+              return switch (o) {
+                  case null -> "null!";
+                  case Integer i when i > 10 -> "big " + i;
+                  case Integer i -> "int " + i;
+                  case String s -> "str " + s;
+                  case PatternPoint(int x, int y) when x == y -> "diag " + x;
+                  case PatternPoint(var x, _) -> "pt " + x;
+                  case PatternShape _ -> "shape";
+                  default -> "?";
+              };
+          }
+
+          static void statement(Object o) {
+              switch (o) {
+                  case String s when s.isEmpty() -> System.out.print("empty ");
+                  case String s -> System.out.print(s + " ");
+                  case PatternLeaf leaf -> { int v = leaf.value; System.out.print("leaf" + v + " "); }
+                  default -> System.out.print("other ");
+              }
+          }
+
+          public static void main(String[] args) {
+              PatternCircle c = new PatternCircle(1.5);
+              System.out.println(area(new PatternGroup(c, new PatternSquare(2))) + " " + area(new PatternGroup(new PatternSquare(1), c)) + " " + depth(new PatternFork(new PatternLeaf(1), new PatternFork(new PatternLeaf(2), new PatternLeaf(3)))));
+              System.out.println(describe(new PatternPoint(1, 2)) + "; " + describe(new PatternPoint(-1, 0)) + "; " + describe("hey") + "; " + describe(3));
+              System.out.println(kind(null) + ", " + kind(42) + ", " + kind(7) + ", " + kind("s") + ", " + kind(new PatternPoint(3, 3)) + ", " + kind(new PatternPoint(3, 4)) + ", " + kind(c) + ", " + kind(2.5));
+              statement("");
+              statement("text");
+              statement(new PatternLeaf(4));
+              statement(1);
+              Object o = new PatternPoint(1, 2);
+              if (o instanceof PatternPoint(int x, int y) && x < y) System.out.print("x<y " + x + " " + y + " ");
+              String size = o instanceof PatternPoint p ? "point " + p.x() : "none";
+              boolean both = o instanceof PatternPoint p && p.y() == 2 || o instanceof String;
+              while (!(o instanceof String text)) { o = "done"; }
+              System.out.println(text + " " + size + " " + both + " " + (o instanceof Object any ? any : "null") + " " + (o instanceof PatternShape));
+              try { area(null); } catch (RuntimeException e) { System.out.println("a pattern switch over null throws"); }
+          }
+      }
+    expected: |
+      1010.75 7.75 3
+      point 3; other PatternPoint[x=-1, y=0]; string 3; other 3
+      null!, big 42, int 7, str s, diag 3, pt 3, shape, ?
+      empty text leaf4 other x<y 1 2 done point 1 true done false
+      a pattern switch over null throws
+  # A class whose static initialization prints, or reads what another class can change,
+  # is initialized at its first use, its superclass first and a cycle as the language
+  # runs it; any other is initialized before main, where nothing tells the difference.
+  # A field read ahead of its initializer holds its type's default.
+  - name: static-initialization-runs-at-first-use-where-it-shows
+    main: StaticInit
+    source: |
+      class InitA {
+          static int x = init("A.x");
+          static { System.out.println("A static"); }
+
+          static int init(String s) { System.out.println(s); return 1; }
+
+          static void touch() { }
+      }
+
+      class InitB extends InitA {
+          static final InitB INSTANCE = new InitB();
+          static { System.out.println("B static"); }
+          int f = init("B.f");
+
+          InitB() { System.out.println("B()"); }
+      }
+
+      class InitSnapshot { static int taken = StaticInit.counter * 2; }
+
+      class InitMade {
+          static final InitMade ONE = new InitMade("one");
+          final String n;
+
+          InitMade(String n) { this.n = n; System.out.println("made " + n); }
+      }
+
+      enum InitLoud { X, Y; static { System.out.println("an enum too"); } }
+
+      class InitCycle1 { static int a = InitCycle2.b + 1; }
+
+      class InitCycle2 { static int b = InitCycle1.a + 1; }
+
+      class InitTable {
+          static final HashMap<String, Integer> CODES = new HashMap<>();
+          static final ArrayList<String> NAMES = new ArrayList<>();
+          static final int[] SQUARES = new int[4];
+          static final int SIZE;
+          static {
+              CODES.put("a", 1);
+              CODES.put("b", 2);
+              NAMES.add("first");
+              for (int i = 0; i < SQUARES.length; i++) SQUARES[i] = i * i;
+              SIZE = CODES.size() + NAMES.size();
+          }
+          static final InitTable DEFAULT = new InitTable(SIZE);
+          final int n;
+
+          InitTable(int n) { this.n = n; }
+      }
+
+      class InitUses {
+          static final int FROM = InitTable.SIZE + InitTable.DEFAULT.n;
+          static final InitLoud FIRST = InitLoud.X;
+      }
+
+      class InitForward {
+          static { System.out.println("ahead of its initializer: " + InitForward.b + " " + InitForward.s); }
+          static int a = InitForward.b + 1;
+          static int b = 5;
+          static String s = "x" + b;
+          static int early = peek() + 1;
+          static int late = 7;
+
+          static int peek() { return late; }
+      }
+
+      class InitNever { static { System.out.println("never printed"); } }
+
+      interface InitConsts { int BASE = StaticInit.counter + 1; String NAME = "consts"; }
+
+      class StaticInit {
+          static int counter = 1;
+          static { System.out.println("the class of main first"); }
+
+          public static void main(String[] args) {
+              System.out.println("main starts");
+              counter = 5;
+              System.out.println(InitSnapshot.taken + " " + InitConsts.NAME + " " + InitConsts.BASE);
+              InitA.touch();
+              System.out.println("after touch");
+              System.out.println(InitB.INSTANCE.f + " " + InitMade.ONE.n);
+              System.out.println(InitLoud.Y + " " + InitLoud.X.ordinal() + " " + InitCycle1.a + " " + InitCycle2.b);
+              System.out.println(InitTable.CODES.get("b") + " " + InitTable.NAMES.get(0) + " " + InitTable.SQUARES[3] + " " + InitTable.SIZE + " " + InitTable.DEFAULT.n + " " + InitUses.FROM + InitUses.FIRST);
+              System.out.println(InitForward.a + " " + InitForward.b + InitForward.s + InitForward.early + InitForward.late);
+          }
+      }
+    expected: |
+      the class of main first
+      main starts
+      10 consts 6
+      A.x
+      A static
+      after touch
+      B.f
+      B()
+      B static
+      made one
+      1 one
+      an enum too
+      Y 0 2 1
+      2 first 9 3 3 6X
+      ahead of its initializer: 0 null
+      1 5x517
+  # The instance initializers and the initializer blocks run in the order written, after
+  # the superclass's constructor; statements may stand ahead of this(..) and super(..),
+  # where a field may be given its value.
+  - name: initializer-blocks-and-statements-ahead-of-super
+    main: Blocks
+    source: |
+      class BlockBase {
+          final String id;
+          static int made;
+
+          BlockBase(String id) {
+              this.id = id;
+              made++;
+              System.out.print("base(" + id + ") ");
+          }
+      }
+
+      class BlockOrder extends BlockBase {
+          int first = note("field first");
+          { note("block one"); }
+          final int doubled;
+          int last = note("field last");
+          { note("block two"); }
+
+          BlockOrder(int v) {
+              int twice = v * 2;
+              if (twice < 0) throw new IllegalArgumentException("negative " + v);
+              this.doubled = twice;
+              super("order" + twice);
+              note("body " + doubled);
+          }
+
+          BlockOrder() {
+              String chosen = made > 0 ? "again" : "once";
+              this(made + 10);
+              note(chosen);
+          }
+
+          int note(String what) {
+              System.out.print(what + " ");
+              return 1;
+          }
+      }
+
+      class Blocks {
+          public static void main(String[] args) {
+              BlockOrder a = new BlockOrder(4);
+              System.out.println("-> " + a.id + " " + a.doubled + " " + a.first + a.last);
+              BlockOrder b = new BlockOrder();
+              System.out.println("-> " + b.id + " " + b.doubled + " " + BlockBase.made);
+              try { new BlockOrder(-1); } catch (IllegalArgumentException e) { System.out.println(e.getMessage() + " " + BlockBase.made); }
+          }
+      }
+    expected: |
+      base(order8) field first block one field last block two body 8 -> order8 8 11
+      base(order22) field first block one field last block two body 22 again -> order22 22 2
+      negative -1 2
+  # A default is the body of every class that has none of its own, the most specific
+  # interface's, and of a lambda; a static and a private method are plain functions; a
+  # constant is a static final field, inherited by what implements the interface.
+  - name: an-interface-has-defaults-static-and-private-methods-and-constants
+    main: Interfaces
+    source: |
+      interface FaceGreeter {
+          String PREFIX = "Hi ";
+          int LIMIT = PREFIX.length() * 2;
+
+          String greet(String name);
+
+          default String twice(String name) { return greet(name) + greet(name); }
+
+          default String help() { return helper() + twice("x"); }
+
+          static FaceGreeter polite() { return n -> PREFIX + "dear " + n; }
+
+          private String helper() { return "h" + LIMIT; }
+      }
+
+      interface FaceLoud extends FaceGreeter {
+          default String twice(String name) { return greet(name).toUpperCase() + "!"; }
+      }
+
+      class FacePlain implements FaceGreeter {
+          public String greet(String name) { return PREFIX + name; }
+      }
+
+      class FaceShout extends FacePlain implements FaceLoud {
+          public String greet(String name) { return "hey " + name; }
+      }
+
+      class FaceQuiet extends FaceShout {
+          public String twice(String name) { return "(" + greet(name) + ")"; }
+      }
+
+      class Interfaces {
+          public static void main(String[] args) {
+              FaceGreeter plain = new FacePlain(), shout = new FaceShout(), quiet = new FaceQuiet();
+              FaceGreeter lambda = name -> "<" + name + ">";
+              FaceLoud loud = name -> "psst " + name;
+              System.out.println(plain.twice("a") + " | " + shout.twice("b") + " | " + quiet.twice("c") + " | " + lambda.twice("d") + " | " + loud.twice("e"));
+              System.out.println(plain.help() + " | " + shout.help() + " | " + lambda.help() + " | " + FaceGreeter.polite().greet("q") + " | " + FaceGreeter.PREFIX + FaceGreeter.LIMIT + FacePlain.PREFIX + FaceLoud.LIMIT);
+          }
+      }
+    expected: |
+      Hi aHi a | HEY B! | (hey c) | <d><d> | PSST E!
+      h6Hi xHi x | h6HEY X! | h6<x><x> | Hi dear q | Hi 6Hi 6
+  # A variable arity call fits last and makes the array; new T[n][m] makes every level;
+  # a text block loses the indentation its lines share; _ names nothing; the
+  # conditional's type is the one its operands share; a compound assignment casts.
+  - name: variable-arity-arrays-of-several-dimensions-text-blocks-and-the-unnamed
+    main: Smalls
+    source: |
+      class Smalls {
+          static int sum(int first, int... rest) {
+              int total = first;
+              for (int r : rest) total += r;
+              return total;
+          }
+
+          static String join(String sep, String... parts) {
+              StringBuilder sb = new StringBuilder();
+              for (int i = 0; i < parts.length; i++) {
+                  if (i > 0) sb.append(sep);
+                  sb.append(parts[i]);
+              }
+              return sb.toString();
+          }
+
+          static String which(int a) { return "one"; }
+
+          static String which(int... a) { return "many" + a.length; }
+
+          static String which(Object a, Object... rest) { return "objects" + rest.length; }
+
+          static Object pick(boolean b) { return b ? "text" : 1; }
+
+          public static void main(String[] args) {
+              System.out.println(sum(1) + " " + sum(1, 2, 3) + " [" + join("-") + "] " + join("-", "a", "b") + " " + join("+", new String[] {"x", "y"}) + " " + which(1) + " " + which() + " " + which("s", 2, 3) + " " + which(new int[] {1, 2, 3}));
+              int[][] grid = new int[2][3];
+              grid[1][2] = 5;
+              String[][][] cube = new String[2][2][];
+              double[][] ds = new double[2][2];
+              long[][][] deep = new long[2][1][2];
+              deep[1][0][1] = 1L << 40;
+              System.out.println(grid.length + " " + grid[0].length + " " + grid[1][2] + grid[0][0] + " " + cube[1][1] + " " + cube[0].length + " " + ds[1][1] + " " + deep[1][0][1] + deep[0][0][0] + " " + (grid[0] != grid[1]));
+              String text = """
+                  Hello,
+                    "World"!
+                  end\
+                   joined
+                  """;
+              String inline = """
+                  a\\b "quoted" ""\"""";
+              System.out.print(text);
+              System.out.println(inline + " " + text.length() + " " + """
+                  x""".equals("x"));
+              var _ = sum(1, 2);
+              int count = 0;
+              for (var _ : new int[3]) count++;
+              Runnable ignore = () -> { };
+              try { Integer.parseInt("x"); } catch (RuntimeException _) { count += 10; }
+              final int fixed;
+              fixed = count * 2;
+              int total = 0;
+              for (int i = 0, j = 10; i < j; i += 3, j--) total += i * j;
+              System.out.println(count + " " + fixed + " " + total + " " + pick(true) + " " + pick(false) + " " + (count > 0 ? 1 : 2.5) + " " + (count > 0 ? 'a' : 0) + (count > 0 ? null : 0) + " " + (count == 13 ? Integer.valueOf(7) : "s") + " " + (count > 0 ? 'x' : "str") + (count < 0 ? 1 : 'c'));
+              boolean flag = true;
+              flag &= count > 100;
+              flag |= true;
+              flag ^= true;
+              Integer boxed = 5;
+              boxed += 2;
+              boxed++;
+              String str = "s";
+              str += 1 + 2;
+              str += 'c';
+              char ch = 'a';
+              ch += 2;
+              ch <<= 1;
+              long big = 1;
+              big <<= 40;
+              big >>>= 3;
+              big |= 5;
+              double dd = 7;
+              dd /= 2;
+              dd %= 2;
+              int[] cells = {1, 2};
+              cells[0] <<= 4;
+              cells[1] ^= cells[0];
+              System.out.println(flag + " " + boxed + " " + str + " " + ch + " " + big + " " + dd + " " + cells[0] + cells[1]);
+          }
+      }
+    expected: |
+      1 6 [] a-b x+y one many0 objects2 many3
+      2 3 50 null 2 0.0 10995116277760 true
+      Hello,
+        "World"!
+      end joined
+      a\b "quoted" """ 29 true
+      13 26 75 text 1 1.0 anull 7 xc
+      false 8 s3c Æ 137438953477 1.5 1618
 standalone:
   # An uncaught exception's report is its toString(): the pipeline's line on standard
   # error and a non-zero exit, where the JDK names the thread.
@@ -1401,11 +2270,29 @@ standalone:
           IO.println(": " + total + " in " + calls + " calls");
           IO.println();
           IO.println(this.calls > 0);
+          Tally tally = new Tally(2);
+          IO.println(tally.twice() + " " + tally.getClass().getName() + " " + Mode.ON.getClass().getName());
       }
+
+      // a class beside the members is a member class of the file's class: an inner class
+      class Tally {
+          final int factor;
+
+          Tally(int factor) {
+              this.factor = factor;
+          }
+
+          int twice() {
+              return square(factor) * 2 + calls;
+          }
+      }
+
+      enum Mode { ON, OFF }
     stdout: |
       sum of squares: 385 in 10 calls
 
       true
+      19 Compact$Tally Compact$Mode
   # The launch protocol: the first class of the file when it has a main, else the class
   # named as the file; main(String[]) before main(), an instance main on an instance
   # made with no argument.

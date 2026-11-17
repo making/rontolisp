@@ -81,19 +81,69 @@ At the first class of the file when it has a `main`, otherwise at the class name
 file. `main(String[])` is chosen before `main()`; an instance `main` runs on an instance
 made with the constructor of no argument. The argument array is empty. A file whose
 top level holds methods and fields is a compact source file: they are the members of one
-class, and every library class is in scope without an import.
+class, and every library class is in scope without an import. A class declared beside them
+is a member of that class too: an inner class, unless it is `static`, a record, an enum or
+an interface.
 
 ## What is read
 
 | | |
 |---|---|
-| Types | `int`, `long`, `double`, `boolean`, `char`, `String`, classes, interfaces, arrays; `var` for a local |
-| Declarations | classes with `extends` and `implements`, abstract classes and methods, interfaces with abstract methods, fields, static fields, constructors with `this(..)` and `super(..)`, overloaded methods, `package` and `import` |
-| Statements | local variables, `if`, `while`, `do`, `for`, the enhanced `for` over an array or a list, `break`, `continue`, `return`, `throw`, `try` with `catch` and `finally` |
-| Expressions | every operator of the primitive types with its conversions, string concatenation, the conditional, assignments and compound assignments, casts, `instanceof`, `new`, array creation and initializers, method calls, `super.m(..)`, lambdas for an interface of the program with one abstract method |
+| Types | `int`, `long`, `double`, `boolean`, `char`, `String`, classes, interfaces, enums, records, arrays; `var` for a local |
+| Declarations | classes with `extends` and `implements`, abstract classes and methods; enums with fields, constructors, methods and constants that have a body; records with compact and canonical constructors; interfaces with abstract, `default`, `static` and `private` methods and constants; `sealed`, `permits` and `non-sealed`; static nested, inner, local and anonymous classes; fields, static fields, static and instance initializer blocks; constructors with `this(..)` and `super(..)` and statements ahead of them; overloaded and variable arity methods; `package` and `import` |
+| Statements | local variables (`final`, the unnamed `_`), `if`, `while`, `do`, `for`, the enhanced `for` over an array or a list, `switch` with colon or arrow cases, patterns and guards, labeled statements, `break` and `continue` with or without a label, `yield`, `return`, `throw`, `try` with `catch` and `finally` |
+| Expressions | every operator of the primitive types with its conversions, string concatenation, the conditional, assignments and compound assignments, casts, `instanceof` with a type, a type pattern or a record pattern, `switch` expressions, `new`, `outer.new Inner()`, `Outer.this`, array creation with one or several lengths and initializers, text blocks, method calls, `super.m(..)`, lambdas for an interface of the program with one abstract method |
 
 Annotations are read and dropped. An `int` and a `long` wrap as two's complement; a
 `double` prints as the shortest text that reads back.
+
+```java
+sealed interface Shape permits Circle, Rect { }
+
+record Circle(double r) implements Shape { }
+
+record Rect(double w, double h) implements Shape { }
+
+enum Unit {
+    CM(1), M(100);
+
+    final int scale;
+
+    Unit(int scale) {
+        this.scale = scale;
+    }
+}
+
+double area(Shape shape) {
+    return switch (shape) {
+        case Circle c -> Math.PI * c.r() * c.r();
+        case Rect(double w, double h) -> w * h;
+    };
+}
+
+void main() {
+    Shape[] shapes = {new Circle(1), new Rect(2, 2), new Rect(2, 3)};
+    for (Shape shape : shapes) {
+        String kind = shape instanceof Rect r && r.w() == r.h() ? "square" : "shape";
+        IO.println(shape + " is a " + kind + " of area " + area(shape));
+    }
+    for (Unit unit : Unit.values()) {
+        String size = switch (unit) {
+            case CM -> "small";
+            case M -> "large";
+        };
+        IO.println(unit + " " + unit.ordinal() + " " + unit.scale + " " + size);
+    }
+}
+```
+
+```
+Circle[r=1.0] is a shape of area 3.141592653589793
+Rect[w=2.0, h=2.0] is a square of area 4.0
+Rect[w=2.0, h=3.0] is a shape of area 6.0
+CM 0 1 small
+M 1 100 large
+```
 
 ## The library
 
@@ -102,9 +152,12 @@ Each class has the members listed and no others; a missing one is refused by nam
 | Class | Members |
 |---|---|
 | `Object` | `toString`, `equals`, `hashCode`, `getClass().getName()`, `getClass().getSimpleName()` |
+| An enum | `values()`, `valueOf(String)`, `name`, `ordinal`, `compareTo`, `toString` |
+| A record | the accessors, `equals`, `hashCode`, `toString` |
+| An array | `length`, `clone()` |
 | `String` | `length`, `charAt`, `substring`, `indexOf(String)`, `equals`, `isEmpty`, `toUpperCase`, `toLowerCase`, `hashCode`, `String.valueOf` |
 | `StringBuilder` | `new StringBuilder()`, `new StringBuilder(String)`, `append`, `toString`, `length`, `charAt` |
-| `Integer`, `Long`, `Double`, `Boolean`, `Character` | boxing and unboxing; `Integer.MAX_VALUE`, `MIN_VALUE`, `parseInt`, `toString(int)`, `valueOf(int)`, `intValue`; `Long.MAX_VALUE`, `MIN_VALUE` |
+| `Integer`, `Long`, `Double`, `Boolean`, `Character` | boxing and unboxing; `Integer.MAX_VALUE`, `MIN_VALUE`, `parseInt`, `toString(int)`, `valueOf(int)`, `intValue`; `Long.MAX_VALUE`, `MIN_VALUE`, `Long.hashCode(long)`; `Double.compare`; `Boolean.hashCode(boolean)` |
 | `Math` | `sqrt`, `floor`, `pow`, `abs`, `max`, `min`, `PI`, `E` |
 | `System.out`, `System.err`, `IO` | `println`, `print` |
 | `ArrayList`, `List` | `new ArrayList<>()`, `add`, `get`, `set`, `size`, `isEmpty` |

@@ -6,9 +6,10 @@ refused BY NAME at its position, never lowered as something else.** Status is ex
 experimental subset of the Java language", no compatibility claim -- and every user surface says
 so (`--source-language` help, `doc/*/java/`, `examples/java/README.md`). Provenance and naming
 rules: [java-frontend-provenance.md](java-frontend-provenance.md). `--no-gc` is refused by name
-(`CompileFrontend.run`). First slice: `.todo/j68` (2026-11-17); what comes after is `.todo/j69`
-(declarations, statements), `j70` (generics, boxing, lambdas), `j71` (library), `j72` (numbers),
-`j73` (exceptions), `j74` (several files, a session), `j76` (threads).
+(`CompileFrontend.run`). First slice: j68 (2026-11-17); the declarations and statements past
+it: j69 (2026-11-17); what comes after is `.todo/j70` (generics, boxing, lambdas), `j71`
+(library), `j72` (numbers), `j73` (exceptions), `j74` (several files, a session), `j76`
+(threads).
 
 ## Where it sits
 
@@ -16,7 +17,9 @@ rules: [java-frontend-provenance.md](java-frontend-provenance.md). `--no-gc` is 
   `JavaLexer` + `JavaParser` + `JavaSyntax` (text -> tree; own lexer and parser, no dependency),
   `JavaClasses` (the class table of one program), `JavaClass` / `JavaType` (members, static
   types), `JavaIntrinsics` (the library classes whose values are Lisp values), `JavaLowering`
-  (tree -> core forms, typing as it goes), `JavaNames` (spelling), `JavaForms`, `Java` (facade).
+  (tree -> core forms, typing as it goes), `JavaInitOrder` (when a class's static initialization
+  runs), `JavaPatterns` (what a switch's patterns cover), `JavaNames` (spelling), `JavaForms`,
+  `Java` (facade).
 - Reached ONLY through the seam: `eval/SourceLanguage.JAVA`, `.java` or `--source-language java`
   ([source-language.md](source-language.md)). A program is ONE file lowered whole. No
   `SourceSession`: the REPL and the playground refuse it (`.todo/j74`).
@@ -69,10 +72,8 @@ rules: [java-frontend-provenance.md](java-frontend-provenance.md). `--no-gc` is 
 - **Constants** are folded as the language computes them (`fold`), so a constant variable
   (`static final`, primitive or `String`, constant initializer) is its value at every read --
   whatever the order of the classes -- and `char c = 'a' + 1` is a `char`.
-- **Static initialization is eager**, class by class in table order, before `main`; the language
-  initializes at first use. So an initializer may read constants and the static fields above it
-  in its class and run no program code; any other is refused by name (`.todo/j69` decides the
-  order).
+- **Static initialization: at first use where it shows, before `main` where it cannot**
+  ("Static initialization" below).
 - **An exception is one condition type holding the object** (`%java-throwable`), `throw` is
   `(%java-throw obj #'describe)`, `describe` the program's `Throwable.toString()` target, which
   the condition's `:report` calls: an uncaught one is `Unhandled condition: <toString()>` with
@@ -105,7 +106,110 @@ rules: [java-frontend-provenance.md](java-frontend-provenance.md). `--no-gc` is 
   the class DECLARING it. The arguments are an empty array.
 - **Lowered until the class table is still**: a library class is read where a body first names
   it, which can be after a call whose dispatch it changes, so `JavaLowering.lower` lowers again
-  from the start when a pass added a class.
+  from the start when a pass moved the table's version: a class added (a library class, a local
+  or an anonymous class, an anonymous class's constructor, an enum's `values()`), a local found
+  to be read by a local class, the set of lazily initialized classes.
+
+## Declarations and statements past the first slice (2026-11-17)
+
+- **A nested class's name** is its canonical name (`Outer.Inner`) in every Lisp name and its
+  binary name (`Outer$Inner`) for `getClass().getName()`; a local class is `Outer$1Local`, an
+  anonymous one `Outer$1`, numbered in the order written in the class's body by a walk of the
+  tree (`JavaClasses.number`), as a compiler names them (the lowering meets them in another
+  order: methods, then initializers). A type name is looked for innermost first: a local class
+  in scope, the class and its member types, inherited ones included, then each class around.
+- **A class of a compact source file is a member of the file's class**, an inner class unless
+  static, a record, an enum or an interface -- measured against a JDK 25: `new A()` in a static
+  method of such a file is `non-static variable this cannot be referenced from a static context`
+  there too, and `getName()` is `Compact$A`.
+- **An inner class holds its outer instance** in a slot `this$<depth>` (the depth of the class in
+  its `extends` chain, so the slots of a class and its superclass never meet), set by the
+  function making the instance ahead of the constructor; a superclass that is an inner class
+  gets the instance of ITS outer class found from the subclass's (`outerInstance`). A member of
+  a class around is read through the chain of those slots.
+- **A local and an anonymous class are lowered where they are declared**, once a pass, behind a
+  scope that marks the class's boundary. A local read across the boundary is a CAPTURE: a slot
+  `val$<name>$<depth>` of the class, set where an instance is made from the value the name has
+  there (which is the enclosing local class's own slot when the creation stands in one). By
+  value, so the local must be effectively final: a local with an initializer that is assigned
+  again is refused where a lambda or a class reads it. Rejected: lowering the class's methods as
+  closures (a method is a `defun` taking `this`; dispatch and `super` calls name it).
+- **An anonymous class's constructor** takes the parameters of the superclass constructor its
+  arguments pick and hands them on (`Method.passesTo`); it is made where the class is created.
+- **An enum** extends the library's `Enum` (source); a constant is a `static final` field whose
+  initializer makes the instance behind two parameters every constructor takes first, the name
+  and the ordinal (`Method.hidden`); a constant with a body is an anonymous class under the
+  enum. `values()` and the `$VALUES` array, and `valueOf`, are added where a program first names
+  them (`JavaClasses.enumMethod`): `valueOf` throws, and a program that does not name it holds
+  no exception class (measured: an enum program naming only `values()` went from 83 to 60
+  forms).
+- **A record** extends the library's `Record`; its accessors, canonical constructor (a compact
+  one is the written statements, then the stores) and `toString`/`equals`/`hashCode` are
+  members in the subset itself, the last three parsed from text the class table writes
+  (`JavaParser.synthetic`, every node at the record's position). `equals` compares a `double`
+  by `Double.compare`; `hashCode` is `31 * h + hash` over the components (unspecified by the
+  language; a `double` component has none until `.todo/j72`).
+- **A switch is a `cond` over the selector**: `eql` for an `int`/`char`, `equal` for a string,
+  `eq` to the constant's field for an enum, a pattern's own test; the default clause last
+  wherever it is written. Colon cases none of which runs into the next are the same `cond`, an
+  empty case giving its labels to the next. Cases that do run on are numbered: the selector
+  picks the first to run and each runs under `(if (<= picked i) ..)`, inside `(block %break ..)`
+  -- no `tagbody`. A local declared in a colon case is the whole switch's: hoisted to one `let`.
+  A `null` selector reaches `%java-null-switch` unless a case names `null`. A switch expression
+  with no target type is lowered twice: once to find the type its arms share.
+- **A pattern's binding is a variable of the statement the pattern stands in**, declared by a
+  `let` around the statement and set where the test holds:
+  `(and (Circle? o) (progn (setq c o) t))`. Where it is in SCOPE is the language's: `flow`
+  answers the bindings a condition leaves when true and when false, `&&`/`||`/`!`/`?:` and
+  `if`/`while`/`for` put them in scope, and a statement whose branch never completes leaves the
+  other's bindings to the end of its block (`introduced`). Rejected: a `let` per binding nested
+  into the condition (the else branch is duplicated or needs a block).
+- **What a set of patterns covers** (`JavaPatterns.covers`): rows of patterns against columns of
+  types; a sealed type is covered when every type it permits is, a record when its record
+  patterns cover its components together. A switch expression, and a statement with a pattern
+  or a `null`, must cover; one that does ends in `%java-no-match` instead of a default.
+- **A labeled statement** is a `block` named `<label>%break`, a labeled loop's round
+  `<label>%continue`; an unlabeled `break` of a labeled loop goes to the same block.
+- **`this(..)`/`super(..)` after statements**: the constructor's body is lowered as written, the
+  call where it stands, followed for `super(..)` by the instance initializers; ahead of it the
+  instance is refused (`early`) but for the store of a field.
+- **A default method** is the body `implementation` answers when no class above declares one;
+  a dispatcher tests the topmost class inheriting it. A lambda called through a default runs
+  the default (`functionp` arm).
+- **A variable arity method** fits in a third phase, after the fits without and with boxing.
+
+## Static initialization (2026-11-17)
+
+The language initializes a class at its first use. Running every initializer before `main` (the
+first slice) is wrong as soon as one prints, or reads what `main` changes first -- silently.
+Testing at every use is right and costs each read of an enum constant a call. So
+`JavaInitOrder` decides per class, from what the lowering recorded of each function
+(`Effects`: prints or throws, static fields read and written, functions called -- every body a
+virtual call can run --, classes used):
+
+- **EAGER**, initialized before `main` with no test anywhere, when the initialization with
+  everything it can call prints nothing, throws nothing (a `throw` statement), writes no static
+  field of another class, and reads of another class only a `final` field whose type nothing
+  can change (a primitive, a string, a box, a class of the program whose fields, with those of
+  every class above and under it, are final and of such types); when every class it needs first
+  (one it makes, calls a static method of, reads, extends) is eager; and when no two need each
+  other. Eager classes run in the order they need each other. Why this is sound: by induction
+  every reference such code can hold is made during the initialization, held by the class's own
+  static fields, or immutable -- so nothing it reads can have been changed by code that ran
+  first, and nothing it writes can be read before the class's first use. `final` is checked
+  for this reason.
+- **LAZY** otherwise: `|C.<clinit>|` runs the initializers once (`|C.<clinit>%done|` set first,
+  the superclass's first), called at the top of the class's static methods and of the functions
+  making its instances, and around a read or a write of its static fields from a class that is
+  not known to be initialized (`initialized`: the class itself, a subclass, a class declared
+  inside one of those and not static). The class the program starts at is initialized by the
+  entry form and never tested.
+- Constant variables are set first; a field holds its type's default before its initializer
+  only when something can read it there (no initializer, a lazy class, a read through a method
+  the initialization calls or by a qualified name ahead of the field).
+- The decision is made at the end of a pass and the next pass is lowered with it.
+- Not the language's: a run-time error inside an eager initialization surfaces before `main`;
+  an exception out of a static initializer is not wrapped (`.todo/j73`).
 
 ## The lowering table
 
@@ -121,6 +225,12 @@ rules: [java-frontend-provenance.md](java-frontend-provenance.md). `--no-gc` is 
 | `while`, `for`, `do` | `(while test body.. update..)`; `(block %break ..)` around it and `(block %continue ..)` around the body only when the body has that exit; `do` tests a flag set after the body |
 | `for (T x : xs)` | a counter over the vector, the length taken once for an array |
 | `return v` | the value in tail position, else `(return-from %fn v)` and a `(block %fn ..)` |
+| `switch (n) { case 1 -> a; default -> b; }` | `(cond ((eql n 1) a) (t b))`; a statement's `break` is `(return-from %break nil)` |
+| `yield v` | the value in tail position of its arm, else `(return-from %yield v)` |
+| `o instanceof Circle c` | `(and (Circle? o) (progn (setq c o) t))`, `c` a `let` of the statement |
+| `new Inner()`, a local class | `(Outer.Inner.new outer args.. captured..)` |
+| `new int[n][m]` | `(%java-new-array (list n m) kind default)` |
+| `f(1, 2)` to `f(int...)` | `(f (make-array 2 .. :initial-contents (list 1 2)))` |
 | `x -> e` | `(lambda (x) e)` |
 | `List.get(i)`, `Map.put(k, v)` | `(%java-list-get xs i)` (aref reads past a fill pointer); `(setf (gethash k m) v)` as a statement, `(%java-map-put m k v)` for its value |
 
@@ -136,14 +246,20 @@ the spike's lowering (JVM, precompiled wasm) / this front end's:
 | `Sieve` | 0.21 | 1.20 / 0.57 | 1.22 / 0.61 | 41,446 / 11,136 -> 35,936 / 10,380 |
 | `WrapLong` | 0.12 | 3.57 / 7.74 | 3.46 / 7.46 | 27,604 / 7,049 -> 21,519 / 4,544 |
 
-The programs are `.todo/artefacts/j68-java-front-end-spike/programs/`. The corpus (23 cases, 1,120
-lines) and `examples/java/Orders.java` print what the JDK prints on four backends.
+The programs are `.todo/artefacts/j68-java-front-end-spike/programs/`. The corpus (32 cases,
+2,190 lines, 2026-11-17) and `examples/java/Orders.java` print what the JDK prints on four
+backends.
 
-## Not checked, stated in `doc/*/java/deviations.md`
+## What a compiler reports and this does not, stated in `doc/*/java/deviations.md`
 
-Definite assignment, unreachable code, a missing `return`, checked exceptions, access modifiers,
-`final`. A `null` receiver of a direct call runs the body. The run time's errors keep their Lisp
-class and text.
+Checked: `private` (the unit is the top-level class), assignment to a `final` field or local,
+effectively final captures, a missing `return` and an unreachable statement where it is SURE
+(`completes` / `exits`), and definite assignment through `if`, `while` and `for`. The rule for
+each is to refuse only what a compiler refuses: where the lowering does not follow the branches
+(`switch`, `try`, `do`, `&&`, `?:`) an assignment on any path counts. Not checked: checked
+exceptions; a blank local assigned twice and then captured (`.todo/j77`, with what is still
+refused by name). A `null` receiver of a direct call
+runs the body. The run time's errors keep their Lisp class and text.
 
 ## Tests
 

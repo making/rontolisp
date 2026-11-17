@@ -53,3 +53,8 @@ double (toward zero, the type's ends, `%java-double-to-int`), a double division 
 `0.0 / 0.0` (the host's own `Infinity`/`NaN`, four backends), `Math.sqrt` of a negative,
 `Integer.MIN_VALUE / -1`, shift counts, `Double`'s text. `float`, `byte`, `short` are refused.
 `long[]`, `char[]`, `boolean[]` are untyped vectors.
+
+After j69 (2026-11-17): a `float` literal and the `float` type are still refused here; a record
+with a `double` component has no `hashCode` (`Double.hashCode` is `%java-hash-code`, which
+refuses a float); `Double.compare` is exact (`%java-double-compare`); `new long[n][m]` leaves are
+untyped vectors.

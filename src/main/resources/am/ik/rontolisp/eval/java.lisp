@@ -161,6 +161,8 @@
 
 ;; --- Object.equals and hashCode ---------------------------------------------------
 
+;; Long.hashCode as the API specifies it: (int) (value ^ (value >>> 32)).
+
 (defun rontolisp::%java-string-equals (a b)
   (if (and (stringp b) (simple-string-p b)) (equal a b) nil))
 
@@ -189,6 +191,11 @@
       (setq i (+ i 1)))
     (if (>= h 2147483648) (- h 4294967296) h)))
 
+(defun rontolisp::%java-long-hash (x)
+  (let ((bits (logand x 18446744073709551615)))
+    (let ((h (logand (logxor bits (ash bits -32)) 4294967295)))
+      (if (>= h 2147483648) (- h 4294967296) h))))
+
 (defun rontolisp::%java-hash-code (x)
   (cond ((null x) (error "NullPointerException: hashCode() called on null"))
    ((stringp x)
@@ -198,10 +205,7 @@
    ((integerp x)
     (if (and (>= x -2147483648) (<= x 2147483647))
         x
-        ;; Long.hashCode as the API specifies it: (int) (value ^ (value >>> 32))
-        (let ((bits (logand x 18446744073709551615)))
-          (let ((h (logand (logxor bits (ash bits -32)) 4294967295)))
-            (if (>= h 2147483648) (- h 4294967296) h)))))
+        (rontolisp::%java-long-hash x)))
    ((eq x t) 1231)
    ((eq x :false) 1237)
    ((characterp x) (char-code x))
@@ -211,6 +215,8 @@
    (t (rontolisp::%java-identity-hash x))))
 
 ;; --- numbers ------------------------------------------------------------------------
+
+(defun rontolisp::%java-boolean-p (x) (if (or (eq x t) (eq x :false)) t nil))
 
 (defun rontolisp::%java-unbox-boolean (x)
   (cond ((eq x t) t)
@@ -252,6 +258,49 @@
     (if (or (> value 2147483647) (< value -2147483648))
         (error "NumberFormatException: For input string: ~S" s))
     value))
+
+;; Double.compare as the API specifies it: a NaN is equal to itself and above every
+;; other value, and 0.0 is above -0.0, which the reciprocals tell apart.
+(defun rontolisp::%java-double-compare (a b)
+  (cond ((< a b) -1)
+        ((> a b) 1)
+        ((= a b)
+         (if (= a 0d0)
+             (let ((x (/ 1d0 a)) (y (/ 1d0 b)))
+               (cond ((< x y) -1) ((> x y) 1) (t 0)))
+             0))
+        ((= a a) -1)
+        ((= b b) 1)
+        (t 0)))
+
+;; --- arrays, switch -----------------------------------------------------------------
+
+;; new T[n][m]..: every level but the last holds arrays. KIND is 1 for an int leaf,
+;; 2 for a double one, 0 for any other, which starts as INITIAL.
+(defun rontolisp::%java-new-array (lengths kind initial)
+  (let ((n (car lengths)))
+    (if (null (cdr lengths))
+        (cond ((eql kind 1)
+               (make-array n
+                           :element-type '(signed-byte 32)
+                           :initial-element 0))
+              ((eql kind 2)
+               (make-array n :element-type 'double-float :initial-element 0d0))
+              (t (make-array n :initial-element initial)))
+        (let ((rows (make-array n :initial-element nil)) (i 0))
+          (while (< i n)
+            (setf (aref rows i)
+                  (rontolisp::%java-new-array (cdr lengths) kind initial))
+            (setq i (+ i 1)))
+          rows))))
+
+(defun rontolisp::%java-null-switch ()
+  (error "NullPointerException: a switch over null"))
+
+;; A switch that covers its selector's type by its cases reaches this only when the
+;; lowering is wrong.
+(defun rontolisp::%java-no-match ()
+  (error "MatchException: no case of the switch takes the value"))
 
 ;; --- String, StringBuilder ----------------------------------------------------------
 

@@ -834,8 +834,9 @@ class RontoLispCliStreamsTest {
 		// a construct the subset does not have is refused by name before anything runs,
 		// at its position, on the interpreter and the compile path alike
 		Path broken = this.tempDir.resolve("Broken.java");
-		Files.writeString(broken, "void main() {\n    IO.println(\"never\");\n    switch (1) { default: }\n}\n");
-		String expected = "error: " + broken + ":3:5: a switch is not supported by the experimental Java subset yet";
+		Files.writeString(broken, "void main() {\n    IO.println(\"never\");\n    assert true;\n}\n");
+		String expected = "error: " + broken
+				+ ":3:5: an assert statement is not supported by the experimental Java subset yet";
 		String[] refused = runReporting(broken.toString());
 		assertThat(refused[1]).isEmpty();
 		assertThat(refused[2].trim()).isEqualTo(expected);
