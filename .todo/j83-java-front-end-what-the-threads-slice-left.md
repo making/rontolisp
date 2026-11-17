@@ -45,4 +45,5 @@ stack cannot end is refused by name with the status 1.
   `sleep(Duration)`/`join(Duration)`, a JDK's thread numbers, `Thread.Builder`'s factory,
   `InheritableThreadLocal`; an atomic is no `Number`; a class literal is read only as a
   `synchronized` statement's lock (`Counter.class.wait()` is refused).
-- **A thread's uncaught report** is the first line, as `main`'s (`.todo/j82`).
+- **A thread's uncaught report** is the first line alone; `main`'s has the pipeline's location
+  line under it since j82, and holds no condition, which a thread's still does (`.todo/j88`).

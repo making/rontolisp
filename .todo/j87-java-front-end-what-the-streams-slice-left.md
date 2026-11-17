@@ -37,7 +37,7 @@ compiles the library (`JavaLoweringTest#theLibrarysSourceIsJavaAJdkCompiles`).
   standard input traps there (wasmtime 49). A `listen` the wasm backends answer (WASI
   `poll_oneoff` on preview 1, a pollable on the component) would make the two variants of
   `%java-input-more` one.
-- `MatchException` and the run time's own errors as the library's classes: `.todo/j82`.
+- `MatchException` and the run time's own errors as the library's classes: `.todo/j88`.
 
 ## Measured costs (2026-11-17), each a lead
 
@@ -49,10 +49,11 @@ compiles the library (`JavaLoweringTest#theLibrarysSourceIsJavaAJdkCompiles`).
   list 44 -> 57 KB, one over a `HashMap` 38 -> 58 KB. `%string`, `%equals` and `%hash` take
   any value, so they hold every arm (a double's text, the identity table) whatever the
   program stores. A type flow over what a program puts into its collections would drop them.
-- **Any `try` with a `catch` is 175 KB of wasm** (`C1.java`: one class, one `catch`): the
-  host's `format` and condition report are held. Since j79 a program that makes a
-  `PrintStream` or reads through `InputStream.read(byte[], int, int)` pays it through the
-  library's own `catch` of an `IOException`. With `.todo/j82`.
+- **A program that throws or catches at all is ~60 KB of wasm** (a loop calling a method that
+  throws: 60,901 B; with a `try`/`catch` around the call 64,019 B, which was 183,852 B until
+  j82 made a `catch` signal nothing again). Since j79 a program that makes a `PrintStream` or
+  reads through `InputStream.read(byte[], int, int)` pays it through the library's own
+  `catch` of an `IOException`. What the 60 KB are is `.todo/j88`'s.
 - **A `BufferedReader` over `System.in` costs 1.3 us a line on wasm over `IO.readln`**
   (200,000 lines: 1.04 against 0.78 s), 1.1 us on the JVM: every character goes through
   `StandardInput.units`, the reader's buffer and `new String(char[], ..)`. A `readLine` that

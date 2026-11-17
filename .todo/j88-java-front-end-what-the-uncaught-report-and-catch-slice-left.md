@@ -31,6 +31,8 @@ site was measured and not made (an index test: 9 ns an array access on wasm).
 - **A program that throws one exception is 60,901 B of wasm** (a loop calling a method with
   one `throw new IllegalStateException(..)`, no `try`; `Fib`, which throws nothing, is 2,868 B). What the
   bytes are -- `Throwable`'s source, the `define-condition`, the report -- is not measured.
+- **`MatchException` and the run time's other errors are the library's classes only at a
+  `catch`** (`%lisp-error`, by the table's class name); `.todo/j87` leaves them here.
 - **`StackOverflowError`** where a backend can (`.kb/interpreter-stack.md`); it waits for a
   program that needs it.
 - **`ExceptionInInitializerError`** around an exception out of a static initializer, and

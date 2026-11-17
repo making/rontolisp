@@ -823,7 +823,7 @@ virtual call can run --, classes used):
 - Not the language's: a run-time error inside an eager initialization surfaces before `main`
   (inside the entry's handler since j73, so it is reported as the JDK reports an uncaught one);
   an exception out of a static initializer is not wrapped in `ExceptionInInitializerError`, and
-  a later use does not raise `NoClassDefFoundError` (stated in `deviations.md`, `.todo/j82`).
+  a later use does not raise `NoClassDefFoundError` (stated in `deviations.md`, `.todo/j88`).
 
 ## Exceptions (2026-11-17, j73; the entry and the catch: j82)
 
