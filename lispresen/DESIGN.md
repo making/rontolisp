@@ -4,8 +4,8 @@ lispresen turns a slide deck written as S-expressions into one HTML file. It is 
 rontolisp and runs unchanged on the interpreter, the JVM (`.class` / `.jar`), WASM (WASI
 Preview 1 module and WASI 0.3 component) and in a browser (a `--no-wasi` reactor). Two
 features set it apart: it decides font sizes and placement itself, so every slide stays
-readable from the back of the room, and Lisp, Scheme and Clojure code on a slide can be
-edited and run during the talk on rontolisp's own WebAssembly runtime.
+readable from the back of the room, and Lisp, Scheme, Clojure and Starlark code on a
+slide can be edited and run during the talk on rontolisp's own WebAssembly runtime.
 
 Decks are written in Japanese. Line breaking, measurement and fonts are designed for
 Japanese text with embedded Latin words and code; English-only decks work but are not
@@ -150,7 +150,7 @@ Rules:
   leading byte order mark dropped) instead, lines FIRST to LAST when `:lines` is given,
   dedented the same way. A relative path resolves against the deck's directory, as an
   image's does (Images, below). `:lang` defaults by extension: `lisp` / `lsp` / `cl`
-  lisp, `scm` / `ss` scheme, `clj` / `cljc` clojure, and for the other highlighted
+  lisp, `scm` / `ss` scheme, `clj` / `cljc` clojure, `star` / `bzl` starlark, and for the other highlighted
   languages (Runnable code, below) `java`, `kt`, `js` / `mjs`, `ts`, `c` / `h`, `cpp` /
   `cc` / `hpp`, `go`, `rs`, `py`, `sh` / `bash` / `zsh`, `sql`, `json`, `yaml` / `yml`;
   none otherwise. The file is read
@@ -1267,8 +1267,8 @@ to 10, and of a Japanese text.
 
 ## Runnable code
 
-A `code` block whose `:lang` is `"lisp"`, `"scheme"` or `"clojure"` is runnable unless it
-says `:run nil` or the deck says `:runtime :none`.
+A `code` block whose `:lang` is `"lisp"`, `"scheme"`, `"clojure"`, `"starlark"` or
+`"star"` is runnable unless it says `:run nil` or the deck says `:runtime :none`.
 
 ### Runtime
 
@@ -1330,13 +1330,21 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
   it. The load state shows in the presenter window and, on the slides, only as the Run
   button's label (Loading / Run / Failed), so it takes no room on the slide; a run
   pressed while loading waits, and Run after a failure loads again.
-- Each language has one persistent environment (`rontoSetLanguage`, then `rontoEval`),
-  so a function defined on one slide can be called on a later one, as the
+- Each Lisp language has one persistent environment (`rontoSetLanguage`, then
+  `rontoEval`), so a function defined on one slide can be called on a later one, as the
   documentation site's Lisp cells share one interpreter. Verified 2026-10-22 on the
   hosted runtime for all three languages: a definition in one `rontoEval` is callable in
   the next. `:fresh t` runs the block as a
   whole program on a new interpreter instead (`rontoRunProgram`, with `:stdin "..."` as
   its standard input). The presenter window has a runtime reset.
+- Starlark is a file language and has no persistent environment: a block is read as one
+  whole program and run on a fresh interpreter (`rontoRunProgram`), as a `starlark` cell
+  on the documentation site is (`.kb/documentation-site.md`), so it shows what the
+  program prints and `:fresh` states nothing new. A definition therefore does not carry
+  to another slide; a block that ends with an expression prints nothing unless it calls
+  `print`. It is the runtime's experimental front end, so a construct outside what
+  `.kb/starlark-frontend.md` covers is reported by the run, not at render time: lispresen
+  lays the block out and colors it whichever the runtime's subset holds.
 - What is shown is what the playground shows: the printed output, then the echoed
   values; a result starting with `ERROR:` is shown in the error style.
 
@@ -1377,7 +1385,7 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 - Runs execute in the audience window. Edits and outputs are broadcast to the presenter
   window over the same `BroadcastChannel` as navigation, and Run pressed in the
   presenter window is forwarded.
-- Highlighting uses one tokenizer for the three languages (`highlight.lisp`): comments
+- Highlighting uses one tokenizer for the three Lisp languages (`highlight.lisp`): comments
   (`;`, `#|...|#`), strings and characters (`"..."`, `#\x`, Clojure `\x`), keywords
   (`:name`), numbers and constants (`nil`, `t`, `true`, `false`, `#t`, `#f`), and the head
   of a defining or binding form (`def...`, `let`, `lambda`, `fn`, `if`, ...). `[]`, `{}`
@@ -1388,8 +1396,9 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 - Code in another language a talk shows next to Lisp is highlighted by a second
   tokenizer driven by a table of rules per language: `java`, `kotlin` (`kt`),
   `javascript` (`js`), `typescript` (`ts`), `c`, `cpp` (`c++`), `go`, `rust` (`rs`),
-  `python` (`py`), `bash` (`sh`, `shell`, `zsh`), `sql`, `json` and `yaml` (`yml`). A
-  language's rules are its line and block comment delimiters, its string delimiters with
+  `python` (`py`), `bash` (`sh`, `shell`, `zsh`), `sql`, `json`, `yaml` (`yml`) and
+  `starlark` (`star`). A language's rules are its line and block comment delimiters, its
+  string delimiters with
   their escapes (`\`, or SQL's and YAML's doubled quote) and whether they span lines
   (Python's triple quotes, Java and Kotlin text blocks, template literals and Go's raw
   strings, all set as plain strings), `'x'` character literals (C family; a `'` that
@@ -1400,10 +1409,15 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
   its line, so a stray quote colors one line at most. It is no grammar: enough to set
   comments, strings and keywords apart from the back of the room. Only colors change, so
   the widths, the fit solver and the layout are the monospace table's as for any code;
-  `:steps`, `:at` and `:morph` work on these blocks as on Lisp. They are never run, whatever
-  `:run` says, and not editable; any other `:lang` is plain `code-fg` text. Checked
-  2026-10-24 in Chrome: Java, Python, shell, SQL, JSON and YAML blocks in each built-in
-  theme, the runtime check making no correction.
+  `:steps`, `:at` and `:morph` work on these blocks as on Lisp. Every one but starlark is
+  never run, whatever `:run` says, and not editable; any other `:lang` is plain `code-fg`
+  text. Starlark is the runnable entry of this table and the one language outside the
+  Lisp tokenizer that is editable: the player script carries its rules too, for the
+  editor. Verified 2026-11-17 in Chrome 157 through DevTools: the editor's markup for a
+  starlark block equals the build's token for token, and Run on a block printing `f(21)`
+  showed `42` over the hosted runtime. The other languages were checked 2026-10-24 in
+  Chrome: Java, Python, shell, SQL, JSON and YAML blocks in each built-in theme, the
+  runtime check making no correction.
 - A `console` block is a shell transcript: a line starting with `$ ` is a command, its
   `$` in the keyword color, and every other line is output, in the comment color. It is
   never runnable. A command line is set on one line like code; an output line longer

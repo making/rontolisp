@@ -72,7 +72,7 @@ without `:agenda` (a warning), and needs at least one section after it.
 | `"text"` or `(p inline...)` | paragraph |
 | `(lead inline...)` | paragraph in the muted color, e.g. above columns |
 | `(ul item...)`, `(ol item...)` | list; each argument is one item: a string, an inline form or `(li inline... [nested list])`; `:step t` reveals one item per advance |
-| `(code [:lang "lisp"] "text")` | code block; common indentation removed. `lisp`, `scheme`, `clojure` are highlighted and runnable; `console` is a shell transcript (`$ ` lines are commands); `java`, `kotlin`, `javascript`/`js`, `typescript`/`ts`, `c`, `cpp`, `go`, `rust`, `python`/`py`, `bash`/`sh`, `sql`, `json`, `yaml`/`yml` are highlighted, never run; any other `:lang` is plain |
+| `(code [:lang "lisp"] "text")` | code block; common indentation removed. `lisp`, `scheme`, `clojure` and `starlark`/`star` are highlighted and runnable; `console` is a shell transcript (`$ ` lines are commands); `java`, `kotlin`, `javascript`/`js`, `typescript`/`ts`, `c`, `cpp`, `go`, `rust`, `python`/`py`, `bash`/`sh`, `sql`, `json`, `yaml`/`yml` are highlighted, never run; any other `:lang` is plain |
 | `(code :file "fib.lisp" [:lines (4 6)])` | code from a UTF-8 file beside the deck; `:lang` defaults by extension (`.lisp`, `.java`, `.py`, `.sh`, `.json`, ...) |
 | `(quote [:cite "who"] inline...)` | quotation |
 | `(column block...)` | consecutive columns stand side by side; widths come from content |
@@ -208,6 +208,10 @@ run). Blocks of one language share definitions across slides. Options: `:run nil
 only), `:timeout 5`, `:fresh t` (new interpreter), `:stdin "3 4"` (with `:fresh`). The
 runtime (about 35 MB) loads from the network when the deck opens; `:runtime :none` or
 `--runtime none` makes all code static.
+
+A `starlark` (`star`) block is runnable too, as a whole program on a fresh interpreter:
+it shows what the program prints, definitions do not carry across slides, and `print` is
+needed to see a value.
 
 ## Images
 

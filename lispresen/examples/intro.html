@@ -1473,10 +1473,33 @@ else if(c===BS)emit('s',tend(Math.min(n,i+2)));
 else if(delim(c))emit(null,i+1);
 else{j=tend(i);emit(cls(j),j);}}
 return o;}
+var SQ=String.fromCharCode(39),TQ=DQ+DQ+DQ,TS=SQ+SQ+SQ,
+SKW=' and break continue def elif else for if in lambda load not or pass return while ',
+SCONST=' True False None ';
+function starWord(c){var x=c.charCodeAt(0);return x>=128||(c>='0'&&c<='9')||(c>='A'&&c<='Z')||(c>='a'&&c<='z')||c==='_';}
+function highlightStar(t){var n=t.length,i=0,o='';
+function emit(k,e){var s=esc(t.slice(i,e));o+=k?'<span class=hl-'+k+'>'+s+'</span>':s;i=e;}
+function at(s,j){return t.substr(j,s.length)===s;}
+function strend(j,open,escaped){j+=open.length;
+for(;;){if(j>=n)return n;if(escaped&&t[j]===BS){j=Math.min(n,j+2);continue;}
+if(at(open,j))return j+open.length;if(open.length===1&&t[j]===NL)return j;j++;}}
+while(i<n){var c=t[i],e,j;
+if(c==='#'){e=t.indexOf(NL,i);emit('c',e<0?n:e);}
+else if(at(TQ,i))emit('s',strend(i,TQ,true));
+else if(at(TS,i))emit('s',strend(i,TS,true));
+else if(c===DQ)emit('s',strend(i,DQ,false));
+else if(c===SQ)emit('s',strend(i,SQ,false));
+else if(starWord(c)){j=i+1;var num=c>='0'&&c<='9';
+while(j<n&&(starWord(t[j])||(num&&t[j]==='.'&&j+1<n&&t[j+1]>='0'&&t[j+1]<='9')))j++;
+var w=t.slice(i,j);emit(SKW.indexOf(' '+w+' ')>=0?'k':SCONST.indexOf(' '+w+' ')>=0?'n':num?'n':null,j);}
+else emit(null,i+1);}
+return o;}
+function hl(b,t){var l=(b.dataset.lang||'').toLowerCase();return l==='starlark'||l==='star'?highlightStar(t):highlight(t);}
 var orig=[],state=[],rt='loading',why='',gen=0,worker=null,busy=-1,queue=[],timer=null,editing=null;
 var base=cfg.runtime;try{base=new URL(base,location.href).href;}catch(e){}if(base.slice(-1)!=='/')base+='/';
 function workerMain(B){self.rontoFetchBroker=true;Promise.resolve().then(function(){var c=new GraalVM.Config();c.wasm_path=B+'rontoplayground.js.wasm';return GraalVM.run([],c);})
-.then(function(){self.onmessage=function(e){var m=e.data,v;try{rontoSetLanguage(m.lang);v=m.fresh?rontoRunProgram(m.src,m.stdin):rontoEval(m.src);}
+.then(function(){self.onmessage=function(e){var m=e.data,v;try{rontoSetLanguage(m.lang);
+v=(m.fresh||m.lang==='starlark')?rontoRunProgram(m.src,m.stdin):rontoEval(m.src);}
 catch(x){v='ERROR:'+(x&&x.message||x);}postMessage({type:'result',id:m.id,v:v});};postMessage({type:'ready'});})
 .catch(function(x){postMessage({type:'fail',error:String(x)});});}
 function broker(m){var i32=new Int32Array(m.sab,0,2),S=String.fromCharCode(1),hs=(m.reqHeaders||'').split(NL),h={},k;
@@ -1522,10 +1545,10 @@ function share(i){send({t:'code',i:i,s:state[i]});}
 function run(b){var i=+b.dataset.i;if(busy===i||queue.indexOf(i)>=0)return;queue.push(i);
 output(i,rt==='ready'?'running...':'waiting for the runtime...',false,true);if(rt==='failed')startWorker();else pump();}
 function pump(){if(busy>=0||!queue.length||rt!=='ready')return;var i=queue.shift(),b=boxes[i];busy=i;
-worker.postMessage({id:i,lang:b.dataset.lang.toLowerCase(),src:codeOf(b),fresh:b.hasAttribute('data-fresh'),stdin:b.dataset.stdin||''});
+var lg=b.dataset.lang.toLowerCase();worker.postMessage({id:i,lang:lg==='star'?'starlark':lg,src:codeOf(b),fresh:b.hasAttribute('data-fresh'),stdin:b.dataset.stdin||''});
 var secs=+b.dataset.timeout||10;timer=setTimeout(function(){output(i,'timed out after '+secs+' s; the runtime restarted, so earlier definitions are gone',true);startWorker();},secs*1000);}
 function done(i,v){if(i!==busy)return;clearTimeout(timer);busy=-1;var err=typeof v==='string'&&v.indexOf('ERROR:')===0;output(i,err?v.slice(6).trim():String(v),err);pump();}
-function setCode(b,text,html){b.querySelector('pre.code code').innerHTML=html||highlight(text);var i=+b.dataset.i;state[i].text=text;share(i);
+function setCode(b,text,html){b.querySelector('pre.code code').innerHTML=html||hl(b,text);var i=+b.dataset.i;state[i].text=text;share(i);
 var sl=b.closest('.slide');hooks.place.forEach(function(f){f(sl,[]);});}
 function reset(i){leave();setCode(boxes[i],orig[i].text,orig[i].html);focus(slides[cur],shown);hide(i);}
 function leave(){if(!editing)return;var ta=editing.querySelector('textarea');editing.closest('.slide').classList.remove('editing');editing=null;if(ta)ta.remove();}
@@ -1543,7 +1566,7 @@ function tools(b,onRun,onReset){var t=d.createElement('div');t.className='tools'
 k.textContent=x[0];k.title=x[1];if(x[2]===onRun){k.className='run';label(k);}k.addEventListener('mousedown',function(e){e.preventDefault();});
 k.addEventListener('click',function(e){e.stopPropagation();x[2]();});t.appendChild(k);});b.appendChild(t);
 b.addEventListener('dblclick',function(e){e.stopPropagation();});}
-function apply(b,s){if(!s)return;b.querySelector('pre.code code').innerHTML=highlight(s.text);paint(b,s);}
+function apply(b,s){if(!s)return;b.querySelector('pre.code code').innerHTML=hl(b,s.text);paint(b,s);}
 function openOn(i){return boxes.filter(function(b){return state[+b.dataset.i].open&&slides[i].contains(b);});}
 boxes.forEach(function(b,i){b.dataset.i=i;orig[i]={text:codeOf(b),html:b.querySelector('pre.code code').innerHTML};state[i]={text:orig[i].text,out:'',err:false,busy:false,open:false};
 var o=d.createElement('div');o.className='out';o.dataset.o=i;o.setAttribute('aria-live','polite');

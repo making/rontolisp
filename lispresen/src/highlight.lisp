@@ -7,8 +7,8 @@
 ;;;;
 ;;;; Lisp: hl-k is a keyword (:name), hl-d the head of a form such as (def..., let, lambda,
 ;;;; if, ...), hl-n also nil, t, true, false, #t, #f. [], {} and #{} are delimiters like
-;;;; (). The player's editor re-highlights with the same rules (HIGHLIGHT in player.lisp),
-;;;; so an edited block looks like the deck's.
+;;;; (). The player's editor re-highlights with the same rules (HIGHLIGHT, and HIGHLIGHTSTAR
+;;;; for Starlark, in player.lisp), so an edited block looks like the deck's.
 ;;;;
 ;;;; A console transcript is highlighted by line: the $ of a command line as hl-k, every
 ;;;; other line, the output, as hl-c.
@@ -16,8 +16,12 @@
 ;;;; Every other language is a LANG-RULES: its comment and string delimiters, character
 ;;;; literals, keywords (hl-k) and constants (hl-n); in JSON and YAML a key is hl-k. It is
 ;;;; no grammar, only enough to set comments, strings and keywords apart on a slide.
+;;;; Starlark is one of them, and the only one that is runnable: it is not a Lisp form.
 
 (in-package :lispresen)
+
+(defparameter *lisp-langs* '("lisp" "scheme" "clojure")
+  "The languages LISP-SEGMENTS tokenizes. Runnable Starlark code is not one of them.")
 
 (defparameter *form-heads*
   '("lambda" "fn" "let" "let*" "letrec" "letfn" "flet" "labels" "if" "when"
@@ -215,6 +219,13 @@ struct super trait type unsafe use where while")
 elif else except finally for from global if import in is lambda match nonlocal not or
 pass raise return try while with yield")
           :constants (words "True False None"))
+   (rules '("starlark" "star")
+          :line-comments '("#")
+          :strings '(("\"\"\"" "\"\"\"" :backslash t) ("'''" "'''" :backslash t)
+                     ("\"" "\"" :backslash nil) ("'" "'" :backslash nil))
+          :keywords (words "and break continue def elif else for if in lambda load not
+or pass return while")
+          :constants (words "True False None"))
    (rules '("bash" "sh" "shell" "zsh")
           :line-comments '("#") :anchored :comments
           :strings '(("\"" "\"" :backslash nil) ("'" "'" nil nil))
@@ -363,7 +374,7 @@ order, each with its class (nil for none): a token, a delimiter or blank charact
 console line. One segment without a class when LANG has no rules."
   (let* ((name (and lang (string-downcase lang)))
          (rules (and name (language-rules name))))
-    (cond ((member name *runnable-langs* :test #'equal) (lisp-segments text))
+    (cond ((member name *lisp-langs* :test #'equal) (lisp-segments text))
           ((equal name "console") (console-segments text))
           (rules (rule-segments text rules))
           (t (list (list 0 (length text) nil))))))

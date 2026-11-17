@@ -54,7 +54,8 @@ UTF-8."
 
 (defparameter *code-langs*
   '(("lisp" . "lisp") ("lsp" . "lisp") ("cl" . "lisp") ("scm" . "scheme")
-    ("ss" . "scheme") ("clj" . "clojure") ("cljc" . "clojure") ("java" . "java")
+    ("ss" . "scheme") ("clj" . "clojure") ("cljc" . "clojure")
+    ("star" . "starlark") ("bzl" . "starlark") ("java" . "java")
     ("kt" . "kotlin") ("js" . "javascript") ("mjs" . "javascript")
     ("ts" . "typescript") ("c" . "c") ("h" . "c") ("cpp" . "cpp") ("cc" . "cpp")
     ("hpp" . "cpp") ("go" . "go") ("rs" . "rust") ("py" . "python") ("sh" . "bash")
