@@ -13,15 +13,8 @@ compiles the library (`JavaLoweringTest#theLibrarysSourceIsJavaAJdkCompiles`).
 
 ## Inside the first target, not done
 
-- **Regular expressions**: `String.split` reads a text or one character class
-  (`%java-split-pattern`); `matches`, `replaceAll`, `replaceFirst`, `Pattern`, `Matcher` are
-  refused. Checked in j79: the Clojure front end's engine is `java.util.regex` of JDK 25
-  ported method by method (`.kb/clojure-frontend.md`, "Regex"), so rule 2 forbids sharing
-  it. Write one from the API's description of the syntax (the `Pattern` class
-  documentation: the constructs, the flags, the quantifier kinds), as Java source of the
-  library, with the JDK as the oracle of a differential test; `split` then moves onto it.
-  Whether the Clojure engine itself may stay as it is under this project's licence is the
-  user's decision, not this item's.
+- **Regular expressions**: moved to j90 (one engine written here, shared with the Clojure
+  front end, whose ported engine it replaces).
 - **The tree a long `HashMap` chain becomes.** Measured in j79 (`.kb/java-frontend.md`, "The
   library"): 64 `Double` keys of few digits and a 16 x 16 grid under a weak `hashCode` get
   there; strings and ints do not. The order inside the JDK's tree is no part of the API; it
