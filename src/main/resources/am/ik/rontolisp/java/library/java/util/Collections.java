@@ -141,6 +141,7 @@ public final class Collections {
         return found;
     }
 
+    @SafeVarargs
     public static <T> boolean addAll(Collection<? super T> c, T... elements) {
         boolean changed = false;
         for (T element : elements) {

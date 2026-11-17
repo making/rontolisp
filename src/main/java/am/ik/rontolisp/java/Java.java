@@ -1,6 +1,7 @@
 package am.ik.rontolisp.java;
 
 import java.util.List;
+import java.util.function.Consumer;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReadException;
@@ -45,7 +46,23 @@ public final class Java {
 	 * with its position
 	 */
 	public static List<LispVal> read(String source, @Nullable String file, JavaFiles files) {
-		return read(source, file, files, false);
+		return read(source, file, files, null);
+	}
+
+	/**
+	 * {@link #read(String, String, JavaFiles)}, telling the warnings a compiler prints of
+	 * the program (its unchecked ones) as a compiler prints them.
+	 * @param source the file's text
+	 * @param file the origin file
+	 * @param files where the other files of the source tree are read
+	 * @param warnings what is told the text of the warnings, every line ended, when there
+	 * are some; {@code null} to drop them
+	 * @return the top-level forms
+	 * @throws LispReadException as {@link #read(String, String, JavaFiles)}
+	 */
+	public static List<LispVal> read(String source, @Nullable String file, JavaFiles files,
+			@Nullable Consumer<String> warnings) {
+		return read(source, file, files, false, warnings);
 	}
 
 	/**
@@ -59,10 +76,26 @@ public final class Java {
 	 * @throws LispReadException as {@link #read}
 	 */
 	public static List<LispVal> load(String source, @Nullable String file, JavaFiles files) {
-		return read(source, file, files, true);
+		return load(source, file, files, null);
 	}
 
-	private static List<LispVal> read(String source, @Nullable String file, JavaFiles files, boolean loaded) {
+	/**
+	 * {@link #load(String, String, JavaFiles)}, telling the warnings as
+	 * {@link #read(String, String, JavaFiles, Consumer)} does.
+	 * @param source the file's text
+	 * @param file the origin file
+	 * @param files where the other files of the source tree are read
+	 * @param warnings what is told the text of the warnings, or {@code null}
+	 * @return the top-level forms
+	 * @throws LispReadException as {@link #read(String, String, JavaFiles)}
+	 */
+	public static List<LispVal> load(String source, @Nullable String file, JavaFiles files,
+			@Nullable Consumer<String> warnings) {
+		return read(source, file, files, true, warnings);
+	}
+
+	private static List<LispVal> read(String source, @Nullable String file, JavaFiles files, boolean loaded,
+			@Nullable Consumer<String> warnings) {
 		String name = "Main";
 		if (file != null) {
 			String path = file.replace('\\', '/');
@@ -72,7 +105,7 @@ public final class Java {
 				name = base;
 			}
 		}
-		return JavaLowering.lower(JavaParser.parse(source, file, name), source, file, files, null, loaded);
+		return JavaLowering.lower(JavaParser.parse(source, file, name), source, file, files, null, loaded, warnings);
 	}
 
 }

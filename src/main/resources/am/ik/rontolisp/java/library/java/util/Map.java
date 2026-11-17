@@ -152,6 +152,7 @@ public interface Map<K, V> {
         return new ImmutableCollections.MapN<>(held);
     }
 
+    @SafeVarargs
     static <K, V> Map<K, V> ofEntries(Map.Entry<? extends K, ? extends V>... entries) {
         HashMap<K, V> held = new HashMap<>();
         for (Map.Entry<? extends K, ? extends V> entry : entries) {

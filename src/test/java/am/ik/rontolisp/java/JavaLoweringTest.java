@@ -601,8 +601,6 @@ class JavaLoweringTest {
 				{ "import module java.sql; void main() { }", "1:1: the module java.sql" },
 				{ "void main() { assert true; }", "1:15: an assert statement" },
 				{ "void main() { switch (1L) { default -> { } } }", "1:15: a switch over long" },
-				{ "interface M { } void main() { Runnable r = (Runnable & M) () -> { }; }",
-						"1:44: a lambda or a method reference cast to an intersection type" },
 				{ "void main() { Object o = int.class; }", "1:26: a class literal" },
 				{ "class A { transient int x; } void main() { }", "1:11: the modifier transient" },
 				{ "import java.util.concurrent.locks.StampedLock; void main() { StampedLock l = null; }",

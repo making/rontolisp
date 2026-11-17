@@ -5,6 +5,11 @@ package java.util;
 
 public interface Set<E> extends Collection<E> {
 
+    boolean add(E e);
+
+    boolean addAll(Collection<? extends E> c);
+
+    @SafeVarargs
     static <E> Set<E> of(E... elements) {
         HashSet<E> held = new HashSet<>();
         for (E element : elements) {

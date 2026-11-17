@@ -94,9 +94,13 @@ class JavaSpecE2eTest {
 	 * {@code null} when it is not checked
 	 * @param files the other files of its source tree, by path, or {@code null}
 	 * @param stdin what it reads from the standard input, or {@code null} for nothing
+	 * @param warnings what a compiler warns of before the program runs: the start of the
+	 * standard error under the JDK and the interpreter, what a compile prints for the JVM
+	 * and wasm; {@code null} when not checked
 	 */
 	record Standalone(String name, String file, String source, String stdout, @Nullable String error,
-			@Nullable String stderr, @Nullable String at, @Nullable Map<String, String> files, @Nullable String stdin) {
+			@Nullable String stderr, @Nullable String at, @Nullable Map<String, String> files, @Nullable String stdin,
+			@Nullable String warnings) {
 
 		String stem() {
 			return "Standalone" + this.file.replaceFirst("\\.[^./]*$", "").replace('/', '_');
@@ -196,7 +200,7 @@ class JavaSpecE2eTest {
 		for (Standalone s : cases == null ? List.<Standalone>of() : cases) {
 			if (!s.isLisp()) {
 				legs.add(dynamicTest(s.name() + " JDK", () -> {
-					assertEnded(s, "JDK", runOnJdk(s.file(), s.write(s.stem() + "-JDK"), s.stdin()));
+					assertEnded(s, "JDK", runOnJdk(s.file(), s.write(s.stem() + "-JDK"), s.stdin()), null);
 				}));
 			}
 			legs.add(dynamicTest(s.name() + " INTERPRETER", () -> standaloneOnInterpreter(s)));
@@ -208,11 +212,15 @@ class JavaSpecE2eTest {
 						abort("no usable wasmtime on PATH");
 					}
 					Path file = s.write(s.stem() + "-" + leg);
-					Path module = compileWasm(file, s.source(), component, s.stem());
+					ByteArrayOutputStream warned = new ByteArrayOutputStream();
+					Path module;
+					try (ThreadStdio.Scope _ = ThreadStdio.err(warned)) {
+						module = compileWasm(file, s.source(), component, s.stem());
+					}
 					assertEnded(s, leg, ended(
 							new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", module.toString())
 								.start(),
-							s.stdin()));
+							s.stdin()), withoutRoot(warned, s.stem() + "-" + leg));
 				}));
 			}
 		}
@@ -370,11 +378,26 @@ class JavaSpecE2eTest {
 		return new Ended(stdout, Files.readString(errors, StandardCharsets.UTF_8), process.exitValue());
 	}
 
-	private static void assertEnded(Standalone s, String leg, Ended ended) {
+	/**
+	 * Checks how a standalone case ended on a leg.
+	 * @param compiled what its compile printed, its directory taken out of the paths, or
+	 * {@code null} where the standard error holds that (the JDK and the interpreter)
+	 */
+	private static void assertEnded(Standalone s, String leg, Ended ended, @Nullable String compiled) {
 		String where = where(s, leg, ended.stderr());
 		assertThat(ended.stdout()).as("%s", where).isEqualTo(s.stdout());
+		String stderr = ended.stderr();
+		if (s.warnings() != null) {
+			if (compiled != null) {
+				assertThat(compiled).as("what the compile printed, %s", where).isEqualTo(s.warnings());
+			}
+			else {
+				assertThat(stderr).as("%s", where).startsWith(s.warnings());
+				stderr = stderr.substring(s.warnings().length());
+			}
+		}
 		if (s.stderr() != null) {
-			assertThat(splitLines(ended.stderr()).stream()
+			assertThat(splitLines(stderr).stream()
 				.filter(line -> !line.matches("\\s+(at |\\.\\.\\. \\d+ more).*"))
 				.toList()).as("%s", where).containsExactlyElementsOf(splitLines(s.stderr()));
 		}
@@ -383,12 +406,21 @@ class JavaSpecE2eTest {
 			return;
 		}
 		// the report first; the JDK's stack trace follows
-		assertThat(splitLines(ended.stderr())).as("%s", where).first().isEqualTo(UNCAUGHT + s.error());
+		assertThat(splitLines(stderr)).as("%s", where).first().isEqualTo(UNCAUGHT + s.error());
 		assertThat(ended.exit()).as("%s: expected the status 1", where).isEqualTo(1);
 		if (s.at() != null && (leg.equals("INTERPRETER") || leg.equals("JVM"))) {
 			// where it was raised, under the report: the pipeline's own location line
-			assertThat(splitLines(ended.stderr()).get(1)).as("%s", where).startsWith("  at ").endsWith(s.at());
+			assertThat(splitLines(stderr).get(1)).as("%s", where).startsWith("  at ").endsWith(s.at());
 		}
+	}
+
+	/**
+	 * What a leg printed, with the directory its files were written to taken out of the
+	 * paths: a JDK names a file as its command line does, from that directory.
+	 */
+	private static String withoutRoot(ByteArrayOutputStream printed, String leg) {
+		return printed.toString(java.nio.charset.Charset.defaultCharset())
+			.replace(workDir.resolve(leg) + java.io.File.separator, "");
 	}
 
 	private static final String UNCAUGHT = "Exception in thread \"main\" ";
@@ -426,8 +458,9 @@ class JavaSpecE2eTest {
 				return null;
 			});
 		}
-		assertEnded(s, "INTERPRETER", new Ended(out.toString(StandardCharsets.UTF_8),
-				err.toString(java.nio.charset.Charset.defaultCharset()), status[0]));
+		assertEnded(s, "INTERPRETER",
+				new Ended(out.toString(StandardCharsets.UTF_8), withoutRoot(err, s.stem() + "-INTERPRETER"), status[0]),
+				null);
 	}
 
 	// The program may die, so it runs in a process of its own: with the class and the
@@ -437,9 +470,13 @@ class JavaSpecE2eTest {
 		Path file = s.write(s.stem() + "-JVM");
 		Path dir = workDir.resolve(s.stem());
 		Files.createDirectories(dir);
-		JvmSourceCompiler.Result compiled = new JvmSourceCompiler(s.stem())
-			.baseDir(java.util.Objects.requireNonNull(file.getParent()).toString())
-			.compile(s.source(), file.toString());
+		ByteArrayOutputStream warned = new ByteArrayOutputStream();
+		JvmSourceCompiler.Result compiled;
+		try (ThreadStdio.Scope _ = ThreadStdio.err(warned)) {
+			compiled = new JvmSourceCompiler(s.stem())
+				.baseDir(java.util.Objects.requireNonNull(file.getParent()).toString())
+				.compile(s.source(), file.toString());
+		}
 		Files.write(dir.resolve(s.stem() + ".class"), compiled.classBytes());
 		for (Map.Entry<String, byte[]> runtime : compiled.runtimeClasses().entrySet()) {
 			Path travelling = dir.resolve(runtime.getKey());
@@ -449,7 +486,8 @@ class JavaSpecE2eTest {
 		assertEnded(s, "JVM",
 				ended(new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-cp",
 						dir.toString(), s.stem())
-					.start(), s.stdin()));
+					.start(), s.stdin()),
+				withoutRoot(warned, s.stem() + "-JVM"));
 	}
 
 	// Starts run on a thread of its own and answers its result, rethrowing what it threw.

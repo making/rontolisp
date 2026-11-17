@@ -25,6 +25,7 @@ public final class Arrays {
         }
     }
 
+    @SafeVarargs
     public static <T> List<T> asList(T... a) {
         return new ArrayView<>(a);
     }

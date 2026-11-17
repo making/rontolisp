@@ -17,6 +17,7 @@ import am.ik.rontolisp.clojure.Clojure;
 import am.ik.rontolisp.clojure.ClojureFiles;
 import am.ik.rontolisp.clojure.ClojureJavaClasses;
 import am.ik.rontolisp.clojure.ClojureRepositories;
+import am.ik.rontolisp.compiler.CompileWarnings;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.java.Java;
 import am.ik.rontolisp.java.JavaFiles;
@@ -170,7 +171,7 @@ public enum SourceLanguage {
 			return readUntilError(source, features, file, standards, loader);
 		}
 		try {
-			return new LispReader.ReadPrefix(Java.load(source, file, javaFiles(loader)), null);
+			return new LispReader.ReadPrefix(Java.load(source, file, javaFiles(loader), SourceLanguage::warned), null);
 		}
 		catch (LispReadException ex) {
 			return new LispReader.ReadPrefix(List.of(), ex);
@@ -251,7 +252,8 @@ public enum SourceLanguage {
 						Starlark.read(source, file, standards.starlark(), starlarkFiles(loader)), null);
 			}
 			if (this == JAVA) {
-				return new LispReader.ReadPrefix(Java.read(source, file, javaFiles(loader)), null);
+				return new LispReader.ReadPrefix(Java.read(source, file, javaFiles(loader), SourceLanguage::warned),
+						null);
 			}
 			return new LispReader.ReadPrefix(clojure(source, features, file, standards, loader, false, null).forms(),
 					null);
@@ -259,6 +261,15 @@ public enum SourceLanguage {
 		catch (LispReadException ex) {
 			return new LispReader.ReadPrefix(List.of(), ex);
 		}
+	}
+
+	/**
+	 * Prints what a compiler warns of a Java program before it runs, as it prints it: a
+	 * line of the build, never counted as a warning about a form
+	 * ({@link CompileWarnings#note}).
+	 */
+	private static void warned(String text) {
+		CompileWarnings.note(text.substring(0, text.length() - 1));
 	}
 
 	/**

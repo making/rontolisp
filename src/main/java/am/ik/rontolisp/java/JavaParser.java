@@ -140,6 +140,14 @@ final class JavaParser {
 	/** How many tokens the operator {@link #operator} last answered spans. */
 	private int operatorWidth;
 
+	/**
+	 * Where an annotation {@code @SuppressWarnings} naming {@code "unchecked"} starts.
+	 */
+	private final java.util.TreeSet<Integer> suppressing = new java.util.TreeSet<>();
+
+	/** The declarations such an annotation is on. */
+	private final List<JavaSyntax.Span> unchecked = new ArrayList<>();
+
 	private JavaParser(String source, @Nullable String file) {
 		this.source = source;
 		this.file = file;
@@ -284,9 +292,12 @@ final class JavaParser {
 				continue;
 			}
 			this.p = start;
+			int from = current().offset();
 			Set<String> modifiers = modifiers();
 			if (atTypeDeclaration()) {
+				int head = current().offset();
 				classes.add(typeDeclaration(modifiers));
+				suppressed(from, head);
 				continue;
 			}
 			// a member at the top level: a compact source file
@@ -308,9 +319,9 @@ final class JavaParser {
 			ClassDeclaration declared = new ClassDeclaration(implicitAt, Set.of("final"), JavaSyntax.Kind.CLASS,
 					implicitName, null, List.of(), List.of(), List.of(), List.of(), implicit.fields, implicit.methods,
 					List.of(), List.copyOf(classes), true);
-			return new CompilationUnit(null, imports, List.of(declared));
+			return new CompilationUnit(null, imports, List.of(declared), List.copyOf(this.unchecked));
 		}
-		return new CompilationUnit(packageName, imports, classes);
+		return new CompilationUnit(packageName, imports, classes, List.copyOf(this.unchecked));
 	}
 
 	/** What a top-level item of a session's buffer is. */
@@ -465,7 +476,7 @@ final class JavaParser {
 				List.of(), List.of(), List.of(), List.of(), fields, methods, List.of(), List.of(), true);
 		List<ClassDeclaration> all = new ArrayList<>(List.of(session));
 		all.addAll(classes);
-		return new SessionTree(new CompilationUnit(null, imports, all), snippets, echo);
+		return new SessionTree(new CompilationUnit(null, imports, all, List.copyOf(this.unchecked)), snippets, echo);
 	}
 
 	/** Where the item read last ends: where the next token starts. */
@@ -568,12 +579,26 @@ final class JavaParser {
 					else if (current().kind() == Kind.END) {
 						throw error("unterminated annotation");
 					}
+					else if (simple.equals("SuppressWarnings") && current().kind() == Kind.STRING
+							&& current().text().equals("unchecked")) {
+						this.suppressing.add(pos);
+					}
 					this.p++;
 				}
 				while (depth > 0);
 			}
 		}
 		return names;
+	}
+
+	/**
+	 * Records a declaration that suppresses the unchecked warnings: one whose modifiers,
+	 * from {@code from} to {@code head}, hold such an annotation; it ends here.
+	 */
+	private void suppressed(int from, int head) {
+		if (!this.suppressing.subSet(from, head).isEmpty()) {
+			this.unchecked.add(new JavaSyntax.Span(from, current().offset()));
+		}
 	}
 
 	/** Whether a token can follow the contextual modifier {@code sealed}. */
@@ -768,8 +793,15 @@ final class JavaParser {
 		if (eat(";")) {
 			return;
 		}
-		boolean inInterface = kind == JavaSyntax.Kind.INTERFACE;
+		int from = current().offset();
 		Set<String> modifiers = modifiers();
+		int head = current().offset();
+		member(className, kind, into, modifiers);
+		suppressed(from, head);
+	}
+
+	private void member(String className, JavaSyntax.Kind kind, Body into, Set<String> modifiers) {
+		boolean inInterface = kind == JavaSyntax.Kind.INTERFACE;
 		if (at("{")) {
 			if (inInterface) {
 				throw error("an interface has no initializer block");
@@ -1046,6 +1078,7 @@ final class JavaParser {
 	}
 
 	private LocalVariable localVariable() {
+		int from = current().offset();
 		boolean isFinal = finalModifier();
 		int pos = current().offset();
 		TypeName type = typeName();
@@ -1059,6 +1092,7 @@ final class JavaParser {
 			declarators.add(new Declarator(at, name, eat("=") ? variableInitializer() : null));
 		}
 		while (eat(","));
+		suppressed(from, pos);
 		return new LocalVariable(pos, type, declarators, isFinal);
 	}
 
@@ -1098,7 +1132,10 @@ final class JavaParser {
 		}
 		if (at("@") && atLocalClass()) {
 			// an annotated local class
-			ClassDeclaration declaration = typeDeclaration(modifiers());
+			Set<String> modifiers = modifiers();
+			int head = current().offset();
+			ClassDeclaration declaration = typeDeclaration(modifiers);
+			suppressed(pos, head);
 			out.add(new LocalClass(declaration.pos(), declaration));
 			return;
 		}
@@ -1869,8 +1906,12 @@ final class JavaParser {
 	}
 
 	private Expression creation(int pos, @Nullable Expression outer) {
+		List<TypeName> typeArguments = typeArguments();
 		annotations();
 		TypeName type = typeName();
+		if (!typeArguments.isEmpty() && !at("(")) {
+			throw error("expected '(' but found " + current().shown());
+		}
 		if (type.dimensions() > 0) {
 			// new T[]{..}
 			if (!at("{")) {
@@ -1902,7 +1943,7 @@ final class JavaParser {
 			body = new ClassDeclaration(pos, Set.of(), JavaSyntax.Kind.CLASS, "", null, List.of(), List.of(), List.of(),
 					List.of(), members.fields, members.methods, members.initializers, members.nested, false);
 		}
-		return new New(pos, type, arguments, body, outer);
+		return new New(pos, type, arguments, body, outer, typeArguments);
 	}
 
 	private Expression postfix(Expression expression) {

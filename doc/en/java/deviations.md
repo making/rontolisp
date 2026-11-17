@@ -49,13 +49,6 @@ class gets there only through a raw type or a cast a compiler warns of as unchec
 is then used as it is, where the language throws `ClassCastException`. A cast to a type
 variable tests its bound, a cast to a parameterized type its class.
 
-**A call that is an argument of an overloaded method is typed by its own arguments.** When
-the method has several overloads of that many parameters, a lambda among the call's
-arguments whose parameter types only the method around could give is an error: with
-`show(Comparator<String>)` and `show(Runnable)` declared,
-`show(Comparator.comparing(s -> s.length()))` is refused at `s.length()`, `s` being an
-`Object` there.
-
 **A store into an array is not checked.** A value stored through an array type above the
 array's own (`Object[] a = new String[1]; a[0] = 1;`) is stored, where the language throws
 `ArrayStoreException`.
@@ -161,8 +154,9 @@ Exception in thread "main" java.lang.IllegalStateException: insufficient funds: 
 
 **Some errors a compiler reports are not reported**, and such a program runs. `throws`
 clauses are read and not checked: a checked exception that is neither caught nor declared
-is not reported, nor is a `catch` of one its `try` cannot throw. No unchecked warning is
-printed. A `protected` member is reached from every class under its
+is not reported, nor is a `catch` of one its `try` cannot throw. Of the warnings a
+compiler prints, only the [unchecked ones](index.md#unchecked-warnings) of a call, a
+conversion, a cast and a variable arity parameter are. A `protected` member is reached from every class under its
 class, where the language allows an instance member only through a reference of that
 class's own type and a constructor only through `super(..)`.
 
@@ -260,10 +254,8 @@ Each of these is an error naming the construct and its position.
 - Annotation types, `assert`.
 - Class literals, but as the lock of a `synchronized` statement.
 - A `switch` over a `long`, a `float`, a `double` or a `boolean`; a method reference through a
-  qualified `super` (`Interface.super::m`); a constructor reference with type arguments
-  (`Box::<T>new`).
+  qualified `super` (`Interface.super::m`).
 - A field hiding one of a superclass.
-- A lambda or a method reference cast to several types (`(Runnable & Marker) () -> ..`).
 - A class extending `String`, `StringBuilder` or a box.
 - Of `java.util.concurrent`, what the [overview](index.md) does not list: read-write and
   stamped locks, `CyclicBarrier`, `Phaser`, `Exchanger`, scheduled executors,

@@ -7,6 +7,10 @@ import java.util.function.UnaryOperator;
 
 public interface List<E> extends Collection<E> {
 
+    boolean add(E e);
+
+    boolean addAll(Collection<? extends E> c);
+
     E get(int index);
 
     E set(int index, E element);
@@ -86,6 +90,7 @@ public interface List<E> extends Collection<E> {
         return out;
     }
 
+    @SafeVarargs
     static <E> List<E> of(E... elements) {
         Object[] held = new Object[elements.length];
         for (int i = 0; i < held.length; i++) {

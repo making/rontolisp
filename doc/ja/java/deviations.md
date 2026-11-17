@@ -49,12 +49,6 @@ JDK は `false false true` を表示します。
 `ClassCastException` になる箇所でも、そのまま使われます。型変数へのキャストはその境界を、
 型引数付きの型へのキャストはそのクラスを検査します。
 
-**オーバーロードされたメソッドの引数になった呼び出しは、自身の引数だけで型が決まります。**
-同じ数の引数を取るオーバーロードが複数あるメソッドの場合、その呼び出しの引数のラムダの引数型を
-外側のメソッドしか与えられないと、エラーになります。`show(Comparator<String>)` と
-`show(Runnable)` を宣言したプログラムでは、`show(Comparator.comparing(s -> s.length()))` が
-`s.length()` で拒否されます。そこでの `s` は `Object` だからです。
-
 **配列への格納は検査しません。** 配列自身の型より上の配列型を通して格納した値
 （`Object[] a = new String[1]; a[0] = 1;`）は、言語仕様では `ArrayStoreException` になる場合でも
 格納されます。
@@ -157,7 +151,8 @@ Exception in thread "main" java.lang.IllegalStateException: insufficient funds: 
 
 **コンパイラが報告するエラーの一部は報告されません。** そのようなプログラムは実行されます。
 `throws` 節は読みますが検査しません。捕捉も宣言もされていないチェック例外と、`try` が投げ
-得ないチェック例外の `catch` は報告しません。unchecked の警告は表示しません。
+得ないチェック例外の `catch` は報告しません。コンパイラが表示する警告のうち、表示するのは
+呼び出し、変換、キャスト、可変長引数の [unchecked の警告](index.md#unchecked-warnings)だけです。
 `protected` のメンバーには、そのクラスのサブクラスならどこからでも
 アクセスできます。言語仕様では、インスタンスメンバーにはサブクラス自身の型の参照を通してだけ、
 コンストラクタには `super(..)` を通してだけアクセスできます。
@@ -262,9 +257,8 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 - アノテーション型、`assert`。
 - `synchronized` 文のロック以外のクラスリテラル。
 - `long`、`float`、`double`、`boolean` に対する `switch`。修飾した `super` を通すメソッド参照
-  （`Interface.super::m`）。型引数を書くコンストラクタ参照（`Box::<T>new`）。
+  （`Interface.super::m`）。
 - スーパークラスのフィールドを隠すフィールド。
-- 複数の型へのラムダとメソッド参照のキャスト（`(Runnable & Marker) () -> ..`）。
 - `String`、`StringBuilder`、ボックスを継承するクラス。
 - `java.util.concurrent` のうち、[概要](index.md)の表にないもの。読み書きロックとスタンプ付き
   ロック、`CyclicBarrier`、`Phaser`、`Exchanger`、スケジュール実行のエグゼキューター、

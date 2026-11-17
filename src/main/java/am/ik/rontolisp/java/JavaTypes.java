@@ -406,6 +406,18 @@ final class JavaTypes implements JavaClasses.Relations {
 		return type instanceof Variable variable && variable.parameter().open;
 	}
 
+	/** Whether a type is an open variable or has one among its arguments. */
+	private static boolean holdsOpen(JavaType type) {
+		return switch (type) {
+			case Variable variable -> variable.parameter().open;
+			case ClassType named -> named.arguments().stream().anyMatch(JavaTypes::holdsOpen);
+			case ArrayType array -> holdsOpen(array.element());
+			case Wildcard wildcard -> (wildcard.upper() != null && holdsOpen(wildcard.upper()))
+					|| (wildcard.lower() != null && holdsOpen(wildcard.lower()));
+			default -> false;
+		};
+	}
+
 	/** Whether a type is one an open variable can be: any, or one above what it found. */
 	private boolean takes(JavaType open, JavaType type) {
 		JavaType found = ((Variable) open).parameter().lower;
@@ -943,19 +955,32 @@ final class JavaTypes implements JavaClasses.Relations {
 					}
 				}
 				for (JavaType wanted : this.upper.getOrDefault(parameter, List.of())) {
-					if (!mentions(wanted, this.variables) && !isSubtype(type, wanted)) {
+					if (mentions(wanted, this.variables)) {
+						continue;
+					}
+					if (!isSubtype(type, wanted)) {
 						return parameter;
+					}
+					// the type found may be one an open variable makes fit where another
+					// value given is not
+					for (JavaType given : this.lower.getOrDefault(parameter, List.of())) {
+						if (!mentions(given, this.variables) && !isSubtype(given, wanted)) {
+							return parameter;
+						}
 					}
 				}
 			}
 			return null;
 		}
 
-		/** How many types the values given for a parameter are of. */
+		/**
+		 * How many types the values given for a parameter are of, a type holding an open
+		 * variable not counted.
+		 */
 		int given(TypeParameter parameter) {
 			List<JavaType> distinct = new ArrayList<>();
 			for (JavaType type : this.lower.getOrDefault(parameter, List.of())) {
-				if (distinct.stream().noneMatch(known -> known.equals(type))) {
+				if (!holdsOpen(type) && distinct.stream().noneMatch(known -> known.equals(type))) {
 					distinct.add(type);
 				}
 			}

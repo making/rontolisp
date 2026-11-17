@@ -191,11 +191,12 @@ $ rontolisp main.lisp
 | 型 | `int`、`long`、`short`、`byte`、`char`、`double`、`float`、`boolean`、`String`、クラス、インターフェース、列挙型、レコード、配列。ローカル変数の `var`。型引数、ワイルドカード（`?`、`? extends T`、`? super T`）、raw 型。型パラメータを持つクラスの内部クラス（`Outer<String>.Inner`） |
 | 宣言 | `extends` と `implements` を持つクラス、抽象クラスと抽象メソッド。型パラメータとその境界を持つクラス、インターフェース、レコード、メソッド。フィールド、コンストラクタ、メソッド、本体付きの定数を持つ列挙型。コンパクトコンストラクタと標準コンストラクタを持つレコード。抽象メソッド、`default` メソッド、`static` メソッド、`private` メソッド、定数を持つインターフェース。`sealed`、`permits`、`non-sealed`。static なネストクラス、内部クラス、ローカルクラス、匿名クラス。フィールド、static フィールド、static 初期化ブロックとインスタンス初期化ブロック。`this(..)`、`super(..)`、`outer.super(..)`、およびその前の文を持つコンストラクタ。メソッドのオーバーロードと可変長引数。`synchronized` メソッドと `volatile` フィールド。`package` と `import` |
 | 文 | ローカル変数（`final`、無名変数 `_`）、`if`、`while`、`do`、`for`、配列または `Iterable` に対する拡張 `for`、コロン形式または矢印形式の `case`・パターン・ガードを持つ `switch`、ラベル付きの文、ラベルの有無を問わない `break` と `continue`、`yield`、`return`、`throw`、`catch`（1 つまたは複数の型）と `finally` を持つ `try`、`try`-with-resources、オブジェクトまたはクラスリテラルに対する `synchronized` |
-| 式 | プリミティブ型のすべての演算子とその変換、文字列連結、条件演算子、代入と複合代入、キャスト（複数の型への `(A & B) x` も）、型・型パターン・レコードパターンに対する `instanceof`、`switch` 式、`new`、クラス本体の有無を問わない `outer.new Inner()`、`Outer.this`、長さを 1 つ以上指定する配列の生成と初期化子、テキストブロック、型引数の有無を問わないメソッド呼び出し、`super.m(..)`、`Interface.super.m(..)`、`Outer.super.m(..)`、クラス本体の有無を問わない `new Box<>(..)`、任意の関数型インターフェースに対するラムダとメソッド参照（`Type::name`、`expression::name`、`super::name`、`Type::new`、`int[]::new`、`List<String>::size`、`Type::<T>name`） |
+| 式 | プリミティブ型のすべての演算子とその変換、文字列連結、条件演算子、代入と複合代入、キャスト（複数の型への `(A & B) x` も、ラムダとメソッド参照のものも）、型・型パターン・レコードパターンに対する `instanceof`、`switch` 式、コンストラクタの型引数の有無を問わない `new`（`new <T>Box(..)`）、クラス本体の有無を問わない `outer.new Inner()`、`Outer.this`、長さを 1 つ以上指定する配列の生成と初期化子、テキストブロック、型引数の有無を問わないメソッド呼び出し、`super.m(..)`、`Interface.super.m(..)`、`Outer.super.m(..)`、クラス本体の有無を問わない `new Box<>(..)`、任意の関数型インターフェースに対するラムダとメソッド参照（`Type::name`、`expression::name`、`super::name`、`Type::new`、`int[]::new`、`List<String>::size`、`Type::<T>name`、`Type::<T>new`） |
 
 `java.lang` のアノテーション（`@Override`、`@FunctionalInterface`、`@SuppressWarnings`、
 `@SafeVarargs`、`@Deprecated`）は読み飛ばします。ただし `@Override` と `@FunctionalInterface` は
-コンパイラと同じように検査します。それ以外の名前はプログラムのどのアノテーション型でもないので、
+コンパイラと同じように検査し、`@SuppressWarnings("unchecked")` と `@SafeVarargs` は下記の警告を
+抑止します。それ以外の名前はプログラムのどのアノテーション型でもないので、
 コンパイラと同じように拒否します。`int`、`long`、`short`、`byte` は 2 の補数として桁あふれします。
 `float` は演算のたびに単精度へ丸めます。`double` と `float` は、読み戻すとその型の同じ値になる
 最短の文字列で表示されます。
@@ -246,6 +247,37 @@ Rect[w=2.0, h=2.0] is a square of area 4.0
 Rect[w=2.0, h=3.0] is a shape of area 6.0
 CM 0 1 small
 M 1 100 large
+```
+
+## unchecked の警告
+
+コンパイラが unchecked と警告するもの（raw 型を通したメンバーの呼び出し、raw 型から型引数付きの
+型への変換、実行時に検査しきれないキャスト、実行時に検査しきれない型の可変長引数）は、プログラムの
+実行前に、コンパイラと同じ形式で標準エラーに表示します。コンパイル（`-o`）ではコンパイル時に
+表示し、コンパイルしたプログラムは何も表示しません。`@SuppressWarnings("unchecked")` を付けた
+宣言の中では警告しません。
+
+```java
+void main() {
+    List names = new ArrayList();
+    names.add("ann");
+    IO.println(names);
+}
+```
+
+```
+[ann]
+```
+
+`Raw.java` として実行すると、その前に標準エラーへ次を表示します。
+
+```console
+Raw.java:3: warning: [unchecked] unchecked call to add(E) as a member of the raw type List
+    names.add("ann");
+             ^
+  where E is a type-variable:
+    E extends Object declared in interface List
+1 warning
 ```
 
 ## 型パラメータ、ラムダ、メソッド参照

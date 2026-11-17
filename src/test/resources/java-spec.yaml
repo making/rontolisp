@@ -3333,6 +3333,14 @@ cases:
               return 2 * x;
           }
 
+          static String order(Comparator<String> c) {
+              return "order " + c.compare("aa", "b");
+          }
+
+          static String order(Runnable r) {
+              return "task";
+          }
+
           public static void main(String[] args) {
               Map<String, List<Integer>> groups = new HashMap<>();
               groups.put("a", new ArrayList<>());
@@ -3366,6 +3374,11 @@ cases:
                   case 1 -> () -> "one";
                   default -> () -> "other";
               }));
+              // among overloads, such a call is the argument of those whose parameter
+              // it lowers against; a lambda for a type parameter waits for what the
+              // call finds
+              Supplier<String> first = pick(() -> "p", () -> "q");
+              System.out.println(order(Comparator.comparing(s -> s.length())) + " " + first.get());
           }
       }
     expected: |
@@ -3375,6 +3388,7 @@ cases:
       yes 5 made [] text 42 5
       string object list list ran got 42 got block
       [, bb, ccc] [bb, ccc] [0, 4, 6] 41 other
+      order 1 p
   # ? extends T is read as T and written with nothing but null, ? super T written with a
   # T and read as Object; a method taking List<T> takes a List<?>. A raw type reads its
   # members erased.
@@ -3475,7 +3489,8 @@ cases:
       [x, 2, 1, 9] 2 18.0 <set> <1> set 5 <x>
   # A lambda is a function. Where instanceof, a cast or a default method tells which
   # interface a lambda was made for, the lambdas of that interface are structures
-  # holding the function, each tested by its own predicate.
+  # holding the function, each tested by its own predicate. One cast to an intersection
+  # is made for an interface extending each.
   - name: a-lambda-is-a-function-until-the-program-can-tell-its-interface
     main: LambdaKinds
     source: |
@@ -3515,6 +3530,15 @@ cases:
           record Person(String name) implements Named {
           }
 
+          interface Marked {
+          }
+
+          interface Shouting {
+              default String shout() {
+                  return "SHOUT";
+              }
+          }
+
           static String describe(Object o) {
               if (o instanceof Loud l) {
                   return "loud:" + l.greet();
@@ -3552,6 +3576,12 @@ cases:
                   System.out.println("a Named is no Task");
               }
               System.out.println(job.twice().run(5) + " " + new Doubler().twice().run(5) + " " + ((Job) all[3]).run(9) + " " + back.greet() + " " + (all[2] instanceof Runnable) + " " + (all[0] == plain) + " " + plain.equals(loud));
+              // a lambda cast to an intersection is an instance of each of its interfaces
+              Task marked = (Task & Marked) () -> System.out.println("marked ran");
+              Object shouting = (Shouting & Job) x -> x * 10;
+              Object reference = (Named & Marked) new Person("ed")::name;
+              marked.run();
+              System.out.println((marked instanceof Marked) + " " + (task instanceof Marked) + " " + describe(marked) + " " + ((Shouting) shouting).shout() + ((Job) shouting).run(4) + " " + describe(shouting) + " " + (reference instanceof Marked m ? describe(m) : "-") + " " + (shouting instanceof Marked));
           }
       }
     expected: |
@@ -3566,9 +3596,11 @@ cases:
       ran
       a Named is no Task
       7 20 10 HELLO bob false true false
+      marked ran
+      true false task SHOUT40 job:10 named:hello ed false
   # Type::name is a static method of the parameters or a method of the first on the rest;
   # expression::name evaluates its expression once, where it stands; Type::new makes an
-  # instance or an array.
+  # instance or an array, Type::<T>new passes the constructor its type arguments.
   - name: a-method-reference-is-the-lambda-calling-the-method
     main: MethodRefs
     source: |
@@ -3670,7 +3702,17 @@ cases:
               Function<List<String>, Integer> size = List<String>::size;
               BiFunction<Map<String, Integer>, String, Integer> get = Map<String, Integer>::get;
               Function<String, List<String>> single = MethodRefs::<String>single;
-              System.out.println(size.apply(made) + " " + (get.apply(Map.of("k", 3), "k") + 1) + " " + single.apply("one").get(0).length());
+              // a constructor's own type arguments; a method that is not generic ignores them
+              Function<Integer, Tagged> tag = Tagged::<Integer>new;
+              System.out.println(size.apply(made) + " " + (get.apply(Map.of("k", 3), "k") + 1) + " " + single.apply("one").get(0).length() + " " + tag.apply(7).text + " " + new <String>Tagged("s").text + " " + MethodRefs.<String>twice(4));
+          }
+
+          static class Tagged {
+              final String text;
+
+              <U> Tagged(U u) {
+                  text = "tagged " + u;
+              }
           }
 
           static <T> List<T> single(T x) {
@@ -3684,7 +3726,7 @@ cases:
       3 2 9 -1 UP true 1.5 [3] [6]
       p1p1 1
       printed
-      1 4 3
+      1 4 3 tagged 7 tagged s 8
   # java.util.function and Comparator are Java source lowered with the program: generic
   # interfaces whose default methods return lambdas.
   - name: the-functional-interfaces-of-the-library-are-source-in-the-subset
@@ -4733,6 +4775,113 @@ cases:
       10 10
       wrapped java.io.IOException: inner
 standalone:
+  # What a compiler warns of as unchecked is printed on standard error before the
+  # program runs, as a JDK prints it, by the interpreter and by a compile; a declaration
+  # annotated @SuppressWarnings("unchecked") says none of its own (`warnings`).
+  - name: the-unchecked-warnings-are-printed-before-the-program-runs
+    file: Unchecked.java
+    source: |
+      import java.util.*;
+
+      public class Unchecked {
+          static class Box<T> {
+              T value;
+
+              Box(T value) {
+                  this.value = value;
+              }
+
+              void set(T value) {
+                  this.value = value;
+              }
+          }
+
+          static int count(List<String> xs) {
+              return xs.size();
+          }
+
+          static <T> List<T> listOf(T... xs) {
+              return new ArrayList<>(Arrays.asList(xs));
+          }
+
+          static <T> T unsafe(Object o) {
+              return (T) o;
+          }
+
+          @SuppressWarnings("unchecked")
+          static <T> T quiet(Object o) {
+              return (T) o;
+          }
+
+          public static void main(String[] args) {
+              List raw = new ArrayList();
+              raw.add("x");
+              List<String> strings = raw;
+              Box box = new Box("b");
+              box.set(1);
+              box.value = 2;
+              @SuppressWarnings("unchecked") List<String> named = raw;
+              Map<String, Integer> map = (Map<String, Integer>) new HashMap();
+              System.out.println(count(raw) + " " + listOf(strings, named).size() + " " + box.value + " " + map.size() + " " + Unchecked.<String>unsafe("u") + quiet("q"));
+          }
+      }
+    warnings: |
+      Unchecked.java:20: warning: [unchecked] Possible heap pollution from parameterized vararg type T
+          static <T> List<T> listOf(T... xs) {
+                                         ^
+        where T is a type-variable:
+          T extends Object declared in method <T>listOf(T...)
+      Unchecked.java:25: warning: [unchecked] unchecked cast
+              return (T) o;
+                         ^
+        required: T
+        found:    Object
+        where T is a type-variable:
+          T extends Object declared in method <T>unsafe(Object)
+      Unchecked.java:35: warning: [unchecked] unchecked call to add(E) as a member of the raw type List
+              raw.add("x");
+                     ^
+        where E is a type-variable:
+          E extends Object declared in interface List
+      Unchecked.java:36: warning: [unchecked] unchecked conversion
+              List<String> strings = raw;
+                                     ^
+        required: List<String>
+        found:    List
+      Unchecked.java:37: warning: [unchecked] unchecked call to Box(T) as a member of the raw type Box
+              Box box = new Box("b");
+                        ^
+        where T is a type-variable:
+          T extends Object declared in class Box
+      Unchecked.java:38: warning: [unchecked] unchecked call to set(T) as a member of the raw type Box
+              box.set(1);
+                     ^
+        where T is a type-variable:
+          T extends Object declared in class Box
+      Unchecked.java:39: warning: [unchecked] unchecked assignment to variable value as member of raw type Box
+              box.value = 2;
+                 ^
+      Unchecked.java:41: warning: [unchecked] unchecked cast
+              Map<String, Integer> map = (Map<String, Integer>) new HashMap();
+                                                                ^
+        required: Map<String,Integer>
+        found:    HashMap
+      Unchecked.java:42: warning: [unchecked] unchecked method invocation: method count in class Unchecked is applied to given types
+              System.out.println(count(raw) + " " + listOf(strings, named).size() + " " + box.value + " " + map.size() + " " + Unchecked.<String>unsafe("u") + quiet("q"));
+                                      ^
+        required: List<String>
+        found:    List
+      Unchecked.java:42: warning: [unchecked] unchecked conversion
+              System.out.println(count(raw) + " " + listOf(strings, named).size() + " " + box.value + " " + map.size() + " " + Unchecked.<String>unsafe("u") + quiet("q"));
+                                       ^
+        required: List<String>
+        found:    List
+      Unchecked.java:42: warning: [unchecked] unchecked generic array creation for varargs parameter of type List<String>[]
+              System.out.println(count(raw) + " " + listOf(strings, named).size() + " " + box.value + " " + map.size() + " " + Unchecked.<String>unsafe("u") + quiet("q"));
+                                                          ^
+      11 warnings
+    stdout: |
+      1 2 2 0 uq
   # An uncaught exception is the line a JDK writes on standard error -- the exception's
   # toString() -- and the status 1; where a JDK's stack trace follows, the interpreter and
   # the JVM name where it was raised (`at`).
@@ -6464,12 +6613,19 @@ refused:
     - name: a-diamond-whose-argument-and-target-disagree
       body: 'Box<String> b = new Box<>(1);'
       error: "incompatible types: cannot infer type arguments for Box<>"
+    - name: a-diamond-with-the-constructor-s-type-arguments
+      body: 'Box<String> b = new <Integer>Box<>("a");'
+      error: "cannot infer type arguments for Box<T>"
     - name: a-type-parameter-the-argument-and-the-target-disagree-on
       body: 'String s = id(1);'
       error: "incompatible types: inference variable T has incompatible bounds"
     - name: arguments-with-no-type-above-them-under-the-target
       body: 'String s = pick(1, "a");'
       error: "incompatible types: inferred type does not conform to upper bound(s)"
+    # a type an open variable makes fit is checked against every other value given
+    - name: a-value-the-target-does-not-take-beside-an-open-one
+      body: 'java.util.List<String> a = pick(new java.util.ArrayList<>(), new java.util.ArrayList<Integer>());'
+      error: "incompatible types: inference variable T has incompatible bounds"
     - name: an-argument-outside-its-type-parameter-s-bound
       body: 'int n = max("a", 1);'
       error: "method max in class Refused cannot be applied to given types;"
@@ -6485,6 +6641,15 @@ refused:
     - name: a-lambda-where-no-functional-interface-is-wanted
       body: 'Object o = () -> 1;'
       error: "incompatible types: Object is not a functional interface"
+    - name: a-lambda-cast-to-an-intersection-of-two-functions
+      body: 'Object o = (Runnable & java.util.function.Supplier<String>) () -> "x";'
+      error: "incompatible types: INT#1 is not a functional interface"
+    - name: a-lambda-cast-to-an-intersection-with-a-class
+      body: 'Object o = (String & Runnable) () -> { };'
+      error: "incompatible types: bad intersection type target for lambda or method reference"
+    - name: a-conditional-of-lambdas-in-a-cast
+      body: 'Object o = (Runnable) (args.length > 0 ? () -> { } : () -> { });'
+      error: "lambda expression not expected here"
     - name: a-lambda-returning-what-its-interface-does-not
       body: 'java.util.function.Function<String, Integer> f = s -> s;'
       error: "incompatible types: bad return type in lambda expression"

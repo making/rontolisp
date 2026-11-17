@@ -60,9 +60,11 @@ final class JavaClasses {
 	 * @param statics the classes a static import names, by the simple name of the member
 	 * it imports
 	 * @param staticOnDemand the classes whose static members are imported on demand
+	 * @param unchecked where its unchecked warnings are suppressed
 	 */
 	record Unit(Source source, @Nullable String packageName, Map<String, Import> imports, List<String> onDemand,
-			Map<String, JavaClass> declared, Map<String, List<JavaClass>> statics, List<JavaClass> staticOnDemand) {
+			Map<String, JavaClass> declared, Map<String, List<JavaClass>> statics, List<JavaClass> staticOnDemand,
+			List<JavaSyntax.Span> unchecked) {
 	}
 
 	private final Map<String, JavaClass> classes = new LinkedHashMap<>();
@@ -113,6 +115,27 @@ final class JavaClasses {
 	 * program can tell which interface a lambda was made for.
 	 */
 	final Set<JavaClass> taggedLambdas = new java.util.LinkedHashSet<>();
+
+	/**
+	 * The interface a lambda cast to an intersection of interfaces is made for, by those
+	 * interfaces: one no declaration names, extending each, so a lambda made for it is an
+	 * instance of every one.
+	 */
+	private final Map<List<JavaClass>, JavaClass> intersections = new HashMap<>();
+
+	/**
+	 * The interface a lambda cast to an intersection of interfaces is made for.
+	 * @param interfaces the interfaces, as written
+	 * @return the one interface extending them all, the same for the same interfaces
+	 */
+	JavaClass intersection(List<JavaClass> interfaces) {
+		return this.intersections.computeIfAbsent(List.copyOf(interfaces), key -> {
+			JavaClass made = new JavaClass(String.join("&", key.stream().map(each -> each.name).toList()), true, true,
+					false, null, null);
+			made.interfaces.addAll(key);
+			return made;
+		});
+	}
 
 	/**
 	 * The methods of the library's Java source a pass called: only these are lowered.
@@ -357,7 +380,7 @@ final class JavaClasses {
 			}
 		}
 		Unit unit = new Unit(source, tree.packageName(), imports, onDemand, new LinkedHashMap<>(), new HashMap<>(),
-				new ArrayList<>());
+				new ArrayList<>(), tree.unchecked());
 		List<JavaClass> declared = new ArrayList<>();
 		List<JavaClass> all = new ArrayList<>();
 		for (ClassDeclaration declaration : tree.classes()) {
@@ -867,7 +890,7 @@ final class JavaClasses {
 			arguments.add(new JavaSyntax.IntLiteral(constant.pos(), ordinal++, false));
 			arguments.addAll(constant.arguments());
 			field.initializer = new JavaSyntax.New(constant.pos(), simpleType(made, constant.pos(), 0), arguments,
-					constant.body(), null);
+					constant.body(), null, List.of());
 			field.pos = constant.pos();
 			field.isConstant = true;
 			made.fields.add(field);
@@ -983,6 +1006,7 @@ final class JavaClasses {
 			JavaClass.Method member = new JavaClass.Method(made, method.name(), parameters, returnType, isStatic,
 					isAbstract, method, emitter, false);
 			member.typeParameters = List.copyOf(typeParameters);
+			typeParameters.forEach(parameter -> parameter.method = member);
 			if (made.isEnum && isConstructor) {
 				member.hidden = 2;
 				member.isPrivate = true;

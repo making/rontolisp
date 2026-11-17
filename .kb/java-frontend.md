@@ -16,8 +16,9 @@ several files, a session, the calls across languages, the tools and annotations:
 the `Math` members j72 left: j81 (2026-11-17); the uncaught report without a held condition
 and the catch that signals nothing again: j82 (2026-11-17); the classes a JDK synchronizes, a
 class's own initialization, `java.util.concurrent` and the two leads for a suspended thread
-measured: j83 (2026-11-17); what comes after is `.todo/j86`, `j87`, `j88` and `j89` (what j78,
-j79, j82 and j83 left).
+measured: j83 (2026-11-17); the unchecked warnings, a lambda cast to an intersection,
+`Type::<T>new` and an argument call among overloads: j86 (2026-11-17); what comes after is
+`.todo/j87`, `j88` and `j89` (what j79, j82 and j83 left).
 
 ## Where it sits
 
@@ -240,7 +241,8 @@ program, so such a name is javac's error too, and it is the kind a processor or 
 gives a meaning whose absence would change the program. None of the five changes a program
 that compiles. `@Override` and `@FunctionalInterface` ride in the modifiers and are checked
 (`JavaLowering.overrides`: a supertype's or `Object`'s instance method of the signature seen
-from the class, or a record's accessor; `checkFunctional`).
+from the class, or a record's accessor; `checkFunctional`). `@SafeVarargs` rides there too and
+`@SuppressWarnings("unchecked")` is a span of the file (j86, "Warnings" below).
 
 ## The tools (2026-11-17, j74)
 
@@ -427,8 +429,15 @@ the first problem of the kind it reports first: reachability, then assignment, t
   when their bounds are. A cast `(A & B) x` casts to each in turn (the failing one names
   itself in the exception); a lub of types sharing several least supertypes is their
   intersection, the class first (two records implementing `S` are `Record & S`, which was
-  `Record`). A lambda or a method reference cast to one is refused by name: the marker
-  interfaces would need the lambda tagged for each.
+  `Record`). A lambda or a method reference cast to one (j86, `intersectionLambda`) is made
+  for an interface no declaration names, extending each (`JavaClasses.intersection`, one per
+  list of interfaces, its name the names joined by `&` so a session finds it again): its
+  function type is the bound's that has the one abstract method, `madeFor` hands the lambda
+  that interface as its target, and the tagging of "Lambdas" below then makes it an instance
+  of each (`instanceof Marker`) and runs each one's defaults. Errors as javac's: `INT#1 is
+  not a functional interface`, `bad intersection type target` (a class but `Object`). A
+  conditional or a switch of lambdas in a cast is javac's `lambda expression not expected
+  here` (it was accepted).
 
 ## Inference (2026-11-17, j70)
 
@@ -459,9 +468,21 @@ lub of the lowers, else an upper, else OPEN.
   back (`Standing`) and the call waits like a lambda, lowered against its parameter's type
   once this call's inference has run, its type then told to the inference.
   `words.sort(Comparator.comparing(s -> s.length()))`, `filter(xs, not(s -> s.isEmpty()))`.
-  Only with one candidate of the arity: with several the first error stands (`deviations.md`).
-  A failure, not a success, marks it, so a program that lowered keeps its forms and its
-  cost. Rejected as before: lowering every such argument a second time.
+  With several candidates of the arity (j86, `Late`), a candidate takes the argument when it
+  lowers against that candidate's parameter (state put back after each try, one try per
+  candidate and type), and the most specific is chosen by subtyping, not by the lambda rule;
+  none taking it is the first error. A failure, not a success, marks it, so a program that
+  lowered keeps its forms and its cost. Rejected as before: lowering every such argument a
+  second time.
+- **A lambda for a parameter whose type is the call's type variable waits** (j86): its shape
+  says nothing there, so it is lowered once the variable is found -- from the other
+  arguments or the target (`Supplier<String> s = pick(() -> "p", () -> "q")`); a variable
+  found by nothing is javac's `cannot infer type-variable(s) T`.
+- **Each value given is checked against the target** (j86, `conflict`): a type an open
+  variable makes fit (`List<OPEN>`) no longer hides another value given that does not
+  (`List<String> a = pick(new ArrayList<>(), new ArrayList<Integer>())` was accepted), and
+  a type holding an open variable is not counted among the values given when the message is
+  chosen (`given`).
 - **An exact method reference says what the function takes** (`exact`: one method of the
   name in a class that is not generic, itself not generic nor of variable arity, as JLS
   15.13.1 has it): its parameter types are upper bounds of the function's
@@ -489,7 +510,11 @@ lub of the lowers, else an upper, else OPEN.
   lowered as the static call and, when that is refused, as the call on the first parameter;
   `expression::name` binds the expression once around the lambda; `Type::new` is a creation.
   `List<String>::size` is the call on the first parameter seen as the type written;
-  `Type::<T>name` passes its type arguments to the call (j78; `Type::<T>new` stays refused).
+  `Type::<T>name` passes its type arguments to the call (j78), `Type::<T>new` and
+  `new <T>Box(..)` to the constructor (j86: `New.typeArguments`; on a raw reference to a
+  generic class, javac's `invalid constructor reference`; with `<>`, `cannot infer type
+  arguments`). A method that is not generic ignores type arguments written (JLS 15.12.2.1;
+  they were an error).
 - **An anonymous class made with `<>`** (j78, `anonymousType`) extends the type a creation
   with `<>` finds -- from the target for an interface, from the constructor's arguments
   (lowered a second time with the class's constructor) for a class --, refused as javac
@@ -529,6 +554,48 @@ lub of the lowers, else an upper, else OPEN.
   that program). `Fib`, `WrapInt`, `Sieve`, `WrapLong` are unchanged in time and in wasm bytes
   (2,728 / 2,508 / 10,380 / 4,544). After j72's `long` (a program of that shape, 2026-11-17,
   `ListLong` in the j72 measurements): JVM 5.14 -> 1.44 s, wasm 28.02 -> 1.35 s.
+
+## Warnings (2026-11-17, j86)
+
+A JDK 25 source launcher prints a program's unchecked warnings on standard error before it
+runs (it compiles with `-Xlint:unchecked`); so does the front end, byte for byte on the
+measured programs.
+
+- **The channel**: `Java.read(.., Consumer<String>)` hands the whole text (each warning, then
+  `N warning(s)`, at most 100 as javac) to `SourceLanguage`, which prints it as a
+  `CompileWarnings.note` -- never counted (`--warnings-as-errors` is about Lisp forms),
+  buffered with a compile attempt. The interpreter prints it before the program runs; a
+  compile (`-o`, the JVM and wasm alike) prints it once as it reads the source, and the
+  compiled program prints nothing, as a `.class` javac made. A session prints none.
+- **Gathered while lowering, kept from the last pass** (`JavaWarnings`, one per pass of
+  `JavaLowering.lower`): a dropped lowering (`Standing`: a trial, a `givesNothing`, a failed
+  first lowering) truncates what it gathered; the same warning twice is one; sorted by file
+  (the program's first) and position, as javac's attribution order came out on every
+  program tried (a nested class declared first warns first).
+- **What is warned** (each where javac puts its caret: a call's `(`, `new`, a field's `.`,
+  the start of an expression, a parameter's name): a call or a creation through a raw type
+  of a member whose parameters the erasure changes (`unchecked call to add(E) as a member of
+  the raw type List`, also an inherited member called on `this` in a subclass of a raw
+  type); a raw type converted to a parameterized one where a value is assigned, initialized,
+  returned or passed (`unchecked conversion`, and for an argument `unchecked method
+  invocation` at the call); a cast to a type variable or to a parameterized type whose
+  arguments the value's type does not give (`unchecked cast`; none for an intersection,
+  as javac); a field of a raw type written; a variable arity parameter whose element type is
+  not reifiable (`Possible heap pollution`) and a call spreading arguments into one
+  (`unchecked generic array creation`), but for a `@SafeVarargs` method (the library's
+  `List.of`, `Set.of`, `Arrays.asList`, `Collections.addAll`, `Map.ofEntries` carry it as the
+  JDK's do). The `where` lines name each type variable the warning mentions, in the order
+  mentioned, then those its bounds mention.
+- **`@SuppressWarnings("unchecked")`** (`JavaParser.suppressed`): the parser records the span
+  of each declaration so annotated -- a top-level, member or local class, a field, a method,
+  a constructor, a local variable --, and a warning whose caret is inside one is not said.
+  `"all"` suppresses nothing: JDK 25's javac still warns under it (measured).
+- **The library follows the JDK where a message names it**: `List` and `Set` redeclare
+  `add(E)` and `addAll(Collection<? extends E>)`, so `raw.add(x)` names `List`, not
+  `Collection`.
+- Not warned: a raw value returned from a lambda body, a conditional's arms, a method
+  reference through a raw type, an override whose return type converts unchecked; and no
+  other category (`[removal]`, `[deprecation]` ...) (`deviations.md`).
 
 ## The library (2026-11-17, j71)
 
@@ -1307,7 +1374,7 @@ another package ("A program of several files"), assignment to a `final` field or
 what the flow decides ("The flow"): unreachable statements, a missing `return`, definite
 assignment and unassignment of locals and blank final fields, effectively final captures; a
 written type argument outside its parameter's bound and a field written through `? extends`
-(j78). Not checked: checked exceptions; the unchecked warnings (`.todo/j86`). A value read
+(j78). Warned: the unchecked warnings ("Warnings"). Not checked: checked exceptions. A value read
 through a type argument is trusted (no cast where it is used: measured below, "j78"), and a
 store into an array of references is not checked (measured: "The class of an array"). The run time's exceptions are the
 language's, but a `NullPointerException` has no message and a `ClassCastException` says nothing
@@ -1364,4 +1431,7 @@ initialized while another thread initializes another, `getState`, `InheritableTh
 `an-uncaught-exception-ends-its-thread-alone` (the handlers),
 `locks-latches-queues-and-executors-hand-work-between-threads` and
 `threads-share-concurrent-collections-and-completable-futures` (j83; each waits only for what
-one stack can run, so the four legs print the same).
+one stack can run, so the four legs print the same). The `standalone:` case
+`the-unchecked-warnings-are-printed-before-the-program-runs` (j86): its `warnings:` is the
+start of the standard error under the JDK and the interpreter, and what the compile prints
+for the JVM and both wasm legs.

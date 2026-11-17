@@ -104,6 +104,9 @@ sealed interface JavaType {
 		 */
 		@Nullable JavaClass owner;
 
+		/** The method or constructor declaring it, or {@code null}. */
+		JavaClass.@Nullable Method method;
+
 		/** The wildcard it is the capture of, or {@code null}. */
 		@Nullable Wildcard captured;
 

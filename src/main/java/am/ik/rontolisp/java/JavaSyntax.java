@@ -188,9 +188,10 @@ final class JavaSyntax {
 	 * @param arguments the constructor's arguments
 	 * @param body the anonymous class's body, or {@code null}
 	 * @param outer the instance before {@code .new}, or {@code null}
+	 * @param typeArguments the constructor's type arguments written after {@code new}
 	 */
 	record New(int pos, TypeName type, List<Expression> arguments, @Nullable ClassDeclaration body,
-			@Nullable Expression outer) implements Expression {
+			@Nullable Expression outer, List<TypeName> typeArguments) implements Expression {
 	}
 
 	/**
@@ -565,7 +566,31 @@ final class JavaSyntax {
 	record Import(int pos, String name, boolean onDemand, boolean module, boolean isStatic) {
 	}
 
-	record CompilationUnit(@Nullable String packageName, List<Import> imports, List<ClassDeclaration> classes) {
+	/**
+	 * A file.
+	 *
+	 * @param packageName its package, or {@code null}
+	 * @param imports its imports
+	 * @param classes its top-level classes
+	 * @param unchecked where the unchecked warnings are suppressed: the declarations
+	 * annotated {@code @SuppressWarnings("unchecked")}
+	 */
+	record CompilationUnit(@Nullable String packageName, List<Import> imports, List<ClassDeclaration> classes,
+			List<Span> unchecked) {
+	}
+
+	/**
+	 * A stretch of a file's text.
+	 *
+	 * @param from where it starts
+	 * @param to where it ends, exclusive
+	 */
+	record Span(int from, int to) {
+
+		boolean contains(int pos) {
+			return pos >= this.from && pos < this.to;
+		}
+
 	}
 
 }

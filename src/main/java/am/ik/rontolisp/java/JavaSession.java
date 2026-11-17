@@ -91,7 +91,7 @@ public final class JavaSession {
 		SessionTree tree = JavaParser.session(text, own.length(), CLASS, this.echoes);
 		JavaLowering.Session session = new JavaLowering.Session(declaredTypes, this.initialized, this.made,
 				this.lambdas, this.monitors);
-		List<LispVal> forms = JavaLowering.lower(tree.unit(), text, null, JavaFiles.NONE, session, false);
+		List<LispVal> forms = JavaLowering.lower(tree.unit(), text, null, JavaFiles.NONE, session, false, null);
 		// what the buffer leaves for the next ones
 		Map<String, String> declarations = new LinkedHashMap<>(kept);
 		List<JavaTopLevel> steps = new ArrayList<>();
