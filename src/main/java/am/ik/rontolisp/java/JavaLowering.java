@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -41,6 +42,7 @@ import am.ik.rontolisp.java.JavaSyntax.Break;
 import am.ik.rontolisp.java.JavaSyntax.Call;
 import am.ik.rontolisp.java.JavaSyntax.Cast;
 import am.ik.rontolisp.java.JavaSyntax.Catch;
+import am.ik.rontolisp.java.JavaSyntax.Close;
 import am.ik.rontolisp.java.JavaSyntax.CharLiteral;
 import am.ik.rontolisp.java.JavaSyntax.CompilationUnit;
 import am.ik.rontolisp.java.JavaSyntax.Conditional;
@@ -216,8 +218,6 @@ final class JavaLowering implements JavaEmitter.Context {
 	 */
 	private static final class Target {
 
-		final int finallyDepth;
-
 		final @Nullable String label;
 
 		final boolean isLoop;
@@ -238,8 +238,7 @@ final class JavaLowering implements JavaEmitter.Context {
 
 		boolean continues;
 
-		Target(int finallyDepth, @Nullable String label, boolean isLoop, boolean takesBreak, boolean isExpression) {
-			this.finallyDepth = finallyDepth;
+		Target(@Nullable String label, boolean isLoop, boolean takesBreak, boolean isExpression) {
 			this.label = label;
 			this.isLoop = isLoop;
 			this.takesBreak = takesBreak;
@@ -290,6 +289,19 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private static final LispSymbol LISP_ERROR = new LispSymbol("%lisp-error");
 
+	/**
+	 * The classes of the exceptions the run time raises as Lisp conditions, which
+	 * {@code %java-exception-of} in {@code java.lisp} -- the one table from a condition
+	 * to an exception -- answers: a {@code catch} above one of them makes the program's
+	 * object of that class from the condition.
+	 */
+	static final List<String> RAISED = List.of("java.lang.ArithmeticException",
+			"java.lang.ArrayIndexOutOfBoundsException", "java.lang.NullPointerException",
+			"java.lang.NegativeArraySizeException", "java.lang.StringIndexOutOfBoundsException",
+			"java.lang.IllegalArgumentException", "java.lang.MatchException",
+			"java.util.IllegalFormatConversionException", "java.util.UnknownFormatConversionException",
+			"java.util.MissingFormatArgumentException", "java.lang.RuntimeException");
+
 	private static final LispSymbol RECEIVER = new LispSymbol("%o");
 
 	private static final LispSymbol YIELD_BLOCK = new LispSymbol("%yield");
@@ -329,9 +341,13 @@ final class JavaLowering implements JavaEmitter.Context {
 	private final Set<LispSymbol> generated = new LinkedHashSet<>();
 
 	/**
-	 * Whether the program reads or writes an array by an index: a Lisp error may be one.
+	 * The classes of {@link #RAISED} some {@code catch} of the program takes: the ones
+	 * {@code %lisp-error} makes.
 	 */
-	private boolean indexes;
+	private final Set<String> caughtRaised = new TreeSet<>();
+
+	/** Whether the program throws objects: its entry's handler reports one. */
+	private boolean raises;
 
 	private final Map<Field, Object> constants = new HashMap<>();
 
@@ -339,9 +355,6 @@ final class JavaLowering implements JavaEmitter.Context {
 	private final Set<LispVal> nonNull = Collections.newSetFromMap(new IdentityHashMap<>());
 
 	private int temporaries;
-
-	/** Whether the program has a {@code throw} or a cast that can fail. */
-	private boolean raises;
 
 	// ---- where the lowering stands
 
@@ -389,8 +402,6 @@ final class JavaLowering implements JavaEmitter.Context {
 	private final Deque<Frame> frames = new ArrayDeque<>();
 
 	private final Deque<Target> targets = new ArrayDeque<>();
-
-	private int finallyDepth;
 
 	/** What the function being lowered does. */
 	private Effects effects = new Effects();
@@ -516,7 +527,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		return new LocatedCons(cons.car(), cons.cdr(), source.file(), found >= 0 ? found + 1 : -found - 1);
 	}
 
-	private LispSymbol temporary() {
+	@Override
+	public LispSymbol temporary() {
 		return new LispSymbol("%t" + (this.temporaries++));
 	}
 
@@ -541,7 +553,6 @@ final class JavaLowering implements JavaEmitter.Context {
 			lowerReached();
 		}
 		while (reached != this.loweredMethods.size() + this.loweredInits.size());
-		// after the library: whether the program throws is known once it is lowered
 		LispVal entry = entry();
 		List<LispVal> initialization = initialization();
 		List<LispVal> made = new ArrayList<>();
@@ -549,8 +560,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		made.addAll(this.functions);
 		made.addAll(this.dispatchers.values());
 		made.addAll(generated);
-		made.addAll(initialization);
-		made.add(entry);
+		made.add(uncaught(initialization, entry));
 		Set<String> named = new HashSet<>();
 		for (LispVal form : made) {
 			names(form, named);
@@ -908,7 +918,6 @@ final class JavaLowering implements JavaEmitter.Context {
 		Deque<Scope> savedScopes = this.scopes;
 		Initializing savedInitializing = this.initializing;
 		Deque<Target> savedTargets = new ArrayDeque<>(this.targets);
-		int savedFinally = this.finallyDepth;
 		boolean savedEarly = this.early;
 		boolean savedMaking = this.makingConstant;
 		JavaClass savedConstructing = this.constructing;
@@ -927,7 +936,6 @@ final class JavaLowering implements JavaEmitter.Context {
 		this.staticContext = isStatic;
 		this.initializing = null;
 		this.targets.clear();
-		this.finallyDepth = 0;
 		this.early = false;
 		this.makingConstant = false;
 		this.returnType = Primitive.VOID;
@@ -946,7 +954,6 @@ final class JavaLowering implements JavaEmitter.Context {
 			this.initializing = savedInitializing;
 			this.targets.clear();
 			this.targets.addAll(savedTargets);
-			this.finallyDepth = savedFinally;
 			this.early = savedEarly;
 			this.makingConstant = savedMaking;
 			this.constructing = savedConstructing;
@@ -972,7 +979,6 @@ final class JavaLowering implements JavaEmitter.Context {
 		boolean savedStatic = this.staticContext;
 		JavaType savedReturn = this.returnType;
 		Deque<Target> savedTargets = new ArrayDeque<>(this.targets);
-		int savedFinally = this.finallyDepth;
 		boolean savedEarly = this.early;
 		boolean savedMaking = this.makingConstant;
 		JavaClass savedConstructing = this.constructing;
@@ -987,7 +993,6 @@ final class JavaLowering implements JavaEmitter.Context {
 		this.returns = null;
 		this.lambdaBody = false;
 		this.targets.clear();
-		this.finallyDepth = 0;
 		this.early = false;
 		this.makingConstant = false;
 		this.initializing = null;
@@ -1004,7 +1009,6 @@ final class JavaLowering implements JavaEmitter.Context {
 			this.returnType = savedReturn;
 			this.targets.clear();
 			this.targets.addAll(savedTargets);
-			this.finallyDepth = savedFinally;
 			this.early = savedEarly;
 			this.makingConstant = savedMaking;
 			this.constructing = savedConstructing;
@@ -1345,15 +1349,12 @@ final class JavaLowering implements JavaEmitter.Context {
 		this.frames.push(frame);
 		Deque<Target> savedTargets = new ArrayDeque<>(this.targets);
 		this.targets.clear();
-		int savedFinally = this.finallyDepth;
-		this.finallyDepth = 0;
 		List<Local> savedPatterns = this.patternVariables;
 		this.patternVariables = new ArrayList<>();
 		this.scopes.push(new Scope(null, false));
 		List<LispVal> forms = sequence(body.statements(), 0, true);
 		this.scopes.pop();
 		this.patternVariables = savedPatterns;
-		this.finallyDepth = savedFinally;
 		this.targets.addAll(savedTargets);
 		this.frames.pop();
 		return frame.exits ? form(cl("block"), prepend(FUNCTION_BLOCK, forms)) : progn(forms);
@@ -1406,10 +1407,20 @@ final class JavaLowering implements JavaEmitter.Context {
 				break;
 			}
 		}
-		// A program that throws starts inside an unwind-protect protecting nothing: a
-		// wasm module holding one reports the condition nothing caught, as the
-		// interpreter and the JVM always do.
-		return this.raises ? list(cl("unwind-protect"), start, NIL) : start;
+		return start;
+	}
+
+	/**
+	 * The static initialization before {@code main} and {@code main}, inside the handler
+	 * of what nothing caught: the line a JDK writes and the status 1. Only a program that
+	 * throws objects asks the condition for one.
+	 */
+	private LispVal uncaught(List<LispVal> initialization, LispVal start) {
+		LispSymbol condition = new LispSymbol("%c");
+		List<LispVal> body = new ArrayList<>(initialization);
+		body.add(start);
+		return list(cl("handler-case"), body.size() == 1 ? start : form(cl("progn"), body), list(cl("error"),
+				list(condition), runtimeCall(this.raises ? "uncaught-thrown" : "uncaught", condition)));
 	}
 
 	/**
@@ -1491,32 +1502,51 @@ final class JavaLowering implements JavaEmitter.Context {
 			forms.add(list(cl("defun"), name, list(RECEIVER), list(arms)));
 		}
 		if (this.generated.contains(LISP_ERROR)) {
+			// the exception the table names, made as the program's object; nil for one
+			// no catch takes
 			LispSymbol condition = new LispSymbol("%c");
-			LispVal other = list(creator("java.lang.RuntimeException"), runtimeCall("condition-text", condition));
-			if (this.indexes) {
-				// an index outside an array is the host's type error, which tells the
-				// index and the length
-				LispSymbol message = new LispSymbol("%m");
-				other = JavaForms.let(message, runtimeCall("index-error", condition), List.of(call("if", message,
-						list(creator("java.lang.ArrayIndexOutOfBoundsException"), message), other)));
+			LispSymbol entry = new LispSymbol("%e");
+			List<LispVal> arms = new ArrayList<>();
+			arms.add(cl("cond"));
+			for (String name : this.caughtRaised) {
+				arms.add(list(call("equal", call("car", entry), string(name)),
+						form(creator(name), creatorArguments(name, call("cdr", entry)))));
 			}
 			forms.add(list(cl("defun"), LISP_ERROR, list(condition),
-					call("if", runtimeCall("division-by-zero-p", condition),
-							list(creator("java.lang.ArithmeticException"), string("/ by zero")), other)));
+					JavaForms.let(entry, runtimeCall("exception-of", condition), List.of(list(arms)))));
 		}
 		return forms;
 	}
 
-	/** The function making a library exception of one message. */
+	/**
+	 * The function making a library exception of a message: its constructor of a message,
+	 * else of a message and a cause.
+	 */
 	private LispSymbol creator(String exception) {
+		Method constructor = messageConstructor(exception);
+		reach(constructor);
+		makes(constructor.owner);
+		return JavaNames.creator(constructor);
+	}
+
+	private List<LispVal> creatorArguments(String exception, LispVal message) {
+		return messageConstructor(exception).parameters.size() == 1 ? List.of(message) : List.of(message, NIL);
+	}
+
+	private Method messageConstructor(String exception) {
+		Method withCause = null;
 		for (Method constructor : constructors(this.classes.library(exception))) {
 			if (constructor.parameters.equals(List.of(this.stringType))) {
-				reach(constructor);
-				makes(constructor.owner);
-				return JavaNames.creator(constructor);
+				return constructor;
+			}
+			if (constructor.parameters.size() == 2 && constructor.parameters.get(0).equals(this.stringType)) {
+				withCause = constructor;
 			}
 		}
-		throw new IllegalStateException(exception + " has no constructor of a message");
+		if (withCause == null) {
+			throw new IllegalStateException(exception + " has no constructor of a message");
+		}
+		return withCause;
 	}
 
 	/**
@@ -2580,11 +2610,16 @@ final class JavaLowering implements JavaEmitter.Context {
 					return new Typed(runtimeCall("new-array", form(cl("list"), lengths), integer(arrayKind(leaf)),
 							defaultValue(leaf)), type);
 				}
-				List<LispVal> made = new ArrayList<>(List.of(cl("make-array"), lengths.get(0)));
+				// a negative length is the language's exception, which the run time makes
+				LispVal length = lengths.get(0) instanceof LispInteger n && n.value() >= 0 ? lengths.get(0)
+						: runtimeCall("array-length", lengths.get(0));
+				List<LispVal> made = new ArrayList<>(List.of(cl("make-array"), length));
 				made.addAll(elementType(type.element()));
 				made.add(new LispSymbol(":INITIAL-ELEMENT"));
 				made.add(type.element() == Primitive.BOOLEAN ? integer(0) : defaultValue(type.element()));
-				return new Typed(list(made), type);
+				LispVal array = list(made);
+				this.nonNull.add(array);
+				return new Typed(array, type);
 			}
 			case ArrayInitializer initializer:
 				if (!(expected instanceof ArrayType type)) {
@@ -2923,7 +2958,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				Typed object = assigning && this.early && select.target() instanceof This
 						? new Typed(THIS, this.currentClass.self()) : expression(select.target(), null);
 				if (object.type() instanceof ArrayType && select.name().equals("length")) {
-					return new Place(Primitive.INT, call("length", object.form()), value -> {
+					return new Place(Primitive.INT, call("length", dereferenced(object.form())), value -> {
 						throw error(select.pos(), "cannot assign a value to final variable length");
 					}, bindings);
 				}
@@ -2953,7 +2988,6 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 				LispVal element = call("aref", stabilized(array.form(), stable, bindings),
 						stabilized(at.form(), stable, bindings));
-				this.indexes = true;
 				return new Place(type.element(), elementRead(type.element(), element),
 						value -> call("setf", element, elementStored(type.element(), value)), bindings);
 			}
@@ -3485,15 +3519,41 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (test == T) {
 			return new Typed(value.form(), to);
 		}
-		Method failed = constructors(this.classes.library("java.lang.ClassCastException")).stream()
-			.filter(constructor -> constructor.parameters.isEmpty())
-			.findFirst()
-			.orElseThrow();
-		called(failed);
-		makes(failed.owner);
-		LispVal failure = raise(list(JavaNames.creator(failed)));
+		LispVal failure = raise(castFailure(checked, to));
 		return new Typed(JavaForms.let(checked, value.form(),
 				List.of(call("if", call("or", call("null", checked), test), checked, failure))), to);
+	}
+
+	/**
+	 * The {@code ClassCastException} of a value that is no {@code to}: the message names
+	 * the two classes as a JDK's starts, without what it says of their modules and class
+	 * loaders; a cast to an array type has none.
+	 */
+	private LispVal castFailure(LispSymbol value, JavaType to) {
+		String target = to instanceof ClassType type ? type.declaration().binaryName : null;
+		if (target == null) {
+			Method failed = constructors(this.classes.library("java.lang.ClassCastException")).stream()
+				.filter(constructor -> constructor.parameters.isEmpty())
+				.findFirst()
+				.orElseThrow();
+			called(failed);
+			makes(failed.owner);
+			return list(JavaNames.creator(failed));
+		}
+		this.generated.add(CLASS_NAME);
+		LispVal message = call("%string-concat", call("%string-concat", string("class "), list(CLASS_NAME, value)),
+				string(" cannot be cast to class " + target));
+		// a lambda's class has a name only a JDK makes up: no message
+		if (!this.classes.lambdaTargets.isEmpty()) {
+			List<LispVal> lambda = new ArrayList<>();
+			lambda.add(cl("or"));
+			lambda.add(call("functionp", value));
+			for (JavaClass tagged : this.classes.taggedLambdas) {
+				lambda.add(list(lambdaTest(tagged), value));
+			}
+			message = call("if", lambda.size() == 2 ? lambda.get(1) : list(lambda), NIL, message);
+		}
+		return list(creator("java.lang.ClassCastException"), message);
 	}
 
 	/**
@@ -3946,7 +4006,6 @@ final class JavaLowering implements JavaEmitter.Context {
 		List<JavaType> savedReturns = this.returns;
 		boolean savedLambda = this.lambdaBody;
 		Initializing savedInitializing = this.initializing;
-		int savedFinally = this.finallyDepth;
 		Set<Local> savedAssigned = new HashSet<>(this.assigned);
 		this.patternVariables = new ArrayList<>();
 		this.scopes.push(new Scope(null, true));
@@ -3975,7 +4034,6 @@ final class JavaLowering implements JavaEmitter.Context {
 			this.returns = savedReturns;
 			this.lambdaBody = savedLambda;
 			this.initializing = savedInitializing;
-			this.finallyDepth = savedFinally;
 			this.assigned = savedAssigned;
 			this.flexible = false;
 		}
@@ -4452,6 +4510,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			if (method.owner.name.equals("java.io.PrintStream") || method.owner.name.equals("java.lang.IO")) {
 				this.effects.visible = true;
 			}
+			if (receiver != null && call.target() != null) {
+				receiver = new Typed(dereferenced(receiver.form()), receiver.type());
+			}
 			LispVal form = method.emitter.emit(this,
 					new Invocation(method.isStatic ? null : receiver, resolved.arguments(), discard, pos));
 			if (resolved.returnType().equals(this.stringType) && method.returnType.equals(this.stringType)) {
@@ -4466,7 +4527,8 @@ final class JavaLowering implements JavaEmitter.Context {
 			form = form(JavaNames.function(method), resolved.forms());
 		}
 		else {
-			form = virtual(in, method, Objects.requireNonNull(receiver).form(), resolved.forms());
+			LispVal object = Objects.requireNonNull(receiver).form();
+			form = virtual(in, method, call.target() != null ? object : null, object, resolved.forms());
 		}
 		return new Typed(located(form, pos), resolved.returnType());
 	}
@@ -4636,9 +4698,35 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	private LispVal virtual(JavaClass receiver, Method method, LispVal object, List<LispVal> arguments) {
+		return virtual(receiver, method, null, object, arguments);
+	}
+
+	/**
+	 * A call of an instance method.
+	 * @param written the receiver as the program wrote it, which can be {@code null}: a
+	 * call going straight to a body tests it, where a dispatcher's last arm answers it
+	 */
+	private LispVal virtual(JavaClass receiver, Method method, @Nullable LispVal written, LispVal object,
+			List<LispVal> arguments) {
 		LispSymbol target = target(receiver, method);
-		return target == null ? form(cl("funcall"), prepend(object, arguments))
-				: form(target, prepend(object, arguments));
+		boolean dispatched = target != null && this.dispatchers.containsKey(target.name());
+		LispVal checked = written == null || dispatched ? object : dereferenced(object);
+		return target == null ? form(cl("funcall"), prepend(checked, arguments))
+				: form(target, prepend(checked, arguments));
+	}
+
+	/**
+	 * A reference a member is read or called through: tested for {@code null}, which
+	 * raises {@code NullPointerException}, unless it surely is none. A structure's
+	 * accessor and an array's {@code aref} need no test: the host's type error over
+	 * {@code nil} is the exception already ({@code %java-exception-of}).
+	 */
+	private LispVal dereferenced(LispVal form) {
+		if (form == THIS || form == RECEIVER || form instanceof LispString || this.nonNull.contains(form)
+				|| (form instanceof LispSymbol symbol && symbol.name().startsWith("*"))) {
+			return form;
+		}
+		return call("or", form, runtimeCall("npe"));
 	}
 
 	/**
@@ -5105,7 +5193,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	private Target loopTarget() {
-		Target target = new Target(this.finallyDepth, this.pendingLabel, true, true, false);
+		Target target = new Target(this.pendingLabel, true, true, false);
 		this.pendingLabel = null;
 		return target;
 	}
@@ -5128,9 +5216,6 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 			}
 			if (found) {
-				if (target.finallyDepth != this.finallyDepth) {
-					throw unsupported(pos, "a " + exit + " leaving a finally block");
-				}
 				return target;
 			}
 		}
@@ -5163,7 +5248,7 @@ final class JavaLowering implements JavaEmitter.Context {
 					this.pendingLabel = labeled.label();
 					return statement(body, false);
 				}
-				Target target = new Target(this.finallyDepth, labeled.label(), false, false, false);
+				Target target = new Target(labeled.label(), false, false, false);
 				this.targets.push(target);
 				List<LispVal> forms = statement(body, false);
 				this.targets.pop();
@@ -5304,9 +5389,6 @@ final class JavaLowering implements JavaEmitter.Context {
 				if (tail) {
 					return exit.value() == null ? List.of() : List.of(value);
 				}
-				if (this.finallyDepth > 0) {
-					throw unsupported(exit.pos(), "a return inside a finally block");
-				}
 				Objects.requireNonNull(this.frames.peek()).exits = true;
 				return List.of(located(list(cl("return-from"), FUNCTION_BLOCK, value), exit.pos()));
 			}
@@ -5331,9 +5413,6 @@ final class JavaLowering implements JavaEmitter.Context {
 				if (target == null) {
 					throw error(exit.pos(), "yield outside of switch expression");
 				}
-				if (target.finallyDepth != this.finallyDepth) {
-					throw unsupported(exit.pos(), "a yield leaving a finally block");
-				}
 				LispVal value = yielded(expression(exit.value(), this.yieldType), exit.value().pos());
 				if (tail) {
 					return List.of(value);
@@ -5352,6 +5431,8 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 			case Try attempt:
 				return List.of(located(attempt(attempt), attempt.pos()));
+			case Close close:
+				return close(close);
 			case JavaSyntax.Switch block:
 				return switchStatement(block, tail);
 			case LocalVariable variable:
@@ -5432,14 +5513,14 @@ final class JavaLowering implements JavaEmitter.Context {
 		LispVal test;
 		if (through == null) {
 			round.add(call("setq", index, call("+", index, integer(1))));
-			bindings.add(list(items, iterable.form()));
+			bindings.add(list(items, dereferenced(iterable.form())));
 			bindings.add(list(count, call("length", items)));
 			bindings.add(list(index, integer(0)));
 			test = call("<", index, count);
 		}
 		else {
 			bindings.add(list(items, virtual(through.declaration(), iteratorMethod(through.declaration(), "iterator"),
-					iterable.form(), List.of())));
+					iterable.form(), iterable.form(), List.of())));
 			test = virtual(this.classes.library("java.util.Iterator"),
 					iteratorMethod(this.classes.library("java.util.Iterator"), "hasNext"), items, List.of());
 		}
@@ -5460,35 +5541,43 @@ final class JavaLowering implements JavaEmitter.Context {
 	/**
 	 * {@code try}: the catch clauses are one {@code handler-case} clause testing the
 	 * thrown object's class, clause by clause, and signalling again when none takes it;
-	 * {@code finally} is an {@code unwind-protect}. A Lisp {@code error} reaches a clause
-	 * whose type is above the exception it is turned into.
+	 * {@code finally} is an {@code unwind-protect}. A condition that is no thrown object
+	 * -- one the run time or the host raised -- is made the program's exception by
+	 * {@code %lisp-error} when a clause can take that exception.
 	 */
 	private LispVal attempt(Try attempt) {
 		LispVal body = progn(scoped(attempt.body(), false));
 		if (!attempt.catches().isEmpty()) {
 			LispSymbol condition = temporary();
 			LispSymbol thrown = temporary();
-			JavaClass throwable = this.classes.library("java.lang.Throwable");
-			JavaClass arithmetic = this.classes.library("java.lang.ArithmeticException");
-			JavaClass runtime = this.classes.library("java.lang.RuntimeException");
 			boolean takesLispErrors = false;
 			List<LispVal> arms = new ArrayList<>();
 			arms.add(cl("cond"));
 			for (Catch clause : attempt.catches()) {
-				if (!(type(clause.type()) instanceof ClassType type) || !type.declaration().isSubclassOf(throwable)) {
-					throw error(clause.type().pos(),
-							"incompatible types: " + clause.type().name() + " cannot be converted to Throwable");
+				List<JavaClass> taken = new ArrayList<>();
+				JavaType type = null;
+				for (TypeName written : clause.types()) {
+					JavaClass one = caught(written);
+					for (JavaClass other : taken) {
+						if (one.isSubclassOf(other) || other.isSubclassOf(one)) {
+							throw error(written.pos(),
+									"Alternatives in a multi-catch statement cannot be related by subclassing");
+						}
+					}
+					taken.add(one);
+					type = type == null ? one.self() : this.types.lub(type, one.self());
+					takesLispErrors |= takesRaised(one);
 				}
-				takesLispErrors |= arithmetic.isSubclassOf(type.declaration())
-						|| runtime.isSubclassOf(type.declaration())
-						|| type.declaration().name.equals("java.lang.IndexOutOfBoundsException")
-						|| type.declaration().name.equals("java.lang.ArrayIndexOutOfBoundsException");
 				this.scopes.push(new Scope(null, false));
-				Local bound = bind(clause.name(), type, clause.pos());
+				Local bound = bind(clause.name(), Objects.requireNonNull(type), clause.pos());
 				bound.initialized = true;
 				List<LispVal> handler = sequence(clause.body().statements(), 0, false);
 				this.scopes.pop();
-				arms.add(list(list(JavaNames.predicate(type.declaration()), thrown),
+				List<LispVal> tests = new ArrayList<>();
+				for (JavaClass one : taken) {
+					tests.add(list(JavaNames.predicate(one), thrown));
+				}
+				arms.add(list(tests.size() == 1 ? tests.get(0) : form(cl("or"), tests),
 						JavaForms.let(bound.symbol(), thrown, handler)));
 			}
 			arms.add(list(T, call("error", condition)));
@@ -5501,12 +5590,68 @@ final class JavaLowering implements JavaEmitter.Context {
 					list(cl("error"), list(condition), JavaForms.let(thrown, object, List.of(list(arms)))));
 		}
 		if (attempt.finallyBlock() != null) {
-			this.finallyDepth++;
 			List<LispVal> cleanup = scoped(attempt.finallyBlock(), false);
-			this.finallyDepth--;
 			body = form(cl("unwind-protect"), prepend(body, cleanup));
 		}
 		return body;
+	}
+
+	/** The class a {@code catch} names, which is a {@code Throwable}. */
+	private JavaClass caught(TypeName written) {
+		JavaClass throwable = this.classes.library("java.lang.Throwable");
+		if (!(type(written) instanceof ClassType type) || !type.declaration().isSubclassOf(throwable)) {
+			throw error(written.pos(), "incompatible types: " + written.name() + " cannot be converted to Throwable");
+		}
+		return type.declaration();
+	}
+
+	/**
+	 * Whether a clause of a class takes some exception of the run time's: then the
+	 * classes of those it takes are made by {@code %lisp-error}.
+	 */
+	private boolean takesRaised(JavaClass clause) {
+		if (!isLibrary(clause)) {
+			return false;
+		}
+		boolean takes = false;
+		for (String name : RAISED) {
+			if (this.classes.library(name).isSubclassOf(clause)) {
+				this.caughtRaised.add(name);
+				takes = true;
+			}
+		}
+		return takes;
+	}
+
+	/**
+	 * Closing a resource of a {@code try}-with-resources: when it is no {@code null},
+	 * {@code close()}; when the body threw, an exception of {@code close()} is suppressed
+	 * by the body's.
+	 */
+	private List<LispVal> close(Close close) {
+		int at = close.pos();
+		Typed resource = expression(new Name(at, close.resource()), null);
+		ClassType closeable = this.classes.libraryType("java.lang.AutoCloseable");
+		if (!(resource.type() instanceof ClassType || resource.type() instanceof Variable)
+				|| !isSubtype(resource.type(), closeable)) {
+			throw error(at, "incompatible types: try-with-resources not applicable to variable type");
+		}
+		String suppressed = close.primary() + "%s";
+		Statement closing = new ExpressionStatement(at,
+				new Call(at, new Name(at, close.resource()), "close", List.of(), false));
+		TypeName throwable = new TypeName(at, "Throwable", List.of(), false, 0);
+		Statement suppressing = new Try(
+				at, new Block(at, List.of(
+						closing)),
+				List.of(new Catch(at, List.of(throwable), suppressed,
+						new Block(at, List.of(new ExpressionStatement(at, new Call(at, new Name(at, close.primary()),
+								"addSuppressed", List.of(new Name(at, suppressed)), false)))))),
+				null);
+		Statement whenThrown = new If(at, new Binary(at, "!=", new Name(at, close.primary()), new NullLiteral(at)),
+				suppressing, closing);
+		return statement(
+				new If(at, new Binary(at, "!=", new Name(at, close.resource()), new NullLiteral(at)), whenThrown, null),
+				false);
 	}
 
 	// ---- switch
@@ -5746,7 +5891,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	private List<LispVal> switchStatement(JavaSyntax.Switch block, boolean tail) {
-		Target target = new Target(this.finallyDepth, this.pendingLabel, false, true, false);
+		Target target = new Target(this.pendingLabel, false, true, false);
 		this.pendingLabel = null;
 		Selection selection = selection(block, false);
 		List<LispVal> hoisted = new ArrayList<>();
@@ -5835,7 +5980,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	private LispVal switchArms(JavaSyntax.Switch block, @Nullable JavaType type, @Nullable List<Typed> results) {
-		Target target = new Target(this.finallyDepth, null, false, false, true);
+		Target target = new Target(null, false, false, true);
 		Selection selection = selection(block, true);
 		if (!block.arrow() && !separate(selection.arms())) {
 			throw unsupported(block.pos(), "a switch expression whose cases run into the next");

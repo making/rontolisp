@@ -22,6 +22,7 @@ import am.ik.rontolisp.cli.CompileFrontendAccess;
 import am.ik.rontolisp.cli.JvmSourceCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
+import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
@@ -55,10 +56,10 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * output is sliced back per case, so a failure names its case and its leg. A
  * {@code standalone:} case is a file of its own, per leg: one that starts another way, or
  * one that ENDS with an uncaught exception -- it prints {@code stdout}, then reports
- * {@code error}, after {@code Exception in thread "main"} under the JDK and after the
- * pipeline's {@code Unhandled condition:} everywhere else. A {@code refused:} case is a
- * program a compiler refuses: the JDK has to report {@code error} at {@code line}, and
- * the front end the same line and a message starting with it.
+ * {@code error} after {@code Exception in thread "main"} on standard error and exits with
+ * the status 1, on every leg. A {@code refused:} case is a program a compiler refuses:
+ * the JDK has to report {@code error} at {@code line}, and the front end the same line
+ * and a message starting with it.
  *
  * <p>
  * Like {@code StarlarkSpecE2eTest} this needs no native binary: every leg goes through
@@ -81,8 +82,11 @@ class JavaSpecE2eTest {
 	 * @param file the file's name, which the launch protocol reads
 	 * @param error the text of the uncaught exception it ends with, or {@code null} when
 	 * it ends normally
+	 * @param stderr the whole of its standard error but a JDK's frame lines, or
+	 * {@code null} when only the report of {@code error} is checked
 	 */
-	record Standalone(String name, String file, String source, String stdout, @Nullable String error) {
+	record Standalone(String name, String file, String source, String stdout, @Nullable String error,
+			@Nullable String stderr) {
 
 		String stem() {
 			return "Standalone" + this.file.replace(".java", "");
@@ -163,8 +167,7 @@ class JavaSpecE2eTest {
 		List<Standalone> cases = loadSpec().standalone();
 		for (Standalone s : cases == null ? List.<Standalone>of() : cases) {
 			legs.add(dynamicTest(s.name() + " JDK", () -> {
-				Ended ended = runOnJdk(s.file(), s.source());
-				assertEnded(s, "JDK", ended, "Exception in thread \"main\" ");
+				assertEnded(s, "JDK", runOnJdk(s.file(), s.source()));
 			}));
 			legs.add(dynamicTest(s.name() + " INTERPRETER", () -> standaloneOnInterpreter(s)));
 			legs.add(dynamicTest(s.name() + " JVM", () -> standaloneOnJvm(s)));
@@ -178,8 +181,7 @@ class JavaSpecE2eTest {
 					Path module = compileWasm(file, s.source(), component, s.stem());
 					assertEnded(s, leg, ended(
 							new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", module.toString())
-								.start()),
-							"Unhandled condition: ");
+								.start()));
 				}));
 			}
 		}
@@ -260,17 +262,24 @@ class JavaSpecE2eTest {
 		return new Ended(stdout, Files.readString(errors, StandardCharsets.UTF_8), process.exitValue());
 	}
 
-	private static void assertEnded(Standalone s, String leg, Ended ended, String reportPrefix) {
+	private static void assertEnded(Standalone s, String leg, Ended ended) {
 		String where = where(s, leg, ended.stderr());
 		assertThat(ended.stdout()).as("%s", where).isEqualTo(s.stdout());
+		if (s.stderr() != null) {
+			assertThat(splitLines(ended.stderr()).stream()
+				.filter(line -> !line.matches("\\s+(at |\\.\\.\\. \\d+ more).*"))
+				.toList()).as("%s", where).containsExactlyElementsOf(splitLines(s.stderr()));
+		}
 		if (s.error() == null) {
 			assertThat(ended.exit()).as("%s", where).isZero();
 			return;
 		}
-		// the report first; what the host adds about the dead process follows
-		assertThat(splitLines(ended.stderr())).as("%s", where).first().isEqualTo(reportPrefix + s.error());
-		assertThat(ended.exit()).as("%s: expected a non-zero exit", where).isNotZero();
+		// the report first; the JDK's stack trace follows
+		assertThat(splitLines(ended.stderr())).as("%s", where).first().isEqualTo(UNCAUGHT + s.error());
+		assertThat(ended.exit()).as("%s: expected the status 1", where).isEqualTo(1);
 	}
+
+	private static final String UNCAUGHT = "Exception in thread \"main\" ";
 
 	private static String where(Standalone s, String leg, String stderr) {
 		return "standalone case '%s' on %s%n--- source ---%n%s--- end source ---%n--- stderr ---%n%s"
@@ -279,29 +288,26 @@ class JavaSpecE2eTest {
 
 	private static void standaloneOnInterpreter(Standalone s) throws Exception {
 		Path file = write(s.stem() + "-INTERPRETER", s.file(), s.source());
-		Throwable[] thrown = new Throwable[1];
+		int[] status = new int[1];
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		CliStack.call("java-spec", () -> {
-			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
-			try {
-				for (LispVal form : SourceLanguage.forFile(file.toString(), null)
-					.read(s.source(), Features.INTERPRETER, file.toString())) {
-					evaluator.eval(form);
+		ByteArrayOutputStream err = new ByteArrayOutputStream();
+		try (ThreadStdio.Scope _ = ThreadStdio.err(err)) {
+			CliStack.call("java-spec", () -> {
+				LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+				try {
+					for (LispVal form : SourceLanguage.forFile(file.toString(), null)
+						.read(s.source(), Features.INTERPRETER, file.toString())) {
+						evaluator.eval(form);
+					}
 				}
-			}
-			catch (Throwable ex) {
-				thrown[0] = ex;
-			}
-			return null;
-		});
-		String where = where(s, "INTERPRETER", "");
-		assertThat(out.toString(StandardCharsets.UTF_8)).as("%s", where).isEqualTo(s.stdout());
-		if (s.error() == null) {
-			assertThat(thrown[0]).as("%s", where).isNull();
+				catch (LispExitSignal exit) {
+					status[0] = exit.code();
+				}
+				return null;
+			});
 		}
-		else {
-			assertThat(thrown[0]).as("%s: expected a failure", where).isNotNull().hasMessage(s.error());
-		}
+		assertEnded(s, "INTERPRETER", new Ended(out.toString(StandardCharsets.UTF_8),
+				err.toString(java.nio.charset.Charset.defaultCharset()), status[0]));
 	}
 
 	// The program may die, so it runs in a process of its own: with the class and the
@@ -321,8 +327,7 @@ class JavaSpecE2eTest {
 		assertEnded(s, "JVM",
 				ended(new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-cp",
 						dir.toString(), s.stem())
-					.start()),
-				"Unhandled condition: ");
+					.start()));
 	}
 
 	// Starts run on a thread of its own and answers its result, rethrowing what it threw.

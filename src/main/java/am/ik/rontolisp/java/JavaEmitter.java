@@ -2,6 +2,7 @@ package am.ik.rontolisp.java;
 
 import java.util.List;
 
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
@@ -64,6 +65,9 @@ interface JavaEmitter {
 		LispVal objectMethod(String signature, Typed receiver, Invocation call);
 
 		LispReadException unsupported(int pos, String what);
+
+		/** A variable of its own, for a value a member reads twice. */
+		LispSymbol temporary();
 
 		/**
 		 * The function answering any value's {@code toString()}: what a member taking

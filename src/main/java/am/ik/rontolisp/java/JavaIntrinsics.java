@@ -325,8 +325,10 @@ final class JavaIntrinsics {
 									call("floor", call("%unix-nano-time"), integer(1000000))))
 					.statik("nanoTime", Primitive.LONG, host("%nano-time"))
 					.statik("exit", Primitive.VOID, runtime("exit"), Primitive.INT)
-					.statik("arraycopy", Primitive.VOID, runtime("arraycopy"), object, Primitive.INT, object,
-							Primitive.INT, Primitive.INT)
+					.statik("arraycopy", Primitive.VOID, (lowering, call) -> runtimeCall("arraycopy", call.argument(0),
+							call.argument(1), call.argument(2), call.argument(3), call.argument(4),
+							arrayKind(call.arguments().get(0).type()), arrayKind(call.arguments().get(2).type())),
+							object, Primitive.INT, object, Primitive.INT, Primitive.INT)
 					.statik("identityHashCode", Primitive.INT, runtime("identity-hash-code"), object)
 					.statik("lineSeparator", classes.libraryType(STRING),
 							(lowering, call) -> JavaForms.string("\n")).made;
@@ -404,8 +406,7 @@ final class JavaIntrinsics {
 			.constructor((lowering, call) -> runtimeCall("chars-string", call.argument(0), call.argument(1),
 					call.argument(2)), characters, i, i)
 			.method("length", i, host("length"))
-			.method("charAt", Primitive.CHAR,
-					(lowering, call) -> call("char-code", call("char", call.self(), call.argument(0))), i)
+			.method("charAt", Primitive.CHAR, JavaIntrinsics::charAt, i)
 			.method("isEmpty", b, (lowering, call) -> call("=", call("length", call.self()), integer(0)))
 			.method("isBlank", b, runtime("blank-p"))
 			.method("equals", b, (lowering, call) -> {
@@ -471,6 +472,44 @@ final class JavaIntrinsics {
 					object, new ArrayType(object))
 			.varargs()
 			.any("valueOf", true, string, object, (lowering, call) -> text(lowering, call, 0)).made;
+	}
+
+	/**
+	 * An array's type as the message of {@code System.arraycopy} names it: the element's
+	 * primitive type, {@code object array}; {@code nil} for a type that is no array.
+	 */
+	private static LispVal arrayKind(JavaType type) {
+		if (!(type instanceof ArrayType array)) {
+			return JavaForms.NIL;
+		}
+		return JavaForms.string(array.element() instanceof Primitive primitive ? primitive.toString() : "object array");
+	}
+
+	/**
+	 * {@code String.charAt}: the index tested against the string's length where it is
+	 * read -- the host's {@code char} checks nothing on the compiled backends -- and the
+	 * language's exception outside it, then the host's character. A call of a function of
+	 * the run time doing both cost a loop over a string twice the time on wasm
+	 * (.kb/java-frontend.md, "Exceptions").
+	 */
+	private static LispVal charAt(Context lowering, Invocation call) {
+		List<LispVal> bindings = new ArrayList<>();
+		LispVal text = held(lowering, call.self(), bindings);
+		LispVal index = held(lowering, call.argument(0), bindings);
+		LispVal test = call("if", call("or", call("<", index, integer(0)), call(">=", index, call("length", text))),
+				runtimeCall("string-index", index, text));
+		LispVal read = call("char-code", call("char", text, index));
+		return bindings.isEmpty() ? call("progn", test, read) : list(cl("let*"), list(bindings), test, read);
+	}
+
+	/** A form read twice: itself when it is simple, else a variable bound to it. */
+	private static LispVal held(Context lowering, LispVal form, List<LispVal> bindings) {
+		if (JavaForms.isSimple(form)) {
+			return form;
+		}
+		LispSymbol variable = lowering.temporary();
+		bindings.add(list(variable, form));
+		return variable;
 	}
 
 	private static LispVal characters() {

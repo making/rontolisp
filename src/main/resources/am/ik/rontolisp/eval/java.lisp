@@ -41,9 +41,19 @@
                             (rontolisp::%java-throwable-object condition))
                    stream))))
 
+;; An exception the run time raises: a simple error whose text is what a JDK prints for
+;; it, "java.lang.X" or "java.lang.X: message" -- a text, not a condition class of its
+;; own, so a program that holds what it caught pays for no class (.kb/java-frontend.md).
+(defun rontolisp::%java-raise (class message)
+  (error "~A"
+   (if message (%string-concat (%string-concat class ": ") message) class)))
+
+(defun rontolisp::%java-npe ()
+  (rontolisp::%java-raise "java.lang.NullPointerException" nil))
+
 (defun rontolisp::%java-throw (object describe)
   (if (null object)
-      (error "NullPointerException: throw of null")
+      (rontolisp::%java-npe)
       (error 'rontolisp::%java-throwable :object object :describe describe)))
 
 ;; The object a condition holds, nil for a condition that is no thrown object.
@@ -52,31 +62,115 @@
       (rontolisp::%java-throwable-object condition)
       nil))
 
-(defun rontolisp::%java-division-by-zero-p (condition)
-  (if (typep condition 'division-by-zero) t nil))
-
 ;; The message of ArrayIndexOutOfBoundsException for a condition that is an index
 ;; outside an array -- a type error whose type is (integer 0 (length)) -- else nil.
 (defun rontolisp::%java-index-error (condition)
-  (if (typep condition 'type-error)
-      (let ((type (type-error-expected-type condition))
-            (index (type-error-datum condition)))
-        (if (and (consp type) (eq (car type) 'integer) (eql (cadr type) 0)
-                 (consp (cddr type)) (consp (caddr type)) (integerp index))
-            (%string-concat (%string-concat
-                             (%string-concat "Index " (%decimal-piece index))
-                             " out of bounds for length ")
-                            (%decimal-piece (car (caddr type))))
+  (let ((type (type-error-expected-type condition))
+        (index (type-error-datum condition)))
+    (if (and (consp type) (eq (car type) 'integer) (eql (cadr type) 0)
+             (consp (cddr type)) (consp (caddr type)) (integerp index))
+        (rontolisp::%java-index-text index (car (caddr type)))
+        nil)))
+
+(defun rontolisp::%java-index-text (index length)
+  (%string-concat (%string-concat
+                   (%string-concat "Index " (%decimal-piece index))
+                   " out of bounds for length ") (%decimal-piece length)))
+
+(defun rontolisp::%java-range-text (start end length)
+  (%string-concat (%string-concat (%string-concat (%string-concat "Range ["
+                                                   (%decimal-piece start)) ", ")
+                                  (%string-concat (%decimal-piece end)
+                                   ") out of bounds for length "))
+                  (%decimal-piece length)))
+
+;; The text of an exception the run time raised, else nil.
+(defun rontolisp::%java-raised-text (condition)
+  (if (typep condition 'simple-error)
+      (let ((text (simple-condition-format-control condition)))
+        (if (and (stringp text) (> (length text) 5)
+                 (string= (%substring text 0 5) "java."))
+            text
             nil))
       nil))
+
+;; The text of the exception a condition of the host is -- a division by zero, an index
+;; outside an array, a structure's accessor, an array's element or a string's character
+;; read on NIL, which is null -- else nil.
+(defun rontolisp::%java-host-text (condition)
+  (cond ((typep condition 'division-by-zero)
+         "java.lang.ArithmeticException: / by zero")
+        ((typep condition 'type-error)
+         (let ((index (rontolisp::%java-index-error condition)))
+           (cond (index (%string-concat
+                         "java.lang.ArrayIndexOutOfBoundsException: " index))
+                 ((null (type-error-datum condition))
+                  "java.lang.NullPointerException")
+                 (t nil))))
+        (t nil)))
+
+;; THE TABLE: the exception a condition the run time or the host raised is, as
+;; (class . message); any other error is a RuntimeException of its text. A thrown
+;; object's own condition is no entry: it IS the object. JavaLowering.RAISED lists the
+;; classes this answers; JavaLoweringTest holds the two together.
+(defun rontolisp::%java-exception-of (condition)
+  (let ((text (rontolisp::%java-raised-text condition)))
+    (if (null text) (setq text (rontolisp::%java-host-text condition)))
+    (if text
+        (let ((colon (search ": " text)))
+          (if colon
+              (cons (%substring text 0 colon)
+                    (%substring text (+ colon 2) (length text)))
+              (cons text nil)))
+        (cons "java.lang.RuntimeException"
+              (rontolisp::%java-condition-text condition)))))
 
 (defun rontolisp::%java-condition-text (condition)
   (%normalize-string (princ-to-string condition)))
 
+;; What nothing caught: the line a JDK writes first, and the status 1. An error of
+;; rontolisp's own is a RuntimeException of its text where it is a simple error, else of
+;; no message: re-signalling it, or printing it, would bring every condition class and
+;; the printer into every program (.kb/java-frontend.md, "Exceptions").
+(defun rontolisp::%java-uncaught (condition)
+  (let ((text (rontolisp::%java-raised-text condition)))
+    (if (null text) (setq text (rontolisp::%java-host-text condition)))
+    (rontolisp::%java-report-uncaught
+     (cond (text text)
+           ((typep condition 'simple-error)
+            (%string-concat "java.lang.RuntimeException: "
+                            (simple-condition-format-control condition)))
+           (t "java.lang.RuntimeException")))))
+
+;; The same in a program that throws objects: one is reported by its toString().
+(defun rontolisp::%java-uncaught-thrown (condition)
+  (if (typep condition 'rontolisp::%java-throwable)
+      (rontolisp::%java-report-uncaught
+       (funcall (rontolisp::%java-throwable-describe condition)
+                (rontolisp::%java-throwable-object condition)))
+      (rontolisp::%java-uncaught condition)))
+
+(defun rontolisp::%java-report-uncaught (text)
+  (finish-output)
+  (%warn (%string-concat "Exception in thread \"main\" " text))
+  (%host-exit 1))
+
 (defun rontolisp::%java-no-receiver (object signature)
   (if (null object)
-      (error "NullPointerException: ~A called on null" signature)
+      (rontolisp::%java-npe)
       (error "~A has no implementation for its receiver" signature)))
+
+;; new T[n]: a negative length is the language's exception.
+(defun rontolisp::%java-array-length (n)
+  (if (< n 0)
+      (rontolisp::%java-raise "java.lang.NegativeArraySizeException"
+                              (%decimal-piece n))
+      n))
+
+;; String.charAt outside the string: the language's exception.
+(defun rontolisp::%java-string-index (index s)
+  (rontolisp::%java-raise "java.lang.StringIndexOutOfBoundsException"
+                          (rontolisp::%java-index-text index (length s))))
 
 ;; --- text -------------------------------------------------------------------------
 
@@ -150,7 +244,7 @@
 
 ;; The class name of a value no class of the program answers for.
 (defun rontolisp::%java-class-name (x qualified)
-  (cond ((null x) (error "NullPointerException: getClass() called on null"))
+  (cond ((null x) (rontolisp::%java-npe))
    ((stringp x)
     (if (simple-string-p x)
         (if qualified "java.lang.String" "String")
@@ -196,7 +290,7 @@
 ;; Object.equals of a value no class of the program answers for: a string and a box
 ;; by value, anything else by identity.
 (defun rontolisp::%java-equals (a b)
-  (cond ((null a) (error "NullPointerException: equals(Object) called on null"))
+  (cond ((null a) (rontolisp::%java-npe))
         ((stringp a)
          (if (simple-string-p a) (rontolisp::%java-string-equals a b) (eq a b)))
         ((integerp a) (if (integerp b) (= a b) nil))
@@ -235,7 +329,7 @@
       (if (>= h 2147483648) (- h 4294967296) h))))
 
 (defun rontolisp::%java-hash-code (x)
-  (cond ((null x) (error "NullPointerException: hashCode() called on null"))
+  (cond ((null x) (rontolisp::%java-npe))
         ((stringp x)
          (if (simple-string-p x)
              (rontolisp::%java-string-hash x)
@@ -256,14 +350,10 @@
 (defun rontolisp::%java-boolean-p (x) (if (or (eq x t) (eq x :false)) t nil))
 
 ;; What reading a box that is null as its primitive raises.
-(defun rontolisp::%java-null-unbox ()
-  (error "NullPointerException: a box that is null was read as its primitive"))
+(defun rontolisp::%java-null-unbox () (rontolisp::%java-npe))
 
 (defun rontolisp::%java-unbox-boolean (x)
-  (cond ((eq x t) t)
-   ((eq x :false) nil)
-   (t (error
-       "NullPointerException: a Boolean that is null was read as a boolean"))))
+  (cond ((eq x t) t) ((eq x :false) nil) (t (rontolisp::%java-npe))))
 
 ;; (int) and (long) of a double: toward zero, and the nearest value of the type for
 ;; one outside it.
@@ -302,6 +392,13 @@
 ;; type (JavaLowering.arrayKind): 1 an int, 2 a double, 3 a byte, 4 a short or a char,
 ;; 5 a float, 6 a boolean; 0 any other, which starts as INITIAL.
 (defun rontolisp::%java-new-array (lengths kind initial)
+  (let ((rest lengths))
+    (while rest
+      (rontolisp::%java-array-length (car rest))
+      (setq rest (cdr rest))))
+  (rontolisp::%java-new-rows lengths kind initial))
+
+(defun rontolisp::%java-new-rows (lengths kind initial)
   (let ((n (car lengths)))
     (if (null (cdr lengths))
         (cond
@@ -320,17 +417,16 @@
         (let ((rows (make-array n :initial-element nil)) (i 0))
           (while (< i n)
             (setf (aref rows i)
-                  (rontolisp::%java-new-array (cdr lengths) kind initial))
+                  (rontolisp::%java-new-rows (cdr lengths) kind initial))
             (setq i (+ i 1)))
           rows))))
 
-(defun rontolisp::%java-null-switch ()
-  (error "NullPointerException: a switch over null"))
+(defun rontolisp::%java-null-switch () (rontolisp::%java-npe))
 
 ;; A switch that covers its selector's type by its cases reaches this only when the
 ;; lowering is wrong.
 (defun rontolisp::%java-no-match ()
-  (error "MatchException: no case of the switch takes the value"))
+  (rontolisp::%java-raise "java.lang.MatchException" nil))
 
 ;; --- String, StringBuilder ----------------------------------------------------------
 
@@ -359,8 +455,8 @@
 (defun rontolisp::%java-substring (s start end)
   (let ((end (if end end (length s))))
     (if (or (< start 0) (> start end) (> end (length s)))
-        (error "StringIndexOutOfBoundsException: begin ~D, end ~D, length ~D"
-               start end (length s)))
+        (rontolisp::%java-raise "java.lang.StringIndexOutOfBoundsException"
+         (rontolisp::%java-range-text start end (length s))))
     (%substring s start end)))
 
 (defun rontolisp::%java-sb-append (builder text)
@@ -378,9 +474,7 @@
   (%normalize-string (subseq builder 0 (length builder))))
 
 (defun rontolisp::%java-sb-char (builder index)
-  (if (or (< index 0) (>= index (length builder)))
-      (error "StringIndexOutOfBoundsException: index ~D, length ~D" index
-             (length builder)))
+  (rontolisp::%java-sb-index builder index)
   (char-code (aref builder index)))
 
 ;; --- numbers: bits, parsing, text ------------------------------------------------------
@@ -809,7 +903,8 @@
 
 (defun rontolisp::%java-repeat (s count)
   (if (< count 0)
-      (error "IllegalArgumentException: count is negative: ~D" count))
+      (rontolisp::%java-raise "java.lang.IllegalArgumentException"
+       (%string-concat "count is negative: " (%decimal-piece count))))
   (let ((builder (rontolisp::%java-sb-new)) (i 0))
     (while (< i count)
       (rontolisp::%java-sb-append builder s)
@@ -872,8 +967,27 @@
 
 ;; String.valueOf(char[]) and new String(char[], offset, count).
 (defun rontolisp::%java-chars-string (codes offset count)
-  (if (null codes)
-      (error "NullPointerException: a char[] that is null was read as text"))
+  (if (null codes) (rontolisp::%java-npe))
+  (if (and count
+           (or (< offset 0) (< count 0) (> offset (- (length codes) count))))
+      (rontolisp::%java-raise "java.lang.StringIndexOutOfBoundsException"
+                              (%string-concat (%string-concat (%string-concat
+                                                               (%string-concat
+                                                                "Range ["
+                                                                (%decimal-piece
+                                                                 offset))
+                                                               (%string-concat
+                                                                ", "
+                                                                (%decimal-piece
+                                                                 offset)))
+                                                              (%string-concat
+                                                               " + "
+                                                               (%decimal-piece
+                                                                count)))
+                                              (%string-concat
+                                               ") out of bounds for length "
+                                               (%decimal-piece
+                                                (length codes))))))
   (let ((builder (rontolisp::%java-sb-new))
         (i offset)
         (end (if count (+ offset count) (length codes))))
@@ -1059,8 +1173,14 @@
 
 (defun rontolisp::%java-sb-check (builder start end)
   (if (or (< start 0) (> start end) (> end (length builder)))
-      (error "StringIndexOutOfBoundsException: start ~D, end ~D, length ~D"
-             start end (length builder))))
+      (rontolisp::%java-raise "java.lang.StringIndexOutOfBoundsException"
+       (rontolisp::%java-range-text start end (length builder)))))
+
+;; An index of a character of a StringBuilder.
+(defun rontolisp::%java-sb-index (builder index)
+  (if (or (< index 0) (>= index (length builder)))
+      (rontolisp::%java-raise "java.lang.StringIndexOutOfBoundsException"
+       (rontolisp::%java-index-text index (length builder)))))
 
 (defun rontolisp::%java-sb-substring (builder start end)
   (let ((end (if end end (length builder))))
@@ -1098,9 +1218,7 @@
   builder)
 
 (defun rontolisp::%java-sb-delete-char (builder index)
-  (if (or (< index 0) (>= index (length builder)))
-      (error "StringIndexOutOfBoundsException: index ~D, length ~D" index
-             (length builder)))
+  (rontolisp::%java-sb-index builder index)
   (rontolisp::%java-sb-delete builder index (+ index 1)))
 
 (defun rontolisp::%java-sb-replace (builder start end text)
@@ -1118,15 +1236,15 @@
   builder)
 
 (defun rontolisp::%java-sb-set-length (builder length)
-  (if (< length 0) (error "StringIndexOutOfBoundsException: length ~D" length))
+  (if (< length 0)
+      (rontolisp::%java-raise "java.lang.StringIndexOutOfBoundsException"
+       (%string-concat "String index out of range: " (%decimal-piece length))))
   (while (< (length builder) length) (vector-push-extend (code-char 0) builder))
   (setf (fill-pointer builder) length)
   nil)
 
 (defun rontolisp::%java-sb-set-char (builder index code)
-  (if (or (< index 0) (>= index (length builder)))
-      (error "StringIndexOutOfBoundsException: index ~D, length ~D" index
-             (length builder)))
+  (rontolisp::%java-sb-index builder index)
   (setf (aref builder index) (code-char code))
   nil)
 
@@ -1147,15 +1265,34 @@
 
 ;; System.arraycopy: the host's replace, which copies at the host's speed where an
 ;; element at a time is a generic read and a generic store each. Inside one array the
-;; range is copied out first: replace says nothing of two ranges that overlap.
-(defun rontolisp::%java-arraycopy (from from-start to to-start count)
-  (if (or (null from) (null to))
-      (error "NullPointerException: System.arraycopy of null"))
-  (if (or (< from-start 0) (< to-start 0) (< count 0)
-          (> (+ from-start count) (length from))
-          (> (+ to-start count) (length to)))
-      (error "ArrayIndexOutOfBoundsException: arraycopy: last source index ~D out of bounds for length ~D"
-             (+ from-start count) (length from)))
+;; range is copied out first: replace says nothing of two ranges that overlap. FROM-KIND
+;; and TO-KIND name the arrays' types as the language's message does ("int", "object
+;; array"), from their static types; nil where those are no array types.
+(defun rontolisp::%java-arraycopy
+    (from from-start to to-start count from-kind to-kind)
+  (if (or (null from) (null to)) (rontolisp::%java-npe))
+  (let ((problem
+         (cond ((< from-start 0)
+                (rontolisp::%java-copy-text "source index " from-start from
+                                            from-kind))
+               ((< to-start 0)
+                (rontolisp::%java-copy-text "destination index " to-start to
+                                            to-kind))
+               ((< count 0)
+                (%string-concat
+                 (%string-concat "arraycopy: length " (%decimal-piece count))
+                 " is negative"))
+               ((> (+ from-start count) (length from))
+                (rontolisp::%java-copy-text "last source index "
+                                            (+ from-start count) from
+                                            from-kind))
+               ((> (+ to-start count) (length to))
+                (rontolisp::%java-copy-text "last destination index "
+                                            (+ to-start count) to to-kind))
+               (t nil))))
+    (if problem
+        (rontolisp::%java-raise "java.lang.ArrayIndexOutOfBoundsException"
+                                problem)))
   (if (> count 0)
       (if (eq from to)
           (replace to (subseq from from-start (+ from-start count))
@@ -1165,6 +1302,13 @@
                    :start2 from-start
                    :end2 (+ from-start count))))
   nil)
+
+(defun rontolisp::%java-copy-text (what index array kind)
+  (%string-concat
+   (%string-concat (%string-concat "arraycopy: " what) (%decimal-piece index))
+   (%string-concat
+    (%string-concat " out of bounds for " (if kind kind "object array"))
+    (%string-concat (%string-concat "[" (%decimal-piece (length array))) "]"))))
 
 ;; IO.readln: a line of the standard input without its end, null at the end.
 (defun rontolisp::%java-readln ()
@@ -1339,8 +1483,11 @@
 
 ;; The class a conversion names for an argument it does not take.
 (defun rontolisp::%java-format-mismatch (conversion argument)
-  (error "IllegalFormatConversionException: ~A != ~A" conversion
-         (rontolisp::%java-class-name-or argument)))
+  (rontolisp::%java-raise "java.util.IllegalFormatConversionException"
+                          (%string-concat
+                           (%string-concat
+                            (%normalize-string (string conversion)) " != ")
+                           (rontolisp::%java-class-name-or argument))))
 
 (defun rontolisp::%java-class-name-or (x)
   (cond ((stringp x) "java.lang.String")
@@ -1478,22 +1625,29 @@
                        (+ (* precision 10) (digit-char-p (char control j))))
                       (setq j (+ j 1)))))
               (if (>= j n)
-                  (error "UnknownFormatConversionException: Conversion = '%'"))
+                  (rontolisp::%java-raise
+                   "java.util.UnknownFormatConversionException"
+                   "Conversion = '%'"))
               (let ((conversion (char control j)))
                 (cond
                  ((char= conversion #\n) (vector-push-extend #\Newline builder))
                  ((char= conversion #\%)
                   (rontolisp::%java-sb-append builder
                    (rontolisp::%java-pad "%" width (position #\- flags) nil)))
-                 (t (let ((at (if index index next)))
-                      (if (null index) (setq next (+ next 1)))
-                      (if (>= at (length arguments))
-                          (error "MissingFormatArgumentException: Format specifier '%~A'"
-                                 (%normalize-string (string conversion))))
-                      (rontolisp::%java-sb-append builder
-                                                  (rontolisp::%java-format-one
-                                                   conversion flags width
-                                                   precision (aref arguments at)
-                                                   to-string))))))
+                 (t
+                  (let ((at (if index index next)))
+                    (if (null index) (setq next (+ next 1)))
+                    (if (>= at (length arguments))
+                        (rontolisp::%java-raise
+                         "java.util.MissingFormatArgumentException"
+                         (%string-concat (%string-concat "Format specifier '%"
+                                                         (%normalize-string
+                                                          (string conversion)))
+                                         "'")))
+                    (rontolisp::%java-sb-append builder
+                                                (rontolisp::%java-format-one
+                                                 conversion flags width
+                                                 precision (aref arguments at)
+                                                 to-string))))))
               (setq i (+ j 1))))))
     (rontolisp::%java-sb-string builder)))

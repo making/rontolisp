@@ -11,4 +11,8 @@ public class ArrayIndexOutOfBoundsException extends IndexOutOfBoundsException {
     public ArrayIndexOutOfBoundsException(String message) {
         super(message);
     }
+
+    public ArrayIndexOutOfBoundsException(int index) {
+        super("Array index out of range: " + index);
+    }
 }

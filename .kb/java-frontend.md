@@ -8,9 +8,9 @@ so (`--source-language` help, `doc/*/java/`, `examples/java/README.md`). Provena
 rules: [java-frontend-provenance.md](java-frontend-provenance.md). `--no-gc` is refused by name
 (`CompileFrontend.run`). First slice: j68 (2026-11-17); the declarations and statements past
 it: j69 (2026-11-17); type parameters, inference, lambdas and boxes: j70 (2026-11-17); the
-library: j71 (2026-11-17); the numbers: j72 (2026-11-17); what comes after is `.todo/j73`
-(exceptions), `j74` (several files, a session), `j76` (threads), `j77`, `j78`, `j79` and `j81`
-(what j69, j70, j71 and j72 left).
+library: j71 (2026-11-17); the numbers: j72 (2026-11-17); the exceptions: j73 (2026-11-17);
+what comes after is `.todo/j74` (several files, a session), `j76` (threads), `j77`, `j78`, `j79`,
+`j81` and `j82` (what j69, j70, j71, j72 and j73 left).
 
 ## Where it sits
 
@@ -80,17 +80,12 @@ library: j71 (2026-11-17); the numbers: j72 (2026-11-17); what comes after is `.
   ("Static initialization" below).
 - **An exception is one condition type holding the object** (`%java-throwable`), `throw` is
   `(%java-throw obj #'describe)`, `describe` the program's `Throwable.toString()` target, which
-  the condition's `:report` calls: an uncaught one is `Unhandled condition: <toString()>` with
-  the location lines of any error. `try`: ONE `handler-case` clause on `error` binding
+  the condition's `:report` calls. `try`: ONE `handler-case` clause on `error` binding
   `(%java-thrown c)`, a `cond` over the clause types (each its own parameter), `(error c)` again
-  when none takes it; `finally` is `unwind-protect`. A Lisp `error` reaches a clause above
-  `ArithmeticException` (a `division-by-zero`, message `/ by zero`) or `RuntimeException`
-  (anything else) through the generated `%lisp-error`; a clause below lets it pass.
-- **A program that throws starts inside `(unwind-protect (main) nil)`**: outside EH mode a wasm
-  module reports nothing of an uncaught condition (true of any Lisp program). Measured
-  2026-11-17 with every program wrapped: `Sieve.wasm` 10,380 -> 18,170 bytes, `Fib` 2,728 ->
-  2,845, no time change; hence only a program holding a `throw` or a failing cast is wrapped. A
-  program whose only errors are the run time's stays silent on wasm (`.todo/j73`).
+  when none takes it; `finally` is `unwind-protect`. What the run time raises is converted AT
+  THE CATCH ("Exceptions" below).
+- **The program runs inside `(handler-case (progn init.. (main)) (error (c) (%java-uncaught c)))`**:
+  what nothing caught is a JDK's line and the status 1 on four backends ("Exceptions" below).
 - **`instanceof` / a cast**: a class is its predicate; an interface the generated `Iface%is`
   (the predicates of the topmost classes implementing it, of the library's values that are it,
   and of its lambdas: "Lambdas" below); a library class its own (`simple-string-p`, `integerp`,
@@ -284,8 +279,7 @@ lub of the lowers, else an upper, else OPEN.
   `case Integer i` took a `Long`, silently) and a structure in `java.lisp` (the pruner keys a
   bundled structure by name, `.kb/library-defun-pruning.md`; a cons needs nothing).
 - **Unboxing tests for `null`**: `(or box (%java-null-unbox))`, then `car` for a `long`,
-  `char-code` for a `char`; a literal is not tested. It raises a Lisp error with the text
-  `NullPointerException: ..`; the class is `.todo/j73`'s.
+  `char-code` for a `char`; a literal is not tested. It raises `NullPointerException` (j73).
 - **`==` of two boxes compares the values** (`eql`, `equal` for `Long`): a box is its value.
   The language promises it from -128 to 127 and allows it elsewhere. `==` of two strings:
   "The library" below.
@@ -438,8 +432,93 @@ virtual call can run --, classes used):
   only when something can read it there (no initializer, a lazy class, a read through a method
   the initialization calls or by a qualified name ahead of the field).
 - The decision is made at the end of a pass and the next pass is lowered with it.
-- Not the language's: a run-time error inside an eager initialization surfaces before `main`;
-  an exception out of a static initializer is not wrapped (`.todo/j73`).
+- Not the language's: a run-time error inside an eager initialization surfaces before `main`
+  (inside the entry's handler since j73, so it is reported as the JDK reports an uncaught one);
+  an exception out of a static initializer is not wrapped in `ExceptionInInitializerError`, and
+  a later use does not raise `NoClassDefFoundError` (stated in `deviations.md`, `.todo/j82`).
+
+## Exceptions (2026-11-17, j73)
+
+- **What the run time raises is TEXT, `(error "~A" "java.lang.X: message")`** (`%java-raise`,
+  `%java-npe`): a simple error whose format control is that text on four backends (the site
+  pre-renders it), no condition class of its own. Rejected: a `define-condition`
+  `%java-error` holding class and message -- its `typep` in the entry's handler cost every
+  program ~30 KB of wasm ("Measured" below).
+- **ONE table from a condition to an exception**, `%java-exception-of` in `java.lisp`:
+  `%java-raised-text` (a simple error whose control starts `java.`), `%java-host-text` (a
+  `division-by-zero` is `ArithmeticException: / by zero`; a `type-error` of `(integer 0 (n))`
+  `ArrayIndexOutOfBoundsException: Index i out of bounds for length n`; a `type-error` whose
+  datum is NIL -- a structure's accessor, an array's element read on null -- is
+  `NullPointerException`), else `RuntimeException` of the condition's text.
+  `JavaLowering.RAISED` lists the classes the table can answer; `JavaLoweringTest` checks that
+  every `java.*Exception` `java.lisp` names is in it.
+- **Converted at the CATCH, not where raised.** A clause whose class is above one of `RAISED`
+  marks it (`caughtRaised`); the generated `%lisp-error` makes the program's object of the
+  table's class by its constructor of a message (or of a message and a cause) for those
+  classes only, nil for any other, and a clause below lets the condition pass. So a field read
+  costs nothing: no test, the host's type error over NIL is the `NullPointerException`.
+  Raised at the site, where the host would say nothing or the wrong thing: a call going
+  straight to a body through a reference that can be null, an intrinsic's receiver and an
+  array's length (`(or x (%java-npe))`; `this`, a literal, a `new`, a concatenation are not
+  tested; a dispatcher's last arm answers null) -- measured free (a direct call per node of a
+  list walked 10^8 times: JVM 0.47 -> 0.45 s, wasm 1.02 -> 1.03 s); a negative array length
+  (`%java-array-length`, every length of `%java-new-array` first); `charAt` (the host's
+  `char` checks nothing compiled: the JVM gave a `type-error` of datum NIL, wasm a garbage
+  code), the test a statement ahead of the read -- a function of the run time doing it cost a
+  loop over a string twice the time on wasm; a failed cast's message,
+  `class A cannot be cast to class B` from `%class-name` (none for a lambda), without the
+  modules and loaders a JDK adds.
+- **A `NullPointerException` the run time raises has no message.** A JDK's describes the null
+  expression by its class file's names: `"<local4>"` under the source launcher, `"p"` under
+  `javac -g` (measured): no one text to match.
+- **Uncaught: the entry is `(handler-case (progn init.. start) (error (c) (%java-uncaught c)))`**,
+  `%java-uncaught-thrown` in a program that throws objects (it alone asks for
+  `%java-throwable`): `finish-output`, `%warn` of `Exception in thread "main" <text>`, then
+  `%host-exit 1` -- on the JVM `System.exit`, so a compiled Java class invoked in process ends
+  its JVM, as `System.exit` does (`UncaughtReportParityTest` runs compiled classes in process,
+  hence no Java case there: `JavaSpecE2eTest`'s `standalone:` legs run each in a process). An
+  error of rontolisp's own is `RuntimeException` of a simple error's text, else of no message:
+  printing it (`princ`) cost +24 KB, re-signalling it (a computed datum: the condition
+  narrowing bails) Fib 142 KB. No location lines, no stack trace.
+- **`try`-with-resources is written by the parser as JLS 14.20.3.1 spells it**
+  (`JavaParser.withResources`: the resource, a `%primary` local, `catch (Throwable)` keeping it
+  and rethrowing, a `finally` closing): the lowering sees only `Close`, which checks the type
+  (`try-with-resources not applicable to variable type`), and closes when not null, an
+  exception of `close()` suppressed by the body's. A resource that names a variable is declared
+  under a name of its own (`%resource<n>`). Multi-catch: `(or (A? x) (B? x))`, the parameter
+  the lub, alternatives related by subclassing refused with javac's message.
+- **`return`/`break`/`continue`/`yield` inside `finally`** are a non-local exit out of an
+  `unwind-protect` cleanup: CL's newer exit wins, which is Java's finally discarding what the
+  `try` did. wasm inlined a named `return-from`'s cleanups inside the handlers it left; fixed in
+  the backend ([error-handling.md](error-handling.md), Phase 1).
+- **`Throwable`** (source): a cause set once (`causeSet`; `initCause` refuses a second and
+  itself, with a JDK's messages), suppressed exceptions in an array, `printStackTrace()` writing
+  the exception, `\tSuppressed: ` and `Caused by: ` lines and `[CIRCULAR REFERENCE: ..]` as a
+  JDK does, without frames (`java-spec.yaml` `standalone:` with `stderr:`). The four constructors
+  where the API has them; `IndexOutOfBoundsException(int)` and kin.
+- **Checked exceptions are not checked** (`deviations.md`).
+- **Measured** (2026-11-17, Linux x86-64, GraalVM JDK 25.0.5, wasmtime 49, best of three; JVM /
+  precompiled wasm seconds, then `.wasm` / `.class` bytes; before -> after):
+
+  | program | before | after |
+  |---|---|---|
+  | `Fib` | 0.25 / 0.21, 2,728 / 20,743 | 0.23 / 0.23, 41,656 / 61,620 |
+  | `WrapInt` | 0.23 / 0.14, 2,508 / 21,992 | 0.24 / 0.13, 41,536 / 62,675 |
+  | `Sieve` | 0.67 / 0.51, 10,819 / 37,363 | 0.66 / 0.56, 48,675 / 74,169 |
+  | `WrapLong` | 0.16 / 0.07, 2,539 / 21,531 | 0.16 / 0.07, 41,465 / 62,204 |
+  | `charAt` over 26 letters 10^6 times | 0.26 / 0.76 | 0.28 / 1.44 |
+  | a `try` around a call, 10^8 rounds | 1.68 / 1.17 | 1.79 / 1.19 |
+  | the same with no `try` | 0.40 / 1.04 | 0.41 / 1.12 |
+
+  The size is the handler holding its condition: once a program can hold one, every signal
+  site builds one (`.kb/error-handling.md`, "The routing gate"). On `Fib.wasm`: the handler
+  and `%host-exit` alone 13,041 B; `write-string` to `*error-output*` instead of `%warn` +7 KB;
+  `type-error-datum` +23 KB (+2.5 KB in a program with a signal site of its own); the first
+  design (a `%java-error` class, `princ` for the rest) 52,201 B. The `charAt` loop pays EH
+  mode (~0.4 s: `_str_char_ref`'s string test in EH mode, the old forms under a `handler-case`
+  1.18 s) and the index test (~0.25 s). A `try` in a loop costs the JVM ~13 ns a round (the
+  `handler-case`), wasm nothing measurable. What would take the size back is
+  `.todo/j82`'s.
 
 ## The lowering table
 
@@ -469,6 +548,8 @@ virtual call can run --, classes used):
 | `above(T o)` with `T extends Comparable<T>` | `(defun Box.above(Comparable) (this o) ..)`; `held.compareTo(o)` is `(Comparable.compareTo(Object)%v held o)` |
 | `xs.get(i)` on a `List` | `(java.util.ArrayList.get(int) xs i)` while `ArrayList` is the one list the program makes, else `(java.util.List.get(int)%v xs i)` |
 | `a == b` (strings) | `(eq a b)`; every string constant of such a program is a global `%string<n>` set to `(%java-intern "text")` before `main` |
+| `try { .. } catch (A \| B e) { .. }` | `(handler-case .. (error (%t1) (let ((%t2 (or (%java-thrown %t1) (%lisp-error %t1)))) (cond ((or (A? %t2) (B? %t2)) (let ((e %t2)) ..)) (t (error %t1))))))` |
+| `p.get()`, `xs.length`, `s.charAt(i)` | `(C.get() (or p (%java-npe)))`; `(length (or xs (%java-npe)))`; `(progn (if (or (< i 0) (>= i (length s))) (%java-string-index i s)) (char-code (char s i)))` |
 | `Arrays.sort(ns)`, `Integer.parseInt(s)` | `(java.util.Arrays.sort(int[]) ns)` whose body is the native `(%java-sort-numbers a 0 (length a))`; `(rontolisp.internal.Support.parseInt(String,int) s 10)` |
 
 ## Measured (2026-11-17)
@@ -499,24 +580,23 @@ each is to refuse only what a compiler refuses: where the lowering does not foll
 exceptions; a blank local assigned twice and then captured (`.todo/j77`, with what is still
 refused by name); a type argument outside its parameter's bound and the unchecked warnings
 (`.todo/j78`). A value read through a type argument is trusted (no cast where it is used),
-and a store into an array of references is not checked. A `null` receiver of a direct call
-runs the body. The run time's errors keep their Lisp class and text, but for a division by zero
-and an index outside an array.
+and a store into an array of references is not checked. The run time's exceptions are the
+language's, but a `NullPointerException` has no message and a `ClassCastException` says nothing
+of modules and loaders ("Exceptions").
 
 ## Tests
 
 `JavaSpecE2eTest` over `java-spec.yaml`: the cases concatenated into one file behind a class
 calling each case's `main`, run under the JDK running the test (the oracle leg: an expectation
 that is not the JDK's fails there), the interpreter, the JVM, wasm and the component; a
-`standalone:` case is a file of its own (the launch rules, an uncaught exception); a
-`refused:` case is the scaffold with the case's statements, which the JDK has to refuse with
+`standalone:` case is a file of its own (the launch rules, an uncaught exception: the JDK's
+first line and the status 1 on every leg; `stderr:` the whole standard error but a JDK's frame
+lines); a `refused:` case is the scaffold with the case's statements, which the JDK has to refuse with
 `error` at that line and the front end at the same line with a message starting the same. In
 process, part of `./mvnw test`. `JavaLoweringTest` (the table as emitted forms, names and constants, the
 refusals and the compile errors with their positions;
 `theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`). `SourceLanguageTest#javaClaimsItsExtension`,
 `RontoLispCliStreamsTest#aJavaFileRunsCompilesAndIsRefusedWhereItCannot`,
-`SchemeLibraryTest#aCommonLispProgramReadsNoFrontEndsLibrary` (the gate),
-`UncaughtReportParityTest#aFrontEndsSourceIsLocatedTheSameWay`,
-`WasmReportLocationsTest#aFrontEndsProgramNamesTheFunctionHoldingTheForm`, `DocExamplesTest` (a
+`SchemeLibraryTest#aCommonLispProgramReadsNoFrontEndsLibrary` (the gate), `DocExamplesTest` (a
 ` ```java ` fence is a whole program, its output the plain block after it), `ExamplesE2eTest`
 (`examples/java/Orders.java`).

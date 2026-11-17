@@ -16,6 +16,7 @@ import am.ik.rontolisp.java.JavaSyntax.Break;
 import am.ik.rontolisp.java.JavaSyntax.Call;
 import am.ik.rontolisp.java.JavaSyntax.Cast;
 import am.ik.rontolisp.java.JavaSyntax.Catch;
+import am.ik.rontolisp.java.JavaSyntax.Close;
 import am.ik.rontolisp.java.JavaSyntax.CharLiteral;
 import am.ik.rontolisp.java.JavaSyntax.ClassDeclaration;
 import am.ik.rontolisp.java.JavaSyntax.CompilationUnit;
@@ -1116,8 +1117,16 @@ final class JavaParser {
 	}
 
 	private Statement tryStatement(int pos) {
-		if (at("(")) {
-			throw unsupported("a try-with-resources statement");
+		List<LocalVariable> resources = new ArrayList<>();
+		if (eat("(")) {
+			do {
+				if (at(")")) {
+					break;
+				}
+				resources.add(resource());
+			}
+			while (eat(";"));
+			expect(")");
 		}
 		Block body = block();
 		List<Catch> catches = new ArrayList<>();
@@ -1125,19 +1134,85 @@ final class JavaParser {
 			int at = this.tokens.get(this.p++).offset();
 			expect("(");
 			finalModifier();
-			TypeName type = typeName();
-			if (at("|")) {
-				throw unsupported("a multi-catch");
+			List<TypeName> types = new ArrayList<>();
+			types.add(typeName());
+			while (eat("|")) {
+				types.add(typeName());
 			}
 			String name = identifierOrUnnamed();
 			expect(")");
-			catches.add(new Catch(at, type, name, block()));
+			catches.add(new Catch(at, List.copyOf(types), name, block()));
 		}
 		Block finallyBlock = eat("finally") ? block() : null;
-		if (catches.isEmpty() && finallyBlock == null) {
+		if (resources.isEmpty() && catches.isEmpty() && finallyBlock == null) {
 			throw error("a try needs a catch or a finally");
 		}
-		return new Try(pos, body, catches, finallyBlock);
+		if (resources.isEmpty()) {
+			return new Try(pos, body, catches, finallyBlock);
+		}
+		Statement basic = withResources(resources, body);
+		return catches.isEmpty() && finallyBlock == null ? basic
+				: new Try(pos, new Block(pos, List.of(basic)), catches, finallyBlock);
+	}
+
+	/**
+	 * A resource: a declaration, or a variable or a field named, which is declared here
+	 * under a name of its own.
+	 */
+	private LocalVariable resource() {
+		if (atDeclaration()) {
+			LocalVariable declared = localVariable();
+			if (declared.declarators().size() != 1 || declared.declarators().get(0).initializer() == null) {
+				throw error("a resource is one variable with a value");
+			}
+			Declarator declarator = declared.declarators().get(0);
+			return declarator.name().equals("_") ? new LocalVariable(declared.pos(), declared.type(),
+					List.of(new Declarator(declarator.pos(), synthetic("%resource"), declarator.initializer())), true)
+					: new LocalVariable(declared.pos(), declared.type(), declared.declarators(), true);
+		}
+		int at = current().offset();
+		Expression named = expression();
+		if (!(named instanceof Name) && !(named instanceof Select)) {
+			throw error("the expression of a resource is a variable or a field");
+		}
+		return new LocalVariable(at, new TypeName(at, "var", List.of(), false, 0),
+				List.of(new Declarator(at, synthetic("%resource"), named)), true);
+	}
+
+	/**
+	 * The basic {@code try}-with-resources as the language specifies it, one resource a
+	 * level: the resource declared, the body tried, what it throws kept, and the resource
+	 * closed on the way out.
+	 */
+	private Statement withResources(List<LocalVariable> resources, Block body) {
+		Statement inner = body;
+		for (int i = resources.size() - 1; i >= 0; i--) {
+			LocalVariable resource = resources.get(i);
+			int at = resource.pos();
+			String name = resource.declarators().get(0).name();
+			String primary = synthetic("%primary");
+			String thrown = synthetic("%thrown");
+			TypeName throwable = new TypeName(at, "Throwable", List.of(), false, 0);
+			Catch keep = new Catch(at, List.of(throwable), thrown,
+					new Block(at,
+							List.of(new ExpressionStatement(at,
+									new Assign(at, "=", new Name(at, primary), new Name(at, thrown))),
+									new Throw(at, new Name(at, thrown)))));
+			inner = new Block(at,
+					List.of(resource,
+							new LocalVariable(at, throwable, List.of(new Declarator(at, primary, new NullLiteral(at))),
+									false),
+							new Try(at, inner instanceof Block block ? block : new Block(at, List.of(inner)),
+									List.of(keep), new Block(at, List.of(new Close(at, name, primary))))));
+		}
+		return inner;
+	}
+
+	private int synthetics;
+
+	/** A name no program can write. */
+	private String synthetic(String stem) {
+		return stem + (this.synthetics++);
 	}
 
 	// ---- expressions

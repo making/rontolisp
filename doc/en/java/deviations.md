@@ -102,28 +102,32 @@ Two things differ. An error the run time raises inside an initialization that ru
 starts. An exception thrown by a static initializer reaches the program as itself, not
 inside an `ExceptionInInitializerError`.
 
-**An error of the run time is not the language's exception.** A division by zero is an
-`ArithmeticException` with the message `/ by zero`, an index outside an array an
-`ArrayIndexOutOfBoundsException` with the language's message, and what a collection,
-`Integer.parseInt`, `Double.parseDouble`, `Objects.requireNonNull` and `Math.addExact` refuse
-is the language's exception with its message. A `null` receiver, a `switch` over `null`, a
-box that is `null` read as its primitive, an index outside a string or a `StringBuilder`, and
-a mismatched `String.format` are errors a `catch` of `RuntimeException`, `Exception` or
-`Throwable` takes, with another class and message than the language's. A call or a field
-read on `null` is not always detected. A failed cast throws `ClassCastException` with no
-message.
+**Two messages of the run time's exceptions differ.** An error of the run time is the
+exception the language names, and a `catch` takes it as that class: a member, an element or
+the length read through `null`, a `null` box read as its primitive and a `switch` over
+`null` are a `NullPointerException`, a division by zero an `ArithmeticException`, an index
+outside an array, a string or a `StringBuilder` an `ArrayIndexOutOfBoundsException` or a
+`StringIndexOutOfBoundsException`, a negative array length a `NegativeArraySizeException`,
+a mismatched `String.format` an `IllegalFormatException`. The messages are a JDK's, but
+two. A `NullPointerException` the run time raises has none, where a JDK's describes the
+expression that was `null` by names that depend on how the class was compiled. A
+`ClassCastException`'s message names the two classes and leaves out what a JDK adds of
+their modules and class loaders. A stack overflow is no `StackOverflowError` a program can catch.
 
-**An uncaught exception is reported in rontolisp's form**: `Unhandled condition:` and the
-exception's `toString()` on standard error, then a non-zero exit. There is no stack trace.
+**An uncaught exception is reported without a stack trace.** Standard error gets the line a
+JDK writes first, `Exception in thread "main"` and the exception's `toString()`, and the
+program exits with the status 1. No frame and no cause follows. `printStackTrace()` writes
+an exception, the exceptions it suppressed and its causes as a JDK does, without the frame
+lines.
 
 ```console
 $ rontolisp Uncaught.java
-Unhandled condition: java.lang.IllegalStateException: insufficient funds: 30
-  at Uncaught.java:4 in Uncaught.check(int,int)
+Exception in thread "main" java.lang.IllegalStateException: insufficient funds: 30
 ```
 
-**Some errors a compiler reports are not reported**, and such a program runs. A checked
-exception that is not declared is never reported. A local read before it is assigned is
+**Some errors a compiler reports are not reported**, and such a program runs. `throws`
+clauses are read and not checked: a checked exception that is neither caught nor declared
+is not reported, nor is a `catch` of one its `try` cannot throw. A local read before it is assigned is
 reported when no path assigns it, following `if`, `while` and `for`; an assignment anywhere
 inside a `switch`, a `try`, a `do` loop or a conditional expression counts as made. A
 statement that cannot be reached is reported after a `return`, a `throw`, a `break`, a
@@ -164,8 +168,7 @@ is an error naming it.
 Each of these is an error naming the construct and its position.
 
 - Static imports, annotation types, `assert`.
-- Class literals, `try`-with-resources, multi-catch, `return`, `break`, `continue` or
-  `yield` leaving a `finally` block.
+- Class literals.
 - A `switch` over a `long`, a `float`, a `double` or a `boolean`; a switch expression whose colon
   cases run into the next; `Interface.super.m()`; a class extending an inner class from
   outside that class's outer class; an anonymous class made with `outer.new` or with `<>`.

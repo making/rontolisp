@@ -1216,8 +1216,10 @@ cases:
       rt false null
       01234 141 1 first again 01234FG
       java.lang.Error: err | err | ExceptionsFatal | ExceptionsApp: m | null
-  # A division by zero is an ArithmeticException to a clause above it, any other Lisp
-  # error a RuntimeException; a clause below those lets it pass.
+  # An error the run time or the host raises is the exception the table in java.lisp
+  # names, made the program's object for a clause above it: a division by zero an
+  # ArithmeticException, an index outside an array an ArrayIndexOutOfBoundsException,
+  # any other Lisp error a RuntimeException; a clause below lets it pass.
   - name: a-lisp-error-reaches-the-catch-of-the-exception-it-is
     main: LispErrors
     source: |
@@ -1268,6 +1270,247 @@ cases:
       read 5 out of bounds out of bounds
       / by zero true java.lang.ArithmeticException: / by zero
       no number
+  # The run time raises the language's exceptions with a JDK's messages; a
+  # NullPointerException it raises has none (a JDK's describes the expression).
+  - name: the-run-time-raises-the-language-s-exceptions
+    main: Raised
+    source: |
+      class RaisedPoint {
+          int x;
+
+          int get() {
+              return 7;
+          }
+      }
+
+      class Raised {
+          interface Step {
+              void run() throws Exception;
+          }
+
+          static void attempt(String what, Step step) {
+              try {
+                  step.run();
+                  System.out.println(what + ": ran");
+              } catch (NullPointerException e) {
+                  System.out.println(what + ": " + e.getClass().getName() + " " + (e instanceof RuntimeException));
+              } catch (ClassCastException e) {
+                  System.out.println(what + ": " + e.getMessage().startsWith("class java.lang.String cannot be cast to class java.lang.Integer"));
+              } catch (Exception e) {
+                  System.out.println(what + ": " + e);
+              }
+          }
+
+          static RaisedPoint none() {
+              return null;
+          }
+
+          public static void main(String[] args) {
+              RaisedPoint p = none();
+              int[] xs = args.length > 5 ? new int[1] : null;
+              Integer boxed = args.length > 5 ? 1 : null;
+              String s = args.length > 5 ? "s" : null;
+              Object o = args.length > 5 ? "o" : null;
+              List<String> list = args.length > 5 ? new ArrayList<>() : null;
+              Object text = "text";
+              StringBuilder b = new StringBuilder("ab");
+              attempt("field", () -> System.out.println(p.x));
+              attempt("store", () -> p.x = 3);
+              attempt("call", () -> System.out.println(p.get()));
+              attempt("element", () -> System.out.println(xs[0]));
+              attempt("length", () -> System.out.println(xs.length));
+              attempt("for", () -> { for (int x : xs) System.out.println(x); });
+              attempt("unbox", () -> System.out.println(boxed + 1));
+              attempt("string", () -> System.out.println(s.length()));
+              attempt("object", () -> System.out.println(o.hashCode()));
+              attempt("list", () -> System.out.println(list.size()));
+              attempt("throw", () -> { RuntimeException e = null; throw e; });
+              attempt("cast", () -> System.out.println((Integer) text));
+              attempt("negative", () -> System.out.println(new int[args.length - 2].length));
+              attempt("negative rows", () -> System.out.println(new int[2][args.length - 3].length));
+              attempt("index", () -> (new int[2][2])[args.length][args.length + 2] = 1);
+              attempt("charAt", () -> System.out.println("abc".charAt(args.length + 5)));
+              attempt("substring", () -> System.out.println("abc".substring(2, args.length + 7)));
+              attempt("builder", () -> System.out.println(b.charAt(args.length - 1)));
+              attempt("builder range", () -> b.delete(3, 4));
+              attempt("set length", () -> b.setLength(args.length - 1));
+              attempt("repeat", () -> System.out.println("x".repeat(args.length - 2)));
+              attempt("chars", () -> System.out.println(new String(new char[2], 1, 5)));
+              attempt("arraycopy", () -> System.arraycopy(new int[3], 1, new int[3], 0, 3));
+              attempt("arraycopy to", () -> System.arraycopy(new String[3], 0, new String[2], 0, 3));
+              attempt("format", () -> System.out.println(String.format("%d", "x")));
+              attempt("format argument", () -> System.out.println(String.format("%s %s", "x")));
+              attempt("divide", () -> System.out.println(7 / args.length));
+              attempt("parse", () -> System.out.println(Integer.parseInt("7x")));
+              try {
+                  System.out.println(xs[1]);
+              } catch (IllegalStateException | NullPointerException e) {
+                  System.out.println("multi-catch " + e.getClass().getSimpleName());
+              }
+          }
+      }
+    expected: |
+      field: java.lang.NullPointerException true
+      store: java.lang.NullPointerException true
+      call: java.lang.NullPointerException true
+      element: java.lang.NullPointerException true
+      length: java.lang.NullPointerException true
+      for: java.lang.NullPointerException true
+      unbox: java.lang.NullPointerException true
+      string: java.lang.NullPointerException true
+      object: java.lang.NullPointerException true
+      list: java.lang.NullPointerException true
+      throw: java.lang.NullPointerException true
+      cast: true
+      negative: java.lang.NegativeArraySizeException: -2
+      negative rows: java.lang.NegativeArraySizeException: -3
+      index: java.lang.ArrayIndexOutOfBoundsException: Index 2 out of bounds for length 2
+      charAt: java.lang.StringIndexOutOfBoundsException: Index 5 out of bounds for length 3
+      substring: java.lang.StringIndexOutOfBoundsException: Range [2, 7) out of bounds for length 3
+      builder: java.lang.StringIndexOutOfBoundsException: Index -1 out of bounds for length 2
+      builder range: java.lang.StringIndexOutOfBoundsException: Range [3, 2) out of bounds for length 2
+      set length: java.lang.StringIndexOutOfBoundsException: String index out of range: -1
+      repeat: java.lang.IllegalArgumentException: count is negative: -2
+      chars: java.lang.StringIndexOutOfBoundsException: Range [1, 1 + 5) out of bounds for length 2
+      arraycopy: java.lang.ArrayIndexOutOfBoundsException: arraycopy: last source index 4 out of bounds for int[3]
+      arraycopy to: java.lang.ArrayIndexOutOfBoundsException: arraycopy: last destination index 3 out of bounds for object array[2]
+      format: java.util.IllegalFormatConversionException: d != java.lang.String
+      format argument: java.util.MissingFormatArgumentException: Format specifier '%s'
+      divide: java.lang.ArithmeticException: / by zero
+      parse: java.lang.NumberFormatException: For input string: "7x"
+      multi-catch NullPointerException
+  # try-with-resources is the statement the language specifies: the resources closed in
+  # reverse, a null one skipped, an exception of close suppressed by the body's, a
+  # return leaving through the closing; a finally may return, break and continue.
+  - name: try-with-resources-finally-exits-and-causes
+    main: Resources
+    source: |
+      class ResourcesHandle implements AutoCloseable {
+          final String name;
+          final boolean fails;
+
+          ResourcesHandle(String name, boolean fails) {
+              this.name = name;
+              this.fails = fails;
+              System.out.println("open " + name);
+          }
+
+          public void close() {
+              System.out.println("close " + name);
+              if (fails) {
+                  throw new IllegalStateException("close " + name);
+              }
+          }
+      }
+
+      class Resources {
+          static String use(boolean bodyFails, boolean closeFails) {
+              try (ResourcesHandle a = new ResourcesHandle("a", closeFails); ResourcesHandle none = null;
+                   ResourcesHandle b = new ResourcesHandle("b", false)) {
+                  if (bodyFails) {
+                      throw new IllegalArgumentException("body");
+                  }
+                  return "returned " + a.name + b.name;
+              } catch (RuntimeException e) {
+                  return e + " suppressed " + Arrays.toString(e.getSuppressed());
+              } finally {
+                  System.out.println("finally");
+              }
+          }
+
+          static int named(ResourcesHandle given) {
+              try (given) {
+                  return given.name.length();
+              }
+          }
+
+          static int exits() {
+              int total = 0;
+              for (int i = 0; i < 6; i++) {
+                  try {
+                      if (i == 1 || i == 3) {
+                          throw new IllegalStateException("lost " + i);
+                      }
+                      total += 10;
+                  } finally {
+                      if (i == 1) {
+                          continue;
+                      }
+                      if (i == 3) {
+                          break;
+                      }
+                      total += 1;
+                  }
+              }
+              return total;
+          }
+
+          @SuppressWarnings("finally")
+          static String overrides() {
+              try {
+                  throw new IllegalStateException("discarded");
+              } finally {
+                  return "the finally's";
+              }
+          }
+
+          public static void main(String[] args) {
+              System.out.println(use(false, false));
+              System.out.println(use(true, true));
+              System.out.println(use(false, true));
+              System.out.println(named(new ResourcesHandle("given", false)));
+              System.out.println(exits() + " " + overrides());
+              RuntimeException outer = new RuntimeException("outer", new IllegalStateException("inner"));
+              Exception free = new Exception("free");
+              System.out.println(outer.getCause() + " | " + new RuntimeException(new Error("wrapped")).getMessage() + " | " + new RuntimeException((Throwable) null).getMessage() + " | " + free.getCause() + " | " + new IndexOutOfBoundsException(3).getMessage());
+              try {
+                  free.initCause(free);
+              } catch (IllegalArgumentException e) {
+                  System.out.println(e.getMessage() + " " + (e.getCause() == free));
+              }
+              free.initCause(null);
+              try {
+                  free.initCause(outer);
+              } catch (IllegalStateException e) {
+                  System.out.println(e.getMessage());
+              }
+              try {
+                  free.addSuppressed(null);
+              } catch (NullPointerException e) {
+                  System.out.println(e.getMessage());
+              }
+              free.addSuppressed(outer);
+              System.out.println(free.getSuppressed().length + " " + free.getSuppressed()[0].getLocalizedMessage());
+          }
+      }
+    expected: |
+      open a
+      open b
+      close b
+      close a
+      finally
+      returned ab
+      open a
+      open b
+      close b
+      close a
+      finally
+      java.lang.IllegalArgumentException: body suppressed [java.lang.IllegalStateException: close a]
+      open a
+      open b
+      close b
+      close a
+      finally
+      java.lang.IllegalStateException: close a suppressed []
+      open given
+      close given
+      5
+      22 the finally's
+      java.lang.IllegalStateException: inner | java.lang.Error: wrapped | null | null | Index out of range: 3
+      Self-causation not permitted true
+      Can't overwrite cause with java.lang.RuntimeException: outer
+      Cannot suppress a null exception.
+      1 outer
   # A missing key is null and a boxed false is not: get of a map of Boolean tells the
   # two apart. put and set answer the value before.
   - name: a-list-and-a-map-hold-boxes-strings-and-objects
@@ -3930,8 +4173,8 @@ cases:
       For input string: "x1" true true true 1
       true false false true java.lang.Object true [1, 1, 2, 3, 4]
 standalone:
-  # An uncaught exception's report is its toString(): the pipeline's line on standard
-  # error and a non-zero exit, where the JDK names the thread.
+  # An uncaught exception is the line a JDK writes on standard error -- the exception's
+  # toString() -- and the status 1; no stack trace follows.
   - name: an-uncaught-exception-reports-its-class-and-message
     file: Uncaught.java
     source: |
@@ -3982,6 +4225,49 @@ standalone:
     stdout: |
       before
     error: "Rejected with code 7"
+  # An error of the run time nothing catches is the exception it is.
+  - name: an-uncaught-error-of-the-run-time-is-the-language-s-exception
+    file: OutOfBounds.java
+    source: |
+      public class OutOfBounds {
+          public static void main(String[] args) {
+              int[] xs = new int[2];
+              System.out.println("before");
+              xs[args.length + 3] = 1;
+          }
+      }
+    stdout: |
+      before
+    error: "java.lang.ArrayIndexOutOfBoundsException: Index 3 out of bounds for length 2"
+  # printStackTrace writes the exception, its suppressed ones and its causes as a JDK
+  # does, without a JDK's frame lines.
+  - name: print-stack-trace-writes-the-causes-and-the-suppressed
+    file: Traces.java
+    source: |
+      public class Traces {
+          public static void main(String[] args) {
+              Exception top = new Exception("top");
+              Exception middle = new IllegalStateException("middle", new Error("root"));
+              top.addSuppressed(middle);
+              middle.addSuppressed(new RuntimeException("deep"));
+              top.printStackTrace();
+              Throwable loop = new Exception("loop");
+              RuntimeException back = new RuntimeException("back", loop);
+              loop.initCause(back);
+              back.printStackTrace();
+              System.out.println("printed");
+          }
+      }
+    stdout: |
+      printed
+    stderr: |
+      java.lang.Exception: top
+      	Suppressed: java.lang.IllegalStateException: middle
+      		Suppressed: java.lang.RuntimeException: deep
+      	Caused by: java.lang.Error: root
+      java.lang.RuntimeException: back
+      Caused by: java.lang.Exception: loop
+      Caused by: [CIRCULAR REFERENCE: java.lang.RuntimeException: back]
   # Top-level methods and fields are the members of a class named as the file; java.base
   # is imported, IO is java.lang's.
   - name: a-compact-source-file-starts-at-its-instance-main
@@ -4189,3 +4475,9 @@ refused:
     - name: a-type-variable-out-of-scope
       body: 'T t = null;'
       error: "cannot find symbol"
+    - name: multi-catch-alternatives-related-by-subclassing
+      body: 'try { } catch (RuntimeException | IllegalStateException e) { }'
+      error: "Alternatives in a multi-catch statement cannot be related by subclassing"
+    - name: a-resource-that-is-no-auto-closeable
+      body: 'try (String s = "x") { }'
+      error: "incompatible types: try-with-resources not applicable to variable type"

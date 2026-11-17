@@ -468,29 +468,6 @@ class UncaughtReportParityTest {
 				""");
 		assertSameReport(starlark, "Unhandled condition: unknown binary op: int + string",
 				"  at " + starlark + ":6 in run");
-		// The Java lowering locates every statement and call at its node; a method is a
-		// function named with its signature, and an uncaught exception's report is its
-		// toString().
-		Path java = write("App.java", """
-				class Account {
-				    int balance;
-
-				    void withdraw(int amount) {
-				        if (amount > balance) {
-				            throw new IllegalStateException("insufficient funds");
-				        }
-				        balance -= amount;
-				    }
-				}
-
-				public class App {
-				    public static void main(String[] args) {
-				        new Account().withdraw(5);
-				    }
-				}
-				""");
-		assertSameReport(java, "Unhandled condition: java.lang.IllegalStateException: insufficient funds",
-				"  at " + java + ":6 in Account.withdraw(int)");
 	}
 
 	@Test

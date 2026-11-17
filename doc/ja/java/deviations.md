@@ -100,29 +100,31 @@ Report is initialized
 static 初期化子が投げた例外は、`ExceptionInInitializerError` に包まれず、そのままプログラムに
 届きます。
 
-**実行時のエラーは言語仕様の例外ではありません。** 0 による整数の除算は、メッセージが
-`/ by zero` の `ArithmeticException` です。配列の範囲外の添字は、言語仕様のメッセージを持つ
-`ArrayIndexOutOfBoundsException` です。コレクション、`Integer.parseInt`、
-`Double.parseDouble`、`Objects.requireNonNull`、`Math.addExact` が失敗したときに投げる例外は、
-クラスもメッセージも言語仕様のものです。`null` に対する呼び出し、`null` に対する `switch`、
-`null` のボックスのアンボクシング、文字列・`StringBuilder` の範囲外の添字、引数と変換が
-合わない `String.format` は、`RuntimeException`、`Exception`、`Throwable` の `catch` で捕捉
-できるエラーになりますが、クラスとメッセージは言語仕様のものと異なります。`null` に対する
-呼び出しやフィールドの読み出しは、検出されない場合があります。失敗したキャストは、メッセージの
-ない `ClassCastException` を投げます。
+**実行時の例外のメッセージのうち 2 つが異なります。** 実行時のエラーは言語仕様が定める例外で、
+`catch` はその例外のクラスとして捕捉します。`null` を通したメンバー・要素・長さの読み出し、
+`null` のボックスのアンボクシング、`null` に対する `switch` は `NullPointerException`、
+0 による整数の除算は `ArithmeticException`、配列・文字列・`StringBuilder` の範囲外の添字は
+`ArrayIndexOutOfBoundsException` または `StringIndexOutOfBoundsException`、負の長さの配列は
+`NegativeArraySizeException`、引数と変換が合わない `String.format` は
+`IllegalFormatException` です。メッセージは JDK のものと同じですが、2 つだけ異なります。
+実行時に起きる `NullPointerException` はメッセージを持ちません。JDK のメッセージは `null`
+だった式を名前で説明し、その名前はクラスのコンパイル方法によって変わるためです。
+`ClassCastException` のメッセージは 2 つのクラスを示し、JDK が加えるモジュールとクラス
+ローダーの説明を含みません。スタックオーバーフローは、プログラムが捕捉できる `StackOverflowError` になりません。
 
-**捕捉されなかった例外は rontolisp の形式で報告されます。** 標準エラー出力に
-`Unhandled condition:` と例外の `toString()` を書き、0 でない終了コードで終了します。
-スタックトレースはありません。
+**捕捉されなかった例外は、スタックトレースなしで報告されます。** 標準エラー出力に、JDK が
+最初に書く行、つまり `Exception in thread "main"` と例外の `toString()` を書き、終了ステータス
+1 で終了します。フレームと原因（cause）の行は続きません。`printStackTrace()` は、例外、
+その例外が抑制した例外、原因を JDK と同じ形で書きますが、フレームの行は書きません。
 
 ```console
 $ rontolisp Uncaught.java
-Unhandled condition: java.lang.IllegalStateException: insufficient funds: 30
-  at Uncaught.java:4 in Uncaught.check(int,int)
+Exception in thread "main" java.lang.IllegalStateException: insufficient funds: 30
 ```
 
 **コンパイラが報告するエラーの一部は報告されません。** そのようなプログラムは実行されます。
-宣言されていないチェック例外は報告しません。代入前のローカル変数の読み出しは、`if`、`while`、
+`throws` 節は読みますが検査しません。捕捉も宣言もされていないチェック例外と、`try` が投げ
+得ないチェック例外の `catch` は報告しません。代入前のローカル変数の読み出しは、`if`、`while`、
 `for` の分岐をたどって、どの経路でも代入されていない場合に報告します。`switch`、`try`、`do`
 ループ、条件式の中にある代入は、行われたものとして扱います。到達できない文は、`return`、
 `throw`、`break`、`continue`、終わらないループの直後にある場合に報告します。`return` の不足は、
@@ -161,8 +163,7 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 どれも、構文の名前と位置を示すエラーになります。
 
 - static import、アノテーション型、`assert`。
-- クラスリテラル、`try`-with-resources、マルチキャッチ、`finally` ブロックから抜ける
-  `return`、`break`、`continue`、`yield`。
+- クラスリテラル。
 - `long`、`float`、`double`、`boolean` に対する `switch`。コロン形式の `case` が次の `case` に
   フォールスルーする `switch` 式。`Interface.super.m()`。内部クラスを、その外側のクラスの外で
   継承するクラス。`outer.new` または `<>` で作る匿名クラス。

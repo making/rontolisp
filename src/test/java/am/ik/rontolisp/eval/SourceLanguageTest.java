@@ -117,7 +117,7 @@ class SourceLanguageTest {
 					"(DEFSTRUCT (|Main| (:CONC-NAME |Main.|) (:CONSTRUCTOR |%make-Main| NIL) (:PREDICATE |Main?|)"
 							+ " (:COPIER NIL)))",
 					"(DEFUN |Main.main()| (|this|) (WRITE-LINE \"#.\"))", "(DEFUN |Main.new()| NIL (|%make-Main|))",
-					"(|Main.main()| (|Main.new()|))");
+					"(HANDLER-CASE (|Main.main()| (|Main.new()|)) (ERROR (|%c|) (RONTOLISP::%JAVA-UNCAUGHT |%c|)))");
 		// A program is a whole file: there is no prompt to read a buffer at.
 		assertThatThrownBy(() -> new SourceSession(SourceLanguage.JAVA)).isInstanceOf(IllegalArgumentException.class)
 			.hasMessageContaining("--source-language java has no prompt yet");

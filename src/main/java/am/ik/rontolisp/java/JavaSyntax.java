@@ -333,7 +333,29 @@ final class JavaSyntax {
 	record Throw(int pos, Expression value) implements Statement {
 	}
 
-	record Catch(int pos, TypeName type, String name, Block body) {
+	/**
+	 * A {@code catch} clause.
+	 *
+	 * @param pos the {@code catch}
+	 * @param types the types it takes: several for a multi-catch
+	 * @param name its parameter
+	 * @param body its block
+	 */
+	record Catch(int pos, List<TypeName> types, String name, Block body) {
+	}
+
+	/**
+	 * What a {@code try}-with-resources does with a resource on its way out: closes it
+	 * when it is no {@code null}, an exception of {@code close} suppressed by the one the
+	 * body threw. The parser writes the statement as the language specifies it
+	 * ({@code JavaParser.withResources}); only this part is left to the lowering, which
+	 * checks the resource's type.
+	 *
+	 * @param pos the resource
+	 * @param resource the variable holding it
+	 * @param primary the variable holding what the body threw, or {@code null}
+	 */
+	record Close(int pos, String resource, String primary) implements Statement {
 	}
 
 	record Try(int pos, Block body, List<Catch> catches, @Nullable Block finallyBlock) implements Statement {
