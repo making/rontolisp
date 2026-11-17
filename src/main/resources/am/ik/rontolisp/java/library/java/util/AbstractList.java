@@ -72,6 +72,17 @@ public abstract class AbstractList<E> extends AbstractCollection<E> implements L
         return new IndexIterator<>(this);
     }
 
+    public ListIterator<E> listIterator() {
+        return listIterator(0);
+    }
+
+    public ListIterator<E> listIterator(int index) {
+        if (index < 0 || index > size()) {
+            throw new IndexOutOfBoundsException("Index: " + index + ", Size: " + size());
+        }
+        return new IndexWalk<>(this, index);
+    }
+
     public List<E> subList(int from, int to) {
         if (from < 0 || to > size() || from > to) {
             throw new IndexOutOfBoundsException("fromIndex: " + from + ", toIndex: " + to + ", size: " + size());
@@ -138,6 +149,75 @@ public abstract class AbstractList<E> extends AbstractCollection<E> implements L
             }
             list.remove(last);
             cursor = last;
+            last = -1;
+        }
+    }
+
+    // An iterator both ways over get, set, add and remove at an index.
+    static final class IndexWalk<E> implements ListIterator<E> {
+
+        private final List<E> list;
+
+        private int cursor;
+
+        // the element next() or previous() gave last, -1 once it was removed or one added
+        private int last = -1;
+
+        IndexWalk(List<E> list, int index) {
+            this.list = list;
+            this.cursor = index;
+        }
+
+        public boolean hasNext() {
+            return cursor < list.size();
+        }
+
+        public E next() {
+            if (cursor >= list.size()) {
+                throw new NoSuchElementException();
+            }
+            last = cursor;
+            return list.get(cursor++);
+        }
+
+        public boolean hasPrevious() {
+            return cursor > 0;
+        }
+
+        public E previous() {
+            if (cursor <= 0) {
+                throw new NoSuchElementException();
+            }
+            last = --cursor;
+            return list.get(cursor);
+        }
+
+        public int nextIndex() {
+            return cursor;
+        }
+
+        public int previousIndex() {
+            return cursor - 1;
+        }
+
+        public void remove() {
+            if (last < 0) {
+                throw new IllegalStateException();
+            }
+            list.remove(last);
+            cursor = last;
+            last = -1;
+        }
+
+        public void set(E e) {
+            if (last < 0) {
+                throw new IllegalStateException();
+            }
+            list.set(last, e);
+        }
+
+        public void add(E e) {
+            list.add(cursor++, e);
             last = -1;
         }
     }

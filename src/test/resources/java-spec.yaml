@@ -8,7 +8,8 @@
 # case -- the ci-spec.yaml idea. So every class of a case carries the case's name. A
 # `standalone` case is a file of its own, named `file`: one that starts another way, or
 # one that ENDS with an uncaught exception -- it prints `stdout`, then reports `error`.
-# `files` holds the other files of its source tree by path, written beside it.
+# `files` holds the other files of its source tree by path, written beside it; `stdin`
+# is what it reads from the standard input.
 #
 # Every expectation is what a JDK 25 prints, and the test runs the corpus under the JDK
 # running it as its first leg: an expectation that is not the JDK's fails there. Every
@@ -18,6 +19,8 @@
 # the statements of main. The JDK leg checks the error and its line, the front end leg
 # that it refuses at the same line with a message starting the same.
 imports: |
+  import java.io.*;
+  import java.nio.charset.StandardCharsets;
   import java.util.AbstractList;
   import java.util.ArrayDeque;
   import java.util.ArrayList;
@@ -33,6 +36,7 @@ imports: |
   import java.util.Hashtable;
   import java.util.Iterator;
   import java.util.List;
+  import java.util.ListIterator;
   import java.util.Map;
   import java.util.NoSuchElementException;
   import java.util.Objects;
@@ -4216,6 +4220,40 @@ cases:
               System.out.println(random.nextInt(100) + " " + random.nextInt() + " " + random.nextDouble() + " " + random.nextBoolean() + " " + random.nextLong() + " " + random.nextGaussian() + " " + random.nextInt(16) + " " + random.nextGaussian());
               Collections.shuffle(nums, new Random(7));
               System.out.println(nums);
+              List<String> walked = new ArrayList<>(List.of("b", "d", "f"));
+              ListIterator<String> walk = walked.listIterator();
+              while (walk.hasNext()) {
+                  int at = walk.nextIndex();
+                  String s = walk.next();
+                  if (s.equals("d")) {
+                      walk.set("D");
+                      walk.add("e");
+                  } else if (at == 0) {
+                      walk.remove();
+                      walk.add("a");
+                      walk.add("c");
+                  }
+              }
+              StringBuilder back = new StringBuilder();
+              while (walk.hasPrevious()) {
+                  back.append(walk.previousIndex()).append(walk.previous());
+              }
+              ListIterator<Integer> view = Arrays.asList(3, 4, 5).listIterator(1);
+              System.out.println(walked + " " + back + " " + view.previous() + view.next() + view.next() + " " + Collections.binarySearch(List.of(1, 3, 5, 7), 5) + " " + Collections.binarySearch(List.of(1, 3, 5, 7), 4) + " " + Collections.binarySearch(List.of("d", "b", "a"), "b", Comparator.reverseOrder()));
+              ListIterator<String> late = walked.listIterator(2);
+              walked.add("g");
+              for (int attempt = 0; attempt < 4; attempt++) {
+                  try {
+                      switch (attempt) {
+                          case 0 -> late.next();
+                          case 1 -> walked.listIterator(9);
+                          case 2 -> List.of(1, 2).listIterator().add(3);
+                          default -> view.remove();
+                      }
+                  } catch (ConcurrentModificationException | IndexOutOfBoundsException | UnsupportedOperationException ex) {
+                      System.out.println(ex.getClass().getSimpleName() + " " + ex.getMessage());
+                  }
+              }
           }
       }
     expected: |
@@ -4230,6 +4268,11 @@ cases:
       [3, 2, 1][apple, fig, pear][-1.0, 0.0, 2.5][9, 3, 7, 1][1, 2, 3, 0, 0][7, 7, 7]false1[fig, pear][1, 2]994[1, 3][a, b, c][false, false]1
       30 234785527 0.6832234717598454 false -1068554554583376509 0.2669736057242196 7 -0.5252767454241688
       [1, 5, 9, 3]
+      [a, c, D, e, f] 4f3e2D1c0a 334 2 -3 1
+      ConcurrentModificationException null
+      IndexOutOfBoundsException Index: 9, Size: 6
+      UnsupportedOperationException null
+      UnsupportedOperationException null
   # == of two strings compares references: the constants of one text are one object, a
   # computed string another, intern the constant's. split takes a text or one character
   # class; a StringBuilder is edited in place and is a CharSequence, as a string is.
@@ -4327,6 +4370,14 @@ cases:
               int[] source = {1, 2, 3, 4, 5};
               System.arraycopy(source, 0, source, 1, 4);
               System.out.println(plain.equals(plain) + " " + plain.equals(another) + " " + (plain == another) + " " + (plain.hashCode() == plain.hashCode()) + " " + plain.getClass().getName() + " " + plain.toString().startsWith("java.lang.Object@") + " " + Arrays.toString(source));
+              System.out.println(Integer.parseUnsignedInt("4294967295") + " " + Integer.parseUnsignedInt("ff", 16) + " " + Integer.toUnsignedString(-1) + " " + Integer.toUnsignedLong(-1) + " " + Double.longBitsToDouble(Double.doubleToLongBits(-0.0)) + " " + Double.longBitsToDouble(0x7ff0000000000000L) + " " + Double.longBitsToDouble(1L) + " " + Double.longBitsToDouble(0x400921fb54442d18L) + " " + Float.intBitsToFloat(0x7fc00000) + " " + Float.intBitsToFloat(1) + " " + Float.intBitsToFloat(0x40490fdb) + " " + Float.intBitsToFloat(0x80000000));
+              for (String text : new String[] {"-1", "4294967296"}) {
+                  try {
+                      Integer.parseUnsignedInt(text);
+                  } catch (NumberFormatException ex) {
+                      System.out.println(ex.getMessage());
+                  }
+              }
           }
       }
     expected: |
@@ -4344,6 +4395,310 @@ cases:
       Cannot parse null string
       For input string: "x1" true true true 1
       true false false true java.lang.Object true [1, 1, 2, 3, 4]
+      -1 255 4294967295 4294967295 -0.0 Infinity 4.9E-324 3.141592653589793 NaN 1.4E-45 3.1415927 -0.0
+      Illegal leading minus sign on unsigned string -1.
+      String value 4294967296 exceeds range of unsigned int.
+  # java.io's byte streams are Java source over byte[]: the array pair, the data pair
+  # (high byte first, writeUTF's modified UTF-8), mark and reset, the exceptions. A
+  # string's bytes are its UTF-8 unless a charset says ISO-8859-1 or US-ASCII; what is no
+  # UTF-8 decodes to U+FFFD.
+  - name: a-byte-stream-reads-and-writes-bytes-and-a-string-is-its-bytes
+    main: ByteStreams
+    source: |
+      class ByteStreams {
+          public static void main(String[] args) {
+              try {
+                  run();
+              } catch (IOException e) {
+                  throw new UncheckedIOException(e);
+              }
+          }
+
+          static void run() throws IOException {
+              ByteArrayOutputStream out = new ByteArrayOutputStream();
+              out.write(65);
+              out.write("héllo€".getBytes());
+              out.write(new byte[] {119, 120, 121, 122}, 1, 2);
+              System.out.println(out.size());
+              System.out.println(Arrays.toString(out.toByteArray()));
+              System.out.println(out.toString());
+              byte[] bs = "héllo".getBytes(StandardCharsets.UTF_8);
+              System.out.println(bs.length + " " + new String(bs, StandardCharsets.UTF_8) + " " + new String(bs, 0, 1));
+              System.out.println(Arrays.toString("héllo€".getBytes(StandardCharsets.ISO_8859_1)));
+              System.out.println(Arrays.toString("héllo€".getBytes("US-ASCII")));
+              System.out.println(new String(new byte[] {104, (byte) 233}, StandardCharsets.ISO_8859_1));
+              System.out.println(new String(new byte[] {104, (byte) 233}, "ascii").length());
+              ByteArrayInputStream in = new ByteArrayInputStream(out.toByteArray());
+              System.out.println(in.read() + " " + in.available());
+              byte[] buf = new byte[4];
+              System.out.println(in.read(buf) + " " + Arrays.toString(buf));
+              in.mark(0);
+              System.out.println(in.skip(2) + " " + in.read());
+              in.reset();
+              System.out.println(in.read() + " " + Arrays.toString(in.readAllBytes()) + " " + in.read() + " " + in.read(buf, 0, 0));
+              DataOutputStream data = new DataOutputStream(out);
+              out.reset();
+              data.writeInt(-2);
+              data.writeLong(1L << 40);
+              data.writeDouble(-0.5);
+              data.writeFloat(1.5f);
+              data.writeUTF("aé€\u0000z");
+              data.writeBoolean(true);
+              data.writeShort(-3);
+              data.writeChar('x');
+              data.writeByte(200);
+              data.writeBytes("ab");
+              data.writeChars("cd");
+              System.out.println(data.size() + " " + Arrays.toString(out.toByteArray()));
+              DataInputStream din = new DataInputStream(new ByteArrayInputStream(out.toByteArray()));
+              System.out.println(din.readInt() + " " + din.readLong() + " " + din.readDouble() + " " + din.readFloat());
+              String s = din.readUTF();
+              System.out.println(s.length() + " " + s.charAt(1) + " " + (int) s.charAt(3));
+              System.out.println(din.readBoolean() + " " + din.readShort() + " " + din.readChar() + " " + din.readByte() + " " + din.readUnsignedByte());
+              din.skipBytes(1);
+              System.out.println(din.readChar() + "" + din.readChar());
+              try {
+                  din.readInt();
+              }
+              catch (EOFException e) {
+                  System.out.println("eof " + e.getMessage());
+              }
+              try {
+                  in.read(buf, 2, 5);
+              }
+              catch (IndexOutOfBoundsException e) {
+                  System.out.println(e.getMessage());
+              }
+              try {
+                  new String(buf, 2, 5);
+              }
+              catch (IndexOutOfBoundsException e) {
+                  System.out.println(e);
+              }
+              try {
+                  "x".getBytes("nope");
+              }
+              catch (UnsupportedEncodingException e) {
+                  System.out.println(e);
+              }
+          }
+      }
+    expected: |
+      12
+      [65, 104, -61, -87, 108, 108, 111, -30, -126, -84, 120, 121]
+      Ahéllo€xy
+      6 héllo h
+      [104, -23, 108, 108, 111, 63]
+      [104, 63, 108, 108, 111, 63]
+      hé
+      2
+      65 11
+      4 [104, -61, -87, 108]
+      2 226
+      108 [111, -30, -126, -84, 120, 121] -1 -1
+      47 [-1, -1, -1, -2, 0, 0, 1, 0, 0, 0, 0, 0, -65, -32, 0, 0, 0, 0, 0, 0, 63, -64, 0, 0, 0, 9, 97, -61, -87, -30, -126, -84, -64, -128, 122, 1, -1, -3, 0, 120, -56, 97, 98, 0, 99, 0, 100]
+      -2 1099511627776 -0.5 1.5
+      5 é 0
+      true -3 x -56 97
+      cd
+      eof null
+      Range [2, 2 + 5) out of bounds for length 4
+      java.lang.StringIndexOutOfBoundsException: Range [2, 2 + 5) out of bounds for length 4
+      java.io.UnsupportedEncodingException: nope
+  # A PrintStream a program makes encodes into the stream under it at once and keeps an
+  # IOException for checkError; System.out is one as a value, and the host's stream as
+  # the receiver of a print. An OutputStreamWriter holds its bytes until flush (8192 at a
+  # time), a BufferedWriter its characters; a reader decodes, a BufferedReader ends a
+  # line at \n, \r or \r\n and goes back to its mark.
+  - name: a-print-stream-a-reader-and-a-writer-over-streams-and-system-out-as-a-value
+    main: CharStreams
+    source: |
+      class CharStreams {
+          static class Upper extends FilterOutputStream {
+              Upper(OutputStream out) { super(out); }
+              public void write(int b) throws IOException { out.write(Character.toUpperCase((char) b)); }
+          }
+
+          static class Failing extends OutputStream {
+              public void write(int b) throws IOException { throw new IOException("full"); }
+          }
+
+          public static void main(String[] args) {
+              try {
+                  run();
+              } catch (IOException e) {
+                  throw new UncheckedIOException(e);
+              }
+          }
+
+          static void run() throws IOException {
+              ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+              PrintStream ps = new PrintStream(bytes);
+              ps.print(1);
+              ps.print('c');
+              ps.print(2.5);
+              ps.print(true);
+              ps.print(3L);
+              ps.print(1.5f);
+              ps.print(new char[] {'x', 'y'});
+              ps.print((String) null);
+              ps.print((Object) null);
+              ps.println();
+              ps.println("é€");
+              ps.printf("%d-%s%n", 7, "q").println(new int[0].length);
+              ps.write(66);
+              ps.write(new byte[] {67, 68}, 0, 2);
+              System.out.println(bytes.size() + " " + bytes.toString() + "|" + ps.checkError());
+              PrintStream failing = new PrintStream(new Failing());
+              failing.print("x");
+              System.out.println(failing.checkError());
+              PrintStream upper = new PrintStream(new Upper(System.out), true);
+              upper.println("shouted " + 1);
+              PrintStream out = System.out;
+              out.println("as a value");
+              out.printf("%5.2f|%n", 3.14159).print("chained\n");
+              System.out.printf("%s%n", "direct").println("chained too");
+              OutputStream raw = System.out;
+              raw.write("bytes é€ 😀\n".getBytes(StandardCharsets.UTF_8));
+              raw.write(0xc3);
+              raw.write(0xa9);
+              raw.write('\n');
+              raw.flush();
+
+              StringWriter sw = new StringWriter();
+              PrintWriter pw = new PrintWriter(sw);
+              pw.println("line " + 1);
+              pw.printf("%03d", 5);
+              pw.print('c');
+              pw.append("app").append('!').write("w");
+              pw.flush();
+              System.out.println(sw.toString().replace("\n", "/") + " " + sw.getBuffer().length());
+
+              ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+              OutputStreamWriter osw = new OutputStreamWriter(encoded, StandardCharsets.UTF_8);
+              osw.write("aé€");
+              System.out.println(encoded.size() + " " + osw.getEncoding());
+              osw.write(0xD83D);
+              osw.write(0xDE00);
+              osw.flush();
+              System.out.println(Arrays.toString(encoded.toByteArray()));
+              StringBuilder big = new StringBuilder();
+              for (int i = 0; i < 10000; i++) {
+                  big.append((char) ('a' + i % 26));
+              }
+              osw.write(big.toString());
+              System.out.println(encoded.size());
+              osw.close();
+              System.out.println(encoded.size());
+              try {
+                  osw.write("x");
+              }
+              catch (IOException e) {
+                  System.out.println(e.getMessage());
+              }
+
+              BufferedWriter bw = new BufferedWriter(sw, 4);
+              bw.write("ab");
+              System.out.println(sw.getBuffer().length());
+              bw.write("cdefg");
+              bw.newLine();
+              System.out.println(sw.getBuffer().length());
+              bw.flush();
+              System.out.println(sw.getBuffer().length());
+
+              InputStreamReader isr = new InputStreamReader(new ByteArrayInputStream(encoded.toByteArray(), 0, 20), "UTF-8");
+              char[] cs = new char[4];
+              int decoded = isr.read(cs, 0, 4);
+              System.out.println(decoded + " " + new String(cs, 0, decoded) + " " + isr.read() + " " + isr.read() + " " + (char) isr.read() + " " + isr.ready());
+              BufferedReader br = new BufferedReader(new StringReader("one\ntwo\r\nthree\rfour\n\nlast"));
+              String line;
+              while ((line = br.readLine()) != null) {
+                  System.out.print("[" + line + "]");
+              }
+              System.out.println();
+              br = new BufferedReader(new StringReader("abcdef\r\nxyz"), 3);
+              br.mark(10);
+              System.out.println((char) br.read() + "" + (char) br.read() + br.readLine() + br.read());
+              br.reset();
+              System.out.println(br.readLine() + " " + br.skip(1) + " " + br.readLine() + " " + br.readLine());
+              try (BufferedReader closed = br) {
+                  closed.close();
+                  closed.read();
+              }
+              catch (IOException e) {
+                  System.out.println(e.getMessage());
+              }
+              StringReader sr = new StringReader("hello");
+              System.out.println(sr.skip(2) + " " + (char) sr.read() + " " + sr.skip(-10) + " " + (char) sr.read() + sr.ready());
+              BufferedInputStream bis = new BufferedInputStream(new ByteArrayInputStream(new byte[] {1, 2, 3, 4, 5, 6, 7}), 2);
+              bis.mark(4);
+              System.out.println(bis.read() + " " + bis.read() + " " + bis.read() + " " + bis.available());
+              bis.reset();
+              byte[] five = new byte[5];
+              System.out.println(bis.read(five) + " " + Arrays.toString(five) + " " + bis.skip(1) + " " + bis.read() + " " + bis.read());
+              try {
+                  bis.reset();
+              }
+              catch (IOException e) {
+                  System.out.println(e.getMessage());
+              }
+              ByteArrayOutputStream sink = new ByteArrayOutputStream();
+              BufferedOutputStream bos = new BufferedOutputStream(sink, 4);
+              bos.write(1);
+              bos.write(new byte[] {2, 3}, 0, 2);
+              System.out.println(sink.size());
+              bos.write(new byte[] {4, 5}, 0, 2);
+              System.out.println(sink.size());
+              bos.write(new byte[] {6, 7, 8, 9, 10}, 0, 5);
+              System.out.println(sink.size());
+              bos.close();
+              System.out.println(sink.size() + " " + new ByteArrayInputStream(sink.toByteArray()).transferTo(new ByteArrayOutputStream()));
+              try {
+                  throw new UncheckedIOException("wrapped", new IOException("inner"));
+              }
+              catch (UncheckedIOException e) {
+                  System.out.println(e.getMessage() + " " + e.getCause());
+              }
+          }
+      }
+    expected: |
+      39 1c2.5true31.5xynullnull
+      é€
+      7-q
+      0
+      BCD|false
+      true
+      SHOUTED 1
+      as a value
+       3.14|
+      chained
+      direct
+      chained too
+      bytes é€ 😀
+      é
+      line 1/005capp!w 16
+      0 UTF8
+      [97, -61, -87, -30, -126, -84, -16, -97, -104, -128]
+      8202
+      10010
+      Stream closed
+      16
+      24
+      24
+      3 aé€ 55357 56832 a true
+      [one][two][three][four][][last]
+      abcdef120
+      abcdef 1 yz null
+      Stream closed
+      2 l -3 htrue
+      1 2 3 4
+      5 [1, 2, 3, 4, 5] 1 7 -1
+      Resetting to invalid mark
+      0
+      3
+      10
+      10 10
+      wrapped java.io.IOException: inner
 standalone:
   # An uncaught exception is the line a JDK writes on standard error -- the exception's
   # toString() -- and the status 1; no stack trace follows.
@@ -5193,6 +5548,54 @@ standalone:
 # Programs a compiler refuses, each the scaffold with the case's statements in its main.
 # The JDK has to report `error` at the statements' line, and the front end the same line
 # and a message starting with it.
+  # System.in is the host's standard input read as the bytes of its UTF-8; a reader over
+  # it takes the characters. A line with no end is read to the end of the input.
+  - name: the-standard-input-is-read-as-bytes-and-through-a-reader
+    file: ReadsInput.java
+    source: |
+      import java.io.BufferedReader;
+      import java.io.BufferedWriter;
+      import java.io.IOException;
+      import java.io.InputStreamReader;
+      import java.io.OutputStreamWriter;
+      import java.io.PrintWriter;
+
+      public class ReadsInput {
+          public static void main(String[] args) throws IOException {
+              StringBuilder first = new StringBuilder();
+              int b;
+              while ((b = System.in.read()) != '\n' && b >= 0) {
+                  first.append(b).append(' ');
+              }
+              System.out.println(first);
+              BufferedReader in = new BufferedReader(new InputStreamReader(System.in));
+              int n = Integer.parseInt(in.readLine().trim());
+              int sum = 0;
+              for (int i = 0; i < n; i++) {
+                  for (String part : in.readLine().split(" ")) {
+                      sum += Integer.parseInt(part);
+                  }
+              }
+              System.out.println("sum " + sum);
+              String line;
+              while ((line = in.readLine()) != null) {
+                  System.out.println(line.length() + " " + line);
+              }
+              System.out.println(in.read() + " " + System.in.read());
+              PrintWriter out = new PrintWriter(new BufferedWriter(new OutputStreamWriter(System.out)));
+              out.printf("%d lines%n", n);
+              out.flush();
+          }
+      }
+    stdin: "h\u00e9\n2\n1 2 3\n4 5\nh\u00e9llo \u20ac\n\nlast line without end"
+    stdout: |
+      104 195 169 
+      sum 15
+      7 héllo €
+      0 
+      21 last line without end
+      -1 -1
+      2 lines
 refused:
   scaffold: |
     class Refused {

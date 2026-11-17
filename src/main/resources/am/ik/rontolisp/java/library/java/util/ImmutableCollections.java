@@ -28,6 +28,13 @@ final class ImmutableCollections {
             return (E) held[index];
         }
 
+        public ListIterator<E> listIterator(int index) {
+            if (index < 0 || index > held.length) {
+                throw new IndexOutOfBoundsException("Index: " + index + " Size: " + held.length);
+            }
+            return super.listIterator(index);
+        }
+
         public boolean add(E e) {
             throw new UnsupportedOperationException();
         }

@@ -41,7 +41,8 @@ import org.jspecify.annotations.Nullable;
 final class JavaClasses {
 
 	/** The packages of the library: what {@code import module java.base} imports. */
-	private static final List<String> LIBRARY_PACKAGES = List.of("java.lang", "java.util", "java.util.function");
+	private static final List<String> LIBRARY_PACKAGES = List.of("java.lang", "java.util", "java.util.function",
+			"java.io", "java.nio.charset");
 
 	private static final String COMPARABLE = "java.lang.Comparable";
 
@@ -151,8 +152,8 @@ final class JavaClasses {
 		@Nullable JavaClass create(String name, JavaClasses classes);
 
 		/**
-		 * Tells that a class which is no Java source and an interface of the library's
-		 * Java source are both in the table: the class may gain members naming it.
+		 * Tells that a class which is no Java source and a class of the library's Java
+		 * source are both in the table: the first may gain members naming the second.
 		 */
 		void meets(JavaClass intrinsic, JavaClass named, JavaClasses classes);
 
@@ -268,16 +269,20 @@ final class JavaClasses {
 		this.classes.put(declaration.name, declaration);
 		this.lispNames.put(declaration.lispName(), declaration);
 		this.version++;
-		if (declaration.isInterface && !declaration.intrinsic) {
+		if (!declaration.intrinsic && (declaration.isInterface || isLibrarySource(declaration))) {
 			for (JavaClass known : List.copyOf(this.classes.values())) {
 				implement(known, declaration);
 			}
 		}
-		else if (declaration.intrinsic || declaration.name.equals(ENUM)) {
+		if (declaration.intrinsic || declaration.name.equals(ENUM)) {
 			for (JavaClass known : List.copyOf(this.classes.values())) {
 				implement(declaration, known);
 			}
 		}
+	}
+
+	private static boolean isLibrarySource(JavaClass declaration) {
+		return declaration.source != null && declaration.source.library();
 	}
 
 	/**
@@ -287,11 +292,14 @@ final class JavaClasses {
 	 * that every other program holds no interface it does not name.
 	 */
 	private void implement(JavaClass declaration, JavaClass implemented) {
-		if (!implemented.isInterface || implemented.intrinsic) {
+		if (implemented.intrinsic) {
 			return;
 		}
-		if (declaration.intrinsic) {
+		if (declaration.intrinsic && (implemented.isInterface || isLibrarySource(implemented))) {
 			this.library.meets(declaration, implemented, this);
+		}
+		if (!implemented.isInterface) {
+			return;
 		}
 		boolean enumeration = declaration.name.equals(ENUM) && implemented.name.equals(COMPARABLE);
 		if ((!enumeration

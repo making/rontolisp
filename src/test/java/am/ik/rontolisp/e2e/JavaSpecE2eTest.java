@@ -1,8 +1,10 @@
 package am.ik.rontolisp.e2e;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.PrintStream;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
@@ -88,9 +90,10 @@ class JavaSpecE2eTest {
 	 * @param stderr the whole of its standard error but a JDK's frame lines, or
 	 * {@code null} when only the report of {@code error} is checked
 	 * @param files the other files of its source tree, by path, or {@code null}
+	 * @param stdin what it reads from the standard input, or {@code null} for nothing
 	 */
 	record Standalone(String name, String file, String source, String stdout, @Nullable String error,
-			@Nullable String stderr, @Nullable Map<String, String> files) {
+			@Nullable String stderr, @Nullable Map<String, String> files, @Nullable String stdin) {
 
 		String stem() {
 			return "Standalone" + this.file.replaceFirst("\\.[^./]*$", "").replace('/', '_');
@@ -172,7 +175,7 @@ class JavaSpecE2eTest {
 		String program = spec.program();
 		boolean wasm = HostWasmtime.isAvailable();
 		Callable<String> jdk = started(
-				() -> runOnJdk(PROGRAM + ".java", write("JDK-" + PROGRAM, PROGRAM + ".java", program)).stdout());
+				() -> runOnJdk(PROGRAM + ".java", write("JDK-" + PROGRAM, PROGRAM + ".java", program), null).stdout());
 		Callable<String> interpreter = started(
 				() -> interpret(write("INTERPRETER", PROGRAM + ".java", program), program));
 		Callable<String> jvm = started(() -> runOnJvm(program));
@@ -190,7 +193,7 @@ class JavaSpecE2eTest {
 		for (Standalone s : cases == null ? List.<Standalone>of() : cases) {
 			if (!s.isLisp()) {
 				legs.add(dynamicTest(s.name() + " JDK", () -> {
-					assertEnded(s, "JDK", runOnJdk(s.file(), s.write(s.stem() + "-JDK")));
+					assertEnded(s, "JDK", runOnJdk(s.file(), s.write(s.stem() + "-JDK"), s.stdin()));
 				}));
 			}
 			legs.add(dynamicTest(s.name() + " INTERPRETER", () -> standaloneOnInterpreter(s)));
@@ -205,7 +208,8 @@ class JavaSpecE2eTest {
 					Path module = compileWasm(file, s.source(), component, s.stem());
 					assertEnded(s, leg, ended(
 							new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", module.toString())
-								.start()));
+								.start(),
+							s.stdin()));
 				}));
 			}
 		}
@@ -225,7 +229,7 @@ class JavaSpecE2eTest {
 			String file = "Refused" + (index++) + ".java";
 			String source = refusals.source(r);
 			legs.add(dynamicTest(r.name() + " JDK", () -> {
-				Ended ended = runOnJdk(file, write("JDK-" + file.replace(".java", ""), file, source));
+				Ended ended = runOnJdk(file, write("JDK-" + file.replace(".java", ""), file, source), null);
 				assertThat(ended.stderr()).as("refused case '%s' under the JDK: %s", r.name(), r.body())
 					.contains(file + ":" + line + ": error: " + r.error() + "\n");
 			}));
@@ -324,18 +328,27 @@ class JavaSpecE2eTest {
 
 	// The oracle: the source launcher of the JDK running this test, started where the
 	// path of the file it is given begins.
-	private static Ended runOnJdk(String file, Path written) throws Exception {
+	private static Ended runOnJdk(String file, Path written, @Nullable String stdin) throws Exception {
 		Path dir = written;
 		for (int i = file.split("/").length; i > 0; i--) {
 			dir = java.util.Objects.requireNonNull(dir.getParent());
 		}
 		return ended(new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(), file)
 			.directory(dir.toFile())
-			.start());
+			.start(), stdin);
 	}
 
 	private static Ended ended(Process process) throws Exception {
-		process.getOutputStream().close();
+		return ended(process, null);
+	}
+
+	// What a process printed and how it ended, once it has read the standard input given.
+	private static Ended ended(Process process, @Nullable String stdin) throws Exception {
+		try (OutputStream in = process.getOutputStream()) {
+			if (stdin != null) {
+				in.write(stdin.getBytes(StandardCharsets.UTF_8));
+			}
+		}
 		Path errors = Files.createTempFile(workDir, "java-spec", ".err");
 		Thread drain = Thread.ofPlatform().start(() -> {
 			try (InputStream err = process.getErrorStream()) {
@@ -385,7 +398,9 @@ class JavaSpecE2eTest {
 		ByteArrayOutputStream err = new ByteArrayOutputStream();
 		try (ThreadStdio.Scope _ = ThreadStdio.err(err)) {
 			CliStack.call("java-spec", () -> {
-				LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+				LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8),
+						new ByteArrayInputStream(
+								(s.stdin() == null ? "" : s.stdin()).getBytes(StandardCharsets.UTF_8)));
 				if (s.isLisp()) {
 					// what the program loads is beside it, as the compiled legs' splice
 					// reads it
@@ -427,7 +442,7 @@ class JavaSpecE2eTest {
 		assertEnded(s, "JVM",
 				ended(new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(), "-cp",
 						dir.toString(), s.stem())
-					.start()));
+					.start(), s.stdin()));
 	}
 
 	// Starts run on a thread of its own and answers its result, rethrowing what it threw.

@@ -48,6 +48,20 @@ final class JavaClass {
 		/** An intrinsic field's value, or {@code null} for a declared field. */
 		final @Nullable LispVal form;
 
+		/**
+		 * An intrinsic field whose value is an object of the library's Java source: the
+		 * static method of that source answering it, called where the field is read, or
+		 * {@code null}.
+		 */
+		JavaClass.@Nullable Accessor accessor;
+
+		/**
+		 * What an intrinsic field is as the receiver of a member its {@link Accessor}'s
+		 * object need not be made for: a value of an intrinsic class holding those
+		 * members, or {@code null}.
+		 */
+		JavaEmitter.@Nullable Typed direct;
+
 		/** What a field the front end adds is initialized with, or {@code null}. */
 		JavaSyntax.@Nullable Expression initializer;
 
@@ -85,6 +99,16 @@ final class JavaClass {
 			this.isPrivate = declaration != null && declaration.modifiers().contains("private");
 		}
 
+	}
+
+	/**
+	 * The static method of the library's Java source that answers an intrinsic field's
+	 * value.
+	 *
+	 * @param className the class declaring it
+	 * @param method its name; it takes no argument
+	 */
+	record Accessor(String className, String method) {
 	}
 
 	/**

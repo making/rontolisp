@@ -308,35 +308,44 @@ as far as the program reaches it, so a class of the program can extend or implem
 | An enum | `values()`, `valueOf(String)`, `name`, `ordinal`, `compareTo`, `toString` |
 | A record | the accessors, `equals`, `hashCode`, `toString` |
 | An array | `length`, `clone()` |
-| `String` | `length`, `charAt`, `isEmpty`, `isBlank`, `equals`, `equalsIgnoreCase`, `compareTo`, `compareToIgnoreCase`, `hashCode`, `substring`, `subSequence`, `indexOf` and `lastIndexOf` of a string or a character, `contains`, `startsWith`, `endsWith`, `toUpperCase`, `toLowerCase`, `trim`, `strip`, `stripLeading`, `stripTrailing`, `repeat`, `replace`, `concat`, `toCharArray`, `split`, `intern`, `formatted`; `String.valueOf`, `String.join`, `String.format`; `new String()`, `new String(String)`, `new String(char[])`, `new String(char[], int, int)` |
+| `String` | `length`, `charAt`, `isEmpty`, `isBlank`, `equals`, `equalsIgnoreCase`, `compareTo`, `compareToIgnoreCase`, `hashCode`, `substring`, `subSequence`, `indexOf` and `lastIndexOf` of a string or a character, `contains`, `startsWith`, `endsWith`, `toUpperCase`, `toLowerCase`, `trim`, `strip`, `stripLeading`, `stripTrailing`, `repeat`, `replace`, `concat`, `toCharArray`, `split`, `intern`, `formatted`, `getBytes` of nothing, a `Charset` or a charset's name; `String.valueOf`, `String.join`, `String.format`; `new String()`, `new String(String)`, `new String(char[])`, `new String(char[], int, int)`, `new String(byte[])` with or without a range and a `Charset` or a charset's name |
 | `StringBuilder`, `StringBuffer` | the constructors of nothing, a capacity or a text; `append`, `insert`, `reverse`, `setLength`, `setCharAt`, `deleteCharAt`, `delete`, `replace`, `indexOf`, `toString`, `length`, `isEmpty`, `charAt`, `substring`, `subSequence` |
 | `CharSequence` | `length`, `charAt`, `subSequence`, `isEmpty`; a `String` and a `StringBuilder` are one |
-| `Integer`, `Long` | boxing and unboxing; `MAX_VALUE`, `MIN_VALUE`, `parseInt` / `parseLong` with or without a radix, `valueOf`, `toString` with or without a radix, `toBinaryString`, `toHexString`, `Integer.toOctalString`, `compare`, `signum`, `sum`, `max`, `min`, `bitCount`, `hashCode`, `intValue`, `longValue`, `doubleValue`, `compareTo` |
+| `Integer`, `Long` | boxing and unboxing; `MAX_VALUE`, `MIN_VALUE`, `parseInt` / `parseLong` with or without a radix, `valueOf`, `toString` with or without a radix, `toBinaryString`, `toHexString`, `Integer.toOctalString`, `Integer.parseUnsignedInt`, `Integer.toUnsignedString`, `Integer.toUnsignedLong`, `compare`, `signum`, `sum`, `max`, `min`, `bitCount`, `hashCode`, `intValue`, `longValue`, `doubleValue`, `compareTo` |
 | `Byte`, `Short` | boxing and unboxing; `MAX_VALUE`, `MIN_VALUE`, `parseByte` / `parseShort` with or without a radix, `valueOf`, `toString`, `compare`, `hashCode`, `toUnsignedInt`, `byteValue` / `shortValue`, `intValue`, `longValue`, `floatValue`, `doubleValue`, `compareTo` |
-| `Float` | `MAX_VALUE`, `MIN_VALUE`, `MIN_NORMAL`, `POSITIVE_INFINITY`, `NEGATIVE_INFINITY`, `NaN`, `parseFloat`, `valueOf`, `toString`, `compare`, `hashCode`, `floatToIntBits`, `isNaN`, `isInfinite`, `isFinite`, `sum`, `max`, `min`, `floatValue`, `doubleValue`, `intValue`, `longValue`, `compareTo` |
-| `Double` | `MAX_VALUE`, `MIN_VALUE`, `POSITIVE_INFINITY`, `NEGATIVE_INFINITY`, `NaN`, `parseDouble`, `valueOf`, `toString`, `compare`, `hashCode`, `doubleToLongBits`, `isNaN`, `isInfinite`, `isFinite`, `sum`, `max`, `min`, `intValue`, `longValue`, `doubleValue`, `compareTo` |
+| `Float` | `MAX_VALUE`, `MIN_VALUE`, `MIN_NORMAL`, `POSITIVE_INFINITY`, `NEGATIVE_INFINITY`, `NaN`, `parseFloat`, `valueOf`, `toString`, `compare`, `hashCode`, `floatToIntBits`, `intBitsToFloat`, `isNaN`, `isInfinite`, `isFinite`, `sum`, `max`, `min`, `floatValue`, `doubleValue`, `intValue`, `longValue`, `compareTo` |
+| `Double` | `MAX_VALUE`, `MIN_VALUE`, `POSITIVE_INFINITY`, `NEGATIVE_INFINITY`, `NaN`, `parseDouble`, `valueOf`, `toString`, `compare`, `hashCode`, `doubleToLongBits`, `longBitsToDouble`, `isNaN`, `isInfinite`, `isFinite`, `sum`, `max`, `min`, `intValue`, `longValue`, `doubleValue`, `compareTo` |
 | `Boolean`, `Character` | `Boolean.TRUE`, `FALSE`, `parseBoolean`, `valueOf`, `toString`, `hashCode`, `compare`, `logicalAnd`, `logicalOr`, `logicalXor`, `booleanValue`, `compareTo`; `Character.MAX_VALUE`, `MIN_VALUE`, `valueOf`, `toString`, `compare`, `hashCode`, `isDigit`, `isLetter`, `isLetterOrDigit`, `isAlphabetic`, `isWhitespace`, `isSpaceChar`, `isUpperCase`, `isLowerCase`, `toUpperCase`, `toLowerCase`, `getNumericValue`, `digit`, `forDigit`, `charValue`, `compareTo` |
 | `Number` | `intValue`, `longValue`, `floatValue`, `doubleValue`, `byteValue`, `shortValue` |
 | `Math` | `PI`, `E`, `abs`, `max`, `min`, `sqrt`, `cbrt`, `pow`, `exp`, `log`, `log10`, `floor`, `ceil`, `rint`, `round`, `signum`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `hypot`, `toRadians`, `toDegrees`, `floorDiv`, `floorMod`, `random`, `addExact`, `subtractExact`, `multiplyExact`, `negateExact`, `toIntExact` |
-| `System` | `out`, `err` (`println`, `print`, `printf`, `format`, `flush`), `currentTimeMillis`, `nanoTime`, `exit`, `arraycopy`, `identityHashCode`, `lineSeparator` |
+| `System` | `out`, `err` (each a `PrintStream`), `in` (an `InputStream`), `currentTimeMillis`, `nanoTime`, `exit`, `arraycopy`, `identityHashCode`, `lineSeparator` |
 | `IO` | `println`, `print`, `readln` |
+| `InputStream`, `OutputStream` | `read` of a byte or into an array, `readAllBytes`, `readNBytes`, `skip`, `skipNBytes`, `available`, `mark`, `reset`, `markSupported`, `transferTo`, `close`; `write` of a byte or of an array, `flush`, `close`; a class of the program extends either |
+| `ByteArrayInputStream`, `ByteArrayOutputStream` | over a `byte[]` or a range of one; `toByteArray`, `size`, `reset`, `writeTo`, `writeBytes`, `toString` with or without a charset |
+| `FilterInputStream`, `FilterOutputStream`, `BufferedInputStream`, `BufferedOutputStream` | a stream over another, the buffered ones with or without a size |
+| `DataInput`, `DataOutput`, `DataInputStream`, `DataOutputStream` | `readBoolean`, `readByte`, `readUnsignedByte`, `readShort`, `readUnsignedShort`, `readChar`, `readInt`, `readLong`, `readFloat`, `readDouble`, `readFully`, `skipBytes`, `readLine`, `readUTF`; the `write` of each, `writeBytes`, `writeChars`, `writeUTF`, `size` |
+| `PrintStream` | over an `OutputStream`, with or without automatic flushing and a charset; `print` and `println` of each type, `printf`, `format`, `write`, `writeBytes`, `flush`, `close`, `checkError`, `charset` |
+| `Reader`, `Writer` | `read` of a character or into an array, `skip`, `ready`, `mark`, `reset`, `markSupported`, `transferTo`, `close`; `write` of a character, an array or a string, `append`, `flush`, `close`; a class of the program extends either |
+| `StringReader`, `StringWriter`, `InputStreamReader`, `OutputStreamWriter` | over a string; `getBuffer`, `toString`; over a stream, with or without a `Charset` or a charset's name, `getEncoding` |
+| `BufferedReader`, `BufferedWriter`, `PrintWriter` | with or without a buffer size; `readLine`; `newLine`; a `PrintWriter` over a `Writer` or an `OutputStream`, with or without automatic flushing, with the members of `PrintStream` over characters |
+| `Charset`, `StandardCharsets` | `UTF_8`, `ISO_8859_1`, `US_ASCII`; `Charset.forName`, `defaultCharset`, `isSupported`, `name`, `displayName`, `toString` |
 | `Iterable`, `Iterator` | `iterator`, `forEach`; `hasNext`, `next`, `remove`, `forEachRemaining` |
 | `Collection` | `size`, `isEmpty`, `contains`, `add`, `remove`, `containsAll`, `addAll`, `removeAll`, `retainAll`, `removeIf`, `clear`, `toArray`, `iterator`, `forEach`, `equals`, `hashCode`, `toString` |
-| `List`, `ArrayList` | the members of `Collection`; `get`, `set`, `add` and `addAll` at an index, `remove` at an index, `indexOf`, `lastIndexOf`, `subList`, `sort`, `replaceAll`, `getFirst`, `getLast`, `removeFirst`, `removeLast`, `addFirst`, `addLast`, `reversed`; `List.of`, `List.copyOf`; `new ArrayList<>()` of nothing, a capacity or a collection, `ensureCapacity`, `trimToSize` |
+| `List`, `ArrayList` | the members of `Collection`; `get`, `set`, `add` and `addAll` at an index, `remove` at an index, `indexOf`, `lastIndexOf`, `subList`, `sort`, `replaceAll`, `getFirst`, `getLast`, `removeFirst`, `removeLast`, `addFirst`, `addLast`, `reversed`, `listIterator` with or without an index (a `ListIterator`: `hasNext`, `next`, `hasPrevious`, `previous`, `nextIndex`, `previousIndex`, `remove`, `set`, `add`); `List.of`, `List.copyOf`; `new ArrayList<>()` of nothing, a capacity or a collection, `ensureCapacity`, `trimToSize` |
 | `Set`, `HashSet` | the members of `Collection`; `Set.of`, `Set.copyOf`; `new HashSet<>()` of nothing, a capacity or a collection |
 | `Map`, `HashMap`, `Map.Entry` | `size`, `isEmpty`, `containsKey`, `containsValue`, `get`, `getOrDefault`, `put`, `putIfAbsent`, `putAll`, `remove`, `replace`, `clear`, `keySet`, `values`, `entrySet`, `forEach`, `replaceAll`, `computeIfAbsent`, `computeIfPresent`, `compute`, `merge`, `equals`, `hashCode`, `toString`; `Map.of` up to ten pairs, `Map.entry`, `Map.ofEntries`, `Map.copyOf`; `new HashMap<>()` of nothing, a capacity or a map; `getKey`, `getValue`, `setValue`, `Map.Entry.comparingByKey`, `comparingByValue` |
 | `Queue`, `Deque`, `ArrayDeque` | the members of `Collection`; `offer`, `poll`, `peek`, `element`, `remove`; `addFirst`, `addLast`, `offerFirst`, `offerLast`, `removeFirst`, `removeLast`, `pollFirst`, `pollLast`, `getFirst`, `getLast`, `peekFirst`, `peekLast`, `push`, `pop`, `descendingIterator` |
 | `AbstractCollection`, `AbstractList`, `AbstractSet`, `AbstractMap` | what a class of the program extends to be a collection |
 | `Vector`, `Stack`, `Enumeration` | the members of `ArrayList`; `addElement`, `elementAt`, `firstElement`, `lastElement`, `setElementAt`, `insertElementAt`, `removeElementAt`, `removeElement`, `removeAllElements`, `elements`; `push`, `pop`, `peek`, `empty`, `search`; `hasMoreElements`, `nextElement` |
 | `Hashtable` | the members of `Map`; `keys`, `elements`, `contains`; no `null` key or value |
-| `Arrays` | `asList`, `toString`, `fill`, `equals`, `copyOf`, `copyOfRange`, `sort` of a whole array or a range, with or without a comparator, `binarySearch`, `hashCode` of an `int[]` or an `Object[]`; over arrays of `int`, `long`, `double`, `char`, `boolean` and of objects |
-| `Collections` | `sort`, `reverse`, `shuffle`, `swap`, `max`, `min`, `frequency`, `addAll`, `fill`, `nCopies`, `emptyList`, `emptySet`, `emptyMap`, `singletonList`, `singleton`, `unmodifiableList`, `unmodifiableSet`, `unmodifiableCollection`, `unmodifiableMap`, `reverseOrder` |
-| `Objects` | `equals`, `hashCode`, `hash`, `toString`, `isNull`, `nonNull`, `requireNonNull`, `requireNonNullElse`, `compare`, `checkIndex` |
+| `Arrays` | `asList`, `toString`, `fill`, `equals`, `copyOf`, `copyOfRange`, `sort` of a whole array or a range, with or without a comparator, `binarySearch`, `hashCode` of an `int[]` or an `Object[]`; over arrays of `int`, `long`, `double`, `char`, `boolean` and of objects; `toString`, `fill`, `equals`, `copyOf`, `copyOfRange` and `hashCode` of a `byte[]` |
+| `Collections` | `sort`, `binarySearch` with or without a comparator, `reverse`, `shuffle`, `swap`, `max`, `min`, `frequency`, `addAll`, `fill`, `nCopies`, `emptyList`, `emptySet`, `emptyMap`, `singletonList`, `singleton`, `unmodifiableList`, `unmodifiableSet`, `unmodifiableCollection`, `unmodifiableMap`, `reverseOrder` |
+| `Objects` | `equals`, `hashCode`, `hash`, `toString`, `isNull`, `nonNull`, `requireNonNull`, `requireNonNullElse`, `compare`, `checkIndex`, `checkFromIndexSize`, `checkFromToIndex` |
 | `Optional` | `empty`, `of`, `ofNullable`, `isPresent`, `isEmpty`, `get`, `orElse`, `orElseGet`, `orElseThrow`, `ifPresent`, `ifPresentOrElse`, `filter`, `map`, `flatMap`, `or`, `equals`, `hashCode`, `toString` |
 | `Random` | `new Random()`, `new Random(long)`, `setSeed`, `nextInt()`, `nextInt(int)`, `nextLong`, `nextDouble`, `nextBoolean`, `nextGaussian`; a seed gives the specified sequence |
 | `Comparator` | `compare`, `reversed`, `thenComparing` of a comparator or a key, `thenComparingInt`, `Comparator.naturalOrder`, `reverseOrder`, `comparing` with or without a comparator of the key, `comparingInt`, `comparingLong`, `comparingDouble`, `nullsFirst`, `nullsLast` |
-| Exceptions | `Throwable`, `Exception`, `Error`, `RuntimeException`, `IllegalArgumentException`, `IllegalStateException`, `ArithmeticException`, `NullPointerException`, `ClassCastException`, `IndexOutOfBoundsException`, `ArrayIndexOutOfBoundsException`, `StringIndexOutOfBoundsException`, `NegativeArraySizeException`, `UnsupportedOperationException`, `NumberFormatException`, `CloneNotSupportedException`, `InterruptedException`, `IllegalMonitorStateException`, `IllegalThreadStateException`, `NoSuchElementException`, `ConcurrentModificationException`, `EmptyStackException`, `MatchException`: the constructors of the API -- of no argument, of a message, of a message and a cause, of a cause, of an index --, `getMessage`, `getLocalizedMessage`, `getCause`, `initCause`, `addSuppressed`, `getSuppressed`, `printStackTrace()`, `toString`. `IllegalFormatException` and three subclasses the run time raises, with no constructor: `IllegalFormatConversionException`, `UnknownFormatConversionException`, `MissingFormatArgumentException` |
-| `Runnable`, `Comparable`, `AutoCloseable` | `run`; `compareTo`, which a `String`, a box and an enum constant have too; `close` |
+| Exceptions | `Throwable`, `Exception`, `Error`, `RuntimeException`, `IllegalArgumentException`, `IllegalStateException`, `ArithmeticException`, `NullPointerException`, `ClassCastException`, `IndexOutOfBoundsException`, `ArrayIndexOutOfBoundsException`, `StringIndexOutOfBoundsException`, `NegativeArraySizeException`, `UnsupportedOperationException`, `NumberFormatException`, `CloneNotSupportedException`, `InterruptedException`, `IllegalMonitorStateException`, `IllegalThreadStateException`, `NoSuchElementException`, `ConcurrentModificationException`, `EmptyStackException`, `MatchException`, `IOException`, `EOFException`, `UTFDataFormatException`, `UnsupportedEncodingException`, `UncheckedIOException`, `UnsupportedCharsetException`, `IllegalCharsetNameException`: the constructors of the API -- of no argument, of a message, of a message and a cause, of a cause, of an index --, `getMessage`, `getLocalizedMessage`, `getCause`, `initCause`, `addSuppressed`, `getSuppressed`, `printStackTrace()`, `toString`. `IllegalFormatException` and three subclasses the run time raises, with no constructor: `IllegalFormatConversionException`, `UnknownFormatConversionException`, `MissingFormatArgumentException` |
+| `Runnable`, `Comparable`, `AutoCloseable`, `Closeable`, `Flushable` | `run`; `compareTo`, which a `String`, a box and an enum constant have too; `close`; `flush` |
 | `Thread` | the constructors of nothing, a `Runnable`, a name or both; a class extending it; `start`, `run`, `join()`, `join(long)`, `interrupt`, `isInterrupted`, `isAlive`, `getName`, `setName`, `isDaemon`, `setDaemon`, `getPriority`, `setPriority`, `isVirtual`, `threadId`, `getId`, `toString`; `Thread.currentThread`, `sleep(long)`, `sleep(long, int)`, `yield`, `onSpinWait`, `interrupted`, `holdsLock`, `startVirtualThread`; `Thread.ofPlatform()` and `ofVirtual()` with `name`, `daemon`, `priority`, `start`, `unstarted` |
 | `ThreadLocal` | `new ThreadLocal<>()`, `withInitial`, `get`, `set`, `remove`, `initialValue` |
 | `AtomicInteger`, `AtomicLong` | `get`, `set`, `lazySet`, `getAndSet`, `compareAndSet`, `getAndAdd`, `addAndGet`, `getAndIncrement`, `getAndDecrement`, `incrementAndGet`, `decrementAndGet`, `getAndUpdate`, `updateAndGet`, `getAndAccumulate`, `accumulateAndGet`, `intValue`, `longValue`, `doubleValue`, `toString` |
@@ -347,6 +356,32 @@ as far as the program reaches it, so a class of the program can extend or implem
 `%X`, `%o`, `%c`, `%b`, `%n` and `%%`, with the flags `-`, `0`, `+`, a space, `,`, `(` and
 `#`, a width, a precision and an argument index (`%2$s`). `String.split` takes a text, or
 one character class (`\\s`, `\\d`, `\\w`, `[,;]`, `[0-9]`) alone or followed by `+`.
+
+The streams of `java.io` are over arrays, strings, the standard streams and each other;
+there are no files. A `PrintStream`, a `PrintWriter` and the two bridges between bytes and
+characters take `UTF-8` (the default), `ISO-8859-1` or `US-ASCII`.
+
+```java
+void main() throws IOException {
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    try (DataOutputStream out = new DataOutputStream(bytes)) {
+        out.writeInt(2026);
+        out.writeUTF("naïve");
+    }
+    DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes.toByteArray()));
+    IO.println(bytes.size() + " bytes: " + in.readInt() + " " + in.readUTF());
+    BufferedReader lines = new BufferedReader(new StringReader("first\nsecond"));
+    for (String line = lines.readLine(); line != null; line = lines.readLine()) {
+        IO.println(line.toUpperCase());
+    }
+}
+```
+
+```
+12 bytes: 2026 naïve
+FIRST
+SECOND
+```
 
 A `HashMap`, a `HashSet` and a `Hashtable` find a key by its `equals` and `hashCode`, and
 walk their keys in the order a JDK's do.

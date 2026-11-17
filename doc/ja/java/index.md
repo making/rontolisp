@@ -313,35 +313,44 @@ void main() {
 | 列挙型 | `values()`、`valueOf(String)`、`name`、`ordinal`、`compareTo`、`toString` |
 | レコード | アクセサ、`equals`、`hashCode`、`toString` |
 | 配列 | `length`、`clone()` |
-| `String` | `length`、`charAt`、`isEmpty`、`isBlank`、`equals`、`equalsIgnoreCase`、`compareTo`、`compareToIgnoreCase`、`hashCode`、`substring`、`subSequence`、文字列または文字の `indexOf` と `lastIndexOf`、`contains`、`startsWith`、`endsWith`、`toUpperCase`、`toLowerCase`、`trim`、`strip`、`stripLeading`、`stripTrailing`、`repeat`、`replace`、`concat`、`toCharArray`、`split`、`intern`、`formatted`。`String.valueOf`、`String.join`、`String.format`。`new String()`、`new String(String)`、`new String(char[])`、`new String(char[], int, int)` |
+| `String` | `length`、`charAt`、`isEmpty`、`isBlank`、`equals`、`equalsIgnoreCase`、`compareTo`、`compareToIgnoreCase`、`hashCode`、`substring`、`subSequence`、文字列または文字の `indexOf` と `lastIndexOf`、`contains`、`startsWith`、`endsWith`、`toUpperCase`、`toLowerCase`、`trim`、`strip`、`stripLeading`、`stripTrailing`、`repeat`、`replace`、`concat`、`toCharArray`、`split`、`intern`、`formatted`、引数なし、`Charset`、文字セットの名前を取る `getBytes`。`String.valueOf`、`String.join`、`String.format`。`new String()`、`new String(String)`、`new String(char[])`、`new String(char[], int, int)`、範囲と、`Charset` または文字セットの名前を指定できる `new String(byte[])` |
 | `StringBuilder`、`StringBuffer` | 引数なし、容量、文字列を取るコンストラクタ。`append`、`insert`、`reverse`、`setLength`、`setCharAt`、`deleteCharAt`、`delete`、`replace`、`indexOf`、`toString`、`length`、`isEmpty`、`charAt`、`substring`、`subSequence` |
 | `CharSequence` | `length`、`charAt`、`subSequence`、`isEmpty`。`String` と `StringBuilder` は `CharSequence` です |
-| `Integer`、`Long` | ボクシングとアンボクシング。`MAX_VALUE`、`MIN_VALUE`、基数の指定がある、またはない `parseInt` / `parseLong`、`valueOf`、基数の指定がある、またはない `toString`、`toBinaryString`、`toHexString`、`Integer.toOctalString`、`compare`、`signum`、`sum`、`max`、`min`、`bitCount`、`hashCode`、`intValue`、`longValue`、`doubleValue`、`compareTo` |
+| `Integer`、`Long` | ボクシングとアンボクシング。`MAX_VALUE`、`MIN_VALUE`、基数の指定がある、またはない `parseInt` / `parseLong`、`valueOf`、基数の指定がある、またはない `toString`、`toBinaryString`、`toHexString`、`Integer.toOctalString`、`Integer.parseUnsignedInt`、`Integer.toUnsignedString`、`Integer.toUnsignedLong`、`compare`、`signum`、`sum`、`max`、`min`、`bitCount`、`hashCode`、`intValue`、`longValue`、`doubleValue`、`compareTo` |
 | `Byte`、`Short` | ボクシングとアンボクシング。`MAX_VALUE`、`MIN_VALUE`、基数の指定がある、またはない `parseByte` / `parseShort`、`valueOf`、`toString`、`compare`、`hashCode`、`toUnsignedInt`、`byteValue` / `shortValue`、`intValue`、`longValue`、`floatValue`、`doubleValue`、`compareTo` |
-| `Float` | `MAX_VALUE`、`MIN_VALUE`、`MIN_NORMAL`、`POSITIVE_INFINITY`、`NEGATIVE_INFINITY`、`NaN`、`parseFloat`、`valueOf`、`toString`、`compare`、`hashCode`、`floatToIntBits`、`isNaN`、`isInfinite`、`isFinite`、`sum`、`max`、`min`、`floatValue`、`doubleValue`、`intValue`、`longValue`、`compareTo` |
-| `Double` | `MAX_VALUE`、`MIN_VALUE`、`POSITIVE_INFINITY`、`NEGATIVE_INFINITY`、`NaN`、`parseDouble`、`valueOf`、`toString`、`compare`、`hashCode`、`doubleToLongBits`、`isNaN`、`isInfinite`、`isFinite`、`sum`、`max`、`min`、`intValue`、`longValue`、`doubleValue`、`compareTo` |
+| `Float` | `MAX_VALUE`、`MIN_VALUE`、`MIN_NORMAL`、`POSITIVE_INFINITY`、`NEGATIVE_INFINITY`、`NaN`、`parseFloat`、`valueOf`、`toString`、`compare`、`hashCode`、`floatToIntBits`、`intBitsToFloat`、`isNaN`、`isInfinite`、`isFinite`、`sum`、`max`、`min`、`floatValue`、`doubleValue`、`intValue`、`longValue`、`compareTo` |
+| `Double` | `MAX_VALUE`、`MIN_VALUE`、`POSITIVE_INFINITY`、`NEGATIVE_INFINITY`、`NaN`、`parseDouble`、`valueOf`、`toString`、`compare`、`hashCode`、`doubleToLongBits`、`longBitsToDouble`、`isNaN`、`isInfinite`、`isFinite`、`sum`、`max`、`min`、`intValue`、`longValue`、`doubleValue`、`compareTo` |
 | `Boolean`、`Character` | `Boolean.TRUE`、`FALSE`、`parseBoolean`、`valueOf`、`toString`、`hashCode`、`compare`、`logicalAnd`、`logicalOr`、`logicalXor`、`booleanValue`、`compareTo`。`Character.MAX_VALUE`、`MIN_VALUE`、`valueOf`、`toString`、`compare`、`hashCode`、`isDigit`、`isLetter`、`isLetterOrDigit`、`isAlphabetic`、`isWhitespace`、`isSpaceChar`、`isUpperCase`、`isLowerCase`、`toUpperCase`、`toLowerCase`、`getNumericValue`、`digit`、`forDigit`、`charValue`、`compareTo` |
 | `Number` | `intValue`、`longValue`、`floatValue`、`doubleValue`、`byteValue`、`shortValue` |
 | `Math` | `PI`、`E`、`abs`、`max`、`min`、`sqrt`、`cbrt`、`pow`、`exp`、`log`、`log10`、`floor`、`ceil`、`rint`、`round`、`signum`、`sin`、`cos`、`tan`、`asin`、`acos`、`atan`、`atan2`、`sinh`、`cosh`、`tanh`、`hypot`、`toRadians`、`toDegrees`、`floorDiv`、`floorMod`、`random`、`addExact`、`subtractExact`、`multiplyExact`、`negateExact`、`toIntExact` |
-| `System` | `out`、`err`（`println`、`print`、`printf`、`format`、`flush`）、`currentTimeMillis`、`nanoTime`、`exit`、`arraycopy`、`identityHashCode`、`lineSeparator` |
+| `System` | `out`、`err`（どちらも `PrintStream`）、`in`（`InputStream`）、`currentTimeMillis`、`nanoTime`、`exit`、`arraycopy`、`identityHashCode`、`lineSeparator` |
 | `IO` | `println`、`print`、`readln` |
+| `InputStream`、`OutputStream` | 1 バイトまたは配列への `read`、`readAllBytes`、`readNBytes`、`skip`、`skipNBytes`、`available`、`mark`、`reset`、`markSupported`、`transferTo`、`close`。1 バイトまたは配列の `write`、`flush`、`close`。プログラムのクラスはどちらも継承できます |
+| `ByteArrayInputStream`、`ByteArrayOutputStream` | `byte[]` またはその範囲を対象にします。`toByteArray`、`size`、`reset`、`writeTo`、`writeBytes`、文字セットの指定がある、またはない `toString` |
+| `FilterInputStream`、`FilterOutputStream`、`BufferedInputStream`、`BufferedOutputStream` | ほかのストリームの上に作るストリーム。バッファ付きのものはサイズを指定できます |
+| `DataInput`、`DataOutput`、`DataInputStream`、`DataOutputStream` | `readBoolean`、`readByte`、`readUnsignedByte`、`readShort`、`readUnsignedShort`、`readChar`、`readInt`、`readLong`、`readFloat`、`readDouble`、`readFully`、`skipBytes`、`readLine`、`readUTF`。それぞれに対応する `write`、`writeBytes`、`writeChars`、`writeUTF`、`size` |
+| `PrintStream` | `OutputStream` の上に作ります。自動フラッシュと文字セットを指定できます。各型の `print` と `println`、`printf`、`format`、`write`、`writeBytes`、`flush`、`close`、`checkError`、`charset` |
+| `Reader`、`Writer` | 1 文字または配列への `read`、`skip`、`ready`、`mark`、`reset`、`markSupported`、`transferTo`、`close`。1 文字、配列、文字列の `write`、`append`、`flush`、`close`。プログラムのクラスはどちらも継承できます |
+| `StringReader`、`StringWriter`、`InputStreamReader`、`OutputStreamWriter` | 文字列を対象にします。`getBuffer`、`toString`。ストリームを対象にするものは `Charset` または文字セットの名前を指定できます。`getEncoding` |
+| `BufferedReader`、`BufferedWriter`、`PrintWriter` | バッファのサイズを指定できます。`readLine`。`newLine`。`PrintWriter` は `Writer` または `OutputStream` の上に作り、自動フラッシュを指定できます。メンバーは `PrintStream` の文字版です |
+| `Charset`、`StandardCharsets` | `UTF_8`、`ISO_8859_1`、`US_ASCII`。`Charset.forName`、`defaultCharset`、`isSupported`、`name`、`displayName`、`toString` |
 | `Iterable`、`Iterator` | `iterator`、`forEach`。`hasNext`、`next`、`remove`、`forEachRemaining` |
 | `Collection` | `size`、`isEmpty`、`contains`、`add`、`remove`、`containsAll`、`addAll`、`removeAll`、`retainAll`、`removeIf`、`clear`、`toArray`、`iterator`、`forEach`、`equals`、`hashCode`、`toString` |
-| `List`、`ArrayList` | `Collection` のメンバー。`get`、`set`、添字を指定する `add` と `addAll`、添字を指定する `remove`、`indexOf`、`lastIndexOf`、`subList`、`sort`、`replaceAll`、`getFirst`、`getLast`、`removeFirst`、`removeLast`、`addFirst`、`addLast`、`reversed`。`List.of`、`List.copyOf`。引数なし、容量、コレクションを取る `new ArrayList<>()`、`ensureCapacity`、`trimToSize` |
+| `List`、`ArrayList` | `Collection` のメンバー。`get`、`set`、添字を指定する `add` と `addAll`、添字を指定する `remove`、`indexOf`、`lastIndexOf`、`subList`、`sort`、`replaceAll`、`getFirst`、`getLast`、`removeFirst`、`removeLast`、`addFirst`、`addLast`、`reversed`、添字の指定がある、またはない `listIterator`（`ListIterator` のメンバーは `hasNext`、`next`、`hasPrevious`、`previous`、`nextIndex`、`previousIndex`、`remove`、`set`、`add`）。`List.of`、`List.copyOf`。引数なし、容量、コレクションを取る `new ArrayList<>()`、`ensureCapacity`、`trimToSize` |
 | `Set`、`HashSet` | `Collection` のメンバー。`Set.of`、`Set.copyOf`。引数なし、容量、コレクションを取る `new HashSet<>()` |
 | `Map`、`HashMap`、`Map.Entry` | `size`、`isEmpty`、`containsKey`、`containsValue`、`get`、`getOrDefault`、`put`、`putIfAbsent`、`putAll`、`remove`、`replace`、`clear`、`keySet`、`values`、`entrySet`、`forEach`、`replaceAll`、`computeIfAbsent`、`computeIfPresent`、`compute`、`merge`、`equals`、`hashCode`、`toString`。10 組までの `Map.of`、`Map.entry`、`Map.ofEntries`、`Map.copyOf`。引数なし、容量、マップを取る `new HashMap<>()`。`getKey`、`getValue`、`setValue`、`Map.Entry.comparingByKey`、`comparingByValue` |
 | `Queue`、`Deque`、`ArrayDeque` | `Collection` のメンバー。`offer`、`poll`、`peek`、`element`、`remove`。`addFirst`、`addLast`、`offerFirst`、`offerLast`、`removeFirst`、`removeLast`、`pollFirst`、`pollLast`、`getFirst`、`getLast`、`peekFirst`、`peekLast`、`push`、`pop`、`descendingIterator` |
 | `AbstractCollection`、`AbstractList`、`AbstractSet`、`AbstractMap` | プログラムのクラスがコレクションになるために継承するクラス |
 | `Vector`、`Stack`、`Enumeration` | `ArrayList` のメンバー。`addElement`、`elementAt`、`firstElement`、`lastElement`、`setElementAt`、`insertElementAt`、`removeElementAt`、`removeElement`、`removeAllElements`、`elements`。`push`、`pop`、`peek`、`empty`、`search`。`hasMoreElements`、`nextElement` |
 | `Hashtable` | `Map` のメンバー。`keys`、`elements`、`contains`。キーにも値にも `null` は使えません |
-| `Arrays` | `asList`、`toString`、`fill`、`equals`、`copyOf`、`copyOfRange`、配列全体または範囲に対する、コンパレータの指定がある、またはない `sort`、`binarySearch`、`int[]` と `Object[]` の `hashCode`。対象は `int`、`long`、`double`、`char`、`boolean`、オブジェクトの配列 |
-| `Collections` | `sort`、`reverse`、`shuffle`、`swap`、`max`、`min`、`frequency`、`addAll`、`fill`、`nCopies`、`emptyList`、`emptySet`、`emptyMap`、`singletonList`、`singleton`、`unmodifiableList`、`unmodifiableSet`、`unmodifiableCollection`、`unmodifiableMap`、`reverseOrder` |
-| `Objects` | `equals`、`hashCode`、`hash`、`toString`、`isNull`、`nonNull`、`requireNonNull`、`requireNonNullElse`、`compare`、`checkIndex` |
+| `Arrays` | `asList`、`toString`、`fill`、`equals`、`copyOf`、`copyOfRange`、配列全体または範囲に対する、コンパレータの指定がある、またはない `sort`、`binarySearch`、`int[]` と `Object[]` の `hashCode`。対象は `int`、`long`、`double`、`char`、`boolean`、オブジェクトの配列。`byte[]` には `toString`、`fill`、`equals`、`copyOf`、`copyOfRange`、`hashCode` |
+| `Collections` | `sort`、コンパレータの指定がある、またはない `binarySearch`、`reverse`、`shuffle`、`swap`、`max`、`min`、`frequency`、`addAll`、`fill`、`nCopies`、`emptyList`、`emptySet`、`emptyMap`、`singletonList`、`singleton`、`unmodifiableList`、`unmodifiableSet`、`unmodifiableCollection`、`unmodifiableMap`、`reverseOrder` |
+| `Objects` | `equals`、`hashCode`、`hash`、`toString`、`isNull`、`nonNull`、`requireNonNull`、`requireNonNullElse`、`compare`、`checkIndex`、`checkFromIndexSize`、`checkFromToIndex` |
 | `Optional` | `empty`、`of`、`ofNullable`、`isPresent`、`isEmpty`、`get`、`orElse`、`orElseGet`、`orElseThrow`、`ifPresent`、`ifPresentOrElse`、`filter`、`map`、`flatMap`、`or`、`equals`、`hashCode`、`toString` |
 | `Random` | `new Random()`、`new Random(long)`、`setSeed`、`nextInt()`、`nextInt(int)`、`nextLong`、`nextDouble`、`nextBoolean`、`nextGaussian`。シードを指定すると仕様どおりの列になります |
 | `Comparator` | `compare`、`reversed`、コンパレータまたはキーを取る `thenComparing`、`thenComparingInt`、`Comparator.naturalOrder`、`reverseOrder`、キーのコンパレータの指定がある、またはない `comparing`、`comparingInt`、`comparingLong`、`comparingDouble`、`nullsFirst`、`nullsLast` |
-| 例外 | `Throwable`、`Exception`、`Error`、`RuntimeException`、`IllegalArgumentException`、`IllegalStateException`、`ArithmeticException`、`NullPointerException`、`ClassCastException`、`IndexOutOfBoundsException`、`ArrayIndexOutOfBoundsException`、`StringIndexOutOfBoundsException`、`NegativeArraySizeException`、`UnsupportedOperationException`、`NumberFormatException`、`CloneNotSupportedException`、`InterruptedException`、`IllegalMonitorStateException`、`IllegalThreadStateException`、`NoSuchElementException`、`ConcurrentModificationException`、`EmptyStackException`、`MatchException`。API のコンストラクタ（引数なし、メッセージ、メッセージと原因、原因、添字）、`getMessage`、`getLocalizedMessage`、`getCause`、`initCause`、`addSuppressed`、`getSuppressed`、`printStackTrace()`、`toString`。実行時に起きる `IllegalFormatException` とその 3 つのサブクラス（コンストラクタなし）：`IllegalFormatConversionException`、`UnknownFormatConversionException`、`MissingFormatArgumentException` |
-| `Runnable`、`Comparable`、`AutoCloseable` | `run`。`compareTo`（`String`、ボックス、列挙型の定数にもあります）。`close` |
+| 例外 | `Throwable`、`Exception`、`Error`、`RuntimeException`、`IllegalArgumentException`、`IllegalStateException`、`ArithmeticException`、`NullPointerException`、`ClassCastException`、`IndexOutOfBoundsException`、`ArrayIndexOutOfBoundsException`、`StringIndexOutOfBoundsException`、`NegativeArraySizeException`、`UnsupportedOperationException`、`NumberFormatException`、`CloneNotSupportedException`、`InterruptedException`、`IllegalMonitorStateException`、`IllegalThreadStateException`、`NoSuchElementException`、`ConcurrentModificationException`、`EmptyStackException`、`MatchException`、`IOException`、`EOFException`、`UTFDataFormatException`、`UnsupportedEncodingException`、`UncheckedIOException`、`UnsupportedCharsetException`、`IllegalCharsetNameException`。API のコンストラクタ（引数なし、メッセージ、メッセージと原因、原因、添字）、`getMessage`、`getLocalizedMessage`、`getCause`、`initCause`、`addSuppressed`、`getSuppressed`、`printStackTrace()`、`toString`。実行時に起きる `IllegalFormatException` とその 3 つのサブクラス（コンストラクタなし）：`IllegalFormatConversionException`、`UnknownFormatConversionException`、`MissingFormatArgumentException` |
+| `Runnable`、`Comparable`、`AutoCloseable`、`Closeable`、`Flushable` | `run`。`compareTo`（`String`、ボックス、列挙型の定数にもあります）。`close`。`flush` |
 | `Thread` | 引数なし、`Runnable`、名前、その両方を取るコンストラクタ。`Thread` を継承するクラス。`start`、`run`、`join()`、`join(long)`、`interrupt`、`isInterrupted`、`isAlive`、`getName`、`setName`、`isDaemon`、`setDaemon`、`getPriority`、`setPriority`、`isVirtual`、`threadId`、`getId`、`toString`。`Thread.currentThread`、`sleep(long)`、`sleep(long, int)`、`yield`、`onSpinWait`、`interrupted`、`holdsLock`、`startVirtualThread`。`Thread.ofPlatform()` と `ofVirtual()`（`name`、`daemon`、`priority`、`start`、`unstarted`） |
 | `ThreadLocal` | `new ThreadLocal<>()`、`withInitial`、`get`、`set`、`remove`、`initialValue` |
 | `AtomicInteger`、`AtomicLong` | `get`、`set`、`lazySet`、`getAndSet`、`compareAndSet`、`getAndAdd`、`addAndGet`、`getAndIncrement`、`getAndDecrement`、`incrementAndGet`、`decrementAndGet`、`getAndUpdate`、`updateAndGet`、`getAndAccumulate`、`accumulateAndGet`、`intValue`、`longValue`、`doubleValue`、`toString` |
@@ -353,6 +362,32 @@ void main() {
 幅、精度、引数の番号（`%2$s`）を指定できます。`String.split` が受け付けるのは、演算子を
 含まない文字列か、1 つの文字クラス（`\\s`、`\\d`、`\\w`、`[,;]`、`[0-9]`）です。文字クラスには
 `+` を続けられます。
+
+`java.io` のストリームは、配列、文字列、標準ストリーム、ほかのストリームの上に作ります。
+ファイルはありません。`PrintStream`、`PrintWriter`、バイトと文字をつなぐ 2 つのクラスが
+受け付ける文字セットは、`UTF-8`（デフォルト）、`ISO-8859-1`、`US-ASCII` です。
+
+```java
+void main() throws IOException {
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    try (DataOutputStream out = new DataOutputStream(bytes)) {
+        out.writeInt(2026);
+        out.writeUTF("naïve");
+    }
+    DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes.toByteArray()));
+    IO.println(bytes.size() + " bytes: " + in.readInt() + " " + in.readUTF());
+    BufferedReader lines = new BufferedReader(new StringReader("first\nsecond"));
+    for (String line = lines.readLine(); line != null; line = lines.readLine()) {
+        IO.println(line.toUpperCase());
+    }
+}
+```
+
+```
+12 bytes: 2026 naïve
+FIRST
+SECOND
+```
 
 `HashMap`、`HashSet`、`Hashtable` は、キーを `equals` と `hashCode` で探し、JDK と同じ順序で
 キーをたどります。

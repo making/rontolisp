@@ -385,6 +385,69 @@ class JavaLoweringTest {
 						+ ":SQRT (FLOAT (- (LOGAND (+ (AREF |ns| 0) 2147483648) 4294967295) 2147483648) 1.0)))))))))",
 				"(DEFUN |java.util.Arrays.sort(int[])| (|a|) (RONTOLISP::%JAVA-SORT-INTS |a| 0 (LENGTH (OR "
 						+ "|a| (RONTOLISP::%JAVA-NPE)))))");
+		// System.out as the receiver of a print is the host's stream, so the program
+		// above holds no class of java.io; as a value it is an object of the library's
+		// PrintStream, made by the static method the field is read through, and a printf
+		// whose value is used is that object's.
+		assertThat(forms).noneMatch(form -> form.contains("java.io."));
+		assertThat(lower("""
+				import java.io.PrintStream;
+				class L5 {
+				    public static void main(String[] args) {
+				        System.out.println(1);
+				        System.out.printf("%d%n", 2);
+				        PrintStream out = System.out;
+				        out.println(3);
+				        System.err.printf("%d%n", 4).flush();
+				    }
+				}
+				""", "L5.java")).contains(
+				"(DEFUN |L5.main(String[])| (|args|) (PROGN (WRITE-LINE \"1\") (WRITE-STRING (RONTOLISP::%JAVA-FORMAT "
+						+ "\"%d%n\" (VECTOR 2) #'|%string|)) (LET ((|out| (|java.io.StandardOutput.out()|))) "
+						+ "(|java.io.PrintStream.println(int)| (OR |out| (RONTOLISP::%JAVA-NPE)) 3) "
+						+ "(|java.io.StandardOutput.flush()| (OR (|java.io.PrintStream.printf(String,Object[])| "
+						+ "(OR (|java.io.StandardOutput.err()|) (RONTOLISP::%JAVA-NPE)) \"%d%n\" (VECTOR 4)) "
+						+ "(RONTOLISP::%JAVA-NPE))))))",
+				"(DEFUN |java.io.StandardOutput.text(String,boolean)| (|this| |s| |line|) (PROGN (WRITE-STRING |s| (IF "
+						+ "(|java.io.StandardOutput.error| |this|) *ERROR-OUTPUT* *STANDARD-OUTPUT*)) (IF |line| "
+						+ "(WRITE-CHAR (CODE-CHAR 10) (IF (|java.io.StandardOutput.error| |this|) *ERROR-OUTPUT* "
+						+ "*STANDARD-OUTPUT*)))))");
+	}
+
+	@Test
+	void theLibrarysSourceIsJavaAJdkCompiles() throws IOException {
+		// The library is read by this front end only, which takes more than the language
+		// does (an access across packages, a checked exception nothing declares): the
+		// compiler of the JDK running the test compiles every file of it, as a patch of
+		// its own java.base, with no error. A native member is Java too.
+		Path library = Path.of("src/main/resources/am/ik/rontolisp/java/library");
+		List<Path> sources;
+		try (java.util.stream.Stream<Path> files = java.nio.file.Files.walk(library)) {
+			sources = files.filter(file -> file.toString().endsWith(".java")).sorted().toList();
+		}
+		assertThat(sources).hasSizeGreaterThan(130);
+		javax.tools.JavaCompiler compiler = javax.tools.ToolProvider.getSystemJavaCompiler();
+		javax.tools.DiagnosticCollector<javax.tools.JavaFileObject> reported = new javax.tools.DiagnosticCollector<>();
+		Path classes = java.nio.file.Files.createTempDirectory("java-library");
+		try (javax.tools.StandardJavaFileManager files = compiler.getStandardFileManager(reported, null,
+				StandardCharsets.UTF_8)) {
+			compiler
+				.getTask(null, files, reported,
+						List.of("--patch-module", "java.base=" + library, "-d", classes.toString(), "-proc:none",
+								"-Xlint:none", "-Xmaxerrs", "1000"),
+						null, files.getJavaFileObjectsFromPaths(sources))
+				.call();
+		}
+		finally {
+			try (java.util.stream.Stream<Path> written = java.nio.file.Files.walk(classes)) {
+				written.sorted(java.util.Comparator.reverseOrder()).forEach(file -> file.toFile().delete());
+			}
+		}
+		assertThat(reported.getDiagnostics()
+			.stream()
+			.filter(diagnostic -> diagnostic.getKind() == javax.tools.Diagnostic.Kind.ERROR)
+			.map(diagnostic -> diagnostic.toString())
+			.toList()).isEmpty();
 	}
 
 	@Test

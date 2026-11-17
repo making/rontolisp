@@ -149,8 +149,10 @@ from run to run.
 
 **The order of a `HashMap` differs from a JDK's in two cases.** More than eight keys whose
 hash codes fall into one bucket of a table of 64 buckets or more are walked in the order
-they were put. `Set.of` and `Map.of` have one fixed order, where a JDK picks another at
-every start.
+they were put. Keys of a `Double` with few digits get there from 64 keys on (`0.0`, `0.25`,
+`0.5` ..: their hash codes differ in the high bits only), and so do the keys of a class
+whose `hashCode` has few values; strings and integers do not. `Set.of` and `Map.of` have
+one fixed order, where a JDK picks another at every start.
 
 **The functions of `Math` are those of `StrictMath`**, so a result is the same on every
 backend and processor. A JDK's `Math.sin`, `Math.exp` and the like may differ from it in
@@ -163,6 +165,18 @@ is an error naming it.
 
 **Two older classes are the newer ones.** A `StringBuffer` is a `StringBuilder` and
 `getClass().getName()` says so; a `Vector` is an `ArrayList` to `instanceof`.
+
+**The standard streams are streams of characters.** `System.in` reads the characters of
+the host's standard input as the bytes of their UTF-8, so input that is no text does not
+come through as its bytes; a byte written to `System.out` or `System.err` is a byte of
+UTF-8, and its character is written once its last byte is. A read of several bytes from
+`System.in` waits for the first and takes what is at hand after it; a `.wasm` cannot ask
+its host what is at hand and reads to the end of the line. `System.out` and `System.err`
+cannot be replaced (`System.setOut`) and stay open after `close()`.
+
+**Three charsets.** `UTF-8`, which is the default, `ISO-8859-1` and `US-ASCII`; any other
+name is an `UnsupportedEncodingException` or an `UnsupportedCharsetException`. Bytes that
+are no UTF-8 decode to U+FFFD, as many as a JDK 25 writes.
 
 ## Threads
 
@@ -215,6 +229,7 @@ Each of these is an error naming the construct and its position.
 - `java.util.concurrent` but for the four atomic classes: locks, executors, concurrent
   collections, `CompletableFuture`. `Thread.getState`, thread groups and uncaught-exception
   handlers.
-- Any class or member of the library not listed in the [overview](index.md): streams,
-  `LinkedList`, `LinkedHashMap`, `TreeMap`, `Scanner`, `java.io`, `java.time`,
-  `BigInteger`, `BigDecimal`, regular expressions, reflection.
+- Any class or member of the library not listed in the [overview](index.md): streams
+  (`java.util.stream`), `LinkedList`, `LinkedHashMap`, `TreeMap`, `Scanner`, files
+  (`File`, `FileReader`, `java.nio.file`), `java.time`, `BigInteger`, `BigDecimal`, regular
+  expressions, reflection.

@@ -314,6 +314,13 @@ final class JavaLowering implements JavaEmitter.Context {
 			"java.util.IllegalFormatConversionException", "java.util.UnknownFormatConversionException",
 			"java.util.MissingFormatArgumentException", "java.lang.RuntimeException");
 
+	/**
+	 * The classes whose intrinsic and {@code native} members read or write what is
+	 * outside the program: a static initialization calling one is not run ahead.
+	 */
+	private static final Set<String> VISIBLE = Set.of(JavaIntrinsics.STANDARD_STREAM, "java.lang.IO",
+			"java.io.StandardOutput", "java.io.StandardInput");
+
 	private static final LispSymbol RECEIVER = new LispSymbol("%o");
 
 	private static final LispSymbol YIELD_BLOCK = new LispSymbol("%yield");
@@ -1993,8 +2000,23 @@ final class JavaLowering implements JavaEmitter.Context {
 		return null;
 	}
 
-	private static List<Method> constructors(JavaClass declaration) {
+	private List<Method> constructors(JavaClass declaration) {
+		bring(declaration, "<init>");
 		return declaration.methods.stream().filter(Method::isConstructor).toList();
+	}
+
+	/**
+	 * Reads the classes of the library's Java source whose types the members of a name
+	 * have in an intrinsic class: such a member joins the class when the class it names
+	 * is in the table, and a call naming that class only among its arguments would look
+	 * for the member before.
+	 */
+	private void bring(JavaClass declaration, String name) {
+		if (declaration.intrinsic) {
+			for (String named : JavaIntrinsics.named(declaration.name, name)) {
+				this.classes.library(named);
+			}
+		}
 	}
 
 	/**
@@ -2026,6 +2048,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (declaration.isEnum && (name.equals("values") || name.equals("valueOf"))) {
 			this.classes.enumMethod(declaration, name);
 		}
+		bring(declaration, name);
 		Set<JavaClass> above = new LinkedHashSet<>();
 		supertypes(declaration, above);
 		above.add(this.objectType.declaration());
@@ -3091,6 +3114,9 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * field's class their arguments, or {@code null} for a static field
 	 */
 	private Typed fieldRead(Field field, @Nullable LispVal object, int pos, @Nullable JavaType site) {
+		if (field.accessor != null) {
+			return new Typed(library(field.accessor.className(), field.accessor.method(), List.of()), field.type);
+		}
 		if (field.form != null) {
 			Object constant = !(field.type instanceof Primitive type) ? null
 					: field.form instanceof LispInteger number ? narrowed(number.value(), type)
@@ -4313,7 +4339,8 @@ final class JavaLowering implements JavaEmitter.Context {
 			value = found;
 		}
 		else {
-			Typed receiver = expression(written, null);
+			Typed direct = directReceiver(written, reference.name(), discard);
+			Typed receiver = direct != null ? direct : expression(written, null);
 			if (!isSimple(receiver.form())) {
 				LispSymbol held = temporary();
 				bindings.add(list(held, receiver.form()));
@@ -5050,7 +5077,8 @@ final class JavaLowering implements JavaEmitter.Context {
 				qualified = true;
 			}
 			else {
-				receiver = expression(call.target(), null);
+				Typed direct = directReceiver(call.target(), call.name(), discard);
+				receiver = direct != null ? direct : expression(call.target(), null);
 				if (receiver.type() instanceof ClassType || receiver.type() instanceof Variable) {
 					ClassType through = this.types.site(receiver.type());
 					if (receiver.type() instanceof Variable variable && variable.parameter().bounds.size() > 1) {
@@ -5125,7 +5153,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			receiver = path == THIS ? thisValue(pos) : new Typed(path, in.self());
 		}
 		if (method.emitter != null) {
-			if (method.owner.name.equals("java.io.PrintStream") || method.owner.name.equals("java.lang.IO")) {
+			if (VISIBLE.contains(method.owner.name)) {
 				this.effects.visible = true;
 			}
 			if (receiver != null && call.target() != null) {
@@ -5149,6 +5177,33 @@ final class JavaLowering implements JavaEmitter.Context {
 			form = virtual(in, method, call.target() != null ? object : null, object, resolved.forms());
 		}
 		return new Typed(located(form, pos), resolved.returnType());
+	}
+
+	/**
+	 * {@code System.out} or {@code System.err} as the receiver of a member the host's
+	 * stream answers itself -- of a call or of a method reference --, or {@code null}:
+	 * the field's object is not made for such a call, so a program that only prints holds
+	 * no class of the library's streams. A {@code printf} whose value is used is the
+	 * object's.
+	 */
+	private @Nullable Typed directReceiver(@Nullable Expression target, String name, boolean discard) {
+		Field field = null;
+		if (target instanceof Select select) {
+			JavaClass named = classNamed(select.target());
+			field = named == null || !named.intrinsic ? null : field(named, select.name());
+		}
+		else if (target instanceof Name simple
+				&& variable(simple.identifier(), simple.pos(), true) instanceof FieldRef imported) {
+			// a static import of the field
+			field = imported.field();
+		}
+		if (field == null || field.direct == null) {
+			return null;
+		}
+		List<Method> answered = methods(((ClassType) field.direct.type()).declaration(), name);
+		boolean answersNothing = !answered.isEmpty() && answered.get(0).returnType == Primitive.VOID;
+		boolean answersItself = name.equals("printf") || name.equals("format");
+		return answersNothing && (discard || !answersItself) ? field.direct : null;
 	}
 
 	/**

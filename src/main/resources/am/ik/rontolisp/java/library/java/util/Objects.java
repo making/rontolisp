@@ -58,6 +58,22 @@ public final class Objects {
         return a == b ? 0 : c.compare(a, b);
     }
 
+    public static int checkFromIndexSize(int fromIndex, int size, int length) {
+        if (fromIndex < 0 || size < 0 || fromIndex > length - size || length < 0) {
+            throw new IndexOutOfBoundsException(
+                    "Range [" + fromIndex + ", " + fromIndex + " + " + size + ") out of bounds for length " + length);
+        }
+        return fromIndex;
+    }
+
+    public static int checkFromToIndex(int fromIndex, int toIndex, int length) {
+        if (fromIndex < 0 || fromIndex > toIndex || toIndex > length) {
+            throw new IndexOutOfBoundsException(
+                    "Range [" + fromIndex + ", " + toIndex + ") out of bounds for length " + length);
+        }
+        return fromIndex;
+    }
+
     public static int checkIndex(int index, int length) {
         if (index < 0 || index >= length) {
             throw new IndexOutOfBoundsException("Index " + index + " out of bounds for length " + length);

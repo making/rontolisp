@@ -146,6 +146,9 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 
 **`HashMap` の順序が JDK と異なる場合が 2 つあります。** バケットが 64 個以上の表で、ハッシュ
 コードが 1 つのバケットに集まるキーが 8 個を超えると、それらのキーは追加した順にたどられます。
+桁数の少ない `Double` のキー（`0.0`、`0.25`、`0.5` など。ハッシュコードが上位ビットでしか
+違いません）は、64 個からこの状態になります。`hashCode` が取る値の少ないクラスのキーも同様です。
+文字列と整数のキーはこの状態になりません。
 `Set.of` と `Map.of` の順序は 1 つに決まっています。JDK は起動のたびに別の順序を選びます。
 
 **`Math` の関数は `StrictMath` の関数です。** そのため、結果はどのバックエンドとプロセッサでも
@@ -159,6 +162,18 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 **古い 2 つのクラスは新しいクラスと同じものです。** `StringBuffer` は `StringBuilder` であり、
 `getClass().getName()` も `StringBuilder` の名前を返します。`Vector` は `instanceof` で
 `ArrayList` と判定されます。
+
+**標準ストリームは文字のストリームです。** `System.in` は、ホストの標準入力の文字を、その
+UTF-8 のバイト列として読みます。そのため、テキストでない入力は元のバイト列のままでは
+読めません。`System.out` と `System.err` に書いたバイトは UTF-8 のバイトとして扱い、文字は
+その最後のバイトが書かれたときに出力します。`System.in` から複数のバイトを読むと、最初の
+1 バイトを待ち、その時点で読めるバイトまでを返します。`.wasm` は読めるバイトの有無をホストに
+問い合わせられないため、行末まで読みます。`System.out` と `System.err` は差し替えられず
+（`System.setOut`）、`close()` の後も出力できます。
+
+**文字セットは 3 つです。** デフォルトの `UTF-8` と、`ISO-8859-1`、`US-ASCII` です。それ以外の
+名前は `UnsupportedEncodingException` または `UnsupportedCharsetException` になります。UTF-8
+として不正なバイト列は U+FFFD にデコードします。U+FFFD の個数は JDK 25 と同じです。
 
 ## スレッド
 
@@ -215,6 +230,6 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 - 4 つのアトミッククラスを除く `java.util.concurrent`。ロック、エグゼキューター、並行
   コレクション、`CompletableFuture` などです。`Thread.getState`、スレッドグループ、未捕捉例外
   ハンドラーも拒否されます。
-- [概要](index.md)の表にないライブラリのクラスとメンバー。ストリーム、`LinkedList`、
-  `LinkedHashMap`、`TreeMap`、`Scanner`、`java.io`、`java.time`、`BigInteger`、
-  `BigDecimal`、正規表現、リフレクションなどです。
+- [概要](index.md)の表にないライブラリのクラスとメンバー。ストリーム（`java.util.stream`）、
+  `LinkedList`、`LinkedHashMap`、`TreeMap`、`Scanner`、ファイル（`File`、`FileReader`、
+  `java.nio.file`）、`java.time`、`BigInteger`、`BigDecimal`、正規表現、リフレクションなどです。

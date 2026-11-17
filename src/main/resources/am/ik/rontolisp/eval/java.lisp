@@ -1041,29 +1041,22 @@
         (setq i (+ i 1)))
       codes)))
 
+;; What an offset and a count outside an array of LENGTH are called.
+(defun rontolisp::%java-count-text (offset count length)
+  (%string-concat
+   (%string-concat (%string-concat
+                    (%string-concat "Range [" (%decimal-piece offset))
+                    (%string-concat ", " (%decimal-piece offset)))
+                   (%string-concat " + " (%decimal-piece count)))
+   (%string-concat ") out of bounds for length " (%decimal-piece length))))
+
 ;; String.valueOf(char[]) and new String(char[], offset, count).
 (defun rontolisp::%java-chars-string (codes offset count)
   (if (null codes) (rontolisp::%java-npe))
   (if (and count
            (or (< offset 0) (< count 0) (> offset (- (length codes) count))))
       (rontolisp::%java-raise "java.lang.StringIndexOutOfBoundsException"
-                              (%string-concat (%string-concat (%string-concat
-                                                               (%string-concat
-                                                                "Range ["
-                                                                (%decimal-piece
-                                                                 offset))
-                                                               (%string-concat
-                                                                ", "
-                                                                (%decimal-piece
-                                                                 offset)))
-                                                              (%string-concat
-                                                               " + "
-                                                               (%decimal-piece
-                                                                count)))
-                                              (%string-concat
-                                               ") out of bounds for length "
-                                               (%decimal-piece
-                                                (length codes))))))
+       (rontolisp::%java-count-text offset count (length codes))))
   (let ((builder (rontolisp::%java-sb-new))
         (i offset)
         (end (if count (+ offset count) (length codes))))
@@ -1397,6 +1390,115 @@
 (defun rontolisp::%java-readln ()
   (let ((line (read-line *standard-input* nil nil)))
     (if line (%normalize-string line) nil)))
+
+;; A character of the standard input as its code, -1 at the end: what System.in reads.
+(defun rontolisp::%java-read-character ()
+  (let ((c (read-char *standard-input* nil nil))) (if c (char-code c) -1)))
+
+;; Whether the standard input has a character at hand with no wait.
+#-rontolisp-wasm
+(defun rontolisp::%java-input-ready () (if (listen *standard-input*) t nil))
+
+;; A wasm host cannot say.
+#+rontolisp-wasm (defun rontolisp::%java-input-ready () nil)
+
+;; Whether a read of several bytes or characters goes on after the one of code LAST: as
+;; long as the next is at hand. Where the host cannot say (wasm), to the line's end.
+#-rontolisp-wasm
+(defun rontolisp::%java-input-more (last) (if (listen *standard-input*) t nil))
+
+#+rontolisp-wasm
+(defun rontolisp::%java-input-more (last) (if (= last 10) nil t))
+
+;; --- bytes and text ----------------------------------------------------------------
+
+;; String.getBytes(): the UTF-8 of a string, a byte[].
+(defun rontolisp::%java-utf8-bytes (s)
+  (rontolisp:string-to-octets (or s (rontolisp::%java-npe))))
+
+;; new String(byte[], offset, count) and new String(byte[]) (COUNT nil) in UTF-8. What
+;; is no UTF-8 is U+FFFD, as many as a JDK 25 answers (measured, .kb/java-frontend.md):
+;; a byte that starts nothing is one; a start whose next byte cannot follow it is one,
+;; alone; a sequence a byte that cannot continue it or the end cuts short is one; the
+;; three bytes of a surrogate are one.
+(defun rontolisp::%java-utf8-string (bytes offset count)
+  (if (null bytes) (rontolisp::%java-npe))
+  (if (and count
+           (or (< offset 0) (< count 0) (> offset (- (length bytes) count))))
+      (rontolisp::%java-raise "java.lang.StringIndexOutOfBoundsException"
+       (rontolisp::%java-count-text offset count (length bytes))))
+  (let ((builder (rontolisp::%java-sb-new))
+        (i offset)
+        (end (if count (+ offset count) (length bytes))))
+    (while (< i end)
+      (let ((b (aref bytes i)))
+        (cond
+         ((< b 128)
+          (vector-push-extend (code-char b) builder)
+          (setq i (+ i 1)))
+         ((or (< b 194) (> b 244))
+          (vector-push-extend (code-char 65533) builder)
+          (setq i (+ i 1)))
+         (t (let ((size (cond ((< b 224) 2) ((< b 240) 3) (t 4)))
+                  (code (logand b (cond ((< b 224) 31) ((< b 240) 15) (t 7))))
+                  ;; what the second byte may be depends on the first
+                  (low (cond ((= b 224) 160) ((= b 240) 144) (t 128)))
+                  (high (if (= b 244) 143 191))
+                  (taken 1)
+                  (cut nil))
+              (while (and (< taken size) (not cut))
+                (if (>= (+ i taken) end)
+                    (setq cut t)
+                    (let ((c (aref bytes (+ i taken))))
+                      (if (and (>= c (if (= taken 1) low 128))
+                               (<= c (if (= taken 1) high 191)))
+                          (progn
+                            (setq code (+ (ash code 6) (logand c 63)))
+                            (setq taken (+ taken 1)))
+                          (setq cut t)))))
+              (vector-push-extend (code-char
+                                   (if (or cut
+                                           (and (>= code 55296) (< code 57344)))
+                                       65533
+                                       code)) builder)
+              (setq i (+ i taken)))))))
+    (rontolisp::%java-sb-string builder)))
+
+;; Double.longBitsToDouble as the API specifies it: the sign, the eleven bits of the
+;; exponent and the fifty-two of the fraction.
+(defun rontolisp::%java-bits-double (bits)
+  (rontolisp::%java-bits-binary (logand bits 18446744073709551615) 52 11 53
+                                -1074 1024))
+
+;; Float.intBitsToFloat: the sign, eight bits of exponent, twenty-three of fraction;
+;; the float is the double of its value.
+(defun rontolisp::%java-bits-float (bits)
+  (rontolisp::%java-bits-binary (logand bits 4294967295) 23 8 24 -149 128))
+
+;; The value of the unsigned BITS of a binary format: FRACTION bits under EXPONENT
+;; bits under the sign. PRECISION, LEAST and MOST are the format's, as
+;; %java-nearest-binary takes them.
+(defun rontolisp::%java-bits-binary
+    (bits fraction exponent precision least most)
+  (let ((negative (logbitp (+ fraction exponent) bits))
+        (scale (logand (ash bits (- fraction)) (- (ash 1 exponent) 1)))
+        (digits (logand bits (- (ash 1 fraction) 1))))
+    (cond ((= scale (- (ash 1 exponent) 1))
+           (if (= digits 0)
+               (rontolisp::%java-infinity negative)
+               (rontolisp::%java-nan)))
+          ((and (= scale 0) (= digits 0)) (if negative (- 0d0) 0d0))
+          (t
+           (let* ((mantissa (if (= scale 0) digits (+ digits (ash 1 fraction))))
+                  (power (+ least (if (= scale 0) 0 (- scale 1))))
+                  (value
+                   (if (< power 0)
+                       (rontolisp::%java-nearest-binary mantissa
+                                                        (ash 1 (- power))
+                                                        precision least most)
+                       (rontolisp::%java-nearest-binary (ash mantissa power) 1
+                                                        precision least most))))
+             (if negative (- value) value))))))
 
 ;; --- Arrays ----------------------------------------------------------------------------
 

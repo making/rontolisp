@@ -23,6 +23,10 @@ public interface List<E> extends Collection<E> {
 
     List<E> subList(int from, int to);
 
+    ListIterator<E> listIterator();
+
+    ListIterator<E> listIterator(int index);
+
     default void sort(Comparator<? super E> c) {
         Object[] sorted = toArray();
         Arrays.sortObjects(sorted, 0, sorted.length, c);

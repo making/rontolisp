@@ -3,6 +3,9 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package rontolisp.internal;
 
+import java.io.UnsupportedEncodingException;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 
 // The members of String, the boxes and Math that are written in Java: the ones that
@@ -58,6 +61,100 @@ public final class Support {
 
     private static NumberFormatException overflow(String s, int radix) {
         return new NumberFormatException("For input string: \"" + s + "\"" + (radix == 10 ? "" : " under radix " + radix));
+    }
+
+    // Integer.parseUnsignedInt: no sign but a +, a value under 2^32 as the int of its bits.
+    public static int parseUnsignedInt(String s, int radix) {
+        if (s == null) {
+            throw new NumberFormatException("Cannot parse null string");
+        }
+        if (!s.isEmpty() && s.charAt(0) == '-') {
+            throw new NumberFormatException("Illegal leading minus sign on unsigned string " + s + ".");
+        }
+        long value = parse(s, radix, Long.MIN_VALUE, Long.MAX_VALUE);
+        if (value > 0xFFFFFFFFL) {
+            throw new NumberFormatException(
+                    "String value " + s + " exceeds range of unsigned int.");
+        }
+        return (int) value;
+    }
+
+    // The charset of a name, for the members that take a name and not a Charset.
+    public static Charset charset(String name) throws UnsupportedEncodingException {
+        if (!Charset.isSupported(name)) {
+            throw new UnsupportedEncodingException(name);
+        }
+        return Charset.forName(name);
+    }
+
+    public static boolean isUtf8(Charset charset) {
+        return charset == StandardCharsets.UTF_8;
+    }
+
+    // What a reader or a writer answers for its encoding.
+    public static String historicalName(Charset charset) {
+        return charset == StandardCharsets.UTF_8 ? "UTF8" : charset == StandardCharsets.ISO_8859_1 ? "ISO8859_1" : "ASCII";
+    }
+
+    private static native byte[] utf8(String s);
+
+    private static native String utf8String(byte[] b, int offset, int count);
+
+    // String.getBytes(Charset): a character a charset of one byte does not have is ?.
+    public static byte[] encode(String s, Charset charset) {
+        if (isUtf8(charset)) {
+            return utf8(s);
+        }
+        int last = charset == StandardCharsets.ISO_8859_1 ? 0xff : 0x7f;
+        int n = s.length();
+        byte[] encoded = new byte[n];
+        for (int i = 0; i < n; i++) {
+            int c = s.charAt(i);
+            encoded[i] = (byte) (c <= last ? c : '?');
+        }
+        return encoded;
+    }
+
+    public static byte[] encodeNamed(String s, String charsetName) throws UnsupportedEncodingException {
+        if (charsetName == null) {
+            throw new NullPointerException();
+        }
+        return encode(s, charset(charsetName));
+    }
+
+    public static String decode(byte[] b, Charset charset) {
+        return decode(b, 0, b.length, charset);
+    }
+
+    // new String(byte[], int, int, Charset): a byte a charset of one byte does not have
+    // is U+FFFD.
+    public static String decode(byte[] b, int offset, int count, Charset charset) {
+        if (isUtf8(charset)) {
+            return utf8String(b, offset, count);
+        }
+        if (offset < 0 || count < 0 || offset > b.length - count) {
+            throw new StringIndexOutOfBoundsException(
+                    "Range [" + offset + ", " + offset + " + " + count + ") out of bounds for length " + b.length);
+        }
+        int last = charset == StandardCharsets.ISO_8859_1 ? 0xff : 0x7f;
+        char[] units = new char[count];
+        for (int i = 0; i < count; i++) {
+            int c = b[offset + i] & 0xff;
+            units[i] = (char) (c <= last ? c : 0xfffd);
+        }
+        return new String(units, 0, count);
+    }
+
+    public static String decodeNamed(byte[] b, String charsetName) throws UnsupportedEncodingException {
+        return decodeNamed(b, 0, b.length, charsetName);
+    }
+
+    public static String decodeNamed(byte[] b, int offset, int count, String charsetName)
+            throws UnsupportedEncodingException {
+        if (charsetName == null) {
+            throw new NullPointerException("charsetName");
+        }
+        return decode(b, offset, count, charset(charsetName));
     }
 
     private static native Double readDouble(String s);

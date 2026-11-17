@@ -16,6 +16,49 @@ public final class Collections {
         list.sort(c);
     }
 
+    // The index of a key in a list in its order, or -(where it would go) - 1.
+    public static <T> int binarySearch(List<? extends Comparable<? super T>> list, T key) {
+        int low = 0;
+        int high = list.size() - 1;
+        while (low <= high) {
+            int middle = (low + high) >>> 1;
+            int order = ((Comparable) list.get(middle)).compareTo(key);
+            if (order < 0) {
+                low = middle + 1;
+            }
+            else if (order > 0) {
+                high = middle - 1;
+            }
+            else {
+                return middle;
+            }
+        }
+        return -(low + 1);
+    }
+
+    public static <T> int binarySearch(List<? extends T> list, T key, Comparator<? super T> c) {
+        if (c == null) {
+            List raw = list;
+            return binarySearch(raw, key);
+        }
+        int low = 0;
+        int high = list.size() - 1;
+        while (low <= high) {
+            int middle = (low + high) >>> 1;
+            int order = c.compare(list.get(middle), key);
+            if (order < 0) {
+                low = middle + 1;
+            }
+            else if (order > 0) {
+                high = middle - 1;
+            }
+            else {
+                return middle;
+            }
+        }
+        return -(low + 1);
+    }
+
     public static void swap(List<?> list, int i, int j) {
         List raw = list;
         Object moved = raw.get(i);

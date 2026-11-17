@@ -17,6 +17,13 @@ public class Vector<E> extends ArrayList<E> {
         super(c);
     }
 
+    public ListIterator<E> listIterator(int index) {
+        if (index < 0 || index > size()) {
+            throw new IndexOutOfBoundsException("Index: " + index);
+        }
+        return super.listIterator(index);
+    }
+
     public void addElement(E e) {
         add(e);
     }

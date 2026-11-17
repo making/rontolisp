@@ -211,6 +211,97 @@ public class ArrayList<E> extends AbstractList<E> {
         return new Each<>(this);
     }
 
+    public ListIterator<E> listIterator(int index) {
+        if (index < 0 || index > count) {
+            throw new IndexOutOfBoundsException("Index: " + index + ", Size: " + count);
+        }
+        return new EachWay<>(this, index);
+    }
+
+    // The iterator both ways: it refuses once the list changed size behind it.
+    static final class EachWay<E> implements ListIterator<E> {
+
+        private final ArrayList<E> list;
+
+        private int cursor;
+
+        private int last = -1;
+
+        private int expected;
+
+        EachWay(ArrayList<E> list, int index) {
+            this.list = list;
+            this.cursor = index;
+            this.expected = list.changes;
+        }
+
+        private void unchanged() {
+            if (list.changes != expected) {
+                throw new ConcurrentModificationException();
+            }
+        }
+
+        public boolean hasNext() {
+            return cursor != list.count;
+        }
+
+        public E next() {
+            unchanged();
+            if (cursor >= list.count) {
+                throw new NoSuchElementException();
+            }
+            last = cursor;
+            return (E) list.items[cursor++];
+        }
+
+        public boolean hasPrevious() {
+            return cursor != 0;
+        }
+
+        public E previous() {
+            unchanged();
+            if (cursor <= 0) {
+                throw new NoSuchElementException();
+            }
+            last = --cursor;
+            return (E) list.items[cursor];
+        }
+
+        public int nextIndex() {
+            return cursor;
+        }
+
+        public int previousIndex() {
+            return cursor - 1;
+        }
+
+        public void remove() {
+            if (last < 0) {
+                throw new IllegalStateException();
+            }
+            unchanged();
+            list.remove(last);
+            cursor = last;
+            last = -1;
+            expected = list.changes;
+        }
+
+        public void set(E e) {
+            if (last < 0) {
+                throw new IllegalStateException();
+            }
+            unchanged();
+            list.set(last, e);
+        }
+
+        public void add(E e) {
+            unchanged();
+            list.add(cursor++, e);
+            last = -1;
+            expected = list.changes;
+        }
+    }
+
     static final class Each<E> implements Iterator<E> {
 
         private final ArrayList<E> list;

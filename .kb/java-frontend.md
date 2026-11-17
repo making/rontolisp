@@ -12,8 +12,8 @@ library: j71 (2026-11-17); the numbers: j72 (2026-11-17); the exceptions: j73 (2
 several files, a session, the calls across languages, the tools and annotations: j74
 (2026-11-17); threads: j76 (2026-11-17); the flow, outer instances and qualified `super`: j77
 (2026-11-17); inner class types, intersections, the inference j70 left: j78 (2026-11-17);
-what comes after is `.todo/j79`, `j81`, `j82`, `j83` and `j86` (what j71, j72, j73, j76 and
-j78 left).
+`java.io`, the charsets and the members j71 left: j79 (2026-11-17); what comes after is
+`.todo/j81`, `j82`, `j83`, `j86` and `j87` (what j72, j73, j76, j78 and j79 left).
 
 ## Where it sits
 
@@ -527,16 +527,23 @@ lub of the lowers, else an upper, else OPEN.
 ## The library (2026-11-17, j71)
 
 - **The split.** INTRINSIC: `Object`, `String`, `StringBuilder`/`StringBuffer` (one
-  representation, one predicate), `Number` and the five boxes, `Math`, `System`,
-  `PrintStream`, `IO`. SOURCE: everything else -- the collections, `Arrays`, `Collections`,
+  representation, one predicate), `Number` and the five boxes, `Math`, `System`, `IO`.
+  SOURCE: everything else -- the collections, `Arrays`, `Collections`,
   `Objects`, `Optional`, `Random`, `Comparator`, `java.util.function`, the `Throwable` family,
-  `Iterable`, `CharSequence`. Three bridges: a `native` method of the source is a form
+  `Iterable`, `CharSequence`, `java.io` and the charsets ("java.io" below). Three bridges: a `native` method of the source is a form
   (`JavaIntrinsics.NATIVES`, keyed `class.name(erased parameters)`; the parser takes `native`
   only under `library/`); an intrinsic member written in Java is a static method of
   `rontolisp.internal.Support` reached through `Context.library` (`parseInt`, `addExact`: they
   throw the library's exceptions); an intrinsic class implements a source interface, and gains
   the members naming it, once a program names that interface (`Library.implemented` / `meets`:
-  `Comparable`, `CharSequence`, `String.join(.., Iterable)`).
+  `Comparable`, `CharSequence`, `String.join(.., Iterable)`); since j79 any class of the
+  source (`String.getBytes(Charset)`, `new String(byte[], Charset)`).
+- **A member `meets` adds is looked for by name before it is there** (j79,
+  `JavaIntrinsics.named`, `JavaLowering.bring`): `methods` and `constructors` of an intrinsic
+  class first read the source classes the members of that name have in their types. Before,
+  a call naming the class only among its arguments -- or not at all: `"abc".subSequence(0, 2)`
+  in a program with no `CharSequence` -- found no candidate and was refused, by the order the
+  program was written in.
 - **Measured both ways before choosing** (`ArrayList` as an adjustable vector, j68, against
   Java over `Object[]`; 20,000,000 `add` then 100,000,000 of one operation, best of three, ns
   an operation): wasm `add` 11 / 46, `get` 17 / 24, the enhanced `for` 16 / 50 to 65, `set`
@@ -589,8 +596,97 @@ lub of the lowers, else an upper, else OPEN.
 - A method reference naming a class fits a functional interface by its arity when a call has
   several candidates (`takes`): `thenComparing(Point::label)` against `thenComparing(Comparator)`.
 - Sizes on wasm (2026-11-17, before / after): a list added to and read 3,732 / 25,592; one
-  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/j79` holds what is
+  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/j87` holds what is
   left and the leads.
+- **The library is Java a JDK compiles** (j79, decided by measuring): javac of JDK 25 takes
+  all 139 files as a patch of its own `java.base` (`--patch-module java.base=<library>`) with
+  no error -- a `native` member and a raw type are Java. The front end reading it takes more
+  than the language (an access across packages, which the library is not checked for: the
+  nine errors the first run reported were all j79's own, a package-private member of
+  `Charset` reached from `java.io`), so the leg is a test:
+  `JavaLoweringTest#theLibrarysSourceIsJavaAJdkCompiles` (3 s).
+- **A long chain of a `HashMap`: measured, not written** (j79). Against JDK 25, the order of
+  `values()`: 10 keys of one hash code walk as ours; the 11th (the table reached 64 at the
+  9th and 10th) makes the JDK's bin a tree, whose root moves to the head of the chain, and
+  the order departs (`same: 9 5 3 1 ..` against `5 3 9 1 ..`). How a program gets there: 64
+  `Double` keys `x + y / 64.0` (a double of few digits has its hash code in the high bits:
+  the JDK walks `2.0` before `0.0`), a class whose `hashCode` is `x ^ y` or `x + y` over a
+  16 x 16 grid (256 keys); NOT string keys (4,096 of them) nor `int` keys, which were
+  identical at every size tried. The order inside a tree comes from the JDK's own
+  red-black insertion, its tie-breaks (class name, `compareTo`, the identity hash) and where
+  it links a node: no part of the API, so it can be had only by deriving it from outputs --
+  the provenance rule forbids writing it from the JDK's source. `deviations.md` names the
+  double keys. `.todo/j87`.
+- **Regular expressions: the Clojure front end's engine cannot be shared** (j79, the check
+  j71 asked for): `.kb/clojure-frontend.md`, "Regex", states it is `java.util.regex` of JDK
+  25 ported method by method (`Pattern.java` read), which rule 2 of the provenance file
+  forbids under this front end. An engine for `matches`/`replaceAll`/`Pattern` is written
+  from the API's own description of the syntax or not at all (`.todo/j87`).
+- **`Arrays.deepToString` stays refused**: a `short[]` and a `char[]` are one element type
+  (`(unsigned-byte 16)`), so an `Object[]` holding one cannot say which it prints; a
+  `short[]` of `(signed-byte 16)` would settle it and the cast `.todo/j81` lists.
+
+## java.io (2026-11-17, j79)
+
+**Invariant: a stream is Java source over `byte[]`, `char[]` and the stream under it; the
+host is reached at three classes only -- `StandardOutput`, `StandardInput`
+(`java.io`, not public) and the UTF-8 pair of `java.lisp` -- and a program that only prints
+holds none of it.** No files: `File`, `FileReader`, `java.nio.file` stay refused.
+
+- **The classes**: `InputStream`/`OutputStream`, the `ByteArray` pair, the `Filter` pair,
+  the `Buffered` pair, `DataInput`/`DataOutput` and their streams, `PrintStream`;
+  `Reader`/`Writer`, `StringReader`/`StringWriter`, `InputStreamReader`/`OutputStreamWriter`,
+  `BufferedReader`/`BufferedWriter`, `PrintWriter`; `Closeable`, `Flushable`; `IOException`,
+  `EOFException`, `UTFDataFormatException`, `UnsupportedEncodingException`,
+  `UncheckedIOException`; `java.nio.charset.Charset`/`StandardCharsets` (UTF-8, the default,
+  ISO-8859-1, US-ASCII) with its two exceptions. `import module java.base` and a compact
+  source file bring `java.io` and `java.nio.charset` (`LIBRARY_PACKAGES`).
+- **`System.out`, `System.err`, `System.in` are two things** (`JavaClass.Field.accessor`,
+  `direct`). As the receiver of `print`/`println`/`flush`, and of a `printf`/`format` whose
+  value is dropped, `System.out` is the host's stream (`JavaLowering.directReceiver`, the
+  intrinsic class `rontolisp.internal.StandardStream`): `(write-line ..)`, as before. As a
+  value it is `(java.io.StandardOutput.out())`, a `PrintStream` made at the first ask.
+  Measured: `Fib`, `WrapInt`, `Sieve`, `WrapLong`, `Shapes`, `Basics` are byte-identical on
+  wasm and the JVM. Rejected: `PrintStream` intrinsic with the host's stream as its value
+  (j68: it is no `OutputStream`, so `new PrintWriter(System.out)` has no type) and `System`
+  as source (every program would hold the class and its initialization). A method
+  reference (`System.out::println`) and a static import of the field take the direct road
+  too: `xs.forEach(System.out::println)` is 67,439 B of wasm either way, 71,120 through the
+  object.
+- **`StandardOutput` extends `PrintStream`** and writes its characters with `write-string`;
+  a byte written to it is a byte of UTF-8, decoded as it comes. Both the direct forms and
+  the object write to the host's stream with no buffer of their own, so their lines keep
+  the order written. `close()` flushes and leaves it open (`deviations.md`).
+- **`StandardInput`**: the host's standard input is a stream of characters
+  (`%java-read-character`), handed out as the bytes of their UTF-8; an `InputStreamReader`
+  over it takes the characters as they are (`unit`). A read of several goes on while
+  `%java-input-more` says so: `listen` on the interpreter and the JVM, to the line's end on
+  wasm, where `listen` of the standard input traps (measured, wasmtime 49) -- the two
+  variants of `java.lisp`. So a program mixing a bulk `System.in.read(buf)` with another
+  reader sees another split on wasm (`deviations.md`).
+- **A `PrintStream` a program makes** encodes each print and writes it to the stream under
+  it at once; an `IOException` is kept for `checkError()`, which is a `try`/`catch` in
+  `PrintStream`, so making one costs the handler (below). `OutputStreamWriter` holds 8,192
+  bytes and `BufferedWriter` 8,192 characters until `flush()`, as a JDK shows through the
+  stream under them (10,000 ASCII characters: 8,192 bytes before the flush).
+- **UTF-8**: `getBytes()` is `rontolisp:string-to-octets`; decoding is
+  `%java-utf8-string`, not the host's `octets-to-string`, which takes what is no UTF-8 as it
+  comes. The U+FFFD rules were measured against JDK 25 and pinned by 6,000 random sequences
+  over the bytes that matter, identical through `new String` and through a reader: a byte
+  starting nothing is one; a start whose second byte is outside its range (`E0`: `A0`..,
+  `F0`: `90`.., `F4`: ..`8F`) is one, alone; a sequence cut by a byte or by the end is one;
+  the three bytes of a surrogate are one. An `InputStreamReader` decodes a buffer at a time
+  and keeps back the bytes of a character the buffer ends inside.
+- **`Double.longBitsToDouble`, `Float.intBitsToFloat`** are `%java-bits-binary` over
+  `%java-nearest-binary` (exact, the subnormals included).
+- **Measured** (2026-11-17, the box and method of "Measured" below; wasm / class bytes, then
+  precompiled wasm / JVM seconds): a `ByteArrayOutputStream` written and read 74,674 /
+  126,883; `BufferedReader(InputStreamReader(System.in))` summing 200,000 lines 142,695 /
+  197,974, 1.04 / 0.59 s against 0.78 / 0.36 s for `IO.readln` (70,642 / 127,438);
+  `PrintWriter(BufferedWriter(OutputStreamWriter(System.out)))` printing 200,000 lines
+  244,022 / 260,052, 0.43 / 0.66 s against 0.50 / 0.42 s for one `StringBuilder` printed
+  (76,122 / 108,409). The corpus case of the byte streams alone is 312,953 B of wasm, the
+  one of the print streams and readers 460,101 B.
 
 ## Numbers (2026-11-17, j72)
 
@@ -633,8 +729,8 @@ lub of the lowers, else an upper, else OPEN.
   wasm: the `cond` over the structure predicates 0.28 / 0.41 s, a generic function with three
   methods 0.27 / 0.45, a per-class vector of functions in a slot 0.32 / 0.84.
 - **Not done** (`.todo/j81`): the store check (an array of references records no element
-  type); a cast to `short[]`, `char[]`, `long[]`; an array's class name; `Float.intBitsToFloat`,
-  `Math` over floats beyond `abs`, `max`, `min`, `round`, `signum`.
+  type); a cast to `short[]`, `char[]`, `long[]`; an array's class name; `Math` over floats
+  beyond `abs`, `max`, `min`, `round`, `signum` (`Float.intBitsToFloat`: j79).
 
 ## Static initialization (2026-11-17)
 
@@ -886,6 +982,8 @@ under a monitor prints the same on four backends.
 | `synchronized (o) { .. }`, a `synchronized` method | `(let ((%t1 (%java-monitor-enter o))) (unwind-protect (progn ..) (%java-monitor-exit %t1)))`, the lock `this`, `'Class` for a static method and `Class.class`; `(progn (or o (%java-npe)) ..)` in a program reaching no member of `Thread` |
 | a `volatile` field read, written | `(rontolisp:with-mutex ((%java-volatile)) (C.f o))`; `(let* ((%t0 v)) (rontolisp:with-mutex ((%java-volatile)) (setf (C.f o) %t0)))`; the plain access in a program reaching no member of `Thread` |
 | `o.wait()`, `o.notifyAll()`, `t.start()` | `(Thread.await(Object,long) (or o (%java-npe)) 0)`; `(Thread.signal(Object,boolean) (or o (%java-npe)) t)`; `(Thread.start() t)`, whose body ends in `(%java-thread-start carrier daemon (lambda () ..))` |
+| `System.out.println(x)`, `PrintStream p = System.out` | `(write-line x')`; `(java.io.StandardOutput.out())`, whose `p.println(3)` is `(java.io.PrintStream.println(int) p 3)` |
+| `s.getBytes()`, `new String(bs)` | `(%java-utf8-bytes s)`; `(%java-utf8-string bs 0 nil)` |
 | `Arrays.sort(ns)`, `Integer.parseInt(s)` | `(java.util.Arrays.sort(int[]) ns)` whose body is the native `(%java-sort-numbers a 0 (length a))`; `(rontolisp.internal.Support.parseInt(String,int) s 10)` |
 
 ## Measured (2026-11-17)
@@ -989,6 +1087,12 @@ around it), the corpus cases `a-loop-is-a-while-and-its-exits-are-blocks` (what 
 accepts), `a-nested-class-is-static-or-holds-the-instance-around-it` (`o.super(..)`, `o.new I()
 { }`, `Outer.super.m()`, `Outer.this` ahead of `super(..)`) and
 `an-interface-has-defaults-static-and-private-methods-and-constants` (`I.super.m()`),
+java-spec `a-byte-stream-reads-and-writes-bytes-and-a-string-is-its-bytes`,
+`a-print-stream-a-reader-and-a-writer-over-streams-and-system-out-as-a-value` and the
+`standalone:` case `the-standard-input-is-read-as-bytes-and-through-a-reader` (a case's
+`stdin:` is what every leg reads), `ListIterator`, `Collections.binarySearch` and
+`parseUnsignedInt` in the cases of the utilities and of the boxes,
+`JavaLoweringTest#theLibrarysSourceIsJavaAJdkCompiles`,
 `SchemeLibraryTest#aCommonLispProgramReadsNoFrontEndsLibrary` (the gate), `DocExamplesTest` (a
 ` ```java ` fence is a whole program, its output the plain block after it), `ExamplesE2eTest`
 (`examples/java/shop/Main.java`, read with the files of its source tree).

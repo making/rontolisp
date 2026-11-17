@@ -57,6 +57,15 @@ final class JavaIntrinsics {
 	/** The source class holding the members of these classes that are written in Java. */
 	private static final String SUPPORT = "rontolisp.internal.Support";
 
+	private static final String CHARSET = "java.nio.charset.Charset";
+
+	/**
+	 * What {@code System.out} and {@code System.err} are as the receiver of a print: the
+	 * host's stream itself. Their value anywhere else is an object of the library's
+	 * {@code java.io.PrintStream}, made the first time one is asked for.
+	 */
+	static final String STANDARD_STREAM = "rontolisp.internal.StandardStream";
+
 	/** The boxes, and what each holds. */
 	private static final Map<String, Primitive> BOXES = Map.of("java.lang.Integer", Primitive.INT, "java.lang.Long",
 			Primitive.LONG, "java.lang.Double", Primitive.DOUBLE, "java.lang.Boolean", Primitive.BOOLEAN,
@@ -153,9 +162,25 @@ final class JavaIntrinsics {
 	};
 
 	/**
-	 * Adds to an intrinsic class the members whose types name an interface of the
-	 * library's Java source, once a program names that interface: named from the start,
-	 * every program would hold the interface.
+	 * The classes of the library's Java source that the members of a name have in their
+	 * types, in an intrinsic class: {@link #meets} adds those members once the class is
+	 * in the table.
+	 */
+	static List<String> named(String intrinsic, String member) {
+		boolean builder = intrinsic.equals("java.lang.StringBuilder") || intrinsic.equals("java.lang.StringBuffer");
+		if (member.equals("subSequence") && (intrinsic.equals(STRING) || builder)) {
+			return List.of(CHARS);
+		}
+		if (intrinsic.equals(STRING) && (member.equals("getBytes") || member.equals("<init>"))) {
+			return List.of(CHARSET);
+		}
+		return List.of();
+	}
+
+	/**
+	 * Adds to an intrinsic class the members whose types name a class of the library's
+	 * Java source, once a program names that class: named from the start, every program
+	 * would hold the class.
 	 */
 	private static void meets(JavaClass intrinsic, JavaClass named, JavaClasses classes) {
 		boolean text = intrinsic.name.equals(STRING);
@@ -165,6 +190,17 @@ final class JavaIntrinsics {
 			intrinsic.methods.add(new JavaClass.Method(intrinsic, "subSequence", List.of(Primitive.INT, Primitive.INT),
 					new ClassType(named, List.of()), false, false, null, runtime(text ? "substring" : "sb-substring"),
 					false));
+		}
+		if (named.name.equals(CHARSET) && text) {
+			ClassType charset = new ClassType(named, List.of());
+			ArrayType bytes = new ArrayType(Primitive.BYTE);
+			intrinsic.methods.add(new JavaClass.Method(intrinsic, "getBytes", List.of(charset), bytes, false, false,
+					null, support("encode"), false));
+			intrinsic.methods.add(new JavaClass.Method(intrinsic, "<init>", List.of(bytes, charset), Primitive.VOID,
+					false, false, null, support("decode"), false));
+			intrinsic.methods
+				.add(new JavaClass.Method(intrinsic, "<init>", List.of(bytes, Primitive.INT, Primitive.INT, charset),
+						Primitive.VOID, false, false, null, support("decode"), false));
 		}
 		if (named.name.equals("java.lang.Iterable") && text) {
 			intrinsic.methods.add(new JavaClass.Method(intrinsic, "join",
@@ -254,6 +290,19 @@ final class JavaIntrinsics {
 			return method("<init>", Primitive.VOID, emitter, parameters);
 		}
 
+		/**
+		 * A field holding an object of the library's Java source, which the static method
+		 * named as the field answers, and what it is as the receiver of a member that
+		 * needs no object.
+		 */
+		Builder standard(String name, JavaType type, String source, @Nullable Typed direct) {
+			JavaClass.Field field = new JavaClass.Field(this.made, name, type, true, true, null, null);
+			field.accessor = new JavaClass.Accessor(source, name);
+			field.direct = direct;
+			this.made.fields.add(field);
+			return this;
+		}
+
 		Builder field(String name, JavaType type, LispVal form) {
 			this.made.fields.add(new JavaClass.Field(this.made, name, type, true, true, null, form));
 			return this;
@@ -335,10 +384,14 @@ final class JavaIntrinsics {
 			case "java.lang.Character":
 				return character(new Builder(name, false, classes), classes);
 			case "java.lang.System": {
-				ClassType stream = classes.libraryType("java.io.PrintStream");
 				ClassType object = classes.libraryType(OBJECT);
-				return new Builder(name, false, classes).field("out", stream, OUT)
-					.field("err", stream, cl("*error-output*"))
+				Builder system = new Builder(name, false, classes);
+				ClassType stream = classes.libraryType("java.io.PrintStream");
+				ClassType direct = classes.libraryType(STANDARD_STREAM);
+				system.standard("out", stream, "java.io.StandardOutput", new Typed(OUT, direct))
+					.standard("err", stream, "java.io.StandardOutput", new Typed(cl("*error-output*"), direct))
+					.standard("in", classes.libraryType("java.io.InputStream"), "java.io.StandardInput", null);
+				return system
 					.statik("currentTimeMillis", Primitive.LONG,
 							(lowering, call) -> call("values",
 									call("floor", call("%unix-nano-time"), integer(1000000))))
@@ -352,19 +405,22 @@ final class JavaIntrinsics {
 					.statik("lineSeparator", classes.libraryType(STRING),
 							(lowering, call) -> JavaForms.string("\n")).made;
 			}
-			case "java.io.PrintStream": {
+			case STANDARD_STREAM: {
+				// printf and format answer nothing here: a call whose value is used is
+				// the
+				// object's
 				ClassType object = classes.libraryType(OBJECT);
-				Builder builder = new Builder(name, false, classes);
-				ClassType self = new ClassType(builder.made, List.of());
-				return builder
+				return new Builder(name, false, classes)
 					.any("println", false, Primitive.VOID, object,
 							(lowering, call) -> print(lowering, call, "write-line", call.self()))
 					.method("println", Primitive.VOID, (lowering, call) -> newline(call.self()))
 					.any("print", false, Primitive.VOID, object,
 							(lowering, call) -> print(lowering, call, "write-string", call.self()))
-					.method("printf", self, JavaIntrinsics::printf, classes.libraryType(STRING), new ArrayType(object))
+					.method("printf", Primitive.VOID, JavaIntrinsics::printf, classes.libraryType(STRING),
+							new ArrayType(object))
 					.varargs()
-					.method("format", self, JavaIntrinsics::printf, classes.libraryType(STRING), new ArrayType(object))
+					.method("format", Primitive.VOID, JavaIntrinsics::printf, classes.libraryType(STRING),
+							new ArrayType(object))
 					.varargs()
 					.method("flush", Primitive.VOID, host("finish-output")).made;
 			}
@@ -397,8 +453,7 @@ final class JavaIntrinsics {
 
 	private static LispVal printf(Context lowering, Invocation call) {
 		LispVal text = runtimeCall("format", call.argument(0), call.argument(1), lowering.stringFunction());
-		LispSymbol stream = new LispSymbol("%stream");
-		return JavaForms.let(stream, call.self(), List.of(call("write-string", text, stream), stream));
+		return call.self().equals(OUT) ? call("write-string", text) : call("write-string", text, call.self());
 	}
 
 	/** An argument as the text {@code String.valueOf} makes of it. */
@@ -416,6 +471,7 @@ final class JavaIntrinsics {
 		Primitive i = Primitive.INT;
 		Primitive b = Primitive.BOOLEAN;
 		ArrayType characters = new ArrayType(Primitive.CHAR);
+		ArrayType bytes = new ArrayType(Primitive.BYTE);
 		JavaEmitter format = (lowering, call) -> runtimeCall("format", call.self(), call.argument(0),
 				lowering.stringFunction());
 		return builder.constructor((lowering, call) -> JavaForms.string(""))
@@ -424,6 +480,13 @@ final class JavaIntrinsics {
 					characters)
 			.constructor((lowering, call) -> runtimeCall("chars-string", call.argument(0), call.argument(1),
 					call.argument(2)), characters, i, i)
+			.constructor((lowering, call) -> runtimeCall("utf8-string", call.argument(0), integer(0), JavaForms.NIL),
+					bytes)
+			.constructor(runtime("utf8-string"), bytes, i, i)
+			.constructor(support("decodeNamed"), bytes, string)
+			.constructor(support("decodeNamed"), bytes, i, i, string)
+			.method("getBytes", bytes, runtime("utf8-bytes"))
+			.method("getBytes", bytes, support("encodeNamed"), string)
 			.method("length", i, host("length"))
 			.method("charAt", Primitive.CHAR, JavaIntrinsics::charAt, i)
 			.method("isEmpty", b, (lowering, call) -> call("=", call("length", call.self()), integer(0)))
@@ -585,6 +648,15 @@ final class JavaIntrinsics {
 			.statik("valueOf", self,
 					(lowering, call) -> lowering.library(SUPPORT, "parseInt", List.of(call.argument(0), integer(10))),
 					string)
+			.statik("parseUnsignedInt", i,
+					(lowering, call) -> lowering.library(SUPPORT, "parseUnsignedInt",
+							List.of(call.argument(0), integer(10))),
+					string)
+			.statik("parseUnsignedInt", i, support("parseUnsignedInt"), string, i)
+			.statik("toUnsignedString", string,
+					(lowering, call) -> runtimeCall("unsigned-string", call.argument(0), integer(10), integer(32)), i)
+			.statik("toUnsignedLong", Primitive.LONG,
+					(lowering, call) -> call("logand", call.argument(0), integer(0xFFFFFFFFL)), i)
 			.statik("toString", string, host("%decimal-piece"), i)
 			.statik("toString", string, runtime("radix-string"), i, i)
 			.statik("toBinaryString", string,
@@ -674,6 +746,7 @@ final class JavaIntrinsics {
 			.statik("compare", i, runtime("double-compare"), d, d)
 			.statik("hashCode", i, runtime("double-hash"), d)
 			.statik("doubleToLongBits", Primitive.LONG, runtime("double-bits"), d)
+			.statik("longBitsToDouble", d, runtime("bits-double"), Primitive.LONG)
 			.statik("valueOf", self, (lowering, call) -> call.argument(0), d)
 			.statik("isNaN", b, nan, d)
 			.statik("isInfinite", b, infinite, d)
@@ -763,6 +836,7 @@ final class JavaIntrinsics {
 			.statik("compare", i, runtime("double-compare"), f, f)
 			.statik("hashCode", i, runtime("float-bits"), f)
 			.statik("floatToIntBits", i, runtime("float-bits"), f)
+			.statik("intBitsToFloat", f, runtime("bits-float"), i)
 			.statik("isNaN", b, runtime("nan-p"), f)
 			.statik("isInfinite", b, runtime("infinite-p"), f)
 			.statik("isFinite", b,
@@ -907,6 +981,11 @@ final class JavaIntrinsics {
 		return builder.made;
 	}
 
+	/** The host's stream a standard stream writes to: the error stream or the output. */
+	private static LispVal standard(LispVal error) {
+		return call("if", error, cl("*error-output*"), OUT);
+	}
+
 	// ---- the native members of the library's Java source
 
 	/**
@@ -926,6 +1005,18 @@ final class JavaIntrinsics {
 		natives.put(arrays + "sortRange(double[],int,int)", runtime("sort-doubles"));
 		natives.put(arrays + "sortRange(char[],int,int)", runtime("sort-numbers"));
 		natives.put("rontolisp.internal.Support.readDouble(String)", runtime("read-double"));
+		natives.put("rontolisp.internal.Support.utf8(String)", runtime("utf8-bytes"));
+		natives.put("rontolisp.internal.Support.utf8String(byte[],int,int)", runtime("utf8-string"));
+		// the standard streams: the host's, which are streams of characters
+		natives.put("java.io.StandardOutput.write0(boolean,String)",
+				(lowering, call) -> call("write-string", call.argument(1), standard(call.argument(0))));
+		natives.put("java.io.StandardOutput.put0(boolean,int)", (lowering, call) -> call("write-char",
+				call("code-char", call.argument(1)), standard(call.argument(0))));
+		natives.put("java.io.StandardOutput.flush0(boolean)",
+				(lowering, call) -> call("finish-output", standard(call.argument(0))));
+		natives.put("java.io.StandardInput.read0()", runtime("read-character"));
+		natives.put("java.io.StandardInput.ready0()", runtime("input-ready"));
+		natives.put("java.io.StandardInput.more0(int)", runtime("input-more"));
 		String thread = THREAD + ".";
 		natives.put(thread + "carrier0(Thread)", runtime("thread-carrier"));
 		natives.put(thread + "adopt0(Thread)", runtime("thread-adopt"));

@@ -606,6 +606,76 @@ public final class Arrays {
         return hash;
     }
 
+    public static byte[] copyOf(byte[] original, int length) {
+        byte[] copy = new byte[length];
+        System.arraycopy(original, 0, copy, 0, original.length < length ? original.length : length);
+        return copy;
+    }
+
+    public static byte[] copyOfRange(byte[] original, int from, int to) {
+        if (from > to) {
+            throw new IllegalArgumentException(from + " > " + to);
+        }
+        byte[] copy = new byte[to - from];
+        int end = original.length < to ? original.length : to;
+        System.arraycopy(original, from, copy, 0, end - from);
+        return copy;
+    }
+
+    public static String toString(byte[] a) {
+        if (a == null) {
+            return "null";
+        }
+        StringBuilder text = new StringBuilder();
+        text.append('[');
+        for (int i = 0; i < a.length; i++) {
+            if (i > 0) {
+                text.append(", ");
+            }
+            text.append(a[i]);
+        }
+        return text.append(']').toString();
+    }
+
+    public static void fill(byte[] a, byte value) {
+        for (int i = 0; i < a.length; i++) {
+            a[i] = value;
+        }
+    }
+
+    public static void fill(byte[] a, int from, int to, byte value) {
+        range(a.length, from, to);
+        for (int i = from; i < to; i++) {
+            a[i] = value;
+        }
+    }
+
+    public static boolean equals(byte[] a, byte[] b) {
+        if (a == b) {
+            return true;
+        }
+        if (a == null || b == null || a.length != b.length) {
+            return false;
+        }
+        for (int i = 0; i < a.length; i++) {
+            if (a[i] != b[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public static int hashCode(byte[] a) {
+        if (a == null) {
+            return 0;
+        }
+        int hash = 1;
+        for (int i = 0; i < a.length; i++) {
+            hash = 31 * hash + a[i];
+        }
+        return hash;
+    }
+
     // The list Arrays.asList answers: the array itself, so of a fixed size.
     static final class ArrayView<E> extends AbstractList<E> {
 

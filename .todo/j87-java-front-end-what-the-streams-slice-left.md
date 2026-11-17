@@ -1,0 +1,76 @@
+# j87. Java front end: what the streams slice (j79) left
+
+Difficulty: High
+
+**Important -- licence and naming: read `.kb/java-frontend-provenance.md` before writing
+anything.** The library is Java source embedded in every compiled program.
+
+State after j79 (2026-11-17, `.kb/java-frontend.md`, "java.io" and "The library"): `java.io`'s
+byte and character streams, `PrintStream` as a class, `System.in`, the three charsets,
+`String.getBytes` / `new String(byte[])`, `ListIterator`, `Collections.binarySearch`,
+`Integer.parseUnsignedInt`, `Double.longBitsToDouble` / `Float.intBitsToFloat` are in; javac
+compiles the library (`JavaLoweringTest#theLibrarysSourceIsJavaAJdkCompiles`).
+
+## Inside the first target, not done
+
+- **Regular expressions**: `String.split` reads a text or one character class
+  (`%java-split-pattern`); `matches`, `replaceAll`, `replaceFirst`, `Pattern`, `Matcher` are
+  refused. Checked in j79: the Clojure front end's engine is `java.util.regex` of JDK 25
+  ported method by method (`.kb/clojure-frontend.md`, "Regex"), so rule 2 forbids sharing
+  it. Write one from the API's description of the syntax (the `Pattern` class
+  documentation: the constructs, the flags, the quantifier kinds), as Java source of the
+  library, with the JDK as the oracle of a differential test; `split` then moves onto it.
+  Whether the Clojure engine itself may stay as it is under this project's licence is the
+  user's decision, not this item's.
+- **The tree a long `HashMap` chain becomes.** Measured in j79 (`.kb/java-frontend.md`, "The
+  library"): 64 `Double` keys of few digits and a 16 x 16 grid under a weak `hashCode` get
+  there; strings and ints do not. The order inside the JDK's tree is no part of the API; it
+  can only be derived from outputs (which node heads the chain after each put, remove and
+  resize, for comparable and for incomparable keys). Decide whether that derivation is worth
+  an unspecified order before starting it.
+- **`Arrays.deepToString`**: an `Object[]` holding a `short[]` cannot tell it from a
+  `char[]` (one element type). A `short[]` of `(signed-byte 16)` settles it together with the
+  cast to `short[]` / `char[]` that `.todo/j81` lists: do them as one change.
+- `String.chars` / `lines`, `BufferedReader.lines` (streams), `Reader.nullReader`,
+  `InputStream.nullInputStream`, `CharArrayReader` / `CharArrayWriter`, `PushbackReader`,
+  `SequenceInputStream`, `Appendable` / `Readable`, the UTF-16 charsets, `Locale` forms of
+  `printf`, and any other member a program reaches: each is refused by name, add where one
+  is met.
+- **`System.in` on wasm** reads a bulk read to the line's end because `listen` of the
+  standard input traps there (wasmtime 49). A `listen` the wasm backends answer (WASI
+  `poll_oneoff` on preview 1, a pollable on the component) would make the two variants of
+  `%java-input-more` one.
+- `MatchException` and the run time's own errors as the library's classes: `.todo/j82`.
+
+## Measured costs (2026-11-17), each a lead
+
+- **An iterator costs 16 -> 50 to 65 ns an element on wasm and 6 -> 16 ns on the JVM** against
+  the counter over an adjustable vector it replaced; `add` 11 -> 46 ns on wasm. The same shapes
+  written by hand in Lisp cost the same, so the cost is the backends' on structure slots and
+  the `int` mask, not the library's. Where the wasm time goes is not known.
+- **A program adding to a list and reading it is 3.7 -> 25.6 KB of wasm**; one printing a
+  list 44 -> 57 KB, one over a `HashMap` 38 -> 58 KB. `%string`, `%equals` and `%hash` take
+  any value, so they hold every arm (a double's text, the identity table) whatever the
+  program stores. A type flow over what a program puts into its collections would drop them.
+- **Any `try` with a `catch` is 175 KB of wasm** (`C1.java`: one class, one `catch`): the
+  host's `format` and condition report are held. Since j79 a program that makes a
+  `PrintStream` or reads through `InputStream.read(byte[], int, int)` pays it through the
+  library's own `catch` of an `IOException`. With `.todo/j82`.
+- **A `BufferedReader` over `System.in` costs 1.3 us a line on wasm over `IO.readln`**
+  (200,000 lines: 1.04 against 0.78 s), 1.1 us on the JVM: every character goes through
+  `StandardInput.units`, the reader's buffer and `new String(char[], ..)`. A `readLine` that
+  asks the host for a line when the reader stands directly over the standard input would
+  take it back.
+
+## After the first target (from j71)
+
+The rest of `Formatter`, streams, `LinkedList`, `LinkedHashMap`, `TreeMap`/`TreeSet`,
+`EnumMap`/`EnumSet`, `Scanner`, files, `java.time` (and the older
+`Date`/`Calendar`/`TimeZone`), `BigInteger`/`BigDecimal`, `Class` beyond a name,
+reflection, weak references, `Thread` and the concurrent classes (`.todo/j83`).
+
+## To decide
+
+- A program's own class named `Iterable`, `CharSequence` or `Comparable` is refused once the
+  program names a library class whose signatures name the library's (`JavaClasses.register`).
+  Count how often before changing the Lisp names of `java.lang` source classes.
