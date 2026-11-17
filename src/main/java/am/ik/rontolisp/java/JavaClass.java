@@ -18,8 +18,15 @@ import org.jspecify.annotations.Nullable;
  */
 final class JavaClass {
 
-	/** The text a class was read from, for the positions of what is said about it. */
-	record Source(@Nullable String file, String text) {
+	/**
+	 * The text a class was read from, for the positions of what is said about it.
+	 *
+	 * @param file the file, or {@code null}
+	 * @param text its text
+	 * @param library whether it is Java source of the library, lowered as far as the
+	 * program reaches it, and no file of the program, lowered whole
+	 */
+	record Source(@Nullable String file, String text, boolean library) {
 	}
 
 	/** A field. */

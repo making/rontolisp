@@ -8,6 +8,7 @@
 # case -- the ci-spec.yaml idea. So every class of a case carries the case's name. A
 # `standalone` case is a file of its own, named `file`: one that starts another way, or
 # one that ENDS with an uncaught exception -- it prints `stdout`, then reports `error`.
+# `files` holds the other files of its source tree by path, written beside it.
 #
 # Every expectation is what a JDK 25 prints, and the test runs the corpus under the JDK
 # running it as its first leg: an expectation that is not the JDK's fails there. Every
@@ -4366,6 +4367,144 @@ standalone:
       }
     stdout: |
       an instance main with 0 arguments
+  # A program of several files: the classes the file names are found under the root of its
+  # source tree -- the directory its package names it below -- by their packages and names,
+  # with every class of the file found (Polygon, beside Square). Single-type, on-demand and
+  # static imports; a sibling of the package found with no import; a call through an
+  # interface whose classes stand in other files; a static initializer that runs where its
+  # class is first used; protected members reached from a subclass in another package.
+  - name: a-program-of-several-files-finds-its-classes-by-package
+    file: app/Main.java
+    source: |
+      package app;
+
+      import java.util.ArrayList;
+      import java.util.List;
+      import shapes.*;
+      import util.Strings;
+
+      import static java.lang.Math.*;
+      import static util.Strings.GREETING;
+      import static util.Strings.twice;
+
+      public class Main {
+          public static void main(String[] args) {
+              System.out.println(Strings.shout(GREETING) + " " + twice(21) + " " + max(2, 5) + " " + (PI > 3));
+              List<Shape> shapes = new ArrayList<>();
+              shapes.add(new Circle(1));
+              shapes.add(new Square(2));
+              for (Shape shape : shapes) {
+                  System.out.println(shape.name() + " " + shape.area());
+              }
+              System.out.println(Helper.count(shapes) + " " + new Pair("a", 1));
+              System.out.println(util.Registry.size());
+              System.out.println(util.Registry.size());
+          }
+      }
+    files:
+      app/Helper.java: |
+        package app;
+
+        import java.util.List;
+        import shapes.Shape;
+
+        class Helper {
+            static int count(List<Shape> shapes) {
+                return shapes.size();
+            }
+        }
+
+        record Pair(String key, int value) {
+        }
+      util/Strings.java: |
+        package util;
+
+        public class Strings {
+            public static final String GREETING = "hello";
+
+            public static String shout(String s) {
+                return s.toUpperCase() + "!";
+            }
+
+            public static int twice(int x) {
+                return 2 * x;
+            }
+        }
+      util/Registry.java: |
+        package util;
+
+        public class Registry {
+            private static final java.util.List<String> NAMES = new java.util.ArrayList<>();
+
+            static {
+                System.out.println("registry ready");
+                NAMES.add("first");
+            }
+
+            public static int size() {
+                return NAMES.size();
+            }
+        }
+      shapes/Shape.java: |
+        package shapes;
+
+        public interface Shape {
+            double area();
+
+            default String name() {
+                return getClass().getSimpleName();
+            }
+        }
+      shapes/Circle.java: |
+        package shapes;
+
+        public class Circle implements Shape {
+            protected final double r;
+
+            public Circle(double r) {
+                this.r = r;
+            }
+
+            public double area() {
+                return Math.PI * r * r;
+            }
+        }
+      shapes/Square.java: |
+        package shapes;
+
+        public class Square extends Polygon {
+            public Square(double side) {
+                super(side);
+            }
+
+            public double area() {
+                return side * side;
+            }
+
+            public String name() {
+                return "square of " + sides();
+            }
+        }
+
+        abstract class Polygon implements Shape {
+            protected final double side;
+
+            protected Polygon(double side) {
+                this.side = side;
+            }
+
+            protected int sides() {
+                return 4;
+            }
+        }
+    stdout: |
+      HELLO! 42 5 true
+      Circle 3.141592653589793
+      square of 4 4.0
+      2 Pair[key=a, value=1]
+      registry ready
+      1
+      1
 # Programs a compiler refuses, each the scaffold with the case's statements in its main.
 # The JDK has to report `error` at the statements' line, and the front end the same line
 # and a message starting with it.

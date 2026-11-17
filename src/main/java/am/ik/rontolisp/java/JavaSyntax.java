@@ -482,11 +482,13 @@ final class JavaSyntax {
 	 *
 	 * @param pos the {@code import}
 	 * @param name the type's qualified name, a package's for an import on demand, a
-	 * module's for a module import
+	 * module's for a module import; for a static import the member's, or the type's on
+	 * demand
 	 * @param onDemand whether it ends in {@code .*}
 	 * @param module whether it is {@code import module}
+	 * @param isStatic whether it is {@code import static}
 	 */
-	record Import(int pos, String name, boolean onDemand, boolean module) {
+	record Import(int pos, String name, boolean onDemand, boolean module, boolean isStatic) {
 	}
 
 	record CompilationUnit(@Nullable String packageName, List<Import> imports, List<ClassDeclaration> classes) {

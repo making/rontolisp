@@ -4,13 +4,16 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.LispReadException;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -35,7 +38,7 @@ class JavaLoweringTest {
 	}
 
 	private static List<String> lower(String source, String file) {
-		return Java.read(source, file).stream().map(LispVal::print).toList();
+		return Java.read(source, file, JavaFiles.NONE).stream().map(LispVal::print).toList();
 	}
 
 	@Test
@@ -407,7 +410,7 @@ class JavaLoweringTest {
 				        System.out.println(T.CDR(2) + demo.app.T.TEXT + c + big + (int) 3.9e10 + -0.0 + 7 / 2 * 1.5);
 				    }
 				}
-				""", "Main.java")).contains(
+				""", "demo/app/Main.java")).contains(
 				"(DEFSTRUCT (|demo.app.T| (:CONC-NAME |demo.app.T.|) (:CONSTRUCTOR |%make-demo.app.T| NIL) "
 						+ "(:PREDICATE |demo.app.T?|) (:COPIER NIL)) (|j%CAR| 0))",
 				"(DEFUN |demo.app.T.CDR(int)| (|this| |j%LIST|) (- (LOGAND (+ (+ (- (LOGAND (+ (+ |j%LIST| "
@@ -427,7 +430,6 @@ class JavaLoweringTest {
 		String[][] refusals = { { "record P(int... xs) {}", "1:17: a variable arity record component" },
 				{ "class A { synchronized void m() { } }", "1:11: the modifier synchronized" },
 				{ "class A { volatile int x; }", "1:11: the modifier volatile" },
-				{ "import static java.lang.Math.max; void main() { }", "1:8: a static import" },
 				{ "import module java.sql; void main() { }", "1:1: the module java.sql" },
 				{ "void main() { synchronized (this) { } }", "1:15: a synchronized statement" },
 				{ "void main() { assert true; }", "1:15: an assert statement" },
@@ -565,6 +567,73 @@ class JavaLoweringTest {
 				.isInstanceOf(LispReadException.class)
 				.hasMessage("Wrong.java:" + error[1]);
 		}
+	}
+
+	@Test
+	void aProgramOfSeveralFilesIsReadFromItsSourceTree() {
+		// The files of the source tree, rooted where the starting file's package says.
+		Map<String, String> tree = Map.of("p/U.java", """
+				package p;
+				public class U {
+				    public static int F = 3;
+				    int hidden;
+				    public static int yes() { return 1; }
+				    public int inst() { return 2; }
+				    void pkg() { }
+				    protected void prot() { }
+				}
+				""", "p/B.java", "package p; class B { public static int v() { return 1; } }", "p/Q.java",
+				"package other; public class Q { }", "app/Helper.java", """
+						package app;
+						class Helper { static int twice(int x) { return 2 * x; } }
+						""");
+		JavaFiles files = (from, path) -> {
+			String resolved = Path.of(from).resolveSibling(path).normalize().toString();
+			String text = tree.get(resolved);
+			return text == null ? null : new JavaFiles.Source(resolved, text);
+		};
+		// A class beside the file, a class of another package and a static import are
+		// lowered with it, each from its own file.
+		assertThat(Java.read("""
+				package app;
+				import static p.U.*;
+				public class Main { public static void main(String[] a) { IO.println(Helper.twice(yes() + F)); } }
+				""", "app/Main.java", files).stream().map(LispVal::print).toList()).contains(
+				"(DEFUN |app.Helper.twice(int)| (|x|) (- (LOGAND (+ (* 2 |x|) 2147483648) 4294967295) 2147483648))",
+				"(DEFUN |p.U.yes()| NIL 1)");
+		String[][] errors = {
+				{ "x/Main.java", "package app; class Main { }",
+						"x/Main.java:1:1: end of path to source file does not match its package name app" },
+				{ "app/Main.java", "package app; class Main { void main() { IO.println(p.B.v()); } }",
+						"app/Main.java:1:54: B is not public in p; cannot be accessed from outside package" },
+				{ "app/Main.java", "package app; import p.B; class Main { void main() { } }",
+						"app/Main.java:1:21: B is not public in p; cannot be accessed from outside package" },
+				{ "app/Main.java", "package app; class Main { void main() { IO.println(new p.U().hidden); } }",
+						"app/Main.java:1:62: hidden is not public in U; cannot be accessed from outside package" },
+				{ "app/Main.java", "package app; class Main { void main() { new p.U().pkg(); } }",
+						"app/Main.java:1:51: pkg() is not public in U; cannot be accessed from outside package" },
+				{ "app/Main.java", "package app; class Main { void main() { new p.U().prot(); } }",
+						"app/Main.java:1:51: prot() has protected access in U" },
+				{ "app/Main.java", "package app; class Main extends p.U { void main() { prot(); } }", null },
+				{ "app/Main.java", "package app; import static p.U.nope; class Main { void main() { } }",
+						"app/Main.java:1:14: cannot find symbol: static nope" },
+				{ "app/Main.java", "package app; import static p.Nope.*; class Main { void main() { } }",
+						"app/Main.java:1:28: cannot find symbol: class Nope" },
+				{ "app/Main.java", "package app; import static p.U.*; class Main { void main() { inst(); } }",
+						"app/Main.java:1:62: cannot find symbol: method inst()" },
+				{ "app/Main.java", "package app; class Main { void main() { new p.Q(); } }",
+						"p/Q.java:1:1: bad source file: p/Q.java: file does not contain class p.Q" } };
+		List<@Nullable String> reported = new java.util.ArrayList<>();
+		for (String[] error : errors) {
+			try {
+				Java.read(error[1], error[0], files);
+				reported.add(null);
+			}
+			catch (LispReadException ex) {
+				reported.add(ex.getMessage());
+			}
+		}
+		assertThat(reported).containsExactlyElementsOf(java.util.Arrays.stream(errors).map(error -> error[2]).toList());
 	}
 
 }

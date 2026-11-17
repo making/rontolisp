@@ -8,7 +8,8 @@ for rontolisp from the published specifications; no JDK code is read, bundled or
 in a compiled program.
 
 A `.java` file is read as this subset; `--source-language java` says so for any other file
-and for `-e`. A program is one file.
+and for `-e`. A program is the file it starts at and the files of its source tree that
+file names.
 
 ```bash
 rontolisp Hello.java                                # interpreter
@@ -84,6 +85,26 @@ top level holds methods and fields is a compact source file: they are the member
 class, and every library class is in scope without an import. A class declared beside them
 is a member of that class too: an inner class, unless it is `static`, a record, an enum or
 an interface.
+
+## A program of several files
+
+A class the program names that no file read so far declares is read from the file its
+package and name spell under the root of the source tree, the directory above the
+starting file's package: for `app/Main.java` declaring `package app;`, `util.Strings` is
+`util/Strings.java` and `Helper` of the package `app` is `app/Helper.java`. Every class of a
+file read joins the program, and the program is compiled whole. The directories above the
+starting file must spell its package. A `(load "app/Main.java")` from Common Lisp runs the
+program as `rontolisp app/Main.java` does.
+
+```console
+$ rontolisp app/Main.java
+$ rontolisp app/Main.java -o main.wasm
+```
+
+An `import` names a class, a package on demand, `module java.base` (every class of the
+library), or with `static` a static member of a class, or all of them on demand. A class
+that is not `public` and a member with no access modifier are reached from their own
+package only, a `protected` member from its package and from the classes under its class.
 
 ## What is read
 

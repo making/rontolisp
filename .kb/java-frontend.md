@@ -9,7 +9,8 @@ rules: [java-frontend-provenance.md](java-frontend-provenance.md). `--no-gc` is 
 (`CompileFrontend.run`). First slice: j68 (2026-11-17); the declarations and statements past
 it: j69 (2026-11-17); type parameters, inference, lambdas and boxes: j70 (2026-11-17); the
 library: j71 (2026-11-17); the numbers: j72 (2026-11-17); the exceptions: j73 (2026-11-17);
-what comes after is `.todo/j74` (several files, a session), `j76` (threads), `j77`, `j78`, `j79`,
+several files: j74 (2026-11-17); what comes after is `.todo/j74` (a session, the calls across
+languages, the tools), `j76` (threads), `j77`, `j78`, `j79`,
 `j81` and `j82` (what j69, j70, j71, j72 and j73 left).
 
 ## Where it sits
@@ -23,7 +24,8 @@ what comes after is `.todo/j74` (several files, a session), `j76` (threads), `j7
   runs), `JavaPatterns` (what a switch's patterns cover), `JavaNames` (spelling), `JavaForms`,
   `Java` (facade).
 - Reached ONLY through the seam: `eval/SourceLanguage.JAVA`, `.java` or `--source-language java`
-  ([source-language.md](source-language.md)). A program is ONE file lowered whole. No
+  ([source-language.md](source-language.md)). A program is the file it starts at and the files
+  of its source tree it names, lowered whole together ("A program of several files" below). No
   `SourceSession`: the REPL and the playground refuse it (`.todo/j74`).
 - The run-time half is `eval/java.lisp`, spliced by `eval/JavaLibrary` the `StarlarkLibrary` way:
   the interpreter loads it on the first resolution of a `rontolisp::%java-` FUNCTION,
@@ -114,6 +116,46 @@ what comes after is `.todo/j74` (several files, a session), `j76` (threads), `j7
   from the start when a pass moved the table's version: a class added (a library class, a local
   or an anonymous class, an anonymous class's constructor, an enum's `values()`), a local found
   to be read by a local class, the set of lazily initialized classes.
+
+## A program of several files (2026-11-17, j74)
+
+- **Found where first named, as a source launcher finds them** (measured against JDK 25's
+  `java app/Main.java`): `JavaClasses.qualified` misses the table and the library, then reads
+  `<root>/<package>/<Name>.java` (`programClass`) through `JavaFiles`, which the seam makes
+  over the read's `SourceLoader` (`SourceLanguage.javaFiles`); the root is a `../` per name of
+  the starting file's package above its directory. Every class of a file read joins the table
+  (`Polygon` beside `Square` is found once `Square` is). A file that does not declare the
+  class in the package its path spells is `bad source file: .. file does not contain class
+  p.Q`; a starting file whose directories do not spell its package is `end of path to source
+  file does not match its package name p` (the launcher refuses a single file so too). No
+  file (`-e`) reads no other file.
+- **The unit of lowering is the program.** A class found adds to the table, so the pass is
+  lowered again (the table's version, as for a library class); the direct calls and the
+  dispatch sets see every class of every file. A class of another file is the program's
+  (`Source.library` false): lowered whole and located (`located` keeps a provenance unit and
+  line table per file). So a read of a `.java` file is the read of the program it starts:
+  `(load "app/Main.java")` from Common Lisp runs it as `rontolisp app/Main.java` does, on both
+  paths (the interpreter's `loadFile`, `LoadInliner` on the compile path hand the read their
+  loader); a file with no `main` is refused as an entry. Two loads whose programs share a
+  class are two closed programs: the second defines the shared names again, its dispatch
+  sets with them.
+- **Imports**: a single-type import of a class of the program is resolved where it is
+  written (a compiler's `cannot find symbol` at the import), one of the library where it is
+  used, so a program holds only the library classes it uses. A static import
+  (`Unit.statics`, `staticOnDemand`) is checked where it is written (`cannot find symbol:
+  static m`, `cannot find symbol: class C`); a simple name that is no local, field or member
+  of a class around reads the imported field (`variable`), an unqualified call no class
+  around has a method of is the imported class's static methods, every single-static import
+  of the name together (`imported`), a type name the imported member type.
+- **Access across packages** (`JavaClasses.accessible`, `JavaLowering.checkAccess`): a class
+  not `public` named from another package, a member with no modifier and a `protected` one
+  from outside its package and its subclasses are a compiler's errors (`X is not public in p;
+  cannot be accessed from outside package`, `m() has protected access in C`). Only the
+  program's classes are checked; the library trusts itself. Not checked: the receiver rule of
+  a `protected` instance member and a `protected` constructor reached by `new` from a
+  subclass (`deviations.md`). javac drops an inaccessible candidate from the overloads
+  (`no suitable constructor found for A(no arguments)`); ours is chosen, then refused by its
+  access.
 
 ## Declarations and statements past the first slice (2026-11-17)
 
@@ -572,7 +614,8 @@ prints on four backends. After j71 the four programs are byte-identical but `Sie
 
 ## What a compiler reports and this does not, stated in `doc/*/java/deviations.md`
 
-Checked: `private` (the unit is the top-level class), assignment to a `final` field or local,
+Checked: `private` (the unit is the top-level class), the access of a class or member from
+another package ("A program of several files"), assignment to a `final` field or local,
 effectively final captures, a missing `return` and an unreachable statement where it is SURE
 (`completes` / `exits`), and definite assignment through `if`, `while` and `for`. The rule for
 each is to refuse only what a compiler refuses: where the lowering does not follow the branches
@@ -595,7 +638,11 @@ lines); a `refused:` case is the scaffold with the case's statements, which the 
 `error` at that line and the front end at the same line with a message starting the same. In
 process, part of `./mvnw test`. `JavaLoweringTest` (the table as emitted forms, names and constants, the
 refusals and the compile errors with their positions;
-`theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`). `SourceLanguageTest#javaClaimsItsExtension`,
+`theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`; `aProgramOfSeveralFilesIsReadFromItsSourceTree` over
+an in-memory `JavaFiles`: the refusals of the source tree, the imports and the access). A
+`standalone:` case may carry `files:` (path to text) written beside it, its `file:` a path
+below its package's directories (`a-program-of-several-files-finds-its-classes-by-package`).
+`SourceLanguageTest#javaClaimsItsExtension`,
 `RontoLispCliStreamsTest#aJavaFileRunsCompilesAndIsRefusedWhereItCannot`,
 `SchemeLibraryTest#aCommonLispProgramReadsNoFrontEndsLibrary` (the gate), `DocExamplesTest` (a
 ` ```java ` fence is a whole program, its output the plain block after it), `ExamplesE2eTest`

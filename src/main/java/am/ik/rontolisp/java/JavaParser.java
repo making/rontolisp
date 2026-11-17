@@ -300,14 +300,12 @@ final class JavaParser {
 
 	private Import importDeclaration() {
 		int pos = expect("import").offset();
-		if (at("static")) {
-			throw unsupported("a static import");
-		}
-		if (at("module") && peek(1).kind() == Kind.IDENTIFIER) {
+		boolean isStatic = eat("static");
+		if (!isStatic && at("module") && peek(1).kind() == Kind.IDENTIFIER) {
 			this.p++;
 			String module = qualifiedName();
 			expect(";");
-			return new Import(pos, module, false, true);
+			return new Import(pos, module, false, true, false);
 		}
 		StringBuilder name = new StringBuilder(identifier());
 		boolean onDemand = false;
@@ -319,7 +317,7 @@ final class JavaParser {
 			name.append('.').append(identifier());
 		}
 		expect(";");
-		return new Import(pos, name.toString(), onDemand, false);
+		return new Import(pos, name.toString(), onDemand, false, isStatic);
 	}
 
 	private String qualifiedName() {

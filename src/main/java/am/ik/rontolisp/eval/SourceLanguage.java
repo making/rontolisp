@@ -19,6 +19,7 @@ import am.ik.rontolisp.clojure.ClojureJavaClasses;
 import am.ik.rontolisp.clojure.ClojureRepositories;
 import am.ik.rontolisp.compiler.JavaClassLookup;
 import am.ik.rontolisp.java.Java;
+import am.ik.rontolisp.java.JavaFiles;
 import am.ik.rontolisp.scheme.Scheme;
 import am.ik.rontolisp.scheme.SchemeFiles;
 import am.ik.rontolisp.starlark.Starlark;
@@ -225,7 +226,7 @@ public enum SourceLanguage {
 						Starlark.read(source, file, standards.starlark(), starlarkFiles(loader)), null);
 			}
 			if (this == JAVA) {
-				return new LispReader.ReadPrefix(Java.read(source, file), null);
+				return new LispReader.ReadPrefix(Java.read(source, file, javaFiles(loader)), null);
 			}
 			return new LispReader.ReadPrefix(clojure(source, features, file, standards, loader, false, null).forms(),
 					null);
@@ -336,6 +337,37 @@ public enum SourceLanguage {
 			String resolved = SourceLoader.resolve(from == null ? null : SourceLoader.parentDir(from), path);
 			String text = text(loader, resolved);
 			return text == null ? null : new StarlarkFiles.Source(resolved, text);
+		};
+	}
+
+	/**
+	 * The files of a Java program's source tree, through a loader: a path relative to the
+	 * starting file's directory ({@link SourceLoader#resolve}).
+	 * @param loader the loader, or {@code null} for none
+	 * @return the files
+	 */
+	static JavaFiles javaFiles(@Nullable SourceLoader loader) {
+		if (loader == null) {
+			return JavaFiles.NONE;
+		}
+		return new JavaFiles() {
+			@Override
+			public JavaFiles.@Nullable Source find(String from, String path) {
+				String resolved = SourceLoader.resolve(SourceLoader.parentDir(from), path);
+				String text = text(loader, resolved);
+				return text == null ? null : new JavaFiles.Source(resolved, text);
+			}
+
+			@Override
+			public String absolute(String path) {
+				try {
+					return java.nio.file.Path.of(path).toAbsolutePath().normalize().toString();
+				}
+				catch (RuntimeException ex) {
+					// a host with no working directory (the browser) keeps the spelling
+					return path;
+				}
+			}
 		};
 	}
 

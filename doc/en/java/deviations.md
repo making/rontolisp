@@ -135,8 +135,9 @@ statement that cannot be reached is reported after a `return`, a `throw`, a `bre
 statement surely completes; the cases a compiler finds beyond those are not. A local
 declared without a value, assigned twice and then read by a lambda or a local class is not
 refused. A type argument outside the bound of its type parameter is not reported, and no
-unchecked warning is printed. Of the access modifiers `private` is checked; a program is one
-file, so the others never restrict.
+unchecked warning is printed. A `protected` member is reached from every class under its
+class, where the language allows an instance member only through a reference of that
+class's own type and a constructor only through `super(..)`.
 
 **A record's `hashCode`** is computed from its components in order, `31 * h + hash`; the
 language leaves the number unspecified.
@@ -167,7 +168,7 @@ is an error naming it.
 
 Each of these is an error naming the construct and its position.
 
-- Static imports, annotation types, `assert`.
+- Annotation types, `assert`.
 - Class literals.
 - A `switch` over a `long`, a `float`, a `double` or a `boolean`; a switch expression whose colon
   cases run into the next; `Interface.super.m()`; a class extending an inner class from

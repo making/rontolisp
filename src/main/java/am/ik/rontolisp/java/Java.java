@@ -32,16 +32,19 @@ public final class Java {
 	}
 
 	/**
-	 * Reads a Java file and lowers the program it is to Common Lisp core forms.
+	 * Reads the Java program a file starts and lowers it to Common Lisp core forms: the
+	 * file's classes and every class they name from the other files of its source tree,
+	 * lowered together.
 	 * @param source the file's text
-	 * @param file the origin file for diagnostics and for the class the program starts
-	 * at, or {@code null} when unknown
+	 * @param file the origin file for diagnostics, for the class the program starts at
+	 * and for where its source tree is, or {@code null} when unknown
+	 * @param files where the other files of the source tree are read
 	 * @return the top-level forms
 	 * @throws LispReadException on a lexical or syntax error, a construct the subset does
 	 * not have yet, or an error a compiler reports that the lowering depends on, each
 	 * with its position
 	 */
-	public static List<LispVal> read(String source, @Nullable String file) {
+	public static List<LispVal> read(String source, @Nullable String file, JavaFiles files) {
 		String name = "Main";
 		if (file != null) {
 			String path = file.replace('\\', '/');
@@ -51,7 +54,7 @@ public final class Java {
 				name = base;
 			}
 		}
-		return JavaLowering.lower(JavaParser.parse(source, file, name), source, file);
+		return JavaLowering.lower(JavaParser.parse(source, file, name), source, file, files);
 	}
 
 }

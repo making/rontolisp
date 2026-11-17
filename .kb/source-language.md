@@ -84,7 +84,9 @@ jar read in place (`SourceLoader.listArchive`, whose default, like every probe's
 the WIT files `rontolisp.wit` reads, described through `eval/ClojureHostBoundary`, the
 `ClojureBoundary` the seam passes beside the loader (`.kb/clojure-frontend.md`, "Host
 boundary"). A Starlark read gets it through `SourceLanguage.starlarkFiles`, for the modules
-its `load` statements name (`.kb/starlark-frontend.md`, "Modules"). A read with no loader
+its `load` statements name (`.kb/starlark-frontend.md`, "Modules"). A Java read gets it through
+`SourceLanguage.javaFiles`, for the classes of its source tree (`.kb/java-frontend.md`, "A
+program of several files"). A read with no loader
 names no file. A Common Lisp read ignores it.
 
 The entry-language override is validated where it is parsed (an unknown name fails
@@ -145,7 +147,8 @@ programs and read through `read`.
 to core forms in one step, with no `#.` and no reader features; the file name picks the class a
 program starts at (`.kb/java-frontend.md`). `CompileFrontend.run` refuses the entry language
 under `--no-gc`. It has NO `SourceSession` (the constructor refuses, so the REPL and the
-playground do): a program is a whole file, or `-e` with one. `isSourceFile` answers true for
+playground do): a program is a whole file and the files of its source tree it names, or `-e`
+with one file. `isSourceFile` answers true for
 `.java`; what `rontolisp test`, the formatter and the Maven plugin make of one is `.todo/j74`.
 
 ## The run-time libraries' name gate (2026-10-23)

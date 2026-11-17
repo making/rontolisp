@@ -1,4 +1,4 @@
-# j74. Java front end: several files, packages, the other languages, a session
+# j74. Java front end: a session, the other languages, the tools
 
 Difficulty: Medium
 
@@ -6,21 +6,12 @@ Difficulty: Medium
 anything.** No JDK jar, source, Javadoc text or test is copied or translated; what ships is
 written here from the specification; no surface says "Java compatible".
 
-**First target (j68): the first bullet only** -- packages and imports are the language.
-After, in this order: the session and playground (wanted: the first thing taken up once
-the target is met), the calls across languages, `rontolisp test`, the formatter and the
-Maven plugin.
+**Done 2026-11-17: a program of several files** (`.kb/java-frontend.md`, "A program of several
+files"): packages, single, on-demand, static and module imports, the source tree found as a
+source launcher finds it, access across packages, `(load "x.java")` as the read of the program
+that file starts. **Next target: the session and the playground**, then the calls across
+languages, `rontolisp test`, the formatter and the Maven plugin, then annotations.
 
-After j68, which reads one file.
-
-- **A program of several files**: `package` and `import` (single, on demand, static)
-  and a module import (`import module java.base`: every
-  class of the library we have) resolved through the `SourceLoader` the read already carries (`.kb/source-language.md`,
-  "The files a source names travel with the read too"), the directory layout a package
-  names, a class found beside the entry file without being named on the command line.
-  The lowering needs the whole program's class table for its direct calls and dispatch
-  sets (j68), so the unit of lowering is the program, not the file: say how a `(load
-  "x.java")` from Common Lisp and a per-file read agree with that.
 - **Across languages** (`.kb/starlark-frontend.md`, "Across languages", for the
   precedent): a Common Lisp function called from Java and a Java static method called
   from Common Lisp, under one stated name mapping (a method's Lisp name carries its
@@ -45,10 +36,9 @@ After j68, which reads one file.
 - Annotations are parsed and dropped; say so, and refuse the ones whose absence changes a
   program's meaning.
 
-## State after j68 (2026-11-17, `.kb/java-frontend.md`)
+## State (2026-11-17)
 
-One file. `package` is part of every Lisp name of its classes; single-type, on-demand and
-`import module java.base` imports resolve against the file and the library only; a static
-import is refused. `SourceSession` refuses `JAVA` (no REPL, no playground pick); a ` ```java `
-doc fence is checked by `DocExamplesTest` and rendered as static code.
-`SourceLanguage.isSourceFile` answers true for `.java`; its readers are not checked yet.
+`SourceSession` refuses `JAVA` (no REPL, no playground pick); a ` ```java ` doc fence is checked
+by `DocExamplesTest` and rendered as static code. `SourceLanguage.isSourceFile` answers true
+for `.java`; its readers are not checked yet. A session's buffers read no other file of a
+source tree: decide whether a session has one (the REPL's working directory) or none.

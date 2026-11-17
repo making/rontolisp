@@ -55,9 +55,12 @@ final class JavaClasses {
 	 * @param imports the single-type imports, by simple name
 	 * @param onDemand the packages imported on demand
 	 * @param declared the classes it declares, by simple name
+	 * @param statics the classes a static import names, by the simple name of the member
+	 * it imports
+	 * @param staticOnDemand the classes whose static members are imported on demand
 	 */
 	record Unit(Source source, @Nullable String packageName, Map<String, Import> imports, List<String> onDemand,
-			Map<String, JavaClass> declared) {
+			Map<String, JavaClass> declared, Map<String, List<JavaClass>> statics, List<JavaClass> staticOnDemand) {
 	}
 
 	private final Map<String, JavaClass> classes = new LinkedHashMap<>();
@@ -149,8 +152,28 @@ final class JavaClasses {
 
 	}
 
-	JavaClasses(Library library) {
+	/** Where the files of the program's source tree are read. */
+	private final JavaFiles files;
+
+	/** The file the program starts at, or {@code null}: no other file is read. */
+	private final @Nullable String entry;
+
+	/** The path from the starting file's directory up to the root of its source tree. */
+	private final String root;
+
+	/**
+	 * @param library the classes of the library that are no Java source
+	 * @param files where the other files of the program's source tree are read
+	 * @param entry the file the program starts at, or {@code null} when it has none and
+	 * no other file is read
+	 * @param root the path from the starting file's directory up to the root of its
+	 * source tree: a {@code ../} for each name of its package
+	 */
+	JavaClasses(Library library, JavaFiles files, @Nullable String entry, String root) {
 		this.library = library;
+		this.files = files;
+		this.entry = entry;
+		this.root = root;
 	}
 
 	static LispReadException error(@Nullable Source source, int pos, String message) {
@@ -256,6 +279,9 @@ final class JavaClasses {
 			onDemand.addAll(LIBRARY_PACKAGES);
 		}
 		for (Import imported : tree.imports()) {
+			if (imported.isStatic()) {
+				continue;
+			}
 			if (imported.module()) {
 				if (!imported.name().equals("java.base")) {
 					throw unsupported(source, imported.pos(), "the module " + imported.name());
@@ -269,7 +295,8 @@ final class JavaClasses {
 				imports.put(imported.name().substring(imported.name().lastIndexOf('.') + 1), imported);
 			}
 		}
-		Unit unit = new Unit(source, tree.packageName(), imports, onDemand, new LinkedHashMap<>());
+		Unit unit = new Unit(source, tree.packageName(), imports, onDemand, new LinkedHashMap<>(), new HashMap<>(),
+				new ArrayList<>());
 		List<JavaClass> declared = new ArrayList<>();
 		List<JavaClass> all = new ArrayList<>();
 		for (ClassDeclaration declaration : tree.classes()) {
@@ -283,7 +310,101 @@ final class JavaClasses {
 			declared.add(made);
 		}
 		complete(all, unit);
+		for (Import imported : tree.imports()) {
+			if (imported.isStatic()) {
+				importStatic(imported, unit);
+			}
+			else if (!imported.onDemand() && !imported.module() && !imported.name().startsWith("java.")
+					&& !imported.name().startsWith("javax.")) {
+				// a class of the program is looked for where it is imported, as a
+				// compiler
+				// does; one of the library where it is used, so that a program holds only
+				// the library classes it uses
+				require(imported.name(), imported.pos() + "import ".length(), null, unit);
+			}
+		}
 		return declared;
+	}
+
+	/**
+	 * Records what a static import names: a type and its static members by a simple name,
+	 * or all of them on demand. A compiler refuses a type that is not there, and a member
+	 * that is no static one of it.
+	 */
+	private void importStatic(Import imported, Unit unit) {
+		String name = imported.name();
+		int dot = name.lastIndexOf('.');
+		String typeName = imported.onDemand() ? name : name.substring(0, Math.max(dot, 0));
+		int at = imported.pos() + "import static ".length();
+		if (typeName.isEmpty()) {
+			throw error(unit.source(), at, "cannot find symbol: class " + name);
+		}
+		JavaClass type = find(typeName, null, unit);
+		if (type == null) {
+			throw error(unit.source(), at,
+					"cannot find symbol: class " + typeName.substring(typeName.lastIndexOf('.') + 1));
+		}
+		accessible(type, unit, at);
+		if (imported.onDemand()) {
+			unit.staticOnDemand().add(type);
+			return;
+		}
+		String member = name.substring(dot + 1);
+		if (!hasStatic(type, member, new HashSet<>()) && member(type, member, new HashSet<>()) == null) {
+			throw error(unit.source(), imported.pos(), "cannot find symbol: static " + member);
+		}
+		unit.statics().computeIfAbsent(member, key -> new ArrayList<>()).add(type);
+	}
+
+	/** Whether a class has a static field or method of a name, its own or inherited. */
+	static boolean hasStatic(JavaClass type, String name, Set<JavaClass> seen) {
+		if (!seen.add(type)) {
+			return false;
+		}
+		if (type.fields.stream().anyMatch(field -> field.isStatic && field.name.equals(name))
+				|| type.methods.stream().anyMatch(method -> method.isStatic && method.name.equals(name))) {
+			return true;
+		}
+		if (type.superclass != null && hasStatic(type.superclass, name, seen)) {
+			return true;
+		}
+		for (JavaClass implemented : type.interfaces) {
+			if (hasStatic(implemented, name, seen)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The package of a class of the program or of the library's Java source, or
+	 * {@code null} for the unnamed package and for a class whose values are Lisp values.
+	 */
+	@Nullable String packageOf(JavaClass declaration) {
+		Unit unit = declaration.intrinsic ? null : this.units.get(declaration.topLevel());
+		return unit == null ? null : unit.packageName();
+	}
+
+	/**
+	 * Refuses a class of the program that is not {@code public} where it is named from
+	 * another package, as a compiler does.
+	 */
+	void accessible(JavaClass type, Unit from, int pos) {
+		for (JavaClass around = type; around != null && !around.isLocal; around = around.outer) {
+			if (around.intrinsic || around.source == null || around.source.library()
+					|| java.util.Objects.equals(packageOf(around), from.packageName())) {
+				return;
+			}
+			ClassDeclaration declaration = around.declaration;
+			java.util.Set<String> modifiers = declaration == null ? Set.of("public") : declaration.modifiers();
+			boolean inInterface = around.outer != null && around.outer.isInterface;
+			if (!modifiers.contains("public") && !modifiers.contains("protected") && !inInterface) {
+				throw error(from.source(), pos,
+						around.simpleName() + " is not public in "
+								+ (around.outer == null ? packageOf(around) : around.outer.simpleName())
+								+ "; cannot be accessed from outside package");
+			}
+		}
 	}
 
 	/**
@@ -1043,13 +1164,14 @@ final class JavaClasses {
 		if (imported != null) {
 			return qualified(imported.name());
 		}
-		if (unit.packageName() != null) {
-			JavaClass sibling = qualified(unit.packageName() + "." + name);
-			if (sibling != null) {
-				return sibling;
+		for (JavaClass type : unit.statics().getOrDefault(name, List.of())) {
+			JavaClass member = member(type, name, new HashSet<>());
+			if (member != null) {
+				return member;
 			}
 		}
-		else if (this.classes.get(name) instanceof JavaClass sibling) {
+		JavaClass sibling = qualified(unit.packageName() == null ? name : unit.packageName() + "." + name);
+		if (sibling != null) {
 			return sibling;
 		}
 		JavaClass implicit = qualified("java.lang." + name);
@@ -1062,6 +1184,12 @@ final class JavaClasses {
 				return found;
 			}
 		}
+		for (JavaClass type : unit.staticOnDemand()) {
+			JavaClass member = member(type, name, new HashSet<>());
+			if (member != null) {
+				return member;
+			}
+		}
 		return null;
 	}
 
@@ -1069,6 +1197,7 @@ final class JavaClasses {
 	JavaClass require(String name, int pos, @Nullable JavaClass context, Unit unit) {
 		JavaClass found = find(name, context, unit);
 		if (found != null) {
+			accessible(found, unit, pos);
 			return found;
 		}
 		Import imported = unit.imports().get(name);
@@ -1093,8 +1222,11 @@ final class JavaClasses {
 		String text;
 		try (InputStream in = JavaClasses.class.getResourceAsStream(path)) {
 			if (in == null) {
-				this.missing.add(name);
-				return null;
+				JavaClass found = programClass(name);
+				if (found == null) {
+					this.missing.add(name);
+				}
+				return found;
 			}
 			text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
 		}
@@ -1108,13 +1240,49 @@ final class JavaClasses {
 		this.localScope = null;
 		this.methodParameters = List.of();
 		try {
-			declare(JavaParser.parse(text, path, simpleName), new Source(path, text));
+			declare(JavaParser.parse(text, path, simpleName), new Source(path, text, true));
 		}
 		finally {
 			this.localScope = scope;
 			this.methodParameters = parameters;
 		}
 		return java.util.Objects.requireNonNull(this.classes.get(name), () -> path + " does not declare " + name);
+	}
+
+	/**
+	 * The class of a qualified name from the file of the program's source tree that the
+	 * name spells -- {@code app.util.Strings} in {@code app/util/Strings.java} under the
+	 * root -- or {@code null}: as a source launcher finds the classes of a program of
+	 * several files, where they are first named. The file's other classes join with it.
+	 */
+	private @Nullable JavaClass programClass(String name) {
+		if (this.entry == null || name.startsWith("java.") || name.startsWith("javax.")) {
+			return null;
+		}
+		JavaFiles.Source found = this.files.find(this.entry, this.root + name.replace('.', '/') + ".java");
+		if (found == null) {
+			return null;
+		}
+		int dot = name.lastIndexOf('.');
+		String simpleName = name.substring(dot + 1);
+		Source source = new Source(found.path(), found.text(), false);
+		Function<String, @Nullable JavaClass> scope = this.localScope;
+		List<TypeParameter> parameters = this.methodParameters;
+		this.localScope = null;
+		this.methodParameters = List.of();
+		try {
+			CompilationUnit tree = JavaParser.parse(found.text(), found.path(), simpleName);
+			if (!java.util.Objects.equals(tree.packageName(), dot < 0 ? null : name.substring(0, dot))
+					|| tree.classes().stream().noneMatch(declared -> declared.name().equals(simpleName))) {
+				throw error(source, 0, "bad source file: " + found.path() + ": file does not contain class " + name);
+			}
+			declare(tree, source);
+		}
+		finally {
+			this.localScope = scope;
+			this.methodParameters = parameters;
+		}
+		return this.classes.get(name);
 	}
 
 	/** The library class of a qualified name, which the front end itself relies on. */

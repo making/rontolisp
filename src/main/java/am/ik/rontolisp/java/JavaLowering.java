@@ -442,9 +442,11 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private final JavaInitOrder order;
 
-	private SourceProvenance.@Nullable Unit provenance;
+	/** The compile path's record of each file of the program, made where first asked. */
+	private Map<Source, SourceProvenance.@Nullable Unit> provenance = new IdentityHashMap<>();
 
-	private int @Nullable [] lineStarts;
+	/** The start of each line of each file of the program, for the interpreter. */
+	private final Map<Source, int[]> lineStarts = new IdentityHashMap<>();
 
 	private JavaLowering(JavaClasses classes, List<JavaClass> declared, Source program, JavaInitOrder order) {
 		this.classes = classes;
@@ -460,22 +462,41 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/**
-	 * Lowers a program.
+	 * Lowers a program: the file it starts at and the classes it names from the other
+	 * files of its source tree, whose root is the directory the file's package names it
+	 * below, as a source launcher finds them.
 	 * @param tree the program's file
 	 * @param source its text
-	 * @param file the origin file, or {@code null} when unknown
+	 * @param file the origin file, or {@code null} when unknown: no other file is read
+	 * @param files where the other files are read
 	 * @return the top-level forms
 	 * @throws LispReadException at the first construct the subset does not have and at
 	 * the first error a compiler reports that the lowering depends on
 	 */
-	static List<LispVal> lower(CompilationUnit tree, String source, @Nullable String file) {
-		Source program = new Source(file, source);
+	static List<LispVal> lower(CompilationUnit tree, String source, @Nullable String file, JavaFiles files) {
+		Source program = new Source(file, source, false);
 		if (tree.classes().isEmpty()) {
 			throw JavaClasses.error(program, 0, "the file declares no class");
 		}
-		JavaClasses classes = new JavaClasses(JavaIntrinsics.LIBRARY);
+		String root = "";
+		if (file != null && tree.packageName() != null) {
+			// the directories above the file spell its package, as a source launcher
+			// requires: the root of the source tree is above them
+			String[] directories = files.absolute(file).replace('\\', '/').split("/");
+			String[] names = tree.packageName().split("\\.");
+			boolean matches = directories.length > names.length;
+			for (int i = 0; matches && i < names.length; i++) {
+				matches = names[i].equals(directories[directories.length - 1 - names.length + i]);
+			}
+			if (!matches) {
+				throw JavaClasses.error(program, 0,
+						"end of path to source file does not match its package name " + tree.packageName());
+			}
+			root = "../".repeat(names.length);
+		}
+		JavaClasses classes = new JavaClasses(JavaIntrinsics.LIBRARY, files, file, root);
 		List<JavaClass> declared = classes.declare(tree, program);
-		SourceProvenance.Unit provenance = SourceProvenance.unit(file, source);
+		Map<Source, SourceProvenance.@Nullable Unit> provenance = new IdentityHashMap<>();
 		JavaInitOrder order = new JavaInitOrder();
 		while (true) {
 			int version = classes.version();
@@ -502,29 +523,31 @@ final class JavaLowering implements JavaEmitter.Context {
 	/**
 	 * A form located at a node's position, as a reader locates what it reads: recorded in
 	 * the compile path's table, or for the interpreter answered as a located copy -- so
-	 * the caller uses the value returned. Only the program's own file is located.
+	 * the caller uses the value returned. Only the program's own files are located.
 	 */
 	private LispVal located(LispVal form, int pos) {
 		Source source = this.unit.source();
-		if (source != this.program || source.file() == null || !(form instanceof LispCons cons)
-				|| form instanceof LocatedCons) {
+		String file = source.file();
+		if (source.library() || file == null || !(form instanceof LispCons cons) || form instanceof LocatedCons) {
 			return form;
 		}
-		if (this.provenance != null) {
-			SourceProvenance.record(cons, this.provenance, pos);
+		SourceProvenance.Unit recorded = this.provenance.computeIfAbsent(source,
+				read -> SourceProvenance.unit(file, read.text()));
+		if (recorded != null) {
+			SourceProvenance.record(cons, recorded, pos);
 			return form;
 		}
-		if (this.lineStarts == null) {
-			List<Integer> starts = new ArrayList<>(List.of(0));
-			for (int i = 0; i < source.text().length(); i++) {
-				if (source.text().charAt(i) == '\n') {
-					starts.add(i + 1);
+		int[] starts = this.lineStarts.computeIfAbsent(source, read -> {
+			List<Integer> found = new ArrayList<>(List.of(0));
+			for (int i = 0; i < read.text().length(); i++) {
+				if (read.text().charAt(i) == '\n') {
+					found.add(i + 1);
 				}
 			}
-			this.lineStarts = starts.stream().mapToInt(Integer::intValue).toArray();
-		}
-		int found = java.util.Arrays.binarySearch(this.lineStarts, pos);
-		return new LocatedCons(cons.car(), cons.cdr(), source.file(), found >= 0 ? found + 1 : -found - 1);
+			return found.stream().mapToInt(Integer::intValue).toArray();
+		});
+		int found = java.util.Arrays.binarySearch(starts, pos);
+		return new LocatedCons(cons.car(), cons.cdr(), file, found >= 0 ? found + 1 : -found - 1);
 	}
 
 	@Override
@@ -591,7 +614,7 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	/** Whether a class is Java source of the library, and no class of the program. */
 	private boolean isLibrary(JavaClass declaration) {
-		return !declaration.intrinsic && declaration.source != this.program;
+		return !declaration.intrinsic && declaration.source != null && declaration.source.library();
 	}
 
 	/**
@@ -1335,7 +1358,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		ClassType site = target == this.currentClass ? target.self() : this.currentClass.supertype(target);
 		Resolved resolved = resolve(constructors(target), site, List.of(), arguments, null,
 				"constructor " + target.simpleName(), target, pos);
-		checkAccess(resolved.method().isPrivate, resolved.method().owner,
+		checkAccess(resolved.method().isPrivate, resolved.method().declaration, resolved.method().owner,
 				target.simpleName() + resolved.method().parameterList(), pos);
 		called(resolved.method());
 		if (isTrivial(resolved.method())) {
@@ -1733,7 +1756,19 @@ final class JavaLowering implements JavaEmitter.Context {
 			path = type.hasOuterInstance() && path != null ? list(slotAccessor(type, outerSlot(type)), path) : null;
 			type = type.outer;
 		}
-		return null;
+		List<JavaClass> owners = imported(name, owner -> field(owner, name) instanceof Field field && field.isStatic);
+		return owners.isEmpty() ? null
+				: new FieldRef(Objects.requireNonNull(field(owners.get(0), name)), null, owners.get(0));
+	}
+
+	/**
+	 * The classes a static import of the file brings a member of a name from, as the
+	 * member wanted: the single-static imports of the name, else the static imports on
+	 * demand.
+	 */
+	private List<JavaClass> imported(String name, java.util.function.Predicate<JavaClass> has) {
+		List<JavaClass> found = this.unit.statics().getOrDefault(name, List.of()).stream().filter(has).toList();
+		return !found.isEmpty() ? found : this.unit.staticOnDemand().stream().filter(has).toList();
 	}
 
 	/** The instance of a class around the one the lowering stands in, or {@code null}. */
@@ -2466,11 +2501,36 @@ final class JavaLowering implements JavaEmitter.Context {
 		return new Typed(THIS, this.currentClass.self());
 	}
 
-	/** A member that is {@code private} is reached from its own top-level class only. */
-	private void checkAccess(boolean isPrivate, JavaClass owner, String what, int pos) {
+	/**
+	 * A member that is {@code private} is reached from its own top-level class only; one
+	 * of a class of the program with no access modifier from its package only, one that
+	 * is {@code protected} from its package and from the classes under its class. A
+	 * member the front end writes itself has the access of its class.
+	 * @param declaration the member as written, or {@code null}
+	 */
+	private void checkAccess(boolean isPrivate, @Nullable Object declaration, JavaClass owner, String what, int pos) {
 		if (isPrivate && owner.topLevel() != this.currentClass.topLevel()) {
 			throw error(pos, what + " has private access in " + owner.simpleName());
 		}
+		Set<String> modifiers = switch (declaration) {
+			case JavaSyntax.Method method -> method.modifiers();
+			case JavaSyntax.Field field -> field.modifiers();
+			case null, default -> Set.of("public");
+		};
+		if (isPrivate || owner.intrinsic || isLibrary(owner) || owner.isInterface || modifiers.contains("public")
+				|| Objects.equals(this.classes.packageOf(owner), this.unit.packageName())) {
+			return;
+		}
+		if (!modifiers.contains("protected")) {
+			throw error(pos,
+					what + " is not public in " + owner.simpleName() + "; cannot be accessed from outside package");
+		}
+		for (JavaClass around = this.currentClass; around != null; around = around.outer) {
+			if (around.isSubclassOf(owner)) {
+				return;
+			}
+		}
+		throw error(pos, what + " has protected access in " + owner.simpleName());
 	}
 
 	/** A simple name read as a value. */
@@ -2536,7 +2596,11 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (variable(first, 0, true) != null) {
 			return null;
 		}
-		return this.classes.find(name, this.currentClass, this.unit);
+		JavaClass found = this.classes.find(name, this.currentClass, this.unit);
+		if (found != null) {
+			this.classes.accessible(found, this.unit, expression.pos());
+		}
+		return found;
 	}
 
 	private Typed expression(Expression expression, @Nullable JavaType expected) {
@@ -2756,7 +2820,7 @@ final class JavaLowering implements JavaEmitter.Context {
 							: field.form instanceof LispDouble number ? narrowed(number.value(), type) : null;
 			return new Typed(field.form, field.type, constant);
 		}
-		checkAccess(field.isPrivate, field.owner, field.name, pos);
+		checkAccess(field.isPrivate, field.declaration, field.owner, field.name, pos);
 		if (!field.isStatic) {
 			return new Typed(list(JavaNames.accessor(field), Objects.requireNonNull(object)),
 					inScope(this.types.upward(this.types.memberType(field.type, site, field.owner)), pos));
@@ -4434,7 +4498,7 @@ final class JavaLowering implements JavaEmitter.Context {
 						? unsupported(pos, "a call of one of Object's methods through super") : error(pos,
 								"abstract method " + resolved.method().signature() + " cannot be accessed directly");
 			}
-			checkAccess(body.isPrivate, body.owner, body.signature(), pos);
+			checkAccess(body.isPrivate, body.declaration, body.owner, body.signature(), pos);
 			called(body);
 			return new Typed(
 					located(form(JavaNames.function(body), prepend(thisValue(pos).form(), resolved.forms())), pos),
@@ -4445,6 +4509,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		LispVal path = this.staticContext ? null : THIS;
 		JavaType site = null;
 		boolean qualified = false;
+		List<JavaClass> imported = List.of();
 		if (call.target() != null) {
 			JavaClass named = classNamed(call.target());
 			if (named != null) {
@@ -4492,13 +4557,33 @@ final class JavaLowering implements JavaEmitter.Context {
 				in = type;
 				path = instance;
 			}
+			else {
+				imported = imported(call.name(),
+						owner -> methods(owner, call.name()).stream().anyMatch(method -> method.isStatic));
+				if (!imported.isEmpty()) {
+					in = imported.get(0);
+					qualified = true;
+				}
+			}
 			site = in.self();
 		}
 		this.flexible = flexible;
-		Resolved resolved = resolve(methods(in, call.name()), site, explicit, call.arguments(), expected,
-				"method " + call.name(), in, pos);
+		List<Method> candidates = methods(in, call.name());
+		if (imported.size() > 1) {
+			// the static methods of a name every class importing it has
+			candidates = new ArrayList<>();
+			for (JavaClass owner : imported) {
+				for (Method method : methods(owner, call.name())) {
+					if (method.isStatic && !candidates.contains(method)) {
+						candidates.add(method);
+					}
+				}
+			}
+		}
+		Resolved resolved = resolve(candidates, site, explicit, call.arguments(), expected, "method " + call.name(), in,
+				pos);
 		Method method = resolved.method();
-		checkAccess(method.isPrivate, method.owner, method.signature(), pos);
+		checkAccess(method.isPrivate, method.declaration, method.owner, method.signature(), pos);
 		if (!method.isStatic && receiver == null) {
 			if (qualified || path == null) {
 				throw error(pos,
@@ -4833,7 +4918,8 @@ final class JavaLowering implements JavaEmitter.Context {
 					resolved.method().emitter.emit(this, new Invocation(null, resolved.arguments(), false, pos)), type);
 		}
 		if (!constant) {
-			checkAccess(resolved.method().isPrivate, made, made.simpleName() + resolved.method().parameterList(), pos);
+			checkAccess(resolved.method().isPrivate, resolved.method().declaration, made,
+					made.simpleName() + resolved.method().parameterList(), pos);
 		}
 		called(resolved.method());
 		uses(made);
@@ -4868,7 +4954,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			Resolved resolved = resolve(constructors(extended), extendedType, List.of(), creation.arguments(), null,
 					"constructor " + extended.simpleName(), extended, pos);
 			if (!extended.isEnum) {
-				checkAccess(resolved.method().isPrivate, extended,
+				checkAccess(resolved.method().isPrivate, resolved.method().declaration, extended,
 						extended.simpleName() + resolved.method().parameterList(), pos);
 			}
 			above = resolved.method();

@@ -24,6 +24,7 @@ import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.testsupport.CliStack;
@@ -79,17 +80,31 @@ class JavaSpecE2eTest {
 	/**
 	 * A case run as a file of its own.
 	 *
-	 * @param file the file's name, which the launch protocol reads
+	 * @param file the file's path, which the launch protocol reads: below the directories
+	 * its package names
 	 * @param error the text of the uncaught exception it ends with, or {@code null} when
 	 * it ends normally
 	 * @param stderr the whole of its standard error but a JDK's frame lines, or
 	 * {@code null} when only the report of {@code error} is checked
+	 * @param files the other files of its source tree, by path, or {@code null}
 	 */
 	record Standalone(String name, String file, String source, String stdout, @Nullable String error,
-			@Nullable String stderr) {
+			@Nullable String stderr, @Nullable Map<String, String> files) {
 
 		String stem() {
-			return "Standalone" + this.file.replace(".java", "");
+			return "Standalone" + this.file.replace(".java", "").replace('/', '_');
+		}
+
+		/**
+		 * Writes the program's files under a directory of its own and answers the first.
+		 */
+		Path write(String leg) throws IOException {
+			if (this.files != null) {
+				for (Map.Entry<String, String> other : this.files.entrySet()) {
+					JavaSpecE2eTest.write(leg, other.getKey(), other.getValue());
+				}
+			}
+			return JavaSpecE2eTest.write(leg, this.file, this.source);
 		}
 
 	}
@@ -150,7 +165,8 @@ class JavaSpecE2eTest {
 		Spec spec = loadSpec();
 		String program = spec.program();
 		boolean wasm = HostWasmtime.isAvailable();
-		Callable<String> jdk = started(() -> runOnJdk(PROGRAM + ".java", program).stdout());
+		Callable<String> jdk = started(
+				() -> runOnJdk(PROGRAM + ".java", write("JDK-" + PROGRAM, PROGRAM + ".java", program)).stdout());
 		Callable<String> interpreter = started(
 				() -> interpret(write("INTERPRETER", PROGRAM + ".java", program), program));
 		Callable<String> jvm = started(() -> runOnJvm(program));
@@ -167,7 +183,7 @@ class JavaSpecE2eTest {
 		List<Standalone> cases = loadSpec().standalone();
 		for (Standalone s : cases == null ? List.<Standalone>of() : cases) {
 			legs.add(dynamicTest(s.name() + " JDK", () -> {
-				assertEnded(s, "JDK", runOnJdk(s.file(), s.source()));
+				assertEnded(s, "JDK", runOnJdk(s.file(), s.write(s.stem() + "-JDK")));
 			}));
 			legs.add(dynamicTest(s.name() + " INTERPRETER", () -> standaloneOnInterpreter(s)));
 			legs.add(dynamicTest(s.name() + " JVM", () -> standaloneOnJvm(s)));
@@ -177,7 +193,7 @@ class JavaSpecE2eTest {
 					if (!HostWasmtime.isAvailable()) {
 						abort("no usable wasmtime on PATH");
 					}
-					Path file = write(s.stem() + "-" + leg, s.file(), s.source());
+					Path file = s.write(s.stem() + "-" + leg);
 					Path module = compileWasm(file, s.source(), component, s.stem());
 					assertEnded(s, leg, ended(
 							new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", module.toString())
@@ -201,7 +217,7 @@ class JavaSpecE2eTest {
 			String file = "Refused" + (index++) + ".java";
 			String source = refusals.source(r);
 			legs.add(dynamicTest(r.name() + " JDK", () -> {
-				Ended ended = runOnJdk(file, source);
+				Ended ended = runOnJdk(file, write("JDK-" + file.replace(".java", ""), file, source));
 				assertThat(ended.stderr()).as("refused case '%s' under the JDK: %s", r.name(), r.body())
 					.contains(file + ":" + line + ": error: " + r.error() + "\n");
 			}));
@@ -230,15 +246,20 @@ class JavaSpecE2eTest {
 		Path dir = workDir.resolve(leg);
 		Files.createDirectories(dir);
 		Path path = dir.resolve(file);
+		Files.createDirectories(java.util.Objects.requireNonNull(path.getParent()));
 		Files.writeString(path, source, StandardCharsets.UTF_8);
 		return path;
 	}
 
-	// The oracle: the source launcher of the JDK running this test.
-	private static Ended runOnJdk(String file, String source) throws Exception {
-		Path path = write("JDK-" + file.replace(".java", ""), file, source);
+	// The oracle: the source launcher of the JDK running this test, started where the
+	// path of the file it is given begins.
+	private static Ended runOnJdk(String file, Path written) throws Exception {
+		Path dir = written;
+		for (int i = file.split("/").length; i > 0; i--) {
+			dir = java.util.Objects.requireNonNull(dir.getParent());
+		}
 		return ended(new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(), file)
-			.directory(java.util.Objects.requireNonNull(path.getParent()).toFile())
+			.directory(dir.toFile())
 			.start());
 	}
 
@@ -287,7 +308,7 @@ class JavaSpecE2eTest {
 	}
 
 	private static void standaloneOnInterpreter(Standalone s) throws Exception {
-		Path file = write(s.stem() + "-INTERPRETER", s.file(), s.source());
+		Path file = s.write(s.stem() + "-INTERPRETER");
 		int[] status = new int[1];
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		ByteArrayOutputStream err = new ByteArrayOutputStream();
@@ -296,7 +317,8 @@ class JavaSpecE2eTest {
 				LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
 				try {
 					for (LispVal form : SourceLanguage.forFile(file.toString(), null)
-						.read(s.source(), Features.INTERPRETER, file.toString())) {
+						.read(s.source(), Features.INTERPRETER, file.toString(), SourceStandards.DEFAULT,
+								evaluator.sourceLoader())) {
 						evaluator.eval(form);
 					}
 				}
@@ -314,7 +336,7 @@ class JavaSpecE2eTest {
 	// runtime classes travelling beside it in its class path directory, as the CLI
 	// writes them.
 	private static void standaloneOnJvm(Standalone s) throws Exception {
-		Path file = write(s.stem() + "-JVM", s.file(), s.source());
+		Path file = s.write(s.stem() + "-JVM");
 		Path dir = workDir.resolve(s.stem());
 		Files.createDirectories(dir);
 		JvmSourceCompiler.Result compiled = new JvmSourceCompiler(s.stem()).compile(s.source(), file.toString());
