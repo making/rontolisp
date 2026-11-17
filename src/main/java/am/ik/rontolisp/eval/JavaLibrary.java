@@ -30,7 +30,7 @@ import org.jspecify.annotations.Nullable;
  * <li>the interpreter evaluates {@link #forms()} into the global environment the first
  * time one of the {@code rontolisp::%java-} functions is resolved
  * ({@code LispEvaluator#resolveFunction});</li>
- * <li>the compile path calls {@link #process(List)} inside
+ * <li>the compile path calls {@link #process(List, boolean)} inside
  * {@code CompileFrontend.expand}: a program that references one of the functions -- only
  * a lowered Java program does -- gets the definitions prepended, and
  * {@link LibraryDefunPruner} drops the ones it does not reach.</li>

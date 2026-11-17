@@ -15804,10 +15804,13 @@ cases:
     # host's objects; compareAndSet compares values whose identity survives
     # the java: boundary there. Oracle-identical (clj 1.12.6, 2026-11-09).
     source: |
-      (let [m (java.util.Collections/synchronizedMap (java.util.WeakHashMap.))]
-        (prn (.put m [1 2] :v) (.put m "k" 1) (.put m [1 2] :w) (.put m {:a 1} nil))
+      ;; The keys are bound and used last so the host's weak map cannot collect them
+      ;; between lines (GC timing must not reach the output).
+      (let [m (java.util.Collections/synchronizedMap (java.util.WeakHashMap.))
+            k1 [1 2] k2 "k" k3 {:a 1}]
+        (prn (.put m k1 :v) (.put m k2 1) (.put m [1 2] :w) (.put m k3 nil))
         (prn (.get m [1 2]) (.get m (vector 1 2)) (.get m "k") (.containsKey m {:a 1}) (.containsKey m "z") (.size m))
-        (prn (.remove m [1 2]) (.remove m [1 2]) (.size m) (.isEmpty m) (.clear m) (.isEmpty m)))
+        (prn (.remove m k1) (.remove m [1 2]) (.size m) (.isEmpty m) (when (and k2 k3) (.clear m)) (.isEmpty m)))
       (let [r (java.util.concurrent.atomic.AtomicReference. false)
             e (java.util.concurrent.atomic.AtomicReference.)]
         (prn (.get r) (.set r true) (.get r) (.get e) (str e) (str r))
