@@ -77,3 +77,19 @@ read by qualified name where a program first names it. Intrinsic now: `Object`, 
 text); source: the `Throwable` family of thirteen and `Runnable`. The members are the ones listed
 in `doc/en/java/index.md`; any other is refused by name. `ArrayList` as an adjustable vector
 against Java over `Object[]` is not measured yet.
+
+## State after j70 (2026-11-17, `.kb/java-frontend.md`)
+
+- `java.util.function` (34 interfaces), `Comparable` and `Comparator` are Java source in the
+  jar; `String`, `Integer`, `Long`, `Double`, `Character` and `Enum` are `Comparable` in a
+  program naming it (`JavaClasses.compares`), each with `compareTo`. A dispatcher through a
+  source interface has an arm per intrinsic class implementing it (the class's predicate, its
+  emitter): the way `CharSequence`, `Iterable` and `Collection` can take the intrinsics.
+- An intrinsic member cannot declare a type parameter of its own (`List.of`, `Map.of`,
+  `Collections.emptyList`): `JavaIntrinsics.Builder` makes none. A program's or a source
+  class's method can.
+- Left here by j70: `==` of two strings is still refused. Its meaning is identity, and a
+  constant string is one object per text: lower the constants of a program that compares
+  strings by reference as globals (the program is closed and lowered until still, so only
+  such a program pays), then `eq`. `new Object()` is refused (it needs a value that is no other class's). A `HashMap`
+  keyed by a type parameter is refused with the other keys `equal` does not compare.

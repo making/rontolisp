@@ -58,3 +58,13 @@ After j69 (2026-11-17): a `float` literal and the `float` type are still refused
 with a `double` component has no `hashCode` (`Double.hashCode` is `%java-hash-code`, which
 refuses a float); `Double.compare` is exact (`%java-double-compare`); `new long[n][m]` leaves are
 untyped vectors.
+
+## State after j70 (2026-11-17, `.kb/java-frontend.md`)
+
+- Measured: `(make-array n :element-type '(signed-byte 32))` has `array-element-type` `T` on
+  the interpreter, the JVM and wasm; only `double-float` is kept. So an `int[]` is the same
+  kind of vector as an `Object[]`, no array records its element type, and j70 left to this
+  item: the store check (`ArrayStoreException` through a widened array type, stated in
+  `deviations.md`) and a narrowing cast or `instanceof` to an array type (refused by name).
+- A boxed `long` is `(number . :long)`; a boxed `int` and `double` the number. `Byte`, `Short`
+  and `Float` boxes need the same decision: a tag where the number alone does not tell.

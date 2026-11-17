@@ -27,9 +27,10 @@ class JavaLoweringTest {
 		// A class is a structure, extends its :include, a field a slot with its type's
 		// default, a static field a global set before main; a method's function has
 		// its signature in its name; a call is direct with one body and a function
-		// over the structure predicates with several, a function tested first where
-		// the interface is a lambda's; + is by the operands' static types; a library
-		// class is read where the program first names it, here inside method bodies.
+		// over the structure predicates with several, a funcall where the receiver can
+		// only be a lambda; + is by the operands' static types; an unboxing tests for
+		// null; a library class is read where the program first names it, here inside
+		// method bodies.
 		assertThat(
 				lower("""
 						interface Shape { double area(); }
@@ -115,7 +116,7 @@ class JavaLoweringTest {
 					"(DEFUN |L1.adder(int)| (|n|) (LAMBDA (|x|) (- (LOGAND (+ (+ |x| |n|) 2147483648) 4294967"
 							+ "295) 2147483648)))",
 					"(DEFUN |L1.main(String[])| (|args|) (LET ((|s| (|Circle.new(double)| 1.5))) (LET ((|boxe"
-							+ "d| (|L1.twice(int)| 3))) (LET ((|flag| (IF (> |boxed| 3) T :FALSE))) (WRITE-LINE (%STRIN"
+							+ "d| (|L1.twice(int)| 3))) (LET ((|flag| (IF (> (OR |boxed| (RONTOLISP::%JAVA-NULL-UNBOX)) 3) T :FALSE))) (WRITE-LINE (%STRIN"
 							+ "G-CONCAT (%STRING-CONCAT (%STRING-CONCAT (OR (|L1.show(Shape,Object,char,boolean)| |s| |"
 							+ "boxed| 99 (RONTOLISP::%JAVA-UNBOX-BOOLEAN |flag|)) \"null\") (%DECIMAL-PIECE (FUNCALL (|L1"
 							+ ".adder(int)| 1) 2))) (IF (|Rect?| |s|) \"true\" \"false\")) (IF (NOT (NULL |s|)) \"true\" \"fal"
@@ -128,9 +129,8 @@ class JavaLoweringTest {
 							+ "\": \") (OR (|Throwable.message| |this|) \"null\")))))",
 					"(DEFUN |Base.area()%v| (|%o|) (COND ((|Circle?| |%o|) (|Circle.area()| |%o|)) ((|Rect?| "
 							+ "|%o|) (|Rect.area()| |%o|)) (T (RONTOLISP::%JAVA-NO-RECEIVER |%o| \"area()\"))))",
-					"(DEFUN |Shape.area()%v| (|%o|) (COND ((FUNCTIONP |%o|) (FUNCALL |%o|)) ((|Circle?| |%o|)"
-							+ " (|Circle.area()| |%o|)) ((|Rect?| |%o|) (|Rect.area()| |%o|)) (T (RONTOLISP::%JAVA-NO-R"
-							+ "ECEIVER |%o| \"area()\"))))",
+					"(DEFUN |Shape.area()%v| (|%o|) (COND ((|Circle?| |%o|) (|Circle.area()| |%o|)) ((|Rect?| "
+							+ "|%o|) (|Rect.area()| |%o|)) (T (RONTOLISP::%JAVA-NO-RECEIVER |%o| \"area()\"))))",
 					"(DEFUN |%string| (|%o|) (COND ((|Base?| |%o|) (|Base.toString()| |%o|)) ((|Throwable?| |"
 							+ "%o|) (|Throwable.toString()| |%o|)) (T (RONTOLISP::%JAVA-TO-STRING |%o| #'|%string|))))",
 					"(DEFUN |%lisp-error| (|%c|) (IF (RONTOLISP::%JAVA-DIVISION-BY-ZERO-P |%c|) (|ArithmeticE"
@@ -239,6 +239,80 @@ class JavaLoweringTest {
 	}
 
 	@Test
+	void typeParametersLambdasAndBoxes() {
+		// A type parameter is erased: a method's name has its bound, and a member typed
+		// by one is converted where the type it is read through gives a box. An override
+		// through a type parameter is one entry of the dispatcher, beside the predicates
+		// of the library's own values. A lambda is a function, called by funcall; the
+		// lambdas of an interface instanceof asks for are structures holding it. A method
+		// reference is the lambda calling the method. A boxed long is the number in a
+		// cons, and an unboxing tests for null.
+		assertThat(
+				lower("""
+						import java.util.function.Function;
+
+						interface Named { String name(); default String greet() { return "hi " + name(); } }
+						interface Task { void run(); }
+						class Version implements Comparable<Version> {
+						    final int n;
+						    Version(int n) { this.n = n; }
+						    public int compareTo(Version o) { return n - o.n; }
+						}
+						class Box<T extends Comparable<T>> {
+						    T held;
+						    Box(T held) { this.held = held; }
+						    boolean above(T other) { return held.compareTo(other) > 0; }
+						    <R> R with(Function<? super T, ? extends R> f) { return f.apply(held); }
+						}
+						class L3 {
+						    static <T> T pick(T a, T b) { return a != null ? a : b; }
+						    static long sum(Long a, Integer b) { return a + b; }
+						    public static void main(String[] args) {
+						        Box<Version> v = new Box<>(new Version(2));
+						        Box<String> s = new Box<>("b");
+						        Named named = () -> "n";
+						        Task task = () -> { };
+						        Object o = named;
+						        Long big = 5L;
+						        int len = s.with(String::length);
+						        System.out.println(v.above(new Version(1)) + " " + s.above("a") + (o instanceof Named n ? n.greet() : "") + sum(big, len) + pick(1, 2));
+						        task.run();
+						    }
+						}
+						""",
+						"L3.java"))
+			.contains(
+					"(DEFSTRUCT (|Named%lambda| (:CONSTRUCTOR |%make-Named%lambda| (|%f|)) (:PREDICATE |Named%lambda?|)"
+							+ " (:COPIER NIL)) |%f|)",
+					"(DEFUN |Box.above(Comparable)| (|this| |other|) (> (|Comparable.compareTo(Object)%v| (|Box.held|"
+							+ " |this|) |other|) 0))",
+					"(DEFUN |Box.with(java.util.function.Function)| (|this| |f|) (FUNCALL |f| (|Box.held| |this|)))",
+					"(DEFUN |L3.pick(Object,Object)| (|a| |b|) (IF (NOT (NULL |a|)) |a| |b|))",
+					"(DEFUN |L3.sum(Long,Integer)| (|a| |b|) (- (LOGAND (+ (+ (CAR (OR |a| (RONTOLISP::%JAVA-NULL-UNBOX)))"
+							+ " (OR |b| (RONTOLISP::%JAVA-NULL-UNBOX))) 9223372036854775808) 18446744073709551615)"
+							+ " 9223372036854775808))",
+					"(DEFUN |L3.main(String[])| (|args|) (LET ((|v| (|Box.new(Comparable)| (|Version.new(int)| 2))))"
+							+ " (LET ((|s| (|Box.new(Comparable)| \"b\"))) (LET ((|named| (|%make-Named%lambda| (LAMBDA"
+							+ " NIL \"n\")))) (LET ((|task| (LAMBDA NIL NIL))) (LET ((|o| |named|)) (LET ((|big| (CONS 5"
+							+ " :LONG))) (LET ((|len| (OR (|Box.with(java.util.function.Function)| |s| (LAMBDA (|%t0|)"
+							+ " (LENGTH |%t0|))) (RONTOLISP::%JAVA-NULL-UNBOX)))) (LET ((|n| NIL)) (WRITE-LINE"
+							+ " (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT (IF"
+							+ " (|Box.above(Comparable)| |v| (|Version.new(int)| 1)) \"true\" \"false\") \" \") (IF"
+							+ " (|Box.above(Comparable)| |s| \"a\") \"true\" \"false\")) (OR (IF (AND (|Named%is| |o|)"
+							+ " (PROGN (SETQ |n| |o|) T)) (|Named.greet()%v| |n|) \"\") \"null\")) (%DECIMAL-PIECE"
+							+ " (|L3.sum(Long,Integer)| |big| |len|))) (RONTOLISP::%JAVA-TO-STRING"
+							+ " (|L3.pick(Object,Object)| 1 2) NIL)))) (FUNCALL |task|)))))))))",
+					"(DEFUN |Named.name()%v| (|%o|) (COND ((|Named%lambda?| |%o|) (FUNCALL (|Named%lambda-%f| |%o|)))"
+							+ " (T (RONTOLISP::%JAVA-NO-RECEIVER |%o| \"name()\"))))",
+					"(DEFUN |Comparable.compareTo(Object)%v| (|%o| |%a0|) (COND ((|Version?| |%o|)"
+							+ " (|Version.compareTo(Version)| |%o| |%a0|)) ((SIMPLE-STRING-P |%o|)"
+							+ " (RONTOLISP::%JAVA-STRING-COMPARE |%o| |%a0|)) ((CONSP |%o|) (RONTOLISP::%JAVA-COMPARE (CAR"
+							+ " |%o|) (CAR |%a0|))) ((INTEGERP |%o|) (RONTOLISP::%JAVA-COMPARE |%o| |%a0|)) (T"
+							+ " (RONTOLISP::%JAVA-NO-RECEIVER |%o| \"compareTo(Object)\"))))",
+					"(DEFUN |Named%is| (|%o|) (OR (|Named%lambda?| |%o|)))");
+	}
+
+	@Test
 	void aNameIsEscapedAndAConstantIsFolded() {
 		// A name holding no lowercase letter never meets the pipeline's own; a
 		// constant variable is its value wherever it is read; a package is part of the
@@ -278,10 +352,7 @@ class JavaLoweringTest {
 
 	@Test
 	void aConstructTheSubsetDoesNotHaveIsRefusedByNameAtItsPosition() {
-		String[][] refusals = { { "class A<T> {}", "1:8: a generic class" },
-				{ "record P<T>(T x) {}", "1:9: a generic record" },
-				{ "class A { <T> void m() { } }", "1:11: a generic method" },
-				{ "record P(int... xs) {}", "1:17: a variable arity record component" },
+		String[][] refusals = { { "record P(int... xs) {}", "1:17: a variable arity record component" },
 				{ "class A { synchronized void m() { } }", "1:11: the modifier synchronized" },
 				{ "class A { volatile int x; }", "1:11: the modifier volatile" },
 				{ "import static java.lang.Math.max; void main() { }", "1:8: a static import" },
@@ -301,7 +372,16 @@ class JavaLoweringTest {
 				{ "void main() { for (;;) { try { } finally { break; } } }", "1:44: a break leaving a finally block" },
 				{ "void main() { int k = switch (1) { default -> { try { } finally { yield 1; } } }; }",
 						"1:67: a yield leaving a finally block" },
-				{ "void main() { Runnable r = this::main; }", "1:32: a method reference" },
+				{ "void main() { java.util.function.Supplier<Integer> s = List<String>::size; }",
+						"1:68: a method reference through a parameterized type" },
+				{ "class O<T> { class I { } } void main() { O<String>.I i = null; }",
+						"1:51: a type nested in a parameterized type" },
+				{ "interface G<T> { T g(); } void main() { G<String> g = new G<>() { public String g() { return \"\"; } }; }",
+						"1:55: an anonymous class made with <>" },
+				{ "void main() { Object o = null; String[] a = (String[]) o; }", "1:45: a cast to String[]" },
+				{ "class C<K> { Map<K, String> m; } void main() { }", "1:14: a map keyed by K" },
+				{ "class O<T> { class I { T v; } I make(T v) { I i = new I(); i.v = v; return i; } } void main() { O<String> o = new O<>(); String s = o.make(\"x\").v; }",
+						"1:145: a member of an inner class of the parameterized class O read from outside that class" },
 				{ "void main() { Object o = int.class; }", "1:26: a class literal" },
 				{ "interface I { default void m() { } } class A implements I { public void m() { I.super.m(); } } void main() { }",
 						"1:81: a method of an interface called through super" },
@@ -311,28 +391,22 @@ class JavaLoweringTest {
 						"1:41: a class extending the inner class I from outside its outer class" },
 				{ "void main() { String a = \"a\", b = \"b\"; IO.println(a == b); }",
 						"1:53: == of two strings, which compares references (equals compares text)," },
-				{ "void main() { Integer a = 1, b = 1; IO.println(a != b); }",
-						"1:50: != of two boxed values, which compares references," },
-				{ "void main() { java.util.function.Function<String, String> f = x -> x; }",
-						"1:15: the class java.util.function.Function" },
 				{ "import java.util.Scanner; void main() { Scanner s = null; }", "1:41: the class java.util.Scanner" },
 				{ "void main() { var xs = new ArrayList<String>(); xs.forEach(x -> IO.println(x)); }",
 						"1:52: ArrayList.forEach(<lambda>)" },
 				{ "void main() { List<String> xs = List.of(\"a\"); }", "1:38: List.of(String)" },
 				{ "void main() { var s = new String(\"a\"); }", "1:23: new String(String)" },
 				{ "void main() { Map<Double, String> m = new HashMap<>(); }", "1:15: a map keyed by Double" },
-				{ "void main() { List xs = null; }", "1:15: the raw type List" },
 				{ "void main() { var m = new HashMap<String, Integer>(); IO.println(m); }", "1:58: the text of a map" },
 				{ "void main() { var xs = new ArrayList<String>(); IO.println(xs.equals(xs)); }",
 						"1:63: ArrayList.equals(Object)" },
 				{ "void main() { IO.println(getClass()); }",
 						"1:26: getClass() but for its getName() and getSimpleName()" },
 				{ "class A { int x; } class B extends A { int x; } void main() { }", "1:44: a field hiding A.x" },
-				{ "class A extends ArrayList<String> { } void main() { }", "1:17: a parameterized supertype" },
+				{ "class A extends ArrayList<String> { } void main() { }",
+						"1:17: a class extending java.util.ArrayList" },
 				{ "class String { } class Refused { static void main() { } }",
-						"1:7: a class named as java.lang.String, which the program also uses," },
-				{ "interface F { void f(); } interface G { void g(); } void main() { F f = () -> { }; G g = () -> { }; Object o = f; IO.println(o instanceof F); }",
-						"1:128: instanceof or a cast to F, which some lambdas of the program implement and others do not," } };
+						"1:7: a class named as java.lang.String, which the program also uses," } };
 		for (String[] refusal : refusals) {
 			assertThatThrownBy(() -> lower(refusal[0], "Refused.java")).as("%s", refusal[0])
 				.isInstanceOf(LispReadException.class)
@@ -414,9 +488,10 @@ class JavaLoweringTest {
 				{ "class A { } class B { } void main() { A a = new A(); B b = (B) a; }",
 						"1:60: incompatible types: A cannot be converted to B" },
 				{ "static void f(int x) { } static void f(long x, int y) { } void main() { f(\"s\"); }",
-						"1:73: no suitable method f found for the arguments (String)" },
+						"1:73: no suitable method found for f(String)" },
 				{ "static void f(int x, long y) { } static void f(long x, int y) { } void main() { f(1, 2); }",
-						"1:81: reference to method f is ambiguous" },
+						"1:81: reference to f is ambiguous" },
+				{ "void main() { IO.println(() -> 1); }", "1:18: no suitable method found for println(<lambda>)" },
 				{ "interface I { void m(); } class A implements I { } void main() { }",
 						"1:33: A is not abstract and does not override abstract method m() in I" },
 				{ "abstract class A { } void main() { new A(); }", "1:36: A is abstract; cannot be instantiated" },

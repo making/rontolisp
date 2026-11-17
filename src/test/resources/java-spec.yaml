@@ -12,11 +12,17 @@
 # Every expectation is what a JDK 25 prints, and the test runs the corpus under the JDK
 # running it as its first leg: an expectation that is not the JDK's fails there. Every
 # case must print the same on the interpreter, the JVM, wasm and the component.
+#
+# `refused` holds programs that must NOT compile: its scaffold with a case's `body` as
+# the statements of main. The JDK leg checks the error and its line, the front end leg
+# that it refuses at the same line with a message starting the same.
 imports: |
   import java.util.ArrayList;
+  import java.util.Comparator;
   import java.util.HashMap;
   import java.util.List;
   import java.util.Map;
+  import java.util.function.*;
 cases:
   # An int is an integer kept in range by an unconditional mask; a constant expression
   # is folded as the language computes it.
@@ -1208,9 +1214,11 @@ cases:
       3 2 null false true 3 3 null 10 false
       true false null true false true true true false
       2 1 null 4 one million null <b> null
-  # A boxed number is the number, a boxed char a character, a boxed true T and a boxed
-  # false :false; a boxing and an unboxing are made where the static types say.
-  - name: a-box-is-the-value-itself-and-none-is-null
+  # A boxed int or double is the number, a boxed long the number in a cons -- an
+  # Integer and a Long of one number are two values --, a boxed char a character, a boxed
+  # boolean T or :false; null is NIL, and reading it as a primitive raises. == of two
+  # boxes compares their values.
+  - name: a-box-is-its-value-but-a-long-s-and-none-is-null
     main: Boxes
     source: |
       class Boxes {
@@ -1247,6 +1255,114 @@ cases:
               Integer chosen = i > 0 ? i : null;
               int picked = no ? 1 : i;
               System.out.println(o + " " + value + " " + widened + " " + sum + " " + chosen + " " + picked + " " + i.equals(16) + " " + i.equals(17) + " " + i.hashCode() + " " + yes.equals(true) + " " + no.equals(true) + " " + letter.equals('q') + " " + letter.hashCode() + " " + i.toString() + no.toString() + letter.toString());
+              BoxKinds.main(args);
+          }
+      }
+
+      class BoxKinds {
+          static String kind(Object o) {
+              return switch (o) {
+                  case null -> "null";
+                  case Integer i when i > 100 -> "big int " + i;
+                  case Integer i -> "int " + i;
+                  case Long l -> "long " + l;
+                  case Double d -> "double " + d;
+                  case Character c -> "char " + c;
+                  case Boolean b -> "boolean " + b;
+                  case String s -> "string " + s;
+                  default -> "other";
+              };
+          }
+
+          static <T> String generic(T value) {
+              Object o = value;
+              return kind(o);
+          }
+
+          static long widen(Long boxed) {
+              return boxed + 1;
+          }
+
+          static int over(int x) {
+              return 1;
+          }
+
+          static int over(long x) {
+              return 2;
+          }
+
+          static int over(Integer x) {
+              return 3;
+          }
+
+          static int over(Object x) {
+              return 4;
+          }
+
+          static int over(int... xs) {
+              return 5;
+          }
+
+          static int rest(String s, Object... rest) {
+              return rest.length;
+          }
+
+          public static void main(String[] args) {
+              Integer i = 5;
+              Long l = 5L;
+              Object oi = i, ol = l;
+              System.out.println(kind(1) + ", " + kind(1L) + ", " + kind(2.5) + ", " + kind('c') + ", " + kind(true) + ", " + kind("s") + ", " + kind(null) + ", " + kind(1000) + ", " + generic(7L) + ", " + generic(7));
+              System.out.println(oi.equals(ol) + " " + ol.equals(5L) + " " + oi.equals(5) + " " + l.equals(5L) + " " + i.equals(5) + " " + (oi instanceof Long) + " " + (ol instanceof Long) + " " + (ol instanceof Integer));
+              System.out.println(oi.hashCode() + " " + ol.hashCode() + " " + ((Object) (-1L)).hashCode() + " " + ((Object) 4294967296L).hashCode() + " " + oi.getClass().getName() + " " + ol.getClass().getSimpleName() + " " + ol + " " + l.toString());
+              Integer a = 100, b = 100;
+              Long x = 7L, y = 7L;
+              Double d1 = 1.5, d2 = 1.5;
+              Character c1 = 'q', c2 = 'q';
+              Boolean t1 = true, t2 = true;
+              Integer nothing = null;
+              System.out.println((a == b) + " " + (x == y) + " " + (a != b) + " " + (c1 == c2) + " " + (t1 == t2) + " " + (nothing == null) + " " + (a == 100) + " " + (x == 7) + " " + (d1.equals(d2)));
+              System.out.println(widen(l) + " " + (l + i) + " " + (i + 1L) + " " + (l * 2) + " " + over(1) + over(1L) + over(i) + over(l) + over("s") + over() + over(1, 2) + " " + rest("a") + rest("a", 1, 2L, "x"));
+              List<Long> longs = new ArrayList<>();
+              longs.add(1L);
+              longs.add(Long.MAX_VALUE);
+              long total = 0;
+              for (long each : longs) {
+                  total += each;
+              }
+              Map<Long, String> byLong = new HashMap<>();
+              byLong.put(1L, "one");
+              Map<String, Long> counts = new HashMap<>();
+              counts.put("k", 1L);
+              counts.put("k", counts.get("k") + 1);
+              System.out.println(longs + " " + total + " " + byLong.get(1L) + " " + byLong.get(1) + " " + byLong.containsKey(1L) + " " + counts.get("k") + " " + longs.get(0).compareTo(longs.get(1)) + " " + Long.valueOf(3).longValue());
+              try {
+                  int unboxed = nothing;
+                  System.out.println("not reached " + unboxed);
+              }
+              catch (RuntimeException e) {
+                  System.out.println("null unboxed");
+              }
+              Map<String, Integer> ages = new HashMap<>();
+              try {
+                  int age = ages.get("nobody");
+                  System.out.println("not reached " + age);
+              }
+              catch (RuntimeException e) {
+                  System.out.println("missing unboxed");
+              }
+              Object o = 42;
+              int n = (int) o;
+              long widened = (Integer) o;
+              Object ch = 'x';
+              char c = (char) ch;
+              System.out.println(n + " " + widened + " " + c + " " + (Integer) o + " " + (o instanceof Integer k ? k + 1 : -1));
+              try {
+                  long bad = (long) o;
+                  System.out.println("not reached " + bad);
+              }
+              catch (ClassCastException e) {
+                  System.out.println("an Integer is no Long");
+              }
           }
       }
     expected: |
@@ -1254,6 +1370,16 @@ cases:
       true false null false true true 2 q q 114 r true
       <1><2><1.5><true><false><c><s><null><16><false><q>
       42 7 7.0 1099511627792 16 16 true false 16 true false true 113 16falseq
+      int 1, long 1, double 2.5, char c, boolean true, string s, null, big int 1000, long 7, int 7
+      false true true true true false true false
+      5 5 0 1 java.lang.Integer Long 5 5
+      true true false true true true true true true
+      6 10 6 10 1234455 03
+      [1, 9223372036854775807] -9223372036854775808 one null true 2 -1 3
+      null unboxed
+      missing unboxed
+      42 42 x 42 43
+      an Integer is no Long
   # A name holding no lowercase letter is escaped, so T, NIL, LIST and a class named
   # PRINT are the program's and never the pipeline's.
   - name: a-name-that-is-a-common-lisp-symbol-stays-the-program-s
@@ -2192,6 +2318,1012 @@ cases:
       a\b "quoted" """ 29 true
       13 26 75 text 1 1.0 anull 7 xc
       false 8 s3c Æ 137438953477 1.5 1618
+  # A class, a record and a method declare type parameters, bounded or not; the program
+  # that runs has none of them. A member is typed through the arguments of the type it
+  # is read through, so a boxing or an unboxing is made where a parameter is a box.
+  - name: a-type-parameter-is-erased-and-a-member-is-typed-through-its-arguments
+    main: Generics
+    source: |
+      class Generics {
+          static class Box<T> {
+              private T value;
+
+              Box(T value) {
+                  this.value = value;
+              }
+
+              T get() {
+                  return value;
+              }
+
+              void set(T value) {
+                  this.value = value;
+              }
+
+              <R> Box<R> map(Function<? super T, ? extends R> f) {
+                  return new Box<>(f.apply(value));
+              }
+
+              public String toString() {
+                  return "Box(" + value + ")";
+              }
+          }
+
+          record Pair<A, B>(A first, B second) {
+              <C> Pair<A, C> withSecond(C c) {
+                  return new Pair<>(first, c);
+              }
+
+              static <X> Pair<X, X> twin(X x) {
+                  return new Pair<>(x, x);
+              }
+          }
+
+          static class Stack<T> {
+              private class Cell {
+                  T value;
+                  Cell next;
+              }
+
+              private Cell head;
+              private int size;
+
+              void push(T v) {
+                  Cell c = new Cell();
+                  c.value = v;
+                  c.next = head;
+                  head = c;
+                  size++;
+              }
+
+              T pop() {
+                  T v = head.value;
+                  head = head.next;
+                  size--;
+                  return v;
+              }
+          }
+
+          static class Tree<T extends Comparable<T>> {
+              private T value;
+              private Tree<T> left, right;
+              private int size;
+
+              void add(T v) {
+                  if (size++ == 0) {
+                      value = v;
+                  }
+                  else if (v.compareTo(value) < 0) {
+                      if (left == null) {
+                          left = new Tree<>();
+                      }
+                      left.add(v);
+                  }
+                  else {
+                      if (right == null) {
+                          right = new Tree<>();
+                      }
+                      right.add(v);
+                  }
+              }
+
+              void walk(List<? super T> out) {
+                  if (size == 0) {
+                      return;
+                  }
+                  if (left != null) {
+                      left.walk(out);
+                  }
+                  out.add(value);
+                  if (right != null) {
+                      right.walk(out);
+                  }
+              }
+
+              <A> A fold(A zero, BiFunction<A, ? super T, A> f) {
+                  List<T> all = new ArrayList<>();
+                  walk(all);
+                  A acc = zero;
+                  for (T each : all) {
+                      acc = f.apply(acc, each);
+                  }
+                  return acc;
+              }
+          }
+
+          static class Cache<V> {
+              private final Map<String, V> map = new HashMap<>();
+              private final Function<String, V> loader;
+              int loads;
+
+              Cache(Function<String, V> loader) {
+                  this.loader = loader;
+              }
+
+              V get(String key) {
+                  V known = map.get(key);
+                  if (known == null) {
+                      known = loader.apply(key);
+                      map.put(key, known);
+                      loads++;
+                  }
+                  return known;
+              }
+          }
+
+          static <T> T first(List<T> xs) {
+              return xs.get(0);
+          }
+
+          static <T extends Comparable<T>> T max(T a, T b) {
+              return a.compareTo(b) >= 0 ? a : b;
+          }
+
+          static <T, R> List<R> map(List<T> xs, Function<T, R> f) {
+              List<R> out = new ArrayList<>();
+              for (T x : xs) {
+                  out.add(f.apply(x));
+              }
+              return out;
+          }
+
+          static <T> void swap(List<T> xs, int i, int j) {
+              T t = xs.get(i);
+              xs.set(i, xs.get(j));
+              xs.set(j, t);
+          }
+
+          public static void main(String[] args) {
+              Box<String> b = new Box<>("hi");
+              Box<Integer> n = b.map(String::length);
+              Box<Boolean> flag = new Box<>(false);
+              Box<Character> letter = new Box<>('c');
+              flag.set(!flag.get());
+              System.out.println(b + " " + n + " " + (n.get() + 1) + " " + flag + " " + (flag.get() ? "set" : "clear") + " " + letter + " " + (char) (letter.get() + 1));
+              Pair<String, Integer> p = new Pair<>("a", 1);
+              System.out.println(p + " " + p.withSecond(2.5) + " " + Pair.twin('x') + " " + p.first().length() + " " + (p.second() + 1) + " " + p.equals(new Pair<>("a", 1)) + " " + (p.hashCode() == new Pair<>("a", 1).hashCode()));
+              List<Integer> xs = new ArrayList<>();
+              for (int i = 1; i <= 5; i++) {
+                  xs.add(i * i);
+              }
+              swap(xs, 0, 4);
+              System.out.println(first(xs) + " " + max(3, 7) + " " + max("pear", "apple") + " " + map(xs, x -> x + 1) + " " + map(xs, x -> "n" + x).get(1).length());
+              Stack<String> stack = new Stack<>();
+              stack.push("a");
+              stack.push("b");
+              String top = stack.pop();
+              System.out.println(top + stack.pop() + stack.size);
+              Tree<String> tree = new Tree<>();
+              for (String w : new String[] { "m", "c", "x", "a", "d" }) {
+                  tree.add(w);
+              }
+              List<Object> sorted = new ArrayList<>();
+              tree.walk(sorted);
+              System.out.println(sorted + " " + tree.fold("", (acc, w) -> acc + w) + " " + tree.fold(0, (acc, w) -> acc + w.length()));
+              Cache<Integer> cache = new Cache<>(String::length);
+              System.out.println(cache.get("four") + cache.get("four") + cache.get("xy") + " " + cache.loads);
+              class Local<T> {
+                  final T held;
+
+                  Local(T held) {
+                      this.held = held;
+                  }
+
+                  <U> Local<U> with(U other) {
+                      return new Local<>(other);
+                  }
+              }
+              Local<String> local = new Local<>("held");
+              var q = new Box<>(42);
+              int unboxed = q.get();
+              q.set(unboxed + 1);
+              System.out.println(local.held + " " + local.with(5).held + " " + local.with(local).held.held + " " + q + " " + unboxed);
+          }
+      }
+    expected: |
+      Box(hi) Box(2) 3 Box(true) set Box(c) d
+      Pair[first=a, second=1] Pair[first=a, second=2.5] Pair[first=x, second=x] 1 2 true true
+      25 7 pear [26, 5, 10, 17, 2] 2
+      ba0
+      [a, c, d, m, x] acdmx 5
+      10 2
+      held 5 held Box(43) 42
+  # compareTo(T) of Comparable<T> and compareTo(Version) of a class implementing
+  # Comparable<Version> are one method: the dispatcher of the first calls the second, and
+  # there is no bridge. A string and a box are tested by their own predicates.
+  - name: an-override-through-a-type-parameter-is-one-dispatch-entry
+    main: Overrides
+    source: |
+      class Overrides {
+          interface Source<T> {
+              T get();
+          }
+
+          static class Fixed implements Source<String> {
+              public String get() {
+                  return "fixed";
+              }
+          }
+
+          static abstract class Node<T extends Comparable<T>> implements Comparable<Node<T>> {
+              abstract T key();
+
+              public int compareTo(Node<T> other) {
+                  return key().compareTo(other.key());
+              }
+          }
+
+          static class Leaf extends Node<Integer> {
+              final int k;
+
+              Leaf(int k) {
+                  this.k = k;
+              }
+
+              Integer key() {
+                  return k;
+              }
+
+              public String toString() {
+                  return "Leaf" + k;
+              }
+          }
+
+          static class Version implements Comparable<Version> {
+              final int major, minor;
+
+              Version(int major, int minor) {
+                  this.major = major;
+                  this.minor = minor;
+              }
+
+              public int compareTo(Version o) {
+                  return major != o.major ? major - o.major : minor - o.minor;
+              }
+
+              public String toString() {
+                  return major + "." + minor;
+              }
+          }
+
+          static abstract class Animal<S> {
+              abstract S sound();
+
+              String speak() {
+                  return "says " + sound();
+              }
+          }
+
+          static class Dog extends Animal<String> {
+              String sound() {
+                  return "woof";
+              }
+          }
+
+          static class Counter extends Animal<Integer> {
+              int n;
+
+              Integer sound() {
+                  return ++n;
+              }
+          }
+
+          interface Visitor<R> {
+              R num(int n);
+
+              R add(R a, R b);
+          }
+
+          enum Planet implements Supplier<String> {
+              EARTH, MARS;
+
+              public String get() {
+                  return name().toLowerCase();
+              }
+          }
+
+          static <R> R visit(int depth, Visitor<R> v) {
+              return depth == 0 ? v.num(1) : v.add(visit(depth - 1, v), visit(depth - 1, v));
+          }
+
+          static <T extends Comparable<T>> T best(List<T> xs) {
+              T found = xs.get(0);
+              for (T x : xs) {
+                  if (x.compareTo(found) > 0) {
+                      found = x;
+                  }
+              }
+              return found;
+          }
+
+          @SafeVarargs
+          static <T> List<T> listOf(T... items) {
+              List<T> out = new ArrayList<>();
+              for (T item : items) {
+                  out.add(item);
+              }
+              return out;
+          }
+
+          public static void main(String[] args) {
+              Source<String> s = new Fixed();
+              Source<Integer> lambda = () -> 7;
+              Supplier<String> planet = Planet.MARS;
+              System.out.println(s.get() + " " + s.get().length() + " " + (lambda.get() + 1) + " " + planet.get() + " " + Planet.MARS.compareTo(Planet.EARTH));
+              List<Version> versions = listOf(new Version(1, 2), new Version(1, 10), new Version(0, 9));
+              Leaf a = new Leaf(3), b = new Leaf(5);
+              Comparable<Version> first = versions.get(0);
+              Comparable<String> text = "b";
+              Comparable<Integer> number = 4;
+              System.out.println(best(versions) + " " + best(listOf(3, 9, 4)) + " " + best(listOf("b", "c", "a")) + " " + best(listOf(Planet.EARTH, Planet.MARS)) + " " + a.compareTo(b) + " " + best(listOf(a, b)) + " " + first.compareTo(versions.get(2)) + " " + text.compareTo("a") + " " + number.compareTo(9) + " " + "apple".compareTo("apricot"));
+              Animal<String> dog = new Dog();
+              Counter counter = new Counter();
+              Animal<Integer> counting = counter;
+              System.out.println(dog.speak() + " " + dog.sound().length() + " " + counting.speak() + " " + (counting.sound() + 10) + " " + counter.n);
+              System.out.println(visit(3, new Visitor<Integer>() {
+                  public Integer num(int n) {
+                      return n;
+                  }
+
+                  public Integer add(Integer a, Integer b) {
+                      return a + b;
+                  }
+              }) + " " + visit(2, new Visitor<String>() {
+                  public String num(int n) {
+                      return "" + n;
+                  }
+
+                  public String add(String a, String b) {
+                      return "(" + a + b + ")";
+                  }
+              }));
+          }
+      }
+    expected: |
+      fixed 5 8 mars 1
+      1.10 9 c MARS -1 Leaf5 1 1 -1 -2
+      says woof 4 says 1 12 2
+      8 ((11)(11))
+  # The diamond, a generic method, var and a lambda find their types from the arguments,
+  # from the type the value is wanted as, and from the lambdas among the arguments, each
+  # lowered once its own parameters are known. Overloads are chosen with them.
+  - name: a-type-argument-is-found-from-the-arguments-the-target-and-the-lambdas
+    main: Inference
+    source: |
+      class Inference {
+          static <T> T pick(T a, T b) {
+              return a != null ? a : b;
+          }
+
+          static <T extends Comparable<? super T>> T clamp(T v, T lo, T hi) {
+              return v.compareTo(lo) < 0 ? lo : v.compareTo(hi) > 0 ? hi : v;
+          }
+
+          static <A, B, C> Function<A, C> compose(Function<A, B> f, Function<B, C> g) {
+              return a -> g.apply(f.apply(a));
+          }
+
+          static <T> List<T> filter(List<T> xs, Predicate<? super T> p) {
+              List<T> out = new ArrayList<>();
+              for (T x : xs) {
+                  if (p.test(x)) {
+                      out.add(x);
+                  }
+              }
+              return out;
+          }
+
+          static <T, R> List<R> map(List<T> xs, Function<? super T, ? extends R> f) {
+              List<R> out = new ArrayList<>();
+              for (T x : xs) {
+                  out.add(f.apply(x));
+              }
+              return out;
+          }
+
+          static <T> T fold(List<T> xs, T zero, BinaryOperator<T> op) {
+              T acc = zero;
+              for (T x : xs) {
+                  acc = op.apply(acc, x);
+              }
+              return acc;
+          }
+
+          static <T> List<T> build(int n, IntFunction<T> f) {
+              List<T> out = new ArrayList<>();
+              for (int i = 0; i < n; i++) {
+                  out.add(f.apply(i));
+              }
+              return out;
+          }
+
+          static <T> T make(Supplier<T> s) {
+              return s.get();
+          }
+
+          static <T> List<T> empty() {
+              return new ArrayList<>();
+          }
+
+          static int size(List<String> xs) {
+              return xs.size();
+          }
+
+          static String which(Object o) {
+              return "object";
+          }
+
+          static String which(String s) {
+              return "string";
+          }
+
+          static <T> String which(List<T> xs) {
+              return "list";
+          }
+
+          static String run(Runnable r) {
+              r.run();
+              return "ran";
+          }
+
+          static <T> String run(Supplier<T> s) {
+              return "got " + s.get();
+          }
+
+          @SuppressWarnings("unchecked")
+          static <T> T cast(Object o) {
+              return (T) o;
+          }
+
+          public static void main(String[] args) {
+              Map<String, List<Integer>> groups = new HashMap<>();
+              groups.put("a", new ArrayList<>());
+              groups.get("a").add(1);
+              var names = build(3, i -> "n" + i);
+              System.out.println(groups.get("a") + " " + names + " " + names.get(2).length() + " " + size(empty()) + " " + size(new ArrayList<>()) + " " + Inference.<Integer>empty().size());
+              List<Integer> squares = build(5, i -> i * i);
+              System.out.println(filter(squares, x -> x % 2 == 0) + " " + map(squares, x -> x + 0.5) + " " + map(map(squares, x -> "s" + x), String::length) + " " + fold(squares, 0, (x, y) -> x + y) + " " + fold(map(squares, x -> "" + x), "", (x, y) -> x + y));
+              String chosen = pick(null, "fallback");
+              int number = pick(1, 2);
+              long wide = pick(3, 4);
+              boolean truth = pick(true, false);
+              Object either = pick("s", 1);
+              System.out.println(chosen + " " + number + " " + wide + " " + truth + " " + either + " " + clamp(15, 0, 10) + " " + clamp("m", "a", "f") + " " + Inference.<Integer>pick(null, 3) + " " + compose((String s) -> s.length(), n -> n * 2).apply("four"));
+              boolean on = args.length == 0;
+              Supplier<String> lazy = on ? () -> "yes" : () -> "no";
+              Function<Integer, Function<Integer, Integer>> adder = x -> y -> x + y;
+              String text = cast("text");
+              int forty = Inference.<Integer>cast(41) + 1;
+              System.out.println(lazy.get() + " " + adder.apply(2).apply(3) + " " + make(() -> "made") + " " + make(ArrayList::new) + " " + text + " " + forty + " " + ((Supplier<Integer>) () -> 5).get());
+              System.out.println(which("s") + " " + which(1) + " " + which(squares) + " " + which(empty()) + " " + run(() -> System.out.print("")) + " " + run(() -> 42) + " " + run(() -> {
+                  return "block";
+              }));
+          }
+      }
+    expected: |
+      [1] [n0, n1, n2] 2 0 0 0
+      [0, 4, 16] [0.5, 1.5, 4.5, 9.5, 16.5] [2, 2, 2, 2, 3] 30 014916
+      fallback 1 3 true s 10 f 3 8
+      yes 5 made [] text 42 5
+      string object list list ran got 42 got block
+  # ? extends T is read as T and written with nothing but null, ? super T written with a
+  # T and read as Object; a method taking List<T> takes a List<?>. A raw type reads its
+  # members erased.
+  - name: a-wildcard-is-captured-where-a-member-is-read-through-it
+    main: Wildcards
+    source: |
+      class Wildcards {
+          interface Shape {
+              double area();
+          }
+
+          record Circle(double r) implements Shape {
+              public double area() {
+                  return 3 * r * r;
+              }
+          }
+
+          static class Holder<T> {
+              T held;
+
+              Holder(T held) {
+                  this.held = held;
+              }
+          }
+
+          static double total(List<? extends Shape> shapes) {
+              double sum = 0;
+              for (Shape s : shapes) {
+                  sum += s.area();
+              }
+              return sum + shapes.get(0).area();
+          }
+
+          static void fill(List<? super Integer> out, int n) {
+              for (int i = 0; i < n; i++) {
+                  out.add(i);
+              }
+              Object first = out.get(0);
+              out.set(0, 9);
+          }
+
+          static int count(List<?> xs) {
+              Object first = xs.isEmpty() ? null : xs.get(0);
+              return xs.size() + (first == null ? 0 : 100);
+          }
+
+          static void reverse(List<?> xs) {
+              reverseCaptured(xs);
+          }
+
+          private static <T> void reverseCaptured(List<T> xs) {
+              for (int i = 0, j = xs.size() - 1; i < j; i++, j--) {
+                  T t = xs.get(i);
+                  xs.set(i, xs.get(j));
+                  xs.set(j, t);
+              }
+          }
+
+          static String peek(Holder<?> holder) {
+              Object o = holder.held;
+              return "<" + o + ">";
+          }
+
+          static <T> void copy(List<? super T> to, List<? extends T> from) {
+              for (T each : from) {
+                  to.add(each);
+              }
+          }
+
+          @SuppressWarnings({ "rawtypes", "unchecked" })
+          static int raw(List xs, Holder holder) {
+              xs.add("raw");
+              Object held = holder.held;
+              holder.held = xs.get(0);
+              return xs.size();
+          }
+
+          public static void main(String[] args) {
+              List<Circle> circles = new ArrayList<>();
+              circles.add(new Circle(1));
+              circles.add(new Circle(2));
+              List<Object> objects = new ArrayList<>();
+              fill(objects, 3);
+              objects.add("x");
+              System.out.println(total(circles) + " " + objects + " " + count(objects) + " " + count(new ArrayList<String>()));
+              reverse(objects);
+              List<Shape> shapes = new ArrayList<>();
+              copy(shapes, circles);
+              Holder<String> holder = new Holder<>("held");
+              Holder<? extends Object> any = holder;
+              Holder<? super String> lower = holder;
+              lower.held = "set";
+              System.out.println(objects + " " + shapes.size() + " " + total(shapes) + " " + peek(holder) + " " + peek(new Holder<>(1)) + " " + any.held + " " + raw(objects, holder) + " " + peek(holder));
+          }
+      }
+    expected: |
+      18.0 [9, 1, 2, x] 104 0
+      [x, 2, 1, 9] 2 18.0 <set> <1> set 5 <x>
+  # A lambda is a function. Where instanceof, a cast or a default method tells which
+  # interface a lambda was made for, the lambdas of that interface are structures
+  # holding the function, each tested by its own predicate.
+  - name: a-lambda-is-a-function-until-the-program-can-tell-its-interface
+    main: LambdaKinds
+    source: |
+      class LambdaKinds {
+          interface Named {
+              String name();
+
+              default String greet() {
+                  return "hello " + name();
+              }
+          }
+
+          interface Loud extends Named {
+              default String greet() {
+                  return "HELLO " + name();
+              }
+          }
+
+          interface Task {
+              void run();
+          }
+
+          interface Job {
+              int run(int x);
+
+              default Job twice() {
+                  return x -> run(run(x));
+              }
+          }
+
+          static class Doubler implements Job {
+              public int run(int x) {
+                  return x * 2;
+              }
+          }
+
+          record Person(String name) implements Named {
+          }
+
+          static String describe(Object o) {
+              if (o instanceof Loud l) {
+                  return "loud:" + l.greet();
+              }
+              if (o instanceof Named n) {
+                  return "named:" + n.greet();
+              }
+              if (o instanceof Task) {
+                  return "task";
+              }
+              if (o instanceof Job j) {
+                  return "job:" + j.run(1);
+              }
+              return "other";
+          }
+
+          public static void main(String[] args) {
+              Named plain = () -> "ann";
+              Loud loud = () -> "bob";
+              Named asNamed = loud;
+              Task task = () -> System.out.println("ran");
+              Job job = x -> x + 1;
+              Object[] all = { plain, loud, task, job, new Person("cy"), new Doubler(), "str" };
+              for (Object o : all) {
+                  System.out.println(describe(o));
+              }
+              System.out.println(plain.greet() + " " + asNamed.greet() + " " + new Person("di").greet());
+              task.run();
+              Named back = (Named) all[1];
+              try {
+                  Task wrong = (Task) all[0];
+                  wrong.run();
+              }
+              catch (ClassCastException e) {
+                  System.out.println("a Named is no Task");
+              }
+              System.out.println(job.twice().run(5) + " " + new Doubler().twice().run(5) + " " + ((Job) all[3]).run(9) + " " + back.greet() + " " + (all[2] instanceof Runnable) + " " + (all[0] == plain) + " " + plain.equals(loud));
+          }
+      }
+    expected: |
+      named:hello ann
+      loud:HELLO bob
+      task
+      job:2
+      named:hello cy
+      job:2
+      other
+      hello ann HELLO bob hello di
+      ran
+      a Named is no Task
+      7 20 10 HELLO bob false true false
+  # Type::name is a static method of the parameters or a method of the first on the rest;
+  # expression::name evaluates its expression once, where it stands; Type::new makes an
+  # instance or an array.
+  - name: a-method-reference-is-the-lambda-calling-the-method
+    main: MethodRefs
+    source: |
+      class MethodRefs {
+          static class Person {
+              final String name;
+
+              Person(String name) {
+                  this.name = name;
+              }
+
+              static Person of(String name) {
+                  return new Person(name);
+              }
+
+              String name() {
+                  return name;
+              }
+
+              String shout(String suffix) {
+                  return name.toUpperCase() + suffix;
+              }
+          }
+
+          static class Base {
+              String who() {
+                  return "base";
+              }
+          }
+
+          static class Derived extends Base {
+              String who() {
+                  return "derived";
+              }
+
+              Supplier<String> above() {
+                  return super::who;
+              }
+
+              Supplier<String> own() {
+                  return this::who;
+              }
+          }
+
+          final int base = 10;
+
+          int plus(int x) {
+              return base + x;
+          }
+
+          Function<Integer, Integer> adder() {
+              return this::plus;
+          }
+
+          static int twice(int x) {
+              return x * 2;
+          }
+
+          static int apply(IntBinaryOperator op, int a, int b) {
+              return op.applyAsInt(a, b);
+          }
+
+          static <T, R> List<R> map(List<T> xs, Function<T, R> f) {
+              List<R> out = new ArrayList<>();
+              for (T x : xs) {
+                  out.add(f.apply(x));
+              }
+              return out;
+          }
+
+          static Person next(int[] counter) {
+              counter[0]++;
+              return new Person("p" + counter[0]);
+          }
+
+          public static void main(String[] args) {
+              Function<String, Person> maker = Person::new;
+              Function<String, Person> factory = Person::of;
+              Function<Person, String> name = Person::name;
+              Person eve = maker.apply("eve");
+              Function<String, String> shout = eve::shout;
+              Supplier<List<String>> lists = ArrayList::new;
+              List<String> made = lists.get();
+              made.add(name.apply(factory.apply("fay")));
+              System.out.println(made + " " + shout.apply("!") + " " + new MethodRefs().adder().apply(5) + " " + new Derived().above().get() + " " + new Derived().own().get());
+              IntFunction<int[]> arrays = int[]::new;
+              Function<Integer, String[]> strings = String[]::new;
+              IntBinaryOperator larger = Math::max;
+              UnaryOperator<String> upper = String::toUpperCase;
+              Predicate<String> empty = String::isEmpty;
+              Function<Object, String> text = String::valueOf;
+              System.out.println(arrays.apply(3).length + " " + strings.apply(2).length + " " + apply(larger, 3, 9) + " " + apply(Integer::compare, 3, 9) + " " + upper.apply("up") + " " + empty.test("") + " " + text.apply(1.5) + " " + map(made, String::length) + " " + map(map(made, String::length), MethodRefs::twice));
+              int[] counter = { 0 };
+              Supplier<String> once = next(counter)::name;
+              System.out.println(once.get() + once.get() + " " + counter[0]);
+              Consumer<String> printer = System.out::println;
+              printer.accept("printed");
+          }
+      }
+    expected: |
+      [fay] EVE! 15 base derived
+      3 2 9 -1 UP true 1.5 [3] [6]
+      p1p1 1
+      printed
+  # java.util.function and Comparator are Java source lowered with the program: generic
+  # interfaces whose default methods return lambdas.
+  - name: the-functional-interfaces-of-the-library-are-source-in-the-subset
+    main: Functions
+    source: |
+      class Functions {
+          static <T> void sort(List<T> xs, Comparator<? super T> order) {
+              for (int i = 1; i < xs.size(); i++) {
+                  T x = xs.get(i);
+                  int j = i - 1;
+                  while (j >= 0 && order.compare(xs.get(j), x) > 0) {
+                      xs.set(j + 1, xs.get(j));
+                      j--;
+                  }
+                  xs.set(j + 1, x);
+              }
+          }
+
+          static List<String> words() {
+              List<String> words = new ArrayList<>();
+              words.add("pear");
+              words.add("fig");
+              words.add("banana");
+              words.add("kiwi");
+              return words;
+          }
+
+          public static void main(String[] args) {
+              Function<Integer, Integer> inc = x -> x + 1;
+              Function<Integer, Integer> dbl = x -> x * 2;
+              BiFunction<Integer, Integer, Integer> add = (x, y) -> x + y;
+              BinaryOperator<String> join = (x, y) -> x + y;
+              UnaryOperator<String> same = UnaryOperator.identity();
+              System.out.println(inc.andThen(dbl).apply(5) + " " + inc.compose(dbl).apply(5) + " " + add.andThen(inc).apply(2, 3) + " " + Function.<Integer>identity().apply(9) + " " + join.apply("a", "b") + " " + same.apply("s"));
+              Predicate<String> empty = String::isEmpty;
+              Predicate<String> isLong = s -> s.length() > 3;
+              BiPredicate<String, Integer> longer = (s, n) -> s.length() > n;
+              System.out.println(empty.test("") + " " + empty.negate().test("") + " " + empty.or(isLong).test("long") + " " + empty.and(isLong).test("") + " " + Predicate.not(isLong).test("abc") + " " + Predicate.isEqual("x").test("x") + " " + longer.negate().test("abc", 2));
+              IntUnaryOperator next = n -> n + 1;
+              IntPredicate even = n -> n % 2 == 0;
+              IntSupplier seven = () -> 7;
+              ToIntFunction<String> length = String::length;
+              IntBinaryOperator times = (x, y) -> x * y;
+              DoubleUnaryOperator half = d -> d / 2;
+              LongBinaryOperator sum = (x, y) -> x + y;
+              BooleanSupplier yes = () -> true;
+              System.out.println(next.andThen(next).applyAsInt(1) + " " + next.compose(n -> n * 10).applyAsInt(1) + " " + even.negate().test(3) + " " + seven.getAsInt() + " " + length.applyAsInt("four") + " " + times.applyAsInt(6, 7) + " " + half.applyAsDouble(3) + " " + sum.applyAsLong(1L << 40, 1) + " " + yes.getAsBoolean());
+              List<String> seen = new ArrayList<>();
+              Consumer<String> keep = seen::add;
+              BiConsumer<String, Integer> both = (s, n) -> seen.add(s + n);
+              keep.andThen(s -> seen.add(s.toUpperCase())).accept("a");
+              both.accept("b", 2);
+              Supplier<Integer> size = seen::size;
+              System.out.println(seen + " " + size.get());
+              List<String> words = words();
+              sort(words, Comparator.naturalOrder());
+              System.out.println(words);
+              sort(words, Comparator.comparingInt(String::length));
+              System.out.println(words);
+              sort(words, Comparator.comparing((String w) -> w.charAt(w.length() - 1)).thenComparing(Comparator.reverseOrder()));
+              System.out.println(words);
+              sort(words, Comparator.<String>naturalOrder().reversed());
+              System.out.println(words + " " + Comparator.<Integer>reverseOrder().compare(1, 2));
+          }
+      }
+    expected: |
+      12 11 6 9 ab s
+      true false true false true true false
+      3 11 true 7 4 42 1.5 1099511627777 true
+      [a, A, b2] 3
+      [banana, fig, kiwi, pear]
+      [fig, kiwi, pear, banana]
+      [banana, fig, kiwi, pear]
+      [pear, kiwi, fig, banana] 1
+  # A type pattern and a record pattern of a parameterized record take their arguments
+  # from the type of the value they test; a sealed parameterized interface is covered by
+  # the classes it permits.
+  - name: a-pattern-names-a-parameterized-class-with-what-its-value-settles
+    main: GenericPatterns
+    source: |
+      class GenericPatterns {
+          sealed interface Expr<T> permits Const, Add, Neg {
+          }
+
+          record Const<T>(T value) implements Expr<T> {
+          }
+
+          record Add<T>(Expr<T> left, Expr<T> right) implements Expr<T> {
+          }
+
+          record Neg<T>(Expr<T> inner) implements Expr<T> {
+          }
+
+          sealed interface Option<T> {
+              record Some<T>(T value) implements Option<T> {
+              }
+
+              record None<T>() implements Option<T> {
+              }
+
+              default <R> Option<R> map(Function<? super T, ? extends R> f) {
+                  return switch (this) {
+                      case Some<T> s -> new Some<>(f.apply(s.value()));
+                      case None<T> n -> new None<>();
+                  };
+              }
+
+              default T orElse(T other) {
+                  return this instanceof Some<T> s ? s.value() : other;
+              }
+
+              static <T> Option<T> of(T value) {
+                  return value == null ? new None<>() : new Some<>(value);
+              }
+          }
+
+          static int eval(Expr<Integer> e) {
+              return switch (e) {
+                  case Const<Integer> c -> c.value();
+                  case Add<Integer>(var l, var r) -> eval(l) + eval(r);
+                  case Neg<Integer>(Expr<Integer> inner) -> -eval(inner);
+              };
+          }
+
+          static <T> String show(Expr<T> e) {
+              if (e instanceof Const<T>(T v)) {
+                  return "" + v;
+              }
+              if (e instanceof Add<T> a) {
+                  return "(" + show(a.left()) + " + " + show(a.right()) + ")";
+              }
+              if (e instanceof Neg<T> n) {
+                  return "-" + show(n.inner());
+              }
+              return "?";
+          }
+
+          static String unwrap(Object o) {
+              return switch (o) {
+                  case Const<?>(String s) -> "text " + s.length();
+                  case Const<?>(Integer i) -> "number " + (i + 1);
+                  case Const<?> c -> "const " + c.value();
+                  case List<?> xs -> "list of " + xs.size();
+                  default -> "other";
+              };
+          }
+
+          public static void main(String[] args) {
+              Expr<Integer> e = new Add<>(new Const<>(3), new Neg<>(new Const<>(1)));
+              System.out.println(eval(e) + " " + show(e) + " " + show(new Const<>("s")));
+              Option<String> some = Option.of("text");
+              Option<String> none = Option.of(null);
+              System.out.println(some.map(String::length).orElse(-1) + " " + none.map(String::length).orElse(-1) + " " + some + " " + none + " " + some.map(s -> s + "!").orElse("?"));
+              System.out.println(unwrap(new Const<>("abc")) + ", " + unwrap(new Const<>(41)) + ", " + unwrap(new Const<>(1.5)) + ", " + unwrap(new ArrayList<String>()) + ", " + unwrap(e));
+          }
+      }
+    expected: |
+      2 (3 + -1) s
+      4 -1 Some[value=text] None[] text!
+      text 3, number 42, const 1.5, list of 0, other
+  # A cast to a type variable tests its bound, to a parameterized type its class, to a
+  # collection of the library its own predicate; an Object is cast to a primitive through
+  # the box.
+  - name: a-cast-tests-what-the-program-that-runs-has
+    main: GenericCasts
+    source: |
+      class GenericCasts {
+          interface Shape {
+          }
+
+          record Dot(int x) implements Shape {
+          }
+
+          static class Crate<T> {
+              T held;
+          }
+
+          @SuppressWarnings("unchecked")
+          static <T> T as(Object o) {
+              return (T) o;
+          }
+
+          @SuppressWarnings("unchecked")
+          static <T extends Shape> T shape(Object o) {
+              return (T) o;
+          }
+
+          static String tryCast(Supplier<Object> cast) {
+              try {
+                  return "ok " + cast.get();
+              }
+              catch (ClassCastException e) {
+                  return "refused";
+              }
+          }
+
+          @SuppressWarnings("unchecked")
+          public static void main(String[] args) {
+              Object list = new ArrayList<String>();
+              Object map = new HashMap<String, Integer>();
+              Object text = new StringBuilder("sb");
+              Object crate = new Crate<String>();
+              Object dot = new Dot(1);
+              List<String> strings = (List<String>) list;
+              strings.add("s");
+              Map<String, Integer> counts = (Map<String, Integer>) map;
+              counts.put("k", 1);
+              Crate<String> typed = (Crate<String>) crate;
+              typed.held = "held";
+              Crate<Integer> lying = (Crate<Integer>) crate;
+              Object untouched = lying.held;
+              System.out.println(strings + " " + counts.get("k") + " " + ((StringBuilder) text).length() + " " + untouched + " " + (list instanceof List<?>) + " " + (list instanceof ArrayList<?> a ? a.size() : -1) + " " + (map instanceof Map) + " " + (map instanceof List) + " " + (text instanceof StringBuilder) + " " + (text instanceof String) + " " + (crate instanceof Crate<?> c ? c.held : null));
+              String s = as("text");
+              Dot d = shape(dot);
+              System.out.println(s + " " + d + " " + tryCast(() -> (List<String>) map) + " " + tryCast(() -> (Map<String, String>) list) + " " + tryCast(() -> (StringBuilder) list) + " " + tryCast(() -> (Shape) list) + " " + tryCast(() -> GenericCasts.<Shape>shape("no shape")) + " " + tryCast(() -> GenericCasts.<Integer>as("unchecked")) + " " + tryCast(() -> (Object) list) + " " + tryCast(() -> (int) dot) + " " + tryCast(() -> (int) (Object) 41 + 1));
+          }
+      }
+    expected: |
+      [s] 1 2 held true 1 true false true false held
+      text Dot[x=1] refused refused refused refused refused ok unchecked ok [s] refused ok 42
 standalone:
   # An uncaught exception's report is its toString(): the pipeline's line on standard
   # error and a non-zero exit, where the JDK names the thread.
@@ -2343,3 +3475,109 @@ standalone:
       }
     stdout: |
       an instance main with 0 arguments
+# Programs a compiler refuses, each the scaffold with the case's statements in its main.
+# The JDK has to report `error` at the statements' line, and the front end the same line
+# and a message starting with it.
+refused:
+  scaffold: |
+    class Refused {
+        static class Box<T> {
+            T held;
+
+            Box(T held) {
+                this.held = held;
+            }
+
+            T get() {
+                return held;
+            }
+        }
+
+        static <T> T id(T x) {
+            return x;
+        }
+
+        static <T> T pick(T a, T b) {
+            return a;
+        }
+
+        static <T extends Comparable<T>> T max(T a, T b) {
+            return a.compareTo(b) > 0 ? a : b;
+        }
+
+        static int two(long a, Integer b) {
+            return 1;
+        }
+
+        static int two(Object a, Object b) {
+            return 2;
+        }
+
+        public static void main(String[] args) {
+            @@
+        }
+    }
+  cases:
+    - name: an-incompatible-type
+      body: 'int x = "s";'
+      error: "incompatible types: String cannot be converted to int"
+    - name: an-unresolved-name
+      body: 'int x = y;'
+      error: "cannot find symbol"
+    - name: an-unreachable-statement
+      body: 'return; int x = 1;'
+      error: "unreachable statement"
+    - name: a-type-argument-is-no-subtype-of-another
+      body: 'Box<String> b = new Box<String>("a"); Box<Object> o = b;'
+      error: "incompatible types: Box<String> cannot be converted to Box<Object>"
+    - name: a-primitive-is-no-type-argument
+      body: 'java.util.List<int> xs = null;'
+      error: "unexpected type"
+    - name: a-wrong-number-of-type-arguments
+      body: 'java.util.Map<String> m = null;'
+      error: "wrong number of type arguments; required 2"
+    - name: a-diamond-whose-argument-and-target-disagree
+      body: 'Box<String> b = new Box<>(1);'
+      error: "incompatible types: cannot infer type arguments for Box<>"
+    - name: a-type-parameter-the-argument-and-the-target-disagree-on
+      body: 'String s = id(1);'
+      error: "incompatible types: inference variable T has incompatible bounds"
+    - name: arguments-with-no-type-above-them-under-the-target
+      body: 'String s = pick(1, "a");'
+      error: "incompatible types: inferred type does not conform to upper bound(s)"
+    - name: an-argument-outside-its-type-parameter-s-bound
+      body: 'int n = max("a", 1);'
+      error: "method max in class Refused cannot be applied to given types;"
+    - name: an-ambiguous-overload
+      body: 'int r = two(1, 2);'
+      error: "reference to two is ambiguous"
+    - name: a-write-through-an-extends-wildcard
+      body: 'java.util.List<? extends Object> xs = new java.util.ArrayList<String>(); xs.add("a");'
+      error: "no suitable method found for add(String)"
+    - name: an-instanceof-the-program-that-runs-cannot-answer
+      body: 'Object o = "s"; boolean b = o instanceof java.util.List<String>;'
+      error: "Object cannot be safely cast to List<String>"
+    - name: a-lambda-where-no-functional-interface-is-wanted
+      body: 'Object o = () -> 1;'
+      error: "incompatible types: Object is not a functional interface"
+    - name: a-lambda-returning-what-its-interface-does-not
+      body: 'java.util.function.Function<String, Integer> f = s -> s;'
+      error: "incompatible types: bad return type in lambda expression"
+    - name: a-lambda-of-a-value-for-an-interface-giving-none
+      body: 'Runnable r = () -> 1;'
+      error: "incompatible types: lambda body is not compatible with a void functional interface"
+    - name: a-lambda-with-the-wrong-number-of-parameters
+      body: 'java.util.function.Function<String, Integer> f = (a, b) -> 1;'
+      error: "incompatible types: incompatible parameter types in lambda expression"
+    - name: a-method-reference-to-no-method
+      body: 'java.util.function.Supplier<String> f = Refused::missing;'
+      error: "invalid method reference"
+    - name: boxes-of-two-types-compared
+      body: 'Integer i = 1; Long l = 1L; boolean b = i == l;'
+      error: "incomparable types: Integer and Long"
+    - name: a-member-typed-through-its-type-argument
+      body: 'Box<String> b = new Box<>("a"); Integer i = b.get();'
+      error: "incompatible types: String cannot be converted to Integer"
+    - name: a-type-variable-out-of-scope
+      body: 'T t = null;'
+      error: "cannot find symbol"

@@ -89,10 +89,10 @@ circle 1.5, 2 shapes, total 11.068583470577035
 
 | | |
 |---|---|
-| 型 | `int`、`long`、`double`、`boolean`、`char`、`String`、クラス、インターフェース、列挙型、レコード、配列。ローカル変数の `var` |
-| 宣言 | `extends` と `implements` を持つクラス、抽象クラスと抽象メソッド。フィールド、コンストラクタ、メソッド、本体付きの定数を持つ列挙型。コンパクトコンストラクタと標準コンストラクタを持つレコード。抽象メソッド、`default` メソッド、`static` メソッド、`private` メソッド、定数を持つインターフェース。`sealed`、`permits`、`non-sealed`。static なネストクラス、内部クラス、ローカルクラス、匿名クラス。フィールド、static フィールド、static 初期化ブロックとインスタンス初期化ブロック。`this(..)` と `super(..)`、およびその前の文を持つコンストラクタ。メソッドのオーバーロードと可変長引数。`package` と `import` |
+| 型 | `int`、`long`、`double`、`boolean`、`char`、`String`、クラス、インターフェース、列挙型、レコード、配列。ローカル変数の `var`。型引数、ワイルドカード（`?`、`? extends T`、`? super T`）、raw 型 |
+| 宣言 | `extends` と `implements` を持つクラス、抽象クラスと抽象メソッド。型パラメータとその境界を持つクラス、インターフェース、レコード、メソッド。フィールド、コンストラクタ、メソッド、本体付きの定数を持つ列挙型。コンパクトコンストラクタと標準コンストラクタを持つレコード。抽象メソッド、`default` メソッド、`static` メソッド、`private` メソッド、定数を持つインターフェース。`sealed`、`permits`、`non-sealed`。static なネストクラス、内部クラス、ローカルクラス、匿名クラス。フィールド、static フィールド、static 初期化ブロックとインスタンス初期化ブロック。`this(..)` と `super(..)`、およびその前の文を持つコンストラクタ。メソッドのオーバーロードと可変長引数。`package` と `import` |
 | 文 | ローカル変数（`final`、無名変数 `_`）、`if`、`while`、`do`、`for`、配列またはリストに対する拡張 `for`、コロン形式または矢印形式の `case`・パターン・ガードを持つ `switch`、ラベル付きの文、ラベルの有無を問わない `break` と `continue`、`yield`、`return`、`throw`、`catch` と `finally` を持つ `try` |
-| 式 | プリミティブ型のすべての演算子とその変換、文字列連結、条件演算子、代入と複合代入、キャスト、型・型パターン・レコードパターンに対する `instanceof`、`switch` 式、`new`、`outer.new Inner()`、`Outer.this`、長さを 1 つ以上指定する配列の生成と初期化子、テキストブロック、メソッド呼び出し、`super.m(..)`、抽象メソッドを 1 つ持つプログラム内のインターフェースに対するラムダ |
+| 式 | プリミティブ型のすべての演算子とその変換、文字列連結、条件演算子、代入と複合代入、キャスト、型・型パターン・レコードパターンに対する `instanceof`、`switch` 式、`new`、`outer.new Inner()`、`Outer.this`、長さを 1 つ以上指定する配列の生成と初期化子、テキストブロック、型引数の有無を問わないメソッド呼び出し、`super.m(..)`、`new Box<>(..)`、任意の関数型インターフェースに対するラムダとメソッド参照（`Type::name`、`expression::name`、`super::name`、`Type::new`、`int[]::new`） |
 
 アノテーションは読み飛ばします。`int` と `long` は 2 の補数として桁あふれします。`double` は、
 読み戻すと同じ値になる最短の文字列で表示されます。
@@ -145,6 +145,57 @@ CM 0 1 small
 M 1 100 large
 ```
 
+## 型パラメータ、ラムダ、メソッド参照
+
+型パラメータは、プログラムを読む間だけ存在します。呼び出しと `new Box<>(..)` の型引数は、
+引数、値が求められている型、引数にあるラムダから決まります。型引数がボックスになる箇所では、
+値をボクシングまたはアンボクシングします。ラムダとメソッド参照は、抽象メソッドを 1 つ持つ
+インターフェースであれば、プログラムのものでもライブラリのものでも作れます。
+
+```java
+record Pair<A, B>(A first, B second) {
+    <C> Pair<A, C> withSecond(Function<? super B, ? extends C> f) {
+        return new Pair<>(first, f.apply(second));
+    }
+}
+
+<T extends Comparable<T>> T max(List<T> items) {
+    T best = items.get(0);
+    for (T item : items) {
+        if (item.compareTo(best) > 0) {
+            best = item;
+        }
+    }
+    return best;
+}
+
+<T, R> List<R> map(List<T> items, Function<? super T, ? extends R> f) {
+    List<R> out = new ArrayList<>();
+    for (T item : items) {
+        out.add(f.apply(item));
+    }
+    return out;
+}
+
+void main() {
+    List<String> words = new ArrayList<>();
+    words.add("pear");
+    words.add("fig");
+    words.add("banana");
+    List<Integer> lengths = map(words, String::length);
+    Pair<String, Integer> longest = new Pair<>(max(words), max(lengths));
+    IO.println(lengths + " " + longest + " " + longest.withSecond(n -> n * 1.5));
+    Comparator<String> byLength = Comparator.comparingInt(String::length);
+    Predicate<String> isShort = word -> word.length() < 5;
+    IO.println(byLength.reversed().compare("fig", "pear") + " " + map(words, isShort.negate()::test));
+}
+```
+
+```
+[4, 3, 6] Pair[first=pear, second=6] Pair[first=pear, second=9.0]
+1 [false, false, true]
+```
+
 ## ライブラリ
 
 各クラスにあるメンバーは次の表のものだけです。表にないメンバーは名前を示して拒否します。
@@ -155,15 +206,17 @@ M 1 100 large
 | 列挙型 | `values()`、`valueOf(String)`、`name`、`ordinal`、`compareTo`、`toString` |
 | レコード | アクセサ、`equals`、`hashCode`、`toString` |
 | 配列 | `length`、`clone()` |
-| `String` | `length`、`charAt`、`substring`、`indexOf(String)`、`equals`、`isEmpty`、`toUpperCase`、`toLowerCase`、`hashCode`、`String.valueOf` |
+| `String` | `length`、`charAt`、`substring`、`indexOf(String)`、`equals`、`compareTo`、`isEmpty`、`toUpperCase`、`toLowerCase`、`hashCode`、`String.valueOf` |
 | `StringBuilder` | `new StringBuilder()`、`new StringBuilder(String)`、`append`、`toString`、`length`、`charAt` |
-| `Integer`、`Long`、`Double`、`Boolean`、`Character` | ボクシングとアンボクシング。`Integer.MAX_VALUE`、`MIN_VALUE`、`parseInt`、`toString(int)`、`valueOf(int)`、`intValue`。`Long.MAX_VALUE`、`MIN_VALUE`、`Long.hashCode(long)`。`Double.compare`。`Boolean.hashCode(boolean)` |
+| `Integer`、`Long`、`Double`、`Boolean`、`Character` | ボクシングとアンボクシング。`Integer.MAX_VALUE`、`MIN_VALUE`、`parseInt`、`toString(int)`、`valueOf(int)`、`compare`、`intValue`、`compareTo`。`Long.MAX_VALUE`、`MIN_VALUE`、`Long.hashCode(long)`、`valueOf(long)`、`compare`、`longValue`、`compareTo`。`Double.compare`、`valueOf(double)`、`doubleValue`、`compareTo`。`Character.compare`、`charValue`、`compareTo`。`Boolean.hashCode(boolean)` |
 | `Math` | `sqrt`、`floor`、`pow`、`abs`、`max`、`min`、`PI`、`E` |
 | `System.out`、`System.err`、`IO` | `println`、`print` |
 | `ArrayList`、`List` | `new ArrayList<>()`、`add`、`get`、`set`、`size`、`isEmpty` |
 | `HashMap`、`Map` | `new HashMap<>()`、`put`、`get`、`getOrDefault`、`containsKey`、`size`、`isEmpty`。キーは `String`、`Integer`、`Long`、`Character`、`Boolean` |
 | 例外 | `Throwable`、`Exception`、`Error`、`RuntimeException`、`IllegalArgumentException`、`IllegalStateException`、`ArithmeticException`、`NullPointerException`、`ClassCastException`、`IndexOutOfBoundsException`、`ArrayIndexOutOfBoundsException`、`UnsupportedOperationException`、`NumberFormatException`。引数のないコンストラクタとメッセージを取るコンストラクタ、`getMessage`、`toString` |
-| `Runnable` | `run` |
+| `Runnable`、`Comparable` | `run`。`compareTo`（`String`、`Integer`、`Long`、`Double`、`Character`、列挙型の定数にもあります） |
+| `java.util.function` | `Function`、`BiFunction`、`UnaryOperator`、`BinaryOperator`、`Supplier`、`Consumer`、`BiConsumer`、`Predicate`、`BiPredicate`、`BooleanSupplier`。`Int`、`Long`、`Double` のそれぞれに `IntFunction`、`IntPredicate`、`IntUnaryOperator`、`IntBinaryOperator`、`IntSupplier`、`IntConsumer`、`ToIntFunction`、`ToIntBiFunction`。各インターフェースの抽象メソッドと `andThen`、`compose`、`and`、`or`、`negate`、`identity`、`not`、`isEqual` |
+| `Comparator` | `compare`、`reversed`、`thenComparing(Comparator)`、`Comparator.naturalOrder`、`reverseOrder`、`comparing(Function)`、`comparingInt` |
 
 ```java
 class Account {

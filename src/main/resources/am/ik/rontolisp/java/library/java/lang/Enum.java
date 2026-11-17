@@ -3,7 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that declares an enum.
 package java.lang;
 
-public abstract class Enum {
+public abstract class Enum<E extends Enum<E>> {
 
     private final String name;
 
@@ -26,7 +26,7 @@ public abstract class Enum {
         return name;
     }
 
-    public final int compareTo(Enum other) {
-        return ordinal - other.ordinal;
+    public final int compareTo(E other) {
+        return ordinal - other.ordinal();
     }
 }

@@ -89,10 +89,10 @@ an interface.
 
 | | |
 |---|---|
-| Types | `int`, `long`, `double`, `boolean`, `char`, `String`, classes, interfaces, enums, records, arrays; `var` for a local |
-| Declarations | classes with `extends` and `implements`, abstract classes and methods; enums with fields, constructors, methods and constants that have a body; records with compact and canonical constructors; interfaces with abstract, `default`, `static` and `private` methods and constants; `sealed`, `permits` and `non-sealed`; static nested, inner, local and anonymous classes; fields, static fields, static and instance initializer blocks; constructors with `this(..)` and `super(..)` and statements ahead of them; overloaded and variable arity methods; `package` and `import` |
+| Types | `int`, `long`, `double`, `boolean`, `char`, `String`, classes, interfaces, enums, records, arrays; `var` for a local; type arguments, wildcards (`?`, `? extends T`, `? super T`) and raw types |
+| Declarations | classes with `extends` and `implements`, abstract classes and methods; classes, interfaces, records and methods with type parameters and their bounds; enums with fields, constructors, methods and constants that have a body; records with compact and canonical constructors; interfaces with abstract, `default`, `static` and `private` methods and constants; `sealed`, `permits` and `non-sealed`; static nested, inner, local and anonymous classes; fields, static fields, static and instance initializer blocks; constructors with `this(..)` and `super(..)` and statements ahead of them; overloaded and variable arity methods; `package` and `import` |
 | Statements | local variables (`final`, the unnamed `_`), `if`, `while`, `do`, `for`, the enhanced `for` over an array or a list, `switch` with colon or arrow cases, patterns and guards, labeled statements, `break` and `continue` with or without a label, `yield`, `return`, `throw`, `try` with `catch` and `finally` |
-| Expressions | every operator of the primitive types with its conversions, string concatenation, the conditional, assignments and compound assignments, casts, `instanceof` with a type, a type pattern or a record pattern, `switch` expressions, `new`, `outer.new Inner()`, `Outer.this`, array creation with one or several lengths and initializers, text blocks, method calls, `super.m(..)`, lambdas for an interface of the program with one abstract method |
+| Expressions | every operator of the primitive types with its conversions, string concatenation, the conditional, assignments and compound assignments, casts, `instanceof` with a type, a type pattern or a record pattern, `switch` expressions, `new`, `outer.new Inner()`, `Outer.this`, array creation with one or several lengths and initializers, text blocks, method calls with or without type arguments, `super.m(..)`, `new Box<>(..)`, lambdas and method references (`Type::name`, `expression::name`, `super::name`, `Type::new`, `int[]::new`) for any functional interface |
 
 Annotations are read and dropped. An `int` and a `long` wrap as two's complement; a
 `double` prints as the shortest text that reads back.
@@ -145,6 +145,58 @@ CM 0 1 small
 M 1 100 large
 ```
 
+## Type parameters, lambdas and method references
+
+A type parameter exists only while the program is read: the type arguments of a call and of
+`new Box<>(..)` are found from the arguments, from the type the value is wanted as and from
+the lambdas among the arguments, and a value is boxed or unboxed where a type argument is a
+box. A lambda and a method reference are made for any interface with one abstract method,
+the program's or the library's.
+
+```java
+record Pair<A, B>(A first, B second) {
+    <C> Pair<A, C> withSecond(Function<? super B, ? extends C> f) {
+        return new Pair<>(first, f.apply(second));
+    }
+}
+
+<T extends Comparable<T>> T max(List<T> items) {
+    T best = items.get(0);
+    for (T item : items) {
+        if (item.compareTo(best) > 0) {
+            best = item;
+        }
+    }
+    return best;
+}
+
+<T, R> List<R> map(List<T> items, Function<? super T, ? extends R> f) {
+    List<R> out = new ArrayList<>();
+    for (T item : items) {
+        out.add(f.apply(item));
+    }
+    return out;
+}
+
+void main() {
+    List<String> words = new ArrayList<>();
+    words.add("pear");
+    words.add("fig");
+    words.add("banana");
+    List<Integer> lengths = map(words, String::length);
+    Pair<String, Integer> longest = new Pair<>(max(words), max(lengths));
+    IO.println(lengths + " " + longest + " " + longest.withSecond(n -> n * 1.5));
+    Comparator<String> byLength = Comparator.comparingInt(String::length);
+    Predicate<String> isShort = word -> word.length() < 5;
+    IO.println(byLength.reversed().compare("fig", "pear") + " " + map(words, isShort.negate()::test));
+}
+```
+
+```
+[4, 3, 6] Pair[first=pear, second=6] Pair[first=pear, second=9.0]
+1 [false, false, true]
+```
+
 ## The library
 
 Each class has the members listed and no others; a missing one is refused by name.
@@ -155,15 +207,17 @@ Each class has the members listed and no others; a missing one is refused by nam
 | An enum | `values()`, `valueOf(String)`, `name`, `ordinal`, `compareTo`, `toString` |
 | A record | the accessors, `equals`, `hashCode`, `toString` |
 | An array | `length`, `clone()` |
-| `String` | `length`, `charAt`, `substring`, `indexOf(String)`, `equals`, `isEmpty`, `toUpperCase`, `toLowerCase`, `hashCode`, `String.valueOf` |
+| `String` | `length`, `charAt`, `substring`, `indexOf(String)`, `equals`, `compareTo`, `isEmpty`, `toUpperCase`, `toLowerCase`, `hashCode`, `String.valueOf` |
 | `StringBuilder` | `new StringBuilder()`, `new StringBuilder(String)`, `append`, `toString`, `length`, `charAt` |
-| `Integer`, `Long`, `Double`, `Boolean`, `Character` | boxing and unboxing; `Integer.MAX_VALUE`, `MIN_VALUE`, `parseInt`, `toString(int)`, `valueOf(int)`, `intValue`; `Long.MAX_VALUE`, `MIN_VALUE`, `Long.hashCode(long)`; `Double.compare`; `Boolean.hashCode(boolean)` |
+| `Integer`, `Long`, `Double`, `Boolean`, `Character` | boxing and unboxing; `Integer.MAX_VALUE`, `MIN_VALUE`, `parseInt`, `toString(int)`, `valueOf(int)`, `compare`, `intValue`, `compareTo`; `Long.MAX_VALUE`, `MIN_VALUE`, `Long.hashCode(long)`, `valueOf(long)`, `compare`, `longValue`, `compareTo`; `Double.compare`, `valueOf(double)`, `doubleValue`, `compareTo`; `Character.compare`, `charValue`, `compareTo`; `Boolean.hashCode(boolean)` |
 | `Math` | `sqrt`, `floor`, `pow`, `abs`, `max`, `min`, `PI`, `E` |
 | `System.out`, `System.err`, `IO` | `println`, `print` |
 | `ArrayList`, `List` | `new ArrayList<>()`, `add`, `get`, `set`, `size`, `isEmpty` |
 | `HashMap`, `Map` | `new HashMap<>()`, `put`, `get`, `getOrDefault`, `containsKey`, `size`, `isEmpty`; keys of `String`, `Integer`, `Long`, `Character` or `Boolean` |
 | Exceptions | `Throwable`, `Exception`, `Error`, `RuntimeException`, `IllegalArgumentException`, `IllegalStateException`, `ArithmeticException`, `NullPointerException`, `ClassCastException`, `IndexOutOfBoundsException`, `ArrayIndexOutOfBoundsException`, `UnsupportedOperationException`, `NumberFormatException`: the constructors of no argument and of a message, `getMessage`, `toString` |
-| `Runnable` | `run` |
+| `Runnable`, `Comparable` | `run`; `compareTo`, which a `String`, an `Integer`, a `Long`, a `Double`, a `Character` and an enum constant have too |
+| `java.util.function` | `Function`, `BiFunction`, `UnaryOperator`, `BinaryOperator`, `Supplier`, `Consumer`, `BiConsumer`, `Predicate`, `BiPredicate`, `BooleanSupplier`; for `Int`, `Long` and `Double`: `IntFunction`, `IntPredicate`, `IntUnaryOperator`, `IntBinaryOperator`, `IntSupplier`, `IntConsumer`, `ToIntFunction`, `ToIntBiFunction`; each with its abstract method and its `andThen`, `compose`, `and`, `or`, `negate`, `identity`, `not`, `isEqual` |
+| `Comparator` | `compare`, `reversed`, `thenComparing(Comparator)`, `Comparator.naturalOrder`, `reverseOrder`, `comparing(Function)`, `comparingInt` |
 
 ```java
 class Account {

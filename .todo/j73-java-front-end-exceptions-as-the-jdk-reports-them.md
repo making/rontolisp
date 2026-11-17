@@ -58,3 +58,8 @@ After j69 (2026-11-17): a `switch` over `null` is `%java-null-switch` (a Lisp er
 `ExceptionInInitializerError`, and a run-time error inside an initialization that runs before
 `main` surfaces before `main` (`.kb/java-frontend.md`, "Static initialization"); a `yield`
 leaving a `finally` block is refused like `break` and `continue`.
+
+After j70 (2026-11-17): unboxing `null` raises `%java-null-unbox` (a Lisp error whose text
+starts `NullPointerException`, taken by a `catch` of `RuntimeException` and above, no
+`NullPointerException` object); `expression::name` does not test its receiver for `null`
+where the reference is made.

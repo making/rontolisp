@@ -79,7 +79,10 @@ import am.ik.rontolisp.java.JavaSyntax.While;
 import am.ik.rontolisp.java.JavaType.ArrayType;
 import am.ik.rontolisp.java.JavaType.ClassType;
 import am.ik.rontolisp.java.JavaType.Primitive;
+import am.ik.rontolisp.java.JavaType.TypeParameter;
 import am.ik.rontolisp.java.JavaType.Variable;
+import am.ik.rontolisp.java.JavaType.Wildcard;
+import am.ik.rontolisp.java.JavaTypes.Inference;
 import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
 
@@ -125,6 +128,10 @@ import static am.ik.rontolisp.java.JavaForms.string;
  * function testing the structure predicates, deepest class first, made once per static
  * type and signature. A lambda is a {@code lambda}: an interface no class implements is
  * called with {@code funcall}.</li>
+ * <li><b>A type parameter is erased.</b> A member is typed through the arguments of the
+ * type it is read through ({@link JavaTypes}), a call's type arguments are found from its
+ * arguments, its target and its lambdas, and all that reaches the forms is the
+ * conversions the types then ask for: no cast, no bridge.</li>
  * <li><b>A construct the subset does not have is refused by name</b>, at its position,
  * and so is a program a compiler refuses where the lowering would otherwise have to
  * guess: nothing is lowered as something else.</li>
@@ -262,8 +269,9 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * @param field the field
 	 * @param object the instance holding it, or {@code null} for a static field and where
 	 * no instance can be reached
+	 * @param through the class it was found from, whose supertypes give its type
 	 */
-	private record FieldRef(Field field, @Nullable LispVal object) implements Named {
+	private record FieldRef(Field field, @Nullable LispVal object, JavaClass through) implements Named {
 	}
 
 	/** Where a value is stored: how it is read, and how a new one is written. */
@@ -303,6 +311,8 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private final ClassType objectType;
 
+	private final JavaTypes types;
+
 	// ---- what one pass makes
 
 	private final List<LispVal> functions = new ArrayList<>();
@@ -313,11 +323,8 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private final List<LispVal> initializers = new ArrayList<>();
 
-	/** The interfaces {@code instanceof} or a cast tests, with where one first does. */
-	private final Map<JavaClass, Integer> interfaceTests = new LinkedHashMap<>();
-
-	/** The interfaces a lambda of the program implements. */
-	private final Set<JavaClass> lambdaTargets = new LinkedHashSet<>();
+	/** The interfaces {@code instanceof} or a cast tests. */
+	private final Set<JavaClass> interfaceTests = new LinkedHashSet<>();
 
 	private final Set<LispSymbol> generated = new LinkedHashSet<>();
 
@@ -340,6 +347,16 @@ final class JavaLowering implements JavaEmitter.Context {
 	private boolean staticContext;
 
 	private JavaType returnType = Primitive.VOID;
+
+	/**
+	 * The types of the values the lambda being lowered returns, when the type of its
+	 * value is still to be found by the call it is an argument of; {@code null} anywhere
+	 * else.
+	 */
+	private @Nullable List<JavaType> returns;
+
+	/** Whether the function body being lowered is a lambda's. */
+	private boolean lambdaBody;
 
 	/** The static field whose initializer is being lowered, or {@code null}. */
 	private @Nullable Initializing initializing;
@@ -421,6 +438,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		classes.localScope = this::localClass;
 		this.stringType = classes.libraryType("java.lang.String");
 		this.objectType = classes.libraryType("java.lang.Object");
+		this.types = new JavaTypes(classes);
 		this.currentClass = declared.get(0);
 		this.unit = classes.unit(this.currentClass);
 	}
@@ -514,6 +532,12 @@ final class JavaLowering implements JavaEmitter.Context {
 		for (JavaClass declaration : List.copyOf(this.classes.all())) {
 			structure(declaration, defined, forms);
 		}
+		for (JavaClass target : this.classes.taggedLambdas) {
+			forms.add(list(cl("defstruct"), list(lambdaStructure(target),
+					list(new LispSymbol(":CONSTRUCTOR"), lambdaMaker(target), list(LAMBDA_FUNCTION)),
+					list(new LispSymbol(":PREDICATE"), lambdaTest(target)), list(new LispSymbol(":COPIER"), NIL)),
+					LAMBDA_FUNCTION));
+		}
 		forms.addAll(this.variables);
 		forms.addAll(this.functions);
 		forms.addAll(this.dispatchers.values());
@@ -521,6 +545,29 @@ final class JavaLowering implements JavaEmitter.Context {
 		forms.addAll(initialization);
 		forms.add(entry);
 		return List.copyOf(forms);
+	}
+
+	private static final LispSymbol LAMBDA_FUNCTION = new LispSymbol("%f");
+
+	/**
+	 * The structure a lambda made for an interface is when the program can tell which
+	 * interface a lambda was made for: it holds the function.
+	 */
+	private static LispSymbol lambdaStructure(JavaClass target) {
+		return JavaNames.symbol(target.lispName() + "%lambda");
+	}
+
+	private static LispSymbol lambdaMaker(JavaClass target) {
+		return JavaNames.symbol("%make-" + target.lispName() + "%lambda");
+	}
+
+	private static LispSymbol lambdaTest(JavaClass target) {
+		return JavaNames.symbol(target.lispName() + "%lambda?");
+	}
+
+	/** The function a lambda that is a structure holds. */
+	private static LispVal lambdaFunction(JavaClass target, LispVal lambda) {
+		return list(new LispSymbol(lambdaStructure(target).name() + "-" + LAMBDA_FUNCTION.name()), lambda);
 	}
 
 	/** The slot holding the instance of the class a class's declaration stands in. */
@@ -586,7 +633,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		supertypes(declaration, above);
 		for (JavaClass type : above) {
 			for (Method method : type.methods) {
-				if (method.isAbstract && implementation(declaration, method.signature()) == null) {
+				if (method.isAbstract && implementation(declaration, method) == null) {
 					String name = declaration.simpleName().isEmpty() ? "<anonymous " + declaration.binaryName + ">"
 							: declaration.simpleName();
 					throw JavaClasses.error(declaration.source, Objects.requireNonNull(declaration.declaration).pos(),
@@ -707,6 +754,12 @@ final class JavaLowering implements JavaEmitter.Context {
 		JavaClass savedConstructing = this.constructing;
 		boolean savedConstructingStatic = this.constructingStatic;
 		JavaType savedReturn = this.returnType;
+		List<JavaType> savedReturns = this.returns;
+		boolean savedLambda = this.lambdaBody;
+		List<TypeParameter> savedParameters = this.classes.methodParameters;
+		this.classes.methodParameters = List.of();
+		this.returns = null;
+		this.lambdaBody = false;
 		this.scopes = scopesAround(declaration);
 		this.scopes.push(new Scope(null, false));
 		this.currentClass = declaration;
@@ -739,6 +792,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			this.constructing = savedConstructing;
 			this.constructingStatic = savedConstructingStatic;
 			this.returnType = savedReturn;
+			this.returns = savedReturns;
+			this.lambdaBody = savedLambda;
+			this.classes.methodParameters = savedParameters;
 		}
 	}
 
@@ -764,7 +820,12 @@ final class JavaLowering implements JavaEmitter.Context {
 		Initializing savedInitializing = this.initializing;
 		Effects savedEffects = this.effects;
 		List<Local> savedPatterns = this.patternVariables;
+		List<JavaType> savedReturns = this.returns;
+		boolean savedLambda = this.lambdaBody;
+		List<TypeParameter> savedParameters = this.classes.methodParameters;
 		this.patternVariables = new ArrayList<>();
+		this.returns = null;
+		this.lambdaBody = false;
 		this.targets.clear();
 		this.finallyDepth = 0;
 		this.early = false;
@@ -774,6 +835,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			lowerMembers(made);
 		}
 		finally {
+			this.returns = savedReturns;
+			this.lambdaBody = savedLambda;
+			this.classes.methodParameters = savedParameters;
 			this.currentClass = savedClass;
 			this.unit = savedUnit;
 			this.staticContext = savedStatic;
@@ -848,6 +912,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		this.staticContext = method.isStatic;
 		this.returnType = method.returnType;
 		this.constructing = null;
+		this.classes.methodParameters = method.typeParameters;
 		Effects saved = this.effects;
 		this.effects = new Effects();
 		this.methodEffects.put(method, this.effects);
@@ -863,6 +928,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		LispVal body = functionBody(Objects.requireNonNull(written.body()));
 		this.scopes.pop();
 		this.effects = saved;
+		this.classes.methodParameters = List.of();
 		LispVal first = method.isStatic ? initializationOf(method.owner) : null;
 		if (first != null) {
 			body = call("progn", first, body);
@@ -959,6 +1025,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		int pos = written != null ? written.pos() : Objects.requireNonNull(owner.declaration).pos();
 		this.staticContext = false;
 		this.returnType = Primitive.VOID;
+		this.classes.methodParameters = constructor.typeParameters;
 		Effects saved = this.effects;
 		this.effects = new Effects();
 		this.methodEffects.put(constructor, this.effects);
@@ -1013,6 +1080,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		this.scopes.pop();
 		this.constructing = null;
 		this.effects = saved;
+		this.classes.methodParameters = List.of();
 		boolean trivial = isTrivial(constructor);
 		if (!trivial) {
 			List<LispVal> all = new ArrayList<>();
@@ -1099,8 +1167,9 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * {@code this(..)} or {@code super(..)}: {@code nil} when the constructor is trivial.
 	 */
 	private LispVal constructorCall(JavaClass target, List<Expression> arguments, int pos) {
-		Resolved resolved = resolve(constructors(target), List.of(), arguments, "constructor " + target.simpleName(),
-				target, pos);
+		ClassType site = target == this.currentClass ? target.self() : this.currentClass.supertype(target);
+		Resolved resolved = resolve(constructors(target), site, List.of(), arguments, null,
+				"constructor " + target.simpleName(), target, pos);
 		checkAccess(resolved.method().isPrivate, resolved.method().owner,
 				target.simpleName() + resolved.method().parameterList(), pos);
 		this.effects.calls.add(resolved.method());
@@ -1229,8 +1298,8 @@ final class JavaLowering implements JavaEmitter.Context {
 			.filter(declaration -> !declaration.intrinsic && !declaration.isInterface)
 			.sorted(Comparator.comparingInt(JavaClass::depth).reversed())
 			.toList();
-		for (Map.Entry<JavaClass, Integer> test : this.interfaceTests.entrySet()) {
-			forms.add(interfaceTest(test.getKey(), test.getValue()));
+		for (JavaClass tested : this.interfaceTests) {
+			forms.add(interfaceTest(tested));
 		}
 		if (this.generated.contains(OBJECT_STRING)) {
 			forms.add(objectFunction(OBJECT_STRING, "toString()", List.of(), deepestFirst,
@@ -1305,28 +1374,58 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/**
-	 * {@code instanceof} of an interface: the classes implementing it, and a function
-	 * when every lambda of the program implements it. A program some of whose lambdas do
-	 * and some do not is refused: a lambda does not tell which interface it was made for.
+	 * {@code instanceof} of an interface: the classes implementing it, and the lambdas
+	 * made for it. A lambda is a function, which does not tell the interface it was made
+	 * for: so when the program has lambdas of this interface and of another, the ones of
+	 * this interface are made structures holding the function, and the program is lowered
+	 * again.
 	 */
-	private LispVal interfaceTest(JavaClass declaration, int pos) {
-		long implementing = this.lambdaTargets.stream().filter(target -> target.isSubclassOf(declaration)).count();
-		if (implementing != 0 && implementing != this.lambdaTargets.size()) {
-			throw JavaClasses.unsupported(this.program, pos, "instanceof or a cast to " + declaration.simpleName()
-					+ ", which some lambdas of the program implement and others do not,");
-		}
+	private LispVal interfaceTest(JavaClass declaration) {
 		List<LispVal> tests = new ArrayList<>();
 		tests.add(cl("or"));
-		if (implementing != 0) {
+		List<JavaClass> plain = new ArrayList<>();
+		boolean others = false;
+		for (JavaClass target : this.classes.lambdaTargets) {
+			if (this.classes.taggedLambdas.contains(target)) {
+				if (target.isSubclassOf(declaration)) {
+					tests.add(list(lambdaTest(target), RECEIVER));
+				}
+			}
+			else if (target.isSubclassOf(declaration)) {
+				plain.add(target);
+			}
+			else {
+				others = true;
+			}
+		}
+		if (!plain.isEmpty() && others) {
+			tag(plain);
+		}
+		else if (!plain.isEmpty()) {
 			tests.add(call("functionp", RECEIVER));
 		}
 		for (JavaClass candidate : this.classes.all()) {
-			if (!candidate.intrinsic && !candidate.isInterface && candidate.isSubclassOf(declaration)
-					&& (candidate.superclass == null || !candidate.superclass.isSubclassOf(declaration))) {
+			if (candidate.isInterface || !candidate.isSubclassOf(declaration)) {
+				continue;
+			}
+			if (candidate.intrinsic) {
+				LispSymbol predicate = JavaIntrinsics.predicate(candidate);
+				if (predicate != null) {
+					tests.add(list(predicate, RECEIVER));
+				}
+			}
+			else if (candidate.superclass == null || !candidate.superclass.isSubclassOf(declaration)) {
 				tests.add(list(JavaNames.predicate(candidate), RECEIVER));
 			}
 		}
 		return list(cl("defun"), JavaNames.interfaceTest(declaration), list(RECEIVER), list(tests));
+	}
+
+	/** Makes the lambdas of some interfaces structures: the program is lowered again. */
+	private void tag(List<JavaClass> targets) {
+		if (this.classes.taggedLambdas.addAll(targets)) {
+			this.classes.changed();
+		}
 	}
 
 	// ---- scopes
@@ -1415,7 +1514,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			if (scope.boundary != null && type != null) {
 				Field field = field(type, name);
 				if (field != null) {
-					return new FieldRef(field, field.isStatic ? null : path);
+					return new FieldRef(field, field.isStatic ? null : path, type);
 				}
 				if (reader == null) {
 					reader = type;
@@ -1427,7 +1526,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		while (type != null) {
 			Field field = field(type, name);
 			if (field != null) {
-				return new FieldRef(field, field.isStatic ? null : path);
+				return new FieldRef(field, field.isStatic ? null : path, type);
 			}
 			path = type.hasOuterInstance() && path != null ? list(slotAccessor(type, outerSlot(type)), path) : null;
 			type = type.outer;
@@ -1467,6 +1566,30 @@ final class JavaLowering implements JavaEmitter.Context {
 		return declaration.methods.stream().filter(Method::isConstructor).toList();
 	}
 
+	/**
+	 * A method's name and parameter types as a class under its owner has them: the
+	 * owner's type parameters replaced by what the class gives them, then erased. What an
+	 * override shares with the method it overrides, whichever of the two is written with
+	 * a type parameter: {@code compareTo(T)} of {@code Comparable<T>} is
+	 * {@code compareTo(A)} in a class implementing {@code Comparable<A>}.
+	 */
+	private String signatureIn(JavaClass viewer, Method method) {
+		if (method.owner == viewer || method.owner.typeParameters.isEmpty()) {
+			return method.signature();
+		}
+		ClassType above = this.types.asSuper(viewer.self(), method.owner);
+		if (above == null || above.arguments().isEmpty()) {
+			return method.signature();
+		}
+		Map<TypeParameter, JavaType> bindings = this.types.bindings(above);
+		StringBuilder signature = new StringBuilder(method.name).append('(');
+		for (int i = 0; i < method.parameters.size(); i++) {
+			signature.append(i > 0 ? "," : "")
+				.append(JavaTypes.substitute(method.parameters.get(i), bindings).erasure());
+		}
+		return signature.append(')').toString();
+	}
+
 	/** The methods of a name a class has, an overridden one left out. */
 	private List<Method> methods(JavaClass declaration, String name) {
 		if (declaration.isEnum && (name.equals("values") || name.equals("valueOf"))) {
@@ -1479,7 +1602,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		Set<String> signatures = new HashSet<>();
 		for (JavaClass type : above) {
 			for (Method method : type.methods) {
-				if (method.name.equals(name) && !method.isConstructor() && signatures.add(method.signature())) {
+				if (method.name.equals(name) && !method.isConstructor()
+						&& signatures.add(signatureIn(declaration, method))) {
 					found.add(method);
 				}
 			}
@@ -1488,14 +1612,16 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/**
-	 * The body a class runs for a signature: its own or the nearest one above it, else an
-	 * interface's default, the one of the most specific interface.
+	 * The body a class runs for a method declared above it: its own or the nearest one
+	 * above it, else an interface's default, the one of the most specific interface.
 	 */
-	private static @Nullable Method implementation(JavaClass declaration, String signature) {
+	private @Nullable Method implementation(JavaClass declaration, Method method) {
+		String signature = signatureIn(declaration, method);
 		for (JavaClass type = declaration; type != null; type = type.superclass) {
-			for (Method method : type.methods) {
-				if (!method.isAbstract && !method.isStatic && method.signature().equals(signature)) {
-					return method;
+			for (Method candidate : type.methods) {
+				if (!candidate.isAbstract && !candidate.isStatic && candidate.name.equals(method.name)
+						&& signatureIn(declaration, candidate).equals(signature)) {
+					return candidate;
 				}
 			}
 		}
@@ -1506,64 +1632,80 @@ final class JavaLowering implements JavaEmitter.Context {
 			if (!type.isInterface) {
 				continue;
 			}
-			for (Method method : type.methods) {
-				if (method.isDefault() && method.signature().equals(signature)
+			for (Method candidate : type.methods) {
+				if (candidate.isDefault() && candidate.name.equals(method.name)
+						&& signatureIn(declaration, candidate).equals(signature)
 						&& (found == null || type.isSubclassOf(found.owner))) {
-					found = method;
+					found = candidate;
 				}
 			}
 		}
 		return found;
 	}
 
+	/**
+	 * What a lambda made for a functional interface is: the interface's one abstract
+	 * method, with the types the interface's arguments give its parameters and its value.
+	 */
+	private record Descriptor(ClassType target, Method method, List<JavaType> parameters, JavaType returnType) {
+	}
+
 	/** The one abstract method of a functional interface, or {@code null}. */
-	private static @Nullable Method functional(JavaType type) {
-		if (!(type instanceof ClassType target) || !target.declaration().isInterface
-				|| target.declaration().intrinsic) {
+	private @Nullable Method functionalMethod(JavaClass declaration) {
+		if (!declaration.isInterface || declaration.intrinsic) {
 			return null;
 		}
 		Set<JavaClass> above = new LinkedHashSet<>();
-		supertypes(target.declaration(), above);
+		supertypes(declaration, above);
 		Map<String, Method> found = new LinkedHashMap<>();
-		for (JavaClass declaration : above) {
-			for (Method method : declaration.methods) {
-				if (method.isAbstract) {
-					found.putIfAbsent(method.signature(), method);
+		for (JavaClass type : above) {
+			for (Method method : type.methods) {
+				if (method.isAbstract && implementation(declaration, method) == null) {
+					found.putIfAbsent(signatureIn(declaration, method), method);
 				}
 			}
 		}
 		return found.size() == 1 ? found.values().iterator().next() : null;
 	}
 
-	private static JavaType substitute(JavaType type, List<JavaType> arguments) {
-		return switch (type) {
-			case Variable variable -> variable.index() < arguments.size() ? arguments.get(variable.index()) : type;
-			case ArrayType array -> new ArrayType(substitute(array.element(), arguments));
-			default -> type;
-		};
+	/**
+	 * The function type of a functional interface type, or {@code null} for any other
+	 * type. A wildcard among its arguments is read as its bound.
+	 */
+	private @Nullable Descriptor functional(@Nullable JavaType type) {
+		if (!(type instanceof ClassType target)) {
+			return null;
+		}
+		JavaClass declaration = target.declaration();
+		Method method = functionalMethod(declaration);
+		if (method == null) {
+			return null;
+		}
+		if (!target.arguments().isEmpty()) {
+			List<JavaType> arguments = new ArrayList<>();
+			for (int i = 0; i < target.arguments().size(); i++) {
+				JavaType argument = target.arguments().get(i);
+				if (argument instanceof Wildcard wildcard) {
+					List<JavaType> bounds = declaration.typeParameters.get(i).bounds;
+					argument = wildcard.upper() != null ? wildcard.upper() : wildcard.lower() != null ? wildcard.lower()
+							: bounds.isEmpty() ? this.objectType : this.types.erased(bounds.get(0));
+				}
+				arguments.add(argument);
+			}
+			target = new ClassType(declaration, List.copyOf(arguments));
+		}
+		List<JavaType> parameters = new ArrayList<>();
+		for (JavaType parameter : method.parameters) {
+			parameters.add(this.types.memberType(parameter, target, method.owner));
+		}
+		return new Descriptor(target, method, List.copyOf(parameters),
+				this.types.memberType(method.returnType, target, method.owner));
 	}
 
 	// ---- conversions
 
 	private boolean isSubtype(JavaType from, JavaType to) {
-		if (from.equals(to)) {
-			return true;
-		}
-		if (!from.isReference() || !to.isReference() || to == JavaType.Null.NULL) {
-			return false;
-		}
-		if (from == JavaType.Null.NULL || to.equals(this.objectType)) {
-			return true;
-		}
-		if (from instanceof ClassType source && to instanceof ClassType target) {
-			return source.declaration().isSubclassOf(target.declaration())
-					&& source.arguments().equals(target.arguments());
-		}
-		if (from instanceof ArrayType source && to instanceof ArrayType target) {
-			return source.element().isReference() && target.element().isReference()
-					&& isSubtype(source.element(), target.element());
-		}
-		return false;
+		return this.types.isSubtype(from, to);
 	}
 
 	private static int rank(JavaType type) {
@@ -1622,10 +1764,16 @@ final class JavaLowering implements JavaEmitter.Context {
 		else if (primitive == Primitive.CHAR) {
 			form = call("code-char", form);
 		}
+		else if (primitive == Primitive.LONG) {
+			form = call("cons", form, JavaForms.BOXED_LONG);
+		}
 		return new Typed(form, box);
 	}
 
-	/** A value of a box type as the primitive it holds; any other value as it is. */
+	/**
+	 * A value of a box type as the primitive it holds; any other value as it is. A box
+	 * that is {@code null} raises: the test is one branch where the box is the number.
+	 */
 	private static Typed unbox(Typed value) {
 		Primitive primitive = JavaIntrinsics.unboxed(value.type());
 		if (primitive == null) {
@@ -1635,8 +1783,16 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (primitive == Primitive.BOOLEAN) {
 			form = runtimeCall("unbox-boolean", form);
 		}
-		else if (primitive == Primitive.CHAR) {
-			form = call("char-code", form);
+		else {
+			if (!(form instanceof LispInteger) && !(form instanceof LispDouble)) {
+				form = call("or", form, runtimeCall("null-unbox"));
+			}
+			if (primitive == Primitive.CHAR) {
+				form = call("char-code", form);
+			}
+			else if (primitive == Primitive.LONG) {
+				form = call("car", form);
+			}
 		}
 		return new Typed(form, primitive);
 	}
@@ -1670,6 +1826,17 @@ final class JavaLowering implements JavaEmitter.Context {
 			return isSubtype(boxed.type(), to) ? boxed.form() : null;
 		}
 		if (to.isPrimitive()) {
+			if (isOpen(from)) {
+				// what an inference left open is the type it found, else the box its
+				// context unboxes
+				JavaType found = ((Variable) from).parameter().lower;
+				if (found != null) {
+					return conversion(new Typed(value.form(), found), to, boxing, narrowing);
+				}
+				return boxing
+						? unbox(new Typed(value.form(), JavaIntrinsics.boxed((Primitive) to, this.classes))).form()
+						: null;
+			}
 			Typed unboxed = unbox(value);
 			if (!boxing || unboxed == value) {
 				return null;
@@ -1677,6 +1844,10 @@ final class JavaLowering implements JavaEmitter.Context {
 			return conversion(unboxed, to, false, false);
 		}
 		return isSubtype(from, to) ? value.form() : null;
+	}
+
+	private static boolean isOpen(JavaType type) {
+		return type instanceof Variable variable && variable.parameter().open;
 	}
 
 	/** A value as its target takes it in an assignment, a return or an initializer. */
@@ -1766,7 +1937,12 @@ final class JavaLowering implements JavaEmitter.Context {
 			return and ? new Flow(value, union(left.whenTrue(), right.whenTrue()), Map.of())
 					: new Flow(value, Map.of(), union(left.whenFalse(), right.whenFalse()));
 		}
-		return new Flow(unbox(expression(expression, null)), Map.of(), Map.of());
+		Typed value = expression(expression, Primitive.BOOLEAN);
+		if (isOpen(value.type())) {
+			value = new Typed(Objects.requireNonNull(conversion(value, Primitive.BOOLEAN, true, false)),
+					Primitive.BOOLEAN);
+		}
+		return new Flow(unbox(value), Map.of(), Map.of());
 	}
 
 	/** A binding of a pattern: a variable of the statement the pattern stands in. */
@@ -1822,7 +1998,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		switch (pattern) {
 			case JavaSyntax.TypePattern written: {
 				boolean inferred = written.type().name().equals("var") && written.type().dimensions() == 0;
-				JavaType to = inferred ? from : type(written.type());
+				JavaType to = inferred ? this.types.ground(from) : patternType(written.type(), from);
 				if (from.isPrimitive() || to.isPrimitive()) {
 					if (!from.equals(to)) {
 						throw error(written.pos(), "incompatible types: " + from + " cannot be converted to " + to);
@@ -1845,10 +2021,11 @@ final class JavaLowering implements JavaEmitter.Context {
 				return;
 			}
 			case JavaSyntax.RecordPattern written: {
-				if (!(type(written.type()) instanceof ClassType to) || !to.declaration().isRecord) {
+				if (!(patternType(written.type(), from) instanceof ClassType to) || !to.declaration().isRecord) {
 					throw error(written.pos(), "deconstruction patterns can only be applied to records");
 				}
 				JavaClass record = to.declaration();
+				ClassType through = this.types.capture(to);
 				tests.add(isSubtype(from, to) ? call("not", call("null", value))
 						: instanceTest(value, from, to, written.pos(), "a pattern"));
 				List<Field> components = record.fields.stream().filter(field -> !field.isStatic).toList();
@@ -1866,11 +2043,23 @@ final class JavaLowering implements JavaEmitter.Context {
 						.orElse(null);
 					LispVal read = accessor != null ? list(JavaNames.function(accessor), value)
 							: list(JavaNames.accessor(component), value);
-					pattern(written.components().get(i), read, component.type, false, tests, stores, bindings);
+					pattern(written.components().get(i), read,
+							this.types.upward(this.types.memberType(component.type, through, record)), false, tests,
+							stores, bindings);
 				}
 				return;
 			}
 		}
+	}
+
+	/**
+	 * The type a pattern names: a parameterized class named with no argument has the
+	 * arguments the value's static type settles.
+	 */
+	private JavaType patternType(TypeName written, JavaType from) {
+		JavaType type = type(written);
+		return type instanceof ClassType named && JavaTypes.isRaw(named) ? this.types.refine(named.declaration(), from)
+				: type;
 	}
 
 	/**
@@ -1964,8 +2153,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		JavaType type = receiver.type();
 		boolean plain = JavaIntrinsics.unboxed(type) != null || type instanceof ArrayType
 				|| (type instanceof ClassType builder && builder.declaration().name.equals("java.lang.StringBuilder"));
-		if (type instanceof ClassType collection && collection.declaration().typeParameters > 0
-				&& !signature.equals("toString()")) {
+		if (type instanceof ClassType collection && collection.declaration().intrinsic
+				&& !collection.declaration().typeParameters.isEmpty() && !signature.equals("toString()")) {
 			throw unsupported(call.pos(), collection.declaration().simpleName() + "." + signature);
 		}
 		switch (signature) {
@@ -1999,7 +2188,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (this.early) {
 			throw error(pos, "cannot reference this before supertype constructor has been called");
 		}
-		return new Typed(THIS, new ClassType(this.currentClass, List.of()));
+		return new Typed(THIS, this.currentClass.self());
 	}
 
 	/** A member that is {@code private} is reached from its own top-level class only. */
@@ -2027,7 +2216,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				else if (forward(field)) {
 					throw error(pos, "illegal forward reference");
 				}
-				yield fieldRead(field, found.object(), pos);
+				yield fieldRead(field, found.object(), pos, found.through().self());
 			}
 		};
 	}
@@ -2115,12 +2304,12 @@ final class JavaLowering implements JavaEmitter.Context {
 				if (instance == null) {
 					throw error(self.pos(), "not an enclosing class: " + named.simpleName());
 				}
-				return new Typed(instance, new ClassType(named, List.of()));
+				return new Typed(instance, named.self());
 			}
 			case Select select:
 				return select(select);
 			case Call call:
-				return invocation(call, discard);
+				return invocation(call, expected, discard);
 			case ConstructorCall call:
 				throw error(call.pos(), "explicit constructor invocation may only appear within a constructor body");
 			case New creation:
@@ -2176,7 +2365,11 @@ final class JavaLowering implements JavaEmitter.Context {
 			case InstanceOf test:
 				return test.pattern() != null ? flow(test).value() : instanceOf(test);
 			case Lambda lambda:
-				return lambda(lambda, expected);
+				return lambda(lambda, expected, null);
+			case JavaSyntax.MethodReference reference:
+				return methodReference(reference, expected, null);
+			case JavaSyntax.Lowered lowered:
+				return (Typed) lowered.value();
 			case JavaSyntax.Switch block:
 				return switchExpression(block, expected);
 		}
@@ -2227,7 +2420,12 @@ final class JavaLowering implements JavaEmitter.Context {
 		return false;
 	}
 
-	private Typed fieldRead(Field field, @Nullable LispVal object, int pos) {
+	/**
+	 * A field read.
+	 * @param site the type it is read through, which gives the type parameters of the
+	 * field's class their arguments, or {@code null} for a static field
+	 */
+	private Typed fieldRead(Field field, @Nullable LispVal object, int pos, @Nullable JavaType site) {
 		if (field.form != null) {
 			Object constant = field.form instanceof LispInteger number
 					? (field.type == Primitive.LONG ? (Object) number.value() : (Object) (int) number.value())
@@ -2236,7 +2434,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		checkAccess(field.isPrivate, field.owner, field.name, pos);
 		if (!field.isStatic) {
-			return new Typed(list(JavaNames.accessor(field), Objects.requireNonNull(object)), field.type);
+			return new Typed(list(JavaNames.accessor(field), Objects.requireNonNull(object)),
+					inScope(this.types.upward(this.types.memberType(field.type, site, field.owner)), pos));
 		}
 		Object constant = constantOf(field);
 		if (constant != null) {
@@ -2252,6 +2451,44 @@ final class JavaLowering implements JavaEmitter.Context {
 			return new Typed(call("progn", list(JavaNames.initializer(field.owner)), global), field.type);
 		}
 		return new Typed(global, field.type);
+	}
+
+	/**
+	 * A member's type, refused when it names a type parameter of a class the lowering
+	 * does not stand in: the type arguments of the class around an inner class are no
+	 * part of the inner class's type, so its member read from outside has no type here.
+	 */
+	private JavaType inScope(JavaType type, int pos) {
+		switch (type) {
+			case Variable variable: {
+				JavaClass owner = variable.parameter().owner;
+				boolean around = owner == null;
+				for (JavaClass at = this.currentClass; at != null && !around; at = at.outer) {
+					around = at == owner;
+				}
+				if (!around) {
+					throw unsupported(pos, "a member of an inner class of the parameterized class "
+							+ Objects.requireNonNull(owner).simpleName() + " read from outside that class");
+				}
+				break;
+			}
+			case ClassType named:
+				named.arguments().forEach(argument -> inScope(argument, pos));
+				break;
+			case ArrayType array:
+				inScope(array.element(), pos);
+				break;
+			case Wildcard wildcard:
+				if (wildcard.upper() != null) {
+					inScope(wildcard.upper(), pos);
+				}
+				if (wildcard.lower() != null) {
+					inScope(wildcard.lower(), pos);
+				}
+				break;
+			default:
+		}
+		return type;
 	}
 
 	/**
@@ -2332,7 +2569,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				throw error(select.pos(),
 						"non-static variable " + select.name() + " cannot be referenced from a static context");
 			}
-			return fieldRead(field, null, select.pos());
+			return fieldRead(field, null, select.pos(), null);
 		}
 		Place place = place(select, false, false);
 		return new Typed(place.read(), place.type());
@@ -2381,7 +2618,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				if (!field.isStatic && !(assigning && this.early && found.object() == THIS)) {
 					requireInstance(field, found.object(), name.pos());
 				}
-				return fieldPlace(field, found.object(), name.pos(), bindings);
+				return fieldPlace(field, found.object(), name.pos(), bindings, found.through().self());
 			}
 			case Select select: {
 				JavaClass named = classNamed(select.target());
@@ -2391,20 +2628,20 @@ final class JavaLowering implements JavaEmitter.Context {
 						throw error(select.pos(), "cannot find symbol: static variable " + select.name() + " in class "
 								+ named.simpleName());
 					}
-					return fieldPlace(field, null, select.pos(), bindings);
+					return fieldPlace(field, null, select.pos(), bindings, null);
 				}
 				// a field may be given its value ahead of this(..) or super(..)
 				Typed object = assigning && this.early && select.target() instanceof This
-						? new Typed(THIS, new ClassType(this.currentClass, List.of()))
-						: expression(select.target(), null);
+						? new Typed(THIS, this.currentClass.self()) : expression(select.target(), null);
 				if (object.type() instanceof ArrayType && select.name().equals("length")) {
 					return new Place(Primitive.INT, call("length", object.form()), value -> {
 						throw error(select.pos(), "cannot assign a value to final variable length");
 					}, bindings);
 				}
-				if (!(object.type() instanceof ClassType type)) {
+				if (!(object.type() instanceof ClassType) && !(object.type() instanceof Variable)) {
 					throw error(select.pos(), object.type() + " cannot be dereferenced");
 				}
+				ClassType type = this.types.site(object.type());
 				Field field = field(type.declaration(), select.name());
 				if (field == null) {
 					throw type.declaration().intrinsic
@@ -2413,7 +2650,7 @@ final class JavaLowering implements JavaEmitter.Context {
 									+ type.declaration().simpleName());
 				}
 				return fieldPlace(field, field.isStatic ? null : stabilized(object.form(), stable, bindings),
-						select.pos(), bindings);
+						select.pos(), bindings, type);
 			}
 			case Index index: {
 				Typed array = expression(index.array(), null);
@@ -2443,8 +2680,9 @@ final class JavaLowering implements JavaEmitter.Context {
 		return temporary;
 	}
 
-	private Place fieldPlace(Field field, @Nullable LispVal object, int pos, List<LispVal> bindings) {
-		Typed read = fieldRead(field, object, pos);
+	private Place fieldPlace(Field field, @Nullable LispVal object, int pos, List<LispVal> bindings,
+			@Nullable JavaType site) {
+		Typed read = fieldRead(field, object, pos, site);
 		Function<LispVal, LispVal> write = value -> {
 			// a final field is given its value once, where its class is constructed
 			boolean constructed = this.constructing == field.owner && this.constructingStatic == field.isStatic
@@ -2461,7 +2699,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			return read.form() instanceof LispSymbol ? call("setq", global, value)
 					: call("setq", global, call("prog1", value, list(JavaNames.initializer(field.owner))));
 		};
-		return new Place(field.type, read.form(), write, bindings);
+		return new Place(read.type(), read.form(), write, bindings);
 	}
 
 	private static LispVal bound(List<LispVal> bindings, LispVal body) {
@@ -2754,18 +2992,22 @@ final class JavaLowering implements JavaEmitter.Context {
 		boolean rightBox = JavaIntrinsics.unboxed(right.type()) != null;
 		LispVal test;
 		if (left.type().isReference() && right.type().isReference()) {
-			if (leftBox && rightBox) {
-				throw unsupported(pos, operator + " of two boxed values, which compares references,");
-			}
 			if (isString(left) && isString(right)) {
 				throw unsupported(pos, operator + " of two strings, which compares references (equals compares text),");
 			}
-			if (!isSubtype(left.type(), right.type()) && !isSubtype(right.type(), left.type())
-					&& !(isInterface(left.type()) || isInterface(right.type()))) {
+			JavaType a = this.types.erased(this.types.upward(left.type()));
+			JavaType b = this.types.erased(this.types.upward(right.type()));
+			if (!isOpen(left.type()) && !isOpen(right.type()) && !isSubtype(a, b) && !isSubtype(b, a)
+					&& !(isInterface(a) || isInterface(b))) {
 				throw error(pos, "incomparable types: " + left.type() + " and " + right.type());
 			}
+			// a box is its value, so two boxes of one value are one object: what the
+			// language
+			// promises of the small values, and allows of every other
+			String identity = !leftBox || !rightBox ? "eq"
+					: JavaIntrinsics.unboxed(left.type()) == Primitive.LONG ? "equal" : "eql";
 			test = left.type() == JavaType.Null.NULL ? call("null", right.form()) : right.type() == JavaType.Null.NULL
-					? call("null", left.form()) : call("eq", left.form(), right.form());
+					? call("null", left.form()) : call(identity, left.form(), right.form());
 		}
 		else {
 			Typed a = unbox(left);
@@ -2854,31 +3096,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			if (isSubtype(br, ar)) {
 				return ar;
 			}
-			return leastUpperBound(ar, br);
+			return this.types.lub(ar, br);
 		}
 		throw error(pos, "incompatible types in a conditional: " + at + " and " + bt);
-	}
-
-	/**
-	 * The type two unrelated reference types share: the one class or interface both are
-	 * under and no other of theirs is under, else {@code Object}.
-	 */
-	private JavaType leastUpperBound(JavaType a, JavaType b) {
-		if (!(a instanceof ClassType left) || !(b instanceof ClassType right)) {
-			return this.objectType;
-		}
-		Set<JavaClass> above = new LinkedHashSet<>();
-		supertypes(left.declaration(), above);
-		Set<JavaClass> shared = new LinkedHashSet<>();
-		supertypes(right.declaration(), shared);
-		shared.retainAll(above);
-		shared.removeIf(type -> type.intrinsic);
-		List<JavaClass> least = shared.stream()
-			.filter(type -> shared.stream().noneMatch(other -> other != type && other.isSubclassOf(type)))
-			.toList();
-		List<JavaClass> classes = least.stream().filter(type -> !type.isInterface).toList();
-		JavaClass chosen = classes.size() == 1 ? classes.get(0) : least.size() == 1 ? least.get(0) : null;
-		return chosen == null ? this.objectType : new ClassType(chosen, List.of());
 	}
 
 	/**
@@ -2895,9 +3115,16 @@ final class JavaLowering implements JavaEmitter.Context {
 			if (from == to) {
 				return operand;
 			}
+			if (from.isReference()) {
+				// through the box: a reference is cast to it, then unboxed
+				ClassType box = JavaIntrinsics.boxed((Primitive) to, this.classes);
+				if (!isSubtype(box, this.types.erased(this.types.upward(from)))) {
+					throw error(pos, "incompatible types: " + from + " cannot be converted to " + to);
+				}
+				return unbox(castTo(box, operand, pos));
+			}
 			if (!from.isNumeric() || !to.isNumeric()) {
-				throw from.isReference() ? unsupported(pos, "a cast from " + from + " to " + to)
-						: error(pos, "incompatible types: " + from + " cannot be converted to " + to);
+				throw error(pos, "incompatible types: " + from + " cannot be converted to " + to);
 			}
 			if (rank(from) < rank(to)) {
 				return widen(operand, to);
@@ -2932,8 +3159,15 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (!from.isReference()) {
 			throw error(pos, "incompatible types: " + from + " cannot be converted to " + to);
 		}
+		if (isSubtype(this.types.erased(this.types.upward(from)), this.types.erased(to))) {
+			// only the type arguments differ, which no program that runs has
+			return new Typed(value.form(), to);
+		}
 		LispSymbol checked = temporary();
 		LispVal test = instanceTest(checked, from, to, pos, "a cast");
+		if (test == T) {
+			return new Typed(value.form(), to);
+		}
 		this.classes.library("java.lang.ClassCastException");
 		LispVal failure = raise(
 				list(JavaNames.creator(constructors(this.classes.library("java.lang.ClassCastException")).stream()
@@ -2954,18 +3188,34 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * structure predicate, an interface's test, a library class's own.
 	 */
 	private LispVal instanceTest(LispVal value, JavaType from, JavaType to, int pos, String what) {
-		if (!(to instanceof ClassType target) || !target.arguments().isEmpty()) {
+		boolean cast = what.equals("a cast");
+		if (to instanceof Variable) {
+			// a type variable is no type of the program that runs: its bound is
+			if (!cast) {
+				throw error(pos, from + " cannot be safely cast to " + to);
+			}
+			JavaType bound = this.types.erased(to);
+			return bound.equals(this.objectType) ? T : instanceTest(value, from, bound, pos, what);
+		}
+		if (!(to instanceof ClassType target)) {
 			throw unsupported(pos, what + " to " + to);
 		}
 		JavaClass declaration = target.declaration();
-		if (from instanceof ClassType source && !source.declaration().isInterface && !declaration.isInterface
-				&& !source.equals(this.objectType) && !declaration.isSubclassOf(source.declaration())) {
+		if (!target.arguments().isEmpty() && !cast && !isSubtype(this.types.refine(declaration, from), target)) {
+			throw error(pos, from + " cannot be safely cast to " + to);
+		}
+		JavaType source = this.types.erased(this.types.upward(from));
+		if (source instanceof ClassType known && !known.declaration().isInterface && !declaration.isInterface
+				&& !known.equals(this.objectType) && !declaration.isSubclassOf(known.declaration())) {
 			throw error(pos, "incompatible types: " + from + " cannot be converted to " + to);
 		}
 		if (from instanceof ArrayType) {
 			throw error(pos, "incompatible types: " + from + " cannot be converted to " + to);
 		}
 		if (declaration.intrinsic) {
+			if (target.equals(this.objectType)) {
+				return cast ? T : call("not", call("null", value));
+			}
 			LispSymbol predicate = JavaIntrinsics.predicate(declaration);
 			if (predicate == null) {
 				throw unsupported(pos, what + " to " + to);
@@ -2973,7 +3223,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			return list(predicate, value);
 		}
 		if (declaration.isInterface) {
-			this.interfaceTests.putIfAbsent(declaration, pos);
+			this.interfaceTests.add(declaration);
 			return list(JavaNames.interfaceTest(declaration), value);
 		}
 		return list(JavaNames.predicate(declaration), value);
@@ -2991,43 +3241,100 @@ final class JavaLowering implements JavaEmitter.Context {
 		return new Typed(instanceTest(operand.form(), operand.type(), to, test.pos(), "instanceof"), Primitive.BOOLEAN);
 	}
 
-	private Typed lambda(Lambda lambda, @Nullable JavaType expected) {
-		Method method = expected == null ? null : functional(expected);
-		if (method == null) {
-			throw expected instanceof ClassType target && target.declaration().intrinsic
-					? unsupported(lambda.pos(), "a lambda as a " + target.declaration().simpleName())
-					: error(lambda.pos(), "a lambda needs a functional interface of the program as its target"
-							+ (expected == null ? "" : ", not " + expected));
+	/** A value of a primitive type as its box; any other as it is. */
+	private Typed boxedValue(Typed value) {
+		return value.type().isPrimitive() ? box(value) : value;
+	}
+
+	/** Records that the program makes a lambda for an interface. */
+	private JavaClass lambdaTarget(Descriptor function) {
+		JavaClass target = function.target().declaration();
+		if (this.classes.lambdaTargets.add(target)) {
+			this.classes.changed();
 		}
-		if (method.parameters.size() != lambda.parameters().size()) {
-			throw error(lambda.pos(), "incompatible parameter types in lambda expression");
+		return target;
+	}
+
+	/**
+	 * A lambda as the value of its interface: the function, or a structure holding it
+	 * when the program can tell which interface a lambda was made for.
+	 */
+	private LispVal lambdaValue(JavaClass target, LispVal function) {
+		return this.classes.taggedLambdas.contains(target) ? list(lambdaMaker(target), function) : function;
+	}
+
+	/**
+	 * A lambda expression.
+	 * @param expected the functional interface type it is made for
+	 * @param inference the inference of the call it is an argument of when the type of
+	 * its value is still to be found there: what the body gives is told to it
+	 */
+	private Typed lambda(Lambda lambda, @Nullable JavaType expected, @Nullable Inference inference) {
+		Descriptor function = functional(expected);
+		if (function == null) {
+			throw error(lambda.pos(), expected == null || isOpen(expected) ? "lambda expression not expected here"
+					: "incompatible types: " + expected + " is not a functional interface");
 		}
-		this.lambdaTargets.add(((ClassType) Objects.requireNonNull(expected)).declaration());
+		if (!function.method().typeParameters.isEmpty()) {
+			throw error(lambda.pos(), "incompatible types: invalid functional descriptor for lambda expression");
+		}
+		if (function.parameters().size() != lambda.parameters().size()) {
+			throw error(lambda.pos(), "incompatible types: incompatible parameter types in lambda expression");
+		}
+		JavaClass target = lambdaTarget(function);
 		this.scopes.push(new Scope(null, true));
 		Initializing savedInitializing = this.initializing;
 		this.initializing = null;
 		List<LispVal> parameters = new ArrayList<>();
 		for (int i = 0; i < lambda.parameters().size(); i++) {
 			Parameter parameter = lambda.parameters().get(i);
-			JavaType type = method.parameters.get(i);
-			if (parameter.type() != null && !type(parameter.type()).equals(type)) {
-				throw error(parameter.pos(), "incompatible parameter types in lambda expression");
+			JavaType type = function.parameters().get(i);
+			if (parameter.type() != null) {
+				JavaType declared = type(parameter.type());
+				if (!this.types.sameType(declared, type)) {
+					throw error(parameter.pos(),
+							"incompatible types: incompatible parameter types in lambda expression");
+				}
+				type = declared;
 			}
-			Local bound = bind(parameter.name(), type, parameter.pos());
+			Local bound = bind(parameter.name(), this.types.ground(type), parameter.pos());
 			bound.initialized = true;
 			parameters.add(bound.symbol());
 		}
+		JavaType wanted = function.returnType();
+		boolean inferring = inference != null && JavaTypes.mentions(wanted, inference.variables);
 		JavaType savedReturn = this.returnType;
-		this.returnType = method.returnType;
+		List<JavaType> savedReturns = this.returns;
+		boolean savedLambda = this.lambdaBody;
+		List<JavaType> returned = new ArrayList<>();
+		this.returnType = inferring ? this.objectType : wanted;
+		this.returns = inferring ? returned : null;
+		this.lambdaBody = true;
 		LispVal body;
 		Expression written = lambda.expression();
+		if (wanted == Primitive.VOID && written != null && !fits(lambda, true)) {
+			throw error(written.pos(),
+					"incompatible types: lambda body is not compatible with a void functional interface");
+		}
+		if (wanted != Primitive.VOID && !inferring && written == null
+				&& completes(Objects.requireNonNull(lambda.block()))) {
+			throw error(lambda.pos(), "incompatible types: bad return type in lambda expression");
+		}
 		if (written != null) {
 			Deque<Target> savedTargets = new ArrayDeque<>(this.targets);
 			this.targets.clear();
 			body = progn(patterned(() -> {
-				Typed value = expression(written, method.returnType, method.returnType == Primitive.VOID);
-				return List.of(method.returnType == Primitive.VOID ? value.form()
-						: assign(value, method.returnType, written.pos()));
+				if (inferring) {
+					Typed value = expression(written, null);
+					if (value.type() == Primitive.VOID) {
+						return List.of(value.form());
+					}
+					Typed boxed = boxedValue(value);
+					returned.add(boxed.type());
+					return List.of(boxed.form());
+				}
+				Typed value = expression(written, wanted, wanted == Primitive.VOID);
+				return List.of(wanted == Primitive.VOID ? value.form() : returned(value, wanted, written.pos()));
 			}));
 			this.targets.addAll(savedTargets);
 		}
@@ -3035,9 +3342,148 @@ final class JavaLowering implements JavaEmitter.Context {
 			body = functionBody(Objects.requireNonNull(lambda.block()));
 		}
 		this.returnType = savedReturn;
+		this.returns = savedReturns;
+		this.lambdaBody = savedLambda;
 		this.initializing = savedInitializing;
 		this.scopes.pop();
-		return new Typed(list(cl("lambda"), list(parameters), body), expected);
+		if (inference != null && inferring) {
+			JavaType shared = null;
+			for (JavaType type : returned) {
+				shared = shared == null ? type : this.types.lub(shared, type);
+			}
+			if (shared != null) {
+				inference.lowerBound(wanted, shared);
+			}
+		}
+		return new Typed(lambdaValue(target, list(cl("lambda"), list(parameters), body)),
+				Objects.requireNonNull(expected));
+	}
+
+	/** A value as the function being lowered returns it. */
+	private LispVal returned(Typed value, JavaType wanted, int pos) {
+		if (!this.lambdaBody) {
+			return assign(value, wanted, pos);
+		}
+		LispVal form = conversion(value, wanted, true, true);
+		if (form == null) {
+			throw error(pos, "incompatible types: bad return type in lambda expression");
+		}
+		return form;
+	}
+
+	/**
+	 * A method reference: the lambda calling the method with the parameters its interface
+	 * gives it. {@code Type::name} is a static method of all of them, or a method of the
+	 * first on the rest; {@code expression::name} a method of the expression's value,
+	 * which is evaluated once, where the reference stands.
+	 */
+	private Typed methodReference(JavaSyntax.MethodReference reference, @Nullable JavaType expected,
+			@Nullable Inference inference) {
+		int pos = reference.pos();
+		Descriptor function = functional(expected);
+		if (function == null) {
+			throw error(pos, expected == null || isOpen(expected) ? "method reference not expected here"
+					: "incompatible types: " + expected + " is not a functional interface");
+		}
+		JavaClass target = lambdaTarget(function);
+		JavaType wanted = function.returnType();
+		boolean inferring = inference != null && JavaTypes.mentions(wanted, inference.variables);
+		boolean discard = wanted == Primitive.VOID;
+		JavaType hint = inferring || discard ? null : wanted;
+		List<LispVal> parameters = new ArrayList<>();
+		List<Expression> arguments = new ArrayList<>();
+		for (JavaType type : function.parameters()) {
+			LispSymbol parameter = temporary();
+			parameters.add(parameter);
+			arguments.add(new JavaSyntax.Lowered(pos, new Typed(parameter, this.types.ground(type))));
+		}
+		List<LispVal> bindings = new ArrayList<>();
+		Typed value;
+		Expression written = reference.target();
+		if (reference.name().equals("new")) {
+			value = constructorReference(reference, arguments, hint);
+		}
+		else if (reference.onSuper()) {
+			value = invocation(new Call(pos, null, reference.name(), arguments, true), hint, discard);
+		}
+		else if (written == null) {
+			throw unsupported(pos, "a method reference through a parameterized type");
+		}
+		else if (classNamed(written) instanceof JavaClass named) {
+			Typed found;
+			try {
+				found = invocation(new Call(pos, written, reference.name(), arguments, false), hint, discard);
+			}
+			catch (LispReadException asStatic) {
+				if (arguments.isEmpty() || !isSubtype(function.parameters().get(0), new ClassType(named, List.of()))) {
+					throw error(pos, "invalid method reference: " + asStatic.reason());
+				}
+				try {
+					found = invocation(new Call(pos, arguments.get(0), reference.name(),
+							arguments.subList(1, arguments.size()), false), hint, discard);
+				}
+				catch (LispReadException asInstance) {
+					throw error(pos, "invalid method reference: " + asInstance.reason());
+				}
+			}
+			value = found;
+		}
+		else {
+			Typed receiver = expression(written, null);
+			if (!isSimple(receiver.form())) {
+				LispSymbol held = temporary();
+				bindings.add(list(held, receiver.form()));
+				receiver = new Typed(held, receiver.type());
+			}
+			value = invocation(
+					new Call(pos, new JavaSyntax.Lowered(written.pos(), receiver), reference.name(), arguments, false),
+					hint, discard);
+		}
+		LispVal body;
+		if (discard) {
+			body = value.form();
+		}
+		else if (value.type() == Primitive.VOID) {
+			throw error(pos, "incompatible types: bad return type in method reference");
+		}
+		else if (inference != null && inferring) {
+			Typed boxed = boxedValue(value);
+			inference.lowerBound(wanted, boxed.type());
+			body = boxed.form();
+		}
+		else {
+			body = conversion(value, wanted, true, false);
+			if (body == null) {
+				throw error(pos, "incompatible types: bad return type in method reference: " + value.type()
+						+ " cannot be converted to " + wanted);
+			}
+		}
+		return new Typed(bound(bindings, lambdaValue(target, list(cl("lambda"), list(parameters), body))),
+				Objects.requireNonNull(expected));
+	}
+
+	/** {@code Type::new}: an instance creation, an array creation for an array type. */
+	private Typed constructorReference(JavaSyntax.MethodReference reference, List<Expression> arguments,
+			@Nullable JavaType hint) {
+		int pos = reference.pos();
+		TypeName written = reference.type();
+		if (written == null) {
+			String name = reference.target() == null ? null : dotted(reference.target());
+			if (name == null) {
+				throw error(pos, "invalid method reference: a class is expected before ::new");
+			}
+			written = new TypeName(Objects.requireNonNull(reference.target()).pos(), name, List.of(), false, 0);
+		}
+		if (written.dimensions() > 0) {
+			if (arguments.size() != 1) {
+				throw error(pos, "incompatible types: invalid constructor reference");
+			}
+			return expression(new NewArray(pos, written, arguments, null), null);
+		}
+		JavaClass made = this.classes.require(written.name(), written.pos(), this.currentClass, this.unit);
+		boolean inferred = written.arguments().isEmpty() && !made.typeParameters.isEmpty();
+		return creation(new New(pos, new TypeName(written.pos(), written.name(), written.arguments(), inferred, 0),
+				arguments, null, null), hint);
 	}
 
 	// ---- calls
@@ -3053,91 +3499,373 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	}
 
-	/** Whether an argument waits for its parameter's type before it can be lowered. */
+	/**
+	 * Whether an argument waits for its parameter's type before it can be lowered: a
+	 * lambda, a method reference, a conditional of them.
+	 */
 	private static boolean needsTarget(Expression argument) {
-		return argument instanceof Lambda || (argument instanceof New creation && creation.type().diamond());
+		return switch (argument) {
+			case Lambda lambda -> true;
+			case JavaSyntax.MethodReference reference -> true;
+			case Conditional conditional -> needsTarget(conditional.whenTrue()) || needsTarget(conditional.whenFalse());
+			default -> false;
+		};
 	}
 
-	private boolean accepts(JavaType parameter, @Nullable Typed argument, Expression written, boolean boxing) {
-		if (argument != null) {
-			return conversion(argument, parameter, boxing, false) != null;
+	/** Whether a statement holds a {@code return} of a value that is its function's. */
+	private static boolean returnsValue(@Nullable Statement statement) {
+		return switch (statement) {
+			case null -> false;
+			case Return exit -> exit.value() != null;
+			case Block block -> block.statements().stream().anyMatch(JavaLowering::returnsValue);
+			case If branch -> returnsValue(branch.then()) || returnsValue(branch.otherwise());
+			case While loop -> returnsValue(loop.body());
+			case DoWhile loop -> returnsValue(loop.body());
+			case For loop -> returnsValue(loop.body());
+			case ForEach loop -> returnsValue(loop.body());
+			case JavaSyntax.Labeled labeled -> returnsValue(labeled.body());
+			case Try attempt -> returnsValue(attempt.body())
+					|| attempt.catches().stream().anyMatch(clause -> returnsValue(clause.body()))
+					|| returnsValue(attempt.finallyBlock());
+			case JavaSyntax.Switch block -> block.cases()
+				.stream()
+				.anyMatch(written -> written.body().stream().anyMatch(JavaLowering::returnsValue));
+			default -> false;
+		};
+	}
+
+	/**
+	 * Whether a lambda's body can be a function of a kind: one giving a value, or one
+	 * giving none.
+	 */
+	private static boolean fits(Lambda lambda, boolean isVoid) {
+		Expression value = lambda.expression();
+		if (value != null) {
+			return !isVoid || value instanceof Assign || value instanceof Call || value instanceof New
+					|| (value instanceof Unary unary
+							&& (unary.operator().equals("++") || unary.operator().equals("--")));
 		}
-		if (written instanceof Lambda lambda) {
-			Method method = functional(parameter);
-			return method != null && method.parameters.size() == lambda.parameters().size();
+		Block block = Objects.requireNonNull(lambda.block());
+		return isVoid ? !returnsValue(block) : returnsValue(block) || !completes(block);
+	}
+
+	/** Whether each lambda met so far gives no value, where that was looked for. */
+	private final Map<Lambda, Boolean> givesNothing = new IdentityHashMap<>();
+
+	/**
+	 * Whether a lambda whose body is a call gives no value: the call is of a method
+	 * giving none. Only a lambda that writes the types of its parameters, or has none,
+	 * can be asked; its body is lowered once to find out, as the arms of a switch
+	 * expression are, and what that lowering made is dropped.
+	 */
+	private boolean givesNothing(Lambda lambda) {
+		Boolean known = this.givesNothing.get(lambda);
+		if (known != null) {
+			return known;
 		}
-		return parameter instanceof ClassType target && this.classes.find(((New) written).type().name(),
-				this.currentClass, this.unit) instanceof JavaClass made && made.isSubclassOf(target.declaration());
+		Expression body = Objects.requireNonNull(lambda.expression());
+		Deque<Scope> scopes = new ArrayDeque<>(this.scopes);
+		Deque<Target> targets = new ArrayDeque<>(this.targets);
+		Deque<Frame> frames = new ArrayDeque<>(this.frames);
+		List<Local> patterns = this.patternVariables;
+		JavaType savedReturn = this.returnType;
+		List<JavaType> savedReturns = this.returns;
+		boolean savedLambda = this.lambdaBody;
+		Initializing savedInitializing = this.initializing;
+		int savedFinally = this.finallyDepth;
+		Set<Local> savedAssigned = new HashSet<>(this.assigned);
+		this.patternVariables = new ArrayList<>();
+		this.scopes.push(new Scope(null, true));
+		this.initializing = null;
+		boolean nothing;
+		try {
+			for (Parameter parameter : lambda.parameters()) {
+				bind(parameter.name(), type(Objects.requireNonNull(parameter.type())),
+						parameter.pos()).initialized = true;
+			}
+			nothing = expression(body, null).type() == Primitive.VOID;
+		}
+		catch (LispReadException ex) {
+			// what is wrong with it is said where it is lowered for its parameter
+			nothing = false;
+		}
+		finally {
+			this.scopes.clear();
+			this.scopes.addAll(scopes);
+			this.targets.clear();
+			this.targets.addAll(targets);
+			this.frames.clear();
+			this.frames.addAll(frames);
+			this.patternVariables = patterns;
+			this.returnType = savedReturn;
+			this.returns = savedReturns;
+			this.lambdaBody = savedLambda;
+			this.initializing = savedInitializing;
+			this.finallyDepth = savedFinally;
+			this.assigned = savedAssigned;
+			this.flexible = false;
+		}
+		this.givesNothing.put(lambda, nothing);
+		return nothing;
+	}
+
+	/**
+	 * Whether an argument that waits for its parameter's type can be an argument of a
+	 * parameter of that type, by its shape.
+	 * @param contested whether the call has several candidates: only then is a lambda's
+	 * body asked what its shape does not say
+	 */
+	private boolean accepts(JavaType parameter, Expression written, boolean contested) {
+		switch (written) {
+			case Lambda lambda: {
+				Descriptor function = functional(parameter);
+				if (function == null || function.parameters().size() != lambda.parameters().size()
+						|| !fits(lambda, function.returnType() == Primitive.VOID)) {
+					return false;
+				}
+				return !contested || function.returnType() == Primitive.VOID || !(lambda.expression() instanceof Call)
+						|| lambda.parameters().stream().anyMatch(each -> each.type() == null) || !givesNothing(lambda);
+			}
+			case JavaSyntax.MethodReference reference:
+				return functional(parameter) != null;
+			case Conditional conditional:
+				return accepts(parameter, conditional.whenTrue(), contested)
+						&& accepts(parameter, conditional.whenFalse(), contested);
+			default:
+				return false;
+		}
+	}
+
+	/**
+	 * Whether a parameter is at least as specific as another's for an argument that waits
+	 * for its parameter's type: a functional interface giving a value is, against one
+	 * giving none or a value it converts to.
+	 */
+	private boolean moreSpecific(JavaType mine, JavaType theirs) {
+		Descriptor a = functional(mine);
+		Descriptor b = functional(theirs);
+		if (a == null || b == null) {
+			return conversion(new Typed(NIL, mine), theirs, false, false) != null;
+		}
+		if (b.returnType() == Primitive.VOID) {
+			return true;
+		}
+		return a.returnType() != Primitive.VOID
+				&& (conversion(new Typed(NIL, a.returnType()), b.returnType(), false, false) != null
+						|| (a.returnType().isPrimitive() && !b.returnType().isPrimitive()));
 	}
 
 	/**
 	 * The type a method's parameter list gives the argument at an index.
+	 * @param site the type the method is called through
 	 * @param spread whether the last parameter takes the arguments from its index on,
 	 * each as an element
 	 */
-	private static JavaType parameterAt(Method method, int index, List<JavaType> typeArguments, boolean spread) {
+	private JavaType parameterAt(Method method, int index, @Nullable JavaType site, boolean spread) {
 		int last = method.parameters.size() - 1;
-		if (spread && index >= last) {
-			return substitute(((ArrayType) method.parameters.get(last)).element(), typeArguments);
+		JavaType declared = spread && index >= last ? ((ArrayType) method.parameters.get(last)).element()
+				: method.parameters.get(index);
+		return this.types.memberType(declared, site, method.owner);
+	}
+
+	/**
+	 * Whether a call's arguments fit a method: what they say about its type parameters,
+	 * or {@code null} when they do not fit.
+	 * @param boxing whether a boxing or an unboxing may be part of the fit
+	 * @param spread whether the arguments past the fixed parameters are the elements of
+	 * the last
+	 */
+	private @Nullable Inference applicable(Method candidate, @Nullable JavaType site, List<JavaType> explicit,
+			List<TypeParameter> inferred, List<@Nullable Typed> typed, List<Expression> arguments, boolean boxing,
+			boolean spread, boolean contested) {
+		int count = arguments.size();
+		if (spread ? !candidate.varargs || count < candidate.parameters.size() - 1
+				: candidate.parameters.size() != count) {
+			return null;
 		}
-		return substitute(method.parameters.get(index), typeArguments);
+		List<TypeParameter> variables = new ArrayList<>(inferred);
+		variables.addAll(candidate.typeParameters);
+		Inference inference = this.types.new Inference(variables);
+		if (!explicit.isEmpty()) {
+			if (explicit.size() != candidate.typeParameters.size()) {
+				return null;
+			}
+			for (int i = 0; i < explicit.size(); i++) {
+				inference.exactly(candidate.typeParameters.get(i), explicit.get(i));
+			}
+		}
+		if (candidate.raw) {
+			// a member taking its argument as it is typed takes none that waits for a
+			// type
+			return typed.contains(null) ? null : inference;
+		}
+		for (int i = 0; i < count; i++) {
+			JavaType formal = parameterAt(candidate, i, site, spread);
+			Typed argument = typed.get(i);
+			if (argument != null) {
+				inference.lowerBound(formal, argument.type());
+			}
+			else if (!accepts(formal, arguments.get(i), contested)) {
+				return null;
+			}
+		}
+		Map<TypeParameter, JavaType> solution = inference.solution(true);
+		if (!inference.withinBounds(solution)) {
+			return null;
+		}
+		for (int i = 0; i < count; i++) {
+			Typed argument = typed.get(i);
+			if (argument != null && conversion(argument,
+					JavaTypes.substitute(parameterAt(candidate, i, site, spread), solution), boxing, false) == null) {
+				return null;
+			}
+		}
+		return inference;
+	}
+
+	/**
+	 * Lowers an argument that waited for its parameter's type, and tells the call's
+	 * inference what its value says.
+	 */
+	private Typed deferred(Expression argument, JavaType parameter, Inference inference) {
+		JavaType target = JavaTypes.substitute(parameter, inference.solution(false));
+		if (!(argument instanceof Lambda) && !(argument instanceof JavaSyntax.MethodReference)) {
+			return expression(argument, JavaTypes.substitute(parameter, inference.solution(true)));
+		}
+		Descriptor function = Objects.requireNonNull(functional(target));
+		// what the function takes has to be known before its body is lowered
+		for (int i = 0; i < function.parameters().size(); i++) {
+			JavaType input = function.parameters().get(i);
+			if (argument instanceof Lambda lambda && lambda.parameters().get(i).type() != null) {
+				inference.same(input, type(Objects.requireNonNull(lambda.parameters().get(i).type())));
+			}
+			else if (i == 0 && argument instanceof JavaSyntax.MethodReference reference && reference.target() != null
+					&& !reference.name().equals("new") && input instanceof Variable variable
+					&& inference.variables.contains(variable.parameter()) && inference.isFree(variable.parameter())
+					&& classNamed(reference.target()) instanceof JavaClass named) {
+				// Type::name of a first parameter nothing was said of: it is the type
+				inference.exactly(variable.parameter(), new ClassType(named, List.of()));
+			}
+			for (TypeParameter variable : inference.variables) {
+				if (inference.isFree(variable) && JavaTypes.mentions(input, Set.of(variable))) {
+					inference.exactly(variable, this.types.erased(new Variable(variable)));
+				}
+			}
+		}
+		target = JavaTypes.substitute(parameter, inference.solution(false));
+		return argument instanceof Lambda lambda ? lambda(lambda, target, inference)
+				: methodReference((JavaSyntax.MethodReference) argument, target, inference);
+	}
+
+	private static String kind(JavaClass declaration) {
+		return declaration.isInterface ? "interface"
+				: declaration.isEnum ? "enum" : declaration.isRecord ? "record" : "class";
+	}
+
+	private Resolved resolve(List<Method> candidates, @Nullable JavaType site, List<JavaType> explicit,
+			List<Expression> arguments, @Nullable JavaType expected, String what, JavaClass in, int pos) {
+		return resolve(candidates, site, explicit, arguments, expected, what, in, pos, List.of(), null);
 	}
 
 	/**
 	 * Picks the method a call means: the candidates its arguments fit with no boxing, or
 	 * else with it, or else as the elements of a variable arity parameter, and among
-	 * those the one whose parameters are the most specific.
-	 * @param typeArguments the receiver's type arguments, which a library collection's
-	 * member is read against
+	 * those the one whose parameters are the most specific. The type parameters of the
+	 * one picked are found from the arguments, from the type the call's value is wanted
+	 * as, then from the lambdas among the arguments, each lowered once its own
+	 * parameters' types are known.
+	 * @param site the type the method is called through, which gives the type parameters
+	 * of its class their arguments
+	 * @param explicit the type arguments written at the call
+	 * @param expected the type the call's value is wanted as, or {@code null}
+	 * @param inferred the type parameters of the class an instance creation with
+	 * {@code <>} has to find
+	 * @param made the type such a creation makes, in those parameters
 	 */
-	private Resolved resolve(List<Method> candidates, List<JavaType> typeArguments, List<Expression> arguments,
-			String what, JavaClass in, int pos) {
+	private Resolved resolve(List<Method> candidates, @Nullable JavaType site, List<JavaType> explicit,
+			List<Expression> arguments, @Nullable JavaType expected, String what, JavaClass in, int pos,
+			List<TypeParameter> inferred, @Nullable JavaType made) {
+		boolean flexible = this.flexible;
+		this.flexible = false;
 		List<@Nullable Typed> typed = new ArrayList<>();
 		for (Expression argument : arguments) {
-			typed.add(needsTarget(argument) ? null : expression(argument, null));
+			if (needsTarget(argument)) {
+				typed.add(null);
+				continue;
+			}
+			// a call that is an argument leaves open what this call may need above
+			this.flexible = argument instanceof Call || (argument instanceof New creation && creation.type().diamond());
+			Typed lowered = expression(argument, null);
+			this.flexible = false;
+			// each wildcard of an argument's type is a type of its own from here on
+			typed.add(lowered.type() instanceof ClassType named
+					&& named.arguments().stream().anyMatch(Wildcard.class::isInstance)
+							? new Typed(lowered.form(), this.types.capture(named), lowered.constant()) : lowered);
 		}
-		List<Method> fitting = List.of();
+		List<Method> fitting = new ArrayList<>();
+		Map<Method, Inference> inferences = new HashMap<>();
 		boolean spread = false;
 		for (int phase = 0; phase < 3 && fitting.isEmpty(); phase++) {
-			boolean boxing = phase > 0;
-			boolean spreading = phase == 2;
-			spread = spreading;
-			fitting = candidates.stream().filter(candidate -> {
-				if (spreading ? !candidate.varargs || arguments.size() < candidate.parameters.size() - 1
-						: candidate.parameters.size() != arguments.size()) {
-					return false;
+			spread = phase == 2;
+			for (Method candidate : candidates) {
+				Inference inference = applicable(candidate, site, explicit, inferred, typed, arguments, phase > 0,
+						spread, candidates.size() > 1);
+				if (inference != null) {
+					fitting.add(candidate);
+					inferences.put(candidate, inference);
 				}
-				for (int i = 0; i < arguments.size(); i++) {
-					if (!candidate.raw && !accepts(parameterAt(candidate, i, typeArguments, spreading), typed.get(i),
-							arguments.get(i), boxing)) {
-						return false;
-					}
-				}
-				return true;
-			}).toList();
+			}
 		}
+		boolean isConstructor = what.startsWith("constructor ");
+		String name = what.substring(what.indexOf(' ') + 1);
 		if (fitting.isEmpty()) {
 			StringBuilder given = new StringBuilder();
 			for (int i = 0; i < typed.size(); i++) {
 				Typed argument = typed.get(i);
-				given.append(i > 0 ? "," : "").append(argument == null ? "<lambda>" : argument.type().toString());
+				given.append(i > 0 ? "," : "")
+					.append(argument != null ? argument.type().toString()
+							: arguments.get(i) instanceof Lambda ? "<lambda>" : "<method reference>");
 			}
-			if (in.intrinsic) {
-				throw unsupported(pos, (what.startsWith("constructor ") ? "new " + in.simpleName()
-						: in.simpleName() + "." + what.substring("method ".length())) + "(" + given + ")");
+			int count = arguments.size();
+			if (in.intrinsic && candidates.stream()
+				.noneMatch(candidate -> candidate.parameters.size() == count
+						|| (candidate.varargs && count >= candidate.parameters.size() - 1))) {
+				// a member the library does not have yet
+				throw unsupported(pos,
+						(isConstructor ? "new " + in.simpleName() : in.simpleName() + "." + name) + "(" + given + ")");
 			}
-			throw error(pos, candidates.isEmpty() ? "cannot find symbol: " + what + "(" + given + ")"
-					: "no suitable " + what + " found for the arguments (" + given + ")");
+			if (candidates.isEmpty()) {
+				throw error(pos, "cannot find symbol: " + what + "(" + given + ")");
+			}
+			if (candidates.size() == 1 && !in.intrinsic) {
+				Method only = candidates.get(0);
+				StringBuilder required = new StringBuilder();
+				for (int i = only.hidden; i < only.parameters.size(); i++) {
+					required.append(i > only.hidden ? "," : "").append(only.parameters.get(i));
+				}
+				throw error(pos,
+						what + " in " + kind(only.owner) + " " + only.owner.self()
+								+ " cannot be applied to given types; required: "
+								+ (required.isEmpty() ? "no arguments" : required) + "; found: "
+								+ (given.isEmpty() ? "no arguments" : given));
+			}
+			throw error(pos, "no suitable " + (isConstructor ? "constructor" : "method") + " found for " + name + "("
+					+ given + ")");
 		}
 		Method chosen = null;
 		boolean spreads = spread;
 		for (Method candidate : fitting) {
 			boolean mostSpecific = true;
 			for (Method other : fitting) {
+				Map<TypeParameter, JavaType> theirs = new HashMap<>();
+				for (TypeParameter parameter : other.typeParameters) {
+					theirs.put(parameter, this.types.open(parameter, Map.of(), null));
+				}
 				for (int i = 0; i < arguments.size() && mostSpecific; i++) {
-					JavaType mine = parameterAt(candidate, i, typeArguments, spreads);
-					JavaType theirs = parameterAt(other, i, typeArguments, spreads);
-					mostSpecific = other.raw || conversion(new Typed(NIL, mine), theirs, false, false) != null;
+					JavaType mine = parameterAt(candidate, i, site, spreads);
+					JavaType against = JavaTypes.substitute(parameterAt(other, i, site, spreads), theirs);
+					mostSpecific = other.raw || (typed.get(i) == null ? moreSpecific(mine, against)
+							: conversion(new Typed(NIL, mine), against, false, false) != null);
 				}
 			}
 			if (mostSpecific) {
@@ -3146,31 +3874,73 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 		}
 		if (chosen == null) {
-			throw error(pos, "reference to " + what + " is ambiguous");
+			throw error(pos, "reference to " + name + " is ambiguous");
+		}
+		Inference inference = Objects.requireNonNull(inferences.get(chosen));
+		// the value's type against the type it is wanted as
+		JavaType returned = made != null ? made : this.types.memberType(chosen.returnType, site, chosen.owner);
+		if (expected != null && expected != Primitive.VOID && JavaTypes.mentions(returned, inference.variables)) {
+			if (!expected.isPrimitive()) {
+				inference.upperBound(returned, expected);
+			}
+			else if (returned instanceof Variable variable && inference.isFree(variable.parameter())) {
+				inference.exactly(variable.parameter(), JavaIntrinsics.boxed((Primitive) expected, this.classes));
+			}
+		}
+		List<@Nullable Typed> lowered = new ArrayList<>(typed);
+		for (int i = 0; i < arguments.size(); i++) {
+			if (lowered.get(i) == null) {
+				lowered.set(i, deferred(arguments.get(i), parameterAt(chosen, i, site, spread), inference));
+			}
+		}
+		Map<TypeParameter, JavaType> solution = inference.solution(true, flexible);
+		TypeParameter conflict = inference.conflict(solution);
+		if (conflict != null) {
+			throw error(pos, made != null ? "incompatible types: cannot infer type arguments for " + name + "<>"
+					: inference.given(conflict) > 1
+							? "incompatible types: inferred type does not conform to upper bound(s)"
+							: "incompatible types: inference variable " + conflict + " has incompatible bounds");
+		}
+		if (!inference.withinBounds(solution)) {
+			throw error(pos, "incompatible types: inferred type does not conform to upper bound(s)");
 		}
 		List<Typed> converted = new ArrayList<>();
 		for (int i = 0; i < arguments.size(); i++) {
-			JavaType parameter = parameterAt(chosen, i, typeArguments, spread);
-			Typed argument = typed.get(i);
-			if (argument == null) {
-				argument = expression(arguments.get(i), parameter);
+			JavaType parameter = JavaTypes.substitute(parameterAt(chosen, i, site, spread), solution);
+			Typed argument = Objects.requireNonNull(lowered.get(i));
+			if (typed.get(i) == null) {
+				// lowered as the parameter takes it
+				converted.add(new Typed(argument.form(), parameter));
 			}
-			converted.add(new Typed(chosen.raw ? argument.form() : assign(argument, parameter, arguments.get(i).pos()),
-					argument.type(), argument.constant()));
+			else {
+				converted
+					.add(new Typed(chosen.raw ? argument.form() : assign(argument, parameter, arguments.get(i).pos()),
+							this.types.ground(argument.type()), argument.constant()));
+			}
 		}
 		if (spread) {
 			// the arguments past the fixed parameters are the elements of one array
 			int fixed = chosen.parameters.size() - 1;
-			ArrayType rest = (ArrayType) substitute(chosen.parameters.get(fixed), typeArguments);
+			ArrayType rest = (ArrayType) this.types.erased(JavaTypes
+				.substitute(this.types.memberType(chosen.parameters.get(fixed), site, chosen.owner), solution));
 			List<LispVal> elements = converted.subList(fixed, converted.size()).stream().map(Typed::form).toList();
 			converted = new ArrayList<>(converted.subList(0, fixed));
 			converted.add(new Typed(arrayOf(rest, elements), rest));
 		}
-		return new Resolved(chosen, converted, substitute(chosen.returnType, typeArguments));
+		return new Resolved(chosen, converted,
+				inScope(this.types.upward(JavaTypes.substitute(returned, solution)), pos));
 	}
 
-	private Typed invocation(Call call, boolean discard) {
+	/**
+	 * Whether the call about to be resolved is an argument of another: what only its own
+	 * arguments say of its type parameters is then left open above the type they give.
+	 */
+	private boolean flexible;
+
+	private Typed invocation(Call call, @Nullable JavaType expected, boolean discard) {
 		int pos = call.pos();
+		boolean flexible = this.flexible;
+		this.flexible = false;
 		if (call.target() instanceof Call inner && inner.name().equals("getClass") && inner.arguments().isEmpty()
 				&& (call.name().equals("getName") || call.name().equals("getSimpleName"))
 				&& call.arguments().isEmpty()) {
@@ -3187,14 +3957,18 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (call.name().equals("getClass") && call.arguments().isEmpty()) {
 			throw unsupported(pos, "getClass() but for its getName() and getSimpleName()");
 		}
+		List<JavaType> explicit = new ArrayList<>();
+		for (TypeName written : call.typeArguments()) {
+			explicit.add(type(written));
+		}
 		if (call.onSuper()) {
 			JavaClass above = this.currentClass.superclass;
 			if (above == null) {
 				throw unsupported(pos, "a call of one of Object's methods through super");
 			}
-			Resolved resolved = resolve(methods(above, call.name()), List.of(), call.arguments(),
-					"method " + call.name(), above, pos);
-			Method body = implementation(above, resolved.method().signature());
+			Resolved resolved = resolve(methods(above, call.name()), this.currentClass.supertype(above), explicit,
+					call.arguments(), expected, "method " + call.name(), above, pos);
+			Method body = implementation(above, resolved.method());
 			if (body == null || resolved.method().emitter != null) {
 				throw resolved.method().emitter != null
 						? unsupported(pos, "a call of one of Object's methods through super") : error(pos,
@@ -3209,7 +3983,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		Typed receiver = null;
 		JavaClass in = this.currentClass;
 		LispVal path = this.staticContext ? null : THIS;
-		List<JavaType> typeArguments = List.of();
+		JavaType site = null;
 		boolean qualified = false;
 		if (call.target() != null) {
 			JavaClass named = classNamed(call.target());
@@ -3219,9 +3993,20 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 			else {
 				receiver = expression(call.target(), null);
-				if (receiver.type() instanceof ClassType type) {
-					in = type.declaration();
-					typeArguments = type.arguments();
+				if (receiver.type() instanceof ClassType || receiver.type() instanceof Variable) {
+					ClassType through = this.types.site(receiver.type());
+					if (receiver.type() instanceof Variable variable && variable.parameter().bounds.size() > 1) {
+						// a type variable with several bounds has the methods of each
+						for (JavaType bound : variable.parameter().bounds) {
+							ClassType candidate = this.types.site(bound);
+							if (!methods(candidate.declaration(), call.name()).isEmpty()) {
+								through = candidate;
+								break;
+							}
+						}
+					}
+					in = through.declaration();
+					site = through;
 				}
 				else if (receiver.type() instanceof ArrayType array) {
 					if (call.name().equals("clone") && call.arguments().isEmpty()) {
@@ -3247,9 +4032,11 @@ final class JavaLowering implements JavaEmitter.Context {
 				in = type;
 				path = instance;
 			}
+			site = in.self();
 		}
-		Resolved resolved = resolve(methods(in, call.name()), typeArguments, call.arguments(), "method " + call.name(),
-				in, pos);
+		this.flexible = flexible;
+		Resolved resolved = resolve(methods(in, call.name()), site, explicit, call.arguments(), expected,
+				"method " + call.name(), in, pos);
 		Method method = resolved.method();
 		checkAccess(method.isPrivate, method.owner, method.signature(), pos);
 		if (!method.isStatic && receiver == null) {
@@ -3257,7 +4044,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				throw error(pos,
 						"non-static method " + method.signature() + " cannot be referenced from a static context");
 			}
-			receiver = path == THIS ? thisValue(pos) : new Typed(path, new ClassType(in, List.of()));
+			receiver = path == THIS ? thisValue(pos) : new Typed(path, in.self());
 		}
 		if (method.emitter != null) {
 			if (method.owner.name.equals("java.io.PrintStream") || method.owner.name.equals("java.lang.IO")) {
@@ -3295,19 +4082,18 @@ final class JavaLowering implements JavaEmitter.Context {
 	/** The bodies a call of a method on a receiver of a static type can run. */
 	private List<Body> bodies(JavaClass receiver, Method method) {
 		Map<JavaClass, Method> tested = new LinkedHashMap<>();
-		String signature = method.signature();
 		for (JavaClass candidate : this.classes.all()) {
 			if (candidate.intrinsic || candidate.isAbstract || !candidate.isSubclassOf(receiver)) {
 				continue;
 			}
-			Method body = implementation(candidate, signature);
+			Method body = implementation(candidate, method);
 			if (body == null) {
 				continue;
 			}
 			JavaClass top = body.owner;
 			if (top.isInterface) {
 				top = candidate;
-				while (top.superclass != null && implementation(top.superclass, signature) == body) {
+				while (top.superclass != null && implementation(top.superclass, method) == body) {
 					top = top.superclass;
 				}
 			}
@@ -3321,9 +4107,25 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/**
+	 * What a lambda made for an interface runs for a method called on it: {@code null}
+	 * for the lambda itself -- the method is the interface's one abstract method --, else
+	 * the default method the interface has for it.
+	 */
+	private @Nullable Method lambdaBody(JavaClass target, Method method) {
+		Method single = Objects.requireNonNull(functionalMethod(target));
+		return signatureIn(target, single).equals(signatureIn(target, method)) ? null : implementation(target, method);
+	}
+
+	/**
 	 * The function a call of an instance method goes to: the one body under the
 	 * receiver's static type, or the function choosing among several by the receiver's
-	 * class; {@code null} when the receiver can only be a lambda.
+	 * class; {@code null} when the receiver can only be a lambda that is a function.
+	 *
+	 * <p>
+	 * A lambda is a function, tested first. Where the lambdas a receiver can be would not
+	 * all run the same thing -- one interface's own method is another's default -- they
+	 * are made structures holding the function, each tested by its own predicate, and the
+	 * program is lowered again.
 	 */
 	private @Nullable LispSymbol target(JavaClass receiver, Method method) {
 		if (method.isPrivate) {
@@ -3334,40 +4136,96 @@ final class JavaLowering implements JavaEmitter.Context {
 		for (Body body : bodies) {
 			this.effects.calls.add(body.method());
 		}
-		Method single = functional(new ClassType(receiver, List.of()));
-		boolean lambda = single != null && single.signature().equals(method.signature());
-		// what a lambda runs for a method that is not its own: the interface's default
-		Method inherited = single != null && !lambda ? implementation(receiver, method.signature()) : null;
-		if (inherited != null) {
-			this.effects.calls.add(inherited);
+		// the classes of the library whose values are Lisp values and implement the
+		// method
+		Map<JavaClass, Method> intrinsics = new LinkedHashMap<>();
+		if (!receiver.intrinsic) {
+			for (JavaClass candidate : this.classes.all()) {
+				LispSymbol predicate = candidate.intrinsic && !candidate.isInterface && candidate.isSubclassOf(receiver)
+						? JavaIntrinsics.predicate(candidate) : null;
+				if (predicate == null) {
+					continue;
+				}
+				String signature = signatureIn(candidate, method);
+				for (Method member : candidate.methods) {
+					if (!member.isStatic && member.emitter != null && member.signature().equals(signature)) {
+						intrinsics.put(candidate, member);
+					}
+				}
+			}
 		}
-		if (bodies.isEmpty() && lambda) {
-			return null;
+		List<JavaClass> plain = new ArrayList<>();
+		List<JavaClass> tagged = new ArrayList<>();
+		Set<Object> ran = new HashSet<>();
+		Method inherited = null;
+		boolean called = false;
+		for (JavaClass made : this.classes.lambdaTargets) {
+			if (!made.isSubclassOf(receiver) || functionalMethod(made) == null) {
+				continue;
+			}
+			Method body = lambdaBody(made, method);
+			if (body != null) {
+				this.effects.calls.add(body);
+			}
+			if (this.classes.taggedLambdas.contains(made)) {
+				tagged.add(made);
+				continue;
+			}
+			plain.add(made);
+			ran.add(body == null ? T : body);
+			inherited = body;
+			called |= body == null;
 		}
-		if (bodies.isEmpty() && inherited != null) {
-			return JavaNames.function(inherited);
+		if (ran.size() > 1) {
+			// the function does not tell which of them it was made for
+			tag(plain);
+			tagged.addAll(plain);
+			plain = List.of();
+			called = false;
+			inherited = null;
 		}
-		if (bodies.size() == 1 && !lambda && (inherited == null || inherited == bodies.get(0).method())) {
+		boolean lambdas = !plain.isEmpty() || !tagged.isEmpty();
+		if (bodies.isEmpty() && intrinsics.isEmpty() && tagged.isEmpty() && !plain.isEmpty()) {
+			return called ? null : JavaNames.function(Objects.requireNonNull(inherited));
+		}
+		if (bodies.size() == 1 && intrinsics.isEmpty() && tagged.isEmpty()
+				&& (!lambdas || (!called && inherited == bodies.get(0).method()))) {
 			return JavaNames.function(bodies.get(0).method());
 		}
 		LispSymbol name = JavaNames.dispatcher(receiver, method);
 		if (!this.dispatchers.containsKey(name.name())) {
 			List<LispVal> parameters = new ArrayList<>();
 			parameters.add(RECEIVER);
+			List<Typed> arguments = new ArrayList<>();
 			for (int i = 0; i < method.parameters.size(); i++) {
 				parameters.add(new LispSymbol("%a" + i));
 			}
 			List<LispVal> arms = new ArrayList<>();
 			arms.add(cl("cond"));
-			if (lambda) {
-				arms.add(list(call("functionp", RECEIVER), form(cl("funcall"), parameters)));
+			if (!plain.isEmpty()) {
+				arms.add(list(call("functionp", RECEIVER), called ? form(cl("funcall"), parameters)
+						: form(JavaNames.function(Objects.requireNonNull(inherited)), parameters)));
 			}
-			else if (inherited != null) {
-				arms.add(list(call("functionp", RECEIVER), form(JavaNames.function(inherited), parameters)));
+			for (JavaClass made : tagged) {
+				Method body = lambdaBody(made, method);
+				arms.add(list(list(lambdaTest(made), RECEIVER),
+						body != null ? form(JavaNames.function(body), parameters) : form(cl("funcall"),
+								prepend(lambdaFunction(made, RECEIVER), parameters.subList(1, parameters.size())))));
 			}
 			for (Body body : bodies) {
 				arms.add(list(list(JavaNames.predicate(body.tested()), RECEIVER),
 						form(JavaNames.function(body.method()), parameters)));
+			}
+			for (Map.Entry<JavaClass, Method> intrinsic : intrinsics.entrySet()) {
+				Method member = intrinsic.getValue();
+				arguments.clear();
+				for (int i = 0; i < member.parameters.size(); i++) {
+					arguments.add(new Typed(parameters.get(i + 1), member.parameters.get(i)));
+				}
+				arms.add(list(list(Objects.requireNonNull(JavaIntrinsics.predicate(intrinsic.getKey())), RECEIVER),
+						Objects.requireNonNull(member.emitter)
+							.emit(this, new Invocation(new Typed(RECEIVER, intrinsic.getKey().self()),
+									List.copyOf(arguments), false, 0))));
 			}
 			arms.add(list(T, runtimeCall("no-receiver", RECEIVER, string(method.signature()))));
 			this.dispatchers.put(name.name(), list(cl("defun"), name, list(parameters), list(arms)));
@@ -3426,6 +4284,8 @@ final class JavaLowering implements JavaEmitter.Context {
 	private Typed creation(New creation, @Nullable JavaType expected) {
 		TypeName written = creation.type();
 		int pos = creation.pos();
+		boolean flexible = this.flexible;
+		this.flexible = false;
 		boolean constant = this.makingConstant;
 		this.makingConstant = false;
 		ClassType type;
@@ -3441,11 +4301,12 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		else if (written.diamond()) {
 			JavaClass made = this.classes.require(written.name(), written.pos(), this.currentClass, this.unit);
-			if (!(expected instanceof ClassType target) || made.typeParameters == 0
-					|| !made.isSubclassOf(target.declaration()) || target.arguments().size() != made.typeParameters) {
-				throw error(pos, "cannot infer type arguments for " + made.simpleName() + "<> here");
+			if (made.typeParameters.isEmpty()) {
+				throw error(pos, "cannot infer type arguments for " + made.simpleName() + "<>");
 			}
-			type = new ClassType(made, target.arguments());
+			// the arguments are found as a method's are: from the constructor's arguments
+			// and the type the instance is wanted as
+			type = made.self();
 		}
 		else if (type(written) instanceof ClassType named) {
 			type = named;
@@ -3458,13 +4319,26 @@ final class JavaLowering implements JavaEmitter.Context {
 			throw error(pos, "enum classes may not be instantiated");
 		}
 		if (creation.body() != null) {
-			return anonymous(creation, made);
+			if (written.diamond()) {
+				throw unsupported(pos, "an anonymous class made with <>");
+			}
+			return anonymous(creation, type);
 		}
 		if (made.isAbstract) {
 			throw error(pos, made.simpleName() + " is abstract; cannot be instantiated");
 		}
-		Resolved resolved = resolve(constructors(made), type.arguments(), creation.arguments(),
-				"constructor " + made.simpleName(), made, pos);
+		Resolved resolved;
+		if (written.diamond()) {
+			this.flexible = flexible;
+			resolved = resolve(constructors(made), type, List.of(), creation.arguments(), expected,
+					"constructor " + made.simpleName(), made, pos, made.typeParameters, type);
+			type = (ClassType) resolved.returnType();
+			this.classes.check(type, this.unit.source(), pos);
+		}
+		else {
+			resolved = resolve(constructors(made), type, List.of(), creation.arguments(), null,
+					"constructor " + made.simpleName(), made, pos);
+		}
 		if (resolved.method().emitter != null) {
 			return new Typed(
 					resolved.method().emitter.emit(this, new Invocation(null, resolved.arguments(), false, pos)), type);
@@ -3482,7 +4356,8 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * {@code new T(..) { .. }}: a class under {@code T}, declared and lowered where it is
 	 * made, whose constructor hands its arguments to the one of {@code T} they pick.
 	 */
-	private Typed anonymous(New creation, JavaClass extended) {
+	private Typed anonymous(New creation, ClassType extendedType) {
+		JavaClass extended = extendedType.declaration();
 		int pos = creation.pos();
 		if (creation.outer() != null) {
 			throw unsupported(pos, "an anonymous class made with an outer instance");
@@ -3491,7 +4366,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			throw unsupported(pos, "an anonymous class of " + extended.name);
 		}
 		JavaClass made = this.classes.local(Objects.requireNonNull(creation.body()), this.currentClass,
-				this.staticContext || this.early, extended);
+				this.staticContext || this.early, extendedType);
 		Method above = null;
 		List<LispVal> arguments = List.of();
 		if (extended.isInterface || extended.intrinsic) {
@@ -3500,7 +4375,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 		}
 		else {
-			Resolved resolved = resolve(constructors(extended), List.of(), creation.arguments(),
+			Resolved resolved = resolve(constructors(extended), extendedType, List.of(), creation.arguments(), null,
 					"constructor " + extended.simpleName(), extended, pos);
 			if (!extended.isEnum) {
 				checkAccess(resolved.method().isPrivate, extended,
@@ -3735,7 +4610,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			this.patternVariables = new ArrayList<>();
 			Typed initial = expression(initializer, type);
 			if (type == null) {
-				type = initial.type();
+				type = this.types.ground(initial.type());
 				if (type == JavaType.Null.NULL || type == Primitive.VOID) {
 					throw error(declarator.pos(), "cannot infer type for local variable " + declarator.name());
 				}
@@ -4000,12 +4875,28 @@ final class JavaLowering implements JavaEmitter.Context {
 				LispVal value = NIL;
 				if (exit.value() != null) {
 					if (this.returnType == Primitive.VOID) {
-						throw error(exit.pos(), "incompatible types: unexpected return value");
+						throw error(exit.pos(),
+								this.lambdaBody ? "incompatible types: bad return type in lambda expression"
+										: "incompatible types: unexpected return value");
 					}
-					value = assign(expression(exit.value(), this.returnType), this.returnType, exit.value().pos());
+					if (this.returns != null) {
+						// a lambda whose value's type the call it is an argument of finds
+						Typed returned = expression(exit.value(), null);
+						if (returned.type() == Primitive.VOID) {
+							throw error(exit.value().pos(), "incompatible types: unexpected return value");
+						}
+						returned = boxedValue(returned);
+						this.returns.add(returned.type());
+						value = returned.form();
+					}
+					else {
+						value = returned(expression(exit.value(), this.returnType), this.returnType,
+								exit.value().pos());
+					}
 				}
 				else if (this.returnType != Primitive.VOID) {
-					throw error(exit.pos(), "incompatible types: missing return value");
+					throw error(exit.pos(), this.lambdaBody ? "incompatible types: bad return type in lambda expression"
+							: "incompatible types: missing return value");
 				}
 				if (tail) {
 					return exit.value() == null ? List.of() : List.of(value);
@@ -4103,12 +4994,14 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (iterable.type() instanceof ArrayType type) {
 			element = type.element();
 		}
-		else if (iterable.type() instanceof ClassType type && type.declaration().name.endsWith("List")
-				&& type.declaration().intrinsic) {
-			element = type.arguments().get(0);
-		}
 		else {
-			throw unsupported(loop.pos(), "an enhanced for over " + iterable.type());
+			ClassType list = iterable.type() instanceof ClassType || iterable.type() instanceof Variable
+					? this.types.asSuper(this.types.site(iterable.type()), this.classes.library("java.util.List"))
+					: null;
+			if (list == null) {
+				throw unsupported(loop.pos(), "an enhanced for over " + iterable.type());
+			}
+			element = list.arguments().isEmpty() ? this.objectType : this.types.upward(list.arguments().get(0));
 		}
 		LispSymbol items = temporary();
 		LispSymbol index = temporary();
@@ -4364,7 +5257,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			covered = constants.fields.stream().filter(field -> field.isConstant).allMatch(seen::contains);
 		}
 		if (!covered && !rows.isEmpty()) {
-			covered = JavaPatterns.covers(rows, List.of(type), this::isSubtype);
+			covered = JavaPatterns.covers(rows, List.of(type), this.types);
 		}
 		if ((mustCover || patterns || hasNull) && !covered) {
 			throw error(block.pos(), "the switch " + (mustCover ? "expression" : "statement")
@@ -4573,7 +5466,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (!seen.add(declaration)) {
 			return true;
 		}
-		if (this.lambdaTargets.stream().anyMatch(target -> target.isSubclassOf(declaration))) {
+		if (this.classes.lambdaTargets.stream().anyMatch(target -> target.isSubclassOf(declaration))) {
 			return false;
 		}
 		Set<JavaClass> holders = new LinkedHashSet<>();

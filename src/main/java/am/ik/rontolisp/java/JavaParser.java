@@ -402,12 +402,9 @@ final class JavaParser {
 		this.p++;
 		int pos = current().offset();
 		String name = identifier();
-		if (at("<")) {
-			throw unsupported(switch (kind) {
-				case INTERFACE -> "a generic interface";
-				case RECORD -> "a generic record";
-				default -> "a generic class";
-			});
+		List<JavaSyntax.TypeParameter> typeParameters = typeParameters();
+		if (kind == JavaSyntax.Kind.ENUM && !typeParameters.isEmpty()) {
+			throw new LispReadException("an enum declares no type parameter", location(typeParameters.get(0).pos()));
 		}
 		List<Parameter> components = kind == JavaSyntax.Kind.RECORD ? parameters(false) : List.of();
 		for (Parameter component : components) {
@@ -450,7 +447,31 @@ final class JavaParser {
 		}
 		Body body = body(name, kind);
 		return new ClassDeclaration(pos, modifiers, kind, name, superclass, interfaces, permits, components,
-				body.constants, body.fields, body.methods, body.initializers, body.nested, false);
+				body.constants, body.fields, body.methods, body.initializers, body.nested, false, typeParameters);
+	}
+
+	/** The type parameters a declaration starts with, {@code <T extends A & B, U>}. */
+	private List<JavaSyntax.TypeParameter> typeParameters() {
+		if (!eat("<")) {
+			return List.of();
+		}
+		List<JavaSyntax.TypeParameter> parameters = new ArrayList<>();
+		do {
+			annotations();
+			int pos = current().offset();
+			String name = identifier();
+			List<TypeName> bounds = new ArrayList<>();
+			if (eat("extends")) {
+				do {
+					bounds.add(typeName());
+				}
+				while (eat("&"));
+			}
+			parameters.add(new JavaSyntax.TypeParameter(pos, name, bounds));
+		}
+		while (eat(","));
+		expect(">");
+		return parameters;
 	}
 
 	/** A type's body, from its opening brace to its closing one. */
@@ -491,8 +512,8 @@ final class JavaParser {
 	private TypeName supertype() {
 		int start = current().offset();
 		TypeName type = typeName();
-		if (!type.arguments().isEmpty() || type.dimensions() > 0) {
-			throw unsupported("a parameterized supertype", start);
+		if (type.dimensions() > 0 || type.diamond()) {
+			throw new LispReadException("a class or an interface is expected here", location(start));
 		}
 		return type;
 	}
@@ -515,9 +536,7 @@ final class JavaParser {
 			into.nested.add(typeDeclaration(modifiers));
 			return;
 		}
-		if (at("<")) {
-			throw unsupported("a generic method");
-		}
+		List<JavaSyntax.TypeParameter> typeParameters = typeParameters();
 		if (atIdentifier() && current().text().equals(className) && (peekIs(1, "(") || peekIs(1, "{"))) {
 			if (inInterface) {
 				throw error("an interface has no constructor");
@@ -528,12 +547,12 @@ final class JavaParser {
 				if (kind != JavaSyntax.Kind.RECORD) {
 					throw error("expected '(' but found '{'");
 				}
-				into.methods.add(new Method(pos, modifiers, null, "<init>", List.of(), block(), true));
+				into.methods.add(new Method(pos, modifiers, null, "<init>", List.of(), block(), true, List.of()));
 				return;
 			}
 			List<Parameter> parameters = parameters(false);
 			throwsClause();
-			into.methods.add(new Method(pos, modifiers, null, "<init>", parameters, block()));
+			into.methods.add(new Method(pos, modifiers, null, "<init>", parameters, block(), false, typeParameters));
 			return;
 		}
 		TypeName type = at("void") ? new TypeName(this.tokens.get(this.p++).offset(), "void", List.of(), false, 0)
@@ -550,8 +569,11 @@ final class JavaParser {
 			if (!eat(";")) {
 				body = block();
 			}
-			into.methods.add(new Method(pos, modifiers, type, name, parameters, body));
+			into.methods.add(new Method(pos, modifiers, type, name, parameters, body, false, typeParameters));
 			return;
+		}
+		if (!typeParameters.isEmpty()) {
+			throw new LispReadException("a field declares no type parameter", location(typeParameters.get(0).pos()));
 		}
 		if (type.name().equals("void")) {
 			throw error("expected '(' but found " + current().shown());
@@ -634,11 +656,39 @@ final class JavaParser {
 		return identifier();
 	}
 
+	/** A type argument: a type, or a wildcard with the bound it has. */
+	private TypeName typeArgument() {
+		annotations();
+		if (!at("?")) {
+			return typeName();
+		}
+		int pos = this.tokens.get(this.p++).offset();
+		annotations();
+		if (eat("extends")) {
+			return new TypeName(pos, "? extends", List.of(typeName()), false, 0);
+		}
+		if (eat("super")) {
+			return new TypeName(pos, "? super", List.of(typeName()), false, 0);
+		}
+		return new TypeName(pos, "?", List.of(), false, 0);
+	}
+
+	/** Type arguments written ahead of a method's name, {@code <A, B>}; none without. */
+	private List<TypeName> typeArguments() {
+		if (!eat("<")) {
+			return List.of();
+		}
+		List<TypeName> arguments = new ArrayList<>();
+		do {
+			arguments.add(typeName());
+		}
+		while (eat(","));
+		expect(">");
+		return arguments;
+	}
+
 	private TypeName typeName() {
 		int pos = current().offset();
-		if (at("?")) {
-			throw unsupported("a wildcard");
-		}
 		String name;
 		if (current().kind() == Kind.IDENTIFIER && PRIMITIVES.contains(current().text())) {
 			name = this.tokens.get(this.p++).text();
@@ -660,13 +710,12 @@ final class JavaParser {
 			}
 			else {
 				do {
-					annotations();
-					arguments.add(typeName());
+					arguments.add(typeArgument());
 				}
 				while (eat(","));
 				expect(">");
 			}
-			if (at(".")) {
+			if (at(".") && peek(1).kind() == Kind.IDENTIFIER && !RESERVED.contains(peek(1).text())) {
 				throw unsupported("a type nested in a parameterized type");
 			}
 		}
@@ -1377,16 +1426,18 @@ final class JavaParser {
 				if (at("(")) {
 					return new ConstructorCall(pos, true, arguments());
 				}
-				expect(".");
-				if (at("<")) {
-					throw unsupported("an explicit type argument");
+				if (at("::")) {
+					int at = this.tokens.get(this.p++).offset();
+					return new JavaSyntax.MethodReference(at, null, null, identifier(), true);
 				}
+				expect(".");
+				List<TypeName> typeArguments = typeArguments();
 				int at = current().offset();
 				String name = identifier();
 				if (!at("(")) {
 					throw unsupported("a field read through super", at);
 				}
-				return new Call(at, null, name, arguments(), true);
+				return new Call(at, null, name, arguments(), true, typeArguments);
 			}
 			case "new":
 				this.p++;
@@ -1395,11 +1446,44 @@ final class JavaParser {
 				return switchBlock();
 			default:
 		}
+		TypeName referenced = referencedType();
+		if (referenced != null) {
+			int at = expect("::").offset();
+			return new JavaSyntax.MethodReference(at, null, referenced,
+					at("new") ? this.tokens.get(this.p++).text() : identifier(), false);
+		}
 		if (PRIMITIVES.contains(token.text()) || token.text().equals("void")) {
 			throw unsupported("a class literal");
 		}
 		String name = identifier();
 		return at("(") ? new Call(pos, null, name, arguments(), false) : new Name(pos, name);
+	}
+
+	/**
+	 * The type ahead of a method reference's {@code ::} when no expression spells it --
+	 * an array type, a parameterized type --, or {@code null}; the position is left as it
+	 * was without one.
+	 */
+	private @Nullable TypeName referencedType() {
+		if (current().kind() != Kind.IDENTIFIER
+				|| RESERVED.contains(current().text()) && !PRIMITIVES.contains(current().text())) {
+			return null;
+		}
+		int save = this.p;
+		try {
+			TypeName type = typeName();
+			if (at("::") && (type.dimensions() > 0 || !type.arguments().isEmpty())) {
+				return type;
+			}
+		}
+		catch (Unsupported ex) {
+			// read again as an expression, which says what it is
+		}
+		catch (LispReadException ex) {
+			// no type stands here
+		}
+		this.p = save;
+		return null;
 	}
 
 	private Expression creation(int pos, @Nullable Expression outer) {
@@ -1442,8 +1526,11 @@ final class JavaParser {
 		while (true) {
 			int pos = current().offset();
 			if (eat(".")) {
-				if (at("<")) {
-					throw unsupported("an explicit type argument");
+				List<TypeName> typeArguments = typeArguments();
+				if (!typeArguments.isEmpty()) {
+					int at = current().offset();
+					expression = new Call(at, expression, identifier(), arguments(), false, typeArguments);
+					continue;
 				}
 				if (at("new")) {
 					int at = this.tokens.get(this.p++).offset();
@@ -1477,7 +1564,12 @@ final class JavaParser {
 				expression = new Unary(pos, this.tokens.get(this.p++).text(), expression, true);
 			}
 			else if (at("::")) {
-				throw unsupported("a method reference");
+				int at = this.tokens.get(this.p++).offset();
+				if (at("<")) {
+					throw unsupported("an explicit type argument of a method reference");
+				}
+				expression = new JavaSyntax.MethodReference(at, expression, null,
+						at("new") ? this.tokens.get(this.p++).text() : identifier(), false);
 			}
 			else {
 				return expression;

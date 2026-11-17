@@ -18,8 +18,9 @@ final class JavaSyntax {
 	 * A type as written.
 	 *
 	 * @param pos its first token
-	 * @param name its name, dotted when qualified; {@code var} for an inferred local
-	 * @param arguments its type arguments
+	 * @param name its name, dotted when qualified; {@code var} for an inferred local;
+	 * {@code ?}, {@code ? extends} or {@code ? super} for a wildcard
+	 * @param arguments its type arguments; a wildcard's bound
 	 * @param diamond whether it is written with an empty {@code <>}
 	 * @param dimensions how many {@code []} follow it
 	 */
@@ -29,6 +30,20 @@ final class JavaSyntax {
 			return new TypeName(this.pos, this.name, this.arguments, this.diamond, this.dimensions - 1);
 		}
 
+		boolean isWildcard() {
+			return this.name.startsWith("?");
+		}
+
+	}
+
+	/**
+	 * A type parameter as declared, {@code T extends A & B}.
+	 *
+	 * @param pos its name
+	 * @param name its name
+	 * @param bounds what follows {@code extends}
+	 */
+	record TypeParameter(int pos, String name, List<TypeName> bounds) {
 	}
 
 	sealed interface Expression {
@@ -81,9 +96,39 @@ final class JavaSyntax {
 	 * @param name the method's name
 	 * @param arguments the arguments
 	 * @param onSuper whether it is {@code super.name(..)}
+	 * @param typeArguments the type arguments written ahead of the name
 	 */
-	record Call(int pos, @Nullable Expression target, String name, List<Expression> arguments,
+	record Call(int pos, @Nullable Expression target, String name, List<Expression> arguments, boolean onSuper,
+			List<TypeName> typeArguments) implements Expression {
+
+		Call(int pos, @Nullable Expression target, String name, List<Expression> arguments, boolean onSuper) {
+			this(pos, target, name, arguments, onSuper, List.of());
+		}
+
+	}
+
+	/**
+	 * A method reference, {@code target::name}.
+	 *
+	 * @param pos the {@code ::}
+	 * @param target what stands before it when that is an expression or a class's name
+	 * @param type what stands before it when that is a type no expression spells: an
+	 * array type, a parameterized type
+	 * @param name the method's name, {@code new} for a constructor
+	 * @param onSuper whether it is {@code super::name}
+	 */
+	record MethodReference(int pos, @Nullable Expression target, @Nullable TypeName type, String name,
 			boolean onSuper) implements Expression {
+	}
+
+	/**
+	 * A value the lowering has already: an argument of the call a method reference stands
+	 * for.
+	 *
+	 * @param pos where it is said to be
+	 * @param value the lowered value
+	 */
+	record Lowered(int pos, Object value) implements Expression {
 	}
 
 	/**
@@ -346,13 +391,14 @@ final class JavaSyntax {
 	 * @param parameters its parameters
 	 * @param body its body, or {@code null} for an abstract method
 	 * @param compact whether it is a record's compact constructor
+	 * @param typeParameters the type parameters it declares
 	 */
 	record Method(int pos, Set<String> modifiers, @Nullable TypeName returnType, String name,
-			List<Parameter> parameters, @Nullable Block body, boolean compact) {
+			List<Parameter> parameters, @Nullable Block body, boolean compact, List<TypeParameter> typeParameters) {
 
 		Method(int pos, Set<String> modifiers, @Nullable TypeName returnType, String name, List<Parameter> parameters,
 				@Nullable Block body) {
-			this(pos, modifiers, returnType, name, parameters, body, false);
+			this(pos, modifiers, returnType, name, parameters, body, false, List.of());
 		}
 
 		boolean varargs() {
@@ -385,11 +431,20 @@ final class JavaSyntax {
 	 * @param initializers its initializer blocks, in order
 	 * @param nested the types declared in its body
 	 * @param implicit whether it is the class of a compact source file
+	 * @param typeParameters the type parameters it declares
 	 */
 	record ClassDeclaration(int pos, Set<String> modifiers, Kind kind, String name, @Nullable TypeName superclass,
 			List<TypeName> interfaces, List<TypeName> permits, List<Parameter> components, List<EnumConstant> constants,
 			List<Field> fields, List<Method> methods, List<Initializer> initializers, List<ClassDeclaration> nested,
-			boolean implicit) {
+			boolean implicit, List<TypeParameter> typeParameters) {
+
+		ClassDeclaration(int pos, Set<String> modifiers, Kind kind, String name, @Nullable TypeName superclass,
+				List<TypeName> interfaces, List<TypeName> permits, List<Parameter> components,
+				List<EnumConstant> constants, List<Field> fields, List<Method> methods, List<Initializer> initializers,
+				List<ClassDeclaration> nested, boolean implicit) {
+			this(pos, modifiers, kind, name, superclass, interfaces, permits, components, constants, fields, methods,
+					initializers, nested, implicit, List.of());
+		}
 
 		boolean isInterface() {
 			return this.kind == Kind.INTERFACE;

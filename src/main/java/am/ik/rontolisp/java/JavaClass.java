@@ -7,6 +7,8 @@ import java.util.Map;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.java.JavaSyntax.ClassDeclaration;
+import am.ik.rontolisp.java.JavaType.ClassType;
+import am.ik.rontolisp.java.JavaType.TypeParameter;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -122,6 +124,9 @@ final class JavaClass {
 		 */
 		@Nullable Method passesTo;
 
+		/** The type parameters it declares: found at every call. */
+		List<TypeParameter> typeParameters = List.of();
+
 		Method(JavaClass owner, String name, List<JavaType> parameters, JavaType returnType, boolean isStatic,
 				boolean isAbstract, JavaSyntax.@Nullable Method declaration, @Nullable JavaEmitter emitter,
 				boolean raw) {
@@ -200,7 +205,8 @@ final class JavaClass {
 	/** Whether its values are Lisp values and its members forms. */
 	final boolean intrinsic;
 
-	final int typeParameters;
+	/** The type parameters it declares. */
+	final List<TypeParameter> typeParameters = new ArrayList<>();
 
 	final @Nullable ClassDeclaration declaration;
 
@@ -219,9 +225,18 @@ final class JavaClass {
 	/** Whether it is a local or an anonymous class: lowered where it is declared. */
 	boolean isLocal;
 
+	/** The type parameters of the method a local class is declared in. */
+	List<TypeParameter> scope = List.of();
+
 	@Nullable JavaClass superclass;
 
 	final List<JavaClass> interfaces = new ArrayList<>();
+
+	/**
+	 * What it extends and implements as written, type arguments and all, by class: a
+	 * supertype that is not here is one with no argument.
+	 */
+	final Map<JavaClass, ClassType> parameterized = new LinkedHashMap<>();
 
 	final List<JavaClass> permits = new ArrayList<>();
 
@@ -235,21 +250,20 @@ final class JavaClass {
 	/** The locals of the enclosing methods a local class reads, by name. */
 	final Map<String, Capture> captures = new LinkedHashMap<>();
 
-	JavaClass(String name, boolean isInterface, boolean isAbstract, boolean intrinsic, int typeParameters,
+	JavaClass(String name, boolean isInterface, boolean isAbstract, boolean intrinsic,
 			@Nullable ClassDeclaration declaration, @Nullable Source source) {
-		this(name, name, name.substring(name.lastIndexOf('.') + 1), isInterface, isAbstract, intrinsic, typeParameters,
-				declaration, source);
+		this(name, name, name.substring(name.lastIndexOf('.') + 1), isInterface, isAbstract, intrinsic, declaration,
+				source);
 	}
 
 	JavaClass(String name, String binaryName, String simple, boolean isInterface, boolean isAbstract, boolean intrinsic,
-			int typeParameters, @Nullable ClassDeclaration declaration, @Nullable Source source) {
+			@Nullable ClassDeclaration declaration, @Nullable Source source) {
 		this.name = name;
 		this.binaryName = binaryName;
 		this.simple = simple;
 		this.isInterface = isInterface;
 		this.isAbstract = isAbstract;
 		this.intrinsic = intrinsic;
-		this.typeParameters = typeParameters;
 		this.declaration = declaration;
 		this.source = source;
 	}
@@ -293,6 +307,21 @@ final class JavaClass {
 			}
 		}
 		return false;
+	}
+
+	/** A direct supertype as the class's declaration writes it. */
+	ClassType supertype(JavaClass above) {
+		ClassType written = this.parameterized.get(above);
+		return written != null ? written : new ClassType(above, List.of());
+	}
+
+	/** The class as a type inside its own body: its parameters are its arguments. */
+	ClassType self() {
+		List<JavaType> arguments = new ArrayList<>();
+		for (TypeParameter parameter : this.typeParameters) {
+			arguments.add(new JavaType.Variable(parameter));
+		}
+		return new ClassType(this, List.copyOf(arguments));
 	}
 
 	/** How many classes it extends, the order a dispatch tests the classes in. */

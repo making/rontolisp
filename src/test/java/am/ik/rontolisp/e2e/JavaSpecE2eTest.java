@@ -24,6 +24,7 @@ import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.reader.Features;
+import am.ik.rontolisp.reader.LispReadException;
 import am.ik.rontolisp.testsupport.CliStack;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.ThreadStdio;
@@ -55,7 +56,9 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * {@code standalone:} case is a file of its own, per leg: one that starts another way, or
  * one that ENDS with an uncaught exception -- it prints {@code stdout}, then reports
  * {@code error}, after {@code Exception in thread "main"} under the JDK and after the
- * pipeline's {@code Unhandled condition:} everywhere else.
+ * pipeline's {@code Unhandled condition:} everywhere else. A {@code refused:} case is a
+ * program a compiler refuses: the JDK has to report {@code error} at {@code line}, and
+ * the front end the same line and a message starting with it.
  *
  * <p>
  * Like {@code StarlarkSpecE2eTest} this needs no native binary: every leg goes through
@@ -87,7 +90,36 @@ class JavaSpecE2eTest {
 
 	}
 
-	record Spec(String imports, List<Case> cases, @Nullable List<Standalone> standalone) {
+	/**
+	 * A program that must not compile.
+	 *
+	 * @param body the statements of the scaffold's {@code main}, on one line
+	 * @param error the first line of the compiler's message
+	 */
+	record Refused(String name, String body, String error) {
+	}
+
+	/**
+	 * The programs that must not compile.
+	 *
+	 * @param scaffold the file every case is, with {@code @@} where its body goes
+	 */
+	record Refusals(String scaffold, List<Refused> cases) {
+
+		String source(Refused refused) {
+			return this.scaffold.replace(PLACEHOLDER, refused.body());
+		}
+
+		/** The line every case's error is on, from 1. */
+		int line() {
+			return splitLines(this.scaffold.substring(0, this.scaffold.indexOf(PLACEHOLDER))).size();
+		}
+
+	}
+
+	private static final String PLACEHOLDER = "@@";
+
+	record Spec(String imports, List<Case> cases, @Nullable List<Standalone> standalone, @Nullable Refusals refused) {
 
 		String program() {
 			StringBuilder program = new StringBuilder(this.imports);
@@ -150,6 +182,40 @@ class JavaSpecE2eTest {
 							"Unhandled condition: ");
 				}));
 			}
+		}
+		return legs.stream();
+	}
+
+	@TestFactory
+	Stream<DynamicNode> refused() throws Exception {
+		List<DynamicNode> legs = new ArrayList<>();
+		Refusals refusals = loadSpec().refused();
+		if (refusals == null) {
+			return Stream.empty();
+		}
+		int line = refusals.line();
+		int index = 0;
+		for (Refused r : refusals.cases()) {
+			String file = "Refused" + (index++) + ".java";
+			String source = refusals.source(r);
+			legs.add(dynamicTest(r.name() + " JDK", () -> {
+				Ended ended = runOnJdk(file, source);
+				assertThat(ended.stderr()).as("refused case '%s' under the JDK: %s", r.name(), r.body())
+					.contains(file + ":" + line + ": error: " + r.error() + "\n");
+			}));
+			legs.add(dynamicTest(r.name() + " FRONT_END", () -> {
+				try {
+					SourceLanguage.JAVA.read(source, Features.INTERPRETER, file);
+				}
+				catch (LispReadException ex) {
+					assertThat(ex.reason()).as("refused case '%s': %s", r.name(), r.body()).startsWith(r.error());
+					assertThat(java.util.Objects.requireNonNull(ex.location()).line())
+						.as("the line of '%s' in refused case '%s': %s", ex.reason(), r.name(), r.body())
+						.isEqualTo(line);
+					return;
+				}
+				fail("refused case '%s' was lowered: %s".formatted(r.name(), r.body()));
+			}));
 		}
 		return legs.stream();
 	}

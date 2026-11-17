@@ -15,6 +15,7 @@ import am.ik.rontolisp.java.JavaEmitter.Typed;
 import am.ik.rontolisp.java.JavaType.ArrayType;
 import am.ik.rontolisp.java.JavaType.ClassType;
 import am.ik.rontolisp.java.JavaType.Primitive;
+import am.ik.rontolisp.java.JavaType.TypeParameter;
 import am.ik.rontolisp.java.JavaType.Variable;
 import org.jspecify.annotations.Nullable;
 
@@ -27,24 +28,18 @@ import static am.ik.rontolisp.java.JavaForms.runtimeCall;
 
 /**
  * The classes of the library whose values are Lisp values, so that their members are
- * forms and not Java source: a {@code String} is the host's string, a boxed number the
- * number, a {@code StringBuilder} and an {@code ArrayList} adjustable vectors, a
- * {@code HashMap} an {@code equal} hash table. Written here from the API specification's
- * names and signatures; nothing of a JDK is read
- * ({@code .kb/java-frontend-provenance.md}). Each class has the members programs reached
- * so far, not its whole surface: a member missing here is refused by name.
+ * forms and not Java source: a {@code String} is the host's string, a boxed {@code int}
+ * the number and a boxed {@code long} the number in a cons, a {@code StringBuilder} and
+ * an {@code ArrayList} adjustable vectors, a {@code HashMap} an {@code equal} hash table.
+ * Written here from the API specification's names and signatures; nothing of a JDK is
+ * read ({@code .kb/java-frontend-provenance.md}). Each class has the members programs
+ * reached so far, not its whole surface: a member missing here is refused by name.
  */
 final class JavaIntrinsics {
 
 	private static final String OBJECT = "java.lang.Object";
 
 	private static final String STRING = "java.lang.String";
-
-	private static final Variable E = new Variable(0);
-
-	private static final Variable K = new Variable(0);
-
-	private static final Variable V = new Variable(1);
 
 	/** The boxes, and what each holds. */
 	private static final Map<String, Primitive> BOXES = Map.of("java.lang.Integer", Primitive.INT, "java.lang.Long",
@@ -58,8 +53,20 @@ final class JavaIntrinsics {
 	private JavaIntrinsics() {
 	}
 
-	/** The primitive a box class holds, or {@code null} for any other type. */
+	/**
+	 * The primitive a box class holds, or {@code null} for any other type; a type
+	 * variable bounded by a box is the box.
+	 */
 	static @Nullable Primitive unboxed(JavaType type) {
+		if (type instanceof Variable variable) {
+			for (JavaType bound : variable.parameter().bounds) {
+				Primitive held = unboxed(bound);
+				if (held != null) {
+					return held;
+				}
+			}
+			return null;
+		}
 		return type instanceof ClassType boxed ? BOXES.get(boxed.declaration().name) : null;
 	}
 
@@ -80,12 +87,15 @@ final class JavaIntrinsics {
 	static @Nullable LispSymbol predicate(JavaClass declaration) {
 		return switch (declaration.name) {
 			case STRING -> cl("simple-string-p");
-			// a boxed number is the number: an Integer and a Long of one number are one
-			// value
-			case "java.lang.Integer", "java.lang.Long" -> cl("integerp");
+			// a boxed int is the number, a boxed long the number in a cons
+			case "java.lang.Integer" -> cl("integerp");
+			case "java.lang.Long" -> cl("consp");
 			case "java.lang.Double" -> cl("floatp");
 			case "java.lang.Character" -> cl("characterp");
 			case "java.lang.Boolean" -> JavaForms.runtime("boolean-p");
+			case "java.lang.StringBuilder" -> JavaForms.runtime("sb-p");
+			case "java.util.ArrayList", "java.util.List" -> JavaForms.runtime("list-p");
+			case "java.util.HashMap", "java.util.Map" -> cl("hash-table-p");
 			default -> null;
 		};
 	}
@@ -101,13 +111,31 @@ final class JavaIntrinsics {
 		public void check(ClassType type, Source source, int pos) {
 			checkArguments(type, source, pos);
 		}
+
+		@Override
+		public boolean isComparable(String name) {
+			return name.equals(STRING) || (BOXES.containsKey(name) && !name.equals("java.lang.Boolean"));
+		}
 	};
 
 	private static void checkArguments(ClassType type, Source source, int pos) {
 		String name = type.declaration().name;
-		if ((name.equals("java.util.HashMap") || name.equals("java.util.Map"))
-				&& !(type.arguments().get(0) instanceof ClassType key && KEYS.contains(key.declaration().name))) {
-			throw JavaClasses.unsupported(source, pos, "a map keyed by " + type.arguments().get(0));
+		if ((!name.equals("java.util.HashMap") && !name.equals("java.util.Map")) || type.arguments().isEmpty()) {
+			return;
+		}
+		JavaType key = type.arguments().get(0);
+		if (key instanceof JavaType.Wildcard wildcard) {
+			key = wildcard.upper() != null ? wildcard.upper() : wildcard.lower();
+		}
+		if (key instanceof Variable variable && variable.parameter().open) {
+			// what the map is used as says
+			return;
+		}
+		// a key is found by equal: a key of a class of the program, or of a type the
+		// map's
+		// own code does not know, would be found by identity
+		if (key instanceof ClassType named ? !KEYS.contains(named.declaration().name) : key != null) {
+			throw JavaClasses.unsupported(source, pos, "a map keyed by " + key);
 		}
 	}
 
@@ -115,9 +143,27 @@ final class JavaIntrinsics {
 
 		private final JavaClass made;
 
-		Builder(String name, boolean isInterface, int typeParameters, JavaClasses classes) {
-			this.made = new JavaClass(name, isInterface, isInterface, true, typeParameters, null, null);
+		Builder(String name, boolean isInterface, JavaClasses classes, String... typeParameters) {
+			this.made = new JavaClass(name, isInterface, isInterface, true, null, null);
+			for (String parameter : typeParameters) {
+				TypeParameter declared = new TypeParameter(parameter, false, false);
+				declared.owner = this.made;
+				this.made.typeParameters.add(declared);
+			}
 			classes.register(this.made);
+		}
+
+		/** A type parameter of the class as a member's signature names it. */
+		Variable variable(int index) {
+			return new Variable(this.made.typeParameters.get(index));
+		}
+
+		/** The interface of the library the class implements with its own parameters. */
+		void implement(JavaClass implemented) {
+			this.made.interfaces.add(implemented);
+			if (!this.made.typeParameters.isEmpty()) {
+				this.made.parameterized.put(implemented, new ClassType(implemented, this.made.self().arguments()));
+			}
 		}
 
 		Builder method(String name, JavaType returnType, JavaEmitter emitter, JavaType... parameters) {
@@ -159,7 +205,7 @@ final class JavaIntrinsics {
 	private static @Nullable JavaClass create(String name, JavaClasses classes) {
 		switch (name) {
 			case OBJECT: {
-				Builder builder = new Builder(name, false, 0, classes);
+				Builder builder = new Builder(name, false, classes);
 				ClassType object = new ClassType(builder.made, List.of());
 				builder
 					.method("toString", classes.libraryType(STRING),
@@ -174,20 +220,20 @@ final class JavaIntrinsics {
 				return builder.made;
 			}
 			case STRING:
-				return string(new Builder(name, false, 0, classes), classes);
+				return string(new Builder(name, false, classes), classes);
 			case "java.lang.StringBuilder":
-				return stringBuilder(new Builder(name, false, 0, classes), classes);
+				return stringBuilder(new Builder(name, false, classes), classes);
 			case "java.util.ArrayList":
 			case "java.util.List":
-				return listClass(new Builder(name, name.endsWith(".List"), 1, classes), classes);
+				return listClass(new Builder(name, name.endsWith(".List"), classes, "E"), classes);
 			case "java.util.HashMap":
 			case "java.util.Map":
-				return map(new Builder(name, name.endsWith(".Map"), 2, classes), classes);
+				return map(new Builder(name, name.endsWith(".Map"), classes, "K", "V"), classes);
 			case "java.lang.Math":
-				return math(new Builder(name, false, 0, classes));
+				return math(new Builder(name, false, classes));
 			case "java.lang.Integer": {
 				ClassType string = classes.libraryType(STRING);
-				Builder builder = new Builder(name, false, 0, classes);
+				Builder builder = new Builder(name, false, classes);
 				ClassType self = new ClassType(builder.made, List.of());
 				return builder.field("MAX_VALUE", Primitive.INT, integer(Integer.MAX_VALUE))
 					.field("MIN_VALUE", Primitive.INT, integer(Integer.MIN_VALUE))
@@ -196,34 +242,70 @@ final class JavaIntrinsics {
 					.statik("toString", string, (lowering, call) -> call("%decimal-piece", call.argument(0)),
 							Primitive.INT)
 					.statik("valueOf", self, (lowering, call) -> call.argument(0), Primitive.INT)
+					.statik("compare", Primitive.INT,
+							(lowering, call) -> runtimeCall("compare", call.argument(0), call.argument(1)),
+							Primitive.INT, Primitive.INT)
+					.method("compareTo", Primitive.INT,
+							(lowering, call) -> runtimeCall("compare", call.self(), call.argument(0)), self)
 					.method("intValue", Primitive.INT, (lowering, call) -> call.self()).made;
 			}
-			case "java.lang.Long":
-				return new Builder(name, false, 0, classes).field("MAX_VALUE", Primitive.LONG, integer(Long.MAX_VALUE))
+			case "java.lang.Long": {
+				Builder builder = new Builder(name, false, classes);
+				ClassType self = new ClassType(builder.made, List.of());
+				return builder.field("MAX_VALUE", Primitive.LONG, integer(Long.MAX_VALUE))
 					.field("MIN_VALUE", Primitive.LONG, integer(Long.MIN_VALUE))
 					.statik("hashCode", Primitive.INT, (lowering, call) -> runtimeCall("long-hash", call.argument(0)),
-							Primitive.LONG).made;
-			case "java.lang.Double":
-				return new Builder(name, false, 0, classes)
+							Primitive.LONG)
+					.statik("valueOf", self, (lowering, call) -> call("cons", call.argument(0), JavaForms.BOXED_LONG),
+							Primitive.LONG)
+					.statik("compare", Primitive.INT,
+							(lowering, call) -> runtimeCall("compare", call.argument(0), call.argument(1)),
+							Primitive.LONG, Primitive.LONG)
+					.method("compareTo", Primitive.INT,
+							(lowering, call) -> runtimeCall("compare", call("car", call.self()),
+									call("car", call.argument(0))),
+							self)
+					.method("longValue", Primitive.LONG, (lowering, call) -> call("car", call.self())).made;
+			}
+			case "java.lang.Double": {
+				Builder builder = new Builder(name, false, classes);
+				ClassType self = new ClassType(builder.made, List.of());
+				return builder
 					.statik("compare", Primitive.INT,
 							(lowering, call) -> runtimeCall("double-compare", call.argument(0), call.argument(1)),
 							Primitive.DOUBLE, Primitive.DOUBLE)
 					.statik("hashCode", Primitive.INT, (lowering, call) -> runtimeCall("hash-code", call.argument(0)),
-							Primitive.DOUBLE).made;
+							Primitive.DOUBLE)
+					.statik("valueOf", self, (lowering, call) -> call.argument(0), Primitive.DOUBLE)
+					.method("compareTo", Primitive.INT,
+							(lowering, call) -> runtimeCall("double-compare", call.self(), call.argument(0)), self)
+					.method("doubleValue", Primitive.DOUBLE, (lowering, call) -> call.self()).made;
+			}
 			case "java.lang.Boolean":
-				return new Builder(name, false, 0, classes).statik("hashCode", Primitive.INT,
+				return new Builder(name, false, classes).statik("hashCode", Primitive.INT,
 						(lowering, call) -> call("if", call.argument(0), integer(1231), integer(1237)),
 						Primitive.BOOLEAN).made;
-			case "java.lang.Character":
-				return new Builder(name, false, 0, classes).made;
+			case "java.lang.Character": {
+				Builder builder = new Builder(name, false, classes);
+				ClassType self = new ClassType(builder.made, List.of());
+				// a boxed char is a character, a char its code
+				return builder
+					.statik("compare", Primitive.INT, (lowering, call) -> call("-", call.argument(0), call.argument(1)),
+							Primitive.CHAR, Primitive.CHAR)
+					.method("compareTo", Primitive.INT,
+							(lowering, call) -> call("-", call("char-code", call.self()),
+									call("char-code", call.argument(0))),
+							self)
+					.method("charValue", Primitive.CHAR, (lowering, call) -> call("char-code", call.self())).made;
+			}
 			case "java.lang.System": {
 				ClassType stream = classes.libraryType("java.io.PrintStream");
-				return new Builder(name, false, 0, classes).field("out", stream, cl("*standard-output*"))
+				return new Builder(name, false, classes).field("out", stream, cl("*standard-output*"))
 					.field("err", stream, cl("*error-output*")).made;
 			}
 			case "java.io.PrintStream": {
 				ClassType object = classes.libraryType(OBJECT);
-				return new Builder(name, false, 0, classes)
+				return new Builder(name, false, classes)
 					.any("println", false, Primitive.VOID, object,
 							(lowering, call) -> print(lowering, call, "write-line", call.self()))
 					.method("println", Primitive.VOID, (lowering, call) -> newline(call.self()))
@@ -233,7 +315,7 @@ final class JavaIntrinsics {
 			case "java.lang.IO": {
 				ClassType object = classes.libraryType(OBJECT);
 				LispSymbol out = cl("*standard-output*");
-				return new Builder(name, false, 0, classes)
+				return new Builder(name, false, classes)
 					.any("println", true, Primitive.VOID, object,
 							(lowering, call) -> print(lowering, call, "write-line", out))
 					.statik("println", Primitive.VOID, (lowering, call) -> newline(out))
@@ -278,6 +360,8 @@ final class JavaIntrinsics {
 						: runtimeCall("string-equals", call.self(), call.argument(0));
 			}, object)
 			.method("hashCode", Primitive.INT, (lowering, call) -> runtimeCall("string-hash", call.self()))
+			.method("compareTo", Primitive.INT,
+					(lowering, call) -> runtimeCall("string-compare", call.self(), call.argument(0)), string)
 			.method("toString", string, (lowering, call) -> call.self())
 			.method("substring", string,
 					(lowering, call) -> runtimeCall("substring", call.self(), call.argument(0), JavaForms.NIL),
@@ -316,16 +400,18 @@ final class JavaIntrinsics {
 		if (!builder.made.isInterface) {
 			builder.constructor((lowering, call) -> list(cl("make-array"), integer(8), new LispSymbol(":ADJUSTABLE"),
 					JavaForms.T, new LispSymbol(":FILL-POINTER"), integer(0)));
-			builder.made.interfaces.add(classes.library("java.util.List"));
+			builder.implement(classes.library("java.util.List"));
 		}
+		Variable element = builder.variable(0);
 		return builder.method("add", Primitive.BOOLEAN, (lowering, call) -> {
 			LispVal push = call("vector-push-extend", call.argument(0), call.self());
 			return call.discard() ? push : call("progn", push, JavaForms.T);
-		}, E)
-			.method("get", E, (lowering, call) -> runtimeCall("list-get", call.self(), call.argument(0)), Primitive.INT)
-			.method("set", E,
+		}, element)
+			.method("get", element, (lowering, call) -> runtimeCall("list-get", call.self(), call.argument(0)),
+					Primitive.INT)
+			.method("set", element,
 					(lowering, call) -> runtimeCall("list-set", call.self(), call.argument(0), call.argument(1)),
-					Primitive.INT, E)
+					Primitive.INT, element)
 			.method("size", Primitive.INT, (lowering, call) -> call("length", call.self()))
 			.method("isEmpty", Primitive.BOOLEAN,
 					(lowering, call) -> call("=", call("length", call.self()), integer(0))).made;
@@ -336,17 +422,19 @@ final class JavaIntrinsics {
 		if (!builder.made.isInterface) {
 			builder.constructor(
 					(lowering, call) -> list(cl("make-hash-table"), new LispSymbol(":TEST"), quote(cl("equal"))));
-			builder.made.interfaces.add(classes.library("java.util.Map"));
+			builder.implement(classes.library("java.util.Map"));
 		}
+		Variable key = builder.variable(0);
+		Variable value = builder.variable(1);
 		return builder
-			.method("put", V,
+			.method("put", value,
 					(lowering, call) -> call.discard()
 							? call("setf", call("gethash", call.argument(0), call.self()), call.argument(1))
 							: runtimeCall("map-put", call.self(), call.argument(0), call.argument(1)),
-					K, V)
-			.method("get", V, (lowering, call) -> call("gethash", call.argument(0), call.self()), object)
-			.method("getOrDefault", V,
-					(lowering, call) -> call("gethash", call.argument(0), call.self(), call.argument(1)), object, V)
+					key, value)
+			.method("get", value, (lowering, call) -> call("gethash", call.argument(0), call.self()), object)
+			.method("getOrDefault", value,
+					(lowering, call) -> call("gethash", call.argument(0), call.self(), call.argument(1)), object, value)
 			.method("containsKey", Primitive.BOOLEAN,
 					(lowering, call) -> call("nth-value", integer(1), call("gethash", call.argument(0), call.self())),
 					object)

@@ -25,6 +25,9 @@ import am.ik.rontolisp.java.JavaSyntax.TypeName;
 import am.ik.rontolisp.java.JavaType.ArrayType;
 import am.ik.rontolisp.java.JavaType.ClassType;
 import am.ik.rontolisp.java.JavaType.Primitive;
+import am.ik.rontolisp.java.JavaType.TypeParameter;
+import am.ik.rontolisp.java.JavaType.Variable;
+import am.ik.rontolisp.java.JavaType.Wildcard;
 import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
 
@@ -38,7 +41,9 @@ import org.jspecify.annotations.Nullable;
 final class JavaClasses {
 
 	/** The packages of the library: what {@code import module java.base} imports. */
-	private static final List<String> LIBRARY_PACKAGES = List.of("java.lang", "java.util");
+	private static final List<String> LIBRARY_PACKAGES = List.of("java.lang", "java.util", "java.util.function");
+
+	private static final String COMPARABLE = "java.lang.Comparable";
 
 	/**
 	 * The file a class was declared in: what a simple name is resolved against.
@@ -76,6 +81,21 @@ final class JavaClasses {
 	/** The local classes in scope where the lowering stands, by simple name. */
 	@Nullable Function<String, @Nullable JavaClass> localScope;
 
+	/**
+	 * The type parameters of the method whose signature is being read or whose body is
+	 * being lowered.
+	 */
+	List<TypeParameter> methodParameters = List.of();
+
+	/** The interfaces a lambda or a method reference of the program is made for. */
+	final Set<JavaClass> lambdaTargets = new java.util.LinkedHashSet<>();
+
+	/**
+	 * The interfaces whose lambdas are structures holding the function, because the
+	 * program can tell which interface a lambda was made for.
+	 */
+	final Set<JavaClass> taggedLambdas = new java.util.LinkedHashSet<>();
+
 	private final Library library;
 
 	/**
@@ -88,6 +108,11 @@ final class JavaClasses {
 
 		/** Refuses the type arguments a class of the library does not take yet. */
 		void check(ClassType type, Source source, int pos);
+
+		/**
+		 * Whether a class of the library that is no Java source is {@code Comparable}.
+		 */
+		boolean isComparable(String name);
 
 	}
 
@@ -143,6 +168,31 @@ final class JavaClasses {
 		}
 		this.classes.put(declaration.name, declaration);
 		this.lispNames.put(declaration.lispName(), declaration);
+		this.version++;
+		if (declaration.name.equals(COMPARABLE)) {
+			for (JavaClass known : List.copyOf(this.classes.values())) {
+				compares(known, declaration);
+			}
+		}
+		else if (this.classes.get(COMPARABLE) instanceof JavaClass comparable) {
+			compares(declaration, comparable);
+		}
+	}
+
+	/**
+	 * Makes a class of the library {@code Comparable} to itself when it is: an enum's
+	 * superclass, a string, a box. Only in a program that names {@code Comparable}, so
+	 * that every other program holds no interface it does not name.
+	 */
+	private void compares(JavaClass declaration, JavaClass comparable) {
+		boolean enumeration = declaration.name.equals("java.lang.Enum");
+		if ((!enumeration && !(declaration.intrinsic && this.library.isComparable(declaration.name)))
+				|| declaration.interfaces.contains(comparable)) {
+			return;
+		}
+		declaration.interfaces.add(comparable);
+		declaration.parameterized.put(comparable, new ClassType(comparable, List.of(enumeration
+				? new Variable(declaration.typeParameters.get(0)) : new ClassType(declaration, List.of()))));
 		this.version++;
 	}
 
@@ -201,7 +251,8 @@ final class JavaClasses {
 	 * class
 	 * @return the class
 	 */
-	JavaClass local(ClassDeclaration declaration, JavaClass outer, boolean isStatic, @Nullable JavaClass extended) {
+	JavaClass local(ClassDeclaration declaration, JavaClass outer, boolean isStatic, @Nullable ClassType extendedType) {
+		JavaClass extended = extendedType == null ? null : extendedType.declaration();
 		JavaClass known = this.locals.get(declaration);
 		if (known != null) {
 			return known;
@@ -212,6 +263,7 @@ final class JavaClasses {
 		JavaClass made = create(declaration, name, name, outer, isStatic || declaration.kind() != JavaSyntax.Kind.CLASS,
 				unit, all);
 		made.isLocal = true;
+		made.scope = this.methodParameters;
 		this.locals.put(declaration, made);
 		if (extended != null) {
 			if (extended.isFinal && !extended.isEnum) {
@@ -225,6 +277,9 @@ final class JavaClasses {
 			}
 			else {
 				made.superclass = extended.intrinsic ? null : extended;
+			}
+			if (extendedType != null && !extendedType.arguments().isEmpty()) {
+				made.parameterized.put(extended, extendedType);
 			}
 		}
 		complete(all, unit);
@@ -326,6 +381,7 @@ final class JavaClasses {
 				declared(lambda.expression(), into);
 				declared(lambda.block(), into);
 			}
+			case JavaSyntax.MethodReference reference -> declared(reference.target(), into);
 			case JavaSyntax.Switch block -> {
 				declared(block.selector(), into);
 				for (JavaSyntax.SwitchCase written : block.cases()) {
@@ -381,7 +437,12 @@ final class JavaClasses {
 		Set<String> modifiers = declaration.modifiers();
 		boolean isInterface = declaration.isInterface();
 		JavaClass made = new JavaClass(name, binaryName, declaration.name(), isInterface,
-				isInterface || modifiers.contains("abstract"), false, 0, declaration, unit.source());
+				isInterface || modifiers.contains("abstract"), false, declaration, unit.source());
+		for (JavaSyntax.TypeParameter parameter : declaration.typeParameters()) {
+			TypeParameter declared = new TypeParameter(parameter.name(), false, false);
+			declared.owner = made;
+			made.typeParameters.add(declared);
+		}
 		made.outer = outer;
 		made.isStatic = isStatic;
 		made.isEnum = declaration.kind() == JavaSyntax.Kind.ENUM;
@@ -407,6 +468,9 @@ final class JavaClasses {
 	/** What each new class extends, what a sealed one permits, then the members. */
 	private void complete(List<JavaClass> all, Unit unit) {
 		Source source = unit.source();
+		for (JavaClass made : all) {
+			bounds(made.typeParameters, declaration(made).typeParameters(), made, unit);
+		}
 		for (JavaClass made : all) {
 			supertypes(made, unit);
 		}
@@ -453,12 +517,46 @@ final class JavaClasses {
 		return java.util.Objects.requireNonNull(made.declaration);
 	}
 
+	/** The bounds of declared type parameters, each of which may name the others. */
+	private void bounds(List<TypeParameter> parameters, List<JavaSyntax.TypeParameter> written,
+			@Nullable JavaClass context, Unit unit) {
+		for (int i = 0; i < written.size(); i++) {
+			List<JavaType> bounds = new ArrayList<>();
+			for (TypeName bound : written.get(i).bounds()) {
+				JavaType type = type(bound, context, unit);
+				if (!(type instanceof ClassType) && !(type instanceof Variable)) {
+					throw error(unit.source(), bound.pos(), "unexpected type; required: class, found: " + type);
+				}
+				bounds.add(type);
+			}
+			parameters.get(i).bounds = List.copyOf(bounds);
+		}
+	}
+
+	/** A type a class extends or implements: a class, with the arguments written. */
+	private ClassType supertype(TypeName written, JavaClass made, Unit unit) {
+		JavaType type = resolve(written, made.outer, made, unit);
+		if (!(type instanceof ClassType named)) {
+			throw error(unit.source(), written.pos(), "unexpected type; required: class, found: " + type);
+		}
+		for (JavaType argument : named.arguments()) {
+			if (argument instanceof Wildcard) {
+				throw error(unit.source(), written.pos(),
+						"unexpected type; required: class or interface without bounds, found: " + argument);
+			}
+		}
+		if (!named.arguments().isEmpty()) {
+			made.parameterized.put(named.declaration(), named);
+		}
+		return named;
+	}
+
 	private void supertypes(JavaClass made, Unit unit) {
 		ClassDeclaration declaration = declaration(made);
 		Source source = unit.source();
 		TypeName extended = declaration.superclass();
 		if (extended != null) {
-			JavaClass superclass = require(extended.name(), extended.pos(), made.outer, unit);
+			JavaClass superclass = supertype(extended, made, unit).declaration();
 			if (superclass.isInterface) {
 				throw error(source, extended.pos(), "no interface expected here");
 			}
@@ -477,12 +575,13 @@ final class JavaClasses {
 		}
 		else if (made.isEnum) {
 			made.superclass = library("java.lang.Enum");
+			made.parameterized.put(made.superclass, new ClassType(made.superclass, List.of(made.self())));
 		}
 		else if (made.isRecord) {
 			made.superclass = library("java.lang.Record");
 		}
 		for (TypeName implemented : declaration.interfaces()) {
-			JavaClass type = require(implemented.name(), implemented.pos(), made.outer, unit);
+			JavaClass type = supertype(implemented, made, unit).declaration();
 			if (!type.isInterface) {
 				throw error(source, implemented.pos(), "interface expected here");
 			}
@@ -520,7 +619,7 @@ final class JavaClasses {
 		Source source = unit.source();
 		Set<String> fieldNames = new HashSet<>();
 		List<JavaSyntax.Method> methods = new ArrayList<>(declaration.methods());
-		ClassType self = new ClassType(made, List.of());
+		ClassType self = made.self();
 		// an enum's constants: static fields made once, by the constructor the arguments
 		// pick, behind the name and the ordinal every constructor takes first
 		int ordinal = 0;
@@ -576,12 +675,25 @@ final class JavaClasses {
 				parameters.add(libraryType("java.lang.String"));
 				parameters.add(Primitive.INT);
 			}
-			for (Parameter parameter : method.parameters()) {
-				parameters.add(type(java.util.Objects.requireNonNull(parameter.type()), made, unit));
+			List<TypeParameter> typeParameters = new ArrayList<>();
+			for (JavaSyntax.TypeParameter parameter : method.typeParameters()) {
+				typeParameters.add(new TypeParameter(parameter.name(), true, false));
 			}
-			TypeName returned = method.returnType();
-			JavaType returnType = returned == null || returned.name().equals("void") ? Primitive.VOID
-					: type(returned, made, unit);
+			List<TypeParameter> around = this.methodParameters;
+			this.methodParameters = typeParameters;
+			JavaType returnType;
+			try {
+				bounds(typeParameters, method.typeParameters(), made, unit);
+				for (Parameter parameter : method.parameters()) {
+					parameters.add(type(java.util.Objects.requireNonNull(parameter.type()), made, unit));
+				}
+				TypeName returned = method.returnType();
+				returnType = returned == null || returned.name().equals("void") ? Primitive.VOID
+						: type(returned, made, unit);
+			}
+			finally {
+				this.methodParameters = around;
+			}
 			Set<String> modifiers = method.modifiers();
 			boolean isStatic = modifiers.contains("static");
 			boolean isAbstract = method.body() == null;
@@ -613,6 +725,7 @@ final class JavaClasses {
 			}
 			JavaClass.Method member = new JavaClass.Method(made, method.name(), parameters, returnType, isStatic,
 					isAbstract, method, null, false);
+			member.typeParameters = List.copyOf(typeParameters);
 			if (made.isEnum && isConstructor) {
 				member.hidden = 2;
 				member.isPrivate = true;
@@ -780,8 +893,8 @@ final class JavaClasses {
 			for (JavaSyntax.EnumConstant constant : declaration.constants()) {
 				constants.add(new JavaSyntax.Name(at, constant.name()));
 			}
-			JavaClass.Field values = new JavaClass.Field(made, "$VALUES", new ArrayType(new ClassType(made, List.of())),
-					true, true, null, null);
+			JavaClass.Field values = new JavaClass.Field(made, "$VALUES", new ArrayType(made.self()), true, true, null,
+					null);
 			values.initializer = new JavaSyntax.ArrayInitializer(at, constants);
 			// set right after the constants: an initializer below them may ask for
 			// values()
@@ -894,6 +1007,11 @@ final class JavaClasses {
 		return null;
 	}
 
+	/** Refuses the type arguments a class of the library does not take yet. */
+	void check(ClassType type, Source source, int pos) {
+		this.library.check(type, source, pos);
+	}
+
 	/** {@link #find}, or the error a compiler reports. */
 	JavaClass require(String name, int pos, @Nullable JavaClass context, Unit unit) {
 		JavaClass found = find(name, context, unit);
@@ -933,12 +1051,15 @@ final class JavaClasses {
 		String simpleName = name.substring(name.lastIndexOf('.') + 1);
 		// a class of the library names no local class of the program
 		Function<String, @Nullable JavaClass> scope = this.localScope;
+		List<TypeParameter> parameters = this.methodParameters;
 		this.localScope = null;
+		this.methodParameters = List.of();
 		try {
 			declare(JavaParser.parse(text, path, simpleName), new Source(path, text));
 		}
 		finally {
 			this.localScope = scope;
+			this.methodParameters = parameters;
 		}
 		return java.util.Objects.requireNonNull(this.classes.get(name), () -> path + " does not declare " + name);
 	}
@@ -954,6 +1075,16 @@ final class JavaClasses {
 
 	/** The type a type written in a class's body means. */
 	JavaType type(TypeName written, @Nullable JavaClass context, Unit unit) {
+		return resolve(written, context, context, unit);
+	}
+
+	/**
+	 * The type a type as written means.
+	 * @param context the class a class's name is looked for from
+	 * @param variables the class a type variable's name is looked for from: the class
+	 * itself where its own header is read, which names no member type of its own
+	 */
+	private JavaType resolve(TypeName written, @Nullable JavaClass context, @Nullable JavaClass variables, Unit unit) {
 		JavaType type = switch (written.name()) {
 			case "int" -> Primitive.INT;
 			case "long" -> Primitive.LONG;
@@ -964,7 +1095,9 @@ final class JavaClasses {
 				throw unsupported(unit.source(), written.pos(), "the type " + written.name());
 			case "void" -> throw error(unit.source(), written.pos(), "void is not allowed here");
 			case "var" -> throw error(unit.source(), written.pos(), "var is not allowed here");
-			default -> classType(written, context, unit);
+			case "?", "? extends", "? super" ->
+				throw error(unit.source(), written.pos(), "a wildcard stands only as a type argument");
+			default -> named(written, context, variables, unit);
 		};
 		for (int i = 0; i < written.dimensions(); i++) {
 			type = new ArrayType(type);
@@ -972,26 +1105,78 @@ final class JavaClasses {
 		return type;
 	}
 
-	private ClassType classType(TypeName written, @Nullable JavaClass context, Unit unit) {
-		JavaClass declaration = require(written.name(), written.pos(), context, unit);
+	/**
+	 * The type parameter a simple name means where a type is written, or {@code null}.
+	 */
+	private @Nullable TypeParameter typeVariable(String name, @Nullable JavaClass context) {
+		for (TypeParameter parameter : this.methodParameters) {
+			if (parameter.name.equals(name)) {
+				return parameter;
+			}
+		}
+		for (JavaClass around = context; around != null; around = around.outer) {
+			for (TypeParameter parameter : around.typeParameters) {
+				if (parameter.name.equals(name)) {
+					return parameter;
+				}
+			}
+			for (TypeParameter parameter : around.scope) {
+				if (parameter.name.equals(name)) {
+					return parameter;
+				}
+			}
+			if (around.isStatic && !around.isLocal) {
+				// a static member reads no type parameter of the class around it
+				return null;
+			}
+		}
+		return null;
+	}
+
+	private JavaType named(TypeName written, @Nullable JavaClass context, @Nullable JavaClass variables, Unit unit) {
 		Source source = unit.source();
+		JavaClass local = written.name().indexOf('.') < 0 && this.localScope != null
+				? this.localScope.apply(written.name()) : null;
+		TypeParameter parameter = written.name().indexOf('.') < 0 && local == null
+				? typeVariable(written.name(), variables) : null;
+		if (parameter != null) {
+			if (!written.arguments().isEmpty() || written.diamond()) {
+				throw error(source, written.pos(),
+						"unexpected type; required: class, found: type parameter " + parameter.name);
+			}
+			return new Variable(parameter);
+		}
+		JavaClass declaration = require(written.name(), written.pos(), context, unit);
 		if (written.diamond()) {
 			throw error(source, written.pos(), "cannot infer type arguments for " + declaration.simpleName() + " here");
 		}
-		if (declaration.typeParameters == 0 && !written.arguments().isEmpty()) {
+		int declared = declaration.typeParameters.size();
+		if (written.arguments().isEmpty()) {
+			// a class with no parameter, or a raw type
+			return new ClassType(declaration, List.of());
+		}
+		if (declared == 0) {
 			throw error(source, written.pos(), "type " + declaration.simpleName() + " does not take parameters");
 		}
-		if (declaration.typeParameters > 0 && written.arguments().isEmpty()) {
-			throw unsupported(source, written.pos(), "the raw type " + declaration.simpleName());
-		}
-		if (declaration.typeParameters != written.arguments().size()) {
-			throw error(source, written.pos(), "wrong number of type arguments for " + declaration.simpleName());
+		if (declared != written.arguments().size()) {
+			throw error(source, written.pos(), "wrong number of type arguments; required " + declared);
 		}
 		List<JavaType> arguments = new ArrayList<>();
 		for (TypeName argument : written.arguments()) {
-			JavaType type = type(argument, context, unit);
-			if (type.isPrimitive()) {
-				throw error(source, argument.pos(), "unexpected type; required: reference, found: " + type);
+			JavaType type;
+			if (argument.isWildcard()) {
+				JavaType bound = argument.arguments().isEmpty() ? null
+						: resolve(argument.arguments().get(0), context, variables, unit);
+				if (bound != null && bound.isPrimitive()) {
+					throw error(source, argument.pos(), "unexpected type; required: reference, found: " + bound);
+				}
+				type = argument.name().equals("? super") ? new Wildcard(null, bound) : new Wildcard(bound, null);
+			}
+			else {
+				type = resolve(argument, context, variables, unit);
+				if (type.isPrimitive()) {
+					throw error(source, argument.pos(), "unexpected type; required: reference, found: " + type);
+				}
 			}
 			arguments.add(type);
 		}

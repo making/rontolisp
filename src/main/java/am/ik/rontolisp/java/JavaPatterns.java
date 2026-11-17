@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.function.BiPredicate;
 
 import am.ik.rontolisp.java.JavaType.ClassType;
 
@@ -41,10 +40,10 @@ final class JavaPatterns {
 	 * columns' types.
 	 * @param rows the rows
 	 * @param types the columns' types
-	 * @param isSubtype whether a first type's values are a second's
+	 * @param algebra the relations between types
 	 * @return whether no tuple is left out
 	 */
-	static boolean covers(List<List<Shape>> rows, List<JavaType> types, BiPredicate<JavaType, JavaType> isSubtype) {
+	static boolean covers(List<List<Shape>> rows, List<JavaType> types, JavaTypes algebra) {
 		if (types.isEmpty()) {
 			return !rows.isEmpty();
 		}
@@ -52,12 +51,12 @@ final class JavaPatterns {
 			return false;
 		}
 		List<JavaType> rest = types.subList(1, types.size());
-		for (JavaType leaf : leaves(types.get(0))) {
+		for (JavaType leaf : leaves(types.get(0), algebra)) {
 			List<List<Shape>> applicable = new ArrayList<>();
 			JavaClass deconstructed = null;
 			for (List<Shape> row : rows) {
 				Shape head = row.get(0);
-				if (head instanceof Any || (head instanceof OfType typed && isSubtype.test(leaf, typed.type()))) {
+				if (head instanceof Any || (head instanceof OfType typed && algebra.isSubtype(leaf, typed.type()))) {
 					applicable.add(row);
 				}
 				else if (head instanceof OfRecord record && leaf instanceof ClassType named
@@ -69,9 +68,10 @@ final class JavaPatterns {
 			List<List<Shape>> narrowed = new ArrayList<>();
 			List<JavaType> columns = new ArrayList<>();
 			if (deconstructed != null) {
+				ClassType through = algebra.capture((ClassType) leaf);
 				for (JavaClass.Field component : deconstructed.fields) {
 					if (!component.isStatic) {
-						columns.add(component.type);
+						columns.add(algebra.upward(algebra.memberType(component.type, through, deconstructed)));
 					}
 				}
 			}
@@ -90,7 +90,7 @@ final class JavaPatterns {
 				next.addAll(row.subList(1, row.size()));
 				narrowed.add(next);
 			}
-			if (!covers(narrowed, columns, isSubtype)) {
+			if (!covers(narrowed, columns, algebra)) {
 				return false;
 			}
 		}
@@ -98,30 +98,33 @@ final class JavaPatterns {
 	}
 
 	/**
-	 * The types a value of a type is one of: under a sealed type, the ones it permits.
+	 * The types a value of a type is one of: under a sealed type, the ones it permits,
+	 * each with the type arguments the sealed type's own settle.
 	 */
-	private static List<JavaType> leaves(JavaType type) {
-		if (!(type instanceof ClassType named)) {
+	private static List<JavaType> leaves(JavaType type, JavaTypes algebra) {
+		JavaType subject = type instanceof JavaType.Variable ? algebra.site(type) : type;
+		if (!(subject instanceof ClassType named)) {
 			return List.of(type);
 		}
 		List<JavaType> leaves = new ArrayList<>();
-		leaves(named.declaration(), leaves, new HashSet<>());
+		leaves(named, leaves, new HashSet<>(), algebra);
 		return leaves;
 	}
 
-	private static void leaves(JavaClass declaration, List<JavaType> into, Set<JavaClass> seen) {
+	private static void leaves(ClassType type, List<JavaType> into, Set<JavaClass> seen, JavaTypes algebra) {
+		JavaClass declaration = type.declaration();
 		if (!seen.add(declaration)) {
 			return;
 		}
 		if (!declaration.isSealed || declaration.isEnum) {
-			into.add(new ClassType(declaration, List.of()));
+			into.add(type);
 			return;
 		}
 		if (!declaration.isAbstract) {
-			into.add(new ClassType(declaration, List.of()));
+			into.add(type);
 		}
 		for (JavaClass permitted : declaration.permits) {
-			leaves(permitted, into, seen);
+			leaves(algebra.refine(permitted, type), into, seen, algebra);
 		}
 	}
 

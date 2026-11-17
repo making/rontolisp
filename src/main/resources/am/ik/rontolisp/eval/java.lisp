@@ -11,9 +11,11 @@
 ;; The value model these helpers share with the lowering (.kb/java-frontend.md): null
 ;; is NIL, a boolean T or NIL, an int and a long an integer kept in range by the
 ;; lowering, a char an integer, a double a double, a String the host's immutable string,
-;; an array a simple vector, an object a structure. A boxed number is the number, a
-;; boxed char a character, a boxed true T and a boxed false :false, so that no box is
-;; null. A StringBuilder is an adjustable character vector, an ArrayList an adjustable
+;; an array a simple vector, an object a structure. A boxed int or double is the number,
+;; a boxed long the cons (number . :long) -- so an Integer and a Long of one number are
+;; two values, and equal tells them apart as equals does --, a boxed char a character,
+;; a boxed true T and a boxed false :false, so that no box is null. No other value of
+;; a program is a cons. A StringBuilder is an adjustable character vector, an ArrayList an adjustable
 ;; vector, a HashMap an equal hash table, a lambda a function.
 ;;
 ;; Three rules every definition here keeps:
@@ -123,6 +125,7 @@
    ((stringp x) (if (simple-string-p x) x (rontolisp::%java-sb-string x)))
    ((integerp x) (%decimal-piece x))
    ((floatp x) (rontolisp::%java-double-string x))
+   ((consp x) (%decimal-piece (car x)))
    ((eq x t) "true")
    ((eq x :false) "false")
    ((characterp x) (%normalize-string (string x)))
@@ -150,6 +153,7 @@
         (if qualified "java.lang.String" "String")
         (if qualified "java.lang.StringBuilder" "StringBuilder")))
    ((integerp x) (if qualified "java.lang.Integer" "Integer"))
+   ((consp x) (if qualified "java.lang.Long" "Long"))
    ((floatp x) (if qualified "java.lang.Double" "Double"))
    ((or (eq x t) (eq x :false)) (if qualified "java.lang.Boolean" "Boolean"))
    ((characterp x) (if qualified "java.lang.Character" "Character"))
@@ -173,6 +177,7 @@
         ((stringp a)
          (if (simple-string-p a) (rontolisp::%java-string-equals a b) (eq a b)))
         ((integerp a) (if (integerp b) (= a b) nil))
+        ((consp a) (equal a b))
         ((floatp a) (if (floatp b) (= a b) nil))
         ((characterp a) (if (characterp b) (char= a b) nil))
         (t (eq a b))))
@@ -202,10 +207,8 @@
     (if (simple-string-p x)
         (rontolisp::%java-string-hash x)
         (rontolisp::%java-identity-hash x)))
-   ((integerp x)
-    (if (and (>= x -2147483648) (<= x 2147483647))
-        x
-        (rontolisp::%java-long-hash x)))
+   ((integerp x) x)
+   ((consp x) (rontolisp::%java-long-hash (car x)))
    ((eq x t) 1231)
    ((eq x :false) 1237)
    ((characterp x) (char-code x))
@@ -217,6 +220,10 @@
 ;; --- numbers ------------------------------------------------------------------------
 
 (defun rontolisp::%java-boolean-p (x) (if (or (eq x t) (eq x :false)) t nil))
+
+;; What reading a box that is null as its primitive raises.
+(defun rontolisp::%java-null-unbox ()
+  (error "NullPointerException: a box that is null was read as its primitive"))
 
 (defun rontolisp::%java-unbox-boolean (x)
   (cond ((eq x t) t)
@@ -273,6 +280,9 @@
         ((= b b) 1)
         (t 0)))
 
+;; Integer.compare and Long.compare: -1, 0 or 1.
+(defun rontolisp::%java-compare (a b) (cond ((< a b) -1) ((> a b) 1) (t 0)))
+
 ;; --- arrays, switch -----------------------------------------------------------------
 
 ;; new T[n][m]..: every level but the last holds arrays. KIND is 1 for an int leaf,
@@ -304,6 +314,28 @@
 
 ;; --- String, StringBuilder ----------------------------------------------------------
 
+;; The UTF-16 unit a string's element starts with: the element itself inside the BMP,
+;; its high surrogate outside it.
+(defun rontolisp::%java-leading-unit (code)
+  (if (< code 65536) code (+ 55296 (ash (- code 65536) -10))))
+
+;; String.compareTo as the API specifies it: the difference of the first two UTF-16
+;; units that differ, else of the lengths.
+(defun rontolisp::%java-string-compare (a b)
+  (let ((i 0) (n (min (length a) (length b))) (found nil))
+    (while (and (< i n) (null found))
+      (let ((x (char-code (char a i))) (y (char-code (char b i))))
+        (if (= x y)
+            (setq i (+ i 1))
+            (let ((p (rontolisp::%java-leading-unit x))
+                  (q (rontolisp::%java-leading-unit y)))
+              (setq found
+               (if (= p q) (- (logand x 1023) (logand y 1023)) (- p q)))))))
+    (if found found (- (length a) (length b)))))
+
+(defun rontolisp::%java-sb-p (x)
+  (if (and (stringp x) (not (simple-string-p x))) t nil))
+
 (defun rontolisp::%java-substring (s start end)
   (let ((end (if end end (length s))))
     (if (or (< start 0) (> start end) (> end (length s)))
@@ -332,6 +364,9 @@
   (char-code (aref builder index)))
 
 ;; --- ArrayList, HashMap -------------------------------------------------------------
+
+(defun rontolisp::%java-list-p (x)
+  (if (and (vectorp x) (not (stringp x)) (array-has-fill-pointer-p x)) t nil))
 
 ;; aref reads past a fill pointer, so the index is tested against the size here.
 (defun rontolisp::%java-list-get (items index)

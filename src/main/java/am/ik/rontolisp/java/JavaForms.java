@@ -25,6 +25,9 @@ final class JavaForms {
 	/** A {@code Boolean} box holding false: {@code null} is {@code NIL}. */
 	static final LispSymbol BOXED_FALSE = new LispSymbol(":FALSE");
 
+	/** What a {@code Long} box holds beside its number: {@code (number . :long)}. */
+	static final LispSymbol BOXED_LONG = new LispSymbol(":LONG");
+
 	static final LispSymbol THIS = new LispSymbol("this");
 
 	static final LispSymbol FUNCTION_BLOCK = new LispSymbol("%fn");
