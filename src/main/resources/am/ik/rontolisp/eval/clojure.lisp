@@ -23923,554 +23923,501 @@
 ;;;; The clojure.pprint kernels: rontolisp.internal.pprint, the namespace only
 ;;;; the built-in clojure.pprint requires, lowers each var to one of these.
 ;;;;
-;;;; A pretty print runs its dispatch with *standard-output* bound to a capture
-;;;; stream: each logical block start and end, conditional newline,
-;;;; indentation and fresh line becomes an event beside the text captured since
-;;;; the last one. Once the dispatch returns, the events are replayed through
-;;;; the oracle's pretty writer, so its layout decisions are the oracle's own:
-;;;; text is written at once until a conditional newline is met, then buffered;
-;;;; whenever the buffer no longer fits before the right margin, its first
-;;;; newline is decided -- a linear one taken once its block has broken or when
-;;;; what follows it up to the next newline of an enclosing block does not fit,
-;;;; a fill one when a nested block broke since its block last did or the
-;;;; section up to its block's next newline does not fit, or in miser mode as a
-;;;; linear one, a miser one only in miser mode (a block starting at or past
-;;;; margin - miser width) -- and the section after an untaken one is decided
-;;;; the same way while the rest does not fit. What is still buffered at the
-;;;; end is written with only the mandatory newlines, and the linear and miser
-;;;; ones of a block that has broken, taken. The blanks ending a write are held
-;;;; back, dropped before a taken newline. A newline in the text forces the
-;;;; buffer out and starts a line at column 0, as the oracle's writer does.
-;;;; Two more events: a flush, where a nested pprint or write ends (the
-;;;; buffer written as it stands), and an event carrying its own layout
-;;;; function (cl-format's ~T and ~:;, which read the column reached).
+;;;; The pretty printer. Written from the Common Lisp HyperSpec's account of
+;;;; logical blocks, conditional newlines and indentation (22.2.1) and from
+;;;; what clj 1.12.6 prints: the rules below are the ones its answers to
+;;;; probes and to generated layouts at generated margins bear out
+;;;; (.kb/clojure-frontend.md, "clojure.jar namespaces"). None of it follows
+;;;; another implementation's text.
 ;;;;
-;;;; A block is #(parent prefix per-line-prefix suffix start-col indent done-nl
-;;;; intra-nl saved-length); the capture state #(stream events block level
-;;;; length); the writer #(out column blanks buffer mode margin miser block
-;;;; buffer-tail).
+;;;; A pretty print has two halves. RECORDING: the dispatch runs with
+;;;; *standard-output* bound to a string stream, and whatever shapes the
+;;;; layout -- a block opening or closing, a conditional newline, an
+;;;; indentation -- is noted as a mark between the stretches of text printed
+;;;; around it. LAYING OUT: when the dispatch has returned the record is a
+;;;; vector of marks, with a running total of the columns they take, so that
+;;;; the width of any stretch is one subtraction. The marks are then taken in
+;;;; the order they were made, each knowing only those before it, because that
+;;;; is what the oracle's answers depend on:
+;;;;
+;;;; - Until the first conditional newline a mark is placed as it comes.
+;;;;   From then on the page WAITS: marks stay open while everything open
+;;;;   fits the line, and whenever a mark arrives that makes it reach the
+;;;;   right margin, the open part is laid out BY MEASURE as far as that
+;;;;   settles it.
+;;;; - By measure, text is placed up to the first open newline, and that one
+;;;;   breaks or not: a linear newline if its block has broken or the stretch
+;;;;   up to the next newline of a block around it reaches the margin; a fill
+;;;;   newline if a block inside its block has broken since its block last
+;;;;   did, or the stretch up to its block's next newline reaches the margin;
+;;;;   in a miser block (one that opened within the miser width of the
+;;;;   margin) a fill newline also as a linear one, and a miser newline only
+;;;;   there, as a linear one; a mandatory one always. A stretch is measured
+;;;;   as far as it is known. If what is left then fits, it stays open -- and
+;;;;   so does a newline that did not break, to be measured again when more
+;;;;   is known. If it does not fit, the newline's stretch is laid out by
+;;;;   measure on its own; one that fits with nothing to settle is placed
+;;;;   whole.
+;;;; - What is still open when the record closes -- at its end, at a line end
+;;;;   in the text, where a nested pprint or write ends -- is settled BY
+;;;;   HISTORY: only a mandatory newline breaks, and a linear or miser one of
+;;;;   a block that has broken.
+;;;;
+;;;; A column asked for at some mark (cl-format's ~T and ~:;, a fresh line)
+;;;; is the column the page has reached when that mark is taken: what is
+;;;; still open is not on it yet.
+;;;;
+;;;; The blanks a stretch of text ends in are held back: dropped when a
+;;;; newline breaks right there, written when anything else follows, and
+;;;; never counted in the column.
+;;;;
+;;;; A block is #(parent prefix per-line-prefix suffix count column indent
+;;;; broken inner); the recording #(stream marks block depth count); a mark is
+;;;; a list headed by its kind; the page being laid out #(out column blanks
+;;;; margin miser marks totals next waiting).
 
-(defvar rontolisp::%clojure-pp-state
+(defvar rontolisp::%clojure-pp-recording
   nil
-  "The pretty print in progress, or NIL outside one.")
+  "The recording of the pretty print in progress, or NIL outside one.")
 
 (defun rontolisp::%clojure-pp-active ()
-  "The pretty print in progress when *standard-output* is its capture stream,
-   the oracle's *out* being its pretty writer; NIL otherwise, so what runs
-   with *out* bound elsewhere (with-out-str inside a dispatch, a writer of
-   the program's) writes plain text, as it does outside a pretty print."
-  (let ((state rontolisp::%clojure-pp-state))
-    (if (and state (eq *standard-output* (aref state 0))) state nil)))
+  "The recording in progress when *standard-output* is still its stream, the
+   oracle's *out* being its pretty writer; NIL otherwise, so what a dispatch
+   prints into a string or a writer of its own is plain text."
+  (let ((rec rontolisp::%clojure-pp-recording))
+    (if (and rec (eq *standard-output* (aref rec 0))) rec nil)))
 
 (defun rontolisp::%clojure-pp-active-p ()
   "Whether *out* is the pretty writer of a pretty print in progress."
-  (if (rontolisp::%clojure-pp-active) t nil))
+  (if (rontolisp::%clojure-pp-active) t rontolisp::%clojure-false))
 
-(defun rontolisp::%clojure-pp-push (state event)
-  "EVENT added to STATE's events, newest first."
-  (setf (aref state 1) (cons event (aref state 1))))
-
-(defun rontolisp::%clojure-pp-flush (state)
-  "The text captured since the last event, as a text event."
-  (let ((text (get-output-stream-string (aref state 0))))
-    (if (> (length text) 0)
-        (rontolisp::%clojure-pp-push state (cons :text text)))))
+(defun rontolisp::%clojure-pp-note (rec mark)
+  "MARK added to the recording REC after the text printed since the last
+   mark, that text cut into its lines."
+  (let ((text (get-output-stream-string (aref rec 0))) (from 0))
+    (do ((at (position #\Newline text) (position #\Newline text :start from)))
+        ((null at))
+      (if (> at from)
+          (setf (aref rec 1)
+                (cons (list :text (subseq text from at)) (aref rec 1))))
+      (setf (aref rec 1) (cons (list :line) (aref rec 1)))
+      (setq from (+ at 1)))
+    (if (> (length text) from)
+        (setf (aref rec 1) (cons (list :text (subseq text from)) (aref rec 1))))
+    (if mark (setf (aref rec 1) (cons mark (aref rec 1))))
+    nil))
 
 (defun rontolisp::%clojure-pp-call (thunk margin miser)
-  "THUNK run as a pretty print: its output laid out within the right MARGIN
-   (nil for none) and MISER width, then written to *standard-output*; answers
-   THUNK's value. When *standard-output* is the pretty writer of a print in
-   progress, THUNK adds to it, and what it left buffered is then written out
-   with no newline decided, as the oracle's pprint and write flush the pretty
-   writer they reuse; any other output (a string a dispatch collects, a writer
-   of its own) gets a pretty print of its own, as the oracle wraps a writer
-   that is no pretty writer."
-  (if (rontolisp::%clojure-pp-active)
-      (let ((value (funcall thunk)) (state (rontolisp::%clojure-pp-active)))
-        (if state
-            (progn
-              (rontolisp::%clojure-pp-flush state)
-              (rontolisp::%clojure-pp-push state (list :flush))))
-        value)
-      (let* ((root (vector nil nil nil nil 0 0 nil nil nil))
-             (state (vector (make-string-output-stream) nil root 0 nil))
-             (value
-              (let ((rontolisp::%clojure-pp-state state)
-                    (*standard-output* (aref state 0)))
-                (prog1 (funcall thunk) (rontolisp::%clojure-pp-flush state)))))
-        (write-string
-         (rontolisp::%clojure-pp-layout (reverse (aref state 1)) root margin
-                                        miser))
-        value)))
+  "THUNK run as a pretty print: what it prints laid out within the right
+   MARGIN (nil for none) and MISER width, then written to *standard-output*;
+   answers THUNK's value. Under a pretty print in progress THUNK adds to that
+   one, and its end closes the record so far, as the oracle's pprint and
+   write flush the pretty writer they are handed."
+  (let ((outer (rontolisp::%clojure-pp-active)))
+    (if outer
+        (let ((value (funcall thunk)) (rec (rontolisp::%clojure-pp-active)))
+          (if rec (rontolisp::%clojure-pp-note rec (list :sync)))
+          value)
+        (let* ((root (vector nil nil nil nil 0 0 0 nil nil))
+               (rec (vector (make-string-output-stream) nil root 0 nil))
+               (value
+                (let ((rontolisp::%clojure-pp-recording rec)
+                      (*standard-output* (aref rec 0)))
+                  (prog1 (funcall thunk)
+                    (rontolisp::%clojure-pp-note rec nil)))))
+          (write-string
+           (rontolisp::%clojure-pp-lay-out
+            (coerce (reverse (aref rec 1)) 'vector) margin miser))
+          value))))
 
 (defun rontolisp::%clojure-pp-start (prefix per-line suffix level-limit)
-  "Start a logical block, answering true, or write # and answer false when
-   the pretty print is LEVEL-LIMIT (*print-level*) blocks deep. A per-line
-   prefix is written after each newline the block takes. Outside a pretty
-   print the prefix is plain text."
-  (let ((state (rontolisp::%clojure-pp-active)))
-    (cond ((null state)
+  "Open a logical block and answer true; LEVEL-LIMIT (*print-level*) blocks
+   deep, write # and answer false instead. PER-LINE is a prefix repeated on
+   every line the block breaks onto. Outside a pretty print the prefix is
+   plain text."
+  (let ((rec (rontolisp::%clojure-pp-active)))
+    (cond ((null rec)
            (if prefix (write-string prefix))
            t)
-          ((and level-limit (>= (aref state 3) level-limit))
+          ((and level-limit (>= (aref rec 3) level-limit))
            (write-string "#")
            rontolisp::%clojure-false)
-          (t
-           (rontolisp::%clojure-pp-flush state)
-           (let ((block
-                  (vector (aref state 2) prefix per-line suffix 0 0 nil nil
-                          (aref state 4))))
-             (rontolisp::%clojure-pp-push state (cons :start block))
-             (setf (aref state 2) block)
-             (setf (aref state 3) (+ (aref state 3) 1))
-             (setf (aref state 4) 0)
-             t)))))
+          (t (let ((block
+                    (vector (aref rec 2) prefix per-line suffix (aref rec 4) 0 0
+                            nil nil)))
+               (rontolisp::%clojure-pp-note rec (list :open block))
+               (setf (aref rec 2) block)
+               (setf (aref rec 3) (+ (aref rec 3) 1))
+               (setf (aref rec 4) 0)
+               t)))))
 
 (defun rontolisp::%clojure-pp-end (suffix)
-  "End the current logical block (its suffix written at the layout; SUFFIX
-   is written as plain text outside a pretty print)."
-  (let ((state (rontolisp::%clojure-pp-active)))
-    (if state
-        (let ((block (aref state 2)))
-          (rontolisp::%clojure-pp-flush state)
-          (rontolisp::%clojure-pp-push state (cons :end block))
-          (setf (aref state 2) (aref block 0))
-          (setf (aref state 3) (- (aref state 3) 1))
-          (setf (aref state 4) (aref block 8)))
+  "Close the innermost logical block; outside a pretty print SUFFIX is plain
+   text."
+  (let ((rec (rontolisp::%clojure-pp-active)))
+    (if rec
+        (let ((block (aref rec 2)))
+          (rontolisp::%clojure-pp-note rec (list :close block))
+          (setf (aref rec 2) (aref block 0))
+          (setf (aref rec 3) (- (aref rec 3) 1))
+          (setf (aref rec 4) (aref block 4)))
         (if suffix (write-string suffix)))
     nil))
 
-(defun rontolisp::%clojure-pp-keyword (k choices what)
-  "The CL keyword CHOICES pairs with the spelling of the Clojure keyword K,
-   CHOICES an alist of spellings to CL keywords; else the oracle's refusal
-   naming WHAT, the set it prints."
-  (let ((spelling (if (rontolisp::%clojure-keyword-p k) (car (cdr k)) nil))
-        (found nil))
-    (dolist (choice choices)
-      (if (and spelling (null found) (string= spelling (car choice)))
-          (setq found (cdr choice))))
-    (or found
+(defun rontolisp::%clojure-pp-choice (k names what)
+  "The position of the Clojure keyword K among the spellings NAMES; any
+   other value is the oracle's refusal, which prints the set WHAT."
+  (let ((at
+         (if (rontolisp::%clojure-keyword-p k)
+             (position (car (cdr k)) names :test #'string=)
+             nil)))
+    (or at
         (rontolisp::%clojure-illegal-argument-exception
          (concatenate 'string "Bad argument: "
-                      (rontolisp::%clojure-str-of k "null" t)
+                      (if (null k) "null" (rontolisp::%clojure-pp-str k))
                       ". It must be one of " what)))))
 
 (defun rontolisp::%clojure-pp-newline (kind)
   "A conditional newline of KIND (:linear :miser :fill :mandatory) in the
-   current logical block; nothing outside a pretty print."
-  (let ((k
-         (rontolisp::%clojure-pp-keyword kind
-                                         (list (cons "linear" :linear)
-                                               (cons "miser" :miser)
-                                               (cons "fill" :fill)
-                                               (cons "mandatory" :mandatory))
-                                         "#{:mandatory :miser :fill :linear}"))
-        (state (rontolisp::%clojure-pp-active)))
-    (if state
-        (progn
-          (rontolisp::%clojure-pp-flush state)
-          (rontolisp::%clojure-pp-push state (list :nl k (aref state 2)))))
+   innermost logical block; nothing outside a pretty print."
+  (let ((which
+         (rontolisp::%clojure-pp-choice kind
+          (list "linear" "miser" "fill" "mandatory")
+          "#{:mandatory :miser :fill :linear}"))
+        (rec (rontolisp::%clojure-pp-active)))
+    (if rec (rontolisp::%clojure-pp-note rec (list :break which (aref rec 2))))
     nil))
 
 (defun rontolisp::%clojure-pp-indent (relative-to n)
-  "Set the current block's indentation to N columns past its start (:block)
-   or past the current column (:current); nothing outside a pretty print."
-  (let ((k
-         (rontolisp::%clojure-pp-keyword relative-to
-          (list (cons "block" :block) (cons "current" :current))
-          "#{:block :current}"))
-        (state (rontolisp::%clojure-pp-active)))
-    (if state
-        (progn
-          (rontolisp::%clojure-pp-flush state)
-          (rontolisp::%clojure-pp-push state
-                                       (list :indent k n (aref state 2)))))
+  "Indent the lines the innermost logical block breaks onto by N columns
+   past where its body began (:block) or past the column reached
+   (:current); nothing outside a pretty print."
+  (let ((which
+         (rontolisp::%clojure-pp-choice relative-to (list "block" "current")
+                                        "#{:block :current}"))
+        (rec (rontolisp::%clojure-pp-active)))
+    (if rec
+        (rontolisp::%clojure-pp-note rec (list :indent which n (aref rec 2))))
     nil))
 
 (defun rontolisp::%clojure-pp-fresh-line ()
-  "A newline unless the pretty print in progress is at the start of a line;
-   outside one always a newline, as the oracle's writer that keeps no column
-   writes one."
-  (let ((state (rontolisp::%clojure-pp-active)))
-    (if state
-        (progn
-          (rontolisp::%clojure-pp-flush state)
-          (rontolisp::%clojure-pp-push state (list :fresh)))
-        (terpri))
+  "A line end unless the pretty print in progress stands at the start of a
+   line; outside one always a line end, the oracle's plain writer keeping no
+   column."
+  (let ((rec (rontolisp::%clojure-pp-active)))
+    (if rec (rontolisp::%clojure-pp-note rec (list :fresh)) (terpri))
     nil))
 
 (defun rontolisp::%clojure-pp-tab (colnum colinc relative)
-  "cl-format's ~T in the pretty print in progress: spaces to column COLNUM
-   (or COLNUM past the column, RELATIVE), then on to a multiple of COLINC,
-   counted at the layout from the column its writer has reached, as the
-   oracle's base column is; answers false outside a pretty print."
-  (let ((state (rontolisp::%clojure-pp-active)))
-    (if state
+  "cl-format's ~T in the pretty print in progress: blanks up to column COLNUM
+   (RELATIVE: COLNUM blanks), then on to a multiple of COLINC, counted when
+   the page is laid out; answers false outside a pretty print."
+  (let ((rec (rontolisp::%clojure-pp-active)))
+    (if rec
         (progn
-          (rontolisp::%clojure-pp-flush state)
-          (rontolisp::%clojure-pp-push state
-                                       (list
-                                        :lay
-                                        (function
-                                         rontolisp::%clojure-pp-lay-tab) colnum
-                                        colinc
-                                        (rontolisp::%clojure-truthy relative)))
+          (rontolisp::%clojure-pp-note rec
+           (list :tab colnum colinc (rontolisp::%clojure-truthy relative)))
           t)
         nil)))
-
-(defun rontolisp::%clojure-pp-lay-tab (w args)
-  "The blanks of a ~T event (ARGS: colnum colinc relative) written by the
-   writer W at the column it has reached."
-  (rontolisp::%clojure-pp-text w
-                               (rontolisp::%clojure-pp-tab-text (aref w 1)
-                                (car args) (car (cdr args))
-                                (car (cdr (cdr args))))))
 
 (defun rontolisp::%clojure-pp-tab-text (column colnum colinc relative)
-  "The blanks ~T writes at COLUMN: to COLNUM, or on to the next multiple of
-   COLINC past it; RELATIVE, COLNUM blanks and on to a multiple of COLINC."
-  (let ((n
-         (if relative
-             (let ((offset (if (> colinc 0) (rem (+ colnum column) colinc) 0)))
-               (+ colnum (if (= offset 0) 0 (- colinc offset))))
-             (cond ((< column colnum) (- colnum column))
-                   ((= colinc 0) 0)
-                   (t (- colinc (rem (- column colnum) colinc)))))))
-    (make-string (if (> n 0) n 0) :initial-element #\Space)))
+  "The blanks ~T writes at COLUMN: up to COLNUM, or past it on to the next
+   column that is COLNUM plus a multiple of COLINC; RELATIVE, COLNUM blanks
+   and then on to a multiple of COLINC."
+  (let ((blanks
+         (cond (relative
+                (let ((over (if (> colinc 0) (rem (+ column colnum) colinc) 0)))
+                  (if (= over 0) colnum (+ colnum (- colinc over)))))
+               ((< column colnum) (- colnum column))
+               ((= colinc 0) 0)
+               (t (- colinc (rem (- column colnum) colinc))))))
+    (make-string (if (> blanks 0) blanks 0) :initial-element #\Space)))
 
 (defun rontolisp::%clojure-pp-eol (text needed limit)
-  "The ~:; clause TEXT of a cl-format justification, written at the layout
-   when the column then reached plus NEEDED passes LIMIT; answers false
-   outside a pretty print."
-  (let ((state (rontolisp::%clojure-pp-active)))
-    (if state
+  "The ~:; clause TEXT of a cl-format justification in the pretty print in
+   progress, written when the page is laid out if the column reached there
+   plus NEEDED passes LIMIT; answers false outside a pretty print."
+  (let ((rec (rontolisp::%clojure-pp-active)))
+    (if rec
         (progn
-          (rontolisp::%clojure-pp-flush state)
-          (rontolisp::%clojure-pp-push state
-                                       (list :lay
-                                             (function
-                                              rontolisp::%clojure-pp-lay-eol)
-                                             text needed limit))
+          (rontolisp::%clojure-pp-note rec (list :eol text needed limit))
           t)
         nil)))
 
-(defun rontolisp::%clojure-pp-lay-eol (w args)
-  "The text of a ~:; event (ARGS: text needed limit), written by the writer W
-   when its column plus NEEDED passes LIMIT."
-  (if (> (+ (aref w 1) (car (cdr args))) (car (cdr (cdr args))))
-      (rontolisp::%clojure-pp-text w (car args))))
-
 (defun rontolisp::%clojure-pp-length-reached (limit)
-  "Whether the current block has written LIMIT (*print-length*) objects."
-  (let ((state rontolisp::%clojure-pp-state))
-    (if (and state limit (aref state 4) (>= (aref state 4) limit))
+  "Whether the innermost block has written LIMIT (*print-length*) objects."
+  (let ((rec (rontolisp::%clojure-pp-active)))
+    (if (and rec limit (aref rec 4) (>= (aref rec 4) limit))
         t
         rontolisp::%clojure-false)))
 
 (defun rontolisp::%clojure-pp-count-object ()
-  "Count one more object written in the current block."
-  (let ((state rontolisp::%clojure-pp-state))
-    (if (and state (aref state 4)) (setf (aref state 4) (+ (aref state 4) 1)))
+  "One more object written in the innermost block."
+  (let ((rec (rontolisp::%clojure-pp-active)))
+    (if (and rec (aref rec 4)) (setf (aref rec 4) (+ (aref rec 4) 1)))
     nil))
 
 (defun rontolisp::%clojure-pp-reset-length ()
-  "Count the current block's objects from zero again."
-  (let ((state rontolisp::%clojure-pp-state))
-    (if state (setf (aref state 4) 0))
+  "The innermost block's objects counted from none again."
+  (let ((rec (rontolisp::%clojure-pp-active)))
+    (if (and rec (aref rec 4)) (setf (aref rec 4) 0))
     nil))
 
-(defun rontolisp::%clojure-pp-out (w s)
-  "S written to the writer W's output, its column following."
-  (let ((last -1))
-    (dotimes (i (length s)) (if (char= (char s i) #\Newline) (setq last i)))
-    (write-string s (aref w 0))
-    (setf (aref w 1)
-          (if (>= last 0) (- (length s) last 1) (+ (aref w 1) (length s))))))
+;; Laying the record out.
 
-(defun rontolisp::%clojure-pp-blanks (w)
-  "The blanks W holds back, written."
-  (if (aref w 2)
-      (progn
-        (rontolisp::%clojure-pp-out w (aref w 2))
-        (setf (aref w 2) nil))))
+(defun rontolisp::%clojure-pp-width (mark)
+  "The columns MARK takes on a line."
+  (let ((kind (car mark)))
+    (cond ((eq kind :text) (length (car (cdr mark))))
+          ((eq kind :open) (length (or (aref (car (cdr mark)) 1) "")))
+          ((eq kind :close) (length (or (aref (car (cdr mark)) 3) "")))
+          (t 0))))
 
-(defun rontolisp::%clojure-pp-fits (w tokens)
-  "Whether the buffered TOKENS fit on the line before W's right margin."
-  (let ((margin (aref w 5)))
-    (if (null margin)
-        t
-        (let ((room (- margin (aref w 1))) (len 0))
-          (do ((rest tokens (cdr rest)))
-              ((or (null rest) (>= len room)) (< len room))
-            (let ((token (car rest)))
-              (cond ((eq (car token) :blob)
-                     (setq len
-                           (+ len (length (car (cdr token)))
-                              (length (car (cdr (cdr token)))))))
-                    ((eq (car token) :start)
-                     (setq len (+ len (length (or (aref (cdr token) 1) "")))))
-                    ((eq (car token) :end)
-                     (setq len
-                      (+ len (length (or (aref (cdr token) 3) ""))))))))))))
+(defun rontolisp::%clojure-pp-blanks (page)
+  "The blanks held back are written after all: something follows them on
+   the line."
+  (dotimes (i (aref page 2)) (write-char #\Space (aref page 0)))
+  (setf (aref page 1) (+ (aref page 1) (aref page 2)))
+  (setf (aref page 2) 0)
+  nil)
 
-(defun rontolisp::%clojure-pp-broke (block)
-  "Note a newline taken in BLOCK: it and every enclosing block have broken,
-   and a nested block broke for each enclosing one."
-  (setf (aref block 6) t)
-  (setf (aref block 7) nil)
-  (do ((p (aref block 0) (aref p 0)))
-      ((null p))
-    (setf (aref p 6) t)
-    (setf (aref p 7) t)))
+(defun rontolisp::%clojure-pp-put (page text)
+  "TEXT written on the page's line, after the blanks held back before it;
+   the blanks TEXT ends in are held back in turn."
+  (let* ((len (length text))
+         (end
+          (do ((j len (- j 1)))
+              ((or (= j 0) (char/= (char text (- j 1)) #\Space)) j))))
+    (if (> len 0)
+        (progn
+          (rontolisp::%clojure-pp-blanks page)
+          (write-string text (aref page 0) :end end)
+          (setf (aref page 1) (+ (aref page 1) end))
+          (setf (aref page 2) (- len end))))
+    nil))
 
-(defun rontolisp::%clojure-pp-emit-nl (w nl)
-  "The newline NL taken: its block's per-line prefix and indentation follow,
-   the blanks held back are dropped."
-  (let* ((block (car (cdr (cdr nl)))) (lead (aref block 2)))
-    (rontolisp::%clojure-pp-out w (string #\Newline))
-    (setf (aref w 2) nil)
-    (if lead (rontolisp::%clojure-pp-out w lead))
-    (dotimes (i (- (aref block 5) (length (or lead ""))))
-      (rontolisp::%clojure-pp-out w " "))
-    (rontolisp::%clojure-pp-broke block)))
+(defun rontolisp::%clojure-pp-inside-p (block outer)
+  "Whether BLOCK is OUTER or lies inside it."
+  (do ((b block (aref b 0))) ((or (null b) (eq b outer)) (if b t nil))))
 
-(defun rontolisp::%clojure-pp-write-token (w token)
-  "The buffered TOKEN written out: a newline only when mandatory, or linear
-   or miser in a block that has broken."
-  (let ((kind (car token)))
-    (cond ((eq kind :blob) (rontolisp::%clojure-pp-out w (car (cdr token))))
-          ((eq kind :start)
-           (let ((block (cdr token)))
-             (if (aref block 1) (rontolisp::%clojure-pp-out w (aref block 1)))
-             (setf (aref block 4) (aref w 1))
-             (setf (aref block 5) (aref w 1))))
-          ((eq kind :end)
-           (if (aref (cdr token) 3)
-               (rontolisp::%clojure-pp-out w (aref (cdr token) 3))))
+(defun rontolisp::%clojure-pp-stretch-end (page from to block own)
+  "Where the stretch after the newline at index FROM ends: the index of the
+   first newline before TO that belongs to a block around BLOCK -- or, OWN,
+   to BLOCK itself -- and TO when there is none."
+  (let ((marks (aref page 5)) (found nil))
+    (do ((j (+ from 1) (+ j 1)))
+        ((or found (>= j to)) (or found to))
+      (let ((mark (aref marks j)))
+        (if (eq (car mark) :break)
+            (let ((b (car (cdr (cdr mark)))))
+              (if (and (rontolisp::%clojure-pp-inside-p block b)
+                       (or own (not (eq b block))))
+                  (setq found j))))))))
+
+(defun rontolisp::%clojure-pp-reaches-p (page from to)
+  "Whether the marks FROM up to TO, written on from the column the page has
+   reached, get to the right margin. The blanks held back at the end of the
+   line so far are not counted."
+  (and (aref page 3)
+       (>=
+        (+ (aref page 1) (- (aref (aref page 6) to) (aref (aref page 6) from)))
+        (aref page 3))))
+
+(defun rontolisp::%clojure-pp-miser-p (page block)
+  "Whether BLOCK opened within the miser width of the margin."
+  (and (aref page 4) (aref page 3)
+       (>= (aref block 5) (- (aref page 3) (aref page 4)))))
+
+(defun rontolisp::%clojure-pp-break (page block)
+  "A line end at a newline of BLOCK: the blanks held back go, the new line
+   starts with the block's per-line prefix and is indented as the block
+   says, and the block and those around it have broken."
+  (write-char #\Newline (aref page 0))
+  (let* ((prefix (or (aref block 2) ""))
+         (indent (aref block 6))
+         (blanks (- indent (length prefix))))
+    (write-string prefix (aref page 0))
+    (dotimes (i blanks) (write-char #\Space (aref page 0)))
+    (setf (aref page 1) (if (> blanks 0) indent (length prefix)))
+    (setf (aref page 2) 0))
+  (setf (aref block 7) t)
+  (setf (aref block 8) nil)
+  (do ((b (aref block 0) (aref b 0)))
+      ((null b))
+    (setf (aref b 7) t)
+    (setf (aref b 8) t))
+  nil)
+
+(defun rontolisp::%clojure-pp-breaks-p (page at to)
+  "Whether the newline at index AT breaks, by measure, the marks up to TO
+   being all there is to measure. A linear newline breaks if its block has
+   broken or the stretch up to the next newline of a block around it reaches
+   the margin; a miser newline as a linear one, in a miser block only; a
+   fill newline if a block inside its block has broken since its block last
+   did, or the stretch up to its block's next newline reaches the margin,
+   or, in a miser block, as a linear one; a mandatory one always."
+  (let* ((mark (aref (aref page 5) at))
+         (kind (car (cdr mark)))
+         (block (car (cdr (cdr mark))))
+         (as-linear
+          (or (aref block 7)
+              (rontolisp::%clojure-pp-reaches-p page at
+               (rontolisp::%clojure-pp-stretch-end page at to block nil)))))
+    (cond ((= kind 3) t)
+     ((= kind 0) as-linear)
+     ((= kind 1) (and (rontolisp::%clojure-pp-miser-p page block) as-linear))
+     (t (or (aref block 8)
+            (rontolisp::%clojure-pp-reaches-p page at
+             (rontolisp::%clojure-pp-stretch-end page at to block t))
+            (and (rontolisp::%clojure-pp-miser-p page block) as-linear))))))
+
+(defun rontolisp::%clojure-pp-place (page mark)
+  "MARK, which is no newline, takes its place on the page."
+  (let ((kind (car mark)))
+    (cond ((eq kind :text) (rontolisp::%clojure-pp-put page (car (cdr mark))))
+          ((eq kind :open)
+           (let ((block (car (cdr mark))))
+             (rontolisp::%clojure-pp-blanks page)
+             (rontolisp::%clojure-pp-put page (or (aref block 1) ""))
+             (setf (aref block 5) (+ (aref page 1) (aref page 2)))
+             (setf (aref block 6) (aref block 5))))
+          ((eq kind :close)
+           (rontolisp::%clojure-pp-blanks page)
+           (rontolisp::%clojure-pp-put page (or (aref (car (cdr mark)) 3) "")))
           ((eq kind :indent)
-           (let ((block (car (cdr (cdr (cdr token))))))
-             (setf (aref block 5)
-                   (+ (car (cdr (cdr token)))
-                      (if (eq (car (cdr token)) :block)
-                          (aref block 4)
-                          (aref w 1))))))
-          (t (let ((how (car (cdr token))))
-               (if (or (eq how :mandatory)
-                    (and (not (eq how :fill)) (aref (car (cdr (cdr token))) 6)))
-                   (rontolisp::%clojure-pp-emit-nl w token)
-                   (rontolisp::%clojure-pp-blanks w))
-               (setf (aref w 2) nil))))))
+           (let ((block (car (cdr (cdr (cdr mark)))))
+                 (n (car (cdr (cdr mark)))))
+             (rontolisp::%clojure-pp-blanks page)
+             (setf (aref block 6)
+              (+ n (if (= (car (cdr mark)) 0) (aref block 5) (aref page 1))))))
+          (t nil))
+    nil))
 
-(defun rontolisp::%clojure-pp-write-tokens (w tokens force)
-  "TOKENS written out in order, the blanks of each write held back until the
-   next; with FORCE the last ones are written too."
-  (dolist (token tokens)
-    (if (not (eq (car token) :nl)) (rontolisp::%clojure-pp-blanks w))
-    (rontolisp::%clojure-pp-write-token w token)
-    (setf (aref w 2) (if (eq (car token) :blob) (car (cdr (cdr token))) nil)))
-  (if force (rontolisp::%clojure-pp-blanks w)))
+(defun rontolisp::%clojure-pp-by-history (page from to)
+  "The marks FROM up to TO placed, their newlines settled by history: only
+   a mandatory one breaks, and a linear or miser one of a block that has
+   broken; before any other the blanks held back are written."
+  (let ((marks (aref page 5)))
+    (do ((at from (+ at 1)))
+        ((>= at to))
+      (let ((mark (aref marks at)))
+        (if (eq (car mark) :break)
+            (let ((kind (car (cdr mark))) (block (car (cdr (cdr mark)))))
+              (if (or (= kind 3) (and (< kind 2) (aref block 7)))
+                  (rontolisp::%clojure-pp-break page block)
+                  (rontolisp::%clojure-pp-blanks page)))
+            (rontolisp::%clojure-pp-place page mark))))
+    nil))
 
-(defun rontolisp::%clojure-pp-ancestor-p (a b)
-  "Whether the block A strictly encloses the block B."
-  (let ((found nil))
-    (do ((p (aref b 0) (aref p 0)))
-        ((or found (null p)) found)
-      (if (eq p a) (setq found t)))))
-
-(defun rontolisp::%clojure-pp-section (tokens subsection)
-  "The tokens after the newline heading TOKENS up to the next newline of an
-   enclosing block (of its own block too for a SUBSECTION), as a fresh list,
-   and the rest from that newline on: (section . rest)."
-  (let ((block (car (cdr (cdr (car tokens))))) (acc nil) (rest (cdr tokens)))
+(defun rontolisp::%clojure-pp-by-measure (page from to)
+  "The marks FROM up to TO, which do not fit the line, laid out as far as
+   they settle; answers the index of the first mark left open, FROM itself
+   when nothing could be settled. Text is placed up to the first newline,
+   and that one breaks or not by measure. If what is then left fits, it
+   stays open -- the newline too, when it did not break, to be measured
+   again once more is known. If it does not fit, the newline's stretch (up
+   to the next newline of a block around its own) is laid out the same way
+   by itself; a stretch that fits and has nothing to settle is placed whole,
+   by history."
+  (let ((marks (aref page 5)) (at from))
     (do ()
-        ((or (null rest)
-             (and (eq (car (car rest)) :nl)
-                  (let ((owner (car (cdr (cdr (car rest))))))
-                    (or (rontolisp::%clojure-pp-ancestor-p owner block)
-                        (and subsection (eq owner block))))))
-         (cons (nreverse acc) rest))
-      (setq acc (cons (car rest) acc))
-      (setq rest (cdr rest)))))
-
-(defun rontolisp::%clojure-pp-take-p (w tokens)
-  "Whether the newline heading the buffered TOKENS is taken, its section and
-   subsection read from them only when the decision needs them."
-  (let* ((nl (car tokens))
-         (how (car (cdr nl)))
-         (block (car (cdr (cdr nl))))
-         (margin (aref w 5))
-         (miser (aref w 6))
-         (miser-p (and miser margin (>= (aref block 4) (- margin miser)))))
-    (cond ((eq how :mandatory) t)
-          ((eq how :linear)
-           (or (aref block 6)
-               (not
-                (rontolisp::%clojure-pp-fits w
-                 (car (rontolisp::%clojure-pp-section tokens nil))))))
-          ((eq how :miser)
-           (and miser-p
-                (or (aref block 6)
-                    (not
-                     (rontolisp::%clojure-pp-fits w
-                      (car (rontolisp::%clojure-pp-section tokens nil)))))))
-          (t
-           (or (aref block 7)
-               (not
-                (rontolisp::%clojure-pp-fits w
-                 (car (rontolisp::%clojure-pp-section tokens t))))
-               (and miser-p
-                    (or (aref block 6)
-                        (not
-                         (rontolisp::%clojure-pp-fits w
-                          (car
-                           (rontolisp::%clojure-pp-section tokens nil)))))))))))
-
-(defun rontolisp::%clojure-pp-write-section (w tokens)
-  "Write TOKENS up to their first newline, decide it, and while what follows
-   does not fit decide the newlines of the section after it the same way;
-   answers the tokens left (TOKENS itself when nothing could be written)."
-  (let ((before nil) (rest tokens))
-    (do ()
-        ((or (null rest) (eq (car (car rest)) :nl)))
-      (setq before (cons (car rest) before))
-      (setq rest (cdr rest)))
-    (if before (rontolisp::%clojure-pp-write-tokens w (nreverse before) nil))
-    (if (null rest)
-        nil
-        (let ((result
-               (if (rontolisp::%clojure-pp-take-p w rest)
-                   (progn
-                     (rontolisp::%clojure-pp-emit-nl w (car rest))
-                     (cdr rest))
-                   rest)))
-          (if (rontolisp::%clojure-pp-fits w result)
-              result
-              (let* ((split (rontolisp::%clojure-pp-section rest nil))
-                     (section (car split))
-                     (remainder (cdr split))
-                     (left (rontolisp::%clojure-pp-write-section w section)))
-                (if (eq left section)
+        ((or (>= at to) (eq (car (aref marks at)) :break)))
+      (rontolisp::%clojure-pp-place page (aref marks at))
+      (setq at (+ at 1)))
+    (if (>= at to)
+        to
+        (let* ((block (car (cdr (cdr (aref marks at)))))
+               (end (rontolisp::%clojure-pp-stretch-end page at to block nil))
+               (open
+                (if (rontolisp::%clojure-pp-breaks-p page at to)
                     (progn
-                      (rontolisp::%clojure-pp-write-tokens w section nil)
-                      remainder)
-                    (append left remainder))))))))
+                      (rontolisp::%clojure-pp-break page block)
+                      (+ at 1))
+                    at)))
+          (if (not (rontolisp::%clojure-pp-reaches-p page open to))
+              open
+              (let ((inner
+                     (rontolisp::%clojure-pp-by-measure page (+ at 1) end)))
+                (if (= inner (+ at 1))
+                    (progn
+                      (rontolisp::%clojure-pp-by-history page (+ at 1) end)
+                      end)
+                    inner)))))))
 
-(defun rontolisp::%clojure-pp-write-line (w)
-  "Decide the buffer's newlines while it does not fit on the line."
-  (let ((buffer (aref w 3)) (done nil))
+(defun rontolisp::%clojure-pp-arrive (page limit)
+  "The mark before index LIMIT has just been made. Until a first newline is
+   made every mark is placed as it comes. From then on the page WAITS: what
+   is open stays open while it fits the line, and is laid out by measure,
+   as far as that settles it, whenever it does not."
+  (let ((marks (aref page 5)) (stuck nil))
     (do ()
-        (done)
-      (setf (aref w 3) buffer)
-      (if (rontolisp::%clojure-pp-fits w buffer)
-          (setq done t)
-          (let ((left (rontolisp::%clojure-pp-write-section w buffer)))
-            (if (eq left buffer) (setq done t) (setq buffer left)))))
-    (setf (aref w 8) (last (aref w 3)))))
+        ((or (aref page 8) (>= (aref page 7) limit)))
+      (let ((mark (aref marks (aref page 7))))
+        (if (eq (car mark) :break)
+            (setf (aref page 8) t)
+            (progn
+              (rontolisp::%clojure-pp-place page mark)
+              (setf (aref page 7) (+ (aref page 7) 1))))))
+    (do ()
+        ((or stuck (>= (aref page 7) limit)
+             (not (rontolisp::%clojure-pp-reaches-p page (aref page 7) limit))))
+      (let ((open (rontolisp::%clojure-pp-by-measure page (aref page 7) limit)))
+        (if (= open (aref page 7)) (setq stuck t) (setf (aref page 7) open))))
+    nil))
 
-(defun rontolisp::%clojure-pp-buffer (w token)
-  "TOKEN added to W's buffer, which is written out as far as it no longer
-   fits; the buffer's last cell is kept, so adding costs no walk."
-  (let ((cell (list token)))
-    (if (aref w 3) (rplacd (aref w 8) cell) (setf (aref w 3) cell))
-    (setf (aref w 8) cell))
-  (if (not (rontolisp::%clojure-pp-fits w (aref w 3)))
-      (rontolisp::%clojure-pp-write-line w)))
+(defun rontolisp::%clojure-pp-close-out (page upto)
+  "The record before index UPTO is closed: what is still open is settled by
+   history."
+  (rontolisp::%clojure-pp-by-history page (aref page 7) upto)
+  (setf (aref page 7) upto)
+  nil)
 
-(defun rontolisp::%clojure-pp-text (w s)
-  "The text S written: its blanks held back, buffered while a newline is
-   pending; a newline in it forces the buffer out and starts its next line at
-   column 0 (the lines between are followed by the current block's per-line
-   prefix), as the oracle's writer does."
-  (let ((start 0) (line 0))
-    (dotimes (i (length s))
-      (if (char= (char s i) #\Newline)
-          (progn
-            (if (= line 0)
-                (let ((first (subseq s 0 i)))
-                  (if (eq (aref w 4) :buffering)
-                      (progn
-                        (rontolisp::%clojure-pp-buffer w (list :blob first ""))
-                        (rontolisp::%clojure-pp-write-line w)
-                        (rontolisp::%clojure-pp-write-tokens w (aref w 3) t)
-                        (setf (aref w 3) nil)
-                        (setf (aref w 8) nil))
-                      (progn
-                        (rontolisp::%clojure-pp-blanks w)
-                        (rontolisp::%clojure-pp-out w first)))
-                  (rontolisp::%clojure-pp-out w (string #\Newline)))
-                (progn
-                  (rontolisp::%clojure-pp-out w (subseq s start i))
-                  (rontolisp::%clojure-pp-out w (string #\Newline))
-                  (if (aref (aref w 7) 2)
-                      (rontolisp::%clojure-pp-out w (aref (aref w 7) 2)))))
-            (setq line (+ line 1))
-            (setq start (+ i 1)))))
-    (let* ((rest (subseq s start)) (end (length rest)))
-      (do ()
-          ((or (= end 0)
-               (not
-                (member (char rest (- end 1))
-                 (list #\Space #\Tab #\Return (code-char 11) (code-char 12))))))
-        (setq end (- end 1)))
-      (if (eq (aref w 4) :writing)
-          (progn
-            (rontolisp::%clojure-pp-blanks w)
-            (rontolisp::%clojure-pp-out w (subseq rest 0 end))
-            (setf (aref w 2) (subseq rest end)))
-          (rontolisp::%clojure-pp-buffer w
-           (list :blob (subseq rest 0 end) (subseq rest end)))))))
+(defun rontolisp::%clojure-pp-line-end (page upto)
+  "A line end written into the text itself closes the record before index
+   UPTO, and the next line starts at the left edge."
+  (rontolisp::%clojure-pp-close-out page upto)
+  (rontolisp::%clojure-pp-blanks page)
+  (write-char #\Newline (aref page 0))
+  (setf (aref page 1) 0)
+  nil)
 
-(defun rontolisp::%clojure-pp-layout (events root margin miser)
-  "The text of the EVENTS of a pretty print rooted at the block ROOT, as the
-   oracle's pretty writer lays them out within MARGIN and MISER."
-  (let ((w
-         (vector (make-string-output-stream) 0 nil nil
-                 :writing margin miser root nil)))
-    (dolist (event events)
-      (let ((kind (car event)))
-        (cond ((eq kind :text) (rontolisp::%clojure-pp-text w (cdr event)))
-              ((eq kind :start)
-               (setf (aref w 7) (cdr event))
-               (if (eq (aref w 4) :writing)
-                   (progn
-                     (rontolisp::%clojure-pp-blanks w)
-                     (rontolisp::%clojure-pp-write-token w event))
-                   (rontolisp::%clojure-pp-buffer w event)))
-              ((eq kind :end)
-               (setf (aref w 7) (aref (cdr event) 0))
-               (if (eq (aref w 4) :writing)
-                   (progn
-                     (rontolisp::%clojure-pp-blanks w)
-                     (rontolisp::%clojure-pp-write-token w event))
-                   (rontolisp::%clojure-pp-buffer w event)))
-              ((eq kind :nl)
-               (setf (aref w 4) :buffering)
-               (rontolisp::%clojure-pp-buffer w event))
-              ((eq kind :indent)
-               (if (eq (aref w 4) :writing)
-                   (progn
-                     (rontolisp::%clojure-pp-blanks w)
-                     (rontolisp::%clojure-pp-write-token w event))
-                   (rontolisp::%clojure-pp-buffer w event)))
-              ((eq kind :lay)
-               ;; an event carrying its own layout (cl-format's ~T and ~:;),
-               ;; so a pretty print without one carries none of it
-               (funcall (car (cdr event)) w (cdr (cdr event))))
-              ((eq kind :flush)
-               ;; the oracle's ppflush: the buffer written as it stands, the
-               ;; writer left buffering
-               (if (eq (aref w 4) :buffering)
-                   (progn
-                     (rontolisp::%clojure-pp-write-tokens w (aref w 3) t)
-                     (setf (aref w 3) nil)
-                     (setf (aref w 8) nil))
-                   (rontolisp::%clojure-pp-blanks w)))
-              (t (if (/= (aref w 1) 0)
-                     (rontolisp::%clojure-pp-text w (string #\Newline)))))))
-    (if (eq (aref w 4) :buffering)
-        (rontolisp::%clojure-pp-write-tokens w (aref w 3) t)
-        (rontolisp::%clojure-pp-blanks w))
-    (get-output-stream-string (aref w 0))))
+(defun rontolisp::%clojure-pp-lay-out (marks margin miser)
+  "The text of the record MARKS laid out within MARGIN and MISER. The marks
+   are taken in the order they were made, each one knowing only those
+   before it. A ~T, a ~:; and a fresh line read the column reached; a line
+   end in the text and the end of a nested print close the record so far,
+   as the end of the record does."
+  (let* ((n (length marks))
+         (totals (make-array (+ n 1) :initial-element 0))
+         (page
+          (vector (make-string-output-stream) 0 0 margin miser marks totals 0
+                  nil)))
+    (dotimes (s n)
+      (let ((kind (car (aref marks s))) (args (cdr (aref marks s))))
+        (cond ((eq kind :tab)
+               (setf (aref marks s)
+                     (list :text (rontolisp::%clojure-pp-tab-text (aref page 1)
+                                  (car args) (car (cdr args))
+                                  (car (cdr (cdr args))))))
+               (setq kind :text))
+              ((eq kind :eol)
+               (setf (aref marks s)
+                     (list :text (if (> (+ (aref page 1) (car (cdr args)))
+                                        (car (cdr (cdr args))))
+                                     (car args)
+                                     "")))
+               (setq kind :text)))
+        (setf (aref totals (+ s 1))
+              (+ (aref totals s) (rontolisp::%clojure-pp-width (aref marks s))))
+        (cond ((eq kind :sync) (rontolisp::%clojure-pp-close-out page (+ s 1)))
+              ((eq kind :line) (rontolisp::%clojure-pp-line-end page (+ s 1)))
+              ((eq kind :fresh)
+               (if (/= (aref page 1) 0)
+                   (rontolisp::%clojure-pp-line-end page (+ s 1))))
+              (t (rontolisp::%clojure-pp-arrive page (+ s 1))))))
+    (rontolisp::%clojure-pp-close-out page n)
+    (rontolisp::%clojure-pp-blanks page)
+    (get-output-stream-string (aref page 0))))
 
 (defun rontolisp::%clojure-pp-digits (n base)
   "The non-negative integer N in BASE (2 to 36), lowercase; empty for a
@@ -24876,354 +24823,362 @@
       (rontolisp::%clojure-pp-integer-text x 10 t nil 0 #\Space #\, 3 print-base
                                            print-radix)))
 
-;; ~F ~E ~G ~$: the digits of the number's spelling, rounded as text.
+;; ~F ~E ~G ~$. Written from the Common Lisp HyperSpec's definition of the four
+;; directives (22.3.3.1 - 22.3.3.4) and from what clj 1.12.6 prints for them
+;; (.kb/clojure-frontend.md, "clojure.jar namespaces": the generated
+;; comparisons); none of it follows another implementation's text. The model: a number is READ once into the characters
+;; of its decimal spelling and the place of its point, every directive then
+;; works on that reading alone -- scale by moving the point, round by cutting
+;; the characters, lay out by splitting them at the point. The oracle's answers
+;; for what is no ordinary number fall out of the same reading: -0.0 is not
+;; negative, so its minus sign is one of its characters, and NaN and the
+;; infinities are read as the letters Java spells them with.
 
-(defun rontolisp::%clojure-pp-zeros (n)
-  "N zeros, none for N below one."
+(defun rontolisp::%clojure-pp-fl-zeros (n)
+  "N zero characters, none for N below one."
   (make-string (if (> n 0) n 0) :initial-element #\0))
 
-(defun rontolisp::%clojure-pp-decimal-exponent (a)
-  "The exponent e of the positive rational A with 10^e <= A < 10^(e+1)."
+(defun rontolisp::%clojure-pp-fl-reading (all point)
+  "The reading (characters . point) of the digit text ALL whose decimal point
+   stands after its first POINT characters: leading zeros go (the point moves
+   with them), trailing zeros go, and nothing left is zero, (\"0\" . 1)."
+  (let* ((len (length all))
+         (lead
+          (do ((i 0 (+ i 1))) ((or (>= i len) (char/= (char all i) #\0)) i)))
+         (end
+          (do ((j len (- j 1)))
+              ((or (<= j lead) (char/= (char all (- j 1)) #\0)) j))))
+    (if (>= lead end)
+        (cons "0" 1)
+        (cons (subseq all lead end) (- point lead)))))
+
+(defun rontolisp::%clojure-pp-fl-spelled (text)
+  "The reading of TEXT, a number as Java spells it: digits, an optional point
+   and more digits, an optional E and a power of ten; in lower case, so the
+   letters of NaN and Infinity are read as they print."
+  (let* ((s (string-downcase text))
+         (e (position #\e s))
+         (mantissa (if e (subseq s 0 e) s))
+         (power (if e (parse-integer s :start (+ e 1)) 0))
+         (dot (position #\. mantissa)))
+    (if dot
+        (rontolisp::%clojure-pp-fl-reading (concatenate 'string
+                                            (subseq mantissa 0 dot)
+                                            (subseq mantissa (+ dot 1)))
+                                           (+ dot power))
+        (rontolisp::%clojure-pp-fl-reading mantissa
+                                           (+ (length mantissa) power)))))
+
+(defun rontolisp::%clojure-pp-fl-power (e)
+  "Ten to the E, exact for a negative E too."
+  (if (< e 0) (/ 1 (expt 10 (- e))) (expt 10 e)))
+
+(defun rontolisp::%clojure-pp-fl-ratio-double (r)
+  "The double the oracle reads the positive ratio R as: R to sixteen
+   significant digits, a tie to the even digit, then the double nearest that
+   decimal; nil when that is past the doubles or below them all."
   (let ((e
-         (- (length (princ-to-string (numerator a)))
-            (length (princ-to-string (denominator a))))))
+         (- (length (princ-to-string (numerator r)))
+            (length (princ-to-string (denominator r))))))
     (do ()
-        ((<= (expt 10 e) a))
+        ((>= r (rontolisp::%clojure-pp-fl-power e)))
       (setq e (- e 1)))
     (do ()
-        ((< a (expt 10 (+ e 1))) e)
-      (setq e (+ e 1)))))
+        ((< r (rontolisp::%clojure-pp-fl-power (+ e 1))))
+      (setq e (+ e 1)))
+    (let* ((unit (rontolisp::%clojure-pp-fl-power (- e 15)))
+           (scaled (/ r unit))
+           (whole (floor scaled))
+           (rest (- scaled whole))
+           (sixteen
+            (cond ((> rest 1/2) (+ whole 1))
+                  ((< rest 1/2) whole)
+                  ((evenp whole) whole)
+                  (t (+ whole 1))))
+           (decimal (* sixteen unit)))
+      (if (> decimal most-positive-double-float)
+          nil
+          (let ((d (coerce decimal 'double-float))) (if (= d 0) nil d))))))
 
-(defun rontolisp::%clojure-pp-ratio-double (r)
-  "The ratio R as the oracle's Ratio.doubleValue answers it: rounded half
-   even to sixteen significant digits, then to the nearest double."
-  (let* ((a (abs r))
-         (e (rontolisp::%clojure-pp-decimal-exponent a))
-         (n (round (* a (expt 10 (- 15 e)))))
-         (d
-          (cond ((> e 308) (/ 1d0 0d0))
-                ((< e -325) 0d0)
-                (t (float (* n (expt 10 (- e 15))) 1d0)))))
-    (if (< r 0) (- d) d)))
-
-(defun rontolisp::%clojure-pp-convert-ratio (x)
-  "X as the float directives read it: a ratio as a double, unless the double
-   is zero or infinite, when the ratio stays exact (the oracle's BigDecimal);
-   anything else itself."
-  (if (and (rationalp x) (not (integerp x)))
-      (let ((d (rontolisp::%clojure-pp-ratio-double x)))
-        (if (or (= d 0) (rontolisp::%clojure-symbolic-float-p d)) x d))
-      x))
-
-(defun rontolisp::%clojure-pp-exact-parts (r)
-  "The significant digits of the exact positive ratio R and the decimal
-   exponent of the first, as the oracle reads them off its BigDecimal; a
-   ratio no decimal holds is that BigDecimal's ArithmeticException."
-  (let ((den (denominator r)) (twos 0) (fives 0))
+(defun rontolisp::%clojure-pp-fl-exact (r)
+  "The reading of the positive ratio R written out in full, which only a
+   denominator of twos and fives allows; any other is the oracle's refusal
+   to divide without end."
+  (let ((rest (denominator r)) (twos 0) (fives 0))
     (do ()
-        ((/= (rem den 2) 0))
-      (setq den (/ den 2))
+        ((/= (mod rest 2) 0))
+      (setq rest (/ rest 2))
       (setq twos (+ twos 1)))
     (do ()
-        ((/= (rem den 5) 0))
-      (setq den (/ den 5))
+        ((/= (mod rest 5) 0))
+      (setq rest (/ rest 5))
       (setq fives (+ fives 1)))
-    (if (/= den 1)
+    (if (/= rest 1)
         (rontolisp::%clojure-arithmetic-exception
          "Non-terminating decimal expansion; no exact representable decimal result.")
-        (let* ((scale (max twos fives))
-               (digits (princ-to-string (* r (expt 10 scale))))
-               (end (length digits)))
-          (do ()
-              ((char/= (char digits (- end 1)) #\0))
-            (setq end (- end 1)))
-          (cons (subseq digits 0 end) (- (length digits) 1 scale))))))
+        (let* ((places (if (> twos fives) twos fives))
+               (text (princ-to-string (* r (expt 10 places)))))
+          (rontolisp::%clojure-pp-fl-reading text (- (length text) places))))))
 
-(defun rontolisp::%clojure-pp-float-parts (x)
-  "The significant digits of X and the decimal exponent of the first, as the
-   oracle reads them off X's Java spelling, lowercased: an integer's digits,
-   a double's shortest decimal (nan and infinity spelled as letters, their
-   'digits'), an exact ratio's decimal; (\"0\" . 0) for zero."
-  (if (and (rationalp x) (not (integerp x)))
-      (rontolisp::%clojure-pp-exact-parts x)
-      (let* ((s
-              (if (integerp x)
-                  (princ-to-string x)
-                  (string-downcase
-                   (rontolisp::%clojure-pp-java-double-string x))))
-             (e (position #\e s))
-             (dot (position #\. s))
-             (mantissa
-              (cond ((and (null e) (null dot)) s)
-                    ((null e)
-                     (concatenate 'string (subseq s 0 dot)
-                                  (subseq s (+ dot 1))))
-                    ((null dot) (subseq s 0 e))
-                    (t (concatenate 'string (subseq s 0 1) (subseq s 2 e)))))
-             (exponent
-              (cond (e (parse-integer s :start (+ e 1)))
-                    (dot (- dot 1))
-                    (t (- (length s) 1))))
-             (end (length mantissa))
-             (start 0))
-        (do ()
-            ((or (= end 0) (char/= (char mantissa (- end 1)) #\0)))
-          (setq end (- end 1)))
-        (do ()
-            ((or (= start end) (char/= (char mantissa start) #\0)))
-          (setq start (+ start 1)))
-        (if (= start end)
-            (cons "0" 0)
-            (cons (subseq mantissa start end) (- exponent start))))))
+(defun rontolisp::%clojure-pp-fl-read (x)
+  "X read for a float directive: (negative characters . point). An integer
+   is its digits; a double is Java's spelling of it; a ratio is the double
+   the oracle makes of it, or all of its digits where no double holds it; a
+   decimal is all of its own digits. Anything else is the oracle's refusal
+   of what is no number."
+  (cond
+        ;; a decimal through its exact value: an arm of the decimal family
+        ((rontolisp::%clojure-bd-p x)
+         (let ((r (rontolisp::%clojure-bd-rational x)))
+           (if (integerp r)
+               (rontolisp::%clojure-pp-fl-read r)
+               (cons (< r 0) (rontolisp::%clojure-pp-fl-exact (abs r))))))
+        ((not (realp x)) (rontolisp::%clojure-pp-not-a-number x))
+        ((floatp x)
+         (if (< x 0)
+             (cons t
+                   (rontolisp::%clojure-pp-fl-spelled
+                    (rontolisp::%clojure-pp-java-double-string (- x))))
+             (cons nil
+                   (rontolisp::%clojure-pp-fl-spelled
+                    (rontolisp::%clojure-pp-java-double-string x)))))
+        ((integerp x)
+         (let ((text (princ-to-string (abs x))))
+           (cons (< x 0)
+                 (rontolisp::%clojure-pp-fl-reading text (length text)))))
+        (t (let* ((r (abs x)) (d (rontolisp::%clojure-pp-fl-ratio-double r)))
+             (cons (< x 0)
+                   (if d
+                       (rontolisp::%clojure-pp-fl-spelled
+                        (rontolisp::%clojure-pp-java-double-string d))
+                       (rontolisp::%clojure-pp-fl-exact r)))))))
 
-(defun rontolisp::%clojure-pp-incremented (s)
-  "The digit string S plus one in its last place: a digit longer, a one and
-   zeros, when every digit carries."
-  (let ((i (- (length s) 1)))
-    (do ()
-        ((or (< i 0) (char/= (char s i) #\9)))
-      (setq i (- i 1)))
-    (if (< i 0)
-        (concatenate 'string "1" (rontolisp::%clojure-pp-zeros (length s)))
-        (concatenate 'string (subseq s 0 i)
-                     (string (code-char (+ (char-code (char s i)) 1)))
-                     (rontolisp::%clojure-pp-zeros (- (length s) 1 i))))))
+(defun rontolisp::%clojure-pp-fl-cut (text n)
+  "TEXT cut to its first N characters, rounded up when the first character cut
+   off is 5 or more: (kept . carried). A carry out of the first character
+   puts a 1 in front, so KEPT is then one longer than N and CARRIED is true.
+   N at or past the end keeps everything; a negative N keeps nothing."
+  (let ((len (length text)))
+    (cond ((>= n len) (cons text nil))
+          ((< n 0) (cons "" nil))
+          ((char< (char text n) #\5) (cons (subseq text 0 n) nil))
+          (t (let ((kept (subseq text 0 n)) (i (- n 1)) (done nil))
+               (do ()
+                   ((or done (< i 0)))
+                 (if (char= (char kept i) #\9)
+                     (progn
+                       (setf (char kept i) #\0)
+                       (setq i (- i 1)))
+                     (progn
+                       (setf (char kept i)
+                             (code-char (+ (char-code (char kept i)) 1)))
+                       (setq done t))))
+               (if done
+                   (cons kept nil)
+                   (cons (concatenate 'string "1" kept) t)))))))
 
-(defun rontolisp::%clojure-pp-rounded (m e d w)
-  "The digits M, the first at exponent E, rounded half up as text: to D
-   places past the point, else to what fits W columns (never left of the
-   point); answers (digits exponent carried), carried when the rounding
-   added a digit, which it then drops."
-  (if (or d w)
-      (let* ((w (if w (max 2 w) nil))
-             (at
-              (cond (d (+ e d 1)) ((>= e 0) (max (+ e 1) (- w 1))) (t (+ w e))))
-             (shift (= at 0))
-             (m1 (if shift (concatenate 'string "0" m) m))
-             (e1 (if shift (+ e 1) e))
-             (at (if shift 1 at)))
-        (cond ((< at 0) (list "0" 0 nil))
-              ((> (length m1) at)
-               (let ((kept (subseq m1 0 at)))
-                 (if (>= (char-code (char m1 at)) (char-code #\5))
-                     (let ((up (rontolisp::%clojure-pp-incremented kept)))
-                       (if (> (length up) (length kept))
-                           (list (subseq up 0 (- (length up) 1)) e1 t)
-                           (list up e1 nil)))
-                     (list kept e1 nil))))
-              (t (list m e nil))))
-      (list m e nil)))
+(defun rontolisp::%clojure-pp-fl-sign (negative at)
+  "The sign a float directive writes: - for a negative number, + under @."
+  (cond (negative "-") ((rontolisp::%clojure-truthy at) "+") (t "")))
 
-(defun rontolisp::%clojure-pp-pointed (m e d)
-  "The digits M, the first at exponent E, with their decimal point: zeros
-   between the point and a first digit right of it, and zeros after the
-   digits up to D places past the point (up to the point without D)."
-  (let* ((m1
-          (if (< e 0)
-              (concatenate 'string (rontolisp::%clojure-pp-zeros (- (- e) 1)) m)
-              m))
-         (e1 (if (< e 0) -1 e))
-         (target (if d (+ e1 d 1) (+ e1 1)))
-         (m2
-          (if (< (length m1) target)
-              (concatenate 'string m1
-               (rontolisp::%clojure-pp-zeros (- target (length m1))))
-              m1)))
-    (if (< e 0)
-        (concatenate 'string "." m2)
-        (concatenate 'string (subseq m2 0 (+ e 1)) "." (subseq m2 (+ e 1))))))
+(defun rontolisp::%clojure-pp-fl-fielded (text w overflow pad)
+  "TEXT in a field of W columns: as it is without a W; W overflow characters
+   when it is wider and there is one to write; else behind its padding."
+  (cond ((null w) text)
+        ((and overflow (> (length text) w))
+         (rontolisp::%clojure-pp-padding w overflow))
+        (t (rontolisp::%clojure-pp-pad-left text w pad))))
 
 (defun rontolisp::%clojure-pp-fixed (x w d k overflow pad at)
-  "cl-format's ~w,d,k,overflowchar,padcharF of X: D places past the point
-   (as many as the digits take without D), scaled by 10^K, signed when
-   negative or AT, right-justified in W columns, or W OVERFLOW characters
-   when it does not fit."
-  ;; a decimal through its exact value, as a ratio or an integer is read: an arm
-  ;; of the decimal family
-  (if (not (numberp x))
-      (if (rontolisp::%clojure-bd-p x)
-          (setq x (rontolisp::%clojure-bd-rational x))
-          (rontolisp::%clojure-pp-not-a-number x)))
-  (let* ((neg (< x 0))
-         (parts
-          (rontolisp::%clojure-pp-float-parts
-           (rontolisp::%clojure-pp-convert-ratio (if neg (- x) x))))
-         (mantissa (car parts))
-         (scaled (+ (cdr parts) k))
-         (signed (or (rontolisp::%clojure-truthy at) neg))
-         (sign (if signed (if neg "-" "+") ""))
-         (sign-width (if signed 1 0))
-         (append-zero (and (null d) (<= (- (length mantissa) 1) scaled)))
-         (rounded
-          (rontolisp::%clojure-pp-rounded mantissa scaled d
-                                          (if w (- w sign-width) nil)))
-         (text
-          (rontolisp::%clojure-pp-pointed (car rounded)
-                                          (if (car (cdr (cdr rounded)))
-                                              (+ (car (cdr rounded)) 1)
-                                              (car (cdr rounded))) d))
-         (text
-          (if (and w d (>= d 1) (char= (char text 0) #\0)
-                   (char= (char text 1) #\.) (> (length text) (- w sign-width)))
-              (subseq text 1)
-              text))
-         (prepend-zero (char= (char text 0) #\.)))
-    (if w
-        (let* ((signed-len (+ (length text) sign-width))
-               (prepend-zero (and prepend-zero (< signed-len w)))
-               (append-zero (and append-zero (< signed-len w)))
-               (full-len
-                (if (or prepend-zero append-zero) (+ signed-len 1) signed-len)))
-          (if (and (> full-len w) overflow)
-              (rontolisp::%clojure-pp-padding w overflow)
-              (concatenate 'string
-                           (rontolisp::%clojure-pp-padding (- w full-len) pad)
-                           sign (if prepend-zero "0" "") text
-                           (if append-zero "0" ""))))
-        (concatenate 'string sign (if prepend-zero "0" "") text
-                     (if append-zero "0" "")))))
+  "cl-format's ~w,d,k,overflowchar,padcharF of X."
+  (let* ((reading (rontolisp::%clojure-pp-fl-read x))
+         (sign (rontolisp::%clojure-pp-fl-sign (car reading) at))
+         (chars (cadr reading))
+         (point (+ (cddr reading) k))
+         (places
+          (cond (d d)
+                (w (let ((room (- w (length sign) 1 (if (> point 0) point 0)))
+                         (least (if (> point 0) 0 1)))
+                     (if (> room least) room least)))
+                (t nil)))
+         (gone nil))
+    (if places
+        (let* ((keep (+ point places))
+               (cut (rontolisp::%clojure-pp-fl-cut chars keep)))
+          (setq chars (car cut))
+          (cond ((< keep 0) (setq gone t))
+                ;; a carry out of the front: one place more ahead of the
+                ;; point, and as many characters as were asked for
+                ((cdr cut)
+                 (setq point (+ point 1))
+                 (if (> keep 0) (setq chars (subseq chars 0 keep)))))))
+    (let* ((len (length chars))
+           (whole
+            (cond (gone "")
+                  ((<= point 0) "")
+                  ((<= point len) (subseq chars 0 point))
+                  (t (concatenate 'string chars
+                      (rontolisp::%clojure-pp-fl-zeros (- point len))))))
+           (part
+            (cond (gone "")
+                  ((>= point len) "")
+                  ((>= point 0) (subseq chars point))
+                  (t (concatenate 'string
+                                  (rontolisp::%clojure-pp-fl-zeros (- point))
+                                  chars)))))
+      (if d
+          (setq part
+                (concatenate 'string part
+                 (rontolisp::%clojure-pp-fl-zeros (- d (length part)))))
+          (if (and (= (length part) 0) (not gone)
+                   (or (null w) (< (+ (length sign) (length whole) 1) w)))
+              (setq part "0")))
+      ;; nothing ahead of the point is written as a zero where the field has
+      ;; a column for it, and always when nothing follows the point either
+      (if (or (= (length whole) 0) (string= whole "0"))
+          (setq whole
+                (if (or (= (length part) 0) (null w)
+                        (< (+ (length sign) 1 (length part)) w))
+                    "0"
+                    "")))
+      (rontolisp::%clojure-pp-fl-fielded
+       (concatenate 'string sign whole "." part) w overflow pad))))
 
-(defun rontolisp::%clojure-pp-point-at (m k)
-  "The digits M with a point after the first K of them (ahead of them for a
-   negative K); K past their end is the oracle's substring refusal."
-  (cond ((< k 0) (concatenate 'string "." m))
-        ((> k (length m))
-         (rontolisp::%clojure-string-index-out-of-bounds-exception
-          (concatenate 'string "Range [0, " (princ-to-string k)
-                       ") out of bounds for length "
-                       (princ-to-string (length m)))))
-        (t (concatenate 'string (subseq m 0 k) "." (subseq m k)))))
+(defun rontolisp::%clojure-pp-fl-exponent (power e mark)
+  "The exponent of ~E: MARK (E without one), the sign, and POWER's digits,
+   zeros ahead of them up to E digits."
+  (let ((digits (princ-to-string (abs power))))
+    (concatenate 'string (if mark (rontolisp::%clojure-pp-str mark) "E")
+     (if (< power 0) "-" "+")
+     (if e (rontolisp::%clojure-pp-fl-zeros (- e (length digits))) "") digits)))
 
 (defun rontolisp::%clojure-pp-exponential (x w d e k overflow pad mark at)
-  "cl-format's ~w,d,e,k,overflowchar,padchar,exponentcharE of X: K digits
-   before the point and D after it, then the exponent MARK (E), its sign and
-   at least E digits; signed when negative or AT, right-justified in W
-   columns, or W OVERFLOW characters when it does not fit."
-  ;; a decimal through its exact value, as a ratio or an integer is read: an arm
-  ;; of the decimal family
-  (if (not (numberp x))
-      (if (rontolisp::%clojure-bd-p x)
-          (setq x (rontolisp::%clojure-bd-rational x))
-          (rontolisp::%clojure-pp-not-a-number x)))
-  (let* ((x (rontolisp::%clojure-pp-convert-ratio x))
-         (neg (< x 0))
-         (parts (rontolisp::%clojure-pp-float-parts (if neg (- x) x)))
-         (signed (or (rontolisp::%clojure-truthy at) neg))
-         (sign (if signed (if neg "-" "+") ""))
-         (sign-width (if signed 1 0))
-         (result nil))
-    (do ()
-        (result result)
-      (let* ((mantissa (car parts))
-             (scaled-exp (- (cdr parts) (- k 1)))
-             (exp-digits (princ-to-string (abs scaled-exp)))
-             (exp-text
-              (concatenate 'string (rontolisp::%clojure-pp-str (or mark #\E))
-                           (if (< scaled-exp 0) "-" "+")
-                           (if e
-                               (rontolisp::%clojure-pp-zeros
-                                (- e (length exp-digits)))
-                               "") exp-digits))
-             (exp-width (length exp-text))
-             (digits
-              (concatenate 'string (rontolisp::%clojure-pp-zeros (- k)) mantissa
-                           (if d
-                               (rontolisp::%clojure-pp-zeros
-                                (- d (- (length mantissa) 1)
-                                   (if (< k 0) (- k) 0)))
-                               "")))
-             (places
-              (cond ((> k 0) d)
-               (d (- d 1))
-               (t
-                (rontolisp::%clojure-null-pointer-exception
-                 "Cannot invoke \"Object.getClass()\" because \"x\" is null"))))
-             (rounded
-              (rontolisp::%clojure-pp-rounded digits 0 places
-               (if w (- w exp-width sign-width) nil)))
-             (kept (car rounded)))
-        (if (car (cdr (cdr rounded)))
-            (setq parts (cons kept (+ (cdr parts) 1)))
-            (let* ((full (rontolisp::%clojure-pp-point-at kept k))
-                   (append-zero (and (= k (length kept)) (null d))))
-              (setq result
-                    (if w
-                        (let* ((signed-len
-                                (+ (length full) exp-width sign-width))
-                               (prepend-zero (and (<= k 0) (/= signed-len w)))
-                               (full-len
-                                (if prepend-zero (+ signed-len 1) signed-len))
-                               (append-zero (and append-zero (< full-len w))))
-                          (if (and
-                               (or (> full-len w) (and e (> (- exp-width 2) e)))
-                               overflow)
-                              (rontolisp::%clojure-pp-padding w overflow)
-                              (concatenate 'string
-                                           (rontolisp::%clojure-pp-padding
-                                            (- w full-len (if append-zero 1 0))
-                                            pad) sign (if prepend-zero "0" "")
-                                           full (if append-zero "0" "")
-                                           exp-text)))
-                        (concatenate 'string sign (if (<= k 0) "0" "") full
-                                     (if append-zero "0" "") exp-text)))))))))
+  "cl-format's ~w,d,e,k,overflowchar,padchar,exptcharE of X."
+  (let* ((reading (rontolisp::%clojure-pp-fl-read x))
+         (sign (rontolisp::%clojure-pp-fl-sign (car reading) at))
+         (power (- (cddr reading) k))
+         (chars
+          (if (< k 0)
+              (concatenate 'string (rontolisp::%clojure-pp-fl-zeros (- k))
+                           (cadr reading))
+              (cadr reading)))
+         (keep
+          (cond (d (if (> k 0) (+ d 1) d))
+                ((<= k 0)
+                 (rontolisp::%clojure-null-pointer-exception
+                  "Cannot invoke \"Object.getClass()\" because \"x\" is null"))
+                (w (let ((room
+                          (- w (length sign) 1
+                             (length
+                              (rontolisp::%clojure-pp-fl-exponent power e
+                                                                  mark)))))
+                     (if (> room 1) room 1)))
+                (t nil))))
+    (if keep
+        (let ((cut (rontolisp::%clojure-pp-fl-cut chars keep)))
+          (setq chars (car cut))
+          ;; a carry out of the front is one power of ten more, in as many
+          ;; characters as were asked for; where none were asked for the
+          ;; oracle writes the carried 1 and leaves the power alone
+          (if (and (cdr cut) (> keep 0))
+              (progn
+                (setq power (+ power 1))
+                (setq chars (subseq chars 0 keep))))))
+    (if d
+        (setq chars
+              (concatenate 'string chars
+               (rontolisp::%clojure-pp-fl-zeros (- keep (length chars))))))
+    (if (> k (length chars))
+        (rontolisp::%clojure-string-index-out-of-bounds-exception
+         (concatenate 'string "Range [0, " (princ-to-string k)
+                      ") out of bounds for length "
+                      (princ-to-string (length chars)))))
+    (let* ((whole (if (> k 0) (subseq chars 0 k) ""))
+           (part (if (> k 0) (subseq chars k) chars))
+           (tail (rontolisp::%clojure-pp-fl-exponent power e mark)))
+      (if (and (null d) (= (length part) 0)
+           (or (null w) (< (+ (length sign) (length whole) 1 (length tail)) w)))
+          (setq part "0"))
+      (if (and (= (length whole) 0) (= (length part) 0)) (setq part "0"))
+      ;; nothing ahead of the point is written as a zero, except where
+      ;; leaving it out is what makes the text fill the field exactly
+      (if (and (= (length whole) 0)
+           (not (and w (= (+ (length sign) 1 (length part) (length tail)) w))))
+          (setq whole "0"))
+      (if (and w e overflow (> (length (princ-to-string (abs power))) e))
+          (rontolisp::%clojure-pp-padding w overflow)
+          (rontolisp::%clojure-pp-fl-fielded
+           (concatenate 'string sign whole "." part tail) w overflow pad)))))
 
 (defun rontolisp::%clojure-pp-general (x w d e k overflow pad mark at)
-  "cl-format's ~G of X: ~F, then four (or E + 2) blanks, when the number's
-   magnitude leaves its D significant digits room on both sides of the
-   point; else ~E."
-  ;; a decimal through its exact value, as a ratio or an integer is read: an arm
-  ;; of the decimal family
-  (if (not (numberp x))
-      (if (rontolisp::%clojure-bd-p x)
-          (setq x (rontolisp::%clojure-bd-rational x))
-          (rontolisp::%clojure-pp-not-a-number x)))
-  (let* ((c (rontolisp::%clojure-pp-convert-ratio x))
-         (parts (rontolisp::%clojure-pp-float-parts (if (< c 0) (- c) c)))
-         (n (if (and (floatp c) (= c 0)) 0 (+ (cdr parts) 1)))
-         (ee (if e (+ e 2) 4))
-         (digits (or d (max (length (car parts)) (min n 7))))
+  "cl-format's ~w,d,e,k,overflowchar,padchar,exptcharG of X: ~F in a field
+   narrowed by the exponent's columns, which stay blank, when the digits fit
+   without one; ~E otherwise."
+  (let* ((reading (rontolisp::%clojure-pp-fl-read x))
+         (n (if (and (floatp x) (= x 0)) 0 (cddr reading)))
+         (blank (if e (+ e 2) 4))
+         (digits
+          (or d
+              (let ((q (length (cadr reading))) (least (if (< n 7) n 7)))
+                (if (> q least) q least))))
          (places (- digits n)))
     (if (and (<= 0 places) (<= places digits))
         (concatenate 'string
-                     (rontolisp::%clojure-pp-fixed x (if w (- w ee) nil) places
-                                                   0 overflow pad at)
-                     (rontolisp::%clojure-pp-padding ee #\Space))
+                     (rontolisp::%clojure-pp-fixed x (if w (- w blank) nil)
+                                                   places 0 overflow pad at)
+                     (rontolisp::%clojure-pp-padding blank #\Space))
         (rontolisp::%clojure-pp-exponential x w d e k overflow pad mark at))))
 
 (defun rontolisp::%clojure-pp-dollar (x d n w pad colon at)
-  "cl-format's ~d,n,w,padchar$ of X: D places past the point, at least N
-   digits before it, signed when negative or AT (ahead of the padding under
-   COLON), right-justified in W columns. A long is taken as it is, any other
-   number as its double (Math/abs's two arms)."
-  (cond
-   ((null x)
-    (rontolisp::%clojure-null-pointer-exception
-     "Cannot invoke \"java.lang.Number.doubleValue()\" because \"x\" is null"))
-   ;; a decimal as its double, like a ratio: an arm of the decimal family
-   ((rontolisp::%clojure-bd-p x) (setq x (rontolisp::%clojure-bd-double x)))
-   ((not (numberp x)) (rontolisp::%clojure-pp-not-a-number x))
-   ((and (integerp x) (typep x '(signed-byte 64))))
-   ((integerp x) (setq x (float x 1d0)))
-   ((rationalp x) (setq x (rontolisp::%clojure-pp-ratio-double x))))
-  (let* ((neg (< x 0))
-         (parts (rontolisp::%clojure-pp-float-parts (abs x)))
-         (signed (or (rontolisp::%clojure-truthy at) neg))
-         (sign (if signed (if neg "-" "+") ""))
-         (rounded
-          (rontolisp::%clojure-pp-rounded (car parts) (cdr parts) d nil))
-         (text
-          (rontolisp::%clojure-pp-pointed (car rounded)
-                                          (if (car (cdr (cdr rounded)))
-                                              (+ (car (cdr rounded)) 1)
-                                              (car (cdr rounded))) d))
-         (full
-          (concatenate 'string
-                       (rontolisp::%clojure-pp-zeros (- n (position #\. text)))
-                       text))
-         (colon (rontolisp::%clojure-truthy colon)))
-    (concatenate 'string (if colon sign "")
-     (rontolisp::%clojure-pp-padding (- w (length full) (if signed 1 0)) pad)
-     (if colon "" sign) full)))
+  "cl-format's ~d,n,w,padchar$ of X: D digits past the point, at least N
+   ahead of it, in a field of W columns; the sign leads the padding under
+   the colon and follows it otherwise. The oracle takes every number as a
+   double here, so an integer past sixteen digits ends in zeros."
+  (let* ((value
+          (cond ;; a decimal as its double: an arm of the decimal family
+                ((rontolisp::%clojure-bd-p x) (rontolisp::%clojure-bd-double x))
+                ((integerp x) (float x))
+                ((rationalp x)
+                 (or (rontolisp::%clojure-pp-fl-ratio-double (abs x))
+                     (float x)))
+                (t x)))
+         (reading
+          (rontolisp::%clojure-pp-fl-read (if (realp value) (abs value) value)))
+         (sign
+          (rontolisp::%clojure-pp-fl-sign
+           (if (rationalp x) (< x 0) (and (realp value) (< value 0))) at))
+         (point (cddr reading))
+         (cut (rontolisp::%clojure-pp-fl-cut (cadr reading) (+ point d)))
+         (chars (car cut)))
+    (if (cdr cut) (setq point (+ point 1)))
+    (if (< (+ point d) 0)
+        (progn
+          (setq chars "0")
+          (setq point 1)))
+    (let* ((len (length chars))
+           (whole
+            (cond ((<= point 0) "")
+                  ((<= point len) (subseq chars 0 point))
+                  (t (concatenate 'string chars
+                      (rontolisp::%clojure-pp-fl-zeros (- point len))))))
+           (part
+            (cond ((>= point len) "")
+                  ((>= point 0) (subseq chars point))
+                  ((< (+ point d) 0) "")
+                  (t (concatenate 'string
+                                  (rontolisp::%clojure-pp-fl-zeros (- point))
+                                  chars))))
+           (number
+            (concatenate 'string
+                         (rontolisp::%clojure-pp-fl-zeros (- n (length whole)))
+                         whole "." part
+                         (rontolisp::%clojure-pp-fl-zeros (- d (length part)))))
+           (blanks
+            (rontolisp::%clojure-pp-padding (- w (length sign) (length number))
+                                            pad)))
+      (if (rontolisp::%clojure-truthy colon)
+          (concatenate 'string sign blanks number)
+          (concatenate 'string blanks sign number)))))
 
 ;; ~(...~): one conversion per write, as the oracle's writers convert each
 ;; string and each character written through them.

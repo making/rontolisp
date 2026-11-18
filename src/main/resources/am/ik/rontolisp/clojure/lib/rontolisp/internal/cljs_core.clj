@@ -170,30 +170,29 @@
 ;; equality and hashing
 
 (defn equiv-sequential
-  "Whether y is sequential and holds x's members in order, compared by =."
+  "Whether y is sequential, as x is, and the two hold equal members, by =,
+  in the same order."
   [x y]
-  (boolean
-    (when (sequential? y)
-      (if (and (counted? x) (counted? y) (not (== (count x) (count y))))
-        false
-        (loop [xs (seq x) ys (seq y)]
-          (cond (nil? xs) (nil? ys)
-                (nil? ys) false
-                (= (first xs) (first ys)) (recur (next xs) (next ys))
-                :else false))))))
+  (and (sequential? y)
+       (loop [xs (seq x) ys (seq y)]
+         (cond (and (nil? xs) (nil? ys)) true
+               (or (nil? xs) (nil? ys)) false
+               (= (first xs) (first ys)) (recur (next xs) (next ys))
+               :else false))))
 
 (defmacro caching-hash
-  "The hash cached in the mutable field hash-key, computed by hash-fn of coll
-  and stored there the first time."
+  "The hash of coll kept in the mutable field hash-key, which holds nil
+  until it is asked for: (hash-fn coll) the first time, stored in the field,
+  and the field's value from then on."
   [coll hash-fn hash-key]
-  `(let [h# ~hash-key]
-     (if-not (nil? h#)
-       h#
-       (let [h# (~hash-fn ~coll)]
-         (set! ~hash-key h#)
-         h#))))
+  `(or ~hash-key
+       (let [computed# (~hash-fn ~coll)]
+         (set! ~hash-key computed#)
+         computed#)))
 
-;; a chunk over an array, the one cljs.core's chunked seqs hand out
+;; a chunk over an array, the one cljs.core's chunked seqs hand out: the
+;; members of arr from off up to end, counted and indexed from off, reduced
+;; in order, and -drop-first the chunk past its first member
 
 (deftype ArrayChunk [arr off end]
   clojure.lang.Counted
@@ -201,14 +200,12 @@
   clojure.lang.Indexed
   (nth [_ i] (aget arr (+ off i)))
   (nth [_ i not-found]
-    (if (and (>= i 0) (< i (- end off)))
-      (aget arr (+ off i))
-      not-found))
+    (if (< -1 i (- end off)) (aget arr (+ off i)) not-found))
   IChunk
   (-drop-first [_]
-    (if (== off end)
-      (throw (RuntimeException. "-drop-first of empty chunk"))
-      (ArrayChunk. arr (inc off) end)))
+    (when-not (< off end)
+      (throw (RuntimeException. "-drop-first of empty chunk")))
+    (ArrayChunk. arr (inc off) end))
   clojure.lang.IReduce
   (reduce [this f]
     (if (== off end)

@@ -60,6 +60,10 @@ class ClojureDepsAliasesTest {
 		return new ClojureSourcePath(project().withAliases(aliases), null).describeRoots();
 	}
 
+	private static String rootsOf(Map<String, String> files, String... aliases) {
+		return new ClojureSourcePath(new MemoryClojureFiles(files).withAliases(aliases), null).describeRoots();
+	}
+
 	@Test
 	void theResolveArgumentsChooseTheCoordinates() {
 		assertThat(roots()).isEqualTo(": ., src, a1/src, b/src, c/src");
@@ -72,6 +76,29 @@ class ClojureDepsAliasesTest {
 		assertThat(roots(":ov", ":df")).isEqualTo(": ., src, a2/src, b/src, n/src, d/src");
 		// an extra dep joins the top level
 		assertThat(roots(":ex")).isEqualTo(": ., src, a1/src, b/src, d/src, c/src");
+		// asked of clj 1.12.6 (2026-11-18): an override wins over a default; its own
+		// exclusions hold and the replaced coordinate's do not; one nothing uses is not
+		// read; the coordinate it replaces is still checked where it is written
+		Map<String, String> files = new LinkedHashMap<>();
+		files.put("deps.edn", """
+				{:deps {my/a {:local/root "a"}}
+				 :aliases {:both {:override-deps {my/c {:local/root "c2"}} :default-deps {my/c {:local/root "c3"}}}
+				           :excl {:override-deps {my/c {:local/root "c2" :exclusions [my/d]}}}
+				           :unused {:override-deps {my/zz {:local/root "nowhere"}}}
+				           :x {:override-deps {my/x {:local/root "c3"}}}}}
+				""");
+		files.put("a/deps.edn", "{:deps {my/c {:local/root \"../c1\" :exclusions [my/e]}}}");
+		files.put("c1/deps.edn", "{}");
+		files.put("c2/deps.edn", "{:deps {my/d {:local/root \"../d\"} my/e {:local/root \"../e\"}}}");
+		files.put("c3/deps.edn", "{}");
+		files.put("d/deps.edn", "{}");
+		files.put("e/deps.edn", "{}");
+		assertThat(rootsOf(files, ":both")).isEqualTo(": ., src, a/src, c2/src, d/src, e/src");
+		assertThat(rootsOf(files, ":excl")).isEqualTo(": ., src, a/src, c2/src, e/src");
+		assertThat(rootsOf(files, ":unused")).isEqualTo(": ., src, a/src, c1/src");
+		files.put("a/deps.edn", "{:deps {my/x {:local/root \"../missing\"}}}");
+		assertThatThrownBy(() -> rootsOf(files, ":x")).isInstanceOf(LispReadException.class)
+			.hasMessage("Local lib my/x not found: missing");
 	}
 
 	@Test

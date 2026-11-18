@@ -1523,12 +1523,21 @@ the merged map's `:paths`, every library `ClojureDepsGraph.resolve` selects in t
 order, then `Found.builtin`. Every rule below was verified on `clj` 1.12.6.1673
 (`clj -Srepro -Spath` over fixture trees -- a `file:` Maven repository with
 `:mvn/local-repo` seeded from `~/.m2` minus its `_remote.repositories`, `file://` git
-repositories, `GITLIBS` set; tools.deps read from the CLI jar).
-- **Maps** (`ClojureDepsEdn`): the oracle's root `deps.edn` (`ROOT_TEXT`, verbatim), the
-  user-level one, the project's (nearest at or above the entry file; the oracle reads the
-  working directory's), merged like `merge-edns` (a map value merges, anything else
-  replaces). A `:local/root` library's map merges over the root map alone (`deps-map`), so
-  its `:paths` default to `["src"]`. Read by `ClojureReader.forEdn` (any tagged literal is
+repositories, `GITLIBS` set). In October 2026 tools.deps was also read from the CLI jar,
+and the selection and the root map were written from that reading; both were deleted and
+written again on 2026-11-18 from the published reference and the CLI's answers alone
+(`.kb/java-frontend-provenance.md`; the two bullets say how).
+- **Maps** (`ClojureDepsEdn`): the root map, the user-level one, the project's (nearest at
+  or above the entry file; the oracle reads the working directory's), merged left to right
+  (a map value merges into the one before it, anything else replaces it). The root map
+  (`ClojureDepsEdn.rootMap`) is stated from what `clj` answers in an empty directory with no
+  user map, not from the oracle's root file, which is neither read nor copied (2026-11-18):
+  `-Spath` is `src` and the clojure jar of its version; `-A:test -Spath` adds `test`;
+  `-X:deps aliases` lists `:deps` and `:test` as `(root)`; `-A:deps -Spath` has the one tool
+  library (with what it depends on) and no `src`; the two repositories are the reference's documented defaults; the
+  basis the CLI hands a program (`clojure.basis`) holds exactly those keys. Until then the
+  file's text stood here verbatim (`ROOT_TEXT`). A `:local/root` library's map merges over
+  the root map alone, so its `:paths` default to `["src"]`. Read by `ClojureReader.forEdn` (any tagged literal is
   data); one value; no repeated key (checked here: the code reader checks set elements
   only).
 - **Validation** in the oracle's words, `Error validating deps in F. Found: v, expected: p,
@@ -1539,21 +1548,75 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   valid `deps.edn` of a dependency its user cannot edit. Registered qualified keys
   (`:mvn/version`, `:local/root`, `:git/*`, `:deps/root`, `:deps/manifest`) are checked
   wherever a map holds one, like `s/keys`.
-- **Selection** (`ClojureDepsGraph`, a port of `expand-deps` and `flatten-libs`): breadth
-  first, `include-coord?`'s order (top, excluded, use-top, parent-missing, new, same,
-  newer, older), `update-excl` (a same-version revisit queues only what an earlier visit's
-  exclusions cut and this one does not exclude: `a4 (excl z4)` + `b4` includes `z4` in
-  either order), `deselect-orphans`, then every tree path sorted by length and lib by lib.
-  `Lib.compareTo` is `Symbol.compareTo` (namespace, then name), not the `ns/name` string.
-  Maven versions by `ClojureMavenVersions`, a port of `GenericVersionScheme`
-  (maven-resolver-util 1.9.27) from its class files, pinned by the oracle's 121x121 sign
-  matrix; local roots equal or `No known ancestor relationship`; two types `Unable to compare
-  versions`; git commits by descent (`Procurer.compareGit`, the first stays while unfetched).
-  The Maven graphs the oracle resolved from a `file:` repository fixture (newest wins,
-  orphans, exclusion narrowing, order, cycles) are pinned through
-  `ClojureDepsGraphTest.FakeRepository`; over fetched descriptors by `ClojureDepsFetchTest`.
-  `:override-deps`/`:default-deps` (alias arguments) are `choose-coord`
-  (`ClojureDepsGraph.chooseCoord`), canonicalized against the project when first used.
+- **Selection** (`ClojureDepsGraph`): the rules of the published reference ("Dependency
+  Expansion": breadth first, a top-level dep always wins, else the newest version, an
+  exclusion holds below the coordinate naming it and loses to another path bringing the
+  library, what only a replaced version brought is dropped), and for everything the
+  reference leaves open the oracle's answers. **Written 2026-11-18 from those two alone**:
+  the walk before it was tools.deps' own, translated function by function, and was deleted,
+  not edited; nobody read tools.deps for the new one. The answers came from `clj -Srepro
+  -Spath` and `-Stree` over a `file:` Maven repository and `:local/root` trees: forty
+  constructed Maven graphs and some thirty local trees, then the classpaths of 1,500
+  generated graphs (up to eight libraries in two or three versions, exclusions on up to a
+  third of the edges, cycles), every one identical here -- and identical under the walk
+  this replaced, so nothing observable moved. What they showed, each a case of
+  `ClojureDepsGraphTest`:
+  - **Waves.** Every dependency of one depth is decided, in order, before the dependencies
+    of any library taken at that depth are read. So a refusal met deciding (a `nil`
+    coordinate, two roots that do not compare) comes before one met reading (a dependency's
+    missing root); every top-level coordinate is made canonical before anything is opened;
+    a library replaced within its own wave still has its dependencies read (the replaced
+    `words 1.0` of `ClojureDepsFetchCliTest` has its POM fetched) and each is then turned
+    away. A written coordinate is made canonical where it is written, also one then
+    turned away (below a top-level library of its name, below its parent's own exclusion,
+    under an override); a `nil` one is refused when decided, so not below its parent's own
+    exclusion, which drops it before.
+  - **Routes.** A library keeps, per version, every route (the libraries from the top
+    down to its parent) it was taken on; none is removed. A dependency is considered only
+    while its parent's selected version was taken on the route it hangs from AND the parent
+    hangs, on some route, from a library whose selected version holds it. The second half
+    is one step, not the whole route: a library reached through a replaced grandparent is
+    still served while another parent holds it.
+  - **Replacing.** A newer version replaces the selected one; every OTHER library whose
+    selected version was taken only on routes through the replaced one loses its selection
+    at once. A library with another route keeps it; a dependency of it already taken
+    below the dead route is gone all the same, its own one route running through the
+    replaced version, while one decided only afterwards is served (the `q4b` and `q4`
+    graphs of the test). Losing the
+    selection is losing the claim: an older version arriving later is taken, and the same
+    version arriving later has its dependencies offered again. The replacing library is
+    exempt even when its own route came through the version it replaces (a cycle): it
+    stays selected, brings nothing while nothing else holds it, and is served again once
+    another route reaches it.
+  - **Exclusions.** A coordinate's own `:exclusions` drop its direct dependencies when
+    they are read; the ones inherited along the route turn a dependency away when it is
+    decided. A version met again offers what every earlier coordinate of it excluded
+    itself and this one does not -- its own exclusions only: a dependency an ancestor
+    excluded is not offered again on a clean path (`a (excl y) -> x -> y` + `b -> x`: no
+    `y`). A library taken again after losing its selection starts that count over.
+  - **Equal versions spelled differently** (`1.0`, `1.0.0`) are the first, and the second
+    adds no route.
+  - **Order**: every route of each selected version, sorted by length and then library by
+    library, the library itself last; a library sits at its first. A route that no longer
+    stands still places (so a library can sit above its only living parent).
+    `Lib.compareTo` is by namespace, then name, not the `ns/name` string.
+  - **Versions**: Maven versions by `ClojureMavenVersions`, a port of `GenericVersionScheme`
+    (maven-resolver-util 1.9.27, Apache-2.0) from its class files, pinned by the oracle's
+    121x121 sign matrix; local roots equal or `No known ancestor relationship`; two types
+    `Unable to compare versions`; git commits by descent (`Procurer.compareGit`, the first
+    stays while unfetched).
+  - **`:override-deps`/`:default-deps`** (alias arguments): the override, else the written
+    coordinate, else the default, wherever the library appears, top level included; made
+    canonical against the project when first used (one nothing uses is never read); the
+    override's own exclusions hold and the replaced coordinate's do not
+    (`ClojureDepsAliasesTest`).
+  - Libraries to prepare are refused together, named in the order the walk first took them.
+  - Rejected: keeping the old walk under an EPL notice (user decision, 2026-11-18). Tried
+    against the first 940 answers and discarded, with the graphs each got wrong: no
+    "parent is held" half (37); that half over the whole route instead of one step (2), or
+    satisfied by any selected version of the grandparent (1); on a replacement, also
+    counting routes through versions replaced earlier (4), or unselecting whatever has no
+    standing route left (4-5).
 - **Procurer** (`ClojureDepsProcurer`, the oracle's extensions): `:local/root` canonical
   (`SourceLoader.canonicalPath`, `toRealPath`) and checked (`Local lib X not found: R`); a
   manifest `:deps`, `:jar`, `:pom` (below), none (`Manifest file not found ...`) or
@@ -1699,8 +1762,13 @@ repositories, `GITLIBS` set; tools.deps read from the CLI jar).
   `-A:x` is an option, `-M`/`-X` end the options (clj's order: M/X aliases, then every
   `-A`'s). `-M` = `:main-opts` (last wins) ++ args into `clojure.main`: `-m ns` is a
   generated program `(require 'ns)` + `(apply ns/-main *command-line-args*)`, a path a
-  script, nothing the REPL; `-e`/`-i`/`--report` refused. `-X` is `clojure.run.exec` ported:
-  `arg-spec` (a function reading wins when both fit), `qualify-fn`, `apply-overrides`, the
+  script, nothing the REPL; `-e`/`-i`/`--report` refused. `-X` (`ClojureMain.exec`) is written
+  from the CLI reference's `-X` grammar (`[fn] [key value]* [map]`) and clj's answers to
+  each shape of command line (2026-10-08, re-asked 2026-11-18 when the first version,
+  which the record called a port of the CLI's exec namespace, was deleted and written
+  again): a first symbol is the function whenever what follows pairs up (a map allowed
+  last), `:ns-aliases` then `:ns-default` qualify it, a vector key is a path (an empty one
+  the key nil), the last map's entries replace without merging in depth, the
   map printed by `ClojureEdn.print` under `quote`. The command line's arguments are baked as
   `(set! *command-line-args* (seq (concat [..] *command-line-args*)))`, so `-o` keeps them
   ahead of the artifact's own. The project is the working directory's (`ClojureBasis.create`
@@ -2185,7 +2253,13 @@ persistent-sorted-set bullet.
     port's seq type steps to the value it makes), `pr-str*`, `pr-writer`, `-write`,
     `pr-sequential-writer` (cut at `*print-length*` and `*print-level*`), `equiv-sequential`,
     `caching-hash` (a macro setting the mutable field), `lookup-contains?`, `js-number`,
-    `js-slice`; its `print-method` of `IPrintWithWriter`'s interface prints a type implementing
+    `js-slice`. Each is written from what a port calling the name expects, ClojureScript's
+    source unopened; j92 (2026-11-18) found three bodies that were ClojureScript's own
+    carried over (`equiv-sequential`, `caching-hash`, `ArrayChunk`'s `nth` and
+    `-drop-first`) and wrote them again from that contract -- equal members in order; the
+    field or, the first time, the computed hash stored in it; the array's members from
+    `off` up to `end` -- checked equal to the old ones over 352 pairs and the chunk's
+    members. Its `print-method` of `IPrintWithWriter`'s interface prints a type implementing
     it through its `-pr-writer` ("Dispatch", a protocol interface's row). `cljs.core/x` is that
     namespace's var, else `clojure.core`'s.
   - Protocol stand-ins (`ClojureScriptPort.STANDINS`): in a `deftype` or `reify` body a
@@ -2832,10 +2906,19 @@ namespaces is left `unknown namespace` but the ones no measured library names
 `test.junit`/`tap`, `java.basis`, `tools.deps.interop`). The spec jars' namespaces are no
 longer the language's: they load from their own jars ("clojure.spec.alpha (g90)").
 - **Licensing**: clojure.jar is EPL-1.0, this project Apache-2.0, so nothing of it is
-  copied -- no code, no docstring. Each file is written from the documented behaviour and
-  diffed against the oracle; a one-line var dictated by its contract
-  (`(prewalk-replace smap form)`) reads like the oracle's because the contract allows no
-  other shape.
+  copied or translated -- no code, no docstring (`.kb/java-frontend-provenance.md`). Each
+  file is written from the documented behaviour (the API documentation, the docstrings
+  `doc` prints) and from what the oracle ANSWERS, with the oracle's source closed; a
+  one-line var dictated by its contract (`(prewalk-replace smap form)`) reads like the
+  oracle's because the contract allows no other shape.
+  - The 2026-11-18 audit found that six files did not meet this (`main`, `repl`,
+    `stacktrace`, `data`, `core/reducers`, `zip`: bodies, branch order and docstring
+    openings matching the oracle's), as did `pprint`'s layout and number kernels. They
+    were deleted and written again (`.todo` j92): each rule below that is not in the
+    documentation is an answer of clj 1.12.6 to a probe, and the shape is ours (a table
+    of spellings scanned left to right for `demunge`, one slot comparison shared by the
+    map and the sequential diff, a per-phase word list for `ex-str`, `fold-vector` over
+    index bounds).
 - **Which first** (a census, 2026-10-08, over 72 jars: the eight `e43` probe libraries plus
   64 widely used Clojars/contrib ones, a library counted once per namespace it names in a
   `.clj`/`.cljc`): `clojure.string` 43, `clojure.java.io` 20, `clojure.set` 19,
@@ -2886,17 +2969,39 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   `print-length-loop`, `simple-dispatch`, `write`, `print-table`) is Clojure source; the
   layout is the kernel namespace `rontolisp.internal.pprint` (`clojure.lisp`, "The
   clojure.pprint kernels"). The dispatch runs with `*standard-output*` bound to a capture
-  stream, each block start/end, conditional newline, indentation and fresh line an event
-  beside the text since the last; the events are then replayed through the oracle's
-  pretty writer's decision procedure (what its docstring states: write at once until the
-  first conditional newline, then buffer; decide the buffer's first newline only when it
-  overflows, `tokens-fit?` strict, the held-back trailing blanks not counted; the final
-  flush takes only mandatory newlines and the linear/miser ones of a broken block).
-  - Why a replay: the first draft laid the event tree out with full
-    knowledge (a block breaks iff it does not fit, Oppen/XP style). It matched the oracle
-    on linear-only data but not on fill, miser and per-line-prefix blocks, nor on the
-    final flush: the oracle decides incrementally, so a newline's fate depends on when the
-    buffer overflowed, which only the replay reproduces.
+  stream, each block start/end, conditional newline, indentation and fresh line a mark
+  beside the text since the last; the record is then laid out by `%clojure-pp-lay-out`.
+  - **Rewritten 2026-11-18 (j92)**: the layout, `pprint.clj` whole (the API, both
+    dispatches, `cl-format`) and the `~F ~E ~G ~$` kernel were deleted and written again
+    from the HyperSpec (22.2, 22.3), the namespace's documentation and clj 1.12.6 as a
+    black box; nobody read Clojure's pprint sources while writing, and the deleted code
+    was used only as a second black box to compare outputs against
+    (`.kb/java-frontend-provenance.md`).
+  - The layout takes the marks in the order they were made, each knowing only those
+    before it, over a vector with a running total of columns (a stretch's width is one
+    subtraction). The rules, each borne out by a probe against clj: until the first
+    conditional newline a mark is placed as it comes; after it the page waits, and each
+    arriving mark asks whether what is open still fits (reaching the margin does not);
+    when it does not, text is placed up to the first open newline, which breaks by
+    measure -- linear: its block has broken, or the stretch to the next newline of an
+    enclosing block reaches the margin; fill: a nested block broke since its block last
+    did, or the stretch to its block's next newline reaches it, or miser mode and the
+    linear rule; miser: miser mode (the block opened within `*print-miser-width*` of
+    the margin) and the linear rule -- measured as far as the record is known; a newline
+    that did not break stays open while the rest fits (and is measured again later),
+    else its stretch is laid out by itself and, if that fits with nothing to settle,
+    placed whole. What is open when the record closes (its end, a line end in the text,
+    the end of a nested `pprint`/`write`) breaks by history only: a mandatory newline,
+    and a linear or miser one of a block that has broken. A break marks its block and
+    every enclosing one broken. Blanks ending a write are held back: dropped by a break
+    right after them, written by anything else (an indentation included), never counted
+    in the column a measure starts from.
+  - Why mark by mark and not with the whole record in view: a first cut measured each
+    stretch to the end of the record. It matched clj on 1,499 of 1,500 generated layouts,
+    and what it missed (`~T` after a line end, a trailing newline, a 72-column `let`)
+    showed that clj's answers depend on what had been written when: a column `~T` reads,
+    an unbroken newline measured again when more text arrives, a stretch that fits only
+    while its end is not yet known.
   - Fidelity, checked against clj 1.12.6: generated layouts (nested vectors,
     lists, maps up to eight keys, sets, scalars, at random margins) identical on the
     interpreter and the JVM class, and one-key maps on both wasm legs (wasm
@@ -2914,11 +3019,12 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
     multimethod keeps no cache, "Dispatch"), once per value printed.
   - Cost (2026-10-08): `pprint` here is faster than the oracle's on the JVM and the wasm
     legs, and slower on the interpreter, over long vectors and many small maps alike.
-  - `code-dispatch` (a multimethod on `class`, like the oracle's) emits, per head symbol,
-    the event sequence of the oracle's code layout, inferred from its output only
-    (2026-10-08): the oracle spells most layouts as format directives, so a run of
-    writes stops at the first object `*print-length*` cuts (`write-run`, `code-head`;
-    `(condp = ...1 2)` and `(defn f ... ...)` follow), while the plain list, `cond`'s and
+  - `code-dispatch` (a multimethod on `class`, like the oracle's) lays a list out by its
+    head symbol; each layout was read off what clj prints for forms of its kind at
+    margin 1 (every break) and 72 (none), with and without miser mode (2026-11-18), and
+    is written as a control string of our own `cl-format` where it is a run of
+    directives (`lay`), so a run of writes stops at the first object `*print-length*`
+    cuts (`(condp = ...1 2)` and `(defn f ... ...)` follow), while the plain list, `cond`'s and
     the bindings' pairs use `print-length-loop`. The quirks kept: a blank before a broken
     head's miser newline (`(defn \n  f`), `(let [a 1] )`, `((let x))` for a non-vector
     second, a nested `#(...)` rebinding the parameter spellings, the ns docstring
@@ -2942,8 +3048,8 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
     (`%clojure-pp-active`; the oracle asks whether `*out*` is a pretty writer): what runs
     under `with-out-str` inside a dispatch writes plain text, and `write :stream nil` there
     lays out a pretty print of its own. A `pprint` or `write` joining one ends with a
-    `:flush` event, the oracle's `ppflush` of the writer it reused (the buffer written as it
-    stands, no newline decided): without it `(cl-format nil "~@w ~:w" x y)` broke `x`
+    `:sync` mark, which closes the record so far (what is open breaks by history only, as
+    clj shows for a nested print): without it `(cl-format nil "~@w ~:w" x y)` broke `x`
     where the oracle breaks `y` (2026-10-09). `fresh-line` outside a pretty print always
     writes a newline, the oracle's writer keeping no column. `pprint` and `write` set
     `*radix-pr*` when `*print-base*`/`*print-radix*` are not the defaults (the oracle
@@ -2951,21 +3057,27 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
     bare `~W`, while `~A` always writes `ff`.
   - `cl-format`, `formatter`, `formatter-out` (2026-10-09): Clojure source too. The run-time
     library's `format` (`.kb/format.md`) prints CL notation and iterates lists, so a
-    conversion layer could not serve; a compiler (`compile-nodes`: a vector of literal
-    strings and directives `[char at colon params dynamic clauses else at-least-once
-    else-separator offset]`, the params in definition order with the defaults in, `:v`/`:#`
-    realized last-first like the oracle's array map) and an executor over a navigator
-    `[seq rest position dropped]`, answering the navigator or `(exit nav)`. The text of the
+    conversion layer could not serve. A control string is read into a tree (`compile-format`:
+    strings and directive maps `{:char :colon :at :params :offset}`, a bracket directive
+    holding its `:clauses`, `:separators` and `:closer`; the table `directive-table` has
+    the parameter names clj's refusals print) and walked (`walk`) over a cursor, a
+    volatile `{:all :rest :at :moved}` moved in place; a walk answers nil, `:up` (a `~^`
+    left it) or `:out` (a `~:^`). A `v` or `#` parameter is resolved last-first, as clj's
+    answers show (`~v,v,va`). The text of the
     number directives and of `~(` is kernels (`%clojure-pp-integer-text`, `-english`,
     `-roman`, `-fixed`, `-exponential`, `-general`, `-dollar`, `-case-convert`).
     - Oracle mechanics kept, each measured: the integer and English spellings walk a double
       with Clojure's `quot`/`rem` in Java's double arithmetic (a double past the long range
       spells the oracle's digits, or its `Value out of range for char`); `~F ~E ~G ~$`
-      round the digits of the number's Java spelling as text (NaN and the infinities as
-      letters: `infinity.0`, `n.anE+2`), a ratio through `Ratio.doubleValue` (sixteen digits
-      half even first), exact past the double range (the oracle's `BigDecimal`, a
-      non-terminating one refused), `~$` taking a long as it is and any other number's
-      double (`Math/abs`'s two arms); `~(...~)` converts each write apart, a character write
+      read the number once into the characters of its Java spelling and the place of its
+      point, and scale, cut and lay out that reading (NaN and the infinities as letters:
+      `infinity.0`, `n.anE+2`; -0.0's minus sign one of its characters), a ratio through
+      the double of its sixteen digits (half even), exact past the double range (a
+      non-terminating one refused), a decimal with all its digits (until 2026-11-18
+      through its double: `~f` of `84041315718281514592.53M` lost the tail), `~$` taking
+      every number as a double (until 2026-11-18 a long as it was: clj writes
+      `415792619445590017` as `415792619445590000.00`); 12,000 generated cases identical
+      to clj; `~(...~)` converts each write apart, a character write
       unlike a string one (`~:(~a-~a~)` of "foo" "bar" is `Foo-bar`), its state the CL
       special `%clojure-pp-case-writer`, so a program formatting nothing carries none; after
       `~*`/`~:*`/`~@*` one nil comes back past the end (the oracle's `drop` answers a truthy
@@ -2976,8 +3088,8 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
       justification without max-columns and `~W` of a collection (a dispatch block) where
       `*out*` is no pretty writer are the oracle's `ClassCastException` (a `~(...~)` clause,
       a `~<...~>` segment, `formatter-out` outside a pretty print). `~T` and `~:;` are
-      layout events carrying their own function (`:lay`), computed from the column the
-      replay has reached, the oracle's base column: blanks held back do not count.
+      marks (`:tab`, `:eol`) turned into text when the layout takes them, from the column
+      the page has reached then: what is still open and blanks held back do not count.
     - The macros name their function in a plain template (`` `(#'formatter-fn ~format-in) ``):
       a template symbol is an unspelled quote ("Macros"), so a program expanding at run
       time keeps no executor for it. Before 2026-10-09 they built the symbol
@@ -2997,16 +3109,21 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
       -2^63 writes it where the oracle's negation overflows; where the oracle's message is
       the JVM's own (a `ClassCastException`, a `NullPointerException`, `seq`'s refusal) only
       the class matches. A format handed in that is no control string runs only when it is
-      the private `compile-format`'s (wrapped `[::compiled nodes]`); any other is walked as
+      the private `compile-format`'s (a map holding `::pieces`); any other is walked as
       the oracle walks it, a non-empty one its `NullPointerException` when it runs.
 - `clojure.data`: `EqualityPartition` and `Diff` are protocols extended to nil,
   `java.util.Set`, `java.util.List`, `IPersistentVector`, `java.util.Map` and `Object`,
   whose arm sends a `map?` value to the map diff: a record reaches neither the `Map` nor a
-  vector row here, where the oracle's record is a `java.util.Map`. The
-  map diff walks `(set/union (keys a) (keys b))` over the key SEQS, like the oracle's (a
-  shared key comes twice and merges alike), and answers a lazy seq; the sequential diff
-  answers vectors. Deviation: a part that is a map of several keys may print its keys in
-  another order (a key merged again moves to the end here; "Deviations": walk order).
+  vector row here, where the oracle's record is a `java.util.Map`. One slot comparison
+  (`slot-diff`) serves maps and sequential collections: a slot both sides hold is diffed in
+  depth and counts as shared when the diff found something in common or both hold nil
+  there; a side keeps its entry when its part is non-nil or the slot is not shared (so
+  `(diff {:a [nil]} {:a []})` is `({:a [nil]} {:a nil} nil)`, probed). The map diff walks
+  a's keys, then b's keys a lacks, and answers a seq of three; the sequential diff runs
+  the same over the indices and answers vectors reaching each part's highest index
+  (`(diff [1 2 3] [1 2 3 nil])` is `[nil [nil nil nil nil] [1 2 3]]`). Deviation: a part
+  that is a map of several keys may print its keys in another order (the oracle's is its
+  hash set's walk; "Deviations": walk order).
 - `clojure.zip`: a loc is the oracle's own shape (`[node path]`, the path a map of `:l`
   `:pnodes` `:ppath` `:r` and `:changed?`, the zipper functions in the loc's metadata, the
   end loc `[node :end]` without metadata) since programs print and destructure locs; the
@@ -3104,10 +3221,16 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
 - `clojure.core.reducers` (2026-10-08): every public var but `pool`, `fjtask` and `->Cat`
   (refused by name). The reducers are `reify` objects of `CollReduce` (`folder`s also of
   the namespace's `CollFold`), so they need the multi-arity protocol methods ("Dispatch")
-  and the reducible arms above; written over explicit three-arity reducing fns (the
-  oracle's `rfn`/`defcurried` are private macros). `fold` keeps the oracle's split -- a
-  vector halves while it holds more than `n` (`fold-range` over index bounds, so only a
-  leaf is copied by `subvec`), each part reduced from `(combinef)`, the halves combined in
+  and the reducible arms above; each is written as an explicit three-arity reducing fn
+  (none, a member, a key and a value). What the docstrings leave open was probed
+  (2026-11-18): `take` and `drop` count per reduction and `take` ends on the member after
+  the n-th; `mapcat` reduces each result with the namespace's own `reduce` (a map result
+  is the oracle's `ArityException`) and hands a stop on; a reducer over a map reduces its
+  entries, a folder folded over one gets key and value. `fold` splits as the oracle's
+  answers show -- a
+  vector halves while it holds more than `n` (`fold-vector` over index bounds, so only a
+  leaf is copied by `subvec`; one member is always a leaf, where the oracle overflows its
+  stack for an `n` below one), each part reduced from `(combinef)`, the halves combined in
   order -- but runs on the calling thread, the left part first; a map, record or sorted map
   folds as one `kv-reduce` (the `Object` row through the namespace's own `reduce`, which
   takes `java.util.Map` like the oracle's -- the oracle's hash map past eight entries also
@@ -3141,11 +3264,23 @@ longer the language's: they load from their own jars ("clojure.spec.alpha (g90)"
   munged spellings longest first, `$` as `/`; 30 spellings oracle-checked), `root-cause`,
   `stack-element-str`, `ex-triage`, `ex-str`, `err->msg`, `repl-caught`,
   `repl-exception`, `repl-prompt`, `repl-requires`, `with-read-known`. `ex-triage` reads
-  frames given in the data like the oracle's (`:trace` tuples, `core-frame?`,
-  `source-symbol`), so triage of `Throwable->map` data is oracle-identical when the data
-  is; a throwable here has none, so its report says `(REPL:1)`. Deviations:
-  `:clojure.error/path` is the source as given (the oracle's is relative to the working
-  directory, which wasm has not); `ex-str` of spec problems is refused. Left out
+  frames given in the data (`:trace` tuples), so triage of `Throwable->map` data is
+  oracle-identical when the data is; a throwable here has none, so its report says
+  `(REPL:1)`. Its rules are the oracle's answers to probes over every phase
+  (2026-11-18): a reader error merges the data of the two outermost throwables, a
+  compiler or macro error takes the outermost's, an error printing or reading a result
+  adds the first frame, an execution error starts empty and takes the first frame that
+  is neither a `clojure.lang` class nor a function of 22 namespaces (`core-namespaces`,
+  found by asking about each namespace of clojure.jar); a frame's symbol is
+  namespace/name for `invoke`/`invokeStatic` (nested names joined by `$`, each cut at its
+  `__` serial) and Class/method otherwise; `:spec` is the innermost data when it holds
+  spec problems. `ex-str` is a word list per phase; the class is left out for
+  `Exception` and `RuntimeException`, by simple name. `clojure.repl/pst` drops the frames
+  of `clojure.lang.AFn` and `RestFn` and gives a cause two frames more than it adds.
+  Deviations: `:clojure.error/path` is the source with single slashes and none at the
+  end (the oracle's is also relative to the working directory, which wasm has not);
+  `ex-str` of spec problems (the two phases where the oracle explains them,
+  `:macro-syntax-check` and `:execution`) is refused. Left out
   (`mainLeftOut`): `repl`, `main`, `load-script` (no `eval`), `repl-read`,
   `renumbering-read`, `skip-whitespace`, `skip-if-eol`, `with-bindings` (the REPL's parts),
   `report-error` (main's uncaught report). Written with plain keys, though
@@ -4910,8 +5045,26 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
   shadowed by a project file, refused to a program's `require` --
   `ClojureBuiltinNamespaces.INTERNAL`), written from the documented behaviour and diffed
   against clj 1.12.6 with gensyms renumbered in order of appearance: every shape matches,
-  `destructure` (clojure.core's own function, refused until then) and `case`'s hashed `case*`
-  map included (`.hashCode` is the oracle's, the shift/mask search the documented one). The
+  `destructure` (the function of that name, refused until then) and `case`'s hashed `case*`
+  map included. What `case*` takes was read off the oracle's expansions of tests chosen for
+  the purpose: a test's code is the test itself when all are ints, else its Java `hashCode`
+  (nil 0); no shift and mask while the codes span under 8192 values, else the narrowest
+  mask, one bit to thirteen, and under it the smallest shift, 0 to 30, that keep the codes
+  apart, `:sparse` when none does; tests sharing a hash are one entry keyed by it whose then
+  is a `condp =` over them, its narrowed code in the skip-check set. **Provenance (j92,
+  2026-11-18)**: until then `case`'s table helpers, `doseq`'s step function, `for`'s level
+  emitter and the three type macros followed clojure.core's own private helpers function
+  for function (`core.clj`, `core_deftype.clj`: EPL). All were deleted and written again
+  from the macros' documentation and the oracle's printed expansions, nobody opening its
+  source, and assembled differently: `case` files rows by code and merges colliding tests
+  before it picks the mask, in one pass; `doseq` hands each step the forms to carry on
+  with (a test takes them inside itself, a `:let` wraps the first and leaves the rest
+  behind) where the old one answered a needs-recur flag; `for` folds its levels from the
+  innermost out. The small macros are their expansion written as a template, which their
+  printed form dictates; `destructure` was already of its own shape. Checked: 107 `case`,
+  `doseq` and `for` shapes and 57 generated `case` tables (ints up to 300 tests, strings
+  sharing hashes, keywords, symbols, mixed) print the oracle's line but for refusal words
+  (probes run by hand against clj 1.12.6; the spec cases below pin the shapes). The
   read-time auto-gensyms the oracle shares across a `doseq`'s or `for`'s levels (`c#`,
   `iterys#`, ...) are made once per expansion and handed down. Each expander takes
   `(&form &env & args)`; a core macro outside the list answers its call (its root is
@@ -4951,16 +5104,17 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
     (`ClojureLangClasses`).
   - Deviations: a malformed call's refusal propagates as the expander throws it (the oracle's
     `Syntax error macroexpanding` wraps it); a `case` whose tests collide in two or more
-    buckets lists the skipped hashes in insertion order; a BigDecimal test hashes as its
+    buckets lists the skipped codes ascending (the oracle's set prints in its own order,
+    the same for the ones measured); a BigDecimal test hashes as its
     ratio; the macros outside the list answer their call; a type body's interfaces, the
     oracle's `(vec (set ...))` of its groups, keep their order (the pinned set-order
     deviation: the oracle's two interfaces may come out swapped).
   - **The type special forms `deftype*` and `reify*`** (j26, 2026-11-09): what `deftype`,
     `defrecord` and `reify` expand to (`expand-deftype`, `expand-defrecord`, `expand-reify`:
-    the oracle's shapes, the record's own map methods spelled `clojure.core/`-qualified and
-    listed last first ahead of the body's, a group's protocol read as its `:on` symbol --
-    the protocol's value map's `:on` is that symbol since j26, a keyword before -- and every
-    shape diffed against clj 1.12.6 with gensyms renumbered) lower in `ClojureTypeSpecials`,
+    the oracle's shapes, a group's protocol read as its `:on` symbol -- the protocol's value
+    map's `:on` is that symbol since j26, a keyword before -- diffed against clj 1.12.6 with
+    gensyms renumbered; of a record's expansion the oracle's is the SKELETON only, below)
+    lower in `ClojureTypeSpecials`,
     so a program's macro may build them: datascript's `defrecord-updatable` postwalks
     `(macroexpand-1 (list* 'defrecord ...))`, dedupes the `:implements` vector and drops the
     record methods its body overrides (`hashCode`, `hasheq`, `count`, `equiv`, `empty`);
@@ -4973,7 +5127,7 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
     `:implements` names, under the `what` "deftype*" no row check applies to. The type is the
     literal class: a `:C%TYPE` over every field (`TypeDef.starDrops` >= 0;
     `declareStarType` registers no `->Name`, which the form never defines), every method a
-    row -- so a record's expansion is the oracle's record method for method, its overrides
+    row -- so a record's expansion is a record method for method, its overrides
     included, and the generated `valAt`, `assoc`, `without`, `seq`, `equiv`, `hasheq` ...
     run as written -- `IRecord` making it `record?` and a record to the printer. Its
     constructions (`(new T ...)`, `(T. ...)`, `T/new`) call its own defun over every field
@@ -4985,9 +5139,35 @@ the file), `default-streams-impl` a map. Until then only `reader` resolved, as a
     (`->T%create`: each other field read and taken out, the rest the `__extmap`, nil when
     empty). What the expansion calls that no class here has is the shipped internal
     namespace `rontolisp.internal.records` (`records.clj`, loaded where such a call first
-    lowers): `APersistentMap/mapEquals`/`mapHash`/`mapHasheq`, `clojure.lang.RecordIterator.`
-    and the private `#'clojure.core/imap-cons` (a var whose root is its function); `(. x -f)`
-    reads the field like `(.-f x)`. Measured 2026-11-09 against clj 1.12.6: a
+    lowers): `APersistentMap/mapEquals`/`mapHash`/`mapHasheq`; `(. x -f)`
+    reads the field like `(.-f x)`.
+    **A record's own methods are written here** (j92, 2026-11-18; until then the expansion
+    was the oracle's text method for method, and with it went `records.clj`'s
+    `RecordIterator` and `imap-cons` and their lowerings, which nothing else called). What
+    is the oracle's is what a program taking the expansion apart can rely on: the
+    `let` of the two `declare`s, the `deftype*` of tag and class over the fields and
+    `__meta`, `__extmap`, `__hash`, `__hasheq` (the last two `^int` and unsynchronized-mutable),
+    its interface vector, one method per method those interfaces declare under its
+    `clojure.core/`-qualified name ahead of the body's (the class's 29 own methods by
+    reflection), `import`, `->Name` and `map->Name` with their docstrings, the class. Each
+    method's BODY is spelled from what the oracle's record answers through it, a 46-line
+    probe (lookups and the lookup thunk, count, seq and iterator, `assoc`/`dissoc`/`conj`
+    and their refusals, `empty`, `=`/`equiv`/`equals`, `hash`/`hashCode` -- `hasheq` is the
+    map's unordered hash xor the hash of the class-name symbol -- metadata, the read-only
+    `java.util.Map` face, the constructors, `create`, `map->`, printing): the iterator is a
+    `SeqIterator` over the record's own seq, `cons` assocs a vector's first two members or
+    each entry of a collection, the hashes cache in their slots, the thunk is one `reify`
+    per record answering through `get`. Inside its methods the class goes by its
+    unqualified name, as `deftype` documents. Two checks: the class the ORACLE's compiler
+    builds from this expansion answers all 46 lines like its own `defrecord` (only gensym
+    numbers and file names differ), and through `deftype*` here the lines are what the old
+    expansion printed. The `->Name` of a type of more than twenty fields checks its rest
+    argument's count ahead of the construction. Refusals are the oracle's words where it
+    has any (`No fields vector given.`, the reserved names, `... fields must be symbols`,
+    `Unsupported option(s) - ...`, each an `AssertionError` or `IllegalArgumentException`
+    in the oracle's order); a group that starts with no symbol is a `ClassCastException`
+    (the oracle's class; before, the datum reached `deftype*`).
+    Measured 2026-11-09 against clj 1.12.6: a
     `defrecord-updatable` of two fields overriding `hashCode`, `hasheq`, `count` and `equiv`
     and implementing a protocol prints the oracle's lines on all four backends (printing,
     `=`, `hash`, `assoc`/`dissoc` keeping or dropping the record, `map->`, `conj`, `seq`,
@@ -6120,8 +6300,8 @@ interfaces behind an arm family its row's store makes (`ClojureArms`, `COLLECTIO
   `Numbers/compare` (`compare`, j37: datascript's `value-compare`), `Util/hashCombine` the
   library's `%clojure-hash-combine-ints` over its two int-cast arguments,
   `RT/EMPTY_ARRAY` an empty object array ("Remaining array surface"); a record
-  expansion's `APersistentMap/mapEquals`, `mapHash`, `mapHasheq` and `RecordIterator.`
-  construction call `rontolisp.internal.records` ("Macros", the type special forms).
+  expansion's `APersistentMap/mapEquals`, `mapHash` and `mapHasheq` call
+  `rontolisp.internal.records` ("Macros", the type special forms).
 - `clojure.lang.LineNumberingPushbackReader.` (j15, aero's `read-config`): the prelude's
   text pull stream over the inner reader pulling ONE character per piece
   (`%clojure-line-reader-pull`), so the counters see exactly what left the inner reader,

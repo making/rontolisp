@@ -27,9 +27,9 @@ import am.ik.rontolisp.reader.LispReadException;
  * A {@code deftype*} type is the literal class: its every field (a record expansion's
  * {@code __meta}, {@code __extmap} and mutable hash caches included), every method the
  * form spells -- a record expansion's own map methods among them, so a type implementing
- * {@code IRecord} is the oracle's record method for method, overrides included -- and no
- * {@code ->Name}, which the form never defines. Its constructions call a constructor of
- * its own over every field; the oracle's shorter ones (all but the trailing record
+ * {@code IRecord} is a record through the methods it was given, overrides included -- and
+ * no {@code ->Name}, which the form never defines. Its constructions call a constructor
+ * of its own over every field; the oracle's shorter ones (all but the trailing record
  * fields, and all but the two hash caches) fill {@code nil}, {@code nil}, {@code 0} and
  * {@code 0}, and with such fields the class's static {@code create} builds it from a map.
  *
@@ -51,8 +51,7 @@ final class ClojureTypeSpecials {
 	/**
 	 * The shipped internal namespace of what a record's expansion calls that no class
 	 * here has ({@code lib/rontolisp/internal/records.clj}): the {@code APersistentMap}
-	 * statics, {@code RecordIterator}'s construction and the private
-	 * {@code clojure.core/imap-cons}.
+	 * statics its {@code equals}, {@code hashCode} and {@code hasheq} call.
 	 */
 	static final String RECORDS = "rontolisp.internal.records";
 
@@ -73,18 +72,6 @@ final class ClojureTypeSpecials {
 		call.add(ClojureLowering.varSym(RECORDS + "/" + fn));
 		call.addAll(args);
 		return ClojureLowerUtil.list(call);
-	}
-
-	/**
-	 * A function of {@link #RECORDS} as a value: the root of the private
-	 * {@code #'clojure.core/imap-cons} a record's {@code cons} calls.
-	 * @param ctx the hub
-	 * @param fn the function's name
-	 * @return the value form
-	 */
-	static LispVal recordsFunction(ClojureLowering ctx, String fn) {
-		loadRecords(ctx);
-		return ClojureLowerUtil.list(ClojureLowerUtil.sym("function"), ClojureLowering.varSym(RECORDS + "/" + fn));
 	}
 
 	private static void loadRecords(ClojureLowering ctx) {

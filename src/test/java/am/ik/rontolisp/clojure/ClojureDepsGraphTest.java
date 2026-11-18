@@ -71,6 +71,81 @@ class ClojureDepsGraphTest {
 		repo.put("fake/c12 1.0", List.of(mvn("fake/x", "1.0")));
 		repo.put("fake/cy1 1.0", List.of(mvn("fake/cy2", "1.0")));
 		repo.put("fake/cy2 1.0", List.of(mvn("fake/cy1", "1.0")));
+		// the graphs of 2026-11-18, one group each: what the reference leaves open
+		repo.put("fake.q1/a 1", List.of(mvn("fake.q1/k", "1")));
+		repo.put("fake.q1/k 1", List.of(mvn("fake.q1/x", "2")));
+		repo.put("fake.q1/b 1", List.of(mvn("fake.q1/m", "1")));
+		repo.put("fake.q1/m 1", List.of(mvn("fake.q1/k", "2")));
+		repo.put("fake.q1/c 1", List.of(mvn("fake.q1/n", "1")));
+		repo.put("fake.q1/n 1", List.of(mvn("fake.q1/p", "1")));
+		repo.put("fake.q1/p 1", List.of(mvn("fake.q1/q", "1")));
+		repo.put("fake.q1/q 1", List.of(mvn("fake.q1/x", "1")));
+		repo.put("fake.q4/a 1", List.of(mvn("fake.q4/p", "1")));
+		repo.put("fake.q4/p 1", List.of(mvn("fake.q4/k", "1")));
+		repo.put("fake.q4/k 1", List.of(mvn("fake.q4/x", "1")));
+		repo.put("fake.q4/b 1", List.of(mvn("fake.q4/q", "1")));
+		repo.put("fake.q4/q 1", List.of(mvn("fake.q4/k", "1")));
+		repo.put("fake.q4/c 1", List.of(mvn("fake.q4/r", "1")));
+		repo.put("fake.q4/r 1", List.of(mvn("fake.q4/p", "2")));
+		repo.put("fake.q4b/a 1", List.of(mvn("fake.q4b/p", "1")));
+		repo.put("fake.q4b/p 1", List.of(mvn("fake.q4b/k", "1")));
+		repo.put("fake.q4b/k 1", List.of(mvn("fake.q4b/x", "1")));
+		repo.put("fake.q4b/b 1", List.of(mvn("fake.q4b/q", "1")));
+		repo.put("fake.q4b/q 1", List.of(mvn("fake.q4b/k", "1")));
+		repo.put("fake.q4b/c 1", List.of(mvn("fake.q4b/r", "1")));
+		repo.put("fake.q4b/r 1", List.of(mvn("fake.q4b/s", "1")));
+		repo.put("fake.q4b/s 1", List.of(mvn("fake.q4b/t", "1")));
+		repo.put("fake.q4b/t 1", List.of(mvn("fake.q4b/p", "2")));
+		repo.put("fake.q8/a 1", List.of(mvn("fake.q8/b", "1")));
+		repo.put("fake.q8/b 1", List.of(mvn("fake.q8/c", "1")));
+		repo.put("fake.q8/c 1", List.of(mvn("fake.q8/b", "2")));
+		repo.put("fake.q8/b 2", List.of(mvn("fake.q8/d", "1")));
+		repo.put("fake.p1/a 1", List.of(mvn("fake.p1/b", "1")));
+		repo.put("fake.p1/b 1", List.of(mvn("fake.p1/c", "1")));
+		repo.put("fake.p1/c 1", List.of(mvn("fake.p1/b", "2")));
+		repo.put("fake.p1/b 2", List.of(mvn("fake.p1/d", "1")));
+		repo.put("fake.p1/e 1", List.of(mvn("fake.p1/h", "1")));
+		repo.put("fake.p1/h 1", List.of(mvn("fake.p1/i", "1")));
+		repo.put("fake.p1/i 1", List.of(mvn("fake.p1/b", "2")));
+		repo.put("fake.r1/c 1", List.of(mvn("fake.r1/f", "1"), mvn("fake.r1/b", "1")));
+		repo.put("fake.r1/f 1", List.of(mvn("fake.r1/g", "2")));
+		repo.put("fake.r1/g 2", List.of(mvn("fake.r1/f", "2")));
+		repo.put("fake.r1/f 2", List.of(mvn("fake.r1/w", "1")));
+		repo.put("fake.r1/b 1", List.of(mvn("fake.r1/a", "1")));
+		repo.put("fake.r1/a 1", List.of(mvn("fake.r1/g", "3")));
+		repo.put("fake.r6/a 1", List.of(mvn("fake.r6/x", "1")));
+		repo.put("fake.r6/b 1", List.of(mvn("fake.r6/x", "1")));
+		repo.put("fake.r6/x 1", List.of(mvn("fake.r6/y", "1"), mvn("fake.r6/w", "1")));
+		repo.put("fake.r4/a 1", List.of(mvn("fake.r4/k", "1")));
+		repo.put("fake.r4/k 1", List.of(mvn("fake.r4/x", "2", "fake.r4/y")));
+		repo.put("fake.r4/x 2", List.of(mvn("fake.r4/y", "1"), mvn("fake.r4/w", "1")));
+		repo.put("fake.r4/b 1", List.of(mvn("fake.r4/m", "1")));
+		repo.put("fake.r4/m 1", List.of(mvn("fake.r4/k", "2")));
+		repo.put("fake.r4/c 1", List.of(mvn("fake.r4/n", "1")));
+		repo.put("fake.r4/n 1", List.of(mvn("fake.r4/p", "1")));
+		repo.put("fake.r4/p 1", List.of(mvn("fake.r4/q", "1")));
+		repo.put("fake.r4/q 1", List.of(mvn("fake.r4/x", "2", "fake.r4/w")));
+		repo.put("fake.r4/d 1", List.of(mvn("fake.r4/r", "1")));
+		repo.put("fake.r4/r 1", List.of(mvn("fake.r4/s", "1")));
+		repo.put("fake.r4/s 1", List.of(mvn("fake.r4/t", "1")));
+		repo.put("fake.r4/t 1", List.of(mvn("fake.r4/u", "1")));
+		repo.put("fake.r4/u 1", List.of(mvn("fake.r4/x", "2")));
+		repo.put("fake.q7/a 1", List.of(mvn("fake.q7/k", "1")));
+		repo.put("fake.q7/k 1", List.of(mvn("fake.q7/x", "1")));
+		repo.put("fake.q7/b 1", List.of(mvn("fake.q7/m", "1")));
+		repo.put("fake.q7/m 1", List.of(mvn("fake.q7/n", "1")));
+		repo.put("fake.q7/n 1", List.of(mvn("fake.q7/k", "2")));
+		repo.put("fake.q7/k 2", List.of(mvn("fake.q7/o", "1")));
+		repo.put("fake.q7/o 1", List.of(mvn("fake.q7/x", "1")));
+		repo.put("fake.s1/a 1", List.of(mvn("fake.s1/k", "1")));
+		repo.put("fake.s1/k 1", List.of(mvn("fake.s1/x", "1.0")));
+		repo.put("fake.s1/b 1", List.of(mvn("fake.s1/m", "1")));
+		repo.put("fake.s1/m 1", List.of(mvn("fake.s1/x", "1.0.0")));
+		repo.put("fake.s1/c 1", List.of(mvn("fake.s1/n", "1")));
+		repo.put("fake.s1/n 1", List.of(mvn("fake.s1/o", "1")));
+		repo.put("fake.s1/o 1", List.of(mvn("fake.s1/k", "2")));
+		repo.put("fake.s1/x 1.0", List.of(mvn("fake.s1/y", "1")));
+		repo.put("fake.s1/x 1.0.0", List.of(mvn("fake.s1/w", "1")));
 		return repo;
 	}
 
@@ -96,6 +171,11 @@ class ClojureDepsGraphTest {
 			.isEqualTo("fake/a6 1.0, fake/b6 1.0, org.clojure/clojure 1.12.6, fake/c6 1.0, " + SPECS);
 		assertThat(selected("fake/b6 1.0", "fake/a6 1.0"))
 			.isEqualTo("fake/a6 1.0, fake/b6 1.0, org.clojure/clojure 1.12.6, fake/c6 1.0.0, " + SPECS);
+		// the second spelling adds no route either: x 1.0 hangs from k 1 alone and goes
+		// with it when k 2 turns up, though m's x 1.0.0 was offered in between
+		assertThat(selected("fake.s1/a 1", "fake.s1/b 1", "fake.s1/c 1"))
+			.isEqualTo("fake.s1/a 1, fake.s1/b 1, fake.s1/c 1, org.clojure/clojure 1.12.6, fake.s1/m 1, "
+					+ "fake.s1/n 1, " + SPECS + ", fake.s1/o 1, fake.s1/k 2");
 	}
 
 	@Test
@@ -108,6 +188,21 @@ class ClojureDepsGraphTest {
 				+ "org.clojure/clojure 1.12.6, fake/d3 1.0, " + SPECS + ", fake/e3 1.0, fake/x 2.0");
 		assertThat(selected("fake/a12 1.0", "fake/b12 1.0", "fake/c12 1.0")).isEqualTo("fake/a12 1.0, fake/b12 1.0, "
 				+ "fake/c12 1.0, org.clojure/clojure 1.12.6, fake/k12 1.0, " + SPECS + ", fake/x 2.0");
+		// a library dropped that way has no claim left: x 2 went with k 1, so the older
+		// x 1 arriving two waves later is taken
+		assertThat(selected("fake.q1/a 1", "fake.q1/b 1", "fake.q1/c 1"))
+			.isEqualTo("fake.q1/a 1, fake.q1/b 1, fake.q1/c 1, org.clojure/clojure 1.12.6, fake.q1/m 1, "
+					+ "fake.q1/n 1, " + SPECS + ", fake.q1/k 2, fake.q1/p 1, fake.q1/q 1, fake.q1/x 1");
+		// k hangs from p 1 and from q. Its dependency x was offered below p 1: decided
+		// after p 2 replaced p 1 it is taken, k still being held by q...
+		assertThat(selected("fake.q4/a 1", "fake.q4/b 1", "fake.q4/c 1"))
+			.isEqualTo("fake.q4/a 1, fake.q4/b 1, fake.q4/c 1, org.clojure/clojure 1.12.6, fake.q4/q 1, "
+					+ "fake.q4/r 1, " + SPECS + ", fake.q4/k 1, fake.q4/p 2, fake.q4/x 1");
+		// ...and taken before p 2 turns up it is dropped with p 1, its one route going
+		// through it, while k stays
+		assertThat(selected("fake.q4b/a 1", "fake.q4b/b 1", "fake.q4b/c 1"))
+			.isEqualTo("fake.q4b/a 1, fake.q4b/b 1, fake.q4b/c 1, org.clojure/clojure 1.12.6, fake.q4b/q 1, "
+					+ "fake.q4b/r 1, " + SPECS + ", fake.q4b/k 1, fake.q4b/s 1, fake.q4b/t 1, fake.q4b/p 2");
 	}
 
 	@Test
@@ -127,6 +222,19 @@ class ClojureDepsGraphTest {
 		assertThat(selected("fake/b4 1.0", "fake/a4 1.0")).isEqualTo(both);
 		assertThat(selected("fake/a4 1.0", "fake/b4c 1.0"))
 			.isEqualTo("fake/a4 1.0, fake/b4c 1.0, org.clojure/clojure 1.12.6, fake/x4 1.0, " + SPECS);
+		// only a coordinate's own exclusions are narrowed that way: y, excluded by the
+		// top-level a two levels up, stays out though b reaches x without excluding it
+		Map<String, Coord> inherited = new LinkedHashMap<>();
+		inherited.put("fake.r6/a", coord(":mvn/version", "1", "fake.r6/y"));
+		inherited.put("fake.r6/b", coord(":mvn/version", "1"));
+		assertThat(selected(inherited))
+			.isEqualTo("fake.r6/a 1, fake.r6/b 1, org.clojure/clojure 1.12.6, fake.r6/x 1, " + SPECS + ", fake.r6/w 1");
+		// x 2 (excluding y) goes with k 1; taken again below q (excluding w) it offers y
+		// and starts over, so u's x 2, excluding nothing, brings w
+		assertThat(selected("fake.r4/a 1", "fake.r4/b 1", "fake.r4/c 1", "fake.r4/d 1"))
+			.isEqualTo("fake.r4/a 1, fake.r4/b 1, fake.r4/c 1, fake.r4/d 1, org.clojure/clojure 1.12.6, "
+					+ "fake.r4/m 1, fake.r4/n 1, fake.r4/r 1, " + SPECS + ", fake.r4/x 2, fake.r4/k 2, fake.r4/p 1, "
+					+ "fake.r4/s 1, fake.r4/q 1, fake.r4/t 1, fake.r4/u 1, fake.r4/y 1, fake.r4/w 1");
 	}
 
 	@Test
@@ -135,12 +243,29 @@ class ClojureDepsGraphTest {
 		// library at two paths sits at the first
 		assertThat(selected("fake.z/top 1.0", "alpha/top 1.0")).isEqualTo("alpha/top 1.0, fake.z/top 1.0, "
 				+ "org.clojure/clojure 1.12.6, fake/m10 1.0, alpha/n10 1.0, " + SPECS + ", fake/deep 1.0");
+		// a route that no longer stands still places: x is held four levels down below
+		// k 2 and sits where the replaced k 1 first brought it
+		assertThat(selected("fake.q7/a 1", "fake.q7/b 1"))
+			.isEqualTo("fake.q7/a 1, fake.q7/b 1, org.clojure/clojure 1.12.6, fake.q7/m 1, " + SPECS
+					+ ", fake.q7/x 1, fake.q7/n 1, fake.q7/k 2, fake.q7/o 1");
 	}
 
 	@Test
 	void aCycleStopsAtTheLibraryAlreadySelected() {
 		assertThat(selected("fake/cy1 1.0"))
 			.isEqualTo("fake/cy1 1.0, org.clojure/clojure 1.12.6, fake/cy2 1.0, " + SPECS);
+		// a newer version met below its own older one: b 2 replaces b 1 and stays
+		// selected, c goes with b 1, and b 2, held by nothing now, brings nothing...
+		assertThat(selected("fake.q8/a 1"))
+			.isEqualTo("fake.q8/a 1, org.clojure/clojure 1.12.6, " + SPECS + ", fake.q8/b 2");
+		// ...until another library holds it: i's b 2 arrives in the same wave, so d is in
+		assertThat(selected("fake.p1/a 1", "fake.p1/e 1"))
+			.isEqualTo("fake.p1/a 1, fake.p1/e 1, org.clojure/clojure 1.12.6, fake.p1/h 1, " + SPECS
+					+ ", fake.p1/i 1, fake.p1/b 2, fake.p1/d 1");
+		// held means by the version that brought it: g 2 went with f 1, and the g 3 taken
+		// since never had f 2 below it, so f 2's w stays out
+		assertThat(selected("fake.r1/c 1")).isEqualTo("fake.r1/c 1, org.clojure/clojure 1.12.6, fake.r1/b 1, " + SPECS
+				+ ", fake.r1/a 1, fake.r1/g 3, fake.r1/f 2");
 	}
 
 	@Test
@@ -210,6 +335,18 @@ class ClojureDepsGraphTest {
 		assertThat(roots("{:deps {my/a {:local/root \"a\"}}}", "a/deps.edn",
 				"{:deps {org.clojure/clojure {:mvn/version \"1.10.0\"}}}"))
 			.isEqualTo(": ., src, a/src");
+		// what is turned away is never opened: a directory with no manifest below a
+		// top-level library of the same name, or below an exclusion two levels up
+		assertThat(roots("{:deps {my/a {:local/root \"a\"} my/c {:local/root \"c\"}}}", "a/deps.edn",
+				"{:deps {my/c {:local/root \"../bare\"}}}", "c/deps.edn", "{}", "bare/README", ""))
+			.isEqualTo(": ., src, a/src, c/src");
+		assertThat(roots("{:deps {my/a {:local/root \"a\" :exclusions [my/c]}}}", "a/deps.edn",
+				"{:deps {my/b {:local/root \"../b\"}}}", "b/deps.edn", "{:deps {my/c {:local/root \"../bare\"}}}",
+				"bare/README", ""))
+			.isEqualTo(": ., src, a/src, b/src");
+		// a nil coordinate its own parent's coordinate excludes is never decided
+		assertThat(roots("{:deps {my/a {:local/root \"a\" :exclusions [my/c]}}}", "a/deps.edn", "{:deps {my/c nil}}"))
+			.isEqualTo(": ., src, a/src");
 	}
 
 	@Test
@@ -261,6 +398,41 @@ class ClojureDepsGraphTest {
 						+ ":fn compile}}",
 				"a/target/classes/x.class", ""))
 			.isEqualTo(": ., src, a/src, a/target/classes");
+		// several are named in the order the walk took them, not the source path's
+		String prep = "{:deps/prep-lib {:ensure \"target/classes\" :alias :build :fn compile}}";
+		assertRoots("{:deps {my/z {:local/root \"z\"} my/a {:local/root \"a\"}}}",
+				"The following libs must be prepared before use: [my/z my/a my/m]", "z/deps.edn",
+				"{:deps {my/m {:local/root \"../m\"}} :deps/prep-lib {:ensure \"target/classes\" :alias :build "
+						+ ":fn compile}}",
+				"a/deps.edn", prep, "m/deps.edn", prep);
+		// which of two refusals comes first, asked of clj 1.12.6 (2026-11-18). Every
+		// top-level coordinate is checked before any library is opened...
+		assertRoots("{:deps {my/a {:local/root \"a\"} my/b {:local/root \"nowhere\"}}}",
+				"Local lib my/b not found: nowhere", "a/deps.edn", "{:deps {my/x {:local/root \"../missing\"}}}");
+		// ...and every dependency of a wave is decided before the dependencies of one
+		// taken in it are read: q's nil and c's second root come before p's missing x
+		assertRoots("{:deps {my/a {:local/root \"a\"}}}", "Bad coordinate for library my/q, expected map: nil",
+				"a/deps.edn", "{:deps {my/p {:local/root \"../p\"} my/q nil}}", "p/deps.edn",
+				"{:deps {my/x {:local/root \"../missing\"}}}");
+		assertRoots("{:deps {my/a {:local/root \"a\"} my/b {:local/root \"b\"}}}",
+				"No known ancestor relationship between local versions for my/c: c2 and c1", "a/deps.edn",
+				"{:deps {my/c {:local/root \"../c1\"}}}", "b/deps.edn",
+				"{:deps {my/p {:local/root \"../p\"} my/c {:local/root \"../c2\"}}}", "p/deps.edn",
+				"{:deps {my/x {:local/root \"../missing\"}}}", "c1/deps.edn", "{}", "c2/deps.edn", "{}");
+		// a coordinate is checked where it is written, also one that is then turned
+		// away: below a top-level library of the same name, below its parent's exclusion
+		assertRoots("{:deps {my/a {:local/root \"a\"} my/c {:local/root \"c\"}}}", "Local lib my/c not found: missing",
+				"a/deps.edn", "{:deps {my/c {:local/root \"../missing\"}}}", "c/deps.edn", "{}");
+		assertRoots("{:deps {my/a {:local/root \"a\" :exclusions [my/c]}}}", "Local lib my/c not found: missing",
+				"a/deps.edn", "{:deps {my/c {:local/root \"../missing\"}}}");
+		// a nil coordinate is refused when decided, ahead of an exclusion from further up
+		// the route and of a top-level library of the same name
+		assertRoots("{:deps {my/a {:local/root \"a\" :exclusions [my/c]}}}",
+				"Bad coordinate for library my/c, expected map: nil", "a/deps.edn",
+				"{:deps {my/b {:local/root \"../b\"}}}", "b/deps.edn", "{:deps {my/c nil}}");
+		assertRoots("{:deps {my/a {:local/root \"a\"} my/c {:local/root \"c\"}}}",
+				"Bad coordinate for library my/c, expected map: nil", "a/deps.edn", "{:deps {my/c nil}}", "c/deps.edn",
+				"{}");
 	}
 
 	@Test

@@ -1,8 +1,7 @@
 package am.ik.rontolisp.clojure;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -10,7 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.SequencedMap;
 import java.util.Set;
-import java.util.function.Predicate;
+import java.util.TreeMap;
 import java.util.function.Supplier;
 
 import am.ik.rontolisp.clojure.ClojureDepsEdn.Coord;
@@ -19,20 +18,45 @@ import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The dependency graph of a {@code deps.edn} project and the libraries it selects, by the
- * oracle's own rules ({@code clj} 1.12.6's {@code clojure.tools.deps/resolve-deps} and
- * {@code make-classpath-map}, ported and measured against it 2026-10-08):
+ * Which libraries a {@code deps.edn} project selects, and in which order they go on the
+ * source path: the answer {@code clj} gives for the same dependencies.
+ * <p>
+ * Built from two things, and from nothing else. The rules are the ones the published
+ * reference states (clojure.org, "Dependency Expansion" and the {@code deps.edn}
+ * reference): the tree is walked breadth first; a top-level dependency always wins; among
+ * the others the newest version of a library wins; an exclusion holds below the
+ * coordinate that names it, and a library excluded on one path and brought in on another
+ * is in; what only a replaced version brought in is dropped. Everything the reference
+ * leaves open was learned by running {@code clj} 1.12.6.1673 as a black box
+ * ({@code -Srepro -Spath} and {@code -Stree} over a {@code file:} Maven repository and
+ * over {@code :local/root} trees, 2026-11-18: forty constructed Maven graphs, some thirty
+ * local trees, and the classpaths of 1,500 generated graphs of up to eight libraries in
+ * three versions with exclusions and cycles) and writing down what it answered. The
+ * source of tools.deps was not read for it, and the walk that stood here before, which
+ * had been translated from that source, was deleted, not edited. What the answers showed,
+ * each pinned by {@code ClojureDepsGraphTest} (the read of a replaced library's
+ * dependencies by {@code ClojureDepsFetchCliTest}):
  * <ul>
- * <li>the top-level deps are expanded breadth first, each library's dependencies after
- * the libraries already queued;</li>
- * <li>a top-level dep always wins; otherwise the newest version of a library across the
- * tree is selected ({@link ClojureMavenVersions} for Maven versions; two local roots of
- * one library are no versions of each other and are refused, as are coordinates of two
- * types), and the dependencies only the replaced version brought in are dropped;</li>
- * <li>{@code :exclusions} drop a library below the coordinate naming them, unless another
- * path brings it in; a cycle stops at the library already selected;</li>
- * <li>the selected libraries go on the source path top of the tree first, alphabetically
- * by their path from the top at each depth, each library's roots in its own order.</li>
+ * <li>The walk goes in waves, one per depth. Every dependency of a wave is decided, in
+ * order, before the dependencies of any library taken in it are read; so a refusal met
+ * while deciding comes before one met while reading, and a library replaced within its
+ * own wave still has its dependencies read (and each of them then turned away).</li>
+ * <li>A library keeps, per version, the routes it was taken on. A dependency is
+ * considered only while its parent's selected version was taken on the route the
+ * dependency hangs from, and while that parent itself hangs from a library that still
+ * holds it.</li>
+ * <li>When a newer version replaces the selected one, every other library whose selected
+ * version was taken only on routes through the replaced one loses its selection, and with
+ * it its claim against an older version arriving later. A library taken again after that
+ * has its dependencies offered again.</li>
+ * <li>A version met again where its coordinate excludes less offers what every earlier
+ * coordinate of it excluded and this one does not. Only a coordinate's own
+ * {@code :exclusions} count for that; one inherited from further up the route does
+ * not.</li>
+ * <li>Two versions that compare equal but are spelled differently are the first one.</li>
+ * <li>A selected library is placed by the shortest route its selected version was ever
+ * taken on, routes of one length in the order of their libraries' names, whether or not
+ * that route still stands.</li>
  * </ul>
  * What a coordinate brings -- its dependencies, its roots -- is the {@link Procurer}'s;
  * this class is the selection, deterministic for a given graph
@@ -41,14 +65,16 @@ import org.jspecify.annotations.Nullable;
 final class ClojureDepsGraph {
 
 	/**
-	 * What the expansion asks of a coordinate: the oracle's extension points
-	 * ({@code clojure.tools.deps.extensions}), each answering for one library.
+	 * What the selection asks about a coordinate. Each question is one the oracle answers
+	 * per kind of coordinate (Maven, local root, git), and each may refuse in the
+	 * oracle's words.
 	 */
 	interface Procurer {
 
 		/**
-		 * The coordinate in canonical form ({@code ext/canonicalize}): a local root made
-		 * canonical against the directory and checked to exist, a git coordinate checked.
+		 * The coordinate in the one spelling the rest of the selection compares: a local
+		 * root made canonical against the directory and checked to exist, a git
+		 * coordinate checked against its repository, a Maven version range resolved.
 		 * @param lib the library
 		 * @param coord its coordinate
 		 * @param dir the directory a relative path is relative to, or null for the
@@ -58,43 +84,44 @@ final class ClojureDepsGraph {
 		Coord canonicalize(Lib lib, Coord coord, @Nullable String dir);
 
 		/**
-		 * The coordinate with its manifest merged in ({@code ext/manifest-type}):
-		 * {@code :deps/manifest} and {@code :deps/root} where the coordinate has them.
+		 * The coordinate with what kind of project it names ({@code :deps/manifest}) and
+		 * where that project's root is ({@code :deps/root}), where the coordinate has
+		 * them.
 		 * @param lib the library
-		 * @param coord its coordinate
-		 * @return the coordinate the rest of the expansion uses
+		 * @param coord its canonical coordinate
+		 * @return the coordinate the rest of the selection uses
 		 */
 		Coord manifest(Lib lib, Coord coord);
 
 		/**
-		 * The libraries this one depends on, in its manifest's order
-		 * ({@code ext/coord-deps}), not yet canonicalized.
+		 * The libraries this one depends on, in the order and with the coordinates it
+		 * declares them.
 		 * @param lib the library
-		 * @param useCoord its coordinate, manifest merged
+		 * @param useCoord its coordinate, as {@link #manifest} answered it
 		 * @return the dependencies
 		 */
 		List<Dep> children(Lib lib, Coord useCoord);
 
 		/**
-		 * What a selected library puts on the source path ({@code ext/coord-paths}).
+		 * What a selected library puts on the source path.
 		 * @param lib the library
-		 * @param useCoord its coordinate, manifest merged
+		 * @param useCoord its coordinate, as {@link #manifest} answered it
 		 * @return its contribution
 		 */
 		Contribution contribution(Lib lib, Coord useCoord);
 
 		/**
-		 * Whether a selected library still needs the preparation its
-		 * {@code :deps/prep-lib} names ({@code prep-libs!}).
+		 * Whether a selected library declares a preparation step ({@code :deps/prep-lib})
+		 * that has not been run.
 		 * @param lib the library
-		 * @param useCoord its coordinate, manifest merged
-		 * @return whether its {@code :ensure} directory is missing
+		 * @param useCoord its coordinate, as {@link #manifest} answered it
+		 * @return whether the directory the step would make is missing
 		 */
 		boolean unprepped(Lib lib, Coord useCoord);
 
 		/**
-		 * Compares two git coordinates of one library with different commits: the newer
-		 * is the descendant ({@code compare-versions [:git :git]}).
+		 * Compares two git coordinates of one library that name different commits: of two
+		 * commits the descendant is the newer.
 		 * @param lib the library
 		 * @param x one coordinate
 		 * @param y the other
@@ -186,51 +213,88 @@ final class ClojureDepsGraph {
 	record Selected(Lib lib, Coord coord, Contribution contribution) {
 	}
 
-	/** Every version of one library seen, the paths reaching each, and the selection. */
-	private static final class Versions {
+	/**
+	 * One version of a library that the walk took at least once.
+	 */
+	private static final class Standing {
 
-		final Map<String, Coord> coords = new LinkedHashMap<>();
+		final Lib lib;
 
-		final Map<String, Set<List<Lib>>> paths = new LinkedHashMap<>();
+		/**
+		 * The coordinate it was first taken with, as {@link Procurer#manifest} gave it.
+		 */
+		final Coord coord;
 
-		@Nullable String select;
+		/** Every route it was taken on, top down to its parent; none is ever removed. */
+		final Set<List<Lib>> routes = new LinkedHashSet<>();
 
-		boolean top;
+		/**
+		 * The libraries every coordinate it was taken with, since it last became the
+		 * selection, excluded itself.
+		 */
+		Set<Lib> withheld = Set.of();
 
-		@Nullable Set<List<Lib>> selectedPaths() {
-			return this.select == null ? null : this.paths.get(this.select);
+		/** What it depends on, canonical; read the first time the walk needs it. */
+		@Nullable List<Dep> dependencies;
+
+		Standing(Lib lib, Coord coord) {
+			this.lib = lib;
+			this.coord = coord;
 		}
 
 	}
 
-	/** What the breadth-first queue holds: a node, or a node's dependencies to read. */
-	private sealed interface Queued permits Node, Children {
+	/** What the walk knows of one library. */
+	private static final class Entry {
+
+		/** Its versions taken so far, by {@link #version}. */
+		final Map<String, Standing> taken = new HashMap<>();
+
+		/** The selected version, or null while none is. */
+		@Nullable Standing selected;
+
+		/** Whether the project names it itself. */
+		boolean top;
 
 	}
 
 	/**
-	 * A queued node: the path of libraries above it, and it.
+	 * A dependency still to decide.
 	 *
-	 * @param parents the libraries from the top down to its parent
+	 * @param route the libraries from the top down to the one declaring it
 	 * @param lib the library
 	 * @param coord its canonical coordinate, or null for {@code nil}
+	 * @param barred the libraries excluded by the coordinates along the route
 	 */
-	private record Node(List<Lib> parents, Lib lib, @Nullable Coord coord) implements Queued {
+	private record Offer(List<Lib> route, Lib lib, @Nullable Coord coord, Set<Lib> barred) {
 	}
 
 	/**
-	 * A queued expansion of one included library's dependencies, filtered by what its
-	 * exclusions allow.
+	 * A dependency just taken, whose own dependencies make part of the next wave.
 	 *
-	 * @param lib the library
-	 * @param coordId its version's identity
-	 * @param useCoord its coordinate, manifest merged
-	 * @param usePath the libraries from the top down to it
-	 * @param pred which of its dependencies get queued
+	 * @param standing the version taken
+	 * @param route the route it was taken on
+	 * @param own what its coordinate excludes itself
+	 * @param barred the libraries excluded for everything below it on this route
+	 * @param only the dependencies to offer, or null for every one {@code own} lets
+	 * through
 	 */
-	private record Children(Lib lib, String coordId, Coord useCoord, List<Lib> usePath,
-			Predicate<Lib> pred) implements Queued {
+	private record Opening(Standing standing, List<Lib> route, Set<Lib> own, Set<Lib> barred, @Nullable Set<Lib> only) {
 	}
+
+	/** Shorter routes first; routes of one length by their libraries, top down. */
+	private static final Comparator<List<Lib>> ROUTE_ORDER = (a, b) -> {
+		if (a.size() != b.size()) {
+			return Integer.compare(a.size(), b.size());
+		}
+		for (int i = 0; i < a.size(); i++) {
+			int byLib = a.get(i).compareTo(b.get(i));
+			if (byLib != 0) {
+				return byLib;
+			}
+		}
+		return 0;
+	};
 
 	private final Procurer procurer;
 
@@ -242,16 +306,17 @@ final class ClojureDepsGraph {
 	/** {@code :default-deps}: the coordinate used for a library that names none. */
 	private final Map<Lib, @Nullable Coord> defaults;
 
-	/** An override or default canonicalized against the project, once per library. */
-	private final Map<String, Coord> canonicalArgs = new HashMap<>();
+	/** The overrides already made canonical, each when first used. */
+	private final Map<Lib, Coord> canonicalOverrides = new HashMap<>();
 
-	private final Map<Lib, Versions> versions = new LinkedHashMap<>();
+	/** The defaults already made canonical, each when first used. */
+	private final Map<Lib, Coord> canonicalDefaults = new HashMap<>();
 
-	private final Map<List<Lib>, Set<Lib>> exclusions = new HashMap<>();
+	/** Every library offered so far. */
+	private final Map<Lib, Entry> entries = new HashMap<>();
 
-	private final Map<String, @Nullable Set<Lib>> cut = new HashMap<>();
-
-	private final Map<String, List<Node>> childrenMemo = new HashMap<>();
+	/** The libraries in the order each was first taken. */
+	private final Set<Lib> firstTaken = new LinkedHashSet<>();
 
 	private ClojureDepsGraph(Procurer procurer, @Nullable String dir, Map<Lib, @Nullable Coord> overrides,
 			Map<Lib, @Nullable Coord> defaults) {
@@ -262,8 +327,7 @@ final class ClojureDepsGraph {
 	}
 
 	/**
-	 * Expands the top-level deps and selects the libraries, like the oracle's
-	 * {@code resolve-deps} followed by {@code make-classpath-map}'s library order.
+	 * Selects the libraries of a project.
 	 * @param deps the top-level deps, in the merged map's order
 	 * @param dir the project's directory, which a top-level relative path is relative to
 	 * (null for the working directory)
@@ -275,13 +339,15 @@ final class ClojureDepsGraph {
 	}
 
 	/**
-	 * {@link #resolve(SequencedMap, String, Procurer)} under the aliases'
-	 * {@code :override-deps} and {@code :default-deps}, the oracle's
-	 * {@code choose-coord}: wherever a library appears, its override if it has one, else
-	 * the coordinate that names it, else its default. Both are read relative to the
-	 * project's directory wherever the library appears, and only when used (measured on
-	 * {@code clj} 1.12.6, 2026-10-08: a relative {@code :local/root} override of a
-	 * transitive library resolves against the project).
+	 * {@link #resolve(SequencedMap, String, Procurer)} under the selected aliases'
+	 * {@code :override-deps} and {@code :default-deps}. Wherever a library appears, top
+	 * level included, its coordinate is its override if it has one, else the one written
+	 * there, else its default. Asked of {@code clj} 1.12.6: an override or default is
+	 * read relative to the project's directory and only when used (one whose root is
+	 * missing and that nothing uses is no refusal); the coordinate an override replaces
+	 * is still checked where it is written; the override's own {@code :exclusions} hold
+	 * and the replaced coordinate's do not; two parents' different coordinates of an
+	 * overridden library are one version.
 	 * @param deps the top-level deps, in the merged map's order
 	 * @param dir the project's directory (null for the working directory)
 	 * @param procurer what a coordinate brings
@@ -292,196 +358,121 @@ final class ClojureDepsGraph {
 	static List<Selected> resolve(SequencedMap<Lib, @Nullable Coord> deps, @Nullable String dir, Procurer procurer,
 			Map<Lib, @Nullable Coord> overrides, Map<Lib, @Nullable Coord> defaults) {
 		ClojureDepsGraph graph = new ClojureDepsGraph(procurer, dir, overrides, defaults);
-		List<Dep> top = new ArrayList<>();
-		for (Map.Entry<Lib, @Nullable Coord> entry : deps.entrySet()) {
-			top.add(new Dep(entry.getKey(), entry.getValue()));
+		List<Offer> top = new ArrayList<>();
+		for (Map.Entry<Lib, @Nullable Coord> dep : deps.entrySet()) {
+			Coord coord = dep.getValue();
+			top.add(new Offer(List.of(), dep.getKey(),
+					coord == null ? null : procurer.canonicalize(dep.getKey(), coord, dir), Set.of()));
 		}
-		graph.expand(graph.canonicalized(top, List.of(), dir));
-		return graph.classpathOrder();
+		graph.walk(top);
+		return graph.sourcePathOrder();
 	}
 
-	/** The coordinates canonicalized against a directory, as queued nodes. */
-	private List<Node> canonicalized(List<Dep> deps, List<Lib> parents, @Nullable String against) {
-		List<Node> out = new ArrayList<>();
-		for (Dep dep : deps) {
-			Coord coord = dep.coord();
-			out.add(new Node(parents, dep.lib(),
-					coord == null ? null : this.procurer.canonicalize(dep.lib(), coord, against)));
-		}
-		return out;
-	}
-
-	/** The breadth-first expansion: {@code expand-deps}. */
-	private void expand(List<Node> top) {
-		Deque<Queued> queue = new ArrayDeque<>(top);
-		Deque<Node> pending = new ArrayDeque<>();
-		while (true) {
-			Node node = nextNode(pending, queue);
-			if (node == null) {
-				return;
+	/**
+	 * Walks the tree a wave at a time: the top-level deps, then what the libraries taken
+	 * from them depend on, and so on until a wave takes nothing.
+	 */
+	private void walk(List<Offer> top) {
+		List<Offer> wave = top;
+		while (!wave.isEmpty()) {
+			List<Opening> openings = new ArrayList<>();
+			for (Offer offer : wave) {
+				Opening opening = decide(offer);
+				if (opening != null) {
+					openings.add(opening);
+				}
 			}
-			Lib lib = node.lib();
-			List<Lib> parents = node.parents();
-			Coord coord = chooseCoord(lib, node.coord());
-			if (coord == null) {
-				throw new LispReadException("Bad coordinate for library " + lib + ", expected map: nil");
+			List<Offer> next = new ArrayList<>();
+			for (Opening opening : openings) {
+				offersBelow(opening, next);
 			}
-			Coord useCoord = this.procurer.manifest(lib, coord);
-			String coordId = depId(useCoord);
-			List<Lib> usePath = append(parents, lib);
-			Decision decision = include(lib, useCoord, coordId, parents);
-			Predicate<Lib> pred = updateExclusions(lib, useCoord, coordId, usePath, decision);
-			if (pred != null) {
-				queue.addLast(new Children(lib, coordId, useCoord, usePath, pred));
-			}
+			wave = next;
 		}
 	}
 
-	/** {@code choose-coord}: the override, else the node's own, else the default. */
-	private @Nullable Coord chooseCoord(Lib lib, @Nullable Coord coord) {
-		Coord override = argCoord("override", lib, this.overrides);
+	/**
+	 * Decides one dependency.
+	 * @return what to read for the next wave, or null when the dependency is turned away
+	 * or brings nothing new
+	 */
+	private @Nullable Opening decide(Offer offer) {
+		Lib lib = offer.lib();
+		Coord coord = coordinateFor(lib, offer.coord());
+		if (coord == null) {
+			throw new LispReadException("Bad coordinate for library " + lib + ", expected map: nil");
+		}
+		Entry entry = this.entries.computeIfAbsent(lib, key -> new Entry());
+		List<Lib> route = offer.route();
+		if (route.isEmpty()) {
+			entry.top = true;
+		}
+		else if (entry.top || offer.barred().contains(lib.base()) || !stillOffered(route)) {
+			return null;
+		}
+		Coord useCoord = this.procurer.manifest(lib, coord);
+		String version = version(useCoord);
+		Set<Lib> excluded = useCoord.exclusions();
+		Set<Lib> own = excluded == null ? Set.of() : excluded;
+		Set<Lib> barred = union(offer.barred(), own);
+		Standing selected = entry.selected;
+		if (selected != null && selected == entry.taken.get(version)) {
+			// the selected version again: one more route, and what it may now bring
+			selected.routes.add(route);
+			Set<Lib> released = new LinkedHashSet<>(selected.withheld);
+			released.removeAll(own);
+			selected.withheld = intersection(selected.withheld, own);
+			return released.isEmpty() ? null : new Opening(selected, route, own, barred, released);
+		}
+		if (selected != null && compare(lib, useCoord, selected.coord) <= 0) {
+			return null;
+		}
+		Standing standing = entry.taken.computeIfAbsent(version, key -> new Standing(lib, useCoord));
+		standing.routes.add(route);
+		standing.withheld = own;
+		entry.selected = standing;
+		this.firstTaken.add(lib);
+		if (selected != null) {
+			unselectWhatHungFrom(selected, entry);
+		}
+		return new Opening(standing, route, own, barred, null);
+	}
+
+	/**
+	 * The coordinate a library is decided with: its override, else the one written, else
+	 * its default.
+	 */
+	private @Nullable Coord coordinateFor(Lib lib, @Nullable Coord written) {
+		Coord override = aliasCoordinate(lib, this.overrides, this.canonicalOverrides);
 		if (override != null) {
 			return override;
 		}
-		return coord != null ? coord : argCoord("default", lib, this.defaults);
+		return written != null ? written : aliasCoordinate(lib, this.defaults, this.canonicalDefaults);
 	}
 
-	private @Nullable Coord argCoord(String kind, Lib lib, Map<Lib, @Nullable Coord> args) {
-		Coord raw = args.get(lib);
-		if (raw == null) {
-			return null;
-		}
-		String key = kind + " " + lib;
-		Coord known = this.canonicalArgs.get(key);
+	private @Nullable Coord aliasCoordinate(Lib lib, Map<Lib, @Nullable Coord> given, Map<Lib, Coord> canonical) {
+		Coord known = canonical.get(lib);
 		if (known == null) {
+			Coord raw = given.get(lib);
+			if (raw == null) {
+				return null;
+			}
 			known = this.procurer.canonicalize(lib, raw, this.dir);
-			this.canonicalArgs.put(key, known);
+			canonical.put(lib, known);
 		}
 		return known;
 	}
 
 	/**
-	 * The next node: a pending sibling first, else the next queued node, else the next
-	 * queued library's dependencies -- read now, in queue order, so a manifest's refusal
-	 * surfaces where the oracle's does.
+	 * Whether a dependency hanging from a route is still on offer: its parent's selected
+	 * version was taken on that route, and the parent is itself held by some library.
 	 */
-	private @Nullable Node nextNode(Deque<Node> pending, Deque<Queued> queue) {
-		while (true) {
-			Node sibling = pending.pollFirst();
-			if (sibling != null) {
-				return sibling;
-			}
-			Queued next = queue.pollFirst();
-			switch (next) {
-				case null -> {
-					return null;
-				}
-				case Node node -> {
-					return node;
-				}
-				case Children children -> {
-					for (Node child : childrenOf(children)) {
-						if (children.pred().test(child.lib())) {
-							pending.addLast(new Node(children.usePath(), child.lib(), child.coord()));
-						}
-					}
-				}
-			}
+	private boolean stillOffered(List<Lib> route) {
+		Standing parent = selectedAt(route);
+		if (parent == null) {
+			return false;
 		}
-	}
-
-	/** A library's canonical dependencies, read once per library version. */
-	private List<Node> childrenOf(Children children) {
-		String key = children.lib() + " " + children.coordId();
-		List<Node> known = this.childrenMemo.get(key);
-		if (known == null) {
-			String root = children.useCoord().string(":deps/root");
-			known = canonicalized(this.procurer.children(children.lib(), children.useCoord()), List.of(),
-					root != null ? root : this.dir);
-			this.childrenMemo.put(key, known);
-		}
-		return known;
-	}
-
-	/** Why a node was included or omitted ({@code include-coord?}'s reason). */
-	private enum Decision {
-
-		NEW_TOP(true), NEW_DEP(true), NEWER_VERSION(true), EXCLUDED(false), USE_TOP(false), PARENT_OMITTED(false),
-		SAME_VERSION(false), OLDER_VERSION(false);
-
-		final boolean include;
-
-		Decision(boolean include) {
-			this.include = include;
-		}
-
-	}
-
-	/**
-	 * The include decision for one node, updating the versions: {@code include-coord?}.
-	 */
-	private Decision include(Lib lib, Coord coord, String coordId, List<Lib> parents) {
-		if (parents.isEmpty()) {
-			addVersion(lib, coord, parents, coordId);
-			select(lib, coordId, true);
-			return Decision.NEW_TOP;
-		}
-		if (excluded(parents, lib)) {
-			return Decision.EXCLUDED;
-		}
-		Versions known = this.versions.get(lib);
-		if (known != null && known.top) {
-			return Decision.USE_TOP;
-		}
-		if (parentMissing(parents)) {
-			return Decision.PARENT_OMITTED;
-		}
-		if (known == null || known.select == null) {
-			addVersion(lib, coord, parents, coordId);
-			select(lib, coordId, false);
-			return Decision.NEW_DEP;
-		}
-		if (coordId.equals(known.select)) {
-			addVersion(lib, coord, parents, coordId);
-			return Decision.SAME_VERSION;
-		}
-		Coord selected = known.coords.get(known.select);
-		if (selected != null && compareVersions(lib, coord, selected) > 0) {
-			Set<List<Lib>> omitted = new LinkedHashSet<>();
-			Set<List<Lib>> oldPaths = known.selectedPaths();
-			if (oldPaths != null) {
-				for (List<Lib> path : oldPaths) {
-					omitted.add(append(path, lib));
-				}
-			}
-			addVersion(lib, coord, parents, coordId);
-			deselectOrphans(omitted);
-			select(lib, coordId, false);
-			return Decision.NEWER_VERSION;
-		}
-		return Decision.OLDER_VERSION;
-	}
-
-	private void addVersion(Lib lib, Coord coord, List<Lib> parents, String coordId) {
-		Versions known = this.versions.computeIfAbsent(lib, k -> new Versions());
-		known.coords.put(coordId, coord);
-		known.paths.computeIfAbsent(coordId, k -> new LinkedHashSet<>()).add(parents);
-	}
-
-	private void select(Lib lib, String coordId, boolean top) {
-		Versions known = this.versions.computeIfAbsent(lib, k -> new Versions());
-		known.select = coordId;
-		if (top) {
-			known.top = true;
-		}
-	}
-
-	/** Whether an exclusion above the node names its library: {@code excluded?}. */
-	private boolean excluded(List<Lib> parents, Lib lib) {
-		Lib base = lib.base();
-		for (int length = parents.size(); length > 0; length--) {
-			Set<Lib> excluded = this.exclusions.get(parents.subList(0, length));
-			if (excluded != null && excluded.contains(base)) {
+		for (List<Lib> parentRoute : parent.routes) {
+			if (parentRoute.isEmpty() || selectedAt(parentRoute) != null) {
 				return true;
 			}
 		}
@@ -489,240 +480,182 @@ final class ClojureDepsGraph {
 	}
 
 	/**
-	 * Whether a library on the path to the node is no longer selected along it -- a newer
-	 * version elsewhere orphaned it: {@code parent-missing?}, following the other paths
-	 * to a selected library before giving up.
+	 * The selected version of a route's last library, when it was taken on the rest of
+	 * the route.
 	 */
-	private boolean parentMissing(List<Lib> parentPath) {
-		List<Lib> path = parentPath;
-		Deque<List<Lib>> more = new ArrayDeque<>();
-		while (true) {
-			if (path.isEmpty()) {
-				return false;
+	private @Nullable Standing selectedAt(List<Lib> route) {
+		Entry entry = this.entries.get(route.getLast());
+		Standing selected = entry == null ? null : entry.selected;
+		return selected != null && selected.routes.contains(route.subList(0, route.size() - 1)) ? selected : null;
+	}
+
+	/**
+	 * A version was replaced: every other library whose selected version was taken only
+	 * on routes through it is no longer selected. The library that replaced it keeps its
+	 * selection even when its own route came through the replaced version (a cycle).
+	 */
+	private void unselectWhatHungFrom(Standing replaced, Entry replacing) {
+		List<List<Lib>> through = new ArrayList<>();
+		for (List<Lib> route : replaced.routes) {
+			through.add(below(route, replaced.lib));
+		}
+		for (Entry entry : this.entries.values()) {
+			Standing selected = entry.selected;
+			if (selected == null || entry == replacing) {
+				continue;
 			}
-			Lib lib = path.get(path.size() - 1);
-			List<Lib> check = path.subList(0, path.size() - 1);
-			Versions known = this.versions.get(lib);
-			Set<List<Lib>> toSelected = known == null ? null : known.selectedPaths();
-			if (toSelected != null && toSelected.contains(check)) {
-				for (List<Lib> other : toSelected) {
-					if (!other.equals(check)) {
-						more.addLast(other);
-					}
+			boolean elsewhere = false;
+			for (List<Lib> route : selected.routes) {
+				if (!startsWithAny(route, through)) {
+					elsewhere = true;
+					break;
 				}
-				path = check;
 			}
-			else if (!more.isEmpty()) {
-				path = more.removeFirst();
+			if (!elsewhere) {
+				entry.selected = null;
 			}
-			else {
+		}
+	}
+
+	private static boolean startsWithAny(List<Lib> route, List<List<Lib>> starts) {
+		for (List<Lib> start : starts) {
+			if (route.size() >= start.size() && route.subList(0, start.size()).equals(start)) {
 				return true;
 			}
 		}
+		return false;
 	}
 
 	/**
-	 * Deselects every library all of whose paths to its selected version run through the
-	 * omitted paths: {@code deselect-orphans}.
+	 * Reads what a taken version depends on and adds its offers to the next wave. Every
+	 * dependency written with a coordinate is made canonical first, against the library's
+	 * own root, also one that is then left out: only after that does the coordinate's own
+	 * exclusion drop it.
 	 */
-	private void deselectOrphans(Set<List<Lib>> omitted) {
-		for (Versions known : this.versions.values()) {
-			Set<List<Lib>> paths = known.selectedPaths();
-			boolean orphaned = true;
-			if (paths != null) {
-				for (List<Lib> path : paths) {
-					boolean under = false;
-					for (List<Lib> prefix : omitted) {
-						if (path.size() >= prefix.size() && path.subList(0, prefix.size()).equals(prefix)) {
-							under = true;
-							break;
-						}
-					}
-					if (!under) {
-						orphaned = false;
-						break;
-					}
-				}
+	private void offersBelow(Opening opening, List<Offer> next) {
+		Standing standing = opening.standing();
+		List<Dep> dependencies = standing.dependencies;
+		if (dependencies == null) {
+			String root = standing.coord.string(":deps/root");
+			dependencies = new ArrayList<>();
+			for (Dep declared : this.procurer.children(standing.lib, standing.coord)) {
+				Coord coord = declared.coord();
+				dependencies.add(new Dep(declared.lib(),
+						coord == null ? null : this.procurer.canonicalize(declared.lib(), coord, root)));
 			}
-			if (orphaned) {
-				known.select = null;
+			standing.dependencies = dependencies;
+		}
+		List<Lib> route = below(opening.route(), standing.lib);
+		Set<Lib> only = opening.only();
+		for (Dep dependency : dependencies) {
+			Lib named = dependency.lib().base();
+			if (only != null ? only.contains(named) : !opening.own().contains(named)) {
+				next.add(new Offer(route, dependency.lib(), dependency.coord(), opening.barred()));
 			}
 		}
 	}
 
 	/**
-	 * The exclusions an included node adds, and which of its dependencies get queued
-	 * ({@code update-excl}): all of them but its own exclusions when it is new; when it
-	 * is the selected version seen again, only those an earlier visit's exclusions cut
-	 * that this visit no longer excludes; none otherwise (null).
+	 * The selected libraries where the source path has them: each at the shortest route
+	 * its selected version was taken on, the routes of one length in the order of their
+	 * libraries, a library's siblings by name. Their contributions are asked in that
+	 * order; then the libraries still to prepare are refused together, named in the order
+	 * the walk first took them.
 	 */
-	private @Nullable Predicate<Lib> updateExclusions(Lib lib, Coord useCoord, String coordId, List<Lib> usePath,
-			Decision decision) {
-		Set<Lib> coordExcl = useCoord.exclusions();
-		String cutKey = lib + " " + coordId;
-		if (decision.include) {
-			if (coordExcl == null) {
-				return child -> true;
-			}
-			this.exclusions.put(usePath, coordExcl);
-			this.cut.put(cutKey, coordExcl);
-			return child -> !coordExcl.contains(child);
-		}
-		if (decision == Decision.SAME_VERSION) {
-			if (coordExcl != null && !coordExcl.isEmpty()) {
-				this.exclusions.put(usePath, coordExcl);
-			}
-			Set<Lib> cutCoord = this.cut.get(cutKey);
-			Set<Lib> newCut = intersection(coordExcl, cutCoord);
-			Set<Lib> enqueueOnly = difference(cutCoord, newCut);
-			this.cut.put(cutKey, newCut);
-			Set<Lib> only = enqueueOnly == null ? Set.of() : enqueueOnly;
-			return only::contains;
-		}
-		return null;
-	}
-
-	/** {@code clojure.set/intersection}, where a missing set is nil. */
-	private static @Nullable Set<Lib> intersection(@Nullable Set<Lib> a, @Nullable Set<Lib> b) {
-		int countA = a == null ? 0 : a.size();
-		int countB = b == null ? 0 : b.size();
-		if (countB < countA) {
-			return intersection(b, a);
-		}
-		if (a == null) {
-			return null;
-		}
-		Set<Lib> out = new LinkedHashSet<>(a);
-		out.removeIf(member -> b == null || !b.contains(member));
-		return out;
-	}
-
-	/** {@code clojure.set/difference}, where a missing set is nil. */
-	private static @Nullable Set<Lib> difference(@Nullable Set<Lib> a, @Nullable Set<Lib> b) {
-		if (a == null) {
-			return null;
-		}
-		Set<Lib> out = new LinkedHashSet<>(a);
-		if (b != null) {
-			out.removeAll(b);
-		}
-		return out;
-	}
-
-	/**
-	 * The selected libraries in source path order: every path from the top to a selected
-	 * library, sorted by length and then library by library, each library at its first
-	 * path ({@code flatten-libs}); a library's contribution read in that order.
-	 */
-	private List<Selected> classpathOrder() {
-		List<List<Lib>> treePaths = new ArrayList<>();
-		Map<Lib, Coord> selected = new LinkedHashMap<>();
-		for (Map.Entry<Lib, Versions> entry : this.versions.entrySet()) {
-			Versions known = entry.getValue();
-			Coord coord = known.select == null ? null : known.coords.get(known.select);
-			if (coord == null) {
-				continue; // cut-orphans
-			}
-			selected.put(entry.getKey(), coord);
-			Set<List<Lib>> parents = known.selectedPaths();
-			if (parents != null) {
-				for (List<Lib> parent : parents) {
-					treePaths.add(append(parent, entry.getKey()));
+	private List<Selected> sourcePathOrder() {
+		Map<List<Lib>, Standing> places = new TreeMap<>(ROUTE_ORDER);
+		for (Entry entry : this.entries.values()) {
+			Standing selected = entry.selected;
+			if (selected != null) {
+				for (List<Lib> route : selected.routes) {
+					places.put(below(route, selected.lib), selected);
 				}
 			}
 		}
-		// download-libs: every selected library's contribution, in the expansion's order
-		Map<Lib, Selected> chosen = new LinkedHashMap<>();
-		for (Map.Entry<Lib, Coord> entry : selected.entrySet()) {
-			chosen.put(entry.getKey(), new Selected(entry.getKey(), entry.getValue(),
-					this.procurer.contribution(entry.getKey(), entry.getValue())));
+		Map<Lib, Selected> placed = new LinkedHashMap<>();
+		for (Standing standing : places.values()) {
+			if (!placed.containsKey(standing.lib)) {
+				placed.put(standing.lib, new Selected(standing.lib, standing.coord,
+						this.procurer.contribution(standing.lib, standing.coord)));
+			}
 		}
 		List<String> unprepped = new ArrayList<>();
-		for (Map.Entry<Lib, Coord> entry : selected.entrySet()) {
-			if (this.procurer.unprepped(entry.getKey(), entry.getValue())) {
-				unprepped.add(entry.getKey().toString());
+		for (Lib lib : this.firstTaken) {
+			Selected selected = placed.get(lib);
+			if (selected != null && this.procurer.unprepped(lib, selected.coord())) {
+				unprepped.add(lib.toString());
 			}
 		}
 		if (!unprepped.isEmpty()) {
 			throw new LispReadException(
 					"The following libs must be prepared before use: [" + String.join(" ", unprepped) + "]");
 		}
-		treePaths.sort(ClojureDepsGraph::comparePaths);
-		Set<Lib> order = new LinkedHashSet<>();
-		for (List<Lib> path : treePaths) {
-			order.add(path.get(path.size() - 1));
-		}
-		List<Selected> out = new ArrayList<>();
-		for (Lib lib : order) {
-			Selected one = chosen.get(lib);
-			if (one != null) {
-				out.add(one);
-			}
-		}
-		return out;
-	}
-
-	/** The oracle's vector order: shorter first, then member by member. */
-	private static int comparePaths(List<Lib> a, List<Lib> b) {
-		if (a.size() != b.size()) {
-			return Integer.compare(a.size(), b.size());
-		}
-		for (int i = 0; i < a.size(); i++) {
-			int c = a.get(i).compareTo(b.get(i));
-			if (c != 0) {
-				return c;
-			}
-		}
-		return 0;
+		return new ArrayList<>(placed.values());
 	}
 
 	/**
-	 * A coordinate's identity among the versions of its library ({@code ext/dep-id}): a
-	 * Maven version, a local root, a git repository at a commit.
-	 * @param coord the canonical coordinate
-	 * @return its identity
+	 * What makes two coordinates of one library the same version: a Maven version as
+	 * spelled, a local root, a git repository and commit.
 	 */
-	static String depId(Coord coord) {
-		return switch (coord.type()) {
-			case "mvn" -> "mvn " + coord.string(":mvn/version");
-			case "local" -> "local " + coord.string(":local/root");
-			default -> "git " + coord.string(":git/url") + " " + coord.string(":git/sha");
+	private static String version(Coord coord) {
+		String kind = coord.type();
+		return switch (kind) {
+			case "mvn" -> kind + " " + coord.string(":mvn/version");
+			case "local" -> kind + " " + coord.string(":local/root");
+			default -> kind + " " + coord.string(":git/url") + " " + coord.string(":git/sha");
 		};
 	}
 
 	/**
-	 * Which of two coordinates of one library is newer ({@code ext/compare-versions}):
-	 * Maven versions by their order, one local root is no other's version, git commits by
-	 * descent; coordinates of two types are the oracle's refusal.
+	 * Compares a coordinate offered for a library with the selected one, refusing in the
+	 * oracle's words when they cannot be compared: Maven versions by
+	 * {@link ClojureMavenVersions}; two local roots are equal or no versions of each
+	 * other; of two git commits the descendant is newer; two kinds never compare.
+	 * @return positive when the offered one is newer
 	 */
-	private int compareVersions(Lib lib, Coord x, Coord y) {
-		String typeX = x.type();
-		String typeY = y.type();
-		if (typeX.equals("mvn") && typeY.equals("mvn")) {
-			return ClojureMavenVersions.compare(String.valueOf(x.string(":mvn/version")),
-					String.valueOf(y.string(":mvn/version")));
+	private int compare(Lib lib, Coord offered, Coord selected) {
+		String kind = offered.type();
+		if (!kind.equals(selected.type())) {
+			throw new LispReadException(
+					"Unable to compare versions for " + lib + ": " + offered.print() + " and " + selected.print());
 		}
-		if (typeX.equals("local") && typeY.equals("local")) {
-			String rootX = x.string(":local/root");
-			String rootY = y.string(":local/root");
-			if (String.valueOf(rootX).equals(rootY)) {
+		if (kind.equals("mvn")) {
+			return ClojureMavenVersions.compare(String.valueOf(offered.string(":mvn/version")),
+					String.valueOf(selected.string(":mvn/version")));
+		}
+		if (kind.equals("local")) {
+			String offeredRoot = offered.string(":local/root");
+			String selectedRoot = selected.string(":local/root");
+			if (offeredRoot != null && offeredRoot.equals(selectedRoot)) {
 				return 0;
 			}
 			throw new LispReadException("No known ancestor relationship between local versions for " + lib + ": "
-					+ rootX + " and " + rootY);
+					+ offeredRoot + " and " + selectedRoot);
 		}
-		if (typeX.equals("git") && typeY.equals("git")) {
-			return String.valueOf(x.string(":git/sha")).equals(y.string(":git/sha")) ? 0
-					: this.procurer.compareGit(lib, x, y);
-		}
-		throw new LispReadException("Unable to compare versions for " + lib + ": " + x.print() + " and " + y.print());
+		return String.valueOf(offered.string(":git/sha")).equals(selected.string(":git/sha")) ? 0
+				: this.procurer.compareGit(lib, offered, selected);
 	}
 
-	private static List<Lib> append(List<Lib> path, Lib lib) {
-		List<Lib> out = new ArrayList<>(path.size() + 1);
-		out.addAll(path);
+	private static List<Lib> below(List<Lib> route, Lib lib) {
+		List<Lib> out = new ArrayList<>(route.size() + 1);
+		out.addAll(route);
 		out.add(lib);
 		return List.copyOf(out);
+	}
+
+	private static Set<Lib> union(Set<Lib> a, Set<Lib> b) {
+		if (b.isEmpty()) {
+			return a;
+		}
+		Set<Lib> out = new LinkedHashSet<>(a);
+		out.addAll(b);
+		return out;
+	}
+
+	private static Set<Lib> intersection(Set<Lib> a, Set<Lib> b) {
+		Set<Lib> out = new LinkedHashSet<>(a);
+		out.retainAll(b);
+		return out;
 	}
 
 }

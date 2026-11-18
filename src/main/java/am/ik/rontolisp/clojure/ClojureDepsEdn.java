@@ -37,45 +37,61 @@ import org.jspecify.annotations.Nullable;
  */
 final class ClojureDepsEdn {
 
-	/**
-	 * The oracle's root {@code deps.edn} ({@code clojure/tools/deps/deps.edn} of
-	 * {@code clj} 1.12.6), the first map every project and every {@code :local/root}
-	 * dependency merges: the default {@code :paths ["src"]} and the
-	 * {@code org.clojure/clojure} dependency come from it.
-	 */
-	private static final String ROOT_TEXT = """
-			{
-			  :paths ["src"]
-
-			  :deps {
-			    org.clojure/clojure {:mvn/version "1.12.6"}
-			  }
-
-			  :aliases {
-			    :deps {:replace-paths []
-			           :replace-deps {org.clojure/tools.deps.cli {:mvn/version "0.31.162"}}
-			           :ns-default clojure.tools.deps.cli.api
-			           :ns-aliases {help clojure.tools.deps.cli.help}}
-			    :test {:extra-paths ["test"]}
-			  }
-
-			  :mvn/repos {
-			    "central" {:url "https://repo1.maven.org/maven2/"}
-			    "clojars" {:url "https://repo.clojars.org/"}
-			  }
-			}
-			""";
-
 	/** The keys whose presence names a coordinate's type, per type. */
 	private static final Map<String, List<String>> TYPE_KEYS = typeKeys();
 
 	/** The map of a {@code deps.edn} that holds nothing (an empty file, {@code nil}). */
 	static final DepsMap EMPTY = new DepsMap(null, null, null, null, null, null);
 
-	/** The oracle's root map ({@link #ROOT_TEXT}), read once the fields above exist. */
-	static final DepsMap ROOT = read(ROOT_TEXT, "clojure/tools/deps/deps.edn");
+	/**
+	 * The root map, the first one every project and every {@code :local/root} dependency
+	 * merges: the default {@code :paths ["src"]} and the {@code org.clojure/clojure}
+	 * dependency come from it. Made once the fields above exist.
+	 */
+	static final DepsMap ROOT = rootMap();
 
 	private ClojureDepsEdn() {
+	}
+
+	/**
+	 * The root map, stated here from what the oracle's command line answers about it and
+	 * not from its root file, which was not read. Asked of {@code clj} 1.12.6.1673 in an
+	 * empty directory with no user map (2026-11-18):
+	 * <ul>
+	 * <li>{@code -Spath} is {@code src}, then the clojure jar of that version and the two
+	 * jars it depends on: the default path and the one default dependency;</li>
+	 * <li>{@code -A:test -Spath} puts {@code test} ahead of that, and
+	 * {@code -X:deps aliases} lists two aliases, {@code :deps} and {@code :test}, both
+	 * marked {@code (root)};</li>
+	 * <li>{@code -A:deps -Spath} has no {@code src} and has the tool library below with
+	 * what it depends on, and {@code -X:deps aliases} and {@code -X:deps help/doc} run
+	 * its functions, so the alias replaces the paths and the dependencies and names a
+	 * default namespace and one namespace alias;</li>
+	 * <li>the two repositories are the ones the deps.edn reference documents as the
+	 * defaults, and the basis the command line hands a program ({@code clojure.basis})
+	 * holds exactly these keys and values.</li>
+	 * </ul>
+	 * A selected alias applies here as any project's does; nothing treats the two
+	 * specially.
+	 */
+	private static DepsMap rootMap() {
+		String defaultDependency = mavenDep("org.clojure/clojure", "1.12.6");
+		String depsTool = mavenDep("org.clojure/tools.deps.cli", "0.31.162");
+		String testAlias = ":test {:extra-paths [\"test\"]}";
+		String depsAlias = ":deps {:replace-paths [] :replace-deps {" + depsTool + "}"
+				+ " :ns-default clojure.tools.deps.cli.api :ns-aliases {help clojure.tools.deps.cli.help}}";
+		String repositories = mavenRepo("central", "https://repo1.maven.org/maven2/") + " "
+				+ mavenRepo("clojars", "https://repo.clojars.org/");
+		return read("{:paths [\"src\"] :deps {" + defaultDependency + "} :aliases {" + depsAlias + " " + testAlias
+				+ "} :mvn/repos {" + repositories + "}}", "the root map");
+	}
+
+	private static String mavenDep(String lib, String version) {
+		return lib + " {:mvn/version \"" + version + "\"}";
+	}
+
+	private static String mavenRepo(String id, String url) {
+		return "\"" + id + "\" {:url \"" + url + "\"}";
 	}
 
 	private static Map<String, List<String>> typeKeys() {

@@ -131,3 +131,113 @@ algorithm came from, and the answer goes in the file's header.
     `%utf-8-well-formed-end`; the one departure (an encoded surrogate is one sequence) is a
     JDK's observed answer. `LispPreludeLibraryTest` pins it against the JDK decoder.
   - `NOTICE` entries for fdlibm and Schubfach are `j93`'s.
+- **Clojure's EPL sources (j92, 2026-11-18): replaced.** Clojure, ClojureScript and
+  tools.deps are EPL-1.0, a weak copyleft; the audit's rows 3, 4, 5, 8, 21 and 29 were
+  line-by-line translations of them, all but row 8 embedded in compiled programs. User
+  decision: rewrite, not keep under an EPL notice. Nobody working it opened the EPL
+  sources (no clojure jar's `.clj`, no tools.deps file, no GitHub). The old bodies were
+  deleted, not edited, and read only as far as a caller's contract had to be kept (each
+  item says how far); they were also RUN as black boxes beside the oracle, which is how
+  "nothing observable changed" is known. What each new one is built from: the published
+  documentation (the API docstrings `doc` prints, clojure.org's reference pages, the
+  Common Lisp HyperSpec for what `cl-format` and the pretty printer take from it) and
+  the answers of `clj` 1.12.6 to probes; where a rule is neither documented nor asked,
+  it is not there.
+  - **Six clojure.jar namespaces** (`clojure/{main,repl,stacktrace,data,zip}.clj`,
+    `clojure/core/reducers.clj`; row 4): deleted and written again, docstrings in our own
+    words. Of the old files only the `ns` forms, the names of the top-level definitions,
+    the kernels they call and the lines of host interop were read (by grep). Probed:
+    `clojure.zip` 122 loc shapes and refusals; `clojure.data` 86 diffs; `clojure.main`
+    some 1,000 lines of `ex-triage`/`ex-str` answers over every phase, source spelling,
+    frame class and method, and every namespace of clojure.jar for the "core frame"
+    set; `clojure.repl`'s `doc` and `pst`; `clojure.stacktrace`'s element and trace
+    printing; `clojure.core.reducers` 244 reductions and folds. The new files give the
+    oracle's answer on every probe line but the documented deviations (user docs), as
+    the old ones did. Shapes that differ: `demunge` scans a table of spellings left to
+    right; `ex-triage` is one `case` over shared helpers and `ex-str` a word list per
+    phase; the map and the sequential diff share one slot comparison; a zipper is
+    written over a private `at`/`trail`/`edited` vocabulary; `fold` halves by index.
+    Two things the comparison improved: `:clojure.error/path` loses repeated and
+    trailing slashes like the oracle's, and `ex-str` refuses spec problems only in the
+    two phases where the oracle explains them. One printed order moved: a part of a map
+    diff that holds several keys lists the first map's keys, then the second's (user
+    doc, `examples/clojure/bundled-namespaces.clj`'s expected line); the old file
+    reached the oracle's order on that example by walking the keys the way its source
+    does, and the oracle's order is its hash set's, which nothing here reproduces.
+  - **The pretty printer and `cl-format`** (rows 3 and 21): the `~F ~E ~G ~$` kernel, the
+    pretty writer (capture layer and layout) in `clojure.lisp` and the whole of
+    `clojure/pprint.clj` (API, `simple-dispatch`, `code-dispatch`, and the `cl-format`
+    compiler and executor, whose helper inventory mirrored the oracle's) were deleted and
+    written again. The deleted code was read only for its entry points and kernel
+    contract, and otherwise used as a second black box whose outputs, and in a few cases
+    whose stream of layout marks, were compared. Built from: the float directives from
+    CLHS 22.3.3 and clj's answers (a number read once into the characters of its spelling
+    and the place of its point); the layout from CLHS 22.2.1 and probes against clj that
+    establish each rule the file header states (a vector of marks with running column
+    totals, taken mark by mark, where the old one replayed a token buffer); `cl-format`
+    from CLHS 22.3 and clj's answers, refusal messages and parameter names included,
+    since clj prints them (a tree of directive maps walked over a cursor); the code
+    layouts from what clj prints for each kind of form at margins that force every break
+    and none, written as control strings of our own `cl-format`. Checked against clj:
+    12,000 generated float cases identical; 13,500 generated control strings, 8 agreeing
+    with neither clj nor the old code (the order of exception classes inside a
+    justification); the layout engine on targeted probes. Checked against the old code
+    (itself identical to clj on a 1,500-layout sample): 9,000 generated layouts
+    identical, 10,000 generated code forms with one differing (an `ns` form with a vector
+    for a name under `*print-level*` prints where the old code threw; not asked of clj).
+    The comparison removed two deviations: a decimal keeps all its digits under
+    `~F ~E ~G`, and `~$` takes every number as a double.
+  - **The type macros, `case`, `doseq`, `for` and three ClojureScript bodies** (rows 5
+    and 29, and what the review of the rest of `core_macros.clj` found): the
+    `reify`/`deftype`/`defrecord` expanders followed `clojure/core_deftype.clj` function
+    for function and emitted its record methods as text; the `case` table helpers, the
+    `doseq` step function and the `for` level emitter followed `core.clj`'s private
+    helpers; `cljs_core.clj`'s `equiv-sequential`, `caching-hash` and `ArrayChunk` were
+    ClojureScript's bodies (judged from the file's one commit and the callers; its source
+    was not opened). All deleted and written from the macros' documentation and the
+    oracle's answers. What is still the oracle's is what a program can observe and rely
+    on: the expansions' shapes, the `deftype*` skeleton of a record with its method
+    names, the factories' docstrings, the refusals' words. Each record method's body is
+    ours, spelled from what the oracle's record answers through that method, so
+    `macroexpand-1` of a `defrecord` no longer prints the oracle's text (user doc). How
+    the shape differs: `case` files rows by code and merges colliding tests before it
+    picks the mask; `doseq` hands each step the forms to carry on with instead of
+    answering a needs-recur flag; `for` folds from the innermost level out; a record's
+    iterator is a `SeqIterator` over its own seq and its `cons` is spelled in the method,
+    so `records.clj`'s `RecordIterator` and `imap-cons` and their lowerings are gone.
+    Checked: the class the oracle's compiler builds from our record expansion answers a
+    46-line probe like its own `defrecord`; 107 shapes and 57 generated `case` tables
+    print the oracle's lines but for refusal words; datascript 1.8.1 prints its oracle
+    lines on all four backends. Judged clean and left: `destructure` (own
+    decomposition), the small macros (their printed expansion as a template), the rest
+    of `cljs_core.clj`.
+  - **tools.deps' selection and root map** (rows 8 and 29; compiler only):
+    `ClojureDepsGraph`'s walk had been `expand-deps`/`flatten-libs` translated function by
+    function, `ClojureDepsEdn.ROOT_TEXT` the root `deps.edn` verbatim. The old class was
+    read for its contract only (the `Procurer` surface, the records, the refusal words);
+    its decision, exclusion, orphan and ordering methods were not. The new selection is
+    built from the published reference ("Dependency Expansion", the `deps.edn`
+    reference) and, for what that leaves open, from `clj` 1.12.6.1673 as a black box
+    (`-Srepro -Spath`, `-Stree`): 40 constructed Maven graphs over a `file:` repository,
+    33 `:local/root` trees and 1,500 generated graphs, every graph classpath identical
+    here. Its shape is its own: a walk in waves (decide a depth, then read what was
+    taken) over per-version routes, where the old one ran a queue of nodes and deferred
+    expansions over a version map. What the answers showed is in the class's Javadoc and
+    `.kb/clojure-frontend.md` "deps.edn", pinned by `ClojureDepsGraphTest` and
+    `ClojureDepsAliasesTest`. The root map is stated from what the CLI answers in an empty
+    directory (`-Spath`, `-A:test -Spath`, `-A:deps -Spath`, `-X:deps aliases`, the
+    `clojure.basis` it hands a program) and the reference's default repositories. The
+    replaced walk gave the same answer on all 1,540 graphs.
+  - **`clj -X`** (`ClojureMain.exec`; not an audit row, but the record called it a port
+    of the CLI's exec namespace and its Javadoc cited that namespace's private names):
+    the argument reading and the map building were deleted and written from the CLI
+    reference's grammar and 43 command lines asked of `clj -X` over a fixture project;
+    `ClojureMainTest` pins the four answers that were new.
+  - What the audit did NOT list and this item left as it is, for `.todo/j95` to decide: the
+    rest of the `deps.edn` classes (`ClojureDepsEdn`'s reading, validation and alias
+    merge, `ClojureDepsProcurer`, `ClojureBasis`, `eval/ClojureDepsRepositories`) cite
+    tools.deps' private function names in their Javadoc, and `.kb/clojure-frontend.md`
+    records that tools.deps was read from the CLI jar in October 2026; the audit compared
+    them and called only the selection walk a translation. And the Clojure HTTP client's
+    redirect code, which the same note says follows the JDK's `RedirectFilter` with
+    `URI.resolve` "ported".

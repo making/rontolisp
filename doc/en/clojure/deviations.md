@@ -351,9 +351,14 @@ Conformance is partial by design. Where behavior departs from the Clojure oracle
   ...) answers the call itself, where the oracle answers its expansion. A malformed
   call's refusal propagates as the expander throws it, where the oracle wraps it in a
   `Compiler$CompilerException` (`Syntax error macroexpanding ...`), and a `case` whose
-  tests collide in two or more hash buckets lists the skipped hashes in insertion order,
+  tests collide in two or more hash buckets lists the skipped hashes in ascending order,
   and a type body's interfaces keep the body's order where the oracle's set may swap two
-  (the set-order deviation). A program calling one of these as it runs carries the
+  (the set-order deviation). A `defrecord`'s expansion has the oracle's shape -- the
+  `deftype*` over the fields and the record's `__meta`, `__extmap`, `__hash` and
+  `__hasheq`, the oracle's interfaces, one method per method of them under its
+  `clojure.core/` name, ahead of the body's -- but each of those methods' bodies is
+  written here: it answers what the oracle's answers, spelled differently, as does the
+  `->Name` of a type of more than twenty fields. A program calling one of these as it runs carries the
   expanders; a program expanding only in its macro bodies carries none.
 - `deftype*` and `reify*`, the special forms `deftype`, `defrecord` and `reify` expand
   to, lower over the same machinery. A type `deftype*` defines is a deftype to every

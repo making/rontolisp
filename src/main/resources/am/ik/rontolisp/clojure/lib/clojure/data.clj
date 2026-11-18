@@ -1,94 +1,97 @@
 (ns clojure.data
-  "Recursive comparison of two values, built into rontolisp: diff answers what
-  only the first holds, what only the second holds and what both hold. Written
-  for this front end from the documented behaviour of Clojure's namespace of the
-  same name."
+  "Structural comparison of two values, built into rontolisp. Written here
+  from the documented behaviour of Clojure's namespace of the same name and
+  from the answers it gives: diff sorts what two values hold into three
+  parts -- only the first, only the second, both."
   (:require [clojure.set :as set]))
 
 (declare diff)
 
 (defprotocol EqualityPartition
-  "The kind of value diff compares a value as."
+  "How a value takes part in a diff: values of different partitions are
+  never compared member by member."
   (equality-partition [x]
-    "Which of :atom, :set, :sequential and :map x is compared as."))
+    "The partition of x: :atom, :set, :sequential or :map."))
 
 (defprotocol Diff
-  "How diff compares two values of one equality partition."
+  "The comparison of two unequal values of one partition."
   (diff-similar [a b]
-    "The diff of a and b, two values of one equality partition."))
+    "The three parts of a and b, which share a partition."))
 
-(defn- atom-diff
-  "a and b compared as wholes."
+(defn- whole-diff
+  "Two values compared as wholes: nothing of one is in the other unless
+  they are equal."
   [a b]
   (if (= a b) [nil nil a] [a b nil]))
 
-(defn- key-diff
-  "The single-entry maps (or nils) the key k adds to the diff of the
-  associative a and b: what only a holds there, what only b holds and what both
-  hold."
+(defn- slot-diff
+  "The three parts of one slot k, each a one-entry map or nil. A slot both
+  sides hold is compared in depth; it counts as shared when the comparison
+  found something in common, or when both hold nil there."
   [a b k]
   (let [va (get a k)
         vb (get b k)
-        [only-a only-b both] (diff va vb)
         in-a (contains? a k)
         in-b (contains? b k)
-        same (and in-a in-b (or (some? both) (and (nil? va) (nil? vb))))]
-    [(when (and in-a (or (some? only-a) (not same))) {k only-a})
-     (when (and in-b (or (some? only-b) (not same))) {k only-b})
-     (when same {k both})]))
+        [only-a only-b common] (diff va vb)
+        shared (and in-a in-b (or (some? common) (and (nil? va) (nil? vb))))
+        side (fn [present part] (when (and present (or (some? part) (not shared))) {k part}))]
+    [(side in-a only-a) (side in-b only-b) (when shared {k common})]))
 
-(defn- associative-diff
-  "The diff of the associative a and b over the keys ks, as three maps (or
-  nils) merged key by key."
+(defn- slots-diff
+  "The three parts of the associative values a and b over the slots ks,
+  each part a map of the slots that landed in it, or nil."
   [a b ks]
-  (reduce (fn [acc part] (doall (map merge acc part)))
+  (reduce (fn [parts k] (mapv merge parts (slot-diff a b k)))
           [nil nil nil]
-          (map (fn [k] (key-diff a b k)) ks)))
+          ks))
 
-(defn- vectorize
-  "The map m of indexes to values as a vector holding each value at its
-  index, nil between; nil for an empty m."
-  [m]
-  (when (seq m)
-    (reduce (fn [v [i x]] (assoc v i x))
-            (vec (repeat (apply max (keys m)) nil))
-            m)))
+(defn- map-diff [a b]
+  (let [ks (concat (keys a) (clojure.core/remove (fn [k] (contains? a k)) (keys b)))]
+    (seq (slots-diff a b ks))))
 
-(defn- sequential-diff
-  "a and b compared index by index, each part a vector."
-  [a b]
-  (vec (map vectorize (associative-diff (vec a) (vec b) (range (max (count a) (count b)))))))
+(defn- as-vector
+  "A map of index to value as a vector reaching its highest index, nil in
+  every slot the map leaves out; nil for no map."
+  [by-index]
+  (when (seq by-index)
+    (reduce-kv assoc (vec (repeat (inc (apply max (keys by-index))) nil)) by-index)))
 
-(defn- map-diff
-  "a and b compared key by key, over the union of their key seqs (a key both
-  hold comes twice, which merges alike)."
-  [a b]
-  (associative-diff a b (set/union (keys a) (keys b))))
+(defn- sequential-diff [a b]
+  (let [a (vec a)
+        b (vec b)]
+    (mapv as-vector (slots-diff a b (range (max (count a) (count b)))))))
 
-(defn- set-diff
-  "a and b compared member by member."
-  [a b]
-  [(not-empty (set/difference a b))
-   (not-empty (set/difference b a))
-   (not-empty (set/intersection a b))])
+(defn- set-diff [a b]
+  (let [a (set a)
+        b (set b)]
+    [(not-empty (set/difference a b))
+     (not-empty (set/difference b a))
+     (not-empty (set/intersection a b))]))
+
+(defn- array? [x]
+  (and (some? x) (.isArray (class x))))
 
 (extend-protocol EqualityPartition
   nil
-  (equality-partition [_] :atom)
+  (equality-partition [x] :atom)
   java.util.Set
-  (equality-partition [_] :set)
+  (equality-partition [x] :set)
   java.util.List
-  (equality-partition [_] :sequential)
+  (equality-partition [x] :sequential)
   clojure.lang.IPersistentVector
-  (equality-partition [_] :sequential)
+  (equality-partition [x] :sequential)
   java.util.Map
-  (equality-partition [_] :map)
+  (equality-partition [x] :map)
   Object
-  (equality-partition [x] (if (map? x) :map :atom)))
+  (equality-partition [x]
+    (cond (map? x) :map
+          (array? x) :sequential
+          :else :atom)))
 
 (extend-protocol Diff
   nil
-  (diff-similar [a b] (atom-diff a b))
+  (diff-similar [a b] (whole-diff a b))
   java.util.Set
   (diff-similar [a b] (set-diff a b))
   java.util.List
@@ -98,17 +101,19 @@
   java.util.Map
   (diff-similar [a b] (map-diff a b))
   Object
-  (diff-similar [a b] (if (map? a) (map-diff a b) (atom-diff a b))))
+  (diff-similar [a b]
+    (cond (map? a) (map-diff a b)
+          (array? a) (sequential-diff a b)
+          :else (whole-diff a b))))
 
 (defn diff
-  "Compares a and b recursively, answering [only-in-a only-in-b in-both]. Equal
-  values answer [nil nil a]. Two maps compare key by key and two sequential
-  collections index by index (their parts as vectors), each shared position
-  compared recursively; two sets compare member by member; anything else,
-  strings included, compares as a whole, as do two values of different kinds."
+  "Compares a and b in depth and answers [only-in-a only-in-b in-both].
+  Equal values are all in-both. Maps are compared key by key, down into the
+  values of the keys they share. Sequential collections are compared index
+  by index, each part a vector with nil where it holds nothing. Sets are
+  split into members, never compared inside. Anything else, strings
+  included, is one indivisible value."
   [a b]
-  (if (= a b)
-    [nil nil a]
-    (if (= (equality-partition a) (equality-partition b))
-      (diff-similar a b)
-      (atom-diff a b))))
+  (cond (= a b) [nil nil a]
+        (= (equality-partition a) (equality-partition b)) (diff-similar a b)
+        :else [a b nil]))

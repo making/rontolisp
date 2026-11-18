@@ -1,237 +1,241 @@
 (ns clojure.zip
-  "Functional tree editing with zippers, built into rontolisp. A location
-  (loc) is a vector of the focused node and the path to it, carrying in its
-  metadata the three functions that make the tree a tree: :zip/branch?,
-  :zip/children and :zip/make-node. Moving and editing answer new locs; root
-  rebuilds the edited tree. Written for this front end from the documented
-  behaviour of Clojure's namespace of the same name."
+  "Zippers: a cursor into a tree that can move and edit without mutating
+  anything, built into rontolisp. Written here from the documented behaviour
+  of Clojure's namespace of the same name and from what its locations print.
+
+  A location is a vector [node trail]. The trail is nil at the top, :end
+  once a depth-first walk has run out, and otherwise a map: :l the siblings
+  to the left (a vector), :r the siblings to the right (a seq), :pnodes the
+  ancestors from the root down, :ppath the parent's trail, and :changed?
+  once something at this level was edited. What makes a value a tree -- which
+  nodes have children, what they are, how to rebuild a node -- rides in the
+  location's metadata."
   (:refer-clojure :exclude [replace remove next]))
 
 (defn zipper
-  "A loc at root, the top of a tree whose branch nodes branch? recognizes,
-  whose children children answers (a seq) and which make-node rebuilds from a
-  node and a seq of children."
+  "A location at the top of root. (branch? node) says whether node may have
+  children, (children node) answers them as a seq, and (make-node node kids)
+  builds a node like node holding kids."
   [branch? children make-node root]
   (with-meta [root nil]
-    {:zip/branch? branch? :zip/children children :zip/make-node make-node}))
+    {:zip/branch? branch?, :zip/children children, :zip/make-node make-node}))
 
 (defn seq-zip
-  "A zipper over nested seqs."
+  "A zipper over nested seqs: every seq is a branch of its members."
   [root]
-  (zipper seq? identity (fn [node children] (with-meta children (meta node))) root))
+  (zipper seq? identity (fn [old kids] (with-meta kids (meta old))) root))
 
 (defn vector-zip
-  "A zipper over nested vectors."
+  "A zipper over nested vectors: every vector is a branch of its members."
   [root]
-  (zipper vector? seq (fn [node children] (with-meta (vec children) (meta node))) root))
+  (zipper vector? seq (fn [old kids] (with-meta (vec kids) (meta old))) root))
 
 (defn xml-zip
-  "A zipper over maps of :tag, :attrs and :content, as clojure.xml parses
-  XML into; a string is a leaf."
+  "A zipper over element maps as clojure.xml/parse answers them: anything but
+  a string is a branch of its :content."
   [root]
-  (zipper (complement string?)
-          (comp seq :content)
-          (fn [node children] (assoc node :content (and children (apply vector children))))
+  (zipper (fn [n] (not (string? n)))
+          (fn [n] (seq (:content n)))
+          (fn [n kids] (assoc n :content (when kids (vec kids))))
           root))
 
-(defn- moved
-  "A loc focused on node at path, carrying the zipper functions of loc."
-  [loc node path]
-  (with-meta [node path] (meta loc)))
-
 (defn node
-  "The node at loc."
+  "The node loc points at."
   [loc]
   (loc 0))
 
+(defn- trail [loc] (loc 1))
+
+(defn- at
+  "A location like loc, of the same tree kind, at node n with trail t."
+  [loc n t]
+  (with-meta [n t] (meta loc)))
+
+(defn- edited [t] (assoc t :changed? true))
+
 (defn branch?
-  "Whether the node at loc is a branch, one that may have children."
+  "True when the node at loc may have children."
   [loc]
   ((:zip/branch? (meta loc)) (node loc)))
 
 (defn children
-  "The children of the branch node at loc, a seq."
+  "The children of the node at loc, which must be a branch."
   [loc]
-  (if (branch? loc)
-    ((:zip/children (meta loc)) (node loc))
-    (throw (Exception. "called children on a leaf node"))))
+  (when-not (branch? loc)
+    (throw (Exception. "called children on a leaf node")))
+  ((:zip/children (meta loc)) (node loc)))
 
 (defn make-node
-  "A new branch node from node and the seq children, rebuilt the way loc's
-  zipper rebuilds one; loc is used only for that."
+  "A new branch like node with the given children, built the way loc's
+  zipper builds one."
   [loc node children]
   ((:zip/make-node (meta loc)) node children))
 
 (defn path
-  "The nodes from the root down to the parent of loc's node, a vector."
+  "The nodes from the root down to the parent of loc."
   [loc]
-  (:pnodes (loc 1)))
+  (:pnodes (trail loc)))
 
 (defn lefts
-  "The siblings to the left of loc's node, as a seq."
+  "The siblings left of loc, nearest last."
   [loc]
-  (seq (:l (loc 1))))
+  (seq (:l (trail loc))))
 
 (defn rights
-  "The siblings to the right of loc's node, as a seq."
+  "The siblings right of loc, nearest first."
   [loc]
-  (:r (loc 1)))
+  (:r (trail loc)))
 
 (defn down
-  "The loc of the leftmost child of loc's node, or nil when it has none."
+  "The location of the leftmost child of loc; nil when it has none."
   [loc]
   (when (branch? loc)
-    (let [focus (node loc)
-          above (loc 1)
-          kids (children loc)]
+    (let [kids (children loc)]
       (when kids
-        (moved loc (first kids)
-               {:l []
-                :pnodes (if above (conj (:pnodes above) focus) [focus])
-                :ppath above
-                :r (clojure.core/next kids)})))))
+        (let [t (trail loc)
+              above (if t (conj (:pnodes t) (node loc)) [(node loc)])]
+          (at loc (first kids) {:l [], :pnodes above, :ppath t, :r (clojure.core/next kids)}))))))
 
 (defn up
-  "The loc of the parent of loc's node, rebuilt when an edit below changed
-  it; nil at the top."
+  "The location of the parent of loc; nil at the top. A parent whose level
+  was edited is rebuilt from its children."
   [loc]
-  (let [focus (node loc)
-        {:keys [l r pnodes ppath changed?]} (loc 1)]
-    (when pnodes
-      (let [parent (peek pnodes)]
-        (if changed?
-          (moved loc (make-node loc parent (concat l (cons focus r)))
-                 (and ppath (assoc ppath :changed? true)))
-          (moved loc parent ppath))))))
+  (let [t (when loc (trail loc))
+        above (:pnodes t)]
+    (when above
+      (let [parent (peek above)
+            outer (:ppath t)]
+        (if (:changed? t)
+          (at loc
+              (make-node loc parent (concat (:l t) (cons (node loc) (:r t))))
+              (and outer (edited outer)))
+          (at loc parent outer))))))
 
 (defn end?
-  "Whether loc is the end of a depth-first walk with next."
+  "True once a depth-first walk has gone past the last node."
   [loc]
-  (= :end (loc 1)))
+  (= :end (trail loc)))
 
 (defn root
-  "The root node of loc's tree, with every edit applied."
+  "The whole tree with every edit applied, from wherever loc is."
   [loc]
   (if (end? loc)
     (node loc)
-    (loop [loc loc]
-      (if-let [parent (up loc)]
-        (recur parent)
-        (node loc)))))
+    (loop [here loc]
+      (let [parent (up here)]
+        (if parent (recur parent) (node here))))))
 
 (defn right
-  "The loc of the right sibling of loc's node, or nil."
+  "The location of the sibling right of loc; nil when there is none."
   [loc]
-  (let [focus (node loc)
-        above (loc 1)
-        siblings (:r above)]
-    (when (and above siblings)
-      (moved loc (first siblings)
-             (assoc above :l (conj (:l above) focus) :r (clojure.core/next siblings))))))
+  (let [t (trail loc)
+        more (:r t)]
+    (when (and t more)
+      (at loc (first more)
+          (assoc t :l (conj (:l t) (node loc)) :r (clojure.core/next more))))))
 
 (defn rightmost
-  "The loc of the rightmost sibling of loc's node, or loc itself."
+  "The location of the last sibling of loc; loc itself when it is the last."
   [loc]
-  (let [focus (node loc)
-        above (loc 1)
-        siblings (:r above)]
-    (if (and above siblings)
-      (moved loc (last siblings)
-             (assoc above :l (apply conj (:l above) focus (butlast siblings)) :r nil))
+  (let [t (trail loc)
+        more (:r t)]
+    (if (and t more)
+      (at loc (last more)
+          (assoc t :l (into (conj (:l t) (node loc)) (butlast more)) :r nil))
       loc)))
 
 (defn left
-  "The loc of the left sibling of loc's node, or nil."
+  "The location of the sibling left of loc; nil when there is none."
   [loc]
-  (let [focus (node loc)
-        above (loc 1)
-        siblings (:l above)]
-    (when (and above (seq siblings))
-      (moved loc (peek siblings)
-             (assoc above :l (pop siblings) :r (cons focus (:r above)))))))
+  (let [t (trail loc)
+        before (:l t)]
+    (when (and t (seq before))
+      (at loc (peek before)
+          (assoc t :l (pop before) :r (cons (node loc) (:r t)))))))
 
 (defn leftmost
-  "The loc of the leftmost sibling of loc's node, or loc itself."
+  "The location of the first sibling of loc; loc itself when it is the first."
   [loc]
-  (let [focus (node loc)
-        above (loc 1)
-        siblings (:l above)]
-    (if (and above (seq siblings))
-      (moved loc (first siblings)
-             (assoc above :l [] :r (concat (rest siblings) [focus] (:r above))))
+  (let [t (trail loc)
+        before (:l t)]
+    (if (and t (seq before))
+      (at loc (first before)
+          (assoc t :l [] :r (concat (rest before) (cons (node loc) (:r t)))))
       loc)))
 
+(defn- below-top
+  "The trail of loc, refusing with what when loc is the top."
+  [loc what]
+  (or (trail loc) (throw (Exception. (str what " at top")))))
+
 (defn insert-left
-  "loc with item inserted as the left sibling of its node."
+  "Puts item in as the left sibling of loc, without moving."
   [loc item]
-  (let [above (loc 1)]
-    (if (nil? above)
-      (throw (Exception. "Insert at top"))
-      (moved loc (node loc) (assoc above :l (conj (:l above) item) :changed? true)))))
+  (let [t (below-top loc "Insert")]
+    (at loc (node loc) (edited (assoc t :l (conj (:l t) item))))))
 
 (defn insert-right
-  "loc with item inserted as the right sibling of its node."
+  "Puts item in as the right sibling of loc, without moving."
   [loc item]
-  (let [above (loc 1)]
-    (if (nil? above)
-      (throw (Exception. "Insert at top"))
-      (moved loc (node loc) (assoc above :r (cons item (:r above)) :changed? true)))))
+  (let [t (below-top loc "Insert")]
+    (at loc (node loc) (edited (assoc t :r (cons item (:r t)))))))
 
 (defn replace
-  "loc with node in place of its node."
+  "Puts node in place of the node at loc, without moving."
   [loc node]
-  (moved loc node (assoc (loc 1) :changed? true)))
+  (at loc node (edited (trail loc))))
 
 (defn edit
-  "loc with its node replaced by (apply f node args)."
+  "Replaces the node at loc with (f node args...)."
   [loc f & args]
   (replace loc (apply f (node loc) args)))
 
 (defn insert-child
-  "loc with item inserted as the leftmost child of its node."
+  "Puts item in as the first child of the node at loc, without moving."
   [loc item]
   (replace loc (make-node loc (node loc) (cons item (children loc)))))
 
 (defn append-child
-  "loc with item inserted as the rightmost child of its node."
+  "Puts item in as the last child of the node at loc, without moving."
   [loc item]
-  (replace loc (make-node loc (node loc) (concat (children loc) [item]))))
+  (replace loc (make-node loc (node loc) (concat (children loc) (list item)))))
+
+(defn- last-leaf
+  "From loc, the last location of its subtree in depth-first order."
+  [loc]
+  (loop [here loc]
+    (let [kid (and (branch? here) (down here))]
+      (if kid (recur (rightmost kid)) here))))
 
 (defn next
-  "The loc after loc in a depth-first walk; past the last node, the end loc,
-  whose node is the root (end? is true of it and next answers it again)."
+  "The location after loc in a depth-first walk. Past the last one it is an
+  end location, which end? detects and which next answers again."
   [loc]
   (if (end? loc)
     loc
     (or (and (branch? loc) (down loc))
         (right loc)
-        (loop [at loc]
-          (if-let [parent (up at)]
-            (or (right parent) (recur parent))
-            [(node at) :end])))))
-
-(defn- deepest-last
-  "The rightmost leaf below loc's node, or loc when it has no children."
-  [loc]
-  (if-let [child (and (branch? loc) (down loc))]
-    (recur (rightmost child))
-    loc))
+        (loop [here loc]
+          (let [parent (up here)]
+            (if parent
+              (or (right parent) (recur parent))
+              [(node here) :end]))))))
 
 (defn prev
-  "The loc before loc in a depth-first walk; nil at the root."
+  "The location before loc in a depth-first walk; nil at the top."
   [loc]
-  (if-let [before (left loc)]
-    (deepest-last before)
-    (up loc)))
+  (let [before (when loc (left loc))]
+    (if before (last-leaf before) (up loc))))
 
 (defn remove
-  "Removes the node at loc, answering the loc that came before it in a
-  depth-first walk."
+  "Takes the node at loc out of the tree and answers the location that came
+  before it in a depth-first walk."
   [loc]
-  (let [{:keys [l pnodes ppath r] :as above} (loc 1)]
-    (if (nil? above)
-      (throw (Exception. "Remove at top"))
-      (if (pos? (count l))
-        (deepest-last (moved loc (peek l) (assoc above :l (pop l) :changed? true)))
-        (moved loc (make-node loc (peek pnodes) r)
-               (and ppath (assoc ppath :changed? true)))))))
+  (let [t (below-top loc "Remove")
+        before (:l t)]
+    (if (seq before)
+      (last-leaf (at loc (peek before) (edited (assoc t :l (pop before)))))
+      (let [outer (:ppath t)]
+        (at loc
+            (make-node loc (peek (:pnodes t)) (:r t))
+            (and outer (edited outer)))))))

@@ -17,12 +17,12 @@ import org.jspecify.annotations.Nullable;
  * {@code clj} does: {@code -M} runs {@code clojure.main} over the selected aliases'
  * {@code :main-opts} and the arguments after them ({@code -m my.app args} calls
  * {@code my.app/-main}, a path runs a script, nothing is the REPL), {@code -X} calls a
- * function with a map ({@code clojure.run.exec}), and a project's tests run under its
- * {@code :test} alias. The project is the working directory's, like the oracle's; the
- * aliases are the files' ({@link ClojureFiles#aliases}). What runs a namespace or a
- * function is a generated Clojure program, read without a file, so every backend runs or
- * compiles it like any other program: the command line's arguments are baked into it,
- * ahead of whatever arguments the program is later run with.
+ * function with a map, and a project's tests run under its {@code :test} alias. The
+ * project is the working directory's, like the oracle's; the aliases are the files'
+ * ({@link ClojureFiles#aliases}). What runs a namespace or a function is a generated
+ * Clojure program, read without a file, so every backend runs or compiles it like any
+ * other program: the command line's arguments are baked into it, ahead of whatever
+ * arguments the program is later run with.
  */
 public final class ClojureMain {
 
@@ -129,11 +129,13 @@ public final class ClojureMain {
 	}
 
 	/**
-	 * {@code clj -X:aliases [fn] [k v]... [map]}: the function the arguments or the
-	 * aliases' {@code :exec-fn} name (qualified through {@code :ns-aliases} and
-	 * {@code :ns-default}) called with one map, the aliases' {@code :exec-args} under the
-	 * key-value arguments (a vector key is a path) and a trailing map, each argument read
-	 * as EDN -- the oracle's {@code clojure.run.exec}, refused in its words.
+	 * {@code clj -X:aliases [fn] [k v]... [map]}: one function called with one map. The
+	 * arguments, each read as EDN, are an optional function symbol, keys with their
+	 * values, and an optional last map; the map starts as the aliases'
+	 * {@code :exec-args}, takes each value at its key (a vector key is a path of keys)
+	 * and then the last map's entries. Written from the CLI's documentation of {@code -X}
+	 * and from what {@code clj} 1.12.6 answers to each shape of command line; the
+	 * refusals are in its words.
 	 * @param files the project's files and the selected aliases
 	 * @param args the arguments after {@code -X}
 	 * @param replAliases whether {@code -A} selected aliases too
@@ -143,38 +145,15 @@ public final class ClojureMain {
 		ClojureBasis basis = ClojureBasis.create(files, "", false);
 		List<String> warnings = warnings(basis, replAliases);
 		ArgMap aliasArgs = basis.args();
-		List<LispVal> read = new ArrayList<>();
-		for (String arg : args) {
-			read.add(readArg(arg));
-		}
-		ExecArgs parsed = ExecArgs.parse(read);
-		LispVal fn = parsed.function() != null ? parsed.function() : aliasArgs.get(":exec-fn");
-		if (fn == null || ClojureDepsEdn.isNil(fn)) {
-			if (!parsed.overrides().isEmpty() && isSymbol(parsed.overrides().get(0))) {
-				throw new IllegalArgumentException(
-						"Key is missing value: " + ClojureEdn.print(parsed.overrides().getLast()));
-			}
-			throw new IllegalArgumentException("No function found on command line or in :exec-fn");
-		}
-		String qualified = qualify(fn, aliasArgs);
-		LispVal execArgs = aliasArgs.get(":exec-args");
-		LispVal map = execArgs == null || ClojureDepsEdn.isNil(execArgs) ? null : execArgs;
-		if (map != null && !ClojureDepsEdn.isMap(map)) {
-			throw new IllegalArgumentException("the aliases' :exec-args must be a map, got: " + ClojureEdn.print(map));
-		}
-		List<LispVal> overrides = parsed.overrides();
-		for (int i = 0; i + 1 < overrides.size(); i += 2) {
-			map = assocIn(map, overrides.get(i), overrides.get(i + 1));
-		}
-		if (parsed.trailing() != null) {
-			map = map == null ? parsed.trailing() : ClojureDepsEdn.mergeMapDatums(map, parsed.trailing());
-		}
-		int slash = qualified.indexOf('/');
+		List<LispVal> data = args.stream().map(ClojureMain::readArg).toList();
+		int keysFrom = leadingFunctions(data);
+		String function = execFunction(data, keysFrom, aliasArgs);
+		LispVal map = execMap(data, keysFrom, aliasArgs.get(":exec-args"));
 		StringBuilder out = new StringBuilder();
-		out.append(";; clj -X ").append(qualified).append('\n');
-		out.append("(require '").append(qualified, 0, slash).append(")\n");
+		out.append(";; clj -X ").append(function).append('\n');
+		out.append("(require '").append(function, 0, function.indexOf('/')).append(")\n");
 		bakeArguments(args, out);
-		out.append('(').append(qualified).append(' ');
+		out.append('(').append(function).append(' ');
 		out.append(map == null ? "nil" : "(quote " + ClojureEdn.print(map) + ")");
 		out.append(")\n");
 		return new Resolved(new Program(out.toString()), warnings);
@@ -327,92 +306,105 @@ public final class ClojureMain {
 		}
 	}
 
-	/** {@code qualify-fn}: through {@code :ns-aliases}, else {@code :ns-default}. */
-	private static String qualify(LispVal fn, ArgMap aliasArgs) {
-		if (!isSymbol(fn)) {
-			throw new IllegalArgumentException("Expected function symbol: " + ClojureEdn.print(fn));
+	/**
+	 * How many of the {@code -X} arguments name the function: one when the first is a
+	 * symbol and what follows it is keys with their values and at most a last map, none
+	 * when the arguments are that by themselves. A first symbol that could be either is
+	 * the function ({@code clj -X:a run b c '{:m 1}'} calls {@code run} with {@code {b c,
+	 * :m 1}}).
+	 */
+	private static int leadingFunctions(List<LispVal> data) {
+		if (!data.isEmpty() && isSymbol(data.get(0)) && areKeysAndValues(data, 1)) {
+			return 1;
 		}
-		String name = ((LispSymbol) fn).name();
-		int slash = name.indexOf('/');
-		if (slash > 0 && slash < name.length() - 1) {
-			Map<String, String> nsAliases = aliasArgs.nsAliases();
-			String ns = nsAliases.get(name.substring(0, slash));
-			return ns == null ? name : ns + name.substring(slash);
+		if (areKeysAndValues(data, 0)) {
+			return 0;
 		}
-		String nsDefault = aliasArgs.symbol(":ns-default");
-		if (nsDefault == null) {
-			throw new IllegalArgumentException("Unqualified function can't be resolved: " + name);
-		}
-		return nsDefault + "/" + name;
-	}
-
-	/** {@code assoc}, or {@code assoc-in} for a vector key, on a map datum or nil. */
-	private static LispVal assocIn(@Nullable LispVal map, LispVal key, LispVal value) {
-		List<LispVal> path = ClojureDepsEdn.isVector(key) ? ClojureDepsEdn.elements(key) : List.of(key);
-		if (path.isEmpty()) {
-			// (assoc-in m [] v) is (assoc m nil v)
-			path = List.of(new LispSymbol("nil"));
-		}
-		return assocPath(map, path, value);
-	}
-
-	private static LispVal assocPath(@Nullable LispVal map, List<LispVal> path, LispVal value) {
-		if (map != null && !ClojureDepsEdn.isMap(map)) {
-			throw new IllegalArgumentException(
-					"-X cannot assoc " + ClojureEdn.print(path.get(0)) + " into " + ClojureEdn.print(map));
-		}
-		LispVal key = path.get(0);
-		LispVal inner = value;
-		if (path.size() > 1) {
-			LispVal existing = map == null ? null : ClojureDepsEdn.mapGet(map, key);
-			inner = assocPath(existing == null || ClojureDepsEdn.isNil(existing) ? null : existing,
-					path.subList(1, path.size()), value);
-		}
-		LispVal entry = ClojureLowerUtil.list(new LispSymbol("%hash-map"), key, inner);
-		return map == null ? entry : ClojureDepsEdn.mergeMapDatums(map, entry);
+		List<LispVal> vector = new ArrayList<>();
+		vector.add(ClojureReader.VECTOR);
+		vector.addAll(data);
+		throw new IllegalArgumentException(
+				"Problem parsing arguments:  Insufficient input " + ClojureEdn.print(ClojureLowerUtil.list(vector)));
 	}
 
 	/**
-	 * The {@code -X} arguments split like the oracle's {@code arg-spec}: an optional
-	 * function symbol, key-value pairs, an optional trailing map. Where both a reading
-	 * with the function and one without fit, the function wins (measured on {@code clj}
-	 * 1.12.6, 2026-10-08: {@code a b c {:m 1}} calls {@code a} with {@code {b c, :m 1}}).
-	 *
-	 * @param function the function symbol, or {@code null}
-	 * @param overrides the keys and values, alternating
-	 * @param trailing the trailing map, or {@code null}
+	 * Whether the arguments from {@code from} pair up, a map allowed to stand alone last.
 	 */
-	private record ExecArgs(@Nullable LispVal function, List<LispVal> overrides, @Nullable LispVal trailing) {
+	private static boolean areKeysAndValues(List<LispVal> data, int from) {
+		return (data.size() - from) % 2 == 0 || ClojureDepsEdn.isMap(data.getLast());
+	}
 
-		static ExecArgs parse(List<LispVal> args) {
-			if (!args.isEmpty() && isSymbol(args.get(0))) {
-				ExecArgs withFunction = pairs(args.subList(1, args.size()), args.get(0));
-				if (withFunction != null) {
-					return withFunction;
-				}
+	/**
+	 * The function {@code -X} calls, qualified: the command line's, else the aliases'
+	 * {@code :exec-fn}. A qualified name's namespace part may be one of the aliases'
+	 * {@code :ns-aliases}; a bare name belongs to their {@code :ns-default}.
+	 */
+	private static String execFunction(List<LispVal> data, int keysFrom, ArgMap aliasArgs) {
+		LispVal named = keysFrom == 1 ? data.get(0) : aliasArgs.get(":exec-fn");
+		if (named == null || ClojureDepsEdn.isNil(named)) {
+			// clj then takes a first symbol for the function after all and misses a value
+			if (!data.isEmpty() && isSymbol(data.get(0))) {
+				throw new IllegalArgumentException("Key is missing value: " + ClojureEdn.print(data.getLast()));
 			}
-			ExecArgs without = pairs(args, null);
-			if (without == null) {
-				List<LispVal> vector = new ArrayList<>();
-				vector.add(ClojureReader.VECTOR);
-				vector.addAll(args);
-				throw new IllegalArgumentException("Problem parsing arguments:  Insufficient input "
-						+ ClojureEdn.print(ClojureLowerUtil.list(vector)));
-			}
-			return without;
+			throw new IllegalArgumentException("No function found on command line or in :exec-fn");
 		}
-
-		private static @Nullable ExecArgs pairs(List<LispVal> rest, @Nullable LispVal function) {
-			if (rest.size() % 2 == 0) {
-				return new ExecArgs(function, List.copyOf(rest), null);
-			}
-			LispVal last = rest.getLast();
-			if (!ClojureDepsEdn.isMap(last)) {
-				return null;
-			}
-			return new ExecArgs(function, List.copyOf(rest.subList(0, rest.size() - 1)), last);
+		if (!isSymbol(named)) {
+			throw new IllegalArgumentException("Expected function symbol: " + ClojureEdn.print(named));
 		}
+		String name = ((LispSymbol) named).name();
+		int slash = name.indexOf('/');
+		if (slash <= 0 || slash == name.length() - 1) {
+			String home = aliasArgs.symbol(":ns-default");
+			if (home == null) {
+				throw new IllegalArgumentException("Unqualified function can't be resolved: " + name);
+			}
+			return home + "/" + name;
+		}
+		String standsFor = aliasArgs.nsAliases().get(name.substring(0, slash));
+		return standsFor == null ? name : standsFor + name.substring(slash);
+	}
 
+	/**
+	 * The map {@code -X} hands the function, or {@code null} for none: {@code execArgs}
+	 * with every value of the command line stored at its key, in order, and the last
+	 * map's entries over that.
+	 */
+	private static @Nullable LispVal execMap(List<LispVal> data, int keysFrom, @Nullable LispVal execArgs) {
+		LispVal map = execArgs == null || ClojureDepsEdn.isNil(execArgs) ? null : execArgs;
+		if (map != null && !ClojureDepsEdn.isMap(map)) {
+			throw new IllegalArgumentException("the aliases' :exec-args must be a map, got: " + ClojureEdn.print(map));
+		}
+		int values = (data.size() - keysFrom) / 2;
+		for (int i = 0; i < values; i++) {
+			LispVal key = data.get(keysFrom + 2 * i);
+			// a vector key is a path of keys; an empty one stores under nil, like clj
+			List<LispVal> path = ClojureDepsEdn.isVector(key) ? ClojureDepsEdn.elements(key) : List.of(key);
+			map = stored(map, path.isEmpty() ? List.of(new LispSymbol("nil")) : path, 0,
+					data.get(keysFrom + 2 * i + 1));
+		}
+		if ((data.size() - keysFrom) % 2 == 1) {
+			map = map == null ? data.getLast() : ClojureDepsEdn.mergeMapDatums(map, data.getLast());
+		}
+		return map;
+	}
+
+	/**
+	 * {@code map} with {@code value} stored under the keys of {@code path} from
+	 * {@code at} on.
+	 */
+	private static LispVal stored(@Nullable LispVal map, List<LispVal> path, int at, LispVal value) {
+		LispVal key = path.get(at);
+		if (map != null && !ClojureDepsEdn.isMap(map)) {
+			throw new IllegalArgumentException(
+					"-X cannot assoc " + ClojureEdn.print(key) + " into " + ClojureEdn.print(map));
+		}
+		LispVal held = value;
+		if (at + 1 < path.size()) {
+			LispVal below = map == null ? null : ClojureDepsEdn.mapGet(map, key);
+			held = stored(below == null || ClojureDepsEdn.isNil(below) ? null : below, path, at + 1, value);
+		}
+		LispVal entry = ClojureLowerUtil.list(new LispSymbol("%hash-map"), key, held);
+		return map == null ? entry : ClojureDepsEdn.mergeMapDatums(map, entry);
 	}
 
 }

@@ -1,111 +1,112 @@
 (ns clojure.repl
-  "Utilities for the REPL, built into rontolisp: a var's documentation and a
-  throwable's stack trace. Written for this front end from the documented
-  behaviour of Clojure's namespace of the same name."
+  "What one asks a REPL about a program, built into rontolisp: a var's
+  documentation and a throwable's trace. Written here from the documented
+  behaviour of Clojure's namespace of the same name and from the lines it
+  prints."
   (:require [clojure.main :as main]
             [clojure.string :as str]
             [rontolisp.internal.throwable :as t]))
 
-(def ^:private special-forms
-  "The special forms doc names without a var, with the clojure.org page of
-  those documented outside the special forms page."
-  '{. "java_interop#dot" def nil do nil if nil monitor-enter nil monitor-exit nil
-    new "java_interop#new" quote nil recur nil set! "vars#set" throw nil try nil var nil})
+(def ^:private special-pages
+  "The special forms doc knows, each with its page under clojure.org; the
+  page is special_forms#name where none is given."
+  '{def nil, do nil, if nil, quote nil, recur nil, throw nil, try nil, var nil,
+    monitor-enter nil, monitor-exit nil,
+    new "java_interop#new", . "java_interop#dot", set! "vars#set"})
+
+(def ^:private documented-under
+  "The words that are documented with the form they belong to."
+  '{catch try, finally try})
 
 (defn- print-doc
-  "Prints the documentation the map m holds: the name, the forms or argument
-  lists, the kind, the docstring."
-  [{n :ns nm :name :keys [forms arglists special-form doc url macro spec] :as m}]
+  "Prints what the metadata m says of a var or special form: a rule, the
+  name, the forms and argument lists, what kind of thing it is, the
+  docstring, and for a special form where to read more."
+  [m]
   (println "-------------------------")
-  (println (or spec (str (when n (str n "/")) nm)))
-  (doseq [f forms]
-    (print "  ")
-    (prn f))
-  (when arglists
+  (println (str (when-some [space (:ns m)] (str (ns-name space) "/")) (:name m)))
+  (doseq [form (:forms m)]
+    (println (str "  " form)))
+  (when-some [arglists (:arglists m)]
     (prn arglists))
-  (cond
-    special-form (println "Special Form")
-    macro (println "Macro")
-    spec (println "Spec"))
-  (when doc
-    (println " " doc))
-  (when special-form
-    (if (contains? m :url)
-      (when url
-        (println (str "\n  Please see http://clojure.org/" url)))
-      (println (str "\n  Please see http://clojure.org/special_forms#" nm)))))
+  (cond (:special-form m) (println "Special Form")
+        (:macro m) (println "Macro"))
+  (when-some [text (:doc m)]
+    (println (str "  " text)))
+  (when (:special-form m)
+    (let [page (if (contains? m :url) (:url m) (str "special_forms#" (:name m)))]
+      (when page
+        (println)
+        (println (str "  Please see http://clojure.org/" page))))))
 
 (defmacro doc
-  "Prints the documentation of the var or special form name names: its
-  argument lists and docstring as its definition gave them."
+  "Prints the documentation of the var or special form called name."
   [name]
-  (let [target (get '{& fn catch try finally try} name name)]
-    (cond
-      (contains? special-forms target)
-      (let [url (get special-forms target)]
-        `(#'print-doc '~(cond-> {:name target :special-form true} url (assoc :url url))))
+  (let [name (get documented-under name name)]
+    (cond (contains? special-pages name)
+          (let [page (get special-pages name)]
+            `(#'print-doc '~(cond-> {:name name, :special-form true} page (assoc :url page))))
 
-      (keyword? name)
-      (throw (UnsupportedOperationException.
-              (str "clojure.repl/doc of " name " reads a spec: clojure.spec.alpha is a library"
-                   " this clojure.repl does not load")))
+          (contains? '#{fn &} name)
+          `(#'print-doc (assoc (meta (var clojure.core/fn)) :special-form true))
 
-      (= target 'fn)
-      `(#'print-doc (assoc (meta (var ~'fn)) :special-form true))
+          (keyword? name)
+          (throw (UnsupportedOperationException.
+                  (str "clojure.repl/doc of " name
+                       " reads a spec: clojure.spec.alpha is a library this clojure.repl does not load")))
 
-      :else
-      `(#'print-doc (meta (var ~name))))))
+          :else
+          `(#'print-doc (meta (var ~name))))))
 
 (defn demunge
-  "The Clojure spelling of the class name fn-name of a function, as a stack
-  trace element names it."
+  "The Clojure spelling of fn-name, a function's class name as a stack trace
+  shows it."
   [fn-name]
   (main/demunge fn-name))
 
 (defn root-cause
-  "The innermost cause of the throwable t, following its causes; t itself
-  when it has none."
+  "The throwable at the end of t's chain of causes."
   [t]
   (main/root-cause t))
 
 (defn stack-element-str
-  "The stack trace element el as text, a Clojure function by its demunged
-  name."
+  "A stack frame as text, a Clojure function by its demunged name."
   [el]
   (main/stack-element-str el))
 
-(def ^:private compiler-phases
+(def ^:private plumbing
+  "The classes whose frames pst leaves out: every call of a function passes
+  through them."
+  #{"clojure.lang.AFn" "clojure.lang.RestFn"})
+
+(def ^:private before-running
+  "The phases in which an error is the reader's or the compiler's."
   #{:read-source :macro-syntax-check :macroexpansion :compile-syntax-check :compilation})
 
-(def ^:private dispatch-frames #{"clojure.lang.RestFn" "clojure.lang.AFn"})
-
-(defn- simple-name
-  "The class name of the throwable e as Class.getSimpleName spells it."
-  [e]
-  (let [class-name (t/class-name e)
-        segment (fn [s c] (if-let [i (str/last-index-of s c)] (subs s (inc i)) s))]
-    (segment (segment class-name ".") "$")))
+(defn- simple-name [class-name]
+  (last (str/split class-name #"\.")))
 
 (defn pst
-  "Prints the stack trace of the throwable e to *err*, depth frames of it (12
-  when not given), then each cause's after Caused by:. Without a throwable,
-  the root cause of the last exception, *e."
+  "Prints to *err* a throwable's simple class name, message and ex-data,
+  then no more than depth of its frames (12 unless given), then the same
+  for each cause after Caused by:. Without a throwable, prints the root
+  cause of *e, and nothing when there is none."
   ([] (pst 12))
   ([e-or-depth]
    (if (instance? Throwable e-or-depth)
      (pst e-or-depth 12)
-     (when-let [e *e]
+     (when-some [e *e]
        (pst (root-cause e) e-or-depth))))
   ([e depth]
    (binding [*out* *err*]
-     (when (contains? compiler-phases (:clojure.error/phase (ex-data e)))
+     (when (contains? before-running (:clojure.error/phase (ex-data e)))
        (println "Note: The following stack trace applies to the reader or compiler, your code was not executed."))
-     (println (str (simple-name e) " " (ex-message e)
-                   (when-let [info (ex-data e)] (str " " (pr-str info)))))
-     (let [frames (.getStackTrace e)
-           cause (ex-cause e)]
-       (doseq [el (take depth (remove #(contains? dispatch-frames (.getClassName %)) frames))]
-         (println (str \tab (stack-element-str el))))
-       (when cause
+     (println (str (simple-name (t/class-name e)) " " (.getMessage e)
+                   (when-some [data (ex-data e)] (str " " (pr-str data)))))
+     (let [frames (.getStackTrace e)]
+       (doseq [frame (take depth (remove (fn [el] (contains? plumbing (.getClassName el))) frames))]
+         (println (str "\t" (stack-element-str frame))))
+       (when-some [cause (.getCause e)]
          (println "Caused by:")
+         ;; A cause repeats the frames of what it caused: show the ones it adds, and two more.
          (pst cause (min depth (+ 2 (- (count (.getStackTrace cause)) (count frames))))))))))

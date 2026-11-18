@@ -1,1625 +1,1399 @@
 (ns clojure.pprint
-  "Pretty printing, built into rontolisp: pprint lays data out within the right
-  margin as Clojure's pretty printer does, through a dispatch function a program
-  can extend (simple-dispatch is a multimethod) or replace. Written for this front
-  end from the documented behaviour of Clojure's namespace of the same name; the
-  layout itself is the run-time library's (rontolisp.internal.pprint)."
-  (:require [rontolisp.internal.pprint :as kernel]))
+  "The pretty printer, built into rontolisp. pprint and write print a value
+  within a right margin, breaking it into lines where it has to; what a
+  value looks like is up to a dispatch function, simple-dispatch for data
+  and code-dispatch for code, which a program may extend or replace;
+  cl-format is Common Lisp's format. Written here from the documentation of
+  Clojure's namespace of the same name, from the Common Lisp HyperSpec
+  (22.2 and 22.3) and from what clj 1.12.6 prints; the page itself is laid
+  out by the run-time library (rontolisp.internal.pprint)."
+  (:require [rontolisp.internal.pprint :as k]))
 
 (def ^:dynamic *print-pretty*
-  "Whether write prints prettily; true unless bound otherwise."
+  "Whether write-out goes through the dispatch function; false prints as pr."
   true)
 
 (def ^:dynamic *print-right-margin*
-  "The column pretty printing keeps its lines before, 72 by default; nil lets a
-  line run as long as it needs."
+  "The column a pretty-printed line should stay short of; nil for no limit."
   72)
 
 (def ^:dynamic *print-miser-width*
-  "How close to the right margin a logical block may start before it prints in
-  miser style (only miser and fill newlines read it); nil turns miser style off."
+  "A logical block opening within this many columns of the right margin is
+  laid out in miser style, where its miser newlines break; nil for never."
   40)
 
 (def ^:dynamic *print-suppress-namespaces*
-  "Whether a symbol prints without its namespace."
+  "Whether code-dispatch and ~W write a symbol without its namespace."
   nil)
 
 (def ^:dynamic *print-radix*
-  "Whether an integer or a ratio prints with its radix mark (#x, #o, #b, #Nr, or
-  a trailing dot in base 10)."
+  "Whether an integer or a ratio is written with a mark of its base: #b,
+  #o, #x, #NNr, or a closing point in base ten."
   nil)
 
 (def ^:dynamic *print-base*
-  "The base, 2 to 36, integers and ratios print in."
+  "The base pprint and write spell integers and ratios in."
   10)
 
-(def ^:private ^:dynamic *radix-pr*
-  "Whether the dispatch writes an integer or a ratio in *print-base* and
-  *print-radix*: set by pprint and write when either is not its default (as
-  Clojure's rebind pr there), so cl-format's ~W writes one as pr does."
-  nil)
+(def ^:private ^:dynamic *numbers-in-base*
+  "True inside a pprint or write that found *print-base* or *print-radix*
+  changed: there a number is written in that base wherever pr would write
+  it."
+  false)
 
-(defn- pr-radix
-  "Writes x as pr does, an integer or a ratio in *print-base* and
-  *print-radix* inside a pprint or write that set them."
+(defn- pr-number
+  "x as pr writes it, but an integer or a ratio in *print-base* and
+  *print-radix* where pprint or write asked for that."
   [x]
-  (if-let [s (and *radix-pr* (kernel/number-string x *print-base* *print-radix*))]
-    (print s)
-    (pr x)))
+  (let [spelled (when *numbers-in-base* (k/number-string x *print-base* *print-radix*))]
+    (if spelled (print spelled) (pr x))))
+
+;; The layout marks a dispatch function makes.
 
 (defmacro pprint-logical-block
-  "Runs body as a logical block of the pretty print in progress. The leading
-  options :prefix and :suffix are strings written around the body, and
-  :per-line-prefix one written at the start of each of its lines. Past
-  *print-level* blocks deep it writes # instead."
-  [& args]
-  (let [[options body] (loop [options {} args args]
-                         (if (contains? #{:prefix :per-line-prefix :suffix} (first args))
-                           (recur (assoc options (first args) (second args)) (next (next args)))
-                           [options args]))]
-    `(do (when (kernel/start ~(:prefix options) ~(:per-line-prefix options) ~(:suffix options)
-                             *print-level*)
-           (try ~@body (finally (kernel/end ~(:suffix options)))))
-         nil)))
+  "Runs body as one logical block of the pretty print in progress: its
+  conditional newlines break together or not at all, and the lines it breaks
+  onto are indented under where it began. Ahead of body come the options
+  :prefix and :suffix, strings written around it, and :per-line-prefix, a
+  string repeated at the start of every line it breaks onto. Nested deeper
+  than *print-level*, the block is written as #."
+  [& options-and-body]
+  (loop [options {} forms options-and-body]
+    (if (contains? #{:prefix :per-line-prefix :suffix} (first forms))
+      (recur (assoc options (first forms) (second forms)) (nnext forms))
+      `(do (when (k/start ~(:prefix options) ~(:per-line-prefix options) ~(:suffix options) *print-level*)
+             (try ~@forms (finally (k/end ~(:suffix options)))))
+           nil))))
+
+(defn- count-recurs
+  "form with a counter, one more each time, handed to every recur that
+  belongs to the loop form sits in."
+  [counter form]
+  (cond
+    (and (seq? form) (= 'recur (first form)))
+    (apply list 'recur (list 'clojure.core/inc counter) (map (fn [f] (count-recurs counter f)) (rest form)))
+    (and (seq? form) (contains? '#{loop fn fn* letfn} (first form))) form
+    (seq? form) (apply list (map (fn [f] (count-recurs counter f)) form))
+    (vector? form) (mapv (fn [f] (count-recurs counter f)) form)
+    :else form))
 
 (defmacro print-length-loop
-  "A loop like loop whose body runs at most *print-length* times, writing ...
-  where it is cut short."
+  "loop, for a dispatch function that walks a collection: once the body has
+  run *print-length* times, ... is written in place of the next round."
   [bindings & body]
-  (let [n (gensym "length-count")]
-    (letfn [(counted [form]
-              (cond
-                (and (seq? form) (= 'recur (first form)))
-                (apply list 'recur (list 'clojure.core/inc n) (map counted (rest form)))
-                (and (seq? form) (contains? '#{loop fn fn* letfn} (first form))) form
-                (seq? form) (apply list (map counted form))
-                (vector? form) (vec (map counted form))
-                :else form))]
-      `(loop ~(apply vector n 0 bindings)
-         (if (or (not *print-length*) (< ~n *print-length*))
-           (do ~@(map counted body))
-           (print "..."))))))
+  (let [rounds (gensym "rounds")]
+    `(loop [~rounds 0 ~@bindings]
+       (if (and *print-length* (>= ~rounds *print-length*))
+         (print "...")
+         (do ~@(map (fn [form] (count-recurs rounds form)) body))))))
 
 (defn pprint-newline
-  "A conditional newline of kind :linear, :miser, :fill or :mandatory in the
-  logical block being printed; nothing outside a pretty print."
+  "A place where the logical block being printed may break: kind is
+  :linear (all of a block's break, or none), :fill (as few as fit), :miser
+  (only in a block laid out in miser style) or :mandatory (always)."
   [kind]
-  (kernel/newline kind))
+  (k/newline kind))
 
 (defn pprint-indent
-  "Sets the indentation of the logical block being printed to n columns past
-  its start (:block) or past the current column (:current)."
+  "Indents the lines the logical block being printed breaks onto from here
+  on by n columns, counted from where the block's body began (:block) or
+  from the column reached (:current)."
   [relative-to n]
-  (kernel/indent relative-to n))
+  (k/indent relative-to n))
 
 (defn pprint-tab
-  "Column tabulation, which Clojure's pretty printer does not implement either."
+  "Tabulation in a pretty print, which Clojure does not implement either."
   [kind colnum colinc]
   (throw (UnsupportedOperationException. "pprint-tab is not yet implemented")))
 
 (defn fresh-line
-  "A newline unless the pretty print in progress is at the start of a line;
-  outside a pretty print, which keeps no column, always a newline."
+  "Ends the line unless the pretty print in progress is at the start of
+  one. Outside a pretty print nothing knows the column, and the line is
+  always ended."
   []
-  (kernel/fresh-line))
+  (k/fresh-line))
 
 (defn get-pretty-writer
-  "writer itself: pretty printing happens inside pprint and write here, whatever
-  the writer."
+  "The writer itself: here it is pprint and write that lay a page out, on
+  whatever writer they are given."
   [writer]
   writer)
 
+;; What a value looks like.
+
 (defmulti simple-dispatch
-  "The pprint dispatch for data: vectors, lists and seqs, maps and records, and
-  sets lay out as logical blocks with linear newlines; anything else prints as pr
-  prints it. A program adds a method for its own class."
+  "The dispatch function of data, a multimethod on the value's class: a
+  list, a vector, a map and a set are logical blocks whose members break
+  onto lines of their own when they do not fit on one, and anything else is
+  written as pr writes it. A method added for a class changes how its
+  values are pretty printed."
   class)
 
 (def ^:dynamic *print-pprint-dispatch*
-  "The function pprint and write-out hand each object to; simple-dispatch unless
-  bound otherwise."
+  "The function that writes one value of a pretty print: simple-dispatch
+  until bound or set to another."
   simple-dispatch)
 
 (defn write-out
-  "Writes object through *print-pprint-dispatch* inside a pretty print (as pr
-  does when *print-pretty* is false), honouring *print-length*; answers whether
-  the length was reached, having written ... instead."
+  "Writes object as part of the pretty print in progress, through
+  *print-pprint-dispatch* (as pr when *print-pretty* is false). Counts
+  against *print-length* in the logical block it is written in: past the
+  limit it writes ... instead and answers true."
   [object]
-  (let [reached (kernel/length-reached *print-length*)]
-    (cond
-      (not *print-pretty*) (pr object)
-      reached (print "...")
-      :else (do (kernel/count-object)
-                (*print-pprint-dispatch* object)))
-    reached))
+  (let [cut (k/length-reached *print-length*)]
+    (cond (not *print-pretty*) (pr object)
+          cut (print "...")
+          :else (do (k/count-object) (*print-pprint-dispatch* object)))
+    cut))
 
-(defn- pprint-meta
-  "With *print-meta*, x's metadata ahead of it as pr writes it."
+(defn- write-metadata
+  "Under *print-meta*, the metadata of x ahead of it, as the reader takes
+  it back."
   [x]
-  (when-let [m (and *print-meta* (meta x))]
-    (print "^")
-    (write-out m)
-    (print " ")
-    (pprint-newline :linear)))
-
-(defn- pprint-items
-  "The members of the seq s in a logical block between prefix and suffix,
-  separated by linear newlines."
-  [prefix suffix s]
-  (pprint-logical-block :prefix prefix :suffix suffix
-    (print-length-loop [s s]
-      (when s
-        (write-out (first s))
-        (when (next s)
-          (print " ")
-          (pprint-newline :linear)
-          (recur (next s)))))))
-
-(def ^:private reader-macros
-  "The reader macro each two-member list headed by these symbols prints as."
-  {'quote "'" 'var "#'" 'clojure.core/deref "@" 'clojure.core/unquote "~"})
-
-(defn- pprint-reader-macro
-  "Writes the two-member list s as the reader macro its head stands for,
-  answering true; false for any other list."
-  [s]
-  (let [prefix (get reader-macros (first s))]
-    (if (and prefix (= 2 (count s)))
-      (do (print prefix) (write-out (second s)) true)
-      false)))
-
-(defn- lifted-namespace
-  "The namespace every key of the map m shares, when each is a keyword or a
-  symbol qualified by it and *print-namespace-maps* is on; else nil."
-  [m]
-  (when (and *print-namespace-maps* (seq m))
-    (let [ns (first (map (fn [k] (when (or (keyword? k) (symbol? k)) (namespace k))) (keys m)))]
-      (when (and ns (every? (fn [k] (and (or (keyword? k) (symbol? k)) (= ns (namespace k)))) (keys m)))
-        ns))))
-
-(defn- pprint-map
-  "The entries of the map m as logical blocks of key and value, separated by a
-  comma and a linear newline; a namespace all its keys share lifted to #:ns."
-  [m]
-  (pprint-meta m)
-  (let [ns (lifted-namespace m)
-        entries (seq m)
-        entries (if ns
-                  (map (fn [[k v]] [(if (keyword? k) (keyword (name k)) (symbol (name k))) v]) entries)
-                  entries)]
-    (pprint-logical-block :prefix (if ns (str "#:" ns "{") "{") :suffix "}"
-      (print-length-loop [s entries]
-        (when s
-          (pprint-logical-block
-            (write-out (ffirst s))
-            (print " ")
-            (pprint-newline :linear)
-            (kernel/reset-length)
-            (write-out (second (first s))))
-          (when (next s)
-            (print ", ")
-            (pprint-newline :linear)
-            (recur (next s))))))))
-
-(defmethod simple-dispatch nil [_]
-  (pr nil))
-
-(defn- pprint-default
-  "x laid out by its kind: a map, vector, set or seq as a logical block, a
-  reader macro form abbreviated, anything else as pr prints it (a symbol
-  without its namespace under *print-suppress-namespaces*, an integer or ratio
-  in *print-base* and *print-radix* inside a pprint or write that set them)."
-  [x]
-  (cond
-    (map? x) (pprint-map x)
-    (vector? x) (do (pprint-meta x) (pprint-items "[" "]" (seq x)))
-    (set? x) (do (pprint-meta x) (pprint-items "#{" "}" (seq x)))
-    (seq? x) (when-not (pprint-reader-macro x)
-               (pprint-meta x)
-               (pprint-items "(" ")" (seq x)))
-    (and *print-suppress-namespaces* (symbol? x)) (print (name x))
-    :else (pr-radix x)))
-
-;; one method per class the common values have, so they dispatch at the first
-;; lookup; every other value (a record, a deftype) reaches :default
-(defmethod simple-dispatch clojure.lang.IPersistentVector [x] (pprint-default x))
-(defmethod simple-dispatch clojure.lang.IPersistentMap [x] (pprint-default x))
-(defmethod simple-dispatch clojure.lang.IPersistentSet [x] (pprint-default x))
-(defmethod simple-dispatch clojure.lang.IPersistentList [x] (pprint-default x))
-(defmethod simple-dispatch java.lang.Number [x] (pprint-default x))
-(defmethod simple-dispatch java.lang.String [x] (pprint-default x))
-(defmethod simple-dispatch clojure.lang.Keyword [x] (pprint-default x))
-(defmethod simple-dispatch clojure.lang.Symbol [x] (pprint-default x))
-(defmethod simple-dispatch java.lang.Boolean [x] (pprint-default x))
-(defmethod simple-dispatch java.lang.Character [x] (pprint-default x))
-(defmethod simple-dispatch :default [x] (pprint-default x))
-
-;; code-dispatch: the layouts of Clojure code. A run of writes the code layouts
-;; spell in sequence stops at the first object *print-length* cuts short, as
-;; Clojure's own layouts (format directives) do.
-
-(def ^:private ^:dynamic *code-symbols*
-  "While the body of an anonymous function literal prints, the spelling (%, %1,
-  %2, ...) of each of its parameters."
-  {})
-
-(defn- write-run
-  "Writes the members of s, each but the last followed by a space and a
-  newline of kind, stopping at the first one *print-length* cuts short."
-  [s kind]
-  (loop [s (seq s)]
-    (when (and s (not (write-out (first s))) (next s))
+  (when *print-meta*
+    (when-let [m (meta x)]
+      (print "^")
+      (if (and (= 1 (count m)) (:tag m)) (write-out (:tag m)) (write-out m))
       (print " ")
-      (pprint-newline kind)
-      (recur (next s)))))
+      (pprint-newline :linear))))
 
-(defn- code-plain
-  "The list s as code with no layout of its own: its members on one line, or
-  each on a line of its own indented one column past the parenthesis."
-  [s]
-  (pprint-logical-block :prefix "(" :suffix ")"
-    (pprint-indent :block 1)
-    (print-length-loop [s (seq s)]
-      (when s
-        (write-out (first s))
-        (when (next s)
-          (print " ")
-          (pprint-newline :linear)
-          (recur (next s)))))))
-
-(defn- code-pairs
-  "The members of s two by two, each pair a block whose second member may go
-  below its first in miser style, the pairs separated by linear newlines."
-  [s]
-  (print-length-loop [s (seq s)]
-    (when s
-      (pprint-logical-block
-        (write-out (first s))
-        (when (next s)
-          (print " ")
-          (pprint-newline :miser)
-          (write-out (second s))))
-      (when (next (rest s))
+(defn- write-members
+  "The members of coll, a blank and a linear newline between two."
+  [coll]
+  (print-length-loop [members (seq coll)]
+    (when members
+      (write-out (first members))
+      (when (next members)
         (print " ")
         (pprint-newline :linear)
-        (recur (next (rest s)))))))
+        (recur (next members))))))
 
-(defn- code-head
-  "Writes the head of a defining form and, past a space and a block indent of
-  one, the name after it (which goes below in miser style)."
-  [head named]
-  (when-not (write-out head)
-    (print " ")
-    (pprint-indent :block 1)
-    (pprint-newline :miser)
-    (write-out named)))
+(def ^:private reader-marks
+  "The two-member lists the reader has a mark for, and the mark."
+  {'quote "'", 'clojure.core/deref "@", 'var "#'", 'clojure.core/unquote "~"})
 
-(defn- code-hold-first
-  "def, ->, . and the like: the first operand stays beside the head unless in
-  miser style, the rest go below it."
-  [s]
-  (pprint-logical-block :prefix "(" :suffix ")"
-    (when-not (write-out (first s))
-      (when-let [more (next s)]
-        (print " ")
-        (pprint-newline :miser)
-        (when-not (write-out (first more))
-          (when-let [more (next more)]
-            (print " ")
-            (pprint-newline :linear)
-            (write-run more :linear)))))))
+(defn- write-marked
+  "Writes the list form as the reader mark it stands for and answers true;
+  nil for any other list."
+  [form]
+  (let [mark (reader-marks (first form))]
+    (when (and mark (= 2 (count form)))
+      (print mark)
+      (write-out (second form))
+      true)))
 
-(defn- code-defn
-  "defn, defmacro, fn: the name beside the head, then the docstring, the
-  attribute map and the parameter vector and body, or the arities."
-  [s]
-  (if (next s)
-    (let [[head named & more] s
-          [doc more] (if (string? (first more)) [(first more) (next more)] [nil more])
-          [attrs more] (if (map? (first more)) [(first more) (next more)] [nil more])]
-      (pprint-logical-block :prefix "(" :suffix ")"
-        (code-head head named)
-        (when doc
-          (print " ")
-          (pprint-newline :linear)
-          (write-out doc))
-        (when attrs
-          (print " ")
-          (pprint-newline :linear)
-          (write-out attrs))
-        (when (seq more)
-          (print " ")
-          (pprint-newline (if (and (vector? (first more)) (not (or doc attrs))) :miser :linear))
-          (write-run more :linear))))
-    (code-plain s)))
+(defn- common-namespace
+  "The namespace every key of the map m is qualified by, when the printer
+  lifts one out of a map (*print-namespace-maps*); nil otherwise."
+  [m]
+  (when (and *print-namespace-maps* (seq m) (not (record? m)))
+    (let [spaces (map (fn [key] (when (or (keyword? key) (symbol? key)) (namespace key))) (keys m))]
+      (when (and (first spaces) (apply = spaces))
+        (first spaces)))))
 
-(defn- code-bindings
-  "A binding vector: its name and value pairs."
-  [v]
-  (pprint-logical-block :prefix "[" :suffix "]"
-    (code-pairs v)))
-
-(defn- code-let
-  "let, loop, binding, doseq and the like: the binding vector beside the head,
-  the body below."
-  [s]
-  (pprint-logical-block :prefix "(" :suffix ")"
-    (if (and (next s) (vector? (second s)))
-      (do
-        (when-not (write-out (first s))
-          (print " ")
-          (pprint-indent :block 1)
-          (pprint-newline :miser))
-        (code-bindings (second s))
-        (print " ")
-        (pprint-newline :linear)
-        (write-run (next (next s)) :linear))
-      (code-plain s))))
-
-(defn- code-if
-  "if, when and their negations: the test beside the head unless in miser
-  style, the branches or body below."
-  [s]
-  (pprint-logical-block :prefix "(" :suffix ")"
-    (pprint-indent :block 1)
-    (when-not (write-out (first s))
-      (when-let [more (next s)]
-        (print " ")
-        (pprint-newline :miser)
-        (when-not (write-out (first more))
-          (loop [more (next more)]
-            (when more
+(defn- write-map
+  "A map as a logical block of its entries: each entry a block of its own,
+  key and value a linear newline apart, a comma between two entries. A map
+  whose keys share a namespace is written #:ns{...} with the keys bare."
+  [m]
+  (let [space (common-namespace m)
+        bare (fn [key] (if (keyword? key) (keyword (name key)) (symbol (name key))))]
+    (pprint-logical-block :prefix (if space (str "#:" space "{") "{") :suffix "}"
+      (print-length-loop [entries (seq m)]
+        (when entries
+          (pprint-logical-block
+            (let [entry (first entries)]
+              (write-out (if space (bare (key entry)) (key entry)))
               (print " ")
               (pprint-newline :linear)
-              (when-not (write-out (first more))
-                (recur (next more))))))))))
+              ;; a key is never left without its value
+              (k/reset-length)
+              (write-out (val entry))))
+          (when (next entries)
+            (print ", ")
+            (pprint-newline :linear)
+            (recur (next entries))))))))
 
-(defn- code-cond
-  "cond: the test and expression pairs below the head."
-  [s]
+(defn- write-data
+  "x as simple-dispatch lays it out."
+  [x]
+  (cond
+    (nil? x) (pr nil)
+    (map? x) (do (write-metadata x) (write-map x))
+    (vector? x) (do (write-metadata x)
+                    (pprint-logical-block :prefix "[" :suffix "]" (write-members x)))
+    (set? x) (do (write-metadata x)
+                 (pprint-logical-block :prefix "#{" :suffix "}" (write-members x)))
+    (seq? x) (do (write-metadata x)
+                 (when-not (write-marked x)
+                   (pprint-logical-block :prefix "(" :suffix ")" (write-members x))))
+    (and (symbol? x) *print-suppress-namespaces*) (print (name x))
+    :else (pr-number x)))
+
+(defmethod simple-dispatch nil [_] (pr nil))
+(defmethod simple-dispatch clojure.lang.IPersistentVector [x] (write-data x))
+(defmethod simple-dispatch clojure.lang.IPersistentMap [x] (write-data x))
+(defmethod simple-dispatch clojure.lang.IPersistentSet [x] (write-data x))
+(defmethod simple-dispatch clojure.lang.IPersistentList [x] (write-data x))
+(defmethod simple-dispatch java.lang.Number [x] (write-data x))
+(defmethod simple-dispatch java.lang.String [x] (write-data x))
+(defmethod simple-dispatch clojure.lang.Keyword [x] (write-data x))
+(defmethod simple-dispatch clojure.lang.Symbol [x] (write-data x))
+(defmethod simple-dispatch java.lang.Boolean [x] (write-data x))
+(defmethod simple-dispatch java.lang.Character [x] (write-data x))
+(defmethod simple-dispatch :default [x] (write-data x))
+
+;; cl-format: Common Lisp's format (HyperSpec 22.3). A control string is
+;; read once into a tree -- text, and directives holding the clauses they
+;; bracket -- and the tree is then walked over the arguments. The walk
+;; keeps its place among the arguments in a cursor that it moves in place;
+;; a walk of some part answers nil when it ran to its end, :up when a ~^
+;; left it (the enclosing iteration goes on to its next round, or stops)
+;; and :out when a ~:^ ended the enclosing ~:{ as a whole. The spelling of
+;; numbers and the case conversion of ~( are the run-time library's.
+
+(defn- refuse
+  "Throws the refusal of a control string: the reason, the string, and a
+  caret under the offset it failed at."
+  [control reason offset]
+  (throw (RuntimeException. (str reason "\n" control "\n" (k/padding offset \space) "^\n"))))
+
+(def ^:private directive-table
+  "Per directive character: the names of its parameters and their defaults
+  (a parameter named ...char is a character, any other an integer), the
+  flags it takes (:any, :one of the two, :at, :colon or :none), the
+  character that closes it when it brackets clauses, whether ~; may
+  separate them, and whether it needs a pretty print to run in."
+  (let [field {:names ["mincol" "colinc" "minpad" "padchar"] :defaults [0 1 0 \space]}
+        whole {:names ["mincol" "padchar" "commachar" "commainterval"] :defaults [0 \space \, 3]}
+        scaled {:names ["w" "d" "e" "k" "overflowchar" "padchar" "exponentchar"]
+                :defaults [nil nil nil 1 nil \space nil]}
+        times {:names ["count"] :defaults [1]}
+        bare {:names [] :defaults []}]
+    {\A (assoc field :flags :any)
+     \S (assoc field :flags :any)
+     \D (assoc whole :flags :any)
+     \B (assoc whole :flags :any)
+     \O (assoc whole :flags :any)
+     \X (assoc whole :flags :any)
+     \R {:names (into ["base"] (:names whole)) :defaults (into [nil] (:defaults whole)) :flags :any}
+     \P (assoc bare :flags :any)
+     \C {:names ["char-format"] :defaults [nil] :flags :any}
+     \F {:names ["w" "d" "k" "overflowchar" "padchar"] :defaults [nil nil 0 nil \space] :flags :at}
+     \E (assoc scaled :flags :at)
+     \G (assoc scaled :flags :at)
+     \$ {:names ["d" "n" "w" "padchar"] :defaults [2 1 0 \space] :flags :any}
+     \% (assoc times :flags :none)
+     \| (assoc times :flags :none)
+     \& (assoc times :flags :none :pretty true)
+     \~ {:names ["n"] :defaults [1] :flags :none}
+     \newline (assoc bare :flags :one)
+     \T {:names ["colnum" "colinc"] :defaults [1 1] :flags :at :pretty true}
+     \* {:names ["n"] :defaults [nil] :flags :one}
+     \? (assoc bare :flags :at)
+     \( (assoc bare :flags :any :closer \))
+     \[ {:names ["selector"] :defaults [nil] :flags :one :closer \] :separated true}
+     \; {:names ["min-remaining" "max-columns"] :defaults [nil nil] :flags :colon}
+     \{ {:names ["max-iterations"] :defaults [nil] :flags :any :closer \}}
+     \< (assoc field :flags :any :closer \> :separated true :pretty true)
+     \) (assoc bare :flags :none)
+     \] (assoc bare :flags :none)
+     \} (assoc bare :flags :colon)
+     \> (assoc bare :flags :colon)
+     \^ {:names ["arg1" "arg2" "arg3"] :defaults [nil nil nil] :flags :colon}
+     \W (assoc bare :flags :any :pretty true)
+     \_ (assoc bare :flags :any)
+     \I {:names ["n"] :defaults [0] :flags :colon}}))
+
+(defn- digit-at?
+  [control at]
+  (and (< at (count control))
+       (let [code (int (nth control at))] (and (>= code 48) (<= code 57)))))
+
+(defn- read-parameter
+  "The parameter starting at index at of control: [value next-index], the
+  value an integer, a character, :v (the next argument), :# (how many
+  arguments are left) or nil for none written there."
+  [control at]
+  (let [size (count control)
+        c (when (< at size) (nth control at))]
+    (cond
+      (or (digit-at? control at) (and (or (= c \+) (= c \-)) (digit-at? control (inc at))))
+      (let [end (loop [i (inc at)] (if (digit-at? control i) (recur (inc i)) i))
+            digits (subs control (if (= c \+) (inc at) at) end)]
+        ;; a parameter is an int to the oracle, which refuses one that is not
+        (when-not (<= -2147483648 (bigint digits) 2147483647)
+          (throw (NumberFormatException. (str "For input string: \"" digits "\""))))
+        [(parse-long digits) end])
+      (and (= c \') (< (inc at) size)) [(nth control (inc at)) (+ at 2)]
+      (or (= c \v) (= c \V)) [:v (inc at)]
+      (= c \#) [:# (inc at)]
+      :else [nil at])))
+
+(defn- read-directive
+  "The directive whose tilde is at index tilde of control, checked against
+  the table: a map of :char (upper case), :colon, :at, :params (the values
+  written, in order), :offset (where its character stands) and :next (the
+  index after it)."
+  [control tilde]
+  (let [size (count control)
+        [params at] (loop [params [] offsets [] at (inc tilde) commas false]
+                      (let [[value next] (read-parameter control at)]
+                        (cond
+                          (and (< next size) (= \, (nth control next)))
+                          (recur (conj params value) (conj offsets at) (inc next) true)
+                          (and commas (= next at))
+                          (refuse control "Badly formed parameters in format directive" at)
+                          (= next at) [(mapv vector params offsets) at]
+                          :else [(mapv vector (conj params value) (conj offsets at)) next])))
+        [flags at] (loop [flags {} at at]
+                     (let [c (when (< at size) (nth control at))
+                           flag (cond (= c \:) :colon (= c \@) :at)]
+                       (cond
+                         (nil? flag) [flags at]
+                         (contains? flags flag)
+                         (refuse control (str "Flag \"" c "\" appears more than once in a directive") at)
+                         :else (recur (assoc flags flag at) (inc at)))))]
+    (when (>= at size)
+      (if (and (seq params) (empty? flags))
+        (throw (StringIndexOutOfBoundsException. "Index 0 out of bounds for length 0"))
+        (throw (NullPointerException.
+                 "Cannot invoke \"Character.charValue()\" because \"directive\" is null"))))
+    (let [written (nth control at)
+          c (first (clojure.string/upper-case (str written)))
+          entry (directive-table c)
+          colon (contains? flags :colon)
+          at-flag (contains? flags :at)
+          allowed (:flags entry)]
+      (when-not entry
+        (refuse control (str "Directive \"" written "\" is undefined") at))
+      (when (and at-flag (contains? #{:colon :none} allowed))
+        (refuse control (str "\"@\" is an illegal flag for format directive \"" c "\"") (:at flags)))
+      (when (and colon (contains? #{:at :none} allowed))
+        (refuse control (str "\":\" is an illegal flag for format directive \"" c "\"") (:colon flags)))
+      (when (and colon at-flag (= allowed :one))
+        (refuse control (str "Cannot combine \"@\" and \":\" flags for format directive \"" c "\"")
+                (min (:at flags) (:colon flags))))
+      (when (> (count params) (count (:names entry)))
+        (refuse control
+                (str "Too many parameters for directive \"" c "\": " (count params)
+                     (if (= 1 (count params)) " was" " were") " specified but only "
+                     (count (:names entry)) (if (= 1 (count (:names entry))) " is" " are") " allowed")
+                (inc tilde)))
+      (doseq [[[value offset] name] (map vector params (:names entry))]
+        (let [wants-char (or (= name "char-format") (clojure.string/ends-with? name "char"))]
+          (when (and (some? value) (not (keyword? value)) (not= wants-char (char? value)))
+            (refuse control
+                    (str "Parameter " name " has bad type in directive \"" c "\": class java.lang."
+                         (if (char? value) "Character" "Integer"))
+                    offset))))
+      {:char c :colon colon :at at-flag :params (mapv first params) :offset at :next (inc at)})))
+
+(defn- blank?
+  [c]
+  (or (= c \space) (= c \tab)))
+
+(defn- read-flat
+  "control as a vector of its pieces in order: strings and directives. A
+  ~newline swallows the blanks after it, unless it has the colon, and
+  stands for a line end only with the at-sign."
+  [control]
+  (let [size (count control)]
+    (loop [pieces [] at 0]
+      (if (>= at size)
+        pieces
+        (let [tilde (clojure.string/index-of control "~" at)]
+          (cond
+            (nil? tilde) (conj pieces (subs control at))
+            (> tilde at) (recur (conj pieces (subs control at tilde)) tilde)
+            :else
+            (let [directive (read-directive control tilde)]
+              (if (= \newline (:char directive))
+                (let [after (if (:colon directive)
+                              (:next directive)
+                              (loop [i (:next directive)]
+                                (if (and (< i size) (blank? (nth control i))) (recur (inc i)) i)))]
+                  (recur (if (:at directive) (conj pieces "\n") pieces) after))
+                (recur (conj pieces directive) (:next directive))))))))))
+
+(declare nest)
+
+(defn- nest-bracket
+  "The bracket directive opener, at index start of the flat pieces, with
+  the clauses up to its closer: [directive next-index]. The directive gains
+  :clauses, :separators (the ~; ahead of each clause but the first) and
+  :closer."
+  [control pieces start]
+  (let [opener (nth pieces start)
+        entry (directive-table (:char opener))
+        closer (:closer entry)]
+    (loop [clauses [] separators [] at (inc start)]
+      (let [[clause stop] (nest control pieces at closer)
+            ending (when (< stop (count pieces)) (nth pieces stop))]
+        (cond
+          (nil? ending) (refuse control "No closing bracket found." (:offset opener))
+          (= closer (:char ending))
+          [(assoc opener :clauses (conj clauses clause) :separators separators :closer ending) (inc stop)]
+          (not (:separated entry))
+          (refuse control
+                  (if (:colon ending)
+                    "An else clause (\"~:;\") is in a bracket type that doesn't support it."
+                    "A separator (\"~;\") is in a bracket type that doesn't support it.")
+                  (:offset opener))
+          (and (= \[ (:char opener)) (not (:colon ending)) (some :colon separators))
+          (refuse control
+                  "A plain clause (with \"~;\") follows an else clause (\"~:;\") inside bracket construction."
+                  (:offset opener))
+          (and (= \< (:char opener)) (:colon ending) (seq separators))
+          (refuse control
+                  (if (:colon (first separators))
+                    "Two else clauses (\"~:;\") inside bracket construction."
+                    "The else clause (\"~:;\") is only allowed in the first position for this directive.")
+                  (:offset opener))
+          :else (recur (conj clauses clause) (conj separators ending) (inc stop)))))))
+
+(defn- nest
+  "The pieces from index at on as one clause -- a vector of strings and
+  directives, the bracket ones holding their own clauses -- up to the
+  directive closing or separating the bracket whose closer is given (to
+  the end without one): [clause stop-index]."
+  [control pieces at closer]
+  (loop [clause [] at at]
+    (if (>= at (count pieces))
+      [clause at]
+      (let [piece (nth pieces at)]
+        (cond
+          (string? piece) (recur (conj clause piece) (inc at))
+          (and closer (or (= closer (:char piece)) (= \; (:char piece)))) [clause at]
+          (:closer (directive-table (:char piece)))
+          (let [[bracket next] (nest-bracket control pieces at)]
+            (recur (conj clause bracket) next))
+          :else (recur (conj clause piece) (inc at)))))))
+
+(defn- pretty-clause?
+  "Whether clause holds, at any depth, a directive that runs in a pretty
+  print."
+  [clause]
+  (boolean (some (fn [piece]
+                   (and (map? piece)
+                        (or (:pretty (directive-table (:char piece)))
+                            (some pretty-clause? (:clauses piece)))))
+                 clause)))
+
+(defn- compile-format
+  "The control string read into what cl-format runs: a map of its pieces
+  (::pieces) and whether it needs a pretty print (::pretty)."
+  [control]
+  (let [pieces (read-flat control)
+        [clause _] (nest control pieces 0 nil)]
+    {::pieces clause ::pretty (pretty-clause? clause)}))
+
+(def ^:private compiled
+  "The control strings compiled so far; emptied when it has grown to 512."
+  (atom {}))
+
+(defn- as-format
+  "What cl-format was handed as its format, ready to run: a control string
+  compiled (once per string), a compiled format as it is."
+  [format-in]
+  (cond
+    (string? format-in)
+    (or (get @compiled format-in)
+        (let [ready (compile-format format-in)]
+          (when (>= (count @compiled) 512) (reset! compiled {}))
+          (swap! compiled assoc format-in ready)
+          ready))
+    (and (map? format-in) (contains? format-in ::pieces)) format-in
+    ;; anything else is walked as if it were compiled: nothing to walk in
+    ;; what is empty, and nothing that can run in what is not
+    (empty? (seq format-in)) {::pieces [] ::pretty false}
+    :else (throw (NullPointerException.
+                   "Cannot invoke \"clojure.lang.IFn.applyTo(clojure.lang.ISeq)\" because \"f\" is null"))))
+
+;; The cursor over the arguments: a volatile holding where the walk is.
+
+(defn- cursor
+  [arguments]
+  (volatile! {:all arguments :rest (seq arguments) :at 0 :moved false}))
+
+(defn- take-argument
+  "The next argument, moving the cursor past it. Right after a ~* moved the
+  cursor there is always one more to take, nil past the end, as the
+  oracle's is."
+  [cur]
+  (let [{:keys [rest at moved] :as place} @cur]
+    (when-not (or rest moved)
+      (throw (Exception. "Not enough arguments for format definition")))
+    (vreset! cur (assoc place :rest (next rest) :at (inc at) :moved false))
+    (first rest)))
+
+(defn- move-to
+  "Moves the cursor to the argument numbered n from the first."
+  [cur n]
+  (let [place @cur]
+    (vreset! cur (assoc place :rest (seq (drop n (:all place))) :at n :moved true))
+    nil))
+
+(defn- skip
+  "Moves the cursor n arguments on from where it is."
+  [cur n]
+  (let [place @cur]
+    (vreset! cur (assoc place :rest (seq (drop n (:rest place))) :at (+ (:at place) n) :moved true))
+    nil))
+
+(defn- left
+  "How many arguments the cursor has not taken."
+  [cur]
+  (count (:rest @cur)))
+
+(defn- more?
+  "Whether the cursor has an argument left to take; unlike a count, this
+  can be asked of arguments without end."
+  [cur]
+  (some? (:rest @cur)))
+
+;; Writing.
+
+(def ^:private ^:dynamic *plain-out*
+  "True where what a clause writes is collected or converted on its way
+  out, so that nothing there can take part in a pretty print."
+  false)
+
+(defn- emit
+  "Writes piece, a string or a character, through the case conversion of
+  the ~( clauses around it."
+  [piece]
+  (let [convert (k/case-out)]
+    (print (if convert (convert piece) piece))))
+
+(defn- need-pretty
+  "Refuses what only a pretty print can do, where there is none."
+  []
+  (when (or *plain-out* (not (k/active?)))
+    (throw (ClassCastException. "*out* is not a pretty writer"))))
+
+(declare walk run-format)
+
+(defn- actual
+  "The parameters of directive as the walk finds them: the defaults where
+  none was written, the next argument for a v and the number of arguments
+  left for a #, the last one written resolved first."
+  [directive cur]
+  (let [defaults (:defaults (directive-table (:char directive)))
+        written (:params directive)
+        resolved (reduce (fn [values i]
+                           (let [value (nth written i)]
+                             (assoc values i
+                                    (cond (= value :v) (take-argument cur)
+                                          (= value :#) (left cur)
+                                          :else value))))
+                         written
+                         (reverse (range (count written))))]
+    (mapv (fn [i]
+            (let [value (when (< i (count resolved)) (nth resolved i))
+                  given (and (< i (count written)) (some? (nth written i)))]
+              (if given value (nth defaults i))))
+          (range (count defaults)))))
+
+(defn- in-field
+  "text in a field of at least mincol columns, padded with minpad copies
+  of padchar and then colinc more at a time: on the left under at-flag."
+  [text mincol colinc minpad padchar at-flag]
+  (let [short (- mincol (count text) minpad)
+        more (if (pos? short) (* colinc (quot (+ short (dec colinc)) colinc)) 0)
+        padding (k/padding (+ minpad more) padchar)]
+    (if at-flag (str padding text) (str text padding))))
+
+(defn- spelled
+  "x as ~A writes it: an integer or a ratio in *print-base* and
+  *print-radix*, anything else as print does."
+  [x]
+  (or (k/number-string x *print-base* *print-radix*) (print-str x)))
+
+(defn- character-name
+  "The character of the given code as ~:C names it."
+  [code]
+  (let [code (bit-and code 255)]
+    (cond
+      (> code 127) (str "Meta-" (character-name (- code 128)))
+      (= code 8) "Backspace"
+      (= code 9) "Tab"
+      (= code 10) "Newline"
+      (= code 13) "Return"
+      (= code 32) "Space"
+      (= code 127) "Control-?"
+      (< code 32) (str "Control-" (char (+ code 64)))
+      :else (str (char code)))))
+
+(defn- write-character
+  [directive params cur]
+  (let [c (take-argument cur)
+        style (first params)]
+    (cond
+      (:colon directive) (emit (character-name (int c)))
+      (and (:at directive) (= style \o)) (emit (str "\\o" (k/integer-text (int c) 8 nil nil 3 \0 \, 3 10 nil)))
+      (and (:at directive) (= style \u)) (emit (str "\\u" (k/integer-text (int c) 16 nil nil 4 \0 \, 3 10 nil)))
+      (and (:at directive) (nil? style)) (emit (pr-str c))
+      (:at directive) (throw (IllegalArgumentException. (str "No matching clause: " style)))
+      (char? c) (emit c)
+      :else (emit (print-str c)))))
+
+(defn- repeated
+  "n copies of text; n may be a character, which stands for its code."
+  [n text]
+  (apply str (repeat (if (char? n) (int n) (long n)) text)))
+
+(defn- choose
+  "~[: the clause the argument (or the selector) numbers, the ~:; clause
+  past the last; ~:[ the first clause for a false argument and the second
+  for a true one; ~@[ its clause for a true argument, which stays to be
+  taken."
+  [directive params cur]
+  (let [has-else (true? (:colon (last (:separators directive))))
+        clauses (if has-else (vec (butlast (:clauses directive))) (:clauses directive))
+        else-clause (when has-else (last (:clauses directive)))]
+    (cond
+      (:colon directive) (let [clause (if (take-argument cur) (second clauses) (first clauses))]
+                           (when clause (walk clause cur)))
+      (:at directive) (let [place @cur
+                            value (take-argument cur)]
+                        (when value
+                          (vreset! cur place)
+                          (walk (first clauses) cur)))
+      :else (let [selector (if (some? (first params)) (first params) (take-argument cur))
+                  number (cond (number? selector) selector
+                               (nil? selector) (throw (NullPointerException.
+                                                        "Cannot invoke \"Object.getClass()\" because \"x\" is null"))
+                               :else (throw (ClassCastException.
+                                              (str "class " (.getName (class selector))
+                                                   " cannot be cast to class java.lang.Number"))))
+                  clause (if (and (>= number 0) (< number (count clauses)))
+                           (nth clauses number)
+                           else-clause)]
+              (when clause (walk clause cur))))))
+
+(def ^:private ^:dynamic *lists-left*
+  "What ~:^ asks: a function answering whether the arguments one level up
+  from the clause it stands in have run out -- the sublists still to come
+  in a round of ~:{, the arguments themselves at the top of a format. Never
+  true in a round of ~{ or ~@{, whose list was still to come when it
+  began."
+  (fn [] false))
+
+(defn- rounds
+  "~{: the body walked round after round. over is the cursor a round takes
+  its arguments from, or nil when every round has a sublist of its own,
+  taken from lists (a cursor) by next-list. Stops when the arguments run
+  out, after limit rounds, or when a round is left by ~^ (by ~:^, when the
+  rounds are over sublists)."
+  [directive body limit over lists]
+  (let [once (:colon (:closer directive))
+        name (if (:at directive) "%@{" "%{")]
+    (loop [n 0]
+      (let [more (if over (more? over) (more? lists))]
+        (when (and (or more (and once (zero? n))) (or (nil? limit) (< n limit)))
+          (if over
+            (let [before (:at @over)
+                  status (binding [*lists-left* (fn [] false)] (walk (force body) over))]
+              (when (nil? status)
+                ;; with no limit on the rounds, one that took nothing would
+                ;; be followed by the same round for ever
+                (when (and (nil? limit) (= before (:at @over)) (more? over))
+                  (throw (RuntimeException.
+                           (str name " construct not consuming any arguments: Infinite loop!"))))
+                (recur (inc n))))
+            (let [sub (cursor (if more (take-argument lists) nil))
+                  status (binding [*lists-left* (fn [] (not (more? lists)))] (walk (force body) sub))]
+              (when (not= status :out) (recur (inc n))))))))))
+
+(defn- iterate-over
+  [directive params cur]
+  (let [limit (first params)
+        written (first (:clauses directive))
+        ;; an empty body stands for a format taken from the arguments,
+        ;; ahead of the list, and read when a first round needs it
+        given (when (empty? written) (take-argument cur))
+        own (when-not (:at directive) (cursor (seq (take-argument cur))))
+        body (delay (if (empty? written) (::pieces (as-format given)) written))]
+    (cond
+      (and (:colon directive) (:at directive)) (rounds directive body limit nil cur)
+      (:colon directive) (rounds directive body limit nil own)
+      (:at directive) (rounds directive body limit cur nil)
+      :else (rounds directive body limit own nil))
+    nil))
+
+(defn- escape
+  "~^: :up when no argument is left (one parameter: when it is zero; two:
+  when they are equal; three: when they ascend); ~:^ :out, asking about
+  the sublists of the ~:{ around it instead."
+  [directive params cur]
+  (let [[a b c] params
+        leave (cond (and (some? a) (some? b) (some? c)) (<= a b c)
+                    (and (some? a) (some? b)) (= a b)
+                    (some? a) (= a 0)
+                    (:colon directive) (*lists-left*)
+                    :else (not (more? cur)))]
+    (when leave (if (:colon directive) :out :up))))
+
+(defn- segments
+  "The text each clause of a justification writes, in order, and how the
+  last one walked ended: [texts status]. A clause left by ~^ ends them, its
+  own text dropped; one left by ~:^ ends them too, its text kept."
+  [clauses cur]
+  (loop [texts [] clauses clauses]
+    (if (empty? clauses)
+      [texts nil]
+      (let [status (volatile! nil)
+            text (binding [*plain-out* true]
+                   (with-out-str (vreset! status (walk (first clauses) cur))))]
+        (cond (= :up @status) [texts :up]
+              (= :out @status) [(conj texts text) :out]
+              :else (recur (conj texts text) (rest clauses)))))))
+
+(defn- justify
+  "~<...~>: the clauses' texts spread over a field of mincol columns (wider
+  by colinc at a time), the padding between them, before the first under
+  the colon and after the last under the at-sign. A first clause ending in
+  ~:; is written ahead of the rest only where the line has not room for
+  them."
+  [directive params cur]
+  (let [[mincol colinc minpad padchar] params
+        spill (true? (:colon (first (:separators directive))))
+        columns-written (and spill (some? (second (:params (first (:separators directive))))))
+        ;; without a line width of its own a justification asks the pretty
+        ;; print for one, once its ~:; clause is written
+        _ (when-not spill (need-pretty))
+        [spilled spill-status] (when spill (segments (take 1 (:clauses directive)) cur))
+        overflow (first spilled)
+        _ (when (and spill (not columns-written)) (need-pretty))
+        [texts status] (if spill-status
+                         [[] spill-status]
+                         (segments (if spill (rest (:clauses directive)) (:clauses directive)) cur))
+        gaps (+ (dec (count texts)) (if (:colon directive) 1 0) (if (:at directive) 1 0))
+        gaps (if (and (zero? gaps) (seq texts)) 1 gaps)
+        lead (or (:colon directive) (and (= 1 (count texts)) (not (:at directive))))
+        chars (reduce + (map count texts))
+        least (+ chars (* gaps minpad))
+        width (if (> least mincol)
+                (+ mincol (* colinc (quot (+ (- least mincol) (dec colinc)) colinc)))
+                mincol)
+        room (- width chars)
+        each (if (pos? gaps) (quot room gaps) 0)
+        extra (if (pos? gaps) (rem room gaps) 0)
+        pad (fn [i] (k/padding (+ each (if (< i extra) 1 0)) padchar))
+        line (loop [out "" texts texts gap 0 first-text true]
+               (if (empty? texts)
+                 (if (:at directive) (str out (pad gap)) out)
+                 (if (and first-text (not lead))
+                   (recur (str out (first texts)) (rest texts) gap false)
+                   (recur (str out (pad gap) (first texts)) (rest texts) (inc gap) false))))]
+    (let [[spare columns] (when spill (actual (first (:separators directive)) cur))]
+      (when (and spill overflow)
+        ;; the oracle compares against the width the ~:; names, and has
+        ;; none to compare against without it
+        (when (nil? columns)
+          (throw (NullPointerException. "Cannot invoke \"Object.getClass()\" because \"x\" is null")))
+        (when-not (k/eol overflow (+ (count line) (or spare 0)) (or columns *print-right-margin* 72))
+          (throw (ClassCastException. "*out* is not a pretty writer")))))
+    (emit line)
+    ;; a ~:^ that left a clause leaves the whole format with it
+    (when (= :out status) :out)))
+
+(defn- fill-style
+  "The body of a ~:@> block: a fill newline after every run of blanks in
+  its text."
+  [clause]
+  (vec (mapcat (fn [piece]
+                 (if (string? piece)
+                   (loop [out [] text piece]
+                     (let [blank (clojure.string/index-of text " ")]
+                       (if (nil? blank)
+                         (if (seq text) (conj out text) out)
+                         (let [end (loop [i blank] (if (and (< i (count text)) (= \space (nth text i))) (recur (inc i)) i))]
+                           (recur (conj out (subs text 0 end) {:char \_ :colon true :at false :params []})
+                                  (subs text end))))))
+                   [piece]))
+               clause)))
+
+(defn- logical-block
+  "~<...~:>: its body walked as a logical block over a list argument. One
+  clause is the body;
+  two a prefix and the body; three a prefix, the body and a suffix; the
+  colon stands for parentheses."
+  [directive cur]
+  (let [clauses (:clauses directive)
+        text (fn [clause] (apply str (filter string? clause)))
+        prefix (cond (> (count clauses) 1) (text (first clauses)) (:colon directive) "(")
+        suffix (cond (> (count clauses) 2) (text (nth clauses 2)) (:colon directive) ")")
+        body (if (> (count clauses) 1) (second clauses) (first clauses))
+        body (if (:at (:closer directive)) (fill-style body) body)
+        argument (take-argument cur)]
+    (need-pretty)
+    (let [inner (cursor argument)]
+      (pprint-logical-block :prefix prefix :suffix suffix
+        (walk body inner)))
+    nil))
+
+(declare write)
+
+(defn- write-argument
+  "~W: the argument through write-out, as part of the pretty print in
+  progress; a value *print-length* cut ends the walk. With a flag it is a
+  write of its own -- pretty under the colon, without *print-level* and
+  *print-length* under the at-sign."
+  [directive cur]
+  (let [value (take-argument cur)
+        go (fn []
+             (cond
+               (and (:colon directive) (:at directive)) (do (write value :pretty true :level nil :length nil) false)
+               (:colon directive) (do (write value :pretty true) false)
+               (:at directive) (do (write value :level nil :length nil) false)
+               :else (write-out value)))]
+    ;; a collection is a logical block, which a bare ~W can only write into
+    ;; a pretty print -- not through the conversion of a ~( either
+    (when (and (coll? value)
+               (or (not (k/active?))
+                   (and (k/case-out) (not (:colon directive)) (not (:at directive)))))
+      (throw (ClassCastException. "*out* is not a pretty writer")))
+    (when (if (k/case-out)
+            ;; under ~( the oracle's printer hands its text over a character
+            ;; at a time, and a character is converted unlike a string
+            (do (doseq [c (with-out-str (go))] (emit c)) false)
+            (go))
+      :up)))
+
+(defn- convert-case
+  "~(...~): the clause with every piece it writes put in lower case (the
+  colon: each word capitalized; the at-sign: the first word capitalized;
+  both: upper case), through any conversion already around it."
+  [directive cur]
+  (let [mode (+ (if (:colon directive) 1 0) (if (:at directive) 2 0))
+        state (k/case-state)
+        outer (k/case-out)
+        convert (fn [piece]
+                  (let [converted (k/case-convert mode state piece)]
+                    (if outer (outer converted) converted)))]
+    (binding [*plain-out* true]
+      (k/with-case-out convert (fn [] (walk (first (:clauses directive)) cur))))))
+
+(defn- run-directive
+  "Runs one directive at the cursor; answers nil, :up or :out."
+  [directive cur]
+  (let [c (:char directive)
+        params (actual directive cur)
+        colon (:colon directive)
+        at-flag (:at directive)]
+    (case c
+      \A (let [[mincol colinc minpad padchar] params]
+           (emit (in-field (spelled (take-argument cur)) mincol colinc minpad padchar at-flag))
+           nil)
+      \S (let [[mincol colinc minpad padchar] params
+               value (take-argument cur)]
+           (emit (in-field (or (k/number-string value *print-base* *print-radix*) (pr-str value))
+                           mincol colinc minpad padchar at-flag))
+           nil)
+      (\D \B \O \X)
+      (let [[mincol padchar commachar interval] params]
+        (emit (k/integer-text (take-argument cur) (case c \D 10 \B 2 \O 8 \X 16) colon at-flag
+                              mincol padchar commachar interval *print-base* *print-radix*))
+        nil)
+      \R (let [[base mincol padchar commachar interval] params
+               value (take-argument cur)]
+           ;; a base that was written makes it a number in that base, even
+           ;; when a v found none
+           (emit (cond (some? (first (:params directive)))
+                       (k/integer-text value base colon at-flag mincol padchar commachar interval
+                                       *print-base* *print-radix*)
+                       at-flag (k/roman value colon *print-base* *print-radix*)
+                       :else (k/english value colon *print-base* *print-radix*)))
+           nil)
+      \P (do (when colon (move-to cur (dec (:at @cur))))
+             (let [one (= 1 (take-argument cur))]
+               (emit (if at-flag (if one "y" "ies") (if one "" "s"))))
+             nil)
+      \C (do (write-character directive params cur) nil)
+      \F (let [[w d scale overflow pad] params]
+           (emit (k/fixed (take-argument cur) w d scale overflow pad at-flag))
+           nil)
+      \E (let [[w d e scale overflow pad mark] params]
+           (emit (k/exponential (take-argument cur) w d e scale overflow pad mark at-flag))
+           nil)
+      \G (let [[w d e scale overflow pad mark] params]
+           (emit (k/general (take-argument cur) w d e scale overflow pad mark at-flag))
+           nil)
+      \$ (let [[d n w pad] params]
+           (emit (k/dollar (take-argument cur) d n w pad colon at-flag))
+           nil)
+      \% (do (dotimes [_ (if (char? (first params)) (int (first params)) (long (first params)))] (emit "\n")) nil)
+      \| (do (emit (repeated (first params) "\f")) nil)
+      \~ (do (emit (repeated (first params) "~")) nil)
+      \& (let [n (first params)]
+           (when (pos? n)
+             (fresh-line)
+             (dotimes [_ (dec n)] (emit "\n")))
+           nil)
+      \T (do (when-not (and (not *plain-out*) (k/tab (first params) (second params) at-flag))
+               (throw (ClassCastException. "*out* is not a pretty writer")))
+             nil)
+      \* (let [n (first params)]
+           (cond at-flag (move-to cur (or n 0))
+                 colon (move-to cur (- (:at @cur) (or n 1)))
+                 :else (skip cur (or n 1)))
+           nil)
+      \? (let [given (take-argument cur)
+               over (if at-flag cur (cursor (seq (take-argument cur))))]
+           (binding [*lists-left* (fn [] (not (more? over)))]
+             (walk (::pieces (as-format given)) over))
+           nil)
+      ;; inside the clauses of these, ~:^ asks about the arguments as they
+      ;; stood when the directive began
+      (\( \[ \<)
+      (let [none (not (more? cur))]
+        (binding [*lists-left* (fn [] none)]
+          (case c
+            \( (convert-case directive cur)
+            \[ (choose directive params cur)
+            \< (if (:colon (:closer directive)) (logical-block directive cur) (justify directive params cur)))))
+      \{ (iterate-over directive params cur)
+      \^ (escape directive params cur)
+      \W (write-argument directive cur)
+      \_ (do (need-pretty)
+             (pprint-newline (cond (and colon at-flag) :mandatory colon :fill at-flag :miser :else :linear))
+             nil)
+      \I (do (need-pretty)
+             (pprint-indent (if colon :current :block) (first params))
+             nil)
+      (throw (NullPointerException.
+               "Cannot invoke \"clojure.lang.IFn.applyTo(clojure.lang.ISeq)\" because \"f\" is null")))))
+
+(defn- walk
+  "Walks clause over the arguments at the cursor: text is written, and each
+  directive run in turn until one leaves the clause. Answers nil, :up or
+  :out."
+  [clause cur]
+  (loop [pieces (seq clause)]
+    (when pieces
+      (let [piece (first pieces)
+            status (if (string? piece) (do (emit piece) nil) (run-directive piece cur))]
+        (or status (recur (next pieces)))))))
+
+(defn- run-format
+  "Runs the compiled format ready over arguments on *out*, inside a pretty
+  print of its own when it needs one and is in none."
+  [ready arguments]
+  (let [go (fn []
+             (let [cur (cursor arguments)]
+               (binding [*lists-left* (fn [] (not (more? cur)))]
+                 (walk (::pieces ready) cur)))
+             nil)]
+    (if (and (::pretty ready) (not (k/active?)))
+      (k/call go *print-right-margin* *print-miser-width*)
+      (go))))
+
+(defn cl-format
+  "Common Lisp's format: writes what the control string format-in makes of
+  args on writer -- nil to answer the text as a string, true for *out*.
+  format-in may also be a format compiled before."
+  [writer format-in & args]
+  (let [ready (as-format format-in)]
+    (cond (nil? writer) (with-out-str (run-format ready args))
+          (true? writer) (run-format ready args)
+          :else (binding [*out* writer] (run-format ready args)))))
+
+(defn- formatter-fn
+  "The function formatter makes: cl-format with its control string fixed."
+  [format-in]
+  (let [ready (as-format format-in)]
+    (fn [stream & args] (apply cl-format stream ready args))))
+
+(defn- formatter-out-fn
+  "The function formatter-out makes: the control string run over its
+  arguments on *out* as it stands, a pretty print in progress included."
+  [format-in]
+  (let [ready (as-format format-in)]
+    (fn [& args]
+      (let [cur (cursor args)]
+        (binding [*lists-left* (fn [] (not (more? cur)))]
+          (walk (::pieces ready) cur)))
+      nil)))
+
+(defmacro formatter
+  "A function of a stream and arguments that formats them by the control
+  string format-in, compiled once."
+  [format-in]
+  `(#'formatter-fn ~format-in))
+
+(defmacro formatter-out
+  "A function of arguments that formats them by the control string
+  format-in on *out*, for a dispatch function to call inside a pretty
+  print."
+  [format-in]
+  `(#'formatter-out-fn ~format-in))
+
+;; code-dispatch: Clojure code. A list is laid out by the symbol it begins
+;; with. Each layout below was read off what clj prints for forms of its
+;; kind at margins that force every break and at margins that force none;
+;; where a layout is a run of directives it is written as a control string
+;; of cl-format above.
+
+(declare code-dispatch)
+
+(defn- lay
+  "Lays args out by the control string control, as part of the pretty
+  print in progress."
+  [control & args]
+  (let [cur (cursor args)]
+    (binding [*lists-left* (fn [] (not (more? cur)))]
+      (walk (::pieces (as-format control)) cur))
+    nil))
+
+(defn- plain-call
+  "A call with nothing special about it: its members a blank and a linear
+  newline apart, the lines after the first one column in."
+  [form]
   (pprint-logical-block :prefix "(" :suffix ")"
     (pprint-indent :block 1)
-    (write-out (first s))
-    (when (next s)
-      (print " ")
-      (pprint-newline :linear)
-      (code-pairs (next s)))))
+    (write-members form)))
 
-(defn- code-condp
-  "condp: the predicate and the expression beside the head, the clause pairs
-  below."
-  [s]
-  (if (> (count s) 3)
-    (pprint-logical-block :prefix "(" :suffix ")"
-      (pprint-indent :block 1)
-      (when-not (write-out (first s))
-        (print " ")
-        (pprint-newline :miser)
-        (when-not (write-out (second s))
+(defn- head-first
+  "A form that keeps its first argument beside its head when it breaks and
+  puts the rest right under the head: def, -> and their like."
+  [form]
+  (lay "~:<~w~^ ~@_~w~^ ~_~@{~w~^ ~_~}~:>" form))
+
+(defn- test-and-branches
+  "if and its like: the test beside the head, the branches under it."
+  [form]
+  (lay "~:<~1I~w~^ ~@_~w~@{ ~_~w~}~:>" form))
+
+(defn- side-by-side
+  "pairs, two by two: the two of a pair side by side (a miser newline
+  between them), pair under pair."
+  [pairs]
+  (print-length-loop [pairs (seq pairs)]
+    (when pairs
+      (pprint-logical-block
+        (write-out (first pairs))
+        (when (next pairs)
           (print " ")
           (pprint-newline :miser)
-          (when-not (write-out (nth s 2))
-            (print " ")
-            (pprint-newline :linear))))
-      (code-pairs (drop 3 s)))
-    (code-plain s)))
+          (write-out (second pairs))))
+      (when (nnext pairs)
+        (print " ")
+        (pprint-newline :linear)
+        (recur (nnext pairs))))))
 
-(defn- code-anonymous
-  "fn* over a parameter vector as the literal #(...) the reader reads into it,
-  each parameter spelled % (the only one) or %1, %2, ... by position."
-  [s]
-  (let [params (second s)
-        body (first (rest (rest s)))]
-    (if (vector? params)
-      (binding [*code-symbols* (if (= 1 (count params))
-                                 {(first params) "%"}
-                                 (into {} (map (fn [p i] [p (str "%" i)])
-                                               params (range 1 (inc (count params))))))]
-        (pprint-logical-block :prefix "#(" :suffix ")"
-          (write-run body :linear)))
-      (code-plain s))))
+(defn- bindings-and-body
+  "let and its like: the binding vector beside the head, name and value
+  side by side in it, and the body under the head. Without a vector to
+  bind in, clj prints the form as a call inside one more pair of
+  parentheses, and so does this."
+  [form]
+  (pprint-logical-block :prefix "(" :suffix ")"
+    (if (and (next form) (vector? (second form)))
+      (do (lay "~w ~1I~@_" (first form))
+          (pprint-logical-block :prefix "[" :suffix "]" (side-by-side (second form)))
+          (lay " ~_~{~w~^ ~_~}" (nnext form)))
+      (plain-call form))))
 
-(defn- code-reference-part
-  "A list or vector inside an ns reference. A libspec of a name, a keyword and
-  a value ([lib :as alias], [lib :refer [a b]]) stays on one line, a list or
-  vector value filled; any other has its members after the first aligned past
-  it and filled."
-  [part]
-  (let [open (if (vector? part) "[" "(")
-        close (if (vector? part) "]" ")")]
-    (if (and (= 3 (count part)) (keyword? (second part)))
-      (let [[lib option value] part]
-        (pprint-logical-block :prefix open :suffix close
-          (when-not (write-out lib)
-            (print " ")
-            (when-not (write-out option)
-              (print " ")))
-          (if (sequential? value)
-            (pprint-logical-block :prefix (if (vector? value) "[" "(") :suffix (if (vector? value) "]" ")")
-              (write-run value :fill))
-            (write-out value))))
-      (do
-        (when (empty? part)
-          (throw (Exception. "Not enough arguments for format definition")))
-        (pprint-logical-block :prefix open :suffix close
-          (when-not (write-out (first part))
-            (print " ")
-            (pprint-indent :current 0)
-            (write-run (rest part) :fill)))))))
-
-(defn- code-reference
-  "One reference of an ns form, (:require ...) and the like: its arguments
-  aligned one column past the keyword, a line ending after a list or vector
-  argument when they do not fit, filled after any other."
-  [reference]
-  (if (sequential? reference)
-    (pprint-logical-block :prefix (if (vector? reference) "[" "(")
-                          :suffix (if (vector? reference) "]" ")")
-      (when-not (write-out (first reference))
-        (pprint-indent :current 0))
-      (loop [args (next reference)]
-        (when args
-          (print " ")
-          (let [arg (first args)]
-            (if (sequential? arg)
-              (code-reference-part arg)
-              (write-out arg))
-            (when (next args)
-              (pprint-newline (if (sequential? arg) :linear :fill))))
-          (recur (next args)))))
-    (write-out reference)))
-
-(defn- code-ns
-  "ns: the name beside the head, then the docstring, the attribute map and
-  each reference on lines of their own."
-  [s]
-  (if (next s)
-    (let [[head named & more] s
-          [doc more] (if (string? (first more)) [(first more) (next more)] [nil more])
-          [attrs references] (if (map? (first more)) [(first more) (next more)] [nil more])]
+(defn- definition
+  "defn and its like: the name beside the head; then a docstring, a map of
+  metadata, the parameters and the body, each on a line of its own once the
+  form breaks -- but parameters that follow the name directly stay beside
+  it."
+  [form]
+  (if (next form)
+    (let [[head name & more] form
+          doc (when (string? (first more)) (first more))
+          more (if doc (next more) more)
+          attrs (when (map? (first more)) (first more))
+          more (if attrs (next more) more)]
       (pprint-logical-block :prefix "(" :suffix ")"
-        (code-head head named)
+        (lay "~w ~1I~@_~w" head name)
+        (when doc (lay " ~_~w" doc))
+        (when attrs (lay " ~_~w" attrs))
+        (if (and (vector? (first more)) (not doc) (not attrs))
+          (apply lay " ~@_~w~@{ ~_~w~}" more)
+          (lay "~{ ~_~w~}" more))))
+    (plain-call form)))
+
+(defn- clause-pairs
+  "cond: test and value side by side, pair under pair, under the head."
+  [form]
+  (pprint-logical-block :prefix "(" :suffix ")"
+    (pprint-indent :block 1)
+    (write-out (first form))
+    (when (next form)
+      (print " ")
+      (pprint-newline :linear)
+      (side-by-side (next form)))))
+
+(defn- chosen-pairs
+  "condp: the predicate and the expression beside the head, then test and
+  value side by side, pair under pair. With nothing to choose from it is a
+  plain call."
+  [form]
+  (if (> (count form) 3)
+    (pprint-logical-block :prefix "(" :suffix ")"
+      (pprint-indent :block 1)
+      (lay "~w ~@_~w ~@_~w ~_" (first form) (second form) (nth form 2))
+      (side-by-side (drop 3 form)))
+    (plain-call form)))
+
+(def ^:private ^:dynamic *parameter-spellings*
+  "Inside an anonymous function written #(...): its parameters and the %
+  each is written as."
+  {})
+
+(defn- anonymous-function
+  "(fn* [params] (call...)), what the reader makes of #(call...), written
+  back that way: one parameter as %, several as %1 %2 ... by their place in
+  the vector."
+  [form]
+  (if (vector? (second form))
+    (let [params (second form)
+          spellings (if (= 1 (count params))
+                      {(first params) '%}
+                      (zipmap params (map (fn [i] (symbol (str "%" i))) (iterate inc 1))))]
+      (binding [*parameter-spellings* spellings]
+        (pprint-logical-block :prefix "#(" :suffix ")"
+          (write-members (seq (first (nnext form)))))))
+    (plain-call form)))
+
+(defn- brackets
+  [coll]
+  (if (vector? coll) ["[" "]"] ["(" ")"]))
+
+(defn- filled
+  "The members of coll in its own brackets, as many to a line as fit."
+  [coll]
+  (let [[open close] (brackets coll)]
+    (pprint-logical-block :prefix open :suffix close
+      (print-length-loop [members (seq coll)]
+        (when members
+          (write-out (first members))
+          (when (next members)
+            (print " ")
+            (pprint-newline :fill)
+            (recur (next members))))))))
+
+(defn- library-spec
+  "A list or vector among the arguments of an ns reference. [lib :as x] and
+  its like, three members with a keyword in the middle, stay on one line
+  (a list or vector in the third place filled); any other keeps its first
+  two members together and fills the rest in under the second."
+  [spec]
+  (let [[open close] (brackets spec)]
+    (pprint-logical-block :prefix open :suffix close
+      (if (and (= 3 (count spec)) (keyword? (second spec)))
+        (let [[lib option value] spec]
+          (lay "~w ~w " lib option)
+          (if (or (seq? value) (vector? value)) (filled value) (write-out value)))
+        (apply lay "~w ~:i~@{~w~^ ~:_~}" spec)))))
+
+(defn- reference
+  "A reference of an ns form, (:require ...) and its like: each argument a
+  blank after the keyword or after the newline ahead of it, so that the
+  arguments line up; that newline is linear after a list or a vector, which
+  then gets a line of its own once the reference breaks, and fill after
+  anything else."
+  [form]
+  (let [[open close] (brackets form)]
+    (pprint-logical-block :prefix open :suffix close
+      ;; a keyword *print-length* cut leaves the indentation where it was
+      (when-not (write-out (first form))
+        (pprint-indent :current 0))
+      (loop [arguments (next form) ahead nil]
+        (when arguments
+          (when ahead (pprint-newline ahead))
+          (print " ")
+          (let [argument (first arguments)
+                spec (or (seq? argument) (vector? argument))]
+            (if spec (library-spec argument) (write-out argument))
+            (recur (next arguments) (if spec :linear :fill))))))))
+
+(defn- namespace-form
+  "ns: the name beside the head; the docstring (written as it is, between
+  quotes), a map of metadata and every reference each on a line of its
+  own, always."
+  [form]
+  (if (next form)
+    (let [[head name & more] form
+          doc (when (string? (first more)) (first more))
+          more (if doc (next more) more)
+          attrs (when (map? (first more)) (first more))
+          references (if attrs (next more) more)]
+      (pprint-logical-block :prefix "(" :suffix ")"
+        (lay "~w ~1I~@_~w" head name)
         (when (or doc attrs (seq references))
           (pprint-newline :mandatory))
         (when doc
           (print (str "\"" doc "\""))
           (when (or attrs (seq references))
             (pprint-newline :mandatory)))
-        (when attrs
-          (when (and (not (write-out attrs)) (seq references))
-            (pprint-newline :mandatory)))
-        (loop [references (seq references)]
-          (when references
-            (code-reference (first references))
-            (when (next references)
-              (pprint-newline :linear)
-              (recur (next references)))))))
-    (code-plain s)))
+        ;; a map *print-length* cut is not followed by its line end
+        (when (and attrs (not (write-out attrs)) (seq references))
+          (pprint-newline :mandatory))
+        (loop [parts references]
+          (when parts
+            (let [part (first parts)]
+              (if (or (seq? part) (vector? part)) (reference part) (write-out part))
+              (when (next parts)
+                (pprint-newline :linear)
+                (recur (next parts))))))))
+    (plain-call form)))
 
 (def ^:private code-layouts
-  "The layout of each head symbol code-dispatch lays out its own way, the
-  clojure.core macros and functions under their qualified names too."
-  (let [special {'def code-hold-first
-                 'if code-if
-                 'fn* code-anonymous
-                 '. code-hold-first}
-        core {'defonce code-hold-first
-              'defn code-defn
-              'defn- code-defn
-              'defmacro code-defn
-              'fn code-defn
-              'let code-let
-              'loop code-let
-              'binding code-let
-              'with-local-vars code-let
-              'with-open code-let
-              'when-let code-let
-              'if-let code-let
-              'doseq code-let
-              'dotimes code-let
-              'when-first code-let
-              'if-not code-if
-              'when code-if
-              'when-not code-if
-              'cond code-cond
-              'condp code-condp
-              '.. code-hold-first
-              '-> code-hold-first
-              'locking code-hold-first
-              'struct code-hold-first
-              'struct-map code-hold-first
-              'ns code-ns}]
-    (merge special core
-           (into {} (map (fn [[sym layout]] [(symbol "clojure.core" (name sym)) layout]) core)))))
+  "The layout of a list by the symbol it begins with."
+  (let [by (fn [layout names] (zipmap names (repeat layout)))]
+    (merge (by definition '[defn defn- defmacro fn])
+           (by head-first '[def defonce . .. -> locking struct struct-map])
+           (by bindings-and-body '[let loop binding with-open when-let if-let doseq dotimes when-first
+                                   with-local-vars])
+           (by test-and-branches '[if if-not when when-not])
+           {'cond clause-pairs, 'condp chosen-pairs, 'ns namespace-form, 'fn* anonymous-function})))
 
 (defn- code-list
-  "The list s as code: a reader macro form abbreviated, a form whose head has
-  a layout of its own laid out so, any other as a plain list."
-  [s]
-  (when-not (pprint-reader-macro s)
-    (if-let [layout (get code-layouts (first s))]
-      (layout s)
-      (code-plain s))))
+  "A list of code: a reader mark for the lists the reader has one for,
+  else the layout of its head -- a clojure.core head counting as the bare
+  one, except for the special forms (def, if, fn*, .), which the compiler
+  only knows bare -- else a plain call."
+  [form]
+  (when-not (write-marked form)
+    (let [head (first form)
+          layout (when (symbol? head)
+                   (or (code-layouts head)
+                       (when (and (= "clojure.core" (namespace head))
+                                  (not (contains? '#{def if fn* .} (symbol (name head)))))
+                         (code-layouts (symbol (name head))))))]
+      (if layout (layout form) (plain-call form)))))
 
-(defn- code-symbol
-  "A symbol in code: an anonymous function's parameter as its % spelling."
-  [sym]
-  (if-let [spelling (get *code-symbols* sym)]
-    (print spelling)
-    (if *print-suppress-namespaces*
-      (print (name sym))
-      (pr sym))))
-
-(defn- code-default
-  "x laid out as code: a seq as a list, a symbol as code-symbol does, anything
-  else as simple-dispatch lays it out."
+(defn- write-code
+  "x as code-dispatch lays it out."
   [x]
   (cond
+    (nil? x) (pr nil)
     (seq? x) (code-list x)
-    (symbol? x) (code-symbol x)
-    :else (pprint-default x)))
+    (symbol? x) (let [spelling (get *parameter-spellings* x)]
+                  (cond spelling (pr spelling)
+                        *print-suppress-namespaces* (print (name x))
+                        :else (pr x)))
+    :else (write-data x)))
 
 (defmulti code-dispatch
-  "The pprint dispatch for Clojure code: def, defn, let, if, cond, condp, ns,
-  anonymous function literals and the like each in the layout Clojure's
-  pretty printer gives them, other lists as plain calls, and data as
-  simple-dispatch lays it out. A program adds a method for its own class."
+  "The dispatch function of code, a multimethod on the value's class: a
+  list is laid out as the form its first member makes it -- a definition,
+  a binding form, a conditional, a threading form, an ns form, a plain
+  call -- and everything else as simple-dispatch lays it out."
   class)
 
-(defmethod code-dispatch clojure.lang.IPersistentList [x] (code-default x))
-(defmethod code-dispatch clojure.lang.Symbol [x] (code-symbol x))
-(defmethod code-dispatch clojure.lang.IPersistentVector [x] (pprint-default x))
-(defmethod code-dispatch clojure.lang.IPersistentMap [x] (pprint-default x))
-(defmethod code-dispatch clojure.lang.IPersistentSet [x] (pprint-default x))
-(defmethod code-dispatch java.lang.Number [x] (pprint-default x))
-(defmethod code-dispatch java.lang.String [x] (pprint-default x))
-(defmethod code-dispatch clojure.lang.Keyword [x] (pprint-default x))
-(defmethod code-dispatch java.lang.Boolean [x] (pprint-default x))
-(defmethod code-dispatch java.lang.Character [x] (pprint-default x))
 (defmethod code-dispatch nil [_] (pr nil))
-(defmethod code-dispatch :default [x] (code-default x))
+(defmethod code-dispatch clojure.lang.IPersistentList [x] (write-code x))
+(defmethod code-dispatch clojure.lang.Symbol [x] (write-code x))
+(defmethod code-dispatch clojure.lang.IPersistentVector [x] (write-data x))
+(defmethod code-dispatch clojure.lang.IPersistentMap [x] (write-data x))
+(defmethod code-dispatch clojure.lang.IPersistentSet [x] (write-data x))
+(defmethod code-dispatch java.lang.Number [x] (write-data x))
+(defmethod code-dispatch java.lang.String [x] (write-data x))
+(defmethod code-dispatch clojure.lang.Keyword [x] (write-data x))
+(defmethod code-dispatch java.lang.Boolean [x] (write-data x))
+(defmethod code-dispatch java.lang.Character [x] (write-data x))
+(defmethod code-dispatch :default [x] (write-code x))
+
+;; Printing a value.
+
+(defn- based?
+  "Whether numbers are to be written in *print-base* and *print-radix*:
+  one of the two is not as it starts out, here or in a print around this
+  one."
+  []
+  (or *numbers-in-base* (not= *print-base* 10) (boolean *print-radix*)))
 
 (defn pprint
-  "Pretty prints object to writer (*out* when absent) within
-  *print-right-margin*, then a newline."
+  "Pretty prints object on *out*, or on writer, and ends the line: laid
+  out through *print-pprint-dispatch* within *print-right-margin*."
   ([object] (pprint object *out*))
   ([object writer]
-   (binding [*out* writer]
-     (binding [*print-pretty* true
-               *radix-pr* (or *radix-pr* (not= *print-base* 10) *print-radix*)]
-       (kernel/call (fn [] (write-out object)) *print-right-margin* *print-miser-width*))
-     (newline))))
+   (binding [*out* writer
+             *print-pretty* true
+             *numbers-in-base* (based?)]
+     (k/call (fn [] (write-out object)) *print-right-margin* *print-miser-width*)
+     (k/fresh-line))
+   nil))
 
 (defmacro pp
   "Pretty prints the last value the REPL answered, *1."
   []
   `(pprint *1))
 
+(def ^:private write-options
+  "The var each option of write binds for the duration of the call."
+  {:base #'*print-base*
+   :dispatch #'*print-pprint-dispatch*
+   :length #'*print-length*
+   :level #'*print-level*
+   :miser-width #'*print-miser-width*
+   :pretty #'*print-pretty*
+   :radix #'*print-radix*
+   :readably #'*print-readably*
+   :right-margin #'*print-right-margin*
+   :suppress-namespaces #'*print-suppress-namespaces*})
+
 (defn write
-  "Writes object as the options say: :stream (a writer, true for *out*, the
-  default, or nil to answer the text), :pretty, :right-margin, :miser-width,
-  :dispatch, :length, :level, :readably, :suppress-namespaces, :base and :radix
-  (:circle and :lines are accepted and ignored). Answers the text for a nil
-  :stream, else nil."
-  [object & kw-args]
-  (let [options (apply hash-map kw-args)
-        stream (get options :stream true)
-        written (fn []
-                  (binding [*print-pretty* (get options :pretty *print-pretty*)
-                            *print-right-margin* (get options :right-margin *print-right-margin*)
-                            *print-miser-width* (get options :miser-width *print-miser-width*)
-                            *print-pprint-dispatch* (get options :dispatch *print-pprint-dispatch*)
-                            *print-suppress-namespaces* (get options :suppress-namespaces
-                                                             *print-suppress-namespaces*)
-                            *print-base* (get options :base *print-base*)
-                            *print-radix* (get options :radix *print-radix*)
-                            *print-length* (get options :length *print-length*)
-                            *print-level* (get options :level *print-level*)
-                            *print-readably* (get options :readably *print-readably*)]
-                    (binding [*radix-pr* (or *radix-pr* (not= *print-base* 10) *print-radix*)]
-                      (if *print-pretty*
-                        (kernel/call (fn [] (write-out object)) *print-right-margin* *print-miser-width*)
-                        (pr-radix object)))))]
-    (cond
-      (nil? stream) (with-out-str (written))
-      (true? stream) (do (written) nil)
-      :else (do (binding [*out* stream] (written)) nil))))
+  "Writes object as the options say and the printer's vars otherwise, with
+  no line end after it. The options, each naming the var it stands in for:
+  :base, :dispatch, :length, :level, :miser-width, :pretty, :radix,
+  :readably, :right-margin and :suppress-namespaces; and :stream, the
+  writer to write on -- true (the default) for *out*, nil to answer the
+  text as a string."
+  [object & {:as options}]
+  (let [stream (get options :stream true)
+        run (fn []
+              (binding [*print-base* (get options :base *print-base*)
+                        *print-pprint-dispatch* (get options :dispatch *print-pprint-dispatch*)
+                        *print-length* (get options :length *print-length*)
+                        *print-level* (get options :level *print-level*)
+                        *print-miser-width* (get options :miser-width *print-miser-width*)
+                        *print-pretty* (get options :pretty *print-pretty*)
+                        *print-radix* (get options :radix *print-radix*)
+                        *print-readably* (get options :readably *print-readably*)
+                        *print-right-margin* (get options :right-margin *print-right-margin*)
+                        *print-suppress-namespaces* (get options :suppress-namespaces
+                                                         *print-suppress-namespaces*)]
+                (if *print-pretty*
+                  (binding [*numbers-in-base* (based?)]
+                    (k/call (fn [] (write-out object)) *print-right-margin* *print-miser-width*))
+                  (pr object))))]
+    (cond (nil? stream) (with-out-str (run))
+          (true? stream) (do (run) nil)
+          :else (binding [*out* stream] (run) nil))))
 
 (defmacro with-pprint-dispatch
-  "Runs body with function as *print-pprint-dispatch*."
+  "Runs body with function as the pretty printer's dispatch function."
   [function & body]
   `(binding [*print-pprint-dispatch* ~function] ~@body))
 
 (defn set-pprint-dispatch
-  "Makes function the pprint dispatch from now on."
+  "Makes function the pretty printer's dispatch function from here on."
   [function]
-  (def *print-pprint-dispatch* function)
+  (alter-var-root #'*print-pprint-dispatch* (constantly function))
   nil)
 
 (defn print-table
-  "Prints the maps of rows as a table, one column per key of ks (the first row's
-  keys when absent), each value right-aligned under its key as str spells them.
-  Prints nothing for no rows."
+  "Prints the maps rows as a table with one column per key in ks (the keys
+  of the first row when ks is left out): a blank line, the keys, a rule,
+  then a line per row, every cell flush right in its column."
   ([rows] (print-table (keys (first rows)) rows))
   ([ks rows]
    (when (seq rows)
-     (let [widths (map (fn [k] (apply max (count (str k)) (map (fn [row] (count (str (get row k)))) rows))) ks)
-           padded (fn [text width] (str (apply str (repeat (- width (count text)) " ")) text))
-           line (fn [lead separator tail cells] (str lead (apply str (interpose separator cells)) tail))]
+     (let [cell (fn [row key] (str (get row key)))
+           widths (map (fn [key] (apply max (count (str key)) (map (fn [row] (count (cell row key))) rows)))
+                       ks)
+           flush-right (fn [text width] (str (k/padding (- width (count text)) \space) text))
+           line (fn [open between close cells]
+                  (str open (apply str (interpose between (map flush-right cells widths))) close))]
        (println)
-       (println (line "| " " | " " |" (map (fn [k w] (padded (str k) w)) ks widths)))
-       (println (line "|-" "-+-" "-|" (map (fn [w] (apply str (repeat w "-"))) widths)))
+       (println (line "| " " | " " |" (map str ks)))
+       (println (line "|-" "-+-" "-|" (map (fn [width] (k/padding width \-)) widths)))
        (doseq [row rows]
-         (println (line "| " " | " " |" (map (fn [k w] (padded (str (get row k)) w)) ks widths))))))))
-
-;; cl-format: Common Lisp's format directives over Clojure values. A control
-;; string compiles to a format, a vector of nodes: a string of literal text,
-;; or a directive [char at colon params dynamic clauses else at-least-once
-;; else-separator offset], params in its definition's order with the defaults
-;; filled in (:v and :# for the two read from the arguments). The executor
-;; walks a format over an argument navigator [seq rest position dropped] and
-;; answers the navigator moved on, or (exit navigator) when a ~^ (or a ~W cut
-;; by *print-length*) ended the run. The text of the number directives is the
-;; run-time library's (rontolisp.internal.pprint); the directives of the
-;; pretty printer add to the pretty print in progress.
-
-(defn- format-error
-  "Throws the RuntimeException of the malformed control string s: message, the
-  string, and a caret under offset."
-  [s message offset]
-  (throw (RuntimeException. (str message "\n" s "\n" (kernel/padding offset \space) "^\n"))))
-
-(defn- directive-spec
-  "What the directive named by the upper-case character c takes: :params,
-  each [name default kind] with kind :int or :char; :flags, the flags it
-  allows (:both for : and @ together); :pretty when it needs a pretty
-  writer. nil for no directive."
-  [c]
-  (let [all #{:at :colon :both}
-        padding [["mincol" 0 :int] ["colinc" 1 :int] ["minpad" 0 :int] ["padchar" \space :char]]
-        integer [["mincol" 0 :int] ["padchar" \space :char] ["commachar" \, :char]
-                 ["commainterval" 3 :int]]
-        exponential [["w" nil :int] ["d" nil :int] ["e" nil :int] ["k" 1 :int]
-                     ["overflowchar" nil :char] ["padchar" \space :char] ["exponentchar" nil :char]]]
-    (case c
-      (\A \S) {:params padding :flags all}
-      (\D \B \O \X) {:params integer :flags all}
-      \R {:params (into [["base" nil :int]] integer) :flags all}
-      \P {:params [] :flags all}
-      \C {:params [["char-format" nil :char]] :flags all}
-      \F {:params [["w" nil :int] ["d" nil :int] ["k" 0 :int] ["overflowchar" nil :char]
-                   ["padchar" \space :char]]
-          :flags #{:at}}
-      (\E \G) {:params exponential :flags #{:at}}
-      \$ {:params [["d" 2 :int] ["n" 1 :int] ["w" 0 :int] ["padchar" \space :char]] :flags all}
-      (\% \|) {:params [["count" 1 :int]] :flags #{}}
-      \& {:params [["count" 1 :int]] :flags #{} :pretty true}
-      \~ {:params [["n" 1 :int]] :flags #{}}
-      \newline {:params [] :flags #{:at :colon}}
-      \T {:params [["colnum" 1 :int] ["colinc" 1 :int]] :flags #{:at} :pretty true}
-      \* {:params [["n" nil :int]] :flags #{:at :colon}}
-      \? {:params [] :flags #{:at}}
-      \( {:params [] :flags all}
-      \[ {:params [["selector" nil :int]] :flags #{:at :colon}}
-      \; {:params [["min-remaining" nil :int] ["max-columns" nil :int]] :flags #{:colon}}
-      \{ {:params [["max-iterations" nil :int]] :flags all}
-      \< {:params padding :flags all :pretty true}
-      (\) \]) {:params [] :flags #{}}
-      (\} \>) {:params [] :flags #{:colon}}
-      \^ {:params [["arg1" nil :int] ["arg2" nil :int] ["arg3" nil :int]] :flags #{:colon}}
-      \W {:params [] :flags all :pretty true}
-      \_ {:params [] :flags all}
-      \I {:params [["n" 0 :int]] :flags #{:colon}}
-      nil)))
-
-(defn- bracket
-  "The closing character of the bracket directive c, whether ~; separates its
-  clauses, and where its ~:; may stand (:first or :last); nil for any other."
-  [c]
-  (case c
-    \( [\) false nil]
-    \[ [\] true :last]
-    \{ [\} false nil]
-    \< [\> true :first]
-    nil))
-
-(defn- digit?
-  "Whether c is an ASCII digit."
-  [c]
-  (and (char? c) (>= (int c) 48) (<= (int c) 57)))
-
-(defn- param-token
-  "The parameter token at index i of s, as [token end]: :v, :#, a character
-  after a quote, the text of an integer, or nil for the empty one a comma
-  follows; nil when none stands there."
-  [s i]
-  (let [n (count s)
-        c (when (< i n) (nth s i))]
-    (cond
-      (nil? c) nil
-      (or (= c \v) (= c \V)) [:v (inc i)]
-      (= c \#) [:# (inc i)]
-      (and (= c \') (< (inc i) n)
-           (not (contains? #{10 13 133 8232 8233} (int (nth s (inc i))))))
-      [(nth s (inc i)) (+ i 2)]
-      (or (digit? c) (and (contains? #{\+ \-} c) (digit? (when (< (inc i) n) (nth s (inc i))))))
-      (let [end (loop [j (inc i)] (if (digit? (when (< j n) (nth s j))) (recur (inc j)) j))]
-        [(subs s i end) end])
-      (= c \,) [nil i]
-      :else nil)))
-
-(defn- param-value
-  "The value of a parameter token: an integer's text read as Integer/parseInt
-  reads it, any other token itself."
-  [token]
-  (if (string? token)
-    (let [magnitude (reduce (fn [acc d] (+ (* acc 10) (- (int d) 48)))
-                            0 (if (digit? (first token)) token (subs token 1)))
-          value (if (= (first token) \-) (- magnitude) magnitude)]
-      (if (or (> value 2147483647) (< value -2147483648))
-        (throw (NumberFormatException. (str "For input string: \"" token "\"")))
-        value))
-    token))
-
-(defn- check-flags
-  "Refuses the flags of a directive of the control string s whose definition
-  does not allow them."
-  [s c spec flags]
-  (let [allowed (:flags spec)
-        at (get flags :at)
-        colon (get flags :colon)]
-    (when (and at (not (contains? allowed :at)))
-      (format-error s (str "\"@\" is an illegal flag for format directive \"" c "\"") at))
-    (when (and colon (not (contains? allowed :colon)))
-      (format-error s (str "\":\" is an illegal flag for format directive \"" c "\"") colon))
-    (when (and at colon (not (contains? allowed :both)))
-      (format-error s (str "Cannot combine \"@\" and \":\" flags for format directive \"" c "\"")
-                    (min at colon)))))
-
-(defn- directive-params
-  "The parameters of a directive of the control string s given as [token
-  offset] pairs, read, checked against its definition, and with the defaults
-  filled in."
-  [s c spec given]
-  (let [defs (:params spec)
-        given (mapv (fn [[token offset]] [(param-value token) offset]) given)]
-    (when (> (count given) (count defs))
-      (format-error s (str "Too many parameters for directive \"" c "\": " (count given)
-                         (if (= 1 (count given)) " was" " were") " specified but only "
-                         (count defs) (if (= 1 (count defs)) " is" " are") " allowed")
-                    (second (first given))))
-    (doseq [[[value offset] [name _ kind]] (map vector given defs)]
-      (when-not (or (nil? value) (keyword? value)
-                    (if (= kind :int) (integer? value) (char? value)))
-        (format-error s (str "Parameter " name " has bad type in directive \"" c "\": class "
-                           (if (char? value) "java.lang.Character" "java.lang.Integer"))
-                      offset)))
-    (vec (map-indexed (fn [i [_ default _]]
-                        (let [value (first (get given i))]
-                          (if (nil? value) default value)))
-                      defs))))
-
-(defn- compile-directive
-  "The directive whose text starts at index i of the control string s, just
-  past its tilde, and the index past it (and past the blanks a ~ newline
-  swallows)."
-  [s i]
-  (let [n (count s)
-        [given i] (loop [i i given [] comma false]
-                    (if-let [[value end] (param-token s i)]
-                      (let [given (conj given [value i])]
-                        (when (>= end n)
-                          (throw (StringIndexOutOfBoundsException. "Index 0 out of bounds for length 0")))
-                        (if (= \, (nth s end))
-                          (recur (inc end) given true)
-                          [given end]))
-                      (if comma
-                        (format-error s "Badly formed parameters in format directive" i)
-                        [given i])))
-        [flags i] (loop [i i flags {}]
-                    (let [c (when (< i n) (nth s i))
-                          flag (case c \: :colon \@ :at nil)]
-                      (cond
-                        (nil? flag) [flags i]
-                        (contains? flags flag)
-                        (format-error s (str "Flag \"" c "\" appears more than once in a directive") i)
-                        :else (recur (inc i) (assoc flags flag i)))))
-        _ (when (>= i n)
-            (throw (NullPointerException.
-                    "Cannot invoke \"java.lang.Character.charValue()\" because \"directive\" is null")))
-        c (nth s i)
-        upper (if (and (>= (int c) 97) (<= (int c) 122)) (char (- (int c) 32)) c)
-        spec (directive-spec upper)
-        _ (when-not spec (format-error s (str "Directive \"" c "\" is undefined") i))
-        _ (check-flags s upper spec flags)
-        params (directive-params s upper spec given)
-        at (contains? flags :at)
-        colon (contains? flags :colon)
-        end (inc i)
-        end (if (and (= upper \newline) (not colon))
-              (loop [j end] (if (and (< j n) (contains? #{\space \tab} (nth s j))) (recur (inc j)) j))
-              end)]
-    [[upper at colon params (boolean (some keyword? params)) nil nil false nil i] end]))
-
-(defn- flat-nodes
-  "The control string s as a flat vector of literal strings and directives."
-  [s]
-  (let [n (count s)]
-    (loop [i 0 nodes []]
-      (if (>= i n)
-        nodes
-        (let [tilde (clojure.string/index-of s "~" i)]
-          (cond
-            (nil? tilde) (conj nodes (subs s i))
-            (> tilde i) (recur tilde (conj nodes (subs s i tilde)))
-            :else (let [[node end] (compile-directive s (inc i))]
-                    (recur end (conj nodes node)))))))))
-
-(defn- opener?
-  "Whether node is a directive that opens a bracket."
-  [node]
-  (and (vector? node) (some? (bracket (nth node 0)))))
-
-(defn- directive?
-  "Whether node is the directive c."
-  [node c]
-  (and (vector? node) (= c (nth node 0))))
-
-(declare nest-clauses)
-
-(defn- nest
-  "The flat nodes of the control string s as a format, each bracket directive
-  holding the clauses up to its closing directive."
-  [s nodes]
-  (loop [nodes (seq nodes) out []]
-    (if nodes
-      (let [node (first nodes)]
-        (if (opener? node)
-          (let [[node more] (nest-clauses s node (next nodes))]
-            (recur more (conj out node)))
-          (recur (next nodes) (conj out node))))
-      out)))
-
-(defn- nest-clauses
-  "The bracket directive opener of the control string s holding its clauses
-  taken from nodes, and the nodes past its closing directive."
-  [s opener nodes]
-  (let [[right separates else-at] (bracket (nth opener 0))
-        offset (nth opener 9)]
-    (loop [nodes nodes clause [] clauses [] else nil separator nil saw-else false]
-      (if-not nodes
-        (format-error s "No closing bracket found." offset)
-        (let [node (first nodes)]
-          (cond
-            (opener? node)
-            (let [[sub more] (nest-clauses s node (next nodes))]
-              (recur more (conj clause sub) clauses else separator saw-else))
-
-            (directive? node right)
-            [(-> opener
-                 (assoc 5 (if saw-else clauses (conj clauses clause)))
-                 (assoc 6 (if saw-else [clause] else))
-                 (assoc 7 (nth node 2))
-                 (assoc 8 separator))
-             (next nodes)]
-
-            (and (directive? node \;) (nth node 2))
-            (cond
-              else (format-error s "Two else clauses (\"~:;\") inside bracket construction." offset)
-              (nil? else-at)
-              (format-error s "An else clause (\"~:;\") is in a bracket type that doesn't support it." offset)
-              (and (= else-at :first) (seq clauses))
-              (format-error
-               s "The else clause (\"~:;\") is only allowed in the first position for this directive."
-               offset)
-              (= else-at :first) (recur (next nodes) [] clauses [clause] node false)
-              :else (recur (next nodes) [] (conj clauses clause) else separator true))
-
-            (directive? node \;)
-            (cond
-              saw-else
-              (format-error
-               s "A plain clause (with \"~;\") follows an else clause (\"~:;\") inside bracket construction."
-               offset)
-              (not separates)
-              (format-error s "A separator (\"~;\") is in a bracket type that doesn't support it." offset)
-              :else (recur (next nodes) [] (conj clauses clause) else separator false))
-
-            :else (recur (next nodes) (conj clause node) clauses else separator saw-else)))))))
-
-(defn- compile-nodes
-  "The control string s compiled to a format."
-  [s]
-  (nest s (flat-nodes s)))
-
-(defn- compile-format
-  "The control string s compiled, as cl-format and formatter take it in its
-  place."
-  [s]
-  [::compiled (compile-nodes s)])
-
-(defn- as-format
-  "The format format-in stands for: a control string compiled, a compiled one
-  unwrapped; anything else (foreign format-in), which the oracle walks as a
-  seq of compiled directives only when it runs."
-  [format-in]
-  (cond
-    (string? format-in) (compile-nodes format-in)
-    (and (vector? format-in) (= ::compiled (nth format-in 0 nil))) (nth format-in 1)
-    :else (list ::foreign format-in)))
-
-(def ^:private format-cache
-  "The formats compiled so far, by control string: a compile is a pure
-  function of the string, so cl-format's own compiles are kept too (the
-  oracle's compiles on every call); emptied when it holds 512, so control
-  strings built at run time cannot grow it without bound."
-  (atom {}))
-
-(defn- cached-format
-  "format-in as a format, a control string compiled once."
-  [format-in]
-  (if (string? format-in)
-    (or (get @format-cache format-in)
-        (let [compiled (compile-nodes format-in)]
-          (swap! format-cache (fn [cache]
-                                (assoc (if (< (count cache) 512) cache {}) format-in compiled)))
-          compiled))
-    (as-format format-in)))
-
-(defn- needs-pretty?
-  "Whether the format holds, at any depth, a directive that writes through a
-  pretty writer: ~&, ~T, ~< or ~W."
-  [fmt]
-  (some (fn [node]
-          (and (vector? node)
-               (or (contains? #{\& \T \< \W} (nth node 0))
-                   (some needs-pretty? (nth node 5))
-                   (some needs-pretty? (nth node 6)))))
-        fmt))
-
-;; the argument navigator
-
-(defn- init-nav
-  "A navigator over the arguments s, at the first."
-  [s]
-  (let [s (seq s)]
-    [s s 0 false]))
-
-(defn- next-arg
-  "The next argument and the navigator past it. Past the end it is the
-  oracle's Exception, unless the navigator was just repositioned: there one
-  nil comes back first, as from the seq drop answers."
-  [nav]
-  (let [rest-args (nth nav 1)]
-    (if (or rest-args (nth nav 3))
-      [(first rest-args) [(nth nav 0) (next rest-args) (inc (nth nav 2)) false]]
-      (throw (Exception. "Not enough arguments for format definition")))))
-
-(defn- next-arg-or-nil
-  "The next argument and the navigator past it, nil and the navigator at the
-  end."
-  [nav]
-  (if (or (nth nav 1) (nth nav 3))
-    (next-arg nav)
-    [nil nav]))
-
-(declare reposition-absolute)
-
-(defn- reposition-relative
-  "The navigator n arguments on (back for a negative n)."
-  [nav n]
-  (let [position (+ (nth nav 2) n)]
-    (if (neg? n)
-      (reposition-absolute nav position)
-      [(nth nav 0) (drop n (nth nav 1)) position true])))
-
-(defn- reposition-absolute
-  "The navigator at argument position."
-  [nav position]
-  (if (>= position (nth nav 2))
-    (reposition-relative nav (- position (nth nav 2)))
-    [(nth nav 0) (drop position (nth nav 0)) position true]))
-
-(defn- realize-params
-  "The parameters of the directive node, those read from the arguments (v and
-  #) realized, last first as the oracle realizes them, and the navigator
-  past what they took."
-  [params nav]
-  (loop [i (dec (count params)) params params nav nav]
-    (if (neg? i)
-      [params nav]
-      (let [p (nth params i)]
-        (cond
-          (= p :v) (let [[value nav] (next-arg nav)]
-                     (recur (dec i) (assoc params i value) nav))
-          (= p :#) (recur (dec i) (assoc params i (count (nth nav 1))) nav)
-          :else (recur (dec i) params nav))))))
-
-;; output: every piece a directive writes goes through emit, so a ~(...~)
-;; clause converts each the way Clojure's case-converting writers do. While a
-;; clause runs, (kernel/case-out) is the function each piece (a string or a
-;; character) goes through: its case conversion, writing on to the output of
-;; the enclosing one; nil outside one.
-
-(defn- emit
-  "Writes x, a string or a character, through the case conversion in effect."
-  [x]
-  (if-let [w (kernel/case-out)]
-    (w x)
-    (print x)))
-
-(defn- not-pretty
-  "The oracle's ClassCastException of a pretty printing directive whose *out*
-  is no pretty writer."
-  []
-  (throw (ClassCastException. "*out* is not a pretty writer")))
-
-(declare execute)
-
-(defn- abort?
-  "Whether the result of a run is a ~^ exit rather than a navigator."
-  [result]
-  (seq? result))
-
-(defn- ascii-text
-  "x as ~A (print) or ~S (readably, pr) spells it: an integer or ratio in
-  *print-base* and *print-radix*."
-  [x readably]
-  (or (kernel/number-string x *print-base* *print-radix*)
-      (if readably (pr-str x) (print-str x))))
-
-(defn- divided
-  "(quot n d), a zero d the oracle's ArithmeticException."
-  [n d]
-  (if (= d 0)
-    (throw (ArithmeticException. "Divide by zero"))
-    (quot n d)))
-
-(defn- ascii
-  "~mincol,colinc,minpad,padcharA and ~S: x padded to mincol columns, minpad
-  copies at least, then colinc at a time; on the left with @."
-  [node params nav readably]
-  (let [[arg nav] (next-arg nav)
-        [mincol colinc minpad padchar] params
-        text (ascii-text arg readably)
-        least (+ (count text) minpad)
-        width (if (>= least mincol)
-                least
-                (+ least (* (inc (divided (- mincol least 1) colinc)) colinc)))
-        pad (kernel/padding (- width (count text)) padchar)]
-    (emit (if (nth node 1) (str pad text) (str text pad)))
-    nav))
-
-(defn- integer-arg
-  "~D, ~B, ~O, ~X and ~R with a radix: the argument in base."
-  [node nav base [mincol padchar commachar interval]]
-  (let [[arg nav] (next-arg nav)]
-    (emit (kernel/integer-text arg base (nth node 2) (nth node 1) mincol padchar commachar interval
-                               *print-base* *print-radix*))
-    nav))
-
-(defn- radix
-  "~R: in the radix its first parameter gives, else in English words (~:R
-  ordinal) or Roman numerals (~@R, ~:@R the old style)."
-  [node params nav]
-  (if (some? (nth (nth node 3) 0))
-    (integer-arg node nav (nth params 0) (subvec params 1))
-    (let [[arg nav] (next-arg nav)
-          at (nth node 1)
-          colon (nth node 2)]
-      (emit (if at
-              (kernel/roman arg colon *print-base* *print-radix*)
-              (kernel/english arg colon *print-base* *print-radix*)))
-      nav)))
-
-(defn- plural
-  "~P: s unless the argument is 1 (~@P y or ies); ~:P backs up to the
-  argument before."
-  [node nav]
-  (let [nav (if (nth node 2) (reposition-relative nav -1) nav)
-        [arg nav] (next-arg nav)]
-    (emit (if (= arg 1)
-            (if (nth node 1) "y" "")
-            (if (nth node 1) "ies" "s")))
-    nav))
-
-(defn- emit-pr
-  "Writes x as pr does, a string or a character in the writes pr makes of it,
-  so a ~(...~) clause converts them one by one."
-  [x]
-  (cond
-    (nil? (kernel/case-out)) (pr x)
-    (string? x) (do (emit \")
-                    (doseq [c x]
-                      (case c
-                        \newline (emit "\\n")
-                        \tab (emit "\\t")
-                        \return (emit "\\r")
-                        \" (emit "\\\"")
-                        \\ (emit "\\\\")
-                        \formfeed (emit "\\f")
-                        \backspace (emit "\\b")
-                        (emit c)))
-                    (emit \"))
-    (char? x) (do (emit \\)
-                  (case x
-                    \newline (emit "newline")
-                    \space (emit "space")
-                    \tab (emit "tab")
-                    \backspace (emit "backspace")
-                    \formfeed (emit "formfeed")
-                    \return (emit "return")
-                    (emit x)))
-    :else (emit (pr-str x))))
-
-(defn- character
-  "~C: the character; ~:C its name (Space, Control-A, Meta-...); ~@C as pr
-  writes it (~'o@C and ~'u@C as an octal or unicode escape)."
-  [node params nav]
-  (let [[c nav] (next-arg nav)]
-    (cond
-      (nth node 2)
-      (let [code (int c)
-            low (mod code 128)]
-        (when (>= (mod code 256) 128) (emit "Meta-"))
-        (case low
-          8 (emit "Backspace")
-          9 (emit "Tab")
-          10 (emit "Newline")
-          13 (emit "Return")
-          32 (emit "Space")
-          (cond
-            (< low 32) (emit (str "Control-" (char (+ low 64))))
-            (= low 127) (emit "Control-?")
-            :else (emit (char low)))))
-
-      (nth node 1)
-      (let [style (nth params 0)]
-        (cond
-          (nil? style) (emit-pr c)
-          (= style \o) (do (emit "\\o")
-                           (emit (kernel/integer-text (int c) 8 false false 3 \0 \, 3 10 nil)))
-          (= style \u) (do (emit "\\u")
-                           (emit (kernel/integer-text (int c) 16 false false 4 \0 \, 3 10 nil)))
-          :else (throw (IllegalArgumentException. (str "No matching clause: " style)))))
-
-      :else (if (char? c) (emit c) (emit (print-str c))))
-    nav))
-
-(defn- fixed
-  "~w,d,k,overflowchar,padcharF."
-  [node params nav]
-  (let [[arg nav] (next-arg nav)
-        [w d k overflow pad] params]
-    (emit (kernel/fixed arg w d k overflow pad (nth node 1)))
-    nav))
-
-(defn- exponential
-  "~w,d,e,k,overflowchar,padchar,exponentcharE, and ~G."
-  [node params nav general]
-  (let [[arg nav] (next-arg nav)
-        [w d e k overflow pad mark] params]
-    (emit (if general
-            (kernel/general arg w d e k overflow pad mark (nth node 1))
-            (kernel/exponential arg w d e k overflow pad mark (nth node 1))))
-    nav))
-
-(defn- dollar
-  "~d,n,w,padchar$."
-  [node params nav]
-  (let [[arg nav] (next-arg nav)
-        [d n w pad] params]
-    (emit (kernel/dollar arg d n w pad (nth node 2) (nth node 1)))
-    nav))
-
-(defn- format-fresh-line
-  "A fresh line as ~& writes it: always a newline in a ~(...~) clause, whose
-  writer keeps no column."
-  []
-  (if (kernel/case-out) (emit "\n") (fresh-line)))
-
-(defn- tabulate
-  "~colnum,colincT, ~colrel,colinc@T: blanks to a column of the pretty print."
-  [node params nav]
-  (if (and (nil? (kernel/case-out)) (kernel/tab (nth params 0) (nth params 1) (nth node 1)))
-    nav
-    (not-pretty)))
-
-(defn- goto
-  "~n*, ~n:* and ~n@*: n arguments on, back, or to argument n."
-  [node params nav]
-  (let [n (nth params 0)]
-    (if (nth node 1)
-      (reposition-absolute nav (or n 0))
-      (let [n (or n 1)]
-        (reposition-relative nav (if (nth node 2) (- n) n))))))
-
-(defn- format-arg
-  "The next argument as a format and the navigator past it."
-  [nav]
-  (let [[f nav] (next-arg nav)]
-    [(cached-format f) nav]))
-
-(defn- indirect
-  "~?: the format the next argument is, over the list after it; ~@? over the
-  arguments that follow."
-  [node nav base]
-  (let [[sub nav] (format-arg nav)]
-    (if (nth node 1)
-      (execute sub nav base)
-      (let [[args nav] (next-arg nav)]
-        (execute sub (init-nav args) base)
-        nav))))
-
-(defn- convert-case
-  "~(...~) lowercase, ~:( words capitalized, ~@( the first word capitalized,
-  ~:@( uppercase."
-  [node nav base]
-  (let [at (nth node 1)
-        colon (nth node 2)
-        mode (cond (and at colon) 3 colon 1 at 2 :else 0)
-        state (kernel/case-state)
-        outer (or (kernel/case-out) (fn [x] (print x)))]
-    (kernel/with-case-out (fn [x] (outer (kernel/case-convert mode state x)))
-      (fn [] (execute (first (nth node 5)) nav base)))))
-
-(defn- conditional
-  "~[...~;...~] by index (the argument, or the parameter), ~:[false~;true~]
-  by truth, ~@[...~] when the argument is true, which it leaves to the
-  clause."
-  [node params nav base]
-  (let [clauses (nth node 5)]
-    (cond
-      (nth node 2)
-      (let [[arg nav] (next-arg nav)
-            clause (if arg (second clauses) (first clauses))]
-        (if clause (execute clause nav base) nav))
-
-      (nth node 1)
-      (let [[arg past] (next-arg nav)]
-        (if arg
-          (if-let [clause (first clauses)] (execute clause nav base) nav)
-          past))
-
-      :else
-      (let [[arg nav] (if-let [selector (nth params 0)] [selector nav] (next-arg nav))
-            _ (when (nil? arg)
-                (throw (NullPointerException. "Cannot invoke \"Object.getClass()\" because \"x\" is null")))
-            clause (if (or (neg? arg) (>= arg (count clauses)))
-                     (first (nth node 6))
-                     (nth clauses (int arg)))]
-        (if clause (execute clause nav base) nav)))))
-
-(defn- iterate-args
-  "~{...~} over the list argument, ~:{ over its sublists, ~@{ over the
-  arguments that follow, ~:@{ over those as sublists; at most the parameter's
-  count of times, at least once when closed by ~:}; an empty body takes the
-  format from the arguments."
-  [node params nav base]
-  (let [at (nth node 1)
-        colon (nth node 2)
-        limit (nth params 0)
-        once (nth node 7)
-        [clause nav] (let [body (first (nth node 5))]
-                       (if (empty? body) (format-arg nav) [body nav]))
-        done? (fn [n empty-args]
-                (or (and empty-args (or (not once) (> n 0)))
-                    (and limit (>= n limit))))]
-    (cond
-      (and at colon)
-      (loop [n 0 nav nav]
-        (if (done? n (empty? (nth nav 1)))
-          nav
-          (let [[sublist nav] (next-arg-or-nil nav)
-                result (execute clause (init-nav sublist) nav)]
-            (if (and (abort? result) (= :colon-up-arrow (first result)))
-              nav
-              (recur (inc n) nav)))))
-
-      colon
-      (let [[arg-list nav] (next-arg nav)]
-        (loop [n 0 arg-list arg-list]
-          (if (done? n (empty? arg-list))
-            nav
-            (let [result (execute clause (init-nav (first arg-list)) (init-nav (next arg-list)))]
-              (if (and (abort? result) (= :colon-up-arrow (first result)))
-                nav
-                (recur (inc n) (next arg-list)))))))
-
-      at
-      (loop [n 0 nav nav last-position -1]
-        (when (and (not limit) (= (nth nav 2) last-position) (> n 1))
-          (throw (RuntimeException. "%@{ construct not consuming any arguments: Infinite loop!")))
-        (if (done? n (empty? (nth nav 1)))
-          nav
-          (let [result (execute clause nav base)]
-            (cond
-              (not (abort? result)) (recur (inc n) result (nth nav 2))
-              (= :up-arrow (first result)) (second result)
-              :else result))))
-
-      :else
-      (let [[arg-list nav] (next-arg nav)]
-        (loop [n 0 args (init-nav arg-list) last-position -1]
-          (when (and (not limit) (= (nth args 2) last-position) (> n 1))
-            (throw (RuntimeException. "%{ construct not consuming any arguments: Infinite loop!")))
-          (if (done? n (empty? (nth args 1)))
-            nav
-            (let [result (execute clause args base)]
-              (if (abort? result)
-                nav
-                (recur (inc n) result (nth args 2))))))))))
-
-(defn- render-clauses
-  "The text of each clause run in turn, and the navigator after them; a ~^
-  ends them, dropping the clause it ended."
-  [clauses nav base]
-  (loop [clauses (seq clauses) texts [] nav nav]
-    (if clauses
-      (let [result (volatile! nil)
-            text (kernel/with-case-out nil
-                   (fn [] (with-out-str (vreset! result (execute (first clauses) nav base)))))
-            result @result]
-        (cond
-          (not (abort? result)) (recur (next clauses) (conj texts text) result)
-          (= :up-arrow (first result)) [texts (second result)]
-          :else (recur (next clauses) (conj texts text) [nil nil nil false])))
-      [texts nav])))
-
-(defn- justify
-  "~mincol,colinc,minpad,padchar<...~>: the clauses' texts spread over
-  mincol columns (more by colinc), the padding between them, before the
-  first with ~:< and after the last with ~@<; a first clause ended by ~:; is
-  written first when the rest would pass max-columns."
-  [node params nav base]
-  (let [[eol-texts eol-nav] (when-let [else (nth node 6)] (render-clauses else nav base))
-        nav (or eol-nav nav)
-        eol (first eol-texts)
-        [limits nav] (if-let [separator (nth node 8)]
-                       (realize-params (nth separator 3) nav)
-                       [[nil nil] nav])
-        min-remaining (or (nth limits 0) 0)
-        max-columns (nth limits 1)
-        ;; without its own max-columns, ~< asks the writer for the margin, which
-        ;; only a pretty writer answers
-        _ (when (and (nil? max-columns) (or (kernel/case-out) (not (kernel/active?))))
-            (not-pretty))
-        [texts nav] (render-clauses (nth node 5) nav base)
-        at (nth node 1)
-        colon (nth node 2)
-        [mincol colinc minpad padchar] params
-        slots (max 1 (+ (dec (count texts)) (if colon 1 0) (if at 1 0)))
-        chars (reduce + 0 (map count texts))
-        least (+ chars (* slots minpad))
-        columns (if (<= least mincol)
-                  mincol
-                  (+ mincol (* colinc (inc (divided (- least mincol 1) colinc)))))
-        total (- columns chars)
-        pad (max minpad (quot total slots))
-        pad-text (kernel/padding pad padchar)]
-    (when eol
-      (cond
-        (or (kernel/case-out) (not (kernel/active?))) (not-pretty)
-        (nil? max-columns) (throw (NullPointerException.
-                                   "Cannot invoke \"Object.getClass()\" because \"x\" is null"))
-        :else (kernel/eol eol (+ min-remaining columns) max-columns)))
-    (loop [extra (- total (* pad slots))
-           texts texts
-           pad-only (or colon (and (= 1 (count texts)) (not at)))]
-      (when (seq texts)
-        (emit (str (when-not pad-only (first texts))
-                   (when (or pad-only (next texts) at) pad-text)
-                   (when (pos? extra) (str padchar))))
-        (recur (dec extra) (if pad-only texts (next texts)) false)))
-    nav))
-
-(defn- logical-block
-  "~<prefix~;body~;suffix~:>: the body a logical block over the list argument,
-  between the literal texts the first and last clauses start with (( and )
-  for ~:< when absent)."
-  [node nav base]
-  (let [clauses (nth node 5)
-        n (count clauses)
-        lead (fn [clause] (let [x (first clause)] (when (string? x) x)))
-        prefix (cond (> n 1) (lead (nth clauses 0)) (nth node 2) "(")
-        body (nth clauses (if (> n 1) 1 0))
-        suffix (cond (> n 2) (lead (nth clauses 2)) (nth node 2) ")")
-        [arg nav] (next-arg nav)]
-    (cond
-      (or (kernel/case-out) (not (kernel/active?)))
-      (if (and *print-level* (<= *print-level* 0)) (emit "#") (not-pretty))
-      :else
-      (pprint-logical-block :prefix prefix :suffix suffix
-        (execute body (init-nav arg) base)))
-    nav))
-
-(defn- up-and-out
-  "~^: ends the enclosing run when no argument is left (~:^ when the
-  enclosing ~:{ has no sublist left), or as its parameters say: one zero, two
-  equal, three in order."
-  [node params nav base]
-  (let [[a b c] params
-        colon (nth node 2)
-        stop (cond
-               (and a b c) (<= a b c)
-               (and a b) (= a b)
-               a (= a 0)
-               :else (empty? (nth (if colon base nav) 1)))]
-    (if stop
-      (list (if colon :colon-up-arrow :up-arrow) nav)
-      nav)))
-
-(defn- write-arg
-  "~W: the argument written through the pretty print dispatch, ending the
-  enclosing run when *print-length* cut it; ~:W pretty, ~@W without length
-  or level limits, as write writes them. In a ~(...~) clause what is written
-  is converted as one piece, a string or a character written as pr writes it
-  in the pieces pr writes. A collection the dispatch would lay out as a
-  logical block is the oracle's refusal where *out* is no pretty writer (a
-  ~(...~) clause, a ~<...~> segment, a formatter-out outside a pretty
-  print)."
-  [node nav]
-  (let [[arg nav] (next-arg nav)
-        at (nth node 1)
-        colon (nth node 2)
-        options (concat (when at [:level nil :length nil]) (when colon [:pretty true]))]
-    (when (and (not (or at colon)) *print-pretty* (coll? arg)
-               (or (kernel/case-out) (not (kernel/active?)))
-               (not (kernel/length-reached *print-length*)))
-      (not-pretty))
-    (cond
-      (kernel/case-out)
-      (let [reached (volatile! false)]
-        (let [text (kernel/with-case-out nil
-                     (fn []
-                       (with-out-str
-                         (if (or at colon)
-                           (apply write arg options)
-                           (vreset! reached (write-out arg))))))]
-          (if (and (or (string? arg) (char? arg)) (= text (pr-str arg)))
-            (emit-pr arg)
-            (emit text)))
-        (if @reached (list :up-arrow nav) nav))
-
-      (or at colon) (do (apply write arg options) nav)
-      (write-out arg) (list :up-arrow nav)
-      :else nav)))
-
-(defn- conditional-newline
-  "~_ linear, ~:_ fill, ~@_ miser, ~:@_ mandatory: a conditional newline of
-  the pretty print."
-  [node nav]
-  (if (or (kernel/case-out) (not (kernel/active?)))
-    (not-pretty)
-    (pprint-newline (if (nth node 2)
-                      (if (nth node 1) :mandatory :fill)
-                      (if (nth node 1) :miser :linear))))
-  nav)
-
-(defn- indent-block
-  "~nI: the logical block's indentation n past its start, ~n:I past the
-  column."
-  [node params nav]
-  (if (or (kernel/case-out) (not (kernel/active?)))
-    (not-pretty)
-    (pprint-indent (if (nth node 2) :current :block) (nth params 0)))
-  nav)
-
-(defn- run-directive
-  "Runs the directive node over nav with its realized params; base is the
-  navigator a ~:^ and the clauses consult."
-  [node params nav base]
-  (case (nth node 0)
-    \A (ascii node params nav false)
-    \S (ascii node params nav true)
-    \D (integer-arg node nav 10 params)
-    \B (integer-arg node nav 2 params)
-    \O (integer-arg node nav 8 params)
-    \X (integer-arg node nav 16 params)
-    \R (radix node params nav)
-    \P (plural node nav)
-    \C (character node params nav)
-    \F (fixed node params nav)
-    \E (exponential node params nav false)
-    \G (exponential node params nav true)
-    \$ (dollar node params nav)
-    \% (do (dotimes [_ (nth params 0)] (emit "\n")) nav)
-    \& (let [n (nth params 0)]
-         (when (pos? n) (format-fresh-line))
-         (dotimes [_ (dec n)] (emit "\n"))
-         nav)
-    \| (do (dotimes [_ (nth params 0)] (emit \formfeed)) nav)
-    \~ (do (emit (kernel/padding (nth params 0) \~)) nav)
-    \newline (do (when (nth node 1) (emit "\n")) nav)
-    \T (tabulate node params nav)
-    \* (goto node params nav)
-    \? (indirect node nav base)
-    \( (convert-case node nav base)
-    \[ (conditional node params nav base)
-    \{ (iterate-args node params nav base)
-    \< (if (nth node 7) (logical-block node nav base) (justify node params nav base))
-    \^ (up-and-out node params nav base)
-    \W (write-arg node nav)
-    \_ (conditional-newline node nav)
-    \I (indent-block node params nav)
-    (throw (NullPointerException.
-            "Cannot invoke \"clojure.lang.IFn.applyTo(clojure.lang.ISeq)\" because \"f\" is null"))))
-
-(defn- execute
-  "Runs the format fmt over the navigator nav: the navigator past what it
-  took, or the exit of a ~^ that ended it. base is the navigator of the
-  enclosing directive, nil at the top, where each directive's is its own. A
-  foreign format is walked as the oracle walks it: no seq is its
-  IllegalArgumentException, a non-empty one holds no directive it can run."
-  [fmt nav base]
-  (if (seq? fmt)
-    (if (seq (second fmt))
-      (throw (NullPointerException.
-              "Cannot invoke \"clojure.lang.IFn.applyTo(clojure.lang.ISeq)\" because \"f\" is null"))
-      nav)
-    (let [n (count fmt)]
-      (loop [i 0 nav nav]
-        (if (< i n)
-          (let [node (nth fmt i)]
-            (if (string? node)
-              (do (emit node) (recur (inc i) nav))
-              (let [[params nav] (if (nth node 4) (realize-params (nth node 3) nav) [(nth node 3) nav])
-                    result (run-directive node params nav (or base nav))]
-                (if (abort? result) result (recur (inc i) result)))))
-          nav)))))
-
-(defn- format-on-out
-  "Runs the format over nav on *out*, inside a pretty print of its own when
-  it needs one and *out* is not the pretty writer of one already."
-  [fmt nav]
-  (if (and (needs-pretty? fmt) (not (kernel/active?)))
-    (kernel/call (fn [] (execute fmt nav nil)) *print-right-margin* *print-miser-width*)
-    (execute fmt nav nil))
-  nil)
-
-(defn- execute-format
-  "Runs the format over nav on the stream: nil answers the text, true writes
-  to *out*, a writer to itself."
-  [stream fmt nav]
-  (cond
-    (nil? stream) (kernel/with-case-out nil (fn [] (with-out-str (format-on-out fmt nav))))
-    (true? stream) (format-on-out fmt nav)
-    :else (binding [*out* stream] (kernel/with-case-out nil (fn [] (format-on-out fmt nav))))))
-
-(defn cl-format
-  "Formats args by the control string format-in, Common Lisp's format
-  directives over Clojure values: to a string answered when writer is nil,
-  to *out* when it is true, else to writer itself (answering nil). ~A and ~S
-  print as print and pr do, ~W through the pretty print dispatch, ~{ walks
-  any seqable, ~:[ tests Clojure truth, and ~<...~:>, ~_ and ~I lay text out
-  as the pretty printer does."
-  [writer format-in & args]
-  (execute-format writer (cached-format format-in) (init-nav args)))
-
-(defn- formatter-fn
-  "The function formatter makes of format-in."
-  [format-in]
-  (let [fmt (cached-format format-in)]
-    (fn [stream & args]
-      (execute-format stream fmt (init-nav args)))))
-
-(defn- formatter-out-fn
-  "The function formatter-out makes of format-in."
-  [format-in]
-  (let [fmt (cached-format format-in)]
-    (fn [& args]
-      (execute fmt (init-nav args) nil)
-      nil)))
-
-(defmacro formatter
-  "A function of a stream and arguments that formats them by format-in,
-  compiled once, as cl-format would: answering the text for a nil stream."
-  [format-in]
-  `(#'formatter-fn ~format-in))
-
-(defmacro formatter-out
-  "A function of arguments that formats them by format-in, compiled once, to
-  *out* as it is: meant for a pretty print dispatch function, whose *out* is
-  the pretty writer."
-  [format-in]
-  `(#'formatter-out-fn ~format-in))
+         (println (line "| " " | " " |" (map (fn [key] (cell row key)) ks))))))))

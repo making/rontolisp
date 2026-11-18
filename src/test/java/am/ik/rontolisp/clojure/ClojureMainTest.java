@@ -11,9 +11,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * What {@code -M}, {@code -X} and a project test run generate, over a project in memory.
- * The argument handling and the refusals' words are the oracle's ({@code clj} 1.12.6,
- * {@code clojure.main} and {@code clojure.run.exec}, measured 2026-10-08); that the
- * programs run alike on the four backends is {@code cli/ClojureDepsCommandLineTest}'s.
+ * The argument handling and the refusals' words are the oracle's ({@code clj} 1.12.6, its
+ * {@code -M} and {@code -X}, measured 2026-10-08 and again 2026-11-18); that the programs
+ * run alike on the four backends is {@code cli/ClojureDepsCommandLineTest}'s.
  */
 class ClojureMainTest {
 
@@ -100,6 +100,10 @@ class ClojureMainTest {
 		// :exec-args merges across aliases, a nil one keeps what came before
 		assertThat(exec(List.of(), ":run", ":e2", ":e3")).contains("(quote {:a 1, :b 3, :c 4})");
 		assertThat(exec(List.of(":a", "nil", ":s", "x y"), ":run")).contains("(quote {:a nil, :b {:c 2}, :s x})");
+		// an empty path stores under nil; the last map's entries replace, they do not
+		// merge in depth
+		assertThat(exec(List.of("[]", "1"), ":run")).contains("(quote {:a 1, :b {:c 2}, nil 1})");
+		assertThat(exec(List.of(":b", "{:z 1}", "{:b {:y 2}}"), ":run")).contains("(quote {:a 1, :b {:y 2}})");
 	}
 
 	@Test
@@ -111,6 +115,12 @@ class ClojureMainTest {
 		assertThatThrownBy(() -> exec(List.of(), ":nsd"))
 			.hasMessage("No function found on command line or in :exec-fn");
 		assertThatThrownBy(() -> exec(List.of("a", "b"), ":nsd")).hasMessage("Key is missing value: b");
+		assertThatThrownBy(() -> exec(List.of("my.app/run", "x", "y", "z"), ":nsd"))
+			.hasMessage("Key is missing value: z");
+		// a first symbol that fits as the function is the function, whatever :exec-fn
+		// says
+		assertThatThrownBy(() -> exec(List.of("x", "y", "z"), ":run"))
+			.hasMessage("Unqualified function can't be resolved: x");
 		assertThatThrownBy(() -> exec(List.of("unq"), ":run"))
 			.hasMessage("Unqualified function can't be resolved: unq");
 		assertThatThrownBy(() -> exec(List.of(":a", "\"open"), ":run")).hasMessage("Unreadable arg: \"\\\"open\"");

@@ -38,7 +38,7 @@ Divide by zero
 
 - ここでの throwable はスタックフレームを持たないため、その triage はシンボル、ソース、行を
   含みません。`err->msg` と `repl-caught` は `(REPL:1)` の位置として報告します。
-- `:clojure.error/path` はデータが与えたソースパスそのままです。Clojure は作業ディレクトリの下の
-  パスを相対パスにします。
+- `:clojure.error/path` はデータが与えたソースパスから、重複したスラッシュと末尾のスラッシュを
+  除いたものです。Clojure はさらに、作業ディレクトリの下のパスを相対パスにします。
 - spec の問題を含む `ex-str` は拒否します。Clojure の `clojure.main` はそれを
   `clojure.spec.alpha` で説明しますが、この `clojure.main` はそのライブラリを読み込みません。

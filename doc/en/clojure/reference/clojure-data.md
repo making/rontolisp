@@ -30,3 +30,8 @@ as do two values of different partitions. A record compares as a map.
 (data/diff "abc" "abd")
 ; => ["abc" "abd" nil]
 ```
+
+## Differences
+
+- A part that is a map of several keys lists the first map's keys in its order, then the keys
+  only the second map has; Clojure walks a hash set of the keys, so its order can differ.

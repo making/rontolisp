@@ -38,7 +38,7 @@ program is lowered, and so are the parts of the REPL: `repl-read`, `renumbering-
 
 - A throwable carries no stack frames here, so the triage of one names no symbol, source or
   line: `err->msg` and `repl-caught` report it at `(REPL:1)`.
-- `:clojure.error/path` is the source path as the data gives it, where Clojure's makes a path
-  below the working directory relative.
+- `:clojure.error/path` is the data's source path with repeated and trailing slashes removed,
+  where Clojure's also makes a path below the working directory relative.
 - `ex-str` of spec problems is refused: Clojure's `clojure.main` explains them through
   `clojure.spec.alpha`, a library this `clojure.main` does not load.

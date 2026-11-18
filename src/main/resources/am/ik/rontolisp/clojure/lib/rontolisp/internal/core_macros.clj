@@ -360,126 +360,93 @@
   `(when-let [xs# (seq ~(nth bindings 1))]
      (let [~(nth bindings 0) (first xs#)] ~@body)))
 
-(defn- case-hash
-  "The hash a case test dispatches on: its Java hashCode, 0 for nil."
-  [x]
-  (if (nil? x) 0 (.hashCode x)))
+;; case. The form it expands to, as the oracle prints it:
+;;   (case* value shift mask default table switch-type test-type skip-check)
+;; The table maps each test's code to [test then], codes ascending. A code is
+;; the test itself when every test is an int, else the test's Java hash; under
+;; a nonzero mask it is that number shifted right and masked. Tests sharing a
+;; hash share one entry, keyed by the hash, whose then tries each of them, and
+;; skip-check holds the codes of such entries. Which shift and mask the
+;; oracle picks was read off its expansions of tests chosen for the purpose:
+;; none while the codes span fewer than 8192 values, else the narrowest mask
+;; and for it the smallest shift that keep the codes apart.
 
-(defn- shift-mask
-  "x shifted right by shift and masked by mask."
-  [shift mask x]
-  (bit-and (bit-shift-right x shift) mask))
+(defn- case-pairs
+  "The [test then] pairs of case's clauses, a list of tests giving a pair
+  for each of them; a test written twice is refused."
+  [clauses]
+  (let [pairs (vec (mapcat (fn [[tests then]]
+                             (map (fn [test] [test then]) (if (seq? tests) tests [tests])))
+                           (partition 2 clauses)))]
+    (reduce (fn [seen [test _]]
+              (when (some #(= test %) seen)
+                (throw (IllegalArgumentException. (str "Duplicate case test constant: " test))))
+              (push seen test))
+            [] pairs)
+    pairs))
 
-(defn- fits-table?
-  "Whether the ints span less than a jump table's 8192 entries."
-  [ints]
-  (< (- (apply max ints) (apply min ints)) 8192))
+(defn- hashed-rows
+  "The rows [code test then shared?] of tests dispatched on their hashes, in
+  the order the hashes first appear. Tests sharing a hash make one row,
+  marked shared: its test is the hash and its then compares value with each
+  of them in turn, ending in default."
+  [value default pairs]
+  (let [code (fn [[test _]] (if (nil? test) 0 (.hashCode test)))]
+    (map (fn [h]
+           (let [sharing (filter #(= h (code %)) pairs)]
+             (if (next sharing)
+               [h h `(condp = ~value ~@(mapcat (fn [[test then]] [(list 'quote test) then]) sharing) ~default) true]
+               [h (first (first sharing)) (second (first sharing)) false])))
+         (distinct (map code pairs)))))
 
-(defn- min-hash
-  "The [shift mask] sending the ints to distinct values, masks widening from 1
-  bit to 13 and shifts from 0 to 30 within each, or nil when none does."
-  [ints]
-  (loop [bits 1 shift 0]
-    (cond
-      (> bits 13) nil
-      (> shift 30) (recur (inc bits) 0)
-      :else (let [mask (dec (bit-shift-left 1 bits))]
-              (if (apply distinct? (map #(shift-mask shift mask %) ints))
-                [shift mask]
-                (recur bits (inc shift)))))))
+(defn- narrowed
+  "The key a table of the given shift and mask files a code under: the code
+  itself when there is no mask."
+  [code shift mask]
+  (if (zero? mask) code (bit-and mask (bit-shift-right code shift))))
 
-(defn- case-key
-  "The key a test dispatches on: the int itself for :int, else its hash -- a
-  merged test, the int hash its tests share, as itself."
-  [mode merged test]
-  (cond
-    (= mode :int) (int test)
-    (contains? merged test) test
-    :else (case-hash test)))
-
-(defn- case-map
-  "The map of each test's key, shifted and masked by a nonzero mask, to its
-  [test then], its keys ascending."
-  [mode merged shift mask tests thens]
-  (reduce (fn [m [k entry]] (assoc m k entry))
-          {} (sort-by first (map (fn [test then]
-                                   (let [k (case-key mode merged test)]
-                                     [(if (zero? mask) k (shift-mask shift mask k))
-                                      [(if (= mode :int) (int test) test) then]]))
-                                 tests thens))))
-
-(defn- table-of
-  "[shift mask case-map switch-type] over the distinct keys of the tests: a
-  compact table over the keys as they are when they fit one, else over the keys
-  shifted and masked apart, else a sparse table."
-  [mode merged tests thens]
-  (let [keys (map #(case-key mode merged %) tests)]
-    (if (fits-table? keys)
-      [0 0 (case-map mode merged 0 0 tests thens) :compact]
-      (let [[shift mask] (or (min-hash keys) [0 0])]
-        (if (zero? mask)
-          [0 0 (case-map mode merged 0 0 tests thens) :sparse]
-          [shift mask (case-map mode merged shift mask tests thens) :compact])))))
-
-(defn- merge-collisions
-  "[tests thens skip-check]: each set of tests sharing a hash merged into one
-  test, the hash itself, whose then is the condp of those tests ending in
-  default; skip-check the set of those hashes."
-  [value default tests thens]
-  (let [buckets (reduce (fn [buckets [test then]]
-                          (let [h (case-hash test)
-                                bucket (some (fn [[k b]] (when (= k h) b)) buckets)]
-                            (put-entry buckets h (push bucket [test then]))))
-                        [] (map vector tests thens))
-        merged (map (fn [[h bucket]]
-                      (if (= 1 (count bucket))
-                        (first bucket)
-                        [h `(condp = ~value ~@(mapcat (fn [[test then]] [(list 'quote test) then]) bucket)
-                              ~default)]))
-                    buckets)]
-    [(map first merged) (map second merged)
-     (set (map first (filter (fn [[_ bucket]] (< 1 (count bucket))) buckets)))]))
-
-(defn- hashes-table
-  "[shift mask case-map switch-type skip-check] of tests dispatched on their
-  hashes, colliding tests merged first (merged holds the merged tests' hashes)."
-  [value default tests thens merged]
-  (if (apply distinct? (map #(case-key :hash merged %) tests))
-    (push (table-of :hash merged tests thens) nil)
-    (let [[tests thens skip-check] (merge-collisions value default tests thens)
-          [shift mask cases switch-type] (hashes-table value default tests thens skip-check)]
-      [shift mask cases switch-type
-       (if (zero? mask) skip-check (set (map #(shift-mask shift mask %) skip-check)))])))
+(defn- narrowing
+  "The [shift mask] for a table of the codes: [0 0] while they span fewer
+  than 8192 values; else the first pair that keeps them apart, trying masks
+  from one bit wide to thirteen and under each the shifts from 0 to 30; nil
+  when no pair does."
+  [codes]
+  (if (< (- (apply max codes) (apply min codes)) 8192)
+    [0 0]
+    (loop [n 0]
+      (when (< n (* 13 31))
+        (let [shift (rem n 31)
+              mask (dec (bit-shift-left 2 (quot n 31)))]
+          (if (apply distinct? (map #(narrowed % shift mask) codes))
+            [shift mask]
+            (recur (inc n))))))))
 
 (defn expand-case
-  "(case e clause* default?): e bound to a fresh name, then case* over a map
-  of each test's case key to its [test then] -- the tests themselves when all
-  are ints, else their hashes -- a list of tests counting each."
+  "(case e clause* default?): e bound to a fresh name and case* over the
+  table of the clauses' tests; without clauses, the default alone. With no
+  default, the one that refuses the value."
   [&form &env e & clauses]
-  (let [g (gensym)
-        default (if (odd? (count clauses)) (last clauses) (no-match g))]
-    (if (> 2 (count clauses))
-      `(let [~g ~e] ~default)
-      (let [pairs (reduce (fn [pairs [test then]]
-                            (reduce (fn [pairs t]
-                                      (when (some #(= t (first %)) pairs)
-                                        (throw (IllegalArgumentException.
-                                                (str "Duplicate case test constant: " t))))
-                                      (push pairs [t then]))
-                                    pairs (if (seq? test) test [test])))
-                          [] (partition 2 clauses))
-            tests (map first pairs)
-            thens (map second pairs)]
-        (cond
-          (every? #(and (integer? %) (<= -2147483648 % 2147483647)) tests)
-          (let [[shift mask cases switch-type] (table-of :int nil tests thens)]
-            `(let [~g ~e] (case* ~g ~shift ~mask ~default ~cases ~switch-type :int)))
-          (every? keyword? tests)
-          (let [[shift mask cases switch-type skip-check] (hashes-table g default tests thens nil)]
-            `(let [~g ~e] (case* ~g ~shift ~mask ~default ~cases ~switch-type :hash-identity ~skip-check)))
-          :else
-          (let [[shift mask cases switch-type skip-check] (hashes-table g default tests thens nil)]
-            `(let [~g ~e] (case* ~g ~shift ~mask ~default ~cases ~switch-type :hash-equiv ~skip-check))))))))
+  (let [value (gensym)
+        default (if (odd? (count clauses)) (last clauses) (no-match value))
+        pairs (case-pairs clauses)]
+    (if (empty? pairs)
+      `(let [~value ~e] ~default)
+      (let [tests (map first pairs)
+            ints? (every? #(and (integer? %) (<= -2147483648 % 2147483647)) tests)
+            rows (if ints?
+                   (map (fn [[test then]] [(int test) (int test) then false]) pairs)
+                   (hashed-rows value default pairs))
+            fit (narrowing (map first rows))
+            [shift mask] (or fit [0 0])
+            filed (sort-by first (map (fn [[code test then shared?]] [(narrowed code shift mask) [test then] shared?])
+                                      rows))
+            table (reduce (fn [table [k entry _]] (assoc table k entry)) {} filed)
+            shared (map first (filter #(nth % 2) filed))]
+        `(let [~value ~e]
+           (case* ~value ~shift ~mask ~default ~table ~(if fit :compact :sparse)
+                  ~@(cond ints? [:int]
+                          (every? keyword? tests) [:hash-identity (when (seq shared) (set shared))]
+                          :else [:hash-equiv (when (seq shared) (set shared))])))))))
 
 ;; threading
 
@@ -578,130 +545,152 @@
   [&form &env test & body]
   `(loop [] (when ~test ~@body (recur))))
 
-(defn- doseq-step
-  "[recurs? form]: the doseq form over the remaining binding steps around the
-  body, recurs? whether the step above must put its recur behind it. A
-  collection step is a loop over the collection's seq with the chunked walk's
-  four names, the chunk taken through the one name c every level shares;
-  :let, :while and :when wrap what follows."
-  [c recur-form steps body]
+;; doseq and for. What each expands to is the oracle's form as it prints it,
+;; modifier by modifier and level by level; how the forms are assembled is
+;; this file's.
+
+(defn- doseq-forms
+  "The forms that run the remaining steps of a doseq around its body and
+  then carry on with onward: the recur of the walk the steps sit in, or a
+  lone nil outside any walk. A collection step is one loop form with onward
+  behind it; inside the loop its member is bound twice, once per way of
+  walking -- through a chunk (taken under the name every level shares) and
+  member by member -- each with its own recur for what is under it. A test
+  takes onward inside itself, since a :when that fails still carries on and
+  a :while that fails does not. A :let wraps the first form of what is
+  under it and leaves the rest behind itself."
+  [chunk-name steps body onward]
   (if-not (seq steps)
-    [true `(do ~@body)]
+    (cons `(do ~@body) onward)
     (let [k (first steps)
           v (second steps)
-          more (nnext steps)]
-      (if (keyword? k)
-        (let [[recurs inner] (doseq-step c recur-form more body)]
-          (case k
-            :let [recurs `(let ~v ~inner)]
-            :while [false `(when ~v ~inner ~@(when recurs [recur-form]))]
-            :when [false `(if ~v (do ~inner ~@(when recurs [recur-form])) ~recur-form)]))
+          under (fn [onward] (doseq-forms chunk-name (nnext steps) body onward))]
+      (cond
+        (= k :let) (let [forms (under onward)] (cons `(let ~v ~(first forms)) (next forms)))
+        (= k :when) (list `(if ~v (do ~@(under onward)) ~@onward))
+        (= k :while) (list `(when ~v ~@(under onward)))
+        (keyword? k) (throw (IllegalArgumentException. (str "doseq takes :let, :when and :while, not " k)))
+        :else
         (let [walked (gensym "seq_")
               chunk (gensym "chunk_")
               size (gensym "count_")
-              i (gensym "i_")
-              recur-seq `(recur (next ~walked) nil 0 0)
-              [recurs inner] (doseq-step c recur-seq more body)
-              recur-chunk `(recur ~walked ~chunk ~size (unchecked-inc ~i))
-              [_ inner-chunk] (doseq-step c recur-chunk more body)]
-          [true
-           `(loop [~walked (seq ~v) ~chunk nil ~size 0 ~i 0]
-              (if (< ~i ~size)
-                (let [~k (.nth ~chunk ~i)]
-                  ~inner-chunk
-                  ~@(when recurs [recur-chunk]))
-                (when-let [~walked (seq ~walked)]
-                  (if (chunked-seq? ~walked)
-                    (let [~c (chunk-first ~walked)]
-                      (recur (chunk-rest ~walked) ~c (int (count ~c)) (int 0)))
-                    (let [~k (first ~walked)]
-                      ~inner
-                      ~@(when recurs [recur-seq]))))))])))))
+              i (gensym "i_")]
+          (cons `(loop [~walked (seq ~v) ~chunk nil ~size 0 ~i 0]
+                   (if (< ~i ~size)
+                     (let [~k (.nth ~chunk ~i)]
+                       ~@(under (list `(recur ~walked ~chunk ~size (unchecked-inc ~i)))))
+                     (when-let [~walked (seq ~walked)]
+                       (if (chunked-seq? ~walked)
+                         (let [~chunk-name (chunk-first ~walked)]
+                           (recur (chunk-rest ~walked) ~chunk-name (int (count ~chunk-name)) (int 0)))
+                         (let [~k (first ~walked)]
+                           ~@(under (list `(recur (next ~walked) nil 0 0))))))))
+                onward))))))
 
 (defn expand-doseq
-  "(doseq [binding* ] body*): the body run for each binding of the nested walk,
-  :let, :while and :when modifiers included."
+  "(doseq [step*] body*): the body run for each binding of the nested walk,
+  under the :let, :when and :while steps."
   [&form &env seq-exprs & body]
   (binding-vector &form seq-exprs)
-  (second (doseq-step `c# nil (seq seq-exprs) body)))
+  (first (doseq-forms `c# (seq seq-exprs) body (list nil))))
 
 (defn- for-levels
-  "The levels of a for binding vector: each a [name coll] pair followed by the
-  [keyword form] pairs of its modifiers."
+  "The levels of a for binding vector, [binding coll modifiers]: a binding
+  and its collection, then the [keyword form] pairs up to the next binding.
+  A modifier ahead of every binding has no level to belong to and is refused
+  as the oracle refuses it."
   [seq-exprs]
-  (reduce (fn [levels [k v]]
-            (if (keyword? k)
-              (push (pop levels) (push (peek levels) [k v]))
-              (push levels [[k v]])))
-          [] (partition 2 seq-exprs)))
+  (loop [levels [] pairs (seq (partition 2 seq-exprs))]
+    (if-not pairs
+      levels
+      (let [[bind coll] (first pairs)
+            modifiers (take-while #(keyword? (first %)) (next pairs))]
+        (when (keyword? bind)
+          (throw (IllegalStateException. "Can't pop empty vector")))
+        (recur (push levels [bind coll modifiers])
+               (seq (drop (count modifiers) (next pairs))))))))
 
-(defn- for-modifiers
-  "inner under a level's modifiers: :let binding, :while ending the level,
-  :when skipping to skip."
-  [modifiers skip inner]
-  (if-let [[k v] (first modifiers)]
-    (let [rest-form (for-modifiers (next modifiers) skip inner)]
-      (case k
-        :let `(let ~v ~rest-form)
-        :while `(when ~v ~rest-form)
-        :when `(if ~v ~rest-form ~skip)
-        (throw (IllegalArgumentException. (str "Invalid 'for' keyword " k)))))
-    inner))
+(defn- for-guarded
+  "reached under a level's modifiers, the first outermost: a :let binds
+  around what follows, a :while that fails ends the level, and a :when that
+  fails goes to skip, the form that moves on to the next member."
+  [modifiers skip reached]
+  (reduce (fn [inner [k v]]
+            (cond
+              (= k :let) `(let ~v ~inner)
+              (= k :while) `(when ~v ~inner)
+              (= k :when) `(if ~v ~inner ~skip)
+              :else (throw (IllegalArgumentException. (str "Invalid 'for' keyword " k)))))
+          reached (reverse modifiers)))
 
-(defn- for-level
-  "The lazy seq function of the first of levels: a walk of its collection with
-  fresh iter__ and s__ names, an outer level concatenating the seqs of the next
-  level's function (bound to the shared iterys name, its seq to fs), the
-  innermost level answering body for each member, chunk by chunk through the
-  shared c and size names and fresh i__ and b__ names where the seq is
-  chunked."
-  [shared levels body]
-  (let [[[bind _] & modifiers] (first levels)
-        more (next levels)
+(defn- for-innermost
+  "The function of the last level, from a seq to the lazy seq of body over
+  it: a chunked seq a chunk at a time, each chunk's answers gathered in a
+  buffer by a loop that answers whether the level goes on; any other seq
+  member by member."
+  [shared [bind _ modifiers] body]
+  (let [{:keys [c size]} shared
         iter (gensym "iter__")
         xs (gensym "s__")
-        {:keys [iterys fs c size]} shared]
-    (if more
-      `(fn ~iter [~xs]
-         (lazy-seq
-          (loop [~xs ~xs]
-            (when-first [~bind ~xs]
-              ~(for-modifiers modifiers `(recur (rest ~xs))
-                              `(let [~iterys ~(for-level shared more body)
-                                     ~fs (seq (~iterys ~(second (first (first more)))))]
-                                 (if ~fs
-                                   (concat ~fs (~iter (rest ~xs)))
-                                   (recur (rest ~xs)))))))))
-      (let [i (gensym "i__")
-            b (gensym "b__")]
-        `(fn ~iter [~xs]
-           (lazy-seq
-            (loop [~xs ~xs]
-              (when-let [~xs (seq ~xs)]
-                (if (chunked-seq? ~xs)
-                  (let [~c (chunk-first ~xs)
-                        ~size (int (count ~c))
-                        ~b (chunk-buffer ~size)]
-                    (if (loop [~i (int 0)]
-                          (if (< ~i ~size)
-                            (let [~bind (.nth ~c ~i)]
-                              ~(for-modifiers modifiers `(recur (unchecked-inc ~i))
-                                              `(do (chunk-append ~b ~body) (recur (unchecked-inc ~i)))))
-                            true))
-                      (chunk-cons (chunk ~b) (~iter (chunk-rest ~xs)))
-                      (chunk-cons (chunk ~b) nil)))
-                  (let [~bind (first ~xs)]
-                    ~(for-modifiers modifiers `(recur (rest ~xs))
-                                    `(cons ~body (~iter (rest ~xs))))))))))))))
+        i (gensym "i__")
+        b (gensym "b__")]
+    `(fn ~iter [~xs]
+       (lazy-seq
+        (loop [~xs ~xs]
+          (when-let [~xs (seq ~xs)]
+            (if (chunked-seq? ~xs)
+              (let [~c (chunk-first ~xs)
+                    ~size (int (count ~c))
+                    ~b (chunk-buffer ~size)]
+                (if (loop [~i (int 0)]
+                      (if (< ~i ~size)
+                        (let [~bind (.nth ~c ~i)]
+                          ~(for-guarded modifiers `(recur (unchecked-inc ~i))
+                                        `(do (chunk-append ~b ~body) (recur (unchecked-inc ~i)))))
+                        true))
+                  (chunk-cons (chunk ~b) (~iter (chunk-rest ~xs)))
+                  (chunk-cons (chunk ~b) nil)))
+              (let [~bind (first ~xs)]
+                ~(for-guarded modifiers `(recur (rest ~xs))
+                              `(cons ~body (~iter (rest ~xs))))))))))))
+
+(defn- for-outer
+  "The function of a level with levels under it, given the function of the
+  level below and that level's collection: for each member, the seq the
+  level below makes, joined ahead of the rest of this level; a member the
+  level below makes nothing of is passed over."
+  [shared [bind _ modifiers] below below-coll]
+  (let [{:keys [iterys fs]} shared
+        iter (gensym "iter__")
+        xs (gensym "s__")]
+    `(fn ~iter [~xs]
+       (lazy-seq
+        (loop [~xs ~xs]
+          (when-first [~bind ~xs]
+            ~(for-guarded modifiers `(recur (rest ~xs))
+                          `(let [~iterys ~below
+                                 ~fs (seq (~iterys ~below-coll))]
+                             (if ~fs
+                               (concat ~fs (~iter (rest ~xs)))
+                               (recur (rest ~xs)))))))))))
 
 (defn expand-for
-  "(for [binding*] body): the lazy seq of body over the nested walk, :let,
-  :while and :when modifiers included."
+  "(for [step*] body): the lazy seq of body over the nested walk, under the
+  :let, :when and :while steps. Built from the last level outwards: each
+  level's function takes in the one below it."
   [&form &env seq-exprs body]
   (binding-vector &form seq-exprs)
-  (let [iter `iter#]
-    `(let [~iter ~(for-level {:iterys `iterys# :fs `fs# :c `c# :size `size#} (for-levels seq-exprs) body)]
-       (~iter ~(second seq-exprs)))))
+  (let [shared {:iterys `iterys# :fs `fs# :c `c# :size `size#}
+        levels (for-levels seq-exprs)
+        levels (if (seq levels) levels [[nil nil nil]])
+        last-level (peek levels)
+        whole (first (reduce (fn [[below below-coll] level]
+                               [(for-outer shared level below below-coll) (second level)])
+                             [(for-innermost shared last-level body) (second last-level)]
+                             (reverse (pop levels))))
+        iter `iter#]
+    `(let [~iter ~whole]
+       (~iter ~(second (first levels))))))
 
 ;; definitions and the rest
 
@@ -786,249 +775,304 @@
   [&form &env & body]
   `(future-call (~(with-meta 'fn* {:once true}) [] ~@body)))
 
-;; the types: reify*, deftype* and the record's own methods
+;; reify, deftype and defrecord. Written here from the macros' documentation
+;; (a type body is options, then groups: a protocol, an interface or Object
+;; followed by its methods) and from what the oracle answers: the shape of the
+;; special forms a program's own macro may take apart, the words of each
+;; refusal, and what a record answers through each of its interfaces. A
+;; record's own methods are this file's, one per method its interfaces
+;; declare, each written from that method's contract.
 
-(defn- parse-opts
-  "The leading keyword options of a type body, then the rest: [opts specs]."
-  [s]
-  (loop [opts {} [k v & rs :as s] s]
-    (if (keyword? k)
-      (recur (assoc opts k v) rs)
-      [opts s])))
+(defn- leading-options
+  "A type body's options, [[keyword value]*], and what follows them. The only
+  option there is, :load-ns, is handed on to deftype*; any other is refused
+  by name."
+  [body]
+  (loop [options [] more (seq body)]
+    (if (keyword? (first more))
+      (recur (push options [(first more) (second more)]) (nnext more))
+      (let [unknown (remove #(= :load-ns %) (map first options))]
+        (when (seq unknown)
+          (throw (IllegalArgumentException.
+                  (apply str "Unsupported option(s) - " (interpose " " unknown)))))
+        [options more]))))
 
-(defn- parse-impls
-  "Each group symbol of a type body to the methods following it, a map: a group
-  named again keeps its place and takes its later methods."
+(defn- grouped
+  "The groups of a type body in the order their heads first appear,
+  [[head methods]*]: a head is a symbol, the lists after it are its methods,
+  and a head written again starts over with the methods that follow it."
   [specs]
-  (loop [ret {} s specs]
-    (if (seq s)
-      (recur (assoc ret (first s) (take-while seq? (next s)))
-             (drop-while seq? (next s)))
-      ret)))
+  (loop [groups [] more (seq specs)]
+    (if-not more
+      groups
+      (let [head (first more)
+            methods (take-while seq? (next more))
+            others (remove #(= head (first %)) groups)]
+        (when-not (symbol? head)
+          (throw (ClassCastException.
+                  (str "a group of a type body starts with a protocol, an interface or Object, not " (pr-str head)))))
+        (recur (if (= (count others) (count groups))
+                 (push groups [head methods])
+                 (mapv (fn [group] (if (= head (first group)) [head methods] group)) groups))
+               (seq (drop (count methods) (next more))))))))
 
-(defn- group-interface
-  "The interface a group symbol names: a protocol's (the :on of its var's map),
-  else the symbol. Resolved while the program lowers; where it runs no lowering
-  is, so the symbol stays as written."
-  [sym]
-  (let [v (when (symbol? sym) (types/protocol-var sym))]
-    (if (var? v) (:on @v) sym)))
+(defn- implemented
+  "What a group's head adds to the type's interfaces: nothing for Object, a
+  protocol's interface (the :on of its var's map; the var is in reach only
+  while the program lowers, so where the expansion runs the head stays as
+  written), else the head itself."
+  [head]
+  (if (or (= 'Object head) (= 'java.lang.Object head))
+    []
+    (let [v (types/protocol-var head)]
+      [(if (var? v) (:on @v) head)])))
 
-(defn- type-method
-  "One method as the special forms take it, (name [params] body*): a parameter
-  pattern replaced by a fresh p__ name the body's let takes apart."
-  [[name params & body]]
-  (if (every? symbol? params)
-    (list* name params body)
-    (loop [ps (seq params) plain [] lets []]
-      (if ps
-        (let [p (first ps)]
-          (if (symbol? p)
-            (recur (next ps) (push plain p) lets)
-            (let [g (gensym "p__")]
-              (recur (next ps) (push plain g) (push lets p g)))))
-        (list name (with-meta plain (meta params)) `(let ~lets ~@body))))))
+(defn- plain-method
+  "A method as the special forms take it, (name [symbol*] body*): each
+  destructuring parameter gives way to a fresh p__ name and the body moves
+  into a let taking those names apart."
+  [method]
+  (let [params (second method)
+        body (nnext method)
+        named (mapv (fn [p] (if (symbol? p) p (gensym "p__"))) params)
+        taken (vec (mapcat (fn [p g] (if (symbol? p) [] [p g])) params named))]
+    (if (seq taken)
+      (list (first method) (with-meta named (meta params)) `(let ~taken ~@body))
+      method)))
 
-(defn- parse-opts+specs
-  "A type body as [interfaces methods opts]: the interfaces its groups name,
-  each once, Object none; every method in group order."
-  [opts+specs]
-  (let [[opts specs] (parse-opts opts+specs)
-        impls (parse-impls specs)
-        interfaces (-> (map group-interface (keys impls))
-                       set
-                       (disj 'Object 'java.lang.Object)
-                       vec)
-        methods (map type-method (apply concat (vals impls)))]
-    (when-let [bad (seq (remove #{:no-print :load-ns} (keys opts)))]
-      (throw (IllegalArgumentException. (apply print-str "Unsupported option(s) -" bad))))
-    [interfaces methods opts]))
+(defn- type-body
+  "A type body read whole: {:options [keyword value ...], :interfaces
+  [symbol*], :methods (method*)}, the methods in group order."
+  [body]
+  (let [[options specs] (leading-options body)
+        groups (grouped specs)]
+    {:options (vec (mapcat identity options))
+     :interfaces (vec (mapcat (fn [group] (implemented (first group))) groups))
+     :methods (map plain-method (mapcat second groups))}))
 
 (defn expand-reify
-  "(reify group method* ...): reify* over the interfaces the groups name and
-  every method, carrying the call's metadata."
-  [&form &env & opts+specs]
-  (let [[interfaces methods] (parse-opts+specs opts+specs)]
+  "(reify options* group*): reify* over the interfaces the groups name and
+  their methods, with the metadata of the call."
+  [&form &env & body]
+  (let [{:keys [interfaces methods]} (type-body body)]
     (with-meta (list* 'reify* interfaces methods) (meta &form))))
 
-(defn- validate-fields
-  "Refuses a field vector that is none, names a record's own field or holds
-  anything but symbols."
-  [fields name]
+(defn- checked-fields
+  "The field vector of the type named nom, refused in the oracle's words
+  when it is no vector, takes a name a record's class keeps for itself (its
+  metadata, the entries beyond its fields, the two hash caches), or holds
+  anything that is not a symbol."
+  [fields nom]
   (when-not (vector? fields)
     (throw (AssertionError. "No fields vector given.")))
-  (let [specials '#{__hash __meta __hasheq __extmap}]
-    (when (some specials fields)
-      (throw (AssertionError. (str "The names in " specials
-                                   " cannot be used as field names for types or records.")))))
-  (let [non-syms (remove symbol? fields)]
-    (when (seq non-syms)
-      (throw (AssertionError. (str "defrecord and deftype fields must be symbols, " *ns* "." name
-                                   " had: " (apply str (interpose ", " non-syms))))))))
+  (when (some (fn [slot] (some #(= slot %) fields)) '[__meta __extmap __hash __hasheq])
+    (throw (AssertionError.
+            "The names in #{__hash __meta __hasheq __extmap} cannot be used as field names for types or records.")))
+  (let [strays (remove symbol? fields)]
+    (when (seq strays)
+      (throw (AssertionError.
+              (apply str "defrecord and deftype fields must be symbols, " *ns* "." nom " had: "
+                     (interpose ", " strays))))))
+  fields)
 
-(defn- class-of
-  "The class a type of the name defines in the current namespace."
-  [cname]
-  (symbol (str (namespace-munge *ns*) "." cname)))
+(defn- naming
+  "The names a type called nom goes by in the current namespace: the tag
+  deftype* files it under, its class and its positional factory."
+  [nom]
+  {:tag (symbol (name (ns-name *ns*)) (name nom))
+   :class (symbol (str (namespace-munge *ns*) "." nom))
+   :factory (symbol (str "->" nom))})
 
-(defn- positional-factory
-  "The defn of ->name over the fields, past twenty of them a rest argument
-  counted when it runs."
-  [nom classname fields]
-  (let [fn-name (symbol (str "->" nom))
-        [field-args over] (split-at 20 fields)
-        over-count (count over)]
-    `(defn ~fn-name
-       ~(str "Positional factory function for class " classname ".")
-       [~@field-args ~@(if (seq over) '[& overage] [])]
-       ~(if (seq over)
-          `(if (= (count ~'overage) ~over-count)
-             (new ~classname ~@field-args ~@(map (fn [i] (list `nth 'overage i)) (range over-count)))
-             (throw (clojure.lang.ArityException. (+ ~(count field-args) (count ~'overage)) (name '~fn-name))))
-          `(new ~classname ~@field-args)))))
+(defn- positional
+  "The definition of the factory taking the fields, given by their bare
+  names, in order. A function has at most twenty named parameters, so the
+  fields past the twentieth arrive as a rest argument, whose count is
+  checked when the factory runs."
+  [factory class fields]
+  (let [doc (str "Positional factory function for class " class ".")
+        named (vec (take 20 fields))
+        extra (- (count fields) 20)]
+    (if (pos? extra)
+      `(defn ~factory ~doc ~(push named '& 'overage)
+         (when-not (= ~extra (count ~'overage))
+           (throw (clojure.lang.ArityException. (+ 20 (count ~'overage)) ~(name factory))))
+         (new ~class ~@named ~@(map (fn [i] `(nth ~'overage ~i)) (range extra))))
+      `(defn ~factory ~doc ~named (new ~class ~@named)))))
+
+(defn- bare
+  "The field names without the metadata their declarations carry."
+  [fields]
+  (mapv (fn [field] (with-meta field nil)) fields))
 
 (defn expand-deftype
-  "(deftype name [fields*] opts* specs*): deftype* of the class implementing
-  the groups' interfaces and IType, the class imported, its ->name, and the
-  class."
-  [&form &env name fields & opts+specs]
-  (validate-fields fields name)
-  (let [[interfaces methods opts] (parse-opts+specs opts+specs)
-        classname (class-of name)]
+  "(deftype name [field*] options* group*): the class by deftype* over the
+  fields, implementing the groups' interfaces and IType; then its import,
+  its positional factory, and the class as the value."
+  [&form &env nom fields & body]
+  (let [fields (checked-fields fields nom)
+        {:keys [options interfaces methods]} (type-body body)
+        {:keys [tag class factory]} (naming nom)]
     `(let []
-       (deftype* ~(symbol (str (ns-name *ns*)) (str name)) ~(with-meta classname (meta name)) ~fields
-         :implements ~(push interfaces 'clojure.lang.IType)
-         ~@(mapcat identity opts)
-         ~@methods)
-       (import ~classname)
-       ~(positional-factory name classname (vec (map #(with-meta % nil) fields)))
-       ~classname)))
+       ~(list* 'deftype* tag (with-meta class (meta nom)) fields
+               :implements (push interfaces 'clojure.lang.IType)
+               (concat options methods))
+       (import ~class)
+       ~(positional factory class (bare fields))
+       ~class)))
 
-(defn- core-name
-  "A record method's name as the oracle's expansion spells it, qualified by
-  clojure.core."
-  [name]
-  (symbol "clojure.core" name))
+;; a record's own methods
+
+(defn- own
+  "A method the record supplies, named the way a record's expansion names
+  its own, clojure.core/name, so that a program rewriting the expansion can
+  tell them from the methods of the body."
+  [nom params & body]
+  (list* (symbol "clojure.core" (name nom)) params body))
+
+(defn- field-keys
+  "The keywords a record's fields are reached by, in field order."
+  [fields]
+  (map (fn [field] (keyword (name field))) fields))
+
+(defn- by-key
+  "A case over the key k with one clause per field -- (clause field) answers
+  its result -- and otherwise as the last form; with no fields, otherwise
+  alone."
+  [k fields clause otherwise]
+  (if (seq fields)
+    `(case ~k ~@(mapcat (fn [field key] [key (clause field)]) fields (field-keys fields)) ~otherwise)
+    otherwise))
+
+(defn- by-field?
+  "A case over the key k answering field-form for the keyword of any field
+  and otherwise for any other key; with no fields, otherwise alone."
+  [k fields field-form otherwise]
+  (if (seq fields)
+    `(case ~k ~(field-keys fields) ~field-form ~otherwise)
+    otherwise))
+
+(defn- cached-hash
+  "The body of a hashing method: what the slot caches, computed by the form
+  and stored on the first call (a cache of zero is an empty one)."
+  [slot form]
+  (let [h (gensym "h__")]
+    `(let [~h ~slot]
+       (if (zero? ~h)
+         (let [~h (int ~form)]
+           (set! ~slot ~h)
+           ~h)
+         ~h))))
 
 (defn- record-methods
-  "The record's own methods, last first, as the oracle's expansion lists them
-  ahead of the body's: the java.util.Map ones, then IPersistentMap's,
-  ILookup's and IKeywordLookup's, IObj's and IHashEq's with Object's."
-  [tagname classname fields base-fields gs]
-  (let [type-hash (hash classname)
-        hinted (with-meta gs {:tag tagname})
-        others (fn [& drop] (remove (set drop) fields))]
-    [`(~(core-name "entrySet") [this#] (set this#))
-     `(~(core-name "values") [this#] (vals this#))
-     `(~(core-name "keySet") [this#] (set (keys this#)))
-     `(~(core-name "clear") [this#] (throw (java.lang.UnsupportedOperationException.)))
-     `(~(core-name "putAll") [this# m#] (throw (java.lang.UnsupportedOperationException.)))
-     `(~(core-name "remove") [this# k#] (throw (java.lang.UnsupportedOperationException.)))
-     `(~(core-name "put") [this# k# v#] (throw (java.lang.UnsupportedOperationException.)))
-     `(~(core-name "get") [this# k#] (.valAt this# k#))
-     `(~(core-name "containsValue") [this# v#] (boolean (some #{v#} (vals this#))))
-     `(~(core-name "isEmpty") [this#] (= 0 (.count this#)))
-     `(~(core-name "size") [this#] (.count this#))
-     `(~(core-name "without") [this# k#]
-       (if (contains? #{~@(map keyword base-fields)} k#)
-         (dissoc (with-meta (into {} this#) ~'__meta) k#)
-         (new ~tagname ~@(others '__extmap '__hash '__hasheq)
-              (not-empty (dissoc ~'__extmap k#)))))
-     `(~(core-name "assoc") [this# k# ~gs]
-       (condp identical? k#
-         ~@(mapcat (fn [fld]
-                     [(keyword fld) (list* 'new tagname (replace {fld gs} (others '__hash '__hasheq)))])
-                   base-fields)
-         (new ~tagname ~@(others '__extmap '__hash '__hasheq) (assoc ~'__extmap k# ~gs))))
-     `(~(core-name "iterator") [~gs]
-       (clojure.lang.RecordIterator. ~gs [~@(map keyword base-fields)] (clojure.lang.RT/iter ~'__extmap)))
-     `(~(core-name "seq") [this#]
-       (seq (concat [~@(map #(list 'clojure.lang.MapEntry/create (keyword %) %) base-fields)]
-                    ~'__extmap)))
-     `(~(core-name "entryAt") [this# k#]
-       (let [v# (.valAt this# k# this#)]
-         (when-not (identical? this# v#)
-           (clojure.lang.MapEntry/create k# v#))))
-     `(~(core-name "containsKey") [this# k#] (not (identical? this# (.valAt this# k# this#))))
-     `(~(core-name "equiv") [this# ~gs]
-       (boolean
-        (or (identical? this# ~gs)
-            (when (identical? (class this#) (class ~gs))
-              (let [~gs ~hinted]
-                (and ~@(map (fn [fld] `(= ~fld (. ~gs ~(symbol (str "-" fld))))) base-fields)
-                     (= ~'__extmap (. ~gs ~'__extmap))))))))
-     `(~(core-name "cons") [this# e#] ((var clojure.core/imap-cons) this# e#))
-     `(~(core-name "empty") [this#]
-       (throw (java.lang.UnsupportedOperationException. (str "Can't create empty: " ~(str classname)))))
-     `(~(core-name "count") [this#] (+ ~(count base-fields) (count ~'__extmap)))
-     `(~(core-name "getLookupThunk") [this# k#]
-       (let [~'gclass (class this#)]
-         (case k#
-           ~@(mapcat (fn [fld]
-                       [(keyword fld)
-                        `(reify clojure.lang.ILookupThunk
-                           (get [~'thunk ~'gtarget]
-                             (if (identical? (class ~'gtarget) ~'gclass)
-                               (. ~(with-meta 'gtarget {:tag tagname}) ~(symbol (str "-" fld)))
-                               ~'thunk)))])
-                     base-fields)
-           nil)))
-     `(~(core-name "valAt") [this# k# else#]
-       (case k# ~@(mapcat (fn [fld] [(keyword fld) fld]) base-fields)
-         (get ~'__extmap k# else#)))
-     `(~(core-name "valAt") [this# k#] (.valAt this# k# nil))
-     `(~(core-name "withMeta") [this# ~gs] (new ~tagname ~@(replace {'__meta gs} fields)))
-     `(~(core-name "meta") [this#] ~'__meta)
-     `(~(core-name "equals") [this# ~gs] (clojure.lang.APersistentMap/mapEquals this# ~gs))
-     `(~(core-name "hashCode") [this#]
-       (let [hash# ~'__hash]
-         (if (zero? hash#)
-           (let [h# (clojure.lang.APersistentMap/mapHash this#)]
-             (set! ~'__hash h#)
-             h#)
-           hash#)))
-     `(~(core-name "hasheq") [this#]
-       (let [hq# ~'__hasheq]
-         (if (zero? hq#)
-           (let [h# (int (bit-xor ~type-hash (clojure.lang.APersistentMap/mapHasheq this#)))]
-             (set! ~'__hasheq h#)
-             h#)
-           hq#)))]))
+  "The methods every record has, for the class of the given fields. Inside
+  its own methods a type goes by its unqualified name, self, as deftype
+  documents: the class's name resolves only once deftype* has defined it.
+  The slots __meta and __extmap hold the record's metadata and its entries
+  beyond the fields (nil while there are none).
+  - IObj: its metadata, and a copy carrying other metadata.
+  - ILookup and IKeywordLookup: a field's value by its keyword, anything
+    else from __extmap; the thunk of a field's keyword reads that field off
+    a record of this class and answers itself for any other target.
+  - IPersistentMap: the fields in order, then the entries of __extmap; assoc
+    of a field keeps the record and of another key grows __extmap; without a
+    field it is a plain map, without another key still the record; conj
+    takes an entry, a pair, or a collection of entries; there is no empty
+    record; a record equals only a record of its class with equal fields
+    and equal __extmap.
+  - Object and IHashEq: equals and hashCode as the map of its entries, and
+    hasheq that map's, mixed with the hash of the class's name; both hashes
+    are kept in their slots.
+  - java.util.Map: read only."
+  [self class fields]
+  (let [this (gensym "this__")
+        k (gensym "k__")
+        v (gensym "v__")
+        other (gensym "other__")
+        thunk (gensym "thunk__")
+        entry (gensym "entry__")
+        md '__meta
+        ext '__extmap
+        rebuilt (fn [fields md ext] `(new ~self ~@fields ~md ~ext))
+        refusal (list 'throw (list 'java.lang.UnsupportedOperationException.))]
+    (concat
+     [(own 'meta [this] md)
+      (own 'withMeta [this v] `(new ~self ~@fields ~v ~ext ~'__hash ~'__hasheq))
+      (own 'valAt [this k] `(.valAt ~this ~k nil))
+      (own 'valAt [this k v] (by-key k fields identity `(get ~ext ~k ~v)))
+      (own 'getLookupThunk [this k]
+           (by-field? k fields
+                      `(reify clojure.lang.ILookupThunk
+                         (~'get [~thunk ~other] (if (instance? ~self ~other) (get ~other ~k) ~thunk)))
+                      nil))
+      (own 'count [this] `(+ ~(count fields) (count ~ext)))
+      (own 'seq [this]
+           `(seq (concat ~(mapv (fn [field] `(clojure.lang.MapEntry/create ~(keyword (name field)) ~field)) fields)
+                         ~ext)))
+      (own 'iterator [this] `(clojure.lang.SeqIterator. (.seq ~this)))
+      (own 'containsKey [this k] (by-field? k fields true `(contains? ~ext ~k)))
+      (own 'entryAt [this k] `(when (.containsKey ~this ~k) (clojure.lang.MapEntry/create ~k (.valAt ~this ~k))))
+      (own 'assoc [this k v]
+           (by-key k fields
+                   (fn [field] (rebuilt (map (fn [f] (if (= f field) v f)) fields) md ext))
+                   (rebuilt fields md `(assoc ~ext ~k ~v))))
+      (own 'without [this k]
+           (by-field? k fields
+                      `(dissoc (with-meta (into {} ~this) ~md) ~k)
+                      (rebuilt fields md `(not-empty (dissoc ~ext ~k)))))
+      (own 'cons [this v]
+           `(if (vector? ~v)
+              (assoc ~this (nth ~v 0) (nth ~v 1))
+              (reduce (fn [~other ~entry] (assoc ~other (key ~entry) (val ~entry))) ~this ~v)))
+      (own 'empty [this]
+           (list 'throw (list 'java.lang.UnsupportedOperationException. (str "Can't create empty: " class))))
+      (own 'equiv [this other]
+           `(boolean
+             (or (identical? ~this ~other)
+                 (and (instance? ~self ~other)
+                      ~@(map (fn [field] `(= ~field (. ~other ~(symbol (str "-" field))))) fields)
+                      (= ~ext (. ~other ~'-__extmap))))))
+      (own 'equals [this other] `(clojure.lang.APersistentMap/mapEquals ~this ~other))
+      (own 'hashCode [this] (cached-hash '__hash `(clojure.lang.APersistentMap/mapHash ~this)))
+      (own 'hasheq [this]
+           (cached-hash '__hasheq `(bit-xor ~(hash class) (clojure.lang.APersistentMap/mapHasheq ~this))))
+      (own 'size [this] `(.count ~this))
+      (own 'isEmpty [this] `(zero? (.count ~this)))
+      (own 'get [this k] `(.valAt ~this ~k))
+      (own 'containsValue [this v] `(boolean (some (hash-set ~v) (vals ~this))))
+      (own 'keySet [this] `(set (keys ~this)))
+      (own 'values [this] `(vals ~this))
+      (own 'entrySet [this] `(set ~this))]
+     (map (fn [[nom arity]] (own nom (vec (take arity [this k v])) refusal))
+          '[[put 3] [remove 2] [putAll 2] [clear 1]]))))
 
 (defn expand-defrecord
-  "(defrecord name [fields*] opts* specs*): deftype* of the class over the
-  fields and the record's own __meta, __extmap and hash caches, implementing
-  the groups' interfaces and the record's, every method of the record's own
-  ahead of the body's; the class imported, ->name and map->name, and the
-  class."
-  [&form &env name fields & opts+specs]
-  (validate-fields fields name)
-  (let [[interfaces methods opts] (parse-opts+specs opts+specs)
-        classname (class-of name)
-        base-fields (vec (map #(with-meta % nil) fields))
-        all-fields (push base-fields '__meta '__extmap
-                         (with-meta '__hash {:unsynchronized-mutable true})
-                         (with-meta '__hasheq {:unsynchronized-mutable true}))
-        gs (gensym)]
-    (when (some #{:volatile-mutable :unsynchronized-mutable} (mapcat (comp keys meta) fields))
-      (throw (IllegalArgumentException.
-              ":volatile-mutable or :unsynchronized-mutable not supported for record fields")))
+  "(defrecord name [field*] options* group*): the class by deftype* over the
+  fields and the slots a record keeps, implementing the groups' interfaces
+  and a record's own, with the record's methods ahead of the body's; around
+  it the factories declared, the class imported, ->name and map->name
+  defined, and the class as the value."
+  [&form &env nom fields & body]
+  (let [fields (checked-fields fields nom)
+        {:keys [options interfaces methods]} (type-body body)
+        {:keys [tag class factory]} (naming nom)
+        names (bare fields)
+        from-map (symbol (str "map->" nom))
+        cache (fn [slot] (with-meta slot {:unsynchronized-mutable true :tag 'int}))
+        m (gensym "m__")]
     `(let []
-       (declare ~(symbol (str "->" name)))
-       (declare ~(symbol (str "map->" name)))
-       (deftype* ~(symbol (str (ns-name *ns*)) (str name)) ~(with-meta classname (meta name))
-         ~(push fields '__meta '__extmap
-                (with-meta '__hash {:unsynchronized-mutable true :tag 'int})
-                (with-meta '__hasheq {:unsynchronized-mutable true :tag 'int}))
-         :implements ~(push interfaces 'clojure.lang.IRecord 'clojure.lang.IHashEq 'clojure.lang.IObj
-                            'clojure.lang.ILookup 'clojure.lang.IKeywordLookup 'clojure.lang.IPersistentMap
-                            'java.util.Map 'java.io.Serializable)
-         ~@(mapcat identity opts)
-         ~@(concat (record-methods name classname all-fields base-fields gs) methods))
-       (import ~classname)
-       ~(positional-factory name classname base-fields)
-       (defn ~(symbol (str "map->" name))
-         ~(str "Factory function for class " classname ", taking a map of keywords to field values.")
-         ([m#] (~(symbol (str classname "/create"))
-                (if (instance? clojure.lang.MapEquivalence m#) m# (into {} m#)))))
-       ~classname)))
+       (declare ~factory)
+       (declare ~from-map)
+       ~(list* 'deftype* tag (with-meta class (meta nom))
+               (push fields '__meta '__extmap (cache '__hash) (cache '__hasheq))
+               :implements (push interfaces
+                                 'clojure.lang.IRecord 'clojure.lang.IHashEq 'clojure.lang.IObj
+                                 'clojure.lang.ILookup 'clojure.lang.IKeywordLookup
+                                 'clojure.lang.IPersistentMap 'java.util.Map 'java.io.Serializable)
+               (concat options (record-methods (symbol (name nom)) class names) methods))
+       (import ~class)
+       ~(positional factory class names)
+       (defn ~from-map
+         ~(str "Factory function for class " class ", taking a map of keywords to field values.")
+         [~m]
+         (~(symbol (str class) "create") (if (map? ~m) ~m (into {} ~m))))
+       ~class)))

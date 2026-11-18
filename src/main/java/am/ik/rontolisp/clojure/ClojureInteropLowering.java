@@ -1077,10 +1077,6 @@ final class ClojureInteropLowering {
 		if (cls.equals("clojure.lang.SeqIterator") && args.size() == 1) {
 			return ClojureLowerUtil.list(new LispSymbol(ClojureInterfaces.SEQ_ITERATOR), args.get(0));
 		}
-		if (cls.equals("clojure.lang.RecordIterator") && args.size() == 3) {
-			// a record expansion's iterator (a deftype* implementing IRecord)
-			return ClojureTypeSpecials.recordsCall(ctx, "record-iterator", args);
-		}
 		if (args.isEmpty() && cls.equals("clojure.lang.LispReader$StringReader")) {
 			return ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LISPREADER-STRING"));
 		}

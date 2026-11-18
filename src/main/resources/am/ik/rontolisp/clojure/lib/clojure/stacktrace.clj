@@ -1,67 +1,74 @@
 (ns clojure.stacktrace
-  "Printing of throwables and their causes, built into rontolisp. Written for
-  this front end from the documented behaviour of Clojure's namespace of the
-  same name."
+  "A throwable, its frames and its causes as text, built into rontolisp.
+  Written here from the documented behaviour of Clojure's namespace of the
+  same name and from the lines it prints."
   (:require [rontolisp.internal.throwable :as t]))
 
 (defn root-cause
-  "The innermost cause of the throwable tr, following its causes; tr itself
-  when it has none."
+  "The throwable at the end of tr's chain of causes: tr itself when nothing
+  caused it."
   [tr]
-  (if-let [cause (ex-cause tr)]
-    (recur cause)
-    tr))
+  (loop [at tr]
+    (let [cause (.getCause at)]
+      (if cause (recur cause) at))))
+
+(def ^:private fn-class
+  "The class name the compiler gives a named function: its namespace, a
+  dollar sign, its name, two underscores and a serial number."
+  #"([\w.-]+)\$(\w+)__\d+")
 
 (defn print-trace-element
-  "Prints the stack trace element e: a Clojure function as namespace/name, any
-  other method as class.method, then its file and line."
+  "Prints one stack frame without a line end: namespace/name for the invoke
+  of a function's class, Class.method for any other frame, then the file and
+  the line in parentheses."
   [e]
-  (let [class-name (.getClassName e)
+  (let [owner (.getClassName e)
         method (.getMethodName e)
-        fn-name (re-matches #"^([A-Za-z0-9_.-]+)\$(\w+)__\d+$" (str class-name))]
-    (if (and fn-name (= "invoke" method))
-      (print (str (nth fn-name 1) "/" (nth fn-name 2)))
-      (print (str class-name "." method)))
-    (print (str " (" (or (.getFileName e) "") ":" (.getLineNumber e) ")"))))
+        named (when (= method "invoke") (re-matches fn-class owner))]
+    (print (if named
+             (str (named 1) "/" (named 2))
+             (str owner "." method)))
+    (print (str " (" (.getFileName e) ":" (.getLineNumber e) ")"))))
 
 (defn print-throwable
-  "Prints the class and message of the throwable tr, and its ex-data on a line
-  of its own."
+  "Prints the class of tr and its message without a line end, and for an
+  ex-info its data on a second line."
   [tr]
-  (print (str (t/class-name tr) ": " (let [message (ex-message tr)] (if (nil? message) "null" message))))
-  (when-let [info (ex-data tr)]
+  (print (str (t/class-name tr) ": " (if-some [m (.getMessage tr)] m "null")))
+  (when-some [data (ex-data tr)]
     (newline)
-    (pr info)))
+    (pr data)))
 
 (defn print-stack-trace
-  "Prints the throwable tr and its stack trace, the first n frames when n is
-  given."
+  "Prints tr like print-throwable, then its frames one per line, the first
+  after at. With n, no more than n frames (but always the first)."
   ([tr] (print-stack-trace tr nil))
   ([tr n]
+   (print-throwable tr)
+   (newline)
+   (print " at ")
    (let [frames (seq (.getStackTrace tr))]
-     (print-throwable tr)
-     (newline)
-     (print " at ")
-     (if-let [frame (first frames)]
-       (print-trace-element frame)
-       (print "[empty stack trace]"))
-     (newline)
-     (doseq [frame (if (nil? n) (rest frames) (take (dec n) (rest frames)))]
-       (print "    ")
-       (print-trace-element frame)
-       (newline)))))
+     (if-not frames
+       (print "[empty stack trace]")
+       (do (print-trace-element (first frames))
+           (doseq [frame (if n (take (dec n) (rest frames)) (rest frames))]
+             (newline)
+             (print "    ")
+             (print-trace-element frame)))))
+   (newline)))
 
 (defn print-cause-trace
-  "Prints the throwable tr's stack trace and those of its causes, each cause
-  after Caused by:, the first n frames of each when n is given."
+  "Prints the stack trace of tr and then of each cause down its chain, every
+  cause introduced by Caused by:. With n, no more than n frames of each."
   ([tr] (print-cause-trace tr nil))
   ([tr n]
-   (print-stack-trace tr n)
-   (when-let [cause (ex-cause tr)]
-     (print "Caused by: ")
-     (recur cause n))))
+   (loop [at tr]
+     (print-stack-trace at n)
+     (when-some [cause (.getCause at)]
+       (print "Caused by: ")
+       (recur cause)))))
 
 (defn e
-  "Prints a short stack trace of the root cause of the last exception, *e."
+  "For the REPL: the first eight frames of what started the exception in *e."
   []
   (print-stack-trace (root-cause *e) 8))

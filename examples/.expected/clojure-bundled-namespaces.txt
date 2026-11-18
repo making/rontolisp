@@ -23,7 +23,7 @@ product 6
 cart has 3 items: :x, :y, :z
 forty-two / MMXXVI / 1,234,567 / 3.14
 == clojure.data
-({:b {:c 2}} {:b {:c 5}, :e 4} {:b {:d 3}, :a 1})
+({:b {:c 2}} {:b {:c 5}, :e 4} {:a 1, :b {:d 3}})
 == clojure.zip
 2
 [1 [2 30] [4 [5]]]

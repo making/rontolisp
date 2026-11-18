@@ -33,7 +33,7 @@ import org.jspecify.annotations.Nullable;
  * 357,787 B (generic {@code conj}, {@code apply str}, {@code throw} and the regex
  * engine), where the Common Lisp {@code rontolisp:url-decode} is a 26,940 B module.</li>
  * <li>{@code rontolisp.internal.pprint} for {@code clojure.pprint}: the pretty print's
- * token buffer and its layout, the radix spelling of a number, and the text of
+ * record of layout marks and its layout, the radix spelling of a number, and the text of
  * {@code cl-format}'s number directives and case conversion.</li>
  * <li>{@code rontolisp.internal.datafy} for {@code clojure.datafy}: the oracle's class
  * name of a value, an exception's too, which {@code class} (a kind keyword here) does not
