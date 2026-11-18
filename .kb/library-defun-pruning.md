@@ -35,6 +35,11 @@ six of them -- see `.kb/architecture.md`, "Package rules".
   (JFR: 33 of 49 samples of a 0.9 s `-o P.class` of a one-line Common Lisp program); a
   program of neither language now never reads them, and the output is byte-identical
   (`.kb/source-language.md`, "The run-time libraries' name gate").
+- **A `rontolisp:async-defun` of `java.lisp` is keyed as its `defun`s are** (2026-11-18,
+  todo k00; `definitionName`, gated on `JavaLibrary.mayDefine`): the functions a thread of
+  a Java program is suspended in on wasm. Kept as roots they named `sleep` in every Java
+  program that starts a thread, and the component refused one that never sleeps for want
+  of the `wait.lisp` binding. The async-defuns of every other library stay roots.
 - **usocket is excluded entirely**: its `with-*` built-in macros synthesize
   `usocket:socket-close` / `usocket::%usock-guard` / `%usock-resignal` calls absent from the
   pre-expansion AST.

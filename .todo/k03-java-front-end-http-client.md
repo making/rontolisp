@@ -33,7 +33,9 @@ The JDK's own API is the goal; a rontolisp API only where the JDK's cannot be ha
   `--no-wasi` needs `--host-fetch`; `--native` fetches through its runner; the component
   through `wasi:http`.
 - Blocking `send` on wasm is an `await`; check it inside a `Thread` (`.kb/java-frontend.md`,
-  "Threads") and against the k00 work on a suspended thread.
+  "Threads"). Since k00 a thread there is a body suspended and resumed ("Resumable
+  bodies"): a `send` that waits is one more suspension `JavaResumable` has to know, and
+  its future the host's, which the program's own scheduler does not settle.
 - Redirects: reuse the Clojure client's RFC 3986 resolution (written from the RFC, measured
   against a JDK); do not write a second one. `java.net.URI` may share it too.
 

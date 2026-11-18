@@ -7,12 +7,14 @@ anything.** No JDK jar, source, Javadoc text or test is copied or translated; a 
 matched by running a program under a JDK.
 
 State after j89 (2026-11-18, `.kb/java-frontend.md`, "Threads" and "java.util.concurrent"):
-a scheduled pool and a `Timer` run tasks at their times on four backends (one stack starts
-a thread for a time); a program makes its own `ThreadPoolExecutor`; read-write locks,
+a scheduled pool and a `Timer` run tasks at their times on four backends; a program makes
+its own `ThreadPoolExecutor`; read-write locks,
 barriers, exchangers, the deques, a `SynchronousQueue`, the atomic arrays, `LongAdder`,
 fork/join, `invokeAny`, a future's state and the stages of two futures are there; a
 future's dependents run in a JDK's order; a simple name no longer finds a member a class
-does not inherit. A thread suspended and resumed on wasm is `.todo/k00`.
+does not inherit. Since k00 (2026-11-18) a thread is suspended and resumed on wasm
+("Resumable bodies"), so the library has no branch for a target; what that left is
+`.todo/k07`.
 
 - **`java.util.concurrent`, not there**: `StampedLock`, `Phaser`, `PriorityBlockingQueue`
   and `DelayQueue` (no `PriorityQueue` yet: `.todo/k05`), `ConcurrentSkipListMap` / `Set`

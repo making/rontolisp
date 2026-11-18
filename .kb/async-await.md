@@ -42,7 +42,7 @@
   [error-handling.md](error-handling.md)) and `_await` records the condition under the throwable
   on the awaiting thread before rethrowing it -- that is what makes handler-case dispatch across
   the await. A plain failure records nothing, so a condition already on its way out stays its own.
-- **Preview-1 wasm-GC, a module naming `rontolisp::%future-new`** (2026-11-19, todo k00): the
+- **Preview-1 wasm-GC, a module naming `rontolisp::%future-new`** (2026-11-18, todo k00): the
   component's state machines, unchanged. A program that makes futures of its own -- the threads of
   a Java program, `java.lisp` -- has bodies that suspend whatever the host is, so
   `WasmLispCompiler` turns `asyncMode` on for it (`LispNames.FUTURE_NEW_QUALIFIED`): with no host
@@ -212,7 +212,7 @@ and the `await-answers-every-value-of-the-async-body` ci-spec case -- plus its s
 - **Trap**: an async-defun's rewritten plain defun is EXCLUDED from the fusion-inlinable set even
   when a one-form body qualifies textually (`.kb/wasm-int-fusion.md`).
 - **Trap**: an `async-lambda` binds its parameters as a `lambda` does in
-  `FreeVarAnalyzer.findFreeVars` / `findCapturedVars`. Until 2026-11-19 it was read as a call,
+  `FreeVarAnalyzer.findFreeVars` / `findCapturedVars`. Until 2026-11-18 it was read as a call,
   so an `async-lambda` with a parameter written inside another async body made that parameter a
   free variable of the body around it: `Cannot find variable for closure: E` at compile time, on
   the component too (found by the Java front end's resumable lowering, the first to nest them).

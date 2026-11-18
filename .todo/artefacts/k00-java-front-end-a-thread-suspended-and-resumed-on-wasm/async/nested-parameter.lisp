@@ -1,0 +1,6 @@
+(defun f (g) (funcall g 1))
+(rontolisp:async-defun h (x) x)
+(defvar *p* (rontolisp::%future-new))
+(rontolisp:async-defun top ()
+  (rontolisp:await (f (rontolisp:async-lambda () (let* ((w (rontolisp:await (h 1)))) (rontolisp:await (f (rontolisp:async-lambda (e) (let* ((a (+ e 1)) (b (rontolisp:await (h a)))) (+ a b))))))))))
+(print (rontolisp:await (top)))
