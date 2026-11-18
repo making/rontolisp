@@ -72,5 +72,5 @@ that runs one on four backends:
 - **A corpus line that asks an order of two threads by a short time fails under load**:
   `threads-wait-for-one-another-again-and-again` printed `closed true 1 11` once on the
   interpreter leg while another worktree ran the whole suite (a 10 ms sleep against a
-  thread's start; widened to 300 ms by k01). The other short sleeps of the thread cases
-  were not gone through.
+  thread's start; a latch orders the two tasks since `195dcb88c`). The other short
+  sleeps of the thread cases were not gone through.
