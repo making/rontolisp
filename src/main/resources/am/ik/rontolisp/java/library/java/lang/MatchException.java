@@ -8,4 +8,10 @@ public class MatchException extends RuntimeException {
     public MatchException(String message, Throwable cause) {
         super(message, cause);
     }
+
+    // What a catch makes of the one the run time raises: no cause is handed, so a
+    // program that catches it is not one whose exceptions can have a cause.
+    private MatchException(String message) {
+        super(message);
+    }
 }

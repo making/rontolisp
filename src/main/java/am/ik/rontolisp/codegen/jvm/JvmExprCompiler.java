@@ -1074,6 +1074,8 @@ final class JvmExprCompiler {
 				ctx.body.invokestatic(JvmEmitHelper.selfMethod(ctx, className,
 						JvmStringIndexRuntimeBuilder.ORDER_METHOD, JvmStringIndexRuntimeBuilder.ORDER_DESC));
 			}
+			case LispNames.STRING_CODE ->
+				JvmExprCompiler.compileExpr(LispMacroExpander.expandStringCode(cons), ctx, className);
 			case LispNames.SYMBOL_NAME -> JvmSymbolApiCompiler.compileSymbolName(cons, ctx, className);
 			case LispNames.INTERN -> JvmSymbolApiCompiler.compileIntern(cons, ctx, className);
 			case LispNames.FIND_SYMBOL -> JvmSymbolApiCompiler.compileFindSymbol(cons, ctx, className);

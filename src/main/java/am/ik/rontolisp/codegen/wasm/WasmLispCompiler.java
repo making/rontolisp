@@ -2392,6 +2392,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	// shaken from a program that never orders two strings.
 	static final int FUNC_STR_ORDER = FUNC_STR_SEARCH + 1;
 
+	// _str_code (string, index) -> (ref null eq): the %string-code primitive, the code
+	// of an immutable string's character or -1 outside it, in one call
+	// (WasmStringRuntimeBuilder.buildStrCodeBody). Reuses the two-argument callable
+	// signature; appended after the last fixed helper so no index above shifts, and
+	// shaken from a program with no site of it.
+	static final int FUNC_STR_CODE = FUNC_STR_ORDER + 1;
+
 	// The hash-table runtime (WasmHashTableRuntimeBuilder): gethash, puthash, remhash
 	// and the structure-sharing copy over a chained table that becomes a trie of hash
 	// chains once copied, each keeping the insertion order --
@@ -2399,7 +2406,7 @@ public final class WasmLispCompiler implements LispCompiler {
 	// offsets. Each reuses a TYPE_CALLABLE_BASE signature, so no type is added; appended
 	// after the last fixed helper so no index above shifts, and shaken from a module
 	// that makes no table.
-	static final int FUNC_HT_BASE = FUNC_STR_ORDER + 1;
+	static final int FUNC_HT_BASE = FUNC_STR_CODE + 1;
 
 	// _host_getcwd () -> (ref null eq): the working directory, fd 3's preopen name when
 	// the host spells it absolute, else nil (WasmIoRuntimeBuilder.buildHostGetcwdBody,
@@ -8606,6 +8613,8 @@ public final class WasmLispCompiler implements LispCompiler {
 															// value (FUNC_STR_SEARCH)
 				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _str_order (a, b) -> value
 															// (FUNC_STR_ORDER)
+				fnDef.addFunction(TYPE_CALLABLE_BASE + 1); // _str_code (string, index) ->
+															// code (FUNC_STR_CODE)
 				// the hash-table runtime block (FUNC_HT_BASE ..)
 				for (int i = 0; i < WasmHashTableRuntimeBuilder.FUNC_COUNT; i++) {
 					fnDef.addFunction(WasmHashTableRuntimeBuilder.typeIndexOf(i));
@@ -9759,6 +9768,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				code.addFunction(WasmStringRuntimeBuilder.buildStrSearchBody());
 				// the string order (FUNC_STR_ORDER): shaken when nothing orders.
 				code.addFunction(WasmStringRuntimeBuilder.buildStrOrderBody());
+				// a character's code (FUNC_STR_CODE): shaken when nothing asks.
+				code.addFunction(WasmStringRuntimeBuilder.buildStrCodeBody(this.charvecPossible));
 				// the hash-table runtime block (FUNC_HT_BASE ..): shaken from a module
 				// that makes no table.
 				WasmHashTableRuntimeBuilder.Flags tableFlags = new WasmHashTableRuntimeBuilder.Flags(

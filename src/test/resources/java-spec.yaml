@@ -1381,6 +1381,26 @@ cases:
               } catch (RuntimeException e) {
                   System.out.println("no number");
               }
+              // the object a clause made of an error is the one thrown again and the
+              // cause of another
+              int[] two = new int[2];
+              RuntimeException kept = null;
+              try {
+                  two[args.length + 5] = 1;
+              } catch (RuntimeException e) {
+                  kept = e;
+                  e.addSuppressed(new IllegalStateException("aside"));
+              }
+              try {
+                  throw kept;
+              } catch (ArrayIndexOutOfBoundsException e) {
+                  System.out.println((e == kept) + " " + e.getSuppressed().length + " " + e.getMessage());
+              }
+              try {
+                  throw new IllegalStateException("wrapped", kept);
+              } catch (Throwable e) {
+                  System.out.println(e + " <- " + e.getCause() + " " + (e instanceof Exception) + " " + (e instanceof Error));
+              }
           }
       }
     expected: |
@@ -1391,6 +1411,8 @@ cases:
       read 5 out of bounds out of bounds
       / by zero true java.lang.ArithmeticException: / by zero
       no number
+      true 1 Index 5 out of bounds for length 2
+      java.lang.IllegalStateException: wrapped <- java.lang.ArrayIndexOutOfBoundsException: Index 5 out of bounds for length 2 true false
   # The run time raises the language's exceptions with a JDK's messages; a
   # NullPointerException it raises has none (a JDK's describes the expression).
   - name: the-run-time-raises-the-language-s-exceptions
@@ -1451,6 +1473,10 @@ cases:
               attempt("negative rows", () -> System.out.println(new int[2][args.length - 3].length));
               attempt("index", () -> (new int[2][2])[args.length][args.length + 2] = 1);
               attempt("charAt", () -> System.out.println("abc".charAt(args.length + 5)));
+              attempt("charAt below", () -> System.out.println("abc".charAt(args.length - 1)));
+              attempt("charAt far", () -> System.out.println("abc".charAt(Integer.MAX_VALUE - args.length)));
+              attempt("charAt wide", () -> System.out.println((int) "aé日z".charAt(args.length + 2) + " " + "aé日z".charAt(3) + " " + "aé日z".substring(1).charAt(0) + " " + new StringBuilder("xy").toString().charAt(1)));
+              attempt("charAt past wide", () -> System.out.println("aé日z".charAt(args.length + 4)));
               attempt("substring", () -> System.out.println("abc".substring(2, args.length + 7)));
               attempt("builder", () -> System.out.println(b.charAt(args.length - 1)));
               attempt("builder range", () -> b.delete(3, 4));
@@ -1487,6 +1513,11 @@ cases:
       negative rows: java.lang.NegativeArraySizeException: -3
       index: java.lang.ArrayIndexOutOfBoundsException: Index 2 out of bounds for length 2
       charAt: java.lang.StringIndexOutOfBoundsException: Index 5 out of bounds for length 3
+      charAt below: java.lang.StringIndexOutOfBoundsException: Index -1 out of bounds for length 3
+      charAt far: java.lang.StringIndexOutOfBoundsException: Index 2147483647 out of bounds for length 3
+      26085 z é y
+      charAt wide: ran
+      charAt past wide: java.lang.StringIndexOutOfBoundsException: Index 4 out of bounds for length 4
       substring: java.lang.StringIndexOutOfBoundsException: Range [2, 7) out of bounds for length 3
       builder: java.lang.StringIndexOutOfBoundsException: Index -1 out of bounds for length 2
       builder range: java.lang.StringIndexOutOfBoundsException: Range [3, 2) out of bounds for length 2
@@ -2646,6 +2677,107 @@ cases:
       2 first 9 3 3 6X
       ahead of its initializer: 0 null
       1 5x517
+  # A static initialization that throws ends as the language ends it: an exception that
+  # is no Error is the cause of an ExceptionInInitializerError, an Error passes as it
+  # is, and every later use of the class -- and of a class whose own initialization
+  # needed it -- throws NoClassDefFoundError, whose cause says what was thrown and in
+  # which thread. A class whose initialization can throw and does not is initialized.
+  - name: a-static-initialization-that-throws-leaves-its-class-unusable
+    main: FailingInit
+    source: |
+      class FailConfig {
+          static int n = load();
+
+          static int load() {
+              System.out.println("loading");
+              if (n == 0) throw new IllegalStateException("no config");
+              return 1;
+          }
+
+          static int get() { return n; }
+      }
+
+      class FailBroken {
+          static int n;
+          static { System.out.println("broken"); if (n == 0) throw new Error("an error"); }
+      }
+
+      class FailBase {
+          static int b;
+          static { System.out.println("base"); if (b == 0) throw new UnsupportedOperationException(); }
+      }
+
+      class FailDerived extends FailBase {
+          static int d = 5;
+          static { System.out.println("derived"); }
+      }
+
+      class FailUser { static int u = FailConfig.get() + 1; }
+
+      class FailParsed {
+          static int f = Integer.parseInt("12");
+          static { System.out.println("parsed"); }
+      }
+
+      class FailingInit {
+          static void show(String what, Throwable t) {
+              System.out.println(what + ": " + t + " | cause " + t.getCause() + (t.getCause() != null ? " | " + t.getCause().getCause() : ""));
+              if (t instanceof ExceptionInInitializerError e) System.out.println("  getException " + e.getException() + " " + e.getMessage());
+          }
+
+          static String refused(Throwable t) {
+              try {
+                  t.initCause(new RuntimeException("c"));
+                  return "set";
+              } catch (IllegalStateException e) {
+                  return "refused";
+              }
+          }
+
+          public static void main(String[] args) {
+              for (int i = 0; i < 2; i++) {
+                  try { System.out.println(FailConfig.get()); } catch (Throwable t) { show("config " + i, t); }
+              }
+              try { System.out.println(FailConfig.n); } catch (LinkageError t) { show("field", t); }
+              try { FailConfig.n = 3; } catch (NoClassDefFoundError t) { show("store", t); }
+              try { System.out.println(new FailConfig()); } catch (Error t) { show("new", t); }
+              for (int i = 0; i < 2; i++) {
+                  try { System.out.println(FailBroken.n); } catch (Throwable t) { show("broken " + i, t); }
+              }
+              for (int i = 0; i < 2; i++) {
+                  try { System.out.println(FailDerived.d); } catch (Throwable t) { show("derived " + i, t); }
+              }
+              try { System.out.println(FailBase.b); } catch (Throwable t) { show("base", t); }
+              for (int i = 0; i < 2; i++) {
+                  try { System.out.println(FailUser.u); } catch (Throwable t) { show("user " + i, t); }
+              }
+              System.out.println(FailParsed.f + FailParsed.f);
+              ExceptionInInitializerError none = new ExceptionInInitializerError(), text = new ExceptionInInitializerError("text");
+              System.out.println(none + " " + none.getException() + " " + refused(none) + " | " + text + " " + refused(text) + " | " + refused(new ExceptionInInitializerError(new Error("e")))
+                      + " | " + new NoClassDefFoundError() + " " + refused(new NoClassDefFoundError("n")) + " | " + new LinkageError() + " " + new LinkageError("l", new Error("e")).getCause() + " " + ((Object) text instanceof Exception));
+          }
+      }
+    expected: |
+      loading
+      config 0: java.lang.ExceptionInInitializerError | cause java.lang.IllegalStateException: no config | null
+        getException java.lang.IllegalStateException: no config null
+      config 1: java.lang.NoClassDefFoundError: Could not initialize class FailConfig | cause java.lang.ExceptionInInitializerError: Exception java.lang.IllegalStateException: no config [in thread "main"] | null
+      field: java.lang.NoClassDefFoundError: Could not initialize class FailConfig | cause java.lang.ExceptionInInitializerError: Exception java.lang.IllegalStateException: no config [in thread "main"] | null
+      store: java.lang.NoClassDefFoundError: Could not initialize class FailConfig | cause java.lang.ExceptionInInitializerError: Exception java.lang.IllegalStateException: no config [in thread "main"] | null
+      new: java.lang.NoClassDefFoundError: Could not initialize class FailConfig | cause java.lang.ExceptionInInitializerError: Exception java.lang.IllegalStateException: no config [in thread "main"] | null
+      broken
+      broken 0: java.lang.Error: an error | cause null
+      broken 1: java.lang.NoClassDefFoundError: Could not initialize class FailBroken | cause java.lang.ExceptionInInitializerError: Exception java.lang.Error: an error [in thread "main"] | null
+      base
+      derived 0: java.lang.ExceptionInInitializerError | cause java.lang.UnsupportedOperationException | null
+        getException java.lang.UnsupportedOperationException null
+      derived 1: java.lang.NoClassDefFoundError: Could not initialize class FailDerived | cause java.lang.ExceptionInInitializerError: Exception java.lang.ExceptionInInitializerError [in thread "main"] | null
+      base: java.lang.NoClassDefFoundError: Could not initialize class FailBase | cause java.lang.ExceptionInInitializerError: Exception java.lang.UnsupportedOperationException [in thread "main"] | null
+      user 0: java.lang.NoClassDefFoundError: Could not initialize class FailConfig | cause java.lang.ExceptionInInitializerError: Exception java.lang.IllegalStateException: no config [in thread "main"] | null
+      user 1: java.lang.NoClassDefFoundError: Could not initialize class FailUser | cause java.lang.ExceptionInInitializerError: Exception java.lang.NoClassDefFoundError: Could not initialize class FailConfig [in thread "main"] | null
+      parsed
+      24
+      java.lang.ExceptionInInitializerError null refused | java.lang.ExceptionInInitializerError: text refused | refused | java.lang.NoClassDefFoundError set | java.lang.LinkageError java.lang.Error: e false
   # The instance initializers and the initializer blocks run in the order written, after
   # the superclass's constructor; statements may stand ahead of this(..) and super(..),
   # where a field may be given its value.
@@ -5551,7 +5683,8 @@ standalone:
       finally
     error: "java.lang.IllegalStateException: insufficient funds: 30"
     at: "Uncaught.java:4 in Uncaught.check(int,int)"
-  # The report asks the thrown object's own toString().
+  # The report asks the thrown object's own toString(), then writes the exceptions it
+  # suppressed and its causes as printStackTrace does; the location line follows them.
   - name: an-uncaught-exception-of-the-program-s-own-class
     file: Own.java
     source: |
@@ -5570,12 +5703,45 @@ standalone:
       public class Own {
           public static void main(String[] args) throws Rejected {
               System.out.println("before");
-              throw new Rejected(7);
+              Rejected rejected = new Rejected(7);
+              rejected.initCause(new IllegalArgumentException("middle", new Error("root")));
+              rejected.addSuppressed(new IllegalStateException("aside"));
+              throw rejected;
           }
       }
     stdout: |
       before
+    stderr: |
+      Exception in thread "main" Rejected with code 7
+      	Suppressed: java.lang.IllegalStateException: aside
+      Caused by: java.lang.IllegalArgumentException: middle
+      Caused by: java.lang.Error: root
     error: "Rejected with code 7"
+    at: "Own.java:19 in Own.main(String[])"
+  # The class the program starts at is initialized as any class is: what its
+  # initialization throws is the cause of the error reported.
+  - name: the-class-the-program-starts-at-fails-its-initialization
+    file: Unstarted.java
+    source: |
+      public class Unstarted {
+          static int n = start();
+
+          static int start() {
+              System.out.println("starting");
+              if (n == 0) throw new IllegalStateException("never starts");
+              return 1;
+          }
+
+          public static void main(String[] args) {
+              System.out.println("main " + n);
+          }
+      }
+    stdout: |
+      starting
+    stderr: |
+      Exception in thread "main" java.lang.ExceptionInInitializerError
+      Caused by: java.lang.IllegalStateException: never starts
+    error: "java.lang.ExceptionInInitializerError"
   # An error of the run time nothing catches is the exception it is.
   - name: an-uncaught-error-of-the-run-time-is-the-language-s-exception
     file: OutOfBounds.java
@@ -6446,9 +6612,10 @@ standalone:
       java.lang.IllegalArgumentException: timeout value is negative
       java.lang.IllegalArgumentException: timeout value is negative
       done
-  # What a thread leaves uncaught ends that thread alone: the line a JDK writes, with
-  # the thread's name, and the program goes on to the status 0. A handler set for the
-  # thread, or for every thread, is asked instead, and what it throws ends there.
+  # What a thread leaves uncaught ends that thread alone: what a JDK writes of it but
+  # the frames, with the thread's name and the exception's causes, and the program goes
+  # on to the status 0. A handler set for the thread, or for every thread, is asked
+  # instead, and what it throws ends there.
   - name: an-uncaught-exception-ends-its-thread-alone
     file: Dies.java
     source: |
@@ -6496,10 +6663,29 @@ standalone:
                       + (handled.getUncaughtExceptionHandler() == null) + " " + own.isAlive());
               Thread.setDefaultUncaughtExceptionHandler(null);
               Thread again = new Thread(() -> {
-                  throw new IllegalStateException("no handler again");
+                  throw new IllegalStateException("no handler again", new Error("its cause"));
               }, "again");
               again.start();
               again.join();
+              // a class whose initialization throws in a thread says so in every other
+              Thread first = new Thread(() -> System.out.println(Unusable.n), "first");
+              first.start();
+              first.join();
+              try {
+                  System.out.println(Unusable.n);
+              } catch (NoClassDefFoundError e) {
+                  System.out.println(e.getMessage() + " <- " + e.getCause());
+              }
+          }
+
+          static class Unusable {
+              static int n;
+
+              static {
+                  if (n == 0) {
+                      throw new IllegalArgumentException("unusable");
+                  }
+              }
           }
       }
     stdout: |
@@ -6510,12 +6696,16 @@ standalone:
       default: failing java.lang.ArrayIndexOutOfBoundsException: Index 1 out of bounds for length 0
       own: own boom true
       true true false
+      Could not initialize class Dies$Unusable <- java.lang.ExceptionInInitializerError: Exception java.lang.IllegalArgumentException: unusable [in thread "first"]
     stderr: |
       Exception in thread "thrower" java.lang.IllegalStateException: boom
       Exception in thread "failing" java.lang.ArrayIndexOutOfBoundsException: Index 1 out of bounds for length 0
 
       Exception: java.lang.IllegalArgumentException thrown from the UncaughtExceptionHandler in thread "own"
       Exception in thread "again" java.lang.IllegalStateException: no handler again
+      Caused by: java.lang.Error: its cause
+      Exception in thread "first" java.lang.ExceptionInInitializerError
+      Caused by: java.lang.IllegalArgumentException: unusable
   # java.util.concurrent over monitors: a unit of time; a lock taken again by its
   # holder, with conditions; a latch and a semaphore; the blocking queues; a pool whose
   # threads run the tasks handed to it, a future waiting for one, a thread a task. On

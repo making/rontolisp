@@ -167,6 +167,11 @@ public class Thread implements Runnable {
         return current != null ? current : new Thread(null, null, false, true);
     }
 
+    /** The name of the thread running: what a static initialization that threw keeps. */
+    private static String currentName() {
+        return currentThread().getName();
+    }
+
     public static Thread startVirtualThread(Runnable task) {
         return ofVirtual().start(task);
     }

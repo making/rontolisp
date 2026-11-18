@@ -9046,6 +9046,36 @@ cases:
   # untouched on all four backends (.kb/string-write-runtime.md). The make-string buffer
   # at the end is the guard that the rule is keyed on the SOURCE MARK, not on
   # immutability: an allocated character vector is still filled in place.
+  # (%string-code string index), what library code whose strings nothing writes reads a
+  # character's code with: the code, and -1 for an index that is none of the string --
+  # below it, past it, wider than a fixnum. A single-byte string, a multi-byte one, a
+  # mutable character vector and a slice answer alike; each operand is evaluated once,
+  # the string first (.kb/string-index-cost.md).
+  - name: string-code-reads-a-character-s-code-or-minus-one
+    source: |
+      (defun ci-string-codes (s)
+        (let ((out nil))
+          (dolist (i (list -1 0 1 2 3 4 5 1073741824 -1073741825 (expt 2 70)))
+            (push (%string-code s i) out))
+          (nreverse out)))
+      (print (ci-string-codes "abc"))
+      (print (ci-string-codes "aé日😀z"))
+      (print (ci-string-codes (make-string 3 :initial-element #\x)))
+      (let ((b (make-string 2 :initial-element #\y)))
+        (setf (char b 1) #\é)
+        (print (ci-string-codes b))
+        (print (%string-code (subseq "hello" 1 3) (length b))))
+      (print (%string-code (concatenate 'string "ab" "cd") (+ 1 2)))
+      (let ((s "xyz") (i 0))
+        (print (list (%string-code s (progn (setq s "abc") i)) (%string-code s (incf i)))))
+    expected: |
+      (-1 97 98 99 -1 -1 -1 -1 -1 -1)
+      (-1 97 233 26085 128512 122 -1 -1 -1 -1)
+      (-1 120 120 120 -1 -1 -1 -1 -1 -1)
+      (-1 121 233 -1 -1 -1 -1 -1 -1 -1)
+      -1
+      100
+      (120 98)
   - name: string-literal-bulk-write-cross-backend
     source: |
       (defun ci-sbulk () "abc")

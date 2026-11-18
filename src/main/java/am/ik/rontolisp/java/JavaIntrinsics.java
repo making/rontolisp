@@ -58,6 +58,8 @@ final class JavaIntrinsics {
 	 */
 	private static final String THREAD = "java.lang.Thread";
 
+	private static final String THROWABLE = "java.lang.Throwable";
+
 	/** The source class holding the members of these classes that are written in Java. */
 	private static final String SUPPORT = "rontolisp.internal.Support";
 
@@ -747,20 +749,19 @@ final class JavaIntrinsics {
 	}
 
 	/**
-	 * {@code String.charAt}: the index tested against the string's length where it is
-	 * read -- the host's {@code char} checks nothing on the compiled backends -- and the
-	 * language's exception outside it, then the host's character. A call of a function of
-	 * the run time doing both cost a loop over a string twice the time on wasm
+	 * {@code String.charAt}: the character's code where the index is one of the string,
+	 * the language's exception where it is not -- one read that tests the index, the
+	 * host's {@code char} checking nothing on the compiled backends
 	 * (.kb/java-frontend.md, "Exceptions").
 	 */
 	private static LispVal charAt(Context lowering, Invocation call) {
 		List<LispVal> bindings = new ArrayList<>();
 		LispVal text = held(lowering, call.self(), bindings);
 		LispVal index = held(lowering, call.argument(0), bindings);
-		LispVal test = call("if", call("or", call("<", index, integer(0)), call(">=", index, call("length", text))),
-				runtimeCall("string-index", index, text));
-		LispVal read = call("char-code", call("char", text, index));
-		return bindings.isEmpty() ? call("progn", test, read) : list(cl("let*"), list(bindings), test, read);
+		LispSymbol code = lowering.temporary();
+		bindings.add(list(code, call("%string-code", text, index)));
+		return list(cl("let*"), list(bindings),
+				call("if", call("<", code, integer(0)), runtimeCall("string-index", index, text), code));
 	}
 
 	/** A form read twice: itself when it is simple, else a variable bound to it. */
@@ -1233,8 +1234,10 @@ final class JavaIntrinsics {
 		natives.put(thread + "start0(Thread,Object,boolean)", (lowering, call) -> {
 			LispSymbol started = lowering.temporary();
 			LispSymbol condition = lowering.temporary();
+			LispSymbol thrown = lowering.temporary();
+			LispVal trace = list(cl("lambda"), list(thrown), lowering.library(THROWABLE, "trace", List.of(thrown)));
 			LispVal uncaught = list(cl("error"), list(condition),
-					lowering.library(THREAD, "report", List.of(started, runtimeCall("thrown-text", condition))));
+					lowering.library(THREAD, "report", List.of(started, runtimeCall("traced-text", condition, trace))));
 			LispVal body = list(cl("lambda"), JavaForms.NIL,
 					list(cl("unwind-protect"),
 							list(cl("handler-case"), lowering.library(THREAD, "body", List.of(started)), uncaught),

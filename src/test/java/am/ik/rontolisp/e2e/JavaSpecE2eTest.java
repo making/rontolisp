@@ -409,8 +409,10 @@ class JavaSpecE2eTest {
 		assertThat(splitLines(stderr)).as("%s", where).first().isEqualTo(UNCAUGHT + s.error());
 		assertThat(ended.exit()).as("%s: expected the status 1", where).isEqualTo(1);
 		if (s.at() != null && (leg.equals("INTERPRETER") || leg.equals("JVM"))) {
-			// where it was raised, under the report: the pipeline's own location line
-			assertThat(splitLines(stderr).get(1)).as("%s", where).startsWith("  at ").endsWith(s.at());
+			// where it was raised, under the report and what the exception encloses:
+			// the pipeline's own location line
+			assertThat(splitLines(stderr).stream().filter(line -> line.startsWith("  at ")).findFirst()).as("%s", where)
+				.hasValueSatisfying(line -> assertThat(line).endsWith(s.at()));
 		}
 	}
 

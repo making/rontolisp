@@ -2368,6 +2368,85 @@ final class WasmStringRuntimeBuilder {
 	}
 
 	/**
+	 * Builds {@code _str_code} (FUNC_STR_CODE), the {@code %string-code} primitive: the
+	 * code of character {@code index} of a {@code TYPE_STRING}, -1 when the index is
+	 * outside it. An index below the string's cursor in a single-byte prefix
+	 * ({@link #buildStrCharByteOffsetBody}: always, in a single-byte string whose
+	 * characters were counted) is the byte at {@code 1 + index}, read here; any other
+	 * asks {@code _str_char_count} and {@code _str_char_at}. A mutable character vector
+	 * is rendered first, where the module can hold one: the primitive is for strings
+	 * nothing writes, and this keeps one that reached it right. No operand type is
+	 * checked: an index that is no fixnum is outside every string, a string that is no
+	 * string fails its cast.
+	 * @param charvecPossible whether a character vector can reach it
+	 * @return the function body (signature {@code TYPE_CALLABLE_BASE + 1})
+	 */
+	static byte[] buildStrCodeBody(boolean charvecPossible) {
+		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
+		WasmWriter w = new WasmWriter(body);
+		// params: string = 0, index = 1. locals: s = 2 (TYPE_STRING); i = 3, ci = 4
+		// (i32).
+		int string = 0, index = 1, s = 2, i = 3, ci = 4;
+		w.write(2);
+		w.write(1);
+		w.writeRefType(true, WasmLispCompiler.TYPE_STRING);
+		w.write(2);
+		w.write(Type.I32);
+		w.write(Instruction.BLOCK, 0x40);
+		get(w, index);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.BR_IF, 0);
+		get(w, index);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(Type.I31.code());
+		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		set(w, i);
+		WasmEmitHelper.emitCharvecToStrLocal(w, string, charvecPossible);
+		castStringLocal(w, string, s);
+		// index <u ci and cb == ci + 1: a character of the single-byte prefix
+		get(w, i);
+		getCursor(w, s, CURSOR_CHAR);
+		w.write(Instruction.TEE_LOCAL);
+		w.writeUnsignedLeb128(ci);
+		w.write(Instruction.I32_LT_U);
+		getCursor(w, s, CURSOR_BYTE);
+		get(w, ci);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.I32_EQ);
+		w.write(Instruction.I32_AND);
+		w.write(Instruction.IF, 0x40);
+		getCursor(w, s, 2);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_STR_BYTES);
+		get(w, i);
+		i32(w, 1);
+		w.write(Instruction.I32_ADD);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET_U);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_STR_BYTES);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END);
+		get(w, i);
+		get(w, s);
+		WasmEmitHelper.emitStrCharCountCall(w);
+		w.write(Instruction.I32_GE_U);
+		w.write(Instruction.BR_IF, 0);
+		get(w, s);
+		get(w, i);
+		WasmEmitHelper.emitStrCharAtCall(w);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.RETURN);
+		w.write(Instruction.END); // block
+		i32(w, -1);
+		w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+		w.write(Instruction.END); // function
+		return body.toByteArray();
+	}
+
+	/**
 	 * Builds {@code _str_order} (FUNC_STR_ORDER), the {@code %string-order} primitive:
 	 * two quote-framed {@code TYPE_STRING}s ordered by code point -- 0 when equal,
 	 * {@code -(k + 1)} when the first comes first, {@code k + 1} when the second does,

@@ -4,8 +4,8 @@
 package java.lang;
 
 // The cause is unset until a constructor or initCause sets it, and then fixed; a trace
-// is what printStackTrace prints of the causes and the suppressed exceptions, with no
-// frame.
+// is the exception with its causes and the exceptions it suppressed, with no frame:
+// what printStackTrace prints, and what is reported of an exception nothing caught.
 public class Throwable {
 
     private String message;
@@ -17,6 +17,10 @@ public class Throwable {
     private Throwable[] suppressed;
 
     private int suppressedCount;
+
+    private static int traces;
+
+    private int traced;
 
     public Throwable() {
     }
@@ -94,40 +98,36 @@ public class Throwable {
     }
 
     public void printStackTrace() {
-        System.err.println(this);
-        Throwable[] seen = new Throwable[] {this};
-        seen = enclosed(seen);
+        System.err.println(trace(this));
     }
 
-    // The suppressed exceptions and the cause under this one: each once, the second
-    // time a circular reference.
-    private Throwable[] enclosed(Throwable[] seen) {
-        for (int i = 0; i < suppressedCount; i++) {
-            seen = suppressed[i].print("Suppressed: ", "\t", seen);
-        }
-        if (cause != null) {
-            seen = cause.print("Caused by: ", "", seen);
-        }
-        return seen;
+    // What printStackTrace writes of an exception, and what is reported of one nothing
+    // caught: the exception, then the suppressed exceptions and the cause under it,
+    // each once, the second time a circular reference. An exception written keeps the
+    // number of the trace that wrote it, and the lines are one text built by
+    // concatenation: an array of the exceptions seen and a StringBuilder cost each
+    // program that reports an exception more than the trace itself
+    // (.kb/java-frontend.md, "Exceptions"). Two threads tracing at once read each
+    // other's numbers.
+    private static String trace(Throwable thrown) {
+        traces++;
+        thrown.traced = traces;
+        return thrown.enclosed("", thrown.toString());
     }
 
-    private Throwable[] print(String caption, String prefix, Throwable[] seen) {
-        for (Throwable printed : seen) {
-            if (printed == this) {
-                System.err.println(prefix + caption + "[CIRCULAR REFERENCE: " + this + "]");
-                return seen;
-            }
-        }
-        Throwable[] more = new Throwable[seen.length + 1];
-        System.arraycopy(seen, 0, more, 0, seen.length);
-        more[seen.length] = this;
-        System.err.println(prefix + caption + this);
+    private String enclosed(String prefix, String lines) {
         for (int i = 0; i < suppressedCount; i++) {
-            more = suppressed[i].print("Suppressed: ", prefix + "\t", more);
+            lines = suppressed[i].under("Suppressed: ", prefix + "\t", lines);
         }
-        if (cause != null) {
-            more = cause.print("Caused by: ", prefix, more);
+        return cause == null ? lines : cause.under("Caused by: ", prefix, lines);
+    }
+
+    private String under(String caption, String prefix, String lines) {
+        String line = lines + "\n" + prefix + caption;
+        if (traced == traces) {
+            return line + "[CIRCULAR REFERENCE: " + toString() + "]";
         }
-        return more;
+        traced = traces;
+        return enclosed(prefix, line + toString());
     }
 }

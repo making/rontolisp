@@ -30,11 +30,14 @@
 
 ;; --- exceptions -----------------------------------------------------------------
 
-;; One condition type holds every thrown object. DESCRIBE is the program's function
-;; answering the object's toString(), which the report of an uncaught one asks.
+;; One condition type holds every thrown object. TO-STRING is the program's function
+;; answering the object's toString(), which the report of an uncaught one asks. No
+;; variable or slot here is named as a function of the prelude is: the name alone
+;; keeps that function in the program (`describe` kept 10 KB of wasm in every
+;; program that throws, .kb/java-frontend.md, "Exceptions").
 (define-condition rontolisp::%java-throwable (error)
   ((object :initarg :object :reader rontolisp::%java-throwable-object)
-   (describe :initarg :describe :reader rontolisp::%java-throwable-describe))
+   (to-string :initarg :to-string :reader rontolisp::%java-throwable-describe))
   (:report
    (lambda (condition stream)
      (write-string (funcall (rontolisp::%java-throwable-describe condition)
@@ -51,10 +54,10 @@
 (defun rontolisp::%java-npe ()
   (rontolisp::%java-raise "java.lang.NullPointerException" nil))
 
-(defun rontolisp::%java-throw (object describe)
+(defun rontolisp::%java-throw (object to-string)
   (if (null object)
       (rontolisp::%java-npe)
-      (error 'rontolisp::%java-throwable :object object :describe describe)))
+      (error 'rontolisp::%java-throwable :object object :to-string to-string)))
 
 ;; The object a condition holds, nil for a condition that is no thrown object.
 (defun rontolisp::%java-thrown (condition)
@@ -2072,8 +2075,9 @@
 
 ;; The static initialization of a class in a program that starts threads: one thread
 ;; initializes a class, and any other asking for THAT class waits until it has. A
-;; class's state -- nil, the carrier of the thread initializing it, :ended -- is read
-;; and written under this lock, which no initializer runs under.
+;; class's state -- nil, the carrier of the thread initializing it, :ended or, once its
+;; initialization threw, the text every later use says of it -- is read and written
+;; under this lock, which no initializer runs under.
 (defvar rontolisp::%java-initializing-lock (rontolisp:make-mutex))
 
 #-rontolisp-wasm
@@ -2088,7 +2092,7 @@
 ;; initialized.
 #-rontolisp-wasm
 (defun rontolisp::%java-init-busy (state)
-  (if (or (null state) (eq state :ended))
+  (if (or (null state) (eq state :ended) (stringp state))
       nil
       (progn
         (rontolisp::%condition-wait rontolisp::%java-initialized
@@ -2345,18 +2349,27 @@
         (setq rontolisp::%java-started (reverse kept))
         (if found (rontolisp::%java-thread-run found) (setq waiting nil))))))
 
-;; The entry of a program that starts threads: what MAIN leaves uncaught is the line a
-;; JDK writes, the thread the program started on ends (FINISH, on its Thread object when
-;; the program asked for one), the threads that are no daemons end, and the status is 1
-;; when MAIN left something uncaught.
-(defun rontolisp::%java-thread-main (main finish)
+;; What a thread writes of a condition it left uncaught, after its name: a thrown
+;; object as TRACE answers it -- with its causes and what it suppressed -- any other
+;; condition as the exception it is.
+(defun rontolisp::%java-traced-text (condition trace)
+  (let ((thrown (rontolisp::%java-thrown condition)))
+    (if thrown
+        (funcall trace thrown)
+        (rontolisp::%java-thrown-text condition))))
+
+;; The entry of a program that starts threads: what MAIN leaves uncaught is what a JDK
+;; writes of it but the frames (TRACE), the thread the program started on ends (FINISH,
+;; on its Thread object when the program asked for one), the threads that are no
+;; daemons end, and the status is 1 when MAIN left something uncaught.
+(defun rontolisp::%java-thread-main (main finish trace)
   (let ((failed nil))
     (handler-case (funcall main)
       (error (condition)
         (finish-output)
         (%warn
          (%string-concat "Exception in thread \"main\" "
-                         (rontolisp::%java-thrown-text condition)))
+                         (rontolisp::%java-traced-text condition trace)))
         (setq failed t)))
     (let ((thread (rontolisp::%java-thread-current)))
       (if thread (funcall finish thread)))

@@ -1322,6 +1322,15 @@ final class WasmExprCompiler {
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_ORDER);
 			}
+			// (%string-code string index): the character's code, -1 outside the string
+			// (WasmStringRuntimeBuilder.buildStrCodeBody).
+			case LispNames.STRING_CODE -> {
+				java.util.List<LispVal> operands = cons.toList();
+				WasmExprCompiler.compileExpr(operands.get(1), ctx);
+				WasmExprCompiler.compileExpr(operands.get(2), ctx);
+				ctx.writer.write(Instruction.CALL);
+				ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_STR_CODE);
+			}
 			case LispNames.SYMBOL_NAME -> WasmSymbolApiCompiler.compileSymbolName(cons, ctx);
 			case LispNames.INTERN -> WasmSymbolApiCompiler.compileIntern(cons, ctx);
 			case LispNames.FIND_SYMBOL -> WasmSymbolApiCompiler.compileFindSymbol(cons, ctx);

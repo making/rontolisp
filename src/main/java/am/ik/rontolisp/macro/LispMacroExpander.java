@@ -50129,6 +50129,49 @@ public final class LispMacroExpander {
 	}
 
 	/**
+	 * Expands {@code (%string-code string index)} ({@link LispNames#STRING_CODE}) over
+	 * the public reads, each operand evaluated once:
+	 *
+	 * <pre>
+	 * (%string-code s i) ->
+	 *   (let ((__sc_s s))
+	 *     (let ((__sc_i i))
+	 *       (if (if (&lt; __sc_i 0) nil (&lt; __sc_i (length __sc_s)))
+	 *           (char-code (char __sc_s __sc_i))
+	 *           -1)))
+	 * </pre>
+	 *
+	 * An operand that is a variable or a constant is read where it stands when no operand
+	 * after it could assign it, so a variable the backend keeps unboxed stays so. The
+	 * temporaries need no fresh names: the operands are evaluated outside their scope.
+	 * @param cons the {@code %string-code} expression
+	 * @return the expanded expression
+	 */
+	public static LispVal expandStringCode(LispCons cons) {
+		List<LispVal> parts = cons.toList();
+		if (parts.size() != 3) {
+			throw new IllegalArgumentException("%string-code expects a string and an index: " + cons.print());
+		}
+		List<MvBinding> bindings = new java.util.ArrayList<>();
+		LispVal s = parts.get(1);
+		LispVal i = parts.get(2);
+		// a variable is held too where the index is a form, which could assign it
+		if (s instanceof LispCons || (s instanceof LispSymbol && i instanceof LispCons)) {
+			bindings.add(new MvBinding(new LispSymbol("__sc_s"), s));
+			s = bindings.getLast().var();
+		}
+		if (i instanceof LispCons) {
+			bindings.add(new MvBinding(new LispSymbol("__sc_i"), i));
+			i = bindings.getLast().var();
+		}
+		LispVal inside = mvCall(LispNames.IF, mvCall(LispNames.LT, i, new LispInteger(0)), LispNil.INSTANCE,
+				mvCall(LispNames.LT, i, mvCall(LispNames.LENGTH, s)));
+		LispVal body = mvCall(LispNames.IF, inside, mvCall(LispNames.CHAR_CODE, mvCall(LispNames.CHAR, s, i)),
+				new LispInteger(-1));
+		return nestMvBindings(bindings, body);
+	}
+
+	/**
 	 * The literal size of a well-formed {@code (%mask-signed-field size n)}, or -1 when
 	 * the size is not a literal from 0 to {@link #LITERAL_BYTESPEC_LIMIT} or the arity is
 	 * wrong.

@@ -3990,6 +3990,18 @@ public final class LispNames {
 	public static final String STRING_ORDER = "%STRING-ORDER";
 
 	/**
+	 * The {@code %string-code} internal primitive: {@code (%string-code string index)}
+	 * answers the code of the character at the integer INDEX of a string, and -1 when
+	 * INDEX is no index of it -- the test and the read
+	 * {@code (char-code (char string index))} makes behind a bounds test of the caller's,
+	 * in one step. For library code whose strings nothing writes: on WASM an immutable
+	 * string's read is one call that checks no operand type, where a mutable character
+	 * vector is rendered first ({@code .kb/string-index-cost.md}). Never read from
+	 * source.
+	 */
+	public static final String STRING_CODE = "%STRING-CODE";
+
+	/**
 	 * The {@code %string-split} internal primitive: {@code (%string-split string
 	 * separator limit)} answers the pieces of STRING between the leftmost LIMIT
 	 * occurrences of SEPARATOR that do not overlap -- all of them when LIMIT is negative

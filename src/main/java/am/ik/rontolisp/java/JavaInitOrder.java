@@ -37,6 +37,12 @@ final class JavaInitOrder {
 		/** Whether it does what a program can see: it prints, or it throws. */
 		boolean visible;
 
+		/**
+		 * Whether it throws an object: a static initialization that can is the one whose
+		 * exception is wrapped and whose class says so at a later use.
+		 */
+		boolean thrown;
+
 		final Set<Field> reads = new LinkedHashSet<>();
 
 		final Set<Field> writes = new LinkedHashSet<>();
@@ -171,6 +177,7 @@ final class JavaInitOrder {
 		while (!pending.isEmpty()) {
 			Effects next = pending.pop();
 			all.visible |= next.visible;
+			all.thrown |= next.thrown;
 			all.reads.addAll(next.reads);
 			all.writes.addAll(next.writes);
 			all.forward.addAll(next.forward);

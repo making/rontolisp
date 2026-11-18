@@ -5,13 +5,18 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import am.ik.rontolisp.LispCons;
+import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.eval.JavaLibrary;
+import am.ik.rontolisp.eval.LispPreludeLibrary;
 import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
@@ -168,11 +173,48 @@ class JavaLoweringTest {
 					// what nothing caught is the pipeline's own report with the program's
 					// line in it: no handler holds the condition
 					"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-THROWN-LINE (%HOST-EXIT 1) (SETQ |Base.count| 0) "
-							+ "(SETQ |Base.LIMIT| 10) (|L1.main(String[])| (VECTOR)))");
+							+ "(SETQ |Base.LIMIT| 10) (SETQ |Throwable.traces| 0) (|L1.main(String[])| (VECTOR)))");
 		// every exception class the run time's table names is one the lowering can make
 		Matcher named = Pattern.compile("\"(java\\.(?:lang|util)\\.\\w+Exception)\"").matcher(runtimeLibrary());
 		while (named.find()) {
 			assertThat(JavaLowering.RAISED).as("java.lisp names %s", named.group(1)).contains(named.group(1));
+		}
+		// the prelude keeps a function a program names in any position, so a variable or
+		// a slot of java.lisp named as one keeps it in every program reaching the
+		// definition: `describe` kept 10 KB of wasm in each program that throws
+		List<String> bound = new ArrayList<>();
+		for (LispVal form : JavaLibrary.everyVariantForms()) {
+			bound(form, bound);
+		}
+		assertThat(bound).isNotEmpty().noneMatch(LispPreludeLibrary::isPreludeFunction);
+	}
+
+	/**
+	 * The names a form of java.lisp binds: parameters, let variables, a condition's
+	 * slots.
+	 */
+	private static void bound(LispVal form, List<String> into) {
+		if (!(form instanceof LispCons cons)) {
+			return;
+		}
+		List<LispVal> parts = cons.toList();
+		String head = parts.get(0) instanceof LispSymbol symbol ? symbol.name() : "";
+		int bindings = switch (head) {
+			case "DEFUN" -> 2;
+			case "LAMBDA", "LET", "LET*", "DOLIST", "DOTIMES" -> 1;
+			case "DEFINE-CONDITION" -> 3;
+			default -> -1;
+		};
+		if (bindings >= 0 && bindings < parts.size() && parts.get(bindings) instanceof LispCons list) {
+			for (LispVal binding : list.toList()) {
+				LispVal name = binding instanceof LispCons pair ? pair.car() : binding;
+				if (name instanceof LispSymbol symbol) {
+					into.add(symbol.name());
+				}
+			}
+		}
+		for (LispVal part : parts) {
+			bound(part, into);
 		}
 	}
 
@@ -501,9 +543,10 @@ class JavaLoweringTest {
 		// field is read and written one access at a time; wait and notify are
 		// Thread.java's
 		// over the run time's; a started thread runs its run(), reports what it leaves
-		// uncaught and ends; a program that starts one initializes a class on one thread,
-		// its state written under a lock no initializer runs under, and ends when its
-		// threads have.
+		// uncaught with its causes and ends; a program that starts one initializes a
+		// class on one thread, its state written under a lock no initializer runs under
+		// -- the text every later use says of it once the initialization threw -- and
+		// ends when its threads have.
 		assertThat(lower("""
 				class Cell {
 				    static volatile int hits;
@@ -516,6 +559,7 @@ class JavaLoweringTest {
 				    }
 				}
 				class Lazy { static int made; static { System.out.println("made"); } }
+				class Late { static int made; static { if (made > 0) throw new IllegalStateException("late"); } }
 				class T1 {
 				    public static void main(String[] args) throws InterruptedException {
 				        Cell cell = new Cell();
@@ -523,7 +567,7 @@ class JavaLoweringTest {
 				        worker.start();
 				        worker.join();
 				        cell.twice(cell);
-				        System.out.println(Cell.bump() + cell.held + Lazy.made);
+				        System.out.println(Cell.bump() + cell.held + Lazy.made + Late.made);
 				    }
 				}
 				""", "T1.java")).contains(
@@ -552,26 +596,47 @@ class JavaLoweringTest {
 						+ "T))) (RONTOLISP::%JAVA-MONITOR-EXIT |%t7|))) (LET ((|%t8| |this|)) "
 						+ "(RONTOLISP::%JAVA-THREAD-START (|Thread.carrier| |this|) (|Thread.daemon| |this|) (LAMBDA "
 						+ "NIL (UNWIND-PROTECT (HANDLER-CASE (|Thread.body(Thread)| |%t8|) (ERROR (|%t9|) "
-						+ "(|Thread.report(Thread,String)| |%t8| (RONTOLISP::%JAVA-THROWN-TEXT |%t9|)))) "
-						+ "(|Thread.finish(Thread)| |%t8|)))))))",
-				"(DEFUN |Lazy.<clinit>| NIL (IF (EQ |Lazy.<clinit>%done| :ENDED) NIL (LET ((|%t15| "
-						+ "(RONTOLISP::%JAVA-SELF))) (IF (EQ |Lazy.<clinit>%done| |%t15|) NIL (PROGN "
+						+ "(|Thread.report(Thread,String)| |%t8| (RONTOLISP::%JAVA-TRACED-TEXT |%t9| (LAMBDA "
+						+ "(|%t10|) (|Throwable.trace(Throwable)| |%t10|)))))) (|Thread.finish(Thread)| |%t8|)))))))",
+				"(DEFUN |Lazy.<clinit>| NIL (IF (EQ |Lazy.<clinit>%done| :ENDED) NIL (LET ((|%t16| "
+						+ "(RONTOLISP::%JAVA-SELF))) (IF (EQ |Lazy.<clinit>%done| |%t16|) NIL (PROGN "
 						+ "(RONTOLISP::%JAVA-INIT-ENTER) (WHILE (RONTOLISP::%JAVA-INIT-BUSY |Lazy.<clinit>%done|)) "
 						+ "(IF |Lazy.<clinit>%done| (RONTOLISP::%JAVA-INIT-LEAVE NIL) (PROGN (SETQ "
-						+ "|Lazy.<clinit>%done| |%t15|) (RONTOLISP::%JAVA-INIT-LEAVE NIL) (UNWIND-PROTECT "
+						+ "|Lazy.<clinit>%done| |%t16|) (RONTOLISP::%JAVA-INIT-LEAVE NIL) (UNWIND-PROTECT "
 						+ "(WRITE-LINE \"made\") (PROGN (RONTOLISP::%JAVA-INIT-ENTER) (SETQ |Lazy.<clinit>%done| "
 						+ ":ENDED) (RONTOLISP::%JAVA-INIT-LEAVE T))))))))))",
+				"(DEFUN |Late.<clinit>| NIL (IF (EQ |Late.<clinit>%done| :ENDED) NIL (LET ((|%t19| "
+						+ "(RONTOLISP::%JAVA-SELF))) (IF (EQ |Late.<clinit>%done| |%t19|) NIL (PROGN "
+						+ "(RONTOLISP::%JAVA-INIT-ENTER) (WHILE (RONTOLISP::%JAVA-INIT-BUSY |Late.<clinit>%done|)) "
+						+ "(IF |Late.<clinit>%done| (PROGN (RONTOLISP::%JAVA-INIT-LEAVE NIL) (IF (STRINGP "
+						+ "|Late.<clinit>%done|) (RONTOLISP::%JAVA-THROW "
+						+ "(|NoClassDefFoundError.unusable(String,String)| \"Late\" |Late.<clinit>%done|) "
+						+ "#'|Throwable.toString()|) NIL)) (LET ((|%t20| NIL)) (SETQ |Late.<clinit>%done| |%t19|) "
+						+ "(RONTOLISP::%JAVA-INIT-LEAVE NIL) (UNWIND-PROTECT (HANDLER-CASE (IF (> |Late.made| 0) "
+						+ "(RONTOLISP::%JAVA-THROW (|IllegalStateException.new(String)| \"late\") "
+						+ "#'|Throwable.toString()|)) ((SATISFIES RONTOLISP::%JAVA-THROWN) (|%t17|) (LET ((|%t18| "
+						+ "(RONTOLISP::%JAVA-THROWN |%t17|))) (SETQ |%t20| "
+						+ "(|ExceptionInInitializerError.record(Throwable,String)| |%t18| (|Thread.currentName()|))) "
+						+ "(RONTOLISP::%JAVA-THROW (|ExceptionInInitializerError.of(Throwable)| |%t18|) "
+						+ "#'|Throwable.toString()|)))) (PROGN (RONTOLISP::%JAVA-INIT-ENTER) (SETQ "
+						+ "|Late.<clinit>%done| (IF |%t20| |%t20| :ENDED)) (RONTOLISP::%JAVA-INIT-LEAVE T))))))))))",
 				"(RONTOLISP::%JAVA-THREAD-MAIN (LAMBDA NIL (PROGN (SETQ |Cell.hits| 0) (SETQ |Lazy.made| 0) (SETQ "
-						+ "|Thread.defaultHandler| NIL) (SETQ |Thread.guarding| NIL) (SETQ |Thread.MIN_PRIORITY| 1) "
-						+ "(SETQ |Thread.NORM_PRIORITY| 5) (SETQ |Thread.MAX_PRIORITY| 10) (SETQ |Thread.unnamed| 0) "
-						+ "(SETQ |Thread.identifiers| 1) (SETQ |Lazy.<clinit>%done| NIL) (|T1.main(String[])| "
-						+ "(VECTOR)))) (LAMBDA (|%t|) (|Thread.finish(Thread)| |%t|)))");
+						+ "|Late.made| 0) (SETQ |Thread.defaultHandler| NIL) (SETQ |Thread.guarding| NIL) (SETQ "
+						+ "|Thread.MIN_PRIORITY| 1) (SETQ |Thread.NORM_PRIORITY| 5) (SETQ |Thread.MAX_PRIORITY| 10) "
+						+ "(SETQ |Thread.unnamed| 0) (SETQ |Throwable.traces| 0) (SETQ |Thread.identifiers| 1) (SETQ "
+						+ "|Lazy.<clinit>%done| NIL) (SETQ |Late.<clinit>%done| NIL) (|T1.main(String[])| (VECTOR)))) (LAMBDA (|%t|) "
+						+ "(|Thread.finish(Thread)| |%t|)) (LAMBDA (|%o|) (|Throwable.trace(Throwable)| |%o|)))");
 		// a program that starts no thread and neither waits nor asks cannot tell a
 		// monitor
 		// held from one that is not: synchronized leaves the exception a null has, the
-		// program ends as any other and its classes are initialized under no lock
+		// program ends as any other and its classes are initialized under no lock. A
+		// class whose initialization can throw keeps what it threw in place of its
+		// state; the name of a class is asked of the program's own classes alone; what
+		// nothing caught is reported with its causes where an exception can have one;
+		// charAt is one read that tests its index
 		assertThat(lower("""
 				class Lazy { static int made; static { System.out.println("made"); } }
+				class Late { static int made; static { if (made > 0) throw new IllegalStateException("late"); } }
 				class T2 {
 				    int n;
 				    synchronized void add(Object lock, T2 other) {
@@ -580,7 +645,12 @@ class JavaLoweringTest {
 				        synchronized (other.self()) { n++; }
 				    }
 				    T2 self() { return this; }
-				    static synchronized void main() { System.out.println(Lazy.made); new T2().add("x", new T2()); }
+				    static synchronized void main() {
+				        String text = "late";
+				        System.out.println(Lazy.made + Late.made + text.charAt(n()));
+				        new T2().add("x", new T2());
+				    }
+				    static int n() { return 1; }
 				}
 				""", "T2.java")).contains(
 				"(DEFUN |T2.add(Object,T2)| (|this| |lock| |other|) (PROGN (PROGN (OR |lock| (RONTOLISP::%JAVA-NPE)) "
@@ -591,8 +661,33 @@ class JavaLoweringTest {
 						+ "2147483648) 4294967295) 2147483648)))))",
 				"(DEFUN |Lazy.<clinit>| NIL (IF |Lazy.<clinit>%done| NIL (PROGN (SETQ |Lazy.<clinit>%done| T) "
 						+ "(WRITE-LINE \"made\"))))",
-				"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (SETQ |Lazy.made| 0) "
-						+ "(SETQ |Lazy.<clinit>%done| NIL) (|T2.main()|))");
+				"(DEFUN |Late.<clinit>| NIL (IF (EQ |Late.<clinit>%done| T) NIL (IF |Late.<clinit>%done| "
+						+ "(RONTOLISP::%JAVA-THROW (|NoClassDefFoundError.unusable(String,String)| \"Late\" "
+						+ "|Late.<clinit>%done|) #'|Throwable.toString()|) (PROGN (SETQ |Late.<clinit>%done| T) "
+						+ "(HANDLER-CASE (IF (> |Late.made| 0) (RONTOLISP::%JAVA-THROW "
+						+ "(|IllegalStateException.new(String)| \"late\") #'|Throwable.toString()|)) ((SATISFIES "
+						+ "RONTOLISP::%JAVA-THROWN) (|%t3|) (LET ((|%t4| (RONTOLISP::%JAVA-THROWN |%t3|))) (SETQ "
+						+ "|Late.<clinit>%done| (|ExceptionInInitializerError.record(Throwable,String)| |%t4| "
+						+ "\"main\")) (RONTOLISP::%JAVA-THROW (|ExceptionInInitializerError.of(Throwable)| |%t4|) "
+						+ "#'|Throwable.toString()|))))))))",
+				"(DEFUN |T2.main()| NIL (LET ((|text| \"late\")) (WRITE-LINE (%DECIMAL-PIECE (- (LOGAND (+ (+ (- "
+						+ "(LOGAND (+ (+ (PROGN (|Lazy.<clinit>|) |Lazy.made|) (PROGN (|Late.<clinit>|) |Late.made|)) "
+						+ "2147483648) 4294967295) 2147483648) (LET* ((|%t0| (OR |text| (RONTOLISP::%JAVA-NPE))) "
+						+ "(|%t1| (|T2.n()|)) (|%t2| (%STRING-CODE |%t0| |%t1|))) (IF (< |%t2| 0) "
+						+ "(RONTOLISP::%JAVA-STRING-INDEX |%t1| |%t0|) |%t2|))) 2147483648) 4294967295) "
+						+ "2147483648))) (|T2.add(Object,T2)| (OR (|T2.new()|) (RONTOLISP::%JAVA-NPE)) \"x\" "
+						+ "(|T2.new()|))))",
+				"(DEFUN |%class-name| (|%o|) (COND ((|IllegalStateException?| |%o|) "
+						+ "\"java.lang.IllegalStateException\") ((|ExceptionInInitializerError?| |%o|) "
+						+ "\"java.lang.ExceptionInInitializerError\") ((|NoClassDefFoundError?| |%o|) "
+						+ "\"java.lang.NoClassDefFoundError\") ((|Lazy?| |%o|) \"Lazy\") ((|Late?| |%o|) "
+						+ "\"Late\") ((|j%T2?| |%o|) \"T2\") (T (RONTOLISP::%JAVA-NO-RECEIVER |%o| "
+						+ "\"getClass()\"))))",
+				"(DEFUN |%uncaught| (|%c| |%text|) (RONTOLISP::%JAVA-UNCAUGHT-THROWN-LINE |%c| (LET ((|%o| "
+						+ "(RONTOLISP::%JAVA-THROWN |%c|))) (IF |%o| (|Throwable.trace(Throwable)| |%o|) |%text|))))",
+				"(%REPORTING-UNCAUGHT #'|%uncaught| (%HOST-EXIT 1) (SETQ |Lazy.made| 0) (SETQ |Late.made| 0) "
+						+ "(SETQ |Throwable.traces| 0) (SETQ |Lazy.<clinit>%done| NIL) (SETQ |Late.<clinit>%done| NIL) "
+						+ "(|T2.main()|))");
 	}
 
 	@Test

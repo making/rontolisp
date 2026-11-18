@@ -364,6 +364,13 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private final Set<LispSymbol> generated = new LinkedHashSet<>();
 
+	/**
+	 * The name functions asked of a value that can be something other than an instance of
+	 * a class of the program -- a string, a box, an array, a lambda: those end in the run
+	 * time's answer, the others as a dispatcher ends.
+	 */
+	private final Set<LispSymbol> namesOfAny = new LinkedHashSet<>();
+
 	/** The test of each catch clause's classes, by the classes ({@link #catchTest}). */
 	private final Map<String, LispSymbol> catchTestNames = new HashMap<>();
 
@@ -791,7 +798,11 @@ final class JavaLowering implements JavaEmitter.Context {
 		made.addAll(this.dispatchers.values());
 		made.addAll(this.catchTests.values());
 		made.addAll(generated);
-		made.add(runs ? uncaught(initialization, entry) : progn(initialization));
+		LispVal started = runs ? uncaught(initialization, entry) : progn(initialization);
+		if (this.reporter != null) {
+			made.add(this.reporter);
+		}
+		made.add(started);
 		Set<String> named = new HashSet<>();
 		for (LispVal form : made) {
 			names(form, named);
@@ -1710,18 +1721,68 @@ final class JavaLowering implements JavaEmitter.Context {
 	private LispVal uncaught(List<LispVal> initialization, LispVal start) {
 		List<LispVal> body = new ArrayList<>(initialization);
 		body.add(start);
+		int known = this.classes.reached.size();
+		LispSymbol thrown = new LispSymbol("%o");
+		LispVal entry;
 		if (startsThreads()) {
 			// the program ends when its threads that are no daemons have: the run time
 			// reports what main left uncaught, then waits for them
 			LispSymbol ended = new LispSymbol("%t");
-			return runtimeCall("thread-main", list(cl("lambda"), NIL, progn(body)),
-					list(cl("lambda"), list(ended), library(THREAD, "finish", List.of(ended))));
+			entry = runtimeCall("thread-main", list(cl("lambda"), NIL, progn(body)),
+					list(cl("lambda"), list(ended), library(THREAD, "finish", List.of(ended))),
+					list(cl("lambda"), list(thrown), library(THROWABLE, "trace", List.of(thrown))));
 		}
-		List<LispVal> reporting = new ArrayList<>();
-		reporting.add(function(JavaForms.runtime(this.raises ? "uncaught-thrown-line" : "uncaught-line")));
-		reporting.add(call("%host-exit", integer(1)));
-		reporting.addAll(body);
-		return form(cl("%reporting-uncaught"), reporting);
+		else {
+			LispVal line = function(JavaForms.runtime(this.raises ? "uncaught-thrown-line" : "uncaught-line"));
+			if (this.raises && enclosing()) {
+				// an exception that can have a cause or suppress another is reported
+				// with them
+				LispSymbol condition = new LispSymbol("%c");
+				LispSymbol text = new LispSymbol("%text");
+				this.reporter = list(cl("defun"), UNCAUGHT, list(condition, text),
+						runtimeCall("uncaught-thrown-line", condition, JavaForms.let(thrown,
+								runtimeCall("thrown", condition),
+								List.of(call("if", thrown, library(THROWABLE, "trace", List.of(thrown)), text)))));
+				line = function(UNCAUGHT);
+			}
+			List<LispVal> reporting = new ArrayList<>();
+			reporting.add(line);
+			reporting.add(call("%host-exit", integer(1)));
+			reporting.addAll(body);
+			entry = form(cl("%reporting-uncaught"), reporting);
+		}
+		if (this.classes.reached.size() != known) {
+			// what the report reaches of the library is lowered by one more pass
+			this.classes.changed();
+		}
+		return entry;
+	}
+
+	private static final String THROWABLE = "java.lang.Throwable";
+
+	private static final LispSymbol UNCAUGHT = new LispSymbol("%uncaught");
+
+	/** The function a program whose exceptions can enclose others is reported by. */
+	private @Nullable LispVal reporter;
+
+	/**
+	 * Whether an exception of the program can have a cause or a suppressed exception:
+	 * some constructor taking a cause, {@code initCause} or {@code addSuppressed} is
+	 * reached.
+	 */
+	private boolean enclosing() {
+		for (Method method : this.classes.reached) {
+			if (!method.owner.name.equals(THROWABLE)) {
+				continue;
+			}
+			if (method.isConstructor()
+					? method.parameters.size() == 2
+							|| (method.parameters.size() == 1 && !method.parameters.get(0).equals(this.stringType))
+					: method.name.equals("initCause") || method.name.equals("addSuppressed")) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private static final String THREAD = "java.lang.Thread";
@@ -1813,7 +1874,9 @@ final class JavaLowering implements JavaEmitter.Context {
 							string(name == CLASS_NAME ? declaration.binaryName : declaration.simpleName())));
 				}
 			}
-			arms.add(list(T, runtimeCall("class-name", RECEIVER, name == CLASS_NAME ? T : NIL)));
+			arms.add(list(T,
+					this.namesOfAny.contains(name) ? runtimeCall("class-name", RECEIVER, name == CLASS_NAME ? T : NIL)
+							: runtimeCall("no-receiver", RECEIVER, string("getClass()"))));
 			forms.add(list(cl("defun"), name, list(RECEIVER), list(arms)));
 		}
 		if (this.generated.contains(LISP_ERROR)) {
@@ -4359,6 +4422,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			return list(JavaNames.creator(failed));
 		}
 		this.generated.add(CLASS_NAME);
+		this.namesOfAny.add(CLASS_NAME);
 		LispVal message = call("%string-concat", call("%string-concat", string("class "), list(CLASS_NAME, value)),
 				string(" cannot be cast to class " + target));
 		// a lambda's class has a name only a JDK makes up: no message
@@ -5609,6 +5673,10 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 				LispSymbol name = qualified ? CLASS_NAME : SIMPLE_NAME;
 				this.generated.add(name);
+				if (!(erased instanceof ClassType type) || type.declaration().intrinsic
+						|| type.declaration().isInterface || erased.equals(this.objectType)) {
+					this.namesOfAny.add(name);
+				}
 				text = list(name, object.form());
 			}
 			this.nonNull.add(text);
@@ -6705,6 +6773,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		Method describe = methods(throwable, "toString").get(0);
 		LispSymbol target = Objects.requireNonNull(target(throwable, describe));
 		this.raises = true;
+		this.effects.thrown = true;
 		return runtimeCall("throw", thrown, function(target));
 	}
 
@@ -7586,6 +7655,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		for (JavaClass declaration : this.order.eager()) {
 			forms.addAll(Objects.requireNonNull(this.staticInits.get(declaration)));
 		}
+		Set<JavaClass> failing = failingInitializations();
 		for (JavaClass declaration : this.staticInits.keySet()) {
 			if (!this.order.isLazy(declaration)) {
 				continue;
@@ -7602,6 +7672,11 @@ final class JavaLowering implements JavaEmitter.Context {
 				body.add(above);
 			}
 			body.addAll(Objects.requireNonNull(this.staticInits.get(declaration)));
+			if (failing.contains(declaration)) {
+				this.functions.add(list(cl("defun"), JavaNames.initializer(declaration), NIL,
+						failingInitialization(declaration, done, body.subList(1, body.size()), threads)));
+				continue;
+			}
 			LispVal run = call("if", done, NIL, progn(body));
 			if (threads) {
 				// one thread initializes a class and every other asking for that class
@@ -7627,6 +7702,111 @@ final class JavaLowering implements JavaEmitter.Context {
 			this.functions.add(list(cl("defun"), JavaNames.initializer(declaration), NIL, run));
 		}
 		return forms;
+	}
+
+	private static final String INITIALIZER_ERROR = "java.lang.ExceptionInInitializerError";
+
+	/**
+	 * The lazy classes whose static initialization can end with a thrown object: one that
+	 * reaches a {@code throw}, one above a class it extends that can, one whose
+	 * initialization uses such a class. An exception the run time raises is no object
+	 * until a {@code catch} makes one, and passes as it came.
+	 */
+	private Set<JavaClass> failingInitializations() {
+		Map<JavaClass, Effects> reached = new LinkedHashMap<>();
+		Set<JavaClass> failing = new LinkedHashSet<>();
+		for (JavaClass declaration : this.staticInits.keySet()) {
+			Effects effects = this.initEffects.get(declaration);
+			if (!this.order.isLazy(declaration) || effects == null) {
+				continue;
+			}
+			Effects all = JavaInitOrder.reached(effects, this.methodEffects);
+			reached.put(declaration, all);
+			if (all.thrown) {
+				failing.add(declaration);
+			}
+		}
+		boolean moved = true;
+		while (moved) {
+			moved = false;
+			for (Map.Entry<JavaClass, Effects> entry : reached.entrySet()) {
+				JavaClass declaration = entry.getKey();
+				if (!failing.contains(declaration) && initializes(declaration, entry.getValue(), failing)) {
+					failing.add(declaration);
+					moved = true;
+				}
+			}
+		}
+		return failing;
+	}
+
+	/**
+	 * Whether a class's initialization runs the initialization of one of some classes.
+	 */
+	private static boolean initializes(JavaClass declaration, Effects reached, Set<JavaClass> some) {
+		Set<JavaClass> needed = new LinkedHashSet<>(reached.uses);
+		if (declaration.superclass != null) {
+			needed.add(declaration.superclass);
+		}
+		for (JavaClass use : needed) {
+			for (JavaClass type = use; type != null; type = type.superclass) {
+				if (type != declaration && some.contains(type)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The static initialization of a lazy class that can end with a thrown object, as the
+	 * language ends it: an exception that is no {@code Error} is thrown as the cause of
+	 * an {@code ExceptionInInitializerError}, and the class keeps what a JDK says of it
+	 * -- the text of {@code ExceptionInInitializerError.record} -- in place of its state,
+	 * so every later use throws {@code NoClassDefFoundError.unusable}'s. The state is
+	 * {@code nil}, {@code t} -- in a program that starts threads the carrier of the
+	 * thread initializing the class, then {@code :ended} -- or that text.
+	 */
+	private LispVal failingInitialization(JavaClass declaration, LispSymbol done, List<LispVal> body, boolean threads) {
+		LispSymbol condition = temporary();
+		LispSymbol thrown = temporary();
+		int known = this.classes.reached.size();
+		LispVal thread = threads ? library(THREAD, "currentName", List.of()) : string("main");
+		LispVal record = library(INITIALIZER_ERROR, "record", List.of(thrown, thread));
+		LispVal wrapped = raise(library(INITIALIZER_ERROR, "of", List.of(thrown)));
+		LispVal unusable = raise(
+				library("java.lang.NoClassDefFoundError", "unusable", List.of(string(declaration.binaryName), done)));
+		if (this.classes.reached.size() != known) {
+			// what this reaches of the library is lowered by one more pass
+			this.classes.changed();
+		}
+		// every thrown object is taken: the clause's test is the run time's reading of
+		// one
+		LispVal clauseType = list(cl("satisfies"), JavaForms.runtime("thrown"));
+		if (!threads) {
+			LispVal clause = list(clauseType, list(condition), JavaForms.let(thrown, runtimeCall("thrown", condition),
+					List.of(call("setq", done, record), wrapped)));
+			LispVal run = progn(List.of(call("setq", done, T), list(cl("handler-case"), progn(body), clause)));
+			return call("if", call("eq", done, T), NIL, call("if", done, unusable, run));
+		}
+		// the text is kept until the class's state is written, under the lock
+		LispVal ended = new LispSymbol(":ENDED");
+		LispSymbol self = temporary();
+		LispSymbol failed = temporary();
+		LispVal clause = list(clauseType, list(condition), JavaForms.let(thrown, runtimeCall("thrown", condition),
+				List.of(call("setq", failed, record), wrapped)));
+		LispVal end = progn(List.of(runtimeCall("init-enter"), call("setq", done, call("if", failed, failed, ended)),
+				runtimeCall("init-leave", T)));
+		LispVal claim = JavaForms.let(failed, NIL, List.of(call("setq", done, self), runtimeCall("init-leave", NIL),
+				list(cl("unwind-protect"), list(cl("handler-case"), progn(body), clause), end)));
+		LispVal waited = progn(
+				List.of(runtimeCall("init-leave", NIL), call("if", call("stringp", done), unusable, NIL)));
+		return call("if", call("eq", done, ended), NIL,
+				JavaForms.let(self, runtimeCall("self"),
+						List.of(call("if", call("eq", done, self), NIL,
+								progn(List.of(runtimeCall("init-enter"),
+										form(cl("while"), List.of(runtimeCall("init-busy", done))),
+										call("if", done, waited, claim)))))));
 	}
 
 }

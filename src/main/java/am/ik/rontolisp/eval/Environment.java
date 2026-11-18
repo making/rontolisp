@@ -5271,6 +5271,22 @@ public final class Environment implements Scope {
 			}
 			return new LispInteger(stringOrder(a, b));
 		}));
+		// %string-code: the code of the character at an index of a string, -1 outside it
+		// -- where a wide integer is.
+		env.defineFunction(LispNames.STRING_CODE, new LispFunction(LispNames.STRING_CODE, args -> {
+			requireArgCount(LispNames.STRING_CODE, args, 2);
+			if (!(args.get(0) instanceof LispString string)) {
+				throw OperandTypeException.of(args.get(0), OperandTypes.Kind.STRING, LispNames.STRING_CODE);
+			}
+			if (args.get(1) instanceof LispBigInteger) {
+				return new LispInteger(-1);
+			}
+			if (!(args.get(1) instanceof LispInteger index)) {
+				throw OperandTypeException.of(args.get(1), OperandTypes.Kind.INTEGER, LispNames.STRING_CODE);
+			}
+			long at = index.value();
+			return new LispInteger(at >= 0 && at < string.codePointCount() ? string.codePointAt((int) at) : -1);
+		}));
 		// make-symbol: rontolisp has no intern table (symbols compare by name), so
 		// "uninterned" is represented by the same "#:" name prefix gensym uses.
 		env.defineFunction(LispNames.MAKE_SYMBOL, new LispFunction(LispNames.MAKE_SYMBOL, args -> {
