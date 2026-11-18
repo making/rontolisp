@@ -394,7 +394,7 @@ sbcl --script lispresen/cli.lisp talk.lisp
 ```
 
 ```
-lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--check] [--strict]
+lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--pptx] [--check] [--strict]
 lispresen new FILE [--lang ja|en] [--force]
 lispresen serve DECK [--port N] [--host ADDR] [--theme NAME] [--runtime URL|hosted|none]
 lispresen --version
@@ -474,6 +474,39 @@ plays or pauses it in the slides. Print with notes opens the handout print (`?no
 If the fonts on the presenting machine set text wider than lispresen measured, the deck
 steps the affected slides down a size when it opens; `?check` in the URL lists what it
 changed.
+
+## PowerPoint
+
+```bash
+lispresen talk.lisp -o talk.pptx          # or: lispresen talk.lisp --pptx
+```
+
+The PPTX keeps the layout lispresen computed: every line, code panel, table cell,
+diagram shape, formula glyph and callout is placed where the fit solver put it. Text is
+real text, lists are native PowerPoint lists, flow boxes hold their labels, images are
+embedded, tables are PowerPoint tables, and notes become notes slides.
+
+The export is theme-free: colors are theme references, ordinary text names no font, and
+no slide paints a background, so a theme applied afterwards in PowerPoint (Design →
+Themes), or the template the slides are pasted into, supplies the colors and fonts. Code
+is the exception: it names `Consolas`, because it has to stay monospace. The deck's
+`:theme` and `--theme` affect the HTML only. A Google Slides import converts theme
+references to concrete colors; a theme change there reliably changes the background and
+layout, so check the text after importing.
+
+Not exported in this version: the kicker, footer, source line and page number, the
+progress bar, and page advances (every step is shown, as in print). Code is not runnable;
+a video is shown as its `:poster` (or a named box), a frame as a bordered box with its URL
+and a link. A quote's `:cite` stays.
+
+Runs use the Office theme's fonts. A machine whose font differs changes glyph widths;
+lines never re-wrap, because each line is its own text box, so the result can overflow
+slightly rather than reflow. Use a template with the deck's Japanese font (`Hiragino
+Sans`, `Noto Sans JP`, `BIZ UDGothic` or `Yu Gothic`) for the closest match.
+
+`--check` with a `.pptx` output reports without writing; `-o -` writes the package to
+standard output. The browser editor and `serve` do not export PPTX: they have no
+`read-file`, so they cannot embed an image.
 
 ## Runnable code
 

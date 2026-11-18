@@ -50,6 +50,7 @@
   --runtime R   where runnable code loads the runtime from, overriding the deck's
                 :runtime: a directory URL, hosted (the project site) or none (static code)
   --embed       inline images as data: URIs, so the HTML file stands alone
+  --pptx        write a PowerPoint file instead of HTML; OUT ending in .pptx does too
   --check       report diagnostics without writing HTML or the page image
   --strict      fail on warnings too
   new FILE      write a starter deck to FILE (- for standard output), dated today (local date)
@@ -79,14 +80,31 @@ NO_COLOR is set (https://no-color.org) or TERM is dumb."
           while line
           do (write-line line out))))
 
-(defun default-output (deck)
-  "DECK with its extension replaced by .html."
+(defun default-output (deck &optional (ext "html"))
+  "DECK with its extension replaced by EXT."
   (let ((dot (position #\. deck :from-end t))
         (slash (position #\/ deck :from-end t)))
     (concatenate 'string
                  (if (and dot (> dot 0) (or (null slash) (> dot (1+ slash))))
                      (subseq deck 0 dot)
-                     deck) ".html")))
+                     deck) "." ext)))
+
+(defun pptx-path-p (path)
+  "True when PATH names a .pptx file."
+  (let ((dot (position #\. path :from-end t)))
+    (and dot (> dot 0) (string-equal (subseq path (1+ dot)) "pptx"))))
+
+(defun write-octets-stdout (octets)
+  "Octets to standard output, which a host writes as bytes."
+  #+sbcl
+  (write-sequence octets
+                  (sb-sys:make-fd-stream 1 :output t
+                                           :element-type '(unsigned-byte 8)
+                                           :buffering :full
+                                           :name "stdout"))
+  #-sbcl
+  (write-sequence octets *standard-output*)
+  (finish-output))
 
 (defun read-deck (deck)
   (if (string= deck "-")
@@ -332,6 +350,17 @@ process is stopped."
       (listen-and-serve (lambda (env) (lispresen:served-respond served env)) host port)
       (uiop:quit 0))))
 
+(defun report-diagnostics (name diagnostics color)
+  "Print DIAGNOSTICS for NAME and return the error and warning counts."
+  (let ((errors 0) (warnings 0))
+    (dolist (d diagnostics)
+      (if (eq (lispresen:diagnostic-severity d) :error)
+          (incf errors)
+          (incf warnings))
+      (write-line (lispresen:format-diagnostic name d color) *error-output*))
+    (finish-output *error-output*)
+    (values errors warnings)))
+
 (defun main (args)
   (when (equal (first args) "new") (new-deck (rest args)))
   (when (equal (first args) "serve") (serve-deck (rest args)))
@@ -340,6 +369,7 @@ process is stopped."
         (theme nil)
         (runtime nil)
         (embed nil)
+        (pptx nil)
         (check nil)
         (strict nil))
     (loop while args
@@ -356,6 +386,7 @@ process is stopped."
                        (usage-error "--runtime needs a URL, hosted or none"))
                      (setf runtime (pop args)))
                     ((string= a "--embed") (setf embed t))
+                    ((string= a "--pptx") (setf pptx t))
                     ((string= a "--check") (setf check t))
                     ((string= a "--strict") (setf strict t))
                     ((string= a "--help")
@@ -374,33 +405,44 @@ process is stopped."
         (format *error-output* "lispresen: cannot read ~a~%" deck)
         (finish-output *error-output*)
         (uiop:quit 1))
-      (multiple-value-bind (html diagnostics image) (lispresen:render source
-                                                                      :theme theme
-                                                                      :runtime runtime
-                                                                      :read-file
-                                                                      (file-reader
-                                                                       deck)
-                                                                      :embed embed
-                                                                      :page-image t)
-        (let ((name (if (string= deck "-") "<stdin>" deck))
-              (errors 0)
-              (warnings 0)
-              (color (color-p)))
-          (dolist (d diagnostics)
-            (if (eq (lispresen:diagnostic-severity d) :error)
-                (incf errors)
-                (incf warnings))
-            (write-line (lispresen:format-diagnostic name d color) *error-output*))
-          (finish-output *error-output*)
-          (unless check
-            (let ((target
-                   (or out (if (string= deck "-") "-" (default-output deck)))))
-              (write-output html target)
-              (when (and image
-                         (not (write-octets (second image)
-                                            (beside target (first image)))))
-                (incf errors))))
-          (uiop:quit
-           (if (or (> errors 0) (and strict (> warnings 0))) 1 0)))))))
+      (let ((name (if (string= deck "-") "<stdin>" deck))
+            (color (color-p)))
+        (if (or pptx (and out (pptx-path-p out)))
+            (multiple-value-bind (octets diagnostics)
+                (lispresen:render-pptx source
+                                       :theme theme
+                                       :runtime runtime
+                                       :read-file (file-reader deck))
+              (multiple-value-bind (errors warnings)
+                  (report-diagnostics name diagnostics color)
+                (unless check
+                  (let ((target
+                         (or out (if (string= deck "-") "-"
+                                     (default-output deck "pptx")))))
+                    (if (string= target "-")
+                        (write-octets-stdout octets)
+                        (unless (write-octets octets target) (incf errors)))))
+                (uiop:quit
+                 (if (or (> errors 0) (and strict (> warnings 0))) 1 0))))
+            (multiple-value-bind (html diagnostics image)
+                (lispresen:render source
+                                  :theme theme
+                                  :runtime runtime
+                                  :read-file (file-reader deck)
+                                  :embed embed
+                                  :page-image t)
+              (multiple-value-bind (errors warnings)
+                  (report-diagnostics name diagnostics color)
+                (unless check
+                  (let ((target
+                         (or out (if (string= deck "-") "-"
+                                     (default-output deck)))))
+                    (write-output html target)
+                    (when (and image
+                               (not (write-octets (second image)
+                                                  (beside target (first image)))))
+                      (incf errors))))
+                (uiop:quit
+                 (if (or (> errors 0) (and strict (> warnings 0))) 1 0)))))))))
 
 (main (uiop:command-line-arguments))

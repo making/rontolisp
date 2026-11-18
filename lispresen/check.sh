@@ -26,11 +26,13 @@ jar=${RONTOLISP_JAR:-$root/target/rontolisp-0.1.0-SNAPSHOT-exec.jar}
 deck=$here/examples/intro.lisp
 golden=$here/examples/intro.html
 golden_png=$here/examples/intro.png
+golden_pptx=$here/examples/pptx.pptx
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 if [[ ${1:-} == --update ]]; then
   (cd "$here/examples" && java -jar "$jar" "$here/cli.lisp" -- - -o - --embed < "$deck" > "$golden")
+  (cd "$here/examples" && java -jar "$jar" "$here/cli.lisp" -- pptx.lisp -o pptx.pptx)
 fi
 
 # What --version prints: the version from pom.xml and the commit read when lispresen was
@@ -57,6 +59,21 @@ check() {
     { cat "$work/$name.err"
       cmp "$golden" "$work/$name.html" || true
       cmp "$golden_png" "$dir/intro.png" || true; } >> "$log"
+  fi
+  # The PPTX: the same bytes on every backend, with no warning, and --check writes none.
+  if ! (cd "$dir" && "$@" pptx.lisp -o pptx-out.pptx) > "$work/$name.pptx.err" 2>&1 \
+      || [[ -s $work/$name.pptx.err ]] \
+      || ! cmp -s "$golden_pptx" "$dir/pptx-out.pptx"; then
+    failed=1
+    { echo "pptx:"
+      cat "$work/$name.pptx.err"
+      cmp "$golden_pptx" "$dir/pptx-out.pptx" || true; } >> "$log"
+  fi
+  rm -f "$dir/pptx-check.pptx"
+  if ! (cd "$dir" && "$@" pptx.lisp -o pptx-check.pptx --check) > /dev/null 2>&1 \
+      || [[ -e $dir/pptx-check.pptx ]]; then
+    failed=1
+    echo "--check wrote a PPTX, or failed" >> "$log"
   fi
   local printed
   printed=$("$@" --version 2>&1) || true
@@ -146,6 +163,57 @@ if command -v sbcl > /dev/null; then
   check sbcl sbcl --script "$here/cli.lisp"
 else
   echo "skip sbcl: not on PATH"
+fi
+
+# The PPTX is a package of parts: every XML parses, the content types cover every part,
+# every relationship target exists, and the media and notes are in it.
+if [[ -f $work/interpreter/pptx-out.pptx ]]; then
+  if ! python3 - "$work/interpreter/pptx-out.pptx" <<'PY'
+import sys, zipfile, posixpath, xml.etree.ElementTree as ET
+z = zipfile.ZipFile(sys.argv[1])
+names = set(z.namelist())
+bad = []
+for n in names:
+    if n.endswith(('.xml', '.rels')):
+        try:
+            ET.fromstring(z.read(n))
+        except Exception as e:
+            bad.append(f'{n}: {e}')
+ct = ET.fromstring(z.read('[Content_Types].xml'))
+defaults = {e.get('Extension').lower() for e in ct if e.tag.endswith('Default')}
+overrides = {e.get('PartName') for e in ct if e.tag.endswith('Override')}
+for n in names:
+    if n == '[Content_Types].xml':
+        continue
+    if '/' + n not in overrides and n.rsplit('.', 1)[-1].lower() not in defaults:
+        bad.append(f'no content type: {n}')
+for n in names:
+    if not n.endswith('.rels'):
+        continue
+    base = posixpath.dirname(posixpath.dirname(n))
+    for r in ET.fromstring(z.read(n)):
+        if r.get('TargetMode') == 'External':
+            continue
+        target = posixpath.normpath(posixpath.join(base, r.get('Target')))
+        if target not in names:
+            bad.append(f'{n}: missing {target}')
+slides = [n for n in names if n.startswith('ppt/slides/slide') and n.endswith('.xml')]
+if len(slides) != 18:
+    bad.append(f'{len(slides)} slides')
+if not any(b'<a:tbl>' in z.read(n) for n in slides):
+    bad.append('no native table')
+if not any(n.startswith('ppt/media/') for n in names):
+    bad.append('no media')
+if not any(n.startswith('ppt/notesSlides/notesSlide') for n in names):
+    bad.append('no notes')
+for b in bad:
+    print(b, file=sys.stderr)
+sys.exit(1 if bad else 0)
+PY
+  then
+    echo "FAIL pptx package"
+    status=1
+  fi
 fi
 
 resources=$root/src/test/resources
