@@ -532,7 +532,7 @@ gitBranch=${git.branch}
 					     binary: src/native/graalvm-notices.sh writes them from java.home
 					     (the Oracle GraalVM this build runs under) into
 					     META-INF/graalvm-notices.txt, which the notices subcommand (flag: tool)
-					     prints (.kb/java-frontend-provenance.md, "Notices"). -->
+					     prints (.kb/java-frontend-provenance.md, "The audit (2026-11-18) and what followed"). -->
 					<plugin>
 						<groupId>org.apache.maven.plugins</groupId>
 						<artifactId>maven-antrun-plugin</artifactId>
