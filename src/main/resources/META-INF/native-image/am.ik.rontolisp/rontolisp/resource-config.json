@@ -749,7 +749,7 @@
         "condition": {
           "typeReachable": "am.ik.rontolisp.cli.NoticesCommand"
         },
-        "pattern": "META-INF/(LICENSE|NOTICE|THIRD-PARTY-NOTICES\\.txt)"
+        "pattern": "META-INF/(LICENSE|NOTICE|THIRD-PARTY-NOTICES\\.txt|graalvm-notices\\.txt)"
       },
       {
         "condition": {

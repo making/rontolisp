@@ -45,3 +45,9 @@ EPL) may ask more, such as offering the library's source code.
 `rontolisp notices --tool` prints what the rontolisp jar or native binary itself carries:
 its licence, `NOTICE`, the third-party code it is built from, JLine, and the Rust crates
 of its precompile shim and runners. The jar also holds them under `META-INF/`.
+
+The native binary is built with Oracle GraalVM, and its Substrate VM and the JDK classes it
+links are part of the binary. `--tool` therefore also prints GraalVM's licence (the GraalVM
+Free Terms and Conditions), the JDK's (the Oracle No-Fee Terms and Conditions) and the
+third-party notices of the JDK modules linked in. Those terms allow redistributing the
+binary only unmodified, with the notices, and free of charge.

@@ -47,3 +47,9 @@ rontolisp notices --native --native-target linux-aarch64 -o NOTICES.txt
 `rontolisp notices --tool` は、rontolisp の jar やネイティブバイナリ自体が含むものを出力します:
 rontolisp のライセンスと `NOTICE`、取り込んでいる第三者のコード、JLine、プリコンパイル用シムと
 ランナーの Rust クレートです。jar の `META-INF/` にも同じものが入っています。
+
+ネイティブバイナリは Oracle GraalVM でビルドされ、その Substrate VM とリンクされた JDK クラスは
+バイナリの一部です。そのため `--tool` は GraalVM のライセンス (GraalVM Free Terms and
+Conditions)、JDK のライセンス (Oracle No-Fee Terms and Conditions)、リンクされた JDK モジュールの
+第三者の通知も出力します。これらの条件では、バイナリの再配布は無改変であること、通知を添えること、
+無償であることが求められます。

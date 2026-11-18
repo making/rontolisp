@@ -301,5 +301,22 @@ algorithm came from, and the answer goes in the file's header.
     directory whose `.asd` declares a licence.
   - Row 25: clsql's (LLGPL) and petalisp's (AGPL-3.0) near-copy `.asd` files are deleted;
     `AsdOverrides.REWRITES` edits the upstream file at load time (`.kb/asdf.md`, "Tier 2").
-  - Not covered: the GraalVM runtime linked into rontolisp's own native binary has notices
-    of its own; this item did not audit it.
+- **The GraalVM runtime of the native binary (j97, 2026-11-18): shipped.** Measured on the
+  Oracle GraalVM 25.0.5 the release build uses (`setup-graalvm`, `distribution: graalvm`): its
+  `LICENSE.txt` is the GraalVM Free Terms and Conditions, which deem the portions of a Native
+  Image output "an unmodified Program" and allow redistributing it only under those terms, free
+  of charge; the JDK's `legal/java.base/LICENSE` is Oracle's No-Fee Terms and Conditions (not
+  GPLv2+CPE, which only a Community build would give); `legal/<module>/*.md` hold third-party
+  components. Of the modules the image links, `java.base` has eight (ICU, CLDR, Unicode, the
+  GCC runtime exception ...) and `jdk.incubator.vector` has SLEEF (Boost, CC-BY-4.0); the
+  other modules in use carry only the Oracle texts. `src/native/graalvm-notices.sh` writes
+  LICENSE.txt, the java.base LICENSE and COPYRIGHT and those `.md` files from `java.home` into
+  `META-INF/graalvm-notices.txt` (`-Pnative` only; the jar runs on the user's JVM), the binary
+  holds it (`resource-config.json`), and `rontolisp notices --tool` prints it last. CI's
+  "Verify native image" greps the three marks. Only licence texts are read from the JDK
+  (rule 1 is about classes and jars). A module with `.md` files entering the image is added to
+  the script's `MODULES`. Switching to GraalVM Community (GPLv2+CPE, no fee condition) is not
+  an option: `-H:+VectorAPISupport` (pom) is Oracle GraalVM's. The release stays free of
+  charge by that condition; charging for rontolisp's binary would need Oracle's terms first.
+  Not covered: the web playground (`-Pweb`, Web Image) is not a release asset and was not
+  audited.

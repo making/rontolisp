@@ -511,6 +511,48 @@ gitBranch=${git.branch}
 									</sources>
 								</configuration>
 							</execution>
+							<execution>
+								<id>add-graalvm-notices</id>
+								<phase>generate-resources</phase>
+								<goals>
+									<goal>add-resource</goal>
+								</goals>
+								<configuration>
+									<resources>
+										<resource>
+											<directory>${project.build.directory}/generated-resources/graalvm</directory>
+										</resource>
+									</resources>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+					<!-- The GraalVM that builds the image asks its licence terms and the
+					     third-party notices of the JDK modules it links to travel with the
+					     binary: src/native/graalvm-notices.sh writes them from java.home
+					     (the Oracle GraalVM this build runs under) into
+					     META-INF/graalvm-notices.txt, which the notices subcommand (flag: tool)
+					     prints (.kb/java-frontend-provenance.md, "Notices"). -->
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-antrun-plugin</artifactId>
+						<executions>
+							<execution>
+								<id>graalvm-notices</id>
+								<phase>generate-resources</phase>
+								<goals>
+									<goal>run</goal>
+								</goals>
+								<configuration>
+									<target>
+										<exec executable="bash" osfamily="unix" failonerror="true">
+											<arg value="${project.basedir}/src/native/graalvm-notices.sh"/>
+											<arg value="${java.home}"/>
+											<arg value="${project.build.directory}/generated-resources/graalvm/META-INF/graalvm-notices.txt"/>
+										</exec>
+									</target>
+								</configuration>
+							</execution>
 						</executions>
 					</plugin>
 					<plugin>

@@ -126,7 +126,7 @@ class ThirdPartyNoticesTest {
 		String text = program.toString(StandardCharsets.UTF_8);
 		assertThat(text).contains("Apache License", "Copyright 2001-2026 The Apache Software Foundation", "\nfdlibm\n",
 				"\nring\n", "\nUnicode\n");
-		assertThat(text).doesNotContain("\nJLine\n", "\nllama2.c\n");
+		assertThat(text).doesNotContain("\nJLine\n", "\nllama2.c\n", "GraalVM Free Terms");
 
 		ByteArrayOutputStream tool = new ByteArrayOutputStream();
 		assertThat(
@@ -134,6 +134,12 @@ class ThirdPartyNoticesTest {
 			.isZero();
 		assertThat(tool.toString(StandardCharsets.UTF_8)).contains("\nJLine\n", "\nfdlibm\n")
 			.doesNotContain("\nllama2.c\n");
+		// Only a -Pnative build writes the GraalVM runtime's notices
+		// (src/native/graalvm-notices.sh).
+		if (getClass().getResource("/META-INF/graalvm-notices.txt") != null) {
+			assertThat(tool.toString(StandardCharsets.UTF_8)).contains("GraalVM Free Terms and Conditions",
+					"No-Fee Terms and Conditions", "SLEEF");
+		}
 
 		ByteArrayOutputStream refused = new ByteArrayOutputStream();
 		assertThat(new NoticesCommand(new PrintStream(refused, true, StandardCharsets.UTF_8))

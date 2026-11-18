@@ -250,7 +250,14 @@ jobs:
       run: |
         set -e
         ./target/rontolisp -v
-        ./target/rontolisp notices --tool >/dev/null
+        # The binary owes the notices of the GraalVM runtime linked into it, the JDK
+        # modules it links and the SLEEF of jdk.incubator.vector (src/native/graalvm-notices.sh).
+        ./target/rontolisp notices --tool >notices-tool.txt
+        for notice in 'GraalVM Free Terms and Conditions' 'No-Fee Terms and Conditions' 'SLEEF'; do
+          grep -q "$notice" notices-tool.txt \
+            || { echo "the native binary's notices lack '$notice'" >&2; exit 1; }
+        done
+        rm notices-tool.txt
         if [[ ${{ github.event_name }} != pull_request ]]; then
           for platform in linux-x86_64 linux-aarch64 macos-aarch64; do
             for stub in rlrun rlrun-net; do

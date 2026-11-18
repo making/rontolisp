@@ -22,15 +22,22 @@ import org.jspecify.annotations.Nullable;
  * every {@code THIRD-PARTY-NOTICES.txt} entry a compiled program may carry -- and, with
  * {@code --native}, the notices of the Rust crates the native runner links, for the
  * target platform. {@code --tool} prints instead what the rontolisp jar or native binary
- * itself owes: every entry but the repository's own, and the crates of the precompile
- * shim and of every runner it carries. All of it is read from the classpath
- * ({@code META-INF/}, and the files {@code rontolisp-native/build.sh} lays beside each
- * runner), so the native binary answers the same as the jar.
+ * itself owes: every entry but the repository's own, the crates of the precompile shim
+ * and of every runner it carries and, in the native binary, the GraalVM and JDK notices
+ * of the runtime built into it. All of it is read from the classpath ({@code META-INF/},
+ * and the files {@code rontolisp-native/build.sh} lays beside each runner), so the native
+ * binary answers the same as the jar.
  */
 final class NoticesCommand {
 
 	/** The crates of a platform's runners, beside them (rontolisp-native/build.sh). */
 	static final String RUNNER_NOTICES = "runner-notices.txt";
+
+	/**
+	 * The GraalVM and JDK notices a native binary carries
+	 * (src/native/graalvm-notices.sh).
+	 */
+	static final String GRAALVM_NOTICES = "META-INF/graalvm-notices.txt";
 
 	/** The crates of a platform's precompile shim, beside it. */
 	static final String SHIM_NOTICES = "shim-notices.txt";
@@ -141,7 +148,8 @@ final class NoticesCommand {
 
 	/**
 	 * What the rontolisp jar or native binary itself owes: its licence and NOTICE, every
-	 * entry but the repository's own, and the crates of each native half it carries.
+	 * entry but the repository's own, the crates of each native half it carries and, in
+	 * the native binary, the notices of the GraalVM runtime linked into it.
 	 */
 	static String toolNotices() {
 		ThirdPartyNotices notices = ThirdPartyNotices.parse(resource(ThirdPartyNotices.RESOURCE));
@@ -160,6 +168,10 @@ final class NoticesCommand {
 							crates);
 				}
 			}
+		}
+		String graalvm = optionalResource(GRAALVM_NOTICES);
+		if (graalvm != null) {
+			appendFile(text, "The GraalVM runtime of this binary", graalvm);
 		}
 		return text.toString();
 	}
