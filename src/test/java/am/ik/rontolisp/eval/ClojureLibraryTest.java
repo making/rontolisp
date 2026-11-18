@@ -240,7 +240,7 @@ class ClojureLibraryTest {
 		Map<String, String> arms = Map.of("RONTOLISP::%CLOJURE-STRICT-SEQ", "%CLOJURE-CHAR-SEQUENCE-P",
 				"RONTOLISP::%CLOJURE-NTH", "%CLOJURE-CHAR-SEQUENCE-P", "RONTOLISP::%CLOJURE-IS-SEQABLE",
 				"%CLOJURE-CHAR-SEQUENCE-P", "RONTOLISP::%CLOJURE-RE-FIND", "%CLOJURE-CHAR-SEQUENCE-P",
-				"RONTOLISP::%CLOJURE-RE-NEXT-FROM", "%CLOJURE-RE-LAZY-P");
+				"RONTOLISP::%CLOJURE-RE-NEXT", "%CLOJURE-RE-LAZY-P");
 		arms.forEach((verb, arm) -> assertThat(defun(ClojureLibrary.forms(), verb)).as(verb).contains(arm));
 		List<LispVal> plain = ClojureLibrary.process(Clojure.read(source, null));
 		arms.forEach((verb, arm) -> assertThat(defun(plain, verb)).as(verb).doesNotContain(arm));
@@ -355,56 +355,47 @@ class ClojureLibraryTest {
 	}
 
 	@Test
-	void aProgramWhosePatternsNameNoUnicodePropertySplicesTheRegexEngineWithoutItsTables() {
-		// the parser resolves a property and the matcher tests one only where a pattern
-		// may name one: a literal naming \p, \P or U, or a pattern made from a string
-		// at run time; \b reads the general category of a mark only where a literal names
-		// a word boundary or a property may be named
-		String parse = "RONTOLISP::%CLOJURE-RP-PROPERTY";
-		String test = "RONTOLISP::%CLOJURE-RE-ITEM-TEST";
-		String bound = "RONTOLISP::%CLOJURE-RE-BOUND-WORD-P";
-		assertThat(defun(ClojureLibrary.forms(), parse)).contains("(RONTOLISP::%CLOJURE-RE-UNICODE-P ST)");
-		assertThat(defun(ClojureLibrary.forms(), test)).contains("(RONTOLISP::%CLOJURE-RE-UNI-ITEM-P ITEM)");
-		assertThat(defun(ClojureLibrary.forms(), bound)).contains("(RONTOLISP::%CLOJURE-RE-CAT-WORD-P S I UNICODE)");
-		List<LispVal> plain = ClojureLibrary
-			.process(Clojure.read("(println (re-find #\"a+\" \"caab\") (re-pattern \"x\"))", null));
-		assertThat(defun(plain, parse)).doesNotContain("UNICODE-P").doesNotContain("FAMILY");
-		assertThat(defun(plain, test)).doesNotContain("UNI-ITEM");
-		assertThat(defun(plain, bound)).doesNotContain("CAT-WORD");
-		List<LispVal> wordBound = ClojureLibrary.process(Clojure.read("(println (re-find #\"\\ba\" \"a\"))", null));
-		assertThat(defun(wordBound, parse)).doesNotContain("FAMILY");
-		assertThat(defun(wordBound, bound)).contains("CAT-WORD");
+	void aProgramCarriesTheRegexEnginesTablesOnlyWhereAPatternMayNameWhatReadsThem() {
+		// the engine (regex.lisp) reaches its Unicode tables only through the providers a
+		// pattern is compiled with, so what is left after pruning says what a program
+		// carries: no table for a plain literal; the word characters past ASCII for a
+		// literal naming a word boundary; the properties for one naming \p, \P or U; the
+		// grapheme table for one naming \X or \b{g}; all of them for a pattern made from
+		// a string while the program runs
+		String property = "RONTOLISP::%REGEX-UNI-PROPERTY";
+		String word = "RONTOLISP::%REGEX-CATEGORY-WORD-P";
+		String cluster = "RONTOLISP::%REGEX-GR-NEXT";
+		assertThat(compiledNames("(println (+ 1 2))")).noneMatch(name -> name.contains("%REGEX-"));
+		assertThat(compiledNames("(println (re-find #\"a+\" \"caab\") (re-pattern \"x\"))"))
+			.contains("RONTOLISP::%REGEX-COMPILE")
+			.doesNotContain(property, word, cluster, "RONTOLISP::%REGEX-UNI-PROPS");
+		assertThat(compiledNames("(println (re-find #\"\\ba\" \"a\"))")).contains(word)
+			.doesNotContain(property, cluster);
 		for (String source : List.of("(println (re-find #\"\\p{L}\" \"a\"))", "(println (re-find #\"(?U)\\w\" \"a\"))",
-				"(println (re-pattern \"\\\\pL\"))", "(defn f [s] (re-pattern s)) (println (f \"a\"))",
+				"(println (re-pattern \"\\\\pL\"))")) {
+			assertThat(compiledNames(source)).as(source).contains(property, word).doesNotContain(cluster);
+		}
+		for (String source : List.of("(println (re-seq #\"\\X\" \"ab\"))", "(println (re-find #\"\\b{g}a\" \"a\"))",
+				"(println (re-pattern \"\\\\X\"))")) {
+			assertThat(compiledNames(source)).as(source).contains(cluster).doesNotContain(property);
+		}
+		for (String source : List.of("(defn f [s] (re-pattern s)) (println (f \"a\"))",
 				"(println (read-string \"#\\\"a\\\"\"))")) {
-			List<LispVal> unicode = ClojureLibrary.process(Clojure.read(source, null));
-			assertThat(defun(unicode, parse)).as(source).contains("FAMILY");
-			assertThat(defun(unicode, test)).as(source).contains("UNI-ITEM");
-			assertThat(defun(unicode, bound)).as(source).contains("CAT-WORD");
+			assertThat(compiledNames(source)).as(source).contains(property, word, cluster);
 		}
 	}
 
-	@Test
-	void aProgramWhosePatternsNameNoGraphemeClusterSplicesTheRegexEngineWithoutIt() {
-		// the parser takes \X and \b{g} and the matcher matches them only where a
-		// pattern may name one: a literal naming either, or a pattern made from a
-		// string at run time
-		String parse = "RONTOLISP::%CLOJURE-RP-ESCAPE-NODE";
-		String match = "RONTOLISP::%CLOJURE-RE-MATCH";
-		assertThat(defun(ClojureLibrary.forms(), parse)).contains("(RONTOLISP::%CLOJURE-RE-GRAPHEME-P ST)");
-		assertThat(defun(ClojureLibrary.forms(), match)).contains("(RONTOLISP::%CLOJURE-RE-GRAPHEME-OP-P OP)");
-		for (String source : List.of("(println (re-find #\"a+\" \"caab\") (re-pattern \"x\"))",
-				"(println (re-find #\"\\b\\p{L}\" \"a\"))")) {
-			List<LispVal> plain = ClojureLibrary.process(Clojure.read(source, null));
-			assertThat(defun(plain, parse)).as(source).doesNotContain("GRAPHEME");
-			assertThat(defun(plain, match)).as(source).doesNotContain("GRAPHEME");
+	// The names a Clojure program defines once the whole front end ran: the libraries
+	// spliced and what the program does not reach pruned.
+	private static Set<String> compiledNames(String source) {
+		Set<String> names = new TreeSet<>();
+		for (LispVal form : am.ik.rontolisp.cli.CompileFrontendAccess.clojure(source, true, false).forms()) {
+			if (form instanceof am.ik.rontolisp.LispCons cons && cons.cdr() instanceof am.ik.rontolisp.LispCons rest
+					&& rest.car() instanceof am.ik.rontolisp.LispSymbol name) {
+				names.add(name.name());
+			}
 		}
-		for (String source : List.of("(println (re-seq #\"\\X\" \"ab\"))", "(println (re-find #\"\\b{g}a\" \"a\"))",
-				"(println (re-pattern \"\\\\X\"))", "(defn f [s] (re-pattern s)) (println (f \"a\"))")) {
-			List<LispVal> graphemes = ClojureLibrary.process(Clojure.read(source, null));
-			assertThat(defun(graphemes, parse)).as(source).contains("GRAPHEME-P");
-			assertThat(defun(graphemes, match)).as(source).contains("GRAPHEME-OP-P");
-		}
+		return names;
 	}
 
 	@Test

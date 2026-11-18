@@ -341,7 +341,7 @@ as far as the program reaches it, so a class of the program can extend or implem
 | An enum | `values()`, `valueOf(String)`, `name`, `ordinal`, `compareTo`, `toString` |
 | A record | the accessors, `equals`, `hashCode`, `toString` |
 | An array | `length`, `clone()` |
-| `String` | `length`, `charAt`, `isEmpty`, `isBlank`, `equals`, `equalsIgnoreCase`, `compareTo`, `compareToIgnoreCase`, `hashCode`, `substring`, `subSequence`, `indexOf` and `lastIndexOf` of a string or a character, `contains`, `startsWith`, `endsWith`, `toUpperCase`, `toLowerCase`, `trim`, `strip`, `stripLeading`, `stripTrailing`, `repeat`, `replace`, `concat`, `toCharArray`, `split`, `intern`, `formatted`, `getBytes` of nothing, a `Charset` or a charset's name; `String.valueOf`, `String.join`, `String.format`; `new String()`, `new String(String)`, `new String(char[])`, `new String(char[], int, int)`, `new String(byte[])` with or without a range and a `Charset` or a charset's name |
+| `String` | `length`, `charAt`, `isEmpty`, `isBlank`, `equals`, `equalsIgnoreCase`, `compareTo`, `compareToIgnoreCase`, `hashCode`, `substring`, `subSequence`, `indexOf` and `lastIndexOf` of a string or a character, `contains`, `startsWith`, `endsWith`, `toUpperCase`, `toLowerCase`, `trim`, `strip`, `stripLeading`, `stripTrailing`, `repeat`, `replace`, `replaceAll`, `replaceFirst`, `matches`, `concat`, `toCharArray`, `split`, `intern`, `formatted`, `getBytes` of nothing, a `Charset` or a charset's name; `String.valueOf`, `String.join`, `String.format`; `new String()`, `new String(String)`, `new String(char[])`, `new String(char[], int, int)`, `new String(byte[])` with or without a range and a `Charset` or a charset's name |
 | `StringBuilder`, `StringBuffer` | the constructors of nothing, a capacity or a text; `append`, `insert`, `reverse`, `setLength`, `setCharAt`, `deleteCharAt`, `delete`, `replace`, `indexOf`, `toString`, `length`, `isEmpty`, `charAt`, `substring`, `subSequence` |
 | `CharSequence` | `length`, `charAt`, `subSequence`, `isEmpty`; a `String` and a `StringBuilder` are one |
 | `Integer`, `Long` | boxing and unboxing; `MAX_VALUE`, `MIN_VALUE`, `parseInt` / `parseLong` with or without a radix, `valueOf`, `toString` with or without a radix, `toBinaryString`, `toHexString`, `Integer.toOctalString`, `Integer.parseUnsignedInt`, `Integer.toUnsignedString`, `Integer.toUnsignedLong`, `compare`, `signum`, `sum`, `max`, `min`, `bitCount`, `hashCode`, `intValue`, `longValue`, `doubleValue`, `compareTo` |
@@ -396,8 +396,14 @@ as far as the program reaches it, so a class of the program can extend or implem
 
 `String.format`, `formatted` and `printf` take `%d`, `%s`, `%S`, `%f`, `%e`, `%E`, `%x`,
 `%X`, `%o`, `%c`, `%b`, `%n` and `%%`, with the flags `-`, `0`, `+`, a space, `,`, `(` and
-`#`, a width, a precision and an argument index (`%2$s`). `String.split` takes a text, or
-one character class (`\\s`, `\\d`, `\\w`, `[,;]`, `[0-9]`) alone or followed by `+`.
+`#`, a width, a precision and an argument index (`%2$s`).
+
+`java.util.regex.Pattern` and `Matcher` take the syntax the `Pattern` documentation
+describes -- classes with unions and intersections, groups (capturing, named, atomic),
+lookahead and lookbehind, back references, greedy, reluctant and possessive quantifiers,
+the inline flags, `\\p{..}` properties, `\\X` and `\\b{g}` -- and so do `String.matches`,
+`replaceAll`, `replaceFirst` and `split`. A malformed pattern is a
+`PatternSyntaxException` with a JDK's message. See [deviations](deviations.md).
 
 The streams of `java.io` are over arrays, strings, the standard streams and each other;
 there are no files. A `PrintStream`, a `PrintWriter` and the two bridges between bytes and

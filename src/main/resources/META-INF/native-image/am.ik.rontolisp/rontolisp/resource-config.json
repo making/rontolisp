@@ -345,9 +345,15 @@
       },
       {
         "condition": {
-          "typeReachable": "am.ik.rontolisp.eval.ClojureLibrary"
+          "typeReachable": "am.ik.rontolisp.eval.RegexLibrary"
         },
-        "pattern": "am/ik/rontolisp/eval/clojure-unicode\\.lisp"
+        "pattern": "am/ik/rontolisp/eval/regex\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.RegexLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/regex-unicode\\.lisp"
       },
       {
         "condition": {

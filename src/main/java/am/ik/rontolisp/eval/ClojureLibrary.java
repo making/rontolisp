@@ -31,11 +31,10 @@ import org.jspecify.annotations.Nullable;
 /**
  * The run-time half of the EXPERIMENTAL Clojure front end ({@code clojure.lisp} on the
  * classpath, plus the case mapping's tables {@link ClojureCaseMapping} generates from the
- * JDK and the regex engine's Unicode tables, {@code clojure-unicode.lisp}, generated from
- * it by {@code ClojureUnicodeTablesTest}): the printer behind
- * {@code println}/{@code print}/{@code pr}/{@code prn}, the string builders behind
- * {@code str}/{@code pr-str}, and the REPL echo. It is Common Lisp source like every
- * other shipped library, so no backend learns a Clojure name
+ * JDK; its regular expressions run on the engine {@link RegexLibrary} splices): the
+ * printer behind {@code println}/{@code print}/{@code pr}/{@code prn}, the string
+ * builders behind {@code str}/{@code pr-str}, and the REPL echo. It is Common Lisp source
+ * like every other shipped library, so no backend learns a Clojure name
  * ({@code .kb/clojure-frontend.md}).
  *
  * <p>
@@ -257,7 +256,6 @@ public final class ClojureLibrary {
 		return FORMS.computeIfAbsent("default", ignored -> {
 			List<LispVal> forms = new ArrayList<>(LispReader.readAllFromString(readSource("clojure.lisp")));
 			forms.addAll(ClojureCaseMapping.runtimeForms());
-			forms.addAll(LispReader.readAllFromString(readSource("clojure-unicode.lisp")));
 			return List.copyOf(forms);
 		});
 	}

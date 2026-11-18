@@ -32,7 +32,9 @@ same kind of spliced run-time library (`.kb/starlark-frontend.md`). The fifth is
 EXPERIMENTAL, `.java`, a subset of the Java language: its own lexer and parser, static types,
 then the same lowering to core forms and a spliced run-time library; its library classes that
 are plain Java are source in the jar, lowered with the program behind the seam
-(`.kb/java-frontend.md`).
+(`.kb/java-frontend.md`). What two front ends need at run time is a spliced library of its
+own, named by theirs: the regular-expression engine of Clojure and Java
+(`eval/RegexLibrary`, `.kb/regex-engine.md`).
 
 ## Language-independent libraries
 

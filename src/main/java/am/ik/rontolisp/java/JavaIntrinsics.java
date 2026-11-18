@@ -59,6 +59,8 @@ final class JavaIntrinsics {
 	/** The source class holding the members of these classes that are written in Java. */
 	private static final String SUPPORT = "rontolisp.internal.Support";
 
+	private static final String PATTERN = "java.util.regex.Pattern";
+
 	private static final String CHARSET = "java.nio.charset.Charset";
 
 	/**
@@ -228,6 +230,77 @@ final class JavaIntrinsics {
 	/** A member written in Java, in the library's own source. */
 	private static JavaEmitter support(String name) {
 		return (lowering, call) -> lowering.library(SUPPORT, name, operands(call));
+	}
+
+	/**
+	 * A member that is a function of the regular-expression engine every front end shares
+	 * ({@code eval/regex.lisp}): its arguments.
+	 */
+	private static JavaEmitter engine(String name) {
+		return (lowering, call) -> JavaForms.form(engineFunction(name), operands(call));
+	}
+
+	private static LispSymbol engineFunction(String name) {
+		return new LispSymbol("RONTOLISP::%REGEX-" + name.toUpperCase(java.util.Locale.ROOT));
+	}
+
+	/**
+	 * The engine's providers a pattern is compiled with, as three forms: of the Unicode
+	 * properties, of the word characters past ASCII and of the grapheme clusters. The
+	 * engine reaches its tables only through them, so a program carries a table only
+	 * where a pattern may name what reads it: a pattern written as a constant is read for
+	 * a backslash before {@code p}, {@code P}, {@code b}, {@code B} or {@code X} and for
+	 * the {@code U} flag (too wide a yes costs the tables, never an answer), any other
+	 * one may name anything.
+	 * @param regex the pattern
+	 * @param flags the flags it is compiled under, or {@code null} for none
+	 * @return the three forms, {@code nil} for a provider the pattern cannot need
+	 */
+	private static List<LispVal> regexProviders(Typed regex, @Nullable Typed flags) {
+		boolean unicode = true;
+		boolean category = true;
+		boolean grapheme = true;
+		if (regex.constant() instanceof String text) {
+			boolean anyFlags = flags != null && !(flags.constant() instanceof Number);
+			int known = flags != null && flags.constant() instanceof Number number ? number.intValue() : 0;
+			unicode = anyFlags || (known & 256) != 0 || text.contains("\\p") || text.contains("\\P")
+					|| text.contains("(?") && text.indexOf('U') >= 0;
+			category = unicode || text.contains("\\b") || text.contains("\\B");
+			grapheme = text.contains("\\X") || text.contains("\\b") && text.contains("{g");
+		}
+		return List.of(unicode ? list(engineFunction("unicode-provider")) : JavaForms.NIL,
+				category ? list(engineFunction("category-provider")) : JavaForms.NIL,
+				grapheme ? list(engineFunction("grapheme-provider")) : JavaForms.NIL);
+	}
+
+	/** A call of one of {@code Pattern}'s entries: the arguments, then the providers. */
+	private static LispVal pattern(Context lowering, String entry, List<LispVal> arguments, Typed regex,
+			@Nullable Typed flags) {
+		List<LispVal> all = new ArrayList<>(arguments);
+		all.addAll(regexProviders(regex, flags));
+		return lowering.library(PATTERN, entry, all);
+	}
+
+	/**
+	 * Whether a pattern written as a constant is a text with no operator, which
+	 * {@code String.split} cuts by without the engine.
+	 */
+	private static boolean plainText(Typed regex) {
+		if (!(regex.constant() instanceof String text) || text.isEmpty()) {
+			return false;
+		}
+		for (int i = 0; i < text.length(); i++) {
+			if ("\\.[]{}()*+?^$|".indexOf(text.charAt(i)) >= 0) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	private static LispVal split(Context lowering, Invocation call, LispVal limit) {
+		Typed regex = call.arguments().get(0);
+		return plainText(regex) ? runtimeCall("split-text", call.self(), regex.form(), limit)
+				: pattern(lowering, "splitText", List.of(call.self(), regex.form(), limit), regex, null);
 	}
 
 	/** A member that is one of fdlibm's functions over doubles. */
@@ -556,9 +629,23 @@ final class JavaIntrinsics {
 					object, object)
 			.method("concat", string, (lowering, call) -> call("%string-concat", call.self(), call.argument(0)), string)
 			.method("toCharArray", characters, runtime("to-chars"))
-			.method("split", new ArrayType(string),
-					(lowering, call) -> runtimeCall("split", call.self(), call.argument(0), integer(0)), string)
-			.method("split", new ArrayType(string), runtime("split"), string, i)
+			.method("split", new ArrayType(string), (lowering, call) -> split(lowering, call, integer(0)), string)
+			.method("split", new ArrayType(string), (lowering, call) -> split(lowering, call, call.argument(1)), string,
+					i)
+			.method("matches", b,
+					(lowering, call) -> pattern(lowering, "matchesText", List.of(call.argument(0), call.self()),
+							call.arguments().get(0), null),
+					string)
+			.method("replaceAll", string,
+					(lowering, call) -> pattern(lowering, "replaceText",
+							List.of(call.self(), call.argument(0), call.argument(1), JavaForms.T),
+							call.arguments().get(0), null),
+					string, string)
+			.method("replaceFirst", string,
+					(lowering, call) -> pattern(lowering, "replaceText",
+							List.of(call.self(), call.argument(0), call.argument(1), JavaForms.NIL),
+							call.arguments().get(0), null),
+					string, string)
 			.method("formatted", string, format, new ArrayType(object))
 			.varargs()
 			.statik("format", string,
@@ -1079,6 +1166,37 @@ final class JavaIntrinsics {
 			return JavaForms.let(started, call.argument(0),
 					List.of(runtimeCall("thread-start", call.argument(1), call.argument(2), body)));
 		});
+		// java.util.regex over the engine every front end shares: compile and matches are
+		// lowered where they are called, with the providers their pattern may need
+		String regex = PATTERN + ".";
+		natives.put(regex + "compile(String)", (lowering, call) -> pattern(lowering, "make",
+				List.of(call.argument(0), integer(0)), call.arguments().get(0), null));
+		natives.put(regex + "compile(String,int)", (lowering, call) -> pattern(lowering, "make",
+				List.of(call.argument(0), call.argument(1)), call.arguments().get(0), call.arguments().get(1)));
+		natives.put(regex + "matches(String,CharSequence)", (lowering, call) -> pattern(lowering, "matchesText",
+				List.of(call.argument(0), call.argument(1)), call.arguments().get(0), null));
+		natives.put(regex + "compile0(String,int,Object,Object,Object)", runtime("regex-compile"));
+		natives.put(regex + "refused0(Object)", runtime("regex-refused-p"));
+		natives.put(regex + "description0(Object)", runtime("regex-refusal-text"));
+		natives.put(regex + "index0(Object)", runtime("regex-refusal-index"));
+		natives.put(regex + "message0(String,int,String)", engine("syntax-message"));
+		natives.put(regex + "quote0(String)", engine("quote"));
+		natives.put(regex + "split0(Object,String,int)", runtime("regex-split"));
+		natives.put(regex + "groupCount0(Object)", engine("group-count"));
+		natives.put(regex + "groupIndex0(Object,String)", runtime("regex-group-index"));
+		String matcher = "java.util.regex.Matcher.";
+		natives.put(matcher + "matcher0(Object,String)", engine("matcher"));
+		natives.put(matcher + "find0(Object)", engine("matcher-find"));
+		natives.put(matcher + "findFrom0(Object,int)", engine("matcher-find-from"));
+		natives.put(matcher + "lookingAt0(Object)", engine("matcher-looking-at"));
+		natives.put(matcher + "matches0(Object)", engine("matcher-matches"));
+		natives.put(matcher + "reset0(Object)", engine("matcher-reset"));
+		natives.put(matcher + "matched0(Object)", engine("matcher-matched-p"));
+		natives.put(matcher + "start0(Object,int)", engine("matcher-start"));
+		natives.put(matcher + "end0(Object,int)", engine("matcher-end"));
+		natives.put(matcher + "group0(Object,int)", engine("matcher-group"));
+		natives.put(matcher + "replace0(Object,String,String,boolean)", runtime("regex-replace"));
+		natives.put(matcher + "text0(Object)", (lowering, call) -> call.argument(0));
 		natives.put("rontolisp.internal.Support.oneStack()", runtime("one-stack-p"));
 		natives.put("rontolisp.internal.Support.floatHash(float)", runtime("float-bits"));
 		// a Float is the float in a cons with its tag

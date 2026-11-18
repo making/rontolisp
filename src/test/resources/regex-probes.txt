@@ -1,0 +1,1080 @@
+;; The probes the regex engine's rules were read from (.kb/regex-engine.md): a pattern,
+;; a tab, an input (\n \r \t \\ and \uXXXX escaped), each run under java.util.regex and
+;; under the engine by ClojureRegexTest, which requires the same finds, groups and refusal
+;; messages. Written here; an expectation is never stored, the JDK running the test gives it.
+((\w)\w)*\w\w	abcde
+(?:(\w)\w)*\w\w	abcde
+((\w)\w)*?\w\wf	abcdef
+((\w)\w)+\w\w	abcde
+((\w)\w){1,5}\w\w	abcde
+((\w)\w)*+\w	abcde
+((\w)|x)*\w\w	abcde
+((\w)x?)*\w\w	abcde
+(\w)*\w\w	abcde
+(\w)*c	abcde
+(a)*	b
+(a)*b	b
+(a)?b	b
+(a|b)*c	abd abc
+(a)*c	aad aac
+(ab)*c	abd abc
+(a)|b	b
+(a)|(b)	ab
+(?:(a)|b)*	ab
+(?:(a)|b)+	ab
+(?:(a)|(b))*	ab
+((a)|(b))*	ab
+((a)|(b))+	ab
+(a(b)?)+	aba
+(a(b)?)*	aba
+(?:a(b)?)+	aba
+(a(b)*)+	aba
+(a|(b))+	ba
+((a)|b)+c	abc
+(?:(a)b|ac)	ac
+(?:(a)b|a)c	ac
+(?:(a)b)?ac	ac
+(?:(a)b)*ac	ac
+(?:(a)b)*?ac	ac
+(?:(a)b){0,2}ac	ac
+((a)b)?ac	ac
+((a)b)*ac	ac
+(a)*?b	aab
+(a)+?b	aab
+(a){2}b	aab
+(a){1,2}?b	aab
+(a|b){2}c	abc
+(a|ab)(c|bcd)(d*)	abcd
+(a+)(b+)?	aab
+(a+?)(a*)	aaa
+(a*)(a*)	aaa
+(a*)*	aaa
+(a*)+	aaa
+(a+)*	aaa
+(a+)+b	aaa
+(a|b)*?c	abc
+(?=(a+))a*b\1	baaabac
+(?<=(a))b(?=(c))	abc
+(?=(a))?b	b
+(?:(?=(a))a)*b	aab
+((?=(a))a)*b	aab
+(?>(a)|b)c	ac bc
+(?>(a))?b	b
+(?>(a)b)?ac	ac
+(?>(a)b)*ac	ac
+(?:(a)|b)*c	abc bac
+(?:(a)|(b)|c)*d	abcd cbad
+(a)\1*	aaa
+(a)(?:\1)*	aaa
+(a)(\1)*	aaa
+(?:x(a)?)*y	xaxy
+(x(a)?)*y	xaxy
+(?:x(a)?)+?y	xaxy
+(?:(a)|x)*y	xaxy axy
+(?:(a)|x){2,}y	xaxy axxy
+()*	x
+()+	x
+()?	x
+(){2}	x
+(){0,2}	x
+()*?	x
+(^)*a	a
+(\b)+a	a
+(a|)*	ab
+(a|)+	ab
+(|a)*	ab
+(|a)+	ab
+(a?)*?b	ab
+(a?)+?b	ab
+(a??)*b	ab
+(?:a?)*b	ab
+(?:a|)*b	ab
+(?:)*b	ab
+(?:(a)|)*b	ab
+a{1}{2}	a aa
+a{2}{3}	aaaaaaa
+{2}	x{2}
+x|{2}	x{2}
+({2})	x{2}
+^{2}	x
+a{2}{3}?	aaaaaaa
+a{2}{	aa{
+a{2}+{3}	aaaaaaaa
+a{0}	a
+a{0,0}b	ab
+(?x)a+ ?	aaa
+(?x)a + ?	aaa
+(?x)a b{2, 3}	abbb
+(?x)a b{ 2,3}	abbb
+(?x)a b{2 ,3}	abbb
+(?x)a b{2,3 }	abbb
+(?x)a b {2,3}	abbb
+(?x)a{2}# c\n{3}	aaaaaa
+\Qab\E+	abab
+\Qa\E{2}	aa
+a\Q\E+	aaa
+\Q\E+	a
+(?x)\Q a\E b	 ab
+\Q\	\\
+\Qa\\E	a\\
+\Qé\E(
+\Q1\E(
+\Q-\E(
+\Q \E(
+\Q_\E(
+\Q\\E(
+\Qa\E\E
+\Qa\Qb\E	a\\Qb
+ab\Q\E*	ab abbb
+(?i)\Qab\E	AB
+\x{41g}
+\x{41 }
+\x{ 41}
+\u004
+\u00g1
+\u+041
+😀	😀
+\uD83D	😀
+[😀]	😀
+\07	\u0007
+\077	?
+\0377	ÿ
+\0400	 0
+\0477	'7
+\018	\u00018
+\1	a
+(a)\1	aa
+(a)\2	aa2
+(a)\10	aa0
+(a)\11	aa1
+(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\10	abcdefghijj
+(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\11	abcdefghija1
+(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)\11	abcdefghijkk
+(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)\111	abcdefghijkk1
+\2(a)(b)	ab
+(a\1)	a
+(a)|\1	b
+(a)?\1	b
+(a)?\1b	b
+\ca	!
+\cA	\u0001
+\c?	\u007f
+\c[	\u001b
+\cé	x
+\e\a\f\t\n\r	\u001b\u0007\f\t\n\r
+\h\H\v\V\s\S\d\D\w\W	 a\na a1 a-
+\z\Z\A\G\b\B	
+\R	\r\n\u0085  \u000b\u000c\r
+\X	a
+\i
+\j
+\l
+\m
+\o
+\q
+\g
+\C
+\F
+\I
+\J
+\K
+\L
+\M
+\O
+\T
+\U
+\Y
+\"\#\!\@\%\&\'\,\/\:\;\<\=\>\`\~\ 	"#!@%&',/:;<=>`~ 
+\é	é
+\日	日
+(
+)
+ab)
+abc)d
+()
+(?
+(?:
+(?<
+(?<n
+(?<n>
+(?<n>a
+(?<>a)
+(?<1n>a)
+(?<n>a)(?<n>b)
+\k<n>(?<n>a)
+\k
+\k<
+\k<n
+\kn
+(?$a)
+(?i
+(?q)
+(?i-q)
+(?-)
+(?)
+(?i:
+(?<=a
+(?<!a
+(?<a
+(?=
+(?>a
+*
++a
+?a
+a**
+a+*
+a?*
+a{2}{3}
+a{2}*
+a|*
+(*)
+(|*)
+a{
+a{}
+a{a}
+a{2
+a{2,
+a{2,a}
+a{2,1}
+a{,2}
+a{99999999999}
+a{2,99999999999}
+a{2147483648}
+a{2147483647}
+x{2}?+
+x*?+
+x*+?
+x*++
+[
+[]
+[a
+[a-
+[a-]
+[z-a]
+[a-\d]
+[\d-a]
+[\1]
+[&&]
+[[]
+[]]
+[^]
+[^]]
+[a&&
+[a&&&&b]
+[a&&&b]
+[^
+[\
+[a\
+[\q]
+[[:alpha:]
+(?x)[ ]
+(?x)[
+\
+\y
+\E
+\Q
+\Qabc
+\x
+\x4
+\xg1
+\x{110000}
+\x{41
+\x{}
+\x{g}
+\u12
+\u
+\c
+\0
+\08
+\8
+\9
+\1
+(a)\2
+(a)\11
+\p
+\p{
+\p{L
+\pq
+\N
+\b{
+\b{x}
+\ba{
+\_
+\-
+\<
+\Z+
+^*
+$+
+\b+
+\G+
+\A*
+(?=a)+
+(?=a)*
+(?!a)?
+(?<=a)+
+(?<=a)*
+(?<!a){2}
+(?<=a*)
+(?<=a+)
+(?<=a{2,})
+(?<=a|b*)
+(?<=(a)*)
+(?<=(a)+)
+(?<=(?:a)+)
+(?<=(?:ab)*)
+(?<=a?)
+(?<=(a)?)
+(?<=(ab)?)
+(?<=a*?)
+(?<=a+?)
+(?<=a*+)
+(?<=a++)
+(?<=[ab]*)
+(?<=.*)
+(?<=.+)
+(?<=\w+)
+(?<=\R)
+(?<=\R+)
+(?<=\X)
+(?<=\1)(a)
+(?<=(a)\1)
+(?<=a{2})
+(?<=a{2,3})
+(?<=(?:a|bc){2,3})
+(?<=ab+)
+(?<=a+b)
+(?<=a+b+)
+(?<=(?:a+)+)
+(?<=a++b)
+(?<=x(?:a+)y)
+(?<=(a+))
+(?<=(?:a+))
+(?<=a+|b)
+(?<=(?=a+))
+(?<=(?<=a+))
+(?<=$*)
+(?<=^+)
+(?<=\b+)
+(?<=b*?a)c	bbac
+(?<=a*?b*?)c	abc
+(?<=(?:a*?))c	ac
+(?<=a*?|b)c	ac
+(?<=a{0,5}?)c	ac
+(?<=ab{0,5}?)c	abc
+(?<=ab*+)c	abc
+(?<=a(?:b*))c	abc
+(?<=ab*)c	abbc
+(?<=ab?)c	abc
+(?<=ab??)c	abc
+(?<=a??)c	ac
+(?<=a??b)c	abc
+(?<=ba??)c	bac
+(?<=ab+?)c	abc
+(?<=a+?b)c	aabc
+(?<=x*?a*?)c	xac
+(?<=(a)*?)c	ac
+(?<=(a)+?)c	ac
+(?<=(a){2,3})c	aac
+(?<=(a){2,3}?)c	aac
+(?<=(ab){2,3})c	ababc
+(?<=(ab)+)c	ababc
+(?<=(ab)*)c	ababc
+(?<=(a)*b)c	aabc
+(?<=b(a)*)c	baac
+(?<=(a|b)*)c	abc
+(?<=(a|b)+)c	abc
+(?<=(a|b){2})c	abc
+(?<=(?:a|b){2})c	abc
+(?<=(?:a|b)?)c	abc
+(?<=(?:a|b)??)c	abc
+(?<=(?:ab)?)c	abc
+(?<=(?:ab)??)c	abc
+(?<=(?:ab){2})c	ababc
+(?<=(?:ab){1,2})c	ababc
+(?<=(?:ab){1,2}?)c	ababc
+(?<=(?:a){1,2})c	aac
+(?<=(?:a)*)c	aac
+(?<=(?:a)*?)c	aac
+(?<=(?:[ab])*)c	abc
+(?<=(?:.)*)c	abc
+(?<=(?:ab|c)*)c	abc
+(?<=(?:a?)*)c	abc
+(?<=(?:a?){2})c	aac
+(?<=(a?){2})c	aac
+(?<=(?:a{2}){2})c	aaaac
+(?<=(?:a{2})*)c	aaaac
+(?<=(?:a{2})+)c	aaaac
+(?<=a{2}+)c	aac
+(?<=a{2,}+)c	aac
+(?<=a{2,}?)c	aac
+(?<=xa{2,}?)c	xaac
+(?<=a{2,}?x)c	aaxc
+(?<=\R?)c	\nc
+(?<=\R{2})c	\n\nc
+(?<=\R*)c	\nc
+(?<=\b*)c	c
+(?<=(?:^)*)c	c
+(?<=(?:^|a)*)c	c
+(?<=(?>a+))c	aac
+(?<=(?>a+)b)c	aabc
+(?<=(?>a|bb)+)c	abbc
+(?<=(?i)a+)c	Aac
+(?<=(?i:a)+)c	Aac
+(?<=\w+\d)c	a1c
+(?<=\d\w+)c	1ac
+(?<=\d\w+\d)c	1a1c
+(?<=\w+\d+)c	a1c
+(?<=\w*\d*)c	a1c
+(?<=\w?\d*)c	a1c
+(?<=\w{2,5}\d*)c	aa1c
+(?<=\d*\w{2,5})c	1aac
+(?<=\d*|\w*)c	1c
+(?<=\d*\w*|x)c	1ac
+(?<=(?:\d*)(?:\w*))c	1ac
+(?<=(\d*)(\w*))c	1ac
+(?<=(\d*)x)c	1xc
+(?<=xa{2,})c	xaac
+(?<=xa{0,})c	xaac
+(?<=xa{1,})c	xaac
+(?<=xa{2,5})c	xaac
+(?<=x[ab]+)c	xabc
+(?<=\d*\w?)c	1ac
+(?<=\d*\w??)c	1ac
+(?<=x\w?)c	xac
+(?<=a(?:b*?|c))d	acd
+(?<=a*(?:b|c))d	aabd
+(?<=a*(?:b|c)?)d	aabd
+(?<=(?:b|c)a*)d	baad
+(?<=(?:b|cc)a*d)e	baade
+(?<=a*(?:b){2})c	abbc
+(?<=a*b{2})c	abbc
+(?<=a*b{1})c	abc
+(?<=a*b{1,1})c	abc
+(?<=(a*)b)c	aabc
+(?<=x(a*))c	xaac
+(?<=(a+|b)c)d	aacd
+(?<=\X)a	ba
+(?<=a\X)c	abc
+(?<=a\b*)c	ac
+(?<=(?:ab){0,1})c	abc
+(?<=(?:ab){0,1}x*)c	abxc
+(?<=x*(?:ab){0,1})c	xabc
+(?<=x*(?:ab)?)c	xabc
+(?<=x*(a)?)c	xac
+(?<=x*a?)c	xac
+(?<=(?>a|b)*)c	abc
+(?<=(?>a)*)c	aac
+(?<=x(?>a)*)c	xaac
+(?<=(?=a*)x)c	xc
+(?<=x(?<=a*))c	xc
+(?<=a{2}b*)c	aabc
+(?<=a{2}b*c)d	aabcd
+(?<=a{2,3}b*c)d	aabcd
+(?<=ab*c*)d	abcd
+(?<=ab*cd*)e	abcde
+(?<=.*)a	xa
+(?<=.*x.*)a	xa
+(?<=^.*)a	xa
+(?<=\G.*)a	xa
+(?<=a|b*|c)d	bbd
+(?<=(?:a|b*)c)d	bbcd
+(?<=(?:a|b*)c+)d	bbcd
+(?<=(?:a+|b+)(?:c+|d))e	bde
+(?<=a??b*)c	abc
+(?<=a?+b*)c	abc
+(?<=b*a?+)c	bac
+(?<=b*a{0,1})c	bac
+(?<=b*a{0,1}?)c	bac
+(?<=b*a{1})c	bac
+(?<=b*(?:a){1})c	bac
+(?<=b*(a){1})c	bac
+(?<=b*(a){1,2})c	bac
+(?<=(a){1,2}b*)c	abc
+(?<=\R\R?)c	\n\nc
+(?<=\R{1,2}a*)c	\nac
+(?<=a{0}b*c*)d	bcd
+(?<=(?:a*){0}b)d	bd
+(?<=(?:a|b){0}b)d	bd
+(?<=(?:a|b){1}b)d	abd
+(?<=(?:(?:a))*)d	ad
+(?<=(?:(a))*)d	ad
+(?<=(?:a(?:b))*)d	abd
+(?<=(?:a{1,2})?)d	ad
+(?<=(?:a*)?)d	ad
+(?<=(?:a*)?b)d	abd
+(?<=b(?:a*)?)d	bad
+(?<=b(?:a*?)?)d	bad
+(?<=b(?:a*+)?)d	bad
+(?<=b(?:(?:a)*)?)d	bad
+(?<=(?:a|b)c*+)d	acd
+(?<=(?:a)?c*?)d	acd
+(?<=(?:a|b)x\w{2,3})d	axccd
+(?<=x(?:a|b)c*+)d	xacd
+(?<=x(?:a|b)c*+e)d	xaced
+(?<=(?:a|b)c*+e*+)d	aced
+(?<=((?:a|b))c*+)d	acd
+(?<=(?:(?:a|b)x)c*+)d	axcd
+(?<=(?:a|b){1}c*+)d	acd
+(?<=(?>a|b)c*+)d	acd
+(?<=(?:a|b)(?:c*+))d	acd
+(?<=x*(?:a|b)c*)d	xacd
+(?<=x*(?:a|b)c*y*)d	xacyd
+(?<=x+(?:a|b)c{2,3})d	xaccd
+(?<=(a|b)*+c*+)d	acd
+(?<=x(?:a|b)?c*+)d	xacd
+(?<=x(?:a|b)??c*+)d	xacd
+(?<=x(?:a|b)?+c*+)d	xacd
+(?<=xa?c*+)d	xacd
+(?<=x++(?:ab){0,1}+)c	xabc
+(?<=x++(?:ab)?+)c	xabc
+(?<=x++(?:ab){0,1})c	xabc
+(?<=x++(?:ab)?)c	xabc
+(?<=x++(a)?+)c	xac
+(?<=x++a{0,1})c	xac
+(?<=x++a{0,1}+)c	xac
+(?<=x++a?+)c	xac
+(?<=x++a?)c	xac
+(?<=x++a??)c	xac
+(?<=x++a{0,1}?)c	xac
+(?<=x++(?:ab){0,1}?)c	xabc
+(?<=x++(?:ab)??)c	xabc
+(?<=x++(?:a|b){0,1})c	xac
+(?<=x++(?:a|b){0,1}+)c	xac
+(?<=x++(?:a|b)?+)c	xac
+(?<=x(?:ab){0,1}+)c	xabc
+(?<=x(?:a|b){0,1}+)c	xac
+(?<=(?:a|b){0,1}+)c	xac
+(?<=(?:a|bb){2}+)c	abbc
+(?<=(|e++(?:A{2}?s[BA-C]{0,1}){0,1}+( A)?+))
+(?<=(|e++(?:A{2}?s[BA-C]{0,1}){0,1}+))
+(?<=(|e++( A)?+))
+(?<=(e++( A)?+))
+(?<=e++( A)?+)
+(?<=e++(?: A)?+)
+(?<=e++(?:A)?+)
+(?<=e++(?:AB)?+)
+(?<=e++(A)?+)
+(?<=e++(AB)?+)
+(?<=e++A?+)
+(?<=e++(AB)?)
+(?<=e++(AB)??)
+(?<=e++(?:AB){0,1}+)
+(?<=e++(AB){0,1}+)
+(?<=e++(?:A{2}?s[BA-C]{0,1}){0,1}+)
+(?<=e++(?:A{2}?s){0,1}+)
+(?<=e++(?:A{2}s){0,1}+)
+(?<=e++(?:As[BA-C]{0,1}){0,1}+)
+(?<=e++(?:As[BA-C]?){0,1}+)
+(?<=e++(?:AB?){0,1}+)
+(?<=e++(?:AB?)?+)
+(?<=e++(?:AB?)?)
+(?<=e++(?:AB?){2}+)
+(?<=e(?:AB?){2}+)
+(?<=e(?:AB?){2})
+(?<=e(?:AB?){0,1})
+(?<=e++(?:AB?){0,1})
+(?<=e++(?:A|B){0,1}+)
+(?<=e++(?:A|BB){0,1}+)
+(?<=e++(?:A|BB){2}+)
+(?<=e++(?:AB){2}+)
+(?<=e++(?:A){2}+)
+(?<=e++A{2}+)
+(?<=e++A{2})
+(?<=e++(?:AB){2})
+(?<=e++(?:A{2}s)?)
+(?<=e++(?:A{2}s|x))
+(?<=e++(?:A{2}?s)??)
+(?<=e++(?:x|A{2}s)y{2})
+(?<=e++(?:x|A{2}s)?y{2})
+(?<=e++(?>A{2}s))
+(?<=e++(A{2}s))
+(?<=e++(?:(?:A{2}s)))
+(?<=e++(?=A{2}s))
+(?<=e++(?<=A{2}s))
+(?<=e++(?:A*s)?+)
+(?<=e++A*)
+(?<=e++(?:A*)?+)
+(?<=e++(?:A*)?)
+(?<=(?>\AS#+|[a-c]?\w*s){0,2})
+(?<=(?:a+b|c+d)e)
+(?<=(?:a+b|c+d)?e)
+(?<=(?:a+b+|c)?e)	ce
+(?<=(?:a+b+)?e)	e
+(?<=(?>a+b+|c+d+){1}e)	cde
+(?:a|ab){2}+c	abac
+(?:a|ab){2}c	abac
+(?:a|ab)*+c	abac
+(?:a|ab){1,2}+c	abc
+(?:a|ab)?+c	abc
+(?:a|ab){0,1}+c	abc
+(?:(a)|b){0,1}+c	bc ac
+(?:(a)b|a){0,1}+ac	aac
+(?:(a)b|a)?+ac	aac
+((a)b|a){0,1}ac	aac
+((a)b|a){0,1}?ac	aac
+(?:(a)){0,1}ab	ab
+(?:(a)){0,1}?ab	ab
+(?:(a)){0,2}ab	ab
+((a)){0,1}ab	ab
+(a){0,1}+ab	ab
+(a)?+ab	ab
+[a&&]	abcd&-^]w[.{
+[&&a]	abcd&-^]w[.{
+[a&]	abcd&-^]w[.{
+[a&&&&b]	abcd&-^]w[.{
+[a&&&b]	abcd&-^]w[.{
+[a&&&]	abcd&-^]w[.{
+[&a]	abcd&-^]w[.{
+[&&&a]	abcd&-^]w[.{
+[a&&b]	abcd&-^]w[.{
+[^a&&b]	abcd&-^]w[.{
+[^ab&&[bc]]	abcd&-^]w[.{
+[a-c&&b-d]	abcd&-^]w[.{
+[a-c&&b-d&&c]	abcd&-^]w[.{
+[ab&&bc[cd]]	abcd&-^]w[.{
+[a&&[b]c]	abcd&-^]w[.{
+[abc&&[b]c]	abcd&-^]w[.{
+[abc&&c[b]]	abcd&-^]w[.{
+[abc&&[b][c]]	abcd&-^]w[.{
+[[ab]&&[bc]]	abcd&-^]w[.{
+[[ab][cd]&&[bc]]	abcd&-^]w[.{
+[ab[cd]&&[bc]]	abcd&-^]w[.{
+[[ab]cd&&[bc]]	abcd&-^]w[.{
+[^[ab]]	abcd&-^]w[.{
+[^[ab]c]	abcd&-^]w[.{
+[a[^b]]	abcd&-^]w[.{
+[^a[^b]]	abcd&-^]w[.{
+[^[^a]]	abcd&-^]w[.{
+[^[^a]b]	abcd&-^]w[.{
+[a&&[^a]]	abcd&-^]w[.{
+[^a&&[^b]]	abcd&-^]w[.{
+[a-d&&[^b]&&[^c]]	abcd&-^]w[.{
+[a-d&&[^b]c]	abcd&-^]w[.{
+[[a-d]&&[^b]&&c]	abcd&-^]w[.{
+[abc&&]	abcd&-^]w[.{
+[&&abc]	abcd&-^]w[.{
+[^&&abc]	abcd&-^]w[.{
+[^abc&&]	abcd&-^]w[.{
+[a&&b&&]	abcd&-^]w[.{
+[a-]	abcd&-^]w[.{
+[-a]	abcd&-^]w[.{
+[a-b-d]	abcd&-^]w[.{
+[a-b-]	abcd&-^]w[.{
+[--a]	abcd&-^]w[.{
+[a\-d]	abcd&-^]w[.{
+[\w-a]	abcd&-^]w[.{
+[a-\w]	abcd&-^]w[.{
+[a-[b]]	abcd&-^]w[.{
+[[a]-b]	abcd&-^]w[.{
+[a-b[c]]	abcd&-^]w[.{
+[a-&&b]	abcd&-^]w[.{
+[a&&-]	abcd&-^]w[.{
+[&]	abcd&-^]w[.{
+[&&&&]	abcd&-^]w[.{
+[a&&&&]	abcd&-^]w[.{
+[]a]	abcd&-^]w[.{
+[]-a]	abcd&-^]w[.{
+[a]]	abcd&-^]w[.{
+[^^]	abcd&-^]w[.{
+[a^]	abcd&-^]w[.{
+[\^a]	abcd&-^]w[.{
+[.$|()*+?{}]	abcd&-^]w[.{
+[\]]	abcd&-^]w[.{
+[\[]	abcd&-^]w[.{
+[a[]	abcd&-^]w[.{
+[a[]]	abcd&-^]w[.{
+[[]]	abcd&-^]w[.{
+[[]a]	abcd&-^]w[.{
+[[a]	abcd&-^]w[.{
+[a-z&&[^m-p]&&[^a]]	abcd&-^]w[.{
+[a&&[b]&c]	abcd&-^]w[.{
+[a&&[b]&]	abcd&-^]w[.{
+[a&&[ab]&c]	abcd&-^]w[.{
+[ab&&[b]&c]	abcd&-^]w[.{
+[a&&[b]&&c]	abcd&-^]w[.{
+[a&&[a]&c]	abcd&-^]w[.{
+[a&&[a]&a]	abcd&-^]w[.{
+[a&&[ac]&c]	abcd&-^]w[.{
+[a&&[c]&c]	abcd&-^]w[.{
+[d&&[b]&c]	abcd&-^]w[.{
+[a&&[b]c&c]	abcd&-^]w[.{
+[a&&[b]&[c]]	abcd&-^]w[.{
+[a&&[^b]&c]	abcd&-^]w[.{
+[a&&b&]	abcd&-^]w[.{
+[a&&[b]&&]	abcd&-^]w[.{
+[a&&[a]&]	abcd&-^]w[.{
+[a-b&&[b]&c]	abcd&-^]w[.{
+[a-b&&[b]&]	abcd&-^]w[.{
+[\w&&[b]&c]	abcd&-^]w[.{
+[[a]&&[b]&c]	abcd&-^]w[.{
+[[ab]&&[b]&c]	abcd&-^]w[.{
+[a[x]&&[b]&c]	abcd&-^]w[.{
+[a&&[b]]	abcd&-^]w[.{
+[a&&[a]]	abcd&-^]w[.{
+[a&&[b]d]	abcd&-^]w[.{
+[a&&d[b]]	abcd&-^]w[.{
+[a&&[a]d]	abcd&-^]w[.{
+[a&&d[a]]	abcd&-^]w[.{
+[ab&&[a]&&[b]]	abcd&-^]w[.{
+[abcd&&[ab]&&[bc]]	abcd&-^]w[.{
+[abcd&&ab&&bc]	abcd&-^]w[.{
+[abcd&&ab[bc]]	abcd&-^]w[.{
+[a&b]	abcd&-^]w[.{
+[a&b&&b]	abcd&-^]w[.{
+[&&b&c]	abcd&-^]w[.{
+[a&&&&&b]	abcd&-^]w[.{
+[a&&&&&&b]	abcd&-^]w[.{
+[b-c&&]	abcd&-^]w[.{
+[b-ca&&]	abcd&-^]w[.{
+[ab-c&&]	abcd&-^]w[.{
+[b-c&&&d]	abcd&-^]w[.{
+[b-c&&&[d]]	abcd&-^]w[.{
+[a&&&[d]]	abcd&-^]w[.{
+[ab-c&&&d]	abcd&-^]w[.{
+[b-ca&&&d]	abcd&-^]w[.{
+[\w&&&d]	abcd&-^]w[.{
+[[a]&&&d]	abcd&-^]w[.{
+[b-c&&&&d]	abcd&-^]w[.{
+[b-c&&d&&&c]	abcd&-^]w[.{
+[b-c&&&]	abcd&-^]w[.{
+[b-c&&&&]	abcd&-^]w[.{
+[b-c&&c&&]	abcd&-^]w[.{
+[b-c&&c&&&]	abcd&-^]w[.{
+[a&&c&&&]	abcd&-^]w[.{
+[a&&a&&&]	abcd&-^]w[.{
+[a&&[a]&&&]	abcd&-^]w[.{
+[^a&&&b]	abcd&-^]w[.{
+[ab-c&&&]	abcd&-^]w[.{
+[a-a&&&d]	abcd&-^]w[.{
+[a&&&-]	abcd&-^]w[.{
+[a&&&d-e]	abcd&-^]w[.{
+[a&&&\w]	abcd&-^]w[.{
+[a&&b-c&&&d]	abcd&-^]w[.{
+[a&&&&&]	abcd&-^]w[.{
+[b-c&&&&&d]	abcd&-^]w[.{
+[\t-\v]+	\t\n\u000b\u000c\r\u0085
+[\v-\r]+	\t\n\u000b\u000c\r\u0085-
+[\v]+	\t\n\u000b\u000c\r\u0085
+[a-\h]
+[\h-a]+	 -a
+[a-\s]
+[a-\w]
+[a-\D]
+[a-\V]
+[\t-\V]
+[a-\p{L}]
+[\n-\R]
+[\v-\v]+	\t\n\u000b\u000c
+[\x09-\v\x20]+	\t\n\u000b\u000c 
+[^\t-\v]+	\t\n\u000b\u000c
+[\v&&\x0b]+	\n\u000b\u000c
+(?x)[\t - \v]+	\t\n\u000b\u000c
+[\cI-\v]+	\t\n\u000b\u000c
+(?m)^	
+(?m)^$	
+(?m)^a	a
+(?md)^	
+(?m)^	a
+(?m)^x*	
+^	
+(?m)$	
+(?:a?){3}b	b
+(?:a|){2}b	b
+(a|){2}	b
+(?:a??){2}b	b
+(?:|a){2,3}?	b
+(?:a|){3}	a
+(a|){3}	a
+(a|){3}	aa
+(?:a?|x){2,3}?b	ab
+(a?|x){2,3}b	b
+(a?|x){1,3}b	b
+(a?|x){3}b	ab
+(?:a?|x){2}?b	b
+(?:()|a){2,3}?	b
+(?:()|a){2}	b
+(?:()|x){2}?b	b
+(?x)[a& ]]	a&] 
+(?x)[a& b]	a&b
+(?x)[a&b]	a&b
+(?x)[a & b]	a&b
+(?x)[a& &b]	a&b
+(?x)[a& ]
+(?x)[a&	]]	a&]
+(?x)[a- ]
+(?x)[a- c]	abc-
+(?x)[a -c]	abc-
+(?x)[a - ]	a-
+(?x)[a -]	a-
+(?x)[a-]	a-
+(?:()|x)??\1	b
+(?>()|x)??\1	b
+()??\1	b
+(?:())??\1	b
+(?>())*?\1	b
+(?:())*?\1	b
+(?>())+?\1	b
+(?>()){0,2}?\1	b
+(?>(a)|())*?\1b	ab
+x(?>a??)\G	xa
+x(?>a??){2}\G	xa
+x(?>a??){2}\G|	xa
+x(?>a)\G	xa
+x(?=a)\G	xa
+x(?=)\G	xa
+x(?!b)\G	xa
+x(?<=x)\G	xa
+x(?>)\G	xa
+x(?:a)?\G	xa
+xa?\G	xa
+xa??\G	xa
+xa?+\G	xa
+xa*\G	xa
+xa*?\G	xa
+xa*+\G	xa
+xa{1}\G	xa
+xa{1,2}\G	xa
+x[a]*\G	xa
+x.*\G	xa
+x.+\G	xa
+x\w{0,5}\G	xa
+x(a)*\G	xa
+x(a)+\G	xa
+x(?:a)*\G	xa
+x(a|b)*\G	xa
+x(a)*+\G	xa
+x(?:a|b)*+\G	xa
+x\R?\G	x\n
+x(?:a){1}\G	xa
+x(a){1}\G	xa
+x(?:a){1}?\G	xa
+x\b*\G	xa
+x^*\G	xa
+x(?=a)*\G	xa
+x(?>a)*\G	xa
+x(?>a??){2}\G	x
+x(?>a??){1}\G	x
+x(?>a??)*\G	x
+x(?>a??)+\G	x
+x(?>a?){2}\G	x
+x(?>){2}\G	x
+x(?>)+\G	x
+x(?=){2}\G	x
+x(?:){2}\G	x
+x(){2}\G	x
+x()+\G	x
+x(?:)*+\G	x
+x\b{1}\G	x
+x\b{1}\G	x 
+x$*\G	x
+x${1}\G	x
+x$+\G	x
+\G+	日É _
+(?i){2}\G+	ab
+\G{2}	ab
+\G*	ab
+\G?	ab
+(?:\G)+	ab
+(\G)+	ab
+(?!\G{2,3})	ab
+(?!\G+)	ab
+(?!\G)	ab
+(?!\G{2,3}+)	ab
+(?=\G{2})	ab
+(?:\X+z|\b{g}b)	ab
+(?:.{1,5}z|\b{g}b)	ab
+(?:.+z|\b{g}b)	ab
+(?:.*z|\b{g}b)	ab
+(?:\X{1,5}z|\b{g}b)	ab
+(?:\X*z|\b{g}b)	ab
+(?:\X?z|\b{g}b)	ab
+(?:\X{1}z|\b{g}b)	ab
+(?:(?:\X)+z|\b{g}b)	ab
+(?:(\X)+z|\b{g}b)	ab
+(?:(?=ab)z|\b{g}b)	ab
+(?:(?=a)z|\b{g}b)	ab
+(?:(?!x)z|\b{g}b)	ab
+(?:(?>ab)z|\b{g}b)	ab
+(?:(?>a)z|\b{g}b)	ab
+(?:(?<=a)z|\b{g}b)	ab
+(?:(a)+z|\b{g}b)	ab
+(?:(a)*z|\b{g}b)	ab
+(?:(?:a)+z|\b{g}b)	ab
+(?:a?z|\b{g}b)	ab
+(?:a??z|\b{g}b)	ab
+(?:a?+z|\b{g}b)	ab
+(?:a{1}z|\b{g}b)	ab
+(?:a{1,2}z|\b{g}b)	ab
+(?:a{1,2}?z|\b{g}b)	ab
+(?:a{1,}z|\b{g}b)	ab
+(?:a{2,}z|\b{g}b)	ab
+(?:a{0,}z|\b{g}b)	ab
+(?:a*+z|\b{g}b)	ab
+(?:a++z|\b{g}b)	ab
+(?:[a]*z|\b{g}b)	ab
+(?:a*z|\b{g}b)	ab
+(?:a+z|\b{g}b)	ab
+(?:a+?z|\b{g}b)	ab
+(?:a*?z|\b{g}b)	ab
+(?:(?:a|x)*z|\b{g}b)	ab
+(?:(?:a|x)+z|\b{g}b)	ab
+(?:(?:a|x)+?z|\b{g}b)	ab
+(?:(?:a)*z|\b{g}b)	ab
+(?:(a)*+z|\b{g}b)	ab
+(?:(?:a|b)*+z|\b{g}b)	ab
+(?:(?:a)?z|\b{g}b)	ab
+(?:(?:a)??z|\b{g}b)	ab
+(?:(?:a)?+z|\b{g}b)	ab
+(?:(a)?z|\b{g}b)	ab
+(?:(a|x)?z|\b{g}b)	ab
+(?:(?:a){1}z|\b{g}b)	ab
+(?:(?:a|x){1}z|\b{g}b)	ab
+(?:(?:a|x){1}+z|\b{g}b)	ab
+(?:(?:a){1}?z|\b{g}b)	ab
+(?:a\R?z|\b{g}b)	ab
+(?:a\b*z|\b{g}b)	ab
+(?:a\b?z|\b{g}b)	ab
+(?:a\b{1}z|\b{g}b)	ab
+(?:a(?:)z|\b{g}b)	ab
+(?:a()z|\b{g}b)	ab
+(?:a(?:){1}z|\b{g}b)	ab
+(?:a(){1}z|\b{g}b)	ab
+(?:a(?:)*z|\b{g}b)	ab
+(?:a(?:)?z|\b{g}b)	ab
+(?:a(?=)z|\b{g}b)	ab
+(?:a(?=){1}z|\b{g}b)	ab
+(?:a(?>)z|\b{g}b)	ab
+(?:a\1?z|\b{g}b)	ab
+(?:a(?:x|)z|\b{g}b)	ab
+(?:(?:a|ax)z|\b{g}b)	ab
+(?:(?i)az|\b{g}b)	ab
+(?:az|\b{g}b)	ab
+\p{}
+\p{Foo}
+\pX
+\P
+\p{IsFoo}
+\p{InFoo}
+\p{sc=Foo}
+\p{x=y}
+\p{=L}
+\p{gc=}
+\p{lu}
+\p{alpha}
+(?U)\p{alpha}
+\p{InBasic-Latin}
+\p{IsLatn}	a
+[\p{Foo}]
+[\p{L}-z]
+(?x)\p{L # c\n}
+a\p{L
+\p{L}\p{Foo
+\p{Is}
+\p{In}
+\p{L1 }
+\p{blk=Foo}
+\p{block=}
+\p{gc=Foo}
+\p{general_category=xx}
+\p{script=}
+\p{SC=LATIN}	a
+\p{Sc=latin}	a
+\p{isL}	a
+\p{ISL}
+\p{inGreek}
+\p{IsLATIN}	a
+\p{Islatin}	a
+\p{IsALPHABETIC}	a
+\p{Isalpha}	a
+\p{IsLu}	A
+\p{Islu}
+\p{IsLU}
+\p{Lu}	A
+\p{LU}
+\p{javalowercase}
+\p{JavaLowerCase}
+\p{Latin}
+\p{Greek}
+\p{Any}
+\p{ALL}
+\p{all}	a
+\p{Alphabetic}
+\p{IsAny}
+\p{Isall}
+\p{IsASCII}
+\p{IsL1}
+\p{IsLC}	a
+\p{IsLD}	a
+\p{Isjavalowercase}
+\p{IsAssigned}	a
+\p{IsWord}	a
+\p{Word}
+\p{IsCc}
+\p{IsZ}
+\p{general category=L}
+\p{gc =L}
+\p{InGREEK}	α
+\p{Ingreek}	α
+\p{blk=greek}	α
+\p{IsCommon}	1
+\p{sc=common}	1
+\p{IsUnknown}
+\p{IsZzzz}
+\p{sc=Zzzz}
+\pL	a
+\PL	1
+\pLu	A
+\p{^L}
+\p{L}{2}	ab
+\p{Pe}	)
+\p{IsPe}	)
+\p{gc=Pe}	)
+\p{gc=LC}	a
+\p{gc=L1}
+\p{gc=all}
+\p{gc=Alpha}
+\p{IsDigit}	1
+\p{IsHex_Digit}	f
+\p{Ishex_digit}	f
+\p{IsHEXDIGIT}	f
+\p{IsHex Digit}
+\p{IsWhite Space}
+\p{IsWHITE_SPACE}	 
+\p{IsNoncharacterCodePoint}	a
+\p{IsJoinControl}	a
+\p{IsEmojiPresentation}	a
+\p{IsExtendedPictographic}	a
+\b	été
+\b	aé
+\b	été
+\b	́a
+\b	á̂ b
+\b	1́
+\b	_́
+\b	 ́
+\b	é́
+\b	áé́
+\b	a⃝
+\b	aः
+\b	-́a
+\b	á́́b
+\b	a‍́
+\B	á
+(?U)\b	日本 語
+(?U)\b	á ́
+(?U)\b	été _1٤
+(?U)\b	a‌b‍
+(?U)\w+	a‌b‍
+(?U)\b	́
+(?U)\b	a⃝ b
+(?U)\b	‿
+\b	٤
+\b	a٤
+\b	٤́
+\b	ǅ
+\b	Á
+(?x:[[&#\D]]a-c\W])+
+(?x)[a&#x
+(?x)[&#x
+(?x)[a&
+[a&

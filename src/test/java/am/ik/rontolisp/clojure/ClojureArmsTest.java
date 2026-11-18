@@ -300,31 +300,10 @@ class ClojureArmsTest {
 	}
 
 	@Test
-	void theRegexFamiliesAreMadeByAPatternThatMayNameAPropertyOrAWordBoundary() {
-		// the parser's arm refuses a property as before without the unicode family; the
-		// category family's arm is the clause of \b's test past ASCII
-		List<LispVal> parser = read("(if (rontolisp::%clojure-re-unicode-p st) (family st) (error \"no\"))");
-		assertThat(ClojureArms.strip(parser, ClojureArms.Family.REGEX_UNICODE).stream().map(LispVal::print))
-			.containsExactly("(ERROR \"no\")");
-		List<LispVal> bound = read("(cond ((ascii c) t) ((rontolisp::%clojure-re-cat-word-p s i u) t) (t nil))");
-		assertThat(ClojureArms.strip(bound, ClojureArms.Family.REGEX_CATEGORY).stream().map(LispVal::print))
-			.containsExactly("(COND ((ASCII C) T) (T NIL))");
-		for (String maker : List.of("rontolisp::%clojure-re-compile-unicode", "rontolisp::%clojure-re-pattern",
-				"rontolisp::%clojure-read-string", "rontolisp::%clojure-lispreader-regex")) {
-			assertThat(ClojureArms.scan(read("(" + maker + " x)"), ClojureArms.Family.REGEX_UNICODE).builds()).as(maker)
-				.isTrue();
-			assertThat(ClojureArms.scan(read("(" + maker + " x)"), ClojureArms.Family.REGEX_CATEGORY).builds())
-				.as(maker)
-				.isTrue();
-		}
-		assertThat(ClojureArms.scan(read("(rontolisp::%clojure-re-compile-bound x)"), ClojureArms.Family.REGEX_UNICODE)
-			.builds()).isFalse();
-		assertThat(ClojureArms.scan(read("(rontolisp::%clojure-re-compile-bound x)"), ClojureArms.Family.REGEX_CATEGORY)
-			.builds()).isTrue();
-		assertThat(ClojureArms.scan(read("(rontolisp::%clojure-re-compile x)"), ClojureArms.Family.REGEX_CATEGORY)
-			.builds()).isFalse();
-		// a literal or a re-pattern of a literal string parses through the parse its
-		// source may need
+	void aRegexLiteralIsParsedByTheEntryItsSourceCallsFor() {
+		// a literal or a re-pattern of a literal string parses through the entry its
+		// source may need: each hands the engine the providers of what the source may
+		// name, so a program carries their tables only then (ClojureLibraryTest)
 		assertThat(ClojureStringLowering.reCompiler("a+")).isEqualTo(ClojureStringLowering.RE_COMPILE);
 		assertThat(ClojureStringLowering.reCompiler("\\ba")).isEqualTo(ClojureStringLowering.RE_COMPILE_BOUND);
 		assertThat(ClojureStringLowering.reCompiler("\\B")).isEqualTo(ClojureStringLowering.RE_COMPILE_BOUND);
@@ -332,37 +311,8 @@ class ClojureArmsTest {
 			assertThat(ClojureStringLowering.reCompiler(source)).as(source)
 				.isEqualTo(ClojureStringLowering.RE_COMPILE_UNICODE);
 		}
-	}
-
-	@Test
-	void theGraphemeFamilyIsMadeByAPatternThatMayNameAGraphemeCluster() {
-		// the parser's arms refuse \X and \b{g} as before without the family, and the
-		// matcher's clause for them goes
-		List<LispVal> parser = read("(if (rontolisp::%clojure-re-grapheme-p st) (list :graph) (error \"no\"))");
-		assertThat(ClojureArms.strip(parser, ClojureArms.Family.REGEX_GRAPHEME).stream().map(LispVal::print))
-			.containsExactly("(ERROR \"no\")");
-		List<LispVal> matcher = read(
-				"(cond ((eq tag :lb) (lb)) ((rontolisp::%clojure-re-grapheme-op-p op) (gr op))" + " (t (anchor)))");
-		assertThat(ClojureArms.strip(matcher, ClojureArms.Family.REGEX_GRAPHEME).stream().map(LispVal::print))
-			.containsExactly("(COND ((EQ TAG :LB) (LB)) (T (ANCHOR)))");
-		for (String maker : List.of("rontolisp::%clojure-re-grapheme-source", "rontolisp::%clojure-re-pattern",
-				"rontolisp::%clojure-read-string", "rontolisp::%clojure-lispreader-regex")) {
-			assertThat(ClojureArms.scan(read("(" + maker + " x)"), ClojureArms.Family.REGEX_GRAPHEME).builds())
-				.as(maker)
-				.isTrue();
-		}
-		for (String other : List.of("rontolisp::%clojure-re-compile", "rontolisp::%clojure-re-compile-bound",
-				"rontolisp::%clojure-re-compile-unicode")) {
-			assertThat(ClojureArms.scan(read("(" + other + " x)"), ClojureArms.Family.REGEX_GRAPHEME).builds())
-				.as(other)
-				.isFalse();
-		}
-		assertThat(
-				ClojureArms.scan(read("(rontolisp::%clojure-re-grapheme-source x)"), ClojureArms.Family.REGEX_UNICODE)
-					.builds())
-			.isFalse();
-		// a literal's source is wrapped where it may name one: a backslash before X,
-		// or one before b and an opening brace before g
+		// a literal's source is wrapped where it may name a grapheme cluster: a
+		// backslash before X, or one before b and an opening brace before g
 		for (String source : List.of("\\X", "a\\X+", "\\b{g}", "(?x)\\b {g}", "\\\\X")) {
 			assertThat(ClojureStringLowering.mayNameAGraphemeCluster(source)).as(source).isTrue();
 		}

@@ -1285,141 +1285,75 @@
               (setq i (+ i 1))))))
     (rontolisp::%java-sb-string builder)))
 
-;; What a regular expression String.split takes can be: a text with no operator, each
-;; character possibly behind a backslash; or one of the character classes \s \d \w and
-;; a set in brackets (characters, ranges, those classes), alone or repeated by +. Answers (kind . data), kind :text with
-;; the text, or :class with (members . repeated), members a string of characters and of
-;; the letters after a backslash; nil for anything else.
-(defun rontolisp::%java-split-pattern (regex)
-  (let ((n (length regex))
-        (i 0)
-        (text (rontolisp::%java-sb-new))
-        (plain t)
-        (members nil)
-        (repeated nil))
-    (cond ((and (>= n 2) (char= (char regex 0) #\\)
-                (position (char regex 1) "sdw")
-                (or (= n 2) (and (= n 3) (char= (char regex 2) #\+))))
-           (cons :class (cons (%substring regex 0 2) (= n 3))))
-          ((and (>= n 3) (char= (char regex 0) #\[)
-                (not (char= (char regex 1) #\^))
-                (let ((close (position #\] regex :start 2)))
-                  (and close
-                       (or (= close (- n 1))
-                           (and (= close (- n 2))
-                                (char= (char regex (- n 1)) #\+)))
-                       (progn
-                         (setq members (%substring regex 1 close))
-                         (setq repeated (= close (- n 2)))
-                         t))) (null (position #\[ members))
-                (null (position #\& members)))
-           (cons :class (cons members repeated)))
-          (t
-           (while (and plain (< i n))
-             (let ((c (char regex i)))
-               (cond ((char= c #\\)
-                      (if (and (< (+ i 1) n)
-                               (not (alphanumericp (char regex (+ i 1)))))
-                          (progn
-                            (vector-push-extend (char regex (+ i 1)) text)
-                            (setq i (+ i 2)))
-                          (setq plain nil)))
-                     ((position c ".[]{}()*+?^$|") (setq plain nil))
-                     (t
-                      (vector-push-extend c text)
-                      (setq i (+ i 1))))))
-           (if plain (cons :text (rontolisp::%java-sb-string text)) nil)))))
+;; An array of the elements of a list.
+(defun rontolisp::%java-list-array (items)
+  (let ((result (make-array (length items) :initial-element nil)) (k 0))
+    (dolist (item items result)
+      (%aset result k item)
+      (setq k (+ k 1)))))
 
-;; Whether a character is a member of a class as %java-split-pattern answers it.
-(defun rontolisp::%java-class-member-p (members c)
-  (let ((i 0) (n (length members)) (found nil))
-    (while (and (null found) (< i n))
-      (let ((m (char members i)))
-        (if (and (char= m #\\) (< (+ i 1) n))
-            (let ((kind (char members (+ i 1))))
-              (setq found
-                    (cond ((char= kind #\s)
-                           (let ((code (char-code c)))
-                             (or (= code 32) (and (>= code 9) (<= code 13)))))
-                          ((char= kind #\d) (and (char>= c #\0) (char<= c #\9)))
-                          ((char= kind #\w)
-                           (or (and (char>= c #\0) (char<= c #\9))
-                               (and (char>= c #\a) (char<= c #\z))
-                               (and (char>= c #\A) (char<= c #\Z))
-                               (char= c #\_)))
-                          (t (char= kind c))))
-              (setq i (+ i 2)))
-            (if (and (< (+ i 2) n) (char= (char members (+ i 1)) #\-))
-                ;; a range, both ends in it
-                (progn
-                  (setq found
-                        (and (char>= c m) (char<= c (char members (+ i 2)))))
-                  (setq i (+ i 3)))
-                (progn
-                  (setq found (char= m c))
-                  (setq i (+ i 1)))))))
-    found))
+;; String.split by a text with no operator (a constant, which the lowering reads): the
+;; texts between its occurrences, at most LIMIT of them where LIMIT is above zero, the
+;; empty ones at the end dropped where it is zero. A string it does not occur in is the
+;; one piece.
+(defun rontolisp::%java-split-text (s text limit)
+  (let ((pieces nil) (count 0) (at 0) (i 0) (n (length s)) (k (length text)))
+    (while (and (<= (+ i k) n) (or (<= limit 0) (< count (- limit 1))))
+      (if (rontolisp::%java-starts-with s text i)
+          (progn
+            (setq pieces (cons (%substring s at i) pieces))
+            (setq count (+ count 1))
+            (setq i (+ i k))
+            (setq at i))
+          (setq i (+ i 1))))
+    (if (null pieces)
+        (rontolisp::%java-list-array (list s))
+        (progn
+          (setq pieces (cons (%substring s at n) pieces))
+          (if (= limit 0)
+              (while (and pieces (= (length (car pieces)) 0))
+                (setq pieces (cdr pieces))))
+          (rontolisp::%java-list-array (reverse pieces))))))
 
-;; String.split: the texts between the matches, a leading empty one kept only before
-;; a match that is not empty, the trailing empty ones dropped unless LIMIT is negative;
-;; a positive LIMIT is the most pieces made.
-(defun rontolisp::%java-split (s regex limit)
-  (let ((pattern (rontolisp::%java-split-pattern regex)))
-    (if (null pattern)
-        (error "String.split by the regular expression ~S is not supported by the experimental Java subset yet"
-               regex))
-    (let ((pieces (make-array 4 :adjustable t :fill-pointer 0))
-          (start 0)
-          (i 0)
-          (n (length s))
-          (text (eq (car pattern) :text)))
-      (if (and text (= (length (cdr pattern)) 0))
-          ;; an empty expression splits between the characters
-          (progn
-            (while (and (< i n)
-                        (or (<= limit 0) (< (+ (length pieces) 1) limit)))
-              (vector-push-extend (%substring s i (+ i 1)) pieces)
-              (setq i (+ i 1)))
-            (if (< i n) (vector-push-extend (%substring s i n) pieces))
-            (if (= n 0) (vector-push-extend "" pieces)))
-          (progn
-            (while (and (< i n)
-                        (or (<= limit 0) (< (+ (length pieces) 1) limit)))
-              (let ((end
-                     (if text
-                         (if (rontolisp::%java-starts-with s (cdr pattern) i)
-                             (+ i (length (cdr pattern)))
-                             nil)
-                         (if (rontolisp::%java-class-member-p
-                              (car (cdr pattern)) (char s i))
-                             (let ((j (+ i 1)))
-                               (if (cdr (cdr pattern))
-                                   (while (and (< j n)
-                                               (rontolisp::%java-class-member-p
-                                                (car (cdr pattern)) (char s j)))
-                                     (setq j (+ j 1))))
-                               j)
-                             nil))))
-                (if end
-                    (progn
-                      (if (or (> i 0) (> (length pieces) 0))
-                          (vector-push-extend (%substring s start i) pieces)
-                          (if (= i 0)
-                              ;; a match at the very start leaves an empty first piece
-                              (vector-push-extend "" pieces)))
-                      (setq start end)
-                      (setq i end))
-                    (setq i (+ i 1)))))
-            (vector-push-extend (%substring s start n) pieces)))
-      (if (= limit 0)
-          (while (and (> (length pieces) 1)
-                      (= (length (aref pieces (- (length pieces) 1))) 0))
-            (vector-pop pieces)))
-      (let ((result (make-array (length pieces) :initial-element nil)) (k 0))
-        (while (< k (length pieces))
-          (%aset result k (aref pieces k))
-          (setq k (+ k 1)))
-        result))))
+;; java.util.regex over the engine every front end shares (regex.lisp). What the engine
+;; refuses comes back as a value, (:refused text index), for the library's Java source
+;; to throw as the exception it is; a grapheme boundary past the input is the run
+;; time's own StringIndexOutOfBoundsException.
+(defun rontolisp::%java-regex-compile (regex flags unicode category grapheme)
+  (block refused
+    (rontolisp::%regex-compile regex flags
+                               :none (lambda (description index)
+                                       (if (eq index :bounds)
+                                           (rontolisp::%java-raise "java.lang.StringIndexOutOfBoundsException"
+                                                                   description)
+                                           (return-from refused
+                                            (list :refused description index))))
+                               unicode category grapheme)))
+
+(defun rontolisp::%java-regex-refused-p (made)
+  (if (and (consp made) (eq (car made) :refused)) t nil))
+
+(defun rontolisp::%java-regex-refusal-text (refusal) (car (cdr refusal)))
+
+(defun rontolisp::%java-regex-refusal-index (refusal) (car (cdr (cdr refusal))))
+
+;; The index of a named group, -1 for a name the pattern has no group of.
+(defun rontolisp::%java-regex-group-index (program name)
+  (or (rontolisp::%regex-group-index program name) -1))
+
+(defun rontolisp::%java-regex-split (program input limit)
+  (rontolisp::%java-list-array (rontolisp::%regex-split program input limit)))
+
+;; Matcher.replaceAll and replaceFirst: the text, or the refusal of a replacement that
+;; names no group -- its index 1 for a group number past the groups, the oracle's
+;; IndexOutOfBoundsException, 0 for its IllegalArgumentException.
+(defun rontolisp::%java-regex-replace (program input replacement all)
+  (block refused
+    (rontolisp::%regex-replace program input replacement all
+                               (lambda (kind message)
+                                 (return-from refused
+                                              (list :refused message
+                                               (if (eq kind :bounds) 1 0)))))))
 
 ;; String.join over the elements of an array, each through TO-STRING.
 (defun rontolisp::%java-join (delimiter items to-string)

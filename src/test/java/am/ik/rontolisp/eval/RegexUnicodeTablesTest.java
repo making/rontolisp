@@ -1,4 +1,4 @@
-package am.ik.rontolisp.clojure;
+package am.ik.rontolisp.eval;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -24,7 +24,6 @@ import java.util.stream.Collectors;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispInteger;
 import am.ik.rontolisp.LispVal;
-import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.format.LispFormatter;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReader;
@@ -33,31 +32,30 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Generates the Unicode tables of the Clojure runtime's regex engine
- * ({@code clojure-unicode.lisp}, read by {@code clojure.lisp}'s "Unicode properties")
- * from the running JDK, the oracle's own {@code Character}, and pins the shipped file to
- * them: every code point's general category and the {@code Character} predicates
- * {@code java.util.regex}'s {@code CharPredicates} asks, its {@code UnicodeScript} and
+ * Generates the Unicode tables of the regex engine the front ends share
+ * ({@code regex-unicode.lisp}, read by {@code regex.lisp}'s "Unicode properties" and
+ * "Grapheme clusters") from the running JDK's public {@code Character} API, and pins the
+ * shipped file to them: every code point's general category and the {@code Character}
+ * predicates the Pattern documentation names classes after, its {@code UnicodeScript} and
  * {@code UnicodeBlock}, the names {@code UnicodeScript.forName} and
  * {@code UnicodeBlock.forName} take, and its grapheme cluster break type and Indic
- * conjunct class as {@code java.util.regex}'s {@code \X} reads them. A JDK whose Unicode
+ * conjunct class as {@code java.util.regex}'s {@code \X} shows them. A JDK whose Unicode
  * moved fails here; the message names the regenerated file to copy over the shipped one.
  *
  * <p>
- * The names come from public API alone: a script's ISO 15924 alias is found by asking
- * {@code forName} every four-letter name, and a block's names are the variants of its
- * constant's name with each underscore a space, a hyphen or kept (and without the
- * spaces), plus the three canonical names that are no such variant. A later JDK adding
- * another such name would go unseen here. The grapheme classes, which the JDK keeps in
- * internal API ({@code jdk.internal.util.regex.Grapheme} and {@code IndicConjunctBreak}),
- * are found by asking the JDK's own {@code \X} whether short sequences around each code
- * point form one cluster ({@link #graphemeClass}).
+ * Everything comes from running the JDK, nothing from reading it: a script's ISO 15924
+ * alias is found by asking {@code forName} every four-letter name, and a block's names
+ * are the variants of its constant's name with each underscore a space, a hyphen or kept
+ * (and without the spaces), plus the three canonical names that are no such variant. A
+ * later JDK adding another such name would go unseen here. The grapheme classes are found
+ * by asking the JDK's {@code \X} whether short sequences around each code point form one
+ * cluster ({@link #graphemeClass}).
  */
-class ClojureUnicodeTablesTest {
+class RegexUnicodeTablesTest {
 
 	/**
 	 * The {@code Character} predicates of a combo, from bit 5 up in this order
-	 * ({@code clojure.lisp}, "Unicode properties").
+	 * ({@code regex.lisp}, "Unicode properties").
 	 */
 	private static final List<IntPredicate> PREDICATES = List.of(Character::isAlphabetic, Character::isLowerCase,
 			Character::isUpperCase, Character::isTitleCase, Character::isIdeographic, Character::isDigit,
@@ -96,7 +94,7 @@ class ClojureUnicodeTablesTest {
 
 	/**
 	 * A code point's break type times four plus its Indic conjunct class
-	 * ({@code clojure.lisp}, "Grapheme clusters"), each the first a probe tells apart: a
+	 * ({@code regex.lisp}, "Grapheme clusters"), each the first a probe tells apart: a
 	 * break before an extend leaves CR, LF and Control (CR joins a LF, a CR joins LF);
 	 * joining a letter after it is Extend or ZWJ (ZWJ between two pictographs joins them,
 	 * GB11); joining a letter before it is Prepend; joining a regional indicator,
@@ -203,10 +201,10 @@ class ClojureUnicodeTablesTest {
 	/** The generated file. */
 	static String text() {
 		StringBuilder out = new StringBuilder();
-		out.append(";;;; The Unicode tables of the Clojure runtime's regex engine (clojure.lisp,\n")
-			.append(";;;; \"Unicode properties\"), generated from the JDK by\n")
-			.append(";;;; ClojureUnicodeTablesTest, which fails when they are not the running JDK's:\n")
-			.append(";;;; regenerate them there, never by hand.\n\n");
+		out.append(";;;; The Unicode tables of the regex engine (regex.lisp, \"Unicode properties\"\n")
+			.append(";;;; and \"Grapheme clusters\"), generated from a running JDK's public Character\n")
+			.append(";;;; API by RegexUnicodeTablesTest, which fails when they are not the running\n")
+			.append(";;;; JDK's: regenerate them there, never by hand.\n\n");
 		// the properties: runs of combo indexes into the combos
 		Map<Integer, Integer> combos = new LinkedHashMap<>();
 		Runs props = runs(codePoint -> combos.computeIfAbsent(combo(codePoint), ignored -> combos.size()));
@@ -214,12 +212,12 @@ class ClojureUnicodeTablesTest {
 		combos.keySet().forEach(combo -> encode(comboText, combo));
 		cache(out, "props",
 				"The general category and the Character predicates of every code point, as runs\n" + "   of combos.",
-				"(rontolisp::%clojure-re-uni-decode \"" + props.text + "\" " + props.count
-						+ "\n                  (rontolisp::%clojure-re-uni-numbers \"" + comboText + "\" "
-						+ combos.size() + "))");
+				"(rontolisp::%regex-uni-decode \"" + props.text + "\" " + props.count
+						+ "\n                  (rontolisp::%regex-uni-numbers \"" + comboText + "\" " + combos.size()
+						+ "))");
 		Runs scripts = runs(codePoint -> Character.UnicodeScript.of(codePoint).ordinal());
 		cache(out, "scripts", "The Character.UnicodeScript ordinal of every code point, as runs.",
-				"(rontolisp::%clojure-re-uni-decode \"" + scripts.text + "\" " + scripts.count + " nil)");
+				"(rontolisp::%regex-uni-decode \"" + scripts.text + "\" " + scripts.count + " nil)");
 		List<Character.UnicodeBlock> blocks = blocks();
 		Runs blockRuns = runs(codePoint -> {
 			Character.UnicodeBlock block = Character.UnicodeBlock.of(codePoint);
@@ -228,7 +226,7 @@ class ClojureUnicodeTablesTest {
 		cache(out, "blocks",
 				"The Character.UnicodeBlock of every code point (its place among the block\n"
 						+ "   names plus one, 0 for none), as runs.",
-				"(rontolisp::%clojure-re-uni-decode \"" + blockRuns.text + "\" " + blockRuns.count + " nil)");
+				"(rontolisp::%regex-uni-decode \"" + blockRuns.text + "\" " + blockRuns.count + " nil)");
 		Map<Integer, Integer> classes = new LinkedHashMap<>();
 		Runs graphemes = runs(
 				codePoint -> classes.computeIfAbsent(Graphemes.CLASSES[codePoint], ignored -> classes.size()));
@@ -237,9 +235,9 @@ class ClojureUnicodeTablesTest {
 		cache(out, "graphemes",
 				"The grapheme cluster break type of every code point times four plus its Indic\n"
 						+ "   conjunct class, as runs.",
-				"(rontolisp::%clojure-re-uni-decode \"" + graphemes.text + "\" " + graphemes.count
-						+ "\n                  (rontolisp::%clojure-re-uni-numbers \"" + classText + "\" "
-						+ classes.size() + "))");
+				"(rontolisp::%regex-uni-decode \"" + graphemes.text + "\" " + graphemes.count
+						+ "\n                  (rontolisp::%regex-uni-numbers \"" + classText + "\" " + classes.size()
+						+ "))");
 		names(out, "script-names", "The scripts by ordinal: the constant's name, then its ISO 15924 alias.",
 				scriptNames());
 		names(out, "block-names", "The blocks: the constant's name, then its canonical names (* the constant's\n"
@@ -248,15 +246,15 @@ class ClojureUnicodeTablesTest {
 	}
 
 	private static void cache(StringBuilder out, String name, String doc, String decode) {
-		out.append("(defvar rontolisp::%clojure-re-uni-")
+		out.append("(defvar rontolisp::%regex-uni-")
 			.append(name)
-			.append("-cache nil)\n\n(defun rontolisp::%clojure-re-uni-")
+			.append("-cache nil)\n\n(defun rontolisp::%regex-uni-")
 			.append(name)
 			.append(" ()\n  \"")
 			.append(doc)
-			.append("\"\n  (or rontolisp::%clojure-re-uni-")
+			.append("\"\n  (or rontolisp::%regex-uni-")
 			.append(name)
-			.append("-cache\n      (setq rontolisp::%clojure-re-uni-")
+			.append("-cache\n      (setq rontolisp::%regex-uni-")
 			.append(name)
 			.append("-cache\n            ")
 			.append(decode)
@@ -265,7 +263,7 @@ class ClojureUnicodeTablesTest {
 
 	private static void names(StringBuilder out, String name, String doc, List<List<String>> entries) {
 		String table = entries.stream().map(entry -> String.join("=", entry)).collect(Collectors.joining(","));
-		out.append("(defun rontolisp::%clojure-re-uni-")
+		out.append("(defun rontolisp::%regex-uni-")
 			.append(name)
 			.append(" ()\n  \"")
 			.append(doc)
@@ -412,7 +410,7 @@ class ClojureUnicodeTablesTest {
 	}
 
 	private static String shipped() throws IOException {
-		try (InputStream in = LispEvaluator.class.getResourceAsStream("clojure-unicode.lisp")) {
+		try (InputStream in = LispEvaluator.class.getResourceAsStream("regex-unicode.lisp")) {
 			assertThat(in).isNotNull();
 			return new String(in.readAllBytes(), StandardCharsets.UTF_8);
 		}
@@ -424,12 +422,11 @@ class ClojureUnicodeTablesTest {
 		String generated = LispFormatter.format(text());
 		String shipped = shipped();
 		if (!generated.equals(shipped)) {
-			Path out = Path.of("target", "clojure-unicode.lisp");
+			Path out = Path.of("target", "regex-unicode.lisp");
 			Files.createDirectories(out.getParent());
 			Files.writeString(out, generated);
 			assertThat(shipped)
-				.as("copy " + out.toAbsolutePath()
-						+ " over src/main/resources/am/ik/rontolisp/eval/clojure-unicode.lisp")
+				.as("copy " + out.toAbsolutePath() + " over src/main/resources/am/ik/rontolisp/eval/regex-unicode.lisp")
 				.isEqualTo(generated);
 		}
 	}
@@ -458,10 +455,10 @@ class ClojureUnicodeTablesTest {
 			List<Integer> chunk = list.subList(from, Math.min(from + 2000, list.size()));
 			String program = "(let ((out nil)) (dolist (c '("
 					+ chunk.stream().map(String::valueOf).collect(Collectors.joining(" "))
-					+ ") (reverse out)) (setq out (cons (list (rontolisp::%clojure-re-uni-combo c)"
-					+ " (rontolisp::%clojure-re-uni-run-value (rontolisp::%clojure-re-uni-scripts) c)"
-					+ " (rontolisp::%clojure-re-uni-run-value (rontolisp::%clojure-re-uni-blocks) c)"
-					+ " (rontolisp::%clojure-re-gr-class c)) out))))";
+					+ ") (reverse out)) (setq out (cons (list (rontolisp::%regex-uni-combo c)"
+					+ " (rontolisp::%regex-uni-run-value (rontolisp::%regex-uni-scripts) c)"
+					+ " (rontolisp::%regex-uni-run-value (rontolisp::%regex-uni-blocks) c)"
+					+ " (rontolisp::%regex-gr-class c)) out))))";
 			LispVal answers = evaluator.eval(LispReader.readAllFromString(program, Features.INTERPRETER).get(0));
 			for (LispVal rest = answers; rest instanceof LispCons cons; rest = cons.cdr()) {
 				List<Long> row = new ArrayList<>();
@@ -504,8 +501,9 @@ class ClojureUnicodeTablesTest {
 			all.add(name.toLowerCase(java.util.Locale.ROOT));
 		}
 		String program = "(mapcar (lambda (s) (list"
-				+ " (let ((i (rontolisp::%clojure-re-uni-script-item s))) (if i (car (cdr i)) -1))"
-				+ " (let ((i (rontolisp::%clojure-re-uni-block-item s))) (if i (car (cdr i)) -1)))) '("
+				+ " (or (rontolisp::%regex-uni-name-index (rontolisp::%regex-uni-script-names) (string-upcase s)) -1)"
+				+ " (let ((i (rontolisp::%regex-uni-name-index (rontolisp::%regex-uni-block-names)"
+				+ " (string-upcase s)))) (if i (+ i 1) -1)))) '("
 				+ all.stream()
 					.map(name -> new am.ik.rontolisp.LispString(name).print())
 					.collect(Collectors.joining(" "))

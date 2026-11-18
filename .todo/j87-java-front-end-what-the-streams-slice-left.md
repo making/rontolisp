@@ -13,8 +13,10 @@ compiles the library (`JavaLoweringTest#theLibrarysSourceIsJavaAJdkCompiles`).
 
 ## Inside the first target, not done
 
-- **Regular expressions**: moved to j90 (one engine written here, shared with the Clojure
-  front end, whose ported engine it replaces).
+- **Regular expressions**: in since j90 (`.kb/regex-engine.md`, `.kb/java-frontend.md`, "The
+  library"). Left of `java.util.regex`: `Matcher` regions, `hitEnd`, `appendReplacement` /
+  `appendTail`, `results`, `toMatchResult`, `Pattern.asPredicate` / `splitAsStream`, a
+  `\N{name}` (no name table is shipped) and a class under `CANON_EQ`.
 - **The tree a long `HashMap` chain becomes.** Measured in j79 (`.kb/java-frontend.md`, "The
   library"): 64 `Double` keys of few digits and a 16 x 16 grid under a weak `hashCode` get
   there; strings and ints do not. The order inside the JDK's tree is no part of the API; it

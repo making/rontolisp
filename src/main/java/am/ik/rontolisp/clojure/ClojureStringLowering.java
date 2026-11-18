@@ -760,17 +760,17 @@ final class ClojureStringLowering {
 	static final String RE_COMPILE = "RONTOLISP::%CLOJURE-RE-COMPILE";
 
 	/**
-	 * The parse of a regex literal naming a Unicode property or the {@code U} flag: the
-	 * producer of the families whose arms read the Unicode tables
-	 * ({@link ClojureArms.Family#REGEX_UNICODE},
-	 * {@link ClojureArms.Family#REGEX_CATEGORY}).
+	 * The parse of a regex literal naming a Unicode property or the {@code U} flag: it
+	 * hands the engine its providers of the Unicode properties and of the word characters
+	 * past ASCII, so only a program calling it carries their tables
+	 * ({@code eval/RegexLibrary}).
 	 */
 	static final String RE_COMPILE_UNICODE = "RONTOLISP::%CLOJURE-RE-COMPILE-UNICODE";
 
 	/**
 	 * The parse of a regex literal naming a word boundary, which reads the general
-	 * category of a non-spacing mark: the producer of
-	 * {@link ClojureArms.Family#REGEX_CATEGORY}.
+	 * category of a non-spacing mark: it hands the engine its provider of the word
+	 * characters past ASCII.
 	 */
 	static final String RE_COMPILE_BOUND = "RONTOLISP::%CLOJURE-RE-COMPILE-BOUND";
 
@@ -779,8 +779,8 @@ final class ClojureStringLowering {
 
 	/**
 	 * The source of a regex literal that may name a grapheme cluster ({@code \X},
-	 * {@code \b{g}}), which answers it as it is: the producer of
-	 * {@link ClojureArms.Family#REGEX_GRAPHEME}.
+	 * {@code \b{g}}): it hands the parse the engine's provider of the clusters with the
+	 * source.
 	 */
 	static final String GRAPHEME_SOURCE = "RONTOLISP::%CLOJURE-RE-GRAPHEME-SOURCE";
 

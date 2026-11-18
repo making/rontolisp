@@ -96,6 +96,7 @@ class SourceLanguageSeamTest {
 			Map.entry("am.ik.rontolisp.eval.LinalgLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.LispPreludeLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.MetalLibrary", SHIPPED_SOURCE),
+			Map.entry("am.ik.rontolisp.eval.RegexLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.SafetensorsLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.SceneLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.ShimLibraries", SHIPPED_SOURCE),

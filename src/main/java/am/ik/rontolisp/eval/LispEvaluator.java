@@ -306,6 +306,8 @@ public final class LispEvaluator {
 
 	private boolean javaLibraryLoaded = false;
 
+	private boolean regexLibraryLoaded;
+
 	private boolean clojureLibraryLoaded = false;
 
 	/** Whether the Clojure library came from {@link #clojureProgram}, stripped. */
@@ -16971,6 +16973,19 @@ public final class LispEvaluator {
 			if (!this.javaLibraryLoaded && JavaLibrary.isJavaFunction(name)) {
 				this.javaLibraryLoaded = true;
 				for (LispVal form : JavaLibrary.forms()) {
+					evalResolved(form);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// The regular-expression engine the front ends share (regex.lisp) loads the
+			// same way on the first resolution of a rontolisp::%regex- function, which
+			// only a front end's run-time library names.
+			if (!this.regexLibraryLoaded && RegexLibrary.isRegexFunction(name)) {
+				this.regexLibraryLoaded = true;
+				for (LispVal form : RegexLibrary.forms()) {
 					evalResolved(form);
 				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);

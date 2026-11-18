@@ -157,8 +157,9 @@ the Maven plugin compiles `.lisp` only (`.kb/java-frontend.md`, "The tools").
 
 The front ends' run-time libraries (`scheme.lisp`, `clojure.lisp`, and since 2026-11-15
 `starlark.lisp`, whose gate is the member prefix `%STARLARK-` and the one public name
-`rontolisp:starlark-call`, and since 2026-11-17 `java.lisp`, gate `%JAVA-`) are Common Lisp
-loaded on demand, and the question "is this name one of yours" is asked about names of
+`rontolisp:starlark-call`, and since 2026-11-17 `java.lisp`, gate `%JAVA-`) and the
+regular-expression engine two of them share (`regex.lisp` with `regex-unicode.lisp`, gate
+`%REGEX-`, since 2026-11-18, `.kb/regex-engine.md`) are Common Lisp loaded on demand, and the question "is this name one of yours" is asked about names of
 EVERY program:
 
 - The interpreter: `LispEvaluator.resolveFunction`, for a name the global environment
@@ -166,7 +167,7 @@ EVERY program:
   helpers, linalg, objc, appkit, geom, checkpoint, safetensors, metal, scene, torch,
   tokenizer, gguf, vec, url, `SchemeLibrary.isSchemeFunction`,
   `StarlarkLibrary.isStarlarkFunction`, `JavaLibrary.isJavaFunction`,
-  `ClojureLibrary.isClojureFunction`, usocket, wit,
+  `RegexLibrary.isRegexFunction`, `ClojureLibrary.isClojureFunction`, usocket, wit,
   the prelude (one defun at a time),
   uiop, asdf, the generated slot/struct helpers. The name sets are disjoint (packages,
   `%scheme-`/`%clojure-` helpers), so the order decides only which gates a name pays
@@ -177,7 +178,8 @@ EVERY program:
 
 Until 2026-10-23 the two checks built their name sets from the whole library on the
 first question, whatever the name: `scheme.lisp` read plus its generated run-time table,
-`clojure.lisp` plus the case mapping and `clojure-unicode.lisp`. A Common Lisp program
+`clojure.lisp` plus the case mapping and its Unicode tables (now `regex-unicode.lisp`). A
+Common Lisp program
 paid it on its first prelude call (`equalp`, `string<`, `read-sequence`) or its first
 undefined function; JFR of `-e '(print (equalp "a" "A"))'` had 34 of 37 samples under the
 two checks. Now `mayDefine(name)` answers from the spelling first -- Scheme: the member

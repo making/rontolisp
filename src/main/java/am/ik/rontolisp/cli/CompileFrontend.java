@@ -40,6 +40,7 @@ import am.ik.rontolisp.eval.MetalLibrary;
 import am.ik.rontolisp.eval.ObjcLibrary;
 import am.ik.rontolisp.eval.ObjcNativeLibrary;
 import am.ik.rontolisp.eval.SceneLibrary;
+import am.ik.rontolisp.eval.RegexLibrary;
 import am.ik.rontolisp.eval.SchemeLibrary;
 import am.ik.rontolisp.eval.SocketsLibrary;
 import am.ik.rontolisp.eval.SourceLanguage;
@@ -862,9 +863,18 @@ final class CompileFrontend {
 		// body reaches the prelude. Not on --no-gc, which has no eval runtime.
 		List<LispVal> expanded = CurrentPackageIntern
 			.rewrite(UserMacroExpander.expand(ObjcLibrary.withMacros(loaded), programHead, features));
-		List<LispVal> languages = InflateLibrary.process(ClojureLibrary.process(SchemeLibrary.process(
-				StarlarkLibrary.process(JavaLibrary.process(noGc ? expanded : EvalReferences.process(expanded), wasm)),
-				features, input.standards()), !wasm, input.lowersAtRunTime(), input.linked()), witBackend);
+		// RegexLibrary right OUTSIDE the front ends' libraries too: the engine is named
+		// only by clojure.lisp and java.lisp.
+		List<LispVal> languages = InflateLibrary.process(
+				RegexLibrary.process(
+						ClojureLibrary
+							.process(
+									SchemeLibrary.process(
+											StarlarkLibrary.process(JavaLibrary
+												.process(noGc ? expanded : EvalReferences.process(expanded), wasm)),
+											features, input.standards()),
+									!wasm, input.lowersAtRunTime(), input.linked())),
+				witBackend);
 		List<LispVal> macos = ObjcLibrary.process(AppKitLibrary.process(JsonLibrary.process(
 				LinalgLibrary.process(GeomLibrary
 					.process(MetalLibrary.process(SceneLibrary.process(TorchLibrary.process(CheckpointLibrary.process(

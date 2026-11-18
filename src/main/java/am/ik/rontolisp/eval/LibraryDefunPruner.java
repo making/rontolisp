@@ -104,6 +104,8 @@ public final class LibraryDefunPruner {
 
 	@Nullable private static volatile Set<String> javaDefinitionNames;
 
+	@Nullable private static volatile Set<String> regexDefinitionNames;
+
 	private LibraryDefunPruner() {
 	}
 
@@ -1343,6 +1345,7 @@ public final class LibraryDefunPruner {
 				|| ClojureLibrary.mayDefine(name) && clojureDefinitionNames().contains(name)
 				|| StarlarkLibrary.mayDefine(name) && starlarkDefinitionNames().contains(name)
 				|| JavaLibrary.mayDefine(name) && javaDefinitionNames().contains(name)
+				|| RegexLibrary.mayDefine(name) && regexDefinitionNames().contains(name)
 				|| ClojureLowering.isCoreMacroDefinition(name);
 	}
 
@@ -1380,6 +1383,15 @@ public final class LibraryDefunPruner {
 		if (cached == null) {
 			cached = definitionNames(JavaLibrary.everyVariantForms(), JavaLibrary::mayDefine, "java.lisp");
 			javaDefinitionNames = cached;
+		}
+		return cached;
+	}
+
+	private static Set<String> regexDefinitionNames() {
+		Set<String> cached = regexDefinitionNames;
+		if (cached == null) {
+			cached = definitionNames(RegexLibrary.forms(), RegexLibrary::mayDefine, "regex.lisp");
+			regexDefinitionNames = cached;
 		}
 		return cached;
 	}

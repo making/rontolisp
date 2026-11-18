@@ -17,7 +17,8 @@ the `Math` members j72 left: j81 (2026-11-17); the uncaught report without a hel
 and the catch that signals nothing again: j82 (2026-11-17); the classes a JDK synchronizes, a
 class's own initialization, `java.util.concurrent` and the two leads for a suspended thread
 measured: j83 (2026-11-17); the unchecked warnings, a lambda cast to an intersection,
-`Type::<T>new` and an argument call among overloads: j86 (2026-11-17); what comes after is
+`Type::<T>new` and an argument call among overloads: j86 (2026-11-17); regular expressions
+on the engine shared with the Clojure front end: j90 (2026-11-18); what comes after is
 `.todo/j87`, `j88` and `j89` (what j79, j82 and j83 left).
 
 ## Where it sits
@@ -691,11 +692,28 @@ measured programs.
   it links a node: no part of the API, so it can be had only by deriving it from outputs --
   the provenance rule forbids writing it from the JDK's source. `deviations.md` names the
   double keys. `.todo/j87`.
-- **Regular expressions: the Clojure front end's engine cannot be shared** (j79, the check
-  j71 asked for): `.kb/clojure-frontend.md`, "Regex", states it is `java.util.regex` of JDK
-  25 ported method by method (`Pattern.java` read), which rule 2 of the provenance file
-  forbids under this front end. An engine for `matches`/`replaceAll`/`Pattern` is written
-  from the API's own description of the syntax or not at all (`.todo/j87`).
+- **Regular expressions run on the engine the Clojure front end runs on** (j90, 2026-11-18;
+  [regex-engine.md](regex-engine.md): `eval/regex.lisp`, written here from the `Pattern`
+  documentation, behind `eval/RegexLibrary`). Until then the Clojure engine was a port of
+  OpenJDK's `Pattern.java`, which rule 2 of the provenance file forbids, and `String.split`
+  read a text or one character class by a splitter of its own. `Pattern`, `Matcher`,
+  `MatchResult` and `PatternSyntaxException` are Java source whose `native` members are the
+  engine's functions (`JavaIntrinsics.NATIVES`, `engine(..)`), the search state an `Object`
+  field. What the engine refuses comes back from `%java-regex-compile` /
+  `%java-regex-replace` as a value, `(:refused text index)`, and the source throws it
+  (`PatternSyntaxException` holds fields a run-time `%java-raise` cannot make).
+  **`Pattern.compile`, `Pattern.matches`, `String.matches` / `replaceAll` / `replaceFirst` /
+  `split` are lowered where they are called** (`native` statics and intrinsics over
+  `Pattern.make` / `matchesText` / `replaceText` / `splitText`), so the lowering can hand
+  the engine's providers by the pattern: a constant is read for `\p`, `\P`, `\b`, `\B`, `\X`
+  and the `U` flag (`regexProviders`), any other pattern gets all three -- the Unicode
+  tables travel only with a pattern that may read them. **A split by a constant text with
+  no operator needs no engine** (`%java-split-text`): `"to be".split(" ")` is 66,664 B of
+  wasm where the old splitter made 79,448; a split by a pattern is 251,783 B, by a pattern
+  computed at run time 317,388 B. Positions
+  count characters, as `length` and `charAt` do. Pin: `java-spec.yaml`
+  `regular-expressions-run-on-the-engine-the-front-ends-share` (four backends, a JDK's
+  lines).
 - **`Arrays.deepToString`** is Java source (j81): `instanceof` over the element, which the
   recorded class answers ("The class of an array").
 

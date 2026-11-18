@@ -48,6 +48,9 @@ imports: |
   import java.util.Stack;
   import java.util.Vector;
   import java.util.function.*;
+  import java.util.regex.Matcher;
+  import java.util.regex.Pattern;
+  import java.util.regex.PatternSyntaxException;
 cases:
   # An int is an integer kept in range by an unconditional mask; a constant expression
   # is folded as the language computes it.
@@ -4347,8 +4350,8 @@ cases:
       UnsupportedOperationException null
       UnsupportedOperationException null
   # == of two strings compares references: the constants of one text are one object, a
-  # computed string another, intern the constant's. split takes a text or one character
-  # class; a StringBuilder is edited in place and is a CharSequence, as a string is.
+  # computed string another, intern the constant's. split takes a pattern; a
+  # StringBuilder is edited in place and is a CharSequence, as a string is.
   - name: a-string-has-its-everyday-surface-and-two-constants-of-a-text-are-one
     main: StringSurface
     source: |
@@ -4380,6 +4383,85 @@ cases:
       [a, b, , c][, a, b][a, b, c][a, b][a, b,c][a, b, , ][][a, b, c][k=v, x=y][a, b, c]
       Jello]1.5true 13 2 13 e el ab llo]1.5true el false false J
       Je cJ42eJe x1nullnull fub
+  # java.util.regex is the engine every front end shares (eval/regex.lisp): Pattern and
+  # Matcher over it, the String members that take a pattern, the refusals as the
+  # library's exceptions. A split by a constant text with no operator needs no engine.
+  - name: regular-expressions-run-on-the-engine-the-front-ends-share
+    main: RegexSurface
+    source: |
+      class RegexSurface {
+          public static void main(String[] args) {
+              Pattern date = Pattern.compile("(?<y>\\d{4})-(?<m>\\d{2})-(\\d{2})");
+              Matcher m = date.matcher("from 2026-11-17 to 2026-12-01");
+              while (m.find()) {
+                  System.out.println(m.group() + " " + m.start() + ".." + m.end() + " y=" + m.group("y") + " m=" + m.group(2) + " d=" + m.group(3) + " groups=" + m.groupCount());
+              }
+              System.out.println("2026-11-17".matches("\\d+-\\d+-\\d+") + " " + "x2026".matches("\\d+") + " " + Pattern.matches("(?i)hello", "HELLO") + " " + Pattern.quote("a.b") + " " + "a.b".matches(Pattern.quote("a.b")) + " " + Matcher.quoteReplacement("$1\\"));
+              System.out.println("a1b22c333".replaceAll("\\d+", "#") + " " + "a1b22c333".replaceFirst("(\\d)", "<$1>") + " " + "2026-10".replaceAll("(?<y>\\d+)-(?<m>\\d+)", "${m}/${y}") + " " + date.matcher("2026-11-17").replaceAll("$3.$2.$1"));
+              System.out.println(Arrays.toString("a, b,c ,  d".split("\\s*,\\s*")) + Arrays.toString("to be or not".split(" ")) + Arrays.toString("a,b,,".split(",", -1)) + Arrays.toString(Pattern.compile("(?=b)").split("abab")) + Arrays.toString("x1y22z".split("\\d+", 2)));
+              Matcher word = Pattern.compile("\\b\\p{L}+\\b").matcher("h\u00e9llo w\u00f6rld 42");
+              StringBuilder words = new StringBuilder();
+              while (word.find()) {
+                  words.append('[').append(word.group()).append(']');
+              }
+              System.out.println(words + " " + date + " " + date.flags() + " " + Pattern.compile("a.c", Pattern.DOTALL | Pattern.CASE_INSENSITIVE).matcher("A\nC").matches() + " " + Pattern.compile("a+", Pattern.LITERAL).matcher("aa+").find());
+              Matcher look = Pattern.compile("(?<=\\$)\\d+").matcher("$10 20 $30");
+              System.out.println(look.find() + " " + look.group() + " " + look.find(4) + " " + look.group() + " " + look.lookingAt() + " " + look.reset().find() + " " + look.start() + " " + look);
+              Matcher greedy = Pattern.compile("(a+?)(a*)|((\\w)\\w)*\\w\\w").matcher("aaa bcdef");
+              greedy.find();
+              System.out.print(greedy.group(1) + "," + greedy.group(2) + "," + greedy.group(3) + " ");
+              greedy.find();
+              System.out.println(greedy.group() + "," + greedy.group(1) + "," + greedy.group(3) + "," + greedy.group(4) + " " + greedy.start(1) + " " + greedy.end(3));
+              Matcher cluster = Pattern.compile("\\X").matcher("e\u0301x");
+              cluster.find();
+              System.out.println(cluster.end() + " " + "\u65e5\u672c\u8a9e x".replaceAll("\\p{IsHan}", "*") + " " + "A-b".replaceAll("(?i)[a-z]", "_"));
+              try {
+                  Pattern.compile("(a");
+              }
+              catch (PatternSyntaxException e) {
+                  System.out.println(e.getDescription() + " | " + e.getIndex() + " | " + e.getPattern() + " | " + e.getMessage().replace('\n', '/'));
+              }
+              try {
+                  Pattern.compile("(?<=(?:ab)*)c");
+              }
+              catch (IllegalArgumentException e) {
+                  System.out.println(e.getMessage().replace('\n', '/'));
+              }
+              try {
+                  m.group();
+              }
+              catch (IllegalStateException e) {
+                  System.out.println(e.getMessage());
+              }
+              try {
+                  "a".replaceAll("(a)", "$2");
+              }
+              catch (IndexOutOfBoundsException e) {
+                  System.out.println(e.getMessage());
+              }
+              try {
+                  date.matcher("2026-11-17").replaceFirst("${d}");
+              }
+              catch (IllegalArgumentException e) {
+                  System.out.println(e.getMessage());
+              }
+          }
+      }
+    expected: |
+      2026-11-17 5..15 y=2026 m=11 d=17 groups=3
+      2026-12-01 19..29 y=2026 m=12 d=01 groups=3
+      true false true \Qa.b\E true \$1\\
+      a#b#c# a<1>b22c333 10/2026 17.11.2026
+      [a, b, c, d][to, be, or, not][a, b, , ][a, ba, b][x, y22z]
+      [héllo][wörld] (?<y>\d{4})-(?<m>\d{2})-(\d{2}) 0 true true
+      true 10 true 30 false true 1 java.util.regex.Matcher[pattern=(?<=\$)\d+ region=0,10 lastmatch=10]
+      a,aa,null bcde,null,bc,d -1 6
+      2 *** x _-_
+      Unclosed group | 2 | (a | Unclosed group near index 2/(a
+      Look-behind group does not have an obvious maximum length near index 10/(?<=(?:ab)*)c/          ^
+      No match found
+      No group 2
+      No group with name {d}
   # String.format, formatted and printf: %d %s %f %e %x %o %c %b %n %% with flags, width,
   # precision and an argument index; %f rounds the shortest digits half up.
   - name: format-renders-the-conversions-programs-write

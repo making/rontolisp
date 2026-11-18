@@ -345,7 +345,7 @@ void main() {
 | 列挙型 | `values()`、`valueOf(String)`、`name`、`ordinal`、`compareTo`、`toString` |
 | レコード | アクセサ、`equals`、`hashCode`、`toString` |
 | 配列 | `length`、`clone()` |
-| `String` | `length`、`charAt`、`isEmpty`、`isBlank`、`equals`、`equalsIgnoreCase`、`compareTo`、`compareToIgnoreCase`、`hashCode`、`substring`、`subSequence`、文字列または文字の `indexOf` と `lastIndexOf`、`contains`、`startsWith`、`endsWith`、`toUpperCase`、`toLowerCase`、`trim`、`strip`、`stripLeading`、`stripTrailing`、`repeat`、`replace`、`concat`、`toCharArray`、`split`、`intern`、`formatted`、引数なし、`Charset`、文字セットの名前を取る `getBytes`。`String.valueOf`、`String.join`、`String.format`。`new String()`、`new String(String)`、`new String(char[])`、`new String(char[], int, int)`、範囲と、`Charset` または文字セットの名前を指定できる `new String(byte[])` |
+| `String` | `length`、`charAt`、`isEmpty`、`isBlank`、`equals`、`equalsIgnoreCase`、`compareTo`、`compareToIgnoreCase`、`hashCode`、`substring`、`subSequence`、文字列または文字の `indexOf` と `lastIndexOf`、`contains`、`startsWith`、`endsWith`、`toUpperCase`、`toLowerCase`、`trim`、`strip`、`stripLeading`、`stripTrailing`、`repeat`、`replace`、`replaceAll`、`replaceFirst`、`matches`、`concat`、`toCharArray`、`split`、`intern`、`formatted`、引数なし、`Charset`、文字セットの名前を取る `getBytes`。`String.valueOf`、`String.join`、`String.format`。`new String()`、`new String(String)`、`new String(char[])`、`new String(char[], int, int)`、範囲と、`Charset` または文字セットの名前を指定できる `new String(byte[])` |
 | `StringBuilder`、`StringBuffer` | 引数なし、容量、文字列を取るコンストラクタ。`append`、`insert`、`reverse`、`setLength`、`setCharAt`、`deleteCharAt`、`delete`、`replace`、`indexOf`、`toString`、`length`、`isEmpty`、`charAt`、`substring`、`subSequence` |
 | `CharSequence` | `length`、`charAt`、`subSequence`、`isEmpty`。`String` と `StringBuilder` は `CharSequence` です |
 | `Integer`、`Long` | ボクシングとアンボクシング。`MAX_VALUE`、`MIN_VALUE`、基数の指定がある、またはない `parseInt` / `parseLong`、`valueOf`、基数の指定がある、またはない `toString`、`toBinaryString`、`toHexString`、`Integer.toOctalString`、`Integer.parseUnsignedInt`、`Integer.toUnsignedString`、`Integer.toUnsignedLong`、`compare`、`signum`、`sum`、`max`、`min`、`bitCount`、`hashCode`、`intValue`、`longValue`、`doubleValue`、`compareTo` |
@@ -400,9 +400,14 @@ void main() {
 
 `String.format`、`formatted`、`printf` が受け付ける変換は `%d`、`%s`、`%S`、`%f`、`%e`、`%E`、
 `%x`、`%X`、`%o`、`%c`、`%b`、`%n`、`%%` です。フラグ `-`、`0`、`+`、空白、`,`、`(`、`#` と、
-幅、精度、引数の番号（`%2$s`）を指定できます。`String.split` が受け付けるのは、演算子を
-含まない文字列か、1 つの文字クラス（`\\s`、`\\d`、`\\w`、`[,;]`、`[0-9]`）です。文字クラスには
-`+` を続けられます。
+幅、精度、引数の番号（`%2$s`）を指定できます。
+
+`java.util.regex.Pattern` と `Matcher` は、`Pattern` のドキュメントが記す構文を受け付けます。
+和と積のある文字クラス、グループ（捕捉、名前付き、アトミック）、先読みと後読み、後方参照、
+貪欲・最短・所有の量指定子、インラインフラグ、`\\p{..}` のプロパティ、`\\X` と `\\b{g}` です。
+`String.matches`、`replaceAll`、`replaceFirst`、`split` も同じ構文を取ります。不正なパターンは
+JDK と同じメッセージの `PatternSyntaxException` になります。[言語との差異](deviations.md)も
+参照してください。
 
 `java.io` のストリームは、配列、文字列、標準ストリーム、ほかのストリームの上に作ります。
 ファイルはありません。`PrintStream`、`PrintWriter`、バイトと文字をつなぐ 2 つのクラスが

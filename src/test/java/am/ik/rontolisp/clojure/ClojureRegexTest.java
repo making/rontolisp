@@ -34,13 +34,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Pins the Clojure runtime's regex engine ({@code clojure.lisp}, "Regular expressions":
- * {@code java.util.regex.Pattern}'s parser and match nodes ported) to
- * {@code java.util.regex} itself, the oracle's engine: every find of a pattern over an
- * input with its groups, and the {@code PatternSyntaxException} message of a pattern the
- * oracle refuses, over curated cases and a seeded random corpus of lookarounds, inline
- * flags, classes, quantifiers and groups. The interpreter answers here; the agreement of
- * the four backends is {@code clojure-spec.yaml}'s.
+ * Pins the regex engine the front ends share ({@code regex.lisp}, reached here through
+ * the Clojure runtime's entries in {@code clojure.lisp}, "Regular expressions") to
+ * {@code java.util.regex} itself, the oracle's engine run beside it: every find of a
+ * pattern over an input with its groups, and the {@code PatternSyntaxException} message
+ * of a pattern the oracle refuses, over curated cases and a seeded random corpus of
+ * lookarounds, inline flags, classes, quantifiers and groups. The interpreter answers
+ * here; the agreement of the four backends is {@code clojure-spec.yaml}'s.
  */
 @ExtendWith(CliStackExtension.class)
 class ClojureRegexTest {
@@ -49,19 +49,20 @@ class ClojureRegexTest {
 	// most twenty; (1 message) for the oracle's PatternSyntaxException, (2 message) for
 	// any other signal.
 	private static final String PROBE = """
+			(defun regex-found (m n)
+			  (let ((engine (rontolisp::%clojure-re-match-engine m)))
+			    (cons (rontolisp::%regex-matcher-start engine 0)
+			          (cons (rontolisp::%regex-matcher-end engine 0)
+			                (rontolisp::%clojure-re-group-strings engine 0 n)))))
+			(defun regex-finds (m)
+			  (let ((n (rontolisp::%clojure-re-pat-ngroups (rontolisp::%clojure-re-match-pat m)))
+			        (acc nil))
+			    (do ((k 1 (+ k 1)))
+			        ((or (> k 20) (not (rontolisp::%clojure-re-next m))) (cons 0 (reverse acc)))
+			      (setq acc (cons (regex-found m n) acc)))))
 			(defun regex-probe (re in)
 			  (handler-case
-			      (let* ((p (rontolisp::%clojure-re-compile re))
-			             (m (rontolisp::%clojure-re-fresh-matcher p in))
-			             (n (rontolisp::%clojure-re-pat-ngroups p))
-			             (acc nil))
-			        (do ((found (rontolisp::%clojure-re-next m) (rontolisp::%clojure-re-next m))
-			             (k 1 (+ k 1)))
-			            ((or (null found) (> k 20)) (cons 0 (reverse acc)))
-			          (setq acc (cons (cons (car found)
-			                                (cons (car (cdr found))
-			                                      (rontolisp::%clojure-re-group-strings in found n 0)))
-			                          acc))))
+			      (regex-finds (rontolisp::%clojure-re-fresh-matcher (rontolisp::%clojure-re-compile-any re) in))
 			    (error (c) (list (if (rontolisp::%clojure-refusal-p c) 1 2) (princ-to-string c)))))
 			""";
 
@@ -72,31 +73,20 @@ class ClojureRegexTest {
 	// groups are read off the prefix the matcher holds.
 	private static final String LAZY_PROBE = """
 			(defun regex-lazy-matcher (re in seed)
-			  (list :c%matcher (gensym "re") (rontolisp::%clojure-re-compile re) (subseq in 0 (min seed (length in)))
-			        (cons 0 nil) (cons (list :c%type 'regex-probe-cs in) (length in))))
+			  (let* ((p (rontolisp::%clojure-re-compile-any re))
+			         (engine (rontolisp::%regex-matcher (rontolisp::%clojure-re-pat-program p)
+			                                           (subseq in 0 (min seed (length in))))))
+			    (rontolisp::%regex-matcher-whole-length engine (length in))
+			    (list :c%matcher (gensym "re") p engine
+			          (cons (list :c%type 'regex-probe-cs in) (length in)))))
 			(defun regex-lazy-probe (re in seed)
 			  (handler-case
-			      (let* ((m (regex-lazy-matcher re in seed))
-			             (n (rontolisp::%clojure-re-pat-ngroups (rontolisp::%clojure-re-match-pat m)))
-			             (acc nil))
-			        (do ((found (rontolisp::%clojure-re-next m) (rontolisp::%clojure-re-next m))
-			             (k 1 (+ k 1)))
-			            ((or (null found) (> k 20)) (cons 0 (reverse acc)))
-			          (setq acc (cons (cons (car found)
-			                                (cons (car (cdr found))
-			                                      (rontolisp::%clojure-re-group-strings
-			                                       (rontolisp::%clojure-re-match-input m) found n 0)))
-			                          acc))))
+			      (regex-finds (regex-lazy-matcher re in seed))
 			    (error (c) (list (if (rontolisp::%clojure-refusal-p c) 1 2) (princ-to-string c)))))
 			(defun regex-lazy-anchored (re in seed whole)
-			  (let* ((m (regex-lazy-matcher re in seed))
-			         (n (rontolisp::%clojure-re-pat-ngroups (rontolisp::%clojure-re-match-pat m)))
-			         (found (rontolisp::%clojure-re-lazy-search m 0 whole 0)))
-			    (if found
-			        (cons (car found)
-			              (cons (car (cdr found))
-			                    (rontolisp::%clojure-re-group-strings
-			                     (rontolisp::%clojure-re-match-input m) found n 0)))
+			  (let ((m (regex-lazy-matcher re in seed)))
+			    (if (rontolisp::%clojure-re-lazy-search m 0 (if whole 2 1))
+			        (regex-found m (rontolisp::%clojure-re-pat-ngroups (rontolisp::%clojure-re-match-pat m)))
 			        nil)))
 			(defun regex-lazy-anchored-probe (re in seed)
 			  (handler-case
@@ -104,21 +94,16 @@ class ClojureRegexTest {
 			    (error (c) (list (if (rontolisp::%clojure-refusal-p c) 1 2) (princ-to-string c)))))
 			(defun regex-named-probe (re in names)
 			  (handler-case
-			      (let* ((p (rontolisp::%clojure-re-compile re names))
-			             (m (rontolisp::%clojure-re-fresh-matcher p in))
-			             (n (rontolisp::%clojure-re-pat-ngroups p))
-			             (acc nil))
-			        (do ((found (rontolisp::%clojure-re-next m) (rontolisp::%clojure-re-next m))
-			             (k 1 (+ k 1)))
-			            ((or (null found) (> k 20)) (cons 0 (reverse acc)))
-			          (setq acc (cons (cons (car found)
-			                                (cons (car (cdr found))
-			                                      (rontolisp::%clojure-re-group-strings in found n 0)))
-			                          acc))))
+			      (regex-finds
+			       (rontolisp::%clojure-re-fresh-matcher
+			        (rontolisp::%clojure-re-make (rontolisp::%clojure-re-grapheme-source re) names
+			                                     (rontolisp::%regex-unicode-provider)
+			                                     (rontolisp::%regex-category-provider))
+			        in))
 			    (error (c) (list (if (rontolisp::%clojure-refusal-p c) 1 2) (princ-to-string c)))))
 			(defvar rontolisp::%clojure-false '|false|)
 			(defun regex-ops (re in ops)
-			  (let ((m (rontolisp::%clojure-re-fresh-matcher (rontolisp::%clojure-re-compile re) in))
+			  (let ((m (rontolisp::%clojure-re-fresh-matcher (rontolisp::%clojure-re-compile-any re) in))
 			        (acc nil))
 			    (dolist (op ops (reverse acc))
 			      (setq acc
@@ -144,8 +129,7 @@ class ClojureRegexTest {
 	@BeforeAll
 	static void defineTheProbe() {
 		evaluator = new LispEvaluator(new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
-		evaluator.eval(LispReader.readAllFromString(PROBE, Features.INTERPRETER).get(0));
-		for (LispVal form : LispReader.readAllFromString(LAZY_PROBE, Features.INTERPRETER)) {
+		for (LispVal form : LispReader.readAllFromString(PROBE + LAZY_PROBE, Features.INTERPRETER)) {
 			evaluator.eval(form);
 		}
 	}
@@ -155,7 +139,14 @@ class ClojureRegexTest {
 	}
 
 	@Test
-	void theCuratedPatternsMatchAsJavaUtilRegexDoes() {
+	void theCuratedPatternsMatchAsJavaUtilRegexDoes() throws Exception {
+		// the probes the engine's rules were read from (regex-probes.txt): what the
+		// Pattern documentation leaves open -- refusal indices, the captures a loop
+		// keeps, the look-behind bounds, a class's && bookkeeping, the matcher's last
+		// end -- was learned by running these under a JDK
+		List<Case> probes = probes();
+		assertThat(probes).hasSizeGreaterThan(1000);
+		assertThat(mismatches(probes, runtime(probes), java(probes))).isEmpty();
 		List<Case> cases = List.of(
 				// lookahead, lookbehind (bounded, a one-character loop, the overflowing
 				// sum that never matches), atomic groups
@@ -224,6 +215,47 @@ class ClojureRegexTest {
 				.as("lookingAt and matches, seed " + seed)
 				.isEmpty();
 		}
+	}
+
+	// The cases of regex-probes.txt: a pattern, a tab and an input per line, the input's
+	// \\n, \\r, \\t, \\\\ and backslash-u escapes decoded.
+	private static List<Case> probes() throws Exception {
+		List<Case> cases = new ArrayList<>();
+		try (var in = ClojureRegexTest.class.getResourceAsStream("/regex-probes.txt")) {
+			String text = new String(java.util.Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8);
+			for (String line : text.split("\n")) {
+				if (line.isEmpty() || line.startsWith(";;")) {
+					continue;
+				}
+				int tab = line.indexOf('\t');
+				cases.add(tab < 0 ? c(line, "") : c(line.substring(0, tab), unescaped(line.substring(tab + 1))));
+			}
+		}
+		return cases;
+	}
+
+	private static String unescaped(String text) {
+		StringBuilder out = new StringBuilder();
+		for (int i = 0; i < text.length(); i++) {
+			char ch = text.charAt(i);
+			if (ch != '\\' || i + 1 == text.length()) {
+				out.append(ch);
+				continue;
+			}
+			char next = text.charAt(++i);
+			switch (next) {
+				case 'n' -> out.append('\n');
+				case 'r' -> out.append('\r');
+				case 't' -> out.append('\t');
+				case '\\' -> out.append('\\');
+				case 'u' -> {
+					out.append((char) Integer.parseInt(text.substring(i + 1, i + 5), 16));
+					i += 4;
+				}
+				default -> out.append('\\').append(next);
+			}
+		}
+		return out.toString();
 	}
 
 	// The cases whose two answers differ, each with both answers: the whole list of
@@ -673,11 +705,11 @@ class ClojureRegexTest {
 	}
 
 	/**
-	 * Random patterns over the constructs the engine ports -- lookarounds, atomic and
-	 * named groups, inline flags (comments mode with its spaces and # comments among
-	 * them), classes with ranges, escapes, unions and intersections, back references,
-	 * every quantifier -- and short inputs over the characters they test, each kept only
-	 * when the oracle answers it within a second.
+	 * Random patterns over the constructs the engine has -- lookarounds, atomic and named
+	 * groups, inline flags (comments mode with its spaces and # comments among them),
+	 * classes with ranges, escapes, unions and intersections, back references, every
+	 * quantifier -- and short inputs over the characters they test, each kept only when
+	 * the oracle answers it within a second.
 	 */
 	static final class RandomPatterns {
 
@@ -692,10 +724,10 @@ class ClojureRegexTest {
 		private final boolean graphemes;
 
 		/**
-		 * What the patterns hold beside the constructs every mode ports: nothing more;
-		 * the Unicode properties, the U flag and \\G over inputs of letters, digits,
-		 * marks and spaces past ASCII; or \\X and \\b{g} over inputs of each grapheme
-		 * break rule's characters.
+		 * What the patterns hold beside the constructs every mode has: nothing more; the
+		 * Unicode properties, the U flag and \\G over inputs of letters, digits, marks
+		 * and spaces past ASCII; or \\X and \\b{g} over inputs of each grapheme break
+		 * rule's characters.
 		 */
 		enum Mode {
 

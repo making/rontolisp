@@ -183,10 +183,19 @@ the last digit.
 `doubleToRawLongBits` give the bits `floatToIntBits` and `doubleToLongBits` give, and
 `intBitsToFloat` and `longBitsToDouble` of any NaN's bits give that NaN.
 
-**`String.split` reads a small part of the regular expressions**: a text with no operator,
-or one character class alone or followed by `+`. Any other expression is an error when the
-program runs. `String.format` has the conversions the [overview](index.md) lists; any other
-is an error naming it.
+**Regular expressions count characters, not UTF-16 units.** `java.util.regex` and the
+`String` members that take a pattern run on an engine written for this project from the
+`Pattern` documentation; a match's `start` and `end` count the characters of the input, as
+`length` and `charAt` do here. Where a JDK's `find` steps between the halves of a surrogate
+pair the matches differ. A character class or a property under `CANON_EQ` and `\N{name}`
+are an error when the pattern is compiled. `Pattern` has `compile`, `matches`, `quote`,
+`matcher`, `split`, `pattern`, `flags` and the flag constants; `Matcher` has `find`,
+`lookingAt`, `matches`, `group`, `start`, `end`, `groupCount`, `reset`, `replaceAll`,
+`replaceFirst` and `quoteReplacement`; regions, `hitEnd`, `appendReplacement`, `results`
+and the streams are not there.
+
+**`String.format` has the conversions the [overview](index.md) lists**; any other is an
+error naming it.
 
 **Two older classes are the newer ones.** A `StringBuffer` is a `StringBuilder` and
 `getClass().getName()` says so; a `Vector` is an `ArrayList` to `instanceof`.

@@ -179,10 +179,18 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 `doubleToRawLongBits` は `floatToIntBits` と `doubleToLongBits` と同じビットを返し、
 `intBitsToFloat` と `longBitsToDouble` はどの NaN のビットからもその NaN を返します。
 
-**`String.split` が読む正規表現は一部だけです。** 演算子を含まない文字列か、1 つの文字クラス
-（`+` を続けられます）を受け付けます。それ以外の正規表現は実行時のエラーになります。
-`String.format` の変換は[概要](index.md)に挙げたものだけで、それ以外の変換は名前を示す
-エラーになります。
+**正規表現は UTF-16 の単位ではなく文字を数えます。** `java.util.regex` と、パターンを取る
+`String` のメンバーは、`Pattern` のドキュメントを基に本プロジェクトで書いたエンジンの上で
+動きます。マッチの `start` と `end` は入力の文字数で数えます（ここでの `length` と `charAt` と
+同じです）。JDK の `find` がサロゲートペアの間に入る場合は、マッチが異なります。`CANON_EQ` の
+下の文字クラスとプロパティ、および `\N{name}` は、パターンのコンパイル時にエラーになります。
+`Pattern` にあるのは `compile`、`matches`、`quote`、`matcher`、`split`、`pattern`、`flags` と
+フラグの定数です。`Matcher` にあるのは `find`、`lookingAt`、`matches`、`group`、`start`、`end`、
+`groupCount`、`reset`、`replaceAll`、`replaceFirst`、`quoteReplacement` です。リージョン、
+`hitEnd`、`appendReplacement`、`results`、ストリームはありません。
+
+**`String.format` の変換は[概要](index.md)に挙げたものだけです。** それ以外の変換は名前を
+示すエラーになります。
 
 **古い 2 つのクラスは新しいクラスと同じものです。** `StringBuffer` は `StringBuilder` であり、
 `getClass().getName()` も `StringBuilder` の名前を返します。`Vector` は `instanceof` で
