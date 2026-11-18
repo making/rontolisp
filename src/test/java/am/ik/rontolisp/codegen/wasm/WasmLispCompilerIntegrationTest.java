@@ -20058,6 +20058,53 @@ class WasmLispCompilerIntegrationTest {
 		}
 	}
 
+	// The binary16 encode is this backend's own integer code (WasmFloat16Compiler), so
+	// its rounding is pinned against the JDK's over every regime: random patterns, and
+	// around each sampled binary16 value the midpoint to its successor (a tie) with the
+	// binary32 neighbours either side -- subnormal results, the carry into the next
+	// exponent and the overflow to infinity included. No NaN: wasm leaves the sign of a
+	// demoted NaN to the engine.
+	@Test
+	void float16BitsRoundsEveryRegimeAsFloatToFloat16Does() throws Exception {
+		List<Float> inputs = new ArrayList<>(
+				List.of(0.0f, -0.0f, Float.MIN_VALUE, Float.MAX_VALUE, Float.POSITIVE_INFINITY, 65520.0f));
+		java.util.Random random = new java.util.Random(16);
+		for (int i = 0; i < 600; i++) {
+			float f = Float.intBitsToFloat(random.nextInt());
+			if (!Float.isNaN(f)) {
+				inputs.add(f);
+			}
+		}
+		for (int i = 0; i < 160; i++) {
+			int h = switch (i) {
+				case 0 -> 0;
+				case 1 -> 1;
+				case 2 -> 0x3fe;
+				case 3 -> 0x3ff;
+				case 4 -> 0x400;
+				case 5 -> 0x7bfe;
+				default -> random.nextInt(0x7bff);
+			};
+			float mid = (Float.float16ToFloat((short) h) + Float.float16ToFloat((short) (h + 1))) / 2;
+			for (float f : new float[] { mid, Math.nextUp(mid), Math.nextDown(mid) }) {
+				inputs.add(f);
+				inputs.add(-f);
+			}
+		}
+		StringBuilder code = new StringBuilder("(print (mapcar (lambda (x) (rontolisp:float16-bits x)) (list");
+		StringBuilder expected = new StringBuilder("(");
+		for (float f : inputs) {
+			code.append(' ')
+				.append(Float.isInfinite(f) ? "1.0d300" : new java.math.BigDecimal((double) f).toPlainString() + "d0");
+			if (f == 0.0f && Float.floatToRawIntBits(f) != 0) {
+				code.setLength(code.length() - 3);
+				code.append("-0.0d0");
+			}
+			expected.append(expected.length() > 1 ? " " : "").append(Float.floatToFloat16(f) & 0xffff);
+		}
+		assertThat(compileAndRun(code.append(")))").toString())).isEqualTo(expected.append(')').toString());
+	}
+
 	@Test
 	void aSparseArityLadderDispatchesTheSame() throws Exception {
 		// 300 defuns nobody takes as a value, then function values whose funcIds sit far

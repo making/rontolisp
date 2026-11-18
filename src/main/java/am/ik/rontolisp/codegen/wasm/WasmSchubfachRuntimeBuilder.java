@@ -1,3 +1,27 @@
+/*
+ * The decimal selection in this file is Raffaello Giulietti's Schubfach
+ * (https://github.com/c4f7fcce9cb06515/Schubfach, todec/src/math), adapted. Its notice:
+ *
+ * Copyright 2018-2020 Raffaello Giulietti
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
 package am.ik.rontolisp.codegen.wasm;
 
 import java.io.ByteArrayOutputStream;
@@ -16,7 +40,9 @@ import am.ik.wasm.WasmWriter;
  * backend and {@code --no-gc}; only the function indices and the table/buffer addresses
  * are parameters. The algorithm is the mirror in {@link SchubfachTables}, instruction for
  * instruction; change them together ({@code SchubfachTablesTest} pins the mirror against
- * {@code FloatText}).
+ * {@code FloatText}). The selection is Giulietti's, under the notice at the top of this
+ * file, as the mirror's comment details; the 64x64 high product is the schoolbook one in
+ * 32-bit halves, and the formatter is this project's.
  */
 final class WasmSchubfachRuntimeBuilder {
 
@@ -58,7 +84,7 @@ final class WasmSchubfachRuntimeBuilder {
 
 	/**
 	 * {@code _schub_rop (g1 i64, g0 i64, cp i64) -> i64}: the rounded odd product of the
-	 * 126-bit g and cp (Schubfach figure 9).
+	 * 126-bit g and cp (the r_o' of the Schubfach paper).
 	 * @param umulhiIdx the {@code _schub_umulhi} function index
 	 * @return the function body
 	 */

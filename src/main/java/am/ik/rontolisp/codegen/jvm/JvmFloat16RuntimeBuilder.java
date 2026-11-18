@@ -423,8 +423,7 @@ final class JvmFloat16RuntimeBuilder {
 
 	// The bf16 round-to-nearest-even narrow, over the raw bits of a float already in
 	// local slot fTmp: NaN is special-cased (a plain bits + 0x7fff + lsb bias-add can
-	// carry a heavy-payload NaN's low bits into the sign --
-	// .todo/artefacts/482-bfloat16-a-narrow-width-that-pays/Enc.java)
+	// carry a heavy-payload NaN's low bits into the sign)
 	// rather than relying on the payload surviving the add. Emitted instruction for
 	// instruction from am.ik.rontolisp.BFloat16#bits(float), which eval.FloatBitsWidening
 	// calls -- the interpreter and this backend answer one rounding (.kb/bfloat16.md).

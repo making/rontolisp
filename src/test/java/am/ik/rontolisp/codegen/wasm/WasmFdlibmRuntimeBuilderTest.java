@@ -26,11 +26,11 @@ import org.testcontainers.images.builder.Transferable;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Pins the WASM fdlibm port to {@code java.lang.StrictMath} bit for bit: a standalone
- * module holding every {@link Fn} evaluates them over the inputs below and prints each
- * result's raw bits; the expectations are the JDK's own fdlibm. Every NaN is one NaN here
- * (the sign and payload of a computed NaN are the engine's to choose), and nothing else
- * is forgiven.
+ * Pins the WASM fdlibm ({@code WasmFdlibmSources}, from Sun's C) to
+ * {@code java.lang.StrictMath} bit for bit: a standalone module holding every {@link Fn}
+ * evaluates them over the inputs below and prints each result's raw bits; the
+ * expectations are the JDK's own fdlibm. Every NaN is one NaN here (the sign and payload
+ * of a computed NaN are the engine's to choose), and nothing else is forgiven.
  */
 @EnabledIf("am.ik.rontolisp.testsupport.HostWasmtime#isAvailable")
 class WasmFdlibmRuntimeBuilderTest {

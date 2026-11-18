@@ -47,18 +47,25 @@ saturated) and `:get-exponent` answers an integer.
 - WASM (no transcendental instruction): `codegen/wasm/WasmFdlibmRuntimeBuilder`, one
   runtime FUNCTION per algorithm (`Fn`: the 13 public ones plus `k_sin`/`k_cos`/`k_tan`,
   `rem_pio2`/`krem` and `expm1`/`log1p`/`hypot`), shared by the GC backend and
-  `--no-gc`. Appended for `%strict-math` (every earlier slot keeps its index): FdLibm's
-  `log10`, `cbrt` and `IEEEremainder` with its `__ieee754_fmod` and `ilogb` (`FMOD`, `ILOGB`),
-  then the bit-level `ULP SIGNUM NEXT_UP NEXT_DOWN NEXT_AFTER COPY_SIGN GET_EXPONENT SCALB`,
-  written from StrictMath's specification over the subset's `BITS`/`FROM_BITS` (the raw long
-  bits). `SCALB` multiplies its exponent's remainder by 1000 first, then whole 2^+-1000
-  steps (the `scale-float` trap below); its exponent travels as an f64, an exact integer, so
-  it shares `(f64, f64) -> f64` and no fixed type was added. The sources are fdlibm transliterated statement for statement from the
-  JDK's own `java.lang.FdLibm` into a C-like subset (`Sources`), which a small
-  compiler in the same class (lexer, parser, emitter over raw `f64`/`i32`/`i64`
-  locals) turns into a body; the `__HI`/`__LO` word accessors are `i64.reinterpret`
-  arithmetic, `(int) d` is the saturating `i32.trunc_sat_f64_s` (Java's cast), and
-  the language has NO implicit promotion, so a missed cast in a transliteration fails
+  `--no-gc`. Appended for `%strict-math` (every earlier slot keeps its index): fdlibm's
+  `log10`, `cbrt` and `remainder` with its `__ieee754_fmod` (`FMOD`), then the bit-level
+  `ULP SIGNUM NEXT_UP NEXT_DOWN NEXT_AFTER COPY_SIGN GET_EXPONENT`, written from
+  StrictMath's specification over the subset's `BITS`/`FROM_BITS` (the raw long bits), and
+  `SCALB`, fdlibm's `scalbn` (`s_scalbn.c`: the exponent field set, one multiplication by
+  2^-54 into the subnormal range, so one rounding); its exponent travels as an f64, an exact
+  integer, so it shares `(f64, f64) -> f64` and no fixed type was added, and `pow` calls it
+  for a subnormal result. **The sources are Sun's C fdlibm 5.3 (netlib), file by file,
+  and nothing else** (`WasmFdlibmSources`, whose header keeps Sun's notices; rewritten
+  2026-11-18, `.kb/java-frontend-provenance.md`): each function keeps the C file's decimal
+  constants, names, operand order and grouping in a C-like subset, which a small compiler
+  in `WasmFdlibmRuntimeBuilder` (lexer, parser, emitter over raw `f64`/`i32`/`i64` locals)
+  turns into a body. `__HI(x)`/`__LO(x)` read a word and `__HI(x) = ...` assigns one
+  (`i64.reinterpret` arithmetic), `(int) d` is the saturating `i32.trunc_sat_f64_s`, an
+  `unsigned` operand is an `int` taken through `>>>`, `ult` or `ule`, `switch`/`for`/`goto`
+  are if-chains and `while`, `scalbn` by a power of two that keeps the value normal is a
+  multiplication by `pow2(n)`, `__kernel_rem_pio2` is specialized to `prec = 2`, and the
+  language has NO implicit promotion, so a conversion C makes silently is written and a
+  missed one fails
   to parse. The trig reduction's 2/pi table, `npio2_hw` and `__kernel_rem_pio2`'s
   scratch arrays live in linear memory (`tables()`, a reader-owned blob kept while a function
   `addressesTables` names survives; every access cites the base as its own `i32.const`, which
@@ -108,9 +115,9 @@ saturated) and `:get-exponent` answers an integer.
 
 ## fdlibm against the inline cores
 
-- Bits: `WasmFdlibmRuntimeBuilderTest` runs every function over 16,225 arguments (random
+- Bits: `WasmFdlibmRuntimeBuilderTest` runs every function over 20,192 arguments (random
   bit patterns, the ranges each is used over, values near multiples of pi/2, 1e22-class
-  trig arguments, 65 special values paired for the binary functions) and every result
+  trig arguments, 64 special values paired for the binary functions) and every result
   equals `StrictMath`'s (NaN payloads excepted: an engine may sign a computed NaN
   either way). The old cores could be far off in ulps (`log` near 1, trig near a zero,
   float `expt`) and matched the JVM only on a minority of arguments; the SICP sample that
@@ -155,7 +162,8 @@ Decided: fdlibm stays; the difference is the stated deviation (`(m/exp 1)` is
   answers 4.9e-324; 103 of 20M random `(f, n)` pairs differed. Since 2026-10-08 the exponent's
   remainder by 1000 multiplies first: only the step entering the subnormal range rounds, and
   a step after it takes a value below 2^-1022 to the zero the exact product rounds to as well
-  (0 of the 20M differ). `%strict-math :scalb`'s wasm `SCALB` is the same order. Pinned by
+  (0 of the 20M differ). `%strict-math :scalb`'s wasm `SCALB` rounds once its own way
+  (fdlibm's `scalbn`, above). Pinned by
   `JvmLispCompilerTest`/`WasmLispCompilerIntegrationTest#scaleFloatRoundsOnceIntoTheSubnormalRange`
   and `StrictMathE2eTest`.
 - The 0xFD byte of a no-gc probe: fdlibm's coefficients (asin's `0x1.23de10dfdf709p-15`)
@@ -175,8 +183,13 @@ Decided: fdlibm stays; the difference is the stated deviation (`(m/exp 1)` is
   the tables for a trig name spelled as a string literal when a builder is present
   (`programSpellsStringLiteral`), and for one a package walk can hand back
   (`RuntimeNameProducers.packageWalkSpellings`, which arms the universes' names).
-- `Math.scalb` in `Pow`'s subnormal tail is `(z * 2^-1000) * 2^(n+1000)` in the source:
-  exact steps and one rounding, the same double `scalb`'s stepped multiply lands on.
+- Checking a rewrite of the sources: `WasmFdlibmRuntimeBuilderTest` holds 20,192 inputs
+  (12,000 random, 64 specials paired) and its driver's input region ends at the tables,
+  32,256 doubles in: past that the inputs overwrite the tables and every function
+  "differs". A bigger sweep is the same test with another seed (2026-11-18: the pinned
+  seed and three more at 23,000 random inputs, nothing differs on any function). A constant mistyped in a source shows
+  there only as an ulp on some arguments, so compare the literals with the C files' too
+  (every float and hex literal of each function is the C file's set, checked by script).
 
 ## Pinning tests
 

@@ -2,6 +2,7 @@ package am.ik.rontolisp.clojure;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -21,26 +22,36 @@ import org.jspecify.annotations.Nullable;
  * The literal format string is parsed here as Formatter parses it, and every refusal of
  * that parse becomes the run-time refusal of the oracle's class and words, signalled
  * after the arguments are evaluated (the oracle's {@code format} is a function). The
- * print resolves each specifier's argument as Formatter does (ordinary, {@code n$} and
- * {@code <} indexes; a missing one refused in its place) and renders it through one
- * {@code clojure.lisp} helper per conversion family ({@code %clojure-format-text},
- * {@code -char}, {@code -integer}, {@code -float}), which take the flags, width and
- * precision and check the argument's class.
+ * parse is written from the {@code Formatter} documentation -- the specifier's syntax,
+ * its table of the flags each conversion takes, the exceptions it names -- and what the
+ * documentation leaves open (which refusal comes first, and its words) from a JDK's
+ * answers over every combination of flags, width and precision ({@link #STEPS};
+ * {@code ClojureFormatLoweringTest} asks again). The print resolves each specifier's
+ * argument as Formatter does (ordinary, {@code n$} and {@code <} indexes; a missing one
+ * refused in its place) and renders it through one {@code clojure.lisp} helper per
+ * conversion family ({@code %clojure-format-text}, {@code -char}, {@code -integer},
+ * {@code -float}), which take the flags, width and precision and check the argument's
+ * class.
  */
 final class ClojureFormatLowering {
 
 	/**
-	 * Formatter's specifier: {@code %[index$][flags][width][.precision][t]conversion}. A
-	 * {@code %} it does not match is refused naming the character after it.
+	 * The documented syntax of a specifier,
+	 * {@code %[argument_index$][flags][width][.precision]conversion}, a date and time
+	 * conversion being a {@code t} or {@code T} and its suffix. A {@code %} it does not
+	 * match is refused naming the character after it.
 	 */
-	private static final Pattern SPECIFIER = Pattern
-		.compile("%(\\d+\\$)?([-#+ 0,(<]*)?(\\d+)?(\\.\\d+)?([tT])?([a-zA-Z%])");
+	private static final Pattern SPECIFIER = Pattern.compile(
+			"%(?<index>\\d+\\$)?(?<flags>[-#+ 0,(<]*)(?<width>\\d+)?(?<precision>\\.\\d+)?(?<time>[tT])?(?<conversion>[a-zA-Z%])");
 
 	/** The flags in Formatter's own order, the order its messages spell them in. */
 	private static final String FLAGS = "-#+ 0,(<";
 
-	/** Every conversion Formatter knows; any other letter is refused. */
-	private static final String CONVERSIONS = "bBhHsScCdoxXeEfgGaAtT%n";
+	/**
+	 * Every conversion Formatter knows but the date and time ones, which need their
+	 * suffix; any other letter is refused.
+	 */
+	private static final String CONVERSIONS = "bBhHsScCdoxXeEfgGaA%n";
 
 	private static final LispSymbol FORMAT_TEXT = new LispSymbol("RONTOLISP::%CLOJURE-FORMAT-TEXT");
 
@@ -84,7 +95,10 @@ final class ClojureFormatLowering {
 			return Character.toLowerCase(this.conversion);
 		}
 
-		/** Formatter's {@code FormatSpecifier.toString}, the words of its refusals. */
+		/**
+		 * The specifier as a refusal spells it: the flags in their order, then an
+		 * explicit index, the width, the precision and the conversion.
+		 */
 		@Override
 		public String toString() {
 			StringBuilder text = new StringBuilder("%").append(this.flags);
@@ -334,13 +348,13 @@ final class ClojureFormatLowering {
 
 	private static Specifier specifier(Matcher m) throws Refused {
 		int index = 0;
-		if (m.group(1) != null) {
-			index = number(m.group(1).substring(0, m.group(1).length() - 1), m);
+		if (m.group("index") != null) {
+			index = number(m.group("index").substring(0, m.group("index").length() - 1), m);
 			if (index == 0) {
 				throw new Refused(ClojureRefusals.ILLEGAL_FORMAT_ARGUMENT_INDEX, "Illegal format argument index = 0");
 			}
 		}
-		String written = (m.group(2) != null) ? m.group(2) : "";
+		String written = m.group("flags");
 		for (int i = 0; i < written.length(); i++) {
 			if (written.indexOf(written.charAt(i)) < i) {
 				throw new Refused(ClojureRefusals.DUPLICATE_FORMAT_FLAGS, "Flags = '" + written.charAt(i) + "'");
@@ -355,12 +369,12 @@ final class ClojureFormatLowering {
 		if (flags.indexOf("<") >= 0) {
 			index = -1;
 		}
-		int width = (m.group(3) != null) ? number(m.group(3), m) : -1;
-		int precision = (m.group(4) != null) ? number(m.group(4).substring(1), m) : -1;
-		if (m.group(5) != null) {
-			throw new Refused(null, "format directive %" + m.group(5) + " is not supported yet");
+		int width = (m.group("width") != null) ? number(m.group("width"), m) : -1;
+		int precision = (m.group("precision") != null) ? number(m.group("precision").substring(1), m) : -1;
+		if (m.group("time") != null) {
+			throw new Refused(null, "format directive %" + m.group("time") + " is not supported yet");
 		}
-		char conversion = m.group(6).charAt(0);
+		char conversion = m.group("conversion").charAt(0);
 		if (CONVERSIONS.indexOf(conversion) < 0) {
 			throw new Refused(ClojureRefusals.UNKNOWN_FORMAT_CONVERSION, "Conversion = '" + conversion + "'");
 		}
@@ -369,13 +383,7 @@ final class ClojureFormatLowering {
 			index = -2;
 		}
 		Specifier spec = new Specifier(index, flags.toString(), width, precision, conversion);
-		switch (kind) {
-			case 'b', 'h', 's' -> checkGeneral(spec);
-			case 'c' -> checkCharacter(spec);
-			case 'd', 'o', 'x' -> checkInteger(spec);
-			case 'e', 'f', 'g', 'a' -> checkFloat(spec);
-			default -> checkText(spec);
-		}
+		check(spec);
 		if (kind == 'h' || kind == 'a') {
 			throw new Refused(null, "format directive %" + conversion + " is not supported yet");
 		}
@@ -391,103 +399,125 @@ final class ClojureFormatLowering {
 		}
 	}
 
-	private static void checkGeneral(Specifier spec) throws Refused {
-		if ((spec.kind() == 'b' || spec.kind() == 'h') && spec.has('#')) {
-			throw mismatch(spec, "#");
-		}
-		requireWidthFor(spec, "-");
-		checkBadFlags(spec, "+ 0,(");
+	/** What a conversion refuses about a specifier; {@link #STEPS} orders them. */
+	private enum Refusal {
+
+		/** A precision. */
+		PRECISION,
+		/** A width. */
+		WIDTH,
+		/** One of the step's flags without a width. */
+		NO_WIDTH,
+		/** {@code +} with a space, or {@code -} with {@code 0}. */
+		EXCLUSIVE_FLAGS,
+		/** The step's flags: those given are named with the conversion. */
+		FLAGS,
+		/** Any flag but the step's: all the flags are named. */
+		OTHER_FLAGS
+
 	}
 
-	private static void checkCharacter(Specifier spec) throws Refused {
-		if (spec.precision() != -1) {
-			throw new Refused(ClojureRefusals.ILLEGAL_FORMAT_PRECISION, Integer.toString(spec.precision()));
-		}
-		checkBadFlags(spec, "#+ 0,(");
-		requireWidthFor(spec, "-");
-	}
+	private record Step(Refusal refusal, String flags) {
 
-	private static void checkInteger(Specifier spec) throws Refused {
-		checkNumeric(spec);
-		if (spec.precision() != -1) {
-			throw new Refused(ClojureRefusals.ILLEGAL_FORMAT_PRECISION, Integer.toString(spec.precision()));
+		Step(Refusal refusal) {
+			this(refusal, "");
 		}
-		checkBadFlags(spec, spec.kind() == 'd' ? "#" : ",");
-	}
 
-	private static void checkFloat(Specifier spec) throws Refused {
-		checkNumeric(spec);
-		switch (spec.kind()) {
-			case 'e' -> checkBadFlags(spec, ",");
-			case 'g' -> checkBadFlags(spec, "#");
-			case 'a' -> checkBadFlags(spec, ",(");
-			default -> {
-			}
-		}
-	}
-
-	private static void checkNumeric(Specifier spec) throws Refused {
-		requireWidthFor(spec, "-0");
-		if ((spec.has('+') && spec.has(' ')) || (spec.has('-') && spec.has('0'))) {
-			throw illegalFlags(spec);
-		}
-	}
-
-	private static void checkText(Specifier spec) throws Refused {
-		if (spec.precision() != -1) {
-			throw new Refused(ClojureRefusals.ILLEGAL_FORMAT_PRECISION, Integer.toString(spec.precision()));
-		}
-		if (spec.kind() == '%') {
-			if (!spec.flags().isEmpty() && !spec.flags().equals("-")) {
-				throw illegalFlags(spec);
-			}
-			requireWidthFor(spec, "-");
-		}
-		else {
-			if (spec.width() != -1) {
-				throw new Refused(ClojureRefusals.ILLEGAL_FORMAT_WIDTH, Integer.toString(spec.width()));
-			}
-			if (!spec.flags().isEmpty()) {
-				throw illegalFlags(spec);
-			}
-		}
 	}
 
 	/**
-	 * {@code MissingFormatWidthException} when one of the flags is given without a width.
+	 * Each conversion's refusals, in the order it makes them. WHAT is refused is the
+	 * documentation's: a flag outside the conversion's row of the flag table, a precision
+	 * where none applies (a character, an integer, {@code %%}, {@code %n}), a width on
+	 * {@code %n}, {@code -} or {@code 0} without a width, and the two exclusive pairs.
+	 * The ORDER, and that {@code b} and {@code h} refuse {@code #} ahead of the rest, is
+	 * what a JDK answers.
 	 */
-	private static void requireWidthFor(Specifier spec, String flags) throws Refused {
-		if (spec.width() == -1) {
-			for (char flag : flags.toCharArray()) {
-				if (spec.has(flag)) {
-					throw new Refused(ClojureRefusals.MISSING_FORMAT_WIDTH, spec.toString());
+	private static final Map<Character, List<Step>> STEPS;
+
+	static {
+		Step numeric = new Step(Refusal.NO_WIDTH, "-0");
+		Step exclusive = new Step(Refusal.EXCLUSIVE_FLAGS);
+		Step precision = new Step(Refusal.PRECISION);
+		Step leftOnly = new Step(Refusal.NO_WIDTH, "-");
+		List<Step> hash = List.of(new Step(Refusal.FLAGS, "#"), leftOnly, new Step(Refusal.FLAGS, "+ 0,("));
+		List<Step> radix = List.of(numeric, exclusive, precision, new Step(Refusal.FLAGS, ","));
+		STEPS = Map.ofEntries(Map.entry('b', hash), Map.entry('h', hash),
+				Map.entry('s', List.of(leftOnly, new Step(Refusal.FLAGS, "+ 0,("))),
+				Map.entry('c', List.of(precision, new Step(Refusal.FLAGS, "#+ 0,("), leftOnly)),
+				Map.entry('d', List.of(numeric, exclusive, precision, new Step(Refusal.FLAGS, "#"))),
+				Map.entry('o', radix), Map.entry('x', radix),
+				Map.entry('e', List.of(numeric, exclusive, new Step(Refusal.FLAGS, ","))),
+				Map.entry('f', List.of(numeric, exclusive)),
+				Map.entry('g', List.of(numeric, exclusive, new Step(Refusal.FLAGS, "#"))),
+				Map.entry('a', List.of(numeric, exclusive, new Step(Refusal.FLAGS, ",("))),
+				Map.entry('%', List.of(precision, new Step(Refusal.OTHER_FLAGS, "-"), leftOnly)),
+				Map.entry('n', List.of(precision, new Step(Refusal.WIDTH), new Step(Refusal.OTHER_FLAGS))));
+	}
+
+	/** The first refusal the specifier's conversion makes of it, if any. */
+	private static void check(Specifier spec) throws Refused {
+		String flags = spec.flags().replace("<", "");
+		for (Step step : STEPS.getOrDefault(spec.kind(), List.of())) {
+			switch (step.refusal()) {
+				case PRECISION -> {
+					if (spec.precision() != -1) {
+						throw new Refused(ClojureRefusals.ILLEGAL_FORMAT_PRECISION, Integer.toString(spec.precision()));
+					}
+				}
+				case WIDTH -> {
+					if (spec.width() != -1) {
+						throw new Refused(ClojureRefusals.ILLEGAL_FORMAT_WIDTH, Integer.toString(spec.width()));
+					}
+				}
+				case NO_WIDTH -> {
+					if (spec.width() == -1 && !given(flags, step.flags()).isEmpty()) {
+						throw new Refused(ClojureRefusals.MISSING_FORMAT_WIDTH, spec.toString());
+					}
+				}
+				case EXCLUSIVE_FLAGS -> {
+					if ((spec.has('+') && spec.has(' ')) || (spec.has('-') && spec.has('0'))) {
+						throw illegalFlags(spec);
+					}
+				}
+				case FLAGS -> {
+					String refused = given(flags, step.flags());
+					if (!refused.isEmpty()) {
+						throw new Refused(ClojureRefusals.FORMAT_FLAGS_CONVERSION_MISMATCH,
+								"Conversion = " + spec.kind() + ", Flags = " + refused);
+					}
+				}
+				case OTHER_FLAGS -> {
+					if (given(spec.flags(), step.flags()).length() != spec.flags().length()) {
+						throw illegalFlags(spec);
+					}
 				}
 			}
 		}
 	}
 
-	/**
-	 * The conversion's refusal of the given flags it does not take, all of them named.
-	 */
-	private static void checkBadFlags(Specifier spec, String bad) throws Refused {
+	/** Those of the flags that are among the set, in the flags' order. */
+	private static String given(String flags, String set) {
 		StringBuilder given = new StringBuilder();
-		for (char flag : spec.flags().toCharArray()) {
-			if (bad.indexOf(flag) >= 0) {
+		for (char flag : flags.toCharArray()) {
+			if (set.indexOf(flag) >= 0) {
 				given.append(flag);
 			}
 		}
-		if (!given.isEmpty()) {
-			throw mismatch(spec, given.toString());
-		}
+		return given.toString();
 	}
 
-	private static Refused mismatch(Specifier spec, String flags) {
-		return new Refused(ClojureRefusals.FORMAT_FLAGS_CONVERSION_MISMATCH,
-				"Conversion = " + spec.kind() + ", Flags = " + flags);
-	}
-
+	/**
+	 * The refusal of the specifier's flags together, all of them named -- an uppercase
+	 * conversion among them as {@code ^}, after {@code -}.
+	 */
 	private static Refused illegalFlags(Specifier spec) {
-		return new Refused(ClojureRefusals.ILLEGAL_FORMAT_FLAGS, "Flags = '" + spec.flags() + "'");
+		String flags = spec.flags();
+		if (spec.conversion() != spec.kind()) {
+			int at = flags.startsWith("-") ? 1 : 0;
+			flags = flags.substring(0, at) + "^" + flags.substring(at);
+		}
+		return new Refused(ClojureRefusals.ILLEGAL_FORMAT_FLAGS, "Flags = '" + flags + "'");
 	}
 
 }

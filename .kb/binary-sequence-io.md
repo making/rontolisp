@@ -63,7 +63,15 @@ along: `.kb/character-sequence-io.md`.
 - **Deliberately a plain scalar loop, not `jdk.incubator.vector`**: the JVM's `long[]` backing
   has no `ShortVector.fromArray`/`convertShape(S2I)` path; re-open only if a caller measures itself
   bandwidth-bound here. Correctness pinned against
-  `Float.floatToFloat16`/`float16ToFloat` over all 65536 f16 bit patterns.
+  `Float.floatToFloat16`/`float16ToFloat` over all 65536 f16 bit patterns. The WASM encode
+  (`WasmFloat16Compiler.emitFloat16Encode`) is IEEE 754's binary32 -> binary16 conversion
+  written from the two formats (2026-11-18): at most 2^-25 a zero, 2^16 and up an infinity,
+  else the 24-bit significand shifted down by 13 plus one per exponent below 2^-14, rounded
+  to nearest even, and ADDED to the exponent field so a carry lands on the next exponent. A
+  NaN's payload is what a JDK answers (quiet, the payload's top ten bits). The same
+  arithmetic in Java agreed with `Float.floatToFloat16` on all 2^32 inputs; the emitted code
+  is pinned by `WasmLispCompilerIntegrationTest#float16BitsRoundsEveryRegimeAsFloatToFloat16Does`
+  (random patterns and every kind of tie; no NaN, whose sign wasm leaves to the engine).
 
 ## Tests
 ci-spec `read-sequence-and-write-sequence-over-packed-buffers-move-raw-little-endian-elements`;

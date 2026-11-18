@@ -87,8 +87,10 @@ public class Hashtable<K, V> extends AbstractMap<K, V> {
         limit = length * 3 / 4;
     }
 
+    // The slots a copy gets are what the order a JDK walks one in shows: the default
+    // eleven up to five mappings, two for each mapping above (asked for 2 to 64).
     public Hashtable(Map<? extends K, ? extends V> m) {
-        this(m.size() * 2 < 11 ? 11 : m.size() * 2);
+        this(m.size() > 5 ? m.size() * 2 : 11);
         putAll(m);
     }
 

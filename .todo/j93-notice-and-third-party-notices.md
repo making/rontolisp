@@ -14,8 +14,11 @@ shipped. Rewrites are j90-j92; this item keeps what may stay and says so.
   #22 starlark-go's `string_format` (or correct the "ported" wording if only behaviour was
   matched -- establish which), #23 ggml's q8_0 reference, #26 the WASI / wasmtime WIT files,
   #27 Unicode-3.0, #30 `coi-serviceworker`, #31 the Kuzushiji-49 weights (CC BY-SA 4.0: decide
-  whether SA reaches the weights), #32 the Programming Clojure snippets, and fdlibm's
-  permission notice once j91 lands.
+  whether SA reaches the weights), #32 the Programming Clojure snippets, and the two
+  ports j91 left with their notices in the file headers only (landed 2026-11-18): Sun's
+  fdlibm 5.3 (`codegen/wasm/WasmFdlibmSources.java`, three notice variants) and Raffaello
+  Giulietti's Schubfach (MIT; `SchubfachTables.java`, `WasmSchubfachRuntimeBuilder.java`).
+  Both are embedded in a user's `.wasm`, so they also belong to "what a user ships" below.
 - **A header in each copied file** naming its origin and licence.
 - **The jars**: the exec jar and the native image carry the notices (`META-INF/`).
 - **What a user ships** (#16): every `--native` output statically links wasmtime and 143

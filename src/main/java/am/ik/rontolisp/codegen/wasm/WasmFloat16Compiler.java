@@ -22,18 +22,17 @@ import am.ik.wasm.Instruction;
  * {@code .todo/artefacts/482-bfloat16-a-narrow-width-that-pays/README.md}).
  *
  * <p>
- * {@link #compileBits} (the ENCODE direction, real -&gt; bits, round-to-nearest-even) is
- * a BRANCHLESS reformulation of a literal port of {@code java.lang.Float.floatToFloat16}
- * (JDK 20+, {@code java.base/java/lang/Float.java}): the three top-level cases (NaN,
- * overflow, underflow-to-zero) are still an if/else-if/else chain (their RESULT shapes
- * differ), but the "normal" branch's own internal subnormal-vs-normal split is turned
- * into arithmetic (a {@code shift}/{@code msb}/{@code biasedExpField} formula scaled by
- * the 0/1 {@code isSubnormal} flag, and the round-to-nearest-even increment as a 0/1
- * multiply) rather than nested branches -- verified exhaustively against the original
- * branchy port over all 2^32 float32 inputs (NaN payload included; the
- * {@code .todo/artefacts/482-bfloat16-a-narrow-width-that-pays/Enc.java} test harness)
- * before being transliterated here. Two branchless "magic-multiply" alternatives were
- * tried and abandoned because they round DENORMAL-target ties wrongly (same file).
+ * {@link #compileBits} (the ENCODE direction, real -&gt; bits) is IEEE 754's conversion
+ * of a binary32 to binary16, round to nearest with ties to even, written here from the
+ * two formats ({@link #emitFloat16Encode}): at most 2^-25 is a signed zero, 2^16 and up
+ * an infinity, and between them the 24-bit significand is shifted down to the 11 bits
+ * binary16 keeps -- further by each exponent below its smallest normal one -- and the
+ * rounded significand ADDED to the exponent field, so a carry out of it lands on the next
+ * exponent, and on infinity from the largest one. What the standard leaves open is a
+ * NaN's payload; a JDK's {@code Float.floatToFloat16} was asked (it answers a quiet NaN
+ * with the payload's top ten bits). The same arithmetic written in Java agrees with that
+ * method on all 2^32 inputs, and the emitted code is pinned against it over every regime
+ * ({@code WasmLispCompilerIntegrationTest}).
  *
  * <p>
  * Every intermediate value lives in an {@code i64} scratch slot (this compiler has no
@@ -55,11 +54,20 @@ final class WasmFloat16Compiler {
 	/** {@code 0x1.0p112f}: the magic-multiply rescale constant. */
 	private static final float DECODE_SCALE = Float.intBitsToFloat(0x77800000);
 
-	/** The overflow threshold: bits of {@code (0x1.ffcp15f + 0x0.002p15f)}. */
-	private static final int OVERFLOW_THRESHOLD = 0x477ff000;
+	/** The bits of 2^16: from here up a binary32 is past every finite binary16. */
+	private static final int OVERFLOW_THRESHOLD = 0x47800000;
 
-	/** The zero/subnormal-source threshold: bits of {@code (0x1.0p-24f * 0.5f)}. */
+	/**
+	 * The bits of 2^-25, half the smallest binary16 subnormal: up to here (the tie goes
+	 * to the even zero) a binary32 rounds to zero.
+	 */
 	private static final int ZERO_THRESHOLD = 0x33000000;
+
+	/** The bits of the binary32 infinity; a magnitude above it is a NaN. */
+	private static final int F32_INFINITY = 0x7f800000;
+
+	/** The exponent field of binary16's smallest normal binade (2^-14) in a binary32. */
+	private static final int F16_MIN_NORMAL_EXPONENT = 113;
 
 	/**
 	 * How a packed float array's data field (field 1 of {@code TYPE_FARRAY}) is laid out
@@ -99,16 +107,11 @@ final class WasmFloat16Compiler {
 		ctx.writer.write(Instruction.F32_DEMOTE_F64);
 		ctx.writer.write(Instruction.I32_REINTERPRET_F32);
 		int savedI64Locals = ctx.nextI64Local;
-		int doppel = ctx.allocI64Temp();
-		int signBit = ctx.allocI64Temp();
-		int absBits = ctx.allocI64Temp();
-		int exp = ctx.allocI64Temp();
-		int isSubnormal = ctx.allocI64Temp();
-		int shift = ctx.allocI64Temp();
-		int fSignifBits = ctx.allocI64Temp();
-		storeI32(ctx, doppel);
+		int bits = ctx.allocI64Temp();
+		Float16Slots slots = Float16Slots.alloc(ctx);
+		storeI32(ctx, bits);
 
-		emitFloat16Encode(ctx, doppel, signBit, absBits, exp, isSubnormal, shift, fSignifBits);
+		emitFloat16Encode(ctx, bits, slots);
 
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 		ctx.nextI64Local = savedI64Locals;
@@ -379,8 +382,8 @@ final class WasmFloat16Compiler {
 	 * <p>
 	 * <b>Known simplification for a {@code double-float} source's {@code :bfloat16}
 	 * direction</b>: every element is demoted {@code f64 -> f32} once before the bf16
-	 * round, exactly like the {@code :float16} direction (whose JDK reference,
-	 * {@code Float.floatToFloat16}, only ever takes a {@code float}).
+	 * round, exactly like the {@code :float16} direction (binary16's conversion here
+	 * starts from a binary32, as the interpreter's {@code Float.floatToFloat16} does).
 	 * {@code BFloat16.bits(double)} avoids this by checking the DOUBLE's own NaN bits
 	 * before narrowing, so a double source right at a bf16 rounding tie can answer one
 	 * ULP differently between backends; nothing here needs bit-for-bit parity with that
@@ -474,15 +477,10 @@ final class WasmFloat16Compiler {
 
 	private static void emitNarrowLoop(WasmLispCompiler.Ctx ctx, Layout layout, int srcDataArr, int dstArr, int n,
 			int isFloat16, int start, int i) {
-		// The branchless float16-bits encode's own scratch slots (see compileBits),
-		// re-run once per element.
-		int doppel = ctx.allocI64Temp();
-		int signBit = ctx.allocI64Temp();
-		int absBits = ctx.allocI64Temp();
-		int exp = ctx.allocI64Temp();
-		int isSubnormal = ctx.allocI64Temp();
-		int shift = ctx.allocI64Temp();
-		int fSignifBits = ctx.allocI64Temp();
+		// The source element's f32 bits and the float16 encode's own scratch slots,
+		// reused for every element.
+		int bits = ctx.allocI64Temp();
+		Float16Slots slots = Float16Slots.alloc(ctx);
 
 		ctx.writer.write(Instruction.I64_CONST);
 		ctx.writer.writeSignedLeb128(0);
@@ -496,7 +494,7 @@ final class WasmFloat16Compiler {
 		ctx.writer.write(Instruction.I64_GE_S);
 		ctx.writer.write(Instruction.BR_IF, 1);
 
-		// doppel = bits of the source element narrowed to f32 (row-major from 0, no
+		// bits = the source element narrowed to f32 (row-major from 0, no
 		// :start offset on the SOURCE side -- narrow-float-bits reads src whole).
 		getRef(ctx, srcDataArr);
 		switch (layout) {
@@ -522,7 +520,7 @@ final class WasmFloat16Compiler {
 		}
 		ctx.writer.write(Instruction.I32_REINTERPRET_F32);
 		ctx.writer.write(Instruction.I64_EXTEND_U_I32);
-		setI64(ctx, doppel);
+		setI64(ctx, bits);
 
 		// push (dstArr, index) -- the encoded i32 bits land on top for array.set.
 		getRef(ctx, dstArr);
@@ -535,9 +533,9 @@ final class WasmFloat16Compiler {
 		getI64(ctx, isFloat16);
 		ctx.writer.write(Instruction.I32_WRAP_I64);
 		ctx.writer.write(Instruction.IF, 0x7F); // (result i32): the bits to store
-		emitFloat16Encode(ctx, doppel, signBit, absBits, exp, isSubnormal, shift, fSignifBits);
+		emitFloat16Encode(ctx, bits, slots);
 		ctx.writer.write(Instruction.ELSE);
-		emitBfloat16Encode(ctx, doppel);
+		emitBfloat16Encode(ctx, bits);
 		ctx.writer.write(Instruction.END);
 
 		arraySet(ctx, WasmLispCompiler.TYPE_I16ARR);
@@ -553,175 +551,142 @@ final class WasmFloat16Compiler {
 		ctx.wasmCtrlDepth -= 2;
 	}
 
+	/** The scratch slots of {@link #emitFloat16Encode}, i64 locals holding i32 values. */
+	private record Float16Slots(int sign, int mag, int e14, int shift, int signif) {
+
+		static Float16Slots alloc(WasmLispCompiler.Ctx ctx) {
+			return new Float16Slots(ctx.allocI64Temp(), ctx.allocI64Temp(), ctx.allocI64Temp(), ctx.allocI64Temp(),
+					ctx.allocI64Temp());
+		}
+
+	}
+
 	/**
-	 * The branchless {@code float16-bits} encode (see {@link #compileBits}), factored out
-	 * so {@link #emitNarrowLoop} can run it per element without duplicating the
-	 * ~30-instruction body. {@code doppel} must already hold the source's f32 bits;
-	 * leaves the encoded i32 (0..65535) on the stack.
+	 * The {@code float16-bits} encode (see the class comment), shared by
+	 * {@link #compileBits} and the per-element body of {@link #emitNarrowLoop}.
+	 * {@code bits} must already hold the source's f32 bits; leaves the encoded i32
+	 * (0..65535) on the stack.
 	 */
-	private static void emitFloat16Encode(WasmLispCompiler.Ctx ctx, int doppel, int signBit, int absBits, int exp,
-			int isSubnormal, int shift, int fSignifBits) {
-		loadI32(ctx, doppel);
-		constI32(ctx, 0x80000000);
-		i32(ctx, Instruction.I32_AND);
+	private static void emitFloat16Encode(WasmLispCompiler.Ctx ctx, int bits, Float16Slots t) {
+		// sign = the sign bit where binary16 keeps it; mag = the bits of |x|
+		loadI32(ctx, bits);
 		constI32(ctx, 16);
 		i32(ctx, Instruction.I32_SHR_U);
-		storeI32(ctx, signBit);
-
-		loadI32(ctx, doppel);
-		constI32(ctx, 23);
-		i32(ctx, Instruction.I32_SHR_U);
-		constI32(ctx, 0xff);
+		constI32(ctx, 0x8000);
 		i32(ctx, Instruction.I32_AND);
-		constI32(ctx, 0xff);
-		i32(ctx, Instruction.I32_EQ);
-		loadI32(ctx, doppel);
-		constI32(ctx, 0x7fffff);
-		i32(ctx, Instruction.I32_AND);
-		constI32(ctx, 0);
-		i32(ctx, Instruction.I32_NE);
-		i32(ctx, Instruction.I32_AND);
-
-		ctx.writer.write(Instruction.IF, 0x7F);
-		loadI32(ctx, signBit);
-		constI32(ctx, 0x7c00);
-		i32(ctx, Instruction.I32_OR);
-		loadI32(ctx, doppel);
-		constI32(ctx, 0x7fe000);
-		i32(ctx, Instruction.I32_AND);
-		constI32(ctx, 13);
-		i32(ctx, Instruction.I32_SHR_U);
-		i32(ctx, Instruction.I32_OR);
-		loadI32(ctx, doppel);
-		constI32(ctx, 0x1ff0);
-		i32(ctx, Instruction.I32_AND);
-		constI32(ctx, 4);
-		i32(ctx, Instruction.I32_SHR_U);
-		i32(ctx, Instruction.I32_OR);
-		loadI32(ctx, doppel);
-		constI32(ctx, 0xf);
-		i32(ctx, Instruction.I32_AND);
-		i32(ctx, Instruction.I32_OR);
-		ctx.writer.write(Instruction.ELSE);
-
-		loadI32(ctx, doppel);
+		storeI32(ctx, t.sign());
+		loadI32(ctx, bits);
 		constI32(ctx, 0x7fffffff);
 		i32(ctx, Instruction.I32_AND);
-		storeI32(ctx, absBits);
+		storeI32(ctx, t.mag());
 
-		loadI32(ctx, absBits);
-		constI32(ctx, OVERFLOW_THRESHOLD);
-		i32(ctx, Instruction.I32_GE_S);
-		ctx.writer.write(Instruction.IF, 0x7F);
-		loadI32(ctx, signBit);
-		constI32(ctx, 0x7c00);
-		i32(ctx, Instruction.I32_OR);
-		ctx.writer.write(Instruction.ELSE);
-
-		loadI32(ctx, absBits);
+		// |x| <= 2^-25: a zero
+		loadI32(ctx, t.mag());
 		constI32(ctx, ZERO_THRESHOLD);
 		i32(ctx, Instruction.I32_LE_S);
 		ctx.writer.write(Instruction.IF, 0x7F);
-		loadI32(ctx, signBit);
+		loadI32(ctx, t.sign());
 		ctx.writer.write(Instruction.ELSE);
 
-		loadI32(ctx, absBits);
+		// |x| >= 2^16: an infinity, or a quiet NaN carrying the payload's top ten bits
+		loadI32(ctx, t.mag());
+		constI32(ctx, OVERFLOW_THRESHOLD);
+		i32(ctx, Instruction.I32_GE_S);
+		ctx.writer.write(Instruction.IF, 0x7F);
+		loadI32(ctx, t.sign());
+		constI32(ctx, 0x7c00);
+		i32(ctx, Instruction.I32_OR);
+		loadI32(ctx, t.mag());
+		constI32(ctx, 13);
+		i32(ctx, Instruction.I32_SHR_U);
+		constI32(ctx, 0x3ff);
+		i32(ctx, Instruction.I32_AND);
+		constI32(ctx, 0x200);
+		i32(ctx, Instruction.I32_OR);
+		constI32(ctx, 0);
+		loadI32(ctx, t.mag());
+		constI32(ctx, F32_INFINITY);
+		i32(ctx, Instruction.I32_GT_S);
+		ctx.writer.write(Instruction.SELECT);
+		i32(ctx, Instruction.I32_OR);
+		ctx.writer.write(Instruction.ELSE);
+
+		// e14 = the exponent counted from binary16's smallest normal binade
+		loadI32(ctx, t.mag());
 		constI32(ctx, 23);
 		i32(ctx, Instruction.I32_SHR_U);
-		constI32(ctx, 0xff);
-		i32(ctx, Instruction.I32_AND);
-		constI32(ctx, 127);
+		constI32(ctx, F16_MIN_NORMAL_EXPONENT);
 		i32(ctx, Instruction.I32_SUB);
-		storeI32(ctx, exp);
-
-		loadI32(ctx, exp);
-		constI32(ctx, -14);
-		i32(ctx, Instruction.I32_LT_S);
-		storeI32(ctx, isSubnormal);
-
+		storeI32(ctx, t.e14());
+		// shift = 13, the bits binary16 does not keep, plus one per exponent below it
 		constI32(ctx, 13);
-		loadI32(ctx, isSubnormal);
-		constI32(ctx, -14);
-		loadI32(ctx, exp);
+		loadI32(ctx, t.e14());
 		i32(ctx, Instruction.I32_SUB);
-		i32(ctx, Instruction.I32_MUL);
-		i32(ctx, Instruction.I32_ADD);
-		storeI32(ctx, shift);
-
-		loadI32(ctx, absBits);
+		constI32(ctx, 13);
+		loadI32(ctx, t.e14());
+		constI32(ctx, 0);
+		i32(ctx, Instruction.I32_LT_S);
+		ctx.writer.write(Instruction.SELECT);
+		storeI32(ctx, t.shift());
+		// signif = the 24-bit significand, implicit bit included
+		loadI32(ctx, t.mag());
 		constI32(ctx, 0x7fffff);
 		i32(ctx, Instruction.I32_AND);
-		loadI32(ctx, isSubnormal);
 		constI32(ctx, 0x800000);
-		i32(ctx, Instruction.I32_MUL);
 		i32(ctx, Instruction.I32_OR);
-		storeI32(ctx, fSignifBits);
+		storeI32(ctx, t.signif());
 
-		loadI32(ctx, signBit);
-		loadI32(ctx, exp);
-		constI32(ctx, 15);
-		i32(ctx, Instruction.I32_ADD);
-		constI32(ctx, 1);
-		loadI32(ctx, isSubnormal);
-		i32(ctx, Instruction.I32_SUB);
-		i32(ctx, Instruction.I32_MUL);
+		// sign | ((max(e14, 0) << 10) + rounded), where rounded is signif >> shift to
+		// nearest, ties to even: half an ulp less one is added, plus the kept part's
+		// last bit, so only an odd one is carried up by an exact half.
+		loadI32(ctx, t.sign());
+		loadI32(ctx, t.e14());
+		constI32(ctx, 0);
+		loadI32(ctx, t.e14());
+		constI32(ctx, 0);
+		i32(ctx, Instruction.I32_GT_S);
+		ctx.writer.write(Instruction.SELECT);
 		constI32(ctx, 10);
 		i32(ctx, Instruction.I32_SHL);
-		loadI32(ctx, fSignifBits);
-		loadI32(ctx, shift);
+		loadI32(ctx, t.signif());
+		constI32(ctx, 1);
+		loadI32(ctx, t.shift());
+		constI32(ctx, 1);
+		i32(ctx, Instruction.I32_SUB);
+		i32(ctx, Instruction.I32_SHL);
+		constI32(ctx, 1);
+		i32(ctx, Instruction.I32_SUB);
+		i32(ctx, Instruction.I32_ADD);
+		loadI32(ctx, t.signif());
+		loadI32(ctx, t.shift());
 		i32(ctx, Instruction.I32_SHR_U);
-		loadI32(ctx, fSignifBits);
-		loadI32(ctx, shift);
 		constI32(ctx, 1);
-		i32(ctx, Instruction.I32_SUB);
-		constI32(ctx, 1);
-		i32(ctx, Instruction.I32_SHL);
-		i32(ctx, Instruction.I32_AND);
-		constI32(ctx, 0);
-		i32(ctx, Instruction.I32_NE);
-		loadI32(ctx, fSignifBits);
-		loadI32(ctx, shift);
-		constI32(ctx, 1);
-		i32(ctx, Instruction.I32_SHL);
-		i32(ctx, Instruction.I32_AND);
-		loadI32(ctx, fSignifBits);
-		loadI32(ctx, shift);
-		constI32(ctx, 1);
-		i32(ctx, Instruction.I32_SUB);
-		constI32(ctx, 1);
-		i32(ctx, Instruction.I32_SHL);
-		constI32(ctx, 1);
-		i32(ctx, Instruction.I32_SUB);
-		i32(ctx, Instruction.I32_AND);
-		i32(ctx, Instruction.I32_OR);
-		constI32(ctx, 0);
-		i32(ctx, Instruction.I32_NE);
 		i32(ctx, Instruction.I32_AND);
 		i32(ctx, Instruction.I32_ADD);
+		loadI32(ctx, t.shift());
+		i32(ctx, Instruction.I32_SHR_U);
 		i32(ctx, Instruction.I32_ADD);
 		i32(ctx, Instruction.I32_OR);
 
-		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 		ctx.writer.write(Instruction.END);
 	}
 
 	/**
 	 * The bf16 round-to-nearest-even narrow, over an f32 bit pattern already in
-	 * {@code doppel}: {@code (bits + 0x7fff + lsb) >>> 16}, NaN special-cased (a plain
-	 * bias-add can carry a heavy-payload NaN's low bits into the sign -- the note in
-	 * {@code .todo/artefacts/482-bfloat16-a-narrow-width-that-pays/Enc.java}). Leaves the
+	 * {@code bits}: {@code (bits + 0x7fff + lsb) >>> 16}, NaN special-cased (a plain
+	 * bias-add can carry a heavy-payload NaN's low bits into the sign). Leaves the
 	 * encoded i32 (0..65535) on the stack.
 	 */
-	private static void emitBfloat16Encode(WasmLispCompiler.Ctx ctx, int doppel) {
-		loadI32(ctx, doppel);
+	private static void emitBfloat16Encode(WasmLispCompiler.Ctx ctx, int bits) {
+		loadI32(ctx, bits);
 		constI32(ctx, 23);
 		i32(ctx, Instruction.I32_SHR_U);
 		constI32(ctx, 0xff);
 		i32(ctx, Instruction.I32_AND);
 		constI32(ctx, 0xff);
 		i32(ctx, Instruction.I32_EQ);
-		loadI32(ctx, doppel);
+		loadI32(ctx, bits);
 		constI32(ctx, 0x7fffff);
 		i32(ctx, Instruction.I32_AND);
 		constI32(ctx, 0);
@@ -729,7 +694,7 @@ final class WasmFloat16Compiler {
 		i32(ctx, Instruction.I32_AND);
 
 		ctx.writer.write(Instruction.IF, 0x7F);
-		// u = doppel >>> 16 (the top sixteen bits ARE already sign + all-ones exponent +
+		// u = bits >>> 16 (the top sixteen bits ARE already sign + all-ones exponent +
 		// the payload's top seven bits -- a direct copy, not force-quieted) | a
 		// correction bit that fires only when u's payload is all-zero (which would
 		// otherwise read back as infinity, not NaN): ((u & 0x7f) - 1) >>> 31. NOT
@@ -737,10 +702,10 @@ final class WasmFloat16Compiler {
 		// NaN, which quiets a signalling one exactly as often as the double-detour bug
 		// this pair otherwise avoids (126/65536, measured): a different way to lose the
 		// same patterns, not a fix.
-		loadI32(ctx, doppel);
+		loadI32(ctx, bits);
 		constI32(ctx, 16);
 		i32(ctx, Instruction.I32_SHR_U);
-		loadI32(ctx, doppel);
+		loadI32(ctx, bits);
 		constI32(ctx, 16);
 		i32(ctx, Instruction.I32_SHR_U);
 		constI32(ctx, 0x7f);
@@ -751,10 +716,10 @@ final class WasmFloat16Compiler {
 		i32(ctx, Instruction.I32_SHR_U);
 		i32(ctx, Instruction.I32_OR);
 		ctx.writer.write(Instruction.ELSE);
-		loadI32(ctx, doppel);
+		loadI32(ctx, bits);
 		constI32(ctx, 0x7fff);
 		i32(ctx, Instruction.I32_ADD);
-		loadI32(ctx, doppel);
+		loadI32(ctx, bits);
 		constI32(ctx, 16);
 		i32(ctx, Instruction.I32_SHR_U);
 		constI32(ctx, 1);

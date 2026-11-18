@@ -328,7 +328,11 @@ lowercase exponent marker. Authority: `am.ik.rontolisp.FloatText` (`doubleText` 
 - Interpreter `LispDouble.print()` / `Environment.displayString`/`printString`; JVM
   `_lispToString`/`_lispToDisplayString`; WASM GC and `--no-gc` a hand-emitted Schubfach
   (`WasmSchubfachRuntimeBuilder`: `_f64_dec` selects digits+exponent, `_dec_fmt` renders, with
-  `_schub_umulhi`/`_schub_g`/`_schub_rop` beneath).
+  `_schub_umulhi`/`_schub_g`/`_schub_rop` beneath). The selection follows the author's own
+  implementation (Raffaello Giulietti's `todec`, MIT; its notice heads `SchubfachTables` and
+  `WasmSchubfachRuntimeBuilder`), every statement of it found there under the same names;
+  the table's compression, the division by 10 and the formatter are ours
+  (`.kb/java-frontend-provenance.md`).
 - The 617-entry 126-bit power table compresses to a **~755-byte blob** (`SchubfachTables`): every
   27th entry exactly, a `5^j` multiplier table, and a 2-bit correction per entry derived at emit
   time by comparing a bit-exact replay of the runtime recomposition against the exact BigInteger

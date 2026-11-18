@@ -15545,7 +15545,8 @@ cases:
     # included, Latin letters ASCII and fullwidth as digits 10 to 35, -1 for
     # none); a (BigInteger. s) or (BigInteger. s radix) construction is the
     # integer the string spells, refused in BigInteger's words and order (the
-    # first failing digit group named), a (BigInteger. bytes) the big-endian
+    # piece of the string holding the first non-digit named, leading zeros
+    # counted out), a (BigInteger. bytes) the big-endian
     # two's complement and (BigInteger. signum bytes) the signed magnitude
     # (data.generators' bigint); .longValue and .intValue of an integer
     # are its low bits. Anything no overload takes is the oracle's refusal, a
@@ -15563,7 +15564,7 @@ cases:
       (prn (cs-msg (Character/isWhitespace "a")) (cs-msg (Character/isDigit nil)) (cs-msg (Character/digit \1 1.5)) (cs-msg (Character/digit 9999999999 10)))
       (prn (BigInteger. "123") (str (BigInteger. "-123456789012345678901234567890")) (BigInteger. "+5") (BigInteger. "zz" 36) (BigInteger. "-ff" 16) (BigInteger. "000") (BigInteger. (str "1" (char 65297))))
       (prn (cs-msg (BigInteger. "")) (cs-msg (BigInteger. "-")) (cs-msg (BigInteger. "1-2")) (cs-msg (BigInteger. "12" 37)) (cs-msg (BigInteger. 5)))
-      (prn (cs-msg (BigInteger. "12345678901x")) (cs-msg (BigInteger. "x2345678901")) (cs-msg (BigInteger. "zzzzzzz1" 8)))
+      (prn (cs-msg (BigInteger. "12345678901x")) (cs-msg (BigInteger. "x2345678901")) (cs-msg (BigInteger. "zzzzzzz1" 8)) (cs-msg (BigInteger. "00x")) (cs-msg (BigInteger. "5+")) (str (BigInteger. "-000123456789012345678901234567890abcdef" 16)))
       (prn (BigInteger. (byte-array [1 0])) (BigInteger. (byte-array [-1])) (BigInteger. (byte-array [0 -1])) (BigInteger. 1 (byte-array [-1])) (BigInteger. -1 (byte-array [1 0])) (BigInteger. 1 (byte-array 0)))
       (prn (cs-msg (BigInteger. (byte-array 0))) (cs-msg (BigInteger. 0 (byte-array [1]))) (cs-msg (BigInteger. 2 (byte-array [1]))) (cs-msg (BigInteger. (byte-array [1]) 1)))
       (prn (.longValue (BigInteger. "123456789012345678901234567890")) (.longValue 5) (.intValue 4294967297))
@@ -15575,7 +15576,7 @@ cases:
       "No matching method isWhitespace found taking 1 args" "No matching method isDigit found taking 1 args" "No matching method digit found taking 2 args" "integer overflow"
       123 "-123456789012345678901234567890" 5 1295 -255 0 11
       "Zero length BigInteger" "Zero length BigInteger" "Illegal embedded sign character" "Radix out of range" "No matching ctor found for class java.math.BigInteger"
-      "For input string: \"45678901x\"" "For input string: \"x2\"" "For input string: \"zzzzzzz1\" under radix 8"
+      "For input string: \"45678901x\"" "For input string: \"x2\"" "For input string: \"zzzzzzz1\" under radix 8" "For input string: \"x\"" "Illegal embedded sign character" "-1585830769456943054292280938484993067044335"
       256 -1 255 255 -256 0
       "Zero length BigInteger" "signum-magnitude mismatch" "Invalid signum value" "No matching ctor found for class java.math.BigInteger"
       -4362896299872285998 5 1

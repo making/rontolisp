@@ -648,6 +648,11 @@ measured programs.
   chain becomes in a table of 64 or more. `Set.of`/`Map.of` wrap a `HashSet`/`HashMap`.
   `Hashtable` has its own rules, a class of its own (11 slots, `2n + 1`, a key put ahead of its
   chain, read from the last chain; `a-deque-an-optional-the-utilities-and-the-older-classes`);
+  a copy of a map gets the slots the order a JDK walks one in shows -- 11 up to five
+  mappings, two per mapping above, the one table size that order fits for each of 2 to 64
+  mappings (asked 2026-11-18). `Random()` without a seed is specified only as unlikely to
+  repeat: ours steps a counter by 2^64 over the golden ratio and mixes the clock in, and no
+  program can tell it from another choice;
   `Vector` extends `ArrayList` and `StringBuffer` is `StringBuilder`'s representation; each
   holds its monitor since j83 ("java.util.concurrent").
 - **`==` of two strings is `eq`**, and the constants of a program holding one are globals set

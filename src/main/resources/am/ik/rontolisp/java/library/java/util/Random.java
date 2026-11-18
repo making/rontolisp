@@ -13,11 +13,14 @@ public class Random {
 
     private boolean hasSpare;
 
-    private static long entropy = 8682522807148012L;
+    private static long distinct;
 
+    // No seed given: the specification asks only for one unlikely to repeat. Each call
+    // steps a counter by an odd 64-bit constant (2^64 over the golden ratio, so every
+    // step lands on a new value) and mixes the clock in.
     public Random() {
-        entropy = entropy * 1181783497276652981L;
-        setSeed(entropy ^ System.nanoTime());
+        distinct = distinct + 0x9E3779B97F4A7C15L;
+        setSeed(distinct ^ System.nanoTime());
     }
 
     public Random(long seed) {

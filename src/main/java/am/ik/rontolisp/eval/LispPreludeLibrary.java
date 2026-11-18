@@ -3203,11 +3203,11 @@ public final class LispPreludeLibrary {
 				  (rontolisp::%octets-to-string octets))
 				""");
 		// %octets-to-string-replacing: the octets of V from START below END decoded as
-		// the
-		// JDK's new String(bytes, UTF_8) decodes them -- each malformed sequence ONE
-		// U+FFFD, as many octets per replacement as that decoder takes, and a sequence
-		// the
-		// range ends inside one -- the decoding the Clojure front end's text of octets
+		// the JDK's new String(bytes, UTF_8) decodes them -- each malformed sequence ONE
+		// U+FFFD, as many octets per replacement as that decoder is seen to take (the
+		// Unicode standard's maximal subpart, an encoded surrogate whole), and a
+		// sequence the range ends inside one -- the decoding the Clojure front end's
+		// text of octets
 		// takes (a reader over a fetched reply, slurp, String. of a byte array), where
 		// %octets-to-string above keeps a malformed octet as its own character. Every
 		// well-formed run -- what a strict validator accepts, which every decoder reads
@@ -3227,75 +3227,57 @@ public final class LispPreludeLibrary {
 				                (write-string (rontolisp::%octets-to-string (subseq v i good)) out))
 				            (if (>= good end) (return nil))
 				            (write-char (code-char 65533) out)
-				            (let ((skip (rontolisp::%utf-8-malformed-length v good end)))
-				              (if (null skip) (return nil))
-				              (setq i (+ good skip))
-				              (setq good (rontolisp::%utf-8-well-formed-end v i end))))
+				            (setq i (+ good (rontolisp::%utf-8-malformed-length v good end)))
+				            (setq good (rontolisp::%utf-8-well-formed-end v i end)))
 				          (get-output-stream-string out)))))
+				(defun rontolisp::%utf-8-sequence-length (b)
+				  ;; The octets of the sequence the lead octet B starts in the Unicode
+				  ;; standard's table of well-formed UTF-8 (Table 3-7), 0 when none does.
+				  (cond ((< b 194) 0) ((< b 224) 2) ((< b 240) 3) ((< b 245) 4) (t 0)))
+				(defun rontolisp::%utf-8-second-octet-p (b b1 surrogates)
+				  ;; Whether B1 may follow the lead octet B: the table's second column, which
+				  ;; narrows the continuation range after E0 and F0 (no overlong form), F4
+				  ;; (nothing past U+10FFFF) and ED (no surrogate, unless SURROGATES).
+				  (and (>= b1 (cond ((= b 224) 160) ((= b 240) 144) (t 128)))
+				       (<= b1 (cond ((and (= b 237) (not surrogates)) 159) ((= b 244) 143) (t 191)))))
 				(defun rontolisp::%utf-8-well-formed-end (v start end)
 				  ;; The index of the first octet from START below END at which no
 				  ;; well-formed sequence starts (a malformed one, or one the range ends
-				  ;; inside), END when there is none: the sequences of the Unicode
-				  ;; standard's table, no overlong form, no surrogate, nothing past U+10FFFF.
+				  ;; inside), END when there is none.
 				  (let ((i start))
 				    (loop
 				      (if (>= i end) (return end))
 				      (let ((b (aref v i)))
 				        (if (< b 128)
 				            (setq i (+ i 1))
-				            (let ((n (cond ((< b 194) 0) ((< b 224) 2) ((< b 240) 3) ((< b 245) 4) (t 0))))
+				            (let ((n (rontolisp::%utf-8-sequence-length b)))
 				              (if (or (= n 0) (> (+ i n) end)) (return i))
-				              (let ((b1 (aref v (+ i 1))))
-				                (if (or (< b1 (cond ((= b 224) 160) ((= b 240) 144) (t 128)))
-				                        (> b1 (cond ((= b 237) 159) ((= b 244) 143) (t 191)))
-				                        (and (> n 2) (/= (logand (aref v (+ i 2)) 192) 128))
-				                        (and (> n 3) (/= (logand (aref v (+ i 3)) 192) 128)))
-				                    (return i)))
+				              (if (or (not (rontolisp::%utf-8-second-octet-p b (aref v (+ i 1)) nil))
+				                      (and (> n 2) (/= (logand (aref v (+ i 2)) 192) 128))
+				                      (and (> n 3) (/= (logand (aref v (+ i 3)) 192) 128)))
+				                  (return i))
 				              (setq i (+ i n))))))))
 				(defun rontolisp::%utf-8-malformed-length (v i end)
-				  ;; How many octets the JDK's decoder replaces with ONE U+FFFD at the
-				  ;; sequence from I that is not well-formed, or nil when the range ends
-				  ;; inside a sequence it could still complete: the decoder then answers one
-				  ;; U+FFFD for all of it and stops (String.decodeUTF8_UTF16, its malformed3
-				  ;; and malformed4).
-				  (let ((b1 (aref v i)) (r (- end i)))
-				    (cond ((and (>= b1 194) (<= b1 223))
-				           (if (>= r 2) 1 nil))
-				          ((and (>= b1 224) (<= b1 239))
-				           (if (>= r 3)
-				               (let ((b2 (aref v (+ i 1))))
-				                 (cond ((or (and (= b1 224) (= (logand b2 224) 128))
-				                            (/= (logand b2 192) 128))
-				                        1)
-				                       ((/= (logand (aref v (+ i 2)) 192) 128) 2)
-				                       ;; an encoded surrogate, all three
-				                       (t 3)))
-				               (if (and (= r 2)
-				                        (let ((b2 (aref v (+ i 1))))
-				                          (or (and (= b1 224) (= (logand b2 224) 128))
-				                              (/= (logand b2 192) 128))))
-				                   1
-				                   nil)))
-				          ((and (>= b1 240) (<= b1 247))
-				           (if (>= r 4)
-				               (let ((b2 (aref v (+ i 1))))
-				                 (cond ((or (> b1 244)
-				                            (and (= b1 240) (or (< b2 144) (> b2 191)))
-				                            (and (= b1 244) (/= (logand b2 240) 128))
-				                            (/= (logand b2 192) 128))
-				                        1)
-				                       ((/= (logand (aref v (+ i 2)) 192) 128) 2)
-				                       (t 3)))
-				               (cond ((or (> b1 244)
-				                          (and (>= r 2)
-				                               (let ((b2 (aref v (+ i 1))))
-				                                 (or (and (= b1 240) (or (< b2 144) (> b2 191)))
-				                                     (and (= b1 244) (/= (logand b2 240) 128))
-				                                     (/= (logand b2 192) 128)))))
-				                      1)
-				                     ((and (>= r 3) (/= (logand (aref v (+ i 2)) 192) 128)) 2)
-				                     (t nil))))
-				          (t 1))))
+				  ;; How many octets ONE U+FFFD stands for at I, where no well-formed
+				  ;; sequence starts: the longest run from I that begins one of the table's
+				  ;; sequences, the octet at I alone when nothing does -- the "maximal
+				  ;; subpart" the Unicode standard recommends replacing as a unit, the range's
+				  ;; end cutting it like any other octet. One thing is not the standard's: a
+				  ;; JDK's decoder was seen to take an encoded surrogate as begun, and whole,
+				  ;; as one sequence (ED A0 80 is one U+FFFD, not three), so the second octet
+				  ;; after ED is admitted through BF here.
+				  (let ((b (aref v i)) (k 1))
+				    (let ((n (rontolisp::%utf-8-sequence-length b)))
+				      (if (and (> n 0) (< (+ i 1) end)
+				               (rontolisp::%utf-8-second-octet-p b (aref v (+ i 1)) t))
+				          (progn
+				            (setq k 2)
+				            (loop
+				              (if (or (>= k n) (>= (+ i k) end)
+				                      (/= (logand (aref v (+ i k)) 192) 128))
+				                  (return nil))
+				              (setq k (+ k 1))))))
+				    k))
 				""");
 		// rontolisp:string-to-octets: the encoder half. Total over every CHARACTER
 		// value -- 0 to #x10FFFF, surrogates included -- so unlike the decoder it has

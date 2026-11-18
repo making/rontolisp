@@ -1,3 +1,27 @@
+/*
+ * The decimal selection in this file is Raffaello Giulietti's Schubfach
+ * (https://github.com/c4f7fcce9cb06515/Schubfach, todec/src/math), adapted. Its notice:
+ *
+ * Copyright 2018-2020 Raffaello Giulietti
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
 package am.ik.rontolisp.codegen.wasm;
 
 import java.math.BigInteger;
@@ -15,13 +39,23 @@ import java.nio.ByteOrder;
  * The algorithm is Schubfach (Giulietti, "The Schubfach way to render doubles"), the same
  * selection {@code Double.toString} performs: the decimal with the fewest digits that
  * rounds back to the value, refined to two digits minimum, closest-to-value, ties to even
- * significand. The full table in that formulation is 617 entries of 126 bits (~9.9 KB).
- * What is emitted instead is a SPARSE table of every 27th entry plus a 5^j multiplier
- * table and a 2-bit correction per k -- ~0.75 KB -- and {@code g(k)} is recomposed at
- * runtime as {@code round(gSparse * 5^j)} normalized to 126 bits plus the correction. The
- * corrections are derived here at emit time by comparing the exact BigInteger value with
- * a bit-exact replay of the runtime recomposition, and asserted to fit two bits, so the
- * compressed table cannot silently disagree with the exact one.
+ * significand. Provenance ({@code .kb/java-frontend-provenance.md}): the selection
+ * ({@link #f64Dec}, {@link #f32Dec}, {@link #rop} and the three {@code flog} functions
+ * with their constants) follows the author's own implementation under the MIT licence
+ * ({@code DoubleToDecimal}, {@code FloatToDecimal} and {@code MathUtils} of the
+ * repository named at the top of this file), statement by statement and under its names;
+ * no other implementation is its source. What is written here instead: the table
+ * (computed, compressed and recomposed as described next, where the original carries
+ * every entry as a literal), the division by 10 where the original multiplies by a
+ * reciprocal, unsigned comparisons at the double width, and the trailing-zero strip in
+ * place of the original's formatting. The full table in that formulation is 617 entries
+ * of 126 bits (~9.9 KB). What is emitted instead is a SPARSE table of every 27th entry
+ * plus a 5^j multiplier table and a 2-bit correction per k -- ~0.75 KB -- and
+ * {@code g(k)} is recomposed at runtime as {@code round(gSparse * 5^j)} normalized to 126
+ * bits plus the correction. The corrections are derived here at emit time by comparing
+ * the exact BigInteger value with a bit-exact replay of the runtime recomposition, and
+ * asserted to fit two bits, so the compressed table cannot silently disagree with the
+ * exact one.
  *
  * <p>
  * Blob layout (little-endian):

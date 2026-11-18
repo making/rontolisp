@@ -11116,9 +11116,9 @@
       (setq k (+ k 1)))))
 
 (defun rontolisp::%clojure-format-specifier (s pct)
-  "The specifier of S at the % at PCT, Formatter's
-   %[index$][flags][width][.precision][t]conversion with its checks, consed
-   onto the index past it."
+  "The specifier of S at the % at PCT, the documented
+   %[index$][flags][width][.precision]conversion (a date and time one a t or
+   T and its suffix) with its refusals, consed onto the index past it."
   (let* ((n (length s))
          (j (+ pct 1))
          (index 0)
@@ -11168,7 +11168,7 @@
             (if (find flag written)
                 (setq flags (concatenate 'string flags (string flag)))))
           (if (find #\< flags) (setq index -1))
-          (if (not (find conv "bBhHsScCdoxXeEfgGaAtT%n"))
+          (if (not (find conv "bBhHsScCdoxXeEfgGaA%n"))
               (rontolisp::%clojure-unknown-format-conversion-exception
                (concatenate 'string "Conversion = '" (string conv) "'")))
           (let* ((kind (char-downcase conv))
@@ -11183,7 +11183,8 @@
             (cons spec (+ j 1))))))))
 
 (defun rontolisp::%clojure-format-spec-text (spec)
-  "Formatter's FormatSpecifier.toString of SPEC, the words of its refusals."
+  "SPEC as a refusal spells it: the flags in their order, then an explicit
+   index, the width, the precision and the conversion."
   (concatenate 'string "%" (nth 1 spec)
    (if (> (nth 0 spec) 0)
        (concatenate 'string (princ-to-string (nth 0 spec)) "$")
@@ -11191,80 +11192,73 @@
    (if (nth 3 spec) (concatenate 'string "." (princ-to-string (nth 3 spec))) "")
    (string (nth 4 spec))))
 
+(defvar rontolisp::%clojure-format-refusals
+  '((#\b (:flags "#") (:no-width "-") (:flags "+ 0,("))
+    (#\h (:flags "#") (:no-width "-") (:flags "+ 0,("))
+    (#\s (:no-width "-") (:flags "+ 0,("))
+    (#\c (:precision) (:flags "#+ 0,(") (:no-width "-"))
+    (#\d (:no-width "-0") (:exclusive) (:precision) (:flags "#"))
+    (#\o (:no-width "-0") (:exclusive) (:precision) (:flags ","))
+    (#\x (:no-width "-0") (:exclusive) (:precision) (:flags ","))
+    (#\e (:no-width "-0") (:exclusive) (:flags ","))
+    (#\f (:no-width "-0") (:exclusive))
+    (#\g (:no-width "-0") (:exclusive) (:flags "#"))
+    (#\a (:no-width "-0") (:exclusive) (:flags ",("))
+    (#\% (:precision) (:other-flags "-") (:no-width "-"))
+    (#\n (:precision) (:width) (:other-flags "")))
+  "Each conversion's refusals of a specifier, in the order it makes them:
+   :precision and :width one that is given, :no-width one of its flags without
+   a width, :exclusive + with a space or - with 0, :flags those of its flags
+   that are given, :other-flags any flag but its own. What is refused is the
+   Formatter documentation's -- a flag outside the conversion's row of the
+   flag table, a precision or a width where none applies, - or 0 without a
+   width, the exclusive pairs; the order, and b and h refusing # first, is
+   what a JDK answers (ClojureFormatLoweringTest asks it again).")
+
+(defun rontolisp::%clojure-format-flags-among (flags set)
+  "Those of FLAGS that are in SET, in FLAGS' order."
+  (let ((given ""))
+    (dotimes (k (length flags) given)
+      (if (find (char flags k) set)
+          (setq given (concatenate 'string given (string (char flags k))))))))
+
 (defun rontolisp::%clojure-format-check (spec)
-  "Formatter's checks of the parsed SPEC by its conversion, refused in its
-   class and words."
+  "The first refusal SPEC's conversion makes of it, in the oracle's class and
+   words."
   (let ((flags (nth 1 spec))
         (width (nth 2 spec))
         (precision (nth 3 spec))
         (kind (char-downcase (nth 4 spec))))
-    (cond ((find kind "bhs")
-           (if (and (find kind "bh") (find #\# flags))
-               (rontolisp::%clojure-format-flags-mismatch kind "#"))
-           (rontolisp::%clojure-format-require-width spec "-")
-           (rontolisp::%clojure-format-bad-flags spec "+ 0,("))
-          ((char= kind #\c)
-           (if precision
-               (rontolisp::%clojure-illegal-format-precision-exception
-                (princ-to-string precision)))
-           (rontolisp::%clojure-format-bad-flags spec "#+ 0,(")
-           (rontolisp::%clojure-format-require-width spec "-"))
-          ((find kind "dox")
-           (rontolisp::%clojure-format-check-numeric spec)
-           (if precision
-               (rontolisp::%clojure-illegal-format-precision-exception
-                (princ-to-string precision)))
-           (rontolisp::%clojure-format-bad-flags spec
-                                                 (if (char= kind #\d) "#" ",")))
-          ((find kind "efga")
-           (rontolisp::%clojure-format-check-numeric spec)
-           (cond
-            ((char= kind #\e) (rontolisp::%clojure-format-bad-flags spec ","))
-            ((char= kind #\g) (rontolisp::%clojure-format-bad-flags spec "#"))
-            ((char= kind #\a)
-             (rontolisp::%clojure-format-bad-flags spec ",("))))
-          (t
-           (if precision
-               (rontolisp::%clojure-illegal-format-precision-exception
-                (princ-to-string precision)))
-           (if (char= kind #\%)
-               (progn
-                 (if (and (> (length flags) 0) (string/= flags "-"))
-                     (rontolisp::%clojure-format-illegal-flags spec))
-                 (rontolisp::%clojure-format-require-width spec "-"))
-               (progn
-                 (if width
-                     (rontolisp::%clojure-illegal-format-width-exception
-                      (princ-to-string width)))
-                 (if (> (length flags) 0)
+    (dolist (step (cdr (assoc kind rontolisp::%clojure-format-refusals)))
+      (let ((refusal (car step)) (set (if (cdr step) (car (cdr step)) "")))
+        (cond ((eq refusal :precision)
+               (if precision
+                   (rontolisp::%clojure-illegal-format-precision-exception
+                    (princ-to-string precision))))
+              ((eq refusal :width)
+               (if width
+                   (rontolisp::%clojure-illegal-format-width-exception
+                    (princ-to-string width))))
+              ((eq refusal :no-width)
+               (if (and (null width)
+                        (> (length
+                            (rontolisp::%clojure-format-flags-among flags set))
+                           0))
+                   (rontolisp::%clojure-missing-format-width-exception
+                    (rontolisp::%clojure-format-spec-text spec))))
+              ((eq refusal :exclusive)
+               (if (or (and (find #\+ flags) (find #\Space flags))
+                       (and (find #\- flags) (find #\0 flags)))
+                   (rontolisp::%clojure-format-illegal-flags spec)))
+              ((eq refusal :flags)
+               (let ((refused
+                      (rontolisp::%clojure-format-flags-among flags set)))
+                 (if (> (length refused) 0)
+                     (rontolisp::%clojure-format-flags-mismatch kind refused))))
+              (t (if (/= (length
+                          (rontolisp::%clojure-format-flags-among flags set))
+                         (length flags))
                      (rontolisp::%clojure-format-illegal-flags spec))))))))
-
-(defun rontolisp::%clojure-format-check-numeric (spec)
-  "The checks every numeric conversion makes of SPEC's flags."
-  (let ((flags (nth 1 spec)))
-    (rontolisp::%clojure-format-require-width spec "-0")
-    (if (or (and (find #\+ flags) (find #\Space flags))
-            (and (find #\- flags) (find #\0 flags)))
-        (rontolisp::%clojure-format-illegal-flags spec))))
-
-(defun rontolisp::%clojure-format-require-width (spec flags)
-  "MissingFormatWidthException when SPEC has one of FLAGS but no width."
-  (if (null (nth 2 spec))
-      (dotimes (k (length flags))
-        (if (find (char flags k) (nth 1 spec))
-            (rontolisp::%clojure-missing-format-width-exception
-             (rontolisp::%clojure-format-spec-text spec))))))
-
-(defun rontolisp::%clojure-format-bad-flags (spec bad)
-  "The conversion's refusal of the flags of SPEC among BAD, all of them named."
-  (let ((given ""))
-    (dotimes (k (length (nth 1 spec)))
-      (if (find (char (nth 1 spec) k) bad)
-          (setq given
-                (concatenate 'string given (string (char (nth 1 spec) k))))))
-    (if (> (length given) 0)
-        (rontolisp::%clojure-format-flags-mismatch (char-downcase (nth 4 spec))
-                                                   given))))
 
 (defun rontolisp::%clojure-format-flags-mismatch (kind flags)
   "FormatFlagsConversionMismatchException of the conversion KIND and FLAGS."
@@ -11272,9 +11266,16 @@
    (concatenate 'string "Conversion = " (string kind) ", Flags = " flags)))
 
 (defun rontolisp::%clojure-format-illegal-flags (spec)
-  "IllegalFormatFlagsException naming SPEC's flags."
-  (rontolisp::%clojure-illegal-format-flags-exception
-   (concatenate 'string "Flags = '" (nth 1 spec) "'")))
+  "IllegalFormatFlagsException naming all of SPEC's flags, an uppercase
+   conversion among them as ^, after -."
+  (let ((flags (nth 1 spec)))
+    (if (upper-case-p (nth 4 spec))
+        (let ((at
+               (if (and (> (length flags) 0) (char= (char flags 0) #\-)) 1 0)))
+          (setq flags
+           (concatenate 'string (subseq flags 0 at) "^" (subseq flags at)))))
+    (rontolisp::%clojure-illegal-format-flags-exception
+     (concatenate 'string "Flags = '" flags "'"))))
 
 (defun rontolisp::%clojure-format-print (parts args)
   "The text of the parsed PARTS over the ARGS list: each specifier's argument
@@ -26606,8 +26607,8 @@
       nil))
 
 (defun rontolisp::%clojure-input-string-refusal (s radix)
-  "The oracle's NumberFormatException of the string S read in RADIX, Java's
-   forInputString: the radix named unless it is 10."
+  "The oracle's NumberFormatException of the string S read in RADIX: the radix
+   named unless it is 10."
   (rontolisp::%clojure-number-format-exception
    (concatenate 'string "For input string: \"" s "\""
                 (if (= radix 10)
@@ -26757,11 +26758,20 @@
             (concatenate 'string "class " (rontolisp::%clojure-class-name-of x)
                          " cannot be cast to class java.lang.Character")))))
 
-(defvar rontolisp::%clojure-big-integer-group-digits
-  #(0 0 30 19 15 13 11 11 10 9 9 8 8 8 8 7 7 7 7 7 7 7 6 6 6 6 6 6 6 6 6 6 6 6 6
-    6 5)
-  "BigInteger's digitsPerInt by radix: the digits of each group its string
-   constructor parses with Integer.parseInt.")
+(defun rontolisp::%clojure-big-integer-group-width (radix)
+  "The most digits of RADIX whose value always fits a Java int -- 9 in radix
+   10, 7 in radix 16. The oracle's refusal of a non-digit names the string in
+   pieces this wide, the first one short (observed under a JDK)."
+  (do ((width 0 (+ width 1)) (power 1 (* power radix)))
+      ((> (* power radix) 2147483647) width)))
+
+(defun rontolisp::%clojure-big-integer-digit (s i radix)
+  "The value of S's character I as a digit of RADIX, nil for none. A character
+   past the Basic Multilingual Plane is none, as under the oracle."
+  (let ((code (char-code (char s i))))
+    (if (< code 65536)
+        (rontolisp::%clojure-character-digit-value code radix)
+        nil)))
 
 (defun rontolisp::%clojure-big-integer-no-ctor ()
   "The oracle's refusal of a BigInteger construction no constructor takes."
@@ -26788,11 +26798,12 @@
 (defun rontolisp::%clojure-big-integer-new (s radix)
   "new BigInteger of two arguments where no host is (wasm): a string S and a
    RADIX, or a signum S and a byte-array magnitude RADIX. A string reads as
-   the integer it spells in RADIX, an optional leading sign and
-   Character.digit digits, refused in the oracle's words and order -- the
-   radix range, an empty string, an embedded sign, a sign alone, then the
-   first digit group (leading zeros skipped, the first group short) holding a
-   non-digit, named as Integer.parseInt names it. A signum outside -1 to 1 is
+   the documentation says: one optional sign, then one or more digits of
+   RADIX as Character.digit maps them, nothing else. What it refuses it
+   refuses in the words a JDK was observed to answer, checked in this order:
+   a radix outside 2 to 36, an empty string, a sign anywhere but in front, a
+   sign alone, a non-digit -- named by the piece of the string it stands in
+   (the group width above, counted after the leading zeros). A signum outside -1 to 1 is
    Invalid signum value, 0 over a nonzero magnitude signum-magnitude mismatch.
    A long radix or signum is narrowed to an int first, like the oracle's
    reflector; nil and anything else are its NullPointerExceptions and its
@@ -26824,59 +26835,53 @@
         (t
          (let ((radix (rontolisp::%clojure-wrap-bits radix 32))
                (len (length s))
-               (minus -1)
-               (plus -1)
-               (cursor 0)
-               (sign 1))
+               (start 0)
+               (negative nil))
            (if (or (< radix 2) (> radix 36))
                (rontolisp::%clojure-number-format-exception
                 "Radix out of range"))
            (if (= len 0)
                (rontolisp::%clojure-number-format-exception
                 "Zero length BigInteger"))
-           (dotimes (i len)
-             (if (char= (char s i) #\-) (setq minus i))
-             (if (char= (char s i) #\+) (setq plus i)))
-           (cond ((>= minus 0)
-                  (if (or (/= minus 0) (>= plus 0))
-                      (rontolisp::%clojure-number-format-exception
-                       "Illegal embedded sign character"))
-                  (setq sign -1)
-                  (setq cursor 1))
-                 ((>= plus 0)
-                  (if (/= plus 0)
-                      (rontolisp::%clojure-number-format-exception
-                       "Illegal embedded sign character"))
-                  (setq cursor 1)))
-           (if (= cursor len)
+           (if (or (char= (char s 0) #\-) (char= (char s 0) #\+))
+               (progn
+                 (setq negative (char= (char s 0) #\-))
+                 (setq start 1)))
+           (do ((i start (+ i 1)))
+               ((>= i len))
+             (if (or (char= (char s i) #\-) (char= (char s i) #\+))
+                 (rontolisp::%clojure-number-format-exception
+                  "Illegal embedded sign character")))
+           (if (= start len)
                (rontolisp::%clojure-number-format-exception
                 "Zero length BigInteger"))
+           ;; Leading zeros add nothing and belong to no group.
            (do ()
-               ((or (>= cursor len)
+               ((or (>= start len)
                     (not
-                     (eql (rontolisp::%clojure-character-digit-value
-                           (char-code (char s cursor)) radix) 0))))
-             (setq cursor (+ cursor 1)))
-           (let ((per (aref rontolisp::%clojure-big-integer-group-digits radix))
-                 (glen 0)
+                     (eql (rontolisp::%clojure-big-integer-digit s start radix)
+                          0))))
+             (setq start (+ start 1)))
+           ;; One group at a time: its digits into a small integer, then the
+           ;; whole group onto the value in one multiplication.
+           (let ((width (rontolisp::%clojure-big-integer-group-width radix))
                  (value 0))
-             (setq glen (rem (- len cursor) per))
-             (if (= glen 0) (setq glen per))
-             (do ()
-                 ((>= cursor len))
-               (let ((end (+ cursor glen)))
-                 (do ((j cursor (+ j 1)))
-                     ((>= j end))
-                   (let ((d
-                          (rontolisp::%clojure-character-digit-value
-                           (char-code (char s j)) radix)))
-                     (if d
-                         (setq value (+ (* value radix) d))
-                         (rontolisp::%clojure-input-string-refusal
-                          (subseq s cursor end) radix))))
-                 (setq cursor end)
-                 (setq glen per)))
-             (* sign value))))))
+             (let ((scale (expt radix width)) (short (rem (- len start) width)))
+               (do ((from start) (to (+ start (if (= short 0) width short))))
+                   ((>= from len))
+                 (let ((group 0))
+                   (do ((i from (+ i 1)))
+                       ((>= i to))
+                     (let ((d
+                            (rontolisp::%clojure-big-integer-digit s i radix)))
+                       (if d
+                           (setq group (+ (* group radix) d))
+                           (rontolisp::%clojure-input-string-refusal
+                            (subseq s from to) radix))))
+                   (setq value (+ (* value scale) group)))
+                 (setq from to)
+                 (setq to (+ to width))))
+             (if negative (- value) value))))))
 
 (defun rontolisp::%clojure-int-hex (n)
   "The non-negative int N in lowercase hex, no leading zeros."
