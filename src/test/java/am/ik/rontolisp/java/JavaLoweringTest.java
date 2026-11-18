@@ -267,9 +267,9 @@ class JavaLoweringTest {
 						""",
 						"L2.java"))
 			.contains(
-					"(DEFSTRUCT (|Circle| (:INCLUDE |Record|) (:CONC-NAME |Circle.|) (:CONSTRUCTOR |%make-Circle| "
+					"(DEFSTRUCT (|Circle| (:INCLUDE |java.lang.Record|) (:CONC-NAME |Circle.|) (:CONSTRUCTOR |%make-Circle| "
 							+ "NIL) (:PREDICATE |Circle?|) (:COPIER NIL)) (|r| 0.0))",
-					"(DEFSTRUCT (|L2.Inner| (:CONC-NAME |L2.Inner.|) (:CONSTRUCTOR |%make-L2.Inner| NIL) (:PREDICATE "
+					"(DEFSTRUCT (|L2$Inner| (:CONC-NAME |L2.Inner.|) (:CONSTRUCTOR |%make-L2.Inner| NIL) (:PREDICATE "
 							+ "|L2.Inner?|) (:COPIER NIL)) (|this$0| NIL))",
 					"(DEFSTRUCT (|j%L2$1| (:CONC-NAME L2$1.) (:CONSTRUCTOR |%make-L2$1| NIL) (:PREDICATE |j%L2$1?|) "
 							+ "(:COPIER NIL)) (|val$step$0| NIL))",
@@ -480,6 +480,22 @@ class JavaLoweringTest {
 							+ "(|java.nio.charset.Charset.utf8()|))"));
 		assertThat(lower(named.formatted("Charset.forName(args[0])"), "L6.java"))
 			.anyMatch(form -> form.contains("rontolisp.internal.Utf16.bytes(String)"));
+		// A pool's afterExecute is handed what a task threw, which takes a catch of
+		// every exception around each task: the class holding it is made only in a
+		// program one of whose classes declares a hook.
+		String pool = """
+				import java.util.concurrent.*;
+				class L7 {
+				    public static void main(String[] args) {
+				        new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new LinkedBlockingQueue<>()) %s
+				            .execute(() -> { });
+				    }
+				}
+				""";
+		assertThat(lower(pool.formatted(""), "L7.java")).noneMatch(form -> form.contains("ThreadPoolExecutor.Hooked"));
+		assertThat(lower(pool.formatted("{ protected void afterExecute(Runnable r, Throwable t) { } }"), "L7.java"))
+			.anyMatch(form -> form.contains("(DEFUN |java.util.concurrent.ThreadPoolExecutor.hooked()| NIL "
+					+ "(|java.util.concurrent.ThreadPoolExecutor.Hooked.new()|))"));
 	}
 
 	@Test
@@ -923,8 +939,8 @@ class JavaLoweringTest {
 				{ "void main() { Object o = String.class; }",
 						"1:33: a class literal but compared with a class or before getName()" },
 				{ "class A { transient int x; } void main() { }", "1:11: the modifier transient" },
-				{ "import java.util.concurrent.locks.StampedLock; void main() { StampedLock l = null; }",
-						"1:62: the class java.util.concurrent.locks.StampedLock" },
+				{ "import java.util.concurrent.DelayQueue; void main() { DelayQueue<?> q = null; }",
+						"1:55: the class java.util.concurrent.DelayQueue" },
 				{ "interface I { default void m() { } } class A implements I { Runnable r = I.super::m; } void main() { }",
 						"1:81: a method reference through a qualified super" },
 				{ "import java.util.Scanner; void main() { Scanner s = null; }", "1:41: the class java.util.Scanner" },
@@ -937,7 +953,8 @@ class JavaLoweringTest {
 				{ "void main() { IO.println(Runtime.getRuntime().totalMemory()); }", "1:47: Runtime.totalMemory()" },
 				{ "void main() { IO.println(getClass()); }",
 						"1:26: getClass() but compared with a class or before getName() and getSimpleName()" },
-				{ "class A { int x; } class B extends A { int x; } void main() { }", "1:44: a field hiding A.x" },
+				{ "class A { int x; } class B extends A { class C { int y = B.super.x; } } void main() { }",
+						"1:66: a field read through a qualified super" },
 				{ "class String { } class Refused { static void main() { } }",
 						"1:7: a class named as java.lang.String, which the program also uses," } };
 		for (String[] refusal : refusals) {

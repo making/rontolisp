@@ -57,19 +57,30 @@ public abstract class ForkJoinTask<V> implements Future<V> {
             failure = caught;
         }
         running.set(around);
-        synchronized (this) {
-            if (this.state == RUNNING) {
-                if (failure != null) {
-                    this.thrown = failure;
-                    this.state = THROWN;
-                }
-                else if (ended) {
-                    this.state = ENDED;
-                }
+        if (failure != null) {
+            if (fail(failure)) {
+                failed(failure);
             }
-            notifyAll();
+        }
+        else if (ended) {
+            quietlyComplete();
         }
         return true;
+    }
+
+    /** Ends the task with an exception, when it has not ended: whether it did. */
+    final synchronized boolean fail(Throwable ex) {
+        if (this.state >= ENDED) {
+            return false;
+        }
+        this.thrown = ex;
+        this.state = THROWN;
+        notifyAll();
+        return true;
+    }
+
+    /** What a task does once an exception ended it: a CountedCompleter tells the ones it completes. */
+    void failed(Throwable ex) {
     }
 
     /** Hands the task to the pool the thread runs a task of, else to the one every program shares. */
@@ -224,21 +235,20 @@ public abstract class ForkJoinTask<V> implements Future<V> {
 
     public void complete(V value) {
         setRawResult(value);
-        synchronized (this) {
-            if (this.state < ENDED) {
-                this.state = ENDED;
-                notifyAll();
-            }
+        quietlyComplete();
+    }
+
+    /** Ends the task with the value it has. */
+    public final synchronized void quietlyComplete() {
+        if (this.state < ENDED) {
+            this.state = ENDED;
+            notifyAll();
         }
     }
 
     public void completeExceptionally(Throwable ex) {
-        synchronized (this) {
-            if (this.state < ENDED) {
-                this.thrown = ex;
-                this.state = THROWN;
-                notifyAll();
-            }
+        if (fail(ex)) {
+            failed(ex);
         }
     }
 

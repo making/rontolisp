@@ -624,7 +624,9 @@ cases:
       1 2 10 2 both5 11 1 100 | 2 3 20 4 none 22 2 200 | -2
   # extends is :include, a field a slot with its type's default, a constructor a
   # function run on a made instance: this(..) or super(..) first, then the field
-  # initializers, then its body.
+  # initializers, then its body. A field named as one of a class above it is a slot of
+  # its own -- a private one above is not even hidden --, and the static type of what it
+  # is read through picks the field: super.x, a cast.
   - name: a-class-is-a-structure-and-a-constructor-a-function
     main: Classes
     source: |
@@ -635,6 +637,11 @@ cases:
           double weight;
           boolean heavy;
           ClassesBase other;
+          private int serial = 7;
+
+          int serial() {
+              return serial;
+          }
 
           ClassesBase() {
               made++;
@@ -669,6 +676,16 @@ cases:
           }
       }
 
+      class ClassesHiding extends ClassesChild {
+          String label = "hiding";
+          long extra = 9L;
+          int serial = 1;
+
+          String all() {
+              return label + " " + super.label + " " + ((ClassesBase) this).label + " " + extra + " " + super.extra + " " + extra() + " " + serial + " " + serial();
+          }
+      }
+
       class ClassesPlain {
           int v;
           String name;
@@ -699,12 +716,20 @@ cases:
               k.add(2);
               k.self().self().add(3);
               System.out.println(c.id + " " + p.v + " " + p.name + " " + k.count + " " + (a.other == c) + " " + (a.other != d) + " " + (p.name == null));
+              ClassesHiding h = new ClassesHiding();
+              ClassesBase above = h;
+              h.label += "!";
+              above.label = "above";
+              h.extra++;
+              ((ClassesChild) h).extra -= 1;
+              System.out.println(h.all() + " | " + h.label + " " + above.label + " " + h.describe() + " " + h.serial + " " + above.serial());
           }
       }
     expected: |
       unnamed#1 b#2 c#3 default#4 4
       35 41 2 0.0 false null c
       103 1 null 5 true true true
+      hiding! above above 10 50 50 1 7 | hiding! above above#5 1 7
   # The signature is in the function's name; the candidates an argument list fits with
   # no boxing come first, and among them the most specific wins.
   - name: an-overload-is-chosen-by-the-static-types-of-the-arguments
@@ -2450,7 +2475,8 @@ cases:
       Pair[first=a, second=1] Pair[first=1, second=a] true true Records$Pair true null
   # A static nested class is a class of its own under its outer's name; an inner class
   # holds the instance it was made in and reaches the outer's members through it, a
-  # private one included; Outer.this, outer.new Inner() and getName()'s binary name.
+  # private one included; Outer.this, outer.new Inner() and the binary name, which
+  # getName() and the toString() of Object write, as of a class of the library.
   - name: a-nested-class-is-static-or-holds-the-instance-around-it
     main: Nested
     source: |
@@ -2537,6 +2563,8 @@ cases:
               NestedOuter none = null;
               System.out.println(given.reveal() + " " + new NestedFar(other).reveal() + " " + new NestedFar().reveal() + " " + wider.new Peek().up() + " " + o.new Early(8).seen + " " + given.getClass().getName());
               try { new NestedFar(none); } catch (NullPointerException e) { System.out.println("outer.super(..) of null throws"); }
+              String counter = n.toString(), inner = deep.toString(), runtime = Runtime.getRuntime().toString();
+              System.out.println(counter.substring(0, counter.indexOf('@')) + " " + inner.substring(0, inner.indexOf('@')) + " " + runtime.substring(0, runtime.indexOf('@')) + " " + given.toString().startsWith("Nested$1@"));
           }
       }
     expected: |
@@ -2544,6 +2572,7 @@ cases:
       NestedOuter$Counter NestedOuter$Inner NestedOuter$Inner$Deep Deep true false
       1048 50 47 45132 50 Nested$1
       outer.super(..) of null throws
+      NestedOuter$Counter NestedOuter$Inner$Deep java.lang.Runtime true
   # A class declared in a method is lowered where it stands: each local it reads is a
   # slot set where an instance is made, through a class declared inside another too;
   # an anonymous class's constructor hands its arguments to its superclass's.
@@ -7379,7 +7408,8 @@ standalone:
               Future<Integer> answer;
               try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
                   answer = pool.submit(() -> {
-                      Thread.sleep(10);
+                      // wide on purpose: the legs run beside each other
+                      Thread.sleep(300);
                       return counter.incrementAndGet();
                   });
                   pool.submit(() -> counter.addAndGet(10));
@@ -7609,7 +7639,11 @@ standalone:
   # lock of readers and a writer, a barrier, an exchanger, a deque with two ends, a
   # queue that holds nothing, a pool of the program's own with its queue and what it
   # does of a task it cannot take, a future's state and the first answer of several
-  # tasks -- and what each of them prints of itself.
+  # tasks -- and what each of them prints of itself. Then a lock told by a stamp with a
+  # JDK's numbers, a phaser with its tiers and the phase its last arrival is answered, a
+  # queue whose producer waits for its element to be taken; a pool asked around its
+  # tasks and at its end, its sizes set later, a pool with no core thread, a task that
+  # threw counted as done, and the pools of one thread behind their wrappers.
   - name: locks-latches-queues-and-executors-hand-work-between-threads
     file: Handing.java
     source: |
@@ -7633,7 +7667,11 @@ standalone:
       import java.util.concurrent.FutureTask;
       import java.util.concurrent.LinkedBlockingDeque;
       import java.util.concurrent.LinkedBlockingQueue;
+      import java.util.concurrent.LinkedTransferQueue;
+      import java.util.concurrent.Phaser;
       import java.util.concurrent.RejectedExecutionException;
+      import java.util.concurrent.ScheduledExecutorService;
+      import java.util.concurrent.ScheduledThreadPoolExecutor;
       import java.util.concurrent.Semaphore;
       import java.util.concurrent.SynchronousQueue;
       import java.util.concurrent.ThreadPoolExecutor;
@@ -7643,6 +7681,7 @@ standalone:
       import java.util.concurrent.locks.Lock;
       import java.util.concurrent.locks.ReentrantLock;
       import java.util.concurrent.locks.ReentrantReadWriteLock;
+      import java.util.concurrent.locks.StampedLock;
 
       public class Handing {
           static int total;
@@ -7905,6 +7944,10 @@ standalone:
               dequesAndHandOffs();
               aPoolOfTheProgramsOwn();
               answers();
+              stamps();
+              phases();
+              transfers();
+              hooksAndSizes();
           }
 
           static boolean turnedOver;
@@ -8233,6 +8276,458 @@ standalone:
                       + shown(new Semaphore(3)));
               lock.unlock();
           }
+
+          // a lock whose holder is told by a number; a read that takes nothing is checked after
+          static void stamps() throws Exception {
+              StampedLock lock = new StampedLock();
+              long optimistic = lock.tryOptimisticRead();
+              System.out.println(shown(lock) + " " + optimistic + " " + lock.validate(optimistic) + " " + lock.validate(0));
+              long write = lock.writeLock();
+              System.out.println(write + " " + shown(lock) + " " + lock.validate(optimistic) + " " + lock.tryOptimisticRead()
+                      + " " + lock.tryReadLock() + " " + lock.tryWriteLock() + " " + lock.isWriteLocked());
+              lock.unlockWrite(write);
+              long first = lock.readLock();
+              long second = lock.readLock();
+              System.out.println(first + " " + second + " " + shown(lock) + " " + lock.getReadLockCount() + " "
+                      + lock.tryWriteLock() + " " + lock.tryOptimisticRead() + " " + lock.validate(first));
+              attempt(() -> {
+                  lock.unlockWrite(write);
+                  return "unlocked";
+              });
+              attempt(() -> {
+                  lock.unlockRead(first + 300);
+                  return "unlocked";
+              });
+              lock.unlockRead(first);
+              lock.unlock(second);
+              attempt(() -> {
+                  lock.unlockRead(second);
+                  return "unlocked";
+              });
+              // one hold becomes another when no other thread is in the way
+              long read = lock.readLock();
+              long converted = lock.tryConvertToWriteLock(read);
+              long back = lock.tryConvertToReadLock(converted);
+              long also = lock.readLock();
+              System.out.println(read + " " + converted + " " + back + " " + also + " " + lock.tryConvertToWriteLock(back)
+                      + " " + lock.tryConvertToOptimisticRead(also) + " " + lock.tryConvertToOptimisticRead(back) + " "
+                      + lock.tryConvertToWriteLock(read) + " " + shown(lock));
+              System.out.println(StampedLock.isWriteLockStamp(converted) + " " + StampedLock.isReadLockStamp(back) + " "
+                      + StampedLock.isOptimisticReadStamp(optimistic) + " " + StampedLock.isLockStamp(optimistic) + " "
+                      + StampedLock.isOptimisticReadStamp(0));
+              // the lock as two locks with no stamp
+              Lock reading = lock.asReadLock();
+              Lock writing = lock.asReadWriteLock().writeLock();
+              reading.lock();
+              System.out.println(writing.tryLock() + " " + reading.tryLock(1, TimeUnit.MILLISECONDS) + " "
+                      + lock.getReadLockCount() + " " + (reading == lock.asReadWriteLock().readLock()) + " "
+                      + named(reading) + " " + named(writing));
+              reading.unlock();
+              reading.unlock();
+              attempt(() -> {
+                  reading.unlock();
+                  return "unlocked";
+              });
+              attempt(() -> writing.newCondition());
+              // a writer waits for the readers, and an interrupt ends a wait that says so
+              List<String> seen = Collections.synchronizedList(new ArrayList<>());
+              long held = lock.readLock();
+              Thread writer = new Thread(() -> {
+                  long stamp = lock.writeLock();
+                  seen.add("the writer is in");
+                  try {
+                      lock.readLockInterruptibly();
+                  }
+                  catch (InterruptedException e) {
+                      seen.add("interrupted " + Thread.currentThread().isInterrupted());
+                  }
+                  lock.unlockWrite(stamp);
+              });
+              writer.start();
+              while (writer.getState() != Thread.State.WAITING) {
+                  Thread.sleep(1);
+              }
+              seen.add("the reader is out");
+              lock.unlockRead(held);
+              while (seen.size() < 2 || writer.getState() != Thread.State.WAITING) {
+                  Thread.sleep(1);
+              }
+              writer.interrupt();
+              writer.join();
+              Thread.currentThread().interrupt();
+              try {
+                  lock.tryWriteLock(1, TimeUnit.SECONDS);
+              }
+              catch (InterruptedException e) {
+                  seen.add("interrupted though the lock is free");
+              }
+              System.out.println(seen + " " + shown(lock));
+              // two fields written under the write lock are never read torn
+              int[] pair = new int[2];
+              int[] torn = new int[1];
+              Thread writes = new Thread(() -> {
+                  for (int i = 1; i <= 2000; i++) {
+                      long stamp = lock.writeLock();
+                      pair[0] = i;
+                      pair[1] = -i;
+                      lock.unlockWrite(stamp);
+                  }
+              });
+              Thread reads = new Thread(() -> {
+                  for (int i = 0; i < 2000; i++) {
+                      long stamp = lock.tryOptimisticRead();
+                      int a = pair[0];
+                      int b = pair[1];
+                      if (!lock.validate(stamp)) {
+                          stamp = lock.readLock();
+                          a = pair[0];
+                          b = pair[1];
+                          lock.unlockRead(stamp);
+                      }
+                      if (a + b != 0) {
+                          torn[0]++;
+                      }
+                  }
+              });
+              writes.start();
+              reads.start();
+              writes.join();
+              reads.join();
+              System.out.println(torn[0] + " " + pair[0] + " " + pair[1]);
+          }
+
+          /** The counts a phaser prints. */
+          static String counts(Phaser phaser) {
+              String text = phaser.toString();
+              return text.substring(text.indexOf('['));
+          }
+
+          // a barrier whose parties come and go, phase after phase
+          static void phases() throws Exception {
+              Phaser plain = new Phaser();
+              System.out.println(plain.register() + " " + plain.bulkRegister(2) + " " + plain.arrive() + " "
+                      + plain.getArrivedParties() + " " + plain.getUnarrivedParties() + " " + plain.arrive() + " "
+                      + plain.arrive() + " " + plain.getPhase() + " " + plain.awaitAdvance(0) + " " + plain.awaitAdvance(-7)
+                      + " " + plain.arriveAndDeregister() + " " + plain.getRegisteredParties() + " " + shown(plain));
+              System.out.println(plain.arriveAndDeregister() + " " + plain.arriveAndDeregister() + " " + plain.isTerminated()
+                      + " " + (plain.getPhase() - Integer.MIN_VALUE) + " " + (plain.register() < 0) + " " + counts(plain));
+              attempt(() -> new Phaser(-1));
+              for (Phaser refusing : List.of(new Phaser(65535), new Phaser())) {
+                  try {
+                      System.out.println(refusing.getRegisteredParties() == 0 ? refusing.arrive() : refusing.register());
+                  }
+                  catch (IllegalStateException e) {
+                      System.out.println(shown(e.getMessage()));
+                  }
+              }
+              // the root is asked at the end of each phase, on the thread that arrived last
+              List<String> seen = Collections.synchronizedList(new ArrayList<>());
+              Phaser three = new Phaser(1) {
+                  protected boolean onAdvance(int phase, int registeredParties) {
+                      seen.add("phase " + phase + " of " + registeredParties + ", " + getArrivedParties() + " arrived");
+                      return phase >= 2;
+                  }
+              };
+              Thread[] workers = new Thread[3];
+              for (int i = 0; i < workers.length; i++) {
+                  three.register();
+                  workers[i] = new Thread(() -> {
+                      while (three.arriveAndAwaitAdvance() >= 0) {
+                          Thread.yield();
+                      }
+                  });
+                  workers[i].start();
+              }
+              while (three.getArrivedParties() < 3) {
+                  Thread.sleep(1);
+              }
+              System.out.println(counts(three));
+              int first = three.arriveAndAwaitAdvance();
+              int second = three.arriveAndAwaitAdvance();
+              // the last phase: the thread whose arrival ends it is answered 3, any other the end
+              int last = three.arriveAndAwaitAdvance();
+              for (Thread worker : workers) {
+                  worker.join();
+              }
+              System.out.println(first + " " + second + " " + (last & Integer.MAX_VALUE) + " " + three.isTerminated() + " "
+                      + seen + " " + counts(three));
+              Phaser alone = new Phaser(1) {
+                  protected boolean onAdvance(int phase, int registeredParties) {
+                      return phase >= 1;
+                  }
+              };
+              System.out.println(alone.arriveAndAwaitAdvance() + " " + alone.isTerminated() + " "
+                      + alone.arriveAndAwaitAdvance() + " " + alone.isTerminated() + " "
+                      + (alone.arriveAndAwaitAdvance() - Integer.MIN_VALUE));
+              // a tier is one party of the phaser above it while it has parties of its own
+              Phaser root = new Phaser();
+              Phaser left = new Phaser(root, 2);
+              Phaser right = new Phaser(root);
+              System.out.println(counts(root) + " " + counts(left) + " " + counts(right) + " " + (left.getParent() == root)
+                      + " " + (right.getRoot() == root) + " " + root.getParent());
+              right.register();
+              System.out.println(left.arrive() + " " + right.arrive() + " " + counts(root) + " " + counts(left) + " "
+                      + counts(right));
+              System.out.println(left.arrive() + " " + counts(root) + " " + counts(left) + " " + counts(right));
+              System.out.println(right.arriveAndDeregister() + " " + counts(root) + " " + left.arriveAndDeregister() + " "
+                      + left.arriveAndDeregister() + " " + root.isTerminated() + " " + left.isTerminated() + " "
+                      + (root.getPhase() - Integer.MIN_VALUE));
+              // an end that is forced wakes who waits; an interrupt ends only a wait that says so
+              seen.clear();
+              Phaser forced = new Phaser(2);
+              Thread waits = new Thread(() -> seen.add("woken with " + (forced.arriveAndAwaitAdvance() - Integer.MIN_VALUE)));
+              waits.start();
+              while (forced.getArrivedParties() < 1) {
+                  Thread.sleep(1);
+              }
+              forced.forceTermination();
+              waits.join();
+              Phaser gate = new Phaser(1);
+              Thread watcher = new Thread(() -> {
+                  try {
+                      gate.awaitAdvanceInterruptibly(0);
+                  }
+                  catch (InterruptedException e) {
+                      seen.add("interrupted");
+                  }
+                  Thread.currentThread().interrupt();
+                  seen.add("advanced to " + gate.awaitAdvance(0) + " " + Thread.interrupted());
+              });
+              watcher.start();
+              while (watcher.getState() != Thread.State.WAITING) {
+                  Thread.sleep(1);
+              }
+              watcher.interrupt();
+              while (seen.size() < 2 || watcher.getState() != Thread.State.WAITING) {
+                  Thread.sleep(1);
+              }
+              System.out.println(gate.arrive() + " " + counts(forced));
+              watcher.join();
+              System.out.println(seen);
+              attempt(() -> gate.awaitAdvanceInterruptibly(1, 5, TimeUnit.MILLISECONDS));
+          }
+
+          // a queue whose producer may wait for its element to be taken
+          static void transfers() throws Exception {
+              LinkedTransferQueue<String> queue = new LinkedTransferQueue<>();
+              System.out.println(queue.tryTransfer("nobody") + " " + queue.tryTransfer("nobody", 5, TimeUnit.MILLISECONDS)
+                      + " " + queue.offer("a") + " " + queue + " " + queue.hasWaitingConsumer() + " "
+                      + queue.remainingCapacity() + " " + queue.poll() + " " + queue.poll());
+              List<String> seen = Collections.synchronizedList(new ArrayList<>());
+              Thread consumer = new Thread(() -> {
+                  try {
+                      seen.add("took " + queue.take());
+                      seen.add("took " + queue.poll(60, TimeUnit.SECONDS));
+                  }
+                  catch (InterruptedException e) {
+                      seen.add("interrupted");
+                  }
+              });
+              consumer.start();
+              while (!queue.hasWaitingConsumer()) {
+                  Thread.sleep(1);
+              }
+              System.out.println(queue.getWaitingConsumerCount() + " " + queue.tryTransfer("handed") + " " + queue.size());
+              while (!queue.hasWaitingConsumer()) {
+                  Thread.sleep(1);
+              }
+              System.out.println(queue.offer("offered") + " " + queue.size());
+              consumer.join();
+              // transfer waits behind the elements ahead of its own
+              queue.add("ahead");
+              Thread producer = new Thread(() -> {
+                  try {
+                      queue.transfer("transferred");
+                      seen.add("the transfer is over");
+                  }
+                  catch (InterruptedException e) {
+                      seen.add("interrupted");
+                  }
+              });
+              producer.start();
+              while (queue.size() < 2) {
+                  Thread.sleep(1);
+              }
+              System.out.println(queue + " " + queue.peek() + " " + queue.take() + " " + producer.isAlive());
+              String taken = queue.take();
+              producer.join();
+              System.out.println(taken + " " + seen + " " + queue.isEmpty());
+              // a transfer that gives up takes its element back
+              seen.clear();
+              Thread giving = new Thread(() -> {
+                  try {
+                      seen.add("in time: " + queue.tryTransfer("timed", 20, TimeUnit.MILLISECONDS));
+                      queue.transfer("lost");
+                  }
+                  catch (InterruptedException e) {
+                      seen.add("interrupted, " + queue.size() + " left");
+                  }
+              });
+              giving.start();
+              while (seen.isEmpty() || queue.isEmpty()) {
+                  Thread.sleep(1);
+              }
+              giving.interrupt();
+              giving.join();
+              System.out.println(seen + " " + queue);
+              LinkedTransferQueue<Integer> numbers = new LinkedTransferQueue<>(List.of(3, 1, 2));
+              Iterator<Integer> walk = numbers.iterator();
+              walk.next();
+              walk.remove();
+              List<Integer> into = new ArrayList<>();
+              System.out.println(numbers + " " + numbers.drainTo(into, 1) + " " + into + " " + numbers.contains(2) + " "
+                      + numbers.remove(2) + " " + numbers.isEmpty());
+              attempt(() -> queue.offer(null));
+          }
+
+          static final List<String> events = Collections.synchronizedList(new ArrayList<>());
+
+          /** A pool that is asked around each task and at its end. */
+          static class Asked extends ThreadPoolExecutor {
+              Asked(int size) {
+                  super(size, size, 60, TimeUnit.SECONDS, new LinkedBlockingQueue<>(), r -> new Thread(r, "asked"));
+              }
+
+              @Override
+              protected void beforeExecute(Thread t, Runnable r) {
+                  events.add("before " + (t == Thread.currentThread()) + " " + (r instanceof FutureTask));
+              }
+
+              @Override
+              protected void afterExecute(Runnable r, Throwable t) {
+                  events.add("after " + t);
+              }
+
+              @Override
+              protected void terminated() {
+                  events.add("terminated " + isShutdown() + " " + isTerminated() + " " + isTerminating() + " "
+                          + getPoolSize());
+              }
+          }
+
+          // what a pool is asked around its tasks, its sizes set later, and the pools of one thread
+          static void hooksAndSizes() throws Exception {
+              Asked asked = new Asked(1);
+              asked.execute(() -> events.add("one"));
+              asked.submit(() -> events.add("two")).get();
+              asked.execute(() -> {
+                  events.add("three");
+                  throw new IllegalStateException("thrown");
+              });
+              asked.submit(() -> {
+                  throw new IllegalArgumentException("in a future");
+              });
+              asked.shutdown();
+              System.out.println(asked.awaitTermination(60, TimeUnit.SECONDS) + " " + asked.isTerminating() + " "
+                      + asked.isTerminated() + " " + asked.getCompletedTaskCount());
+              System.out.println(events);
+              events.clear();
+              Asked idle = new Asked(2);
+              idle.shutdown();
+              System.out.println(events + " " + idle.isTerminated());
+              events.clear();
+              ThreadPoolExecutor sized = new ThreadPoolExecutor(1, 2, 1, TimeUnit.SECONDS, new LinkedBlockingQueue<>());
+              attempt(() -> {
+                  sized.setCorePoolSize(-1);
+                  return "set";
+              });
+              attempt(() -> {
+                  sized.setCorePoolSize(3);
+                  return "set";
+              });
+              attempt(() -> {
+                  sized.setMaximumPoolSize(0);
+                  return "set";
+              });
+              attempt(() -> {
+                  sized.setKeepAliveTime(-1, TimeUnit.SECONDS);
+                  return "set";
+              });
+              attempt(() -> {
+                  sized.setThreadFactory(null);
+                  return "set";
+              });
+              sized.setMaximumPoolSize(4);
+              sized.setKeepAliveTime(2, TimeUnit.MINUTES);
+              sized.setThreadFactory(r -> new Thread(r, "by hand"));
+              // a larger core size starts a worker for each task that waits
+              CountDownLatch gate = new CountDownLatch(1);
+              CountDownLatch running = new CountDownLatch(3);
+              List<String> names = Collections.synchronizedList(new ArrayList<>());
+              for (int i = 0; i < 3; i++) {
+                  sized.execute(() -> {
+                      names.add(Thread.currentThread().getName());
+                      running.countDown();
+                      try {
+                          gate.await();
+                      }
+                      catch (InterruptedException e) {
+                          return;
+                      }
+                  });
+              }
+              System.out.println(sized.getPoolSize() + " " + sized.getQueue().size());
+              sized.setCorePoolSize(3);
+              running.await();
+              Collections.sort(names);
+              System.out.println(sized.getPoolSize() + " " + sized.getQueue().size() + " " + sized.getLargestPoolSize() + " "
+                      + sized.getCorePoolSize() + " " + sized.getMaximumPoolSize() + " "
+                      + sized.getKeepAliveTime(TimeUnit.SECONDS) + " " + sized.prestartCoreThread() + " "
+                      + names.get(1).equals(names.get(2)) + " " + names.get(2));
+              gate.countDown();
+              sized.setCorePoolSize(4);
+              System.out.println(sized.prestartAllCoreThreads() + " " + sized.getPoolSize() + " " + sized.prestartCoreThread());
+              sized.shutdown();
+              // the futures that were cancelled leave the queue when the pool is asked
+              ThreadPoolExecutor purged = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new LinkedBlockingQueue<>());
+              CountDownLatch hold = new CountDownLatch(1);
+              purged.execute(() -> {
+                  try {
+                      hold.await();
+                  }
+                  catch (InterruptedException e) {
+                      return;
+                  }
+              });
+              Future<?> dropped = purged.submit(() -> events.add("dropped"));
+              purged.submit(() -> events.add("kept"));
+              dropped.cancel(false);
+              int before = purged.getQueue().size();
+              purged.purge();
+              System.out.println(before + " " + purged.getQueue().size());
+              hold.countDown();
+              purged.shutdown();
+              // a pool with no core thread still runs what waits in its queue
+              ThreadPoolExecutor none = new ThreadPoolExecutor(0, 2, 0, TimeUnit.SECONDS, new LinkedBlockingQueue<>());
+              CountDownLatch ran = new CountDownLatch(2);
+              none.execute(ran::countDown);
+              none.execute(ran::countDown);
+              System.out.println(ran.await(60, TimeUnit.SECONDS) + " " + none.prestartCoreThread() + " "
+                      + none.prestartAllCoreThreads() + " " + purged.awaitTermination(60, TimeUnit.SECONDS) + " " + events);
+              none.shutdown();
+              // a pool of one thread is behind a wrapper: no ThreadPoolExecutor to set the size of
+              ExecutorService single = Executors.newSingleThreadExecutor();
+              ScheduledExecutorService timed = Executors.newSingleThreadScheduledExecutor();
+              ExecutorService fixed = Executors.newFixedThreadPool(2);
+              ExecutorService wrapped = Executors.unconfigurableExecutorService(fixed);
+              System.out.println((single instanceof ThreadPoolExecutor) + " " + (timed instanceof ScheduledThreadPoolExecutor)
+                      + " " + (fixed instanceof ThreadPoolExecutor) + " " + (wrapped instanceof ThreadPoolExecutor) + " "
+                      + named(single) + " " + named(timed) + " " + named(wrapped));
+              System.out.println(single.submit(() -> "through the wrapper").get() + ", "
+                      + timed.schedule(() -> "at its time", 5, TimeUnit.MILLISECONDS).get() + ", "
+                      + wrapped.invokeAny(List.of(() -> "any")));
+              wrapped.shutdown();
+              single.shutdown();
+              System.out.println(fixed.isShutdown() + " " + single.awaitTermination(60, TimeUnit.SECONDS) + " "
+                      + single.isTerminated() + " " + timed.shutdownNow().size());
+              attempt(() -> Executors.unconfigurableExecutorService(null));
+          }
+
+          /** The class an object's text names. */
+          static String named(Object object) {
+              String text = object.toString();
+              return text.substring(0, text.indexOf('@'));
+          }
       }
     stdout: |
       3000 3 72 -1 9223372036854775807 -9223372036854775808 120 MICROSECONDS
@@ -8312,19 +8807,77 @@ standalone:
       java.lang.IllegalArgumentException: tasks is empty
       in time
       java.util.concurrent.locks.ReentrantLock[Locked by thread main] java.util.concurrent.locks.ReentrantLock[Unlocked] java.util.concurrent.CountDownLatch[Count = 2] java.util.concurrent.Semaphore[Permits = 3]
+      java.util.concurrent.locks.StampedLock[Unlocked] 256 true false
+      384 java.util.concurrent.locks.StampedLock[Write-locked] false 0 0 0 true
+      513 514 java.util.concurrent.locks.StampedLock[Read-locks:2] 2 0 512 true
+      java.lang.IllegalMonitorStateException
+      java.lang.IllegalMonitorStateException
+      java.lang.IllegalMonitorStateException
+      513 640 769 770 0 768 768 0 java.util.concurrent.locks.StampedLock[Unlocked]
+      true true true false false
+      false true 2 true java.util.concurrent.locks.StampedLock$ReadLockView java.util.concurrent.locks.StampedLock$WriteLockView
+      java.lang.IllegalMonitorStateException
+      java.lang.UnsupportedOperationException
+      [the reader is out, the writer is in, interrupted false, interrupted though the lock is free] java.util.concurrent.locks.StampedLock[Unlocked]
+      0 2000 -2000
+      0 0 0 1 2 0 0 1 1 -7 1 2 java.util.concurrent.Phaser[phase = 1 parties = 2 arrived = 0]
+      1 1 true 2 true [phase = -2147483646 parties = 0 arrived = 0]
+      java.lang.IllegalArgumentException: Illegal number of parties
+      Attempt to register more than 65535 parties for java.util.concurrent.Phaser[phase = 0 parties = 65535 arrived = 0]
+      Attempted arrival of unregistered party for java.util.concurrent.Phaser[phase = 0 parties = 0 arrived = 0]
+      [phase = 0 parties = 4 arrived = 3]
+      1 2 3 true [phase 0 of 4, 4 arrived, phase 1 of 4, 4 arrived, phase 2 of 4, 4 arrived] [phase = -2147483645 parties = 4 arrived = 4]
+      1 false 2 true 2
+      [phase = 0 parties = 1 arrived = 0] [phase = 0 parties = 2 arrived = 0] [phase = 0 parties = 0 arrived = 0] true true null
+      0 0 [phase = 0 parties = 2 arrived = 1] [phase = 0 parties = 2 arrived = 1] [phase = 0 parties = 1 arrived = 1]
+      0 [phase = 1 parties = 2 arrived = 0] [phase = 1 parties = 2 arrived = 0] [phase = 1 parties = 1 arrived = 0]
+      1 [phase = 1 parties = 1 arrived = 0] 1 1 true true 2
+      0 [phase = -2147483648 parties = 2 arrived = 1]
+      [woken with 0, interrupted, advanced to 1 true]
+      java.util.concurrent.TimeoutException
+      false false true [a] false 2147483647 a null
+      1 true 0
+      true 0
+      [ahead, transferred] ahead ahead true
+      transferred [took handed, took offered, the transfer is over] true
+      [in time: false, interrupted, 0 left] []
+      [1, 2] 1 [1] true true true
+      java.lang.NullPointerException
+      true false true 4
+      [before true false, one, after null, before true true, two, after null, before true false, three, after java.lang.IllegalStateException: thrown, before true true, after null, terminated true false true 0]
+      [terminated true false true 0] true
+      java.lang.IllegalArgumentException: corePoolSize must be non-negative
+      java.lang.IllegalArgumentException: corePoolSize must be less than or equal to maximumPoolSize
+      java.lang.IllegalArgumentException: maximumPoolSize must be positive
+      java.lang.IllegalArgumentException: time must be non-negative
+      java.lang.NullPointerException: threadFactory
+      1 2
+      3 0 3 3 4 120 false true by hand
+      1 4 false
+      2 1
+      true false 0 true [kept]
+      false false true false java.util.concurrent.Executors$AutoShutdownDelegatedExecutorService java.util.concurrent.Executors$DelegatedScheduledExecutorService java.util.concurrent.Executors$DelegatedExecutorService
+      through the wrapper, at its time, any
+      true true true 0
+      java.lang.NullPointerException
     stderr: |
       Exception in thread "pool-3-thread-1" java.lang.IllegalStateException: the task's thread ends
+      Exception in thread "asked" java.lang.IllegalStateException: thrown
   # The collections threads share and a value set once: a ConcurrentHashMap keeps the
   # order a program sees and its walk never refuses, a CopyOnWriteArrayList is walked as
   # it was, a ConcurrentLinkedQueue; a CompletableFuture's stages, the exception going
   # down them, every one of several and the first. Then a set and a deque, the arrays
   # of atomics and a sum; the order a future's dependents run in (the one added last
   # first, what depends on it right after it); the stages of two futures, a future with
-  # a limit; a task that splits into tasks on a pool's threads.
+  # a limit; a task that splits into tasks on a pool's threads. Then the accumulators,
+  # what is made of a failure on another thread or by another stage, a value set over
+  # a future's, a stage that is no future, a subclass whose stages are its own, and the
+  # tasks that count what is pending.
   - name: threads-share-concurrent-collections-and-completable-futures
     file: Sharing.java
     source: |
       import java.util.ArrayList;
+      import java.util.Collections;
       import java.util.Iterator;
       import java.util.List;
       import java.util.Map;
@@ -8334,13 +8887,16 @@ standalone:
       import java.util.concurrent.CancellationException;
       import java.util.concurrent.CompletableFuture;
       import java.util.concurrent.CompletionException;
+      import java.util.concurrent.CompletionStage;
       import java.util.concurrent.ConcurrentHashMap;
       import java.util.concurrent.ConcurrentLinkedDeque;
       import java.util.concurrent.ConcurrentLinkedQueue;
       import java.util.concurrent.ConcurrentMap;
       import java.util.concurrent.CopyOnWriteArrayList;
       import java.util.concurrent.CopyOnWriteArraySet;
+      import java.util.concurrent.CountedCompleter;
       import java.util.concurrent.ExecutionException;
+      import java.util.concurrent.Executor;
       import java.util.concurrent.ExecutorService;
       import java.util.concurrent.Executors;
       import java.util.concurrent.ForkJoinPool;
@@ -8353,6 +8909,9 @@ standalone:
       import java.util.concurrent.atomic.AtomicIntegerArray;
       import java.util.concurrent.atomic.AtomicLongArray;
       import java.util.concurrent.atomic.AtomicReferenceArray;
+      import java.util.concurrent.atomic.DoubleAccumulator;
+      import java.util.concurrent.atomic.DoubleAdder;
+      import java.util.concurrent.atomic.LongAccumulator;
       import java.util.concurrent.atomic.LongAdder;
 
       public class Sharing {
@@ -8537,6 +9096,9 @@ standalone:
               dependents();
               bothEitherAndLimits();
               splitting();
+              accumulated();
+              stagesLeft();
+              completers();
           }
 
           static StringBuilder order = new StringBuilder();
@@ -8837,6 +9399,332 @@ standalone:
               ForkJoinPool.commonPool().shutdown();
               System.out.println(ForkJoinPool.commonPool().isShutdown());
           }
+
+          // a value many threads fold their own into, and a sum of doubles
+          static void accumulated() throws Exception {
+              LongAccumulator most = new LongAccumulator(Long::max, Long.MIN_VALUE);
+              LongAccumulator sum = new LongAccumulator((x, y) -> x + y, 0);
+              DoubleAdder halves = new DoubleAdder();
+              DoubleAccumulator product = new DoubleAccumulator((x, y) -> x * y, 1.0);
+              System.out.println(most + " " + most.intValue() + " " + sum + " " + halves + " " + product);
+              Thread[] threads = new Thread[4];
+              for (int i = 0; i < threads.length; i++) {
+                  int id = i;
+                  threads[i] = new Thread(() -> {
+                      for (int j = 0; j < 500; j++) {
+                          most.accumulate(id * 1000 + j);
+                          sum.accumulate(1);
+                          halves.add(0.5);
+                      }
+                  });
+                  threads[i].start();
+              }
+              for (Thread thread : threads) {
+                  thread.join();
+              }
+              product.accumulate(1.5);
+              product.accumulate(4);
+              System.out.println(most.get() + " " + sum.get() + " " + sum.getThenReset() + " " + sum.longValue() + " "
+                      + halves.sum() + " " + halves.intValue() + " " + halves.sumThenReset() + " " + halves.doubleValue()
+                      + " " + product + " " + product.intValue() + " " + product.getThenReset() + " " + product.get());
+              most.reset();
+              halves.add(-0.0);
+              product.accumulate(Double.NaN);
+              product.reset();
+              System.out.println(most.get() + " " + most.floatValue() + " " + halves + " " + product.floatValue());
+          }
+
+          /** A future whose stages are of its own class. */
+          static class Counting<T> extends CompletableFuture<T> {
+              static int made;
+
+              @Override
+              public <U> CompletableFuture<U> newIncompleteFuture() {
+                  made++;
+                  return new Counting<U>();
+              }
+
+              @Override
+              public Executor defaultExecutor() {
+                  return task -> {
+                      order.append("mine ");
+                      task.run();
+                  };
+              }
+          }
+
+          // what is made of a failure, a value set over another, a stage that is no future
+          static void stagesLeft() throws Exception {
+              ExecutorService one = Executors.newFixedThreadPool(1, r -> new Thread(r, "the one"));
+              CompletableFuture<String> open = new CompletableFuture<>();
+              CompletableFuture<String> mended = open
+                  .exceptionallyAsync(t -> "saw " + t.getMessage() + " on a daemon: " + Thread.currentThread().isDaemon());
+              open.completeExceptionally(new IllegalStateException("boom"));
+              System.out.println(mended.join());
+              CompletableFuture<String> failed = CompletableFuture.failedFuture(new IllegalStateException("x"));
+              System.out.println(failed.exceptionallyAsync(t -> Thread.currentThread().getName() + " saw " + t, one).join()
+                      + ", " + CompletableFuture.completedFuture("fine").exceptionallyAsync(t -> "never").join() + ", "
+                      + failed.thenApply(s -> s + "!").exceptionallyAsync(t -> "taken over as " + t).join());
+              attempt(() -> failed.exceptionallyAsync(t -> {
+                  throw new IllegalArgumentException("y");
+              }).join());
+              System.out.println(failed.exceptionallyCompose(t -> CompletableFuture.completedFuture("composed of " + t))
+                  .join() + ", "
+                      + CompletableFuture.completedFuture("fine")
+                          .exceptionallyCompose(t -> CompletableFuture.completedFuture("never"))
+                          .join()
+                      + ", "
+                      + failed
+                          .exceptionallyComposeAsync(
+                                  t -> CompletableFuture.completedFuture("on " + Thread.currentThread().getName()), one)
+                          .join()
+                      + ", " + failed
+                          .exceptionallyComposeAsync(
+                                  t -> CompletableFuture.completedFuture("a daemon: " + Thread.currentThread().isDaemon()))
+                          .join());
+              attempt(() -> failed.exceptionallyCompose(t -> CompletableFuture.failedFuture(new IllegalStateException("in")))
+                  .join());
+              attempt(() -> failed.exceptionallyCompose(t -> {
+                  throw new IllegalArgumentException("thrown");
+              }).join());
+              CompletableFuture<String> later = new CompletableFuture<>();
+              CompletableFuture<String> through = failed.exceptionallyCompose(t -> later);
+              boolean early = through.isDone();
+              later.complete("late");
+              System.out.println(early + " " + through.join());
+              attempt(() -> failed.exceptionallyCompose(null));
+              one.shutdown();
+              // a value is set over the one a future has; what ran on the old one stays run
+              CompletableFuture<String> set = CompletableFuture.completedFuture("first");
+              CompletableFuture<String> before = set.thenApply(s -> s + "!");
+              set.obtrudeValue("second");
+              System.out.println(set.join() + " " + before.join() + " " + set.thenApply(s -> s + "?").join());
+              set.obtrudeException(new IllegalStateException("forced"));
+              attempt(set::join);
+              System.out.println(set.isCompletedExceptionally() + " " + shown(set));
+              set.obtrudeValue(null);
+              System.out.println(set.join() + " " + set.isCompletedExceptionally() + " " + shown(set));
+              CompletableFuture<String> unset = new CompletableFuture<>();
+              CompletableFuture<String> waiting = unset.thenApply(s -> s + "!");
+              unset.obtrudeValue("set");
+              System.out.println(unset.join() + " " + waiting.join() + " " + unset.complete("again"));
+              attempt(() -> {
+                  unset.obtrudeException(null);
+                  return "set";
+              });
+              // a stage that answers what a stage answers and nothing a future does
+              CompletableFuture<String> source = new CompletableFuture<>();
+              CompletionStage<String> minimal = source.minimalCompletionStage();
+              CompletableFuture<String> behind = (CompletableFuture<String>) minimal;
+              System.out.println(shown(minimal) + " " + (minimal instanceof CompletableFuture));
+              attempt(() -> behind.complete("no"));
+              attempt(() -> behind.join());
+              attempt(() -> behind.get());
+              attempt(() -> behind.isDone());
+              attempt(() -> behind.cancel(true));
+              attempt(() -> behind.getNow("x"));
+              attempt(() -> behind.orTimeout(1, TimeUnit.SECONDS));
+              attempt(() -> {
+                  behind.obtrudeValue("x");
+                  return "set";
+              });
+              CompletionStage<String> next = minimal.thenApply(s -> s + "!");
+              CompletableFuture<String> future = minimal.toCompletableFuture();
+              System.out.println(shown(next) + " " + shown(behind.copy()) + " " + shown(future) + " " + (future == source));
+              source.complete("done");
+              System.out.println(future.join() + " " + next.toCompletableFuture().join() + " " + shown(minimal) + " "
+                      + next.thenCombine(minimal, (a, b) -> a + b).toCompletableFuture().join());
+              CompletableFuture<String> bad = new CompletableFuture<>();
+              CompletionStage<String> lost = bad.minimalCompletionStage();
+              bad.completeExceptionally(new IllegalStateException("bad"));
+              System.out.println(shown(lost) + " " + lost.exceptionally(t -> "seen " + t).toCompletableFuture().join());
+              attempt(() -> lost.toCompletableFuture().join());
+              CompletionStage<String> ready = CompletableFuture.completedStage("ready");
+              CompletionStage<String> broken = CompletableFuture.failedStage(new IllegalStateException("broken"));
+              System.out.println(shown(ready) + " " + ready.toCompletableFuture().join() + " " + shown(broken) + " "
+                      + shown(source.newIncompleteFuture()));
+              attempt(() -> CompletableFuture.failedStage(null));
+              // a subclass says what its stages are and where they run
+              order.setLength(0);
+              Counting<String> mine = new Counting<>();
+              CompletableFuture<Integer> length = mine.thenApply(String::length);
+              CompletableFuture<Integer> twice = length.thenApplyAsync(n -> n * 2);
+              System.out.println((length instanceof Counting) + " " + (twice instanceof Counting) + " "
+                      + (mine.copy() instanceof Counting) + " " + (mine.exceptionally(t -> "") instanceof Counting) + " "
+                      + (mine.thenCombine(length, (s, n) -> s + n) instanceof Counting) + " "
+                      + (mine.minimalCompletionStage() instanceof Counting) + " " + Counting.made);
+              mine.complete("four");
+              System.out.println(twice.join() + " " + order.toString().trim());
+          }
+
+          static final List<String> told = Collections.synchronizedList(new ArrayList<>());
+
+          /** A task that ends when the tasks it started have told it so. */
+          static class Total extends CountedCompleter<Long> {
+              final int[] numbers;
+              final int from;
+              final int to;
+              Total left;
+              Total right;
+              long sum;
+
+              Total(CountedCompleter<?> above, int[] numbers, int from, int to) {
+                  super(above);
+                  this.numbers = numbers;
+                  this.from = from;
+                  this.to = to;
+              }
+
+              @Override
+              public void compute() {
+                  if (to - from <= 4) {
+                      for (int i = from; i < to; i++) {
+                          sum += numbers[i];
+                      }
+                  }
+                  else {
+                      int middle = (from + to) >>> 1;
+                      left = new Total(this, numbers, from, middle);
+                      right = new Total(this, numbers, middle, to);
+                      setPendingCount(2);
+                      left.fork();
+                      right.fork();
+                  }
+                  tryComplete();
+              }
+
+              @Override
+              public void onCompletion(CountedCompleter<?> caller) {
+                  if (left != null) {
+                      sum = left.sum + right.sum;
+                  }
+              }
+
+              @Override
+              public Long getRawResult() {
+                  return sum;
+              }
+          }
+
+          static class Step extends CountedCompleter<String> {
+              final String name;
+              String result;
+
+              Step(CountedCompleter<?> above, String name, int pending) {
+                  super(above, pending);
+                  this.name = name;
+              }
+
+              @Override
+              public void compute() {
+                  told.add(name + " computes");
+              }
+
+              @Override
+              public void onCompletion(CountedCompleter<?> caller) {
+                  told.add(name + " by " + ((Step) caller).name);
+              }
+
+              @Override
+              public boolean onExceptionalCompletion(Throwable ex, CountedCompleter<?> caller) {
+                  told.add(name + " failed by " + ((Step) caller).name);
+                  return !name.equals("stop");
+              }
+
+              @Override
+              public String getRawResult() {
+                  return result;
+              }
+
+              @Override
+              protected void setRawResult(String value) {
+                  result = value;
+              }
+          }
+
+          static void told(String what) {
+              System.out.println(what + ": " + told);
+              told.clear();
+          }
+
+          // tasks that count what is pending and tell the task above
+          static void completers() throws Exception {
+              int[] numbers = new int[100];
+              for (int i = 0; i < numbers.length; i++) {
+                  numbers[i] = i + 1;
+              }
+              ForkJoinPool pool = new ForkJoinPool(3);
+              Total forked = new Total(null, numbers, 0, 50);
+              pool.submit(forked);
+              System.out.println(new Total(null, numbers, 0, numbers.length).invoke() + " " + pool.invoke(new Total(null,
+                      numbers, 0, numbers.length)) + " " + forked.get() + " " + forked.isCompletedNormally() + " "
+                      + forked.getPendingCount() + " " + forked.getCompleter() + " " + (forked.left.getRoot() == forked)
+                      + " " + (forked.left.getCompleter() == forked));
+              // up the chain: one less pending where something is, else the task is told
+              Step root = new Step(null, "root", 1);
+              Step middle = new Step(root, "middle", 1);
+              Step leaf = new Step(middle, "leaf", 0);
+              Step other = new Step(middle, "other", 0);
+              leaf.tryComplete();
+              told("leaf");
+              other.tryComplete();
+              told("other");
+              System.out.println(root.getPendingCount() + " " + middle.getPendingCount() + " " + leaf.isDone() + " "
+                      + middle.isDone() + " " + root.isDone());
+              middle.tryComplete();
+              told("middle");
+              System.out.println(middle.isDone() + " " + root.isDone() + " " + root.join());
+              Step quiet = new Step(null, "quiet", 0);
+              Step below = new Step(new Step(quiet, "between", 0), "below", 0);
+              below.propagateCompletion();
+              told("propagated");
+              Step given = new Step(new Step(null, "top", 1), "given", 5);
+              given.complete("a value");
+              told("complete");
+              System.out.println(quiet.isDone() + " " + below.isDone() + " " + given.isDone() + " " + given.getRawResult()
+                      + " " + given.getPendingCount() + " " + given.getCompleter().isDone() + " "
+                      + given.getCompleter().getPendingCount());
+              // the counts' own members
+              Step counted = new Step(new Step(null, "above", 0), "counted", 3);
+              System.out.println(counted.compareAndSetPendingCount(2, 9) + " " + counted.compareAndSetPendingCount(3, 1) + " "
+                      + counted.decrementPendingCountUnlessZero() + " " + counted.decrementPendingCountUnlessZero() + " "
+                      + (counted.firstComplete() == counted) + " " + (counted.nextComplete() == counted.getCompleter()) + " "
+                      + counted.getCompleter().isDone() + " " + (counted.getCompleter().nextComplete() == null) + " "
+                      + counted.getCompleter().isDone() + " " + counted.isDone());
+              counted.addToPendingCount(-4);
+              counted.quietlyCompleteRoot();
+              counted.helpComplete(1);
+              System.out.println(counted.getPendingCount() + " " + counted.getRoot().isDone() + " " + counted.isDone());
+              told("counts");
+              // an exception climbs while each task says so
+              Step top = new Step(null, "top", 0);
+              Step stop = new Step(top, "stop", 1);
+              Step under = new Step(stop, "under", 1);
+              Step thrower = new Step(under, "thrower", 0);
+              thrower.completeExceptionally(new IllegalStateException("broken"));
+              told("failed");
+              System.out.println(thrower.isCompletedAbnormally() + " " + under.isCompletedAbnormally() + " "
+                      + stop.isCompletedAbnormally() + " " + top.isDone() + " " + under.getException());
+              attempt(under::join);
+              attempt(new CountedCompleter<Void>() {
+                  public void compute() {
+                      throw new IllegalArgumentException("in compute");
+                  }
+              }::invoke);
+              // a task whose compute ends with something pending is not done
+              Step unfinished = new Step(null, "unfinished", 1);
+              ForkJoinTask<String> task = pool.submit(unfinished);
+              while (told.isEmpty()) {
+                  Thread.sleep(1);
+              }
+              boolean early = task.isDone();
+              unfinished.tryComplete();
+              boolean still = task.isDone();
+              unfinished.tryComplete();
+              System.out.println(early + " " + still + " " + task.isDone() + " " + task.get());
+              told("unfinished");
+              pool.shutdown();
+          }
       }
     stdout: |
       22 200 4000 0 22 true true
@@ -8904,13 +9792,67 @@ standalone:
       true true
       a pool shut down takes no task
       false
+      -9223372036854775808 0 0 0.0 1.0
+      3499 2000 2000 0 1000.0 1000 1000.0 0.0 6.0 6 6.0 1.0
+      -9223372036854775808 -9.223372E18 0.0 1.0
+      saw boom on a daemon: true
+      the one saw java.lang.IllegalStateException: x, fine, taken over as java.util.concurrent.CompletionException: java.lang.IllegalStateException: x
+      java.util.concurrent.CompletionException: java.lang.IllegalArgumentException: y <- java.lang.IllegalArgumentException: y
+      composed of java.lang.IllegalStateException: x, fine, on the one, a daemon: true
+      java.util.concurrent.CompletionException: java.lang.IllegalStateException: in <- java.lang.IllegalStateException: in
+      java.util.concurrent.CompletionException: java.lang.IllegalArgumentException: thrown <- java.lang.IllegalArgumentException: thrown
+      false late
+      java.lang.NullPointerException
+      second first! second?
+      java.util.concurrent.CompletionException: java.lang.IllegalStateException: forced <- java.lang.IllegalStateException: forced
+      true java.util.concurrent.CompletableFuture[Completed exceptionally: java.lang.IllegalStateException]
+      null false java.util.concurrent.CompletableFuture[Completed normally]
+      set set! false
+      java.lang.NullPointerException
+      java.util.concurrent.CompletableFuture$MinimalStage[Not completed] true
+      java.lang.UnsupportedOperationException
+      java.lang.UnsupportedOperationException
+      java.lang.UnsupportedOperationException
+      java.lang.UnsupportedOperationException
+      java.lang.UnsupportedOperationException
+      java.lang.UnsupportedOperationException
+      java.lang.UnsupportedOperationException
+      java.lang.UnsupportedOperationException
+      java.util.concurrent.CompletableFuture$MinimalStage[Not completed] java.util.concurrent.CompletableFuture$MinimalStage[Not completed] java.util.concurrent.CompletableFuture[Not completed] false
+      done done! java.util.concurrent.CompletableFuture$MinimalStage[Completed normally] done!done
+      java.util.concurrent.CompletableFuture$MinimalStage[Completed exceptionally: java.util.concurrent.CompletionException] seen java.util.concurrent.CompletionException: java.lang.IllegalStateException: bad
+      java.util.concurrent.CompletionException: java.lang.IllegalStateException: bad <- java.lang.IllegalStateException: bad
+      java.util.concurrent.CompletableFuture$MinimalStage[Completed normally] ready java.util.concurrent.CompletableFuture$MinimalStage[Completed exceptionally: java.lang.IllegalStateException] java.util.concurrent.CompletableFuture[Not completed]
+      java.lang.NullPointerException
+      true true true true true false 5
+      8 mine
+      5050 5050 1275 true 0 null true true
+      leaf: [leaf by leaf]
+      other: [other by other, middle by other]
+      0 0 false false false
+      middle: [middle by middle, root by middle]
+      false true null
+      propagated: []
+      complete: [given by given]
+      true false true a value 5 false 0
+      false true 1 0 true true false true true false
+      -4 true false
+      counts: []
+      failed: [thrower failed by thrower, under failed by thrower, stop failed by under]
+      true true true false java.lang.IllegalStateException: broken
+      java.lang.IllegalStateException: broken
+      java.lang.IllegalArgumentException: in compute
+      false false true null
+      unfinished: [unfinished computes, unfinished by unfinished]
   # A task at its time: a scheduled pool's, in the order of the times, repeated until it
   # is cancelled or throws, and after shutdown() only when it does not repeat; a Timer's
   # on its one thread. On one stack no thread can wait for a time, so a thread is started
   # that runs no sooner than the soonest task's time, named as the pool's threads in
   # turn, and the program's waits pass the time until then. Which of two threads a JDK
   # gives a task is not asked: it moves with the load. What a TimerTask does not hand down to an
-  # anonymous class (its state, its period) hides no local of the program.
+  # anonymous class (its state, its period) hides no local of the program. A scheduled
+  # pool is asked around each run of a task and at its end, starts its threads ahead of
+  # a task, takes a size later and drops what was cancelled.
   - name: a-scheduled-pool-and-a-timer-run-tasks-at-their-times
     file: Timed.java
     source: |
@@ -9084,6 +10026,8 @@ standalone:
                   }
               }, 1));
 
+              asked();
+
               // a timer that is no daemon keeps the program until it is cancelled
               Timer second = new Timer();
               second.scheduleAtFixedRate(new TimerTask() {
@@ -9096,6 +10040,75 @@ standalone:
                       }
                   }
               }, 5, 10);
+          }
+
+          static final List<String> events = Collections.synchronizedList(new ArrayList<>());
+
+          /** A scheduled pool that is asked around each run of a task and at its end. */
+          static class Asked extends ScheduledThreadPoolExecutor {
+              Asked(int size) {
+                  super(size, r -> new Thread(r, "timed"));
+              }
+
+              @Override
+              protected void beforeExecute(Thread t, Runnable r) {
+                  events.add("before " + (t == Thread.currentThread()) + " " + (r instanceof Future) + " " + t.getName());
+              }
+
+              @Override
+              protected void afterExecute(Runnable r, Throwable t) {
+                  events.add("after " + t);
+              }
+
+              @Override
+              protected void terminated() {
+                  events.add("terminated " + isShutdown() + " " + isTerminated() + " " + getPoolSize());
+              }
+          }
+
+          // what a scheduled pool is asked, its threads started ahead of a task, its size set later
+          static void asked() throws Exception {
+              Asked asked = new Asked(1);
+              asked.schedule(() -> events.add("one"), 5, TimeUnit.MILLISECONDS).get();
+              asked.submit(() -> {
+                  throw new IllegalStateException("in a future");
+              });
+              CountDownLatch twice = new CountDownLatch(2);
+              ScheduledFuture<?> repeating = asked.scheduleAtFixedRate(twice::countDown, 1, 5, TimeUnit.MILLISECONDS);
+              twice.await();
+              repeating.cancel(false);
+              asked.shutdown();
+              System.out.println(asked.awaitTermination(60, TimeUnit.SECONDS) + " " + asked.isTerminated() + " "
+                      + asked.isTerminating());
+              int before = 0;
+              int after = 0;
+              for (String event : events) {
+                  if (event.startsWith("before")) {
+                      before++;
+                  }
+                  if (event.equals("after null")) {
+                      after++;
+                  }
+              }
+              System.out.println(events.subList(0, 5) + " " + (before == after) + " " + (before >= 4) + " "
+                      + events.get(events.size() - 1));
+              events.clear();
+              Asked idle = new Asked(2);
+              System.out.println(idle.getPoolSize() + " " + idle.prestartCoreThread() + " " + idle.getPoolSize() + " "
+                      + idle.prestartAllCoreThreads() + " " + idle.getPoolSize() + " " + idle.prestartCoreThread() + " "
+                      + idle.getCorePoolSize());
+              idle.setCorePoolSize(3);
+              System.out.println(idle.getCorePoolSize() + " " + idle.prestartAllCoreThreads() + " " + idle.getPoolSize());
+              ScheduledFuture<?> far = idle.schedule(() -> events.add("never"), 1, TimeUnit.HOURS);
+              idle.schedule(() -> events.add("never either"), 1, TimeUnit.HOURS);
+              far.cancel(false);
+              idle.purge();
+              System.out.println(idle.shutdownNow().size() + " " + idle.awaitTermination(60, TimeUnit.SECONDS) + " "
+                      + events);
+              ScheduledThreadPoolExecutor named = new ScheduledThreadPoolExecutor(1);
+              named.setThreadFactory(r -> new Thread(r, "by hand"));
+              System.out.println(named.schedule(() -> Thread.currentThread().getName(), 1, TimeUnit.MILLISECONDS).get());
+              named.shutdown();
           }
       }
     stdout: |
@@ -9129,6 +10142,12 @@ standalone:
       3 false 0
       true false 1
       java.lang.IllegalStateException: Timer already cancelled.
+      true true false
+      [before true true timed, one, after null, before true true timed, after null] true true terminated true false 0
+      0 true 1 1 2 false 2
+      3 1 3
+      1 true [terminated true false 0]
+      by hand
       Timer-0 1
       Timer-0 2
   # The thread the program started on dies and the threads it started still end: the
@@ -9270,6 +10289,10 @@ refused:
     - name: a-private-method-of-a-superclass-is-not-called-by-its-simple-name
       body: 'class Above { private int count() { return 1; } } class Under extends Above { int get() { return count(); } }'
       error: "cannot find symbol"
+    # super.x is this as the class above sees it, so there is none in a static method
+    - name: a-field-through-super-in-a-static-method
+      body: 'class Above { int count; } class Under extends Above { static int get() { return super.count; } }'
+      error: "non-static variable super cannot be referenced from a static context"
     # Annotations are dropped, but a name no annotation type of the library has is
     # unknown, and @Override and @FunctionalInterface are checked
     - name: an-annotation-of-no-type-the-program-sees

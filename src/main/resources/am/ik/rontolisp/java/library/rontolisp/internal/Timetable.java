@@ -18,6 +18,16 @@ public final class Timetable {
         Thread make(Runnable body);
     }
 
+    /**
+     * What is told once the last thread is gone: a pool's terminated(). An interface of
+     * its own, so that what a call of it can reach is that member and not every Runnable
+     * of the program.
+     */
+    public interface End {
+
+        void ended();
+    }
+
     private static final class Entry {
 
         final Runnable task;
@@ -30,9 +40,17 @@ public final class Timetable {
         }
     }
 
-    private final int size;
+    private int size;
 
     private final Threads threads;
+
+    /** What is run once, when the last thread is gone: a pool's terminated(). */
+    private End atEnd;
+
+    /** Whether a thread took it on itself to run that, and whether it has answered: the table's end. */
+    private boolean ending;
+
+    private boolean over;
 
     /** The tasks to run, the soonest first, the one added first among equal times. */
     private final ArrayList<Entry> entries = new ArrayList<>();
@@ -59,6 +77,53 @@ public final class Timetable {
     public Timetable(int size, Threads threads) {
         this.size = size;
         this.threads = threads;
+    }
+
+    /** What to run when the last thread is gone, outside the table's monitor. */
+    public synchronized void atEnd(End atEnd) {
+        this.atEnd = atEnd;
+    }
+
+    /** Under the monitor: whether the last thread is gone and the caller is the one to end the table. */
+    private boolean ends() {
+        if (this.ending || !(this.closed && this.alive == 0 && this.entries.isEmpty())) {
+            return false;
+        }
+        this.ending = true;
+        return true;
+    }
+
+    /** Ends the table, outside its monitor: it has ended once what is run then has answered. */
+    private void end() {
+        try {
+            if (this.atEnd != null) {
+                this.atEnd.ended();
+            }
+        }
+        finally {
+            synchronized (this) {
+                this.over = true;
+                notifyAll();
+            }
+        }
+    }
+
+    /** How many threads the table has from now on; the ones above the number stay. */
+    public synchronized void resize(int size) {
+        this.size = size;
+    }
+
+    /** Starts one more thread ahead of any task, while fewer than the table's number were made. */
+    public boolean start() {
+        Thread started;
+        synchronized (this) {
+            if (this.closed || this.made.size() >= this.size) {
+                return false;
+            }
+            started = another();
+        }
+        started.start();
+        return true;
     }
 
     /** Starts the first thread ahead of any task: a Timer's own. */
@@ -122,6 +187,7 @@ public final class Timetable {
             thrown = false;
         }
         finally {
+            boolean ended;
             synchronized (this) {
                 this.alive--;
                 if (thrown) {
@@ -130,7 +196,11 @@ public final class Timetable {
                     this.closed = true;
                     this.entries.clear();
                 }
+                ended = ends();
                 notifyAll();
+            }
+            if (ended) {
+                end();
             }
         }
     }
@@ -204,23 +274,38 @@ public final class Timetable {
     }
 
     /** The threads end once no task is left. */
-    public synchronized void close() {
-        this.closed = true;
-        notifyAll();
+    public void close() {
+        boolean ended;
+        synchronized (this) {
+            this.closed = true;
+            ended = ends();
+            notifyAll();
+        }
+        if (ended) {
+            end();
+        }
     }
 
     /** Nothing runs any more: the tasks that waited. A pool interrupts the one running. */
-    public synchronized List<Runnable> drop(boolean interrupting) {
-        List<Runnable> waiting = tasks();
-        this.entries.clear();
-        this.closed = true;
-        this.dead = true;
-        if (interrupting) {
-            for (Thread thread : this.made) {
-                thread.interrupt();
+    public List<Runnable> drop(boolean interrupting) {
+        List<Runnable> waiting;
+        boolean ended;
+        synchronized (this) {
+            waiting = tasks();
+            this.entries.clear();
+            this.closed = true;
+            this.dead = true;
+            if (interrupting) {
+                for (Thread thread : this.made) {
+                    thread.interrupt();
+                }
             }
+            ended = ends();
+            notifyAll();
         }
-        notifyAll();
+        if (ended) {
+            end();
+        }
         return waiting;
     }
 
@@ -229,12 +314,12 @@ public final class Timetable {
     }
 
     public synchronized boolean isEnded() {
-        return this.closed && this.alive == 0 && this.entries.isEmpty();
+        return this.over;
     }
 
     /** Waits for the table's end until a time, as System.nanoTime() counts: whether it ended. */
     public synchronized boolean awaitEnd(long deadline) throws InterruptedException {
-        while (!(this.closed && this.alive == 0 && this.entries.isEmpty())) {
+        while (!this.over) {
             long left = deadline - System.nanoTime();
             if (left <= 0) {
                 return false;

@@ -101,6 +101,13 @@ final class JavaSyntax {
 	}
 
 	/**
+	 * {@code super} ahead of a field's name: {@code this} as an instance of the class
+	 * above the one it stands in.
+	 */
+	record Super(int pos) implements Expression {
+	}
+
+	/**
 	 * {@code Outer.this}.
 	 *
 	 * @param pos the {@code this}

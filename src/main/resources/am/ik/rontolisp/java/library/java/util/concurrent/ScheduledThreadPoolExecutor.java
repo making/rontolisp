@@ -5,7 +5,8 @@
 // A pool whose tasks run at their times: a task is a future holding its time, kept in
 // the table its threads take the due ones from (rontolisp.internal.Timetable). A task
 // that repeats is added again after each run, a period later; one whose run throws is
-// not.
+// not. The threads are the table's, so what a ThreadPoolExecutor says of its workers
+// is said here of the table.
 package java.util.concurrent;
 
 import java.util.List;
@@ -13,8 +14,6 @@ import java.util.List;
 import rontolisp.internal.Timetable;
 
 public class ScheduledThreadPoolExecutor extends ThreadPoolExecutor implements ScheduledExecutorService {
-
-    private final int size;
 
     private final Timetable table;
 
@@ -33,8 +32,9 @@ public class ScheduledThreadPoolExecutor extends ThreadPoolExecutor implements S
     public ScheduledThreadPoolExecutor(int corePoolSize, ThreadFactory threadFactory) {
         super(corePoolSize, Integer.MAX_VALUE, 0L, TimeUnit.NANOSECONDS, new LinkedBlockingQueue<Runnable>(),
                 threadFactory);
-        this.size = corePoolSize;
-        this.table = new Timetable(corePoolSize == 0 ? 1 : corePoolSize, (Runnable body) -> threadFactory.newThread(body));
+        this.table = new Timetable(corePoolSize == 0 ? 1 : corePoolSize,
+                (Runnable body) -> getThreadFactory().newThread(body));
+        this.table.atEnd(() -> terminated());
     }
 
     private static final class ScheduledFutureTask<V> extends FutureTask<V> implements RunnableScheduledFuture<V> {
@@ -69,6 +69,8 @@ public class ScheduledThreadPoolExecutor extends ThreadPoolExecutor implements S
         }
 
         public void run() {
+            // a future's run throws nothing, so the two hooks need no catch around it
+            this.pool.beforeExecute(Thread.currentThread(), this);
             if (!this.pool.runs(this)) {
                 cancel(false);
             }
@@ -84,6 +86,7 @@ public class ScheduledThreadPoolExecutor extends ThreadPoolExecutor implements S
                     cancel(false);
                 }
             }
+            this.pool.afterExecute(this, null);
         }
 
         public boolean cancel(boolean mayInterruptIfRunning) {
@@ -198,6 +201,10 @@ public class ScheduledThreadPoolExecutor extends ThreadPoolExecutor implements S
         return isShutdown() && this.table.isEnded();
     }
 
+    public boolean isTerminating() {
+        return isShutdown() && !this.table.isEnded();
+    }
+
     public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
         if (Thread.interrupted()) {
             throw new InterruptedException();
@@ -209,8 +216,22 @@ public class ScheduledThreadPoolExecutor extends ThreadPoolExecutor implements S
         return this.table.threads();
     }
 
-    public int getCorePoolSize() {
-        return this.size;
+    public void setCorePoolSize(int corePoolSize) {
+        super.setCorePoolSize(corePoolSize);
+        this.table.resize(corePoolSize == 0 ? 1 : corePoolSize);
+    }
+
+    public boolean prestartCoreThread() {
+        return getCorePoolSize() > 0 && !isShutdown() && this.table.start();
+    }
+
+    /** Takes the tasks that were cancelled out of the table. */
+    public void purge() {
+        for (Runnable waiting : this.table.tasks()) {
+            if (((ScheduledFutureTask<?>) waiting).isCancelled()) {
+                this.table.remove(waiting);
+            }
+        }
     }
 
     public int getActiveCount() {

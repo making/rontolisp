@@ -221,8 +221,6 @@ Caused by: java.lang.IllegalStateException: insufficient funds: 30
 
 **`hashCode` も `toString` も宣言していないオブジェクトの `hashCode` と `toString`** は、
 rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進表記を続けた文字列です。
-ネストしたクラスの名前は、この文字列ではドット区切り（`Outer.Inner@1f`）になります。
-`getClass().getName()` と JDK は `Outer$Inner` と書きます。
 このようなオブジェクト（列挙型の定数を含みます）をキーにした `HashMap` は、JDK と異なる順序で
 キーをたどります。JDK でも、この順序は実行のたびに変わります。
 
@@ -317,13 +315,13 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 古い値が読まれることがあります。これは言語仕様が許す動作です。`volatile`、`synchronized`、
 `Thread.start`、`join` による順序付けは言語仕様のとおりです。
 
-**プールには JDK と異なる点があります。** `Executors.newSingleThreadExecutor()` と
-`newSingleThreadScheduledExecutor()` はプールそのものを返します。JDK はプールをラッパーで
-包んで返すため、JDK では戻り値が `ThreadPoolExecutor` ではありません。`ThreadPoolExecutor`
-には、オーバーライドするための `beforeExecute`、`afterExecute`、`terminated` がなく、
-セッターはハンドラーのものだけです。プログラムが `getQueue()` に直接入れたタスクは、次の
+**プールには JDK と異なる点があります。** プログラムが `getQueue()` に直接入れたタスクは、次の
 `execute` まで実行されません。スケジュール実行のプールはタスクを独自の表に保持するため、
-`getQueue()` は空です。`ForkJoinPool` は、タスクを実行できるスレッドが空いていなければ
+`getQueue()` は空です。`CompletableFuture.defaultExecutor()` はステージを実行するプールを
+返しますが、これは `ForkJoinPool.commonPool()` が返すオブジェクトとは別のものです。
+`LongAccumulator` と `DoubleAccumulator` は値を 1 つだけ保持します。JDK はスレッドごとに
+値を畳み込んでから合わせるため、渡した値が関数の単位元であることを前提にします。
+`ForkJoinPool` は、タスクを実行できるスレッドが空いていなければ
 スレッドを開始します。そのため並列度は問い合わせに答えるだけの数値で、`new ForkJoinPool()`
 では 2、共通プールでは 1 です。タスクが投げた例外は、そのまま再スローされます。JDK は、
 別のスレッドがタスクを実行した場合、元の例外を原因に持つ同じクラスの例外を投げます。
@@ -334,8 +332,8 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 **スレッドの状態が `BLOCKED` になることはありません。** `getState` で分かるのは、スレッドが
 待機中またはスリープ中であることです。モニターに入るのを待っているスレッドの状態は
 `RUNNABLE` です。未捕捉例外ハンドラーが呼ばれるのはプログラムが開始したスレッドだけで、
-`main` のスレッドでは呼ばれません。`AtomicInteger` と `AtomicLong` は `Number` では
-ありません。
+`main` のスレッドでは呼ばれません。`AtomicInteger`、`AtomicLong`、加算器
+（`LongAdder`、`DoubleAdder`）、アキュムレーターは `Number` ではありません。
 
 **スレッドの番号は rontolisp 独自のものです。** `threadId()` と `toString()` に含まれる番号は、
 プログラムのスレッドを 1 から数えた値です。
@@ -348,14 +346,12 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 - 値として使うクラスリテラルと `getClass()`。どちらも、クラスとの比較と `getName()`、
   `getSimpleName()` の直前でだけ読めます。クラスリテラルは `synchronized` 文のロックにも
   なります。プリミティブ型と配列型のクラスリテラル。
-- `long`、`float`、`double`、`boolean` に対する `switch`。修飾した `super` を通すメソッド参照
-  （`Interface.super::m`）。
-- スーパークラスのフィールドを隠すフィールド。
+- `long`、`float`、`double`、`boolean` に対する `switch`。修飾した `super` を通すメソッド参照と
+  フィールド（`Interface.super::m`、`Outer.super.x`）。
 - `String`、`StringBuilder`、ボックスを継承するクラス。
-- `java.util.concurrent` のうち、[概要](index.md)の表にないもの。スタンプ付きロック、
-  `Phaser`、優先度順または遅延順のキュー、`ConcurrentSkipListMap`、`CountedCompleter`、
-  表にないアトミッククラスです。`Date` を取る `Timer` の `schedule`、スレッドグループ、
-  `Duration` を取る `sleep` と `join` も拒否されます。
+- `java.util.concurrent` のうち、[概要](index.md)の表にないもの。優先度順または遅延順の
+  キュー、`ConcurrentSkipListMap`、フィールドアップデーターです。`Date` を取る `Timer` の
+  `schedule`、スレッドグループ、`Duration` を取る `sleep` と `join` も拒否されます。
 - [概要](index.md)の表にないライブラリのクラスとメンバー。ストリーム（`java.util.stream`）、
   `LinkedList`、`LinkedHashMap`、`TreeMap`、`Scanner`、ファイル（`File`、`FileReader`、
   `java.nio.file`）、`java.time`、`BigInteger`、`BigDecimal`、リフレクションなどです。

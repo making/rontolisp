@@ -8,7 +8,9 @@
 // exception a stage's own function threw, and one a stage takes over from the stage
 // before it, is held in a CompletionException; one given to completeExceptionally is
 // held as it is. A task with no executor runs on a daemon thread of the pool every
-// program shares (Common).
+// program shares (Common). A stage is made by newIncompleteFuture(), so a subclass
+// decides what its stages are: a MinimalStage is one whose stages are minimal too and
+// that refuses what only a future answers.
 package java.util.concurrent;
 
 import java.util.ArrayDeque;
@@ -181,6 +183,28 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
         return made;
     }
 
+    public static <U> CompletionStage<U> completedStage(U value) {
+        CompletableFuture<U> made = new MinimalStage<>();
+        made.settle(value, null, null);
+        return made;
+    }
+
+    public static <U> CompletionStage<U> failedStage(Throwable ex) {
+        CompletableFuture<U> made = new MinimalStage<>();
+        made.settle(null, given(ex), null);
+        return made;
+    }
+
+    /** The future a stage of this one is: a subclass answers one of its own. */
+    public <U> CompletableFuture<U> newIncompleteFuture() {
+        return new CompletableFuture<U>();
+    }
+
+    /** Where a stage asked to run with no executor runs. */
+    public Executor defaultExecutor() {
+        return shared();
+    }
+
     /** Done when every one is: failed as the first of them, in the order given, that failed. */
     public static CompletableFuture<Void> allOf(CompletableFuture<?>... cfs) {
         CompletableFuture<Void> all = new CompletableFuture<>();
@@ -232,13 +256,31 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
         return settle(null, given(ex), null);
     }
 
+    /** Sets the value or the exception whatever the future holds; what ran on the old one stays run. */
+    private void force(T value, Throwable failure) {
+        if (!settle(value, failure, null)) {
+            synchronized (this) {
+                this.value = value;
+                this.failure = failure;
+            }
+        }
+    }
+
+    public void obtrudeValue(T value) {
+        force(value, null);
+    }
+
+    public void obtrudeException(Throwable ex) {
+        force(null, given(ex));
+    }
+
     public boolean cancel(boolean mayInterruptIfRunning) {
         settle(null, new CancellationException(), null);
         return isCancelled();
     }
 
     public CompletableFuture<T> completeAsync(Supplier<? extends T> supplier) {
-        return completeAsync(supplier, shared());
+        return completeAsync(supplier, defaultExecutor());
     }
 
     public CompletableFuture<T> completeAsync(Supplier<? extends T> supplier, Executor executor) {
@@ -260,7 +302,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
     /** Failed with a TimeoutException when nothing set it within the time. */
     public CompletableFuture<T> orTimeout(long timeout, TimeUnit unit) {
         given(unit);
-        if (!isDone()) {
+        if (!finished()) {
             limit(delayer().schedule(() -> {
                 settle(null, new TimeoutException(), null);
             }, timeout, unit));
@@ -270,7 +312,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
 
     public CompletableFuture<T> completeOnTimeout(T value, long timeout, TimeUnit unit) {
         given(unit);
-        if (!isDone()) {
+        if (!finished()) {
             limit(delayer().schedule(() -> {
                 settle(value, null, null);
             }, timeout, unit));
@@ -306,6 +348,25 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
         return applying((T taken) -> taken, null);
     }
 
+    /** A stage done as this future is, that answers only what a stage answers. */
+    public CompletionStage<T> minimalCompletionStage() {
+        CompletableFuture<T> stage = new MinimalStage<>();
+        mirrored(stage);
+        return stage;
+    }
+
+    /** Ends another future as this one ends: its exception as one taken over. */
+    private void mirrored(CompletableFuture<T> other) {
+        then(null, (ArrayDeque<Dependent> pending) -> {
+            if (this.failure != null) {
+                other.settle(null, held(this.failure), pending);
+            }
+            else {
+                other.settle(this.value, null, pending);
+            }
+        });
+    }
+
     public synchronized State state() {
         return !this.done ? State.RUNNING : this.failure == null ? State.SUCCESS
                 : this.failure instanceof CancellationException ? State.CANCELLED : State.FAILED;
@@ -339,7 +400,11 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
         return super.toString() + state;
     }
 
-    public synchronized boolean isDone() {
+    public boolean isDone() {
+        return finished();
+    }
+
+    private synchronized boolean finished() {
         return this.done;
     }
 
@@ -435,7 +500,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
 
     private <U> CompletableFuture<U> applying(Function<? super T, ? extends U> fn, Executor executor) {
         given(fn);
-        CompletableFuture<U> next = new CompletableFuture<>();
+        CompletableFuture<U> next = newIncompleteFuture();
         then(executor, (ArrayDeque<Dependent> pending) -> {
             if (this.failure != null) {
                 next.settle(null, held(this.failure), pending);
@@ -459,7 +524,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
     }
 
     public <U> CompletableFuture<U> thenApplyAsync(Function<? super T, ? extends U> fn) {
-        return applying(fn, shared());
+        return applying(fn, defaultExecutor());
     }
 
     public <U> CompletableFuture<U> thenApplyAsync(Function<? super T, ? extends U> fn, Executor executor) {
@@ -475,7 +540,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
     }
 
     public CompletableFuture<Void> thenAcceptAsync(Consumer<? super T> action) {
-        return thenAcceptAsync(action, shared());
+        return thenAcceptAsync(action, defaultExecutor());
     }
 
     public CompletableFuture<Void> thenAcceptAsync(Consumer<? super T> action, Executor executor) {
@@ -495,7 +560,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
     }
 
     public CompletableFuture<Void> thenRunAsync(Runnable action) {
-        return thenRunAsync(action, shared());
+        return thenRunAsync(action, defaultExecutor());
     }
 
     public CompletableFuture<Void> thenRunAsync(Runnable action, Executor executor) {
@@ -509,7 +574,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
     private <U> CompletableFuture<U> composing(Function<? super T, ? extends CompletionStage<U>> fn,
             Executor executor) {
         given(fn);
-        CompletableFuture<U> next = new CompletableFuture<>();
+        CompletableFuture<U> next = newIncompleteFuture();
         then(executor, (ArrayDeque<Dependent> pending) -> {
             if (this.failure != null) {
                 next.settle(null, held(this.failure), pending);
@@ -523,16 +588,22 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
                 next.settle(null, held(thrown), pending);
                 return;
             }
-            inner.then(null, (ArrayDeque<Dependent> later) -> {
-                if (inner.failure != null) {
-                    next.settle(null, held(inner.failure), later);
-                }
-                else {
-                    next.settle(inner.value, null, later);
-                }
-            }, pending);
+            follow(inner, next, pending);
         });
         return next;
+    }
+
+    /** Ends a stage as the future its function answered ends. */
+    private static <U> void follow(CompletableFuture<U> inner, CompletableFuture<U> next,
+            ArrayDeque<Dependent> pending) {
+        inner.then(null, (ArrayDeque<Dependent> later) -> {
+            if (inner.failure != null) {
+                next.settle(null, held(inner.failure), later);
+            }
+            else {
+                next.settle(inner.value, null, later);
+            }
+        }, pending);
     }
 
     public <U> CompletableFuture<U> thenCompose(Function<? super T, ? extends CompletionStage<U>> fn) {
@@ -540,7 +611,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
     }
 
     public <U> CompletableFuture<U> thenComposeAsync(Function<? super T, ? extends CompletionStage<U>> fn) {
-        return composing(fn, shared());
+        return composing(fn, defaultExecutor());
     }
 
     public <U> CompletableFuture<U> thenComposeAsync(Function<? super T, ? extends CompletionStage<U>> fn,
@@ -556,7 +627,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
             BiFunction<? super T, ? super U, ? extends V> fn, Executor executor) {
         given(fn);
         CompletableFuture<? extends U> second = given(other).toCompletableFuture();
-        CompletableFuture<V> next = new CompletableFuture<>();
+        CompletableFuture<V> next = newIncompleteFuture();
         boolean[] ran = new boolean[1];
         Dependent run = on(executor, (ArrayDeque<Dependent> pending) -> {
             if (this.failure != null) {
@@ -578,7 +649,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
             next.settle(made, null, pending);
         });
         Dependent both = (ArrayDeque<Dependent> pending) -> {
-            if (!isDone() || !second.isDone()) {
+            if (!finished() || !second.finished()) {
                 return;
             }
             synchronized (ran) {
@@ -601,7 +672,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
 
     public <U, V> CompletableFuture<V> thenCombineAsync(CompletionStage<? extends U> other,
             BiFunction<? super T, ? super U, ? extends V> fn) {
-        return combining(other, fn, shared());
+        return combining(other, fn, defaultExecutor());
     }
 
     public <U, V> CompletableFuture<V> thenCombineAsync(CompletionStage<? extends U> other,
@@ -616,7 +687,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
 
     public <U> CompletableFuture<Void> thenAcceptBothAsync(CompletionStage<? extends U> other,
             BiConsumer<? super T, ? super U> action) {
-        return acceptingBoth(other, action, shared());
+        return acceptingBoth(other, action, defaultExecutor());
     }
 
     public <U> CompletableFuture<Void> thenAcceptBothAsync(CompletionStage<? extends U> other,
@@ -638,7 +709,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
     }
 
     public CompletableFuture<Void> runAfterBothAsync(CompletionStage<?> other, Runnable action) {
-        return runningAfterBoth(other, action, shared());
+        return runningAfterBoth(other, action, defaultExecutor());
     }
 
     public CompletableFuture<Void> runAfterBothAsync(CompletionStage<?> other, Runnable action, Executor executor) {
@@ -661,7 +732,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
             Executor executor) {
         given(fn);
         CompletableFuture<? extends T> second = given(other).toCompletableFuture();
-        CompletableFuture<U> next = new CompletableFuture<>();
+        CompletableFuture<U> next = newIncompleteFuture();
         boolean[] ran = new boolean[1];
         then(null, first(this, ran, fn, next, executor));
         second.then(null, first(second, ran, fn, next, executor));
@@ -702,7 +773,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
 
     public <U> CompletableFuture<U> applyToEitherAsync(CompletionStage<? extends T> other,
             Function<? super T, U> fn) {
-        return either(other, fn, shared());
+        return either(other, fn, defaultExecutor());
     }
 
     public <U> CompletableFuture<U> applyToEitherAsync(CompletionStage<? extends T> other,
@@ -716,7 +787,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
 
     public CompletableFuture<Void> acceptEitherAsync(CompletionStage<? extends T> other,
             Consumer<? super T> action) {
-        return acceptingEither(other, action, shared());
+        return acceptingEither(other, action, defaultExecutor());
     }
 
     public CompletableFuture<Void> acceptEitherAsync(CompletionStage<? extends T> other,
@@ -739,7 +810,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
     }
 
     public CompletableFuture<Void> runAfterEitherAsync(CompletionStage<?> other, Runnable action) {
-        return runningAfterEither(other, action, shared());
+        return runningAfterEither(other, action, defaultExecutor());
     }
 
     public CompletableFuture<Void> runAfterEitherAsync(CompletionStage<?> other, Runnable action,
@@ -751,7 +822,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
             Executor executor) {
         given(action);
         CompletableFuture<?> second = given(other).toCompletableFuture();
-        CompletableFuture<Void> next = new CompletableFuture<>();
+        CompletableFuture<Void> next = newIncompleteFuture();
         boolean[] ran = new boolean[1];
         Function<Object, Void> running = (Object taken) -> {
             action.run();
@@ -764,7 +835,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
 
     private <U> CompletableFuture<U> handling(BiFunction<? super T, Throwable, ? extends U> fn, Executor executor) {
         given(fn);
-        CompletableFuture<U> next = new CompletableFuture<>();
+        CompletableFuture<U> next = newIncompleteFuture();
         then(executor, (ArrayDeque<Dependent> pending) -> {
             U made;
             try {
@@ -784,7 +855,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
     }
 
     public <U> CompletableFuture<U> handleAsync(BiFunction<? super T, Throwable, ? extends U> fn) {
-        return handling(fn, shared());
+        return handling(fn, defaultExecutor());
     }
 
     public <U> CompletableFuture<U> handleAsync(BiFunction<? super T, Throwable, ? extends U> fn, Executor executor) {
@@ -793,7 +864,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
 
     private CompletableFuture<T> completing(BiConsumer<? super T, ? super Throwable> action, Executor executor) {
         given(action);
-        CompletableFuture<T> next = new CompletableFuture<>();
+        CompletableFuture<T> next = newIncompleteFuture();
         then(executor, (ArrayDeque<Dependent> pending) -> {
             try {
                 action.accept(this.value, this.failure);
@@ -818,7 +889,7 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
     }
 
     public CompletableFuture<T> whenCompleteAsync(BiConsumer<? super T, ? super Throwable> action) {
-        return completing(action, shared());
+        return completing(action, defaultExecutor());
     }
 
     public CompletableFuture<T> whenCompleteAsync(BiConsumer<? super T, ? super Throwable> action,
@@ -826,24 +897,177 @@ public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
         return completing(action, given(executor));
     }
 
-    public CompletableFuture<T> exceptionally(Function<Throwable, ? extends T> fn) {
+    /** A stage with this future's value, or what a function makes of its exception. */
+    private CompletableFuture<T> recovering(Function<Throwable, ? extends T> fn, Executor executor) {
         given(fn);
-        CompletableFuture<T> next = new CompletableFuture<>();
+        CompletableFuture<T> next = newIncompleteFuture();
         then(null, (ArrayDeque<Dependent> pending) -> {
             if (this.failure == null) {
                 next.settle(this.value, null, pending);
                 return;
             }
-            T made;
-            try {
-                made = fn.apply(this.failure);
-            }
-            catch (Throwable thrown) {
-                next.settle(null, held(thrown), pending);
-                return;
-            }
-            next.settle(made, null, pending);
+            on(executor, (ArrayDeque<Dependent> later) -> {
+                T made;
+                try {
+                    made = fn.apply(this.failure);
+                }
+                catch (Throwable thrown) {
+                    next.settle(null, held(thrown), later);
+                    return;
+                }
+                next.settle(made, null, later);
+            }).fire(pending);
         });
         return next;
+    }
+
+    public CompletableFuture<T> exceptionally(Function<Throwable, ? extends T> fn) {
+        return recovering(fn, null);
+    }
+
+    public CompletableFuture<T> exceptionallyAsync(Function<Throwable, ? extends T> fn) {
+        return recovering(fn, defaultExecutor());
+    }
+
+    public CompletableFuture<T> exceptionallyAsync(Function<Throwable, ? extends T> fn, Executor executor) {
+        return recovering(fn, given(executor));
+    }
+
+    /** As recovering, ended as the stage the function answers ends. */
+    private CompletableFuture<T> recoveringWith(Function<Throwable, ? extends CompletionStage<T>> fn,
+            Executor executor) {
+        given(fn);
+        CompletableFuture<T> next = newIncompleteFuture();
+        then(null, (ArrayDeque<Dependent> pending) -> {
+            if (this.failure == null) {
+                next.settle(this.value, null, pending);
+                return;
+            }
+            on(executor, (ArrayDeque<Dependent> later) -> {
+                CompletableFuture<T> inner;
+                try {
+                    inner = fn.apply(this.failure).toCompletableFuture();
+                }
+                catch (Throwable thrown) {
+                    next.settle(null, held(thrown), later);
+                    return;
+                }
+                follow(inner, next, later);
+            }).fire(pending);
+        });
+        return next;
+    }
+
+    public CompletableFuture<T> exceptionallyCompose(Function<Throwable, ? extends CompletionStage<T>> fn) {
+        return recoveringWith(fn, null);
+    }
+
+    public CompletableFuture<T> exceptionallyComposeAsync(Function<Throwable, ? extends CompletionStage<T>> fn) {
+        return recoveringWith(fn, defaultExecutor());
+    }
+
+    public CompletableFuture<T> exceptionallyComposeAsync(Function<Throwable, ? extends CompletionStage<T>> fn,
+            Executor executor) {
+        return recoveringWith(fn, given(executor));
+    }
+
+    /**
+     * What minimalCompletionStage, completedStage and failedStage answer: a future to
+     * the stages made of it, and to a program a stage that cannot be asked or set.
+     */
+    private static final class MinimalStage<T> extends CompletableFuture<T> {
+
+        MinimalStage() {
+        }
+
+        public <U> CompletableFuture<U> newIncompleteFuture() {
+            return new MinimalStage<U>();
+        }
+
+        public CompletableFuture<T> toCompletableFuture() {
+            CompletableFuture<T> future = new CompletableFuture<>();
+            super.mirrored(future);
+            return future;
+        }
+
+        public T get() {
+            throw new UnsupportedOperationException();
+        }
+
+        public T get(long timeout, TimeUnit unit) {
+            throw new UnsupportedOperationException();
+        }
+
+        public T getNow(T valueIfAbsent) {
+            throw new UnsupportedOperationException();
+        }
+
+        public T join() {
+            throw new UnsupportedOperationException();
+        }
+
+        public T resultNow() {
+            throw new UnsupportedOperationException();
+        }
+
+        public Throwable exceptionNow() {
+            throw new UnsupportedOperationException();
+        }
+
+        public boolean complete(T value) {
+            throw new UnsupportedOperationException();
+        }
+
+        public boolean completeExceptionally(Throwable ex) {
+            throw new UnsupportedOperationException();
+        }
+
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            throw new UnsupportedOperationException();
+        }
+
+        public void obtrudeValue(T value) {
+            throw new UnsupportedOperationException();
+        }
+
+        public void obtrudeException(Throwable ex) {
+            throw new UnsupportedOperationException();
+        }
+
+        public boolean isDone() {
+            throw new UnsupportedOperationException();
+        }
+
+        public boolean isCancelled() {
+            throw new UnsupportedOperationException();
+        }
+
+        public boolean isCompletedExceptionally() {
+            throw new UnsupportedOperationException();
+        }
+
+        public State state() {
+            throw new UnsupportedOperationException();
+        }
+
+        public int getNumberOfDependents() {
+            throw new UnsupportedOperationException();
+        }
+
+        public CompletableFuture<T> completeAsync(Supplier<? extends T> supplier) {
+            throw new UnsupportedOperationException();
+        }
+
+        public CompletableFuture<T> completeAsync(Supplier<? extends T> supplier, Executor executor) {
+            throw new UnsupportedOperationException();
+        }
+
+        public CompletableFuture<T> orTimeout(long timeout, TimeUnit unit) {
+            throw new UnsupportedOperationException();
+        }
+
+        public CompletableFuture<T> completeOnTimeout(T value, long timeout, TimeUnit unit) {
+            throw new UnsupportedOperationException();
+        }
     }
 }

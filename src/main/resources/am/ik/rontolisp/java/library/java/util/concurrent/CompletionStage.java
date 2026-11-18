@@ -38,5 +38,71 @@ public interface CompletionStage<T> {
 
     CompletionStage<T> exceptionally(Function<Throwable, ? extends T> fn);
 
+    <U> CompletionStage<U> thenApplyAsync(Function<? super T, ? extends U> fn);
+
+    <U> CompletionStage<U> thenApplyAsync(Function<? super T, ? extends U> fn, Executor executor);
+
+    CompletionStage<Void> thenAcceptAsync(Consumer<? super T> action);
+
+    CompletionStage<Void> thenAcceptAsync(Consumer<? super T> action, Executor executor);
+
+    CompletionStage<Void> thenRunAsync(Runnable action);
+
+    CompletionStage<Void> thenRunAsync(Runnable action, Executor executor);
+
+    <U> CompletionStage<U> thenComposeAsync(Function<? super T, ? extends CompletionStage<U>> fn);
+
+    <U> CompletionStage<U> thenComposeAsync(Function<? super T, ? extends CompletionStage<U>> fn,
+            Executor executor);
+
+    <U, V> CompletionStage<V> thenCombineAsync(CompletionStage<? extends U> other,
+            BiFunction<? super T, ? super U, ? extends V> fn);
+
+    <U, V> CompletionStage<V> thenCombineAsync(CompletionStage<? extends U> other,
+            BiFunction<? super T, ? super U, ? extends V> fn, Executor executor);
+
+    <U> CompletionStage<Void> thenAcceptBothAsync(CompletionStage<? extends U> other,
+            BiConsumer<? super T, ? super U> action);
+
+    <U> CompletionStage<Void> thenAcceptBothAsync(CompletionStage<? extends U> other,
+            BiConsumer<? super T, ? super U> action, Executor executor);
+
+    CompletionStage<Void> runAfterBothAsync(CompletionStage<?> other, Runnable action);
+
+    CompletionStage<Void> runAfterBothAsync(CompletionStage<?> other, Runnable action, Executor executor);
+
+    <U> CompletionStage<U> applyToEitherAsync(CompletionStage<? extends T> other, Function<? super T, U> fn);
+
+    <U> CompletionStage<U> applyToEitherAsync(CompletionStage<? extends T> other, Function<? super T, U> fn,
+            Executor executor);
+
+    CompletionStage<Void> acceptEitherAsync(CompletionStage<? extends T> other, Consumer<? super T> action);
+
+    CompletionStage<Void> acceptEitherAsync(CompletionStage<? extends T> other, Consumer<? super T> action,
+            Executor executor);
+
+    CompletionStage<Void> runAfterEitherAsync(CompletionStage<?> other, Runnable action);
+
+    CompletionStage<Void> runAfterEitherAsync(CompletionStage<?> other, Runnable action, Executor executor);
+
+    <U> CompletionStage<U> handleAsync(BiFunction<? super T, Throwable, ? extends U> fn);
+
+    <U> CompletionStage<U> handleAsync(BiFunction<? super T, Throwable, ? extends U> fn, Executor executor);
+
+    CompletionStage<T> whenCompleteAsync(BiConsumer<? super T, ? super Throwable> action);
+
+    CompletionStage<T> whenCompleteAsync(BiConsumer<? super T, ? super Throwable> action, Executor executor);
+
+    CompletionStage<T> exceptionallyAsync(Function<Throwable, ? extends T> fn);
+
+    CompletionStage<T> exceptionallyAsync(Function<Throwable, ? extends T> fn, Executor executor);
+
+    CompletionStage<T> exceptionallyCompose(Function<Throwable, ? extends CompletionStage<T>> fn);
+
+    CompletionStage<T> exceptionallyComposeAsync(Function<Throwable, ? extends CompletionStage<T>> fn);
+
+    CompletionStage<T> exceptionallyComposeAsync(Function<Throwable, ? extends CompletionStage<T>> fn,
+            Executor executor);
+
     CompletableFuture<T> toCompletableFuture();
 }

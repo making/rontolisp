@@ -99,6 +99,24 @@ final class JavaClass {
 			this.isPrivate = declaration != null && declaration.modifiers().contains("private");
 		}
 
+		/**
+		 * The structure slot an instance field is. A structure has one slot of a name and
+		 * holds the slots of the classes above it, so a field hiding one of a superclass
+		 * -- or named as a private one there, which it does not even hide -- is a slot of
+		 * its own name: the field's, and how many fields above it have it.
+		 */
+		String slot() {
+			int above = 0;
+			for (JavaClass type = this.owner.superclass; type != null; type = type.superclass) {
+				for (Field field : type.fields) {
+					if (!field.isStatic && field.name.equals(this.name)) {
+						above++;
+					}
+				}
+			}
+			return above == 0 ? this.name : this.name + "%" + above;
+		}
+
 	}
 
 	/**

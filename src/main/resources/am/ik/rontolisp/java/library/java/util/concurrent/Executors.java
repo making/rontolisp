@@ -3,7 +3,114 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util.concurrent;
 
+import java.util.Collection;
+import java.util.List;
+
 public final class Executors {
+
+    /**
+     * A pool behind the members of an ExecutorService alone: what the pools of one
+     * thread are, so no program sets the size of one, and what
+     * unconfigurableExecutorService answers.
+     */
+    private static class DelegatedExecutorService implements ExecutorService {
+
+        private final ExecutorService pool;
+
+        DelegatedExecutorService(ExecutorService pool) {
+            if (pool == null) {
+                throw new NullPointerException();
+            }
+            this.pool = pool;
+        }
+
+        public void execute(Runnable command) {
+            this.pool.execute(command);
+        }
+
+        public void shutdown() {
+            this.pool.shutdown();
+        }
+
+        public List<Runnable> shutdownNow() {
+            return this.pool.shutdownNow();
+        }
+
+        public boolean isShutdown() {
+            return this.pool.isShutdown();
+        }
+
+        public boolean isTerminated() {
+            return this.pool.isTerminated();
+        }
+
+        public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
+            return this.pool.awaitTermination(timeout, unit);
+        }
+
+        public <T> Future<T> submit(Callable<T> task) {
+            return this.pool.submit(task);
+        }
+
+        public <T> Future<T> submit(Runnable task, T result) {
+            return this.pool.submit(task, result);
+        }
+
+        public Future<?> submit(Runnable task) {
+            return this.pool.submit(task);
+        }
+
+        public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks) throws InterruptedException {
+            return this.pool.invokeAll(tasks);
+        }
+
+        public <T> T invokeAny(Collection<? extends Callable<T>> tasks) throws InterruptedException,
+                ExecutionException {
+            return this.pool.invokeAny(tasks);
+        }
+
+        public <T> T invokeAny(Collection<? extends Callable<T>> tasks, long timeout, TimeUnit unit)
+                throws InterruptedException, ExecutionException, TimeoutException {
+            return this.pool.invokeAny(tasks, timeout, unit);
+        }
+    }
+
+    /** What newSingleThreadExecutor answers. */
+    private static final class AutoShutdownDelegatedExecutorService extends DelegatedExecutorService {
+
+        AutoShutdownDelegatedExecutorService(ExecutorService pool) {
+            super(pool);
+        }
+    }
+
+    private static final class DelegatedScheduledExecutorService extends DelegatedExecutorService
+            implements ScheduledExecutorService {
+
+        private final ScheduledExecutorService scheduled;
+
+        DelegatedScheduledExecutorService(ScheduledExecutorService pool) {
+            super(pool);
+            this.scheduled = pool;
+        }
+
+        public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
+            return this.scheduled.schedule(command, delay, unit);
+        }
+
+        public <V> ScheduledFuture<V> schedule(Callable<V> callable, long delay, TimeUnit unit) {
+            return this.scheduled.schedule(callable, delay, unit);
+        }
+
+        public ScheduledFuture<?> scheduleAtFixedRate(Runnable command, long initialDelay, long period,
+                TimeUnit unit) {
+            return this.scheduled.scheduleAtFixedRate(command, initialDelay, period, unit);
+        }
+
+        public ScheduledFuture<?> scheduleWithFixedDelay(Runnable command, long initialDelay, long delay,
+                TimeUnit unit) {
+            return this.scheduled.scheduleWithFixedDelay(command, initialDelay, delay, unit);
+        }
+    }
 
     /** How many default factories were made: the number the next one's threads carry. */
     private static int pools;
@@ -44,11 +151,19 @@ public final class Executors {
     }
 
     public static ExecutorService newSingleThreadExecutor() {
-        return newFixedThreadPool(1, defaultThreadFactory());
+        return newSingleThreadExecutor(defaultThreadFactory());
     }
 
     public static ExecutorService newSingleThreadExecutor(ThreadFactory threadFactory) {
-        return newFixedThreadPool(1, threadFactory);
+        return new AutoShutdownDelegatedExecutorService(newFixedThreadPool(1, threadFactory));
+    }
+
+    public static ExecutorService unconfigurableExecutorService(ExecutorService executor) {
+        return new DelegatedExecutorService(executor);
+    }
+
+    public static ScheduledExecutorService unconfigurableScheduledExecutorService(ScheduledExecutorService executor) {
+        return new DelegatedScheduledExecutorService(executor);
     }
 
     public static ExecutorService newCachedThreadPool() {
@@ -69,11 +184,11 @@ public final class Executors {
     }
 
     public static ScheduledExecutorService newSingleThreadScheduledExecutor() {
-        return new ScheduledThreadPoolExecutor(1);
+        return new DelegatedScheduledExecutorService(new ScheduledThreadPoolExecutor(1));
     }
 
     public static ScheduledExecutorService newSingleThreadScheduledExecutor(ThreadFactory threadFactory) {
-        return new ScheduledThreadPoolExecutor(1, threadFactory);
+        return new DelegatedScheduledExecutorService(new ScheduledThreadPoolExecutor(1, threadFactory));
     }
 
     public static ExecutorService newThreadPerTaskExecutor(ThreadFactory threadFactory) {

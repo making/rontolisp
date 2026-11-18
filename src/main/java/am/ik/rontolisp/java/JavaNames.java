@@ -41,9 +41,12 @@ final class JavaNames {
 		return new LispSymbol(mangle(name));
 	}
 
-	/** The structure a class is. */
+	/**
+	 * The structure a class is, named as the class is at run time ({@code Outer$Inner},
+	 * {@code java.lang.ThreadLocal}): the name is what {@code Object.toString()} reads.
+	 */
 	static LispSymbol structure(JavaClass declaration) {
-		return symbol(declaration.lispName());
+		return symbol(declaration.binaryName);
 	}
 
 	/** The structure's predicate: {@code instanceof} of a class. */
@@ -67,7 +70,7 @@ final class JavaNames {
 	}
 
 	static LispSymbol accessor(JavaClass.Field field) {
-		return new LispSymbol(field.owner.lispName() + "." + mangle(field.name));
+		return new LispSymbol(field.owner.lispName() + "." + mangle(field.slot()));
 	}
 
 	/** A static field's global variable. */

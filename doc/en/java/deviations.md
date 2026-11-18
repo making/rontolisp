@@ -220,9 +220,7 @@ variable arity parameter and the one of a `catch` clause nothing reaches are.
 language leaves the number unspecified.
 
 **`hashCode` and `toString` of an object declaring neither** are an identity number of
-rontolisp's own, `Name@` and that number in hexadecimal. The name of a nested class is
-written with a dot there (`Outer.Inner@1f`), where `getClass().getName()` and a JDK write
-`Outer$Inner`. A `HashMap` keyed by such objects,
+rontolisp's own, `Name@` and that number in hexadecimal. A `HashMap` keyed by such objects,
 enum constants included, walks them in another order than a JDK, whose own order changes
 from run to run.
 
@@ -315,23 +313,23 @@ the JVM a field two threads read and write with neither may be read stale, as th
 allows. `volatile`, `synchronized`, `Thread.start` and `join` order what they order in the
 language.
 
-**A pool is not in every respect a JDK's.** `Executors.newSingleThreadExecutor()` and
-`newSingleThreadScheduledExecutor()` answer the pool itself, which a JDK wraps: there it
-is no `ThreadPoolExecutor`. A `ThreadPoolExecutor` has no `beforeExecute`, `afterExecute`
-or `terminated` to override, and of the setters only the handler's; a task put into
-`getQueue()` by the program waits for the next `execute`. A scheduled pool keeps its tasks
-in a table of its own, so its `getQueue()` is empty. A `ForkJoinPool` starts a thread
-whenever none is free for a task: its parallelism is a number it answers, 2 for
-`new ForkJoinPool()` and 1 for the common pool. An exception a task threw is thrown again
-as it is; a JDK throws a copy holding it when another thread ran the task.
+**A pool is not in every respect a JDK's.** A task put into `getQueue()` by the program
+waits for the next `execute`. A scheduled pool keeps its tasks in a table of its own, so
+its `getQueue()` is empty. `CompletableFuture.defaultExecutor()` answers the pool the
+stages run on, which is not the object `ForkJoinPool.commonPool()` answers. A
+`LongAccumulator` and a `DoubleAccumulator` hold one value, where a JDK folds the values
+of each thread apart and so asks for a function with the identity given. A `ForkJoinPool`
+starts a thread whenever none is free for a task: its parallelism is a number it answers,
+2 for `new ForkJoinPool()` and 1 for the common pool. An exception a task threw is thrown
+again as it is; a JDK throws a copy holding it when another thread ran the task.
 
 **A `ConcurrentHashMap` keeps the order a JDK 25 walks it in**, but for a table of 64
 chains or more in which nine keys share one chain.
 
 **A thread's state is never `BLOCKED`.** `getState` tells a thread that waits or sleeps;
 one waiting to enter a monitor is `RUNNABLE`. An uncaught-exception handler is asked for
-the threads a program starts, not for the thread of `main`. An `AtomicInteger` and an
-`AtomicLong` are no `Number`.
+the threads a program starts, not for the thread of `main`. An `AtomicInteger`, an
+`AtomicLong`, the adders and the accumulators are no `Number`.
 
 **A thread's number is rontolisp's own.** `threadId()` and the number in `toString()` count
 the threads of the program from 1.
@@ -344,14 +342,12 @@ Each of these is an error naming the construct and its position.
 - A class literal and `getClass()` as a value: each is read compared with a class and
   before `getName()` and `getSimpleName()`, a literal also as the lock of a `synchronized`
   statement. A class literal of a primitive or an array type.
-- A `switch` over a `long`, a `float`, a `double` or a `boolean`; a method reference through a
-  qualified `super` (`Interface.super::m`).
-- A field hiding one of a superclass.
+- A `switch` over a `long`, a `float`, a `double` or a `boolean`; a method reference and a
+  field through a qualified `super` (`Interface.super::m`, `Outer.super.x`).
 - A class extending `String`, `StringBuilder` or a box.
-- Of `java.util.concurrent`, what the [overview](index.md) does not list: stamped locks,
-  `Phaser`, the queues ordered by priority or by delay, `ConcurrentSkipListMap`,
-  `CountedCompleter`, the other atomic classes. A `Timer`'s `schedule` of a `Date`. Thread
-  groups, `sleep` and `join` of a `Duration`.
+- Of `java.util.concurrent`, what the [overview](index.md) does not list: the queues
+  ordered by priority or by delay, `ConcurrentSkipListMap`, the field updaters. A
+  `Timer`'s `schedule` of a `Date`. Thread groups, `sleep` and `join` of a `Duration`.
 - Any class or member of the library not listed in the [overview](index.md): streams
   (`java.util.stream`), `LinkedList`, `LinkedHashMap`, `TreeMap`, `Scanner`, files
   (`File`, `FileReader`, `java.nio.file`), `java.time`, `BigInteger`, `BigDecimal`,

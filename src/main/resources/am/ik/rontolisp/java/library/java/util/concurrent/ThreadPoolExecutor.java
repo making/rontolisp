@@ -9,7 +9,10 @@
 // the core number run, else it waits in the queue, else -- the queue full -- it is given
 // a new worker up to the most the pool may have, else the pool's handler is asked. A
 // SynchronousQueue holds nothing: a task waits in it only as long as it takes an idle
-// worker to wake, so the pool keeps such a task itself.
+// worker to wake, so the pool keeps such a task itself. beforeExecute and afterExecute
+// are asked only in a program one of whose classes declares one (hooks): afterExecute
+// is handed what the task threw, which takes a catch of every exception around each
+// task.
 package java.util.concurrent;
 
 import java.util.ArrayDeque;
@@ -66,19 +69,43 @@ public class ThreadPoolExecutor implements ExecutorService {
         }
     }
 
+    /** What runs a task between the two hooks around it. */
+    private interface Hooks {
+
+        void run(ThreadPoolExecutor pool, Thread thread, Runnable task);
+    }
+
+    /** Made in a program one of whose classes declares a hook, which alone holds the catch. */
+    private static final class Hooked implements Hooks {
+
+        public void run(ThreadPoolExecutor pool, Thread thread, Runnable task) {
+            pool.beforeExecute(thread, task);
+            try {
+                task.run();
+                pool.afterExecute(task, null);
+            }
+            catch (Throwable thrown) {
+                pool.afterExecute(task, thrown);
+                throw thrown;
+            }
+        }
+    }
+
     /** The workers made, one a task, before a task waits for a worker. */
-    private final int core;
+    private int core;
 
     /** The most workers the pool has. */
-    private final int most;
+    private int most;
 
     /** How long an idle worker above the core number waits for a task, in nanoseconds. */
-    private final long keepAlive;
+    private long keepAlive;
 
     /** Whether the workers up to the core number end as the others, for want of a task. */
     private boolean coreEnds;
 
-    private final ThreadFactory factory;
+    private ThreadFactory factory;
+
+    private final Hooks hooks = hooks();
 
     private RejectedExecutionHandler handler;
 
@@ -100,6 +127,11 @@ public class ThreadPoolExecutor implements ExecutorService {
     private int idle;
 
     private boolean shutdown;
+
+    /** Whether terminated() was called, and whether it has answered. */
+    private boolean closing;
+
+    private boolean over;
 
     private long completed;
 
@@ -157,6 +189,28 @@ public class ThreadPoolExecutor implements ExecutorService {
         this.handler = handler;
     }
 
+    /**
+     * A Hooked in a program one of whose classes declares beforeExecute or afterExecute,
+     * null in any other: answered where the program is lowered.
+     */
+    private static native Hooks hooks();
+
+    private static Hooks hooked() {
+        return new Hooked();
+    }
+
+    /** Asked on the worker's thread before it runs a task. */
+    protected void beforeExecute(Thread t, Runnable r) {
+    }
+
+    /** Asked on the worker's thread after a task: with what the task threw, or null. */
+    protected void afterExecute(Runnable r, Throwable t) {
+    }
+
+    /** Asked once, when the pool has ended. */
+    protected void terminated() {
+    }
+
     private static final class Worker implements Runnable {
 
         private final ThreadPoolExecutor pool;
@@ -185,7 +239,13 @@ public class ThreadPoolExecutor implements ExecutorService {
                     }
                     Runnable running = task;
                     task = null;
-                    running.run();
+                    Hooks hooks = this.pool.hooks;
+                    if (hooks == null) {
+                        running.run();
+                    }
+                    else {
+                        hooks.run(this.pool, this.thread, running);
+                    }
                     this.pool.ran();
                 }
             }
@@ -211,12 +271,16 @@ public class ThreadPoolExecutor implements ExecutorService {
             }
             else if (waits(command)) {
                 Worker rested = this.resting.poll();
-                if (rested == null) {
-                    notify();
-                }
-                else {
+                if (rested != null) {
                     this.workers.add(rested);
                     started = rested.thread;
+                }
+                else if (made == 0) {
+                    // a pool with no core worker: the one that takes the task out again
+                    started = hire(null, made);
+                }
+                else {
+                    notify();
                 }
             }
             else if (made < this.most) {
@@ -234,7 +298,7 @@ public class ThreadPoolExecutor implements ExecutorService {
         }
     }
 
-    /** A new worker whose first task is the one given: its thread, to start. */
+    /** A new worker whose first task is the one given, or with none yet: its thread, to start. */
     private Thread hire(Runnable command, int made) {
         Worker worker = new Worker(this, command);
         worker.thread = this.factory.newThread(worker);
@@ -272,7 +336,8 @@ public class ThreadPoolExecutor implements ExecutorService {
 
     /** The next task of a worker that ended one; null when the worker is to end. */
     private synchronized Runnable next(Worker worker) {
-        long deadline = System.nanoTime() + this.keepAlive;
+        long deadline = 0L;
+        boolean timed = false;
         while (true) {
             Runnable task = waiting();
             if (task != null) {
@@ -285,6 +350,11 @@ public class ThreadPoolExecutor implements ExecutorService {
             if (ending && this.keepAlive == 0) {
                 return null;
             }
+            if (ending && !timed) {
+                // the time runs from where the worker found that it is to end
+                deadline = System.nanoTime() + this.keepAlive;
+            }
+            timed = ending;
             this.idle++;
             try {
                 if (!ending) {
@@ -311,6 +381,10 @@ public class ThreadPoolExecutor implements ExecutorService {
         Thread started = null;
         synchronized (this) {
             this.workers.remove(worker);
+            if (thrown) {
+                // a task that threw is a task the pool is done with
+                this.completed++;
+            }
             if (thrown && !(this.shutdown && queued() == 0)) {
                 Worker next = new Worker(this, waiting());
                 next.thread = this.factory.newThread(next);
@@ -322,33 +396,60 @@ public class ThreadPoolExecutor implements ExecutorService {
                     started = next.thread;
                 }
             }
-            if (this.workers.isEmpty()) {
-                notifyAll();
-            }
         }
         if (started != null) {
             started.start();
         }
+        end();
     }
 
-    public synchronized void shutdown() {
-        this.shutdown = true;
-        this.resting.clear();
-        notifyAll();
+    /**
+     * The pool's end, once it is shut down and its last worker is gone: terminated() is
+     * asked on the thread that finds it so, outside the pool's monitor, and until it
+     * answers the pool is ending and has not ended.
+     */
+    private void end() {
+        synchronized (this) {
+            if (!this.shutdown || this.closing || !this.workers.isEmpty()) {
+                return;
+            }
+            this.closing = true;
+        }
+        try {
+            terminated();
+        }
+        finally {
+            synchronized (this) {
+                this.over = true;
+                notifyAll();
+            }
+        }
     }
 
-    public synchronized List<Runnable> shutdownNow() {
-        this.shutdown = true;
-        this.resting.clear();
+    public void shutdown() {
+        synchronized (this) {
+            this.shutdown = true;
+            this.resting.clear();
+            notifyAll();
+        }
+        end();
+    }
+
+    public List<Runnable> shutdownNow() {
         List<Runnable> waiting = new ArrayList<>();
-        Runnable task;
-        while ((task = waiting()) != null) {
-            waiting.add(task);
+        synchronized (this) {
+            this.shutdown = true;
+            this.resting.clear();
+            Runnable task;
+            while ((task = waiting()) != null) {
+                waiting.add(task);
+            }
+            for (Worker worker : this.workers) {
+                worker.thread.interrupt();
+            }
+            notifyAll();
         }
-        for (Worker worker : this.workers) {
-            worker.thread.interrupt();
-        }
-        notifyAll();
+        end();
         return waiting;
     }
 
@@ -356,8 +457,12 @@ public class ThreadPoolExecutor implements ExecutorService {
         return this.shutdown;
     }
 
+    public synchronized boolean isTerminating() {
+        return this.shutdown && !this.over;
+    }
+
     public synchronized boolean isTerminated() {
-        return this.shutdown && this.workers.isEmpty();
+        return this.over;
     }
 
     public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
@@ -366,7 +471,7 @@ public class ThreadPoolExecutor implements ExecutorService {
         }
         long deadline = Timing.deadline(timeout, unit);
         synchronized (this) {
-            while (!(this.shutdown && this.workers.isEmpty())) {
+            while (!this.over) {
                 if (!Timing.await(this, deadline)) {
                     return false;
                 }
@@ -379,24 +484,98 @@ public class ThreadPoolExecutor implements ExecutorService {
         return this.workers.size() + this.resting.size();
     }
 
-    public int getCorePoolSize() {
+    public synchronized int getCorePoolSize() {
         return this.core;
+    }
+
+    /** A larger number starts a worker for each task that waits, up to the difference. */
+    public void setCorePoolSize(int corePoolSize) {
+        ArrayList<Thread> started = new ArrayList<>();
+        synchronized (this) {
+            if (corePoolSize < 0) {
+                throw new IllegalArgumentException("corePoolSize must be non-negative");
+            }
+            if (corePoolSize > this.most) {
+                throw new IllegalArgumentException("corePoolSize must be less than or equal to maximumPoolSize");
+            }
+            int more = corePoolSize - this.core;
+            this.core = corePoolSize;
+            while (more-- > 0 && !this.shutdown && this.workers.size() + this.resting.size() < corePoolSize) {
+                Runnable task = waiting();
+                if (task == null) {
+                    break;
+                }
+                started.add(hire(task, this.workers.size() + this.resting.size()));
+            }
+            // an idle worker above the new number finds out that it is to end
+            notifyAll();
+        }
+        for (Thread thread : started) {
+            thread.start();
+        }
+    }
+
+    /** Starts a worker with no task yet, while fewer than the core number run: whether it did. */
+    public boolean prestartCoreThread() {
+        Thread started;
+        synchronized (this) {
+            int made = this.workers.size() + this.resting.size();
+            if (this.shutdown || made >= this.core) {
+                return false;
+            }
+            started = hire(null, made);
+        }
+        started.start();
+        return true;
+    }
+
+    public int prestartAllCoreThreads() {
+        int started = 0;
+        while (prestartCoreThread()) {
+            started++;
+        }
+        return started;
     }
 
     public synchronized int getActiveCount() {
         return this.workers.size() - this.idle;
     }
 
-    public int getMaximumPoolSize() {
+    public synchronized int getMaximumPoolSize() {
         return this.most;
+    }
+
+    public synchronized void setMaximumPoolSize(int maximumPoolSize) {
+        if (maximumPoolSize <= 0) {
+            throw new IllegalArgumentException("maximumPoolSize must be positive");
+        }
+        if (maximumPoolSize < this.core) {
+            throw new IllegalArgumentException("maximumPoolSize must be greater than or equal to corePoolSize");
+        }
+        this.most = maximumPoolSize;
+        notifyAll();
     }
 
     public synchronized int getLargestPoolSize() {
         return this.largest;
     }
 
-    public long getKeepAliveTime(TimeUnit unit) {
+    public synchronized long getKeepAliveTime(TimeUnit unit) {
         return unit.convert(this.keepAlive, TimeUnit.NANOSECONDS);
+    }
+
+    public synchronized void setKeepAliveTime(long time, TimeUnit unit) {
+        if (time < 0) {
+            throw new IllegalArgumentException("time must be non-negative");
+        }
+        if (time == 0 && this.coreEnds) {
+            throw new IllegalArgumentException("Core threads must have nonzero keep alive times");
+        }
+        if (unit == null) {
+            throw new NullPointerException("unit");
+        }
+        this.keepAlive = unit.toNanos(time);
+        notifyAll();
     }
 
     public synchronized void allowCoreThreadTimeOut(boolean value) {
@@ -415,8 +594,15 @@ public class ThreadPoolExecutor implements ExecutorService {
         return this.queue;
     }
 
-    public ThreadFactory getThreadFactory() {
+    public synchronized ThreadFactory getThreadFactory() {
         return this.factory;
+    }
+
+    public synchronized void setThreadFactory(ThreadFactory threadFactory) {
+        if (threadFactory == null) {
+            throw new NullPointerException("threadFactory");
+        }
+        this.factory = threadFactory;
     }
 
     public synchronized RejectedExecutionHandler getRejectedExecutionHandler() {
@@ -433,6 +619,15 @@ public class ThreadPoolExecutor implements ExecutorService {
     /** Takes a task that waits for a worker out of the queue. */
     public synchronized boolean remove(Runnable task) {
         return this.handed == null ? this.queue.remove(task) : this.handed.remove(task);
+    }
+
+    /** Takes the futures that were cancelled out of the queue. */
+    public synchronized void purge() {
+        for (Object waiting : this.handed == null ? this.queue.toArray() : this.handed.toArray()) {
+            if (waiting instanceof Future<?> future && future.isCancelled()) {
+                remove((Runnable) waiting);
+            }
+        }
     }
 
     public synchronized long getCompletedTaskCount() {

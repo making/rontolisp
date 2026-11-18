@@ -1,6 +1,7 @@
 package am.ik.rontolisp.java;
 
 import java.util.List;
+import java.util.Set;
 
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -83,6 +84,13 @@ interface JavaEmitter {
 		 * Java, found by its class, its name and how many arguments it takes.
 		 */
 		LispVal library(String className, String name, List<LispVal> arguments);
+
+		/**
+		 * Whether a class under a class of the library's Java source declares an instance
+		 * method of one of these names: what a member of that class asks before it pays
+		 * for calling them. The program is closed, so the answer is the program's.
+		 */
+		boolean declaresBelow(String className, Set<String> names);
 
 		/**
 		 * An array made of another's class, as {@code Arrays.copyOf} makes one: in a

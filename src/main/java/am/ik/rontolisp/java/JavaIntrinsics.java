@@ -5,6 +5,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispSymbol;
@@ -1597,6 +1598,12 @@ final class JavaIntrinsics {
 			return JavaForms.let(started, call.argument(0),
 					List.of(runtimeCall("thread-start", call.argument(1), call.argument(2), body)));
 		});
+		// afterExecute is handed what a pool's task threw: the catch of every exception
+		// around a task is made only in a program one of whose classes declares a hook
+		String pool = "java.util.concurrent.ThreadPoolExecutor";
+		natives.put(pool + ".hooks()",
+				(lowering, call) -> lowering.declaresBelow(pool, Set.of("beforeExecute", "afterExecute"))
+						? lowering.library(pool, "hooked", List.of()) : JavaForms.NIL);
 		// java.util.regex over the engine every front end shares: compile and matches are
 		// lowered where they are called, with the providers their pattern may need
 		String regex = PATTERN + ".";

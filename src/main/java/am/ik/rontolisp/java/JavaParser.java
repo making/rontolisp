@@ -1868,7 +1868,7 @@ final class JavaParser {
 				int at = current().offset();
 				String name = identifier();
 				if (!at("(")) {
-					throw unsupported("a field read through super", at);
+					return new Select(at, new JavaSyntax.Super(pos), name);
 				}
 				return new Call(at, null, name, arguments(), true, typeArguments);
 			}
@@ -1996,7 +1996,7 @@ final class JavaParser {
 					int named = current().offset();
 					String name = identifier();
 					if (!at("(")) {
-						throw unsupported("a field read through super", named);
+						throw unsupported("a field read through a qualified super", named);
 					}
 					expression = new Call(named, expression, name, arguments(), true, superArguments);
 					continue;

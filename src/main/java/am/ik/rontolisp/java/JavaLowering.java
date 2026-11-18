@@ -1073,13 +1073,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			if (field.isStatic) {
 				continue;
 			}
-			Field hidden = declaration.superclass == null ? null : field(declaration.superclass, field.name);
-			if (hidden != null && !hidden.isStatic) {
-				// a structure has one slot of a name
-				throw JavaClasses.unsupported(declaration.source, field.pos,
-						"a field hiding " + hidden.owner.simpleName() + "." + field.name);
-			}
-			structure.add(list(JavaNames.slot(field.name), defaultValue(field.type)));
+			structure.add(list(JavaNames.slot(field.slot()), defaultValue(field.type)));
 		}
 		out.add(list(structure));
 	}
@@ -3260,6 +3254,18 @@ final class JavaLowering implements JavaEmitter.Context {
 		throw new IllegalStateException(className + " has no " + name + " of " + arguments.size() + " arguments");
 	}
 
+	@Override
+	public boolean declaresBelow(String className, Set<String> names) {
+		JavaClass above = this.classes.library(className);
+		for (JavaClass declaration : List.copyOf(this.classes.all())) {
+			if (declaration != above && declaration.isSubclassOf(above) && declaration.methods.stream()
+				.anyMatch(method -> !method.isStatic && names.contains(method.name))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/**
 	 * A call of one of {@code Object}'s methods no class of the receiver's type declares.
 	 */
@@ -3425,6 +3431,16 @@ final class JavaLowering implements JavaEmitter.Context {
 				return new Typed(NIL, JavaType.Null.NULL);
 			case This self:
 				return thisValue(self.pos());
+			case JavaSyntax.Super above: {
+				// super.x: the field as the class above sees it, which one here may hide
+				if (this.staticContext) {
+					throw error(above.pos(), "non-static variable super cannot be referenced from a static context");
+				}
+				Typed self = thisValue(above.pos());
+				JavaClass superclass = this.currentClass.superclass;
+				return new Typed(self.form(),
+						superclass == null ? this.objectType : this.currentClass.supertype(superclass));
+			}
 			case JavaSyntax.ClassLiteral literal:
 				throw unsupported(literal.pos(), "a class literal but compared with a class or before getName()");
 			case Name name:
