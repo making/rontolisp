@@ -9,6 +9,11 @@ matched by running a program under a JDK.
 A Java program cannot serve HTTP today (`.kb/java-frontend.md`). Give it a server on all
 four backends. The client is `.todo/k03`; a test of the server may use it once it lands.
 
+**The primary target is `wasi:http`**: a `--component` build of a Java server program is a
+`wasi:http/incoming-handler` component that `wasmtime serve` (and wasmCloud) runs, as the
+`rontolisp:http-handler` directive's component leg already is (`.kb/clack.md`,
+`.kb/wasi-component.md`). The other backends follow the same program unchanged.
+
 ## API
 
 The JDK's own API is the goal; a rontolisp API only where the JDK's cannot be had.
@@ -27,11 +32,19 @@ The JDK's own API is the goal; a rontolisp API only where the JDK's cannot be ha
 - Lower onto `rontolisp:http-handler` / `%http-serve` (`.kb/http-server.md`, `.kb/clack.md`),
   adding no transport. The Clojure front end did the same: `ring.adapter.rontolisp` over
   `%http-serve` (`.kb/clojure-frontend.md`, "Ring adapter").
-- Transport limits already measured: `--native` serves through its runner and sends a
-  response whole, `Content-Length`-framed (no streaming response, so `sendResponseHeaders`
-  with length 0 cannot stream there); the component serves through `wasi:http`'s incoming
-  handler, where the host owns the socket. Decide what `create(InetSocketAddress, backlog)`,
-  the executor, `start` returning while the server runs, and `stop(delay)` mean there.
+- `wasi:http`: the host owns the socket and calls the component's `handle` per request.
+  Decide and record:
+  - when `main` runs (it builds the server and its contexts) relative to the first
+    `handle`, and what `create(InetSocketAddress, backlog)` (the address is the host's:
+    `wasmtime serve --addr`), the executor, `start` and `stop(delay)` mean there;
+  - state across requests: `wasmtime serve` may instantiate the component per request, so
+    a static field a handler updates need not survive to the next one. Measure, and say so
+    in `doc/*/java/deviations.md` if it does not;
+  - streaming: `wasi:http`'s outgoing body is a stream, so `sendResponseHeaders(code, 0)`
+    (chunked) and writes after the head can stream there. Measure whether the component leg
+    of `%http-serve` streams today; if it buffers, make it stream rather than refuse.
+- `--native` serves through its runner and sends a response whole, `Content-Length`-framed:
+  a chunked response arrives whole there (record it as a deviation, not a refusal).
 - A handler runs per request on a thread (`.kb/concurrent-served-requests.md`); check the
   Java front end's `Thread` and `synchronized` (`.kb/java-frontend.md`, "Threads") under it.
 
