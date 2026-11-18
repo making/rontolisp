@@ -99,7 +99,7 @@ exception.
   the Scheme front end's `SchemeCharacters`); `.todo/269` done on the host would make
   `isLetter` and `isDigit` the host's again.
 - **A program that throws or catches at all is ~47 KB of wasm** since j88 (60 KB
-  before); what is left is the pipeline's print seam, `.todo/j99`'s lead.
+  before); what is left is the pipeline's print seam, `.todo/k06`'s lead.
 - **A `BufferedReader` over `System.in` is 0.17 s over `IO.readln` in 200,000 lines on
   wasm** (1.06 against 0.89 s) now that the line comes whole: the rest is the reader's
   own test and the `indexOf` of a `\r`.

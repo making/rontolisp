@@ -27,9 +27,10 @@ program that throws carries: j88 (2026-11-18); a task at its time (a scheduled p
 members a class does not inherit, `super` to `Object`'s methods and the analysis of the
 `synchronized` regions a suspended thread can hold: j89 (2026-11-18); the members a probe
 of everyday code met refused, `Character` over the Unicode tables, a class compared with
-a class, and the UTF-16 charsets paid for only where named: j98 (2026-11-18); what comes
-after is `.todo/k00` (a thread suspended and resumed), `k01`, `k05` and `j99` (what j89,
-j98 and j88 left).
+a class, and the UTF-16 charsets paid for only where named: j98 (2026-11-18); checked
+exceptions, the catch clause nothing reaches, and an exit a cleanup takes on the JVM and
+wasm: j99 (2026-11-18); what comes after is `.todo/k00` (a thread suspended and resumed),
+`k01`, `k05` and `k06` (what j89, j98 and j99 left).
 
 ## Where it sits
 
@@ -382,9 +383,16 @@ program compiled to a class of the same name would collide with it.
 **What a compiler decides from the flow is decided after the lowering, per class, over the
 tree (`JavaFlow`), as a compiler's flow analysis follows its attributed tree:** reachability and
 normal completion (JLS 14.22), definite assignment and unassignment (16), effective finality
-(4.12.4). `lowerClass` runs `JavaFlow.check` once the class's members and static
+(4.12.4), and since j99 the checked exceptions a body throws (11.2: "Checked exceptions"
+below). `lowerClass` runs `JavaFlow.check` once the class's members and static
 initialization are lowered; a library class is not checked. Reported as the compiler reports,
-the first problem of the kind it reports first: reachability, then assignment, then captures.
+the first problem of the kind it reports first: reachability, then assignment, then
+exceptions, then captures; of one kind the first in the ORDER OF THE CLASS'S MEMBERS, the
+static initialization and a default constructor ahead of them (j99, asked of javac 25: a
+method written ahead of a constructor is reported first; until then every constructor went
+ahead of every method). A class with an error of typing gets no flow at all, and a class
+after one with a flow error is typed but not flowed, which is why the first error is all
+that is reported.
 
 - **What only typing knows comes from the lowering (`JavaFlow.Facts`)**, recorded by node
   identity: the variable each `Name` and `this.f` it resolved stands for (a local's declaring
@@ -1116,7 +1124,7 @@ virtual call can run --, classes used):
 - Not the language's: a run-time error inside an eager initialization surfaces before `main`
   (reported as the JDK reports an uncaught one), and an error the run time raises inside any
   initialization is neither wrapped in `ExceptionInInitializerError` nor remembered by the
-  class (stated in `deviations.md`, `.todo/j99`).
+  class (stated in `deviations.md`, `.todo/k06`).
 
 ## Exceptions (2026-11-17, j73; the entry and the catch: j82)
 
@@ -1250,7 +1258,15 @@ virtual call can run --, classes used):
   lazy class hold its condition and carry the classes of `RAISED` (the j73 entry's cost,
   40 KB of wasm); such an error passes as it came and the class stays as far as it got.
   Cost: `examples/java/shop` (one such class, threads) 303,997 -> 309,806 B of wasm with the
-  trace, 418,108 -> 412,215 B of class.
+  trace, 418,108 -> 412,215 B of class. **Marking the class unusable where the run time's
+  error leaves its initialization was measured and not made** (j99, 2026-11-18, the lead
+  of an `unwind-protect` with no handler, spelled in Java over a lazy class in a program
+  that throws nothing; wasm / class bytes): as lowered today 18,744 / 34,421; a `finally`
+  setting a flag 18,828 / 34,732; a later use throwing `NoClassDefFoundError` 50,092 /
+  77,358. The mark is free; the 31 KB are the thrown object at the later use, the j73
+  entry's cost again. What it would buy without them -- the later use raising the run
+  time's TEXT -- is a `NoClassDefFoundError` with no cause, after a first error that is
+  still not wrapped: `.todo/k06`.
 - **`charAt` is one read** (j88): `(let* ((c (%string-code s i))) (if (< c 0)
   (%java-string-index i s) c))`. `%string-code` (`LispNames.STRING_CODE`,
   [string-index-cost.md](string-index-cost.md)) answers the character's code, -1 outside
@@ -1278,14 +1294,92 @@ virtual call can run --, classes used):
   (`%condition-report-str`, `%signal-text`, `%seq-to-string`, `%subseq-runtime`, the string
   stream: 8.5 KB), the rest the program's classes and the run time. The first three are the
   pipeline's price for a condition class with a `:report` ([error-handling.md](error-handling.md),
-  "A condition's `:report` is what PRINTS it"), `.todo/j99`'s lead.
+  "A condition's `:report` is what PRINTS it"), `.todo/k06`'s lead.
 - **The run time's errors are the library's classes at every place a program can see one**
   (j88, probed against a JDK 25 on four backends): class, message, cause, `toString()`,
   the same object thrown again and as another's cause, through two clauses and a
   `finally`, to an uncaught-exception handler -- all a `catch` -- print a JDK's lines but
   the two stated messages. Nothing was changed; java-spec
   `a-lisp-error-reaches-the-catch-of-the-exception-it-is` holds the kept object.
-- **Checked exceptions are not checked** (`deviations.md`, `.todo/j99`).
+- **Checked exceptions are checked** (j99, 2026-11-18; JLS 11.2, every message, position
+  and order asked of javac 25 over 136 probe programs, 132 of them answered alike, kept
+  with the four that are not in
+  `.todo/artefacts/j99-java-front-end-what-the-charat-initializer-and-causes-slice-left/`).
+  Three parts:
+  - **The clauses.** The parser keeps `throws` (`JavaSyntax.Method.thrown`), the class
+    table resolves it (`JavaClass.Method.thrown`: classes and type variables; a type that
+    is no `Throwable` is `incompatible types: String cannot be converted to Throwable`).
+    An intrinsic member names its classes (`Method.raises`, `Builder.throwing`: `wait`,
+    `getBytes(String)`, `new String(byte[], String)`), read where a call of it is
+    lowered so no program holds them for nothing. Resolving a clause where its class is
+    declared loads the exception classes earlier than before: the ORDER of the class
+    table moved (structures, eager initializations), nothing was added -- of 25 programs
+    measured 17 kept their size, 8 moved by at most 43 B of wasm and 14 B of class
+    either way, and one whose only exceptions are in clauses is byte-identical. **What
+    makes the check safe is
+    `JavaLoweringTest#theLibrarysSourceIsJavaAJdkCompiles`**: every public method and
+    constructor of the running JDK's class of each library class's name is asked by
+    reflection which checked exceptions it throws, and the member a call reaches here
+    (own or inherited, by erased signature) has to declare the same. Over 2,000 members
+    compared; the five it found were the intrinsics above. 117 JDK members have a
+    namesake here of the same arity and other parameter types: overloads the library
+    lacks (a `CharBuffer`, a file name), refused where a program calls them.
+  - **Typing** (`JavaLowering`, an error of the class before any flow): an override
+    throwing more (`m() in C cannot override m() in B; overridden method does not throw
+    X`, `cannot implement` for a class's method under an interface's;
+    `overriddenThrows`), a method inherited from the superclass implementing an
+    interface's (`inheritedThrows`, said at the class's keyword), and a method
+    reference whose method throws what its function type does not (`incompatible thrown
+    types X in functional expression`, at the reference's start).
+  - **The flow** (`JavaFlow`, kind `THROWN`). The lowering records by node what each
+    call throws (`Facts.raises`: the clause through the call's site and the type
+    arguments found, `thrownBy`; a `throw`'s static type; a catch clause's classes; what
+    a lambda's function type lets through, `lets`), the walk keeps a list of
+    `(type, position)` per body. `try`: a list of its own; a clause takes what is under
+    its classes, its parameter then HOLDING those (and its own class where the block
+    throws a superclass of it), which is what `throw e` throws while no assignment of
+    `e` is in the clause (asked by a walk of the clause's body that reports nothing,
+    `reassigns`); what is left and what the clauses throw join the list around unless a
+    `finally` cannot complete normally. Roots: a method's and a constructor's clause, a
+    lambda's function type, nothing for a static initialization; instance initializers
+    are walked with every constructor; an anonymous class's throw where it is made, less
+    what the constructor it hands its arguments to throws (the creation throws that).
+    A step of a session throws what it likes, as a jshell snippet does.
+  - **What the answers showed that the specification does not say**: the position is a
+    call's `(`, a creation's `new`, a `throw`, the body's `{` for a `super()` not
+    written, the class's keyword for `in default constructor`, the resource's variable
+    for `close()`, the `catch` for a clause and the alternative for a multi-catch. In
+    one body the clauses' errors and a lambda's come where the walk meets them and the
+    body's own at its end. `exception X has already been caught` is the flow's, for
+    unchecked classes too. A clause all of whose exceptions were taken before is a
+    WARNING (`unreachable catch clause`, printed with `-Xlint:none` too): through
+    `JavaWarnings.warn`, on the unchecked warnings' path.
+  - **A type parameter in a `throws` clause** (JLS 18.1.3, 18.2.5, 18.4): one nothing
+    says anything of is `RuntimeException` where its bounds allow (`settled`: no checked
+    exception), else its bound; a lambda or a method reference given for a function type
+    whose clause names it bounds it from below by what its body or its method throws
+    (`throwsOf`, after the argument is lowered; `JavaFlow.thrown` walks the lambda's body
+    alone), several by their lub. Read from the parameter's DECLARED type: the type the
+    inference has so far would fix the parameter at the first lambda's exception. What
+    the lambda may throw is recorded again once the call's solution is known. javac's
+    inference reads a catch parameter of a clause AROUND the lambda as its declared
+    type, not what it holds (`call(() -> { throw e; })` is `unreported exception
+    Exception`), so the walk of a lambda alone does the same; an anonymous class's
+    initializer reads it as what it holds (`Facts.rethrown`, `holds` walking the `try`
+    block where the walk did not come through it).
+  - **A charset's name written as a constant** makes the lowering call the member taking
+    the `Charset` (`charsetsNamed`); the call still throws what the member taking the
+    name does (`UnsupportedEncodingException`), or a valid `catch` of it would be
+    refused.
+  - **Not as javac**: a local class's flow is checked where it is lowered, ahead of an
+    earlier method of the class around it (one error is reported, so it shows only in a
+    program with two). `Object.clone()` and `finalize()` are no members here. A type
+    variable thrown is named without the `where` lines javac adds.
+- **An exit a cleanup takes** (j99): `try { return a(); } finally { return 4; }` is
+  `(block f (unwind-protect (return-from f ..) (return-from f 4)))`, which the JVM backend
+  compiled without end -- each exit inlined the cleanup with its region still open
+  ([error-handling.md](error-handling.md), Phase 1). The first corpus program with a
+  `return` in both met it.
 - **Measured** (2026-11-17, Linux x86-64, GraalVM JDK 25.0.5, wasmtime 49, best of three; JVM /
   precompiled wasm seconds, then `.wasm` / `.class` bytes; before -> after):
 
@@ -1339,9 +1433,8 @@ virtual call can run --, classes used):
 
   The programs and how each variant was made:
   `.todo/artefacts/j88-java-front-end-what-the-uncaught-report-and-catch-slice-left/`.
-  What is left of the list j73 made is `.todo/j99`'s: checked exceptions, the host's
-  failures in an initializer, `StackOverflowError`, the `NullPointerException` message,
-  the frames.
+  What is left of the list j73 made is `.todo/k06`'s: the host's failures in an
+  initializer, `StackOverflowError`, the `NullPointerException` message, the frames.
 - **`getStackTrace()` answers an empty array, after `setStackTrace` too** (j98). A slot
   of `Throwable` holding what a program set was 275 B of wasm in every program that
   throws (a list program 124,032 -> 124,287, one catching its own exception 56,768 ->
@@ -1853,7 +1946,8 @@ another package ("A program of several files"), assignment to a `final` field or
 what the flow decides ("The flow"): unreachable statements, a missing `return`, definite
 assignment and unassignment of locals and blank final fields, effectively final captures; a
 written type argument outside its parameter's bound and a field written through `? extends`
-(j78). Warned: the unchecked warnings ("Warnings"). Not checked: checked exceptions. A value read
+(j78); checked exceptions (j99: "Exceptions"). Warned: the unchecked warnings ("Warnings")
+and a catch clause nothing reaches. A value read
 through a type argument is trusted (no cast where it is used: measured below, "j78"), and a
 store into an array of references is not checked (measured: "The class of an array"). The run time's exceptions are the
 language's, but a `NullPointerException` has no message, a `ClassCastException` says nothing
@@ -1960,4 +2054,14 @@ the standard input case; `JavaLoweringTest`'s refusals and, in
 `theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`, a charset named by a constant
 reaching no `Utf16` where a computed name does. A corpus program holding a surrogate
 with no partner makes it with `new String(char[])`, never as a constant (wasm reads a
-constant's as `?`).
+constant's as `?`). j99: the 13 `refused:` cases from
+`a-checked-exception-thrown-and-neither-caught-nor-declared` to
+`a-throws-clause-of-no-throwable`, `checked` in
+`try-catch-finally-over-one-condition-holding-the-thrown-object` (what must be ACCEPTED:
+the rethrow, the inferred clause, `close()`, a `finally` that drops, the charset name),
+the last warning of `the-unchecked-warnings-are-printed-before-the-program-runs`,
+`JavaLoweringTest#anErrorTheLoweringDependsOnIsReportedAtItsPosition` (the columns) and
+`#theLibrarysSourceIsJavaAJdkCompiles` (the clauses against the JDK's),
+`RontoLispCliStreamsTest#aJavaFileRunsCompilesAndIsRefusedWhereItCannot` (a session's
+step and a session's method), ci-spec
+`a-cleanup-a-return-from-runs-is-outside-every-handler-it-left` (a cleanup's own exit).
