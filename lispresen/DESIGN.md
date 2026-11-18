@@ -4,7 +4,7 @@ lispresen turns a slide deck written as S-expressions into one HTML file. It is 
 rontolisp and runs unchanged on the interpreter, the JVM (`.class` / `.jar`), WASM (WASI
 Preview 1 module and WASI 0.3 component) and in a browser (a `--no-wasi` reactor). Two
 features set it apart: it decides font sizes and placement itself, so every slide stays
-readable from the back of the room, and Lisp, Scheme, Clojure and Starlark code on a
+readable from the back of the room, and Lisp, Scheme, Clojure, Starlark and Java code on a
 slide can be edited and run during the talk on rontolisp's own WebAssembly runtime.
 
 Decks are written in Japanese. Line breaking, measurement and fonts are designed for
@@ -1269,8 +1269,9 @@ to 10, and of a Japanese text.
 
 ## Runnable code
 
-A `code` block whose `:lang` is `"lisp"`, `"scheme"`, `"clojure"`, `"starlark"` or
-`"star"` is runnable unless it says `:run nil` or the deck says `:runtime :none`.
+A `code` block whose `:lang` is `"lisp"`, `"scheme"`, `"clojure"`, `"starlark"`
+(`"star"`) or `"java"` is runnable unless it says `:run nil` or the deck says
+`:runtime :none`.
 
 ### Runtime
 
@@ -1339,14 +1340,16 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
   the next. `:fresh t` runs the block as a
   whole program on a new interpreter instead (`rontoRunProgram`, with `:stdin "..."` as
   its standard input). The presenter window has a runtime reset.
-- Starlark is a file language and has no persistent environment: a block is read as one
-  whole program and run on a fresh interpreter (`rontoRunProgram`), as a `starlark` cell
-  on the documentation site is (`.kb/documentation-site.md`), so it shows what the
-  program prints and `:fresh` states nothing new. A definition therefore does not carry
-  to another slide; a block that ends with an expression prints nothing unless it calls
-  `print`. It is the runtime's experimental front end, so a construct outside what
-  `.kb/starlark-frontend.md` covers is reported by the run, not at render time: lispresen
-  lays the block out and colors it whichever the runtime's subset holds.
+- Starlark and Java are file languages and have no persistent environment: a block is
+  read as one whole program and run on a fresh interpreter (`rontoRunProgram`), as a
+  `starlark` or `java` cell on the documentation site is (`.kb/documentation-site.md`),
+  so it shows what the program prints and `:fresh` states nothing new. A definition
+  therefore does not carry to another slide; a block that ends with an expression prints
+  nothing unless it prints it (`print`, `IO.println`). Both are the runtime's experimental
+  front ends, so a construct outside what `.kb/starlark-frontend.md` and
+  `.kb/java-frontend.md` cover is reported by the run, not at render time: lispresen lays
+  the block out and colors it whichever the runtime's subset holds. A Java block is a
+  compact source file or classes whose first one has a `main`.
 - What is shown is what the playground shows: the printed output, then the echoed
   values; a result starting with `ERROR:` is shown in the error style.
 
@@ -1411,15 +1414,16 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
   its line, so a stray quote colors one line at most. It is no grammar: enough to set
   comments, strings and keywords apart from the back of the room. Only colors change, so
   the widths, the fit solver and the layout are the monospace table's as for any code;
-  `:steps`, `:at` and `:morph` work on these blocks as on Lisp. Every one but starlark is
-  never run, whatever `:run` says, and not editable; any other `:lang` is plain `code-fg`
-  text. Starlark is the runnable entry of this table and the one language outside the
-  Lisp tokenizer that is editable: the player script carries its rules too, for the
-  editor. Verified 2026-11-17 in Chrome 157 through DevTools: the editor's markup for a
-  starlark block equals the build's token for token, and Run on a block printing `f(21)`
-  showed `42` over the hosted runtime. The other languages were checked 2026-10-24 in
-  Chrome: Java, Python, shell, SQL, JSON and YAML blocks in each built-in theme, the
-  runtime check making no correction.
+  `:steps`, `:at` and `:morph` work on these blocks as on Lisp. Every one but starlark
+  and java is never run, whatever `:run` says, and not editable; any other `:lang` is
+  plain `code-fg` text. Starlark and java are the runnable entries of this table and the
+  two languages outside the Lisp tokenizer that are editable: the player script carries
+  their rules too, for the editor. Verified 2026-11-18 in Chrome 157 through DevTools: the
+  editor's markup for a starlark and for a java block equals the build's token for token,
+  and Run showed `42` for a starlark program printing `6 * 7` and `6` for a java block
+  printing `IO.println(6)` over the hosted runtime. The other languages were checked
+  2026-10-24 in Chrome: Java, Python, shell, SQL, JSON and YAML blocks in each built-in
+  theme, the runtime check making no correction.
 - A `console` block is a shell transcript: a line starting with `$ ` is a command, its
   `$` in the keyword color, and every other line is output, in the comment color. It is
   never runnable. A command line is set on one line like code; an output line longer

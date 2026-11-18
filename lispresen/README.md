@@ -47,7 +47,7 @@ a few slides showing the main forms, each with a comment on how it is written.
 | `"text"`, `(p [:step t] inline...)` | a paragraph; `:step t` on it or on any block below but a list reveals the whole block on a page advance (below) |
 | `(lead inline...)` | a paragraph in the muted color, e.g. an introduction above columns |
 | `(ul [:step t] item...)`, `(ol ...)` | a list; each argument is one item: a string, an inline form or `(li inline... [list])` for text mixed with inline forms, and a list right after an item nests under it. `:step t` reveals one item per page advance (below) |
-| `(code [:lang "lisp"] "text")` | a code block; the common indentation is removed. `lisp`, `scheme`, `clojure`, `starlark` (`star`) are highlighted and runnable (below); a `starlark` block runs as a whole program, so it shows what it prints; `console` is a shell transcript: `$ ` lines are commands, the other lines output, which wraps at the panel's edge; `java`, `kotlin`, `javascript` (`js`), `typescript` (`ts`), `c`, `cpp`, `go`, `rust`, `python` (`py`), `bash` (`sh`, `shell`, `zsh`), `sql`, `json` and `yaml` (`yml`) are highlighted (comments, strings, keywords, numbers and constants; JSON and YAML keys) and never run; any other `:lang` is plain |
+| `(code [:lang "lisp"] "text")` | a code block; the common indentation is removed. `lisp`, `scheme`, `clojure`, `starlark` (`star`) and `java` are highlighted and runnable (below); a `starlark` or `java` block runs as a whole program, so it shows what it prints; `console` is a shell transcript: `$ ` lines are commands, the other lines output, which wraps at the panel's edge; `kotlin`, `javascript` (`js`), `typescript` (`ts`), `c`, `cpp`, `go`, `rust`, `python` (`py`), `bash` (`sh`, `shell`, `zsh`), `sql`, `json` and `yaml` (`yml`) are highlighted (comments, strings, keywords, numbers and constants; JSON and YAML keys) and never run; any other `:lang` is plain |
 | `(code :file "src/fib.lisp" [:lines (4 6)] [:lang ...])` | a code block whose text is a UTF-8 file beside the deck, or its lines 4 to 6; `:lang` defaults by extension (`.lisp`, `.scm`, `.clj`, `.star`, `.bzl` and their variants, and `.java`, `.kt`, `.js`, `.ts`, `.c`, `.h`, `.cpp`, `.go`, `.rs`, `.py`, `.sh`, `.sql`, `.json`, `.yaml`, `.yml` and the like) |
 | `(code :steps ("(defun" (3 4) ("x" "y")) ...)` | brings lines forward one page advance at a time and fades the rest: a string names the first line holding it, `(3 4)` lines 3 to 4 of the block as shown, a list several of them |
 | `(quote [:cite "who"] inline...)` | a quotation |
@@ -510,8 +510,8 @@ standard output. The browser editor and `serve` do not export PPTX: they have no
 
 ## Runnable code
 
-A `code` block in `lisp`, `scheme`, `clojure` or `starlark` (`star`) runs in the deck:
-click it (or press `E`)
+A `code` block in `lisp`, `scheme`, `clojure`, `starlark` (`star`) or `java` runs in the
+deck: click it (or press `E`)
 to edit, `Ctrl+Enter` or Run to run, Reset to restore it. The output opens in a panel over
 the slide, so running code takes no room from it; long output scrolls (wheel, or `↑` /
 `↓`), and × or `Esc` closes the panel. Run and Reset sit in the panel's top-right corner;
@@ -525,16 +525,24 @@ next.
   (map square (range 10))")
 ```
 
-A `starlark` block is a whole program, as a `starlark` cell on the documentation site is:
+A `starlark` or `java` block is a whole program, as a `starlark` or `java` cell on the
+documentation site is:
 it runs on a fresh interpreter and shows what it prints, so a definition does not carry
-to another slide and a block that ends with an expression shows nothing. It is
-rontolisp's experimental front end, so what the front end covers is what runs.
+to another slide and a block that ends with an expression shows nothing. Both are
+rontolisp's experimental front ends, so what the front end covers is what runs; a Java
+block is a compact source file or classes whose first one has a `main` (`IO.println`
+prints).
 
 ```lisp
 (code :lang "starlark" "
   def fib(n):
       return n if n < 2 else fib(n - 1) + fib(n - 2)
   print(fib(20))")
+
+(code :lang "java" "
+  void main() {
+    IO.println(6 * 7);
+  }")
 ```
 
 | Option | Meaning |

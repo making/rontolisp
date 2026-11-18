@@ -220,8 +220,8 @@ presenter window (notes, timer), `E` or a click edits runnable code, `Ctrl+Enter
 - Every `image` and `video` file exists beside the deck (or the deck was rendered with
   `--embed`), and every one has `:alt`.
 - The title slide (`:title`, `:author`, `:date`) and the agenda read as intended.
-- Runnable code (`:lang "lisp"`, `"scheme"`, `"clojure"`, `"starlark"`) loads a 35 MB
-  runtime from the
+- Runnable code (`:lang "lisp"`, `"scheme"`, `"clojure"`, `"starlark"`, `"java"`) loads a
+  35 MB runtime from the
   network when the deck opens. If the talk does not run code live, use `:run nil` on the
   block or `:runtime :none` on the deck.
 - Tell the user the output path, how to present (open in a browser, `F`, `P`), and any

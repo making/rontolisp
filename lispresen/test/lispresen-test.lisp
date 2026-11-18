@@ -172,6 +172,14 @@ widens its first and last character"
           (ok (contains html "class=\"codebox runnable\""))
           (ok (contains html "<span class=\"hl-k\">def</span>"))
           (ok (not (contains html "<span class=\"hl-d\">")))))
+      ;; Java runs as a whole program too, in the Java subset's own syntax.
+      (let ((html
+             (lispresen:render
+              "(slide :title \"t\" (code :lang \"java\" \"class A { static void main() { IO.println(6); } }\"))")))
+        (ok (contains html "class=\"codebox runnable"))
+        (ok (contains html "data-lang=\"java\""))
+        (ok (contains html "<span class=\"hl-k\">class</span>"))
+        (ok (contains html "<span class=\"hl-n\">6</span>")))
       ;; A console's output wraps at the panel's edge instead of stepping the code down:
       ;; 300 characters at 44px take 5 rows of 61.
       (let ((html
