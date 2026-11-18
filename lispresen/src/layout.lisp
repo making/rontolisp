@@ -112,9 +112,9 @@ top right corner.")
     (when (item-sublist it) (prepare-list (item-sublist it)))))
 
 (defparameter *runnable-langs*
-  '("lisp" "scheme" "clojure" "starlark" "star")
-  "Languages the runtime runs. Starlark is not a Lisp, so it is tokenized by the rules of
-its own syntax (`highlight.lisp`), not as a Lisp form.")
+  '("lisp" "scheme" "clojure" "starlark" "star" "java")
+  "Languages the runtime runs. Starlark and Java are not Lisp, so they are tokenized by
+the rules of their own syntax (`highlight.lisp`), not as a Lisp form.")
 
 (defun runnable-lang-p (b)
   "True when the code block B is in a language the runtime runs. Code in any other

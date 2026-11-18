@@ -184,33 +184,43 @@ else if(c===BS)emit('s',tend(Math.min(n,i+2)));
 else if(delim(c))emit(null,i+1);
 else{j=tend(i);emit(cls(j),j);}}
 return o;}
-var SQ=String.fromCharCode(39),TQ=DQ+DQ+DQ,TS=SQ+SQ+SQ,
-SKW=' and break continue def elif else for if in lambda load not or pass return while ',
-SCONST=' True False None ';
-function starWord(c){var x=c.charCodeAt(0);return x>=128||(c>='0'&&c<='9')||(c>='A'&&c<='Z')||(c>='a'&&c<='z')||c==='_';}
-function highlightStar(t){var n=t.length,i=0,o='';
+var SQ=String.fromCharCode(39),TQ=DQ+DQ+DQ,TS=SQ+SQ+SQ;
+var JAVA={line:[['//']],block:[['/*','*/']],strings:[[TQ,TQ,1,1],[DQ,DQ,0,0]],chars:1,word:'_$',
+kw:' abstract assert boolean break byte case catch char class const continue default do double else enum extends final finally float for goto if implements import instanceof int interface long native new non-sealed package permits private protected public record return sealed short static strictfp super switch synchronized this throw throws transient try var void volatile while yield ',
+kon:' true false null '};
+var STAR={line:[['#']],block:[],strings:[[TQ,TQ,1,1],[TS,TS,1,1],[DQ,DQ,0,0],[SQ,SQ,0,0]],chars:0,word:'_',
+kw:' and break continue def elif else for if in lambda load not or pass return while ',
+kon:' True False None '};
+function ruleWord(c,R){var x=c.charCodeAt(0);return x>=128||(c>='0'&&c<='9')||(c>='A'&&c<='Z')||(c>='a'&&c<='z')||R.word.indexOf(c)>=0;}
+function highlightRules(t,R){var n=t.length,i=0,o='';
 function emit(k,e){var s=esc(t.slice(i,e));o+=k?'<span class=hl-'+k+'>'+s+'</span>':s;i=e;}
 function at(s,j){return t.substr(j,s.length)===s;}
-function strend(j,open,escaped){j+=open.length;
-for(;;){if(j>=n)return n;if(escaped&&t[j]===BS){j=Math.min(n,j+2);continue;}
-if(at(open,j))return j+open.length;if(open.length===1&&t[j]===NL)return j;j++;}}
-while(i<n){var c=t[i],e,j;
-if(c==='#'){e=t.indexOf(NL,i);emit('c',e<0?n:e);}
-else if(at(TQ,i))emit('s',strend(i,TQ,true));
-else if(at(TS,i))emit('s',strend(i,TS,true));
-else if(c===DQ)emit('s',strend(i,DQ,false));
-else if(c===SQ)emit('s',strend(i,SQ,false));
-else if(starWord(c)){j=i+1;var num=c>='0'&&c<='9';
-while(j<n&&(starWord(t[j])||(num&&t[j]==='.'&&j+1<n&&t[j+1]>='0'&&t[j+1]<='9')))j++;
-var w=t.slice(i,j);emit(SKW.indexOf(' '+w+' ')>=0?'k':SCONST.indexOf(' '+w+' ')>=0?'n':num?'n':null,j);}
+function first(list){for(var q=0;q<list.length;q++)if(at(list[q][0],i))return list[q];return null;}
+function ssend(j,sp){var open=sp[0],close=sp[1],esc=sp[2],multi=sp[3];j+=open.length;
+for(;;){if(j>=n)return n;if(esc&&t[j]===BS){j=Math.min(n,j+2);continue;}
+if(at(close,j))return j+close.length;if(!multi&&t[j]===NL)return j;j++;}}
+function cend(){if(i+1<n&&t[i+1]===BS){if(i+3<n){var e=t.indexOf(SQ,i+3),lim=Math.min(n,i+12),nl=t.indexOf(NL,i);
+if(e>=0&&e<lim&&(nl<0||nl>=e))return e+1;}return 0;}
+if(i+2<n&&t[i+2]===SQ&&t[i+1]!==SQ&&t[i+1]!==NL)return i+3;return 0;}
+while(i<n){var c=t[i],e,j,bl,st;
+if(first(R.line)){e=t.indexOf(NL,i);emit('c',e<0?n:e);}
+else if((bl=first(R.block))){e=t.indexOf(bl[1],i+bl[0].length);emit('c',e<0?n:e+bl[1].length);}
+else if((st=first(R.strings))){emit('s',ssend(i,st));}
+else if(R.chars&&c===SQ&&(e=cend()))emit('s',e);
+else if(ruleWord(c,R)){j=i+1;var num=c>='0'&&c<='9';
+while(j<n&&(ruleWord(t[j],R)||(num&&t[j]==='.'&&j+1<n&&t[j+1]>='0'&&t[j+1]<='9')))j++;
+var w=t.slice(i,j);emit(R.kw.indexOf(' '+w+' ')>=0?'k':R.kon.indexOf(' '+w+' ')>=0?'n':num?'n':null,j);}
 else emit(null,i+1);}
 return o;}
-function hl(b,t){var l=(b.dataset.lang||'').toLowerCase();return l==='starlark'||l==='star'?highlightStar(t):highlight(t);}
+function hl(b,t){var l=(b.dataset.lang||'').toLowerCase();
+if(l==='starlark'||l==='star')return highlightRules(t,STAR);
+if(l==='java')return highlightRules(t,JAVA);
+return highlight(t);}
 var orig=[],state=[],rt='loading',why='',gen=0,worker=null,busy=-1,queue=[],timer=null,editing=null;
 var base=cfg.runtime;try{base=new URL(base,location.href).href;}catch(e){}if(base.slice(-1)!=='/')base+='/';
 function workerMain(B){self.rontoFetchBroker=true;Promise.resolve().then(function(){var c=new GraalVM.Config();c.wasm_path=B+'rontoplayground.js.wasm';return GraalVM.run([],c);})
 .then(function(){self.onmessage=function(e){var m=e.data,v;try{rontoSetLanguage(m.lang);
-v=(m.fresh||m.lang==='starlark')?rontoRunProgram(m.src,m.stdin):rontoEval(m.src);}
+v=(m.fresh||m.lang==='starlark'||m.lang==='java')?rontoRunProgram(m.src,m.stdin):rontoEval(m.src);}
 catch(x){v='ERROR:'+(x&&x.message||x);}postMessage({type:'result',id:m.id,v:v});};postMessage({type:'ready'});})
 .catch(function(x){postMessage({type:'fail',error:String(x)});});}
 function broker(m){var i32=new Int32Array(m.sab,0,2),S=String.fromCharCode(1),hs=(m.reqHeaders||'').split(NL),h={},k;

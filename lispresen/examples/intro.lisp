@@ -156,7 +156,7 @@
 (slide :title "ほかの言語のコード" :kicker "書き方"
   (p (tt ":lang") " が " (tt "java") "、" (tt "python") "、" (tt "bash") "、"
      (tt "sql") "、" (tt "json") " などなら、その言語の規則で色を付ける。"
-     "動かせるのは Lisp、Scheme、Clojure だけ。")
+     "動かせるのは Lisp、Scheme、Clojure、Starlark、Java。")
   (sexp "
     (code :lang \"java\" \"
       long square(long x) {
@@ -169,6 +169,9 @@
       // the same function in Java
       static long square(long x) {
         return x * x;
+      }
+      void main() {
+        IO.println(square(12));
       }"))
   (column
     (code :lang "python" "
