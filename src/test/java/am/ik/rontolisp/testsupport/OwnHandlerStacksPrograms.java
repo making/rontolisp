@@ -70,7 +70,9 @@ public final class OwnHandlerStacksPrograms {
 	 * the turn its caller hands out, not after a timer: on the interpreter and the JVM it
 	 * resumes in parallel with its caller, so a timer raced the caller's read and the
 	 * other holder's {@code push}. Last, an await of a timer an await has already
-	 * resolved stays in the eager part, so the body's exit leaves the call.
+	 * resolved stays in the eager part, so the body's exit leaves the call, and an await
+	 * of a fresh timer ends it even at 0 ms, so a body polling a variable its caller sets
+	 * after the call lets the caller run.
 	 */
 	public static final String SUSPENDING = """
 			(define-condition own-c (error) ())
@@ -136,6 +138,14 @@ public final class OwnHandlerStacksPrograms {
 			         (block out
 			           (funcall (rontolisp:async-lambda () (rontolisp:await tick) (return-from out :left)))
 			           :stayed)))
+			(defvar *own-flag* nil)
+			(rontolisp:async-defun own-spin ()
+			  (dotimes (i 1000 :stuck)
+			    (when *own-flag* (return :spun))
+			    (rontolisp:await (rontolisp:wait-for 0))))
+			(let ((f (own-spin)))
+			  (setq *own-flag* t)
+			  (print (rontolisp:await f)))
 			""";
 
 	/** The printed lines of {@link #SUSPENDING}. */
@@ -152,7 +162,8 @@ public final class OwnHandlerStacksPrograms {
 			:LEFT
 			:THROWN
 			(NIL T)
-			:LEFT""";
+			:LEFT
+			:SPUN""";
 
 	private OwnHandlerStacksPrograms() {
 	}

@@ -4884,22 +4884,24 @@ public final class WasmLispCompiler implements LispCompiler {
 		// (future . data))) entries -- kind 0 = subtask, kind 1 = in-flight stream
 		// read), the CURRENT task's waitable-set handle, the read-buffer free list,
 		// the CURRENT task record (null at a synchronous boundary), the task-record
-		// list of the callback driver and its id counter, after the EH depth counter
-		// (asyncMode implies ehMode). Every non-async module is byte-identical to a
-		// build that never knew about them.
+		// list of the callback driver and its id counter, and the next-turn list (the
+		// futures of host calls that returned at once, settled by the scheduler's next
+		// turn), after the EH depth counter (asyncMode implies ehMode). Every non-async
+		// module is byte-identical to a build that never knew about them.
 		int schedRegistryGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 1 : -1;
 		int schedSetGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 2 : -1;
 		int schedReadFreeGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 3 : -1;
 		int currentTaskGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 4 : -1;
 		int tasksGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 5 : -1;
 		int taskSeqGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 6 : -1;
+		int schedNextTurnGlobalIndex = this.asyncMode ? ehDepthGlobalIndex + 7 : -1;
 		// Serve mode: the init-once flag (a mut i32 = 0) the handle wrapper checks. A
 		// serve component's `run` is never lifted, so nothing else executes the top
 		// level (defvar/defparameter globals, library state, user top-level forms);
 		// the first handle call runs _start under this flag instead. Appended after
 		// every other global so non-serve output is byte-identical (serve implies
-		// asyncMode, so taskSeqGlobalIndex is always valid here).
-		int serveInitGlobalIndex = this.serve ? taskSeqGlobalIndex + 1 : -1;
+		// asyncMode, so schedNextTurnGlobalIndex is always valid here).
+		int serveInitGlobalIndex = this.serve ? schedNextTurnGlobalIndex + 1 : -1;
 		// The re-entry guard flag (a mut i32) of a module whose host import may suspend
 		// (hostMaySuspend above): every export wrapper sets it on entry and clears it on
 		// return, and a second entry -- a call arriving while the first is parked on the
@@ -4907,7 +4909,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		// allocator and the shallow special bindings. Only when the module both can
 		// suspend and exports something, so every other module is byte-identical.
 		int lastModeGlobalIndex = this.serve ? serveInitGlobalIndex
-				: this.asyncMode ? taskSeqGlobalIndex : ehMode ? ehDepthGlobalIndex : GLOBAL_FENV + globalCount;
+				: this.asyncMode ? schedNextTurnGlobalIndex : ehMode ? ehDepthGlobalIndex : GLOBAL_FENV + globalCount;
 		// --reentrant retires the guard (overlap is the point) and instead -- when any
 		// special is dynamically bound -- carries the CURRENT task record in a global of
 		// its own, swapped by the export wrappers and around the suspending host calls
@@ -6108,7 +6110,7 @@ public final class WasmLispCompiler implements LispCompiler {
 								Objects.requireNonNull(importSlotIndex
 									.get(schedIface + "\0" + WasmComponentImportCompiler.FIELD_SUBTASK_DROP))),
 						schedRegistryGlobalIndex, schedSetGlobalIndex, schedReadFreeGlobalIndex, allocFuncIndex,
-						strFromMemFuncIndex, bytesFromMemFuncIndex, streamEndedGlobalIndex);
+						strFromMemFuncIndex, bytesFromMemFuncIndex, streamEndedGlobalIndex, schedNextTurnGlobalIndex);
 				break;
 			}
 		}
@@ -8855,7 +8857,8 @@ public final class WasmLispCompiler implements LispCompiler {
 				// the read-buffer free list, a (mut (ref null eq)) = null, then the
 				// callback-task runtime's three: the CURRENT task record and the
 				// task-record list (both (mut (ref null eq)) = null) and the task-id
-				// counter, a (mut i32) = 0.
+				// counter, a (mut i32) = 0, and last the next-turn list, a (mut (ref null
+				// eq)) = null.
 				if (this.asyncMode) {
 					gs.add(g -> {
 						g.writeRefType(true, Type.EQ.code());
@@ -8897,6 +8900,13 @@ public final class WasmLispCompiler implements LispCompiler {
 						g.write(am.ik.wasm.Mutability.VAR.code());
 						g.write(Instruction.I32_CONST);
 						g.writeSignedLeb128(0);
+						g.write(Instruction.END);
+					});
+					gs.add(g -> {
+						g.writeRefType(true, Type.EQ.code());
+						g.write(am.ik.wasm.Mutability.VAR.code());
+						g.write(Instruction.REF_NULL);
+						g.writeHeapType(Type.EQ.code());
 						g.write(Instruction.END);
 					});
 				}

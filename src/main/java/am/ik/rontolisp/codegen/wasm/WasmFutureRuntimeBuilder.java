@@ -139,12 +139,14 @@ final class WasmFutureRuntimeBuilder {
 
 	/**
 	 * {@code _subtask_future(token, lift) -> future}: the import layer's bridge from an
-	 * async-lowered call to a first-class future. An eagerly-completed call (status
-	 * RETURNED, no subtask) lifts immediately into a settled future; anything else
-	 * becomes a pending future whose {@code (subtask, future, lift, token)} entry is
-	 * pushed onto the scheduler registry and whose subtask is joined into the task's
-	 * waitable-set, to be settled by {@code _sched_loop} (or, in serve mode, the
-	 * callback) when the subtask reports RETURNED.
+	 * async-lowered call to a first-class future. The future is pending either way, so an
+	 * await of it ends an async body's eager part as on the threaded backends: an
+	 * eagerly-completed call (status RETURNED, no subtask) lifts at once and its
+	 * {@code (future . value)} pair joins the next-turn list, which the scheduler settles
+	 * before it next waits on the host; anything else has its {@code (subtask, future,
+	 * lift, token)} entry pushed onto the scheduler registry and its subtask joined into
+	 * the task's waitable-set, to be settled by {@code _sched_loop} (or, in serve mode,
+	 * the callback) when the subtask reports RETURNED.
 	 */
 	static final int OFF_SUBTASK_FUTURE = 6;
 
@@ -281,10 +283,13 @@ final class WasmFutureRuntimeBuilder {
 	 * @param streamEndedGlobal the global index of the ended-stream latch (a cons list of
 	 * i31 readable-end handles whose read completed DROPPED; the read wrappers answer nil
 	 * for them without touching the handle), or -1 when the module reads no stream
+	 * @param nextTurnGlobal the global index of the next-turn list (a cons list of
+	 * {@code (future . value)} pairs, newest first, of the host calls that returned at
+	 * once; {@link #emitNextTurn} settles them)
 	 */
 	record Sched(WasmComponentImportCompiler.WaitOrdinals ordinals, int registryGlobal, int setGlobal,
 			int readFreeGlobal, int allocFuncIndex, int strFromMemFuncIndex, int bytesFromMemFuncIndex,
-			int streamEndedGlobal) {
+			int streamEndedGlobal, int nextTurnGlobal) {
 	}
 
 	/**
@@ -376,7 +381,8 @@ final class WasmFutureRuntimeBuilder {
 			case OFF_POLL -> buildPoll(futureType, spillGlobal, reawaitFunc, blockExitTag);
 			case OFF_SUBTASK_FUTURE ->
 				sched == null ? buildUnreachableStub() : buildSubtaskFuture(futureType, sched, identityHash);
-			case OFF_SCHED_LOOP -> sched == null ? buildSyncForce(base) : buildSchedLoop(base, futureType, sched);
+			case OFF_SCHED_LOOP ->
+				sched == null ? buildSyncForce(base) : buildSchedLoop(base, futureType, sched, identityHash);
 			case OFF_WSTREAM_READ -> buildWasiStreamRead(futureType, streamType, sched, streamCheck);
 			case OFF_WSTREAM_CLOSE -> buildWasiStreamClose(streamType, streamCheck);
 			case OFF_WAKE_LIST -> buildWakeList(base, futureType, frameType, currentTaskGlobal, cb, identityHash,
@@ -387,8 +393,8 @@ final class WasmFutureRuntimeBuilder {
 				cb == null ? buildUnreachableStub() : buildTaskBegin(currentTaskGlobal, cb, identityHash);
 			case OFF_TASK_SUSPEND ->
 				cb == null ? buildUnreachableStub() : buildTaskSuspend(base, currentTaskGlobal, cb, identityHash);
-			case OFF_TASK_FINISH ->
-				cb == null ? buildUnreachableStub() : buildTaskFinish(base, futureType, currentTaskGlobal, cb);
+			case OFF_TASK_FINISH -> cb == null ? buildUnreachableStub()
+					: buildTaskFinish(base, futureType, currentTaskGlobal, cb, sched, identityHash);
 			case OFF_ASYNC_CB -> cb == null ? buildUnreachableStub() : buildAsyncCb(base, currentTaskGlobal, cb);
 			default -> throw new IllegalArgumentException("unknown future runtime member: " + off);
 		};
@@ -1014,22 +1020,33 @@ final class WasmFutureRuntimeBuilder {
 		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
 		unboxI31(w);
 		setLocal(w, PACKED);
-		// Eagerly completed (status RETURNED, no subtask): lift now, settled future.
+		// Eagerly completed (status RETURNED, no subtask): lift now, and leave the future
+		// pending until the scheduler's next turn: nextTurn = ((fut . value) . nextTurn).
+		// A future settled at its making would not end the eager part of a body awaiting
+		// it, so a body polling with (await (wait-for 0)) never let another run.
 		getLocal(w, PACKED);
 		i32(w, 0xF);
 		w.write(Instruction.I32_AND);
 		i32(w, WasmComponentImportCompiler.SUBTASK_STATUS_RETURNED);
 		w.write(Instruction.I32_EQ);
 		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
-		i32(w, 1);
-		getLocal(w, FN);
-		getLocal(w, TOKEN);
-		w.write(Instruction.CALL);
-		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 1);
+		i32(w, 0);
+		refNullEq(w);
 		refNullEq(w);
 		refNullEq(w);
 		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
 		w.writeUnsignedLeb128(futureType);
+		setLocal(w, FUT);
+		getLocal(w, FUT);
+		getLocal(w, FN);
+		getLocal(w, TOKEN);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE + 1);
+		newCons(w, identityHash);
+		globalGet(w, sched.nextTurnGlobal());
+		newCons(w, identityHash);
+		globalSet(w, sched.nextTurnGlobal());
+		getLocal(w, FUT);
 		w.write(Instruction.RETURN);
 		w.write(Instruction.END);
 		// Pending: register (subtask . (0 . (future . (lift . token)))) -- kind 0, a
@@ -1103,14 +1120,16 @@ final class WasmFutureRuntimeBuilder {
 	// The exit polls: a settled chain flattens to the value, a rejection re-signals on
 	// $lisp-cond. The serve `handle` boundary does NOT use this: it returns the packed
 	// WAIT code to the host instead and the events arrive through _async_cb.
-	private static byte[] buildSchedLoop(int base, int futureType, Sched sched) {
+	private static byte[] buildSchedLoop(int base, int futureType, Sched sched, boolean identityHash) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
-		final int FUT = 0, EVTP = 1, EV = 2;
-		// locals: 2x i32
-		w.write(1);
+		final int FUT = 0, EVTP = 1, EV = 2, LIST = 3, REV = 4;
+		// locals: 2x i32, 2x (ref null eq)
+		w.write(2);
 		w.writeUnsignedLeb128(2);
 		w.write(Type.I32);
+		w.writeUnsignedLeb128(2);
+		w.writeRefType(true, Type.EQ.code());
 		// EVTP = __ronto_alloc(8): the (waitable, payload) event scratch.
 		i32(w, 8);
 		w.write(Instruction.CALL);
@@ -1122,6 +1141,14 @@ final class WasmFutureRuntimeBuilder {
 		castFuture(w, FUT, futureType);
 		structGet(w, futureType, 0);
 		w.write(Instruction.BR_IF, 1); // -> $done
+		// The host calls that returned at once settle before the host is waited on.
+		globalGet(w, sched.nextTurnGlobal());
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.I32_EQZ);
+		w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		emitNextTurn(w, base, sched, identityHash, LIST, REV);
+		w.write(Instruction.BR, 1); // -> $next
+		w.write(Instruction.END);
 		// A pending future with no waitable-set is a deadlock: nothing can settle it.
 		globalGet(w, sched.setGlobal());
 		w.write(Instruction.I32_EQZ);
@@ -1488,9 +1515,12 @@ final class WasmFutureRuntimeBuilder {
 		return body.toByteArray();
 	}
 
-	// _task_finish (ignored) -> code: drain the ready list, then WAIT (root pending) /
-	// EXIT after unlinking the record (root fulfilled) / trap (root rejected).
-	private static byte[] buildTaskFinish(int base, int futureType, int currentTaskGlobal, Cb cb) {
+	// _task_finish (ignored) -> code: drain the ready list and the next-turn list until
+	// both are empty, then WAIT (root pending) / EXIT after unlinking the record (root
+	// fulfilled) / trap (root rejected). The next-turn list is the module's, not the
+	// task's: settling an entry hands another task's waiter to that task's ready list.
+	private static byte[] buildTaskFinish(int base, int futureType, int currentTaskGlobal, Cb cb,
+			@org.jspecify.annotations.Nullable Sched sched, boolean identityHash) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int STATE = 1, REC = 2, CELL = 3, PREV = 4, CUR = 5;
@@ -1502,6 +1532,7 @@ final class WasmFutureRuntimeBuilder {
 		w.writeRefType(true, Type.EQ.code());
 		globalGet(w, currentTaskGlobal);
 		setLocal(w, REC);
+		w.write(Instruction.LOOP, WasmLispCompiler.BLOCKTYPE_EMPTY); // $turn
 		// CELL = the (set . ready) cons; drain: list = CELL.cdr, CELL.cdr = nil.
 		castCons(w, REC);
 		structGet(w, WasmLispCompiler.TYPE_CONS, 1);
@@ -1525,6 +1556,16 @@ final class WasmFutureRuntimeBuilder {
 		w.write(Instruction.CALL);
 		w.writeUnsignedLeb128(base + OFF_WAKE_LIST);
 		w.write(Instruction.DROP);
+		if (sched != null) {
+			globalGet(w, sched.nextTurnGlobal());
+			w.write(Instruction.REF_IS_NULL);
+			w.write(Instruction.I32_EQZ);
+			w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			emitNextTurn(w, base, sched, identityHash, PREV, CUR);
+			w.write(Instruction.BR, 1); // -> $turn
+			w.write(Instruction.END);
+		}
+		w.write(Instruction.END); // loop $turn
 		// STATE = root.state
 		castCons(w, REC);
 		structGet(w, WasmLispCompiler.TYPE_CONS, 1);
@@ -1596,6 +1637,61 @@ final class WasmFutureRuntimeBuilder {
 		i32(w, 0);
 		w.write(Instruction.END);
 		return body.toByteArray();
+	}
+
+	// The scheduler's turn over the next-turn list: takes the list, empties the global
+	// and settles each entry's future in the order the calls were made (waking its
+	// waiters, whose own host calls that return at once go on the emptied list, for the
+	// turn after). Uses two (ref null eq) scratch locals.
+	private static void emitNextTurn(WasmWriter w, int base, Sched sched, boolean identityHash, int list, int rev) {
+		globalGet(w, sched.nextTurnGlobal());
+		setLocal(w, list);
+		refNullEq(w);
+		globalSet(w, sched.nextTurnGlobal());
+		refNullEq(w);
+		setLocal(w, rev);
+		// rev = the list reversed: oldest first.
+		w.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		w.write(Instruction.LOOP, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		getLocal(w, list);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.BR_IF, 1);
+		castCons(w, list);
+		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
+		getLocal(w, rev);
+		newCons(w, identityHash);
+		setLocal(w, rev);
+		castCons(w, list);
+		structGet(w, WasmLispCompiler.TYPE_CONS, 1);
+		setLocal(w, list);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
+		// _future_settle(car(entry), cdr(entry)) for each entry.
+		w.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		w.write(Instruction.LOOP, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		getLocal(w, rev);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.BR_IF, 1);
+		castCons(w, rev);
+		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
+		castCons(w, rev);
+		structGet(w, WasmLispCompiler.TYPE_CONS, 0);
+		w.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		w.writeHeapType(WasmLispCompiler.TYPE_CONS);
+		structGet(w, WasmLispCompiler.TYPE_CONS, 1);
+		w.write(Instruction.CALL);
+		w.writeUnsignedLeb128(base + OFF_SETTLE);
+		w.write(Instruction.DROP);
+		castCons(w, rev);
+		structGet(w, WasmLispCompiler.TYPE_CONS, 1);
+		setLocal(w, rev);
+		w.write(Instruction.BR, 0);
+		w.write(Instruction.END);
+		w.write(Instruction.END);
 	}
 
 	// _async_cb (event, waitable, code) -> code: the real callback. Restores the task

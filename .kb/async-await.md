@@ -77,11 +77,20 @@ push stream's read, a body that suspended -- ends it even when it has settled by
   up; `_await` asks `knownSettled` and joins through `RontoFuture.join`, which marks. A Java
   `CompletableFuture` is never known. The push read token always ended the part; the interpreter's
   buffered read used to go on when a chunk was queued, and now ends it too.
-- Component and Preview 1: unchanged. Nothing settles behind a component's program: a host future
-  settles only while something blocks on the scheduler, so settled is known there, but for a future
-  the scheduler settled while the program awaited ANOTHER (a 1 ms timer under an await of a 10 ms
-  one). The component goes on where the threaded backends hand off, which is one of the orders they
-  allow, since a handed-off body runs in parallel.
+- Component: nothing settles behind the program: a host future settles only on a scheduler turn, so
+  settled is known there, but for a future the scheduler settled while the program awaited ANOTHER (a
+  1 ms timer under an await of a 10 ms one). The component goes on where the threaded backends hand
+  off, which is one of the orders they allow, since a handed-off body runs in parallel. A host call
+  the host answers at once (status RETURNED: wasmtime 49's `wait-for` of 0 ns) is no exception: the
+  future `_subtask_future` answers stays pending on the next-turn list (`Sched.nextTurnGlobal`), which
+  `_sched_loop` settles, oldest first, before it waits on the host and `_task_finish` before it
+  answers WAIT. Until 2026-11-18 that future came back settled, so `(await (wait-for 0))` never
+  suspended and a body polling a variable with it never let the body or caller that sets it run
+  (it hung on the component, ended on the other two).
+  Limit: a turn drains the list without asking the host (there is no `waitable-set.poll` import), so
+  a body polling with `(wait-for 0)` for what only a HOST event settles never lets that event in;
+  poll with `(wait-for 1)` there.
+- Preview 1: unchanged (no host future, no `wait-for`).
 - An await on another thread marks the future when it returns, so a parallel program's handoff can
   follow its own race; a one-thread program's cannot.
 
@@ -92,14 +101,17 @@ held a full `./mvnw test` for over 4 hours at load 17. Rejected: ending at EVERY
 the threaded backends what follows a settled await would then race the caller, where all four run it
 in order now (`then` over a finished body, `read-all` over a pull stream). Rejected too: only what
 arrived settled (no mark at the join). A body re-awaiting a timer its caller had awaited then raced
-the caller on the threaded backends and ran in order on the component.
+the caller on the threaded backends and ran in order on the component. Rejected for the 0 ms timer
+(2026-11-18): settling it at its making everywhere. A program would lose its one yield on the threaded
+backends as well, and a timer would again be known settled by how fast it fired.
 
 Pinned by `aThreadsHandlersAreItsOwn` in `ThreadTest`/`JvmThreadTest` (`ASYNC_BODY`: a timer that has
 fired but no await resolved still ends the part; it polls `%future-settled-p` until the timer fires, so
-nothing depends on how fast; it hung both before), the last line of `OwnHandlerStacksPrograms.SUSPENDING`
-(a timer an await resolved does not end it, so the body's exit leaves the call; three suspending
-backends), and ci-spec `an-async-bodys-eager-part-is-a-call`'s `ci-eager-body-exit` (a non-future, a
-finished body, a pull read; all four).
+nothing depends on how fast; it hung both before), the last two cases of
+`OwnHandlerStacksPrograms.SUSPENDING` (a timer an await resolved does not end it, so the body's exit
+leaves the call; a body polling with `(await (wait-for 0))` until its caller sets a flag ends, the
+0 ms timer ending the part on the component too; three suspending backends), and ci-spec `an-async-bodys-eager-part-is-a-call`'s
+`ci-eager-body-exit` (a non-future, a finished body, a pull read; all four).
 
 ## The eager part is a call
 **Invariant (2026-11-05): before its first suspension an async body sees what a call sees, on all four backends.**
