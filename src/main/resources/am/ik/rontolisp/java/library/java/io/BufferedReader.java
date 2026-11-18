@@ -132,8 +132,32 @@ public class BufferedReader extends Reader {
         return total;
     }
 
+    // The line the host hands whole, for a reader standing on the standard input: a
+    // \r that ends it is its \r\n, and one inside it ends a line of its own, what
+    // follows it kept for the next read.
+    private String hostLine() throws IOException {
+        String line = in.line();
+        int cr = line == null ? -1 : line.indexOf('\r');
+        if (cr < 0) {
+            return line;
+        }
+        if (cr < line.length() - 1) {
+            char[] rest = (line.substring(cr + 1) + "\n").toCharArray();
+            if (rest.length > cb.length) {
+                cb = new char[rest.length];
+            }
+            System.arraycopy(rest, 0, cb, 0, rest.length);
+            next = 0;
+            end = rest.length;
+        }
+        return line.substring(0, cr);
+    }
+
     public String readLine() throws IOException {
         open();
+        if (next >= end && marked < 0 && !skipLF && in.hasLines()) {
+            return hostLine();
+        }
         StringBuilder line = null;
         while (true) {
             if (!more()) {

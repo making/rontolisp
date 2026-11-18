@@ -1214,6 +1214,7 @@ final class JavaIntrinsics {
 		natives.put("java.io.StandardOutput.flush0(boolean)",
 				(lowering, call) -> call("finish-output", standard(call.argument(0))));
 		natives.put("java.io.StandardInput.read0()", runtime("read-character"));
+		natives.put("java.io.StandardInput.line0()", runtime("readln"));
 		natives.put("java.io.StandardInput.ready0()", runtime("input-ready"));
 		natives.put("java.io.StandardInput.more0(int)", runtime("input-more"));
 		String thread = THREAD + ".";

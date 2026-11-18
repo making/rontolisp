@@ -90,6 +90,14 @@ public class InputStreamReader extends Reader {
         return false;
     }
 
+    boolean hasLines() {
+        return in != null && standard != null && next >= units.length && standard.whole();
+    }
+
+    String line() {
+        return standard.line();
+    }
+
     public int read() throws IOException {
         open();
         if (standard != null && next >= units.length) {

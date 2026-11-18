@@ -57,6 +57,17 @@ public abstract class Reader implements Closeable {
 
     public abstract int read(char[] cbuf, int off, int len) throws IOException;
 
+    // Whether the host hands this reader a line whole: a reader standing directly on
+    // the standard input, with nothing of it read ahead.
+    boolean hasLines() {
+        return false;
+    }
+
+    // That line without the \n that ends it, null at the end of the input.
+    String line() throws IOException {
+        return null;
+    }
+
     public abstract void close() throws IOException;
 
     public int read() throws IOException {

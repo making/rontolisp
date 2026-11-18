@@ -33,6 +33,10 @@ public class PrintWriter extends Writer {
         this(new BufferedWriter(new OutputStreamWriter(out)), autoFlush);
     }
 
+    public PrintWriter(OutputStream out, boolean autoFlush, java.nio.charset.Charset charset) {
+        this(new BufferedWriter(new OutputStreamWriter(out, charset)), autoFlush);
+    }
+
     private void text(String s, boolean line) {
         try {
             if (out == null) {

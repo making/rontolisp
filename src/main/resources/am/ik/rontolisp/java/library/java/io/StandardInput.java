@@ -88,6 +88,18 @@ final class StandardInput extends InputStream {
         return leftEnd - leftAt > 0 ? leftEnd - leftAt : ready0() ? 1 : 0;
     }
 
+    // Whether no part of a character waits to be read.
+    boolean whole() {
+        return low < 0 && leftAt >= leftEnd;
+    }
+
+    // The next line without the \n that ends it, null at the end.
+    String line() {
+        return line0();
+    }
+
+    private static native String line0();
+
     // The next UTF-16 unit, for a reader of characters: -1 at the end.
     int unit() {
         if (low >= 0) {

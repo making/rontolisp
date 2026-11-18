@@ -5085,10 +5085,28 @@ cases:
           public static void main(String[] args) {
               try {
                   run();
+                  surrogates();
               }
               catch (Exception e) {
                   throw new IllegalStateException(e);
               }
+          }
+
+          // A high surrogate that ends what was written waits in a writer for its partner,
+          // whether it came in a string or in an array.
+          static void surrogates() throws IOException {
+              ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+              OutputStreamWriter writer = new OutputStreamWriter(bytes, StandardCharsets.UTF_8);
+              writer.write(new String(new char[] {'a', 0xd83d}));
+              writer.flush();
+              int held = bytes.size();
+              writer.write(new char[] {0xde00, 'b'});
+              writer.close();
+              ByteArrayOutputStream latin = new ByteArrayOutputStream();
+              PrintWriter printed = new PrintWriter(latin, true, StandardCharsets.ISO_8859_1);
+              printed.print("é€");
+              printed.flush();
+              System.out.println(held + " " + Arrays.toString(bytes.toByteArray()) + " " + Arrays.toString(latin.toByteArray()));
           }
 
           static void run() throws Exception {
@@ -5395,6 +5413,7 @@ cases:
       true false true false
       append range: java.lang.IndexOutOfBoundsException: Range [2, 5) out of bounds for length 3
       <am>nullulbxyqr<am>nullul<am>nullulo
+      1 [97, -16, -97, -104, -128, 98] [-23, 63]
 standalone:
   # What a compiler warns of as unchecked is printed on standard error before the
   # program runs, as a JDK prints it, by the interpreter and by a compile; a declaration
@@ -7102,6 +7121,8 @@ standalone:
                   }
               }
               System.out.println("sum " + sum);
+              // a line ends at \r\n and at a \r alone too; a read between two lines
+              System.out.println(in.readLine() + "|" + in.readLine() + "|" + in.readLine() + "|" + (char) in.read() + "|" + in.readLine());
               String line;
               while ((line = in.readLine()) != null) {
                   System.out.println(line.length() + " " + line);
@@ -7112,10 +7133,11 @@ standalone:
               out.flush();
           }
       }
-    stdin: "h\u00e9\n2\n1 2 3\n4 5\nh\u00e9llo \u20ac\n\nlast line without end"
+    stdin: "h\u00e9\n2\n1 2 3\n4 5\ncrlf\r\nold\rmac\nxy z\nh\u00e9llo \u20ac\n\nlast line without end"
     stdout: |
       104 195 169 
       sum 15
+      crlf|old|mac|x|y z
       7 héllo €
       0 
       21 last line without end

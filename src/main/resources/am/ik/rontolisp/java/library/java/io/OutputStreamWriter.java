@@ -113,7 +113,9 @@ public class OutputStreamWriter extends Writer {
 
     public void write(String str, int off, int len) throws IOException {
         open();
-        if (high >= 0) {
+        // a high surrogate at the end waits for its partner, as one of an array does
+        int last = len > 0 ? str.charAt(off + len - 1) : 0;
+        if (high >= 0 || (last >= 0xd800 && last <= 0xdbff)) {
             char[] units = str.substring(off, off + len).toCharArray();
             write(units, 0, units.length);
             return;
