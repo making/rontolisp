@@ -47,6 +47,14 @@ signals replaces the pending unwind (CL: newer exit wins).
   an `UnwindScope{cleanupForms, blockDepth, trampolineDepth}` and `WasmReturnCompiler` branches to a
   trampoline block emitted lexically OUTSIDE the try_table (the structural equivalent of `holes`),
   cascading innermost-first.
+- **A cleanup inlined at an exit is compiled with its own scope, and the ones inside it, OFF
+  the scope stack** (2026-11-18, j99; `JvmUnwindProtectCompiler.compileEscapedCleanups` for
+  `return`/`return-from`/`go`, `WasmTagbodyCompiler` for `go`): they are left already, so an
+  exit the cleanup itself takes runs the cleanups still around it and not its own again.
+  With the scope still open the cleanup's exit compiled the cleanup inline again, without
+  end -- `(block b (unwind-protect (return-from b 1) (return-from b 2)))` was a stack
+  overflow of the JVM compile, a `go` out of a cleanup that a `go` ran one of both. wasm's
+  `return` and named `return-from` land outside the region and were right.
 - **A named `return-from` takes a trampoline too, on wasm** (2026-11-17, `.todo/j73`): it INLINED
   the escaped cleanups at the exit, inside every try_table between the exit and the
   `unwind-protect` -- the region's own and a `handler-case`'s -- so a cleanup that signalled ran
@@ -58,7 +66,8 @@ signals replaces the pending unwind (CL: newer exit wins).
   (`UnwindScope.namedTargets`), goes on through the next such scope or to the block
   (`WasmReturnFromCompiler.exit`). Cleanups that throw nothing are still inlined. `go` keeps the
   inlining. Pinned by `ci-spec.yaml` `a-cleanup-a-return-from-runs-is-outside-every-handler-it-left`
-  and `java-spec.yaml` `try-with-resources-finally-exits-and-causes`.
+  (its last two functions the cleanup's own exit) and `java-spec.yaml`
+  `try-with-resources-finally-exits-and-causes`.
 - **A cleanup's VALUES are discarded, its value COUNT included**: the cleanup sequence is bracketed
   by a save/restore of the `%mv-spill` channel on all three backends, and the save lives in each
   backend's SHARED cleanup emitter so `return`/`go`-inlined copies get it too

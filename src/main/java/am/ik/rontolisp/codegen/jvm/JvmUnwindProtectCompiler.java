@@ -212,6 +212,35 @@ final class JvmUnwindProtectCompiler {
 	}
 
 	/**
+	 * Compiles, where an exit leaves them, the cleanups of the scopes it escapes: the
+	 * innermost scopes of the context, innermost first. Each cleanup is compiled with its
+	 * own scope and the ones inside it off the context's stack -- they are left already
+	 * -- so an exit the cleanup itself takes ({@code return-from}, {@code go}) runs the
+	 * cleanups of the scopes still around it and not this one again: with the scope still
+	 * open, the cleanup's exit compiled the cleanup inline again, without end
+	 * ({@code (block b (unwind-protect (return-from b 1) (return-from b 2)))}).
+	 * @param escaped the scopes the exit leaves, as the context's stack holds them
+	 * @param holeStarts filled with where each scope's cleanup starts
+	 */
+	static void compileEscapedCleanups(List<JvmLispCompiler.UnwindScope> escaped, MethodCode.Label[] holeStarts,
+			JvmLispCompiler.Ctx ctx, String className) {
+		int left = 0;
+		try {
+			for (int i = 0; i < escaped.size(); i++) {
+				holeStarts[i] = ctx.body.newBoundLabel();
+				ctx.unwindScopes.pop();
+				left++;
+				compileCleanups(escaped.get(i).cleanupForms, ctx, className);
+			}
+		}
+		finally {
+			while (left > 0) {
+				ctx.unwindScopes.push(escaped.get(--left));
+			}
+		}
+	}
+
+	/**
 	 * Whether the cleanup sequence is the compiler's OWN bookkeeping rather than a user's
 	 * cleanup forms -- the {@code (%hc-depth-dec)} a {@code handler-case} scope carries
 	 * (an i32 counter adjustment) or the {@code (%dyn-restore ...)}s of a special

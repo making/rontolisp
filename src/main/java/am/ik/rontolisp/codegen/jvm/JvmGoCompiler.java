@@ -105,10 +105,7 @@ final class JvmGoCompiler {
 			return;
 		}
 		MethodCode.Label[] holeStarts = new MethodCode.Label[escaped.size()];
-		for (int j = 0; j < escaped.size(); j++) {
-			holeStarts[j] = ctx.body.newBoundLabel();
-			JvmUnwindProtectCompiler.compileCleanups(escaped.get(j).cleanupForms, ctx, className);
-		}
+		JvmUnwindProtectCompiler.compileEscapedCleanups(escaped, holeStarts, ctx, className);
 		MethodCode.Label sequenceEnd = ctx.body.newBoundLabel();
 		for (int j = 0; j < escaped.size(); j++) {
 			escaped.get(j).holes.add(new JvmLispCompiler.Hole(holeStarts[j], sequenceEnd));

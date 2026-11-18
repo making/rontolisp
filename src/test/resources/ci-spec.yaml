@@ -15939,9 +15939,30 @@ cases:
                  (unwind-protect (if (> (random 2) -1) (return-from outer :out) (return-from inner :in))
                    (format t "first~%")))
             (format t "second~%"))))
+      ; A cleanup that leaves by an exit of its own replaces the exit that ran it and
+      ; is not run again for its own. The JVM compiled a cleanup inline at the exit
+      ; with the cleanup's region still open, so an exit inside the cleanup compiled
+      ; the cleanup again, without end.
+      (defun ci-crf-replaced ()
+        (block b
+          (unwind-protect
+               (block c
+                 (unwind-protect (return-from b :first)
+                   (format t "replaces~%")
+                   (return-from c :second)))
+            (format t "outer cleanup~%"))))
+      (defun ci-crf-again (n)
+        (prog ()
+           (unwind-protect (if (> n 0) (go out) (return :none))
+             (format t "go cleanup~%")
+             (if (> n 1) (return :returned) (go out)))
+         out
+           (return :gone)))
       (print (handler-case (ci-crf-inner) (error (c) (list :outer (princ-to-string c)))))
       (print (handler-case (ci-crf-own) (error (c) (list :outer (princ-to-string c)))))
       (print (ci-crf-nested))
+      (print (ci-crf-replaced))
+      (print (list (ci-crf-again 0) (ci-crf-again 1) (ci-crf-again 2)))
     expected: |
       cleanup
       (:OUTER "from cleanup")
@@ -15950,6 +15971,13 @@ cases:
       first
       second
       :OUT
+      replaces
+      outer cleanup
+      :SECOND
+      go cleanup
+      go cleanup
+      go cleanup
+      (:GONE :GONE :RETURNED)
   - name: unwind-protect-values
     source: |
       ; An unwind-protect cleanup runs for effect: its values -- and its value
