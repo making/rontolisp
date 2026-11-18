@@ -7195,6 +7195,7 @@ standalone:
       import java.util.ArrayDeque;
       import java.util.List;
       import java.util.concurrent.Callable;
+      import java.util.concurrent.CountDownLatch;
       import java.util.concurrent.CyclicBarrier;
       import java.util.concurrent.ExecutorService;
       import java.util.concurrent.Executors;
@@ -7406,13 +7407,17 @@ standalone:
           // waits for its tasks; of two tasks the one that ends in time is answered
           static void pools() throws Exception {
               Future<Integer> answer;
+              CountDownLatch added = new CountDownLatch(1);
               try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
                   answer = pool.submit(() -> {
-                      // wide on purpose: the legs run beside each other
-                      Thread.sleep(300);
+                      added.await();
+                      Thread.sleep(10);
                       return counter.incrementAndGet();
                   });
-                  pool.submit(() -> counter.addAndGet(10));
+                  pool.submit(() -> {
+                      counter.addAndGet(10);
+                      added.countDown();
+                  });
               }
               System.out.println("closed " + answer.isDone() + " " + answer.get() + " " + counter.get());
               ExecutorService single = Executors.newSingleThreadExecutor();
