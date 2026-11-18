@@ -3679,9 +3679,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		program = WasmSocketsRewrite.rewrite(program);
 		// --component compiles the raw async forms as entry+resume state machines
 		// (WasmAsyncEmit): a top-level async-defun becomes a plain defun whose name is
-		// remembered, and lowerProgram is skipped. Everything else (Preview 1, and a
-		// component with no async surface -- where lowering is a no-op) keeps the
-		// degenerate %async-run lowering.
+		// remembered, and lowerProgram is skipped. Everything else (Preview 1 but for a
+		// program that settles futures of its own, and a component with no async
+		// surface -- where lowering is a no-op) keeps the degenerate %async-run
+		// lowering.
 		// %subtask-future counts too: a wit-import binding of an async func member
 		// returns a first-class future through it, which needs the async runtime even
 		// when the program itself never awaits (the caller may hand the future around).
@@ -3691,8 +3692,13 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| programUsesSymbol(program, LispNames.SUBTASK_FUTURE_INTERNAL_QUALIFIED);
 		// A --no-wasi reactor component has no host I/O to suspend on (its import
 		// surface is empty by contract), so it keeps the Preview 1 degenerate lowering:
-		// every future settles immediately.
-		this.asyncMode = this.component && !this.noWasi && usesAsync;
+		// every future settles immediately. A program that settles futures of its own
+		// (%future-new: the threads of a Java program, java.lisp) has bodies that
+		// suspend on any target, so it gets the state machines on Preview 1 as well:
+		// with no host future the scheduler members are the stubs a component binding
+		// no async interface has, and an await of a pending future at top level polls.
+		this.asyncMode = usesAsync
+				&& ((this.component && !this.noWasi) || programUsesSymbol(program, LispNames.FUTURE_NEW_QUALIFIED));
 		// The callback-task runtime (per-task waitable-sets over context slots +
 		// doorbell streams) exists exactly when the module has a CALLBACK-lifted export:
 		// serve's `handle` (its %serve-handle target is an async-defun, so serve implies

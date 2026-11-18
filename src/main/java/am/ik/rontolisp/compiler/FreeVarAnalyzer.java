@@ -232,7 +232,10 @@ public final class FreeVarAnalyzer {
 						case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE -> {
 							// skip quoted expressions
 						}
-						case LispNames.LAMBDA -> {
+						// An async-lambda binds its parameters as a lambda does: read
+						// as a call, a nested one's parameter was a free variable of
+						// the function around it, which then failed to capture it.
+						case LispNames.LAMBDA, LispNames.ASYNC_LAMBDA_QUALIFIED -> {
 							List<LispVal> parts = cons.toList();
 							Set<String> innerBound = new HashSet<>(boundVars);
 							innerBound.addAll(extractParamNames(parts.get(1)));
@@ -664,7 +667,7 @@ public final class FreeVarAnalyzer {
 				case LispNames.QUOTE, LispNames.UNSPELLED_QUOTE -> {
 					// skip
 				}
-				case LispNames.LAMBDA -> {
+				case LispNames.LAMBDA, LispNames.ASYNC_LAMBDA_QUALIFIED -> {
 					// Any reference to an outer local inside a lambda body means
 					// capture
 					List<LispVal> parts = cons.toList();

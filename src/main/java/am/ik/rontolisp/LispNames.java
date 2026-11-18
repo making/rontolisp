@@ -7025,12 +7025,13 @@ public final class LispNames {
 	public static final String ASYNC_RUN = "%ASYNC-RUN";
 
 	/**
-	 * The internal {@code rontolisp::%future-new} primitive of the {@code --component}
-	 * async state machines: a fresh PENDING first-class future. Undocumented; it makes
-	 * the suspension machinery (spill/restore, waiter cascade) exercisable end-to-end
-	 * without the import layer, and it is the race future of sockets.lisp's
-	 * {@code %future-race} (a socket read or a TLS handshake against its deadline,
-	 * {@code .kb/async-await.md}).
+	 * The internal {@code rontolisp::%future-new} primitive of the WASM async state
+	 * machines: a fresh PENDING first-class future. Undocumented; it makes the suspension
+	 * machinery (spill/restore, waiter cascade) exercisable end-to-end without the import
+	 * layer, it is the race future of sockets.lisp's {@code %future-race} (a socket read
+	 * or a TLS handshake against its deadline) and the future a thread of a Java program
+	 * awaits while it cannot go on (java.lisp). A Preview 1 module naming it is compiled
+	 * with the state machines a component has ({@code .kb/async-await.md}).
 	 */
 	public static final String FUTURE_NEW_INTERNAL = "%FUTURE-NEW";
 
@@ -8811,6 +8812,14 @@ public final class LispNames {
 	 * ({@link #FUTURE_SETTLED_INTERNAL}), which the JVM backend gates its helper on.
 	 */
 	public static final String FUTURE_SETTLED_QUALIFIED = RONTOLISP_PKG + "::" + FUTURE_SETTLED_INTERNAL;
+
+	/**
+	 * The canonical internal-qualified spelling of {@code rontolisp::%future-new}
+	 * ({@link #FUTURE_NEW_INTERNAL}): a program naming it settles futures of its own, so
+	 * its async bodies have to suspend and the WASM compiler builds the state machines
+	 * for it outside a component too.
+	 */
+	public static final String FUTURE_NEW_QUALIFIED = RONTOLISP_PKG + "::" + FUTURE_NEW_INTERNAL;
 
 	/**
 	 * The canonical internal-qualified spelling of {@code rontolisp::%future-deferred}

@@ -42,7 +42,19 @@
   [error-handling.md](error-handling.md)) and `_await` records the condition under the throwable
   on the awaiting thread before rethrowing it -- that is what makes handler-case dispatch across
   the await. A plain failure records nothing, so a condition already on its way out stays its own.
-- **Preview-1 wasm-GC**: degenerate synchronous. `WasmAsyncRunCompiler` wraps the value in a settled
+- **Preview-1 wasm-GC, a module naming `rontolisp::%future-new`** (2026-11-19, todo k00): the
+  component's state machines, unchanged. A program that makes futures of its own -- the threads of
+  a Java program, `java.lisp` -- has bodies that suspend whatever the host is, so
+  `WasmLispCompiler` turns `asyncMode` on for it (`LispNames.FUTURE_NEW_QUALIFIED`): with no host
+  future the scheduler members are the stubs a component binding no async interface has, an
+  await of a pending future suspends the frame, `%future-settle` resumes the waiters on the
+  settler's stack, and a pending await at top level ends the program as it does on a component.
+  No host timer: `wait-for` stays the compile error, and whoever settles the futures passes the
+  time itself (`sleep`). A resumable call that does not suspend costs 88 ns there as on the
+  component (33 ns degenerate). Pinned by
+  `WasmLispCompilerIntegrationTest#componentAsyncLambdaCapturesAndArgumentHoistAcrossSuspension`
+  (the same program on both targets) and the wasm legs of the Java corpus's thread cases.
+- **Preview-1 wasm-GC, every other module**: degenerate synchronous. `WasmAsyncRunCompiler` wraps the value in a settled
   kind-2 (kind 4 for several values, "Multiple values") `TYPE_P1_FUTURE {mut i32 kind, mut value}` (the kind field exists so the shape does not
   canonicalize into `TYPE_CELL`); `_p1_future_await` (`FUNC_P1_FUTURE_AWAIT`) resolves. The one
   UNSETTLED kind is 3, `rontolisp::%future-deferred`'s: its value is a thunk every await runs (a
@@ -199,6 +211,11 @@ and the `await-answers-every-value-of-the-async-body` ci-spec case -- plus its s
   (`.kb/wasm-function-body-size.md`, "Keeping the top level bounded").
 - **Trap**: an async-defun's rewritten plain defun is EXCLUDED from the fusion-inlinable set even
   when a one-form body qualifies textually (`.kb/wasm-int-fusion.md`).
+- **Trap**: an `async-lambda` binds its parameters as a `lambda` does in
+  `FreeVarAnalyzer.findFreeVars` / `findCapturedVars`. Until 2026-11-19 it was read as a call,
+  so an `async-lambda` with a parameter written inside another async body made that parameter a
+  free variable of the body around it: `Cannot find variable for closure: E` at compile time, on
+  the component too (found by the Java front end's resumable lowering, the first to nest them).
 - **Trap**: a region's landing pad must not restore the resume target `$rt`; one that did skipped
   everything after a `handler-case` that caught on a RESUMED frame (`.kb/wasm-landing-pad-refresh.md`,
   "`$rt`").

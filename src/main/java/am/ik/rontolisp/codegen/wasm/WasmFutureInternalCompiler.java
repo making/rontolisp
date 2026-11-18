@@ -10,15 +10,16 @@ import am.ik.wasm.Type;
 
 /**
  * Compiles the internal {@code rontolisp::%future-new}/{@code %future-settle}/
- * {@code %future-reject} primitives of the {@code --component} async state machines --
- * thin bindings of the {@link WasmFutureRuntimeBuilder} runtime, available only in
- * asyncMode, deliberately undocumented and absent from every other backend; the first two
- * are also sockets.lisp's race future (its read deadline) -- plus the import layer's
- * {@code rontolisp::%subtask-future} (the bridge from an async-lowered call's token to a
- * first-class future, synthesized by {@code WitImportDirective} for an {@code async func}
- * member's binding), plus the one member that is neither: {@code rontolisp::%stream-new},
- * which builds a first-class stream value in whichever tier this module has one (see
- * {@link WasmStreamCompiler}).
+ * {@code %future-reject} primitives of the async state machines -- thin bindings of the
+ * {@link WasmFutureRuntimeBuilder} runtime, available only in asyncMode (a component, or
+ * a Preview 1 module naming {@code %future-new}), deliberately undocumented and absent
+ * from every other backend; the first two are also sockets.lisp's race future (its read
+ * deadline) and what a thread of a Java program waits on (java.lisp) -- plus the import
+ * layer's {@code rontolisp::%subtask-future} (the bridge from an async-lowered call's
+ * token to a first-class future, synthesized by {@code WitImportDirective} for an
+ * {@code async func} member's binding), plus the one member that is neither:
+ * {@code rontolisp::%stream-new}, which builds a first-class stream value in whichever
+ * tier this module has one (see {@link WasmStreamCompiler}).
  */
 final class WasmFutureInternalCompiler {
 
@@ -81,7 +82,8 @@ final class WasmFutureInternalCompiler {
 				return;
 			}
 			throw new UnsupportedOperationException("rontolisp::" + member
-					+ " requires --component and an async program (it is an internal async-runtime binding)");
+					+ " requires an async program compiled with the state machines: --component, or one that makes"
+					+ " futures of its own with rontolisp::%future-new (it is an internal async-runtime binding)");
 		}
 		List<LispVal> args = cons.toList();
 		switch (member) {

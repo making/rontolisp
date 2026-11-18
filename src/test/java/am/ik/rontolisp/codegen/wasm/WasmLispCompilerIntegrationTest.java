@@ -16471,15 +16471,24 @@ class WasmLispCompilerIntegrationTest {
 	void componentAsyncLambdaCapturesAndArgumentHoistAcrossSuspension() throws Exception {
 		// An async-lambda's captures live in the frame across a suspension, and an
 		// await in a strict call's argument position rides the let* hoist
-		// (WasmAwaitNormalizer).
-		assertThat(compileAndRunComponent("""
+		// (WasmAwaitNormalizer). An async-lambda's parameter is its own inside
+		// another async body, which captures nothing by that name. Preview 1 compiles
+		// the same state machines for a program that settles a future of its own.
+		String program = """
 				(defvar *g* (rontolisp::%future-new))
 				(defvar *lam* (let ((n 100)) (rontolisp:async-lambda (x) (+ x n (rontolisp:await *g*)))))
 				(defvar *lf* (funcall *lam* 1))
 				(print 40)
+				(defvar *nested*
+				  (funcall (rontolisp:async-lambda ()
+				             (rontolisp:await
+				              (funcall (rontolisp:async-lambda (e) (+ e (rontolisp:await *g*))) 2)))))
 				(rontolisp::%future-settle *g* 10)
 				(print (rontolisp:await *lf*))
-				""")).isEqualTo("40\n111");
+				(print (rontolisp:await *nested*))
+				""";
+		assertThat(compileAndRunComponent(program)).isEqualTo("40\n111\n12");
+		assertThat(compileAndRun(program)).isEqualTo("40\n111\n12");
 	}
 
 	@Test
