@@ -7,7 +7,8 @@ anything.** No JDK jar, source, Javadoc text or test is copied or translated; a 
 matched by running a program under a JDK.
 
 A Java program cannot serve HTTP today (`.kb/java-frontend.md`). Give it a server on all
-four backends. The client is `.todo/k03`; a test of the server may use it once it lands.
+four backends. The client is there (`.kb/java-frontend.md`, "java.net.http"; its corpus is
+`java-http-spec.yaml`, `FetchSpecE2eTest#javaHttpClient`): a test of the server may use it.
 
 **The primary target is `wasi:http`**: a `--component` build of a Java server program is a
 `wasi:http/incoming-handler` component that `wasmtime serve` (and wasmCloud) runs, as the
