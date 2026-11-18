@@ -21,6 +21,17 @@ public interface CompletionStage<T> {
     <U, V> CompletionStage<V> thenCombine(CompletionStage<? extends U> other,
             BiFunction<? super T, ? super U, ? extends V> fn);
 
+    <U> CompletionStage<Void> thenAcceptBoth(CompletionStage<? extends U> other,
+            BiConsumer<? super T, ? super U> action);
+
+    CompletionStage<Void> runAfterBoth(CompletionStage<?> other, Runnable action);
+
+    <U> CompletionStage<U> applyToEither(CompletionStage<? extends T> other, Function<? super T, U> fn);
+
+    CompletionStage<Void> acceptEither(CompletionStage<? extends T> other, Consumer<? super T> action);
+
+    CompletionStage<Void> runAfterEither(CompletionStage<?> other, Runnable action);
+
     <U> CompletionStage<U> handle(BiFunction<? super T, Throwable, ? extends U> fn);
 
     CompletionStage<T> whenComplete(BiConsumer<? super T, ? super Throwable> action);

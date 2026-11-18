@@ -50,4 +50,8 @@ public class CountDownLatch {
     public synchronized long getCount() {
         return this.count;
     }
+
+    public synchronized String toString() {
+        return super.toString() + "[Count = " + this.count + "]";
+    }
 }

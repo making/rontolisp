@@ -117,6 +117,15 @@ public final class Support {
     /** Whether the target runs the threads of a program on one stack. */
     public static native boolean oneStack();
 
+    /**
+     * One stack: the thread started next runs no sooner than the time given, as
+     * System.nanoTime() counts -- what stands for a thread waiting until then.
+     */
+    public static native void notBefore(long nanoTime);
+
+    /** One stack: a thread started that has not run yet is not to run. */
+    public static native void unstart(Thread thread);
+
     private static native byte[] utf8(String s);
 
     private static native String utf8String(byte[] b, int offset, int count);

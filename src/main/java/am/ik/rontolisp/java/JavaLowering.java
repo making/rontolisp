@@ -2062,6 +2062,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		LispVal path = this.staticContext ? null : THIS;
 		JavaClass reader = null;
 		JavaClass crossed = null;
+		Field hidden = null;
 		for (Scope scope : this.scopes) {
 			Local local = scope.locals.get(name);
 			if (local != null) {
@@ -2083,9 +2084,10 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 			if (scope.boundary != null && type != null) {
 				Field field = field(type, name);
-				if (field != null) {
+				if (field != null && inherits(type, field.owner, field.isPrivate, field.declaration)) {
 					return new FieldRef(field, field.isStatic ? null : path, type);
 				}
+				hidden = hidden != null ? hidden : field;
 				if (reader == null) {
 					reader = type;
 				}
@@ -2095,15 +2097,57 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		while (type != null) {
 			Field field = field(type, name);
-			if (field != null) {
+			if (field != null && inherits(type, field.owner, field.isPrivate, field.declaration)) {
 				return new FieldRef(field, field.isStatic ? null : path, type);
 			}
+			hidden = hidden != null ? hidden : field;
 			path = type.hasOuterInstance() && path != null ? list(slotAccessor(type, outerSlot(type)), path) : null;
 			type = type.outer;
 		}
 		List<JavaClass> owners = imported(name, owner -> field(owner, name) instanceof Field field && field.isStatic);
-		return owners.isEmpty() ? null
-				: new FieldRef(Objects.requireNonNull(field(owners.get(0), name)), null, owners.get(0));
+		if (!owners.isEmpty()) {
+			return new FieldRef(Objects.requireNonNull(field(owners.get(0), name)), null, owners.get(0));
+		}
+		if (hidden != null && !probe) {
+			// the one field of the name is of a class above, which did not hand it down
+			throw error(pos, hidden.isPrivate ? name + " has private access in " + hidden.owner.simpleName() : name
+					+ " is not public in " + hidden.owner.simpleName() + "; cannot be accessed from outside package");
+		}
+		return null;
+	}
+
+	/**
+	 * Whether a class has a member a class above it declares: one that is not
+	 * {@code private} and, from another package, {@code public} or {@code protected}.
+	 * What it does not have, a simple name does not find in it: the name is then what the
+	 * classes and the method around it say. A member the front end writes itself is
+	 * {@code public}.
+	 * @param declaration the member as written, or {@code null}
+	 */
+	private boolean inherits(JavaClass viewer, JavaClass owner, boolean isPrivate, @Nullable Object declaration) {
+		if (owner == viewer) {
+			return true;
+		}
+		if (isPrivate) {
+			return false;
+		}
+		Set<String> modifiers = switch (declaration) {
+			case JavaSyntax.Method method -> method.modifiers();
+			case JavaSyntax.Field field -> field.modifiers();
+			case null, default -> Set.of("public");
+		};
+		return owner.intrinsic || owner.isInterface || modifiers.contains("public") || modifiers.contains("protected")
+				|| Objects.equals(this.classes.packageOf(owner), this.classes.packageOf(viewer));
+	}
+
+	/**
+	 * The methods of a name a class has by its simple name: its own and the inherited
+	 * ones.
+	 */
+	private List<Method> inherited(JavaClass declaration, String name) {
+		return methods(declaration, name).stream()
+			.filter(method -> inherits(declaration, method.owner, method.isPrivate, method.declaration))
+			.toList();
 	}
 
 	/**
@@ -5742,7 +5786,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			// the innermost class around the call that has a method of the name
 			JavaClass type = this.currentClass;
 			LispVal instance = path;
-			while (type != null && methods(type, call.name()).isEmpty()) {
+			while (type != null && inherited(type, call.name()).isEmpty()) {
 				instance = type.hasOuterInstance() && instance != null
 						? list(slotAccessor(type, outerSlot(type)), instance) : null;
 				type = type.outer;
@@ -5762,7 +5806,8 @@ final class JavaLowering implements JavaEmitter.Context {
 			site = in.self();
 		}
 		this.flexible = flexible;
-		List<Method> candidates = methods(in, call.name());
+		List<Method> candidates = call.target() == null && imported.isEmpty() ? inherited(in, call.name())
+				: methods(in, call.name());
 		if (imported.size() > 1) {
 			// the static methods of a name every class importing it has
 			candidates = new ArrayList<>();
@@ -5874,15 +5919,24 @@ final class JavaLowering implements JavaEmitter.Context {
 				self = named;
 			}
 			JavaClass superclass = self.superclass;
-			if (superclass == null) {
-				throw unsupported(pos, "a call of one of Object's methods through super");
-			}
-			above = superclass;
-			site = self.supertype(above);
+			above = superclass != null ? superclass : this.objectType.declaration();
+			site = superclass != null ? self.supertype(above) : this.objectType;
 		}
 		Resolved resolved = resolve(methods(above, call.name()), site, explicit, call.arguments(), expected,
 				"method " + call.name(), above, pos);
 		Method body = implementation(above, resolved.method());
+		String ownBody = resolved.method().emitter == null ? null : switch (resolved.method().signature()) {
+			case "toString()" -> "to-string";
+			case "equals(Object)" -> "equals";
+			case "hashCode()" -> "hash-code";
+			default -> null;
+		};
+		if (ownBody != null && resolved.method().owner == this.objectType.declaration()) {
+			// no class above declares it: Object's own body, which the run time has
+			LispVal receiver = object != null ? object : thisValue(pos).form();
+			return new Typed(form(JavaForms.runtime(ownBody), prepend(receiver, resolved.forms())),
+					resolved.returnType());
+		}
 		if (body == null || resolved.method().emitter != null) {
 			throw resolved.method().emitter != null
 					? unsupported(pos, "a call of one of Object's methods through super")

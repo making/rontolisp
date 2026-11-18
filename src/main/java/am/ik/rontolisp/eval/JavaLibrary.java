@@ -175,8 +175,8 @@ public final class JavaLibrary {
 	 * The functions a lowered program calls whose one-stack definitions call
 	 * {@code sleep}.
 	 */
-	private static final Set<String> SLEEPING = Set.of("RONTOLISP::%JAVA-THREAD-SLEEP",
-			"RONTOLISP::%JAVA-MONITOR-WAIT");
+	private static final Set<String> SLEEPING = Set.of("RONTOLISP::%JAVA-THREAD-SLEEP", "RONTOLISP::%JAVA-MONITOR-WAIT",
+			"RONTOLISP::%JAVA-THREAD-NOT-BEFORE");
 
 	/**
 	 * Whether a lowered program can sleep through the library: a thread's sleep and a

@@ -54,6 +54,22 @@ public interface ExecutorService extends Executor, AutoCloseable {
         return futures;
     }
 
+    /** The value of the first task to end with one; the others are cancelled. */
+    default <T> T invokeAny(Collection<? extends Callable<T>> tasks) throws InterruptedException, ExecutionException {
+        try {
+            return FirstAnswer.of(this, tasks, -1L);
+        }
+        catch (TimeoutException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    default <T> T invokeAny(Collection<? extends Callable<T>> tasks, long timeout, TimeUnit unit)
+            throws InterruptedException, ExecutionException, TimeoutException {
+        long nanos = unit.toNanos(timeout);
+        return FirstAnswer.of(this, tasks, nanos < 0 ? 0 : nanos);
+    }
+
     /**
      * No more tasks, and the ones given all ended: an interrupt meanwhile stops them
      * as shutdownNow() does, and is the thread's again at the end.

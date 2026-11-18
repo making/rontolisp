@@ -9,8 +9,8 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
 
-// What ArrayBlockingQueue and LinkedBlockingQueue are: a queue of at most so many
-// elements, first in first out, read and written under its own monitor, on which a
+// What ArrayBlockingQueue, LinkedBlockingQueue and LinkedBlockingDeque are: a queue of
+// at most so many elements, first in first out, read and written under its own monitor, on which a
 // thread putting into a full queue and one taking from an empty queue wait. No element
 // is null. An iterator walks the elements there were when it was made.
 abstract class Bounded<E> extends AbstractCollection<E> implements BlockingQueue<E> {
@@ -31,6 +31,95 @@ abstract class Bounded<E> extends AbstractCollection<E> implements BlockingQueue
             throw new NullPointerException();
         }
         return e;
+    }
+
+    // A member that never waits calls nothing that can: what it holds the monitor
+    // around then holds it across no wait (.kb/java-frontend.md, "A thread suspended and
+    // resumed"). So the two ends have a member that waits and one that does not.
+
+    /** Adds at one end when the queue is not full: whether it did. */
+    final synchronized boolean insertNow(E e, boolean first) {
+        given(e);
+        if (this.held.size() >= this.capacity) {
+            return false;
+        }
+        if (first) {
+            this.held.addFirst(e);
+        }
+        else {
+            this.held.addLast(e);
+        }
+        notifyAll();
+        return true;
+    }
+
+    /**
+     * Adds at one end, waiting while the queue is full: for ever below 0 nanoseconds,
+     * else no longer than that; false when it stayed full.
+     */
+    final boolean insert(E e, boolean first, long nanos) throws InterruptedException {
+        given(e);
+        if (Thread.interrupted()) {
+            throw new InterruptedException();
+        }
+        long deadline = System.nanoTime() + nanos;
+        synchronized (this) {
+            while (this.held.size() >= this.capacity) {
+                if (nanos < 0) {
+                    wait();
+                }
+                else if (!Timing.await(this, deadline)) {
+                    return false;
+                }
+            }
+            if (first) {
+                this.held.addFirst(e);
+            }
+            else {
+                this.held.addLast(e);
+            }
+            notifyAll();
+            return true;
+        }
+    }
+
+    /** Takes from one end when the queue is not empty; else null. */
+    final synchronized E extractNow(boolean first) {
+        E taken = first ? this.held.pollFirst() : this.held.pollLast();
+        if (taken != null) {
+            notifyAll();
+        }
+        return taken;
+    }
+
+    /** Takes from one end, waiting while the queue is empty as insert waits; null when it stayed empty. */
+    final E extract(boolean first, long nanos) throws InterruptedException {
+        if (Thread.interrupted()) {
+            throw new InterruptedException();
+        }
+        long deadline = System.nanoTime() + nanos;
+        synchronized (this) {
+            while (this.held.isEmpty()) {
+                if (nanos < 0) {
+                    wait();
+                }
+                else if (!Timing.await(this, deadline)) {
+                    return null;
+                }
+            }
+            notifyAll();
+            return first ? this.held.pollFirst() : this.held.pollLast();
+        }
+    }
+
+    /** The element at one end, or null. */
+    final synchronized E end(boolean first) {
+        return first ? this.held.peekFirst() : this.held.peekLast();
+    }
+
+    /** The elements there are, last to first. */
+    final synchronized Iterator<E> backwards() {
+        return new ArrayDeque<>(this.held).descendingIterator();
     }
 
     public synchronized int size() {

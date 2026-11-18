@@ -75,6 +75,45 @@ public class FutureTask<V> implements RunnableFuture<V> {
         done();
     }
 
+    /**
+     * Runs the task and keeps the future as it was, for a task that runs again: false
+     * when the task threw, which the future then holds, or was cancelled.
+     */
+    protected boolean runAndReset() {
+        Callable<V> task;
+        synchronized (this) {
+            if (this.state != WAITING) {
+                return false;
+            }
+            this.state = RUNNING;
+            this.runner = Thread.currentThread();
+            task = this.callable;
+        }
+        Throwable thrown = null;
+        try {
+            task.call();
+        }
+        catch (Throwable t) {
+            thrown = t;
+        }
+        synchronized (this) {
+            this.runner = null;
+            if (this.state != RUNNING) {
+                return false;
+            }
+            if (thrown == null) {
+                this.state = WAITING;
+                return true;
+            }
+            this.callable = null;
+            this.failure = thrown;
+            this.state = FAILED;
+            notifyAll();
+        }
+        done();
+        return false;
+    }
+
     protected void done() {
     }
 
@@ -100,6 +139,13 @@ public class FutureTask<V> implements RunnableFuture<V> {
 
     public synchronized boolean isDone() {
         return this.state >= ANSWERED;
+    }
+
+    public synchronized String toString() {
+        String state = this.state == ANSWERED ? "[Completed normally]"
+                : this.state == FAILED ? "[Completed exceptionally: " + this.failure + "]"
+                : this.state == CANCELLED ? "[Cancelled]" : "[Not completed, task = " + this.callable + "]";
+        return super.toString() + state;
     }
 
     private V report() throws ExecutionException {

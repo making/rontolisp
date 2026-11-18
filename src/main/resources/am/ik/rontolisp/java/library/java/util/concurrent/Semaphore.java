@@ -123,4 +123,8 @@ public class Semaphore {
     public boolean isFair() {
         return this.fair;
     }
+
+    public synchronized String toString() {
+        return super.toString() + "[Permits = " + this.permits + "]";
+    }
 }

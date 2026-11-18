@@ -39,10 +39,8 @@ public final class Executors {
     }
 
     public static ExecutorService newFixedThreadPool(int nThreads, ThreadFactory threadFactory) {
-        if (nThreads <= 0) {
-            throw new IllegalArgumentException();
-        }
-        return new ThreadPoolExecutor(nThreads, false, 0L, threadFactory);
+        return new ThreadPoolExecutor(nThreads, nThreads, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>(), threadFactory);
     }
 
     public static ExecutorService newSingleThreadExecutor() {
@@ -58,7 +56,24 @@ public final class Executors {
     }
 
     public static ExecutorService newCachedThreadPool(ThreadFactory threadFactory) {
-        return new ThreadPoolExecutor(0, true, 60000000000L, threadFactory);
+        return new ThreadPoolExecutor(0, Integer.MAX_VALUE, 60L, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(),
+                threadFactory);
+    }
+
+    public static ScheduledExecutorService newScheduledThreadPool(int corePoolSize) {
+        return new ScheduledThreadPoolExecutor(corePoolSize);
+    }
+
+    public static ScheduledExecutorService newScheduledThreadPool(int corePoolSize, ThreadFactory threadFactory) {
+        return new ScheduledThreadPoolExecutor(corePoolSize, threadFactory);
+    }
+
+    public static ScheduledExecutorService newSingleThreadScheduledExecutor() {
+        return new ScheduledThreadPoolExecutor(1);
+    }
+
+    public static ScheduledExecutorService newSingleThreadScheduledExecutor(ThreadFactory threadFactory) {
+        return new ScheduledThreadPoolExecutor(1, threadFactory);
     }
 
     public static ExecutorService newThreadPerTaskExecutor(ThreadFactory threadFactory) {
