@@ -24,6 +24,11 @@ Three readings of a call through a function value, printed side by side:
             a lambda that is stored, returned or bound, and a FUNCALL of anything but
             such a parameter, are read as in typed,
   arity  -- a FUNCALL reaches every lambda and every #'function of its arity.
+
+none is unsound and arity sound; typed and flow are neither where the IR is silent: a
+lambda bound to a variable has no interface in it, and a FUNCALL through a field or a
+local none either, so such a call reaches every lambda of its arity. The lowering knows
+both; this script is the measurement that says the analysis belongs there.
 """
 import re
 import sys
