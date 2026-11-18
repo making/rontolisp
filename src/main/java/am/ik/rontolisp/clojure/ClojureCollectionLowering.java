@@ -1169,7 +1169,12 @@ final class ClojureCollectionLowering {
 				grownTable(ClojureProtocolLowering.typedTableOf(collSym), entryPlist(ctx, item)))));
 		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("hash-table-p"), collSym),
 				grownTable(collSym, entryPlist(ctx, item))));
-		branches.add(ClojureLowerUtil.list(ClojureLowerUtil.list(ClojureLowerUtil.sym("vectorp"), collSym),
+		branches.add(ClojureLowerUtil.list(
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("vectorp"), collSym),
+						// a string is a vector too, and no collection
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("stringp"), collSym))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("coerce"),
 						ClojureLowerUtil.list(ClojureLowerUtil.sym("append"),
 								ClojureLowerUtil.list(ClojureLowerUtil.sym("coerce"), collSym,
@@ -1181,16 +1186,20 @@ final class ClojureCollectionLowering {
 		branches.add(ClojureLowerUtil.list(ClojureSortedLowering.sortedTest(collSym),
 				ClojureSortedLowering.runtime("sorted-conj", collSym, item)));
 		branches.add(ClojureLowerUtil.list(
-				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"), ClojureLowerUtil.list(
-						ClojureLowerUtil.sym("or"), ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), collSym),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), collSym)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
-								ClojureProtocolLowering.isTypedForm(collSym)),
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"), ClojureStringLowering.isRegexForm(collSym)),
-						// atoms (and refs/agents/volatiles, the same cell) are cons
-						// wrappers too, so the oracle signals instead of consing
-						// (the regex-guard precedent)
-						ClojureLowerUtil.list(ClojureLowerUtil.sym("not"), ClojureStateLowering.isAtomForm(collSym))),
+				ClojureLowerUtil.list(ClojureLowerUtil.sym("and"),
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("null"), collSym),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("consp"), collSym)),
+						// every tagged wrapper (a keyword, var, delay, uuid, atom, regex,
+						// typed
+						// value ...) is a cons headed by a CL keyword, a collection none
+						// of
+						// them is but a lazy seq: the oracle signals instead of consing
+						ClojureLowerUtil.list(ClojureLowerUtil.sym("or"),
+								ClojureLowerUtil.list(ClojureLowerUtil.sym("not"),
+										ClojureLowerUtil.list(ClojureLowerUtil.sym("keywordp"),
+												ClojureLowerUtil.list(ClojureLowerUtil.sym("car"), collSym))),
+								ClojureLowerUtil.list(new LispSymbol("RONTOLISP::%CLOJURE-LAZY-P"), collSym))),
 				ClojureLowerUtil.list(ClojureLowerUtil.sym("cons"), item, collSym)));
 		// a type implementing IPersistentCollection takes the item through its cons, like
 		// the oracle's RT.conj (an arm a program storing no such row sheds, ClojureArms)

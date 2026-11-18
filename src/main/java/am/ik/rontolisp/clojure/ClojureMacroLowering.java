@@ -2282,17 +2282,29 @@ final class ClojureMacroLowering {
 		// answered as the mangled data itself; a non-macro head, and a head naming a
 		// local in reach, answers the form itself, like the oracle's isMacro
 		LispSymbol localEnv = new LispSymbol(LOCAL_ENV);
+		// a lazy seq, or a cons whose tail is one (list* and cons over a lazy seq), is
+		// read
+		// through its realized list, like the oracle's ISeq; any other wrapper keeps its
+		// own shape
+		LispSymbol view = new LispSymbol("C%EXPAND-VIEW");
+		LispVal isSeqForm = ClojureHierarchyLowering.hfn("AND", ClojureHierarchyLowering.hfn("CONSP", form),
+				ClojureHierarchyLowering.hfn("OR", ClojureHierarchyLowering.hfn("RONTOLISP::%CLOJURE-LAZY-P", form),
+						ClojureHierarchyLowering.hfn("NOT",
+								ClojureHierarchyLowering.hfn("KEYWORDP", ClojureHierarchyLowering.hfn("CAR", form)))));
 		runtime.add(ClojureHierarchyLowering.hdefun(MACROEXPAND_1, List.of(form), ClojureHierarchyLowering.hlet(
-				List.of(ClojureLowerUtil.list(next,
-						ClojureHierarchyLowering.hfn("IF",
-								ClojureHierarchyLowering.hfn("AND", ClojureHierarchyLowering.hfn("CONSP", form),
+				List.of(ClojureLowerUtil.list(view,
+						ClojureHierarchyLowering.hfn("IF", isSeqForm,
+								ClojureHierarchyLowering.hfn("RONTOLISP::%CLOJURE-SEQ-ALL", form), form))),
+				ClojureHierarchyLowering.hlet(
+						List.of(ClojureLowerUtil.list(next, ClojureHierarchyLowering.hfn("IF",
+								ClojureHierarchyLowering.hfn("AND", ClojureHierarchyLowering.hfn("CONSP", view),
 										ClojureHierarchyLowering.hfn("NOT",
 												ClojureHierarchyLowering.hfn("RONTOLISP::%CLOJURE-LOCAL-HEAD-P",
-														ClojureHierarchyLowering.hfn("CAR", form)))),
-								ClojureHierarchyLowering.hfn("C%MACRO-FN", ClojureHierarchyLowering.hfn("CAR", form)),
+														ClojureHierarchyLowering.hfn("CAR", view)))),
+								ClojureHierarchyLowering.hfn("C%MACRO-FN", ClojureHierarchyLowering.hfn("CAR", view)),
 								ClojureLowering.NIL_CONST))),
-				ClojureHierarchyLowering.hfn("IF", next, ClojureHierarchyLowering.hfn("APPLY", next, form, localEnv,
-						ClojureHierarchyLowering.hfn("CDR", form)), form))));
+						ClojureHierarchyLowering.hfn("IF", next, ClojureHierarchyLowering.hfn("APPLY", next, view,
+								localEnv, ClojureHierarchyLowering.hfn("CDR", view)), form)))));
 		// (defun C%MACROEXPAND (form) ...): to the fixpoint, where an expansion answers
 		// its form itself (a core macro this front end does not expand as data), the
 		// mangled data itself

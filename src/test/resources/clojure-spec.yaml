@@ -1197,6 +1197,8 @@ cases:
       (println (contains? (conj #{1} 2) 2))
       (println (contains? (conj #{1} false) false))
       (println (try (conj (atom nil) 1) (catch Exception e :refused)))
+      (println (mapv #(try (conj % 1) (catch ClassCastException e :refused)) [:kw 'sym "str" 5 \a true (delay 1) (var inc) (reduced 1) (random-uuid) (the-ns 'user) #"re" (volatile! 1)]))
+      (println (conj (lazy-seq [2 3]) 1) (conj (map inc [1 2]) 0))
     expected: |
       [1 2 3]
       (3 1 2)
@@ -1207,6 +1209,8 @@ cases:
       true
       true
       :refused
+      [:refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused :refused]
+      (1 2 3) (0 2 3)
   - name: conj-onto-a-hash-map-takes-nil-and-refuses-a-wrapper
     # Oracle-identical (clj 1.12.6): a nil item adds nothing; a keyword, symbol or
     # atom is no map entry.
@@ -9224,9 +9228,12 @@ cases:
       (defmacro kw [k s] (list 'if k s :no))
       (println (macroexpand-1 '(kw :yes "str")))
       (prn (macroexpand-1 '(kw :yes "str")))
+      ; a form built over a lazy seq (list*, cons, or the seq itself) expands too
+      (prn (macroexpand-1 (list* 'when (lazy-seq ['true 1]))) (macroexpand (cons 'when (lazy-seq ['true 1]))) (macroexpand-1 (lazy-seq '(when true 1))))
     expected: |
       (if :yes str :no)
       (if :yes "str" :no)
+      (if true (do 1)) (if true (do 1)) (if true (do 1))
   - name: a-run-time-expansion-reads-template-symbols-as-data
     # A template's var symbols are data in the expansion macroexpand-1 answers at run
     # time, never a name a call resolves by: an uncalled private helper, a core name, a
