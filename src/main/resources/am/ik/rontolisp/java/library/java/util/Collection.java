@@ -3,6 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.util.function.IntFunction;
 import java.util.function.Predicate;
 
 public interface Collection<E> extends Iterable<E> {
@@ -16,6 +17,10 @@ public interface Collection<E> extends Iterable<E> {
     Object[] toArray();
 
     <T> T[] toArray(T[] a);
+
+    default <T> T[] toArray(IntFunction<T[]> generator) {
+        return toArray(generator.apply(0));
+    }
 
     boolean add(E e);
 

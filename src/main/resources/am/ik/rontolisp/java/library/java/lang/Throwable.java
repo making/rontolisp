@@ -91,6 +91,24 @@ public class Throwable {
         return copy;
     }
 
+    // No frame is kept, and none a program sets: a slot for them would be in every
+    // program that throws (.kb/java-frontend.md, "Exceptions").
+    public StackTraceElement[] getStackTrace() {
+        return new StackTraceElement[0];
+    }
+
+    public void setStackTrace(StackTraceElement[] stackTrace) {
+        for (int i = 0; i < stackTrace.length; i++) {
+            if (stackTrace[i] == null) {
+                throw new NullPointerException("stackTrace[" + i + "]");
+            }
+        }
+    }
+
+    public Throwable fillInStackTrace() {
+        return this;
+    }
+
     public String toString() {
         String name = getClass().getName();
         String text = getLocalizedMessage();

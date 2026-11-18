@@ -12,7 +12,8 @@
 UTF-16 のコード単位を返し、`new String(char[])` はそれを元の文字列に読み戻します。
 `toUpperCase` と `toLowerCase` は 1 文字を 1 文字に変えます。`"ß".toUpperCase()` は `ß` です
 （JDK は `SS` を返します）。相手のないサロゲートは、UTF-8 では 3 バイトになります（JDK は
-`?` を書きます）。
+`?` を書きます）。`Character.digit`、`getNumericValue`、`Integer.parseInt` は、ASCII の外の
+数字（`'٣'`）をインタプリタと JVM では読み、`.wasm` では読みません。
 
 ```java
 void main() {
@@ -176,6 +177,8 @@ JDK は最初の読み出しで `java.lang.ExceptionInInitializerError` を表�
 [`--report-locations`](../compiling/wasm.md#uncaught-condition-locations---report-locations)
 を付けてコンパイルしたときに書きます。`printStackTrace()` は、この 1 行を除いた同じ行を
 書きます。
+例外はフレームを保持しません。`getStackTrace()` は、`setStackTrace` のあとも空の配列を
+返します。
 
 ```java
 public class Uncaught {
@@ -268,9 +271,20 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 問い合わせられないため、行末まで読みます。`System.out` と `System.err` は差し替えられず
 （`System.setOut`）、`close()` の後も出力できます。
 
-**文字セットは 3 つです。** デフォルトの `UTF-8` と、`ISO-8859-1`、`US-ASCII` です。それ以外の
-名前は `UnsupportedEncodingException` または `UnsupportedCharsetException` になります。UTF-8
-として不正なバイト列は U+FFFD にデコードします。U+FFFD の個数は JDK 25 と同じです。
+**文字セットは 6 つです。** デフォルトの `UTF-8` と、`ISO-8859-1`、`US-ASCII`、`UTF-16`、
+`UTF-16BE`、`UTF-16LE` です。それ以外の名前は `UnsupportedEncodingException` または
+`UnsupportedCharsetException` になります。UTF-8 または UTF-16 として不正なバイト列は U+FFFD に
+デコードします。U+FFFD の個数は JDK 25 と同じです。`UTF-16` の `PrintStream` の `charset()` は、
+最初の出力のあと、同じ名前の別のオブジェクトを返します。
+
+**クラスを表すオブジェクトはありません。** `getClass()` とクラスリテラル（`Name.class`）は、
+互いを `==`、`!=`、`equals` で比較する箇所と、`getName()`、`getSimpleName()` の直前でだけ
+読めます。それ以外の箇所ではエラーになります。
+
+**ホストへの問い合わせには決まった値を返します。** `Runtime.availableProcessors()` は 1 です。
+`System.getProperty` は `line.separator`、`file.separator`、`path.separator` と、エンコーディング
+（`file.encoding`、`native.encoding`、`stdin.encoding`、`stdout.encoding`、`stderr.encoding`。
+どれも `UTF-8`）に答えます。それ以外のキーは `null` です。`System.gc()` は何もしません。
 
 ## スレッド
 
@@ -338,15 +352,16 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 ありません。
 
 **スレッドの番号は rontolisp 独自のものです。** `threadId()` と `toString()` に含まれる番号は、
-プログラムのスレッドを 1 から数えた値です。クラスリテラルは `synchronized` 文のロックとして
-だけ読めます。
+プログラムのスレッドを 1 から数えた値です。
 
 ## 拒否される構文
 
 どれも、構文の名前と位置を示すエラーになります。
 
 - アノテーション型、`assert`。
-- `synchronized` 文のロック以外のクラスリテラル。
+- 値として使うクラスリテラルと `getClass()`。どちらも、クラスとの比較と `getName()`、
+  `getSimpleName()` の直前でだけ読めます。クラスリテラルは `synchronized` 文のロックにも
+  なります。プリミティブ型と配列型のクラスリテラル。
 - `long`、`float`、`double`、`boolean` に対する `switch`。修飾した `super` を通すメソッド参照
   （`Interface.super::m`）。
 - スーパークラスのフィールドを隠すフィールド。

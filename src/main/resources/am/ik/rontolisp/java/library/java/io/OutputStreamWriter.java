@@ -13,7 +13,8 @@ public class OutputStreamWriter extends Writer {
 
     private OutputStream out;
 
-    private final Charset charset;
+    // the charset of what is still to write: past its start, UTF-16 writes no mark
+    private Charset charset;
 
     private final StandardOutput standard;
 
@@ -39,7 +40,7 @@ public class OutputStreamWriter extends Writer {
     }
 
     public String getEncoding() {
-        return out == null ? null : rontolisp.internal.Support.historicalName(charset);
+        return out == null ? null : charset.historicalName();
     }
 
     private void open() throws IOException {
@@ -56,7 +57,8 @@ public class OutputStreamWriter extends Writer {
             standard.text(text);
             return;
         }
-        byte[] encoded = text.getBytes(charset);
+        byte[] encoded = charset.bytes(text);
+        charset = charset.writing();
         int at = 0;
         while (at < encoded.length) {
             int room = bytes.length - count;
@@ -136,7 +138,7 @@ public class OutputStreamWriter extends Writer {
         try {
             if (high >= 0) {
                 high = -1;
-                encode("?");
+                encode(charset.lone());
             }
             empty();
         }

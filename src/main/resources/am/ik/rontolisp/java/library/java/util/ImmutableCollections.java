@@ -265,7 +265,7 @@ final class ImmutableCollections {
         }
 
         public V setValue(V replacement) {
-            throw new UnsupportedOperationException();
+            throw new UnsupportedOperationException("not supported");
         }
 
         public boolean equals(Object o) {

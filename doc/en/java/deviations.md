@@ -12,6 +12,8 @@ the Basic Multilingual Plane. `hashCode` is the specified number, and `toCharArr
 the UTF-16 units, which `new String(char[])` reads back. `toUpperCase` and `toLowerCase`
 change one character into one: `"ß".toUpperCase()` is `ß`, where a JDK answers `SS`. A
 surrogate with no partner in a string is its three bytes in UTF-8, where a JDK writes `?`.
+`Character.digit`, `getNumericValue` and `Integer.parseInt` read a digit outside ASCII
+(`'٣'`) on the interpreter and the JVM and not in a `.wasm`.
 
 ```java
 void main() {
@@ -175,7 +177,8 @@ line stands for the frames, after the causes: the file and the line of the state
 exception was raised in, and the method that statement is written in. The interpreter and
 a JVM output write it; a `.wasm` output writes it when compiled with
 [`--report-locations`](../compiling/wasm.md#uncaught-condition-locations---report-locations).
-`printStackTrace()` writes the same lines but that one.
+`printStackTrace()` writes the same lines but that one. An exception keeps no frames:
+`getStackTrace()` answers an empty array, after `setStackTrace` too.
 
 ```java
 public class Uncaught {
@@ -269,9 +272,20 @@ UTF-8, and its character is written once its last byte is. A read of several byt
 its host what is at hand and reads to the end of the line. `System.out` and `System.err`
 cannot be replaced (`System.setOut`) and stay open after `close()`.
 
-**Three charsets.** `UTF-8`, which is the default, `ISO-8859-1` and `US-ASCII`; any other
-name is an `UnsupportedEncodingException` or an `UnsupportedCharsetException`. Bytes that
-are no UTF-8 decode to U+FFFD, as many as a JDK 25 writes.
+**Six charsets.** `UTF-8`, which is the default, `ISO-8859-1`, `US-ASCII`, `UTF-16`,
+`UTF-16BE` and `UTF-16LE`; any other name is an `UnsupportedEncodingException` or an
+`UnsupportedCharsetException`. Bytes that are no UTF-8 or no UTF-16 decode to U+FFFD, as
+many as a JDK 25 writes. After its first print, `charset()` of a `PrintStream` in `UTF-16`
+answers another object of the same name.
+
+**No object stands for a class.** `getClass()` and a class literal (`Name.class`) are read
+where one is compared with the other by `==`, `!=` or `equals`, and before `getName()` and
+`getSimpleName()`. Anywhere else each is an error.
+
+**What a program asks of its host has fixed answers.** `Runtime.availableProcessors()` is
+1. `System.getProperty` answers `line.separator`, `file.separator`, `path.separator` and
+the encodings (`file.encoding`, `native.encoding`, `stdin.encoding`, `stdout.encoding`,
+`stderr.encoding`, each `UTF-8`); any other key is `null`. `System.gc()` does nothing.
 
 ## Threads
 
@@ -331,15 +345,16 @@ the threads a program starts, not for the thread of `main`. An `AtomicInteger` a
 `AtomicLong` are no `Number`.
 
 **A thread's number is rontolisp's own.** `threadId()` and the number in `toString()` count
-the threads of the program from 1. A class literal is read only as the lock of a
-`synchronized` statement.
+the threads of the program from 1.
 
 ## What is refused
 
 Each of these is an error naming the construct and its position.
 
 - Annotation types, `assert`.
-- Class literals, but as the lock of a `synchronized` statement.
+- A class literal and `getClass()` as a value: each is read compared with a class and
+  before `getName()` and `getSimpleName()`, a literal also as the lock of a `synchronized`
+  statement. A class literal of a primitive or an array type.
 - A `switch` over a `long`, a `float`, a `double` or a `boolean`; a method reference through a
   qualified `super` (`Interface.super::m`).
 - A field hiding one of a superclass.

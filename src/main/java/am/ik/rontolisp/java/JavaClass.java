@@ -148,6 +148,12 @@ final class JavaClass {
 		/** Whether its last parameter takes the arguments past the ones before it. */
 		boolean varargs;
 
+		/**
+		 * Whether an intrinsic member answering a {@code String} may answer {@code null}:
+		 * every other one's text is concatenated as it is.
+		 */
+		boolean answersNull;
+
 		boolean isPrivate;
 
 		/**

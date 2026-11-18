@@ -21,8 +21,11 @@
 # that it refuses at the same line with a message starting the same.
 imports: |
   import java.io.*;
+  import java.nio.charset.Charset;
   import java.nio.charset.StandardCharsets;
+  import java.nio.charset.UnsupportedCharsetException;
   import java.util.AbstractList;
+  import java.util.AbstractMap;
   import java.util.ArrayDeque;
   import java.util.ArrayList;
   import java.util.Arrays;
@@ -1084,6 +1087,51 @@ cases:
               System.out.println(text + " " + number + " " + real + " " + yes + " " + letter + " " + none + " " + text.equals("text") + " " + number.equals(42) + " " + number.equals("42") + " " + real.equals(2.5) + " " + yes.equals(true) + " " + letter.equals('c') + " " + text.equals(number));
               System.out.println(text.hashCode() + " " + number.hashCode() + " " + yes.hashCode() + " " + letter.hashCode() + " " + text.toString() + number.toString() + " " + "é☺".hashCode());
               System.out.println(p.getClass().getName() + " " + third.getClass().getSimpleName() + " " + text.getClass().getName() + " " + number.getClass().getSimpleName() + " " + new IllegalStateException("x").getClass().getName() + " " + new IllegalStateException().getClass().getSimpleName());
+              classes();
+          }
+
+          // a class is read where it is compared with a class and where its name is asked: the
+          // equals a class writes over getClass(), a literal beside it
+          static class Sized {
+              final int size;
+
+              Sized(int size) {
+                  this.size = size;
+              }
+
+              @Override
+              public boolean equals(Object o) {
+                  if (this == o) {
+                      return true;
+                  }
+                  if (o == null || getClass() != o.getClass()) {
+                      return false;
+                  }
+                  return size == ((Sized) o).size;
+              }
+
+              @Override
+              public int hashCode() {
+                  return size;
+              }
+          }
+
+          static class Padded extends Sized {
+              Padded(int size) {
+                  super(size);
+              }
+          }
+
+          static void classes() {
+              Sized p = new Sized(1);
+              Object q = new Padded(1), text = "s", number = 5, big = 5L, list = new ArrayList<String>(), nothing = null;
+              System.out.println(p.equals(new Sized(1)) + " " + p.equals(q) + " " + q.equals(p) + " " + p.equals(null) + " " + p.equals("p") + " " + q.equals(new Padded(1)) + " " + (p.getClass() == Sized.class) + " " + (q.getClass() == Sized.class) + " " + (q.getClass() != Padded.class) + " " + (Sized.class == Sized.class) + " " + p.getClass().equals(q.getClass()) + " " + q.getClass().equals(Padded.class) + " " + Padded.class.equals(q.getClass()));
+              System.out.println(Sized.class.getName() + " " + Sized.class.getSimpleName() + " " + ObjectMethods.class.getName() + " " + String.class.getName() + " " + java.util.ArrayList.class.getName() + " " + List.class.getSimpleName() + " " + (text.getClass() == String.class) + " " + (number.getClass() == Integer.class) + " " + (number.getClass() == big.getClass()) + " " + (big.getClass() == Long.class) + " " + (list.getClass() == ArrayList.class) + " " + (list.getClass() == List.class) + " " + (new int[0].getClass() == new int[5].getClass()));
+              try {
+                  System.out.println(nothing.getClass() == String.class);
+              } catch (NullPointerException e) {
+                  System.out.println("null has no class");
+              }
           }
       }
     expected: |
@@ -1092,6 +1140,9 @@ cases:
       text 42 2.5 true c null true true false true true true false
       3556653 42 1231 99 text42 17009
       ObjectMethodsPoint ObjectMethodsPoint3 java.lang.String Integer java.lang.IllegalStateException IllegalStateException
+      true false false false false true true false false true false true true
+      ObjectMethods$Sized Sized ObjectMethods java.lang.String java.util.ArrayList List true true false true true false true
+      null has no class
   # A lambda is a lambda capturing its variables; an interface no class implements is
   # called with funcall, one a class implements too by a function testing for a function
   # first.
@@ -1327,6 +1378,22 @@ cases:
               } catch (Throwable th) {
                   System.out.println(th + " | " + th.getMessage() + " | " + new ExceptionsFatal() + " | " + new ExceptionsApp("m", 1) + " | " + new RuntimeException().getMessage());
               }
+              named();
+          }
+
+          // the errors and exceptions a program names beside its own, and a frame as a program
+          // makes one: no frame of a thrown exception is kept
+          static void named() {
+              Throwable[] all = {new AssertionError(), new AssertionError("detail"), new AssertionError(5), new AssertionError((Object) null), new AssertionError('c'), new AssertionError(1.5), new AssertionError(7L), new AssertionError("with cause", new RuntimeException("why")), new AssertionError(new RuntimeException("as detail")), new ArrayStoreException("java.lang.Integer"), new StackOverflowError(), new OutOfMemoryError("Java heap space"), new SecurityException("denied", new RuntimeException("c")), new SecurityException(new RuntimeException("c")), new FileNotFoundException("a.txt (No such file or directory)"), new java.util.InputMismatchException("For input string: \"x\"")};
+              for (Throwable each : all) {
+                  System.out.println(each + " | " + each.getCause() + " | " + (each instanceof RuntimeException) + " " + (each instanceof Error) + " " + (each instanceof IOException) + " " + (each instanceof VirtualMachineError) + " " + (each instanceof NoSuchElementException));
+              }
+              try {
+                  throw new AssertionError("caught");
+              } catch (Error e) {
+                  StackTraceElement frame = new StackTraceElement("a.B", "run", "B.java", 12);
+                  System.out.println(e + " " + frame + " " + frame.getClassName() + " " + frame.getMethodName() + " " + frame.getFileName() + " " + frame.getLineNumber() + " " + new StackTraceElement("a.B", "run", null, -1) + " " + new StackTraceElement("a.B", "run", "B.java", -2) + " " + frame.equals(new StackTraceElement("a.B", "run", "B.java", 12)) + " " + (e.fillInStackTrace() == e));
+              }
           }
       }
     expected: |
@@ -1337,6 +1404,23 @@ cases:
       rt false null
       01234 141 1 first again 01234FG
       java.lang.Error: err | err | ExceptionsFatal | ExceptionsApp: m | null
+      java.lang.AssertionError | null | false true false false false
+      java.lang.AssertionError: detail | null | false true false false false
+      java.lang.AssertionError: 5 | null | false true false false false
+      java.lang.AssertionError: null | null | false true false false false
+      java.lang.AssertionError: c | null | false true false false false
+      java.lang.AssertionError: 1.5 | null | false true false false false
+      java.lang.AssertionError: 7 | null | false true false false false
+      java.lang.AssertionError: with cause | java.lang.RuntimeException: why | false true false false false
+      java.lang.AssertionError: java.lang.RuntimeException: as detail | java.lang.RuntimeException: as detail | false true false false false
+      java.lang.ArrayStoreException: java.lang.Integer | null | true false false false false
+      java.lang.StackOverflowError | null | false true false true false
+      java.lang.OutOfMemoryError: Java heap space | null | false true false true false
+      java.lang.SecurityException: denied | java.lang.RuntimeException: c | true false false false false
+      java.lang.SecurityException: java.lang.RuntimeException: c | java.lang.RuntimeException: c | true false false false false
+      java.io.FileNotFoundException: a.txt (No such file or directory) | null | false false true false false
+      java.util.InputMismatchException: For input string: "x" | null | true false false false true
+      java.lang.AssertionError: caught a.B.run(B.java:12) a.B run B.java 12 a.B.run(Unknown Source) a.B.run(Native Method) true true
   # An error the run time or the host raises is the exception the table in java.lisp
   # names, made the program's object for a clause above it: a division by zero an
   # ArithmeticException, an index outside an array an ArrayIndexOutOfBoundsException,
@@ -3935,6 +4019,24 @@ cases:
               System.out.println(words);
               sort(words, Comparator.<String>naturalOrder().reversed());
               System.out.println(words + " " + Comparator.<Integer>reverseOrder().compare(1, 2));
+              conversions();
+          }
+
+          // the interfaces from one primitive to another and of an object beside a primitive
+          static void conversions() {
+              IntToDoubleFunction half = i -> i / 2.0;
+              IntToLongFunction wide = i -> (long) i << 33;
+              LongToIntFunction narrow = l -> (int) (l >> 33);
+              LongToDoubleFunction halved = l -> l * 0.5;
+              DoubleToIntFunction whole = d -> (int) d;
+              DoubleToLongFunction longer = d -> (long) d;
+              ObjIntConsumer<String> ints = (text, i) -> System.out.print(text + i + " ");
+              ObjLongConsumer<String> longs = (text, l) -> System.out.print(text + l + " ");
+              ObjDoubleConsumer<String> doubles = (text, d) -> System.out.print(text + d + " ");
+              ints.accept("i", 1);
+              longs.accept("l", 2L);
+              doubles.accept("d", 3.5);
+              System.out.println(half.applyAsDouble(3) + " " + wide.applyAsLong(1) + " " + narrow.applyAsInt(1L << 34) + " " + halved.applyAsDouble(3L) + " " + whole.applyAsInt(3.9) + " " + longer.applyAsLong(-3.9));
           }
       }
     expected: |
@@ -3946,6 +4048,7 @@ cases:
       [fig, kiwi, pear, banana]
       [banana, fig, kiwi, pear]
       [pear, kiwi, fig, banana] 1
+      i1 l2 d3.5 1.5 8589934592 2 1.5 3 -3
   # A type pattern and a record pattern of a parameterized record take their arguments
   # from the type of the value they test; a sealed parameterized interface is covered by
   # the classes it permits.
@@ -4473,6 +4576,55 @@ cases:
                       System.out.println(ex.getClass().getSimpleName() + " " + ex.getMessage());
                   }
               }
+              later();
+          }
+
+          // what Objects supplies, what Collections rotates, replaces and finds, an array filled
+          // by a function and compared and hashed through its arrays, an entry of its own, a
+          // comparator's later keys, the properties every target answers
+          static void later() {
+              Runnable[] refused = {() -> Objects.requireNonNullElseGet(null, () -> null), () -> Objects.requireNonNullElseGet(null, null), () -> Objects.requireNonNull(null, () -> "the message"), () -> new AbstractMap.SimpleImmutableEntry<>("k", 1).setValue(2), () -> Map.entry("a", 1).setValue(2), () -> System.getProperty(""), () -> System.getProperty(null)};
+              for (Runnable each : refused) {
+                  try {
+                      each.run();
+                  } catch (RuntimeException ex) {
+                      System.out.println(ex);
+                  }
+              }
+              List<Integer> ring = new ArrayList<>(List.of(1, 2, 3, 4, 5));
+              Collections.rotate(ring, 2);
+              Collections.rotate(ring, -8);
+              List<Integer> big = new ArrayList<>(List.of(1, 2, 3, 1, 2, 3, 4, 1, 2));
+              System.out.println(Objects.requireNonNullElseGet(null, () -> "made") + " " + Objects.requireNonNull("x", () -> "message") + " " + ring + " " + Collections.indexOfSubList(big, List.of(1, 2)) + " " + Collections.lastIndexOfSubList(big, List.of(1, 2)) + " " + Collections.indexOfSubList(big, List.of(9)) + " " + Collections.lastIndexOfSubList(big, List.of()) + " " + Collections.replaceAll(big, 1, 9) + big + " " + Collections.replaceAll(big, 7, 9));
+              List<String> names = new ArrayList<>(List.of("x", "yy", "zzz"));
+              String[] array = names.toArray(String[]::new);
+              int[] ints = new int[5];
+              Arrays.setAll(ints, i -> i * i);
+              long[] longs = new long[3];
+              Arrays.setAll(longs, i -> 1L << (i * 20));
+              double[] doubles = new double[3];
+              Arrays.setAll(doubles, i -> i / 2.0);
+              String[] strings = new String[3];
+              Arrays.setAll(strings, i -> "s" + i);
+              System.out.println(array.length + array[2] + " " + Arrays.toString(new ArrayDeque<>(names).toArray(n -> new String[n])) + " " + Arrays.toString(ints) + Arrays.toString(longs) + Arrays.toString(doubles) + Arrays.toString(strings) + " " + Arrays.hashCode(longs) + " " + Arrays.hashCode(doubles) + " " + Arrays.hashCode(new double[] {0.0, -0.0, Double.NaN}) + " " + Arrays.hashCode(new char[] {'a', 'b'}) + " " + Arrays.hashCode(new boolean[] {true, false}) + " " + Arrays.hashCode(new short[] {1, -2}) + " " + Arrays.hashCode(new float[] {1.5f, -0.0f}) + " " + Arrays.hashCode((long[]) null));
+              Object[] a = {1, "two", new int[] {3, 4}, new Object[] {"five", new long[] {6L}}, null, new double[] {1.5}, new char[] {'c'}};
+              Object[] b = {1, "two", new int[] {3, 4}, new Object[] {"five", new long[] {6L}}, null, new double[] {1.5}, new char[] {'c'}};
+              Object[] c = {1, "two", new int[] {3, 5}, new Object[] {"five", new long[] {6L}}, null, new double[] {1.5}, new char[] {'c'}};
+              System.out.println(Arrays.deepEquals(a, b) + " " + Arrays.deepEquals(a, c) + " " + Arrays.equals(a, b) + " " + Arrays.deepEquals(null, null) + " " + Arrays.deepEquals(a, null) + " " + Arrays.deepEquals(new Object[] {new int[] {1}}, new Object[] {new long[] {1}}) + " " + Arrays.deepHashCode(a) + " " + Arrays.deepHashCode(c) + " " + Arrays.deepHashCode(null) + " " + Arrays.equals(new short[] {1}, new short[] {1}) + " " + Arrays.equals(new float[] {Float.NaN}, new float[] {Float.NaN}) + " " + Arrays.equals(new float[] {0f}, new float[] {-0f}));
+              Map.Entry<String, Integer> entry = new AbstractMap.SimpleEntry<>("k", 1);
+              Map.Entry<String, Integer> fixed = new AbstractMap.SimpleImmutableEntry<>(entry);
+              System.out.println(entry + " " + entry.setValue(5) + " " + entry + " " + entry.hashCode() + " " + entry.equals(fixed) + " " + fixed.equals(Map.entry("k", 1)) + " " + fixed.getKey() + fixed.getValue() + " " + new AbstractMap.SimpleEntry<String, String>(null, null) + " " + entry.equals("k=5"));
+              List<double[]> points = new ArrayList<>(List.of(new double[] {2, 0.5}, new double[] {1, 2.5}, new double[] {1, -1.0}, new double[] {2, 0.25}, new double[] {1, Double.NaN}));
+              points.sort(Comparator.<double[]>comparingInt(p -> (int) p[0]).thenComparingDouble(p -> p[1]));
+              StringBuilder sorted = new StringBuilder();
+              for (double[] p : points) {
+                  sorted.append(Arrays.toString(p));
+              }
+              points.sort(Comparator.<double[]>comparingDouble(p -> p[1]).thenComparingLong(p -> (long) p[0]).thenComparing(p -> p[0], Comparator.reverseOrder()));
+              Runtime runtime = Runtime.getRuntime();
+              runtime.gc();
+              System.gc();
+              System.out.println(sorted + " " + points.get(0)[1] + " " + System.getProperty("line.separator").length() + " " + System.getProperty("no.such.property") + " " + System.getProperty("no.such.property", "fallback") + " " + System.getProperty("file.separator") + System.getProperty("path.separator") + " " + System.getProperty("stdout.encoding") + " " + (runtime.availableProcessors() > 0) + " " + (runtime == Runtime.getRuntime()));
           }
       }
     expected: |
@@ -4492,6 +4644,18 @@ cases:
       IndexOutOfBoundsException Index: 9, Size: 6
       UnsupportedOperationException null
       UnsupportedOperationException null
+      java.lang.NullPointerException: supplier.get()
+      java.lang.NullPointerException: supplier
+      java.lang.NullPointerException: the message
+      java.lang.UnsupportedOperationException
+      java.lang.UnsupportedOperationException: not supported
+      java.lang.IllegalArgumentException: key can't be empty
+      java.lang.NullPointerException: key can't be null
+      made x [2, 3, 4, 5, 1] 0 7 -1 9 true[9, 2, 3, 9, 2, 3, 4, 9, 2] false
+      3zzz [x, yy, zzz] [0, 1, 4, 9, 16][1, 1048576, 1099511627776][0.0, 0.5, 1.0][s0, s1, s2] 32536864 -66030497 -494497 4066 40359 990 943719361 0
+      true false false true false false -480553787 -479630266 0 true true false
+      k=1 1 k=5 110 false true k1 null=null false
+      [1.0, -1.0][1.0, 2.5][1.0, NaN][2.0, 0.25][2.0, 0.5] -1.0 1 null fallback /: UTF-8 true true
   # == of two strings compares references: the constants of one text are one object, a
   # computed string another, intern the constant's. split takes a pattern; a
   # StringBuilder is edited in place and is a CharSequence, as a string is.
@@ -4517,6 +4681,43 @@ cases:
               sb.setLength(2);
               StringBuilder other = new StringBuilder(sb).append(sb).insert(1, 42).insert(0, 'c');
               System.out.println(sb + " " + other + " " + new StringBuilder(8).append("x").append(1L).append((Object) null).append((String) null) + " " + new StringBuffer("buf").reverse());
+              rest();
+          }
+
+          // a code point, a search from the end, a region, the UTF-16 units, the indentation
+          // and the order that ignores case; what a StringBuilder searches, compares and repeats
+          static void rest() {
+              String s = "hello, world; hello";
+              System.out.println(s.codePointAt(4) + " " + s.codePointBefore(4) + " " + s.lastIndexOf('o', 17) + " " + s.lastIndexOf("hello", 13) + " " + s.lastIndexOf("", 100) + " " + s.lastIndexOf('o', -1) + " " + s.regionMatches(7, "a World", 2, 5) + " " + s.regionMatches(true, 7, "a World", 2, 5) + " " + s.regionMatches(0, "hello", 0, -1) + " " + s.regionMatches(15, "hello", 0, 5) + " " + s.contentEquals(new StringBuilder(s)) + " " + s.contentEquals("hello") + " " + String.copyValueOf(new char[] {'a', 'b', 'c'}, 1, 2) + String.copyValueOf(new char[] {'x'}) + String.valueOf(new char[] {'a', 'b', 'c'}, 0, 2));
+              char[] into = {'.', '.', '.', '.', '.', '.', '.', '.'};
+              s.getChars(7, 12, into, 2);
+              System.out.println(new String(into) + "|" + "  a\n    b\r\n\tc\n\nd".indent(2).replace("\n", "/").replace("\t", "T") + "|" + "  a\n    b\n\tc".indent(-3).replace("\n", "/") + "|" + "".indent(4) + "|");
+              try {
+                  s.getChars(0, 9, into, 0);
+              } catch (StringIndexOutOfBoundsException ex) {
+                  System.out.println(ex.getMessage());
+              }
+              try {
+                  s.codePointAt(19);
+              } catch (StringIndexOutOfBoundsException ex) {
+                  System.out.println(ex.getMessage());
+              }
+              List<String> names = new ArrayList<>(List.of("bob", "Alice", "carol", "Bob", "alice", "Z", "a"));
+              names.sort(String.CASE_INSENSITIVE_ORDER);
+              Comparator<String> order = String.CASE_INSENSITIVE_ORDER;
+              System.out.println(names + " " + order.compare("abc", "ABD") + " " + order.reversed().compare("b", "A") + " " + (order == String.CASE_INSENSITIVE_ORDER));
+              StringBuilder t = new StringBuilder("hello world hello");
+              System.out.println(t.lastIndexOf("hello") + " " + t.lastIndexOf("hello", 5) + " " + t.indexOf("hello", 1) + " " + t.indexOf("", 50) + " " + t.compareTo(new StringBuilder("hello")) + " " + new StringBuilder("a").compareTo(new StringBuilder("b")) + " " + t.appendCodePoint(65).appendCodePoint(0x1F600) + " " + new StringBuilder().repeat("ab", 3).repeat('x', 2).repeat(0x1F600, 1).repeat((CharSequence) null, 1));
+              try {
+                  t.appendCodePoint(0x110000);
+              } catch (IllegalArgumentException ex) {
+                  System.out.println(ex.getMessage());
+              }
+              try {
+                  t.repeat(-1, -1);
+              } catch (IllegalArgumentException ex) {
+                  System.out.println(ex.getMessage());
+              }
           }
       }
     expected: |
@@ -4526,6 +4727,14 @@ cases:
       [a, b, , c][, a, b][a, b, c][a, b][a, b,c][a, b, , ][][a, b, c][k=v, x=y][a, b, c]
       Jello]1.5true 13 2 13 e el ab llo]1.5true el false false J
       Je cJ42eJe x1nullnull fub
+      111 108 8 0 19 -1 false true true false true false bcxab
+      ..world.|    a/      b/  Tc/  /  d/|a/ b/c/||
+      Range [0, 0 + 9) out of bounds for length 8
+      Index 19 out of bounds for length 19
+      [a, Alice, alice, bob, Bob, carol, Z] -1 -1 true
+      12 0 12 17 12 -1 hello world helloA😀 abababxx😀null
+      Not a valid Unicode code point: 0x110000
+      count is negative: -1
   # java.util.regex is the engine every front end shares (eval/regex.lisp): Pattern and
   # Matcher over it, the String members that take a pattern, the refusals as the
   # library's exceptions. A split by a constant text with no operator needs no engine.
@@ -4786,6 +4995,18 @@ cases:
               for (Locale each : new Locale[] {Locale.ROOT, Locale.ENGLISH, Locale.US, Locale.UK, Locale.CANADA}) {
                   System.out.println("[" + each + "] " + each.getLanguage() + " " + each.getCountry() + " " + each.toLanguageTag() + " " + (each == Locale.US) + " " + each.equals(Locale.UK));
               }
+              hashes();
+          }
+
+          // %h is the hash code's hexadecimal digits: of a class of the program its own
+          record Keyed(int key) {
+              public int hashCode() {
+                  return key * 16 + 1;
+              }
+          }
+
+          static void hashes() {
+              System.out.println(String.format("%h %h %h %H %h %h %10h|%-10h|%h %h %.2h", "hello", 255, null, "hello", 3.5, 'c', "x", "y", true, 100000L, 123456789) + " " + "%h".formatted(new Keyed(10)) + " " + String.format("%s %h", List.of(1), List.of(1)));
           }
       }
     expected: |
@@ -4805,6 +5026,7 @@ cases:
       [en_US] en US en-US true false
       [en_GB] en GB en-GB false true
       [en_CA] en CA en-CA false false
+      5e918d2 ff null 5E918D2 400c0000 63         78|79        |4cf 186a0 75 a1 [1] 20
   # The members of the boxes and of Math; a failed parse and an exact operation that
   # overflows throw the library's exceptions; a double's bits and hash are the
   # specified ones; new Object() is a value of no other class.
@@ -4853,6 +5075,53 @@ cases:
                       System.out.println(ex.getMessage());
                   }
               }
+              bits();
+          }
+
+          // the bits of an int and a long, the unsigned members, decode, the hexadecimal text
+          // of a double, what Math rounds, clamps and checks, a character's kind by the Unicode
+          // tables on every backend
+          static void bits() {
+              for (int i : new int[] {0, 1, -1, 0x12345678, Integer.MIN_VALUE, -123456789}) {
+                  System.out.println(Integer.highestOneBit(i) + " " + Integer.lowestOneBit(i) + " " + Integer.numberOfLeadingZeros(i) + " " + Integer.numberOfTrailingZeros(i) + " " + Integer.reverse(i) + " " + Integer.reverseBytes(i) + " " + Integer.rotateLeft(i, 5) + " " + Integer.rotateRight(i, 37) + " " + Integer.toUnsignedString(i, 16) + " " + Integer.divideUnsigned(i, 7) + " " + Integer.remainderUnsigned(i, -7) + " " + Integer.compareUnsigned(i, 3));
+              }
+              for (long i : new long[] {0L, -1L, 0x123456789ABCDEFL, Long.MIN_VALUE, -1234567890123456789L}) {
+                  System.out.println(Long.highestOneBit(i) + " " + Long.lowestOneBit(i) + " " + Long.numberOfLeadingZeros(i) + " " + Long.numberOfTrailingZeros(i) + " " + Long.reverse(i) + " " + Long.reverseBytes(i) + " " + Long.rotateLeft(i, 69) + " " + Long.rotateRight(i, 5) + " " + Long.toUnsignedString(i) + " " + Long.toUnsignedString(i, 36) + " " + Long.toOctalString(i) + " " + Long.divideUnsigned(i, 10L) + " " + Long.remainderUnsigned(i, -7L) + " " + Long.compareUnsigned(i, 3L));
+              }
+              System.out.println(Integer.SIZE + " " + Integer.BYTES + " " + Long.SIZE + " " + Long.BYTES + " " + Short.SIZE + " " + Byte.BYTES + " " + Character.SIZE + " " + Double.SIZE + " " + Float.BYTES + " " + Double.MIN_NORMAL + " " + Double.MAX_EXPONENT + " " + Float.MIN_EXPONENT + " " + Character.MIN_RADIX + " " + Character.MAX_RADIX + " " + Math.TAU + " " + StrictMath.sqrt(2) + " " + StrictMath.floorMod(-7, 3));
+              for (String text : new String[] {"0x1F", "-#ff", "010", "-0x80000000", "+10", "0x80000000", "08", "", "-", "0x-1", "1 "}) {
+                  try {
+                      System.out.println(Integer.decode(text) + " " + Long.decode(text));
+                  } catch (NumberFormatException ex) {
+                      System.out.println(ex.getMessage());
+                  }
+              }
+              for (String text : new String[] {"18446744073709551615", "18446744073709551616", "-1", "", "12x", "99999999999999999999x"}) {
+                  try {
+                      System.out.println(Long.parseUnsignedLong(text) + " " + Long.parseUnsignedLong(text, 16));
+                  } catch (NumberFormatException ex) {
+                      System.out.println(ex.getMessage());
+                  }
+              }
+              try {
+                  Integer.parseInt("1", 99);
+              } catch (NumberFormatException ex) {
+                  System.out.println(ex.getMessage() + " " + Double.toHexString(1.0) + " " + Double.toHexString(-0.1) + " " + Double.toHexString(Double.MIN_VALUE) + " " + Double.toHexString(Double.MAX_VALUE) + " " + Double.toHexString(Double.NaN) + " " + Float.toHexString(1.5f) + " " + Float.toHexString(Float.MIN_VALUE) + " " + Float.toHexString(-3.14f));
+              }
+              System.out.println(Math.log1p(1e-10) + " " + Math.expm1(1e-10) + " " + Math.IEEEremainder(5.0, 3.0) + " " + Math.IEEEremainder(1.0, 0.0) + " " + Math.copySign(1.5, -0.0) + " " + Math.copySign(2f, -1f) + " " + Math.getExponent(1e300) + " " + Math.getExponent(0.0) + " " + Math.getExponent(3.14f) + " " + Math.nextAfter(1.0, 2.0) + " " + Math.nextAfter(1.0f, 0.0) + " " + Math.nextAfter(0.0, -0.0) + " " + Math.ceilDiv(7, 2) + " " + Math.ceilDiv(-7, 2) + " " + Math.ceilMod(7, 2) + " " + Math.ceilMod(-7L, 2) + " " + Math.ceilDiv(Integer.MIN_VALUE, -1) + " " + Math.floorDiv(-7L, 2) + " " + Math.floorMod(-7L, 2) + " " + Math.multiplyHigh(Long.MAX_VALUE, Long.MAX_VALUE) + " " + Math.unsignedMultiplyHigh(-1L, -1L) + " " + Math.multiplyFull(Integer.MAX_VALUE, Integer.MAX_VALUE) + " " + Math.clamp(99L, 1, 10) + " " + Math.clamp(-5L, -2L, 2L) + " " + Math.clamp(-0.0, 0.0, 3.0) + " " + Math.clamp(2.5f, 0f, 1f) + " " + Math.absExact(-5) + " " + Math.incrementExact(5L) + " " + Math.decrementExact(5) + " " + Math.negateExact(5L) + " " + Math.multiplyExact(3L, 4));
+              Runnable[] refused = {() -> Math.absExact(Integer.MIN_VALUE), () -> Math.absExact(Long.MIN_VALUE), () -> Math.incrementExact(Integer.MAX_VALUE), () -> Math.decrementExact(Long.MIN_VALUE), () -> Math.clamp(1L, 5, 3), () -> Math.clamp(1.0, 0.0, -0.0), () -> Math.clamp(1.0, Double.NaN, 3.0), () -> Math.ceilDiv(1, 0), () -> Integer.divideUnsigned(1, 0), () -> Character.toChars(-1)};
+              for (Runnable each : refused) {
+                  try {
+                      each.run();
+                  } catch (RuntimeException ex) {
+                      System.out.println(ex);
+                  }
+              }
+              for (int cp : new int[] {'a', 'Z', '5', '_', '$', ' ', 0x7f, 0xaa, 0xe9, 0x1c5, 0x2160, 0x660, 0x3042, 0x4e2d, 0x200b, 0xd800, 0xffff, 0x1f600, 0x10000}) {
+                  System.out.println(Integer.toHexString(cp) + ": " + Character.getType(cp) + " " + Character.isLetter(cp) + " " + Character.isDigit(cp) + " " + Character.isLetterOrDigit(cp) + " " + Character.isAlphabetic(cp) + " " + Character.isUpperCase(cp) + " " + Character.isLowerCase(cp) + " " + Character.isTitleCase(cp) + " " + Character.isWhitespace(cp) + " " + Character.isJavaIdentifierStart(cp) + " " + Character.isJavaIdentifierPart(cp) + " " + Character.isISOControl(cp) + " " + Character.isDefined(cp) + " " + Character.isSupplementaryCodePoint(cp) + " " + Character.charCount(cp) + " " + Character.toChars(cp).length + " " + Character.toString(cp).equals(new String(Character.toChars(cp))));
+              }
+              char high = Character.highSurrogate(0x1f600), low = Character.lowSurrogate(0x1f600);
+              System.out.println((int) high + " " + (int) low + " " + Character.toCodePoint(high, low) + " " + Character.isSurrogatePair(high, low) + " " + Character.isHighSurrogate(high) + " " + Character.isLowSurrogate(high) + " " + Character.isSurrogate(low) + " " + Character.isLetter('é') + " " + Character.isJavaIdentifierStart('1') + " " + Character.getType('A') + " " + (Character.getType('a') == Character.LOWERCASE_LETTER) + " " + Character.DECIMAL_DIGIT_NUMBER + " " + Character.isValidCodePoint(0x110000) + " " + Character.isBmpCodePoint(0x10000) + " " + Character.isEmoji(0x1f600) + " " + Character.MAX_CODE_POINT + " " + (int) Character.MIN_SURROGATE);
           }
       }
     expected: |
@@ -4874,6 +5143,67 @@ cases:
       2.220446049250313E-16 7.450581E-9 1.99584030953472E292 1.4E-45 1.0000001 -9.9E-324 -3.4028235E38 -4.9E-324 5.551115123125783E-17 1.4901161E-8 Infinity -0.0 6.0 9.9E-324 1.0239945E-37 Infinity -1071644672 4602678819172646912
       Illegal leading minus sign on unsigned string -1.
       String value 4294967296 exceeds range of unsigned int.
+      0 0 32 32 0 0 0 0 0 0 0 -1
+      1 1 31 0 -2147483648 16777216 32 134217728 1 0 1 -1
+      -2147483648 1 0 0 -1 -1 -1 -1 ffffffff 613566756 6 1
+      268435456 8 3 3 510274632 2018915346 1183502082 -1064197453 12345678 43631413 305419896 1
+      -2147483648 -2147483648 0 31 1 128 16 67108864 80000000 306783378 -2147483648 1
+      -2147483648 1 0 0 -682875617 -349002504 344350079 1606754711 f8a432eb 595930072 -123456789 1
+      0 0 64 64 0 0 0 0 0 0 0 0 0 -1
+      -9223372036854775808 1 0 0 -1 -1 -1 -1 18446744073709551615 3w5e11264sgsf 1777777777777777777777 1844674407370955161 6 1
+      72057594037927936 1 7 0 -597899502893742976 -1167088121787636991 2623536934927580640 8649473332339367535 81985529216486895 mf9g063v08f 4432126361152746757 8198552921648689 81985529216486895 1
+      -9223372036854775808 -9223372036854775808 0 63 1 128 16 288230376151711744 9223372036854775808 1y2p0ij32e8e8 1000000000000000000000 922337203685477580 -9223372036854775808 1
+      -9223372036854775808 1 0 0 -2918780876601443465 -1477718879929115154 -2612684336531513987 6878948781074723831 17212176183586094827 3mrpz8j2vltd7 1673357360560205477353 1721217618358609482 -1234567890123456789 1
+      32 4 64 8 16 1 16 64 4 2.2250738585072014E-308 1023 -126 2 36 6.283185307179586 1.4142135623730951 2
+      31 31
+      -255 -255
+      8 8
+      -2147483648 -2147483648
+      10 10
+      For input string: "80000000" under radix 16
+      For input string: "8" under radix 8
+      Zero length string
+      For input string: "-"
+      Sign character in wrong position
+      For input string: "1 "
+      String value 18446744073709551615 exceeds range of unsigned long.
+      String value 18446744073709551616 exceeds range of unsigned long.
+      Illegal leading minus sign on unsigned string -1.
+      For input string: ""
+      For input string: "12x"
+      String value 99999999999999999999x exceeds range of unsigned long.
+      radix 99 greater than Character.MAX_RADIX 0x1.0p0 -0x1.999999999999ap-4 0x0.0000000000001p-1022 0x1.fffffffffffffp1023 NaN 0x1.8p0 0x0.000002p-126 -0x1.91eb86p1
+      9.999999999500001E-11 1.00000000005E-10 -1.0 NaN -1.5 -2.0 996 -1023 1 1.0000000000000002 0.99999994 -0.0 4 -3 -1 -1 -2147483648 -4 1 4611686018427387903 -2 4611686014132420609 10 -2 0.0 1.0 5 6 4 -5 12
+      java.lang.ArithmeticException: Overflow to represent absolute value of Integer.MIN_VALUE
+      java.lang.ArithmeticException: Overflow to represent absolute value of Long.MIN_VALUE
+      java.lang.ArithmeticException: integer overflow
+      java.lang.ArithmeticException: long overflow
+      java.lang.IllegalArgumentException: 5 > 3
+      java.lang.IllegalArgumentException: 0.0 > -0.0
+      java.lang.IllegalArgumentException: min is NaN
+      java.lang.ArithmeticException: / by zero
+      java.lang.ArithmeticException: / by zero
+      java.lang.IllegalArgumentException: Not a valid Unicode code point: 0xFFFFFFFF
+      61: 2 true false true true false true false false true true false true false 1 1 true
+      5a: 1 true false true true true false false false true true false true false 1 1 true
+      35: 9 false true true false false false false false false true false true false 1 1 true
+      5f: 23 false false false false false false false false true true false true false 1 1 true
+      24: 26 false false false false false false false false true true false true false 1 1 true
+      20: 12 false false false false false false false true false false false true false 1 1 true
+      7f: 15 false false false false false false false false false true true true false 1 1 true
+      aa: 5 true false true true false true false false true true false true false 1 1 true
+      e9: 2 true false true true false true false false true true false true false 1 1 true
+      1c5: 3 true false true true false false true false true true false true false 1 1 true
+      2160: 10 false false false true true false false false true true false true false 1 1 true
+      660: 9 false true true false false false false false false true false true false 1 1 true
+      3042: 5 true false true true false false false false true true false true false 1 1 true
+      4e2d: 5 true false true true false false false false true true false true false 1 1 true
+      200b: 16 false false false false false false false false false true false true false 1 1 true
+      d800: 19 false false false false false false false false false false false true false 1 1 true
+      ffff: 0 false false false false false false false false false false false false false 1 1 true
+      1f600: 28 false false false false false false false false false false false true true 2 2 true
+      10000: 5 true false true true false false false false true true false true true 2 2 true
+      55357 56832 128512 true true false true true false 1 true 9 false false true 1114111 55296
   # java.io's byte streams are Java source over byte[]: the array pair, the data pair
   # (high byte first, writeUTF's modified UTF-8), mark and reset, the exceptions. A
   # string's bytes are its UTF-8 unless a charset says ISO-8859-1 or US-ASCII; what is no
@@ -4888,6 +5218,7 @@ cases:
               } catch (IOException e) {
                   throw new UncheckedIOException(e);
               }
+              wide();
           }
 
           static void run() throws IOException {
@@ -4958,6 +5289,93 @@ cases:
                   System.out.println(e);
               }
           }
+
+          // UTF-16 writes its mark once, ahead of a text that is not empty, and reads one as
+          // the order of what follows; UTF-16BE and UTF-16LE have none. A surrogate with no
+          // partner, a byte with none and a high surrogate with the unit after it are U+FFFD,
+          // through a string and through a reader given a few bytes at a time alike. A charset
+          // named as a constant is the charset: the member taking a Charset.
+          static String wideHex(byte[] b) {
+              StringBuilder s = new StringBuilder();
+              for (byte x : b) {
+                  s.append(Integer.toHexString((x & 0xff) | 0x100).substring(1));
+              }
+              return s.toString();
+          }
+
+          static String wideUnits(char[] units, int count) {
+              StringBuilder s = new StringBuilder("[");
+              for (int i = 0; i < count; i++) {
+                  s.append(i > 0 ? " " : "").append(Integer.toHexString(units[i]));
+              }
+              return s.append(']').toString();
+          }
+
+          static void wide() {
+              Charset[] sets = {StandardCharsets.UTF_16, StandardCharsets.UTF_16BE, StandardCharsets.UTF_16LE};
+              int[][] texts = {{}, {'a', 0xe9, 0x20ac}, {0xd83d, 0xde00}, {'x', 0xd83d, 'y'}, {0xde00, 0xd83d}, {0xfeff, 'a'}, {0xd83d, 0xd83d, 0xde00}};
+              String[] inputs = {"", "00", "feff0061", "fffe6100", "feff", "feff00", "d83dde00", "d83d0061", "de000061", "d83d", "d83dd83dde00", "0061feff0062", "fefffffe", "0061d83d00", "dc00d800"};
+              try {
+                  for (Charset cs : sets) {
+                      StringBuilder line = new StringBuilder(cs + " " + cs.name() + " " + new InputStreamReader(new ByteArrayInputStream(new byte[0]), cs).getEncoding() + " " + new OutputStreamWriter(new ByteArrayOutputStream(), cs).getEncoding());
+                      for (int[] codes : texts) {
+                          char[] made = new char[codes.length];
+                          for (int i = 0; i < codes.length; i++) {
+                              made[i] = (char) codes[i];
+                          }
+                          line.append(' ').append(wideHex(new String(made).getBytes(cs)));
+                      }
+                      System.out.println(line);
+                      line = new StringBuilder();
+                      for (String in : inputs) {
+                          byte[] b = new byte[in.length() / 2];
+                          for (int i = 0; i < b.length; i++) {
+                              b[i] = (byte) Integer.parseInt(in.substring(2 * i, 2 * i + 2), 16);
+                          }
+                          char[] whole = new String(b, cs).toCharArray();
+                          line.append(wideUnits(whole, whole.length));
+                          for (int step = 1; step <= 3; step++) {
+                              final int most = step;
+                              Reader reader = new InputStreamReader(new ByteArrayInputStream(b) {
+                                  public int read(byte[] to, int off, int len) {
+                                      return super.read(to, off, Math.min(len, most));
+                                  }
+                              }, cs);
+                              char[] read = new char[8];
+                              int got = 0;
+                              for (int c = reader.read(); c >= 0; c = reader.read()) {
+                                  read[got++] = (char) c;
+                              }
+                              line.append(wideUnits(read, got).equals(wideUnits(whole, whole.length)) ? "=" : wideUnits(read, got));
+                          }
+                      }
+                      System.out.println(line);
+                      ByteArrayOutputStream sink = new ByteArrayOutputStream();
+                      Writer writer = new OutputStreamWriter(sink, cs);
+                      writer.flush();
+                      writer.write("a");
+                      writer.write(0xd83d);
+                      writer.flush();
+                      writer.write(new char[] {0xde00, 'b'});
+                      writer.write(0xd83d);
+                      writer.write("c");
+                      writer.write(0xd83d);
+                      writer.close();
+                      ByteArrayOutputStream printed = new ByteArrayOutputStream();
+                      PrintStream stream = new PrintStream(printed, true, cs);
+                      stream.print("");
+                      stream.print("a");
+                      stream.println("b");
+                      stream.close();
+                      System.out.println(wideHex(sink.toByteArray()) + " " + wideHex(printed.toByteArray()) + " " + printed.toString(cs).length() + " " + new String(printed.toByteArray(), cs.name()).trim() + " " + wideHex("hi".getBytes(cs.name())) + " " + stream.charset().name());
+                  }
+                  System.out.println(Charset.forName("utf-16").name() + " " + Charset.forName("UnicodeBigUnmarked") + " " + Charset.forName("X-UTF-16LE") + " " + Charset.isSupported("UTF16") + " " + Charset.isSupported("UTF-64") + " " + (Charset.forName("UTF-16") == StandardCharsets.UTF_16) + " " + (Charset.forName("utf8") == StandardCharsets.UTF_8) + " " + wideHex("hé".getBytes("UTF-8")) + wideHex("hé".getBytes("latin1")) + " " + new String(new byte[] {0, 104, 0, 105}, "UTF-16BE") + new String(new byte[] {104, 105}, 0, 1, "ASCII") + " " + new BufferedReader(new InputStreamReader(new ByteArrayInputStream(new byte[] {(byte) 0xff, (byte) 0xfe, 104, 0, 105, 0}), "UTF-16")).readLine() + " " + new InputStreamReader(new ByteArrayInputStream(new byte[0]), "utf-8").getEncoding() + " " + new PrintStream(new ByteArrayOutputStream(), false, "US-ASCII").charset());
+                  String computed = "UTF-" + sets.length * 4 + "x";
+                  Charset.forName(computed);
+              } catch (IOException | UnsupportedCharsetException e) {
+                  System.out.println(e);
+              }
+          }
       }
     expected: |
       12
@@ -4981,6 +5399,17 @@ cases:
       Range [2, 2 + 5) out of bounds for length 4
       java.lang.StringIndexOutOfBoundsException: Range [2, 2 + 5) out of bounds for length 4
       java.io.UnsupportedEncodingException: nope
+      UTF-16 UTF-16 UTF-16 UTF-16  feff006100e920ac feffd83dde00 feff0078fffd0079 fefffffdfffd fefffeff0061 fefffffdd83dde00
+      []===[fffd]===[61]===[61]===[]===[fffd]===[d83d de00]===[fffd]===[fffd 61]===[fffd]===[fffd fffd]===[61 feff 62]===[fffe]===[61 fffd]===[fffd fffd]===
+      feff0061d83dde000062fffd0063fffd feff00610062000a 3 ab feff00680069 UTF-16
+      UTF-16BE UTF-16BE UnicodeBigUnmarked UnicodeBigUnmarked  006100e920ac d83dde00 0078fffd0079 fffdfffd feff0061 fffdd83dde00
+      []===[fffd]===[feff 61]===[fffe 6100]===[feff]===[feff fffd]===[d83d de00]===[fffd]===[fffd 61]===[fffd]===[fffd fffd]===[61 feff 62]===[feff fffe]===[61 fffd]===[fffd fffd]===
+      0061d83dde000062fffd0063fffd 00610062000a 3 ab 00680069 UTF-16BE
+      UTF-16LE UTF-16LE UnicodeLittleUnmarked UnicodeLittleUnmarked  6100e900ac20 3dd800de 7800fdff7900 fdfffdff fffe6100 fdff3dd800de
+      []===[fffd]===[fffe 6100]===[feff 61]===[fffe]===[fffe fffd]===[3dd8 de]===[3dd8 6100]===[de 6100]===[3dd8]===[3dd8 3dd8 de]===[6100 fffe 6200]===[fffe feff]===[6100 3dd8 fffd]===[dc d8]===
+      61003dd800de6200fdff6300fdff 610062000a00 3 ab 68006900 UTF-16LE
+      UTF-16 UTF-16BE UTF-16LE true false true true 68c3a968e9 hih hi UTF8 US-ASCII
+      java.nio.charset.UnsupportedCharsetException: UTF-12x
   # A PrintStream a program makes encodes into the stream under it at once and keeps an
   # IOException for checkError; System.out is one as a value, and the host's stream as
   # the receiver of a print. An OutputStreamWriter holds its bytes until flush (8192 at a
@@ -8306,6 +8735,8 @@ standalone:
                   System.out.println(line.length() + " " + line);
               }
               System.out.println(in.read() + " " + System.in.read());
+              // a line there is not is null, and null is its four letters in a text
+              System.out.println("at the end: " + IO.readln());
               PrintWriter out = new PrintWriter(new BufferedWriter(new OutputStreamWriter(System.out)));
               out.printf("%d lines%n", n);
               out.flush();
@@ -8320,6 +8751,7 @@ standalone:
       0 
       21 last line without end
       -1 -1
+      at the end: null
       2 lines
 refused:
   scaffold: |
@@ -8364,6 +8796,14 @@ refused:
     - name: an-incompatible-type
       body: 'int x = "s";'
       error: "incompatible types: String cannot be converted to int"
+    # Two classes the types say cannot be one are not compared: two literals, a literal
+    # of a class the object's type does not have under it.
+    - name: two-class-literals-of-two-classes
+      body: 'boolean same = String.class == Object.class;'
+      error: "incomparable types: Class<String> and Class<Object>"
+    - name: a-class-literal-of-no-class-under-the-object-s-type
+      body: 'String text = ""; boolean same = text.getClass() == Object.class;'
+      error: "incomparable types: Class<CAP#1> and Class<Object>"
     # A private member is no member of the classes under its class: its simple name
     # finds what is around them, or nothing.
     - name: a-private-field-of-a-superclass-is-not-read-by-its-simple-name

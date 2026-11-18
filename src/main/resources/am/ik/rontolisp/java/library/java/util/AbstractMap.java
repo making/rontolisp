@@ -194,6 +194,94 @@ public abstract class AbstractMap<K, V> implements Map<K, V> {
         }
     }
 
+    // An entry of its own, whose value can be set.
+    public static class SimpleEntry<K, V> implements Map.Entry<K, V> {
+
+        private final K key;
+
+        private V value;
+
+        public SimpleEntry(K key, V value) {
+            this.key = key;
+            this.value = value;
+        }
+
+        public SimpleEntry(Map.Entry<? extends K, ? extends V> entry) {
+            this.key = entry.getKey();
+            this.value = entry.getValue();
+        }
+
+        public K getKey() {
+            return key;
+        }
+
+        public V getValue() {
+            return value;
+        }
+
+        public V setValue(V replacement) {
+            V old = value;
+            value = replacement;
+            return old;
+        }
+
+        public boolean equals(Object o) {
+            return o instanceof Map.Entry<?, ?> other && Objects.equals(key, other.getKey())
+                    && Objects.equals(value, other.getValue());
+        }
+
+        public int hashCode() {
+            return (key == null ? 0 : key.hashCode()) ^ (value == null ? 0 : value.hashCode());
+        }
+
+        public String toString() {
+            return key + "=" + value;
+        }
+    }
+
+    // An entry of its own nothing changes.
+    public static class SimpleImmutableEntry<K, V> implements Map.Entry<K, V> {
+
+        private final K key;
+
+        private final V value;
+
+        public SimpleImmutableEntry(K key, V value) {
+            this.key = key;
+            this.value = value;
+        }
+
+        public SimpleImmutableEntry(Map.Entry<? extends K, ? extends V> entry) {
+            this.key = entry.getKey();
+            this.value = entry.getValue();
+        }
+
+        public K getKey() {
+            return key;
+        }
+
+        public V getValue() {
+            return value;
+        }
+
+        public V setValue(V replacement) {
+            throw new UnsupportedOperationException();
+        }
+
+        public boolean equals(Object o) {
+            return o instanceof Map.Entry<?, ?> other && Objects.equals(key, other.getKey())
+                    && Objects.equals(value, other.getValue());
+        }
+
+        public int hashCode() {
+            return (key == null ? 0 : key.hashCode()) ^ (value == null ? 0 : value.hashCode());
+        }
+
+        public String toString() {
+            return key + "=" + value;
+        }
+    }
+
     // The keys or the values of the entries an iterator gives.
     static final class Part<T, K, V> implements Iterator<T> {
 

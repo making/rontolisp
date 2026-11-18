@@ -75,6 +75,9 @@ interface JavaEmitter {
 		 */
 		LispVal stringFunction();
 
+		/** The function answering any value's {@code hashCode()}. */
+		LispVal hashFunction();
+
 		/**
 		 * A call of a static method of the library's Java source: a member written in
 		 * Java, found by its class, its name and how many arguments it takes.

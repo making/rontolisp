@@ -230,6 +230,65 @@ public final class Collections {
         return new Synchronized.MapOf<>(map);
     }
 
+    // The element at i moves to (i + distance) mod size: three reversals.
+    public static void rotate(List<?> list, int distance) {
+        int size = list.size();
+        if (size == 0) {
+            return;
+        }
+        int shift = distance % size;
+        if (shift < 0) {
+            shift += size;
+        }
+        if (shift == 0) {
+            return;
+        }
+        reverse(list.subList(0, size - shift));
+        reverse(list.subList(size - shift, size));
+        reverse(list);
+    }
+
+    public static <T> boolean replaceAll(List<T> list, T oldVal, T newVal) {
+        boolean replaced = false;
+        for (int i = 0; i < list.size(); i++) {
+            T held = list.get(i);
+            if (oldVal == null ? held == null : oldVal.equals(held)) {
+                list.set(i, newVal);
+                replaced = true;
+            }
+        }
+        return replaced;
+    }
+
+    private static boolean sublistAt(List<?> source, List<?> target, int at) {
+        for (int i = 0; i < target.size(); i++) {
+            Object wanted = target.get(i);
+            Object held = source.get(at + i);
+            if (!(wanted == null ? held == null : wanted.equals(held))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public static int indexOfSubList(List<?> source, List<?> target) {
+        for (int at = 0; at <= source.size() - target.size(); at++) {
+            if (sublistAt(source, target, at)) {
+                return at;
+            }
+        }
+        return -1;
+    }
+
+    public static int lastIndexOfSubList(List<?> source, List<?> target) {
+        for (int at = source.size() - target.size(); at >= 0; at--) {
+            if (sublistAt(source, target, at)) {
+                return at;
+            }
+        }
+        return -1;
+    }
+
     public static <T> Comparator<T> reverseOrder() {
         return (T a, T b) -> ((Comparable) b).compareTo(a);
     }
