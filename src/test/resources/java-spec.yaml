@@ -1379,6 +1379,95 @@ cases:
                   System.out.println(th + " | " + th.getMessage() + " | " + new ExceptionsFatal() + " | " + new ExceptionsApp("m", 1) + " | " + new RuntimeException().getMessage());
               }
               named();
+              System.out.println(checked());
+          }
+
+          // what a compiler lets a body throw: what a clause takes or the method declares. A
+          // catch parameter thrown again throws what its try left it, a type parameter of a
+          // throws clause is what a lambda's body or a method reference's method throws, a
+          // resource's close() and a constructor an anonymous class hands its arguments to
+          // throw where they stand, and a finally that never completes drops what its try
+          // threw -- its own return over the try's, which the JVM compiled without end
+          interface Task<X extends Exception> {
+              int run() throws X;
+          }
+
+          static class Resource implements AutoCloseable {
+              final int code;
+
+              Resource(int code) throws ExceptionsApp {
+                  this.code = risky(code);
+              }
+
+              public void close() throws ExceptionsApp {
+                  throw new ExceptionsApp("closed", code);
+              }
+          }
+
+          static <X extends Exception> int call(Task<X> task) throws X {
+              return task.run();
+          }
+
+          static int again(int n) throws ExceptionsApp {
+              try {
+                  return risky(n);
+              } catch (Exception e) {
+                  log += "R";
+                  throw e;
+              }
+          }
+
+          static int dropped() {
+              for (;;) {
+                  try {
+                      again(1);
+                  } finally {
+                      break;
+                  }
+              }
+              try {
+                  return again(1);
+              } finally {
+                  return 4;
+              }
+          }
+
+          static String checked() {
+              String out = "" + call(() -> 7) + call(Exceptions::dropped);
+              try {
+                  out += call(() -> again(5));
+                  out += call(() -> again(1));
+              } catch (ExceptionsApp e) {
+                  out += " " + e.getMessage() + e.code;
+              }
+              try (Resource first = new Resource(5); Resource second = new Resource(1)) {
+                  out += " in" + first.code + second.code;
+              } catch (ExceptionsApp e) {
+                  out += " " + e.getMessage() + e.code + e.getSuppressed().length;
+              }
+              try (Resource only = new Resource(6)) {
+                  out += " in" + only.code;
+              } catch (ExceptionsApp e) {
+                  out += " " + e.getMessage() + e.code;
+              }
+              try {
+                  out += " " + new String("ab".getBytes("UTF-8"), "ISO-8859-1").length();
+                  java.util.concurrent.Callable<Integer> task = () -> again(2);
+                  out += task.call();
+              } catch (UnsupportedEncodingException | ExceptionsApp e) {
+                  out += " never";
+              } catch (Exception e) {
+                  out += " " + e.getMessage();
+              }
+              Object made = new Resource[0];
+              try {
+                  made = new Resource(1) {
+                      int more = again(0);
+                  };
+              } catch (ExceptionsApp e) {
+                  out += " " + (made instanceof Resource[]) + e.code;
+              }
+              return out + " " + log;
           }
 
           // the errors and exceptions a program names beside its own, and a frame as a program
@@ -1421,6 +1510,7 @@ cases:
       java.io.FileNotFoundException: a.txt (No such file or directory) | null | false false true false false
       java.util.InputMismatchException: For input string: "x" | null | true false false false true
       java.lang.AssertionError: caught a.B.run(B.java:12) a.B run B.java 12 a.B.run(Unknown Source) a.B.run(Native Method) true true
+      745 one11 one111 in6 closed6 2 two true11 01234FGRRRR
   # An error the run time or the host raises is the exception the table in java.lisp
   # names, made the program's object for a clause above it: a division by zero an
   # ArithmeticException, an index outside an array an ArrayIndexOutOfBoundsException,
@@ -5986,7 +6076,8 @@ cases:
 standalone:
   # What a compiler warns of as unchecked is printed on standard error before the
   # program runs, as a JDK prints it, by the interpreter and by a compile; a declaration
-  # annotated @SuppressWarnings("unchecked") says none of its own (`warnings`).
+  # annotated @SuppressWarnings("unchecked") says none of its own (`warnings`). So is a
+  # catch clause that every exception of its try it could take was taken before.
   - name: the-unchecked-warnings-are-printed-before-the-program-runs
     file: Unchecked.java
     source: |
@@ -6032,6 +6123,13 @@ standalone:
               @SuppressWarnings("unchecked") List<String> named = raw;
               Map<String, Integer> map = (Map<String, Integer>) new HashMap();
               System.out.println(count(raw) + " " + listOf(strings, named).size() + " " + box.value + " " + map.size() + " " + Unchecked.<String>unsafe("u") + quiet("q"));
+              try {
+                  if (raw.isEmpty()) {
+                      throw new java.io.FileNotFoundException("none");
+                  }
+              } catch (java.io.FileNotFoundException e) {
+              } catch (java.io.IOException e) {
+              }
           }
       }
     warnings: |
@@ -6088,7 +6186,11 @@ standalone:
       Unchecked.java:42: warning: [unchecked] unchecked generic array creation for varargs parameter of type List<String>[]
               System.out.println(count(raw) + " " + listOf(strings, named).size() + " " + box.value + " " + map.size() + " " + Unchecked.<String>unsafe("u") + quiet("q"));
                                                           ^
-      11 warnings
+      Unchecked.java:48: warning: unreachable catch clause
+              } catch (java.io.IOException e) {
+                ^
+        thrown type FileNotFoundException has already been caught
+      12 warnings
     stdout: |
       1 2 2 0 uq
   # An uncaught exception is the line a JDK writes on standard error -- the exception's
@@ -8826,6 +8928,53 @@ refused:
     - name: an-unresolved-name
       body: 'int x = y;'
       error: "cannot find symbol"
+    # A checked exception is caught or declared (JLS 11.2): what a throw's value is, what
+    # the method, the constructor or the close() a body calls declares.
+    - name: a-checked-exception-thrown-and-neither-caught-nor-declared
+      body: 'throw new java.io.IOException("x");'
+      error: "unreported exception IOException; must be caught or declared to be thrown"
+    - name: a-call-of-a-method-declaring-a-checked-exception
+      body: 'Thread.sleep(1);'
+      error: "unreported exception InterruptedException; must be caught or declared to be thrown"
+    - name: a-resource-whose-close-declares-a-checked-exception
+      body: 'try (java.io.Reader in = new java.io.StringReader("x")) { }'
+      error: "unreported exception IOException; must be caught or declared to be thrown"
+    - name: an-initializer-throwing-what-no-constructor-declares
+      body: 'class Local { int held = make(); static int make() throws Exception { return 1; } }'
+      error: "unreported exception Exception; must be caught or declared to be thrown"
+    - name: a-default-constructor-over-a-constructor-that-throws
+      body: 'class Above { Above() throws Exception { } } class Under extends Above { }'
+      error: "unreported exception Exception in default constructor"
+    # A catch parameter thrown again throws what its try left it, not its type.
+    - name: a-catch-parameter-thrown-again-as-what-its-try-left-it
+      body: 'try { Thread.sleep(1); } catch (Exception e) { throw e; }'
+      error: "unreported exception InterruptedException; must be caught or declared to be thrown"
+    # A clause takes what its try can throw, and nothing a clause before it took.
+    - name: a-catch-of-a-checked-exception-its-try-does-not-throw
+      body: 'try { int x = 1; } catch (java.io.IOException e) { }'
+      error: "exception IOException is never thrown in body of corresponding try statement"
+    - name: a-catch-of-a-class-a-clause-before-it-takes
+      body: 'try { Thread.sleep(1); } catch (Exception e) { } catch (InterruptedException e) { }'
+      error: "exception InterruptedException has already been caught"
+    # A lambda's body and a method reference's method throw what the function type does.
+    - name: a-lambda-throwing-what-its-function-type-does-not
+      body: 'Runnable nap = () -> Thread.sleep(1);'
+      error: "unreported exception InterruptedException; must be caught or declared to be thrown"
+    - name: a-method-reference-throwing-what-its-function-type-does-not
+      body: 'java.util.function.LongConsumer nap = Thread::sleep;'
+      error: "incompatible thrown types InterruptedException in functional expression"
+    # A type parameter of a throws clause is what the lambda given for it throws.
+    - name: a-type-parameter-of-a-throws-clause-found-from-a-lambda
+      body: 'interface Task<X extends Exception> { void run() throws X; } class Calls { static <X extends Exception> void call(Task<X> task) throws X { task.run(); } } Calls.call(() -> Thread.sleep(1));'
+      error: "unreported exception InterruptedException; must be caught or declared to be thrown"
+    # An override throws no more than what it overrides (JLS 8.4.8.3), and a throws
+    # clause names exceptions.
+    - name: an-override-throwing-what-the-overridden-method-does-not
+      body: 'class Above { void run() { } } class Under extends Above { void run() throws Exception { } }'
+      error: "run() in Under cannot override run() in Above"
+    - name: a-throws-clause-of-no-throwable
+      body: 'class Local { void run() throws String { } }'
+      error: "incompatible types: String cannot be converted to Throwable"
     - name: an-unreachable-statement
       body: 'return; int x = 1;'
       error: "unreachable statement"

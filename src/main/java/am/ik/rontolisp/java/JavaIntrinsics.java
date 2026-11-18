@@ -60,6 +60,10 @@ final class JavaIntrinsics {
 
 	private static final String THROWABLE = "java.lang.Throwable";
 
+	private static final String INTERRUPTED = "java.lang.InterruptedException";
+
+	private static final String UNSUPPORTED_ENCODING = "java.io.UnsupportedEncodingException";
+
 	/** The source class holding the members of these classes that are written in Java. */
 	private static final String SUPPORT = "rontolisp.internal.Support";
 
@@ -485,6 +489,15 @@ final class JavaIntrinsics {
 			return this;
 		}
 
+		/**
+		 * The member added last throws checked exceptions, named here: the classes are
+		 * read where a call of it is lowered.
+		 */
+		Builder throwing(String... exceptions) {
+			this.made.methods.get(this.made.methods.size() - 1).raises = List.of(exceptions);
+			return this;
+		}
+
 		/** The member added last takes the arguments past its others as an array. */
 		Builder varargs() {
 			this.made.methods.get(this.made.methods.size() - 1).varargs = true;
@@ -549,10 +562,12 @@ final class JavaIntrinsics {
 					// their exceptions
 					.method("wait", Primitive.VOID,
 							(lowering, call) -> lowering.library(THREAD, "await", List.of(call.self(), integer(0))))
+					.throwing(INTERRUPTED)
 					.method("wait", Primitive.VOID,
 							(lowering, call) -> lowering.library(THREAD, "await",
 									List.of(call.self(), call.argument(0))),
 							Primitive.LONG)
+					.throwing(INTERRUPTED)
 					.method("notify", Primitive.VOID,
 							(lowering, call) -> lowering.library(THREAD, "signal", List.of(call.self(), JavaForms.NIL)))
 					.method("notifyAll", Primitive.VOID,
@@ -734,9 +749,12 @@ final class JavaIntrinsics {
 					bytes)
 			.constructor(runtime("utf8-string"), bytes, i, i)
 			.constructor(support("decodeNamed"), bytes, string)
+			.throwing(UNSUPPORTED_ENCODING)
 			.constructor(support("decodeNamed"), bytes, i, i, string)
+			.throwing(UNSUPPORTED_ENCODING)
 			.method("getBytes", bytes, runtime("utf8-bytes"))
 			.method("getBytes", bytes, support("encodeNamed"), string)
+			.throwing(UNSUPPORTED_ENCODING)
 			.method("length", i, host("length"))
 			.method("charAt", Primitive.CHAR, JavaIntrinsics::charAt, i)
 			// a string's elements are code points

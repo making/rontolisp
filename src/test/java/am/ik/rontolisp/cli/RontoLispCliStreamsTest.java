@@ -856,7 +856,8 @@ class RontoLispCliStreamsTest {
 		// a session lowers every buffer with the declarations of the earlier ones: a
 		// subclass, a body declared later reaches an earlier caller; a class's static
 		// state lives on; a value shows by its static type; what a step left uncaught
-		// is reported and the session goes on
+		// is reported and the session goes on; a step throws what it likes, as a
+		// snippet does, where a method declares what it throws
 		String[] session = runSession(false, """
 				interface Shape { double area(); }
 				record Sq(double s) implements Shape { public double area() { return s * s; } }
@@ -880,6 +881,8 @@ class RontoLispCliStreamsTest {
 				int[] xs = {1,
 				    2}
 				System.out.println(xs.length)
+				byte[] bs = "ab".getBytes("UTF-8")
+				int nap(int n) { Thread.sleep(n); return n; }
 				""", "--source-language", "java");
 		assertThat(session[1]).isEqualTo("""
 				shapes ==> []
@@ -894,8 +897,10 @@ class RontoLispCliStreamsTest {
 				$10 ==> 'c'
 				xs ==> int[2] { 1, 2 }
 				2
+				bs ==> byte[2] { 97, 98 }
 				""");
-		assertThat(session[2]).contains("Exception java.lang.ArithmeticException: / by zero");
+		assertThat(session[2]).contains("Exception java.lang.ArithmeticException: / by zero",
+				"unreported exception InterruptedException; must be caught or declared to be thrown");
 		// a Java file is no test and holds no S-expression to re-indent
 		assertThat(runReporting("test", program.toString())[2])
 			.contains("is a Java program, which has no test framework");

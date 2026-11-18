@@ -60,16 +60,29 @@ import org.jspecify.annotations.Nullable;
 /**
  * What the language decides from the flow of a class's bodies once the lowering has typed
  * them: which statements are reachable and which complete normally (JLS 14.22), which
- * variables are definitely assigned and definitely unassigned (JLS 16), and which locals
+ * variables are definitely assigned and definitely unassigned (JLS 16), which checked
+ * exceptions a body throws that nothing catches or declares (JLS 11.2), and which locals
  * are effectively final (JLS 4.12.4).
  *
  * <p>
  * The walk follows the syntax tree, as a compiler's flow analysis follows its attributed
  * tree; what only typing knows comes from the lowering ({@link Facts}): the variable each
  * name stands for, the value of each constant condition, the switches that are enhanced,
- * the locals each local or anonymous class reads. A problem is reported as a compiler
- * reports it, and of a class's problems the first of the kind a compiler reports first:
- * reachability, then assignment, then captures.
+ * the locals each local or anonymous class reads, what each call throws. A problem is
+ * reported as a compiler reports it, and of a class's problems the first of the kind a
+ * compiler reports first: reachability, then assignment, then exceptions, then captures;
+ * of one kind, the first in the order of the class's members, its static initialization
+ * ahead of them (asked of a JDK 25's compiler).
+ *
+ * <p>
+ * The exceptions: each body is walked with the list of the checked exceptions thrown so
+ * far, at the places a compiler names. A {@code try} starts a list of its own; each
+ * clause takes what is under its classes out of it, its parameter then holding those --
+ * which is what {@code throw} of it throws again while nothing assigns it --, and what is
+ * left joins the list around unless a {@code finally} cannot complete normally. A
+ * lambda's list is held against its function type's clause, a body's against its method's
+ * or constructor's, an initializer's against every constructor's. An anonymous class's
+ * initializers throw where it is made.
  */
 final class JavaFlow {
 
@@ -95,10 +108,59 @@ final class JavaFlow {
 		/** The locals of the methods around it each local or anonymous class reads. */
 		final Map<ClassDeclaration, List<Capture>> captures = new IdentityHashMap<>();
 
+		/**
+		 * The checked exceptions each call throws ({@link Raise}), by its node: a method
+		 * call, an instance creation, {@code this(..)} or {@code super(..)}, a resource
+		 * closed; by a constructor's declaration what the {@code super()} it does not
+		 * write throws, by a class's what its default constructor's does.
+		 */
+		final Map<Object, Raise> raises = new IdentityHashMap<>();
+
+		/** The type of each {@code throw}'s value that is a checked exception. */
+		final Map<Throw, JavaType> thrown = new IdentityHashMap<>();
+
+		/**
+		 * The catch clause whose parameter each {@code throw} throws again, also from a
+		 * lambda or a class inside the clause.
+		 */
+		final Map<Throw, Catch> rethrown = new IdentityHashMap<>();
+
+		/** The classes each catch clause takes, in the order written. */
+		final Map<Catch, List<JavaClass>> caught = new IdentityHashMap<>();
+
+		/** The {@code try} statement each catch clause is a clause of. */
+		final Map<Catch, Try> tries = new IdentityHashMap<>();
+
+		/** What the function type of each lambda lets its body throw. */
+		final Map<Lambda, List<JavaType>> lets = new IdentityHashMap<>();
+
+		/** The class each anonymous class's body declares. */
+		final Map<ClassDeclaration, JavaClass> anonymous = new IdentityHashMap<>();
+
+		/** The relations between the types, which say what a clause takes. */
+		@Nullable JavaTypes types;
+
+		/**
+		 * What a compiler warns of in the flow of the classes checked so far, which the
+		 * lowering takes: a catch clause nothing reaches.
+		 */
+		final List<Problem> warnings = new ArrayList<>();
+
 		void captured(ClassDeclaration reader, Object variable, int pos) {
 			this.captures.computeIfAbsent(reader, key -> new ArrayList<>()).add(new Capture(variable, pos));
 		}
 
+	}
+
+	/**
+	 * The checked exceptions a call throws.
+	 *
+	 * @param pos where a compiler says so: a call's parenthesis, a creation's
+	 * {@code new}, a resource's variable
+	 * @param types the exceptions
+	 * @param detail what a compiler adds under its message, or {@code null}
+	 */
+	record Raise(int pos, List<JavaType> types, @Nullable String detail) {
 	}
 
 	/**
@@ -118,7 +180,19 @@ final class JavaFlow {
 
 	private static final int ASSIGN = 1;
 
-	private static final int CAPTURE = 2;
+	private static final int THROWN = 2;
+
+	private static final int CAPTURE = 3;
+
+	/**
+	 * A checked exception thrown.
+	 *
+	 * @param type its type
+	 * @param pos where a compiler reports it when nothing takes it
+	 * @param detail what a compiler adds under its message, or {@code null}
+	 */
+	private record Thrown(JavaType type, int pos, @Nullable String detail) {
+	}
 
 	/**
 	 * A variable the walk follows. A blank one -- a local declared with no value, a blank
@@ -186,7 +260,7 @@ final class JavaFlow {
 	/** Whether only reachability is asked: nothing is reported. */
 	private final boolean quiet;
 
-	private final @Nullable Problem[] problems = new Problem[3];
+	private final @Nullable Problem[] problems = new Problem[4];
 
 	private int reported;
 
@@ -225,6 +299,25 @@ final class JavaFlow {
 
 	private final List<Reference> references = new ArrayList<>();
 
+	/** The checked exceptions thrown so far that nothing around has taken yet. */
+	private List<Thrown> thrown = new ArrayList<>();
+
+	/** What each catch clause's parameter can hold: what its {@code try} left it. */
+	private final Map<Catch, List<Thrown>> held = new IdentityHashMap<>();
+
+	/** Whether each catch clause's body assigns its parameter. */
+	private final Map<Catch, Boolean> reassigned = new IdentityHashMap<>();
+
+	/** Whether the walk only asks whether a catch clause's body assigns its parameter. */
+	private boolean probing;
+
+	/**
+	 * Whether the walk is of a lambda's body alone, for a call that infers from what it
+	 * throws: the parameter of a clause around the lambda is then thrown as its type, as
+	 * a compiler's inference reads it (asked of a JDK 25's).
+	 */
+	private boolean alone;
+
 	private JavaFlow(Facts facts, boolean quiet) {
 		this.facts = facts;
 		this.quiet = quiet;
@@ -248,26 +341,40 @@ final class JavaFlow {
 	 */
 	static @Nullable Problem check(JavaClass declaration, Facts facts) {
 		ClassDeclaration written = Objects.requireNonNull(declaration.declaration);
-		JavaFlow first = null;
-		for (JavaFlow flow : List.of(statics(declaration, written, facts), instances(declaration, written, facts))) {
-			first = earlier(first, flow);
+		JavaFlow first = statics(declaration, written, facts);
+		if (declaration.methods.stream().noneMatch(method -> method.isConstructor() && method.declaration != null)) {
+			// the default constructor stands ahead of every member
+			first = earlier(first, defaultConstructor(declaration, written, facts));
 		}
 		for (Method method : declaration.methods) {
 			JavaSyntax.Method body = method.declaration;
-			if (method.isConstructor() || body == null || body.body() == null) {
+			if (body == null || body.body() == null) {
 				continue;
 			}
 			JavaFlow flow = new JavaFlow(facts, false);
-			flow.method(method, Objects.requireNonNull(body.body()));
+			if (method.isConstructor()) {
+				flow.constructor(declaration, written, method, Objects.requireNonNull(body.body()));
+			}
+			else {
+				flow.method(method, written, Objects.requireNonNull(body.body()));
+			}
 			first = earlier(first, flow);
 		}
-		return first == null ? null : first.first();
+		return first.first();
 	}
 
-	private static JavaFlow earlier(@Nullable JavaFlow first, JavaFlow flow) {
-		if (first == null) {
-			return flow;
-		}
+	/**
+	 * The checked exceptions a lambda's body can throw, as far as the body alone says: a
+	 * call infers what a type parameter of a {@code throws} clause is from them (JLS
+	 * 18.2.5).
+	 */
+	static List<JavaType> thrown(Lambda lambda, Facts facts) {
+		JavaFlow flow = new JavaFlow(facts, true);
+		flow.alone = true;
+		return flow.body(lambda).stream().map(Thrown::type).toList();
+	}
+
+	private static JavaFlow earlier(JavaFlow first, JavaFlow flow) {
 		for (int kind = REACH; kind <= CAPTURE; kind++) {
 			if (first.problems[kind] != null) {
 				return first;
@@ -300,12 +407,16 @@ final class JavaFlow {
 
 	// ---- bodies
 
-	private void method(Method method, Block body) {
+	private void method(Method method, ClassDeclaration written, Block body) {
 		this.function = body;
 		parameters(Objects.requireNonNull(method.declaration).parameters());
 		statement(body);
 		if (method.returnType != JavaType.Primitive.VOID && this.alive) {
 			problem(REACH, body.end(), "missing return statement");
+		}
+		// a step of a session throws what it likes, as a snippet does
+		if (!(written.implicit() && method.name.startsWith("$step"))) {
+			unreported(this.thrown, method.thrown, null);
 		}
 		effectivelyFinal();
 	}
@@ -316,8 +427,18 @@ final class JavaFlow {
 		List<Var> blank = flow.blankFields(declaration, true);
 		for (JavaSyntax.EnumConstant constant : written.constants()) {
 			constant.arguments().forEach(flow::expression);
+			// the constant is made by an instance creation the class table wrote
+			Expression creation = null;
+			for (Field field : declaration.fields) {
+				if (field.isConstant && field.name.equals(constant.name())) {
+					creation = field.initializer;
+				}
+			}
+			flow.raise(creation);
 			if (constant.body() != null) {
 				flow.declared(Objects.requireNonNull(constant.body()));
+				flow.anonymous(Objects.requireNonNull(constant.body()),
+						creation == null ? null : flow.facts.raises.get(creation));
 			}
 		}
 		flow.initializers(declaration, written, true);
@@ -326,32 +447,22 @@ final class JavaFlow {
 				flow.problem(ASSIGN, field.pos, "variable " + field.name + " might not have been initialized");
 			}
 		}
+		flow.unreported(flow.thrown, List.of(), null);
 		flow.effectivelyFinal();
 		return flow;
 	}
 
 	/**
-	 * The constructors, each with the instance initializers it runs; a class declaring
-	 * none, its initializers alone.
+	 * The instance initializers of a class declaring no constructor, which its default
+	 * constructor runs after its superclass's. An anonymous class's throw where it is
+	 * made ({@link #anonymous}).
 	 */
-	private static JavaFlow instances(JavaClass declaration, ClassDeclaration written, Facts facts) {
-		JavaFlow first = null;
-		boolean declares = false;
-		for (Method constructor : declaration.methods) {
-			JavaSyntax.Method body = constructor.declaration;
-			if (!constructor.isConstructor() || body == null || body.body() == null) {
-				continue;
-			}
-			declares = true;
-			JavaFlow flow = new JavaFlow(facts, false);
-			flow.constructor(declaration, written, body, Objects.requireNonNull(body.body()));
-			first = earlier(first, flow);
-		}
-		if (declares) {
-			return Objects.requireNonNull(first);
-		}
+	private static JavaFlow defaultConstructor(JavaClass declaration, ClassDeclaration written, Facts facts) {
 		JavaFlow flow = new JavaFlow(facts, false);
 		List<Var> blank = flow.blankFields(declaration, false);
+		flow.raise(written);
+		flow.unreported(flow.thrown, List.of(), " in default constructor");
+		flow.thrown = new ArrayList<>();
 		flow.initializers(declaration, written, false);
 		for (Var field : blank) {
 			if (!flow.inits.get(field.bit)) {
@@ -359,11 +470,16 @@ final class JavaFlow {
 						"variable " + field.name + " not initialized in the default constructor");
 			}
 		}
+		if (!declaration.simple.isEmpty()) {
+			flow.unreported(flow.thrown, List.of(), null);
+		}
 		flow.effectivelyFinal();
 		return flow;
 	}
 
-	private void constructor(JavaClass declaration, ClassDeclaration written, JavaSyntax.Method method, Block body) {
+	/** A constructor, with the instance initializers it runs. */
+	private void constructor(JavaClass declaration, ClassDeclaration written, Method constructor, Block body) {
+		JavaSyntax.Method method = Objects.requireNonNull(constructor.declaration);
 		this.function = body;
 		List<Var> blank = blankFields(declaration, false);
 		parameters(method.parameters());
@@ -375,6 +491,8 @@ final class JavaFlow {
 			}
 		}
 		if (explicit == null) {
+			// the super() it does not write
+			raise(method);
 			initializers(declaration, written, false);
 		}
 		for (Statement statement : body.statements()) {
@@ -388,6 +506,7 @@ final class JavaFlow {
 					expression(Objects.requireNonNull(call.outer()));
 				}
 				call.arguments().forEach(this::expression);
+				raise(call);
 				if (call.onSuper()) {
 					initializers(declaration, written, false);
 				}
@@ -411,6 +530,7 @@ final class JavaFlow {
 				unassigned(blank, exit.inits(), exit.pos());
 			}
 		}
+		unreported(this.thrown, constructor.thrown, null);
 		effectivelyFinal();
 	}
 
@@ -488,6 +608,169 @@ final class JavaFlow {
 						"local variables referenced from "
 								+ (reference.lambda() ? "a lambda expression" : "an inner class")
 								+ " must be final or effectively final");
+			}
+		}
+	}
+
+	// ---- exceptions
+
+	private boolean isSubtype(JavaType from, JavaType to) {
+		return Objects.requireNonNull(this.facts.types).isSubtype(from, to);
+	}
+
+	private static JavaType type(JavaClass declaration) {
+		return new JavaType.ClassType(declaration, List.of());
+	}
+
+	/** What a call throws joins what is thrown so far. */
+	private void raise(@Nullable Object node) {
+		Raise raise = node == null ? null : this.facts.raises.get(node);
+		if (raise != null) {
+			for (JavaType type : raise.types()) {
+				this.thrown.add(new Thrown(type, raise.pos(), raise.detail()));
+			}
+		}
+	}
+
+	/**
+	 * Reports each exception thrown that is under none of the types a body may throw.
+	 * @param where what a compiler says in place of what is to be done about it
+	 */
+	private void unreported(List<Thrown> thrown, List<JavaType> allowed, @Nullable String where) {
+		for (Thrown one : thrown) {
+			if (allowed.stream().noneMatch(type -> isSubtype(one.type(), type))) {
+				problem(THROWN, one.pos(),
+						JavaTypes.diagnostic("unreported exception " + one.type(), one.type())
+								+ (where != null ? where : "; must be caught or declared to be thrown"
+										+ (one.detail() == null ? "" : "; " + one.detail())));
+			}
+		}
+	}
+
+	/**
+	 * What a compiler says of a catch clause. It refuses a class a clause before it takes
+	 * already, and a checked one -- but {@code Exception} and what is above it -- that
+	 * the {@code try} block throws neither a subclass nor a superclass of. It warns of
+	 * one whose every such exception a clause before it took.
+	 * @param left what the block throws that no clause before this one takes
+	 */
+	private void clause(Catch clause, List<JavaClass> taken, List<JavaClass> earlier, List<Thrown> inBody,
+			List<Thrown> left) {
+		for (int i = 0; i < taken.size(); i++) {
+			JavaClass one = taken.get(i);
+			int pos = taken.size() == 1 ? clause.pos() : clause.types().get(i).pos();
+			if (earlier.stream().anyMatch(one::isSubclassOf)) {
+				problem(THROWN, pos, "exception " + one.simpleName() + " has already been caught");
+				continue;
+			}
+			if (!JavaTypes.isChecked(type(one)) || one.name.equals("java.lang.Exception")
+					|| one.name.equals("java.lang.Throwable")) {
+				continue;
+			}
+			// a type variable is under its bounds and above nothing but what a capture of
+			// ? super is above, as a compiler takes it
+			List<Thrown> related = inBody.stream()
+				.filter(thrown -> isSubtype(thrown.type(), type(one)) || isSubtype(type(one), thrown.type()))
+				.toList();
+			if (related.isEmpty()) {
+				problem(THROWN, pos,
+						"exception " + one.simpleName() + " is never thrown in body of corresponding try statement");
+			}
+			else if (!this.quiet && related.stream().noneMatch(left::contains)) {
+				List<String> caught = related.stream().map(thrown -> thrown.type().toString()).distinct().toList();
+				this.facts.warnings.add(new Problem(pos,
+						"unreachable catch clause\n  thrown " + (caught.size() == 1 ? "type " : "types ")
+								+ String.join(",", caught) + (caught.size() == 1 ? " has" : " have")
+								+ " already been caught"));
+			}
+		}
+	}
+
+	/**
+	 * What a clause takes of what its {@code try} block throws and no clause before it
+	 * took.
+	 * @param holds filled with what the clause's parameter can then hold
+	 * @return what the clause leaves
+	 */
+	private List<Thrown> taken(List<Thrown> left, List<JavaClass> taken, List<Thrown> holds) {
+		List<Thrown> passing = new ArrayList<>();
+		for (Thrown one : left) {
+			if (taken.stream().anyMatch(type -> isSubtype(one.type(), type(type)))) {
+				holds.add(one);
+				continue;
+			}
+			passing.add(one);
+			for (JavaClass type : taken) {
+				// a class under what is thrown: the parameter holds it as its own
+				if (JavaTypes.isChecked(type(type)) && isSubtype(type(type), one.type())) {
+					holds.add(new Thrown(type(type), one.pos(), null));
+				}
+			}
+		}
+		return passing;
+	}
+
+	/**
+	 * What a catch clause's parameter can hold, or {@code null} when that is not known. A
+	 * walk that did not come through the clause's {@code try} -- of an anonymous class's
+	 * initializers -- walks the block for it.
+	 */
+	private @Nullable List<Thrown> holds(Catch clause) {
+		List<Thrown> known = this.held.get(clause);
+		Try attempt = this.facts.tries.get(clause);
+		if (known != null || attempt == null || this.alone || this.probing) {
+			return known;
+		}
+		JavaFlow block = new JavaFlow(this.facts, true);
+		block.statement(attempt.body());
+		List<Thrown> left = block.thrown;
+		for (Catch each : attempt.catches()) {
+			// up to the clause asked for: the lowering may not have met the ones after it
+			List<Thrown> holds = new ArrayList<>();
+			left = taken(left, this.facts.caught.getOrDefault(each, List.of()), holds);
+			this.held.put(each, holds);
+			if (each == clause) {
+				break;
+			}
+		}
+		return this.held.get(clause);
+	}
+
+	/**
+	 * Whether a catch clause's body assigns its parameter: then {@code throw} of it
+	 * throws its type, not what the {@code try} left it. Asked by a walk of the body that
+	 * reports nothing.
+	 */
+	private boolean reassigns(Catch clause) {
+		if (this.probing) {
+			return false;
+		}
+		Boolean known = this.reassigned.get(clause);
+		if (known == null) {
+			JavaFlow probe = new JavaFlow(this.facts, true);
+			probe.probing = true;
+			Var parameter = probe.declare(clause, clause.name(), false, false);
+			probe.statement(clause.body());
+			known = !parameter.effectivelyFinal;
+			this.reassigned.put(clause, known);
+		}
+		return known;
+	}
+
+	/**
+	 * What the initializers of an anonymous class throw joins what is thrown where it is
+	 * made, but what the constructor it hands its arguments to throws already.
+	 */
+	private void anonymous(ClassDeclaration body, @Nullable Raise constructor) {
+		JavaClass made = this.facts.anonymous.get(body);
+		if (made == null || this.probing) {
+			return;
+		}
+		JavaFlow inner = new JavaFlow(this.facts, true);
+		inner.initializers(made, body, false);
+		for (Thrown one : inner.thrown) {
+			if (constructor == null || constructor.types().stream().noneMatch(type -> isSubtype(one.type(), type))) {
+				this.thrown.add(one);
 			}
 		}
 	}
@@ -760,6 +1043,18 @@ final class JavaFlow {
 			}
 			case Throw exit -> {
 				expression(exit.value());
+				Catch clause = this.facts.rethrown.get(exit);
+				List<Thrown> holds = clause == null ? null : holds(clause);
+				if (clause != null && holds != null && !reassigns(clause)) {
+					// what its try left the parameter; the clause the parser writes for a
+					// resource throws again where each was thrown
+					for (Thrown one : holds) {
+						this.thrown.add(clause.name().startsWith("%") ? one : new Thrown(one.type(), exit.pos(), null));
+					}
+				}
+				else if (this.facts.thrown.get(exit) != null) {
+					this.thrown.add(new Thrown(Objects.requireNonNull(this.facts.thrown.get(exit)), exit.pos(), null));
+				}
 				markDead();
 			}
 			case Try attempt -> attempt(attempt);
@@ -769,8 +1064,7 @@ final class JavaFlow {
 				}
 				statement(held.body());
 			}
-			case JavaSyntax.Close close -> {
-			}
+			case JavaSyntax.Close close -> raise(close);
 			case JavaSyntax.Empty empty -> {
 			}
 			case Switch block -> switchBlock(block, false);
@@ -958,13 +1252,27 @@ final class JavaFlow {
 		BitSet initsTry = copy(this.inits);
 		this.uninitsTry = copy(this.uninits);
 		boolean before = this.alive;
+		List<Thrown> thrownAround = this.thrown;
+		this.thrown = new ArrayList<>();
 		statement(attempt.body());
+		List<Thrown> inBody = this.thrown;
+		// what no clause so far takes, then what the clauses' bodies throw too
+		List<Thrown> left = new ArrayList<>(inBody);
+		List<JavaClass> earlier = new ArrayList<>();
 		this.uninitsTry.and(this.uninits);
 		BitSet initsEnd = copy(this.inits);
 		BitSet uninitsEnd = copy(this.uninits);
 		boolean aliveEnd = this.alive;
 		BitSet uninitsCatch = copy(this.uninitsTry);
+		List<Thrown> inClauses = new ArrayList<>();
 		for (Catch clause : attempt.catches()) {
+			List<JavaClass> taken = this.facts.caught.getOrDefault(clause, List.of());
+			clause(clause, taken, earlier, inBody, left);
+			earlier.addAll(taken);
+			List<Thrown> holds = new ArrayList<>();
+			left = taken(left, taken, holds);
+			this.held.put(clause, holds);
+			this.thrown = inClauses;
 			this.inits = copy(initsTry);
 			this.uninits = copy(uninitsCatch);
 			this.alive = before;
@@ -974,6 +1282,8 @@ final class JavaFlow {
 			uninitsEnd.and(this.uninits);
 			aliveEnd |= this.alive;
 		}
+		left.addAll(inClauses);
+		this.thrown = left;
 		Block last = attempt.finallyBlock();
 		if (last != null) {
 			this.inits = copy(initsTry);
@@ -981,6 +1291,7 @@ final class JavaFlow {
 			List<Jump> exits = this.pending;
 			this.pending = around;
 			this.alive = before;
+			this.thrown = new ArrayList<>();
 			statement(last);
 			if (this.alive) {
 				this.uninits.and(uninitsEnd);
@@ -991,6 +1302,9 @@ final class JavaFlow {
 				}
 				this.inits.or(initsEnd);
 				this.alive = aliveEnd;
+				// a finally that cannot complete normally drops what was thrown
+				left.addAll(this.thrown);
+				this.thrown = left;
 			}
 		}
 		else {
@@ -1001,6 +1315,8 @@ final class JavaFlow {
 			this.pending.addAll(exits);
 			this.alive = aliveEnd;
 		}
+		thrownAround.addAll(this.thrown);
+		this.thrown = thrownAround;
 		this.uninitsTry.and(uninitsTryAround);
 		this.uninitsTry.and(this.uninits);
 	}
@@ -1191,20 +1507,24 @@ final class JavaFlow {
 					expression(Objects.requireNonNull(call.target()));
 				}
 				call.arguments().forEach(this::expression);
+				raise(call);
 			}
 			case ConstructorCall call -> {
 				if (call.outer() != null) {
 					expression(Objects.requireNonNull(call.outer()));
 				}
 				call.arguments().forEach(this::expression);
+				raise(call);
 			}
 			case New creation -> {
 				if (creation.outer() != null) {
 					expression(Objects.requireNonNull(creation.outer()));
 				}
 				creation.arguments().forEach(this::expression);
+				raise(creation);
 				if (creation.body() != null) {
 					declared(Objects.requireNonNull(creation.body()));
+					anonymous(Objects.requireNonNull(creation.body()), this.facts.raises.get(creation));
 				}
 			}
 			case NewArray creation -> {
@@ -1297,6 +1617,17 @@ final class JavaFlow {
 	 * unassigned, and what it assigns stays in it.
 	 */
 	private void lambda(Lambda lambda) {
+		List<Thrown> thrown = body(lambda);
+		List<JavaType> lets = this.facts.lets.get(lambda);
+		if (lets != null) {
+			unreported(thrown, lets, null);
+		}
+	}
+
+	/** Walks a lambda's body: the checked exceptions it throws. */
+	private List<Thrown> body(Lambda lambda) {
+		List<Thrown> thrownAround = this.thrown;
+		this.thrown = new ArrayList<>();
 		BitSet savedInits = copy(this.inits);
 		BitSet savedUninits = copy(this.uninits);
 		BitSet savedTry = copy(this.uninitsTry);
@@ -1328,6 +1659,9 @@ final class JavaFlow {
 		this.inits = savedInits;
 		this.uninits = savedUninits;
 		this.uninitsTry = savedTry;
+		List<Thrown> thrown = this.thrown;
+		this.thrown = thrownAround;
+		return thrown;
 	}
 
 }

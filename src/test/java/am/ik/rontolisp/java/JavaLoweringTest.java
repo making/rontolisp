@@ -516,6 +516,135 @@ class JavaLoweringTest {
 			.filter(diagnostic -> diagnostic.getKind() == javax.tools.Diagnostic.Kind.ERROR)
 			.map(diagnostic -> diagnostic.toString())
 			.toList()).isEmpty();
+		// That compile holds the library's throws clauses to each other, not to the
+		// API's: a member declaring a checked exception the API's does not would refuse a
+		// valid program, and one declaring none would refuse the catch of it. So every
+		// public member of the running JDK's class of the name is asked, by reflection,
+		// which checked exceptions it throws, and the member a call of it reaches here
+		// has to declare the same.
+		JavaClasses table = new JavaClasses(JavaIntrinsics.LIBRARY, JavaFiles.NONE, null, "", JavaTypes::new);
+		List<String> names = new ArrayList<>(List.of("java.lang.Object", "java.lang.String", "java.lang.StringBuilder",
+				"java.lang.StringBuffer", "java.lang.Math", "java.lang.StrictMath", "java.lang.Number",
+				"java.lang.Integer", "java.lang.Long", "java.lang.Double", "java.lang.Float", "java.lang.Byte",
+				"java.lang.Short", "java.lang.Boolean", "java.lang.Character", "java.lang.System",
+				"java.nio.charset.StandardCharsets", "java.lang.IO"));
+		for (Path source : sources) {
+			String name = library.relativize(source).toString().replace('\\', '/');
+			names.add(name.substring(0, name.length() - ".java".length()).replace('/', '.'));
+		}
+		List<JavaClass> all = new ArrayList<>();
+		for (String name : names) {
+			nested(table.library(name), all);
+		}
+		List<String> differing = new ArrayList<>();
+		int compared = 0;
+		for (JavaClass ours : all) {
+			Class<?> theirs;
+			try {
+				theirs = Class.forName(ours.binaryName, false, ClassLoader.getPlatformClassLoader());
+			}
+			catch (ClassNotFoundException ex) {
+				// a class of the library's own
+				continue;
+			}
+			List<java.lang.reflect.Executable> members = new ArrayList<>(List.of(theirs.getMethods()));
+			members.addAll(List.of(theirs.getConstructors()));
+			for (java.lang.reflect.Executable member : members) {
+				if (member.isSynthetic() || (member instanceof java.lang.reflect.Method method && method.isBridge())) {
+					continue;
+				}
+				String name = member instanceof java.lang.reflect.Method ? member.getName() : "<init>";
+				List<String> parameters = java.util.Arrays.stream(member.getParameterTypes())
+					.map(JavaLoweringTest::erased)
+					.toList();
+				JavaClass.Method found = member(ours, name, parameters, new java.util.HashSet<>());
+				if (found == null) {
+					continue;
+				}
+				compared++;
+				java.util.Set<String> expected = new java.util.TreeSet<>();
+				for (Class<?> thrown : member.getExceptionTypes()) {
+					if (isChecked(thrown)) {
+						expected.add(thrown.getName());
+					}
+				}
+				java.util.Set<String> declared = new java.util.TreeSet<>(found.raises);
+				for (JavaType thrown : found.thrown) {
+					// a type variable is thrown as its bound, which is what the JDK
+					// answers
+					JavaType erased = thrown instanceof JavaType.Variable variable ? variable.parameter().bounds.get(0)
+							: thrown;
+					declared.add(((JavaType.ClassType) erased).declaration().binaryName);
+				}
+				declared.removeIf(thrown -> {
+					try {
+						return !isChecked(Class.forName(thrown, false, ClassLoader.getPlatformClassLoader()));
+					}
+					catch (ClassNotFoundException ex) {
+						return false;
+					}
+				});
+				if (!declared.equals(expected)) {
+					differing.add(ours.name + "." + name + parameters + " throws " + declared + ", the JDK's "
+							+ expected + " (found in " + found.owner.name + ")");
+				}
+			}
+		}
+		assertThat(compared).isGreaterThan(2000);
+		assertThat(differing).isEmpty();
+	}
+
+	private static void nested(JavaClass declaration, List<JavaClass> into) {
+		if (!into.contains(declaration)) {
+			into.add(declaration);
+			declaration.members.values().forEach(member -> nested(member, into));
+		}
+	}
+
+	private static boolean isChecked(Class<?> thrown) {
+		return !RuntimeException.class.isAssignableFrom(thrown) && !Error.class.isAssignableFrom(thrown);
+	}
+
+	/** A JDK type as the front end spells the erasure of a parameter's type. */
+	private static String erased(Class<?> type) {
+		if (type.isArray()) {
+			return erased(type.getComponentType()) + "[]";
+		}
+		String name = Objects.requireNonNull(type.isPrimitive() ? type.getName() : type.getCanonicalName());
+		return name.startsWith("java.lang.") && name.indexOf('.', 10) < 0 ? name.substring(10) : name;
+	}
+
+	/**
+	 * The member a call through a class reaches: the class's own of the name and the
+	 * erased parameter types, else the one of the nearest class or interface above it.
+	 */
+	private static JavaClass.@Nullable Method member(JavaClass declaration, String name, List<String> parameters,
+			java.util.Set<JavaClass> seen) {
+		if (!seen.add(declaration)) {
+			return null;
+		}
+		for (JavaClass.Method method : declaration.methods) {
+			List<JavaType> declared = method.parameters.subList(method.hidden, method.parameters.size());
+			if (method.name.equals(name) && !method.isPrivate
+					&& declared.stream().map(JavaType::erasure).toList().equals(parameters)) {
+				return method;
+			}
+		}
+		if (name.equals("<init>")) {
+			return null;
+		}
+		List<JavaClass> above = new ArrayList<>();
+		if (declaration.superclass != null) {
+			above.add(declaration.superclass);
+		}
+		above.addAll(declaration.interfaces);
+		for (JavaClass up : above) {
+			JavaClass.Method found = member(up, name, parameters, seen);
+			if (found != null) {
+				return found;
+			}
+		}
+		return null;
 	}
 
 	@Test
@@ -641,9 +770,9 @@ class JavaLoweringTest {
 						+ "#'|Throwable.toString()|)))) (PROGN (RONTOLISP::%JAVA-INIT-ENTER) (SETQ "
 						+ "|Late.<clinit>%done| (IF |%t20| |%t20| :ENDED)) (RONTOLISP::%JAVA-INIT-LEAVE T))))))))))",
 				"(RONTOLISP::%JAVA-THREAD-MAIN (LAMBDA NIL (PROGN (SETQ |Cell.hits| 0) (SETQ |Lazy.made| 0) (SETQ "
-						+ "|Late.made| 0) (SETQ |Thread.defaultHandler| NIL) (SETQ |Thread.guarding| NIL) (SETQ "
-						+ "|Thread.MIN_PRIORITY| 1) (SETQ |Thread.NORM_PRIORITY| 5) (SETQ |Thread.MAX_PRIORITY| 10) "
-						+ "(SETQ |Thread.unnamed| 0) (SETQ |Throwable.traces| 0) (SETQ |Thread.identifiers| 1) (SETQ "
+						+ "|Late.made| 0) (SETQ |Throwable.traces| 0) (SETQ |Thread.defaultHandler| NIL) (SETQ "
+						+ "|Thread.guarding| NIL) (SETQ |Thread.MIN_PRIORITY| 1) (SETQ |Thread.NORM_PRIORITY| 5) "
+						+ "(SETQ |Thread.MAX_PRIORITY| 10) (SETQ |Thread.unnamed| 0) (SETQ |Thread.identifiers| 1) (SETQ "
 						+ "|Lazy.<clinit>%done| NIL) (SETQ |Late.<clinit>%done| NIL) (|T1.main(String[])| (VECTOR)))) (LAMBDA (|%t|) "
 						+ "(|Thread.finish(Thread)| |%t|)) (LAMBDA (|%o|) (|Throwable.trace(Throwable)| |%o|)))");
 		// a program that starts no thread and neither waits nor asks cannot tell a
@@ -841,7 +970,25 @@ class JavaLoweringTest {
 				{ "void main() { IO.println(1 +); }", "1:29: unexpected ')'" },
 				{ "void main() { String s = \"abc", "1:30: unterminated string literal" },
 				{ "void main() { char c = 'ab'; }", "1:24: unterminated character literal" },
-				{ "void main() { int x = 1 # 2; }", "1:25: illegal character: '#'" } };
+				{ "void main() { int x = 1 # 2; }", "1:25: illegal character: '#'" },
+				// a checked exception is said where a compiler says it: at a call's
+				// parenthesis, a creation's new, the class whose default constructor
+				// throws it, the resource whose close() does, the clause, the reference
+				{ "void main() { Thread.sleep(1); }",
+						"1:27: unreported exception InterruptedException; must be caught or declared to be thrown" },
+				{ "class A { A() throws Exception { } } void main() { new A(); }",
+						"1:52: unreported exception Exception; must be caught or declared to be thrown" },
+				{ "class A { A() throws Exception { } } class B extends A { } void main() { }",
+						"1:38: unreported exception Exception in default constructor" },
+				{ "void main() { try (java.io.Reader r = new java.io.StringReader(\"x\")) { } }",
+						"1:35: unreported exception IOException; must be caught or declared to be thrown; "
+								+ "exception thrown from implicit call to close() on resource variable 'r'" },
+				{ "void main() { try { Thread.sleep(1); } catch (InterruptedException | RuntimeException e) { } catch (IllegalStateException e) { } }",
+						"1:94: exception IllegalStateException has already been caught" },
+				{ "void main() { java.util.function.LongConsumer nap = Thread::sleep; }",
+						"1:53: incompatible thrown types InterruptedException in functional expression" },
+				{ "class A { void m() { } } class B extends A { void m() throws Exception { } } void main() { }",
+						"1:51: m() in Wrong.B cannot override m() in Wrong.A; overridden method does not throw Exception" } };
 		for (String[] error : errors) {
 			assertThatThrownBy(() -> lower(error[0], "Wrong.java")).as("%s", error[0])
 				.isInstanceOf(LispReadException.class)

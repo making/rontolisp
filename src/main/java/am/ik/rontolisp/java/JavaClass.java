@@ -171,6 +171,16 @@ final class JavaClass {
 		/** The type parameters it declares: found at every call. */
 		List<TypeParameter> typeParameters = List.of();
 
+		/** The types of its {@code throws} clause: classes and type variables. */
+		List<JavaType> thrown = List.of();
+
+		/**
+		 * The classes of an intrinsic member's {@code throws} clause, by qualified name:
+		 * read where a call of it is lowered, so that a program calling none of them
+		 * holds no such class.
+		 */
+		List<String> raises = List.of();
+
 		Method(JavaClass owner, String name, List<JavaType> parameters, JavaType returnType, boolean isStatic,
 				boolean isAbstract, JavaSyntax.@Nullable Method declaration, @Nullable JavaEmitter emitter,
 				boolean raw) {

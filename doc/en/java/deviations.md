@@ -209,13 +209,12 @@ Caused by: java.lang.IllegalStateException: insufficient funds: 30
   at Uncaught.java:12 in Uncaught.withdraw(int,int)
 ```
 
-**Some errors a compiler reports are not reported**, and such a program runs. `throws`
-clauses are read and not checked: a checked exception that is neither caught nor declared
-is not reported, nor is a `catch` of one its `try` cannot throw. Of the warnings a
-compiler prints, only the [unchecked ones](index.md#unchecked-warnings) of a call, a
-conversion, a cast and a variable arity parameter are. A `protected` member is reached from every class under its
-class, where the language allows an instance member only through a reference of that
-class's own type and a constructor only through `super(..)`.
+**Some errors a compiler reports are not reported**, and such a program runs. A
+`protected` member is reached from every class under its class, where the language allows
+an instance member only through a reference of that class's own type and a constructor
+only through `super(..)`. Of the warnings a compiler prints, only the
+[unchecked ones](index.md#unchecked-warnings) of a call, a conversion, a cast and a
+variable arity parameter and the one of a `catch` clause nothing reaches are.
 
 **A record's `hashCode`** is computed from its components in order, `31 * h + hash`; the
 language leaves the number unspecified.

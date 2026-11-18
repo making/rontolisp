@@ -398,6 +398,46 @@ final class JavaTypes implements JavaClasses.Relations {
 		return new Variable(parameter);
 	}
 
+	/**
+	 * Whether a type is a checked exception class (JLS 11.1.1): {@code Throwable} or a
+	 * class under it that is neither {@code RuntimeException}, {@code Error} nor under
+	 * one of them; a type variable is what its bounds are. Asked by the classes' names,
+	 * so that no program holds a class for the question.
+	 */
+	static boolean isChecked(JavaType type) {
+		return switch (type) {
+			case ClassType named -> {
+				for (JavaClass up = named.declaration(); up != null; up = up.superclass) {
+					if (up.name.equals("java.lang.RuntimeException") || up.name.equals("java.lang.Error")) {
+						yield false;
+					}
+					if (up.name.equals("java.lang.Throwable")) {
+						yield true;
+					}
+				}
+				yield false;
+			}
+			case Variable variable -> {
+				List<JavaType> bounds = variable.parameter().bounds;
+				yield bounds.stream().anyMatch(JavaTypes::isChecked)
+						&& bounds.stream().noneMatch(JavaTypes::isUnchecked);
+			}
+			default -> false;
+		};
+	}
+
+	/** Whether a type is {@code RuntimeException}, {@code Error} or a class under one. */
+	private static boolean isUnchecked(JavaType type) {
+		if (type instanceof ClassType named) {
+			for (JavaClass up = named.declaration(); up != null; up = up.superclass) {
+				if (up.name.equals("java.lang.RuntimeException") || up.name.equals("java.lang.Error")) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
 	private static boolean isIntersection(JavaType type) {
 		return type instanceof Variable variable && variable.parameter().intersection;
 	}

@@ -423,7 +423,7 @@ final class JavaSyntax {
 	 * ({@code JavaParser.withResources}); only this part is left to the lowering, which
 	 * checks the resource's type.
 	 *
-	 * @param pos the resource
+	 * @param pos the resource's variable, where a compiler says what is wrong with it
 	 * @param resource the variable holding it
 	 * @param primary the variable holding what the body threw, or {@code null}
 	 */
@@ -501,13 +501,15 @@ final class JavaSyntax {
 	 * @param body its body, or {@code null} for an abstract method
 	 * @param compact whether it is a record's compact constructor
 	 * @param typeParameters the type parameters it declares
+	 * @param thrown the types of its {@code throws} clause
 	 */
 	record Method(int pos, Set<String> modifiers, @Nullable TypeName returnType, String name,
-			List<Parameter> parameters, @Nullable Block body, boolean compact, List<TypeParameter> typeParameters) {
+			List<Parameter> parameters, @Nullable Block body, boolean compact, List<TypeParameter> typeParameters,
+			List<TypeName> thrown) {
 
 		Method(int pos, Set<String> modifiers, @Nullable TypeName returnType, String name, List<Parameter> parameters,
 				@Nullable Block body) {
-			this(pos, modifiers, returnType, name, parameters, body, false, List.of());
+			this(pos, modifiers, returnType, name, parameters, body, false, List.of(), List.of());
 		}
 
 		boolean varargs() {

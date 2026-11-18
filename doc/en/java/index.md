@@ -250,7 +250,9 @@ converted to a parameterized one, a cast the program that runs cannot check, a v
 arity parameter of a type it cannot check -- is printed on standard error before the
 program runs, as a compiler prints it. A compile prints them as it compiles; the compiled
 program prints nothing. A declaration annotated `@SuppressWarnings("unchecked")` warns of
-nothing inside it.
+nothing inside it. A `catch` clause nothing reaches, because the clauses before it take
+every exception of its `try` it could, is warned of in the same way
+(`unreachable catch clause`).
 
 ```java
 void main() {

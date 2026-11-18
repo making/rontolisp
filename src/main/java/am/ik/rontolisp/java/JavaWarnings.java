@@ -17,13 +17,13 @@ import am.ik.rontolisp.java.JavaType.Variable;
 import am.ik.rontolisp.java.JavaType.Wildcard;
 
 /**
- * The warnings a compiler prints of a program that compiles: the unchecked ones, each
- * where it is in the program's own files, gathered while a program is lowered and printed
- * as a compiler prints them before it runs -- the line, the line's text, a caret under
- * the place, what the warning names, the type variables it mentions -- in the order of
- * the files and of the places in them, then the count. A declaration annotated
- * {@code @SuppressWarnings("unchecked")} says none of its own; one annotated
- * {@code ("all")} says them, as a JDK 25 compiler does.
+ * The warnings a compiler prints of a program that compiles: the unchecked ones and a
+ * catch clause nothing reaches, each where it is in the program's own files, gathered
+ * while a program is lowered and printed as a compiler prints them before it runs -- the
+ * line, the line's text, a caret under the place, what the warning names, the type
+ * variables it mentions -- in the order of the files and of the places in them, then the
+ * count. A declaration annotated {@code @SuppressWarnings("unchecked")} says none of its
+ * own; one annotated {@code ("all")} says them, as a JDK 25 compiler does.
  */
 final class JavaWarnings {
 
@@ -70,6 +70,18 @@ final class JavaWarnings {
 			text.append("\n  ").append(detail);
 		}
 		this.warnings.add(new Warning(unit.source(), pos, text.append(where(mentioned)).toString()));
+	}
+
+	/**
+	 * A warning no annotation suppresses.
+	 * @param unit the file being lowered
+	 * @param pos where the caret goes
+	 * @param text its first line, then the lines under the caret
+	 */
+	void warn(JavaClasses.Unit unit, int pos, String text) {
+		if (!unit.source().library()) {
+			this.warnings.add(new Warning(unit.source(), pos, text));
+		}
 	}
 
 	/**

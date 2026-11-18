@@ -943,6 +943,7 @@ final class JavaClasses {
 			List<TypeParameter> around = this.methodParameters;
 			this.methodParameters = typeParameters;
 			JavaType returnType;
+			List<JavaType> thrown = new ArrayList<>();
 			try {
 				bounds(typeParameters, method.typeParameters(), made, unit);
 				for (Parameter parameter : method.parameters()) {
@@ -951,6 +952,14 @@ final class JavaClasses {
 				TypeName returned = method.returnType();
 				returnType = returned == null || returned.name().equals("void") ? Primitive.VOID
 						: type(returned, made, unit);
+				for (TypeName written : method.thrown()) {
+					JavaType type = type(written, made, unit);
+					if (!isThrowable(type)) {
+						throw error(source, written.pos(),
+								"incompatible types: " + type + " cannot be converted to Throwable");
+					}
+					thrown.add(type);
+				}
 			}
 			finally {
 				this.methodParameters = around;
@@ -1006,6 +1015,7 @@ final class JavaClasses {
 			JavaClass.Method member = new JavaClass.Method(made, method.name(), parameters, returnType, isStatic,
 					isAbstract, method, emitter, false);
 			member.typeParameters = List.copyOf(typeParameters);
+			member.thrown = List.copyOf(thrown);
 			typeParameters.forEach(parameter -> parameter.method = member);
 			if (made.isEnum && isConstructor) {
 				member.hidden = 2;
@@ -1034,6 +1044,15 @@ final class JavaClasses {
 			constructor.hidden = made.isEnum ? 2 : 0;
 			made.methods.add(constructor);
 		}
+	}
+
+	/** Whether a type is {@code Throwable} or under it: what a {@code throws} names. */
+	private boolean isThrowable(JavaType type) {
+		return switch (type) {
+			case ClassType named -> named.declaration().isSubclassOf(library("java.lang.Throwable"));
+			case Variable variable -> variable.parameter().bounds.stream().anyMatch(this::isThrowable);
+			default -> false;
+		};
 	}
 
 	/**

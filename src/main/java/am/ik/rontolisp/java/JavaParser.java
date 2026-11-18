@@ -410,7 +410,7 @@ final class JavaParser {
 				Set<String> modifiers = new LinkedHashSet<>(method.modifiers());
 				modifiers.add("static");
 				members.methods.add(new Method(method.pos(), modifiers, method.returnType(), method.name(),
-						method.parameters(), method.body(), false, method.typeParameters()));
+						method.parameters(), method.body(), false, method.typeParameters(), method.thrown()));
 				StringBuilder key = new StringBuilder("method ").append(method.name()).append('(');
 				for (Parameter parameter : method.parameters()) {
 					TypeName type = Objects.requireNonNull(parameter.type());
@@ -827,12 +827,14 @@ final class JavaParser {
 				if (kind != JavaSyntax.Kind.RECORD) {
 					throw error("expected '(' but found '{'");
 				}
-				into.methods.add(new Method(pos, modifiers, null, "<init>", List.of(), block(), true, List.of()));
+				into.methods
+					.add(new Method(pos, modifiers, null, "<init>", List.of(), block(), true, List.of(), List.of()));
 				return;
 			}
 			List<Parameter> parameters = parameters(false);
-			throwsClause();
-			into.methods.add(new Method(pos, modifiers, null, "<init>", parameters, block(), false, typeParameters));
+			List<TypeName> thrown = throwsClause();
+			into.methods
+				.add(new Method(pos, modifiers, null, "<init>", parameters, block(), false, typeParameters, thrown));
 			return;
 		}
 		TypeName type = at("void") ? new TypeName(this.tokens.get(this.p++).offset(), "void", List.of(), false, 0)
@@ -849,12 +851,12 @@ final class JavaParser {
 			if (at("[")) {
 				throw unsupported("an array dimension after a method's parameters");
 			}
-			throwsClause();
+			List<TypeName> thrown = throwsClause();
 			Block body = null;
 			if (!eat(";")) {
 				body = block();
 			}
-			into.methods.add(new Method(pos, modifiers, type, name, parameters, body, false, typeParameters));
+			into.methods.add(new Method(pos, modifiers, type, name, parameters, body, false, typeParameters, thrown));
 			return;
 		}
 		if (!typeParameters.isEmpty()) {
@@ -882,13 +884,16 @@ final class JavaParser {
 		}
 	}
 
-	private void throwsClause() {
+	/** The types of a {@code throws} clause, none when there is no clause. */
+	private List<TypeName> throwsClause() {
+		List<TypeName> thrown = new ArrayList<>();
 		if (eat("throws")) {
 			do {
-				typeName();
+				thrown.add(typeName());
 			}
 			while (eat(","));
 		}
+		return thrown;
 	}
 
 	/**
@@ -1543,12 +1548,10 @@ final class JavaParser {
 							List.of(new ExpressionStatement(at,
 									new Assign(at, "=", new Name(at, primary), new Name(at, thrown))),
 									new Throw(at, new Name(at, thrown)))));
-			inner = new Block(at,
-					List.of(resource,
-							new LocalVariable(at, throwable, List.of(new Declarator(at, primary, new NullLiteral(at))),
-									false),
-							new Try(at, inner instanceof Block block ? block : new Block(at, List.of(inner)),
-									List.of(keep), new Block(at, List.of(new Close(at, name, primary))))));
+			inner = new Block(at, List.of(resource,
+					new LocalVariable(at, throwable, List.of(new Declarator(at, primary, new NullLiteral(at))), false),
+					new Try(at, inner instanceof Block block ? block : new Block(at, List.of(inner)), List.of(keep),
+							new Block(at, List.of(new Close(resource.declarators().get(0).pos(), name, primary))))));
 		}
 		return inner;
 	}
