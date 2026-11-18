@@ -22,8 +22,12 @@ on the engine shared with the Clojure front end: j90 (2026-11-18); the rest of `
 `Appendable`, `Locale`, a `Matcher`'s region, `hitEnd` and `appendReplacement`, and the
 line a `BufferedReader` takes whole from the host: j87 (2026-11-18); `charAt` as one read,
 a static initialization that throws, an uncaught exception with its causes and what a
-program that throws carries: j88 (2026-11-18); what comes after is `.todo/j89`, `j98` and
-`j99` (what j83, j87 and j88 left).
+program that throws carries: j88 (2026-11-18); a task at its time (a scheduled pool, a
+`Timer`, the thread one stack starts for a time), the rest of `java.util.concurrent`, the
+members a class does not inherit, `super` to `Object`'s methods and the analysis of the
+`synchronized` regions a suspended thread can hold: j89 (2026-11-18); what comes after is
+`.todo/k00` (a thread suspended and resumed), `k01`, `j98` and `j99` (what j89, j87 and j88
+left).
 
 ## Where it sits
 
@@ -119,7 +123,22 @@ program that throws carries: j88 (2026-11-18); what comes after is `.todo/j89`, 
   whose classes declares it, the program-wide `%string` / `%equals` / `%hash` test the classes
   declaring one, deepest first, then `%java-to-string` / `-equals` / `-hash-code` answer for
   every other value (identity for a structure: a number kept in an `eq` table from the first
-  ask). `getClass()` exists only before `.getName()` / `.getSimpleName()`.
+  ask). `getClass()` exists only before `.getName()` / `.getSimpleName()`. `super.toString()`,
+  `super.equals(o)` and `super.hashCode()` with no class above declaring the method are
+  those three run-time functions on `this` (j89; refused by name until then, and any other
+  member of `Object` through `super` still is). The identity text names a structure by its
+  Lisp name, so a nested class reads `Outer.Inner@1f` where a JDK and `getName()` write
+  `Outer$Inner` (`deviations.md`; `.todo/k01`).
+- **A simple name finds what a class HAS, not what a class above it declares** (j89;
+  `JavaLowering.inherits`, JLS 8.2): a `private` member, and from another package one that
+  is neither `public` nor `protected`, is no member of the classes under its class, so the
+  name goes on to the classes and the method around (`variable`, the unqualified call's
+  `inherited`). Until then `String name = ..; new Thread() { public void run() { use(name); } }`
+  was `name has private access in Thread`, and a library class's field named as a
+  program's local took the local's place in every anonymous subclass. With nothing else of
+  the name a field is the compiler's `x has private access in A` / `is not public in A;
+  cannot be accessed from outside package`, a method `cannot find symbol` (asked of javac:
+  the corpus's two `refused:` cases). A qualified access (`o.x`, `super.m()`) is as before.
 - **The string model: a string's elements are code points** (the host CHARACTER); `hashCode` is
   the specified number over the UTF-16 form. The host's `princ` of a double IS the language's
   text but for the exponent letter (measured 2026-11-17: 628 doubles, four backends).
@@ -1259,6 +1278,21 @@ under a monitor prints the same on four backends.
   the waiting thread's stack, oldest first, each to its end (`%java-thread-wait`); the queue
   empty and the ticket not taken is `%java-one-stack`: the message and `%host-exit 1`, which
   no handler of the program takes. A monitor another thread holds is the same refusal.
+- **A thread started for a time** (j89). No thread can wait for a time on one stack -- the
+  thread to hand a scheduled pool a sooner task is suspended under it -- so a queue entry
+  carries a time, `(carrier daemon body due)`: `Support.notBefore(nanoTime)`
+  (`%java-thread-not-before`) sets what the next `%java-thread-start` takes, and
+  `Support.unstart(thread)` takes a thread that has not run out of the queue. An entry
+  whose time has not come is passed over (`%java-thread-take`); a wait that finds nothing
+  to run sleeps until the soonest one's time when that is before its own limit, or when it
+  has none -- so `future.get()` of a task an hour away sleeps the hour instead of refusing
+  -- and the program's end does the same for the entries that are no daemons. The sleep is
+  reached through `%java-pausing`, set by the first `notBefore`, so a program that starts
+  threads and no timed one names no `sleep` at its end (`JavaLibrary.SLEEPING` has the
+  name for the component's `wait.lisp` binding). The host variant's two functions do
+  nothing: there a thread waits for its time. Cost to a program that starts threads and
+  uses none of it: +777 B of wasm (`Buffer` 161,286 -> 162,063, `shop` 309,806 -> 310,585);
+  `Fib` and `Sieve` byte-identical.
 - **`sleep` runs the queue** (decided between two; neither covers the corpus). With `sleep`
   only passing the time the two stop-loops end and polling with `sleep` never does, and
   sleeping then reading without a `join` prints what the thread had not written yet -- a
@@ -1331,8 +1365,10 @@ under a monitor prints the same on four backends.
   `Shapes` +226 B of class and +16 B of wasm (the test in the identity hash). A counter
   under four threads is 168,841 B of class and 98,004 B of wasm.
 - **Stated in `deviations.md`**: the one stack; what is shared with no monitor is the
-  host's; a pool's thread ending for want of a task on one stack; a `ConcurrentHashMap`'s
-  long chain; no `BLOCKED` state; the handlers not asked for `main`'s thread; an atomic is no
+  host's; a pool's thread ending for want of a task on one stack; a task at its time run
+  by a thread started for it; what a pool is not (the single-thread wrappers, the hooks,
+  `getQueue()`, a fork/join pool's parallelism and its rethrown exception); a
+  `ConcurrentHashMap`'s long chain; no `BLOCKED` state; the handlers not asked for `main`'s thread; an atomic is no
   `Number`; thread numbers are ours; a class literal only as a `synchronized` statement's
   lock (the quoted structure name, the object a `static synchronized` method holds).
 - **Pinned by** `java-spec.yaml`'s six `standalone:` thread cases (a `standalone:` case so
@@ -1363,15 +1399,89 @@ that can only be suspended under it asks `Support.oneStack()` and does what one 
   `Semaphore`; `BlockingQueue` with `ArrayBlockingQueue` and `LinkedBlockingQueue` (one
   class, `Bounded`, over an `ArrayDeque`), `ConcurrentLinkedQueue`; `ConcurrentMap` /
   `ConcurrentHashMap`; `CopyOnWriteArrayList`; `Executor` / `ExecutorService` / `Executors`
-  / `ThreadPoolExecutor` (made by `Executors` alone) / `Callable` / `Future` / `FutureTask`
+  / `ThreadPoolExecutor` (made by `Executors` alone until j89) / `Callable` / `Future` / `FutureTask`
   / `ThreadFactory`; `CompletableFuture` / `CompletionStage`; the five exceptions. Beside
   them `Thread.State` and `getState`, the uncaught-exception handlers,
   `InheritableThreadLocal`, `Thread.Builder.factory()`, `java.lang.Void`.
+- **Added by j89** (2026-11-18, each member's behaviour a JDK 25's answer to a probe, the
+  probes in `.todo/artefacts/j89-java-front-end-what-the-concurrent-slice-left/probes/`):
+  `ReadWriteLock` / `ReentrantReadWriteLock`; `CyclicBarrier`, `Exchanger`;
+  `SynchronousQueue`, `BlockingDeque` / `LinkedBlockingDeque`, `ConcurrentLinkedDeque`,
+  `CopyOnWriteArraySet`; `AtomicIntegerArray` / `AtomicLongArray` / `AtomicReferenceArray`,
+  `LongAdder`; `ScheduledExecutorService` / `ScheduledThreadPoolExecutor` /
+  `ScheduledFuture` / `Delayed`, `java.util.Timer` / `TimerTask`; a program's own
+  `ThreadPoolExecutor` with its queue, its four policies and `RejectedExecutionHandler`;
+  `ForkJoinPool` / `ForkJoinTask` / `RecursiveTask` / `RecursiveAction`; `invokeAny`;
+  `Future.State` with `state` / `resultNow` / `exceptionNow`; `CompletableFuture`'s
+  `thenAcceptBoth`, `runAfterBoth`, `applyToEither`, `acceptEither`, `runAfterEither`,
+  `thenCombineAsync`, `orTimeout`, `completeOnTimeout`, `completeAsync`,
+  `delayedExecutor`, `copy`; `toString` of a lock, a latch, a semaphore, a pool and a
+  future. Still not there: `.todo/k01`.
+- **A task at its time is `rontolisp.internal.Timetable`**, which a scheduled pool and a
+  `Timer` share: the tasks sorted by time under one monitor, a fixed number of threads.
+  Where a thread can wait, the thread that had no task longest waits for the soonest
+  task's time and the others for their turn (a line of the idle threads, a thread joining
+  it where it is made) -- a JDK's pool of two runs sequential tasks on its threads in
+  turn (measured), and so does this. On one stack the table keeps ONE thread started for
+  its soonest task's time while one of its threads is free ("A thread started for a time"
+  above): made by the pool's factory for the first of each number, else a `Thread` of
+  that one's name, daemon flag and priority; taken back (`Support.unstart`) when a
+  sooner task comes or the task is removed, its turn given back, so a cancelled task
+  keeps no program alive and uses no thread name. A task that throws ends its thread and
+  the table (a `Timer`'s; a pool's tasks are futures and never throw). A
+  `ScheduledThreadPoolExecutor` extends `ThreadPoolExecutor` for the type's sake and
+  overrides every member over its table; its tasks are `FutureTask`s (`runAndReset` for
+  one that repeats). After `shutdown()` a task waiting for its time still runs and one
+  that repeats is cancelled, as a JDK's two policies default.
+- **A pool is a core size, a most size, a queue and a handler** (j89; until then a core
+  size and a flag). A task gets a new worker below the core size, else waits in the
+  queue, else gets a new worker below the most size, else the handler is asked -- outside
+  the pool's monitor. The queue is the program's own object, offered to and polled under
+  the pool's monitor, on which the workers wait (so a task the program puts into
+  `getQueue()` itself waits for the next `execute`: `deviations.md`); a `SynchronousQueue`
+  holds nothing, so a pool over one keeps the tasks handed to idle workers itself.
+  `Executors`' pools are the same constructor. The refusals' messages are a JDK 25's
+  (`corePoolSize must be non-negative` .., `NullPointerException: workQueue`).
+- **What depends on a `CompletableFuture` runs in the order a JDK runs it, measured**
+  (j89; it ran in the order added until then, which no test asked): of the future set
+  first the dependent added LAST first; of a future one of those sets, right after it,
+  the one added FIRST first (`d3 e3a d2 e2a e2b g1 g2 e2c d1 e1a e1b` for three
+  dependents, the second with three of its own). `settle` keeps one stack per outermost
+  completion: a dependent is `fire(pending)`, and a future set inside one pushes its own
+  dependents on `pending` in reverse. A stage of two futures is one dependent added to
+  both where the stage is asked for, not to the second where the first is done -- which
+  is what puts `q1 all combine2 combine1` in a JDK's order. `orTimeout` and the like run
+  on one daemon thread of a scheduled pool named as a JDK's.
+- **`ForkJoinPool` is a thin layer over a `ThreadPoolExecutor`** that grows a daemon
+  thread whenever none is free; `java.util.concurrent.Common` holds the one every
+  program shares, which a `CompletableFuture`'s tasks run on too. One thread runs a task:
+  a pool's thread, or -- before any has -- the pool's thread that joins it
+  (`ForkJoinTask.run` under the task's monitor), so `left.fork(); right.compute() +
+  left.join()` needs no second thread and runs on one stack. The pool a thread runs a
+  task of is a `ThreadLocal`. Not a JDK's: the parallelism is a number answered (2, and 1
+  for the common pool: there is no `Runtime`), no work is stolen, and an exception is
+  thrown again as it is where a JDK, when another thread ran the task, throws a new one
+  of the same class holding it -- made by reflection, which the subset has none of
+  (`deviations.md`).
+- **A member that never waits calls nothing that can** (j89, a rule of the library's
+  source): `offer(e)`, `poll()`, `tryLock()`, `add` have bodies of their own beside the
+  members that wait (`Bounded.insertNow` / `insert`, `SynchronousQueue.offer` / `hand`,
+  `ReentrantReadWriteLock.take` / `acquire`), and a callback of the program runs with the
+  monitor given up where it can (`CyclicBarrier`'s action). Why: a `synchronized` region
+  is held across a suspension as soon as a call in it can REACH a wait, and through the
+  interfaces (`Collection.add`, `Queue.poll`) one such member makes every region calling
+  the interface one -- sharing a body with the waiting member put 30 regions of the
+  corpus's `Handing` in that set and took the functions to lower twice from 18 to 49%
+  ("A thread suspended and resumed" below). Nothing pins it yet: `.todo/k00`'s analysis
+  will.
 - **A lock is a monitor's protocol, not a monitor**: `ReentrantLock` holds an owner and a
   count under its own monitor, on which a thread waiting for the lock waits; a `Condition`
   queues a ticket per waiting thread under the lock and each thread waits on its own ticket,
   so `signal` wakes the thread that waited longest and a signal between the lock given up
-  and the wait is not lost.
+  and the wait is not lost (`locks.Waiting`, over what a lock answers of itself, so a
+  write lock's condition is the same class). `ReentrantReadWriteLock` is one monitor: a
+  thread asking to read waits while another writes, and while one waits to write unless
+  it reads already; `tryLock()` goes ahead of the waiting writers, as a JDK's does.
 - **An executor on one stack.** A worker with no task left cannot wait for one: the thread
   to hand it one is under it. `ThreadPoolExecutor.next` puts the worker in `resting` and
   ends the thread; `execute` then queues the task and starts a thread of the SAME NAME over
@@ -1434,7 +1544,8 @@ that can only be suspended under it asks `Support.oneStack()` and does what one 
 
 ### A thread suspended and resumed: the two leads measured (2026-11-17, j83)
 
-Neither is made; `.todo/j89` holds the plan.
+Neither is made; `.todo/k00` holds the plan. j89 made the first step of the second lead:
+"The regions a suspended thread can hold" below.
 
 - **Wasm stack switching is in wasmtime 49.0.0 and cannot be used.** It is off by default
   (`-W stack-switching=y`), only on x86-64 Linux and macOS (`Config`'s check: any other
@@ -1466,6 +1577,66 @@ Neither is made; `.todo/j89` holds the plan.
   2 to 16%. What decides it is whether a `synchronized` region can be held across a
   suspension, which the closed program can answer per region (no call in it reaches a
   suspension -- every atomic, every `ConcurrentHashMap` member).
+
+### The regions a suspended thread can hold (2026-11-18, j89)
+
+**The analysis brings the functions to lower twice back to the ones that reach a wait, a
+sleep or a yield, in six programs of seven; the seventh is decided by how well a function
+value is typed, which the IR does not tell and the lowering does.** The lowering is
+therefore worth making; `.todo/k00`.
+
+- **What is computed** (`held/held.py` over `--dump-ir`, a fixed point over the call
+  graph): a region is HELD ACROSS A SUSPENSION when its body reaches a sleep, a yield, an
+  entry that may block, or a wait on anything but the region's own lock (a wait gives its
+  own monitor up: `Thread.await` is "waits on its first argument", handed up the calls as
+  long as the argument is a parameter); an entry MAY BLOCK when its lock may be the lock
+  of a held region (`this` of related classes, the same static lock, a `new Object()`
+  against the like, anything else against everything); a function is resumable when it
+  reaches a suspension or an entry that may block. A lazy class's initialization needs no
+  rule of its own: it is a function, and the wait for it is inside.
+- **Measured** (2026-11-18, the corpus's standalone programs as j89 left them and
+  `examples/java/shop`; functions written in Java, the library's included):
+
+  | program | functions | reach a wait, a sleep, a yield | or a monitor's entry | resumable, function values not followed .. followed by arity | regions | held |
+  |---|---|---|---|---|---|---|
+  | a bounded buffer | 62 | 6 | 15 | 6 .. 9 | 7 | 0 |
+  | `examples/java/shop` | 271 | 4 | 25 | 4 .. 7 | 9 | 0 |
+  | `Monitors` | 325 | 7 | 142 | 7 .. 15 | 59 | 0 |
+  | `Waits` | 79 | 8 | 19 | 8 .. 11 | 18 | 0 |
+  | `Handing` (locks, barriers, queues, pools) | 582 | 110 | 308 | 104 .. 106 | 120 | 0 |
+  | `Timed` (a scheduled pool, a `Timer`) | 278 | 45 | 123 | 10 .. 17 | 59 | 0 |
+  | `Sharing` (`ConcurrentHashMap`, futures, fork/join) | 853 | 121 | 471 | 42 .. 425 | 168 | 0 .. 55 |
+
+  The two ends are the unsound and the sound reading of a call through a function value:
+  not followed, and reaching every lambda and `#'function` of its arity. Where they meet,
+  the answer is exact: 1.5 to 18% of a program's functions, against 9 to 55% when every
+  monitor's entry counts. Of a program's lambdas 0 to 41% are resumable (`Handing` 34 of
+  82).
+- **`Sharing` is not answered by the IR.** Its 425 come from one place: a
+  `CompletableFuture`'s dependents are lambdas bound to variables and called through a
+  local (`next.fire(stack)`), a field (`this.threads.make(..)`) -- in the IR a `FUNCALL`
+  of an unknown operand, which then reaches every lambda of one parameter, a thread
+  factory's among them; from there `Timetable.arm`, the pools and the map's `compute`
+  hold their monitors across "a suspension" and 127 entries may block. The lowering
+  knows the interface of every lambda and of every such call (the IR only where a lambda
+  is written as an argument: the script's `typed` and `flow` readings), so the analysis
+  belongs in `JavaLowering`, beside `Effects`; whether interface precision is enough for
+  `Sharing`, or the lambdas handed to each parameter are needed (`flow`: 34 of 492 on
+  the program as j83 left it), is `.todo/k00`'s first measurement.
+- **The component runs a suspended body today** (the second lead tried by hand,
+  `async/`): a bounded buffer written as two `async-defun` bodies, an `unwind-protect`
+  and a `handler-case` across the awaits and an error signalled after a resume, prints
+  what the interpreter and the JVM print (33 KB). What a resumable call costs when it
+  does not suspend, 20,000,000 calls of `(+ n 1)` under an `unwind-protect`, wasmtime
+  49.0.0: a plain call 0.42 s / 0.35 s (Preview 1 / component), an `async-defun` awaited
+  1.11 s / 2.13 s -- 35 ns a call on Preview 1 (a settled future made and read) and 90 ns
+  on the component (the frame). Preview 1 runs a body to its end at the call
+  ([async-await.md](async-await.md)): it has no state machines, and a thread's wait
+  needs a future the PROGRAM settles, which neither wasm target has (`make-stream` is
+  refused there). `(await (wait-for 0))` does not stand in for a yield: on the component
+  a timer of 0 ms is settled when it is made, the await never suspends, and a loop
+  polling with it never lets another body run -- the interpreter and the JVM end, the
+  component does not (`async/spin2.lisp`, `.todo/k02`).
 
 
 ## The lowering table
@@ -1645,3 +1816,19 @@ the location line: `at:` is the first line starting `  at `),
 thread); ci-spec `string-code-reads-a-character-s-code-or-minus-one`;
 `JavaLoweringTest#aMonitorIsEnteredAndLeftAndAThreadIsTheRunTimes` (both forms of a
 failing initialization, `%uncaught`, the name function that ends in no run-time answer).
+j89: the `standalone:` case `a-scheduled-pool-and-a-timer-run-tasks-at-their-times` (the
+thread one stack starts for a time; a `TimerTask`'s `state` and `period` hiding no local
+of the program; its delays are wide on purpose -- 600 against 20 ms, 100 ms apart -- since
+the order asked is by time and the legs run beside each other), the second halves of
+`locks-latches-queues-and-executors-hand-work-between-threads` and
+`threads-share-concurrent-collections-and-completable-futures` (static methods called
+from the end of `main`: each new class, the dependents' order, the refusals' messages, the
+text forms through `shown`, which drops the object's number), the `LocalBase` lines of
+`a-local-and-an-anonymous-class-keep-the-locals-they-read` (a private field and method
+above an anonymous class) and the `refused:` cases
+`a-private-field-of-a-superclass-is-not-read-by-its-simple-name` /
+`a-private-method-of-a-superclass-is-not-called-by-its-simple-name`. A thread program for
+the corpus waits only for what one stack can run: a thread may wait for what a thread
+started LATER does, never for the thread that waits for it (two readers held open by
+`main` at once, a second round of one barrier's threads and a producer blocked on a full
+queue are refused there).

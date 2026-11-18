@@ -219,6 +219,8 @@ Caused by: java.lang.IllegalStateException: insufficient funds: 30
 
 **`hashCode` も `toString` も宣言していないオブジェクトの `hashCode` と `toString`** は、
 rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進表記を続けた文字列です。
+ネストしたクラスの名前は、この文字列ではドット区切り（`Outer.Inner@1f`）になります。
+`getClass().getName()` と JDK は `Outer$Inner` と書きます。
 このようなオブジェクト（列挙型の定数を含みます）をキーにした `HashMap` は、JDK と異なる順序で
 キーをたどります。JDK でも、この順序は実行のたびに変わります。
 
@@ -306,9 +308,28 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 開始されるため、プールのスレッドの `ThreadLocal` は初期値に戻ります。シャットダウンしない
 プールがあると、JDK ではプログラムが終了しませんが、`.wasm` では終了します。
 
+**`.wasm` では、時刻を指定したタスクは、その時刻のために開始されたスレッドが実行します。**
+`.wasm` のスレッドは、時刻が来るまで待機できません。そこで、スケジュール実行のプールと
+`Timer` は、最も早いタスクの時刻より前には動かないスレッドを開始します。プログラムが
+`get`、`await`、`join`、`sleep` で待機したとき、またはプログラムの終わりに達したときに、
+その時刻まで待ってからタスクが実行されます。実行のたびに新しいスレッドが使われるため、
+`ThreadLocal` は初期値に戻ります。新しいスレッドには、プールのスレッドの名前が順番に
+付きます。デーモンでない `Timer` をキャンセルしないままにすると、JDK ではプログラムが
+終了しませんが、`.wasm` ではタスクがなくなった時点で終了します。
+
+**プールには JDK と異なる点があります。** `Executors.newSingleThreadExecutor()` と
+`newSingleThreadScheduledExecutor()` はプールそのものを返します。JDK はプールをラッパーで
+包んで返すため、JDK では戻り値が `ThreadPoolExecutor` ではありません。`ThreadPoolExecutor`
+には、オーバーライドするための `beforeExecute`、`afterExecute`、`terminated` がなく、
+セッターはハンドラーのものだけです。プログラムが `getQueue()` に直接入れたタスクは、次の
+`execute` まで実行されません。スケジュール実行のプールはタスクを独自の表に保持するため、
+`getQueue()` は空です。`ForkJoinPool` は、タスクを実行できるスレッドが空いていなければ
+スレッドを開始します。そのため並列度は問い合わせに答えるだけの数値で、`new ForkJoinPool()`
+では 2、共通プールでは 1 です。タスクが投げた例外は、そのまま再スローされます。JDK は、
+別のスレッドがタスクを実行した場合、元の例外を原因に持つ同じクラスの例外を投げます。
+
 **`ConcurrentHashMap` の走査順は JDK 25 と同じです。** ただし、チェーンが 64 本以上ある
-テーブルで、1 本のチェーンに 9 個のキーが入った場合の順序は一致しません。エグゼキューターが
-タスクを拒否したときの `RejectedExecutionException` にはメッセージがありません。
+テーブルで、1 本のチェーンに 9 個のキーが入った場合の順序は一致しません。
 
 **スレッドの状態が `BLOCKED` になることはありません。** `getState` で分かるのは、スレッドが
 待機中またはスリープ中であることです。モニターに入るのを待っているスレッドの状態は
@@ -330,9 +351,9 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
   （`Interface.super::m`）。
 - スーパークラスのフィールドを隠すフィールド。
 - `String`、`StringBuilder`、ボックスを継承するクラス。
-- `java.util.concurrent` のうち、[概要](index.md)の表にないもの。読み書きロックとスタンプ付き
-  ロック、`CyclicBarrier`、`Phaser`、`Exchanger`、スケジュール実行のエグゼキューター、
-  `ForkJoinPool`、表にないキューとマップ、表にないアトミッククラスです。スレッドグループと、
+- `java.util.concurrent` のうち、[概要](index.md)の表にないもの。スタンプ付きロック、
+  `Phaser`、優先度順または遅延順のキュー、`ConcurrentSkipListMap`、`CountedCompleter`、
+  表にないアトミッククラスです。`Date` を取る `Timer` の `schedule`、スレッドグループ、
   `Duration` を取る `sleep` と `join` も拒否されます。
 - [概要](index.md)の表にないライブラリのクラスとメンバー。ストリーム（`java.util.stream`）、
   `LinkedList`、`LinkedHashMap`、`TreeMap`、`Scanner`、ファイル（`File`、`FileReader`、

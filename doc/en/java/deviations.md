@@ -218,7 +218,9 @@ class's own type and a constructor only through `super(..)`.
 language leaves the number unspecified.
 
 **`hashCode` and `toString` of an object declaring neither** are an identity number of
-rontolisp's own, `Name@` and that number in hexadecimal. A `HashMap` keyed by such objects,
+rontolisp's own, `Name@` and that number in hexadecimal. The name of a nested class is
+written with a dot there (`Outer.Inner@1f`), where `getClass().getName()` and a JDK write
+`Outer$Inner`. A `HashMap` keyed by such objects,
 enum constants included, walks them in another order than a JDK, whose own order changes
 from run to run.
 
@@ -302,9 +304,26 @@ over. A task given later starts a thread of the same name in its place, so a
 `ThreadLocal` of the pool's thread starts again from its initial value. A pool that is
 never shut down keeps a JDK's program running; a `.wasm` ends.
 
+**A task at its time is run by a thread started for that time, in a `.wasm`.** No thread
+can wait there for a time. A scheduled pool and a `Timer` start a thread that runs no
+sooner than their soonest task's time, and a wait of the program -- `get`, `await`, `join`,
+`sleep`, the program's end -- passes the time until then. Each run is a new thread, named
+as the pool's threads in turn, so a `ThreadLocal` starts again. A `Timer` that is no daemon
+and is never cancelled keeps a JDK's program running; a `.wasm` ends once it has no task
+left.
+
+**A pool is not in every respect a JDK's.** `Executors.newSingleThreadExecutor()` and
+`newSingleThreadScheduledExecutor()` answer the pool itself, which a JDK wraps: there it
+is no `ThreadPoolExecutor`. A `ThreadPoolExecutor` has no `beforeExecute`, `afterExecute`
+or `terminated` to override, and of the setters only the handler's; a task put into
+`getQueue()` by the program waits for the next `execute`. A scheduled pool keeps its tasks
+in a table of its own, so its `getQueue()` is empty. A `ForkJoinPool` starts a thread
+whenever none is free for a task: its parallelism is a number it answers, 2 for
+`new ForkJoinPool()` and 1 for the common pool. An exception a task threw is thrown again
+as it is; a JDK throws a copy holding it when another thread ran the task.
+
 **A `ConcurrentHashMap` keeps the order a JDK 25 walks it in**, but for a table of 64
-chains or more in which nine keys share one chain. An executor that refuses a task
-throws a `RejectedExecutionException` with no message.
+chains or more in which nine keys share one chain.
 
 **A thread's state is never `BLOCKED`.** `getState` tells a thread that waits or sleeps;
 one waiting to enter a monitor is `RUNNABLE`. An uncaught-exception handler is asked for
@@ -325,10 +344,10 @@ Each of these is an error naming the construct and its position.
   qualified `super` (`Interface.super::m`).
 - A field hiding one of a superclass.
 - A class extending `String`, `StringBuilder` or a box.
-- Of `java.util.concurrent`, what the [overview](index.md) does not list: read-write and
-  stamped locks, `CyclicBarrier`, `Phaser`, `Exchanger`, scheduled executors,
-  `ForkJoinPool`, the other queues and maps, the other atomic classes. Thread groups,
-  `sleep` and `join` of a `Duration`.
+- Of `java.util.concurrent`, what the [overview](index.md) does not list: stamped locks,
+  `Phaser`, the queues ordered by priority or by delay, `ConcurrentSkipListMap`,
+  `CountedCompleter`, the other atomic classes. A `Timer`'s `schedule` of a `Date`. Thread
+  groups, `sleep` and `join` of a `Duration`.
 - Any class or member of the library not listed in the [overview](index.md): streams
   (`java.util.stream`), `LinkedList`, `LinkedHashMap`, `TreeMap`, `Scanner`, files
   (`File`, `FileReader`, `java.nio.file`), `java.time`, `BigInteger`, `BigDecimal`,
