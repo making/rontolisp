@@ -28,7 +28,9 @@ forbids; it was deleted, not refactored (it stays in git history, the user's dec
 front end cannot lower the Java library (its values are not Java's: a string is shared, a
 vector, a boolean and `null` are not), and the Java library's own measured cost is against it
 (an `int` kept in range by a mask on every operation, structure slots: `.kb/java-frontend.md`,
-"Measured costs"). Lisp is what both already splice.
+"The library", "Measured both ways before choosing"). Lisp is what both already splice. The
+Java-source alternative was not built; what was measured is this engine against the port, on
+four backends ("Measured" below).
 
 ## The design (this file's own)
 
@@ -61,14 +63,14 @@ vector, a boolean and `null` are not), and the Java library's own measured cost 
   with one pattern once they were gone.
 - **No variable is named after a function the wasm compiler scans for** (`set` made
   `programUsesSymbol(.., SET)` true, which brings the eval and apply runtimes), and no call
-  takes `:test` / `:start` / `:end` (the prelude's sequence functions grow with the keywords
-  a program uses): 598,330 -> 539,385 B for the two together.
+  takes `:test` / `:start` / `:end`: 598,330 -> 539,385 B for the two together (not measured
+  apart).
 
 ## What was read from the documentation and what was measured
 
 The syntax, the flags, the classes and their names, the quantifier kinds, replacement and
 split are the `Pattern` / `Matcher` / `String.split` documentation's. What it leaves open was
-measured by running patterns under JDK 25 (never by reading its source); the 1,100 probes are
+measured by running patterns under JDK 25 (never by reading its source); the 1,076 probes are
 kept (`src/test/resources/regex-probes.txt`, run by `ClojureRegexTest` against the JDK
 running it), and a comment in `regex.lisp` says "measured" where a rule is one:
 
@@ -135,24 +137,31 @@ refusal message compared: 34,000 plain patterns 1 mismatch (the unclosed-class i
 9,000 Unicode patterns 0, 5,000 grapheme patterns 2 (both the code point deviation). The
 seeds `ClojureRegexTest` pins: 0.
 
-Wasm P1 / component / JVM class, bytes, and a loop's best of three, seconds:
+Wasm P1 / component / JVM class, bytes, and a loop's best run, seconds:
 
 | | port | this engine |
 |---|---|---|
-| `(println (re-find #"a+" "caab"))` | 386,096 / 409,345 / 659,649 | 415,700 / 439,221 / 656,687 |
-| six patterns (`re-seq`, `re-matches`, `replace`, `split`, two `re-find`) | 425,889 / 449,171 / 717,798 | 471,722 / 495,019 / 710,612 |
-| the six, 3,000 times, each literal compiled every time: interpreter / JVM / wasm / component | 8.1 / 0.89 / 0.37 / 0.36 | 7.3 / 0.92 / 0.37 / 0.37 |
+| `(println (re-find #"a+" "caab"))` | 386,096 / 409,345 / 659,649 | 415,913 / 439,435 / 657,587 |
+| six patterns (`re-seq`, `re-matches`, `replace`, `split`, two `re-find`) | 425,889 / 449,171 / 717,798 | 471,846 / 495,143 / 711,500 |
+| the six, 3,000 times, each literal compiled every time: interpreter / JVM / wasm / component | 8.1 / 0.85 / 0.37 / 0.36 | 7.4 / 0.87 / 0.41 / 0.38 |
 
-So: the same time on the compiled backends, a tenth less on the interpreter, a JVM class the
-same size, a wasm module 8 to 11 % larger. The engine's own functions are 121 KB of wasm
+So: a tenth less time on the interpreter, the same on the JVM, up to a tenth more on wasm
+(a process from start to end, so wasmtime compiling the larger module is in it), a JVM class
+the same size, a wasm module 8 to 11 % larger. The engine's own functions are 121 KB of wasm
 where the port's were 92 KB: a closure per node costs more code than a walk over an opcode
 tree (a `svref`, a `setf` of one or a `+` is 100 to 250 bytes there). What was done for size:
 the two rules under "The design" (-146 KB together), and helpers for the cold paths -- the
 parser's cursor, the look-behind study, the loops' bookkeeping (-22 KB of the engine alone).
 
-The Java front end, wasm: `"..".split("\\s+")` 251,783 B (the engine, no table);
+Depth: a loop over a body that can match several ways recurses once per iteration (so did
+the port's, and so does the oracle's). `(?:a|bx?)*c` over `ab` repeated, the most repeats
+that still answer, port / this engine: interpreter 6,000 / 4,000 (`--stack` raises it), JVM
+8,000 / 16,000, wasm 500 / 500 (8,000 / 8,000 under `-W max-wasm-stack=8388608`). A run of
+one character and a loop over a one-way body do not recurse (400,000 characters).
+
+The Java front end, wasm: `"..".split("\\s+")` 251,975 B (the engine, no table);
 `split(" ")`, a constant text, 66,664 B (no engine; the splitter it replaced made 79,448);
-a pattern computed at run time 317,388 B (every table).
+a pattern computed at run time 317,580 B (every table).
 
 ## Pins
 

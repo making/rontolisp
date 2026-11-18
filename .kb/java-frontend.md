@@ -709,8 +709,8 @@ measured programs.
   and the `U` flag (`regexProviders`), any other pattern gets all three -- the Unicode
   tables travel only with a pattern that may read them. **A split by a constant text with
   no operator needs no engine** (`%java-split-text`): `"to be".split(" ")` is 66,664 B of
-  wasm where the old splitter made 79,448; a split by a pattern is 251,783 B, by a pattern
-  computed at run time 317,388 B. Positions
+  wasm where the old splitter made 79,448; a split by a pattern is 251,975 B, by a pattern
+  computed at run time 317,580 B. Positions
   count characters, as `length` and `charAt` do. Pin: `java-spec.yaml`
   `regular-expressions-run-on-the-engine-the-front-ends-share` (four backends, a JDK's
   lines).

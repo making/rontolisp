@@ -7683,7 +7683,10 @@ has), so destructuring a matcher binds its groups. `%clojure-matcher-nth` is the
 `%clojure-nth`'s refusal clause, whose test `%clojure-matcher-value-p` (an alias of
 `%clojure-re-matcher-p`, which is also used outside arm positions) is the test of
 `ClojureArms.Family.MATCHER`, produced by `%clojure-re-matcher` alone: a program naming no
-`re-matcher` has the arm folded and compiles `nth` as before. Deviations: an index below zero
+`re-matcher` has the arm folded and compiles `nth` as before (the 465 programs of "Refusals":
+`--dump-ir` identical but the matcher probe). Cost of the arm in a program reading a matcher by
+`nth`, wasm P1 / component / JVM class, measured 2026-10-05 under the engine of that day:
+68,384 / 69,664 / 115,873 -> 68,722 / 70,002 / 116,433. Deviations: an index below zero
 or past the groups answers the default (nil without one) where the oracle's two-argument `nth`
 throws `IndexOutOfBoundsException` ("No group n"; `nth` past the end answers the default,
 "Deviations"); and the oracle's three-argument `nth` reads no group of a pattern without

@@ -1745,18 +1745,21 @@
                     (setq pos (car starts) starts (cdr starts) count
                           (- count 1))))))))))
 
-(defun rontolisp::%regex-loop-iterate (st i cnt ipos inner)
-  "Runs one more iteration of a general loop from I: the count and the
-   iteration's start are set for it and given back when it fails."
-  (let ((n (svref st cnt)) (p (svref st ipos)))
+(defun rontolisp::%regex-loop-begin (st i cnt ipos n)
+  "Sets the count and the start of one more iteration of a general loop, the
+   one after N, from I; answers the start that stood there."
+  (let ((p (svref st ipos)))
     (setf (svref st cnt) (+ n 1))
     (setf (svref st ipos) i)
-    (if (funcall inner st i)
-        t
-        (progn
-          (setf (svref st cnt) n)
-          (setf (svref st ipos) p)
-          nil))))
+    p))
+
+(defun rontolisp::%regex-loop-undo (st cnt ipos n p)
+  "Gives the count N and the iteration start P back after an iteration that
+   failed; answers nil. (The body is called by the step itself, not from a
+   helper: every frame between two iterations is depth a long input pays.)"
+  (setf (svref st cnt) n)
+  (setf (svref st ipos) p)
+  nil)
 
 (defun rontolisp::%regex-loop-remember (st memo i)
   "Remembers that the loop whose memo slot is MEMO cannot continue from I;
@@ -1790,21 +1793,32 @@
                 (let ((n (svref st cnt)))
                   (cond
                    ((< n min)
-                    (rontolisp::%regex-loop-iterate st i cnt ipos inner))
+                    (let ((p (rontolisp::%regex-loop-begin st i cnt ipos n)))
+                      (or (funcall inner st i)
+                          (rontolisp::%regex-loop-undo st cnt ipos n p))))
                    ((funcall next st i) t)
                    ((or (= i (svref st ipos)) (and (>= max 0) (>= n max))) nil)
-                   (t (rontolisp::%regex-loop-iterate st i cnt ipos inner)))))
+                   (t (let ((p (rontolisp::%regex-loop-begin st i cnt ipos n)))
+                        (or (funcall inner st i)
+                            (rontolisp::%regex-loop-undo st cnt ipos n p)))))))
               (lambda (st i)
                 (let ((n (svref st cnt)))
                   (cond ((< n min)
-                         (rontolisp::%regex-loop-iterate st i cnt ipos inner))
+                         (let ((p
+                                (rontolisp::%regex-loop-begin st i cnt ipos n)))
+                           (or (funcall inner st i)
+                               (rontolisp::%regex-loop-undo st cnt ipos n p))))
                         ((or (= i (svref st ipos)) (and (>= max 0) (>= n max)))
                          (funcall next st i))
                         ((and memo
                               (let ((m (svref st memo)))
                                 (and (not (integerp m)) (svref m i))))
                          nil)
-                        ((rontolisp::%regex-loop-iterate st i cnt ipos inner) t)
+                        ((let ((p
+                                (rontolisp::%regex-loop-begin st i cnt ipos n)))
+                           (or (funcall inner st i)
+                               (rontolisp::%regex-loop-undo st cnt ipos n p)))
+                         t)
                         ((funcall next st i) t)
                         (memo (rontolisp::%regex-loop-remember st memo i))
                         (t nil)))))))
