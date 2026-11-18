@@ -6,6 +6,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.UnaryOperator;
 
 import org.jspecify.annotations.Nullable;
 
@@ -21,6 +22,13 @@ import org.jspecify.annotations.Nullable;
  * library sources are loaded; only the system metadata is redeclared. Both system loaders
  * (the interpreter's {@code loadSystem} and the compile-time {@code LoadInliner}) go
  * through {@code locate}, so one entry serves every backend.
+ *
+ * <p>
+ * Where the difference is small and the upstream file is under a copyleft licence
+ * (clsql's LLGPL, petalisp's AGPL-3.0), no near-copy is bundled: {@link #REWRITES} edits
+ * the located file's own text at load time, as {@link PetalispForms} edits a component,
+ * by markers that must occur exactly once, so an upstream release that moves one fails
+ * loudly instead of loading the unedited file.
  */
 public final class AsdOverrides {
 
@@ -79,25 +87,67 @@ public final class AsdOverrides {
 			// same system name over cffi-uffi-compat, whose package has the nickname
 			// uffi.
 			Map.entry("uffi.asd", "uffi-cffi.asd"),
-			// Not unparseable but MIS-DECLARED here: it loads uffi for a perform method
-			// that does not run, and names no MOP system because its package.lisp uses
-			// one MOP package per implementation (ClsqlForms). The replacement declares
-			// closer-mop and leaves uffi to the database backends.
-			Map.entry("clsql.asd", "clsql-closer-mop.asd"),
 			// Not unparseable but MIS-DECLARED for a .wasm: its cffi dependency copies
 			// foreign libraries next to an executable, which a module has none of (its
 			// mezzano arm), and a .wasm refuses ffi: by name. The replacement skips cffi
 			// there; every other target reads upstream's dependencies.
-			Map.entry("deploy.asd", "deploy-rontolisp.asd"),
-			// Not unparseable but MIS-DECLARED here: static-vectors serves the SBCL and
-			// CCL arms that read an array's storage by its address, and its own .asd
-			// refuses rontolisp. The rontolisp arm (PetalispForms) reads none, so the
-			// replacement drops it; every other dependency and component is upstream's.
-			Map.entry("petalisp.native-backend.asd", "petalisp-native-backend-rontolisp.asd"));
+			Map.entry("deploy.asd", "deploy-rontolisp.asd"));
+
+	/**
+	 * The {@code .asd} file name to the edit of its own text: the systems that load as
+	 * upstream declares them but for a difference small enough to state as a few marker
+	 * edits.
+	 */
+	private static final Map<String, UnaryOperator<String>> REWRITES = Map.of(
+			// MIS-DECLARED here: an eval-when loads uffi for a perform method reading
+			// ~/.clsql-init.lisp, which does not run here, and no MOP system is named
+			// because package.lisp uses one MOP package per implementation (ClsqlForms).
+			// Both are skipped on rontolisp and closer-mop is declared; uffi is left to
+			// the database backends, so the core reaches wasm.
+			"clsql.asd",
+			source -> edit("clsql.asd",
+					edit("clsql.asd",
+							edit("clsql.asd", source, "(eval-when (:compile-toplevel :load-toplevel :execute)",
+									"#-rontolisp\n(eval-when (:compile-toplevel :load-toplevel :execute)"),
+							"(defmethod perform :after", "#-rontolisp\n(defmethod perform :after"),
+					"(defsystem clsql\n", "(defsystem clsql\n    :depends-on (closer-mop)\n"),
+			// MIS-DECLARED here: static-vectors serves the SBCL and CCL arms that read an
+			// array's storage by its address, and its own .asd refuses rontolisp. The
+			// rontolisp arm (PetalispForms) reads none, so the dependency is skipped;
+			// every other dependency and component is upstream's.
+			"petalisp.native-backend.asd", source -> edit("petalisp.native-backend.asd", source, "\"static-vectors\"",
+					"#-rontolisp \"static-vectors\""));
 
 	private static final Map<String, String> CACHE = new ConcurrentHashMap<>();
 
 	private AsdOverrides() {
+	}
+
+	/**
+	 * The text a located {@code .asd} is read as: its bundled replacement, its own text
+	 * edited ({@link #REWRITES}), or its own text.
+	 * @param asdFileName the located file's name (e.g. {@code "clsql.asd"})
+	 * @param source the located file's text
+	 * @return the text to read
+	 * @throws IllegalStateException when an edit's marker is not in the text exactly once
+	 */
+	public static String effectiveSource(String asdFileName, String source) {
+		String replacement = replacementSource(asdFileName);
+		if (replacement != null) {
+			return replacement;
+		}
+		UnaryOperator<String> rewrite = REWRITES.get(asdFileName);
+		return rewrite == null ? source : rewrite.apply(source);
+	}
+
+	private static String edit(String asdFileName, String source, String marker, String replacement) {
+		int first = source.indexOf(marker);
+		if (first < 0 || source.indexOf(marker, first + 1) >= 0) {
+			throw new IllegalStateException(asdFileName + ": expected exactly one occurrence of the marker <<<" + marker
+					+ ">>> (found " + (first < 0 ? 0 : 2) + "). The upstream release moved it; update "
+					+ AsdOverrides.class.getSimpleName() + " -- see .kb/asdf.md.");
+		}
+		return source.substring(0, first) + replacement + source.substring(first + marker.length());
 	}
 
 	/**

@@ -165,6 +165,12 @@ runtime itself, and the program runs on the process's first thread, where AppKit
 wants it. See [macOS GUI](../guides/objc-appkit.md#a-native-executable). For every
 other target such a program is a compile error naming the reference.
 
+## Licenses
+
+The runner links wasmtime and the Rust crates it builds on, whose licences ask for their
+notices to go with the executable: `rontolisp notices --native -o NOTICES.txt` writes
+them with rontolisp's own ([Licenses of a Compiled Program](licenses.md)).
+
 ## Size and Speed
 
 An executable is a runner (2.1 MB on Linux x86_64, 1.9 MB on Linux aarch64,

@@ -4,6 +4,12 @@
 # (<out> defaults to target/resources), the classpath layout the Java side loads. The
 # stubs are one runner built twice: rlrun-net adds the network host a program that
 # fetches imports (the `net` feature: rustls, +1.14 MB), which no other output carries.
+# Beside them go the notices the binaries owe the crates they link: runner-notices.txt
+# (rlrun-net's crates, a superset of rlrun's; what every --native output carries) and,
+# with the shim, shim-notices.txt -- each crate's name, version, licence and repository
+# from cargo's metadata, then every licence file the crates' packages ship. Third-party:
+# wasmtime and the crates it links (MIT, Apache-2.0, BSD-3-Clause, ISC, Unicode-3.0,
+# Zlib, CDLA-Permissive-2.0). Notice: THIRD-PARTY-NOTICES.txt, "Rust crates".
 #
 #   ./build.sh [--test] [out-dir]    --test: then run the workspace tests against the stubs
 #   ./build.sh --stub PLATFORM [out-dir]
@@ -13,15 +19,19 @@
 #       gcc-aarch64-linux-gnu / gcc-x86-64-linux-gnu) and the rustup target
 #       <arch>-unknown-linux-musl
 #   ./build.sh --is-static FILE      exit 0 iff FILE is an ELF executable with no interpreter
+#   ./build.sh --notices PACKAGE PLATFORM
+#       print the notices of the crates PACKAGE (rlrun: with the net feature) links on
+#       PLATFORM
 #   ./build.sh --maven BUILD REQUIRED
 #       what pom.xml runs in generate-resources, with the values of the properties
 #       rontolisp.native.build and rontolisp.native.required (true|false):
 #       BUILD     build the pair when cargo is found; without cargo, warn and go on.
 #                 A pair already there and older than a file it is built from is
 #                 rebuilt the same way under false too
-#       REQUIRED  fail unless target/resources holds the host's shim and both stubs
-#                 afterwards (built here or put there by CI), and on Linux unless the
-#                 stubs are static
+#       REQUIRED  fail unless target/resources holds the host's shim, both stubs and
+#                 their notices afterwards (built here or put there by CI), and on Linux
+#                 unless the stubs are static. A pair without notices gets them when
+#                 cargo is found, whatever BUILD says
 #
 # The two are built by SEPARATE cargo invocations on purpose: cargo unifies a
 # dependency's features across the packages of one invocation, so building them together
@@ -135,7 +145,102 @@ install_pair() {
   local stubs=$1 dest=$2
   mkdir -p "$dest"
   cp "target/release/$lib" "$stubs/rlrun" "$stubs/rlrun-net" "$dest/"
+  write_notices "$os-$arch" "$dest" true
   ls -l "$dest"
+}
+
+# The Rust target the binaries of PACKAGE $2 for platform $1 (<os>-<arch>) are built for:
+# what decides which crates link. A Linux runner links musl (its glibc fallback links the
+# same crates), the shim the host's glibc.
+binary_triple() {
+  case $1 in
+    linux-*) if [[ $2 == rlprecomp ]]; then echo "${1#*-}-unknown-linux-gnu"; else echo "${1#*-}-unknown-linux-musl"; fi ;;
+    macos-*) echo "${1#*-}-apple-darwin" ;;
+    *) echo "error: unknown platform $1" >&2; return 1 ;;
+  esac
+}
+
+# Prints the notices a binary of PACKAGE ($1) built for Rust target $2, with the cargo
+# arguments after them, owes the crates it links: the normal dependencies but proc
+# macros, which run in the compiler and leave nothing in the binary. A table of every
+# crate (name, version, licence expression, repository), then each licence file a
+# crate's package ships (LICENSE*, COPYING*, NOTICE* ...) once, under every crate that
+# ships the same text (white space aside). A crate whose package ships none is named
+# under a crate of the same repository that does (wasmtime's internal crates, under
+# wasmtime), else under the one licence file of a crate with the same licence
+# expression, else listed at the end with its expression. Every source is in
+# cargo's registry after a --locked build; a missing one is an error, never a shorter
+# list. Plain bash 3 and POSIX awk: macOS runs it too.
+crate_notices() {
+  local package=$1 triple=$2
+  local -a extra=("${@:3}")
+  local registry=${CARGO_HOME:-$HOME/.cargo}/registry/src
+  local crates id license repo name version dir file row
+  crates=$(cargo tree --locked -p "$package" --target "$triple" -e normal,no-proc-macro \
+    ${extra[@]+"${extra[@]}"} --prefix none --format '{p}|{l}|{r}' | sed 's/ (\*)$//' |
+    grep -v ' (/' | sort -u) || return
+  printf 'The Rust crates %s links on %s (%s crates).\n\n' "$package" "$triple" "$(wc -l <<<"$crates" | tr -d ' ')"
+  while IFS='|' read -r id license repo; do
+    printf '%-44s %-52s %s\n' "$id" "$license" "$repo"
+  done <<<"$crates"
+  while IFS='|' read -r id license repo; do
+    name=${id% v*}
+    version=${id##* v}
+    dir=$(compgen -G "$registry/*/$name-$version" | head -1) || true
+    if [[ -z $dir ]]; then
+      echo "error: no source of the crate $name $version under $registry" >&2
+      return 1
+    fi
+    row="$name $version	$repo	$license"
+    for file in "$dir"/*; do
+      [[ -f $file ]] || continue
+      case ${file##*/} in
+        LICENSE* | LICENCE* | COPYING* | COPYRIGHT* | NOTICE* | UNLICENSE* | license* | licence*)
+          row+="	$file" ;;
+      esac
+    done
+    printf '%s\n' "$row"
+  done <<<"$crates" | awk -F '\t' '
+    function text(f,  line, t) { t = ""; while ((getline line < f) > 0) t = t line "\n"; close(f); return t }
+    function key(t,  k) { k = t; gsub(/[ \t\n\r]+/, " ", k); return k }
+    {
+      if (NF < 4) { orphan[++orphans] = $1; orphanRepo[orphans] = $2; orphanLicense[orphans] = $3; next }
+      for (i = 4; i <= NF; i++) {
+        t = text($i); k = key(t)
+        if (!(k in index_)) { index_[k] = ++texts; body[texts] = t }
+        n = index_[k]
+        owners[n] = owners[n] (owners[n] == "" ? "" : ", ") $1
+        if (!($2 in byRepo)) byRepo[$2] = n
+        if (NF == 4 && !($3 in byLicense)) byLicense[$3] = n
+      }
+    }
+    END {
+      rule = "================================================================================"
+      dash = "--------------------------------------------------------------------------------"
+      left = 0
+      for (o = 1; o <= orphans; o++) {
+        if (orphanRepo[o] != "" && orphanRepo[o] in byRepo) n = byRepo[orphanRepo[o]]
+        else if (orphanLicense[o] in byLicense) n = byLicense[orphanLicense[o]]
+        else { rest[++left] = orphan[o] ": " orphanLicense[o]; continue }
+        owners[n] = owners[n] ", " orphan[o]
+      }
+      for (n = 1; n <= texts; n++) printf "\n%s\n%s\n%s\n\n%s", rule, owners[n], dash, body[n]
+      if (left) { printf "\n%s\nNo licence file in the package:\n", rule; for (o = 1; o <= left; o++) print rest[o] }
+    }'
+}
+
+# Writes the notices of <platform> $1 into directory $2: the runners' always, the shim's
+# when $3 is true.
+write_notices() {
+  local platform=$1 dest=$2 shim=$3 triple
+  triple=$(binary_triple "$platform" rlrun) || return
+  crate_notices rlrun "$triple" --features net >"$dest/runner-notices.txt.tmp" || return
+  mv "$dest/runner-notices.txt.tmp" "$dest/runner-notices.txt"
+  if $shim; then
+    triple=$(binary_triple "$platform" rlprecomp) || return
+    crate_notices rlprecomp "$triple" >"$dest/shim-notices.txt.tmp" || return
+    mv "$dest/shim-notices.txt.tmp" "$dest/shim-notices.txt"
+  fi
 }
 
 # From the ELF program headers, not ldd: ldd calls every foreign-architecture file "not a
@@ -173,6 +278,19 @@ if [[ ${1:-} == --is-static ]]; then
   exit
 fi
 
+if [[ ${1:-} == --notices ]]; then
+  package=${2:?PACKAGE}
+  platform=${3:?PLATFORM}
+  find_cargo || { echo "error: cargo (Rust >= 1.96) not found" >&2; exit 1; }
+  triple=$(binary_triple "$platform" "$package")
+  if [[ $package == rlrun ]]; then
+    crate_notices rlrun "$triple" --features net
+  else
+    crate_notices "$package" "$triple"
+  fi
+  exit
+fi
+
 if [[ ${1:-} == --stub ]]; then
   platform=${2:?PLATFORM}
   out=${3:-target/resources}
@@ -188,6 +306,7 @@ if [[ ${1:-} == --stub ]]; then
     fi
     cp "$stubs/$runner" "$dest/"
   done
+  write_notices "$platform" "$dest" false
   ls -l "$dest"
   exit 0
 fi
@@ -230,12 +349,21 @@ if [[ ${1:-} == --maven ]]; then
         "is not found: --native outputs run the runner those older sources built" >&2
     fi
   fi
-  if [[ $required == true ]]; then
-    if [[ ! -f $dest/$lib || ! -f $dest/rlrun || ! -f $dest/rlrun-net ]]; then
-      echo "error: -Drontolisp.native.required=true but rontolisp-native/$dest has no" \
-        "shim and stubs (install Rust >= 1.96 or put CI's artifact there)" >&2
+  # A pair built before the notices were written beside it gets them now.
+  if [[ -f $dest/$lib && ! -f $dest/shim-notices.txt ]] && find_cargo; then
+    write_notices "$os-$arch" "$dest" true || {
+      echo "error: rontolisp-native/build.sh could not write the crates' notices" >&2
       exit 1
-    fi
+    }
+  fi
+  if [[ $required == true ]]; then
+    for file in "$lib" rlrun rlrun-net runner-notices.txt shim-notices.txt; do
+      if [[ ! -f $dest/$file ]]; then
+        echo "error: -Drontolisp.native.required=true but rontolisp-native/$dest has no" \
+          "$file (install Rust >= 1.96 or put CI's artifact there)" >&2
+        exit 1
+      fi
+    done
     for runner in "${RUNNERS[@]}"; do
       if [[ $os == linux ]] && ! statically_linked "$dest/$runner"; then
         echo "error: -Drontolisp.native.required=true but rontolisp-native/$dest/$runner" \

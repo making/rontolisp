@@ -1,3 +1,7 @@
+;; Third-party: follows ring-core 1.15.5 and ring-codec 1.3.0 (MIT), Copyright (c)
+;; 2009-2010 Mark McGranaghan, 2009-2026 James Reeves.
+;; Notice: THIRD-PARTY-NOTICES.txt, "ring".
+;;
 ;; The file, URL and resource responses of ring.util.response (ring-core
 ;; 1.15.5): loaded into the namespace where a program first names one of
 ;; them, so a program serving no file carries none of this. The oracle's

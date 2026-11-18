@@ -174,3 +174,11 @@ java -jar $JAR infer.lisp -o /tmp/infer-c.wasm --component && \
 - 字形が似たかな（は/ほ/ま、ね/れ/わ、る/ろ、さ/き など）では依然として混同が起きます。
 - 濁点・半濁点・拗音（が・ぱ・きゃ 等）は対象外です。
 - ブラウザのシムの仮想 FS は**読み込み専用**です（データファイルは読めますが書き込みはできません）。
+
+## ライセンス
+
+学習データの Kuzushiji-49 は (c) ROIS-DS 人文学オープンデータ共同利用センター (CODH) で、
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) で提供されています
+(<http://codh.rois.ac.jp/kmnist/>)。`weights.bin` はこのデータで学習した重みなので、データの翻案物として
+同じ CC BY-SA 4.0 で配布します。コードは rontolisp と同じ Apache License 2.0 です
+(`THIRD-PARTY-NOTICES.txt` の "Kuzushiji-49")。

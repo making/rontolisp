@@ -2,6 +2,8 @@
 ;;;; and "Grapheme clusters"), generated from a running JDK's public Character
 ;;;; API by RegexUnicodeTablesTest, which fails when they are not the running
 ;;;; JDK's: regenerate them there, never by hand.
+;;;; Third-party: Unicode Character Database data (Unicode-3.0), Copyright (c) 1991-2026
+;;;; Unicode, Inc. Notice: THIRD-PARTY-NOTICES.txt, "Unicode".
 
 (defvar rontolisp::%regex-uni-props-cache nil)
 

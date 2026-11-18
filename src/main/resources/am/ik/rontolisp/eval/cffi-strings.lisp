@@ -1,3 +1,6 @@
+;; Third-party: contains code from CFFI (MIT), Copyright (C) 2005-2007 James Bielman.
+;; Notice: THIRD-PARTY-NOTICES.txt, "CFFI".
+;;
 ;; A leaf-module substitution for upstream cffi's src/strings.lisp -- the ONE
 ;; portable file of the system that cannot load here. The original drives
 ;; babel's instantiate-concrete-mappings code generator, which emits a

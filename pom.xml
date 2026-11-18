@@ -59,6 +59,9 @@
 		</developer>
 	</developers>
 	<dependencies>
+		<!-- Shaded into the exec jar and linked into the native binary, its own native
+		     libraries included. Third-party: JLine 4.4.7 (BSD-3-Clause), Copyright (c)
+		     2002-2023 the original author or authors. Notice: THIRD-PARTY-NOTICES.txt, "JLine". -->
 		<dependency>
 			<groupId>org.jline</groupId>
 			<artifactId>jline</artifactId>
@@ -219,6 +222,17 @@ gitBranch=${git.branch}
 							<resources>
 								<resource>
 									<directory>${project.build.directory}/generated-resources/version</directory>
+								</resource>
+								<!-- The licence, NOTICE and third-party notices travel in the jar and
+								     the native binary, where `rontolisp notices` reads them. -->
+								<resource>
+									<directory>${project.basedir}</directory>
+									<targetPath>META-INF</targetPath>
+									<includes>
+										<include>LICENSE</include>
+										<include>NOTICE</include>
+										<include>THIRD-PARTY-NOTICES.txt</include>
+									</includes>
 								</resource>
 								<!-- The precompile shims and runner stubs of the native
 								     executable output (.kb/native-output.md): the host's pair

@@ -1,0 +1,17 @@
+rontolisp
+Copyright 2026 Toshiaki Maki
+
+Licensed under the Apache License, Version 2.0 (LICENSE).
+
+rontolisp contains code and data from other projects, under their own licences;
+THIRD-PARTY-NOTICES.txt lists each of them, the files that hold it and its licence text.
+The attribution notices of the Apache-2.0 works among them:
+
+Apache Maven
+Copyright 2001-2026 The Apache Software Foundation
+
+Maven Artifact Resolver
+Copyright 2010-2026 The Apache Software Foundation
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).

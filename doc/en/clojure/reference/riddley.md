@@ -4,8 +4,9 @@
 locals they bind; specter's `path` and potemkin's types walk the code they are handed with it.
 Its own jar drives the Clojure compiler's internals (`Compiler/LOCAL_ENV`, and a Java class
 building the compiler's `LocalBinding`s), which rontolisp does not have, so `riddley.walk` and
-`riddley.compiler` are built in: Clojure source written for rontolisp from riddley's documented
-behavior, loaded like a project file and the same on every backend. In a `deps.edn`,
+`riddley.compiler` are built in: Clojure source written for rontolisp, whose walk follows
+riddley's own (MIT; its notice is in rontolisp's `THIRD-PARTY-NOTICES.txt`), loaded like a
+project file and the same on every backend. In a `deps.edn`,
 `riddley/riddley` at a Maven version up to 0.2.2 is this built-in one and fetches nothing --
 specter names 0.1.12 -- and a newer version is refused when a riddley namespace loads.
 

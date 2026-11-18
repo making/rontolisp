@@ -163,6 +163,10 @@ public final class RontoLispCli {
 			this.exitCode = new FormatCommand(this.in, this.out).run(Arrays.copyOfRange(args, 1, args.length));
 			return;
 		}
+		if (args.length > 0 && "notices".equals(args[0])) {
+			this.exitCode = new NoticesCommand(this.out).run(Arrays.copyOfRange(args, 1, args.length));
+			return;
+		}
 		// `test` is the exception: it takes one target and every compiler flag the
 		// ordinary modes take, because it GENERATES a program (the rove runner around
 		// the target) and then runs or compiles it through the very same pipeline. So
@@ -1781,6 +1785,8 @@ public final class RontoLispCli {
 		this.out.println("                     :entry-point runs, at its :build-pathname (no type is a");
 		this.out.println("                     native executable, .jar a JVM program, .wasm a module).");
 		this.out.println("                     See: rontolisp build --help");
+		this.out.println("  notices            The licence notices to ship with a compiled program");
+		this.out.println("                     (--native: its runner's too). See: rontolisp notices --help");
 		this.out.println();
 		this.out.println("Options:");
 		this.out.println("  -h, --help         Show this help message");

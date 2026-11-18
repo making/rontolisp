@@ -33,6 +33,8 @@
  * software is freely granted, provided that this notice
  * is preserved.
  * ====================================================
+ *
+ * Third-party: fdlibm 5.3 (Sun's notices above). Notice: THIRD-PARTY-NOTICES.txt, "fdlibm".
  */
 package am.ik.rontolisp.codegen.wasm;
 

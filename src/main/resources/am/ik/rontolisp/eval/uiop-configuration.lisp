@@ -1,3 +1,7 @@
+;;;; Third-party: contains code from ASDF 3.3.1 / UIOP (MIT), Copyright (c) 2001-2016
+;;;; Daniel Barlow and contributors.
+;;;; Notice: THIRD-PARTY-NOTICES.txt, "ASDF".
+;;;;
 ;;;; uiop/configuration -- ASDF's configuration DSL and where its files live.
 ;;;; Upstream's bodies (ASDF 3.3.1's uiop/configuration), which the source registry
 ;;;; (asdf-search.lisp) stands on. See .kb/uiop.md.

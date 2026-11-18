@@ -131,6 +131,17 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   `rontolisp-native/target/resources` and checks the exec jar lists each `rlrun` and
   `rlrun-net`. Every platform ships both stubs since 2026-09-25 ("The network runner"). A pull
   request's binary carries its own pair only; its cross-target tests skip.
+- **The crates' notices** (since 2026-11-18): beside each platform's binaries `build.sh` writes
+  `runner-notices.txt` (the crates of `rlrun-net`, a superset of `rlrun`'s: what every output
+  links) and, with the shim, `shim-notices.txt`, from `cargo tree --locked -e
+  normal,no-proc-macro --target <triple>` plus the licence files each crate's package ships in
+  cargo's registry, one copy per distinct text (white space aside); `build.sh --notices
+  PACKAGE PLATFORM` prints one. A crate shipping no licence file is filed under one of its
+  repository, else under a single-file crate of the same SPDX expression (wasmtime's
+  internal crates). Measured 2026-11-18: runner 113 crates, 268 KB on linux-x86_64 (265 KB
+  macOS, 110 crates); shim 69 crates, 122 KB. `--stub` writes the runner's, `--maven` adds both to a pair
+  that predates them, and `required` fails without them; `rontolisp notices --native` prints
+  the runner's for a program's distribution (`.kb/java-frontend-provenance.md`, "The audit").
 - **lispresen's executables** (`.github/workflows/lispresen.yaml`, since 2026-10-23): on a
   push to `develop` that changes `lispresen/**`, each platform's runner downloads the
   `rontolisp-<os>-<arch>` binary the `<version>` release holds at that moment (no wait for a

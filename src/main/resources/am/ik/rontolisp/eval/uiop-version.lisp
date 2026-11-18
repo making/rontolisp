@@ -1,3 +1,7 @@
+;;;; Third-party: contains code from ASDF 3.3.1 / UIOP (MIT), Copyright (c) 2001-2016
+;;;; Daniel Barlow and contributors.
+;;;; Notice: THIRD-PARTY-NOTICES.txt, "ASDF".
+;;;;
 ;;;; uiop/version -- version comparison and the deprecation conditions.
 ;;;;
 ;;;; The whole sub-package, ported from upstream's version.lisp, keeping only the

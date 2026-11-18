@@ -1,3 +1,7 @@
+;; Third-party: follows ring-core 1.15.5 and ring-codec 1.3.0 (MIT), Copyright (c)
+;; 2009-2010 Mark McGranaghan, 2009-2026 James Reeves.
+;; Notice: THIRD-PARTY-NOTICES.txt, "ring".
+
 (ns ring.util.mime-type
   "Utility functions for determining the mime-types files: the built-in
   ring.util.mime-type of ring-core."

@@ -1,3 +1,7 @@
+;; Third-party: contains code from tiny-routes v0.1.1 (BSD-3-Clause), Copyright (c) 2021
+;; Johnny Ruiz.
+;; Notice: THIRD-PARTY-NOTICES.txt, "tiny-routes".
+;;
 ;; A leaf-module shim replacing tiny-routes' src/middleware/path-template.lisp
 ;; for the OPT-IN "tiny-routes/lite" system ONLY -- the full "tiny-routes"
 ;; system keeps the real file and its cl-ppcre engine (see tiny-routes-lite.asd

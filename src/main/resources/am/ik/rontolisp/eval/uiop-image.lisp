@@ -1,3 +1,7 @@
+;;;; Third-party: contains code from ASDF 3.3.1 / UIOP (MIT), Copyright (c) 2001-2016
+;;;; Daniel Barlow and contributors.
+;;;; Notice: THIRD-PARTY-NOTICES.txt, "ASDF".
+;;;;
 ;;;; uiop/image -- exiting, fatal conditions, backtraces and the image hooks.
 ;;;;
 ;;;; Canonical shape; see .kb/uiop.md. Three groups with three different answers:

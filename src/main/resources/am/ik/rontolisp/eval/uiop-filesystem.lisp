@@ -1,3 +1,7 @@
+;;;; Third-party: contains code from ASDF 3.3.1 / UIOP (MIT), Copyright (c) 2001-2016
+;;;; Daniel Barlow and contributors.
+;;;; Notice: THIRD-PARTY-NOTICES.txt, "ASDF".
+;;;;
 ;;;; uiop/filesystem -- probe and list the file system. Canonical shape; see .kb/uiop.md.
 
 ;; file-exists-p is upstream's: probe-file's truename unless it names a

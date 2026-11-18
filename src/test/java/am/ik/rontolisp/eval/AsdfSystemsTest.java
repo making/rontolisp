@@ -554,18 +554,23 @@ class AsdfSystemsTest {
 		assertThat(systems.get(0).name()).isEqualTo("uffi");
 		assertThat(systems.get(0).dependsOn()).containsExactly("cffi-uffi-compat");
 		assertThat(systems.get(0).files()).isEmpty();
-		// petalisp's native backend: upstream's components, without the static-vectors
-		// its SBCL and CCL arms read storage through (PetalispForms).
-		String petalisp = AsdOverrides.replacementSource("petalisp.native-backend.asd");
-		assertThat(petalisp).isNotNull();
+		// petalisp's native backend: its own .asd, edited to skip the static-vectors its
+		// SBCL and CCL arms read storage through (PetalispForms); a release that moved
+		// the marker is refused rather than read unedited.
+		String petalisp = AsdOverrides.effectiveSource("petalisp.native-backend.asd", """
+				(defsystem "petalisp.native-backend"
+				  :depends-on ("cffi" "lparallel" "static-vectors" "typo")
+				  :serial t
+				  :components ((:file "packages") (:file "evaluator")))""");
 		List<AsdfSystems.LispSystem> backend = loadAsd(petalisp, "sw/code/native-backend/petalisp.native-backend.asd",
 				Features.INTERPRETER);
 		assertThat(backend).hasSize(1);
 		assertThat(backend.get(0).name()).isEqualTo("petalisp.native-backend");
-		assertThat(backend.get(0).dependsOn()).contains("cffi", "lparallel", "typo").doesNotContain("static-vectors");
-		assertThat(backend.get(0).files()).containsExactly("packages.lisp", "request.lisp", "pin-current-thread.lisp",
-				"worker-pool.lisp", "backend.lisp", "scheduling.lisp", "allocation.lisp", "evaluator.lisp",
-				"compilation.lisp");
+		assertThat(backend.get(0).dependsOn()).containsExactly("cffi", "lparallel", "typo");
+		assertThat(backend.get(0).files()).containsExactly("packages.lisp", "evaluator.lisp");
+		assertThatThrownBy(() -> AsdOverrides.effectiveSource("petalisp.native-backend.asd", "(defsystem \"p\")"))
+			.isInstanceOf(IllegalStateException.class)
+			.hasMessageContaining("static-vectors");
 	}
 
 	@Test

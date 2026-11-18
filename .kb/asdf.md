@@ -907,6 +907,10 @@ downloading. `BuiltinSystems.DEPENDENCIES` records edges between shims; one exis
 Maps the `.asd` FILE NAME to a bundled replacement (`eval/*.asd`, written in the supported
 subset); `AsdfSystems.locate` substitutes it **after locating the real file — keeping the located
 PATH**, so component files still resolve against the real tree. One entry serves every backend.
+A difference of a few forms in a copyleft `.asd` (clsql's LLGPL, petalisp's AGPL-3.0) is no
+bundled near-copy: `AsdOverrides.REWRITES` edits the located file's own text by markers that must
+occur exactly once (`PetalispForms`' rule), so a moved marker fails loudly (decided 2026-11-18,
+`.kb/java-frontend-provenance.md`).
 
 | `.asd` | replacement | reason |
 | --- | --- | --- |
@@ -919,9 +923,9 @@ PATH**, so component files still resolve against the real tree. One entry serves
 | `cffi.asd` | `cffi-rontolisp.asd` | opens with `(error "Sorry, this Lisp is not yet supported")`; names rontolisp's `cffi-sys` (`.kb/cffi.md`) |
 | `cl-unicode.asd` | `cl-unicode-built.asd` | drops the build system, `component-depends-on`, fiveam |
 | `uffi.asd` | `uffi-cffi.asd` | guards its whole `defsystem` per implementation; the replacement is cffi's own `uffi-compat/uffi.asd`, over `cffi-uffi-compat` (package nickname `uffi`). Interpreter and JVM; a `.wasm` refuses by naming `ffi:` |
-| `clsql.asd` | `clsql-closer-mop.asd` | loads uffi only for a `perform :after` reading `~/.clsql-init.lisp`, which does not run here, and names no MOP system; the replacement declares `closer-mop` and leaves uffi to the database backends, so the core reaches wasm |
+| `clsql.asd` | its own text, edited (`AsdOverrides.REWRITES`) | loads uffi (an `eval-when`) only for a `perform :after` reading `~/.clsql-init.lisp`, which does not run here, and names no MOP system; the edit puts `#-rontolisp` before both forms and declares `closer-mop`, leaving uffi to the database backends, so the core reaches wasm |
 | `deploy.asd` | `deploy-rontolisp.asd` | cffi copies foreign libraries next to an executable; a `.wasm` has none and refuses `ffi:`, so it reads deploy the mezzano way ("deploy: build-time hooks") |
-| `petalisp.native-backend.asd` | `petalisp-native-backend-rontolisp.asd` | `static-vectors` serves the SBCL/CCL arms that read storage by address, and its `.asd` refuses rontolisp; the rontolisp arm (`eval/PetalispForms`, below) reads none |
+| `petalisp.native-backend.asd` | its own text, edited (`AsdOverrides.REWRITES`) | `static-vectors` serves the SBCL/CCL arms that read storage by address, and its `.asd` refuses rontolisp; the rontolisp arm (`eval/PetalispForms`, below) reads none, so the edit puts `#-rontolisp` before the dependency |
 
 **Every bundled replacement `.asd` and every leaf-module shim `.lisp` also needs a
 `resource-config.json` entry** (`AsdOverrides` resp. `ShimLibraries` as `typeReachable`). A

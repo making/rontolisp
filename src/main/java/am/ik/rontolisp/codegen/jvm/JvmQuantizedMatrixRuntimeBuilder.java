@@ -1,3 +1,8 @@
+/*
+ * Third-party: the Q8_0 quantization transcribes ggml's quantize_row_q8_0_ref (MIT),
+ * Copyright (c) 2023-2026 The ggml authors.
+ * Notice: THIRD-PARTY-NOTICES.txt, "ggml".
+ */
 package am.ik.rontolisp.codegen.jvm;
 
 import java.lang.classfile.TypeKind;

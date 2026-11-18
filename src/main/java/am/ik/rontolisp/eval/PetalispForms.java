@@ -14,9 +14,9 @@ import org.jspecify.annotations.Nullable;
  * own storage, and an element is read and written with {@code row-major-aref}. What
  * reaches for an address (the storage vector, the fixnum tag width read through
  * {@code cffi:mem-ref}) gets an arm that does not, so {@code static-vectors} is no longer
- * needed ({@code petalisp-native-backend-rontolisp.asd}). A worker is not pinned to a
- * core: a rontolisp thread is a virtual thread, whose carrier others share, and the pin
- * compiles C++ at load time. And {@code petalisp.utilities}' portable
+ * needed ({@link AsdOverrides} skips it in the backend's {@code .asd}). A worker is not
+ * pinned to a core: a rontolisp thread is a virtual thread, whose carrier others share,
+ * and the pin compiles C++ at load time. And {@code petalisp.utilities}' portable
  * {@code with-pinned-objects} answered the last pinned object rather than its body's
  * values, so an evaluator of two results answered one; the rontolisp arm answers the
  * body's. Everything else -- partitioning, scheduling, allocation, the worker pool and

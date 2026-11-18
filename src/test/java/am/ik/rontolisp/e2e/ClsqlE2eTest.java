@@ -8,11 +8,11 @@ import java.util.List;
  * {@code clsql.asd} and {@code sql/} without the clisp-only {@code ansi-loop.lisp},
  * LLGPL) on all four backends via {@link AsdfLibraryE2eSupport}. Its MOP package and
  * method shapes are the derived forms of {@code eval/ClsqlForms} and {@code clsql.asd}
- * the replacement {@code clsql-closer-mop.asd} ({@code .kb/asdf.md}), whose markers this
- * pins against the release. The program defines a database type of its own that prints
- * every statement, so no foreign library is involved and the SQL a view class generates
- * is what is compared. Every line is SBCL 2.2.9's answer to the same program over the
- * real {@code clsql.asd}.
+ * {@code AsdOverrides}' edit of it ({@code .kb/asdf.md}), whose markers this pins against
+ * the release. The program defines a database type of its own that prints every
+ * statement, so no foreign library is involved and the SQL a view class generates is what
+ * is compared. Every line is SBCL 2.2.9's answer to the same program over the real
+ * {@code clsql.asd}.
  */
 class ClsqlE2eTest extends AsdfLibraryE2eSupport {
 

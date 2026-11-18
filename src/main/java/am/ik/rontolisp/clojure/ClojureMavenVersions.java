@@ -1,3 +1,9 @@
+/*
+ * Third-party: ported from Apache Maven Artifact Resolver 1.9.27's GenericVersionScheme
+ * (Apache-2.0), Copyright 2010-2026 The Apache Software Foundation. Changed: rewritten as
+ * this class's own parse and comparison; not the resolver's code as distributed.
+ * Notice: THIRD-PARTY-NOTICES.txt, "Apache Maven".
+ */
 package am.ik.rontolisp.clojure;
 
 import java.math.BigInteger;

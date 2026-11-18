@@ -29,9 +29,11 @@ of what a user ships. This project is Apache-2.0 and its output must stay so.
    corpus (`java-spec.yaml`) is written here; a case's expected output comes from running it
    under a JDK, which is use, not copying.
 5. **A port is allowed only from an implementation whose licence allows it** -- Apache-2.0,
-   or a permissive licence (MIT, BSD, Sun's fdlibm permission) -- with its notice kept and the
-   origin stated in the file's header and in `NOTICE`. Default is to write it ourselves.
-   Since j91 two ports stand on it: fdlibm (Sun's C) and Schubfach (Giulietti's own, MIT).
+   or a permissive licence (MIT, BSD, Sun's fdlibm permission) -- with its notice kept: the
+   file's header names the origin and licence and cites its entry of
+   `THIRD-PARTY-NOTICES.txt` (`Notice: THIRD-PARTY-NOTICES.txt, "<entry>"`), the entry lists
+   the file and holds the licence text, and an Apache-2.0 work's NOTICE goes into `NOTICE`.
+   `cli/ThirdPartyNoticesTest` holds the two directions. Default is to write it ourselves.
 6. **Naming: "an experimental subset of the Java language"**, on every user surface
    (`--source-language` help, `doc/*/java/`, examples, release notes). Never "Java compatible",
    "Java SE", a logo, or a product or module name built on the word: the name is a trademark and
@@ -130,7 +132,7 @@ algorithm came from, and the answer goes in the file's header.
     Table 3-7 and its maximal-subpart practice, sharing the table with
     `%utf-8-well-formed-end`; the one departure (an encoded surrogate is one sequence) is a
     JDK's observed answer. `LispPreludeLibraryTest` pins it against the JDK decoder.
-  - `NOTICE` entries for fdlibm and Schubfach are `j93`'s.
+  - fdlibm and Schubfach have their `THIRD-PARTY-NOTICES.txt` entries since j93 (below).
 - **Clojure's EPL sources (j92, 2026-11-18): replaced.** Clojure, ClojureScript and
   tools.deps are EPL-1.0, a weak copyleft; the audit's rows 3, 4, 5, 8, 21 and 29 were
   line-by-line translations of them, all but row 8 embedded in compiled programs. User
@@ -241,3 +243,37 @@ algorithm came from, and the answer goes in the file's header.
     them and called only the selection walk a translation. And the Clojure HTTP client's
     redirect code, which the same note says follows the JDK's `RedirectFilter` with
     `URI.resolve` "ported".
+- **Notices (j93, 2026-11-18): kept with notices.** What the audit filed under "Add notices"
+  and "To confirm" stays, under its licence:
+  - Root `NOTICE` (rontolisp, and Maven's and Maven Resolver's Apache NOTICE lines) and
+    `THIRD-PARTY-NOTICES.txt`: one entry per project (`Origin`, `License`, `Ships`: `output`
+    / `tool` / `repository`, `Files`, `Use`, then the licence text), parsed by
+    `cli/ThirdPartyNotices`. `LICENSE` stays the bare Apache text: an appended section would
+    lower GitHub's licence match. The jar carries all three under `META-INF/` (`pom.xml`,
+    build-helper `add-resource`), the native binary too (`resource-config.json`).
+  - **What a user ships**: `rontolisp notices` (`cli/NoticesCommand`) prints rontolisp's
+    licence, `NOTICE` and every `output` entry; `--native [--native-target P]` adds the
+    runner's crates (`.kb/native-output.md`, "The Java side"), `--tool` what the jar
+    or binary itself owes. A library a program loads (Quicklisp, `deps.edn`, `--java-dep`)
+    carries no notice into the output and is not listed: `doc/*/compiling/licenses.md`
+    states the user's obligation.
+  - Settled by looking: starlark-go's `string_format` is ported (the decision chain and the
+    order of the refusals are Go's), so it is noticed, not reworded. riddley's `walk.clj`
+    shares `walk-exprs`' branches and `case` destructuring with 0.2.2 (13 lines verbatim):
+    its docstring and `doc/*/clojure/reference/riddley.md` no longer say "from the documented
+    behaviour". The WASI WIT is not Apache-2.0 (audit row 26) but the W3C Community CLA of
+    the WASI repositories; `tls.wit` is wasmtime's (Apache-2.0 WITH LLVM-exception).
+  - Decided: Kuzushiji-49's ShareAlike is taken to reach the trained `weights.bin`, which is
+    distributed under CC BY-SA 4.0 (the example's README). The Programming Clojure probes
+    (`.todo/artefacts/b16-shcloj4-inventory`): only `green-baseline.clj` held book code (12
+    lines over four snippets, compared with the book's code archive); they were rewritten in
+    other words with the oracle's same answers, so no book code is left to notice.
+  - Vendored test libraries without licence text (row 19) got a `LICENSE` stating the
+    licence their `.asd` declares with the copyright of their README or sources (none of
+    those upstreams ships one); `src/wasm-component/deps/` and the keyvalue WIT got the WASI
+    statement. `ThirdPartyNoticesTest` requires licence text in every `src/test/resources`
+    directory whose `.asd` declares a licence.
+  - Row 25: clsql's (LLGPL) and petalisp's (AGPL-3.0) near-copy `.asd` files are deleted;
+    `AsdOverrides.REWRITES` edits the upstream file at load time (`.kb/asdf.md`, "Tier 2").
+  - Not covered: the GraalVM runtime linked into rontolisp's own native binary has notices
+    of its own; this item did not audit it.

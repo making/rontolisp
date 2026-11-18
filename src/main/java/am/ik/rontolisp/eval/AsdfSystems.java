@@ -2085,8 +2085,7 @@ public final class AsdfSystems {
 				// substitute the bundled replacement declaring the loadable slice,
 				// keeping the located path so component files resolve against the real
 				// library.
-				String replacement = AsdOverrides.replacementSource(fileName);
-				return new LocatedAsd(path, replacement != null ? replacement : source);
+				return new LocatedAsd(path, AsdOverrides.effectiveSource(fileName, source));
 			}
 			catch (IOException ex) {
 				tried.add(path);
@@ -2199,8 +2198,7 @@ public final class AsdfSystems {
 		try {
 			String source = loader.load(path);
 			int slash = path.lastIndexOf('/');
-			String replacement = AsdOverrides.replacementSource(path.substring(slash + 1));
-			return new LocatedAsd(path, replacement != null ? replacement : source);
+			return new LocatedAsd(path, AsdOverrides.effectiveSource(path.substring(slash + 1), source));
 		}
 		catch (IOException ex) {
 			return null;

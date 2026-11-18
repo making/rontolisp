@@ -24,6 +24,8 @@
 # Dataset: Kuzushiji-49, (c) ROIS-DS Center for Open Data in the Humanities
 # (CODH), licensed CC BY-SA 4.0.  http://codh.rois.ac.jp/kmnist/  The .npz files
 # are downloaded on first run and cached under --data-dir (NOT committed).
+# Third-party: the trained weights.bin is CC BY-SA 4.0 too (see the README).
+# Notice: THIRD-PARTY-NOTICES.txt, "Kuzushiji-49".
 #
 # Usage (from anywhere):
 #   python3 examples/browser/hiragana/tools/k49/prepare-k49.py

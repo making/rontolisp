@@ -1,3 +1,6 @@
+;;;; Third-party: ported from llama2.c's run.c (MIT), Copyright (c) 2023 Andrej Karpathy.
+;;;; Notice: THIRD-PARTY-NOTICES.txt, "llama2.c".
+;;;;
 ;;;; llama2.c in rontolisp: run a Llama 2 model from a llama2.c checkpoint.
 ;;;;
 ;;;; This is Andrej Karpathy's run.c (https://github.com/karpathy/llama2.c)

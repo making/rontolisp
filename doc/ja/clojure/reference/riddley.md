@@ -4,8 +4,9 @@
 コードを走査するライブラリです。specter の `path` や potemkin の型定義は、渡されたコードを riddley で
 走査します。riddley の jar 自体は Clojure コンパイラの内部（`Compiler/LOCAL_ENV` と、コンパイラの
 `LocalBinding` を組み立てる Java クラス）を外から操作するもので、rontolisp にはその内部がありません。
-そこで `riddley.walk` と `riddley.compiler` を組み込みで提供します。riddley について文書化された
-振る舞いをもとに rontolisp 向けに書いた Clojure ソースで、プロジェクトのファイルと同じ手順で読み込み、
+そこで `riddley.walk` と `riddley.compiler` を組み込みで提供します。rontolisp 向けに書いた
+Clojure ソースで、走査の部分は riddley 自身の実装に沿っています（MIT。著作権表示は rontolisp の
+`THIRD-PARTY-NOTICES.txt` にあります）。プロジェクトのファイルと同じ手順で読み込み、
 すべてのバックエンドで同じように動きます。`deps.edn` では、Maven バージョンが 0.2.2 以下の
 `riddley/riddley` がこの組み込み版を指し、何も取得しません（specter が指定するのは 0.1.12 です）。
 それより新しいバージョンを選んでいると、riddley の名前空間を読み込む時点でエラーになります。

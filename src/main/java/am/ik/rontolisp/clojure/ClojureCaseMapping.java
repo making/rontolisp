@@ -1,3 +1,8 @@
+/*
+ * Third-party: its tables are Unicode Character Database data (Unicode-3.0), read from the
+ * running JDK, Copyright (c) 1991-2026 Unicode, Inc.
+ * Notice: THIRD-PARTY-NOTICES.txt, "Unicode".
+ */
 package am.ik.rontolisp.clojure;
 
 import java.util.List;

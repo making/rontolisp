@@ -1,10 +1,13 @@
+;; Third-party: the walk follows riddley 0.2.2's (MIT), Copyright (c) 2013 Zachary Tellman.
+;; Notice: THIRD-PARTY-NOTICES.txt, "riddley".
+
 (ns riddley.walk
   "A code walker that knows the special forms and the locals they bind, built
   into rontolisp in place of riddley's namespace of the same name. Every macro
   call it meets expands with the locals in reach at the call as its &env, as the
   compiler expands it: macroexpand-all expands a whole form so, walk-exprs hands
-  the expressions a predicate picks to a function. Written for this front end
-  from riddley's documented behaviour."
+  the expressions a predicate picks to a function. Written for this front end;
+  the walk follows riddley's own."
   (:refer-clojure :exclude [macroexpand])
   (:require [riddley.compiler :as cmp]))
 

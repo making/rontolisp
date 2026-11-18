@@ -4,6 +4,10 @@ package root:sockets;
 // src/wasm-component/deps/sockets/types.wit), plus rontolisp's transparent async
 // type aliases at the end of the `types` interface. Keep in lockstep with the
 // vendored file.
+//
+// Third-party: the WASI 0.3.0 WIT, Copyright (c) 2019-2024 the Contributors to the WASI
+// Specification (W3C Community Contributor License Agreement).
+// Notice: THIRD-PARTY-NOTICES.txt, "WASI".
 
 package wasi:clocks@0.3.0 {
   /// This interface common types used throughout wasi:clocks.

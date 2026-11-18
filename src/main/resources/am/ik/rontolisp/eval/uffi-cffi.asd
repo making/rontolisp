@@ -1,3 +1,6 @@
+;;;; Third-party: contains code from CFFI (MIT), Copyright (C) 2005-2007 James Bielman.
+;;;; Notice: THIRD-PARTY-NOTICES.txt, "CFFI".
+;;;;
 ;;;; A replacement for upstream uffi's uffi.asd (eval.AsdOverrides).
 ;;;;
 ;;;; The real file guards its whole defsystem with

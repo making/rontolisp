@@ -86,6 +86,10 @@ rontolisp hello.lisp --native --native-target linux-aarch64 -o hello-arm64
 
 Apple シリコン (`macos-aarch64`) では、実行ファイルは `objc`、`appkit`、`metal`、`scene` パッケージを使うプログラムも動かせます: ランナー自身が Objective-C ランタイムを呼び、プログラムは AppKit が求めるプロセスの最初のスレッドで動きます。[macOS GUI](../guides/objc-appkit.md#a-native-executable) を参照してください。それ以外のターゲットでは、そうしたプログラムは参照を挙げるコンパイルエラーになります。
 
+## ライセンス
+
+ランナーは wasmtime とそれが依存する Rust クレートをリンクしており、それらのライセンスは実行ファイルにライセンス表示を添えることを求めています。`rontolisp notices --native -o NOTICES.txt` が rontolisp 自身のものと合わせて書き出します ([コンパイルしたプログラムのライセンス](licenses.md))。
+
 ## サイズと速度
 
 実行ファイルはランナー(Linux x86_64 で 2.1 MB、Linux aarch64 で 1.9 MB、macOS で 1.7 MB)に `.wasm` の約 11 倍を足した大きさです: Linux x86_64 では `hello` で 2.1 MB、28 KB のモジュールで 2.3 MB。fetch、配信、TCP ソケットを使うプログラムのランナーは Linux x86_64 で 3.3 MB、Linux aarch64 で 2.9 MB です。起動は約 10 ms で、同じモジュールを `wasmtime run` で動かすのとほぼ同じ速度で動きます。

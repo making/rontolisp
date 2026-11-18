@@ -1,3 +1,7 @@
+;;;; Third-party: contains code from ASDF 3.3.1 / UIOP (MIT), Copyright (c) 2001-2016
+;;;; Daniel Barlow and contributors.
+;;;; Notice: THIRD-PARTY-NOTICES.txt, "ASDF".
+;;;;
 ;;;; uiop/backward-driver -- the two backward-compatibility aliases that are real
 ;;;; here. coerce-pathname is the DEPRECATED alias of parse-unix-namestring
 ;;;; (.kb/uiop.md), and version-compatible-p is the ASDF 1-to-2.32 version check

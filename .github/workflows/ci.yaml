@@ -250,6 +250,7 @@ jobs:
       run: |
         set -e
         ./target/rontolisp -v
+        ./target/rontolisp notices --tool >/dev/null
         if [[ ${{ github.event_name }} != pull_request ]]; then
           for platform in linux-x86_64 linux-aarch64 macos-aarch64; do
             for stub in rlrun rlrun-net; do
@@ -340,11 +341,13 @@ jobs:
         set -e
         ./mvnw -V --no-transfer-progress -Drontolisp.native.required=true -DskipTests clean package
         for platform in linux-x86_64 linux-aarch64 macos-aarch64; do
-          for stub in rlrun rlrun-net; do
+          for stub in rlrun rlrun-net runner-notices.txt; do
             unzip -l target/rontolisp-*-exec.jar | grep -q "am/ik/rontolisp/native/$platform/$stub\$" \
               || { echo "the executable jar has no --native $stub for $platform" >&2; exit 1; }
           done
         done
+        unzip -l target/rontolisp-*-exec.jar | grep -q 'META-INF/THIRD-PARTY-NOTICES.txt$' \
+          || { echo "the executable jar has no third-party notices" >&2; exit 1; }
     # Move the snapshot tag onto this commit and leave the release itself alone, so
     # the action below UPDATES it in place (it overwrites the assets) instead of the
     # release being recreated from scratch.

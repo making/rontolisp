@@ -5,11 +5,11 @@ import org.jspecify.annotations.Nullable;
 /**
  * The derived forms of clsql (tier 4, {@code .kb/asdf.md}). {@code sql/package.lisp} uses
  * one MOP package per {@code #+impl} arm, so here {@code clsql-sys} gets
- * {@code closer-mop}, which {@code clsql-closer-mop.asd} loads first.
- * {@code sql/metaclasses.lisp} asks three generics for their lambda lists to choose the
- * AMOP method shapes, and those are the shapes here; and it computes a class's key slots
- * in {@code register-metaclass} unless {@code #+(or sbcl allegro)} moves that to a
- * {@code finalize-inheritance :after} method. The method is what holds here too: the
+ * {@code closer-mop}, which {@code clsql.asd}, as {@link AsdOverrides} edits it, loads
+ * first. {@code sql/metaclasses.lisp} asks three generics for their lambda lists to
+ * choose the AMOP method shapes, and those are the shapes here; and it computes a class's
+ * key slots in {@code register-metaclass} unless {@code #+(or sbcl allegro)} moves that
+ * to a {@code finalize-inheritance :after} method. The method is what holds here too: the
  * effective slots do not exist yet when the class is initialized.
  */
 final class ClsqlForms {

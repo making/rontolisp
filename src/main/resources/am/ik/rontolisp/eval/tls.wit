@@ -7,6 +7,9 @@ package root:tls;
 // async type alias at the end of the `client` interface. The proposal is
 // CLIENT-ONLY by design: there is no server/accept interface in any draft,
 // which is why the tls-listen family stays off every WASM target.
+//
+// Third-party: wasmtime v47.0.2's WIT (Apache-2.0 WITH LLVM-exception), Copyright (c)
+// the Wasmtime Project Developers. Notice: THIRD-PARTY-NOTICES.txt, "wasmtime".
 
 package wasi:tls@0.3.0-draft {
   interface types {

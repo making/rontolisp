@@ -1,3 +1,7 @@
+;; Third-party: follows ring-core 1.15.5 and ring-codec 1.3.0 (MIT), Copyright (c)
+;; 2009-2010 Mark McGranaghan, 2009-2026 James Reeves.
+;; Notice: THIRD-PARTY-NOTICES.txt, "ring".
+
 (ns ring.middleware.keyword-params
   "Middleware that converts parameter keys in the request to keywords: the
   built-in ring.middleware.keyword-params of ring-core."

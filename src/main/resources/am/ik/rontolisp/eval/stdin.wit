@@ -8,6 +8,10 @@ package root:stdin;
 // declares, because the component binds the interface FROM the block's
 // already-declared instance (like wait.lisp's monotonic-clock), never as a second
 // import of the same name.
+//
+// Third-party: the WASI 0.3.0 WIT, Copyright (c) 2019-2024 the Contributors to the WASI
+// Specification (W3C Community Contributor License Agreement).
+// Notice: THIRD-PARTY-NOTICES.txt, "WASI".
 
 package wasi:cli@0.3.0 {
   @since(version = 0.3.0)

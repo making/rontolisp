@@ -7,6 +7,10 @@ package root:environment;
 // because the component binds the interface FROM the fixed import block's
 // already-declared instance there. The serve variant's block declares no
 // environment interface, so there the same binding becomes an appended user import.
+//
+// Third-party: the WASI 0.3.0 WIT, Copyright (c) 2019-2024 the Contributors to the WASI
+// Specification (W3C Community Contributor License Agreement).
+// Notice: THIRD-PARTY-NOTICES.txt, "WASI".
 
 package wasi:cli@0.3.0 {
   interface environment {

@@ -21,6 +21,13 @@ Corpus: `https://media.pragprog.com/titles/shcloj4/code/shcloj4-code.zip`
 `code/test/**` (mirrors of the same examples as `clojure.test` suites)
 and `code/data/snippets/**` (2 editor snippets).
 
+2026-11-18: `probes/green-baseline.clj` held 12 lines of the book's code (four snippets: the
+trampolined `my-even?`/`my-odd?`, `Message`, `replace-symbol`, `index-of-any`), which is
+"All rights reserved". They were rewritten in other words over the same forms; the oracle
+prints the same lines (re-run under the same CLI). No other probe line is the book's (every
+line of 25+ characters compared with the code archive). The table's evidence still names
+the book's files, which is where each probe's subject came from.
+
 Harness: `probes/` (one runnable `.clj` per row below) + `capture.sh`
 (regenerates `expected/`) + `run.sh` (re-runs every probe under both
 runners and diffs against `expected/`; pattern-matched where the oracle

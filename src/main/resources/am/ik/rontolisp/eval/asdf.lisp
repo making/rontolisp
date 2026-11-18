@@ -1,3 +1,7 @@
+;; Third-party: contains code from ASDF 3.3.1 / UIOP (MIT), Copyright (c) 2001-2016
+;; Daniel Barlow and contributors.
+;; Notice: THIRD-PARTY-NOTICES.txt, "ASDF".
+;;
 ;; The ASDF component metaobject family at run time: the classes rove's
 ;; system-driven `run` dispatches over (typecase, defmethod specializers), the
 ;; readers it walks the component model with, and `asdf:find-system` answering

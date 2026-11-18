@@ -5,6 +5,10 @@ package root:clocks;
 // regen source in src/wasm-component/deps/clocks: the member set here must stay a
 // subset of what src/wasm-component/core*.wat imports, because the component binds
 // the interface FROM the fixed import block's already-declared instance.
+//
+// Third-party: the WASI 0.3.0 WIT, Copyright (c) 2019-2024 the Contributors to the WASI
+// Specification (W3C Community Contributor License Agreement).
+// Notice: THIRD-PARTY-NOTICES.txt, "WASI".
 
 package wasi:clocks@0.3.0 {
   /// This interface common types used throughout wasi:clocks.

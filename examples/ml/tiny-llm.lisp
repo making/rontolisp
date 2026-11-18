@@ -1,3 +1,6 @@
+;;;; Third-party: ported from llama2.c's run.c (MIT), Copyright (c) 2023 Andrej Karpathy.
+;;;; Notice: THIRD-PARTY-NOTICES.txt, "llama2.c".
+;;;;
 ;;;; A transformer decoder -- the arithmetic core of an LLM inference engine --
 ;;;; and the example where `--simd` earns its keep.
 ;;;;

@@ -1,3 +1,6 @@
+;; Third-party: contains code from CFFI (MIT), Copyright (C) 2005-2007 James Bielman.
+;; Notice: THIRD-PARTY-NOTICES.txt, "CFFI".
+;;
 ;; The cffi-sys backend for rontolisp: upstream CFFI's own implementation seam
 ;; -- the ~30 names its src/package.lisp exports -- written over the ffi:
 ;; primitives (.kb/ffi.md) exactly as upstream's src/cffi-sbcl.lisp is written

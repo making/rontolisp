@@ -204,7 +204,9 @@ class RegexUnicodeTablesTest {
 		out.append(";;;; The Unicode tables of the regex engine (regex.lisp, \"Unicode properties\"\n")
 			.append(";;;; and \"Grapheme clusters\"), generated from a running JDK's public Character\n")
 			.append(";;;; API by RegexUnicodeTablesTest, which fails when they are not the running\n")
-			.append(";;;; JDK's: regenerate them there, never by hand.\n\n");
+			.append(";;;; JDK's: regenerate them there, never by hand.\n")
+			.append(";;;; Third-party: Unicode Character Database data (Unicode-3.0), Copyright (c) 1991-2026\n")
+			.append(";;;; Unicode, Inc. Notice: THIRD-PARTY-NOTICES.txt, \"Unicode\".\n\n");
 		// the properties: runs of combo indexes into the combos
 		Map<Integer, Integer> combos = new LinkedHashMap<>();
 		Runs props = runs(codePoint -> combos.computeIfAbsent(combo(codePoint), ignored -> combos.size()));

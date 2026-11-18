@@ -1,3 +1,7 @@
+;; Third-party: str.format (%starlark-m-format) is ported from starlark-go's string_format
+;; (BSD-3-Clause), Copyright (c) 2017 The Bazel Authors.
+;; Notice: THIRD-PARTY-NOTICES.txt, "starlark-go".
+;;
 ;; The run-time half of the EXPERIMENTAL Starlark front end (am.ik.rontolisp.starlark),
 ;; written in Common Lisp so one definition runs on every backend and no emitter learns
 ;; a Starlark name: the interpreter loads it on the first resolution of a

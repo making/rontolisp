@@ -1,3 +1,7 @@
+;;;; Third-party: contains code from ASDF 3.3.1 / UIOP (MIT), Copyright (c) 2001-2016
+;;;; Daniel Barlow and contributors.
+;;;; Notice: THIRD-PARTY-NOTICES.txt, "ASDF".
+;;;;
 ;;;; How ASDF finds a system definition: *system-definition-search-functions* and the
 ;;;; source registry, upstream's bodies (ASDF 3.3.1). The interpreter evaluates this
 ;;;; with asdf.lisp and its loader walks the list (%asdf-search-file); a compile path

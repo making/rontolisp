@@ -1,3 +1,7 @@
+;;;; Third-party: contains code from ASDF 3.3.1 / UIOP (MIT), Copyright (c) 2001-2016
+;;;; Daniel Barlow and contributors.
+;;;; Notice: THIRD-PARTY-NOTICES.txt, "ASDF".
+;;;;
 ;;;; uiop/lisp-build -- compiling a file. Canonical shape; see .kb/uiop.md.
 ;;;;
 ;;;; rontolisp compiles a whole program -- no compile-file, no fasl, no

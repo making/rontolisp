@@ -6,6 +6,10 @@ package root:exit;
 // APPENDED USER IMPORT -- which is the point: only a program that calls uiop:quit makes
 // its component import wasi:cli/exit at all. Keep in lockstep with the regen source in
 // src/wasm-component/deps/cli/exit.wit.
+//
+// Third-party: the WASI 0.3.0 WIT, Copyright (c) 2019-2024 the Contributors to the WASI
+// Specification (W3C Community Contributor License Agreement).
+// Notice: THIRD-PARTY-NOTICES.txt, "WASI".
 
 package wasi:cli@0.3.0 {
   interface exit {

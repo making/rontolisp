@@ -1,3 +1,7 @@
+;; Third-party: follows ring-core 1.15.5 and ring-codec 1.3.0 (MIT), Copyright (c)
+;; 2009-2010 Mark McGranaghan, 2009-2026 James Reeves.
+;; Notice: THIRD-PARTY-NOTICES.txt, "ring".
+
 (ns ring.middleware.params
   "Middleware to parse url-encoded parameters from the query string and request
   body: the built-in ring.middleware.params of ring-core."

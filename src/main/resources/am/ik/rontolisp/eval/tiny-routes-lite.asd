@@ -1,3 +1,7 @@
+;;;; Third-party: contains code from tiny-routes v0.1.1 (BSD-3-Clause), Copyright (c) 2021
+;;;; Johnny Ruiz.
+;;;; Notice: THIRD-PARTY-NOTICES.txt, "tiny-routes".
+;;;;
 ;;;; Hand-authored replacement for tiny-routes.asd that keeps the verbatim
 ;;;; primary system and ADDS the opt-in "tiny-routes/lite" secondary system.
 ;;;;

@@ -1,3 +1,9 @@
+/*
+ * Third-party: ported from Apache Maven Artifact Resolver 1.9's conflict resolution
+ * (Apache-2.0), Copyright 2010-2026 The Apache Software Foundation. Changed: rewritten over
+ * this package's own model; not Maven's code as distributed.
+ * Notice: THIRD-PARTY-NOTICES.txt, "Apache Maven".
+ */
 package am.ik.maven;
 
 import java.util.ArrayList;
