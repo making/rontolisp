@@ -116,4 +116,4 @@ The rest of `Formatter`, streams, `LinkedList`, `LinkedHashMap` / `LinkedHashSet
 `StringTokenizer`, `StringJoiner`, `BitSet`, files, `java.time` (and the older `Date` /
 `Calendar` / `TimeZone`), `java.text`, `BigInteger` / `BigDecimal`, `java.nio` buffers,
 `Class` beyond what is above, reflection, weak references, `Thread` and the concurrent
-classes (`.todo/k01`).
+classes (`.todo/k08`).

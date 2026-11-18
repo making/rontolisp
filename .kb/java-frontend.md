@@ -31,8 +31,10 @@ and resumed on wasm (`JavaResumable`), which took the one-stack thread away: k00
 of everyday code met refused, `Character` over the Unicode tables, a class compared with
 a class, and the UTF-16 charsets paid for only where named: j98 (2026-11-18); checked
 exceptions, the catch clause nothing reaches, and an exit a cleanup takes on the JVM and
-wasm: j99 (2026-11-18); what comes after is `.todo/k01`, `k05`, `k06` and `k07` (what
-j89, j98, j99 and k00 left).
+wasm: j99 (2026-11-18); a stamped lock, a phaser, a transfer queue, the completers and
+accumulators, a pool's hooks and sizes, a structure named by its class's binary name, a
+field hiding one above it and `super.x`: k01 (2026-11-18); what comes after is
+`.todo/k05`, `k06`, `k07` and `k08` (what j98, j99, k00 and k01 left).
 
 ## Where it sits
 
@@ -76,7 +78,15 @@ j89, j98, j99 and k00 left).
   `(- (logand (+ x 2^31) (2^32 - 1)) 2^31)`, `short` and `byte` the same at 16 and 8 bits;
   `long` is `(%mask-signed-field 64 x)`; `char` an integer whose static type prints it, a
   `float` the double of its value. No declaration is emitted ("Numbers" below).
-- **A class is a `defstruct`**, `extends` its `:include`, a field a slot defaulting by type, a
+- **A class is a `defstruct`** named by the class's BINARY name (`Outer$Inner`,
+  `java.lang.ThreadLocal`; k01, `JavaNames.structure`: the structure's name is the one
+  thing of a class the run time reads, for `Object.toString()`, and every other Lisp name
+  of a class stays its `lispName`), `extends` its `:include`, a field a slot defaulting by
+  type -- a field named as one of a class above it a slot `name%n`, `n` the fields of the
+  name above (`JavaClass.Field.slot`, k01: a structure has one slot of a name and holds
+  the slots above it; the static type a field is read through picks the accessor, so
+  `super.x` is `this` typed as the class above, `JavaSyntax.Super`, and a private field
+  above is not even hidden; refused by name until then) --, a
   static field a `defvar` global set before `main`, an instance method
   `(defun |C.m(int,String)| (this ..))`. A constructor is two functions: `|C.<init>(..)|` on a
   made instance (explicit `this(..)`/`super(..)` or the implicit `super()`, then the field
@@ -141,8 +151,10 @@ j89, j98, j99 and k00 left).
   `super.equals(o)` and `super.hashCode()` with no class above declaring the method are
   those three run-time functions on `this` (j89; refused by name until then, and any other
   member of `Object` through `super` still is). The identity text names a structure by its
-  Lisp name, so a nested class reads `Outer.Inner@1f` where a JDK and `getName()` write
-  `Outer$Inner` (`deviations.md`; `.todo/k01`).
+  own name, which is the class's binary name since k01 (until then the Lisp name:
+  `Outer.Inner@1f`, `ThreadLocal@1f`). Cost: the longer names of the made classes of
+  `java.lang` (a counter under four threads 109,069 -> 109,253 B of wasm), nothing to a
+  program that makes none.
 - **A simple name finds what a class HAS, not what a class above it declares** (j89;
   `JavaLowering.inherits`, JLS 8.2): a `private` member, and from another package one that
   is neither `public` nor `protected`, is no member of the classes under its class, so the
@@ -1561,8 +1573,8 @@ without it, which ran 11 of the 16 programs below).
 - **Stated in `deviations.md`**: the turns the threads of a `.wasm` take (a loop that
   never waits and reads nothing another thread writes keeps its turn; threads that all wait
   end the program with the status 1); what is shared with no monitor is the
-  host's; what a pool is not (the single-thread wrappers, the hooks,
-  `getQueue()`, a fork/join pool's parallelism and its rethrown exception); a
+  host's; what a pool is not (`getQueue()`, `defaultExecutor()`, an accumulator's one
+  value, a fork/join pool's parallelism and its rethrown exception); a
   `ConcurrentHashMap`'s long chain; no `BLOCKED` state; the handlers not asked for `main`'s thread; an atomic is no
   `Number`; thread numbers are ours; a class literal only as a `synchronized` statement's
   lock (the quoted structure name, the object a `static synchronized` method holds).
@@ -1614,7 +1626,75 @@ thread suspended under it asked `Support.oneStack()` and did what one stack coul
   `thenAcceptBoth`, `runAfterBoth`, `applyToEither`, `acceptEither`, `runAfterEither`,
   `thenCombineAsync`, `orTimeout`, `completeOnTimeout`, `completeAsync`,
   `delayedExecutor`, `copy`; `toString` of a lock, a latch, a semaphore, a pool and a
-  future. Still not there: `.todo/k01`.
+  future.
+- **Added by k01** (2026-11-18, learned the same way; probes, the script running one on
+  four backends and the sizes in
+  `.todo/artefacts/k01-java-front-end-what-the-timers-and-concurrent-classes-slice-left/`):
+  `StampedLock`; `Phaser`; `TransferQueue` / `LinkedTransferQueue`; `CountedCompleter`;
+  `LongAccumulator`, `DoubleAdder`,
+  `DoubleAccumulator`; a `ThreadPoolExecutor`'s `beforeExecute` / `afterExecute` /
+  `terminated`, its setters, `prestartCoreThread` / `prestartAllCoreThreads`, `purge`,
+  `isTerminating`, on a scheduled pool too; the wrappers `Executors` answers for the
+  pools of one thread and `unconfigurable..`; `CompletableFuture`'s `exceptionallyAsync`,
+  `exceptionallyCompose` / `..Async`, `obtrudeValue` / `obtrudeException`,
+  `minimalCompletionStage`, `completedStage` / `failedStage`, `newIncompleteFuture`,
+  `defaultExecutor`, and every `..Async` member on `CompletionStage`. Still not there:
+  `.todo/k08`.
+- **A `StampedLock`'s stamps are a JDK 25's numbers, read from its answers** (k01): one
+  monitor holding a sequence that starts at 256 and moves by 128 when the write lock is
+  taken and again when it is given back (384 a first write stamp, 512 the next optimistic
+  one), and a count of readers; a reader's stamp is the sequence plus the readers there
+  were, 126 at most (the 127th reader on is told 382); a stamp is good while its upper
+  bits are the lock's sequence, so `validate` of a read stamp holds until a write. What
+  the probes also settled: a write stamp converts only when it is the sequence itself,
+  a read stamp to a write lock only when the count is one, every interruptible member
+  throws for a thread interrupted beforehand though the lock is free, the views' names.
+  Not a JDK's: no thread is preferred, so readers arriving for ever keep a writer out.
+- **A `Phaser`'s tree is counted under its root's monitor** (k01): the phase is the
+  root's, a tier's counts are those of the root's phase it last saw (`current`), a tier
+  with parties is one party of the phaser above it and arrives there when its last party
+  does. `onAdvance` is the root's alone and runs with the monitor given up on the thread
+  whose arrival ended the phase (`advancing`; a party registering meanwhile waits).
+  Measured against a JDK: `arriveAndAwaitAdvance` answers the thread whose own arrival
+  ended the phase the NEXT phase's number even when the tree ended with it (3, any other
+  thread the negative number) -- which thread that is moves with the load, so the corpus
+  masks the bit there and asks it of a phaser of one party; `getPhase()` of an ended
+  tree is the next phase with the sign bit, of a forced end the current one. Not asked
+  of a JDK, the documentation's reading: a party registering when every other has
+  arrived waits for the next phase.
+- **A pool's hooks cost only a program that declares one** (k01). `afterExecute` is
+  handed what a task threw: a catch of every exception around each task, and with it the
+  run time's exceptions as classes. It is in `ThreadPoolExecutor.Hooked`, made by the
+  `native` static `hooks()`, whose emitter asks the lowering whether a class under
+  `ThreadPoolExecutor` declares `beforeExecute` or `afterExecute`
+  (`JavaEmitter.Context.declaresBelow`: the program is closed, and a class found late
+  lowers the program again) and answers `nil` when none does. Measured, a fixed pool
+  running four tasks: 226,375 B of wasm and 278,314 B of class with no hook, 239,533 and
+  317,014 with an empty `afterExecute`. `terminated()` needs no catch and is always
+  called, on the thread that finds the pool shut down and its last worker gone, outside
+  the monitor; until it answers the pool `isTerminating` (a JDK's order, probed). A
+  scheduled pool asks the two hooks in its task's `run` (a future throws nothing) and
+  `terminated` from its table (`Timetable.atEnd`), whose end is said after that answers.
+  The same k01 probes found two things wrong before: a task waiting in the queue of a
+  pool with no core thread never ran (no worker was made for it), and a task that threw
+  was not counted as completed.
+- **A callback of the library is an interface of its own, never `Runnable`** (k01,
+  measured): the analysis of what can suspend reads a call through an interface as any
+  class or lambda of it, so `Timetable`'s end as a `Runnable` made `close()` and `drop()`
+  reach every task of the program and a scheduled pool running one task went from
+  250,061 to 348,553 B of wasm; as `Timetable.End` it is 252,774.
+- **A stage is made by `newIncompleteFuture()`** (k01), so a subclass decides what its
+  stages are, and a `MinimalStage` is the subclass whose stages are minimal and that
+  refuses what only a future answers; `toCompletableFuture()` of one is a new future
+  ended as it ends. Asked of a JDK: `copy()` and `minimalCompletionStage()` of a minimal
+  stage answer one, an exception taken over is held in a `CompletionException`
+  (`failedStage` holds it as given). `defaultExecutor()` answers `Common.pool()`, not the
+  object `ForkJoinPool.commonPool()` answers (`deviations.md`).
+- **The pools of one thread are behind a wrapper** (k01; `Executors`' three nested
+  classes, named as a JDK's since `toString()` shows them): `instanceof
+  ThreadPoolExecutor` is false, as on a JDK. Cost, a program submitting one task to
+  `newSingleThreadExecutor()`: 238,152 -> 241,674 B of wasm (the fixed pool with no
+  wrapper 224,454 -> 226,375: the pool's end and its sizes).
 - **A task at its time is `rontolisp.internal.Timetable`**, which a scheduled pool and a
   `Timer` share: the tasks sorted by time under one monitor, a fixed number of threads.
   Where a thread can wait, the thread that had no task longest waits for the soonest
@@ -2131,7 +2211,21 @@ above an anonymous class) and the `refused:` cases
 or never ended: a buffer of two, turns, loops another thread ends, a held monitor's entry,
 cleanups and catches that wait, a pool's idle thread, `invokeAny`, a barrier's second
 round), `JavaSpecE2eTest#aProgramWhoseThreadsAllWaitIsRefusedWhereThreadsTakeTurns`,
-`JavaLoweringTest#theThreadsOfTheCorpusHoldNoMonitorWhileTheyAreSuspended`. j98: the methods added at the end of
+`JavaLoweringTest#theThreadsOfTheCorpusHoldNoMonitorWhileTheyAreSuspended`. k01: the
+third parts of `locks-latches-queues-and-executors-hand-work-between-threads` (`stamps`,
+`phases`, `transfers`, `hooksAndSizes`: the stamps' numbers, a phaser's tiers and its last
+arrival's answer, a pool asked around its tasks, a pool with no core thread, a task that
+threw counted, the wrappers) and of
+`threads-share-concurrent-collections-and-completable-futures` (`accumulated`,
+`stagesLeft`, `completers`), `asked` in
+`a-scheduled-pool-and-a-timer-run-tasks-at-their-times`, the `ClassesHiding` lines of
+`a-class-is-a-structure-and-a-constructor-a-function` (a hidden field, `super.x`, a
+private field above), the last line of
+`a-nested-class-is-static-or-holds-the-instance-around-it` (the identity text), and in
+`JavaLoweringTest` the structures' names, the refusal of a field through a qualified
+`super` and `Hooked` made only where a hook is declared
+(`theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`); the `refused:` case
+`a-field-through-super-in-a-static-method`. j98: the methods added at the end of
 `a-string-has-its-everyday-surface-and-two-constants-of-a-text-are-one` (`rest`),
 `the-boxes-parse-print-and-compare-and-math-is-strict` (`bits`: the bits, `decode`, the
 unsigned parses, `Math`, `Character` over 19 code points),
