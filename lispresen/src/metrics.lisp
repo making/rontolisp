@@ -199,7 +199,10 @@ opening an aside and code are not such a word."
 ;;; UNITS lists (START END W WSP) for each stretch between break opportunities, W
 ;;; excluding and WSP being its trailing spaces. ANCHORS lists (CALLOUT START END) for
 ;;; each callout whose anchor is the characters START below END.
-(defstruct run text styles breaks widths units anchors)
+;;; ATTRS is one attribute list a character, for the emitters that set more than a width
+;;; style: :bold, :italic, :mono, :accent, :mark, (:link URL), and the inline formulas of
+;;; FORMULAS as (INDEX . FORMULA).
+(defstruct run text styles breaks widths units anchors attrs formulas)
 
 (defparameter *formula-char*
   (code-char #xE000)
@@ -208,39 +211,56 @@ point no deck writes, as wide as the formula's box.")
 
 (defun flatten-inlines (inlines bold)
   "The text of INLINES, the style of each of its characters, the anchors of the callouts
-in it, the indices of the characters inline code or a marker pads, one per side, and the
-(INDEX . WIDTH) of each inline formula, which stands as one character of its width."
-  (let ((styles nil) (anchors nil) (pads nil) (boxes nil) (i 0))
+in it, the indices of the characters inline code or a marker pads, one per side, the
+(INDEX . WIDTH) of each inline formula, which stands as one character of its width, the
+attribute list of each character, and the (INDEX . FORMULA) of each inline formula."
+  (let ((styles nil) (anchors nil) (pads nil) (boxes nil) (attrs nil) (formulas nil)
+        (i 0))
     (values (with-output-to-string (out)
-              (labels ((chars (s style)
+              (labels ((chars (s style attr)
                          (loop for c across s
                                do (write-char c out) (push style styles)
-                                 (incf i)))
+                                 (push attr attrs) (incf i)))
                        (padded (start)
                          (when (> i start) (push start pads) (push (1- i) pads)))
-                       (walk (nodes style)
+                       (walk (nodes style attr)
                          (dolist (n nodes)
-                           (cond ((stringp n) (chars n style))
+                           (cond ((stringp n) (chars n style attr))
                                  ((eq (car n) :math)
                                   (push (cons i (mbox-width (formula-box (second n)))) boxes)
-                                  (chars (string *formula-char*) style))
+                                  (push (cons i (second n)) formulas)
+                                  (chars (string *formula-char*) style attr))
                                  ((eq (car n) :tt)
                                   (let ((start i))
-                                    (chars (second n) :mono)
+                                    (chars (second n) :mono
+                                           (cons :mono (cons t attr)))
                                     (padded start)))
                                  ((eq (car n) :mark)
                                   (let ((start i))
-                                    (walk (second n) style)
+                                    (walk (second n) style
+                                          (cons :mark (cons t attr)))
                                     (padded start)))
-                                 ((eq (car n) :b) (walk (second n) :bold))
-                                 ((eq (car n) :link) (walk (third n) style))
+                                 ((eq (car n) :b)
+                                  (walk (second n) :bold
+                                        (cons :bold (cons t attr))))
+                                 ((eq (car n) :i)
+                                  (walk (second n) style
+                                        (cons :italic (cons t attr))))
+                                 ((eq (car n) :accent)
+                                  (walk (second n) style
+                                        (cons :accent (cons t attr))))
+                                 ((eq (car n) :link)
+                                  (walk (third n) style
+                                        (cons :link (cons (second n) attr))))
                                  ((eq (car n) :say)
                                   (let ((start i))
-                                    (walk (third n) style)
+                                    (walk (third n) style attr)
                                     (push (list (second n) start i) anchors)))
-                                 (t (walk (second n) style))))))
-                (walk inlines (if bold :bold :normal))))
-            (coerce (nreverse styles) 'simple-vector) (nreverse anchors) pads boxes)))
+                                 (t (walk (second n) style attr))))))
+                (walk inlines (if bold :bold :normal)
+                      (if bold '(:bold t) nil))))
+            (coerce (nreverse styles) 'simple-vector) (nreverse anchors) pads boxes
+            (coerce (nreverse attrs) 'simple-vector) (nreverse formulas))))
 
 (defun compute-units (text breaks widths)
   (let ((n (length text)) (units nil) (start 0))
@@ -257,7 +277,8 @@ in it, the indices of the characters inline code or a marker pads, one per side,
 
 (defun make-text-run (inlines &key bold)
   "The run of INLINES; BOLD sets the whole text bold, as a title is."
-  (multiple-value-bind (text styles anchors pads boxes) (flatten-inlines inlines bold)
+  (multiple-value-bind (text styles anchors pads boxes attrs formulas)
+      (flatten-inlines inlines bold)
     (let* ((n (length text))
            (phrase (budoux-breaks text))
            (breaks (make-array n :initial-element nil))
@@ -293,7 +314,9 @@ in it, the indices of the characters inline code or a marker pads, one per side,
                 :breaks breaks
                 :widths widths
                 :units (compute-units text breaks widths)
-                :anchors anchors))))
+                :anchors anchors
+                :attrs attrs
+                :formulas formulas))))
 
 (defun split-unit (run unit size limit)
   "The starts of the lines beyond the first a unit wider than LIMIT takes when broken

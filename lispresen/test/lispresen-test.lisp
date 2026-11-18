@@ -1132,4 +1132,70 @@ carries the panel, and the next good one drops it"
              (ok (not (contains (third (request served "/")) "lispresen-serve\"")))))
       (delete-file deck))))
 
+(defun zip-u16 (v i) (+ (aref v i) (* 256 (aref v (1+ i)))))
+(defun zip-u32 (v i) (+ (aref v i) (* 256 (aref v (+ i 1)))
+                        (* 65536 (aref v (+ i 2))) (* 16777216 (aref v (+ i 3)))))
+
+(defun zip-part-names (zip)
+  "The names of the local entries of ZIP, read from their headers."
+  (let ((i 0) (names nil))
+    (loop while (and (< (+ i 30) (length zip))
+                     (= (aref zip i) 80) (= (aref zip (+ i 1)) 75)
+                     (= (aref zip (+ i 2)) 3) (= (aref zip (+ i 3)) 4))
+          do (let* ((size (zip-u32 zip (+ i 18)))
+                    (name-len (zip-u16 zip (+ i 26)))
+                    (extra (zip-u16 zip (+ i 28)))
+                    (name (map 'string #'code-char
+                               (subseq zip (+ i 30) (+ i 30 name-len)))))
+               (push name names)
+               (setf i (+ i 30 name-len extra size))))
+    (nreverse names)))
+
+(defun octets-of (s) (coerce (map 'list #'char-code s) '(vector (unsigned-byte 8))))
+
+(deftest pptx-package
+  (testing "the ZIP writer records the name and the CRC of an entry"
+    (let* ((zip (lispresen::zip-octets (list (cons "a.txt" "hello"))))
+           (octets (octets-of "hello")))
+      (ok (equal (zip-part-names zip) '("a.txt")))
+      (ok (= (zip-u32 zip 14) (lispresen::crc32 octets)))
+      (ok (= (zip-u32 zip 22) 5))))
+  (testing "a deck becomes a package with its slides and notes"
+    (multiple-value-bind (octets diagnostics)
+        (lispresen:render-pptx
+         "(deck :title \"T\")
+          (slide :title \"a\" \"b\")
+          (slide :title \"c\" (notes \"n\"))")
+      (ok (zerop (length diagnostics)))
+      (let ((names (zip-part-names octets)))
+        (ok (member "[Content_Types].xml" names :test #'equal))
+        (ok (member "ppt/presentation.xml" names :test #'equal))
+        (ok (member "ppt/slides/slide1.xml" names :test #'equal))
+        (ok (member "ppt/slides/slide3.xml" names :test #'equal))
+        (ok (member "ppt/notesSlides/notesSlide1.xml" names :test #'equal)))))
+  (testing "a canvas px is 6350 EMU and half a point"
+    (ok (= (lispresen::emu 1) 6350))
+    (ok (= (lispresen::sz100 56) 2800)))
+  (testing "text is escaped for XML"
+    (ok (equal (with-output-to-string (o)
+                 (lispresen::write-xml-text "a<b&\"'>" o))
+               "a&lt;b&amp;&quot;&#39;&gt;"))))
+
+(deftest pptx-image-size
+  (testing "PNG"
+    (let ((png (make-array 24 :element-type '(unsigned-byte 8) :initial-element 0)))
+      (replace png #(137 80 78 71 13 10 26 10 0 0 0 13 73 72 68 82))
+      (setf (aref png 18) 2 (aref png 22) 1) ; 512 x 256, big-endian
+      (ok (equal (multiple-value-list (lispresen::image-size png)) '(512 256)))))
+  (testing "JPEG"
+    (let ((jpeg #(255 216 255 192 0 11 8 0 100 1 200 3)))
+      (ok (equal (multiple-value-list (lispresen::image-size jpeg)) '(456 100)))))
+  (testing "GIF"
+    (let ((gif #(71 73 70 56 57 97 64 0 32 0)))
+      (ok (equal (multiple-value-list (lispresen::image-size gif)) '(64 32)))))
+  (testing "SVG"
+    (let ((svg (octets-of "<svg viewBox=\"0 0 100 50\"></svg>")))
+      (ok (equal (multiple-value-list (lispresen::image-size svg))
+                 '(100000 50000))))))
+
 (uiop:quit (if (run-suite :lispresen-test) 0 1))

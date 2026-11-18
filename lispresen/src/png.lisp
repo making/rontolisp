@@ -77,9 +77,10 @@ below 2^32."
           do (incf k))
     k))
 
-(defun deflate (octets &optional (row 0))
-  "OCTETS as a zlib stream of one fixed-Huffman deflate block, matching runs (distance 1)
-and, when ROW is positive, the bytes ROW before."
+(defun deflate-raw (octets &optional (row 0))
+  "OCTETS as one raw fixed-Huffman deflate block, with no zlib wrapper, as a ZIP entry
+holds one. Matches a run of the byte before (distance 1) and, when ROW is positive, the
+bytes ROW before."
   (let ((out (octet-buffer)) (acc 0) (nacc 0) (n (length octets)) (i 0))
     (labels ((bits (value count)
                ;; Least significant bit first.
@@ -106,9 +107,6 @@ and, when ROW is positive, the bytes ROW before."
                                      (aref octets (+ i len (- d)))))
                        do (incf len))
                  len)))
-      ;; zlib header: deflate, 32K window, no preset dictionary.
-      (vector-push-extend #x78 out)
-      (vector-push-extend #x01 out)
       (bits 1 1)
       (bits 1 2)
       (loop while (< i n)
@@ -133,8 +131,19 @@ and, when ROW is positive, the bytes ROW before."
                         (incf i len)))))
       (symbol 256)
       (when (> nacc 0) (bits 0 (- 8 nacc)))
-      (put-u32 (adler32 octets) out)
       out)))
+
+(defun deflate (octets &optional (row 0))
+  "OCTETS as a zlib stream of one fixed-Huffman deflate block, matching runs (distance 1)
+and, when ROW is positive, the bytes ROW before."
+  (let ((out (octet-buffer))
+        (raw (deflate-raw octets row)))
+    ;; zlib header: deflate, 32K window, no preset dictionary.
+    (vector-push-extend #x78 out)
+    (vector-push-extend #x01 out)
+    (loop for b across raw do (vector-push-extend b out))
+    (put-u32 (adler32 octets) out)
+    out))
 
 ;;; --- PNG -----------------------------------------------------------------------------
 

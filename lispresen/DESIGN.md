@@ -36,9 +36,11 @@ Goals:
 - Byte-identical output for the same deck on every backend.
 - One HTML file. Without runnable code it has no network dependency at all.
 
-Non-goals: WYSIWYG editing, slide transitions, free-form positioning, PowerPoint
-export. Builds are page advances that reveal list items and whole blocks, bring code lines
-forward and show callouts (Page advances, below); each takes effect at once, without a transition. The one
+Non-goals: WYSIWYG editing, slide transitions, free-form positioning, and a PowerPoint
+round trip (the PPTX export is one way; an edit made there does not return to
+S-expressions). Builds are page advances that reveal list items and whole blocks, bring
+code lines forward and show callouts (Page advances, below); each takes effect at once,
+without a transition. The one
 animation is the code morph (below): a slide that rewrites the previous slide's code
 shows the change as it happens.
 
@@ -1641,6 +1643,73 @@ the HTML file stands alone:
 - A source with a URL scheme stays as it is; anything but `data:` gets a warning, since
   the file then does not stand alone.
 
+## PPTX export
+
+`lispresen DECK -o OUT.pptx` (or `--pptx`) writes the deck as a PowerPoint package
+instead of HTML. The layout is the one the fit solver computed: every text line, code
+panel, table cell, diagram shape, formula glyph and callout is placed at the coordinates
+the geometry pass recorded. No screenshot is taken and no image decoder is needed; the
+emitter writes DrawingML and embeds the images the deck names.
+
+- **Theme-free by default.** Colors are `schemeClr` references only (`tx1`, `tx2`,
+  `bg2`, `accent1` to `accent6`, `hlink`), ordinary text names no typeface, shapes carry
+  no deck color, and no slide paints its background. The destination's default text style
+  and theme therefore supply the fonts, and a theme applied later in PowerPoint, or a
+  template the slides are pasted into, supplies the colors. Only code is monospace and
+  names `Consolas`, since a theme has no monospace slot. The deck's `:theme` and
+  `--theme` affect the HTML only. A later mode may bake the deck's theme in, with
+  embedded fonts.
+- **Geometry.** `fit-body` runs one final geometry pass when the render asks for it; the
+  pass pushes records (`:text`, `:code`, `:table-row`, `:picture`, `:diagram`,
+  `:formula`, `:marker`) into the slide's FIT, and the HTML path leaves the sink nil, so
+  its output is unchanged. A title is emitted from the fit's title size and lines.
+- **Coordinates.** 1 px = 6350 EMU (1920 x 1080 px is 13.333 x 7.5 in) and 1 px = 0.5 pt
+  (56 px is 28 pt), so every size and position is an integer.
+- **Text.** A paragraph is one text box across its block, its lines as explicit breaks,
+  `wrap="none"`, `noAutofit`, with the line heights as exact `spcPts`. A title is one box
+  across the text region. A list is one box with a native bullet or number paragraph for
+  each item, at the item's indent. A paragraph with an inline formula keeps a box a line,
+  since the formula's glyphs are placed between segments. Every box reaches the block's
+  right edge and names no font. Bold, italic, monospace, accent, highlight and
+  hyperlinks are run properties.
+- **Code.** The panel is a rounded `bg2` rectangle; the rows are monospace runs colored by
+  the same tokenizer the HTML uses (comments `tx2`, keywords bold). Run and Reset are not
+  drawn (they would do nothing), but the band the fit reserved for them stays.
+- **Tables.** A native PowerPoint table (`a:tbl`), with the fit solver's column widths,
+  row heights, cell text and alignment. The table style is "No Style, No Grid"; the
+  header fill and the 1 px row rules are set on the cells, so a theme's table style does
+  not replace them. A colspan cell carries `gridSpan`. A substitute font can make
+  PowerPoint grow a row, which moves the blocks below it; the theme-baking mode's
+  embedded fonts remove that risk. An inline formula in a cell (rare) becomes spaces of
+  its width, since a table cell has no positioned glyphs.
+- **Diagrams.** `:rect`, `:poly`, `:dot` and `:slice` become filled shapes (a pie slice is
+  a polygon sampled every two degrees; renderers disagree about `arcTo`). A flow box is
+  one shape with its label as the shape's text, not a box with a separate text box over
+  it, and an arrow's label is one text box in the muted color. Chart series take
+  `accent1` to `accent6`; values and ticks stay text in `tx1`/`tx2`.
+- **Images.** The original bytes are embedded; the intrinsic size is read from the
+  header (PNG, JPEG, GIF, WebP, SVG) to show the picture whole or to crop it with
+  `a:srcRect` for a full or split image. An SVG in the drawing subset is rasterized to a
+  PNG through `raster.lisp`; anything else is embedded as SVG with a warning. A
+  video becomes its `:poster` (or a named box), and a frame a bordered box with its URL
+  and a link.
+- **Callouts** are a rounded bubble, a tail and text, at the placed coordinates.
+- **Notes** become notes slides.
+- **Steps** are shown fully, as print and the overview show them; the progress bar is not
+  drawn. The kicker, footer, source line and page number are not emitted in this first
+  version; a quote's `:cite` is part of the quote and stays. They come with the
+  theme-baking mode.
+- **Diagnostics.** A warning says when an image cannot be read or its size is unknown, an
+  SVG is outside the subset, or a video has no poster. `--strict` fails on them.
+- **Determinism.** The ZIP writer fixes its timestamps and entry order, no clock is read
+  (docProps use the deck's `:date`), and every number is an integer, so every backend
+  writes the same bytes. `check.sh` compares `examples/pptx.pptx` on the interpreter, the
+  JVM, both WASM backends, a native executable and SBCL, validates the package (every XML
+  parses, content types cover every part, every relationship target exists) with python3,
+  and requires `--check` to write nothing.
+- **Hosts.** The CLI exports PPTX. The browser editor and `serve` do not: they have no
+  `read-file`, so they cannot embed an image.
+
 ## Link preview
 
 A deck published on the web says what a link preview shows: `<meta>` tags in the head and,
@@ -1763,7 +1832,7 @@ code ending where the browser's ends.
 CLI:
 
 ```
-lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--check] [--strict]
+lispresen DECK [-o OUT] [--theme NAME] [--runtime URL|hosted|none] [--embed] [--pptx] [--check] [--strict]
 lispresen new FILE [--lang ja|en] [--force]
 lispresen serve DECK [--port N] [--host ADDR] [--theme NAME] [--runtime URL|hosted|none]
 lispresen --version
@@ -1946,9 +2015,13 @@ lispresen/
     theme.lisp           built-in themes, theme overrides
     html.lisp            HTML escaping and emission, stylesheet, preview tags
     png.lisp             CRC-32, Adler-32, deflate, the PNG file
+    zip.lisp             the ZIP container of a PPTX, fixed timestamps
+    opc.lisp             content types, relationships, presentation, master, theme
     truetype.lisp        glyph outlines and advances from a .ttf
     raster.lisp          polygon filling, strokes, text, the SVG subset of a logo
+    image-size.lisp      the intrinsic size of PNG, JPEG, GIF, WebP and SVG
     page-image.lisp      the title slide drawn as the page image
+    pptx.lisp            the PPTX emitter
     player.lisp          the player script as a string constant
     highlight.lisp       tokenizers: Lisp / Scheme / Clojure, console, other languages
     morph.lisp           the token pairing of a :morph slide's code
@@ -1971,6 +2044,8 @@ lispresen/
     intro.lisp           a talk introducing lispresen
     intro.html           its golden output, rendered with --embed
     intro.png            its golden page image
+    pptx.lisp            the golden input of the PPTX check: one slide of every block
+    pptx.pptx            its golden package
     fonts/               the page image's fonts: BIZ UDPGothic subsets, OFL.txt
     pipeline.png         the image intro.lisp shows (its flow, drawn as a PNG)
     photo.svg            the picture of its full-bleed and split slides
@@ -2035,6 +2110,12 @@ before committing a change under `lispresen/`.
   callout placement and the binary read, UTF-8 decoding and base64 are in the
   comparison, and in the page image the TrueType reader, the rasterizer, the logo's SVG
   (a rounded rectangle, quadratic paths and round-capped strokes) and the PNG encoder.
+- **PPTX package**: the same legs render `examples/pptx.lisp` and must write
+  `examples/pptx.pptx` byte for byte, with no warning; python3 checks that every XML part
+  parses, the content types cover every part and every relationship target exists; and
+  `--check` must write nothing. The package opens in Keynote (its PDF export) and in
+  Quick Look on macOS (checked 2026-11-18); LibreOffice was not installed on that
+  machine.
 - **Unit tests** (rove, `test/lispresen-test.lisp`, run by `check.sh` on the
   interpreter; on SBCL rove needs bordeaux-threads, which the repository does not
   vendor): phrase boundaries checked against BudouX's own output, measurement and
@@ -2069,7 +2150,10 @@ before committing a change under `lispresen/`.
   check values, deflate and a whole PNG against what zlib reads, the
   embedding diagnostics (a video, its poster and the size warning), code files (UTF-8 up to four bytes, `:lines`, the language by
   extension, their diagnostics), the highlighting of every language from a table of
-  (language, source, spans) rows (a comment marker in a string, a string in a comment), and both starter decks rendering with no diagnostic. The golden deck covers
+  (language, source, spans) rows (a comment marker in a string, a string in a comment), the
+  ZIP entry name and CRC, the intrinsic size of PNG, JPEG, GIF and SVG, the parts of a
+  small deck's PPTX, the EMU and point conversion and XML escaping, and both starter decks
+  rendering with no diagnostic. The golden deck covers
   emission, so HTML is not asserted piecewise.
 - **Calibration and runnable code** (manual, in Chrome and Safari, when the width table,
   the font stacks, the formula metrics or the player change): the page `tools/calibrate.lisp` writes must

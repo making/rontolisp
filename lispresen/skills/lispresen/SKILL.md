@@ -182,6 +182,11 @@ lispresen talk.lisp --embed --strict   # writes talk.html (and :page-image, if s
 it (`lispresen talk.lisp`) the HTML refers to images by relative path and must travel with
 them, and a missing image is not reported; `--embed` reports it as an error.
 
+If the deck is to be handed over as PowerPoint, also build
+`lispresen talk.lisp -o talk.pptx` (README, "PowerPoint"). The layout is kept and colors
+and fonts are theme references, so a theme is applied in PowerPoint afterwards; this
+version leaves out the kicker, footer, source line and page numbers.
+
 ## 5. Check in a browser
 
 While editing, the page is the one serve answers: tell the user to open

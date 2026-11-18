@@ -42,6 +42,13 @@
 (defparameter *source-lh* 40)
 (defparameter *source-gap* 24 "Between the body and the source line under it.")
 (defparameter *progress-height* 6 "The progress bar along the bottom edge.")
+
+(defvar *geometry-sink* nil
+  "When bound to a list, the records of the layout pass being run, newest first. The
+HTML emitter leaves it nil; the PPTX emitter binds it for a slide's final geometry.")
+
+(defvar *record-geometry* nil
+  "True when the render needs FIT-GEOMETRY of every slide.")
 (defparameter *title-block-gap*
   48
   "Between the logo, the title and the lines under it.")
@@ -70,6 +77,10 @@ top right corner.")
 
 (defun safe-height () (- *canvas-height* *margin-top* *margin-bottom*))
 
+(defun centered-box (height &optional (available (safe-height)))
+  "The top of a block HEIGHT px tall centered in AVAILABLE px of the safe area."
+  (+ *margin-top* (floor (- available height) 2)))
+
 ;;; The layout result of one slide. LEFT and WIDTH place the text region, the content
 ;;; width of the safe area but on a split slide; BODY-TOP and BODY-HEIGHT place the body
 ;;; box; the sizes are px. BLEED is (FIGURE LEFT WIDTH), the image of a full or split
@@ -89,7 +100,8 @@ top right corner.")
   code-size
   stmt-size
   qr
-  overflow)
+  overflow
+  geometry)
 
 ;;; --- runs ------------------------------------------------------------------------
 
@@ -763,7 +775,15 @@ Columns share the slide's sizes, so side-by-side text matches."
                           (column-aligns b (table-columns b)))))
                 (when (diagram-p b)
                   (multiple-value-bind (s d) (diagram-layout b k rwidth)
-                    (setf (diagram-size b) s (diagram-drawing b) d))))))))
+                    (setf (diagram-size b) s (diagram-drawing b) d))))))
+    ;; The final pass the geometry emitters read; the HTML does not ask for it.
+    (when *record-geometry*
+      (let ((*geometry-sink* nil)
+            (*obstacles* nil)
+            (*slide-callouts* (slide-callouts slide)))
+        (blocks-geometry blocks k (body-code-size blocks k width)
+                         (fit-left fit) (fit-body-top fit) width body-height)
+        (setf (fit-geometry fit) (nreverse *geometry-sink*))))))
 
 (defun growing-chart-p (b)
   (and (diagram-p b) (member (diagram-kind b) '(:bars :columns :lines :pie))))
@@ -1114,20 +1134,28 @@ the base.")
         ((equal align "center") (floor (- width lw) 2))
         (t 0)))
 
-(defun run-geometry (run s width lh x y &optional align)
-  "Records each line of RUN, set at S px into WIDTH px from X, Y, as an obstacle, and
-the fragments of the callouts anchored in it. Returns the rectangle around its lines."
+(defun record-geometry (record)
+  (when *record-geometry* (push record *geometry-sink*)))
+
+(defun run-line-boxes (run s width lh x y &optional align)
+  "The lines RUN takes at S px into WIDTH px from X, Y, as (START END TOP X WIDTH)."
   (let* ((n (length (run-text run)))
-         (starts (wrap-run run s width))
-         (lines
-          (loop for (start next) on starts
-                for top from y by lh
-                collect
-                  (let* ((end (or next n))
-                         (lw (milli-px->px (run-span-width run start end s))))
-                    (list start end top (+ x (line-offset lw width align))
-                          lw))))
-         (box nil))
+         (starts (wrap-run run s width)))
+    (loop for (start next) on starts
+          for top from y by lh
+          collect
+            (let* ((end (or next n))
+                   (lw (milli-px->px (run-span-width run start end s))))
+              (list start end top (+ x (line-offset lw width align)) lw)))))
+
+(defun run-geometry (run s width lh x y &optional align role info)
+  "Records each line of RUN, set at S px into WIDTH px from X, Y, as an obstacle, and
+the fragments of the callouts anchored in it. Returns the rectangle around its lines.
+ROLE and INFO are the record's tags for the emitters (ROLE :body, :lead, :item,
+:quote, :cite, :caption, :cell or :dg-label; INFO the cell's (:row :col))."
+  (let ((lines (run-line-boxes run s width lh x y align))
+        (box nil))
+    (record-geometry (list :text run s lh x y width align role info))
     (dolist (line lines)
       (destructuring-bind (start end top lx lw) line
         (declare (ignore start end))
@@ -1152,38 +1180,51 @@ the fragments of the callouts anchored in it. Returns the rectangle around its l
                               (+ top lh)))))))
     box))
 
-(defun list-geometry (b s x y width)
-  "Records the list B set at S px from X, Y; returns its height, as BULLETS-HEIGHT."
+(defun list-geometry (b s x y width &optional group)
+  "Records the list B set at S px from X, Y; returns its height, as BULLETS-HEIGHT.
+GROUP ties a nested list's items to the list it belongs to, so the emitter can write
+one PowerPoint text box per list."
   (let ((indent (list-indent s))
+        (group (or group (list :list-group x)))
         (gap (item-gap s))
         (lh (body-lh s))
         (h 0)
+        (index 0)
         (first t))
     (dolist (it (bullets-items b) h)
       (unless first (incf h gap))
       (setf first nil)
       ;; The marker sits in the indent, beside the item's first line.
       (obstacle (list x (+ y h) (+ x indent) (+ y h lh)))
-      (run-geometry (item-run it) s (- width indent) lh (+ x indent) (+ y h))
+      (record-geometry (list :marker x (+ y h) indent lh s
+                             (bullets-ordered b) index (item-current it)))
+      (run-geometry (item-run it) s (- width indent) lh (+ x indent) (+ y h)
+                    nil :item
+                    (list :indent indent :ordered (bullets-ordered b)
+                          :index index :current (item-current it) :group group
+                          :list-x x))
+      (incf index)
       (incf h (* (run-lines (item-run it) s (- width indent)) lh))
       (when (item-sublist it)
         (incf h gap)
         (incf h
               (list-geometry (item-sublist it) s (+ x indent) (+ y h)
-                             (- width indent)))))))
+                             (- width indent) group))))))
 
 (defun quote-geometry (q s x y width)
   (let* ((indent (quote-indent s)) (lh (body-lh s)))
-    (run-geometry (quotation-run q) s (- width indent) lh (+ x indent) y)
+    (run-geometry (quotation-run q) s (- width indent) lh (+ x indent) y nil :quote)
     (when (quotation-cite-run q)
       (run-geometry (quotation-cite-run q) s (- width indent) lh (+ x indent)
                     (+ y (* (run-lines (quotation-run q) s (- width indent)) lh)
-                       (item-gap s))))
+                       (item-gap s))
+                    nil :cite))
     (quote-height q s width)))
 
 (defun code-geometry (b c x y width)
   "Records the rows of the code block B at C px from X, Y, its Run and Reset buttons,
 and the fragments of a callout naming a piece of it with :at; returns its height."
+  (record-geometry (list :code b c x y width (code-height b c width)))
   (let ((pad (code-pad c))
         (top-pad (code-top-pad b c width))
         (lh (code-lh c))
@@ -1227,25 +1268,33 @@ its box."
           (py (cell-pad-y s))
           (aligns (column-aligns tb (table-columns tb)))
           (total (reduce #'+ widths))
+          (row-index 0)
           (top y))
       (when (table-block-caption-run tb)
-        (run-geometry (table-block-caption-run tb) s total lh x top)
+        (run-geometry (table-block-caption-run tb) s total lh x top nil :caption)
         (incf top
               (+ (* (run-lines (table-block-caption-run tb) s total) lh) py)))
+      (let ((table-top top))
       (dolist (row (table-rows-with-header tb))
-        (let ((col 0) (cx x) (tallest 0))
+        (let ((row-top top) (col 0) (cx x) (tallest 0))
           (dolist (c row)
             (let ((w
                    (reduce #'+
                            (subseq widths (min col (length widths))
                             (min (+ col (cell-colspan c)) (length widths))))))
               (run-geometry (cell-run c) s (- w (* 2 px)) lh (+ cx px)
-                            (+ top py) (nth col aligns))
+                            (+ top py) (nth col aligns) :cell
+                            (list :row row-index :col col))
               (setf tallest
                     (max tallest (run-lines (cell-run c) s (- w (* 2 px)))))
               (incf cx w)
               (incf col (cell-colspan c))))
-          (incf top (+ (* tallest lh) (* 2 py)))))
+          (incf top (+ (* tallest lh) (* 2 py)))
+          (record-geometry (list :table-row row-index row-top (- top row-top)
+                                 (and (zerop row-index) (table-block-header tb))
+                                 x total))
+          (incf row-index)))
+      (record-geometry (list :table tb x table-top total (- top table-top) s)))
       (values (- top y) (list x y (+ x total) top)))))
 
 (defun figure-geometry (b s x y width height)
@@ -1255,9 +1304,10 @@ image's own is unknown within, and its caption. Returns the picture area."
          (cap (caption-height b s w))
          (img (list x y (+ x w) (+ y (- height cap)))))
     (obstacle img)
+    (record-geometry (list :picture b x y (+ x w) (+ y (- height cap))))
     (when (figure-caption-run b)
       (run-geometry (figure-caption-run b) s w (body-lh s) x (fourth img)
-                    "center"))
+                    "center" :caption))
     img))
 
 (defun diagram-geometry (b s d x y)
@@ -1267,6 +1317,7 @@ naming a label with :at points at a box or an arrow's label as a whole, at an at
 chart's row (its mark on a chart of one series, else its label) or series (its name in
 the legend); one inside a label points where naming the label would, and one around a
 chart's value at that value's mark."
+  (record-geometry (list :diagram b s x y))
   (let ((labels nil)
         (px (dg-pad-x s))
         (chart (and (chart-p (diagram-datum b)) (diagram-datum b))))
@@ -1279,8 +1330,8 @@ chart's value at that value's mark."
              (target (key)
                (let ((r (cdr (assoc key (drawing-targets d) :test #'equal))))
                  (list (+ x (first r)) (+ y (second r)) (+ x (third r)) (+ y (fourth r)))))
-             (label-run (run w lx ly align box)
-               (run-geometry run s w (dg-lh s) lx ly align)
+             (label-run (run w lx ly align box &optional (role :dg-label))
+               (run-geometry run s w (dg-lh s) lx ly align role)
                ;; Its text lies inside the box, which leaves a bubble no room beside it.
                (when box
                  (dolist (anchor (run-anchors run)) (point (first anchor) box)))))
@@ -1293,13 +1344,13 @@ chart's value at that value's mark."
                (destructuring-bind (bx by w h i pad) (cdr shape)
                  (declare (ignore h))
                  (label-run (nth i (diagram-runs b)) (- w (* 2 px)) (+ x bx px)
-                            (+ y by pad) "center" box))
+                            (+ y by pad) "center" box :flow-label))
                (push box labels))
               (:edge-label
                (destructuring-bind (bx by w h j) (cdr shape)
                  (declare (ignore h))
                  (label-run (nth j (flow-graph-edge-runs (diagram-datum b))) w
-                            (+ x bx) (+ y by) "center" box)))
+                            (+ x bx) (+ y by) "center" box :edge-label)))
               (:category
                (destructuring-bind (bx by w h j align) (cdr shape)
                  (declare (ignore h))
@@ -1350,7 +1401,8 @@ layout gives it to them."
       (let ((before *obstacles*) (h 0) (box nil))
         (cond ((para-p b)
                (setf h (* (run-lines (para-run b) s width) (body-lh s)))
-               (run-geometry (para-run b) s width (body-lh s) x top))
+               (run-geometry (para-run b) s width (body-lh s) x top nil
+                             (if (para-lead b) :lead :body)))
               ((bullets-p b) (setf h (list-geometry b s x top width)))
               ((quotation-p b) (setf h (quote-geometry b s x top width)))
               ((code-block-p b)
@@ -1372,6 +1424,7 @@ layout gives it to them."
                (let* ((w (min width (formula-width b s)))
                       (dx (+ x (floor (- width w) 2))))
                  (setf h (formula-height b s) box (list dx top (+ dx w) (+ top h)))
+                 (record-geometry (list :formula b dx top w h s))
                  (obstacle box)))
               ((figure-p b)
                (setf h (floor rest growing) box
