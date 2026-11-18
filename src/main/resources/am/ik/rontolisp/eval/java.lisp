@@ -1355,6 +1355,25 @@
                                               (list :refused message
                                                (if (eq kind :bounds) 1 0)))))))
 
+;; Matcher.appendReplacement: the replacement of the last match with its group
+;; references filled in, or the refusal as %java-regex-replace answers it, with what
+;; was written before the reference refused.
+(defun rontolisp::%java-regex-expand (matcher replacement)
+  (let ((out (make-string-output-stream)))
+    (block refused
+      (rontolisp::%regex-expand-replacement matcher replacement
+                                            (lambda (kind message)
+                                              (return-from refused
+                                                           (list :refused message
+                                                            (if (eq kind :bounds) 1 0)
+                                                            (%normalize-string
+                                                             (get-output-stream-string out)))))
+                                            out)
+      (%normalize-string (get-output-stream-string out)))))
+
+(defun rontolisp::%java-regex-refusal-partial (refusal)
+  (car (cdr (cdr (cdr refusal)))))
+
 ;; String.join over the elements of an array, each through TO-STRING.
 (defun rontolisp::%java-join (delimiter items to-string)
   (let ((builder (rontolisp::%java-sb-new)) (i 0) (n (length items)))

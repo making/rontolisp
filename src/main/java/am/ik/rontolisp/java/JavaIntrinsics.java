@@ -51,6 +51,8 @@ final class JavaIntrinsics {
 
 	private static final String COMPARABLE = "java.lang.Comparable";
 
+	private static final String APPENDABLE = "java.lang.Appendable";
+
 	/**
 	 * The source class a thread is, which holds what the monitor members are written in.
 	 */
@@ -62,6 +64,8 @@ final class JavaIntrinsics {
 	private static final String PATTERN = "java.util.regex.Pattern";
 
 	private static final String CHARSET = "java.nio.charset.Charset";
+
+	private static final String LOCALE = "java.util.Locale";
 
 	/**
 	 * What {@code System.out} and {@code System.err} are as the receiver of a print: the
@@ -149,7 +153,7 @@ final class JavaIntrinsics {
 		public List<String> implemented(String name) {
 			return switch (name) {
 				case STRING -> List.of(COMPARABLE, CHARS);
-				case "java.lang.StringBuilder", STRING_BUFFER -> List.of(CHARS);
+				case "java.lang.StringBuilder", STRING_BUFFER -> List.of(CHARS, APPENDABLE);
 				default -> BOXES.containsKey(name) ? List.of(COMPARABLE) : List.of();
 			};
 		}
@@ -178,6 +182,12 @@ final class JavaIntrinsics {
 		if (intrinsic.equals(STRING) && (member.equals("getBytes") || member.equals("<init>"))) {
 			return List.of(CHARSET);
 		}
+		boolean formats = member.equals("format") || member.equals("printf");
+		if ((intrinsic.equals(STRING)
+				&& (member.equals("format") || member.equals("toUpperCase") || member.equals("toLowerCase")))
+				|| (intrinsic.equals(STANDARD_STREAM) && formats)) {
+			return List.of(LOCALE);
+		}
 		return List.of();
 	}
 
@@ -195,6 +205,22 @@ final class JavaIntrinsics {
 					new ClassType(named, List.of()), false, false, null,
 					intrinsic.name.equals(STRING_BUFFER) ? guarded(emitter) : emitter, false));
 		}
+		if (named.name.equals(APPENDABLE) && builder) {
+			// the three members as the interface spells them, which a call through it
+			// looks for by signature
+			ClassType self = new ClassType(intrinsic, List.of());
+			ClassType characters = classes.libraryType(CHARS);
+			boolean held = intrinsic.name.equals(STRING_BUFFER);
+			JavaEmitter whole = (lowering, call) -> runtimeCall("sb-append", call.self(), text(lowering, call, 0));
+			JavaEmitter one = (lowering, call) -> runtimeCall("sb-append-char", call.self(), call.argument(0));
+			intrinsic.methods.add(new JavaClass.Method(intrinsic, "append", List.of(characters), self, false, false,
+					null, held ? guarded(whole) : whole, false));
+			intrinsic.methods.add(new JavaClass.Method(intrinsic, "append", List.of(Primitive.CHAR), self, false, false,
+					null, held ? guarded(one) : one, false));
+			intrinsic.methods.add(new JavaClass.Method(intrinsic, "append",
+					List.of(characters, Primitive.INT, Primitive.INT), self, false, false, null,
+					held ? guarded(JavaIntrinsics::appendRange) : JavaIntrinsics::appendRange, false));
+		}
 		if (named.name.equals(CHARSET) && text) {
 			ClassType charset = new ClassType(named, List.of());
 			ArrayType bytes = new ArrayType(Primitive.BYTE);
@@ -206,6 +232,38 @@ final class JavaIntrinsics {
 				.add(new JavaClass.Method(intrinsic, "<init>", List.of(bytes, Primitive.INT, Primitive.INT, charset),
 						Primitive.VOID, false, false, null, support("decode"), false));
 		}
+		if (named.name.equals(LOCALE) && (text || intrinsic.name.equals(STANDARD_STREAM))) {
+			// every locale there is writes a number and a letter's case as no locale
+			// does: the argument is evaluated and dropped
+			ClassType locale = new ClassType(named, List.of());
+			ClassType string = classes.libraryType(STRING);
+			List<JavaType> formatted = List.of(locale, string, new ArrayType(classes.libraryType(OBJECT)));
+			if (text) {
+				JavaClass.Method format = new JavaClass.Method(intrinsic, "format", formatted, string, true, false,
+						null,
+						(lowering, call) -> after(call.argument(0),
+								runtimeCall("format", call.argument(1), call.argument(2), lowering.stringFunction())),
+						false);
+				format.varargs = true;
+				intrinsic.methods.add(format);
+				for (String cased : List.of("toUpperCase", "toLowerCase")) {
+					String piece = cased.equals("toUpperCase") ? "%string-upcase-piece" : "%string-downcase-piece";
+					intrinsic.methods.add(new JavaClass.Method(intrinsic, cased, List.of(locale), string, false, false,
+							null, (lowering, call) -> after(call.argument(0), call(piece, call.self())), false));
+				}
+			}
+			else {
+				for (String name : List.of("printf", "format")) {
+					JavaClass.Method print = new JavaClass.Method(intrinsic, name, formatted, Primitive.VOID, false,
+							false, null,
+							(lowering, call) -> after(call.argument(0), printf(lowering, new Invocation(call.receiver(),
+									call.arguments().subList(1, call.arguments().size()), call.discard(), call.pos()))),
+							false);
+					print.varargs = true;
+					intrinsic.methods.add(print);
+				}
+			}
+		}
 		if (named.name.equals("java.lang.Iterable") && text) {
 			intrinsic.methods.add(new JavaClass.Method(intrinsic, "join",
 					List.of(classes.libraryType(OBJECT), new ClassType(named, List.of())),
@@ -216,6 +274,22 @@ final class JavaIntrinsics {
 	}
 
 	// ---- emitters
+
+	/**
+	 * {@code append} of a range: of an array of characters by offset and count, of
+	 * anything else -- a text, {@code null} read as its four letters -- by start and end.
+	 */
+	private static LispVal appendRange(Context lowering, Invocation call) {
+		boolean array = call.arguments().get(0).type().equals(new ArrayType(Primitive.CHAR));
+		return lowering.library(SUPPORT, array ? "appendChars" : "appendRange",
+				List.of(call.self(), array ? call.argument(0) : lowering.stringOf(call.arguments().get(0), call.pos()),
+						call.argument(1), call.argument(2)));
+	}
+
+	/** A form whose value is another's, evaluated after one that is only evaluated. */
+	private static LispVal after(LispVal dropped, LispVal form) {
+		return JavaForms.isSimple(dropped) ? form : call("progn", dropped, form);
+	}
 
 	/** A member that is a call of a run-time function: its receiver, its arguments. */
 	private static JavaEmitter runtime(String name) {
@@ -717,6 +791,7 @@ final class JavaIntrinsics {
 					(lowering, call) -> call.arguments().get(0).type() == Primitive.CHAR
 							? runtimeCall("sb-append-char", call.self(), call.argument(0))
 							: runtimeCall("sb-append", call.self(), text(lowering, call, 0)))
+			.method("append", self, JavaIntrinsics::appendRange, object, i, i)
 			.method("insert", self,
 					(lowering, call) -> runtimeCall("sb-insert", call.self(), call.argument(0), text(lowering,
 							new Invocation(call.receiver(), call.arguments().subList(1, 2), false, call.pos()), 0)),
@@ -1191,6 +1266,12 @@ final class JavaIntrinsics {
 		natives.put(matcher + "lookingAt0(Object)", engine("matcher-looking-at"));
 		natives.put(matcher + "matches0(Object)", engine("matcher-matches"));
 		natives.put(matcher + "reset0(Object)", engine("matcher-reset"));
+		natives.put(matcher + "region0(Object,int,int)", engine("matcher-region"));
+		natives.put(matcher + "bounds0(Object,boolean,boolean)", engine("matcher-bounds"));
+		natives.put(matcher + "expand0(Object,String)", runtime("regex-expand"));
+		natives.put(matcher + "partial0(Object)", runtime("regex-refusal-partial"));
+		natives.put(matcher + "hitEnd0(Object)", engine("matcher-hit-end"));
+		natives.put(matcher + "requireEnd0(Object)", engine("matcher-require-end"));
 		natives.put(matcher + "matched0(Object)", engine("matcher-matched-p"));
 		natives.put(matcher + "start0(Object,int)", engine("matcher-start"));
 		natives.put(matcher + "end0(Object,int)", engine("matcher-end"));

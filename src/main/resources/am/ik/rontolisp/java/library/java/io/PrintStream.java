@@ -11,7 +11,7 @@ import java.util.Objects;
 // checkError(). With automatic flushing the stream is flushed at each println, at each
 // array of bytes and at each \n. The standard streams are StandardOutput, a subclass
 // with no stream under it.
-public class PrintStream extends FilterOutputStream {
+public class PrintStream extends FilterOutputStream implements Appendable {
 
     private final boolean autoFlush;
 
@@ -224,7 +224,30 @@ public class PrintStream extends FilterOutputStream {
         text(String.valueOf(obj), true);
     }
 
+    public PrintStream append(CharSequence csq) {
+        text(String.valueOf(csq), false);
+        return this;
+    }
+
+    public PrintStream append(CharSequence csq, int start, int end) {
+        return append(String.valueOf(csq).subSequence(start, end));
+    }
+
+    public PrintStream append(char c) {
+        text(String.valueOf(c), false);
+        return this;
+    }
+
     public PrintStream printf(String format, Object... args) {
+        return format(format, args);
+    }
+
+    // A locale changes nothing: each one there is writes as the root does.
+    public PrintStream printf(java.util.Locale l, String format, Object... args) {
+        return format(format, args);
+    }
+
+    public PrintStream format(java.util.Locale l, String format, Object... args) {
         return format(format, args);
     }
 

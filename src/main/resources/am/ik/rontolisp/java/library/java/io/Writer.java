@@ -3,11 +3,71 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.io;
 
+import java.util.Objects;
+
 // A subclass gives write(char[], int, int), flush() and close(); a char is a UTF-16
 // unit.
-public abstract class Writer implements Closeable, Flushable {
+public abstract class Writer implements Appendable, Closeable, Flushable {
 
     protected Writer() {
+    }
+
+    // A writer that drops what it is given, until it is closed.
+    public static Writer nullWriter() {
+        return new Writer() {
+            private boolean closed;
+
+            private void open() throws IOException {
+                if (closed) {
+                    throw new IOException("Stream closed");
+                }
+            }
+
+            public Writer append(char c) throws IOException {
+                open();
+                return this;
+            }
+
+            public Writer append(CharSequence csq) throws IOException {
+                open();
+                return this;
+            }
+
+            public Writer append(CharSequence csq, int start, int end) throws IOException {
+                open();
+                if (csq != null) {
+                    Objects.checkFromToIndex(start, end, csq.length());
+                }
+                return this;
+            }
+
+            public void write(int c) throws IOException {
+                open();
+            }
+
+            public void write(char[] cbuf, int off, int len) throws IOException {
+                Objects.checkFromIndexSize(off, len, cbuf.length);
+                open();
+            }
+
+            public void write(String str) throws IOException {
+                Objects.requireNonNull(str);
+                open();
+            }
+
+            public void write(String str, int off, int len) throws IOException {
+                Objects.checkFromIndexSize(off, len, str.length());
+                open();
+            }
+
+            public void flush() throws IOException {
+                open();
+            }
+
+            public void close() throws IOException {
+                closed = true;
+            }
+        };
     }
 
     public abstract void write(char[] cbuf, int off, int len) throws IOException;

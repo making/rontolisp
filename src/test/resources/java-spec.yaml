@@ -38,6 +38,7 @@ imports: |
   import java.util.Iterator;
   import java.util.List;
   import java.util.ListIterator;
+  import java.util.Locale;
   import java.util.Map;
   import java.util.NoSuchElementException;
   import java.util.Objects;
@@ -48,6 +49,7 @@ imports: |
   import java.util.Stack;
   import java.util.Vector;
   import java.util.function.*;
+  import java.util.regex.MatchResult;
   import java.util.regex.Matcher;
   import java.util.regex.Pattern;
   import java.util.regex.PatternSyntaxException;
@@ -4463,8 +4465,160 @@ cases:
       No match found
       No group 2
       No group with name {d}
+  # A Matcher's region with its anchoring and transparent bounds, hitEnd and requireEnd
+  # as a JDK 25 answers them, appendReplacement and appendTail (a group number the pattern
+  # does not have leaves what stood before it appended), a replacement by a function,
+  # toMatchResult and a pattern as a predicate.
+  - name: a-matcher-keeps-a-region-tells-what-it-read-and-appends-its-replacements
+    main: MatcherRest
+    source: |
+      class MatcherRest {
+          interface Step {
+              Object run();
+          }
+
+          static void tell(String label, Step step) {
+              try {
+                  System.out.println(label + ": " + step.run());
+              }
+              catch (RuntimeException e) {
+                  System.out.println(label + ": " + e);
+              }
+          }
+
+          public static void main(String[] args) {
+              // a region: the searches stay in it, and its bounds anchor and hide what is outside
+              Matcher words = Pattern.compile("\\b\\w+\\b").matcher("one two three");
+              words.region(2, 9);
+              StringBuilder found = new StringBuilder();
+              while (words.find()) {
+                  found.append(words.group()).append('@').append(words.start()).append(' ');
+              }
+              System.out.println(found + "| " + words.regionStart() + "," + words.regionEnd() + " " + words.hasAnchoringBounds() + " " + words.hasTransparentBounds());
+              words.useTransparentBounds(true).region(2, 9);
+              found.setLength(0);
+              while (words.find()) {
+                  found.append(words.group()).append('@').append(words.start()).append(' ');
+              }
+              System.out.println(found + "| " + words);
+              Matcher line = Pattern.compile("^two$").matcher("one two three");
+              System.out.println(line.region(4, 7).matches() + " " + line.useAnchoringBounds(false).region(4, 7).matches() + " " + line.region(4, 7).lookingAt()
+                      + " " + line.reset().regionEnd() + " " + line.hasAnchoringBounds() + " " + line.find());
+              Matcher behind = Pattern.compile("(?<=one )two(?= three)").matcher("one two three");
+              System.out.println(behind.region(4, 7).find() + " " + behind.useTransparentBounds(true).region(4, 7).find() + " " + behind.start() + " " + behind.find(0) + " " + behind.regionStart());
+              // a lexer: each token is looked for where the last one ended
+              Pattern token = Pattern.compile("\\s*(?:(\\d+)|([a-z]+)|(.))");
+              Matcher lexer = token.matcher("let x1 = 42+y;");
+              StringBuilder tokens = new StringBuilder();
+              for (int at = 0; at < lexer.regionEnd() && lexer.region(at, lexer.regionEnd()).lookingAt(); at = lexer.end()) {
+                  tokens.append(lexer.group(1) != null ? "num" : lexer.group(2) != null ? "id" : "op").append(lexer.end()).append(' ');
+              }
+              System.out.println(tokens.toString().trim());
+              tell("region start", () -> words.region(-1, 2));
+              tell("region end", () -> words.region(2, 14));
+              tell("region order", () -> words.region(5, 4));
+
+              // whether the search read the end of the input, and whether its match needs it
+              for (String[] probe : new String[][] {{"a+", "caa"}, {"a+", "aab"}, {"ab|a", "ca"}, {"a$", "ba"}, {"a$", "ba\n"}, {"a\\b", "a"}, {"a\\z", "a"}, {"a(?!b)", "a"}, {"^a", "ba"}, {"abc", "xab"}, {"a?", "a"}}) {
+                  Matcher m = Pattern.compile(probe[0]).matcher(probe[1]);
+                  StringBuilder flags = new StringBuilder();
+                  while (m.find()) {
+                      flags.append(m.start()).append('-').append(m.end()).append(m.hitEnd() ? " hit" : "").append(m.requireEnd() ? " needed" : "").append(", ");
+                  }
+                  flags.append(m.hitEnd() ? "hit" : "no hit").append("; whole ").append(m.matches()).append(m.hitEnd() ? " hit" : "");
+                  System.out.println(probe[0] + " over " + probe[1].replace("\n", "\\n") + ": " + flags);
+              }
+
+              // a replacement built match by match
+              Matcher digits = Pattern.compile("(\\d)(\\d)?").matcher("a12b3c");
+              StringBuffer buffer = new StringBuffer();
+              while (digits.find()) {
+                  digits.appendReplacement(buffer, "[$2$1]");
+              }
+              System.out.println(digits.appendTail(buffer));
+              digits.reset();
+              StringBuilder builder = new StringBuilder();
+              digits.find();
+              digits.appendReplacement(builder, Matcher.quoteReplacement("$1\\"));
+              tell("twice", () -> digits.appendReplacement(builder, "again"));
+              System.out.println(digits.appendTail(builder) + " " + digits.find() + " " + digits.appendReplacement(builder, "<$0>").appendTail(builder));
+              tell("no match", () -> digits.reset().appendReplacement(new StringBuilder(), "x"));
+              digits.find();
+              tell("no group", () -> digits.appendReplacement(builder, "$3"));
+              tell("no name", () -> digits.appendReplacement(builder, "${n}"));
+              tell("no escape", () -> digits.appendReplacement(builder, "x\\"));
+              System.out.println(builder + " " + digits.appendTail(new StringBuilder()));
+              Matcher letters = Pattern.compile("[a-c]").matcher("abcd");
+              System.out.println(letters.replaceAll(m -> m.group().toUpperCase() + m.start()) + " " + letters.replaceFirst(m -> "\\$" + m.end())
+                      + " " + letters.replaceAll(m -> "") + " " + Pattern.compile("x").matcher("abc").replaceAll(m -> "y") + " " + letters.find());
+              tell("replacer", () -> letters.replaceAll((Function<MatchResult, String>) null));
+
+              // a match kept as it was
+              Matcher pair = Pattern.compile("(?<key>\\w+)=(?<value>\\w*)|(;)").matcher("a=1;bb=;c");
+              pair.find();
+              MatchResult first = pair.toMatchResult();
+              pair.find();
+              pair.find();
+              MatchResult third = pair.toMatchResult();
+              System.out.println(first.group() + " " + first.start() + "-" + first.end() + " " + first.group(1) + "/" + first.group("value") + " " + first.group(3) + " " + first.start(3)
+                      + " " + first.groupCount() + " " + first.hasMatch() + " | " + third.group("key") + " " + third.start("key") + "-" + third.end("value") + " [" + third.group(2) + "] " + pair.hasMatch());
+              pair.find();
+              pair.find();
+              MatchResult none = pair.toMatchResult();
+              System.out.println(none.hasMatch() + " " + none.groupCount() + " " + pair.hasMatch());
+              tell("no result", none::group);
+              tell("no result start", () -> none.start(1));
+              tell("no such group", () -> first.group(4));
+              tell("no such name", () -> first.group("other"));
+              tell("null name", () -> first.start(null));
+
+              // a pattern as a test
+              Predicate<String> some = Pattern.compile("\\d+").asPredicate();
+              Predicate<String> all = Pattern.compile("\\d+").asMatchPredicate();
+              System.out.println(some.test("a1") + " " + all.test("a1") + " " + all.test("12") + " " + some.negate().test("ab"));
+          }
+      }
+    expected: |
+      e@2 two@4 t@8 | 2,9 true false
+      two@4 | java.util.regex.Matcher[pattern=\b\w+\b region=2,9 lastmatch=]
+      true false false 13 false false
+      false true 4 true 0
+      id3 id5 num6 op8 num11 op12 id13 op14
+      region start: java.lang.IndexOutOfBoundsException: start
+      region end: java.lang.IndexOutOfBoundsException: end
+      region order: java.lang.IndexOutOfBoundsException: start > end
+      a+ over caa: 1-3 hit, hit; whole false
+      a+ over aab: 0-2, hit; whole false
+      ab|a over ca: 1-2 hit, hit; whole false
+      a$ over ba: 1-2 hit needed, hit; whole false
+      a$ over ba\n: 1-2 hit needed, hit; whole false
+      a\b over a: 0-1 hit needed, hit; whole true hit
+      a\z over a: 0-1 hit, hit; whole true hit
+      a(?!b) over a: 0-1 hit needed, hit; whole true hit
+      ^a over ba: no hit; whole false
+      abc over xab: hit; whole false
+      a? over a: 0-1, 1-1 hit, hit; whole true
+      a[21]b[3]c
+      twice: java.lang.IndexOutOfBoundsException: Range [3, 1) out of bounds for length 6
+      a$1\b3c true a$1\b3cb<3>c
+      no match: java.lang.IllegalStateException: No match found
+      no group: java.lang.IndexOutOfBoundsException: No group 3
+      no name: java.lang.IllegalArgumentException: No group with name {n}
+      no escape: java.lang.IllegalArgumentException: character to be escaped is missing
+      a$1\b3cb<3>ca a12b3c
+      A0B1C2d $1bcd d abc false
+      replacer: java.lang.NullPointerException
+      a=1 0-3 a/1 null -1 3 true | bb 4-7 [] true
+      false 3 false
+      no result: java.lang.IllegalStateException: No match found
+      no result start: java.lang.IllegalStateException: No match found
+      no such group: java.lang.IndexOutOfBoundsException: No group 4
+      no such name: java.lang.IllegalArgumentException: No group with name <other>
+      null name: java.lang.NullPointerException: Group name
+      true false true true
   # String.format, formatted and printf: %d %s %f %e %x %o %c %b %n %% with flags, width,
-  # precision and an argument index; %f rounds the shortest digits half up.
+  # precision and an argument index; %f rounds the shortest digits half up. A Locale --
+  # the root and the English ones are all there are -- changes nothing.
   - name: format-renders-the-conversions-programs-write
     main: Formats
     source: |
@@ -4479,6 +4633,19 @@ cases:
               } catch (RuntimeException e) {
                   System.out.println("refused");
               }
+              System.out.println(String.format(Locale.US, "%,d %.2f %s", 1234567, 3.14159, "x") + String.format(Locale.ROOT, "|%5d|", 42) + String.format((Locale) null, "%x", 255));
+              System.out.printf(Locale.ENGLISH, "%d items%n", 3);
+              System.out.format(Locale.UK, "%s%n", "formatted");
+              PrintStream out = System.out;
+              out.printf(Locale.CANADA, "%05.1f%n", 2.25).format(Locale.US, "%S%n", "chained");
+              StringWriter text = new StringWriter();
+              PrintWriter writer = new PrintWriter(text);
+              writer.printf(Locale.ROOT, "%d-", 1).format(Locale.ROOT, "%d", 2);
+              writer.flush();
+              System.out.println(text + " " + "Title".toUpperCase(Locale.ROOT) + "Title".toLowerCase(Locale.ENGLISH));
+              for (Locale each : new Locale[] {Locale.ROOT, Locale.ENGLISH, Locale.US, Locale.UK, Locale.CANADA}) {
+                  System.out.println("[" + each + "] " + each.getLanguage() + " " + each.getCountry() + " " + each.toLanguageTag() + " " + (each == Locale.US) + " " + each.equals(Locale.UK));
+              }
           }
       }
     expected: |
@@ -4487,6 +4654,17 @@ cases:
       0.2 1.01 3 0.000 -0.00 10000000000.0000|1.3       |0.333333|3 items|  -42|42   |-0042|-1,234,567| 42|ffffffff|123456789012
       b a a|xy|false true|     right|left      |1.5 c 10|1.235e-04|1.000000E+100|-0003.14|+2.0|ff
       refused
+      1,234,567 3.14 x|   42|ff
+      3 items
+      formatted
+      002.3
+      CHAINED
+      1-2 TITLEtitle
+      []   und false false
+      [en] en  en false false
+      [en_US] en US en-US true false
+      [en_GB] en GB en-GB false true
+      [en_CA] en CA en-CA false false
   # The members of the boxes and of Math; a failed parse and an exact operation that
   # overflows throw the library's exceptions; a double's bits and hash are the
   # specified ones; new Object() is a value of no other class.
@@ -4857,6 +5035,366 @@ cases:
       10
       10 10
       wrapped java.io.IOException: inner
+  # The rest of java.io over arrays and other streams: the null streams, CharArrayReader
+  # and CharArrayWriter, the two that take back what was read, SequenceInputStream,
+  # LineNumberReader -- whose count at the end of the input, after a skip and across a
+  # mark was measured against a JDK 25 -- and Appendable, which a StringBuilder, a Writer
+  # and a PrintStream are.
+  - name: the-streams-that-hold-nothing-take-back-follow-one-another-and-count-lines
+    main: MoreStreams
+    source: |
+      class MoreStreams {
+          interface Step {
+              Object run() throws Exception;
+          }
+
+          // What a LineNumberReader answers to a script: r a read, a a read into an array,
+          // l a line, s and S a skip of one and of nine, m a mark, t a reset.
+          static String counted(String input, String script) throws IOException {
+              LineNumberReader r = new LineNumberReader(new StringReader(input), 2);
+              char[] buf = new char[8];
+              StringBuilder out = new StringBuilder();
+              for (char op : script.toCharArray()) {
+                  switch (op) {
+                      case 'r' -> out.append(r.read());
+                      case 'a' -> out.append(r.read(buf));
+                      case 'l' -> out.append(r.readLine());
+                      case 's' -> out.append(r.skip(1));
+                      case 'S' -> out.append(r.skip(9));
+                      case 'm' -> r.mark(1);
+                      default -> r.reset();
+                  }
+                  out.append('@').append(r.getLineNumber()).append(' ');
+              }
+              return out.toString().trim();
+          }
+
+          static void tell(String label, Step step) {
+              try {
+                  System.out.println(label + ": " + step.run());
+              }
+              catch (Exception e) {
+                  System.out.println(label + ": " + e);
+              }
+          }
+
+          static void render(Appendable out, String name) throws IOException {
+              out.append("<").append(name, 1, 3).append('>');
+          }
+
+          public static void main(String[] args) {
+              try {
+                  run();
+              }
+              catch (Exception e) {
+                  throw new IllegalStateException(e);
+              }
+          }
+
+          static void run() throws Exception {
+              // the streams that hold nothing
+              InputStream none = InputStream.nullInputStream();
+              byte[] four = new byte[4];
+              tell("null in", () -> none.read() + " " + none.read(four) + " " + none.read(four, 0, 0) + " " + none.available()
+                      + " " + none.readAllBytes().length + " " + none.readNBytes(3).length + " " + none.readNBytes(four, 0, 2)
+                      + " " + none.skip(5) + " " + none.transferTo(new ByteArrayOutputStream()) + " " + none.markSupported());
+              tell("null in skipN", () -> { none.skipNBytes(0); none.skipNBytes(2); return "skipped"; });
+              tell("null in range", () -> none.read(four, 3, 2));
+              none.close();
+              none.close();
+              tell("null in closed read", () -> none.read());
+              tell("null in closed read array", () -> none.read(four, 0, 0));
+              tell("null in closed available", () -> none.available());
+              tell("null in closed all", () -> none.readAllBytes().length);
+              tell("null in closed n", () -> none.readNBytes(0).length);
+              tell("null in closed skip", () -> none.skip(1));
+              tell("null in closed transfer", () -> none.transferTo(new ByteArrayOutputStream()));
+              OutputStream sink = OutputStream.nullOutputStream();
+              tell("null out", () -> { sink.write(1); sink.write(four); sink.write(four, 1, 2); sink.flush(); return "written"; });
+              tell("null out range", () -> { sink.write(four, 3, 2); return "written"; });
+              sink.close();
+              tell("null out closed", () -> { sink.write(1); return "written"; });
+              tell("null out closed array", () -> { sink.write(four, 0, 0); return "written"; });
+              tell("null out closed flush", () -> { sink.flush(); return "flushed"; });
+              Reader blank = Reader.nullReader();
+              char[] three = new char[3];
+              tell("null reader", () -> blank.read() + " " + blank.read(three) + " " + blank.read(three, 0, 0) + " "
+                      + blank.ready() + " " + blank.skip(4) + " " + blank.transferTo(new StringWriter()) + " " + blank.markSupported());
+              tell("null reader range", () -> blank.read(three, 2, 2));
+              tell("null reader mark", () -> { blank.mark(1); return "marked"; });
+              blank.close();
+              tell("null reader closed", () -> blank.read());
+              tell("null reader closed array", () -> blank.read(three, 0, 0));
+              tell("null reader closed ready", () -> blank.ready());
+              tell("null reader closed skip", () -> blank.skip(1));
+              tell("null reader closed transfer", () -> blank.transferTo(new StringWriter()));
+              Writer drain = Writer.nullWriter();
+              tell("null writer", () -> { drain.write('a'); drain.write("ab"); drain.write(three); drain.write("abc", 1, 2);
+                      drain.write(three, 1, 2); drain.append('c').append("cd").append("cde", 1, 2).flush(); return drain.append(null) == drain; });
+              tell("null writer range", () -> { drain.write(three, 2, 2); return "written"; });
+              tell("null writer string range", () -> { drain.write("abc", 2, 2); return "written"; });
+              tell("null writer append range", () -> { drain.append("abc", 2, 5); return "written"; });
+              drain.close();
+              tell("null writer closed", () -> { drain.write('a'); return "written"; });
+              tell("null writer closed append", () -> { drain.append('a'); return "written"; });
+              tell("null writer closed append text", () -> { drain.append("a"); return "written"; });
+              tell("null writer closed flush", () -> { drain.flush(); return "flushed"; });
+
+              // characters over an array
+              CharArrayWriter chars = new CharArrayWriter();
+              chars.write('a');
+              chars.write("bcd", 1, 2);
+              chars.write(new char[] {'e', 'f', 'g'}, 1, 1);
+              chars.append('h').append("ij").append("klm", 0, 2).append(null);
+              System.out.println(chars + " " + chars.size() + " " + chars.toCharArray().length);
+              StringWriter copy = new StringWriter();
+              chars.writeTo(copy);
+              chars.reset();
+              chars.write("xy");
+              chars.flush();
+              chars.close();
+              chars.write('z');
+              System.out.println(copy + " " + chars + " " + new CharArrayWriter(0).size());
+              tell("writer size", () -> new CharArrayWriter(-1));
+              tell("writer range", () -> { chars.write(new char[2], 1, 2); return "written"; });
+              CharArrayReader letters = new CharArrayReader("abcdefgh".toCharArray());
+              char[] buffer = new char[3];
+              tell("array reader", () -> (char) letters.read() + " " + letters.read(buffer) + new String(buffer) + " "
+                      + letters.skip(1) + " " + letters.ready() + " " + letters.markSupported() + " " + letters.read(buffer, 0, 0));
+              letters.mark(0);
+              tell("array reader marked", () -> (char) letters.read() + " " + letters.skip(10) + " " + letters.read() + " "
+                      + letters.read(buffer) + " " + letters.ready() + " " + letters.skip(-3));
+              letters.reset();
+              tell("array reader reset", () -> (char) letters.read() + " " + letters.read(buffer, 1, 2) + new String(buffer));
+              tell("array reader range", () -> letters.read(buffer, 2, 2));
+              letters.close();
+              tell("array reader closed", () -> letters.read());
+              tell("array reader closed ready", () -> letters.ready());
+              tell("array reader closed mark", () -> { letters.mark(0); return "marked"; });
+              tell("array reader closed skip", () -> letters.skip(1));
+              CharArrayReader part = new CharArrayReader("abcdefgh".toCharArray(), 2, 3);
+              tell("array reader part", () -> { part.reset(); return (char) part.read() + " " + part.read(buffer) + " " + part.read() + " " + part.ready(); });
+              tell("array reader bounds", () -> new CharArrayReader(new char[3], 4, 1));
+              tell("array reader past", () -> new CharArrayReader(new char[3], 2, 5).read(buffer));
+              tell("array reader negative", () -> new CharArrayReader(new char[3], 1, -1));
+
+              // a reader and a stream that take back what was read
+              PushbackReader back = new PushbackReader(new StringReader("abcdef"), 3);
+              tell("pushback", () -> { int c = back.read(); back.unread(c); back.unread('z'); return (char) back.read() + "" + (char) back.read() + (char) back.read(); });
+              tell("pushback array", () -> { back.unread(new char[] {'x', 'y'}); back.unread(new char[] {'p', 'q', 'r'}, 1, 1); return back.read(buffer) + new String(buffer) + back.read(buffer, 0, 2) + new String(buffer); });
+              tell("pushback full", () -> { back.unread(new char[] {'1', '2', '3'}); back.unread('4'); return "unread"; });
+              tell("pushback full array", () -> { back.unread(new char[] {'5', '6'}); return "unread"; });
+              tell("pushback ready", () -> back.ready() + " " + back.markSupported() + " " + back.skip(2) + " " + (char) back.read() + " " + back.skip(1) + " " + back.skip(100) + " " + back.read() + " " + back.ready());
+              tell("pushback mark", () -> { back.mark(1); return "marked"; });
+              tell("pushback reset", () -> { back.reset(); return "reset"; });
+              tell("pushback skip", () -> back.skip(-1));
+              tell("pushback size", () -> new PushbackReader(new StringReader(""), 0));
+              tell("pushback range", () -> back.read(buffer, 2, 2));
+              back.close();
+              back.close();
+              tell("pushback closed", () -> back.read());
+              tell("pushback closed unread", () -> { back.unread('a'); return "unread"; });
+              tell("pushback closed ready", () -> back.ready());
+              tell("pushback closed skip", () -> back.skip(1));
+              PushbackInputStream bytes = new PushbackInputStream(new ByteArrayInputStream(new byte[] {1, 2, 3, 4, 5, 6}), 3);
+              byte[] held = new byte[3];
+              tell("pushback bytes", () -> { int b = bytes.read(); bytes.unread(b); bytes.unread(-1); return bytes.read() + " " + bytes.read() + " " + bytes.read() + " " + bytes.available(); });
+              tell("pushback bytes array", () -> { bytes.unread(new byte[] {8, 9}); bytes.unread(new byte[] {10, 11, 12}, 1, 1); return bytes.available() + " " + bytes.read(held) + Arrays.toString(held) + bytes.read(held, 0, 2) + Arrays.toString(held); });
+              tell("pushback bytes full", () -> { bytes.unread(new byte[] {1, 2, 3}); bytes.unread(4); return "unread"; });
+              tell("pushback bytes full array", () -> { bytes.unread(new byte[] {5, 6}); return "unread"; });
+              tell("pushback bytes skip", () -> bytes.markSupported() + " " + bytes.skip(2) + " " + bytes.read() + " " + bytes.skip(2) + " " + bytes.skip(100) + " " + bytes.read() + " " + bytes.available() + " " + bytes.skip(-1));
+              tell("pushback bytes reset", () -> { bytes.mark(1); bytes.reset(); return "reset"; });
+              tell("pushback bytes size", () -> new PushbackInputStream(new ByteArrayInputStream(new byte[0]), 0));
+              tell("pushback bytes range", () -> bytes.read(held, 2, 2));
+              tell("pushback bytes nothing", () -> bytes.read(held, 0, 0));
+              bytes.close();
+              bytes.close();
+              tell("pushback bytes closed", () -> bytes.read());
+              tell("pushback bytes closed unread", () -> { bytes.unread(1); return "unread"; });
+              tell("pushback bytes closed available", () -> bytes.available());
+              tell("pushback bytes closed skip", () -> bytes.skip(1));
+              tell("pushback bytes closed nothing", () -> bytes.read(held, 0, 0));
+
+              // streams one after another
+              class Noisy extends ByteArrayInputStream {
+                  final String name;
+                  Noisy(String name, byte[] b) { super(b); this.name = name; }
+                  public void close() throws IOException { System.out.println("closed " + name); super.close(); }
+              }
+              SequenceInputStream both = new SequenceInputStream(new Noisy("first", new byte[] {1, 2}), new Noisy("second", new byte[] {3}));
+              tell("sequence", () -> both.available() + " " + both.read() + " " + both.read(held) + Arrays.toString(held) + " " + both.available() + " " + both.read(held, 0, 0));
+              tell("sequence second", () -> both.read(held) + " " + both.available() + " " + both.read() + " " + both.read(held) + " " + both.available());
+              both.close();
+              Vector<InputStream> many = new Vector<>();
+              many.add(new Noisy("a", new byte[] {7}));
+              many.add(new Noisy("b", new byte[0]));
+              many.add(new Noisy("c", new byte[] {8, 9}));
+              SequenceInputStream all = new SequenceInputStream(many.elements());
+              tell("sequence all", () -> Arrays.toString(all.readAllBytes()) + " " + all.read());
+              many.clear();
+              many.add(new Noisy("d", new byte[] {1}));
+              many.add(new Noisy("e", new byte[] {2}));
+              SequenceInputStream left = new SequenceInputStream(many.elements());
+              tell("sequence transfer", () -> { ByteArrayOutputStream to = new ByteArrayOutputStream(); return left.transferTo(to) + Arrays.toString(to.toByteArray()); });
+              many.clear();
+              many.add(new Noisy("f", new byte[] {1}));
+              many.add(new Noisy("g", new byte[] {2}));
+              SequenceInputStream early = new SequenceInputStream(many.elements());
+              early.read();
+              early.close();
+              tell("sequence closed", () -> early.read() + " " + early.available() + " " + early.read(held));
+              tell("sequence range", () -> new SequenceInputStream(new Noisy("h", new byte[1]), new Noisy("i", new byte[1])).read(held, 2, 2));
+              tell("sequence none", () -> new SequenceInputStream(new Vector<InputStream>().elements()).read());
+              many.clear();
+              many.add(null);
+              tell("sequence null", () -> new SequenceInputStream(many.elements()).read());
+
+              // lines counted
+              LineNumberReader lines = new LineNumberReader(new StringReader("one\r\ntwo\rthree\nfour"));
+              tell("lines", () -> lines.getLineNumber() + lines.readLine() + lines.getLineNumber() + " " + (char) lines.read() + (char) lines.read() + (char) lines.read() + lines.read() + lines.getLineNumber());
+              lines.mark(10);
+              tell("lines marked", () -> lines.readLine() + lines.getLineNumber() + " " + lines.read(buffer) + new String(buffer) + lines.getLineNumber());
+              lines.reset();
+              lines.setLineNumber(40);
+              tell("lines reset", () -> lines.getLineNumber() + " " + lines.skip(7) + " " + lines.getLineNumber() + lines.readLine() + lines.getLineNumber() + lines.readLine() + lines.getLineNumber());
+
+              // the end of the input ends a line that was begun, once; a skip leaves none begun
+              // and a mark keeps none; a mark after \r holds over the \n dropped
+              for (String script : new String[] {"rrr", "aa", "sr", "Sr", "rsr", "rmrtrr", "rl", "lr"}) {
+                  System.out.println(script + ": " + counted("a", script) + "| " + counted("ab", script) + "| " + counted("\r\nb", script));
+              }
+              tell("lines skip", () -> new LineNumberReader(new StringReader("")).skip(-1));
+
+              // what takes characters
+              StringBuilder built = new StringBuilder();
+              StringBuffer buffered = new StringBuffer();
+              StringWriter written = new StringWriter();
+              ByteArrayOutputStream under = new ByteArrayOutputStream();
+              PrintStream printed = new PrintStream(under);
+              CharArrayWriter array = new CharArrayWriter();
+              PrintWriter pw = new PrintWriter(array);
+              for (Appendable each : new Appendable[] {built, buffered, written, printed, array, pw}) {
+                  render(each, "name");
+                  each.append(null).append(null, 1, 3);
+              }
+              pw.flush();
+              System.out.println(built + " " + buffered + " " + written + " " + under + " " + array);
+              Appendable one = built;
+              System.out.println((one instanceof StringBuilder) + " " + (one instanceof Writer) + " " + (((Object) written) instanceof Appendable) + " " + (((Object) "text") instanceof Appendable));
+              tell("append range", () -> one.append("abc", 2, 5));
+              built.append("abc", 1, 2).append(new char[] {'x', 'y'}).append(new char[] {'p', 'q', 'r'}, 1, 2).append((CharSequence) buffered).append(buffered).append((Object) "o");
+              System.out.println(built);
+          }
+      }
+    expected: |
+      null in: -1 -1 0 0 0 0 0 0 0 false
+      null in skipN: java.io.EOFException
+      null in range: java.lang.IndexOutOfBoundsException: Range [3, 3 + 2) out of bounds for length 4
+      null in closed read: java.io.IOException: Stream closed
+      null in closed read array: 0
+      null in closed available: java.io.IOException: Stream closed
+      null in closed all: java.io.IOException: Stream closed
+      null in closed n: java.io.IOException: Stream closed
+      null in closed skip: java.io.IOException: Stream closed
+      null in closed transfer: java.io.IOException: Stream closed
+      null out: written
+      null out range: java.lang.IndexOutOfBoundsException: Range [3, 3 + 2) out of bounds for length 4
+      null out closed: java.io.IOException: Stream closed
+      null out closed array: java.io.IOException: Stream closed
+      null out closed flush: flushed
+      null reader: -1 -1 0 false 0 0 false
+      null reader range: java.lang.IndexOutOfBoundsException: Range [2, 2 + 2) out of bounds for length 3
+      null reader mark: java.io.IOException: mark() not supported
+      null reader closed: java.io.IOException: Stream closed
+      null reader closed array: java.io.IOException: Stream closed
+      null reader closed ready: java.io.IOException: Stream closed
+      null reader closed skip: java.io.IOException: Stream closed
+      null reader closed transfer: java.io.IOException: Stream closed
+      null writer: true
+      null writer range: java.lang.IndexOutOfBoundsException: Range [2, 2 + 2) out of bounds for length 3
+      null writer string range: java.lang.IndexOutOfBoundsException: Range [2, 2 + 2) out of bounds for length 3
+      null writer append range: java.lang.IndexOutOfBoundsException: Range [2, 5) out of bounds for length 3
+      null writer closed: java.io.IOException: Stream closed
+      null writer closed append: java.io.IOException: Stream closed
+      null writer closed append text: java.io.IOException: Stream closed
+      null writer closed flush: java.io.IOException: Stream closed
+      acdfhijklnull 13 13
+      acdfhijklnull xyz 0
+      writer size: java.lang.IllegalArgumentException: Negative initial size: -1
+      writer range: java.lang.IndexOutOfBoundsException: Range [1, 1 + 2) out of bounds for length 2
+      array reader: a 3bcd 1 true true 0
+      array reader marked: f 2 -1 -1 false 0
+      array reader reset: f 2bgh
+      array reader range: java.lang.IndexOutOfBoundsException: Range [2, 2 + 2) out of bounds for length 3
+      array reader closed: java.io.IOException: Stream closed
+      array reader closed ready: java.io.IOException: Stream closed
+      array reader closed mark: java.io.IOException: Stream closed
+      array reader closed skip: java.io.IOException: Stream closed
+      array reader part: c 2 -1 false
+      array reader bounds: java.lang.IllegalArgumentException
+      array reader past: 1
+      array reader negative: java.lang.IllegalArgumentException
+      pushback: zab
+      pushback array: 3qxy2cdy
+      pushback full: java.io.IOException: Pushback buffer overflow
+      pushback full array: java.io.IOException: Pushback buffer overflow
+      pushback ready: true false 2 3 1 1 -1 true
+      pushback mark: java.io.IOException: mark/reset not supported
+      pushback reset: java.io.IOException: mark/reset not supported
+      pushback skip: java.lang.IllegalArgumentException: skip value is negative
+      pushback size: java.lang.IllegalArgumentException: size <= 0
+      pushback range: java.lang.IndexOutOfBoundsException: Range [2, 2 + 2) out of bounds for length 3
+      pushback closed: java.io.IOException: Stream closed
+      pushback closed unread: java.io.IOException: Stream closed
+      pushback closed ready: java.io.IOException: Stream closed
+      pushback closed skip: java.io.IOException: Stream closed
+      pushback bytes: 255 1 2 4
+      pushback bytes array: 7 3[11, 8, 9]2[3, 4, 9]
+      pushback bytes full: java.io.IOException: Push back buffer is full
+      pushback bytes full array: java.io.IOException: Push back buffer is full
+      pushback bytes skip: false 2 3 2 0 -1 0 0
+      pushback bytes reset: java.io.IOException: mark/reset not supported
+      pushback bytes size: java.lang.IllegalArgumentException: size <= 0
+      pushback bytes range: java.lang.IndexOutOfBoundsException: Range [2, 2 + 2) out of bounds for length 3
+      pushback bytes nothing: 0
+      pushback bytes closed: java.io.IOException: Stream closed
+      pushback bytes closed unread: java.io.IOException: Stream closed
+      pushback bytes closed available: java.io.IOException: Stream closed
+      pushback bytes closed skip: java.io.IOException: Stream closed
+      pushback bytes closed nothing: java.io.IOException: Stream closed
+      sequence: 2 1 1[2, 4, 9] 0 0
+      closed first
+      closed second
+      sequence second: 1 0 -1 -1 0
+      closed a
+      closed b
+      closed c
+      sequence all: [7, 8, 9] -1
+      closed d
+      closed e
+      sequence transfer: 2[1, 2]
+      closed f
+      closed g
+      sequence closed: -1 0 -1
+      sequence range: java.lang.IndexOutOfBoundsException: Range [2, 2 + 2) out of bounds for length 3
+      sequence none: -1
+      sequence null: java.lang.NullPointerException
+      lines: 0one1 two102
+      lines marked: three3 3fou3
+      lines reset: 40 7 41our42null42
+      rrr: 97@0 -1@1 -1@1| 97@0 98@0 -1@1| 10@1 98@1 -1@2
+      aa: 1@0 -1@1| 2@0 -1@1| 3@1 -1@2
+      sr: 1@0 -1@0| 1@0 98@0| 1@1 98@1
+      Sr: 1@1 -1@1| 2@1 -1@1| 3@2 -1@2
+      rsr: 97@0 0@1 -1@1| 97@0 1@0 -1@0| 10@1 1@1 98@1
+      rmrtrr: 97@0 @0 -1@1 @0 -1@0 -1@0| 97@0 @0 98@0 @0 98@0 -1@1| 10@1 @1 98@1 @1 98@1 -1@2
+      rl: 97@0 null@1| 97@0 b@1| 10@1 b@2
+      lr: a@1 -1@1| ab@1 -1@1| @1 98@1
+      lines skip: java.lang.IllegalArgumentException: skip() value is negative
+      <am>nullul <am>nullul <am>nullul <am>nullul <am>nullul<am>nullul
+      true false true false
+      append range: java.lang.IndexOutOfBoundsException: Range [2, 5) out of bounds for length 3
+      <am>nullulbxyqr<am>nullul<am>nullulo
 standalone:
   # What a compiler warns of as unchecked is printed on standard error before the
   # program runs, as a JDK prints it, by the interpreter and by a compile; a declaration

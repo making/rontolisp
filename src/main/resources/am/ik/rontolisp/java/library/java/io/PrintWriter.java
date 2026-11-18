@@ -202,6 +202,15 @@ public class PrintWriter extends Writer {
         return format(format, args);
     }
 
+    // A locale changes nothing: each one there is writes as the root does.
+    public PrintWriter printf(java.util.Locale l, String format, Object... args) {
+        return format(format, args);
+    }
+
+    public PrintWriter format(java.util.Locale l, String format, Object... args) {
+        return format(format, args);
+    }
+
     public PrintWriter format(String format, Object... args) {
         text(String.format(format, args), false);
         if (autoFlush) {

@@ -79,6 +79,24 @@ public final class Support {
         return (int) value;
     }
 
+    // StringBuilder.append(CharSequence, int, int), the text made already.
+    public static StringBuilder appendRange(StringBuilder to, String text, int start, int end) {
+        if (start < 0 || start > end || end > text.length()) {
+            throw new IndexOutOfBoundsException(
+                    "Range [" + start + ", " + end + ") out of bounds for length " + text.length());
+        }
+        return to.append(text.substring(start, end));
+    }
+
+    // StringBuilder.append(char[], int, int).
+    public static StringBuilder appendChars(StringBuilder to, char[] chars, int offset, int count) {
+        if (offset < 0 || count < 0 || offset > chars.length - count) {
+            throw new IndexOutOfBoundsException(
+                    "Range [" + offset + ", " + (offset + count) + ") out of bounds for length " + chars.length);
+        }
+        return to.append(new String(chars, offset, count));
+    }
+
     // The charset of a name, for the members that take a name and not a Charset.
     public static Charset charset(String name) throws UnsupportedEncodingException {
         if (!Charset.isSupported(name)) {

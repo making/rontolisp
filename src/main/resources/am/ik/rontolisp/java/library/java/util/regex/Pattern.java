@@ -3,6 +3,8 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util.regex;
 
+import java.util.function.Predicate;
+
 // A compiled pattern of the engine every front end shares (eval/regex.lisp, written
 // from the syntax this class's documentation describes). The native members are the
 // engine's; compile, matches and quote are lowered where they are called, so that a
@@ -92,6 +94,14 @@ public final class Pattern {
 
     public Matcher matcher(CharSequence input) {
         return new Matcher(this, input.toString());
+    }
+
+    public Predicate<String> asPredicate() {
+        return text -> matcher(text).find();
+    }
+
+    public Predicate<String> asMatchPredicate() {
+        return text -> matcher(text).matches();
     }
 
     public String[] split(CharSequence input) {

@@ -11,6 +11,50 @@ public abstract class Reader implements Closeable {
     protected Reader() {
     }
 
+    // A reader at its end from the start, until it is closed.
+    public static Reader nullReader() {
+        return new Reader() {
+            private boolean closed;
+
+            private void open() throws IOException {
+                if (closed) {
+                    throw new IOException("Stream closed");
+                }
+            }
+
+            public int read() throws IOException {
+                open();
+                return -1;
+            }
+
+            public int read(char[] cbuf, int off, int len) throws IOException {
+                Objects.checkFromIndexSize(off, len, cbuf.length);
+                open();
+                return len == 0 ? 0 : -1;
+            }
+
+            public boolean ready() throws IOException {
+                open();
+                return false;
+            }
+
+            public long skip(long n) throws IOException {
+                open();
+                return 0;
+            }
+
+            public long transferTo(Writer out) throws IOException {
+                Objects.requireNonNull(out);
+                open();
+                return 0;
+            }
+
+            public void close() {
+                closed = true;
+            }
+        };
+    }
+
     public abstract int read(char[] cbuf, int off, int len) throws IOException;
 
     public abstract void close() throws IOException;

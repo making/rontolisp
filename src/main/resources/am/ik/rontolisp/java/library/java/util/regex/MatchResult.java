@@ -18,4 +18,20 @@ public interface MatchResult {
     String group(int group);
 
     int groupCount();
+
+    default int start(String name) {
+        throw new UnsupportedOperationException();
+    }
+
+    default int end(String name) {
+        throw new UnsupportedOperationException();
+    }
+
+    default String group(String name) {
+        throw new UnsupportedOperationException();
+    }
+
+    default boolean hasMatch() {
+        throw new UnsupportedOperationException();
+    }
 }

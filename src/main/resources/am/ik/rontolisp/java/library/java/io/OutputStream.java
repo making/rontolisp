@@ -11,6 +11,32 @@ public abstract class OutputStream implements Closeable, Flushable {
     public OutputStream() {
     }
 
+    // A stream that drops what it is given, until it is closed.
+    public static OutputStream nullOutputStream() {
+        return new OutputStream() {
+            private boolean closed;
+
+            private void open() throws IOException {
+                if (closed) {
+                    throw new IOException("Stream closed");
+                }
+            }
+
+            public void write(int b) throws IOException {
+                open();
+            }
+
+            public void write(byte[] b, int off, int len) throws IOException {
+                Objects.checkFromIndexSize(off, len, b.length);
+                open();
+            }
+
+            public void close() {
+                closed = true;
+            }
+        };
+    }
+
     public abstract void write(int b) throws IOException;
 
     public void write(byte[] b) throws IOException {

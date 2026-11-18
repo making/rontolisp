@@ -99,6 +99,12 @@ public class BufferedReader extends Reader {
         }
     }
 
+    // The line read next starts after a \n at hand: a reader over this one took the \r
+    // before it as a line's end.
+    void afterCarriageReturn() {
+        skipLF = true;
+    }
+
     public int read() throws IOException {
         open();
         return more() ? cb[next++] : -1;

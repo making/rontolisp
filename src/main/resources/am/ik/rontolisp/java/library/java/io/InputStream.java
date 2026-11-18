@@ -11,6 +11,74 @@ public abstract class InputStream implements Closeable {
     public InputStream() {
     }
 
+    // A stream at its end from the start, until it is closed.
+    public static InputStream nullInputStream() {
+        return new InputStream() {
+            private boolean closed;
+
+            private void open() throws IOException {
+                if (closed) {
+                    throw new IOException("Stream closed");
+                }
+            }
+
+            public int available() throws IOException {
+                open();
+                return 0;
+            }
+
+            public int read() throws IOException {
+                open();
+                return -1;
+            }
+
+            public int read(byte[] b, int off, int len) throws IOException {
+                Objects.checkFromIndexSize(off, len, b.length);
+                if (len == 0) {
+                    return 0;
+                }
+                open();
+                return -1;
+            }
+
+            public byte[] readNBytes(int len) throws IOException {
+                if (len < 0) {
+                    throw new IllegalArgumentException("len < 0");
+                }
+                open();
+                return new byte[0];
+            }
+
+            public int readNBytes(byte[] b, int off, int len) throws IOException {
+                Objects.checkFromIndexSize(off, len, b.length);
+                open();
+                return 0;
+            }
+
+            public long skip(long n) throws IOException {
+                open();
+                return 0;
+            }
+
+            public void skipNBytes(long n) throws IOException {
+                open();
+                if (n > 0) {
+                    throw new EOFException();
+                }
+            }
+
+            public long transferTo(OutputStream out) throws IOException {
+                Objects.requireNonNull(out);
+                open();
+                return 0;
+            }
+
+            public void close() {
+                closed = true;
+            }
+        };
+    }
+
     public abstract int read() throws IOException;
 
     public int read(byte[] b) throws IOException {

@@ -1041,7 +1041,11 @@
 ;;; is a return.
 ;;;
 ;;; The state of one search is a simple vector:
-;;;   0 the input        1 its length          2 whether the search read the end
+;;;   0 the input        1 where the search's region ends: no character at or
+;;;     past it is taken (the input's length while the region is the whole
+;;;     input)            2 whether the search read the end: the oracle's hitEnd,
+;;;     set where its matcher sets it (measured, node by node: the comments
+;;;     say "measured" at each)
 ;;;   3 the last end: where the last match ended, moved by each sub-match of
 ;;;     the search under way (the oracle's matcher shows it: a search that
 ;;;     fails leaves it where a sub-match put it, and the next one starts there)
@@ -1050,7 +1054,13 @@
 ;;;   6 where \G holds: the last end as the search began
 ;;;   7 the length of the whole input where the state's is a prefix of it,
 ;;;     else nil
-;;;   8 + 2g, 9 + 2g     the start and the end of group g, -1 while it has none
+;;;   8 where ^ and \A hold     9 where $, \z and \Z see the end: the region's
+;;;     bounds while its bounds anchor, else the input's
+;;;   10, 11 the bounds of what a look-behind, a lookahead and a boundary may
+;;;     read: the region's while they are opaque, else the input's
+;;;   12 whether the match found needs the end where it is: more input could
+;;;     undo it (the oracle's requireEnd)
+;;;   13 + 2g, 14 + 2g   the start and the end of group g, -1 while it has none
 ;;;   the rest           the counters, positions and memos the nodes own
 ;;;
 ;;; The compile context is a simple vector: 0 the next free slot, 1 whether a
@@ -1080,9 +1090,28 @@
   (if (and (svref st 5) (< i (svref st 1)))
       nil
       (progn
-        (if (svref st 5) (setf (svref st 2) t))
         (setf (svref st 4) i)
         t)))
+
+(defun rontolisp::%regex-need-end (st)
+  "Marks that an anchor held at the end: the search read it, and more input
+   could undo the match. Answers t."
+  (setf (svref st 2) t)
+  (setf (svref st 12) t)
+  t)
+
+(defun rontolisp::%regex-look-ahead (body st i)
+  "Whether a lookahead's BODY matches from I: it may take characters as far
+   as a lookahead may read, which is past the region's end while the bounds
+   are transparent, and $ inside it sees the end no nearer than that
+   (measured)."
+  (let ((end (svref st 1)) (anchor (svref st 9)))
+    (setf (svref st 1) (svref st 11))
+    (if (< anchor (svref st 11)) (setf (svref st 9) (svref st 11)))
+    (let ((found (funcall body st i)))
+      (setf (svref st 1) end)
+      (setf (svref st 9) anchor)
+      found)))
 
 (defun rontolisp::%regex-char-test (code mode)
   "The test of one literal character."
@@ -1139,9 +1168,14 @@
              (rontolisp::%regex-emit (car (cdr (cdr node)))
                                      #'rontolisp::%regex-sub-accept cx)))
         (if (car (cdr node))
-            (lambda (st i) (and (funcall body st i) (funcall next st i)))
             (lambda (st i)
-              (and (not (funcall body st i)) (funcall next st i))))))
+              (and (rontolisp::%regex-look-ahead body st i) (funcall next st i)))
+            (lambda (st i)
+              ;; measured: a negative lookahead standing at the end of what
+              ;; it may read needs it, whatever its body reads
+              (if (>= i (svref st 11)) (setf (svref st 12) t))
+              (and (not (rontolisp::%regex-look-ahead body st i))
+                   (funcall next st i))))))
      ((eq kind :lookb)
       (rontolisp::%regex-emit-look-behind (car (cdr node))
                                           (car (cdr (cdr node)))
@@ -1152,13 +1186,15 @@
      ((eq kind :ref)
       (rontolisp::%regex-emit-ref (car (cdr node)) (car (cdr (cdr node))) next
                                   cx))
-     ((eq kind :bol) (lambda (st i) (and (= i 0) (funcall next st i))))
+     ((eq kind :bol)
+      (lambda (st i) (and (= i (svref st 8)) (funcall next st i))))
      ((eq kind :bolm) (rontolisp::%regex-emit-line-start (car (cdr node)) next))
      ((eq kind :eol) (rontolisp::%regex-emit-end (car (cdr node)) next))
      ((eq kind :eolm) (rontolisp::%regex-emit-line-end (car (cdr node)) next))
      ((eq kind :endz)
       (lambda (st i)
-        (and (>= i (svref st 1))
+        ;; measured: \z reads the end and, unlike $, does not need it
+        (and (>= i (svref st 9))
              (progn
                (setf (svref st 2) t)
                (funcall next st i)))))
@@ -1196,26 +1232,30 @@
         (t (rontolisp::%regex-fold-equal-p a b))))
 
 (defun rontolisp::%regex-emit-str (text mode next)
+  "A run of literal characters, compared one after another: the end is read
+   only where every character before it was the text's (measured)."
   (let ((n (length text)))
     (lambda (st i)
-      (if (> (+ i n) (svref st 1))
-          (rontolisp::%regex-hit st)
-          (let ((in (svref st 0)) (k 0))
-            (if (= mode 0)
-                (loop
-                  (if (or (>= k n)
-                          (not (char= (char in (+ i k)) (char text k))))
-                      (return nil))
-                  (setq k (+ k 1)))
-                (loop
-                  (if (or (>= k n)
-                          (not
-                           (rontolisp::%regex-code-equal-p
-                            (char-code (char text k))
-                            (char-code (char in (+ i k))) mode)))
-                      (return nil))
-                  (setq k (+ k 1))))
-            (and (= k n) (funcall next st (+ i n))))))))
+      (let* ((in (svref st 0))
+             (len (svref st 1))
+             (k 0)
+             (m (if (> (+ i n) len) (- len i) n)))
+        (if (= mode 0)
+            (loop
+              (if (or (>= k m) (not (char= (char in (+ i k)) (char text k))))
+                  (return nil))
+              (setq k (+ k 1)))
+            (loop
+              (if (or (>= k m)
+                      (not
+                       (rontolisp::%regex-code-equal-p
+                        (char-code (char text k)) (char-code (char in (+ i k)))
+                        mode)))
+                  (return nil))
+              (setq k (+ k 1))))
+        (cond ((= k n) (funcall next st (+ i n)))
+              ((= k m) (rontolisp::%regex-hit st))
+              (t nil))))))
 
 (defun rontolisp::%regex-emit-alt (branches)
   (if (and (cdr branches) (null (cdr (cdr branches))))
@@ -1230,7 +1270,7 @@
 (defun rontolisp::%regex-emit-group (index body next cx)
   "A capturing group: its bounds are set where its body ends and given back
    when what follows fails."
-  (let* ((s (+ 8 (* 2 index)))
+  (let* ((s (+ 13 (* 2 index)))
          (e (+ s 1))
          (tmp (rontolisp::%regex-slot cx))
          (close
@@ -1259,7 +1299,7 @@
       (lambda (st i)
         (declare (ignore st i))
         nil)
-      (let ((s (+ 8 (* 2 index))))
+      (let ((s (+ 13 (* 2 index))))
         (lambda (st i)
           (let ((gs (svref st s)) (ge (svref st (+ s 1))))
             (if (or (< gs 0) (< ge 0))
@@ -1285,22 +1325,25 @@
    carriage return and its newline; never at the end, the start of an empty
    input included (measured: the oracle finds no line there)."
   (lambda (st i)
-    (and (if (>= i (svref st 1))
+    (and (if (>= i (svref st 9))
              (rontolisp::%regex-hit st)
-             (or (= i 0)
-                 (let ((before (char-code (char (svref st 0) (- i 1)))))
-                   (and (rontolisp::%regex-line-end-code-p before unix)
-                        (not
-                         (and (= before 13)
-                              (= (char-code (char (svref st 0) i)) 10)))))))
+             (or (= i (svref st 8))
+                 ;; measured: the character before is read wherever ^ does not
+                 ;; hold outright, opaque bounds or not
+                 (and (> i (svref st 8))
+                      (let ((before (char-code (char (svref st 0) (- i 1)))))
+                        (and (rontolisp::%regex-line-end-code-p before unix)
+                             (not
+                              (and (= before 13)
+                                   (= (char-code (char (svref st 0) i))
+                                      10))))))))
          (funcall next st i))))
 
 (defun rontolisp::%regex-emit-end (unix next)
   "$ without MULTILINE and \\Z: the end, or before the line terminator that
    ends the input."
   (lambda (st i)
-    (let ((len (svref st 1)) (in (svref st 0)))
-      (if (>= i (- len 2)) (setf (svref st 2) t))
+    (let ((len (svref st 9)) (in (svref st 0)))
       (and (cond ((>= i len) t)
                  ((= i (- len 1))
                   (let ((c (char-code (char in i))))
@@ -1311,17 +1354,17 @@
                  ((and (= i (- len 2)) (not unix))
                   (and (= (char-code (char in i)) 13)
                        (= (char-code (char in (+ i 1))) 10)))
-                 (t nil)) (funcall next st i)))))
+                 (t nil))
+           ;; measured: where it holds, the end was read and is needed
+           (rontolisp::%regex-need-end st) (funcall next st i)))))
 
 (defun rontolisp::%regex-emit-line-end (unix next)
   "$ under MULTILINE: the end, or before a line terminator but not between a
    carriage return and its newline."
   (lambda (st i)
-    (let ((len (svref st 1)) (in (svref st 0)))
+    (let ((len (svref st 9)) (in (svref st 0)))
       (and (if (>= i len)
-               (progn
-                 (setf (svref st 2) t)
-                 t)
+               (rontolisp::%regex-need-end st)
                (let ((c (char-code (char in i))))
                  (and (rontolisp::%regex-line-end-code-p c unix)
                       (not
@@ -1340,9 +1383,9 @@
   (let ((word (if cat (funcall cat unicode) nil)))
     (lambda (st i)
       (let* ((in (svref st 0))
-             (len (svref st 1))
+             (len (svref st 11))
              (before
-              (and (> i 0)
+              (and (> i (svref st 10))
                    (let ((c (char-code (char in (- i 1)))))
                      (if (and word (or unicode (>= c 128)))
                          (funcall word in (- i 1))
@@ -1353,7 +1396,9 @@
                     (if (and word (or unicode (>= c 128)))
                         (funcall word in i)
                         (rontolisp::%regex-word-code-p c)))
-                  (rontolisp::%regex-hit st))))
+                  ;; measured: a boundary asked at the end reads it and needs
+                  ;; it, whether it holds or not
+                  (not (rontolisp::%regex-need-end st)))))
         (and (if positive
                  (if before (not after) after)
                  (if before after (not after))) (funcall next st i))))))
@@ -1363,18 +1408,21 @@
 
 (defun rontolisp::%regex-emit-linebreak (next)
   "\\R on its own: a carriage return and its newline, else the return alone
-   or any other line break character."
+   or any other line break character. The end is read where nothing is left,
+   and by a carriage return that ends the input (measured)."
   (lambda (st i)
     (let ((len (svref st 1)) (in (svref st 0)))
-      (if (>= i (- len 1)) (setf (svref st 2) t))
-      (and (< i len)
-           (let ((c (char-code (char in i))))
-             (cond
-              ((and (= c 13) (< (+ i 1) len)
-                    (= (char-code (char in (+ i 1))) 10))
-               (or (funcall next st (+ i 2)) (funcall next st (+ i 1))))
-              ((rontolisp::%regex-linebreak-code-p c) (funcall next st (+ i 1)))
-              (t nil)))))))
+      (if (>= i len)
+          (rontolisp::%regex-hit st)
+          (let ((c (char-code (char in i))))
+            (cond
+             ((and (= c 13) (< (+ i 1) len)
+                   (= (char-code (char in (+ i 1))) 10))
+              (or (funcall next st (+ i 2)) (funcall next st (+ i 1))))
+             ((rontolisp::%regex-linebreak-code-p c)
+              (if (and (= c 13) (>= (+ i 1) len)) (setf (svref st 2) t))
+              (funcall next st (+ i 1)))
+             (t nil)))))))
 
 (defun rontolisp::%regex-emit-grapheme (provider next)
   "\\X: one grapheme cluster."
@@ -1383,8 +1431,11 @@
       (if (>= i len)
           (rontolisp::%regex-hit st)
           (let ((end (funcall provider (svref st 0) i)))
-            (if (>= end len) (setf (svref st 2) t))
-            (funcall next st end))))))
+            ;; measured: a cluster that reaches the end reads no end; one of
+            ;; an input known in part may go on in the rest
+            (if (and (>= end len) (svref st 7)) (setf (svref st 2) t))
+            ;; a cluster the region cuts ends where the region does
+            (funcall next st (if (> end len) len end)))))))
 
 (defun rontolisp::%regex-emit-grapheme-boundary (provider next cx)
   "\\b{g}: the start, the end, or a position the cluster that starts at the
@@ -1399,7 +1450,7 @@
   (let ((fail (svref cx 5)))
     (lambda (st i)
       (let ((len (svref st 1)))
-        (if (>= i len) (setf (svref st 2) t))
+        (if (>= i len) (rontolisp::%regex-need-end st))
         (and (or (= i 0) (>= i len)
                  (let ((last (svref st 3)))
                    (if (>= last len)
@@ -1540,12 +1591,16 @@
     (lambda (st i)
       (let ((old (svref st end))
             (j (- i least))
-            (low (max 0 (rontolisp::%regex-wrap (- i most))))
+            (low (max (svref st 10) (rontolisp::%regex-wrap (- i most))))
+            (anchor (svref st 8))
             (found nil))
         (setf (svref st end) i)
+        ;; measured: inside it ^ holds no further on than where it may read
+        (if (> anchor (svref st 10)) (setf (svref st 8) (svref st 10)))
         (loop
           (if (or found (< j low)) (return nil))
           (if (funcall inner st j) (setq found t) (setq j (- j 1))))
+        (setf (svref st 8) anchor)
         (setf (svref st end) old)
         (and (if positive found (not found)) (funcall next st i))))))
 
@@ -1623,7 +1678,8 @@
       (if (or (>= j limit) (not (funcall test (char-code (char in j)))))
           (return nil))
       (setq j (+ j 1)))
-    (if (>= j len) (setf (svref st 2) t))
+    ;; the end is read only by a run that would take more (measured)
+    (if (and (>= j len) (or (< max 0) (< j (+ i max)))) (setf (svref st 2) t))
     j))
 
 (defun rontolisp::%regex-emit-run (test min max kind next)
@@ -1656,7 +1712,9 @@
                      (if (funcall next st j) (return t))
                      (if (>= j limit)
                          (return
-                          (if (>= j len) (rontolisp::%regex-hit st) nil)))
+                          (if (and (>= j len) (or (< max 0) (< j (+ i max))))
+                              (rontolisp::%regex-hit st)
+                              nil)))
                      (if (not (funcall test (char-code (char in j))))
                          (return nil))
                      (setq j (+ j 1))
@@ -1680,7 +1738,7 @@
    the minimum that takes nothing is not taken; a possessive loop takes it and
    ends."
   (let ((inner (rontolisp::%regex-emit body #'rontolisp::%regex-sub-accept cx))
-        (gs (if index (+ 8 (* 2 index)) nil)))
+        (gs (if index (+ 13 (* 2 index)) nil)))
     (if (eq kind :lazy)
         (lambda (st i)
           (let ((count 0)
@@ -1866,8 +1924,8 @@
 (defun rontolisp::%regex-compile (source flags names fail uni cat graph)
   "The program of the pattern SOURCE under FLAGS (Pattern's bits): a simple
    vector of the entry matcher, the number of groups, the group names, the
-   size of a search's state, the source, the flags and the least length of a
-   match. NAMES is the table a \\N{name} is looked up in, ((name . code) ...),
+   size of a search's state, the source, the flags, the least length of a
+   match and whether the pattern starts with ^ or \A. NAMES is the table a \\N{name} is looked up in, ((name . code) ...),
    or :none. FAIL is called with a description and an index for a pattern
    refused (%regex-syntax-message makes the oracle's text of them), and does
    not return. UNI, CAT and GRAPH are the providers of the Unicode properties,
@@ -1889,12 +1947,17 @@
               (rontolisp::%regex-parse ps)))
          (groups (svref ps 3))
          (cx
-          (vector (+ 8 (* 2 (+ groups 1))) (not (svref ps 11)) 0 nil groups fail
+          (vector (+ 13 (* 2 (+ groups 1))) (not (svref ps 11)) 0 nil groups fail
                   source))
          (entry
           (rontolisp::%regex-emit tree #'rontolisp::%regex-final-accept cx)))
     (vector entry groups (svref ps 4) (svref cx 0) source flags
-            (rontolisp::%regex-min-length tree))))
+            (rontolisp::%regex-min-length tree)
+            (let ((first
+                   (if (and (eq (car tree) :seq) (car (cdr tree)))
+                       (car (car (cdr tree)))
+                       tree)))
+              (eq (car first) :bol)))))
 
 (defun rontolisp::%regex-group-count (program) (svref program 1))
 
@@ -1913,6 +1976,11 @@
     (setf (svref st 3) 0)
     (setf (svref st 5) nil)
     (setf (svref st 7) nil)
+    (setf (svref st 12) nil)
+    (setf (svref st 8) 0)
+    (setf (svref st 9) (length input))
+    (setf (svref st 10) 0)
+    (setf (svref st 11) (length input))
     st))
 
 (defun rontolisp::%regex-search (program st from mode anchor)
@@ -1920,8 +1988,10 @@
    1 for one starting at FROM, 2 for one from FROM to the end. \\G holds at
    ANCHOR. A match leaves its bounds in the state's group slots (group 0 the
    whole match) and its end as the last end."
-  (let ((n (svref program 3)) (k 8))
+  (let ((n (svref program 3)) (k 13))
     (loop (if (>= k n) (return nil)) (setf (svref st k) -1) (setq k (+ k 1))))
+  (setf (svref st 2) nil)
+  (setf (svref st 12) nil)
   (setf (svref st 5) (= mode 2))
   (setf (svref st 6) anchor)
   (let* ((entry (svref program 0))
@@ -1930,7 +2000,9 @@
          (found nil)
          ;; no match starts where fewer characters are left than one takes
          (stop (- len (svref program 6))))
-    (if (= mode 0)
+    ;; measured: a pattern that starts with ^ or \A is tried where the search
+    ;; starts and nowhere else, so its failure reads no end
+    (if (and (= mode 0) (not (svref program 7)))
         (loop
           (if (> i stop)
               (progn
@@ -1944,22 +2016,25 @@
         (setq found (funcall entry st i)))
     (if found
         (progn
-          (setf (svref st 8) i)
-          (setf (svref st 9) (svref st 4))
+          (setf (svref st 13) i)
+          (setf (svref st 14) (svref st 4))
           (setf (svref st 3) (svref st 4))
           t)
         nil)))
 
-(defun rontolisp::%regex-group-start (st group) (svref st (+ 8 (* 2 group))))
+(defun rontolisp::%regex-group-start (st group) (svref st (+ 13 (* 2 group))))
 
-(defun rontolisp::%regex-group-end (st group) (svref st (+ 9 (* 2 group))))
+(defun rontolisp::%regex-group-end (st group) (svref st (+ 14 (* 2 group))))
 ;;; ---------------------------------------------------------------------------
 ;;; Matchers: the searches of one pattern over one input, in a row.
 ;;;
 ;;; A matcher is a simple vector: 0 the program, 1 the search state, 2 the
 ;;; start of the last match (-1 when the last search found none), 3 where \G
 ;;; holds for the next search (-1 until the first search since a reset, which
-;;; holds it where it starts), 4 whether the last search found a match.
+;;; holds it where it starts), 4 whether the last search found a match, 5
+;;; whether the region's bounds anchor (they do until told otherwise), 6
+;;; whether they are transparent (they are not), 7 where the region starts
+;;; (its end is the state's).
 ;;;
 ;;; What the API documentation leaves open was measured against a JDK's
 ;;; Matcher: find starts where the last match ended, one further after an
@@ -1968,7 +2043,7 @@
 ;;; there.
 
 (defun rontolisp::%regex-matcher (program input)
-  (vector program (rontolisp::%regex-state program input) -1 -1 nil))
+  (vector program (rontolisp::%regex-state program input) -1 -1 nil t nil 0))
 
 (defun rontolisp::%regex-matcher-program (m) (svref m 0))
 
@@ -1983,12 +2058,33 @@
   m)
 
 (defun rontolisp::%regex-matcher-reset (m)
-  "Forgets the last match: the next find starts at 0."
+  "Forgets the last match and the region: the next find starts at 0, over
+   the whole input."
+  (rontolisp::%regex-matcher-region m 0 (length (svref (svref m 1) 0))))
+
+(defun rontolisp::%regex-matcher-region (m from to)
+  "Forgets the last match and makes FROM to TO the region the searches stay
+   in: the next find starts at FROM."
   (let ((st (svref m 1)))
-    (setf (svref st 3) 0)
+    (setf (svref st 1) to)
+    (setf (svref st 3) from)
     (setf (svref m 2) -1)
     (setf (svref m 3) -1)
     (setf (svref m 4) nil)
+    (setf (svref m 7) from)
+    (rontolisp::%regex-matcher-bounds m (svref m 5) (svref m 6))))
+
+(defun rontolisp::%regex-matcher-bounds (m anchoring transparent)
+  "Says whether the region's bounds anchor (^ and $ hold at them) and whether
+   they are transparent (a look-behind, a lookahead and a boundary read past
+   them); the last match stays."
+  (let* ((st (svref m 1)) (whole (length (svref st 0))))
+    (setf (svref m 5) anchoring)
+    (setf (svref m 6) transparent)
+    (setf (svref st 8) (if anchoring (svref m 7) 0))
+    (setf (svref st 9) (if anchoring (svref st 1) whole))
+    (setf (svref st 10) (if transparent 0 (svref m 7)))
+    (setf (svref st 11) (if transparent whole (svref st 1)))
     m))
 
 (defun rontolisp::%regex-matcher-search (m from mode)
@@ -1997,7 +2093,7 @@
          (found
           (rontolisp::%regex-search (svref m 0) st from mode
                                     (if (< (svref m 3) 0) from (svref m 3)))))
-    (setf (svref m 2) (if found (svref st 8) -1))
+    (setf (svref m 2) (if found (svref st 13) -1))
     (setf (svref m 3) (svref st 3))
     (setf (svref m 4) found)
     found))
@@ -2016,7 +2112,9 @@
       (let ((found
              (and (<= from (svref st 1))
                   (rontolisp::%regex-matcher-search m from mode))))
-        (if (and (<= from (svref st 1)) (not (svref st 2))) (return found))
+        (if (and (<= from (svref st 1)) (not (svref st 2))
+                 (not (and found (= mode 2))))
+            (return found))
         (let ((more (funcall grow (svref st 0))))
           (if (null more)
               (progn
@@ -2024,9 +2122,17 @@
                 (return found)))
           (setf (svref st 0) more)
           (setf (svref st 1) (length more))
+          (setf (svref st 9) (length more))
+          (setf (svref st 11) (length more))
           (setf (svref st 3) last)
           (setf (svref m 2) first)
           (setf (svref m 3) anchor))))))
+
+(defun rontolisp::%regex-matcher-hit-end (m)
+  (if (svref (svref m 1) 2) t nil))
+
+(defun rontolisp::%regex-matcher-require-end (m)
+  (if (svref (svref m 1) 12) t nil))
 
 (defun rontolisp::%regex-matcher-next-start (m)
   "Where the next find starts: the last end, one further after an empty match."
@@ -2048,23 +2154,23 @@
   (rontolisp::%regex-matcher-search m start 0))
 
 (defun rontolisp::%regex-matcher-looking-at (m)
-  (rontolisp::%regex-matcher-search m 0 1))
+  (rontolisp::%regex-matcher-search m (svref m 7) 1))
 
 (defun rontolisp::%regex-matcher-matches (m)
-  (rontolisp::%regex-matcher-search m 0 2))
+  (rontolisp::%regex-matcher-search m (svref m 7) 2))
 
 (defun rontolisp::%regex-matcher-start (m group)
   "The start of GROUP in the last match, -1 for a group that took no part."
-  (svref (svref m 1) (+ 8 (* 2 group))))
+  (svref (svref m 1) (+ 13 (* 2 group))))
 
 (defun rontolisp::%regex-matcher-end (m group)
-  (svref (svref m 1) (+ 9 (* 2 group))))
+  (svref (svref m 1) (+ 14 (* 2 group))))
 
 (defun rontolisp::%regex-matcher-group (m group)
   "The text of GROUP in the last match, nil for a group that took no part."
   (let* ((st (svref m 1))
-         (s (svref st (+ 8 (* 2 group))))
-         (e (svref st (+ 9 (* 2 group)))))
+         (s (svref st (+ 13 (* 2 group))))
+         (e (svref st (+ 14 (* 2 group)))))
     (if (or (< s 0) (< e 0)) nil (subseq (svref st 0) s e))))
 
 (defun rontolisp::%regex-group-index (program name)
