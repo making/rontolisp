@@ -260,10 +260,12 @@ class ClojureHttpClientTest {
 
 	/**
 	 * A redirect to another origin -- scheme or raw authority -- goes without the
-	 * caller's {@code Authorization}, {@code Cookie}, {@code Origin}, {@code Referer} and
-	 * {@code Host}, as the JDK's {@code newInstanceForRedirection} sends it; one to the
-	 * same origin keeps them. The rule is Lisp over the reply, the same on every
-	 * transport; the corpus has one origin, so the second one is here.
+	 * caller's {@code Authorization}, {@code Cookie}, {@code Origin} and {@code Referer},
+	 * as the oracle's client was seen to send it; one to the same origin keeps them. A
+	 * Location of two slashes and no authority is a path on the same origin, as the
+	 * oracle resolves it ({@code ///seen} is {@code /seen}). The rule is Lisp over the
+	 * reply, the same on every transport; the corpus has one origin, so the second one is
+	 * here.
 	 */
 	@Test
 	void aRedirectToAnotherOriginGoesWithoutTheCredentialHeaders() throws Exception {
@@ -272,14 +274,17 @@ class ClojureHttpClientTest {
 		try {
 			redirect(origin, "/same", "/seen");
 			redirect(origin, "/other", "http://127.0.0.1:" + other.getAddress().getPort() + "/seen");
+			redirect(origin, "/a/slashes", "///seen");
 			String base = "http://127.0.0.1:" + origin.getAddress().getPort();
 			String program = REQUIRE + """
 					(def headers {"authorization" "Bearer t" "cookie" "c=1" "origin" "http://o"
 					              "referer" "http://r" "x-keep" "k"})
 					(println (:body (http/get "%BASE%/same" {:headers headers})))
 					(println (:body (http/get "%BASE%/other" {:headers headers})))
+					(println (:body (http/get "%BASE%/a/slashes" {:headers headers})))
 					""".replace("%BASE%", base);
-			assertThat(interpret(program)).isEqualTo("authorization cookie origin referer x-keep\nx-keep\n");
+			assertThat(interpret(program)).isEqualTo(
+					"authorization cookie origin referer x-keep\nx-keep\nauthorization cookie origin referer x-keep\n");
 		}
 		finally {
 			origin.stop(0);

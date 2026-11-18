@@ -21,11 +21,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * A {@code pom.xml} project's model ({@link MavenResolver#project}) as Maven 3.9.16
- * builds it from a file for tools.deps: every expectation is what
+ * builds it from a file for {@code clj}: every expectation is what
  * {@code clj -Srepro -Spath} (1.12.6, 2026-10-08) put on the classpath for the same tree
- * -- tools.deps reads the source directory, the resources' directories and the first
- * plugin's build-helper configuration off this model, each made canonical against the
- * project -- and every refusal one the oracle refused.
+ * -- the source directory, the resources' directories and the first plugin's build-helper
+ * configuration of this model, each made canonical against the project -- and every
+ * refusal one the oracle refused.
  */
 class MavenProjectTest {
 
@@ -282,9 +282,9 @@ class MavenProjectTest {
 	}
 
 	/**
-	 * A POM checked at the strict level (tools.deps' request): the refusal lists Maven's
-	 * problems in Maven's order, a warning marked; {@code null} where the oracle built
-	 * the model.
+	 * A POM checked at the strict level (the one the oracle's answers fit): the refusal
+	 * lists Maven's problems in Maven's order, a warning marked; {@code null} where the
+	 * oracle built the model.
 	 */
 	@ParameterizedTest(name = "{0}")
 	@MethodSource("strictCases")

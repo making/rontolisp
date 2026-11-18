@@ -8,7 +8,7 @@ refused by name, never approximated.**
 Language-independent: imports `am.ik.artifact` and nothing else of ours (`PackageCycleTest`).
 Consumers: `cli/JavaClassPath` (`--java-dep`, `.kb/java-interop.md` "The program's Java class
 path"); `eval/ClojureDepsRepositories` (`deps.edn` `:mvn/version`, `.kb/clojure-frontend.md`
-"deps.edn"), which reads descriptors and jars one at a time and selects with tools.deps'
+"deps.edn"), which reads descriptors and jars one at a time and selects with clj's
 newest-wins itself -- never `collect`/`resolve`; `mavenVersion` is `versions` (a range's highest)
 or `version` (`RELEASE`/`LATEST`) -- and builds its resolver as `clj` does:
 `:mvn/local-repo` else `~/.m2/repository`, `settings.xml` without its `localRepository` and
@@ -43,13 +43,12 @@ or `version` (`RELEASE`/`LATEST`) -- and builds its resolver as `clj` does:
   repositories -- Maven's `UrlModelSource` has no relativePath parent either), its
   dependencies as the MODEL holds them: the classifier written (a `test-jar` type implies
   none here, `tests` in a descriptor), the type's extension. An invalid POM is a
-  `MavenResolutionException` here (no descriptor to fall back to). What tools.deps'
-  `coord-deps :jar` reads (`model-dep->data`), at its level, STRICT ("Validation levels").
+  `MavenResolutionException` here (no descriptor to fall back to). What `clj` reads of a
+  local jar's `pom.xml`, at its level, STRICT ("Validation levels").
 - `project(Path pom, Map extraSystemProperties)` -> `MavenProject`: a `pom.xml` built as
-  Maven builds a `FileModelSource` without a project directory (tools.deps' `read-model-file`:
-  no `request.setPomFile`, so `${project.basedir}` / `${basedir}` reflect nothing and the
-  path translator does nothing; tools.deps sets the system property `project.basedir=.`, the
-  caller passes it). Its dependencies as `projectDependencies`, its effective
+  Maven builds a `FileModelSource` without a project directory, as `clj` answers for a
+  `:pom` project (`${basedir}/x` stays literal, `${project.basedir}/x` is `x`: the caller
+  passes the system property `project.basedir=.`; `.kb/clojure-frontend.md`, "deps.edn"). Its dependencies as `projectDependencies`, its effective
   `sourceDirectory`, resource directories (a directory-less resource left out) and plugins
   (key, executions: id, goals, `ConfigurationNode` = `Xpp3Dom`), the plugin management merged
   in. A parent is read beside the file first (`localParent`, Maven's `readParentLocally` +
@@ -60,7 +59,7 @@ or `version` (`RELEASE`/`LATEST`) -- and builds its resolver as `clj` does:
   Maven's `readParentLocally` uses maven-artifact's `DefaultArtifactVersion`); else the
   repositories. Up a chain of files.
   A repository parent's own relatedSource (Maven's: beside `~/.m2/.../a-v.pom`) is never
-  looked at. Validated at tools.deps' level, STRICT ("Validation levels"); until
+  looked at. Validated at the level `clj`'s answers fit, STRICT ("Validation levels"); until
   2026-10-08 at the minimal one, so `<resource/>` was read where `clj` refuses it.
 
 ## Effective model (`ModelBuilder`, `ProfileActivator`, `Interpolator`)
@@ -150,13 +149,14 @@ inside a list is not reproduced.
 `DefaultModelValidator` 3.9.16 ported check by check, at `ModelBuildingRequest`'s levels
 (minimal 0, 2.0 20, 3.0 30, 3.1 31; `errOn30`/`errOn31` a warning below the level, an error
 from it). Who builds at which: a descriptor and every import, minimal; `project` and
-`projectDependencies`, STRICT = 3.0 (tools.deps' bare `DefaultModelBuildingRequest`); a parent
+`projectDependencies`, STRICT = 3.0 (a bare `DefaultModelBuildingRequest`'s, the level `clj`'s
+answers fit); a parent
 beside the file at the request's level, a repository parent at 2.0 at most
 (`readParentExternally`'s lenient request: measured, duplicate profile ids refuse a local
 parent and pass in a repository one).
 - Reading (`readModel`): the strict reader from 2.0 on; when only the lenient one reads the
   POM, `Malformed POM <where>: <strict message>` -- an ERROR when the request names the POM
-  file, else a WARNING. tools.deps names none, so its `pom.xml` and a jar's pom only warn and
+  file, else a WARNING. `clj` answers as a request naming none: its `pom.xml` and a jar's pom only warn and
   a parent beside the file errs (measured 2026-10-08, `clj` 1.12.6: `<foo/>` in the project
   accepted, in its `../pom.xml` refused). Neither reader -> fatal `Non-parseable POM`, the
   strict message.
@@ -285,7 +285,7 @@ reports the collection's warnings with that failure; the parity test re-collects
   searches them all.
 - Update policy: Maven's `DefaultUpdatePolicyAnalyzer` (`daily` = local midnight).
 - **Per-repository policies** (`RemoteRepository.releases()` / `snapshots()`, each a
-  `RepositoryPolicy(enabled, update)`, default enabled + `daily`; tools.deps' `:releases` /
+  `RepositoryPolicy(enabled, update)`, default enabled + `daily`; `deps.edn`'s `:releases` /
   `:snapshots`). `RepositoryRoute.effective(releases, snapshots, override)` is
   `DefaultRemoteRepositoryManager.getPolicy`: policy1 = the snapshot policy when snapshots
   are wanted, policy2 = the release policy unless releases are wanted; a disabled one gives
@@ -307,14 +307,15 @@ reports the collection's warnings with that failure; the parity test re-collects
     `Artifact.isSnapshot`'s pattern); the local repository's list is unfiltered.
   - a mirror serves what the repositories it covers serve (`mergeMirrors`: policies merged as
     above, the first dominant).
-  Defaults stay clj's: `CENTRAL` serves snapshots (tools.deps' `standard-repos` set no
-  policy); `--java-dep` declares Central with snapshots disabled, as Maven's super POM does,
+  Defaults stay clj's: `CENTRAL` serves snapshots (the reference's default repositories
+  name no policy); `--java-dep` declares Central with snapshots disabled, as Maven's super POM does,
   so a SNAPSHOT is never asked of it (`JavaClassPath.repositories`).
-  tools.deps `repo-policy` (clj 1.12.6.1673, `:update` read from its source and measured):
-  `:enabled` defaults true, `:update` `:daily`; an INTEGER `:update` is passed on as
-  `(str update)`, the string `"5"`, which Maven reads as an unknown policy and runs as `never`
-  (measured: no metadata request two days after the record, where `:daily` asks) -- not the
-  minutes its docstring promises; `ClojureDepsEdn.repositoryPolicy` does the same.
+  `deps.edn`'s `:releases`/`:snapshots` (clj 1.12.6.1673): `:enabled` defaults true,
+  `:update` `:daily`; an INTEGER `:update` runs as `never` (measured: no metadata request
+  two days after the record, where `:daily` asks) -- not the minutes the reference promises;
+  `ClojureDepsEdn.repositoryPolicy` does the same. Until 2026-11-18 this note also said how
+  the oracle passes the integer on, read from its source; that reading is withdrawn
+  (`.todo/j95`).
 - `file:` repositories are read in place. URLs are the layout path percent-encoded
   (Resolver's `new URI(null, null, path, null)`); a path leaving the repository's base or
   the local root is never fetched.

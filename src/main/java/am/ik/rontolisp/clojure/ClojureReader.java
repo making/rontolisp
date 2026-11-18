@@ -1163,7 +1163,7 @@ final class ClojureReader {
 	 * it, positioned after the closing brace). A key repeats when the two read forms are
 	 * {@code =} ({@link #equivKey}); two forms that only evaluate to equal keys are the
 	 * runtime's to refuse. EDN data keeps its own check, which words the refusal as
-	 * {@code tools.deps} does.
+	 * {@code clj} does reading a {@code deps.edn}.
 	 */
 	private LispVal readBraced() {
 		next();

@@ -90,10 +90,10 @@ public final class ClojureDepsRepositories implements ClojureRepositories {
 	}
 
 	/**
-	 * The oracle's {@code canonicalize :mvn}: {@code RELEASE} and {@code LATEST} through
-	 * Maven's version resolver, a range to the highest version Maven's version range
-	 * resolver admits ({@code Unable to resolve LIB version: RANGE} when none), any other
-	 * version itself.
+	 * A Maven coordinate's version made concrete: {@code RELEASE} and {@code LATEST}
+	 * through Maven's version resolver, a range to the highest version Maven's version
+	 * range resolver admits ({@code Unable to resolve LIB version: RANGE} when none), any
+	 * other version itself.
 	 */
 	@Override
 	public String mavenVersion(MavenSource source, MavenArtifact artifact) {
@@ -139,9 +139,10 @@ public final class ClojureDepsRepositories implements ClojureRepositories {
 	}
 
 	/**
-	 * The project the oracle's {@code read-model-file} reads: the model built from the
-	 * file, the system property {@code project.basedir} set to {@code .} as tools.deps
-	 * sets it.
+	 * A {@code pom.xml} project as {@code clj} reads one: the model built from the file,
+	 * the system property {@code project.basedir} set to {@code .} ({@code clj} 1.12.6
+	 * answers {@code ${project.basedir}/x} as {@code x}, {@code .kb/clojure-frontend.md}
+	 * "deps.edn").
 	 */
 	@Override
 	public PomProject pomProject(MavenSource source, String pom) {

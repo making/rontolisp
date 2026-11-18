@@ -22742,129 +22742,131 @@
                 (rontolisp::%clojure-http-body body))))))
 
 (defun rontolisp::%clojure-http-split (url)
-  "The parts (scheme authority path query fragment) of the URI reference URL,
-   each nil when absent but the path, a string."
-  (let* ((hash (position #\# url))
-         (fragment (if hash (subseq url (+ hash 1))))
-         (rest (if hash (subseq url 0 hash) url))
-         (mark (position #\? rest))
-         (query (if mark (subseq rest (+ mark 1))))
-         (rest (if mark (subseq rest 0 mark) rest))
-         (colon (position #\: rest :end (position #\/ rest)))
-         (scheme (if (and colon (> colon 0)) (subseq rest 0 colon)))
-         (rest (if scheme (subseq rest (+ colon 1)) rest))
+  "The parts of the URI reference URL as RFC 3986's appendix B cuts them, the
+   list (scheme authority path query fragment): each nil when absent but the
+   path, a string. Two slashes with nothing before the next slash are no
+   authority, and the path is what follows them (the oracle resolves ///g as
+   /g and //?q as ?q)."
+  (let* ((n (length url))
+         (stop (rontolisp::%clojure-http-first-of url ":/?#" 0))
+         (scheme
+          (if (and (< stop n) (> stop 0) (char= (char url stop) #\:))
+              (subseq url 0 stop)))
+         (at (if scheme (+ stop 1) 0))
+         (path-end (rontolisp::%clojure-http-first-of url "?#" at))
+         (hash (position #\# url :start path-end))
          (authority nil))
-    (if (and (>= (length rest) 2) (string= (subseq rest 0 2) "//"))
-        (let ((slash (or (position #\/ rest :start 2) (length rest))))
-          (setq authority (subseq rest 2 slash))
-          (setq rest (subseq rest slash))))
-    (list scheme authority rest query fragment)))
+    (if (and (<= (+ at 2) path-end) (char= (char url at) #\/)
+             (char= (char url (+ at 1)) #\/))
+        (let ((authority-end
+               (or (position #\/ url :start (+ at 2) :end path-end) path-end)))
+          (if (> authority-end (+ at 2))
+              (setq authority (subseq url (+ at 2) authority-end)))
+          (setq at authority-end)))
+    (list scheme authority (subseq url at path-end)
+          (if (and (< path-end n) (char= (char url path-end) #\?))
+              (subseq url (+ path-end 1) (or hash n)))
+          (if hash (subseq url (+ hash 1))))))
 
-(defun rontolisp::%clojure-http-normalize (path)
-  "java.net.URI's normalize of PATH: every . segment and every .. segment with
-   the segment ahead of it dropped, a leading .. kept, redundant slashes
-   gone."
-  (let ((absolute (and (> (length path) 0) (char= (char path 0) #\/)))
-        (segments nil)
-        (directory nil)
-        (start 0))
+(defun rontolisp::%clojure-http-remove-dots (path)
+  "PATH with its dot segments removed, as the oracle's client removes them from
+   a relative reference merged with its base (java.net.URI's answers, probed):
+   RFC 3986's remove_dot_segments, but for two departures. Empty segments go
+   too (a//b is a/b). A .. with no segment of its own before it stays where it
+   is (/a/../../g is /../g, where the RFC answers /g). The result ends in a
+   slash when the input's last step was one, a ., or a .. that removed a
+   segment."
+  (let ((kept nil) (directory nil) (from 0) (n (length path)))
     (loop
-      (let* ((slash (position #\/ path :start start))
-             (segment (subseq path start (or slash (length path)))))
-        (cond ((string= segment ".") (setq directory t))
-              ((string= segment "..")
-               (if (and segments (not (string= (car segments) "..")))
-                   (setq segments (cdr segments))
-                   (setq segments (cons segment segments)))
-               (setq directory t))
-              ((string= segment "")
-               (if (null slash) (setq directory (or directory segments))))
-              (t
-               (setq segments (cons segment segments))
-               (setq directory nil)))
-        (if (null slash) (return nil))
-        (setq start (+ slash 1))))
-    (let ((out (make-string-output-stream)) (first t))
-      (if absolute (write-char #\/ out))
-      (dolist (s (reverse segments))
-        (if first (setq first nil) (write-char #\/ out))
-        (write-string s out))
-      (if (and directory segments) (write-char #\/ out))
+      (let* ((slash (or (position #\/ path :start from) n))
+             (segment (subseq path from slash)))
+        (cond
+         ((or (string= segment "") (string= segment ".")) (setq directory t))
+         ((and (string= segment "..") kept (not (string= (car kept) "..")))
+          (setq kept (cdr kept))
+          (setq directory t))
+         (t
+          (setq kept (cons segment kept))
+          (setq directory nil)))
+        (if (>= slash n) (return nil))
+        (setq from (+ slash 1))))
+    (let ((out (make-string-output-stream)))
+      (if (and (> n 0) (char= (char path 0) #\/)) (write-char #\/ out))
+      (setq kept (reverse kept))
+      (loop
+        (if (null kept) (return nil))
+        (write-string (car kept) out)
+        (setq kept (cdr kept))
+        (if (or kept directory) (write-char #\/ out)))
       (get-output-stream-string out))))
 
 (defun rontolisp::%clojure-http-resolve (base location)
-  "The redirect target LOCATION resolved against the request URL BASE, as
-   java.net.URI's resolve answers it."
-  (let ((b (rontolisp::%clojure-http-split base))
-        (c (rontolisp::%clojure-http-split location)))
-    (if (car c)
+  "The URL a redirect's LOCATION names from the request URL BASE: RFC 3986's
+   section 5.2.2 with the oracle's departures (java.net.URI's answers, which
+   its client's redirects were probed to follow). Only a relative path has its
+   dot segments removed: an absolute LOCATION, a network path and an absolute
+   path are taken as written. A LOCATION of a fragment alone keeps the base's
+   path and query; any other empty path is the base's directory, and the
+   base's query goes (where the RFC keeps both)."
+  (let ((ref (rontolisp::%clojure-http-split location)))
+    (if (car ref)
         location
-        (let ((scheme (car b))
-              (authority (nth 1 b))
-              (path (nth 2 b))
-              (query (nth 3 c))
-              (fragment (nth 4 c))
-              (cpath (nth 2 c)))
-          (cond ((and (null (nth 1 c)) (string= cpath "") fragment (null query))
-                 (setq query (nth 3 b))
-                 (setq path (nth 2 b)))
-                ((nth 1 c)
-                 (setq authority (nth 1 c))
-                 (setq path cpath))
-                ((and (> (length cpath) 0) (char= (char cpath 0) #\/))
-                 (setq path cpath))
-                (t (let ((slash (position #\/ path :from-end t)))
-                     (setq path
-                           (rontolisp::%clojure-http-normalize
-                            (if slash
-                                (concatenate 'string (subseq path 0 (+ slash 1))
-                                             cpath)
-                                (concatenate 'string "/" cpath)))))))
-          (concatenate 'string scheme ":"
-                       (if authority (concatenate 'string "//" authority) "")
-                       path (if query (concatenate 'string "?" query) "")
-                       (if fragment (concatenate 'string "#" fragment) ""))))))
+        (let* ((at (rontolisp::%clojure-http-split base))
+               (path (nth 2 ref))
+               (query (nth 3 ref))
+               (authority (or (nth 1 ref) (nth 1 at))))
+          (cond ((nth 1 ref))
+                ((and (string= path "") (null query) (nth 4 ref))
+                 (setq path (nth 2 at))
+                 (setq query (nth 3 at)))
+                ((and (> (length path) 0) (char= (char path 0) #\/)))
+                (t
+                 (let ((slash (position #\/ (nth 2 at) :from-end t)))
+                   (setq path
+                         (rontolisp::%clojure-http-remove-dots
+                          (cond (slash (concatenate 'string
+                                        (subseq (nth 2 at) 0 (+ slash 1)) path))
+                                ((string= path "") "")
+                                (t (concatenate 'string "/" path))))))))
+          (concatenate 'string (car at) ":"
+           (if authority (concatenate 'string "//" authority) "") path
+           (if query (concatenate 'string "?" query) "")
+           (if (nth 4 ref) (concatenate 'string "#" (nth 4 ref)) ""))))))
 
 (defun rontolisp::%clojure-http-redirect (res url method fields body hops)
-  "The request the redirect reply RES to URL leads to under the JDK's NORMAL
-   policy -- (url method fields body) -- or NIL: a 301, 302, 303, 307 or 308
-   with a Location the client may follow (no https to http) on hop HOPS of at
-   most four. 303 turns any method and 301/302 a POST into a GET, dropping the
-   body; a target of another origin goes without the caller's Authorization,
-   Cookie, Origin, Referer and Host."
+  "The request the reply RES to (URL METHOD FIELDS BODY) leads to, the list
+   (url method fields body), or nil when RES is the answer; HOPS redirects
+   were followed before it. As the oracle's client was seen to follow them
+   under its default policy: a 301, 302, 303, 307 or 308, at most four in a
+   row, to the same scheme in any case or to https; no Location is its
+   IOException. A 303, and a 301 or 302 of a POST, is a GET without a body;
+   any other keeps the method and the body. Off the origin (the scheme in any
+   case and the authority as written) the caller's Authorization, Cookie,
+   Origin and Referer stay behind."
   (let ((status (getf res :status)))
-    (if (and (member status '(301 302 303 307 308)) (< (+ hops 1) 5))
+    (if (and (member status '(301 302 303 307 308)) (< hops 4))
         (let ((location
                (cdr (assoc "location" (getf res :headers) :test #'string=))))
           (if (null location)
               (rontolisp::%clojure-io-exception
                "java.io.UncheckedIOException: java.io.IOException: Invalid redirection"))
           (let* ((target (rontolisp::%clojure-http-resolve url location))
-                 (from (rontolisp::%clojure-http-split url))
                  (to (rontolisp::%clojure-http-split target))
-                 (next-method
-                  (cond ((= status 303) "GET")
-                        ((and (member status '(301 302))
-                              (string= method "POST"))
-                         "GET")
-                        (t method))))
-            (if (or (string-equal (car to) (car from))
-                    (string-equal (car to) "https"))
-                (let ((same-origin
-                       (and (string-equal (car to) (car from))
-                            (equal (nth 1 to) (nth 1 from))))
-                      (dropped
-                       '("authorization" "cookie" "origin" "referer" "host")))
-                  (list target next-method
-                        (if same-origin
-                            fields
-                            (remove-if (lambda (f)
-                                         (member (string-downcase (car f))
-                                                 dropped
-                                                 :test #'string=)) fields))
-                        (if (and (/= status 303) (string= next-method method))
-                            body
-                            nil)))))))))
+                 (from (rontolisp::%clojure-http-split url))
+                 (same-scheme (string-equal (car to) (car from)))
+                 (as-get
+                  (or (= status 303)
+                      (and (< status 303) (string= method "POST")))))
+            (if (or same-scheme (string-equal (car to) "https"))
+                (list target (if as-get "GET" method)
+                      (if (and same-scheme (equal (nth 1 to) (nth 1 from)))
+                          fields
+                          (remove-if (lambda (field)
+                                       (member (string-downcase (car field))
+                                               '("authorization" "cookie"
+                                                 "origin" "referer")
+                                               :test #'string=)) fields))
+                      (if as-get nil body))))))))
 
 (defun rontolisp::%clojure-http-text (c)
   "The oracle's toString of the condition C: an exception's report already

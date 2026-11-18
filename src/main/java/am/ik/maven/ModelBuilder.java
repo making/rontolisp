@@ -24,8 +24,8 @@ import org.jspecify.annotations.Nullable;
 /**
  * The effective model of a POM, built as Maven 3.9's {@code DefaultModelBuilder} builds a
  * model without a project directory or plugin processing, at a validation level
- * ({@link ModelValidator}): minimal for a dependency's POM, strict for what tools.deps
- * builds:
+ * ({@link ModelValidator}): minimal for a dependency's POM, strict for the
+ * {@code pom.xml} files {@code clj} reads:
  * <ol>
  * <li>each POM of the parent chain is read (strictly from level 2.0 on, leniently when
  * the strict reader refuses it) and its raw model validated, a fatal problem stopping the
@@ -297,11 +297,11 @@ final class ModelBuilder {
 
 	/**
 	 * Returns the effective model of a POM file, built as Maven builds one from a
-	 * {@code FileModelSource} without a project directory (what tools.deps asks for): a
-	 * parent is looked for at its {@code relativePath} beside the file first -- and so on
-	 * up a chain read from files -- then in the repositories. The request names no POM
-	 * file, so what only the lenient reader reads of this one is a warning; of a parent
-	 * read beside it, an error.
+	 * {@code FileModelSource} without a project directory (what {@code clj}'s answers
+	 * fit): a parent is looked for at its {@code relativePath} beside the file first --
+	 * and so on up a chain read from files -- then in the repositories. The request names
+	 * no POM file, so what only the lenient reader reads of this one is a warning; of a
+	 * parent read beside it, an error.
 	 * @param pom the POM file
 	 * @param level the validation level
 	 * @return the model

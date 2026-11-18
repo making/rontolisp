@@ -23,19 +23,20 @@ import am.ik.rontolisp.reader.LispReadException;
 import org.jspecify.annotations.Nullable;
 
 /**
- * One {@code deps.edn} read the way the oracle's tools.deps reads it ({@code clj}
- * 1.12.6's {@code clojure.tools.deps.edn/read-deps}): one EDN value, validated against
- * the oracle's spec ({@code clojure.tools.deps.specs}) and refused in its words
- * ({@code Error validating deps in <file>. Found: <value>, expected: <pred>, in:
+ * One {@code deps.edn} read as {@code clj} 1.12.6 reads it: one EDN value, checked
+ * against the shapes the deps.edn reference gives its keys and refused in the oracle's
+ * words ({@code Error validating deps in <file>. Found: <value>, expected: <pred>, in:
  * <path>}), its unqualified lib names canonicalized ({@code foo} is {@code foo/foo}). The
  * whole map is read: {@code :paths}, {@code :deps}, {@code :aliases}, {@code :mvn/repos},
  * {@code :mvn/local-repo}, {@code :tools/usage}, {@code :deps/prep-lib}. Any other key is
  * ignored, like the oracle's open map (measured 2026-10-08: {@code :foo},
- * {@code :foo/bar} and {@code :deps/whatever} all pass). Several maps merge left to right
- * like {@code merge-edns}: a map value merges into the one before it, anything else
- * replaces it.
+ * {@code :foo/bar} and {@code :deps/whatever} all pass). Several maps merge left to
+ * right: a map value merges into the one before it, anything else replaces it.
  */
 final class ClojureDepsEdn {
+
+	/** The {@code nil} an argument map holds for a key an alias gave no value. */
+	private static final LispVal NIL = new LispSymbol("nil");
 
 	/** The keys whose presence names a coordinate's type, per type. */
 	private static final Map<String, List<String>> TYPE_KEYS = typeKeys();
@@ -282,7 +283,7 @@ final class ClojureDepsEdn {
 
 	/**
 	 * Reads one {@code deps.edn}: exactly one EDN value, validated against the oracle's
-	 * spec. An empty file is the empty map, like the oracle's {@code read-edn}.
+	 * spec. An empty file, and {@code nil}, is the empty map, as {@code clj} answers.
 	 * @param text the file's text
 	 * @param path its path, for the refusals
 	 * @return the map
@@ -314,9 +315,9 @@ final class ClojureDepsEdn {
 	}
 
 	/**
-	 * Merges maps left to right like the oracle's {@code merge-edns}: a key's map value
-	 * merges into the earlier one (a later entry replaces an earlier one in place), any
-	 * other value replaces it, and an absent key keeps the earlier value.
+	 * Merges maps left to right, as {@code clj} merges the root, user and project maps: a
+	 * key's map value merges into the earlier one (a later entry replaces an earlier one
+	 * in place), any other value replaces it, and an absent key keeps the earlier value.
 	 * @param maps the maps, earliest first
 	 * @return the merged map
 	 */
@@ -353,11 +354,12 @@ final class ClojureDepsEdn {
 	}
 
 	/**
-	 * The Maven repositories a merged map names, the oracle's {@code remote-repos}:
-	 * {@code central}, then {@code clojars}, then the others in the map's order, a
-	 * {@code nil} one removed, each with its {@code :releases} and {@code :snapshots}
-	 * policies; and its {@code :mvn/local-repo}. Only the top-level maps name them: a
-	 * dependency's own {@code :mvn/repos} is never read, as the oracle reads none.
+	 * The Maven repositories a merged map names: {@code central}, then {@code clojars}
+	 * (the reference: always checked first, in this order), then the others in the map's
+	 * order, a {@code nil} one removed, each with its {@code :releases} and
+	 * {@code :snapshots} policies; and its {@code :mvn/local-repo}. Only the top-level
+	 * maps name them: a dependency's own {@code :mvn/repos} is never read (the reference:
+	 * repositories declared in a dependency are not used).
 	 * @param merged the merged map
 	 * @param files where a relative {@code :mvn/local-repo} is resolved
 	 * @param projectDir the directory it is relative to, or {@code null} for the working
@@ -389,11 +391,11 @@ final class ClojureDepsEdn {
 	}
 
 	/**
-	 * A {@code :releases} or {@code :snapshots} map as tools.deps' {@code repo-policy}
-	 * reads it: {@code :enabled} (default true) and {@code :update} (default
-	 * {@code :daily}). An integer {@code :update} is documented as minutes, but
-	 * tools.deps hands Maven the string {@code "5"} (measured with clj 1.12.6,
-	 * 2026-10-08), which Maven reads as an unknown policy and treats as {@code never}.
+	 * A {@code :releases} or {@code :snapshots} map: {@code :enabled} (default true) and
+	 * {@code :update} (default {@code :daily}), as the reference documents them. An
+	 * integer {@code :update} is documented as minutes, but {@code clj} 1.12.6 runs it as
+	 * {@code never} (measured 2026-10-08: no metadata request two days after the record,
+	 * where {@code :daily} asks), and so does this.
 	 * @param map the map, or {@code null} when the repository names none
 	 * @return the policy
 	 */
@@ -429,10 +431,12 @@ final class ClojureDepsEdn {
 
 	/**
 	 * The directories {@code :paths} names, its alias keywords resolved through the
-	 * aliases recursively like the oracle's {@code chase-key}: an alias's collection
-	 * contributes its strings and resolves its keywords; a keyword naming no alias, and
-	 * anything else in a collection, contributes nothing; a value that is no collection
-	 * (a number, a keyword) is the oracle's {@code Don't know how to create ISeq from}.
+	 * aliases recursively, as {@code clj} 1.12.6 answers (2026-11-18): an alias's vector,
+	 * list or set contributes its strings in order, repeats kept, and resolves its
+	 * keywords; a keyword naming no alias, a string or a map value, and anything else in
+	 * a collection, contribute nothing; a number or a keyword value is the oracle's
+	 * {@code Don't know how to create ISeq from}. An alias naming itself is refused here,
+	 * where the oracle overflows its stack.
 	 * @param map the merged map
 	 * @return the directories, as written
 	 */
@@ -441,10 +445,12 @@ final class ClojureDepsEdn {
 	}
 
 	/**
-	 * The directories of the source path's own part, like the oracle's
-	 * {@code flatten-paths}: the selected aliases' {@code :extra-paths} first, then
-	 * {@code :paths}, each resolved through the aliases like {@code chase-key}, where
-	 * {@code :paths} and {@code :extra-paths} are themselves names a keyword may chase.
+	 * The directories of the source path's own part: the selected aliases'
+	 * {@code :extra-paths} first, then {@code :paths}, each resolved through the aliases
+	 * as {@link #flattenPaths(DepsMap)} resolves them, where {@code :paths} and
+	 * {@code :extra-paths} are themselves names a keyword may resolve to ({@code clj}
+	 * 1.12.6: {@code :extra-paths [:paths "e"]} over {@code :paths ["s"]} is
+	 * {@code s:e:s}).
 	 * @param map the merged map
 	 * @param extraPaths the argument map's {@code :extra-paths}, or {@code null}
 	 * @return the directories, as written
@@ -512,12 +518,11 @@ final class ClojureDepsEdn {
 	}
 
 	/**
-	 * Every alias the maps define, each merged across the maps like the oracle's
-	 * {@code create-basis} ({@code (apply merge-with merge (map :aliases edn-maps))}): an
-	 * alias two maps define is one map, the later map's keys replacing the earlier's, so
-	 * a project's {@code :test} alias keeps the root map's {@code :extra-paths ["test"]}
-	 * unless it names its own (measured on {@code clj} 1.12.6, 2026-10-08). An alias
-	 * value that is no map replaces the earlier one.
+	 * Every alias the maps define, each merged across the maps: an alias two maps define
+	 * is one map, the later map's keys replacing the earlier's, so a project's
+	 * {@code :test} alias keeps the root map's {@code :extra-paths ["test"]} unless it
+	 * names its own (measured on {@code clj} 1.12.6, 2026-10-08). An alias value that is
+	 * no map replaces the earlier one.
 	 * @param maps the maps, earliest first
 	 * @return the aliases by keyword spelling
 	 */
@@ -538,16 +543,21 @@ final class ClojureDepsEdn {
 	}
 
 	/**
-	 * The arguments the selected aliases name, merged like the oracle's
-	 * {@code merge-alias-maps}: per key, {@code :extra-deps}, {@code :override-deps},
+	 * The arguments the selected aliases name, merged alias by alias as {@code clj}
+	 * 1.12.6 merges them (its basis's {@code :argmap}, compared over 300 generated alias
+	 * sets, 2026-11-18): per key, {@code :extra-deps}, {@code :override-deps},
 	 * {@code :default-deps}, {@code :replace-deps}, {@code :deps},
 	 * {@code :classpath-overrides} and {@code :ns-aliases} merge; {@code :extra-paths},
 	 * {@code :replace-paths} and {@code :paths} append without repeats; {@code :jvm-opts}
 	 * appends; {@code :main-opts}, {@code :exec-fn} and {@code :ns-default} take the last
 	 * non-nil value; {@code :exec-args} merges two maps and otherwise takes the last
-	 * non-nil value; any other key merges a map and replaces anything else. An alias no
-	 * map defines contributes nothing (the oracle warns of it,
-	 * {@link #undeclaredAliases}), as does an alias whose value is no map.
+	 * non-nil value; any other key merges a map into a map and is otherwise replaced. The
+	 * rule applies to a key's first value too: one alias's {@code :paths} loses its
+	 * repeats, and a {@code nil} one is an empty vector. A key is kept with a {@code nil}
+	 * value, which {@link ArgMap#get} answers as absent. An alias no map defines
+	 * contributes nothing (the oracle warns of it, {@link #undeclaredAliases}), as does
+	 * an alias whose value is no map. One difference, in keys nothing here reads: a map
+	 * merged into a vector the oracle appends to it.
 	 * @param aliasData every alias, {@link #aliasData}
 	 * @param selected the selected aliases' keyword spellings, in order
 	 * @return the argument map
@@ -563,20 +573,22 @@ final class ClojureDepsEdn {
 			for (int i = 0; i + 1 < kvs.size(); i += 2) {
 				String key = kvs.get(i) instanceof LispSymbol symbol ? symbol.name() : ClojureEdn.print(kvs.get(i));
 				LispVal earlier = out.get(key);
-				LispVal merged = mergeArg(key, earlier, kvs.get(i + 1));
-				if (merged == null) {
-					out.remove(key);
-				}
-				else {
-					out.put(key, merged);
-				}
+				LispVal merged = mergeArg(key, earlier == null ? null : nilAsNull(earlier), nilAsNull(kvs.get(i + 1)));
+				out.put(key, merged == null ? NIL : merged);
 			}
 		}
 		return new ArgMap(out);
 	}
 
-	private static @Nullable LispVal mergeArg(String key, @Nullable LispVal earlier, LispVal value) {
-		LispVal v = isNil(value) ? null : value;
+	private static @Nullable LispVal nilAsNull(LispVal value) {
+		return isNil(value) ? null : value;
+	}
+
+	/**
+	 * A key's value merged into what the aliases before gave it, either side {@code null}
+	 * when absent or {@code nil}; {@code null} answers {@code nil}.
+	 */
+	private static @Nullable LispVal mergeArg(String key, @Nullable LispVal earlier, @Nullable LispVal v) {
 		return switch (key) {
 			case ":deps", ":replace-deps", ":extra-deps", ":override-deps", ":default-deps", ":classpath-overrides",
 					":ns-aliases" ->
@@ -601,11 +613,8 @@ final class ClojureDepsEdn {
 		return isMap(earlier) && isMap(v) ? mergeMapDatums(earlier, v) : v;
 	}
 
-	/** {@code (vec (concat earlier v))}, without repeats when asked. */
-	private static @Nullable LispVal append(@Nullable LispVal earlier, @Nullable LispVal v, boolean unique) {
-		if (earlier == null && v == null) {
-			return null;
-		}
+	/** One vector of both sides' members, earlier first, without repeats when asked. */
+	private static LispVal append(@Nullable LispVal earlier, @Nullable LispVal v, boolean unique) {
 		List<LispVal> items = new ArrayList<>();
 		items.add(ClojureReader.VECTOR);
 		Set<String> seen = new HashSet<>();
@@ -671,9 +680,10 @@ final class ClojureDepsEdn {
 	/**
 	 * The project map with the argument map's {@code :replace-deps} and
 	 * {@code :replace-paths} (and their older spellings {@code :deps} and {@code :paths})
-	 * in place of its own, like the oracle's {@code tools.deps/tool}: only the project's
-	 * map, so the root and user maps still merge under it -- the root map's
-	 * {@code org.clojure/clojure} stays.
+	 * in place of its own, {@code :paths} then {@code :replace-paths}, repeats kept: only
+	 * the project's map, so the root and user maps still merge under it -- the root map's
+	 * {@code org.clojure/clojure} stays ({@code clj} 1.12.6: {@code :replace-deps {}}
+	 * keeps the clojure jar, 2026-11-18).
 	 * @param project the project map ({@link #EMPTY} when there is none)
 	 * @param args the argument map
 	 * @return the tooled map
@@ -691,8 +701,7 @@ final class ClojureDepsEdn {
 		}
 		List<PathRef> toolPaths = project.paths();
 		if (paths != null || replacePaths != null) {
-			LispVal appended = append(paths, replacePaths, false);
-			toolPaths = appended == null ? List.of() : pathRefs(appended);
+			toolPaths = pathRefs(append(paths, replacePaths, false));
 		}
 		return new DepsMap(toolPaths, toolDeps, project.aliases(), project.mvnRepos(), project.mvnLocalRepo(),
 				project.prepLib());
@@ -713,10 +722,11 @@ final class ClojureDepsEdn {
 		/**
 		 * A key's value.
 		 * @param key the keyword spelling
-		 * @return the value, or {@code null} when absent
+		 * @return the value, or {@code null} when absent or {@code nil}
 		 */
 		@Nullable LispVal get(String key) {
-			return this.entries.get(key);
+			LispVal value = this.entries.get(key);
+			return value == null || isNil(value) ? null : value;
 		}
 
 		/**
@@ -727,7 +737,7 @@ final class ClojureDepsEdn {
 		 * @return the libs and coordinates, or {@code null} when absent
 		 */
 		@Nullable SequencedMap<Lib, @Nullable Coord> libs(String key) {
-			LispVal value = this.entries.get(key);
+			LispVal value = get(key);
 			return value == null ? null : libs(value, key);
 		}
 
@@ -753,7 +763,7 @@ final class ClojureDepsEdn {
 		 */
 		SequencedMap<Lib, String> classpathOverrides() {
 			SequencedMap<Lib, String> out = new LinkedHashMap<>();
-			LispVal value = this.entries.get(":classpath-overrides");
+			LispVal value = get(":classpath-overrides");
 			if (value == null) {
 				return out;
 			}
@@ -776,7 +786,7 @@ final class ClojureDepsEdn {
 		 * @return the strings, empty when absent
 		 */
 		List<String> strings(String key) {
-			LispVal value = this.entries.get(key);
+			LispVal value = get(key);
 			if (value == null) {
 				return List.of();
 			}
@@ -800,7 +810,7 @@ final class ClojureDepsEdn {
 		 * @return its spelling, or {@code null} when absent
 		 */
 		@Nullable String symbol(String key) {
-			LispVal value = this.entries.get(key);
+			LispVal value = get(key);
 			if (value == null) {
 				return null;
 			}
@@ -817,7 +827,7 @@ final class ClojureDepsEdn {
 		 */
 		Map<String, String> nsAliases() {
 			Map<String, String> out = new LinkedHashMap<>();
-			LispVal value = this.entries.get(":ns-aliases");
+			LispVal value = get(":ns-aliases");
 			if (value == null) {
 				return out;
 			}
@@ -1081,9 +1091,9 @@ final class ClojureDepsEdn {
 	}
 
 	/**
-	 * The oracle's {@code clojure.tools.deps.specs/deps-map}, walked in map order: the
-	 * first value its spec refuses is reported with the path to it, in the oracle's
-	 * words.
+	 * The check of a {@code deps.edn} map, walked in map order: the first value of a
+	 * shape the reference does not give its key is reported with the path to it, in the
+	 * oracle's words.
 	 */
 	private static final class Validation {
 

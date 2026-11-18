@@ -15,7 +15,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * Reading one {@code deps.edn}: what the oracle ({@code clj} 1.12.6, measured 2026-10-08
  * with {@code clj -Srepro -Spath}) accepts is accepted, what it refuses is refused in its
  * words ({@code Error validating deps in <file>. Found: ..., expected: ..., in: ...}),
- * and the {@code :paths} alias keywords resolve the way its {@code chase-key} does.
+ * and the {@code :paths} alias keywords resolve as it resolves them.
  */
 class ClojureDepsEdnTest {
 
@@ -130,10 +130,9 @@ class ClojureDepsEdnTest {
 	}
 
 	@Test
-	void aRepositorysPoliciesReachTheResolverAsTheOraclesRepoPolicyReadsThem() {
-		// tools.deps' repo-policy (clj 1.12.6, 2026-10-08): :enabled defaults to true and
-		// :update to :daily; an integer :update is handed to Maven as the string "5",
-		// which Maven treats as never (measured: no metadata request two days on)
+	void aRepositorysPoliciesReachTheResolverAsTheOracleReadsThem() {
+		// clj 1.12.6, 2026-10-08: :enabled defaults to true and :update to :daily; an
+		// integer :update runs as never (measured: no metadata request two days on)
 		DepsMap map = ClojureDepsEdn.read("""
 				{:mvn/repos {"plain" {:url "https://plain.example/"}
 				             "gated" {:url "https://gated.example/"

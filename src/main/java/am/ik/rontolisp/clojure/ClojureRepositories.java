@@ -125,7 +125,7 @@ public interface ClojureRepositories {
 
 	/**
 	 * What a {@code pom.xml} project's effective model says: its dependencies and the
-	 * parts of its {@code build} the oracle's {@code coord-paths :pom} reads.
+	 * parts of its {@code build} the oracle takes roots from.
 	 *
 	 * @param dependencies the dependencies as the model holds them (each classifier the
 	 * one written), in model order
@@ -258,8 +258,7 @@ public interface ClojureRepositories {
 	/**
 	 * The dependencies a Maven artifact's POM declares, as its descriptor converts them
 	 * (each artifact's classifier and extension the ones its type implies), every scope
-	 * and the optional ones included: the oracle's {@code coord-deps :mvn} keeps what it
-	 * keeps of them.
+	 * and the optional ones included: the caller keeps what the oracle keeps of them.
 	 * @param source the repositories
 	 * @param artifact the artifact
 	 * @return the dependencies, in the POM's order
@@ -269,7 +268,7 @@ public interface ClojureRepositories {
 	/**
 	 * The dependencies a POM's text declares -- one a jar ships -- as its model holds
 	 * them (each classifier the one written), its parents and imports from the
-	 * repositories: what the oracle's {@code coord-deps :jar} reads.
+	 * repositories: what the oracle reads of a local jar's {@code pom.xml}.
 	 * @param source the repositories
 	 * @param pom the POM's text
 	 * @return the dependencies, in the model's order
@@ -277,10 +276,10 @@ public interface ClojureRepositories {
 	List<MavenDependency> pomDependencies(MavenSource source, String pom);
 
 	/**
-	 * A {@code pom.xml} project's effective model, built as the oracle's
-	 * {@code read-model-file} builds it: from the file, a parent at its
-	 * {@code relativePath} beside it before the repositories, imports from the
-	 * repositories, {@code ${project.basedir}} reading {@code .} (no project directory).
+	 * A {@code pom.xml} project's effective model, built as the oracle builds it: from
+	 * the file, a parent at its {@code relativePath} beside it before the repositories,
+	 * imports from the repositories, {@code ${project.basedir}} reading {@code .} (no
+	 * project directory).
 	 * @param source the repositories
 	 * @param pom the {@code pom.xml} file
 	 * @return the project

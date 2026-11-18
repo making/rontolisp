@@ -17,10 +17,10 @@ import am.ik.rontolisp.clojure.ClojureRepositories.MavenSource;
 import org.jspecify.annotations.Nullable;
 
 /**
- * A project's {@code deps.edn} maps read and merged with the selected aliases applied,
- * like the oracle's {@code create-basis}: the root map, the user-level map and the
- * project's, the aliases every map defines merged per alias, the selected ones' arguments
- * merged ({@link ClojureDepsEdn#argMap}), the project map tooled by their
+ * A project's {@code deps.edn} maps read and merged with the selected aliases applied, as
+ * {@code clj} 1.12.6 builds a classpath from them: the root map, the user-level map and
+ * the project's, the aliases every map defines merged per alias, the selected ones'
+ * arguments merged ({@link ClojureDepsEdn#argMap}), the project map tooled by their
  * {@code :replace-deps}/{@code :replace-paths} ({@link ClojureDepsEdn#tool}), then the
  * maps merged. What it puts on the source path is computed on request ({@link #paths},
  * {@link #libraries}).

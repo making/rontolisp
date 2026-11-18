@@ -4,8 +4,8 @@ import java.util.Objects;
 
 /**
  * What a repository serves of one kind, releases or snapshots (Maven's {@code <releases>}
- * / {@code <snapshots>}, tools.deps' {@code :releases} / {@code :snapshots}): whether it
- * is asked at all, and when something cached from it is asked for again.
+ * / {@code <snapshots>}, {@code deps.edn}'s {@code :releases} / {@code :snapshots}):
+ * whether it is asked at all, and when something cached from it is asked for again.
  *
  * @param enabled whether the repository is asked for this kind
  * @param update the update policy in Maven's spellings ({@code always}, {@code daily},

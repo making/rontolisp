@@ -1526,7 +1526,10 @@ order, then `Found.builtin`. Every rule below was verified on `clj` 1.12.6.1673
 repositories, `GITLIBS` set). In October 2026 tools.deps was also read from the CLI jar,
 and the selection and the root map were written from that reading; both were deleted and
 written again on 2026-11-18 from the published reference and the CLI's answers alone
-(`.kb/java-frontend-provenance.md`; the two bullets say how).
+(`.kb/java-frontend-provenance.md`; the two bullets say how). The rest (reading, checking,
+merging, the procurer) was judged the same day (`.todo/j95`): the git checks were rewritten
+(below); the other code has its own shape and was kept, its rules asked of `clj` again
+where the record had only the source's function names.
 - **Maps** (`ClojureDepsEdn`): the root map, the user-level one, the project's (nearest at
   or above the entry file; the oracle reads the working directory's), merged left to right
   (a map value merges into the one before it, anything else replaces it). The root map
@@ -1620,11 +1623,11 @@ written again on 2026-11-18 from the published reference and the CLI's answers a
 - **Procurer** (`ClojureDepsProcurer`, the oracle's extensions): `:local/root` canonical
   (`SourceLoader.canonicalPath`, `toRealPath`) and checked (`Local lib X not found: R`); a
   manifest `:deps`, `:jar`, `:pom` (below), none (`Manifest file not found ...`) or
-  another (`Manifest type :lein not loaded ...`; tools.deps has no lein reader);
+  another (`Manifest type :lein not loaded ...`; `clj` reads no lein project);
   `:deps/prep-lib` checked after every contribution, local or git (`The following libs must be
   prepared before use: [..]`), never run. It fetches through `ClojureFiles.repositories()`
   (`ClojureRepositories`), the host's; null = fetch nothing (below).
-- **Maven** (`coord-deps :mvn`, `coord-paths :mvn`): the descriptor's dependencies
+- **Maven**: the descriptor's dependencies
   (`ClojureRepositories.mavenDependencies`, `MavenResolver.descriptor`: classifier and
   extension from the type) kept when compile/runtime and not optional, each lib
   `group/artifact$classifier`, its coord `:mvn/version`, `:extension` when not jar, `:exclusions`
@@ -1634,9 +1637,9 @@ written again on 2026-11-18 from the published reference and the CLI's answers a
   highest (`Unable to resolve LIB version: RANGE` when none, the oracle's words), `RELEASE`/`LATEST`
   -> `MavenResolver.version`; a SNAPSHOT resolves at the fetch (`ClojureDepsFetchCliTest`,
   verified against clj 1.12.6). A `:classifier` key is the oracle's `Invalid
-  library spec` refusal. Repositories (`ClojureBasis.mavenSource`, `remote-repos`): central,
+  library spec` refusal. Repositories (`ClojureBasis.mavenSource`): central,
   clojars, then the merged maps' others in order, `nil` removes one, each carrying its
-  `:releases` / `:snapshots` policy (`:enabled`, `:update`; tools.deps drops nothing: a
+  `:releases` / `:snapshots` policy (`:enabled`, `:update`; `clj` drops nothing: a
   repository with releases disabled still serves snapshots, `.kb/maven-resolver.md`
   "Per-repository policies"; until 2026-10-08 it was dropped whole), `http:` refused (`Invalid repo url (http not supported)`) unless
   `CLOJURE_CLI_ALLOW_HTTP_REPO`. Local repository: `:mvn/local-repo` against the project
@@ -1646,18 +1649,17 @@ written again on 2026-11-18 from the published reference and the CLI's answers a
   dependency's own `:mvn/repos` is never read. A built-in coordinate fetches nothing; the
   built-in clojure's children are the spec jars, read when a lookup first asks for one of
   their namespaces ("clojure.spec.alpha (g90)").
-- **A jar's own `pom.xml`** (`coord-deps :jar`): the first `META-INF/**/pom.xml` entry read as a
+- **A jar's own `pom.xml`**: the first `META-INF/**/pom.xml` entry read as a
   project model (`ClojureRepositories.pomDependencies`, `MavenResolver.projectDependencies`:
   parents and imports from the repositories, classifier AS WRITTEN, type ignored), compile
   and runtime kept, OPTIONAL KEPT, coord `:mvn/version :scope [:optional]`. A
   test-jar typed dependency is the plain jar, a pom typed one the oracle tries as a jar and
   fails on.
-- **A `pom.xml` project** (`coord-deps`/`coord-paths :pom`, `ClojureRepositories.pomProject`
+- **A `pom.xml` project** (`ClojureRepositories.pomProject`
   -> `MavenResolver.project(file, {project.basedir=.})`, read once per resolution): children
   as a jar's pom (`modelChildren`); roots, `pomRoots`: the effective `sourceDirectory`,
   `src/main/clojure`, each resource directory, then the build-helper directories, each
-  `canonical(resolve(root, p))` (absent ones included), each once. Build-helper
-  (`get-build-helper-paths`): when ANY plugin is `org.codehaus.mojo:build-helper-maven-plugin`,
+  `canonical(resolve(root, p))` (absent ones included), each once. Build-helper: when ANY plugin is `org.codehaus.mojo:build-helper-maven-plugin`,
   the FIRST plugin's executions with goal `add-source` give `<sources>`' children's values,
   then `add-resource`'s `<resources>` -- a value-less child (`<source/>`, a nested
   `<resource><directory>`) dropped, an empty one the root. Verified on `clj`
@@ -1669,18 +1671,28 @@ written again on 2026-11-18 from the published reference and the CLI's answers a
   build-helper it shares with its parent makes that child plugin first (no helper dirs). Both
   POMs are validated at the oracle's level, STRICT (`.kb/maven-resolver.md`, "Validation
   levels").
-- **git** (`canonicalize`/`manifest-type`/`compare-versions :git`): both spellings refused,
-  URL given or inferred (the oracle's regex table, here only -- `GitFetcher` has none), then
-  against the repository: a tag must exist (`Library L has invalid tag: t`), sha and tag must
-  name one commit (`... point to different commits`), an abbreviated sha needs a tag and is
-  replaced by the full one, no sha `has coord with missing sha`. The manifest checks the
+- **git** (`ClojureDepsProcurer.canonicalGit`, `inferredGitUrl`; rewritten 2026-11-18,
+  `.todo/j95`: the old method carried the source's local names and order, so it was
+  deleted and written from the deps.edn reference and `clj` 1.12.6's answers over a `file:`
+  repository; the forge table is the reference's). A coordinate is refused at the first of:
+  `:sha` with `:git/sha` (`git coord has both :sha and :git/sha for L`), `:tag` with
+  `:git/tag` (`... for T`, the `:git/tag`'s value), no URL given or inferred (`Failed to
+  infer git url for: L`), a tag the repository lacks (`Library L has invalid tag: t`), no
+  sha (`has coord with missing sha`), a short sha without a tag (`has prefix sha, use full
+  sha or add tag`), a sha and a tag that are not one commit (`... point to different
+  commits`, also for a short sha naming nothing). A short sha beside its tag becomes the
+  full one; the answer keeps the other keys in place, `:git/tag` last when written `:tag`
+  (the basis `clj` writes). Inference: a group of a forge's top word, its word and an owner
+  with no dot, ANY character between the three (`ioXgithubYfoo/bar` is
+  `https://github.com/foo/bar.git`; `io.github.a.b/x`, `IO.GITHUB.a/x`, `xio.github.a/x`
+  refused) -- here only, `GitFetcher` has none. The manifest checks the
   commit out (`gitCheckout`; absent: `Commit not found for L in repo U at S`), roots
   `:deps/root` below it (an absolute one as written, like the oracle) and detects
   `deps.edn`/`pom.xml`. Of two commits the descendant is newer (`gitDescendant`, asked of
   both repositories when the URLs differ); none: `No known ancestor relationship between git
-  versions for L\n  U at X\n  U at Y` -- the oracle throws an EMPTY message for
-  two unrelated commits of one repository (`commit-comparator`'s `(ex-info "" {})`); here its
-  own wording for the unknown case. Tags and commits are asked once per resolution.
+  versions for L\n  U at X\n  U at Y` -- the oracle throws an EMPTY message for two
+  unrelated commits of one repository; here its own wording for the unknown case. Tags and
+  commits are asked once per resolution.
 - **A jar is read in place** (`SourceLoader.listArchive`/`loadArchiveEntry`: the central
   directory, an entry opened only when listed). Extracting it (`Archives.extractZip`, the
   plan) would need a cache keyed by content and invalidated when the jar changes, for
@@ -1749,10 +1761,15 @@ written again on 2026-11-18 from the published reference and the CLI's answers a
   playground) reads none. Merged, as the oracle merges them: its `:paths` apply where the project has none, its
   `:deps` join, a relative path resolves against the project's directory.
 - More than eight top deps iterate in the oracle's hash order, here in file order.
-- **Aliases** (`ClojureBasis`, the oracle's `create-basis`; verified against it 2026-10-08): alias data
-  is `merge-with merge` over root/user/project (a project `:test` keeps the root's
-  `:extra-paths ["test"]`); the selection merges by `merge-alias-maps`' per-key rules
-  (`ClojureDepsEdn.argMap`); `tool` replaces the PROJECT map's `:deps`/`:paths` only;
+- **Aliases** (`ClojureBasis`; verified against the oracle 2026-10-08): an alias is merged
+  key by key over root/user/project (a project `:test` keeps the root's
+  `:extra-paths ["test"]`); the selection merges by per-key rules (`ClojureDepsEdn.argMap`),
+  compared 2026-11-18 with the `:argmap` of the basis `clj -Spath` writes over 300 generated
+  alias sets: identical but for a map merged into a vector under a key nothing reads. The
+  comparison found that a key keeps a `nil` value and that a `nil` `:paths`/`:replace-paths`
+  merges to `[]`, which empties the project's paths (`-A:b:b` with `:b {:replace-paths nil}`):
+  until then the key was dropped. `ClojureDepsEdn.tool` replaces the PROJECT map's
+  `:deps`/`:paths` only;
   `flattenPaths` chases `:extra-paths` then `:paths`; `:classpath-overrides` re-roots or
   (blank) drops a selected lib, its children stay. The selection reaches every read through
   `SourceStandards.clojureAliases` -> `ClojureFiles.aliases`. Undeclared aliases and
@@ -2625,11 +2642,8 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
   top-level form, so an async-defun in `clojure.lisp` rode every Clojure program (caught by
   `ClojureLoweringTest#aProgramPassingRealFunctionsSplicesNoDispatcher`). `send` is fetch
   with a transport failure as the `%clojure-io-exception` carrier over the transport's own
-  text; `follow` is the JDK's `RedirectFilter` under the oracle's default NORMAL policy
-  (301/302/303/307/308, `++hops < 5`, never https to http, 303 and a POST's 301/302 to GET,
-  the body kept only for an unchanged method off a 303, `ALLOWED_REDIRECT_HEADERS` across
-  origins, `URI.resolve` ported with its RFC 2396 empty-path rule; a hop's body
-  stream-closed); `respond` runs the oracle's response interceptors in their order:
+  text; `follow` takes redirects as the oracle's client (the JDK's, default NORMAL policy) was
+  seen to (`%clojure-http-redirect`, `-resolve`; a hop's body stream-closed); `respond` runs the oracle's response interceptors in their order:
   `decompress-body` (a `content-encoding` of `gzip` or `deflate`, lower-cased, one value,
   not under `:decompress-body false` or a `:head` request, is read through
   `rontolisp::%inflate-*`, `.kb/fetch-http.md` "Decompression": `%clojure-http-decoded`
@@ -2709,6 +2723,33 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
   `http:` URL reading as the reply arrives (`.readLine`, `.read`, `read`, lazy `line-seq`,
   `slurp` of the rest, a closed reader's refusal) and the text of a malformed reply
   (`/split`), 2026-10-10. Waiting: `:timeout` (todo `148`).
+- **Redirects** (`%clojure-http-redirect`, `-resolve`, `-split`, `-remove-dots`; written
+  2026-11-18, `.todo/j95`). The October code's record called its resolution a port of
+  `java.net.URI.resolve` and named the JDK client's internals, so it was deleted, not edited,
+  and written from RFC 3986 section 5 and the JDK's answers; nobody read OpenJDK's source,
+  and the old code was used only as a black box. Probed on JDK 25 (a `HttpClient` under
+  `Redirect.NORMAL` against a local server): followed are 301, 302, 303, 307, 308 (not
+  300, 304-306, 309, 399), at most four in a row (the fifth reply is answered); to the same
+  scheme in any case or to `https` (not `ftp`, `ws`, `mailto`, `g:h`); 303 turns every
+  method into a bodiless GET, HEAD included, 301/302 only a POST, and any other keeps the
+  method and the body; off the
+  origin (scheme case-blind, authority as written: `LOCALHOST`, `user@`, `:0port` are other
+  origins) `authorization`, `cookie`, `origin`, `referer` stay behind and the rest
+  (`content-type`, `cookie2`, `authorization2`, `forwarded`, ...) go on; no Location is
+  `Invalid redirection`, an empty one the base's directory. The target is the client's
+  `uri()`, which agreed with `URI.resolve` on every probed Location; `URI.resolve` was then
+  asked over generated references (22,703 pairs, twelve bases, dot, empty and
+  colon segments, `//`, queries and fragments): the new code answers all of them, the old
+  one missed 2,939. Its departures from RFC 3986, each in the docstrings: only a relative
+  path loses its dot segments (an absolute one, a network path and an absolute URL are taken
+  as written), empty segments go (`a//b` is `a/b`), a `..` with nothing to remove stays
+  (`/a/../../g` is `/../g`), an empty path other than a lone fragment's is the base's
+  directory without its query, `//` with no authority is a path (`///g` is `/g`). Known
+  differences: a Location that is no URI (`g h`, `1g:h`, a bare `//`) is followed as
+  written where the oracle fails the request; and `clojure.java.io`'s `http:` reads
+  (`%clojure-io-remote-location`) resolve with the same function, where the oracle's
+  `HttpURLConnection` resolves through `java.net.URL`, which differs on such edges
+  (`./g` against a base with no path, `a//b` kept, `///g`).
 - Pins: `FetchSpecE2eTest#clojureHttpClient` (`clojure-http-spec.yaml`: interpreter, JVM,
   `--native`, component), `ClojureHttpClientTest` (the lowering, the refusals, the FETCH
   strip, the P1 and `--no-wasi` refusals, a Ring proxy relaying a binary reply on the

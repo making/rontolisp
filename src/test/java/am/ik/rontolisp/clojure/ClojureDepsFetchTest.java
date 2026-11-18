@@ -346,7 +346,7 @@ class ClojureDepsFetchTest {
 					Map.of("mod/deps.edn", "{:paths [\"src\"]}", "mod/src/mono/core.clj", "(ns mono.core)"));
 			commit("file:///git/gitpom", this.pom,
 					Map.of("pom.xml", "<project/>", "src/main/clojure/gitpom/core.clj", "(ns gitpom.core)"));
-			// its model: the super POM's directories as tools.deps reads them
+			// its model: the super POM's directories as clj reads them
 			// (${project.basedir} is "."), a resource repeating the source directory
 			this.repositories.pomProjects
 				.put("gitlibs/gitpom/" + this.pom + "/pom.xml", new ClojureRepositories.PomProject(

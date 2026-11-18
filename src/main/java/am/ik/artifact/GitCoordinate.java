@@ -8,7 +8,7 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * A commit of a git repository, as a {@code deps.edn} {@code :git/url} coordinate names
- * it: the repository URL, the FULL commit sha (a short one is refused, as tools.deps
+ * it: the repository URL, the FULL commit sha (a short one is refused, as {@code clj}
  * refuses it), an optional tag that must name that commit, and an optional sub-directory
  * of the checkout ({@code :deps/root}).
  *

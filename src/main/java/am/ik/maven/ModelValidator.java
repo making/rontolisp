@@ -24,8 +24,8 @@ import org.jspecify.annotations.Nullable;
  * {@link PomModel} holds, at a validation level ({@code ModelBuildingRequest}'s): the
  * minimal level a dependency's POM is built at, {@link #MAVEN_2_0} for a parent read from
  * a repository under a stricter request, and {@link #STRICT} -- a bare
- * {@code DefaultModelBuildingRequest}'s, what tools.deps builds a project's
- * {@code pom.xml} and a jar's own POM at. A check's severity at a level is Maven's
+ * {@code DefaultModelBuildingRequest}'s, the level {@code clj}'s answers for a project's
+ * {@code pom.xml} and a jar's own POM fit. A check's severity at a level is Maven's
  * ({@code errOn30} and {@code errOn31}: a warning below that level, an error from it).
  */
 final class ModelValidator {

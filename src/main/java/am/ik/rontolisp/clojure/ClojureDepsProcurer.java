@@ -36,8 +36,8 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * What each coordinate type brings, read through the {@link ClojureFiles} seam, as the
- * oracle's tools.deps extensions answer it ({@code clj} 1.12.6, measured 2026-10-08),
- * with the oracle's refusals:
+ * deps.edn reference states it and, where it is silent, as {@code clj} 1.12.6 answers
+ * (measured 2026-10-08 and 2026-11-18), with the oracle's refusals:
  * <ul>
  * <li>{@code :local/root} to a directory: its own {@code deps.edn} merged over the root
  * map, so its {@code :paths} (relative to it, {@code ["src"]} by default) and its
@@ -65,10 +65,16 @@ import org.jspecify.annotations.Nullable;
 final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 
 	/**
-	 * The oracle's inferred git URLs ({@code clojure.tools.deps.extensions.git}): a lib
-	 * whose group names a forge, {@code io.github.user/repo}, is that forge's repository.
+	 * The forges a git library's name points at when its coordinate gives no
+	 * {@code :git/url}: the deps.edn reference's table.
 	 */
-	private static final Map<Pattern, String> GIT_SERVICES = gitServices();
+	private static final List<Forge> FORGES = List.of(
+			new Forge("github", "https://github.com/%s/%s.git", List.of("io", "com")),
+			new Forge("gitlab", "https://gitlab.com/%s/%s.git", List.of("io", "com")),
+			new Forge("bitbucket", "https://bitbucket.org/%s/%s.git", List.of("io", "org")),
+			new Forge("beanstalkapp", "https://%s.git.beanstalkapp.com/%s.git", List.of("io", "com")),
+			new Forge("sr", "https://git.sr.ht/~%s/%s", List.of("ht")),
+			new Forge("codeberg", "https://codeberg.org/%s/%s.git", List.of("org", "page")));
 
 	/** A Maven version naming exactly one version, {@code [1.0]}. */
 	private static final Pattern SPECIFIC_VERSION = Pattern.compile("^\\[([^,]*)]$");
@@ -116,17 +122,6 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 		this.mavenSourceOf = mavenSource;
 	}
 
-	private static Map<Pattern, String> gitServices() {
-		Map<Pattern, String> services = new LinkedHashMap<>();
-		services.put(Pattern.compile("^(?:com|io).github.([^.]+)$"), "https://github.com/%s/%s.git");
-		services.put(Pattern.compile("^(?:com|io).gitlab.([^.]+)$"), "https://gitlab.com/%s/%s.git");
-		services.put(Pattern.compile("^(?:org|page).codeberg.([^.]+)$"), "https://codeberg.org/%s/%s.git");
-		services.put(Pattern.compile("^(?:org|io).bitbucket.([^.]+)$"), "https://bitbucket.org/%s/%s.git");
-		services.put(Pattern.compile("^(?:com|io).beanstalkapp.([^.]+)$"), "https://%s.git.beanstalkapp.com/%s.git");
-		services.put(Pattern.compile("^ht.sr.([^.]+)$"), "https://git.sr.ht/~%s/%s");
-		return services;
-	}
-
 	@Override
 	public Coord canonicalize(Lib lib, Coord coord, @Nullable String dir) {
 		return switch (coord.type()) {
@@ -144,7 +139,7 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 	}
 
 	/**
-	 * The oracle's {@code canonicalize :mvn}: {@code [1.0]} is {@code 1.0}; a range,
+	 * A Maven coordinate made canonical: {@code [1.0]} is {@code 1.0}; a range,
 	 * {@code RELEASE} and {@code LATEST} resolve against the repositories (where nothing
 	 * is fetched, they stay as written, like the coordinate); any other version is taken
 	 * as written.
@@ -165,25 +160,23 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 	}
 
 	/**
-	 * The oracle's checks of a git coordinate: one spelling of the commit and of the tag,
-	 * a URL given or inferred; then, against the repository, a tag that exists, and a
-	 * commit the sha and the tag both name (an abbreviated sha resolved through it); a
-	 * full commit without a tag. Answered in the oracle's standard keys. Where nothing is
-	 * fetched, the checks that need the repository are left out.
+	 * A git coordinate made canonical. The deps.edn reference states the rules: a
+	 * {@code :git/url} given or inferred from the library's name ({@link #FORGES}), a
+	 * {@code :git/sha} required, a short one only beside a {@code :git/tag}. The rest is
+	 * what {@code clj} 1.12.6 answered over a {@code file:} repository (2026-11-18): the
+	 * older spellings {@code :sha} and {@code :tag} are taken but not beside the
+	 * {@code :git/} ones, and a coordinate is refused at the first of a sha spelled
+	 * twice, a tag spelled twice (named by its {@code :git/tag}), no URL, a tag the
+	 * repository lacks, no sha, a short sha without a tag, and a sha and a tag that do
+	 * not name one commit (also when the short sha names none). A short sha with its tag
+	 * becomes the full one. The answer keeps the coordinate's other keys where they were,
+	 * a {@code :git/tag} written {@code :tag} moving last. Where nothing is fetched, the
+	 * checks that ask the repository are left out.
 	 */
 	private Coord canonicalGit(Lib lib, Coord coord) {
-		String unsha = coord.string(":sha");
-		String sha = coord.string(":git/sha");
-		String untag = coord.string(":tag");
-		String tag = coord.string(":git/tag");
-		if (unsha != null && sha != null) {
-			throw new LispReadException("git coord has both :sha and :git/sha for " + lib);
-		}
-		if (untag != null && tag != null) {
-			throw new LispReadException("git coord has both :tag and :git/tag for " + tag);
-		}
-		String canonSha = sha != null ? sha : unsha;
-		String canonTag = tag != null ? tag : untag;
+		String sha = spelledOnce(coord, ":git/sha", ":sha", "git coord has both :sha and :git/sha for " + lib);
+		String tag = spelledOnce(coord, ":git/tag", ":tag",
+				"git coord has both :tag and :git/tag for " + coord.string(":git/tag"));
 		String url = coord.string(":git/url");
 		if (url == null) {
 			url = inferredGitUrl(lib);
@@ -192,33 +185,44 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 			throw new LispReadException("Failed to infer git url for: " + lib);
 		}
 		ClojureRepositories fetcher = this.repositories;
-		if (fetcher != null && canonTag != null && !hasTag(fetcher, url, canonTag)) {
-			throw new LispReadException("Library " + lib + " has invalid tag: " + canonTag);
+		if (tag != null && fetcher != null && !hasTag(fetcher, url, tag)) {
+			throw new LispReadException("Library " + lib + " has invalid tag: " + tag);
 		}
-		if (canonSha == null) {
+		if (sha == null) {
 			throw new LispReadException("Library " + lib + " has coord with missing sha");
 		}
-		if (canonTag == null && canonSha.length() != 40) {
+		boolean full = sha.length() == 40;
+		if (tag == null && !full) {
 			throw new LispReadException("Library " + lib + " has prefix sha, use full sha or add tag");
 		}
-		if (fetcher != null && canonTag != null) {
-			String bySha = commit(fetcher, url, canonSha);
-			if (bySha == null || !bySha.equals(commit(fetcher, url, canonTag))) {
+		if (tag != null && fetcher != null) {
+			String named = commit(fetcher, url, sha);
+			if (named == null || !named.equals(commit(fetcher, url, tag))) {
 				throw new LispReadException("Library " + lib + " has sha and tag that point to different commits");
 			}
-			if (canonSha.length() != 40) {
-				canonSha = bySha;
-			}
+			sha = full ? sha : named;
 		}
 		SequencedMap<String, LispVal> entries = new LinkedHashMap<>(coord.entries());
 		entries.put(":git/url", LispString.literal(url));
-		entries.put(":git/sha", LispString.literal(canonSha));
-		if (canonTag != null) {
-			entries.put(":git/tag", LispString.literal(canonTag));
+		entries.put(":git/sha", LispString.literal(sha));
+		if (tag != null) {
+			entries.put(":git/tag", LispString.literal(tag));
 		}
-		entries.remove(":sha");
-		entries.remove(":tag");
+		entries.keySet().removeAll(List.of(":sha", ":tag"));
 		return new Coord(entries);
+	}
+
+	/**
+	 * A key's string under its current spelling or its older one, refused when both are
+	 * written.
+	 */
+	private static @Nullable String spelledOnce(Coord coord, String key, String older, String refusal) {
+		String current = coord.string(key);
+		String old = coord.string(older);
+		if (current != null && old != null) {
+			throw new LispReadException(refusal);
+		}
+		return current != null ? current : old;
 	}
 
 	private boolean hasTag(ClojureRepositories fetcher, String url, String tag) {
@@ -232,14 +236,34 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 			.orElse(null);
 	}
 
+	/**
+	 * The repository a library's name points at: its group is a forge's two words and the
+	 * owner, its name the repository. {@code clj} 1.12.6 matched any character between
+	 * the three parts ({@code ioXgithubYfoo/bar} is {@code github.com/foo/bar}), the
+	 * words case for case, an owner of any characters but a dot (2026-11-18).
+	 */
 	private static @Nullable String inferredGitUrl(Lib lib) {
-		for (Map.Entry<Pattern, String> service : GIT_SERVICES.entrySet()) {
-			Matcher match = service.getKey().matcher(lib.ns());
-			if (match.matches()) {
-				return String.format(service.getValue(), match.group(1), lib.name());
+		String group = lib.ns();
+		for (Forge forge : FORGES) {
+			for (String top : forge.tops()) {
+				int owner = top.length() + 1 + forge.word().length() + 1;
+				if (group.length() > owner && group.startsWith(top) && group.startsWith(forge.word(), top.length() + 1)
+						&& group.indexOf('.', owner) < 0) {
+					return String.format(forge.url(), group.substring(owner), lib.name());
+				}
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * One row of the reference's table of forges.
+	 *
+	 * @param word the forge's word, the second of the group
+	 * @param url the repository's URL, formatted with the owner and the library's name
+	 * @param tops the words the group may start with
+	 */
+	private record Forge(String word, String url, List<String> tops) {
 	}
 
 	@Override
@@ -271,10 +295,9 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 	}
 
 	/**
-	 * A git coordinate's manifest, the oracle's {@code manifest-type :git}: the commit
-	 * checked out, its {@code :deps/root} below the checkout (an absolute one as it
-	 * stands), then the manifest the coordinate names or the one found there. Where
-	 * nothing is fetched, the coordinate as it stands.
+	 * A git coordinate's manifest: the commit checked out, its {@code :deps/root} below
+	 * the checkout (an absolute one as it stands), then the manifest the coordinate names
+	 * or the one found there. Where nothing is fetched, the coordinate as it stands.
 	 */
 	private Coord gitManifest(Lib lib, Coord coord) {
 		ClojureRepositories fetcher = this.repositories;
@@ -296,8 +319,8 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 	}
 
 	/**
-	 * The oracle's {@code detect-manifest}: a directory's {@code deps.edn}, else its
-	 * {@code pom.xml}, else the coordinate as it stands (none).
+	 * The manifest a directory holds: its {@code deps.edn}, else its {@code pom.xml} (the
+	 * reference: {@code deps.edn} is preferred), else the coordinate as it stands (none).
 	 */
 	private Coord detectedManifest(Coord coord, String root) {
 		LispVal manifest;
@@ -352,7 +375,7 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 	}
 
 	/**
-	 * The oracle's {@code coord-deps :mvn}: the descriptor's compile and runtime
+	 * A Maven coordinate's dependencies: the descriptor's compile and runtime
 	 * dependencies that are not optional, each lib {@code group/artifact$classifier}, its
 	 * coordinate the version, the extension when it is no jar, and the exclusions.
 	 */
@@ -376,11 +399,10 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 	}
 
 	/**
-	 * The oracle's {@code coord-deps :jar}: the dependencies the jar's own
-	 * {@code pom.xml} declares (its first {@code META-INF/.../pom.xml}), read like a
-	 * project model -- compile and runtime ones, optional ones too, each classifier the
-	 * one written and no extension -- or none without a {@code pom.xml}, or where nothing
-	 * is fetched.
+	 * A local jar's dependencies: the ones the jar's own {@code pom.xml} declares (its
+	 * first {@code META-INF/.../pom.xml}), read like a project model -- compile and
+	 * runtime ones, optional ones too, each classifier the one written and no extension
+	 * -- or none without a {@code pom.xml}, or where nothing is fetched.
 	 */
 	private List<Dep> jarChildren(Lib lib, Coord useCoord) {
 		ClojureRepositories fetcher = this.repositories;
@@ -398,8 +420,8 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 	}
 
 	/**
-	 * The oracle's {@code model-deps}, a POM's model read as a project's: the compile and
-	 * runtime dependencies, optional ones too, each coordinate its version, scope,
+	 * A POM's model read as a project's dependencies: the compile and runtime
+	 * dependencies, optional ones too, each coordinate its version, scope,
 	 * {@code :optional} and exclusions, each classifier the one written and no extension.
 	 */
 	private static List<Dep> modelChildren(List<MavenDependency> dependencies) {
@@ -422,7 +444,7 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 
 	/**
 	 * The first entry of a jar's central directory that is a {@code pom.xml} below
-	 * {@code META-INF/}, the oracle's {@code find-pom}; {@code null} without one.
+	 * {@code META-INF/}; {@code null} without one.
 	 */
 	private @Nullable String jarPom(String jar) {
 		List<String> entries = this.files.archiveEntries(jar);
@@ -460,9 +482,9 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 	}
 
 	/**
-	 * The Maven artifact a coordinate names, the oracle's {@code coord->artifact}: the
-	 * lib's group and artifact, its {@code $classifier}, the {@code :extension} (a jar by
-	 * default); a {@code :classifier} key is the oracle's refusal.
+	 * The Maven artifact a coordinate names: the lib's group and artifact, its
+	 * {@code $classifier}, the {@code :extension} (a jar by default); a
+	 * {@code :classifier} key is the oracle's refusal.
 	 */
 	private static MavenArtifact mavenArtifact(Lib lib, Coord coord) {
 		if (coord.get(":classifier") != null) {
@@ -502,9 +524,9 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 	}
 
 	/**
-	 * A Maven coordinate's jar ({@code coord-paths :mvn}: nothing for another extension),
-	 * built in or unfetched as the host decides; a dependency of the built-in clojure
-	 * read when a lookup first asks for one of its namespaces.
+	 * A Maven coordinate's jar (nothing for another extension), built in or unfetched as
+	 * the host decides; a dependency of the built-in clojure read when a lookup first
+	 * asks for one of its namespaces.
 	 */
 	private Contribution mavenContribution(Lib lib, Coord useCoord) {
 		if (ClojureBuiltinLibs.isBuiltin(lib)) {
@@ -581,10 +603,9 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 	}
 
 	/**
-	 * The oracle's {@code coord-paths :pom}: the source directory,
-	 * {@code src/main/clojure}, the resources' directories, then the
-	 * {@code build-helper-maven-plugin} directories, each made canonical against the root
-	 * (absent ones too), each once.
+	 * A {@code pom.xml} project's roots: the source directory, {@code src/main/clojure},
+	 * the resources' directories, then the {@code build-helper-maven-plugin} directories,
+	 * each made canonical against the root (absent ones too), each once.
 	 */
 	private List<Root> pomRoots(String root, PomProject project) {
 		List<@Nullable String> sources = new ArrayList<>();
@@ -606,10 +627,11 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 	}
 
 	/**
-	 * The oracle's {@code get-build-helper-paths}: when any plugin is the
-	 * {@code build-helper-maven-plugin}, the {@code add-source} executions' sources then
-	 * the {@code add-resource} executions' resources -- read off the FIRST plugin,
-	 * whichever it is, as tools.deps' {@code (first plugins)} reads them.
+	 * The {@code build-helper-maven-plugin} directories: when any plugin is that one, the
+	 * {@code add-source} executions' sources then the {@code add-resource} executions'
+	 * resources -- read off the FIRST plugin, whichever it is, as {@code clj} 1.12.6
+	 * answers ({@code .kb/clojure-frontend.md}, "deps.edn": a child plugin listed ahead
+	 * of the helper it shares with its parent leaves no helper directory).
 	 */
 	private static List<@Nullable String> buildHelperPaths(List<PomPlugin> plugins) {
 		boolean helper = false;
@@ -672,8 +694,8 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 
 	/**
 	 * A {@code :deps} library's map: its {@code deps.edn} (none is an empty one) merged
-	 * over the root map, like the oracle's {@code deps-map} -- the user-level map is not
-	 * merged into a dependency's.
+	 * over the root map -- the user-level map is not merged into a dependency's, as
+	 * {@code clj} answers.
 	 */
 	private DepsMap depsMapOf(Coord useCoord) {
 		String root = String.valueOf(useCoord.string(":deps/root"));
@@ -700,10 +722,9 @@ final class ClojureDepsProcurer implements ClojureDepsGraph.Procurer {
 	}
 
 	/**
-	 * The oracle's {@code compare-versions [:git :git]}: the descendant is the newer --
-	 * asked of both repositories when the URLs differ -- and two commits neither of which
-	 * descends from the other are refused. Where nothing is fetched, the version selected
-	 * first stays.
+	 * Of two commits of a git library the descendant is the newer -- asked of both
+	 * repositories when the URLs differ -- and two commits neither of which descends from
+	 * the other are refused. Where nothing is fetched, the version selected first stays.
 	 */
 	@Override
 	public int compareGit(Lib lib, Coord x, Coord y) {

@@ -117,9 +117,8 @@ public final class MavenResolver {
 	 * them rather than as {@link #descriptor} converts them: each dependency's artifact
 	 * carries the classifier written in the POM (none where only its type implies one, as
 	 * {@code test-jar} implies {@code tests}) and its type's extension; the scope is
-	 * never empty. Built at Maven's strict validation level, as tools.deps builds it (a
-	 * bare {@code DefaultModelBuildingRequest}); what only the lenient reader reads is a
-	 * warning.
+	 * never empty. Built at Maven's strict validation level, the level {@code clj}'s
+	 * answers fit (measured 2026-10-08); what only the lenient reader reads is a warning.
 	 * @param pom the POM's bytes
 	 * @return the dependencies, in model order
 	 * @throws MavenResolutionException if Maven's model builder would reject the POM, or
@@ -138,16 +137,16 @@ public final class MavenResolver {
 
 	/**
 	 * Reads a project's {@code pom.xml} as Maven builds a model from a file without a
-	 * project directory -- what tools.deps reads of a {@code pom.xml} project: a parent
+	 * project directory -- what {@code clj} reads of a {@code pom.xml} project: a parent
 	 * at its {@code relativePath} beside the file (by default {@code ../pom.xml}, up a
 	 * chain of files) when it names the parent, else from the repositories; imports from
 	 * the repositories; the super POM's build defaults. Validated at Maven's strict
-	 * level, as tools.deps builds it: a parent read beside it strictly too, one from a
+	 * level, as {@code clj} answers: a parent read beside it strictly too, one from a
 	 * repository at level 2.0, imports at the minimal level.
 	 * @param pom the {@code pom.xml}
 	 * @param systemProperties added over the resolver's system properties for this build
-	 * (tools.deps adds {@code project.basedir=.}, which a {@code ${project.basedir}} then
-	 * reads, there being no project directory)
+	 * ({@code clj} reads {@code ${project.basedir}/x} as {@code x}: the caller passes
+	 * {@code project.basedir=.}, there being no project directory)
 	 * @return the dependencies and the build's sources
 	 * @throws MavenResolutionException if the file cannot be read, Maven's model builder
 	 * would reject it, or a parent or import cannot be resolved

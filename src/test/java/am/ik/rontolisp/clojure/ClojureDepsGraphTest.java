@@ -445,6 +445,12 @@ class ClojureDepsGraphTest {
 				"Failed to infer git url for: my/g");
 		assertRoots("{:deps {io.github.someone/repo {:git/sha \"abc\"}}}",
 				"Library io.github.someone/repo has prefix sha, use full sha or add tag");
+		// clj 1.12.6 (2026-11-18) infers a URL across any character between the parts,
+		// for an owner with no dot only
+		assertRoots("{:deps {ioXgithubYsomeone/repo {:git/sha \"abc\"}}}",
+				"Library ioXgithubYsomeone/repo has prefix sha, use full sha or add tag");
+		assertRoots("{:deps {io.github.some.one/repo {:git/sha \"abc\"}}}",
+				"Failed to infer git url for: io.github.some.one/repo");
 		assertRoots("{:deps {my/g {:git/url \"https://example.invalid/g.git\" :sha \"" + "0".repeat(40)
 				+ "\" :git/sha \"" + "0".repeat(40) + "\"}}}", "git coord has both :sha and :git/sha for my/g");
 		assertRoots("{:deps {my/g {:git/url \"https://example.invalid/g.git\" :git/tag \"v1\" :tag \"v2\" "

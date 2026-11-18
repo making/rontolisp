@@ -235,14 +235,40 @@ algorithm came from, and the answer goes in the file's header.
     the argument reading and the map building were deleted and written from the CLI
     reference's grammar and 43 command lines asked of `clj -X` over a fixture project;
     `ClojureMainTest` pins the four answers that were new.
-  - What the audit did NOT list and this item left as it is, for `.todo/j95` to decide: the
-    rest of the `deps.edn` classes (`ClojureDepsEdn`'s reading, validation and alias
-    merge, `ClojureDepsProcurer`, `ClojureBasis`, `eval/ClojureDepsRepositories`) cite
-    tools.deps' private function names in their Javadoc, and `.kb/clojure-frontend.md`
-    records that tools.deps was read from the CLI jar in October 2026; the audit compared
-    them and called only the selection walk a translation. And the Clojure HTTP client's
-    redirect code, which the same note says follows the JDK's `RedirectFilter` with
-    `URI.resolve` "ported".
+  - What the audit did NOT list and this item left for `.todo/j95`: below.
+- **What the audit did not list (j95, 2026-11-18): judged per class.** Nobody working it
+  opened tools.deps' or OpenJDK's source; the judgement is from the code's shape, its names
+  and its record. Built from the deps.edn reference, the JDK's API documentation, RFC 3986
+  and the answers of `clj` 1.12.6.1673 and JDK 25.
+  - **`ClojureDepsProcurer`'s git checks**: the method carried the source's local names
+    (`unsha`, `untag`, `canon-sha`) and its order, and the forge table its regular
+    expressions verbatim. Deleted and written again: the forge table from the reference's,
+    its matching from probes (any character between the parts, `ioXgithubYfoo/bar`
+    included, an owner with no dot), the refusals and their order from 17 coordinates
+    asked of `clj` over a `file:` repository (`.kb/clojure-frontend.md`, "deps.edn", git).
+  - **Kept, names dropped**: `ClojureDepsEdn` (reading, the check walk, the merges, the
+    argument map, `tool`), the rest of `ClojureDepsProcurer`, `ClojureBasis`,
+    `eval/ClojureDepsRepositories`, and the `am.ik.maven` Javadoc citing how tools.deps
+    builds its request: each has its own shape (records and datum walks, adapters over
+    `am.ik.maven`) and states a rule `clj` answers. Where the record had only the source's
+    function name, the rule was asked again: path aliases (12 trees), `tool` (5), the
+    reading of an empty, `nil`, doubled and repeated-key file, and the argument map over
+    300 generated alias sets against the `:argmap` of the basis `clj` writes. That
+    comparison found one real difference, now fixed: a key keeps a `nil` value and a `nil`
+    `:paths`/`:replace-paths` is `[]`, so `{:replace-paths nil}` empties the project's
+    paths (`ClojureDepsAliasesTest`). `.kb/maven-resolver.md`'s note that `:update` was
+    "read from its source" is withdrawn; its measurement stands.
+  - **The Clojure HTTP client's redirects** (`clojure.lisp`, embedded): the record called the
+    resolution a port of `java.net.URI.resolve` and named the client's internals
+    (`RedirectFilter`, `ALLOWED_REDIRECT_HEADERS`, `newInstanceForRedirection`, `++hops`);
+    the code's order is RFC 2396's, which the JDK's also follows, so the text cannot tell,
+    and the record says port. Deleted and written from RFC 3986 section 5.2 (the
+    reference parse of appendix B, remove_dot_segments over segments) with the JDK's
+    departures from it, each learned by asking: the client's redirects against a local
+    server (statuses, hops, schemes, methods, bodies, headers across origins, 60
+    Locations), then `URI.resolve` over 22,703 generated pairs, which the new code answers
+    and the old one missed 2,939 of. `.kb/clojure-frontend.md`, "HTTP client", lists the
+    rules and the two known differences.
 - **Notices (j93, 2026-11-18): kept with notices.** What the audit filed under "Add notices"
   and "To confirm" stays, under its licence:
   - Root `NOTICE` (rontolisp, and Maven's and Maven Resolver's Apache NOTICE lines) and

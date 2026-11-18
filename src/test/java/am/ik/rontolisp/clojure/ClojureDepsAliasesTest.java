@@ -29,6 +29,7 @@ class ClojureDepsAliasesTest {
 			           :rd {:replace-deps {my/d {:local/root "d"}}}
 			           :rp {:replace-paths ["dev"]}
 			           :rp2 {:replace-paths ["t2" "dev"]}
+			           :rn {:replace-paths nil}
 			           :cpo {:classpath-overrides {my/a "over" my/b ""}}
 			           :pa {:paths ["t2"] :deps {my/d {:local/root "d"}}}
 			           :test {:main-opts ["-m" "x"]}
@@ -109,6 +110,8 @@ class ClojureDepsAliasesTest {
 		assertThat(roots(":rp", ":rp2")).isEqualTo(": ., dev, t2, a1/src, b/src, c/src");
 		// the older spellings :paths and :deps replace too
 		assertThat(roots(":pa")).isEqualTo(": ., t2, d/src");
+		// a nil :replace-paths is an empty one (clj 1.12.6, 2026-11-18)
+		assertThat(roots(":rn")).isEqualTo(": ., a1/src, b/src, c/src");
 	}
 
 	@Test

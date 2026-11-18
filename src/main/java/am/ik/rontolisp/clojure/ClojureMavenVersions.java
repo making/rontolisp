@@ -16,17 +16,16 @@ import java.util.TreeMap;
 import org.jspecify.annotations.Nullable;
 
 /**
- * The order tools.deps picks the newer of two {@code :mvn/version} coordinates by: its
- * {@code compare-versions} parses both with maven-resolver's {@code GenericVersionScheme}
- * and compares them. This is that scheme's version order (maven-resolver-util 1.9.27, the
- * build the oracle's {@code clj} 1.12.6 runs), ported from its class files: a version is
- * split at {@code .}, {@code -}, {@code _} and every digit/letter transition; numbers
- * compare numerically (leading zeros dropped), the well-known qualifiers by rank
- * ({@code alpha} &lt; {@code beta} &lt; {@code milestone} &lt; {@code rc} = {@code cr}
- * &lt; {@code snapshot} &lt; release = {@code ga} = {@code final} &lt; {@code sp}), any
- * other word above every qualifier and below every number, case-insensitively, and a
- * shorter version is padded with the release value. {@code ClojureMavenVersionsTest} pins
- * it against the oracle's own comparisons.
+ * The order {@code clj} picks the newer of two {@code :mvn/version} coordinates by, which
+ * is maven-resolver's {@code GenericVersionScheme} order. This is that scheme's version
+ * order (maven-resolver-util 1.9.27, the build the oracle's {@code clj} 1.12.6 runs),
+ * ported from its class files: a version is split at {@code .}, {@code -}, {@code _} and
+ * every digit/letter transition; numbers compare numerically (leading zeros dropped), the
+ * well-known qualifiers by rank ({@code alpha} &lt; {@code beta} &lt; {@code milestone}
+ * &lt; {@code rc} = {@code cr} &lt; {@code snapshot} &lt; release = {@code ga} =
+ * {@code final} &lt; {@code sp}), any other word above every qualifier and below every
+ * number, case-insensitively, and a shorter version is padded with the release value.
+ * {@code ClojureMavenVersionsTest} pins it against the oracle's own comparisons.
  */
 final class ClojureMavenVersions {
 
