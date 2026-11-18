@@ -451,7 +451,7 @@ class JavaLoweringTest {
 				}
 				""", "L5.java")).contains(
 				"(DEFUN |L5.main(String[])| (|args|) (PROGN (WRITE-LINE \"1\") (WRITE-STRING (RONTOLISP::%JAVA-FORMAT "
-						+ "\"%d%n\" (VECTOR 2) #'|%string|)) (LET ((|out| (|java.io.StandardOutput.out()|))) "
+						+ "\"%d%n\" (VECTOR 2) #'|%string| NIL)) (LET ((|out| (|java.io.StandardOutput.out()|))) "
 						+ "(|java.io.PrintStream.println(int)| (OR |out| (RONTOLISP::%JAVA-NPE)) 3) "
 						+ "(|java.io.StandardOutput.flush()| (OR (|java.io.PrintStream.printf(String,Object[])| "
 						+ "(OR (|java.io.StandardOutput.err()|) (RONTOLISP::%JAVA-NPE)) \"%d%n\" (VECTOR 4)) "
@@ -460,6 +460,26 @@ class JavaLoweringTest {
 						+ "(|java.io.StandardOutput.error| |this|) *ERROR-OUTPUT* *STANDARD-OUTPUT*)) (IF |line| "
 						+ "(WRITE-CHAR (CODE-CHAR 10) (IF (|java.io.StandardOutput.error| |this|) *ERROR-OUTPUT* "
 						+ "*STANDARD-OUTPUT*)))))");
+		// A charset named by a constant is the charset: the member taking a Charset is
+		// called, so a program naming UTF-8 holds no other charset's codec. A name
+		// computed where the program runs is looked up among all of them.
+		String named = """
+				import java.io.*;
+				import java.nio.charset.Charset;
+				class L6 {
+				    public static void main(String[] args) throws IOException {
+				        Reader in = new InputStreamReader(System.in, "UTF-8");
+				        byte[] bytes = "x".getBytes("utf-8");
+				        System.out.println(new String(bytes, "UTF-8") + Charset.forName("UTF-8") + in.read() + %s);
+				    }
+				}
+				""";
+		assertThat(lower(named.formatted("1"), "L6.java")).noneMatch(form -> form.contains("Utf16"))
+			.anyMatch(
+					form -> form.contains("(|rontolisp.internal.Support.encode(String,java.nio.charset.Charset)| \"x\" "
+							+ "(|java.nio.charset.Charset.utf8()|))"));
+		assertThat(lower(named.formatted("Charset.forName(args[0])"), "L6.java"))
+			.anyMatch(form -> form.contains("rontolisp.internal.Utf16.bytes(String)"));
 	}
 
 	@Test
@@ -697,6 +717,8 @@ class JavaLoweringTest {
 				{ "void main() { assert true; }", "1:15: an assert statement" },
 				{ "void main() { switch (1L) { default -> { } } }", "1:15: a switch over long" },
 				{ "void main() { Object o = int.class; }", "1:26: a class literal" },
+				{ "void main() { Object o = String.class; }",
+						"1:33: a class literal but compared with a class or before getName()" },
 				{ "class A { transient int x; } void main() { }", "1:11: the modifier transient" },
 				{ "import java.util.concurrent.locks.StampedLock; void main() { StampedLock l = null; }",
 						"1:62: the class java.util.concurrent.locks.StampedLock" },
@@ -707,10 +729,11 @@ class JavaLoweringTest {
 						"1:63: ArrayList.stream()" },
 				{ "void main() { IO.println(\"a\".chars()); }", "1:30: String.chars()" },
 				{ "void main() { IO.println(Collections.EMPTY_LIST); }", "1:38: Collections.EMPTY_LIST" },
-				{ "void main() { var s = new StringBuilder(); s.appendCodePoint(65); }",
-						"1:46: StringBuilder.appendCodePoint(int)" },
+				{ "void main() { var s = new StringBuilder(); s.codePointAt(0); }",
+						"1:46: StringBuilder.codePointAt(int)" },
+				{ "void main() { IO.println(Runtime.getRuntime().totalMemory()); }", "1:47: Runtime.totalMemory()" },
 				{ "void main() { IO.println(getClass()); }",
-						"1:26: getClass() but for its getName() and getSimpleName()" },
+						"1:26: getClass() but compared with a class or before getName() and getSimpleName()" },
 				{ "class A { int x; } class B extends A { int x; } void main() { }", "1:44: a field hiding A.x" },
 				{ "class String { } class Refused { static void main() { } }",
 						"1:7: a class named as java.lang.String, which the program also uses," } };

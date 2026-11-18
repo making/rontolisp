@@ -88,6 +88,15 @@ final class JavaSyntax {
 	record Name(int pos, String identifier) implements Expression {
 	}
 
+	/**
+	 * A class literal, {@code Name.class}.
+	 *
+	 * @param pos the {@code class}
+	 * @param type the class it names
+	 */
+	record ClassLiteral(int pos, TypeName type) implements Expression {
+	}
+
 	record This(int pos) implements Expression {
 	}
 

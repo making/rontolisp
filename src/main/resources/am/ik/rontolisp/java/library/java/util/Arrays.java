@@ -3,6 +3,11 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.util.function.IntFunction;
+import java.util.function.IntToDoubleFunction;
+import java.util.function.IntToLongFunction;
+import java.util.function.IntUnaryOperator;
+
 // The sorts of the numbers are forms over the host's sort; a sort of objects is a merge
 // sort written here, stable as the specification asks.
 public final class Arrays {
@@ -651,6 +656,209 @@ public final class Arrays {
             text.append(a[i]);
         }
         return text.append(']').toString();
+    }
+
+    public static int hashCode(long[] a) {
+        if (a == null) {
+            return 0;
+        }
+        int hash = 1;
+        for (int i = 0; i < a.length; i++) {
+            hash = 31 * hash + Long.hashCode(a[i]);
+        }
+        return hash;
+    }
+
+    public static int hashCode(double[] a) {
+        if (a == null) {
+            return 0;
+        }
+        int hash = 1;
+        for (int i = 0; i < a.length; i++) {
+            hash = 31 * hash + Double.hashCode(a[i]);
+        }
+        return hash;
+    }
+
+    public static int hashCode(float[] a) {
+        if (a == null) {
+            return 0;
+        }
+        int hash = 1;
+        for (int i = 0; i < a.length; i++) {
+            hash = 31 * hash + Float.hashCode(a[i]);
+        }
+        return hash;
+    }
+
+    public static int hashCode(char[] a) {
+        if (a == null) {
+            return 0;
+        }
+        int hash = 1;
+        for (int i = 0; i < a.length; i++) {
+            hash = 31 * hash + a[i];
+        }
+        return hash;
+    }
+
+    public static int hashCode(short[] a) {
+        if (a == null) {
+            return 0;
+        }
+        int hash = 1;
+        for (int i = 0; i < a.length; i++) {
+            hash = 31 * hash + a[i];
+        }
+        return hash;
+    }
+
+    public static int hashCode(boolean[] a) {
+        if (a == null) {
+            return 0;
+        }
+        int hash = 1;
+        for (int i = 0; i < a.length; i++) {
+            hash = 31 * hash + (a[i] ? 1231 : 1237);
+        }
+        return hash;
+    }
+
+    public static boolean equals(short[] a, short[] b) {
+        if (a == b) {
+            return true;
+        }
+        if (a == null || b == null || a.length != b.length) {
+            return false;
+        }
+        for (int i = 0; i < a.length; i++) {
+            if (a[i] != b[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Two floats are equal when their bits are: a NaN equals itself, the two zeros differ.
+    public static boolean equals(float[] a, float[] b) {
+        if (a == b) {
+            return true;
+        }
+        if (a == null || b == null || a.length != b.length) {
+            return false;
+        }
+        for (int i = 0; i < a.length; i++) {
+            if (Float.floatToIntBits(a[i]) != Float.floatToIntBits(b[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public static void setAll(int[] a, IntUnaryOperator generator) {
+        for (int i = 0; i < a.length; i++) {
+            a[i] = generator.applyAsInt(i);
+        }
+    }
+
+    public static void setAll(long[] a, IntToLongFunction generator) {
+        for (int i = 0; i < a.length; i++) {
+            a[i] = generator.applyAsLong(i);
+        }
+    }
+
+    public static void setAll(double[] a, IntToDoubleFunction generator) {
+        for (int i = 0; i < a.length; i++) {
+            a[i] = generator.applyAsDouble(i);
+        }
+    }
+
+    public static <T> void setAll(T[] a, IntFunction<? extends T> generator) {
+        for (int i = 0; i < a.length; i++) {
+            a[i] = generator.apply(i);
+        }
+    }
+
+    // Two elements are deeply equal when both are arrays of one kind that are, or when
+    // equals says so.
+    private static boolean deepEqual(Object x, Object y) {
+        if (x instanceof Object[] a) {
+            return y instanceof Object[] b && deepEquals(a, b);
+        }
+        if (x instanceof int[] a) {
+            return y instanceof int[] b && equals(a, b);
+        }
+        if (x instanceof long[] a) {
+            return y instanceof long[] b && equals(a, b);
+        }
+        if (x instanceof short[] a) {
+            return y instanceof short[] b && equals(a, b);
+        }
+        if (x instanceof char[] a) {
+            return y instanceof char[] b && equals(a, b);
+        }
+        if (x instanceof byte[] a) {
+            return y instanceof byte[] b && equals(a, b);
+        }
+        if (x instanceof boolean[] a) {
+            return y instanceof boolean[] b && equals(a, b);
+        }
+        if (x instanceof float[] a) {
+            return y instanceof float[] b && equals(a, b);
+        }
+        if (x instanceof double[] a) {
+            return y instanceof double[] b && equals(a, b);
+        }
+        return x == null ? y == null : x.equals(y);
+    }
+
+    public static boolean deepEquals(Object[] a, Object[] b) {
+        if (a == b) {
+            return true;
+        }
+        if (a == null || b == null || a.length != b.length) {
+            return false;
+        }
+        for (int i = 0; i < a.length; i++) {
+            if (!deepEqual(a[i], b[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public static int deepHashCode(Object[] a) {
+        if (a == null) {
+            return 0;
+        }
+        int hash = 1;
+        for (int i = 0; i < a.length; i++) {
+            Object e = a[i];
+            int element = 0;
+            if (e instanceof Object[] v) {
+                element = deepHashCode(v);
+            } else if (e instanceof int[] v) {
+                element = hashCode(v);
+            } else if (e instanceof long[] v) {
+                element = hashCode(v);
+            } else if (e instanceof short[] v) {
+                element = hashCode(v);
+            } else if (e instanceof char[] v) {
+                element = hashCode(v);
+            } else if (e instanceof byte[] v) {
+                element = hashCode(v);
+            } else if (e instanceof boolean[] v) {
+                element = hashCode(v);
+            } else if (e instanceof float[] v) {
+                element = hashCode(v);
+            } else if (e instanceof double[] v) {
+                element = hashCode(v);
+            } else if (e != null) {
+                element = e.hashCode();
+            }
+            hash = 31 * hash + element;
+        }
+        return hash;
     }
 
     public static String deepToString(Object[] a) {

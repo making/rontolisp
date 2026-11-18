@@ -17,6 +17,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.stream.IntStream;
 
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
@@ -3033,6 +3034,12 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	@Override
+	public LispVal hashFunction() {
+		this.generated.add(OBJECT_HASH);
+		return function(OBJECT_HASH);
+	}
+
+	@Override
 	public LispVal arrayLike(LispVal made, LispVal original) {
 		return this.classes.arrayTypes ? runtimeCall("array-like", made, original) : made;
 	}
@@ -3238,6 +3245,8 @@ final class JavaLowering implements JavaEmitter.Context {
 				return new Typed(NIL, JavaType.Null.NULL);
 			case This self:
 				return thisValue(self.pos());
+			case JavaSyntax.ClassLiteral literal:
+				throw unsupported(literal.pos(), "a class literal but compared with a class or before getName()");
 			case Name name:
 				return read(name);
 			case QualifiedThis self: {
@@ -3773,6 +3782,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	private Typed select(Select select) {
 		JavaClass named = classNamed(select.target());
 		if (named != null) {
+			bring(named, select.name());
 			Field field = field(named, select.name());
 			if (field == null) {
 				throw named.intrinsic || isLibrary(named)
@@ -4029,6 +4039,10 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private Typed binary(Binary binary) {
 		String operator = binary.operator();
+		if ((operator.equals("==") || operator.equals("!=")) && isClass(binary.left()) && isClass(binary.right())) {
+			LispVal same = sameClass(binary.left(), binary.right(), true, binary.pos());
+			return new Typed(operator.equals("==") ? same : call("not", same), Primitive.BOOLEAN);
+		}
 		return operation(operator, expression(binary.left(), null), expression(binary.right(), null), binary.pos());
 	}
 
@@ -5449,6 +5463,49 @@ final class JavaLowering implements JavaEmitter.Context {
 				: declaration.isEnum ? "enum" : declaration.isRecord ? "record" : "class";
 	}
 
+	/**
+	 * The arguments of a call of the library with a charset's name written as a constant
+	 * replaced by the charset, where the member taking the name has one beside it that
+	 * takes a {@code Charset} in its place ({@code getBytes("UTF-8")},
+	 * {@code new InputStreamReader(in, "UTF-8")}): the two do the same, and the member of
+	 * the name looks its charset up among all of them where the program runs, so that a
+	 * program naming UTF-8 would hold every charset's codec.
+	 */
+	private List<Expression> charsetsNamed(List<Method> candidates, List<Expression> arguments) {
+		if (candidates.isEmpty() || !(candidates.get(0).owner.intrinsic || isLibrary(candidates.get(0).owner))) {
+			return arguments;
+		}
+		List<Expression> replaced = arguments;
+		for (int i = 0; i < arguments.size(); i++) {
+			JavaClass.Accessor accessor = arguments.get(i) instanceof StringLiteral literal
+					? JavaIntrinsics.charsetNamed(literal.value()) : null;
+			if (accessor == null) {
+				continue;
+			}
+			int at = i;
+			ClassType charset = candidates.stream()
+				.filter(named -> named.parameters.size() == arguments.size()
+						&& named.parameters.get(at).equals(this.stringType))
+				.flatMap(named -> candidates.stream()
+					.filter(typed -> typed.parameters.size() == named.parameters.size()
+							&& typed.parameters.get(at) instanceof ClassType taken
+							&& taken.declaration().name.equals(JavaIntrinsics.CHARSET)
+							&& IntStream.range(0, named.parameters.size())
+								.allMatch(k -> k == at || typed.parameters.get(k).equals(named.parameters.get(k))))
+					.map(typed -> (ClassType) typed.parameters.get(at)))
+				.findFirst()
+				.orElse(null);
+			if (charset != null) {
+				if (replaced == arguments) {
+					replaced = new ArrayList<>(arguments);
+				}
+				replaced.set(i, new JavaSyntax.Lowered(arguments.get(i).pos(),
+						new Typed(library(accessor.className(), accessor.method(), List.of()), charset)));
+			}
+		}
+		return replaced;
+	}
+
 	private Resolved resolve(List<Method> candidates, @Nullable JavaType site, List<JavaType> explicit,
 			List<Expression> arguments, @Nullable JavaType expected, String what, JavaClass in, int pos) {
 		return resolve(candidates, site, explicit, arguments, expected, what, in, pos, List.of(), null);
@@ -5470,8 +5527,9 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * @param made the type such a creation makes, in those parameters
 	 */
 	private Resolved resolve(List<Method> candidates, @Nullable JavaType site, List<JavaType> explicit,
-			List<Expression> arguments, @Nullable JavaType expected, String what, JavaClass in, int pos,
+			List<Expression> written, @Nullable JavaType expected, String what, JavaClass in, int pos,
 			List<TypeParameter> inferred, @Nullable JavaType made) {
+		List<Expression> arguments = charsetsNamed(candidates, written);
 		boolean flexible = this.flexible;
 		this.flexible = false;
 		List<@Nullable Typed> typed = new ArrayList<>();
@@ -5691,43 +5749,107 @@ final class JavaLowering implements JavaEmitter.Context {
 	 */
 	private boolean flexible;
 
+	/**
+	 * Whether an expression is a class: {@code getClass()} of an object or a class
+	 * literal. No object stands for a class; a class is read where it is compared with
+	 * another and where its name is asked.
+	 */
+	private static boolean isClass(@Nullable Expression expression) {
+		return expression instanceof JavaSyntax.ClassLiteral || (expression instanceof Call call
+				&& call.name().equals("getClass") && call.arguments().isEmpty() && !call.onSuper());
+	}
+
+	/**
+	 * A class read ({@link #isClass}).
+	 *
+	 * @param name its name as a text: the binary name ({@code getName()}) or the simple
+	 * one
+	 * @param type the class a literal names, else the erased static type of the object
+	 * whose class it is
+	 * @param literal whether it is a class literal
+	 */
+	private record ClassRead(LispVal name, JavaType type, boolean literal) {
+	}
+
+	private ClassRead classRead(Expression written, boolean qualified) {
+		if (written instanceof JavaSyntax.ClassLiteral literal) {
+			if (!(type(literal.type()) instanceof ClassType named)) {
+				throw unsupported(literal.pos(), "a class literal of a type that is no class");
+			}
+			JavaClass declaration = named.declaration();
+			return new ClassRead(string(qualified ? declaration.binaryName : declaration.simpleName()),
+					declaration.self(), true);
+		}
+		Call inner = (Call) written;
+		Typed object = inner.target() == null ? thisValue(inner.pos()) : expression(inner.target(), null);
+		if (!object.type().isReference()) {
+			throw error(inner.pos(), object.type() + " cannot be dereferenced");
+		}
+		JavaType erased = this.types.erased(this.types.upward(object.type()));
+		if (erased instanceof ArrayType array) {
+			if (!isExact(array)) {
+				asksArrayTypes();
+			}
+			return new ClassRead(
+					runtimeCall("array-class-name", object.form(), quote(arrayClass(array)), qualified ? T : NIL),
+					erased, false);
+		}
+		if (erased.equals(this.objectType)) {
+			asksArrayTypes();
+		}
+		LispSymbol name = qualified ? CLASS_NAME : SIMPLE_NAME;
+		this.generated.add(name);
+		if (!(erased instanceof ClassType type) || type.declaration().intrinsic || type.declaration().isInterface
+				|| erased.equals(this.objectType)) {
+			this.namesOfAny.add(name);
+		}
+		return new ClassRead(list(name, object.form()), erased, false);
+	}
+
+	/**
+	 * Whether two classes are one: their binary names are the same text. With {@code ==},
+	 * two classes the types say cannot be one are the compiler's error: two literals of
+	 * two classes, a literal of a class that is none of the object's type, two objects
+	 * whose types no object has both.
+	 */
+	private LispVal sameClass(Expression left, Expression right, boolean checked, int pos) {
+		ClassRead a = classRead(left, true);
+		ClassRead b = classRead(right, true);
+		if (checked) {
+			JavaType x = this.types.erased(a.type());
+			JavaType y = this.types.erased(b.type());
+			boolean comparable = a.literal() && b.literal() ? x.equals(y) : a.literal() ? isSubtype(x, y) : b.literal()
+					? isSubtype(y, x) : isSubtype(x, y) || isSubtype(y, x) || isInterface(x) || isInterface(y);
+			if (!comparable) {
+				String first = a.literal() ? simpleName(x) : "CAP#1";
+				String second = b.literal() ? simpleName(y) : a.literal() ? "CAP#1" : "CAP#2";
+				throw error(pos, "incomparable types: Class<" + first + "> and Class<" + second + ">");
+			}
+		}
+		return call("equal", a.name(), b.name());
+	}
+
+	private static String simpleName(JavaType type) {
+		return type instanceof ClassType named ? named.declaration().simpleName() : type.toString();
+	}
+
 	private Typed invocation(Call call, @Nullable JavaType expected, boolean discard) {
 		int pos = call.pos();
 		boolean flexible = this.flexible;
 		this.flexible = false;
-		if (call.target() instanceof Call inner && inner.name().equals("getClass") && inner.arguments().isEmpty()
-				&& (call.name().equals("getName") || call.name().equals("getSimpleName"))
-				&& call.arguments().isEmpty()) {
-			Typed object = inner.target() == null ? thisValue(inner.pos()) : expression(inner.target(), null);
-			if (!object.type().isReference()) {
-				throw error(inner.pos(), object.type() + " cannot be dereferenced");
+		if (isClass(call.target())) {
+			Expression named = Objects.requireNonNull(call.target());
+			if ((call.name().equals("getName") || call.name().equals("getSimpleName")) && call.arguments().isEmpty()) {
+				LispVal text = classRead(named, call.name().equals("getName")).name();
+				this.nonNull.add(text);
+				return new Typed(text, this.stringType);
 			}
-			boolean qualified = call.name().equals("getName");
-			JavaType erased = this.types.erased(this.types.upward(object.type()));
-			LispVal text;
-			if (erased instanceof ArrayType array) {
-				if (!isExact(array)) {
-					asksArrayTypes();
-				}
-				text = runtimeCall("array-class-name", object.form(), quote(arrayClass(array)), qualified ? T : NIL);
+			if (call.name().equals("equals") && call.arguments().size() == 1 && isClass(call.arguments().get(0))) {
+				return new Typed(sameClass(named, call.arguments().get(0), false, pos), Primitive.BOOLEAN);
 			}
-			else {
-				if (erased.equals(this.objectType)) {
-					asksArrayTypes();
-				}
-				LispSymbol name = qualified ? CLASS_NAME : SIMPLE_NAME;
-				this.generated.add(name);
-				if (!(erased instanceof ClassType type) || type.declaration().intrinsic
-						|| type.declaration().isInterface || erased.equals(this.objectType)) {
-					this.namesOfAny.add(name);
-				}
-				text = list(name, object.form());
-			}
-			this.nonNull.add(text);
-			return new Typed(text, this.stringType);
 		}
 		if (call.name().equals("getClass") && call.arguments().isEmpty()) {
-			throw unsupported(pos, "getClass() but for its getName() and getSimpleName()");
+			throw unsupported(pos, "getClass() but compared with a class or before getName() and getSimpleName()");
 		}
 		List<JavaType> explicit = new ArrayList<>();
 		for (TypeName written : call.typeArguments()) {
@@ -5840,7 +5962,8 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 			LispVal form = method.emitter.emit(this,
 					new Invocation(method.isStatic ? null : receiver, resolved.arguments(), discard, pos));
-			if (resolved.returnType().equals(this.stringType) && method.returnType.equals(this.stringType)) {
+			if (resolved.returnType().equals(this.stringType) && method.returnType.equals(this.stringType)
+					&& !method.answersNull) {
 				this.nonNull.add(form);
 			}
 			return new Typed(located(form, pos), resolved.returnType());

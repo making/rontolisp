@@ -25,9 +25,11 @@ a static initialization that throws, an uncaught exception with its causes and w
 program that throws carries: j88 (2026-11-18); a task at its time (a scheduled pool, a
 `Timer`, the thread one stack starts for a time), the rest of `java.util.concurrent`, the
 members a class does not inherit, `super` to `Object`'s methods and the analysis of the
-`synchronized` regions a suspended thread can hold: j89 (2026-11-18); what comes after is
-`.todo/k00` (a thread suspended and resumed), `k01`, `j98` and `j99` (what j89, j87 and j88
-left).
+`synchronized` regions a suspended thread can hold: j89 (2026-11-18); the members a probe
+of everyday code met refused, `Character` over the Unicode tables, a class compared with
+a class, and the UTF-16 charsets paid for only where named: j98 (2026-11-18); what comes
+after is `.todo/k00` (a thread suspended and resumed), `k01`, `k05` and `j99` (what j89,
+j98 and j88 left).
 
 ## Where it sits
 
@@ -123,7 +125,16 @@ left).
   whose classes declares it, the program-wide `%string` / `%equals` / `%hash` test the classes
   declaring one, deepest first, then `%java-to-string` / `-equals` / `-hash-code` answer for
   every other value (identity for a structure: a number kept in an `eq` table from the first
-  ask). `getClass()` exists only before `.getName()` / `.getSimpleName()`. `super.toString()`,
+  ask). **No object stands for a class** (j98): `getClass()` and a class literal
+  (`Name.class`, `JavaSyntax.ClassLiteral`) are read where one is compared with the other
+  (`==`, `!=`, `.equals`: `equal` of the two binary names, `JavaLowering.sameClass`) and
+  before `.getName()` / `.getSimpleName()`; anywhere else each is refused by name. That is
+  the `equals` an IDE writes (`getClass() != o.getClass()`), the one use a probe of
+  everyday code met. With `==` the compiler's `incomparable types: Class<..> and
+  Class<..>` is kept as javac gave it over 16 shapes (two literals of two classes, a
+  literal of no class under the object's type, two objects of unrelated classes), but
+  one: an interface beside a `final` class that does not implement it is compared. A
+  `Class` as a value (a field, an argument, `isInstance`) is `.todo/k05`. `super.toString()`,
   `super.equals(o)` and `super.hashCode()` with no class above declaring the method are
   those three run-time functions on `this` (j89; refused by name until then, and any other
   member of `Object` through `super` still is). The identity text names a structure by its
@@ -705,7 +716,7 @@ measured programs.
 - A method reference naming a class fits a functional interface by its arity when a call has
   several candidates (`takes`): `thenComparing(Point::label)` against `thenComparing(Comparator)`.
 - Sizes on wasm (2026-11-17, before / after): a list added to and read 3,732 / 25,592; one
-  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/j98` holds what is
+  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/k05` holds what is
   left and the leads.
 - **The library is Java a JDK compiles** (j79, decided by measuring): javac of JDK 25 takes
   all 139 files as a patch of its own `java.base` (`--patch-module java.base=<library>`) with
@@ -782,6 +793,53 @@ measured programs.
   the artefacts; the 72 corpus cases): none declares such a class. The Lisp names of
   `java.lang` source classes stay simple.
 
+- **The members everyday code met refused (j98, 2026-11-18)**, each learned as j87's were
+  (a grid printed under JDK 25 and under the four backends: 299 lines of the bits, 1,549
+  of the parses, 1,488 of `Math`, 287 of the strings). Where each lives: a form of the
+  host where the host has one (`Integer` / `Long` over the bits take the width as an
+  argument, `%java-highest-one-bit` .. `%java-rotate`; `Math.ceilDiv` is `ceiling`,
+  `multiplyHigh` an `ash` of the product, `log1p` .. `getExponent` `%strict-math`);
+  Java in `Support` where a member throws a class of the library that is none of
+  `RAISED` or walks text (`decode`, `parseUnsignedLong`, `indent`, `Double.toHexString`,
+  `clamp`, `absExact`); Java source for the classes (`AbstractMap.SimpleEntry`,
+  `StackTraceElement`, `Runtime`, the errors, nine functional interfaces).
+  `StrictMath` is `Math`'s class under another name. What the grids found beside the
+  new members: the refusal of a parse names its radix when it is not ten and a radix
+  that is none has a message of its own (`Support.parseable`); `parseUnsignedInt` reads
+  its digits from the left and refuses at the one that passes 2^32 (one loop with
+  `parseUnsignedLong`); `Map.entry(..).setValue` says `not supported`.
+- **An intrinsic member whose `String` may be `null` says so** (`JavaClass.Method.answersNull`,
+  `Builder.nullable()`: `IO.readln`, `System.getProperty`). Every other intrinsic's text
+  is concatenated as it is, so `"x" + IO.readln()` at the end of the input was `x` on
+  wasm and an error on the JVM, where a JDK writes `xnull` (found by j98; the last line
+  of `the-standard-input-is-read-as-bytes-and-through-a-reader`).
+- **`Character`'s tests are the Unicode tables' on every backend** (j98). The host's
+  `alpha-char-p` and `digit-char-p` are ASCII-only on wasm (`.todo/269`): measured,
+  `Character.isLetter('é')` was `true` on the interpreter and the JVM and `false` on
+  wasm, and `isUpperCase` / `isLowerCase` answered "has a mapping" (`ª`, `ǅ`). The six
+  old tests and the new ones (`getType`, `isJavaIdentifierStart` ..) read the regex
+  engine's table of every code point (`%regex-uni-combo`, a running JDK's answers:
+  [regex-engine.md](regex-engine.md), "Tables") through `%java-char-combo`, which keeps
+  the first 256 code points in a vector. Cost, measured: a program counting letters is
+  12,538 -> 42,124 B of wasm (the table's text is 11 KB, the rest its decoder and the
+  arithmetic it pulls in); 10,500,000 `isLetter` calls take 0.68 -> 0.99 s on wasm
+  (4.37 s before the vector) and 18.6 -> 34.8 s on the interpreter. A program calling
+  none holds none. Not moved: `isWhitespace` / `isSpaceChar` (code, as before),
+  `toUpperCase` / `toLowerCase` (the host's fold is uniform), and `digit` /
+  `getNumericValue`, which still ask the host: a digit outside ASCII is read on the
+  interpreter and the JVM and not on wasm, `Integer.parseInt` with it (`deviations.md`,
+  `.todo/k05`: a table there would be in every program that parses a number).
+- **`%h` hands the format the program's `hashCode()` only where the control may ask**
+  (`JavaIntrinsics.formatted`): `%java-format` takes the function as its fourth argument,
+  `nil` when the control is a constant with no `%h`. The arm itself is 401 B in every
+  program that formats (154,299 -> 154,700 B).
+- **A field of an intrinsic class naming a source class** joins the class as its members
+  do (`named` / `meets`; `select` brings it): `String.CASE_INSENSITIVE_ORDER`, read
+  through `rontolisp.internal.CaseInsensitive.order()`.
+- **`System.getProperty` and `Runtime` answer what every target can**: the separators
+  and the encodings, `null` for any other key; one processor; `gc` is nothing.
+  `totalMemory` and its kind stay refused.
+
 ## java.io (2026-11-17, j79)
 
 **Invariant: a stream is Java source over `byte[]`, `char[]` and the stream under it; the
@@ -798,7 +856,7 @@ holds none of it.** No files: `File`, `FileReader`, `java.nio.file` stay refused
   `SequenceInputStream`, `LineNumberReader`; `Closeable`, `Flushable`; `IOException`,
   `EOFException`, `UTFDataFormatException`, `UnsupportedEncodingException`,
   `UncheckedIOException`; `java.nio.charset.Charset`/`StandardCharsets` (UTF-8, the default,
-  ISO-8859-1, US-ASCII) with its two exceptions. `import module java.base` and a compact
+  ISO-8859-1, US-ASCII; since j98 UTF-16, UTF-16BE, UTF-16LE) with its two exceptions. `import module java.base` and a compact
   source file bring `java.io` and `java.nio.charset` (`LIBRARY_PACKAGES`; since j83 the three
   packages of `java.util.concurrent` too).
 - **`System.out`, `System.err`, `System.in` are two things** (`JavaClass.Field.accessor`,
@@ -855,21 +913,64 @@ holds none of it.** No files: `File`, `FileReader`, `java.nio.file` stay refused
   200,000 lines summed (mean of three): wasm 1.28 -> 1.06 s (`IO.readln` 0.89), the JVM
   0.62 -> 0.44 s; the program 143,022 -> 147,639 B of wasm, a `BufferedReader` over a
   `StringReader` 96,950 -> 98,374 B.
-- **UTF-16: written, measured and taken out** (j87). `UTF_16`, `UTF_16BE`, `UTF_16LE`
+- **A charset is its codec, and a program holds the ones it names** (j98, 2026-11-18).
+  `Charset` has the codec as methods (`bytes`, `text`, `unfinished` -- how many bytes at
+  the end of a buffer wait for the next read --, `writing` / `reading` -- the charset
+  the rest of an output or an input goes on in --, `lone`, `historicalName`); the class
+  itself is UTF-8, ISO-8859-1 and US-ASCII. The UTF-16 ones are objects of
+  `rontolisp.internal.Utf16`, a subclass: a call through `Charset` is direct while the
+  program makes no `Utf16`, so their codec is in no other program. Three things keep
+  it so. `StandardCharsets` is an INTRINSIC class whose fields are read through static
+  methods (`Charset.utf8()` .., `Utf16.marked()` ..: `JavaClass.Field.accessor`, the
+  road `System.out` takes), so naming `UTF_8` initializes nothing of UTF-16. A charset
+  NAMED BY A CONSTANT is the charset: `Charset.forName` is `native` and lowered where
+  it is called, and a call of the library whose member takes the name has the constant
+  replaced by the charset when a member beside it takes a `Charset` in that place
+  (`JavaLowering.charsetsNamed`: `getBytes("UTF-8")`, `new InputStreamReader(in,
+  "UTF-8")`, `new PrintStream(out, true, "UTF-8")`; the names of
+  `JavaIntrinsics.charsetNamed`, a subset of `Charset.find`'s). A name computed where
+  the program runs, and an alias outside that list, is looked up among all of them.
+  Measured (wasm): a `BufferedReader` over `System.in` 127,904 -> 128,313 B (j87's
+  attempt: +18 KB); the same naming `"UTF-8"` three ways 143,937 -> 132,911 B (the
+  lookup is gone); over `StandardCharsets.UTF_16` 135,246 B; `getBytes` of a computed
+  name 64,129 -> 77,465 B.
+  **UTF-16's rules, measured against JDK 25** (186 lines of a grid and 3,000 seeded
+  sequences -- bytes through `new String` and through a reader given 1 to 4 bytes at a
+  time, text through `getBytes` and through a writer in pieces --, identical on the
+  four backends): UTF-16 writes the mark `FE FF` once, ahead of the first text that is
+  not empty (a string's bytes, a writer's and a `PrintStream`'s first write), then the
+  high byte first; it reads a mark at the start as the order of what follows and
+  drops it, and reads the high byte first without one; a later `FE FF` or `FF FE` is a
+  character. UTF-16BE and UTF-16LE write and read no mark. A surrogate with no partner
+  is U+FFFD, written and read; a byte with no partner is one; a high surrogate
+  followed by a unit that is no low one is ONE U+FFFD for both; a high surrogate
+  followed by one byte, or by nothing, is one. So a reader keeps back an odd byte and
+  a high surrogate ending its bytes -- the last of an odd run of them, each taking the
+  unit after it (`Utf16.unfinished`; the first version kept any and split
+  `D83D D83D DE00` otherwise than the JDK). The mark's state is no slot: a reader, a
+  writer and a `PrintStream` swap their charset for the one the rest goes on in
+  (`writing()` / `reading(..)`, two more `Utf16` objects named `UTF-16`), so
+  `PrintStream.charset()` after the first print is another object of that name
+  (`deviations.md`). A writer closed on a high surrogate writes the charset's `lone()`:
+  `?`, U+FFFD in UTF-16.
+- **UTF-16: written, measured and taken out** (j87; superseded by the entry above). `UTF_16`, `UTF_16BE`, `UTF_16LE`
   with a JDK 25's answers (the byte order mark written once and read once; a surrogate
   with no partner, a byte with none and a high surrogate with whatever unit follows it
   one U+FFFD each; 3,000 random sequences identical through `new String` and a reader
   fed a few bytes at a time) cost the `BufferedReader`-over-`System.in` program 143,022
   -> 161,075 B of wasm: `Support.encode` / `decode` and the two bridges choose the
   charset at run time, so every program with a reader or a named charset held the
-  codec. What it needs first is in `.todo/j98`: the UTF-16 charsets as objects of a
+  codec. What it needed first, done in j98: the UTF-16 charsets as objects of a
   class of their own, made only by a program that names them (a field read through a
   holder, as `System.out` is), the codec their method.
 - **A writer holds the high surrogate a STRING ends in** (j87), as it held one an array
   ends in: `write("a\ud83d")` then `write("\ude00")` is the character's four bytes.
   Still open: a string holding a surrogate with no partner encodes to its three bytes
   where a JDK writes `?` (`%java-utf8-bytes` is the host's `string-to-octets`), and a
-  string CONSTANT holding one is `?` on wasm.
+  string CONSTANT holding one is `?` on wasm. Measured 2026-11-18 (j98): the two halves
+  of a pair appended to a `StringBuilder` one `char` after the other are a string of
+  length 2 on the interpreter, 1 on the JVM (a JDK: 2 units, here one character), and
+  on wasm no `equals` of the character they spell (`.todo/k05`).
 - **`Double.longBitsToDouble`, `Float.intBitsToFloat`** are `%java-bits-binary` over
   `%java-nearest-binary` (exact, the subnormals included).
 - **Measured** (2026-11-17, the box and method of "Measured" below; wasm / class bytes, then
@@ -1241,6 +1342,15 @@ virtual call can run --, classes used):
   What is left of the list j73 made is `.todo/j99`'s: checked exceptions, the host's
   failures in an initializer, `StackOverflowError`, the `NullPointerException` message,
   the frames.
+- **`getStackTrace()` answers an empty array, after `setStackTrace` too** (j98). A slot
+  of `Throwable` holding what a program set was 275 B of wasm in every program that
+  throws (a list program 124,032 -> 124,287, one catching its own exception 56,768 ->
+  57,043), for a set-then-get no program in the repository writes: `setStackTrace`
+  checks its elements and keeps nothing (`deviations.md`). `StackTraceElement` is a
+  class a program makes; the classes a program can now name beside its own
+  (`AssertionError`, `ArrayStoreException`, `StackOverflowError`, `OutOfMemoryError`,
+  `SecurityException`, `FileNotFoundException`, `InputMismatchException`) are raised by
+  nothing of the run time.
 
 ## Threads (2026-11-17, j76)
 
@@ -1833,4 +1943,21 @@ above an anonymous class) and the `refused:` cases
 the corpus waits only for what one stack can run: a thread may wait for what a thread
 started LATER does, never for the thread that waits for it (two readers held open by
 `main` at once, a second round of one barrier's threads and a producer blocked on a full
-queue are refused there).
+queue are refused there). j98: the methods added at the end of
+`a-string-has-its-everyday-surface-and-two-constants-of-a-text-are-one` (`rest`),
+`the-boxes-parse-print-and-compare-and-math-is-strict` (`bits`: the bits, `decode`, the
+unsigned parses, `Math`, `Character` over 19 code points),
+`a-deque-an-optional-the-utilities-and-the-older-classes` (`later`),
+`the-functional-interfaces-of-the-library-are-source-in-the-subset` (`conversions`),
+`format-renders-the-conversions-programs-write` (`hashes`: `%h` of a class of the
+program), `the-methods-of-object-on-a-class-that-declares-them-and-on-one-that-does-not`
+(`classes`), `try-catch-finally-over-one-condition-holding-the-thrown-object` (`named`)
+and `a-byte-stream-reads-and-writes-bytes-and-a-string-is-its-bytes` (`wide`: the three
+UTF-16 charsets through a string, a reader given 1 to 3 bytes at a time, a writer and a
+`PrintStream`; the names); the `refused:` cases `two-class-literals-of-two-classes` and
+`a-class-literal-of-no-class-under-the-object-s-type`; the `at the end: null` line of
+the standard input case; `JavaLoweringTest`'s refusals and, in
+`theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`, a charset named by a constant
+reaching no `Utf16` where a computed name does. A corpus program holding a surrogate
+with no partner makes it with `new String(char[])`, never as a constant (wasm reads a
+constant's as `?`).

@@ -1252,6 +1252,18 @@ final class JavaParser {
 		out.add(new ExpressionStatement(pos, expression));
 	}
 
+	/** The qualified name an expression spells, or {@code null} when it spells none. */
+	private static @Nullable String qualifiedName(Expression expression) {
+		if (expression instanceof Name name) {
+			return name.identifier();
+		}
+		if (expression instanceof Select select) {
+			String prefix = qualifiedName(select.target());
+			return prefix == null ? null : prefix + "." + select.name();
+		}
+		return null;
+	}
+
 	/**
 	 * The class a literal {@code Name.class} names when one stands here as the whole lock
 	 * of a {@code synchronized} statement, else {@code null}: the one place the subset
@@ -1987,7 +1999,14 @@ final class JavaParser {
 					continue;
 				}
 				if (at("class")) {
-					throw unsupported("a class literal");
+					String named = qualifiedName(expression);
+					if (named == null) {
+						throw unsupported("a class literal");
+					}
+					int literal = this.tokens.get(this.p++).offset();
+					expression = new JavaSyntax.ClassLiteral(literal,
+							new TypeName(expression.pos(), named, List.of(), false, 0));
+					continue;
 				}
 				int at = current().offset();
 				String name = identifier();

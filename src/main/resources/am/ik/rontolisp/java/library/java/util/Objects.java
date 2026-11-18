@@ -3,6 +3,8 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.util.function.Supplier;
+
 public final class Objects {
 
     private Objects() {
@@ -48,6 +50,18 @@ public final class Objects {
             throw new NullPointerException(message);
         }
         return o;
+    }
+
+    public static <T> T requireNonNull(T o, Supplier<String> messageSupplier) {
+        if (o == null) {
+            throw new NullPointerException(messageSupplier == null ? null : messageSupplier.get());
+        }
+        return o;
+    }
+
+    public static <T> T requireNonNullElseGet(T o, Supplier<? extends T> supplier) {
+        return o != null ? o
+                : requireNonNull(requireNonNull(supplier, "supplier").get(), "supplier.get()");
     }
 
     public static <T> T requireNonNullElse(T o, T other) {

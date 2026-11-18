@@ -65,9 +65,14 @@ final class JavaIntrinsics {
 
 	private static final String PATTERN = "java.util.regex.Pattern";
 
-	private static final String CHARSET = "java.nio.charset.Charset";
+	static final String CHARSET = "java.nio.charset.Charset";
+
+	/** The source class of the UTF-16 charsets, which only a program naming one makes. */
+	private static final String UTF16 = "rontolisp.internal.Utf16";
 
 	private static final String LOCALE = "java.util.Locale";
+
+	private static final String COMPARATOR = "java.util.Comparator";
 
 	/**
 	 * What {@code System.out} and {@code System.err} are as the receiver of a print: the
@@ -144,6 +149,25 @@ final class JavaIntrinsics {
 		};
 	}
 
+	/**
+	 * The static method of the library's Java source answering the charset a name written
+	 * as a constant names, for the names programs write, whatever their case;
+	 * {@code null} for any other name, which the library looks up where the program runs.
+	 * A subset of what {@code Charset.find} takes: a call given such a name reaches that
+	 * one charset, where a lookup reaches them all.
+	 */
+	static JavaClass.@Nullable Accessor charsetNamed(String name) {
+		return switch (name.toUpperCase(java.util.Locale.ROOT)) {
+			case "UTF-8", "UTF8" -> new JavaClass.Accessor(CHARSET, "utf8");
+			case "ISO-8859-1", "ISO8859_1", "LATIN1" -> new JavaClass.Accessor(CHARSET, "latin1");
+			case "US-ASCII", "ASCII" -> new JavaClass.Accessor(CHARSET, "ascii");
+			case "UTF-16" -> new JavaClass.Accessor(UTF16, "marked");
+			case "UTF-16BE" -> new JavaClass.Accessor(UTF16, "big");
+			case "UTF-16LE" -> new JavaClass.Accessor(UTF16, "little");
+			default -> null;
+		};
+	}
+
 	/** The intrinsic classes, as the class table asks for them. */
 	static final JavaClasses.Library LIBRARY = new JavaClasses.Library() {
 		@Override
@@ -183,6 +207,9 @@ final class JavaIntrinsics {
 		}
 		if (intrinsic.equals(STRING) && (member.equals("getBytes") || member.equals("<init>"))) {
 			return List.of(CHARSET);
+		}
+		if (intrinsic.equals(STRING) && member.equals("CASE_INSENSITIVE_ORDER")) {
+			return List.of(COMPARATOR);
 		}
 		boolean formats = member.equals("format") || member.equals("printf");
 		if ((intrinsic.equals(STRING)
@@ -242,9 +269,8 @@ final class JavaIntrinsics {
 			List<JavaType> formatted = List.of(locale, string, new ArrayType(classes.libraryType(OBJECT)));
 			if (text) {
 				JavaClass.Method format = new JavaClass.Method(intrinsic, "format", formatted, string, true, false,
-						null,
-						(lowering, call) -> after(call.argument(0),
-								runtimeCall("format", call.argument(1), call.argument(2), lowering.stringFunction())),
+						null, (lowering, call) -> after(call.argument(0),
+								formatted(lowering, call.arguments().get(1), call.argument(2))),
 						false);
 				format.varargs = true;
 				intrinsic.methods.add(format);
@@ -265,6 +291,12 @@ final class JavaIntrinsics {
 					intrinsic.methods.add(print);
 				}
 			}
+		}
+		if (named.name.equals(COMPARATOR) && text) {
+			JavaClass.Field order = new JavaClass.Field(intrinsic, "CASE_INSENSITIVE_ORDER",
+					new ClassType(named, List.of(new ClassType(intrinsic, List.of()))), true, true, null, null);
+			order.accessor = new JavaClass.Accessor("rontolisp.internal.CaseInsensitive", "order");
+			intrinsic.fields.add(order);
 		}
 		if (named.name.equals("java.lang.Iterable") && text) {
 			intrinsic.methods.add(new JavaClass.Method(intrinsic, "join",
@@ -447,6 +479,12 @@ final class JavaIntrinsics {
 			return this;
 		}
 
+		/** The member added last may answer {@code null} where it answers a text. */
+		Builder nullable() {
+			this.made.methods.get(this.made.methods.size() - 1).answersNull = true;
+			return this;
+		}
+
 		/** The member added last takes the arguments past its others as an array. */
 		Builder varargs() {
 			this.made.methods.get(this.made.methods.size() - 1).varargs = true;
@@ -463,8 +501,12 @@ final class JavaIntrinsics {
 		 * needs no object.
 		 */
 		Builder standard(String name, JavaType type, String source, @Nullable Typed direct) {
+			return standard(name, type, new JavaClass.Accessor(source, name), direct);
+		}
+
+		Builder standard(String name, JavaType type, JavaClass.Accessor accessor, @Nullable Typed direct) {
 			JavaClass.Field field = new JavaClass.Field(this.made, name, type, true, true, null, null);
-			field.accessor = new JavaClass.Accessor(source, name);
+			field.accessor = accessor;
 			field.direct = direct;
 			this.made.fields.add(field);
 			return this;
@@ -523,6 +565,7 @@ final class JavaIntrinsics {
 			case STRING_BUFFER:
 				return stringBuilder(new Builder(name, false, classes), classes);
 			case "java.lang.Math":
+			case "java.lang.StrictMath":
 				return math(new Builder(name, false, classes));
 			case NUMBER:
 				return new Builder(name, true, classes).method("intValue", Primitive.INT, runtime("number-int"))
@@ -569,8 +612,28 @@ final class JavaIntrinsics {
 							arrayKind(call.arguments().get(0).type()), arrayKind(call.arguments().get(2).type())),
 							object, Primitive.INT, object, Primitive.INT, Primitive.INT)
 					.statik("identityHashCode", Primitive.INT, runtime("identity-hash-code"), object)
+					.statik("getProperty", classes.libraryType(STRING), support("property"),
+							classes.libraryType(STRING))
+					.nullable()
+					.statik("getProperty", classes.libraryType(STRING), support("propertyOr"),
+							classes.libraryType(STRING), classes.libraryType(STRING))
+					.nullable()
+					// nothing a program can tell is collected at its ask
+					.statik("gc", Primitive.VOID, (lowering, call) -> JavaForms.NIL)
 					.statik("lineSeparator", classes.libraryType(STRING),
 							(lowering, call) -> JavaForms.string("\n")).made;
+			}
+			case "java.nio.charset.StandardCharsets": {
+				// each field is read through the static method answering its charset,
+				// so
+				// that a program holds the UTF-16 ones only where it names one
+				ClassType charset = classes.libraryType(CHARSET);
+				Builder charsets = new Builder(name, false, classes);
+				for (String field : List.of("UTF_8", "ISO_8859_1", "US_ASCII", "UTF_16", "UTF_16BE", "UTF_16LE")) {
+					charsets.standard(field, charset,
+							java.util.Objects.requireNonNull(charsetNamed(field.replace('_', '-'))), null);
+				}
+				return charsets.made;
 			}
 			case STANDARD_STREAM: {
 				// printf and format answer nothing here: a call whose value is used is
@@ -601,8 +664,12 @@ final class JavaIntrinsics {
 					.any("print", true, Primitive.VOID, object,
 							(lowering, call) -> print(lowering, call, "write-string", OUT))
 					.statik("readln", string, runtime("readln"))
-					.statik("readln", string, (lowering, call) -> call("progn", call("write-string", call.argument(0)),
-							call("finish-output"), runtimeCall("readln")), string).made;
+					.nullable()
+					.statik("readln", string,
+							(lowering, call) -> call("progn", call("write-string", call.argument(0)),
+									call("finish-output"), runtimeCall("readln")),
+							string)
+					.nullable().made;
 			}
 			default:
 				return null;
@@ -619,8 +686,24 @@ final class JavaIntrinsics {
 	}
 
 	private static LispVal printf(Context lowering, Invocation call) {
-		LispVal text = runtimeCall("format", call.argument(0), call.argument(1), lowering.stringFunction());
+		LispVal text = formatted(lowering, call.arguments().get(0), call.argument(1));
 		return call.self().equals(OUT) ? call("write-string", text) : call("write-string", text, call.self());
+	}
+
+	/** A conversion of {@code String.format} that writes its argument's hash code. */
+	private static final java.util.regex.Pattern HASH_CONVERSION = java.util.regex.Pattern
+		.compile("%[-#+ 0,(\\d$.]*[hH]");
+
+	/**
+	 * {@code String.format} over a control and the array of its arguments. The function
+	 * answering any value's {@code hashCode()} goes with it only where the control may
+	 * hold the conversion that asks for one -- it is no constant, or names {@code %h} --,
+	 * so that no other program holds that function for its formats.
+	 */
+	private static LispVal formatted(Context lowering, Typed control, LispVal arguments) {
+		boolean hashes = !(control.constant() instanceof String text) || HASH_CONVERSION.matcher(text).find();
+		return runtimeCall("format", control.form(), arguments, lowering.stringFunction(),
+				hashes ? lowering.hashFunction() : JavaForms.NIL);
 	}
 
 	/** An argument as the text {@code String.valueOf} makes of it. */
@@ -639,8 +722,8 @@ final class JavaIntrinsics {
 		Primitive b = Primitive.BOOLEAN;
 		ArrayType characters = new ArrayType(Primitive.CHAR);
 		ArrayType bytes = new ArrayType(Primitive.BYTE);
-		JavaEmitter format = (lowering, call) -> runtimeCall("format", call.self(), call.argument(0),
-				lowering.stringFunction());
+		JavaEmitter format = (lowering, call) -> formatted(lowering, java.util.Objects.requireNonNull(call.receiver()),
+				call.argument(0));
 		return builder.constructor((lowering, call) -> JavaForms.string(""))
 			.constructor(runtime("string-copy"), string)
 			.constructor((lowering, call) -> runtimeCall("chars-string", call.argument(0), integer(0), JavaForms.NIL),
@@ -656,6 +739,10 @@ final class JavaIntrinsics {
 			.method("getBytes", bytes, support("encodeNamed"), string)
 			.method("length", i, host("length"))
 			.method("charAt", Primitive.CHAR, JavaIntrinsics::charAt, i)
+			// a string's elements are code points
+			.method("codePointAt", i, JavaIntrinsics::charAt, i)
+			.method("codePointBefore", i,
+					(lowering, call) -> code(lowering, call.self(), call("-", call.argument(0), integer(1))), i)
 			.method("isEmpty", b, (lowering, call) -> call("=", call("length", call.self()), integer(0)))
 			.method("isBlank", b, runtime("blank-p"))
 			.method("equals", b, (lowering, call) -> {
@@ -681,6 +768,16 @@ final class JavaIntrinsics {
 			.method("indexOf", i, runtime("index-of-char"), i, i)
 			.method("lastIndexOf", i, runtime("last-index-of"), string)
 			.method("lastIndexOf", i, runtime("last-index-of-char"), i)
+			.method("lastIndexOf", i, runtime("last-index-of-from"), string, i)
+			.method("lastIndexOf", i, runtime("last-index-of-char-from"), i, i)
+			.method("regionMatches", b,
+					(lowering, call) -> runtimeCall("region-matches", call.self(), JavaForms.NIL, call.argument(0),
+							call.argument(1), call.argument(2), call.argument(3)),
+					i, string, i, i)
+			.method("regionMatches", b, runtime("region-matches"), b, i, string, i, i)
+			.method("contentEquals", b, support("contentEquals"), object)
+			.method("getChars", Primitive.VOID, runtime("get-chars"), i, i, characters, i)
+			.method("indent", string, support("indent"), i)
 			.method("contains", b,
 					(lowering, call) -> call("if", call("search", text(lowering, call, 0), call.self()), JavaForms.T,
 							JavaForms.NIL),
@@ -725,15 +822,19 @@ final class JavaIntrinsics {
 			.method("formatted", string, format, new ArrayType(object))
 			.varargs()
 			.statik("format", string,
-					(lowering, call) -> runtimeCall("format", call.argument(0), call.argument(1),
-							lowering.stringFunction()),
-					string, new ArrayType(object))
+					(lowering, call) -> formatted(lowering, call.arguments().get(0), call.argument(1)), string,
+					new ArrayType(object))
 			.varargs()
 			.statik("join", string,
 					(lowering, call) -> runtimeCall("join", text(lowering, call, 0), call.argument(1),
 							lowering.stringFunction()),
 					object, new ArrayType(object))
 			.varargs()
+			.statik("copyValueOf", string,
+					(lowering, call) -> runtimeCall("chars-string", call.argument(0), integer(0), JavaForms.NIL),
+					characters)
+			.statik("copyValueOf", string, runtime("chars-string"), characters, i, i)
+			.statik("valueOf", string, runtime("chars-string"), characters, i, i)
 			.any("valueOf", true, string, object, (lowering, call) -> text(lowering, call, 0)).made;
 	}
 
@@ -755,9 +856,14 @@ final class JavaIntrinsics {
 	 * (.kb/java-frontend.md, "Exceptions").
 	 */
 	private static LispVal charAt(Context lowering, Invocation call) {
+		return code(lowering, call.self(), call.argument(0));
+	}
+
+	/** The code of a string's character at an index, the two given as forms. */
+	private static LispVal code(Context lowering, LispVal string, LispVal at) {
 		List<LispVal> bindings = new ArrayList<>();
-		LispVal text = held(lowering, call.self(), bindings);
-		LispVal index = held(lowering, call.argument(0), bindings);
+		LispVal text = held(lowering, string, bindings);
+		LispVal index = held(lowering, at, bindings);
 		LispSymbol code = lowering.temporary();
 		bindings.add(list(code, call("%string-code", text, index)));
 		return list(cl("let*"), list(bindings),
@@ -805,6 +911,22 @@ final class JavaIntrinsics {
 			.method("delete", self, runtime("sb-delete"), i, i)
 			.method("replace", self, runtime("sb-replace"), i, i, string)
 			.method("indexOf", i, runtime("sb-index-of"), string)
+			.method("indexOf", i, runtime("index-of"), string, i)
+			.method("lastIndexOf", i, runtime("last-index-of"), string)
+			.method("lastIndexOf", i, runtime("last-index-of-from"), string, i)
+			.method("compareTo", i,
+					(lowering, call) -> runtimeCall("string-compare", runtimeCall("sb-string", call.self()),
+							runtimeCall("sb-string", call.argument(0))),
+					self)
+			.method("appendCodePoint", self,
+					(lowering, call) -> runtimeCall("sb-append-char", call.self(),
+							runtimeCall("code-point", call.argument(0))),
+					i)
+			.method("repeat", self, runtime("sb-repeat-code"), i, i)
+			.method("repeat", self,
+					(lowering, call) -> runtimeCall("sb-repeat", call.self(), text(lowering, call, 0),
+							call.argument(1)),
+					object, i)
 			.method("toString", string, runtime("sb-string"))
 			.method("length", i, host("length"))
 			.method("isEmpty", Primitive.BOOLEAN,
@@ -815,11 +937,49 @@ final class JavaIntrinsics {
 			.method("substring", string, runtime("sb-substring"), i, i).made;
 	}
 
+	/**
+	 * The members of {@code Integer} and {@code Long} over the bits of a number: the same
+	 * forms at 32 and at 64 bits.
+	 */
+	private static void bits(Builder builder, Primitive type, int width) {
+		Primitive i = Primitive.INT;
+		LispVal bits = integer(width);
+		LispVal mask = integer(java.math.BigInteger.ONE.shiftLeft(width).subtract(java.math.BigInteger.ONE));
+		builder.field("SIZE", i, integer(width)).field("BYTES", i, integer(width / 8));
+		for (String name : List.of("highestOneBit", "lowestOneBit")) {
+			String function = name.equals("highestOneBit") ? "highest-one-bit" : "lowest-one-bit";
+			builder.statik(name, type, (lowering, call) -> runtimeCall(function, call.argument(0), bits), type);
+		}
+		builder
+			.statik("numberOfLeadingZeros", i, (lowering, call) -> runtimeCall("leading-zeros", call.argument(0), bits),
+					type)
+			.statik("numberOfTrailingZeros", i,
+					(lowering, call) -> runtimeCall("trailing-zeros", call.argument(0), bits), type)
+			.statik("reverse", type,
+					(lowering, call) -> runtimeCall("reverse-bits", call.argument(0), bits, integer(1)), type)
+			.statik("reverseBytes", type,
+					(lowering, call) -> runtimeCall("reverse-bits", call.argument(0), bits, integer(8)), type)
+			.statik("rotateLeft", type,
+					(lowering, call) -> runtimeCall("rotate", call.argument(0), call.argument(1), bits), type, i)
+			.statik("rotateRight", type,
+					(lowering, call) -> runtimeCall("rotate", call.argument(0), call("-", call.argument(1)), bits),
+					type, i)
+			.statik("divideUnsigned", type,
+					(lowering, call) -> runtimeCall("unsigned-divide", call.argument(0), call.argument(1), bits), type,
+					type)
+			.statik("remainderUnsigned", type,
+					(lowering, call) -> runtimeCall("unsigned-remainder", call.argument(0), call.argument(1), bits),
+					type, type)
+			.statik("compareUnsigned", i, (lowering, call) -> runtimeCall("compare",
+					call("logand", call.argument(0), mask), call("logand", call.argument(1), mask)), type, type);
+	}
+
 	private static JavaClass integerClass(Builder builder, JavaClasses classes) {
 		ClassType string = classes.libraryType(STRING);
 		ClassType self = new ClassType(builder.made, List.of());
 		builder.made.superclass = classes.library(NUMBER);
 		Primitive i = Primitive.INT;
+		bits(builder, i, 32);
 		return builder.field("MAX_VALUE", i, integer(Integer.MAX_VALUE))
 			.field("MIN_VALUE", i, integer(Integer.MIN_VALUE))
 			.statik("parseInt", i,
@@ -836,8 +996,15 @@ final class JavaIntrinsics {
 			.statik("parseUnsignedInt", i, support("parseUnsignedInt"), string, i)
 			.statik("toUnsignedString", string,
 					(lowering, call) -> runtimeCall("unsigned-string", call.argument(0), integer(10), integer(32)), i)
+			.statik("toUnsignedString", string,
+					(lowering, call) -> runtimeCall("unsigned-string", call.argument(0), call.argument(1), integer(32)),
+					i, i)
 			.statik("toUnsignedLong", Primitive.LONG,
 					(lowering, call) -> call("logand", call.argument(0), integer(0xFFFFFFFFL)), i)
+			.statik("decode", self,
+					(lowering, call) -> lowering.library(SUPPORT, "decode",
+							List.of(call.argument(0), integer(Integer.MIN_VALUE), integer(Integer.MAX_VALUE))),
+					string)
 			.statik("toString", string, host("%decimal-piece"), i)
 			.statik("toString", string, runtime("radix-string"), i, i)
 			.statik("toBinaryString", string,
@@ -869,8 +1036,27 @@ final class JavaIntrinsics {
 		builder.made.superclass = classes.library(NUMBER);
 		Primitive i = Primitive.INT;
 		Primitive l = Primitive.LONG;
+		bits(builder, l, 64);
 		return builder.field("MAX_VALUE", l, integer(Long.MAX_VALUE))
 			.field("MIN_VALUE", l, integer(Long.MIN_VALUE))
+			.statik("parseUnsignedLong", l,
+					(lowering, call) -> lowering.library(SUPPORT, "parseUnsignedLong",
+							List.of(call.argument(0), integer(10))),
+					string)
+			.statik("parseUnsignedLong", l, support("parseUnsignedLong"), string, i)
+			.statik("decode", self,
+					(lowering, call) -> call("cons",
+							lowering.library(SUPPORT, "decode",
+									List.of(call.argument(0), integer(Long.MIN_VALUE), integer(Long.MAX_VALUE))),
+							JavaForms.BOXED_LONG),
+					string)
+			.statik("toUnsignedString", string,
+					(lowering, call) -> runtimeCall("unsigned-string", call.argument(0), integer(10), integer(64)), l)
+			.statik("toUnsignedString", string,
+					(lowering, call) -> runtimeCall("unsigned-string", call.argument(0), call.argument(1), integer(64)),
+					l, i)
+			.statik("toOctalString", string,
+					(lowering, call) -> runtimeCall("unsigned-string", call.argument(0), integer(8), integer(64)), l)
 			.statik("parseLong", l,
 					(lowering, call) -> lowering.library(SUPPORT, "parseLong", List.of(call.argument(0), integer(10))),
 					string)
@@ -921,6 +1107,12 @@ final class JavaIntrinsics {
 			.field("POSITIVE_INFINITY", d, runtimeCall("infinity", JavaForms.NIL))
 			.field("NEGATIVE_INFINITY", d, runtimeCall("infinity", JavaForms.T))
 			.field("NaN", d, runtimeCall("nan"))
+			.field("MIN_NORMAL", d, new LispDouble(Double.MIN_NORMAL))
+			.field("MAX_EXPONENT", i, integer(Double.MAX_EXPONENT))
+			.field("MIN_EXPONENT", i, integer(Double.MIN_EXPONENT))
+			.field("SIZE", i, integer(Double.SIZE))
+			.field("BYTES", i, integer(Double.BYTES))
+			.statik("toHexString", string, support("hexString"), d)
 			.statik("parseDouble", d, support("parseDouble"), string)
 			.statik("valueOf", self, support("parseDouble"), string)
 			.statik("toString", string, runtime("double-string"), d)
@@ -964,6 +1156,8 @@ final class JavaIntrinsics {
 		JavaEmitter value = (lowering, call) -> call("car", call.self());
 		return builder.field("MAX_VALUE", held, integer(isByte ? Byte.MAX_VALUE : Short.MAX_VALUE))
 			.field("MIN_VALUE", held, integer(isByte ? Byte.MIN_VALUE : Short.MIN_VALUE))
+			.field("SIZE", i, integer(isByte ? Byte.SIZE : Short.SIZE))
+			.field("BYTES", i, integer(isByte ? Byte.BYTES : Short.BYTES))
 			.statik(parse, held,
 					(lowering, call) -> lowering.library(SUPPORT, parse, List.of(call.argument(0), integer(10))),
 					string)
@@ -1008,6 +1202,11 @@ final class JavaIntrinsics {
 			.field("POSITIVE_INFINITY", f, runtimeCall("infinity", JavaForms.NIL))
 			.field("NEGATIVE_INFINITY", f, runtimeCall("infinity", JavaForms.T))
 			.field("NaN", f, runtimeCall("nan"))
+			.field("MAX_EXPONENT", i, integer(Float.MAX_EXPONENT))
+			.field("MIN_EXPONENT", i, integer(Float.MIN_EXPONENT))
+			.field("SIZE", i, integer(Float.SIZE))
+			.field("BYTES", i, integer(Float.BYTES))
+			.statik("toHexString", string, support("hexStringOfFloat"), f)
 			.statik("parseFloat", f, support("parseFloat"), string)
 			.statik("valueOf", self,
 					(lowering, call) -> call("cons", lowering.library(SUPPORT, "parseFloat", List.of(call.argument(0))),
@@ -1102,13 +1301,99 @@ final class JavaIntrinsics {
 					(lowering, call) -> call("-", call("char-code", call.self()), call("char-code", call.argument(0))),
 					self)
 			.method("charValue", c, (lowering, call) -> call("char-code", call.self()));
-		for (String test : List.of("isDigit", "isLetter", "isLetterOrDigit", "isAlphabetic", "isWhitespace",
-				"isSpaceChar", "isUpperCase", "isLowerCase")) {
-			String name = "char-"
-					+ test.substring(2).replaceAll("([a-z])([A-Z])", "$1-$2").toLowerCase(java.util.Locale.ROOT) + "-p";
-			builder.statik(test, b, runtime(name), c);
+		for (Primitive unit : List.of(c, i)) {
+			for (String test : List.of("isWhitespace", "isSpaceChar")) {
+				String name = "char-"
+						+ test.substring(2).replaceAll("([a-z])([A-Z])", "$1-$2").toLowerCase(java.util.Locale.ROOT)
+						+ "-p";
+				builder.statik(test, b, runtime(name), unit);
+			}
+			// the predicates the Unicode tables answer, each by its bit there
+			// (regex.lisp)
+			List<String> tabled = List.of("isAlphabetic", "isLowerCase", "isUpperCase", "isTitleCase", "isIdeographic",
+					"isDigit", "isLetter", "isLetterOrDigit", "isDefined", "isMirrored", "isJavaIdentifierStart",
+					"isJavaIdentifierPart", "isUnicodeIdentifierStart", "isUnicodeIdentifierPart",
+					"isIdentifierIgnorable");
+			for (int bit = 0; bit < tabled.size(); bit++) {
+				LispVal mask = integer(1L << bit);
+				builder.statik(tabled.get(bit), b, (lowering, call) -> runtimeCall("char-is", call.argument(0), mask),
+						unit);
+			}
+			builder
+				.statik("isISOControl", b, (lowering, call) -> runtimeCall("char-iso-control-p", call.argument(0)),
+						unit)
+				.statik("getType", i, runtime("char-type"), unit);
 		}
+		List<String> pictured = List.of("isEmoji", "isEmojiPresentation", "isEmojiModifier", "isEmojiModifierBase",
+				"isEmojiComponent", "isExtendedPictographic");
+		for (int bit = 0; bit < pictured.size(); bit++) {
+			LispVal mask = integer(1L << (18 + bit));
+			builder.statik(pictured.get(bit), b, (lowering, call) -> runtimeCall("char-is", call.argument(0), mask), i);
+		}
+		// the general categories, as getType numbers them
+		List<String> categories = List.of("UNASSIGNED", "UPPERCASE_LETTER", "LOWERCASE_LETTER", "TITLECASE_LETTER",
+				"MODIFIER_LETTER", "OTHER_LETTER", "NON_SPACING_MARK", "ENCLOSING_MARK", "COMBINING_SPACING_MARK",
+				"DECIMAL_DIGIT_NUMBER", "LETTER_NUMBER", "OTHER_NUMBER", "SPACE_SEPARATOR", "LINE_SEPARATOR",
+				"PARAGRAPH_SEPARATOR", "CONTROL", "FORMAT", "", "PRIVATE_USE", "SURROGATE", "DASH_PUNCTUATION",
+				"START_PUNCTUATION", "END_PUNCTUATION", "CONNECTOR_PUNCTUATION", "OTHER_PUNCTUATION", "MATH_SYMBOL",
+				"CURRENCY_SYMBOL", "MODIFIER_SYMBOL", "OTHER_SYMBOL", "INITIAL_QUOTE_PUNCTUATION",
+				"FINAL_QUOTE_PUNCTUATION");
+		for (int number = 0; number < categories.size(); number++) {
+			if (!categories.get(number).isEmpty()) {
+				builder.field(categories.get(number), Primitive.BYTE, integer(number));
+			}
+		}
+		// a code point and the two units of one outside the first plane
+		builder.field("MIN_RADIX", i, integer(2))
+			.field("MAX_RADIX", i, integer(36))
+			.field("SIZE", i, integer(16))
+			.field("BYTES", i, integer(2))
+			.field("MIN_CODE_POINT", i, integer(0))
+			.field("MAX_CODE_POINT", i, integer(0x10FFFF))
+			.field("MIN_SUPPLEMENTARY_CODE_POINT", i, integer(0x10000))
+			.field("MIN_HIGH_SURROGATE", c, integer(0xD800))
+			.field("MAX_HIGH_SURROGATE", c, integer(0xDBFF))
+			.field("MIN_LOW_SURROGATE", c, integer(0xDC00))
+			.field("MAX_LOW_SURROGATE", c, integer(0xDFFF))
+			.field("MIN_SURROGATE", c, integer(0xD800))
+			.field("MAX_SURROGATE", c, integer(0xDFFF))
+			.statik("toString", string,
+					(lowering, call) -> runtimeCall("char-string", runtimeCall("code-point", call.argument(0))), i)
+			.statik("toChars", new ArrayType(c), runtime("code-point-chars"), i)
+			.statik("charCount", i,
+					(lowering, call) -> call("if", call(">=", call.argument(0), integer(0x10000)), integer(2),
+							integer(1)),
+					i)
+			.statik("isValidCodePoint", b, (lowering, call) -> between(call.argument(0), 0, 0x10FFFF), i)
+			.statik("isBmpCodePoint", b, (lowering, call) -> between(call.argument(0), 0, 0xFFFF), i)
+			.statik("isSupplementaryCodePoint", b, (lowering, call) -> between(call.argument(0), 0x10000, 0x10FFFF), i)
+			.statik("isHighSurrogate", b, (lowering, call) -> between(call.argument(0), 0xD800, 0xDBFF), c)
+			.statik("isLowSurrogate", b, (lowering, call) -> between(call.argument(0), 0xDC00, 0xDFFF), c)
+			.statik("isSurrogate", b, (lowering, call) -> between(call.argument(0), 0xD800, 0xDFFF), c)
+			.statik("isSurrogatePair", b,
+					(lowering, call) -> call("and", between(call.argument(0), 0xD800, 0xDBFF),
+							between(call.argument(1), 0xDC00, 0xDFFF)),
+					c, c)
+			.statik("toCodePoint", i,
+					(lowering, call) -> call("+", call("ash", call.argument(0), integer(10)), call.argument(1),
+							integer(0x10000 - (0xD800 << 10) - 0xDC00)),
+					c, c)
+			.statik("highSurrogate", c,
+					(lowering, call) -> call("+", integer(0xD800 - (0x10000 >> 10)),
+							call("ash", call.argument(0), integer(-10))),
+					i)
+			.statik("lowSurrogate", c,
+					(lowering, call) -> call("+", integer(0xDC00), call("logand", call.argument(0), integer(0x3FF))), i)
+			.statik("getNumericValue", i, runtime("numeric-value"), i)
+			.statik("digit", i, runtime("digit"), i, i)
+			.statik("toUpperCase", i, runtime("char-upcase"), i)
+			.statik("toLowerCase", i, runtime("char-downcase"), i);
 		return builder.made;
+	}
+
+	/** Whether a number is one of a range, both ends in it: the number is read once. */
+	private static LispVal between(LispVal number, int least, int most) {
+		return call("<=", integer(least), number, integer(most));
 	}
 
 	private static JavaClass math(Builder builder) {
@@ -1147,7 +1432,7 @@ final class JavaIntrinsics {
 			.statik("floorMod", i, host("mod"), i, i)
 			.statik("floorMod", l, host("mod"), l, l);
 		for (String name : List.of("sqrt", "cbrt", "floor", "ceil", "rint", "exp", "log", "log10", "sin", "cos", "tan",
-				"asin", "acos", "atan", "sinh", "cosh", "tanh", "signum")) {
+				"asin", "acos", "atan", "sinh", "cosh", "tanh", "signum", "log1p", "expm1")) {
 			builder.statik(name, d, strict(name), d);
 		}
 		for (String name : List.of("max", "min")) {
@@ -1161,6 +1446,55 @@ final class JavaIntrinsics {
 			builder.statik(name, i, support(name), i, i).statik(name, l, support(name + "Long"), l, l);
 		}
 		builder.statik("negateExact", i, support("negateExact"), i).statik("toIntExact", i, support("toIntExact"), l);
+		for (String name : List.of("absExact", "incrementExact", "decrementExact")) {
+			builder.statik(name, i, support(name), i).statik(name, l, support(name + "Long"), l);
+		}
+		builder.statik("negateExact", l, support("negateExactLong"), l)
+			.statik("multiplyExact", l, support("multiplyExactLong"), l, i)
+			.statik("clamp", i, support("clamp"), l, i, i)
+			.statik("clamp", l, support("clampLong"), l, l, l)
+			.statik("clamp", d, support("clampDouble"), d, d, d)
+			.statik("clamp", f, support("clampFloat"), f, f, f)
+			.field("TAU", d, new LispDouble(Math.TAU))
+			.statik("multiplyFull", l, host("*"), i, i)
+			.statik("multiplyHigh", l,
+					(lowering, call) -> call("ash", call("*", call.argument(0), call.argument(1)), integer(-64)), l, l)
+			.statik("unsignedMultiplyHigh", l, (lowering, call) -> {
+				LispVal mask = integer(java.math.BigInteger.ONE.shiftLeft(64).subtract(java.math.BigInteger.ONE));
+				return JavaForms.wrap(l, call("ash",
+						call("*", call("logand", call.argument(0), mask), call("logand", call.argument(1), mask)),
+						integer(-64)));
+			}, l, l)
+			.statik("IEEEremainder", d, strict("ieee-remainder"), d, d)
+			.statik("copySign", d, strict("copy-sign"), d, d)
+			.statik("copySign", f, strict("copy-sign"), f, f)
+			.statik("getExponent", i, strict("get-exponent"), d)
+			.statik("getExponent", i, runtime("float-exponent"), f)
+			.statik("nextAfter", d,
+					(lowering, call) -> runtimeCall("next-after", call.argument(0), call.argument(1), JavaForms.T), d,
+					d)
+			.statik("nextAfter", f,
+					(lowering, call) -> runtimeCall("next-after", call.argument(0), call.argument(1), JavaForms.NIL), f,
+					d);
+		// a quotient rounded toward an infinity, and what is left of it
+		for (List<Primitive> operands : List.of(List.of(i, i), List.of(l, i), List.of(l, l))) {
+			Primitive wide = operands.get(0);
+			Primitive divisor = operands.get(1);
+			if (divisor != wide) {
+				builder
+					.statik("floorDiv", wide,
+							(lowering, call) -> JavaForms.wrap(wide,
+									call("values", call("floor", call.argument(0), call.argument(1)))),
+							wide, divisor)
+					.statik("floorMod", divisor, host("mod"), wide, divisor);
+			}
+			builder
+				.statik("ceilDiv", wide,
+						(lowering, call) -> JavaForms.wrap(wide,
+								call("values", call("ceiling", call.argument(0), call.argument(1)))),
+						wide, divisor)
+				.statik("ceilMod", divisor, runtime("ceil-mod"), wide, divisor);
+		}
 		// over the bits: a double's and a float's, the float rounded as one
 		for (Primitive type : List.of(d, f)) {
 			LispVal wide = type == d ? JavaForms.T : JavaForms.NIL;
@@ -1254,6 +1588,13 @@ final class JavaIntrinsics {
 				List.of(call.argument(0), call.argument(1)), call.arguments().get(0), call.arguments().get(1)));
 		natives.put(regex + "matches(String,CharSequence)", (lowering, call) -> pattern(lowering, "matchesText",
 				List.of(call.argument(0), call.argument(1)), call.arguments().get(0), null));
+		// a charset named by a constant is that charset; any other name is looked up
+		natives.put(CHARSET + ".forName(String)", (lowering, call) -> {
+			JavaClass.Accessor named = call.arguments().get(0).constant() instanceof String name ? charsetNamed(name)
+					: null;
+			return named != null ? lowering.library(named.className(), named.method(), List.of())
+					: lowering.library(CHARSET, "lookup", List.of(call.argument(0)));
+		});
 		natives.put(regex + "compile0(String,int,Object,Object,Object)", runtime("regex-compile"));
 		natives.put(regex + "refused0(Object)", runtime("regex-refused-p"));
 		natives.put(regex + "description0(Object)", runtime("regex-refusal-text"));

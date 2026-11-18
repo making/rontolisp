@@ -15,7 +15,7 @@ future's dependents run in a JDK's order; a simple name no longer finds a member
 does not inherit. A thread suspended and resumed on wasm is `.todo/k00`.
 
 - **`java.util.concurrent`, not there**: `StampedLock`, `Phaser`, `PriorityBlockingQueue`
-  and `DelayQueue` (no `PriorityQueue` yet: `.todo/j98`), `ConcurrentSkipListMap` / `Set`
+  and `DelayQueue` (no `PriorityQueue` yet: `.todo/k05`), `ConcurrentSkipListMap` / `Set`
   (no `TreeMap`), `LinkedTransferQueue`, `CountedCompleter`, `LongAccumulator`,
   `DoubleAdder`, the field updaters, `CompletableFuture`'s `exceptionallyAsync`,
   `exceptionallyCompose`, `minimalCompletionStage`, `obtrudeValue`, a `Timer`'s

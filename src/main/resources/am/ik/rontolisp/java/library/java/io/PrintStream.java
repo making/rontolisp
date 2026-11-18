@@ -15,7 +15,8 @@ public class PrintStream extends FilterOutputStream implements Appendable {
 
     private final boolean autoFlush;
 
-    private final Charset charset;
+    // the charset of what is still to print: past its start, UTF-16 writes no mark
+    private Charset charset;
 
     private boolean trouble;
 
@@ -56,8 +57,12 @@ public class PrintStream extends FilterOutputStream implements Appendable {
             if (out == null) {
                 throw new IOException("Stream closed");
             }
-            byte[] encoded = (line ? s + "\n" : s).getBytes(charset);
-            out.write(encoded, 0, encoded.length);
+            String printed = line ? s + "\n" : s;
+            if (!printed.isEmpty()) {
+                byte[] encoded = charset.bytes(printed);
+                charset = charset.writing();
+                out.write(encoded, 0, encoded.length);
+            }
             if (autoFlush && (line || s.indexOf('\n') >= 0)) {
                 out.flush();
             }

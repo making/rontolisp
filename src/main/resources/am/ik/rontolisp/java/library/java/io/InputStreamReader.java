@@ -13,7 +13,8 @@ public class InputStreamReader extends Reader {
 
     private InputStream in;
 
-    private final Charset charset;
+    // the charset of what is still to read: past its start, UTF-16 is one of its orders
+    private Charset charset;
 
     private final StandardInput standard;
 
@@ -43,7 +44,7 @@ public class InputStreamReader extends Reader {
     }
 
     public String getEncoding() {
-        return in == null ? null : rontolisp.internal.Support.historicalName(charset);
+        return in == null ? null : charset.historicalName();
     }
 
     private void open() throws IOException {
@@ -52,40 +53,26 @@ public class InputStreamReader extends Reader {
         }
     }
 
-    // How many bytes at the end of bytes[0, total) start a UTF-8 character and do not
-    // finish it.
-    private int unfinished(int total) {
-        if (!rontolisp.internal.Support.isUtf8(charset)) {
-            return 0;
-        }
-        for (int back = 1; back <= 3 && back <= total; back++) {
-            int b = bytes[total - back] & 0xff;
-            if (b >= 0xc0) {
-                int size = b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : 2;
-                return size > back ? back : 0;
-            }
-            if (b < 0x80) {
-                return 0;
-            }
-        }
-        return 0;
-    }
-
     // Decodes the next bytes; false at the end.
     private boolean fill() throws IOException {
         while (!ended) {
             int n = in.read(bytes, held, bytes.length - held);
             int total = held + (n < 0 ? 0 : n);
-            int tail = n < 0 ? 0 : unfinished(total);
+            int tail = n < 0 ? 0 : charset.unfinished(bytes, total);
             ended = n < 0;
             if (total - tail > 0) {
-                units = new String(bytes, 0, total - tail, charset).toCharArray();
+                units = charset.text(bytes, 0, total - tail).toCharArray();
+                charset = charset.reading(bytes, total - tail);
                 next = 0;
                 System.arraycopy(bytes, total - tail, bytes, 0, tail);
                 held = tail;
-                return true;
+                if (units.length > 0) {
+                    return true;
+                }
             }
-            held = total;
+            else {
+                held = total;
+            }
         }
         return false;
     }

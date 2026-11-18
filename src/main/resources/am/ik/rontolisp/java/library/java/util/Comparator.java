@@ -42,6 +42,32 @@ public interface Comparator<T> {
         };
     }
 
+    default <U> Comparator<T> thenComparing(Function<? super T, ? extends U> key, Comparator<? super U> order) {
+        return (T a, T b) -> {
+            int first = compare(a, b);
+            return first != 0 ? first : order.compare(key.apply(a), key.apply(b));
+        };
+    }
+
+    default Comparator<T> thenComparingLong(ToLongFunction<? super T> key) {
+        return (T a, T b) -> {
+            int order = compare(a, b);
+            if (order != 0) {
+                return order;
+            }
+            long x = key.applyAsLong(a);
+            long y = key.applyAsLong(b);
+            return x < y ? -1 : x > y ? 1 : 0;
+        };
+    }
+
+    default Comparator<T> thenComparingDouble(ToDoubleFunction<? super T> key) {
+        return (T a, T b) -> {
+            int order = compare(a, b);
+            return order != 0 ? order : Double.compare(key.applyAsDouble(a), key.applyAsDouble(b));
+        };
+    }
+
     static <T, U> Comparator<T> comparing(Function<? super T, ? extends U> key, Comparator<? super U> order) {
         return (T a, T b) -> order.compare(key.apply(a), key.apply(b));
     }

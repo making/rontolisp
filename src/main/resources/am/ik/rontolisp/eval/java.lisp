@@ -945,9 +945,77 @@
 (defun rontolisp::%java-radix-string (n radix)
   (rontolisp::%java-digits n (if (and (>= radix 2) (<= radix 36)) radix 10)))
 
-;; toBinaryString, toHexString, toOctalString: the two's complement of BITS bits.
+;; toBinaryString, toHexString, toOctalString, toUnsignedString: the two's complement
+;; of BITS bits, in base ten where RADIX is no radix.
 (defun rontolisp::%java-unsigned-string (n radix bits)
-  (rontolisp::%java-digits (logand n (- (ash 1 bits) 1)) radix))
+  (rontolisp::%java-digits (logand n (- (ash 1 bits) 1))
+                           (if (and (>= radix 2) (<= radix 36)) radix 10)))
+
+;; --- Integer, Long: the bits ---------------------------------------------------------
+
+;; The members of Integer and Long over the two's complement of BITS bits (32 or 64).
+
+;; The number whose two's complement of BITS bits U is.
+(defun rontolisp::%java-signed (u bits)
+  (if (logbitp (- bits 1) u) (- u (ash 1 bits)) u))
+
+(defun rontolisp::%java-highest-one-bit (n bits)
+  (let ((u (logand n (- (ash 1 bits) 1))))
+    (if (= u 0)
+        0
+        (rontolisp::%java-signed (ash 1 (- (integer-length u) 1)) bits))))
+
+(defun rontolisp::%java-lowest-one-bit (n bits)
+  (rontolisp::%java-signed (logand n (- n) (- (ash 1 bits) 1)) bits))
+
+(defun rontolisp::%java-leading-zeros (n bits)
+  (- bits (integer-length (logand n (- (ash 1 bits) 1)))))
+
+(defun rontolisp::%java-trailing-zeros (n bits)
+  (if (= n 0) bits (- (integer-length (logand n (- n))) 1)))
+
+;; reverse (STEP 1) and reverseBytes (STEP 8): the groups of STEP bits in the other
+;; order.
+(defun rontolisp::%java-reverse-bits (n bits step)
+  (let ((u (logand n (- (ash 1 bits) 1)))
+        (group (- (ash 1 step) 1))
+        (r 0)
+        (i 0))
+    (while (< i bits)
+      (setq r (+ (ash r step) (logand u group)))
+      (setq u (ash u (- step)))
+      (setq i (+ i step)))
+    (rontolisp::%java-signed r bits)))
+
+;; rotateLeft; rotateRight is the distance negated.
+(defun rontolisp::%java-rotate (n distance bits)
+  (let ((mask (- (ash 1 bits) 1)) (d (mod distance bits)))
+    (let ((u (logand n mask)))
+      (rontolisp::%java-signed
+       (logand (logior (ash u d) (ash u (- d bits))) mask) bits))))
+
+(defun rontolisp::%java-unsigned-divide (a b bits)
+  (let ((mask (- (ash 1 bits) 1)))
+    (rontolisp::%java-signed (values (floor (logand a mask) (logand b mask)))
+                             bits)))
+
+(defun rontolisp::%java-unsigned-remainder (a b bits)
+  (let ((mask (- (ash 1 bits) 1)))
+    (rontolisp::%java-signed (mod (logand a mask) (logand b mask)) bits)))
+
+;; Math.ceilMod: what is left of A over the quotient rounded up.
+(defun rontolisp::%java-ceil-mod (a b) (- a (* b (values (ceiling a b)))))
+
+;; Math.nextAfter: X itself turned to the float of DIRECTION where the two are equal,
+;; else its neighbour on DIRECTION's side.
+(defun rontolisp::%java-next-after (x direction wide)
+  (cond ((or (/= x x) (/= direction direction)) (rontolisp::%java-nan))
+        ((= x direction) (if wide direction (%single-float direction)))
+        (t (rontolisp::%java-next x (> direction x) wide))))
+
+;; Math.getExponent of a float: the eight bits of its exponent, unbiased.
+(defun rontolisp::%java-float-exponent (f)
+  (- (logand (ash (rontolisp::%java-float-bits f) -23) 255) 127))
 
 (defun rontolisp::%java-parse-boolean (s)
   (if (and s (string-equal s "true")) t nil))
@@ -1071,18 +1139,6 @@
 
 ;; --- characters ------------------------------------------------------------------------
 
-(defun rontolisp::%java-char-digit-p (code)
-  (if (digit-char-p (code-char code)) t nil))
-
-(defun rontolisp::%java-char-letter-p (code)
-  (if (alpha-char-p (code-char code)) t nil))
-
-(defun rontolisp::%java-char-alphabetic-p (code)
-  (if (alpha-char-p (code-char code)) t nil))
-
-(defun rontolisp::%java-char-letter-or-digit-p (code)
-  (if (alphanumericp (code-char code)) t nil))
-
 ;; Character.isWhitespace: the separators but the no-break spaces, and the controls
 ;; from tab to carriage return and from file to unit separator.
 (defun rontolisp::%java-char-whitespace-p (code)
@@ -1099,12 +1155,6 @@
           (= code 8239) (= code 8287) (= code 12288))
       t
       nil))
-
-(defun rontolisp::%java-char-upper-case-p (code)
-  (if (upper-case-p (code-char code)) t nil))
-
-(defun rontolisp::%java-char-lower-case-p (code)
-  (if (lower-case-p (code-char code)) t nil))
 
 (defun rontolisp::%java-char-upcase (code)
   (char-code (char-upcase (code-char code))))
@@ -1124,6 +1174,59 @@
   (if (and (>= radix 2) (<= radix 36) (>= digit 0) (< digit radix))
       (char-code (char-downcase (digit-char digit radix)))
       0))
+
+;; A code point, or the exception of a number that is none.
+(defun rontolisp::%java-code-point (code)
+  (if (or (< code 0) (> code 1114111))
+      (rontolisp::%java-raise "java.lang.IllegalArgumentException"
+                              (%string-concat
+                               "Not a valid Unicode code point: 0x"
+                               (%normalize-string
+                                (write-to-string (logand code 4294967295)
+                                                 :base 16
+                                                 :radix nil)))))
+  code)
+
+;; What the Unicode tables say of a code point: its general category in the low five
+;; bits, the predicates of Character above them (regex.lisp, %regex-uni-combo). The
+;; tables are the regular-expression engine's (regex-unicode.lisp, a running JDK's
+;; answers), so the four backends answer alike where the host's own predicates do
+;; not, and only a program calling one of these carries them. The first 256 code
+;; points are read once into a vector: a search of the runs is some six times the
+;; host's test (.kb/java-frontend.md, "The library").
+(defvar rontolisp::%java-char-low nil)
+
+(defun rontolisp::%java-char-combo (code)
+  (cond ((or (< code 0) (> code 1114111)) 0)
+        ((< code 256)
+         (if (null rontolisp::%java-char-low)
+             (let ((low (make-array 256 :initial-element 0)) (i 0))
+               (while (< i 256)
+                 (%aset low i (rontolisp::%regex-uni-combo i))
+                 (setq i (+ i 1)))
+               (setq rontolisp::%java-char-low low)))
+         (svref rontolisp::%java-char-low code))
+        (t (rontolisp::%regex-uni-combo code))))
+
+;; Character.getType: the general category as the number the API names it by.
+(defun rontolisp::%java-char-type (code)
+  (logand (rontolisp::%java-char-combo code) 31))
+
+;; The predicates of Character the tables hold: MASK is the predicate's bit
+;; (regex.lisp, %regex-uni-plain's `java` names).
+(defun rontolisp::%java-char-is (code mask)
+  (if (/= 0 (logand (ash (rontolisp::%java-char-combo code) -5) mask)) t nil))
+
+;; Character.isISOControl: the two ranges of control codes.
+(defun rontolisp::%java-char-iso-control-p (code)
+  (if (or (and (>= code 0) (<= code 31)) (and (>= code 127) (<= code 159)))
+      t
+      nil))
+
+;; Character.toChars: the UTF-16 units of a code point.
+(defun rontolisp::%java-code-point-chars (code)
+  (rontolisp::%java-to-chars
+   (rontolisp::%java-char-string (rontolisp::%java-code-point code))))
 
 ;; --- String --------------------------------------------------------------------------
 
@@ -1157,6 +1260,56 @@
 
 (defun rontolisp::%java-last-index-of-char (s code)
   (let ((found (position (code-char code) s :from-end t))) (if found found -1)))
+
+;; lastIndexOf from an index: the last occurrence starting at FROM or before it.
+(defun rontolisp::%java-last-index-of-from (s text from)
+  (if (< from 0)
+      -1
+      (let ((found
+             (search text s
+                     :from-end t
+                     :end2 (min (length s) (+ from (length text))))))
+        (if found found -1))))
+
+(defun rontolisp::%java-last-index-of-char-from (s code from)
+  (if (< from 0)
+      -1
+      (let ((found
+             (position (code-char code) s
+                       :from-end t
+                       :end (min (length s) (+ from 1)))))
+        (if found found -1))))
+
+;; String.regionMatches: COUNT characters of S from OFFSET are those of OTHER from
+;; FROM, whatever their case where IGNORE; a region outside either string matches
+;; nothing.
+(defun rontolisp::%java-region-matches (s ignore offset other from count)
+  (if (null other) (rontolisp::%java-npe))
+  (cond ((or (< offset 0) (< from 0) (> offset (- (length s) count))
+             (> from (- (length other) count)))
+         nil)
+        ((<= count 0) t)
+        (t (let ((a (%substring s offset (+ offset count)))
+                 (b (%substring other from (+ from count))))
+             (if ignore
+                 (rontolisp::%java-string-equals-ignore-case a b)
+                 (if (equal a b) t nil))))))
+
+;; String.getChars: the UTF-16 units of the characters from START to END into TARGET
+;; from AT.
+(defun rontolisp::%java-get-chars (s start end target at)
+  (if (or (< start 0) (> start end) (> end (length s)))
+      (rontolisp::%java-raise "java.lang.StringIndexOutOfBoundsException"
+       (rontolisp::%java-range-text start end (length s))))
+  (if (null target) (rontolisp::%java-npe))
+  (let ((codes (rontolisp::%java-to-chars (%substring s start end))) (i 0))
+    (if (or (< at 0) (> at (- (length target) (length codes))))
+        (rontolisp::%java-raise "java.lang.StringIndexOutOfBoundsException"
+         (rontolisp::%java-count-text at (length codes) (length target))))
+    (while (< i (length codes))
+      (%aset target (+ at i) (aref codes i))
+      (setq i (+ i 1))))
+  nil)
 
 (defun rontolisp::%java-starts-with (s prefix offset)
   (let ((n (length prefix)))
@@ -1487,6 +1640,25 @@
   (rontolisp::%java-sb-index builder index)
   (setf (aref builder index) (code-char code))
   nil)
+
+;; StringBuilder.repeat: TEXT appended COUNT times.
+(defun rontolisp::%java-sb-repeat (builder text count)
+  (if (< count 0)
+      (rontolisp::%java-raise "java.lang.IllegalArgumentException"
+       (%string-concat "count is negative: " (%decimal-piece count))))
+  (let ((i 0))
+    (while (< i count)
+      (rontolisp::%java-sb-append builder text)
+      (setq i (+ i 1))))
+  builder)
+
+;; StringBuilder.repeat of a code point: the count is looked at first.
+(defun rontolisp::%java-sb-repeat-code (builder code count)
+  (rontolisp::%java-sb-repeat builder
+                              (if (< count 0)
+                                  ""
+                                  (rontolisp::%java-char-string
+                                   (rontolisp::%java-code-point code))) count))
 
 (defun rontolisp::%java-sb-index-of (builder text)
   (let ((found (search text builder))) (if found found -1)))
@@ -1851,7 +2023,7 @@
 
 ;; One conversion of String.format over its argument.
 (defun rontolisp::%java-format-one
-    (conversion flags width precision argument to-string)
+    (conversion flags width precision argument to-string to-hash)
   (let ((left (if (position #\- flags) t nil))
         (zero (if (position #\0 flags) t nil)))
     (cond ((or (char= conversion #\s) (char= conversion #\S))
@@ -1935,12 +2107,25 @@
              (rontolisp::%java-pad
               (if (char= conversion #\B) (%string-upcase-piece text) text) width
               left nil)))
+          ;; the hexadecimal digits of the argument's hash code
+          ((or (char= conversion #\h) (char= conversion #\H))
+           (let ((text
+                  (if (null argument)
+                      "null"
+                      (rontolisp::%java-digits
+                       (logand (funcall to-hash argument) 4294967295) 16))))
+             (if (and precision (< precision (length text)))
+                 (setq text (%substring text 0 precision)))
+             (rontolisp::%java-pad
+              (if (char= conversion #\H) (%string-upcase-piece text) text) width
+              left nil)))
           (t (error "the conversion %~A of String.format is not supported by the experimental Java subset yet"
                     (%normalize-string (string conversion)))))))
 
 ;; String.format: the text, each %[index$][flags][width][.precision]conversion replaced
-;; by its argument's text. TO-STRING is the program's function for %s.
-(defun rontolisp::%java-format (control arguments to-string)
+;; by its argument's text. TO-STRING is the program's function for %s, TO-HASH the one
+;; for %h, nil where the lowering read a control that has none.
+(defun rontolisp::%java-format (control arguments to-string to-hash)
   (let ((builder (rontolisp::%java-sb-new)) (i 0) (n (length control)) (next 0))
     (while (< i n)
       (let ((c (char control i)))
@@ -1999,7 +2184,7 @@
                                                 (rontolisp::%java-format-one
                                                  conversion flags width
                                                  precision (aref arguments at)
-                                                 to-string))))))
+                                                 to-string to-hash))))))
               (setq i (+ j 1))))))
     (rontolisp::%java-sb-string builder)))
 
