@@ -256,7 +256,7 @@ Both masks are **raw linalg arrays** -- a mask carries no gradient -- shaped to 
 
 ## A worked example
 
-[`examples/llm-from-scratch/`](https://github.com/making/rontolisp/blob/develop/examples/llm-from-scratch/README.md) is chapter 2 of 『作ってわかる大規模言語モデルの仕組み』 rewritten on this package: scaled dot-product and multi-head attention, sinusoidal positional encoding, the encoder/decoder Transformer with its padding and causal masks, and a Japanese-English training loop with greedy decoding. Its README carries the PyTorch-to-`torch` mapping table.
+The `llm-from-scratch` project (separate from this repository; it needs a rontolisp release) is chapters 2 and 3 of 『作ってわかる大規模言語モデルの仕組み』 rewritten on this package: scaled dot-product and multi-head attention, sinusoidal positional encoding, the encoder/decoder Transformer with its padding and causal masks, and a Japanese-English training loop with greedy decoding. Its README carries the PyTorch-to-`torch` mapping table.
 
 ## Packages
 

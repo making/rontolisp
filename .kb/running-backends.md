@@ -72,8 +72,7 @@ exercise:
 ./mvnw -Dtest=ExamplesE2eTest -DfailIfNoTests=false -Drontolisp.examples=true test
 # narrow it while iterating: -Drontolisp.examples.only=cloudflare
 # ...but `only=` is a plain SUBSTRING match on the example's path, not a directory name.
-# `only=llm` also matches `ml/tiny-llm.lisp` and `examples/llm-from-scratch/` -- 72 legs
-# instead of 39. Anchor a directory with a trailing slash: `only=llm/`.
+# `only=llm` also matches `ml/tiny-llm.lisp`. Anchor a directory with a trailing slash: `only=llm/`.
 ```
 
 A `deps.edn` project's entry names a file in the project and a `cli` (`[-M:alias]`, `[test]`):

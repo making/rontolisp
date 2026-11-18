@@ -20,7 +20,7 @@ Project-wide: there is no root `NOTICE` and `LICENSE` has no third-party section
 | 6 | `clojure.lisp` 29440-29560 (`%clojure-big-integer-new`) | OpenJDK `BigInteger(String,int)` | `.kb` says "ported"; check order and `digitsPerInt` table | yes | Compared |
 | 7 | `clojure.lisp` 13873-13945; `src/main/java/am/ik/rontolisp/clojure/ClojureFormatLowering.java` 394-490 | OpenJDK `Formatter` check methods | same forbidden-flag sets and order; Java side keeps `checkGeneral` etc. | Lisp side yes | Compared |
 | 8 | `src/main/java/am/ik/rontolisp/clojure/ClojureDepsGraph.java` 400-615 | tools.deps `deps.clj` (EPL-1.0) | `include-coord?`, `update-excl` translated function by function | no (compiler only) | Compared |
-| 9 | `examples/llm-from-scratch/` | elith-co-jp/book-llm-from-scratch (no licence) | README: rewritten "almost line by line" from the book's PyTorch code | no | Verified |
+| 9 | `examples/llm-from-scratch/` | elith-co-jp/book-llm-from-scratch (no licence) | README: rewritten "almost line by line" from the book's PyTorch code | no | Verified (j94: moved out to a project of its own, 2026-11-18) |
 
 ## Add notices (j93)
 

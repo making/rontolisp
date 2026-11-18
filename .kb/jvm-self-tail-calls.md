@@ -216,7 +216,7 @@ the tail of `multiple-value-bind`, `destructuring-bind`, `symbol-macrolet`,
 the bytecode) -> answers, no self call left. Bytes, base jar vs this change: bench-report's ten
 programs and size-report `hello_world`/`pi_approx`/`zlib` identical as `.class`, and as `.wasm`
 and component (`--optimize`) but `zlib` +1 B; `clojure-spec` as one program 5,965,571 B `.class`
-/ 4,986,328 B `.wasm`, identical; 30 `examples/{console,ml,llm-from-scratch,deep-learning-from-scratch}`
+/ 4,986,328 B `.wasm`, identical; 30 `examples/{console,ml,llm-from-scratch,deep-learning-from-scratch}` (llm-from-scratch since moved out to its own project)
 programs identical on both. The same change fixed the multiple-value settle of a result-less
 `dotimes` ([multiple-values.md](multiple-values.md)), which the tests here first hit.
 

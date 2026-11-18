@@ -220,7 +220,8 @@ doing it. Either record the fixture state beside the count, or accept that the c
 unreadable once the box moves on.
 
 Note the trailing slash. `-Drontolisp.examples.only=` is a plain SUBSTRING match on the
-example's path: `only=llm` also matches `ml/tiny-llm.lisp` and `examples/llm-from-scratch/`.
+example's path: `only=llm` also matches `ml/tiny-llm.lisp` (and matched the `llm-from-scratch` example, since
+moved to a project of its own).
 
 ### 5. A corpus defined by WALKING is defined by the box, not by the commit
 

@@ -499,7 +499,7 @@ the `vec:` kernels did not have to do:
 - `ci-spec.yaml` never passes `--simd`, so the cross-backend E2E is unaffected; the
   `--component --simd` and `--optimize` legs were verified by hand and by the integration test.
 - `examples/ml/{tiny-llm,linear-regression,heat3d,deep-digits}.lisp` and
-  `examples/llm-from-scratch/chapter03/train-gpt-soseki.lisp` print byte-identical output with and
+  `chapter03/train-gpt-soseki.lisp` of the `llm-from-scratch` project (then an example here) print byte-identical output with and
   without `--simd` (the latter on ALL FOUR backends), and at the notebook's shapes also on a
   `--gpu --simd` JVM class -- the acceptance that matters for two members whose kernels write their
   operands IN PLACE.

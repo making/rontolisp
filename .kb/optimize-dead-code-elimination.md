@@ -1341,7 +1341,7 @@ nearly what the sound change takes on `ch03/activation-functions` -- in the nine
 i.e. essentially the whole bound was value-only rows. Across the example compile legs on all
 three artifact kinds the totals edge down a fraction of a percent, no leg growing (a few gain a
 little gzip while shrinking raw); `--no-gc` identical. The largest single movers are the
-`llm-from-scratch` and activation-function examples at around ten percent; the HTTP-adjacent
+`llm-from-scratch` (since moved out to its own project) and activation-function examples at around ten percent; the HTTP-adjacent
 bench rows and `zlib` shed a little on every backend; Workers and ci-spec are
 byte-identical or a hair smaller (ci-spec uses `eval`). Every changed program's run output is
 identical (timing

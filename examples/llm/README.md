@@ -57,8 +57,7 @@ rontolisp llm.lisp -o llm.wasm --simd --component && \
 
 Its `ExamplesE2eTest` slice is `-Drontolisp.examples.only=llm/` **with the
 slash**: `only=llm` is a plain substring match on the example's path, so without
-it the slice also pulls in `ml/tiny-llm.lisp` and the whole of
-`llm-from-scratch/` -- 72 legs where this directory alone is 35.
+it the slice also pulls in `ml/tiny-llm.lisp`.
 
 Every one of them prints
 

@@ -44,7 +44,7 @@ Three readings, and only the first is the item's:
 
 ## 2. The program, before and after nothing -- `gpt-book-shapes-fast.lisp`
 
-`.todo/artefacts/123-gpu-acceleration/gpt-book-shapes-fast.lisp`, compiled
+`gpt-book-shapes-fast.lisp` (now in the `llm-from-scratch` project's `bench/`; it was in `.todo/artefacts/123-gpu-acceleration/`), compiled
 `-o Book.class --class-name Book --gpu --simd` and run on the JVM class output, which is
 the shape `.todo/476` profiled.
 

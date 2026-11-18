@@ -16,7 +16,6 @@ documented here: [`size-report/`](../size-report).
 | [`ml/`](ml) | Numerical computing and machine learning (arrays, `linalg`, `--simd`, `--gpu`) |
 | [`deep-learning-from-scratch/`](deep-learning-from-scratch) | The book *Deep Learning from Scratch* (ゼロから作るDeep Learning) ch02–ch08, ported |
 | [`llm/`](llm) | llama2.c's `run.c` ported whole: a Llama 2 inference engine over the real TinyStories checkpoints — the example `--simd` is for |
-| [`llm-from-scratch/`](llm-from-scratch) | 『作ってわかる大規模言語モデルの仕組み』 ch2–ch3, ported on the `torch` package: attention, a Transformer, a GPT trained on 漱石 |
 | [`net/`](net) | Sockets, HTTP servers and JSON web services |
 | [`db/`](db) | PostgreSQL through the real cl-postgres driver and postmodern, up to a REST API and a full web app |
 | [`jvm/`](jvm) | A Java-callable library class, a C library through `cffi`, `java:` interop and Swing GUIs (JVM only) |

@@ -43,7 +43,7 @@ model CONSTRUCTION builds in `#d`; there is no `with-dtype` macro.
   `torch:layer-norm`, `torch:dropout`, `torch:pad-sequence` (bypasses `%t-as-data`).
 - Deliberately still `#d`: `torch::%t-indices`, `%m-ce-indices`, `torch:topk`, `torch:multinomial`,
   `torch:padding-mask`, `torch:subsequent-mask`, `torch::%o-buffers`' scalar-parameter buffer,
-  `examples/llm-from-scratch/transformer/utils.lisp`'s positional encoding, and `TorchGradcheck`
+  the `llm-from-scratch` project's `transformer/utils.lisp` positional encoding, and `TorchGradcheck`
   (`eps 1e-4` differences against `tol 1e-3`).
 
 ## The two invariants of `backward`, and the adjoints
@@ -186,10 +186,14 @@ eager node, whose adjoint a view's own also is.
 - **Trap: a view read by a SECOND consumer is the one case whose bits differ from the eager tape** —
   `(a + b) / s` eagerly vs `a / s + b / s` fused.
 
-## Whole-package acceptance: `examples/llm-from-scratch/`
+## Whole-package acceptance: the `llm-from-scratch` project
 
-`transformer/{attention,utils,transformer}.lisp`, `chapter02/section{2,3,4,5}.lisp`, `gpt/` and
-`chapter03/`, all in `examples/examples.yaml` with `.expected` files. **A module tree several levels
+Moved out of this repository to a project of its own (it was an example directory, with
+`examples/examples.yaml` entries and `.expected` files; its provenance was the reason). It is no
+longer run by `ExamplesE2eTest`; its `check.sh` runs the eight programs on a rontolisp build.
+In-repo, the package is pinned by the gradcheck table and the ci-spec `torch-*` cases below.
+It held: `transformer/{attention,utils,transformer}.lisp`, `chapter02/section{2,3,4,5}.lisp`,
+`gpt/` and `chapter03/`. **A module tree several levels
 deep really walks** (`torch:parameters` finds all 63 tensors of the section-5 Transformer, 195 for
 `transformer/shapes.lisp`'s two-block one) and **the output is ONE text on all four backends**,
 training loop included.

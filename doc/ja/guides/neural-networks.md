@@ -256,7 +256,7 @@
 
 ## 実例
 
-[`examples/llm-from-scratch/`](https://github.com/making/rontolisp/blob/develop/examples/llm-from-scratch/README.md) は『作ってわかる大規模言語モデルの仕組み』第2章をこのパッケージで書き直したものです。スケール内積注意とマルチヘッド注意、正弦波位置エンコーディング、パディングマスクと因果マスクを備えたエンコーダ・デコーダ Transformer、そして日英の学習ループと貪欲デコードまでが入っています。PyTorch と `torch` の対応表は同ディレクトリの README にあります。
+`llm-from-scratch` プロジェクト(このリポジトリとは別で、rontolisp のリリースが必要です)は『作ってわかる大規模言語モデルの仕組み』第2章と第3章をこのパッケージで書き直したものです。スケール内積注意とマルチヘッド注意、正弦波位置エンコーディング、パディングマスクと因果マスクを備えたエンコーダ・デコーダ Transformer、そして日英の学習ループと貪欲デコードまでが入っています。PyTorch と `torch` の対応表はそのプロジェクトの README にあります。
 
 ## パッケージ
 

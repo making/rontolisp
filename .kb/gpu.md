@@ -11,7 +11,7 @@ programs to the same output.** What is different about a GPU is the fixed cost o
 separate machine with its own memory, and -- since residency -- that arrays stop coming back.
 
 User-facing description and end-to-end numbers: `doc/{en,ja}/guides/gpu-acceleration.md` and
-`examples/llm-from-scratch/README.md`. **This file is the invariants and the mechanics.** Every number
+the `llm-from-scratch` project's README (it was an example directory here until it moved out). **This file is the invariants and the mechanics.** Every number
 here is re-derivable from the probes in `.todo/artefacts/123-gpu-acceleration/` plus the `*-baseline.lisp` CPU
 baselines; that directory's README says which probe answers which question. The two calibration
 machines: an **NVIDIA GB10** (Grace Blackwell, `sm_121`, 48 SMs, unified addressing, driver 580 /
@@ -768,7 +768,7 @@ cannot spell is a bound in the wrong place.** The `vec:` surface is unchanged.
 
 **A `--gpu` step is mostly NATIVE time, so a percentage taken off JFR's execution samples is a
 percentage of the wrong denominator** (2026-09-06, `.todo/476`; GB10, `gpt-book-shapes-fast.lisp`
-compiled `--gpu --simd`, 0.69 s a step, `settings=profile`). `jdk.ExecutionSample` sees only threads
+(the `llm-from-scratch` project's `bench/`) compiled `--gpu --simd`, 0.69 s a step, `settings=profile`). `jdk.ExecutionSample` sees only threads
 in the JAVA state; a thread inside a downcall is seen by `jdk.NativeMethodSample` instead. Here that
 is **217 execution samples against 1471 native ones** -- 2.2 s of Java in 31.6 s of sampled thread
 time, **7%** -- with 1127 of the native ones in `cuCtxSynchronize`, 197 in `cuMemAllocAsync` and 114
