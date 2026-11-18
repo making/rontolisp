@@ -661,7 +661,9 @@ compiles the line's write and `after` as forms over pseudo-locals
 (`JvmUncaughtHandler.emitOwnLine`); the wasm-GC entry pad compiles `(%warn (line cond text))`
 in place of the prefixed line and `after` ahead of the trap (`WasmUncaughtReportCompiler`).
 `after` is written in the program so that what it names is spliced as any reference is
-(`exit.lisp` behind `%host-exit`). The Java front end's entry is the one user
+(`exit.lisp` behind `%host-exit`); `line` may be a function of the program's own (the Java
+front end's `%uncaught`, which writes an exception's causes under its line). The Java front
+end's entry is the one user
 ([java-frontend.md](java-frontend.md), "Exceptions"): its handler holding the condition cost
 every program ~38 KB of wasm (`Fib.wasm` 41,656 -> 2,868 B). Pinned by `java-spec.yaml`'s
 `standalone:` cases with `error:` and `at:` on four backends.

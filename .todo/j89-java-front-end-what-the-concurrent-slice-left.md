@@ -64,6 +64,7 @@ only for what one stack can run.
   as a `synchronized` statement's lock.
 - **A `Vector` is an `ArrayList` to `instanceof`, a `StringBuffer` a `StringBuilder`**
   (`deviations.md`): a class of its own for each retires it.
-- **A thread's uncaught report** is the first line alone; `main`'s has the pipeline's
-  location line under it since j82, and holds no condition, which a thread's still does
-  (`.todo/j88`).
+- **A thread's uncaught report** has its causes since j88 and no location line; `main`'s
+  has the pipeline's location line under it since j82, and holds no condition, which a
+  thread's still does: measured at 3.5 to 6% of a program that starts threads and kept
+  (`.kb/java-frontend.md`, "Threads").

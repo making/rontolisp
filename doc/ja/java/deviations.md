@@ -120,10 +120,41 @@ Report is initialized
 9 3
 ```
 
-言語仕様と異なる点が 2 つあります。`main` の前に行われる初期化の中で実行時エラー（表を埋める
-途中での配列の範囲外の添字など）が起きると、そのエラーは `main` が始まる前に発生します。
-static 初期化子が投げた例外は、`ExceptionInInitializerError` に包まれず、そのままプログラムに
-届きます。
+static 初期化の中で、またはそこから呼ばれたコードの中で `throw` 文が投げた例外は、言語仕様の
+とおりに初期化を終わらせます。その例外は `ExceptionInInitializerError` の原因になり、`Error`
+はそのまま届き、以後そのクラスを使うたびに `NoClassDefFoundError` が投げられます。
+static 初期化の中で起きた実行時エラーの扱いは、言語仕様と異なります。エラーはそのまま
+プログラムに届き、クラスは初期化が進んだところまでの状態で使い続けられます。`main` の前に
+行われる初期化の中で起きた場合は、`main` が始まる前に発生します。
+
+```java
+class Table {
+    static final int[] CELLS = new int[2];
+
+    static {
+        IO.println("filling");
+        CELLS[2] = 1;
+    }
+}
+
+void main() {
+    try {
+        IO.println(Table.CELLS.length);
+    } catch (Throwable thrown) {
+        IO.println(thrown);
+    }
+    IO.println(Table.CELLS.length);
+}
+```
+
+```
+filling
+java.lang.ArrayIndexOutOfBoundsException: Index 2 out of bounds for length 2
+2
+```
+
+JDK は最初の読み出しで `java.lang.ExceptionInInitializerError` を表示し、2 回目の読み出しで
+`NoClassDefFoundError` を投げてプログラムを終了します。
 
 **実行時の例外のメッセージのうち 2 つが異なります。** 実行時のエラーは言語仕様が定める例外で、
 `catch` はその例外のクラスとして捕捉します。`null` を通したメンバー・要素・長さの読み出し、
@@ -137,19 +168,42 @@ static 初期化子が投げた例外は、`ExceptionInInitializerError` に包�
 `ClassCastException` のメッセージは 2 つのクラスを示し、JDK が加えるモジュールとクラス
 ローダーの説明を含みません。スタックオーバーフローは、プログラムが捕捉できる `StackOverflowError` になりません。
 
-**捕捉されなかった例外は、スタックトレースなしで報告されます。** 標準エラー出力に、JDK が
-最初に書く行、つまり `Exception in thread "main"` と例外の `toString()` を書き、終了ステータス
-1 で終了します。JDK がフレームを書く位置には 1 行だけ続きます。例外が発生した文のファイルと
-行、その文が書かれているメソッドです。インタプリタと JVM 出力はこの行を書きます。`.wasm`
-出力は [`--report-locations`](../compiling/wasm.md#uncaught-condition-locations---report-locations)
-を付けてコンパイルしたときに書きます。原因（cause）の行は
-続きません。`printStackTrace()` は、例外、その例外が抑制した例外、原因を JDK と同じ形で
-書きますが、フレームの行は書きません。
+**捕捉されなかった例外は、スタックトレースなしで報告されます。** 標準エラー出力には、JDK が
+書く内容からフレームの行を除いたものを書きます。`Exception in thread "main"` と例外の
+`toString()`、続いてその例外が抑制した例外と原因です。そのあと終了ステータス 1 で終了します。
+フレームの代わりに、原因の行のあとに 1 行だけ書きます。例外が発生した文のファイルと行、
+その文が書かれているメソッドです。インタプリタと JVM 出力はこの行を書きます。`.wasm` 出力は
+[`--report-locations`](../compiling/wasm.md#uncaught-condition-locations---report-locations)
+を付けてコンパイルしたときに書きます。`printStackTrace()` は、この 1 行を除いた同じ行を
+書きます。
+
+```java
+public class Uncaught {
+    static void check(int balance, int amount) {
+        if (amount > balance) {
+            throw new IllegalStateException("insufficient funds: " + (amount - balance));
+        }
+    }
+
+    static void withdraw(int balance, int amount) {
+        try {
+            check(balance, amount);
+        } catch (IllegalStateException e) {
+            throw new RuntimeException("withdrawal refused", e);
+        }
+    }
+
+    public static void main(String[] args) {
+        withdraw(70, 100);
+    }
+}
+```
 
 ```console
 $ rontolisp Uncaught.java
-Exception in thread "main" java.lang.IllegalStateException: insufficient funds: 30
-  at Uncaught.java:4 in Uncaught.check(int,int)
+Exception in thread "main" java.lang.RuntimeException: withdrawal refused
+Caused by: java.lang.IllegalStateException: insufficient funds: 30
+  at Uncaught.java:12 in Uncaught.withdraw(int,int)
 ```
 
 **コンパイラが報告するエラーの一部は報告されません。** そのようなプログラムは実行されます。

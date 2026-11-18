@@ -20,8 +20,10 @@ measured: j83 (2026-11-17); the unchecked warnings, a lambda cast to an intersec
 `Type::<T>new` and an argument call among overloads: j86 (2026-11-17); regular expressions
 on the engine shared with the Clojure front end: j90 (2026-11-18); the rest of `java.io`,
 `Appendable`, `Locale`, a `Matcher`'s region, `hitEnd` and `appendReplacement`, and the
-line a `BufferedReader` takes whole from the host: j87 (2026-11-18); what comes after is
-`.todo/j88`, `j89` and `j98` (what j82, j83 and j87 left).
+line a `BufferedReader` takes whole from the host: j87 (2026-11-18); `charAt` as one read,
+a static initialization that throws, an uncaught exception with its causes and what a
+program that throws carries: j88 (2026-11-18); what comes after is `.todo/j89`, `j98` and
+`j99` (what j83, j87 and j88 left).
 
 ## Where it sits
 
@@ -77,7 +79,7 @@ line a `BufferedReader` takes whole from the host: j87 (2026-11-18); what comes 
   its qualified name, a `java.lang` class its simple one; a program's class named as a
   `java.lang` class the program also uses is refused. An accessor is `Class.` + the slot.
   Generated: `%t<n>`, `%fn`, `%break`, `%continue`, `%string`, `%equals`, `%hash`, `%class-name`,
-  `%simple-name`, `%lisp-error`, `%catch<n>`, `Class.m(sig)%v`, `Iface%is`.
+  `%simple-name`, `%lisp-error`, `%catch<n>`, `%uncaught`, `Class.m(sig)%v`, `Iface%is`.
 - **The program is closed, so a call is direct when it can be.** One body under the receiver's
   static type: a plain call. Several: one `cond` over the structure predicates, deepest owner
   first, made once per (static type, signature), ending in `%java-no-receiver`. A receiver that
@@ -989,10 +991,12 @@ virtual call can run --, classes used):
   only when something can read it there (no initializer, a lazy class, a read through a method
   the initialization calls or by a qualified name ahead of the field).
 - The decision is made at the end of a pass and the next pass is lowered with it.
+- **An initialization that throws an object ends as the language ends it** (j88): "A static
+  initialization that throws" under "Exceptions".
 - Not the language's: a run-time error inside an eager initialization surfaces before `main`
-  (inside the entry's handler since j73, so it is reported as the JDK reports an uncaught one);
-  an exception out of a static initializer is not wrapped in `ExceptionInInitializerError`, and
-  a later use does not raise `NoClassDefFoundError` (stated in `deviations.md`, `.todo/j88`).
+  (reported as the JDK reports an uncaught one), and an error the run time raises inside any
+  initialization is neither wrapped in `ExceptionInInitializerError` nor remembered by the
+  class (stated in `deviations.md`, `.todo/j99`).
 
 ## Exceptions (2026-11-17, j73; the entry and the catch: j82)
 
@@ -1044,8 +1048,8 @@ virtual call can run --, classes used):
   list walked 10^8 times: JVM 0.47 -> 0.45 s, wasm 1.02 -> 1.03 s); a negative array length
   (`%java-array-length`, every length of `%java-new-array` first); `charAt` (the host's
   `char` checks nothing compiled: the JVM gave a `type-error` of datum NIL, wasm a garbage
-  code), the test a statement ahead of the read -- a function of the run time doing it cost a
-  loop over a string twice the time on wasm; a failed cast's message,
+  code), one read answering -1 outside the string ("`charAt` is one read" below); a failed
+  cast's message,
   `class A cannot be cast to class B` from `%class-name` (none for a lambda), without the
   modules and loaders a JDK adds.
 - **A `NullPointerException` the run time raises has no message.** A JDK's describes the null
@@ -1072,7 +1076,24 @@ virtual call can run --, classes used):
   No handler holds the condition, so no signal site builds one: that was the j73 entry's
   cost ("Measured" below). A `return` in tail position is located as the statement it is,
   so the line names the statement that raised. A program that starts threads keeps
-  `%java-thread-main` and its `handler-case`.
+  `%java-thread-main` and its `handler-case` (measured and kept: "Threads").
+- **What nothing caught is reported with what it encloses** (j88): the lines
+  `printStackTrace()` writes -- `\tSuppressed: `, `Caused by: `, `[CIRCULAR REFERENCE: ..]`
+  -- under the first, then the pipeline's location lines. `Throwable.trace(Throwable)`
+  (private, static) is that text; a thread's report asks it always
+  (`%java-traced-text`, the third argument of `%java-thread-main`), the entry of a program
+  that starts none through a generated `(defun %uncaught (%c %text) ..)` handed to
+  `%reporting-uncaught`, and only where an exception can enclose another
+  (`JavaLowering.enclosing`: a constructor of `Throwable` taking a cause, `initCause` or
+  `addSuppressed` is reached). So a program whose exceptions have no cause carries no trace
+  (three `try`/`catch`: 59,949 B of wasm, some 2 KB more with one). `MatchException` has a
+  private constructor of a message for `%lisp-error`: its only API constructor takes a
+  cause, and a `catch (RuntimeException e)` reached it. The trace is built by string
+  concatenation over exceptions numbered by the trace that wrote them
+  (`Throwable.traces`): a `StringBuilder` brought the text of every kind of value (the same
+  program 140,544 B), an array of the exceptions seen made the three functions 3.6 KB,
+  marks taken back after the trace 1.6 KB, the numbers 1.2 KB. Two threads tracing at once
+  read each other's numbers.
 - **`try`-with-resources is written by the parser as JLS 14.20.3.1 spells it**
   (`JavaParser.withResources`: the resource, a `%primary` local, `catch (Throwable)` keeping it
   and rethrowing, a `finally` closing): the lowering sees only `Close`, which checks the type
@@ -1089,7 +1110,62 @@ virtual call can run --, classes used):
   the exception, `\tSuppressed: ` and `Caused by: ` lines and `[CIRCULAR REFERENCE: ..]` as a
   JDK does, without frames (`java-spec.yaml` `standalone:` with `stderr:`). The four constructors
   where the API has them; `IndexOutOfBoundsException(int)` and kin.
-- **Checked exceptions are not checked** (`deviations.md`).
+- **A static initialization that throws** (j88; JLS 12.4.2, the answers a JDK 25's): a
+  lazy class whose initialization can end with a thrown object
+  (`JavaLowering.failingInitializations`: it reaches a `throw` -- `Effects.thrown`, set by
+  `raise` -- or it initializes a class that can, its superclass included) is
+  `(if (eq done t) nil (if done (%java-throw (NoClassDefFoundError.unusable "C" done) ..)
+  (progn (setq done t) (handler-case (progn super.. inits..) ((satisfies %java-thrown) (c)
+  (let ((e (%java-thrown c))) (setq done (ExceptionInInitializerError.record e "main"))
+  (%java-throw (ExceptionInInitializerError.of e) ..)))))))`: an exception that is no
+  `Error` is the cause of an `ExceptionInInitializerError`, an `Error` passes, and the class
+  keeps IN PLACE OF ITS STATE the text a JDK gives the cause of the later
+  `NoClassDefFoundError` (`Exception <toString()> [in thread "<name>"]`). In a program
+  that starts threads the text is written under the initialization lock where `:ended`
+  would be, `%java-init-busy` reads a string as ended, and the name is
+  `Thread.currentName()`. A class that cannot throw keeps the two-state test, so nothing
+  else pays. Three classes were added for it (`LinkageError`, `NoClassDefFoundError`,
+  `ExceptionInInitializerError`). **What the run time raises is not wrapped**: it is no
+  object until a `catch` makes one, and a clause taking it would make every program with a
+  lazy class hold its condition and carry the classes of `RAISED` (the j73 entry's cost,
+  40 KB of wasm); such an error passes as it came and the class stays as far as it got.
+  Cost: `examples/java/shop` (one such class, threads) 303,997 -> 309,806 B of wasm with the
+  trace, 418,108 -> 412,215 B of class.
+- **`charAt` is one read** (j88): `(let* ((c (%string-code s i))) (if (< c 0)
+  (%java-string-index i s) c))`. `%string-code` (`LispNames.STRING_CODE`,
+  [string-index-cost.md](string-index-cost.md)) answers the character's code, -1 outside
+  the string: a function on the interpreter, the public reads on the JVM, one call of
+  `_str_code` on wasm. Measured on the loop over 26 letters 10^6 times (JVM / wasm,
+  interleaved, best of five): 0.26 / 1.25 -> 0.26 / 0.61 s -- under the 0.76 s the loop
+  took outside EH mode (j73). What it replaced paid a generic `length` call for its bounds
+  test, `_idx_chk`, the operator register and `_str_char_ref`'s tests at each read. The first expansion on
+  the JVM bound both operands and cost 0.30 s: a variable is read where it stands, so one
+  the backend keeps unboxed stays so.
+- **What a program that throws carries** (j88, `Fib` 2,868 B against 60,903 B for a loop
+  calling a method with one `throw`, no `try`; `-Drontolisp.wasm.debug-func-sizes`): the
+  prelude's `describe` with `type-of`, `pathname` and what they call, 10.5 KB of wasm and
+  41 KB of class, kept by NOTHING BUT A NAME -- `%java-throw`'s parameter and the
+  condition's slot were called `describe`, and the prelude keeps a function a program names
+  in any position (`LispPreludeLibrary.process`, `symbolNames`); renamed, and
+  `JavaLoweringTest#theLoweringTable` holds java.lisp to binding no such name.
+  `%java-class-name` with the class of an array, 3.8 KB, for `Throwable.toString()`'s
+  `getClass().getName()`: `%class-name` now ends in the run time's answer only where it is
+  asked of a value that can be something other than an instance of a class of the program
+  (`namesOfAny`: `Object`, an interface, an intrinsic, a failed cast's message), else in
+  `%java-no-receiver`. What is left, 46,765 B: the print-object seam every program that can
+  build a condition gets (`%pos-walk`, `%pos-instance`, `%pos-chain-stop`: 8.8 KB), the
+  printer (`_princ_val`, `_print_val`, symbol escapes: 7.7 KB), the report
+  (`%condition-report-str`, `%signal-text`, `%seq-to-string`, `%subseq-runtime`, the string
+  stream: 8.5 KB), the rest the program's classes and the run time. The first three are the
+  pipeline's price for a condition class with a `:report` ([error-handling.md](error-handling.md),
+  "A condition's `:report` is what PRINTS it"), `.todo/j99`'s lead.
+- **The run time's errors are the library's classes at every place a program can see one**
+  (j88, probed against a JDK 25 on four backends): class, message, cause, `toString()`,
+  the same object thrown again and as another's cause, through two clauses and a
+  `finally`, to an uncaught-exception handler -- all a `catch` -- print a JDK's lines but
+  the two stated messages. Nothing was changed; java-spec
+  `a-lisp-error-reaches-the-catch-of-the-exception-it-is` holds the kept object.
+- **Checked exceptions are not checked** (`deviations.md`, `.todo/j99`).
 - **Measured** (2026-11-17, Linux x86-64, GraalVM JDK 25.0.5, wasmtime 49, best of three; JVM /
   precompiled wasm seconds, then `.wasm` / `.class` bytes; before -> after):
 
@@ -1128,9 +1204,24 @@ virtual call can run --, classes used):
 
   `Sieve` over `Fib` is EH mode with signal sites: 8,639 B with no entry at all, 19,522 B
   with an `unwind-protect` around `main` (IR edited by hand). The programs and how each
-  variant was made: `.todo/artefacts/j82-java-front-end-what-the-exceptions-slice-left/`. What is left of the list j73
-  made is `.todo/j88`'s: the string reads EH mode slows on wasm, `StackOverflowError`,
-  `ExceptionInInitializerError`, checked exceptions, the `NullPointerException` message.
+  variant was made: `.todo/artefacts/j82-java-front-end-what-the-exceptions-slice-left/`.
+- **Measured after j88** (2026-11-18, same box and method; `.wasm` / `.class` bytes, before
+  -> after; `Fib`, `WrapInt`, `WrapLong` and `Sieve` are byte-identical):
+
+  | program | j82 | j88 |
+  |---|---|---|
+  | the `charAt` loop | 12,747 / 28,168 | 12,442 / 27,962 |
+  | a loop calling a method that throws, no `try` | 60,903 / 118,894 | 46,765 / 72,177 |
+  | the same with a `try`/`catch` in the loop | 64,021 / 119,617 | 47,861 / 73,210 |
+  | three `try`/`catch`, one taking a host error | 79,465 / 164,965 | 59,949 / 97,267 |
+  | a counter under four threads | 100,630 / 174,751 | 88,642 / 125,415 |
+  | `examples/java/shop` | 303,997 / 418,108 | 309,806 / 412,215 |
+
+  The programs and how each variant was made:
+  `.todo/artefacts/j88-java-front-end-what-the-uncaught-report-and-catch-slice-left/`.
+  What is left of the list j73 made is `.todo/j99`'s: checked exceptions, the host's
+  failures in an initializer, `StackOverflowError`, the `NullPointerException` message,
+  the frames.
 
 ## Threads (2026-11-17, j76)
 
@@ -1211,10 +1302,18 @@ under a monitor prints the same on four backends.
   `(with-mutex ((%java-initializing)) ..)`, ONE lock for every class: an initializer joining
   a thread that initialized another class never ended on the interpreter and the JVM
   (measured: 20 s and killed; the corpus case's `Loud`).
-- **The entry of a program that starts threads** is `(%java-thread-main main finish)`: what
-  `main` leaves uncaught is reported, the thread's object ends (`Thread.finish`), the threads
-  that are no daemons end, then the status. A thread's body is
+- **The entry of a program that starts threads** is `(%java-thread-main main finish trace)`:
+  what `main` leaves uncaught is reported with what it encloses, the thread's object ends
+  (`Thread.finish`), the threads that are no daemons end, then the status. A thread's body is
   `(unwind-protect (handler-case (Thread.body t) (error (c) (Thread.report t text))) (Thread.finish t))`.
+  **The two handlers hold their condition, measured and kept** (j88, 2026-11-18, IR and
+  java.lisp edited by hand): with neither, a counter under four threads is 92,394 ->
+  86,755 B of wasm and 127,038 -> 120,357 B of class (6%, 5%), 92,850 -> 89,597 B once the
+  program has one `catch` of its own (3.5%); taking one of the two away saves 0.5 KB, and
+  reading the report's text in the handlers instead of the condition's slots 0.4 KB -- the
+  cost is the held condition, which every signal site then builds. Not holding it needs
+  `%reporting-uncaught` as a form inside a program, where a thread ends and the program
+  goes on: a new form on four backends for 3.5 to 6% of a program that starts threads.
 - **The run time's own tables** (the identity numbers, `intern`) are read under
   `%java-guard` once a thread was started: `%java-shared` holds the function doing it
   (`%java-among-threads`), set by `%java-thread-start`, so a program starting none
@@ -1398,7 +1497,7 @@ Neither is made; `.todo/j89` holds the plan.
 | `xs.get(i)` on a `List` | `(java.util.ArrayList.get(int) xs i)` while `ArrayList` is the one list the program makes, else `(java.util.List.get(int)%v xs i)` |
 | `a == b` (strings) | `(eq a b)`; every string constant of such a program is a global `%string<n>` set to `(%java-intern "text")` before `main` |
 | `try { .. } catch (A \| B e) { .. }` | `(handler-case .. ((satisfies %catch0) (%t1) (let ((e (or (%java-thrown %t1) (%lisp-error %t1)))) ..)))`, `(defun %catch0 (%c) (let ((%thrown (or (%java-thrown %c) (%lisp-error %c)))) (or (A? %thrown) (B? %thrown))))` |
-| `p.get()`, `xs.length`, `s.charAt(i)` | `(C.get() (or p (%java-npe)))`; `(length (or xs (%java-npe)))`; `(progn (if (or (< i 0) (>= i (length s))) (%java-string-index i s)) (char-code (char s i)))` |
+| `p.get()`, `xs.length`, `s.charAt(i)` | `(C.get() (or p (%java-npe)))`; `(length (or xs (%java-npe)))`; `(let* ((%t0 (%string-code s i))) (if (< %t0 0) (%java-string-index i s) %t0))` |
 | `sb.append(x)` on a `StringBuffer` | `(let* ((%t0 sb) (%t1 x')) (let ((%t2 (%java-monitor-enter %t0))) (unwind-protect (progn (%java-sb-append %t0 %t1)) (%java-monitor-exit %t2))))`; a `StringBuilder`'s form in a program reaching no member of `Thread` |
 | `synchronized (o) { .. }`, a `synchronized` method | `(let ((%t1 (%java-monitor-enter o))) (unwind-protect (progn ..) (%java-monitor-exit %t1)))`, the lock `this`, `'Class` for a static method and `Class.class`; `(progn (or o (%java-npe)) ..)` in a program reaching no member of `Thread` |
 | a `volatile` field read, written | `(rontolisp:with-mutex ((%java-volatile)) (C.f o))`; `(let* ((%t0 v)) (rontolisp:with-mutex ((%java-volatile)) (setf (C.f o) %t0)))`; the plain access in a program reaching no member of `Thread` |
@@ -1475,8 +1574,8 @@ written type argument outside its parameter's bound and a field written through 
 (j78). Warned: the unchecked warnings ("Warnings"). Not checked: checked exceptions. A value read
 through a type argument is trusted (no cast where it is used: measured below, "j78"), and a
 store into an array of references is not checked (measured: "The class of an array"). The run time's exceptions are the
-language's, but a `NullPointerException` has no message and a `ClassCastException` says nothing
-of modules and loaders ("Exceptions").
+language's, but a `NullPointerException` has no message, a `ClassCastException` says nothing
+of modules and loaders, and one out of a static initialization is not wrapped ("Exceptions").
 
 ## Tests
 
@@ -1536,4 +1635,13 @@ initialized while another thread initializes another, `getState`, `InheritableTh
 one stack can run, so the four legs print the same). The `standalone:` case
 `the-unchecked-warnings-are-printed-before-the-program-runs` (j86): its `warnings:` is the
 start of the standard error under the JDK and the interpreter, and what the compile prints
-for the JVM and both wasm legs.
+for the JVM and both wasm legs. j88: java-spec
+`a-static-initialization-that-throws-leaves-its-class-unusable`, the `charAt` lines of
+`the-run-time-raises-the-language-s-exceptions` (each arm of `%string-code`), the
+`standalone:` cases `an-uncaught-exception-of-the-program-s-own-class` (the causes, then
+the location line: `at:` is the first line starting `  at `),
+`the-class-the-program-starts-at-fails-its-initialization` and
+`an-uncaught-exception-ends-its-thread-alone` (a thread's causes, a class failing in a
+thread); ci-spec `string-code-reads-a-character-s-code-or-minus-one`;
+`JavaLoweringTest#aMonitorIsEnteredAndLeftAndAThreadIsTheRunTimes` (both forms of a
+failing initialization, `%uncaught`, the name function that ends in no run-time answer).

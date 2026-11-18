@@ -120,10 +120,41 @@ Report is initialized
 9 3
 ```
 
-Two things differ. An error the run time raises inside an initialization that runs before
-`main` (an array index out of bounds while a table is filled) is raised before `main`
-starts. An exception thrown by a static initializer reaches the program as itself, not
-inside an `ExceptionInInitializerError`.
+An exception a `throw` statement throws out of a static initialization, there or in what it
+calls, ends it as the language says: the exception is the cause of an
+`ExceptionInInitializerError`, an `Error` passes as it is, and every later use of the class
+throws `NoClassDefFoundError`. An error the run time raises there differs. It reaches the
+program as itself, the class stays usable as far as its initialization got, and inside an
+initialization that runs before `main` it is raised before `main` starts.
+
+```java
+class Table {
+    static final int[] CELLS = new int[2];
+
+    static {
+        IO.println("filling");
+        CELLS[2] = 1;
+    }
+}
+
+void main() {
+    try {
+        IO.println(Table.CELLS.length);
+    } catch (Throwable thrown) {
+        IO.println(thrown);
+    }
+    IO.println(Table.CELLS.length);
+}
+```
+
+```
+filling
+java.lang.ArrayIndexOutOfBoundsException: Index 2 out of bounds for length 2
+2
+```
+
+A JDK prints `java.lang.ExceptionInInitializerError` for the first read and ends the
+program at the second with a `NoClassDefFoundError`.
 
 **Two messages of the run time's exceptions differ.** An error of the run time is the
 exception the language names, and a `catch` takes it as that class: a member, an element or
@@ -137,21 +168,42 @@ expression that was `null` by names that depend on how the class was compiled. A
 `ClassCastException`'s message names the two classes and leaves out what a JDK adds of
 their modules and class loaders. A stack overflow is no `StackOverflowError` a program can catch.
 
-**An uncaught exception is reported without a stack trace.** Standard error gets the line a
-JDK writes first, `Exception in thread "main"` and the exception's `toString()`, and the
-program exits with the status 1. One line follows it where a JDK writes its frames: the
-file and the line of the statement the exception was raised in, and the method that
-statement is written in. The interpreter and a JVM output write it; a `.wasm` output
-writes it when compiled with
+**An uncaught exception is reported without a stack trace.** Standard error gets what a JDK
+writes but the frames: `Exception in thread "main"` and the exception's `toString()`, then
+the exceptions it suppressed and its causes, and the program exits with the status 1. One
+line stands for the frames, after the causes: the file and the line of the statement the
+exception was raised in, and the method that statement is written in. The interpreter and
+a JVM output write it; a `.wasm` output writes it when compiled with
 [`--report-locations`](../compiling/wasm.md#uncaught-condition-locations---report-locations).
-No cause follows. `printStackTrace()`
-writes an exception, the exceptions it suppressed and its causes as a JDK does, without
-the frame lines.
+`printStackTrace()` writes the same lines but that one.
+
+```java
+public class Uncaught {
+    static void check(int balance, int amount) {
+        if (amount > balance) {
+            throw new IllegalStateException("insufficient funds: " + (amount - balance));
+        }
+    }
+
+    static void withdraw(int balance, int amount) {
+        try {
+            check(balance, amount);
+        } catch (IllegalStateException e) {
+            throw new RuntimeException("withdrawal refused", e);
+        }
+    }
+
+    public static void main(String[] args) {
+        withdraw(70, 100);
+    }
+}
+```
 
 ```console
 $ rontolisp Uncaught.java
-Exception in thread "main" java.lang.IllegalStateException: insufficient funds: 30
-  at Uncaught.java:4 in Uncaught.check(int,int)
+Exception in thread "main" java.lang.RuntimeException: withdrawal refused
+Caused by: java.lang.IllegalStateException: insufficient funds: 30
+  at Uncaught.java:12 in Uncaught.withdraw(int,int)
 ```
 
 **Some errors a compiler reports are not reported**, and such a program runs. `throws`

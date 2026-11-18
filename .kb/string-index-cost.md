@@ -52,6 +52,30 @@ WHOLE vector per index.
 - **Soundness: a string's bytes never change after it is built** -- an indexed write
   rebuilds (`.kb/string-write-runtime.md`), so a cursor cannot go stale.
 
+## `%string-code`: the read a front end makes of a string nothing writes
+`(%string-code string index)` (`LispNames.STRING_CODE`, 2026-11-18, j88) answers
+the code of the character at an integer index, -1 when the index is none of the string:
+`(char-code (char s i))` behind the caller's bounds test, in one step. Why it exists: a
+front end whose strings are immutable (Java's `charAt`, [java-frontend.md](java-frontend.md))
+paid, in EH mode on WASM, a generic `length` call for its bounds test, `_idx_chk`, two
+stores of the operator register and `_str_char_ref`'s `_charvec_p` and string tests at each
+read -- 49 ns a character of a loop against 23.
+- **WASM**: one call of `_str_code(string, index)` (`FUNC_STR_CODE`,
+  `WasmStringRuntimeBuilder.buildStrCodeBody`). An index below the cursor of a single-byte
+  prefix is the byte at `1 + i`, read there; any other asks `_str_char_count` and
+  `_str_char_at`. No operand type is checked: an index that is no fixnum is outside every
+  string. A mutable character vector is rendered first (`emitCharvecToStrLocal`, only in
+  a module that can hold one), so one that reaches it is read right, at the cost
+  `_charvec_to_str` has.
+- **JVM**: `LispMacroExpander.expandStringCode`, the public reads. An operand that is a
+  variable is read where it stands (a `let` of it boxed a local the backend kept raw:
+  0.26 -> 0.30 s on the loop below), unless a later operand is a form that could assign it.
+- **Interpreter**: a function (`Environment`); a wide integer answers -1.
+- Measured (2026-11-18, Linux x86-64, GraalVM JDK 25.0.5, wasmtime 49, a Java loop over 26
+  letters 10^6 times, JVM / precompiled wasm, interleaved, best of five): 0.26 / 1.25 ->
+  0.26 / 0.61 s. Pinned by ci-spec `string-code-reads-a-character-s-code-or-minus-one` and
+  java-spec's `charAt` lines.
+
 ## JVM: two shapes, and a memory that keeps the expensive one
 `JvmStringIndexRuntimeBuilder` emits `_cpoff(String, int) -> int` and `_scount(String) -> int`,
 which every character index and string length reads through, plus `_cpidx(String) -> int[]`, the

@@ -73,7 +73,9 @@ the two flags). The JDK leg of `JavaSpecE2eTest` compiles the corpus with javac:
   `StackOverflowError`, `OutOfMemoryError`, `SecurityException`,
   `FileNotFoundException`, `InputMismatchException`; the `%h` conversion; a class
   literal as a value; `IntToDoubleFunction`, `ObjIntConsumer` and their kind.
-- `MatchException` and the run time's own errors as the library's classes: `.todo/j88`.
+- `MatchException` and the run time's own errors as the library's classes: probed and
+  closed by j88 (`.kb/java-frontend.md`, "Exceptions": at every place a program can see
+  one).
 
 ## Measured costs, each a lead
 
@@ -88,8 +90,8 @@ the two flags). The JDK leg of `JavaSpecE2eTest` compiles the corpus with javac:
 - **A line of Java source in the library is some 200 B of wasm** (the UTF-16 codec, 90
   lines: 18 KB; the host's line in `BufferedReader`, 20 lines: 4.6 KB): what a class
   every program of a kind reaches may hold is small.
-- **A program that throws or catches at all is ~60 KB of wasm**; what the 60 KB are is
-  `.todo/j88`'s.
+- **A program that throws or catches at all is ~47 KB of wasm** since j88 (60 KB
+  before); what is left is the pipeline's print seam, `.todo/j99`'s lead.
 - **A `BufferedReader` over `System.in` is 0.17 s over `IO.readln` in 200,000 lines on
   wasm** (1.06 against 0.89 s) now that the line comes whole: the rest is the reader's
   own test and the `indexOf` of a `\r`.
