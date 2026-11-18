@@ -1641,9 +1641,6 @@ final class JavaIntrinsics {
 		natives.put(matcher + "group0(Object,int)", engine("matcher-group"));
 		natives.put(matcher + "replace0(Object,String,String,boolean)", runtime("regex-replace"));
 		natives.put(matcher + "text0(Object)", (lowering, call) -> call.argument(0));
-		natives.put("rontolisp.internal.Support.oneStack()", runtime("one-stack-p"));
-		natives.put("rontolisp.internal.Support.notBefore(long)", runtime("thread-not-before"));
-		natives.put("rontolisp.internal.Support.unstart(Thread)", runtime("thread-unstart"));
 		natives.put("rontolisp.internal.Support.floatHash(float)", runtime("float-bits"));
 		// a Float is the float in a cons with its tag
 		natives.put("rontolisp.internal.Support.readFloat(String)", (lowering, call) -> {

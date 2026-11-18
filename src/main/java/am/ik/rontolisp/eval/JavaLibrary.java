@@ -172,11 +172,11 @@ public final class JavaLibrary {
 	}
 
 	/**
-	 * The functions a lowered program calls whose one-stack definitions call
-	 * {@code sleep}.
+	 * The functions a lowered program calls whose wasm definitions reach {@code sleep}: a
+	 * sleep and a wait, of a program that starts no thread and of one that does.
 	 */
 	private static final Set<String> SLEEPING = Set.of("RONTOLISP::%JAVA-THREAD-SLEEP", "RONTOLISP::%JAVA-MONITOR-WAIT",
-			"RONTOLISP::%JAVA-THREAD-NOT-BEFORE");
+			"RONTOLISP::%JAVA-SUSPENDING-SLEEP", "RONTOLISP::%JAVA-SUSPENDING-WAIT");
 
 	/**
 	 * Whether a lowered program can sleep through the library: a thread's sleep and a

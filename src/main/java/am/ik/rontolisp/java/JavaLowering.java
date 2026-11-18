@@ -453,6 +453,18 @@ final class JavaLowering implements JavaEmitter.Context {
 	/** What the flow of the classes lowered reads ({@link JavaFlow}). */
 	private final JavaFlow.Facts facts = new JavaFlow.Facts();
 
+	/** What the forms do not say of themselves that {@link JavaResumable} reads. */
+	private final JavaResumable.Facts resumable = new JavaResumable.Facts();
+
+	/**
+	 * Whether the target has one stack: a thread of the program is then a body suspended
+	 * and resumed ({@link JavaResumable}).
+	 */
+	private boolean suspended;
+
+	/** What is told the analysis of the program's threads, when something asks. */
+	private java.util.function.@Nullable Consumer<JavaResumable.Census> counted;
+
 	/** The local and anonymous classes lowered already in this pass. */
 	private final Set<JavaClass> loweredLocals = new HashSet<>();
 
@@ -601,6 +613,29 @@ final class JavaLowering implements JavaEmitter.Context {
 	 */
 	static List<LispVal> lower(CompilationUnit tree, String source, @Nullable String file, JavaFiles files,
 			@Nullable Session session, boolean loaded, java.util.function.@Nullable Consumer<String> warnings) {
+		return lower(tree, source, file, files, session, loaded, warnings, false);
+	}
+
+	/**
+	 * {@link #lower(CompilationUnit, String, String, JavaFiles, Session, boolean, java.util.function.Consumer)}
+	 * for a target told.
+	 * @param suspended whether the target has one stack, where a thread of the program is
+	 * a body suspended and resumed
+	 */
+	static List<LispVal> lower(CompilationUnit tree, String source, @Nullable String file, JavaFiles files,
+			@Nullable Session session, boolean loaded, java.util.function.@Nullable Consumer<String> warnings,
+			boolean suspended) {
+		return lower(tree, source, file, files, session, loaded, warnings, suspended, null);
+	}
+
+	/**
+	 * The lowering for a target with one stack, telling what {@link JavaResumable} found
+	 * of the program's threads.
+	 * @param counted what is told the analysis, or {@code null}
+	 */
+	static List<LispVal> lower(CompilationUnit tree, String source, @Nullable String file, JavaFiles files,
+			@Nullable Session session, boolean loaded, java.util.function.@Nullable Consumer<String> warnings,
+			boolean suspended, java.util.function.@Nullable Consumer<JavaResumable.Census> counted) {
 		Source program = new Source(file, source, false);
 		if (tree.classes().isEmpty()) {
 			throw JavaClasses.error(program, 0, "the file declares no class");
@@ -654,6 +689,8 @@ final class JavaLowering implements JavaEmitter.Context {
 			lowering.provenance = provenance;
 			lowering.session = session;
 			lowering.loaded = loaded;
+			lowering.suspended = suspended;
+			lowering.counted = counted;
 			List<LispVal> forms = lowering.program();
 			if (classes.version() == version) {
 				if (session != null) {
@@ -823,6 +860,17 @@ final class JavaLowering implements JavaEmitter.Context {
 					LAMBDA_FUNCTION));
 		}
 		forms.addAll(made);
+		if (this.suspended && startsThreads()) {
+			if (!runs) {
+				throw unsupported(0, "a program with no main starting threads on a target with one stack");
+			}
+			this.resumable.dispatchers.addAll(this.dispatchers.keySet());
+			for (LispSymbol dispatching : List.of(OBJECT_STRING, OBJECT_EQUALS, OBJECT_HASH)) {
+				this.resumable.dispatchers.add(dispatching.name());
+			}
+			return JavaResumable.rewrite(forms, this.resumable, what -> JavaClasses.unsupported(this.program, 0, what),
+					this.counted);
+		}
 		return List.copyOf(forms);
 	}
 
@@ -1376,7 +1424,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		this.classes.methodParameters = List.of();
 		if (written.modifiers().contains("synchronized")) {
 			// an instance method holds its object's monitor, a static one its class's
-			body = holding(method.isStatic ? JavaForms.quote(JavaNames.structure(method.owner)) : THIS, List.of(body));
+			body = holding(method.isStatic ? JavaForms.quote(JavaNames.structure(method.owner)) : THIS,
+					new JavaResumable.Lock(method.owner, false, method.isStatic), List.of(body));
 		}
 		LispVal first = method.isStatic ? initializationOf(method.owner) : null;
 		if (first != null) {
@@ -3193,7 +3242,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			arguments.add(new Typed(held, argument.type(), argument.constant()));
 		}
 		Invocation bound = new Invocation(new Typed(self, receiver.type()), arguments, call.discard(), call.pos());
-		return list(cl("let*"), list(bindings), holding(self, List.of(member.emit(this, bound))));
+		JavaResumable.Lock lock = receiver.type() instanceof ClassType held
+				? new JavaResumable.Lock(held.declaration(), false, false) : null;
+		return list(cl("let*"), list(bindings), holding(self, lock, List.of(member.emit(this, bound))));
 	}
 
 	@Override
@@ -4951,8 +5002,20 @@ final class JavaLowering implements JavaEmitter.Context {
 				inference.lowerBound(wanted, shared);
 			}
 		}
-		return new Typed(lambdaValue(target, list(cl("lambda"), list(parameters), body)),
+		return new Typed(lambdaValue(target, madeFor(target, list(cl("lambda"), list(parameters), body))),
 				Objects.requireNonNull(expected));
+	}
+
+	/** A lambda's form, told the interface it was made for. */
+	private LispVal madeFor(JavaClass target, LispVal lambda) {
+		this.resumable.lambdas.put(lambda, target);
+		return lambda;
+	}
+
+	/** A call through a function value, told the interface it is called through. */
+	private LispVal calledThrough(JavaClass receiver, boolean exact, LispVal funcall) {
+		this.resumable.calls.put(funcall, new JavaResumable.Called(receiver, exact));
+		return funcall;
 	}
 
 	/** A value as the function being lowered returns it. */
@@ -5107,7 +5170,8 @@ final class JavaLowering implements JavaEmitter.Context {
 						+ " cannot be converted to " + wanted);
 			}
 		}
-		return new Typed(bound(bindings, lambdaValue(target, list(cl("lambda"), list(parameters), body))),
+		return new Typed(
+				bound(bindings, lambdaValue(target, madeFor(target, list(cl("lambda"), list(parameters), body)))),
 				Objects.requireNonNull(expected));
 	}
 
@@ -6570,14 +6634,16 @@ final class JavaLowering implements JavaEmitter.Context {
 			List<LispVal> arms = new ArrayList<>();
 			arms.add(cl("cond"));
 			if (!plain.isEmpty()) {
-				arms.add(list(call("functionp", RECEIVER), called ? form(cl("funcall"), parameters)
-						: form(JavaNames.function(Objects.requireNonNull(inherited)), parameters)));
+				arms.add(list(call("functionp", RECEIVER),
+						called ? calledThrough(receiver, false, form(cl("funcall"), parameters))
+								: form(JavaNames.function(Objects.requireNonNull(inherited)), parameters)));
 			}
 			for (JavaClass made : tagged) {
 				Method body = lambdaBody(made, method);
 				arms.add(list(list(lambdaTest(made), RECEIVER),
-						body != null ? form(JavaNames.function(body), parameters) : form(cl("funcall"),
-								prepend(lambdaFunction(made, RECEIVER), parameters.subList(1, parameters.size())))));
+						body != null ? form(JavaNames.function(body), parameters) : calledThrough(made, true, form(
+								cl("funcall"),
+								prepend(lambdaFunction(made, RECEIVER), parameters.subList(1, parameters.size()))))));
 			}
 			for (Body body : bodies) {
 				arms.add(list(list(JavaNames.predicate(body.tested()), RECEIVER),
@@ -6614,7 +6680,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		LispSymbol target = target(receiver, method);
 		boolean dispatched = target != null && this.dispatchers.containsKey(target.name());
 		LispVal checked = written == null || dispatched ? object : dereferenced(object);
-		return target == null ? form(cl("funcall"), prepend(checked, arguments))
+		return target == null ? calledThrough(receiver, false, form(cl("funcall"), prepend(checked, arguments)))
 				: form(target, prepend(checked, arguments));
 	}
 
@@ -7308,12 +7374,14 @@ final class JavaLowering implements JavaEmitter.Context {
 				return List.of(located(attempt(attempt), attempt.pos()));
 			case JavaSyntax.Synchronized held: {
 				LispVal lock;
+				JavaResumable.Lock known = null;
 				if (held.type() != null) {
 					// a class's monitor: what its static synchronized methods hold
 					if (!(type(held.type()) instanceof ClassType named)) {
 						throw unsupported(held.type().pos(), "a class literal");
 					}
 					lock = quote(JavaNames.structure(named.declaration()));
+					known = new JavaResumable.Lock(named.declaration(), false, true);
 				}
 				else {
 					Expression written = Objects.requireNonNull(held.lock());
@@ -7322,8 +7390,12 @@ final class JavaLowering implements JavaEmitter.Context {
 						throw error(written.pos(), "unexpected type: a reference is required, found " + value.type());
 					}
 					lock = value.form();
+					if (value.type() instanceof ClassType locked) {
+						JavaClass made = madeAs(written);
+						known = new JavaResumable.Lock(made != null ? made : locked.declaration(), made != null, false);
+					}
 				}
-				return List.of(located(holding(lock, scoped(held.body(), false)), held.pos()));
+				return List.of(located(holding(lock, known, scoped(held.body(), false)), held.pos()));
 			}
 			case Close close:
 				return close(close);
@@ -7416,7 +7488,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			test = virtual(this.classes.library("java.util.Iterator"),
 					iteratorMethod(this.classes.library("java.util.Iterator"), "hasNext"), items, List.of());
 		}
-		LispVal form = list(cl("let*"), list(bindings), form(cl("while"), prepend(test, round)));
+		LispVal walk = form(cl("while"), prepend(test, round));
+		this.resumable.iterations.add(walk);
+		LispVal form = list(cl("let*"), list(bindings), walk);
 		return target.breaks ? list(cl("block"), target.breakBlock, form) : form;
 	}
 
@@ -7528,7 +7602,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * cannot tell a monitor held from one that is not ({@link JavaClasses#monitors}) only
 	 * the exception is left.
 	 */
-	private LispVal holding(LispVal lock, List<LispVal> body) {
+	private LispVal holding(LispVal lock, JavaResumable.@Nullable Lock known, List<LispVal> body) {
 		if (!this.classes.monitors) {
 			// no thread is started and nothing waits or asks: what is left of a monitor
 			// is the exception a null has
@@ -7537,8 +7611,32 @@ final class JavaLowering implements JavaEmitter.Context {
 			return tested == lock && (ofClass || isSimple(lock)) ? progn(body) : progn(prepend(tested, body));
 		}
 		LispSymbol monitor = temporary();
-		return JavaForms.let(monitor, runtimeCall("monitor-enter", lock),
+		LispVal entry = runtimeCall("monitor-enter", lock);
+		if (known != null) {
+			this.resumable.locks.put(entry, known);
+		}
+		return JavaForms.let(monitor, entry,
 				List.of(list(cl("unwind-protect"), progn(body), runtimeCall("monitor-exit", monitor))));
+	}
+
+	/**
+	 * The class a lock is surely an instance of, itself and no class under it: a final
+	 * field named alone whose initializer makes one, as {@code new Object()}. Else
+	 * {@code null}.
+	 */
+	private @Nullable JavaClass madeAs(Expression lock) {
+		if (lock instanceof Name name && variable(name.identifier(), name.pos(), true) instanceof FieldRef read
+				&& read.field().isFinal && read.field().declaration != null
+				&& read.field().declaration.initializer() instanceof JavaSyntax.New made && made.body() == null
+				&& made.type().arguments().isEmpty()) {
+			try {
+				return type(made.type()) instanceof ClassType type ? type.declaration() : null;
+			}
+			catch (LispReadException ex) {
+				return null;
+			}
+		}
+		return null;
 	}
 
 	/** The class a {@code catch} names, which is a {@code Throwable}. */

@@ -2,10 +2,10 @@
 // and behaviour; nothing here is copied or translated from a JDK
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 //
-// A thread is the host's where the target has threads (the interpreter, the JVM) and
-// runs on the stack of the thread that waits for it where it has one stack (wasm): the
-// native members are the run time's (java.lisp, "Threads"), everything a program can
-// tell of a thread is written here over them.
+// A thread is the host's where the target has threads (the interpreter, the JVM) and a
+// body suspended and resumed where it has one stack (wasm): the native members are the
+// run time's (java.lisp, "Threads"), everything a program can tell of a thread is
+// written here over them.
 package java.lang;
 
 import java.util.concurrent.ThreadFactory;

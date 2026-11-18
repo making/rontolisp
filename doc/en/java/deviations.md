@@ -288,42 +288,32 @@ the encodings (`file.encoding`, `native.encoding`, `stdin.encoding`, `stdout.enc
 
 ## Threads
 
-**A `.wasm` runs the threads of a program on one stack.** A thread started does not run
-until the running thread cannot go on: it waits in `wait` or `join`, sleeps, yields, or is
-the thread of `main` and ends. The threads started then run on that thread's stack, one
-after another in the order started, each to its end. Every such execution is one the
-language allows, which promises no thread a turn; a JDK seldom produces it. Three kinds of
-program show it.
+**The threads of a `.wasm` take turns.** A `.wasm` has one stack, so a thread there runs
+until it waits -- in `wait`, `join` or `sleep`, at `yield`, at a monitor another thread
+holds -- and a thread that can go on runs then. A started thread first runs when the thread
+that started it waits. Every such execution is one the language allows, which promises no
+thread a turn. Four kinds of program show it.
 
-- A thread suspended that way goes on only once every thread run above it has ended. A wait
-  that only a suspended thread could end is refused where it happens, with a message naming
-  it on standard error and the status 1: two threads taking turns through `wait` and
-  `notify`, a bounded buffer whose producer waits for its consumer.
-- Nothing interrupts a running thread. A thread that runs until another one tells it to
-  stop, by a flag or an interrupt, never ends when the one to tell it is suspended under it.
-- `sleep` lasts at least its time. A thread sleeping under another goes on when that one
-  has ended, so two threads sleeping different times can print in the other order.
-
-A daemon thread not yet run when the last other thread ends never runs.
+- A loop that never waits keeps its turn. The turn is given up once in about a thousand
+  rounds by a loop that reads what another thread writes the way the language shares it: a
+  `volatile` field, an atomic, a `synchronized` method or block, the interrupt. A loop that
+  reads a plain field instead, one that asks an object through an interface inside its body
+  (`while (true) { if (future.isDone()) break; }`), and one turning while its thread holds a
+  monitor let no other thread run until they end. `Thread.yield()` or a `sleep` in the loop
+  gives the turn.
+- Threads that all wait for one another end the program with a message on standard error
+  and the status 1, where a JDK waits for ever: two threads each holding the monitor the
+  other enters, a pool that is never shut down, a `Timer` that is never cancelled.
+- A `toString()` or a `hashCode()` that `String.format` or `printf` asks for, and the
+  `toString()` of an exception being reported, cannot wait. One that has to -- it is
+  `synchronized` and a sleeping thread holds its monitor -- ends the program the same way.
+- A Java file with no `main` that a Common Lisp program loads is refused when it starts a
+  thread.
 
 **What is shared without a monitor or `volatile` is the host's.** On the interpreter and
 the JVM a field two threads read and write with neither may be read stale, as the language
 allows. `volatile`, `synchronized`, `Thread.start` and `join` order what they order in the
 language.
-
-**A pool's thread ends when it has no task left, in a `.wasm`.** A thread of an executor
-cannot wait there for the next task, which only a thread suspended under it could hand
-over. A task given later starts a thread of the same name in its place, so a
-`ThreadLocal` of the pool's thread starts again from its initial value. A pool that is
-never shut down keeps a JDK's program running; a `.wasm` ends.
-
-**A task at its time is run by a thread started for that time, in a `.wasm`.** No thread
-can wait there for a time. A scheduled pool and a `Timer` start a thread that runs no
-sooner than their soonest task's time, and a wait of the program -- `get`, `await`, `join`,
-`sleep`, the program's end -- passes the time until then. Each run is a new thread, named
-as the pool's threads in turn, so a `ThreadLocal` starts again. A `Timer` that is no daemon
-and is never cancelled keeps a JDK's program running; a `.wasm` ends once it has no task
-left.
 
 **A pool is not in every respect a JDK's.** `Executors.newSingleThreadExecutor()` and
 `newSingleThreadScheduledExecutor()` answer the pool itself, which a JDK wraps: there it

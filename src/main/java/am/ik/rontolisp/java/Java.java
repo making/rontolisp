@@ -62,7 +62,25 @@ public final class Java {
 	 */
 	public static List<LispVal> read(String source, @Nullable String file, JavaFiles files,
 			@Nullable Consumer<String> warnings) {
-		return read(source, file, files, false, warnings);
+		return read(source, file, files, false, warnings, false);
+	}
+
+	/**
+	 * {@link #read(String, String, JavaFiles, Consumer)} for a target told: where it has
+	 * one stack, a program that starts threads is lowered with every function a thread
+	 * can wait in resumable, so a thread is a body suspended and resumed
+	 * ({@code .kb/java-frontend.md}, "Threads").
+	 * @param source the file's text
+	 * @param file the origin file
+	 * @param files where the other files of the source tree are read
+	 * @param warnings what is told the text of the warnings, or {@code null}
+	 * @param suspended whether the target has one stack
+	 * @return the top-level forms
+	 * @throws LispReadException as {@link #read(String, String, JavaFiles)}
+	 */
+	public static List<LispVal> read(String source, @Nullable String file, JavaFiles files,
+			@Nullable Consumer<String> warnings, boolean suspended) {
+		return read(source, file, files, false, warnings, suspended);
 	}
 
 	/**
@@ -91,11 +109,27 @@ public final class Java {
 	 */
 	public static List<LispVal> load(String source, @Nullable String file, JavaFiles files,
 			@Nullable Consumer<String> warnings) {
-		return read(source, file, files, true, warnings);
+		return read(source, file, files, true, warnings, false);
+	}
+
+	/**
+	 * {@link #load(String, String, JavaFiles, Consumer)} for a target told, as
+	 * {@link #read(String, String, JavaFiles, Consumer, boolean)}.
+	 * @param source the file's text
+	 * @param file the origin file
+	 * @param files where the other files of the source tree are read
+	 * @param warnings what is told the text of the warnings, or {@code null}
+	 * @param suspended whether the target has one stack
+	 * @return the top-level forms
+	 * @throws LispReadException as {@link #read(String, String, JavaFiles)}
+	 */
+	public static List<LispVal> load(String source, @Nullable String file, JavaFiles files,
+			@Nullable Consumer<String> warnings, boolean suspended) {
+		return read(source, file, files, true, warnings, suspended);
 	}
 
 	private static List<LispVal> read(String source, @Nullable String file, JavaFiles files, boolean loaded,
-			@Nullable Consumer<String> warnings) {
+			@Nullable Consumer<String> warnings, boolean suspended) {
 		String name = "Main";
 		if (file != null) {
 			String path = file.replace('\\', '/');
@@ -105,7 +139,8 @@ public final class Java {
 				name = base;
 			}
 		}
-		return JavaLowering.lower(JavaParser.parse(source, file, name), source, file, files, null, loaded, warnings);
+		return JavaLowering.lower(JavaParser.parse(source, file, name), source, file, files, null, loaded, warnings,
+				suspended);
 	}
 
 }

@@ -3,8 +3,8 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.lang;
 
-// What a program can ask of every target: one processor is answered, since a .wasm
-// runs its threads on one stack, and nothing is collected at a program's ask.
+// What a program can ask of every target: one processor is answered, since the threads
+// of a .wasm take turns on one stack, and nothing is collected at a program's ask.
 public class Runtime {
 
     private static final Runtime CURRENT = new Runtime();

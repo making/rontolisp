@@ -171,7 +171,8 @@ public enum SourceLanguage {
 			return readUntilError(source, features, file, standards, loader);
 		}
 		try {
-			return new LispReader.ReadPrefix(Java.load(source, file, javaFiles(loader), SourceLanguage::warned), null);
+			return new LispReader.ReadPrefix(
+					Java.load(source, file, javaFiles(loader), SourceLanguage::warned, oneStack(features)), null);
 		}
 		catch (LispReadException ex) {
 			return new LispReader.ReadPrefix(List.of(), ex);
@@ -252,8 +253,8 @@ public enum SourceLanguage {
 						Starlark.read(source, file, standards.starlark(), starlarkFiles(loader)), null);
 			}
 			if (this == JAVA) {
-				return new LispReader.ReadPrefix(Java.read(source, file, javaFiles(loader), SourceLanguage::warned),
-						null);
+				return new LispReader.ReadPrefix(
+						Java.read(source, file, javaFiles(loader), SourceLanguage::warned, oneStack(features)), null);
 			}
 			return new LispReader.ReadPrefix(clojure(source, features, file, standards, loader, false, null).forms(),
 					null);
@@ -261,6 +262,15 @@ public enum SourceLanguage {
 		catch (LispReadException ex) {
 			return new LispReader.ReadPrefix(List.of(), ex);
 		}
+	}
+
+	/**
+	 * Whether the target a program is read for has one stack -- the wasm backends --
+	 * where a thread of a Java program is a body suspended and resumed
+	 * ({@code .kb/java-frontend.md}, "Threads").
+	 */
+	private static boolean oneStack(Features features) {
+		return features.contains("rontolisp-wasm");
 	}
 
 	/**

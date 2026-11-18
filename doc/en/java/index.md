@@ -579,10 +579,11 @@ void main() throws InterruptedException {
 ```
 
 On the interpreter and the JVM a thread is a virtual thread of the host, and threads run
-in parallel. A `.wasm` has one stack, and its threads take turns on it: a thread started
-runs when the running thread waits, sleeps, yields or ends. A program whose threads are
-joined and share what they share under a monitor prints the same on every backend; what one
-stack changes for any other is in [Deviations](deviations.md#threads).
+in parallel. A `.wasm` has one stack, and its threads take turns on it: a thread runs until
+it waits, sleeps, yields or ends, and goes on from there at a later turn. A program whose
+threads share what they share under a monitor, a `volatile` field or an atomic prints the
+same on every backend; what the turns change for any other is in
+[Deviations](deviations.md#threads).
 
 `java.util.concurrent` has locks, latches, barriers, queues, a concurrent map, executors
 -- a pool of a program's own, a scheduled one, a fork/join pool -- and `CompletableFuture`,

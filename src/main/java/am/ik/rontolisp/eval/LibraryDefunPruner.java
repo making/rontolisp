@@ -846,7 +846,7 @@ public final class LibraryDefunPruner {
 				|| !(cons.cdr() instanceof LispCons rest)) {
 			return false;
 		}
-		if (LispNames.DEFUN.equals(op.name())) {
+		if (LispNames.DEFUN.equals(op.name()) || LispNames.ASYNC_DEFUN_QUALIFIED.equals(op.name())) {
 			return true;
 		}
 		// (defvar *x*) with no initform defines nothing to run.
@@ -1530,6 +1530,12 @@ public final class LibraryDefunPruner {
 			return null;
 		}
 		String operator = op.name();
+		// A resumable function of the Java run time (java.lisp's wasm variant: the
+		// functions a thread is suspended in) is a function as its defuns are; the
+		// async-defuns of every other library stay roots.
+		if (LispNames.ASYNC_DEFUN_QUALIFIED.equals(operator)) {
+			return rest.car() instanceof LispSymbol name && JavaLibrary.mayDefine(name.name()) ? name.name() : null;
+		}
 		// defconstant rides with defparameter/defvar: the backends compile all three
 		// through the same case (a global variable definition), and so do
 		// GlobalVarCollector and SpecialVarCollector.

@@ -686,6 +686,50 @@ class JavaLoweringTest {
 	}
 
 	@Test
+	@SuppressWarnings("unchecked")
+	void theThreadsOfTheCorpusHoldNoMonitorWhileTheyAreSuspended() throws IOException {
+		// What a thread suspended and resumed costs is decided by two numbers
+		// (JavaResumable): the functions a thread can be suspended in, which are
+		// lowered as state machines, and the synchronized regions held across a
+		// suspension, whose locks make every entry that may be theirs a suspension
+		// too. The library is written so that no region of its own is held -- a member
+		// that never waits calls nothing that can -- and the analysis follows a
+		// function value to the lambdas handed to the parameter it is: over the
+		// corpus's thread programs no region is held and no entry may block, but for
+		// the one program that sleeps holding a monitor, and less than a quarter of a
+		// program's functions are resumable.
+		Map<String, Object> spec;
+		try (InputStream in = JavaLoweringTest.class.getResourceAsStream("/java-spec.yaml")) {
+			spec = new tools.jackson.dataformat.yaml.YAMLMapper().readValue(am.ik.rontolisp.testsupport.YamlResources
+				.safeReader(new String(Objects.requireNonNull(in).readAllBytes(), StandardCharsets.UTF_8)), Map.class);
+		}
+		Map<String, JavaResumable.Census> found = new java.util.TreeMap<>();
+		for (Map<String, Object> program : (List<Map<String, Object>>) Objects.requireNonNull(spec.get("standalone"))) {
+			String file = (String) Objects.requireNonNull(program.get("file"));
+			String source = (String) Objects.requireNonNull(program.get("source"));
+			if (!file.endsWith(".java") || program.containsKey("files")) {
+				continue;
+			}
+			String name = file.substring(0, file.length() - ".java".length());
+			JavaLowering.lower(JavaParser.parse(source, file, name), source, file, JavaFiles.NONE, null, false, null,
+					true, census -> found.put(name, census));
+		}
+		assertThat(found.keySet()).containsExactly("Dies", "Handing", "MainDies", "Monitors", "Sharing", "Timed",
+				"Turns", "Waits");
+		found.forEach((name, census) -> {
+			assertThat(census.resumable().size() * 4).as(name).isLessThan(census.functions());
+			if (name.equals("Turns")) {
+				assertThat(census.held()).as(name).containsExactly("a lambda: calls Thread.sleep(long)");
+				assertThat(census.blocking()).as(name).isEqualTo(6);
+			}
+			else {
+				assertThat(census.held()).as(name).isEmpty();
+				assertThat(census.blocking()).as(name).isZero();
+			}
+		});
+	}
+
+	@Test
 	void aMonitorIsEnteredAndLeftAndAThreadIsTheRunTimes() {
 		// synchronized enters the monitor of its object -- the class's for a static
 		// method and a class literal -- and leaves it however the body ends; a volatile
@@ -696,7 +740,7 @@ class JavaLoweringTest {
 		// class on one thread, its state written under a lock no initializer runs under
 		// -- the text every later use says of it once the initialization threw -- and
 		// ends when its threads have.
-		assertThat(lower("""
+		String threads = """
 				class Cell {
 				    static volatile int hits;
 				    volatile Cell next;
@@ -719,7 +763,8 @@ class JavaLoweringTest {
 				        System.out.println(Cell.bump() + cell.held + Lazy.made + Late.made);
 				    }
 				}
-				""", "T1.java")).contains(
+				""";
+		assertThat(lower(threads, "T1.java")).contains(
 				"(DEFUN |Cell.add(Cell)| (|this| |other|) (LET ((|%t1| (RONTOLISP::%JAVA-MONITOR-ENTER |this|))) "
 						+ "(UNWIND-PROTECT (PROGN (SETF (|Cell.held| |this|) (- (LOGAND (+ (+ (|Cell.held| |this|) 1) "
 						+ "2147483648) 4294967295) 2147483648)) (LET* ((|%t0| (RONTOLISP:WITH-MUTEX "
@@ -775,6 +820,35 @@ class JavaLoweringTest {
 						+ "(SETQ |Thread.MAX_PRIORITY| 10) (SETQ |Thread.unnamed| 0) (SETQ |Thread.identifiers| 1) (SETQ "
 						+ "|Lazy.<clinit>%done| NIL) (SETQ |Late.<clinit>%done| NIL) (|T1.main(String[])| (VECTOR)))) (LAMBDA (|%t|) "
 						+ "(|Thread.finish(Thread)| |%t|)) (LAMBDA (|%o|) (|Throwable.trace(Throwable)| |%o|)))");
+		// where the target has one stack a thread is a body suspended and resumed:
+		// the functions a thread can wait in are async-defuns and a call of one an
+		// await; a function that only ends with such a call answers its future; a
+		// monitor no suspended thread can hold is entered as anywhere, and a function
+		// that never waits is the function it was
+		assertThat(Java.read(threads, "T1.java", JavaFiles.NONE, null, true).stream().map(LispVal::print).toList())
+			.contains("(DEFUN |Cell.add(Cell)| (|this| |other|) (LET ((|%t1| (RONTOLISP::%JAVA-MONITOR-ENTER |this|))) "
+					+ "(UNWIND-PROTECT (PROGN (SETF (|Cell.held| |this|) (- (LOGAND (+ (+ (|Cell.held| |this|) 1) "
+					+ "2147483648) 4294967295) 2147483648)) (LET* ((|%t0| (RONTOLISP:WITH-MUTEX "
+					+ "((RONTOLISP::%JAVA-VOLATILE)) (|Cell.next| |other|)))) (RONTOLISP:WITH-MUTEX "
+					+ "((RONTOLISP::%JAVA-VOLATILE)) (SETF (|Cell.next| |this|) |%t0|)))) "
+					+ "(RONTOLISP::%JAVA-MONITOR-EXIT |%t1|))))",
+					"(RONTOLISP:ASYNC-DEFUN |Cell.twice(Object)| (|this| |lock|) (LET ((|%t5| "
+							+ "(RONTOLISP::%JAVA-MONITOR-ENTER |lock|))) (UNWIND-PROTECT (PROGN (LET ((|%t4| "
+							+ "(RONTOLISP::%JAVA-MONITOR-ENTER '|Cell|))) (UNWIND-PROTECT (SETF (|Cell.held| |this|) (- "
+							+ "(LOGAND (+ (+ (|Cell.held| |this|) 2) 2147483648) 4294967295) 2147483648)) "
+							+ "(RONTOLISP::%JAVA-MONITOR-EXIT |%t4|))) (RONTOLISP:AWAIT (|Thread.await(Object,long)| (OR "
+							+ "|lock| (RONTOLISP::%JAVA-NPE)) 0)) (|Thread.signal(Object,boolean)| (OR |lock| "
+							+ "(RONTOLISP::%JAVA-NPE)) T)) (RONTOLISP::%JAVA-MONITOR-EXIT |%t5|))))",
+					"(DEFUN |Thread.join()| (|this|) (|Thread.join(long)| |this| 0))",
+					"(RONTOLISP:ASYNC-DEFUN |T1.main(String[])| (|args|) (LET ((|cell| (|Cell.new()|))) (LET ((|worker| "
+							+ "(|Thread.new(Runnable)| (LAMBDA NIL (|Cell.add(Cell)| (OR |cell| (RONTOLISP::%JAVA-NPE)) "
+							+ "|cell|))))) (|Thread.start()| (OR |worker| (RONTOLISP::%JAVA-NPE))) (RONTOLISP:AWAIT "
+							+ "(|Thread.join()| (OR |worker| (RONTOLISP::%JAVA-NPE)))) (RONTOLISP:AWAIT "
+							+ "(|Cell.twice(Object)| (OR |cell| (RONTOLISP::%JAVA-NPE)) |cell|)) (WRITE-LINE "
+							+ "(%DECIMAL-PIECE (- (LOGAND (+ (+ (- (LOGAND (+ (+ (- (LOGAND (+ (+ (|Cell.bump()|) "
+							+ "(|Cell.held| |cell|)) 2147483648) 4294967295) 2147483648) (PROGN (|Lazy.<clinit>|) "
+							+ "|Lazy.made|)) 2147483648) 4294967295) 2147483648) (PROGN (|Late.<clinit>|) |Late.made|)) "
+							+ "2147483648) 4294967295) 2147483648))))))");
 		// a program that starts no thread and neither waits nor asks cannot tell a
 		// monitor
 		// held from one that is not: synchronized leaves the exception a null has, the

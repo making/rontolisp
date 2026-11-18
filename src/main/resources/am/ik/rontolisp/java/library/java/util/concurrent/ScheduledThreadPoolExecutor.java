@@ -3,9 +3,9 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 //
 // A pool whose tasks run at their times: a task is a future holding its time, kept in
-// the table its threads take the due ones from (rontolisp.internal.Timetable, which
-// says what one stack does). A task that repeats is added again after each run, a
-// period later; one whose run throws is not.
+// the table its threads take the due ones from (rontolisp.internal.Timetable). A task
+// that repeats is added again after each run, a period later; one whose run throws is
+// not.
 package java.util.concurrent;
 
 import java.util.List;

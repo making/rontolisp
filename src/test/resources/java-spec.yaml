@@ -7151,6 +7151,362 @@ standalone:
       java.lang.IllegalArgumentException: timeout value is negative
       java.lang.IllegalArgumentException: timeout value is negative
       done
+  # Threads that go on only by waiting for one another, again and again: where a
+  # target has one stack each is a body suspended and resumed (JavaResumable). A buffer
+  # of two, two threads taking turns, loops another thread ends by an interrupt, a
+  # volatile flag and an atomic, a monitor held across a sleep whose entry waits, a
+  # catch and a finally that wait -- an exception, a return, a break and a continue
+  # passing one --, a pool closed by try-with-resources, a pool's thread keeping its
+  # ThreadLocal while it waits for a task, invokeAny answering the task that ends in
+  # time, a barrier's threads meeting twice, a wait ended by its limit and by a notify
+  # ahead of it, and a daemon that never ends keeping no program.
+  - name: threads-wait-for-one-another-again-and-again
+    file: Turns.java
+    source: |
+      import java.util.ArrayDeque;
+      import java.util.List;
+      import java.util.concurrent.Callable;
+      import java.util.concurrent.CyclicBarrier;
+      import java.util.concurrent.ExecutorService;
+      import java.util.concurrent.Executors;
+      import java.util.concurrent.Future;
+      import java.util.concurrent.TimeUnit;
+      import java.util.concurrent.atomic.AtomicBoolean;
+      import java.util.concurrent.atomic.AtomicInteger;
+
+      public class Turns {
+          static final ArrayDeque<Integer> items = new ArrayDeque<>();
+          static final Object lock = new Object();
+          static int turn;
+          static int shared;
+          static volatile boolean running = true;
+          static volatile boolean told;
+          static final AtomicBoolean asked = new AtomicBoolean();
+          static final AtomicInteger counter = new AtomicInteger();
+          static final ThreadLocal<String> kept = new ThreadLocal<>();
+
+          static void put(int n) throws InterruptedException {
+              synchronized (items) {
+                  while (items.size() == 2) {
+                      items.wait();
+                  }
+                  items.add(n);
+                  items.notifyAll();
+              }
+          }
+
+          static int take() throws InterruptedException {
+              synchronized (items) {
+                  while (items.isEmpty()) {
+                      items.wait();
+                  }
+                  int n = items.poll();
+                  items.notifyAll();
+                  return n;
+              }
+          }
+
+          // a buffer of two: each thread waits for the other again and again
+          static void buffer() throws InterruptedException {
+              Thread producer = new Thread(() -> {
+                  try {
+                      for (int i = 0; i < 10; i++) {
+                          put(i * i);
+                      }
+                  }
+                  catch (InterruptedException e) {
+                      System.out.println(e);
+                  }
+              });
+              producer.start();
+              int sum = 0;
+              for (int i = 0; i < 10; i++) {
+                  sum += take();
+              }
+              producer.join();
+              System.out.println("buffer " + sum);
+          }
+
+          static Thread player(String word, int mine) {
+              return new Thread(() -> {
+                  try {
+                      for (int i = 0; i < 3; i++) {
+                          synchronized (lock) {
+                              while (turn != mine) {
+                                  lock.wait();
+                              }
+                              System.out.println(word + " " + i);
+                              turn = 1 - mine;
+                              lock.notifyAll();
+                          }
+                      }
+                  }
+                  catch (InterruptedException e) {
+                      System.out.println("interrupted");
+                  }
+              });
+          }
+
+          // two threads taking turns
+          static void turns() throws InterruptedException {
+              Thread ping = player("ping", 0);
+              Thread pong = player("pong", 1);
+              pong.start();
+              ping.start();
+              ping.join();
+              pong.join();
+          }
+
+          // loops only another thread ends: by an interrupt, a volatile flag, an atomic
+          static void stops() throws InterruptedException {
+              Thread interrupted = new Thread(() -> {
+                  long turns = 0;
+                  while (!Thread.currentThread().isInterrupted()) {
+                      turns++;
+                  }
+                  System.out.println("interrupted after some turns " + (turns > 0));
+              });
+              interrupted.start();
+              Thread.sleep(5);
+              interrupted.interrupt();
+              interrupted.join();
+              Thread flagged = new Thread(() -> {
+                  long turns = 0;
+                  while (running) {
+                      turns++;
+                  }
+                  System.out.println("flag read after some turns " + (turns > 0));
+              });
+              flagged.start();
+              Thread.sleep(5);
+              running = false;
+              flagged.join();
+              Thread polling = new Thread(() -> {
+                  long turns = 0;
+                  while (!asked.get()) {
+                      turns++;
+                  }
+                  System.out.println("atomic read after some turns " + (turns > 0));
+              });
+              polling.start();
+              Thread.sleep(5);
+              asked.set(true);
+              polling.join();
+          }
+
+          // a monitor held across a sleep: the thread entering it waits for the one in it
+          static void held() throws InterruptedException {
+              Thread holder = new Thread(() -> {
+                  synchronized (lock) {
+                      shared = 1;
+                      told = true;
+                      try {
+                          Thread.sleep(20);
+                      }
+                      catch (InterruptedException e) {
+                          return;
+                      }
+                      shared = 2;
+                  }
+              });
+              holder.start();
+              while (!told) {
+                  Thread.sleep(1);
+              }
+              synchronized (lock) {
+                  System.out.println("entered after the sleep " + shared);
+              }
+              holder.join();
+          }
+
+          // a catch and a finally that wait, an exception and an exit passing a finally that waits
+          static int cleanup(int n) throws InterruptedException {
+              try {
+                  if (n == 1) {
+                      throw new IllegalStateException("one");
+                  }
+                  if (n == 2) {
+                      return 20;
+                  }
+                  Thread.sleep(1);
+              }
+              catch (IllegalStateException e) {
+                  Thread.sleep(1);
+                  System.out.println("caught " + e.getMessage());
+                  return 10;
+              }
+              finally {
+                  Thread.sleep(1);
+                  System.out.println("finally " + n);
+              }
+              return 30;
+          }
+
+          static void cleanups() throws InterruptedException {
+              System.out.println(cleanup(0) + " " + cleanup(1) + " " + cleanup(2));
+              try {
+                  try {
+                      throw new IllegalArgumentException("passing");
+                  }
+                  finally {
+                      Thread.sleep(1);
+                      System.out.println("cleanup first");
+                  }
+              }
+              catch (IllegalArgumentException e) {
+                  System.out.println("then " + e.getMessage());
+              }
+              for (int i = 0; i < 5; i++) {
+                  try {
+                      if (i == 1) {
+                          continue;
+                      }
+                      if (i == 3) {
+                          break;
+                      }
+                      System.out.println("round " + i);
+                  }
+                  finally {
+                      Thread.sleep(1);
+                      System.out.println("after " + i);
+                  }
+              }
+          }
+
+          // a pool: its thread waits for the next task, keeping what it holds; closing it
+          // waits for its tasks; of two tasks the one that ends in time is answered
+          static void pools() throws Exception {
+              Future<Integer> answer;
+              try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
+                  answer = pool.submit(() -> {
+                      Thread.sleep(10);
+                      return counter.incrementAndGet();
+                  });
+                  pool.submit(() -> counter.addAndGet(10));
+              }
+              System.out.println("closed " + answer.isDone() + " " + answer.get() + " " + counter.get());
+              ExecutorService single = Executors.newSingleThreadExecutor();
+              single.submit(() -> kept.set(Thread.currentThread().getName())).get();
+              Thread.sleep(5);
+              System.out.println("kept " + single.submit(() -> kept.get()).get());
+              Callable<String> slow = () -> {
+                  Thread.sleep(200);
+                  return "slow";
+              };
+              Callable<String> fast = () -> {
+                  Thread.sleep(5);
+                  return "fast";
+              };
+              System.out.println("any " + single.invokeAny(List.of(fast), 1, TimeUnit.SECONDS));
+              single.shutdown();
+              ExecutorService two = Executors.newFixedThreadPool(2);
+              System.out.println("any of two " + two.invokeAny(List.of(slow, fast), 1, TimeUnit.SECONDS));
+              two.shutdownNow();
+              System.out.println("ended " + two.awaitTermination(1, TimeUnit.SECONDS));
+          }
+
+          // the threads of a barrier meet twice
+          static void barrier() throws Exception {
+              int[] rounds = new int[1];
+              CyclicBarrier barrier = new CyclicBarrier(2, () -> rounds[0]++);
+              Thread other = new Thread(() -> {
+                  try {
+                      barrier.await();
+                      barrier.await();
+                  }
+                  catch (Exception e) {
+                      System.out.println(e);
+                  }
+              });
+              other.start();
+              barrier.await();
+              barrier.await();
+              other.join();
+              System.out.println("met " + rounds[0]);
+          }
+
+          // a wait with a limit: ended by its time, and by a notify ahead of it
+          static void limits() throws InterruptedException {
+              synchronized (lock) {
+                  long before = System.nanoTime();
+                  lock.wait(20);
+                  System.out.println("time up " + (System.nanoTime() - before >= 20_000_000L));
+              }
+              told = false;
+              Thread notifier = new Thread(() -> {
+                  synchronized (lock) {
+                      told = true;
+                      lock.notifyAll();
+                  }
+              });
+              synchronized (lock) {
+                  long before = System.nanoTime();
+                  notifier.start();
+                  while (!told) {
+                      lock.wait(5000);
+                  }
+                  System.out.println("notified " + (System.nanoTime() - before < 4_000_000_000L));
+              }
+              notifier.join();
+          }
+
+          public static void main(String[] args) throws Exception {
+              buffer();
+              turns();
+              stops();
+              held();
+              cleanups();
+              pools();
+              barrier();
+              limits();
+              // a daemon that never ends does not keep the program
+              Thread spinner = new Thread(() -> {
+                  while (true) {
+                      counter.incrementAndGet();
+                  }
+              });
+              spinner.setDaemon(true);
+              spinner.start();
+              while (counter.get() < 1000) {
+                  Thread.sleep(1);
+              }
+              System.out.println("daemon runs");
+          }
+      }
+    stdout: |
+      buffer 285
+      ping 0
+      pong 0
+      ping 1
+      pong 1
+      ping 2
+      pong 2
+      interrupted after some turns true
+      flag read after some turns true
+      atomic read after some turns true
+      entered after the sleep 2
+      finally 0
+      caught one
+      finally 1
+      finally 2
+      30 10 20
+      cleanup first
+      then passing
+      round 0
+      after 0
+      after 1
+      round 2
+      after 2
+      after 3
+      closed true 11 11
+      kept pool-2-thread-1
+      any fast
+      any of two fast
+      ended true
+      met 2
+      time up true
+      notified true
+      daemon runs
   # What a thread leaves uncaught ends that thread alone: what a JDK writes of it but
   # the frames, with the thread's name and the exception's causes, and the program goes
   # on to the status 0. A handler set for the thread, or for every thread, is asked

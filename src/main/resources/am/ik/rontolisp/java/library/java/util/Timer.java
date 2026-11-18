@@ -3,8 +3,8 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 //
 // One thread running tasks at their times, out of the table a scheduled pool also uses
-// (rontolisp.internal.Timetable, which says what one stack does). A task that throws
-// ends the thread, and the timer with it.
+// (rontolisp.internal.Timetable). A task that throws ends the thread, and the timer
+// with it.
 package java.util;
 
 import rontolisp.internal.Timetable;

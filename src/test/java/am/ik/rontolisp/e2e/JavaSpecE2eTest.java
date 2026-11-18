@@ -262,46 +262,44 @@ class JavaSpecE2eTest {
 	}
 
 	/**
-	 * Where the target has one stack a started thread runs on the stack of the thread
-	 * that waits for it, so a wait that only a thread suspended under the waiting one
-	 * could end -- two threads taking turns -- cannot end: refused by name with the
-	 * status 1, never gone on from as if it had. The JDK, the interpreter and the JVM run
-	 * such a program (the corpus's {@code threads-wait-are-notified-and-interrupted}).
+	 * Where the target has one stack the threads of a program are bodies taking turns, so
+	 * a program whose threads all wait for one another -- two threads each holding the
+	 * monitor the other enters -- is known to be one that cannot go on: refused by name
+	 * with the status 1, where a JDK, the interpreter and the JVM wait for ever. The
+	 * programs that do go on are the corpus's
+	 * {@code threads-wait-for-one-another-again-and-again}.
 	 */
 	@TestFactory
-	Stream<DynamicNode> aWaitOnlyAThreadSuspendedUnderItCouldEndIsRefusedOnOneStack() {
+	Stream<DynamicNode> aProgramWhoseThreadsAllWaitIsRefusedWhereThreadsTakeTurns() {
 		String source = """
-				public class Turns {
-				    static int turn;
-				    static final Object table = new Object();
+				public class Stuck {
+				    static final Object first = new Object();
+				    static final Object second = new Object();
 
-				    static Thread player(String word, int mine) {
+				    static Thread holding(Object mine, Object other, String word) {
 				        return new Thread(() -> {
-				            try {
-				                for (int i = 0; i < 2; i++) {
-				                    synchronized (table) {
-				                        while (turn != mine) {
-				                            table.wait();
-				                        }
-				                        System.out.println(word);
-				                        turn = 1 - mine;
-				                        table.notifyAll();
-				                    }
+				            synchronized (mine) {
+				                try {
+				                    Thread.sleep(5);
 				                }
-				            }
-				            catch (InterruptedException e) {
-				                System.out.println("interrupted");
+				                catch (InterruptedException e) {
+				                    return;
+				                }
+				                synchronized (other) {
+				                    System.out.println(word);
+				                }
 				            }
 				        });
 				    }
 
 				    public static void main(String[] args) throws InterruptedException {
-				        Thread ping = player("ping", 0);
-				        Thread pong = player("pong", 1);
-				        ping.start();
-				        pong.start();
-				        ping.join();
-				        pong.join();
+				        Thread one = holding(first, second, "one has both");
+				        Thread two = holding(second, first, "two has both");
+				        one.start();
+				        two.start();
+				        System.out.println("started");
+				        one.join();
+				        two.join();
 				        System.out.println("not reached");
 				    }
 				}
@@ -312,13 +310,12 @@ class JavaSpecE2eTest {
 				if (!HostWasmtime.isAvailable()) {
 					abort("no usable wasmtime on PATH");
 				}
-				Path module = compileWasm(write("Turns-" + leg, "Turns.java", source), source, component, "turns");
+				Path module = compileWasm(write("Stuck-" + leg, "Stuck.java", source), source, component, "stuck");
 				Ended ended = ended(
 						new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", module.toString())
 							.start());
-				assertThat(ended.stdout()).as("%s", ended.stderr()).isEqualTo("ping\npong\n");
-				assertThat(ended.stderr()).contains("a thread waiting for a thread suspended under it",
-						"is not supported by the experimental Java subset yet");
+				assertThat(ended.stdout()).as("%s", ended.stderr()).isEqualTo("started\n");
+				assertThat(ended.stderr()).contains("every thread of the program waits for another and none can go on");
 				assertThat(ended.exit()).isEqualTo(1);
 			});
 		});

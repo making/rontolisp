@@ -4,11 +4,7 @@
 //
 // Tasks run at their times by a fixed number of threads: what a scheduled pool and a
 // Timer share. The table is read and written under its monitor, on which a thread with
-// no task due waits for the soonest one's time. Where the target runs the threads of a
-// program on one stack (wasm) no thread can wait for a time -- the thread to add a
-// sooner task is suspended under it -- so the table keeps one thread started that runs
-// no sooner than its soonest task's time (Support.notBefore), takes what is due then
-// and ends: a thread a time, named as the threads of the table in turn.
+// no task due waits for the soonest one's time.
 package rontolisp.internal;
 
 import java.util.ArrayList;
@@ -41,25 +37,13 @@ public final class Timetable {
     /** The tasks to run, the soonest first, the one added first among equal times. */
     private final ArrayList<Entry> entries = new ArrayList<>();
 
-    /** The table's threads, as they were made: one stack starts others of their names. */
+    /** The table's threads, as they were made. */
     private final ArrayList<Thread> made = new ArrayList<>();
 
     /** The threads with no task, the one that had none longest first: it takes the next. */
     private final ArrayList<Thread> line = new ArrayList<>();
 
-    /**
-     * One stack: the thread started for the soonest task's time, that time, and which
-     * of the table's threads it is named as -- the one the thread started next is.
-     */
-    private Thread alarm;
-
-    private long alarmTime;
-
-    private int alarmTurn;
-
-    private int turn;
-
-    /** The threads that have not ended; one stack: the ones running. */
+    /** The threads that have not ended. */
     private int alive;
 
     private int busy;
@@ -77,11 +61,11 @@ public final class Timetable {
         this.threads = threads;
     }
 
-    /** Starts the first thread where a thread can wait for a task: a Timer's own. */
+    /** Starts the first thread ahead of any task: a Timer's own. */
     public void open() {
         Thread started = null;
         synchronized (this) {
-            if (!Support.oneStack() && this.made.isEmpty()) {
+            if (this.made.isEmpty()) {
                 started = another();
             }
         }
@@ -110,10 +94,7 @@ public final class Timetable {
                 at--;
             }
             this.entries.add(at, new Entry(task, time));
-            if (Support.oneStack()) {
-                arm();
-            }
-            else if (this.made.size() < this.size) {
+            if (this.made.size() < this.size) {
                 started = another();
             }
             else {
@@ -126,53 +107,10 @@ public final class Timetable {
         return true;
     }
 
-    /**
-     * One stack: a thread is started for the soonest task's time while one of the
-     * table's is free, and the one started for a time that is no longer the soonest is
-     * taken back.
-     */
-    private void arm() {
-        if (!Support.oneStack()) {
-            return;
-        }
-        boolean wanted = !this.entries.isEmpty() && this.alive < this.size;
-        long time = wanted ? this.entries.get(0).time : 0;
-        if (this.alarm != null && !(wanted && time == this.alarmTime)) {
-            Support.unstart(this.alarm);
-            this.alarm = null;
-            this.turn = this.alarmTurn;
-        }
-        if (wanted && this.alarm == null) {
-            Thread thread;
-            if (this.turn == this.made.size()) {
-                thread = this.threads.make(() -> work());
-                this.made.add(thread);
-            }
-            else {
-                Thread like = this.made.get(this.turn);
-                thread = new Thread(() -> work(), like.getName());
-                thread.setDaemon(like.isDaemon());
-                thread.setPriority(like.getPriority());
-            }
-            this.alarm = thread;
-            this.alarmTime = time;
-            this.alarmTurn = this.turn;
-            this.turn = (this.turn + 1) % this.size;
-            Support.notBefore(time);
-            thread.start();
-        }
-    }
-
     /** What a thread of the table runs: the tasks due, one after another. */
     private void work() {
         boolean thrown = true;
         try {
-            if (Support.oneStack()) {
-                synchronized (this) {
-                    this.alarm = null;
-                    this.alive++;
-                }
-            }
             Runnable task;
             while ((task = next()) != null) {
                 task.run();
@@ -192,7 +130,6 @@ public final class Timetable {
                     this.closed = true;
                     this.entries.clear();
                 }
-                arm();
                 notifyAll();
             }
         }
@@ -212,11 +149,6 @@ public final class Timetable {
      * no task longest waits for the soonest one's time, the others for their turn.
      */
     private synchronized Runnable next() {
-        if (Support.oneStack()) {
-            Runnable task = due();
-            arm();
-            return task;
-        }
         Thread current = Thread.currentThread();
         if (!this.line.contains(current)) {
             this.line.add(current);
@@ -255,7 +187,6 @@ public final class Timetable {
         for (int i = 0; i < this.entries.size(); i++) {
             if (this.entries.get(i).task == task) {
                 this.entries.remove(i);
-                arm();
                 notifyAll();
                 return true;
             }
@@ -289,7 +220,6 @@ public final class Timetable {
                 thread.interrupt();
             }
         }
-        arm();
         notifyAll();
         return waiting;
     }
@@ -315,7 +245,7 @@ public final class Timetable {
     }
 
     public synchronized int threads() {
-        return Support.oneStack() ? (isEnded() ? 0 : this.made.size()) : this.alive;
+        return this.alive;
     }
 
     public synchronized int busy() {

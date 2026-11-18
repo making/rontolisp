@@ -9,17 +9,12 @@
 // the core number run, else it waits in the queue, else -- the queue full -- it is given
 // a new worker up to the most the pool may have, else the pool's handler is asked. A
 // SynchronousQueue holds nothing: a task waits in it only as long as it takes an idle
-// worker to wake, so the pool keeps such a task itself. Where the target runs
-// the threads of a program on one stack (wasm) a worker with no task left cannot wait
-// for one -- the thread to hand it one is suspended under it -- so it ends, and a later
-// task starts a thread of the same name in its place.
+// worker to wake, so the pool keeps such a task itself.
 package java.util.concurrent;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
-
-import rontolisp.internal.Support;
 
 public class ThreadPoolExecutor implements ExecutorService {
 
@@ -96,8 +91,8 @@ public class ThreadPoolExecutor implements ExecutorService {
     private final ArrayList<Worker> workers = new ArrayList<>();
 
     /**
-     * The workers with no thread running: one stack's that ended for want of a task,
-     * and anywhere the one that takes the place of a worker a task's exception ended.
+     * The workers whose thread is not started yet: the one that takes the place of a
+     * worker a task's exception ended, until a task comes for it.
      */
     private final ArrayDeque<Worker> resting = new ArrayDeque<>();
 
@@ -219,18 +214,9 @@ public class ThreadPoolExecutor implements ExecutorService {
                 if (rested == null) {
                     notify();
                 }
-                else if (rested.thread.getState() == Thread.State.NEW) {
+                else {
                     this.workers.add(rested);
                     started = rested.thread;
-                }
-                else {
-                    // one stack: the thread that ended for want of a task, again
-                    Thread again = new Thread(rested, rested.thread.getName());
-                    again.setDaemon(rested.thread.isDaemon());
-                    again.setPriority(rested.thread.getPriority());
-                    rested.thread = again;
-                    this.workers.add(rested);
-                    started = again;
                 }
             }
             else if (made < this.most) {
@@ -293,10 +279,6 @@ public class ThreadPoolExecutor implements ExecutorService {
                 return task;
             }
             if (this.shutdown) {
-                return null;
-            }
-            if (Support.oneStack()) {
-                this.resting.add(worker);
                 return null;
             }
             boolean ending = this.coreEnds || this.workers.size() > this.core;

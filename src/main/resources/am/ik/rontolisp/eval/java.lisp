@@ -2191,22 +2191,30 @@
 ;; --- threads ------------------------------------------------------------------------
 
 ;; A thread of a program is the host's where the target has threads -- the interpreter
-;; and the JVM, #-rontolisp-wasm below -- and runs on the stack of the thread that
-;; cannot go on without it where the target has one stack -- wasm, #+rontolisp-wasm
-;; (.kb/java-frontend.md, "Threads"). Everything a program can tell of a thread is Java
-;; source (library/java/lang/Thread.java) over the functions here.
+;; and the JVM, #-rontolisp-wasm below -- and a body suspended and resumed where the
+;; target has one stack -- wasm, #+rontolisp-wasm: there the lowering makes every
+;; function of a program that starts threads from which a thread can wait an
+;; async-defun and every call of one an await (java/JavaResumable), a thread that
+;; cannot go on awaits a future of its own, and the thread the program started on
+;; settles those futures in turn (.kb/java-frontend.md, "Threads"). Everything a
+;; program can tell of a thread is Java source (library/java/lang/Thread.java) over the
+;; functions here.
 ;;
 ;; A CARRIER is the run time's record of a thread, #(thread mutex condition interrupted
 ;; monitor): the Thread object it runs, what it parks on, whether it was interrupted, the
 ;; monitor it entered last. The running thread's is the value of
 ;; rontolisp::%java-carrier, bound in each thread the run time starts and made at its
-;; first ask for the thread the program started on.
+;; first ask for the thread the program started on. On wasm it is #(thread turn queued
+;; interrupted monitor holds): the future the thread awaits while it cannot go on,
+;; whether it is in the line of the threads that can, how many monitors it holds; the
+;; variable is set to the thread whose turn it is.
 ;;
 ;; A MONITOR is #(mutex owner count waiters object waiting): the owner a carrier, the
 ;; waiters the tickets (carrier . notified) of the threads in wait() nothing notified
 ;; yet, oldest first, the object nil once the monitor left the table, waiting how many
 ;; threads are in wait(). An object has none until it is first locked; it is found in a
-;; table keyed by identity under rontolisp::%java-guard.
+;; table keyed by identity under rontolisp::%java-guard. On wasm a seventh slot holds
+;; the carriers of the threads that wait to enter it.
 
 (defvar rontolisp::%java-carrier nil)
 
@@ -2272,9 +2280,7 @@
   (rontolisp:mutex-acquire rontolisp::%java-initializing-lock))
 
 ;; Whether the thread asking for a class in STATE had to wait: another thread
-;; initializes it, and this one holds the lock again once some class ended. One stack:
-;; the thread initializing it is suspended under this one, which reads the class as
-;; initialized.
+;; initializes it, and this one holds the lock again once some class ended.
 #-rontolisp-wasm
 (defun rontolisp::%java-init-busy (state)
   (if (or (null state) (eq state :ended) (stringp state))
@@ -2284,7 +2290,26 @@
                                     rontolisp::%java-initializing-lock nil)
         t)))
 
-#+rontolisp-wasm (defun rontolisp::%java-init-busy (state) nil)
+;; Where no suspended thread can be initializing a class -- its initialization
+;; reaches nothing a thread waits in -- nothing is waited for.
+#+rontolisp-wasm
+(defun rontolisp::%java-init-busy (state)
+  (if (or (null state) (eq state :ended) (stringp state))
+      nil
+      (rontolisp::%java-unforeseen)))
+
+;; The threads waiting for a class another initializes.
+#+rontolisp-wasm (defvar rontolisp::%java-initialized nil)
+
+#+rontolisp-wasm
+(rontolisp:async-defun rontolisp::%java-suspending-init (state)
+  (if (or (null state) (eq state :ended) (stringp state))
+      nil
+      (let ((carrier (rontolisp::%java-self)))
+        (setq rontolisp::%java-initialized
+              (cons carrier rontolisp::%java-initialized))
+        (rontolisp:await (rontolisp::%java-thread-park carrier nil))
+        t)))
 
 ;; Gives the lock up; ENDED once a class's initialization has, which the threads
 ;; waiting for a class are told.
@@ -2295,6 +2320,12 @@
 
 #+rontolisp-wasm
 (defun rontolisp::%java-init-leave (ended)
+  (if ended
+      (let ((waiting rontolisp::%java-initialized))
+        (setq rontolisp::%java-initialized nil)
+        (while waiting
+          (rontolisp::%java-thread-ready (car waiting))
+          (setq waiting (cdr waiting)))))
   (rontolisp:mutex-release rontolisp::%java-initializing-lock))
 
 ;; What a read or a write of a volatile field holds: one access at a time, so each sees
@@ -2309,7 +2340,8 @@
           nil))
 
 #+rontolisp-wasm
-(defun rontolisp::%java-thread-carrier (thread) (vector thread nil nil nil nil))
+(defun rontolisp::%java-thread-carrier (thread)
+  (vector thread nil nil nil nil 0))
 
 (defun rontolisp::%java-self ()
   (or rontolisp::%java-carrier
@@ -2353,12 +2385,12 @@
   (rontolisp::%condition-notify (aref carrier 2) t)
   (rontolisp:mutex-release (aref carrier 1)))
 
-;; One stack: the thread finds the ticket taken, or itself interrupted, when it runs
-;; again.
+;; The thread finds the ticket taken, or itself interrupted, at its next turn.
 #+rontolisp-wasm
 (defun rontolisp::%java-unpark (carrier ticket interrupt)
   (if ticket (rplacd ticket t))
-  (if interrupt (%aset carrier 3 t)))
+  (if interrupt (%aset carrier 3 t))
+  (rontolisp::%java-thread-ready carrier))
 
 (defun rontolisp::%java-thread-interrupt (carrier)
   (rontolisp::%java-unpark carrier nil t)
@@ -2436,158 +2468,54 @@
 
 #-rontolisp-wasm (defun rontolisp::%java-thread-yield () nil)
 
-;; One stack. A started thread is kept, (carrier daemon body due), until the running
-;; thread cannot go on -- it waits, sleeps, yields or the program ends -- and runs then,
-;; on that thread's stack, to its end: the oldest first. So a thread suspended under the
-;; running one goes on only once every thread above it has ended, and a wait only such a
-;; thread could end is refused by name. DUE is the time a thread started to run a task
-;; at its time runs no sooner than (a scheduled pool's, a Timer's: no thread can wait
-;; for that time here), as %nano-time counts, or nil.
-(defvar rontolisp::%java-started nil)
+;; Wasm. A program that starts no thread has one, which nothing can wake: its sleep
+;; passes the time, its yield does nothing, and a wait with no limit is refused by
+;; name. The functions a thread suspends in -- %java-suspending-.. -- are the ones the
+;; lowering calls instead in a program that starts threads.
 
-(defvar rontolisp::%java-started-last nil)
-
-;; The time the thread started next runs no sooner than, and what passes the time
-;; until a thread started so can run: set where the first one is, so a program
-;; starting none names no sleep at its end.
-(defvar rontolisp::%java-start-due nil)
-
-(defvar rontolisp::%java-pausing nil)
-
-#-rontolisp-wasm (defun rontolisp::%java-thread-not-before (nanos) nil)
-
+;; What cannot go on is refused by name, and ends the program: no handler of the
+;; program takes it, and nothing goes on as if the wait had ended.
 #+rontolisp-wasm
-(defun rontolisp::%java-thread-not-before (nanos)
-  (setq rontolisp::%java-pausing (function rontolisp::%java-sleep-until))
-  (setq rontolisp::%java-start-due nanos)
-  nil)
+(defun rontolisp::%java-refused (text)
+  (finish-output)
+  (%warn text)
+  (finish-output *error-output*)
+  (%host-exit 1))
 
+;; Every thread that is no daemon waits and none is left to wake one.
 #+rontolisp-wasm
-(defun rontolisp::%java-thread-start (carrier daemon body)
-  (setq rontolisp::%java-started-last
-        (cons (list carrier daemon body rontolisp::%java-start-due)
-              rontolisp::%java-started-last))
-  (setq rontolisp::%java-start-due nil)
-  nil)
+(defun rontolisp::%java-stuck ()
+  (rontolisp::%java-refused
+   "every thread of the program waits for another and none can go on: the experimental Java subset ends the program here"))
 
-;; Takes a thread started that has not run yet out of the queue: the one started for
-;; a time no task waits for any more.
-#-rontolisp-wasm (defun rontolisp::%java-thread-unstart (thread) nil)
-
+;; A thread met, where the lowering had found that none can wait, what a suspended
+;; thread holds: a monitor, a class it initializes.
 #+rontolisp-wasm
-(defun rontolisp::%java-thread-unstart (thread)
-  (let ((all
-         (append rontolisp::%java-started
-                 (reverse rontolisp::%java-started-last)))
-        (kept nil))
-    (setq rontolisp::%java-started-last nil)
-    (while all
-      (if (not (eq (aref (car (car all)) 0) thread))
-          (setq kept (cons (car all) kept)))
-      (setq all (cdr all)))
-    (setq rontolisp::%java-started (reverse kept))
-    nil))
+(defun rontolisp::%java-unforeseen ()
+  (rontolisp::%java-refused
+   "a thread met a monitor or a class a suspended thread holds where the experimental Java subset had found none could: not supported yet"))
 
+;; What a resumable function answered where the run time called it -- a toString() it
+;; asks for a text, a comparator -- and nothing awaits: its value when it went on to
+;; its end, which a thread that has to wait there cannot.
 #+rontolisp-wasm
-(defun rontolisp::%java-thread-run (entry)
-  (let ((running rontolisp::%java-carrier))
-    (setq rontolisp::%java-carrier (car entry))
-    (funcall (car (cdr (cdr entry))))
-    (setq rontolisp::%java-carrier running)
-    t))
-
-;; Whether a thread started cannot run yet: a daemon at the program's end (DAEMONS
-;; nil), one whose time has not come.
-#+rontolisp-wasm
-(defun rontolisp::%java-thread-kept-p (entry daemons)
-  (or (and (not daemons) (car (cdr entry)))
-   (let ((due (car (cdr (cdr (cdr entry)))))) (and due (> due (%nano-time))))))
-
-;; Takes the oldest thread started that can run out of the queue; nil when there is
-;; none.
-#+rontolisp-wasm
-(defun rontolisp::%java-thread-take (daemons)
-  (if (and (null rontolisp::%java-started) rontolisp::%java-started-last)
-      (progn
-        (setq rontolisp::%java-started (reverse rontolisp::%java-started-last))
-        (setq rontolisp::%java-started-last nil)))
-  (cond ((null rontolisp::%java-started) nil)
-        ((not
-          (rontolisp::%java-thread-kept-p (car rontolisp::%java-started)
-                                          daemons))
-         (let ((entry (car rontolisp::%java-started)))
-           (setq rontolisp::%java-started (cdr rontolisp::%java-started))
-           entry))
-        (t (let ((all
-                  (append rontolisp::%java-started
-                          (reverse rontolisp::%java-started-last)))
-                 (kept nil)
-                 (found nil))
-             (setq rontolisp::%java-started-last nil)
-             (while all
-               (if (or found (rontolisp::%java-thread-kept-p (car all) daemons))
-                   (setq kept (cons (car all) kept))
-                   (setq found (car all)))
-               (setq all (cdr all)))
-             (setq rontolisp::%java-started (reverse kept))
-             found))))
-
-;; The soonest time a thread started waits for; nil when none waits for one. Read
-;; after %java-thread-take found none to run, which left the queue in one list.
-#+rontolisp-wasm
-(defun rontolisp::%java-thread-due (daemons)
-  (let ((all rontolisp::%java-started) (soonest nil))
-    (while all
-      (let ((due (car (cdr (cdr (cdr (car all)))))))
-        (if (and due (or daemons (not (car (cdr (car all)))))
-                 (or (null soonest) (< due soonest)))
-            (setq soonest due)))
-      (setq all (cdr all)))
-    soonest))
+(defun rontolisp::%java-now (value)
+  (cond ((not (rontolisp:futurep value)) value)
+        ((rontolisp::%future-settled-p value) (rontolisp::%future-force value))
+        (t (rontolisp::%java-refused
+            "a thread waiting inside a method the run time calls, as a toString() it asks for a text, is not supported by the experimental Java subset yet"))))
 
 #+rontolisp-wasm
 (defun rontolisp::%java-sleep-until (time)
   (let ((left (- time (%nano-time)))) (if (> left 0) (sleep (/ left 1.0d9)))))
 
-;; Runs the oldest thread started that can run; nil when there is none.
-#+rontolisp-wasm
-(defun rontolisp::%java-thread-next ()
-  (let ((entry (rontolisp::%java-thread-take t)))
-    (if entry (rontolisp::%java-thread-run entry) nil)))
-
-;; Whether the threads of the program run on one stack: what the library's Java asks
-;; where a thread would wait for one that could only be suspended under it.
-#-rontolisp-wasm (defun rontolisp::%java-one-stack-p () nil)
-
-#+rontolisp-wasm (defun rontolisp::%java-one-stack-p () t)
-
-;; What one stack cannot run is refused by name, and ends the program: no handler of
-;; the program takes it, and nothing goes on as if the wait had ended.
-#+rontolisp-wasm
-(defun rontolisp::%java-one-stack ()
-  (finish-output)
-  (%warn
-   "a thread waiting for a thread suspended under it, or for none, is not supported by the experimental Java subset yet: this target runs the threads of a program on one stack")
-  (finish-output *error-output*)
-  (%host-exit 1))
-
-;; The running thread cannot go on: the threads started run, until the ticket is taken,
-;; the thread is interrupted or the time is up -- the rest of which is slept, as is the
-;; time until a thread started for a later time can run.
+;; The one thread of a program that starts none cannot go on until the ticket is
+;; taken, it is interrupted or the time is up: only the time can still pass.
 #+rontolisp-wasm
 (defun rontolisp::%java-thread-wait (carrier ticket deadline)
-  (let ((waiting t))
-    (while waiting
-      (cond ((or (and ticket (cdr ticket)) (aref carrier 3)) (setq waiting nil))
-            ((and deadline (>= (%nano-time) deadline)) (setq waiting nil))
-            ((rontolisp::%java-thread-next) nil)
-            (t (let ((due (rontolisp::%java-thread-due t)))
-                 (cond ((and due (or (null deadline) (< due deadline)))
-                        (funcall rontolisp::%java-pausing due))
-                       (deadline
-                        (sleep (/ (- deadline (%nano-time)) 1.0d9))
-                        (setq waiting nil))
-                       (t (rontolisp::%java-one-stack)))))))))
+  (cond ((or (and ticket (cdr ticket)) (aref carrier 3)) nil)
+        (deadline (rontolisp::%java-sleep-until deadline))
+        (t (rontolisp::%java-stuck))))
 
 #+rontolisp-wasm
 (defun rontolisp::%java-thread-sleep (nanos)
@@ -2596,24 +2524,164 @@
         (rontolisp::%java-thread-wait carrier nil (+ (%nano-time) nanos)))
     (rontolisp::%java-thread-interrupted carrier t)))
 
+#+rontolisp-wasm (defun rontolisp::%java-thread-yield () nil)
+
+;; A program that starts threads. A thread is a body the lowering made resumable; one
+;; that cannot go on awaits a future of its own (carrier slot 1) and the scheduler --
+;; the thread the program started on, at its end -- settles the futures of the threads
+;; that can, the one waiting longest first. The line of those is two lists, the
+;; second the newest first.
+#+rontolisp-wasm (defvar rontolisp::%java-ready nil)
+
+#+rontolisp-wasm (defvar rontolisp::%java-ready-last nil)
+
+;; The threads that wait for a time, (deadline carrier . turn), the soonest first.
+;; One that went on for another reason awaits another future, or none.
+#+rontolisp-wasm (defvar rontolisp::%java-timed nil)
+
+;; How many threads that are no daemons have not ended.
+#+rontolisp-wasm (defvar rontolisp::%java-live 0)
+
+;; What passes the time until a thread waiting for one can go on: set by a sleep and
+;; by a wait, so a program with neither names no sleep.
+#+rontolisp-wasm (defvar rontolisp::%java-pausing nil)
+
+;; How many more turns of a loop a thread takes before it lets another go on.
+#+rontolisp-wasm (defvar rontolisp::%java-slice 1024)
+
+;; The future a thread that cannot go on awaits, until DEADLINE at most.
 #+rontolisp-wasm
-(defun rontolisp::%java-thread-yield ()
-  (rontolisp::%java-thread-next)
+(defun rontolisp::%java-thread-park (carrier deadline)
+  (let ((turn (rontolisp::%future-new)))
+    (%aset carrier 1 turn)
+    (if deadline
+        (let ((entry (cons deadline (cons carrier turn)))
+              (timed rontolisp::%java-timed))
+          (if (or (null timed) (< deadline (car (car timed))))
+              (setq rontolisp::%java-timed (cons entry timed))
+              (progn
+                (while (and (cdr timed) (>= deadline (car (car (cdr timed)))))
+                  (setq timed (cdr timed)))
+                (rplacd timed (cons entry (cdr timed)))))))
+    turn))
+
+;; A thread that awaits its turn joins the line of the threads that can go on.
+#+rontolisp-wasm
+(defun rontolisp::%java-thread-ready (carrier)
+  (if (and (aref carrier 1) (not (aref carrier 2)))
+      (progn
+        (%aset carrier 2 t)
+        (setq rontolisp::%java-ready-last
+              (cons carrier rontolisp::%java-ready-last)))))
+
+;; The future of a thread that lets the others go on first.
+#+rontolisp-wasm
+(defun rontolisp::%java-thread-queued (carrier)
+  (let ((turn (rontolisp::%java-thread-park carrier nil)))
+    (rontolisp::%java-thread-ready carrier)
+    turn))
+
+;; The threads whose time is up join the line; answers the soonest time one still
+;; waits for, or nil.
+#+rontolisp-wasm
+(defun rontolisp::%java-thread-due ()
+  (if (null rontolisp::%java-timed)
+      nil
+      (let ((now (%nano-time)) (going t))
+        (while (and going rontolisp::%java-timed)
+          (let ((entry (car rontolisp::%java-timed)))
+            (cond ((not (eq (aref (car (cdr entry)) 1) (cdr (cdr entry))))
+                   (setq rontolisp::%java-timed (cdr rontolisp::%java-timed)))
+                  ((<= (car entry) now)
+                   (rontolisp::%java-thread-ready (car (cdr entry)))
+                   (setq rontolisp::%java-timed (cdr rontolisp::%java-timed)))
+                  (t (setq going nil)))))
+        (if rontolisp::%java-timed (car (car rontolisp::%java-timed)) nil))))
+
+;; Whether another thread can go on now.
+#+rontolisp-wasm
+(defun rontolisp::%java-thread-others ()
+  (rontolisp::%java-thread-due)
+  (if (or rontolisp::%java-ready rontolisp::%java-ready-last) t nil))
+
+;; The thread waiting longest for its turn takes it: nil when none can go on.
+#+rontolisp-wasm
+(defun rontolisp::%java-thread-next ()
+  (if (and (null rontolisp::%java-ready) rontolisp::%java-ready-last)
+      (progn
+        (setq rontolisp::%java-ready (reverse rontolisp::%java-ready-last))
+        (setq rontolisp::%java-ready-last nil)))
+  (if rontolisp::%java-ready
+      (let ((carrier (car rontolisp::%java-ready)))
+        (setq rontolisp::%java-ready (cdr rontolisp::%java-ready))
+        (let ((turn (aref carrier 1)))
+          (%aset carrier 1 nil)
+          (%aset carrier 2 nil)
+          (setq rontolisp::%java-carrier carrier)
+          (rontolisp::%future-settle turn nil))
+        t)
+      nil))
+
+;; A started thread awaits its turn first, so start() returns before the thread runs.
+#+rontolisp-wasm
+(rontolisp:async-defun rontolisp::%java-thread-enter (carrier daemon body)
+  (rontolisp:await (rontolisp::%java-thread-queued carrier))
+  (unwind-protect (rontolisp:await (funcall body))
+    (if (not daemon) (setq rontolisp::%java-live (- rontolisp::%java-live 1)))))
+
+#+rontolisp-wasm
+(defun rontolisp::%java-thread-start (carrier daemon body)
+  (if (not daemon) (setq rontolisp::%java-live (+ rontolisp::%java-live 1)))
+  (rontolisp::%java-thread-enter carrier daemon body)
   nil)
 
-;; The end of the program: the threads started that are no daemons run, the oldest
-;; first, one started for a later time at that time; a daemon is left where it is.
+;; The thread cannot go on until the ticket is taken, it is interrupted or the time is
+;; up.
 #+rontolisp-wasm
-(defun rontolisp::%java-thread-finish ()
+(rontolisp:async-defun rontolisp::%java-suspending-park
+    (carrier ticket deadline)
   (let ((waiting t))
     (while waiting
-      (let ((found (rontolisp::%java-thread-take nil)))
-        (if found
-            (rontolisp::%java-thread-run found)
-            (let ((due (rontolisp::%java-thread-due nil)))
-              (if due
-                  (funcall rontolisp::%java-pausing due)
-                  (setq waiting nil))))))))
+      (cond ((or (and ticket (cdr ticket)) (aref carrier 3)) (setq waiting nil))
+       ((and deadline (>= (%nano-time) deadline)) (setq waiting nil))
+       (t (rontolisp:await (rontolisp::%java-thread-park carrier deadline)))))))
+
+#+rontolisp-wasm
+(rontolisp:async-defun rontolisp::%java-suspending-sleep (nanos)
+  (setq rontolisp::%java-pausing (function rontolisp::%java-sleep-until))
+  (let ((carrier (rontolisp::%java-self)))
+    (if (> nanos 0)
+        (rontolisp:await
+         (rontolisp::%java-suspending-park carrier nil (+ (%nano-time) nanos))))
+    (rontolisp::%java-thread-interrupted carrier t)))
+
+#+rontolisp-wasm
+(rontolisp:async-defun rontolisp::%java-suspending-yield ()
+  (if (rontolisp::%java-thread-others)
+      (rontolisp:await
+       (rontolisp::%java-thread-queued (rontolisp::%java-self))))
+  nil)
+
+;; What a loop a thread could turn in for ever does once in so many turns: another
+;; thread that can go on does. A thread holding a monitor keeps its turn, so a
+;; monitor held over such a loop is none a suspended thread holds.
+#+rontolisp-wasm
+(rontolisp:async-defun rontolisp::%java-suspending-turn ()
+  (setq rontolisp::%java-slice 1024)
+  (let ((carrier (rontolisp::%java-self)))
+    (if (and (= (aref carrier 5) 0) (rontolisp::%java-thread-others))
+        (rontolisp:await (rontolisp::%java-thread-queued carrier))))
+  nil)
+
+;; The end of the program: the threads take their turns until those that are no
+;; daemons have ended; with none that can go on, the time passes until one can.
+#+rontolisp-wasm
+(defun rontolisp::%java-thread-finish ()
+  (while (> rontolisp::%java-live 0)
+    (let ((soonest (rontolisp::%java-thread-due)))
+      (cond ((rontolisp::%java-thread-next) nil)
+            (soonest (funcall rontolisp::%java-pausing soonest))
+            (t (rontolisp::%java-stuck))))))
 
 ;; What a thread writes of a condition it left uncaught, after its name: a thrown
 ;; object as TRACE answers it -- with its causes and what it suppressed -- any other
@@ -2628,6 +2696,7 @@
 ;; writes of it but the frames (TRACE), the thread the program started on ends (FINISH,
 ;; on its Thread object when the program asked for one), the threads that are no
 ;; daemons end, and the status is 1 when MAIN left something uncaught.
+#-rontolisp-wasm
 (defun rontolisp::%java-thread-main (main finish trace)
   (let ((failed nil))
     (handler-case (funcall main)
@@ -2646,6 +2715,36 @@
           (finish-output *error-output*)
           (%host-exit 1)))))
 
+;; Wasm: the thread the program started on is a body as the others are; where it
+;; cannot go on, and at its end, the threads take their turns.
+#+rontolisp-wasm (defvar rontolisp::%java-failed nil)
+
+#+rontolisp-wasm
+(rontolisp:async-defun rontolisp::%java-thread-first (main finish trace)
+  (unwind-protect (progn
+                    (handler-case (rontolisp:await (funcall main))
+                      (error (condition)
+                        (finish-output)
+                        (%warn
+                         (%string-concat "Exception in thread \"main\" "
+                          (rontolisp::%java-traced-text condition trace)))
+                        (setq rontolisp::%java-failed t)))
+                    (let ((thread (rontolisp::%java-thread-current)))
+                      (if thread (rontolisp:await (funcall finish thread)))))
+    (setq rontolisp::%java-live (- rontolisp::%java-live 1))))
+
+#+rontolisp-wasm
+(defun rontolisp::%java-thread-main (main finish trace)
+  (setq rontolisp::%java-live 1)
+  (rontolisp::%java-self)
+  (rontolisp::%java-thread-first main finish trace)
+  (rontolisp::%java-thread-finish)
+  (if rontolisp::%java-failed
+      (progn
+        (finish-output)
+        (finish-output *error-output*)
+        (%host-exit 1))))
+
 ;; The monitor of an object, made when it has none.
 (defun rontolisp::%java-monitor (object)
   (rontolisp:mutex-acquire rontolisp::%java-guard)
@@ -2654,7 +2753,9 @@
   (let ((monitor (gethash object rontolisp::%java-monitors)))
     (if (null monitor)
         (progn
-          (setq monitor (vector (rontolisp:make-mutex) nil 0 nil object 0))
+          (setq monitor
+                (vector (rontolisp:make-mutex) nil 0 nil object 0
+                        #+rontolisp-wasm nil))
           (setf (gethash object rontolisp::%java-monitors) monitor)))
     (rontolisp:mutex-release rontolisp::%java-guard)
     monitor))
@@ -2702,17 +2803,53 @@
       (%aset monitor 2 (+ (aref monitor 2) 1))
       monitor)))
 
-;; One stack: a monitor another thread holds is held by a thread suspended under this
-;; one, which cannot leave it.
+;; Wasm: the entry of a monitor no suspended thread can hold -- no thread waits in a
+;; region of its lock but for the lock itself -- so the monitor is free or the
+;; thread's own.
 #+rontolisp-wasm
 (defun rontolisp::%java-monitor-enter (object)
   (let ((carrier (rontolisp::%java-self)))
     (let ((monitor (rontolisp::%java-monitor-of object carrier)))
-      (if (and (aref monitor 1) (not (eq (aref monitor 1) carrier)))
-          (rontolisp::%java-one-stack))
-      (%aset monitor 1 carrier)
+      (let ((owner (aref monitor 1)))
+        (cond ((null owner)
+               (%aset monitor 1 carrier)
+               (%aset carrier 5 (+ (aref carrier 5) 1)))
+              ((not (eq owner carrier)) (rontolisp::%java-unforeseen))))
       (%aset monitor 2 (+ (aref monitor 2) 1))
       monitor)))
+
+;; The thread takes a monitor no thread holds; while a suspended thread holds it, it
+;; waits among the threads the monitor's last exit lets go on. An interrupt does not
+;; end that wait.
+#+rontolisp-wasm
+(rontolisp:async-defun rontolisp::%java-suspending-claim (monitor carrier)
+  (while (aref monitor 1)
+    (if (not (member carrier (aref monitor 6)))
+        (%aset monitor 6 (cons carrier (aref monitor 6))))
+    (rontolisp:await (rontolisp::%java-thread-park carrier nil)))
+  (if (aref monitor 6) (%aset monitor 6 (remove carrier (aref monitor 6))))
+  (%aset monitor 1 carrier)
+  (%aset carrier 5 (+ (aref carrier 5) 1)))
+
+;; The entry of a monitor a suspended thread may hold.
+#+rontolisp-wasm
+(rontolisp:async-defun rontolisp::%java-suspending-enter (object)
+  (let ((carrier (rontolisp::%java-self)))
+    (let ((monitor (rontolisp::%java-monitor-of object carrier)))
+      (if (not (eq (aref monitor 1) carrier))
+          (rontolisp:await (rontolisp::%java-suspending-claim monitor carrier)))
+      (%aset monitor 2 (+ (aref monitor 2) 1))
+      monitor)))
+
+;; A monitor nothing holds any more: the thread that held it holds one fewer, and the
+;; threads waiting to enter it can go on.
+#+rontolisp-wasm
+(defun rontolisp::%java-monitor-left (monitor carrier)
+  (%aset carrier 5 (- (aref carrier 5) 1))
+  (let ((waiting (aref monitor 6)))
+    (while waiting
+      (rontolisp::%java-thread-ready (car waiting))
+      (setq waiting (cdr waiting)))))
 
 ;; A table grown large keeps no monitor that nothing holds and nothing waits in: an
 ;; object locked once is not kept for ever. Said under the monitor's own mutex, which a
@@ -2722,8 +2859,11 @@
     (%aset monitor 2 count)
     (if (= count 0)
         (progn
+          #+rontolisp-wasm
+          (rontolisp::%java-monitor-left monitor (aref monitor 1))
           (%aset monitor 1 nil)
           (if (and (= (aref monitor 5) 0)
+                   #+rontolisp-wasm (null (aref monitor 6))
                    (> (hash-table-count rontolisp::%java-monitors) 4096))
               (progn
                 (rontolisp:mutex-acquire rontolisp::%java-guard)
@@ -2770,11 +2910,41 @@
       (rontolisp:mutex-acquire (aref monitor 0))
       (setq i (+ i 1)))))
 
+;; Wasm, a program that starts no thread: nothing can notify its one thread.
 #+rontolisp-wasm
 (defun rontolisp::%java-monitor-waiting (monitor carrier ticket count nanos)
   (rontolisp::%java-thread-wait carrier ticket
-                                (if nanos (+ (%nano-time) nanos) nil))
-  (if (aref monitor 1) (rontolisp::%java-one-stack)))
+                                (if nanos (+ (%nano-time) nanos) nil)))
+
+;; Object.wait of a program that starts threads: as %java-monitor-wait, the thread
+;; suspended while it waits and while a suspended thread holds the monitor after.
+#+rontolisp-wasm
+(rontolisp:async-defun rontolisp::%java-suspending-wait (object millis)
+  (setq rontolisp::%java-pausing (function rontolisp::%java-sleep-until))
+  (let ((carrier (rontolisp::%java-self)))
+    (let ((monitor (rontolisp::%java-monitor-owned object carrier)))
+      (cond ((null monitor) 2)
+            ((rontolisp::%java-thread-interrupted carrier t) 1)
+            (t (let ((count (aref monitor 2)) (ticket (cons carrier nil)))
+                 (%aset monitor 3 (append (aref monitor 3) (list ticket)))
+                 (%aset monitor 5 (+ (aref monitor 5) 1))
+                 (%aset monitor 2 0)
+                 (rontolisp::%java-monitor-left monitor carrier)
+                 (%aset monitor 1 nil)
+                 (rontolisp:await
+                  (rontolisp::%java-suspending-park carrier ticket
+                   (if (> millis 0) (+ (%nano-time) (* millis 1000000)) nil)))
+                 (rontolisp:await
+                  (rontolisp::%java-suspending-claim monitor carrier))
+                 (%aset monitor 5 (- (aref monitor 5) 1))
+                 (%aset monitor 2 count)
+                 (if (cdr ticket)
+                     0
+                     (progn
+                       (%aset monitor 3 (remove ticket (aref monitor 3)))
+                       (if (rontolisp::%java-thread-interrupted carrier t)
+                           1
+                           0)))))))))
 
 ;; Object.notify and notifyAll: the oldest waiter, or every one, goes on once the
 ;; monitor is left; nil when the thread does not hold the monitor.
