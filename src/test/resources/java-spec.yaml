@@ -8019,10 +8019,10 @@ standalone:
       false
   # A task at its time: a scheduled pool's, in the order of the times, repeated until it
   # is cancelled or throws, and after shutdown() only when it does not repeat; a Timer's
-  # on its one thread. Where a thread waits for a time the pool's threads take the tasks
-  # in turn; on one stack no thread can wait for one, so a thread is started that runs
-  # no sooner than the soonest task's time, named as the pool's threads in turn, and the
-  # program's waits pass the time until then. What a TimerTask does not hand down to an
+  # on its one thread. On one stack no thread can wait for a time, so a thread is started
+  # that runs no sooner than the soonest task's time, named as the pool's threads in
+  # turn, and the program's waits pass the time until then. Which of two threads a JDK
+  # gives a task is not asked: it moves with the load. What a TimerTask does not hand down to an
   # anonymous class (its state, its period) hides no local of the program.
   - name: a-scheduled-pool-and-a-timer-run-tasks-at-their-times
     file: Timed.java
@@ -8120,7 +8120,7 @@ standalone:
               System.out.println(one.isShutdown() + " " + repeating.isCancelled() + " " + pending.isDone());
               System.out.println(one.awaitTermination(60, TimeUnit.SECONDS) + " " + one.isTerminated() + " " + pending.isDone());
 
-              // the threads of a pool take the tasks in turn
+              // a pool of two threads; a task cancelled is taken out of it when the pool is told so
               ScheduledThreadPoolExecutor two = new ScheduledThreadPoolExecutor(2);
               two.setRemoveOnCancelPolicy(true);
               ScheduledFuture<?> dropped = two.schedule(() -> {
@@ -8129,14 +8129,17 @@ standalone:
               System.out.println(dropped.cancel(false) + " " + dropped.isCancelled() + " " + two.getRemoveOnCancelPolicy() + " "
                       + pool.getCorePoolSize());
               CountDownLatch four = new CountDownLatch(4);
+              List<String> byTwo = Collections.synchronizedList(new ArrayList<>());
               for (int i = 0; i < 4; i++) {
                   int n = i;
                   two.schedule(() -> {
-                      System.out.println(n + " on " + Thread.currentThread().getName());
+                      byTwo.add(n + " on a thread of the pool " + Thread.currentThread().getName().startsWith("pool-2-thread-"));
                       four.countDown();
-                  }, 100 * (i + 1), TimeUnit.MILLISECONDS);
+                  }, 20 * (i + 1), TimeUnit.MILLISECONDS);
               }
               four.await();
+              Collections.sort(byTwo);
+              System.out.println(byTwo);
               two.schedule(() -> System.out.println("dropped"), 1, TimeUnit.HOURS);
               System.out.println(two.shutdownNow().size() + " " + two.awaitTermination(60, TimeUnit.SECONDS));
 
@@ -8223,10 +8226,7 @@ standalone:
       after the shutdown on pool-1-thread-1
       true true true
       true true true 2
-      0 on pool-2-thread-1
-      1 on pool-2-thread-2
-      2 on pool-2-thread-1
-      3 on pool-2-thread-2
+      [0 on a thread of the pool true, 1 on a thread of the pool true, 2 on a thread of the pool true, 3 on a thread of the pool true]
       1 true
       java.lang.IllegalArgumentException: Negative delay.
       java.lang.IllegalArgumentException: Non-positive period.

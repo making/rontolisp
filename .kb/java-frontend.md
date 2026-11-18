@@ -1421,8 +1421,9 @@ that can only be suspended under it asks `Support.oneStack()` and does what one 
   `Timer` share: the tasks sorted by time under one monitor, a fixed number of threads.
   Where a thread can wait, the thread that had no task longest waits for the soonest
   task's time and the others for their turn (a line of the idle threads, a thread joining
-  it where it is made) -- a JDK's pool of two runs sequential tasks on its threads in
-  turn (measured), and so does this. On one stack the table keeps ONE thread started for
+  it where it is made). A JDK's pool of two idle threads gave sequential tasks to its
+  threads in turn in every quiet run and gave one thread two in a row under load (the
+  corpus's JDK leg, beside the other legs), so no test asks which thread runs a task. On one stack the table keeps ONE thread started for
   its soonest task's time while one of its threads is free ("A thread started for a time"
   above): made by the pool's factory for the first of each number, else a `Thread` of
   that one's name, daemon flag and priority; taken back (`Support.unstart`) when a
@@ -1818,8 +1819,9 @@ thread); ci-spec `string-code-reads-a-character-s-code-or-minus-one`;
 failing initialization, `%uncaught`, the name function that ends in no run-time answer).
 j89: the `standalone:` case `a-scheduled-pool-and-a-timer-run-tasks-at-their-times` (the
 thread one stack starts for a time; a `TimerTask`'s `state` and `period` hiding no local
-of the program; its delays are wide on purpose -- 600 against 20 ms, 100 ms apart -- since
-the order asked is by time and the legs run beside each other), the second halves of
+of the program; where an order by time is asked the delays are wide on purpose, 600
+against 20 ms, since the legs run beside each other, and what two threads ran is sorted
+before it is printed), the second halves of
 `locks-latches-queues-and-executors-hand-work-between-threads` and
 `threads-share-concurrent-collections-and-completable-futures` (static methods called
 from the end of `main`: each new class, the dependents' order, the refusals' messages, the
