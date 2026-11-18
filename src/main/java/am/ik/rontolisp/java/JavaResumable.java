@@ -183,6 +183,8 @@ final class JavaResumable {
 
 	private static final String INIT_BUSY = runtime("init-busy").name();
 
+	private static final String REPLY = runtime("http-reply").name();
+
 	private static final String INTERRUPTED = runtime("thread-interrupted").name();
 
 	private static final String VOLATILE = runtime("volatile").name();
@@ -200,7 +202,7 @@ final class JavaResumable {
 	 */
 	private static final Map<String, LispSymbol> SUSPENDING = Map.of(ENTER, runtime("suspending-enter"), WAIT,
 			runtime("suspending-wait"), SLEEP, runtime("suspending-sleep"), YIELD, runtime("suspending-yield"),
-			INIT_BUSY, runtime("suspending-init"));
+			INIT_BUSY, runtime("suspending-init"), REPLY, runtime("suspending-http-reply"));
 
 	/**
 	 * The operators a form with a suspension among its operands is not read as a call of:
@@ -751,9 +753,10 @@ final class JavaResumable {
 			}
 			default -> {
 				operands.forEach(this::visit);
-				if (operator.equals(SLEEP) || operator.equals(YIELD)) {
+				if (operator.equals(SLEEP) || operator.equals(YIELD) || operator.equals(REPLY)) {
 					suspends(form);
-					general(operator.equals(SLEEP) ? "sleeps" : "yields");
+					general(operator.equals(SLEEP) ? "sleeps"
+							: operator.equals(YIELD) ? "yields" : "waits for a reply");
 				}
 				else if (operator.equals(WAIT)) {
 					suspends(form);

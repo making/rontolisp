@@ -334,6 +334,42 @@ the threads a program starts, not for the thread of `main`. An `AtomicInteger`, 
 **A thread's number is rontolisp's own.** `threadId()` and the number in `toString()` count
 the threads of the program from 1.
 
+## The HTTP client
+
+**A request is sent by the transport of the target**
+([`rontolisp:fetch`](../guides/http-fetch.md)), so what belongs to a connection is the
+transport's and has no member: timeouts (`timeout`, `connectTimeout`), a proxy, an
+authenticator, a cookie handler, an `SSLContext`, WebSocket. `version(..)` is kept and
+answered, and no transport reads it; a reply's `version()` is `HTTP_1_1` whatever was
+spoken. A request with no `User-Agent` of its own carries rontolisp's.
+
+**A request is sent as `GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `OPTIONS` or `PATCH`.** Any
+other method a builder took (`TRACE`, `get`) and `expectContinue(true)` are an
+`UnsupportedOperationException` where the request is sent.
+
+**A body is read whole.** `send` returns, and the future of `sendAsync` completes, once
+the whole reply is in: the stream `BodyHandlers.ofInputStream()` answers reads a body
+already there. `BodyPublishers.ofInputStream` is read to its end before the request is
+sent. A `BodyHandler` is a function choosing among the subscribers of `BodySubscribers`,
+and a body is published by `BodyPublishers`; a subscriber or a publisher of a program's
+own class is an `UnsupportedOperationException` where it is used. `BodyHandlers.ofString()`
+reads the charset a reply's `Content-Type` names when it is UTF-8, ISO-8859-1 or US-ASCII,
+and UTF-8 otherwise; `ofString(charset)` reads any.
+
+**A failure is an `IOException` with the transport's words**, a refused connection a
+`ConnectException` on every backend; a JDK has more classes (`UnknownHostException`,
+`SSLHandshakeException`).
+
+**`sendAsync` completes its future on a thread of the common pool**, or of the client's
+`executor`. In a `.wasm` the [threads take turns](#threads): a thread waiting for a reply
+lets the threads that can go on take a turn first, and then no other thread goes on until
+the reply is in -- a thread asleep included.
+
+**A `URI`** is checked as a JDK checks one, with its messages, but for an address in
+brackets, of which only the characters are checked. `hashCode` is not a JDK's number, and
+`compareTo` orders by the text. The constructors of several parts, `normalize`,
+`relativize`, `toURL` and `toASCIIString` are not there.
+
 ## What is refused
 
 Each of these is an error naming the construct and its position.
@@ -351,4 +387,5 @@ Each of these is an error naming the construct and its position.
 - Any class or member of the library not listed in the [overview](index.md): streams
   (`java.util.stream`), `LinkedList`, `LinkedHashMap`, `TreeMap`, `Scanner`, files
   (`File`, `FileReader`, `java.nio.file`), `java.time`, `BigInteger`, `BigDecimal`,
-  reflection.
+  reflection. Of `java.net`, everything but `URI` and the [HTTP client](#the-http-client):
+  `URL`, sockets, `HttpURLConnection`.

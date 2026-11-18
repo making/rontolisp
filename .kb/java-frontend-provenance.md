@@ -269,6 +269,15 @@ algorithm came from, and the answer goes in the file's header.
     Locations), then `URI.resolve` over 22,703 generated pairs, which the new code answers
     and the old one missed 2,939 of. `.kb/clojure-frontend.md`, "HTTP client", lists the
     rules and the two known differences.
+- **`java.net.URI`'s rules and the HTTP client (k03, 2026-11-18).** `eval/uri.lisp` holds
+  j95's resolution and the Clojure client's URL scanner, moved, not rewritten; what was
+  added (an opaque part, an address in brackets, a base with no scheme) and all of the
+  Java subset's `java.net.http` and `java.net.URI` were written from the API
+  documentation, RFC 3986 / RFC 2396's character classes and JDK 25's answers to probes
+  (the builders' refusals, every character of a field name, a method and a value, 76
+  references through `URI`'s getters, the redirects of a client against a local server).
+  Nobody opened OpenJDK's source; the probes' answers are the expectations of
+  `java-http-spec.yaml`, which the JDK leg asks again.
 - **Notices (j93, 2026-11-18): kept with notices.** What the audit filed under "Add notices"
   and "To confirm" stays, under its licence:
   - Root `NOTICE` (rontolisp, and Maven's and Maven Resolver's Apache NOTICE lines) and

@@ -43,7 +43,10 @@ final class JavaClasses {
 	/** The packages of the library: what {@code import module java.base} imports. */
 	private static final List<String> LIBRARY_PACKAGES = List.of("java.lang", "java.util", "java.util.function",
 			"java.io", "java.nio.charset", "java.util.concurrent", "java.util.concurrent.atomic",
-			"java.util.concurrent.locks");
+			"java.util.concurrent.locks", "java.net");
+
+	/** The one package of the module {@code java.net.http}. */
+	private static final String HTTP_MODULE = "java.net.http";
 
 	private static final String COMPARABLE = "java.lang.Comparable";
 
@@ -367,10 +370,15 @@ final class JavaClasses {
 				continue;
 			}
 			if (imported.module()) {
-				if (!imported.name().equals("java.base")) {
+				if (imported.name().equals(HTTP_MODULE)) {
+					onDemand.add(HTTP_MODULE);
+				}
+				else if (imported.name().equals("java.base")) {
+					onDemand.addAll(LIBRARY_PACKAGES);
+				}
+				else {
 					throw unsupported(source, imported.pos(), "the module " + imported.name());
 				}
-				onDemand.addAll(LIBRARY_PACKAGES);
 			}
 			else if (imported.onDemand()) {
 				onDemand.add(imported.name());

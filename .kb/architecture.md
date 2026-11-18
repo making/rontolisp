@@ -34,7 +34,9 @@ then the same lowering to core forms and a spliced run-time library; its library
 are plain Java are source in the jar, lowered with the program behind the seam
 (`.kb/java-frontend.md`). What two front ends need at run time is a spliced library of its
 own, named by theirs: the regular-expression engine of Clojure and Java
-(`eval/RegexLibrary`, `.kb/regex-engine.md`).
+(`eval/RegexLibrary`, `.kb/regex-engine.md`) and `java.net.URI`'s rules -- the cut, the
+characters, the resolution -- of the Clojure HTTP client and the Java subset's `URI`
+(`eval/UriLibrary`, `.kb/java-frontend.md`, "java.net.http").
 
 ## Language-independent libraries
 

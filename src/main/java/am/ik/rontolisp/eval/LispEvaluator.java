@@ -308,6 +308,8 @@ public final class LispEvaluator {
 
 	private boolean regexLibraryLoaded;
 
+	private boolean uriLibraryLoaded;
+
 	private boolean clojureLibraryLoaded = false;
 
 	/** Whether the Clojure library came from {@link #clojureProgram}, stripped. */
@@ -16986,6 +16988,18 @@ public final class LispEvaluator {
 			if (!this.regexLibraryLoaded && RegexLibrary.isRegexFunction(name)) {
 				this.regexLibraryLoaded = true;
 				for (LispVal form : RegexLibrary.forms()) {
+					evalResolved(form);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// java.net.URI's rules as the front ends share them (uri.lisp) load the same
+			// way on the first resolution of a rontolisp::%uri- function.
+			if (!this.uriLibraryLoaded && UriLibrary.isUriFunction(name)) {
+				this.uriLibraryLoaded = true;
+				for (LispVal form : UriLibrary.forms()) {
 					evalResolved(form);
 				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);

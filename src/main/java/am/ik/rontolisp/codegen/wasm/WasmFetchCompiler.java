@@ -65,13 +65,15 @@ final class WasmFetchCompiler {
 	}
 
 	/**
-	 * The surfaces a Clojure program fetches through, named beside fetch so the refusal
-	 * reads from a {@code .clj} file too: {@code rontolisp.http-client} sends every
-	 * request through {@code rontolisp:fetch}, and {@code clojure.java.io} reads an
-	 * {@code http:} or {@code https:} URL through it ({@code rontolisp.http-urls}).
+	 * The surfaces a Clojure and a Java program fetch through, named beside fetch so the
+	 * refusal reads from a {@code .clj} and a {@code .java} file too:
+	 * {@code rontolisp.http-client} sends every request through {@code rontolisp:fetch},
+	 * {@code clojure.java.io} reads an {@code http:} or {@code https:} URL through it
+	 * ({@code rontolisp.http-urls}), and so does the Java subset's {@code java.net.http}
+	 * client.
 	 */
-	private static final String CLOJURE_CLIENT = " (and Clojure's rontolisp.http-client and the http: and https: URLs"
-			+ " clojure.java.io reads, which go through it)";
+	private static final String CLOJURE_CLIENT = " (and Clojure's rontolisp.http-client, the http: and https: URLs"
+			+ " clojure.java.io reads and the Java subset's java.net.http client, which go through it)";
 
 	// Rejects a statically-known unsupported literal method; null (unknown/runtime)
 	// means GET and passes.

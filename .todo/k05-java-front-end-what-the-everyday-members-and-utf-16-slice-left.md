@@ -76,6 +76,19 @@ exception.
 - `MatchException` and the run time's own errors as the library's classes: probed and
   closed by j88 (`.kb/java-frontend.md`, "Exceptions": at every place a program can see
   one).
+- **What the HTTP client (k03, `.kb/java-frontend.md`, "java.net.http") left**:
+  timeouts (`HttpRequest.Builder.timeout`, `HttpClient.Builder.connectTimeout`,
+  `HttpTimeoutException`: they take a `java.time.Duration`, which is not there, and
+  `rontolisp:fetch` has no timeout, `.todo/148`); a body as it arrives
+  (`BodyHandlers.ofInputStream()` reads a body already in; `ofLines`, `ofByteArrayConsumer`,
+  a program's own `BodySubscriber` / `BodyPublisher`, which need `Flow` and
+  `ByteBuffer`); `HttpHeaders.firstValueAsLong` (`OptionalLong`); the methods fetch does
+  not send (`TRACE`, a method in lowercase); the `--no-wasi --host-fetch` reactor, which
+  no test runs a Java program on; `java.net.URI`'s constructors of several parts,
+  `normalize`, `relativize`, `toASCIIString`, the syntax of an address in brackets, and
+  `hashCode`'s number. The corpus is `java-http-spec.yaml`
+  (`FetchSpecE2eTest#javaHttpClient`): a new member is a line of one of its programs,
+  whose expectation is the JDK leg's.
 
 ## Measured costs, each a lead
 

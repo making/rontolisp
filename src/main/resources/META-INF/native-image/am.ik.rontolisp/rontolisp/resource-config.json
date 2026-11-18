@@ -357,6 +357,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.UriLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/uri\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.clojure.ClojureBuiltinNamespaces"
         },
         "pattern": "am/ik/rontolisp/clojure/lib/ring/(util|middleware)/[a-z0-9_]+\\.clj"

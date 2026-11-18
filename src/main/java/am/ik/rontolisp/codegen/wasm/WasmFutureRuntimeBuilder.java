@@ -39,6 +39,16 @@ final class WasmFutureRuntimeBuilder {
 	static final int STATE_EXITED = 3;
 
 	/**
+	 * The state of a DEFERRED future ({@code rontolisp::%future-deferred}) in a module
+	 * that runs the state machines with no host scheduler -- a Preview 1 module whose
+	 * program makes futures of its own, a {@code --native} fetch its one producer: the
+	 * value field holds a thunk, which every poll calls through the arity-0 dispatch and
+	 * whose answer it resolves in turn. Nothing settles such a future but the thunk,
+	 * which blocks the one stack, so an await of it never suspends its frame.
+	 */
+	static final int STATE_DEFERRED = 4;
+
+	/**
 	 * What a signal reads, which a suspended frame keeps of its own: the globals of the
 	 * handler and restart stacks and of the {@code handler-case} depth. A frame resumes
 	 * under its own and hands them back on its way out, so a body leaving its
@@ -365,20 +375,21 @@ final class WasmFutureRuntimeBuilder {
 	 * leaving a resumed frame then settles its future with {@link #STATE_EXITED}, and an
 	 * await throws it again, so it reaches a block or a {@code catch} the awaiter is in
 	 * @param handlerState what a resumed frame swaps in, or null when nothing reads it
+	 * @param deferred whether the module can hold a {@link #STATE_DEFERRED} future
 	 * @return the function body bytes (locals declaration included)
 	 */
 	static byte[] build(int off, int base, int futureType, int frameType, int streamType, int currentTaskGlobal,
 			@org.jspecify.annotations.Nullable Sched sched, @org.jspecify.annotations.Nullable Cb cb,
 			boolean identityHash, int spillGlobal, int reawaitFunc,
 			WasmOperandTypes.@org.jspecify.annotations.Nullable StreamCheck streamCheck, boolean blockExitTag,
-			@org.jspecify.annotations.Nullable HandlerState handlerState) {
+			@org.jspecify.annotations.Nullable HandlerState handlerState, boolean deferred) {
 		return switch (off) {
 			case OFF_NEW -> buildNew(futureType);
 			case OFF_SETTLE -> buildSettleOrReject(base, futureType, 1);
 			case OFF_REJECT -> buildSettleOrReject(base, futureType, 2);
 			case OFF_ADD_WAITER -> buildAddWaiter(futureType, identityHash);
 			case OFF_WAKE -> buildWake(base, futureType);
-			case OFF_POLL -> buildPoll(futureType, spillGlobal, reawaitFunc, blockExitTag);
+			case OFF_POLL -> buildPoll(futureType, spillGlobal, reawaitFunc, blockExitTag, deferred);
 			case OFF_SUBTASK_FUTURE ->
 				sched == null ? buildUnreachableStub() : buildSubtaskFuture(futureType, sched, identityHash);
 			case OFF_SCHED_LOOP ->
@@ -771,7 +782,8 @@ final class WasmFutureRuntimeBuilder {
 	// the non-asyncMode lowering), so there is no degenerate-future branch. With a spill
 	// global the poll is await's multiple-value producer: it answers one value unless
 	// the last fulfilled future of the chain carries extras, which it publishes.
-	private static byte[] buildPoll(int futureType, int spillGlobal, int reawaitFunc, boolean blockExitTag) {
+	private static byte[] buildPoll(int futureType, int spillGlobal, int reawaitFunc, boolean blockExitTag,
+			boolean deferred) {
 		ByteArrayOutputStream body = new am.ik.wasm.UnsynchronizedByteArrayOutputStream();
 		WasmWriter w = new WasmWriter(body);
 		final int STATE = 1;
@@ -815,6 +827,20 @@ final class WasmFutureRuntimeBuilder {
 		setLocal(w, 0);
 		w.write(Instruction.BR, 2); // -> loop (past this if and the TYPE_FUTURE if)
 		w.write(Instruction.END);
+		if (deferred) {
+			// deferred -> run the thunk (it keeps its own answer) and resolve that
+			getLocal(w, STATE);
+			i32(w, STATE_DEFERRED);
+			w.write(Instruction.I32_EQ);
+			w.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			castFuture(w, 0, futureType);
+			structGet(w, futureType, 1);
+			w.write(Instruction.CALL);
+			w.writeUnsignedLeb128(WasmLispCompiler.FUNC_DISPATCH_BASE);
+			setLocal(w, 0);
+			w.write(Instruction.BR, 2); // -> loop
+			w.write(Instruction.END);
+		}
 		if (blockExitTag) {
 			// exited -> the exit goes on from here
 			getLocal(w, STATE);

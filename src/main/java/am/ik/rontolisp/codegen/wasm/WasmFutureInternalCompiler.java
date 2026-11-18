@@ -128,9 +128,23 @@ final class WasmFutureInternalCompiler {
 				ctx.writer.write(Instruction.CALL);
 				ctx.writer.writeUnsignedLeb128(ctx.asyncFuncBase + WasmFutureRuntimeBuilder.OFF_SCHED_LOOP);
 			}
-			case LispNames.FUTURE_DEFERRED_INTERNAL -> throw new UnsupportedOperationException("rontolisp::" + member
-					+ " belongs to the degenerate (non-async) tier: an asyncMode program's futures settle through its"
-					+ " scheduler");
+			case LispNames.FUTURE_DEFERRED_INTERNAL -> {
+				// Where the state machines run with no host scheduler (a Preview 1
+				// module whose program makes futures of its own): a TYPE_FUTURE in
+				// STATE_DEFERRED whose value field is the thunk every poll calls.
+				// %future-settled-p answers t of it: no await of it suspends.
+				expectArgs(member, args, 1);
+				ctx.indirectCallArities.add(0);
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(WasmFutureRuntimeBuilder.STATE_DEFERRED);
+				WasmExprCompiler.compileExpr(args.get(1), ctx);
+				ctx.writer.write(Instruction.REF_NULL);
+				ctx.writer.writeHeapType(Type.EQ.code());
+				ctx.writer.write(Instruction.REF_NULL);
+				ctx.writer.writeHeapType(Type.EQ.code());
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.STRUCT_NEW);
+				ctx.writer.writeUnsignedLeb128(ctx.futureTypeIndex);
+			}
 			default -> throw new IllegalArgumentException("unknown future internal: " + member);
 		}
 	}

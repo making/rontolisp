@@ -1,0 +1,641 @@
+# The corpus of the experimental Java subset's java.net.http client
+# (FetchSpecE2eTest#javaHttpClient): each program is a Java file run under the JDK
+# running the test and on every transport rontolisp:fetch has -- the interpreter, the
+# JVM, a --native output and a --component -- against the test's one local origin,
+# which stands for @ORIGIN@ in a source; @LEG@ stands for the leg's name. Written
+# here; nothing is copied or translated from a JDK or its tests
+# (.kb/java-frontend-provenance.md).
+#
+# A program prints a line `== name` ahead of each case, and its output is cut into
+# cases at those lines, so a failure names its case and its leg. `expected` is what a
+# JDK 25 prints, and the JDK leg checks that it still is; a program `skip`s a leg with
+# the reason: the one of what the subset's client refuses by name has no JDK leg.
+programs:
+  # the blocking client: verbs, fields both ways, bodies, statuses, redirects, java.net.URI
+  - name: client
+    file: Client.java
+    source: |
+      import java.io.ByteArrayInputStream;
+      import java.io.IOException;
+      import java.io.InputStream;
+      import java.net.ConnectException;
+      import java.net.URI;
+      import java.net.URISyntaxException;
+      import java.net.http.HttpClient;
+      import java.net.http.HttpHeaders;
+      import java.net.http.HttpRequest;
+      import java.net.http.HttpResponse;
+      import java.nio.charset.StandardCharsets;
+      import java.util.Arrays;
+      import java.util.HashMap;
+      import java.util.List;
+      import java.util.Map;
+      import java.util.Optional;
+
+      public class Client {
+
+          static final String ORIGIN = "@ORIGIN@";
+
+          static final HttpClient CLIENT = HttpClient.newHttpClient();
+
+          static HttpRequest.Builder to(String path) {
+              return HttpRequest.newBuilder(URI.create(ORIGIN + path));
+          }
+
+          static String text(HttpRequest request) throws IOException, InterruptedException {
+              HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+              return response.statusCode() + " [" + response.body() + "]";
+          }
+
+          static String local(Object value) {
+              return String.valueOf(value).replace(ORIGIN, "");
+          }
+
+          interface Refused {
+              Object run() throws Exception;
+          }
+
+          static void refused(String what, Refused attempt) {
+              try {
+                  System.out.println(what + ": " + local(attempt.run()));
+              }
+              catch (Exception thrown) {
+                  System.out.println(what + ": " + local(thrown));
+              }
+          }
+
+          static void get() throws IOException, InterruptedException {
+              System.out.println("== a-get-answers-its-status-its-fields-and-its-body");
+              HttpRequest request = to("/hello").header("X-Custom", "abc").build();
+              HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString());
+              System.out.println(local(response));
+              System.out.println(response.statusCode() + " " + response.body() + " " + local(response.uri()) + " "
+                      + response.version() + " " + response.previousResponse());
+              HttpHeaders fields = response.headers();
+              System.out.println(fields.firstValue("X-Test") + " " + fields.firstValue("x-test") + " " + fields.allValues("X-TEST")
+                      + " " + fields.firstValue("absent") + " " + fields.allValues("absent"));
+              System.out.println(fields.map().get("content-length") + " " + fields.map().get("Content-Length") + " "
+                      + fields.map().containsKey("x-test") + " " + fields.map().keySet().contains("x-test"));
+              System.out.println(local(request) + " | " + request.method() + " " + request.headers().map() + " "
+                      + request.bodyPublisher() + " " + request.version() + " " + request.expectContinue());
+              System.out.println(local(response.request()) + " " + text(to("/query?a=1&b=%20x#fragment").build()));
+          }
+
+          static void verbs() throws IOException, InterruptedException {
+              System.out.println("== the-verbs-and-a-request-body");
+              HttpRequest post = to("/echo").POST(HttpRequest.BodyPublishers.ofString("héllo")).build();
+              System.out.println(post.method() + " " + post.bodyPublisher().get().contentLength() + " " + text(post));
+              System.out.println(text(to("/echo").PUT(HttpRequest.BodyPublishers.ofByteArray(new byte[] { 104, 105 })).build()));
+              System.out.println(text(to("/echo").DELETE().build()));
+              System.out.println(text(to("/echo").method("PATCH", HttpRequest.BodyPublishers.ofString("p")).build()));
+              System.out.println(text(to("/echo").method("OPTIONS", HttpRequest.BodyPublishers.noBody()).build()));
+              System.out.println(text(to("/echo").POST(HttpRequest.BodyPublishers.noBody()).build()));
+              System.out.println(text(to("/echo").POST(HttpRequest.BodyPublishers.ofByteArray("abcdef".getBytes(), 2, 3)).build()));
+              System.out.println(text(to("/echo")
+                  .POST(HttpRequest.BodyPublishers.ofInputStream(() -> new ByteArrayInputStream("from a stream".getBytes())))
+                  .build()));
+              System.out.println(text(to("/echo").POST(HttpRequest.BodyPublishers.ofString("ignored")).GET().build()));
+              HttpResponse<String> head = CLIENT.send(to("/hello").HEAD().build(), HttpResponse.BodyHandlers.ofString());
+              System.out.println(head.request().method() + " " + head.statusCode() + " [" + head.body() + "] "
+                      + head.headers().firstValue("x-test"));
+              System.out.println(HttpRequest.BodyPublishers.noBody().contentLength() + " "
+                      + HttpRequest.BodyPublishers.ofString("héllo", StandardCharsets.ISO_8859_1).contentLength() + " "
+                      + HttpRequest.BodyPublishers.ofInputStream(() -> null).contentLength());
+              byte[] octets = { (byte) 0xff, (byte) 0xfe, 0x41, 0x00, (byte) 0x80, 0x7f };
+              System.out.println(text(to("/octets-echo").header("Content-Type", "application/octet-stream")
+                  .POST(HttpRequest.BodyPublishers.ofByteArray(octets))
+                  .build()));
+          }
+
+          static void statuses() throws IOException, InterruptedException {
+              System.out.println("== a-status-other-than-200");
+              System.out.println(text(to("/status/404").build()) + " " + text(to("/status/500").build()) + " "
+                      + text(to("/status/204").build()));
+              HttpResponse<String> moved = CLIENT.send(to("/redirect").build(), HttpResponse.BodyHandlers.ofString());
+              System.out.println(local(moved) + " " + moved.body() + " " + moved.headers().firstValue("Location"));
+          }
+
+          static void fields() throws IOException, InterruptedException {
+              System.out.println("== fields-both-ways");
+              HttpRequest request = to("/headers").header("X-A", "1")
+                  .header("x-a", "2")
+                  .headers("X-B", "3", "Accept", "text/plain")
+                  .setHeader("X-C", "4")
+                  .setHeader("x-c", " 5 ")
+                  .build();
+              System.out.println(request.headers().map() + " " + text(request));
+              HttpResponse<String> cookies = CLIENT.send(to("/cookies").build(), HttpResponse.BodyHandlers.ofString());
+              System.out.println(cookies.headers().allValues("set-cookie") + " " + cookies.headers().firstValue("Set-Cookie") + " "
+                      + cookies.headers().map().get("SET-COOKIE"));
+              HttpHeaders made = HttpHeaders.of(Map.of("B", List.of("1", "2"), "a", List.of(" 3 ")),
+                      (name, value) -> !value.equals("2"));
+              HttpHeaders same = HttpHeaders.of(Map.of("b", List.of("1"), "A", List.of("3")), (name, value) -> true);
+              System.out.println(made.map() + " " + made.firstValue("b") + " " + made.equals(same) + " "
+                      + (made.hashCode() == same.hashCode()) + " " + made.toString().equals(
+                              "java.net.http.HttpHeaders@" + Integer.toHexString(made.hashCode()) + " { {a=[3], B=[1]} }"));
+              HttpRequest.Builder builder = to("/a").header("X", "1");
+              HttpRequest.Builder copy = builder.copy().header("Y", "2");
+              HttpRequest one = builder.build();
+              System.out.println(one.headers().map() + " " + copy.build().headers().map() + " "
+                      + one.equals(to("/a").header("x", "1").build()) + " " + one.equals(to("/b").header("X", "1").build()) + " "
+                      + (one.hashCode() == to("/a").header("x", "1").build().hashCode()));
+          }
+
+          static void refusals() {
+              System.out.println("== what-a-builder-refuses");
+              refused("restricted", () -> to("/").header("Host", "x"));
+              refused("restricted", () -> to("/").setHeader("content-length", "1"));
+              refused("restricted", () -> to("/").headers("A", "1", "Upgrade", "x"));
+              refused("name", () -> to("/").header("X A", "x"));
+              refused("name", () -> to("/").header("", "x"));
+              refused("name", () -> to("/").header(null, "x"));
+              refused("value", () -> to("/").header("X-A", "a\nb"));
+              refused("value", () -> to("/").header("X-A", null));
+              refused("value", () -> to("/").header("X-A", "a\u00e9\tb").build().headers().map().toString().replace('\t', '_'));
+              refused("count", () -> to("/").headers("X-A"));
+              refused("count", () -> to("/").headers());
+              refused("scheme", () -> HttpRequest.newBuilder(URI.create("ftp://x/y")));
+              refused("scheme", () -> HttpRequest.newBuilder(URI.create("/x/y")));
+              refused("host", () -> HttpRequest.newBuilder(URI.create("http:///y")));
+              refused("host", () -> HttpRequest.newBuilder(URI.create("http:x")));
+              refused("uri", () -> HttpRequest.newBuilder().uri(null));
+              refused("uri", () -> HttpRequest.newBuilder().build());
+              refused("method", () -> to("/").method("G T", HttpRequest.BodyPublishers.noBody()));
+              refused("method", () -> to("/").method("", HttpRequest.BodyPublishers.noBody()));
+              refused("method", () -> to("/").method("CONNECT", HttpRequest.BodyPublishers.noBody()));
+              refused("method", () -> to("/").method("POST", null));
+              refused("range", () -> HttpRequest.BodyPublishers.ofByteArray(new byte[5], 3, 3));
+              refused("client", () -> CLIENT.send(null, HttpResponse.BodyHandlers.ofString()));
+              refused("client", () -> CLIENT.send(to("/hello").build(), null));
+              refused("client", () -> HttpClient.newBuilder().followRedirects(null));
+              Map<String, List<String>> twice = new HashMap<>();
+              twice.put("a", List.of("1"));
+              twice.put("A", List.of("2"));
+              refused("fields", () -> HttpHeaders.of(twice, (name, value) -> true));
+              refused("fields", () -> to("/").header("X", "1").build().headers().map().put("Y", List.of()));
+          }
+
+          static void bodies() throws IOException, InterruptedException {
+              System.out.println("== a-body-is-what-its-handler-makes");
+              System.out.println(CLIENT.send(to("/utf8").build(), HttpResponse.BodyHandlers.ofString()).body() + " "
+                      + CLIENT.send(to("/latin1").build(), HttpResponse.BodyHandlers.ofString()).body() + " "
+                      + CLIENT.send(to("/latin1").build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)).body()
+                      + " "
+                      + CLIENT.send(to("/utf8").build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.ISO_8859_1))
+                          .body()
+                          .length());
+              StringBuilder points = new StringBuilder();
+              for (char c : CLIENT.send(to("/octets").build(), HttpResponse.BodyHandlers.ofString()).body().toCharArray()) {
+                  points.append((int) c).append(' ');
+              }
+              System.out.println(points + Arrays.toString(CLIENT.send(to("/octets").build(), HttpResponse.BodyHandlers.ofByteArray()).body()));
+              System.out.println(CLIENT.send(to("/hello").build(), HttpResponse.BodyHandlers.discarding()).body() + " "
+                      + CLIENT.send(to("/hello").build(), HttpResponse.BodyHandlers.replacing(42)).body());
+              InputStream stream = CLIENT.send(to("/hello").build(), HttpResponse.BodyHandlers.ofInputStream()).body();
+              System.out.println((char) stream.read() + new String(stream.readAllBytes()) + " " + stream.read());
+              HttpResponse.BodyHandler<String> byStatus = info -> info.statusCode() == 404
+                      ? HttpResponse.BodySubscribers.replacing("gone " + info.headers().firstValue("content-length") + " " + info.version())
+                      : HttpResponse.BodySubscribers.ofString(StandardCharsets.UTF_8);
+              System.out.println(CLIENT.send(to("/status/404").build(), byStatus).body() + " "
+                      + CLIENT.send(to("/hello").build(), byStatus).body() + " "
+                      + CLIENT.send(to("/hello").build(), info -> HttpResponse.BodySubscribers
+                          .mapping(HttpResponse.BodySubscribers.ofString(StandardCharsets.UTF_8), String::length)).body());
+          }
+
+          static String followed(HttpClient client, HttpRequest request) throws IOException, InterruptedException {
+              HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+              StringBuilder before = new StringBuilder();
+              Optional<HttpResponse<String>> previous = response.previousResponse();
+              while (previous.isPresent()) {
+                  HttpResponse<String> hop = previous.get();
+                  before.append(" < ").append(local(hop)).append(' ').append(hop.body()).append(' ')
+                      .append(hop.headers().firstValue("location").orElse("-"));
+                  previous = hop.previousResponse();
+              }
+              return local(response) + " [" + response.body() + "] " + local(response.uri()) + before;
+          }
+
+          static void redirects() throws IOException, InterruptedException {
+              System.out.println("== redirects-as-the-policy-says");
+              HttpClient normal = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build();
+              HttpClient always = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.ALWAYS).build();
+              System.out.println(CLIENT.followRedirects() + " " + normal.followRedirects() + " " + always.followRedirects());
+              System.out.println(followed(normal, to("/redirect").build()));
+              System.out.println(followed(always, to("/redirect").build()));
+              System.out.println(followed(normal, to("/loop").build()));
+              HttpRequest.BodyPublisher body = HttpRequest.BodyPublishers.ofString("body");
+              System.out.println(followed(normal, to("/redirect-post").POST(body).build()));
+              System.out.println(followed(normal, to("/redirect-post").PUT(body).build()));
+              System.out.println(followed(normal, to("/redirect-307").POST(body).build()));
+              System.out.println(followed(normal, to("/redirect-303").PUT(body).build()));
+              refused("no location", () -> followed(normal, to("/no-location").build()));
+          }
+
+          static String parts(URI uri) {
+              return uri.getScheme() + " " + uri.getRawAuthority() + " " + uri.getRawUserInfo() + " " + uri.getHost() + " "
+                      + uri.getPort() + " " + uri.getRawPath() + " " + uri.getRawQuery() + " " + uri.getRawFragment() + " "
+                      + uri.isAbsolute() + " " + uri.isOpaque() + " | " + uri.getPath() + " " + uri.getQuery() + " "
+                      + uri.getFragment() + " " + uri.getRawSchemeSpecificPart() + " .";
+          }
+
+          static void uris() {
+              System.out.println("== a-uri-is-cut-checked-and-resolved");
+              String[] taken = { "HTTP://user:pw@Example.COM:8080/a%20b/c?x=%41&y#%42", "http://host", "http://[::1]:80/p",
+                      "http://a_b/p", "http://host:x/p", "http://1.2.3.4:/", "http://1.2.3/", "http://h-/", "http://3com.com./",
+                      "mailto:a@b.c#f", "/a/b", "a/b?q", "", "#f", "//host:1", "///p", "http:/a", "x://h/?a[b]" };
+              for (String text : taken) {
+                  System.out.println(text + " -> " + parts(URI.create(text)));
+              }
+              String[] refused = { "http://a b/", "http://h/a b", "http://h/a?b c", "http://h/a#b#c", "http://h/%zz", "http://h/%4",
+                      "http://h/a|b", "http://h/\u3000", "mailto:a b", "mailto:", "http:", "http://", "//", ":a", "1a:b", "a_b:x",
+                      "http://[::1/p", "http://[v1.a]/" };
+              for (String text : refused) {
+                  try {
+                      System.out.println(new URI(text));
+                  }
+                  catch (URISyntaxException e) {
+                      System.out.println(e.getMessage() + " | " + e.getReason() + " | " + e.getIndex() + " | " + e.getInput());
+                  }
+              }
+              refused("create", () -> URI.create("http://a b/"));
+              URI base = URI.create("http://h/a/b/c?q#f");
+              StringBuilder resolved = new StringBuilder();
+              for (String reference : new String[] { "d", "./d", "../d", "../../../d", "/d", "//o/d", "?x", "#y", "", "http://o/z",
+                      "d/./e/../f", "mailto:x", "d?x#y" }) {
+                  resolved.append(base.resolve(reference)).append(' ');
+              }
+              System.out.println(resolved + "" + URI.create("mailto:a").resolve("b") + " " + URI.create("a/b").resolve("c") + " "
+                      + URI.create("http://h").resolve("c") + " " + base.resolve(URI.create("../x")));
+              URI one = URI.create("http://Host/a%2f");
+              System.out.println(one.equals(URI.create("HTTP://host/a%2F")) + " " + (one.hashCode() == URI.create("HTTP://host/a%2F").hashCode())
+                      + " " + one.equals(URI.create("http://host/A%2f")) + " " + one.compareTo(URI.create("HTTP://host/a%2F")) + " "
+                      + (one.compareTo(URI.create("http://host/b")) < 0) + " " + one.equals("http://Host/a%2f") + " " + one);
+          }
+
+          static void failures() throws InterruptedException {
+              System.out.println("== a-transport-that-fails-and-a-client-closed");
+              try {
+                  CLIENT.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:1/x")).build(), HttpResponse.BodyHandlers.ofString());
+              }
+              catch (ConnectException e) {
+                  System.out.println(e + " / " + e.getCause());
+              }
+              catch (IOException e) {
+                  System.out.println("not refused: " + e);
+              }
+              HttpClient closing = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
+              System.out.println(closing.version() + " " + CLIENT.version() + " " + closing.executor() + " " + closing.isTerminated());
+              try (HttpClient scoped = closing) {
+                  System.out.println(text(to("/hello").build()).length() + " " + scoped.send(to("/hello").build(), HttpResponse.BodyHandlers.ofString()).body());
+              }
+              catch (IOException e) {
+                  System.out.println("failed: " + e);
+              }
+              try {
+                  closing.send(to("/hello").build(), HttpResponse.BodyHandlers.ofString());
+              }
+              catch (IOException e) {
+                  System.out.println(closing.isTerminated() + " " + e);
+              }
+          }
+
+          public static void main(String[] args) throws IOException, InterruptedException {
+              get();
+              verbs();
+              statuses();
+              fields();
+              refusals();
+              bodies();
+              redirects();
+              uris();
+              failures();
+          }
+      }
+    expected: |
+      == a-get-answers-its-status-its-fields-and-its-body
+      (GET /hello) 200
+      200 got-header /hello HTTP_1_1 Optional.empty
+      Optional[ok] Optional[ok] [ok] Optional.empty []
+      [10] [10] true true
+      /hello GET | GET {X-Custom=[abc]} Optional.empty Optional.empty false
+      /hello GET 200 [a=1&b=%20x]
+      == the-verbs-and-a-request-body
+      POST 6 200 [POST:héllo]
+      200 [PUT:hi]
+      200 [DELETE:]
+      200 [PATCH:p]
+      200 [OPTIONS:]
+      200 [POST:]
+      200 [POST:cde]
+      200 [POST:from a stream]
+      200 [GET:]
+      HEAD 200 [] Optional[ok]
+      0 5 -1
+      200 [application/octet-stream|fffe4100807f]
+      == a-status-other-than-200
+      404 [missing] 500 [broken] 204 []
+      (GET /redirect) 302 moved Optional[/hello]
+      == fields-both-ways
+      {Accept=[text/plain], X-A=[1, 2], X-B=[3], X-C=[5]} 200 [{accept=[text/plain], x-a=[1, 2], x-b=[3], x-c=[5]}]
+      [a=1, b=2] Optional[a=1] [a=1, b=2]
+      {a=[3], B=[1]} Optional[1] true true true
+      {X=[1]} {X=[1], Y=[2]} true false true
+      == what-a-builder-refuses
+      restricted: java.lang.IllegalArgumentException: restricted header name: "Host"
+      restricted: java.lang.IllegalArgumentException: restricted header name: "content-length"
+      restricted: java.lang.IllegalArgumentException: restricted header name: "Upgrade"
+      name: java.lang.IllegalArgumentException: invalid header name: "X A"
+      name: java.lang.IllegalArgumentException: invalid header name: ""
+      name: java.lang.NullPointerException: name
+      value: java.lang.IllegalArgumentException: invalid header value: "a
+      b"
+      value: java.lang.NullPointerException: value
+      value: {X-A=[aé_b]}
+      count: java.lang.IllegalArgumentException: wrong number, 1, of parameters
+      count: java.lang.IllegalArgumentException: wrong number, 0, of parameters
+      scheme: java.lang.IllegalArgumentException: invalid URI scheme ftp
+      scheme: java.lang.IllegalArgumentException: URI with undefined scheme
+      host: java.lang.IllegalArgumentException: unsupported URI http:///y
+      host: java.lang.IllegalArgumentException: unsupported URI http:x
+      uri: java.lang.NullPointerException: uri must be non-null
+      uri: java.lang.IllegalStateException: uri is null
+      method: java.lang.IllegalArgumentException: illegal method "G T"
+      method: java.lang.IllegalArgumentException: illegal method <empty string>
+      method: java.lang.IllegalArgumentException: method CONNECT is not supported
+      method: java.lang.NullPointerException
+      range: java.lang.IndexOutOfBoundsException: Range [3, 3 + 3) out of bounds for length 5
+      client: java.lang.NullPointerException
+      client: java.lang.NullPointerException
+      client: java.lang.NullPointerException
+      fields: java.lang.IllegalArgumentException: duplicate key: A
+      fields: java.lang.UnsupportedOperationException
+      == a-body-is-what-its-handler-makes
+      héllo, 世界 héllo h�llo 14
+      65533 65533 65 0 65533 127 [-1, -2, 65, 0, -128, 127]
+      null 42
+      hello-from-fetch -1
+      gone Optional[7] HTTP_1_1 hello-from-fetch 16
+      == redirects-as-the-policy-says
+      NEVER NORMAL ALWAYS
+      (GET /hello) 200 [hello-from-fetch] /hello < (GET /redirect) 302 null /hello
+      (GET /hello) 200 [hello-from-fetch] /hello < (GET /redirect) 302 null /hello
+      (GET /loop?4) 302 [hop 4] /loop?4 < (GET /loop?3) 302 null /loop?4 < (GET /loop?2) 302 null /loop?3 < (GET /loop?1) 302 null /loop?2 < (GET /loop) 302 null /loop?1
+      (GET /echo) 200 [GET:] /echo < (POST /redirect-post) 302 null /echo
+      (PUT /echo) 200 [PUT:body] /echo < (PUT /redirect-post) 302 null /echo
+      (POST /echo) 200 [POST:body] /echo < (POST /redirect-307) 307 null /echo
+      (GET /echo) 200 [GET:] /echo < (PUT /redirect-303) 303 null echo
+      no location: java.io.IOException: java.io.UncheckedIOException: java.io.IOException: Invalid redirection
+      == a-uri-is-cut-checked-and-resolved
+      HTTP://user:pw@Example.COM:8080/a%20b/c?x=%41&y#%42 -> HTTP user:pw@Example.COM:8080 user:pw Example.COM 8080 /a%20b/c x=%41&y %42 true false | /a b/c x=A&y B //user:pw@Example.COM:8080/a%20b/c?x=%41&y .
+      http://host -> http host null host -1  null null true false |  null null //host .
+      http://[::1]:80/p -> http [::1]:80 null [::1] 80 /p null null true false | /p null null //[::1]:80/p .
+      http://a_b/p -> http a_b null null -1 /p null null true false | /p null null //a_b/p .
+      http://host:x/p -> http host:x null null -1 /p null null true false | /p null null //host:x/p .
+      http://1.2.3.4:/ -> http 1.2.3.4: null 1.2.3.4 -1 / null null true false | / null null //1.2.3.4:/ .
+      http://1.2.3/ -> http 1.2.3 null null -1 / null null true false | / null null //1.2.3/ .
+      http://h-/ -> http h- null null -1 / null null true false | / null null //h-/ .
+      http://3com.com./ -> http 3com.com. null 3com.com. -1 / null null true false | / null null //3com.com./ .
+      mailto:a@b.c#f -> mailto null null null -1 null null f true true | null null f a@b.c .
+      /a/b -> null null null null -1 /a/b null null false false | /a/b null null /a/b .
+      a/b?q -> null null null null -1 a/b q null false false | a/b q null a/b?q .
+       -> null null null null -1  null null false false |  null null  .
+      #f -> null null null null -1  null f false false |  null f  .
+      //host:1 -> null host:1 null host 1  null null false false |  null null //host:1 .
+      ///p -> null null null null -1 /p null null false false | /p null null ///p .
+      http:/a -> http null null null -1 /a null null true false | /a null null /a .
+      x://h/?a[b] -> x h null h -1 / a[b] null true false | / a[b] null //h/?a[b] .
+      Illegal character in authority at index 8: http://a b/ | Illegal character in authority | 8 | http://a b/
+      Illegal character in path at index 10: http://h/a b | Illegal character in path | 10 | http://h/a b
+      Illegal character in query at index 12: http://h/a?b c | Illegal character in query | 12 | http://h/a?b c
+      Illegal character in fragment at index 12: http://h/a#b#c | Illegal character in fragment | 12 | http://h/a#b#c
+      Malformed escape pair at index 9: http://h/%zz | Malformed escape pair | 9 | http://h/%zz
+      Malformed escape pair at index 9: http://h/%4 | Malformed escape pair | 9 | http://h/%4
+      Illegal character in path at index 10: http://h/a|b | Illegal character in path | 10 | http://h/a|b
+      Illegal character in path at index 9: http://h/　 | Illegal character in path | 9 | http://h/　
+      Illegal character in opaque part at index 8: mailto:a b | Illegal character in opaque part | 8 | mailto:a b
+      Expected scheme-specific part at index 7: mailto: | Expected scheme-specific part | 7 | mailto:
+      Expected scheme-specific part at index 5: http: | Expected scheme-specific part | 5 | http:
+      Expected authority at index 7: http:// | Expected authority | 7 | http://
+      Expected authority at index 2: // | Expected authority | 2 | //
+      Expected scheme name at index 0: :a | Expected scheme name | 0 | :a
+      Illegal character in scheme name at index 0: 1a:b | Illegal character in scheme name | 0 | 1a:b
+      Illegal character in scheme name at index 1: a_b:x | Illegal character in scheme name | 1 | a_b:x
+      Expected closing bracket for IPv6 address at index 11: http://[::1/p | Expected closing bracket for IPv6 address | 11 | http://[::1/p
+      Malformed IPv6 address at index 8: http://[v1.a]/ | Malformed IPv6 address | 8 | http://[v1.a]/
+      create: java.lang.IllegalArgumentException: Illegal character in authority at index 8: http://a b/
+      http://h/a/b/d http://h/a/b/d http://h/a/d http://h/../d http://h/d http://o/d http://h/a/b/?x http://h/a/b/c?q#y http://h/a/b/ http://o/z http://h/a/b/d/f mailto:x http://h/a/b/d?x#y b a/c http://h/c http://h/a/x
+      true true false 0 true false http://Host/a%2f
+      == a-transport-that-fails-and-a-client-closed
+      java.net.ConnectException / java.net.ConnectException
+      HTTP_1_1 HTTP_2 Optional.empty false
+      22 hello-from-fetch
+      true java.io.IOException: closed
+  # sendAsync and threads: a program that starts threads, which a wasm target lowers resumable
+  - name: async
+    file: Async.java
+    source: |
+      import java.io.IOException;
+      import java.net.URI;
+      import java.net.http.HttpClient;
+      import java.net.http.HttpRequest;
+      import java.net.http.HttpResponse;
+      import java.util.ArrayList;
+      import java.util.List;
+      import java.util.concurrent.CompletableFuture;
+      import java.util.concurrent.CompletionException;
+      import java.util.concurrent.CountDownLatch;
+      import java.util.concurrent.ExecutionException;
+      import java.util.concurrent.Executor;
+
+      public class Async {
+
+          static final String ORIGIN = "@ORIGIN@";
+
+          static final HttpClient CLIENT = HttpClient.newHttpClient();
+
+          static HttpRequest to(String path) {
+              return HttpRequest.newBuilder(URI.create(ORIGIN + path)).build();
+          }
+
+          static CompletableFuture<String> text(String path) {
+              return CLIENT.sendAsync(to(path), HttpResponse.BodyHandlers.ofString())
+                  .thenApply(response -> response.statusCode() + " [" + response.body() + "]");
+          }
+
+          static void futures() throws Exception {
+              System.out.println("== send-async-answers-a-future-of-the-reply");
+              CompletableFuture<HttpResponse<String>> sent = CLIENT.sendAsync(to("/hello"), HttpResponse.BodyHandlers.ofString());
+              System.out.println("sent");
+              System.out.println(sent.thenApply(HttpResponse::body).thenApply(body -> body.toUpperCase()).join());
+              System.out.println(sent.isDone() + " " + sent.get().statusCode() + " " + sent.join().uri().getPath());
+              CompletableFuture<String> slow = text("/slow");
+              CompletableFuture<String> missing = text("/status/404");
+              System.out.println(slow.thenCombine(missing, (one, other) -> one + " + " + other).get());
+              List<CompletableFuture<String>> all = new ArrayList<>();
+              for (int i = 0; i < 5; i++) {
+                  all.add(text("/query?n=" + i));
+              }
+              CompletableFuture.allOf(all.toArray(new CompletableFuture[0])).join();
+              StringBuilder joined = new StringBuilder();
+              for (CompletableFuture<String> one : all) {
+                  joined.append(one.join()).append(' ');
+              }
+              System.out.println(joined.toString().trim());
+              HttpClient following = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build();
+              System.out.println(following.sendAsync(to("/redirect"), HttpResponse.BodyHandlers.ofString())
+                  .thenApply(response -> response.statusCode() + " " + response.body() + " " + response.previousResponse().isPresent())
+                  .join());
+          }
+
+          static void failures() throws InterruptedException {
+              System.out.println("== a-failure-completes-the-future");
+              HttpRequest nowhere = HttpRequest.newBuilder(URI.create("http://127.0.0.1:1/x")).build();
+              try {
+                  CLIENT.sendAsync(nowhere, HttpResponse.BodyHandlers.ofString()).join();
+              }
+              catch (CompletionException e) {
+                  System.out.println(e + " / " + e.getCause());
+              }
+              try {
+                  CLIENT.sendAsync(nowhere, HttpResponse.BodyHandlers.ofString()).get();
+              }
+              catch (ExecutionException e) {
+                  System.out.println(e + " / " + e.getCause());
+              }
+              System.out.println(CLIENT.sendAsync(nowhere, HttpResponse.BodyHandlers.ofString())
+                  .handle((response, thrown) -> response + " " + (thrown == null ? null : thrown.getClass().getName()))
+                  .join());
+          }
+
+          static void overlapping() throws Exception {
+              System.out.println("== a-request-is-on-its-way-when-send-async-returns");
+              // the reply to the first ends once the second has arrived
+              CompletableFuture<HttpResponse<String>> held = CLIENT.sendAsync(to("/held?java-@LEG@"),
+                      HttpResponse.BodyHandlers.ofString());
+              System.out.println(CLIENT.send(to("/release?java-@LEG@"), HttpResponse.BodyHandlers.ofString()).body());
+              System.out.print(held.get().body());
+          }
+
+          static void threads() throws InterruptedException {
+              System.out.println("== a-thread-sends-and-waits-for-its-reply");
+              String[] answers = new String[3];
+              Thread[] senders = new Thread[3];
+              CountDownLatch started = new CountDownLatch(3);
+              for (int i = 0; i < 3; i++) {
+                  int n = i;
+                  senders[i] = new Thread(() -> {
+                      started.countDown();
+                      try {
+                          answers[n] = CLIENT.send(to("/query?thread=" + n), HttpResponse.BodyHandlers.ofString()).body();
+                      }
+                      catch (IOException | InterruptedException e) {
+                          answers[n] = String.valueOf(e);
+                      }
+                  });
+                  senders[i].start();
+              }
+              started.await();
+              for (Thread sender : senders) {
+                  sender.join();
+              }
+              System.out.println(String.join(" ", answers));
+              List<String> ran = new ArrayList<>();
+              Executor inline = task -> {
+                  ran.add("task");
+                  task.run();
+              };
+              HttpClient own = HttpClient.newBuilder().executor(inline).build();
+              System.out.println(own.executor().isPresent() + " "
+                      + own.sendAsync(to("/hello"), HttpResponse.BodyHandlers.ofString()).thenApply(HttpResponse::body).join() + " "
+                      + !ran.isEmpty());
+          }
+
+          public static void main(String[] args) throws Exception {
+              futures();
+              failures();
+              overlapping();
+              threads();
+          }
+      }
+    expected: |
+      == send-async-answers-a-future-of-the-reply
+      sent
+      HELLO-FROM-FETCH
+      true 200 /hello
+      200 [slow] + 404 [missing]
+      200 [n=0] 200 [n=1] 200 [n=2] 200 [n=3] 200 [n=4]
+      200 hello-from-fetch true
+      == a-failure-completes-the-future
+      java.util.concurrent.CompletionException: java.net.ConnectException / java.net.ConnectException
+      java.util.concurrent.ExecutionException: java.net.ConnectException / java.net.ConnectException
+      null java.util.concurrent.CompletionException
+      == a-request-is-on-its-way-when-send-async-returns
+      released
+      first line
+      released
+      == a-thread-sends-and-waits-for-its-reply
+      thread=0 thread=1 thread=2
+      true hello-from-fetch true
+  # what the client refuses by name (doc/*/java/deviations.md)
+  - name: subset
+    file: Subset.java
+    skip:
+      jdk: "what the subset's client refuses by name, a JDK's sends or reads"
+    source: |
+      import java.net.URI;
+      import java.net.http.HttpClient;
+      import java.net.http.HttpRequest;
+      import java.net.http.HttpResponse;
+      import java.util.concurrent.CompletableFuture;
+      import java.util.concurrent.CompletionStage;
+
+      public class Subset {
+
+          static final String ORIGIN = "@ORIGIN@";
+
+          static final HttpClient CLIENT = HttpClient.newHttpClient();
+
+          static HttpRequest.Builder to(String path) {
+              return HttpRequest.newBuilder(URI.create(ORIGIN + path));
+          }
+
+          static void refused(HttpRequest request, HttpResponse.BodyHandler<String> handler) throws Exception {
+              try {
+                  System.out.println(CLIENT.send(request, handler).body());
+              }
+              catch (UnsupportedOperationException e) {
+                  System.out.println(e.getMessage());
+              }
+          }
+
+          public static void main(String[] args) throws Exception {
+              System.out.println("== what-the-subsets-client-refuses-by-name");
+              HttpResponse.BodyHandler<String> text = HttpResponse.BodyHandlers.ofString();
+              refused(to("/echo").method("TRACE", HttpRequest.BodyPublishers.noBody()).build(), text);
+              refused(to("/echo").method("get", HttpRequest.BodyPublishers.noBody()).build(), text);
+              refused(to("/echo").expectContinue(true).POST(HttpRequest.BodyPublishers.ofString("x")).build(), text);
+              refused(to("/echo").POST(() -> 1L).build(), text);
+              refused(to("/hello").build(), info -> new HttpResponse.BodySubscriber<String>() {
+                  public CompletionStage<String> getBody() {
+                      return CompletableFuture.completedFuture("mine");
+                  }
+              });
+              try {
+                  CLIENT.sendAsync(to("/echo").method("TRACE", HttpRequest.BodyPublishers.noBody()).build(), text);
+              }
+              catch (UnsupportedOperationException e) {
+                  System.out.println("refused where it is sent");
+              }
+              // a reply's version is not told: HTTP_1_1 whatever the transport spoke
+              System.out.println(CLIENT.send(to("/hello").build(), text).version());
+          }
+      }
+    expected: |
+      == what-the-subsets-client-refuses-by-name
+      the method TRACE is not supported by the experimental Java subset: a request is sent as GET, HEAD, POST, PUT, DELETE, OPTIONS or PATCH
+      the method get is not supported by the experimental Java subset: a request is sent as GET, HEAD, POST, PUT, DELETE, OPTIONS or PATCH
+      expectContinue(true) is not supported by the experimental Java subset
+      a BodyPublisher of a program's own class is not supported by the experimental Java subset: HttpRequest.BodyPublishers makes the ones a client sends
+      a BodySubscriber of a program's own class is not supported by the experimental Java subset: HttpResponse.BodySubscribers makes the ones a client reads
+      refused where it is sent
+      HTTP_1_1

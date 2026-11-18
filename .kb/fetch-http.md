@@ -126,6 +126,16 @@ rlhttp.readResponseBody(reply, ptr, cap) -> i32  ; 0 = end, -1 = failed mid-body
   await. Options (the method) are validated at the call. `WasmP1FutureRuntimeBuilder` emits the
   deferred arm only when the program names `%future-deferred` (`usesDeferredFutures`), so every
   other module's await runtime is byte-identical (`NativeFetchTest`).
+- **Where the state machines run** (a Preview 1 module naming `%future-new`: a Java program
+  that starts threads, `.kb/async-await.md`) the same primitive is a `TYPE_FUTURE` in
+  `WasmFutureRuntimeBuilder.STATE_DEFERRED` (4, since 2026-11-18): its value field is the
+  thunk, `_future_poll` calls it through the arity-0 dispatch and resolves what it answers,
+  so an await or a `%future-force` of it never suspends its frame and blocks the one stack
+  in `rlhttp.head`, as the degenerate tier does. Until then such a module was refused by name
+  (`%FUTURE-DEFERRED belongs to the degenerate (non-async) tier`), so a Java program with
+  threads and a request did not compile for `--native`. The arm is in the poll only of a
+  module naming the primitive (`usesAsyncDeferredFutures`). `%future-settled-p` answers `t`
+  of it. Pinned by `NativeFetchTest` and the `async` program of `java-http-spec.yaml`.
 - **The reply is an `externref` handle**, not the reactor's one cursor: several replies drain
   independently, and nothing is superseded. Its host data owns the reply; when the collector finds
   the handle dead (the future and the body stream gone) the runner shuts the socket down under the
@@ -195,6 +205,13 @@ Clojure's `rontolisp.http-client`, every request of which is the program's own f
 (`.kb/clojure-frontend.md`, "HTTP client"), and clojure.java.io's reads of an `http:` URL, which
 go through the same call (`.kb/clojure-frontend.md`, "clojure.java.io"). Its one skip is the `--native` leg of a timed
 `deref` of a pending reply: a Preview 1 async body runs to its end at the call.
+
+And a third, `java-http-spec.yaml` (`#javaHttpClient`, 2026-11-18): the Java subset's
+`java.net.http` client, whose every request is the lowered program's own fetch call
+(`.kb/java-frontend.md`, "java.net.http"). Three programs, each a `.java` file per leg, its
+output cut into cases at its `== name` lines; the JDK running the test is a fifth leg, the
+oracle (`java Client.java` against the same origin). One program starts threads
+(`sendAsync`), so its wasm legs run the state machines.
 
 A case a leg skips names the divergence; no case skips a leg since 2026-09-26. What the corpus
 does not pin (it looks fields up by name), measured 2026-09-25:

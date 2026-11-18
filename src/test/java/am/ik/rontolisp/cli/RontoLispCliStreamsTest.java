@@ -853,6 +853,25 @@ class RontoLispCliStreamsTest {
 		assertThat(refused[2].trim()).isEqualTo(expected);
 		assertThat(runReporting(broken.toString(), "-o", this.tempDir.resolve("Broken.class").toString())[2].trim())
 			.isEqualTo(expected);
+		// a program that sends a request fetches: a Preview 1 module, which no host
+		// answers HTTP for, is refused where it is compiled, by the client's name
+		Path client = this.tempDir.resolve("Client.java");
+		Files.writeString(client,
+				"""
+						import java.net.URI;
+						import java.net.http.*;
+
+						public class Client {
+						    public static void main(String[] args) throws Exception {
+						        HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost/")).build();
+						        System.out.println(HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString()).body());
+						    }
+						}
+						""");
+		String[] unanswered = runReporting(client.toString(), "-o", this.tempDir.resolve("client.wasm").toString());
+		assertThat(unanswered[0]).isEqualTo("1");
+		assertThat(unanswered[2]).contains("the Java subset's java.net.http client")
+			.contains("is only available in WASM component mode (--component) or a --native executable");
 		// a session lowers every buffer with the declarations of the earlier ones: a
 		// subclass, a body declared later reaches an earlier caller; a class's static
 		// state lives on; a value shows by its static type; what a step left uncaught

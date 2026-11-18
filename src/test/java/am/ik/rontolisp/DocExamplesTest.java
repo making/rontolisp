@@ -166,14 +166,14 @@ class DocExamplesTest {
 	/**
 	 * If an example uses {@code rontolisp:fetch} -- or Clojure's
 	 * {@code rontolisp.http-client} and {@code rontolisp.http-urls}, which go through it;
-	 * a Clojure example reading a URL it spells says so in a comment naming fetch --
-	 * rewrites the origin of its http(s) URL string literals to the local test server
-	 * (keeping the path) so evaluation stays offline; otherwise returns the source
-	 * unchanged.
+	 * a Clojure example reading a URL it spells says so in a comment naming fetch; or the
+	 * Java subset's {@code java.net.http} client, which goes through it too -- rewrites
+	 * the origin of its http(s) URL string literals to the local test server (keeping the
+	 * path) so evaluation stays offline; otherwise returns the source unchanged.
 	 */
 	private static String rewriteFetchUrls(String source) {
 		if (!source.contains("rontolisp:fetch") && !source.contains("rontolisp.http-client")
-				&& !source.contains("rontolisp.http-urls")) {
+				&& !source.contains("rontolisp.http-urls") && !source.contains("java.net.http")) {
 			return source;
 		}
 		return source.replaceAll("(?<=\")https?://[^\"/]*", Matcher.quoteReplacement(localFetchOrigin()));
@@ -319,7 +319,8 @@ class DocExamplesTest {
 					actual = run.stdout();
 				}
 				else {
-					actual = runProgram(language, block.content(), blockStdin, markdown, files);
+					actual = runProgram(language, java ? rewriteFetchUrls(block.content()) : block.content(),
+							blockStdin, markdown, files);
 				}
 				Block expected = (i + 1 < blocks.size()) ? blocks.get(i + 1) : null;
 				if (expected != null && expected.isExpectedOutput()) {
@@ -595,7 +596,7 @@ class DocExamplesTest {
 				}
 				else if (info.equals("starlark") || (info.equals("java") && isJavaSubsetPage(page.toString()))) {
 					pendingStdout = runProgram(info.equals("java") ? SourceLanguage.JAVA : SourceLanguage.STARLARK,
-							String.join("\n", content), stdin, page.toString(), files);
+							rewriteFetchUrls(String.join("\n", content)), stdin, page.toString(), files);
 				}
 				else if (isOutputInfo(info) && pendingStdout != null) {
 					content = pendingStdout.isEmpty() ? List.of()

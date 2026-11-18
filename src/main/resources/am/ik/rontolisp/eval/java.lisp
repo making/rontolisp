@@ -2960,3 +2960,68 @@
               (rontolisp::%java-unpark (car ticket) ticket nil))
             (if (not all) (setq going nil)))
           t))))
+
+;; --- java.net.http ----------------------------------------------------------------
+
+;; The client is Java source (rontolisp.internal.Http) over rontolisp:fetch, which the
+;; lowered program itself calls, so every transport fetch has carries it and none is
+;; new (.kb/fetch-http.md). An exchange is a vector holding the future fetch answered,
+;; or the text of what it refused at the call: the future is never a value of the
+;; program, since a function a thread is suspended in answers through an await, which
+;; would wait for a future handed back bare.
+
+;; The request fields as fetch takes them, from an array of names and values in turn.
+(defun rontolisp::%java-http-fields (flat)
+  (let ((fields nil) (i (- (length flat) 2)))
+    (while (>= i 0)
+      (setq fields (cons (cons (aref flat i) (aref flat (+ i 1))) fields))
+      (setq i (- i 2)))
+    fields))
+
+;; The next chunk of a reply's body, nil at its end: a read whose chunk is in flight
+;; settles to the future of it, which is waited for in turn.
+(defun rontolisp::%java-http-chunk (body)
+  (let ((chunk (rontolisp::%future-force (rontolisp:stream-read body))))
+    (while (rontolisp:futurep chunk)
+      (setq chunk (rontolisp::%future-force chunk)))
+    chunk))
+
+;; The reply of an exchange once all of it is in, #(status fields octets) -- the
+;; fields an array of names and values in turn, as fetch lists them --, or the text of
+;; what failed: the request refused at the call, the transport, the transfer.
+(defun rontolisp::%java-http-reply (exchange)
+  (if (stringp exchange)
+      exchange
+      (handler-case (let* ((reply (rontolisp::%future-force (aref exchange 0)))
+                           (body (getf reply :body))
+                           (chunks nil)
+                           (total 0)
+                           (reading t))
+                      (while reading
+                        (let ((chunk (rontolisp::%java-http-chunk body)))
+                          (if (null chunk)
+                              (setq reading nil)
+                              (progn
+                                (setq total (+ total (length chunk)))
+                                (setq chunks (cons chunk chunks))))))
+                      (let ((flat nil))
+                        (dolist (field (getf reply :headers))
+                          (setq flat
+                                (cons (cdr field) (cons (car field) flat))))
+                        (vector (getf reply :status)
+                                (coerce (reverse flat) 'simple-vector)
+                                (if chunks
+                                    (rontolisp::%octets-join (reverse chunks)
+                                                             total)
+                                    (make-array 0
+                                     :element-type '(unsigned-byte 8))))))
+        (error (condition) (princ-to-string condition)))))
+
+;; A thread of a program that starts threads on one stack: the threads that can go on
+;; take a turn before the reply is waited for, and none goes on while it is.
+#+rontolisp-wasm
+(rontolisp:async-defun rontolisp::%java-suspending-http-reply (exchange)
+  (if (rontolisp::%java-thread-others)
+      (rontolisp:await
+       (rontolisp::%java-thread-queued (rontolisp::%java-self))))
+  (rontolisp::%java-http-reply exchange))

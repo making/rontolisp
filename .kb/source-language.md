@@ -159,7 +159,7 @@ The front ends' run-time libraries (`scheme.lisp`, `clojure.lisp`, and since 202
 `starlark.lisp`, whose gate is the member prefix `%STARLARK-` and the one public name
 `rontolisp:starlark-call`, and since 2026-11-17 `java.lisp`, gate `%JAVA-`) and the
 regular-expression engine two of them share (`regex.lisp` with `regex-unicode.lisp`, gate
-`%REGEX-`, since 2026-11-18, `.kb/regex-engine.md`) are Common Lisp loaded on demand, and the question "is this name one of yours" is asked about names of
+`%REGEX-`, since 2026-11-18, `.kb/regex-engine.md`; and `uri.lisp`, gate `%URI-`, since 2026-11-18, asked right after it) are Common Lisp loaded on demand, and the question "is this name one of yours" is asked about names of
 EVERY program:
 
 - The interpreter: `LispEvaluator.resolveFunction`, for a name the global environment

@@ -64,7 +64,9 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * lines leaves the other cases' output where it is. The second corpus,
  * {@code clojure-http-spec.yaml}, is the Clojure client ({@code rontolisp.http-client})
  * and {@code clojure.java.io}'s reads of an {@code http:} URL over the same origin and
- * legs, one {@code .clj} program per leg.
+ * legs, one {@code .clj} program per leg. The third, {@code java-http-spec.yaml}, is the
+ * Java subset's {@code java.net.http} client: each of its programs a {@code .java} file
+ * per leg, with the JDK running the test as one leg more, the oracle.
  *
  * <p>
  * Every leg goes through the command line -- this JVM's {@link RontoLispCli}, or the
@@ -81,6 +83,14 @@ class FetchSpecE2eTest {
 	private static final String SPEC_RESOURCE = "/fetch-spec.yaml";
 
 	private static final String CLOJURE_SPEC_RESOURCE = "/clojure-http-spec.yaml";
+
+	private static final String JAVA_SPEC_RESOURCE = "/java-http-spec.yaml";
+
+	/** Starts the line a Java program prints ahead of each of its cases. */
+	private static final String JAVA_CASE = "== ";
+
+	/** The key of the leg a Java program runs under the JDK running the test. */
+	private static final String JDK = "jdk";
 
 	/**
 	 * The request fields {@code /headers} leaves out: what the transports add on their
@@ -171,6 +181,16 @@ class FetchSpecE2eTest {
 
 	}
 
+	/**
+	 * One Java program: its file, what it prints under a JDK, and the legs it must not
+	 * run on with why.
+	 */
+	record Program(String name, String file, String source, String expected, @Nullable Map<String, String> skip) {
+	}
+
+	record Programs(List<Program> programs) {
+	}
+
 	@TempDir
 	static Path workDir;
 
@@ -226,6 +246,11 @@ class FetchSpecE2eTest {
 		server.createContext("/utf8", exchange -> {
 			exchange.getResponseHeaders().add("Content-Type", "text/plain; charset=utf-8");
 			answer(exchange, 200, "héllo, 世界");
+		});
+		// Text in a charset the reply names, which is not UTF-8.
+		server.createContext("/latin1", exchange -> {
+			exchange.getResponseHeaders().add("Content-Type", "text/plain; charset=ISO-8859-1");
+			answer(exchange, 200, "héllo".getBytes(StandardCharsets.ISO_8859_1));
 		});
 		server.createContext("/big", exchange -> {
 			byte[] body = new byte[BIG];
@@ -456,6 +481,93 @@ class FetchSpecE2eTest {
 		return corpus(CLOJURE_SPEC_RESOURCE, "http-spec.clj");
 	}
 
+	/**
+	 * The Java subset's {@code java.net.http} client over the same origin and legs
+	 * ({@code java-http-spec.yaml}): every request it makes is the program's own
+	 * {@code rontolisp:fetch} call, and the JDK running the test is the oracle, a leg of
+	 * its own.
+	 */
+	@TestFactory
+	Stream<DynamicNode> javaHttpClient() throws Exception {
+		Programs spec = load(JAVA_SPEC_RESOURCE, Programs.class);
+		String originUrl = "http://127.0.0.1:" + Objects.requireNonNull(origin).getAddress().getPort();
+		List<String> legs = new ArrayList<>(List.of(JDK));
+		for (Leg leg : Leg.values()) {
+			legs.add(leg.key());
+		}
+		List<DynamicNode> programs = new ArrayList<>();
+		// One program's legs run at once, the programs one after the other.
+		for (Program program : spec.programs()) {
+			Map<String, Callable<String>> runs = new java.util.LinkedHashMap<>();
+			for (String leg : legs) {
+				if (program.skip() == null || !program.skip().containsKey(leg)) {
+					String source = program.source().replace(ORIGIN_MARK, originUrl).replace(LEG_MARK, leg);
+					runs.put(leg, started(program.name() + "-" + leg, () -> runJava(leg, source, program.file())));
+				}
+			}
+			List<DynamicNode> ran = new ArrayList<>();
+			runs.forEach((leg, run) -> ran.add(javaLeg(leg, program, run)));
+			programs.add(dynamicContainer(program.name(), ran.stream()));
+		}
+		return programs.stream();
+	}
+
+	private static String runJava(String leg, String source, String fileName) throws Exception {
+		if (!leg.equals(JDK)) {
+			return run(Leg.valueOf(leg.toUpperCase(Locale.ROOT)), source, fileName);
+		}
+		String stem = fileName.substring(0, fileName.lastIndexOf('.'));
+		Path dir = Files.createDirectories(workDir.resolve(stem + "-" + leg));
+		Path file = dir.resolve(fileName);
+		Files.writeString(file, source, StandardCharsets.UTF_8);
+		return exec(dir, List.of(Path.of(System.getProperty("java.home"), "bin", "java").toString(), file.toString()));
+	}
+
+	// What a Java program printed, cut at the lines naming its cases: each case's lines
+	// by its name, what came ahead of the first under the empty name.
+	private static Map<String, List<String>> javaCases(String output) {
+		Map<String, List<String>> cases = new java.util.LinkedHashMap<>();
+		List<String> current = new ArrayList<>();
+		String name = "";
+		for (String line : lines(output)) {
+			if (line.startsWith(JAVA_CASE)) {
+				cases.put(name, current);
+				name = line.substring(JAVA_CASE.length());
+				current = new ArrayList<>();
+			}
+			else {
+				current.add(line);
+			}
+		}
+		cases.put(name, current);
+		return cases;
+	}
+
+	private static DynamicContainer javaLeg(String leg, Program program, Callable<String> run) {
+		Map<String, List<String>> printed;
+		try {
+			printed = javaCases(run.call());
+		}
+		catch (Skipped skipped) {
+			return dynamicContainer(leg,
+					Stream.of(dynamicTest("(skipped)", () -> abort(Objects.requireNonNull(skipped.getMessage())))));
+		}
+		catch (Exception | StackOverflowError ex) {
+			return dynamicContainer(leg, Stream
+				.of(dynamicTest("(execution failed)", () -> fail(program.name() + " on " + leg + ": " + ex, ex))));
+		}
+		Map<String, List<String>> expected = javaCases(program.expected());
+		List<DynamicTest> tests = new ArrayList<>();
+		expected.forEach((name,
+				lines) -> tests.add(dynamicTest(name.isEmpty() ? "before-the-first-case" : name,
+						() -> assertThat(printed.get(name)).as("case '%s' of %s on %s", name, program.name(), leg)
+							.isEqualTo(lines))));
+		tests.add(dynamicTest("the-cases-it-printed",
+				() -> assertThat(printed.keySet()).as("the cases %s printed on %s", program.name(), leg)
+					.containsExactlyElementsOf(expected.keySet())));
+		return dynamicContainer(leg, tests.stream());
+	}
+
 	private static Stream<DynamicNode> corpus(String resource, String fileName) throws Exception {
 		Spec spec = loadSpec(resource);
 		String originUrl = "http://127.0.0.1:" + Objects.requireNonNull(origin).getAddress().getPort();
@@ -465,7 +577,7 @@ class FetchSpecE2eTest {
 		List<Callable<String>> runs = new ArrayList<>();
 		for (Leg leg : Leg.values()) {
 			String program = program(spec.on(leg), originUrl, leg, fileName.endsWith(".clj"));
-			runs.add(started(leg, () -> run(leg, program, fileName)));
+			runs.add(started(leg.key(), () -> run(leg, program, fileName)));
 		}
 		List<DynamicNode> legs = new ArrayList<>();
 		for (Leg leg : Leg.values()) {
@@ -662,9 +774,9 @@ class FetchSpecE2eTest {
 	}
 
 	// Starts run on a thread of its own and answers its result, rethrowing what it threw.
-	private static Callable<String> started(Leg leg, Callable<String> run) {
+	private static Callable<String> started(String leg, Callable<String> run) {
 		FutureTask<String> task = new FutureTask<>(run);
-		Thread.ofPlatform().name("fetch-spec-" + leg.key()).start(task);
+		Thread.ofPlatform().name("fetch-spec-" + leg).start(task);
 		return () -> {
 			try {
 				return task.get();
@@ -682,11 +794,15 @@ class FetchSpecE2eTest {
 	}
 
 	private static Spec loadSpec(String resource) throws IOException {
+		return load(resource, Spec.class);
+	}
+
+	private static <T> T load(String resource, Class<T> type) throws IOException {
 		try (InputStream in = FetchSpecE2eTest.class.getResourceAsStream(resource)) {
 			assertThat(in).as("test resource %s", resource).isNotNull();
 			return YAMLMapper.builder()
 				.build()
-				.readValue(YamlResources.safeReader(new String(in.readAllBytes(), StandardCharsets.UTF_8)), Spec.class);
+				.readValue(YamlResources.safeReader(new String(in.readAllBytes(), StandardCharsets.UTF_8)), type);
 		}
 	}
 

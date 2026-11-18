@@ -33,8 +33,11 @@ a class, and the UTF-16 charsets paid for only where named: j98 (2026-11-18); ch
 exceptions, the catch clause nothing reaches, and an exit a cleanup takes on the JVM and
 wasm: j99 (2026-11-18); a stamped lock, a phaser, a transfer queue, the completers and
 accumulators, a pool's hooks and sizes, a structure named by its class's binary name, a
-field hiding one above it and `super.x`: k01 (2026-11-18); what comes after is
-`.todo/k05`, `k06`, `k07` and `k08` (what j98, j99, k00 and k01 left).
+field hiding one above it and `super.x`: k01 (2026-11-18); the HTTP client
+(`java.net.http` over the program's own `rontolisp:fetch`) and `java.net.URI`: k03
+(2026-11-18); what comes after is
+`.todo/k05`, `k06`, `k07` and `k08` (what j98, j99, k00, k01 and k03 left) and the HTTP
+server, `.todo/k04`.
 
 ## Where it sits
 
@@ -1003,6 +1006,110 @@ holds none of it.** No files: `File`, `FileReader`, `java.nio.file` stay refused
   244,022 / 260,052, 0.43 / 0.66 s against 0.50 / 0.42 s for one `StringBuilder` printed
   (76,122 / 108,409). The corpus case of the byte streams alone is 312,953 B of wasm, the
   one of the print streams and readers 460,101 B.
+
+## java.net.http (2026-11-18, k03)
+
+**Invariant: a request is the lowered program's own `rontolisp:fetch` call, so every
+transport fetch has carries the client and none is new; the API is the JDK's, and the
+host's future is never a value of the program.** No class of a package of our own was
+needed: what a transport cannot give has no member (refused by name as any missing
+member) or is refused where the request is sent (`deviations.md`, "The HTTP client").
+
+- **Where it sits.** `java.net.http.HttpClient` / `HttpRequest` (abstract classes),
+  `HttpResponse` (an interface), `HttpHeaders`, `java.net.URI`, `URISyntaxException`,
+  `SocketException`, `ConnectException` are Java source; the one client, its builders,
+  the request, the response, the publisher (`Body`) and the subscriber (`Reader`) are
+  nested classes of `rontolisp.internal.Http`, whose seven `native` members are the
+  transport (`JavaIntrinsics.NATIVES`). `java.net` joined `LIBRARY_PACKAGES` (it is
+  `java.base`'s); `import module java.net.http` brings the one package of that module.
+- **`start0(url, method, fields, body)` is lowered to
+  `(handler-case (vector (rontolisp:fetch url (list :method m :headers (%java-http-fields fs) :body b))) (error (c) (princ-to-string c)))`**
+  in the library method that calls it, so the forms the seam hands on NAME fetch:
+  `HostFetchLibrary.processForRunner` and `HttpLibrary` splice their transports for it,
+  and a plain Preview 1 `.wasm` is refused by `WasmFetchCompiler.reject` (whose words
+  name the client since k03). A program reaching no member of the client holds no fetch
+  (`lowerReached`). `reply0` is `%java-http-reply` (`java.lisp`, "java.net.http"): it
+  forces the future, drains `:body` chunk by chunk (a `--component` read of a chunk in
+  flight settles to a future, forced in turn, as `%clojure-io-next-chunk`), joins with
+  the prelude's `%octets-join`, and answers `#(status fields octets)` -- the fields a
+  flat vector of names and values, fetch's sorted lowercase list -- or the TEXT of what
+  failed (the call's refusal, the transport, a transfer cut short). The source throws
+  from the text (`Http.failure`), as `Pattern` throws the engine's refusal: `RAISED`
+  did not grow.
+- **The future travels in a vector (measured).** Handed back bare, it was awaited: a
+  resumable function answers through an `await`, which flattens a future it is handed.
+  `started()` became resumable in a program with a `BodyPublisher` and a `sendAsync`
+  (`Body.octets()` calls a `Supplier` field, which reaches the resumable supplier
+  `sendAsync` writes), its caller then waited for the host's future, and the scheduler
+  -- which settles only its own -- ended the program with `every thread .. waits`. On
+  the component only: `--native` blocks in the thunk. Pinned by the corpus's `subset`
+  program on the component leg.
+- **`send` waits in `reply0`; `sendAsync` sends at the call and hands the rest to
+  `CompletableFuture.supplyAsync`** (the client's `executor`, else the common pool: a
+  JDK 25 ran a dependent on `ForkJoinPool.commonPool-worker-1`, measured), so a program
+  calling it starts threads and a wasm target lowers it resumable. Several requests are
+  in flight at once on every transport (the corpus's `/held` + `/release` case: the
+  reply to the first ends once the second arrived).
+- **The wait for a reply is a suspension that gives one turn**
+  (`JavaResumable`: `%java-http-reply` -> `%java-suspending-http-reply`, "general" as a
+  sleep is): the threads that can go on take a turn, then the thread waits for the host
+  and no other thread runs -- a thread asleep included. A wait the scheduler shares with
+  its timed threads needs a host future that can be asked without waiting, which neither
+  wasm target has: a `--native` fetch's future is deferred (it settles in the await),
+  the component settles a host future only while something blocks on its scheduler
+  (`.kb/async-await.md`, "`%future-settled-p`"), and `%future-race` is `sockets.lisp`'s.
+  Yielding while others can go on was rejected: a thread spinning on a flag the reply's
+  dependent sets never lets the reply in. `.todo/k07`.
+- **What the backend took: a deferred future where the state machines run.** A Java
+  program that starts threads names `%future-new`, which turns `asyncMode` on in a
+  Preview 1 module; the runner's fetch answers `%future-deferred`, which that mode
+  refused by name ("belongs to the degenerate tier"): threads and HTTP did not compile
+  for `--native`. Now a `TYPE_FUTURE` in `STATE_DEFERRED` (4) holds the thunk and
+  `_future_poll` calls it through the arity-0 dispatch and resolves its answer
+  ([async-await.md](async-await.md), "Preview-1 wasm-GC, a module naming ..").
+- **Redirects**: the policy is Java (`Client.redirected`: `NORMAL` and `ALWAYS`, the
+  statuses, four hops, a 303 and a POST's 301/302 as a GET, the credentials left behind
+  off the origin -- what j95 measured for the Clojure client, asked again of JDK 25 for
+  `previousResponse()`, the final `request()` and a PUT's 302, which keeps its method
+  and body); the target is `URI.resolve`, which is `%uri-resolve`.
+- **`java.net.URI` is cut and checked by `eval/uri.lisp`** (`eval/UriLibrary`, gate
+  `%URI-`, spliced right outside the front ends' libraries beside `RegexLibrary`): the
+  Clojure client's `split` / `remove-dots` / `resolve` moved there unchanged but for a
+  base with no scheme or authority (`a/b` + `c` is `a/c`), and its scanner as
+  `%uri-refusal`, answering `(text . index)` where it raised; `%clojure-http-url` keeps
+  its own type and scheme refusals over it. Added from a JDK 25's answers (a grid of 76
+  references and 18 refusals): an opaque part (`Illegal character in opaque part`,
+  `Expected scheme-specific part`), an address in brackets (closing bracket, its
+  characters; not its syntax). What an authority's host is -- an IPv4 address of four
+  numbers, or labels the last starting with a letter; else no host, no user, no port --
+  is `URI.server` / `named` in Java, measured on the same grid.
+- **Measured against JDK 25** (the probes are the corpus's cases): the builders'
+  refusals and their order (name, value, token, restricted, value's characters; the
+  characters a name, a method and a value take, each of 0..0x17F asked), the trimmed
+  values, `HttpHeaders`' and `HttpRequest`'s `hashCode` formulas and `toString`s, a
+  blocking `send`'s exception holding the failure as its cause.
+- **A transport's failure is an `IOException` with its text**, a refused connection a
+  `ConnectException` by the three texts the transports give (`java.net.ConnectException`,
+  `:CONNECTION-REFUSED`, `cannot connect`).
+- **`BodyHandlers.ofString()` reads three charsets off `Content-Type`** (UTF-8,
+  ISO-8859-1, US-ASCII) and UTF-8 otherwise: a lookup by a computed name would put the
+  UTF-16 codec into every program reading a text ("java.io", j98's measurement).
+- **Sizes** (2026-11-18, wasmtime 49.0.0; class / component bytes): one blocking GET
+  printed 470,670 / 476,954; the corpus's `client` program 580,543 / 559,890; its
+  `async` program (threads, resumable) 623,011 / 673,302. `Hello` and a counter under
+  four threads are byte-identical to before on both wasm targets.
+- **Pinned by** `FetchSpecE2eTest#javaHttpClient` (`java-http-spec.yaml`: three
+  programs, each under the JDK running the test -- the oracle -- and on the interpreter,
+  the JVM, `--native` and the component; `subset`, what the client refuses by name, has
+  no JDK leg), `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
+  (the fetch form, the suspension), `#theLibrarysSourceIsJavaAJdkCompiles` (with
+  `--limit-modules java.base`, so the package of another module is one of the patch),
+  `RontoLispCliStreamsTest#aJavaFileRunsCompilesAndIsRefusedWhereItCannot` (the Preview
+  1 refusal), `NativeFetchTest` (the deferred future beside `%future-new`), the
+  `doc/*/java/index.md` example (`DocExamplesTest` points its URLs at its local origin).
+- **Not made** (`.todo/k05`): timeouts (`java.time.Duration`, and fetch has none:
+  `.todo/148`), bodies as they arrive (`ofInputStream` reads a body already in,
+  `ofLines`, a program's own `BodySubscriber`), the `--host-fetch` reactor as a leg.
 
 ## Numbers (2026-11-17, j72)
 

@@ -415,6 +415,11 @@ void main() {
 | `Callable`、`Future`、`FutureTask`、`ThreadFactory` | `call`。制限時間の指定がある、またはない `get`、`isDone`、`cancel`、`isCancelled`、`state`、`resultNow`、`exceptionNow`。`run`、`toString`。`newThread` |
 | `CompletableFuture`、`CompletionStage` | エグゼキューターの指定がある、またはない `supplyAsync` と `runAsync`、`completedFuture`、`failedFuture`、`completedStage`、`failedStage`、`allOf`、`anyOf`。`thenApply`、`thenAccept`、`thenRun`、`thenCompose`、`handle`、`whenComplete`、`thenCombine`、`thenAcceptBoth`、`runAfterBoth`、`applyToEither`、`acceptEither`、`runAfterEither`、`exceptionally`、`exceptionallyCompose`（いずれも、エグゼキューターの指定がある、またはない `Async` 版があります）。`complete`、`completeExceptionally`、`completeAsync`、`obtrudeValue`、`obtrudeException`、`cancel`、`orTimeout`、`completeOnTimeout`、`delayedExecutor`、`copy`、`minimalCompletionStage`、`newIncompleteFuture`、`defaultExecutor`、`join`、制限時間の指定がある、またはない `get`、`getNow`、`isDone`、`isCancelled`、`isCompletedExceptionally`、`getNumberOfDependents`、`state`、`resultNow`、`exceptionNow`、`toString` |
 | `java.util.function` | `Function`、`BiFunction`、`UnaryOperator`、`BinaryOperator`、`Supplier`、`Consumer`、`BiConsumer`、`Predicate`、`BiPredicate`、`BooleanSupplier`。`Int`、`Long`、`Double` のそれぞれに `IntFunction`、`IntPredicate`、`IntUnaryOperator`、`IntBinaryOperator`、`IntSupplier`、`IntConsumer`、`ToIntFunction`、`ToIntBiFunction`、`ObjIntConsumer`。3 つの型の間の `IntToLongFunction`、`IntToDoubleFunction`、`LongToIntFunction`、`LongToDoubleFunction`、`DoubleToIntFunction`、`DoubleToLongFunction`。各インターフェースの抽象メソッドと `andThen`、`compose`、`and`、`or`、`negate`、`identity`、`not`、`isEqual` |
+| `URI`、`URISyntaxException` | `new URI(String)`、`URI.create`。`getScheme`、`getSchemeSpecificPart`、`getAuthority`、`getUserInfo`、`getHost`、`getPort`、`getPath`、`getQuery`、`getFragment` と、それぞれの `getRaw..`。`isAbsolute`、`isOpaque`、`URI` または文字列を取る `resolve`、`equals`、`hashCode`、`compareTo`、`toString`。`getInput`、`getReason`、`getIndex` |
+| `HttpClient` | `newHttpClient`。`newBuilder` と、そのビルダーの `version`、`followRedirects`、`executor`、`build`。`send`、`sendAsync`、`followRedirects`、`version`、`executor`、`close`、`shutdown`、`shutdownNow`、`isTerminated`。`HttpClient.Version`、`HttpClient.Redirect` |
+| `HttpRequest` | `URI` の指定がある、またはない `newBuilder` と、そのビルダーの `uri`、`header`、`headers`、`setHeader`、`GET`、`POST`、`PUT`、`DELETE`、`HEAD`、`method`、`version`、`expectContinue`、`copy`、`build`。`method`、`uri`、`headers`、`bodyPublisher`、`version`、`expectContinue`、`equals`、`hashCode`、`toString`。`Charset` の指定がある、またはない `BodyPublishers.ofString`、配列またはその範囲を取る `ofByteArray`、`ofInputStream`、`noBody`。`BodyPublisher.contentLength` |
+| `HttpResponse` | `statusCode`、`headers`、`body`、`uri`、`request`、`previousResponse`、`version`、`toString`。`Charset` の指定がある、またはない `BodyHandlers.ofString`、`ofByteArray`、`ofInputStream`、`discarding`、`replacing`。同じ名前の `BodySubscribers` と `mapping`。`ResponseInfo`（`statusCode`、`headers`、`version`）を見てサブスクライバーを選ぶ、プログラム独自の `BodyHandler` |
+| `HttpHeaders` | `firstValue`、`allValues`、`map`、`HttpHeaders.of`、`equals`、`hashCode`、`toString` |
 
 `String.format`、`formatted`、`printf` が受け付ける変換は `%d`、`%s`、`%S`、`%f`、`%e`、`%E`、
 `%x`、`%X`、`%o`、`%c`、`%b`、`%h`、`%H`、`%n`、`%%` です。フラグ `-`、`0`、`+`、空白、`,`、`(`、`#` と、
@@ -616,5 +621,52 @@ void main() {
 ```
 {one=3, seven=5, three=5} 8
 ```
+
+## HTTP
+
+`java.net.http` には HTTP クライアントがあります。`HttpClient` は `HttpRequest` を送り、
+`HttpResponse` を返します。レスポンスのボディは、ハンドラーが応答から作った値です。`send` は
+応答をすべて受け取ってから戻り、`sendAsync` は `CompletableFuture` を返します。すべての
+リクエストは [`rontolisp:fetch`](../guides/http-fetch.md) を通るため、fetch が使えるすべての
+トランスポートで同じソースが動きます。
+
+| ターゲット | ビルド | トランスポート |
+|---|---|---|
+| インタプリタ、JVM | `rontolisp App.java`、`-o App.class` | JDK の `HttpClient` |
+| WASM コンポーネント | `-o app.wasm --component`、`wasmtime run -S http=y` で実行 | `wasi:http` |
+| ネイティブ実行ファイル | `--native` | 実行ファイル自身のクライアント |
+
+素の Preview 1 モジュールにはトランスポートがありません。コンパイルはそのプログラムを拒否し、
+トランスポートを与えるフラグを示します。`java.net` は `java.base` に含まれます。コンパクト
+ソースファイルでは、`import module java.net.http;` でクライアントをインポートします。
+
+```java
+import module java.net.http;
+
+void main() throws IOException, InterruptedException {
+    HttpClient client = HttpClient.newHttpClient();
+    HttpRequest request = HttpRequest.newBuilder(URI.create("https://httpbin.ik.am/get"))
+        .header("Accept", "application/json")
+        .build();
+    HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+    IO.println(response.statusCode() + " " + response.headers().firstValue("content-type").orElse("none"));
+    HttpRequest missing = HttpRequest.newBuilder(URI.create("https://httpbin.ik.am/status/404")).build();
+    IO.println(client.sendAsync(missing, HttpResponse.BodyHandlers.discarding())
+        .thenApply(HttpResponse::statusCode)
+        .join());
+}
+```
+
+```
+200 application/json
+404
+```
+
+ビルダーは、JDK のビルダーが拒否するものを同じメッセージで拒否します。制限されたヘッダー、
+不正なヘッダー、絶対の `http` または `https` でない URI です。
+`followRedirects(Redirect.NORMAL)` と `ALWAYS` は、JDK のクライアントと同じ規則で 301、302、
+303、307、308 をたどり、途中の応答は `previousResponse()` で取り出せます。接続を拒否された
+場合は `ConnectException` になります。トランスポートが提供できないものと、用意していない
+メンバーは[言語との差異](deviations.md#the-http-client)にあります。
 
 言語と動作が異なる点と、拒否される構文は[言語との差異](deviations.md)にあります。

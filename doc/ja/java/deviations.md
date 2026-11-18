@@ -338,6 +338,45 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 **スレッドの番号は rontolisp 独自のものです。** `threadId()` と `toString()` に含まれる番号は、
 プログラムのスレッドを 1 から数えた値です。
 
+## HTTP クライアント
+
+**リクエストは、ターゲットのトランスポートが送ります**
+（[`rontolisp:fetch`](../guides/http-fetch.md)）。接続に関する設定はトランスポートが決める
+ため、対応するメンバーはありません。タイムアウト（`timeout`、`connectTimeout`）、プロキシ、
+認証、クッキーハンドラー、`SSLContext`、WebSocket です。`version(..)` で指定した値は保持され、
+問い合わせには答えますが、どのトランスポートもこの値を読みません。応答の `version()` は、
+実際に使われたバージョンにかかわらず `HTTP_1_1` です。`User-Agent` を指定していない
+リクエストには、rontolisp の `User-Agent` が付きます。
+
+**送れるメソッドは `GET`、`HEAD`、`POST`、`PUT`、`DELETE`、`OPTIONS`、`PATCH` です。** ビルダーが
+受け付けたそれ以外のメソッド（`TRACE`、`get`）と `expectContinue(true)` は、リクエストを送る
+時点で `UnsupportedOperationException` になります。
+
+**ボディは全体をまとめて読みます。** `send` が戻るのも、`sendAsync` のフューチャーが完了する
+のも、応答をすべて受け取ったあとです。そのため、`BodyHandlers.ofInputStream()` が返す
+ストリームは、受信済みのボディを読みます。`BodyPublishers.ofInputStream` のストリームは、
+リクエストを送る前に終わりまで読まれます。`BodyHandler` は `BodySubscribers` のサブスクライバー
+から 1 つを選ぶ関数として書き、リクエストのボディは `BodyPublishers` で作ります。プログラムが
+独自に実装したサブスクライバーとパブリッシャーは、使われた時点で
+`UnsupportedOperationException` になります。`BodyHandlers.ofString()` は、応答の `Content-Type`
+が示す文字セットが UTF-8、ISO-8859-1、US-ASCII のいずれかであればその文字セットで読み、
+それ以外は UTF-8 として読みます。`ofString(charset)` には、どの文字セットも指定できます。
+
+**失敗は、トランスポートのメッセージを持つ `IOException` です。** 接続を拒否された場合は、
+どのバックエンドでも `ConnectException` になります。JDK にはこのほかにも例外クラスがあります
+（`UnknownHostException`、`SSLHandshakeException`）。
+
+**`sendAsync` のフューチャーは、共通プールのスレッドで完了します。** クライアントに
+`executor` を指定した場合は、そのエグゼキューターのスレッドで完了します。`.wasm` では
+[スレッドが交代しながら実行される](#threads)ため、応答を待つスレッドは、まず実行できる
+ほかのスレッドに一度ずつ順番を譲ります。そのあとは、応答をすべて受け取るまで、スリープ中の
+スレッドを含めてほかのスレッドは動きません。
+
+**`URI`** は、JDK と同じ検査を同じメッセージで行います。ただし、角括弧で囲んだアドレスに
+ついては、使われている文字だけを検査します。`hashCode` の値は JDK と一致せず、`compareTo` は
+文字列としての順序で比較します。複数の部分を取るコンストラクタ、`normalize`、`relativize`、
+`toURL`、`toASCIIString` はありません。
+
 ## 拒否される構文
 
 どれも、構文の名前と位置を示すエラーになります。
@@ -355,3 +394,5 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 - [概要](index.md)の表にないライブラリのクラスとメンバー。ストリーム（`java.util.stream`）、
   `LinkedList`、`LinkedHashMap`、`TreeMap`、`Scanner`、ファイル（`File`、`FileReader`、
   `java.nio.file`）、`java.time`、`BigInteger`、`BigDecimal`、リフレクションなどです。
+  `java.net` では、`URI` と [HTTP クライアント](#the-http-client)以外のすべてが該当します。
+  `URL`、ソケット、`HttpURLConnection` です。

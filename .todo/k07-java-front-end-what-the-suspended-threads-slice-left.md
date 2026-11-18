@@ -54,6 +54,14 @@ left, the first two measured:
   down, a `Timer` never cancelled: a JDK waits for ever, here the status is 1); a
   `toString()` or `hashCode()` the run time calls that has to wait (`%java-now`); a Java
   file with no `main` loaded by a Common Lisp program that starts a thread.
+- **A thread waiting for a reply holds the turn** (k03, `.kb/java-frontend.md`,
+  "java.net.http"): `%java-suspending-http-reply` gives the threads that can go on one
+  turn and then blocks the stack in the host, so a thread asleep does not wake until the
+  reply is in, and a reply that waits for what a sleeping thread would send never comes.
+  The scheduler would have to wait for the soonest of its timed threads and the host's
+  futures together: a `--native` fetch's future is deferred (no way to ask it without
+  waiting: the runner has `rlhttp.head` alone), the component settles a host future only
+  while something blocks on its scheduler, and its `%future-race` is `sockets.lisp`'s.
 - **`getState()` never answers `BLOCKED`**: on wasm a thread waiting to enter a monitor is
   now known (the monitor's seventh slot); the host variant still cannot tell.
 

@@ -22266,51 +22266,12 @@
          (concatenate 'string "rontolisp.http-client: method " name
                       " is not supported (rontolisp:fetch sends GET, HEAD, POST, PUT, DELETE, OPTIONS and PATCH)")))))
 
-(defun rontolisp::%clojure-http-uri-char-p (c set)
-  "Whether java.net.URI takes C unescaped in a component whose punctuation is
-   the string SET: a letter, a digit, an unreserved mark, a character of SET,
-   or a character past ASCII that is no control and no space."
-  (let ((code (char-code c)))
-    (cond ((>= code 128)
-           (not
-            (or (<= code 160) (= code 5760) (and (>= code 8192) (<= code 8202))
-                (= code 8232) (= code 8233) (= code 8239) (= code 8287)
-                (= code 12288))))
-          ((or (and (>= code 48) (<= code 57)) (and (>= code 65) (<= code 90))
-               (and (>= code 97) (<= code 122)))
-           t)
-          (t (if (or (find c "_-!.~'()*") (find c set)) t nil)))))
-
 (defun rontolisp::%clojure-http-bad-url (what url i)
   "java.net.URI's refusal WHAT at index I of URL, the IllegalArgumentException
    URI/create throws."
   (rontolisp::%clojure-illegal-argument-exception
    (concatenate 'string what " at index " (rontolisp::%clojure-str-of i "" nil)
                 ": " url)))
-
-(defun rontolisp::%clojure-http-scan-url (url start end set what)
-  "Checks the characters START..END of URL against java.net.URI's rule for the
-   component WHAT, whose punctuation is SET: a % must start an escape pair."
-  (let ((i start))
-    (loop
-      (if (>= i end) (return end))
-      (let ((c (char url i)))
-        (cond ((char= c #\%)
-               (if (and (< (+ i 2) end)
-                        (rontolisp::%clojure-ring-hex (char url (+ i 1)))
-                        (rontolisp::%clojure-ring-hex (char url (+ i 2))))
-                   (setq i (+ i 3))
-                   (rontolisp::%clojure-http-bad-url "Malformed escape pair" url
-                                                     i)))
-              ((rontolisp::%clojure-http-uri-char-p c set) (setq i (+ i 1)))
-              (t
-               (rontolisp::%clojure-http-bad-url
-                (concatenate 'string "Illegal character in " what) url i)))))))
-
-(defun rontolisp::%clojure-http-first-of (url chars start)
-  "The index of the first character of URL from START that is one of CHARS,
-   the length of URL when there is none."
-  (or (position-if (lambda (c) (find c chars)) url :start start) (length url)))
 
 (defun rontolisp::%clojure-http-url (uri)
   "The request URL of the :uri option URI, a string as java.net.URI/create
@@ -22328,55 +22289,21 @@
             (concatenate 'string
              "rontolisp.http-client: the :uri must be a string, not "
              (rontolisp::%clojure-str-of uri "nil" t)))))
-  (let* ((n (length uri))
-         (stop (rontolisp::%clojure-http-first-of uri "/?#" 0))
-         (colon (position #\: uri :end stop))
-         (scheme nil)
-         (p 0))
-    (if colon
-        (progn
-          (if (= colon 0)
-              (rontolisp::%clojure-http-bad-url "Expected scheme name" uri 0))
-          (dotimes (i colon)
-            (let ((c (char uri i)))
-              (if (not
-                   (or (alpha-char-p c)
-                       (and (> i 0) (or (digit-char-p c) (find c "+-.")))))
-                  (rontolisp::%clojure-http-bad-url
-                   "Illegal character in scheme name" uri i))))
-          (setq scheme (string-downcase (subseq uri 0 colon)))
-          (setq p (+ colon 1))))
-    (let ((authority nil))
-      (if (and (< (+ p 1) n) (char= (char uri p) #\/)
-               (char= (char uri (+ p 1)) #\/))
-          (let ((q (rontolisp::%clojure-http-first-of uri "/?#" (+ p 2))))
-            (if (and (= q (+ p 2)) (= q n))
-                (rontolisp::%clojure-http-bad-url "Expected authority" uri q))
-            (rontolisp::%clojure-http-scan-url uri (+ p 2) q ";:@&=+$,[]"
-                                               "authority")
-            (if (> q (+ p 2)) (setq authority t))
-            (setq p q)))
-      (let ((q (rontolisp::%clojure-http-first-of uri "?#" p)))
-        (rontolisp::%clojure-http-scan-url uri p q ";/:@&=+$," "path")
-        (setq p q))
-      (if (and (< p n) (char= (char uri p) #\?))
-          (let ((q (rontolisp::%clojure-http-first-of uri "#" (+ p 1))))
-            (rontolisp::%clojure-http-scan-url uri (+ p 1) q ";/?:@&=+$,[]"
-                                               "query")
-            (setq p q)))
-      (if (< p n)
-          (rontolisp::%clojure-http-scan-url uri (+ p 1) n ";/?:@&=+$,[]"
-                                             "fragment"))
-      (cond ((null scheme)
-             (rontolisp::%clojure-illegal-argument-exception
-              "URI with undefined scheme"))
-            ((not (or (string= scheme "http") (string= scheme "https")))
-             (rontolisp::%clojure-illegal-argument-exception
-              (concatenate 'string "invalid URI scheme " scheme)))
-            ((not authority)
-             (rontolisp::%clojure-illegal-argument-exception
-              (concatenate 'string "unsupported URI " uri)))
-            (t uri)))))
+  (let ((refusal (rontolisp::%uri-refusal uri)))
+    (if refusal
+        (rontolisp::%clojure-http-bad-url (car refusal) uri (cdr refusal))))
+  (let* ((parts (rontolisp::%uri-split uri))
+         (scheme (if (car parts) (string-downcase (car parts)))))
+    (cond ((null scheme)
+           (rontolisp::%clojure-illegal-argument-exception
+            "URI with undefined scheme"))
+          ((not (or (string= scheme "http") (string= scheme "https")))
+           (rontolisp::%clojure-illegal-argument-exception
+            (concatenate 'string "invalid URI scheme " scheme)))
+          ((null (nth 1 parts))
+           (rontolisp::%clojure-illegal-argument-exception
+            (concatenate 'string "unsupported URI " uri)))
+          (t uri))))
 
 (defun rontolisp::%clojure-http-join (parts)
   "The strings PARTS joined by &."
@@ -22741,98 +22668,6 @@
                 body
                 (rontolisp::%clojure-http-body body))))))
 
-(defun rontolisp::%clojure-http-split (url)
-  "The parts of the URI reference URL as RFC 3986's appendix B cuts them, the
-   list (scheme authority path query fragment): each nil when absent but the
-   path, a string. Two slashes with nothing before the next slash are no
-   authority, and the path is what follows them (the oracle resolves ///g as
-   /g and //?q as ?q)."
-  (let* ((n (length url))
-         (stop (rontolisp::%clojure-http-first-of url ":/?#" 0))
-         (scheme
-          (if (and (< stop n) (> stop 0) (char= (char url stop) #\:))
-              (subseq url 0 stop)))
-         (at (if scheme (+ stop 1) 0))
-         (path-end (rontolisp::%clojure-http-first-of url "?#" at))
-         (hash (position #\# url :start path-end))
-         (authority nil))
-    (if (and (<= (+ at 2) path-end) (char= (char url at) #\/)
-             (char= (char url (+ at 1)) #\/))
-        (let ((authority-end
-               (or (position #\/ url :start (+ at 2) :end path-end) path-end)))
-          (if (> authority-end (+ at 2))
-              (setq authority (subseq url (+ at 2) authority-end)))
-          (setq at authority-end)))
-    (list scheme authority (subseq url at path-end)
-          (if (and (< path-end n) (char= (char url path-end) #\?))
-              (subseq url (+ path-end 1) (or hash n)))
-          (if hash (subseq url (+ hash 1))))))
-
-(defun rontolisp::%clojure-http-remove-dots (path)
-  "PATH with its dot segments removed, as the oracle's client removes them from
-   a relative reference merged with its base (java.net.URI's answers, probed):
-   RFC 3986's remove_dot_segments, but for two departures. Empty segments go
-   too (a//b is a/b). A .. with no segment of its own before it stays where it
-   is (/a/../../g is /../g, where the RFC answers /g). The result ends in a
-   slash when the input's last step was one, a ., or a .. that removed a
-   segment."
-  (let ((kept nil) (directory nil) (from 0) (n (length path)))
-    (loop
-      (let* ((slash (or (position #\/ path :start from) n))
-             (segment (subseq path from slash)))
-        (cond
-         ((or (string= segment "") (string= segment ".")) (setq directory t))
-         ((and (string= segment "..") kept (not (string= (car kept) "..")))
-          (setq kept (cdr kept))
-          (setq directory t))
-         (t
-          (setq kept (cons segment kept))
-          (setq directory nil)))
-        (if (>= slash n) (return nil))
-        (setq from (+ slash 1))))
-    (let ((out (make-string-output-stream)))
-      (if (and (> n 0) (char= (char path 0) #\/)) (write-char #\/ out))
-      (setq kept (reverse kept))
-      (loop
-        (if (null kept) (return nil))
-        (write-string (car kept) out)
-        (setq kept (cdr kept))
-        (if (or kept directory) (write-char #\/ out)))
-      (get-output-stream-string out))))
-
-(defun rontolisp::%clojure-http-resolve (base location)
-  "The URL a redirect's LOCATION names from the request URL BASE: RFC 3986's
-   section 5.2.2 with the oracle's departures (java.net.URI's answers, which
-   its client's redirects were probed to follow). Only a relative path has its
-   dot segments removed: an absolute LOCATION, a network path and an absolute
-   path are taken as written. A LOCATION of a fragment alone keeps the base's
-   path and query; any other empty path is the base's directory, and the
-   base's query goes (where the RFC keeps both)."
-  (let ((ref (rontolisp::%clojure-http-split location)))
-    (if (car ref)
-        location
-        (let* ((at (rontolisp::%clojure-http-split base))
-               (path (nth 2 ref))
-               (query (nth 3 ref))
-               (authority (or (nth 1 ref) (nth 1 at))))
-          (cond ((nth 1 ref))
-                ((and (string= path "") (null query) (nth 4 ref))
-                 (setq path (nth 2 at))
-                 (setq query (nth 3 at)))
-                ((and (> (length path) 0) (char= (char path 0) #\/)))
-                (t
-                 (let ((slash (position #\/ (nth 2 at) :from-end t)))
-                   (setq path
-                         (rontolisp::%clojure-http-remove-dots
-                          (cond (slash (concatenate 'string
-                                        (subseq (nth 2 at) 0 (+ slash 1)) path))
-                                ((string= path "") "")
-                                (t (concatenate 'string "/" path))))))))
-          (concatenate 'string (car at) ":"
-           (if authority (concatenate 'string "//" authority) "") path
-           (if query (concatenate 'string "?" query) "")
-           (if (nth 4 ref) (concatenate 'string "#" (nth 4 ref)) ""))))))
-
 (defun rontolisp::%clojure-http-redirect (res url method fields body hops)
   "The request the reply RES to (URL METHOD FIELDS BODY) leads to, the list
    (url method fields body), or nil when RES is the answer; HOPS redirects
@@ -22850,9 +22685,9 @@
           (if (null location)
               (rontolisp::%clojure-io-exception
                "java.io.UncheckedIOException: java.io.IOException: Invalid redirection"))
-          (let* ((target (rontolisp::%clojure-http-resolve url location))
-                 (to (rontolisp::%clojure-http-split target))
-                 (from (rontolisp::%clojure-http-split url))
+          (let* ((target (rontolisp::%uri-resolve url location))
+                 (to (rontolisp::%uri-split target))
+                 (from (rontolisp::%uri-split url))
                  (same-scheme (string-equal (car to) (car from)))
                  (as-get
                   (or (= status 303)
@@ -30390,7 +30225,7 @@
       (let ((location
              (cdr (assoc "location" (getf res :headers) :test #'string=))))
         (if location
-            (let ((resolved (rontolisp::%clojure-http-resolve url location)))
+            (let ((resolved (rontolisp::%uri-resolve url location)))
               (if (not (rontolisp::%clojure-io-url-spelling-p resolved))
                   (rontolisp:stream-close (getf res :body)))
               (let ((target (rontolisp::%clojure-io-url-of resolved)))

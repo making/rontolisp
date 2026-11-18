@@ -412,6 +412,11 @@ as far as the program reaches it, so a class of the program can extend or implem
 | `Callable`, `Future`, `FutureTask`, `ThreadFactory` | `call`; `get` with or without a limit, `isDone`, `cancel`, `isCancelled`, `state`, `resultNow`, `exceptionNow`; `run`, `toString`; `newThread` |
 | `CompletableFuture`, `CompletionStage` | `supplyAsync` and `runAsync` with or without an executor, `completedFuture`, `failedFuture`, `completedStage`, `failedStage`, `allOf`, `anyOf`; `thenApply`, `thenAccept`, `thenRun`, `thenCompose`, `handle`, `whenComplete`, `thenCombine`, `thenAcceptBoth`, `runAfterBoth`, `applyToEither`, `acceptEither`, `runAfterEither`, `exceptionally`, `exceptionallyCompose`, each also `Async` with or without an executor; `complete`, `completeExceptionally`, `completeAsync`, `obtrudeValue`, `obtrudeException`, `cancel`, `orTimeout`, `completeOnTimeout`, `delayedExecutor`, `copy`, `minimalCompletionStage`, `newIncompleteFuture`, `defaultExecutor`, `join`, `get` with or without a limit, `getNow`, `isDone`, `isCancelled`, `isCompletedExceptionally`, `getNumberOfDependents`, `state`, `resultNow`, `exceptionNow`, `toString` |
 | `java.util.function` | `Function`, `BiFunction`, `UnaryOperator`, `BinaryOperator`, `Supplier`, `Consumer`, `BiConsumer`, `Predicate`, `BiPredicate`, `BooleanSupplier`; for `Int`, `Long` and `Double`: `IntFunction`, `IntPredicate`, `IntUnaryOperator`, `IntBinaryOperator`, `IntSupplier`, `IntConsumer`, `ToIntFunction`, `ToIntBiFunction`, `ObjIntConsumer`; from one of the three to another, `IntToLongFunction`, `IntToDoubleFunction`, `LongToIntFunction`, `LongToDoubleFunction`, `DoubleToIntFunction`, `DoubleToLongFunction`; each with its abstract method and its `andThen`, `compose`, `and`, `or`, `negate`, `identity`, `not`, `isEqual` |
+| `URI`, `URISyntaxException` | `new URI(String)`, `URI.create`; `getScheme`, `getSchemeSpecificPart`, `getAuthority`, `getUserInfo`, `getHost`, `getPort`, `getPath`, `getQuery`, `getFragment` and the `getRaw..` of each; `isAbsolute`, `isOpaque`, `resolve` of a `URI` or a string, `equals`, `hashCode`, `compareTo`, `toString`; `getInput`, `getReason`, `getIndex` |
+| `HttpClient` | `newHttpClient`; `newBuilder` with `version`, `followRedirects`, `executor`, `build`; `send`, `sendAsync`, `followRedirects`, `version`, `executor`, `close`, `shutdown`, `shutdownNow`, `isTerminated`; `HttpClient.Version`, `HttpClient.Redirect` |
+| `HttpRequest` | `newBuilder` with or without a `URI`, with `uri`, `header`, `headers`, `setHeader`, `GET`, `POST`, `PUT`, `DELETE`, `HEAD`, `method`, `version`, `expectContinue`, `copy`, `build`; `method`, `uri`, `headers`, `bodyPublisher`, `version`, `expectContinue`, `equals`, `hashCode`, `toString`; `BodyPublishers.ofString` with or without a `Charset`, `ofByteArray` of an array or a range, `ofInputStream`, `noBody`; `BodyPublisher.contentLength` |
+| `HttpResponse` | `statusCode`, `headers`, `body`, `uri`, `request`, `previousResponse`, `version`, `toString`; `BodyHandlers.ofString` with or without a `Charset`, `ofByteArray`, `ofInputStream`, `discarding`, `replacing`; `BodySubscribers` of the same and `mapping`; a `BodyHandler` of the program's own choosing one by the `ResponseInfo` (`statusCode`, `headers`, `version`) |
+| `HttpHeaders` | `firstValue`, `allValues`, `map`, `HttpHeaders.of`, `equals`, `hashCode`, `toString` |
 
 `String.format`, `formatted` and `printf` take `%d`, `%s`, `%S`, `%f`, `%e`, `%E`, `%x`,
 `%X`, `%o`, `%c`, `%b`, `%h`, `%H`, `%n` and `%%`, with the flags `-`, `0`, `+`, a space, `,`, `(` and
@@ -612,5 +617,52 @@ void main() {
 ```
 {one=3, seven=5, three=5} 8
 ```
+
+## HTTP
+
+`java.net.http` has the client. An `HttpClient` sends an `HttpRequest` and answers an
+`HttpResponse` whose body is what the handler makes of the reply: `send` once the reply is
+in, `sendAsync` as a `CompletableFuture`. Every request goes through
+[`rontolisp:fetch`](../guides/http-fetch.md), so one source runs on every transport fetch
+has:
+
+| Target | Build | Transport |
+|---|---|---|
+| Interpreter, JVM | `rontolisp App.java`, `-o App.class` | the JDK's `HttpClient` |
+| WASM component | `-o app.wasm --component`, run with `wasmtime run -S http=y` | `wasi:http` |
+| Native executable | `--native` | the executable's own client |
+
+A plain Preview 1 module has no transport: the compile refuses the program, naming the
+flags that give it one. `java.net` is part of `java.base`; a compact source file imports
+the client with `import module java.net.http;`.
+
+```java
+import module java.net.http;
+
+void main() throws IOException, InterruptedException {
+    HttpClient client = HttpClient.newHttpClient();
+    HttpRequest request = HttpRequest.newBuilder(URI.create("https://httpbin.ik.am/get"))
+        .header("Accept", "application/json")
+        .build();
+    HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+    IO.println(response.statusCode() + " " + response.headers().firstValue("content-type").orElse("none"));
+    HttpRequest missing = HttpRequest.newBuilder(URI.create("https://httpbin.ik.am/status/404")).build();
+    IO.println(client.sendAsync(missing, HttpResponse.BodyHandlers.discarding())
+        .thenApply(HttpResponse::statusCode)
+        .join());
+}
+```
+
+```
+200 application/json
+404
+```
+
+A builder refuses what a JDK's refuses, with its message: a restricted or malformed header,
+a URI that is no absolute `http` or `https` one. `followRedirects(Redirect.NORMAL)` and
+`ALWAYS` follow a 301, 302, 303, 307 and 308 as a JDK's client does, and
+`previousResponse()` answers the replies on the way. A connection that is refused is a
+`ConnectException`. What the transports cannot give and what is not there:
+[Deviations](deviations.md#the-http-client).
 
 What differs from the language and what is refused: [Deviations](deviations.md).

@@ -70,6 +70,20 @@ class NativeFetchTest {
 				HostFetchLibrary.BODY_IMPORT_FIELD);
 		assertThat(WasmLispCompiler.importModules(module)).containsExactlyInAnyOrder("wasi_snapshot_preview1",
 				FetchResponseShape.RUNNER_IMPORT_MODULE);
+		// A program that makes futures of its own -- the threads of a Java program --
+		// runs the state machines, where the fetch's deferred future is one the poll
+		// runs the thunk of: it was refused by name, and fetches over the same imports.
+		byte[] suspending = module("""
+				(defvar *turn* (rontolisp::%future-new))
+				(rontolisp:async-defun later ()
+				  (rontolisp:await *turn*)
+				  (print (getf (rontolisp:await (rontolisp:fetch "http://127.0.0.1:1/")) :status)))
+				(later)
+				(rontolisp::%future-settle *turn* nil)
+				""", "linux-x86_64");
+		assertThat(WasmImports.functionFields(suspending, FetchResponseShape.RUNNER_IMPORT_MODULE)).containsExactly(
+				FetchResponseShape.RUNNER_START_FIELD, FetchResponseShape.RUNNER_HEAD_FIELD,
+				HostFetchLibrary.BODY_IMPORT_FIELD);
 	}
 
 	@Test

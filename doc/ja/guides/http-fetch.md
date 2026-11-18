@@ -19,7 +19,9 @@
 Clojure のプログラムは [`rontolisp.http-client`](../clojure/reference/http-client.md)
 でリクエストを送ります。API は babashka.http-client と同じで、リクエストはこの `fetch` を
 通ります。`slurp` と [clojure.java.io](../clojure/reference/clojure-java-io.md#http-urls) も、
-この `fetch` で `http:` URL のボディを読みます。
+この `fetch` で `http:` URL のボディを読みます。[Java サブセット](../java/index.md#http)の
+プログラムは `java.net.http` の `HttpClient` でリクエストを送り、このリクエストも同じ `fetch` を
+通ります。
 
 > **バックエンドのサポート。** インタプリタとJVMコンパイル済みクラスはJDKの
 > `java.net.http.HttpClient` を使い、`fetch` が返った瞬間からリクエストは

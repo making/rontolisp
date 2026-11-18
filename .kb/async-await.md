@@ -50,7 +50,8 @@
   await of a pending future suspends the frame, `%future-settle` resumes the waiters on the
   settler's stack, and a pending await at top level ends the program as it does on a component.
   No host timer: `wait-for` stays the compile error, and whoever settles the futures passes the
-  time itself (`sleep`). A resumable call that does not suspend costs 88 ns there as on the
+  time itself (`sleep`). The one host future there is a `--native` fetch's deferred one
+  (`STATE_DEFERRED`, whose thunk the poll runs: `.kb/fetch-http.md`, "--native"). A resumable call that does not suspend costs 88 ns there as on the
   component (33 ns degenerate). Pinned by
   `WasmLispCompilerIntegrationTest#componentAsyncLambdaCapturesAndArgumentHoistAcrossSuspension`
   (the same program on both targets) and the wasm legs of the Java corpus's thread cases.

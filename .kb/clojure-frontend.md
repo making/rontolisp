@@ -2723,8 +2723,11 @@ new, and the five fetch has (the JDK's on the interpreter and the JVM, `wasi:htt
   `http:` URL reading as the reply arrives (`.readLine`, `.read`, `read`, lazy `line-seq`,
   `slurp` of the rest, a closed reader's refusal) and the text of a malformed reply
   (`/split`), 2026-10-10. Waiting: `:timeout` (todo `148`).
-- **Redirects** (`%clojure-http-redirect`, `-resolve`, `-split`, `-remove-dots`; written
-  2026-11-18, `.todo/j95`). The October code's record called its resolution a port of
+- **Redirects** (`%clojure-http-redirect` over `%uri-resolve`, `%uri-split`,
+  `%uri-remove-dots`; written 2026-11-18, `.todo/j95`; the three and the URL scanner
+  (`%uri-refusal`, which `%clojure-http-url` raises from) moved to `eval/uri.lisp` on
+  2026-11-18, where the Java subset's `java.net.URI` reads them too: `eval/UriLibrary`,
+  `.kb/java-frontend.md`, "java.net.http"). The October code's record called its resolution a port of
   `java.net.URI.resolve` and named the JDK client's internals, so it was deleted, not edited,
   and written from RFC 3986 section 5 and the JDK's answers; nobody read OpenJDK's source,
   and the old code was used only as a black box. Probed on JDK 25 (a `HttpClient` under

@@ -353,6 +353,18 @@ final class JavaIntrinsics {
 		return (lowering, call) -> JavaForms.form(engineFunction(name), operands(call));
 	}
 
+	/**
+	 * A member that is a function of {@code java.net.URI}'s rules as the front ends share
+	 * them ({@code eval/uri.lisp}): its arguments.
+	 */
+	private static JavaEmitter shared(String name) {
+		return (lowering, call) -> JavaForms.form(sharedFunction(name), operands(call));
+	}
+
+	private static LispSymbol sharedFunction(String name) {
+		return new LispSymbol("RONTOLISP::%URI-" + name.toUpperCase(java.util.Locale.ROOT));
+	}
+
 	private static LispSymbol engineFunction(String name) {
 		return new LispSymbol("RONTOLISP::%REGEX-" + name.toUpperCase(java.util.Locale.ROOT));
 	}
@@ -1648,6 +1660,33 @@ final class JavaIntrinsics {
 		natives.put(matcher + "group0(Object,int)", engine("matcher-group"));
 		natives.put(matcher + "replace0(Object,String,String,boolean)", runtime("regex-replace"));
 		natives.put(matcher + "text0(Object)", (lowering, call) -> call.argument(0));
+		// java.net.http over rontolisp:fetch, which the program itself calls: the
+		// transports see a program that fetches, and a target with none refuses it
+		String http = "rontolisp.internal.Http.";
+		// the future is held in a vector: a function a thread is suspended in answers
+		// its value through an await, which would wait for a future handed back bare
+		natives.put(http + "start0(String,String,String[],byte[])", (lowering, call) -> {
+			LispSymbol condition = lowering.temporary();
+			LispVal options = call("list", new LispSymbol(":METHOD"), call.argument(1), new LispSymbol(":HEADERS"),
+					runtimeCall("http-fields", call.argument(2)), new LispSymbol(":BODY"), call.argument(3));
+			return list(cl("handler-case"),
+					call("vector", list(new LispSymbol("RONTOLISP:FETCH"), call.argument(0), options)),
+					list(cl("error"), list(condition), call("princ-to-string", condition)));
+		});
+		natives.put(http + "reply0(Object)", runtime("http-reply"));
+		natives.put(http + "failed0(Object)", host("stringp"));
+		natives.put(http + "text0(Object)", (lowering, call) -> call.argument(0));
+		natives.put(http + "status0(Object)", (lowering, call) -> call("aref", call.argument(0), integer(0)));
+		natives.put(http + "fields0(Object)", (lowering, call) -> call("aref", call.argument(0), integer(1)));
+		natives.put(http + "octets0(Object)", (lowering, call) -> call("aref", call.argument(0), integer(2)));
+		// java.net.URI over the rules the front ends share (eval/uri.lisp)
+		String uri = "java.net.URI.";
+		natives.put(uri + "refusal0(String)", shared("refusal"));
+		natives.put(uri + "reason0(Object)", host("car"));
+		natives.put(uri + "index0(Object)", host("cdr"));
+		natives.put(uri + "split0(String)", (lowering, call) -> call("coerce",
+				JavaForms.form(sharedFunction("split"), operands(call)), list(cl("quote"), cl("simple-vector"))));
+		natives.put(uri + "resolve0(String,String)", shared("resolve"));
 		natives.put("rontolisp.internal.Support.floatHash(float)", runtime("float-bits"));
 		// a Float is the float in a cons with its tag
 		natives.put("rontolisp.internal.Support.readFloat(String)", (lowering, call) -> {

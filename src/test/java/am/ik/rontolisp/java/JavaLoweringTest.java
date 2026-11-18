@@ -496,6 +496,36 @@ class JavaLoweringTest {
 		assertThat(lower(pool.formatted("{ protected void afterExecute(Runnable r, Throwable t) { } }"), "L7.java"))
 			.anyMatch(form -> form.contains("(DEFUN |java.util.concurrent.ThreadPoolExecutor.hooked()| NIL "
 					+ "(|java.util.concurrent.ThreadPoolExecutor.Hooked.new()|))"));
+		// A request of java.net.http is the program's own call of rontolisp:fetch -- the
+		// transport splices and a target with none read a program that fetches --, its
+		// future held in a vector, never a value of the program; a URI is cut by the
+		// rules the front ends share. Where a thread is a body suspended and resumed,
+		// the wait for a reply is one more suspension.
+		String client = """
+				import java.net.URI;
+				import java.net.http.*;
+				class L8 {
+				    public static void main(String[] args) throws Exception {
+				        HttpClient client = HttpClient.newHttpClient();
+				        HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost/")).build();
+				        %s
+				    }
+				}
+				""";
+		String blocking = "System.out.println(client.send(request, HttpResponse.BodyHandlers.ofString()).body());";
+		assertThat(lower(client.formatted(blocking), "L8.java"))
+			.anyMatch(form -> form.contains("(HANDLER-CASE (VECTOR (RONTOLISP:FETCH ") && form.contains(
+					"(LIST :METHOD |method| :HEADERS (RONTOLISP::%JAVA-HTTP-FIELDS (|java.util.ArrayList.toArray(Object[])| "))
+			.anyMatch(form -> form.contains("(RONTOLISP::%URI-REFUSAL |str|)"))
+			.anyMatch(form -> form.contains("(RONTOLISP::%JAVA-HTTP-REPLY |exchange|)"))
+			.noneMatch(form -> form.contains("%JAVA-SUSPENDING"));
+		String async = "System.out.println(client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).join().body());";
+		assertThat(Java.read(client.formatted(async), "L8.java", JavaFiles.NONE, null, true)
+			.stream()
+			.map(LispVal::print)
+			.toList())
+			.anyMatch(form -> form.contains("(RONTOLISP:AWAIT (RONTOLISP::%JAVA-SUSPENDING-HTTP-REPLY |exchange|))"));
+		assertThat(forms).noneMatch(form -> form.contains("RONTOLISP:FETCH") || form.contains("%URI-"));
 	}
 
 	@Test
@@ -515,11 +545,12 @@ class JavaLoweringTest {
 		Path classes = java.nio.file.Files.createTempDirectory("java-library");
 		try (javax.tools.StandardJavaFileManager files = compiler.getStandardFileManager(reported, null,
 				StandardCharsets.UTF_8)) {
-			compiler
-				.getTask(null, files, reported,
-						List.of("--patch-module", "java.base=" + library, "-d", classes.toString(), "-proc:none",
-								"-Xlint:none", "-Xmaxerrs", "1000"),
-						null, files.getJavaFileObjectsFromPaths(sources))
+			compiler.getTask(null, files, reported,
+					// java.net.http is a package of a module of its own: with the modules
+					// limited to java.base it is one of the patch, as every other
+					List.of("--limit-modules", "java.base", "--patch-module", "java.base=" + library, "-d",
+							classes.toString(), "-proc:none", "-Xlint:none", "-Xmaxerrs", "1000"),
+					null, files.getJavaFileObjectsFromPaths(sources))
 				.call();
 		}
 		finally {

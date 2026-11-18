@@ -945,6 +945,13 @@ public final class WasmLispCompiler implements LispCompiler {
 	private boolean usesDeferredFutures;
 
 	/**
+	 * Whether a deferred future can exist in a module running the async state machines
+	 * ({@link WasmFutureRuntimeBuilder#STATE_DEFERRED}): the program names
+	 * {@code %future-deferred} there.
+	 */
+	private boolean usesAsyncDeferredFutures;
+
+	/**
 	 * Whether a FAILED degenerate future can exist: an EH-mode module with a Preview 1
 	 * future, whose {@code %async-run} settles one when its body signals
 	 * ({@link WasmAsyncRunCompiler}), so the await runtime carries the arm re-signalling
@@ -3718,7 +3725,10 @@ public final class WasmLispCompiler implements LispCompiler {
 		// Whether a DEFERRED degenerate future can exist: the program names
 		// %future-deferred, its one producer (a --native fetch). Only then does the
 		// await runtime carry the arm that runs its thunk.
-		this.usesDeferredFutures = !this.asyncMode && programUsesSymbol(program, LispNames.FUTURE_DEFERRED_QUALIFIED);
+		boolean namesDeferred = programUsesSymbol(program, LispNames.FUTURE_DEFERRED_QUALIFIED);
+		this.usesDeferredFutures = !this.asyncMode && namesDeferred;
+		// The same primitive where the state machines run: the poll carries the arm.
+		this.usesAsyncDeferredFutures = this.asyncMode && namesDeferred;
 		// Whether a degenerate TYPE_P1_FUTURE can exist in this module at all. It has
 		// exactly three producers outside asyncMode: the %async-run the lowering above
 		// leaves behind (WasmAsyncRunCompiler), a `wasm-import ... :async t` wrapper
@@ -5287,7 +5297,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			indirectCallArities.add(0);
 		}
 		// So does the await runtime's deferred arm, whose thunk it runs.
-		if (this.usesDeferredFutures) {
+		if (this.usesDeferredFutures || this.usesAsyncDeferredFutures) {
 			indirectCallArities.add(0);
 		}
 
@@ -9865,7 +9875,8 @@ public final class WasmLispCompiler implements LispCompiler {
 								this.usesIdentityHashTables, globalIndices.getOrDefault(LispNames.MV_SPILL, -1),
 								uncaughtLocations != null ? uncaughtLocations.reawaitFuncIndex() : -1, streamCheck,
 								blockExitTag,
-								WasmFutureRuntimeBuilder.HandlerState.of(globalIndices, ehDepthGlobalIndex)));
+								WasmFutureRuntimeBuilder.HandlerState.of(globalIndices, ehDepthGlobalIndex),
+								this.usesAsyncDeferredFutures));
 					}
 				}
 				// The degenerate tier's stream runtime bodies, in p1StreamFuncBase()
