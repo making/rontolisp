@@ -10,6 +10,9 @@
 コードポイントを数えます。言語仕様は UTF-16 のコード単位を数えるので、基本多言語面の外の
 文字を含む文字列では結果が変わります。`hashCode` は仕様どおりの値です。`toCharArray` は
 UTF-16 のコード単位を返し、`new String(char[])` はそれを元の文字列に読み戻します。
+`toUpperCase` と `toLowerCase` は 1 文字を 1 文字に変えます。`"ß".toUpperCase()` は `ß` です
+（JDK は `SS` を返します）。相手のないサロゲートは、UTF-8 では 3 バイトになります（JDK は
+`?` を書きます）。
 
 ```java
 void main() {
@@ -167,8 +170,8 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 
 **`HashMap` の順序が JDK と異なる場合が 2 つあります。** バケットが 64 個以上の表で、ハッシュ
 コードが 1 つのバケットに集まるキーが 8 個を超えると、それらのキーは追加した順にたどられます。
-桁数の少ない `Double` のキー（`0.0`、`0.25`、`0.5` など。ハッシュコードが上位ビットでしか
-違いません）は、64 個からこの状態になります。`hashCode` が取る値の少ないクラスのキーも同様です。
+桁数の少ない `Float` のキー（`0.0`、`0.5`、`1.0` など。ハッシュコードが上位ビットでしか
+違いません）は 25 個から、桁数の少ない `Double` のキーは 64 個からこの状態になります。`hashCode` が取る値の少ないクラスのキーも同様です。
 文字列と整数のキーはこの状態になりません。
 `Set.of` と `Map.of` の順序は 1 つに決まっています。JDK は起動のたびに別の順序を選びます。
 
@@ -184,13 +187,18 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 動きます。マッチの `start` と `end` は入力の文字数で数えます（ここでの `length` と `charAt` と
 同じです）。JDK の `find` がサロゲートペアの間に入る場合は、マッチが異なります。`CANON_EQ` の
 下の文字クラスとプロパティ、および `\N{name}` は、パターンのコンパイル時にエラーになります。
-`Pattern` にあるのは `compile`、`matches`、`quote`、`matcher`、`split`、`pattern`、`flags` と
-フラグの定数です。`Matcher` にあるのは `find`、`lookingAt`、`matches`、`group`、`start`、`end`、
-`groupCount`、`reset`、`replaceAll`、`replaceFirst`、`quoteReplacement` です。リージョン、
-`hitEnd`、`appendReplacement`、`results`、ストリームはありません。
+`Pattern` にあるのは `compile`、`matches`、`quote`、`matcher`、`split`、`pattern`、`flags`、
+`asPredicate`、`asMatchPredicate` とフラグの定数です。`Matcher` にあるのは `find`、`lookingAt`、
+`matches`、`group`、`start`、`end`、`groupCount`、`hasMatch`、`reset`、`region`、`regionStart`、
+`regionEnd`、アンカー境界と透過境界の設定、`hitEnd`、`requireEnd`、文字列または関数を取る
+`replaceAll` と `replaceFirst`、`appendReplacement`、`appendTail`、`toMatchResult`、
+`quoteReplacement` です。`results`、`usePattern`、`namedGroups`、ストリームはありません。
+透過境界のリージョンで `lookingAt` または `matches` を呼んだあと、後読みがリージョンより前を
+読んでいると、JDK の `start()` は 0 を返します。ここではリージョンの開始位置を返します。
 
 **`String.format` の変換は[概要](index.md)に挙げたものだけです。** それ以外の変換は名前を
-示すエラーになります。
+示すエラーになります。ロケールはルートと英語のものだけで、どれもロケールなしの
+`String.format` と同じ書式になります。デフォルトのロケールは `Locale.US` です。
 
 **古い 2 つのクラスは新しいクラスと同じものです。** `StringBuffer` は `StringBuilder` であり、
 `getClass().getName()` も `StringBuilder` の名前を返します。`Vector` は `instanceof` で
@@ -274,4 +282,4 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
   `Duration` を取る `sleep` と `join` も拒否されます。
 - [概要](index.md)の表にないライブラリのクラスとメンバー。ストリーム（`java.util.stream`）、
   `LinkedList`、`LinkedHashMap`、`TreeMap`、`Scanner`、ファイル（`File`、`FileReader`、
-  `java.nio.file`）、`java.time`、`BigInteger`、`BigDecimal`、正規表現、リフレクションなどです。
+  `java.nio.file`）、`java.time`、`BigInteger`、`BigDecimal`、リフレクションなどです。

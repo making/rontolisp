@@ -40,7 +40,7 @@ only for what one stack can run.
   `LongAdder`), `new ThreadPoolExecutor(..)` by a program, `toString` of a lock, a latch, a
   pool and a future. `java.util.Timer`.
 - **A chain of more than eight keys in a table of 64 or more** is not walked as a JDK walks
-  it, in a `ConcurrentHashMap` as in a `HashMap` (`.todo/j87` holds the `HashMap` half).
+  it, in a `ConcurrentHashMap` as in a `HashMap` (the `HashMap` half was decided: not derived, `.kb/java-frontend.md`, "The library").
   Measured: the tenth key goes to the head; what a removal leaves depends on the tree.
 - **`volatile` is one lock for every field of the program**: 24 ns a read and write on the
   JVM against javac's 6, and every such access of every thread in turn. A volatile place in

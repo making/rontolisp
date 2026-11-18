@@ -1364,11 +1364,11 @@
       (rontolisp::%regex-expand-replacement matcher replacement
                                             (lambda (kind message)
                                               (return-from refused
-                                                           (list :refused message
-                                                            (if (eq kind :bounds) 1 0)
-                                                            (%normalize-string
-                                                             (get-output-stream-string out)))))
-                                            out)
+                                               (list :refused message
+                                                     (if (eq kind :bounds) 1 0)
+                                                     (%normalize-string
+                                                      (get-output-stream-string
+                                                       out))))) out)
       (%normalize-string (get-output-stream-string out)))))
 
 (defun rontolisp::%java-regex-refusal-partial (refusal)

@@ -18,8 +18,10 @@ and the catch that signals nothing again: j82 (2026-11-17); the classes a JDK sy
 class's own initialization, `java.util.concurrent` and the two leads for a suspended thread
 measured: j83 (2026-11-17); the unchecked warnings, a lambda cast to an intersection,
 `Type::<T>new` and an argument call among overloads: j86 (2026-11-17); regular expressions
-on the engine shared with the Clojure front end: j90 (2026-11-18); what comes after is
-`.todo/j87`, `j88` and `j89` (what j79, j82 and j83 left).
+on the engine shared with the Clojure front end: j90 (2026-11-18); the rest of `java.io`,
+`Appendable`, `Locale`, a `Matcher`'s region, `hitEnd` and `appendReplacement`, and the
+line a `BufferedReader` takes whole from the host: j87 (2026-11-18); what comes after is
+`.todo/j88`, `j89` and `j98` (what j82, j83 and j87 left).
 
 ## Where it sits
 
@@ -611,7 +613,13 @@ measured programs.
   throw the library's exceptions); an intrinsic class implements a source interface, and gains
   the members naming it, once a program names that interface (`Library.implemented` / `meets`:
   `Comparable`, `CharSequence`, `String.join(.., Iterable)`); since j79 any class of the
-  source (`String.getBytes(Charset)`, `new String(byte[], Charset)`).
+  source (`String.getBytes(Charset)`, `new String(byte[], Charset)`), and since j87
+  `Appendable` (a `StringBuilder` is one: its three `append` as the interface spells
+  them, which a dispatcher finds by signature) and `Locale` (`String.format(Locale, ..)`,
+  `toUpperCase(Locale)`, the direct `System.out.printf(Locale, ..)`: the locale is
+  evaluated and dropped, `after`). `StringBuilder.append` of a range is
+  `Support.appendRange` / `appendChars`: Java, because its `IndexOutOfBoundsException`
+  is no class of `RAISED` and one more there costs every program with a `catch`.
 - **A member `meets` adds is looked for by name before it is there** (j79,
   `JavaIntrinsics.named`, `JavaLowering.bring`): `methods` and `constructors` of an intrinsic
   class first read the source classes the members of that name have in their types. Before,
@@ -676,7 +684,7 @@ measured programs.
 - A method reference naming a class fits a functional interface by its arity when a call has
   several candidates (`takes`): `thenComparing(Point::label)` against `thenComparing(Comparator)`.
 - Sizes on wasm (2026-11-17, before / after): a list added to and read 3,732 / 25,592; one
-  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/j87` holds what is
+  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/j98` holds what is
   left and the leads.
 - **The library is Java a JDK compiles** (j79, decided by measuring): javac of JDK 25 takes
   all 139 files as a patch of its own `java.base` (`--patch-module java.base=<library>`) with
@@ -696,7 +704,20 @@ measured programs.
   red-black insertion, its tie-breaks (class name, `compareTo`, the identity hash) and where
   it links a node: no part of the API, so it can be had only by deriving it from outputs --
   the provenance rule forbids writing it from the JDK's source. `deviations.md` names the
-  double keys. `.todo/j87`.
+  double keys.
+  **Decided 2026-11-18 (j87): not derived.** Measured against JDK 25, where the order
+  first departs: `Float` keys `i * 0.5f` at 25 keys (ten of them in one bucket once the
+  table is 64; a float of few digits has its low 16 bits zero, so the bucket is its top
+  seven mantissa bits), `Double` keys `i * 1.0`, `0.5` and `0.25` at 265 to 272, `i *
+  1.5` at 184, `i * 100.0` at 176, `i * 0.1` at 900, `i * 0.01` at 1,800, `i * 0.001`
+  not within 2,000; `Long` keys `i << 32` not within 600. The order a JDK shows inside
+  such a bucket moves with every put (the 25-key bucket above heads with `1.5`, at 50
+  keys its remains with `0.5` ahead of `0.0`), so matching it is keeping the JDK's tree
+  per bucket through every put, remove and resize: some 250 lines of the library that
+  `put` reaches, in every program with a `HashMap` (a list program is 3.7 -> 25.6 KB for
+  less), for an order the API leaves open and that keys with no `compareTo` do not have
+  even between two JDKs' objects (it follows their identity hashes). `deviations.md`
+  names the `Float` and the `Double` keys.
 - **Regular expressions run on the engine the Clojure front end runs on** (j90, 2026-11-18;
   [regex-engine.md](regex-engine.md): `eval/regex.lisp`, written here from the `Pattern`
   documentation, behind `eval/RegexLibrary`). Until then the Clojure engine was a port of
@@ -721,6 +742,24 @@ measured programs.
   lines).
 - **`Arrays.deepToString`** is Java source (j81): `instanceof` over the element, which the
   recorded class answers ("The class of an array").
+- **A `Matcher`'s rest (j87)**: `region` with the anchoring and transparent bounds,
+  `hitEnd` / `requireEnd`, `appendReplacement` / `appendTail`, `replaceAll` /
+  `replaceFirst` of a function, `toMatchResult` (a `Snapshot` of the bounds and the
+  input), `hasMatch`; `Pattern.asPredicate` / `asMatchPredicate`. The region and the two
+  flags are the engine's ([regex-engine.md](regex-engine.md), "Regions", "hitEnd and
+  requireEnd"); the append position and the snapshot are Java. Measured for
+  `appendReplacement`: a malformed replacement appends nothing, a group NUMBER the
+  pattern does not have appends the input before the match and the replacement up to the
+  reference, then throws, and moves nothing on (`Matcher.piece` / `pieced`,
+  `%java-regex-expand` answering the part written); a match appended twice is the
+  `IndexOutOfBoundsException` of its range. Not there: `results`, `splitAsStream`
+  (streams), `usePattern`, `namedGroups`.
+- **A program's class named as a `java.lang` source class** (`Iterable`, `CharSequence`,
+  `Comparable`, since j87 `Appendable`, which every `Writer` and `PrintStream` names) is
+  refused once the program reaches the library's. Counted 2026-11-18 over every Java
+  program in the repository (156 files under `examples/`, `doc/`, the test resources and
+  the artefacts; the 72 corpus cases): none declares such a class. The Lisp names of
+  `java.lang` source classes stay simple.
 
 ## java.io (2026-11-17, j79)
 
@@ -732,7 +771,10 @@ holds none of it.** No files: `File`, `FileReader`, `java.nio.file` stay refused
 - **The classes**: `InputStream`/`OutputStream`, the `ByteArray` pair, the `Filter` pair,
   the `Buffered` pair, `DataInput`/`DataOutput` and their streams, `PrintStream`;
   `Reader`/`Writer`, `StringReader`/`StringWriter`, `InputStreamReader`/`OutputStreamWriter`,
-  `BufferedReader`/`BufferedWriter`, `PrintWriter`; `Closeable`, `Flushable`; `IOException`,
+  `BufferedReader`/`BufferedWriter`, `PrintWriter`; since j87 the four null streams
+  (anonymous classes of `nullInputStream` .. `nullWriter`), `FilterReader`/`FilterWriter`,
+  `CharArrayReader`/`CharArrayWriter`, `PushbackReader`/`PushbackInputStream`,
+  `SequenceInputStream`, `LineNumberReader`; `Closeable`, `Flushable`; `IOException`,
   `EOFException`, `UTFDataFormatException`, `UnsupportedEncodingException`,
   `UncheckedIOException`; `java.nio.charset.Charset`/`StandardCharsets` (UTF-8, the default,
   ISO-8859-1, US-ASCII) with its two exceptions. `import module java.base` and a compact
@@ -774,6 +816,39 @@ holds none of it.** No files: `File`, `FileReader`, `java.nio.file` stay refused
   `F0`: `90`.., `F4`: ..`8F`) is one, alone; a sequence cut by a byte or by the end is one;
   the three bytes of a surrogate are one. An `InputStreamReader` decodes a buffer at a time
   and keeps back the bytes of a character the buffer ends inside.
+- **`LineNumberReader` counts as a JDK 25 does, measured** (j87; 1,900 random scripts of
+  reads, skips, marks and resets over it and the three readers beside it, and a grid of
+  scripts over ten inputs): `read()` gives a
+  line's end as one `\n`, a read into an array gives the characters as they are and
+  counts; the end of the input ends a line that was begun, once; a `skip` leaves no line
+  begun (so the end after it counts nothing), and a `mark` does not keep whether one was;
+  a mark set after a `\r` holds one character more than asked (the `\n` dropped is none
+  of the limit). The reader under it is told of a `\r` it read as a line's end
+  (`BufferedReader.afterCarriageReturn`).
+- **A `BufferedReader` standing directly on `System.in` takes its line from the host**
+  (j87; `Reader.hasLines` / `line`, which only `InputStreamReader` over the
+  `StandardInput` answers, so a program with no such reader calls `Reader`'s own and
+  holds nothing of it): `readLine` with nothing read ahead, no mark and no `\r` pending is
+  `%java-readln`. A `\r` ending the host's line is its `\r\n`; one inside it ends a line
+  of its own, and what follows goes into the buffer with the `\n` (`hostLine`). Measured,
+  200,000 lines summed (mean of three): wasm 1.28 -> 1.06 s (`IO.readln` 0.89), the JVM
+  0.62 -> 0.44 s; the program 143,022 -> 147,639 B of wasm, a `BufferedReader` over a
+  `StringReader` 96,950 -> 98,374 B.
+- **UTF-16: written, measured and taken out** (j87). `UTF_16`, `UTF_16BE`, `UTF_16LE`
+  with a JDK 25's answers (the byte order mark written once and read once; a surrogate
+  with no partner, a byte with none and a high surrogate with whatever unit follows it
+  one U+FFFD each; 3,000 random sequences identical through `new String` and a reader
+  fed a few bytes at a time) cost the `BufferedReader`-over-`System.in` program 143,022
+  -> 161,075 B of wasm: `Support.encode` / `decode` and the two bridges choose the
+  charset at run time, so every program with a reader or a named charset held the
+  codec. What it needs first is in `.todo/j98`: the UTF-16 charsets as objects of a
+  class of their own, made only by a program that names them (a field read through a
+  holder, as `System.out` is), the codec their method.
+- **A writer holds the high surrogate a STRING ends in** (j87), as it held one an array
+  ends in: `write("a\ud83d")` then `write("\ude00")` is the character's four bytes.
+  Still open: a string holding a surrogate with no partner encodes to its three bytes
+  where a JDK writes `?` (`%java-utf8-bytes` is the host's `string-to-octets`), and a
+  string CONSTANT holding one is `?` on wasm.
 - **`Double.longBitsToDouble`, `Float.intBitsToFloat`** are `%java-bits-binary` over
   `%java-nearest-binary` (exact, the subnormals included).
 - **Measured** (2026-11-17, the box and method of "Measured" below; wasm / class bytes, then
@@ -1439,7 +1514,11 @@ java-spec `a-byte-stream-reads-and-writes-bytes-and-a-string-is-its-bytes`,
 `standalone:` case `the-standard-input-is-read-as-bytes-and-through-a-reader` (a case's
 `stdin:` is what every leg reads), `ListIterator`, `Collections.binarySearch` and
 `parseUnsignedInt` in the cases of the utilities and of the boxes,
-`JavaLoweringTest#theLibrarysSourceIsJavaAJdkCompiles`,
+`JavaLoweringTest#theLibrarysSourceIsJavaAJdkCompiles`, java-spec
+`the-streams-that-hold-nothing-take-back-follow-one-another-and-count-lines` and
+`a-matcher-keeps-a-region-tells-what-it-read-and-appends-its-replacements` (j87; the
+`Locale` forms are lines of `format-renders-the-conversions-programs-write`, the host's
+line with `\r\n` and a lone `\r` of `the-standard-input-is-read-as-bytes-and-through-a-reader`),
 `SchemeLibraryTest#aCommonLispProgramReadsNoFrontEndsLibrary` (the gate), java-spec
 `an-array-is-a-vector-with-the-default-of-its-element-type` (each array's class through
 `Object`, a generic method's `instanceof`, a row of a widened grid, `copyOf` and `clone`, the

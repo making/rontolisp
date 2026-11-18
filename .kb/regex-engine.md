@@ -41,8 +41,9 @@ four backends ("Measured" below).
 - **Compiler**: the tree becomes closures `(STATE I) -> boolean`, each made holding the closure
   that continues the match, so a sequence allocates nothing while it runs and a failure is a
   return. A class is a test function of a code.
-- **State of a search**: one simple vector -- input, length, the groups' bounds, the counters
-  and positions the loops own. A pattern is immutable and shared; a matcher owns its state.
+- **State of a search**: one simple vector -- input, where the region ends, the bounds its
+  anchors and its look-arounds see, the two end flags, the groups' bounds, the counters and
+  positions the loops own. A pattern is immutable and shared; a matcher owns its state.
 - **Three kinds of repetition**: of one character (a counted run, no recursion per character);
   of a body that matches one way (iterations taken whole, giving back is dropping one); of
   any other body (count and iteration start in the state, the body continuing with the step,
@@ -116,6 +117,60 @@ running it), and a comment in `regex.lisp` says "measured" where a rule is one:
   `RegexUnicodeTablesTest` from the running JDK's public `Character` API and by asking its
   `\X`, pinned to the shipped file.
 
+## Regions (2026-11-18, j87)
+
+A matcher's region is four slots of the state beside the end of what a search may take
+(slot 1): where `^` / `\A` hold (8), where `$` / `\z` / `\Z` see the end (9), and the
+bounds of what a look-behind, a lookahead and a boundary may read (10, 11).
+`%regex-matcher-region` sets the region and forgets the last match (a reset is the region
+of the whole input); `%regex-matcher-bounds` says whether the bounds anchor (8 and 9 are
+the region's, else the input's) and whether they are transparent (10 and 11 are the
+input's, else the region's). The default -- anchoring, opaque -- is a search over the
+part alone. Measured against JDK 25 (51,968 rows: 64 patterns, 16 inputs, every region,
+the four settings, every find, `lookingAt` and `matches`; 0 differ):
+
+- `(?m)^` reads the character before it wherever it does not hold outright, opaque bounds
+  or not: only the anchoring says where it holds outright.
+- Inside a look-behind `^` holds no further on than the look-behind may read (transparent
+  bounds: at 0 even when the bounds anchor); inside a lookahead `$` sees the end no nearer
+  than the lookahead may read. Both set and restore the slot around the body
+  (`%regex-look-ahead`, `%regex-emit-look-behind`).
+- A lookahead's body takes characters as far as slot 11; a cluster of `\X` the region
+  cuts ends where the region does.
+- Not reproduced: after `lookingAt` or `matches` in a region with transparent bounds a
+  JDK's `start()` is 0 when a look-behind read before the region (its `find` answers the
+  region's start, as here).
+
+## hitEnd and requireEnd (2026-11-18, j87)
+
+Slot 2 is the oracle's `hitEnd` and slot 12 its `requireEnd`, both cleared where a search
+starts. Until j87 slot 2 was a wider "the search read the end", which only the search over
+an input known in part read; that search now also runs again after a whole match of the
+part (`matches`), which the oracle's flag does not report. Each rule was measured (a grid
+of 87 patterns over 22 inputs, 39 look-around patterns over five, then 24,000 rows of
+random patterns, half of them in a region: 3 differ -- a match and a capture, under
+"Deviations", and one `requireEnd` after a match, `(?:bc??|\G+?){2}\B*+b` over `b`, where
+a `\B` asked at the end on a way given up sets it here and not there):
+
+- A literal or a class read where nothing is left sets `hitEnd`; a run of literals is
+  compared one after another, so its end is read only where what stands before it matched.
+- A counted run reads the end only when it would take more (`a?` over `a` reads none).
+- `$` and `\Z` set both flags where they hold (at the end or before the line end that ends
+  the input), `(?m)$` at the end only, `\z` sets `hitEnd` alone.
+- `\b`, `\B` and `\b{g}` asked at the end set both, whether they hold or not.
+- A negative lookahead standing at the end of what it may read sets `requireEnd`, whatever
+  its body reads (`a(?!^)` over `a`: no `hitEnd`, `requireEnd`).
+- `\R` reads the end where nothing is left, and at a `\r` that ends the input. A cluster
+  of `\X` reaching the end reads none (the oracle's answer; a state over an input known in
+  part still marks it, slot 7).
+- A `find` that runs out of starts sets `hitEnd`; one starting past the end changes
+  neither flag. **A pattern whose first node is `^` or `\A` is tried where the search
+  starts and nowhere else**, so its failure reads no end (`^a` over `ba`; `(^a)`,
+  `(?m)^a` and `\Ga` scan). The program's eighth element says so.
+- After a search that found nothing `requireEnd` has no meaning in the API and is not
+  matched: the oracle tries starts our least-length cut skips (`\w(\B+$+){2,}c+` over
+  `\rc`), and a boundary there sets it.
+
 ## Deviations (documented in `doc/*/clojure/reference/regex.md`, `doc/*/java/deviations.md`)
 
 - Positions count code points. Where the oracle steps between the halves of a surrogate pair
@@ -126,6 +181,13 @@ running it), and a comment in `regex.lisp` says "measured" where a rule is one:
 - `(?c)` (CANON_EQ): a class or a property under it is `unsupported regex`; so is `\N{name}`
   in a pattern made at run time (the Clojure lowering resolves a literal's names through
   `Character.codePointOf` while lowering; the Java front end has no table).
+- A loop that must run at least twice, whose first iteration took nothing: the oracle
+  tries no other way of a later iteration and finds nothing where a match exists
+  (`(?:\G|\w){2,}$` over `b`: no match there, `0-1` and `1-1` here). Found 2026-11-18 by
+  j87's random searches, 1 pattern in 6,000; `.todo/j98`.
+- Which iteration's capture a group keeps differed once in those searches
+  (`((?![ab]*\z??)*?|.+?(?>\B{2,}ab)?|x){2}ab?+` over `a\rcaa`: group 1 at 3 there, at 2
+  here); `.todo/j98`.
 - The index of an unclosed class at the very end of a comments-mode pattern (the oracle's
   cursor stands one further after skipped space than after a skipped comment) was not
   pinned down: 1 case in 34,000 random patterns.
@@ -159,6 +221,12 @@ that still answer, port / this engine: interpreter 6,000 / 4,000 (`--stack` rais
 8,000 / 16,000, wasm 500 / 500 (8,000 / 8,000 under `-W max-wasm-stack=8388608`). A run of
 one character and a loop over a one-way body do not recurse (400,000 characters).
 
+Regions and the two flags (j87, 2026-11-18, the tree before and after): `(println
+(re-find #"a+" "caab"))` 416,483 -> 423,744 B of wasm, a Java `split("\\s+")` 224,093 ->
+229,936 B, a Java loop over three patterns and a split (20,000 rounds) 2.00 -> 2.04 s on
+wasm, inside the noise. Making the state's region in one place instead of two cost 6 KB
+more and was not kept.
+
 The Java front end, wasm: `"..".split("\\s+")` 251,975 B (the engine, no table);
 `split(" ")`, a constant text, 66,664 B (no engine; the splitter it replaced made 79,448);
 a pattern computed at run time 317,580 B (every table).
@@ -173,7 +241,10 @@ a pattern computed at run time 317,580 B (every table).
   decoded.
 - `clojure-spec.yaml` (`a-regex-*`, `regex-literals-*`, `re-*`, `backslash-g-*`,
   `a-matcher-answers-the-java-matcher-methods`) and `java-spec.yaml`
-  (`regular-expressions-run-on-the-engine-the-front-ends-share`): four backends, the oracle's
-  lines.
+  (`regular-expressions-run-on-the-engine-the-front-ends-share`,
+  `a-matcher-keeps-a-region-tells-what-it-read-and-appends-its-replacements`: a region
+  under each setting, the flags of eleven searches): four backends, the oracle's lines.
+  The grids and the random searches of j87 are not kept as tests: they are a Java program
+  run under a JDK and under the interpreter and compared.
 - `ClojureLibraryTest#aProgramCarriesTheRegexEnginesTablesOnlyWhereAPatternMayNameWhatReadsThem`,
   `ClojureArmsTest#aRegexLiteralIsParsedByTheEntryItsSourceCallsFor`.

@@ -1169,7 +1169,8 @@
                                      #'rontolisp::%regex-sub-accept cx)))
         (if (car (cdr node))
             (lambda (st i)
-              (and (rontolisp::%regex-look-ahead body st i) (funcall next st i)))
+              (and (rontolisp::%regex-look-ahead body st i)
+                   (funcall next st i)))
             (lambda (st i)
               ;; measured: a negative lookahead standing at the end of what
               ;; it may read needs it, whatever its body reads
@@ -1248,9 +1249,8 @@
             (loop
               (if (or (>= k m)
                       (not
-                       (rontolisp::%regex-code-equal-p
-                        (char-code (char text k)) (char-code (char in (+ i k)))
-                        mode)))
+                       (rontolisp::%regex-code-equal-p (char-code (char text k))
+                        (char-code (char in (+ i k))) mode)))
                   (return nil))
               (setq k (+ k 1))))
         (cond ((= k n) (funcall next st (+ i n)))
@@ -1335,8 +1335,7 @@
                         (and (rontolisp::%regex-line-end-code-p before unix)
                              (not
                               (and (= before 13)
-                                   (= (char-code (char (svref st 0) i))
-                                      10))))))))
+                               (= (char-code (char (svref st 0) i)) 10))))))))
          (funcall next st i))))
 
 (defun rontolisp::%regex-emit-end (unix next)
@@ -1415,14 +1414,13 @@
       (if (>= i len)
           (rontolisp::%regex-hit st)
           (let ((c (char-code (char in i))))
-            (cond
-             ((and (= c 13) (< (+ i 1) len)
-                   (= (char-code (char in (+ i 1))) 10))
-              (or (funcall next st (+ i 2)) (funcall next st (+ i 1))))
-             ((rontolisp::%regex-linebreak-code-p c)
-              (if (and (= c 13) (>= (+ i 1) len)) (setf (svref st 2) t))
-              (funcall next st (+ i 1)))
-             (t nil)))))))
+            (cond ((and (= c 13) (< (+ i 1) len)
+                        (= (char-code (char in (+ i 1))) 10))
+                   (or (funcall next st (+ i 2)) (funcall next st (+ i 1))))
+                  ((rontolisp::%regex-linebreak-code-p c)
+                   (if (and (= c 13) (>= (+ i 1) len)) (setf (svref st 2) t))
+                   (funcall next st (+ i 1)))
+                  (t nil)))))))
 
 (defun rontolisp::%regex-emit-grapheme (provider next)
   "\\X: one grapheme cluster."
@@ -1947,8 +1945,8 @@
               (rontolisp::%regex-parse ps)))
          (groups (svref ps 3))
          (cx
-          (vector (+ 13 (* 2 (+ groups 1))) (not (svref ps 11)) 0 nil groups fail
-                  source))
+          (vector (+ 13 (* 2 (+ groups 1))) (not (svref ps 11)) 0 nil groups
+                  fail source))
          (entry
           (rontolisp::%regex-emit tree #'rontolisp::%regex-final-accept cx)))
     (vector entry groups (svref ps 4) (svref cx 0) source flags
@@ -2128,8 +2126,7 @@
           (setf (svref m 2) first)
           (setf (svref m 3) anchor))))))
 
-(defun rontolisp::%regex-matcher-hit-end (m)
-  (if (svref (svref m 1) 2) t nil))
+(defun rontolisp::%regex-matcher-hit-end (m) (if (svref (svref m 1) 2) t nil))
 
 (defun rontolisp::%regex-matcher-require-end (m)
   (if (svref (svref m 1) 12) t nil))

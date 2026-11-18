@@ -9,7 +9,9 @@ backend but for the [threads](#threads) of a `.wasm`.
 **A string's elements are code points.** `length`, `charAt` and `substring` count Unicode
 code points where the language counts UTF-16 units, so they differ for a character outside
 the Basic Multilingual Plane. `hashCode` is the specified number, and `toCharArray` answers
-the UTF-16 units, which `new String(char[])` reads back.
+the UTF-16 units, which `new String(char[])` reads back. `toUpperCase` and `toLowerCase`
+change one character into one: `"ß".toUpperCase()` is `ß`, where a JDK answers `SS`. A
+surrogate with no partner in a string is its three bytes in UTF-8, where a JDK writes `?`.
 
 ```java
 void main() {
@@ -170,9 +172,9 @@ from run to run.
 
 **The order of a `HashMap` differs from a JDK's in two cases.** More than eight keys whose
 hash codes fall into one bucket of a table of 64 buckets or more are walked in the order
-they were put. Keys of a `Double` with few digits get there from 64 keys on (`0.0`, `0.25`,
-`0.5` ..: their hash codes differ in the high bits only), and so do the keys of a class
-whose `hashCode` has few values; strings and integers do not. `Set.of` and `Map.of` have
+they were put. Keys of a `Float` with few digits get there from 25 keys on (`0.0`, `0.5`, `1.0` ..: their
+hash codes differ in the high bits only), keys of a `Double` with few digits from 64, and so
+do the keys of a class whose `hashCode` has few values; strings and integers do not. `Set.of` and `Map.of` have
 one fixed order, where a JDK picks another at every start.
 
 **The functions of `Math` are those of `StrictMath`**, so a result is the same on every
@@ -189,13 +191,18 @@ the last digit.
 `length` and `charAt` do here. Where a JDK's `find` steps between the halves of a surrogate
 pair the matches differ. A character class or a property under `CANON_EQ` and `\N{name}`
 are an error when the pattern is compiled. `Pattern` has `compile`, `matches`, `quote`,
-`matcher`, `split`, `pattern`, `flags` and the flag constants; `Matcher` has `find`,
-`lookingAt`, `matches`, `group`, `start`, `end`, `groupCount`, `reset`, `replaceAll`,
-`replaceFirst` and `quoteReplacement`; regions, `hitEnd`, `appendReplacement`, `results`
-and the streams are not there.
+`matcher`, `split`, `pattern`, `flags`, `asPredicate`, `asMatchPredicate` and the flag
+constants; `Matcher` has `find`, `lookingAt`, `matches`, `group`, `start`, `end`,
+`groupCount`, `hasMatch`, `reset`, `region`, `regionStart`, `regionEnd`, the anchoring and
+transparent bounds, `hitEnd`, `requireEnd`, `replaceAll` and `replaceFirst` of a text or a
+function, `appendReplacement`, `appendTail`, `toMatchResult` and `quoteReplacement`;
+`results`, `usePattern`, `namedGroups` and the streams are not there. After `lookingAt` or
+`matches` in a region with transparent bounds, a JDK's `start()` is 0 when a look-behind
+read before the region; here it is the region's start.
 
 **`String.format` has the conversions the [overview](index.md) lists**; any other is an
-error naming it.
+error naming it. The only locales are the root and the English ones, which format as
+`String.format` without a locale does; the default locale is `Locale.US`.
 
 **Two older classes are the newer ones.** A `StringBuffer` is a `StringBuilder` and
 `getClass().getName()` says so; a `Vector` is an `ArrayList` to `instanceof`.
@@ -272,5 +279,5 @@ Each of these is an error naming the construct and its position.
   `sleep` and `join` of a `Duration`.
 - Any class or member of the library not listed in the [overview](index.md): streams
   (`java.util.stream`), `LinkedList`, `LinkedHashMap`, `TreeMap`, `Scanner`, files
-  (`File`, `FileReader`, `java.nio.file`), `java.time`, `BigInteger`, `BigDecimal`, regular
-  expressions, reflection.
+  (`File`, `FileReader`, `java.nio.file`), `java.time`, `BigInteger`, `BigDecimal`,
+  reflection.

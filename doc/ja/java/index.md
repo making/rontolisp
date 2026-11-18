@@ -345,9 +345,10 @@ void main() {
 | 列挙型 | `values()`、`valueOf(String)`、`name`、`ordinal`、`compareTo`、`toString` |
 | レコード | アクセサ、`equals`、`hashCode`、`toString` |
 | 配列 | `length`、`clone()` |
-| `String` | `length`、`charAt`、`isEmpty`、`isBlank`、`equals`、`equalsIgnoreCase`、`compareTo`、`compareToIgnoreCase`、`hashCode`、`substring`、`subSequence`、文字列または文字の `indexOf` と `lastIndexOf`、`contains`、`startsWith`、`endsWith`、`toUpperCase`、`toLowerCase`、`trim`、`strip`、`stripLeading`、`stripTrailing`、`repeat`、`replace`、`replaceAll`、`replaceFirst`、`matches`、`concat`、`toCharArray`、`split`、`intern`、`formatted`、引数なし、`Charset`、文字セットの名前を取る `getBytes`。`String.valueOf`、`String.join`、`String.format`。`new String()`、`new String(String)`、`new String(char[])`、`new String(char[], int, int)`、範囲と、`Charset` または文字セットの名前を指定できる `new String(byte[])` |
-| `StringBuilder`、`StringBuffer` | 引数なし、容量、文字列を取るコンストラクタ。`append`、`insert`、`reverse`、`setLength`、`setCharAt`、`deleteCharAt`、`delete`、`replace`、`indexOf`、`toString`、`length`、`isEmpty`、`charAt`、`substring`、`subSequence` |
+| `String` | `length`、`charAt`、`isEmpty`、`isBlank`、`equals`、`equalsIgnoreCase`、`compareTo`、`compareToIgnoreCase`、`hashCode`、`substring`、`subSequence`、文字列または文字の `indexOf` と `lastIndexOf`、`contains`、`startsWith`、`endsWith`、`toUpperCase`、`toLowerCase`、`trim`、`strip`、`stripLeading`、`stripTrailing`、`repeat`、`replace`、`replaceAll`、`replaceFirst`、`matches`、`concat`、`toCharArray`、`split`、`intern`、`formatted`、引数なし、`Charset`、文字セットの名前を取る `getBytes`、`Locale` を取る `toUpperCase` と `toLowerCase`。`String.valueOf`、`String.join`、`Locale` の指定がある、またはない `String.format`。`new String()`、`new String(String)`、`new String(char[])`、`new String(char[], int, int)`、範囲と、`Charset` または文字セットの名前を指定できる `new String(byte[])` |
+| `StringBuilder`、`StringBuffer` | 引数なし、容量、文字列を取るコンストラクタ。値、または文字列か `char[]` の範囲を取る `append`、`insert`、`reverse`、`setLength`、`setCharAt`、`deleteCharAt`、`delete`、`replace`、`indexOf`、`toString`、`length`、`isEmpty`、`charAt`、`substring`、`subSequence` |
 | `CharSequence` | `length`、`charAt`、`subSequence`、`isEmpty`。`String` と `StringBuilder` は `CharSequence` です |
+| `Appendable` | `CharSequence`、その範囲、`char` を取る `append`。`StringBuilder`、`Writer`、`PrintStream` は `Appendable` です |
 | `Integer`、`Long` | ボクシングとアンボクシング。`MAX_VALUE`、`MIN_VALUE`、基数の指定がある、またはない `parseInt` / `parseLong`、`valueOf`、基数の指定がある、またはない `toString`、`toBinaryString`、`toHexString`、`Integer.toOctalString`、`Integer.parseUnsignedInt`、`Integer.toUnsignedString`、`Integer.toUnsignedLong`、`compare`、`signum`、`sum`、`max`、`min`、`bitCount`、`hashCode`、`intValue`、`longValue`、`doubleValue`、`compareTo` |
 | `Byte`、`Short` | ボクシングとアンボクシング。`MAX_VALUE`、`MIN_VALUE`、基数の指定がある、またはない `parseByte` / `parseShort`、`valueOf`、`toString`、`compare`、`hashCode`、`toUnsignedInt`、`byteValue` / `shortValue`、`intValue`、`longValue`、`floatValue`、`doubleValue`、`compareTo` |
 | `Float` | `MAX_VALUE`、`MIN_VALUE`、`MIN_NORMAL`、`POSITIVE_INFINITY`、`NEGATIVE_INFINITY`、`NaN`、`parseFloat`、`valueOf`、`toString`、`compare`、`hashCode`、`floatToIntBits`、`floatToRawIntBits`、`intBitsToFloat`、`isNaN`、`isInfinite`、`isFinite`、`sum`、`max`、`min`、`floatValue`、`doubleValue`、`intValue`、`longValue`、`compareTo` |
@@ -357,15 +358,18 @@ void main() {
 | `Math` | `PI`、`E`、`abs`、`max`、`min`、`sqrt`、`cbrt`、`pow`、`exp`、`log`、`log10`、`floor`、`ceil`、`rint`、`round`、`signum`、`sin`、`cos`、`tan`、`asin`、`acos`、`atan`、`atan2`、`sinh`、`cosh`、`tanh`、`hypot`、`toRadians`、`toDegrees`、`floorDiv`、`floorMod`、`random`、`addExact`、`subtractExact`、`multiplyExact`、`negateExact`、`toIntExact`、`ulp`、`nextUp`、`nextDown`、`fma`、`scalb` |
 | `System` | `out`、`err`（どちらも `PrintStream`）、`in`（`InputStream`）、`currentTimeMillis`、`nanoTime`、`exit`、`arraycopy`、`identityHashCode`、`lineSeparator` |
 | `IO` | `println`、`print`、`readln` |
-| `InputStream`、`OutputStream` | 1 バイトまたは配列への `read`、`readAllBytes`、`readNBytes`、`skip`、`skipNBytes`、`available`、`mark`、`reset`、`markSupported`、`transferTo`、`close`。1 バイトまたは配列の `write`、`flush`、`close`。プログラムのクラスはどちらも継承できます |
+| `InputStream`、`OutputStream` | 1 バイトまたは配列への `read`、`readAllBytes`、`readNBytes`、`skip`、`skipNBytes`、`available`、`mark`、`reset`、`markSupported`、`transferTo`、`close`、`InputStream.nullInputStream`。1 バイトまたは配列の `write`、`flush`、`close`、`OutputStream.nullOutputStream`。プログラムのクラスはどちらも継承できます |
 | `ByteArrayInputStream`、`ByteArrayOutputStream` | `byte[]` またはその範囲を対象にします。`toByteArray`、`size`、`reset`、`writeTo`、`writeBytes`、文字セットの指定がある、またはない `toString` |
 | `FilterInputStream`、`FilterOutputStream`、`BufferedInputStream`、`BufferedOutputStream` | ほかのストリームの上に作るストリーム。バッファ付きのものはサイズを指定できます |
+| `PushbackInputStream`、`SequenceInputStream` | サイズを指定できます。1 バイトまたは配列の `unread`。2 つのストリーム、またはストリームの `Enumeration` の上に作ります |
 | `DataInput`、`DataOutput`、`DataInputStream`、`DataOutputStream` | `readBoolean`、`readByte`、`readUnsignedByte`、`readShort`、`readUnsignedShort`、`readChar`、`readInt`、`readLong`、`readFloat`、`readDouble`、`readFully`、`skipBytes`、`readLine`、`readUTF`。それぞれに対応する `write`、`writeBytes`、`writeChars`、`writeUTF`、`size` |
-| `PrintStream` | `OutputStream` の上に作ります。自動フラッシュと文字セットを指定できます。各型の `print` と `println`、`printf`、`format`、`write`、`writeBytes`、`flush`、`close`、`checkError`、`charset` |
-| `Reader`、`Writer` | 1 文字または配列への `read`、`skip`、`ready`、`mark`、`reset`、`markSupported`、`transferTo`、`close`。1 文字、配列、文字列の `write`、`append`、`flush`、`close`。プログラムのクラスはどちらも継承できます |
+| `PrintStream` | `OutputStream` の上に作ります。自動フラッシュと文字セットを指定できます。各型の `print` と `println`、`Locale` の指定がある、またはない `printf` と `format`、`append`、`write`、`writeBytes`、`flush`、`close`、`checkError`、`charset` |
+| `Reader`、`Writer` | 1 文字または配列への `read`、`skip`、`ready`、`mark`、`reset`、`markSupported`、`transferTo`、`close`。1 文字、配列、文字列の `write`、`append`、`flush`、`close`。`Reader.nullReader`、`Writer.nullWriter`。プログラムのクラスはどちらも継承できます |
+| `FilterReader`、`FilterWriter`、`CharArrayReader`、`CharArrayWriter`、`PushbackReader`、`LineNumberReader` | ほかのリーダーやライターの上に作るもの。`char[]` またはその範囲を対象にするもの（`toCharArray`、`size`、`reset`、`writeTo`）。サイズを指定でき、1 文字または配列を `unread` できるもの。`getLineNumber`、`setLineNumber` |
 | `StringReader`、`StringWriter`、`InputStreamReader`、`OutputStreamWriter` | 文字列を対象にします。`getBuffer`、`toString`。ストリームを対象にするものは `Charset` または文字セットの名前を指定できます。`getEncoding` |
-| `BufferedReader`、`BufferedWriter`、`PrintWriter` | バッファのサイズを指定できます。`readLine`。`newLine`。`PrintWriter` は `Writer` または `OutputStream` の上に作り、自動フラッシュを指定できます。メンバーは `PrintStream` の文字版です |
+| `BufferedReader`、`BufferedWriter`、`PrintWriter` | バッファのサイズを指定できます。`readLine`。`newLine`。`PrintWriter` は `Writer` または `OutputStream` の上に作り、自動フラッシュと文字セットを指定できます。メンバーは `PrintStream` の文字版です |
 | `Charset`、`StandardCharsets` | `UTF_8`、`ISO_8859_1`、`US_ASCII`。`Charset.forName`、`defaultCharset`、`isSupported`、`name`、`displayName`、`toString` |
+| `Locale` | `ROOT`、`ENGLISH`、`US`、`UK`、`CANADA`、`Locale.getDefault`（`US` を返します）、`getLanguage`、`getCountry`、`toLanguageTag`、`toString` |
 | `Iterable`、`Iterator` | `iterator`、`forEach`。`hasNext`、`next`、`remove`、`forEachRemaining` |
 | `Collection` | `size`、`isEmpty`、`contains`、`add`、`remove`、`containsAll`、`addAll`、`removeAll`、`retainAll`、`removeIf`、`clear`、`toArray`、`iterator`、`forEach`、`equals`、`hashCode`、`toString` |
 | `List`、`ArrayList` | `Collection` のメンバー。`get`、`set`、添字を指定する `add` と `addAll`、添字を指定する `remove`、`indexOf`、`lastIndexOf`、`subList`、`sort`、`replaceAll`、`getFirst`、`getLast`、`removeFirst`、`removeLast`、`addFirst`、`addLast`、`reversed`、添字の指定がある、またはない `listIterator`（`ListIterator` のメンバーは `hasNext`、`next`、`hasPrevious`、`previous`、`nextIndex`、`previousIndex`、`remove`、`set`、`add`）。`List.of`、`List.copyOf`。引数なし、容量、コレクションを取る `new ArrayList<>()`、`ensureCapacity`、`trimToSize` |
@@ -406,8 +410,11 @@ void main() {
 和と積のある文字クラス、グループ（捕捉、名前付き、アトミック）、先読みと後読み、後方参照、
 貪欲・最短・所有の量指定子、インラインフラグ、`\\p{..}` のプロパティ、`\\X` と `\\b{g}` です。
 `String.matches`、`replaceAll`、`replaceFirst`、`split` も同じ構文を取ります。不正なパターンは
-JDK と同じメッセージの `PatternSyntaxException` になります。[言語との差異](deviations.md)も
-参照してください。
+JDK と同じメッセージの `PatternSyntaxException` になります。`Matcher` はリージョンの中を
+検索でき（`region`、`useAnchoringBounds`、`useTransparentBounds`）、検索が入力の終わりを
+読んだかどうかを答え（`hitEnd`、`requireEnd`）、マッチごとに置換結果を組み立て
+（`appendReplacement`、`appendTail`、関数を取る `replaceAll`）、マッチを保存します
+（`toMatchResult`）。[言語との差異](deviations.md)も参照してください。
 
 `java.io` のストリームは、配列、文字列、標準ストリーム、ほかのストリームの上に作ります。
 ファイルはありません。`PrintStream`、`PrintWriter`、バイトと文字をつなぐ 2 つのクラスが
