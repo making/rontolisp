@@ -134,8 +134,14 @@ final class JavaFlow {
 		/** What the function type of each lambda lets its body throw. */
 		final Map<Lambda, List<JavaType>> lets = new IdentityHashMap<>();
 
-		/** The class each anonymous class's body declares. */
-		final Map<ClassDeclaration, JavaClass> anonymous = new IdentityHashMap<>();
+		/** The class each local or anonymous class's body declares. */
+		final Map<ClassDeclaration, JavaClass> classes = new IdentityHashMap<>();
+
+		/**
+		 * The first problem of each kind of each local or anonymous class, by its body,
+		 * once the walk around it has met it.
+		 */
+		final Map<ClassDeclaration, @Nullable Problem[]> flowed = new IdentityHashMap<>();
 
 		/** The relations between the types, which say what a clause takes. */
 		@Nullable JavaTypes types;
@@ -336,15 +342,39 @@ final class JavaFlow {
 	/**
 	 * What a compiler refuses of the flow of a class's bodies, or {@code null}: its
 	 * methods, its constructors with the initializers they run, its static
-	 * initialization. A local or an anonymous class is a class of its own; what it reads
-	 * of the locals around it is checked where it is declared.
+	 * initialization, and those of the classes declared in it -- its member classes, and
+	 * a local or an anonymous class where the walk meets its declaration, after what it
+	 * reads of the locals around it.
 	 */
 	static @Nullable Problem check(JavaClass declaration, Facts facts) {
+		for (Problem problem : problems(declaration, facts)) {
+			if (problem != null) {
+				return problem;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The first problem of each kind in a class and the classes declared in it, in the
+	 * order a compiler reports that kind (asked of a JDK 25's): what cannot be reached
+	 * and the exceptions in the member classes first, the class's own after; the
+	 * assignments in the class first; the captures in the order they are written. Of the
+	 * class's own, the static initialization and a default constructor ahead of the
+	 * members, and what cannot be reached in the instance initializers ahead of the
+	 * constructors that run them.
+	 */
+	private static @Nullable Problem[] problems(JavaClass declaration, Facts facts) {
 		ClassDeclaration written = Objects.requireNonNull(declaration.declaration);
-		JavaFlow first = statics(declaration, written, facts);
+		List<@Nullable Problem[]> own = new ArrayList<>();
+		own.add(statics(declaration, written, facts).problems);
+		JavaFlow initializers = new JavaFlow(facts, false);
+		initializers.initializers(declaration, written, false);
+		@Nullable Problem[] unreachable = new Problem[CAPTURE + 1];
+		unreachable[REACH] = initializers.problems[REACH];
+		own.add(unreachable);
 		if (declaration.methods.stream().noneMatch(method -> method.isConstructor() && method.declaration != null)) {
-			// the default constructor stands ahead of every member
-			first = earlier(first, defaultConstructor(declaration, written, facts));
+			own.add(defaultConstructor(declaration, written, facts).problems);
 		}
 		for (Method method : declaration.methods) {
 			JavaSyntax.Method body = method.declaration;
@@ -358,9 +388,28 @@ final class JavaFlow {
 			else {
 				flow.method(method, written, Objects.requireNonNull(body.body()));
 			}
-			first = earlier(first, flow);
+			own.add(flow.problems);
 		}
-		return first.first();
+		List<@Nullable Problem[]> members = new ArrayList<>();
+		for (JavaClass member : declaration.members.values()) {
+			if (member.declaration != null) {
+				members.add(problems(member, facts));
+			}
+		}
+		@Nullable Problem[] found = new Problem[CAPTURE + 1];
+		for (int kind = REACH; kind <= CAPTURE; kind++) {
+			List<@Nullable Problem[]> order = new ArrayList<>(kind == ASSIGN ? own : members);
+			order.addAll(kind == ASSIGN ? members : own);
+			for (@Nullable
+			Problem[] one : order) {
+				Problem problem = one[kind];
+				if (problem != null && (found[kind] == null
+						|| kind == CAPTURE && problem.pos() < Objects.requireNonNull(found[kind]).pos())) {
+					found[kind] = problem;
+				}
+			}
+		}
+		return found;
 	}
 
 	/**
@@ -374,33 +423,14 @@ final class JavaFlow {
 		return flow.body(lambda).stream().map(Thrown::type).toList();
 	}
 
-	private static JavaFlow earlier(JavaFlow first, JavaFlow flow) {
-		for (int kind = REACH; kind <= CAPTURE; kind++) {
-			if (first.problems[kind] != null) {
-				return first;
-			}
-			if (flow.problems[kind] != null) {
-				return flow;
-			}
-		}
-		return first;
-	}
-
-	private @Nullable Problem first() {
-		for (Problem problem : this.problems) {
-			if (problem != null) {
-				return problem;
-			}
-		}
-		return null;
-	}
-
+	/** Of one kind the first reported, but a capture: the first written. */
 	private void problem(int kind, int pos, String message) {
 		if (this.quiet) {
 			return;
 		}
 		this.reported++;
-		if (this.problems[kind] == null) {
+		Problem known = this.problems[kind];
+		if (known == null || kind == CAPTURE && pos < known.pos()) {
 			this.problems[kind] = new Problem(pos, message);
 		}
 	}
@@ -762,7 +792,7 @@ final class JavaFlow {
 	 * made, but what the constructor it hands its arguments to throws already.
 	 */
 	private void anonymous(ClassDeclaration body, @Nullable Raise constructor) {
-		JavaClass made = this.facts.anonymous.get(body);
+		JavaClass made = this.facts.classes.get(body);
 		if (made == null || this.probing) {
 			return;
 		}
@@ -835,18 +865,46 @@ final class JavaFlow {
 
 	/**
 	 * What a local or an anonymous class reads of the locals around it: each definitely
-	 * assigned where the class is declared, and effectively final.
+	 * assigned where the class is declared, and effectively final. Then the class's own
+	 * problems, walked once: an assignment among them in the order written with the reads
+	 * (asked of a JDK 25's).
 	 */
 	private void declared(ClassDeclaration declaration) {
+		List<Problem> unassigned = new ArrayList<>();
 		for (Capture capture : this.facts.captures.getOrDefault(declaration, List.of())) {
 			Var variable = this.vars.get(capture.variable());
 			if (variable == null) {
 				continue;
 			}
 			if (variable.bit >= 0 && !this.inits.get(variable.bit)) {
-				problem(ASSIGN, capture.pos(), "variable " + variable.name + " might not have been initialized");
+				unassigned
+					.add(new Problem(capture.pos(), "variable " + variable.name + " might not have been initialized"));
 			}
 			this.references.add(new Reference(variable, capture.pos(), false));
+		}
+		JavaClass made = this.facts.classes.get(declaration);
+		@Nullable Problem[] inner = null;
+		if (made != null && !this.quiet) {
+			inner = this.facts.flowed.get(declaration);
+			if (inner == null) {
+				inner = problems(made, this.facts);
+				this.facts.flowed.put(declaration, inner);
+			}
+			if (inner[ASSIGN] != null) {
+				unassigned.add(inner[ASSIGN]);
+				unassigned.sort(Comparator.comparingInt(Problem::pos));
+			}
+		}
+		for (Problem problem : unassigned) {
+			problem(ASSIGN, problem.pos(), problem.message());
+		}
+		if (inner != null) {
+			for (int kind = REACH; kind <= CAPTURE; kind++) {
+				Problem problem = inner[kind];
+				if (problem != null && kind != ASSIGN) {
+					problem(kind, problem.pos(), problem.message());
+				}
+			}
 		}
 	}
 

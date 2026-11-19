@@ -812,9 +812,9 @@ final class JavaLowering implements JavaEmitter.Context {
 	private List<LispVal> program() {
 		this.launched = launched();
 		for (JavaClass declaration : List.copyOf(this.classes.all())) {
-			if (!declaration.intrinsic && !declaration.isLocal && !isLibrary(declaration)) {
-				implementations(declaration);
-				lowerClass(declaration);
+			if (lowered(declaration) && (declaration.outer == null || !lowered(declaration.outer))) {
+				lowerTree(declaration);
+				flow(declaration);
 			}
 		}
 		// the library's Java source: what the program reaches of it, and what that
@@ -1148,18 +1148,41 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 		}
 		staticInitialization(declaration);
-		if (!isLibrary(declaration)) {
-			JavaFlow.Problem problem = JavaFlow.check(declaration, this.facts);
-			this.currentClass = declaration;
-			this.unit = this.classes.unit(declaration);
-			if (problem != null) {
-				throw error(problem.pos(), problem.message());
+	}
+
+	/**
+	 * Whether a class is lowered with the program: one of its own that is no local class.
+	 */
+	private boolean lowered(JavaClass declaration) {
+		return !declaration.intrinsic && !declaration.isLocal && !isLibrary(declaration);
+	}
+
+	/** A class and its member classes, each typed before the flow of any is asked. */
+	private void lowerTree(JavaClass declaration) {
+		implementations(declaration);
+		lowerClass(declaration);
+		for (JavaClass member : List.copyOf(declaration.members.values())) {
+			if (lowered(member)) {
+				lowerTree(member);
 			}
-			for (JavaFlow.Problem warning : this.facts.warnings) {
-				this.warnings.warn(this.unit, warning.pos(), warning.message());
-			}
-			this.facts.warnings.clear();
 		}
+	}
+
+	/**
+	 * What the flow of a class and of the classes declared in it refuses, once they are
+	 * all typed: a compiler types the whole of a top-level class before its flow.
+	 */
+	private void flow(JavaClass declaration) {
+		JavaFlow.Problem problem = JavaFlow.check(declaration, this.facts);
+		this.currentClass = declaration;
+		this.unit = this.classes.unit(declaration);
+		if (problem != null) {
+			throw error(problem.pos(), problem.message());
+		}
+		for (JavaFlow.Problem warning : this.facts.warnings) {
+			this.warnings.warn(this.unit, warning.pos(), warning.message());
+		}
+		this.facts.warnings.clear();
 	}
 
 	/**
@@ -1295,6 +1318,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * made.
 	 */
 	private void lowerLocal(JavaClass made) {
+		this.facts.classes.put(Objects.requireNonNull(made.declaration), made);
 		if (!this.loweredLocals.add(made)) {
 			return;
 		}
@@ -6913,7 +6937,6 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		Method above = null;
 		List<LispVal> arguments = List.of();
-		this.facts.anonymous.put(creation.body(), made);
 		raises(creation, pos, List.of(), null);
 		if (extended.isInterface || extended.intrinsic) {
 			if (!creation.arguments().isEmpty()) {

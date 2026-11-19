@@ -1154,7 +1154,29 @@ class JavaLoweringTest {
 				{ "void main() { java.util.function.LongConsumer nap = Thread::sleep; }",
 						"1:53: incompatible thrown types InterruptedException in functional expression" },
 				{ "class A { void m() { } } class B extends A { void m() throws Exception { } } void main() { }",
-						"1:51: m() in Wrong.B cannot override m() in Wrong.A; overridden method does not throw Exception" } };
+						"1:51: m() in Wrong.B cannot override m() in Wrong.A; overridden method does not throw Exception" },
+				// of the flow, the first problem a compiler reports: a class and the
+				// classes
+				// in it typed first; of each kind its own order -- a local class where it
+				// is
+				// declared, a member class's unreachable statement ahead, its unassigned
+				// variable after, an instance initializer's unreachable statement ahead
+				// of the
+				// methods, the captures as written
+				{ "class A { void a() { Thread.sleep(1); } void b() { class L { void m() { Thread.sleep(1); } } } } void main() { }",
+						"1:34: unreported exception InterruptedException; must be caught or declared to be thrown" },
+				{ "class A { void b() { class L { void m() { Thread.sleep(1); } } } void c() { foo(); } } void main() { }",
+						"1:77: cannot find symbol: method foo()" },
+				{ "class A { void a() { return; IO.println(); } class M { void k() { return; IO.println(); } } } void main() { }",
+						"1:75: unreachable statement" },
+				{ "class A { static class M { void j() { int y; y++; } } void a() { int x; x++; } } void main() { }",
+						"1:73: variable x might not have been initialized" },
+				{ "class A { void a() { return; IO.println(); } A() { } Runnable r = () -> { return; IO.println(); }; } void main() { }",
+						"1:83: unreachable statement" },
+				{ "class A { void a() { int z = 0; z = 1; Runnable r = () -> IO.println(z); } static { int s = 0; s = 1; Runnable r = () -> IO.println(s); } } void main() { }",
+						"1:70: local variables referenced from a lambda expression must be final or effectively final" },
+				{ "class A { void b() { int p; class L { void j() { int y; y++; } void k() { IO.println(p); } } } } void main() { }",
+						"1:57: variable y might not have been initialized" } };
 		for (String[] error : errors) {
 			assertThatThrownBy(() -> lower(error[0], "Wrong.java")).as("%s", error[0])
 				.isInstanceOf(LispReadException.class)

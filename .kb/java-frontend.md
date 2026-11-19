@@ -405,15 +405,30 @@ goal compiles the program `src/main/java` holds to a `.wasm`, which collides wit
 tree (`JavaFlow`), as a compiler's flow analysis follows its attributed tree:** reachability and
 normal completion (JLS 14.22), definite assignment and unassignment (16), effective finality
 (4.12.4), and since j99 the checked exceptions a body throws (11.2: "Checked exceptions"
-below). `lowerClass` runs `JavaFlow.check` once the class's members and static
-initialization are lowered; a library class is not checked. Reported as the compiler reports,
-the first problem of the kind it reports first: reachability, then assignment, then
-exceptions, then captures; of one kind the first in the ORDER OF THE CLASS'S MEMBERS, the
-static initialization and a default constructor ahead of them (j99, asked of javac 25: a
-method written ahead of a constructor is reported first; until then every constructor went
-ahead of every method). A class with an error of typing gets no flow at all, and a class
-after one with a flow error is typed but not flowed, which is why the first error is all
-that is reported.
+below). `program()` lowers a top-level class with its member classes (`lowerTree`), then
+runs `JavaFlow.check` over the whole of it (`flow`): a compiler types the whole top-level
+class before its flow, so an error of typing in a later member or method comes ahead of
+any flow error of the class (k06; until then each class, a local one included, was flowed
+as soon as it was lowered). A library class is not checked. Reported as the compiler
+reports, the first problem of the kind it reports first: reachability, then assignment,
+then exceptions, then captures. Of one kind, asked of javac 25 (k06, 41 probe programs,
+`.todo/artefacts/k06-java-front-end-what-the-checked-exceptions-slice-left/`), each kind
+has its own order (`JavaFlow.problems`):
+
+- reachability: the member classes first (each with its own member classes first), then
+  the static initialization, the instance initializers, the default constructor, the
+  members in order;
+- assignment: the class's own -- static initialization, default constructor, members in
+  order (a method written ahead of a constructor is reported first, j99) -- and the member
+  classes after;
+- exceptions: the member classes first, then the class's own as for assignment;
+- captures: the first written, over the whole class (`problem` keeps the least position);
+- a local or an anonymous class is walked where the walk around it meets its declaration
+  (`declared`, once: `Facts.flowed`), its problems joining that walk's there; an
+  unassigned local it reads and its own first unassigned variable in the order written.
+
+A class with an error of typing gets no flow at all, and a class after one with a flow
+error is typed but not flowed, which is why the first error is all that is reported.
 
 - **What only typing knows comes from the lowering (`JavaFlow.Facts`)**, recorded by node
   identity: the variable each `Name` and `this.f` it resolved stands for (a local's declaring
@@ -1757,10 +1772,11 @@ virtual call can run --, classes used):
     the `Charset` (`charsetsNamed`); the call still throws what the member taking the
     name does (`UnsupportedEncodingException`), or a valid `catch` of it would be
     refused.
-  - **Not as javac**: a local class's flow is checked where it is lowered, ahead of an
-    earlier method of the class around it (one error is reported, so it shows only in a
-    program with two). `Object.clone()` and `finalize()` are no members here. A type
-    variable thrown is named without the `where` lines javac adds.
+  - **Not as javac**: `Object.clone()` and `finalize()` are no members here. A type
+    variable thrown is named without the `where` lines javac adds: an error is one line
+    (`error: File:line:col: message`, no source line or caret under it), so no error
+    carries what javac writes under its first line, while a warning is printed whole
+    (`JavaWarnings`) -- not a gap of this message (k06).
 - **An exit a cleanup takes** (j99): `try { return a(); } finally { return 4; }` is
   `(block f (unwind-protect (return-from f ..) (return-from f 4)))`, which the JVM backend
   compiled without end -- each exit inlined the cleanup with its region still open
@@ -2582,7 +2598,7 @@ line with `\r\n` and a lone `\r` of `the-standard-input-is-read-as-bytes-and-thr
 `Object`, a generic method's `instanceof`, a row of a widened grid, `copyOf` and `clone`, the
 cast inferring alone, `deepToString`) and `the-boxes-parse-print-and-compare-and-math-is-strict`
 (`ulp` .. `scalb`), `JavaLoweringTest#anErrorTheLoweringDependsOnIsReportedAtItsPosition` (an
-array cast no value passes), `DocExamplesTest` (a
+array cast no value passes; k06: which flow error comes first, each kind's order), `DocExamplesTest` (a
 ` ```java ` fence is a whole program, its output the plain block after it; `deviations.md`'s
 pins the class of an array no record names), `ExamplesE2eTest`
 (`examples/java/shop/Main.java`, read with the files of its source tree), the `standalone:`
