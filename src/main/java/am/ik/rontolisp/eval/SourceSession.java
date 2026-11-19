@@ -106,8 +106,10 @@ public final class SourceSession {
 	 */
 	public SourceSession(SourceLanguage language, SourceStandards standards, @Nullable SourceLoader loader) {
 		this.language = language;
-		// a session reads no other file of a source tree, as a program given with -e
-		this.java = language == SourceLanguage.JAVA ? new JavaSession() : null;
+		// a session reads no other file of a source tree, as a program given with -e, but
+		// the libraries on its source path
+		this.java = language == SourceLanguage.JAVA
+				? new JavaSession(SourceLanguage.javaFiles(loader, standards.javaSourcePath())) : null;
 		this.scheme = language == SourceLanguage.SCHEME
 				? Scheme.session(standards.scheme(), SourceLanguage.schemeFiles(loader)) : null;
 		this.clojure = language == SourceLanguage.CLOJURE

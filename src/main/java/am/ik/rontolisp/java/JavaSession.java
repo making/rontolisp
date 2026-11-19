@@ -61,6 +61,18 @@ public final class JavaSession {
 	/** The number of the last generated variable. */
 	private int echoes;
 
+	/** Where a library a buffer names is read from: the source path's roots alone. */
+	private final JavaFiles files;
+
+	/**
+	 * Starts a session.
+	 * @param files where a class a buffer names is read from: a session has no source
+	 * tree, so only its {@link JavaFiles#library library} roots are asked
+	 */
+	public JavaSession(JavaFiles files) {
+		this.files = files;
+	}
+
 	/**
 	 * Reads and lowers one buffer. A buffer whose reading or lowering fails leaves the
 	 * session as it was.
@@ -91,7 +103,7 @@ public final class JavaSession {
 		SessionTree tree = JavaParser.session(text, own.length(), CLASS, this.echoes);
 		JavaLowering.Session session = new JavaLowering.Session(declaredTypes, this.initialized, this.made,
 				this.lambdas, this.monitors);
-		List<LispVal> forms = JavaLowering.lower(tree.unit(), text, null, JavaFiles.NONE, session, false, null);
+		List<LispVal> forms = JavaLowering.lower(tree.unit(), text, null, this.files, session, false, null);
 		// what the buffer leaves for the next ones
 		Map<String, String> declarations = new LinkedHashMap<>(kept);
 		List<JavaTopLevel> steps = new ArrayList<>();

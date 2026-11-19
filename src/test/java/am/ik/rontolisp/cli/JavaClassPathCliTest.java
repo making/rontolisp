@@ -325,6 +325,22 @@ class JavaClassPathCliTest {
 		}
 		assertThat(warned.toString(StandardCharsets.UTF_8))
 			.contains("warning: --java-source-dep: no sources jar for test.fixture:fixture-lib:jar:0.9");
+		// a program given with -e and a session have no source tree, but the source path
+		try (ThreadStdio.Scope _ = ThreadStdio.err(warned)) {
+			assertThat(runCli(resolver,
+					concat(new String[] { "-e",
+							"void main() { IO.println(fixture.app.App.hello() + local.Words.twice(\"e\")); }",
+							"--source-language", "java" }, sourcePath)))
+				.isEqualTo("appee\n");
+			ByteArrayOutputStream session = new ByteArrayOutputStream();
+			RontoLispCli repl = new RontoLispCli(
+					new ByteArrayInputStream(
+							"fixture.app.App.hello() + local.Words.twice(\"s\")\n".getBytes(StandardCharsets.UTF_8)),
+					new PrintStream(session));
+			repl.javaDependencyResolver(repositories -> resolver);
+			repl.run(concat(new String[] { "--source-language", "java" }, sourcePath));
+			assertThat(session.toString(StandardCharsets.UTF_8)).contains("$1 ==> \"appss\"");
+		}
 		// nothing of it is carried beside a compiled program, a .wasm included
 		Path module = this.tempDir.resolve("greets.wasm");
 		Path jar = this.tempDir.resolve("greets.jar");

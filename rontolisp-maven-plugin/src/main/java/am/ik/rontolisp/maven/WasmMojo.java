@@ -2,20 +2,32 @@ package am.ik.rontolisp.maven;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 import am.ik.rontolisp.Version;
 import am.ik.rontolisp.cli.WasmSourceCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmReportLocations;
 import am.ik.rontolisp.compiler.HostBoundary;
 import am.ik.rontolisp.compiler.OptimizeLevel;
+import org.apache.maven.artifact.Artifact;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugin.MojoFailureException;
+import org.apache.maven.plugins.annotations.Component;
 import org.apache.maven.plugins.annotations.LifecyclePhase;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
+import org.apache.maven.plugins.annotations.ResolutionScope;
+import org.apache.maven.project.MavenProject;
+import org.eclipse.aether.RepositorySystem;
+import org.eclipse.aether.RepositorySystemSession;
+import org.eclipse.aether.artifact.DefaultArtifact;
+import org.eclipse.aether.resolution.ArtifactRequest;
+import org.eclipse.aether.resolution.ArtifactResolutionException;
 import org.jspecify.annotations.Nullable;
 
 /**
@@ -28,12 +40,20 @@ import org.jspecify.annotations.Nullable;
  * javac and its tests still run in surefire, so the same sources run on a JDK; the module
  * is one more artifact of the build, beside the jar.
  * <p>
- * The front end reads source, so a class the program names from a dependency jar is
- * refused by name, as the command line refuses it. Every parameter is a CLI flag under
- * its camel-cased name.
+ * The front end reads source, so a library the program uses is read from its sources jar,
+ * as {@code --java-source-dep} reads one: each compile, provided and system dependency's,
+ * asked of the project's repositories, after {@link #javaSourcePath}'s entries. A
+ * dependency that has none is a warning, and a class of it the program reaches is refused
+ * by name, as the command line refuses it. Every parameter is a CLI flag under its
+ * camel-cased name.
  */
-@Mojo(name = "wasm", defaultPhase = LifecyclePhase.PACKAGE, threadSafe = true)
+@Mojo(name = "wasm", defaultPhase = LifecyclePhase.PACKAGE, threadSafe = true,
+		requiresDependencyResolution = ResolutionScope.COMPILE)
 public class WasmMojo extends AbstractMojo {
+
+	/** The scopes javac compiles {@code src/main/java} against. */
+	private static final Set<String> SOURCE_SCOPES = Set.of(Artifact.SCOPE_COMPILE, Artifact.SCOPE_PROVIDED,
+			Artifact.SCOPE_SYSTEM);
 
 	/** Skips the goal. */
 	@Parameter(property = "rontolisp.skip", defaultValue = "false")
@@ -134,6 +154,22 @@ public class WasmMojo extends AbstractMojo {
 	@Parameter(property = "rontolisp.warningsAsErrors", defaultValue = "false")
 	private boolean warningsAsErrors;
 
+	/**
+	 * {@code --java-source-path}: directories and sources jars the program's libraries
+	 * are read from, searched before the dependencies' sources jars.
+	 */
+	@Parameter
+	private List<File> javaSourcePath = new ArrayList<>();
+
+	@Parameter(defaultValue = "${project}", readonly = true, required = true)
+	private @Nullable MavenProject project;
+
+	@Parameter(defaultValue = "${repositorySystemSession}", readonly = true, required = true)
+	private @Nullable RepositorySystemSession repositorySession;
+
+	@Component
+	private @Nullable RepositorySystem repositorySystem;
+
 	@Override
 	public void execute() throws MojoExecutionException, MojoFailureException {
 		if (this.skip) {
@@ -150,7 +186,7 @@ public class WasmMojo extends AbstractMojo {
 				required(this.buildDirectory, "buildDirectory").toPath()
 					.resolve("rontolisp")
 					.resolve(output.getName() + ".status"),
-				configuration(), this::configure);
+				sourcePath(), configuration(), this::configure);
 		boolean compiled;
 		try {
 			compiled = program.compile();
@@ -166,6 +202,41 @@ public class WasmMojo extends AbstractMojo {
 		}
 		getLog().info(compiled ? "Compiled " + this.mainClass + " to " + output
 				: "Nothing to compile - " + output + " is up to date");
+	}
+
+	/**
+	 * The program's source path: {@link #javaSourcePath}, then the sources jar of each
+	 * dependency javac compiles against, in the class path's order. Not a dependency's
+	 * test or optional ones, which Maven leaves out of that class path.
+	 */
+	private List<Path> sourcePath() {
+		List<Path> roots = new ArrayList<>();
+		for (File entry : this.javaSourcePath) {
+			roots.add(entry.toPath());
+		}
+		MavenProject project = required(this.project, "project");
+		for (Artifact artifact : project.getArtifacts()) {
+			if (!SOURCE_SCOPES.contains(artifact.getScope()) || !artifact.getArtifactHandler().isAddedToClasspath()) {
+				continue;
+			}
+			ArtifactRequest request = new ArtifactRequest(new DefaultArtifact(artifact.getGroupId(),
+					artifact.getArtifactId(), "sources", "jar", artifact.getVersion()),
+					project.getRemoteProjectRepositories(), null);
+			try {
+				roots.add(required(this.repositorySystem, "repositorySystem")
+					.resolveArtifact(required(this.repositorySession, "repositorySession"), request)
+					.getArtifact()
+					.getFile()
+					.toPath());
+			}
+			catch (ArtifactResolutionException ex) {
+				// javac needs only the class file, and the program may never reach a
+				// class of it: one it does is refused there, by name
+				getLog().warn("no sources jar for " + artifact.getId()
+						+ ": its classes are not there for the program to compile (" + ex.getMessage() + ")");
+			}
+		}
+		return roots;
 	}
 
 	private File output() {

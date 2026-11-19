@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -58,18 +59,20 @@ class JvmSourceCompilerTest {
 
 	@Test
 	void theEmbeddedWasmCompileIsByteIdenticalToTheCommandLines() throws Exception {
-		// A Java program of two packages: the entry file's path is what the front end
-		// finds the other class's source tree from, in the seam as on the command line.
+		// A Java program of two packages and a library on its source path: the entry
+		// file's path is what the front end finds the other class's source tree from, and
+		// the source path where the library is, in the seam as on the command line.
 		Path main = this.tempDir.resolve("app/Main.java");
 		Files.createDirectories(main.getParent());
 		Files.writeString(main, """
 				package app;
 
+				import geo.Place;
 				import util.Greeting;
 
 				public class Main {
 				    public static void main(String[] args) {
-				        System.out.println(Greeting.of("wasm"));
+				        System.out.println(Greeting.of(Place.HOME));
 				    }
 				}
 				""");
@@ -84,14 +87,26 @@ class JvmSourceCompilerTest {
 				    }
 				}
 				""");
+		Path library = this.tempDir.resolve("lib");
+		Path place = library.resolve("geo/Place.java");
+		Files.createDirectories(place.getParent());
+		Files.writeString(place, """
+				package geo;
+
+				public class Place {
+				    public static final String HOME = "wasm";
+				}
+				""");
 		Path output = this.tempDir.resolve("out/main.wasm");
 		new RontoLispCli(new ByteArrayInputStream(new byte[0]), new PrintStream(new ByteArrayOutputStream()))
-			.run(new String[] { main.toString(), "-o", output.toString(), "--component", "--emit-wit" });
+			.run(new String[] { main.toString(), "-o", output.toString(), "--component", "--emit-wit",
+					"--java-source-path", library.toString() });
 
 		Path embedded = this.tempDir.resolve("embedded/main.wasm");
 		new WasmSourceCompiler().component(true)
 			.emitWit(true)
 			.baseDir(this.tempDir.resolve("app").toString())
+			.javaSourcePath(List.of(library.toString()))
 			.compile(Files.readString(main), main.toString())
 			.write(embedded);
 

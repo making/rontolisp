@@ -78,6 +78,8 @@ public final class WasmSourceCompiler {
 
 	private @Nullable String sourceLanguage;
 
+	private List<String> javaSourcePath = List.of();
+
 	private boolean warningsAsErrors;
 
 	/**
@@ -253,6 +255,16 @@ public final class WasmSourceCompiler {
 	}
 
 	/**
+	 * @param roots the source path of a program in the Java subset: the directories and
+	 * jars its libraries are read from as source and compiled with it
+	 * ({@code --java-source-path})
+	 */
+	public WasmSourceCompiler javaSourcePath(List<String> roots) {
+		this.javaSourcePath = List.copyOf(roots);
+		return this;
+	}
+
+	/**
 	 * @param warningsAsErrors {@code --warnings-as-errors}: a compile that warns about
 	 * the program's own source fails with a {@link WarningsAsErrorsException}
 	 */
@@ -285,7 +297,7 @@ public final class WasmSourceCompiler {
 						.source(source)
 						.entryFile(entryFile)
 						.sourceLanguage(this.sourceLanguage)
-						.standards(SourceStandards.DEFAULT)
+						.standards(SourceStandards.DEFAULT.withJavaSourcePath(this.javaSourcePath))
 						.systemPath(this.systemPath)
 						.dists(dists)
 						.declaredFeatures(this.features)

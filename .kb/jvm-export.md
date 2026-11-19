@@ -191,18 +191,39 @@ JDK; the module is one more artifact). A goal of this plugin, not a new one (use
 - **Parameters** are the wasm flags camel-cased; `native` is `@Parameter(alias = "native")` on a
   field that cannot carry the keyword. No `noGc`: the Java front end refuses it. Output default
   `${project.build.directory}/${project.build.finalName}.wasm`, no extension under `native`.
+- **A project's dependencies are its source path** (k32, 2026-11-20; `java-frontend.md`, "A
+  library from the source path"): `requiresDependencyResolution = COMPILE`; each artifact of
+  scope `compile`, `provided` or `system` that goes on a class path is asked again with the
+  classifier `sources` through the build's `RepositorySystem` and the project's remote
+  repositories (`WasmMojo.sourcePath`), in the class path's order, after `<javaSourcePath>`'s
+  directories and jars (`--java-source-path`'s place on the command line). One with none is a
+  `[WARNING] no sources jar for g:a:jar:v`, never a failure: javac needs only the class file and
+  the program may never reach it. A dependency's test and optional ones are not in Maven's
+  graph; the project's own optional one is, as on javac's class path.
+  `WasmSourceCompiler.javaSourcePath` carries the roots, as `JvmSourceCompiler`'s does
+  (`JvmSourceCompilerTest#theEmbeddedWasmCompileIsByteIdenticalToTheCommandLines` has a
+  `--java-source-path` directory). Measured 2026-11-20: YAVI's schema example
+  (`.todo/artefacts/k24-java-front-end-a-program-that-uses-an-existing-library/schema`) as a
+  project depending on `am.ik.yavi:yavi:0.18.0`: `mvn -o package` 17.3 s, 1,216,108 B (the
+  CLI's size), the JDK's 23 lines under `wasmtime`; the second build 2.6 s, up to date.
 - **Staleness is all-or-nothing over every `.java` of the tree** (`maven/WasmProgram`): only the
   compile knows which files the program reads. The status file is per output
   (`target/rontolisp/<output name>.status`, so two executions -- Preview 1 and `--component` --
   do not share one) and holds the configuration line (the compiler's version and git commit
-  included, so a new SNAPSHOT rebuilds) plus the sorted source list; stamped before the work.
+  included, so a new SNAPSHOT rebuilds) plus the sorted source list and each source-path root
+  (`sourcePath <absolute>`, a directory's `.java` files under it); every listed file and jar is
+  stamped against it, stamped before the work. A missing `<javaSourcePath>` entry fails as
+  `--java-source-path`'s does.
 - Any `RuntimeException` (a front-end refusal with `file:line:column`, a flag conflict,
-  `WarningsAsErrorsException`) is a `MojoFailureException` with the message verbatim. A
-  dependency jar's class is refused by name: jspecify's `@Nullable` is `Main.java:7:9: cannot find
+  `WarningsAsErrorsException`) is a `MojoFailureException` with the message verbatim. A class of
+  a dependency with no sources jar is refused by name: `@Nullable` is `Main.java:7:9: cannot find
   symbol: class Nullable` (at the use: an import of a class outside the program is resolved where
   it is used, `java-frontend.md`).
 - `MavenBuildE2eTest#aJavaProgramBuildsToWasmThatPrintsWhatTheJdkPrints` (needs `wasmtime` on
-  PATH; the CI job installs it). Checked by hand 2026-11-19: `examples/java/http/Server.java`
+  PATH; the CI job installs it): the program checks a record with YAVI, whose jar and sources
+  jar the module's own test dependencies put in the local repository its offline build reads;
+  the refusal leg's dependency is jspecify's jar as a `system` dependency of coordinates no
+  repository has, so no machine finds a sources jar for it. Checked by hand 2026-11-19: `examples/java/http/Server.java`
   built with `<component>true</component>` serves under `wasmtime serve -S cli=y` from `target/`,
   and `<native>true</native>` writes a running executable when the installed rontolisp jar carries
   the shim (the CI job's does not build it, so the E2E has no native leg).

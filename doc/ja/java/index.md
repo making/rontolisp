@@ -187,7 +187,9 @@ Error: Exception java.lang.ArithmeticException: / by zero
 宣言は、同じ名前（メソッドは名前と引数の型）の以前の宣言を置き換えます。以前に宣言したものは
 新しい宣言を呼びます。後から加えたメソッド、オーバーライド、サブクラスにも、すべての呼び出しが
 届きます。クラスの static フィールドは、そのクラスを宣言し直すまで値を保ちます。宣言し直すと、
-そのクラスを型に含む変数は `null` になります。セッションは他のファイルを読みません。
+そのクラスを型に含む変数は `null` になります。セッションはソースツリーのファイルを読みません。
+[ソースパス](#using-a-library)上のライブラリのクラスは、プログラムと同じように読みます。
+プレイグラウンドにはソースパスがありません。
 
 ## 言語をまたぐ呼び出し
 
@@ -282,13 +284,17 @@ $ wasmtime run target/app-component.wasm
 - パラメータはコマンドラインのフラグをキャメルケースにしたものです: `component`、`noWasi`、
   `optimize`、`simd`、`hostRandom`、`hostFetch`、`reentrant`、`hostBoundary`、
   `reportLocations`、`emitWit`、`emitJsGlue`、`native`、`nativeTarget`、`nativeCpu`、
-  `dynamic`、`noPrune`、`warningsAsErrors`。`skip`（`-Drontolisp.skip=true`）でゴールを
-  無効にします。
-- フロントエンドが読むのはソースで、クラスファイルではありません。依存 jar のクラスは javac
-  ではコンパイルできますが、このゴールはコマンドラインと同じく、その名前と位置を示して失敗します。
-  jspecify の `@Nullable` なら `.../app/Main.java:7:9: cannot find symbol: class Nullable` です。
-- 前回のビルドより新しい `.java` ファイルがツリーになく、追加も削除もなく、パラメータが同じで
-  出力が存在するときは、何もコンパイルしません。そうでなければプログラム全体をコンパイルします。
+  `dynamic`、`noPrune`、`warningsAsErrors`、`javaSourcePath`。`skip`
+  （`-Drontolisp.skip=true`）でゴールを無効にします。
+- フロントエンドが読むのはソースで、クラスファイルではありません（[ライブラリを使う](#using-a-library)）。
+  スコープが `compile`、`provided`、`system` の各依存について、その sources jar をプロジェクトの
+  リポジトリから取得し、ソースパスに加えます。順序は `<javaSourcePath>` に並べたディレクトリと
+  jar の後です。sources jar のない依存は警告になり、プログラムがそのクラスを名指しすると、
+  ゴールはその名前と位置を示して失敗します。そうした jar の `@Nullable` なら
+  `.../app/Main.java:7:9: cannot find symbol: class Nullable` です。
+- 前回のビルドより新しいファイル（ツリーとソースパス上のディレクトリの `.java` ファイル、
+  ソースパス上の jar）がなく、追加も削除もなく、パラメータとソースパスが同じで出力が存在する
+  ときは、何もコンパイルしません。そうでなければプログラム全体をコンパイルします。
 - `component` でビルドした [HTTP](#http) サーバーは、`target/` から `wasmtime serve` で
   動きます。
 

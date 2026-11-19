@@ -180,7 +180,9 @@ Error: Exception java.lang.ArithmeticException: / by zero
 A declaration replaces the earlier one of its name (a method: of its name and parameter types),
 and what was declared before calls the new one: a method, an override, a subclass added later
 is reached by every call. A class keeps its static fields until it is declared again; then the
-variables whose type names it hold `null`. The session reads no other file.
+variables whose type names it hold `null`. The session reads no file of a source tree; a class
+of a library on the [source path](#using-a-library) is read as a program's is. The playground
+has no source path.
 
 ## Across languages
 
@@ -272,14 +274,17 @@ $ wasmtime run target/app-component.wasm
 - The parameters are the command line's flags in camel case: `component`, `noWasi`,
   `optimize`, `simd`, `hostRandom`, `hostFetch`, `reentrant`, `hostBoundary`,
   `reportLocations`, `emitWit`, `emitJsGlue`, `native`, `nativeTarget`, `nativeCpu`,
-  `dynamic`, `noPrune`, `warningsAsErrors`. `skip` (`-Drontolisp.skip=true`) turns the goal
-  off.
-- The front end reads source, not class files. A class from a dependency jar compiles with
-  javac and fails this goal with its name and position, as the command line does; for
-  jspecify's `@Nullable`: `.../app/Main.java:7:9: cannot find symbol: class Nullable`.
-- When no `.java` file of the tree is newer than the last build, none was added or removed,
-  the parameters are the same and the output exists, nothing is compiled. Otherwise the
-  whole program is.
+  `dynamic`, `noPrune`, `warningsAsErrors`, `javaSourcePath`. `skip`
+  (`-Drontolisp.skip=true`) turns the goal off.
+- The front end reads source, not class files ([Using a library](#using-a-library)). The
+  sources jar of each `compile`, `provided` and `system` dependency is fetched from the
+  project's repositories and joins the source path, after the directories and jars
+  `<javaSourcePath>` lists. A dependency with no sources jar is a warning; a class of it the
+  program names fails the goal with its name and position, for `@Nullable` from such a jar:
+  `.../app/Main.java:7:9: cannot find symbol: class Nullable`.
+- When no `.java` file of the tree or of a directory on the source path and no jar on it is
+  newer than the last build, none was added or removed, the parameters and the source path are
+  the same and the output exists, nothing is compiled. Otherwise the whole program is.
 - An [HTTP](#http) server built with `component` runs from `target/` under
   `wasmtime serve`.
 

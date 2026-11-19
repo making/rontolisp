@@ -1,5 +1,6 @@
 package am.ik.rontolisp.maven;
 
+import java.io.File;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -14,7 +15,9 @@ import java.util.Map;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
+import am.ik.yavi.core.Validator;
 import org.apache.catalina.startup.Tomcat;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -169,11 +172,12 @@ class MavenBuildE2eTest {
 	}
 
 	/**
-	 * The {@code wasm} goal: {@code src/main/java} -- two packages, a record, a thread --
-	 * builds with javac as ever and, at {@code package}, to a Preview 1 module and a
-	 * component, each printing what {@code java} prints from javac's classes. A class
-	 * from a dependency jar is source the front end cannot read, so the build fails
-	 * naming it at its position.
+	 * The {@code wasm} goal: {@code src/main/java} -- two packages, a record, a thread, a
+	 * record checked with YAVI -- builds with javac as ever and, at {@code package}, to a
+	 * Preview 1 module and a component, each printing what {@code java} prints from
+	 * javac's classes. YAVI is read from the sources jar of the project's dependency. A
+	 * dependency with no sources jar is a warning, and a class of it the program names is
+	 * refused by name at its position.
 	 */
 	@Test
 	void aJavaProgramBuildsToWasmThatPrintsWhatTheJdkPrints() throws Exception {
@@ -181,12 +185,15 @@ class MavenBuildE2eTest {
 		String wasmtime = "wasmtime";
 		assumeTrue(runAllowingFailure(this.project, List.of(wasmtime, "--version")).status() == 0,
 				"wasmtime is not on PATH");
-		writeJavaProject(ready.version(), ready.lifecyclePlugins());
+		String yavi = System.getProperty("rontolisp.plugin.e2e.yavi");
+		assumeTrue(yavi != null, "rontolisp.plugin.e2e.yavi is unset");
+		writeJavaProject(ready.version(), ready.lifecyclePlugins(), yavi);
 		run(this.project, ready.maven("-o", "-q", "package"));
 
 		String expected = run(this.project, List.of(javaExecutable().toString(), "-cp",
-				this.project.resolve("target/classes").toString(), "app.Main"));
-		assertThat(expected).contains("total 1550");
+				this.project.resolve("target/classes") + File.pathSeparator + jarOf(Validator.class), "app.Main"));
+		assertThat(expected).contains("total 1850")
+			.contains("The size of \"item\" must be less than or equal to 5. The given size is 9");
 		assertThat(run(this.project, List.of(wasmtime, "run", "target/javaapp-1.0.0.wasm"))).isEqualTo(expected);
 		assertThat(run(this.project, List.of(wasmtime, "run", "target/javaapp-component.wasm"))).isEqualTo(expected);
 		assertThat(run(this.project, ready.maven("-o", "package"))).contains("target/javaapp-1.0.0.wasm is up to date")
@@ -206,21 +213,29 @@ class MavenBuildE2eTest {
 				""");
 		ProcessResult refused = runAllowingFailure(this.project, ready.maven("-o", "package"));
 		assertThat(refused.status()).isNotZero();
-		assertThat(refused.output()).contains("app/Main.java:7:9: cannot find symbol: class Nullable");
+		assertThat(refused.output()).contains("[WARNING] no sources jar for e2e:annotations:jar:1.0.0")
+			.contains("app/Main.java:7:9: cannot find symbol: class Nullable");
 	}
 
-	private void writeJavaProject(String version, Map<String, String> plugins) throws Exception {
+	private void writeJavaProject(String version, Map<String, String> plugins, String yavi) throws Exception {
 		Path main = this.project.resolve("src/main/java/app/Main.java");
 		Files.createDirectories(main.getParent());
 		Files.writeString(main, """
 				package app;
 
+				import am.ik.yavi.builder.ValidatorBuilder;
+				import am.ik.yavi.core.Validator;
 				import app.model.Order;
 				import java.util.List;
 
 				public class Main {
+				    static final Validator<Order> validator = ValidatorBuilder.<Order>of()
+				        .constraint(Order::item, "item", c -> c.notBlank().lessThanOrEqual(5))
+				        .build();
+
 				    public static void main(String[] args) throws InterruptedException {
-				        List<Order> orders = List.of(new Order("tea", 3, 250), new Order("cake", 2, 400));
+				        List<Order> orders = List.of(new Order("tea", 3, 250), new Order("cake", 2, 400),
+				            new Order("chocolate", 1, 300));
 				        int[] total = new int[1];
 				        Thread worker = new Thread(() -> {
 				            for (Order order : orders) {
@@ -231,6 +246,9 @@ class MavenBuildE2eTest {
 				        worker.join();
 				        orders.forEach(System.out::println);
 				        System.out.println("total " + total[0]);
+				        for (Order order : orders) {
+				            validator.validate(order).forEach(violation -> System.out.println(violation.message()));
+				        }
 				    }
 				}
 				""");
@@ -245,9 +263,10 @@ class MavenBuildE2eTest {
 				    }
 				}
 				""");
-		// jspecify is the refusal leg's dependency: a jar javac compiles against and the
-		// front end cannot read. This module's own build depends on it, so the offline
-		// build finds it.
+		// YAVI and its sources jar are in the local repository because this module's own
+		// build depends on both. The refusal leg's dependency is jspecify's jar under
+		// coordinates no repository has: javac compiles against it, and no machine finds
+		// a sources jar for it.
 		Files.writeString(this.project.resolve("pom.xml"),
 				"""
 						<project xmlns="http://maven.apache.org/POM/4.0.0">
@@ -261,9 +280,16 @@ class MavenBuildE2eTest {
 						  </properties>
 						  <dependencies>
 						    <dependency>
-						      <groupId>org.jspecify</groupId>
-						      <artifactId>jspecify</artifactId>
+						      <groupId>am.ik.yavi</groupId>
+						      <artifactId>yavi</artifactId>
+						      <version>%s</version>
+						    </dependency>
+						    <dependency>
+						      <groupId>e2e</groupId>
+						      <artifactId>annotations</artifactId>
 						      <version>1.0.0</version>
+						      <scope>system</scope>
+						      <systemPath>%s</systemPath>
 						    </dependency>
 						  </dependencies>
 						  <build>
@@ -313,9 +339,14 @@ class MavenBuildE2eTest {
 						    </plugins>
 						  </build>
 						</project>
-						""".formatted(Runtime.version().feature(), plugins.get("maven-resources-plugin"),
-						plugins.get("maven-jar-plugin"), plugins.get("maven-surefire-plugin"),
-						plugins.get("maven-compiler-plugin"), version));
+						""".formatted(Runtime.version().feature(), yavi, jarOf(Nullable.class),
+						plugins.get("maven-resources-plugin"), plugins.get("maven-jar-plugin"),
+						plugins.get("maven-surefire-plugin"), plugins.get("maven-compiler-plugin"), version));
+	}
+
+	/** The jar a class of this test's class path was loaded from. */
+	private static Path jarOf(Class<?> type) throws Exception {
+		return Path.of(type.getProtectionDomain().getCodeSource().getLocation().toURI());
 	}
 
 	/**

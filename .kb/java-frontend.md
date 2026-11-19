@@ -51,8 +51,10 @@ collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
 as the program reaches it, annotation types and type annotations, an exact method
 reference in a call's applicability: k24 (2026-11-19); what comes after is `.todo/k15`,
 `k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22` and `k26` (what k00, k11, k06, k07, k08,
-k10 and k12 left) and `.todo/k32` and `k33` (what stands between k24 and YAVI compiled to
-wasm: `.todo/k33` holds the order); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
+k10 and k12 left) and `k33` (what stands between k24 and YAVI compiled to
+wasm: `.todo/k33` holds the order); the Maven plugin's `wasm` goal reading a project's
+dependencies from their sources jars, a session reading the source path: k32 (2026-11-20;
+what it left is `.todo/k44`); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
 `java.text.MessageFormat`: k28 (2026-11-19); `java.text.Normalizer` over the normalization
 forms the front ends share: k29 (2026-11-19); a `Class` as a value, a type variable in
 scope kept apart from the one a call finds, `Name.this` as the instance of `Name`
@@ -331,8 +333,11 @@ is `.todo/artefacts/k24-java-front-end-a-program-that-uses-an-existing-library/`
   transitively, a dependency's `provided`, `test` and optional ones not, and of each
   artifact the `sources` classifier. A coordinate NAMED with no sources jar is refused; one
   it depends on with none is a warning (javac needs only its class file, and the program
-  may never reach it). Not there yet: the Maven plugin, a session, the playground
-  (`.todo/k32`).
+  may never reach it). The Maven plugin's `wasm` goal passes a project's dependencies
+  (`jvm-export.md`, "The plugin's `wasm` goal"); `-e` and a session read the roots
+  ("A session" below). **The playground has none** (k32, 2026-11-20): its files are text
+  (`rontoPutFile(name, content)`), so a jar cannot be uploaded as one, and it has no
+  resolver. Its uploaded `.java` files as a root are `.todo/k44`.
 - **A program's file wins**: `JavaClasses.programClass` asks the source tree, then the
   roots in order (javac's order of a source path). A class of a JDK's packages is never
   looked for on either.
@@ -373,7 +378,7 @@ is `.todo/artefacts/k24-java-front-end-a-program-that-uses-an-existing-library/`
   dropped, as javac reads a class file whose annotation type is missing from the class
   path without a word -- jspecify is `provided` in YAVI's pom and is not in the graph.
 - **Resources are not read**: a sources jar holds none, and `ResourceBundle` and its kind
-  are classes the library does not have, refused by name where reached (`.todo/k32`).
+  are classes the library does not have, refused by name where reached (`.todo/k44`).
 - **What the front end lacked that a library showed** (each a rule of the language, fixed
   for every program, pinned by the fixture):
   - An **exact method reference** naming a class counts in applicability by what its
@@ -436,8 +441,13 @@ alternating, then a call, 100 buffers timed): 120 declarations 10 ms a buffer, 4
   (`Session.made`, a dispatch must reach an `ArrayList` no later buffer names), the interfaces a
   lambda was made for, every one tagged in a session (no later buffer may find an untagged one
   it must tell apart), and whether `Thread` was reached (`monitors`).
-- **No other file**: a session has no source tree, as `-e` (the REPL's working directory is no
-  package root, and a snippet shell reads none either).
+- **No source tree**: a session has none, as `-e` (the REPL's working directory is no
+  package root, and a snippet shell reads none either). **The source path it has** (k32,
+  2026-11-20): `JavaSession` takes the `JavaFiles` of `SourceLanguage.javaFiles` over the
+  standards' roots, and `JavaClasses.programClass` with no entry file asks only `library`;
+  `-e` read them already through `SourceLanguage.read`. The roots' entry lists are read once a
+  session, the files again with every buffer as the whole session is lowered again.
+  `JavaClassPathCliTest#aJavaProgramCompilesItsLibrariesFromTheSourcePath`.
 
 ## Across languages (2026-11-17, j74)
 

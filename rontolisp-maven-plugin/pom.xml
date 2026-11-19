@@ -59,6 +59,7 @@
 		<rontolisp.version>${project.version}</rontolisp.version>
 		<maven.version>3.9.9</maven.version>
 		<spring-boot.version>4.1.1</spring-boot.version>
+		<yavi.version>0.18.0</yavi.version>
 		<!--
 			Every plugin a jar project's `package` binds, pinned rather than left to the
 			running Maven's default bindings. MavenBuildE2eTest's offline consumer build
@@ -117,6 +118,24 @@
 			<groupId>org.assertj</groupId>
 			<artifactId>assertj-core</artifactId>
 			<version>3.27.0</version>
+			<scope>test</scope>
+		</dependency>
+		<!--
+			For MavenBuildE2eTest's wasm leg only: a library the program reads from its
+			sources jar, which its offline build finds in the local repository because
+			this module's build put both jars there.
+		-->
+		<dependency>
+			<groupId>am.ik.yavi</groupId>
+			<artifactId>yavi</artifactId>
+			<version>${yavi.version}</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>am.ik.yavi</groupId>
+			<artifactId>yavi</artifactId>
+			<version>${yavi.version}</version>
+			<classifier>sources</classifier>
 			<scope>test</scope>
 		</dependency>
 		<!--
@@ -195,6 +214,7 @@
 						<rontolisp.plugin.e2e.maven-compiler-plugin>${maven-compiler-plugin.version}</rontolisp.plugin.e2e.maven-compiler-plugin>
 						<rontolisp.plugin.e2e.maven-surefire-plugin>${maven-surefire-plugin.version}</rontolisp.plugin.e2e.maven-surefire-plugin>
 						<rontolisp.plugin.e2e.maven-jar-plugin>${maven-jar-plugin.version}</rontolisp.plugin.e2e.maven-jar-plugin>
+						<rontolisp.plugin.e2e.yavi>${yavi.version}</rontolisp.plugin.e2e.yavi>
 					</systemPropertyVariables>
 				</configuration>
 			</plugin>

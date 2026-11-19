@@ -84,8 +84,14 @@ has the two programs, the oracle's lines, the refusals met and how to run it aga
    **Left here: step 5 is done (k37), so the README's schema example (`Yavi.schema()`)
    joins it as a second program of `examples/java/yavi/`, with its `examples.yaml`
    entry and README lines.**
-7. `.todo/k32` -- the Maven plugin passing a project's dependencies, so that a YAVI
-   project builds with `rontolisp:wasm`.
+7. k32 (done 2026-11-20) -- the Maven plugin passing a project's dependencies, so that a
+   YAVI project builds with `rontolisp:wasm`: each `compile` / `provided` / `system`
+   dependency's sources jar is asked of the project's repositories. The schema example as
+   a project depending on `am.ik.yavi:yavi:0.18.0` builds with `mvn -o package` in 17.3 s
+   to 1,216,108 B (the CLI's size) and prints the JDK's 23 lines under `wasmtime`;
+   `MavenBuildE2eTest` builds a YAVI program to a module and a component. A session and
+   `-e` read the source path too; what is left of the surface is `.todo/k44`, none of it
+   on this path.
 
 Found on the way and on nobody's path: `.todo/k39` (two shapes of inference at a
 variable arity parameter), `.todo/k40` (a session's `values()`), `.todo/k41` (the bytes
