@@ -324,12 +324,17 @@ algorithm came from, and the answer goes in the file's header.
   of charge; the JDK's `legal/java.base/LICENSE` is Oracle's No-Fee Terms and Conditions (not
   GPLv2+CPE, which only a Community build would give); `legal/<module>/*.md` hold third-party
   components. Of the modules the image links, `java.base` has eight (ICU, CLDR, Unicode, the
-  GCC runtime exception ...) and `jdk.incubator.vector` has SLEEF (Boost, CC-BY-4.0); the
+  GCC runtime exception ...) and `jdk.incubator.vector` has SLEEF (Boost, CC-BY-4.0; Linux builds only); the
   other modules in use carry only the Oracle texts. `src/native/graalvm-notices.sh` writes
   LICENSE.txt, the java.base LICENSE and COPYRIGHT and those `.md` files from `java.home` into
   `META-INF/graalvm-notices.txt` (`-Pnative` only; the jar runs on the user's JVM), the binary
   holds it (`resource-config.json`), and `rontolisp notices --tool` prints it last. CI's
-  "Verify native image" greps the three marks. Only licence texts are read from the JDK
+  "Verify native image" greps the two Oracle marks and one section header per `.md` the
+  builder JDK ships for those modules. The `.md` set is per platform: macOS-aarch64 Oracle
+  GraalVM 25.0.3/25.0.4 ships `libsleef.dylib` and `lib/static/darwin-aarch64/libsleef.a` but
+  no `legal/jdk.incubator.vector/sleef.md` (OpenJDK keeps it in the Linux-only legal dir), and
+  the darwin-aarch64 binary links no `Sleef_` symbol nor libsleef (`nm`, `otool -L`,
+  2026-11-19), so its notices carry no SLEEF and owe none. Only licence texts are read from the JDK
   (rule 1 is about classes and jars). A module with `.md` files entering the image is added to
   the script's `MODULES`. Switching to GraalVM Community (GPLv2+CPE, no fee condition) is not
   an option: `-H:+VectorAPISupport` (pom) is Oracle GraalVM's. The release stays free of
