@@ -5,7 +5,7 @@
 // A pattern of text and arguments {n}. What the specification leaves to the
 // implementation -- the refusals' words, the largest index, the quotes toPattern writes,
 // how a number with no format type prints -- is a JDK 25's answers to a grid of patterns
-// and arguments (.kb/java-frontend.md, "java.text.MessageFormat").
+// and arguments (.kb/java-frontend.md, "The library").
 package java.text;
 
 import java.util.ArrayList;
