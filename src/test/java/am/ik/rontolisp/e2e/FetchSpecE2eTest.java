@@ -760,7 +760,7 @@ class FetchSpecE2eTest {
 			command = List.of(launcher, "-cp", dir.toString(), "Served");
 		}
 		else if (nativeLeg) {
-			Path executable = dir.resolve(stem);
+			Path executable = executableOf(dir, stem);
 			try {
 				compile(source, executable, "--native");
 			}
@@ -1053,7 +1053,7 @@ class FetchSpecE2eTest {
 						dir.toString(), "FetchSpec"));
 			}
 			case NATIVE -> {
-				Path executable = dir.resolve(stem);
+				Path executable = executableOf(dir, stem);
 				try {
 					compile(source, executable, "--native");
 				}
@@ -1087,6 +1087,13 @@ class FetchSpecE2eTest {
 		new RontoLispCli(new ByteArrayInputStream(new byte[0]), new PrintStream(out, true, StandardCharsets.UTF_8))
 			.run(new String[] { source.toString() });
 		return out.toString(StandardCharsets.UTF_8);
+	}
+
+	// A program's executable, apart from the tree its source's package directories make:
+	// a case-insensitive file system (macOS) reads the executable "Httpbin" and the
+	// directory "httpbin" as one name.
+	private static Path executableOf(Path dir, String stem) throws IOException {
+		return Files.createDirectories(dir.resolve("out")).resolve(stem);
 	}
 
 	private static void compile(Path source, Path output, String... flags) throws Exception {
