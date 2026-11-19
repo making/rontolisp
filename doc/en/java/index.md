@@ -131,7 +131,8 @@ $ rontolisp app/Main.java --java-source-dep org.example:geo:1.2.0 -o main.wasm
   that publishes none is a warning, and its classes are not there.
 
 [`examples/java/yavi`](https://github.com/making/rontolisp/tree/develop/examples/java/yavi)
-validates a record with YAVI, `--java-source-dep am.ik.yavi:yavi:0.18.0`, on every backend.
+has two programs over YAVI, `--java-source-dep am.ik.yavi:yavi:0.18.0`, that run on every
+backend: one validates a record, the other reads one from a map with a schema.
 
 This is not `--java-classpath` and `--java-dep`: those are class files the host runs for a
 `java:` call from Common Lisp or Clojure, and a program of the Java subset calls none.

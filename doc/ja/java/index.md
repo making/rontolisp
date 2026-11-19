@@ -136,8 +136,9 @@ $ rontolisp app/Main.java --java-source-dep org.example:geo:1.2.0 -o main.wasm
   無いものとして扱います。
 
 [`examples/java/yavi`](https://github.com/making/rontolisp/tree/develop/examples/java/yavi)
-は、YAVI（`--java-source-dep am.ik.yavi:yavi:0.18.0`）でレコードを検証し、どのバックエンドでも
-動きます。
+には、YAVI（`--java-source-dep am.ik.yavi:yavi:0.18.0`）を使うプログラムが 2 つあり、どの
+バックエンドでも動きます。1 つはレコードを検証し、もう 1 つはスキーマでマップからレコードを
+読み取ります。
 
 これは `--java-classpath` や `--java-dep` とは別のものです。そちらは Common Lisp や Clojure の
 `java:` 呼び出しのためにホストが実行するクラスファイルで、Java サブセットのプログラムは
