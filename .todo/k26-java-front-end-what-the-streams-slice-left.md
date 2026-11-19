@@ -38,8 +38,9 @@ taking an `Object`.
     one does not, the one line of the count grid that differs.
   - A collector's `finisher` is always called and the marks of a collector of the
     program's own class are not read by the collectors wrapping it (`Collected.marks`).
-  - `mapMulti`, `Stream.gather` and `Gatherers`, `spliterator()` / `Spliterator` /
-    `StreamSupport`, `Collectors.groupingByConcurrent` / `toConcurrentMap`,
+  - `mapMulti`, `Stream.gather` and `Gatherers`, `Collectors.groupingByConcurrent` /
+    `toConcurrentMap` (`spliterator()` / `Spliterator` / `StreamSupport` are
+    `.todo/k38`, which YAVI's schema example reaches),
     `Random.ints` / `longs` / `doubles`, `Iterator`-to-stream bridges of a program's own.
 - **A stage costs a closure call**: 33 ns an element on wasm and 16 to 40 on the JVM
   against 0.4 to 6 under a JDK (`bench/` of the k12 artefacts: an `int[]` summed by a
@@ -55,13 +56,8 @@ taking an `Object`.
   members at once; members declared when first looked for would read only what a
   program names. k12 made the one visible effect go away (an intrinsic class counts in
   a dispatcher only where `held`), not the reading.
-- **A `Class` as a value** is `.todo/k30` since k24 (what stops YAVI's schema example).
-  What was known here: a field, an argument, `isInstance`, `cast`, `getSuperclass`,
-  `Enum.valueOf(Color.class, ..)`, `EnumMap`, a class literal of a primitive or an array
-  type. j98 reads a class only where it is compared with a class and before `getName()`
-  / `getSimpleName()`, k12 before `::isInstance` and `::cast`; what a `Class` is as a
-  value is not decided (one object a class, found by name, so `==` holds; `%string` /
-  `%equals` / `%hash` would each gain an arm).
+- **`EnumMap` / `EnumSet`** over a class object (k30 made a `Class` a value:
+  `.kb/java-frontend.md`, "A class as a value"); reflection stays out.
 - **A surrogate with no partner in a string**: its UTF-8 is its three bytes where a JDK
   writes `?` (`%java-utf8-bytes` is the host's `string-to-octets`; a scan of every
   `getBytes` would cost the print streams), and a string CONSTANT holding one is `?` on
@@ -81,11 +77,13 @@ taking an `Object`.
   runs of ten (`.kb/scheme-frontend.md`, "(scheme char)": `(mod (- code from) 10)`), a
   list small enough to travel, generated from a running JDK and pinned as
   `RegexUnicodeTablesTest` pins the engine's.
-- **`java.time` beyond `Duration`**: `Instant`, `LocalDate` / `LocalDateTime`,
+- **`java.time` beyond `Duration`**: the classes a value is read from its text as
+  (`Instant`, `LocalDate` .. `Period`) are `.todo/k35` and `java.util.Date` is
+  `.todo/k37`, both on the path of YAVI's schema example; left here:
   `ChronoUnit` (and with it `Duration.of` / `get` / `truncatedTo` / `between`),
   `Duration.dividedBy` (a long by a long of nanoseconds needs 128 bits: `multipliedBy`
   shows the digits-of-a-thousand-million way),
-  `CompletableFuture.orTimeout` / `completeOnTimeout`, the older `Date` / `Calendar`.
+  `CompletableFuture.orTimeout` / `completeOnTimeout`, the older `Calendar`.
 - **`"ß".toUpperCase()` is `ß`**; a JDK answers `SS` (the host's upcase is one character
   to one).
 - **`java.util.regex`**: `Matcher.usePattern`, `namedGroups`; `\N{name}` (no name table

@@ -6,10 +6,15 @@ Difficulty: High
 
 YAVI names `BigDecimal` in 46 files and `BigInteger` in 44 (measured 2026-11-19,
 `.todo/artefacts/k24-java-front-end-a-program-that-uses-an-existing-library/`): a constraint
-type each, and the `_bigDecimal` / `_bigInteger` members of every builder. The README's
-two examples do not reach them -- a class a library only names in a declaration is passed
-by (k24) -- so this is behind `.todo/k28` .. `k30` for the milestone (`.todo/k33`) and
-ahead of them for a program that validates money.
+type each, and the `_bigDecimal` / `_bigInteger` members of every builder. The classic
+example does not reach them -- a class a library only names in a declaration is passed
+by (k24). **The schema example does** (measured 2026-11-20 behind k30, edit 4 of the
+artefact's `patch.sh`): `core/UntypedInput.convertNumber` and `decimal` convert every
+number given for another numeric type through a `BigDecimal` (`valueOf(long)`,
+`new BigDecimal(String)` / `(BigInteger)`, `intValueExact` .. `byteValueExact`,
+`toBigIntegerExact`, `scale`, `doubleValue`, `floatValue`), and `typeName` compares
+`BigInteger.class`. So this is on the milestone's path (`.todo/k33`, step 5), and
+those members are the first to write.
 
 - `BigInteger` over the host's integers, which are unbounded on every backend: an
   intrinsic whose value is the Lisp integer has to be told from an `Integer` and a `Long`

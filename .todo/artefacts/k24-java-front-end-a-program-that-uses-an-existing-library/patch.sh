@@ -12,5 +12,22 @@ cp -r "$src"/. "$out"/
 if [ -d "$here"/shim ]; then
     cp -r "$here"/shim/. "$out"/
 fi
-# No edit is left (2026-11-19): the classic example compiles from the unpatched
-# coordinates, and the schema example's gap has no stand-in.
+# The classic example needs none (2026-11-19). The schema example's five (2026-11-20),
+# all in what reads an input of unknown type; GNU sed.
+untyped="$out"/am/ik/yavi/core/UntypedInput.java
+# 1. java.time: the classes read from their text, but Duration
+sed -i -e '/Map\.entry(LocalDate\.class/,/Map\.entry(Year\.class/d' \
+    -e 's/Map\.entry(Duration\.class, Duration::parse), Map\.entry(Period\.class, Period::parse),/Map.entry(Duration.class, Duration::parse),/' "$untyped"
+# 2. java.util.UUID
+sed -i -e 's/Map\.entry(UUID\.class, UntypedInput::parseUuid), //' \
+    -e '/private static UUID parseUuid/,/^\t}$/d' "$untyped"
+# 3. java.util.Date and java.sql
+sed -i -e '/value instanceof java\.util\.Date date/,/^\t\t}$/d' \
+    -e '/private static final class SqlTypes/,/^\t}$/d' "$untyped"
+# 4. java.math.BigDecimal and BigInteger: a number of another type is a mismatch
+sed -i -e '/private static Object convertNumber/,/^\t}$/c\\tprivate static Object convertNumber(Number number, Class<?> type) {\n\t\treturn MISMATCH;\n\t}' \
+    -e '/private static @Nullable BigDecimal decimal/,/^\t}$/d' \
+    -e 's/^\t\t\t\t|| type == BigInteger\.class) {$/\t\t\t\t) {/' "$untyped"
+# 5. java.util.stream.StreamSupport: a projection keeps every property
+sed -i '/return object instanceof Projection<?>projection ? StreamSupport/,/\.toList() : properties;/c\\t\t\treturn properties;' \
+    "$out"/am/ik/yavi/input/Projection.java

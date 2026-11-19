@@ -51,10 +51,12 @@ collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
 as the program reaches it, annotation types and type annotations, an exact method
 reference in a call's applicability: k24 (2026-11-19); what comes after is `.todo/k15`,
 `k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22` and `k26` (what k00, k11, k06, k07, k08,
-k10 and k12 left) and `.todo/k28` to `k33` (what stands between k24 and YAVI compiled to
-wasm); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
+k10 and k12 left) and `.todo/k31` to `k38` (what stands between k24 and YAVI compiled to
+wasm: `.todo/k33` holds the order); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
 `java.text.MessageFormat`: k28 (2026-11-19); `java.text.Normalizer` over the normalization
-forms the front ends share: k29 (2026-11-19); a `Class` as a value: k30 (2026-11-20).
+forms the front ends share: k29 (2026-11-19); a `Class` as a value, a type variable in
+scope kept apart from the one a call finds, `Name.this` as the instance of `Name`
+itself: k30 (2026-11-20; `.todo/k39`, `k40` and `k41` are what it found beside its way).
 
 ## Where it sits
 
@@ -1973,7 +1975,8 @@ no object.** What YAVI's schema example asked (`Map<Class<?>, ..>`, `type == Map
   object); `getClass()` of an `Object` held, with `isInstance` and `isAssignableFrom`,
   32,970 (the function over every held class, the seven arrays a vector tells with
   their components, each with its test and the classes above it); the corpus case
-  327,584.
+  327,584. YAVI's schema example, its source edited around the five library classes
+  still missing (`.todo/k33`), is 1,009,805 and prints a JDK's lines on four backends.
 
 ## Static initialization (2026-11-17)
 

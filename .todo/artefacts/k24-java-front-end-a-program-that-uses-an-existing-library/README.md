@@ -2,8 +2,9 @@
 
 `am.ik.yavi:yavi:0.18.0` (Apache-2.0), its sources jar from Maven Central: 380 Java files,
 183,636 lines. Nothing of YAVI is in this directory: the two programs are written here over
-its public API, `patch.sh` holds `sed` lines and `shim/` classes written here (none is
-left since 2026-11-19).
+its public API, `patch.sh` holds `sed` lines and `shim/` classes written here (the
+classic example needs none since 2026-11-19; the schema example has five edits since
+2026-11-20, each around a class the library lacks).
 
 ## How to run it again
 
@@ -58,12 +59,34 @@ lines (wasm 655,275 B, the component 659,541 B, the jar 255,602 B). The k24 numb
 | # | Refusal | Where | Done |
 |---|---------|-------|------|
 | 1 | `class is not allowed to extend sealed class` (a permitted class in a file of its own, read while the `permits` clause naming it was) | `NullAcceptingValueValidator` | fixed here |
-| 2 | `a class literal but compared with a class or before getName()` (`String.class` as an argument) | `YaviSchema._string` | `.todo/k30` |
+| 2 | `a class literal but compared with a class or before getName()` (`String.class` as an argument) | `YaviSchema._string` | fixed by k30 (a `Class` is a value) |
+| 3 | `the class java.time.LocalDate` (`LocalTime` .. `Period` after it: `X::parse` in the table of the types read from their text) | `core/UntypedInput` | `.todo/k35`; `patch.sh` 1 |
+| 4 | `the class java.util.UUID` (the same table) | `core/UntypedInput` | `.todo/k36`; `patch.sh` 2 |
+| 5 | `lambda expression not expected here` (`X.this.lazy().andThen(.. -> .. .map(x2 -> () -> x2))`: a generic method called from its own body, its type argument made of its own type parameter) | `arguments/Arguments1Validator.andThen` | fixed with k30 |
+| 6 | a program that never ended: `Arguments1Validator.this` in an anonymous `Arguments1Validator` named the anonymous instance | the same | fixed with k30 |
+| 7 | `no suitable constructor found for StringValidator(..)` (`new StringValidator<>(.., lazy, ..)` in `StringValidator<T>` making a `StringValidator<Supplier<T>>`) | `arguments/StringValidator.lazy` | fixed with k30 |
+| 8 | `the class java.util.Date`, then `java.sql.Date` / `Time` / `Timestamp` (`instanceof`) | `core/UntypedInput.convert`, `SqlTypes` | `.todo/k37`; `patch.sh` 3 |
+| 9 | `the class java.math.BigInteger` (`type == BigInteger.class`), `BigDecimal` in the conversion of a number | `core/UntypedInput.typeName`, `convertNumber` | `.todo/k31`; `patch.sh` 4 |
+| 10 | `the class java.util.stream.StreamSupport` (`StreamSupport.stream(properties.spliterator(), false)`) | `input/Projection` | `.todo/k38`; `patch.sh` 5 |
+| 11 | `method composed .. cannot be applied to given types` (two `Function<? super A1, ? extends A1>` given for one type parameter) | `arguments/DefaultArguments1Validator.preprocess` | fixed with k30 |
 
 327 files (175,141 lines) are read and declared before the second refusal, in 1.7 s: the
-schema names nearly the whole library in its declarations. What stands behind `k30` is not
-measured: `Class` values are keys of a map and asked `isInstance` and `getSuperclass`
-throughout `core/UntypedInput`, so no shim stands in for them.
+schema names nearly the whole library in its declarations. Since k30 (2026-11-20) the
+unpatched coordinates stop at row 3, and with `patch.sh`'s five edits (rows 3, 4, 8, 9, 10)
+the program compiles and the interpreter, the JVM, wasm and the component print the JDK's
+eleven lines:
+
+```bash
+unzip -q yavi-0.18.0-sources.jar -d /tmp/yavi && ./patch.sh /tmp/yavi /tmp/yavi-patched
+(cd schema && $R --java-source-path /tmp/yavi-patched shelf/Book.java -o /tmp/book.wasm)
+```
+
+wasm 1,009,805 B (12.8 s of wall time, the interpreter 5.4 s to its last line), the
+component 1,014,068 B, the jar 381,860 B. The edits cut bodies out, so what those bodies
+meet once their classes are there is not measured. Found beside the way: one entry left
+in the table (`Map.ofEntries(Map.entry(.., X::parse))`) is `cannot infer type-variable(s)
+V` (`.todo/k39`), and two compiles of the classic example differ in their bytes
+(`.todo/k41`).
 
 ## What YAVI names of a JDK that the library lacks (by import, all 380 files)
 

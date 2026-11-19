@@ -21,7 +21,7 @@ order.
 
 ## To do
 
-1. Write `examples/java/yavi/`.
+1. Write the example: a directory `yavi` under `examples/java/`.
    - It is a small program of our own: a record or class validated with
      `ValidatorBuilder`, with one valid value and a few invalid ones. Their violations
      print with YAVI's messages. Include a decomposed string if it reads naturally.
@@ -45,11 +45,13 @@ order.
      default `./mvnw test` must not fail offline.
    - Write down the choice and the measured compile time per leg (wasm took 7.9 s in k24).
      The run must fit the time `ExamplesE2eTest` allows.
-4. When `.todo/k30` makes the README's schema example (`Yavi.schema()`) run, it goes into
-   this example or into a second one. If k30 has not landed, leave a line in k33 instead.
+4. The README's schema example (`Yavi.schema()`) joins this example, or a second one,
+   when it compiles from the unpatched coordinates: since k30 (2026-11-20) it prints the
+   JDK's lines on the four backends with five edits around classes the library lacks,
+   which are `.todo/k33`'s step 5.
 
 ## Done when
 
-- `examples/java/yavi/` prints the same output on a JDK and on the four backends.
+- The example prints the same output on a JDK and on the four backends.
 - `examples.yaml` checks it, or skips it with a stated reason.
 - The README section and the docs mention are in.
