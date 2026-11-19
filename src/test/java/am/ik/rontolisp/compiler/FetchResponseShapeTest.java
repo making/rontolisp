@@ -55,11 +55,13 @@ class FetchResponseShapeTest {
 	void requestRecordPinsTheHostFetchEnvelope() {
 		// The --host-fetch request JSON: field name = JSON key, in record order. A
 		// change here changes what every env.fetch host receives, so it must fail
-		// loudly (the host halves are pinned against it in HostFetchLibraryTest).
-		assertThat(FetchResponseShape.requestFields()).extracting(FetchResponseShape.Field::name)
+		// loudly (the host halves are pinned against it in HostFetchLibraryTest). The
+		// --native runner's request carries the two deadlines after them.
+		assertThat(FetchResponseShape.hostRequestFields()).extracting(FetchResponseShape.Field::name)
 			.containsExactly("url", "method", "headers", "body", "octets");
 		assertThat(FetchResponseShape.requestFields()).extracting(FetchResponseShape.Field::keyword)
-			.containsExactly(":URL", ":METHOD", ":HEADERS", ":BODY", ":OCTETS");
+			.containsExactly(":URL", ":METHOD", ":HEADERS", ":BODY", ":OCTETS", ":CONNECT-TIMEOUT",
+					":FIRST-BYTE-TIMEOUT");
 		assertThat(FetchResponseShape.HOST_ENVELOPE_ERROR_KEY).isEqualTo("error");
 	}
 

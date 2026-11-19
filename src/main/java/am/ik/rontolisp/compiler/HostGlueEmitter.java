@@ -552,7 +552,7 @@ public final class HostGlueEmitter {
 		}
 		out.append("        try {\n");
 		out.append("          const response = await fetch(request.").append(requestField("url")).append(", {\n");
-		for (FetchResponseShape.Field field : FetchResponseShape.requestFields()) {
+		for (FetchResponseShape.Field field : FetchResponseShape.hostRequestFields()) {
 			if ("octets".equals(field.name())) {
 				// An octet body arrives one character an octet: the platform sends a
 				// Uint8Array as it is.

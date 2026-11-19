@@ -35,6 +35,22 @@ The optional second argument is an options property list. Recognized keys:
 - `:headers` — request headers, an alist of `(name . value)` string pairs.
 - `:body` — the request body: a string, sent as its UTF-8, or an `(unsigned-byte 8)`
   vector, sent as its octets (omit for no body).
+- `:connect-timeout` — how long the connection may take to be established, a
+  positive integer of milliseconds (omit, or `nil`, for no limit).
+- `:first-byte-timeout` — how long the response may take to start arriving,
+  counted from the call: a positive integer of milliseconds. The head — status
+  and headers — is due within it; the body is not.
+
+A request whose timeout passes fails like any other failed request: awaiting its
+future signals an error.
+
+```console
+(handler-case
+    (getf (rontolisp:await (rontolisp:fetch "https://httpbin.ik.am/delay/3"
+                                            '(:first-byte-timeout 500)))
+          :status)
+  (error () :timed-out))   ; => :TIMED-OUT
+```
 
 Every request carries `User-Agent: rontolisp/<version> (<git-commit>)` — the version
 and abbreviated commit [`rontolisp:version`](rontolisp-version.md) reports, the
@@ -156,3 +172,9 @@ request `:body` from an s-expression.
 - A reply whose transfer fails part-way (the connection closes before the
   body it announced has arrived) signals an error instead of reading as a
   shorter body, when its `:body` is drained.
+- `:connect-timeout` and `:first-byte-timeout` are an error when `fetch` is
+  called on a `--no-wasi` reactor with `--host-fetch` (the host owns the
+  connection) and in a component that serves requests
+  ([`rontolisp:http-handler`](rontolisp-http-handler.md)), and fail the request
+  in the browser playground. The words of a timeout's error are the
+  transport's, so they differ between backends; nothing times the body.

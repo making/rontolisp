@@ -33,6 +33,13 @@ final class HttpSupport {
 	}
 
 	/**
+	 * The {@code :connect-timeout} and {@code :first-byte-timeout} options of one
+	 * {@code rontolisp:fetch}, in milliseconds; 0 is none.
+	 */
+	record Timeouts(long connectMillis, long firstByteMillis) {
+	}
+
+	/**
 	 * A fully buffered HTTP outcome: status code, whole response body and headers. The
 	 * browser playground's fetch broker delivers this shape (see
 	 * {@code src/web/java/.../eval/Target_HttpSupport.java} and
@@ -71,10 +78,11 @@ final class HttpSupport {
 	 * {@link FetchResponseShape#defaultUserAgent()} is added
 	 * @param body the request body -- a {@code String}, sent as its UTF-8 octets, or a
 	 * {@code byte[]}, sent as it is -- or {@code null} for no body
+	 * @param timeouts how long the connection and the reply's head may take
 	 * @return a future settling to the response status, headers and body stream
 	 */
 	static CompletableFuture<Start> requestAsync(String method, String url, List<Header> requestHeaders,
-			@Nullable Object body) {
+			@Nullable Object body, Timeouts timeouts) {
 		HttpClient client;
 		HttpRequest request;
 		try {
@@ -87,8 +95,8 @@ final class HttpSupport {
 			// JDK backends -- HTTP/1.1 over http:, no Content-Length on a bodiless GET,
 			// and the default user-agent set EXPLICITLY rather than the JDK's own
 			// Java-http-client/<jdk> (FetchResponseShape.USER_AGENT_HEADER).
-			request = request(method, url, fields, body);
-			client = HttpClient.newHttpClient();
+			request = request(method, url, fields, body, timeouts.firstByteMillis());
+			client = RontoFetch.client(timeouts.connectMillis());
 		}
 		catch (RuntimeException ex) {
 			return CompletableFuture
@@ -110,8 +118,9 @@ final class HttpSupport {
 	// RontoFetch cannot annotate its parameter (the runtime package imports nothing that
 	// would travel), so no body crosses as the null its contract documents.
 	@SuppressWarnings("NullAway")
-	private static HttpRequest request(String method, String url, List<String> fields, @Nullable Object body) {
-		return RontoFetch.request(url, method, fields, body, FetchResponseShape.defaultUserAgent());
+	private static HttpRequest request(String method, String url, List<String> fields, @Nullable Object body,
+			long firstByteMillis) {
+		return RontoFetch.request(url, method, fields, body, FetchResponseShape.defaultUserAgent(), firstByteMillis);
 	}
 
 	/**

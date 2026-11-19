@@ -256,6 +256,60 @@ such a body exactly like a whole one and puts the `error-code` in the TRAILERS f
 close protocol dropped unread; the fetched reply's release now reads it at the end and signals
 (corpus case `a-body-cut-short-signals-rather-than-reading-short`).
 
+## Timeouts (2026-11-19, k05)
+
+**`:connect-timeout` and `:first-byte-timeout`, positive integers of milliseconds; a
+transport carries its timeout arm only in a program that NAMES one of the two keywords
+(`HttpLibrary.namesTimeout`), so every other program compiles to the bytes it had.** A
+value that is no positive integer is refused at the call, in the same words on every
+transport (`expects a positive integer of milliseconds`); a timeout that passes fails the
+future, so it signals at the await like any transport failure. `:first-byte-timeout` is
+the JDK's `HttpRequest.Builder.timeout`: the HEAD is due, counted from the call, and the
+body is not timed (JDK 25; the corpus's oracle).
+
+- **Interpreter, JVM**: `RontoFetch.request` sets `timeout`, `RontoFetch.client` builds a
+  client with `connectTimeout` (the interpreter's `HttpSupport` calls both); `_fetch`
+  reads the two options as written and `RontoFetch.start` refuses a bad one at the call.
+  Errors: `request timed out` / `HTTP connect timed out` (the JVM prefixes the class).
+- **Component**: `%fetch-request-options` makes a `request-options` (wasi:http's
+  `set-connect-timeout` / `set-first-byte-timeout`, nanoseconds) and `request.new` takes
+  it. wasmtime 49 counts the first byte from the connection, so the connection is given
+  no longer than the first byte is: an origin that never answers the connect is given up
+  at the first-byte timeout (measured: 0.56 s for 300 ms against a blackholed address),
+  and the head may take the timeout once more after it. Errors: the WIT error arms
+  `:CONNECTION-TIMEOUT` / `:CONNECTION-READ-TIMEOUT`.
+- **`--native`**: the request JSON carries `connect-timeout` / `first-byte-timeout`
+  (`FetchResponseShape`'s `request` record; `%host-fetch-timeout` validates). The runner
+  (`wire.rs`): `TcpStream::connect_timeout` per address against the earlier of the two
+  instants, a `Deadline` arming the socket's read timeout before each read of a TLS
+  handshake and of the head and taking it off once the head is in. A first-byte deadline
+  that passes while connecting is `connect timed out`, as the JDK reports it (measured:
+  `HttpConnectTimeoutException`); otherwise `request timed out`. `rlrun-net` 3,409,160 ->
+  3,425,544 B.
+- **Refused by name**: a `--host-fetch` reactor at the call (its host owns the
+  connection; the generated JavaScript host is not handed the two keys:
+  `FetchResponseShape.hostRequestFields`); a component that SERVES at the call
+  (`%fetch-untimed`: its wasi:http/types members are fixed by
+  `import-block-http-server.bin`, which states no `request-options`; found as `instance 1
+  has no export named [constructor]request-options` at load); the browser playground at
+  the await (`Target_HttpSupport`). Each is `.todo/148`.
+- **The gate**: `HttpLibrary.untimed` puts `nil` where `%fetch-request-options` is called
+  and its argument where `%fetch-timed` is, so the forms are those fetch had before;
+  `HostFetchLibrary` generates the runner's two optional members and the reactor's
+  refusal only for a timed program. A program that builds the keyword at run time
+  (`intern`) and never spells it is not seen: its timeout is not applied.
+  Measured against `23ce3b245`: a Lisp fetch program naming none is byte-identical as a
+  component (208,224 B) and as the module of a `--native` output; one naming a timeout is
+  211,970 B.
+- **Pinned by** `fetch-spec.yaml` `a-reply-head-is-due-within-its-first-byte-timeout`
+  (four legs; it makes that corpus a timed program, so the untimed forms are the Clojure
+  corpus's and the Java client's `async` program's), `java-http-spec.yaml`
+  `a-request-and-a-connection-have-time-limits`, `HttpLibraryTest`, `HostFetchLibraryTest`,
+  `FetchResponseShapeTest`, the runner's
+  `a_head_is_due_within_the_first_byte_timeout_and_a_body_is_not`. A connect timeout that
+  PASSES has no pin: no local origin holds a connection open unanswered (asked by hand
+  of `10.255.255.1:81` on all four legs).
+
 ## The response plist
 
 **`(:status <int> :headers <alist> :body <stream>)` on every backend.** `:body` is drained with

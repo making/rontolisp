@@ -34,6 +34,22 @@ future を [`rontolisp:await`](../special-forms/rontolisp-await.md) に渡すと
 - `:headers` — リクエストヘッダ。`(name . value)` の文字列ペアの連想リストです。
 - `:body` — リクエストボディです。文字列なら UTF-8 で、`(unsigned-byte 8)` のベクターなら
   そのオクテットのまま送ります (ボディがなければ省略します)。
+- `:connect-timeout` — 接続の確立にかけてよい時間です。ミリ秒を正の整数で指定します
+  (省略するか `nil` なら制限なし)。
+- `:first-byte-timeout` — 応答が届き始めるまでにかけてよい時間で、呼び出しから数えます。
+  ミリ秒を正の整数で指定します。この時間内に届く必要があるのはヘッド (ステータスと
+  ヘッダー) で、ボディは対象外です。
+
+タイムアウトを過ぎたリクエストは、ほかの失敗したリクエストと同じく失敗します。その
+future を await するとエラーがシグナルされます。
+
+```console
+(handler-case
+    (getf (rontolisp:await (rontolisp:fetch "https://httpbin.ik.am/delay/3"
+                                            '(:first-byte-timeout 500)))
+          :status)
+  (error () :timed-out))   ; => :TIMED-OUT
+```
 
 `:headers` がそのフィールドを指定していない限り、すべてのリクエストは
 `User-Agent: rontolisp/<version> (<git-commit>)` を伴います — バージョンと短縮コミットは
@@ -157,3 +173,9 @@ JSON のレスポンスボディは
 - 転送が途中で失敗した応答 (予告した長さの本文が届く前に接続が閉じた場合) は、短い
   本文として読めてしまうのではなく、エラーをシグナルします。シグナルするのは `:body`
   を読み切る時点です。
+- `:connect-timeout` と `:first-byte-timeout` は、`--host-fetch` を付けた `--no-wasi`
+  リアクタ (接続はホストのものです) と、リクエストを処理するコンポーネント
+  ([`rontolisp:http-handler`](rontolisp-http-handler.md)) では `fetch` を呼んだ時点で
+  エラーになり、ブラウザ プレイグラウンドではリクエストが失敗します。タイムアウトの
+  エラーの文言はトランスポートのものなので、バックエンドごとに異なります。ボディの
+  受信に時間制限はありません。

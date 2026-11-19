@@ -43,7 +43,7 @@ class RontoFetchTest {
 
 	@Test
 	void aUrlTheRequestCannotCarryFailsTheFutureInsteadOfThrowing() {
-		Object future = RontoFetch.start("http://127.0.0.1/a b", "GET", List.of(), "", "rontolisp/test");
+		Object future = start("http://127.0.0.1/a b");
 
 		assertThat(future).isInstanceOf(CompletableFuture.class);
 		assertThat((CompletableFuture<?>) future).isCompletedExceptionally();
@@ -80,13 +80,11 @@ class RontoFetchTest {
 		server.start();
 		try {
 			String origin = "http://127.0.0.1:" + server.getAddress().getPort();
-			LinkedBlockingQueue<Object> held = bodyQueue(
-					RontoFetch.start(origin + "/held", "GET", List.of(), "", "rontolisp/test"));
+			LinkedBlockingQueue<Object> held = bodyQueue(start(origin + "/held"));
 			assertThat(text(held, "first".length())).isEqualTo("first");
 			release.countDown();
 			assertThat(text(held, Integer.MAX_VALUE)).isEqualTo("second");
-			LinkedBlockingQueue<Object> cutShort = bodyQueue(
-					RontoFetch.start(origin + "/cut-short", "GET", List.of(), "", "rontolisp/test"));
+			LinkedBlockingQueue<Object> cutShort = bodyQueue(start(origin + "/cut-short"));
 			List<Object> cut = new ArrayList<>();
 			Object item = cutShort.poll(30, TimeUnit.SECONDS);
 			while (item != RontoFetch.STREAM_MARKER) {
@@ -102,6 +100,13 @@ class RontoFetchTest {
 			release.countDown();
 			server.stop(0);
 		}
+	}
+
+	// A GET with no timeout: the transport takes an absent option as null, which the
+	// runtime package cannot annotate (its classes travel with a compiled program).
+	@SuppressWarnings("NullAway")
+	private static Object start(String url) {
+		return RontoFetch.start(url, "GET", List.of(), "", "rontolisp/test", null, null);
 	}
 
 	// The body stream's queue in the response plist the fetch future settles to: the

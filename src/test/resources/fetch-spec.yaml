@@ -273,3 +273,28 @@ cases:
       :NAMES-THE-URL
       :NAMES-THE-URL
       :NAMES-THE-URL
+  # /slow answers after a second. Naming a timeout makes this whole corpus one of the
+  # programs a transport carries its timeout arm for; the Clojure client's corpus and
+  # the Java client's `async` program name none.
+  - name: a-reply-head-is-due-within-its-first-byte-timeout
+    source: |
+      (print (handler-case
+                 (progn (rontolisp:await (rontolisp:fetch (url "/slow") (list :first-byte-timeout 100)))
+                        :answered)
+               (error () :signalled-at-await)))
+      (let ((r (rontolisp:await (rontolisp:fetch (url "/hello")
+                                                 (list :first-byte-timeout 60000 :connect-timeout 60000)))))
+        (print (rontolisp:await (body-text r))))
+      (dolist (options (list (list :connect-timeout 0) (list :first-byte-timeout "1")
+                             (list :first-byte-timeout -5) (list :connect-timeout 1.5)))
+        (print (handler-case (progn (rontolisp:fetch (url "/hello") options) :no-signal)
+                 (error (c) (if (search "expects a positive integer of milliseconds" (princ-to-string c))
+                                :signalled-at-fetch
+                                :other)))))
+    expected: |
+      :SIGNALLED-AT-AWAIT
+      "hello-from-fetch"
+      :SIGNALLED-AT-FETCH
+      :SIGNALLED-AT-FETCH
+      :SIGNALLED-AT-FETCH
+      :SIGNALLED-AT-FETCH

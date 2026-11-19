@@ -199,6 +199,60 @@
         (error c)))
     fields))
 
+;;; --- timeouts ---
+;;; A program that names neither timeout keyword gets none of this: HttpLibrary puts
+;;; nil where %fetch-request-options is called and its argument where %fetch-timed is,
+;;; so neither defun is reached and no request-options member is bound. A component
+;;; that serves has its wasi:http imports fixed by its import block, which states no
+;;; request-options: there HttpLibrary calls %fetch-untimed for %fetch-timed.
+
+(defun %fetch-timeout (options key name)
+  ;; A timeout option in milliseconds as wasi:http's duration (nanoseconds), nil when
+  ;; absent; anything but a positive integer is refused in the words of every
+  ;; transport.
+  (let ((value (getf options key)))
+    (cond ((null value) nil)
+     ((and (integerp value) (> value 0)) (* value 1000000))
+     (t (error "fetch: ~a expects a positive integer of milliseconds" name)))))
+
+(defun %fetch-timed (options)
+  ;; The options themselves, once both timeouts read: called by rontolisp:fetch, so a
+  ;; refusal signals at the CALL, as an unsupported method does.
+  (%fetch-timeout options :CONNECT-TIMEOUT ":connect-timeout")
+  (%fetch-timeout options :FIRST-BYTE-TIMEOUT ":first-byte-timeout")
+  options)
+
+(defun %fetch-untimed (options)
+  ;; %fetch-timed where no request-options can be made: a timeout is refused by name
+  ;; at the call.
+  (when (or (getf options :CONNECT-TIMEOUT) (getf options :FIRST-BYTE-TIMEOUT))
+    (error
+     "fetch: :connect-timeout and :first-byte-timeout are not supported in a component that serves requests"))
+  options)
+
+(defun %fetch-request-options (options)
+  ;; The request-options a request with a timeout is made with (request.new takes it
+  ;; over), nil for one with none. The host enforces both deadlines and reports one
+  ;; passed through the send's error-code. It counts the first byte from the
+  ;; connection, where the option counts from the call: the connection is given no
+  ;; longer than the first byte is, so a host that never answers the connect is given
+  ;; up when the first-byte timeout passes, as on the other transports.
+  (let* ((first-byte
+          (%fetch-timeout options :FIRST-BYTE-TIMEOUT ":first-byte-timeout"))
+         (stated (%fetch-timeout options :CONNECT-TIMEOUT ":connect-timeout"))
+         (connect
+          (if (and stated first-byte)
+              (min stated first-byte)
+              (or stated first-byte))))
+    (if (or connect first-byte)
+        (let ((made (%http:request-options-new)))
+          (when connect
+            (%http:request-options-set-connect-timeout made connect))
+          (when first-byte
+            (%http:request-options-set-first-byte-timeout made first-byte))
+          made)
+        nil)))
+
 (defun %fetch-send (url options method)
   ;; scheme://authority/path -- the scheme's colon is the first colon. Answers
   ;; (send-future . transmission): the request in flight -- the async-lowered send
@@ -238,7 +292,7 @@
            (trailers (%http:trailers-future-new))
            (reqpair
             (%http:request-new fields (if bodypair (car bodypair) nil)
-                               (car trailers) nil))
+                               (car trailers) (%fetch-request-options options)))
            (req (car reqpair))
            (transmission (car (cdr reqpair))))
       (handler-case (progn
@@ -326,7 +380,8 @@
   ;; everything after that fails the future and signals at the await, as on every
   ;; other backend. The lambda list is the built-in's own (1 or 2 arguments), so a
   ;; direct call with a wrong count reports as FETCH does everywhere.
-  (%fetch-run url opts (%fetch-method-variant (getf opts :METHOD))))
+  (%fetch-run url (%fetch-timed opts)
+              (%fetch-method-variant (getf opts :METHOD))))
 
 ;;; --- serve (incoming): read the request, dispatch, deliver, stream the body ---
 

@@ -39,7 +39,13 @@ final class Target_HttpSupport {
 
 	@Substitute
 	static CompletableFuture<HttpSupport.Start> requestAsync(String method, String url,
-			List<HttpSupport.Header> requestHeaders, Object requestBody) {
+			List<HttpSupport.Header> requestHeaders, Object requestBody, HttpSupport.Timeouts timeouts) {
+		// The browser's fetch has no deadline of its own to hand the two options to: a
+		// timeout is refused by name, at the await like every failure of a request.
+		if (timeouts.connectMillis() > 0 || timeouts.firstByteMillis() > 0) {
+			return CompletableFuture.failedFuture(new IllegalStateException(
+					"fetch: :connect-timeout and :first-byte-timeout are not supported in the browser playground"));
+		}
 		StringBuilder encoded = new StringBuilder();
 		for (HttpSupport.Header header : requestHeaders) {
 			encoded.append(header.name()).append('\n').append(header.value()).append('\n');

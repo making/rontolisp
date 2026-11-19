@@ -101,6 +101,13 @@ public final class FetchResponseShape {
 			    /// character an octet, each below 256, so the octets cross a JSON
 			    /// string unchanged. At most one of body and octets is present.
 			    octets: option<string>,
+			    /// How long the connection may take, in milliseconds. The two
+			    /// deadlines cross to the --native runner only: a --host-fetch
+			    /// reactor refuses a timeout at the call, its host owning the
+			    /// connection, so no host of one reads these keys.
+			    connect-timeout: option<u32>,
+			    /// How long the reply's head may take, in milliseconds.
+			    first-byte-timeout: option<u32>,
 			  }
 			}
 			""";
@@ -241,12 +248,30 @@ public final class FetchResponseShape {
 	}
 
 	/**
-	 * The request record's fields, in record (= envelope) order — what a
-	 * {@code --host-fetch} request JSON carries.
+	 * The request record's fields, in record (= envelope) order — what the request JSON
+	 * of a {@code --native} runner carries.
 	 * @return the fields
 	 */
 	public static List<Field> requestFields() {
 		return REQUEST_FIELDS;
+	}
+
+	/**
+	 * The request fields a {@code --host-fetch} host receives: the record's but the two
+	 * deadlines, which that transport refuses at the call.
+	 * @return the fields
+	 */
+	public static List<Field> hostRequestFields() {
+		return REQUEST_FIELDS.stream().filter(field -> !isDeadline(field)).toList();
+	}
+
+	/**
+	 * Whether a request field is one of the two timeouts.
+	 * @param field a field of the request record
+	 * @return {@code true} for {@code connect-timeout} and {@code first-byte-timeout}
+	 */
+	public static boolean isDeadline(Field field) {
+		return field.name().equals("connect-timeout") || field.name().equals("first-byte-timeout");
 	}
 
 	/**

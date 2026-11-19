@@ -35,6 +35,7 @@ pub(crate) use serve::reason;
 use std::net::{Shutdown, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use wasmtime::{Caller, Extern, ExternRef, Linker, Rooted, TypedFunc};
 use wasmtime_wasi::p1::WasiP1Ctx;
@@ -123,6 +124,11 @@ impl Drop for Handle {
 fn request(text: &str) -> Result<Request, String> {
     let v = json::parse(text)?;
     let field = |name: &str| v.get(name).and_then(json::Value::as_str).map(str::to_owned);
+    // A timeout is a count of milliseconds the module checked to be a positive integer.
+    let millis = |name: &str| match v.get(name) {
+        Some(json::Value::Number(n)) if *n >= 1.0 => Some(Duration::from_millis(*n as u64)),
+        _ => None,
+    };
     let mut headers = Vec::new();
     if let Some(json::Value::Array(pairs)) = v.get("headers") {
         for pair in pairs {
@@ -144,6 +150,8 @@ fn request(text: &str) -> Result<Request, String> {
         body: field("body")
             .map(String::into_bytes)
             .or_else(|| field("octets").map(|s| s.chars().map(|c| c as u32 as u8).collect())),
+        connect_timeout: millis("connect-timeout"),
+        first_byte_timeout: millis("first-byte-timeout"),
     })
 }
 
@@ -182,12 +190,16 @@ fn serve(reply: &Reply, req: &Request) {
 fn serve_with(reply: &Reply, req: &Request, tls: &dyn Fn() -> wire::TlsConfig) {
     // However the transfer ends, the reply's handle on its socket ends with it.
     let _transfer = Transfer(reply);
+    // The head is due this long after the request started, the connection included.
+    // (a time no clock reaches is no limit)
+    let first_byte = req.first_byte_timeout.and_then(|d| Instant::now().checked_add(d));
     let started = wire::validate(req)
         .and_then(|()| url::parse(&req.url))
         .and_then(|target| {
-            let (conn, socket) = wire::connect(&target, tls)?;
+            let (conn, socket) = wire::connect(&target, tls, req.connect_timeout, first_byte)?;
+            let deadline = first_byte.map(|at| wire::Deadline::new(at, &socket)).transpose()?;
             hand_over(reply, socket)?;
-            wire::exchange(conn, req, &target)
+            wire::exchange(conn, req, &target, deadline.as_ref())
         });
     let mut body = match started {
         Ok((head, body)) => {
@@ -425,6 +437,13 @@ mod tests {
         assert_eq!(octets.body.as_deref(), Some(&[0xff, 0x00, 0x41, 0x80][..]));
         let bare = request(r#"{"url":"http://h/","headers":[]}"#).unwrap();
         assert_eq!((bare.method.as_str(), bare.body), ("GET", None));
+        assert_eq!((bare.connect_timeout, bare.first_byte_timeout), (None, None));
+        let timed =
+            request(r#"{"url":"http://h/","headers":[],"connect-timeout":250,"first-byte-timeout":1500}"#).unwrap();
+        assert_eq!(
+            (timed.connect_timeout, timed.first_byte_timeout),
+            (Some(Duration::from_millis(250)), Some(Duration::from_millis(1500)))
+        );
         assert!(request(r#"{"method":"GET"}"#).is_err());
         assert!(request(r#"{"url":"http://h/","headers":[["X"]]}"#).is_err());
     }
@@ -508,6 +527,51 @@ mod tests {
                 .contains("restricted header name")
         );
     }
+    /// A head that does not arrive within the request's first-byte timeout is the head's
+    /// error; one that does leaves the body as long as it takes.
+    #[test]
+    fn a_head_is_due_within_the_first_byte_timeout_and_a_body_is_not() {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let origin = std::thread::spawn(move || {
+            // The first connection is held with no reply until the client gave up.
+            let (mut silent, _) = listener.accept().unwrap();
+            let mut b = [0u8; 1024];
+            while silent.read(&mut b).map(|n| n > 0).unwrap_or(false) {}
+            // The second gets its head at once and the rest of its body when released.
+            let (mut s, _) = listener.accept().unwrap();
+            s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nab").unwrap();
+            release_rx.recv().unwrap();
+            s.write_all(b"cd").unwrap();
+        });
+        let timed = move |millis: u32| {
+            request(&format!(
+                r#"{{"url":"http://127.0.0.1:{port}/","headers":[],"first-byte-timeout":{millis}}}"#
+            ))
+            .unwrap()
+        };
+        let late = Reply::default();
+        serve(&late, &timed(50));
+        assert_eq!(late.lock().head.clone().unwrap().unwrap_err(), wire::TIMED_OUT);
+        let reply = Arc::new(Reply::default());
+        let serving = reply.clone();
+        let transfer = std::thread::spawn(move || serve(&serving, &timed(60_000)));
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while reply.lock().data.len() < 2 {
+            assert!(Instant::now() < deadline, "the head and the first octets never arrived");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // The head is in: the socket's reads wait with no limit again.
+        assert_eq!(reply.lock().socket.as_ref().unwrap().read_timeout().unwrap(), None);
+        release_tx.send(()).unwrap();
+        transfer.join().unwrap();
+        origin.join().unwrap();
+        let s = reply.lock();
+        assert_eq!((s.data.as_slice(), s.end.clone()), (&b"abcd"[..], Some(Ok(()))));
+    }
+
     /// Dropping the handle ends a transfer the origin stalled mid-body: the serving
     /// thread was blocked in a read, and the release shuts the socket down under it.
     #[test]

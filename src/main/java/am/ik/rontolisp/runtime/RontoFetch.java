@@ -6,6 +6,7 @@ import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -71,12 +72,19 @@ public final class RontoFetch {
 	 * @param body the request body -- its text, sent as UTF-8, or an octet vector (a
 	 * {@code byte[]}), sent as it is -- or {@code null} for none
 	 * @param defaultUserAgent the user-agent a request whose fields name none carries
+	 * @param connectTimeout the {@code :connect-timeout} option as the program wrote it
+	 * (milliseconds, a {@code Long}), or {@code null} for none
+	 * @param firstByteTimeout the {@code :first-byte-timeout} option, the same way
 	 * @return a {@link CompletableFuture} settling to the response plist
+	 * @throws RuntimeException at the call, when a timeout is no positive integer
 	 */
-	public static Object start(String url, String method, List<String> headers, Object body, String defaultUserAgent) {
+	public static Object start(String url, String method, List<String> headers, Object body, String defaultUserAgent,
+			Object connectTimeout, Object firstByteTimeout) {
+		long connectMillis = millis(connectTimeout, ":connect-timeout");
+		long firstByteMillis = millis(firstByteTimeout, ":first-byte-timeout");
 		HttpRequest request;
 		try {
-			request = request(url, method, headers, body, defaultUserAgent);
+			request = request(url, method, headers, body, defaultUserAgent, firstByteMillis);
 		}
 		catch (RuntimeException ex) {
 			return RontoFuture.of(CompletableFuture
@@ -86,9 +94,36 @@ public final class RontoFetch {
 		// the interpreter leaves its client to the collector the same way. The future
 		// settles at the head; the body fills in as the reply arrives (bodyStream).
 		// A RontoFuture, so an await that resolved it lets the next one go on
-		return RontoFuture.of(HttpClient.newHttpClient()
-			.sendAsync(request, HttpResponse.BodyHandlers.ofPublisher())
+		return RontoFuture.of(client(connectMillis).sendAsync(request, HttpResponse.BodyHandlers.ofPublisher())
 			.thenApply(RontoFetch::plist));
+	}
+
+	/**
+	 * A timeout option's milliseconds: 0 for an absent one.
+	 * @param value the option's value in the JVM backend's representation
+	 * @param option the option's keyword, for the refusal
+	 * @return the milliseconds, 0 when {@code value} is {@code null}
+	 * @throws RuntimeException when the value is no positive integer
+	 */
+	public static long millis(Object value, String option) {
+		if (value == null) {
+			return 0;
+		}
+		if (value instanceof Long number && number > 0) {
+			return number;
+		}
+		throw new RuntimeException("fetch: " + option + " expects a positive integer of milliseconds");
+	}
+
+	/**
+	 * The client one request is sent through: the JDK's default one, giving a connection
+	 * up after {@code connectMillis} when that is not 0.
+	 * @param connectMillis the {@code :connect-timeout} in milliseconds, 0 for none
+	 * @return the client
+	 */
+	public static HttpClient client(long connectMillis) {
+		return (connectMillis > 0) ? HttpClient.newBuilder().connectTimeout(Duration.ofMillis(connectMillis)).build()
+				: HttpClient.newHttpClient();
 	}
 
 	/**
@@ -111,11 +146,13 @@ public final class RontoFetch {
 	 * @param body the request body -- its text, sent as UTF-8, or an octet vector (a
 	 * {@code byte[]}), sent as it is -- or {@code null} for none
 	 * @param defaultUserAgent the user-agent a request whose fields name none carries
+	 * @param firstByteMillis the {@code :first-byte-timeout} in milliseconds -- how long
+	 * the reply's head may take, the client's request timeout -- or 0 for none
 	 * @return the request
 	 * @throws RuntimeException when the client refuses the URL or a field
 	 */
 	public static HttpRequest request(String url, String method, List<String> headers, Object body,
-			String defaultUserAgent) {
+			String defaultUserAgent, long firstByteMillis) {
 		URI uri = URI.create(url);
 		HttpRequest.Builder builder = HttpRequest.newBuilder(uri);
 		if ("http".equalsIgnoreCase(uri.getScheme())) {
@@ -140,6 +177,9 @@ public final class RontoFetch {
 		}
 		if (!userAgentSet) {
 			builder.header(USER_AGENT_HEADER, defaultUserAgent);
+		}
+		if (firstByteMillis > 0) {
+			builder.timeout(Duration.ofMillis(firstByteMillis));
 		}
 		return builder.build();
 	}

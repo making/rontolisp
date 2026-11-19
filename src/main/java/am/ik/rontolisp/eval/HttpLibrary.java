@@ -122,7 +122,12 @@ public final class HttpLibrary {
 		if (!fetch && handler == null) {
 			return program;
 		}
-		List<LispVal> httpForms = forms();
+		// A program naming neither timeout keyword states no timeout: its fetch is made
+		// with no request-options, by the forms it had before fetch took the two options.
+		// A component that serves cannot make one -- its import block fixes the members
+		// of wasi:http/types -- so a timeout named there is refused at the call.
+		boolean timed = namesTimeout(program);
+		List<LispVal> httpForms = (timed && !serve) ? forms() : untimed(forms(), timed);
 		// The library's defuns by name, in source order.
 		Map<String, LispVal> defunOf = new LinkedHashMap<>();
 		for (LispVal form : httpForms) {
@@ -217,6 +222,73 @@ public final class HttpLibrary {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Returns whether the program names {@code :connect-timeout} or
+	 * {@code :first-byte-timeout} anywhere: the gate of what a transport carries for the
+	 * two {@code rontolisp:fetch} options. A program that never spells a keyword cannot
+	 * hold it in an options plist.
+	 * @param program the top-level forms
+	 * @return {@code true} when a timeout keyword is named
+	 */
+	static boolean namesTimeout(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (namesTimeoutKeyword(form)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean namesTimeoutKeyword(LispVal form) {
+		while (true) {
+			switch (form) {
+				case LispSymbol sym -> {
+					return sym.name().equalsIgnoreCase(":CONNECT-TIMEOUT")
+							|| sym.name().equalsIgnoreCase(":FIRST-BYTE-TIMEOUT");
+				}
+				case LispCons cons -> {
+					if (namesTimeoutKeyword(cons.car())) {
+						return true;
+					}
+					form = cons.cdr();
+				}
+				default -> {
+					return false;
+				}
+			}
+		}
+	}
+
+	// http.lisp making no request-options: (%fetch-request-options x) is nil, and
+	// (%fetch-timed x) is x for a program stating no timeout, (%fetch-untimed x) -- the
+	// refusal -- where REFUSING says the program names one. The defuns it replaces are
+	// left out, and the reachability walk drops what nothing calls any more.
+	private static List<LispVal> untimed(List<LispVal> httpForms, boolean refusing) {
+		List<LispVal> out = new ArrayList<>(httpForms.size());
+		for (LispVal form : httpForms) {
+			String name = defunName(form);
+			if (name == null || !(name.equals("%FETCH-TIMED") || name.equals("%FETCH-REQUEST-OPTIONS"))) {
+				out.add(untimed(form, refusing));
+			}
+		}
+		return out;
+	}
+
+	private static LispVal untimed(LispVal form, boolean refusing) {
+		return LispTrees.rebuildSpine(form, node -> {
+			if (node instanceof LispCons call && call.car() instanceof LispSymbol head
+					&& call.cdr() instanceof LispCons args) {
+				if (head.name().equals("%FETCH-TIMED")) {
+					return refusing ? new LispCons(new LispSymbol("%FETCH-UNTIMED"), args) : args.car();
+				}
+				if (head.name().equals("%FETCH-REQUEST-OPTIONS")) {
+					return am.ik.rontolisp.LispNil.INSTANCE;
+				}
+			}
+			return null;
+		}, car -> untimed(car, refusing));
 	}
 
 	private static boolean references(LispVal form, String member) {

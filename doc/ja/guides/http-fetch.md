@@ -100,6 +100,10 @@ alist)、`:body` (文字列) を指定できます:
                      :body "{\"name\":\"rontolisp\"}")))
 ```
 
+`:connect-timeout` と `:first-byte-timeout` (どちらもミリ秒の正の整数) は、接続と
+応答の開始にかけてよい時間を制限します。どちらかを過ぎたリクエストは、ほかの失敗と
+同じく `await` で失敗します。
+
 サポートされるメソッドは `GET`、`HEAD`、`POST`、`PUT`、`DELETE`、`OPTIONS`、
 `PATCH` です。バックエンドごとのバリデーションのタイミングとエラー時の
 挙動 (リクエストの失敗は `fetch` 時ではなく `await` 時に表面化します —

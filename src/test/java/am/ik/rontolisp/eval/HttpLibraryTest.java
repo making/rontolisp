@@ -61,7 +61,7 @@ class HttpLibraryTest {
 	}
 
 	@Test
-	void processSplicesTheDefaultUserAgentWithTheFetchHalf() {
+	void processSplicesTheDefaultUserAgentAndANamedTimeoutWithTheFetchHalf() {
 		// The component has no HTTP client of its own to default the field, so the
 		// generated literals travel with the fetch half -- and only with it: a serve-only
 		// component never sends a request, so the reachability walk drops them.
@@ -72,6 +72,24 @@ class HttpLibraryTest {
 		assertThat(definesDefun(fetching, "%HTTP-DEFAULT-USER-AGENT")).isTrue();
 		assertThat(definesDefun(fetching, "%FETCH-USER-AGENT-SET-P")).isTrue();
 		assertThat(printAll(fetching)).contains(FetchResponseShape.defaultUserAgent());
+		// A program naming no timeout makes its request with no request-options, by the
+		// forms fetch had before it took the two options; one naming a timeout binds the
+		// resource and reads both options at the call.
+		assertThat(printAll(fetching)).doesNotContain("REQUEST-OPTIONS").doesNotContain("%FETCH-TIMED");
+		String timed = printAll(HttpLibrary.process(
+				LispReader
+					.readAllFromString("(rl:await (rl:fetch \"https://example.com\" (list :first-byte-timeout 500)))"),
+				WitExportDirective.Backend.WASM_COMPONENT, false));
+		assertThat(timed).contains("(%FETCH-REQUEST-OPTIONS OPTIONS)")
+			.contains("(%FETCH-TIMED OPTS)")
+			.contains("REQUEST-OPTIONS-SET-FIRST-BYTE-TIMEOUT");
+		// A component that serves has the members of wasi:http/types fixed by its import
+		// block: a timeout named there is refused at the call.
+		String served = printAll(HttpLibrary.process(LispReader.readAllFromString("""
+				(defun my-handler (req) (rl:await (rl:fetch "https://example.com" (list :connect-timeout 500))))
+				(rontolisp:http-handler 'my-handler 8080)
+				"""), WitExportDirective.Backend.WASM_COMPONENT, true));
+		assertThat(served).contains("(%FETCH-UNTIMED OPTS)").doesNotContain("REQUEST-OPTIONS");
 
 		List<LispVal> serving = HttpLibrary.process(LispReader.readAllFromString("""
 				(defun my-handler (req) req)

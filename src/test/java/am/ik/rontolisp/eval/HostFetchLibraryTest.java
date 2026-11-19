@@ -50,10 +50,16 @@ class HostFetchLibraryTest {
 		// The head's import, under the documented host module/field.
 		assertThat(source).contains(":from \"" + HostFetchLibrary.IMPORT_MODULE + "\"")
 			.contains(":as \"" + HostFetchLibrary.IMPORT_FIELD + "\"");
-		// Request side: every record field crosses, as its own JSON key.
-		for (FetchResponseShape.Field field : FetchResponseShape.requestFields()) {
+		// Request side: every record field a host receives crosses, as its own JSON key.
+		// The two deadlines do not: a program naming one is refused at the call, and one
+		// naming none keeps the lowering it had.
+		for (FetchResponseShape.Field field : FetchResponseShape.hostRequestFields()) {
 			assertThat(source).as("request field '%s' is carried", field.name()).contains(field.keyword());
 		}
+		assertThat(source).doesNotContain("timeout");
+		assertThat(HostFetchLibrary.source(boundary, false, true))
+			.contains("(when (or (getf options :connect-timeout) (getf options :first-byte-timeout))")
+			.doesNotContain(":CONNECT-TIMEOUT");
 		// Response side: every record field is read back by its JSON key, in record
 		// order inside the result plist, plus the reserved error arm. The body's key is
 		// read on BOTH boundaries: on the streaming one it is the in-band fallback a host
@@ -122,7 +128,7 @@ class HostFetchLibraryTest {
 	void theShippedWorkerHostSpeaksTheSameEnvelope() throws IOException {
 		String host = Files.readString(WORKER_HOST, StandardCharsets.UTF_8);
 		// The host reads every request field the record declares...
-		for (FetchResponseShape.Field field : FetchResponseShape.requestFields()) {
+		for (FetchResponseShape.Field field : FetchResponseShape.hostRequestFields()) {
 			assertThat(host).as("the worker host reads request.%s", field.name()).contains("request." + field.name());
 		}
 		// ...and answers every response field, plus the error arm -- the head's fields
@@ -179,9 +185,13 @@ class HostFetchLibraryTest {
 			.contains(module + " :as \"" + HostFetchLibrary.BODY_IMPORT_FIELD + "\"")
 			.doesNotContain(":from \"" + HostFetchLibrary.IMPORT_MODULE + "\"");
 		// The same envelope as the host's: every request field crosses, every response
-		// field is read back by its key, and the error arm signals.
+		// field is read back by its key, and the error arm signals. The two deadlines
+		// cross in a program that names a timeout option, and in no other.
+		String timed = HostFetchLibrary.runnerSource(true);
 		for (FetchResponseShape.Field field : FetchResponseShape.requestFields()) {
-			assertThat(source).as("request field '%s' is carried", field.name()).contains(field.keyword());
+			assertThat(timed).as("request field '%s' is carried", field.name()).contains(field.keyword());
+			assertThat(source.contains(field.keyword())).as("request field '%s' without a timeout", field.name())
+				.isEqualTo(!FetchResponseShape.isDeadline(field));
 		}
 		for (FetchResponseShape.Field field : FetchResponseShape.responseFields()) {
 			assertThat(source).as("response field '%s' is read", field.name())

@@ -1,57 +1,47 @@
-# rontolisp:fetch timeout options (:connect-timeout / :first-byte-timeout)
+# rontolisp:fetch timeouts: where they are refused, and their consumers
 
-`rontolisp:fetch` has no timeout control on any backend: a stalled or
-unreachable server hangs the calling program indefinitely.
-`eval/HttpSupport.java` contains no timeout code (the `HttpClient` is built
-with defaults), `JvmFetchRuntimeBuilder` likewise, and on `--component`
-`http.lisp`'s `%fetch-send` passes `nil` where `request-new` accepts a
-`request-options` resource — even though the vendored `http.wit` already
-declares the full `request-options` type (connect / first-byte /
-between-bytes timeouts).
+Difficulty: Medium
 
-## Proposal
+State after k05 (2026-11-19, `.kb/fetch-http.md`, "Timeouts"): `:connect-timeout` and
+`:first-byte-timeout` (milliseconds) are in on the interpreter, the JVM, a component under
+`wasmtime run` and a `--native` output, carried only by a program that names one, pinned
+by `fetch-spec.yaml`; the Java subset's `HttpRequest.Builder.timeout` and
+`HttpClient.Builder.connectTimeout` hand them to fetch. What is left is where a timeout
+is refused by name, and two consumers.
 
-Two new keyword options on the existing `rontolisp:fetch` options plist,
-both in milliseconds:
+## Where a timeout is refused
 
-- `:connect-timeout` — TCP/TLS connection establishment deadline
-- `:first-byte-timeout` — deadline for the response to start arriving
+- **A component that serves** (`rontolisp:http-handler`, a Java `HttpServer`, a Clack
+  application under `wasmtime serve`): its `wasi:http/types` members are fixed by
+  `import-block-http-server.bin`, which declares no `request-options` constructor or
+  setter, so a fetch with a timeout there signals at the call (`%fetch-untimed`). Making
+  it work is adding the three members to `src/wasm-component/core-http-server.wat`,
+  regenerating the block (`regen.sh`) and re-deriving the instance and type constants of
+  `WasmServeComponentBuilder` from `wasm-tools dump`. That changes the bytes of EVERY
+  served component, so measure what it costs first; a second block selected only by a
+  timed program would keep the others identical.
+- **The `--no-wasi --host-fetch` reactor**: refused at the call. The request record's two
+  deadlines do not reach a host (`FetchResponseShape.hostRequestFields`). A JavaScript
+  host can honour the first byte with an `AbortController` aborted by a timer that is
+  cleared once the head is in (`AbortSignal.timeout` would also cut the body); it has
+  nothing for the connection. `HostGlueEmitter` would write that, the checked-in
+  `examples/cloudflare-workers/dog-fetcher/src/worker.js` follows, and
+  `WasmHostFetchBodyE2eTest` pins it under node.
+- **The browser playground**: the request fails at the await (`Target_HttpSupport`). The
+  page's broker would abort the same way.
 
-No new syntax, no new function. Expiry signals a catchable condition (the
-same condition type fetch already signals for transport errors), identically
-on every backend that has fetch.
+## Not made
 
-`:between-bytes-timeout` (stall detection between body chunks) is a possible
-third option later; it is deferred because the JDK `HttpClient` has no direct
-equivalent (it would need a wrapper on the body-stream reads), while the
-component side would get it for free from the host.
+- **A connect timeout that passes has no pin**: no local origin holds a connection open
+  unanswered. Asked by hand of a blackholed address on four legs (k05's `Hang.java`). A
+  listener whose backlog is full is one way to hold a connect on Linux; it has to be
+  shown not to flake first.
+- **`:between-bytes-timeout`**: wasi:http has it; the JDK client has no equivalent (a
+  wrapper on the body reads), the runner would arm its `Deadline` per body read.
+- **A program that builds the keyword at run time** and never spells it gets no timeout
+  (the gate reads the program's symbols).
 
-## Mechanism per backend
-
-- **Interpreter**: `HttpSupport` applies `HttpClient.Builder.connectTimeout`
-  and `HttpRequest.Builder.timeout` (the JDK request timeout fires if the
-  response has not begun — the first-byte semantics). Wrap
-  `HttpTimeoutException`/`HttpConnectTimeoutException` into the existing
-  fetch condition.
-- **JVM**: the same two calls in `JvmFetchRuntimeBuilder`'s request-building
-  code.
-- **`--component`**: in `http.lisp` `%fetch-send`, when either key is
-  present, construct the `request-options` resource, call
-  `set-connect-timeout` / `set-first-byte-timeout` (WIT `duration` is
-  nanoseconds), and pass it as `request-new`'s options argument. The types
-  already exist in the vendored WIT, so this is only adding those members to
-  `HttpLibrary`'s reachable-member set — no new `.wit` file, no core Java on
-  this path. The host enforces the deadline; the error arrives as the
-  existing `error-code` variant and is already signaled as a condition.
-- **`--native`** (added 2026-09-25): the runner's own client (`rontolisp-native/runner/src/http`)
-  has no deadline either. The request record crosses as JSON (`FetchResponseShape`'s `request`),
-  so the two keys become two more fields there; `wire::connect` takes `TcpStream::connect_timeout`
-  and a read timeout on the socket until the head (`set_read_timeout`), reported as the head's
-  error arm, which signals at the await like any transport failure. Pin it in the fetch corpus
-  (`fetch-spec.yaml`), whose origin can sleep.
-- **WASM P1 `.wasm` / `--no-gc`**: fetch is unsupported there today; unchanged.
-
-## Consumer: `rontolisp.http-client` (added 2026-10-09)
+## Consumer: `rontolisp.http-client`
 
 babashka.http-client's request option `:timeout` (milliseconds, or a `java.time.Duration`) is
 `HttpRequest.Builder.timeout`, the first-byte deadline. Measured on clj 1.12.6 against an origin
@@ -59,16 +49,7 @@ holding its head 2 s: `:timeout 300` throws `java.net.http.HttpTimeoutException`
 out` (under `:async`, an `ExecutionException` over it at the deref); `:timeout 5000` answers.
 `:connect-timeout` is a client option there (`client`, refused here). The client refuses
 `:timeout` by name (`%clojure-http-refuse-options` in `clojure.lisp`); with
-`:first-byte-timeout` it passes the option through and throws the oracle's class and words, a
-case in `clojure-http-spec.yaml` on the four legs.
-
-## Verification
-
-- Deterministic timeout tests: a local server (interpreter/JVM: JDK
-  `HttpServer` that sleeps past the deadline; component: existing
-  Docker/wasmtime harness) asserting the condition type and that a generous
-  timeout does NOT fire.
-- Byte-identity: a program that never passes the new keys must compile
-  byte-identically on the wasm backends (reference-gated members).
-- Docs: fetch reference page (en+ja) gains the two options with a runnable
-  example; `-Drontolisp.doc.fix=true` pass.
+`:first-byte-timeout` it passes the option through and throws the oracle's class and words
+(the texts each transport gives are in `.kb/fetch-http.md`, "Timeouts"; the Java client's
+`TimedWire.failure` maps them), a case in `clojure-http-spec.yaml` on the four legs --
+which makes that corpus a timed program, so keep one program naming no timeout.

@@ -10,8 +10,9 @@
 //! no pool.
 
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use super::url::Target;
 
@@ -22,6 +23,56 @@ pub struct Request {
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: Option<Vec<u8>>,
+    /// How long the connection may take (`:connect-timeout`).
+    pub connect_timeout: Option<Duration>,
+    /// How long the reply head may take, counted from the start of the request
+    /// (`:first-byte-timeout`): `HttpRequest.Builder.timeout` of the reference.
+    pub first_byte_timeout: Option<Duration>,
+}
+
+/// What a request reports when its head did not arrive within its first-byte timeout.
+pub const TIMED_OUT: &str = "request timed out";
+
+/// Why a connection was given up when its time passed.
+const CONNECT_TIMED_OUT: &str = "connect timed out";
+
+/// The first-byte deadline of one request over its socket: armed ahead of each read on
+/// the way to the head, so the read ends when the deadline passes, and taken off once
+/// the head is in -- a body may take as long as it takes.
+pub struct Deadline {
+    at: Instant,
+    socket: TcpStream,
+}
+
+impl Deadline {
+    /// A deadline `at` for the reads of the connection `socket` is a handle on.
+    pub fn new(at: Instant, socket: &TcpStream) -> Result<Deadline, String> {
+        let socket = socket
+            .try_clone()
+            .map_err(|e| format!("cannot time the request: {e}"))?;
+        Ok(Deadline { at, socket })
+    }
+
+    /// Lets the next read wait for what is left of the time, or says it is over.
+    fn arm(&self) -> Result<(), String> {
+        let left = self.at.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(TIMED_OUT.into());
+        }
+        self.socket
+            .set_read_timeout(Some(left))
+            .map_err(|e| format!("cannot time the request: {e}"))
+    }
+
+    /// The head is in: reads wait again for as long as the origin takes.
+    fn disarm(&self) {
+        let _ = self.socket.set_read_timeout(None);
+    }
+}
+
+/// Whether a read ended because its socket's timeout passed.
+fn timed_out(e: &io::Error) -> bool {
+    matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut)
 }
 
 /// A reply head: the status and the fields, names lowercased, in `HttpClient`'s order.
@@ -96,10 +147,16 @@ pub fn encode(req: &Request, target: &Target) -> Vec<u8> {
 /// Opens the connection `target` names, TLS included -- under the configuration `tls`
 /// answers, asked for only when the target is `https`. Answers the connection and a
 /// second handle on its socket: shutting that one down ends a read of the first that
-/// another thread is blocked in.
-pub fn connect(target: &Target, tls: &dyn Fn() -> TlsConfig) -> Result<(Box<dyn Conn>, TcpStream), String> {
-    let tcp = TcpStream::connect((target.host.as_str(), target.port))
-        .map_err(|e| format!("cannot connect to {}:{}: {e}", target.host, target.port))?;
+/// another thread is blocked in. The connection is given up after `connect_timeout`, or
+/// when `first_byte` (the instant the reply head is due) passes, whichever is first; a
+/// TLS handshake reads under `first_byte` too.
+pub fn connect(
+    target: &Target,
+    tls: &dyn Fn() -> TlsConfig,
+    connect_timeout: Option<Duration>,
+    first_byte: Option<Instant>,
+) -> Result<(Box<dyn Conn>, TcpStream), String> {
+    let tcp = open(target, connect_timeout, first_byte)?;
     let _ = tcp.set_nodelay(true);
     let socket = tcp
         .try_clone()
@@ -107,6 +164,7 @@ pub fn connect(target: &Target, tls: &dyn Fn() -> TlsConfig) -> Result<(Box<dyn 
     if !target.tls {
         return Ok((Box::new(tcp), socket));
     }
+    let deadline = first_byte.map(|at| Deadline::new(at, &socket)).transpose()?;
     let name = rustls::pki_types::ServerName::try_from(target.host.clone())
         .map_err(|e| format!("invalid TLS server name {:?}: {e}", target.host))?;
     let mut conn = rustls::ClientConnection::new(tls()?, name).map_err(|e| format!("TLS: {e}"))?;
@@ -114,10 +172,52 @@ pub fn connect(target: &Target, tls: &dyn Fn() -> TlsConfig) -> Result<(Box<dyn 
     // The handshake now, not at the first write, so a certificate nobody vouches for
     // is reported as what it is.
     while conn.is_handshaking() {
-        conn.complete_io(&mut tcp)
-            .map_err(|e| format!("TLS handshake with {} failed: {e}", target.host))?;
+        if let Some(deadline) = &deadline {
+            deadline.arm()?;
+        }
+        conn.complete_io(&mut tcp).map_err(|e| {
+            if deadline.is_some() && timed_out(&e) {
+                TIMED_OUT.to_string()
+            } else {
+                format!("TLS handshake with {} failed: {e}", target.host)
+            }
+        })?;
+    }
+    if let Some(deadline) = &deadline {
+        deadline.disarm();
     }
     Ok((Box::new(rustls::StreamOwned::new(conn, tcp)), socket))
+}
+
+/// The TCP connection to `target`: without a limit the system's own connect, with one
+/// each address of the host in turn within what is left of the time.
+fn open(target: &Target, connect_timeout: Option<Duration>, first_byte: Option<Instant>) -> Result<TcpStream, String> {
+    let refused = |e: &dyn std::fmt::Display| format!("cannot connect to {}:{}: {e}", target.host, target.port);
+    let connect_by = connect_timeout.and_then(|d| Instant::now().checked_add(d));
+    // The earlier of the two instants is the one the connection is due by. Either way
+    // what passed is the time to connect, as the reference reports a request whose
+    // timeout passes before its connection is there.
+    let by = match (connect_by, first_byte) {
+        (Some(c), Some(f)) => c.min(f),
+        (Some(by), None) | (None, Some(by)) => by,
+        (None, None) => return TcpStream::connect((target.host.as_str(), target.port)).map_err(|e| refused(&e)),
+    };
+    let addresses = (target.host.as_str(), target.port)
+        .to_socket_addrs()
+        .map_err(|e| refused(&e))?;
+    let mut last = refused(&"the host has no address");
+    for address in addresses {
+        let left = by.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(refused(&CONNECT_TIMED_OUT));
+        }
+        match TcpStream::connect_timeout(&address, left) {
+            Ok(tcp) => return Ok(tcp),
+            Err(e) if timed_out(&e) => return Err(refused(&CONNECT_TIMED_OUT)),
+            Err(e) => last = refused(&e),
+        }
+    }
+    Err(last)
 }
 
 /// A TLS client configuration, or why there is none.
@@ -178,18 +278,27 @@ pub fn client_config(roots: rustls::RootCertStore) -> TlsConfig {
 }
 
 /// Sends `req` over `conn` and reads the reply head, skipping interim (1xx) replies.
-/// Answers the head and the body reader positioned after it.
-pub fn exchange(mut conn: Box<dyn Conn>, req: &Request, target: &Target) -> Result<(Head, Body), String> {
+/// Answers the head and the body reader positioned after it. Under a `deadline` the
+/// head is due by it; the body is not.
+pub fn exchange(
+    mut conn: Box<dyn Conn>,
+    req: &Request,
+    target: &Target,
+    deadline: Option<&Deadline>,
+) -> Result<(Head, Body), String> {
     conn.write_all(&encode(req, target))
         .and_then(|()| conn.flush())
         .map_err(|e| format!("cannot send the request: {e}"))?;
     let mut buf: Vec<u8> = Vec::new();
     loop {
-        let (head, consumed) = read_head(&mut conn, &mut buf)?;
+        let (head, consumed) = read_head(&mut conn, &mut buf, deadline)?;
         buf.drain(..consumed);
         // 101 is not interim: nothing here switches protocols, so it is the answer.
         if (100..200).contains(&head.status) && head.status != 101 {
             continue;
+        }
+        if let Some(deadline) = deadline {
+            deadline.disarm();
         }
         let framing = framing(&req.method, &head)?;
         let body = Body {
@@ -203,7 +312,11 @@ pub fn exchange(mut conn: Box<dyn Conn>, req: &Request, target: &Target) -> Resu
 }
 
 /// Reads until `buf` holds a whole head; answers it and how many bytes of `buf` it took.
-fn read_head(conn: &mut Box<dyn Conn>, buf: &mut Vec<u8>) -> Result<(Head, usize), String> {
+fn read_head(
+    conn: &mut Box<dyn Conn>,
+    buf: &mut Vec<u8>,
+    deadline: Option<&Deadline>,
+) -> Result<(Head, usize), String> {
     let mut chunk = [0u8; 8192];
     loop {
         if let Some(parsed) = parse_head(buf)? {
@@ -212,9 +325,16 @@ fn read_head(conn: &mut Box<dyn Conn>, buf: &mut Vec<u8>) -> Result<(Head, usize
         if buf.len() > MAX_HEAD {
             return Err("the reply head is larger than 256 KiB".into());
         }
-        let n = conn
-            .read(&mut chunk)
-            .map_err(|e| format!("cannot read the reply: {e}"))?;
+        if let Some(deadline) = deadline {
+            deadline.arm()?;
+        }
+        let n = conn.read(&mut chunk).map_err(|e| {
+            if deadline.is_some() && timed_out(&e) {
+                TIMED_OUT.to_string()
+            } else {
+                format!("cannot read the reply: {e}")
+            }
+        })?;
         if n == 0 {
             return Err("the connection closed before a reply head arrived".into());
         }
@@ -465,7 +585,7 @@ mod tests {
             method: method.into(),
             ..Default::default()
         };
-        let (head, mut body) = exchange(conn, &req, &target)?;
+        let (head, mut body) = exchange(conn, &req, &target, None)?;
         let mut out = Vec::new();
         let mut chunk = [0u8; 7];
         loop {
@@ -555,6 +675,7 @@ mod tests {
             url: String::new(),
             headers: vec![("User-Agent".into(), "ua/1".into())],
             body: Some(b"hi".to_vec()),
+            ..Default::default()
         };
         assert_eq!(
             String::from_utf8(encode(&req, &target)).unwrap(),
@@ -660,12 +781,12 @@ mod tests {
     }
 
     fn fetch_over(target: &Target, tls: &dyn Fn() -> TlsConfig) -> Result<(Head, Vec<u8>), String> {
-        let (conn, _socket) = connect(target, tls)?;
+        let (conn, _socket) = connect(target, tls, None, None)?;
         let req = Request {
             method: "GET".into(),
             ..Default::default()
         };
-        let (head, mut body) = exchange(conn, &req, target)?;
+        let (head, mut body) = exchange(conn, &req, target, None)?;
         let mut out = vec![0u8; 64];
         let n = body.read(&mut out).map_err(|e| e.to_string())?;
         out.truncate(n);

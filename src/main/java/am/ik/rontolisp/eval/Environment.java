@@ -3334,7 +3334,9 @@ public final class Environment implements Scope {
 			String method = fetchMethod(options);
 			List<HttpSupport.Header> requestHeaders = parseHeaderAlist(plistGet(options, ":HEADERS"));
 			Object body = fetchBody(options);
-			return LispFuture.of(HttpSupport.requestAsync(method, url.value(), requestHeaders, body)
+			HttpSupport.Timeouts timeouts = new HttpSupport.Timeouts(fetchTimeout(options, ":CONNECT-TIMEOUT"),
+					fetchTimeout(options, ":FIRST-BYTE-TIMEOUT"));
+			return LispFuture.of(HttpSupport.requestAsync(method, url.value(), requestHeaders, body, timeouts)
 				.thenApply(Environment::fetchResponsePlist));
 		}));
 		// futurep tests whether a value is a future (calling an async-defun function,
@@ -3489,6 +3491,20 @@ public final class Environment implements Scope {
 					+ String.join(", ", SUPPORTED_METHODS) + ")");
 		}
 		return canonical;
+	}
+
+	// A timeout option's milliseconds, 0 when absent: a positive integer or a refusal at
+	// the call, in the words every transport uses.
+	private static long fetchTimeout(LispVal options, String key) {
+		LispVal value = plistGet(options, key);
+		if (value instanceof LispNil) {
+			return 0;
+		}
+		if (value instanceof LispInteger number && number.value() > 0) {
+			return number.value();
+		}
+		throw new LispEvalException(
+				LispNames.FETCH + ": " + key.toLowerCase(Locale.ROOT) + " expects a positive integer of milliseconds");
 	}
 
 	// Resolves the :body option (default none). Must be a string when present.

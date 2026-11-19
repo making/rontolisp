@@ -26,12 +26,14 @@ import am.ik.rontolisp.runtime.RontoFetch;
  * The optional {@code options} argument is a property list; {@code :method} (default
  * {@code "GET"}; one of GET/HEAD/POST/PUT/DELETE/OPTIONS/PATCH, matched
  * case-insensitively and sent in canonical upper case -- anything else throws AT THE
- * CALL), {@code :headers} (a request-header alist) and {@code :body} (a request body
- * string) are recognized. Each value is rendered to its text here, through the program's
- * own {@code _strv} (a mutable character vector is this class's representation, not the
- * transport's). {@link FetchResponseShape#defaultUserAgent()} is baked in at codegen time
- * and set by the transport when the caller's fields name no user-agent. The transport
- * class travels with the compiled output ({@link #RUNTIME_CLASS_FILES}).
+ * CALL), {@code :headers} (a request-header alist), {@code :body} (a request body string)
+ * and the two timeouts, {@code :connect-timeout} and {@code :first-byte-timeout}
+ * (milliseconds, handed to the transport as written), are recognized. Each value is
+ * rendered to its text here, through the program's own {@code _strv} (a mutable character
+ * vector is this class's representation, not the transport's).
+ * {@link FetchResponseShape#defaultUserAgent()} is baked in at codegen time and set by
+ * the transport when the caller's fields name no user-agent. The transport class travels
+ * with the compiled output ({@link #RUNTIME_CLASS_FILES}).
  */
 final class JvmFetchRuntimeBuilder {
 
@@ -46,7 +48,7 @@ final class JvmFetchRuntimeBuilder {
 
 	/** {@link RontoFetch#start}'s descriptor. */
 	static final String TRANSPORT_START_DESC = "(Ljava/lang/String;Ljava/lang/String;Ljava/util/List;"
-			+ "Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;";
+			+ "Ljava/lang/Object;Ljava/lang/String;Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;";
 
 	/**
 	 * The runtime class files a program that fetches carries beside it: the transport,
@@ -111,6 +113,8 @@ final class JvmFetchRuntimeBuilder {
 		StringEntry methodKey = cp.stringEntry(":method");
 		StringEntry headersKey = cp.stringEntry(":headers");
 		StringEntry bodyKey = cp.stringEntry(":body");
+		StringEntry connectTimeoutKey = cp.stringEntry(":connect-timeout");
+		StringEntry firstByteTimeoutKey = cp.stringEntry(":first-byte-timeout");
 		StringEntry unsupportedMsg = cp.stringEntry("fetch: unsupported method");
 		// The supported HTTP methods, in canonical (upper-case) form. The request is sent
 		// with the canonical spelling regardless of the case the caller used.
@@ -124,7 +128,9 @@ final class JvmFetchRuntimeBuilder {
 		// 11 plist cursor, 15 request-body value, 16 canonical method (String),
 		// 17 method scratch (unquoted String), 18 body (its text, a packed octet vector
 		// as it is, null = none),
-		// 19 flattened request fields (ArrayList), 20 the current field pair.
+		// 19 flattened request fields (ArrayList), 20 the current field pair,
+		// 21 the connect timeout, 22 the first-byte timeout (each as written: the
+		// transport refuses what is no positive integer, at this call).
 		MethodCode a = new MethodCode();
 
 		// --- options parsing: method (10), request headers (9), request body (15) ---
@@ -133,6 +139,8 @@ final class JvmFetchRuntimeBuilder {
 		emitPlistGet(a, methodKey, 11, 10, objectArrayClass, stringClass, stringEqualsIgnoreCase);
 		emitPlistGet(a, headersKey, 11, 9, objectArrayClass, stringClass, stringEqualsIgnoreCase);
 		emitPlistGet(a, bodyKey, 11, 15, objectArrayClass, stringClass, stringEqualsIgnoreCase);
+		emitPlistGet(a, connectTimeoutKey, 11, 21, objectArrayClass, stringClass, stringEqualsIgnoreCase);
+		emitPlistGet(a, firstByteTimeoutKey, 11, 22, objectArrayClass, stringClass, stringEqualsIgnoreCase);
 
 		// --- resolve the canonical method into slot 16: nil defaults to GET, otherwise
 		// it
@@ -225,13 +233,16 @@ final class JvmFetchRuntimeBuilder {
 		a.goto_(hLoop);
 		a.labelBinding(hEnd);
 
-		// return RontoFetch.start(url, method, headers, body, defaultUserAgent): the
-		// request starts NOW, and what comes back is the future of the response plist.
+		// return RontoFetch.start(url, method, headers, body, defaultUserAgent,
+		// connectTimeout, firstByteTimeout): the request starts NOW, and what comes back
+		// is the future of the response plist.
 		stripQuotes(a, 0, stringClass, stringLength, stringSubstring, strvRef); // [url]
 		a.aload(16);
 		a.aload(19);
 		a.aload(18);
 		a.ldc(userAgentValue);
+		a.aload(21);
+		a.aload(22);
 		a.invokestatic(fetchStart);
 		a.areturn();
 

@@ -98,6 +98,10 @@ pairs) and `:body` (a string):
                      :body "{\"name\":\"rontolisp\"}")))
 ```
 
+`:connect-timeout` and `:first-byte-timeout` (each a positive integer of
+milliseconds) limit how long the connection and the start of the response may
+take; a request that passes one fails at `await` like any other.
+
 The supported methods are `GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `OPTIONS`
 and `PATCH`; see the [fetch](../reference/functions/rontolisp-fetch.md)
 reference page for validation timing and error behavior per backend (a failed
