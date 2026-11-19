@@ -24,4 +24,4 @@ directory, opens a page and runs the scenario. `ISOLATED=1` sends COOP/COEP.
 - `PAGE=/docs/en/java/index.html node browser.js web/dist stop.js` -- a cell that never
   ends, the page alive meanwhile, Stop, the next Run.
 - `node browser.js web/dist playground.js` -- the playground page's Run source (needs
-  `Pool.java` and `Hello.java` beside it: the doc's pool example and a hello program).
+  `Pool.java` and `Hello.java`, beside it).
