@@ -240,8 +240,27 @@ class FetchSpecE2eTest {
 
 	}
 
-	/** One served Java program: its file, the requests in turn and what it logs. */
-	record Served(String name, String file, String source, String log, List<Asked> requests) {
+	/**
+	 * One served Java program: its file, its source (or the example under
+	 * {@code examples/} it serves), the requests in turn and what it logs.
+	 * {@code endless} marks a program no request stops, which is ended once asked;
+	 * {@code listening} is the line saying its port (its one group); {@code unshown} the
+	 * lines of a response body left out, what the client and the transports add on their
+	 * own.
+	 */
+	record Served(String name, String file, @Nullable String source, @Nullable String example, @Nullable String log,
+			@Nullable Boolean endless, @Nullable String listening, @Nullable List<String> unshown,
+			List<Asked> requests) {
+
+		String text() throws IOException {
+			return (this.example != null) ? Files.readString(Path.of("examples", this.example), StandardCharsets.UTF_8)
+					: Objects.requireNonNull(this.source);
+		}
+
+		boolean ends() {
+			return !Boolean.TRUE.equals(this.endless);
+		}
+
 	}
 
 	record ServedPrograms(List<Served> programs) {
@@ -692,11 +711,14 @@ class FetchSpecE2eTest {
 							.isEqualTo(asked.expectedOn(leg))));
 			}
 		}
-		if (!leg.equals(Leg.COMPONENT.key())) {
-			// the host starts a component as often as it likes, and never ends it
+		// the host starts a component as often as it likes, and never ends it
+		String log = program.log();
+		if (!leg.equals(Leg.COMPONENT.key()) && log != null) {
 			tests.add(dynamicTest("the-lines-it-logged",
 					() -> assertThat(answers.log()).as("the log of %s on %s", program.name(), leg)
-						.isEqualTo(lines(program.log()))));
+						.isEqualTo(lines(log))));
+		}
+		if (!leg.equals(Leg.COMPONENT.key()) && program.ends()) {
 			tests.add(dynamicTest("it-ends-once-its-server-stopped",
 					() -> assertThat(answers.exit()).as("the status %s ended with on %s", program.name(), leg)
 						.isEqualTo(0)));
@@ -705,9 +727,11 @@ class FetchSpecE2eTest {
 	}
 
 	// Starts a program as a server on one leg, asks it the requests in turn and ends
-	// it: the last request stops a program that can stop; the host's is destroyed.
+	// it: the last request stops a program that can stop; the host's is destroyed. A
+	// file in a package is under its directories.
 	private static Answers serve(String leg, Served program, String originUrl) throws Exception {
-		String stem = program.file().substring(0, program.file().lastIndexOf('.'));
+		String name = Path.of(program.file()).getFileName().toString();
+		String stem = name.substring(0, name.lastIndexOf('.'));
 		Path dir = Files.createDirectories(workDir.resolve(stem + "-served-" + leg));
 		boolean component = leg.equals(Leg.COMPONENT.key());
 		boolean nativeLeg = leg.equals(Leg.NATIVE.key());
@@ -715,8 +739,9 @@ class FetchSpecE2eTest {
 		// got: the runner's
 		int reserved = nativeLeg ? ServeComponentE2eSupport.freePort() : 0;
 		Path source = dir.resolve(program.file());
+		Files.createDirectories(source.getParent());
 		Files.writeString(source,
-				program.source()
+				program.text()
 					.replace(ORIGIN_MARK, originUrl)
 					.replace(LEG_MARK, leg)
 					.replace(PORT_MARK, Integer.toString(reserved)),
@@ -760,27 +785,29 @@ class FetchSpecE2eTest {
 		}
 		Path stdout = dir.resolve("served.out");
 		Path stderr = dir.resolve("served.err");
-		Process process = new ProcessBuilder(command).directory(dir.toFile())
+		ProcessBuilder builder = new ProcessBuilder(command).directory(dir.toFile())
 			.redirectInput(ProcessBuilder.Redirect.from(Path.of("/dev/null").toFile()))
 			.redirectOutput(stdout.toFile())
-			.redirectError(stderr.toFile())
-			.start();
+			.redirectError(stderr.toFile());
+		// an example's port is its environment's
+		builder.environment().put("PORT", Integer.toString(reserved));
+		Process process = start(builder);
 		try {
 			int port = servedPort(process, stdout, stderr,
-					component ? Pattern.compile("Serving HTTP on http://127\\.0\\.0\\.1:(\\d+)/")
-							: Pattern.compile("^listening (\\d+)$", Pattern.MULTILINE));
+					component ? Pattern.compile("Serving HTTP on http://127\\.0\\.0\\.1:(\\d+)/") : Pattern.compile(
+							Objects.requireNonNullElse(program.listening(), "^listening (\\d+)$"), Pattern.MULTILINE));
 			Map<String, List<String>> responses = new java.util.LinkedHashMap<>();
 			try (java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
 				.version(java.net.http.HttpClient.Version.HTTP_1_1)
 				.build()) {
 				for (Asked asked : program.requests()) {
 					if (asked.sentOn(leg)) {
-						responses.put(asked.name(), ask(client, port, asked, leg));
+						responses.put(asked.name(), shownOf(program, ask(client, port, asked, leg)));
 					}
 				}
 			}
 			Integer exit = null;
-			if (!component && process.waitFor(60, TimeUnit.SECONDS)) {
+			if (!component && program.ends() && process.waitFor(60, TimeUnit.SECONDS)) {
 				exit = process.exitValue();
 			}
 			List<String> log = new ArrayList<>();
@@ -794,6 +821,16 @@ class FetchSpecE2eTest {
 		finally {
 			process.destroyForcibly().waitFor();
 		}
+	}
+
+	// A response without the lines the program leaves unshown.
+	private static List<String> shownOf(Served program, List<String> response) {
+		List<String> unshown = program.unshown();
+		if (unshown == null) {
+			return response;
+		}
+		List<Pattern> patterns = unshown.stream().map(Pattern::compile).toList();
+		return response.stream().filter(line -> patterns.stream().noneMatch(p -> p.matcher(line).find())).toList();
 	}
 
 	// The port a served program says it listens on: the line is waited for while the
@@ -1084,14 +1121,30 @@ class FetchSpecE2eTest {
 		}
 	}
 
+	// Starts a process, again while its executable is busy: the legs write and run
+	// outputs at once, and a fork on another thread holds a just-written output open
+	// until that child's exec (ETXTBSY, .kb/native-output.md).
+	private static Process start(ProcessBuilder builder) throws Exception {
+		for (int attempt = 1;; attempt++) {
+			try {
+				return builder.start();
+			}
+			catch (IOException ex) {
+				if (attempt == 50 || !String.valueOf(ex.getMessage()).contains("error: 26")) {
+					throw ex;
+				}
+				Thread.sleep(100);
+			}
+		}
+	}
+
 	private static String exec(Path dir, List<String> command) throws Exception {
 		Path stdout = dir.resolve("run.out");
 		Path stderr = dir.resolve("run.err");
-		Process process = new ProcessBuilder(command).directory(dir.toFile())
+		Process process = start(new ProcessBuilder(command).directory(dir.toFile())
 			.redirectInput(ProcessBuilder.Redirect.from(Path.of("/dev/null").toFile()))
 			.redirectOutput(stdout.toFile())
-			.redirectError(stderr.toFile())
-			.start();
+			.redirectError(stderr.toFile()));
 		if (!process.waitFor(300, TimeUnit.SECONDS)) {
 			process.destroyForcibly().waitFor();
 			throw new IllegalStateException("timed out: " + String.join(" ", command));

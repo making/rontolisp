@@ -192,7 +192,8 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
   native program would stay at `/`.
 - **ETXTBSY in a multi-threaded test**: exec of a just-written output fails while another
   thread's fork still holds the write descriptor (until that child's exec). `stub.rs`
-  retries the spawn; a Java E2E that writes and runs outputs in parallel needs the same.
+  retries the spawn; a Java E2E that writes and runs outputs in parallel needs the same
+  (`FetchSpecE2eTest.start`: two served programs' native legs at once hit it, k13).
 - **An explicit target turns host detection off.** `Config::target` set (even to the host's
   triple) makes Cranelift start from no ISA flags; unset, it infers the host's. `host` is the
   only CPU level that leaves it unset, so it is refused for another platform.

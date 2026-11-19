@@ -24,8 +24,8 @@ rontolisp -e 'void main() { IO.println(1 + 2); }' --source-language java
 （[プロンプトで](#at-the-prompt)）。
 
 [`examples/java/`](https://github.com/making/rontolisp/tree/develop/examples/java) に、
-複数のパッケージからなるプログラムとその期待される出力、および HTTP サーバーとその
-クライアントがあります。
+複数のパッケージからなるプログラムとその期待される出力、HTTP サーバーとその
+クライアント、および小さな httpbin があります。
 
 ```java
 interface Shape {

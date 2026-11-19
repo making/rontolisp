@@ -1264,13 +1264,17 @@ own was needed (`deviations.md`, "The HTTP server").
   method the run time calls ..` (the transport calls the handler; `.todo/k11`).
 - **Sizes** (2026-11-19, wasmtime 49.0.0; class / component bytes): a server of one
   context answering `hello` 300,455 / 379,750; `examples/java/http/Server.java` (four
-  contexts, a query split, a chunked body) 480,883 as a component.
+  contexts, a query split, a chunked body) 480,883 as a component;
+  `examples/java/httpbin/Httpbin.java` 618,617 (k13).
 - **Pinned by** `FetchSpecE2eTest#javaHttpServer` (`java-http-server-spec.yaml`: the
   program started as a server under the JDK running the test and on the interpreter,
   the JVM, `--native` and `wasmtime serve`, 22 requests in turn, the log, the exit once
   stopped; `/stream` asks the test's origin whether its first chunk was read before it
   writes the second -- `seen` on the JDK and the component, `unseen` where the body goes
-  whole), `HttpHandlerTest#stoppableSeamServesJoinsAndStops` (the stop by a handler),
+  whole; its program `httpbin` is `examples/java/httpbin/Httpbin.java` read as it stands
+  (`example:`), bound to the `PORT` the harness sets, never stopped (`endless:`), with
+  the `Host` and `User-agent` lines of a body left out (`unshown:`): every leg answers the
+  JDK's seven bodies byte for byte, k13), `HttpHandlerTest#stoppableSeamServesJoinsAndStops` (the stop by a handler),
   `#directiveSupportsTheDelayedResponse` (the writer on the interpreter's mirror),
   `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches` (the begin
   form, the wait after `main`, a monitor held on the host and none on one stack),

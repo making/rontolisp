@@ -277,6 +277,14 @@ examples:
       on every transport is FetchSpecE2eTest#javaHttpClient.
     expect:
       file: .expected/java-http-client.txt
+  - path: java/httpbin/Httpbin.java
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      net/httpbin.lisp on com.sun.net.httpserver: five endpoints answering a JSON
+      description of the request, written (and, for a JSON body, checked) by the
+      program itself, which hands the body back as it came. Compile legs: a server
+      does not end. The answers on all four transports, beside a JDK's, are
+      FetchSpecE2eTest#javaHttpServer (java-http-server-spec.yaml, its `httpbin`).
 
   # --- clojure: the experimental Clojure front end (.clj) --------------------
   - path: clojure/demo.clj

@@ -14,6 +14,11 @@
 # seconds the JDK leg waits for an answer a JDK never gives. `log` is what the program
 # prints on lines starting "| ", in order: not read on the component leg, where the
 # host starts the program as often as it likes.
+#
+# A program may be an example instead of a source (`example`, a path under examples/),
+# which binds the port of its PORT environment variable, says it on the line
+# `listening` matches, and is ended once asked when it is `endless`; `unshown` are the
+# lines of a body left out, by pattern.
 programs:
   - name: server
     file: Server.java
@@ -463,3 +468,121 @@ programs:
         expected: |
           200
           bye
+  # examples/java/httpbin: the five echo endpoints, a wrong method and a path of
+  # none. The fields the client and the transports add on their own are left out --
+  # Host, which wasi:http does not hand a handler, and the client's User-Agent -- so
+  # the field before them keeps its comma.
+  - name: httpbin
+    file: httpbin/Httpbin.java
+    example: java/httpbin/Httpbin.java
+    endless: true
+    listening: "^Listening on http://localhost:(\\d+)/$"
+    unshown: ['^    "Host": ', '^    "User-agent": ']
+    requests:
+      - name: get-with-a-query
+        request: GET /get?b=two&a=1&a=x%20y&c+d=%C3%A9&empty=&flag
+        headers: {X-Probe: "one, two"}
+        show: [content-type]
+        expected: |
+          200
+          content-type: application/json
+          {
+            "args": {
+              "a": ["1", "x y"],
+              "b": "two",
+              "c d": "é",
+              "empty": "",
+              "flag": ""
+            },
+            "headers": {
+              "Content-length": "0",
+              "X-probe": "one, two"
+            },
+            "method": "GET",
+            "path": "/get"
+          }
+      - name: json-comes-back-as-it-came
+        request: POST /post
+        headers: {Content-Type: application/json}
+        body: '{"name": "rontolisp", "n": 1.50e3, "s": "\u00e9\n"}'
+        expected: |
+          200
+          {
+            "args": {},
+            "data": "{\"name\": \"rontolisp\", \"n\": 1.50e3, \"s\": \"\\u00e9\\n\"}",
+            "headers": {
+              "Content-length": "51",
+              "Content-type": "application/json",
+            },
+            "json": {"name": "rontolisp", "n": 1.50e3, "s": "\u00e9\n"},
+            "method": "POST",
+            "path": "/post"
+          }
+      - name: a-body-that-is-no-json
+        request: PUT /put?q=1
+        headers: {Content-Type: "text/plain; charset=utf-8"}
+        body: "h\u00e9llo \"q\" \\ \t{"
+        expected: |
+          200
+          {
+            "args": {
+              "q": "1"
+            },
+            "data": "héllo \"q\" \\ \t{",
+            "headers": {
+              "Content-length": "15",
+              "Content-type": "text/plain; charset=utf-8",
+            },
+            "json": null,
+            "method": "PUT",
+            "path": "/put"
+          }
+      - name: json-over-lines-between-blanks
+        request: PATCH /patch
+        body: "\n  [1, -0.5e-3,\n   {\"a\": [true, false, null], \"\": {}}]\n"
+        expected: |
+          200
+          {
+            "args": {},
+            "data": "\n  [1, -0.5e-3,\n   {\"a\": [true, false, null], \"\": {}}]\n",
+            "headers": {
+              "Content-length": "55",
+            },
+            "json": [1, -0.5e-3,
+             {"a": [true, false, null], "": {}}],
+            "method": "PATCH",
+            "path": "/patch"
+          }
+      - name: no-body
+        request: DELETE /delete
+        expected: |
+          200
+          {
+            "args": {},
+            "data": "",
+            "headers": {
+              "Content-length": "0",
+            },
+            "json": null,
+            "method": "DELETE",
+            "path": "/delete"
+          }
+      - name: a-wrong-method
+        request: GET /post
+        show: [allow, content-type]
+        expected: |
+          405
+          allow: POST
+          content-type: application/json
+          {
+            "allowed": "POST",
+            "error": "method not allowed"
+          }
+      - name: a-path-of-no-endpoint
+        request: POST /get/more
+        expected: |
+          404
+          {
+            "error": "not found",
+            "path": "/get/more"
+          }

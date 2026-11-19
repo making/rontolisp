@@ -23,7 +23,8 @@ rontolisp -e 'void main() { IO.println(1 + 2); }' --source-language java
 `--source-language java` starts a REPL ([At the prompt](#at-the-prompt)).
 
 [`examples/java/`](https://github.com/making/rontolisp/tree/develop/examples/java) holds a
-program of several packages with its expected output, and an HTTP server with its client.
+program of several packages with its expected output, an HTTP server with its client, and
+a miniature httpbin.
 
 ```java
 interface Shape {
