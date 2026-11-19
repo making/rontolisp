@@ -12718,6 +12718,246 @@ standalone:
       -1 -1
       at the end: null
       2 lines
+  # A library the program uses is read AS SOURCE from the program's source path -- here
+  # a sources jar -- and lowered with it as far as the program reaches it, on every
+  # backend. The library's own annotation type and its type annotations are dropped, an
+  # annotation of a type its sources jar does not hold (it was compiled against a jar
+  # that is not there) too; a sealed interface whose permitted classes stand in other
+  # files; an overload picked by what an exact method reference returns, beside one
+  # naming a class the subset lacks (java.time.LocalDate), which is passed by; a
+  # wildcard's capture keeping the bound of its parameter. The exception the library
+  # throws is located in the jar.
+  - name: a-program-uses-a-library-read-as-source-from-its-source-path
+    file: tables/Main.java
+    source: |
+      package tables;
+
+      import geo.Circle;
+      import geo.Group;
+      import geo.Label;
+      import geo.Rect;
+      import geo.Shape;
+      import geo.Table;
+
+      public class Main {
+
+          static String area(Shape shape) {
+              return String.valueOf(shape.area());
+          }
+
+          @Label("where the program starts")
+          public static void main(String[] args) {
+              Table<Shape> table = new Table<Shape>().column("name", Shape::name)
+                  .column("corners", Shape::corners)
+                  .column("area", Main::area);
+              System.out.println(table.header());
+              System.out.println(table.row(new Circle(1.0)));
+              System.out.println(table.row(new Rect(2.0, 3.0)));
+              System.out.println(Group.made(new Group<>(name -> new Rect(name.length(), 1.0))));
+              System.out.println(Table.describe(null) + " " + Table.mark());
+              try {
+                  System.out.println(new String(new int[] { 'a' }, 1, 1));
+              }
+              catch (StringIndexOutOfBoundsException ex) {
+                  System.out.println(ex.getMessage());
+              }
+              try {
+                  System.out.println(new String(new int[] { 'a', -5 }, 0, 2));
+              }
+              catch (IllegalArgumentException ex) {
+                  System.out.println(ex.getMessage());
+              }
+              System.out.println(table.row(null));
+          }
+      }
+    library:
+      geo/Shape.java: |
+        package geo;
+
+        import java.io.Serializable;
+
+        public sealed interface Shape extends Serializable permits Circle, Rect {
+
+            double area();
+
+            @Label("what a table shows")
+            String name();
+
+            int corners();
+        }
+      geo/Circle.java: |
+        package geo;
+
+        public record Circle(double radius) implements Shape {
+
+            @Override
+            public double area() {
+                return 3.0 * this.radius * this.radius;
+            }
+
+            @Override
+            public String name() {
+                return "circle";
+            }
+
+            @Override
+            public int corners() {
+                return 0;
+            }
+        }
+      geo/Rect.java: |
+        package geo;
+
+        public final class Rect implements Shape {
+
+            private static final long serialVersionUID = 1L;
+
+            private final double width;
+
+            private final double height;
+
+            public Rect(double width, double height) {
+                this.width = width;
+                this.height = height;
+            }
+
+            @Override
+            public double area() {
+                return this.width * this.height;
+            }
+
+            @Override
+            public String name() {
+                return "rect";
+            }
+
+            @Override
+            public int corners() {
+                return 4;
+            }
+        }
+      geo/Label.java: |
+        package geo;
+
+        import java.lang.annotation.ElementType;
+        import java.lang.annotation.Retention;
+        import java.lang.annotation.RetentionPolicy;
+        import java.lang.annotation.Target;
+
+        @Retention(RetentionPolicy.RUNTIME)
+        @Target({ ElementType.METHOD, ElementType.TYPE_USE })
+        public @interface Label {
+
+            String value() default "";
+        }
+      geo/Group.java: |
+        package geo;
+
+        import java.util.function.Function;
+
+        public class Group<S extends Shape> {
+
+            private final Function<String, S> maker;
+
+            public Group(Function<String, S> maker) {
+                this.maker = maker;
+            }
+
+            public Function<String, S> maker() {
+                return this.maker;
+            }
+
+            // the wildcard's capture is a Shape by the bound of S
+            public static String made(Group<?> group) {
+                Shape shape = group.maker().apply("four");
+                return shape.name() + " " + shape.area();
+            }
+        }
+      geo/Table.java: |
+        package geo;
+
+        import java.time.LocalDate;
+        import java.util.ArrayList;
+        import java.util.List;
+        import java.util.function.Function;
+
+        import org.marks.Checked;
+
+        public class Table<T> {
+
+            public interface ToText<T> extends Function<T, @Label String> {
+            }
+
+            public interface ToNumber<T> extends Function<T, Integer> {
+            }
+
+            public interface ToDay<T> extends Function<T, LocalDate> {
+            }
+
+            private final List<String> names = new ArrayList<>();
+
+            private final List<Function<T, String>> columns = new ArrayList<>();
+
+            // one name, three functions: a method reference picks by what it returns
+            @Checked
+            public Table<T> column(String name, ToText<T> text) {
+                this.names.add(name);
+                this.columns.add(text);
+                return this;
+            }
+
+            public Table<T> column(String name, ToNumber<T> number) {
+                this.names.add(name);
+                this.columns.add(value -> "#" + number.apply(value));
+                return this;
+            }
+
+            // names a class the program's world may lack: it is there to be passed by
+            public Table<T> column(String name, ToDay<T> day) {
+                this.names.add(name);
+                this.columns.add(value -> day.apply(value).plusDays(1).toString());
+                return this;
+            }
+
+            public String header() {
+                return String.join(" | ", this.names);
+            }
+
+            public String row(T value) {
+                if (value == null) {
+                    throw new IllegalArgumentException("no value for " + header());
+                }
+                List<String> cells = new ArrayList<>();
+                for (Function<T, String> column : this.columns) {
+                    cells.add(column.apply(value));
+                }
+                return String.join(" | ", cells);
+            }
+
+            public static String describe(LocalDate day) {
+                return day == null ? "no day" : "a day";
+            }
+
+            public static String mark() {
+                return new String(new int[] { 0x2713, 0x21 }, 0, 2);
+            }
+        }
+    provided:
+      org/marks/Checked.java: |
+        package org.marks;
+
+        public @interface Checked {
+        }
+    stdout: |
+      name | corners | area
+      circle | #0 | 3.0
+      rect | #4 | 6.0
+      rect 4.0
+      no day ✓!
+      Range [1, 1 + 1) out of bounds for length 1
+      -5
+    error: "java.lang.IllegalArgumentException: no value for name | corners | area"
+    at: "library-sources.jar!/geo/Table.java:52 in geo.Table.row(Object)"
 refused:
   scaffold: |
     class Refused {

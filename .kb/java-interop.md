@@ -1154,6 +1154,10 @@ resolved `Method.invoke` is the cheap part.
 
 ## The program's Java class path (`--java-classpath`, `--java-dep`)
 
+Not the source path of a program in the Java subset (`--java-source-path`,
+`--java-source-dep`): that one is source compiled into every output
+([java-frontend.md](java-frontend.md), "A library from the source path").
+
 - ONE carrier: `eval/SourceLoader.javaClassLoader()` (default rontolisp's own loader;
   `SourceLoader.fileSystem(ClassLoader)`). The evaluator derives its lookup from its source
   loader (`setSourceLoader` -> `ReflectiveJavaClasses.over(loader)`, clearing the site memo),

@@ -71,7 +71,9 @@ runs what the browser runs (`PlaygroundReplTest`, and `DocExamplesTest.runScheme
 seam: `eval/SourceStandards` (the `--scheme-standard` value, `scheme/SchemeStandard`, the
 `--starlark-standard` value, `starlark/StarlarkStandard`, and
 the directory of the user-level Clojure `deps.edn`, which only `RontoLispCli` locates from
-the environment, and the `deps.edn` aliases `-A`/`-M`/`-X` select) is handed to every read of user source -- `read(source,
+the environment, the `deps.edn` aliases `-A`/`-M`/`-X` select, and the source path of a
+Java program, `--java-source-path` / `--java-source-dep`, `.kb/java-frontend.md`, "A
+library from the source path") is handed to every read of user source -- `read(source,
 features, file, standards)`, `SourceSession(language, standards)`, `LoadInliner`,
 `LispEvaluator.setSourceStandards` for run-time `load` -- and to
 `CompileFrontend.Loaded`, whose `SchemeLibrary` splice generates `eval`'s table from it.

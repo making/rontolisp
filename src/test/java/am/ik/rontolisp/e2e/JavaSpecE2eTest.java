@@ -100,10 +100,67 @@ class JavaSpecE2eTest {
 	 * @param warnings what a compiler warns of before the program runs: the start of the
 	 * standard error under the JDK and the interpreter, what a compile prints for the JVM
 	 * and wasm; {@code null} when not checked
+	 * @param library the files of a library the program uses, by path, or {@code null}: a
+	 * sources jar on the program's source path, classes the JDK leg compiles first
+	 * @param provided what the library was compiled against and its sources jar does not
+	 * hold, by path, or {@code null}: only the JDK leg's compile of the library reads it
 	 */
 	record Standalone(String name, String file, String source, String stdout, @Nullable String error,
 			@Nullable String stderr, @Nullable String at, @Nullable Map<String, String> files, @Nullable String stdin,
-			@Nullable String warnings) {
+			@Nullable String warnings, @Nullable Map<String, String> library, @Nullable Map<String, String> provided) {
+
+		/**
+		 * The name of the library's sources jar, which a location line ends a path of.
+		 */
+		static final String SOURCES_JAR = "library-sources.jar";
+
+		/**
+		 * The program's source path on a leg: the library's sources jar, written beside
+		 * the leg's directory, or nothing.
+		 */
+		List<String> sourcePath(String leg) throws IOException {
+			if (this.library == null) {
+				return List.of();
+			}
+			Path jar = workDir.resolve(leg + "-library").resolve(SOURCES_JAR);
+			Files.createDirectories(java.util.Objects.requireNonNull(jar.getParent()));
+			try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(Files.newOutputStream(jar))) {
+				for (Map.Entry<String, String> source : this.library.entrySet()) {
+					zip.putNextEntry(new java.util.zip.ZipEntry(source.getKey()));
+					zip.write(source.getValue().getBytes(StandardCharsets.UTF_8));
+					zip.closeEntry();
+				}
+			}
+			return List.of(jar.toString());
+		}
+
+		/**
+		 * The library as the JDK leg has it: its classes, compiled beside what it was
+		 * compiled against. {@code null} when the program uses none.
+		 */
+		@Nullable Path classes(String leg) throws Exception {
+			if (this.library == null) {
+				return null;
+			}
+			Path classes = workDir.resolve(leg + "-library").resolve("classes");
+			Files.createDirectories(classes);
+			List<String> command = new ArrayList<>(List
+				.of(Path.of(System.getProperty("java.home"), "bin", "javac").toString(), "-d", classes.toString()));
+			Map<String, String> sources = new java.util.LinkedHashMap<>(this.library);
+			if (this.provided != null) {
+				sources.putAll(this.provided);
+			}
+			for (Map.Entry<String, String> source : sources.entrySet()) {
+				command.add(JavaSpecE2eTest.write(leg + "-library/src", source.getKey(), source.getValue()).toString());
+			}
+			Ended compiled = ended(new ProcessBuilder(command).start());
+			assertThat(compiled.exit()).as("javac of the library of '%s': %s", this.name, compiled.stderr()).isZero();
+			return classes;
+		}
+
+		SourceStandards standards(String leg) throws IOException {
+			return SourceStandards.DEFAULT.withJavaSourcePath(sourcePath(leg));
+		}
 
 		String stem() {
 			return "Standalone" + this.file.replaceFirst("\\.[^./]*$", "").replace('/', '_');
@@ -206,7 +263,9 @@ class JavaSpecE2eTest {
 		for (Standalone s : cases == null ? List.<Standalone>of() : cases) {
 			if (!s.isLisp()) {
 				legs.add(dynamicTest(s.name() + " JDK", () -> {
-					assertEnded(s, "JDK", runOnJdk(s.file(), s.write(s.stem() + "-JDK"), s.stdin()), null);
+					assertEnded(s, "JDK",
+							runOnJdk(s.file(), s.write(s.stem() + "-JDK"), s.stdin(), s.classes(s.stem() + "-JDK")),
+							null);
 				}));
 			}
 			legs.add(dynamicTest(s.name() + " INTERPRETER", () -> standaloneOnInterpreter(s)));
@@ -221,7 +280,7 @@ class JavaSpecE2eTest {
 					ByteArrayOutputStream warned = new ByteArrayOutputStream();
 					Path module;
 					try (ThreadStdio.Scope _ = ThreadStdio.err(warned)) {
-						module = compileWasm(file, s.source(), component, s.stem());
+						module = compileWasm(file, s.source(), component, s.stem(), s.standards(s.stem() + "-" + leg));
 					}
 					assertEnded(s, leg, ended(
 							new ProcessBuilder("wasmtime", "run", "-W", "gc=y", "-W", "exceptions=y", module.toString())
@@ -386,13 +445,25 @@ class JavaSpecE2eTest {
 	// The oracle: the source launcher of the JDK running this test, started where the
 	// path of the file it is given begins.
 	private static Ended runOnJdk(String file, Path written, @Nullable String stdin) throws Exception {
+		return runOnJdk(file, written, stdin, null);
+	}
+
+	/**
+	 * @param classes the classes of the library the program uses, or {@code null}
+	 */
+	private static Ended runOnJdk(String file, Path written, @Nullable String stdin, @Nullable Path classes)
+			throws Exception {
 		Path dir = written;
 		for (int i = file.split("/").length; i > 0; i--) {
 			dir = java.util.Objects.requireNonNull(dir.getParent());
 		}
-		return ended(new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin", "java").toString(), file)
-			.directory(dir.toFile())
-			.start(), stdin);
+		List<String> command = new ArrayList<>(
+				List.of(Path.of(System.getProperty("java.home"), "bin", "java").toString()));
+		if (classes != null) {
+			command.addAll(List.of("-cp", classes.toString()));
+		}
+		command.add(file);
+		return ended(new ProcessBuilder(command).directory(dir.toFile()).start(), stdin);
 	}
 
 	private static Ended ended(Process process) throws Exception {
@@ -480,6 +551,7 @@ class JavaSpecE2eTest {
 
 	private static void standaloneOnInterpreter(Standalone s) throws Exception {
 		Path file = s.write(s.stem() + "-INTERPRETER");
+		SourceStandards standards = s.standards(s.stem() + "-INTERPRETER");
 		int[] status = new int[1];
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		ByteArrayOutputStream err = new ByteArrayOutputStream();
@@ -497,8 +569,7 @@ class JavaSpecE2eTest {
 				}
 				try {
 					for (LispVal form : SourceLanguage.forFile(file.toString(), null)
-						.read(s.source(), Features.INTERPRETER, file.toString(), SourceStandards.DEFAULT,
-								evaluator.sourceLoader())) {
+						.read(s.source(), Features.INTERPRETER, file.toString(), standards, evaluator.sourceLoader())) {
 						evaluator.eval(form);
 					}
 				}
@@ -528,6 +599,7 @@ class JavaSpecE2eTest {
 		try (ThreadStdio.Scope _ = ThreadStdio.err(warned)) {
 			compiled = new JvmSourceCompiler(s.stem())
 				.baseDir(java.util.Objects.requireNonNull(file.getParent()).toString())
+				.javaSourcePath(s.sourcePath(s.stem() + "-JVM"))
 				.compile(s.source(), file.toString());
 		}
 		Files.write(dir.resolve(s.stem() + ".class"), compiled.classBytes());
@@ -638,8 +710,13 @@ class JavaSpecE2eTest {
 	}
 
 	private static Path compileWasm(Path file, String program, boolean component, String name) throws IOException {
+		return compileWasm(file, program, component, name, SourceStandards.DEFAULT);
+	}
+
+	private static Path compileWasm(Path file, String program, boolean component, String name,
+			SourceStandards standards) throws IOException {
 		CompileFrontendAccess.Program frontend = CompileFrontendAccess.file(program, file.toString(), true, component,
-				null);
+				standards);
 		byte[] module = WasmLispCompiler.builder()
 			.component(component)
 			.runtimeFeatures(frontend.features().names())

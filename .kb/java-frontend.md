@@ -47,8 +47,12 @@ atomics, a program's own), the field updaters, `invokeAll` with a limit and
 `join(Duration)`: k08 (2026-11-19); a program that starts threads run compiled in the
 browser, whose interpreter has one stack: k10 (2026-11-19); `java.util.stream`, the
 collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
-(2026-11-19); what comes after is `.todo/k15`, `k16`, `k17`, `k18`, `k19`, `k20`, `k21`,
-`k22` and `k26` (what k00, k11, k06, k07, k08, k10 and k12 left).
+(2026-11-19); a library read as source from the program's source path and lowered as far
+as the program reaches it, annotation types and type annotations, an exact method
+reference in a call's applicability: k24 (2026-11-19); what comes after is `.todo/k15`,
+`k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22` and `k26` (what k00, k11, k06, k07, k08,
+k10 and k12 left) and `.todo/k27` to `k33` (what stands between k24 and YAVI compiled to
+wasm).
 
 ## Where it sits
 
@@ -161,7 +165,7 @@ collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
   Class<..>` is kept as javac gave it over 16 shapes (two literals of two classes, a
   literal of no class under the object's type, two objects of unrelated classes), but
   one: an interface beside a `final` class that does not implement it is compared. A
-  `Class` as a value (a field, an argument, `isInstance`) is `.todo/k26`; a method
+  `Class` as a value (a field, an argument, `isInstance`) is `.todo/k30`; a method
   reference `Name.class::isInstance` / `Name.class::cast` is the test and the cast of its
   one argument (k12, `referenced`: the literal is never lowered). `super.toString()`,
   `super.equals(o)` and `super.hashCode()` with no class above declaring the method are
@@ -285,6 +289,100 @@ collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
   (`no suitable constructor found for A(no arguments)`); ours is chosen, then refused by its
   access.
 
+## A library from the source path (2026-11-19, k24)
+
+**Invariant: a library a Java program uses is its SOURCE, lowered with the program on every
+backend as far as the program reaches it; what the program reaches and the subset lacks
+is refused by name where it is reached, never where a class is read.** Asked for YAVI
+(`.todo/k33` holds the milestone and the order of what stands before it; the measurement
+is `.todo/artefacts/k24-java-front-end-a-program-that-uses-an-existing-library/`).
+
+- **Source, not bytecode.** A dependency's `-sources.jar` (or a directory) is read through
+  the same `JavaFiles` as the program's tree (`JavaFiles.library`, a path below a root),
+  so the one lowering serves the four backends. A `.class` front end was weighed and not
+  taken: it would be a second front end with its own semantics (erased generics, no
+  constant folding as the language computes it, `invokedynamic` for lambdas and string
+  concatenation, synthetic bridges), every case of the corpus would need a second leg,
+  and a jar's classes call the JDK's by descriptor, where the library here is found by
+  source name and static type. What it would add is jars that ship no sources; of YAVI and
+  jspecify both publish one.
+- **Surface.** `--java-source-path DIRS-AND-JARS` and `--java-source-dep G:A:V`
+  (repeatable; `cli/JavaSourcePath`), carried to the seam in
+  `SourceStandards.javaSourcePath` and made a `JavaFiles` by `SourceLanguage.javaFiles`
+  (a jar's entries listed once a read, a file known as `root.jar!/path`). **Not
+  `--java-dep`**: that is class files for the host's class loader, refused with a `.wasm`
+  output and copied beside a compiled jar (`NAME-lib/`, the pom's dependencies); a library
+  on the source path is compiled INTO every output and leaves nothing to carry, so one
+  flag for both would have a jar carry classes its program never calls
+  (`JavaClassPathCliTest#aJavaProgramCompilesItsLibrariesFromTheSourcePath`).
+  Coordinates resolve through `am.ik.maven` as `--java-dep`'s do (`--java-repository`
+  serves both): the graph's runtime class path, so compile and runtime scopes
+  transitively, a dependency's `provided`, `test` and optional ones not, and of each
+  artifact the `sources` classifier. A coordinate NAMED with no sources jar is refused; one
+  it depends on with none is a warning (javac needs only its class file, and the program
+  may never reach it). Not there yet: the Maven plugin, a session, the playground
+  (`.todo/k32`).
+- **A program's file wins**: `JavaClasses.programClass` asks the source tree, then the
+  roots in order (javac's order of a source path). A class of a JDK's packages is never
+  looked for on either.
+- **Three origins** (`JavaClass.Origin`, on `Source`): `PROGRAM` lowered whole, located,
+  checked; `LIBRARY` (the jar's own) lowered as reached, trusted, not located;
+  `DEPENDENCY` lowered as reached (`JavaLowering.isPartial`: the `reached` / `made` /
+  `used` sets `lowerReached` already kept for the library), LOCATED (its file and line are
+  an uncaught exception's `at`: `geo-sources.jar!/geo/Table.java:52 in
+  geo.Table.row(Object)`) and checked for access. What a compiler already checked of a
+  library is not checked again: `@Override`, the abstract methods left out, the flow, the
+  `throws` clauses, the bounds of type arguments, the warnings.
+- **A class nobody has is a name until reached** (`JavaClass.absent`, `JavaClasses.lenient`
+  / `absent` / `withdraw`). While a dependency's DECLARATION is read, a class it names
+  that cannot be found, that the subset lacks or whose own file is refused becomes a
+  `JavaClass` holding the refusal, outside the table. It stands in member types, where
+  identity is enough: a method taking a `java.time.LocalDate` is one overload among the
+  others, and `String` is no subtype of it. Asking what it is made of -- its supertypes
+  (`isSubclassOf`), its members (`supertypes`, `field`, `constructors`), a test against it
+  (`instanceTest`) -- throws `JavaClass.Absent`, which `expression` turns into the
+  refusal at the expression that asked. A class whose supertype is absent is itself
+  withdrawn (javac's `class file for X not found`). A type written in a BODY is resolved
+  as ever, so a reached body refuses at its position, and `lowerReached` appends how the
+  program came there (`reachedThrough`, from `JavaClasses.reachedFrom`):
+  `.. CharSequenceConstraint.java:147:8: the class java.text.Normalizer is not supported ..`
+  / `  reached through am.ik.yavi.constraint.CharSequenceConstraint.<init>()` /
+  `  reached through ..ValidatorBuilder.constraint(..)`. Rejected: dropping a member
+  whose signature does not resolve (an overload taken away can change which one a call
+  picks: `f(null)` beside `f(Object)`), and refusing the class (YAVI's `ValidatorBuilder`
+  names `java.time` in its `constraint` overloads, so no program would get past it).
+- **Declared whole, lowered as reached.** A class named is parsed and its members' types
+  resolved, which reads the files they name: the classic YAVI program declares 171 of 380
+  files (24,858 of 183,636 lines), the schema one 327 (175,141 lines) in 1.7 s, and all 380
+  parse in 0.76 s. Resolving a member's types only when its name is looked up was not
+  needed at these numbers. What is lowered is what is reached: 713 forms and 575,271 B of
+  wasm for the classic program, 7.9 s of `-o book.wasm` wall time.
+- **Annotations** ("Annotations" below): of a dependency, one whose type is on no root is
+  dropped, as javac reads a class file whose annotation type is missing from the class
+  path without a word -- jspecify is `provided` in YAVI's pom and is not in the graph.
+- **Resources are not read**: a sources jar holds none, and `ResourceBundle` and its kind
+  are classes the library does not have, refused by name where reached (`.todo/k32`).
+- **What the front end lacked that a library showed** (each a rule of the language, fixed
+  for every program, pinned by the fixture):
+  - An **exact method reference** naming a class counts in applicability by what its
+    method returns (JLS 15.12.2.2; `JavaLowering.gives`): `Book::title` picks
+    `constraint(ToCharSequence, ..)` among fifty overloads taking a function. Until then
+    every overload of the arity fitted and the call was ambiguous. An implicit lambda
+    there is ambiguous under javac too.
+  - A **capture turned back into a wildcard keeps the bound it took from its parameter**
+    (`JavaTypes.uncaptured`): through `CollectionValidator<T, ?, ?>`, `toCollection()
+    .apply(t)` is a `Collection` by `N extends Collection<E>`; it was `Object`.
+  - A **permitted class in a file of its own** read while the `permits` clause naming it
+    is being read is checked once the clause is whole (`JavaClasses.permitted`).
+  - `java.io.Serializable` (a marker in the library's source), `new String(int[], int,
+    int)` (`Support.codePoints`, the refusals a JDK's), and a simple name that is an
+    imported class of a JDK's packages says `the class java.text.Normalizer` and not
+    `cannot find symbol: variable Normalizer`.
+- **YAVI's source is not in the repository**; the fixture is a library written here
+  (`java-spec.yaml` `a-program-uses-a-library-read-as-source-from-its-source-path`:
+  `library:` is zipped to a sources jar for the four legs and compiled by javac for the
+  JDK leg, `provided:` is what javac alone reads).
+
 ## A session (2026-11-17, j74)
 
 **Every buffer lowers the whole session again**: the declarations the earlier buffers left, kept
@@ -351,12 +449,20 @@ alternating, then a call, 100 buffers timed): 120 declarations 10 ms a buffer, 4
 
 ## Annotations (2026-11-17, j74)
 
-Parsed and dropped (`JavaParser.annotations`), but a name that is no annotation type of the
-library -- `java.lang`'s five, simple or qualified -- is `cannot find symbol: class X` (a
-`Known` error, which a probe looking ahead reports): the subset has no annotation type of a
-program, so such a name is javac's error too, and it is the kind a processor or a framework
-gives a meaning whose absence would change the program. None of the five changes a program
-that compiles. `@Override` and `@FunctionalInterface` ride in the modifiers and are checked
+Parsed and dropped (`JavaParser.annotations`), on a declaration and since k24 on a type
+(`Function<A, @Nullable B>`, `String @Nullable []`, `java.util.@Nullable List`), but the
+name has to be an annotation type the file sees: `java.lang`'s five (a set, no file read),
+those of `java.lang.annotation` (library source), or one declared with `@interface` (k24:
+an interface flagged `isAnnotation`, its elements methods, a `default` skipped to its
+`;`). The parser only records `(position, name)` (`CompilationUnit.annotations`; by
+position, since a probe looking ahead reads one twice) and `JavaClasses.annotation`
+resolves it after the file's classes are declared: `cannot find symbol: class X`, or
+`incompatible types: X cannot be converted to Annotation` for a class that is none (both
+javac's). An unknown name is refused because it is the kind a processor or a framework
+gives a meaning whose absence would change the program. Decided for a dependency by what
+javac does with a class file: an annotation whose type is missing from the class path is
+dropped silently, so a library's file is not asked (`Source.partial`). Until k24 the
+parser itself refused any name but the five (the `Known` error, gone). `@Override` and `@FunctionalInterface` ride in the modifiers and are checked
 (`JavaLowering.overrides`: a supertype's or `Object`'s instance method of the signature seen
 from the class, or a record's accessor; `checkFunctional`). `@SafeVarargs` rides there too and
 `@SuppressWarnings("unchecked")` is a span of the file (j86, "Warnings" below).
@@ -3097,7 +3203,15 @@ whatever the load.
 `JavaLoweringTest` (the table as emitted forms, names and constants, the
 refusals and the compile errors with their positions;
 `theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`; `aProgramOfSeveralFilesIsReadFromItsSourceTree` over
-an in-memory `JavaFiles`: the refusals of the source tree, the imports and the access). A
+an in-memory `JavaFiles`: the refusals of the source tree, the imports and the access;
+`aLibraryOfTheSourcePathIsLoweredAsFarAsTheProgramReaches` over one with a `library`: what
+is lowered and what is not, the refusal of a reached body with its `reached through`
+lines, of a class nobody has where the program asks what it is, of a class under one, the
+access, a program's annotation of no type and of a class). A library on the source path
+on four backends and under a JDK is the `standalone:` case
+`a-program-uses-a-library-read-as-source-from-its-source-path` (`library:` / `provided:`),
+the command line's two options and the coordinates
+`JavaClassPathCliTest#aJavaProgramCompilesItsLibrariesFromTheSourcePath`. A
 `standalone:` case may carry `files:` (path to text) written beside it, its `file:` a path
 below its package's directories (`a-program-of-several-files-finds-its-classes-by-package`).
 java-spec `refused:` cases of the inner class types and the bounds

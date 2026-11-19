@@ -148,6 +148,22 @@ public final class Support {
         return to.append(text.substring(start, end));
     }
 
+    // new String(int[], int, int): the code points of a range as a text.
+    public static String codePoints(int[] points, int offset, int count) {
+        if (offset < 0 || count < 0 || offset > points.length - count) {
+            throw new StringIndexOutOfBoundsException(
+                    "Range [" + offset + ", " + offset + " + " + count + ") out of bounds for length " + points.length);
+        }
+        StringBuilder text = new StringBuilder();
+        for (int i = offset; i < offset + count; i++) {
+            if (!Character.isValidCodePoint(points[i])) {
+                throw new IllegalArgumentException(String.valueOf(points[i]));
+            }
+            text.appendCodePoint(points[i]);
+        }
+        return text.toString();
+    }
+
     // StringBuilder.append(char[], int, int).
     public static StringBuilder appendChars(StringBuilder to, char[] chars, int offset, int count) {
         if (offset < 0 || count < 0 || offset > chars.length - count) {

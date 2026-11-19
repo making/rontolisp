@@ -49,6 +49,18 @@ the same names and signatures from scratch; matching observable behaviour (a `Ha
 iteration order, `Double.toString`'s text) by our own code; running a JDK in tests and CI as the
 oracle.
 
+## A library a program uses (k24, 2026-11-19)
+
+A library read from a program's source path is the program's INPUT, as its own files are:
+compiled into what that user ships, under the library's licence, which
+`doc/*/compiling/licenses.md` leaves to the user. It is not this project's source, and none
+of it is copied here: the fixture of the corpus is a library written here, and the YAVI
+measurement (`.todo/artefacts/k24-java-front-end-a-program-that-uses-an-existing-library/`)
+holds programs and stand-in classes written here plus `sed` lines. YAVI is Apache-2.0 and
+has the owner this project has (the user, relayed by the orchestrating session on
+2026-11-19: YAVI may be changed where a change is right for YAVI too); that lifts no rule
+above, which are about the JDK and about what is embedded.
+
 ## When in doubt
 
 A contribution whose author had the JDK's implementation open while writing the same class is

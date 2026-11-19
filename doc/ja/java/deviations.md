@@ -522,7 +522,7 @@ WebSocket です。`version(..)` で指定した値は保持され、問い合�
 
 どれも、構文の名前と位置を示すエラーになります。
 
-- アノテーション型、`assert`。
+- `assert`。
 - 値として使うクラスリテラルと `getClass()`。どちらも、クラスとの比較と `getName()`、
   `getSimpleName()` の直前でだけ読めます。クラスリテラルは `synchronized` 文のロック、
   フィールドアップデーターのクラス、`::isInstance` と `::cast` の対象にもなります。

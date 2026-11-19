@@ -17,6 +17,7 @@ import am.ik.maven.MavenResolver;
 import am.ik.maven.RemoteRepository;
 import am.ik.maven.RepositoryPolicy;
 import am.ik.rontolisp.testsupport.JavaLibraryJar;
+import am.ik.rontolisp.testsupport.ThreadStdio;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -298,6 +299,54 @@ class JavaClassPathCliTest {
 			.hasMessageContaining("--java-dep");
 	}
 
+	// The source path is no class path: a library of a Java program is its SOURCE, from a
+	// directory, a jar or the sources jar of Maven coordinates, compiled with the
+	// program on every backend.
+	@Test
+	void aJavaProgramCompilesItsLibrariesFromTheSourcePath() throws Exception {
+		MavenResolver resolver = fixtureResolver();
+		Path program = program("Greets.java", """
+				public class Greets {
+				    public static void main(String[] args) {
+				        System.out.println(fixture.app.App.hello() + " " + local.Words.twice("a"));
+				    }
+				}
+				""");
+		Path root = this.tempDir.resolve("src-root");
+		Files.writeString(Files.createDirectories(root.resolve("local")).resolve("Words.java"),
+				"package local; public class Words { public static String twice(String s) { return s + s; } }");
+		// fixture-app's sources jar is read; what it depends on ships none and is told,
+		// since nothing of it is reached
+		String[] sourcePath = { "--java-source-path", root.toString(), "--java-source-dep",
+				"test.fixture:fixture-app:1.0" };
+		ByteArrayOutputStream warned = new ByteArrayOutputStream();
+		try (ThreadStdio.Scope _ = ThreadStdio.err(warned)) {
+			assertThat(runCli(resolver, concat(new String[] { program.toString() }, sourcePath))).isEqualTo("app aa\n");
+		}
+		assertThat(warned.toString(StandardCharsets.UTF_8))
+			.contains("warning: --java-source-dep: no sources jar for test.fixture:fixture-lib:jar:0.9");
+		// nothing of it is carried beside a compiled program, a .wasm included
+		Path module = this.tempDir.resolve("greets.wasm");
+		Path jar = this.tempDir.resolve("greets.jar");
+		try (ThreadStdio.Scope _ = ThreadStdio.err(warned)) {
+			runCli(resolver, concat(new String[] { program.toString(), "-o", module.toString() }, sourcePath));
+			runCli(resolver, concat(new String[] { program.toString(), "-o", jar.toString() }, sourcePath));
+		}
+		assertThat(module).isNotEmptyFile();
+		assertThat(this.tempDir.resolve("greets-lib")).doesNotExist();
+		assertThat(run("-jar", jar.toString())).isEqualTo("app aa\n");
+		// a library named that ships no sources is refused, as an entry that is not there
+		assertThatThrownBy(
+				() -> runCli(resolver, program.toString(), "--java-source-dep", "test.fixture:fixture-lib:1.0"))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--java-source-dep: test.fixture:fixture-lib:jar:1.0 has no sources jar");
+		Path missing = this.tempDir.resolve("missing-sources.jar");
+		assertThatThrownBy(() -> runCli(program.toString(), "--java-source-path", missing.toString()))
+			.isInstanceOf(IllegalArgumentException.class)
+			.hasMessageContaining("--java-source-path")
+			.hasMessageContaining(missing.toString());
+	}
+
 	private static String[] concat(String[] first, String[] second) {
 		String[] all = java.util.Arrays.copyOf(first, first.length + second.length);
 		System.arraycopy(second, 0, all, first.length, second.length);
@@ -331,6 +380,16 @@ class JavaClassPathCliTest {
 						"""));
 		publish(repo, "fixture-lib", "1.0", "", libJar);
 		publish(repo, "fixture-lib", "0.9", "", null);
+		// the sources jar a Java program of the subset compiles the library from
+		Path sources = this.tempDir.resolve("build-app/app-sources.jar");
+		try (java.util.zip.ZipOutputStream zip = new java.util.zip.ZipOutputStream(Files.newOutputStream(sources))) {
+			zip.putNextEntry(new ZipEntry("fixture/app/App.java"));
+			zip.write("package fixture.app; public class App { public static String hello() { return \"app\"; } }"
+				.getBytes(StandardCharsets.UTF_8));
+			zip.closeEntry();
+		}
+		write(Files.createDirectories(repo.resolve("test/fixture/fixture-app/1.0"))
+			.resolve("fixture-app-1.0-sources.jar"), Files.readAllBytes(sources));
 		publish(repo, "fixture-app", "1.0",
 				"""
 						<dependencies>

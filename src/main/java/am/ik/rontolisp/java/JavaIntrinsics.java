@@ -826,6 +826,7 @@ final class JavaIntrinsics {
 			.constructor((lowering, call) -> runtimeCall("utf8-string", call.argument(0), integer(0), JavaForms.NIL),
 					bytes)
 			.constructor(runtime("utf8-string"), bytes, i, i)
+			.constructor(support("codePoints"), new ArrayType(i), i, i)
 			.constructor(support("decodeNamed"), bytes, string)
 			.throwing(UNSUPPORTED_ENCODING)
 			.constructor(support("decodeNamed"), bytes, i, i, string)

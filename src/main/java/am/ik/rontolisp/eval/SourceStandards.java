@@ -30,16 +30,19 @@ import am.ik.rontolisp.starlark.StarlarkStandard;
  * network and the caches the environment names, while an embedder, a test and the browser
  * fetch nothing, for the same reason they read no user-level map
  * @param starlark what a Starlark file is read against ({@code --starlark-standard})
+ * @param javaSourcePath the roots a Java program's libraries are read from as source, a
+ * directory or a jar each, in order ({@code --java-source-path}, then the sources jars of
+ * the {@code --java-source-dep} coordinates); none when the command line names none
  */
 public record SourceStandards(SchemeStandard scheme, @Nullable String clojureConfigDir, List<String> clojureAliases,
-		@Nullable ClojureRepositories clojureRepositories, StarlarkStandard starlark) {
+		@Nullable ClojureRepositories clojureRepositories, StarlarkStandard starlark, List<String> javaSourcePath) {
 
 	/**
 	 * Every language's default: {@code --scheme-standard rontolisp},
 	 * {@code --starlark-standard rontolisp}, no user config.
 	 */
 	public static final SourceStandards DEFAULT = new SourceStandards(SchemeStandard.RONTOLISP, null, List.of(), null,
-			StarlarkStandard.RONTOLISP);
+			StarlarkStandard.RONTOLISP, List.of());
 
 	/**
 	 * The standards.
@@ -48,9 +51,11 @@ public record SourceStandards(SchemeStandard scheme, @Nullable String clojureCon
 	 * @param clojureAliases the selected {@code deps.edn} aliases
 	 * @param clojureRepositories where coordinates are fetched from, or {@code null}
 	 * @param starlark what a Starlark file is read against
+	 * @param javaSourcePath the roots of a Java program's source path
 	 */
 	public SourceStandards {
 		clojureAliases = List.copyOf(clojureAliases);
+		javaSourcePath = List.copyOf(javaSourcePath);
 	}
 
 	/**
@@ -73,7 +78,8 @@ public record SourceStandards(SchemeStandard scheme, @Nullable String clojureCon
 	 */
 	public static SourceStandards parse(@Nullable String scheme, @Nullable String starlark) {
 		return new SourceStandards(scheme == null ? SchemeStandard.RONTOLISP : SchemeStandard.parse(scheme), null,
-				List.of(), null, starlark == null ? StarlarkStandard.RONTOLISP : StarlarkStandard.parse(starlark));
+				List.of(), null, starlark == null ? StarlarkStandard.RONTOLISP : StarlarkStandard.parse(starlark),
+				List.of());
 	}
 
 	/**
@@ -82,7 +88,8 @@ public record SourceStandards(SchemeStandard scheme, @Nullable String clojureCon
 	 * @return the standards
 	 */
 	public SourceStandards withClojureConfigDir(@Nullable String dir) {
-		return new SourceStandards(this.scheme, dir, this.clojureAliases, this.clojureRepositories, this.starlark);
+		return new SourceStandards(this.scheme, dir, this.clojureAliases, this.clojureRepositories, this.starlark,
+				this.javaSourcePath);
 	}
 
 	/**
@@ -91,8 +98,8 @@ public record SourceStandards(SchemeStandard scheme, @Nullable String clojureCon
 	 * @return the standards
 	 */
 	public SourceStandards withClojureAliases(List<String> aliases) {
-		return new SourceStandards(this.scheme, this.clojureConfigDir, aliases, this.clojureRepositories,
-				this.starlark);
+		return new SourceStandards(this.scheme, this.clojureConfigDir, aliases, this.clojureRepositories, this.starlark,
+				this.javaSourcePath);
 	}
 
 	/**
@@ -102,8 +109,19 @@ public record SourceStandards(SchemeStandard scheme, @Nullable String clojureCon
 	 * @return the standards
 	 */
 	public SourceStandards withClojureRepositories(@Nullable ClojureRepositories repositories) {
-		return new SourceStandards(this.scheme, this.clojureConfigDir, this.clojureAliases, repositories,
-				this.starlark);
+		return new SourceStandards(this.scheme, this.clojureConfigDir, this.clojureAliases, repositories, this.starlark,
+				this.javaSourcePath);
+	}
+
+	/**
+	 * These standards with a Java program's source path: where the libraries it uses are
+	 * read from as source.
+	 * @param roots the roots, a directory or a jar each, in order
+	 * @return the standards
+	 */
+	public SourceStandards withJavaSourcePath(List<String> roots) {
+		return new SourceStandards(this.scheme, this.clojureConfigDir, this.clojureAliases, this.clojureRepositories,
+				this.starlark, roots);
 	}
 
 	/**

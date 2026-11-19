@@ -502,7 +502,7 @@ the transport binds. `InetAddress.getLocalHost` and the reverse lookups are not 
 
 Each of these is an error naming the construct and its position.
 
-- Annotation types, `assert`.
+- `assert`.
 - A class literal and `getClass()` as a value: each is read compared with a class and
   before `getName()` and `getSimpleName()`, a literal also as the lock of a `synchronized`
   statement, as the class of a field updater and before `::isInstance` and `::cast`. A

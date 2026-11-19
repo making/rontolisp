@@ -62,7 +62,7 @@ final class JavaWarnings {
 	 * variables among them are explained under it
 	 */
 	void unchecked(JavaClasses.Unit unit, int pos, String message, List<String> details, List<JavaType> mentioned) {
-		if (unit.source().library() || pos < 0 || unit.unchecked().stream().anyMatch(span -> span.contains(pos))) {
+		if (unit.source().partial() || pos < 0 || unit.unchecked().stream().anyMatch(span -> span.contains(pos))) {
 			return;
 		}
 		StringBuilder text = new StringBuilder("[unchecked] ").append(message);
@@ -79,7 +79,7 @@ final class JavaWarnings {
 	 * @param text its first line, then the lines under the caret
 	 */
 	void warn(JavaClasses.Unit unit, int pos, String text) {
-		if (!unit.source().library()) {
+		if (!unit.source().partial()) {
 			this.warnings.add(new Warning(unit.source(), pos, text));
 		}
 	}

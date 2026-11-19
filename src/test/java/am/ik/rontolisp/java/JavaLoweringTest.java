@@ -894,7 +894,7 @@ class JavaLoweringTest {
 		for (Map<String, Object> program : (List<Map<String, Object>>) Objects.requireNonNull(spec.get("standalone"))) {
 			String file = (String) Objects.requireNonNull(program.get("file"));
 			String source = (String) Objects.requireNonNull(program.get("source"));
-			if (!file.endsWith(".java") || program.containsKey("files")) {
+			if (!file.endsWith(".java") || program.containsKey("files") || program.containsKey("library")) {
 				continue;
 			}
 			String name = file.substring(0, file.length() - ".java".length());
@@ -1331,6 +1331,91 @@ class JavaLoweringTest {
 				.isInstanceOf(LispReadException.class)
 				.hasMessage("Wrong.java:" + error[1]);
 		}
+	}
+
+	@Test
+	void aLibraryOfTheSourcePathIsLoweredAsFarAsTheProgramReaches() {
+		// The roots of the source path: a library, some of whose declarations name
+		// classes nobody has.
+		Map<String, String> library = Map.of("lib/Lists.java", """
+				package lib;
+				import java.time.LocalDate;
+				import org.marks.Checked;
+				public class Lists {
+				    @Checked public static int twice(int x) { return 2 * x; }
+				    public static int unused(int x) { return Hidden.three() * x; }
+				    public static LocalDate today() {
+				        return LocalDate.now();
+				    }
+				    public static LocalDate none() { return null; }
+				    public static String describe(LocalDate day, Clocked clocked) { return "a day"; }
+				    public static int deep() { return today() == null ? 0 : 1; }
+				}
+				""", "lib/Hidden.java", "package lib; class Hidden { static int three() { return 3; } }",
+				"lib/Clocked.java", """
+						package lib;
+						public class Clocked implements java.time.temporal.Temporal { }
+						""", "lib/Mark.java",
+				"package lib; public @interface Mark { String value() default \"\"; int[] at() default { 1 }; }");
+		JavaFiles files = new JavaFiles() {
+			@Override
+			public JavaFiles.@Nullable Source find(String from, String path) {
+				return null;
+			}
+
+			@Override
+			public JavaFiles.@Nullable Source library(String path) {
+				String text = library.get(path);
+				return text == null ? null : new JavaFiles.Source("lib.jar!/" + path, text);
+			}
+		};
+		// Only what is reached is lowered: the method called, not the one beside it; a
+		// method whose parameters name classes nobody has is called while nothing asks
+		// what they are. An annotation of the library's own type is dropped.
+		List<String> forms = Java.read("""
+				package app;
+				import lib.Lists;
+				import lib.Mark;
+				@Mark(value = "m", at = { 1, 2 })
+				public class Main { public static void main(String[] a) {
+				    IO.println(Lists.twice(4) + Lists.describe(null, null)); } }
+				""", "app/Main.java", files).stream().map(LispVal::print).toList();
+		assertThat(forms).contains(
+				"(DEFUN |lib.Lists.twice(int)| (|x|) (- (LOGAND (+ (* 2 |x|) 2147483648) 4294967295) 2147483648))");
+		assertThat(String.join("\n", forms)).doesNotContain("lib.Lists.unused", "lib.Hidden", "lib.Lists.today");
+		String[][] errors = {
+				// a body that is reached refuses what it names, where it names it, and
+				// says how the program came there
+				{ "IO.println(lib.Lists.deep());",
+						"lib.jar!/lib/Lists.java:8:16: the class java.time.LocalDate is not supported by the"
+								+ " experimental Java subset yet\n  reached through lib.Lists.today()"
+								+ "\n  reached through lib.Lists.deep()" },
+				// what a class nobody has is made of is refused where the program asks
+				{ "IO.println(lib.Lists.none().getYear());",
+						"app/Main.java:2:37: the class java.time.LocalDate is not supported by the experimental"
+								+ " Java subset yet" },
+				// a class under one nobody has is one nobody has
+				{ "new lib.Clocked();",
+						"lib.jar!/lib/Clocked.java:2:33: the class java.time.temporal.Temporal is not supported by"
+								+ " the experimental Java subset yet" },
+				// the library's classes are checked for access as the program's are
+				{ "lib.Hidden.three();",
+						"app/Main.java:2:13: Hidden is not public in lib; cannot be accessed from outside package" },
+				{ "@org.marks.Checked int x = 1;", "app/Main.java:2:9: cannot find symbol: class org.marks.Checked" },
+				{ "@lib.Lists int x = 1;",
+						"app/Main.java:2:9: incompatible types: Lists cannot be converted to Annotation" } };
+		List<@Nullable String> reported = new java.util.ArrayList<>();
+		for (String[] error : errors) {
+			try {
+				Java.read("package app; public class Main { public static void main(String[] a) {\n        " + error[0]
+						+ " } }", "app/Main.java", files);
+				reported.add(null);
+			}
+			catch (LispReadException ex) {
+				reported.add(ex.getMessage());
+			}
+		}
+		assertThat(reported).containsExactlyElementsOf(java.util.Arrays.stream(errors).map(error -> error[1]).toList());
 	}
 
 	@Test

@@ -34,7 +34,7 @@ public class CliOptions {
 	// --java-dep is repeatable on the same terms: one coordinate per occurrence, the
 	// list in the order given. --java-repository likewise: one repository per occurrence.
 	private static final Set<String> repeatableKeys = Set.of("-e", "--dist", "--feature", "--java-dep",
-			"--java-repository");
+			"--java-repository", "--java-source-dep");
 
 	// Long spellings that mean an existing key; the value is stored under the short one,
 	// so every reader looks at one name.

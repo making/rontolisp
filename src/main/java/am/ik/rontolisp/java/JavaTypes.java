@@ -327,7 +327,7 @@ final class JavaTypes implements JavaClasses.Relations {
 				List<JavaType> arguments = new ArrayList<>();
 				for (JavaType argument : named.arguments()) {
 					if (argument instanceof Variable variable && variable.parameter().captured != null) {
-						arguments.add(variable.parameter().captured);
+						arguments.add(uncaptured(variable.parameter(), depth));
 					}
 					else {
 						arguments.add(depth > 4 ? argument : upward(argument, depth + 1));
@@ -341,6 +341,23 @@ final class JavaTypes implements JavaClasses.Relations {
 			}
 			default -> type;
 		};
+	}
+
+	/**
+	 * The wildcard a capture stands for where it is a type argument again. An unbounded
+	 * one that took a bound from the parameter it is the argument of keeps it --
+	 * {@code Box<?>} of {@code Box<T extends Shape>} gives a {@code Shape} through the
+	 * type its member answers, as through the capture --, unless that bound names the
+	 * capture itself ({@code Enum<?>}).
+	 */
+	private JavaType uncaptured(TypeParameter capture, int depth) {
+		Wildcard wildcard = java.util.Objects.requireNonNull(capture.captured);
+		if (wildcard.upper() != null || wildcard.lower() != null || capture.bounds.isEmpty() || depth > 4
+				|| mentions(capture.bounds.get(0), Set.of(capture))) {
+			return wildcard;
+		}
+		JavaType bound = upward(capture.bounds.get(0), depth + 1);
+		return bound.equals(this.object) ? wildcard : new Wildcard(bound, null);
 	}
 
 	/**

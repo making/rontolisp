@@ -214,7 +214,18 @@ public final class JvmSourceCompiler {
 	 * the default
 	 */
 	public JvmSourceCompiler schemeStandard(@Nullable String schemeStandard) {
-		this.standards = SourceStandards.parse(schemeStandard, this.standards.starlark().optionName());
+		this.standards = SourceStandards.parse(schemeStandard, this.standards.starlark().optionName())
+			.withJavaSourcePath(this.standards.javaSourcePath());
+		return this;
+	}
+
+	/**
+	 * @param roots the source path of a program in the Java subset: the directories and
+	 * jars its libraries are read from as source and compiled with it
+	 * ({@code --java-source-path})
+	 */
+	public JvmSourceCompiler javaSourcePath(List<String> roots) {
+		this.standards = this.standards.withJavaSourcePath(roots);
 		return this;
 	}
 
@@ -224,7 +235,8 @@ public final class JvmSourceCompiler {
 	 * for the default
 	 */
 	public JvmSourceCompiler starlarkStandard(@Nullable String starlarkStandard) {
-		this.standards = SourceStandards.parse(this.standards.scheme().optionName(), starlarkStandard);
+		this.standards = SourceStandards.parse(this.standards.scheme().optionName(), starlarkStandard)
+			.withJavaSourcePath(this.standards.javaSourcePath());
 		return this;
 	}
 

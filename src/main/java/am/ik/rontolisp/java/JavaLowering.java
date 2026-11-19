@@ -646,7 +646,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	static List<LispVal> lower(CompilationUnit tree, String source, @Nullable String file, JavaFiles files,
 			@Nullable Session session, boolean loaded, java.util.function.@Nullable Consumer<String> warnings,
 			boolean suspended, java.util.function.@Nullable Consumer<JavaResumable.Census> counted) {
-		Source program = new Source(file, source, false);
+		Source program = new Source(file, source, JavaClass.Origin.PROGRAM);
 		if (tree.classes().isEmpty()) {
 			throw JavaClasses.error(program, 0, "the file declares no class");
 		}
@@ -701,7 +701,13 @@ final class JavaLowering implements JavaEmitter.Context {
 			lowering.loaded = loaded;
 			lowering.suspended = suspended;
 			lowering.counted = counted;
-			List<LispVal> forms = lowering.program();
+			List<LispVal> forms;
+			try {
+				forms = lowering.program();
+			}
+			catch (JavaClass.Absent ex) {
+				throw JavaClasses.error(lowering.unit.source(), 0, Objects.requireNonNull(ex.getMessage()));
+			}
 			if (classes.version() == version) {
 				if (session != null) {
 					classes.made.forEach(made -> session.made.add(made.name));
@@ -859,7 +865,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		List<LispVal> forms = new ArrayList<>();
 		Set<JavaClass> defined = new HashSet<>();
 		for (JavaClass declaration : List.copyOf(this.classes.all())) {
-			if (!isLibrary(declaration) || isLive(declaration) || isNamed(declaration, named)) {
+			if (!isPartial(declaration) || isLive(declaration) || isNamed(declaration, named)) {
 				structure(declaration, defined, forms);
 			}
 		}
@@ -897,12 +903,20 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/**
+	 * Whether a class is lowered only as far as the program reaches it: Java source of
+	 * the library, or of a library the program uses from its source path.
+	 */
+	private boolean isPartial(JavaClass declaration) {
+		return !declaration.intrinsic && declaration.source != null && declaration.source.partial();
+	}
+
+	/**
 	 * Whether the program can hold an instance of a class: any class of the program, and
 	 * a class of the library the program makes an instance of.
 	 */
 	private boolean isMade(JavaClass declaration) {
 		return !declaration.intrinsic && !declaration.isInterface
-				&& (!isLibrary(declaration) || this.classes.made.contains(declaration));
+				&& (!isPartial(declaration) || this.classes.made.contains(declaration));
 	}
 
 	/** Whether the program can hold an instance of a class or of a class under it. */
@@ -922,8 +936,10 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	private void reach(Method method) {
-		if (method.emitter == null && isLibrary(method.owner)) {
-			this.classes.reached.add(method);
+		if (method.emitter == null && isPartial(method.owner)) {
+			if (this.classes.reached.add(method) && this.reaching != null) {
+				this.classes.reachedFrom.put(method, this.reaching);
+			}
 			use(method.owner);
 			if (!this.classes.monitors && (method.owner.name.equals(THREAD) || isServer(method.owner))) {
 				// what was lowered holding no monitor is lowered again holding one: a
@@ -942,7 +958,7 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private void use(JavaClass declaration) {
 		for (JavaClass type = declaration; type != null; type = type.superclass) {
-			if (isLibrary(type)) {
+			if (isPartial(type)) {
 				this.classes.used.add(type);
 			}
 		}
@@ -953,7 +969,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * library changes which bodies a call can run, so the program is lowered again.
 	 */
 	private void makes(JavaClass declaration) {
-		if (isLibrary(declaration) && this.classes.made.add(declaration)) {
+		if (isPartial(declaration) && this.classes.made.add(declaration)) {
 			this.classes.changed();
 		}
 	}
@@ -974,11 +990,20 @@ final class JavaLowering implements JavaEmitter.Context {
 				more = true;
 				this.currentClass = method.owner;
 				this.unit = this.classes.unit(method.owner);
-				if (method.isConstructor()) {
-					constructor(method);
+				this.reaching = method;
+				try {
+					if (method.isConstructor()) {
+						constructor(method);
+					}
+					else {
+						method(method);
+					}
 				}
-				else {
-					method(method);
+				catch (LispReadException ex) {
+					throw reachedThrough(method, ex);
+				}
+				finally {
+					this.reaching = null;
 				}
 			}
 			for (JavaClass declaration : List.copyOf(this.classes.used)) {
@@ -991,6 +1016,30 @@ final class JavaLowering implements JavaEmitter.Context {
 				staticInitialization(declaration);
 			}
 		}
+	}
+
+	/**
+	 * The method of a library whose body is being lowered because the program reaches it,
+	 * or {@code null} while the program's own classes are.
+	 */
+	private @Nullable Method reaching;
+
+	/**
+	 * What a method of a library the program uses refuses, told with the way the program
+	 * comes to it: the refusal stands in a file the program's author did not write, so
+	 * the methods between it and the program are named, the nearest first.
+	 */
+	private LispReadException reachedThrough(Method method, LispReadException refused) {
+		Source source = method.owner.source;
+		if (source == null || !source.dependency() || refused.reason().contains("\n  reached through ")) {
+			return refused;
+		}
+		StringBuilder way = new StringBuilder();
+		Set<Method> seen = new HashSet<>();
+		for (Method at = method; at != null && seen.add(at); at = this.classes.reachedFrom.get(at)) {
+			way.append("\n  reached through ").append(at.owner.name).append('.').append(at.signature());
+		}
+		return new LispReadException(refused.reason() + way, refused.location());
 	}
 
 	/** The names of the symbols of a form. */
@@ -1119,7 +1168,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	private static void supertypes(JavaClass declaration, Set<JavaClass> into) {
-		if (!into.add(declaration)) {
+		if (!into.add(declaration.present())) {
 			return;
 		}
 		if (declaration.superclass != null) {
@@ -1137,14 +1186,14 @@ final class JavaLowering implements JavaEmitter.Context {
 		this.currentClass = declaration;
 		this.unit = this.classes.unit(declaration);
 		checkFunctional(declaration);
-		if (!isLibrary(declaration)) {
+		if (!isPartial(declaration)) {
 			inheritedThrows(declaration);
 		}
 		for (Method method : List.copyOf(declaration.methods)) {
 			this.currentClass = declaration;
 			this.unit = this.classes.unit(declaration);
 			JavaSyntax.Method written = method.declaration;
-			if (written != null && !isLibrary(declaration)) {
+			if (written != null && !isPartial(declaration)) {
 				overriddenThrows(method, written.pos());
 			}
 			if (method.varargs && written != null && !written.modifiers().contains("@SafeVarargs")) {
@@ -1169,7 +1218,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * Whether a class is lowered with the program: one of its own that is no local class.
 	 */
 	private boolean lowered(JavaClass declaration) {
-		return !declaration.intrinsic && !declaration.isLocal && !isLibrary(declaration);
+		return !declaration.intrinsic && !declaration.isLocal && !isPartial(declaration);
 	}
 
 	/** A class and its member classes, each typed before the flow of any is asked. */
@@ -1436,7 +1485,7 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private void method(Method method) {
 		JavaSyntax.Method written = Objects.requireNonNull(method.declaration);
-		if (written.modifiers().contains("@Override") && !isLibrary(method.owner) && !overrides(method)) {
+		if (written.modifiers().contains("@Override") && !isPartial(method.owner) && !overrides(method)) {
 			throw error(written.pos(), "method does not override or implement a method from a supertype");
 		}
 		this.staticContext = method.isStatic;
@@ -1635,7 +1684,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			LispVal body = frame.exits ? form(cl("block"), prepend(FUNCTION_BLOCK, forms)) : progn(forms);
 			this.functions.add(list(cl("defun"), JavaNames.function(constructor), list(all), body));
 		}
-		if ((owner.isAbstract && !owner.isEnum) || (isLibrary(owner) && !this.classes.made.contains(owner))) {
+		if ((owner.isAbstract && !owner.isEnum) || (isPartial(owner) && !this.classes.made.contains(owner))) {
 			// no instance is made: the constructor is reached from a subclass's only
 			return;
 		}
@@ -2327,7 +2376,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * interface.
 	 */
 	private static @Nullable Field field(JavaClass declaration, String name) {
-		for (JavaClass type = declaration; type != null; type = type.superclass) {
+		for (JavaClass type = declaration.present(); type != null; type = type.superclass) {
 			for (Field field : type.fields) {
 				if (field.name.equals(name)) {
 					return field;
@@ -2344,7 +2393,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	private List<Method> constructors(JavaClass declaration) {
-		bring(declaration, "<init>");
+		bring(declaration.present(), "<init>");
 		return declaration.methods.stream().filter(Method::isConstructor).toList();
 	}
 
@@ -3430,7 +3479,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		int pos = written.pos();
 		Named variable = variable(name, pos, false);
 		return switch (variable) {
-			case null -> throw error(pos, "cannot find symbol: variable " + name);
+			case null -> throw this.classes.unknown(name, pos, this.unit);
 			case LocalRef found -> {
 				this.facts.variables.put(written, found.local().key);
 				yield new Typed(found.local().symbol(), found.local().type(), found.local().constant);
@@ -3502,124 +3551,136 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * @param discard whether its value is not used
 	 */
 	private Typed expression(Expression expression, @Nullable JavaType expected, boolean discard) {
-		switch (expression) {
-			case IntLiteral literal:
-				return literal.isLong() ? constant(literal.value()) : constant((int) literal.value());
-			case DoubleLiteral literal:
-				return literal.isFloat() ? constant((float) literal.value()) : constant(literal.value());
-			case CharLiteral literal:
-				return constant((char) literal.value());
-			case StringLiteral literal:
-				return constantString(literal.value());
-			case BooleanLiteral literal:
-				return constant(literal.value());
-			case NullLiteral literal:
-				return new Typed(NIL, JavaType.Null.NULL);
-			case This self:
-				return thisValue(self.pos());
-			case JavaSyntax.Super above: {
-				// super.x: the field as the class above sees it, which one here may hide
-				if (this.staticContext) {
-					throw error(above.pos(), "non-static variable super cannot be referenced from a static context");
-				}
-				Typed self = thisValue(above.pos());
-				JavaClass superclass = this.currentClass.superclass;
-				return new Typed(self.form(),
-						superclass == null ? this.objectType : this.currentClass.supertype(superclass));
-			}
-			case JavaSyntax.ClassLiteral literal:
-				throw unsupported(literal.pos(), "a class literal but compared with a class or before getName()");
-			case Name name:
-				return read(name);
-			case QualifiedThis self: {
-				JavaClass named = classNamed(self.qualifier());
-				if (named == null) {
-					throw error(self.pos(), "cannot find symbol: class " + dotted(self.qualifier()));
-				}
-				if (this.staticContext) {
-					throw error(self.pos(), "non-static variable this cannot be referenced from a static context");
-				}
-				LispVal instance = enclosing(named);
-				if (instance == null) {
-					throw error(self.pos(),
-							this.early && this.currentClass.isSubclassOf(named)
-									? "cannot reference this before supertype constructor has been called"
-									: "not an enclosing class: " + named.simpleName());
-				}
-				return new Typed(instance, named.self());
-			}
-			case Select select:
-				return select(select);
-			case Call call:
-				return invocation(call, expected, discard);
-			case ConstructorCall call:
-				throw error(call.pos(), "explicit constructor invocation may only appear within a constructor body");
-			case New creation:
-				return creation(creation, expected);
-			case NewArray creation: {
-				ArrayType type = (ArrayType) type(creation.type());
-				if (creation.initializer() != null) {
-					return arrayInitializer(creation.initializer(), type);
-				}
-				List<LispVal> lengths = new ArrayList<>();
-				JavaType leaf = type;
-				for (Expression written : creation.lengths()) {
-					Typed length = unbox(expression(written, null));
-					if (length.type() != Primitive.INT && !length.type().isBelowInt()) {
-						throw error(written.pos(),
-								"incompatible types: " + length.type() + " cannot be converted to int");
+		try {
+			switch (expression) {
+				case IntLiteral literal:
+					return literal.isLong() ? constant(literal.value()) : constant((int) literal.value());
+				case DoubleLiteral literal:
+					return literal.isFloat() ? constant((float) literal.value()) : constant(literal.value());
+				case CharLiteral literal:
+					return constant((char) literal.value());
+				case StringLiteral literal:
+					return constantString(literal.value());
+				case BooleanLiteral literal:
+					return constant(literal.value());
+				case NullLiteral literal:
+					return new Typed(NIL, JavaType.Null.NULL);
+				case This self:
+					return thisValue(self.pos());
+				case JavaSyntax.Super above: {
+					// super.x: the field as the class above sees it, which one here may
+					// hide
+					if (this.staticContext) {
+						throw error(above.pos(),
+								"non-static variable super cannot be referenced from a static context");
 					}
-					lengths.add(length.form());
-					leaf = ((ArrayType) leaf).element();
+					Typed self = thisValue(above.pos());
+					JavaClass superclass = this.currentClass.superclass;
+					return new Typed(self.form(),
+							superclass == null ? this.objectType : this.currentClass.supertype(superclass));
 				}
-				if (lengths.size() > 1) {
-					// every level but the last holds arrays; the last, the leaf's default
-					return new Typed(runtimeCall("new-array", form(cl("list"), lengths), integer(arrayKind(leaf)),
-							defaultValue(leaf)), type);
+				case JavaSyntax.ClassLiteral literal:
+					throw unsupported(literal.pos(), "a class literal but compared with a class or before getName()");
+				case Name name:
+					return read(name);
+				case QualifiedThis self: {
+					JavaClass named = classNamed(self.qualifier());
+					if (named == null) {
+						throw error(self.pos(), "cannot find symbol: class " + dotted(self.qualifier()));
+					}
+					if (this.staticContext) {
+						throw error(self.pos(), "non-static variable this cannot be referenced from a static context");
+					}
+					LispVal instance = enclosing(named);
+					if (instance == null) {
+						throw error(self.pos(),
+								this.early && this.currentClass.isSubclassOf(named)
+										? "cannot reference this before supertype constructor has been called"
+										: "not an enclosing class: " + named.simpleName());
+					}
+					return new Typed(instance, named.self());
 				}
-				// a negative length is the language's exception, which the run time makes
-				LispVal length = lengths.get(0) instanceof LispInteger n && n.value() >= 0 ? lengths.get(0)
-						: runtimeCall("array-length", lengths.get(0));
-				List<LispVal> made = new ArrayList<>(List.of(cl("make-array"), length));
-				made.addAll(elementType(type.element()));
-				made.add(new LispSymbol(":INITIAL-ELEMENT"));
-				made.add(type.element() == Primitive.BOOLEAN ? integer(0) : defaultValue(type.element()));
-				LispVal array = list(made);
-				this.nonNull.add(array);
-				return new Typed(array, type);
+				case Select select:
+					return select(select);
+				case Call call:
+					return invocation(call, expected, discard);
+				case ConstructorCall call:
+					throw error(call.pos(),
+							"explicit constructor invocation may only appear within a constructor body");
+				case New creation:
+					return creation(creation, expected);
+				case NewArray creation: {
+					ArrayType type = (ArrayType) type(creation.type());
+					if (creation.initializer() != null) {
+						return arrayInitializer(creation.initializer(), type);
+					}
+					List<LispVal> lengths = new ArrayList<>();
+					JavaType leaf = type;
+					for (Expression written : creation.lengths()) {
+						Typed length = unbox(expression(written, null));
+						if (length.type() != Primitive.INT && !length.type().isBelowInt()) {
+							throw error(written.pos(),
+									"incompatible types: " + length.type() + " cannot be converted to int");
+						}
+						lengths.add(length.form());
+						leaf = ((ArrayType) leaf).element();
+					}
+					if (lengths.size() > 1) {
+						// every level but the last holds arrays; the last, the leaf's
+						// default
+						return new Typed(runtimeCall("new-array", form(cl("list"), lengths), integer(arrayKind(leaf)),
+								defaultValue(leaf)), type);
+					}
+					// a negative length is the language's exception, which the run time
+					// makes
+					LispVal length = lengths.get(0) instanceof LispInteger n && n.value() >= 0 ? lengths.get(0)
+							: runtimeCall("array-length", lengths.get(0));
+					List<LispVal> made = new ArrayList<>(List.of(cl("make-array"), length));
+					made.addAll(elementType(type.element()));
+					made.add(new LispSymbol(":INITIAL-ELEMENT"));
+					made.add(type.element() == Primitive.BOOLEAN ? integer(0) : defaultValue(type.element()));
+					LispVal array = list(made);
+					this.nonNull.add(array);
+					return new Typed(array, type);
+				}
+				case ArrayInitializer initializer:
+					if (!(expected instanceof ArrayType type)) {
+						throw error(initializer.pos(), "illegal initializer for " + expected);
+					}
+					return arrayInitializer(initializer, type);
+				case Index index: {
+					Place place = place(index, false, false);
+					return new Typed(place.read(), place.type());
+				}
+				case Unary unary:
+					return unary.operator().equals("!") ? flow(unary).value() : unary(unary, discard);
+				case Binary binary:
+					return binary.operator().equals("&&") || binary.operator().equals("||") ? flow(binary).value()
+							: binary(binary);
+				case Assign assignment:
+					return assignment(assignment);
+				case Conditional conditional:
+					return conditional(conditional, expected);
+				case Cast cast:
+					return cast(cast);
+				case InstanceOf test:
+					return test.pattern() != null ? flow(test).value() : instanceOf(test);
+				case Lambda lambda:
+					return lambda(lambda, expected, null);
+				case JavaSyntax.MethodReference reference:
+					return methodReference(reference, expected, null);
+				case JavaSyntax.Lowered lowered:
+					return (Typed) lowered.value();
+				case JavaSyntax.Echo echo:
+					return echo(echo);
+				case JavaSyntax.Switch block:
+					return switchExpression(block, expected);
 			}
-			case ArrayInitializer initializer:
-				if (!(expected instanceof ArrayType type)) {
-					throw error(initializer.pos(), "illegal initializer for " + expected);
-				}
-				return arrayInitializer(initializer, type);
-			case Index index: {
-				Place place = place(index, false, false);
-				return new Typed(place.read(), place.type());
-			}
-			case Unary unary:
-				return unary.operator().equals("!") ? flow(unary).value() : unary(unary, discard);
-			case Binary binary:
-				return binary.operator().equals("&&") || binary.operator().equals("||") ? flow(binary).value()
-						: binary(binary);
-			case Assign assignment:
-				return assignment(assignment);
-			case Conditional conditional:
-				return conditional(conditional, expected);
-			case Cast cast:
-				return cast(cast);
-			case InstanceOf test:
-				return test.pattern() != null ? flow(test).value() : instanceOf(test);
-			case Lambda lambda:
-				return lambda(lambda, expected, null);
-			case JavaSyntax.MethodReference reference:
-				return methodReference(reference, expected, null);
-			case JavaSyntax.Lowered lowered:
-				return (Typed) lowered.value();
-			case JavaSyntax.Echo echo:
-				return echo(echo);
-			case JavaSyntax.Switch block:
-				return switchExpression(block, expected);
+		}
+		catch (JavaClass.Absent ex) {
+			// a class nobody has, named by a library: refused where the program reaches
+			// it
+			throw (LispReadException) error(expression.pos(), Objects.requireNonNull(ex.getMessage())).initCause(ex);
 		}
 	}
 
@@ -4840,7 +4901,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		List<Field> fields = new ArrayList<>();
 		for (JavaClass declaration : this.classes.all()) {
-			if (declaration.intrinsic || isLibrary(declaration)) {
+			if (declaration.intrinsic || isPartial(declaration)) {
 				continue;
 			}
 			for (Field field : declaration.fields) {
@@ -5109,7 +5170,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (!(to instanceof ClassType target)) {
 			throw unsupported(pos, what + " to " + to);
 		}
-		JavaClass declaration = target.declaration();
+		JavaClass declaration = target.declaration().present();
 		if (!target.arguments().isEmpty() && !cast && !isSubtype(this.types.refine(declaration, from), target)) {
 			throw error(pos, from + " cannot be safely cast to " + to);
 		}
@@ -5769,6 +5830,48 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/**
+	 * Whether an exact method reference naming a class -- its one method of the name, of
+	 * fixed arity and with no type parameter -- gives what a parameter's function type
+	 * answers: such a reference counts in a call's applicability by the type it returns,
+	 * so of the overloads taking a function of one arity only those whose value the
+	 * method's can be take it. Any other reference is taken by its arity alone.
+	 * @param variables the type parameters the call infers: one of them as the function's
+	 * value is whatever its bounds allow
+	 */
+	private boolean gives(JavaSyntax.MethodReference reference, JavaType formal, List<TypeParameter> variables) {
+		Expression written = reference.target();
+		JavaClass named = written == null || reference.onSuper() || !reference.typeArguments().isEmpty() ? null
+				: classNamed(written);
+		Descriptor function = functional(formal);
+		if (named == null || function == null || function.returnType() == Primitive.VOID
+				|| reference.name().equals("new")) {
+			return true;
+		}
+		List<Method> candidates = methods(named, reference.name());
+		if (candidates.size() != 1 || candidates.get(0).varargs || !candidates.get(0).typeParameters.isEmpty()) {
+			return true;
+		}
+		JavaType given = candidates.get(0).returnType;
+		if (given == Primitive.VOID) {
+			return false;
+		}
+		Set<TypeParameter> open = new HashSet<>(variables);
+		if (JavaTypes.mentions(given, new HashSet<>(candidates.get(0).owner.allTypeParameters()))) {
+			// what the class's arguments make of it is the reference's own inference
+			return true;
+		}
+		List<JavaType> wanted = function.returnType() instanceof Variable variable
+				&& open.contains(variable.parameter()) ? variable.parameter().bounds : List.of(function.returnType());
+		for (JavaType each : wanted) {
+			JavaType target = JavaTypes.mentions(each, open) ? this.types.erased(each) : each;
+			if (conversion(new Typed(NIL, given), target, true, false) == null) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
 	 * Whether a parameter is at least as specific as another's for an argument that waits
 	 * for its parameter's type: a functional interface giving a value is, against one
 	 * giving none or a value it converts to.
@@ -5849,6 +5952,10 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 			}
 			else if (!accepts(formal, arguments.get(i), contested)) {
+				return null;
+			}
+			else if (late.contested() && arguments.get(i) instanceof JavaSyntax.MethodReference reference
+					&& !gives(reference, formal, variables)) {
 				return null;
 			}
 		}
@@ -8681,7 +8788,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		boolean threads = scheduled();
 		List<LispVal> forms = new ArrayList<>();
 		for (JavaClass declaration : this.classes.all()) {
-			if (declaration.intrinsic || (isLibrary(declaration) && !this.classes.used.contains(declaration))) {
+			if (declaration.intrinsic || (isPartial(declaration) && !this.classes.used.contains(declaration))) {
 				continue;
 			}
 			for (Field field : declaration.fields) {
@@ -8707,7 +8814,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			forms.add(call("setq", constant.getValue(), runtimeCall("intern", string(constant.getKey()))));
 		}
 		for (JavaClass declaration : this.classes.all()) {
-			if (declaration.intrinsic || (isLibrary(declaration) && !this.classes.used.contains(declaration))) {
+			if (declaration.intrinsic || (isPartial(declaration) && !this.classes.used.contains(declaration))) {
 				continue;
 			}
 			boolean fresh = isFresh(declaration);

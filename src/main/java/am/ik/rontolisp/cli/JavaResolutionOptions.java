@@ -89,9 +89,10 @@ record JavaResolutionOptions(@Nullable Integer release, List<Path> classpath, Li
 			}
 		}
 		List<RemoteRepository> repositories = repositories(options.get("--java-repository"));
-		if (!repositories.isEmpty() && dependencies.isEmpty()) {
+		if (!repositories.isEmpty() && dependencies.isEmpty() && !options.contains("--java-source-dep")) {
 			throw new IllegalArgumentException(
-					"--java-repository names where --java-dep coordinates resolve from," + " so it needs a --java-dep");
+					"--java-repository names where --java-dep and --java-source-dep coordinates resolve from,"
+							+ " so it needs a --java-dep or a --java-source-dep");
 		}
 		return new JavaResolutionOptions(number, List.copyOf(classpath), List.copyOf(dependencies), repositories,
 				options.contains("--warn-java-reflection"), options.contains("--java-static"));

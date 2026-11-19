@@ -19,14 +19,70 @@ import org.jspecify.annotations.Nullable;
 final class JavaClass {
 
 	/**
+	 * Where a class's text comes from, which decides how much of it is lowered and what
+	 * is checked of it.
+	 */
+	enum Origin {
+
+		/** A file of the program: lowered whole, located, checked. */
+		PROGRAM,
+
+		/**
+		 * A file of a library the program uses, read from its source path: lowered as far
+		 * as the program reaches it, located, and trusted to be Java a compiler took.
+		 */
+		DEPENDENCY,
+
+		/** Java source of the front end's own library: lowered as far as reached. */
+		LIBRARY
+
+	}
+
+	/**
 	 * The text a class was read from, for the positions of what is said about it.
 	 *
 	 * @param file the file, or {@code null}
 	 * @param text its text
-	 * @param library whether it is Java source of the library, lowered as far as the
-	 * program reaches it, and no file of the program, lowered whole
+	 * @param origin whose it is
 	 */
-	record Source(@Nullable String file, String text, boolean library) {
+	record Source(@Nullable String file, String text, Origin origin) {
+
+		/**
+		 * Whether it is Java source of the front end's library, and no file a program
+		 * names.
+		 */
+		boolean library() {
+			return this.origin == Origin.LIBRARY;
+		}
+
+		/** Whether it is a file of a library the program uses. */
+		boolean dependency() {
+			return this.origin == Origin.DEPENDENCY;
+		}
+
+		/** Whether only what the program reaches of it is lowered. */
+		boolean partial() {
+			return this.origin != Origin.PROGRAM;
+		}
+
+	}
+
+	/**
+	 * Told where the program reaches into a class that could not be read: a class of a
+	 * library the program uses naming a class nobody has, or one whose own file is
+	 * refused. Such a class is a name until something asks what it is made of.
+	 */
+	static final class Absent extends RuntimeException {
+
+		private static final long serialVersionUID = 1L;
+
+		final transient JavaClass named;
+
+		Absent(JavaClass named) {
+			super(java.util.Objects.requireNonNull(named.absent).reason());
+			this.named = named;
+		}
+
 	}
 
 	/** A field. */
@@ -269,6 +325,9 @@ final class JavaClass {
 
 	boolean isRecord;
 
+	/** Whether it is an annotation type: an interface an annotation may name. */
+	boolean isAnnotation;
+
 	boolean isFinal;
 
 	/** Whether it is {@code sealed}: its direct subtypes are {@link #permits}. */
@@ -276,6 +335,21 @@ final class JavaClass {
 
 	/** Whether its values are Lisp values and its members forms. */
 	final boolean intrinsic;
+
+	/**
+	 * Why the class could not be read, or {@code null} for a class that was: a class a
+	 * library names in a declaration and nobody has. Its name stands in the types of the
+	 * members naming it; what it extends and what it holds is refused where asked.
+	 */
+	am.ik.rontolisp.reader.@Nullable LispReadException absent;
+
+	/** Refuses a class that could not be read, where what it is made of is asked. */
+	JavaClass present() {
+		if (this.absent != null) {
+			throw new Absent(this);
+		}
+		return this;
+	}
 
 	/**
 	 * Whether the program can hold a value of an intrinsic class: something other than
@@ -388,6 +462,10 @@ final class JavaClass {
 	boolean isSubclassOf(JavaClass other) {
 		if (this == other) {
 			return true;
+		}
+		if (this.absent != null && !other.name.equals("java.lang.Object")) {
+			// what stands above a class nobody has cannot be told
+			throw new Absent(this);
 		}
 		if (this.superclass != null && this.superclass.isSubclassOf(other)) {
 			return true;

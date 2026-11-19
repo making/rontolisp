@@ -3,6 +3,7 @@ package am.ik.rontolisp.eval;
 import java.io.IOException;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 import org.jspecify.annotations.Nullable;
@@ -171,8 +172,8 @@ public enum SourceLanguage {
 			return readUntilError(source, features, file, standards, loader);
 		}
 		try {
-			return new LispReader.ReadPrefix(
-					Java.load(source, file, javaFiles(loader), SourceLanguage::warned, oneStack(features)), null);
+			return new LispReader.ReadPrefix(Java.load(source, file, javaFiles(loader, standards.javaSourcePath()),
+					SourceLanguage::warned, oneStack(features)), null);
 		}
 		catch (LispReadException ex) {
 			return new LispReader.ReadPrefix(List.of(), ex);
@@ -253,8 +254,8 @@ public enum SourceLanguage {
 						Starlark.read(source, file, standards.starlark(), starlarkFiles(loader)), null);
 			}
 			if (this == JAVA) {
-				return new LispReader.ReadPrefix(
-						Java.read(source, file, javaFiles(loader), SourceLanguage::warned, oneStack(features)), null);
+				return new LispReader.ReadPrefix(Java.read(source, file, javaFiles(loader, standards.javaSourcePath()),
+						SourceLanguage::warned, oneStack(features)), null);
 			}
 			return new LispReader.ReadPrefix(clojure(source, features, file, standards, loader, false, null).forms(),
 					null);
@@ -387,21 +388,52 @@ public enum SourceLanguage {
 	}
 
 	/**
-	 * The files of a Java program's source tree, through a loader: a path relative to the
-	 * starting file's directory ({@link SourceLoader#resolve}).
+	 * The files of a Java program, through a loader: those of its source tree by a path
+	 * relative to the starting file's directory ({@link SourceLoader#resolve}), and those
+	 * of the libraries it uses under the roots of its source path, a directory or a jar
+	 * each, the first root that has the file. A jar's entries are listed once a read.
 	 * @param loader the loader, or {@code null} for none
+	 * @param sourcePath the roots of the program's source path, in order
 	 * @return the files
 	 */
-	static JavaFiles javaFiles(@Nullable SourceLoader loader) {
+	static JavaFiles javaFiles(@Nullable SourceLoader loader, List<String> sourcePath) {
 		if (loader == null) {
 			return JavaFiles.NONE;
 		}
+		Map<String, java.util.Set<String>> archives = new java.util.HashMap<>();
 		return new JavaFiles() {
 			@Override
 			public JavaFiles.@Nullable Source find(String from, String path) {
 				String resolved = SourceLoader.resolve(SourceLoader.parentDir(from), path);
 				String text = text(loader, resolved);
 				return text == null ? null : new JavaFiles.Source(resolved, text);
+			}
+
+			@Override
+			public JavaFiles.@Nullable Source library(String path) {
+				for (String root : sourcePath) {
+					if (loader.isDirectory(root)) {
+						String resolved = SourceLoader.resolve(root, path);
+						String text = text(loader, resolved);
+						if (text != null) {
+							return new JavaFiles.Source(resolved, text);
+						}
+						continue;
+					}
+					java.util.Set<String> entries = archives.computeIfAbsent(root, archive -> {
+						List<String> listed = loader.listArchive(archive);
+						return listed == null ? java.util.Set.of() : new java.util.HashSet<>(listed);
+					});
+					if (entries.contains(path)) {
+						try {
+							return new JavaFiles.Source(root + "!/" + path, loader.loadArchiveEntry(root, path));
+						}
+						catch (IOException ex) {
+							// an entry that cannot be read is no file of the root
+						}
+					}
+				}
+				return null;
 			}
 
 			@Override

@@ -249,6 +249,11 @@ public final class RontoLispCli {
 		// coordinate fails before any file is read; the coordinates resolve where the
 		// program runs or compiles.
 		JavaResolutionOptions javaResolution = JavaResolutionOptions.from(options);
+		// --java-source-path / --java-source-dep: the libraries a program of the Java
+		// subset uses, read as source and lowered with it on every backend. Every Java
+		// file of the program reads them, so they travel with the standards.
+		standards = standards.withJavaSourcePath(
+				JavaSourcePath.of(options, javaResolution.repositories(), this.javaDependencyResolver, System.err));
 
 		// What compiles an image the program dumps (uiop:dump-image, asdf:make of a
 		// program-op system), installed on every evaluator this run creates: the run's
@@ -1684,9 +1689,20 @@ public final class RontoLispCli {
 		this.out.println("                     Central through ~/.m2/repository (or settings.xml's");
 		this.out.println("                     localRepository); its jars join the class path after");
 		this.out.println("                     --java-classpath, and a generated pom lists the coordinates");
+		this.out.println("  --java-source-path DIRS-AND-JARS");
+		this.out.println("                     The source path of a program in the Java subset (.java):");
+		this.out.println("                     directories and jars of the libraries it uses, as SOURCE. A");
+		this.out.println("                     class the program names and its own source tree lacks is read");
+		this.out.println("                     from here and compiled with it as far as it is reached, on");
+		this.out.println("                     every backend (a .wasm too); nothing is carried beside the output");
+		this.out.println("  --java-source-dep G:A:V");
+		this.out.println("                     Repeatable. Such a library by Maven coordinates: its sources jar");
+		this.out.println("                     (G:A:jar:sources:V) and those of what it depends on join the");
+		this.out.println("                     source path after --java-source-path. A library with no sources");
+		this.out.println("                     jar is refused by name");
 		this.out.println("  --java-repository [ID=]URL");
 		this.out.println("                     Repeatable. A Maven repository (https:, http: or file:) for");
-		this.out.println("                     --java-dep to search after Maven Central, in the order given;");
+		this.out.println("                     --java-dep and --java-source-dep to search after Maven Central;");
 		this.out.println("                     the ID (default java-repository-N) is what settings.xml's");
 		this.out.println("                     <server> and <mirror> name. The id central replaces Central's URL");
 		this.out.println("  --warn-java-reflection");

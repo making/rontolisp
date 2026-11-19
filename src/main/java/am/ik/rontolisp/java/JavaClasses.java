@@ -159,6 +159,12 @@ final class JavaClasses {
 	 */
 	final Set<JavaClass.Method> reached = new java.util.LinkedHashSet<>();
 
+	/**
+	 * The method whose body first called each method reached from the Java source of a
+	 * library: the way a refusal inside one is told to come from the program.
+	 */
+	final Map<JavaClass.Method, JavaClass.Method> reachedFrom = new IdentityHashMap<>();
+
 	/** The classes of the library's Java source a pass makes an instance of. */
 	final Set<JavaClass> made = new java.util.LinkedHashSet<>();
 
@@ -418,6 +424,9 @@ final class JavaClasses {
 			declared.add(made);
 		}
 		complete(all, unit);
+		for (JavaSyntax.Annotation annotation : tree.annotations()) {
+			annotation(annotation, unit, all);
+		}
 		for (Import imported : tree.imports()) {
 			if (imported.isStatic()) {
 				importStatic(imported, unit);
@@ -431,6 +440,40 @@ final class JavaClasses {
 			}
 		}
 		return declared;
+	}
+
+	/**
+	 * The annotation types of {@code java.lang}: none changes what a program that
+	 * compiles does, and no file is read for one.
+	 */
+	private static final Set<String> ANNOTATIONS = Set.of("Override", "Deprecated", "SuppressWarnings", "SafeVarargs",
+			"FunctionalInterface");
+
+	/**
+	 * Checks that an annotation of a program's file names an annotation type the file can
+	 * see, as a compiler does: its meaning, if it has one, is a processor's or a
+	 * framework's, and its absence would change the program. The annotation itself is
+	 * dropped. One of a library the program uses is not looked for: a compiler took that
+	 * library where the type was, and reads the library's class without it.
+	 */
+	private void annotation(JavaSyntax.Annotation written, Unit unit, List<JavaClass> all) {
+		String name = written.name();
+		if (unit.source().partial()
+				|| ANNOTATIONS.contains(name.startsWith("java.lang.") ? name.substring("java.lang.".length()) : name)) {
+			return;
+		}
+		JavaClass type = find(name, null, unit);
+		for (int i = 0; type == null && i < all.size(); i++) {
+			type = find(name, all.get(i), unit);
+		}
+		if (type == null) {
+			throw error(unit.source(), written.pos(), "cannot find symbol: class " + name);
+		}
+		if (!type.isAnnotation) {
+			throw error(unit.source(), written.pos(),
+					"incompatible types: " + type.simpleName() + " cannot be converted to Annotation");
+		}
+		accessible(type, unit, written.pos());
 	}
 
 	/**
@@ -726,6 +769,7 @@ final class JavaClasses {
 		made.isStatic = isStatic;
 		made.isEnum = declaration.kind() == JavaSyntax.Kind.ENUM;
 		made.isRecord = declaration.kind() == JavaSyntax.Kind.RECORD;
+		made.isAnnotation = modifiers.contains(JavaSyntax.ANNOTATION_TYPE);
 		made.isSealed = modifiers.contains("sealed");
 		made.isFinal = modifiers.contains("final") || made.isRecord
 				|| (made.isEnum && declaration.constants().stream().noneMatch(constant -> constant.body() != null));
@@ -752,6 +796,7 @@ final class JavaClasses {
 	private void complete(List<JavaClass> all, Unit unit) {
 		List<Runnable> outer = this.boundChecks;
 		this.boundChecks = new ArrayList<>();
+		this.completing++;
 		try {
 			declareMembers(all, unit);
 			for (Runnable check : this.boundChecks) {
@@ -760,8 +805,24 @@ final class JavaClasses {
 		}
 		finally {
 			this.boundChecks = outer;
+			this.completing--;
+		}
+		if (this.completing == 0) {
+			List<Runnable> waiting = List.copyOf(this.permitted);
+			this.permitted.clear();
+			waiting.forEach(Runnable::run);
 		}
 	}
+
+	/** How many declarations are being completed, one inside the other. */
+	private int completing;
+
+	/**
+	 * The checks of a class against the {@code permits} clause of a sealed type above it
+	 * that was still being declared: the clause names the class, whose file is read where
+	 * the clause is, before the clause is whole. Made once the outermost declaration is.
+	 */
+	private final List<Runnable> permitted = new ArrayList<>();
 
 	private void declareMembers(List<JavaClass> all, Unit unit) {
 		Source source = unit.source();
@@ -795,9 +856,11 @@ final class JavaClasses {
 					}
 					parent.permits.add(made);
 				}
-				else if (!parent.permits.contains(made)) {
-					throw error(source, declaration(made).pos(), "class is not allowed to extend sealed class: "
-							+ parent.simpleName() + " (as it is not listed in its 'permits' clause)");
+				else if (parent.permits.size() < declaration(parent).permits().size()) {
+					this.permitted.add(() -> permitted(parent, made, source));
+				}
+				else {
+					permitted(parent, made, source);
 				}
 				Set<String> modifiers = declaration(made).modifiers();
 				if (!made.isFinal && !made.isSealed && !modifiers.contains("non-sealed")) {
@@ -807,6 +870,13 @@ final class JavaClasses {
 		}
 		for (JavaClass made : all) {
 			members(made, unit);
+		}
+	}
+
+	private static void permitted(JavaClass parent, JavaClass made, Source source) {
+		if (!parent.permits.contains(made)) {
+			throw error(source, declaration(made).pos(), "class is not allowed to extend sealed class: "
+					+ parent.simpleName() + " (as it is not listed in its 'permits' clause)");
 		}
 	}
 
@@ -836,6 +906,8 @@ final class JavaClasses {
 		if (!(type instanceof ClassType named)) {
 			throw error(unit.source(), written.pos(), "unexpected type; required: class, found: " + type);
 		}
+		// a class under one nobody has is one nobody has
+		named.declaration().present();
 		for (JavaType argument : named.arguments()) {
 			if (argument instanceof Wildcard) {
 				throw error(unit.source(), written.pos(),
@@ -891,7 +963,7 @@ final class JavaClasses {
 			if (!made.isSealed) {
 				throw error(source, permitted.pos(), "invalid permits clause: " + made.simpleName() + " is not sealed");
 			}
-			made.permits.add(require(permitted.name(), permitted.pos(), made, unit));
+			made.permits.add(require(permitted.name(), permitted.pos(), made, unit).present());
 		}
 	}
 
@@ -996,7 +1068,10 @@ final class JavaClasses {
 			Set<String> modifiers = method.modifiers();
 			boolean isStatic = modifiers.contains("static");
 			JavaEmitter emitter = null;
-			if (modifiers.contains("native") && !source.library()) {
+			if (modifiers.contains("native") && source.dependency()) {
+				throw unsupported(source, method.pos(), "a native method of a library");
+			}
+			else if (modifiers.contains("native") && !source.library()) {
 				// a Common Lisp function, called with the program's values
 				if (!isStatic || method.body() != null) {
 					throw error(source, method.pos(), isStatic ? "native methods cannot have a body"
@@ -1078,7 +1153,8 @@ final class JavaClasses {
 	/** Whether a type is {@code Throwable} or under it: what a {@code throws} names. */
 	private boolean isThrowable(JavaType type) {
 		return switch (type) {
-			case ClassType named -> named.declaration().isSubclassOf(library("java.lang.Throwable"));
+			case ClassType named ->
+				named.declaration().absent != null || named.declaration().isSubclassOf(library("java.lang.Throwable"));
 			case Variable variable -> variable.parameter().bounds.stream().anyMatch(this::isThrowable);
 			default -> false;
 		};
@@ -1347,6 +1423,20 @@ final class JavaClasses {
 
 	/** {@link #find}, or the error a compiler reports. */
 	JavaClass require(String name, int pos, @Nullable JavaClass context, Unit unit) {
+		if (this.lenient == 0 || !unit.source().dependency()) {
+			return required(name, pos, context, unit);
+		}
+		Import imported = unit.imports().get(name);
+		try {
+			return required(name, pos, context, unit);
+		}
+		catch (LispReadException ex) {
+			String refusedName = this.refusedNames.get(ex);
+			return absent(refusedName != null ? refusedName : imported != null ? imported.name() : name, ex);
+		}
+	}
+
+	private JavaClass required(String name, int pos, @Nullable JavaClass context, Unit unit) {
 		JavaClass found = find(name, context, unit);
 		if (found != null) {
 			accessible(found, unit, pos);
@@ -1358,6 +1448,19 @@ final class JavaClasses {
 			throw unsupported(unit.source(), pos, "the class " + qualified);
 		}
 		throw error(unit.source(), pos, "cannot find symbol: class " + name);
+	}
+
+	/**
+	 * What is said of a simple name read as a value that is no variable: a compiler's
+	 * words, or, where the file imports a class of a JDK's packages under the name, that
+	 * the library does not have the class.
+	 */
+	LispReadException unknown(String name, int pos, Unit unit) {
+		Import imported = unit.imports().get(name);
+		if (imported != null && isPlatform(imported.name())) {
+			return unsupported(unit.source(), pos, "the class " + imported.name());
+		}
+		return error(unit.source(), pos, "cannot find symbol: variable " + name);
 	}
 
 	/** The class of a qualified name: one declared already, or one of the library. */
@@ -1400,7 +1503,7 @@ final class JavaClasses {
 		this.methodParameters = List.of();
 		this.declaringLibrary++;
 		try {
-			declare(JavaParser.parse(text, path, simpleName), new Source(path, text, true));
+			declare(JavaParser.parse(text, path, simpleName), new Source(path, text, JavaClass.Origin.LIBRARY));
 		}
 		finally {
 			this.declaringLibrary--;
@@ -1432,23 +1535,41 @@ final class JavaClasses {
 	 * The class of a qualified name from the file of the program's source tree that the
 	 * name spells -- {@code app.util.Strings} in {@code app/util/Strings.java} under the
 	 * root -- or {@code null}: as a source launcher finds the classes of a program of
-	 * several files, where they are first named. The file's other classes join with it.
+	 * several files, where they are first named. The file's other classes join with it. A
+	 * class no file of the tree declares is looked for the same way under the roots of
+	 * the program's source path, which hold the libraries it uses.
 	 */
 	private @Nullable JavaClass programClass(String name) {
-		if (this.entry == null || isPlatform(name)) {
+		if (isPlatform(name)) {
 			return null;
 		}
-		JavaFiles.Source found = this.files.find(this.entry, this.root + name.replace('.', '/') + ".java");
+		LispReadException refused = this.refused.get(name);
+		if (refused != null) {
+			throw refused;
+		}
+		String path = name.replace('.', '/') + ".java";
+		JavaFiles.Source found = this.entry == null ? null : this.files.find(this.entry, this.root + path);
+		boolean dependency = found == null;
+		if (dependency) {
+			found = this.files.library(path);
+		}
 		if (found == null) {
 			return null;
 		}
 		int dot = name.lastIndexOf('.');
 		String simpleName = name.substring(dot + 1);
-		Source source = new Source(found.path(), found.text(), false);
+		Source source = new Source(found.path(), found.text(),
+				dependency ? JavaClass.Origin.DEPENDENCY : JavaClass.Origin.PROGRAM);
 		Function<String, @Nullable JavaClass> scope = this.localScope;
 		List<TypeParameter> parameters = this.methodParameters;
 		this.localScope = null;
 		this.methodParameters = List.of();
+		if (dependency) {
+			// its declarations name classes as a library's do, and may name one nobody
+			// has
+			this.declaringLibrary++;
+			this.lenient++;
+		}
 		try {
 			CompilationUnit tree = JavaParser.parse(found.text(), found.path(), simpleName);
 			if (!java.util.Objects.equals(tree.packageName(), dot < 0 ? null : name.substring(0, dot))
@@ -1457,11 +1578,68 @@ final class JavaClasses {
 			}
 			declare(tree, source);
 		}
+		catch (LispReadException | JavaClass.Absent ex) {
+			if (!dependency) {
+				throw ex;
+			}
+			LispReadException reason = ex instanceof JavaClass.Absent absent
+					? java.util.Objects.requireNonNull(absent.named.absent) : (LispReadException) ex;
+			withdraw(source, name, reason);
+			throw reason;
+		}
 		finally {
+			if (dependency) {
+				this.declaringLibrary--;
+				this.lenient--;
+			}
 			this.localScope = scope;
 			this.methodParameters = parameters;
 		}
 		return this.classes.get(name);
+	}
+
+	/**
+	 * How many declarations of a library the program uses are being read: a class one of
+	 * them names that nobody has is a name ({@link #absent}), refused where the program
+	 * reaches what it is made of -- as a class missing where a compiled program runs is
+	 * an error of the code that touches it, and not of every class naming it.
+	 */
+	private int lenient;
+
+	/** The classes nobody has that a library's declarations name, by qualified name. */
+	private final Map<String, JavaClass> absent = new HashMap<>();
+
+	/** The classes of a library whose file was refused, with the refusal. */
+	private final Map<String, LispReadException> refused = new HashMap<>();
+
+	/** The class each such refusal is of. */
+	private final Map<LispReadException, String> refusedNames = new IdentityHashMap<>();
+
+	/**
+	 * Takes the classes of a library's file that was refused out of the table: each is a
+	 * name from now on, for the declarations read meanwhile that hold it.
+	 */
+	private void withdraw(Source source, String name, LispReadException reason) {
+		for (JavaClass declared : List.copyOf(this.classes.values())) {
+			if (declared.source == source) {
+				this.classes.remove(declared.name);
+				this.lispNames.remove(declared.lispName(), declared);
+				declared.absent = reason;
+				this.absent.put(declared.name, declared);
+			}
+		}
+		this.refused.put(name, reason);
+		this.refusedNames.put(reason, name);
+		this.version++;
+	}
+
+	/** The name a class nobody has stands for in a library's declaration. */
+	private JavaClass absent(String name, LispReadException reason) {
+		return this.absent.computeIfAbsent(name, key -> {
+			JavaClass made = new JavaClass(key, false, false, false, null, null);
+			made.absent = reason;
+			return made;
+		});
 	}
 
 	/** The library class of a qualified name, which the front end itself relies on. */
@@ -1548,6 +1726,10 @@ final class JavaClasses {
 			return new Variable(parameter);
 		}
 		JavaClass declaration = require(written.name(), written.pos(), context, unit);
+		if (declaration.absent != null) {
+			// a name: how many parameters it takes is not known
+			return new ClassType(declaration, List.of());
+		}
 		if (written.diamond()) {
 			throw error(source, written.pos(), "cannot infer type arguments for " + declaration.simpleName() + " here");
 		}
@@ -1591,7 +1773,10 @@ final class JavaClasses {
 		}
 		ClassType type = new ClassType(declaration, List.copyOf(arguments));
 		Runnable check = () -> withinBounds(type, written, unit);
-		if (this.boundChecks != null) {
+		if (unit.source().dependency()) {
+			// a compiler took the library: its bounds hold, and one may be a name
+		}
+		else if (this.boundChecks != null) {
 			this.boundChecks.add(check);
 		}
 		else {

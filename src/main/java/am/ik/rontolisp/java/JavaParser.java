@@ -86,20 +86,6 @@ final class JavaParser {
 
 	}
 
-	/**
-	 * An error that holds wherever the text is read from, which a probe looking ahead
-	 * reports rather than taking it for another construct: an annotation of no type.
-	 */
-	static final class Known extends LispReadException {
-
-		private static final long serialVersionUID = 1L;
-
-		Known(String message, SourceLocation at) {
-			super(message, at);
-		}
-
-	}
-
 	private static final Set<String> RESERVED = Set.of("abstract", "assert", "boolean", "break", "byte", "case",
 			"catch", "char", "class", "const", "continue", "default", "do", "double", "else", "enum", "extends",
 			"final", "finally", "float", "for", "goto", "if", "implements", "import", "instanceof", "int", "interface",
@@ -319,9 +305,9 @@ final class JavaParser {
 			ClassDeclaration declared = new ClassDeclaration(implicitAt, Set.of("final"), JavaSyntax.Kind.CLASS,
 					implicitName, null, List.of(), List.of(), List.of(), List.of(), implicit.fields, implicit.methods,
 					List.of(), List.copyOf(classes), true);
-			return new CompilationUnit(null, imports, List.of(declared), List.copyOf(this.unchecked));
+			return new CompilationUnit(null, imports, List.of(declared), List.copyOf(this.unchecked), annotated());
 		}
-		return new CompilationUnit(packageName, imports, classes, List.copyOf(this.unchecked));
+		return new CompilationUnit(packageName, imports, classes, List.copyOf(this.unchecked), annotated());
 	}
 
 	/** What a top-level item of a session's buffer is. */
@@ -476,7 +462,8 @@ final class JavaParser {
 				List.of(), List.of(), List.of(), List.of(), fields, methods, List.of(), List.of(), true);
 		List<ClassDeclaration> all = new ArrayList<>(List.of(session));
 		all.addAll(classes);
-		return new SessionTree(new CompilationUnit(null, imports, all, List.copyOf(this.unchecked)), snippets, echo);
+		return new SessionTree(new CompilationUnit(null, imports, all, List.copyOf(this.unchecked), annotated()),
+				snippets, echo);
 	}
 
 	/** Where the item read last ends: where the next token starts. */
@@ -500,7 +487,7 @@ final class JavaParser {
 			}
 			return atIdentifier() && peekIs(1, "(");
 		}
-		catch (Unsupported | Known ex) {
+		catch (Unsupported ex) {
 			throw ex;
 		}
 		catch (LispReadException ex) {
@@ -542,19 +529,24 @@ final class JavaParser {
 	}
 
 	/**
-	 * The annotation types of the library, all of {@code java.lang}: none changes what a
-	 * program that compiles does. Any other name is no type the program can see -- the
-	 * subset has no annotation type of a program's own --, which a compiler refuses, and
-	 * it is the kind whose meaning a processor or a framework would give.
+	 * The annotations read, by where each starts: the class table says whether each names
+	 * an annotation type the file can see ({@code JavaClasses.declare}). By position,
+	 * since a probe looking ahead reads one twice.
 	 */
-	private static final Set<String> ANNOTATIONS = Set.of("Override", "Deprecated", "SuppressWarnings", "SafeVarargs",
-			"FunctionalInterface");
+	private final java.util.TreeMap<Integer, String> annotated = new java.util.TreeMap<>();
+
+	private List<JavaSyntax.Annotation> annotated() {
+		List<JavaSyntax.Annotation> all = new ArrayList<>();
+		this.annotated.forEach((pos, name) -> all.add(new JavaSyntax.Annotation(pos, name)));
+		return all;
+	}
 
 	/**
 	 * Reads annotations, which are dropped but for what a compiler checks of
 	 * {@code @Override} and {@code @FunctionalInterface}: the modifiers of a declaration
 	 * carry those as {@code @Override} and {@code @FunctionalInterface}.
-	 * @return the simple names of the annotations read
+	 * @return the names of the annotations read, one of {@code java.lang} by its simple
+	 * name
 	 */
 	private List<String> annotations() {
 		List<String> names = new ArrayList<>();
@@ -563,9 +555,7 @@ final class JavaParser {
 			this.p++;
 			String name = qualifiedName();
 			String simple = name.startsWith("java.lang.") ? name.substring("java.lang.".length()) : name;
-			if (!ANNOTATIONS.contains(simple)) {
-				throw new Known("cannot find symbol: class " + name, location(pos));
-			}
+			this.annotated.put(pos, name);
 			names.add(simple);
 			if (at("(")) {
 				int depth = 0;
@@ -664,8 +654,10 @@ final class JavaParser {
 	}
 
 	private ClassDeclaration typeDeclaration(Set<String> modifiers) {
-		if (at("@")) {
-			throw unsupported("an annotation type");
+		boolean annotation = eat("@");
+		if (annotation) {
+			// an annotation type is an interface whose methods are its elements
+			modifiers.add(JavaSyntax.ANNOTATION_TYPE);
 		}
 		JavaSyntax.Kind kind = at("enum") ? JavaSyntax.Kind.ENUM : at("record") ? JavaSyntax.Kind.RECORD
 				: at("interface") ? JavaSyntax.Kind.INTERFACE : JavaSyntax.Kind.CLASS;
@@ -716,9 +708,42 @@ final class JavaParser {
 			}
 			while (eat(","));
 		}
-		Body body = body(name, kind);
+		boolean around = this.inAnnotationType;
+		this.inAnnotationType = annotation;
+		Body body;
+		try {
+			body = body(name, kind);
+		}
+		finally {
+			this.inAnnotationType = around;
+		}
 		return new ClassDeclaration(pos, modifiers, kind, name, superclass, interfaces, permits, components,
 				body.constants, body.fields, body.methods, body.initializers, body.nested, false, typeParameters);
+	}
+
+	/**
+	 * Whether the body being read is an annotation type's: an element may have a default.
+	 */
+	private boolean inAnnotationType;
+
+	/**
+	 * The default of an annotation type's element, which nothing reads: up to its
+	 * {@code ;}.
+	 */
+	private void elementDefault() {
+		int depth = 0;
+		while (depth > 0 || !at(";")) {
+			if (current().kind() == Kind.END) {
+				throw error("expected ';' but found the end of the file");
+			}
+			if (at("(") || at("{")) {
+				depth++;
+			}
+			else if (at(")") || at("}")) {
+				depth--;
+			}
+			this.p++;
+		}
 	}
 
 	/** The type parameters a declaration starts with, {@code <T extends A & B, U>}. */
@@ -853,6 +878,9 @@ final class JavaParser {
 			}
 			List<TypeName> thrown = throwsClause();
 			Block body = null;
+			if (this.inAnnotationType && eat("default")) {
+				elementDefault();
+			}
 			if (!eat(";")) {
 				body = block();
 			}
@@ -982,6 +1010,8 @@ final class JavaParser {
 	}
 
 	private TypeName typeName() {
+		// an annotation of the type itself, dropped as one of a declaration is
+		annotations();
 		int pos = current().offset();
 		if (current().kind() == Kind.IDENTIFIER && PRIMITIVES.contains(current().text())) {
 			String name = this.tokens.get(this.p++).text();
@@ -992,8 +1022,10 @@ final class JavaParser {
 		StringBuilder qualified = new StringBuilder(identifier());
 		TypeName enclosing = null;
 		while (true) {
-			while (at(".") && peek(1).kind() == Kind.IDENTIFIER && !RESERVED.contains(peek(1).text())) {
+			while (at(".")
+					&& (peekIs(1, "@") || (peek(1).kind() == Kind.IDENTIFIER && !RESERVED.contains(peek(1).text())))) {
 				this.p++;
+				annotations();
 				qualified.append('.').append(identifier());
 			}
 			List<TypeName> arguments = new ArrayList<>();
@@ -1024,11 +1056,16 @@ final class JavaParser {
 
 	private int dimensions() {
 		int dimensions = 0;
-		while (at("[") && peekIs(1, "]")) {
+		while (true) {
+			int save = this.p;
+			annotations();
+			if (!at("[") || !peekIs(1, "]")) {
+				this.p = save;
+				return dimensions;
+			}
 			this.p += 2;
 			dimensions++;
 		}
-		return dimensions;
 	}
 
 	// ---- statements
@@ -1071,7 +1108,7 @@ final class JavaParser {
 			}
 			return peekIs(1, "=") || peekIs(1, ";") || peekIs(1, ",") || peekIs(1, ":") || peekIs(1, "[");
 		}
-		catch (Unsupported | Known ex) {
+		catch (Unsupported ex) {
 			throw ex;
 		}
 		catch (LispReadException ex) {
@@ -1708,7 +1745,7 @@ final class JavaParser {
 				default -> false;
 			};
 		}
-		catch (Unsupported | Known ex) {
+		catch (Unsupported ex) {
 			throw ex;
 		}
 		catch (LispReadException ex) {
@@ -1910,7 +1947,7 @@ final class JavaParser {
 				return type;
 			}
 		}
-		catch (Unsupported | Known ex) {
+		catch (Unsupported ex) {
 			// read again as an expression, which says what it is
 		}
 		catch (LispReadException ex) {

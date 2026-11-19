@@ -35,7 +35,8 @@ rontolisp notices --native --native-target linux-aarch64 -o NOTICES.txt
 
 ## プログラムが読み込むライブラリ
 
-プログラムが読み込むライブラリ (Quicklisp などの dist、`deps.edn` の依存、`--java-dep` の座標) は、
+プログラムが読み込むライブラリ (Quicklisp などの dist、`deps.edn` の依存、`--java-dep` の座標、
+Java プログラムのソースパス上のライブラリ (`--java-source-path`、`--java-source-dep`)) は、
 プログラムと一緒に出力へコンパイルされますが、そのライセンス表示は自動では出力に入りません。
 `rontolisp notices` もそれらを含めません。ライセンスに従う責任は利用者にあります。多くの
 ライセンスは著作権表示とライセンス本文 (ライブラリの `LICENSE` ファイル) をプログラムに添えることを

@@ -9,7 +9,8 @@
 
 `.java` のファイルはこのサブセットとして読まれます。それ以外のファイルと `-e` では
 `--source-language java` で指定します。プログラムは、開始するファイルと、そのファイルが名前を
-挙げるソースツリー内のファイルです。
+挙げるソースツリー内のファイル、それにソースパス上のライブラリのうちプログラムが到達する部分です
+（[ライブラリを使う](#using-a-library)）。
 
 ```bash
 rontolisp Hello.java                                # interpreter
@@ -109,6 +110,50 @@ $ rontolisp app/Main.java -o main.wasm
 そのすべてを指定できます。`public` でないクラスとアクセス修飾子のないメンバーには、同じ
 パッケージからだけアクセスできます。`protected` のメンバーには、同じパッケージと、そのクラスの
 サブクラスからアクセスできます。
+
+## ライブラリを使う
+
+プログラムが名前を挙げたクラスをソースツリーが宣言していなければ、次にプログラムの
+**ソースパス**から読みます。ソースパスは、使うライブラリのルートをソースのまま並べたものです。
+ライブラリは、プログラムが到達した範囲だけを、どのバックエンドでもプログラムと一緒に
+コンパイルします。出力の横に置くものはなく、`.wasm` はライブラリのうち使う部分を含みます。
+
+```console
+$ rontolisp app/Main.java --java-source-path libs/geo-sources.jar:other/src/main/java
+$ rontolisp app/Main.java --java-source-dep org.example:geo:1.2.0 -o main.wasm
+```
+
+- `--java-source-path` には、ディレクトリと jar をクラスパスと同じ区切りで並べます。クラス
+  `geo.Table` は、最初にそれを持つルートの下の `geo/Table.java` です。
+- `--java-source-dep` には Maven 座標を指定します。繰り返し指定できます。そのライブラリの
+  ソース jar（`geo-1.2.0-sources.jar`）と、それが実行時に依存するもののソース jar が、
+  Maven Central から `~/.m2/repository` を経由してソースパスに加わります。
+  `--java-repository` でリポジトリを追加できます。指定したライブラリがソース jar を公開して
+  いなければ拒否します。依存先がソース jar を公開していない場合は警告にとどめ、そのクラスは
+  無いものとして扱います。
+
+これは `--java-classpath` や `--java-dep` とは別のものです。そちらは Common Lisp や Clojure の
+`java:` 呼び出しのためにホストが実行するクラスファイルで、Java サブセットのプログラムは
+それを呼びません。
+
+ライブラリが動くかどうかは、プログラムがそのどこに到達するかで決まります。コンパイルするのは、
+呼び出したメソッド、インスタンスを作ったクラス、使った static 初期化だけで、それぞれに
+プログラム自身のコードと同じ検査をします。したがって、プログラムが使う部分がサブセットと
+このページに挙げたライブラリクラスの範囲に収まっていれば、そのライブラリは動きます。
+プログラムが到達した先にサブセットに無いものがあれば、ライブラリ内のその位置のエラーになり、
+プログラムからそこへ至る経路を添えます。
+
+```
+geo-sources.jar!/geo/Table.java:44:38: the class java.time.LocalDate is not supported by the experimental Java subset yet
+  reached through geo.Table.column(String,geo.Table.ToDay)
+```
+
+ライブラリが宣言の中でだけ名前を挙げるクラス（プログラムが呼ばないメソッドの引数の型など）は
+素通りします。ライブラリ内のアノテーションは、その型がソースパスに無ければ読み飛ばします。
+コンパイラがクラスファイルをその型なしで読むのと同じで、アノテーションだけの依存は無くても
+かまいません。別のクラスの名前のファイルに宣言されたクラスは、そのファイルを読んだ後で
+見つかります。同じ名前のファイルがプログラムのソースツリーとソースパスの両方にあれば、
+プログラムのものを使います。
 
 ## プロンプトで
 
@@ -249,11 +294,13 @@ $ wasmtime run target/app-component.wasm
 | 文 | ローカル変数（`final`、無名変数 `_`）、`if`、`while`、`do`、`for`、配列または `Iterable` に対する拡張 `for`、コロン形式または矢印形式の `case`・パターン・ガードを持つ `switch`、ラベル付きの文、ラベルの有無を問わない `break` と `continue`、`yield`、`return`、`throw`、`catch`（1 つまたは複数の型）と `finally` を持つ `try`、`try`-with-resources、オブジェクトまたはクラスリテラルに対する `synchronized` |
 | 式 | プリミティブ型のすべての演算子とその変換、文字列連結、条件演算子、代入と複合代入、キャスト（複数の型への `(A & B) x` も、ラムダとメソッド参照のものも）、型・型パターン・レコードパターンに対する `instanceof`、`switch` 式、コンストラクタの型引数の有無を問わない `new`（`new <T>Box(..)`）、クラス本体の有無を問わない `outer.new Inner()`、`Outer.this`、長さを 1 つ以上指定する配列の生成と初期化子、テキストブロック、型引数の有無を問わないメソッド呼び出し、`super.m(..)`、フィールドを読み書きする `super.x`、`Interface.super.m(..)`、`Outer.super.m(..)`、クラス本体の有無を問わない `new Box<>(..)`、任意の関数型インターフェースに対するラムダとメソッド参照（`Type::name`、`expression::name`、`super::name`、`Type::new`、`int[]::new`、`List<String>::size`、`Type::<T>name`、`Type::<T>new`） |
 
-`java.lang` のアノテーション（`@Override`、`@FunctionalInterface`、`@SuppressWarnings`、
-`@SafeVarargs`、`@Deprecated`）は読み飛ばします。ただし `@Override` と `@FunctionalInterface` は
-コンパイラと同じように検査し、`@SuppressWarnings("unchecked")` と `@SafeVarargs` は下記の警告を
-抑止します。それ以外の名前はプログラムのどのアノテーション型でもないので、
-コンパイラと同じように拒否します。`int`、`long`、`short`、`byte` は 2 の補数として桁あふれします。
+アノテーションは、宣言に付いたものも型に付いたもの（`List<@Label String>`）も読み飛ばします。
+ただし `@Override` と `@FunctionalInterface` はコンパイラと同じように検査し、
+`@SuppressWarnings("unchecked")` と `@SafeVarargs` は下記の警告を抑止します。アノテーションの
+名前は、そのファイルから見えるアノテーション型のものでなければなりません。`java.lang` と
+`java.lang.annotation` のもの、プログラムやライブラリが `@interface` で宣言したものがそれに
+あたります。それ以外の名前はコンパイラと同じように拒否します。実行時にアノテーションを読む
+ものはありません。`int`、`long`、`short`、`byte` は 2 の補数として桁あふれします。
 `float` は演算のたびに単精度へ丸めます。`double` と `float` は、読み戻すとその型の同じ値になる
 最短の文字列で表示されます。
 

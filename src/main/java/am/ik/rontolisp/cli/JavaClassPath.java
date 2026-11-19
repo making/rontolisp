@@ -111,7 +111,8 @@ final class JavaClassPath implements AutoCloseable {
 		}
 		if (!coordinates.isEmpty()) {
 			List<RemoteRepository> repositories = repositories(options.repositories());
-			MavenResolver maven = resolver != null ? resolver.apply(repositories) : mavenResolver(repositories);
+			MavenResolver maven = resolver != null ? resolver.apply(repositories)
+					: mavenResolver(repositories, "--java-dep");
 			List<Dependency> requested = new ArrayList<>();
 			for (Artifact artifact : coordinates) {
 				requested.add(Dependency.of(artifact));
@@ -181,13 +182,13 @@ final class JavaClassPath implements AutoCloseable {
 
 	// The repositories, through Maven's settings: the local repository, offline flag,
 	// mirrors, proxies and servers of the global and the user's settings.xml.
-	private static MavenResolver mavenResolver(List<RemoteRepository> repositories) {
+	static MavenResolver mavenResolver(List<RemoteRepository> repositories, String option) {
 		MavenSettings settings;
 		try {
 			settings = MavenSettings.readGlobalAndUser();
 		}
 		catch (MavenResolutionException ex) {
-			throw new IllegalArgumentException("--java-dep: " + ex.getMessage(), ex);
+			throw new IllegalArgumentException(option + ": " + ex.getMessage(), ex);
 		}
 		Path local = settings.localRepository();
 		return MavenResolver.builder()

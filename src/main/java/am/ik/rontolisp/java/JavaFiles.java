@@ -4,9 +4,10 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * The files of a Java program besides the one it starts at: the classes it names that
- * stand in other files of its source tree. This package has no filesystem of its own --
- * the browser playground has none at all -- so the source-language seam hands one in,
- * over the loader the rest of the program reads through ({@code eval/SourceLanguage}).
+ * stand in other files of its source tree, and those of the libraries it uses, under the
+ * roots of its source path. This package has no filesystem of its own -- the browser
+ * playground has none at all -- so the source-language seam hands one in, over the loader
+ * the rest of the program reads through ({@code eval/SourceLanguage}).
  */
 public interface JavaFiles {
 
@@ -20,6 +21,17 @@ public interface JavaFiles {
 	 * @return the file, or {@code null} when there is none to read
 	 */
 	@Nullable Source find(String from, String path);
+
+	/**
+	 * Reads a file of a library the program uses: one under a root of its source path,
+	 * the first root that has it.
+	 * @param path the path below a root, as a class's qualified name spells it
+	 * ({@code org/example/Lists.java})
+	 * @return the file, or {@code null} when no root has it or there is no source path
+	 */
+	default @Nullable Source library(String path) {
+		return null;
+	}
 
 	/**
 	 * A path made absolute, so that the directories above a file can be compared with its

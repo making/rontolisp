@@ -271,10 +271,25 @@ public final class CompileFrontendAccess {
 	 */
 	public static Program file(String source, String entryFile, boolean wasm, boolean component,
 			@Nullable String starlarkStandard) {
+		return file(source, entryFile, wasm, component, SourceStandards.parse(null, starlarkStandard));
+	}
+
+	/**
+	 * {@link #file(String, String, boolean, boolean, String)} with the standards the
+	 * program's files are read against given whole.
+	 * @param source the program text
+	 * @param entryFile the path the text was read from
+	 * @param wasm whether the target is a {@code .wasm} output
+	 * @param component {@code --component}
+	 * @param standards what each language is read against
+	 * @return the expanded program and the feature set it was read with
+	 */
+	public static Program file(String source, String entryFile, boolean wasm, boolean component,
+			SourceStandards standards) {
 		CompileFrontend.Result result = CompileFrontend.run(CompileFrontend.Request.builder()
 			.source(source)
 			.entryFile(entryFile)
-			.standards(SourceStandards.parse(null, starlarkStandard))
+			.standards(standards)
 			.options(CompileFrontend.Options.builder()
 				.wasm(wasm)
 				.component(component)

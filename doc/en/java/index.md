@@ -8,8 +8,9 @@ for rontolisp from the published specifications; no JDK code is read, bundled or
 in a compiled program.
 
 A `.java` file is read as this subset; `--source-language java` says so for any other file
-and for `-e`. A program is the file it starts at and the files of its source tree that
-file names.
+and for `-e`. A program is the file it starts at, the files of its source tree that
+file names, and what it reaches of the libraries on its source path
+([Using a library](#using-a-library)).
 
 ```bash
 rontolisp Hello.java                                # interpreter
@@ -106,6 +107,48 @@ An `import` names a class, a package on demand, `module java.base` (every class 
 library), or with `static` a static member of a class, or all of them on demand. A class
 that is not `public` and a member with no access modifier are reached from their own
 package only, a `protected` member from its package and from the classes under its class.
+
+## Using a library
+
+A class the program names that its source tree does not declare is read next from the
+program's **source path**: the roots of the libraries it uses, as source. A library is
+compiled with the program, on every backend, as far as the program reaches it; nothing is
+carried beside the output, so a `.wasm` holds what it uses of the library.
+
+```console
+$ rontolisp app/Main.java --java-source-path libs/geo-sources.jar:other/src/main/java
+$ rontolisp app/Main.java --java-source-dep org.example:geo:1.2.0 -o main.wasm
+```
+
+- `--java-source-path` takes directories and jars, separated as a class path is. A class
+  `geo.Table` is `geo/Table.java` under the first root that has it.
+- `--java-source-dep` takes Maven coordinates and may be repeated: the sources jar of the
+  library (`geo-1.2.0-sources.jar`) and of what it depends on at run time join the source
+  path, from Maven Central through `~/.m2/repository`; `--java-repository` adds a
+  repository. A library named that publishes no sources jar is refused. One it depends on
+  that publishes none is a warning, and its classes are not there.
+
+This is not `--java-classpath` and `--java-dep`: those are class files the host runs for a
+`java:` call from Common Lisp or Clojure, and a program of the Java subset calls none.
+
+Whether a library works is decided by what the program reaches of it. Only the methods
+called, the classes instantiated and the static initializers used are compiled, each with
+the checks a program's own code gets. So a library works when the part the program uses
+stays within the subset and the library classes this page lists. What the program reaches
+and the subset lacks is an error at the place in the library, with the way the program
+comes to it:
+
+```
+geo-sources.jar!/geo/Table.java:44:38: the class java.time.LocalDate is not supported by the experimental Java subset yet
+  reached through geo.Table.column(String,geo.Table.ToDay)
+```
+
+A class a library names only in a declaration, such as a parameter's type of a method the
+program never calls, is passed by. An annotation in a library whose type is not on the
+source path is dropped, as a compiler reads a class file without it: annotation-only
+dependencies need not be there. A class declared in a file named after another class is
+found once that file was read. A source file of the program wins over one of the same
+name on the source path.
 
 ## At the prompt
 
@@ -244,11 +287,13 @@ $ wasmtime run target/app-component.wasm
 | Statements | local variables (`final`, the unnamed `_`), `if`, `while`, `do`, `for`, the enhanced `for` over an array or an `Iterable`, `switch` with colon or arrow cases, patterns and guards, labeled statements, `break` and `continue` with or without a label, `yield`, `return`, `throw`, `try` with `catch` (of one type or several) and `finally`, `try`-with-resources, `synchronized` over an object or a class literal |
 | Expressions | every operator of the primitive types with its conversions, string concatenation, the conditional, assignments and compound assignments, casts (to several types, `(A & B) x`, a lambda and a method reference too), `instanceof` with a type, a type pattern or a record pattern, `switch` expressions, `new` with or without the constructor's type arguments (`new <T>Box(..)`), `outer.new Inner()` with or without a class body, `Outer.this`, array creation with one or several lengths and initializers, text blocks, method calls with or without type arguments, `super.m(..)`, `super.x` for a field, `Interface.super.m(..)`, `Outer.super.m(..)`, `new Box<>(..)` with or without a class body, lambdas and method references (`Type::name`, `expression::name`, `super::name`, `Type::new`, `int[]::new`, `List<String>::size`, `Type::<T>name`, `Type::<T>new`) for any functional interface |
 
-The annotations of `java.lang` (`@Override`, `@FunctionalInterface`, `@SuppressWarnings`,
-`@SafeVarargs`, `@Deprecated`) are read and dropped, but for what a compiler checks of
-`@Override` and `@FunctionalInterface` and for the warnings `@SuppressWarnings("unchecked")`
-and `@SafeVarargs` silence. Any other name is no annotation type of the program,
-and is refused as a compiler refuses it. An `int`, a `long`, a `short` and a `byte` wrap as two's
+An annotation is read and dropped, on a declaration and on a type (`List<@Label String>`),
+but for what a compiler checks of `@Override` and `@FunctionalInterface` and for the
+warnings `@SuppressWarnings("unchecked")` and `@SafeVarargs` silence. Its name has to be
+one of an annotation type the file can see -- those of `java.lang` and
+`java.lang.annotation`, one the program or a library declares with `@interface` -- and any
+other name is refused as a compiler refuses it. Nothing reads an annotation where the
+program runs. An `int`, a `long`, a `short` and a `byte` wrap as two's
 complement; a `float` is rounded to single precision at every operation. A `double` and a
 `float` print as the shortest text that reads back as the same value of their type.
 

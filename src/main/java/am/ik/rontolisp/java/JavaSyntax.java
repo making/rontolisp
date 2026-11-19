@@ -592,9 +592,23 @@ final class JavaSyntax {
 	 * @param classes its top-level classes
 	 * @param unchecked where the unchecked warnings are suppressed: the declarations
 	 * annotated {@code @SuppressWarnings("unchecked")}
+	 * @param annotations every annotation of the file, in the order written
 	 */
 	record CompilationUnit(@Nullable String packageName, List<Import> imports, List<ClassDeclaration> classes,
-			List<Span> unchecked) {
+			List<Span> unchecked, List<Annotation> annotations) {
+	}
+
+	/** The modifier an annotation type's declaration carries: {@code @interface}. */
+	static final String ANNOTATION_TYPE = "@interface";
+
+	/**
+	 * An annotation as written, which is dropped once its name is known to be one of an
+	 * annotation type.
+	 *
+	 * @param pos its {@code @}
+	 * @param name the name written, simple or qualified
+	 */
+	record Annotation(int pos, String name) {
 	}
 
 	/**

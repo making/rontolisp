@@ -34,7 +34,8 @@ runner, each with its licence text.
 ## Libraries a Program Loads
 
 A library a program loads -- from Quicklisp or another dist, a `deps.edn` dependency, a
-`--java-dep` coordinate -- is compiled into the output with the program, and no notice of
+`--java-dep` coordinate, a library on a Java program's source path (`--java-source-path`,
+`--java-source-dep`) -- is compiled into the output with the program, and no notice of
 it travels there by itself. `rontolisp notices` does not list it: following its licence
 is up to you. Most ask for their copyright notice and licence text (the library's
 `LICENSE` file) to go with the program. A copyleft licence (LGPL or LLGPL, GPL, AGPL,
