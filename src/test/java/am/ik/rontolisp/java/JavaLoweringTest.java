@@ -451,7 +451,7 @@ class JavaLoweringTest {
 				}
 				""", "L5.java")).contains(
 				"(DEFUN |L5.main(String[])| (|args|) (PROGN (WRITE-LINE \"1\") (WRITE-STRING (RONTOLISP::%JAVA-FORMAT "
-						+ "\"%d%n\" (VECTOR 2) #'|%string| NIL)) (LET ((|out| (|java.io.StandardOutput.out()|))) "
+						+ "\"%d%n\" (VECTOR 2) #'|%string| NIL NIL)) (LET ((|out| (|java.io.StandardOutput.out()|))) "
 						+ "(|java.io.PrintStream.println(int)| (OR |out| (RONTOLISP::%JAVA-NPE)) 3) "
 						+ "(|java.io.StandardOutput.flush()| (OR (|java.io.PrintStream.printf(String,Object[])| "
 						+ "(OR (|java.io.StandardOutput.err()|) (RONTOLISP::%JAVA-NPE)) \"%d%n\" (VECTOR 4)) "
@@ -460,6 +460,18 @@ class JavaLoweringTest {
 						+ "(|java.io.StandardOutput.error| |this|) *ERROR-OUTPUT* *STANDARD-OUTPUT*)) (IF |line| "
 						+ "(WRITE-CHAR (CODE-CHAR 10) (IF (|java.io.StandardOutput.error| |this|) *ERROR-OUTPUT* "
 						+ "*STANDARD-OUTPUT*)))))");
+		// A format is handed the function writing a BigInteger and a BigDecimal by their
+		// own digits only in a program that makes one: the NIL of the program above.
+		assertThat(lower("""
+				import java.math.BigInteger;
+				class L5 {
+				    public static void main(String[] args) {
+				        System.out.println(String.format("%d", new BigInteger("1")));
+				    }
+				}
+				""", "L5.java")).anyMatch(
+				form -> form.contains("#'|%string| NIL (LAMBDA (") && form.contains("(RONTOLISP::%JAVA-FORMAT-EXACT ")
+						&& form.contains("(|rontolisp.internal.Exact.read(Object)| "));
 		// A charset named by a constant is the charset: the member taking a Charset is
 		// called, so a program naming UTF-8 holds no other charset's codec. A name
 		// computed where the program runs is looked up among all of them.
@@ -1197,8 +1209,8 @@ class JavaLoweringTest {
 				{ "interface I { default void m() { } } class A implements I { Runnable r = I.super::m; } void main() { }",
 						"1:81: a method reference through a qualified super" },
 				{ "import java.util.Scanner; void main() { Scanner s = null; }", "1:41: the class java.util.Scanner" },
-				{ "void main() { var xs = new ArrayList<String>(); IO.println(xs.stream().spliterator()); }",
-						"1:72: Stream.spliterator()" },
+				{ "void main() { var r = new java.util.Random(1); r.nextBytes(new byte[2]); }",
+						"1:50: Random.nextBytes(byte[])" },
 				{ "void main() { IO.println(\"a\".stripIndent()); }", "1:30: String.stripIndent()" },
 				{ "void main() { IO.println(Collections.EMPTY_LIST); }", "1:38: Collections.EMPTY_LIST" },
 				{ "void main() { var s = new StringBuilder(); s.codePointAt(0); }",

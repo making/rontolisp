@@ -4,6 +4,9 @@
 package java.util;
 
 import java.util.function.Consumer;
+import java.util.function.DoubleConsumer;
+import java.util.function.IntConsumer;
+import java.util.function.LongConsumer;
 
 public interface Spliterator<T> {
 
@@ -46,5 +49,83 @@ public interface Spliterator<T> {
 
     default Comparator<? super T> getComparator() {
         throw new IllegalStateException();
+    }
+
+    interface OfPrimitive<T, T_CONS, T_SPLITR extends OfPrimitive<T, T_CONS, T_SPLITR>> extends Spliterator<T> {
+
+        T_SPLITR trySplit();
+
+        boolean tryAdvance(T_CONS action);
+
+        default void forEachRemaining(T_CONS action) {
+            while (tryAdvance(action)) {
+            }
+        }
+    }
+
+    interface OfInt extends OfPrimitive<Integer, IntConsumer, OfInt> {
+
+        OfInt trySplit();
+
+        boolean tryAdvance(IntConsumer action);
+
+        default void forEachRemaining(IntConsumer action) {
+            while (tryAdvance(action)) {
+            }
+        }
+
+        default boolean tryAdvance(Consumer<? super Integer> action) {
+            Objects.requireNonNull(action);
+            return tryAdvance((int item) -> action.accept(item));
+        }
+
+        default void forEachRemaining(Consumer<? super Integer> action) {
+            Objects.requireNonNull(action);
+            forEachRemaining((int item) -> action.accept(item));
+        }
+    }
+
+    interface OfLong extends OfPrimitive<Long, LongConsumer, OfLong> {
+
+        OfLong trySplit();
+
+        boolean tryAdvance(LongConsumer action);
+
+        default void forEachRemaining(LongConsumer action) {
+            while (tryAdvance(action)) {
+            }
+        }
+
+        default boolean tryAdvance(Consumer<? super Long> action) {
+            Objects.requireNonNull(action);
+            return tryAdvance((long item) -> action.accept(item));
+        }
+
+        default void forEachRemaining(Consumer<? super Long> action) {
+            Objects.requireNonNull(action);
+            forEachRemaining((long item) -> action.accept(item));
+        }
+    }
+
+    interface OfDouble extends OfPrimitive<Double, DoubleConsumer, OfDouble> {
+
+        OfDouble trySplit();
+
+        boolean tryAdvance(DoubleConsumer action);
+
+        default void forEachRemaining(DoubleConsumer action) {
+            while (tryAdvance(action)) {
+            }
+        }
+
+        default boolean tryAdvance(Consumer<? super Double> action) {
+            Objects.requireNonNull(action);
+            return tryAdvance((double item) -> action.accept(item));
+        }
+
+        default void forEachRemaining(Consumer<? super Double> action) {
+            Objects.requireNonNull(action);
+            forEachRemaining((double item) -> action.accept(item));
+        }
     }
 }

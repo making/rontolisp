@@ -3372,6 +3372,40 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	@Override
+	public LispVal exactFunction() {
+		// asked by name: a program that formats and names no such number reads no file
+		// for the question
+		JavaClass exact = null;
+		for (JavaClass declaration : this.classes.all()) {
+			if (declaration.name.equals(JavaIntrinsics.EXACT)) {
+				exact = declaration;
+			}
+		}
+		if (exact == null) {
+			return NIL;
+		}
+		for (JavaClass made : List.copyOf(this.classes.made)) {
+			if (made.isSubclassOf(exact)) {
+				for (Method method : exact.methods) {
+					if (method.isStatic && method.name.equals("read")) {
+						called(method);
+						uses(exact);
+						List<LispVal> parameters = List.of(temporary(), temporary(), temporary(), temporary());
+						LispSymbol argument = temporary();
+						List<LispVal> given = new ArrayList<>(parameters);
+						given.add(argument);
+						List<LispVal> passed = new ArrayList<>(parameters);
+						passed.add(form(JavaNames.function(method), List.of(argument)));
+						return list(cl("lambda"), list(given),
+								runtimeCall("format-exact", passed.toArray(LispVal[]::new)));
+					}
+				}
+			}
+		}
+		return NIL;
+	}
+
+	@Override
 	public LispVal arrayLike(LispVal made, LispVal original) {
 		return this.classes.arrayTypes ? runtimeCall("array-like", made, original) : made;
 	}

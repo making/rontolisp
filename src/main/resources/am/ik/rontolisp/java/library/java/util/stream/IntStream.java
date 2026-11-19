@@ -7,6 +7,7 @@ import java.util.IntSummaryStatistics;
 import java.util.OptionalDouble;
 import java.util.OptionalInt;
 import java.util.PrimitiveIterator;
+import java.util.Spliterator;
 import java.util.function.BiConsumer;
 import java.util.function.IntBinaryOperator;
 import java.util.function.IntConsumer;
@@ -34,6 +35,11 @@ public interface IntStream extends BaseStream<Integer, IntStream> {
         IntStream build();
     }
 
+    interface IntMapMultiConsumer {
+
+        void accept(int value, IntConsumer consumer);
+    }
+
     IntStream filter(IntPredicate predicate);
 
     IntStream map(IntUnaryOperator mapper);
@@ -45,6 +51,8 @@ public interface IntStream extends BaseStream<Integer, IntStream> {
     DoubleStream mapToDouble(IntToDoubleFunction mapper);
 
     IntStream flatMap(IntFunction<? extends IntStream> mapper);
+
+    IntStream mapMulti(IntMapMultiConsumer mapper);
 
     IntStream distinct();
 
@@ -101,6 +109,8 @@ public interface IntStream extends BaseStream<Integer, IntStream> {
     Stream<Integer> boxed();
 
     PrimitiveIterator.OfInt iterator();
+
+    Spliterator.OfInt spliterator();
 
     static Builder builder() {
         return new IntFlow.Building();

@@ -13,4 +13,16 @@ public interface Exact {
      */
     String written(int places);
 
+    /**
+     * What String.format reads of the number: the whole number its digits make, as the
+     * host's integer, and how many of them stand after the point -- null for a number
+     * that has no point.
+     */
+    Object[] digits();
+
+    /** The same of any value: null of one that is no such number. */
+    static Object[] read(Object value) {
+        return value instanceof Exact exact ? exact.digits() : null;
+    }
+
 }

@@ -10,7 +10,9 @@ import java.util.NoSuchElementException;
 import java.util.OptionalDouble;
 import java.util.OptionalInt;
 import java.util.PrimitiveIterator;
+import java.util.Spliterator;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.IntBinaryOperator;
 import java.util.function.IntConsumer;
 import java.util.function.IntFunction;
@@ -114,6 +116,22 @@ public final class IntFlow extends Flow implements IntStream {
     public static IntFlow generated(IntSupplier supplier) {
         given(supplier);
         return new IntFlow(new Origin(), new Ending(), null, () -> supplier.getAsInt());
+    }
+
+    // so many elements of a supplier, each asked for when the stream is read: the
+    // streams of a Random
+    public static IntFlow drawn(IntSupplier supplier, long size) {
+        Ending ending = new Ending();
+        long[] left = { size };
+        return new IntFlow(new Origin(), ending, () -> size, () -> {
+            long n = left[0];
+            if (n == 0) {
+                ending.reached = true;
+                return 0;
+            }
+            left[0] = n - 1;
+            return supplier.getAsInt();
+        });
     }
 
     public static IntFlow concat(IntStream a, IntStream b) {
@@ -228,6 +246,7 @@ public final class IntFlow extends Flow implements IntStream {
         Ending ending = this.ending;
         Ending flat = new Ending();
         Held<IntFlow> inner = new Held<>();
+        within(origin, inner);
         return new IntFlow(origin, flat, null, () -> {
             for (;;) {
                 IntFlow in = inner.value;
@@ -248,6 +267,53 @@ public final class IntFlow extends Flow implements IntStream {
                 if (mapped != null) {
                     inner.value = entered(mapped);
                 }
+            }
+        });
+    }
+
+    // The elements a function hands a consumer each time it is asked for more: what it
+    // hands over in one call is held until the stages after it ask. The function says
+    // through the ending that it has no more.
+    static IntFlow fed(Origin origin, Ending ending, Consumer<IntConsumer> more) {
+        Held<int[]> held = new Held<>();
+        held.value = new int[8];
+        int[] ends = new int[2];
+        IntConsumer take = item -> {
+            int[] all = held.value;
+            int size = ends[1];
+            if (size == all.length) {
+                all = Arrays.copyOf(all, size * 2);
+                held.value = all;
+            }
+            all[size] = item;
+            ends[1] = size + 1;
+        };
+        return new IntFlow(origin, ending, null, () -> {
+            for (;;) {
+                int at = ends[0];
+                if (at < ends[1]) {
+                    ends[0] = at + 1;
+                    return held.value[at];
+                }
+                ends[0] = 0;
+                ends[1] = 0;
+                more.accept(take);
+                if (ending.reached) {
+                    return 0;
+                }
+            }
+        });
+    }
+
+    public IntStream mapMulti(IntStream.IntMapMultiConsumer mapper) {
+        given(mapper);
+        link();
+        IntPull pull = this.pull;
+        Ending ending = this.ending;
+        return fed(origin, ending, to -> {
+            int item = pull.next();
+            if (!ending.reached) {
+                mapper.accept(item, to);
             }
         });
     }
@@ -324,10 +390,12 @@ public final class IntFlow extends Flow implements IntStream {
         IntPull pull = this.pull;
         Ending ending = this.ending;
         long[] left = { maxSize };
+        Told before = origin.told;
         return new IntFlow(origin, ending, most(count, maxSize), () -> {
             long n = left[0];
             if (n == 0) {
                 ending.reached = true;
+                leave(before);
                 return 0;
             }
             left[0] = n - 1;
@@ -358,10 +426,12 @@ public final class IntFlow extends Flow implements IntStream {
         link();
         IntPull pull = this.pull;
         Ending ending = this.ending;
+        Told before = origin.told;
         return new IntFlow(origin, ending, null, () -> {
             int item = pull.next();
             if (!ending.reached && !predicate.test(item)) {
                 ending.reached = true;
+                leave(before);
             }
             return item;
         });
@@ -533,6 +603,7 @@ public final class IntFlow extends Flow implements IntStream {
         Ending ending = this.ending;
         for (int item = pull.next(); !ending.reached; item = pull.next()) {
             if (predicate.test(item)) {
+                leave(origin.told);
                 return true;
             }
         }
@@ -546,6 +617,7 @@ public final class IntFlow extends Flow implements IntStream {
         Ending ending = this.ending;
         for (int item = pull.next(); !ending.reached; item = pull.next()) {
             if (!predicate.test(item)) {
+                leave(origin.told);
                 return false;
             }
         }
@@ -559,6 +631,7 @@ public final class IntFlow extends Flow implements IntStream {
         Ending ending = this.ending;
         for (int item = pull.next(); !ending.reached; item = pull.next()) {
             if (predicate.test(item)) {
+                leave(origin.told);
                 return false;
             }
         }
@@ -568,7 +641,11 @@ public final class IntFlow extends Flow implements IntStream {
     public OptionalInt findFirst() {
         link();
         int item = pull.next();
-        return ending.reached ? OptionalInt.empty() : OptionalInt.of(item);
+        if (ending.reached) {
+            return OptionalInt.empty();
+        }
+        leave(origin.told);
+        return OptionalInt.of(item);
     }
 
     public OptionalInt findAny() {
@@ -591,6 +668,94 @@ public final class IntFlow extends Flow implements IntStream {
         link();
         IntPull pull = this.pull;
         return new ObjectFlow<Integer>(origin, ending, count, () -> pull.next());
+    }
+
+    // the elements an iterator gives, counted where a count is given
+    public static IntFlow over(PrimitiveIterator.OfInt each, Count count) {
+        Ending ending = new Ending();
+        return new IntFlow(new Origin(), ending, count, () -> {
+            if (each.hasNext()) {
+                return each.nextInt();
+            }
+            ending.reached = true;
+            return 0;
+        });
+    }
+
+    // the elements a spliterator gives: the supplier is asked for it at the first pull, or
+    // at the count where the characteristics say SIZED
+    public static IntFlow split(Supplier<? extends Spliterator.OfInt> supplier, int characteristics,
+            boolean parallel) {
+        Ending ending = new Ending();
+        Held<Spliterator.OfInt> source = new Held<>();
+        int[] taken = new int[1];
+        IntConsumer take = item -> taken[0] = item;
+        Count count = (characteristics & Spliterator.SIZED) == 0 ? null
+                : () -> supplied(source, supplier).getExactSizeIfKnown();
+        IntFlow flow = new IntFlow(new Origin(), ending, count, () -> {
+            if (supplied(source, supplier).tryAdvance(take)) {
+                return taken[0];
+            }
+            ending.reached = true;
+            return 0;
+        });
+        flow.origin.parallel = parallel;
+        return flow;
+    }
+
+    private static Spliterator.OfInt supplied(Held<Spliterator.OfInt> source,
+            Supplier<? extends Spliterator.OfInt> supplier) {
+        Spliterator.OfInt spliterator = source.value;
+        if (spliterator == null) {
+            spliterator = supplier.get();
+            source.value = spliterator;
+        }
+        return spliterator;
+    }
+
+    // The spliterator of an iterator's numbers. A size given is reported, and stays what
+    // it is while the numbers are taken; it is the exact one where the marks say SIZED.
+    public static Spliterator.OfInt walk(PrimitiveIterator.OfInt each, long size, int marks) {
+        Count given = size < 0 ? null : () -> size;
+        return new Walk(over(each, null), (marks & Spliterator.SIZED) == 0 ? null : given, given, marks, false);
+    }
+
+    // the spliterator of an array's numbers, reporting the marks given
+    public static Spliterator.OfInt walk(int[] array, int from, int to, int marks) {
+        IntFlow flow = of(array, from, to);
+        return new Walk(flow, flow.count, null, marks, true);
+    }
+
+    public Spliterator.OfInt spliterator() {
+        link();
+        return new Walk(this, count, null, marks(), true);
+    }
+
+    private static final class Walk extends Walked<Integer> implements Spliterator.OfInt {
+
+        private final IntPull pull;
+
+        private final Ending ending;
+
+        Walk(IntFlow flow, Count sized, Count about, int marks, boolean counted) {
+            super(sized, about, marks, counted);
+            this.pull = flow.pull;
+            this.ending = flow.ending;
+        }
+
+        public boolean tryAdvance(IntConsumer action) {
+            given(action);
+            int item = pull.next();
+            if (!took(ending)) {
+                return false;
+            }
+            action.accept(item);
+            return true;
+        }
+
+        public Spliterator.OfInt trySplit() {
+            return null;
+        }
     }
 
     public PrimitiveIterator.OfInt iterator() {

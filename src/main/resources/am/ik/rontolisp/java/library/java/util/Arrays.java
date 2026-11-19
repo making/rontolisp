@@ -95,6 +95,30 @@ public final class Arrays {
                 Spliterator.ORDERED | Spliterator.IMMUTABLE);
     }
 
+    public static Spliterator.OfInt spliterator(int[] array) {
+        return spliterator(array, 0, array.length);
+    }
+
+    public static Spliterator.OfInt spliterator(int[] array, int fromIndex, int toIndex) {
+        return Spliterators.spliterator(array, fromIndex, toIndex, Spliterator.ORDERED | Spliterator.IMMUTABLE);
+    }
+
+    public static Spliterator.OfLong spliterator(long[] array) {
+        return spliterator(array, 0, array.length);
+    }
+
+    public static Spliterator.OfLong spliterator(long[] array, int fromIndex, int toIndex) {
+        return Spliterators.spliterator(array, fromIndex, toIndex, Spliterator.ORDERED | Spliterator.IMMUTABLE);
+    }
+
+    public static Spliterator.OfDouble spliterator(double[] array) {
+        return spliterator(array, 0, array.length);
+    }
+
+    public static Spliterator.OfDouble spliterator(double[] array, int fromIndex, int toIndex) {
+        return Spliterators.spliterator(array, fromIndex, toIndex, Spliterator.ORDERED | Spliterator.IMMUTABLE);
+    }
+
     @SafeVarargs
     public static <T> List<T> asList(T... a) {
         return new ArrayView<>(a);

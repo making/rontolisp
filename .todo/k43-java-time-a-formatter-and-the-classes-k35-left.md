@@ -7,7 +7,7 @@ Difficulty: High
 reading and writing its ISO-8601 form by a scanner of the library's own (`IsoText`).
 Left, most valuable first; each is refused by name today.
 
-- **`DateTimeFormatter`**: `ofPattern` (with a `Locale`: `.todo/k26` on what a locale
+- **`DateTimeFormatter`**: `ofPattern` (with a `Locale`: `.todo/k47` on what a locale
   is here), the `ISO_*` constants, `format` / `parse` of a formatter and the
   `format(DateTimeFormatter)` / `parse(CharSequence, DateTimeFormatter)` of each class,
   `withResolverStyle` and `ResolverStyle`, `DateTimeFormatterBuilder`. YAVI names it

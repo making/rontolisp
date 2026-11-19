@@ -82,6 +82,9 @@ final class JavaIntrinsics {
 
 	static final String CHARSET = "java.nio.charset.Charset";
 
+	/** The interface of the numbers a format writes by their own digits. */
+	static final String EXACT = "rontolisp.internal.Exact";
+
 	private static final String STREAM = "java.util.stream.Stream";
 
 	private static final String INT_STREAM = "java.util.stream.IntStream";
@@ -791,12 +794,13 @@ final class JavaIntrinsics {
 	 * {@code String.format} over a control and the array of its arguments. The function
 	 * answering any value's {@code hashCode()} goes with it only where the control may
 	 * hold the conversion that asks for one -- it is no constant, or names {@code %h} --,
-	 * so that no other program holds that function for its formats.
+	 * so that no other program holds that function for its formats; the function reading
+	 * a {@code BigInteger} and a {@code BigDecimal} only in a program that makes one.
 	 */
 	private static LispVal formatted(Context lowering, Typed control, LispVal arguments) {
 		boolean hashes = !(control.constant() instanceof String text) || HASH_CONVERSION.matcher(text).find();
 		return runtimeCall("format", control.form(), arguments, lowering.stringFunction(),
-				hashes ? lowering.hashFunction() : JavaForms.NIL);
+				hashes ? lowering.hashFunction() : JavaForms.NIL, lowering.exactFunction());
 	}
 
 	/** An argument as the text {@code String.valueOf} makes of it. */

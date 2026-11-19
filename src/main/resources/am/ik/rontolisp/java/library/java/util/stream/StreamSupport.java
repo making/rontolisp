@@ -6,6 +6,9 @@ package java.util.stream;
 import java.util.Objects;
 import java.util.Spliterator;
 import java.util.function.Supplier;
+import rontolisp.internal.DoubleFlow;
+import rontolisp.internal.IntFlow;
+import rontolisp.internal.LongFlow;
 import rontolisp.internal.ObjectFlow;
 
 public final class StreamSupport {
@@ -22,5 +25,38 @@ public final class StreamSupport {
             boolean parallel) {
         Objects.requireNonNull(supplier);
         return ObjectFlow.split(supplier, characteristics, parallel);
+    }
+
+    public static IntStream intStream(Spliterator.OfInt spliterator, boolean parallel) {
+        Objects.requireNonNull(spliterator);
+        return IntFlow.split(() -> spliterator, spliterator.characteristics(), parallel);
+    }
+
+    public static IntStream intStream(Supplier<? extends Spliterator.OfInt> supplier, int characteristics,
+            boolean parallel) {
+        Objects.requireNonNull(supplier);
+        return IntFlow.split(supplier, characteristics, parallel);
+    }
+
+    public static LongStream longStream(Spliterator.OfLong spliterator, boolean parallel) {
+        Objects.requireNonNull(spliterator);
+        return LongFlow.split(() -> spliterator, spliterator.characteristics(), parallel);
+    }
+
+    public static LongStream longStream(Supplier<? extends Spliterator.OfLong> supplier, int characteristics,
+            boolean parallel) {
+        Objects.requireNonNull(supplier);
+        return LongFlow.split(supplier, characteristics, parallel);
+    }
+
+    public static DoubleStream doubleStream(Spliterator.OfDouble spliterator, boolean parallel) {
+        Objects.requireNonNull(spliterator);
+        return DoubleFlow.split(() -> spliterator, spliterator.characteristics(), parallel);
+    }
+
+    public static DoubleStream doubleStream(Supplier<? extends Spliterator.OfDouble> supplier, int characteristics,
+            boolean parallel) {
+        Objects.requireNonNull(supplier);
+        return DoubleFlow.split(supplier, characteristics, parallel);
     }
 }

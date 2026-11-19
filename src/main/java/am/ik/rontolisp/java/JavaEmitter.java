@@ -80,6 +80,13 @@ interface JavaEmitter {
 		LispVal hashFunction();
 
 		/**
+		 * The function answering a conversion of {@code String.format} for a number
+		 * written by its own digits (a {@code BigInteger}, a {@code BigDecimal}),
+		 * {@code nil} in a program that makes no such number.
+		 */
+		LispVal exactFunction();
+
+		/**
 		 * A call of a static method of the library's Java source: a member written in
 		 * Java, found by its class, its name and how many arguments it takes.
 		 */

@@ -10,7 +10,9 @@ import java.util.NoSuchElementException;
 import java.util.OptionalDouble;
 import java.util.OptionalLong;
 import java.util.PrimitiveIterator;
+import java.util.Spliterator;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.LongBinaryOperator;
 import java.util.function.LongConsumer;
 import java.util.function.LongFunction;
@@ -120,6 +122,22 @@ public final class LongFlow extends Flow implements LongStream {
     public static LongFlow generated(LongSupplier supplier) {
         given(supplier);
         return new LongFlow(new Origin(), new Ending(), null, () -> supplier.getAsLong());
+    }
+
+    // so many elements of a supplier, each asked for when the stream is read: the
+    // streams of a Random
+    public static LongFlow drawn(LongSupplier supplier, long size) {
+        Ending ending = new Ending();
+        long[] left = { size };
+        return new LongFlow(new Origin(), ending, () -> size, () -> {
+            long n = left[0];
+            if (n == 0) {
+                ending.reached = true;
+                return 0;
+            }
+            left[0] = n - 1;
+            return supplier.getAsLong();
+        });
     }
 
     public static LongFlow concat(LongStream a, LongStream b) {
@@ -234,6 +252,7 @@ public final class LongFlow extends Flow implements LongStream {
         Ending ending = this.ending;
         Ending flat = new Ending();
         Held<LongFlow> inner = new Held<>();
+        within(origin, inner);
         return new LongFlow(origin, flat, null, () -> {
             for (;;) {
                 LongFlow in = inner.value;
@@ -254,6 +273,53 @@ public final class LongFlow extends Flow implements LongStream {
                 if (mapped != null) {
                     inner.value = entered(mapped);
                 }
+            }
+        });
+    }
+
+    // The elements a function hands a consumer each time it is asked for more: what it
+    // hands over in one call is held until the stages after it ask. The function says
+    // through the ending that it has no more.
+    static LongFlow fed(Origin origin, Ending ending, Consumer<LongConsumer> more) {
+        Held<long[]> held = new Held<>();
+        held.value = new long[8];
+        int[] ends = new int[2];
+        LongConsumer take = item -> {
+            long[] all = held.value;
+            int size = ends[1];
+            if (size == all.length) {
+                all = Arrays.copyOf(all, size * 2);
+                held.value = all;
+            }
+            all[size] = item;
+            ends[1] = size + 1;
+        };
+        return new LongFlow(origin, ending, null, () -> {
+            for (;;) {
+                int at = ends[0];
+                if (at < ends[1]) {
+                    ends[0] = at + 1;
+                    return held.value[at];
+                }
+                ends[0] = 0;
+                ends[1] = 0;
+                more.accept(take);
+                if (ending.reached) {
+                    return 0;
+                }
+            }
+        });
+    }
+
+    public LongStream mapMulti(LongStream.LongMapMultiConsumer mapper) {
+        given(mapper);
+        link();
+        LongPull pull = this.pull;
+        Ending ending = this.ending;
+        return fed(origin, ending, to -> {
+            long item = pull.next();
+            if (!ending.reached) {
+                mapper.accept(item, to);
             }
         });
     }
@@ -330,10 +396,12 @@ public final class LongFlow extends Flow implements LongStream {
         LongPull pull = this.pull;
         Ending ending = this.ending;
         long[] left = { maxSize };
+        Told before = origin.told;
         return new LongFlow(origin, ending, most(count, maxSize), () -> {
             long n = left[0];
             if (n == 0) {
                 ending.reached = true;
+                leave(before);
                 return 0;
             }
             left[0] = n - 1;
@@ -364,10 +432,12 @@ public final class LongFlow extends Flow implements LongStream {
         link();
         LongPull pull = this.pull;
         Ending ending = this.ending;
+        Told before = origin.told;
         return new LongFlow(origin, ending, null, () -> {
             long item = pull.next();
             if (!ending.reached && !predicate.test(item)) {
                 ending.reached = true;
+                leave(before);
             }
             return item;
         });
@@ -539,6 +609,7 @@ public final class LongFlow extends Flow implements LongStream {
         Ending ending = this.ending;
         for (long item = pull.next(); !ending.reached; item = pull.next()) {
             if (predicate.test(item)) {
+                leave(origin.told);
                 return true;
             }
         }
@@ -552,6 +623,7 @@ public final class LongFlow extends Flow implements LongStream {
         Ending ending = this.ending;
         for (long item = pull.next(); !ending.reached; item = pull.next()) {
             if (!predicate.test(item)) {
+                leave(origin.told);
                 return false;
             }
         }
@@ -565,6 +637,7 @@ public final class LongFlow extends Flow implements LongStream {
         Ending ending = this.ending;
         for (long item = pull.next(); !ending.reached; item = pull.next()) {
             if (predicate.test(item)) {
+                leave(origin.told);
                 return false;
             }
         }
@@ -574,7 +647,11 @@ public final class LongFlow extends Flow implements LongStream {
     public OptionalLong findFirst() {
         link();
         long item = pull.next();
-        return ending.reached ? OptionalLong.empty() : OptionalLong.of(item);
+        if (ending.reached) {
+            return OptionalLong.empty();
+        }
+        leave(origin.told);
+        return OptionalLong.of(item);
     }
 
     public OptionalLong findAny() {
@@ -591,6 +668,94 @@ public final class LongFlow extends Flow implements LongStream {
         link();
         LongPull pull = this.pull;
         return new ObjectFlow<Long>(origin, ending, count, () -> pull.next());
+    }
+
+    // the elements an iterator gives, counted where a count is given
+    public static LongFlow over(PrimitiveIterator.OfLong each, Count count) {
+        Ending ending = new Ending();
+        return new LongFlow(new Origin(), ending, count, () -> {
+            if (each.hasNext()) {
+                return each.nextLong();
+            }
+            ending.reached = true;
+            return 0;
+        });
+    }
+
+    // the elements a spliterator gives: the supplier is asked for it at the first pull, or
+    // at the count where the characteristics say SIZED
+    public static LongFlow split(Supplier<? extends Spliterator.OfLong> supplier, int characteristics,
+            boolean parallel) {
+        Ending ending = new Ending();
+        Held<Spliterator.OfLong> source = new Held<>();
+        long[] taken = new long[1];
+        LongConsumer take = item -> taken[0] = item;
+        Count count = (characteristics & Spliterator.SIZED) == 0 ? null
+                : () -> supplied(source, supplier).getExactSizeIfKnown();
+        LongFlow flow = new LongFlow(new Origin(), ending, count, () -> {
+            if (supplied(source, supplier).tryAdvance(take)) {
+                return taken[0];
+            }
+            ending.reached = true;
+            return 0;
+        });
+        flow.origin.parallel = parallel;
+        return flow;
+    }
+
+    private static Spliterator.OfLong supplied(Held<Spliterator.OfLong> source,
+            Supplier<? extends Spliterator.OfLong> supplier) {
+        Spliterator.OfLong spliterator = source.value;
+        if (spliterator == null) {
+            spliterator = supplier.get();
+            source.value = spliterator;
+        }
+        return spliterator;
+    }
+
+    // The spliterator of an iterator's numbers. A size given is reported, and stays what
+    // it is while the numbers are taken; it is the exact one where the marks say SIZED.
+    public static Spliterator.OfLong walk(PrimitiveIterator.OfLong each, long size, int marks) {
+        Count given = size < 0 ? null : () -> size;
+        return new Walk(over(each, null), (marks & Spliterator.SIZED) == 0 ? null : given, given, marks, false);
+    }
+
+    // the spliterator of an array's numbers, reporting the marks given
+    public static Spliterator.OfLong walk(long[] array, int from, int to, int marks) {
+        LongFlow flow = of(array, from, to);
+        return new Walk(flow, flow.count, null, marks, true);
+    }
+
+    public Spliterator.OfLong spliterator() {
+        link();
+        return new Walk(this, count, null, marks(), true);
+    }
+
+    private static final class Walk extends Walked<Long> implements Spliterator.OfLong {
+
+        private final LongPull pull;
+
+        private final Ending ending;
+
+        Walk(LongFlow flow, Count sized, Count about, int marks, boolean counted) {
+            super(sized, about, marks, counted);
+            this.pull = flow.pull;
+            this.ending = flow.ending;
+        }
+
+        public boolean tryAdvance(LongConsumer action) {
+            given(action);
+            long item = pull.next();
+            if (!took(ending)) {
+                return false;
+            }
+            action.accept(item);
+            return true;
+        }
+
+        public Spliterator.OfLong trySplit() {
+            return null;
+        }
     }
 
     public PrimitiveIterator.OfLong iterator() {

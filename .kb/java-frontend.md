@@ -50,8 +50,8 @@ collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
 (2026-11-19); a library read as source from the program's source path and lowered as far
 as the program reaches it, annotation types and type annotations, an exact method
 reference in a call's applicability: k24 (2026-11-19); what comes after is `.todo/k15`,
-`k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22` and `k26` (what k00, k11, k06, k07, k08,
-k10 and k12 left); YAVI compiled to wasm in both of its styles, the milestone k24 was
+`k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22` and `k47` (what k00, k11, k06, k07, k08,
+k10, k12 and k26 left); YAVI compiled to wasm in both of its styles, the milestone k24 was
 asked for, and where its bytes go: k33 (2026-11-20; "YAVI compiled to wasm" below); the
 Maven plugin's `wasm` goal reading a project's
 dependencies from their sources jars, a session reading the source path: k32 (2026-11-20;
@@ -65,7 +65,10 @@ itself: k30 (2026-11-20; `.todo/k39`, `k40` and `k41` are what it found beside i
 instants read from their texts, the fields and units, the zones of one offset, a clock):
 k35 (2026-11-20; `.todo/k42` and `k43` are what it left); `java.util.Date` and `java.sql`'s
 `Date`, `Time`, `Timestamp`, `import module java.sql`, the two levels of imports on demand:
-k37 (2026-11-20).
+k37 (2026-11-20); the stream members k12 left (`mapMulti`, the gatherers, a stream's and
+the numbers' spliterators, the streams of a `Random`, the collectors of a concurrent
+map), a stream inside `flatMap` closed where its stream stops asking, and
+`String.format` of a `BigInteger` and a `BigDecimal`: k26 (2026-11-20).
 
 ## Where it sits
 
@@ -410,10 +413,12 @@ in both of the library's styles**: `ValidatorBuilder` since k29 (2026-11-19), th
 mechanism was asked for.
 
 - **The examples**, each checked in `examples.yaml` on the four (`javaSourceDep`):
-  `examples/java/yavi/Member.java` (wasm 662,980 B) and `examples/java/yavi/Booking.java`
+  `examples/java/yavi/Member.java` (wasm 663,174 B) and `examples/java/yavi/Booking.java`
   -- a schema of a string, an enum, a `LocalDate` and an integer read from a map and,
-  through `readingParameters()`, from a form's strings: wasm 1,203,365 B, the component
-  1,207,747, the jar 453,082 (2026-11-20, k45); on the exec jar the interpreter 7.5 s,
+  through `readingParameters()`, from a form's strings: wasm 1,204,017 B, the component
+  1,208,399, the jar 453,397 (2026-11-20, k26: 194 and 652 B over k45's 662,980 and
+  1,203,365, the pipeline's record and the third function of a format); on the exec jar
+  the interpreter 7.5 s,
   `-o booking.wasm` 15.3 s. Both are written here, like the fixture. The Maven plugin builds such a project
   (`jvm-export.md`, "The plugin's `wasm` goal").
 - **What stood between** (each fixed for every program, in the order met): annotations
@@ -1035,7 +1040,7 @@ measured programs.
   the forms name. A program's own classes are lowered whole, as before. A local or anonymous
   class of the library is lowered where its method is.
 - **A missing member of a library class is refused by name**, source or intrinsic
-  (`Stream.spliterator()`), never `cannot find symbol`.
+  (`Random.nextBytes(byte[])`), never `cannot find symbol`.
 - **`HashMap` keeps the order a program sees** (the JDK 25 running the corpus is the oracle,
   `a-hash-map-finds-a-key-by-equals-and-keeps-the-order-a-program-sees`): hash folded with its
   upper half, masked by a power of two that doubles past three quarters, the table made at the
@@ -1081,7 +1086,9 @@ measured programs.
   constants of a text are one object and `intern()` answers it. A program with no such
   comparison is unchanged. `new Object()` is `(make-array 0 :fill-pointer 0)`: no other value
   of a program is a vector with a fill pointer that is no string.
-- **`String.format`** is `%java-format` over the argument array and the program's `%string`;
+- **`String.format`** is `%java-format` over the argument array and the program's `%string`
+  (and, where the program makes a `BigInteger` or a `BigDecimal`, the function writing
+  one by its digits: "java.math");
   `%f`/`%e` round the SHORTEST digits half up (`0.15` at one place is `0.2`, measured against
   the JDK), which is why they start from `%java-double-string`. `Double.parseDouble` is exact
   integer arithmetic then `%java-nearest-double` (ties to even, subnormals); `doubleToLongBits`
@@ -1097,7 +1104,7 @@ measured programs.
 - A method reference naming a class fits a functional interface by its arity when a call has
   several candidates (`takes`): `thenComparing(Point::label)` against `thenComparing(Comparator)`.
 - Sizes on wasm (2026-11-17, before / after): a list added to and read 3,732 / 25,592; one
-  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/k26` holds what is
+  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/k47` holds what is
   left and the leads.
 - **The library is Java a JDK compiles** (j79, decided by measuring): javac of JDK 25 takes
   all 139 files as a patch of its own `java.base` (`--patch-module java.base=<library>`) with
@@ -1209,7 +1216,7 @@ measured programs.
   `toUpperCase` / `toLowerCase` (the host's fold is uniform), and `digit` /
   `getNumericValue`, which still ask the host: a digit outside ASCII is read on the
   interpreter and the JVM and not on wasm, `Integer.parseInt` with it (`deviations.md`,
-  `.todo/k26`: a table there would be in every program that parses a number).
+  `.todo/k47`: a table there would be in every program that parses a number).
 - **`%h` hands the format the program's `hashCode()` only where the control may ask**
   (`JavaIntrinsics.formatted`): `%java-format` takes the function as its fourth argument,
   `nil` when the control is a constant with no `%h`. The arm itself is 401 B in every
@@ -1235,7 +1242,7 @@ measured programs.
   adjustments, the arithmetic over 17 durations, 103 texts through `parse` with each
   refusal's message, index and cause -- prints a JDK 25's lines on the four backends
   (`.todo/artefacts/k05-java-front-end-what-the-everyday-members-and-utf-16-slice-left/Dur.java`).
-  Not there: `dividedBy` (`.todo/k26`). `between`, `of` / `get` of a `TemporalUnit` and
+  Not there: `dividedBy` (`.todo/k47`). `between`, `of` / `get` of a `TemporalUnit` and
   `truncatedTo` came with the rest of `java.time` (k35, "java.time" below), which left
   a program of a `Duration` alone as it was (155,029 B of wasm before and after).
   `Thread.sleep(Duration)` is there (a duration below zero is no sleep, zero is one an
@@ -1315,7 +1322,7 @@ measured programs.
   first, so an array too short keeps the high one's place) / `codePointAt` of an array
   / `reverseBytes`, `OptionalLong` and `HttpHeaders.firstValueAsLong`: each in
   `Support` or a source class, 866 probe lines identical to JDK 25 on four backends
-  (`Members.java` beside `Dur.java`). Still refused: `.todo/k26`.
+  (`Members.java` beside `Dur.java`). Still refused: `.todo/k47`.
 
 ## java.math (2026-11-20, k31)
 
@@ -1404,12 +1411,34 @@ leaves open is a JDK 25's answers to a grid.
   (a `long`, two doubles, a `BigDecimal`, a `BigInteger` given for an `Integer`)
   1,095,450 B. `shelf/Price.java` beside the grid (`_bigDecimal`, `_bigInteger`, their
   bounds in the messages) prints a JDK's 19 lines on the four: wasm 1,034,348 B.
-- Not there (`.todo/k26`): the primes (`isProbablePrime`, `nextProbablePrime`,
-  `probablePrime`, the constructors of random bits), refused by name; `%d` / `%f` / `%e`
-  of the two in `String.format`, an `IllegalFormatConversionException` (`deviations.md`).
+- **`String.format` writes the two by their own digits** (k26, 2026-11-20): `%d`, `%x`,
+  `%X` and `%o` of a `BigInteger`, `%f`, `%e` and `%E` of a `BigDecimal`, and the
+  `IllegalFormatConversionException` naming the class for the conversions each does not
+  take. The lowering hands `%java-format` a third function beside `%string` and the hash:
+  `(lambda (conversion flags width precision argument) (%java-format-exact .. (Exact.read
+  argument)))`, and only in a program that MADE a class under `rontolisp.internal.Exact`
+  (`JavaLowering.exactFunction`, asked by name so that no file is read for the question;
+  `nil` otherwise). `Exact.digits()` answers `#(integer scale)`, the scale `null` for a
+  `BigInteger`. Learned from a JDK 25 over 1,006 lines (`Fmt.java` of the k26 artefacts):
+  `%x` / `%o` write the sign ahead of the digits (`-ff`, `-0xff`, `(ff)`), the zeros of
+  a width stand between the prefix and the digits; `%f` / `%e` round half up; a zero's
+  exponent is the place its scale gives it (`0.00` is `0.000000e-02`). **Measured**: a
+  program that formats and makes no such number is 139 B smaller than before (154,286 ->
+  154,147 B of wasm: the rounding of digits became one function for both); one that
+  formats and makes a `BigInteger` pays 8,111 B (184,122 -> 192,233) whatever it formats,
+  since the arguments are an `Object[]` -- `%java-format-exact` 3.7 KB, the radix and
+  the scientific forms 2.5 KB, `_dispatch_5` 0.5 KB.
+  Found beside it: the zeros of a width were written ahead of a negative number's
+  parenthesis (`%(010d` of -5 was `0000000(5)`), now inside it as a JDK writes them.
+- Not there (`.todo/k47`): the primes (`isProbablePrime`, `nextProbablePrime`,
+  `probablePrime`, the constructors of random bits), refused by name.
 - Pins: the `standalone:` case `big-integers-and-decimals-compute-round-and-print-exactly`
   (a file of its own: a class under `Number` changes how the corpus program lowers
-  `Number`); `valueOf(int)` of an enum in `an-enum-is-a-class-whose-constants-are-made-once`.
+  `Number`; its `formatted`: 27 controls over five integers, 25 over sixteen decimals);
+  the parentheses line of `format-renders-the-conversions-programs-write`;
+  `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches` (the third
+  function of a format, `NIL` in a program with no such number); `valueOf(int)` of an
+  enum in `an-enum-is-a-class-whose-constants-are-made-once`.
 
 ## java.time (2026-11-20, k35)
 
@@ -1523,7 +1552,7 @@ documentation; what it leaves open is a JDK 25's answers to a grid. `java.time.c
   `MonthDay`, `OffsetTime`, `InstantSource`, `TemporalAdjusters`, `TemporalQuery` /
   `query`, `IsoFields` / `WeekFields`, the calendars and eras, `getDisplayName`,
   `datesUntil`, the transitions of `ZoneRules`, `ZoneId.getAvailableZoneIds`; each
-  refused by name. `Duration.dividedBy` stays `.todo/k26`'s.
+  refused by name. `Duration.dividedBy` stays `.todo/k47`'s.
 - Pins: java-spec `dates-times-and-instants-are-read-from-their-texts-and-computed-with`
   (146 lines of the grid's kinds); a class the subset lacks is `java.util.Currency` and
   `java.util.EventListener` in `JavaLoweringTest#aLibraryOfTheSourcePathIsLoweredAsFarAsTheProgramReaches`
@@ -1724,7 +1753,7 @@ holds none of it.** No files: `File`, `FileReader`, `java.nio.file` stay refused
   string CONSTANT holding one is `?` on wasm. Measured 2026-11-18 (j98): the two halves
   of a pair appended to a `StringBuilder` one `char` after the other are a string of
   length 2 on the interpreter, 1 on the JVM (a JDK: 2 units, here one character), and
-  on wasm no `equals` of the character they spell (`.todo/k26`).
+  on wasm no `equals` of the character they spell (`.todo/k47`).
 - **`Double.longBitsToDouble`, `Float.intBitsToFloat`** are `%java-bits-binary` over
   `%java-nearest-binary` (exact, the subnormals included).
 - **Measured** (2026-11-17, the box and method of "Measured" below; wasm / class bytes, then
@@ -1782,6 +1811,56 @@ the probes are `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-dura
   order given, the first failure thrown holding the others suppressed. **Everything
   runs in order on the calling thread**: `parallel()` only sets the flag, a combiner is
   never called (`deviations.md`).
+- **A stage is told that no more is asked** (k26, 2026-11-20; `Flow.Told`, the chain
+  `Origin.told`). A pull cannot know that the stage after it stopped, so the stages
+  that hold something register a function of one `int` with the pipeline, each calling
+  the one registered before it: `LEAVE` on the way up closes the stream a `flatMap`
+  stage was reading (`Flow.within`; the stage made last first, an inner stream's own
+  chain before its handlers: `close10 close1`, `close1 outer1`), `END` on the way back
+  finishes a gatherer, the one nearest the source first, `BEGIN` makes the states of
+  the gatherers before one. Who tells: `findFirst` / `findAny` once they hold an
+  element, the three matches where they decide early, and `limit` (at the pull past
+  its last element) and `takeWhile` (at the element that fails) with the chain as it
+  was when they were made, which is the stages before them only -- a gatherer after a
+  `limit` must not be finished as rejected. All a JDK 25's order, `Multi.java` of the
+  k26 artefacts (50 lines). Left as measured: a later stage that throws closes nothing
+  (a `try` / `finally` in every operation that ends a stream would put the exception
+  machinery, 47 KB of wasm, in every stream program); `iterator()` and `Stream.concat`
+  take an inner stream an element at a time, where a JDK takes it whole before it hands
+  on the first (`close1 10`). A `flatMap` program pays 1,124 B of wasm for the chain
+  (126,815 -> 127,939), one with no such stage a field of the pipeline's record.
+- **`mapMulti` and a gatherer hold what they give for one element** (k26). A JDK pushes
+  each element through the later stages while the function still runs; a pull hands on
+  one element a call, so the stage keeps the rest in a list (`ObjectFlow.mapMulti`,
+  `IntFlow.fed` and its kin, `rontolisp.internal.Gathering`) until it is asked again.
+  What a program can tell: a `peek` after `mapMulti` sees an element's outputs after
+  the function returned and none past a `limit`; a gatherer's `push` answers `true`,
+  and `isRejecting()` `false`, until the pipeline said `LEAVE` -- a JDK's turn in the
+  middle of an element once the later stages have enough (`push11=false!`), so a
+  gatherer looping until `push` answers `false` does not return here. The elements
+  handed on are a JDK's on every line of the probes. Rejected: stages that are pushed
+  into (k12's reason: no `iterator()`, no lazy `flatMap`; both kinds of stage would be
+  the library twice).
+- **A gatherer** (k26; `Gatherer`, `Gathered`: one of four functions, as `Collected`;
+  `Gatherers`). Each of these is a JDK 25's answer (`Gather.java`, `Gather2.java`):
+  the state is made before the first element is asked for, of every gatherer of the
+  pipeline in their order (`ainit binit`), and even where a `limit(0)` asks for
+  nothing; an integrator answering `false` leaves the stages before it (`LEAVE`, `END`)
+  and then finishes; the finisher always runs, told `isRejecting()` where the stream
+  stopped asking. **A gatherer straight after a gatherer is one gatherer**
+  (`ObjectFlow.gathering`, `Gathering.then`): `gather(a).gather(b)` prints what
+  `gather(a.andThen(b))` prints, which is how `a`'s push comes to answer what `b`'s
+  integrator did. `andThen` (`Gathered.both`): the first's push answers `false` once
+  the second's integrator did, `isRejecting()` of what the first pushes into stays
+  `false`, the finisher is the default one where both are, the combiner where either
+  is, the initializer never. `Gatherers.mapConcurrent` starts a virtual thread an
+  element, hands a result on when as many as its limit are under way (so a result
+  waits for those before it and a task for a place: `[-1, 2, 3]` of `Gather2.java`) and
+  at the end, waits for a mapping whatever interrupts the wait, and interrupts and
+  waits for the others where one fails or the stream stops asking; a
+  `RuntimeException` is thrown as it is, anything else inside a `RuntimeException`.
+  A JDK may hand a finished result on sooner, by the clock. Sizes: a list through
+  `windowFixed` 164,528 B of wasm, through `mapMulti` 145,142, through `map` 137,639.
 - **A double stream's sum is Kahan's compensated one** (`Flow.add` / `total`: the sum,
   what the additions lost, and the plain sum, which is the answer where the first two
   are no number and it is infinite). Which summation a JDK uses is in no documentation:
@@ -1831,7 +1910,7 @@ the probes are `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-dura
   (`JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`), but its
   class table reads 97 files of the library where it read 46 -- `Collection` names
   `Stream`, and a class's member types are read with it: 1.89 -> 1.95 s for a program of
-  one list on the interpreter (`.todo/k26`).
+  one list on the interpreter (`.todo/k47`).
 - **`String.compareTo(null)` throws** (k12: it answered 1, found by `sorted()` over a
   `null`): `%java-string-compare` and `-ignore-case` test their argument, 23 B of wasm
   in a program comparing strings.
@@ -1867,10 +1946,53 @@ the probes are `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-dura
   (`RandomAccess`, `Spliterator`, `Splits`), runs on the interpreter in the same time
   (1.09 to 1.24 s against 1.10 to 1.18 s, five runs each) and lowers to the same 57,206
   B of wasm; YAVI's classic example grew from 655,275 to 655,678 B.
-- **Not there** (`.todo/k26`, each refused by name): `mapMulti`, `gather`, a stream's own
-  `spliterator()` and the spliterators of `int`, `long` and `double`,
-  `Collectors.groupingByConcurrent` / `toConcurrentMap`, `Random.ints` and its kin; an
-  inner stream of `flatMap` that a short-circuit leaves unfinished is not closed.
+- **The spliterators of numbers and a stream's own** (k26, 2026-11-20). `Spliterator.OfInt`
+  / `OfLong` / `OfDouble` are `IntFlow.Walk` and its kin over `Flow.Walked`: the
+  elements a pull gives, a size that is a count taken when first asked for, counted
+  down an element or kept. `Spliterators`' of an array count down and add `SIZED |
+  SUBSIZED`; of an iterator keep the size given, exact but under `CONCURRENT`, and
+  hand on every element past it; `Arrays.spliterator` is `ORDERED | IMMUTABLE` over
+  that; `StreamSupport.intStream` and its kin are `IntFlow.split`. All a JDK 25's
+  (`Prim.java`).
+  **Decided: a stream's `spliterator()` reports `ORDERED`, and `SIZED | SUBSIZED` where
+  the stream knows its count (`Flow.marks`), and nothing a JDK keeps track of through
+  the stages.** What a JDK reports was measured (`Split.java`, 29 sources by 19 stages)
+  and is regular: a stream with no stage hands out its source's own spliterator; past
+  a stage five marks are left -- `map`, `flatMap`, `mapMulti`, `gather` and a number
+  stream's `distinct()` clear `DISTINCT | SORTED`, `sorted()` sets `SORTED | ORDERED`
+  (a comparator: `ORDERED`, not `SORTED`), `distinct()` sets `DISTINCT`, `unordered()`
+  clears `ORDERED | SORTED` and is no stage of a source in no order, `SIZED` is the
+  count, `SUBSIZED` the source's; `sorted()` over `SORTED` takes nothing ahead. It was
+  written (the source's marks and a mask in one `int` of the pipeline) and printed 558
+  of the 580 lines, and was taken out again for what it cost programs that never ask:
+  0.4 to 2.5 KB of wasm in every stream program (`SzMapList` 144,046 -> 145,347 B,
+  `SzSorted` 157,605 -> 160,061; the table and where the bytes went:
+  `.todo/artefacts/k26-java-front-end-what-the-streams-slice-left/README.md`) -- an
+  `&=` of an `int` field is 221 B of a method here, and every stage that changes the
+  elements would call it. As committed those programs move by -60 to +337 B. So a
+  stream's spliterator differs from a JDK's in the marks named in `deviations.md`, in
+  its estimate where the count is not known (`Long.MAX_VALUE`; a JDK's is its
+  source's), in being no source's own (`StreamSupport.stream(s, false).spliterator()
+  != s`), and `sorted()` always takes every element. Lead (`.todo/k47`): marks kept
+  only in a program that asks for one, which needs a member of the library lowered by
+  what the program reaches, as the third function of a format is.
+- **The streams of a `Random`** (k26; `IntFlow.drawn` and its kin: so many elements of
+  a supplier, each drawn when the stream is read, as many as a `long` counts where no
+  size is given, so `count()` runs nothing). An element between two bounds: the
+  documentation gives a long's draws -- one `nextLong`, masked where the width is a
+  power of two, else its upper 63 bits reduced by the width and drawn again while
+  they fall in what the width does not divide, a width no `long` holds by drawing
+  until one is within -- and a double's (`nextDouble` scaled, the double below the
+  bound where rounding reaches it). For an int no documentation says which; of
+  `nextInt(width) + origin` and the long's draws over `nextInt`, the second gave a
+  JDK 25's numbers on all 2,891 seeded ranges, the first on 2,414 (`Rand.java`).
+- **The collectors of a concurrent map** (k26) are `groupingBy` / `toMap` over a
+  `ConcurrentHashMap` with two more marks (`Collectors.grouped`, `once`, `merged`):
+  `CONCURRENT`, `UNORDERED`, and `IDENTITY_FINISH` where the downstream has it. A JDK
+  checks no argument of them for `null` when the collector is made (`Conmap.java`).
+- **Not there** (`.todo/k47`): a pipeline run in halves (`parallel()` is a flag), the
+  marks of a stream's spliterator, a collector's `finisher` skipped under
+  `IDENTITY_FINISH`.
 
 ## java.net.http (2026-11-18, k03)
 
@@ -1995,7 +2117,7 @@ member) or is refused where the request is sent (`deviations.md`, "The HTTP clie
   and in the client), with one 489,891 B. A program's own `HttpRequest` class stating a
   `timeout()` is refused by name where no builder was given one. A component that
   serves cannot time a request (an `IOException` with fetch's refusal: `.todo/148`).
-- **Not made** (`.todo/k26`): bodies as they arrive (`ofInputStream` reads a body
+- **Not made** (`.todo/k47`): bodies as they arrive (`ofInputStream` reads a body
   already in, `ofLines`, a program's own `BodySubscriber`), the `--host-fetch` reactor
   as a leg, `URI`'s constructors of several parts.
 
@@ -3955,4 +4077,18 @@ texts with the three kinds of refusal, the members, every field and unit, the zo
 a fixed clock, the amounts; where a JDK lists fields in an order of its run, the words
 before them); the class nobody has of `aLibraryOfTheSourcePathIsLoweredAsFarAsTheProgramReaches`
 and of `a-program-uses-a-library-read-as-source-from-its-source-path` is
-`java.util.Currency`.
+`java.util.Currency`. k26: java-spec
+`a-gatherer-is-a-stage-holding-what-it-pushes-until-it-is-asked` (93 lines: `Gatherers`,
+gatherers written by hand and joined, the defaults, a gatherer of the program's own
+class); `closing` and `several` in `a-stream-hands-its-elements-on-one-at-a-time` (when an
+inner stream is closed, `mapMulti`), `numbers` in the spliterators' case (the
+spliterators of numbers, a stream's own where it reports what a JDK does), `drawn` in the
+streams' case (a `Random`'s streams, a thousand seeded ranges as one number), `concurrent`
+in the collectors' case; `mapped` in the `standalone:` case
+`threads-share-concurrent-collections-and-completable-futures` (`mapConcurrent`: threads,
+so no line of the corpus program). A line where this differs from a JDK by decision (a
+`push` in the middle of an element, a `peek` after `mapMulti` under a `limit`, the marks
+of a stream's spliterator) is in no case: the JDK leg would refuse it; the probes of the
+k26 artefacts hold them. The corpus program is past one class's constant pool on the JVM
+since these lines, so its leg loads the `$PartN` classes beside the class
+(`JavaSpecE2eTest.runOnJvm`).

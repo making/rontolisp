@@ -682,12 +682,15 @@ class JavaSpecE2eTest {
 	private static String runOnJvm(String program) throws Exception {
 		String name = "JavaSpecProgram";
 		Path file = write("JVM", PROGRAM + ".java", program);
-		byte[] classBytes = new JvmSourceCompiler(name).compile(program, file.toString()).classBytes();
+		JvmSourceCompiler.Result compiled = new JvmSourceCompiler(name).compile(program, file.toString());
+		// the corpus is past one class's constant pool: its parts travel beside the class
 		ClassLoader loader = new ClassLoader(JavaSpecE2eTest.class.getClassLoader()) {
 			@Override
 			protected Class<?> findClass(String n) throws ClassNotFoundException {
-				if (n.equals(name)) {
-					return defineClass(n, classBytes, 0, classBytes.length);
+				byte[] bytes = n.equals(name) ? compiled.classBytes()
+						: compiled.runtimeClasses().get(n.replace('.', '/') + ".class");
+				if (bytes != null) {
+					return defineClass(n, bytes, 0, bytes.length);
 				}
 				return super.findClass(n);
 			}

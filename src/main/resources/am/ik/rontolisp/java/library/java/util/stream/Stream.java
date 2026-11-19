@@ -10,8 +10,11 @@ import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.BinaryOperator;
 import java.util.function.Consumer;
+import java.util.function.DoubleConsumer;
 import java.util.function.Function;
+import java.util.function.IntConsumer;
 import java.util.function.IntFunction;
+import java.util.function.LongConsumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.function.ToDoubleFunction;
@@ -51,6 +54,16 @@ public interface Stream<T> extends BaseStream<T, Stream<T>> {
     LongStream flatMapToLong(Function<? super T, ? extends LongStream> mapper);
 
     DoubleStream flatMapToDouble(Function<? super T, ? extends DoubleStream> mapper);
+
+    <R> Stream<R> mapMulti(BiConsumer<? super T, ? super Consumer<R>> mapper);
+
+    IntStream mapMultiToInt(BiConsumer<? super T, ? super IntConsumer> mapper);
+
+    LongStream mapMultiToLong(BiConsumer<? super T, ? super LongConsumer> mapper);
+
+    DoubleStream mapMultiToDouble(BiConsumer<? super T, ? super DoubleConsumer> mapper);
+
+    <R> Stream<R> gather(Gatherer<? super T, ?, R> gatherer);
 
     Stream<T> distinct();
 

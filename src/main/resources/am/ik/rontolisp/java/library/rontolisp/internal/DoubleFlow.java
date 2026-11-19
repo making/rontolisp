@@ -9,7 +9,9 @@ import java.util.DoubleSummaryStatistics;
 import java.util.NoSuchElementException;
 import java.util.OptionalDouble;
 import java.util.PrimitiveIterator;
+import java.util.Spliterator;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.DoubleBinaryOperator;
 import java.util.function.DoubleConsumer;
 import java.util.function.DoubleFunction;
@@ -97,6 +99,22 @@ public final class DoubleFlow extends Flow implements DoubleStream {
     public static DoubleFlow generated(DoubleSupplier supplier) {
         given(supplier);
         return new DoubleFlow(new Origin(), new Ending(), null, () -> supplier.getAsDouble());
+    }
+
+    // so many elements of a supplier, each asked for when the stream is read: the
+    // streams of a Random
+    public static DoubleFlow drawn(DoubleSupplier supplier, long size) {
+        Ending ending = new Ending();
+        long[] left = { size };
+        return new DoubleFlow(new Origin(), ending, () -> size, () -> {
+            long n = left[0];
+            if (n == 0) {
+                ending.reached = true;
+                return 0;
+            }
+            left[0] = n - 1;
+            return supplier.getAsDouble();
+        });
     }
 
     public static DoubleFlow concat(DoubleStream a, DoubleStream b) {
@@ -211,6 +229,7 @@ public final class DoubleFlow extends Flow implements DoubleStream {
         Ending ending = this.ending;
         Ending flat = new Ending();
         Held<DoubleFlow> inner = new Held<>();
+        within(origin, inner);
         return new DoubleFlow(origin, flat, null, () -> {
             for (;;) {
                 DoubleFlow in = inner.value;
@@ -231,6 +250,53 @@ public final class DoubleFlow extends Flow implements DoubleStream {
                 if (mapped != null) {
                     inner.value = entered(mapped);
                 }
+            }
+        });
+    }
+
+    // The elements a function hands a consumer each time it is asked for more: what it
+    // hands over in one call is held until the stages after it ask. The function says
+    // through the ending that it has no more.
+    static DoubleFlow fed(Origin origin, Ending ending, Consumer<DoubleConsumer> more) {
+        Held<double[]> held = new Held<>();
+        held.value = new double[8];
+        int[] ends = new int[2];
+        DoubleConsumer take = item -> {
+            double[] all = held.value;
+            int size = ends[1];
+            if (size == all.length) {
+                all = Arrays.copyOf(all, size * 2);
+                held.value = all;
+            }
+            all[size] = item;
+            ends[1] = size + 1;
+        };
+        return new DoubleFlow(origin, ending, null, () -> {
+            for (;;) {
+                int at = ends[0];
+                if (at < ends[1]) {
+                    ends[0] = at + 1;
+                    return held.value[at];
+                }
+                ends[0] = 0;
+                ends[1] = 0;
+                more.accept(take);
+                if (ending.reached) {
+                    return 0;
+                }
+            }
+        });
+    }
+
+    public DoubleStream mapMulti(DoubleStream.DoubleMapMultiConsumer mapper) {
+        given(mapper);
+        link();
+        DoublePull pull = this.pull;
+        Ending ending = this.ending;
+        return fed(origin, ending, to -> {
+            double item = pull.next();
+            if (!ending.reached) {
+                mapper.accept(item, to);
             }
         });
     }
@@ -307,10 +373,12 @@ public final class DoubleFlow extends Flow implements DoubleStream {
         DoublePull pull = this.pull;
         Ending ending = this.ending;
         long[] left = { maxSize };
+        Told before = origin.told;
         return new DoubleFlow(origin, ending, most(count, maxSize), () -> {
             long n = left[0];
             if (n == 0) {
                 ending.reached = true;
+                leave(before);
                 return 0;
             }
             left[0] = n - 1;
@@ -341,10 +409,12 @@ public final class DoubleFlow extends Flow implements DoubleStream {
         link();
         DoublePull pull = this.pull;
         Ending ending = this.ending;
+        Told before = origin.told;
         return new DoubleFlow(origin, ending, null, () -> {
             double item = pull.next();
             if (!ending.reached && !predicate.test(item)) {
                 ending.reached = true;
+                leave(before);
             }
             return item;
         });
@@ -512,6 +582,7 @@ public final class DoubleFlow extends Flow implements DoubleStream {
         Ending ending = this.ending;
         for (double item = pull.next(); !ending.reached; item = pull.next()) {
             if (predicate.test(item)) {
+                leave(origin.told);
                 return true;
             }
         }
@@ -525,6 +596,7 @@ public final class DoubleFlow extends Flow implements DoubleStream {
         Ending ending = this.ending;
         for (double item = pull.next(); !ending.reached; item = pull.next()) {
             if (!predicate.test(item)) {
+                leave(origin.told);
                 return false;
             }
         }
@@ -538,6 +610,7 @@ public final class DoubleFlow extends Flow implements DoubleStream {
         Ending ending = this.ending;
         for (double item = pull.next(); !ending.reached; item = pull.next()) {
             if (predicate.test(item)) {
+                leave(origin.told);
                 return false;
             }
         }
@@ -547,7 +620,11 @@ public final class DoubleFlow extends Flow implements DoubleStream {
     public OptionalDouble findFirst() {
         link();
         double item = pull.next();
-        return ending.reached ? OptionalDouble.empty() : OptionalDouble.of(item);
+        if (ending.reached) {
+            return OptionalDouble.empty();
+        }
+        leave(origin.told);
+        return OptionalDouble.of(item);
     }
 
     public OptionalDouble findAny() {
@@ -558,6 +635,94 @@ public final class DoubleFlow extends Flow implements DoubleStream {
         link();
         DoublePull pull = this.pull;
         return new ObjectFlow<Double>(origin, ending, count, () -> pull.next());
+    }
+
+    // the elements an iterator gives, counted where a count is given
+    public static DoubleFlow over(PrimitiveIterator.OfDouble each, Count count) {
+        Ending ending = new Ending();
+        return new DoubleFlow(new Origin(), ending, count, () -> {
+            if (each.hasNext()) {
+                return each.nextDouble();
+            }
+            ending.reached = true;
+            return 0;
+        });
+    }
+
+    // the elements a spliterator gives: the supplier is asked for it at the first pull, or
+    // at the count where the characteristics say SIZED
+    public static DoubleFlow split(Supplier<? extends Spliterator.OfDouble> supplier, int characteristics,
+            boolean parallel) {
+        Ending ending = new Ending();
+        Held<Spliterator.OfDouble> source = new Held<>();
+        double[] taken = new double[1];
+        DoubleConsumer take = item -> taken[0] = item;
+        Count count = (characteristics & Spliterator.SIZED) == 0 ? null
+                : () -> supplied(source, supplier).getExactSizeIfKnown();
+        DoubleFlow flow = new DoubleFlow(new Origin(), ending, count, () -> {
+            if (supplied(source, supplier).tryAdvance(take)) {
+                return taken[0];
+            }
+            ending.reached = true;
+            return 0;
+        });
+        flow.origin.parallel = parallel;
+        return flow;
+    }
+
+    private static Spliterator.OfDouble supplied(Held<Spliterator.OfDouble> source,
+            Supplier<? extends Spliterator.OfDouble> supplier) {
+        Spliterator.OfDouble spliterator = source.value;
+        if (spliterator == null) {
+            spliterator = supplier.get();
+            source.value = spliterator;
+        }
+        return spliterator;
+    }
+
+    // The spliterator of an iterator's numbers. A size given is reported, and stays what
+    // it is while the numbers are taken; it is the exact one where the marks say SIZED.
+    public static Spliterator.OfDouble walk(PrimitiveIterator.OfDouble each, long size, int marks) {
+        Count given = size < 0 ? null : () -> size;
+        return new Walk(over(each, null), (marks & Spliterator.SIZED) == 0 ? null : given, given, marks, false);
+    }
+
+    // the spliterator of an array's numbers, reporting the marks given
+    public static Spliterator.OfDouble walk(double[] array, int from, int to, int marks) {
+        DoubleFlow flow = of(array, from, to);
+        return new Walk(flow, flow.count, null, marks, true);
+    }
+
+    public Spliterator.OfDouble spliterator() {
+        link();
+        return new Walk(this, count, null, marks(), true);
+    }
+
+    private static final class Walk extends Walked<Double> implements Spliterator.OfDouble {
+
+        private final DoublePull pull;
+
+        private final Ending ending;
+
+        Walk(DoubleFlow flow, Count sized, Count about, int marks, boolean counted) {
+            super(sized, about, marks, counted);
+            this.pull = flow.pull;
+            this.ending = flow.ending;
+        }
+
+        public boolean tryAdvance(DoubleConsumer action) {
+            given(action);
+            double item = pull.next();
+            if (!took(ending)) {
+                return false;
+            }
+            action.accept(item);
+            return true;
+        }
+
+        public Spliterator.OfDouble trySplit() {
+            return null;
+        }
     }
 
     public PrimitiveIterator.OfDouble iterator() {

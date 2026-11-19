@@ -25,6 +25,8 @@ final class Collected<T, A, R> implements Collector<T, A, R> {
 
     private final Function<A, R> finisher;
 
+    static final int CONCURRENT = 1;
+
     static final int UNORDERED = 2;
 
     static final int IDENTITY = 4;

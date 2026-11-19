@@ -378,6 +378,11 @@ public class BigInteger extends Number implements Comparable<BigInteger>, Exact 
         return toString();
     }
 
+    @Override
+    public Object[] digits() {
+        return new Object[] { this.value, null };
+    }
+
     /** The two's complement in the fewest bytes that hold its sign, the high byte first. */
     public byte[] toByteArray() {
         int size = length(this.value) / 8 + 1;

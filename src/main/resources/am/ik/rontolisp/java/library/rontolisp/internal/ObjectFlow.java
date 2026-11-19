@@ -16,8 +16,11 @@ import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.BinaryOperator;
 import java.util.function.Consumer;
+import java.util.function.DoubleConsumer;
 import java.util.function.Function;
+import java.util.function.IntConsumer;
 import java.util.function.IntFunction;
+import java.util.function.LongConsumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.function.ToDoubleFunction;
@@ -26,6 +29,7 @@ import java.util.function.ToLongFunction;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collector;
 import java.util.stream.DoubleStream;
+import java.util.stream.Gatherer;
 import java.util.stream.IntStream;
 import java.util.stream.LongStream;
 import java.util.stream.Stream;
@@ -35,6 +39,9 @@ import java.util.stream.Stream;
 public final class ObjectFlow<T> extends Flow implements Stream<T> {
 
     final Pull<T> pull;
+
+    // the gatherer this stream is the stage of, where it is one
+    Gathering<?, ?, T> gathering;
 
     ObjectFlow(Origin origin, Ending ending, Count count, Pull<T> pull) {
         super(origin, ending, count);
@@ -294,6 +301,7 @@ public final class ObjectFlow<T> extends Flow implements Stream<T> {
         Ending ending = this.ending;
         Ending flat = new Ending();
         Held<ObjectFlow<? extends R>> inner = new Held<>();
+        within(origin, inner);
         return new ObjectFlow<R>(origin, flat, null, () -> {
             for (;;) {
                 ObjectFlow<? extends R> in = inner.value;
@@ -325,6 +333,7 @@ public final class ObjectFlow<T> extends Flow implements Stream<T> {
         Ending ending = this.ending;
         Ending flat = new Ending();
         Held<IntFlow> inner = new Held<>();
+        within(origin, inner);
         return new IntFlow(origin, flat, null, () -> {
             for (;;) {
                 IntFlow in = inner.value;
@@ -356,6 +365,7 @@ public final class ObjectFlow<T> extends Flow implements Stream<T> {
         Ending ending = this.ending;
         Ending flat = new Ending();
         Held<LongFlow> inner = new Held<>();
+        within(origin, inner);
         return new LongFlow(origin, flat, null, () -> {
             for (;;) {
                 LongFlow in = inner.value;
@@ -387,6 +397,7 @@ public final class ObjectFlow<T> extends Flow implements Stream<T> {
         Ending ending = this.ending;
         Ending flat = new Ending();
         Held<DoubleFlow> inner = new Held<>();
+        within(origin, inner);
         return new DoubleFlow(origin, flat, null, () -> {
             for (;;) {
                 DoubleFlow in = inner.value;
@@ -409,6 +420,82 @@ public final class ObjectFlow<T> extends Flow implements Stream<T> {
                 }
             }
         });
+    }
+
+    // what the function hands over for one element is held until the stages after it ask
+    public <R> Stream<R> mapMulti(BiConsumer<? super T, ? super Consumer<R>> mapper) {
+        given(mapper);
+        link();
+        Pull<T> pull = this.pull;
+        Ending ending = this.ending;
+        ArrayList<R> held = new ArrayList<>();
+        int[] at = new int[1];
+        Consumer<R> take = item -> held.add(item);
+        return new ObjectFlow<R>(origin, ending, null, () -> {
+            for (;;) {
+                int i = at[0];
+                if (i < held.size()) {
+                    at[0] = i + 1;
+                    return held.get(i);
+                }
+                held.clear();
+                at[0] = 0;
+                T item = pull.next();
+                if (ending.reached) {
+                    return null;
+                }
+                mapper.accept(item, take);
+            }
+        });
+    }
+
+    public IntStream mapMultiToInt(BiConsumer<? super T, ? super IntConsumer> mapper) {
+        given(mapper);
+        link();
+        Pull<T> pull = this.pull;
+        Ending ending = this.ending;
+        return IntFlow.fed(origin, ending, to -> {
+            T item = pull.next();
+            if (!ending.reached) {
+                mapper.accept(item, to);
+            }
+        });
+    }
+
+    public LongStream mapMultiToLong(BiConsumer<? super T, ? super LongConsumer> mapper) {
+        given(mapper);
+        link();
+        Pull<T> pull = this.pull;
+        Ending ending = this.ending;
+        return LongFlow.fed(origin, ending, to -> {
+            T item = pull.next();
+            if (!ending.reached) {
+                mapper.accept(item, to);
+            }
+        });
+    }
+
+    public DoubleStream mapMultiToDouble(BiConsumer<? super T, ? super DoubleConsumer> mapper) {
+        given(mapper);
+        link();
+        Pull<T> pull = this.pull;
+        Ending ending = this.ending;
+        return DoubleFlow.fed(origin, ending, to -> {
+            T item = pull.next();
+            if (!ending.reached) {
+                mapper.accept(item, to);
+            }
+        });
+    }
+
+    // a gatherer straight after a gatherer is one gatherer with it
+    @SuppressWarnings("unchecked")
+    public <R> Stream<R> gather(Gatherer<? super T, ?, R> gatherer) {
+        given(gatherer);
+        link();
+        Gathering<?, ?, T> stage = gathering;
+        return stage != null ? stage.then(origin, gatherer)
+                : Gathering.over(origin, pull, ending, (Gatherer<T, Object, R>) gatherer);
     }
 
     public Stream<T> distinct() {
@@ -488,10 +575,12 @@ public final class ObjectFlow<T> extends Flow implements Stream<T> {
         Pull<T> pull = this.pull;
         Ending ending = this.ending;
         long[] left = { maxSize };
+        Told before = origin.told;
         return new ObjectFlow<T>(origin, ending, most(count, maxSize), () -> {
             long n = left[0];
             if (n == 0) {
                 ending.reached = true;
+                leave(before);
                 return null;
             }
             left[0] = n - 1;
@@ -522,10 +611,12 @@ public final class ObjectFlow<T> extends Flow implements Stream<T> {
         link();
         Pull<T> pull = this.pull;
         Ending ending = this.ending;
+        Told before = origin.told;
         return new ObjectFlow<T>(origin, ending, null, () -> {
             T item = pull.next();
             if (!ending.reached && !predicate.test(item)) {
                 ending.reached = true;
+                leave(before);
             }
             return item;
         });
@@ -702,6 +793,7 @@ public final class ObjectFlow<T> extends Flow implements Stream<T> {
         Ending ending = this.ending;
         for (T item = pull.next(); !ending.reached; item = pull.next()) {
             if (predicate.test(item)) {
+                leave(origin.told);
                 return true;
             }
         }
@@ -715,6 +807,7 @@ public final class ObjectFlow<T> extends Flow implements Stream<T> {
         Ending ending = this.ending;
         for (T item = pull.next(); !ending.reached; item = pull.next()) {
             if (!predicate.test(item)) {
+                leave(origin.told);
                 return false;
             }
         }
@@ -728,6 +821,7 @@ public final class ObjectFlow<T> extends Flow implements Stream<T> {
         Ending ending = this.ending;
         for (T item = pull.next(); !ending.reached; item = pull.next()) {
             if (predicate.test(item)) {
+                leave(origin.told);
                 return false;
             }
         }
@@ -737,11 +831,47 @@ public final class ObjectFlow<T> extends Flow implements Stream<T> {
     public Optional<T> findFirst() {
         link();
         T item = pull.next();
-        return ending.reached ? Optional.empty() : Optional.of(item);
+        if (ending.reached) {
+            return Optional.empty();
+        }
+        leave(origin.told);
+        return Optional.of(item);
     }
 
     public Optional<T> findAny() {
         return findFirst();
+    }
+
+    public Spliterator<T> spliterator() {
+        link();
+        return new Walk<T>(this);
+    }
+
+    private static final class Walk<T> extends Walked<T> implements Spliterator<T> {
+
+        private final Pull<T> pull;
+
+        private final Ending ending;
+
+        Walk(ObjectFlow<T> flow) {
+            super(flow.count, null, flow.marks(), true);
+            this.pull = flow.pull;
+            this.ending = flow.ending;
+        }
+
+        public boolean tryAdvance(Consumer<? super T> action) {
+            given(action);
+            T item = pull.next();
+            if (!took(ending)) {
+                return false;
+            }
+            action.accept(item);
+            return true;
+        }
+
+        public Spliterator<T> trySplit() {
+            return null;
+        }
     }
 
     public Iterator<T> iterator() {

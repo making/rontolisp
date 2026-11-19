@@ -19,6 +19,8 @@ import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.BinaryOperator;
@@ -388,6 +390,29 @@ public final class Collectors {
         if (classifier == null || mapFactory == null) {
             throw new NullPointerException();
         }
+        return grouped(classifier, mapFactory, downstream, 0);
+    }
+
+    public static <T, K> Collector<T, ?, ConcurrentMap<K, List<T>>> groupingByConcurrent(
+            Function<? super T, ? extends K> classifier) {
+        return groupingByConcurrent(classifier, toList());
+    }
+
+    public static <T, K, A, D> Collector<T, ?, ConcurrentMap<K, D>> groupingByConcurrent(
+            Function<? super T, ? extends K> classifier, Collector<? super T, A, D> downstream) {
+        return groupingByConcurrent(classifier, () -> new ConcurrentHashMap<K, D>(), downstream);
+    }
+
+    // a concurrent map's collector says so in its marks; here too one thread fills one map
+    public static <T, K, A, D, M extends ConcurrentMap<K, D>> Collector<T, ?, M> groupingByConcurrent(
+            Function<? super T, ? extends K> classifier, Supplier<M> mapFactory,
+            Collector<? super T, A, D> downstream) {
+        return grouped(classifier, mapFactory, downstream, Collected.CONCURRENT | Collected.UNORDERED);
+    }
+
+    private static <T, K, D, A, M extends Map<K, D>> Collector<T, ?, M> grouped(
+            Function<? super T, ? extends K> classifier, Supplier<M> mapFactory,
+            Collector<? super T, A, D> downstream, int marks) {
         Supplier<A> made = downstream.supplier();
         BiConsumer<A, ? super T> accumulator = downstream.accumulator();
         BinaryOperator<A> combiner = downstream.combiner();
@@ -407,7 +432,7 @@ public final class Collectors {
         }, groups -> {
             groups.replaceAll((key, group) -> finisher.apply((A) group));
             return (M) groups;
-        }, Collected.marks(downstream) & Collected.IDENTITY);
+        }, Collected.marks(downstream) & Collected.IDENTITY | marks);
     }
 
     public static <T> Collector<T, ?, Map<Boolean, List<T>>> partitioningBy(Predicate<? super T> predicate) {
@@ -443,7 +468,32 @@ public final class Collectors {
         if (keyMapper == null || valueMapper == null) {
             throw new NullPointerException();
         }
-        return new Collected<T, Map<K, U>, Map<K, U>>(() -> new HashMap<K, U>(), (map, item) -> {
+        return once(keyMapper, valueMapper, () -> new HashMap<K, U>(), 0);
+    }
+
+    public static <T, K, U> Collector<T, ?, ConcurrentMap<K, U>> toConcurrentMap(
+            Function<? super T, ? extends K> keyMapper, Function<? super T, ? extends U> valueMapper) {
+        return once(keyMapper, valueMapper, () -> new ConcurrentHashMap<K, U>(),
+                Collected.CONCURRENT | Collected.UNORDERED);
+    }
+
+    public static <T, K, U> Collector<T, ?, ConcurrentMap<K, U>> toConcurrentMap(
+            Function<? super T, ? extends K> keyMapper, Function<? super T, ? extends U> valueMapper,
+            BinaryOperator<U> mergeFunction) {
+        return toConcurrentMap(keyMapper, valueMapper, mergeFunction, () -> new ConcurrentHashMap<K, U>());
+    }
+
+    public static <T, K, U, M extends ConcurrentMap<K, U>> Collector<T, ?, M> toConcurrentMap(
+            Function<? super T, ? extends K> keyMapper, Function<? super T, ? extends U> valueMapper,
+            BinaryOperator<U> mergeFunction, Supplier<M> mapFactory) {
+        return merged(keyMapper, valueMapper, mergeFunction, mapFactory,
+                Collected.CONCURRENT | Collected.UNORDERED);
+    }
+
+    // a map of keys each met once
+    private static <T, K, U, M extends Map<K, U>> Collector<T, ?, M> once(Function<? super T, ? extends K> keyMapper,
+            Function<? super T, ? extends U> valueMapper, Supplier<M> mapFactory, int marks) {
+        return new Collected<T, M, M>(mapFactory, (map, item) -> {
             K key = keyMapper.apply(item);
             U value = valueMapper.apply(item);
             if (value == null) {
@@ -461,7 +511,7 @@ public final class Collectors {
                 }
             }
             return left;
-        }, map -> map, Collected.IDENTITY);
+        }, map -> map, Collected.IDENTITY | marks);
     }
 
     public static <T, K, U> Collector<T, ?, Map<K, U>> toUnmodifiableMap(Function<? super T, ? extends K> keyMapper,
@@ -486,6 +536,12 @@ public final class Collectors {
         if (keyMapper == null || valueMapper == null || mergeFunction == null || mapFactory == null) {
             throw new NullPointerException();
         }
+        return merged(keyMapper, valueMapper, mergeFunction, mapFactory, 0);
+    }
+
+    private static <T, K, U, M extends Map<K, U>> Collector<T, ?, M> merged(Function<? super T, ? extends K> keyMapper,
+            Function<? super T, ? extends U> valueMapper, BinaryOperator<U> mergeFunction, Supplier<M> mapFactory,
+            int marks) {
         return new Collected<T, M, M>(mapFactory,
                 (map, item) -> map.merge(keyMapper.apply(item), valueMapper.apply(item), mergeFunction),
                 (left, right) -> {
@@ -493,7 +549,7 @@ public final class Collectors {
                         left.merge(each.getKey(), each.getValue(), mergeFunction);
                     }
                     return left;
-                }, map -> map, Collected.IDENTITY);
+                }, map -> map, Collected.IDENTITY | marks);
     }
 
     public static <T> Collector<T, ?, IntSummaryStatistics> summarizingInt(ToIntFunction<? super T> mapper) {

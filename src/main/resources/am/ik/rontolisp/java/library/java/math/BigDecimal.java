@@ -911,6 +911,13 @@ public class BigDecimal extends Number implements Comparable<BigDecimal>, Exact 
         return signum() < 0 ? "-" + text : text;
     }
 
+    @Override
+    public Object[] digits() {
+        Object[] read = this.unscaled.digits();
+        read[1] = this.scale;
+        return read;
+    }
+
     // ---- as the other numbers
 
     /** The whole part. */

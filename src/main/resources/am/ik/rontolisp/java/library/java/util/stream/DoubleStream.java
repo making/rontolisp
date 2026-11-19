@@ -6,6 +6,7 @@ package java.util.stream;
 import java.util.DoubleSummaryStatistics;
 import java.util.OptionalDouble;
 import java.util.PrimitiveIterator;
+import java.util.Spliterator;
 import java.util.function.BiConsumer;
 import java.util.function.DoubleBinaryOperator;
 import java.util.function.DoubleConsumer;
@@ -33,6 +34,11 @@ public interface DoubleStream extends BaseStream<Double, DoubleStream> {
         DoubleStream build();
     }
 
+    interface DoubleMapMultiConsumer {
+
+        void accept(double value, DoubleConsumer consumer);
+    }
+
     DoubleStream filter(DoublePredicate predicate);
 
     DoubleStream map(DoubleUnaryOperator mapper);
@@ -44,6 +50,8 @@ public interface DoubleStream extends BaseStream<Double, DoubleStream> {
     LongStream mapToLong(DoubleToLongFunction mapper);
 
     DoubleStream flatMap(DoubleFunction<? extends DoubleStream> mapper);
+
+    DoubleStream mapMulti(DoubleMapMultiConsumer mapper);
 
     DoubleStream distinct();
 
@@ -96,6 +104,8 @@ public interface DoubleStream extends BaseStream<Double, DoubleStream> {
     Stream<Double> boxed();
 
     PrimitiveIterator.OfDouble iterator();
+
+    Spliterator.OfDouble spliterator();
 
     static Builder builder() {
         return new DoubleFlow.Building();

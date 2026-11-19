@@ -264,10 +264,9 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 `99,999,999,999,999,990,000,000` です。`applyPattern` が拒否したパターンは書式を変えません。
 JDK では前後 2 つのパターンが混ざった状態が残ります。
 
-**`BigInteger` と `BigDecimal` には素数のメンバーがなく、`String.format` で書けるのは `%s`
-だけです。** `isProbablePrime`、`nextProbablePrime`、`probablePrime`、乱数のビットを取る
-コンストラクタは、名前を示して拒否されます。`BigInteger` に対する `%d`、`BigDecimal` に対する
-`%f` と `%e` は `IllegalFormatConversionException` になります。JDK はその数値を書きます。
+**`BigInteger` と `BigDecimal` には素数のメンバーがありません。** `isProbablePrime`、
+`nextProbablePrime`、`probablePrime`、乱数のビットを取るコンストラクタは、名前を示して
+拒否されます。
 
 **`java.time` のゾーンは、オフセットが変わらないものだけです。** 使えるゾーンは、オフセット
 （`+09:00`、`Z`）、`UTC`、`GMT`、`UT` とそれにオフセットを付けたもの（`UTC+09:00`）、
@@ -332,16 +331,36 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 `parallelStream()` は記録されるだけです（`isParallel()` は `true` を返します）。要素は
 ソースの順に 1 つずつ流れ、コレクターの `combiner` と、`collect`、`reduce` の第 3 引数は
 呼ばれません。`String.chars()` と `codePoints()` は同じストリームで、コードポイントを
-返します。`flatMap` または `flatMapping` の中で作ったストリームは、最後の要素を取り出した
-ときに閉じられます。`findFirst` や `limit` で途中まで読んだストリームは閉じられません。
+返します。`flatMap` の中で作ったストリームは、最後の要素を取り出したとき、または
+ストリームがそれ以上要素を求めなくなったとき（`findFirst`、`limit`、マッチ、`takeWhile`）に
+閉じられます。ここまでは JDK と同じです。後の段が例外を投げた場合は閉じられません。JDK は
+この場合も閉じます。`iterator()` と `Stream.concat` は、このストリームの要素を 1 つずつ
+取り出します。JDK は全部を取り出してから最初の要素を渡します。
 コレクターの `finisher` は、`characteristics()` の内容にかかわらず必ず呼ばれます。
 プログラム自身のクラスのコレクターから作ったコレクター（`mapping`、`groupingBy`）は、
 元のコレクターの特性を引き継ぎません。ライブラリのスプリッテレーターは分割しません。
 `trySplit` は `null` を返します。スプリッテレーターで読んでいる途中にコレクションを変更すると、
 次の要素を渡す前に `ConcurrentModificationException` が投げられます。JDK はその要素を
-渡してから投げます。`mapMulti`、`gather`、ストリーム自身の `spliterator()`、`int`、`long`、
-`double` のスプリッテレーター、`Collectors.groupingByConcurrent` と `toConcurrentMap`、
-`Random` のストリームはありません。
+渡してから投げます。
+
+**`mapMulti` とギャザラーは、1 つの要素に対して渡した要素を、後の段が求めるまで保持します。**
+`mapMulti` の関数は、1 つの要素に対する処理を最後まで実行します。後の段が最初の要素を
+受け取るのはその後です。JDK では、関数が要素を渡すたびに後の段が受け取り、`limit` を
+超えた分も受け取ります。ギャザラーの `push` は、ストリームが要素を求めなくなるまで `true` を
+返し、`isRejecting()` は `false` を返します。JDK では、後の段が必要な数を受け取った時点で、
+1 つの要素を処理している途中でも値が変わります。そのため、`push` が `false` を返すまで
+渡し続けるギャザラーは、ここでは終了しません。ストリームが渡す要素は JDK と同じです。
+`Gatherers.mapConcurrent` が結果を渡すのは、実行中のマッピングが上限の数に達したときと、
+ストリームが終わったときです。JDK は、終わった結果をそれより早く渡すことがあります。
+
+**ストリームの `spliterator()` が報告するのは、順序と大きさです。** 特性は `ORDERED` で、
+ストリームが要素数を知っている場合は `SIZED` と `SUBSIZED` が加わります。見積もりは、その
+要素数か `Long.MAX_VALUE` です。JDK は、段を通して追跡している内容も報告します。`DISTINCT`、
+`SORTED`、ソースの `NONNULL`、`IMMUTABLE`、`CONCURRENT` を報告し、`HashSet` のストリームには
+`ORDERED` を付けず、`filter` の後ではソースの見積もりを返します。また JDK の `sorted()` は、
+すでに整列しているストリーム（`IntStream.range`）では要素を先に取り出しません。ここでは
+取り出します。`StreamSupport.stream(s, false).spliterator()` は `s` ではなく、別の
+スプリッテレーターです。
 
 **ホストへの問い合わせには決まった値を返します。** `Runtime.availableProcessors()` は 1 です。
 `System.getProperty` は `line.separator`、`file.separator`、`path.separator` と、エンコーディング

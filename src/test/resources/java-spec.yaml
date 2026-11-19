@@ -5558,6 +5558,116 @@ cases:
               row("reader lines", () -> new java.io.BufferedReader(new java.io.StringReader("a\nb\nc")).lines());
           }
 
+              // The stream a flatMap stage was reading is closed where no more is asked of the
+              // stage: a first element found, a limit reached, a match decided, a takeWhile ended.
+              static Stream<Integer> inner(int x, int n) {
+                  return IntStream.range(0, n).mapToObj(i -> x * 10 + i).onClose(() -> log.append("close").append(x).append(' '));
+              }
+
+              static <T> List<T> each(Stream<T> s) {
+                  List<T> all = new ArrayList<>();
+                  s.forEach(x -> {
+                      seen("each" + x);
+                      all.add(x);
+                  });
+                  return all;
+              }
+
+              static void closing() {
+                  show("flatMap all", Stream.of(1, 2).flatMap(x -> inner(x, 2)).peek(StreamsRun::seen).toList());
+                  show("flatMap first", Stream.of(1, 2).flatMap(x -> inner(x, 2)).peek(StreamsRun::seen).findFirst());
+                  show("flatMap limit", Stream.of(1, 2).flatMap(x -> inner(x, 2)).peek(StreamsRun::seen).limit(1).map(StreamsRun::seen).toList());
+                  show("flatMap limit forEach", each(Stream.of(1, 2).flatMap(x -> inner(x, 2)).peek(StreamsRun::seen).limit(1)));
+                  show("flatMap limit 3", Stream.of(1, 2).flatMap(x -> inner(x, 2)).peek(StreamsRun::seen).limit(3).map(StreamsRun::seen).toList());
+                  show("flatMap limit 0", Stream.of(1, 2).flatMap(x -> inner(x, 2)).peek(StreamsRun::seen).limit(0).map(StreamsRun::seen).toList());
+                  show("flatMap any", Stream.of(1, 2).flatMap(x -> inner(x, 3)).peek(StreamsRun::seen).anyMatch(x -> x == 11));
+                  show("flatMap all match", Stream.of(1, 2).flatMap(x -> inner(x, 3)).peek(StreamsRun::seen).allMatch(x -> x < 11));
+                  show("flatMap none match", Stream.of(1, 2).flatMap(x -> inner(x, 3)).peek(StreamsRun::seen).noneMatch(x -> x == 11));
+                  show("flatMap takeWhile", Stream.of(1, 2).flatMap(x -> inner(x, 3)).peek(StreamsRun::seen).takeWhile(x -> x < 11).map(StreamsRun::seen).toList());
+                  show("flatMap nested", Stream.of(1, 2).flatMap(x -> Stream.of(x, x + 4).flatMap(y -> inner(y, 2)).onClose(() -> seen("outer" + x))).peek(StreamsRun::seen).findFirst());
+                  show("flatMap twice", Stream.of(1, 2).flatMap(x -> inner(x, 2)).peek(StreamsRun::seen).flatMap(x -> inner(x, 2)).findFirst());
+                  show("flatMap twice limit", Stream.of(1, 2).flatMap(x -> inner(x, 2)).peek(StreamsRun::seen).flatMap(x -> inner(x, 2)).limit(3).toList());
+                  show("flatMap after limit", Stream.of(1, 2).flatMap(x -> inner(x, 3)).limit(2).flatMap(x -> inner(x, 2)).peek(StreamsRun::seen).toList());
+                  show("flatMap skip limit", Stream.of(1, 2, 3).flatMap(x -> inner(x, 2)).skip(1).limit(2).peek(StreamsRun::seen).toList());
+                  show("flatMap limit count", Stream.of(1, 2, 3).flatMap(x -> inner(x, 2)).limit(3).count());
+                  show("flatMapToInt first", Stream.of(1, 2).flatMapToInt(x -> IntStream.range(0, 2).onClose(() -> seen("close" + x))).peek(StreamsRun::seen).findFirst());
+                  show("flatMapToLong limit", Stream.of(1, 2).flatMapToLong(x -> LongStream.range(0, 2).onClose(() -> seen("close" + x))).peek(StreamsRun::seen).limit(1).sum());
+                  show("flatMapToDouble any", Stream.of(1, 2).flatMapToDouble(x -> DoubleStream.of(0.5, 1.5).onClose(() -> seen("close" + x))).peek(StreamsRun::seen).anyMatch(x -> x > 0));
+                  show("int flatMap first", IntStream.of(1, 2).flatMap(x -> IntStream.range(0, 2).onClose(() -> seen("close" + x))).peek(StreamsRun::seen).findFirst());
+                  show("int flatMap takeWhile", IntStream.of(1, 2).flatMap(x -> IntStream.range(0, 2).onClose(() -> seen("close" + x))).takeWhile(x -> x < 1).sum());
+                  show("long flatMap any", LongStream.of(1, 2).flatMap(x -> LongStream.range(0, 2).onClose(() -> seen("close" + x))).peek(StreamsRun::seen).findAny());
+                  show("long flatMap limit", LongStream.of(1, 2).flatMap(x -> LongStream.range(0, 2).onClose(() -> seen("close" + x))).limit(3).sum());
+                  show("double flatMap none", DoubleStream.of(1, 2).flatMap(x -> DoubleStream.of(0.5, 1.5).onClose(() -> seen("close" + x))).peek(StreamsRun::seen).noneMatch(x -> x > 0));
+                  show("double flatMap all", DoubleStream.of(1, 2).flatMap(x -> DoubleStream.of(0.5, 1.5).onClose(() -> seen("close" + x))).allMatch(x -> x < 1));
+                  fails("flatMap close fails", () -> Stream.of(1, 2).flatMap(x -> inner(x, 2).onClose(() -> {
+                      throw new IllegalStateException("closing " + x);
+                  })).peek(StreamsRun::seen).findFirst());
+              }
+
+              // mapMulti hands on what its function gives a consumer for each element.
+              static void several() {
+                  show("mapMulti", Stream.of(1, 2, 3).<Integer>mapMulti((x, to) -> {
+                      for (int i = 0; i < x; i++) {
+                          to.accept(x * 10 + i);
+                      }
+                  }).toList());
+                  show("mapMulti none", Stream.of(1, 2, 3).<Integer>mapMulti((x, to) -> {
+                  }).toList());
+                  show("mapMulti null element", Stream.of(1, 2).<Integer>mapMulti((x, to) -> {
+                      to.accept(null);
+                      to.accept(x);
+                  }).toList());
+                  show("mapMulti count", Stream.of(1, 2, 3).peek(StreamsRun::seen).<Integer>mapMulti((x, to) -> to.accept(x)).count());
+                  show("mapMulti any", Stream.of(1, 2, 3).peek(StreamsRun::seen).<Integer>mapMulti((x, to) -> {
+                      to.accept(x * 10);
+                      to.accept(x * 10 + 1);
+                  }).peek(StreamsRun::seen).anyMatch(x -> x == 11));
+                  show("mapMulti takeWhile", Stream.of(1, 2, 3).peek(StreamsRun::seen).<Integer>mapMulti((x, to) -> {
+                      to.accept(x * 10);
+                      to.accept(x * 10 + 1);
+                  }).peek(StreamsRun::seen).takeWhile(x -> x < 11).toList());
+                  show("mapMulti sorted", Stream.of(3, 1, 2).peek(StreamsRun::seen).<Integer>mapMulti((x, to) -> {
+                      to.accept(x * 10);
+                      to.accept(x * 10 + 1);
+                  }).sorted().peek(StreamsRun::seen).limit(2).toList());
+                  fails("mapMulti null", () -> Stream.of(1).mapMulti(null));
+                  show("mapMultiToInt", Stream.of(1, 2, 3).mapMultiToInt((x, to) -> {
+                      to.accept(x);
+                      to.accept(-x);
+                  }).sum());
+                  show("mapMultiToLong", Stream.of(1, 2, 3).mapMultiToLong((x, to) -> {
+                      to.accept(x);
+                      to.accept(x * 100L);
+                  }).boxed().toList());
+                  show("mapMultiToDouble", Stream.of(1, 2, 3).mapMultiToDouble((x, to) -> {
+                      if (x != 2) {
+                          to.accept(x / 2.0);
+                      }
+                  }).boxed().toList());
+                  show("int mapMulti", IntStream.range(0, 12).mapMulti((x, to) -> {
+                      for (int i = 0; i < x; i++) {
+                          to.accept(x);
+                      }
+                  }).summaryStatistics());
+                  show("long mapMulti", LongStream.range(0, 4).mapMulti((x, to) -> {
+                      for (int i = 0; i < x; i++) {
+                          to.accept(x);
+                      }
+                  }).boxed().toList());
+                  show("double mapMulti", DoubleStream.of(1.5, 2.5).mapMulti((x, to) -> {
+                      to.accept(x);
+                      to.accept(-x);
+                  }).boxed().toList());
+                  fails("int mapMulti null", () -> IntStream.of(1).mapMulti(null));
+                  List<Consumer<Object>> kept = new ArrayList<>();
+                  show("mapMulti kept", Stream.of(1, 2).<Object>mapMulti((x, to) -> {
+                      kept.add(to);
+                      to.accept(x);
+                  }).toList());
+                  fails("mapMulti after", () -> kept.get(0).accept(9));
+                  show("mapMulti inner closed", Stream.of(1, 2).flatMap(x -> inner(x, 2)).<Integer>mapMulti((x, to) -> to.accept(x)).findFirst());
+              }
+
           public static void main(String[] args) {
               List<Integer> list = new ArrayList<>(List.of(1, 2, 3, 4));
               Set<Integer> set = new HashSet<>(list);
@@ -5729,6 +5839,8 @@ cases:
                   b.build();
               });
               sources();
+              closing();
+              several();
           }
       }
     expected: |
@@ -5948,6 +6060,50 @@ cases:
       int skip: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
       int limit: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
       reader lines: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      flatMap all: [10, 11, 20, 21] | 10 11 close1 20 21 close2
+      flatMap first: Optional[10] | 10 close1
+      flatMap limit: [10] | 10 10 close1
+      flatMap limit forEach: [10] | 10 each10 close1
+      flatMap limit 3: [10, 11, 20] | 10 10 11 11 close1 20 20 close2
+      flatMap limit 0: []
+      flatMap any: true | 10 11 close1
+      flatMap all match: false | 10 11 close1
+      flatMap none match: false | 10 11 close1
+      flatMap takeWhile: [10] | 10 10 11 close1
+      flatMap nested: Optional[10] | 10 close1 outer1
+      flatMap twice: Optional[100] | 10 close10 close1
+      flatMap twice limit: [100, 101, 110] | 10 close10 11 close11 close1
+      flatMap after limit: [100, 101, 110, 111] | 100 101 close10 110 111 close11 close1
+      flatMap skip limit: [11, 20] | 11 close1 20 close2
+      flatMap limit count: 3 | close1 close2
+      flatMapToInt first: OptionalInt[0] | 0 close1
+      flatMapToLong limit: 0 | 0 close1
+      flatMapToDouble any: true | 0.5 close1
+      int flatMap first: OptionalInt[0] | 0 close1
+      int flatMap takeWhile: 0 | close1
+      long flatMap any: OptionalLong[0] | 0 close1
+      long flatMap limit: 1 | close1 close2
+      double flatMap none: false | 0.5 close1.0
+      double flatMap all: false | close1.0
+      flatMap close fails: java.lang.IllegalStateException: closing 1 | 10 close1
+      mapMulti: [10, 20, 21, 30, 31, 32]
+      mapMulti none: []
+      mapMulti null element: [null, 1, null, 2]
+      mapMulti count: 3 | 1 2 3
+      mapMulti any: true | 1 10 11
+      mapMulti takeWhile: [10] | 1 10 11
+      mapMulti sorted: [10, 11] | 3 1 2 10 11
+      mapMulti null: java.lang.NullPointerException
+      mapMultiToInt: 0
+      mapMultiToLong: [1, 100, 2, 200, 3, 300]
+      mapMultiToDouble: [0.5, 1.5]
+      int mapMulti: IntSummaryStatistics{count=66, sum=506, min=1, average=7.666667, max=11}
+      long mapMulti: [1, 2, 2, 3, 3, 3]
+      double mapMulti: [1.5, -1.5, 2.5, -2.5]
+      int mapMulti null: java.lang.NullPointerException
+      mapMulti kept: [1, 2]
+      mapMulti after: ran
+      mapMulti inner closed: Optional[10] | close1
   # The chains everyday code writes over a collection, an array, a text, a pattern and a
   # reader, and the streams of int, long and double with their optionals, statistics and
   # iterators. A double stream's sum is Kahan's compensated one, the plain sum where that
@@ -6203,6 +6359,64 @@ cases:
               }
           }
 
+              // The streams of a Random draw each element when they are read; the draws of an
+              // element between two bounds are the ones a JDK makes.
+              static void refused(String what, Runnable r) {
+                  try {
+                      r.run();
+                      System.out.println(what + ": ran");
+                  }
+                  catch (RuntimeException e) {
+                      System.out.println(what + ": " + e);
+                  }
+              }
+
+              static void drawn() {
+                  System.out.println(new Random(5).ints(3).boxed().toList() + " " + new Random(5).ints().limit(2).boxed().toList() + " "
+                          + new Random(5).longs(2).boxed().toList() + " " + new Random(5).doubles(2).boxed().toList());
+                  System.out.println(new Random(5).ints(4, 0, 10).boxed().toList() + " " + new Random(5).ints(-8, 8).limit(4).boxed().toList()
+                          + " " + new Random(5).ints(3, -1000000, 1000000).boxed().toList() + " "
+                          + new Random(5).ints(3, Integer.MIN_VALUE, Integer.MAX_VALUE).boxed().toList());
+                  System.out.println(new Random(5).longs(3, -5, 5).boxed().toList() + " " + new Random(5).longs(0, 1L << 40).limit(2).boxed().toList()
+                          + " " + new Random(5).longs(2, 0, 3_000_000_000_000L).boxed().toList() + " "
+                          + new Random(5).longs(2, Long.MIN_VALUE, Long.MAX_VALUE).boxed().toList());
+                  System.out.println(new Random(5).doubles(2, 1, 2).boxed().toList() + " " + new Random(5).doubles(-0.5, 0.5).limit(2).boxed().toList()
+                          + " " + new Random(5).doubles(1, 1.0, Math.nextUp(1.0)).boxed().toList());
+                  // a thousand ranges of each kind, each stream against the draws one after the other
+                  Random pick = new Random(42);
+                  long sum = 0;
+                  for (int round = 0; round < 1000; round++) {
+                      long seed = pick.nextLong();
+                      int from = round % 3 == 0 ? 0 : pick.nextInt();
+                      int to = round % 3 == 0 ? 1 + pick.nextInt(1 << (1 + round % 30)) : pick.nextInt();
+                      if (from < to) {
+                          sum = sum * 31 + new Random(seed).ints(5, from, to).sum() + new Random(seed).longs(5, from * 4_000_000_000L, to * 4_000_000_000L).sum();
+                          sum += Double.doubleToLongBits(new Random(seed).doubles(5, from / 7.0, to / 3.0 + 1e10).sum());
+                      }
+                  }
+                  System.out.println("seeded " + sum);
+                  System.out.println(new Random(7).ints(0).count() + " " + new Random(7).ints(3).count() + " " + new Random(7).ints().count() + " "
+                          + new Random(7).ints().limit(4).count() + " " + new Random(7).ints(5).skip(2).count() + " " + new Random(7).longs().count()
+                          + " " + new Random(7).doubles(9).count() + " " + new Random(7).ints().isParallel());
+                  Random shared = new Random(3);
+                  IntStream later = shared.ints(2);
+                  int first = shared.nextInt();
+                  System.out.println("drawn when read: " + (later.boxed().toList().contains(first)) + " " + (new Random(3).nextInt() == first) + " "
+                          + new Random(5).ints(3).sorted().boxed().toList() + " " + new Random(5).doubles().limit(2).count());
+                  refused("ints(-1)", () -> new Random(1).ints(-1));
+                  refused("ints(5, 5)", () -> new Random(1).ints(5, 5));
+                  refused("ints(-1, 0, 1)", () -> new Random(1).ints(-1, 0, 1));
+                  refused("ints(1, 2, 1)", () -> new Random(1).ints(1, 2, 1));
+                  refused("longs(-1)", () -> new Random(1).longs(-1));
+                  refused("longs(3, 3)", () -> new Random(1).longs(3, 3));
+                  refused("longs(-2, 0, 1)", () -> new Random(1).longs(-2, 0, 1));
+                  refused("doubles(-1)", () -> new Random(1).doubles(-1));
+                  refused("doubles(1.0, 1.0)", () -> new Random(1).doubles(1.0, 1.0));
+                  refused("doubles(0, NaN)", () -> new Random(1).doubles(0, Double.NaN));
+                  refused("doubles(-1, 0, 1)", () -> new Random(1).doubles(-1, 0, 1));
+                  refused("doubles(0, infinity)", () -> new Random(1).doubles(0, Double.POSITIVE_INFINITY));
+              }
+
           public static void main(String[] args) {
               // ints
               show(IntStream.range(0, 5).sum() + " " + IntStream.rangeClosed(1, 5).sum() + " " + IntStream.range(5, 0).sum() + " " + IntStream.rangeClosed(3, 3).count());
@@ -6306,6 +6520,7 @@ cases:
               fails("0,9", () -> Arrays.stream(ints, 0, 9));
               fails("4,4", () -> Arrays.stream(longs, 4, 4));
               show(Arrays.stream(names, 3, 3).count() + " " + Arrays.toString(Arrays.stream(names).toArray(String[]::new)) + " " + Arrays.toString(Stream.of("b", "a").sorted().toArray()) + " " + Stream.of("b", "a").toArray(String[]::new).length + " " + Arrays.toString(Stream.of(1, 2).toArray(Integer[]::new)) + " " + Arrays.toString(IntStream.range(0, 3).mapToObj(i -> new int[] { i, i * i }).map(a -> a[0] + a[1]).toArray()));
+              drawn();
           }
       }
     expected: |
@@ -6449,6 +6664,25 @@ cases:
       0,9: java.lang.ArrayIndexOutOfBoundsException: Array index out of range: 9
       4,4: java.lang.ArrayIndexOutOfBoundsException: Array index out of range: 4
       0 [x, y, z] [a, b] 2 [1, 2] [0, 2, 6]
+      [-1157408321, 758500184, 379066948] [-1157408321, 758500184] [-4971030886054769832, 1628080142987304160] [0.730519863614471, 0.08825840967622589]
+      [7, 2, 4, 4] [7, 0, -4, -8] [-220513, 250092, 533474] [-1157408321, 758500184, 379066948]
+      [-3, -5, -4] [821097253720, 290390547680] [593827390892, 2071493652080] [-4971030886054769832, 1628080142987304160]
+      [1.730519863614471, 1.088258409676226] [0.23051986361447097, -0.4117415903237741] [1.0]
+      seeded 3477948173842542044
+      0 3 9223372036854775807 4 3 9223372036854775807 9 false
+      drawn when read: false true [-1157408321, 379066948, 758500184] 2
+      ints(-1): java.lang.IllegalArgumentException: size must be non-negative
+      ints(5, 5): java.lang.IllegalArgumentException: bound must be greater than origin
+      ints(-1, 0, 1): java.lang.IllegalArgumentException: size must be non-negative
+      ints(1, 2, 1): java.lang.IllegalArgumentException: bound must be greater than origin
+      longs(-1): java.lang.IllegalArgumentException: size must be non-negative
+      longs(3, 3): java.lang.IllegalArgumentException: bound must be greater than origin
+      longs(-2, 0, 1): java.lang.IllegalArgumentException: size must be non-negative
+      doubles(-1): java.lang.IllegalArgumentException: size must be non-negative
+      doubles(1.0, 1.0): java.lang.IllegalArgumentException: bound must be greater than origin
+      doubles(0, NaN): java.lang.IllegalArgumentException: bound must be greater than origin
+      doubles(-1, 0, 1): java.lang.IllegalArgumentException: size must be non-negative
+      doubles(0, infinity): java.lang.IllegalArgumentException: bound must be greater than origin
   # Collectors: the maps keep the order a JDK's HashMap shows for keys sharing a bucket
   # (groupingBy puts ahead of the chain, toMap behind it), partitioningBy answers a map
   # of false and true, the marks of each collector and of one made of another are a JDK
@@ -6487,6 +6721,47 @@ cases:
                       new Person("Cy", 40, "Oslo", 520.0), new Person("Di", 25, "Lima", 300.25),
                       new Person("Ed", 58, "Rome", 99.9), new Person("Flo", 31, "Oslo", 0.1));
           }
+
+              // The collectors of a concurrent map: the maps, the marks and the refusals of the
+              // plain ones over a ConcurrentHashMap.
+              static String kind(Object map) {
+                  return map + (map instanceof java.util.concurrent.ConcurrentHashMap ? " in a ConcurrentHashMap" : " in another map");
+              }
+
+              static void concurrent() {
+                  List<String> words = List.of("pear", "fig", "apple", "kiwi", "plum", "date", "lime", "peach");
+                  System.out.println(kind(words.stream().collect(Collectors.groupingByConcurrent(String::length))));
+                  System.out.println(kind(words.stream().collect(Collectors.groupingByConcurrent(String::length, Collectors.counting()))));
+                  System.out.println(kind(words.stream().collect(Collectors.groupingByConcurrent(w -> w.charAt(0), java.util.concurrent.ConcurrentHashMap::new, Collectors.joining("+")))));
+                  System.out.println(kind(words.stream().collect(Collectors.groupingByConcurrent(String::length, Collectors.mapping(w -> w.charAt(0), Collectors.toList())))));
+                  System.out.println(kind(words.stream().collect(Collectors.toConcurrentMap(w -> w, String::length))));
+                  System.out.println(kind(words.stream().collect(Collectors.toConcurrentMap(String::length, w -> w, (a, b) -> a + "|" + b))));
+                  System.out.println(kind(words.stream().collect(Collectors.toConcurrentMap(String::length, w -> w, (a, b) -> b, java.util.concurrent.ConcurrentHashMap::new))));
+                  System.out.println(Collectors.groupingByConcurrent(String::length).characteristics() + " "
+                          + Collectors.groupingByConcurrent(String::length, Collectors.counting()).characteristics() + " "
+                          + Collectors.groupingByConcurrent(String::length, Collectors.toSet()).characteristics() + " "
+                          + Collectors.groupingByConcurrent(String::length, java.util.concurrent.ConcurrentHashMap::new, Collectors.toList()).characteristics());
+                  System.out.println(Collectors.toConcurrentMap(w -> w, w -> w).characteristics() + " "
+                          + Collectors.toConcurrentMap(w -> w, w -> w, (a, b) -> a).characteristics() + " "
+                          + Collectors.toConcurrentMap(w -> w, w -> w, (a, b) -> a, java.util.concurrent.ConcurrentHashMap::new).characteristics());
+                  System.out.println(Collectors.groupingBy(String::length, Collectors.groupingByConcurrent(String::length)).characteristics() + " "
+                          + Collectors.mapping(w -> w, Collectors.toConcurrentMap(w -> w, w -> w)).characteristics() + " "
+                          + Collectors.collectingAndThen(Collectors.toConcurrentMap(w -> w, w -> w), m -> m).characteristics() + " "
+                          + Collectors.teeing(Collectors.toConcurrentMap(w -> w, w -> w), Collectors.groupingByConcurrent(w -> w), (a, b) -> a).characteristics() + " "
+                          + Collectors.partitioningBy(w -> true, Collectors.groupingByConcurrent(w -> w)).characteristics() + " "
+                          + Collectors.groupingByConcurrent(String::length, Collectors.toConcurrentMap(w -> w, w -> w)).characteristics());
+                  fails("duplicate", () -> words.stream().collect(Collectors.toConcurrentMap(String::length, w -> w)));
+                  fails("null key", () -> Stream.of("a", "b").collect(Collectors.groupingByConcurrent(w -> null)));
+                  fails("null key to", () -> Stream.of("a", "b").collect(Collectors.toConcurrentMap(w -> null, w -> w)));
+                  fails("null value to", () -> Stream.of("a", "b").collect(Collectors.toConcurrentMap(w -> w, w -> null)));
+                  fails("null value merge", () -> Stream.of("a", "b").collect(Collectors.toConcurrentMap(w -> w, w -> null, (a, b) -> a)));
+                  fails("null downstream", () -> Collectors.groupingByConcurrent(w -> w, null));
+                  Collector<String, ?, java.util.concurrent.ConcurrentMap<Integer, List<String>>> halves = Collectors.groupingByConcurrent(String::length);
+                  System.out.println(collected(halves, "pear", "fig", "apple", "kiwi", "plum"));
+                  java.util.concurrent.ConcurrentMap<Integer, Long> counts = words.stream().collect(Collectors.groupingByConcurrent(String::length, Collectors.counting()));
+                  counts.merge(4, 10L, Long::sum);
+                  System.out.println(counts);
+              }
 
           public static void main(String[] args) {
               List<String> words = List.of("apple", "fig", "kiwi", "plum", "pear", "banana", "fig");
@@ -6670,6 +6945,7 @@ cases:
               show(IntStream.range(0, 4).collect(ArrayList::new, ArrayList::add, ArrayList::addAll));
               show(IntStream.range(0, 4).collect(StringBuilder::new, (sb, i) -> sb.append(i), StringBuilder::append));        marks();
               own();
+              concurrent();
           }
 
           static void row(String what, Collector<?, ?, ?> c) {
@@ -7086,6 +7362,348 @@ cases:
       {3=1, 4=3, 5=1, 6=1}
       4 true
       6 6 6 apple
+      {3=[fig], 4=[pear, kiwi, plum, date, lime], 5=[apple, peach]} in a ConcurrentHashMap
+      {3=1, 4=5, 5=2} in a ConcurrentHashMap
+      {p=pear+plum+peach, a=apple, d=date, f=fig, k=kiwi, l=lime} in a ConcurrentHashMap
+      {3=[f], 4=[p, k, p, d, l], 5=[a, p]} in a ConcurrentHashMap
+      {plum=4, date=4, apple=5, pear=4, kiwi=4, fig=3, lime=4, peach=5} in a ConcurrentHashMap
+      {3=fig, 4=pear|kiwi|plum|date|lime, 5=apple|peach} in a ConcurrentHashMap
+      {3=fig, 4=lime, 5=peach} in a ConcurrentHashMap
+      [CONCURRENT, UNORDERED, IDENTITY_FINISH] [CONCURRENT, UNORDERED] [CONCURRENT, UNORDERED, IDENTITY_FINISH] [CONCURRENT, UNORDERED, IDENTITY_FINISH]
+      [CONCURRENT, UNORDERED, IDENTITY_FINISH] [CONCURRENT, UNORDERED, IDENTITY_FINISH] [CONCURRENT, UNORDERED, IDENTITY_FINISH]
+      [IDENTITY_FINISH] [CONCURRENT, UNORDERED, IDENTITY_FINISH] [CONCURRENT, UNORDERED] [CONCURRENT, UNORDERED] [IDENTITY_FINISH] [CONCURRENT, UNORDERED, IDENTITY_FINISH]
+      duplicate: java.lang.IllegalStateException: Duplicate key 4 (attempted merging values pear and kiwi)
+      null key: java.lang.NullPointerException
+      null key to: java.lang.NullPointerException
+      null value to: java.lang.NullPointerException
+      null value merge: java.lang.NullPointerException
+      null downstream: java.lang.NullPointerException
+      {3=[fig], 4=[pear, kiwi, plum], 5=[apple]}
+      {3=1, 4=15, 5=2}
+  # A gatherer is a stage that holds what it pushes for one element until the stages
+  # after it ask: its state is made before the first element is asked for, it ends the
+  # stream by answering false, and its finisher runs where the stream ends or stops
+  # asking, a stream flatMap was reading closed first. Two gatherers one after the other
+  # are one, as andThen makes them. A push answers true while the stream asks; what a
+  # JDK answers a gatherer that pushes several elements for one once the stages after
+  # it have enough is not asked here (doc/*/java/deviations.md). Gatherers' fold, scan
+  # and the two windows; mapConcurrent starts threads and is a line of the threads' case.
+  - name: a-gatherer-is-a-stage-holding-what-it-pushes-until-it-is-asked
+    main: GatherersRun
+    source: |
+      class GatherersRun {
+          static StringBuilder log = new StringBuilder();
+
+          static <T> T seen(T x) {
+              log.append(x).append(' ');
+              return x;
+          }
+
+          static void show(String what, Object value) {
+              System.out.println(what + ": " + value + (log.isEmpty() ? "" : " | " + log.toString().trim()));
+              log.setLength(0);
+          }
+
+          static void fails(String what, Runnable r) {
+              try {
+                  r.run();
+                  show(what, "ran");
+              }
+              catch (NullPointerException e) {
+                  show(what, e.getClass().getName());
+              }
+              catch (RuntimeException e) {
+                  show(what, e);
+              }
+          }
+
+          // pushes each element so many times, saying what each push answered
+          static Gatherer<Integer, ?, Integer> times(int n) {
+              return Gatherer.of((state, x, down) -> {
+                  for (int i = 0; i < n; i++) {
+                      boolean more = down.push(x * 10 + i);
+                      seen("push" + (x * 10 + i) + "=" + more + (down.isRejecting() ? "!" : ""));
+                  }
+                  return true;
+              });
+          }
+
+          // hands on two elements and ends the stream, then one more at its end
+          static Gatherer<Integer, int[], Integer> firstTwo() {
+              return Gatherer.ofSequential(() -> {
+                  seen("init");
+                  return new int[1];
+              }, (state, x, down) -> {
+                  seen("in" + x);
+                  down.push(x);
+                  return ++state[0] < 2;
+              }, (state, down) -> {
+                  seen("finish" + state[0] + (down.isRejecting() ? "!" : ""));
+                  down.push(-1);
+              });
+          }
+
+          // hands every element on and says when it begins, takes one and ends
+          static Gatherer<Integer, int[], Integer> passing(String name) {
+              return Gatherer.ofSequential(() -> {
+                  seen(name + "init");
+                  return new int[1];
+              }, (state, x, down) -> {
+                  seen(name + "in" + x);
+                  return down.push(x);
+              }, (state, down) -> seen(name + "finish" + (down.isRejecting() ? "!" : "")));
+          }
+
+          static Stream<Integer> inner(int x) {
+              return Stream.of(x, x + 10).onClose(() -> seen("close" + x));
+          }
+
+          static void made() {
+              show("fold", Stream.of(1, 2, 3).gather(Gatherers.fold(() -> 10, (a, x) -> a + x)).toList());
+              show("fold none", Stream.<Integer>empty().gather(Gatherers.fold(() -> 10, (a, x) -> a + x)).toList());
+              show("fold lazy", Stream.of(1, 2, 3).peek(GatherersRun::seen).gather(Gatherers.fold(() -> seen(10), (a, x) -> a + x)).peek(GatherersRun::seen).findFirst());
+              show("scan", Stream.of(1, 2, 3).gather(Gatherers.scan(() -> "", (a, x) -> a + x)).toList());
+              show("scan none", Stream.<Integer>empty().gather(Gatherers.scan(() -> "", (a, x) -> a + x)).toList());
+              show("scan lazy", Stream.of(1, 2, 3).peek(GatherersRun::seen).gather(Gatherers.scan(() -> 0, (a, x) -> a + x)).peek(GatherersRun::seen).limit(2).toList());
+              show("scan limit 0", Stream.of(1, 2, 3).gather(Gatherers.scan(() -> seen(10), (a, x) -> a + x)).limit(0).toList());
+              show("windowFixed", Stream.of(1, 2, 3, 4, 5).gather(Gatherers.windowFixed(2)).toList());
+              show("windowFixed exact", Stream.of(1, 2, 3, 4).gather(Gatherers.windowFixed(2)).toList());
+              show("windowFixed none", Stream.empty().gather(Gatherers.windowFixed(2)).toList());
+              show("windowFixed null", Stream.of(1, null, 3).gather(Gatherers.windowFixed(2)).toList());
+              show("windowFixed short", Stream.of(1, 2).gather(Gatherers.windowFixed(5)).toList());
+              show("windowFixed lazy", Stream.of(1, 2, 3, 4, 5).peek(GatherersRun::seen).gather(Gatherers.windowFixed(2)).peek(GatherersRun::seen).findFirst());
+              show("windowSliding", Stream.of(1, 2, 3, 4, 5).gather(Gatherers.windowSliding(3)).toList());
+              show("windowSliding short", Stream.of(1, 2).gather(Gatherers.windowSliding(3)).toList());
+              show("windowSliding exact", Stream.of(1, 2, 3).gather(Gatherers.windowSliding(3)).toList());
+              show("windowSliding one", Stream.of(1, 2, 3).gather(Gatherers.windowSliding(1)).toList());
+              show("windowSliding none", Stream.empty().gather(Gatherers.windowSliding(3)).toList());
+              show("windowSliding lazy", Stream.of(1, 2, 3, 4, 5).peek(GatherersRun::seen).gather(Gatherers.windowSliding(2)).peek(GatherersRun::seen).limit(2).toList());
+              fails("windowFixed 0", () -> Gatherers.windowFixed(0));
+              fails("windowSliding -3", () -> Gatherers.windowSliding(-3));
+              fails("fold null", () -> Gatherers.fold(null, (a, x) -> a));
+              fails("fold null folder", () -> Gatherers.fold(() -> 1, null));
+              fails("scan null", () -> Gatherers.scan(null, (a, x) -> a));
+              fails("gather null", () -> Stream.of(1).gather(null));
+              List<Integer> window = Stream.of(1, 2, 3).gather(Gatherers.windowFixed(2)).findFirst().get();
+              fails("window add", () -> window.add(1));
+              fails("window set", () -> window.set(0, 1));
+              List<Integer> sliding = Stream.of(1, 2, 3).gather(Gatherers.windowSliding(2)).findFirst().get();
+              fails("sliding add", () -> sliding.add(1));
+          }
+
+          static void written() {
+              show("times", Stream.of(1, 2).gather(times(2)).toList());
+              show("times count", Stream.of(1, 2).gather(times(2)).count());
+              show("firstTwo", Stream.of(5, 6, 7, 8).peek(GatherersRun::seen).gather(firstTwo()).toList());
+              show("firstTwo short", Stream.of(5).peek(GatherersRun::seen).gather(firstTwo()).toList());
+              show("firstTwo first", Stream.of(5, 6, 7, 8).peek(GatherersRun::seen).gather(firstTwo()).findFirst());
+              show("firstTwo limit 1", Stream.of(5, 6, 7, 8).peek(GatherersRun::seen).gather(firstTwo()).limit(1).toList());
+              show("firstTwo limit 3", Stream.of(5, 6, 7, 8).peek(GatherersRun::seen).gather(firstTwo()).limit(3).toList());
+              show("firstTwo none", Stream.<Integer>empty().gather(firstTwo()).toList());
+              show("firstTwo flat", Stream.of(1, 2, 3).flatMap(x -> Stream.of(x, x + 10).onClose(() -> seen("close" + x))).gather(firstTwo()).toList());
+              Stream<Integer> lazy = Stream.of(1, 2).gather(firstTwo());
+              show("not yet", "made");
+              show("then", lazy.toList());
+              show("limit 0", Stream.of(1, 2).gather(passing("")).limit(0).toList());
+              show("after limit", Stream.of(1, 2, 3).gather(passing("")).limit(1).toList());
+              show("after first", Stream.of(1, 2, 3).gather(passing("")).findFirst());
+              show("after all", Stream.of(1, 2, 3).gather(passing("")).toList());
+              show("takeWhile", Stream.of(1, 2, 3).gather(passing("")).takeWhile(x -> x < 2).toList());
+              show("sorted", Stream.of(3, 1, 2).gather(passing("")).sorted().toList());
+              show("count", Stream.of(1, 2, 3).peek(GatherersRun::seen).gather(passing("")).count());
+              show("flat first", Stream.of(1, 2).flatMap(GatherersRun::inner).gather(passing("")).findFirst());
+              show("flat limit", Stream.of(1, 2).flatMap(GatherersRun::inner).gather(passing("")).limit(1).toList());
+              show("gather flat first", Stream.of(1, 2).gather(passing("")).flatMap(GatherersRun::inner).findFirst());
+              show("two first", Stream.of(1, 2).gather(passing("a")).gather(passing("b")).findFirst());
+              show("two all", Stream.of(1, 2).gather(passing("a")).gather(passing("b")).toList());
+              show("two limit", Stream.of(1, 2, 3).gather(passing("a")).gather(passing("b")).limit(2).toList());
+              show("flat two any", Stream.of(1, 2).flatMap(GatherersRun::inner).gather(passing("a")).flatMap(GatherersRun::inner).gather(passing("b")).anyMatch(x -> x == 11));
+              show("parallel flag", Stream.of(3, 1, 2).parallel().gather(passing("")).isParallel());
+              try (Stream<Integer> s = Stream.of(1).onClose(() -> seen("closed")).gather(passing(""))) {
+                  show("inside", s.toList());
+              }
+              show("after", "");
+              fails("gather twice", () -> {
+                  Stream<Integer> s = Stream.of(1);
+                  s.gather(passing(""));
+                  s.gather(passing(""));
+              });
+              fails("gather throws", () -> Stream.of(1, 2).gather(Gatherer.<Integer, Integer>ofSequential((s, x, down) -> {
+                  throw new IllegalStateException("in " + x);
+              }, (s, down) -> seen("finish"))).toList());
+          }
+
+          static void joined() {
+              Gatherer<Integer, ?, Integer> doubled = Gatherer.of((s, x, down) -> down.push(x * 2));
+              Gatherer<Integer, ?, String> texts = Gatherer.of(Gatherer.Integrator.ofGreedy((s, x, down) -> down.push("<" + x + ">")));
+              show("andThen", Stream.of(1, 2, 3).gather(doubled.andThen(texts)).toList());
+              show("andThen windows", Stream.of(1, 2, 3, 4, 5).gather(Gatherers.windowFixed(2).andThen(Gatherers.scan(() -> 0, (a, w) -> a + w.size()))).toList());
+              show("andThen firstTwo", Stream.of(5, 6, 7, 8).peek(GatherersRun::seen).gather(firstTwo().andThen(times(2))).toList());
+              show("andThen times firstTwo", Stream.of(5, 6, 7, 8).peek(GatherersRun::seen).gather(times(2).andThen(firstTwo())).toList());
+              show("andThen fold", Stream.of(1, 2, 3).gather(Gatherers.<Integer, Integer>scan(() -> 0, (a, x) -> a + x).andThen(Gatherers.fold(() -> "", (a, x) -> a + x))).toList());
+              show("composed first", Stream.of(1, 2).gather(passing("a").andThen(passing("b"))).findFirst());
+              show("composed all", Stream.of(1, 2).gather(passing("a").andThen(passing("b"))).toList());
+              fails("andThen null", () -> doubled.andThen(null));
+              Gatherer<Integer, ?, Integer> plain = Gatherer.of((s, x, down) -> down.push(x));
+              show("default initializer", plain.initializer() == Gatherer.defaultInitializer());
+              show("default combiner", plain.combiner() == Gatherer.defaultCombiner());
+              show("default finisher", (Object) plain.finisher() == (Object) Gatherer.defaultFinisher());
+              Gatherer<Integer, ?, Integer> seq = Gatherer.ofSequential((s, x, down) -> down.push(x));
+              show("sequential initializer", seq.initializer() == Gatherer.defaultInitializer());
+              show("sequential combiner", seq.combiner() == Gatherer.defaultCombiner());
+              show("sequential finisher", (Object) seq.finisher() == (Object) Gatherer.defaultFinisher());
+              show("state null", plain.initializer().get());
+              Gatherer<Integer, ?, Integer> two = plain.andThen(plain);
+              show("andThen initializer", two.initializer() == Gatherer.defaultInitializer());
+              show("andThen finisher", (Object) two.finisher() == (Object) Gatherer.defaultFinisher());
+              show("andThen combiner", two.combiner() == Gatherer.defaultCombiner());
+              Gatherer<Integer, ?, Integer> seqs = seq.andThen(plain);
+              show("andThen sequential combiner", seqs.combiner() == Gatherer.defaultCombiner());
+              Gatherer<Integer, ?, Integer> ended = Gatherer.of((s, x, down) -> down.push(x), (s, down) -> down.push(99));
+              show("of finisher", Stream.of(1).gather(ended).toList());
+              show("of finisher combiner", ended.combiner() == Gatherer.defaultCombiner());
+              Gatherer<Integer, int[], Integer> four = Gatherer.of(() -> new int[1], (s, x, down) -> {
+                  s[0] += x;
+                  return true;
+              }, (a, b) -> a, (s, down) -> down.push(s[0]));
+              show("of four", Stream.of(1, 2, 3).gather(four).toList());
+              Gatherer<Integer, int[], Integer> summing = Gatherer.ofSequential(() -> new int[1], (s, x, down) -> down.push(s[0] += x));
+              show("ofSequential state", Stream.of(1, 2, 3).gather(summing).toList());
+              show("ofSequential state finisher", (Object) summing.finisher() == (Object) Gatherer.defaultFinisher());
+              Gatherer<Integer, ?, Integer> last = Gatherer.ofSequential((s, x, down) -> true, (s, down) -> down.push(7));
+              show("ofSequential finisher", Stream.of(1, 2, 3).gather(last).toList());
+              fails("of null", () -> Gatherer.of((Gatherer.Integrator<Void, Integer, Integer>) null));
+              fails("ofSequential null", () -> Gatherer.ofSequential((Gatherer.Integrator<Void, Integer, Integer>) null));
+              fails("default combiner called", () -> Gatherer.<int[]>defaultCombiner().apply(new int[1], new int[1]));
+              Gatherer.Integrator<Void, Integer, Integer> same = (s, x, down) -> down.push(x);
+              show("Integrator.of", Gatherer.Integrator.of(same) == same);
+              Gatherer.Integrator.Greedy<Void, Integer, Integer> greedy = (s, x, down) -> down.push(x);
+              show("Integrator.ofGreedy", Gatherer.Integrator.ofGreedy(greedy) == greedy);
+              show("integrator kept", Gatherer.of(same).integrator() == same);
+              // a gatherer of the program's own class
+              Gatherer<String, StringBuilder, String> joining = new Gatherer<>() {
+                  public Supplier<StringBuilder> initializer() {
+                      return StringBuilder::new;
+                  }
+
+                  public Integrator<StringBuilder, String, String> integrator() {
+                      return (sb, s, down) -> {
+                          sb.append(s);
+                          return true;
+                      };
+                  }
+
+                  public BiConsumer<StringBuilder, Downstream<? super String>> finisher() {
+                      return (sb, down) -> down.push(sb.toString());
+                  }
+              };
+              show("own class", Stream.of("a", "b", "c").gather(joining).toList());
+              show("own class then", Stream.of("a", "b", "c").gather(joining.andThen(Gatherers.scan(() -> "", (a, x) -> a + x + x))).toList());
+              show("own class combiner", (Object) joining.combiner() == (Object) Gatherer.defaultCombiner());
+              Gatherer.Downstream<Integer> sink = x -> x < 3;
+              show("downstream", sink.push(2) + " " + sink.push(3) + " " + sink.isRejecting());
+          }
+
+          public static void main(String[] args) {
+              made();
+              written();
+              joined();
+          }
+      }
+    expected: |
+      fold: [16]
+      fold none: [10]
+      fold lazy: Optional[16] | 10 1 2 3 16
+      scan: [1, 12, 123]
+      scan none: []
+      scan lazy: [1, 3] | 1 1 2 3
+      scan limit 0: [] | 10
+      windowFixed: [[1, 2], [3, 4], [5]]
+      windowFixed exact: [[1, 2], [3, 4]]
+      windowFixed none: []
+      windowFixed null: [[1, null], [3]]
+      windowFixed short: [[1, 2]]
+      windowFixed lazy: Optional[[1, 2]] | 1 2 [1, 2]
+      windowSliding: [[1, 2, 3], [2, 3, 4], [3, 4, 5]]
+      windowSliding short: [[1, 2]]
+      windowSliding exact: [[1, 2, 3]]
+      windowSliding one: [[1], [2], [3]]
+      windowSliding none: []
+      windowSliding lazy: [[1, 2], [2, 3]] | 1 2 [1, 2] 3 [2, 3]
+      windowFixed 0: java.lang.IllegalArgumentException: 'windowSize' must be greater than zero
+      windowSliding -3: java.lang.IllegalArgumentException: 'windowSize' must be greater than zero
+      fold null: java.lang.NullPointerException
+      fold null folder: java.lang.NullPointerException
+      scan null: java.lang.NullPointerException
+      gather null: java.lang.NullPointerException
+      window add: java.lang.UnsupportedOperationException
+      window set: java.lang.UnsupportedOperationException
+      sliding add: java.lang.UnsupportedOperationException
+      times: [10, 11, 20, 21] | push10=true push11=true push20=true push21=true
+      times count: 4 | push10=true push11=true push20=true push21=true
+      firstTwo: [5, 6, -1] | init 5 in5 6 in6 finish2
+      firstTwo short: [5, -1] | init 5 in5 finish1
+      firstTwo first: Optional[5] | init 5 in5 finish1!
+      firstTwo limit 1: [5] | init 5 in5 finish1!
+      firstTwo limit 3: [5, 6, -1] | init 5 in5 6 in6 finish2
+      firstTwo none: [-1] | init finish0
+      firstTwo flat: [1, 11, -1] | init in1 in11 close1 finish2
+      not yet: made
+      then: [1, 2, -1] | init in1 in2 finish2
+      limit 0: [] | init finish!
+      after limit: [1] | init in1 finish!
+      after first: Optional[1] | init in1 finish!
+      after all: [1, 2, 3] | init in1 in2 in3 finish
+      takeWhile: [1] | init in1 in2 finish!
+      sorted: [1, 2, 3] | init in3 in1 in2 finish
+      count: 3 | init 1 in1 2 in2 3 in3 finish
+      flat first: Optional[1] | init in1 close1 finish!
+      flat limit: [1] | init in1 close1 finish!
+      gather flat first: Optional[1] | init in1 close1 finish!
+      two first: Optional[1] | ainit binit ain1 bin1 afinish bfinish!
+      two all: [1, 2] | ainit binit ain1 bin1 ain2 bin2 afinish bfinish
+      two limit: [1, 2] | ainit binit ain1 bin1 ain2 bin2 afinish bfinish!
+      flat two any: true | ainit binit ain1 bin1 bin11 close1 close1 afinish! bfinish!
+      parallel flag: true
+      inside: [1] | init in1 finish
+      after:  | closed
+      gather twice: java.lang.IllegalStateException: stream has already been operated upon or closed
+      gather throws: java.lang.IllegalStateException: in 1
+      andThen: [<2>, <4>, <6>]
+      andThen windows: [2, 4, 5]
+      andThen firstTwo: [50, 51, 60, 61, -10, -9] | init 5 in5 push50=true push51=true 6 in6 push60=true push61=true finish2 push-10=true push-9=true
+      andThen times firstTwo: [50, 51, -1] | init 5 in50 push50=true in51 push51=false finish2
+      andThen fold: [136]
+      composed first: Optional[1] | ainit binit ain1 bin1 afinish bfinish!
+      composed all: [1, 2] | ainit binit ain1 bin1 ain2 bin2 afinish bfinish
+      andThen null: java.lang.NullPointerException
+      default initializer: true
+      default combiner: false
+      default finisher: true
+      sequential initializer: true
+      sequential combiner: true
+      sequential finisher: true
+      state null: null
+      andThen initializer: false
+      andThen finisher: true
+      andThen combiner: false
+      andThen sequential combiner: true
+      of finisher: [1, 99]
+      of finisher combiner: false
+      of four: [6]
+      ofSequential state: [1, 3, 6]
+      ofSequential state finisher: true
+      ofSequential finisher: [7]
+      of null: java.lang.NullPointerException
+      ofSequential null: java.lang.NullPointerException
+      default combiner called: java.lang.UnsupportedOperationException: This combiner cannot be used!
+      Integrator.of: true
+      Integrator.ofGreedy: true
+      integrator kept: true
+      own class: [abc]
+      own class then: [abcabc]
+      own class combiner: true
+      downstream: true false false
   # A spliterator walks a collection's iterator: what each collection reports of itself
   # (its characteristics, whether its estimate goes down as it is read) is a JDK's, and
   # StreamSupport makes a stream of one, its count known where it says SIZED. Nothing
@@ -7174,6 +7792,146 @@ cases:
                   return 2;
               }
           }
+
+              // The spliterators of int, long and double, and a stream's own: the sizes as the
+              // elements are taken.
+              static void walk(String what, Spliterator<?> s) {
+                  StringBuilder line = new StringBuilder(what + ": " + marks(s) + ", " + s.estimateSize() + "/" + s.getExactSizeIfKnown());
+                  List<Object> seen = new ArrayList<>();
+                  while (s.tryAdvance(seen::add)) {
+                      line.append(" -> ").append(s.estimateSize());
+                  }
+                  System.out.println(line.append(" ").append(seen).append(" split ").append(s.trySplit()));
+              }
+
+              static PrimitiveIterator.OfInt counting(int n) {
+                  return IntStream.range(0, n).iterator();
+              }
+
+              static void numbers() {
+                  int[] ints = { 5, 6, 7 };
+                  long[] longs = { 5, 6, 7 };
+                  double[] doubles = { 5, 6, 7 };
+                  walk("empty int", Spliterators.emptyIntSpliterator());
+                  walk("empty long", Spliterators.emptyLongSpliterator());
+                  walk("empty double", Spliterators.emptyDoubleSpliterator());
+                  walk("int array", Spliterators.spliterator(ints, 0));
+                  walk("int array marks", Spliterators.spliterator(ints, Spliterator.DISTINCT | Spliterator.CONCURRENT));
+                  walk("int array range", Spliterators.spliterator(ints, 1, 3, Spliterator.ORDERED));
+                  walk("long array", Spliterators.spliterator(longs, 1, 2, Spliterator.SORTED));
+                  walk("double array", Spliterators.spliterator(doubles, Spliterator.NONNULL));
+                  fails("int array from > to", () -> Spliterators.spliterator(ints, 2, 1, 0));
+                  fails("long array to > length", () -> Spliterators.spliterator(longs, 0, 4, 0));
+                  fails("double array from < 0", () -> Spliterators.spliterator(doubles, -1, 2, 0));
+                  fails("int array null", () -> Spliterators.spliterator((int[]) null, 0));
+                  walk("Arrays int", Arrays.spliterator(ints));
+                  walk("Arrays int range", Arrays.spliterator(ints, 1, 2));
+                  walk("Arrays long", Arrays.spliterator(longs));
+                  walk("Arrays double", Arrays.spliterator(doubles, 0, 2));
+                  walk("iterator sized", Spliterators.spliterator(counting(3), 3, 0));
+                  walk("iterator concurrent", Spliterators.spliterator(counting(3), 3, Spliterator.ORDERED | Spliterator.CONCURRENT));
+                  walk("iterator sized short", Spliterators.spliterator(counting(3), 1, Spliterator.ORDERED));
+                  walk("iterator unknown", Spliterators.spliteratorUnknownSize(counting(3), Spliterator.ORDERED | Spliterator.SIZED));
+                  walk("long iterator", Spliterators.spliterator(LongStream.range(0, 2).iterator(), 2, Spliterator.NONNULL));
+                  walk("double iterator", Spliterators.spliteratorUnknownSize(DoubleStream.of(1.5).iterator(), 0));
+                  fails("iterator null", () -> Spliterators.spliterator((PrimitiveIterator.OfInt) null, 3, 0));
+                  PrimitiveIterator.OfInt it = Spliterators.iterator(Spliterators.spliterator(ints, 0));
+                  System.out.println("iterator of: " + it.hasNext() + " " + it.nextInt() + " " + it.next() + " " + it.nextInt() + " " + it.hasNext());
+                  fails("iterator of end", () -> it.nextInt());
+                  System.out.println("iterators of: " + Spliterators.iterator(Spliterators.spliterator(longs, 0)).nextLong() + " "
+                          + Spliterators.iterator(Spliterators.spliterator(doubles, 0)).nextDouble());
+                  fails("iterator of null", () -> Spliterators.iterator((Spliterator.OfInt) null));
+                  Spliterator.OfInt own = new Spliterators.AbstractIntSpliterator(3, Spliterator.SIZED | Spliterator.ORDERED) {
+                      int at;
+
+                      public boolean tryAdvance(IntConsumer action) {
+                          if (at == 3) {
+                              return false;
+                          }
+                          action.accept(at++ * 2);
+                          return true;
+                      }
+                  };
+                  System.out.println("own: " + marks(own) + " " + own.estimateSize() + " "
+                          + StreamSupport.intStream(own, false).map(x -> x + 1).boxed().toList());
+                  Spliterator.OfLong ownLong = new Spliterators.AbstractLongSpliterator(Long.MAX_VALUE, 0) {
+                      long at;
+
+                      public boolean tryAdvance(LongConsumer action) {
+                          if (at == 3) {
+                              return false;
+                          }
+                          action.accept(at++);
+                          return true;
+                      }
+                  };
+                  System.out.println("own long: " + marks(ownLong) + " " + StreamSupport.longStream(ownLong, false).sum());
+                  Spliterator.OfDouble ownDouble = new Spliterators.AbstractDoubleSpliterator(2, Spliterator.SIZED) {
+                      double at = 0.5;
+
+                      public boolean tryAdvance(DoubleConsumer action) {
+                          if (at > 2) {
+                              return false;
+                          }
+                          action.accept(at++);
+                          return true;
+                      }
+                  };
+                  System.out.println("own double: " + marks(ownDouble) + " " + StreamSupport.doubleStream(ownDouble, false).boxed().toList());
+                  System.out.println("intStream: " + StreamSupport.intStream(Arrays.spliterator(ints), false).sum() + " "
+                          + StreamSupport.intStream(Arrays.spliterator(ints), false).peek(x -> System.out.println("ran")).count() + " "
+                          + StreamSupport.intStream(() -> Arrays.spliterator(ints), Spliterator.SIZED, true).isParallel());
+                  int[] asked = new int[1];
+                  IntStream lazy = StreamSupport.intStream(() -> {
+                      asked[0]++;
+                      return Arrays.spliterator(ints);
+                  }, Spliterator.SIZED, false);
+                  System.out.println("supplier asked " + asked[0] + ", count " + lazy.count() + ", asked " + asked[0]);
+                  System.out.println("longStream: " + StreamSupport.longStream(Arrays.spliterator(longs), false).max() + " "
+                          + StreamSupport.longStream(() -> Arrays.spliterator(longs), 0, false).count());
+                  System.out.println("doubleStream: " + StreamSupport.doubleStream(Arrays.spliterator(doubles), false).average() + " "
+                          + StreamSupport.doubleStream(() -> Arrays.spliterator(doubles), 0, false).count());
+                  fails("intStream null", () -> StreamSupport.intStream(null, false));
+                  Spliterator.OfInt boxed = Arrays.spliterator(ints);
+                  boxed.tryAdvance((Consumer<Integer>) x -> System.out.println("boxed " + x));
+                  boxed.forEachRemaining((Consumer<Integer>) x -> System.out.println("boxed rest " + x));
+                  fails("null int action", () -> Arrays.spliterator(ints).tryAdvance((IntConsumer) null));
+                  fails("null boxed action", () -> Arrays.spliterator(ints).tryAdvance((Consumer<Integer>) null));
+                  fails("null rest", () -> Arrays.spliterator(ints).forEachRemaining((IntConsumer) null));
+                  // a stream's own
+                  List<Integer> list = new ArrayList<>(List.of(3, 1, 2));
+                  walk("list", list.stream().spliterator());
+                  walk("list map", list.stream().map(x -> x).spliterator());
+                  walk("list skip", list.stream().skip(2).spliterator());
+                  walk("list skip 5", list.stream().skip(5).spliterator());
+                  walk("list map limit skip", list.stream().map(x -> x).limit(2).skip(1).spliterator());
+                  walk("concat", Stream.concat(Stream.of(1), list.stream()).spliterator());
+                  walk("builder", Stream.builder().add(1).add(2).build().spliterator());
+                  walk("iterate limit", Stream.iterate(1, x -> x + 1).limit(2).spliterator());
+                  walk("iterate filter", Stream.iterate(1, x -> x < 4, x -> x + 1).filter(x -> x != 2).spliterator());
+                  walk("mapToObj", IntStream.range(0, 3).mapToObj(x -> "s" + x).spliterator());
+                  walk("mapToInt", list.stream().mapToInt(x -> x).spliterator());
+                  walk("int map", IntStream.range(0, 3).map(x -> x * 2).spliterator());
+                  walk("long map", LongStream.range(0, 3).map(x -> x * 2).spliterator());
+                  walk("double map", DoubleStream.of(1.5, 2.5).map(x -> x * 2).spliterator());
+                  walk("int iterate", IntStream.iterate(1, x -> x + 1).limit(2).spliterator());
+                  Stream<Integer> used = list.stream();
+                  used.spliterator();
+                  fails("used", () -> used.count());
+                  Spliterator<Integer> late = list.stream().peek(x -> System.out.println("peek " + x)).spliterator();
+                  System.out.println("made");
+                  late.tryAdvance(x -> System.out.println("got " + x));
+                  late.forEachRemaining(x -> System.out.println("rest " + x));
+                  Spliterator.OfInt prim = IntStream.range(0, 3).map(x -> x * 2).spliterator();
+                  prim.tryAdvance((IntConsumer) x -> System.out.println("int " + x));
+                  prim.tryAdvance((Consumer<Integer>) x -> System.out.println("boxed " + x));
+                  prim.forEachRemaining((IntConsumer) x -> System.out.println("rest " + x));
+                  fails("null action", () -> list.stream().map(x -> x).spliterator().tryAdvance(null));
+                  Spliterator<Integer> open = list.stream().onClose(() -> System.out.println("closed")).map(x -> x).spliterator();
+                  open.forEachRemaining(x -> { });
+                  System.out.println("walked");
+                  System.out.println("of a stream's " + StreamSupport.stream(list.stream().filter(x -> x > 1).spliterator(), false).map(x -> x * 2).toList());
+              }
 
           public static void main(String[] args) {
               List<Integer> list = new ArrayList<>(List.of(3, 1, 2));
@@ -7316,6 +8074,7 @@ cases:
               Spliterator<Integer> half = new ArrayList<>(List.of(1, 2, 3)).spliterator();
               half.tryAdvance(x -> { });
               System.out.println("the rest " + StreamSupport.stream(half, false).toList() + " count " + StreamSupport.stream(half, false).count());
+              numbers();
           }
       }
     expected: |
@@ -7398,6 +8157,76 @@ cases:
       twice: java.lang.IllegalStateException stream has already been operated upon or closed
       supplier asked 0, count 2, asked 1
       the rest [2, 3] count 0
+      empty int: 16448 SIZED|SUBSIZED, 0/0 [] split null
+      empty long: 16448 SIZED|SUBSIZED, 0/0 [] split null
+      empty double: 16448 SIZED|SUBSIZED, 0/0 [] split null
+      int array: 16448 SIZED|SUBSIZED, 3/3 -> 2 -> 1 -> 0 [5, 6, 7] split null
+      int array marks: 20545 DISTINCT|SIZED|CONCURRENT|SUBSIZED, 3/3 -> 2 -> 1 -> 0 [5, 6, 7] split null
+      int array range: 16464 ORDERED|SIZED|SUBSIZED, 2/2 -> 1 -> 0 [6, 7] split null
+      long array: 16452 SORTED|SIZED|SUBSIZED, 1/1 -> 0 [6] split null
+      double array: 16704 SIZED|NONNULL|SUBSIZED, 3/3 -> 2 -> 1 -> 0 [5.0, 6.0, 7.0] split null
+      int array from > to: java.lang.ArrayIndexOutOfBoundsException origin(2) > fence(1)
+      long array to > length: java.lang.ArrayIndexOutOfBoundsException Array index out of range: 4
+      double array from < 0: java.lang.ArrayIndexOutOfBoundsException Array index out of range: -1
+      int array null: java.lang.NullPointerException
+      Arrays int: 17488 ORDERED|SIZED|IMMUTABLE|SUBSIZED, 3/3 -> 2 -> 1 -> 0 [5, 6, 7] split null
+      Arrays int range: 17488 ORDERED|SIZED|IMMUTABLE|SUBSIZED, 1/1 -> 0 [6] split null
+      Arrays long: 17488 ORDERED|SIZED|IMMUTABLE|SUBSIZED, 3/3 -> 2 -> 1 -> 0 [5, 6, 7] split null
+      Arrays double: 17488 ORDERED|SIZED|IMMUTABLE|SUBSIZED, 2/2 -> 1 -> 0 [5.0, 6.0] split null
+      iterator sized: 16448 SIZED|SUBSIZED, 3/3 -> 3 -> 3 -> 3 [0, 1, 2] split null
+      iterator concurrent: 4112 ORDERED|CONCURRENT, 3/-1 -> 3 -> 3 -> 3 [0, 1, 2] split null
+      iterator sized short: 16464 ORDERED|SIZED|SUBSIZED, 1/1 -> 1 -> 1 -> 1 [0, 1, 2] split null
+      iterator unknown: 16 ORDERED, 9223372036854775807/-1 -> 9223372036854775807 -> 9223372036854775807 -> 9223372036854775807 [0, 1, 2] split null
+      long iterator: 16704 SIZED|NONNULL|SUBSIZED, 2/2 -> 2 -> 2 [0, 1] split null
+      double iterator: 0 , 9223372036854775807/-1 -> 9223372036854775807 [1.5] split null
+      iterator null: java.lang.NullPointerException
+      iterator of: true 5 6 7 false
+      iterator of end: java.util.NoSuchElementException null
+      iterators of: 5 5.0
+      iterator of null: java.lang.NullPointerException
+      own: 16464 ORDERED|SIZED|SUBSIZED 3 [1, 3, 5]
+      own long: 0  3
+      own double: 16448 SIZED|SUBSIZED [0.5, 1.5]
+      intStream: 18 3 true
+      supplier asked 0, count 3, asked 1
+      longStream: OptionalLong[7] 3
+      doubleStream: OptionalDouble[6.0] 3
+      intStream null: java.lang.NullPointerException
+      boxed 5
+      boxed rest 6
+      boxed rest 7
+      null int action: java.lang.NullPointerException
+      null boxed action: java.lang.NullPointerException
+      null rest: java.lang.NullPointerException
+      list: 16464 ORDERED|SIZED|SUBSIZED, 3/3 -> 2 -> 1 -> 0 [3, 1, 2] split null
+      list map: 16464 ORDERED|SIZED|SUBSIZED, 3/3 -> 2 -> 1 -> 0 [3, 1, 2] split null
+      list skip: 16464 ORDERED|SIZED|SUBSIZED, 1/1 -> 0 [2] split null
+      list skip 5: 16464 ORDERED|SIZED|SUBSIZED, 0/0 [] split null
+      list map limit skip: 16464 ORDERED|SIZED|SUBSIZED, 1/1 -> 0 [1] split null
+      concat: 16464 ORDERED|SIZED|SUBSIZED, 4/4 -> 3 -> 2 -> 1 -> 0 [1, 3, 1, 2] split null
+      builder: 16464 ORDERED|SIZED|SUBSIZED, 2/2 -> 1 -> 0 [1, 2] split null
+      iterate limit: 16 ORDERED, 9223372036854775807/-1 -> 9223372036854775807 -> 9223372036854775807 [1, 2] split null
+      iterate filter: 16 ORDERED, 9223372036854775807/-1 -> 9223372036854775807 -> 9223372036854775807 [1, 3] split null
+      mapToObj: 16464 ORDERED|SIZED|SUBSIZED, 3/3 -> 2 -> 1 -> 0 [s0, s1, s2] split null
+      mapToInt: 16464 ORDERED|SIZED|SUBSIZED, 3/3 -> 2 -> 1 -> 0 [3, 1, 2] split null
+      int map: 16464 ORDERED|SIZED|SUBSIZED, 3/3 -> 2 -> 1 -> 0 [0, 2, 4] split null
+      long map: 16464 ORDERED|SIZED|SUBSIZED, 3/3 -> 2 -> 1 -> 0 [0, 2, 4] split null
+      double map: 16464 ORDERED|SIZED|SUBSIZED, 2/2 -> 1 -> 0 [3.0, 5.0] split null
+      int iterate: 16 ORDERED, 9223372036854775807/-1 -> 9223372036854775807 -> 9223372036854775807 [1, 2] split null
+      used: java.lang.IllegalStateException stream has already been operated upon or closed
+      made
+      peek 3
+      got 3
+      peek 1
+      rest 1
+      peek 2
+      rest 2
+      int 0
+      boxed 2
+      rest 4
+      null action: java.lang.NullPointerException
+      walked
+      of a stream's [6, 4]
   # java.time.Duration: seconds and the nanoseconds past them, each member's answer and
   # each refusal a JDK 25's (.kb/java-frontend.md, "The library").
   - name: a-duration-counts-seconds-and-nanoseconds
@@ -8476,6 +9305,8 @@ cases:
                   System.out.println("[" + each + "] " + each.getLanguage() + " " + each.getCountry() + " " + each.toLanguageTag() + " " + (each == Locale.US) + " " + each.equals(Locale.UK));
               }
               hashes();
+              // the zeros that fill a width stand inside a negative number's parentheses
+              System.out.println(String.format("%(010d|%(08.2f|%(,012.1f|%(010d|%(,d|%(.3e|%(8d|%-(8d|", -5, -2.5, -1234.56, 5, -1234567, -0.5, -42, -42));
           }
 
           // %h is the hash code's hexadecimal digits: of a class of the program its own
@@ -8507,6 +9338,7 @@ cases:
       [en_GB] en GB en-GB false true
       [en_CA] en CA en-CA false false
       5e918d2 ff null 5E918D2 400c0000 63         78|79        |4cf 186a0 75 a1 [1] 20
+      (00000005)|(002.50)|(0001,234.6)|0000000005|(1,234,567)|(5.000e-01)|    (42)|(42)    |
   # The members of the boxes and of Math; a failed parse and an exact operation that
   # overflows throw the library's exceptions; a double's bits and hash are the
   # specified ones; new Object() is a value of no other class.
@@ -13033,6 +13865,8 @@ standalone:
       import java.util.concurrent.atomic.DoubleAdder;
       import java.util.concurrent.atomic.LongAccumulator;
       import java.util.concurrent.atomic.LongAdder;
+      import java.util.stream.Gatherers;
+      import java.util.stream.Stream;
 
       public class Sharing {
           public static void main(String[] args) throws Exception {
@@ -13219,6 +14053,7 @@ standalone:
               accumulated();
               stagesLeft();
               completers();
+              mapped();
           }
 
           static StringBuilder order = new StringBuilder();
@@ -13233,6 +14068,108 @@ standalone:
               String text = object.toString();
               return text.substring(0, text.indexOf('@')) + text.substring(text.indexOf('['));
           }
+
+              // Gatherers.mapConcurrent: each element is mapped on a thread of its own, no more
+              // than so many at once, and the results are handed on in the elements' order. A
+              // stream that stops asking and a mapping that fails interrupt the mappings under
+              // way and wait for them.
+              static void mapped() throws Exception {
+                  System.out.println(Stream.of(1, 2, 3, 4, 5).gather(Gatherers.mapConcurrent(2, x -> x * x)).toList() + " "
+                          + Stream.<Integer>empty().gather(Gatherers.mapConcurrent(2, x -> x * x)).toList() + " "
+                          + Stream.of(1, 2, 3, 4, 5).gather(Gatherers.mapConcurrent(2, x -> x * x)).limit(2).toList() + " "
+                          + Stream.of(1, 2).gather(Gatherers.mapConcurrent(2, x -> x == 1 ? null : x)).toList() + " "
+                          + Stream.of(1, 2, 3).gather(Gatherers.mapConcurrent(5, x -> x + 1)).gather(Gatherers.windowFixed(2)).toList());
+                  attempt(() -> Gatherers.mapConcurrent(0, x -> x));
+                  attempt(() -> Gatherers.mapConcurrent(1, null));
+                  attempt(() -> Stream.of(1, 2, 3).gather(Gatherers.mapConcurrent(2, x -> {
+                      if (x == 2) {
+                          throw new IllegalStateException("two");
+                      }
+                      return x;
+                  })).toList());
+                  attempt(() -> Stream.of(1, 2, 3).gather(Gatherers.mapConcurrent(2, x -> {
+                      if (x == 2) {
+                          throw new Error("two");
+                      }
+                      return x;
+                  })).toList());
+                  // two at once, and never more than the limit
+                  java.util.concurrent.CountDownLatch both = new java.util.concurrent.CountDownLatch(2);
+                  java.util.concurrent.atomic.AtomicInteger running = new java.util.concurrent.atomic.AtomicInteger();
+                  java.util.concurrent.atomic.AtomicInteger most = new java.util.concurrent.atomic.AtomicInteger();
+                  Thread caller = Thread.currentThread();
+                  System.out.println(Stream.of(1, 2).gather(Gatherers.mapConcurrent(2, x -> {
+                      both.countDown();
+                      try {
+                          both.await();
+                      }
+                      catch (InterruptedException e) {
+                          return -1;
+                      }
+                      return x;
+                  })).toList() + " " + Stream.of(1, 2, 3, 4, 5, 6, 7).gather(Gatherers.mapConcurrent(3, x -> {
+                      most.accumulateAndGet(running.incrementAndGet(), Math::max);
+                      Thread.yield();
+                      running.decrementAndGet();
+                      return Thread.currentThread() != caller && Thread.currentThread().isVirtual();
+                  })).distinct().toList() + " " + (most.get() <= 3));
+                  // a stream that stops asking: the mappings under way are interrupted, and waited for
+                  List<String> noted = Collections.synchronizedList(new ArrayList<>());
+                  java.util.concurrent.CountDownLatch started = new java.util.concurrent.CountDownLatch(2);
+                  List<Integer> first = Stream.of(1, 2, 3, 4).gather(Gatherers.mapConcurrent(3, x -> {
+                      if (x == 1) {
+                          try {
+                              started.await();
+                          }
+                          catch (InterruptedException e) {
+                              noted.add("first interrupted");
+                          }
+                          return x;
+                      }
+                      started.countDown();
+                      try {
+                          new java.util.concurrent.CountDownLatch(1).await();
+                          noted.add("woke " + x);
+                      }
+                      catch (InterruptedException e) {
+                          noted.add("interrupted " + x);
+                      }
+                      return x;
+                  })).limit(1).toList();
+                  Collections.sort(noted);
+                  System.out.println(first + " " + noted);
+                  noted.clear();
+                  // a mapping that fails
+                  java.util.concurrent.CountDownLatch waiting = new java.util.concurrent.CountDownLatch(1);
+                  try {
+                      Stream.of(1, 2).gather(Gatherers.mapConcurrent(2, x -> {
+                          if (x == 1) {
+                              try {
+                                  waiting.await();
+                              }
+                              catch (InterruptedException e) {
+                                  noted.add("first interrupted");
+                              }
+                              throw new IllegalArgumentException("one");
+                          }
+                          waiting.countDown();
+                          try {
+                              new java.util.concurrent.CountDownLatch(1).await();
+                          }
+                          catch (InterruptedException e) {
+                              noted.add("interrupted " + x);
+                          }
+                          return x;
+                      })).toList();
+                  }
+                  catch (Throwable e) {
+                      System.out.println(e + " " + noted);
+                  }
+                  // the thread that reads the stream is interrupted: the results come, and it stays so
+                  Thread.currentThread().interrupt();
+                  System.out.println(Stream.of(1, 2, 3).gather(Gatherers.mapConcurrent(1, x -> Thread.currentThread().isInterrupted() ? -x : x)).toList()
+                          + " " + Thread.interrupted() + " " + Thread.interrupted());
+              }
 
           static void attempt(Callable<Object> asked) {
               try {
@@ -14102,6 +15039,15 @@ standalone:
       a class above the field's: java.lang.ClassCastException / null
       another class, not volatile: java.lang.ClassCastException / null
       4000 12000 8000
+      [1, 4, 9, 16, 25] [] [1, 4] [null, 2] [[2, 3], [4]]
+      java.lang.IllegalArgumentException: 'maxConcurrency' must be greater than 0
+      java.lang.NullPointerException: 'mapper' must not be null
+      java.lang.IllegalStateException: two
+      java.lang.RuntimeException: java.lang.Error: two <- java.lang.Error: two
+      [1, 2] [true] true
+      [1] [interrupted 2, interrupted 3]
+      java.lang.IllegalArgumentException: one [interrupted 2]
+      [1, 2, 3] true false
   # A task at its time: a scheduled pool's, in the order of the times, repeated until it
   # is cancelled or throws, and after shutdown() only when it does not repeat; a Timer's
   # on its one thread. On one stack no thread can wait for a time, so a thread is started
@@ -14759,9 +15705,11 @@ standalone:
   # both sides of zero, at a precision and of a square root; a precision that is kept
   # by a division, a power and a sum of numbers fifty places apart; the conversions to
   # the primitive types and from a double; the words of each refusal and of a text that
-  # is no number; the numbers through Number, and a message format writing them by their
-  # own digits. A file of its own: a class of Java source under Number changes how the
-  # corpus program lowers Number.
+  # is no number; the numbers through Number, and a message format and String.format
+  # writing them by their own digits (%d, %x and %o of a BigInteger with its sign ahead of
+  # the digits; %f and %e of a BigDecimal rounded half up, a zero's exponent its scale's).
+  # A file of its own: a class of Java source under Number changes how the corpus program
+  # lowers Number.
   - name: big-integers-and-decimals-compute-round-and-print-exactly
     file: Big.java
     source: |
@@ -14857,11 +15805,43 @@ standalone:
               System.out.println(MessageFormat.format("{0} {1} {2} {3} {4} {5} {6}", d("1234567.8915"), d("-0.0004"), d("999.9995"), d("1E+3"), d("0.10"), new BigInteger("-12345678901234567890"), d("0.0025")) + " " + String.format("%s %s", d("1.50"), BigInteger.TEN) + " " + String.valueOf(d("1E+3")) + BigInteger.ONE);
           }
 
+              // String.format writes a BigInteger and a BigDecimal by their own digits: %d, %x
+              // and %o of the one with its sign ahead of the digits, %f and %e of the other
+              // rounded half up, and the conversions each does not take.
+              static void formatted() {
+                  BigInteger big = new BigInteger("123456789012345678901234567890");
+                  BigInteger[] integers = {BigInteger.ZERO, new BigInteger("-255"), big, big.negate(), BigInteger.TWO.pow(64)};
+                  String[] whole = {"%d", "%,d", "%+d", "% d", "%(d", "%10d", "%-10d|", "%010d", "%+,15d", "%(,d", "%(010d", "%x", "%X", "%#x", "%#X", "%o", "%#o", "%08x", "%+x", "%(x", "% o", "%-8x|", "%#010x", "%0(12o", "%s", "%S", "%12s"};
+                  for (String control : whole) {
+                      StringBuilder line = new StringBuilder(control + ":");
+                      for (BigInteger each : integers) {
+                          line.append(" [").append(String.format(control, each)).append("]");
+                      }
+                      System.out.println(line);
+                  }
+                  BigDecimal[] decimals = {BigDecimal.ZERO, d("0.00"), d("-1"), d("1.5"), d("-2.5"), d("0.125"), d("1234567.891"), d("-0.000123456"), d("123456789012345678901234567890.123456789"), d("1E+3"), d("1.23E-10"), d("9.995"), d("99999.5"), d("0.15"), d("2.675"), d("1E+30")};
+                  String[] parts = {"%f", "%.0f", "%.2f", "%.10f", "%,.2f", "%+f", "% .2f", "%(.2f", "%12.3f", "%-12.3f|", "%012.3f", "%#.0f", "%(,012.1f", "%e", "%E", "%.0e", "%.2e", "%+e", "%(e", "%15.3e", "%-15.3e|", "%015.3e", "%#.0e", "%s", "%8s"};
+                  for (String control : parts) {
+                      StringBuilder line = new StringBuilder(control + ":");
+                      for (BigDecimal each : decimals) {
+                          line.append(" [").append(String.format(control, each)).append("]");
+                      }
+                      System.out.println(line);
+                  }
+                  System.out.println(String.format("%d and %f and %s|%2$.1e %1$,d|%d %d %d|%f %f|%d %s", new BigInteger("42"), d("4.25"), new BigInteger("7"), 1, 2L, new BigInteger("3"), 1.5, d("1.5"), null, null)
+                          + "|" + "%,d".formatted(new BigInteger("1234567")) + "|" + String.format(java.util.Locale.ROOT, "%,.3f", d("1234567.8915")));
+                  System.out.printf("%d %.3e%n", new BigInteger("99"), d("12345.6789"));
+                  System.out.println(tried(() -> String.format("%f", BigInteger.TEN)) + "|" + tried(() -> String.format("%e", BigInteger.TEN)) + "|" + tried(() -> String.format("%c", BigInteger.TEN)) + "|"
+                          + tried(() -> String.format("%d", d("3"))) + "|" + tried(() -> String.format("%x", d("3"))) + "|" + tried(() -> String.format("%o", d("3"))) + "|" + tried(() -> String.format("%c", d("3"))) + "|"
+                          + tried(() -> String.format("%d", "text")) + "|" + String.format("%b %h", BigInteger.TEN, BigInteger.TEN));
+              }
+
           public static void main(String[] args) {
               integers();
               money();
               forms();
               numbers();
+              formatted();
           }
 
       }
@@ -14884,6 +15864,61 @@ standalone:
       NumberFormatException: null|NumberFormatException: null|NumberFormatException: No digits found.|NumberFormatException: Character array contains more than one decimal point.|NumberFormatException: Character   is neither a decimal digit number, decimal point, nor "e" notation exponential mark.|NumberFormatException: Not a digit.|NumberFormatException: Too many nonzero exponent digits.|NumberFormatException: Exponent overflow.|NumberFormatException: Infinite or NaN|NumberFormatException: No exponent digits.|IllegalArgumentException: Digits < 0|IllegalArgumentException: bad string format|IllegalArgumentException: argument out of range|IllegalArgumentException: Invalid rounding mode
       1 1 1.99 1 1.99truefalsetrue; 2 4294967298 4.294967298E9 2 4294967298falsetruetrue; 7 7 7.0 7 7falsefalsetrue; 2 2 2.5 2 2.5falsefalsetrue; 3 3 3.0 3 3falsefalsetrue;
       1,234,567.892 -0 1,000 1,000 0.1 -12,345,678,901,234,567,890 0.002 1.50 10 1E+31
+      %d: [0] [-255] [123456789012345678901234567890] [-123456789012345678901234567890] [18446744073709551616]
+      %,d: [0] [-255] [123,456,789,012,345,678,901,234,567,890] [-123,456,789,012,345,678,901,234,567,890] [18,446,744,073,709,551,616]
+      %+d: [+0] [-255] [+123456789012345678901234567890] [-123456789012345678901234567890] [+18446744073709551616]
+      % d: [ 0] [-255] [ 123456789012345678901234567890] [-123456789012345678901234567890] [ 18446744073709551616]
+      %(d: [0] [(255)] [123456789012345678901234567890] [(123456789012345678901234567890)] [18446744073709551616]
+      %10d: [         0] [      -255] [123456789012345678901234567890] [-123456789012345678901234567890] [18446744073709551616]
+      %-10d|: [0         |] [-255      |] [123456789012345678901234567890|] [-123456789012345678901234567890|] [18446744073709551616|]
+      %010d: [0000000000] [-000000255] [123456789012345678901234567890] [-123456789012345678901234567890] [18446744073709551616]
+      %+,15d: [             +0] [           -255] [+123,456,789,012,345,678,901,234,567,890] [-123,456,789,012,345,678,901,234,567,890] [+18,446,744,073,709,551,616]
+      %(,d: [0] [(255)] [123,456,789,012,345,678,901,234,567,890] [(123,456,789,012,345,678,901,234,567,890)] [18,446,744,073,709,551,616]
+      %(010d: [0000000000] [(00000255)] [123456789012345678901234567890] [(123456789012345678901234567890)] [18446744073709551616]
+      %x: [0] [-ff] [18ee90ff6c373e0ee4e3f0ad2] [-18ee90ff6c373e0ee4e3f0ad2] [10000000000000000]
+      %X: [0] [-FF] [18EE90FF6C373E0EE4E3F0AD2] [-18EE90FF6C373E0EE4E3F0AD2] [10000000000000000]
+      %#x: [0x0] [-0xff] [0x18ee90ff6c373e0ee4e3f0ad2] [-0x18ee90ff6c373e0ee4e3f0ad2] [0x10000000000000000]
+      %#X: [0X0] [-0XFF] [0X18EE90FF6C373E0EE4E3F0AD2] [-0X18EE90FF6C373E0EE4E3F0AD2] [0X10000000000000000]
+      %o: [0] [-377] [143564417755415637016711617605322] [-143564417755415637016711617605322] [2000000000000000000000]
+      %#o: [00] [-0377] [0143564417755415637016711617605322] [-0143564417755415637016711617605322] [02000000000000000000000]
+      %08x: [00000000] [-00000ff] [18ee90ff6c373e0ee4e3f0ad2] [-18ee90ff6c373e0ee4e3f0ad2] [10000000000000000]
+      %+x: [+0] [-ff] [+18ee90ff6c373e0ee4e3f0ad2] [-18ee90ff6c373e0ee4e3f0ad2] [+10000000000000000]
+      %(x: [0] [(ff)] [18ee90ff6c373e0ee4e3f0ad2] [(18ee90ff6c373e0ee4e3f0ad2)] [10000000000000000]
+      % o: [ 0] [-377] [ 143564417755415637016711617605322] [-143564417755415637016711617605322] [ 2000000000000000000000]
+      %-8x|: [0       |] [-ff     |] [18ee90ff6c373e0ee4e3f0ad2|] [-18ee90ff6c373e0ee4e3f0ad2|] [10000000000000000|]
+      %#010x: [0x00000000] [-0x00000ff] [0x18ee90ff6c373e0ee4e3f0ad2] [-0x18ee90ff6c373e0ee4e3f0ad2] [0x10000000000000000]
+      %0(12o: [000000000000] [(0000000377)] [143564417755415637016711617605322] [(143564417755415637016711617605322)] [2000000000000000000000]
+      %s: [0] [-255] [123456789012345678901234567890] [-123456789012345678901234567890] [18446744073709551616]
+      %S: [0] [-255] [123456789012345678901234567890] [-123456789012345678901234567890] [18446744073709551616]
+      %12s: [           0] [        -255] [123456789012345678901234567890] [-123456789012345678901234567890] [18446744073709551616]
+      %f: [0.000000] [0.000000] [-1.000000] [1.500000] [-2.500000] [0.125000] [1234567.891000] [-0.000123] [123456789012345678901234567890.123457] [1000.000000] [0.000000] [9.995000] [99999.500000] [0.150000] [2.675000] [1000000000000000000000000000000.000000]
+      %.0f: [0] [0] [-1] [2] [-3] [0] [1234568] [-0] [123456789012345678901234567890] [1000] [0] [10] [100000] [0] [3] [1000000000000000000000000000000]
+      %.2f: [0.00] [0.00] [-1.00] [1.50] [-2.50] [0.13] [1234567.89] [-0.00] [123456789012345678901234567890.12] [1000.00] [0.00] [10.00] [99999.50] [0.15] [2.68] [1000000000000000000000000000000.00]
+      %.10f: [0.0000000000] [0.0000000000] [-1.0000000000] [1.5000000000] [-2.5000000000] [0.1250000000] [1234567.8910000000] [-0.0001234560] [123456789012345678901234567890.1234567890] [1000.0000000000] [0.0000000001] [9.9950000000] [99999.5000000000] [0.1500000000] [2.6750000000] [1000000000000000000000000000000.0000000000]
+      %,.2f: [0.00] [0.00] [-1.00] [1.50] [-2.50] [0.13] [1,234,567.89] [-0.00] [123,456,789,012,345,678,901,234,567,890.12] [1,000.00] [0.00] [10.00] [99,999.50] [0.15] [2.68] [1,000,000,000,000,000,000,000,000,000,000.00]
+      %+f: [+0.000000] [+0.000000] [-1.000000] [+1.500000] [-2.500000] [+0.125000] [+1234567.891000] [-0.000123] [+123456789012345678901234567890.123457] [+1000.000000] [+0.000000] [+9.995000] [+99999.500000] [+0.150000] [+2.675000] [+1000000000000000000000000000000.000000]
+      % .2f: [ 0.00] [ 0.00] [-1.00] [ 1.50] [-2.50] [ 0.13] [ 1234567.89] [-0.00] [ 123456789012345678901234567890.12] [ 1000.00] [ 0.00] [ 10.00] [ 99999.50] [ 0.15] [ 2.68] [ 1000000000000000000000000000000.00]
+      %(.2f: [0.00] [0.00] [(1.00)] [1.50] [(2.50)] [0.13] [1234567.89] [(0.00)] [123456789012345678901234567890.12] [1000.00] [0.00] [10.00] [99999.50] [0.15] [2.68] [1000000000000000000000000000000.00]
+      %12.3f: [       0.000] [       0.000] [      -1.000] [       1.500] [      -2.500] [       0.125] [ 1234567.891] [      -0.000] [123456789012345678901234567890.123] [    1000.000] [       0.000] [       9.995] [   99999.500] [       0.150] [       2.675] [1000000000000000000000000000000.000]
+      %-12.3f|: [0.000       |] [0.000       |] [-1.000      |] [1.500       |] [-2.500      |] [0.125       |] [1234567.891 |] [-0.000      |] [123456789012345678901234567890.123|] [1000.000    |] [0.000       |] [9.995       |] [99999.500   |] [0.150       |] [2.675       |] [1000000000000000000000000000000.000|]
+      %012.3f: [00000000.000] [00000000.000] [-0000001.000] [00000001.500] [-0000002.500] [00000000.125] [01234567.891] [-0000000.000] [123456789012345678901234567890.123] [00001000.000] [00000000.000] [00000009.995] [00099999.500] [00000000.150] [00000002.675] [1000000000000000000000000000000.000]
+      %#.0f: [0.] [0.] [-1.] [2.] [-3.] [0.] [1234568.] [-0.] [123456789012345678901234567890.] [1000.] [0.] [10.] [100000.] [0.] [3.] [1000000000000000000000000000000.]
+      %(,012.1f: [0000000000.0] [0000000000.0] [(00000001.0)] [0000000001.5] [(00000002.5)] [0000000000.1] [01,234,567.9] [(00000000.0)] [123,456,789,012,345,678,901,234,567,890.1] [000001,000.0] [0000000000.0] [0000000010.0] [000099,999.5] [0000000000.2] [0000000002.7] [1,000,000,000,000,000,000,000,000,000,000.0]
+      %e: [0.000000e+00] [0.000000e-02] [-1.000000e+00] [1.500000e+00] [-2.500000e+00] [1.250000e-01] [1.234568e+06] [-1.234560e-04] [1.234568e+29] [1.000000e+03] [1.230000e-10] [9.995000e+00] [9.999950e+04] [1.500000e-01] [2.675000e+00] [1.000000e+30]
+      %E: [0.000000E+00] [0.000000E-02] [-1.000000E+00] [1.500000E+00] [-2.500000E+00] [1.250000E-01] [1.234568E+06] [-1.234560E-04] [1.234568E+29] [1.000000E+03] [1.230000E-10] [9.995000E+00] [9.999950E+04] [1.500000E-01] [2.675000E+00] [1.000000E+30]
+      %.0e: [0e+00] [0e-02] [-1e+00] [2e+00] [-3e+00] [1e-01] [1e+06] [-1e-04] [1e+29] [1e+03] [1e-10] [1e+01] [1e+05] [2e-01] [3e+00] [1e+30]
+      %.2e: [0.00e+00] [0.00e-02] [-1.00e+00] [1.50e+00] [-2.50e+00] [1.25e-01] [1.23e+06] [-1.23e-04] [1.23e+29] [1.00e+03] [1.23e-10] [1.00e+01] [1.00e+05] [1.50e-01] [2.68e+00] [1.00e+30]
+      %+e: [+0.000000e+00] [+0.000000e-02] [-1.000000e+00] [+1.500000e+00] [-2.500000e+00] [+1.250000e-01] [+1.234568e+06] [-1.234560e-04] [+1.234568e+29] [+1.000000e+03] [+1.230000e-10] [+9.995000e+00] [+9.999950e+04] [+1.500000e-01] [+2.675000e+00] [+1.000000e+30]
+      %(e: [0.000000e+00] [0.000000e-02] [(1.000000e+00)] [1.500000e+00] [(2.500000e+00)] [1.250000e-01] [1.234568e+06] [(1.234560e-04)] [1.234568e+29] [1.000000e+03] [1.230000e-10] [9.995000e+00] [9.999950e+04] [1.500000e-01] [2.675000e+00] [1.000000e+30]
+      %15.3e: [      0.000e+00] [      0.000e-02] [     -1.000e+00] [      1.500e+00] [     -2.500e+00] [      1.250e-01] [      1.235e+06] [     -1.235e-04] [      1.235e+29] [      1.000e+03] [      1.230e-10] [      9.995e+00] [      1.000e+05] [      1.500e-01] [      2.675e+00] [      1.000e+30]
+      %-15.3e|: [0.000e+00      |] [0.000e-02      |] [-1.000e+00     |] [1.500e+00      |] [-2.500e+00     |] [1.250e-01      |] [1.235e+06      |] [-1.235e-04     |] [1.235e+29      |] [1.000e+03      |] [1.230e-10      |] [9.995e+00      |] [1.000e+05      |] [1.500e-01      |] [2.675e+00      |] [1.000e+30      |]
+      %015.3e: [0000000.000e+00] [0000000.000e-02] [-000001.000e+00] [0000001.500e+00] [-000002.500e+00] [0000001.250e-01] [0000001.235e+06] [-000001.235e-04] [0000001.235e+29] [0000001.000e+03] [0000001.230e-10] [0000009.995e+00] [0000001.000e+05] [0000001.500e-01] [0000002.675e+00] [0000001.000e+30]
+      %#.0e: [0.e+00] [0.e-02] [-1.e+00] [2.e+00] [-3.e+00] [1.e-01] [1.e+06] [-1.e-04] [1.e+29] [1.e+03] [1.e-10] [1.e+01] [1.e+05] [2.e-01] [3.e+00] [1.e+30]
+      %s: [0] [0.00] [-1] [1.5] [-2.5] [0.125] [1234567.891] [-0.000123456] [123456789012345678901234567890.123456789] [1E+3] [1.23E-10] [9.995] [99999.5] [0.15] [2.675] [1E+30]
+      %8s: [       0] [    0.00] [      -1] [     1.5] [    -2.5] [   0.125] [1234567.891] [-0.000123456] [123456789012345678901234567890.123456789] [    1E+3] [1.23E-10] [   9.995] [ 99999.5] [    0.15] [   2.675] [   1E+30]
+      42 and 4.250000 and 7|4.3e+00 42|1 2 3|1.500000 1.500000|null null|1,234,567|1,234,567.892
+      99 1.235e+04
+      IllegalFormatConversionException: f != java.math.BigInteger|IllegalFormatConversionException: e != java.math.BigInteger|IllegalFormatConversionException: c != java.math.BigInteger|IllegalFormatConversionException: d != java.math.BigDecimal|IllegalFormatConversionException: x != java.math.BigDecimal|IllegalFormatConversionException: o != java.math.BigDecimal|IllegalFormatConversionException: c != java.math.BigDecimal|IllegalFormatConversionException: d != java.lang.String|true a
 refused:
   scaffold: |
     class Refused {

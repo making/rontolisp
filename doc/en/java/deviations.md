@@ -266,10 +266,9 @@ that read back as it, where a JDK sometimes prints others: `1e23` prints
 `100,000,000,000,000,000,000,000`, a JDK `99,999,999,999,999,990,000,000`. A pattern
 `applyPattern` refuses leaves the format as it was; a JDK's keeps a mix of the two.
 
-**A `BigInteger` and a `BigDecimal` have no primes, and `String.format` writes them with
-`%s` alone.** `isProbablePrime`, `nextProbablePrime`, `probablePrime` and the constructors
-of random bits are refused by name. `%d` of a `BigInteger` and `%f` or `%e` of a
-`BigDecimal` are an `IllegalFormatConversionException`, where a JDK writes the number.
+**A `BigInteger` and a `BigDecimal` have no primes.** `isProbablePrime`,
+`nextProbablePrime`, `probablePrime` and the constructors of random bits are refused by
+name.
 
 **`java.time` has the zones whose offset never changes.** A zone is an offset (`+09:00`,
 `Z`), `UTC`, `GMT` or `UT` alone or with an offset (`UTC+09:00`), or a fixed zone of the tz
@@ -333,16 +332,36 @@ object held in a variable.
 `parallelStream()` are kept (`isParallel()` answers `true`) and change nothing else: the
 elements go through one at a time in the source's order, and a collector's `combiner` and
 the third argument of `collect` and `reduce` are never called. `String.chars()` and
-`codePoints()` are one stream, of code points. A stream made inside `flatMap` or
-`flatMapping` is closed once its last element is taken; one a `findFirst` or a `limit`
-leaves unfinished is not closed. A collector's `finisher` is always called, whatever its
-`characteristics()` say, and a collector made of a collector of the program's own class
-(`mapping`, `groupingBy`) reports none of that one's characteristics. A spliterator of
-the library never splits: `trySplit` answers `null`. A collection changed while its spliterator
-is read throws `ConcurrentModificationException` before the next element, where a JDK
-hands that element on first. `mapMulti`, `gather`, a stream's own `spliterator()`, the
-spliterators of `int`, `long` and `double`, `Collectors.groupingByConcurrent` and
-`toConcurrentMap`, and the streams of a `Random` are not there.
+`codePoints()` are one stream, of code points. A stream made inside `flatMap` is closed
+once its last element is taken or the stream stops asking (`findFirst`, `limit`, a match,
+`takeWhile`), as under a JDK; it is not closed where a later stage throws, where a JDK
+closes it. `iterator()` and `Stream.concat` take the elements of such a stream one at a
+time, where a JDK takes all of them before it hands on the first. A collector's
+`finisher` is always called, whatever its `characteristics()` say, and a collector made
+of a collector of the program's own class (`mapping`, `groupingBy`) reports none of that
+one's characteristics. A spliterator of the library never splits: `trySplit` answers
+`null`. A collection changed while its spliterator is read throws
+`ConcurrentModificationException` before the next element, where a JDK hands that
+element on first.
+
+**`mapMulti` and a gatherer hold what they give for one element until the later stages
+ask for it.** The function of `mapMulti` runs to its end for an element before a later
+stage sees the first of what it gave; under a JDK the later stages see each one as it is
+given, including those past a `limit`. A gatherer's `push` answers `true`, and
+`isRejecting()` `false`, until the stream has stopped asking; under a JDK they turn once
+the later stages have enough, in the middle of an element. So a gatherer that pushes
+until `push` answers `false` never returns here. The elements a stream hands on are the
+same. `Gatherers.mapConcurrent` hands a result on when as many mappings as its limit are
+under way or the stream ends; a JDK may hand on a finished one sooner.
+
+**A stream's `spliterator()` reports an order and the size.** Its characteristics are
+`ORDERED`, with `SIZED` and `SUBSIZED` where the stream knows its count, and its estimate
+is that count or `Long.MAX_VALUE`. A JDK also reports what it keeps track of through the
+stages: `DISTINCT`, `SORTED`, a source's `NONNULL`, `IMMUTABLE` and `CONCURRENT`, no
+`ORDERED` for a `HashSet`, a source's own estimate behind a `filter`; and its `sorted()`
+takes no element ahead where the stream is sorted already (`IntStream.range`), where
+here it does. `StreamSupport.stream(s, false).spliterator()` is a spliterator of its
+own, not `s`.
 
 **What a program asks of its host has fixed answers.** `Runtime.availableProcessors()` is
 1. `System.getProperty` answers `line.separator`, `file.separator`, `path.separator` and

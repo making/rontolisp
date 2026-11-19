@@ -7,6 +7,7 @@ import java.util.LongSummaryStatistics;
 import java.util.OptionalDouble;
 import java.util.OptionalLong;
 import java.util.PrimitiveIterator;
+import java.util.Spliterator;
 import java.util.function.BiConsumer;
 import java.util.function.LongBinaryOperator;
 import java.util.function.LongConsumer;
@@ -34,6 +35,11 @@ public interface LongStream extends BaseStream<Long, LongStream> {
         LongStream build();
     }
 
+    interface LongMapMultiConsumer {
+
+        void accept(long value, LongConsumer consumer);
+    }
+
     LongStream filter(LongPredicate predicate);
 
     LongStream map(LongUnaryOperator mapper);
@@ -45,6 +51,8 @@ public interface LongStream extends BaseStream<Long, LongStream> {
     DoubleStream mapToDouble(LongToDoubleFunction mapper);
 
     LongStream flatMap(LongFunction<? extends LongStream> mapper);
+
+    LongStream mapMulti(LongMapMultiConsumer mapper);
 
     LongStream distinct();
 
@@ -99,6 +107,8 @@ public interface LongStream extends BaseStream<Long, LongStream> {
     Stream<Long> boxed();
 
     PrimitiveIterator.OfLong iterator();
+
+    Spliterator.OfLong spliterator();
 
     static Builder builder() {
         return new LongFlow.Building();
