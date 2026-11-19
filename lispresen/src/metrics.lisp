@@ -108,18 +108,20 @@ zero width joiner joins to it."
 (defun parse-widths (s)
   (coerce (mapcar #'parse-integer (split-spaces s)) 'simple-vector))
 
-;;; Milli-em advance of each printable ASCII character (code 32..126) in Hiragino Sans at
-;;; font-weight 400 and 700: the wider of Chrome 155 and Safari 26.3, measured on
-;;; 2026-10-22. Safari sets Hiragino's Latin 2.7% wider on average (bold 4.4%, single
-;;; characters up to 15%), at every size. Hiragino's Latin is the widest of the font
-;;; stack, so the table over-estimates the other faces rather than under.
+;;; Milli-em advance of each printable ASCII character (code 32..126) at font-weight 400
+;;; and 700, the wider of the two faces a deck's default stack sets Latin in: Hiragino
+;;; Sans, measured the wider of Chrome 155 and Safari 26.3 on 2026-10-22 (Safari sets its
+;;; Latin 2.7% wider on average, bold 4.4%, single characters up to 15%), and Arial,
+;;; measured in Chrome 157 on 2026-11-19. Arial is narrower than Hiragino for the letters
+;;; and digits but wider for * , . : ; < > @ I _ ~ and some bold punctuation; the wider of
+;;; the two is kept, so a deck set in either face errs toward more lines, never fewer.
 (defparameter *ascii-widths*
   (parse-widths
-   "333 320 371 675 668 895 815 202 370 370 356 664 250 373 250 487 673 673 673 673 675 673 673 673 673 673 250 250 520 664 520 584 914 766 721 766 771 655 614 764 792 261 532 728 613 957 785 807 676 807 738 682 664 789 736 1021 747 708 679 363 487 363 549 502 500 592 663 591 663 602 417 653 633 248 276 596 243 954 634 638 664 664 447 553 405 634 561 887 559 574 510 365 389 365 562"))
+   "333 320 371 675 668 895 815 202 370 370 382 664 273 373 273 487 673 673 673 673 675 673 673 673 673 673 273 273 573 664 573 584 996 766 721 766 771 655 614 764 792 273 532 728 613 957 785 807 676 807 738 682 664 789 736 1021 747 708 679 363 487 363 549 546 500 592 663 591 663 602 417 653 633 248 276 596 243 954 634 638 664 664 447 553 405 634 561 887 559 574 510 365 389 365 573"))
 
 (defparameter *ascii-bold-widths*
   (parse-widths
-   "333 356 431 751 743 963 892 267 425 425 401 699 287 442 287 544 741 741 741 741 741 741 741 741 741 741 287 287 554 699 554 645 954 837 774 817 830 706 665 814 850 317 637 818 663 1006 846 859 736 859 797 738 739 857 819 1082 858 795 726 434 544 434 617 504 500 664 735 648 735 661 509 713 702 292 331 689 291 1051 702 691 737 737 521 622 455 702 661 890 660 667 562 438 446 439 641"))
+   "333 356 465 751 743 963 892 267 425 425 401 699 287 442 287 544 741 741 741 741 741 741 741 741 741 741 327 327 573 699 573 645 956 837 774 817 830 706 665 814 850 317 637 818 663 1006 846 859 736 859 797 738 739 857 819 1082 858 795 726 434 544 434 617 546 500 664 735 648 735 661 509 713 702 292 331 689 291 1051 702 691 737 737 521 622 455 702 661 890 660 667 562 438 446 439 641"))
 
 (defun char-width (code style)
   "Milli-em width of CODE in STYLE (:normal, :bold or :mono). Full-width characters are

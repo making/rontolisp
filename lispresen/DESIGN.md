@@ -326,13 +326,15 @@ Japanese body text (1.5 and up); the Latin-oriented 1.2-1.4 crowds kanji.
 
 ### Fonts
 
-System fonts only, so the file needs no network: `"Hiragino Sans", "Noto Sans JP",
+System fonts only, so the file needs no network: `Arial, "Hiragino Sans", "Noto Sans JP",
 "BIZ UDGothic", "Yu Gothic", sans-serif`, and `Menlo, Consolas, "BIZ UDGothic",
-monospace` for code. Every Japanese face in the stack sets kana and kanji full-width,
-which is what makes the width model exact for Japanese. For that reason proportional
-Japanese faces (BIZ UDPGothic, Meiryo UI) are not in the stack, and neither `palt` nor
-`text-autospace` is turned on: each changes widths in a way the model would have to
-reproduce per font.
+monospace` for code. A deck may set its own list with `:font`, written into
+`font-family` as given, which still fetches nothing. Every Japanese face in the stack
+sets kana and kanji full-width, which is what makes the width model exact for Japanese.
+For that reason proportional Japanese faces (BIZ UDPGothic, Meiryo UI) are not in the
+stack, and neither `palt` nor `text-autospace` is turned on: each changes widths in a
+way the model would have to reproduce per font. A face a deck names itself is not in
+either table; the model errs toward more lines for it.
 
 ### Text measurement
 
@@ -341,7 +343,7 @@ Width of a code point, in milli-em:
 | Characters | Width |
 |------------|-------|
 | Kanji, kana, full-width punctuation and forms, CJK symbols | 1000, exact |
-| Printable ASCII | per character, the wider of Chrome and Safari on Hiragino Sans at weight 400 (bold: 700), plus 2% |
+| Printable ASCII | per character, the wider of Hiragino Sans and Arial at weight 400 (bold: 700), plus 2%; Hiragino from the wider of Chrome and Safari |
 | Monospace (`code`, `tt`) | 602 (Menlo), plus 2%; full-width 1000 |
 | Emoji (dingbats, transport and map, U+1FA00-1FAFF, ...) and an emoji sequence (flag, ZWJ, skin tone, variation selector, keycap) | 1000 per glyph, exact; the characters of a sequence after the first take 0 and never break apart |
 | Symbols the font stack sets wider than a Latin letter (™ ⌘ ¼½¾ Æ, Letterlike, number forms, math, technical, supplemental arrows and operators, currency, tiles) | per block, the widest glyph measured plus 2% (900-1650); box drawing and block elements 1000, 614 in code |
@@ -363,11 +365,12 @@ on 2026-10-23 with the calibration page, which pads its inline code and has a ma
 sample: never fewer lines than Chrome or Safari, one more in 18 and 11; the golden deck
 needs no runtime correction in either browser in any built-in theme.
 
-Japanese text is exact under the fonts above. Latin glyphs differ per face, and
-Hiragino's are the widest of the stack (its digits are 657, against Noto Sans JP's
-572), so the table measured on it over-estimates the other faces rather than under. A
-first table of character classes (digits 580, lower case 550) under-estimated Hiragino
-and wrapped a table cell the model had set on one line; the per-character table
+Japanese text is exact under the fonts above. Latin glyphs differ per face. Arial's
+letters and digits are narrower than Hiragino's (digits 556 against 657) but its
+`* , . : ; < > @ I _ ~` wider, by up to 10% (`<`), 9% (`@`, `,`), 8.6% (`_`); the table
+holds the wider of the two per character, so a deck set in either face errs toward more
+lines. A first table of character classes (digits 580, lower case 550) under-estimated
+Hiragino and wrapped a table cell the model had set on one line; the per-character table
 replaced it. The 2% covers sub-pixel rounding; it applies to proportional characters
 only, since a margin on full-width ones puts one character fewer on a line than the
 browser does.
@@ -377,16 +380,18 @@ Latin, mixed, bold, inline code, brackets; 40-120 px; 700-1696 px wide): the mod
 predicted fewer lines than Chrome rendered, and predicted one more in 9. Safari 26.3, same
 day and page: never fewer, one more in 1.
 
-That table was measured in Chrome alone, and Safari sets Hiragino's Latin wider at every
-size: 2.7% on average at weight 400, 4.4% at 700, single characters up to 15% (measured
-2026-10-22, Safari 26.3 against Chrome 155, each character set twenty times). The 2%
-margin hid it in the paragraphs, which meet a line boundary only by chance, until a bold
-title the model set in two lines took three in Safari, 0.05 px over its width. The table
-now holds the wider of the two browsers per character, and the calibration page also sets
-every ASCII character in both weights and reports any wider than the model, which does
-not depend on chance. Same day, 96 paragraphs (a bold title among them): never fewer
-lines in either browser, one more in 18 (Chrome) and 11 (Safari); no character wider
-than the model in either.
+The Hiragino entries were measured in Chrome alone at first, and Safari sets its Latin
+wider at every size: 2.7% on average at weight 400, 4.4% at 700, single characters up to
+15% (measured 2026-10-22, Safari 26.3 against Chrome 155, each character set twenty
+times). The 2% margin hid it in the paragraphs, which meet a line boundary only by
+chance, until a bold title the model set in two lines took three in Safari, 0.05 px over
+its width. Those entries now hold the wider of the two browsers per character, and the
+calibration page also sets every ASCII character in both weights and reports any wider
+than the model, which does not depend on chance. Same day, 96 paragraphs (a bold title
+among them): never fewer lines in either browser, one more in 18 (Chrome) and 11
+(Safari); no character wider than the model in either. The Arial entries were measured
+the same way in Chrome 157 on 2026-11-19, every character in both weights, and kept where
+they exceed the Hiragino ones.
 
 Emoji, measured in Chrome 155 on macOS (Apple Color Emoji) on 2026-10-24, each set 20
 times at 1000 px in weights 400 and 700: every emoji in U+1F650-1F6FF (🚀), U+1FA00-1FAFF,
@@ -1436,7 +1441,7 @@ README documents the offline setup (`./mvnw -Pweb -DskipTests package`, copy
 
 | Severity | Condition |
 |----------|-----------|
-| error | malformed or unknown form; a `:page-url` that is not an absolute http(s) URL; a drawn `:page-image` not named `.png`, or without a `:page-image-font`; a page image font that cannot be read or is not TrueType; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes, with a cycle, a name no `(node ...)` declares, a node declared twice, a misplaced or empty `label`, an arrow with two labels, a non-path among paths, a `:direction` other than `:right` or `:down`, or a callout in a box's later appearance; a chart without rows, a row that is not `(label value...)` with a value per series, a value that is not an integer or a decimal string (a float among them), a negative slice or a pie without a slice above 0, `:series` naming fewer than two or more than 6 series, a pie of more than 6 slices, `:step :series` on a pie or a block that is no chart, an option after the rows, a `columns` whose rows are forms; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a `math` without an expression, or with a decimal, a keyword, an operator missing its operands or a matrix row that is not a list; a display formula wider than its region at the smallest body size; a decimal number in text; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; an image `:fit` other than `:cover` or `:contain`, a `:share` other than `1/3`, `1/2` or `2/3`, a frame `:zoom` other than 1 to 4 in quarters; under `--embed`, an image that cannot be read or has an unknown extension |
+| error | malformed or unknown form; a `:font` that is not a string, is empty or holds `{ } ; <`; a `:page-url` that is not an absolute http(s) URL; a drawn `:page-image` not named `.png`, or without a `:page-image-font`; a page image font that cannot be read or is not TrueType; a malformed template or use, or one past the expansion bounds; overflow at the hard floor; a `:url` longer than a QR code holds; a callout without room at the smallest sizes, or whose `:at` text is not on a line of its code or a label of its diagram; a `flow` without boxes, with a cycle, a name no `(node ...)` declares, a node declared twice, a misplaced or empty `label`, an arrow with two labels, a non-path among paths, a `:direction` other than `:right` or `:down`, or a callout in a box's later appearance; a chart without rows, a row that is not `(label value...)` with a value per series, a value that is not an integer or a decimal string (a float among them), a negative slice or a pie without a slice above 0, `:series` naming fewer than two or more than 6 series, a pie of more than 6 slices, `:step :series` on a pie or a block that is no chart, an option after the rows, a `columns` whose rows are forms; a `cells` without one list, with more than 32 conses, or with an atom other than a symbol, integer, ratio, string or character; a diagram wider than its region at the smallest size; a `math` without an expression, or with a decimal, a keyword, an operator missing its operands or a matrix row that is not a list; a display formula wider than its region at the smallest body size; a decimal number in text; a table row whose cell count (with `:colspan`) differs from the header's or the first row's; a second `source` on a slide, a callout in one, one outside a slide; a code `:file` that cannot be read or is not UTF-8, both `:file` and text, `:lines` without `:file`, not two ascending line numbers, or past the file's end; an image `:fit` other than `:cover` or `:contain`, a `:share` other than `1/3`, `1/2` or `2/3`, a frame `:zoom` other than 1 to 4 in quarters; under `--embed`, an image that cannot be read or has an unknown extension |
 | warning | `:agenda` in a deck without sections (after its `(agenda)`); `(agenda)` without `:agenda`, or after the first; `:logo` or `:url` without a `:title`; `:page-image` without `:page-url`, or drawn without a `:title`; `:page-image-font` without `:page-image`; a character the page image font has no glyph for; a logo the page image leaves out (not SVG, unreadable, or SVG it does not draw); a QR code with no free corner; a size below its warning floor; more than 6 items in one list; list nesting deeper than 2; an item longer than 3 lines; a title longer than 2 lines; code longer than 15 lines; a table with more than 7 body rows or 5 columns; a flow of more than 8 boxes; a chart of more than 4 series, a bar chart of more than 7 rows, a column or line chart of more than 12, a pie of more than 5 slices; a chart color below 3:1 on `bg`; an inline formula taller than its line; a source longer than 2 lines; full-width alphanumerics (`ＡＢＣ１２３`); `image`, `video` or `frame` without `:alt`; a `:full`, `:image-left` or `:image-right` layout the slide's shape does not allow; `:fit` on an image in the body box, `:share` off a split slide; under `--embed`, an image given as a URL, a frame given as a relative URL; a theme text color below 4.5:1 against its background; callout text below its warning floor; a callout longer than 2 lines; a kicker on a slide without a title, or longer than one line; a footer longer than one line beside the page number |
 
 Diagnostics print as `talk.lisp:42: warning: slide 7 "その場で動かす": body text at
@@ -1495,7 +1500,7 @@ it narrower than it was measured, never wider. `:midnight` uses this:
 
 Checked 2026-10-22 against the other directions tried (a light deck with full-bleed
 indigo slides and heavy vermilion parentheses; black and white with a signal yellow):
-the dark indigo with fine gold lines was chosen. Hiragino stays the face, since a
+the dark indigo with fine gold lines was chosen. The deck's font stays the face, since a
 display face would need its own width table.
 
 ## HTML output

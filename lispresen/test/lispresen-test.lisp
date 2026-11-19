@@ -454,15 +454,15 @@ height the body leaves, a bar chart's bars at most twice as thick"
       (ok (equal (callout-side html "s1c2") "right"))
       (ok (contains html "data-at=\"b\""))
       (ok (equal (callout-side html "s2c1") "right"))
-      ;; The longest bar takes the room the label and value columns leave, 1505 px; a
+      ;; The longest bar takes the room the label and value columns leave, 1504 px; a
       ;; quarter of the value a quarter of it; a zero draws none, its value at the axis.
       ;; Grown into the body, a bar is 136 px thick, twice its line height.
       (ok (contains html "<rect class=\"dg-s1\" x=\"57\" y=\"24\" width=\"376\" height=\"136\""))
-      (ok (contains html "<rect class=\"dg-s1\" x=\"57\" y=\"208\" width=\"1505\""))
-      (ok (contains html ">y</p><p class=\"dg-l dg-v\" style=\"left:1590px;top:208px"))
+      (ok (contains html "<rect class=\"dg-s1\" x=\"57\" y=\"208\" width=\"1504\""))
+      (ok (contains html ">y</p><p class=\"dg-l dg-v\" style=\"left:1589px;top:208px"))
       (ok (contains html ">z</p><p class=\"dg-l dg-v\" style=\"left:85px;top:392px"))
       ;; The tail points at the value written at the bar's end.
-      (ok (contains html "data-side=\"below\" data-at=\"y\" data-box=\"1590 208 1651 344\""))
+      (ok (contains html "data-side=\"below\" data-at=\"y\" data-box=\"1589 208 1650 344\""))
       ;; A negative column hangs from the zero line; the scale ticks every 1 from -1 to 3,
       ;; the plot grown to fill the body's 776 px; a series' columns, legend and callouts
       ;; share its step.
@@ -742,6 +742,12 @@ diagnostics"
     (ok (contains (lispresen:render "(deck)") "<html lang=\"ja\">"))
     (ok (equal (render-diagnostics "(deck :lang \"en\\\"x\")")
                '((:error 1 ":lang of deck must be a language tag of letters, digits and -"))))
+    (ok (contains (lispresen:render "(deck)")
+                  "body{font-family:Arial,'Hiragino Sans','Noto Sans JP','BIZ UDGothic','Yu Gothic',sans-serif}"))
+    (ok (contains (lispresen:render "(deck :font \"\\\"BIZ UDPGothic\\\", serif\")")
+                  "body{font-family:\"BIZ UDPGothic\", serif}"))
+    (ok (equal (render-diagnostics "(deck :font \"a}b\")")
+               '((:error 1 ":font of deck must be a font-family list without { } ; <"))))
     (ok (contains (lispresen:render "(deck :title \"t&\" :description \"d\"
   :page-url \"https://e.x/a/t.html\" :page-image \"t.png\" :page-image-font \"f.ttf\")")
                   "<title>t&amp;</title>

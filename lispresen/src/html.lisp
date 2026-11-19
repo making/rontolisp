@@ -9,7 +9,9 @@
 (in-package :lispresen)
 
 (defparameter *font-stack*
-  "'Hiragino Sans','Noto Sans JP','BIZ UDGothic','Yu Gothic',sans-serif")
+  "Arial,'Hiragino Sans','Noto Sans JP','BIZ UDGothic','Yu Gothic',sans-serif"
+  "The deck text's faces: Arial for Latin and the Japanese faces of the system for the
+rest, none fetched over the network. A deck's :font replaces the list.")
 (defparameter *mono-stack* "Menlo,Consolas,'BIZ UDGothic',monospace")
 
 (defparameter *stylesheet*
@@ -216,7 +218,8 @@ html:not(.js) #fs{display:none}
     (write-theme-css theme out)
     (write-string (reduce
                    (lambda (s pair) (replace-all s (first pair) (second pair)))
-                   (list (list "FONTS" *font-stack*) (list "MONO" *mono-stack*)
+                   (list (list "FONTS" (or (deck-font deck) *font-stack*))
+                         (list "MONO" *mono-stack*)
                          (list "INLINE-PAD" (milli-em-string *inline-pad*))
                          (list "META-LH" (px-string (body-lh *meta-size*)))
                          (list "META" (px-string *meta-size*))
