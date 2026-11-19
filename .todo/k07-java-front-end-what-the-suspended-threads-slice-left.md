@@ -64,22 +64,8 @@ left, the first two measured:
   while something blocks on its scheduler, and its `%future-race` is `sockets.lisp`'s.
 - **`getState()` never answers `BLOCKED`**: on wasm a thread waiting to enter a monitor is
   now known (the monitor's seventh slot); the host variant still cannot tell.
-- **The thread cases of `java-spec.yaml` flake when the machine is loaded** (seen
-  2026-11-19 by k05, load average 9 to 40 from a full suite in another worktree; not at
-  load 4). Three ways, each also on a tree without k05's changes or on the JDK leg:
-  (1) `JavaSpecE2eTest` never ends: the `java-spec` thread of an INTERPRETER leg stays in
-  `%java-park`'s wait with no limit (`RontoConditionVariable.await` line 60 under
-  `Environment.registerMutexes`, the `cond` of a `while`) -- a wake-up that never comes;
-  which case was not found (the legs run at once; a jstack of the fork shows the stack,
-  not the program). Seen twice in fifteen runs with k05's changes and once in nine on
-  `23ce3b245`. (2) `locks-latches-queues-and-executors-hand-work-between-threads` on the
-  JDK leg: `pool size = 1` where the expectation says 0 (the pool's thread had not left
-  when `toString` ran; seen on both trees). (3) `threads-wait-for-one-another-again-and-again` on the
-  interpreter: `atomic read after some turns false` -- `stops()` gives each spinning
-  thread `Thread.sleep(5)` to take a turn, which a loaded machine does not grant. (2) and
-  (3) are orders decided by a short sleep: a latch the thread counts down is the fix.
-  (1) needs the case first: run the standalone interpreter legs alone under
-  `stress-ng`-like load with each leg's name on its thread.
+- The thread cases that flake under load, and the interpreter's lost wake-up that hangs
+  `JavaSpecE2eTest`, moved to `.todo/k14`.
 
 ## Done when
 
