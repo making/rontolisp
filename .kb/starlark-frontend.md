@@ -29,8 +29,7 @@ and every user surface says so (`--source-language` help, the title of
   accessors it reaches. The name gate is the spelling: `mayDefine` admits a member
   starting `%STARLARK-` (`.kb/source-language.md`, "The run-time libraries' name gate")
   and the one public name, `rontolisp:starlark-call` ("Across languages").
-  The playground's compile chain splices it inside `SchemeLibrary` the same way
-  (`RontoPlayground.frontend`).
+  The playground's compile buttons run the same `expand` (`RontoPlayground.frontend`).
 
 ## The decisions (2026-11-15)
 

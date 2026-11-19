@@ -1,6 +1,8 @@
 package am.ik.rontolisp.eval;
 
 import java.io.FileNotFoundException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 import am.ik.rontolisp.reader.Features;
@@ -167,6 +169,31 @@ class PlaygroundReplTest {
 		assertThat(repl.eval("String.valueOf(xs[0])")).isEqualTo("$3 ==> \"6\"");
 		assertThat(new PlaygroundRepl(NO_FILES).pick(SourceLanguage.JAVA).run("void main() { IO.println(1 + 2); }"))
 			.isEqualTo("3\n");
+		// Where the host has one stack, a program that starts threads is handed to what
+		// runs it there; any other program, and every program of a host with threads,
+		// is the interpreter's.
+		String threaded = """
+				void main() throws InterruptedException {
+				    Thread worker = new Thread(() -> IO.println("worker"));
+				    worker.start();
+				    worker.join();
+				}
+				""";
+		List<String> handed = new ArrayList<>();
+		PlaygroundRepl oneStack = new PlaygroundRepl(NO_FILES, "", source -> {
+			handed.add(source);
+			return "compiled\n";
+		}).pick(SourceLanguage.JAVA);
+		assertThat(oneStack.run("void main() { IO.println(1 + 2); }")).isEqualTo("3\n");
+		assertThat(oneStack.run(threaded)).isEqualTo("compiled\n");
+		assertThat(handed).containsExactly(threaded);
+		assertThat(new PlaygroundRepl(NO_FILES).pick(SourceLanguage.JAVA).run(threaded)).isEqualTo("worker\n");
+		// A buffer of its session starts no thread there, and says so; the other
+		// languages of the page keep theirs.
+		assertThatThrownBy(() -> oneStack.eval("new Thread(() -> IO.println(\"worker\")).start()"))
+			.hasMessageContaining("a thread is started only by a whole program in the browser");
+		assertThat(oneStack.pick(SourceLanguage.COMMON_LISP)
+			.eval("(rontolisp:join-thread (rontolisp:make-thread (lambda () 42)))")).isEqualTo("42");
 	}
 
 	@Test

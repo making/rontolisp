@@ -110,13 +110,15 @@ am.ik.maven -> am.ik.artifact
 - `macro` sits ABOVE `reader` so an expander may build AST by reading Lisp source; the root
   `rontolisp` package must never import `macro`.
 - **A compile-time AST pass that reads a file belongs in `eval`, not `cli`, and reads through
-  `SourceLoader`** -- the browser playground (`src/web/java`) never touches `cli` and has no
-  filesystem (`.kb/wit.md`).
+  `SourceLoader`** -- the browser playground (`src/web/java`) has no filesystem and reaches
+  nothing of `cli` but `CompileFrontend.expand`, which reads through `Options.loader` (the
+  playground's uploaded files; `.kb/wit.md`).
 - **The compile path's front end is `cli/CompileFrontend`** -- the read, `(load ...)`
   inlining, the library splice chain, the WIT lowerings and the tree-shaker, in one
   order-critical place. Every backend and embedder goes through it; a JVM embedder goes
   through `cli/JvmSourceCompiler`, the same backend half `-o out.class` runs
-  (`.kb/jvm-export.md`). **The pass pipeline is `CompileFrontend.expand`, and nothing may
+  (`.kb/jvm-export.md`); the browser playground goes through `cli/PlaygroundFrontend`
+  (`src/web/java`, the `web` profile's alone). **The pass pipeline is `CompileFrontend.expand`, and nothing may
   restate it**: `run` is the read plus `(load ...)` inlining in front of it, and a caller
   needing its own source loader calls `expand` directly. Every test reaches the front end
   through `src/test/.../cli/CompileFrontendAccess` (or, for a JVM target,
@@ -127,7 +129,11 @@ am.ik.maven -> am.ik.artifact
   Gray-streams / usocket / unread-char rewrites was spliced by the CLI and missed by both.
   The `asdf:load-system` E2Es stopped six passes in, and `JvmOsrBackedgeCorpusTest` kept a
   copy until 2026-09-19, eleven splices behind, printing ten `TOKENIZER:... is undefined`
-  warnings on every GREEN run.
+  warnings on every GREEN run. The playground kept the last copy until 2026-11-19: without
+  `UserMacroExpander` and `JavaLibrary`, its compile buttons made of a `defmacro` program and
+  of most Java programs a module calling undefined functions (measured in the image: the
+  macro sample 6,418 B against the CLI's 33,687; now byte-identical to the CLI's for a
+  sample of each of the five languages, `web/playground-check.js` the gate).
 
 ## Requirements
 

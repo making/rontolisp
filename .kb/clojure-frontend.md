@@ -60,7 +60,7 @@ backends, zero divergences -- nothing to fix, pin or cut as a follow-up.
   and `.cljc` ("Reader conditionals") or by `--source-language clojure` (`clj`) (`.kb/source-language.md`). A Common Lisp
   file may `(load "lib.clj")` and call `(c%name ...)` (`(|c%my.ns/name| ...)` for a
   namespaced one).
-- The browser needs no Java-side change: `RontoPlayground` splices `ClojureLibrary`,
+- The browser needs no Java-side change: `RontoPlayground` compiles through `CompileFrontend.expand`,
   `PlaygroundRepl` is language-agnostic, doc ` ```clojure ` fences are Run cells
   (`data-lang="clojure"`, `.kb/documentation-site.md`) checked by `DocExamplesTest`.
 - A whole FILE is lowered at once. Pass one pre-scans every top-level definition name

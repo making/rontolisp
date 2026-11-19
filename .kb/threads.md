@@ -13,7 +13,11 @@ round-trip are portable.
 - Interpreter: `LispThread` record (thread, result, name) from `AsyncRuntime.spawnThread` — the ONLY
   LispEvaluator-reachable class touching threads, so the browser playground substitutes it
   wholesale (`Target_AsyncRuntime.spawnThread` runs the body synchronously, and hands back the current
-  thread: `join-thread` skips the `Thread.join`, which hung the page until 2026-11-05).
+  thread: `join-thread` skips the `Thread.join`, which hung the page until 2026-11-05). A body
+  run so cannot wait for another thread: a `condition-wait` with no limit is refused there
+  ([mutexes.md](mutexes.md)), a Java program that starts threads is run compiled instead and
+  its session starts none (`LispEvaluator.refuseThreads`; `.kb/java-frontend.md`, "In the
+  browser").
 - JVM: `{TMARKER, Thread, FutureTask, name}` marker-headed `Object[]`; `JvmThreadRuntimeBuilder`'s
   class `implements Callable`, `_thread_spawn` builds the handle on an UNSTARTED virtual thread,
   stores it in the runner's `_threadHandle`, then starts it.

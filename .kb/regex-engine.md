@@ -14,8 +14,8 @@ forbids; it was deleted, not refactored (it stays in git history, the user's dec
   libraries' name gate"). The interpreter loads it on the first resolution of a
   `rontolisp::%regex-` function; `CompileFrontend.expand` splices it right OUTSIDE
   `ClojureLibrary` and `JavaLibrary` (their libraries are what name it), and
-  `LibraryDefunPruner` drops what a program does not reach. `RontoPlayground` splices it the
-  same place. A program of two languages gets it once.
+  `LibraryDefunPruner` drops what a program does not reach (the playground compiles through
+  the same `expand`). A program of two languages gets it once.
 - Clojure: `clojure.lisp`, "Regular expressions" -- the pattern and matcher values, the `re-*`
   verbs, `clojure.string`'s pattern arms, the `Matcher` methods, the matcher over a
   CharSequence type ([clojure-frontend.md](clojure-frontend.md), "Regex").

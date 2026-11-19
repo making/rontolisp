@@ -312,6 +312,15 @@ thread a turn. Four kinds of program show it.
 - A Java file with no `main` that a Common Lisp program loads is refused when it starts a
   thread or a server.
 
+**In a browser a program that starts threads runs as a `.wasm`.** **Run** on these pages
+and the playground run a program on the interpreter, which in a browser has one stack and
+cannot leave a thread waiting on it. A whole program that can start a thread is therefore
+compiled in the page to a Preview 1 `.wasm` and run by the browser: its threads take turns
+as above, and it has what a Preview 1 module has. One that also sends an HTTP request is
+refused with that reason, where a program that starts no thread sends it. A buffer at the
+playground's REPL stays on the interpreter and starts no thread: `start()` is refused there
+with a message, and the playground's **Run source** runs the program whole.
+
 **What is shared without a monitor or `volatile` is the host's.** On the interpreter and
 the JVM a field two threads read and write with neither may be read stale, as the language
 allows. `volatile`, `synchronized`, `Thread.start` and `join` order what they order in the

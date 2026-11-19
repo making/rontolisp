@@ -21,7 +21,7 @@ program that calls none. Nothing else here may do I/O.
 | splice class | `eval/GeomLibrary` (`forms()`, `process(program)`, `isGeomQualified`, `mentionsGeomClass`, `CLASS_NAMES`) |
 | package | `PackageRegistry.GEOM_FUNCTIONS` + `LispNames.GEOM_PKG` + `geomFunctionNames()` + `BUILTIN_PACKAGE_NAMES` |
 | interpreter | `LispEvaluator.ensureGeomLoaded()` on the first `geom:`-qualified FUNCTION resolution, plus `ensureGeomClassesFor(form)` at the seven `ensureAsdfClassesFor` sites |
-| compile path | `cli/CompileFrontend`: `GeomLibrary.process` INSIDE `LinalgLibrary.process` (beside `TorchLibrary`); `JsonLibrary.process` OUTSIDE both, since `geom:read-gltf` parses through `rontolisp:json-parse`. The browser playground repeats the nesting. |
+| compile path | `cli/CompileFrontend`: `GeomLibrary.process` INSIDE `LinalgLibrary.process` (beside `TorchLibrary`); `JsonLibrary.process` OUTSIDE both, since `geom:read-gltf` parses through `rontolisp:json-parse`. The browser playground runs the same `expand`. |
 | pruning | `LibraryDefunPruner.prunableNames()` collects `GeomLibrary.forms()` |
 | interpreter natives | `eval/GeomKernels.install`, from `ensureGeomLoaded` |
 | JVM kernels | `codegen/jvm/JvmGeomKernelCompiler` (call site) + `JvmGeomTemplate` (bridge) + `JvmGeomRuntimeBuilder` (injection), gated in `JvmLispCompiler` on `gateMembers()`, one `JvmExprCompiler.compileCons` case |

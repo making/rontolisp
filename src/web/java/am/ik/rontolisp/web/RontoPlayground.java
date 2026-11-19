@@ -1,40 +1,24 @@
 package am.ik.rontolisp.web;
 
 import java.io.FileNotFoundException;
+import java.io.PrintStream;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BiFunction;
 import java.util.function.Function;
-import java.util.function.Supplier;
 
 import org.graalvm.webimage.api.JS;
 import org.graalvm.webimage.api.JSString;
 
 import am.ik.rontolisp.LispVal;
+import am.ik.rontolisp.cli.PlaygroundFrontend;
 import am.ik.rontolisp.codegen.jvm.JvmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
-import am.ik.rontolisp.eval.LispPreludeLibrary;
-import am.ik.rontolisp.eval.JsonLibrary;
-import am.ik.rontolisp.compiler.CompileTimeBoundp;
-import am.ik.rontolisp.compiler.WitExportDirective;
-import am.ik.rontolisp.eval.ExitLibrary;
-import am.ik.rontolisp.eval.LibraryDefunPruner;
-import am.ik.rontolisp.eval.WitExportInliner;
 import am.ik.rontolisp.eval.SourceLoader;
-import am.ik.rontolisp.eval.GeomLibrary;
-import am.ik.rontolisp.eval.GgufLibrary;
-import am.ik.rontolisp.eval.LinalgLibrary;
-import am.ik.rontolisp.eval.TokenizersLibrary;
-import am.ik.rontolisp.eval.TorchLibrary;
 import am.ik.rontolisp.eval.PlaygroundRepl;
 import am.ik.rontolisp.eval.SourceLanguage;
-import am.ik.rontolisp.eval.VecLibrary;
-import am.ik.rontolisp.eval.UrlLibrary;
-import am.ik.rontolisp.eval.UsocketLibrary;
-import am.ik.rontolisp.eval.WitImportInliner;
-import am.ik.rontolisp.eval.WitLibrary;
 import am.ik.rontolisp.reader.Features;
 
 /**
@@ -50,7 +34,9 @@ import am.ik.rontolisp.reader.Features;
  * <li>{@code rontoRunProgram(source, stdin)} / {@code rontoRunSession(source, stdin)} -
  * run source on a FRESH interpreter reading {@code stdin}: as a whole program
  * (its output), or form by form with every value echoed (the documentation site's
- * Scheme, Clojure and Starlark cells).</li>
+ * Scheme, Clojure, Starlark and Java cells). A Java program that starts threads is
+ * compiled to a module and run by the page's own WebAssembly engine instead
+ * ({@link BrowserModule}): the interpreter has the page's one stack.</li>
  * <li>{@code rontoCompileJvm(source, className)} - compile to a JVM
  * {@code .class} file, returned as a Base64 string; a program whose class needs files
  * beside it (a bridge, a runtime class) answers {@value #FILES_PREFIX} and one
@@ -95,7 +81,7 @@ public final class RontoPlayground {
 	};
 
 	/** The page's persistent interpreter, whose pick every call reads. */
-	private static final PlaygroundRepl repl = new PlaygroundRepl(uploads);
+	private static final PlaygroundRepl repl = new PlaygroundRepl(uploads, "", source -> runCompiled(source, ""));
 
 	private RontoPlayground() {
 	}
@@ -121,29 +107,38 @@ public final class RontoPlayground {
 		// #. resolves per form, as at the CLI REPL; the COMPILE buttons keep the
 		// error-mode read (frontend below). (uiop:quit code) / (exit): there is no
 		// process to end, so the run stops where it stood and its output is the answer.
-		return shown(() -> repl.eval(source));
+		return shown(repl, interpreter -> interpreter.eval(source));
 	}
 
 	/** Run {@code source} as a whole program on a fresh interpreter. */
 	static String runProgram(String source, String stdin) {
-		return shown(() -> fresh(stdin).run(source));
+		return shown(fresh(stdin), interpreter -> interpreter.run(source));
 	}
 
 	/** Run {@code source} form by form on a fresh interpreter, echoing every value. */
 	static String runSession(String source, String stdin) {
-		return shown(() -> fresh(stdin).transcript(source));
+		return shown(fresh(stdin), interpreter -> interpreter.transcript(source));
 	}
 
 	private static PlaygroundRepl fresh(String stdin) {
-		return new PlaygroundRepl(uploads, stdin).pick(repl.language());
+		return new PlaygroundRepl(uploads, stdin, source -> runCompiled(source, stdin)).pick(repl.language());
 	}
 
-	private static String shown(Supplier<String> run) {
+	// What a run shows. Standard error is the page's while it runs, in the order things
+	// were written: a warning about the program, the report of what a Java program left
+	// uncaught -- which would otherwise go to the browser's console and leave the page
+	// with nothing.
+	private static String shown(PlaygroundRepl interpreter, Function<PlaygroundRepl, String> run) {
+		PrintStream processErr = System.err;
+		System.setErr(interpreter.page());
 		try {
-			return run.get();
+			return run.apply(interpreter);
 		}
 		catch (RuntimeException ex) {
 			return ERROR_PREFIX + ex.getMessage();
+		}
+		finally {
+			System.setErr(processErr);
 		}
 	}
 
@@ -155,7 +150,7 @@ public final class RontoPlayground {
 	 */
 	static String compileJvm(String source, String className) {
 		try {
-			List<LispVal> program = frontend(source, Features.JVM, WitExportDirective.Backend.OTHER);
+			List<LispVal> program = frontend(source, Features.JVM, false);
 			String name = (className == null || className.isBlank()) ? "Main" : className;
 			JvmLispCompiler compiler = new JvmLispCompiler(name);
 			byte[] bytes = compiler.compile(program);
@@ -181,34 +176,25 @@ public final class RontoPlayground {
 	/** Compile {@code source} to a WebAssembly module, returned as Base64. */
 	static String compileWasm(String source) {
 		try {
-			// The playground emits a Preview 1 core module (no --component), so the world
+			// The playground emits a Preview 1 core module (no --component), so a world
 			// is checked against the wasm-GC backend's rules.
-			List<LispVal> program = frontend(source, Features.WASM, WitExportDirective.Backend.WASM_GC);
-			byte[] bytes = new WasmLispCompiler().compile(program);
-			return Base64.getEncoder().encodeToString(bytes);
+			return Base64.getEncoder().encodeToString(wasmModule(source));
 		}
 		catch (RuntimeException ex) {
 			return ERROR_PREFIX + ex.getMessage();
 		}
 	}
 
-	// The playground's compile-time frontend: the WIT interface bindings (a
-	// rontolisp:wit-import directive becomes the defpackage + bindings it stands for --
-	// first, because the package it declares must exist before anything resolves a call
-	// site in it), then the library splices, then the WIT world check (a
-	// rontolisp:wit-export directive is lowered into the wasm-export directives it stands
-	// for -- without this the backends would meet the directive itself and report an
-	// unhelpful "Cannot compile"), then the library tree-shake. It has no LoadInliner: the
-	// browser resolves (load ...) at run time, against the same uploaded files a WIT file
-	// is read from.
-	private static List<LispVal> frontend(String source, Features features, WitExportDirective.Backend backend) {
-		// The strict (error-mode) read is deliberate here, not a leftover: this
-		// reduced frontend has no marker-resolution pass, so a #. must be a read
-		// error rather than a marker no pass resolves. A Scheme source is read with
-		// the uploaded files its include / define-library name, a Starlark one with the
-		// modules its load statements name.
-		List<LispVal> read = WitImportInliner.inline(repl.language().readStrict(source, features, uploads), null,
-				backend, uploads);
+	// The playground's compile-time front end: the picked language's strict read, then
+	// the compile path's one pass pipeline (cli/CompileFrontend.expand, through
+	// PlaygroundFrontend), reading a WIT world from the uploaded files. It has no
+	// LoadInliner: the browser resolves (load ...) at run time, against the same files.
+	private static List<LispVal> frontend(String source, Features features, boolean wasm) {
+		// The strict (error-mode) read is deliberate here, not a leftover: a #. is a read
+		// error on this page. A Scheme source is read with the uploaded files its include
+		// / define-library name, a Starlark one with the modules its load statements
+		// name, a Java one with the files of its classes.
+		List<LispVal> read = repl.language().readStrict(source, features, uploads);
 		// objc:, appkit:, metal: and scene: need the Objective-C runtime on the machine
 		// that RUNS the program, and the JVM output would need the binding's class
 		// files, which the browser build does not carry: refuse both outputs by the
@@ -220,32 +206,33 @@ public final class RontoPlayground {
 					+ " -- the objc:, appkit:, metal: and scene: packages are not available in the browser "
 					+ "playground");
 		}
-		// JsonLibrary runs AFTER GeomLibrary here too: geom:read-gltf parses its JSON
-		// chunk through rontolisp:json-parse, so the geom splice introduces the
-		// reference (the readers are then pruned out again -- no filesystem here).
-		List<LispVal> program = am.ik.rontolisp.eval.UnreadCharLibrary
-			.process(WitLibrary.process(UsocketLibrary.process(am.ik.rontolisp.eval.GrayStreamsLibrary
-				.process(VecLibrary.process(LispPreludeLibrary.process(
-						UrlLibrary.process(JsonLibrary
-							.process(LinalgLibrary.process(GeomLibrary.process(TorchLibrary
-								.process(GgufLibrary.process(TokenizersLibrary
-									.process(am.ik.rontolisp.eval.UriLibrary.process(am.ik.rontolisp.eval.RegexLibrary
-										.process(am.ik.rontolisp.eval.ClojureLibrary.process(
-												am.ik.rontolisp.eval.SchemeLibrary.process(
-														am.ik.rontolisp.eval.StarlarkLibrary.process(read), features,
-														am.ik.rontolisp.eval.SourceStandards.DEFAULT),
-												!features.contains("rontolisp-wasm"))))))))), backend)),
-						features))))));
-		// uiop:quit on the WASM button is exit.lisp's wasi_snapshot_preview1 proc_exit
-		// binding (eval/ExitLibrary), like the CLI's Preview 1 output; a no-op for the
-		// JVM button and for a program that never quits.
-		program = ExitLibrary.process(program, backend, features);
-		// The (boundp 'name) fold runs before the shake for the same reason it does in the
-		// CLI: a guarded library constant is not a top-level definer until its probe is
-		// decided, and the shaker cannot drop what it cannot see
-		// (compiler/CompileTimeBoundp).
-		return LibraryDefunPruner
-			.prune(CompileTimeBoundp.fold(WitExportInliner.inline(program, null, backend, uploads), false, false));
+		return PlaygroundFrontend.expand(read, features, wasm, uploads);
+	}
+
+	// A Preview 1 module of the program, as `rontolisp program -o program.wasm` writes it.
+	private static byte[] wasmModule(String source) {
+		return WasmLispCompiler.builder()
+			.runtimeFeatures(Features.WASM.names())
+			.build()
+			.compile(frontend(source, Features.WASM, true));
+	}
+
+	// A Java program that starts threads: the interpreter cannot suspend a thread on the
+	// page's one stack, so the program runs as the module the wasm backend makes of it,
+	// where its threads take turns (.kb/java-frontend.md, "In the browser"). What the
+	// module wrote is shown, then what ended it when that was a trap.
+	private static String runCompiled(String source, String stdin) {
+		byte[] module;
+		try {
+			module = wasmModule(source);
+		}
+		catch (RuntimeException ex) {
+			throw new IllegalStateException("A program that starts threads runs in the browser compiled to a "
+					+ "WebAssembly module (Preview 1), where its threads take turns, and this one is refused there: "
+					+ ex.getMessage());
+		}
+		BrowserModule.Run run = BrowserModule.run(module, stdin);
+		return run.trap().isEmpty() ? run.output() : run.output() + run.trap() + "\n";
 	}
 
 	@JS(args = { "fn" }, value = "globalThis.rontoEval = fn;")

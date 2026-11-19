@@ -225,14 +225,36 @@ public final class JavaLibrary {
 	}
 
 	private static boolean namesSleeping(LispVal form) {
+		return names(form, SLEEPING);
+	}
+
+	/** What {@code Thread.start()} is lowered over, on every target. */
+	private static final Set<String> STARTING = Set.of("RONTOLISP::%JAVA-THREAD-START");
+
+	/**
+	 * Whether a lowered program can start a thread: its forms hold {@code Thread.start()}
+	 * only when a call reaches it.
+	 * @param program the top-level forms
+	 * @return {@code true} when the program names the function a thread starts through
+	 */
+	static boolean startsThreads(List<LispVal> program) {
+		for (LispVal form : program) {
+			if (names(form, STARTING)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean names(LispVal form, Set<String> names) {
 		LispVal rest = form;
 		while (rest instanceof LispCons cons) {
-			if (namesSleeping(cons.car())) {
+			if (names(cons.car(), names)) {
 				return true;
 			}
 			rest = cons.cdr();
 		}
-		return rest instanceof LispSymbol symbol && SLEEPING.contains(symbol.name());
+		return rest instanceof LispSymbol symbol && names.contains(symbol.name());
 	}
 
 	private static boolean references(LispVal form) {

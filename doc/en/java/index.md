@@ -661,6 +661,9 @@ threads share what they share under a monitor, a `volatile` field or an atomic p
 same on every backend; what the turns change for any other is in
 [Deviations](deviations.md#threads).
 
+**Run** on these pages, and the playground, run a program that starts threads as such a
+`.wasm`, compiled in the page ([Deviations](deviations.md#threads)).
+
 `java.util.concurrent` has locks, latches, barriers, queues, a concurrent map, executors
 -- a pool of a program's own, a scheduled one, a fork/join pool -- and `CompletableFuture`,
 and `java.util` a `Timer`, all written over the same monitors. `Vector`, `Hashtable`, `StringBuffer`

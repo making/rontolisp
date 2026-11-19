@@ -1670,6 +1670,22 @@ public final class LispEvaluator {
 	}
 
 	/**
+	 * Why {@code rontolisp:make-thread} starts no thread for now, or {@code null} when it
+	 * does. A host with one stack sets it around what cannot run there as its threads run
+	 * elsewhere: the browser's Java session ({@link PlaygroundRepl}).
+	 */
+	private volatile @Nullable String threadsRefused;
+
+	/**
+	 * Makes {@code rontolisp:make-thread} signal instead of starting a thread, or start
+	 * threads again.
+	 * @param reason the condition's text, or {@code null} to start threads again
+	 */
+	void refuseThreads(@Nullable String reason) {
+		this.threadsRefused = reason;
+	}
+
+	/**
 	 * Sets the loader used to resolve {@code (load "path")} source text. Defaults to the
 	 * local filesystem; environments without a filesystem (e.g. the browser playground)
 	 * can install an in-memory loader.
@@ -4293,6 +4309,10 @@ public final class LispEvaluator {
 			if (args.isEmpty() || args.size() > 3) {
 				throw LispEvalException.ofClass(ClosRegistry.PROGRAM_ERROR_CLASS_NAME,
 						LispNames.MAKE_THREAD + " expects 1 to 3 arguments, got " + args.size());
+			}
+			String refused = this.threadsRefused;
+			if (refused != null) {
+				throw new LispEvalException(refused);
 			}
 			LispVal fn = args.get(0);
 			List<String> bindingNames = new ArrayList<>();

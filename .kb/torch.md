@@ -202,7 +202,7 @@ training loop included.
 
 Package `torch` in `PackageRegistry` (`TORCH_FUNCTIONS` / `torchFunctionNames()`; does not use `cl`,
 no nickname); interpreter lazy load in `LispEvaluator.resolveFunction` + `ensureTorchLoaded`. On
-every compile path (`RontoLispCli`, `RontoPlayground`, the corpus and per-backend test helpers)
+every compile path (`CompileFrontend.expand`: the CLI, the playground, the corpus; and the per-backend test helpers)
 **`TorchLibrary.process` runs BEFORE `LinalgLibrary.process`** — get the order wrong and a
 torch-only program fails to compile with undefined `linalg:` functions. torch.lisp is a resolver
 fixed-point, registered in the native-image `resource-config.json` (typeReachable `TorchLibrary`),

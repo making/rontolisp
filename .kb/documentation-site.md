@@ -64,6 +64,18 @@ playground's WebAssembly runtime, so `lisp` and `scheme` examples run in-page.
   there) after `rontoPutFile`-ing the page's file blocks. Those calls are
   `eval/PlaygroundRepl`'s `run` / `transcript`, and `DocExamplesTest` runs both through
   `run` too (`.kb/source-language.md`, "The browser").
+- **The cells run in a Web Worker, never on the page's thread** (`docs.js`: the playground's
+  `ronto-worker.js` beside the runtime, started at the first Run; 2026-11-19). A cell's Run
+  button is Stop while it runs: it ends the worker, and the next Run starts a fresh
+  runtime (1.3 to 1.5 s measured, the Lisp cells' definitions gone -- what "Reset runtime"
+  does too). Until then a cell ran on the page's thread: the runtime's start blocked it
+  1.4 s and a program that never ended froze the tab. The worker brokers no fetch for
+  this page (`ronto-worker.js?fetch=broker` is the playground's), so a cell's
+  `rontolisp:fetch` is the worker's synchronous request. A cell shows standard error too,
+  in the order written. Every Run cell of `doc/en` (2,051 pages) was run in node on the
+  image before and after: three Java cells differ (the warning shown, the two HTTP
+  examples saying why not) and none hangs; some 100 cells fail on both for what the image
+  has not (Java interop by reflection, sockets, files: `.todo/k23`).
 - ` ```starlark ` = a whole Starlark program on a fresh evaluator, stdout asserted by a
   following plain block (`DocExamplesTest`, through `PlaygroundRepl.run`), and a Run cell
   doing the same (`rontoRunProgram`; the stdin block rule as scheme). No annotation: its
@@ -116,12 +128,19 @@ signature > heading > body, then earlier offset.
 java -jar docs-tool/target/rontolisp-docgen.jar --source doc --out web/dist/docs
 cd web/dist && jwebserver -p 8000                                 # http://localhost:8000/docs/
 ```
-`-Pweb -DskipTests package` refreshes the playground wasm (only needed to run cells).
+`-Pweb -DskipTests package` refreshes the playground wasm (only needed to run cells), and
+`node web/playground-check.js` checks the image it built: what its exports answer for a
+Java program on the interpreter, one that starts threads (the compiled route), the
+refusals and a compile button, under a time limit so that a program that never ends fails.
+It is the image's only automatic check -- the JVM suite has threads and cannot run the
+image's routes -- and `pages.yaml` runs it before anything is published.
 Without a system Binaryen, `npm exec binaryen` supplies `wasm-as` (130 worked, 2026-09-19; put
 its `bin` on `PATH`; the build takes ~3 min). The exports can be driven from node by
 `vm.runInThisContext` of `rontoplayground.js` with `config.wasm_path` set and `fetch` answering
 a file path; the cells and the playground page from `chrome-headless-shell` (Playwright's cache)
-over CDP against `jwebserver` -- how `.todo/893` was verified; no committed test does this.
+over CDP -- how `.todo/893` and k10 were verified; no committed test does this, the scripts are
+`.todo/artefacts/k10-playground-a-java-program-with-threads-freezes-the-browser/` (every Run
+cell of `doc/en` in node, a page's cells and the playground page in Chrome).
 `-Drontolisp.doc.fix=true -Dtest=DocExamplesTest#fixShownResults` rewrites `; =>` / output
 blocks in both trees (manual-only). `docs-tool` is NOT in the root reactor, so its own tests
 run only in `pages.yaml` (which builds it WITHOUT `-DskipTests` on purpose) or via

@@ -42,7 +42,10 @@ Tier-1 shim (`ShimLibraries` + `BuiltinSystems` + a `PackageRegistry` package): 
   queued (no lost notify) and retaken outside the monitor (no deadlock against a notifier
   holding the mutex). Interpreter: registered in `registerMutexes` (the mutex table); JVM:
   `invokestatic` on the class, which travels (`.kb/jvm-export.md`). WASM: `condition-wait`
-  signals, notify/broadcast are no-ops.
+  signals, notify/broadcast are no-ops. The browser playground's interpreter has one thread,
+  so nothing can notify a waiter: `Target_RontoConditionVariable` (`src/web/java`) makes a
+  wait with a limit its time (answering nil) and refuses one with none in words (`this wait
+  would never end`), where it spun for ever until 2026-11-19 (`web/playground-check.js`).
 - Semaphores are upstream's portable ones in Lisp (count + lock + condition variable), so they
   count on WASM too and only a wait that would block signals there.
 - `interrupt-thread`, `with-timeout` signal everywhere (upstream's behaviour without them).

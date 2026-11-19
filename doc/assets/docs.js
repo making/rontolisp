@@ -4,10 +4,13 @@
  * Each ".code-cell" is an editable textarea plus a Run button. The rontolisp
  * runtime (the same WebAssembly build that powers the playground,
  * rontoplayground.js) is loaded lazily on the first Run click anywhere on the
- * page and shared by every cell -- nothing heavy loads on page view. One
- * persistent evaluator is shared across the page's Lisp cells, so a definition in
- * an earlier cell is visible to later ones (use "Reset runtime" to start over); a
- * Scheme cell is a program of its own (evalCell).
+ * page and shared by every cell -- nothing heavy loads on page view. It runs in
+ * a Web Worker (ronto-worker.js, the playground's), never on the page's thread:
+ * a cell that runs long leaves the page alive, and its Run button is a Stop
+ * button meanwhile, which ends the worker. One persistent evaluator is shared
+ * across the page's Lisp cells, so a definition in an earlier cell is visible to
+ * later ones (use "Reset runtime", or Stop, to start over); a Scheme cell is a
+ * program of its own (evalCell).
  *
  * The search (Ctrl+K or /) reads the two index files docgen writes beside the
  * pages of this language tree. Tier 1 (search-index.json -- titles, operator
@@ -21,6 +24,9 @@
 	"use strict";
 
 	var runtimePromise = null;
+	var worker = null;
+	var pendingCalls = {};
+	var callSeq = 0;
 	var statusEl = null;
 
 	function setStatus(state, text) {
@@ -29,26 +35,38 @@
 		statusEl.textContent = text || "";
 	}
 
-	// Lazily inject rontoplayground.js and initialize the GraalVM runtime.
-	// Concurrent first clicks all await the same promise.
+	// Lazily start the worker that loads rontoplayground.js and initializes the
+	// GraalVM runtime. Concurrent first clicks all await the same promise. The worker
+	// script sits beside the runtime; it is not asked to broker fetches through this
+	// page, so rontolisp:fetch in a cell is the worker's own synchronous request.
 	function ensureRuntime() {
 		if (runtimePromise) return runtimePromise;
 		var src = document.body.getAttribute("data-runtime-src");
 		setStatus("loading", "loading runtime…");
 		runtimePromise = new Promise(function (resolve, reject) {
-			var script = document.createElement("script");
-			script.src = src;
-			script.onload = function () {
-				if (typeof GraalVM === "undefined" || !GraalVM.run) {
-					reject(new Error("runtime script loaded but GraalVM is unavailable"));
-					return;
+			var started;
+			try {
+				started = new Worker(src.replace(/rontoplayground\.js$/, "ronto-worker.js"));
+			} catch (e) {
+				reject(e);
+				return;
+			}
+			worker = started;
+			started.onmessage = function (e) {
+				var m = e.data;
+				if (m.type === "ready") {
+					resolve();
+				} else if (m.type === "init-error") {
+					reject(new Error(m.error));
+				} else if (m.type === "result" && pendingCalls[m.id]) {
+					var call = pendingCalls[m.id];
+					delete pendingCalls[m.id];
+					call.resolve(m.value);
 				}
-				GraalVM.run([]).then(resolve, reject);
 			};
-			script.onerror = function () {
-				reject(new Error("failed to load " + src));
+			started.onerror = function (e) {
+				reject(new Error(e.message || "failed to load the runtime"));
 			};
-			document.head.appendChild(script);
 		});
 		runtimePromise.then(
 			function () { setStatus("ready", "runtime ready"); },
@@ -58,6 +76,34 @@
 			}
 		);
 		return runtimePromise;
+	}
+
+	// One call of a function the runtime exports, answered when the worker has run
+	// it. Calls run in the order they were made.
+	function vmCall(fn, args) {
+		return new Promise(function (resolve, reject) {
+			var id = callSeq++;
+			pendingCalls[id] = { resolve: resolve, reject: reject };
+			worker.postMessage({ type: "call", id: id, fn: fn, args: args });
+		});
+	}
+
+	// A call made for its effect, ahead of the one whose answer is shown.
+	function vmSend(fn, args) {
+		vmCall(fn, args).catch(function () { /* stopped with the worker */ });
+	}
+
+	// Ends the worker with whatever it was running: the next Run starts a fresh
+	// runtime, so every definition the page's Lisp cells made is gone.
+	function stopRuntime() {
+		if (worker) worker.terminate();
+		worker = null;
+		runtimePromise = null;
+		pageFilesPut = false;
+		var calls = pendingCalls;
+		pendingCalls = {};
+		Object.keys(calls).forEach(function (id) { calls[id].reject(new Error("stopped")); });
+		setStatus("", "");
 	}
 
 	function showOutput(cell, text, isErr) {
@@ -72,16 +118,16 @@
 	// clojure, starlark or java cell runs on a fresh interpreter reading the cell's stdin: a
 	// whole program, or, for scheme and clojure with a "; =>" annotation, a REPL session
 	// echoing every form. The page's "; file: NAME" blocks are the files it includes,
-	// handed over first.
+	// handed over first. Answers a promise of the text to show.
 	function evalCell(cell, src) {
 		var lang = cell.getAttribute("data-lang") || "lisp";
-		globalThis.rontoSetLanguage(lang);
-		if (lang !== "scheme" && lang !== "clojure" && lang !== "starlark" && lang !== "java") return globalThis.rontoEval(src);
+		vmSend("rontoSetLanguage", [lang]);
+		if (lang !== "scheme" && lang !== "clojure" && lang !== "starlark" && lang !== "java") return vmCall("rontoEval", [src]);
 		putPageFiles();
 		var stdinEl = cell.querySelector(".cell-stdin");
 		var stdin = stdinEl ? stdinEl.value : "";
-		return lang !== "starlark" && lang !== "java" && src.indexOf("; =>") >= 0 ? globalThis.rontoRunSession(src, stdin)
-			: globalThis.rontoRunProgram(src, stdin);
+		return lang !== "starlark" && lang !== "java" && src.indexOf("; =>") >= 0 ? vmCall("rontoRunSession", [src, stdin])
+			: vmCall("rontoRunProgram", [src, stdin]);
 	}
 
 	var pageFilesPut = false;
@@ -90,35 +136,49 @@
 		pageFilesPut = true;
 		Array.prototype.forEach.call(document.querySelectorAll("code.language-scheme"), function (code) {
 			var file = /^;+ file: (\S+)/.exec(code.textContent);
-			if (file) globalThis.rontoPutFile(file[1], code.textContent);
+			if (file) vmSend("rontoPutFile", [file[1], code.textContent]);
 		});
 	}
 
-	function runCell(cell) {
+	// The cells whose run has not answered yet: their Run button stops the runtime.
+	var running = [];
+
+	function setRunning(cell, on) {
 		var button = cell.querySelector(".run");
+		var at = running.indexOf(cell);
+		if (on && at < 0) running.push(cell);
+		if (!on && at >= 0) running.splice(at, 1);
+		button.textContent = on ? "Stop" : "Run";
+		button.classList.toggle("stop", on);
+	}
+
+	function runCell(cell) {
 		var cellStatus = cell.querySelector(".cell-status");
+		if (running.indexOf(cell) >= 0) {
+			// Stop: every cell still running ends with the worker.
+			running.slice().forEach(function (stopped) {
+				setRunning(stopped, false);
+				stopped.querySelector(".cell-status").textContent = "stopped (the runtime starts afresh at the next Run)";
+			});
+			stopRuntime();
+			return;
+		}
 		var src = cell.querySelector(".cell-src").value;
-		button.disabled = true;
 		cellStatus.textContent = "";
 		cellStatus.classList.remove("err");
-		ensureRuntime().then(
-			function () {
-				var res;
-				try {
-					res = evalCell(cell, src);
-				} catch (e) {
-					showOutput(cell, String(e), true);
-					button.disabled = false;
-					return;
-				}
+		setRunning(cell, true);
+		ensureRuntime().then(function () { return evalCell(cell, src); }).then(
+			function (res) {
+				if (running.indexOf(cell) < 0) return;
+				setRunning(cell, false);
 				var isErr = typeof res === "string" && res.indexOf("ERROR:") === 0;
 				showOutput(cell, isErr ? res.slice(6).trim() : res, isErr);
-				button.disabled = false;
 			},
-			function () {
+			function (e) {
+				if (running.indexOf(cell) < 0) return;
+				setRunning(cell, false);
 				cellStatus.textContent = "runtime unavailable";
 				cellStatus.classList.add("err");
-				button.disabled = false;
 			}
 		);
 	}
@@ -725,11 +785,10 @@
 		var reset = document.querySelector(".reset-runtime");
 		if (reset) {
 			reset.addEventListener("click", function () {
-				// The persistent evaluator lives inside the loaded runtime; the
-				// simplest correct reset is a full reload.
-				if (runtimePromise) {
-					location.reload();
-				}
+				// The persistent evaluator lives inside the worker: ending it is the
+				// reset, and the next Run starts a fresh one.
+				running.slice().forEach(function (stopped) { setRunning(stopped, false); });
+				stopRuntime();
 			});
 		}
 	}

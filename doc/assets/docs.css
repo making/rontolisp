@@ -685,12 +685,13 @@ body.search-open-body { overflow: hidden; }
 	background: var(--signal);
 	color: var(--paper);
 }
-.cell-toolbar .run:disabled {
-	opacity: 0.4;
-	cursor: progress;
-	background: transparent;
-	color: var(--muted);
-	border-color: var(--rule-strong);
+.cell-toolbar .run.stop {
+	color: var(--signal-err);
+	border-color: var(--signal-err);
+}
+.cell-toolbar .run.stop:hover {
+	background: var(--signal-err);
+	color: var(--paper);
 }
 .cell-status {
 	font-family: var(--mono);

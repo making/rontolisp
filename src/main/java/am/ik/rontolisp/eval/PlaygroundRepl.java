@@ -10,6 +10,7 @@ import java.util.Map;
 
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.reader.Features;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The browser's interpreter: the playground's REPL and the documentation site's Run
@@ -38,8 +39,34 @@ import am.ik.rontolisp.reader.Features;
  * </ul>
  * A failure propagates as the evaluator's exception, whose message is the report; an
  * {@code exit} ends the buffer and keeps what it printed.
+ *
+ * <p>
+ * The browser has one stack, and the interpreter cannot suspend a thread on it: there a
+ * whole Java program that starts threads is run by {@link OneStack} instead -- compiled
+ * for the target whose threads take turns ({@code .kb/java-frontend.md}, "In the
+ * browser").
  */
 public final class PlaygroundRepl {
+
+	/**
+	 * What runs a whole program whose threads the interpreter cannot run on a host with
+	 * one stack.
+	 */
+	@FunctionalInterface
+	public interface OneStack {
+
+		/**
+		 * Runs a program.
+		 * @param source the program text
+		 * @return what the page shows for it
+		 */
+		String run(String source);
+
+	}
+
+	private static final String THREADS_REFUSED = "a thread is started only by a whole program in the browser: "
+			+ "a buffer of this session runs on the page's one stack, where no thread can wait for another "
+			+ "(put the code in a main method and run the program)";
 
 	private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
 
@@ -48,6 +75,8 @@ public final class PlaygroundRepl {
 	private final LispEvaluator evaluator;
 
 	private final SourceLoader loader;
+
+	private final @Nullable OneStack oneStack;
 
 	private final Map<SourceLanguage, SourceSession> sessions = new EnumMap<>(SourceLanguage.class);
 
@@ -67,9 +96,31 @@ public final class PlaygroundRepl {
 	 * @param stdin the whole standard input
 	 */
 	public PlaygroundRepl(SourceLoader loader, String stdin) {
+		this(loader, stdin, null);
+	}
+
+	/**
+	 * An interpreter of a host that may have one stack.
+	 * @param loader where {@code load}, {@code include} and a WIT directive read files
+	 * @param stdin the whole standard input
+	 * @param oneStack what runs a program that starts threads where the host has one
+	 * stack, or {@code null} on a host with threads
+	 */
+	public PlaygroundRepl(SourceLoader loader, String stdin, @Nullable OneStack oneStack) {
+		this.oneStack = oneStack;
 		this.evaluator = new LispEvaluator(this.out, new ByteArrayInputStream(stdin.getBytes(StandardCharsets.UTF_8)));
 		this.evaluator.setSourceLoader(loader);
 		this.loader = loader;
+	}
+
+	/**
+	 * Where what the page shows is collected. A host hands it what else belongs on the
+	 * page in the order it was written: the browser its standard error, which a warning
+	 * about a program and the report of what a Java program left uncaught go to.
+	 * @return the stream a run's output is read back from
+	 */
+	public PrintStream page() {
+		return this.out;
 	}
 
 	/**
@@ -132,8 +183,14 @@ public final class PlaygroundRepl {
 		this.buffer.reset();
 		try {
 			boolean markers = SourceLanguage.usesReadEvalMarkers(source);
-			for (LispVal form : this.language.read(source, this.evaluator.sourceFeatures(), null,
-					SourceStandards.DEFAULT, this.loader)) {
+			List<LispVal> forms = this.language.read(source, this.evaluator.sourceFeatures(), null,
+					SourceStandards.DEFAULT, this.loader);
+			if (this.oneStack != null && this.language == SourceLanguage.JAVA && JavaLibrary.startsThreads(forms)) {
+				// what reading the program wrote on the page -- its warnings -- comes
+				// first
+				return output() + this.oneStack.run(source);
+			}
+			for (LispVal form : forms) {
 				this.evaluator.eval(markers ? this.evaluator.resolveReadTimeEvalInCode(form) : form);
 			}
 		}
@@ -175,14 +232,27 @@ public final class PlaygroundRepl {
 	private List<LispVal> evalStep(SourceSession.Step step, boolean echo, String source) {
 		boolean markers = SourceLanguage.usesReadEvalMarkers(source);
 		List<LispVal> values = List.of();
-		for (int i = 0; i < step.forms().size(); i++) {
-			LispVal form = step.forms().get(i);
-			LispVal expr = markers ? this.evaluator.resolveReadTimeEvalInCode(form) : form;
-			if (echo && step.echoes() && i == step.forms().size() - 1) {
-				values = this.evaluator.evalValues(expr);
+		// A buffer of a Java session runs on the interpreter, which on one stack cannot
+		// leave a thread waiting: a thread is a whole program's there (run).
+		boolean threadless = this.oneStack != null && this.language == SourceLanguage.JAVA;
+		if (threadless) {
+			this.evaluator.refuseThreads(THREADS_REFUSED);
+		}
+		try {
+			for (int i = 0; i < step.forms().size(); i++) {
+				LispVal form = step.forms().get(i);
+				LispVal expr = markers ? this.evaluator.resolveReadTimeEvalInCode(form) : form;
+				if (echo && step.echoes() && i == step.forms().size() - 1) {
+					values = this.evaluator.evalValues(expr);
+				}
+				else {
+					this.evaluator.eval(expr);
+				}
 			}
-			else {
-				this.evaluator.eval(expr);
+		}
+		finally {
+			if (threadless) {
+				this.evaluator.refuseThreads(null);
 			}
 		}
 		return values;

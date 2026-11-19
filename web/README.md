@@ -90,10 +90,22 @@ cross-origin isolation (COOP/COEP); GitHub Pages cannot send those headers, so
 `coi-serviceworker.min.js` (vendored, MIT) supplies them via a service worker
 (one automatic reload on first visit). Without isolation the playground falls
 back to a synchronous XHR per request — same behavior, no overlap. The async
-path is opt-in: the worker sets `self.rontoFetchBroker = true` to declare that
-the page brokers `ronto-fetch` messages. Another page that runs the runtime in a
-worker without setting it gets the synchronous XHR, even when it is isolated
-(the service worker's scope covers every page under `/rontolisp/`).
+path is opt-in: the worker sets `self.rontoFetchBroker` when the page that
+brokers `ronto-fetch` messages says so in the worker's URL
+(`ronto-worker.js?fetch=broker`). Another page that runs the runtime in a
+worker without it gets the synchronous XHR, even when it is isolated (the
+service worker's scope covers every page under `/rontolisp/`) — the
+documentation site's Run cells do: they run in the same `ronto-worker.js`, and a
+cell's Run button is a Stop button while it runs, which ends the worker.
+
+The page has one thread and the interpreter one stack, so the interpreter
+cannot run a thread that waits for another. A whole Java program that starts
+threads is therefore compiled in the page — the same pipeline and bytes as
+`rontolisp Main.java -o main.wasm` — and the module is run by the engine the
+image itself runs on (`src/web/java/.../web/BrowserModule.java`: the Preview 1
+imports over what a page has), where its threads take turns. Anything else
+that would wait for another thread — a `condition-wait` with no limit — is
+refused in words instead of waited for.
 
 `compile-run.html` reuses the same `rontoplayground.js` runtime but adds the
 in-browser execution step:
@@ -160,6 +172,17 @@ Profile-specific details (all confined to the `web` profile):
   by the playground. Its embedded `META-INF/native-image` config is excluded
   (`--exclude-config`), which otherwise force-includes jline and makes the wasm
   roughly 5x larger.
+
+## Check
+
+```bash
+node web/playground-check.js        # the image in web/dist
+```
+
+Runs the image's exports from node, the way a page's worker does, and compares
+what they answer: a Java program on the interpreter, one that starts threads on
+the compiled route, the compile buttons. The JVM test suite cannot reach the
+image, so this is its check; the Pages workflow runs it before publishing.
 
 ## Run
 

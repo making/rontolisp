@@ -117,9 +117,9 @@ no I/O and no codegen; its `Backend` enum (`WASM_GC` / `WASM_NO_GC` / `WASM_NO_G
 
 Three call sites: `eval/WitExportInliner` on the compile path (**after** `LoadInliner` /
 `UserMacroExpander`, so every `defun` is a literal top-level form, and **before**
-`LibraryDefunPruner`, so the directives count as roots); the same inliner from
-`RontoPlayground.frontend`, which is why it lives in `eval` not `cli` and reads the WIT through
-an injected `SourceLoader` (**do not regress**: without it the compile buttons died with
+`LibraryDefunPruner`, so the directives count as roots); the playground runs the same
+`expand` with its uploaded files as `Options.loader`, which is why the inliner lives in `eval`
+not `cli` and reads the WIT through an injected `SourceLoader` (**do not regress**: without it the compile buttons died with
 `Cannot compile: rontolisp:wit-export`); and `LispEvaluator.evalWitExport`, a SPECIAL FORM
 checking the functions defined **so far**, so **put the directive at the END of the file**.
 

@@ -606,13 +606,16 @@
 			}
 		}
 
+		// A buffer typed at the REPL joins the session. "Run source" does too, but for
+		// Java, where the source pane holds a whole program: a session would only
+		// declare its main, so the program runs as one, on a fresh interpreter.
 		let replBusy = false;
-		async function runRepl(src) {
+		async function runRepl(src, program) {
 			if (replBusy) return;
 			replBusy = true;
 			$("repl-input").disabled = true;
 			try {
-				const res = await vmCall("rontoEval", src);
+				const res = program ? await vmCall("rontoRunProgram", src, "") : await vmCall("rontoEval", src);
 				const isErr = typeof res === "string" && res.startsWith("ERROR:");
 				appendEntry(src, isErr ? res.slice(6).trim() : res, isErr);
 			} finally {
@@ -833,7 +836,7 @@
 		// SharedArrayBuffer. SharedArrayBuffer requires cross-origin isolation (see the
 		// coi-serviceworker note above); without it the worker falls back to a
 		// synchronous XHR per request.
-		const worker = new Worker("ronto-worker.js");
+		const worker = new Worker("ronto-worker.js?fetch=broker");
 		const pendingCalls = new Map();
 		let callSeq = 0;
 		function vmCall(fn, ...args) {
@@ -967,7 +970,7 @@
 
 			$("btn-run-source").addEventListener("click", () => {
 				const src = $("source").value.trim();
-				if (src) runRepl(src);
+				if (src) runRepl(src, language === "java");
 			});
 
 			$("btn-jvm").addEventListener("click", async () => {

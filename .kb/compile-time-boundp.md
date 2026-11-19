@@ -13,8 +13,8 @@ Motivation: `(unless (boundp '+k+) (defconstant +k+ v))`, the portable redefinit
 `eval/LibraryDefunPruner`, which only drops top-level definers.
 
 ## Where it runs
-- `RontoLispCli.compileRecorded` / `RontoPlayground.frontend`, before
-  `LibraryDefunPruner.prune`, packages NOT resolved.
+- `CompileFrontend.expand` (the CLI and, through `cli/PlaygroundFrontend`, the browser
+  playground), before `LibraryDefunPruner.prune`, packages NOT resolved.
 - `JvmLispCompiler.compile` / `WasmLispCompiler.compile`, after `PackageResolver`;
   idempotent after a CLI-driven fold. On WASM it must run AFTER
   `NoWasiFilesystemStubs.rewrite` -- the fold refuses a program that can `eval`, and

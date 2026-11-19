@@ -551,7 +551,7 @@ linalg/vec pattern: `eval/usocket.lisp` (canonical package shape) + `eval/Usocke
 - Built-in ASDF system: `eval/BuiltinSystems` maps `"usocket"` -> `UsocketLibrary::forms`.
   `LoadInliner.spliceSystem` splices the FORMS, not mark-only — an `:import-from :usocket` +
   bare-name consumer would evade the Walker, which runs before `PackageResolver`. Chain wiring:
-  `RontoLispCli`, `RontoPlayground`, corpus tests, `AsdfLibraryE2eSupport`, `resource-config.json`.
+  `CompileFrontend.expand` (the CLI, the playground), corpus tests, `AsdfLibraryE2eSupport`, `resource-config.json`.
 - Typed conditions: usocket.lisp defines the hierarchy (`socket-condition` with a `message` slot,
   `socket-error`, `connection-refused-error`, ...) and wraps
   `socket-connect`/`socket-listen`/`socket-accept` in `(usocket::%usock-guard form)`, expanded per

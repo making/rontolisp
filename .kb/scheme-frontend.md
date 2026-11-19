@@ -25,8 +25,8 @@ help, the title of `doc/*/scheme/index.md`). `--no-gc` is refused by name
   way by `eval/SchemeLibrary`: the interpreter loads it on the first resolution of a
   `rontolisp::%scheme-` FUNCTION, `CompileFrontend.expand` splices it innermost (beside
   `TokenizersLibrary`, INSIDE the prelude whose string comparisons it uses) and
-  `LibraryDefunPruner` drops what stays unreachable. The playground's chain has the splice
-  too; the playground reads Scheme when its page picks it, and the doc site's
+  `LibraryDefunPruner` drops what stays unreachable. The playground's compile buttons run
+  the same `expand`; the playground reads Scheme when its page picks it, and the doc site's
   ```` ```scheme ```` fences are Run cells (`.kb/source-language.md`, "The browser"). Some
   definitions are GENERATED from the front end's tables and appended to the source's
   forms (`Scheme.runtimeForms`): `eval`'s procedure table and `environment`'s library
@@ -647,7 +647,7 @@ per backend, generated from the JDK: `.kb/characters-code-points.md`) and are us
 ## `parallel-execute` and `test-and-set!` (SICP 3.4)
 
 - **`scheme.lisp` is read with the TARGET's features** (`SchemeLibrary.forms(Features)`,
-  from `CompileFrontend.expand` and the playground's chain). `%scheme-parallel-execute`
+  from `CompileFrontend.expand`, the playground's too). `%scheme-parallel-execute`
   under `#+thread-support` spawns one `rontolisp:make-thread` per thunk and joins them all
   in nested `unwind-protect`, so a thunk's error is re-signaled by its join only after the
   remaining threads are joined. Without it (both wasm) the thunks run in argument order:

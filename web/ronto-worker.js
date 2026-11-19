@@ -12,9 +12,11 @@
  * SharedArrayBuffer needs cross-origin isolation (COOP/COEP); when it is unavailable
  * the Java side falls back to a synchronous XHR per request (no overlap). The async
  * path is opt-in: rontoFetchBroker declares that the main thread answers "ronto-fetch"
- * (playground.html's brokerFetch). Without it, a request would wait forever.
+ * (playground.html's brokerFetch). Without it, a request would wait forever, so the
+ * page that answers says so in the worker's URL ("?fetch=broker"); the documentation
+ * site's cells run here too and their page answers none.
  */
-self.rontoFetchBroker = true;
+self.rontoFetchBroker = new URLSearchParams(self.location.search).get("fetch") === "broker";
 importScripts("rontoplayground.js");
 
 const config = new GraalVM.Config();

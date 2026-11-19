@@ -44,8 +44,9 @@ the host's events giving a component's threads their turns, so that a served req
 that waits leaves its instance to the host, a loop's turn outside its resume body and
 `Thread.State.BLOCKED`: k07 (2026-11-19); a class of Java source under `Number` (the
 atomics, a program's own), the field updaters, `invokeAll` with a limit and
-`join(Duration)`: k08 (2026-11-19); what comes after is `.todo/k12`, `k15`, `k16`, `k17`,
-`k18`, `k19`, `k20` and `k21` (what k00, k05, k11, k06, k07 and k08 left).
+`join(Duration)`: k08 (2026-11-19); a program that starts threads run compiled in the
+browser, whose interpreter has one stack: k10 (2026-11-19); what comes after is `.todo/k12`, `k15`, `k16`, `k17`,
+`k18`, `k19`, `k20`, `k21` and `k22` (what k00, k05, k11, k06, k07, k08 and k10 left).
 
 ## Where it sits
 
@@ -2045,6 +2046,74 @@ without it, which ran 11 of the 16 programs below).
   wasm legs), `JavaLoweringTest#aMonitorIsEnteredAndLeftAndAThreadIsTheRunTimes` (the
   host's forms, then the resumable ones) and
   `#theThreadsOfTheCorpusHoldNoMonitorWhileTheyAreSuspended`.
+
+### In the browser (2026-11-19, k10)
+
+**Invariant: the browser's interpreter starts no Java thread. A whole program that can
+start one is handed by `PlaygroundRepl.run` to its `OneStack` -- the page compiles it as
+`rontolisp Main.java -o main.wasm` does and runs the module in the engine the image itself
+runs on, where its threads take turns ("Resumable bodies" below) -- and a buffer of the
+Java session refuses `start()` in words.**
+
+- **The cause.** Web Image has one thread and no stack to switch to:
+  `Target_AsyncRuntime.spawnThread` runs a body to its end inside `make-thread`
+  ([threads.md](threads.md)), so a thread that waits -- a pool's worker asking its queue
+  for the next task -- waited for a notify nothing could send, and
+  `RontoConditionVariable.await` never returned. Measured 2026-11-19 (GraalVM 25.0.5
+  `svm-wasm`, node 24.22, `chrome-headless-shell` 1243): `doc/*/java/index.md`'s pool
+  example did not answer in 60 s with one core busy, and froze the documentation page,
+  whose cells ran on the page's thread; the HTTP client example froze at its `sendAsync`
+  the same way; the counter example (threads that never wait) printed.
+- **The seam** (`eval/PlaygroundRepl`): `run` reads the program for the interpreter, and
+  when the host gave it a `OneStack` and `JavaLibrary.startsThreads(forms)` -- the forms
+  name `%java-thread-start`, which they do only when a call reaches `Thread.start()`, the
+  test `JavaLowering.startsThreads` makes -- answers what `OneStack.run(source)` shows,
+  after what the read wrote on the page (the warnings). Only the `web` bootstrap gives one
+  (`RontoPlayground.runCompiled`): a JVM host keeps host threads. A session step of the
+  Java pick runs inside `LispEvaluator.refuseThreads(reason)`, so `make-thread` signals
+  there and the step's own handler shows `Exception java.lang.RuntimeException: a thread
+  is started only by a whole program in the browser ..`; the other picks keep
+  `make-thread` (the body run inside it: clack's `:use-thread`, Scheme's
+  `parallel-execute`). The playground page's "Run source" calls `rontoRunProgram` for the
+  Java pick -- a session only DECLARES a `main`, so until k10 the button printed nothing
+  for a Java program.
+- **The module's host** (`src/web/java/.../web/BrowserModule`, JavaScript in the image, so
+  every host of the image has it: the playground's worker, the documentation site's, a
+  deck's, node): `wasi_snapshot_preview1` over what a page has -- standard output and
+  error collected in the order written, standard input the cell's, no file, `poll_oneoff`
+  of a clock blocking by `Atomics.wait` on a buffer of its own where the page may and by
+  watching the clock otherwise. An import it has not is refused by its name before
+  anything runs; a trap's text follows the output.
+- **Weighed and not taken.** The interpreter lowering as the wasm backends do
+  (`JavaResumable` and the wasm variant of `java.lisp`): the interpreter's `async-defun`
+  is a virtual thread a body, so on one thread an `await` of a future nothing settled
+  cannot return to the scheduler -- it needs a second, resumable evaluator or a
+  continuation-passing pass over the core forms, which is what `WasmAsyncEmit` is to the
+  backend. Stacks of the browser's under the image (JSPI): the glue between a promising
+  export and a suspending import is Web Image's own, every per-thread state of the
+  evaluator (thread locals, dynamic bindings, the handler stacks) would be swapped at
+  each switch, and not every browser has it. A started thread queued and run where its
+  starter waits: j76's one stack, 11 of the 16 programs.
+- **Measured** (2026-11-19, the pool example, a 404,263 B module byte-identical to the
+  CLI's for `Main.java`): 4.5 s from the call to the output in node and 3.4 to 6.1 s in
+  Chrome, nearly all of it the compile, against 0.25 s for an interpreted hello and 0.9 s
+  for an interpreted program reaching `Thread`; a program that starts no thread pays one
+  walk of its forms. The image: 42,800,820 -> 43,063,902 B (four builds of the change
+  43.06 to 43.30 MB: `CompileFrontend.expand` and what it reaches, +0.6 to 1.2%).
+- **What does not run there**, and says why: a program that starts threads and sends an
+  HTTP request (a Preview 1 module has no transport: the compile's own refusal, under a
+  line saying why the program was compiled; `sendAsync` reaches a pool, so the doc's client
+  example is one -- `.todo/k22`), a server (the interpreter's `IOException`).
+- **Standard error is on the page** (`PlaygroundRepl.page()`, which `RontoPlayground.shown`
+  makes `System.err` for the call): an unchecked warning shows before the output it
+  precedes and the report of what `main` left uncaught is the cell's text. Until k10 both
+  went to the browser's console and the server example's cell showed nothing.
+- **Pinned by** `PlaygroundReplTest#theJavaPickKeepsItsDeclarationsAcrossBuffersAndRunsAProgram`
+  (the hand-off, the session's refusal, the other picks' threads; a JVM has threads, so it
+  cannot run the image's route) and `web/playground-check.js` (the image from node: the
+  pool example, a sleep and a join with standard input, an uncaught exception, the
+  refusals, a compiled macro; `pages.yaml` runs it before publishing, `./mvnw test` does
+  not). How the pages were driven: `.todo/artefacts/k10-playground-a-java-program-with-threads-freezes-the-browser/`.
 
 ## java.util.concurrent (2026-11-17, j83)
 

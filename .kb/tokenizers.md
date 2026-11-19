@@ -17,7 +17,7 @@ playground and compile to both WASM backends. Pinned by
 ## Wiring (the `geom` pair)
 `eval/TokenizersLibrary` (`forms()`, `process(program)`, `isTokenizerQualified`);
 `LispEvaluator#resolveFunction` lazy load; `cli/CompileFrontend` as the INNERMOST splice pass
-(order-free); `web/RontoPlayground`; `LibraryDefunPruner`; `LispNames.TOKENIZER_PKG` +
+(order-free), the playground's too; `LibraryDefunPruner`; `LispNames.TOKENIZER_PKG` +
 `PackageRegistry` (`TOKENIZER_FUNCTIONS`, `tokenizerFunctionNames()`, `BUILTIN_PACKAGE_NAMES`).
 
 ## Byte-level BPE, in run order

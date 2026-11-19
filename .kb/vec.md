@@ -85,7 +85,7 @@ count (add a throwaway third permit, `./mvnw compile`), never count by hand.
 ## vec.lisp -- the scalar reference
 
 `VecLibrary` splices/loads it like `LinalgLibrary`: the interpreter lazy-loads on the first
-resolution of a `vec:`-qualified function; `RontoLispCli` / `RontoPlayground` / corpus+e2e helpers
+resolution of a `vec:`-qualified function; `CompileFrontend.expand` (the CLI, the playground) and the corpus+e2e helpers
 call `VecLibrary.process(program)` after user-macro expansion; `--no-gc` is gated OFF the splice
 (`!(outputFile.endsWith(".wasm") && noGc)`) and intercepts the surface natively.
 

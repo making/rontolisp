@@ -160,7 +160,8 @@ ETXTBSY while the previous output still runs). No `.wasm` or `.cwasm` touches di
 - **native-image**: `reachability-metadata.json` registers `rl_precompile`, `rl_free` and
   `rl_assemble` (the first three downcalls; `rl_version`'s `() -> void*` is Metal's shape), pinned by
   `NativeToolchainTest`; `resource-config.json` includes `am/ik/rontolisp/native/.*` when
-  `NativeToolchain` is reachable. `-Pweb` never reaches `cli`.
+  `NativeToolchain` is reachable. `-Pweb` reaches nothing of `cli` but `CompileFrontend.expand`
+  (`.kb/architecture.md`, "Package rules"), which names no toolchain.
 - **Tests**: `NativeExecutableTest` (marker scan, write), `NativeToolchainTest` (incl.
   `rl_assemble`'s append and refusal),
   `RontoLispCliTest.nativeRefuses...` / `nativeTargetAndCpu...`, and `NativeOutputE2eTest`

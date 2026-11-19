@@ -663,6 +663,9 @@ void main() throws InterruptedException {
 でも同じ出力になります。それ以外のプログラムで交代の仕方から生じる違いは
 [言語との差異](deviations.md#threads)にあります。
 
+このサイトの **Run** とプレイグラウンドは、スレッドを開始するプログラムをページの中で
+この `.wasm` にコンパイルして実行します（[言語との差異](deviations.md#threads)）。
+
 `java.util.concurrent` には、ロック、ラッチ、バリア、キュー、並行マップ、エグゼキューター
 （プログラムが構成するプール、スケジュール実行のプール、fork/join のプール）、
 `CompletableFuture` があり、`java.util` には `Timer` があります。どれも同じモニターの上に

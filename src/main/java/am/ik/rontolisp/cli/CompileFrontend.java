@@ -265,10 +265,12 @@ final class CompileFrontend {
 	 * {@code null} for every other output: the wasm-GC module is the payload of a native
 	 * executable, whose runner answers the {@code rlhttp} imports of a fetch on every
 	 * platform and the {@code rlobjc} imports on {@link NativeTarget#OBJC_PLATFORM}
+	 * @param loader where the pipeline reads the files a program names (a WIT world): the
+	 * filesystem, or the browser playground's uploaded files
 	 */
 	record Options(@Nullable String baseDir, boolean wasm, boolean servlet, boolean dynamic, boolean component,
 			boolean noWasi, boolean noGc, boolean hostFetch, HostBoundary hostBoundary, boolean reentrant,
-			boolean noPrune, @Nullable String nativePlatform) {
+			boolean noPrune, @Nullable String nativePlatform, SourceLoader loader) {
 
 		/**
 		 * Whether the module is a native executable's -- the WASI command module a runner
@@ -309,6 +311,8 @@ final class CompileFrontend {
 			private boolean noPrune;
 
 			private @Nullable String nativePlatform;
+
+			private @Nullable SourceLoader loader;
 
 			private Builder() {
 			}
@@ -384,11 +388,22 @@ final class CompileFrontend {
 				return this;
 			}
 
+			/**
+			 * Sets where the pipeline reads the files a program names.
+			 * @param loader the loader; the filesystem when never set
+			 * @return this builder
+			 */
+			Builder loader(SourceLoader loader) {
+				this.loader = loader;
+				return this;
+			}
+
 			Options build() {
 				return new Options(this.baseDir, this.wasm, this.servlet, this.dynamic, this.component, this.noWasi,
 						this.noGc, this.hostFetch,
 						this.hostBoundary != null ? this.hostBoundary : HostBoundary.ENVELOPE, this.reentrant,
-						this.noPrune, this.nativePlatform);
+						this.noPrune, this.nativePlatform,
+						this.loader != null ? this.loader : SourceLoader.fileSystem());
 			}
 
 		}
@@ -683,7 +698,7 @@ final class CompileFrontend {
 		// --optimize, because a WIT member costs a component-level import declaration and
 		// a canon lower, not just a core function; --no-prune / --dynamic disable that,
 		// like the library defun pruner.
-		loaded = WitImportInliner.inline(loaded, baseDir, witBackend, SourceLoader.fileSystem(), !dynamic && !noPrune);
+		loaded = WitImportInliner.inline(loaded, baseDir, witBackend, options.loader(), !dynamic && !noPrune);
 		// The --no-wasi (wasm-GC) reactor legs, BEFORE the serve-mode switch below reads
 		// the program: a reactor owns no socket, so the rontolisp:http-handler directive
 		// lowers to the host-driven transport (the same leg clack:clackup takes there),
@@ -935,7 +950,7 @@ final class CompileFrontend {
 		// literal top-level form, and because the synthesized directives must still count
 		// as pruning roots below.
 		boolean witWorld = WitExportInliner.usesWitExport(program);
-		program = WitExportInliner.inline(program, baseDir, witBackend, SourceLoader.fileSystem());
+		program = WitExportInliner.inline(program, baseDir, witBackend, options.loader());
 		// Decide the (boundp 'name) probes whose answer the top-level order already fixes
 		// (compiler/CompileTimeBoundp), and collapse the guards they were testing. It has
 		// to happen BEFORE the tree-shaker below, not just inside the compilers: the

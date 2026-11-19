@@ -10,7 +10,8 @@
 ## Where it runs, and what is prunable
 `LibraryDefunPruner.prune(program)` runs at the END of the compile-path splice chain:
 `RontoLispCli.compileToFile` (skipped under `--dynamic` and `--no-prune`, both in
-`CliOptions`, `--no-prune` in `noValueKeys`) and `RontoPlayground.compileJvm`/`compileWasm`.
+`CliOptions`, `--no-prune` in `noValueKeys`) and `RontoPlayground.compileJvm`/`compileWasm`
+(the same `CompileFrontend.expand`, through `cli/PlaygroundFrontend`).
 NOT the interpreter nor the per-library compiler tests. Every TEST that wants the pruned
 program reaches it through `CompileFrontend.expand` like everything else -- the corpus
 guards (`JvmDeadMethodEliminationCorpusTest` / `WasmTreeShakerCorpusTest`) and the real-library

@@ -55,8 +55,15 @@ runs what the browser runs (`PlaygroundReplTest`, and `DocExamplesTest.runScheme
   Scheme, Clojure and Starlark cells (`.kb/documentation-site.md`).
 - The compile buttons read the pick through `readStrict(source, features, loader)`; its
   Scheme arm reads the uploaded files an `include` / `define-library` names, its Starlark
-  arm the modules a `load` names; the chain splices `StarlarkLibrary` as
-  `CompileFrontend.expand` does.
+  arm the modules a `load` names. What they read goes through `CompileFrontend.expand`
+  itself (`cli/PlaygroundFrontend` under `src/web/java`, the uploaded files as
+  `Options.loader`), so a module the page compiles is the CLI's byte for byte (measured
+  2026-11-19 on a sample of each language; a Java program's as `Main.java`). Until then the
+  page kept a reduced copy of the chain (`.kb/architecture.md`, "Package rules").
+- A host with one stack hands `PlaygroundRepl` a `OneStack`: `run` gives it a Java program
+  that starts threads, and a Java session step starts none (`.kb/java-frontend.md`, "In
+  the browser"). `page()` is the stream a run's text is read back from; the browser makes
+  it `System.err` for the call, so standard error shows in the order written.
 - JS calls exported with `Function` / `BiFunction` only; a three-argument call is avoided by
   making the language a pick rather than a parameter.
 

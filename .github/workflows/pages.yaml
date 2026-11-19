@@ -80,6 +80,15 @@ jobs:
       run: wasm-as --version
     - name: Build playground (rontolisp -> WebAssembly)
       run: ./mvnw -V --no-transfer-progress -Pweb -DskipTests package
+    # The image has one thread and one stack, which no JVM test runs on: check what
+    # its exports answer -- a Java program that starts threads among them -- before
+    # anything is published. A node whose WebAssembly has GC and exception handling.
+    - name: Set up Node.js (to check the playground image)
+      uses: actions/setup-node@v7
+      with:
+        node-version: '24'
+    - name: Check the playground image
+      run: node web/playground-check.js web/dist
     # Build the standalone Markdown -> HTML docs tool and render doc/ into
     # web/dist/docs. The web profile (above) recreates web/dist, so docs must
     # run after it and only add the docs/ subtree (it never deletes web/dist).
