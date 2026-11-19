@@ -195,6 +195,10 @@ final class JavaResumable {
 
 	private static final String HTTP_REQUEST = runtime("http-request").name();
 
+	private static final String EXCHANGE = runtime("http-exchange").name();
+
+	private static final LispSymbol LAUNCHED = runtime("http-launched");
+
 	private static final LispSymbol SLICE = runtime("slice");
 
 	private static final LispSymbol NOW = runtime("now");
@@ -395,9 +399,31 @@ final class JavaResumable {
 		}
 		List<LispVal> rewritten = new ArrayList<>(forms.size());
 		for (LispVal form : forms) {
-			rewritten.add(resumable.top(form));
+			rewritten.add(launched(resumable.top(form)));
 		}
 		return List.copyOf(rewritten);
+	}
+
+	/**
+	 * A form with every request of the HTTP client sent as one of a program whose threads
+	 * take turns: its exchange is the run time's to read while they do.
+	 */
+	private static LispVal launched(LispVal form) {
+		if (!(form instanceof LispCons cons)) {
+			return form instanceof LispSymbol symbol && symbol.name().equals(EXCHANGE) ? LAUNCHED : form;
+		}
+		if (is(form, "QUOTE")) {
+			return form;
+		}
+		List<LispVal> parts = elements(form);
+		boolean same = true;
+		List<LispVal> renamed = new ArrayList<>(parts.size());
+		for (LispVal part : parts) {
+			LispVal lowered = launched(part);
+			same &= lowered == part;
+			renamed.add(lowered);
+		}
+		return same ? cons : list(renamed);
 	}
 
 	private Census census() {
@@ -789,6 +815,11 @@ final class JavaResumable {
 						if (body != null) {
 							body.awaited = true;
 						}
+					}
+					if (operator.equals(HTTP_REQUEST) && this.current.lambda) {
+						// the function a transport is answered with: it waits for the
+						// future a request still in hand answers it
+						this.current.awaited = true;
 					}
 				}
 				else {
@@ -1301,13 +1332,15 @@ final class JavaResumable {
 				return list(rewritten);
 			}
 			case "WHILE": {
+				// once in so many turns the other threads go on
+				LispVal counted = list(cl("<"), list(cl("setq"), SLICE, list(cl("-"), SLICE, integer(1))), integer(0));
+				if (this.turning.contains(form) && parts.subList(1, parts.size()).stream().noneMatch(this::needs)) {
+					return turns(parts, counted);
+				}
 				List<LispVal> rewritten = new ArrayList<>(parts.size());
 				rewritten.add(parts.get(0));
 				LispVal test = spine(parts.get(1));
 				if (this.turning.contains(form)) {
-					// once in so many turns the other threads go on
-					LispVal counted = list(cl("<"), list(cl("setq"), SLICE, list(cl("-"), SLICE, integer(1))),
-							integer(0));
 					test = list(cl("progn"), list(cl("if"), counted, await(list(runtime("suspending-turn")))), test);
 				}
 				rewritten.add(test);
@@ -1576,6 +1609,41 @@ final class JavaResumable {
 		ends.add(list(JavaForms.T, value));
 		body.add(list(ends));
 		return list(body);
+	}
+
+	/**
+	 * A loop whose one suspension is its turn: a function of its own, no body a thread is
+	 * suspended in, which runs the loop until it ends or its turns are used up and says
+	 * which; the thread lets the others go on between two calls of it. So the loop is
+	 * compiled as any loop is -- a body a thread is resumed in keeps no number unboxed --
+	 * and what it assigns it shares with the function around it. An exit of a block
+	 * around the loop says where it goes and is taken once the function has returned.
+	 */
+	private LispVal turns(List<LispVal> parts, LispVal counted) {
+		LispSymbol run = temporary();
+		LispSymbol left = temporary();
+		LispSymbol exit = temporary();
+		LispSymbol value = temporary();
+		Map<String, Integer> exits = new LinkedHashMap<>();
+		List<LispVal> loop = new ArrayList<>(parts.size() + 1);
+		loop.add(parts.get(0));
+		for (LispVal part : parts.subList(1, parts.size())) {
+			loop.add(descend(leaving(part, new HashSet<>(), exits, exit, value, left)));
+		}
+		loop.add(list(cl("if"), counted, list(cl("return-from"), left, JavaForms.T)));
+		LispVal function = list(cl("lambda"), NIL, list(cl("block"), left, list(loop), NIL));
+		LispVal turning = list(cl("let"), list(list(run, function)),
+				list(cl("while"), list(cl("funcall"), run), await(list(runtime("suspending-turn")))));
+		if (exits.isEmpty()) {
+			return turning;
+		}
+		List<LispVal> ends = new ArrayList<>();
+		ends.add(cl("cond"));
+		for (Map.Entry<String, Integer> named : exits.entrySet()) {
+			ends.add(list(list(cl("eql"), exit, integer(named.getValue())),
+					list(cl("return-from"), new LispSymbol(named.getKey()), value)));
+		}
+		return list(cl("let"), list(list(exit, integer(0)), list(value, NIL)), turning, list(ends));
 	}
 
 	/**

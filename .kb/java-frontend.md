@@ -40,8 +40,10 @@ field hiding one above it and `super.x`: k01 (2026-11-18); the HTTP client
 time limits of the HTTP client over fetch's two timeouts, `java.time.Duration` and the
 members j98 left refused that a line of Java answers: k05 (2026-11-19); the flow's errors
 of a class and the classes in it in the order a compiler reports them: k06 (2026-11-19);
-what comes after is `.todo/k07`, `k08`, `k12`, `k15`, `k16` and `k17` (what k00, k01,
-k05, k11 and k06 left).
+the host's events giving a component's threads their turns, so that a served request
+that waits leaves its instance to the host, a loop's turn outside its resume body and
+`Thread.State.BLOCKED`: k07 (2026-11-19); what comes after is `.todo/k08`, `k12`, `k15`,
+`k16`, `k17`, `k18`, `k19` and `k20` (what k00, k01, k05, k11, k06 and k07 left).
 
 ## Where it sits
 
@@ -1086,7 +1088,8 @@ member) or is refused where the request is sent (`deviations.md`, "The HTTP clie
   did not grow.
 - **The future travels in a vector (measured).** Handed back bare, it was awaited: a
   resumable function answers through an `await`, which flattens a future it is handed.
-  `started()` became resumable in a program with a `BodyPublisher` and a `sendAsync`
+  (Since k07 the lowered form is `(%java-http-exchange (rontolisp:fetch ..))`, the vector
+  made by the run time.) `started()` became resumable in a program with a `BodyPublisher` and a `sendAsync`
   (`Body.octets()` calls a `Supplier` field, which reaches the resumable supplier
   `sendAsync` writes), its caller then waited for the host's future, and the scheduler
   -- which settles only its own -- ended the program with `every thread .. waits`. On
@@ -1098,16 +1101,17 @@ member) or is refused where the request is sent (`deviations.md`, "The HTTP clie
   calling it starts threads and a wasm target lowers it resumable. Several requests are
   in flight at once on every transport (the corpus's `/held` + `/release` case: the
   reply to the first ends once the second arrived).
-- **The wait for a reply is a suspension that gives one turn**
-  (`JavaResumable`: `%java-http-reply` -> `%java-suspending-http-reply`, "general" as a
-  sleep is): the threads that can go on take a turn, then the thread waits for the host
-  and no other thread runs -- a thread asleep included. A wait the scheduler shares with
-  its timed threads needs a host future that can be asked without waiting, which neither
-  wasm target has: a `--native` fetch's future is deferred (it settles in the await),
-  the component settles a host future only while something blocks on its scheduler
-  (`.kb/async-await.md`, "`%future-settled-p`"), and `%future-race` is `sockets.lisp`'s.
-  Yielding while others can go on was rejected: a thread spinning on a flag the reply's
-  dependent sets never lets the reply in. `.todo/k07`.
+- **The wait for a reply is a suspension** (`JavaResumable`: `%java-http-reply` ->
+  `%java-suspending-http-reply`, "general" as a sleep is). Under a component the reply is
+  read as the host delivers it and the thread waits among the others ("The host's events
+  give the turns under a component", k07). In a `--native` module it still gives one turn
+  and then waits for the runner with no thread going on -- a thread asleep included, and a
+  request of the program's own server: a `--native` fetch's future is deferred (it
+  settles in the await; the runner has `rlhttp.head` alone, which blocks), so the
+  scheduler cannot wait for the soonest of its timed threads, its replies and its
+  requests together. What that takes of the runner is `.todo/k18`. Yielding while others
+  can go on was rejected: a thread spinning on a flag the reply's dependent sets never
+  lets the reply in.
 - **What the backend took: a deferred future where the state machines run.** A Java
   program that starts threads names `%future-new`, which turns `asyncMode` on in a
   Preview 1 module; the runner's fetch answers `%future-deferred`, which that mode
@@ -1199,7 +1203,7 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   by name, no file of the program is looked for); `import module jdk.httpserver` brings
   the package.
 - **`open0(server, port, host)` is lowered to
-  `(handler-case (%http-serve-begin (lambda (env) (lambda (responder) (%java-http-request (lambda () (HttpServing.answer server env responder))))) port host) (error (c) (princ-to-string c)))`**
+  `(handler-case (%http-serve-begin (lambda (env) (lambda (responder) (%java-http-request (lambda (handed) (HttpServing.answer server env handed)) responder))) port host) (error (c) (princ-to-string c)))`**
   where it is called, so the forms the seam hands on NAME the transport:
   `HttpServeLibrary` (first pass of `expand`) splices the target's leg, and under
   `--component` the directive inside it makes the output a `wasi:http/handler` component
@@ -1225,7 +1229,9 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   that the interpreter's `System.exit` on a request thread wakes it, "Threads"), then
   joins the transport.
 - **On one stack a request is a thread of the scheduler's, and the scheduler serves
-  (k11).** Every program reaching the server is lowered resumable on wasm
+  (k11; a `--native` module still, a component no longer: there the request's task is
+  suspended and the host's events give the turns, k07, "The host's events give the turns
+  under a component").** Every program reaching the server is lowered resumable on wasm
   (`JavaLowering.scheduled`: it starts threads or serves), its entry is
   `%java-thread-main` and nothing follows `main`. `%java-http-turn gate server state`
   sets `%java-serving`, a function of the soonest time a thread waits for, while the
@@ -1244,7 +1250,9 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   thread, `Thread.currentThread()` of a handler being no thread of `main`'s all hold on
   both wasm targets (the corpus's `/worker`, `/thread` and its `main`, which awaits a
   latch the stop counts down).
-- **A thread outlives the request that started it: `%task-swap` (k11).** Measured first:
+- **A thread outlives the request that started it: `%task-swap` (k11; under a component
+  the swap is the pump's since k07, and what the host still owes a thread holds the task
+  it was asked under).** Measured first:
   a pool's thread started while request 1 was answered was never resumed while request 3
   was (`every thread .. waits`, the third request of a component). A frame is owned by
   the task current when it is made, and `_wake_list` defers a waiter owned by another
@@ -1253,7 +1261,9 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   [async-await.md](async-await.md), "`%task-swap`"): the frames of the program's threads
   belong to none and are resumed on the stack of whichever request runs the scheduler,
   which is also the task whose `task.return` and `stream.write` they then call.
-- **Measured, the instance and requests at once** (2026-11-19, wasmtime 49.0.0): six
+- **Measured, the instance and requests at once, BEFORE k07** (2026-11-19, wasmtime 49.0.0; what
+  a waiting handler does to its instance now is in "The host's events give the turns under
+  a component"): six
   requests at once to a handler sleeping 500 ms went to six instances (each answered
   `entered 1`), a seventh after them to one of those (`entered 2`); a request sent 0.5 s
   after one whose handler sleeps 2 s was answered after 1.5 s -- the host handed it to
@@ -1344,10 +1354,11 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   JDK's own `StreamClosedException`). Two JDK facts not to copy: a stream taken BEFORE
   the head and written after it sends nothing, and a refused `sendResponseHeaders(200, -2)`
   breaks the chunked send after it (the reply's head, then nothing).
-- **A handler that sends a request through the client on one stack** waits in the host
-  for the reply ("java.net.http"): the program's other threads take one turn first and
-  none goes on while it waits, so a program asking its own server from `main` still
-  needs the host's threads (`.todo/k07`).
+- **A handler that sends a request through the client** leaves its instance to the host
+  under `wasmtime serve` (k07). In a `--native` module it waits in the runner for the
+  reply ("java.net.http"): the program's other threads take one turn first and none goes
+  on while it waits, so a program asking its own server from `main` still needs the
+  host's threads (`.todo/k18`).
 - **Sizes** (2026-11-19, wasmtime 49.0.0; class / component bytes): a server of one
   context answering `hello` 300,455 / 379,750; `examples/java/http/Server.java` (four
   contexts, a query split, a chunked body) 480,883 as a component;
@@ -1861,10 +1872,13 @@ without it, which ran 11 of the 16 programs below).
 
 - **Where it sits.** `Thread` is Java source (`library/java/lang/Thread.java`: names, the
   daemon flag, `join` as a loop of `wait` on the thread, the exceptions) over `native`
-  members that are `java.lisp`'s "threads" section, which has TWO variants under the same
-  names, `#-rontolisp-wasm` and `#+rontolisp-wasm`: `JavaLibrary.forms(oneStack)`,
-  `CompileFrontend.expand` passes `wasm`, the interpreter reads the host one, the pruner
-  takes the names of both (`everyVariantForms`). The wasm variant has, beside each function
+  members that are `java.lisp`'s "threads" section, which has THREE variants under the same
+  names: `#-rontolisp-wasm` (the host's threads), `#+rontolisp-wasm` with
+  `#-rontolisp-component` (one stack, the program's own loop over its threads: Preview 1
+  and `--native`) and `#+rontolisp-component` (one stack, the host's events giving the
+  turns; "The host's events give the turns under a component" below, k07).
+  `JavaLibrary.forms(Features)`, `CompileFrontend.expand` passes its features, the
+  interpreter reads the host one, the pruner takes the names of all (`everyVariantForms`). The wasm variant has, beside each function
   a thread waits in, the one it is SUSPENDED in (`%java-suspending-..`), which only the
   resumable lowering names. `Object.wait`/`notify`/`notifyAll` are
   intrinsics calling `Thread.await`/`signal`, which throw (`IllegalMonitorStateException`,
@@ -1907,6 +1921,11 @@ without it, which ran 11 of the 16 programs below).
   not kept for ever, and more than 4,096 objects locked in turn pay a monitor made each time
   (at 256 the bound cost 1,000 objects 337 against 135 ns a round on the JVM). A weak
   identity table in the backends would retire the bound, and the identity hash's retention.
+  The table's size is a global of its own (`%java-monitors-held`, k07): asking the table at
+  every last exit was 30 of the 170 ns an entry and its exit take on wasm (2026-11-19, the
+  counter of `bench/` with its loop a plain function: 1.65 s with the monitor, 0.26 s
+  without, 1.33 s with no size asked). What is left is the vectors: some twenty `aref` /
+  `%aset` of a general vector a pair (`.todo/k20`).
 - **A program that cannot tell a monitor held from one that is not holds none.** Until a
   pass reaches a member of `Thread` (`JavaClasses.monitors`; the program is lowered again when
   one does) `synchronized` is the null test alone and a `volatile` field any field: a class
@@ -1965,9 +1984,18 @@ without it, which ran 11 of the 16 programs below).
   end the program with the status 1); what is shared with no monitor is the
   host's; what a pool is not (`getQueue()`, `defaultExecutor()`, an accumulator's one
   value, a fork/join pool's parallelism and its rethrown exception); a
-  `ConcurrentHashMap`'s long chain; no `BLOCKED` state; the handlers not asked for `main`'s thread; an atomic is no
+  `ConcurrentHashMap`'s long chain; a thread notified in `wait` still `WAITING` while it takes its monitor again; the handlers not asked for `main`'s thread; an atomic is no
   `Number`; thread numbers are ours; a class literal only as a `synchronized` statement's
   lock (the quoted structure name, the object a `static synchronized` method holds).
+- **`getState()` answers `BLOCKED` (k07, 2026-11-19).** `Thread.blocked0(carrier)` is
+  `%java-thread-blocked`: on one stack whether the carrier is among the threads its
+  monitor's last exit lets go on (the monitor's seventh slot, the monitor carrier slot 4);
+  on the host carrier slot 5, which `%java-monitor-enter` sets around its
+  `mutex-acquire` ONLY when it found the monitor another thread's -- set at every entry, a
+  thread running `synchronized` blocks would answer `BLOCKED` to a reader for the two
+  stores' time. The owner is read with no lock: a state is a moment's. Pinned by the
+  corpus's `Turns` (`blocked 2`: a thread polls another's state while it holds the monitor
+  that one enters).
 - **Pinned by** `java-spec.yaml`'s `standalone:` thread cases (a `standalone:` case so
   that the corpus program starts no thread and keeps the thread-free lowering),
   `JavaSpecE2eTest#aProgramWhoseThreadsAllWaitIsRefusedWhereThreadsTakeTurns` (the two
@@ -2227,7 +2255,8 @@ thread suspended under it asked `Support.oneStack()` and did what one stack coul
 ### A thread suspended and resumed: the two leads measured (2026-11-17, j83)
 
 The second is made (k00, 2026-11-18: "Resumable bodies" below); the first waits for
-wasmtime (`.todo/k07`). j89 made the first step of the second lead: "The regions a
+wasmtime: re-measure the three conditions, and the component threads' one, on each
+wasmtime the project moves to. j89 made the first step of the second lead: "The regions a
 suspended thread can hold" below.
 
 - **Wasm stack switching is in wasmtime 49.0.0 and cannot be used.** It is off by default
@@ -2242,6 +2271,24 @@ suspended thread can hold" below.
   collector runs it). So j76's "not in wasmtime 49" was wrong in the letter and right in the
   effect. Re-measure on each wasmtime the project moves to: the three conditions are the
   flag's default, aarch64, a collection with a suspended stack.
+- **The component model's threads are in wasmtime 49.0.0 and pass the collection, not the
+  default (k07, 2026-11-19; x86-64).** `-W component-model-threading=y` gives a component
+  `thread.new-indirect`, `thread.suspend-then-resume` (this toolchain's name for the switch;
+  `suspend-then-promote` trapped `cannot block a synchronous task before returning`),
+  `thread.resume-later`, `thread.index`: each thread a fiber of the host. A hand-written
+  component (`.todo/artefacts/k07-java-front-end-what-the-suspended-threads-slice-left/cm-threading/threads.wat`: the stack-switching
+  probe's shape, a GC struct held 20 frames deep on the suspended thread, a 64-element
+  array made between two switches) runs 1,000,000 round trips in 1.1 to 1.3 s under the
+  DRC, the copying and the null collector with the right sum: A COLLECTION WHILE A THREAD
+  IS SUSPENDED HOLDS. 0.55 us a switch -- a `cont` switch was 0.1 us, the futures'
+  hand-over is 2.2 us. But the flag is off by default (without it the component is refused
+  at load: `thread.new-indirect requires the component model threading feature`), so a
+  `--component` output could not be run by `wasmtime run` / `serve` as it is; aarch64 was
+  not measured (no machine; the fibers are wasmtime's async stacks, which it has there);
+  and a `--native` output is a core module with no component built-in, so it would keep
+  the resumable lowering whatever a component does. Not made. The condition to re-measure
+  on each wasmtime is the flag's default alone; then a component's thread can be a host
+  thread, its scheduler a switch, and no function of a component is lowered twice.
 - **Resumable bodies: how much of a program would be lowered twice.** The functions of the
   program and the library (`--dump-ir`, direct calls and dispatchers by name; a call through
   a function value is not followed) that can reach a point where a thread is suspended:
@@ -2422,10 +2469,177 @@ and the JVM keep host threads and the forms they had.
   `wait` and `notify` is 2.2 us (400,000 in 0.9 s; a JDK 25 takes 4.9 s with host
   threads). A synchronized counter under four threads, 8,000,000 increments: 0.95 s on one
   stack, 2.45 s now -- the loop takes turns, so it is a resume body, where the backend
-  drops its integer fusions (`.todo/k07`).
+  drops its integer fusions; k07 wrote the loop as a function of its own (below): 1.43 to
+  1.65 s.
 - **Not made**: a Java file a Common Lisp program loads that starts threads and has no
-  `main` is refused on wasm (nothing would give the turns); `getState()` still never
-  answers `BLOCKED`. `.todo/k07`.
+  `main` is refused on wasm (nothing would give the turns).
+
+### What k07 measured and made of the resumable lowering (2026-11-19)
+
+- **A loop whose one suspension is its turn is a function of its own** (`JavaResumable.turns`).
+  Measured first, on the lowered forms of `bench/Counter` edited by hand and compiled again
+  (the Probe's forms are a Lisp program: `rontolisp forms.lisp -o x.wasm` gives the bytes of
+  the Java file's own output; wasmtime 49.0.0, precompiled, 8,000,000 synchronized
+  increments under four threads): the loop in the resume body 2.50 s; a plain `lambda`
+  sharing the loop's assigned local 1.67 s; the local copied in and out 1.57 s; a named
+  function handed and answering it 1.55 s; and a plain lambda that never counts a turn --
+  the bound -- 1.65 s. So what the resume body cost the loop was 0.9 s (110 ns a round: a
+  body a thread is resumed in keeps no number unboxed, and the `int` mask is four generic
+  operations), every plain shape reaches the bound, and the backend's way (keeping the
+  fusions between two suspend sites: every `ctx.asyncResume != null` in the expression
+  compilers) could give this loop no more than the bound. Made: the simplest shape,
+  `(let ((run (lambda () (block left (while test body.. (if (< (setq slice (- slice 1)) 0)
+  (return-from left t))) nil)))) (while (funcall run) (await (%java-suspending-turn))))` for
+  a turning `while` with no other suspension in it (the innermost ones: a loop holding a
+  turning loop holds a suspension). An exit of a block around the loop -- `break` of an
+  outer label, `return` -- is what `leaving` already wrote for a cleanup: a number and a
+  value, taken by a `cond` once the function returned, so no exit crosses the lambda. The
+  turn is counted after a round instead of before the test. Now: Counter 1.43 to 1.65 s on
+  both targets (Preview 1 109,410 -> 111,660 B), the hand-over (`Bounce`) 0.87 s as it was.
+  What it costs is bytes: a plain function gets the speed trades a resume body does not,
+  1.8 KB a loop (`Monitors`: 8 lambdas +14.3 KB, its resume bodies -2.7 KB). The corpus,
+  Preview 1 / component bytes, before -> after all of k07: `Monitors` 311,157 -> 323,693 /
+  317,391 -> 335,044; `Waits` 240,199 -> 241,694 / 246,074 -> 253,133; `Turns` (with its new
+  case) 470,128 -> 471,407 / 478,050 -> 485,065; `Handing` 953,828 -> 961,876 / 963,112 ->
+  977,065; `Sharing` 1,040,625 -> 1,055,702 / 1,047,213 -> 1,067,642; `Timed` 398,229 ->
+  401,853 / 404,456 -> 413,674. What is left of the counter's 1.5 s is the monitor (above).
+- **What a suspend site costs: 250 B and 12 B for each local alive across it** (measured,
+  a Lisp `async-defun` of n awaits in sequence and l locals read after the last: 1 await
+  329 B, 11 awaits 2,839 / 4,615 / 6,405 B at 0 / 10 / 20 locals, 21 awaits 5,357 / 8,353 /
+  11,363 B). So a body's bytes grow with awaits x locals: `Handing`'s `main`, 82 awaits and
+  some 74 locals alive at each, is 93,005 B, of which about 73 KB are the spills (its
+  module 961,876 B, 377,598 B of it 154 resume bodies). Not made, and no lowering of the
+  front end's can: the locals of a Java method are what they are. The way is the backend's
+  -- a local alive across an await living in the frame, read and written there, with no
+  spill and no restore -- and is `.todo/k19` with these numbers.
+- **Loops that keep their turn: decided, kept as stated in `deviations.md`.** The rule
+  ("a loop's turn" above) is what makes a function resumable, and widening it is paid in
+  functions lowered twice, not in the loop: every dispatcher a turn made `Handing` 153
+  resumable functions against 113 (k00). With the loop a plain function a turn costs a
+  loop 2 us in 1,024 rounds, so the price of a wider rule is that table's alone; no rule
+  between the two was found that tells a loop reading a plain field another thread writes
+  from one that does not. A daemon turning for ever no longer keeps a component from
+  ending or from serving (below).
+- **What the analysis reads coarsely, and what is refused: decided, kept.** `Flow.ANY` for
+  a lambda bound to a local or a field, a lock known by its static type: the corpus holds
+  no region and no entry that may block but for the program that sleeps in a monitor
+  (`#theThreadsOfTheCorpusHoldNoMonitorWhileTheyAreSuspended`), so precision would buy
+  nothing measured there. Threads that all wait end the program (a JDK waits for ever: no
+  test can hold on that, and a program is told why); `%java-now`'s refusal needs a wait
+  inside the run time's own printer; a Java file with no `main` under a Common Lisp
+  program has no entry to give the turns.
+
+### The host's events give the turns under a component (2026-11-19, k07)
+
+**Invariant: a component never waits in the host while a thread of the program could go
+on, and never loops over its threads to pass the time: a thread waiting for a time is
+woken by a timer of the host's, one waiting for a reply by the reply, a served request's
+by the request, and each gives the threads their turns where the host delivers it
+(`%java-thread-pump`). Under `wasmtime serve` the task of a request that waits is
+SUSPENDED, so the host enters the instance for other requests meanwhile.** Preview 1 and
+`--native` keep k00's loop (`%java-thread-finish` / `-run` passing the time by `sleep`
+and taking a server's requests in steps): Preview 1 has no host future, and the runner's
+are not askable (`.todo/k18`).
+
+- **Why it had to change** (measured before, wasmtime 49.0.0): a request whose handler
+  slept 2 s held its instance in a host call, and the next request the host handed that
+  instance was entered after it; a handler waiting for what another request brings was
+  `%java-stuck`; a thread waiting for a reply blocked in `_sched_loop` with no thread
+  going on, a thread asleep included. A plain Lisp handler that AWAITS a timer was
+  already entered at once by a second request (`slow 2 now 3`): the callback driver
+  suspends a task whose root future is pending. So the scheduler's own blocking was the
+  whole of it.
+- **The pump** runs the ready threads until none can go on, with no current task
+  (`%task-swap nil`, restored after), so every frame a thread makes belongs to none and is
+  resumed wherever its future is settled. It is called by whoever the host woke: the
+  program's start (`%java-thread-finish`), a request's task (`%java-http-held`), a timer
+  (`%java-thread-alarm`), a reply (`%java-http-reading`). A pump inside a pump is
+  nothing (`%java-pumping`): an arm whose future was settled at once ends in one.
+- **A HOLDER is who the host delivers to**: the program's start (`%java-top`) or the
+  task of a request, `#(bell replies ended condition responder queue writer task gone)`.
+  A waitable joins the set of the task current when it is made, and a task that EXITS
+  loses what its set still holds (measured: an unawaited `(wait-for 1500)` body under a
+  handler that had answered never printed). So what the program asks of the host is
+  counted on the holder it was asked under (`%java-host`, found by the task the pump
+  swapped out), and a request's task stays in hand -- its driver awaiting its `bell` --
+  until its thread ended AND it holds nothing a thread waits for (`%java-carrying`): a
+  reply in flight (slot 1), the one armed timer (`%java-armed`, `(deadline . holder)`).
+  Rejected: the same in the runtime (`_task_finish` staying WAIT while the registry has a
+  waitable of its set). It would hold every served Lisp program's task for each losing
+  timer of a read deadline (`sockets.lisp`'s `%future-race`), a change of blast radius no
+  measurement asked for.
+- **Timers**: `%java-pausing` is `%java-thread-arm` there. After a pump one timer is
+  armed for the soonest deadline, unless one no later is armed with a holder still
+  delivered to; a timer that fires pumps. A stale one (its thread went on) fires into a
+  pump with nothing to do; when no thread waits for a time any more the armed one is
+  forgotten and its holder told, so a `await(1, HOURS)` that was released holds no task.
+  The program's start under `serve` returns where no thread can go on: its holder is
+  `gone`, and what it armed is armed again by the first request.
+- **Replies**: in a program whose threads take turns `JavaResumable.rewrite` renames
+  `%java-http-exchange` (the lowered `start0` / `timed0`, `(vector future)` everywhere
+  else) to `%java-http-launched`, which under a component starts READING the reply at the
+  send -- `%java-http-awaited`, the head and each chunk awaited -- into the exchange
+  `#(future reply waiting)`; `%java-suspending-http-reply` parks until it is in. At the
+  send, not at the wait: `sendAsync` sends on one thread and waits on another, and the
+  send's subtask is in the set of the task current THEN.
+- **The end of a program** (`wasmtime run`): `%java-thread-finish` pumps and, while a
+  thread that is no daemon lives and the start holds something, forces its bell
+  (`_sched_loop` dispatches the timer or the reply, whose arm pumps); nothing held is
+  `%java-stuck`. A pump on the start's holder ends when only daemons are left, wherever
+  it was called from: a daemon turning for ever was resumed for ever by the alarm that
+  woke `main` (the corpus's `Turns` never ended, 12 minutes of CPU, before that).
+- **Threads that go on turning** (a daemon spinning, `while (!flag) Thread.yield()`):
+  `%java-thread-others` counts the host as one while a server runs or a reply is in
+  flight, so such a thread joins the line instead of going on; a pump that has run
+  64 turns and 10 ms then stops with a 1 ms timer on its holder (`%java-thread-nap`, one
+  at a time: one a request leaked a task for each, and the latency grew by 50 ms a
+  request). Measured: a served program with a spinning daemon answers in 40 to 120 ms.
+- **A request under `serve`**: `%java-http-request thunk responder` (the lowering hands the
+  transport's responder to the run time; the request's threads get the HOLDER for one)
+  queues the request's thread, and answers the future of `%java-http-held`, a frame of the
+  request's OWN task: pump, then await the bell until the thread ended and nothing is
+  held. The transport awaits it: a delayed response's function may answer a future
+  (`.kb/http-server.md`), and `JavaResumable` marks the function holding
+  `%java-http-request` awaited, or `%java-now` would refuse the pending future.
+- **A response leaves through its own task.** `task.return` is the host's notion of the
+  current task, and a request's thread takes its turns on whichever task the host woke.
+  So `%java-http-respond` / `-stream` / `-write` / `-finish` under a component QUEUE in the
+  holder (the head a list, a chunk its octets, the end `t`) and send where the holder's
+  task is the one running (`%java-host`) or once the head is out (a chunk and the end are
+  the stream's, any task's: measured, `/held`'s last chunk is written under `/release`'s
+  task); else the holder's bell rings and its driver sends. Every response is a head and
+  chunks there, a whole one too: it is out when its exchange closes, however long its
+  task stays in hand.
+- **Measured** (2026-11-19, wasmtime 49.0.0, `examples`-like probes kept in
+  `.todo/artefacts/k07-java-front-end-what-the-suspended-threads-slice-left/serve/`): a request to a handler sleeping 1.5 s and one 0.4 s
+  later: the second answered at once by the SAME instance (`slept 2 now 3`); a task
+  scheduled 700 ms past its handler's response ran (`later 4 ran`), and the instance was
+  dropped a second after; a handler asking an origin that takes 1.5 s through
+  `HttpClient.send`, and a request 0.4 s later: answered at once by the same instance.
+  Which instance a request reaches is the host's: one whose requests all wait was handed
+  the next request every time; of 4 requests at once to a warm instance 9 of 12 shared
+  it and 3 started instances; after the idle second 4 at once started 4. The client
+  (`wasmtime run`): the `waiting` program -- a thread asleep 20 ms that sends what ends
+  the reply `main` waits for -- took 8.3 s and printed `never released` before (the
+  origin's limit), 0.3 s and `released` now.
+- **Sizes** (component bytes, before -> after): a server of one context 435,274 ->
+  454,127 (+4.3%; `-Drontolisp.wasm.debug-func-sizes`: the holders, the pump and the
+  timers 5 KB, three more resume bodies 4 KB, the delayed response's two steps 3 KB,
+  `%java-http-send` 2 KB), its `--native` executable 8,080,040 -> 8,170,352;
+  `examples/java/http/Server.java` 514,871 -> 535,488; `Httpbin.java` 684,081 -> 704,883;
+  the client's `async` program 676,217 -> 689,395; a counter under four threads 115,429 ->
+  118,196 (its loop a plain function; 114,995 before that: no loop over the time).
+  **Trap, measured**: a `lambda` written in the value of a `(setf (aref ..) ..)` was
+  compiled four times (four `_lambda_N` of 2,178 B each in every served component);
+  `%http-delayed-begin` binds what it stores first.
+- **Pinned by** `java-http-server-spec.yaml` `a-request-that-waits-is-ended-by-another`
+  (`/held` writes a chunk and awaits a latch for an hour at most; the harness asks
+  `/release` once it has read the chunk on the legs that send one as it is written, a JDK
+  and the component, beside it elsewhere: `meanwhile:`; before k07 the component leg held
+  the host for the 120 s of the test's client), `java-http-spec.yaml`'s `waiting` program
+  (no `--native` leg: `.todo/k18`), `JavaLoweringTest` (the three variants, the loop, the
+  exchange's two names, the responder handed over), the corpus's thread cases on the
+  component leg.
 
 ## The lowering table
 

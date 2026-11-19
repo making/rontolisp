@@ -344,7 +344,8 @@ final class JavaIntrinsics {
 	 */
 	private static LispVal fetched(JavaEmitter.Context lowering, LispVal url, LispVal options) {
 		LispSymbol condition = lowering.temporary();
-		return list(cl("handler-case"), call("vector", list(new LispSymbol("RONTOLISP:FETCH"), url, options)),
+		return list(cl("handler-case"),
+				runtimeCall("http-exchange", list(new LispSymbol("RONTOLISP:FETCH"), url, options)),
 				list(cl("error"), list(condition), call("princ-to-string", condition)));
 	}
 
@@ -1622,6 +1623,7 @@ final class JavaIntrinsics {
 		natives.put(thread + "sleep0(long)", runtime("thread-sleep"));
 		natives.put(thread + "yield0()", runtime("thread-yield"));
 		natives.put(thread + "interrupt0(Object)", runtime("thread-interrupt"));
+		natives.put(thread + "blocked0(Object)", runtime("thread-blocked"));
 		natives.put(thread + "interrupted0(Object,boolean)", runtime("thread-interrupted"));
 		natives.put(thread + "holds0(Object)", runtime("monitor-held"));
 		natives.put(thread + "wait0(Object,long)", runtime("monitor-wait"));
@@ -1734,11 +1736,14 @@ final class JavaIntrinsics {
 			LispSymbol server = lowering.temporary();
 			LispSymbol env = lowering.temporary();
 			LispSymbol responder = lowering.temporary();
+			LispSymbol handed = lowering.temporary();
 			LispSymbol condition = lowering.temporary();
-			LispVal answer = list(cl("lambda"), JavaForms.NIL,
-					lowering.library(SERVING, "answer", List.of(server, env, responder)));
+			// the request's threads answer through the responder the run time hands
+			// them: the transport's, or one of its own over it
+			LispVal answer = list(cl("lambda"), list(handed),
+					lowering.library(SERVING, "answer", List.of(server, env, handed)));
 			LispVal application = list(cl("lambda"), list(env),
-					list(cl("lambda"), list(responder), runtimeCall("http-request", answer)));
+					list(cl("lambda"), list(responder), runtimeCall("http-request", answer, responder)));
 			return JavaForms.let(server, call.argument(0),
 					List.of(list(cl("handler-case"),
 							list(new LispSymbol("RONTOLISP::%HTTP-SERVE-BEGIN"), application, call.argument(1),

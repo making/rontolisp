@@ -222,12 +222,14 @@ class FetchSpecE2eTest {
 	 * One request to a served program: what is sent, what of the response is shown, what
 	 * a JDK answers, what a leg answers instead and the legs it is not sent on.
 	 * {@code unanswered} is for how many seconds the JDK leg waits for an answer a JDK
-	 * never gives.
+	 * never gives. {@code meanwhile} is a request asked while this one is in hand: once
+	 * {@code first} was read of its reply where a leg sends a chunk as it is written, so
+	 * that its handler is waiting by then, and beside it elsewhere.
 	 */
 	record Asked(String name, String request, @Nullable Map<String, String> headers, @Nullable String body,
 			@Nullable String hex, @Nullable List<String> show, @Nullable Integer times, @Nullable String first,
-			@Nullable Integer unanswered, String expected, @Nullable Map<String, String> deviates,
-			@Nullable Map<String, String> skip) {
+			@Nullable String meanwhile, @Nullable Integer unanswered, String expected,
+			@Nullable Map<String, String> deviates, @Nullable Map<String, String> skip) {
 
 		boolean sentOn(String leg) {
 			return this.skip == null || !this.skip.containsKey(leg);
@@ -872,6 +874,39 @@ class FetchSpecE2eTest {
 		}
 		java.net.http.HttpRequest request = builder.build();
 		String first = asked.first();
+		String meanwhile = asked.meanwhile();
+		if (meanwhile != null) {
+			// a JDK and the component send a chunk as it is written
+			boolean streamed = leg.equals(JDK) || leg.equals(Leg.COMPONENT.key());
+			int told = streamed ? Objects.requireNonNull(first).getBytes(StandardCharsets.UTF_8).length : 0;
+			CountDownLatch waiting = new CountDownLatch(1);
+			Callable<List<String>> held = started("held-" + leg, () -> answered(() -> {
+				try {
+					java.net.http.HttpResponse<InputStream> response = client.send(request,
+							java.net.http.HttpResponse.BodyHandlers.ofInputStream());
+					try (InputStream in = response.body()) {
+						ByteArrayOutputStream whole = new ByteArrayOutputStream();
+						whole.write(in.readNBytes(told));
+						waiting.countDown();
+						in.transferTo(whole);
+						return shown(asked, response.statusCode(), response.headers(), whole.toByteArray());
+					}
+				}
+				finally {
+					waiting.countDown();
+				}
+			}));
+			if (streamed) {
+				waiting.await();
+			}
+			int method = meanwhile.indexOf(' ');
+			client.send(java.net.http.HttpRequest
+				.newBuilder(java.net.URI.create("http://127.0.0.1:" + port + meanwhile.substring(method + 1)))
+				.timeout(java.time.Duration.ofSeconds(120))
+				.method(meanwhile.substring(0, method), java.net.http.HttpRequest.BodyPublishers.noBody())
+				.build(), java.net.http.HttpResponse.BodyHandlers.discarding());
+			return held.call();
+		}
 		if (first != null) {
 			String key = "stream-" + leg;
 			if (asked.deviates() != null && asked.deviates().containsKey(leg)) {

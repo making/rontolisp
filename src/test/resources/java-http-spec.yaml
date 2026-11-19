@@ -629,6 +629,54 @@ programs:
       == a-thread-sends-and-waits-for-its-reply
       thread=0 thread=1 thread=2
       true hello-from-fetch true
+  # a thread waiting for a reply leaves the others their turns: one asleep wakes and
+  # sends what ends the reply. A --native output waits for a reply in its host with no
+  # thread going on (doc/*/java/deviations.md)
+  - name: waiting
+    file: Waiting.java
+    skip:
+      native: a thread asleep does not wake while another waits for a reply in the runner
+    source: |
+      import java.io.IOException;
+      import java.net.URI;
+      import java.net.http.HttpClient;
+      import java.net.http.HttpRequest;
+      import java.net.http.HttpResponse;
+
+      public class Waiting {
+
+          static final String ORIGIN = "@ORIGIN@";
+
+          static final HttpClient CLIENT = HttpClient.newHttpClient();
+
+          static String ask(String path) throws IOException, InterruptedException {
+              return CLIENT.send(HttpRequest.newBuilder(URI.create(ORIGIN + path)).build(), HttpResponse.BodyHandlers.ofString())
+                  .body();
+          }
+
+          public static void main(String[] args) throws Exception {
+              System.out.println("== a-thread-asleep-wakes-while-another-waits-for-a-reply");
+              // the reply ends once the thread asleep has woken and sent its request
+              Thread waker = new Thread(() -> {
+                  try {
+                      Thread.sleep(20);
+                      System.out.println("woken: " + ask("/release?java-woken-@LEG@"));
+                  }
+                  catch (IOException | InterruptedException e) {
+                      System.out.println(e);
+                  }
+              });
+              waker.start();
+              String held = ask("/held?java-woken-@LEG@");
+              waker.join();
+              System.out.print(held);
+          }
+      }
+    expected: |
+      == a-thread-asleep-wakes-while-another-waits-for-a-reply
+      woken: released
+      first line
+      released
   # what the client refuses by name (doc/*/java/deviations.md)
   - name: subset
     file: Subset.java

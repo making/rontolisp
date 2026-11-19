@@ -2266,6 +2266,10 @@
 
 (defvar rontolisp::%java-monitors nil)
 
+;; How many monitors the table holds: read at every last exit, where asking the table
+;; cost 30 ns of the 170 an entry and its exit take on wasm.
+(defvar rontolisp::%java-monitors-held 0)
+
 ;; The static initialization of a class in a program that starts threads: one thread
 ;; initializes a class, and any other asking for THAT class waits until it has. A
 ;; class's state -- nil, the carrier of the thread initializing it, :ended or, once its
@@ -2337,7 +2341,7 @@
 #-rontolisp-wasm
 (defun rontolisp::%java-thread-carrier (thread)
   (vector thread (rontolisp:make-mutex) (rontolisp::%condition-variable-new) nil
-          nil))
+          nil nil))
 
 #+rontolisp-wasm
 (defun rontolisp::%java-thread-carrier (thread)
@@ -2401,6 +2405,17 @@
 (defun rontolisp::%java-thread-interrupt (carrier)
   (rontolisp::%java-unpark carrier nil t)
   nil)
+
+;; Whether a thread waits to enter a monitor another holds (Thread.State.BLOCKED): on
+;; the host what its entry said when it found the monitor held (carrier slot 5), on
+;; one stack whether it is among the threads the monitor's last exit lets go on.
+#-rontolisp-wasm
+(defun rontolisp::%java-thread-blocked (carrier) (if (aref carrier 5) t nil))
+
+#+rontolisp-wasm
+(defun rontolisp::%java-thread-blocked (carrier)
+  (let ((monitor (aref carrier 4)))
+    (if (and monitor (member carrier (aref monitor 6))) t nil)))
 
 #-rontolisp-wasm
 (defun rontolisp::%java-thread-interrupted (carrier clear)
@@ -2549,11 +2564,23 @@
 #+rontolisp-wasm (defvar rontolisp::%java-live 0)
 
 ;; What passes the time until a thread waiting for one can go on: set by a sleep and
-;; by a wait, so a program with neither names no sleep.
+;; by a wait, so a program with neither names no sleep. Under a component it is what
+;; asks the host for a timer (rontolisp::%java-thread-arm, below).
 #+rontolisp-wasm (defvar rontolisp::%java-pausing nil)
 
 ;; How many more turns of a loop a thread takes before it lets another go on.
 #+rontolisp-wasm (defvar rontolisp::%java-slice 1024)
+
+;; What a started server gives the scheduler where no thread can go on: a function of
+;; the soonest time a thread waits for, or nil. It serves the next request, waiting
+;; for it until that time at most, and answers t when it did; :host where a host
+;; calls the program for each request, so there is nothing to wait for here. Under a
+;; component it is t while a server runs.
+#+rontolisp-wasm (defvar rontolisp::%java-serving nil)
+
+;; Under a component: how many replies and moments of the host's the holders hold
+;; between them (rontolisp::%java-hold, below).
+#+rontolisp-component (defvar rontolisp::%java-waits 0)
 
 ;; The future a thread that cannot go on awaits, until DEADLINE at most.
 #+rontolisp-wasm
@@ -2604,11 +2631,17 @@
                   (t (setq going nil)))))
         (if rontolisp::%java-timed (car (car rontolisp::%java-timed)) nil))))
 
-;; Whether another thread can go on now.
+;; Whether another thread can go on now. Under a component the host counts as one
+;; while it may have something for the program -- a request of a server's, a reply --
+;; so a thread turning or yielding for ever lets it in (rontolisp::%java-thread-pump).
 #+rontolisp-wasm
 (defun rontolisp::%java-thread-others ()
   (rontolisp::%java-thread-due)
-  (if (or rontolisp::%java-ready rontolisp::%java-ready-last) t nil))
+  (if (or rontolisp::%java-ready rontolisp::%java-ready-last
+          #+rontolisp-component rontolisp::%java-serving
+          #+rontolisp-component (> rontolisp::%java-waits 0))
+      t
+      nil))
 
 ;; The thread waiting longest for its turn takes it: nil when none can go on.
 #+rontolisp-wasm
@@ -2654,7 +2687,9 @@
 
 #+rontolisp-wasm
 (rontolisp:async-defun rontolisp::%java-suspending-sleep (nanos)
-  (setq rontolisp::%java-pausing (function rontolisp::%java-sleep-until))
+  (setq rontolisp::%java-pausing
+        #-rontolisp-component (function rontolisp::%java-sleep-until)
+        #+rontolisp-component (function rontolisp::%java-thread-arm))
   (let ((carrier (rontolisp::%java-self)))
     (if (> nanos 0)
         (rontolisp:await
@@ -2679,18 +2714,12 @@
         (rontolisp:await (rontolisp::%java-thread-queued carrier))))
   nil)
 
-;; What a started server gives the scheduler where no thread can go on: a function of
-;; the soonest time a thread waits for, or nil. It serves the next request, waiting
-;; for it until that time at most, and answers t when it did; :host where the host
-;; calls the program for each request, so there is nothing to wait for here.
-#+rontolisp-wasm (defvar rontolisp::%java-serving nil)
-
 ;; The end of the program: the threads take their turns until those that are no
 ;; daemons have ended and no server runs. With none that can go on a server's next
 ;; request is served -- a request is a thread, below --, or the program's start ends
-;; here where the host calls it for each request; else the time passes until a
+;; here where a host calls it for each request; else the time passes until a
 ;; thread can go on.
-#+rontolisp-wasm
+#+(and rontolisp-wasm (not rontolisp-component))
 (defun rontolisp::%java-thread-finish ()
   (let ((going t))
     (while (and going (or (> rontolisp::%java-live 0) rontolisp::%java-serving))
@@ -2705,7 +2734,7 @@
 ;; The threads take their turns until ENDED, #(ended ..), says so: what a caller that
 ;; is no thread waits with for one it started. With none that can go on a server's
 ;; next request is served meanwhile, where the program takes them itself.
-#+rontolisp-wasm
+#+(and rontolisp-wasm (not rontolisp-component))
 (defun rontolisp::%java-thread-run (ended)
   (while (null (aref ended 0))
     (let ((soonest (rontolisp::%java-thread-due)))
@@ -2714,6 +2743,192 @@
                   (not (eq (funcall rontolisp::%java-serving soonest) :host)))
              nil)
             (soonest (funcall rontolisp::%java-pausing soonest))
+            (t (rontolisp::%java-stuck))))))
+
+;; A component. The host has timers and replies of its own, and under `wasmtime
+;; serve` it calls the program for each request, at once with the others when the
+;; one it called before is suspended. So the program never waits in the host while a
+;; thread could go on, and never loops over its threads to pass the time: a thread
+;; waiting for a time is woken by a timer of the host's, one waiting for a reply by
+;; the reply, a request's by the request, and each gives the threads their turns
+;; (rontolisp::%java-thread-pump) where the host delivers it.
+;;
+;; What the host delivers it delivers to the one that asked: the program's start, or
+;; the task of the request being answered then. That one is a HOLDER,
+;; #(bell replies ended condition responder queue writer task gone): the future it
+;; waits with while it has nothing to do, how many replies in flight it holds, and
+;; -- of a request -- whether its thread ended and what that left uncaught, the
+;; transport's responder, what its threads wrote that the transport was not handed
+;; yet (the newest first), the transport's writer once the head went out and the
+;; host's task; then whether the host delivers it nothing any more. A holder stays
+;; in hand until what it holds has come: a request's task ends after its response,
+;; once no thread waits for a timer or a reply of its.
+#+rontolisp-component
+(defvar rontolisp::%java-top (vector nil 0 nil nil nil nil nil nil nil))
+
+;; The holders of the requests in hand.
+#+rontolisp-component (defvar rontolisp::%java-holders nil)
+
+;; A holder holds one more thing the host is to deliver, or one fewer.
+#+rontolisp-component
+(defun rontolisp::%java-hold (holder by)
+  (%aset holder 1 (+ (aref holder 1) by))
+  (setq rontolisp::%java-waits (+ rontolisp::%java-waits by)))
+
+;; The holder whose task the threads take their turns on, while they do.
+#+rontolisp-component (defvar rontolisp::%java-host nil)
+
+#+rontolisp-component (defvar rontolisp::%java-pumping nil)
+
+;; The futures of the holders told to look again while the threads took their turns:
+;; settled once they have, each on its own task.
+#+rontolisp-component (defvar rontolisp::%java-rung nil)
+
+;; The timer that wakes the scheduler, (deadline . holder), or nil.
+#+rontolisp-component (defvar rontolisp::%java-armed nil)
+
+#+rontolisp-component
+(defun rontolisp::%java-holder-of (task)
+  (if (null task)
+      (if (aref rontolisp::%java-top 8) nil rontolisp::%java-top)
+      (let ((holders rontolisp::%java-holders) (found nil))
+        (while (and holders (null found))
+          (if (eq (aref (car holders) 7) task) (setq found (car holders)))
+          (setq holders (cdr holders)))
+        found)))
+
+;; The future a holder with nothing to do waits with.
+#+rontolisp-component
+(defun rontolisp::%java-bell (holder)
+  (let ((bell (rontolisp::%future-new)))
+    (%aset holder 0 bell)
+    bell))
+
+;; A holder is told to look again.
+#+rontolisp-component
+(defun rontolisp::%java-ring (holder)
+  (let ((bell (aref holder 0)))
+    (if bell
+        (progn
+          (%aset holder 0 nil)
+          (if rontolisp::%java-pumping
+              (setq rontolisp::%java-rung (cons bell rontolisp::%java-rung))
+              (rontolisp::%future-settle bell nil))))))
+
+;; Whether a thread of the program waits for what the host delivers to this holder.
+#+rontolisp-component
+(defun rontolisp::%java-carrying (holder)
+  (or (> (aref holder 1) 0)
+      (and rontolisp::%java-armed (eq (cdr rontolisp::%java-armed) holder))))
+
+;; A timer of the host's: the threads whose time is up take their turns when it
+;; fires, wherever the others are.
+#+rontolisp-component
+(rontolisp:async-defun rontolisp::%java-thread-alarm (armed millis)
+  (rontolisp:await (rontolisp:wait-for millis))
+  (if (eq rontolisp::%java-armed armed) (setq rontolisp::%java-armed nil))
+  (rontolisp::%java-thread-pump)
+  (rontolisp::%java-ring (cdr armed)))
+
+#+rontolisp-component
+(defun rontolisp::%java-thread-arm (deadline holder)
+  (let ((left (- deadline (%nano-time)))
+        (armed (cons deadline holder))
+        (was rontolisp::%java-armed))
+    (setq rontolisp::%java-armed armed)
+    (if was (rontolisp::%java-ring (cdr was)))
+    (rontolisp::%java-thread-alarm armed
+     (if (> left 0) (+ 1 (truncate left 1000000)) 0))))
+
+;; Once no thread can go on: a timer for the soonest time one waits for, unless one
+;; that fires no later is armed with a holder the host still delivers to.
+#+rontolisp-component
+(defun rontolisp::%java-thread-timed (soonest)
+  (let ((armed rontolisp::%java-armed))
+    (if (and armed (or (null soonest) (aref (cdr armed) 8)))
+        (progn
+          (setq rontolisp::%java-armed nil)
+          (rontolisp::%java-ring (cdr armed))
+          (setq armed nil)))
+    (if (and soonest rontolisp::%java-host
+             (or (null armed) (< soonest (car armed))))
+        (funcall rontolisp::%java-pausing soonest rontolisp::%java-host))))
+
+;; Threads that go on turning give the host a moment once in a while, when it may
+;; have something for the program: one holder holds a timer of one millisecond, and
+;; the threads take their turns again when it fires.
+#+rontolisp-component (defvar rontolisp::%java-napping nil)
+
+#+rontolisp-component
+(rontolisp:async-defun rontolisp::%java-thread-nap (holder)
+  (setq rontolisp::%java-napping holder)
+  (rontolisp::%java-hold holder 1)
+  (rontolisp:await (rontolisp:wait-for 1))
+  (rontolisp::%java-hold holder -1)
+  (if (eq rontolisp::%java-napping holder) (setq rontolisp::%java-napping nil))
+  (rontolisp::%java-thread-pump)
+  (rontolisp::%java-ring holder))
+
+;; The threads that can go on take their turns until none can -- or, in a program
+;; that serves nothing, until those left are daemons; or for some ten milliseconds
+;; when the host may have something for the program meanwhile. Their frames belong to
+;; no task of the host's (rontolisp::%task-swap): a thread outlives the request it
+;; was started under and is resumed wherever the host delivers what it waits for.
+#+rontolisp-component
+(defun rontolisp::%java-thread-pump ()
+  (if (null rontolisp::%java-pumping)
+      (let ((task (rontolisp::%task-swap nil)) (going t) (turns 0) (since nil))
+        (setq rontolisp::%java-pumping t)
+        (setq rontolisp::%java-host (rontolisp::%java-holder-of task))
+        (while going
+          (let ((soonest (rontolisp::%java-thread-due)))
+            (cond ((and (eq rontolisp::%java-host rontolisp::%java-top)
+                        (not
+                         (or (> rontolisp::%java-live 0)
+                             rontolisp::%java-serving)))
+                   (setq going nil))
+                  ((not (rontolisp::%java-thread-next))
+                   (setq going nil)
+                   (rontolisp::%java-thread-timed soonest))
+                  ((and
+                    (or rontolisp::%java-serving (> rontolisp::%java-waits 0))
+                    rontolisp::%java-host (> (setq turns (+ turns 1)) 64))
+                   (setq turns 0)
+                   (cond ((null since) (setq since (%nano-time)))
+                         ((> (- (%nano-time) since) 10000000)
+                          (setq going nil)
+                          (rontolisp::%java-thread-timed soonest)
+                          (if (or (null rontolisp::%java-napping)
+                                  (aref rontolisp::%java-napping 8))
+                              (rontolisp::%java-thread-nap
+                               rontolisp::%java-host))))))))
+        (setq rontolisp::%java-host nil)
+        (setq rontolisp::%java-pumping nil)
+        (rontolisp::%task-swap task)
+        (let ((rung rontolisp::%java-rung))
+          (setq rontolisp::%java-rung nil)
+          (while rung
+            (rontolisp::%future-settle (car rung) nil)
+            (setq rung (cdr rung))))))
+  nil)
+
+;; The end of the program: the threads take their turns, and where none can go on
+;; the program waits in the host for the timer or the reply one waits for, until
+;; those that are no daemons have ended. A program serving returns to its host
+;; instead, which calls it for each request: what its start held is no longer
+;; delivered.
+#+rontolisp-component
+(defun rontolisp::%java-thread-finish ()
+  (let ((going t) (top rontolisp::%java-top))
+    (while going
+      (rontolisp::%java-thread-pump)
+      (cond ((not (or (> rontolisp::%java-live 0) rontolisp::%java-serving))
+             (setq going nil))
+            (rontolisp::%java-serving
+             (%aset top 8 t)
+             (setq going nil))
+            ((rontolisp::%java-carrying top)
+             (rontolisp::%future-force (rontolisp::%java-bell top)))
             (t (rontolisp::%java-stuck))))))
 
 ;; What a thread writes of a condition it left uncaught, after its name: a thrown
@@ -2770,7 +2985,10 @@
 (defun rontolisp::%java-thread-main (main finish trace)
   (setq rontolisp::%java-live 1)
   (rontolisp::%java-self)
+  ;; what main asks of the host before it first waits is held by the program's start
+  #+rontolisp-component (setq rontolisp::%java-host rontolisp::%java-top)
   (rontolisp::%java-thread-first main finish trace)
+  #+rontolisp-component (setq rontolisp::%java-host nil)
   (rontolisp::%java-thread-finish)
   (if rontolisp::%java-failed
       (progn
@@ -2789,7 +3007,9 @@
           (setq monitor
                 (vector (rontolisp:make-mutex) nil 0 nil object 0
                         #+rontolisp-wasm nil))
-          (setf (gethash object rontolisp::%java-monitors) monitor)))
+          (setf (gethash object rontolisp::%java-monitors) monitor)
+          (setq rontolisp::%java-monitors-held
+                (+ rontolisp::%java-monitors-held 1))))
     (rontolisp:mutex-release rontolisp::%java-guard)
     monitor))
 
@@ -2826,7 +3046,14 @@
 (defun rontolisp::%java-monitor-enter (object)
   (let ((carrier (rontolisp::%java-self)))
     (let ((monitor (rontolisp::%java-monitor-of object carrier)))
-      (rontolisp:mutex-acquire (aref monitor 0))
+      ;; a thread that finds the monitor another's says so while it waits for it
+      (let ((owner (aref monitor 1)))
+        (if (and owner (not (eq owner carrier)))
+            (progn
+              (%aset carrier 5 t)
+              (rontolisp:mutex-acquire (aref monitor 0))
+              (%aset carrier 5 nil))
+            (rontolisp:mutex-acquire (aref monitor 0))))
       (while (null (aref monitor 4))
         (rontolisp:mutex-release (aref monitor 0))
         (setq monitor (rontolisp::%java-monitor object))
@@ -2897,11 +3124,13 @@
           (%aset monitor 1 nil)
           (if (and (= (aref monitor 5) 0)
                    #+rontolisp-wasm (null (aref monitor 6))
-                   (> (hash-table-count rontolisp::%java-monitors) 4096))
+                   (> rontolisp::%java-monitors-held 4096))
               (progn
                 (rontolisp:mutex-acquire rontolisp::%java-guard)
                 (remhash (aref monitor 4) rontolisp::%java-monitors)
                 (%aset monitor 4 nil)
+                (setq rontolisp::%java-monitors-held
+                      (- rontolisp::%java-monitors-held 1))
                 (rontolisp:mutex-release rontolisp::%java-guard)))))
     (rontolisp:mutex-release (aref monitor 0))))
 
@@ -2953,7 +3182,9 @@
 ;; suspended while it waits and while a suspended thread holds the monitor after.
 #+rontolisp-wasm
 (rontolisp:async-defun rontolisp::%java-suspending-wait (object millis)
-  (setq rontolisp::%java-pausing (function rontolisp::%java-sleep-until))
+  (setq rontolisp::%java-pausing
+        #-rontolisp-component (function rontolisp::%java-sleep-until)
+        #+rontolisp-component (function rontolisp::%java-thread-arm))
   (let ((carrier (rontolisp::%java-self)))
     (let ((monitor (rontolisp::%java-monitor-owned object carrier)))
       (cond ((null monitor) 2)
@@ -3019,9 +3250,19 @@
       (setq chunk (rontolisp::%future-force chunk)))
     chunk))
 
-;; The reply of an exchange once all of it is in, #(status fields octets) -- the
-;; fields an array of names and values in turn, as fetch lists them --, or the text of
-;; what failed: the request refused at the call, the transport, the transfer.
+;; A reply all of whose body is in, #(status fields octets): the fields an array of
+;; names and values in turn, as fetch lists them; the chunks the newest first.
+(defun rontolisp::%java-http-answered (reply chunks total)
+  (let ((flat nil))
+    (dolist (field (getf reply :headers))
+      (setq flat (cons (cdr field) (cons (car field) flat))))
+    (vector (getf reply :status) (coerce (reverse flat) 'simple-vector)
+            (if chunks
+                (rontolisp::%octets-join (reverse chunks) total)
+                (make-array 0 :element-type '(unsigned-byte 8))))))
+
+;; The reply of an exchange once all of it is in, or the text of what failed: the
+;; request refused at the call, the transport, the transfer.
 (defun rontolisp::%java-http-reply (exchange)
   (if (stringp exchange)
       exchange
@@ -3037,27 +3278,80 @@
                               (progn
                                 (setq total (+ total (length chunk)))
                                 (setq chunks (cons chunk chunks))))))
-                      (let ((flat nil))
-                        (dolist (field (getf reply :headers))
-                          (setq flat
-                                (cons (cdr field) (cons (car field) flat))))
-                        (vector (getf reply :status)
-                                (coerce (reverse flat) 'simple-vector)
-                                (if chunks
-                                    (rontolisp::%octets-join (reverse chunks)
-                                                             total)
-                                    (make-array 0
-                                     :element-type '(unsigned-byte 8))))))
+                      (rontolisp::%java-http-answered reply chunks total))
         (error (condition) (princ-to-string condition)))))
+
+;; The exchange of a request sent, around the future fetch answered.
+(defun rontolisp::%java-http-exchange (future) (vector future))
 
 ;; A thread of a program that starts threads on one stack: the threads that can go on
 ;; take a turn before the reply is waited for, and none goes on while it is.
-#+rontolisp-wasm
+#+(and rontolisp-wasm (not rontolisp-component))
+(defun rontolisp::%java-http-launched (future) (vector future))
+
+#+(and rontolisp-wasm (not rontolisp-component))
 (rontolisp:async-defun rontolisp::%java-suspending-http-reply (exchange)
   (if (rontolisp::%java-thread-others)
       (rontolisp:await
        (rontolisp::%java-thread-queued (rontolisp::%java-self))))
   (rontolisp::%java-http-reply exchange))
+
+;; A component, a program whose threads take turns: the exchange is
+;; #(future reply waiting), and its reply is read as the host delivers it, from the
+;; request on, whatever the threads do meanwhile -- the reply once all of it is in,
+;; or the text of what failed, then the threads waiting for it go on. The holder
+;; the request was sent under holds it until then.
+#+rontolisp-component
+(rontolisp:async-defun rontolisp::%java-http-awaited (future)
+  (handler-case (let ((reply (rontolisp:await future)))
+                  (let ((body (getf reply :body))
+                        (chunks nil)
+                        (total 0)
+                        (reading t))
+                    (while reading
+                      (let ((chunk
+                             (rontolisp:await (rontolisp:stream-read body))))
+                        (if (null chunk)
+                            (setq reading nil)
+                            (progn
+                              (setq total (+ total (length chunk)))
+                              (setq chunks (cons chunk chunks))))))
+                    (rontolisp::%java-http-answered reply chunks total)))
+    (error (condition) (princ-to-string condition))))
+
+#+rontolisp-component
+(rontolisp:async-defun rontolisp::%java-http-reading (exchange holder)
+  (let ((reply
+         (rontolisp:await (rontolisp::%java-http-awaited (aref exchange 0)))))
+    (%aset exchange 1 reply)
+    (if holder (rontolisp::%java-hold holder -1))
+    (let ((waiting (aref exchange 2)))
+      (%aset exchange 2 nil)
+      (while waiting
+        (rontolisp::%java-thread-ready (car waiting))
+        (setq waiting (cdr waiting))))
+    (rontolisp::%java-thread-pump)
+    (if holder (rontolisp::%java-ring holder))
+    nil))
+
+#+rontolisp-component
+(defun rontolisp::%java-http-launched (future)
+  (let ((exchange (vector future nil nil)) (holder rontolisp::%java-host))
+    (if holder (rontolisp::%java-hold holder 1))
+    (rontolisp::%java-http-reading exchange holder)
+    exchange))
+
+;; The thread waits for the reply among the threads that cannot go on.
+#+rontolisp-component
+(rontolisp:async-defun rontolisp::%java-suspending-http-reply (exchange)
+  (if (stringp exchange)
+      exchange
+      (let ((carrier (rontolisp::%java-self)))
+        (while (null (aref exchange 1))
+          (if (not (member carrier (aref exchange 2)))
+              (%aset exchange 2 (cons carrier (aref exchange 2))))
+          (rontolisp:await (rontolisp::%java-thread-park carrier nil)))
+        (aref exchange 1))))
 
 ;; --- com.sun.net.httpserver ---------------------------------------------------------
 
@@ -3120,19 +3414,23 @@
 
 ;; A whole response through the responder: the status, the fields -- an array of names
 ;; and values in turn -- and the body's octets.
+#-rontolisp-component
 (defun rontolisp::%java-http-respond (responder status flat octets)
   (funcall responder (list status (rontolisp::%java-http-fields flat) octets))
   nil)
 
 ;; The head of a response whose body follows in chunks: the writer the responder
 ;; answers for them.
+#-rontolisp-component
 (defun rontolisp::%java-http-stream (responder status flat)
   (funcall responder (list status (rontolisp::%java-http-fields flat))))
 
+#-rontolisp-component
 (defun rontolisp::%java-http-write (writer octets)
   (funcall writer octets)
   nil)
 
+#-rontolisp-component
 (defun rontolisp::%java-http-finish (writer)
   (funcall writer nil :close t)
   nil)
@@ -3188,7 +3486,13 @@
 
 ;; One stack: while the server runs, the scheduler serves where no thread can go on
 ;; (rontolisp::%java-serving). The transport takes its limit in milliseconds.
-#+rontolisp-wasm
+#+rontolisp-component
+(defun rontolisp::%java-http-turn (gate server state)
+  (%aset gate 0 state)
+  (setq rontolisp::%java-serving (eq state :started))
+  nil)
+
+#+(and rontolisp-wasm (not rontolisp-component))
 (defun rontolisp::%java-http-turn (gate server state)
   (%aset gate 0 state)
   (setq rontolisp::%java-serving
@@ -3219,24 +3523,25 @@
 #+rontolisp-wasm
 (defun rontolisp::%java-http-admitted (gate) (eq (aref gate 0) :started))
 
-;; One request on the transport's thread. The run time never started that thread, so
-;; its carrier is bound here -- without it every request would hold a monitor as the
-;; thread the program started on does --, holding the name of the Thread a handler
-;; asking for it is given.
+;; One request on the transport's thread, THUNK a function of the responder. The run
+;; time never started that thread, so its carrier is bound here -- without it every
+;; request would hold a monitor as the thread the program started on does --,
+;; holding the name of the Thread a handler asking for it is given.
 #-rontolisp-wasm
-(defun rontolisp::%java-http-request (thunk)
+(defun rontolisp::%java-http-request (thunk responder)
   (let ((rontolisp::%java-carrier
          (rontolisp::%java-thread-carrier "HTTP-Dispatcher")))
-    (funcall thunk)))
+    (funcall thunk responder)))
 
 ;; One stack: a request is a thread of the scheduler's, so its handler can wait for
 ;; the program's other threads; the transport's call answers once that thread ended,
 ;; the threads taking their turns meanwhile. What the request left uncaught is the
 ;; transport's to answer.
-#+rontolisp-wasm
-(rontolisp:async-defun rontolisp::%java-http-thread (carrier thunk ended)
+#+(and rontolisp-wasm (not rontolisp-component))
+(rontolisp:async-defun rontolisp::%java-http-thread
+    (carrier thunk responder ended)
   (rontolisp:await (rontolisp::%java-thread-queued carrier))
-  (unwind-protect (handler-case (rontolisp:await (funcall thunk))
+  (unwind-protect (handler-case (rontolisp:await (funcall thunk responder))
                     (error (condition) (%aset ended 1 condition)))
     (%aset ended 0 t)))
 
@@ -3244,17 +3549,110 @@
 ;; request runs the scheduler next, so the frames made here belong to no task of the
 ;; host's (rontolisp::%task-swap): one owned by a request long answered would wait
 ;; for that request to resume it.
-#+rontolisp-wasm
-(defun rontolisp::%java-http-request (thunk)
+#+(and rontolisp-wasm (not rontolisp-component))
+(defun rontolisp::%java-http-request (thunk responder)
   (let ((ended (vector nil nil)) (task (rontolisp::%task-swap nil)))
     (unwind-protect (progn
                       (rontolisp::%java-http-thread
                        (rontolisp::%java-thread-carrier "HTTP-Dispatcher") thunk
-                       ended)
+                       responder ended)
                       (rontolisp::%java-thread-run ended))
       (rontolisp::%task-swap task))
     (if (aref ended 1) (error (aref ended 1)))
     nil))
+
+;; A component: the host calls the program for a request while others it called for
+;; are suspended, and a request's thread takes its turns on whichever task the host
+;; delivers something to. But a response's head leaves through the task of its own
+;; request (the host's task.return). So the responder a request's threads are handed
+;; is the request's holder, and what they answer is queued in it (the head a list, a
+;; chunk its octets, the body's end t): sent where the request's own task runs, or
+;; by anyone once the head is out, the holder told when there is something for it to
+;; send. Every response goes out as a head and the chunks after it, so it is out once
+;; its exchange is closed, however long its task then stays in hand.
+#+rontolisp-component
+(defun rontolisp::%java-http-send (holder)
+  (let ((queue (reverse (aref holder 5))))
+    (%aset holder 5 nil)
+    (while queue
+      (let ((item (car queue)))
+        (cond ((consp item) (%aset holder 6 (funcall (aref holder 4) item)))
+              ((eq item t) (funcall (aref holder 6) nil :close t))
+              (t (funcall (aref holder 6) item))))
+      (setq queue (cdr queue)))))
+
+#+rontolisp-component
+(defun rontolisp::%java-http-queue (holder item)
+  (%aset holder 5 (cons item (aref holder 5)))
+  (if (or (aref holder 6) (eq rontolisp::%java-host holder))
+      (rontolisp::%java-http-send holder)
+      (rontolisp::%java-ring holder))
+  nil)
+
+#+rontolisp-component
+(defun rontolisp::%java-http-stream (holder status flat)
+  (rontolisp::%java-http-queue holder
+   (list status (rontolisp::%java-http-fields flat)))
+  holder)
+
+#+rontolisp-component
+(defun rontolisp::%java-http-write (holder octets)
+  (if (> (length octets) 0) (rontolisp::%java-http-queue holder octets))
+  nil)
+
+#+rontolisp-component
+(defun rontolisp::%java-http-finish (holder)
+  (rontolisp::%java-http-queue holder t))
+
+#+rontolisp-component
+(defun rontolisp::%java-http-respond (holder status flat octets)
+  (rontolisp::%java-http-stream holder status flat)
+  (rontolisp::%java-http-write holder octets)
+  (rontolisp::%java-http-finish holder))
+
+;; A request is a thread of the program's, as on every one stack.
+#+rontolisp-component
+(rontolisp:async-defun rontolisp::%java-http-thread (carrier thunk holder)
+  (rontolisp:await (rontolisp::%java-thread-queued carrier))
+  (unwind-protect (handler-case (rontolisp:await (funcall thunk holder))
+                    (error (condition) (%aset holder 3 condition)))
+    (progn
+      (%aset holder 2 t)
+      (rontolisp::%java-ring holder))))
+
+;; What the task of a request does: the threads take their turns, and it waits --
+;; suspended, so the host can call the program for another request -- until its
+;; request's thread has ended and nothing it holds is waited for, sending what that
+;; thread and the ones it waited for wrote. What the thread left uncaught is the
+;; transport's to answer.
+#+rontolisp-component
+(rontolisp:async-defun rontolisp::%java-http-held (holder)
+  (rontolisp::%java-thread-pump)
+  (let ((going t))
+    (while going
+      (rontolisp::%java-http-send holder)
+      (cond
+       ((not (aref holder 2)) (rontolisp:await (rontolisp::%java-bell holder)))
+       ((aref holder 3) (setq going nil))
+       ((rontolisp::%java-carrying holder)
+        (rontolisp:await (rontolisp::%java-bell holder)))
+       (t (setq going nil)))))
+  (%aset holder 8 t)
+  (setq rontolisp::%java-holders (remove holder rontolisp::%java-holders))
+  (if (aref holder 3) (error (aref holder 3)))
+  nil)
+
+;; The future of that: what the delayed response answers its transport, which waits
+;; for it before it takes the response as ended (http-server.lisp).
+#+rontolisp-component
+(defun rontolisp::%java-http-request (thunk responder)
+  (let* ((task (rontolisp::%task-swap nil))
+         (holder (vector nil 0 nil nil responder nil nil task nil)))
+    (setq rontolisp::%java-holders (cons holder rontolisp::%java-holders))
+    (rontolisp::%java-http-thread
+     (rontolisp::%java-thread-carrier "HTTP-Dispatcher") thunk holder)
+    (rontolisp::%task-swap task)
+    (rontolisp::%java-http-held holder)))
 
 ;; The end of a program that started a server: where the host's threads serve, the
 ;; thread the program started on waits until the last server stopped, or for

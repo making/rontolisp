@@ -214,6 +214,17 @@ sends the response whole.** Until then the writer was refused by name on every t
   with nil at the end. The body ends at `:close t`, else where the delayed function
   returns or unwinds (`unwind-protect`): no transport here writes after its request was
   answered, so a writer kept for later (SSE from another thread) is not served.
+- **A delayed function may answer a future (2026-11-19, k07)**, on the path that awaits:
+  `%http-serve-responding` (the component). `%http-delayed-begin res respond` calls the
+  function and keeps `#(captured chunks sink live answer)`; the frame awaits `answer`, then
+  `%http-delayed-end` ends a body still open and makes the triple, so the application goes
+  on answering after its function returned, its task suspended meanwhile -- what a served
+  Java request that waits answers (`.kb/java-frontend.md`, "The host's events give the
+  turns under a component"). A function answering no future is as before, and
+  `%http-normalize-streaming` (the JVM glue's, the reactor's) is begin and end in one. The
+  await sits in an `unwind-protect` that ends the body: a `handler-case` re-signalling the
+  condition made every served JVM program carry `RontoSignal.class`
+  (`JvmHttpHandlerTravellingRuntimeTest`).
 - Chunks are strings or octets; a kept body mixing the two is refused, as a stream's is
   (the octet join needs no encoder, which a default-mode program does not carry).
 - **The component streams** (`http.lisp` `%serve-respond`, through

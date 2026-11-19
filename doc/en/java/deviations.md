@@ -303,7 +303,9 @@ thread a turn. Four kinds of program show it.
   gives the turn.
 - Threads that all wait for one another end the program with a message on standard error
   and the status 1, where a JDK waits for ever: two threads each holding the monitor the
-  other enters, a pool that is never shut down, a `Timer` that is never cancelled.
+  other enters, a pool that is never shut down, a `Timer` that is never cancelled. A
+  program serving under `wasmtime serve` is not ended so: a request there may be waiting
+  for what the next one brings ([The HTTP server](#the-http-server)).
 - A `toString()` or a `hashCode()` that `String.format` or `printf` asks for, and the
   `toString()` of an exception being reported, cannot wait. One that has to -- it is
   `synchronized` and a sleeping thread holds its monitor -- ends the program the same way.
@@ -328,9 +330,11 @@ again as it is; a JDK throws a copy holding it when another thread ran the task.
 **A `ConcurrentHashMap` keeps the order a JDK 25 walks it in**, but for a table of 64
 chains or more in which nine keys share one chain.
 
-**A thread's state is never `BLOCKED`.** `getState` tells a thread that waits or sleeps;
-one waiting to enter a monitor is `RUNNABLE`. An uncaught-exception handler is asked for
-the threads a program starts, not for the thread of `main`. An `AtomicInteger`, an
+**A thread notified in `wait` may still be `WAITING`.** `getState` answers `BLOCKED` for a
+thread waiting to enter a monitor another thread holds; one that was notified and waits
+to take its monitor again may answer `WAITING` or `TIMED_WAITING` until it has it. An
+uncaught-exception handler is asked for the threads a program starts, not for the thread
+of `main`. An `AtomicInteger`, an
 `AtomicLong`, the adders and the accumulators are no `Number`.
 
 **A thread's number is rontolisp's own.** `threadId()` and the number in `toString()` count
@@ -373,9 +377,11 @@ and UTF-8 otherwise; `ofString(charset)` reads any.
 `SSLHandshakeException`).
 
 **`sendAsync` completes its future on a thread of the common pool**, or of the client's
-`executor`. In a `.wasm` the [threads take turns](#threads): a thread waiting for a reply
-lets the threads that can go on take a turn first, and then no other thread goes on until
-the reply is in -- a thread asleep included.
+`executor`. In a `.wasm` the [threads take turns](#threads). In a component a thread
+waiting for a reply leaves the others their turns, as one waiting in `sleep` does. In a
+`--native` executable it lets the threads that can go on take a turn first, and then no
+other thread goes on until the reply is in -- a thread asleep included, and a request of
+the program's own server: a `main` asking its own server waits for ever there.
 
 **A `URI`** is checked as a JDK checks one, with its messages, but for an address in
 brackets, of which only the characters are checked. `hashCode` is not a JDK's number, and
@@ -392,23 +398,44 @@ one server: binding a second while one is bound is an `UnsupportedOperationExcep
 **Under `wasmtime serve` the host owns the port and the program's life.** The address of
 `create` is not bound (`--addr` is) and `getAddress()` answers it as given. The host starts
 an instance of the program for the requests it likes: wasmtime 49 hands one instance up to
-128 requests, one at a time, and drops it after a second with none, so a static field lasts
-as long as its instance and no longer. An instance's start is `main` up to its end, or up
-to where no thread of the program can go on; from then on the program runs only while a
-request is answered, so a thread asleep, a `Timer` and a scheduled task go on when the next
-request is. After `stop` an instance answers 503 until the host drops it. `wasi:http` tells
+128 requests, 16 of them at once, and drops it after a second with none in hand, so a
+static field lasts as long as its instance and no longer. An instance's start is `main` up
+to its end, or up to where no thread of the program can go on; from then on the program
+runs while the host has a request of that instance in hand. A request stays in hand after
+its response while a thread of the program waits for a time or for a reply that request
+was the one to ask the host for, so a task scheduled by a handler runs once its handler
+has answered; a thread asleep since before the first request goes on when a request
+arrives. After `stop` an instance answers 503 until the host drops it. `wasi:http` tells
 a handler neither its peer nor its port: `getRemoteAddress()` is `0.0.0.0:0`, and the port
 of `getLocalAddress()` is 80.
 
 **On one stack a request is a thread taking turns with the program's others**
 ([Threads](#threads)): in a `--native` executable and a component a handler may wait for a
-thread, and `main` may wait for ever after `start()`. A request is taken where no thread
-can go on, so requests are answered one at a time unless a handler waits, and a thread that
-never waits keeps every request from being answered. Under `wasmtime serve` a handler
-waiting for what another request brings never gets it: an instance answers one request at
-a time, and a request the host hands an instance that waits is answered after the one it
-waits in. With no thread left that can go on, the program is refused as threads that all
-wait.
+thread, and `main` may wait for ever after `start()`. A thread that never waits keeps
+every request from being answered.
+
+- A `--native` executable takes a request where no thread can go on, so requests are
+  answered one at a time unless a handler waits. With no thread left that can go on and
+  no request to take, the program is refused as threads that all wait.
+- Under `wasmtime serve` a handler that waits -- asleep, for a thread, for the reply to a
+  request it sent, for what another request brings -- leaves its instance to the host,
+  which hands that instance other requests meanwhile:
+
+  ```console
+  server.createContext("/held", exchange -> {
+      RELEASED.await();                     // answered once /release has been asked
+      exchange.sendResponseHeaders(204, -1);
+  });
+  server.createContext("/release", exchange -> {
+      RELEASED.countDown();
+      exchange.sendResponseHeaders(204, -1);
+  });
+  ```
+
+  The request that ends another's wait has to reach the same instance, and which instance
+  a request reaches is the host's choice: wasmtime 49 hands a request to an instance whose
+  requests all wait, and may start another when several arrive at once. A request waiting
+  for what never comes waits as long as the host lets it.
 
 **A handler runs on the executor's thread, and the exchange ends with it.** With no
 executor the thread that takes the requests runs the handlers one at a time, named

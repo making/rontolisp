@@ -240,6 +240,9 @@ public class Thread implements Runnable {
         if (!this.alive) {
             return State.TERMINATED;
         }
+        if (blocked0(this.carrier)) {
+            return State.BLOCKED;
+        }
         int waits = this.parked;
         return waits == 0 ? State.RUNNABLE : waits == 1 ? State.WAITING : State.TIMED_WAITING;
     }
@@ -444,6 +447,9 @@ public class Thread implements Runnable {
     private static native void interrupt0(Object carrier);
 
     private static native boolean interrupted0(Object carrier, boolean clear);
+
+    /** Whether the thread waits to enter a monitor another thread holds. */
+    private static native boolean blocked0(Object carrier);
 
     private static native boolean holds0(Object object);
 

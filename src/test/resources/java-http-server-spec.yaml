@@ -48,6 +48,7 @@ programs:
       import java.util.concurrent.CountDownLatch;
       import java.util.concurrent.ExecutorService;
       import java.util.concurrent.Executors;
+      import java.util.concurrent.TimeUnit;
       import java.util.concurrent.atomic.AtomicInteger;
 
       public class Server {
@@ -65,6 +66,8 @@ programs:
           static final Thread MAIN = Thread.currentThread();
 
           static final CountDownLatch STOPPED = new CountDownLatch(1);
+
+          static final CountDownLatch RELEASED = new CountDownLatch(1);
 
           static final List<String> TRAIL = new ArrayList<>();
 
@@ -242,6 +245,24 @@ programs:
               text(exchange, 200, "counted");
           }
 
+          // The handler writes a chunk and waits, an hour at most, for the request that
+          // lets it go on: two requests are in hand at once, and one ends the other's wait.
+          static void held(HttpExchange exchange) throws IOException {
+              exchange.sendResponseHeaders(200, 0);
+              OutputStream out = exchange.getResponseBody();
+              out.write("held|".getBytes(StandardCharsets.UTF_8));
+              out.flush();
+              String ended;
+              try {
+                  ended = RELEASED.await(1, TimeUnit.HOURS) ? "released" : "never released";
+              }
+              catch (InterruptedException e) {
+                  ended = e.toString();
+              }
+              out.write(ended.getBytes(StandardCharsets.UTF_8));
+              out.close();
+          }
+
           // The handler waits for a thread it starts, which answers the exchange.
           static void worker(HttpExchange exchange) throws IOException {
               Thread worker = new Thread(() -> {
@@ -413,6 +434,11 @@ programs:
                   "the thread main ran on " + (Thread.currentThread() == MAIN) + ", the executor's "
                           + Thread.currentThread().getName().startsWith("handler-")));
               server.createContext("/worker", Server::worker);
+              server.createContext("/held", Server::held);
+              server.createContext("/release", exchange -> {
+                  RELEASED.countDown();
+                  text(exchange, 200, "released");
+              });
               server.createContext("/anonymous", exchange -> text(exchange, 200, "principal " + exchange.getPrincipal()));
               filters(server);
               handlers(server);
@@ -642,6 +668,16 @@ programs:
         expected: |
           200
           answered by worker
+      # /held writes "held|" and waits for /release, which is asked while /held is in
+      # hand: where a chunk is on its way when its write returns, once the test has
+      # read that chunk -- the handler is waiting then --, elsewhere beside it.
+      - name: a-request-that-waits-is-ended-by-another
+        request: GET /held
+        first: "held|"
+        meanwhile: GET /release
+        expected: |
+          200
+          held|released
       - name: the-two-ends-of-the-connection
         request: GET /peer
         skip:

@@ -421,13 +421,27 @@ Internal, asyncMode only (2026-11-19, todo k11): `(rontolisp::%task-swap task)` 
 CURRENT task record -- nil for none -- and answers the one it replaces
 (`WasmFutureInternalCompiler`: a `global.get` and a `global.set`). A frame made with no
 current task belongs to none, so `_wake_list` resumes it on the stack of whoever settles the
-future it waits for. Its one consumer is a served Java program (`java.lisp`,
-`%java-http-request`): a thread of the program outlives the request that started it and is
-resumed while a later one is answered. Measured without it: the frame carried the first
+future it waits for. Its one consumer is a Java program's scheduler (`java.lisp`:
+`%java-http-request` of a `--native` module, and since k07 `%java-thread-pump` under a
+component, around every turn the threads take): a thread of the program outlives the
+request that started it and is resumed while a later one is answered. The swap moves the
+task record alone: a waitable made meanwhile still joins the set of the task the host
+runs, and a task that exits loses what its set holds, so that scheduler keeps the task in
+hand while a thread waits for one (`.kb/java-frontend.md`, "The host's events give the
+turns under a component"). Measured without it: the frame carried the first
 request's task, the settle while the third was answered went to that task's ready list and
 doorbell, the task had ended, and the scheduler found every thread waiting. Not for a frame
 that answers its own task: the callback driver resumes that on its task (the owner exists for
 `task.return` and the context slots).
+
+**A task that exits loses its pending waitables (measured 2026-11-19, wasmtime 49.0.0,
+todo k07).** Under `wasmtime serve` a handler that answered while an unawaited body of its
+awaited `(wait-for 1500)` never ran the rest of that body: the callback driver answers
+EXIT once the root future is fulfilled, and nothing waits on the task's set any more. A
+handler that AWAITS is suspended instead, and the host enters the instance for other
+requests meanwhile (a request 0.5 s after one awaiting 2 s was answered at once by the
+same instance). Keeping a task until its set is empty was not made in the runtime: a
+losing timer of `%future-race` would hold every such task for its whole deadline.
 
 ## `%future-settled-p`
 Internal; whether a future has settled without waiting (`t` for a non-future). Interpreter

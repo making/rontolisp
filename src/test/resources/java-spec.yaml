@@ -7518,6 +7518,21 @@ standalone:
               synchronized (lock) {
                   System.out.println("entered after the sleep " + shared);
               }
+              // a thread waiting to enter a monitor is blocked until the one in it leaves
+              Thread entering = new Thread(() -> {
+                  synchronized (lock) {
+                      shared = 3;
+                  }
+              });
+              synchronized (lock) {
+                  entering.start();
+                  while (entering.getState() != Thread.State.BLOCKED) {
+                      Thread.sleep(1);
+                  }
+                  System.out.println("blocked " + shared);
+              }
+              entering.join();
+              System.out.println("entered " + shared + " " + entering.getState());
               holder.join();
           }
 
@@ -7694,6 +7709,8 @@ standalone:
       flag read after some turns true
       atomic read after some turns true
       entered after the sleep 2
+      blocked 2
+      entered 3 TERMINATED
       finally 0
       caught one
       finally 1

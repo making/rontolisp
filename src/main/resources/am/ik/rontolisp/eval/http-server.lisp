@@ -699,57 +699,83 @@
   ;; the one of a transport that sends a response whole.
   (rontolisp::%http-normalize-streaming res nil))
 
+(defun rontolisp::%http-delayed-shut (state)
+  ;; A body on its way ends here: where the application closed no writer.
+  (if (and (aref state 2) (aref state 3))
+      (progn
+        (setf (aref state 3) nil)
+        (funcall (aref state 2) nil))))
+
+(defun rontolisp::%http-delayed-writer (state)
+  ;; The writer of a response whose head the responder was handed alone.
+  (lambda (chunk &rest options)
+    (let ((part (rontolisp::%http-writer-part chunk options)))
+      (if (and (aref state 3) part (> (length part) 0))
+          (if (aref state 2)
+              (funcall (aref state 2) part)
+              (setf (aref state 1) (cons part (aref state 1))))))
+    (if (and (aref state 3) (getf options :close))
+        (rontolisp::%http-delayed-shut state))
+    nil))
+
+(defun rontolisp::%http-delayed-responder (state respond)
+  ;; The responder a delayed response is called with.
+  (lambda (r)
+    (if (and (null (aref state 0)) (consp r) (consp (cdr r))
+             (null (cdr (cdr r))))
+        (progn
+          (setf (aref state 0) r)
+          (setf (aref state 3) t)
+          (if respond
+              (let ((sink
+                     (funcall respond (car r)
+                      (rontolisp::%http-response-headers-alist (car (cdr r))))))
+                (setf (aref state 2) sink)))
+          (rontolisp::%http-delayed-writer state))
+        (progn
+          (setf (aref state 0) r)
+          (lambda (&rest ignored)
+            (declare (ignore ignored))
+            (rontolisp::%http-writer-refused))))))
+
+(defun rontolisp::%http-delayed-begin (res respond)
+  ;; Calls the delayed response RES with its responder and answers
+  ;; #(captured chunks sink live answer): the response the responder was handed,
+  ;; the chunks a writer kept (the newest first), the transport's function of one
+  ;; chunk once the head went out through RESPOND, whether a written body has not
+  ;; ended, and what RES answered -- a future while the application goes on
+  ;; answering (%http-serve-responding). An application that leaves by an exit
+  ;; has ended its body.
+  (let ((state (vector nil nil nil nil nil)) (returned nil))
+    (unwind-protect (let ((answer
+                           (funcall res
+                                    (rontolisp::%http-delayed-responder state
+                                     respond))))
+                      (setf (aref state 4) answer)
+                      (setq returned t))
+      (if (not returned) (rontolisp::%http-delayed-shut state)))
+    state))
+
+(defun rontolisp::%http-delayed-end (state)
+  ;; The response of a delayed function that has answered all it will. One its
+  ;; writer sent is answered with an empty body: nothing of it is left for the
+  ;; transport to write.
+  (rontolisp::%http-delayed-shut state)
+  (let ((captured (aref state 0)))
+    (cond ((null captured)
+           (error "http-handler: a delayed response delivered no response"))
+          ((aref state 2) (list (car captured) nil ""))
+          ((aref state 1)
+           (rontolisp::%http-normalize-response
+            (list (car captured) (car (cdr captured))
+                  (rontolisp::%http-written-body (reverse (aref state 1))))))
+          (t (rontolisp::%http-normalize-response captured)))))
+
 (defun rontolisp::%http-normalize-streaming (res respond)
-  ;; %http-normalize-response for a transport that may hand RESPOND (above). A
-  ;; response its writer sent is answered with an empty body: nothing of it is
-  ;; left for the transport to write.
+  ;; %http-normalize-response for a transport that may hand RESPOND (above).
   (if (functionp res)
-      (let ((captured nil) (chunks nil) (sink nil) (live nil))
-        (unwind-protect (funcall res
-                                 (lambda (r)
-                                   (if (and (null captured) (consp r)
-                                            (consp (cdr r))
-                                            (null (cdr (cdr r))))
-                                       (progn
-                                         (setq captured r)
-                                         (setq live t)
-                                         (if respond
-                                             (setq sink
-                                                   (funcall respond (car r)
-                                                            (rontolisp::%http-response-headers-alist
-                                                             (car (cdr r))))))
-                                         (lambda (chunk &rest options)
-                                           (let ((part
-                                                  (rontolisp::%http-writer-part
-                                                   chunk options)))
-                                             (if (and live part
-                                                      (> (length part) 0))
-                                                 (if sink
-                                                     (funcall sink part)
-                                                     (setq chunks
-                                                      (cons part chunks)))))
-                                           (if (and live (getf options :close))
-                                               (progn
-                                                 (setq live nil)
-                                                 (if sink (funcall sink nil))))
-                                           nil))
-                                       (progn
-                                         (setq captured r)
-                                         (lambda (&rest ignored)
-                                           (declare (ignore ignored))
-                                           (rontolisp::%http-writer-refused))))))
-          ;; a body on its way ends here, whichever way the application left
-          (if (and sink live)
-              (progn
-                (setq live nil)
-                (funcall sink nil))))
-        (cond ((null captured)
-               (error "http-handler: a delayed response delivered no response"))
-              (sink (list (car captured) nil ""))
-              (chunks (rontolisp::%http-normalize-response
-                       (list (car captured) (car (cdr captured))
-                             (rontolisp::%http-written-body (reverse chunks)))))
-              (t (rontolisp::%http-normalize-response captured))))
+      (rontolisp::%http-delayed-end
+       (rontolisp::%http-delayed-begin res respond))
       (progn
         (unless (and (consp res) (integerp (car res)))
           (error
@@ -771,12 +797,27 @@
   ;; rontolisp:async-defun both work as handlers (await passes a non-future
   ;; straight through); the rest of the normalization is synchronous, and only
   ;; a STREAM response body (a proxied fetch) costs a second await.
+  ;; A DELAYED response's function may answer a future: the application then goes
+  ;; on answering after the function returned -- on a task of the host's that is
+  ;; suspended meanwhile -- and its response is whole, its written body ended,
+  ;; where that future settles.
   ;; Every await is the direct init of a let binding: the --component backend
   ;; rejects an await in any other position.
   (let* ((env (rontolisp::%http-make-env raw))
          (result (rontolisp:await (funcall app env)))
-         (triple (rontolisp::%http-normalize-streaming result respond))
+         (delayed
+          (if (functionp result)
+              (rontolisp::%http-delayed-begin result respond)
+              nil))
+         (waited
+          (unwind-protect (rontolisp:await (if delayed (aref delayed 4) nil))
+            (if delayed (rontolisp::%http-delayed-shut delayed))))
+         (triple
+          (if delayed
+              (rontolisp::%http-delayed-end delayed)
+              (rontolisp::%http-normalize-streaming result respond)))
          (body (car (cdr (cdr triple)))))
+    (declare (ignorable waited))
     (if (rontolisp:streamp body)
         ;; A stream (a proxied fetch) is the ONE body this frame has to resolve:
         ;; draining it needs an await, and only an async frame has one.

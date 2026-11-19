@@ -30,7 +30,7 @@ import org.jspecify.annotations.Nullable;
  * <li>the interpreter evaluates {@link #forms()} into the global environment the first
  * time one of the {@code rontolisp::%java-} functions is resolved
  * ({@code LispEvaluator#resolveFunction});</li>
- * <li>the compile path calls {@link #process(List, boolean)} inside
+ * <li>the compile path calls {@link #process(List, Features)} inside
  * {@code CompileFrontend.expand}: a program that references one of the functions -- only
  * a lowered Java program does -- gets the definitions prepended, and
  * {@link LibraryDefunPruner} drops the ones it does not reach.</li>
@@ -40,9 +40,51 @@ public final class JavaLibrary {
 
 	private static final String NAME_PREFIX = "%JAVA-";
 
-	@Nullable private static volatile List<LispVal> forms;
+	/**
+	 * The targets the library has a variant for: the thread functions differ, under the
+	 * same names.
+	 */
+	private enum Variant {
 
-	@Nullable private static volatile List<LispVal> oneStackForms;
+		/** A target with threads: the interpreter and the JVM. */
+		HOST(Features.INTERPRETER),
+
+		/** One stack, nothing of the host's to wait for but the time: Preview 1. */
+		ONE_STACK(Features.WASM),
+
+		/** One stack under a host with timers, replies and tasks of its own. */
+		COMPONENT(Features.WASM.with(List.of(Features.COMPONENT)));
+
+		private final Features features;
+
+		@Nullable private volatile List<LispVal> forms;
+
+		Variant(Features features) {
+			this.features = features;
+		}
+
+		static Variant of(Features target) {
+			if (!target.contains("rontolisp-wasm")) {
+				return HOST;
+			}
+			return target.contains(Features.COMPONENT) ? COMPONENT : ONE_STACK;
+		}
+
+		List<LispVal> forms() {
+			List<LispVal> cached = this.forms;
+			if (cached == null) {
+				synchronized (this) {
+					cached = this.forms;
+					if (cached == null) {
+						cached = List.copyOf(LispReader.readAllFromString(readSource(), this.features));
+						this.forms = cached;
+					}
+				}
+			}
+			return cached;
+		}
+
+	}
 
 	@Nullable private static volatile Set<String> functionNames;
 
@@ -55,47 +97,34 @@ public final class JavaLibrary {
 	 * double-colon {@code rontolisp::} helpers, bare {@code cl} names), so it needs no
 	 * package resolution. Parsed once and cached.
 	 * @return the library forms
-	 * @see #forms(boolean)
+	 * @see #forms(Features)
 	 */
 	public static List<LispVal> forms() {
-		return forms(false);
+		return Variant.HOST.forms();
 	}
 
 	/**
-	 * Returns the parsed library definitions for a target. The two variants differ in the
+	 * Returns the parsed library definitions for a target. The variants differ in the
 	 * thread functions alone, under the same names: a thread is the host's where the
-	 * target has threads, and runs on the stack of the thread that waits for it where the
-	 * target has one stack ({@code .kb/java-frontend.md}, "Threads").
-	 * @param oneStack whether the target runs a program on one stack: the wasm backends
+	 * target has threads; where it has one stack a thread is a body suspended and
+	 * resumed, and what gives the threads their turns is the program's own loop, or under
+	 * a component the host's events ({@code .kb/java-frontend.md}, "Threads").
+	 * @param target the features of the target the program is compiled for
 	 * @return the library forms
 	 */
-	public static List<LispVal> forms(boolean oneStack) {
-		List<LispVal> cached = oneStack ? oneStackForms : forms;
-		if (cached == null) {
-			synchronized (JavaLibrary.class) {
-				cached = oneStack ? oneStackForms : forms;
-				if (cached == null) {
-					cached = List.copyOf(LispReader.readAllFromString(readSource(),
-							oneStack ? Features.WASM : Features.INTERPRETER));
-					if (oneStack) {
-						oneStackForms = cached;
-					}
-					else {
-						forms = cached;
-					}
-				}
-			}
-		}
-		return cached;
+	public static List<LispVal> forms(Features target) {
+		return Variant.of(target).forms();
 	}
 
 	/**
-	 * The definitions of both variants: every name the library can define.
-	 * @return the forms of the two variants, one after the other
+	 * The definitions of every variant: every name the library can define.
+	 * @return the forms of the variants, one after the other
 	 */
 	public static List<LispVal> everyVariantForms() {
-		List<LispVal> all = new ArrayList<>(forms(false));
-		all.addAll(forms(true));
+		List<LispVal> all = new ArrayList<>();
+		for (Variant variant : Variant.values()) {
+			all.addAll(variant.forms());
+		}
 		return all;
 	}
 
@@ -157,13 +186,13 @@ public final class JavaLibrary {
 	 * The compile-path pre-pass: prepends the library definitions when the program
 	 * references one of its functions. A program that does not is returned unchanged.
 	 * @param program the top-level forms (after load inlining and user-macro expansion)
-	 * @param oneStack whether the target runs a program on one stack: the wasm backends
+	 * @param target the features of the target the program is compiled for
 	 * @return the program with the library spliced in when used
 	 */
-	public static List<LispVal> process(List<LispVal> program, boolean oneStack) {
+	public static List<LispVal> process(List<LispVal> program, Features target) {
 		for (LispVal form : program) {
 			if (references(form)) {
-				List<LispVal> out = new ArrayList<>(forms(oneStack));
+				List<LispVal> out = new ArrayList<>(forms(target));
 				out.addAll(program);
 				return out;
 			}

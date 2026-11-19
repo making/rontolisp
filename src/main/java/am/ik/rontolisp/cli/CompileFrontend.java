@@ -875,15 +875,14 @@ final class CompileFrontend {
 									.process(
 											ClojureLibrary
 												.process(
-														SchemeLibrary
-															.process(
-																	StarlarkLibrary.process(
-																			JavaLibrary.process(
-																					noGc ? expanded
-																							: EvalReferences
-																								.process(expanded),
-																					wasm)),
-																	features, input.standards()),
+														SchemeLibrary.process(
+																StarlarkLibrary.process(
+																		JavaLibrary.process(
+																				noGc ? expanded
+																						: EvalReferences
+																							.process(expanded),
+																				features)),
+																features, input.standards()),
 														!wasm, input.lowersAtRunTime(), input.linked()))),
 					witBackend);
 		List<LispVal> macos = ObjcLibrary.process(AppKitLibrary.process(JsonLibrary.process(

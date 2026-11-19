@@ -498,9 +498,11 @@ class JavaLoweringTest {
 					+ "(|java.util.concurrent.ThreadPoolExecutor.Hooked.new()|))"));
 		// A request of java.net.http is the program's own call of rontolisp:fetch -- the
 		// transport splices and a target with none read a program that fetches --, its
-		// future held in a vector, never a value of the program; a URI is cut by the
-		// rules the front ends share. Where a thread is a body suspended and resumed,
-		// the wait for a reply is one more suspension. Fetch is handed its two timeouts
+		// future held in the run time's exchange, never a value of the program; a URI is
+		// cut by the rules the front ends share. Where a thread is a body suspended and
+		// resumed, the wait for a reply is one more suspension and the exchange is one
+		// the run time reads while the threads take turns. Fetch is handed its two
+		// timeouts
 		// only by a program that gives a request or a client a time limit, so only such
 		// a program names the keywords a transport carries its timeout arm for.
 		String client = """
@@ -516,11 +518,13 @@ class JavaLoweringTest {
 				""";
 		String blocking = "System.out.println(client.send(request, HttpResponse.BodyHandlers.ofString()).body());";
 		assertThat(lower(client.formatted("", blocking), "L8.java"))
-			.anyMatch(form -> form.contains("(HANDLER-CASE (VECTOR (RONTOLISP:FETCH |url| (LIST :METHOD |method| "
-					+ ":HEADERS (RONTOLISP::%JAVA-HTTP-FIELDS |fields|) :BODY |body|))) (ERROR "))
+			.anyMatch(form -> form
+				.contains("(HANDLER-CASE (RONTOLISP::%JAVA-HTTP-EXCHANGE (RONTOLISP:FETCH |url| (LIST :METHOD |method| "
+						+ ":HEADERS (RONTOLISP::%JAVA-HTTP-FIELDS |fields|) :BODY |body|))) (ERROR "))
 			.anyMatch(form -> form.contains("(RONTOLISP::%URI-REFUSAL |str|)"))
 			.anyMatch(form -> form.contains("(RONTOLISP::%JAVA-HTTP-REPLY |exchange|)"))
-			.noneMatch(form -> form.contains("%JAVA-SUSPENDING") || form.contains("-TIMEOUT"));
+			.noneMatch(form -> form.contains("%JAVA-SUSPENDING") || form.contains("%JAVA-HTTP-LAUNCHED")
+					|| form.contains("-TIMEOUT"));
 		assertThat(lower(client.formatted(".timeout(java.time.Duration.ofSeconds(5))", blocking), "L8.java"))
 			.anyMatch(form -> form.contains(":BODY |body| :CONNECT-TIMEOUT (AND (> ")
 					&& form.contains(" :FIRST-BYTE-TIMEOUT (AND (> "));
@@ -529,7 +533,9 @@ class JavaLoweringTest {
 			.stream()
 			.map(LispVal::print)
 			.toList())
-			.anyMatch(form -> form.contains("(RONTOLISP:AWAIT (RONTOLISP::%JAVA-SUSPENDING-HTTP-REPLY |exchange|))"));
+			.anyMatch(form -> form.contains("(RONTOLISP:AWAIT (RONTOLISP::%JAVA-SUSPENDING-HTTP-REPLY |exchange|))"))
+			.anyMatch(form -> form.contains("(HANDLER-CASE (RONTOLISP::%JAVA-HTTP-LAUNCHED (RONTOLISP:FETCH |url| "))
+			.noneMatch(form -> form.contains("%JAVA-HTTP-EXCHANGE"));
 		// A server of com.sun.net.httpserver is the program's own call of the transport
 		// every adapter serves through, handed the function that answers a request; a
 		// monitor is held with no Thread in the program, since the handlers run beside
@@ -553,8 +559,8 @@ class JavaLoweringTest {
 				""";
 		assertThat(lower(server, "L9.java"))
 			.anyMatch(form -> form.contains("(HANDLER-CASE (RONTOLISP::%HTTP-SERVE-BEGIN (LAMBDA (")
-					&& form.contains("(RONTOLISP::%JAVA-HTTP-REQUEST (LAMBDA NIL "
-							+ "(|rontolisp.internal.HttpServing.answer(Object,Object,Object)| "))
+					&& form.contains("(RONTOLISP::%JAVA-HTTP-REQUEST (LAMBDA (")
+					&& form.contains(") (|rontolisp.internal.HttpServing.answer(Object,Object,Object)| "))
 			.anyMatch(
 					form -> form.contains("(|L9.main(String[])| (VECTOR)) (|rontolisp.internal.HttpServing.serve()|)"))
 			.anyMatch(form -> form
@@ -787,7 +793,8 @@ class JavaLoweringTest {
 		// that never waits calls nothing that can -- and the analysis follows a
 		// function value to the lambdas handed to the parameter it is: over the
 		// corpus's thread programs no region is held and no entry may block, but for
-		// the one program that sleeps holding a monitor, and less than a quarter of a
+		// the one program that sleeps holding a monitor (twice: a thread it starts, and
+		// the thread watching another become BLOCKED), and less than a quarter of a
 		// program's functions are resumable.
 		Map<String, Object> spec;
 		try (InputStream in = JavaLoweringTest.class.getResourceAsStream("/java-spec.yaml")) {
@@ -810,8 +817,9 @@ class JavaLoweringTest {
 		found.forEach((name, census) -> {
 			assertThat(census.resumable().size() * 4).as(name).isLessThan(census.functions());
 			if (name.equals("Turns")) {
-				assertThat(census.held()).as(name).containsExactly("a lambda: calls Thread.sleep(long)");
-				assertThat(census.blocking()).as(name).isEqualTo(6);
+				assertThat(census.held()).as(name)
+					.containsExactly("Turns.held(): calls Thread.sleep(long)", "a lambda: calls Thread.sleep(long)");
+				assertThat(census.blocking()).as(name).isEqualTo(8);
 			}
 			else {
 				assertThat(census.held()).as(name).isEmpty();
@@ -940,6 +948,51 @@ class JavaLoweringTest {
 							+ "(|Cell.held| |cell|)) 2147483648) 4294967295) 2147483648) (PROGN (|Lazy.<clinit>|) "
 							+ "|Lazy.made|)) 2147483648) 4294967295) 2147483648) (PROGN (|Late.<clinit>|) |Late.made|)) "
 							+ "2147483648) 4294967295) 2147483648))))))");
+		// a loop whose one suspension is its turn is a function of its own, called until
+		// it says it ended, so no body a thread is resumed in holds the loop; an exit of
+		// a block around the loop is taken once the function has returned
+		assertThat(Java.read("""
+				class T3 {
+				    static volatile boolean stop;
+				    static int sum(int[] a) {
+				        int n = 0;
+				        for (int i = 0; i < a.length; i++) {
+				            if (stop) { return -1; }
+				            n += a[i];
+				        }
+				        return n;
+				    }
+				    public static void main(String[] args) throws Exception {
+				        Thread t = new Thread(() -> System.out.println(sum(new int[] { 1 })));
+				        t.start();
+				        t.join();
+				    }
+				}
+				""", "T3.java", JavaFiles.NONE, null, true).stream().map(LispVal::print).toList())
+			.anyMatch(form -> form.startsWith("(RONTOLISP:ASYNC-DEFUN |T3.sum(int[])| ")
+					&& form.contains("(LAMBDA NIL (BLOCK |%w") && form.contains("(WHILE (FUNCALL |%w")
+					&& form.contains(") (RONTOLISP:AWAIT (RONTOLISP::%JAVA-SUSPENDING-TURN)))")
+					&& form.contains(
+							"(IF (< (SETQ RONTOLISP::%JAVA-SLICE (- RONTOLISP::%JAVA-SLICE 1)) 0) (RETURN-FROM |%w")
+					&& form.contains(" 1) (RETURN-FROM |%fn| |%w") && !form.contains("(WHILE (PROGN (IF (< (SETQ"));
+		// the run time's thread functions come in three variants under the same names:
+		// the host's threads, a loop over the threads on one stack, and under a
+		// component the host's events giving the threads their turns
+		java.util.function.Function<am.ik.rontolisp.reader.Features, List<String>> defined = target -> JavaLibrary
+			.forms(target)
+			.stream()
+			.map(LispVal::print)
+			.filter(form -> form.startsWith("(DEFUN RONTOLISP::%JAVA-THREAD-"))
+			.map(form -> form.substring(7, form.indexOf(' ', 7)))
+			.toList();
+		assertThat(defined.apply(am.ik.rontolisp.reader.Features.JVM)).doesNotContain("RONTOLISP::%JAVA-THREAD-RUN",
+				"RONTOLISP::%JAVA-THREAD-PUMP");
+		assertThat(defined.apply(am.ik.rontolisp.reader.Features.WASM)).contains("RONTOLISP::%JAVA-THREAD-RUN")
+			.doesNotContain("RONTOLISP::%JAVA-THREAD-PUMP");
+		assertThat(defined
+			.apply(am.ik.rontolisp.reader.Features.WASM.with(List.of(am.ik.rontolisp.reader.Features.COMPONENT))))
+			.contains("RONTOLISP::%JAVA-THREAD-PUMP")
+			.doesNotContain("RONTOLISP::%JAVA-THREAD-RUN");
 		// a program that starts no thread and neither waits nor asks cannot tell a
 		// monitor
 		// held from one that is not: synchronized leaves the exception a null has, the
