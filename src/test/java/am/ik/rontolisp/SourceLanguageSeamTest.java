@@ -113,6 +113,7 @@ class SourceLanguageSeamTest {
 			Map.entry("am.ik.rontolisp.eval.WaitForLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.WitLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.UriLibrary", SHIPPED_SOURCE),
+			Map.entry("am.ik.rontolisp.eval.UnicodeNormalizationLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.UrlLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.SchemeLibrary", SHIPPED_SOURCE),
 			Map.entry("am.ik.rontolisp.eval.ClojureLibrary", SHIPPED_SOURCE),

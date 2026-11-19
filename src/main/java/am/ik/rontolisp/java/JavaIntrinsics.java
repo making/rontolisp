@@ -1850,6 +1850,10 @@ final class JavaIntrinsics {
 		natives.put(uri + "split0(String)", (lowering, call) -> call("coerce",
 				JavaForms.form(sharedFunction("split"), operands(call)), list(cl("quote"), cl("simple-vector"))));
 		natives.put(uri + "resolve0(String,String)", shared("resolve"));
+		// java.text.Normalizer over the forms the front ends share
+		// (eval/unicode-normalization.lisp)
+		natives.put("java.text.Normalizer.normalize0(String,boolean,boolean)",
+				(lowering, call) -> JavaForms.form(new LispSymbol("RONTOLISP::%UNORM-NORMALIZE"), operands(call)));
 		natives.put("rontolisp.internal.Support.floatHash(float)", runtime("float-bits"));
 		// a Float is the float in a cons with its tag
 		natives.put("rontolisp.internal.Support.readFloat(String)", (lowering, call) -> {

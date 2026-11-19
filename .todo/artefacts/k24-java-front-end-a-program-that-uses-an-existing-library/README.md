@@ -2,7 +2,8 @@
 
 `am.ik.yavi:yavi:0.18.0` (Apache-2.0), its sources jar from Maven Central: 380 Java files,
 183,636 lines. Nothing of YAVI is in this directory: the two programs are written here over
-its public API, `patch.sh` holds `sed` lines and `shim/` classes written here.
+its public API, `patch.sh` holds `sed` lines and `shim/` classes written here (none is
+left since 2026-11-19).
 
 ## How to run it again
 
@@ -29,7 +30,7 @@ The refusals reached, in the order met, and what was done with each:
 | 1 | all 380 files refused by the parser: 213 a type annotation (`Function<A, @Nullable B>`), 74 `@Nullable` / `@NullMarked` of no type, 3 an annotation type | everywhere | fixed here (annotations, `@interface`) |
 | 2 | `reference to constraint is ambiguous` in effect: the 50 overloads of `constraint` taking a function, told apart by what `Book::title` returns | `ValidatorBuilder` | fixed here (an exact method reference counts by its return type) |
 | 3 | `the class java.math.BigInteger` named by an overload not taken | `ValidatorBuilder.ToBigInteger` | fixed here (a class nobody has is a name until reached) |
-| 4 | `the class java.text.Normalizer` | `CharSequenceConstraint.<init>` | `shim/` -- `.todo/k29` |
+| 4 | `the class java.text.Normalizer` | `CharSequenceConstraint.<init>` | fixed by k29 (the normalization forms the front ends share) |
 | 5 | `the class java.util.LinkedHashMap` (`LinkedHashSet`, `LinkedList` after it) | `ValidatorBuilder.PredicatesList` | fixed by k27 (library source) |
 | 6 | `the class java.io.Serializable` | `fn/Validation` | fixed here (library source) |
 | 7 | `no suitable constructor found for String(int[],int,int)` | `IdeographicVariationSequence` | fixed here |
@@ -41,7 +42,10 @@ component, and prints the JDK's lines but for their order, which is the shim's (
 where the library keeps insertion order). Since k27 (2026-11-19) two shims are left
 (`MessageFormat`, `Normalizer`) and the four print the JDK's lines in its order: wasm
 590,666 B, the component 594,785 B, the jar 232,947 B. Since k28 (2026-11-19) one is left
-(`Normalizer`): wasm 616,785 B, the component 620,879 B, the jar 240,951 B. The k24 numbers:
+(`Normalizer`): wasm 616,785 B, the component 620,879 B, the jar 240,951 B. Since k29
+(2026-11-19) none is left: the first command above compiles the program from the unpatched
+coordinates, and the interpreter, the JVM, wasm and the component print the JDK's seven
+lines (wasm 655,275 B, the component 659,541 B, the jar 255,602 B). The k24 numbers:
 
 - 171 of the 380 files read and declared (24,858 lines), 713 top-level forms.
 - `-o book.wasm`: 7.9 s wall (JVM start included), 575,271 B; `--component` 579,253 B;

@@ -265,6 +265,10 @@ that read back as it, where a JDK sometimes prints others: `1e23` prints
 `100,000,000,000,000,000,000,000`, a JDK `99,999,999,999,999,990,000,000`. A pattern
 `applyPattern` refuses leaves the format as it was; a JDK's keeps a mix of the two.
 
+**`Normalizer` reads the Unicode data of JDK 25.** A character whose data a later JDK's
+Unicode adds or changes is normalized as JDK 25 does it. `normalize` of a text already in
+the form answers that string itself, where a JDK sometimes answers an equal copy.
+
 **Two older classes are the newer ones.** A `StringBuffer` is a `StringBuilder` and
 `getClass().getName()` says so; a `Vector` is an `ArrayList` to `instanceof`.
 

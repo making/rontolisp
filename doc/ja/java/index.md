@@ -476,6 +476,7 @@ void main() {
 | `Charset`、`StandardCharsets` | `UTF_8`、`ISO_8859_1`、`US_ASCII`、`UTF_16`、`UTF_16BE`、`UTF_16LE`。`Charset.forName`、`defaultCharset`、`isSupported`、`name`、`displayName`、`toString` |
 | `Locale` | `ROOT`、`ENGLISH`、`US`、`UK`、`CANADA`、`Locale.getDefault`（`US` を返します）、`getLanguage`、`getCountry`、`toLanguageTag`、`toString` |
 | `MessageFormat` | パターンを取る、`Locale` の指定がある、またはない `new MessageFormat`、`MessageFormat.format`。`Object[]` を取る `format`、`applyPattern`、`toPattern`、`getLocale`、`setLocale`。パターンの引数は書式型のない `{n}` です。数値は JDK が英語で書く形（`1,000`、`1,234.568`）になり、それ以外の値は `toString` の結果になります |
+| `Normalizer`、`Normalizer.Form` | `CharSequence` と正規化形式を取る `Normalizer.normalize` と `isNormalized`。正規化形式は `NFD`、`NFC`、`NFKD`、`NFKC` です |
 | `Iterable`、`Iterator` | `iterator`、`forEach`。`hasNext`、`next`、`remove`、`forEachRemaining` |
 | `Collection` | `size`、`isEmpty`、`contains`、`add`、`remove`、`containsAll`、`addAll`、`removeAll`、`retainAll`、`removeIf`、`clear`、引数なし、配列、または配列を作る関数を取る `toArray`、`iterator`、`forEach`、`stream`、`parallelStream`、`equals`、`hashCode`、`toString` |
 | `List`、`ArrayList` | `Collection` のメンバー。`get`、`set`、添字を指定する `add` と `addAll`、添字を指定する `remove`、`indexOf`、`lastIndexOf`、`subList`、`sort`、`replaceAll`、`getFirst`、`getLast`、`removeFirst`、`removeLast`、`addFirst`、`addLast`、`reversed`、添字の指定がある、またはない `listIterator`（`ListIterator` のメンバーは `hasNext`、`next`、`hasPrevious`、`previous`、`nextIndex`、`previousIndex`、`remove`、`set`、`add`）。`List.of`、`List.copyOf`。引数なし、容量、コレクションを取る `new ArrayList<>()`、`ensureCapacity`、`trimToSize` |

@@ -108,6 +108,8 @@ public final class LibraryDefunPruner {
 
 	@Nullable private static volatile Set<String> uriDefinitionNames;
 
+	@Nullable private static volatile Set<String> normalizationDefinitionNames;
+
 	private LibraryDefunPruner() {
 	}
 
@@ -1349,6 +1351,7 @@ public final class LibraryDefunPruner {
 				|| JavaLibrary.mayDefine(name) && javaDefinitionNames().contains(name)
 				|| RegexLibrary.mayDefine(name) && regexDefinitionNames().contains(name)
 				|| UriLibrary.mayDefine(name) && uriDefinitionNames().contains(name)
+				|| UnicodeNormalizationLibrary.mayDefine(name) && normalizationDefinitionNames().contains(name)
 				|| ClojureLowering.isCoreMacroDefinition(name);
 	}
 
@@ -1404,6 +1407,16 @@ public final class LibraryDefunPruner {
 		if (cached == null) {
 			cached = definitionNames(UriLibrary.forms(), UriLibrary::mayDefine, "uri.lisp");
 			uriDefinitionNames = cached;
+		}
+		return cached;
+	}
+
+	private static Set<String> normalizationDefinitionNames() {
+		Set<String> cached = normalizationDefinitionNames;
+		if (cached == null) {
+			cached = definitionNames(UnicodeNormalizationLibrary.forms(), UnicodeNormalizationLibrary::mayDefine,
+					"unicode-normalization.lisp");
+			normalizationDefinitionNames = cached;
 		}
 		return cached;
 	}

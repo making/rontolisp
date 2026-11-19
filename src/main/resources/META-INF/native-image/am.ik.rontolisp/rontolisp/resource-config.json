@@ -363,6 +363,18 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.UnicodeNormalizationLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/unicode-normalization\\.lisp"
+      },
+      {
+        "condition": {
+          "typeReachable": "am.ik.rontolisp.eval.UnicodeNormalizationLibrary"
+        },
+        "pattern": "am/ik/rontolisp/eval/unicode-normalization-tables\\.lisp"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.clojure.ClojureBuiltinNamespaces"
         },
         "pattern": "am/ik/rontolisp/clojure/lib/ring/(util|middleware)/[a-z0-9_]+\\.clj"

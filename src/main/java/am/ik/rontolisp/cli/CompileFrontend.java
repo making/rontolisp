@@ -52,6 +52,7 @@ import am.ik.rontolisp.eval.StdinLibrary;
 import am.ik.rontolisp.eval.TlsLibrary;
 import am.ik.rontolisp.eval.TokenizersLibrary;
 import am.ik.rontolisp.eval.TorchLibrary;
+import am.ik.rontolisp.eval.UnicodeNormalizationLibrary;
 import am.ik.rontolisp.eval.UnreadCharLibrary;
 import am.ik.rontolisp.eval.UriLibrary;
 import am.ik.rontolisp.eval.UrlLibrary;
@@ -882,23 +883,25 @@ final class CompileFrontend {
 		// RegexLibrary right OUTSIDE the front ends' libraries too: the engine is named
 		// only by clojure.lisp and java.lisp. UriLibrary beside it: java.net.URI's rules
 		// are named only by clojure.lisp and a lowered Java program.
+		// UnicodeNormalizationLibrary beside them: the normalization forms are named
+		// only by a lowered Java program.
 		List<LispVal> languages = InflateLibrary
 			.process(
-					UriLibrary
+					UnicodeNormalizationLibrary
 						.process(
-								RegexLibrary
+								UriLibrary
 									.process(
-											ClojureLibrary
+											RegexLibrary
 												.process(
-														SchemeLibrary.process(
-																StarlarkLibrary.process(
-																		JavaLibrary.process(
+														ClojureLibrary.process(
+																SchemeLibrary.process(
+																		StarlarkLibrary.process(JavaLibrary.process(
 																				noGc ? expanded
 																						: EvalReferences
 																							.process(expanded),
 																				features)),
-																features, input.standards()),
-														!wasm, input.lowersAtRunTime(), input.linked()))),
+																		features, input.standards()),
+																!wasm, input.lowersAtRunTime(), input.linked())))),
 					witBackend);
 		List<LispVal> macos = ObjcLibrary.process(AppKitLibrary.process(JsonLibrary.process(
 				LinalgLibrary.process(GeomLibrary

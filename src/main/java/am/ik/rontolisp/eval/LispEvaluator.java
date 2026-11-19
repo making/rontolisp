@@ -310,6 +310,8 @@ public final class LispEvaluator {
 
 	private boolean uriLibraryLoaded;
 
+	private boolean normalizationLibraryLoaded;
+
 	private boolean clojureLibraryLoaded = false;
 
 	/** Whether the Clojure library came from {@link #clojureProgram}, stripped. */
@@ -17020,6 +17022,19 @@ public final class LispEvaluator {
 			if (!this.uriLibraryLoaded && UriLibrary.isUriFunction(name)) {
 				this.uriLibraryLoaded = true;
 				for (LispVal form : UriLibrary.forms()) {
+					evalResolved(form);
+				}
+				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);
+				if (loaded != null) {
+					return loaded;
+				}
+			}
+			// Unicode normalization as the front ends share it
+			// (unicode-normalization.lisp) loads the same way on the first resolution of
+			// a rontolisp::%unorm- function.
+			if (!this.normalizationLibraryLoaded && UnicodeNormalizationLibrary.isNormalizationFunction(name)) {
+				this.normalizationLibraryLoaded = true;
+				for (LispVal form : UnicodeNormalizationLibrary.forms()) {
 					evalResolved(form);
 				}
 				LispVal loaded = this.globalEnv.lookupFunctionOrNull(name);

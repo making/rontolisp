@@ -36,7 +36,9 @@ are plain Java are source in the jar, lowered with the program behind the seam
 own, named by theirs: the regular-expression engine of Clojure and Java
 (`eval/RegexLibrary`, `.kb/regex-engine.md`) and `java.net.URI`'s rules -- the cut, the
 characters, the resolution -- of the Clojure HTTP client and the Java subset's `URI`
-(`eval/UriLibrary`, `.kb/java-frontend.md`, "java.net.http").
+(`eval/UriLibrary`, `.kb/java-frontend.md`, "java.net.http"). Unicode normalization is a
+third, though one front end names it so far (`eval/UnicodeNormalizationLibrary`,
+`.kb/unicode-normalization.md`).
 
 ## Language-independent libraries
 

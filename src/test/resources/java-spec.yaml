@@ -25,6 +25,7 @@ imports: |
   import java.nio.charset.StandardCharsets;
   import java.nio.charset.UnsupportedCharsetException;
   import java.text.MessageFormat;
+  import java.text.Normalizer;
   import java.time.Duration;
   import java.time.format.DateTimeParseException;
   import java.util.AbstractList;
@@ -4936,6 +4937,131 @@ cases:
       a number with no locale
       not an array
       no pattern
+  # java.text.Normalizer: the four forms of a text and whether it is in one -- the first
+  # code point each form changes, the order of the marks and which of them joins a
+  # starter, Hangul by arithmetic, the compatibility mappings, the composites no form
+  # puts back, a starter that joins the starter before it (.kb/unicode-normalization.md).
+  - name: a-normalizer-puts-a-text-in-the-four-forms
+    main: Normalized
+    source: |
+      class Normalized {
+          static String hex(String s) {
+              StringBuilder out = new StringBuilder();
+              for (int c : s.codePoints().toArray()) {
+                  out.append(out.length() == 0 ? "" : " ").append(Integer.toHexString(c));
+              }
+              return out.toString();
+          }
+
+          static void show(int... codes) {
+              String s = new String(codes, 0, codes.length);
+              StringBuilder line = new StringBuilder(hex(s)).append(":");
+              for (Normalizer.Form form : Normalizer.Form.values()) {
+                  line.append(" ").append(form).append(Normalizer.isNormalized(s, form) ? " = " : " ")
+                          .append(hex(Normalizer.normalize(s, form)));
+              }
+              System.out.println(line);
+          }
+
+          public static void main(String[] args) {
+              // what no form changes, and the first code point each form does
+              show('a', 'b', 'c', 0x7e);
+              show(0x9f, 0xa0);
+              show(0xbf, 0xc0);
+              show(0x2ff, 0x300);
+              // a composite and its marks: the canonical ordering, a mark that joins across a
+              // lower one and one that a mark of its class keeps away
+              show(0xe9);
+              show('e', 0x301);
+              show('a', 0x315, 0x300, 0x5ae, 0x62);
+              show('a', 0x301, 0x328);
+              show('a', 0x327, 0x301);
+              show('a', 0x301, 0x301);
+              show(0x1ea4, 0x323);
+              show(0x301, 'a', 0x334, 0x345, 0x334);
+              // Hangul by arithmetic
+              show(0xac00);
+              show(0xd4db);
+              show(0x1100, 0x1161, 0x11a8);
+              show(0xac00, 0x11a8, 0x11a8);
+              show(0x1100, 0x1161, 0x301, 0x11a8);
+              show(0x1112, 0x1175, 0x11c2, 0x1113, 0x1161, 0x1100, 0x1176);
+              // the compatibility mappings
+              show(0xfb01);
+              show(0x2460, 0x32, 0x2075);
+              show(0xfdfa);
+              show(0x1e9b, 0x323);
+              show(0xff21, 0xff22, 0xff76, 0xff9e);
+              show(0x1d400, 0x1d7ff);
+              // a code point a form writes another way, and a composite no form puts back
+              show(0x2126, 0x212b);
+              show(0x958);
+              show(0x915, 0x93c);
+              show(0x344);
+              show(0x2f800);
+              show(0x1d15e);
+              // a starter that joins the starter before it
+              show(0x9c7, 0x9be);
+              show(0x110a5, 0x110ba);
+              show(0x113c5, 0x113c2, 0x113c2);
+              // the text of a language whose letters stand above the first mark
+              show(0x3053, 0x304c, 0x304b, 0x3099, 0x30cf, 0x309a);
+              show(0x65e5, 0x672c, 0x8a9e);
+              // a sequence of characters that is no string, the constants, and no text or form
+              System.out.println(hex(Normalizer.normalize(new StringBuilder("é"), Normalizer.Form.NFC)) + " "
+                      + Normalizer.normalize("", Normalizer.Form.NFKC).length() + " "
+                      + Normalizer.Form.valueOf("NFKC").ordinal() + " " + Arrays.toString(Normalizer.Form.values()));
+              try {
+                  Normalizer.normalize(null, Normalizer.Form.NFC);
+              } catch (NullPointerException e) {
+                  System.out.println("no text");
+              }
+              try {
+                  Normalizer.isNormalized("a", null);
+              } catch (NullPointerException e) {
+                  System.out.println("no form");
+              }
+          }
+      }
+    expected: |
+      61 62 63 7e: NFD = 61 62 63 7e NFC = 61 62 63 7e NFKD = 61 62 63 7e NFKC = 61 62 63 7e
+      9f a0: NFD = 9f a0 NFC = 9f a0 NFKD 9f 20 NFKC 9f 20
+      bf c0: NFD bf 41 300 NFC = bf c0 NFKD bf 41 300 NFKC = bf c0
+      2ff 300: NFD = 2ff 300 NFC = 2ff 300 NFKD = 2ff 300 NFKC = 2ff 300
+      e9: NFD 65 301 NFC = e9 NFKD 65 301 NFKC = e9
+      65 301: NFD = 65 301 NFC e9 NFKD = 65 301 NFKC e9
+      61 315 300 5ae 62: NFD 61 5ae 300 315 62 NFC e0 5ae 315 62 NFKD 61 5ae 300 315 62 NFKC e0 5ae 315 62
+      61 301 328: NFD 61 328 301 NFC 105 301 NFKD 61 328 301 NFKC 105 301
+      61 327 301: NFD = 61 327 301 NFC e1 327 NFKD = 61 327 301 NFKC e1 327
+      61 301 301: NFD = 61 301 301 NFC e1 301 NFKD = 61 301 301 NFKC e1 301
+      1ea4 323: NFD 41 323 302 301 NFC 1eac 301 NFKD 41 323 302 301 NFKC 1eac 301
+      301 61 334 345 334: NFD 301 61 334 334 345 NFC 301 61 334 334 345 NFKD 301 61 334 334 345 NFKC 301 61 334 334 345
+      ac00: NFD 1100 1161 NFC = ac00 NFKD 1100 1161 NFKC = ac00
+      d4db: NFD 1111 1171 11b6 NFC = d4db NFKD 1111 1171 11b6 NFKC = d4db
+      1100 1161 11a8: NFD = 1100 1161 11a8 NFC ac01 NFKD = 1100 1161 11a8 NFKC ac01
+      ac00 11a8 11a8: NFD 1100 1161 11a8 11a8 NFC ac01 11a8 NFKD 1100 1161 11a8 11a8 NFKC ac01 11a8
+      1100 1161 301 11a8: NFD = 1100 1161 301 11a8 NFC ac00 301 11a8 NFKD = 1100 1161 301 11a8 NFKC ac00 301 11a8
+      1112 1175 11c2 1113 1161 1100 1176: NFD = 1112 1175 11c2 1113 1161 1100 1176 NFC d7a3 1113 1161 1100 1176 NFKD = 1112 1175 11c2 1113 1161 1100 1176 NFKC d7a3 1113 1161 1100 1176
+      fb01: NFD = fb01 NFC = fb01 NFKD 66 69 NFKC 66 69
+      2460 32 2075: NFD = 2460 32 2075 NFC = 2460 32 2075 NFKD 31 32 35 NFKC 31 32 35
+      fdfa: NFD = fdfa NFC = fdfa NFKD 635 644 649 20 627 644 644 647 20 639 644 64a 647 20 648 633 644 645 NFKC 635 644 649 20 627 644 644 647 20 639 644 64a 647 20 648 633 644 645
+      1e9b 323: NFD 17f 323 307 NFC = 1e9b 323 NFKD 73 323 307 NFKC 1e69
+      ff21 ff22 ff76 ff9e: NFD = ff21 ff22 ff76 ff9e NFC = ff21 ff22 ff76 ff9e NFKD 41 42 30ab 3099 NFKC 41 42 30ac
+      1d400 1d7ff: NFD = 1d400 1d7ff NFC = 1d400 1d7ff NFKD 41 39 NFKC 41 39
+      2126 212b: NFD 3a9 41 30a NFC 3a9 c5 NFKD 3a9 41 30a NFKC 3a9 c5
+      958: NFD 915 93c NFC 915 93c NFKD 915 93c NFKC 915 93c
+      915 93c: NFD = 915 93c NFC = 915 93c NFKD = 915 93c NFKC = 915 93c
+      344: NFD 308 301 NFC 308 301 NFKD 308 301 NFKC 308 301
+      2f800: NFD 4e3d NFC 4e3d NFKD 4e3d NFKC 4e3d
+      1d15e: NFD 1d157 1d165 NFC 1d157 1d165 NFKD 1d157 1d165 NFKC 1d157 1d165
+      9c7 9be: NFD = 9c7 9be NFC 9cb NFKD = 9c7 9be NFKC 9cb
+      110a5 110ba: NFD = 110a5 110ba NFC 110ab NFKD = 110a5 110ba NFKC 110ab
+      113c5 113c2 113c2: NFD 113c2 113c2 113c2 113c2 NFC 113c5 113c5 NFKD 113c2 113c2 113c2 113c2 NFKC 113c5 113c5
+      3053 304c 304b 3099 30cf 309a: NFD 3053 304b 3099 304b 3099 30cf 309a NFC 3053 304c 304c 30d1 NFKD 3053 304b 3099 304b 3099 30cf 309a NFKC 3053 304c 304c 30d1
+      65e5 672c 8a9e: NFD = 65e5 672c 8a9e NFC = 65e5 672c 8a9e NFKD = 65e5 672c 8a9e NFKC = 65e5 672c 8a9e
+      e9 0 3 [NFD, NFC, NFKD, NFKC]
+      no text
+      no form
   # ArrayDeque, Optional, Objects, Collections, Arrays over each array type, Vector,
   # Stack, Enumeration, StringBuffer and Hashtable, which walks its keys in its own
   # order; Random gives the specified sequence, so a seeded shuffle is the JDK's (one

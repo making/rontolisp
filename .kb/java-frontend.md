@@ -53,7 +53,8 @@ reference in a call's applicability: k24 (2026-11-19); what comes after is `.tod
 `k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22` and `k26` (what k00, k11, k06, k07, k08,
 k10 and k12 left) and `.todo/k28` to `k33` (what stands between k24 and YAVI compiled to
 wasm); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
-`java.text.MessageFormat`: k28 (2026-11-19).
+`java.text.MessageFormat`: k28 (2026-11-19); `java.text.Normalizer` over the normalization
+forms the front ends share: k29 (2026-11-19).
 
 ## Where it sits
 
@@ -1159,6 +1160,18 @@ measured programs.
   `a-message-format-puts-its-arguments-in-a-pattern`;
   `RontoLispCliStreamsTest#aJavaFileRunsCompilesAndIsRefusedWhereItCannot` (a format
   type). `BigInteger` / `BigDecimal` arguments wait for `.todo/k31`.
+- **`java.text.Normalizer` (k29, 2026-11-19)** is the enum `Form` and two statics of
+  Java source over one `native`, `normalize0(text, compatibility, composed)`, which is
+  `%unorm-normalize` of the library the front ends share
+  ([unicode-normalization.md](unicode-normalization.md): the algorithm, the tables, the
+  cost). `isNormalized` is `normalize` compared; a null text or form is the
+  `NullPointerException` of the call made on it, the text's first. With it YAVI's
+  classic example compiles from the unpatched coordinates
+  (`--java-source-dep am.ik.yavi:yavi:0.18.0`) and prints a JDK's lines on the four
+  backends: wasm 655,275 B, the component 659,541 B, the jar 255,602 B. YAVI was not
+  changed: the scan below the form's first code point makes its call per string
+  checked the cost of a `charAt` loop over it. Pin: java-spec
+  `a-normalizer-puts-a-text-in-the-four-forms`.
 - **The members j98 left that a line of Java answers (k05)**: `Math.divideExact` /
   `floorDivExact` / `ceilDivExact`, `String.codePointCount` / `offsetByCodePoints` (a
   string's elements are code points, so a range holds as many as it is long) /

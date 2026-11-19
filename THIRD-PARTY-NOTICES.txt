@@ -360,8 +360,9 @@ Files:
   src/main/java/am/ik/rontolisp/codegen/wasm/WasmCaseFoldRuntimeBuilder.java
   src/main/java/am/ik/rontolisp/scheme/SchemeCharacters.java
   src/main/resources/am/ik/rontolisp/eval/regex-unicode.lisp
-Use: The case-mapping, character-property and grapheme tables compiled programs carry are UCD
-  data.
+  src/main/resources/am/ik/rontolisp/eval/unicode-normalization-tables.lisp
+Use: The case-mapping, character-property, grapheme and normalization tables compiled programs
+  carry are UCD data.
 --------------------------------------------------------------------------------
 UNICODE LICENSE V3
 

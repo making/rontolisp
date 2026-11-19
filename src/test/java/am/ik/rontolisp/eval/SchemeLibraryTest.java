@@ -113,7 +113,8 @@ class SchemeLibraryTest {
 	private static final class ResourceRecordingLoader extends URLClassLoader {
 
 		private static final Set<String> LIBRARIES = Set.of("scheme.lisp", "clojure.lisp", "regex.lisp",
-				"regex-unicode.lisp", "uri.lisp", "starlark.lisp", "java.lisp");
+				"regex-unicode.lisp", "uri.lisp", "unicode-normalization.lisp", "unicode-normalization-tables.lisp",
+				"starlark.lisp", "java.lisp");
 
 		private final Set<String> read = ConcurrentHashMap.newKeySet();
 

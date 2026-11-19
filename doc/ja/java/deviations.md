@@ -263,6 +263,11 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 `99,999,999,999,999,990,000,000` です。`applyPattern` が拒否したパターンは書式を変えません。
 JDK では前後 2 つのパターンが混ざった状態が残ります。
 
+**`Normalizer` は JDK 25 の Unicode データを使います。** それより新しい JDK の Unicode で
+追加または変更された文字も、JDK 25 と同じ結果になります。すでにその形式になっている文字列を
+`normalize` に渡すと、その文字列自体を返します。JDK は内容の等しい別の文字列を返すことが
+あります。
+
 **古い 2 つのクラスは新しいクラスと同じものです。** `StringBuffer` は `StringBuilder` であり、
 `getClass().getName()` も `StringBuilder` の名前を返します。`Vector` は `instanceof` で
 `ArrayList` と判定されます。

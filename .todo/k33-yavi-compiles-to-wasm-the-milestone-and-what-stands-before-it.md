@@ -18,7 +18,11 @@ has the two programs, the oracle's lines, the refusals met and how to run it aga
   (575,271 B, 7.9 s) and the component and prints the JDK's lines in another order.
   Since k27 (the linked collections, 2026-11-19) two stand-ins are left and the four
   print the JDK's lines in its order (wasm 590,666 B). Since k28 (`MessageFormat`,
-  2026-11-19) one stand-in is left, `Normalizer` (wasm 616,785 B).
+  2026-11-19) one stand-in is left, `Normalizer` (wasm 616,785 B). **Since k29
+  (`Normalizer`, 2026-11-19) the command above compiles it from the unpatched coordinates
+  and the four print the JDK's lines** (wasm 655,275 B, the component 659,541 B, the jar
+  255,602 B); YAVI checking decomposed text prints the JDK's lines too
+  (`.todo/artefacts/k29-java-text-normalizer/shelf/Note.java`).
 - **The schema example** (the README's first): stops at a class literal as a value;
   unmeasured behind it.
 
@@ -26,10 +30,11 @@ has the two programs, the oracle's lines, the refusals met and how to run it aga
 
 1. k27 (done 2026-11-19) -- `LinkedHashMap`, `LinkedHashSet`, `LinkedList` (the order of the lines).
 2. k28 (done 2026-11-19) -- `java.text.MessageFormat` (the text of every message).
-3. `.todo/k29` -- `java.text.Normalizer` (every string checked).
-   After 1 to 3 the classic example is expected to print the JDK's lines from the
-   unpatched coordinates: add it then as an opt-in test (network or `~/.m2`, so not in
-   `./mvnw test`) and an example under `examples/java/`.
+3. k29 (done 2026-11-19) -- `java.text.Normalizer` (every string checked).
+   The classic example prints the JDK's lines from the unpatched coordinates. **Next,
+   still to do here**: add it as an opt-in test (network or `~/.m2`, so not in
+   `./mvnw test`) and an example under `examples/java/` -- `examples.yaml` has no field
+   for `--java-source-dep` yet (`cli` is a deps.edn project's command line).
 4. `.todo/k30` -- a `Class` as a value, then measure the schema example again and file
    what it meets behind it.
 5. `.todo/k26` -- `java.time`, for a program that validates a date; `.todo/k31` --
@@ -39,11 +44,13 @@ has the two programs, the oracle's lines, the refusals met and how to run it aga
 
 ## Not decided here
 
-- Size: 617 KB for the classic example (575 KB before k27's linked collections, 591 KB
-  before k28's `MessageFormat`, 22 KB of which a program formatting one message pays). Where it
+- Size: 655 KB for the classic example (575 KB before k27's linked collections, 591 KB
+  before k28's `MessageFormat`, 22 KB of which a program formatting one message pays, 617 KB
+  before k29's `Normalizer`, whose tables are 23 KB: `.kb/unicode-normalization.md`). Where it
   goes (the 50 `constraint` overloads are not it: only the three called are lowered) is
   worth a `--emit-size-report` once the program runs unpatched.
 - YAVI itself was not changed (user, 2026-11-19: it may be, where the change is right for
   YAVI too). None of the gaps is YAVI's doing: each is a JDK class or a rule of the
   language the front end lacked. The one candidate, skipping `Normalizer` for a string
-  that cannot change, is noted in `.todo/k29`.
+  that cannot change, was not taken (k29): the library's own scan below the form's first
+  code point does that, and the call's code and tables travel either way.
