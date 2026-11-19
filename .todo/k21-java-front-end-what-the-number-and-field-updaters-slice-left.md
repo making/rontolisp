@@ -14,12 +14,12 @@ program's own); the three field updaters; `ExecutorService.invokeAll` with a lim
 What follows is what k01 left that k08 did not take, and what k08 found.
 
 - **`java.util.concurrent`, not there**: `PriorityBlockingQueue` and `DelayQueue` (no
-  `PriorityQueue` yet: `.todo/k12`), `ConcurrentSkipListMap` / `Set` (no `TreeMap`), a
+  `PriorityQueue` yet: `.todo/k26`), `ConcurrentSkipListMap` / `Set` (no `TreeMap`), a
   `Timer`'s `schedule` of a `Date` (no `java.util.Date`).
 - **What a field updater does not take** (`deviations.md`; `Updaters3.java` of the k08
   probes holds a JDK's answers): a class literal of a primitive or an array type
   (`int.class` is `Must be reference type`, `int[].class` an updater; the parser reads
-  no such literal: `.todo/k12`, a `Class` as a value), a name that is no constant, a
+  no such literal: `.todo/k26`, a `Class` as a value), a name that is no constant, a
   field the calling class cannot read (refused by name where a JDK throws
   `RuntimeException: IllegalAccessException: class Near cannot access a member of class
   Far with modifiers "private volatile"` when the call runs), and `newUpdater` behind a
