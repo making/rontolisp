@@ -7083,6 +7083,12 @@ cases:
           }
 
           static void row(String what, Iterable<?> source) {
+              row(what, source, false);
+          }
+
+          // sorted: a JDK walks an immutable map of two entries in an order that changes
+          // from one run to the next
+          static void row(String what, Iterable<?> source, boolean sorted) {
               Spliterator<?> s = source.spliterator();
               StringBuilder line = new StringBuilder(what + ": " + marks(s));
               line.append(", size ").append(s.estimateSize()).append(" exact ").append(s.getExactSizeIfKnown());
@@ -7090,6 +7096,9 @@ cases:
               boolean one = s.tryAdvance(seen::add);
               line.append(", advanced ").append(one).append(" size ").append(s.estimateSize());
               s.forEachRemaining(seen::add);
+              if (sorted) {
+                  seen.sort((a, b) -> String.valueOf(a).compareTo(String.valueOf(b)));
+              }
               line.append(", ").append(seen).append(" size ").append(s.estimateSize()).append(" again ").append(s.tryAdvance(seen::add));
               System.out.println(line);
           }
@@ -7170,7 +7179,7 @@ cases:
               row("Map.of keySet", Map.of("a", 1).keySet());
               row("Map.of values", Map.of("a", 1).values());
               row("Map.of 1 entrySet", Map.of("a", 1).entrySet());
-              row("Map.of 2 entrySet", Map.of("a", 1, "b", 2).entrySet());
+              row("Map.of 2 entrySet", Map.of("a", 1, "b", 2).entrySet(), true);
               row("Arrays.asList", Arrays.asList(4, 5));
               row("nCopies", Collections.nCopies(2, "n"));
               row("emptyList", Collections.emptyList());
