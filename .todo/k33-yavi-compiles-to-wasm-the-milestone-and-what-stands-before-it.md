@@ -2,7 +2,7 @@
 
 Difficulty: High
 
-Asked by the user (2026-11-19) with `.todo/k24`, whose mechanism is done
+Asked by the user (2026-11-19) with k24, whose mechanism is done
 (`.kb/java-frontend.md`, "A library from the source path"): **a Java program that uses YAVI
 (`am.ik.yavi:yavi`, Apache-2.0) compiles to wasm and prints what `java` prints.** This
 item holds the measurement and the order; each gap is an item of its own.
