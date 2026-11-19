@@ -5,7 +5,7 @@ Difficulty: Medium
 k32 (2026-11-20) gave the source path its surfaces: the Maven plugin's `wasm` goal reads a
 project's dependencies from their sources jars, and `-e` and a session read the roots
 (`.kb/java-frontend.md`, "A library from the source path"; `.kb/jvm-export.md`, "The plugin's
-`wasm` goal"). Left, none on YAVI's path (`.todo/k33`):
+`wasm` goal"). Left, none on YAVI's path (`.kb/java-frontend.md`, "YAVI compiled to wasm"):
 
 - **A class declared in a file named after another class** is found only once that file
   was read (measured in k24: `lib.Hidden` in `lib/Lists.java` is `cannot find symbol`

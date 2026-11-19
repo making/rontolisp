@@ -4,7 +4,8 @@ Difficulty: Medium
 
 Found 2026-11-20 while measuring YAVI's schema example behind k30 (the edits around
 `core/UntypedInput`'s table left it one entry). Neither shape is on the milestone's
-path (`.todo/k33`: the table has twelve entries); both are Java a compiler takes.
+path (`.kb/java-frontend.md`, "YAVI compiled to wasm": the table has twelve entries); both
+are Java a compiler takes.
 
 1. **One argument that is a call holding a lambda or a method reference, given for a
    variable arity parameter**:

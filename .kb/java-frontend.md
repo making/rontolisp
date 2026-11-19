@@ -51,8 +51,9 @@ collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
 as the program reaches it, annotation types and type annotations, an exact method
 reference in a call's applicability: k24 (2026-11-19); what comes after is `.todo/k15`,
 `k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22` and `k26` (what k00, k11, k06, k07, k08,
-k10 and k12 left) and `k33` (what stands between k24 and YAVI compiled to
-wasm: `.todo/k33` holds the order); the Maven plugin's `wasm` goal reading a project's
+k10 and k12 left); YAVI compiled to wasm in both of its styles, the milestone k24 was
+asked for, and where its bytes go: k33 (2026-11-20; "YAVI compiled to wasm" below); the
+Maven plugin's `wasm` goal reading a project's
 dependencies from their sources jars, a session reading the source path: k32 (2026-11-20;
 what it left is `.todo/k44`); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
 `java.text.MessageFormat`: k28 (2026-11-19); `java.text.Normalizer` over the normalization
@@ -307,8 +308,8 @@ k37 (2026-11-20).
 **Invariant: a library a Java program uses is its SOURCE, lowered with the program on every
 backend as far as the program reaches it; what the program reaches and the subset lacks
 is refused by name where it is reached, never where a class is read.** Asked for YAVI
-(`.todo/k33` holds the milestone and the order of what stands before it; the measurement
-is `.todo/artefacts/k24-java-front-end-a-program-that-uses-an-existing-library/`).
+("YAVI compiled to wasm" below holds the milestone; the measurement is
+`.todo/artefacts/k24-java-front-end-a-program-that-uses-an-existing-library/`).
 
 - **Source, not bytecode.** A dependency's `-sources.jar` (or a directory) is read through
   the same `JavaFiles` as the program's tree (`JavaFiles.library`, a path below a root),
@@ -399,6 +400,67 @@ is `.todo/artefacts/k24-java-front-end-a-program-that-uses-an-existing-library/`
   (`java-spec.yaml` `a-program-uses-a-library-read-as-source-from-its-source-path`:
   `library:` is zipped to a sources jar for the four legs and compiled by javac for the
   JDK leg, `provided:` is what javac alone reads).
+
+## YAVI compiled to wasm (2026-11-20, k33)
+
+**A program over YAVI (`am.ik.yavi:yavi:0.18.0`, Apache-2.0) compiles from the unpatched
+coordinates and prints a JDK's lines on the interpreter, the JVM, wasm and the component,
+in both of the library's styles**: `ValidatorBuilder` since k29 (2026-11-19), the schema
+(`Yavi.schema()` .. `fromMap`) since k37 (2026-11-20). This was the milestone k24's
+mechanism was asked for.
+
+- **The examples**, each checked in `examples.yaml` on the four (`javaSourceDep`):
+  `examples/java/yavi/Member.java` (wasm 662,980 B) and `examples/java/yavi/Booking.java`
+  -- a schema of a string, an enum, a `LocalDate` and an integer read from a map and,
+  through `readingParameters()`, from a form's strings: wasm 1,280,340 B, the component
+  1,284,722, the jar 464,923; on the exec jar the interpreter 7.5 s, `-o booking.wasm`
+  15.3 s. Both are written here, like the fixture. The Maven plugin builds such a project
+  (`jvm-export.md`, "The plugin's `wasm` goal").
+- **What stood between** (each fixed for every program, in the order met): annotations
+  and the rules of the language under "A library from the source path"; the linked
+  collections (k27), `MessageFormat` (k28), `Normalizer` (k29); a `Class` as a value and
+  four rules of inference (k30); `java.math` (k31), `java.time` (k35), `UUID` (k36),
+  `java.util.Date` and `java.sql` (k37), `StreamSupport` (k38). The refusals by number:
+  `.todo/artefacts/k24-java-front-end-a-program-that-uses-an-existing-library/README.md`.
+  YAVI was not changed.
+- **Where the bytes go** (`-Drontolisp.wasm.debug-func-sizes`, the functions by what they
+  belong to; the scripts and every column:
+  `.todo/artefacts/k33-yavi-compiles-to-wasm-the-milestone-and-what-stands-before-it/README.md`):
+
+  | | `Member` | `Booking` |
+  |---|---|---|
+  | the file | 662,980 | 1,280,340 |
+  | data section | 146,506 | 230,571 |
+  | YAVI's functions | 47,762 | 186,124 |
+  | the regex engine | 130,631 | 132,255 |
+  | `java.util` | 54,622 | 92,155 |
+  | `java.time`, `java.math` | 0 | 127,259 |
+  | `java.net` and the URI runtime | 0 | 29,554 |
+  | the library's rest | 29,286 | 46,126 |
+  | lambdas | 46,861 | 55,945 |
+  | dispatch | 16,151 | 92,578 |
+  | the top level and the program | 7,032 | 34,056 |
+  | the runtime's rest | 175,393 | 236,870 |
+
+  YAVI itself is 7 % of the classic example and 15 % of the schema one: the fifty
+  `constraint` overloads are not it, only what is called is lowered. The runtime under any
+  program and the regex engine are 46 % of the first. The data section has no such dump.
+- **The regex engine is in every YAVI program** (130 KB, `regex-engine.md`, "Measured"):
+  a string constraint reaches `CharSequenceConstraint`'s three static patterns and
+  `VariantOptions`' `replaceAll`. Without the three patterns the classic example is 937 B
+  smaller and the engine is still there.
+- **A schema pays for every type YAVI reads an input as**, whichever it asks for:
+  `core/UntypedInput` holds them in one table and one method. A schema of a string and an
+  integer is 1,216,741 B; 951,244 (-21.8 %) over a copy of YAVI without the table of the
+  types read from their text, the `java.util.Date` / `java.sql` arm and the `Year` arm;
+  889,037 (-26.9 %) without the conversion of a number through `BigDecimal` too. Splitting
+  that reader by the type asked for is a change to YAVI's design and the user's to decide
+  (`.todo/k46`); the library classes were owed either way.
+- **54 KB of `Booking` is a dispatcher no Java program calls**: `_dispatch_spread`, one case
+  per callable, with `_apply` and `_eval`. `java.net.URI`'s runtime (`eval/uri.lisp`) has a
+  parameter named `set`, which the backends' gate takes for a use of the function `set`
+  (`.todo/k45`). The `URI` entry of the table costs the schema above 108,815 B, 29,553 of
+  them its own code.
 
 ## A session (2026-11-17, j74)
 
@@ -2323,7 +2385,7 @@ no object.** What YAVI's schema example asked (`Map<Class<?>, ..>`, `type == Map
   32,970 (the function over every held class, the seven arrays a vector tells with
   their components, each with its test and the classes above it); the corpus case
   327,584. YAVI's schema example, its source edited around the five library classes
-  still missing (`.todo/k33`), is 1,009,805 and prints a JDK's lines on four backends.
+  then missing, is 1,009,805 and prints a JDK's lines on four backends.
 
 ## Static initialization (2026-11-17)
 
