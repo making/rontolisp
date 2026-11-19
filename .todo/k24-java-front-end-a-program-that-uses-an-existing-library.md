@@ -42,7 +42,7 @@ wasm and prints what `java` prints.**
     `META-INF/services`. A program never names it.
 - No Java file names Kotlin. Kotlin, kotlin-reflect and coroutines are optional
   dependencies, used by `src/main/kotlin` only.
-- `java.time` beyond `Duration` is not in the front end yet (`.todo/k12`). `ValidatorBuilder`
+- `java.time` beyond `Duration` is not in the front end yet (`.todo/k26`). `ValidatorBuilder`
   has a `_localDate`-style method for every temporal type, so lowering the builder whole
   reaches all of `java.time` even for a program that validates one string.
 
@@ -92,7 +92,7 @@ wasm and prints what `java` prints.**
    network or `~/.m2`: the README's first example (`ValidatorBuilder`, `constraint`,
    `validate`, the violations' messages), compiled with `--target wasm`.
    - List every refusal it hits by name.
-   - File each gap as its own Todo (`java.time` joins `.todo/k12`; `MessageFormat`,
+   - File each gap as its own Todo (`java.time` joins `.todo/k26`; `MessageFormat`,
      `Normalizer` and the rest are new) and order them by what the milestone needs.
 3. Docs: `doc/en/java/` and `doc/ja/java/`, mirrored. Explain how to use a library and what
    decides whether it works ("only what the front end supports", with the refusal a
