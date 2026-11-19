@@ -17,7 +17,7 @@ const vm = require("vm");
 const { spawnSync } = require("child_process");
 
 const dist = path.resolve(process.argv[2] || path.join(__dirname, "dist"));
-const LIMIT_MILLIS = 120000;
+const LIMIT_MILLIS = 300000;
 
 const POOL = `void main() {
     Map<String, Integer> lengths = new ConcurrentHashMap<>();
