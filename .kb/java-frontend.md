@@ -38,8 +38,10 @@ field hiding one above it and `super.x`: k01 (2026-11-18); the HTTP client
 (2026-11-18); the HTTP server (`com.sun.net.httpserver` over the program's own
 `%http-serve-begin`, a wasi:http component under `--component`): k04 (2026-11-19); the
 time limits of the HTTP client over fetch's two timeouts, `java.time.Duration` and the
-members j98 left refused that a line of Java answers: k05 (2026-11-19); what comes after
-is `.todo/k06`, `k07`, `k08`, `k11` and `k12` (what j99, k00, k01, k04 and k05 left).
+members j98 left refused that a line of Java answers: k05 (2026-11-19); the flow's errors
+of a class and the classes in it in the order a compiler reports them: k06 (2026-11-19);
+what comes after is `.todo/k07`, `k08`, `k12`, `k15`, `k16` and `k17` (what k00, k01,
+k05, k11 and k06 left).
 
 ## Where it sits
 
@@ -1525,7 +1527,7 @@ virtual call can run --, classes used):
 - Not the language's: a run-time error inside an eager initialization surfaces before `main`
   (reported as the JDK reports an uncaught one), and an error the run time raises inside any
   initialization is neither wrapped in `ExceptionInInitializerError` nor remembered by the
-  class (stated in `deviations.md`, `.todo/k06`).
+  class (stated in `deviations.md`, `.todo/k17`).
 
 ## Exceptions (2026-11-17, j73; the entry and the catch: j82)
 
@@ -1667,7 +1669,7 @@ virtual call can run --, classes used):
   77,358. The mark is free; the 31 KB are the thrown object at the later use, the j73
   entry's cost again. What it would buy without them -- the later use raising the run
   time's TEXT -- is a `NoClassDefFoundError` with no cause, after a first error that is
-  still not wrapped: `.todo/k06`.
+  still not wrapped: `.todo/k17`.
 - **`charAt` is one read** (j88): `(let* ((c (%string-code s i))) (if (< c 0)
   (%java-string-index i s) c))`. `%string-code` (`LispNames.STRING_CODE`,
   [string-index-cost.md](string-index-cost.md)) answers the character's code, -1 outside
@@ -1695,7 +1697,7 @@ virtual call can run --, classes used):
   (`%condition-report-str`, `%signal-text`, `%seq-to-string`, `%subseq-runtime`, the string
   stream: 8.5 KB), the rest the program's classes and the run time. The first three are the
   pipeline's price for a condition class with a `:report` ([error-handling.md](error-handling.md),
-  "A condition's `:report` is what PRINTS it"), `.todo/k06`'s lead.
+  "A condition's `:report` is what PRINTS it"), `.todo/k17`'s lead.
 - **The run time's errors are the library's classes at every place a program can see one**
   (j88, probed against a JDK 25 on four backends): class, message, cause, `toString()`,
   the same object thrown again and as another's cause, through two clauses and a
@@ -1772,11 +1774,11 @@ virtual call can run --, classes used):
     the `Charset` (`charsetsNamed`); the call still throws what the member taking the
     name does (`UnsupportedEncodingException`), or a valid `catch` of it would be
     refused.
-  - **Not as javac**: `Object.clone()` and `finalize()` are no members here. A type
-    variable thrown is named without the `where` lines javac adds: an error is one line
-    (`error: File:line:col: message`, no source line or caret under it), so no error
-    carries what javac writes under its first line, while a warning is printed whole
-    (`JavaWarnings`) -- not a gap of this message (k06).
+  - **Not as javac**: `Object.clone()` and `finalize()` are no members here
+    (`.todo/k16`). A type variable thrown is named without the `where` lines javac adds:
+    an error is one line (`error: File:line:col: message`, no source line or caret under
+    it), so no error carries what javac writes under its first line, while a warning is
+    printed whole (`JavaWarnings`) -- not a gap of this message (k06).
 - **An exit a cleanup takes** (j99): `try { return a(); } finally { return 4; }` is
   `(block f (unwind-protect (return-from f ..) (return-from f 4)))`, which the JVM backend
   compiled without end -- each exit inlined the cleanup with its region still open
@@ -1835,7 +1837,7 @@ virtual call can run --, classes used):
 
   The programs and how each variant was made:
   `.todo/artefacts/j88-java-front-end-what-the-uncaught-report-and-catch-slice-left/`.
-  What is left of the list j73 made is `.todo/k06`'s: the host's failures in an
+  What is left of the list j73 made is `.todo/k17`'s: the host's failures in an
   initializer, `StackOverflowError`, the `NullPointerException` message, the frames.
 - **`getStackTrace()` answers an empty array, after `setStackTrace` too** (j98). A slot
   of `Throwable` holding what a program set was 275 B of wasm in every program that
