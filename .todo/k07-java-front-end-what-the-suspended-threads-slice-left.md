@@ -81,8 +81,6 @@ left, the first two measured:
   where no thread can go on (`%http-serve-step`), nested in the waiting one's call.
 - **`getState()` never answers `BLOCKED`**: on wasm a thread waiting to enter a monitor is
   now known (the monitor's seventh slot); the host variant still cannot tell.
-- The thread cases that flake under load, and the interpreter's lost wake-up that hangs
-  `JavaSpecE2eTest`, moved to `.todo/k14`.
 
 ## Done when
 

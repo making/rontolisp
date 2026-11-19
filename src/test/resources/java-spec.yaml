@@ -7445,39 +7445,53 @@ standalone:
               pong.join();
           }
 
-          // loops only another thread ends: by an interrupt, a volatile flag, an atomic
+          // loops only another thread ends: by an interrupt, a volatile flag, an atomic. A
+          // loop is ended once it has turned, which it says through an interface, so that
+          // what lets another thread go on is the loop's test alone
           static void stops() throws InterruptedException {
+              CountDownLatch first = new CountDownLatch(1);
+              Runnable firstTurned = first::countDown;
               Thread interrupted = new Thread(() -> {
                   long turns = 0;
                   while (!Thread.currentThread().isInterrupted()) {
-                      turns++;
+                      if (turns++ == 0) {
+                          firstTurned.run();
+                      }
                   }
                   System.out.println("interrupted after some turns " + (turns > 0));
               });
               interrupted.start();
-              Thread.sleep(5);
+              first.await();
               interrupted.interrupt();
               interrupted.join();
+              CountDownLatch second = new CountDownLatch(1);
+              Runnable secondTurned = second::countDown;
               Thread flagged = new Thread(() -> {
                   long turns = 0;
                   while (running) {
-                      turns++;
+                      if (turns++ == 0) {
+                          secondTurned.run();
+                      }
                   }
                   System.out.println("flag read after some turns " + (turns > 0));
               });
               flagged.start();
-              Thread.sleep(5);
+              second.await();
               running = false;
               flagged.join();
+              CountDownLatch third = new CountDownLatch(1);
+              Runnable thirdTurned = third::countDown;
               Thread polling = new Thread(() -> {
                   long turns = 0;
                   while (!asked.get()) {
-                      turns++;
+                      if (turns++ == 0) {
+                          thirdTurned.run();
+                      }
                   }
                   System.out.println("atomic read after some turns " + (turns > 0));
               });
               polling.start();
-              Thread.sleep(5);
+              third.await();
               asked.set(true);
               polling.join();
           }
@@ -7562,7 +7576,8 @@ standalone:
           }
 
           // a pool: its thread waits for the next task, keeping what it holds; closing it
-          // waits for its tasks; of two tasks the one that ends in time is answered
+          // waits for its tasks; of two tasks the one that ends is answered, and the one
+          // that would wait for ever is interrupted
           static void pools() throws Exception {
               Future<Integer> answer;
               CountDownLatch added = new CountDownLatch(1);
@@ -7582,20 +7597,21 @@ standalone:
               single.submit(() -> kept.set(Thread.currentThread().getName())).get();
               Thread.sleep(5);
               System.out.println("kept " + single.submit(() -> kept.get()).get());
+              CountDownLatch never = new CountDownLatch(1);
               Callable<String> slow = () -> {
-                  Thread.sleep(200);
+                  never.await();
                   return "slow";
               };
               Callable<String> fast = () -> {
                   Thread.sleep(5);
                   return "fast";
               };
-              System.out.println("any " + single.invokeAny(List.of(fast), 1, TimeUnit.SECONDS));
+              System.out.println("any " + single.invokeAny(List.of(fast), 60, TimeUnit.SECONDS));
               single.shutdown();
               ExecutorService two = Executors.newFixedThreadPool(2);
-              System.out.println("any of two " + two.invokeAny(List.of(slow, fast), 1, TimeUnit.SECONDS));
+              System.out.println("any of two " + two.invokeAny(List.of(slow, fast), 60, TimeUnit.SECONDS));
               two.shutdownNow();
-              System.out.println("ended " + two.awaitTermination(1, TimeUnit.SECONDS));
+              System.out.println("ended " + two.awaitTermination(60, TimeUnit.SECONDS));
           }
 
           // the threads of a barrier meet twice
@@ -8369,8 +8385,13 @@ standalone:
               pool.execute(waiting);
               gate.countDown();
               pool.shutdown();
-              System.out.println(pool.awaitTermination(60, TimeUnit.SECONDS) + " " + pool.getCompletedTaskCount() + " "
-                      + pool.getTaskCount() + " " + shown(pool));
+              boolean ended = pool.awaitTermination(60, TimeUnit.SECONDS);
+              // a JDK's pool has ended a moment before its text counts its last thread out
+              while (!shown(pool).contains("pool size = 0")) {
+                  Thread.sleep(1);
+              }
+              System.out.println(ended + " " + pool.getCompletedTaskCount() + " " + pool.getTaskCount() + " "
+                      + shown(pool));
               Collections.sort(ran);
               System.out.println(ran);
               attempt(() -> new ThreadPoolExecutor(2, 1, 0, TimeUnit.SECONDS, new LinkedBlockingQueue<>()));
@@ -10048,10 +10069,13 @@ standalone:
           }
 
           public static void main(String[] args) throws Exception {
-              // a task runs at its time, the soonest first, whichever was handed over first
+              // a task runs at its time, the soonest first, whichever was handed over first;
+              // what the program says of a task before its run, the task waits for
               ScheduledExecutorService one = Executors.newSingleThreadScheduledExecutor();
               List<String> seen = Collections.synchronizedList(new ArrayList<>());
+              CountDownLatch said = new CountDownLatch(1);
               ScheduledFuture<String> late = one.schedule(() -> {
+                  said.await();
                   seen.add("late");
                   return "late on " + Thread.currentThread().getName();
               }, 600, TimeUnit.MILLISECONDS);
@@ -10061,6 +10085,7 @@ standalone:
               ScheduledFuture<?> far = one.schedule(() -> System.out.println("never"), 1, TimeUnit.HOURS);
               System.out.println(late.isDone() + " " + far.getDelay(TimeUnit.MINUTES) + " " + (soon.compareTo(late) < 0) + " "
                       + late.compareTo(late) + " " + far.cancel(false) + " " + far.isCancelled());
+              said.countDown();
               System.out.println(late.get() + " " + soon.get() + " " + seen + " " + soon.isDone());
 
               // a task that repeats runs until it is cancelled, or throws
@@ -10096,9 +10121,12 @@ standalone:
               System.out.println(plain.get());
 
               // after shutdown() a task waiting for its time still runs, one that repeats does not
-              ScheduledFuture<?> pending = one.schedule(
-                      () -> System.out.println("after the shutdown on " + Thread.currentThread().getName()), 300,
-                      TimeUnit.MILLISECONDS);
+              CountDownLatch shut = new CountDownLatch(1);
+              ScheduledFuture<?> pending = one.schedule(() -> {
+                  shut.await();
+                  System.out.println("after the shutdown on " + Thread.currentThread().getName());
+                  return null;
+              }, 300, TimeUnit.MILLISECONDS);
               ScheduledFuture<?> repeating = one.scheduleAtFixedRate(() -> System.out.println("never again"), 1, 1,
                       TimeUnit.HOURS);
               one.shutdown();
@@ -10110,6 +10138,7 @@ standalone:
                   System.out.println("rejected");
               }
               System.out.println(one.isShutdown() + " " + repeating.isCancelled() + " " + pending.isDone());
+              shut.countDown();
               System.out.println(one.awaitTermination(60, TimeUnit.SECONDS) + " " + one.isTerminated() + " " + pending.isDone());
 
               // a pool of two threads; a task cancelled is taken out of it when the pool is told so
@@ -10145,12 +10174,19 @@ standalone:
               attempt(() -> timer.schedule(nothing, 1, 0));
               System.out.println(nothing.cancel() + " " + nothing.scheduledExecutionTime());
               attempt(() -> timer.schedule(nothing, 1));
+              CountDownLatch refused = new CountDownLatch(1);
               CountDownLatch ran = new CountDownLatch(1);
               // what a class does not inherit hides nothing: the state and the period are the program's
               String state = "once";
               int period = 20;
               TimerTask once = new TimerTask() {
                   public void run() {
+                      try {
+                          refused.await();
+                      }
+                      catch (InterruptedException e) {
+                          return;
+                      }
                       System.out.println(state + " on " + Thread.currentThread().getName() + ", a daemon "
                               + Thread.currentThread().isDaemon());
                       ran.countDown();
@@ -10158,6 +10194,7 @@ standalone:
               };
               timer.schedule(once, period);
               attempt(() -> timer.schedule(once, period));
+              refused.countDown();
               ran.await();
               System.out.println(once.cancel() + " " + (once.scheduledExecutionTime() > 0));
               CountDownLatch ticks = new CountDownLatch(3);
@@ -10174,7 +10211,15 @@ standalone:
               };
               timer.schedule(repeated, 0, 15);
               ticks.await();
-              Thread.sleep(60);
+              // the timer's thread meets the cancelled task at its next time, ahead of a task
+              // whose time is after it, and runs it no more
+              CountDownLatch passed = new CountDownLatch(1);
+              timer.schedule(new TimerTask() {
+                  public void run() {
+                      passed.countDown();
+                  }
+              }, 30);
+              passed.await();
               System.out.println(count[0] + " " + repeated.cancel() + " " + timer.purge());
               TimerTask later = new TimerTask() {
                   public void run() {

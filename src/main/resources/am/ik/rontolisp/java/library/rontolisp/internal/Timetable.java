@@ -205,18 +205,12 @@ public final class Timetable {
         }
     }
 
-    /** The task due, taken out of the table; null when none is. */
-    private Runnable due() {
-        if (this.entries.isEmpty() || this.entries.get(0).time - System.nanoTime() > 0) {
-            return null;
-        }
-        this.busy++;
-        return this.entries.remove(0).task;
-    }
-
     /**
-     * The task a thread runs next; null when the thread is to end. The thread that had
-     * no task longest waits for the soonest one's time, the others for their turn.
+     * The task a thread runs next, taken out of the table; null when the thread is to
+     * end. The thread that had no task longest waits for the soonest one's time, the
+     * others for their turn. ONE reading of the clock says both whether that task is due
+     * and how long to wait for it: by a second reading the time may have come, and a
+     * wait for no time is a wait with no limit, which nothing would end.
      */
     private synchronized Runnable next() {
         Thread current = Thread.currentThread();
@@ -225,17 +219,17 @@ public final class Timetable {
         }
         try {
             while (true) {
-                boolean first = this.line.get(0) == current;
-                Runnable task = first ? due() : null;
-                if (task != null) {
-                    return task;
+                boolean timed = this.line.get(0) == current && !this.entries.isEmpty();
+                long pause = timed ? this.entries.get(0).time - System.nanoTime() : 0;
+                if (timed && pause <= 0) {
+                    this.busy++;
+                    return this.entries.remove(0).task;
                 }
                 if (this.entries.isEmpty() && this.closed) {
                     return null;
                 }
                 try {
-                    if (first && !this.entries.isEmpty()) {
-                        long pause = this.entries.get(0).time - System.nanoTime();
+                    if (timed) {
                         wait((pause + 999999L) / 1000000L);
                     }
                     else {

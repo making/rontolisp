@@ -2080,6 +2080,26 @@ thread suspended under it asked `Support.oneStack()` and did what one stack coul
   overrides every member over its table; its tasks are `FutureTask`s (`runAndReset` for
   one that repeats). After `shutdown()` a task waiting for its time still runs and one
   that repeats is cancelled, as a JDK's two policies default.
+  **A thread of the table reads the clock ONCE a round** (k14, 2026-11-19): that reading
+  says whether the soonest task is due and, when it is not, how long to wait. Until then
+  `next()` read it twice -- `due()`, then the pause -- and a task whose time came between
+  the two was neither taken nor waited for: a pause of 0 down to -2 ms rounds to
+  `wait(0)`, a wait with no limit, and one below that is `wait` of a negative number,
+  which throws and ends the thread. Either way the program never ended (`main` in a
+  `get()` or a latch's `await()`), on every backend, the library being one source. This
+  was the "lost wake-up" that stopped full test runs in
+  `a-scheduled-pool-and-a-timer-run-tasks-at-their-times` on the interpreter; nothing was
+  wrong in the park, monitor or condition-variable path. Measured on 64 cores with
+  `.todo/artefacts/k14-java-threads-a-lost-wake-up-hangs-the-interpreter-and-flaky-thread-cases/run.sh`
+  (24 JVMs at once, four copies of the case each, the interpreter; load average 15 to 40
+  at the start with a full test run beside it, 94 to 107 at the end): 13 and 26 of 96
+  copies left waiting before, a print in `next()` showing 30 pauses of -20 us to -21 ms
+  in the second run (13 a `wait(0)`, 17 a negative one); 0 of 384 after (four runs, load
+  average 61 to 245). Every other wait with
+  a limit in the library tests `left <= 0` on the reading it waits by.
+  `JavaSpecE2eTest#aTaskWhoseTimeComesBetweenTwoReadingsOfTheClockRuns` forces it: the
+  interpreter's `%nano-time` redefined to answer a millisecond later at every reading, so
+  a task 1.5 ms away is not due at one reading and overdue at the next.
 - **A pool is a core size, a most size, a queue and a handler** (j89; until then a core
   size and a flag). A task gets a new worker below the core size, else waits in the
   queue, else gets a new worker below the most size, else the handler is asked -- outside
@@ -2509,7 +2529,24 @@ first line and the status 1 on every leg, `at:` the end of the location line und
 interpreter and the JVM; `stderr:` the whole standard error but a JDK's frame
 lines); a `refused:` case is the scaffold with the case's statements, which the JDK has to refuse with
 `error` at that line and the front end at the same line with a message starting the same. In
-process, part of `./mvnw test`. `JavaLoweringTest` (the table as emitted forms, names and constants, the
+process, part of `./mvnw test`. The interpreter's `standalone:` leg has the 300 s a process of the
+other legs has (`CliStack.callWithin`): a program whose threads wait for ever fails its leg
+by name and the run goes on (until k14 it stopped the run: full run 19, 50 minutes).
+**No thread case orders two threads by a sleep or a delay** (k14, 2026-11-19): what one
+thread prints before another does is held by a latch the other waits for, or by a wait for
+the state the line prints (`while (..) Thread.sleep(1)`); a sleep stays where it IS the
+subject (a monitor held across one, a wait's limit, a task's time). Seen under load before:
+`Turns`' spinning loops stopped after `Thread.sleep(5)` with no turn taken (now each says
+its first turn through a `Runnable` -- an interface, so that the loop's turn on wasm is
+still its test's alone: the same loop over a plain field keeps its turn there, measured);
+`Timed`'s lines around a 20 ms timer task and a `purge()` after `Thread.sleep(60)`, 6 of
+32 copies on the interpreter, 96 programs at once, load average 11 rising to 63 (now 0 of
+408 copies of the thread cases, 14 rising to 152; `check.sh` beside `run.sh` in the
+artefacts named under "java.util.concurrent");
+and under a JDK a `ThreadPoolExecutor`'s text saying `pool size = 1` after
+`awaitTermination` answered true (the case waits for the text). A limit whose expiry would
+change a line is 60 s, never 1.
+`JavaLoweringTest` (the table as emitted forms, names and constants, the
 refusals and the compile errors with their positions;
 `theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`; `aProgramOfSeveralFilesIsReadFromItsSourceTree` over
 an in-memory `JavaFiles`: the refusals of the source tree, the imports and the access). A

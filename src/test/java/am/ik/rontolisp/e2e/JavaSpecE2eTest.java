@@ -10,6 +10,7 @@ import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -29,6 +30,7 @@ import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.reader.Features;
 import am.ik.rontolisp.reader.LispReadException;
+import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.CliStack;
 import am.ik.rontolisp.testsupport.HostWasmtime;
 import am.ik.rontolisp.testsupport.ThreadStdio;
@@ -37,6 +39,7 @@ import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DynamicContainer;
 import org.junit.jupiter.api.DynamicNode;
 import org.junit.jupiter.api.DynamicTest;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.Execution;
@@ -172,6 +175,9 @@ class JavaSpecE2eTest {
 		}
 
 	}
+
+	/** How long a program of a leg may run, in seconds. */
+	private static final int PROCESS_SECONDS = 300;
 
 	@TempDir
 	static Path workDir;
@@ -321,6 +327,49 @@ class JavaSpecE2eTest {
 		});
 	}
 
+	/**
+	 * A task of a scheduled pool runs although its time comes between two readings of the
+	 * clock. The clock is the test's here, a millisecond later at every reading, which
+	 * only the interpreter lets a test hold: a task some milliseconds and a half away is
+	 * not yet due at one reading and overdue at the next. A pool's thread that asked the
+	 * clock a second time for how long to wait then waited for no time at all, which is a
+	 * wait with no limit, and the program never ended -- what a loaded machine did to
+	 * {@code a-scheduled-pool-and-a-timer-run-tasks-at-their-times} with the real clock.
+	 */
+	@Test
+	void aTaskWhoseTimeComesBetweenTwoReadingsOfTheClockRuns() throws Exception {
+		String source = """
+				import java.util.concurrent.ScheduledThreadPoolExecutor;
+				import java.util.concurrent.TimeUnit;
+
+				public class Late {
+				    public static void main(String[] args) throws Exception {
+				        for (int halves = 1; halves <= 7; halves += 2) {
+				            ScheduledThreadPoolExecutor pool = new ScheduledThreadPoolExecutor(1);
+				            System.out.println(pool.schedule(() -> "ran", halves * 500, TimeUnit.MICROSECONDS).get());
+				            pool.shutdown();
+				        }
+				    }
+				}
+				""";
+		Path file = write("Late-INTERPRETER", "Late.java", source);
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		assertThat(CliStack.callWithin("java-spec-late", () -> {
+			LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8));
+			evaluator.eval(LispReader.readFromString("(defvar *readings* (cons 0 (rontolisp:make-mutex)))"));
+			evaluator.eval(LispReader.readFromString("""
+					(defun %nano-time ()
+					  (rontolisp:with-mutex ((cdr *readings*))
+					    (rplaca *readings* (+ (car *readings*) 1000000))
+					    (car *readings*)))
+					"""));
+			for (LispVal form : SourceLanguage.JAVA.read(source, Features.INTERPRETER, file.toString())) {
+				evaluator.eval(form);
+			}
+			return out.toString(StandardCharsets.UTF_8);
+		}, Duration.ofSeconds(60))).as("the program ended; it printed%n%s", out).contains("ran\nran\nran\nran\n");
+	}
+
 	/** What a process printed and how it ended. */
 	record Ended(String stdout, String stderr, int exit) {
 	}
@@ -367,7 +416,7 @@ class JavaSpecE2eTest {
 			}
 		});
 		String stdout = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-		if (!process.waitFor(300, TimeUnit.SECONDS)) {
+		if (!process.waitFor(PROCESS_SECONDS, TimeUnit.SECONDS)) {
 			process.destroyForcibly().waitFor();
 			throw new IllegalStateException("the process timed out");
 		}
@@ -435,7 +484,9 @@ class JavaSpecE2eTest {
 		ByteArrayOutputStream out = new ByteArrayOutputStream();
 		ByteArrayOutputStream err = new ByteArrayOutputStream();
 		try (ThreadStdio.Scope _ = ThreadStdio.err(err)) {
-			CliStack.call("java-spec", () -> {
+			// within the time a process of the other legs has: a program whose threads
+			// wait for ever fails its leg, and the run goes on
+			assertThat(CliStack.callWithin("java-spec", () -> {
 				LispEvaluator evaluator = new LispEvaluator(new PrintStream(out, true, StandardCharsets.UTF_8),
 						new ByteArrayInputStream(
 								(s.stdin() == null ? "" : s.stdin()).getBytes(StandardCharsets.UTF_8)));
@@ -454,8 +505,11 @@ class JavaSpecE2eTest {
 				catch (LispExitSignal exit) {
 					status[0] = exit.code();
 				}
-				return null;
-			});
+				return true;
+			}, Duration.ofSeconds(PROCESS_SECONDS)))
+				.as("standalone case '%s' on INTERPRETER ended within %d s; it printed%n%s", s.name(), PROCESS_SECONDS,
+						out)
+				.isPresent();
 		}
 		assertEnded(s, "INTERPRETER",
 				new Ended(out.toString(StandardCharsets.UTF_8), withoutRoot(err, s.stem() + "-INTERPRETER"), status[0]),
