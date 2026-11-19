@@ -668,8 +668,10 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		JavaClasses classes = new JavaClasses(JavaIntrinsics.LIBRARY, files, file, root, JavaTypes::new);
 		classes.session = session != null;
-		// a later buffer may ask the class of an array an earlier one widened
+		// a later buffer may ask the class of an array an earlier one widened, and the
+		// constants of an enum whose class object an earlier one made
 		classes.arrayTypes = session != null;
+		classes.enumConstants = session != null;
 		List<JavaClass> declared = classes.declare(tree, program);
 		if (session != null) {
 			// a class the buffer declares reads the session's variables and methods as
@@ -844,6 +846,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			lowerReached();
 		}
 		while (reached != this.loweredMethods.size() + this.loweredInits.size());
+		this.generationOver = true;
 		boolean runs = this.session == null && !(this.loaded && mainOf(launched()) == null);
 		LispVal entry = runs ? entry() : NIL;
 		List<LispVal> initialization = initialization();
@@ -2036,6 +2039,8 @@ final class JavaLowering implements JavaEmitter.Context {
 				forms.add(fieldFunction(name));
 			}
 		}
+		// ahead of the tests a class object asks for
+		classObjects(forms, deepestFirst);
 		for (JavaClass tested : this.interfaceTests) {
 			forms.add(interfaceTest(tested));
 		}
@@ -3580,7 +3585,7 @@ final class JavaLowering implements JavaEmitter.Context {
 							superclass == null ? this.objectType : this.currentClass.supertype(superclass));
 				}
 				case JavaSyntax.ClassLiteral literal:
-					throw unsupported(literal.pos(), "a class literal but compared with a class or before getName()");
+					return classLiteral(literal);
 				case Name name:
 					return read(name);
 				case QualifiedThis self: {
@@ -3794,6 +3799,10 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * array types it is an instance of, its own first.
 	 */
 	private LispVal arrayClass(ArrayType array) {
+		if (this.types.erased(array) instanceof ArrayType recorded && this.classes.arrayRecords.add(recorded)
+				&& this.classes.arrayClassValues && this.generationOver) {
+			this.classes.changed();
+		}
 		List<LispVal> names = new ArrayList<>();
 		names.add(string(simpleArrayName(array)));
 		for (String name : arraySupertypes(array)) {
@@ -4639,8 +4648,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 			JavaType a = this.types.erased(this.types.upward(left.type()));
 			JavaType b = this.types.erased(this.types.upward(right.type()));
-			if (!isOpen(left.type()) && !isOpen(right.type()) && !isSubtype(a, b) && !isSubtype(b, a)
-					&& !(isInterface(a) || isInterface(b))) {
+			if (!isOpen(left.type()) && !isOpen(right.type())
+					&& (!isSubtype(a, b) && !isSubtype(b, a) && !(isInterface(a) || isInterface(b))
+							|| distinctArguments(left.type(), right.type()))) {
 				throw error(pos, "incomparable types: " + left.type() + " and " + right.type());
 			}
 			// a box is its value, so two boxes of one value are one object: what the
@@ -4676,6 +4686,27 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private static boolean isInterface(JavaType type) {
 		return type instanceof ClassType declared && declared.declaration().isInterface;
+	}
+
+	/**
+	 * Whether two types are one class given type arguments no value has both of: at some
+	 * place each has a type that is neither a wildcard nor a type variable, and the two
+	 * differ ({@code Class<String>} and {@code Class<Integer>}).
+	 */
+	private static boolean distinctArguments(JavaType left, JavaType right) {
+		if (!(left instanceof ClassType a) || !(right instanceof ClassType b) || a.declaration() != b.declaration()
+				|| a.arguments().size() != b.arguments().size()) {
+			return false;
+		}
+		for (int i = 0; i < a.arguments().size(); i++) {
+			JavaType x = a.arguments().get(i);
+			JavaType y = b.arguments().get(i);
+			if (!(x instanceof Wildcard) && !(x instanceof Variable) && !(y instanceof Wildcard)
+					&& !(y instanceof Variable) && !x.equals(y)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private Typed conditional(Conditional conditional, @Nullable JavaType expected) {
@@ -5440,8 +5471,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		else if (written instanceof JavaSyntax.ClassLiteral literal && arguments.size() == 1
 				&& (reference.name().equals("isInstance") || reference.name().equals("cast"))) {
-			// no object stands for a class: Name.class::isInstance is the test of an
-			// object and Name.class::cast the cast of one
+			// no class object is made: Name.class::isInstance is the test of an object
+			// and Name.class::cast the cast of one
 			Expression object = new JavaSyntax.Lowered(pos, new Typed(parameters.get(0), this.objectType));
 			value = expression(
 					reference.name().equals("cast") ? new JavaSyntax.Cast(pos, literal.type(), object, List.of())
@@ -6610,8 +6641,8 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	/**
 	 * Whether an expression is a class: {@code getClass()} of an object or a class
-	 * literal. No object stands for a class; a class is read where it is compared with
-	 * another and where its name is asked.
+	 * literal. Compared with another such, or asked its name, it is read as that name and
+	 * no object is made; anywhere else it is the class object ({@link #classValue}).
 	 */
 	private static boolean isClass(@Nullable Expression expression) {
 		return expression instanceof JavaSyntax.ClassLiteral || (expression instanceof Call call
@@ -6632,8 +6663,14 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private ClassRead classRead(Expression written, boolean qualified) {
 		if (written instanceof JavaSyntax.ClassLiteral literal) {
-			if (!(type(literal.type()) instanceof ClassType named)) {
-				throw unsupported(literal.pos(), "a class literal of a type that is no class");
+			JavaType of = literalType(literal);
+			if (of instanceof ArrayType array) {
+				return new ClassRead(string(qualified ? descriptor(array) : simpleArrayName(array)),
+						this.types.erased(array), true);
+			}
+			if (!(of instanceof ClassType named)) {
+				// no object is of a primitive type's class: compared as its box is
+				return new ClassRead(string(of.toString()), boxOf(of), true);
 			}
 			JavaClass declaration = named.declaration();
 			return new ClassRead(string(qualified ? declaration.binaryName : declaration.simpleName()),
@@ -6692,6 +6729,375 @@ final class JavaLowering implements JavaEmitter.Context {
 		return type instanceof ClassType named ? named.declaration().simpleName() : type.toString();
 	}
 
+	// ---- a class as a value
+
+	private static final String CLASS = "java.lang.Class";
+
+	private static final LispSymbol ARRAY_CLASS = new LispSymbol("%array-class");
+
+	/** The bits of {@code Class}'s {@code kind}, as the library's source names them. */
+	private static final int CLASS_INTERFACE = 1;
+
+	private static final int CLASS_ARRAY = 2;
+
+	private static final int CLASS_PRIMITIVE = 4;
+
+	private static final int CLASS_ENUM = 8;
+
+	private static final int CLASS_RECORD = 16;
+
+	/** The class objects made before anything of the program runs. */
+	private List<LispVal> classInits = List.of();
+
+	/** Whether the functions made for the whole program are this pass's last. */
+	private boolean generationOver;
+
+	private ClassType classType(JavaType argument) {
+		return new ClassType(this.classes.library(CLASS), List.of(argument));
+	}
+
+	private static LispSymbol classVariable(String name) {
+		return JavaNames.symbol(name + "%class");
+	}
+
+	/** The variable holding the class object of a type, which the program then has. */
+	private LispSymbol classValue(JavaType type) {
+		JavaType erased = type instanceof Primitive ? type : this.types.erased(type);
+		if (erased instanceof ClassType named) {
+			erased = new ClassType(named.declaration().present(), List.of());
+			if (this.classes.enumConstants) {
+				enumValues(named.declaration());
+			}
+		}
+		if (this.classes.classValues.add(erased) && this.generationOver) {
+			this.classes.changed();
+		}
+		return switch (erased) {
+			case ClassType named -> classVariable(named.declaration().lispName());
+			case ArrayType array -> classVariable(descriptor(array));
+			default -> classVariable(erased.toString());
+		};
+	}
+
+	/**
+	 * The {@code values()} of an enum whose class object is held, which answers
+	 * {@code getEnumConstants()}: called by what holds the object, as a lambda's body is
+	 * by what makes the lambda, so that the enum is initialized ahead of it.
+	 */
+	private @Nullable Method enumValues(JavaClass declaration) {
+		if (!declaration.isEnum || declaration.declaration == null) {
+			return null;
+		}
+		this.classes.enumMethod(declaration, "values");
+		for (Method method : declaration.methods) {
+			if (method.isStatic && method.name.equals("values") && method.parameters.isEmpty()) {
+				called(method);
+				uses(declaration);
+				return method;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The type a class literal names: a class, an interface, an array type, a primitive
+	 * type or {@code void}.
+	 */
+	private JavaType literalType(JavaSyntax.ClassLiteral literal) {
+		TypeName written = literal.type();
+		JavaType named = written.name().equals("void") && written.dimensions() == 0 ? Primitive.VOID : type(written);
+		if (named instanceof Variable) {
+			throw error(literal.pos(), "cannot select from a type variable");
+		}
+		return named;
+	}
+
+	/** What {@code Class<..>} of a type's class names: a primitive type's box. */
+	private JavaType boxOf(JavaType type) {
+		return type == Primitive.VOID ? this.classes.libraryType("java.lang.Void")
+				: type instanceof Primitive primitive ? JavaIntrinsics.boxed(primitive, this.classes) : type;
+	}
+
+	/** {@code Name.class} as a value. */
+	private Typed classLiteral(JavaSyntax.ClassLiteral literal) {
+		JavaType named = literalType(literal);
+		return new Typed(classValue(named), classType(boxOf(named)));
+	}
+
+	/** {@code getClass()} as a value: the class object of what the value is. */
+	private Typed classOf(Call call) {
+		Typed object = call.target() == null ? thisValue(call.pos()) : expression(call.target(), null);
+		if (!object.type().isReference()) {
+			throw error(call.pos(), object.type() + " cannot be dereferenced");
+		}
+		JavaType erased = this.types.erased(this.types.upward(object.type()));
+		ClassType type = classType(new JavaType.Wildcard(erased, null));
+		if (erased instanceof ArrayType array) {
+			if (isExact(array)) {
+				return new Typed(call("if", object.form(), classValue(array), runtimeCall("npe")), type);
+			}
+			asksArrayClasses();
+			return new Typed(list(ARRAY_CLASS, object.form(), quote(arrayClass(array))), type);
+		}
+		if (!(erased instanceof ClassType named)) {
+			throw error(call.pos(), object.type() + " cannot be dereferenced");
+		}
+		JavaClass declaration = named.declaration().present();
+		if (this.classes.classOfs.add(declaration) && this.generationOver) {
+			this.classes.changed();
+		}
+		if (holdsArrays(declaration)) {
+			asksArrayClasses();
+		}
+		if (this.classes.enumConstants) {
+			for (JavaClass candidate : List.copyOf(this.classes.all())) {
+				if (candidate.isEnum && candidate.absent == null
+						&& (declaration == this.objectType.declaration() || candidate.isSubclassOf(declaration))) {
+					enumValues(candidate);
+				}
+			}
+		}
+		return new Typed(list(classOfName(declaration), object.form()), type);
+	}
+
+	private static LispSymbol classOfName(JavaClass declaration) {
+		return JavaNames.symbol(declaration.lispName() + "%class-of");
+	}
+
+	/** Whether a value typed by a class can be an array: every array is such a value. */
+	private boolean holdsArrays(JavaClass declaration) {
+		return declaration == this.objectType.declaration() || declaration.name.equals("java.io.Serializable")
+				|| declaration.name.equals("java.lang.Cloneable");
+	}
+
+	/**
+	 * Records that the program reads as a value the class of what can be an array its
+	 * static type does not tell.
+	 */
+	private void asksArrayClasses() {
+		asksArrayTypes();
+		if (!this.classes.arrayClassValues) {
+			this.classes.arrayClassValues = true;
+			this.classes.changed();
+		}
+	}
+
+	/**
+	 * The class objects the program has as values, and the functions choosing one by what
+	 * a value is. An object holds what the program asks of one: the classes above it
+	 * where {@code getSuperclass} or {@code isAssignableFrom} is reached, the interfaces
+	 * for the latter, the test for {@code isInstance} and {@code cast}, the constants for
+	 * {@code getEnumConstants}. Each is made after what it names.
+	 */
+	private void classObjects(List<LispVal> forms, List<JavaClass> deepestFirst) {
+		this.classInits = List.of();
+		if (this.classes.classValues.isEmpty() && this.classes.classOfs.isEmpty()) {
+			return;
+		}
+		JavaClass type = this.classes.library(CLASS);
+		Set<String> reached = new HashSet<>();
+		for (Method method : this.session != null ? type.methods : this.classes.reached) {
+			// a later buffer may ask of an object what the one making it did not
+			if (method.owner == type) {
+				reached.add(method.name);
+			}
+		}
+		if (reached.contains("getEnumConstants") && !this.classes.enumConstants) {
+			// what holds an enum's class object is lowered again calling its values()
+			this.classes.enumConstants = true;
+			this.classes.changed();
+		}
+		Effects saved = this.effects;
+		this.effects = new Effects();
+		for (JavaClass of : List.copyOf(this.classes.classOfs)) {
+			forms.add(classOfFunction(of, deepestFirst));
+		}
+		if (this.classes.arrayClassValues) {
+			forms.add(arrayClassFunction());
+		}
+		Map<JavaType, LispVal> made = new LinkedHashMap<>();
+		List<LispVal> inits = new ArrayList<>();
+		for (JavaType asked : List.copyOf(this.classes.classValues)) {
+			classObject(asked, reached, made, inits, forms);
+		}
+		this.effects = saved;
+		this.classInits = inits;
+	}
+
+	private static JavaType raw(JavaClass declaration) {
+		return new ClassType(declaration, List.of());
+	}
+
+	/**
+	 * The variable holding a type's class object, the object made after the ones it
+	 * names; {@code NIL} for no type.
+	 * @param reached the names of the methods of {@code Class} the program reaches
+	 * @param made the objects made so far, by type
+	 * @param inits where the forms making the objects go, in the order they run
+	 * @param forms where the variables' declarations go
+	 */
+	private LispVal classObject(@Nullable JavaType type, Set<String> reached, Map<JavaType, LispVal> made,
+			List<LispVal> inits, List<LispVal> forms) {
+		if (type == null) {
+			return NIL;
+		}
+		LispVal known = made.get(type);
+		if (known != null) {
+			return known;
+		}
+		LispSymbol variable = classValue(type);
+		made.put(type, variable);
+		boolean around = reached.contains("isAssignableFrom");
+		boolean above = around || reached.contains("getSuperclass");
+		String name;
+		String simple;
+		LispVal canonical = NIL;
+		int kind = 0;
+		JavaType superclass = null;
+		List<JavaClass> interfaces = new ArrayList<>();
+		JavaType component = null;
+		LispVal constants = NIL;
+		switch (type) {
+			case ArrayType array -> {
+				name = descriptor(array);
+				simple = simpleArrayName(array);
+				kind = CLASS_ARRAY;
+				superclass = this.objectType;
+				component = array.element();
+				for (JavaClass candidate : this.classes.all()) {
+					if (holdsArrays(candidate) && candidate.isInterface) {
+						interfaces.add(candidate);
+					}
+				}
+			}
+			case ClassType named -> {
+				JavaClass declaration = named.declaration();
+				name = declaration.binaryName;
+				simple = declaration.simpleName();
+				if (declaration.isLocal) {
+					canonical = string("");
+				}
+				else if (!declaration.name.equals(name)) {
+					canonical = string(declaration.name);
+				}
+				kind = (declaration.isInterface ? CLASS_INTERFACE : 0) | (declaration.isEnum ? CLASS_ENUM : 0)
+						| (declaration.isRecord ? CLASS_RECORD : 0);
+				superclass = declaration.isInterface ? null
+						: declaration.superclass != null ? raw(declaration.superclass)
+								: declaration.intrinsicSuperclass != null ? raw(declaration.intrinsicSuperclass)
+										: declaration == this.objectType.declaration() ? null : this.objectType;
+				interfaces.addAll(declaration.interfaces);
+				if (reached.contains("getEnumConstants")) {
+					Method values = enumValues(declaration);
+					if (values != null) {
+						constants = list(cl("lambda"), NIL, list(JavaNames.function(values)));
+					}
+				}
+			}
+			default -> {
+				name = type.toString();
+				simple = name;
+				kind = CLASS_PRIMITIVE;
+			}
+		}
+		LispVal test = NIL;
+		if (reached.contains("isInstance") || reached.contains("cast")) {
+			// a primitive type and a class holding no value have no instance
+			boolean held = type instanceof ArrayType
+					|| type instanceof ClassType named && (!named.declaration().intrinsic
+							|| named.equals(this.objectType) || JavaIntrinsics.predicate(named.declaration()) != null);
+			test = list(cl("lambda"), list(RECEIVER),
+					held ? instanceTest(RECEIVER, this.objectType, type, 0, "instanceof") : NIL);
+		}
+		List<LispVal> implemented = new ArrayList<>(List.of(cl("vector")));
+		if (around) {
+			for (JavaClass declared : interfaces) {
+				implemented.add(classObject(raw(declared), reached, made, inits, forms));
+			}
+		}
+		Method constructor = constructors(this.classes.library(CLASS)).get(0);
+		reach(constructor);
+		makes(constructor.owner);
+		LispVal object = form(JavaNames.creator(constructor),
+				List.of(string(name), string(simple), canonical, integer(kind),
+						above ? classObject(superclass, reached, made, inits, forms) : NIL,
+						around ? list(implemented) : NIL, classObject(component, reached, made, inits, forms), test,
+						constants));
+		if (this.session != null) {
+			// an earlier buffer's object is the class's
+			forms.add(list(cl("defvar"), variable, NIL));
+			inits.add(call("if", variable, NIL, call("setq", variable, object)));
+		}
+		else {
+			forms.add(list(cl("defvar"), variable));
+			inits.add(call("setq", variable, object));
+		}
+		return variable;
+	}
+
+	/**
+	 * The function answering {@code getClass()} read as a value under a class: the object
+	 * of the class the value is an instance of, among the classes under that one the
+	 * program can hold an instance of. A lambda's class has no object.
+	 */
+	private LispVal classOfFunction(JavaClass of, List<JavaClass> deepestFirst) {
+		List<LispVal> arms = new ArrayList<>();
+		arms.add(cl("cond"));
+		boolean any = of == this.objectType.declaration();
+		for (JavaClass declaration : deepestFirst) {
+			if (!declaration.isAbstract && isMade(declaration) && (any || declaration.isSubclassOf(of))) {
+				arms.add(list(list(JavaNames.predicate(declaration), RECEIVER), classValue(raw(declaration))));
+			}
+		}
+		Set<LispSymbol> predicates = new HashSet<>();
+		List<JavaClass> intrinsics = new ArrayList<>(this.classes.all());
+		// a StringBuffer is a StringBuilder's representation: the first of the two
+		intrinsics.sort(Comparator.comparing(candidate -> candidate.name.equals("java.lang.StringBuffer")));
+		for (JavaClass candidate : intrinsics) {
+			LispSymbol predicate = candidate.intrinsic && candidate.held && !candidate.isInterface
+					&& !candidate.isAbstract && (any || candidate.isSubclassOf(of))
+							? JavaIntrinsics.predicate(candidate) : null;
+			if (predicate != null && predicates.add(predicate)) {
+				arms.add(list(list(predicate, RECEIVER), classValue(raw(candidate))));
+			}
+		}
+		if (holdsArrays(of)) {
+			LispVal array = list(ARRAY_CLASS, RECEIVER, NIL);
+			arms.add(list(call("and", call("vectorp", RECEIVER), call("not", call("stringp", RECEIVER))),
+					any ? call("if", call("array-has-fill-pointer-p", RECEIVER), classValue(this.objectType), array)
+							: array));
+		}
+		arms.add(list(T, runtimeCall("no-class", RECEIVER)));
+		return list(cl("defun"), classOfName(of), list(RECEIVER), list(arms));
+	}
+
+	/**
+	 * The function answering the class object of an array by the class the run time tells
+	 * of it: one a conversion recorded, the static type's, or what its vector says.
+	 */
+	private LispVal arrayClassFunction() {
+		LispSymbol fallback = new LispSymbol("%f");
+		LispSymbol name = new LispSymbol("%n");
+		Set<ArrayType> known = new LinkedHashSet<>();
+		for (Primitive told : List.of(Primitive.INT, Primitive.CHAR, Primitive.BYTE, Primitive.DOUBLE, Primitive.FLOAT,
+				Primitive.BOOLEAN)) {
+			known.add(new ArrayType(told));
+		}
+		known.add(new ArrayType(this.objectType));
+		known.addAll(this.classes.arrayRecords);
+		List<LispVal> arms = new ArrayList<>();
+		arms.add(cl("cond"));
+		Set<String> names = new HashSet<>();
+		for (ArrayType array : known) {
+			if (names.add(descriptor(array))) {
+				arms.add(list(call("equal", name, string(descriptor(array))), classValue(array)));
+			}
+		}
+		arms.add(list(T, runtimeCall("no-class", RECEIVER)));
+		return list(cl("defun"), ARRAY_CLASS, list(RECEIVER, fallback),
+				JavaForms.let(name, runtimeCall("array-class-name", RECEIVER, fallback, T), List.of(list(arms))));
+	}
+
 	private Typed invocation(Call call, @Nullable JavaType expected, boolean discard) {
 		int pos = call.pos();
 		boolean flexible = this.flexible;
@@ -6707,8 +7113,8 @@ final class JavaLowering implements JavaEmitter.Context {
 				return new Typed(sameClass(named, call.arguments().get(0), false, pos), Primitive.BOOLEAN);
 			}
 		}
-		if (call.name().equals("getClass") && call.arguments().isEmpty()) {
-			throw unsupported(pos, "getClass() but compared with a class or before getName() and getSimpleName()");
+		if (call.name().equals("getClass") && call.arguments().isEmpty() && !call.onSuper()) {
+			return classOf(call);
 		}
 		List<JavaType> explicit = new ArrayList<>();
 		for (TypeName written : call.typeArguments()) {
@@ -8786,7 +9192,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			this.classes.changed();
 		}
 		boolean threads = scheduled();
-		List<LispVal> forms = new ArrayList<>();
+		List<LispVal> forms = new ArrayList<>(this.classInits);
 		for (JavaClass declaration : this.classes.all()) {
 			if (declaration.intrinsic || (isPartial(declaration) && !this.classes.used.contains(declaration))) {
 				continue;

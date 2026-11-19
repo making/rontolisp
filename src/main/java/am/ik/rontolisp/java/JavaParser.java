@@ -1924,10 +1924,31 @@ final class JavaParser {
 					at("new") ? this.tokens.get(this.p++).text() : identifier(), false, typeArguments);
 		}
 		if (PRIMITIVES.contains(token.text()) || token.text().equals("void")) {
-			throw unsupported("a class literal");
+			// int.class, void.class, int[].class
+			this.p++;
+			return classLiteral(pos, token.text());
 		}
 		String name = identifier();
 		return at("(") ? new Call(pos, null, name, arguments(), false) : new Name(pos, name);
+	}
+
+	/**
+	 * A class literal from the brackets after its type's name: {@code int.class},
+	 * {@code String[][].class}.
+	 */
+	private Expression classLiteral(int pos, String named) {
+		int dimensions = 0;
+		while (at("[")) {
+			this.p++;
+			expect("]");
+			dimensions++;
+		}
+		expect(".");
+		if (!at("class")) {
+			throw error("expected class but found " + current().shown());
+		}
+		int literal = this.tokens.get(this.p++).offset();
+		return new JavaSyntax.ClassLiteral(literal, new TypeName(pos, named, List.of(), false, dimensions));
 	}
 
 	/**
@@ -2055,7 +2076,13 @@ final class JavaParser {
 			}
 			else if (at("[")) {
 				if (peekIs(1, "]")) {
-					throw unsupported("a class literal");
+					// Name[].class
+					String named = qualifiedName(expression);
+					if (named == null) {
+						throw error("expected an expression but found " + peek(1).shown());
+					}
+					expression = classLiteral(expression.pos(), named);
+					continue;
 				}
 				this.p++;
 				expression = new Index(pos, expression, expression());

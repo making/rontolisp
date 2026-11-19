@@ -445,8 +445,9 @@ void main() {
 
 | クラス | メンバー |
 |---|---|
-| `Object` | `new Object()`、`toString`、`equals`、`hashCode`、`getClass().getName()`、`getClass().getSimpleName()`、`getClass()` とクラスリテラル（`Name.class`）どうしの `==`、`!=`、`equals` による比較、クラスリテラルの `getName()` と `getSimpleName()`、`wait()`、`wait(long)`、`notify`、`notifyAll` |
-| 列挙型 | `values()`、`valueOf(String)`、`name`、`ordinal`、`compareTo`、`toString` |
+| `Object` | `new Object()`、`toString`、`equals`、`hashCode`、`getClass()`、`wait()`、`wait(long)`、`notify`、`notifyAll` |
+| `Class` | クラスリテラル（`Name.class`、`int.class`、`String[].class`、`void.class`）と `getClass()`。`getName`、`getSimpleName`、`getCanonicalName`、`getTypeName`、`getPackageName`、`getSuperclass`、`getComponentType`、`isInstance`、`cast`、`isAssignableFrom`、`isInterface`、`isArray`、`isPrimitive`、`isEnum`、`isRecord`、`getEnumConstants`、`toString`、`equals`、`hashCode` |
+| 列挙型 | `values()`、`valueOf(String)`、`Enum.valueOf(Class, String)`、`name`、`ordinal`、`compareTo`、`getDeclaringClass`、`toString` |
 | レコード | アクセサ、`equals`、`hashCode`、`toString` |
 | 配列 | `length`、`clone()` |
 | `String` | `length`、`charAt`、`isEmpty`、`isBlank`、`equals`、`equalsIgnoreCase`、`compareTo`、`compareToIgnoreCase`、`hashCode`、`substring`、`subSequence`、開始位置の指定がある、またはない、文字列または文字の `indexOf` と `lastIndexOf`、範囲を取る `indexOf`、`codePointAt`、`codePointBefore`、`codePointCount`、`offsetByCodePoints`、`regionMatches`、`contentEquals`、`getChars`、`indent`、`contains`、`startsWith`、`endsWith`、`toUpperCase`、`toLowerCase`、`trim`、`strip`、`stripLeading`、`stripTrailing`、`repeat`、`replace`、`replaceAll`、`replaceFirst`、`matches`、`concat`、`toCharArray`、`split`、`intern`、`formatted`、引数なし、`Charset`、文字セットの名前を取る `getBytes`、`Locale` を取る `toUpperCase` と `toLowerCase`。`String.valueOf`、`String.copyValueOf`、`String.join`、`Locale` の指定がある、またはない `String.format`、`String.CASE_INSENSITIVE_ORDER`。`new String()`、`new String(String)`、`new String(char[])`、`new String(char[], int, int)`、範囲と、`Charset` または文字セットの名前を指定できる `new String(byte[])`、`chars`、`codePoints`、`lines` |

@@ -286,10 +286,16 @@ cannot be replaced (`System.setOut`) and stay open after `close()`.
 many as a JDK 25 writes. After its first print, `charset()` of a `PrintStream` in `UTF-16`
 answers another object of the same name.
 
-**No object stands for a class.** `getClass()` and a class literal (`Name.class`) are read
-where one is compared with the other by `==`, `!=` or `equals`, and before `getName()` and
-`getSimpleName()`; `Name.class::isInstance` and `Name.class::cast` are the test and the
-cast. Anywhere else each is an error.
+**A class object says what a class is and reaches nothing in it.** A `Class` answers its
+names, the class above it, whether a value is an instance, a cast and an enum's constants.
+It has no reflection: a class by name (`Class.forName`), the members, constructors and
+annotations of a class and `getInterfaces()` are refused by name. The classes above a
+library class are this library's: `StringBuilder.class.getSuperclass()` is `Object`, where
+a JDK has a class of its own between the two, and `isAssignableFrom` knows the interfaces
+this library's classes declare (a `String` is a `Comparable` and a `CharSequence`).
+`getClass()` of a lambda is a run-time error. `synchronized (Name.class)` holds the monitor
+the `static synchronized` methods of the class hold, which is not the monitor of the class
+object held in a variable.
 
 **A stream runs in order on the thread that asks for its result.** `parallel()` and
 `parallelStream()` are kept (`isParallel()` answers `true`) and change nothing else: the
@@ -514,10 +520,8 @@ the transport binds. `InetAddress.getLocalHost` and the reverse lookups are not 
 Each of these is an error naming the construct and its position.
 
 - `assert`.
-- A class literal and `getClass()` as a value: each is read compared with a class and
-  before `getName()` and `getSimpleName()`, a literal also as the lock of a `synchronized`
-  statement, as the class of a field updater and before `::isInstance` and `::cast`. A
-  class literal of a primitive or an array type.
+- Reflection: `Class.forName`, the members, constructors and annotations of a class
+  (`getMethods`, `getDeclaredFields`, `newInstance`), `getInterfaces()`.
 - A `switch` over a `long`, a `float`, a `double` or a `boolean`; a method reference and a
   field through a qualified `super` (`Interface.super::m`, `Outer.super.x`).
 - A class extending `String`, `StringBuilder` or a box.

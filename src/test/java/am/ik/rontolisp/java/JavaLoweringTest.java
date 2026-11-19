@@ -665,6 +665,42 @@ class JavaLoweringTest {
 					"(SETQ |j%L11.HITS| (|java.util.concurrent.atomic.AtomicIntegerFieldUpdater.of(Object)| '|L11.hits|))"))
 			.anyMatch(form -> form.startsWith("(DEFUN |L11.main(String[])| ")
 					&& form.endsWith("(|java.util.concurrent.atomic.Fields.missing(String)| \"none\")))"));
+		// A class read as a value is one object a type, made before anything of the
+		// program runs with what the program asks of one -- here its names and the
+		// class above it, and no test of an instance --; getClass() as a value is the
+		// function choosing the object by what the value is; two classes compared, and
+		// a class asked its name, are their names and make no object.
+		List<String> classes = lower("""
+				class Kept { }
+				class L12 {
+				    static String above(Class<?> type) { return type.getSuperclass().getName(); }
+				    public static void main(String[] args) {
+				        Kept kept = new Kept();
+				        Class<?> held = kept.getClass();
+				        System.out.println(above(held) + (held == Kept.class) + (kept.getClass() == Kept.class));
+				    }
+				}
+				""", "L12.java");
+		String made = "(|Class.new(String,String,String,int,Class,Class[],Class,Object,Object)| ";
+		assertThat(classes).contains("(DEFVAR |Kept%class|)",
+				"(DEFUN |Kept%class-of| (|%o|) (COND ((|Kept?| |%o|) |Kept%class|) (T (RONTOLISP::%JAVA-NO-CLASS |%o|))))",
+				"(DEFUN |L12.main(String[])| (|args|) (LET ((|kept| (|Kept.new()|))) (LET ((|held| (|Kept%class-of| "
+						+ "|kept|))) (WRITE-LINE (%STRING-CONCAT (%STRING-CONCAT (OR (|L12.above(Class)| |held|) \"null\") "
+						+ "(IF (EQ |held| |Kept%class|) \"true\" \"false\")) (IF (EQUAL (|%class-name| |kept|) \"Kept\") "
+						+ "\"true\" \"false\"))))))")
+			.anyMatch(form -> form
+				.startsWith("(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (SETQ "
+						+ "|Object%class| " + made
+						+ "\"java.lang.Object\" \"Object\" NIL 0 NIL NIL NIL NIL NIL)) (SETQ |Kept%class| " + made
+						+ "\"Kept\" \"Kept\" NIL 0 |Object%class| NIL NIL NIL NIL)) (|L12.main(String[])| "));
+		assertThat(lower("""
+				class L13 {
+				    public static void main(String[] args) {
+				        Object o = "text";
+				        System.out.println(o.getClass().getName() + (o.getClass() == String.class));
+				    }
+				}
+				""", "L13.java")).noneMatch(form -> form.contains("%class|") || form.contains("|Class."));
 	}
 
 	@Test
@@ -1152,9 +1188,7 @@ class JavaLoweringTest {
 				{ "import module java.sql; void main() { }", "1:1: the module java.sql" },
 				{ "void main() { assert true; }", "1:15: an assert statement" },
 				{ "void main() { switch (1L) { default -> { } } }", "1:15: a switch over long" },
-				{ "void main() { Object o = int.class; }", "1:26: a class literal" },
-				{ "void main() { Object o = String.class; }",
-						"1:33: a class literal but compared with a class or before getName()" },
+				{ "void main() { IO.println(String.class.getInterfaces()); }", "1:39: Class.getInterfaces()" },
 				{ "class A { transient int x; } void main() { }", "1:11: the modifier transient" },
 				{ "import java.util.concurrent.DelayQueue; void main() { DelayQueue<?> q = null; }",
 						"1:55: the class java.util.concurrent.DelayQueue" },
@@ -1168,8 +1202,6 @@ class JavaLoweringTest {
 				{ "void main() { var s = new StringBuilder(); s.codePointAt(0); }",
 						"1:46: StringBuilder.codePointAt(int)" },
 				{ "void main() { IO.println(Runtime.getRuntime().totalMemory()); }", "1:47: Runtime.totalMemory()" },
-				{ "void main() { IO.println(getClass()); }",
-						"1:26: getClass() but compared with a class or before getName() and getSimpleName()" },
 				{ "class A { int x; } class B extends A { class C { int y = B.super.x; } } void main() { }",
 						"1:66: a field read through a qualified super" },
 				{ "import java.util.concurrent.atomic.*; class A { volatile int x; } void main() { String n = \"x\"; "

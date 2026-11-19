@@ -286,10 +286,17 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 デコードします。U+FFFD の個数は JDK 25 と同じです。`UTF-16` の `PrintStream` の `charset()` は、
 最初の出力のあと、同じ名前の別のオブジェクトを返します。
 
-**クラスを表すオブジェクトはありません。** `getClass()` とクラスリテラル（`Name.class`）は、
-互いを `==`、`!=`、`equals` で比較する箇所と、`getName()`、`getSimpleName()` の直前でだけ
-読めます。`Name.class::isInstance` と `Name.class::cast` は、型の検査とキャストになります。
-それ以外の箇所ではエラーになります。
+**クラスオブジェクトはクラスが何であるかを答えるだけで、リフレクションはありません。**
+`Class` は、名前、スーパークラス、値がインスタンスかどうかの検査、キャスト、列挙型の定数を
+返します。名前によるクラスの取得（`Class.forName`）、クラスのメンバー、コンストラクタ、
+アノテーションの取得、`getInterfaces()` は、コンパイル時に名前を示して拒否されます。
+ライブラリのクラスのスーパークラスは、このライブラリでの宣言に従います。
+`StringBuilder.class.getSuperclass()` は `Object` です（JDK では、間に JDK 独自のクラスが
+あります）。`isAssignableFrom` は、このライブラリのクラスが宣言するインターフェースで判定します
+（`String` は `Comparable` であり `CharSequence` です）。ラムダ式の `getClass()` は実行時エラーに
+なります。`synchronized (Name.class)` が保持するモニターは、そのクラスの
+`static synchronized` メソッドが保持するモニターであり、変数に入れたクラスオブジェクトの
+モニターとは別のものです。
 
 **ストリームは、結果を求めたスレッドで順に実行されます。** `parallel()` と
 `parallelStream()` は記録されるだけです（`isParallel()` は `true` を返します）。要素は
@@ -535,10 +542,8 @@ WebSocket です。`version(..)` で指定した値は保持され、問い合�
 どれも、構文の名前と位置を示すエラーになります。
 
 - `assert`。
-- 値として使うクラスリテラルと `getClass()`。どちらも、クラスとの比較と `getName()`、
-  `getSimpleName()` の直前でだけ読めます。クラスリテラルは `synchronized` 文のロック、
-  フィールドアップデーターのクラス、`::isInstance` と `::cast` の対象にもなります。
-  プリミティブ型と配列型のクラスリテラル。
+- リフレクション。`Class.forName`、クラスのメンバー、コンストラクタ、アノテーションの取得
+  （`getMethods`、`getDeclaredFields`、`newInstance`）、`getInterfaces()`。
 - `long`、`float`、`double`、`boolean` に対する `switch`。修飾した `super` を通すメソッド参照と
   フィールド（`Interface.super::m`、`Outer.super.x`）。
 - `String`、`StringBuilder`、ボックスを継承するクラス。

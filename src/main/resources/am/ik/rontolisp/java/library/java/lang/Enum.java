@@ -30,11 +30,29 @@ public abstract class Enum<E extends Enum<E>> {
         return ordinal - other.ordinal();
     }
 
-    /**
-     * What the valueOf(String) a JDK's compiler writes for an enum calls: this front
-     * end writes an enum's own, and has no class object to call this one with.
-     */
+    /** The enum a constant is of: a constant with a body is of a class under it. */
+    @SuppressWarnings("unchecked")
+    public final Class<E> getDeclaringClass() {
+        Class<?> own = getClass();
+        if (!own.isEnum()) {
+            own = own.getSuperclass();
+        }
+        return (Class<E>) own;
+    }
+
     public static <T extends Enum<T>> T valueOf(Class<T> enumClass, String name) {
-        throw new IllegalArgumentException("No enum constant " + name);
+        T[] constants = enumClass.getEnumConstants();
+        if (constants == null) {
+            throw new IllegalArgumentException(enumClass.getName() + " is not an enum class");
+        }
+        if (name == null) {
+            throw new NullPointerException("Name is null");
+        }
+        for (T constant : constants) {
+            if (constant.name().equals(name)) {
+                return constant;
+            }
+        }
+        throw new IllegalArgumentException("No enum constant " + enumClass.getCanonicalName() + "." + name);
     }
 }

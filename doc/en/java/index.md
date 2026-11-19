@@ -441,8 +441,9 @@ as far as the program reaches it, so a class of the program can extend or implem
 
 | Class | Members |
 |---|---|
-| `Object` | `new Object()`, `toString`, `equals`, `hashCode`, `getClass().getName()`, `getClass().getSimpleName()`, `getClass()` and a class literal (`Name.class`) compared with one another by `==`, `!=` or `equals`, a class literal's `getName()` and `getSimpleName()`, `wait()`, `wait(long)`, `notify`, `notifyAll` |
-| An enum | `values()`, `valueOf(String)`, `name`, `ordinal`, `compareTo`, `toString` |
+| `Object` | `new Object()`, `toString`, `equals`, `hashCode`, `getClass()`, `wait()`, `wait(long)`, `notify`, `notifyAll` |
+| `Class` | a class literal (`Name.class`, `int.class`, `String[].class`, `void.class`) and `getClass()`; `getName`, `getSimpleName`, `getCanonicalName`, `getTypeName`, `getPackageName`, `getSuperclass`, `getComponentType`, `isInstance`, `cast`, `isAssignableFrom`, `isInterface`, `isArray`, `isPrimitive`, `isEnum`, `isRecord`, `getEnumConstants`, `toString`, `equals`, `hashCode` |
+| An enum | `values()`, `valueOf(String)`, `Enum.valueOf(Class, String)`, `name`, `ordinal`, `compareTo`, `getDeclaringClass`, `toString` |
 | A record | the accessors, `equals`, `hashCode`, `toString` |
 | An array | `length`, `clone()` |
 | `String` | `length`, `charAt`, `isEmpty`, `isBlank`, `equals`, `equalsIgnoreCase`, `compareTo`, `compareToIgnoreCase`, `hashCode`, `substring`, `subSequence`, `indexOf` and `lastIndexOf` of a string or a character with or without a start, `indexOf` within a range, `codePointAt`, `codePointBefore`, `codePointCount`, `offsetByCodePoints`, `regionMatches`, `contentEquals`, `getChars`, `indent`, `contains`, `startsWith`, `endsWith`, `toUpperCase`, `toLowerCase`, `trim`, `strip`, `stripLeading`, `stripTrailing`, `repeat`, `replace`, `replaceAll`, `replaceFirst`, `matches`, `concat`, `toCharArray`, `split`, `intern`, `formatted`, `getBytes` of nothing, a `Charset` or a charset's name, `toUpperCase` and `toLowerCase` of a `Locale`; `String.valueOf`, `String.copyValueOf`, `String.join`, `String.format` with or without a `Locale`, `String.CASE_INSENSITIVE_ORDER`; `new String()`, `new String(String)`, `new String(char[])`, `new String(char[], int, int)`, `new String(byte[])` with or without a range and a `Charset` or a charset's name, `chars`, `codePoints`, `lines` |

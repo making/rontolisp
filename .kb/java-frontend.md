@@ -54,7 +54,7 @@ reference in a call's applicability: k24 (2026-11-19); what comes after is `.tod
 k10 and k12 left) and `.todo/k28` to `k33` (what stands between k24 and YAVI compiled to
 wasm); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
 `java.text.MessageFormat`: k28 (2026-11-19); `java.text.Normalizer` over the normalization
-forms the front ends share: k29 (2026-11-19).
+forms the front ends share: k29 (2026-11-19); a `Class` as a value: k30 (2026-11-20).
 
 ## Where it sits
 
@@ -158,18 +158,19 @@ forms the front ends share: k29 (2026-11-19).
   whose classes declares it, the program-wide `%string` / `%equals` / `%hash` test the classes
   declaring one, deepest first, then `%java-to-string` / `-equals` / `-hash-code` answer for
   every other value (identity for a structure: a number kept in an `eq` table from the first
-  ask). **No object stands for a class** (j98): `getClass()` and a class literal
-  (`Name.class`, `JavaSyntax.ClassLiteral`) are read where one is compared with the other
-  (`==`, `!=`, `.equals`: `equal` of the two binary names, `JavaLowering.sameClass`) and
-  before `.getName()` / `.getSimpleName()`; anywhere else each is refused by name. That is
-  the `equals` an IDE writes (`getClass() != o.getClass()`), the one use a probe of
-  everyday code met. With `==` the compiler's `incomparable types: Class<..> and
-  Class<..>` is kept as javac gave it over 16 shapes (two literals of two classes, a
-  literal of no class under the object's type, two objects of unrelated classes), but
-  one: an interface beside a `final` class that does not implement it is compared. A
-  `Class` as a value (a field, an argument, `isInstance`) is `.todo/k30`; a method
-  reference `Name.class::isInstance` / `Name.class::cast` is the test and the cast of its
-  one argument (k12, `referenced`: the literal is never lowered). `super.toString()`,
+  ask). **A class compared with a class, or asked its name, is its name** (j98):
+  `getClass()` and a class literal (`Name.class`, `JavaSyntax.ClassLiteral`) where one is
+  compared with the other (`==`, `!=`, `.equals`: `equal` of the two binary names,
+  `JavaLowering.sameClass`) and before `.getName()` / `.getSimpleName()` make no object;
+  anywhere else each is the class object ("A class as a value" below, k30; refused by
+  name until then). That is the `equals` an IDE writes (`getClass() != o.getClass()`),
+  the one use a probe of everyday code met. With `==` the compiler's `incomparable types:
+  Class<..> and Class<..>` is kept as javac gave it over 16 shapes (two literals of two
+  classes, a literal of no class under the object's type, two objects of unrelated
+  classes), but one: an interface beside a `final` class that does not implement it is
+  compared. A method reference `Name.class::isInstance` / `Name.class::cast` is the test
+  and the cast of its one argument (k12, `referenced`: the literal is never lowered).
+  `super.toString()`,
   `super.equals(o)` and `super.hashCode()` with no class above declaring the method are
   those three run-time functions on `this` (j89; refused by name until then, and any other
   member of `Object` through `super` still is). The identity text names a structure by its
@@ -1873,6 +1874,79 @@ that can ask it; the store into an array is not checked.**
   infers `T` from the arguments alone; the cast's type reaches only a lambda or a method
   reference (`needsTarget`). Before, the cast's type bounded `T` and the call failed.
 
+## A class as a value (2026-11-20, k30)
+
+**Invariant: a class read as a value is ONE object a type -- `java.lang.Class`, Java source
+of the library --, made before anything of the program runs and holding what the program
+asks of one; a class compared with a class, or asked its name, is still its name and makes
+no object.** What YAVI's schema example asked (`Map<Class<?>, ..>`, `type == Map.class`,
+`isInstance`, `cast`, `isAssignableFrom`, `getSuperclass()` to `null`,
+`getEnumConstants()`).
+
+- **Which read is a value.** `isClass` (a literal, `getClass()`) on both sides of `==`,
+  `!=`, `equals`, or before `getName()` / `getSimpleName()`, is the names (`classRead`,
+  `sameClass`; a literal of an array type is its descriptor, of a primitive type its
+  keyword, compared as its box). Anywhere else: `classLiteral` -- the variable
+  `|Name%class|` (`classValue`), typed `Class<Name>`, a primitive's by its box and
+  `void`'s by `Void` -- and `classOf`, `(|T%class-of| value)` typed
+  `Class<? extends |T|>`. The parser takes `int.class`, `void.class`, `Name[].class`.
+- **The object** (`library/java/lang/Class.java`): the binary name, the simple name, the
+  canonical name (`null` where it is the name, empty for a local or an anonymous class),
+  a kind (1 interface, 2 array, 4 primitive, 8 enum, 16 record), the class above, the
+  interfaces, the component type, and two functions the lowering makes -- the test of an
+  instance (`instanceTest` from `Object`, so an interface's is its `Iface%is`, with the
+  lambdas it tags) and an enum's `values()` -- which two `native` members call (`test0`,
+  `constants0`). `equals` and `hashCode` are `Object`'s, so a class is a map's key by
+  identity. `Enum.valueOf(Class, String)` and `getDeclaringClass()` are Java over it.
+- **Made once, before the program** (`classObjects`, in `generatedFunctions` ahead of the
+  interface tests it asks for; `classInits` at the head of `initialization`):
+  `(defvar |X%class|)` and `(setq |X%class| (|Class.new(..)| ..))`, each after what it
+  names. Rejected: made at its first read (two host threads of the JVM or the interpreter
+  could make two, and identity is what `==` and a map read). What is asked persists over
+  the passes (`JavaClasses.classValues`, `classOfs`, `arrayRecords`), as `made` does. A
+  session guards the `setq`: an earlier buffer's object stays the class's.
+- **An object holds what the program reaches of `Class`** (the names of its methods in
+  `JavaClasses.reached`): the class above where `getSuperclass` or `isAssignableFrom` is
+  reached, the interfaces for `isAssignableFrom`, the test for `isInstance` / `cast`, the
+  constants for `getEnumConstants`; `NIL` otherwise. A program keying a map by classes
+  makes the objects of its literals and none above them. A session holds all of it: a
+  later buffer may ask what the one making the object did not.
+- **`getClass()` as a value** is one function a static type (`classOfFunction`): the made
+  classes under the type deepest first, the intrinsic classes under it the program can
+  hold (`held`) by their predicates (a `StringBuffer` is a `StringBuilder`'s
+  representation: the builder's), under `Object` an instance of `Object` itself and an
+  array, then `%java-no-class` -- `null` is the `NullPointerException`, a lambda the
+  run-time error `getName()` of one is (a lambda is a function, which names no class).
+- **An array's class object is found by the name the run time tells**
+  (`arrayClassFunction`, `|%array-class|`, gated by `arrayClassValues`, which arms
+  `arrayTypes`): `%java-array-class-name` answers what a conversion recorded, else the
+  static type's, else the vector's, and each is one of the seven a vector tells or of
+  the array types `arrayClass` was asked (`arrayRecords`) -- so the `cond` over those is
+  complete. `getClass()` of an exact array type (`int[]`) is its literal's object.
+- **A class object initializes nothing; an enum's constants do.** A literal reads a
+  variable; `getEnumConstants()` calls `values()`, whose function initializes. For the
+  order of initialization what holds an enum's class object calls its `values()`, as
+  what makes a lambda does the lambda's body (`enumValues`: `called` and `uses` at each
+  literal of the enum and each `getClass()` it stands under) -- only in a program that
+  reaches `getEnumConstants` (`JavaClasses.enumConstants`, lowered again when first
+  reached), so that no other program gives its enums a `values()`.
+- **`==` of two parameterizations no value has both of** is the compiler's `incomparable
+  types: Class<String> and Class<Integer>` (`distinctArguments`: one class, at some place
+  two types that are neither wildcards nor type variables and differ; any generic class).
+- **Not the language's** (`deviations.md`): no reflection and no `getInterfaces()` (an
+  intrinsic class implements the interfaces the program names, `meets`, so the answer
+  would be the program's); the class above a library class is this library's
+  (`StringBuilder` under `Object`); `synchronized (Name.class)` still holds the
+  structure's name, not the object; `getClass()` of a lambda.
+- **Measured** (wasm bytes, the base `278f7e03d` against this): a program comparing two
+  classes and asking a name 13,811 both ways, `examples/java/shop` 328,295 byte for
+  byte, YAVI's classic example 655,275 both ways; a literal held in a variable, asked
+  its name and compared 17,078 (the structure of nine slots, its constructor, one
+  object); `getClass()` of an `Object` held, with `isInstance` and `isAssignableFrom`,
+  32,970 (the function over every held class, the seven arrays a vector tells with
+  their components, each with its test and the classes above it); the corpus case
+  327,584.
+
 ## Static initialization (2026-11-17)
 
 The language initializes a class at its first use. Running every initializer before `main` (the
@@ -2355,8 +2429,8 @@ without it, which ran 11 of the 16 programs below).
   host's; what a pool is not (`getQueue()`, `defaultExecutor()`, an accumulator's one
   value, a fork/join pool's parallelism and its rethrown exception); a
   `ConcurrentHashMap`'s long chain; a thread notified in `wait` still `WAITING` while it takes its monitor again; the handlers not asked for `main`'s thread; a field
-  updater of anything but class literals and a constant name; thread numbers are ours; a class literal only as a `synchronized` statement's
-  lock (the quoted structure name, the object a `static synchronized` method holds).
+  updater of anything but class literals and a constant name; thread numbers are ours; a class literal as a `synchronized` statement's
+  lock is the quoted structure name, the object a `static synchronized` method holds, and not the class object a variable holds ("A class as a value").
 - **`getState()` answers `BLOCKED` (k07, 2026-11-19).** `Thread.blocked0(carrier)` is
   `%java-thread-blocked`: on one stack whether the carrier is among the threads its
   monitor's last exit lets go on (the monitor's seventh slot, the monitor carrier slot 4);
@@ -2503,7 +2577,7 @@ thread suspended under it asked `Support.oneStack()` and did what one stack coul
 - **A field updater holds the NAME of its field** (k08). `newUpdater(C.class, "f")`
   (a reference's `(C.class, V.class, "f")`) is lowered where it is called
   (`JavaLowering.fieldUpdater`, taken in `invocation` before the arguments are lowered:
-  no object stands for a class): the field is found among the fields the class itself
+  the literals are read as written and make no class object): the field is found among the fields the class itself
   declares, and the call is `(|..FieldUpdater.of(Object)| '|C.f|)`, the accessor's
   symbol. Not a number counted where the calls are lowered: a session's buffer does
   not lower the statements of the buffers before it, so an updater made by one buffer
@@ -2735,8 +2809,9 @@ thread suspended under it asked `Support.oneStack()` and did what one stack coul
   that thread local makes.
 - **A library enum needs `java.lang.Class`**: the `valueOf` javac writes for an enum calls
   `Enum.valueOf(Class, String)`, so the library's own compile under a JDK needs the member,
-  and this front end types every signature of a class it reads. `Class` is a type with no
-  value: a class literal and a `getClass()` kept are refused as before.
+  and this front end types every signature of a class it reads. `Class` was a type with no
+  value until k30 ("A class as a value"), since when `Enum.valueOf(Class, String)` walks the
+  class's constants.
 - **A compact source file brings the three packages** (`LIBRARY_PACKAGES`): the atomics were
   not brought before.
 - **Cost to a program that starts threads** (the members `Thread` gained; class / wasm
@@ -3416,4 +3491,14 @@ collector shapes over the program's own classes, which hold the inference withou
 library), `compared` in `the-run-time-raises-the-language-s-exceptions`;
 `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches` (a program
 calling no stream holds no class of them; a stage is a `funcall`, a member's call direct).
-The three cases print 589 lines; the corpus is 61 cases.
+The three cases print 589 lines; the corpus is 61 cases. k30: the `standalone:` case
+`a-class-is-a-value` (a file of its own, so that the corpus program holds no class
+object: each kind of type, the object of what a value is through `Object`, an
+interface and a class, a map keyed by classes, the constants and the initialization of
+an enum, the casts' messages), the `refused:` cases
+`a-class-held-compared-with-a-literal-of-another` and
+`a-class-literal-assigned-to-the-class-of-another`,
+`JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches` (an object
+made with what the program reaches and nothing else; a program comparing classes makes
+none) and `#aConstructTheSubsetDoesNotHaveIsRefusedByNameAtItsPosition`
+(`Class.getInterfaces()`).

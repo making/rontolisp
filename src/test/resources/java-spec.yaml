@@ -9276,6 +9276,270 @@ standalone:
       12 13 0.25 3.0
       1000 1/3 6
       true true false 0.33333334 Fraction[]
+  # A class is a value where a class literal or getClass() is read as anything but a
+  # comparison with another or its name: one object a type -- a class, an interface,
+  # an enum, a record, an array type, a primitive type and void --, the key of a map,
+  # asked its names, the classes above it, whether a value is an instance, a cast, its
+  # enum constants; the object of what a value is, through Object, an interface and a
+  # class, of the boxes, a string and an array whose type was widened; a class object
+  # initializes nothing and an enum's constants do. A file of its own: the corpus
+  # program compares classes and asks their names, and holds no class object.
+  - name: a-class-is-a-value
+    file: Classes.java
+    source: |
+      import java.util.ArrayList;
+      import java.util.HashMap;
+      import java.util.LinkedHashMap;
+      import java.util.List;
+      import java.util.Map;
+      import java.util.function.Function;
+
+      public class Classes {
+
+          interface Shape {
+          }
+
+          static class Circle implements Shape {
+          }
+
+          static class Ring extends Circle implements Comparable<Ring> {
+              public int compareTo(Ring other) {
+                  return 0;
+              }
+          }
+
+          enum Level {
+              LOW, HIGH {
+                  @Override
+                  public String toString() {
+                      return "high";
+                  }
+              }
+          }
+
+          record Point(int x, int y) {
+          }
+
+          enum Loud {
+              ONE, TWO;
+
+              static {
+                  System.out.println("the enum is initialized");
+              }
+          }
+
+          static <T> T first(Class<T> type, Object... candidates) {
+              for (Object candidate : candidates) {
+                  if (type.isInstance(candidate)) {
+                      return type.cast(candidate);
+                  }
+              }
+              return null;
+          }
+
+          static final class Reader<T> {
+
+              private final Class<T> type;
+
+              Reader(Class<T> type) {
+                  this.type = type;
+              }
+
+              T read(Object value) {
+                  return this.type.isInstance(value) ? this.type.cast(value) : null;
+              }
+
+          }
+
+          private static final Map<Class<?>, Function<String, Object>> PARSERS = Map.of(Integer.class, Integer::valueOf,
+                  Boolean.class, Boolean::valueOf, StringBuilder.class, StringBuilder::new);
+
+          static String kind(Class<?> type) {
+              if (type == String.class) {
+                  return "string";
+              }
+              if (type == Integer.class || type == Long.class) {
+                  return "integer";
+              }
+              if (Number.class.isAssignableFrom(type)) {
+                  return "number";
+              }
+              if (Shape.class.isAssignableFrom(type)) {
+                  return "shape";
+              }
+              if (Iterable.class.isAssignableFrom(type)) {
+                  return "array";
+              }
+              return type.getSimpleName();
+          }
+
+          static String above(Class<?> type) {
+              StringBuilder names = new StringBuilder();
+              for (Class<?> current = type; current != null; current = current.getSuperclass()) {
+                  names.append(current.getName()).append(' ');
+              }
+              return names.toString().trim();
+          }
+
+          static String flags(Class<?> type) {
+              return type.getName() + "/" + type.getSimpleName() + "/" + type.getTypeName() + (type.isInterface() ? " interface" : "")
+                      + (type.isArray() ? " array of " + type.getComponentType() : "") + (type.isPrimitive() ? " primitive" : "")
+                      + (type.isEnum() ? " enum" : "") + (type.isRecord() ? " record" : "") + " [" + type.getPackageName()
+                      + "]";
+          }
+
+          static void failing(String what, Runnable body) {
+              try {
+                  body.run();
+                  System.out.println(what + ": nothing");
+              }
+              catch (NullPointerException e) {
+                  System.out.println(what + ": " + e.getClass().getName());
+              }
+              catch (RuntimeException e) {
+                  System.out.println(what + ": " + e.getClass().getName() + ": " + e.getMessage());
+              }
+          }
+
+          public static void main(String[] args) {
+              Class<String> text = String.class;
+              Class<?> any = text;
+              Object held = any;
+              System.out.println(text + " " + any.getName() + " " + (any == String.class) + " " + (any != Object.class) + " "
+                      + any.equals(String.class) + " " + (held instanceof Class<?> c ? c.getSimpleName() : "-") + " "
+                      + (any.hashCode() == text.hashCode()) + " " + Shape.class + " " + int.class + " " + void.class);
+              // each kind of type
+              for (Class<?> type : List.of(Object.class, String.class, Integer.class, Number.class, Shape.class, Circle.class,
+                      Ring.class, Level.class, Point.class, int.class, void.class, int[].class, String[][].class,
+                      ArrayList.class, List.class, Map.Entry.class, Runnable.class)) {
+                  System.out.println(flags(type) + " " + kind(type) + " < " + above(type));
+              }
+              // the class of an object as a value
+              List<Object> objects = List.of("text", 1, 2L, 1.5, 2.5f, 'c', true, (short) 3, (byte) 4, new Circle(),
+                      new Ring(), Level.LOW, Level.HIGH, new Point(1, 2), new ArrayList<String>(), new Object(), new int[1], new String[1], new Circle[1][1], new long[1]);
+              Map<Class<?>, Integer> counts = new LinkedHashMap<>();
+              for (Object object : objects) {
+                  Class<?> type = object.getClass();
+                  counts.merge(type, 1, Integer::sum);
+                  System.out.println(type.getName() + " " + kind(type) + " " + type.isInstance(object) + " "
+                          + type.isInstance("other") + " " + Shape.class.isInstance(object) + " "
+                          + Object.class.isInstance(object) + " " + Comparable.class.isInstance(object) + " "
+                          + (type.getSuperclass() == null ? "-" : type.getSuperclass().getSimpleName()) + " "
+                          + type.isArray() + " " + type.isEnum());
+              }
+              counts.merge(Circle.class, 1, Integer::sum);
+              counts.merge(new Ring().getClass(), 1, Integer::sum);
+              System.out.println(counts.get(Circle.class) + " " + counts.get(Ring.class) + " " + counts.get(String.class)
+                      + " " + counts.get(Map.class) + " " + counts.containsKey(int[].class) + " "
+                      + counts.containsKey(long[].class) + " " + counts.containsKey(double[].class) + " "
+                      + counts.containsKey(Circle[][].class) + " " + counts.containsKey(Circle[].class));
+              // a typed value's class
+              Circle circle = new Ring();
+              Shape shape = circle;
+              Class<? extends Circle> exact = circle.getClass();
+              Class<? extends Shape> through = shape.getClass();
+              System.out.println(exact.getSimpleName() + " " + (exact == through) + " " + (exact == Ring.class) + " "
+                      + Circle.class.isAssignableFrom(exact) + " " + exact.isAssignableFrom(Circle.class) + " "
+                      + Comparable.class.isAssignableFrom(exact) + " " + Object.class.isAssignableFrom(Shape.class) + " "
+                      + Object.class.isAssignableFrom(int.class) + " " + Object[].class.isAssignableFrom(String[].class) + " "
+                      + Object[].class.isAssignableFrom(int[].class) + " " + Object.class.isAssignableFrom(int[].class)
+                      + " " + Shape[].class.isAssignableFrom(Ring[].class) + " " + int.class.isAssignableFrom(int.class)
+                      + " " + "text".getClass().getSimpleName() + " " + Level.HIGH.getClass().getSuperclass().getName()
+                      + " " + Level.HIGH.getDeclaringClass().getName() + " " + Level.LOW.getDeclaringClass().getName());
+              // the constants of an enum
+              Level[] levels = Level.class.getEnumConstants();
+              System.out.println(levels.length + " " + levels[1] + " " + (Level.class.getEnumConstants() != levels) + " "
+                      + (String.class.getEnumConstants() == null) + " " + (Level.HIGH.getClass().getEnumConstants() == null)
+                      + " " + Enum.valueOf(Level.class, "LOW") + " " + Level.HIGH.getClass().isEnum());
+              failing("no such constant", () -> Enum.valueOf(Level.class, "NOPE"));
+              // a class held by an object
+              Reader<String> strings = new Reader<>(String.class);
+              Reader<Shape> shapes = new Reader<>(Shape.class);
+              Reader<Number> numbers = new Reader<>(Number.class);
+              System.out.println(strings.read("yes") + " " + strings.read(1) + " " + (shapes.read(new Ring()) != null) + " "
+                      + shapes.read("no") + " " + numbers.read(7) + " " + numbers.read(7.5) + " " + numbers.read("7"));
+              failing("a cast", () -> Integer.class.cast("text"));
+              failing("a cast of a class", () -> Ring.class.cast(new Circle()));
+              failing("a cast to an interface", () -> Shape.class.cast(new Point(1, 2)));
+              System.out.println(Integer.class.cast(null) + " " + Integer.class.cast(5) + " " + Shape.class.cast(circle).getClass().getSimpleName());
+              // a map from a class
+              Map<Class<?>, String> named = new HashMap<>();
+              for (Class<?> type : List.of(String.class, Integer.class, Circle.class, Shape.class, int.class)) {
+                  named.put(type, type.getSimpleName());
+              }
+              System.out.println(named.size() + " " + named.get(String.class) + " " + named.get("text".getClass()) + " "
+                      + named.get(circle.getClass()) + " " + named.get(new Circle().getClass()) + " " + named.get(int.class)
+                      + " " + named.get(Integer.class) + " " + named.get(long.class) + " " + PARSERS.get(Integer.class).apply("12") + " "
+                      + PARSERS.get(Boolean.class).apply("true") + " " + PARSERS.get(StringBuilder.class).apply("made") + " " + PARSERS.get(String.class));
+              // a class object initializes nothing; an enum's constants do
+              Class<Loud> loud = Loud.class;
+              Object builder = new StringBuilder("sb");
+              Class<?> built = builder.getClass();
+              System.out.println(loud.getSimpleName() + " " + loud.isEnum() + " " + first(Integer.class, "a", 2.5, 3, 4) + " "
+                      + first(CharSequence.class, 1, "text") + " " + first(Shape.class, "none") + " " + built.getName() + " "
+                      + (built == StringBuilder.class) + " " + Map.Entry.class.getCanonicalName() + " "
+                      + Level.HIGH.getClass().getCanonicalName() + " " + Point[].class.getCanonicalName() + " "
+                      + (objects.get(objects.size() - 1).getClass() == long[].class) + " " + (int.class == Integer.class)
+                      + " " + int[].class.getName() + " " + void.class.getSimpleName());
+              System.out.println(loud.getEnumConstants()[1]);
+              failing("null", () -> System.out.println(((Object) null).getClass().getName()));
+              failing("a null class", () -> System.out.println(Object.class.isAssignableFrom(null)));
+          }
+      }
+    stdout: |
+      class java.lang.String java.lang.String true true true String true interface Classes$Shape int void
+      java.lang.Object/Object/java.lang.Object [java.lang] Object < java.lang.Object
+      java.lang.String/String/java.lang.String [java.lang] string < java.lang.String java.lang.Object
+      java.lang.Integer/Integer/java.lang.Integer [java.lang] integer < java.lang.Integer java.lang.Number java.lang.Object
+      java.lang.Number/Number/java.lang.Number [java.lang] number < java.lang.Number java.lang.Object
+      Classes$Shape/Shape/Classes$Shape interface [] shape < Classes$Shape
+      Classes$Circle/Circle/Classes$Circle [] shape < Classes$Circle java.lang.Object
+      Classes$Ring/Ring/Classes$Ring [] shape < Classes$Ring Classes$Circle java.lang.Object
+      Classes$Level/Level/Classes$Level enum [] Level < Classes$Level java.lang.Enum java.lang.Object
+      Classes$Point/Point/Classes$Point record [] Point < Classes$Point java.lang.Record java.lang.Object
+      int/int/int primitive [java.lang] int < int
+      void/void/void primitive [java.lang] void < void
+      [I/int[]/int[] array of int [java.lang] int[] < [I java.lang.Object
+      [[Ljava.lang.String;/String[][]/java.lang.String[][] array of class [Ljava.lang.String; [java.lang] String[][] < [[Ljava.lang.String; java.lang.Object
+      java.util.ArrayList/ArrayList/java.util.ArrayList [java.util] array < java.util.ArrayList java.util.AbstractList java.util.AbstractCollection java.lang.Object
+      java.util.List/List/java.util.List interface [java.util] array < java.util.List
+      java.util.Map$Entry/Entry/java.util.Map$Entry interface [java.util] Entry < java.util.Map$Entry
+      java.lang.Runnable/Runnable/java.lang.Runnable interface [java.lang] Runnable < java.lang.Runnable
+      java.lang.String string true true false true true Object false false
+      java.lang.Integer integer true false false true true Number false false
+      java.lang.Long integer true false false true true Number false false
+      java.lang.Double number true false false true true Number false false
+      java.lang.Float number true false false true true Number false false
+      java.lang.Character Character true false false true true Object false false
+      java.lang.Boolean Boolean true false false true true Object false false
+      java.lang.Short number true false false true true Number false false
+      java.lang.Byte number true false false true true Number false false
+      Classes$Circle shape true false true true false Object false false
+      Classes$Ring shape true false true true true Circle false false
+      Classes$Level Level true false false true true Enum false true
+      Classes$Level$1  true false false true true Level false false
+      Classes$Point Point true false false true false Record false false
+      java.util.ArrayList array true false false true false AbstractList false false
+      java.lang.Object Object true true false true false - false false
+      [I int[] true false false true false Object true false
+      [Ljava.lang.String; String[] true false false true false Object true false
+      [[LClasses$Circle; Circle[][] true false false true false Object true false
+      [J long[] true false false true false Object true false
+      2 2 1 null true true false true false
+      Ring true true true false true true false true false true true true String Classes$Level Classes$Level Classes$Level
+      2 high true true true LOW false
+      no such constant: java.lang.IllegalArgumentException: No enum constant Classes.Level.NOPE
+      yes null true null 7 7.5 null
+      a cast: java.lang.ClassCastException: Cannot cast java.lang.String to java.lang.Integer
+      a cast of a class: java.lang.ClassCastException: Cannot cast Classes$Circle to Classes$Ring
+      a cast to an interface: java.lang.ClassCastException: Cannot cast Classes$Point to Classes$Shape
+      null 5 Ring
+      5 String String null Circle int Integer null 12 true made null
+      Loud true 3 text null java.lang.StringBuilder true java.util.Map.Entry null Classes.Point[] true false [I void
+      the enum is initialized
+      TWO
+      null: java.lang.NullPointerException
+      a null class: java.lang.NullPointerException
   # A thread is the host's where the target has threads and runs on the stack of the
   # thread that waits for it where it has one (wasm): a program whose threads are
   # joined prints the same on every leg. synchronized -- a block, a method, a static
@@ -13481,6 +13745,12 @@ refused:
     - name: a-class-literal-of-no-class-under-the-object-s-type
       body: 'String text = ""; boolean same = text.getClass() == Object.class;'
       error: "incomparable types: Class<CAP#1> and Class<Object>"
+    - name: a-class-held-compared-with-a-literal-of-another
+      body: 'Class<String> held = String.class; boolean same = held == Integer.class;'
+      error: "incomparable types: Class<String> and Class<Integer>"
+    - name: a-class-literal-assigned-to-the-class-of-another
+      body: 'Class<String> held = Integer.class;'
+      error: "incompatible types: Class<Integer> cannot be converted to Class<String>"
     # A private member is no member of the classes under its class: its simple name
     # finds what is around them, or nothing.
     - name: a-private-field-of-a-superclass-is-not-read-by-its-simple-name

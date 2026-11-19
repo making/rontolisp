@@ -1663,6 +1663,10 @@ final class JavaIntrinsics {
 		natives.put("java.io.StandardInput.line0()", runtime("readln"));
 		natives.put("java.io.StandardInput.ready0()", runtime("input-ready"));
 		natives.put("java.io.StandardInput.more0(int)", runtime("input-more"));
+		// what a class object holds of its class: the lowering's functions
+		natives.put("java.lang.Class.test0(Object,Object)", (lowering, call) -> call("if",
+				call("funcall", call.argument(0), call.argument(1)), JavaForms.T, JavaForms.NIL));
+		natives.put("java.lang.Class.constants0(Object)", (lowering, call) -> call("funcall", call.argument(0)));
 		String thread = THREAD + ".";
 		natives.put(thread + "carrier0(Thread)", runtime("thread-carrier"));
 		natives.put(thread + "adopt0(Thread)", runtime("thread-adopt"));

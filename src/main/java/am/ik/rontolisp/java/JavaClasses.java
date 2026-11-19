@@ -186,6 +186,34 @@ final class JavaClasses {
 	boolean arrayTypes;
 
 	/**
+	 * The types whose class object some pass read as a value, erased: a class literal's,
+	 * the classes {@code getClass()} can answer, and what those are made of.
+	 */
+	final Set<JavaType> classValues = new java.util.LinkedHashSet<>();
+
+	/**
+	 * The classes {@code getClass()} is read as a value under: each has the function
+	 * choosing the class object by what the value is.
+	 */
+	final Set<JavaClass> classOfs = new java.util.LinkedHashSet<>();
+
+	/**
+	 * Whether {@code getClass()} is read as a value of what can be an array its static
+	 * type does not tell the class of: the program then has the class object of every
+	 * array type it records ({@link #arrayRecords}).
+	 */
+	boolean arrayClassValues;
+
+	/** The array types whose class a conversion records, or a read falls back on. */
+	final Set<JavaType.ArrayType> arrayRecords = new java.util.LinkedHashSet<>();
+
+	/**
+	 * Whether the program reaches {@code Class.getEnumConstants()}: what holds an enum's
+	 * class object then initializes the enum as a call of its {@code values()} does.
+	 */
+	boolean enumConstants;
+
+	/**
 	 * The classes of the library's Java source whose static initialization a pass needs.
 	 */
 	final Set<JavaClass> used = new java.util.LinkedHashSet<>();

@@ -382,6 +382,13 @@
    (t (error
        "getClass() of this value is not supported by the experimental Java subset yet"))))
 
+;; getClass() read as a value of what no class object stands for: a lambda.
+(defun rontolisp::%java-no-class (x)
+  (if (null x)
+      (rontolisp::%java-npe)
+      (error
+       "getClass() of this value is not supported by the experimental Java subset yet")))
+
 ;; --- the class of an array ------------------------------------------------------------
 ;; An array is a vector, which tells the class of an array of int, byte, char, float,
 ;; double and boolean by its element type and reads as an Object[] otherwise. The class
