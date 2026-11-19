@@ -120,11 +120,22 @@ jobs:
       # parallelism-independent classes agree, e.g. JvmLispCompilerTest, and whose
       # printed parallelism matches.
       run: ./mvnw -V --no-transfer-progress clean test -Drontolisp.test.scope=e2e
-    # What the next run will have to restore, and the number to watch if this job
-    # ever starts evicting the Maven caches.
-    - name: Report the wasmtime cache size
+    # The module cache is content-addressed and a run inherits the previous tree's entry
+    # through its restore-key, so it accumulates modules no current run compiles again:
+    # measured 2026-11-19, the e2e cache held 5.8 GB, nearly all of it from earlier
+    # trees. On the 10 GB budget that evicted every other cache, the native-image Rust
+    # build caches (830 MB per platform) included -- none had been restored. Keep the
+    # newest files under 3 GiB: the modules this tree compiles are the newest, and they
+    # are what the next run asks for. wasmtime's own limit needs -C cache-config on
+    # every invocation, which the tests do not pass. The size printed stays the number to
+    # watch if this job ever evicts the Maven caches.
+    - name: Trim the wasmtime cache
       if: always()
-      run: du -sh ~/.cache/wasmtime || true
+      run: |
+        find ~/.cache/wasmtime -type f -printf '%T@ %s %p\n' 2>/dev/null | sort -k1,1nr |
+          awk -v budget=$((3 * 1024 * 1024 * 1024)) '{ if (sum < budget) sum += $2; else print $3 }' |
+          xargs -r rm -f
+        du -sh ~/.cache/wasmtime || true
   test-rest:
     runs-on: ubuntu-latest
     steps:
@@ -160,9 +171,14 @@ jobs:
       # Same parallelism note as test-e2e above: the flag stays off and the
       # strategy derives it from the runner.
       run: ./mvnw -V --no-transfer-progress clean test -Drontolisp.test.scope=rest
-    - name: Report the wasmtime cache size
+    # The same trim as test-e2e, for the rest shard's own lineage.
+    - name: Trim the wasmtime cache
       if: always()
-      run: du -sh ~/.cache/wasmtime || true
+      run: |
+        find ~/.cache/wasmtime -type f -printf '%T@ %s %p\n' 2>/dev/null | sort -k1,1nr |
+          awk -v budget=$((3 * 1024 * 1024 * 1024)) '{ if (sum < budget) sum += $2; else print $3 }' |
+          xargs -r rm -f
+        du -sh ~/.cache/wasmtime || true
   # Each platform's runner stubs (rlrun, and rlrun-net for a program that fetches), for
   # every native binary to carry beside its own pair: a --native-target output starts
   # with the TARGET's stub, and only a runner of that platform can build it
@@ -181,11 +197,9 @@ jobs:
     - uses: actions/checkout@v7
     - name: Set up Rust
       uses: dtolnay/rust-toolchain@stable
-    - name: Cache the Rust build
-      uses: Swatinem/rust-cache@v2
-      with:
-        workspaces: rontolisp-native
-        key: stub
+    # No Rust build cache: the stubs take about a minute to build, and the 830 MB an
+    # entry takes is what the native-image job's Rust build caches need -- the ones
+    # here never survived beside them (2026-11-19).
     - name: Build the runner stubs
       run: rontolisp-native/build.sh --stub ${{ matrix.platform }}
     - name: Upload the runner stubs

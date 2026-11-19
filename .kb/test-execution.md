@@ -112,7 +112,12 @@ and the shards still use separate save lineages (`wasmtime-modules-*` keeps
 the old key, `test-e2e` saves under `wasmtime-e2e-modules-*` with a
 restore-key into the warm full cache) so no save races at all. Coverage
 parity: both shards install OpenBLAS and the same pinned wasmtime, because
-each shard owns classes needing them. What did NOT change: `release` and
+each shard owns classes needing them. Measured 2026-11-19: the module cache
+accumulates the earlier trees' modules through that restore-key (5.8 GB in
+`test-e2e`), which on the repository's 10 GB budget evicted every other
+cache, the `native-image` Rust build caches included -- none had ever been
+restored. Both shards now trim the directory to the newest 3 GiB before the
+save; `native-stubs` no longer caches its minute-long Rust build. What did NOT change: `release` and
 `examples` still chain through `native-image`, both shards run on pull
 requests exactly as `test` did, and `examples` still never runs on a PR.
 
