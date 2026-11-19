@@ -453,12 +453,12 @@ final class JavaLowering implements JavaEmitter.Context {
 	/** What the function being lowered does. */
 	private Effects effects = new Effects();
 
-	private final Map<Method, Effects> methodEffects = new HashMap<>();
+	private final Map<Method, Effects> methodEffects = new LinkedHashMap<>();
 
 	/** The static initialization of each class: its forms, in the class's order. */
 	private final Map<JavaClass, List<LispVal>> staticInits = new LinkedHashMap<>();
 
-	private final Map<JavaClass, Effects> initEffects = new HashMap<>();
+	private final Map<JavaClass, Effects> initEffects = new LinkedHashMap<>();
 
 	/** What the flow of the classes lowered reads ({@link JavaFlow}). */
 	private final JavaFlow.Facts facts = new JavaFlow.Facts();
@@ -476,7 +476,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	private java.util.function.@Nullable Consumer<JavaResumable.Census> counted;
 
 	/** The local and anonymous classes lowered already in this pass. */
-	private final Set<JavaClass> loweredLocals = new HashSet<>();
+	private final Set<JavaClass> loweredLocals = new LinkedHashSet<>();
 
 	/** The bindings of the patterns of the statement being lowered. */
 	private List<Local> patternVariables = new ArrayList<>();
@@ -896,9 +896,9 @@ final class JavaLowering implements JavaEmitter.Context {
 	// ---- what the program reaches of the library
 
 	/** The library methods and static initializations lowered already in this pass. */
-	private final Set<Method> loweredMethods = new HashSet<>();
+	private final Set<Method> loweredMethods = new LinkedHashSet<>();
 
-	private final Set<JavaClass> loweredInits = new HashSet<>();
+	private final Set<JavaClass> loweredInits = new LinkedHashSet<>();
 
 	/** Whether a class is Java source of the library, and no class of the program. */
 	private boolean isLibrary(JavaClass declaration) {

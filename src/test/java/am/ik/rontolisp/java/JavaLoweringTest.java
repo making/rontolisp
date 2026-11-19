@@ -47,6 +47,19 @@ class JavaLoweringTest {
 	}
 
 	@Test
+	void theSameSourceLoweredTwiceGivesTheSameForms() {
+		// classes that need no other are initialized before main in an order the language
+		// leaves open; the order is the declaration's, never an object's identity
+		StringBuilder source = new StringBuilder();
+		for (int i = 0; i < 40; i++) {
+			source.append("class C").append(i).append(" { static int n = ").append(i).append("; }\n");
+		}
+		source.append("void main() { IO.println(C0.n); }");
+		List<String> first = lower(source.toString(), "Main.java");
+		assertThat(lower(source.toString(), "Main.java")).isEqualTo(first);
+	}
+
+	@Test
 	void theLoweringTable() {
 		// A class is a structure, extends its :include, a field a slot with its type's
 		// default, a static field a global set before main; a method's function has

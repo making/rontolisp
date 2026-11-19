@@ -2546,6 +2546,10 @@ virtual call can run --, classes used):
   only when something can read it there (no initializer, a lazy class, a read through a method
   the initialization calls or by a qualified name ahead of the field).
 - The decision is made at the end of a pass and the next pass is lowered with it.
+- Classes that need no other run in the order of lowering, so one source compiles to the same bytes
+  every time: the per-class and per-method records are insertion-ordered maps, never an
+  identity-hashed one (2026-11-20; the same YAVI example compiled three times by one jar is
+  one 1,204,017 B `.wasm` and a `cmp`-identical one, `JavaLoweringTest`).
 - **An initialization that throws an object ends as the language ends it** (j88): "A static
   initialization that throws" under "Exceptions".
 - Not the language's: a run-time error inside an eager initialization surfaces before `main`
