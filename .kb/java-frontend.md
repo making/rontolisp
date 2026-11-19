@@ -51,13 +51,14 @@ collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
 as the program reaches it, annotation types and type annotations, an exact method
 reference in a call's applicability: k24 (2026-11-19); what comes after is `.todo/k15`,
 `k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22` and `k26` (what k00, k11, k06, k07, k08,
-k10 and k12 left) and `.todo/k31` to `k38` but k36 (what stands between k24 and YAVI compiled to
+k10 and k12 left) and `.todo/k32`, `k33`, `k35` and `k37` (what stands between k24 and YAVI compiled to
 wasm: `.todo/k33` holds the order); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
 `java.text.MessageFormat`: k28 (2026-11-19); `java.text.Normalizer` over the normalization
 forms the front ends share: k29 (2026-11-19); a `Class` as a value, a type variable in
 scope kept apart from the one a call finds, `Name.this` as the instance of `Name`
 itself: k30 (2026-11-20; `.todo/k39`, `k40` and `k41` are what it found beside its way);
-`java.util.UUID`: k36 (2026-11-20).
+`java.util.UUID`: k36 (2026-11-20); `java.math` (`BigInteger`, `BigDecimal`,
+`MathContext`, `RoundingMode`): k31 (2026-11-20).
 
 ## Where it sits
 
@@ -1191,7 +1192,8 @@ measured programs.
   backends: wasm 616,785 B, the component 620,879 B, the jar 240,951 B. Pins: java-spec
   `a-message-format-puts-its-arguments-in-a-pattern`;
   `RontoLispCliStreamsTest#aJavaFileRunsCompilesAndIsRefusedWhereItCannot` (a format
-  type). `BigInteger` / `BigDecimal` arguments wait for `.todo/k31`.
+  type). A `BigInteger` and a `BigDecimal` are written from their own digits since k31
+  ("java.math" below).
 - **`java.text.Normalizer` (k29, 2026-11-19)** is the enum `Form` and two statics of
   Java source over one `native`, `normalize0(text, compatibility, composed)`, which is
   `%unorm-normalize` of the library the front ends share
@@ -1231,6 +1233,100 @@ measured programs.
   / `reverseBytes`, `OptionalLong` and `HttpHeaders.firstValueAsLong`: each in
   `Support` or a source class, 866 probe lines identical to JDK 25 on four backends
   (`Members.java` beside `Dur.java`). Still refused: `.todo/k26`.
+
+## java.math (2026-11-20, k31)
+
+`BigInteger`, `BigDecimal`, `MathContext` and `RoundingMode` are Java source
+(`java.math` joined `LIBRARY_PACKAGES`), written from the API documentation; what it
+leaves open is a JDK 25's answers to a grid.
+
+- **The grid** (`.todo/artefacts/k31-java-math-biginteger-and-bigdecimal/Grid.java`):
+  94,160 lines -- 20 integers and 39 decimals, every pair through every operation, each
+  rounding mode at five scales and four precisions, ten math contexts, 98 texts a number
+  is and is not read from, 31 pairs of numbers far apart, 150 seeded integers and 250 seeded decimals.
+  The interpreter (17 s), the JVM (2.5 s), wasm (14.6 s) and the component (15.3 s)
+  print a JDK's lines, all of them (the JDK itself 1.8 s).
+- **A `BigInteger` is the host's integer held in a field** (`Object value`), its
+  arithmetic 24 `native` members that are host forms (`+`, `truncate`, `ash`,
+  `integer-length`, `logcount`, `isqrt`, `%java-digits`, `%java-nearest-binary`):
+  `JavaIntrinsics.NATIVES`. The structure tells it from an `Integer` and a `Long`, and it
+  stands under `Number` as the atomics do. **Measured against a tagged value** (the
+  item's question; 20,000,000 sums of a 20-digit step, best of three): on wasm a cons
+  `(n . :big)` written in Lisp 2.08 s, a structure written in Lisp 3.37 s, the Java
+  class 2.92 s; on the JVM 1.15 / 1.30 / 1.13 s, a JDK's own class 1.18 s. So the
+  structure costs a sum of small numbers 1.4 times on wasm and nothing on the JVM, and
+  less as the numbers grow. Source was kept: an intrinsic's `toString`, `equals`,
+  `hashCode` and class name are arms of run-time functions every program holds, a class
+  of a program could not extend it, and `BigDecimal` is source either way.
+- **A text is read a group at a time** (the most digits of the radix that always fit an
+  int: 9 in ten, 7 in sixteen, 30 in two), and a digit that is none is refused with its
+  group, as a JDK names it (`For input string: "4567890x1"`, ` under radix 16` after it
+  where the radix is not ten); the zeros a number starts with are in no group. The order
+  of the refusals: the radix, an empty text, a sign past the first character, a text of
+  a sign alone.
+- **`hashCode`** is no part of the API: read off the probe, a `BigInteger`'s is its
+  magnitude's 32-bit words from the highest, each added to 31 times the ones before,
+  times the sign; a `BigDecimal`'s 31 times its unscaled value's plus its scale.
+- **A `BigDecimal` is a `BigInteger`, a scale and the count of its digits once asked.**
+  Each operation is the specification's: the exact result at its preferred scale, then
+  ONE rounding of an integer quotient (`divided`, `away`). What the grid decided:
+  - `divide(x)`: the two as a fraction in lowest terms; the denominator may hold only
+    twos and fives, and the larger count of the two is the digits added.
+  - `divide(x, mc)`: the dividend raised so that the integer quotient has exactly the
+    precision's digits, rounded once. An exact quotient loses the zeros it ends with as
+    far as the preferred scale; a rounded one keeps its digits.
+  - `add(x, mc)`: two zeros are added exactly; beside one zero the other number is
+    rounded, then written with zeros toward the sum's scale as far as the precision
+    takes them (`padded`); **a number wholly below both the other's last digit and the
+    rounding place is replaced by one unit just below them** -- it moves the sum off the
+    other number and across no boundary of any mode, so `1E+1000000000 + 1` at seven
+    digits is seven digits of work.
+  - `sqrt(mc)`: the integer root (`isqrt`) of the value raised to hold one digit more
+    than asked, rounded once with what the root left over; right in the eight modes on
+    every line. The result loses the zeros it ends with as far as `scale / 2` even
+    where it was rounded (`0.5` at two digits, `DOWN`, is `0.7`).
+  - `pow(n, mc)` is the algorithm the documentation gives (squaring from the exponent's
+    highest bit at the precision plus the exponent's digits plus one).
+  - `divideToIntegralValue(x, mc)`: the whole quotient with its zeros off; more digits
+    than the precision is `Division impossible`, fewer are padded toward the preferred
+    scale.
+  - `divide(x, scale, mode)` by zero has a JDK's two wordings: `/ by zero` where the
+    scale moves a number at most 18 places and the dividend moved is below 2^63, else
+    `BigInteger divide by zero` (224 probe lines, no exception).
+  - A text: the exponent is read before the digits are counted; at most ten exponent
+    digits past its zeros; a scale outside an int is `Exponent overflow.`. A text that
+    stops where a character must follow has NO message where it ends its array (every
+    string: `""`, `"1e"`) and `No digits found.` / `No exponent digits.` where it is a
+    range ending inside a `char[]`.
+  - `compareTo`, the exact conversions, `longValue` and `doubleValue` decide by the place
+    of the first digit before any power of ten is made, so `1e1000000000` compares,
+    overflows and is `Infinity` at once. `doubleValue` / `floatValue` are
+    `%java-nearest-binary` of the ratio: one rounding.
+- **`MessageFormat` asks `rontolisp.internal.Exact`** (`written(3)`: the plain digits
+  rounded half even at three places, the sign kept where no digit is left: `-0`), which
+  the two classes implement. An interface, not two `instanceof`: a test of an interface
+  and a call through it hold only the classes a program MADE, so a program with no big
+  number pays 33 B (one message 175,758 -> 175,791 B of wasm; YAVI's classic example
+  655,678 -> 655,716).
+- **An enum may declare an overload of `valueOf` or `values`** (`RoundingMode.valueOf(int)`;
+  until then any method of the name hid the enum's own and `valueOf("X")` was `no
+  suitable method found`): `JavaClasses.enumMethod` looks for the signature.
+- Sizes (wasm): a program summing `BigInteger`s 106,595 B; one adding two `BigDecimal`s
+  and rounding the sum 177,312; a program naming neither is byte-identical.
+- **YAVI**: `patch.sh` lost its fourth edit; `UntypedInput.convertNumber`, `decimal` and
+  `typeName` are lowered as written, but the `Year` arm, which went to the first edit
+  (`java.time`, `.todo/k35`). The schema example with two edits left prints a JDK's
+  lines on the four backends: wasm 1,095,209 B (1,032,990 with the conversion cut out),
+  the component 1,099,574, the jar 407,992; with five inputs that run the conversion
+  (a `long`, two doubles, a `BigDecimal`, a `BigInteger` given for an `Integer`)
+  1,095,450 B. `shelf/Price.java` beside the grid (`_bigDecimal`, `_bigInteger`, their
+  bounds in the messages) prints a JDK's 19 lines on the four: wasm 1,034,348 B.
+- Not there (`.todo/k26`): the primes (`isProbablePrime`, `nextProbablePrime`,
+  `probablePrime`, the constructors of random bits), refused by name; `%d` / `%f` / `%e`
+  of the two in `String.format`, an `IllegalFormatConversionException` (`deviations.md`).
+- Pins: the `standalone:` case `big-integers-and-decimals-compute-round-and-print-exactly`
+  (a file of its own: a class under `Number` changes how the corpus program lowers
+  `Number`); `valueOf(int)` of an enum in `an-enum-is-a-class-whose-constants-are-made-once`.
 
 ## java.io (2026-11-17, j79)
 

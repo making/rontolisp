@@ -12,7 +12,8 @@
 UTF-16 のコード単位を返し、`new String(char[])` はそれを元の文字列に読み戻します。
 `toUpperCase` と `toLowerCase` は 1 文字を 1 文字に変えます。`"ß".toUpperCase()` は `ß` です
 （JDK は `SS` を返します）。相手のないサロゲートは、UTF-8 では 3 バイトになります（JDK は
-`?` を書きます）。`Character.digit`、`getNumericValue`、`Integer.parseInt`、`UUID.fromString` は、ASCII の外の
+`?` を書きます）。`Character.digit`、`getNumericValue`、`Integer.parseInt`、`UUID.fromString`、
+`BigInteger` と `BigDecimal` に渡す文字列は、ASCII の外の
 数字（`'٣'`）をインタプリタと JVM では読み、`.wasm` では読みません。
 
 ```java
@@ -262,6 +263,11 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 別の桁を書くことがあり、`1e23` はここでは `100,000,000,000,000,000,000,000`、JDK では
 `99,999,999,999,999,990,000,000` です。`applyPattern` が拒否したパターンは書式を変えません。
 JDK では前後 2 つのパターンが混ざった状態が残ります。
+
+**`BigInteger` と `BigDecimal` には素数のメンバーがなく、`String.format` で書けるのは `%s`
+だけです。** `isProbablePrime`、`nextProbablePrime`、`probablePrime`、乱数のビットを取る
+コンストラクタは、名前を示して拒否されます。`BigInteger` に対する `%d`、`BigDecimal` に対する
+`%f` と `%e` は `IllegalFormatConversionException` になります。JDK はその数値を書きます。
 
 **`Normalizer` は JDK 25 の Unicode データを使います。** それより新しい JDK の Unicode で
 追加または変更された文字も、JDK 25 と同じ結果になります。すでにその形式になっている文字列を
@@ -556,7 +562,7 @@ WebSocket です。`version(..)` で指定した値は保持され、問い合�
   拒否されます。
 - [概要](index.md)の表にないライブラリのクラスとメンバー。
   `TreeMap`、`Scanner`、ファイル（`File`、`FileReader`、
-  `java.nio.file`）、`Duration` 以外の `java.time`、`BigInteger`、`BigDecimal`、
+  `java.nio.file`）、`Duration` 以外の `java.time`、
   リフレクションなどです。
   `java.net` では、`URI`、サーバーのアドレス、[HTTP クライアント](#the-http-client)以外の
   すべてが該当します。

@@ -12,7 +12,8 @@ the Basic Multilingual Plane. `hashCode` is the specified number, and `toCharArr
 the UTF-16 units, which `new String(char[])` reads back. `toUpperCase` and `toLowerCase`
 change one character into one: `"ß".toUpperCase()` is `ß`, where a JDK answers `SS`. A
 surrogate with no partner in a string is its three bytes in UTF-8, where a JDK writes `?`.
-`Character.digit`, `getNumericValue`, `Integer.parseInt` and `UUID.fromString` read a digit outside ASCII
+`Character.digit`, `getNumericValue`, `Integer.parseInt`, `UUID.fromString` and the texts a
+`BigInteger` and a `BigDecimal` are made of read a digit outside ASCII
 (`'٣'`) on the interpreter and the JVM and not in a `.wasm`.
 
 ```java
@@ -264,6 +265,11 @@ error naming it. The only locales are the root and the English ones, which forma
 that read back as it, where a JDK sometimes prints others: `1e23` prints
 `100,000,000,000,000,000,000,000`, a JDK `99,999,999,999,999,990,000,000`. A pattern
 `applyPattern` refuses leaves the format as it was; a JDK's keeps a mix of the two.
+
+**A `BigInteger` and a `BigDecimal` have no primes, and `String.format` writes them with
+`%s` alone.** `isProbablePrime`, `nextProbablePrime`, `probablePrime` and the constructors
+of random bits are refused by name. `%d` of a `BigInteger` and `%f` or `%e` of a
+`BigDecimal` are an `IllegalFormatConversionException`, where a JDK writes the number.
 
 **`Normalizer` reads the Unicode data of JDK 25.** A character whose data a later JDK's
 Unicode adds or changes is normalized as JDK 25 does it. `normalize` of a text already in
@@ -533,7 +539,6 @@ Each of these is an error naming the construct and its position.
   `Date`. Thread groups.
 - Any class or member of the library not listed in the [overview](index.md):
   `TreeMap`, `Scanner`, files
-  (`File`, `FileReader`, `java.nio.file`), `java.time` but `Duration`, `BigInteger`,
-  `BigDecimal`,
+  (`File`, `FileReader`, `java.nio.file`), `java.time` but `Duration`,
   reflection. Of `java.net`, everything but `URI`, the addresses of a server and the
   [HTTP client](#the-http-client): `URL`, sockets, `HttpURLConnection`.

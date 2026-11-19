@@ -1858,6 +1858,34 @@ final class JavaIntrinsics {
 		// (eval/unicode-normalization.lisp)
 		natives.put("java.text.Normalizer.normalize0(String,boolean,boolean)",
 				(lowering, call) -> JavaForms.form(new LispSymbol("RONTOLISP::%UNORM-NORMALIZE"), operands(call)));
+		// java.math.BigInteger over the host's integers, which have no bound: the field
+		// of a BigInteger holds one, so the arithmetic is the host's
+		String big = "java.math.BigInteger.";
+		natives.put(big + "wide(long)", (lowering, call) -> call.argument(0));
+		natives.put(big + "low(Object)", (lowering, call) -> JavaForms.wrap(Primitive.LONG, call.argument(0)));
+		natives.put(big + "sum(Object,Object)", host("+"));
+		natives.put(big + "difference(Object,Object)", host("-"));
+		natives.put(big + "product(Object,Object)", host("*"));
+		natives.put(big + "quotient(Object,Object)",
+				(lowering, call) -> call("values", host("truncate").emit(lowering, call)));
+		natives.put(big + "rest(Object,Object)", host("rem"));
+		natives.put(big + "modulo(Object,Object)", host("mod"));
+		natives.put(big + "power(Object,int)", host("expt"));
+		natives.put(big + "common(Object,Object)", host("gcd"));
+		natives.put(big + "root(Object)", host("isqrt"));
+		natives.put(big + "shifted(Object,long)", host("ash"));
+		natives.put(big + "both(Object,Object)", host("logand"));
+		natives.put(big + "either(Object,Object)", host("logior"));
+		natives.put(big + "differing(Object,Object)", host("logxor"));
+		natives.put(big + "inverted(Object)", host("lognot"));
+		natives.put(big + "bit(int,Object)", host("logbitp"));
+		natives.put(big + "length(Object)", host("integer-length"));
+		natives.put(big + "count(Object)", host("logcount"));
+		natives.put(big + "sign(Object)", host("signum"));
+		natives.put(big + "below(Object,Object)", host("<"));
+		natives.put(big + "same(Object,Object)", host("="));
+		natives.put(big + "digits(Object,int)", runtime("digits"));
+		natives.put(big + "rounded(Object,Object,int,int,int)", runtime("nearest-binary"));
 		natives.put("rontolisp.internal.Support.floatHash(float)", runtime("float-bits"));
 		// a Float is the float in a cons with its tag
 		natives.put("rontolisp.internal.Support.readFloat(String)", (lowering, call) -> {

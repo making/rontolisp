@@ -1,5 +1,7 @@
 package shelf;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.Map;
 
 import am.ik.yavi.core.ConstraintViolations;
@@ -36,5 +38,11 @@ public record Book(String title, String isbn, Integer pages) {
         show(Map.of("title", "Emma", "isbn", "12", "pages", 474));
         show(Map.of("title", "Emma", "isbn", "978-0141439587", "pages", "many"));
         show(Map.of("title", "Emma", "isbn", "978-0141439587", "pages", 474));
+        // a number of another type is read through a BigDecimal (k31)
+        show(Map.of("title", "Emma", "isbn", "978-0141439587", "pages", 474L));
+        show(Map.of("title", "Emma", "isbn", "978-0141439587", "pages", 474.0));
+        show(Map.of("title", "Emma", "isbn", "978-0141439587", "pages", 474.5));
+        show(Map.of("title", "Emma", "isbn", "978-0141439587", "pages", new BigDecimal("4.74E+2")));
+        show(Map.of("title", "Emma", "isbn", "978-0141439587", "pages", new BigInteger("47400000000")));
     }
 }

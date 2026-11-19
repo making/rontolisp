@@ -13,6 +13,8 @@ import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
+import rontolisp.internal.Exact;
+
 public class MessageFormat {
 
     /** The format types a JDK knows, by their lower-case names: each refused by name. */
@@ -222,7 +224,26 @@ public class MessageFormat {
                 || number instanceof AtomicInteger || number instanceof AtomicLong) {
             return grouped(Long.toString(number.longValue()));
         }
+        if (number instanceof Exact exact) {
+            return exactly(exact.written(3));
+        }
         return decimal(number.doubleValue());
+    }
+
+    /**
+     * A number written by its own digits (a BigInteger, a BigDecimal): at most three
+     * after the point, those that are 0 left out.
+     */
+    private static String exactly(String digits) {
+        int point = digits.indexOf('.');
+        if (point < 0) {
+            return grouped(digits);
+        }
+        int end = digits.length();
+        while (digits.charAt(end - 1) == '0') {
+            end--;
+        }
+        return grouped(digits.substring(0, point)) + (end - 1 > point ? digits.substring(point, end) : "");
     }
 
     /**

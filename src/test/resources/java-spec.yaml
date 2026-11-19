@@ -14198,6 +14198,138 @@ standalone:
       -5
     error: "java.lang.IllegalArgumentException: no value for name | corners | area"
     at: "library-sources.jar!/geo/Table.java:52 in geo.Table.row(Object)"
+  # java.math: a BigInteger is the host's integer held in a field, a BigDecimal one of
+  # those and a scale. The arithmetic of both, the bits, the digits in a radix and the
+  # bytes; a sum of money rounded, a list sorted and summed, equals against compareTo;
+  # the three texts of a decimal number and its parts; each rounding mode at a tie, on
+  # both sides of zero, at a precision and of a square root; a precision that is kept
+  # by a division, a power and a sum of numbers fifty places apart; the conversions to
+  # the primitive types and from a double; the words of each refusal and of a text that
+  # is no number; the numbers through Number, and a message format writing them by their
+  # own digits. A file of its own: a class of Java source under Number changes how the
+  # corpus program lowers Number.
+  - name: big-integers-and-decimals-compute-round-and-print-exactly
+    file: Big.java
+    source: |
+      import java.math.BigDecimal;
+      import java.math.BigInteger;
+      import java.math.MathContext;
+      import java.math.RoundingMode;
+      import java.text.MessageFormat;
+      import java.util.ArrayList;
+      import java.util.Arrays;
+      import java.util.Collections;
+      import java.util.Comparator;
+      import java.util.HashMap;
+      import java.util.HashSet;
+      import java.util.List;
+      import java.util.Map;
+      import java.util.function.Supplier;
+
+      public class Big {
+
+          static String tried(Supplier<Object> made) {
+              try {
+                  return String.valueOf(made.get());
+              }
+              catch (RuntimeException e) {
+                  return e.getClass().getSimpleName() + ": " + e.getMessage();
+              }
+          }
+
+          static BigDecimal d(String text) {
+              return new BigDecimal(text);
+          }
+
+          static void integers() {
+              BigInteger factorial = BigInteger.ONE;
+              for (int i = 2; i <= 30; i++) {
+                  factorial = factorial.multiply(BigInteger.valueOf(i));
+              }
+              System.out.println(factorial + " " + factorial.bitLength() + " " + factorial.toString(36) + " " + factorial.hashCode() + " " + factorial.getLowestSetBit());
+              BigInteger a = new BigInteger("-123456789012345678901234567890");
+              BigInteger b = new BigInteger("ffffffffffffffffffff", 16);
+              System.out.println(a.add(b) + " " + a.subtract(b) + " " + a.multiply(b) + " " + a.divide(b) + " " + a.remainder(b) + " " + a.mod(b) + " " + a.gcd(b) + " " + a.negate().sqrt() + " " + Arrays.toString(a.divideAndRemainder(b)));
+              System.out.println(a.and(b) + " " + a.or(b) + " " + a.xor(b) + " " + a.not() + " " + a.andNot(b) + " " + a.shiftLeft(7) + " " + a.shiftRight(70) + " " + a.testBit(3) + " " + a.setBit(0) + " " + a.clearBit(1) + " " + a.flipBit(100) + " " + a.bitCount());
+              System.out.println(a.intValue() + " " + a.longValue() + " " + a.doubleValue() + " " + a.floatValue() + " " + b.pow(40).doubleValue() + " " + Arrays.toString(BigInteger.valueOf(-129).toByteArray()) + " " + new BigInteger(new byte[] {-1, 127}) + " " + new BigInteger(1, new byte[] {-1, 127}) + " " + new BigInteger("+00012") + " " + a.toString(2).length());
+              System.out.println(a.compareTo(b) + " " + a.equals(new BigInteger("-123456789012345678901234567890")) + " " + a.equals(-5L) + " " + a.min(b).signum() + " " + b.max(a).equals(b) + " " + BigInteger.TWO.modPow(BigInteger.valueOf(100), BigInteger.valueOf(1000007)) + " " + BigInteger.valueOf(3).modInverse(BigInteger.TEN) + " " + BigInteger.TWO.pow(62).longValueExact() + " " + BigInteger.valueOf(Long.MIN_VALUE).abs() + " " + BigInteger.ZERO.pow(0));
+              System.out.println(tried(() -> BigInteger.TEN.divide(BigInteger.ZERO)) + "|" + tried(() -> BigInteger.TEN.mod(BigInteger.ZERO)) + "|" + tried(() -> BigInteger.TWO.pow(63).longValueExact()) + "|" + tried(() -> BigInteger.TEN.pow(-1)) + "|" + tried(() -> a.sqrt()) + "|" + tried(() -> BigInteger.TEN.modInverse(BigInteger.TWO)) + "|" + tried(() -> a.testBit(-1)));
+              System.out.println(tried(() -> new BigInteger("12x")) + "|" + tried(() -> new BigInteger("123456789012345678901234567890x1234567890")) + "|" + tried(() -> new BigInteger("")) + "|" + tried(() -> new BigInteger("1-2")) + "|" + tried(() -> new BigInteger("19", 8)) + "|" + tried(() -> new BigInteger("1", 37)) + "|" + tried(() -> new BigInteger(0, new byte[] {1})));
+          }
+
+          static void money() {
+              BigDecimal price = d("19.99");
+              BigDecimal net = price.multiply(BigDecimal.valueOf(3));
+              BigDecimal tax = net.multiply(d("0.0825")).setScale(2, RoundingMode.HALF_UP);
+              System.out.println(net + " " + tax + " " + net.add(tax) + " " + net.subtract(tax).negate() + " " + net.divide(d("7"), 4, RoundingMode.HALF_EVEN) + " " + net.divide(d("8")) + " " + net.divide(d("7"), MathContext.DECIMAL32) + " " + net.remainder(d("7")) + " " + net.divideToIntegralValue(d("7")) + " " + net.max(tax) + " " + net.min(tax));
+              List<BigDecimal> amounts = new ArrayList<>(List.of(d("2.50"), d("2.5"), d("-1E+3"), d("0.000"), BigDecimal.TEN, d("2.49")));
+              Collections.sort(amounts);
+              Map<BigDecimal, String> named = new HashMap<>();
+              named.put(d("2.5"), "a");
+              named.put(d("2.50"), "b");
+              System.out.println(amounts + " " + amounts.stream().reduce(BigDecimal.ZERO, BigDecimal::add) + " " + amounts.stream().max(Comparator.naturalOrder()).get() + " " + new HashSet<>(amounts).size() + " " + named.get(d("2.50")) + named.size() + " " + d("2.5").equals(d("2.50")) + " " + d("2.5").compareTo(d("2.50")) + " " + d("2.5").hashCode() + " " + d("2.50").hashCode() + " " + d("-1E+3").hashCode());
+          }
+
+          @SuppressWarnings("deprecation")
+          static void forms() {
+              StringBuilder line = new StringBuilder();
+              for (String text : new String[] {"0", "0.00", "0E+3", "-1.50", "1E+3", "123.456", "1E-10", "0.0000001", "-12345.6789E+10", "0E-8"}) {
+                  BigDecimal a = d(text);
+                  line.append(a + " " + a.toEngineeringString() + " " + a.toPlainString() + " " + a.scale() + " " + a.precision() + " " + a.unscaledValue() + " " + a.signum() + " " + a.stripTrailingZeros() + " " + a.ulp() + " " + a.movePointLeft(2) + " " + a.movePointRight(2) + " " + a.scaleByPowerOfTen(2) + "; ");
+              }
+              System.out.println(line.toString().trim());
+              line.setLength(0);
+              for (RoundingMode mode : RoundingMode.values()) {
+                  line.append(mode + " " + tried(() -> d("2.5").setScale(0, mode)) + " " + tried(() -> d("-2.5").setScale(0, mode)) + " " + tried(() -> d("1.15").setScale(1, mode)) + " " + tried(() -> d("-1.249").round(new MathContext(2, mode))) + " " + tried(() -> d("2").sqrt(new MathContext(5, mode))) + " " + tried(() -> d("999.5").round(new MathContext(3, mode))) + "; ");
+              }
+              System.out.println(line.toString().trim());
+              MathContext seven = new MathContext("precision=7 roundingMode=HALF_EVEN");
+              System.out.println(seven + " " + seven.equals(MathContext.DECIMAL32) + " " + MathContext.UNLIMITED + " " + new MathContext(3) + " " + RoundingMode.valueOf(BigDecimal.ROUND_HALF_EVEN) + " " + RoundingMode.valueOf("FLOOR").ordinal() + " " + d("1").divide(d("3"), seven) + " " + d("1").divide(d("3"), 5, BigDecimal.ROUND_UP) + " " + d("2").pow(100) + " " + d("1.1").pow(-3, seven) + " " + d("1.1").pow(100, seven) + " " + d("2").sqrt(MathContext.DECIMAL64) + " " + d("0.0625").sqrt(MathContext.UNLIMITED) + " " + d("1E+50").add(d("1"), seven) + " " + d("1").subtract(d("1E-50"), new MathContext(5, RoundingMode.DOWN)) + " " + d("1000").divide(d("8"), new MathContext(2)) + " " + d("10").divide(d("4"), seven));
+          }
+
+          @SuppressWarnings("deprecation")
+          static void numbers() {
+              System.out.println(d("1e19").longValue() + " " + d("-1.9").intValue() + " " + d("0.1").doubleValue() + " " + d("0.1").floatValue() + " " + d("1e400").doubleValue() + " " + d("-1e-400").doubleValue() + " " + d("9007199254740993").doubleValue() + " " + d("1.5E+2").intValueExact() + " " + d("150.00").toBigIntegerExact() + " " + d("-150.99").toBigInteger() + " " + d("127").byteValueExact() + " " + d("1e1000000000").compareTo(d("1")) + " " + d("1e-1000000000").signum());
+              System.out.println(new BigDecimal(0.1) + " " + BigDecimal.valueOf(0.1) + " " + new BigDecimal(2.5) + " " + BigDecimal.valueOf(1e10) + " " + new BigDecimal(-0.0) + " " + BigDecimal.valueOf(5, 2) + " " + new BigDecimal(BigInteger.TEN, -2) + " " + new BigDecimal(123456, new MathContext(3)) + " " + new BigDecimal(new char[] {'x', '1', '.', '5'}, 1, 3) + " " + d("+.5e-3") + " " + d("00012.3400"));
+              System.out.println(tried(() -> d("1").divide(d("3"))) + "|" + tried(() -> d("1").divide(d("0"))) + "|" + tried(() -> d("0").divide(d("0"))) + "|" + tried(() -> d("1").divide(d("0"), 2, RoundingMode.UP)) + "|" + tried(() -> d("1E+30").divide(d("0"), 2, RoundingMode.UP)) + "|" + tried(() -> d("1.25").setScale(1)) + "|" + tried(() -> d("1.5").intValueExact()) + "|" + tried(() -> d("1e10").intValueExact()) + "|" + tried(() -> d("-1").sqrt(MathContext.DECIMAL32)) + "|" + tried(() -> d("2").sqrt(MathContext.UNLIMITED)) + "|" + tried(() -> d("2").pow(-1)) + "|" + tried(() -> d("1e-2147483647").multiply(d("0.1"))) + "|" + tried(() -> d("123456").divideToIntegralValue(d("1"), new MathContext(3))));
+              System.out.println(tried(() -> d("")) + "|" + tried(() -> d("1e")) + "|" + tried(() -> d("+")) + "|" + tried(() -> d("1..2")) + "|" + tried(() -> d("1 ")) + "|" + tried(() -> d("1e1x")) + "|" + tried(() -> d("1e99999999999")) + "|" + tried(() -> d("1e-2147483648")) + "|" + tried(() -> new BigDecimal(Double.NaN)) + "|" + tried(() -> new BigDecimal(new char[] {'1', 'e', '3'}, 0, 2)) + "|" + tried(() -> new MathContext(-1)) + "|" + tried(() -> new MathContext("precision=7")) + "|" + tried(() -> RoundingMode.valueOf(8)) + "|" + tried(() -> d("1").setScale(1, 8)));
+              // through Number, and where a format writes a number by its own digits
+              Number[] numbers = {d("1.99"), new BigInteger("4294967298"), 7, 2.5, 3L};
+              StringBuilder text = new StringBuilder();
+              for (Number number : numbers) {
+                  text.append(number.intValue()).append(' ').append(number.longValue()).append(' ').append(number.doubleValue()).append(' ').append(number.byteValue()).append(' ').append(number).append(number instanceof BigDecimal).append(number instanceof BigInteger).append(number instanceof Comparable).append("; ");
+              }
+              System.out.println(text.toString().trim());
+              System.out.println(MessageFormat.format("{0} {1} {2} {3} {4} {5} {6}", d("1234567.8915"), d("-0.0004"), d("999.9995"), d("1E+3"), d("0.10"), new BigInteger("-12345678901234567890"), d("0.0025")) + " " + String.format("%s %s", d("1.50"), BigInteger.TEN) + " " + String.valueOf(d("1E+3")) + BigInteger.ONE);
+          }
+
+          public static void main(String[] args) {
+              integers();
+              money();
+              forms();
+              numbers();
+          }
+
+      }
+    stdout: |
+      265252859812191058636308480000000 108 jucotkuo7qe0hs0000000 -469516826 26
+      -123455580086526064272059861715 -123457997938165293530409274065 -149250099843740345319318418503857591750556943839720750 -102121 -75387480132951065270715 1133538339481678109435460 465 351364182882014 [-102121, -75387480132951065270715]
+      1133538339481678109537582 -123456713624865545950169399297 -123457847163205027628278936879 123456789012345678901234567889 -123457922550685160579344105472 -15802468993580246899358024689920 -104571968 true -123456789012345678901234567889 -123456789012345678901234567892 -1391107389240575080397937773266 54
+      -1312754386 4362896299872285998 -1.2345678901234568E29 -1.2345679E29 Infinity [-1, 127] -129 65407 12 98
+      -1 true false -1 true 698635 7 4611686018427387904 9223372036854775808 1
+      ArithmeticException: BigInteger divide by zero|ArithmeticException: BigInteger: modulus not positive|ArithmeticException: BigInteger out of long range|ArithmeticException: Negative exponent|ArithmeticException: Negative BigInteger|ArithmeticException: BigInteger not invertible.|ArithmeticException: Negative bit address
+      NumberFormatException: For input string: "12x"|NumberFormatException: For input string: "4567890x1"|NumberFormatException: Zero length BigInteger|NumberFormatException: Illegal embedded sign character|NumberFormatException: For input string: "19" under radix 8|NumberFormatException: Radix out of range|NumberFormatException: signum-magnitude mismatch
+      59.97 4.95 64.92 -55.02 8.5671 7.49625 8.567143 3.97 8.00 59.97 4.95
+      [-1E+3, 0.000, 2.49, 2.50, 2.5, 10] -982.510 10 6 b2 false 0 776 7752 -34
+      0 0 0 0 1 0 0 0 1 0.00 0 0E+2; 0.00 0.00 0.00 2 1 0 0 0 0.01 0.0000 0 0; 0E+3 0E+3 0 -3 1 0 0 0 1E+3 0 0 0E+5; -1.50 -1.50 -1.50 2 3 -150 -1 -1.5 0.01 -0.0150 -150 -150; 1E+3 1E+3 1000 -3 1 1 1 1E+3 1E+3 10 100000 1E+5; 123.456 123.456 123.456 3 6 123456 1 123.456 0.001 1.23456 12345.6 12345.6; 1E-10 100E-12 0.0000000001 10 1 1 1 1E-10 1E-10 1E-12 1E-8 1E-8; 1E-7 100E-9 0.0000001 7 1 1 1 1E-7 1E-7 1E-9 0.00001 0.00001; -1.23456789E+14 -123.456789E+12 -123456789000000 -6 9 -123456789 -1 -1.23456789E+14 1E+6 -1234567890000 -12345678900000000 -1.23456789E+16; 0E-8 0.00E-6 0.00000000 8 1 0 0 0 1E-8 0E-10 0.000000 0.000000;
+      UP 3 -3 1.2 -1.3 1.4143 1.00E+3; DOWN 2 -2 1.1 -1.2 1.4142 999; CEILING 3 -2 1.2 -1.2 1.4143 1.00E+3; FLOOR 2 -3 1.1 -1.3 1.4142 999; HALF_UP 3 -3 1.2 -1.2 1.4142 1.00E+3; HALF_DOWN 2 -2 1.1 -1.2 1.4142 999; HALF_EVEN 2 -2 1.2 -1.2 1.4142 1.00E+3; UNNECESSARY ArithmeticException: Rounding necessary ArithmeticException: Rounding necessary ArithmeticException: Rounding necessary ArithmeticException: Rounding necessary ArithmeticException: Computed square root not exact. ArithmeticException: Rounding necessary;
+      precision=7 roundingMode=HALF_EVEN true precision=0 roundingMode=HALF_UP precision=3 roundingMode=HALF_UP HALF_EVEN 3 0.3333333 0.33334 1267650600228229401496703205376 0.7513148 13780.61 1.414213562373095 0.25 1.000000E+50 0.99999 1.3E+2 2.5
+      -8446744073709551616 -1 0.1 0.1 Infinity -0.0 9.007199254740992E15 150 150 -150 127 1 1
+      0.1000000000000000055511151231257827021181583404541015625 0.1 2.5 1.0E+10 0 0.05 1.0E+3 1.23E+5 1.5 0.0005 12.3400
+      ArithmeticException: Non-terminating decimal expansion; no exact representable decimal result.|ArithmeticException: Division by zero|ArithmeticException: Division undefined|ArithmeticException: / by zero|ArithmeticException: BigInteger divide by zero|ArithmeticException: Rounding necessary|ArithmeticException: Rounding necessary|ArithmeticException: Overflow|ArithmeticException: Attempted square root of negative BigDecimal|ArithmeticException: Computed square root not exact.|ArithmeticException: Invalid operation|ArithmeticException: Underflow|ArithmeticException: Division impossible
+      NumberFormatException: null|NumberFormatException: null|NumberFormatException: No digits found.|NumberFormatException: Character array contains more than one decimal point.|NumberFormatException: Character   is neither a decimal digit number, decimal point, nor "e" notation exponential mark.|NumberFormatException: Not a digit.|NumberFormatException: Too many nonzero exponent digits.|NumberFormatException: Exponent overflow.|NumberFormatException: Infinite or NaN|NumberFormatException: No exponent digits.|IllegalArgumentException: Digits < 0|IllegalArgumentException: bad string format|IllegalArgumentException: argument out of range|IllegalArgumentException: Invalid rounding mode
+      1 1 1.99 1 1.99truefalsetrue; 2 4294967298 4.294967298E9 2 4294967298falsetruetrue; 7 7 7.0 7 7falsefalsetrue; 2 2 2.5 2 2.5falsefalsetrue; 3 3 3.0 3 3falsefalsetrue;
+      1,234,567.892 -0 1,000 1,000 0.1 -12,345,678,901,234,567,890 0.002 1.50 10 1E+31
 refused:
   scaffold: |
     class Refused {

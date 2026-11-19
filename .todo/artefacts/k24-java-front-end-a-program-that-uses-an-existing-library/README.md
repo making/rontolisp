@@ -4,7 +4,7 @@
 183,636 lines. Nothing of YAVI is in this directory: the two programs are written here over
 its public API, `patch.sh` holds `sed` lines and `shim/` classes written here (the
 classic example needs none since 2026-11-19; the schema example has five edits since
-2026-11-20 (three since k36 and k38), each around a class the library lacks).
+2026-11-20 (two since k36, k38 and k31), each around a class the library lacks).
 
 ## How to run it again
 
@@ -60,13 +60,13 @@ lines (wasm 655,275 B, the component 659,541 B, the jar 255,602 B). The k24 numb
 |---|---------|-------|------|
 | 1 | `class is not allowed to extend sealed class` (a permitted class in a file of its own, read while the `permits` clause naming it was) | `NullAcceptingValueValidator` | fixed here |
 | 2 | `a class literal but compared with a class or before getName()` (`String.class` as an argument) | `YaviSchema._string` | fixed by k30 (a `Class` is a value) |
-| 3 | `the class java.time.LocalDate` (`LocalTime` .. `Period` after it: `X::parse` in the table of the types read from their text) | `core/UntypedInput` | `.todo/k35`; `patch.sh` 1 |
+| 3 | `the class java.time.LocalDate` (`LocalTime` .. `Period` after it: `X::parse` in the table of the types read from their text; `Year.of` and `DateTimeException` in the conversion of a number, met once row 9 went) | `core/UntypedInput` | `.todo/k35`; `patch.sh` 1 |
 | 4 | `the class java.util.UUID` (the same table) | `core/UntypedInput` | fixed by k36 (library source); `patch.sh` 2 is gone |
 | 5 | `lambda expression not expected here` (`X.this.lazy().andThen(.. -> .. .map(x2 -> () -> x2))`: a generic method called from its own body, its type argument made of its own type parameter) | `arguments/Arguments1Validator.andThen` | fixed with k30 |
 | 6 | a program that never ended: `Arguments1Validator.this` in an anonymous `Arguments1Validator` named the anonymous instance | the same | fixed with k30 |
 | 7 | `no suitable constructor found for StringValidator(..)` (`new StringValidator<>(.., lazy, ..)` in `StringValidator<T>` making a `StringValidator<Supplier<T>>`) | `arguments/StringValidator.lazy` | fixed with k30 |
 | 8 | `the class java.util.Date`, then `java.sql.Date` / `Time` / `Timestamp` (`instanceof`) | `core/UntypedInput.convert`, `SqlTypes` | `.todo/k37`; `patch.sh` 3 |
-| 9 | `the class java.math.BigInteger` (`type == BigInteger.class`), `BigDecimal` in the conversion of a number | `core/UntypedInput.typeName`, `convertNumber` | `.todo/k31`; `patch.sh` 4 |
+| 9 | `the class java.math.BigInteger` (`type == BigInteger.class`), `BigDecimal` in the conversion of a number | `core/UntypedInput.typeName`, `convertNumber` | fixed by k31 (library source); `patch.sh` 4 is gone |
 | 10 | `the class java.util.stream.StreamSupport` (`StreamSupport.stream(properties.spliterator(), false)`) | `input/Projection` | fixed by k38 (library source); `patch.sh` 5 is gone |
 | 11 | `method composed .. cannot be applied to given types` (two `Function<? super A1, ? extends A1>` given for one type parameter) | `arguments/DefaultArguments1Validator.preprocess` | fixed with k30 |
 
@@ -75,8 +75,13 @@ schema names nearly the whole library in its declarations. Since k30 (2026-11-20
 unpatched coordinates stop at row 3, and with `patch.sh`'s edits (rows 3, 8, 9; row 4 went
 with k36, 2026-11-20: wasm 1,019,971 B, the component 1,024,234 B, the jar 385,127 B; row 10
 with k38, 2026-11-20: wasm 1,032,990 B (12.6 s), the component 1,037,253 B, the jar 390,454 B,
-the interpreter 5.4 s) the program compiles and the interpreter, the JVM, wasm and the
-component print the JDK's eleven lines:
+the interpreter 5.4 s; row 9 with k31, 2026-11-20: wasm 1,095,209 B, the component
+1,099,574 B, the jar 407,992 B, and the cut of `Year` in the conversion moved to edit 1)
+the program compiles and the interpreter, the JVM, wasm and the component print the JDK's
+lines. They were eleven until k31, which gave the program five inputs that run the
+conversion of a number (a `long`, two doubles, a `BigDecimal` and a `BigInteger` given
+for an `Integer`): 23 lines, wasm 1,095,450 B (13.6 s), the component 1,099,815 B, the
+jar 408,486 B, the interpreter 5.7 s.
 
 ```bash
 unzip -q yavi-0.18.0-sources.jar -d /tmp/yavi && ./patch.sh /tmp/yavi /tmp/yavi-patched

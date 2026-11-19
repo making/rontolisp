@@ -26,14 +26,17 @@ has the two programs, the oracle's lines, the refusals met and how to run it aga
 - **The schema example** (the README's first): stopped at a class literal as a value
   until k30 (2026-11-20). **From the unpatched coordinates it now stops at
   `java.time.LocalDate`**, in `core/UntypedInput`'s table of the types read from their
-  string form. **With three edits to YAVI's source, each around a class the library
+  string form. **With two edits to YAVI's source, each around a class the library
   lacks** (`patch.sh` of the artefact: `java.time`, `java.util.Date` and
-  `java.sql`, `BigDecimal` / `BigInteger`; `UUID` went with k36 and `StreamSupport`
-  with k38, 2026-11-20), **it compiles and the
-  interpreter, the JVM, wasm and the component print the JDK's eleven lines**: wasm
-  1,032,990 B (12.6 s), the component 1,037,253 B, the jar 390,454 B (with the
-  projection's stream kept; 1,019,971 / 1,024,234 / 385,127 with `UUID` alone kept,
-  1,009,805 / 1,014,068 / 381,860 before). Nothing else
+  `java.sql`; `UUID` went with k36, `StreamSupport` with k38 and `BigDecimal` /
+  `BigInteger` with k31, 2026-11-20), **it compiles and the
+  interpreter, the JVM, wasm and the component print the JDK's lines** (23 since k31
+  gave the program five inputs that run the conversion of a number): wasm
+  1,095,450 B (13.6 s), the component 1,099,815 B, the jar 408,486 B (the eleven-line
+  program 1,095,209 / 1,099,574 / 407,992 with the conversion kept, 1,032,990 /
+  1,037,253 / 390,454 with it cut and the projection's stream kept; 1,019,971 /
+  1,024,234 / 385,127 with `UUID` alone kept, 1,009,805 / 1,014,068 / 381,860 before).
+  Nothing else
   stands between: the four rules of the language it met behind the class literals
   (a generic method calling itself, a creation with `<>` of the class it stands in,
   `Name.this` in an anonymous class of `Name`, two captures given for one type
@@ -54,8 +57,10 @@ has the two programs, the oracle's lines, the refusals met and how to run it aga
    - `.todo/k35` -- `java.time`: the nine classes read from their text (the largest;
      `ZonedDateTime` asks for the rules of a region).
    - `.todo/k31` -- `BigInteger` / `BigDecimal`: the conversion of a number
-     (`UntypedInput.convertNumber`, `decimal`, `typeName`). It was thought behind the
-     examples; the schema example reaches it.
+     (`UntypedInput.convertNumber`, `decimal`, `typeName`; done 2026-11-20: two edits
+     left, wasm 1,095,450 B. The `Year` arm of the conversion is `.todo/k35`'s now).
+     A schema of a `BigDecimal` and a `BigInteger` prints a JDK's lines too
+     (`.todo/artefacts/k31-java-math-biginteger-and-bigdecimal/shelf/Price.java`).
    - `.todo/k36` -- `java.util.UUID` (done 2026-11-20: the schema example prints the JDK's
      lines with four edits left, wasm 1,019,971 B).
    - `.todo/k37` -- `java.util.Date` and `java.sql.Date` / `Time` / `Timestamp`, tested
@@ -78,7 +83,8 @@ of two compiles differ). `.todo/k26` keeps the rest of `java.time` and of the st
 
 ## Not decided here
 
-- Size: 1,033 KB for the schema example as patched, the classes of step 5 left not in it.
+- Size: 1,095 KB for the schema example as patched, the classes of step 5 left not in it
+  (62 KB of it the conversion of a number through `BigDecimal`, k31).
   655 KB for the classic example (575 KB before k27's linked collections, 591 KB
   before k28's `MessageFormat`, 22 KB of which a program formatting one message pays, 617 KB
   before k29's `Normalizer`, whose tables are 23 KB: `.kb/unicode-normalization.md`). Where it

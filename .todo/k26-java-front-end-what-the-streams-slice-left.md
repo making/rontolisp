@@ -165,5 +165,13 @@ taking an `Object`.
 
 The rest of `Formatter`, `PriorityQueue`, `EnumMap` / `EnumSet`, `Scanner`,
 `StringTokenizer`, `StringJoiner`, `BitSet`, files, `java.text`,
-`BigInteger` / `BigDecimal`, `java.nio` buffers, `Class` beyond what is above,
+`java.nio` buffers, `Class` beyond what is above,
 reflection, weak references, `Thread` and the concurrent classes (`.todo/k21`).
+
+Of `java.math` (k31, 2026-11-20; `.kb/java-frontend.md`, "java.math"): the primes
+(`isProbablePrime`, `nextProbablePrime`, `probablePrime`, the constructors of random
+bits), refused by name; and `%d` of a `BigInteger`, `%f` / `%e` of a `BigDecimal` in
+`String.format`, which are `d != an object` at run time (`%java-format-one` reads Lisp
+numbers, and a `BigInteger` is a structure of the program). Lead: the lowering hands the
+format a function of an exact number's digits only where the program makes one, as it
+hands `%h` the hash function (`rontolisp.internal.Exact` is what `MessageFormat` asks).
