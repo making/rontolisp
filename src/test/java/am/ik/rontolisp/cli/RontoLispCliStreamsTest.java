@@ -883,7 +883,9 @@ class RontoLispCliStreamsTest {
 		// state lives on; a value shows by its static type; what a step left uncaught
 		// is reported and the session goes on; a step throws what it likes, as a
 		// snippet does, where a method declares what it throws; a field updater made
-		// by one buffer finds its field in the buffers after it
+		// by one buffer finds its field in the buffers after it; the values() of an enum
+		// an
+		// earlier buffer initialized
 		String[] session = runSession(false,
 				"""
 						interface Shape { double area(); }
@@ -916,6 +918,9 @@ class RontoLispCliStreamsTest {
 						up.incrementAndGet(cell)
 						up.addAndGet(cell, 2)
 						int nap(int n) { Thread.sleep(n); return n; }
+						enum Dir { N, S }
+						System.out.println(Dir.N)
+						Dir.values().length
 						""",
 				"--source-language", "java");
 		assertThat(session[1]).isEqualTo("""
@@ -936,6 +941,8 @@ class RontoLispCliStreamsTest {
 				cell ==> null
 				$12 ==> 1
 				$13 ==> 3
+				N
+				$15 ==> 2
 				""");
 		assertThat(session[2]).contains("Exception java.lang.ArithmeticException: / by zero",
 				"unreported exception InterruptedException; must be caught or declared to be thrown");

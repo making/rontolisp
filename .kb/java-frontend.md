@@ -515,6 +515,10 @@ alternating, then a call, 100 buffers timed): 120 declarations 10 ms a buffer, 4
   (`Session.made`, a dispatch must reach an `ArrayList` no later buffer names), the interfaces a
   lambda was made for, every one tagged in a session (no later buffer may find an untagged one
   it must tell apart), and whether `Thread` was reached (`monitors`).
+  An enum's `$VALUES` array is added where a session declares the enum, not where a buffer
+  first names `values()`: that buffer finds the enum initialized by an earlier one, and
+  nothing would set the field (k40, 2026-11-20;
+  `RontoLispCliStreamsTest#aJavaFileRunsCompilesAndIsRefusedWhereItCannot`).
 - **No source tree**: a session has none, as `-e` (the REPL's working directory is no
   package root, and a snippet shell reads none either). **The source path it has** (k32,
   2026-11-20): `JavaSession` takes the `JavaFiles` of `SourceLanguage.javaFiles` over the

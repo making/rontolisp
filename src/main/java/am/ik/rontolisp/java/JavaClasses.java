@@ -1069,6 +1069,9 @@ final class JavaClasses {
 			declared.inferred = inferred;
 			made.fields.add(declared);
 		}
+		if (this.session) {
+			enumValuesField(made);
+		}
 		Set<String> signatures = new HashSet<>();
 		boolean constructed = false;
 		for (JavaSyntax.Method method : methods) {
@@ -1322,6 +1325,35 @@ final class JavaClasses {
 	}
 
 	/**
+	 * Adds the array {@code values()} and {@code valueOf(String)} read, once. A session
+	 * adds it where the enum is declared: a buffer that first names {@code values()}
+	 * finds the enum's initialization done by an earlier one, so nothing would set a
+	 * field added by then.
+	 * @param made the enum
+	 */
+	void enumValuesField(JavaClass made) {
+		if (!made.isEnum || made.declaration == null
+				|| made.fields.stream().anyMatch(field -> field.name.equals("$VALUES"))) {
+			return;
+		}
+		ClassDeclaration declaration = made.declaration;
+		int at = declaration.pos();
+		List<JavaSyntax.Expression> constants = new ArrayList<>();
+		for (JavaSyntax.EnumConstant constant : declaration.constants()) {
+			constants.add(new JavaSyntax.Name(at, constant.name()));
+		}
+		JavaClass.Field values = new JavaClass.Field(made, "$VALUES", new ArrayType(made.self()), true, true, null,
+				null);
+		values.initializer = new JavaSyntax.ArrayInitializer(at, constants);
+		// set right after the constants: an initializer below them may ask for values()
+		values.pos = declaration.constants().isEmpty() ? at
+				: declaration.constants().get(declaration.constants().size() - 1).pos();
+		values.isPrivate = true;
+		values.frozen = true;
+		made.fields.add(values);
+	}
+
+	/**
 	 * Adds an enum's {@code values()} or {@code valueOf(String)}, and the array both
 	 * read, where a program first names one: the second throws, and a program that does
 	 * not name it holds no exception class for it.
@@ -1338,22 +1370,7 @@ final class JavaClasses {
 		ClassDeclaration declaration = made.declaration;
 		Unit unit = unit(made);
 		int at = declaration.pos();
-		if (made.fields.stream().noneMatch(field -> field.name.equals("$VALUES"))) {
-			List<JavaSyntax.Expression> constants = new ArrayList<>();
-			for (JavaSyntax.EnumConstant constant : declaration.constants()) {
-				constants.add(new JavaSyntax.Name(at, constant.name()));
-			}
-			JavaClass.Field values = new JavaClass.Field(made, "$VALUES", new ArrayType(made.self()), true, true, null,
-					null);
-			values.initializer = new JavaSyntax.ArrayInitializer(at, constants);
-			// set right after the constants: an initializer below them may ask for
-			// values()
-			values.pos = declaration.constants().isEmpty() ? at
-					: declaration.constants().get(declaration.constants().size() - 1).pos();
-			values.isPrivate = true;
-			values.frozen = true;
-			made.fields.add(values);
-		}
+		enumValuesField(made);
 		String type = made.simpleName();
 		String text = name.equals("values") ? "public static " + type + "[] values() { return $VALUES.clone(); }\n"
 				: "public static " + type + " valueOf(String name) { for (" + type
