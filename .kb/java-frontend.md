@@ -461,7 +461,9 @@ mechanism was asked for.
   arm and the `Year` arm; 889,037 (-22.3 %) without the conversion of a number through
   `BigDecimal` too. Splitting
   that reader by the type asked for is a change to YAVI's design and the user's to decide
-  (`.todo/k46`); the library classes were owed either way.
+  (`.todo/k46`); the library classes were owed either way. It needs a new public member of
+  YAVI (2026-11-20): the callers that know the type are in `builder` and `arguments`, whose
+  only way into `core` is `ValueValidator.untyped(Class)`, which converts any type.
 - **A variable named `set` put the eval runtime in `Booking`** (fixed by k45): `java.net.URI`'s
   runtime (`eval/uri.lisp`) has a parameter named `set`, and both backends' gate for the
   eval runtime counted any mention of `set`, `symbol-value` or `fboundp`. On wasm that was
