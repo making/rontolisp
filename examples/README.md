@@ -161,7 +161,11 @@ names it under `os` (`os: [mac]`): that gates the run legs and leaves the
 compile legs alone, so its lowering is still checked everywhere. One that calls
 Java as it runs (`java:`, a Clojure host form) says `javaInterop: true`: the
 native binary interprets no `java:`, so its `interpreter` leg runs on the exec
-jar only, while the native binary still compiles it for the `jvm` leg.
+jar only, while the native binary still compiles it for the `jvm` leg. A `.java`
+program that compiles a library from its sources jar names the coordinate under
+`javaSourceDep`, passed to every leg as `--java-source-dep`; the suite resolves
+the jar first (`~/.m2`, then Maven Central) and skips the legs, saying why, on a
+machine that has neither.
 
 The suite is opt-in, so a plain `./mvnw test` skips it:
 

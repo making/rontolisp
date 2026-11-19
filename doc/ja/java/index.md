@@ -26,7 +26,8 @@ rontolisp -e 'void main() { IO.println(1 + 2); }' --source-language java
 
 [`examples/java/`](https://github.com/making/rontolisp/tree/develop/examples/java) に、
 複数のパッケージからなるプログラムとその期待される出力、HTTP サーバーとその
-クライアント、および小さな httpbin があります。
+クライアント、小さな httpbin、およびソース jar から読んだライブラリでフォームを検証する
+プログラムがあります。
 
 ```java
 interface Shape {
@@ -131,6 +132,10 @@ $ rontolisp app/Main.java --java-source-dep org.example:geo:1.2.0 -o main.wasm
   `--java-repository` でリポジトリを追加できます。指定したライブラリがソース jar を公開して
   いなければ拒否します。依存先がソース jar を公開していない場合は警告にとどめ、そのクラスは
   無いものとして扱います。
+
+[`examples/java/yavi`](https://github.com/making/rontolisp/tree/develop/examples/java/yavi)
+は、YAVI（`--java-source-dep am.ik.yavi:yavi:0.18.0`）でレコードを検証し、どのバックエンドでも
+動きます。
 
 これは `--java-classpath` や `--java-dep` とは別のものです。そちらは Common Lisp や Clojure の
 `java:` 呼び出しのためにホストが実行するクラスファイルで、Java サブセットのプログラムは

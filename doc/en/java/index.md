@@ -24,8 +24,8 @@ rontolisp -e 'void main() { IO.println(1 + 2); }' --source-language java
 `--source-language java` starts a REPL ([At the prompt](#at-the-prompt)).
 
 [`examples/java/`](https://github.com/making/rontolisp/tree/develop/examples/java) holds a
-program of several packages with its expected output, an HTTP server with its client, and
-a miniature httpbin.
+program of several packages with its expected output, an HTTP server with its client, a
+miniature httpbin, and a form validated with a library read from its sources jar.
 
 ```java
 interface Shape {
@@ -127,6 +127,9 @@ $ rontolisp app/Main.java --java-source-dep org.example:geo:1.2.0 -o main.wasm
   path, from Maven Central through `~/.m2/repository`; `--java-repository` adds a
   repository. A library named that publishes no sources jar is refused. One it depends on
   that publishes none is a warning, and its classes are not there.
+
+[`examples/java/yavi`](https://github.com/making/rontolisp/tree/develop/examples/java/yavi)
+validates a record with YAVI, `--java-source-dep am.ik.yavi:yavi:0.18.0`, on every backend.
 
 This is not `--java-classpath` and `--java-dep`: those are class files the host runs for a
 `java:` call from Common Lisp or Clojure, and a program of the Java subset calls none.

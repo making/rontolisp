@@ -91,6 +91,11 @@
 #                rontolisp's options; `args` follow it unseparated.
 #   javaSources  .java files compiled before the leg into a class directory that is
 #                passed as --java-classpath and joins a compiled program's java -cp
+#   javaSourceDep Maven coordinates (one or a list) passed to every leg as
+#                --java-source-dep: a library a .java program compiles from its sources
+#                jar. The suite resolves each sources jar first, as the option does
+#                (~/.m2, then Maven Central); offline without it the legs are skipped
+#                with the reason
 #   javaInterop  true for a program that calls Java members as it runs (java:, a
 #                Clojure host form). The native binary interprets no java:, so when
 #                it drives the suite the interpreter leg is skipped (an assumption,
@@ -257,6 +262,18 @@ examples:
     backends: [interpreter, jvm, wasm, wasm-component-run]
     expect:
       file: .expected/java-shop.txt
+  - path: java/yavi/Member.java
+    backends: [interpreter, jvm, wasm, wasm-component-run]
+    javaSourceDep: am.ik.yavi:yavi:0.18.0
+    note: >-
+      YAVI's ValidatorBuilder over a record, compiled from the library's sources jar.
+      The suite resolves the sources jar before the legs and skips them, saying why,
+      offline without it. Measured 2026-11-20: on the exec jar the interpreter runs it in
+      3.1 s and -o .class, -o .wasm and --component compile it in 7.2, 8.5 and 9.0 s;
+      on the native binary the four legs, compile and run, take 0.7, 2.4, 2.9 and
+      2.9 s. The suite allows 240 s a process.
+    expect:
+      file: .expected/java-yavi.txt
   - path: java/http/Server.java
     backends: [jvm-compile, wasm-component]
     note: >-

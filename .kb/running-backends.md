@@ -84,6 +84,12 @@ driver) its `interpreter` leg is skipped, since the binary interprets no `java:`
 runs it (`ExamplesE2eTest#javaInteropGatesTheInterpreterLegOfTheNativeBinaryOnly`). Added
 2026-10-12, when `clojure/http-client.clj` (`java.net.ServerSocket`) and
 `clojure/java-library/main.clj` failed that leg in CI.
+`javaSourceDep` (2026-11-20, `java/yavi/Member.java`) passes Maven coordinates to every leg as
+`--java-source-dep`. Before the legs the suite resolves each sources jar as the option does
+(Maven's settings and `~/.m2`, then Central), so CI's examples job fetches it from Central and
+the legs read it from `~/.m2`; offline without it the legs are skipped with the resolver's reason
+(`ExamplesE2eTest#aSourceDependencyNowhereToBeHadSkipsTheLegs`). Not opt-in on its own: the
+suite already is, and a skip that needs the network would leave CI without the leg.
 
 It is the longest run in the repo. **Split it with `-Drontolisp.examples.only=` from the
 start** -- one slice per surface -- and run each slice to completion in the foreground. A

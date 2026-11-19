@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -21,6 +23,13 @@ import java.util.stream.Stream;
 import javax.tools.JavaCompiler;
 import javax.tools.ToolProvider;
 
+import am.ik.maven.Artifact;
+import am.ik.maven.Dependency;
+import am.ik.maven.MavenResolutionException;
+import am.ik.maven.MavenResolver;
+import am.ik.maven.MavenSettings;
+import am.ik.maven.RemoteRepository;
+import am.ik.maven.RepositoryPolicy;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.DynamicContainer;
 import org.junit.jupiter.api.DynamicNode;
@@ -133,6 +142,12 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * <li>{@code javaSources} -- {@code .java} files (under {@code examples/}) compiled,
  * before the leg, into a class directory that is passed as {@code --java-classpath} and
  * put on a compiled program's {@code java -cp}: a Java library of the example's own.</li>
+ * <li>{@code javaSourceDep} -- Maven coordinates passed to every leg as
+ * {@code --java-source-dep}: a library a program of the Java subset compiles from its
+ * sources jar. Before the legs the suite resolves each coordinate's sources jar as the
+ * option does (Maven's settings and local repository, then Maven Central), so a machine
+ * online fills {@code ~/.m2} once; one offline without the jar skips the legs with the
+ * reason, as an assumption like {@code os} and {@code library}.</li>
  * <li>{@code javaInterop} -- {@code true} for a program that calls Java members as it
  * runs ({@code java:}, a Clojure host form). The native binary interprets no
  * {@code java:}, so when it is the driver the {@code interpreter} leg is skipped, as an
@@ -181,6 +196,9 @@ class ExamplesE2eTest {
 	/** Per-process wall-clock cap; the slowest interpreter examples take ~20s. */
 	private static final long TIMEOUT_SECONDS = 240;
 
+	/** Per example, why its {@code javaSourceDep} cannot be had: resolved once a run. */
+	private static final Map<String, Optional<String>> SOURCE_DEPENDENCIES = new ConcurrentHashMap<>();
+
 	private static final YAMLMapper MAPPER = YAMLMapper.builder()
 		.enable(DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY)
 		.build();
@@ -218,7 +236,7 @@ class ExamplesE2eTest {
 			@Nullable List<String> systemPath, @Nullable String workDir, @Nullable List<String> workFiles,
 			@Nullable Map<String, String> env, @Nullable Boolean simd, @Nullable Boolean parallel,
 			@Nullable List<String> library, @Nullable List<String> cli, @Nullable List<String> javaSources,
-			@Nullable Boolean javaInterop, @Nullable String note) {
+			@Nullable List<String> javaSourceDep, @Nullable Boolean javaInterop, @Nullable String note) {
 
 		List<String> argsOrEmpty() {
 			return this.args == null ? List.of() : this.args;
@@ -302,7 +320,8 @@ class ExamplesE2eTest {
 
 	/**
 	 * The manifest's {@code systemPath} takes one directory or a LIST of them, and each
-	 * element is absolutized SEPARATELY before they are joined.
+	 * element is absolutized SEPARATELY before they are joined; {@code javaSourceDep}
+	 * takes one coordinate or a list, each its own {@code --java-source-dep}.
 	 * <p>
 	 * {@code --system-path} is a {@link File#pathSeparator}-joined list
 	 * ({@code RontoLispCli.systemPath}), so writing {@code "a:b"} as a single path used
@@ -316,17 +335,19 @@ class ExamplesE2eTest {
 	 * @throws Exception if the inline manifest cannot be parsed
 	 */
 	@Test
-	void systemPathTakesOneDirectoryOrAList() throws Exception {
+	void systemPathAndJavaSourceDepTakeOneOrAList() throws Exception {
 		Manifest manifest = MAPPER.readValue("""
 				examples:
 				  - path: one.lisp
 				    backends: [interpreter]
 				    systemPath: src/test/resources/cl-who
+				    javaSourceDep: g:a:1
 				  - path: many.lisp
 				    backends: [interpreter]
 				    systemPath:
 				      - src/test/resources/rove
 				      - src/test/resources/dissect
+				    javaSourceDep: [g:a:1, g:b:2]
 				  - path: none.lisp
 				    backends: [interpreter]
 				""", Manifest.class);
@@ -340,6 +361,40 @@ class ExamplesE2eTest {
 				PROJECT_DIR.resolve("src/test/resources/rove") + File.pathSeparator
 						+ PROJECT_DIR.resolve("src/test/resources/dissect"));
 		assertThat(systemPathFlags(none)).isEmpty();
+		assertThat(javaSourceDepFlags(one)).containsExactly("--java-source-dep", "g:a:1");
+		assertThat(javaSourceDepFlags(many)).containsExactly("--java-source-dep", "g:a:1", "--java-source-dep",
+				"g:b:2");
+		assertThat(javaSourceDepFlags(none)).isEmpty();
+	}
+
+	/**
+	 * A {@code javaSourceDep} whose sources jar cannot be had -- in no local repository
+	 * and from no repository reachable -- is the reason the legs are skipped, and an
+	 * example naming none has nothing to resolve. Needs neither the examples opt-in nor a
+	 * driver: the resolver here searches an empty local repository and no remote one.
+	 * @throws Exception if the inline manifest cannot be parsed
+	 */
+	@Test
+	void aSourceDependencyNowhereToBeHadSkipsTheLegs() throws Exception {
+		Manifest manifest = MAPPER.readValue("""
+				examples:
+				  - path: Uses.java
+				    backends: [interpreter]
+				    javaSourceDep: am.ik.yavi:yavi:0.18.0
+				  - path: Plain.java
+				    backends: [interpreter]
+				""", Manifest.class);
+		Path local = Files.createTempDirectory("rontolisp-empty-m2-");
+		try {
+			MavenResolver offline = MavenResolver.builder().localRepository(local).repositories(List.of()).build();
+
+			assertThat(unresolvedSourceDependency(manifest.examples().get(0), offline))
+				.startsWith("am.ik.yavi:yavi:0.18.0's sources jar cannot be had");
+			assertThat(unresolvedSourceDependency(manifest.examples().get(1), offline)).isNull();
+		}
+		finally {
+			deleteRecursively(local);
+		}
 	}
 
 	/**
@@ -644,6 +699,13 @@ class ExamplesE2eTest {
 				if ((backend == Backend.WASM || backend == Backend.WASM_COMPONENT_RUN) && !onPath("wasmtime")) {
 					abort("wasmtime not on PATH");
 				}
+				String unresolved = SOURCE_DEPENDENCIES
+					.computeIfAbsent(example.path(),
+							path -> Optional.ofNullable(unresolvedSourceDependency(example, mavenResolver())))
+					.orElse(null);
+				if (unresolved != null) {
+					abort(example.path() + " compiles a library from its sources jar, and " + unresolved);
+				}
 				assertThat(Files.isRegularFile(source)).as("example source is missing: %s", source).isTrue();
 				Path work = Files.createTempDirectory("rontolisp-example-");
 				try {
@@ -667,8 +729,10 @@ class ExamplesE2eTest {
 		Path javaClasses = compileJavaSources(example, work);
 		// --simd is a compile-time flag on every path, the interpreter's included; the
 		// --system-path and --java-classpath flags come with it.
-		List<String> flags = concat(concat(example.simdFlag(), systemPathFlags(example)),
-				javaClasses == null ? List.of() : List.of("--java-classpath", javaClasses.toString()));
+		List<String> flags = concat(
+				concat(concat(example.simdFlag(), systemPathFlags(example)),
+						javaClasses == null ? List.of() : List.of("--java-classpath", javaClasses.toString())),
+				javaSourceDepFlags(example));
 		boolean cli = example.cli() != null && !example.cli().isEmpty();
 		switch (backend) {
 			case INTERPRETER -> {
@@ -1094,6 +1158,70 @@ class ExamplesE2eTest {
 			.map(dir -> PROJECT_DIR.resolve(dir).toAbsolutePath().toString())
 			.collect(Collectors.joining(File.pathSeparator));
 		return joined.isEmpty() ? List.of() : List.of("--system-path", joined);
+	}
+
+	/**
+	 * {@code --java-source-dep} for each of an example's {@code javaSourceDep}
+	 * coordinates, or nothing when it declares none.
+	 * @param example the manifest entry
+	 * @return the flags, a pair per coordinate
+	 */
+	static List<String> javaSourceDepFlags(Example example) {
+		List<String> flags = new ArrayList<>();
+		if (example.javaSourceDep() != null) {
+			for (String coordinate : example.javaSourceDep()) {
+				flags.add("--java-source-dep");
+				flags.add(coordinate.strip());
+			}
+		}
+		return flags;
+	}
+
+	/**
+	 * Why an example's legs cannot have the sources jars its {@code javaSourceDep} names,
+	 * or {@code null} when they can: each coordinate's graph and its own sources jar are
+	 * resolved as {@code --java-source-dep} resolves them, which leaves them in the local
+	 * repository the legs then read.
+	 * @param example the manifest entry
+	 * @param maven the resolver
+	 * @return the reason, or {@code null}
+	 */
+	static @Nullable String unresolvedSourceDependency(Example example, MavenResolver maven) {
+		if (example.javaSourceDep() == null) {
+			return null;
+		}
+		for (String coordinate : example.javaSourceDep()) {
+			Artifact artifact = Artifact.parse(coordinate.strip());
+			try {
+				maven.resolve(List.of(Dependency.of(artifact)), List.of());
+				maven.artifact(
+						new Artifact(artifact.groupId(), artifact.artifactId(), artifact.version(), "sources", "jar"));
+			}
+			catch (MavenResolutionException ex) {
+				return coordinate.strip() + "'s sources jar cannot be had: " + ex.getMessage();
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The resolver {@code --java-source-dep} builds: Maven's settings and local
+	 * repository, then Maven Central for releases.
+	 */
+	private static MavenResolver mavenResolver() {
+		MavenSettings settings;
+		try {
+			settings = MavenSettings.readGlobalAndUser();
+		}
+		catch (MavenResolutionException ex) {
+			throw new IllegalStateException("Maven's settings cannot be read: " + ex.getMessage(), ex);
+		}
+		Path local = settings.localRepository();
+		return MavenResolver.builder()
+			.settings(settings)
+			.localRepository(local != null ? local : MavenResolver.defaultLocalRepository())
+			.repositories(List.of(RemoteRepository.CENTRAL.withSnapshots(RepositoryPolicy.DISABLED)))
+			.build();
 	}
 
 	/**

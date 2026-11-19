@@ -42,7 +42,8 @@ has the two programs, the oracle's lines, the refusals met and how to run it aga
 2. k28 (done 2026-11-19) -- `java.text.MessageFormat` (the text of every message).
 3. k29 (done 2026-11-19) -- `java.text.Normalizer` (every string checked).
    The classic example prints the JDK's lines from the unpatched coordinates. The
-   example under `examples/java/` and its check in `examples.yaml` are `.todo/k34`.
+   example under `examples/java/` and its check in `examples.yaml` are `.todo/k34`
+   (done 2026-11-20).
 4. k30 (done 2026-11-20) -- a `Class` as a value, and the four rules above.
 5. What the schema example reaches of a JDK that the library lacks, each one edit of
    `patch.sh` and independent of the others but as said; the milestone is the day the
@@ -57,8 +58,12 @@ has the two programs, the oracle's lines, the refusals met and how to run it aga
      by `instanceof` (after `.todo/k35`, for what they convert to).
    - `.todo/k38` -- `StreamSupport` and `Iterable.spliterator()`.
    What those bodies meet once they are lowered is not measured: the edits cut them out.
-6. `.todo/k34` -- the example under `examples/java/`; the schema example joins it when
-   step 5 is done.
+6. `.todo/k34` (done 2026-11-20) -- `examples/java/yavi/Member.java`, a record checked
+   with `ValidatorBuilder`, compiled with `--java-source-dep am.ik.yavi:yavi:0.18.0` and
+   checked in `examples.yaml` (`javaSourceDep`) on the four backends: wasm 662,539 B.
+   **Left here: when step 5 is done, the README's schema example (`Yavi.schema()`)
+   joins it as a second program of `examples/java/yavi/`, with its `examples.yaml`
+   entry and README lines.**
 7. `.todo/k32` -- the Maven plugin passing a project's dependencies, so that a YAVI
    project builds with `rontolisp:wasm`.
 

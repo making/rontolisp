@@ -130,3 +130,49 @@ curl --json '{"name": "rontolisp"}' http://localhost:8080/post
 A field's name is as `com.sun.net.httpserver` hands it, its first letter upper and the
 rest lower; under `wasmtime serve` there is no `Host`. A JDK 25 runs it as it stands
 (`java examples/java/httpbin/Httpbin.java`).
+
+## A form validated with YAVI: `yavi/`
+
+[`yavi/Member.java`](yavi/Member.java) checks a sign-up record with
+[YAVI](https://github.com/making/yavi)'s `ValidatorBuilder` and prints each violation's
+message: a blank, a malformed address, numbers out of range, a size over its limit, and a
+nickname of six `char`s that YAVI counts as three, composed.
+
+YAVI is not built in. `--java-source-dep` reads it from its sources jar (Maven Central,
+through `~/.m2/repository`) and compiles what the program reaches with the program, on
+every backend:
+
+```bash
+JAR=target/rontolisp-0.1.0-SNAPSHOT-exec.jar
+DEP="--java-source-dep am.ik.yavi:yavi:0.18.0"
+java -jar $JAR $DEP examples/java/yavi/Member.java                                  # interpreter
+java -jar $JAR $DEP examples/java/yavi/Member.java -o Member.class && java Member   # JVM
+java -jar $JAR $DEP examples/java/yavi/Member.java -o member.wasm && wasmtime run member.wasm
+java -jar $JAR $DEP examples/java/yavi/Member.java -o member-c.wasm --component && wasmtime run member-c.wasm
+```
+
+```
+Ann: valid
+kana, 6 chars: valid
+typos: 4 violations
+  "name" must not be blank
+  "email" must be a valid email address
+  "age" must be greater than or equal to 0
+  The size of "nickname" must be less than or equal to 3. The given size is 5
+empty: 3 violations
+  "name" must not be blank
+  "email" must not be blank
+  "age" must not be null
+long: 2 violations
+  The size of "name" must be less than or equal to 20. The given size is 22
+  "age" must be less than 150
+```
+
+`member.wasm` is 662,539 bytes: what the program reaches of YAVI, not the whole library.
+Whether a library works is decided by what the program reaches of it: only what the front
+end supports compiles, and a class the subset lacks is an error at the place in the
+library that reaches it. See [Using a library](../../doc/en/java/index.md#using-a-library)
+([ライブラリを使う](../../doc/ja/java/index.md#ライブラリを使う)).
+
+A JDK 25 runs it as it stands, with YAVI on the class path:
+`java -cp yavi-0.18.0.jar examples/java/yavi/Member.java`.
