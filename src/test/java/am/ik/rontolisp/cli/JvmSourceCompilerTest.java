@@ -57,6 +57,50 @@ class JvmSourceCompilerTest {
 	}
 
 	@Test
+	void theEmbeddedWasmCompileIsByteIdenticalToTheCommandLines() throws Exception {
+		// A Java program of two packages: the entry file's path is what the front end
+		// finds the other class's source tree from, in the seam as on the command line.
+		Path main = this.tempDir.resolve("app/Main.java");
+		Files.createDirectories(main.getParent());
+		Files.writeString(main, """
+				package app;
+
+				import util.Greeting;
+
+				public class Main {
+				    public static void main(String[] args) {
+				        System.out.println(Greeting.of("wasm"));
+				    }
+				}
+				""");
+		Path greeting = this.tempDir.resolve("util/Greeting.java");
+		Files.createDirectories(greeting.getParent());
+		Files.writeString(greeting, """
+				package util;
+
+				public class Greeting {
+				    public static String of(String name) {
+				        return "hello, " + name;
+				    }
+				}
+				""");
+		Path output = this.tempDir.resolve("out/main.wasm");
+		new RontoLispCli(new ByteArrayInputStream(new byte[0]), new PrintStream(new ByteArrayOutputStream()))
+			.run(new String[] { main.toString(), "-o", output.toString(), "--component", "--emit-wit" });
+
+		Path embedded = this.tempDir.resolve("embedded/main.wasm");
+		new WasmSourceCompiler().component(true)
+			.emitWit(true)
+			.baseDir(this.tempDir.resolve("app").toString())
+			.compile(Files.readString(main), main.toString())
+			.write(embedded);
+
+		assertThat(embedded).hasBinaryContent(Files.readAllBytes(output));
+		assertThat(this.tempDir.resolve("embedded/main.wit"))
+			.hasSameTextualContentAs(this.tempDir.resolve("out/main.wit"));
+	}
+
+	@Test
 	void warningsAsErrorsFailsAnEmbeddedCompileThatWarns() {
 		String source = """
 				(defun add (a b) (+ a b))

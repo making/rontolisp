@@ -305,9 +305,11 @@ from the class, or a record's accessor; `checkFunctional`). `@SafeVarargs` rides
 `rontolisp test` refuses a `.java` file (no test framework; a program's status is its verdict:
 it used to read the file as Lisp, run it and report no tests); `rontolisp format` refuses a
 `.java` and a `.star` named explicitly (re-indenting is no whitespace-only change there; a
-directory walk never took them). The Maven plugin compiles `.lisp` under `src/main/lisp` only
-(`LispSourceSet.EXTENSION`): a `.java` file of a Maven project is javac's, and a subset
-program compiled to a class of the same name would collide with it.
+directory walk never took them). The Maven plugin's `compile` goal compiles `.lisp` under
+`src/main/lisp` only (`LispSourceSet.EXTENSION`): a `.java` file of a Maven project is javac's,
+and a subset program compiled to a class of the same name would collide with it. Its `wasm`
+goal compiles the program `src/main/java` holds to a `.wasm`, which collides with nothing
+(`jvm-export.md`, "The plugin's `wasm` goal").
 
 ## Declarations and statements past the first slice (2026-11-17)
 

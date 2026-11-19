@@ -176,8 +176,64 @@ structure, an `Object[]` a vector. A Common Lisp list is no `List`: hand a Java 
 ## The tools
 
 `rontolisp test` refuses a `.java` file: the subset has no test framework, and a program's
-exit status is its verdict. `rontolisp format` refuses one: it re-indents S-expressions. The
-Maven plugin compiles `src/main/lisp`; `src/main/java` stays the Java compiler's.
+exit status is its verdict. `rontolisp format` refuses one: it re-indents S-expressions.
+
+## A Maven project
+
+The `wasm` goal of `rontolisp-maven-plugin` compiles the program in a Maven project's
+`src/main/java` to WebAssembly at `package`, starting at its main class. javac still
+compiles the same sources and surefire still runs their tests, so the program also runs
+on a JDK.
+
+```xml
+<plugin>
+    <groupId>am.ik.rontolisp</groupId>
+    <artifactId>rontolisp-maven-plugin</artifactId>
+    <version>VERSION</version>
+    <configuration>
+        <mainClass>app.Main</mainClass>
+    </configuration>
+    <executions>
+        <execution>
+            <id>preview1</id>
+            <goals><goal>wasm</goal></goals>
+        </execution>
+        <execution>
+            <id>component</id>
+            <goals><goal>wasm</goal></goals>
+            <configuration>
+                <component>true</component>
+                <outputFile>${project.build.directory}/app-component.wasm</outputFile>
+            </configuration>
+        </execution>
+    </executions>
+</plugin>
+```
+
+```console
+$ mvn package
+$ wasmtime run target/app-1.0.0.wasm
+$ wasmtime run target/app-component.wasm
+```
+
+- The program is the one `rontolisp src/main/java/app/Main.java -o target/app-1.0.0.wasm`
+  compiles: the main class's file and the files of the tree it names
+  ([A program of several files](#a-program-of-several-files)).
+- The output is `target/<finalName>.wasm` unless `outputFile` names another;
+  `<native>true</native>` writes the native executable `target/<finalName>`.
+- The parameters are the command line's flags in camel case: `component`, `noWasi`,
+  `optimize`, `simd`, `hostRandom`, `hostFetch`, `reentrant`, `hostBoundary`,
+  `reportLocations`, `emitWit`, `emitJsGlue`, `native`, `nativeTarget`, `nativeCpu`,
+  `dynamic`, `noPrune`, `warningsAsErrors`. `skip` (`-Drontolisp.skip=true`) turns the goal
+  off.
+- The front end reads source, not class files. A class from a dependency jar compiles with
+  javac and fails this goal with its name and position, as the command line does; for
+  jspecify's `@Nullable`: `.../app/Main.java:7:9: cannot find symbol: class Nullable`.
+- When no `.java` file of the tree is newer than the last build, none was added or removed,
+  the parameters are the same and the output exists, nothing is compiled. Otherwise the
+  whole program is.
+- An [HTTP](#http) server built with `component` runs from `target/` under
+  `wasmtime serve`.
 
 ## What is read
 

@@ -30,7 +30,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * The phase binding is the whole point of the test. Maven injects the default lifecycle
  * bindings ahead of a POM-declared plugin, so a goal bound to {@code compile} would run
  * after javac and the Java source would not compile; {@code process-sources} is the only
- * ordering declaration order cannot break, and only a real build can say so.
+ * ordering declaration order cannot break, and only a real build can say so. The
+ * {@code wasm} goal's legs need {@code wasmtime} on PATH.
  * <p>
  * Opt-in ({@code -Drontolisp.plugin.e2e=true}), because it shells out to Maven and needs
  * this plugin -- and the rontolisp it embeds -- already installed. Every shelled-out
@@ -156,6 +157,156 @@ class MavenBuildE2eTest {
 						        <executions>
 						          <execution>
 						            <goals><goal>compile</goal></goals>
+						          </execution>
+						        </executions>
+						      </plugin>
+						    </plugins>
+						  </build>
+						</project>
+						""".formatted(Runtime.version().feature(), plugins.get("maven-resources-plugin"),
+						plugins.get("maven-jar-plugin"), plugins.get("maven-surefire-plugin"),
+						plugins.get("maven-compiler-plugin"), version));
+	}
+
+	/**
+	 * The {@code wasm} goal: {@code src/main/java} -- two packages, a record, a thread --
+	 * builds with javac as ever and, at {@code package}, to a Preview 1 module and a
+	 * component, each printing what {@code java} prints from javac's classes. A class
+	 * from a dependency jar is source the front end cannot read, so the build fails
+	 * naming it at its position.
+	 */
+	@Test
+	void aJavaProgramBuildsToWasmThatPrintsWhatTheJdkPrints() throws Exception {
+		Ready ready = assumeReady();
+		String wasmtime = "wasmtime";
+		assumeTrue(runAllowingFailure(this.project, List.of(wasmtime, "--version")).status() == 0,
+				"wasmtime is not on PATH");
+		writeJavaProject(ready.version(), ready.lifecyclePlugins());
+		run(this.project, ready.maven("-o", "-q", "package"));
+
+		String expected = run(this.project, List.of(javaExecutable().toString(), "-cp",
+				this.project.resolve("target/classes").toString(), "app.Main"));
+		assertThat(expected).contains("total 1550");
+		assertThat(run(this.project, List.of(wasmtime, "run", "target/javaapp-1.0.0.wasm"))).isEqualTo(expected);
+		assertThat(run(this.project, List.of(wasmtime, "run", "target/javaapp-component.wasm"))).isEqualTo(expected);
+		assertThat(run(this.project, ready.maven("-o", "package"))).contains("target/javaapp-1.0.0.wasm is up to date")
+			.contains("target/javaapp-component.wasm is up to date");
+
+		Files.writeString(this.project.resolve("src/main/java/app/Main.java"), """
+				package app;
+
+				import org.jspecify.annotations.Nullable;
+
+				public class Main {
+				    public static void main(String[] args) {
+				        @Nullable String name = args.length > 0 ? args[0] : null;
+				        System.out.println(name);
+				    }
+				}
+				""");
+		ProcessResult refused = runAllowingFailure(this.project, ready.maven("-o", "package"));
+		assertThat(refused.status()).isNotZero();
+		assertThat(refused.output()).contains("app/Main.java:7:9: cannot find symbol: class Nullable");
+	}
+
+	private void writeJavaProject(String version, Map<String, String> plugins) throws Exception {
+		Path main = this.project.resolve("src/main/java/app/Main.java");
+		Files.createDirectories(main.getParent());
+		Files.writeString(main, """
+				package app;
+
+				import app.model.Order;
+				import java.util.List;
+
+				public class Main {
+				    public static void main(String[] args) throws InterruptedException {
+				        List<Order> orders = List.of(new Order("tea", 3, 250), new Order("cake", 2, 400));
+				        int[] total = new int[1];
+				        Thread worker = new Thread(() -> {
+				            for (Order order : orders) {
+				                total[0] += order.amount();
+				            }
+				        });
+				        worker.start();
+				        worker.join();
+				        orders.forEach(System.out::println);
+				        System.out.println("total " + total[0]);
+				    }
+				}
+				""");
+		Path order = this.project.resolve("src/main/java/app/model/Order.java");
+		Files.createDirectories(order.getParent());
+		Files.writeString(order, """
+				package app.model;
+
+				public record Order(String item, int quantity, int unitPrice) {
+				    public int amount() {
+				        return quantity * unitPrice;
+				    }
+				}
+				""");
+		// jspecify is the refusal leg's dependency: a jar javac compiles against and the
+		// front end cannot read. This module's own build depends on it, so the offline
+		// build finds it.
+		Files.writeString(this.project.resolve("pom.xml"),
+				"""
+						<project xmlns="http://maven.apache.org/POM/4.0.0">
+						  <modelVersion>4.0.0</modelVersion>
+						  <groupId>app</groupId>
+						  <artifactId>javaapp</artifactId>
+						  <version>1.0.0</version>
+						  <properties>
+						    <maven.compiler.release>%d</maven.compiler.release>
+						    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+						  </properties>
+						  <dependencies>
+						    <dependency>
+						      <groupId>org.jspecify</groupId>
+						      <artifactId>jspecify</artifactId>
+						      <version>1.0.0</version>
+						    </dependency>
+						  </dependencies>
+						  <build>
+						    <plugins>
+						      <plugin>
+						        <groupId>org.apache.maven.plugins</groupId>
+						        <artifactId>maven-resources-plugin</artifactId>
+						        <version>%s</version>
+						      </plugin>
+						      <plugin>
+						        <groupId>org.apache.maven.plugins</groupId>
+						        <artifactId>maven-jar-plugin</artifactId>
+						        <version>%s</version>
+						      </plugin>
+						      <plugin>
+						        <groupId>org.apache.maven.plugins</groupId>
+						        <artifactId>maven-surefire-plugin</artifactId>
+						        <version>%s</version>
+						      </plugin>
+						      <plugin>
+						        <groupId>org.apache.maven.plugins</groupId>
+						        <artifactId>maven-compiler-plugin</artifactId>
+						        <version>%s</version>
+						      </plugin>
+						      <plugin>
+						        <groupId>am.ik.rontolisp</groupId>
+						        <artifactId>rontolisp-maven-plugin</artifactId>
+						        <version>%s</version>
+						        <configuration>
+						          <mainClass>app.Main</mainClass>
+						        </configuration>
+						        <executions>
+						          <execution>
+						            <id>preview1</id>
+						            <goals><goal>wasm</goal></goals>
+						          </execution>
+						          <execution>
+						            <id>component</id>
+						            <goals><goal>wasm</goal></goals>
+						            <configuration>
+						              <component>true</component>
+						              <outputFile>${project.build.directory}/javaapp-component.wasm</outputFile>
+						            </configuration>
 						          </execution>
 						        </executions>
 						      </plugin>

@@ -26,12 +26,8 @@ import am.ik.maven.RemoteRepository;
 import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispVal;
 import am.ik.rontolisp.Version;
-import am.ik.rontolisp.codegen.wasm.NoGcWasmCompiler;
-import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.codegen.wasm.WasmReportLocations;
-import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.HostBoundary;
-import am.ik.rontolisp.compiler.HostGlueEmitter;
 import am.ik.rontolisp.compiler.OptimizeLevel;
 import am.ik.rontolisp.compiler.SplicedComponentGroups;
 import am.ik.rontolisp.compiler.UncaughtReport;
@@ -47,7 +43,6 @@ import am.ik.rontolisp.eval.LispEvalException;
 import am.ik.rontolisp.eval.LispExitSignal;
 import am.ik.rontolisp.eval.LispEvaluator;
 import am.ik.rontolisp.eval.ObjcInterop;
-import am.ik.rontolisp.eval.SocketsLibrary;
 import am.ik.rontolisp.eval.SourceLanguage;
 import am.ik.rontolisp.eval.SourceStandards;
 import am.ik.rontolisp.eval.SourceSession;
@@ -1189,25 +1184,35 @@ public final class RontoLispCli {
 			@Nullable WasmReportLocations reportLocations, JvmArtifactOptions jvmArtifact,
 			JavaResolutionOptions javaResolution, boolean warningsAsErrors, @Nullable String entryFile,
 			@Nullable String sourceLanguage, SourceStandards standards) {
-		// --native is the wasm-GC backend's WASI Preview 1 command module, precompiled
-		// and appended to a runner stub: every flag that asks for a DIFFERENT module is
-		// refused by name rather than half-honoured, and so is an -o name that says
-		// another output. The shim is loaded and the target tried before the front end
-		// runs, so a host this build has no shim for, a platform it has no stub for or a
-		// CPU level the shim does not know fails before any work.
+		// The wasm flags, refused by name where the output or each other cannot honor
+		// them; the same seam an embedder compiles a .wasm through (WasmSourceCompiler).
+		// --native's -o name is refused before its flags, and the shim is loaded and the
+		// target tried before the front end runs, so a host this build has no shim for,
+		// a platform it has no stub for or a CPU level the shim does not know fails
+		// before any work.
+		WasmSourceCompiler wasm = new WasmSourceCompiler().dynamic(dynamic)
+			.component(component)
+			.noWasi(noWasi)
+			.noGc(noGc)
+			.optimize(optimize)
+			.simd(simd)
+			.hostRandom(hostRandom)
+			.hostFetch(hostFetch)
+			.reentrant(reentrant)
+			.hostBoundary(hostBoundary)
+			.reportLocations(reportLocations)
+			.emitWit(wit)
+			.emitJsGlue(jsGlue)
+			.nativeTarget(nativeTarget)
+			.noPrune(noPrune);
 		if (nativeTarget != null) {
-			refuseNativeConflicts(outputFile, component, noWasi, noGc, hostRandom, hostFetch, hostBoundary, reentrant,
-					jsGlue);
+			refuseNativeOutputName(outputFile);
+		}
+		wasm.refuseConflicts(outputFile.endsWith(".wasm"));
+		if (nativeTarget != null) {
 			NativeToolchain.load().check(nativeTarget);
 		}
 		boolean wasmOutput = nativeTarget != null || outputFile.endsWith(".wasm");
-		// --emit-wit describes a component's typed world, so it is meaningless for any
-		// other
-		// output; fail fast instead of silently ignoring the request.
-		if (wit && !(component && outputFile.endsWith(".wasm"))) {
-			throw new UnsupportedOperationException(
-					"--emit-wit requires --component and a .wasm output (e.g. -o out.wasm --component --emit-wit)");
-		}
 		// --blas binds a native library through the foreign function API, which the
 		// interpreter and the JVM backend have and WASM does not: a .wasm output could
 		// only ignore the flag, and silently running unaccelerated is exactly what the
@@ -1285,74 +1290,6 @@ public final class RontoLispCli {
 					+ " a .wasm module has no threads to split the --simd kernels across."
 					+ " Use --simd alone on a .wasm output");
 		}
-		// --emit-js-glue writes the host half of a boundary only a --no-wasi wasm-GC core
-		// module has: a component is instantiated through its own bindings (jco), and
-		// --no-gc's boundary is flat scalars and (ptr,len) pairs over its own exported
-		// memory -- an import object a host writes in a few lines, with no staging,
-		// no arena bracket and no suspending entry to derive.
-		if (jsGlue && !(noWasi && !component && !noGc && outputFile.endsWith(".wasm"))) {
-			throw new UnsupportedOperationException("--emit-js-glue requires --no-wasi and a .wasm output, without"
-					+ " --component (a component's host glue is its bindings generator's) or --no-gc (whose host"
-					+ " functions take flat scalars and (ptr,len) pairs over its exported memory: write the import"
-					+ " object directly) -- e.g. -o out.wasm --no-wasi --emit-js-glue");
-		}
-		// --host-random routes the wasm-GC backend's random_get slot at a host import,
-		// so it means nothing anywhere else. The backend-selection half is checked here
-		// (the other two backends never see the flag); the --no-wasi / --component half
-		// is the compiler's own guard, next to the contract it protects.
-		if (hostRandom && !outputFile.endsWith(".wasm")) {
-			throw new UnsupportedOperationException(
-					"--host-random requires a .wasm output: it routes the WASM random_get slot at a host import "
-							+ "(the interpreter and the JVM backend draw from the JVM's own generator)");
-		}
-		if (hostRandom && noGc) {
-			throw new UnsupportedOperationException("--host-random cannot be combined with --no-gc: the scalar "
-					+ "(non-GC) backend has no `random` at all, so there is no draw to route");
-		}
-		// --host-fetch is the same family: it routes rontolisp:fetch at a host import on
-		// the wasm-GC reactor, so it means nothing anywhere else. The --no-wasi /
-		// --component half is the compiler's own guard, next to the contract it
-		// protects.
-		if (hostFetch && !outputFile.endsWith(".wasm")) {
-			throw new UnsupportedOperationException(
-					"--host-fetch requires a .wasm output: it routes rontolisp:fetch at a host import "
-							+ "(the interpreter and the JVM backend fetch through the JDK HttpClient)");
-		}
-		if (hostFetch && noGc) {
-			throw new UnsupportedOperationException("--host-fetch cannot be combined with --no-gc: the scalar "
-					+ "(non-GC) backend has no fetch (or strings) at all, so there is nothing to route");
-		}
-		// --host-boundary chooses between two shapes only the --no-wasi wasm-GC core
-		// module HAS. Everywhere else the envelope is not a choice: a reactor component's
-		// host functions cross the canonical ABI (no :bytes import to take a body out
-		// through), --no-gc has no packed array to carry one in (its host imports carry
-		// flat scalars and strings), and a WASI command
-		// module's host is `wasmtime run`, which satisfies no env.* import. Refused
-		// rather than ignored -- a build script that names a boundary it is not getting
-		// is exactly the silence this flag exists to end.
-		if (hostBoundary != null && !(noWasi && !component && !noGc && outputFile.endsWith(".wasm"))) {
-			throw new UnsupportedOperationException("--host-boundary requires --no-wasi and a .wasm output, without"
-					+ " --component (whose host functions cross the canonical ABI, so its bodies are in band"
-					+ " already) or --no-gc (which has no packed array to carry a body in)"
-					+ " -- e.g. -o out.wasm --no-wasi --host-boundary=" + HostBoundary.ENVELOPE.spelling());
-		}
-		// --report-locations buys the wasm-GC entry's uncaught report its location lines;
-		// the interpreter always prints them and --no-gc has no report to put them under.
-		// Refused rather than ignored, like the flags above.
-		if (reportLocations != null && (!wasmOutput || noGc)) {
-			throw new UnsupportedOperationException("--report-locations reaches a wasm-GC output only (-o out.wasm,"
-					+ " --component or --native, without --no-gc): it chooses what the module spends on the location"
-					+ " lines under its uncaught report. The interpreter always prints them");
-		}
-		// --reentrant relaxes the wasm-GC reactor's one-call-at-a-time contract, so it
-		// means nothing anywhere else; the finer guards (needs a suspending import,
-		// no streaming boundary, no --dynamic) live in the compiler, next to the
-		// contracts they protect.
-		if (reentrant && !(noWasi && !component && !noGc && outputFile.endsWith(".wasm"))) {
-			throw new UnsupportedOperationException("--reentrant requires --no-wasi and a .wasm output, without"
-					+ " --component (whose concurrency is the component model's) or --no-gc (which has no suspending"
-					+ " imports to overlap on) -- e.g. -o out.wasm --no-wasi --host-fetch --reentrant");
-		}
 		// The compile path's whole front end -- the read, the (load ...) inlining, user
 		// macro expansion, the library splice chain, the WIT lowerings, the boundp fold
 		// and the library tree-shaker -- in the one place all four backends and the
@@ -1395,95 +1332,14 @@ public final class RontoLispCli {
 		List<LispVal> program = frontend.program();
 		Features features = frontend.features();
 		String runTimeImage = frontend.runTimeImage();
-		boolean serve = frontend.serve();
-		boolean witWorld = frontend.witWorld();
-		byte[] bytes;
+		byte[] bytes = null;
+		WasmSourceCompiler.Result wasmCompiled = null;
 		Map<String, byte[]> jvmRuntimeClasses = Map.of();
 		// The internal name of the class a JVM compile emitted, needed again below to
 		// place it inside a jar or to root the runtime classes beside a .class.
 		String jvmClassName = null;
-		String witText = null;
-		String glueText = null;
-		String glueFile = jsGlue ? outputFile.substring(0, outputFile.length() - ".wasm".length()) + ".js" : null;
 		if (wasmOutput) {
-			if (noGc) {
-				// --no-gc selects the separate scalar (non-GC) lowering: a plain MVP
-				// module
-				// with no wasm-GC types, no imports and no memory, for pure-numeric
-				// rontolisp:wasm-export functions. A PRINT-FREE program is a pure-compute
-				// reactor already; a printing one imports the single fd_write, which
-				// --no-wasi replaces with the discarding sink (the GC contract), so the
-				// module keeps zero imports. With --component the same core module is
-				// wrapped as a compact reactor-style component (typed scalar exports, no
-				// adapter, no wasm-GC requirement) instead of the GC component pipeline.
-				// --simd is the orthogonal acceleration switch: with it the vec: kernels
-				// lower to native v128 (f64x2/f32x4); without it to plain scalar loops
-				// that
-				// run on a runtime lacking the SIMD proposal.
-				NoGcWasmCompiler compiler = NoGcWasmCompiler.builder()
-					.optimize(optimize)
-					.simd(simd)
-					.component(component)
-					.noWasi(noWasi)
-					.build();
-				bytes = compiler.compile(program);
-				witText = compiler.componentWit();
-			}
-			else {
-				// rontolisp:http-handler compiles to a wasi:http/incoming-handler
-				// component (--component only). The HttpHandlerInliner splices in a
-				// %http-dispatch wasm-export wrapper that the serve adapter calls per
-				// request.
-				// `serve` was computed above (http-handler is a special form the library
-				// splices leave untouched, so its presence is unchanged here).
-				// A serve-mode component's only export is wasi:http/incoming-handler (the
-				// component builder lifts no user exports there), so a world of function
-				// exports could not be honored -- say so instead of dropping it.
-				if (serve && witWorld) {
-					throw new UnsupportedOperationException(
-							"rontolisp:wit-export cannot be combined with rontolisp:http-handler: a serve-mode "
-									+ "component exports only wasi:http/incoming-handler");
-				}
-				// Serve (plain or serve+fetch) already carries http.lisp's %serve-handle
-				// wasm-export, spliced by HttpLibrary above; the http-handler directive
-				// was
-				// removed there. Nothing more to synthesize -- the WAT serve adapter is
-				// gone.
-				// --simd routes the vectorizable vec: kernels to emitted v128 helpers and
-				// switches a packed float array's storage to an (array (mut v128)) of
-				// lane
-				// groups -- still a GC object the engine collects, so memory behaves as
-				// it
-				// does without the flag.
-				// --host-random: the one opt-in out of "instantiate with nothing". The
-				// module then imports env.random_get(buf, len) -> errno and every
-				// `random` draw is the host's entropy, which is also what makes
-				// rontolisp:random-bytes sound again.
-				// runtimeFeatures: the compiled program's *features* starts out holding
-				// exactly what the frontend READ it with -- component / reactor /
-				// body-imports included -- so a run-time (member :F *features*) and the
-				// #+F beside it cannot disagree.
-				WasmLispCompiler compiler = WasmLispCompiler.builder()
-					.dynamic(dynamic)
-					.component(component)
-					.noWasi(noWasi)
-					.optimize(optimize)
-					.serve(serve)
-					.simd(simd)
-					.hostRandom(hostRandom)
-					.hostFetch(hostFetch)
-					// --native: fetch is the runner's (HostFetchLibrary's runner shape).
-					.runnerFetch(nativeTarget != null)
-					.reentrant(reentrant)
-					.reportLocations(reportLocations)
-					.runtimeFeatures(features.names())
-					.build();
-				bytes = compiler.compile(program);
-				witText = compiler.componentWit();
-				if (glueFile != null) {
-					glueText = compiler.hostGlueJs(Path.of(glueFile).getFileName().toString());
-				}
-			}
+			wasmCompiled = wasm.compileProgram(frontend);
 		}
 		else {
 			// The class name is the -o path with .class taken off (its directories the
@@ -1533,8 +1389,10 @@ public final class RontoLispCli {
 				// java -jar finds it; a library jar's pom names the --java-dep
 				// coordinates and leaves the class path to its consumer.
 				List<String> classPath = noMain ? List.of() : javaClassPath.copyBeside(outputPath);
-				Files.write(outputPath, JvmJarWriter.jar(Objects.requireNonNull(jvmClassName), bytes, jvmRuntimeClasses,
-						!noMain, jvmArtifact.coordinates(), simd, classPath, javaClassPath.dependencies()));
+				Files.write(outputPath,
+						JvmJarWriter.jar(Objects.requireNonNull(jvmClassName), Objects.requireNonNull(bytes),
+								jvmRuntimeClasses, !noMain, jvmArtifact.coordinates(), simd, classPath,
+								javaClassPath.dependencies()));
 				if (jvmArtifact.emitPom()) {
 					writePom(outputFile, Objects.requireNonNull(jvmArtifact.coordinates()), simd,
 							javaClassPath.dependencies());
@@ -1545,27 +1403,20 @@ public final class RontoLispCli {
 				// WEB-INF/classes, plus the one-line service declaration that lets any
 				// Servlet 6 container discover the program itself -- no web.xml, no
 				// configuration (JvmWarWriter). The Java class path rides in WEB-INF/lib.
-				Files.write(outputPath, JvmWarWriter.war(Objects.requireNonNull(jvmClassName), bytes, jvmRuntimeClasses,
-						jvmArtifact.coordinates(), simd, javaClassPath.warEntries(), javaClassPath.dependencies()));
+				Files.write(outputPath,
+						JvmWarWriter.war(Objects.requireNonNull(jvmClassName), Objects.requireNonNull(bytes),
+								jvmRuntimeClasses, jvmArtifact.coordinates(), simd, javaClassPath.warEntries(),
+								javaClassPath.dependencies()));
 				if (jvmArtifact.emitPom()) {
 					writePom(outputFile, Objects.requireNonNull(jvmArtifact.coordinates()), simd,
 							javaClassPath.dependencies());
 				}
 			}
-			else if (nativeTarget != null) {
-				// Only the executable is written: the .wasm and its precompiled form
-				// never leave memory. The runner is the one the module's imports need:
-				// a fetch's or a server's rlhttp and a socket's rltcp only the network
-				// runner answers.
-				NativeToolchain toolchain = NativeToolchain.load();
-				java.util.Set<String> imports = WasmLispCompiler.importModules(bytes);
-				boolean network = imports.contains(FetchResponseShape.RUNNER_IMPORT_MODULE)
-						|| imports.contains(SocketsLibrary.RUNNER_IMPORT_MODULE);
-				NativeExecutable.write(outputPath, toolchain.assemble(toolchain.stub(nativeTarget.platform(), network),
-						toolchain.precompile(bytes, nativeTarget)));
+			else if (wasmCompiled != null) {
+				wasmCompiled.write(outputPath);
 			}
 			else {
-				Files.write(outputPath, bytes);
+				Files.write(outputPath, Objects.requireNonNull(bytes));
 				if (!jvmRuntimeClasses.isEmpty()) {
 					// Rooted where the output class's own package root is -- the -o path
 					// IS the package, so `-o com/acme/Kernels.class` writes them under
@@ -1583,25 +1434,6 @@ public final class RontoLispCli {
 						Files.write(runtimePath, runtimeClass.getValue());
 					}
 				}
-			}
-			if (wit) {
-				String witFile = outputFile.substring(0, outputFile.length() - ".wasm".length()) + ".wit";
-				Files.writeString(Path.of(witFile), Objects.requireNonNull(witText));
-			}
-			if (glueFile != null) {
-				// The glue's name is the module's, so in a Worker directory `-o
-				// src/index.wasm` aims it straight at a hand-written src/index.js. Only
-				// a file this flag wrote before is overwritten; anything else is the
-				// host's own and is refused by name, because the build has already
-				// committed the .wasm by the time we get here.
-				Path glue = Path.of(glueFile);
-				if (Files.exists(glue)
-						&& !Files.readString(glue, StandardCharsets.UTF_8).startsWith(HostGlueEmitter.MARKER)) {
-					throw new UnsupportedOperationException("--emit-js-glue would overwrite " + glueFile
-							+ ", which it did not write (it does not start with \"" + HostGlueEmitter.MARKER
-							+ "\"). Compile to a different -o name, or move that file aside");
-				}
-				Files.writeString(glue, Objects.requireNonNull(glueText));
 			}
 		}
 		catch (IOException ex) {
@@ -1670,34 +1502,15 @@ public final class RontoLispCli {
 	}
 
 	/**
-	 * The refusals of {@code --native}: what the WASI Preview 1 command module inside a
-	 * native executable cannot be, and an output name that says another backend.
+	 * Refuses an {@code -o} name that says another output than {@code --native}'s
+	 * executable; its flags are {@link WasmSourceCompiler#refuseConflicts}'s.
 	 */
-	private static void refuseNativeConflicts(String outputFile, boolean component, boolean noWasi, boolean noGc,
-			boolean hostRandom, boolean hostFetch, @Nullable HostBoundary hostBoundary, boolean reentrant,
-			boolean jsGlue) {
+	private static void refuseNativeOutputName(String outputFile) {
 		for (String extension : List.of(".wasm", ".class", ".jar", ".war")) {
 			if (outputFile.endsWith(extension)) {
 				throw new UnsupportedOperationException(
 						"--native writes a native executable, but -o " + outputFile + " names a " + extension
 								+ " output: drop --native for that, or name the executable (e.g. -o hello)");
-			}
-		}
-		record Flag(boolean given, String name, String why) {
-		}
-		for (Flag flag : List.of(
-				new Flag(component, "--component", "the runner runs a WASI Preview 1 command module, not a component"),
-				new Flag(noWasi, "--no-wasi", "the runner is the WASI host; a reactor has no _start to run"),
-				new Flag(noGc, "--no-gc", "the runner's engine is the wasm-GC one; compile --no-gc to a .wasm"),
-				new Flag(hostRandom, "--host-random", "the runner answers random_get from the OS itself"),
-				new Flag(hostFetch, "--host-fetch",
-						"the runner answers rontolisp:fetch itself (no env.fetch import); drop the flag"),
-				new Flag(hostBoundary != null, "--host-boundary", "the runner supplies no env.* body imports"),
-				new Flag(reentrant, "--reentrant", "overlapped calls need a JSPI host, and the runner is not one"),
-				new Flag(jsGlue, "--emit-js-glue", "there is no JavaScript host to write glue for"))) {
-			if (flag.given()) {
-				throw new UnsupportedOperationException(
-						"--native cannot be combined with " + flag.name() + ": " + flag.why());
 			}
 		}
 	}

@@ -228,6 +228,8 @@ The goal runs at `process-sources`, before javac, because `src/main/java` compil
 *against* what it writes — the kernel class and the `RontoFloatArray` handle type both.
 The `testCompile` goal is its twin: `src/test/lisp` into `target/test-classes`, at
 `process-test-sources`.
+The `wasm` goal is the plugin's third: it compiles the program in `src/main/java` to
+WebAssembly ([A Maven project](../java/index.md#a-maven-project)).
 
 Every flag that reaches the JVM backend is a parameter under the same name — `simd`,
 `blas`, `gpu`, `parallel`, `optimize`, `dynamic`, `noPrune`, `warningsAsErrors`, `systemPath`, `dists` — and

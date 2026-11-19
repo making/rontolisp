@@ -506,6 +506,11 @@ jobs:
         java-version: '25'
         distribution: 'liberica'
         cache: maven
+    # The wasm goal's leg runs the modules it builds; without wasmtime it would skip.
+    - name: Install wasmtime
+      uses: bytecodealliance/actions/wasmtime/setup@v1
+      with:
+        version: "v49.0.0"
     - name: Install rontolisp
       run: ./mvnw -V --no-transfer-progress install -DskipTests
     - name: Install the plugin

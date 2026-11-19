@@ -6,7 +6,8 @@
 
 	<!--
 		Compiles src/main/lisp into target/classes, so a Maven project can keep
-		rontolisp kernels beside its Java and package both in one jar. Independent
+		rontolisp kernels beside its Java and package both in one jar, and (goal
+		`wasm`) the program src/main/java holds to WebAssembly. Independent
 		of the rontolisp core project (separate reactor), because a Maven plugin
 		must depend on maven-plugin-api / maven-core and the core libraries are
 		dependency-free: docs-tool/ is the same arrangement. Built and run
@@ -25,7 +26,7 @@
 	<version>0.1.0-SNAPSHOT</version>
 	<packaging>maven-plugin</packaging>
 	<name>rontolisp-maven-plugin</name>
-	<description>Compiles src/main/lisp into target/classes with the rontolisp JVM backend</description>
+	<description>Compiles src/main/lisp into target/classes, and a src/main/java program to WebAssembly, with rontolisp</description>
 	<url>https://github.com/making/rontolisp</url>
 
 	<licenses>

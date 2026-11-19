@@ -235,6 +235,8 @@ mvn package     # one jar, Lisp classes and Java classes together
 もの (カーネルのクラスと `RontoFloatArray` ハンドル型の両方) に対してコンパイルされる
 からです。`testCompile` ゴールはその双子で、`process-test-sources` で `src/test/lisp`
 を `target/test-classes` にコンパイルします。
+3 つ目の `wasm` ゴールは、`src/main/java` にあるプログラムを WebAssembly にコンパイル
+します（[Maven プロジェクト](../java/index.md#a-maven-project)）。
 
 JVM バックエンドに届くフラグはすべて同じ名前のパラメータになります — `simd`、`blas`、
 `gpu`、`parallel`、`optimize`、`dynamic`、`noPrune`、`warningsAsErrors`、`systemPath`、`dists` — そして

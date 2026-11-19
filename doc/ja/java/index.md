@@ -182,8 +182,63 @@ $ rontolisp main.lisp
 
 `rontolisp test` は `.java` ファイルを拒否します。このサブセットにはテストフレームワークがなく、
 プログラムの終了ステータスがそのまま結果になるからです。`rontolisp format` も拒否します。
-このコマンドが整形するのは S 式です。Maven プラグインがコンパイルするのは `src/main/lisp` で、
-`src/main/java` は引き続き Java コンパイラのものです。
+このコマンドが整形するのは S 式です。
+
+## Maven プロジェクト
+
+`rontolisp-maven-plugin` の `wasm` ゴールは、Maven プロジェクトの `src/main/java` にある
+プログラムを、メインクラスから始めて `package` で WebAssembly にコンパイルします。同じソースは
+引き続き javac がコンパイルし、そのテストは surefire が実行するので、プログラムは JDK でも
+動きます。
+
+```xml
+<plugin>
+    <groupId>am.ik.rontolisp</groupId>
+    <artifactId>rontolisp-maven-plugin</artifactId>
+    <version>VERSION</version>
+    <configuration>
+        <mainClass>app.Main</mainClass>
+    </configuration>
+    <executions>
+        <execution>
+            <id>preview1</id>
+            <goals><goal>wasm</goal></goals>
+        </execution>
+        <execution>
+            <id>component</id>
+            <goals><goal>wasm</goal></goals>
+            <configuration>
+                <component>true</component>
+                <outputFile>${project.build.directory}/app-component.wasm</outputFile>
+            </configuration>
+        </execution>
+    </executions>
+</plugin>
+```
+
+```console
+$ mvn package
+$ wasmtime run target/app-1.0.0.wasm
+$ wasmtime run target/app-component.wasm
+```
+
+- プログラムは `rontolisp src/main/java/app/Main.java -o target/app-1.0.0.wasm` がコンパイル
+  するものと同じです。メインクラスのファイルと、それが名前を挙げるツリー内のファイルです
+  （[複数ファイルのプログラム](#a-program-of-several-files)）。
+- 出力は `outputFile` で別の名前を指定しない限り `target/<finalName>.wasm` です。
+  `<native>true</native>` はネイティブ実行ファイル `target/<finalName>` を書き出します。
+- パラメータはコマンドラインのフラグをキャメルケースにしたものです: `component`、`noWasi`、
+  `optimize`、`simd`、`hostRandom`、`hostFetch`、`reentrant`、`hostBoundary`、
+  `reportLocations`、`emitWit`、`emitJsGlue`、`native`、`nativeTarget`、`nativeCpu`、
+  `dynamic`、`noPrune`、`warningsAsErrors`。`skip`（`-Drontolisp.skip=true`）でゴールを
+  無効にします。
+- フロントエンドが読むのはソースで、クラスファイルではありません。依存 jar のクラスは javac
+  ではコンパイルできますが、このゴールはコマンドラインと同じく、その名前と位置を示して失敗します。
+  jspecify の `@Nullable` なら `.../app/Main.java:7:9: cannot find symbol: class Nullable` です。
+- 前回のビルドより新しい `.java` ファイルがツリーになく、追加も削除もなく、パラメータが同じで
+  出力が存在するときは、何もコンパイルしません。そうでなければプログラム全体をコンパイルします。
+- `component` でビルドした [HTTP](#http) サーバーは、`target/` から `wasmtime serve` で
+  動きます。
 
 ## 読める構文
 

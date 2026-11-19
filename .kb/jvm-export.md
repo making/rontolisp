@@ -174,6 +174,39 @@ parameter per JVM-reaching CLI flag under the same name.
   `warningsAsErrors`' `WarningsAsErrorsException`, at the first file that warns, the files
   compiled before it already written (the same as a compile error) ([compile-warnings.md](compile-warnings.md)).
 
+## The plugin's `wasm` goal -- `src/main/java` to WebAssembly (2026-11-19, k09)
+
+`<mainClass>app.Main</mainClass>` is the program `rontolisp src/main/java/app/Main.java -o
+target/<finalName>.wasm` compiles, at `package` (javac and surefire keep the same sources on a
+JDK; the module is one more artifact). A goal of this plugin, not a new one (user, 2026-11-19).
+
+- **One code path with the CLI**: `cli/WasmSourceCompiler` is the wasm half the CLI's `-o
+  x.wasm` / `--native` used to hold inline -- the flag refusals (`refuseConflicts`, the
+  `--native` flag list included; the `-o` extension check stays the CLI's), `compileProgram`
+  (`--no-gc` or wasm-GC, the serve/wit-world refusal) and `Result.write` (the module or the
+  native executable, `.wit`, the `.js` glue guard). The CLI holds one for its flags; its embedded
+  `compile(source, entryFile)` runs the front end as `JvmSourceCompiler` does. Pinned by
+  `JvmSourceCompilerTest#theEmbeddedWasmCompileIsByteIdenticalToTheCommandLines` (a two-package
+  Java program, `--component --emit-wit`).
+- **Parameters** are the wasm flags camel-cased; `native` is `@Parameter(alias = "native")` on a
+  field that cannot carry the keyword. No `noGc`: the Java front end refuses it. Output default
+  `${project.build.directory}/${project.build.finalName}.wasm`, no extension under `native`.
+- **Staleness is all-or-nothing over every `.java` of the tree** (`maven/WasmProgram`): only the
+  compile knows which files the program reads. The status file is per output
+  (`target/rontolisp/<output name>.status`, so two executions -- Preview 1 and `--component` --
+  do not share one) and holds the configuration line (the compiler's version and git commit
+  included, so a new SNAPSHOT rebuilds) plus the sorted source list; stamped before the work.
+- Any `RuntimeException` (a front-end refusal with `file:line:column`, a flag conflict,
+  `WarningsAsErrorsException`) is a `MojoFailureException` with the message verbatim. A
+  dependency jar's class is refused by name: jspecify's `@Nullable` is `Main.java:7:9: cannot find
+  symbol: class Nullable` (at the use: an import of a class outside the program is resolved where
+  it is used, `java-frontend.md`).
+- `MavenBuildE2eTest#aJavaProgramBuildsToWasmThatPrintsWhatTheJdkPrints` (needs `wasmtime` on
+  PATH; the CI job installs it). Checked by hand 2026-11-19: `examples/java/http/Server.java`
+  built with `<component>true</component>` serves under `wasmtime serve -S cli=y` from `target/`,
+  and `<native>true</native>` writes a running executable when the installed rontolisp jar carries
+  the shim (the CI job's does not build it, so the E2E has no native leg).
+
 ## Tests
 
 `JvmExportTest` (framing, handle identity, `<clinit>` signalling, shaker roots),

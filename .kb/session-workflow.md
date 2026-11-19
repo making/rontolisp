@@ -15,6 +15,12 @@ needs `./mvnw install -DskipTests` first, and its own `install` is what `MavenBu
 (`-Drontolisp.plugin.e2e=true`) needs. `rontolisp-native/` is the wasmtime precompile shim and
 the runner stub a native executable is made of (`.kb/native-output.md`).
 
+**A worktree beside others installs into a repository of its own** (checked 2026-11-19, Maven
+3.9.16): `-Dmaven.repo.local=<own dir> -Dmaven.repo.local.tail=$HOME/.m2/repository` installs
+the SNAPSHOTs into the own directory and reads everything else from the shared one, read-only.
+`MavenBuildE2eTest`'s child builds get only `-Dmaven.repo.local`; export
+`MAVEN_ARGS=-Dmaven.repo.local.tail=$HOME/.m2/repository` and they inherit the tail too.
+
 `MavenBuildE2eTest` shells out to the Maven running it (`${maven.home}`) on its local repository
 (`${settings.localRepository}`), and its offline jar fixture declares the
 `maven-{resources,compiler,surefire,jar}-plugin.version` the module's pom pins -- all passed by
