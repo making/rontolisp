@@ -9,8 +9,10 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
 import java.util.Queue;
+import java.util.Spliterator;
 import java.util.stream.Stream;
 import rontolisp.internal.ObjectFlow;
+import rontolisp.internal.Splits;
 
 // A queue with no bound, first in first out, read and written under its own monitor;
 // no thread waits on it. No element is null. An iterator walks the elements there were
@@ -98,6 +100,10 @@ public class ConcurrentLinkedQueue<E> extends AbstractCollection<E> implements Q
 
     public synchronized Iterator<E> iterator() {
         return new ArrayDeque<>(this.held).iterator();
+    }
+
+    public Spliterator<E> spliterator() {
+        return Splits.unsized(this, Spliterator.ORDERED | Spliterator.NONNULL | Spliterator.CONCURRENT);
     }
 
     // how many elements a concurrent collection holds is told by running the stream

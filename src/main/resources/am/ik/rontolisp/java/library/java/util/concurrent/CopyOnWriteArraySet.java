@@ -6,6 +6,7 @@ package java.util.concurrent;
 import java.util.AbstractSet;
 import java.util.Collection;
 import java.util.Iterator;
+import java.util.Spliterator;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 
@@ -64,5 +65,10 @@ public class CopyOnWriteArraySet<E> extends AbstractSet<E> {
 
     public Iterator<E> iterator() {
         return this.held.iterator();
+    }
+
+    public Spliterator<E> spliterator() {
+        return this.held.snapshot(Spliterator.DISTINCT | Spliterator.SIZED | Spliterator.IMMUTABLE
+                | Spliterator.SUBSIZED);
     }
 }

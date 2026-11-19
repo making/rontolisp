@@ -6,7 +6,7 @@ package java.util;
 import java.util.function.Consumer;
 
 // A list over an array that grows by half when it is full.
-public class ArrayList<E> extends AbstractList<E> {
+public class ArrayList<E> extends AbstractList<E> implements RandomAccess {
 
     private Object[] items;
 

@@ -39,9 +39,10 @@ taking an `Object`.
   - A collector's `finisher` is always called and the marks of a collector of the
     program's own class are not read by the collectors wrapping it (`Collected.marks`).
   - `mapMulti`, `Stream.gather` and `Gatherers`, `Collectors.groupingByConcurrent` /
-    `toConcurrentMap` (`spliterator()` / `Spliterator` / `StreamSupport` are
-    `.todo/k38`, which YAVI's schema example reaches),
-    `Random.ints` / `longs` / `doubles`, `Iterator`-to-stream bridges of a program's own.
+    `toConcurrentMap`, `Random.ints` / `longs` / `doubles`; a stream's own
+    `spliterator()` and the spliterators of `int`, `long` and `double`
+    (`Spliterator.OfInt` .., `StreamSupport.intStream` ..: the spliterators of objects and
+    `StreamSupport.stream` came with k38, `.kb/java-frontend.md`, "java.util.stream").
 - **A stage costs a closure call**: 33 ns an element on wasm and 16 to 40 on the JVM
   against 0.4 to 6 under a JDK (`bench/` of the k12 artefacts: an `int[]` summed by a
   loop 16.0 ns on wasm, by `Arrays.stream(a).sum()` 56.0, with one `map` 88.5, three

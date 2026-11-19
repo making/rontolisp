@@ -305,8 +305,11 @@ the third argument of `collect` and `reduce` are never called. `String.chars()` 
 `flatMapping` is closed once its last element is taken; one a `findFirst` or a `limit`
 leaves unfinished is not closed. A collector's `finisher` is always called, whatever its
 `characteristics()` say, and a collector made of a collector of the program's own class
-(`mapping`, `groupingBy`) reports none of that one's characteristics. `mapMulti`,
-`gather`, `spliterator`, `StreamSupport`, `Collectors.groupingByConcurrent` and
+(`mapping`, `groupingBy`) reports none of that one's characteristics. A spliterator of
+the library never splits: `trySplit` answers `null`. A collection changed while its spliterator
+is read throws `ConcurrentModificationException` before the next element, where a JDK
+hands that element on first. `mapMulti`, `gather`, a stream's own `spliterator()`, the
+spliterators of `int`, `long` and `double`, `Collectors.groupingByConcurrent` and
 `toConcurrentMap`, and the streams of a `Random` are not there.
 
 **What a program asks of its host has fixed answers.** `Runtime.availableProcessors()` is

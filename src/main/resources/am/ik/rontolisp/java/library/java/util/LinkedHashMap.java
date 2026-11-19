@@ -5,6 +5,7 @@ package java.util;
 
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import rontolisp.internal.Splits;
 
 // A HashMap whose nodes are also one chain, in the order their keys were added or, made
 // with accessOrder, in the order they were last reached; the views walk the chain. The
@@ -274,6 +275,11 @@ public class LinkedHashMap<K, V> extends HashMap<K, V> {
         public Iterator<K> iterator() {
             return new Order<K, V, K>(map, 0);
         }
+
+        public Spliterator<K> spliterator() {
+            return Splits.of(this,
+                    Spliterator.ORDERED | Spliterator.DISTINCT | Spliterator.SIZED | Spliterator.SUBSIZED);
+        }
     }
 
     static final class ValuesInOrder<K, V> extends HashMap.ValueCollection<K, V> {
@@ -288,6 +294,10 @@ public class LinkedHashMap<K, V> extends HashMap<K, V> {
         public Iterator<V> iterator() {
             return new Order<K, V, V>(map, 1);
         }
+
+        public Spliterator<V> spliterator() {
+            return Splits.of(this, Spliterator.ORDERED | Spliterator.SIZED | Spliterator.SUBSIZED);
+        }
     }
 
     static final class EntriesInOrder<K, V> extends HashMap.EntrySet<K, V> {
@@ -301,6 +311,11 @@ public class LinkedHashMap<K, V> extends HashMap<K, V> {
 
         public Iterator<Map.Entry<K, V>> iterator() {
             return new Order<K, V, Map.Entry<K, V>>(map, 2);
+        }
+
+        public Spliterator<Map.Entry<K, V>> spliterator() {
+            return Splits.of(this,
+                    Spliterator.ORDERED | Spliterator.DISTINCT | Spliterator.SIZED | Spliterator.SUBSIZED);
         }
     }
 }

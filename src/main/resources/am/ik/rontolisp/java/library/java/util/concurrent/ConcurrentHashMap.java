@@ -24,11 +24,13 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
+import java.util.Spliterator;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.stream.Stream;
 import rontolisp.internal.ObjectFlow;
+import rontolisp.internal.Splits;
 
 public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K, V> {
 
@@ -694,6 +696,10 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
             return new Keys<>(this.map);
         }
 
+        public Spliterator<K> spliterator() {
+            return Splits.of(this, Spliterator.DISTINCT | Spliterator.NONNULL | Spliterator.CONCURRENT);
+        }
+
         // how many elements a concurrent collection holds is told by running the stream
         public Stream<K> stream() {
             return ObjectFlow.over(this, null);
@@ -722,6 +728,10 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
 
         public Iterator<V> iterator() {
             return new ValueWalk<>(this.map);
+        }
+
+        public Spliterator<V> spliterator() {
+            return Splits.of(this, Spliterator.NONNULL | Spliterator.CONCURRENT);
         }
 
         // how many elements a concurrent collection holds is told by running the stream
@@ -765,6 +775,10 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
 
         public Iterator<Map.Entry<K, V>> iterator() {
             return new EntryWalk<>(this.map);
+        }
+
+        public Spliterator<Map.Entry<K, V>> spliterator() {
+            return Splits.of(this, Spliterator.DISTINCT | Spliterator.NONNULL | Spliterator.CONCURRENT);
         }
 
         // how many elements a concurrent collection holds is told by running the stream

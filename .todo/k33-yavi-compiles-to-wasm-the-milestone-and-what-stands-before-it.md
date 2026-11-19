@@ -26,13 +26,14 @@ has the two programs, the oracle's lines, the refusals met and how to run it aga
 - **The schema example** (the README's first): stopped at a class literal as a value
   until k30 (2026-11-20). **From the unpatched coordinates it now stops at
   `java.time.LocalDate`**, in `core/UntypedInput`'s table of the types read from their
-  string form. **With four edits to YAVI's source, each around a class the library
+  string form. **With three edits to YAVI's source, each around a class the library
   lacks** (`patch.sh` of the artefact: `java.time`, `java.util.Date` and
-  `java.sql`, `BigDecimal` / `BigInteger`, `StreamSupport`; the fifth, `UUID`, went with
-  k36, 2026-11-20), **it compiles and the
+  `java.sql`, `BigDecimal` / `BigInteger`; `UUID` went with k36 and `StreamSupport`
+  with k38, 2026-11-20), **it compiles and the
   interpreter, the JVM, wasm and the component print the JDK's eleven lines**: wasm
-  1,019,971 B (13.0 s), the component 1,024,234 B, the jar 385,127 B (with `UUID` kept
-  in the table; 1,009,805 / 1,014,068 / 381,860 before). Nothing else
+  1,032,990 B (12.6 s), the component 1,037,253 B, the jar 390,454 B (with the
+  projection's stream kept; 1,019,971 / 1,024,234 / 385,127 with `UUID` alone kept,
+  1,009,805 / 1,014,068 / 381,860 before). Nothing else
   stands between: the four rules of the language it met behind the class literals
   (a generic method calling itself, a creation with `<>` of the class it stands in,
   `Name.this` in an anonymous class of `Name`, two captures given for one type
@@ -59,7 +60,8 @@ has the two programs, the oracle's lines, the refusals met and how to run it aga
      lines with four edits left, wasm 1,019,971 B).
    - `.todo/k37` -- `java.util.Date` and `java.sql.Date` / `Time` / `Timestamp`, tested
      by `instanceof` (after `.todo/k35`, for what they convert to).
-   - `.todo/k38` -- `StreamSupport` and `Iterable.spliterator()`.
+   - `.todo/k38` -- `StreamSupport` and `Iterable.spliterator()` (done 2026-11-20: three
+     edits left, wasm 1,032,990 B).
    What those bodies meet once they are lowered is not measured: the edits cut them out.
 6. `.todo/k34` (done 2026-11-20) -- `examples/java/yavi/Member.java`, a record checked
    with `ValidatorBuilder`, compiled with `--java-source-dep am.ik.yavi:yavi:0.18.0` and
@@ -76,7 +78,7 @@ of two compiles differ). `.todo/k26` keeps the rest of `java.time` and of the st
 
 ## Not decided here
 
-- Size: 1,010 KB for the schema example as patched, the classes of step 5 not in it.
+- Size: 1,033 KB for the schema example as patched, the classes of step 5 left not in it.
   655 KB for the classic example (575 KB before k27's linked collections, 591 KB
   before k28's `MessageFormat`, 22 KB of which a program formatting one message pays, 617 KB
   before k29's `Normalizer`, whose tables are 23 KB: `.kb/unicode-normalization.md`). Where it

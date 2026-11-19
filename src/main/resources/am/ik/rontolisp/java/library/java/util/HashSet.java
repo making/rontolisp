@@ -3,6 +3,8 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import rontolisp.internal.Splits;
+
 // A set over the keys of a HashMap, so in a HashMap's order.
 public class HashSet<E> extends AbstractSet<E> {
 
@@ -32,6 +34,10 @@ public class HashSet<E> extends AbstractSet<E> {
 
     public Iterator<E> iterator() {
         return map.keySet().iterator();
+    }
+
+    public Spliterator<E> spliterator() {
+        return Splits.of(this, Spliterator.DISTINCT | Spliterator.SIZED);
     }
 
     public int size() {

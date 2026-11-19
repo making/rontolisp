@@ -16,8 +16,10 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
+import java.util.Spliterator;
 import java.util.stream.Stream;
 import rontolisp.internal.ObjectFlow;
+import rontolisp.internal.Splits;
 
 public class LinkedTransferQueue<E> extends AbstractCollection<E> implements TransferQueue<E> {
 
@@ -312,6 +314,10 @@ public class LinkedTransferQueue<E> extends AbstractCollection<E> implements Tra
 
     public synchronized Iterator<E> iterator() {
         return new Walk<E>(this, elements().iterator());
+    }
+
+    public Spliterator<E> spliterator() {
+        return Splits.unsized(this, Spliterator.ORDERED | Spliterator.NONNULL | Spliterator.CONCURRENT);
     }
 
     // how many elements a concurrent collection holds is told by running the stream

@@ -10,14 +10,17 @@ import java.util.Comparator;
 import java.util.Iterator;
 import java.util.ListIterator;
 import java.util.NoSuchElementException;
+import java.util.RandomAccess;
+import java.util.Spliterator;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
+import rontolisp.internal.Splits;
 
 // A list whose array is never changed: every change, made under the list's monitor,
 // puts a new array in its place, so a read needs no lock and an iterator walks the
 // array there was when it was made, and changes nothing.
-public class CopyOnWriteArrayList<E> extends AbstractList<E> {
+public class CopyOnWriteArrayList<E> extends AbstractList<E> implements RandomAccess {
 
     private volatile Object[] items = new Object[0];
 
@@ -191,6 +194,16 @@ public class CopyOnWriteArrayList<E> extends AbstractList<E> {
 
     public Iterator<E> iterator() {
         return new Snapshot<>(this.items, 0);
+    }
+
+    public Spliterator<E> spliterator() {
+        return snapshot(Spliterator.ORDERED | Spliterator.SIZED | Spliterator.IMMUTABLE | Spliterator.SUBSIZED);
+    }
+
+    // the elements there when it is made
+    Spliterator<E> snapshot(int marks) {
+        Object[] items = this.items;
+        return new Splits<E>(null, new Snapshot<>(items, 0), items.length, marks, true);
     }
 
     public ListIterator<E> listIterator() {

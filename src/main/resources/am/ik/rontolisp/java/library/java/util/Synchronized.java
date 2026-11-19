@@ -121,6 +121,11 @@ final class Synchronized {
             return held.iterator();
         }
 
+        // to be held in the lock by the caller, as the iterator is
+        public Spliterator<E> spliterator() {
+            return held.spliterator();
+        }
+
         public String toString() {
             synchronized (lock) {
                 return held.toString();

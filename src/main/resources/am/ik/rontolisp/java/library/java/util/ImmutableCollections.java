@@ -3,18 +3,50 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.util.function.Consumer;
+import rontolisp.internal.Splits;
+
 // The collections List.of, Set.of and Map.of answer: nothing changes them.
 final class ImmutableCollections {
+
+    // What the spliterator of each reports, as a JDK's does: the held collection's, the
+    // default of its interface, an empty collection's (Collections.empty*) or a
+    // collection's of one element (Collections.singleton*, List.of(e), Set.of(e)).
+    static final int HELD = 0;
+
+    static final int OWN = 1;
+
+    static final int EMPTY = 2;
+
+    static final int ONE = 3;
 
     private ImmutableCollections() {
     }
 
-    static final class ListN<E> extends AbstractList<E> {
+    static <E> Spliterator<E> split(Collection<E> self, int how, int own) {
+        if (how == ONE) {
+            return Splits.one(self);
+        }
+        return Splits.counted(self, how == EMPTY ? Spliterator.SIZED | Spliterator.SUBSIZED : own);
+    }
+
+    static final class ListN<E> extends AbstractList<E> implements RandomAccess {
 
         private final Object[] held;
 
+        private final int how;
+
         ListN(Object[] held) {
+            this(held, OWN);
+        }
+
+        ListN(Object[] held, int how) {
             this.held = held;
+            this.how = how;
+        }
+
+        public Spliterator<E> spliterator() {
+            return split(this, how, Spliterator.ORDERED | Spliterator.SIZED | Spliterator.SUBSIZED);
         }
 
         public int size() {
@@ -88,8 +120,22 @@ final class ImmutableCollections {
 
         private final Collection<E> held;
 
-        Unchanging(Collection<E> held) {
+        private final int how;
+
+        Unchanging(Collection<E> held, int how) {
             this.held = held;
+            this.how = how;
+        }
+
+        public Spliterator<E> spliterator() {
+            if (how == HELD) {
+                return held.spliterator();
+            }
+            if (how == OWN) {
+                return Splits.of(this, this instanceof Set ? Spliterator.DISTINCT | Spliterator.SIZED
+                        | Spliterator.SUBSIZED : Spliterator.SIZED | Spliterator.SUBSIZED);
+            }
+            return split(this, how, 0);
         }
 
         public int size() {
@@ -131,8 +177,8 @@ final class ImmutableCollections {
 
     static final class SetN<E> extends Unchanging<E> implements Set<E> {
 
-        SetN(Set<E> held) {
-            super(held);
+        SetN(Set<E> held, int how) {
+            super(held, how);
         }
     }
 
@@ -170,6 +216,10 @@ final class ImmutableCollections {
             return held.get(index);
         }
 
+        public Spliterator<E> spliterator() {
+            return held.spliterator();
+        }
+
         public boolean remove(Object o) {
             throw new UnsupportedOperationException();
         }
@@ -195,8 +245,15 @@ final class ImmutableCollections {
 
         private final Map<K, V> held;
 
+        private final int how;
+
         MapN(Map<K, V> held) {
+            this(held, OWN);
+        }
+
+        MapN(Map<K, V> held, int how) {
             this.held = held;
+            this.how = how;
         }
 
         public int size() {
@@ -220,11 +277,11 @@ final class ImmutableCollections {
         }
 
         public Set<K> keySet() {
-            return new SetN<>(held.keySet());
+            return new SetN<>(held.keySet(), how);
         }
 
         public Collection<V> values() {
-            return new Unchanging<>(held.values());
+            return new Unchanging<>(held.values(), how);
         }
 
         public Set<Map.Entry<K, V>> entrySet() {
@@ -232,15 +289,58 @@ final class ImmutableCollections {
             for (Map.Entry<K, V> entry : held.entrySet()) {
                 ordered.add(new Pair<>(entry.getKey(), entry.getValue()));
             }
-            return new Entries<>(ordered);
+            if (how == HELD) {
+                return new Entries<>(ordered, held.entrySet());
+            }
+            return new Entries<>(ordered, how == OWN && ordered.size() == 1 ? ONE : how);
         }
     }
 
     // The entries of an unchanging map, in the map's order.
     static final class Entries<E> extends Unchanging<E> implements Set<E> {
 
-        Entries(Collection<E> held) {
-            super(held);
+        // the entries of the map an unmodifiable view holds, or null
+        private final Set<? extends Map.Entry<?, ?>> viewed;
+
+        Entries(Collection<E> held, int how) {
+            super(held, how);
+            this.viewed = null;
+        }
+
+        Entries(Collection<E> held, Set<? extends Map.Entry<?, ?>> viewed) {
+            super(held, HELD);
+            this.viewed = viewed;
+        }
+
+        public Spliterator<E> spliterator() {
+            return viewed == null ? super.spliterator() : new Paired<E>(viewed.spliterator());
+        }
+    }
+
+    // what the spliterator of a map's entries gives, each as an entry nothing changes
+    static final class Paired<E> implements Spliterator<E> {
+
+        private final Spliterator<? extends Map.Entry<?, ?>> held;
+
+        Paired(Spliterator<? extends Map.Entry<?, ?>> held) {
+            this.held = held;
+        }
+
+        public boolean tryAdvance(Consumer<? super E> action) {
+            Objects.requireNonNull(action);
+            return held.tryAdvance(entry -> action.accept((E) new Pair<>(entry.getKey(), entry.getValue())));
+        }
+
+        public Spliterator<E> trySplit() {
+            return null;
+        }
+
+        public long estimateSize() {
+            return held.estimateSize();
+        }
+
+        public int characteristics() {
+            return held.characteristics();
         }
     }
 

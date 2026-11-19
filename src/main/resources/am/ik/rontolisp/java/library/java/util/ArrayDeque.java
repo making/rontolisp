@@ -3,6 +3,8 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import rontolisp.internal.Splits;
+
 // A ring in an array that doubles when it is full: no element is null.
 public class ArrayDeque<E> extends AbstractCollection<E> implements Deque<E> {
 
@@ -214,6 +216,11 @@ public class ArrayDeque<E> extends AbstractCollection<E> implements Deque<E> {
 
     public Iterator<E> iterator() {
         return new Each<>(this, false);
+    }
+
+    public Spliterator<E> spliterator() {
+        return Splits.counted(this,
+                Spliterator.ORDERED | Spliterator.SIZED | Spliterator.NONNULL | Spliterator.SUBSIZED);
     }
 
     public Iterator<E> descendingIterator() {

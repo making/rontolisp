@@ -952,7 +952,7 @@ measured programs.
   the forms name. A program's own classes are lowered whole, as before. A local or anonymous
   class of the library is lowered where its method is.
 - **A missing member of a library class is refused by name**, source or intrinsic
-  (`ArrayList.spliterator()`), never `cannot find symbol`.
+  (`Stream.spliterator()`), never `cannot find symbol`.
 - **`HashMap` keeps the order a program sees** (the JDK 25 running the corpus is the oracle,
   `a-hash-map-finds-a-key-by-equals-and-keeps-the-order-a-program-sees`): hash folded with its
   upper half, masked by a power of two that doubles past three quarters, the table made at the
@@ -1473,10 +1473,42 @@ the probes are `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-dura
 - **`String.compareTo(null)` throws** (k12: it answered 1, found by `sorted()` over a
   `null`): `%java-string-compare` and `-ignore-case` test their argument, 23 B of wasm
   in a program comparing strings.
-- **Not there** (`.todo/k26`, each refused by name): `mapMulti`, `gather`,
-  `spliterator` / `StreamSupport`, `Collectors.groupingByConcurrent` /
-  `toConcurrentMap`, `Random.ints` and its kin; an inner stream of `flatMap` that a
-  short-circuit leaves unfinished is not closed.
+- **Spliterators** (2026-11-20, k38; met by YAVI's `input/Projection`,
+  `StreamSupport.stream(iterable.spliterator(), false)`). Every spliterator of the
+  library is `rontolisp.internal.Splits`: an iterator's elements, a collection's iterator
+  and size taken at the first `tryAdvance` or `estimateSize` (an element added between
+  `spliterator()` and that is read, as of a JDK's `ArrayList`). What each collection
+  reports is a JDK 25's answer to a probe, pinned by the corpus case
+  `a-spliterator-reports-what-a-jdk-reports-of-each-collection-and-a-stream-is-made-of-one`
+  (50 collections): its characteristics, and whether its estimate goes down an element
+  given (`ArrayList`, `Vector`, `LinkedList`, `ArrayDeque`, the lists of `List.of`,
+  `Arrays.asList`, `nCopies`, a sublist of a `RandomAccess` list, the copy-on-write two,
+  a collection of one element) or keeps what it took (every set and map view but those,
+  a sublist of a `LinkedList`, the blocking queues, the defaults of `Collection`, `Set`
+  and `List` for a class of the program). One element nothing changes (`List.of(e)`,
+  `Set.of(e)`, `singleton*`, the entries of a `Map.of` of one pair) is
+  `ORDERED|DISTINCT|SIZED|IMMUTABLE|SUBSIZED`, with `NONNULL` but for a `null`;
+  `Collections.empty*` is `SIZED|SUBSIZED`; an unmodifiable or synchronized view is its
+  held collection's (`ImmutableCollections.HELD` .. `ONE`). `RandomAccess` is what
+  `List.spliterator()` tells the two kinds of list by, as a JDK's does.
+  `Iterable.spliterator()` takes the iterator at once. `StreamSupport.stream` is
+  `ObjectFlow.split`: a pull is a `tryAdvance` into a held cell, the supplier form asks
+  for its spliterator at the first pull or count, and `count()` of a `SIZED` one is
+  `getExactSizeIfKnown()`, no stage run. **Decided: nothing splits** (`trySplit` answers
+  `null`, within the specification: a stream here runs in order, and how a JDK's
+  `AbstractSpliterator` batches is its own). Left as measured: a change while a
+  spliterator is read throws before the next element, where a JDK's `ArrayList` and
+  `HashSet` hand it on first; `Collection.stream()` stays `ObjectFlow.over`, so a
+  program's collection overriding `spliterator()` and not `stream()` streams its
+  iterator; a `SORTED` or `DISTINCT` spliterator does not make `sorted()` / `distinct()`
+  a pass-through. A program of one `ArrayList` reads 94 library files where it read 91
+  (`RandomAccess`, `Spliterator`, `Splits`), runs on the interpreter in the same time
+  (1.09 to 1.24 s against 1.10 to 1.18 s, five runs each) and lowers to the same 57,206
+  B of wasm; YAVI's classic example grew from 655,275 to 655,678 B.
+- **Not there** (`.todo/k26`, each refused by name): `mapMulti`, `gather`, a stream's own
+  `spliterator()` and the spliterators of `int`, `long` and `double`,
+  `Collectors.groupingByConcurrent` / `toConcurrentMap`, `Random.ints` and its kin; an
+  inner stream of `flatMap` that a short-circuit leaves unfinished is not closed.
 
 ## java.net.http (2026-11-18, k03)
 

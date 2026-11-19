@@ -171,27 +171,27 @@ public final class Collections {
     }
 
     public static <T> List<T> emptyList() {
-        return new ImmutableCollections.ListN<>(new Object[0]);
+        return new ImmutableCollections.ListN<>(new Object[0], ImmutableCollections.EMPTY);
     }
 
     public static <T> Set<T> emptySet() {
-        return new ImmutableCollections.SetN<>(new HashSet<T>());
+        return new ImmutableCollections.SetN<>(new HashSet<T>(), ImmutableCollections.EMPTY);
     }
 
     public static <K, V> Map<K, V> emptyMap() {
-        return new ImmutableCollections.MapN<>(new HashMap<K, V>());
+        return new ImmutableCollections.MapN<>(new HashMap<K, V>(), ImmutableCollections.EMPTY);
     }
 
     public static <T> List<T> singletonList(T value) {
         Object[] held = new Object[1];
         held[0] = value;
-        return new ImmutableCollections.ListN<>(held);
+        return new ImmutableCollections.ListN<>(held, ImmutableCollections.ONE);
     }
 
     public static <T> Set<T> singleton(T value) {
         HashSet<T> held = new HashSet<>();
         held.add(value);
-        return new ImmutableCollections.SetN<>(held);
+        return new ImmutableCollections.SetN<>(held, ImmutableCollections.ONE);
     }
 
     public static <T> List<T> unmodifiableList(List<? extends T> list) {
@@ -201,17 +201,17 @@ public final class Collections {
 
     public static <T> Set<T> unmodifiableSet(Set<? extends T> set) {
         Set<T> held = (Set<T>) set;
-        return new ImmutableCollections.SetN<>(held);
+        return new ImmutableCollections.SetN<>(held, ImmutableCollections.HELD);
     }
 
     public static <T> Collection<T> unmodifiableCollection(Collection<? extends T> c) {
         Collection<T> held = (Collection<T>) c;
-        return new ImmutableCollections.Unchanging<>(held);
+        return new ImmutableCollections.Unchanging<>(held, ImmutableCollections.HELD);
     }
 
     public static <K, V> Map<K, V> unmodifiableMap(Map<? extends K, ? extends V> map) {
         Map<K, V> held = (Map<K, V>) map;
-        return new ImmutableCollections.MapN<>(held);
+        return new ImmutableCollections.MapN<>(held, ImmutableCollections.HELD);
     }
 
     public static <T> Collection<T> synchronizedCollection(Collection<T> c) {

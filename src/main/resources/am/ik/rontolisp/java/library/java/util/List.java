@@ -4,6 +4,7 @@
 package java.util;
 
 import java.util.function.UnaryOperator;
+import rontolisp.internal.Splits;
 
 public interface List<E> extends Collection<E> {
 
@@ -26,6 +27,11 @@ public interface List<E> extends Collection<E> {
     int lastIndexOf(Object o);
 
     List<E> subList(int from, int to);
+
+    default Spliterator<E> spliterator() {
+        int marks = Spliterator.ORDERED | Spliterator.SIZED | Spliterator.SUBSIZED;
+        return this instanceof RandomAccess ? Splits.counted(this, marks) : Splits.of(this, marks);
+    }
 
     ListIterator<E> listIterator();
 
@@ -99,7 +105,8 @@ public interface List<E> extends Collection<E> {
             }
             held[i] = elements[i];
         }
-        return new ImmutableCollections.ListN<>(held);
+        return new ImmutableCollections.ListN<>(held,
+                held.length == 1 ? ImmutableCollections.ONE : ImmutableCollections.OWN);
     }
 
     static <E> List<E> copyOf(Collection<? extends E> c) {
@@ -109,6 +116,7 @@ public interface List<E> extends Collection<E> {
                 throw new NullPointerException();
             }
         }
-        return new ImmutableCollections.ListN<>(held);
+        return new ImmutableCollections.ListN<>(held,
+                held.length == 1 ? ImmutableCollections.ONE : ImmutableCollections.OWN);
     }
 }

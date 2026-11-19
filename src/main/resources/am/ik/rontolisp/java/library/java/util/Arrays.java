@@ -86,6 +86,15 @@ public final class Arrays {
         return DoubleFlow.of(array, from, to);
     }
 
+    public static <T> Spliterator<T> spliterator(T[] array) {
+        return spliterator(array, 0, array.length);
+    }
+
+    public static <T> Spliterator<T> spliterator(T[] array, int fromIndex, int toIndex) {
+        return Spliterators.spliterator(array, fromIndex, toIndex,
+                Spliterator.ORDERED | Spliterator.IMMUTABLE);
+    }
+
     @SafeVarargs
     public static <T> List<T> asList(T... a) {
         return new ArrayView<>(a);
@@ -1024,7 +1033,7 @@ public final class Arrays {
     }
 
     // The list Arrays.asList answers: the array itself, so of a fixed size.
-    static final class ArrayView<E> extends AbstractList<E> {
+    static final class ArrayView<E> extends AbstractList<E> implements RandomAccess {
 
         private final E[] held;
 

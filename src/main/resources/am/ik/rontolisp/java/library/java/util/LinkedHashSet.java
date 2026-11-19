@@ -3,6 +3,8 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import rontolisp.internal.Splits;
+
 // A set over the keys of a LinkedHashMap, so in the order its elements were added.
 public class LinkedHashSet<E> extends HashSet<E> {
 
@@ -21,5 +23,10 @@ public class LinkedHashSet<E> extends HashSet<E> {
     public LinkedHashSet(Collection<? extends E> c) {
         super(new LinkedHashMap<E, Boolean>());
         addAll(c);
+    }
+
+    public Spliterator<E> spliterator() {
+        return Splits.of(this, Spliterator.ORDERED | Spliterator.DISTINCT | Spliterator.SIZED
+                | Spliterator.SUBSIZED);
     }
 }

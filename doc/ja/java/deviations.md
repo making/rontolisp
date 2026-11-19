@@ -306,8 +306,12 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 ときに閉じられます。`findFirst` や `limit` で途中まで読んだストリームは閉じられません。
 コレクターの `finisher` は、`characteristics()` の内容にかかわらず必ず呼ばれます。
 プログラム自身のクラスのコレクターから作ったコレクター（`mapping`、`groupingBy`）は、
-元のコレクターの特性を引き継ぎません。`mapMulti`、`gather`、`spliterator`、`StreamSupport`、
-`Collectors.groupingByConcurrent` と `toConcurrentMap`、`Random` のストリームはありません。
+元のコレクターの特性を引き継ぎません。ライブラリのスプリッテレーターは分割しません。
+`trySplit` は `null` を返します。スプリッテレーターで読んでいる途中にコレクションを変更すると、
+次の要素を渡す前に `ConcurrentModificationException` が投げられます。JDK はその要素を
+渡してから投げます。`mapMulti`、`gather`、ストリーム自身の `spliterator()`、`int`、`long`、
+`double` のスプリッテレーター、`Collectors.groupingByConcurrent` と `toConcurrentMap`、
+`Random` のストリームはありません。
 
 **ホストへの問い合わせには決まった値を返します。** `Runtime.availableProcessors()` は 1 です。
 `System.getProperty` は `line.separator`、`file.separator`、`path.separator` と、エンコーディング

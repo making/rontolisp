@@ -7,6 +7,7 @@ import java.util.function.IntFunction;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 import rontolisp.internal.ObjectFlow;
+import rontolisp.internal.Splits;
 
 public interface Collection<E> extends Iterable<E> {
 
@@ -37,6 +38,10 @@ public interface Collection<E> extends Iterable<E> {
     boolean retainAll(Collection<?> c);
 
     void clear();
+
+    default Spliterator<E> spliterator() {
+        return Splits.of(this, Spliterator.SIZED | Spliterator.SUBSIZED);
+    }
 
     default Stream<E> stream() {
         return ObjectFlow.over(this, () -> size());

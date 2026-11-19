@@ -11,6 +11,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Optional;
+import java.util.Spliterator;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.BinaryOperator;
@@ -109,6 +110,39 @@ public final class ObjectFlow<T> extends Flow implements Stream<T> {
             ending.reached = true;
             return null;
         });
+    }
+
+    // the elements a spliterator gives: the supplier is asked for it at the first pull, or
+    // at the count where the characteristics say SIZED
+    public static <T> ObjectFlow<T> split(Supplier<? extends Spliterator<T>> supplier, int characteristics,
+            boolean parallel) {
+        Ending ending = new Ending();
+        Held<Spliterator<T>> source = new Held<>();
+        Held<T> taken = new Held<>();
+        Consumer<T> take = item -> taken.value = item;
+        Count count = (characteristics & Spliterator.SIZED) == 0 ? null
+                : () -> supplied(source, supplier).getExactSizeIfKnown();
+        ObjectFlow<T> flow = new ObjectFlow<T>(new Origin(), ending, count, () -> {
+            if (supplied(source, supplier).tryAdvance(take)) {
+                T item = taken.value;
+                taken.value = null;
+                return item;
+            }
+            ending.reached = true;
+            return null;
+        });
+        flow.origin.parallel = parallel;
+        return flow;
+    }
+
+    private static <T> Spliterator<T> supplied(Held<Spliterator<T>> source,
+            Supplier<? extends Spliterator<T>> supplier) {
+        Spliterator<T> spliterator = source.value;
+        if (spliterator == null) {
+            spliterator = supplier.get();
+            source.value = spliterator;
+        }
+        return spliterator;
     }
 
     public static <T> ObjectFlow<T> of(T[] array, int from, int to) {

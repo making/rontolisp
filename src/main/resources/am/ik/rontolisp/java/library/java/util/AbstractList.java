@@ -3,6 +3,8 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import rontolisp.internal.Splits;
+
 // A list over get and size; one that changes also has set, add at an index and remove
 // at an index.
 public abstract class AbstractList<E> extends AbstractCollection<E> implements List<E> {
@@ -230,10 +232,19 @@ public abstract class AbstractList<E> extends AbstractCollection<E> implements L
 
         private int length;
 
+        // a part of a list of random access, or of a part of one
+        private final boolean random;
+
         SubList(List<E> whole, int offset, int length) {
             this.whole = whole;
             this.offset = offset;
             this.length = length;
+            this.random = whole instanceof RandomAccess || whole instanceof SubList<?> part && part.random;
+        }
+
+        public Spliterator<E> spliterator() {
+            int marks = Spliterator.ORDERED | Spliterator.SIZED | Spliterator.SUBSIZED;
+            return random ? Splits.counted(this, marks) : Splits.of(this, marks);
         }
 
         private void check(int index, int limit) {

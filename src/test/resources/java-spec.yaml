@@ -28,9 +28,11 @@ imports: |
   import java.text.Normalizer;
   import java.time.Duration;
   import java.time.format.DateTimeParseException;
+  import java.util.AbstractCollection;
   import java.util.AbstractList;
   import java.util.AbstractMap;
   import java.util.AbstractSequentialList;
+  import java.util.AbstractSet;
   import java.util.ArrayDeque;
   import java.util.ArrayList;
   import java.util.Arrays;
@@ -64,6 +66,8 @@ imports: |
   import java.util.Queue;
   import java.util.Random;
   import java.util.Set;
+  import java.util.Spliterator;
+  import java.util.Spliterators;
   import java.util.Stack;
   import java.util.UUID;
   import java.util.Vector;
@@ -7056,6 +7060,309 @@ cases:
       {3=1, 4=3, 5=1, 6=1}
       4 true
       6 6 6 apple
+  # A spliterator walks a collection's iterator: what each collection reports of itself
+  # (its characteristics, whether its estimate goes down as it is read) is a JDK's, and
+  # StreamSupport makes a stream of one, its count known where it says SIZED. Nothing
+  # splits (trySplit answers null), so no line asks.
+  - name: a-spliterator-reports-what-a-jdk-reports-of-each-collection-and-a-stream-is-made-of-one
+    main: SplitCase
+    source: |
+      class SplitCase {
+          static String marks(Spliterator<?> s) {
+              int c = s.characteristics();
+              StringBuilder b = new StringBuilder();
+              String[] names = { "ORDERED", "DISTINCT", "SORTED", "SIZED", "NONNULL", "IMMUTABLE", "CONCURRENT", "SUBSIZED" };
+              int[] bits = { Spliterator.ORDERED, Spliterator.DISTINCT, Spliterator.SORTED, Spliterator.SIZED, Spliterator.NONNULL,
+                      Spliterator.IMMUTABLE, Spliterator.CONCURRENT, Spliterator.SUBSIZED };
+              for (int i = 0; i < names.length; i++) {
+                  if ((c & bits[i]) != 0) {
+                      b.append(b.length() == 0 ? "" : "|").append(names[i]);
+                  }
+              }
+              return c + " " + b;
+          }
+
+          static void row(String what, Iterable<?> source) {
+              Spliterator<?> s = source.spliterator();
+              StringBuilder line = new StringBuilder(what + ": " + marks(s));
+              line.append(", size ").append(s.estimateSize()).append(" exact ").append(s.getExactSizeIfKnown());
+              List<Object> seen = new ArrayList<>();
+              boolean one = s.tryAdvance(seen::add);
+              line.append(", advanced ").append(one).append(" size ").append(s.estimateSize());
+              s.forEachRemaining(seen::add);
+              line.append(", ").append(seen).append(" size ").append(s.estimateSize()).append(" again ").append(s.tryAdvance(seen::add));
+              System.out.println(line);
+          }
+
+          static void fails(String what, Runnable r) {
+              try {
+                  r.run();
+                  System.out.println(what + ": ran");
+              }
+              catch (RuntimeException e) {
+                  System.out.println(what + ": " + e.getClass().getName() + (e instanceof NullPointerException ? "" : " " + e.getMessage()));
+              }
+          }
+
+          static class SplitCaseThree implements Iterable<String> {
+              public Iterator<String> iterator() {
+                  return List.of("x", "y", "z").iterator();
+              }
+          }
+
+          static class SplitCaseList extends AbstractList<Integer> {
+              public Integer get(int i) {
+                  return i;
+              }
+
+              public int size() {
+                  return 2;
+              }
+          }
+
+          static class SplitCaseSet extends AbstractSet<Integer> {
+              public Iterator<Integer> iterator() {
+                  return List.of(1, 2).iterator();
+              }
+
+              public int size() {
+                  return 2;
+              }
+          }
+
+          static class SplitCaseCollection extends AbstractCollection<Integer> {
+              public Iterator<Integer> iterator() {
+                  return List.of(1, 2).iterator();
+              }
+
+              public int size() {
+                  return 2;
+              }
+          }
+
+          public static void main(String[] args) {
+              List<Integer> list = new ArrayList<>(List.of(3, 1, 2));
+              Map<String, Integer> map = new HashMap<>(Map.of("a", 1, "b", 2));
+              Map<String, Integer> linked = new LinkedHashMap<>();
+              linked.put("p", 1);
+              linked.put("q", 2);
+              row("ArrayList", list);
+              row("subList", list.subList(0, 2));
+              row("subList of a subList", list.subList(0, 3).subList(1, 2));
+              row("LinkedList", new LinkedList<>(list));
+              row("LinkedList subList", new LinkedList<>(list).subList(0, 2));
+              row("ArrayDeque", new ArrayDeque<>(list));
+              row("Vector", new Vector<>(list));
+              row("HashSet", new HashSet<>(list));
+              row("LinkedHashSet", new LinkedHashSet<>(list));
+              row("HashMap keySet", map.keySet());
+              row("HashMap values", map.values());
+              row("HashMap entrySet", map.entrySet());
+              row("LinkedHashMap keySet", linked.keySet());
+              row("LinkedHashMap values", linked.values());
+              row("LinkedHashMap entrySet", linked.entrySet());
+              row("Hashtable entrySet", new Hashtable<>(map).entrySet());
+              row("List.of 0", List.of());
+              row("List.of 1", List.of(1));
+              row("List.of 3", List.of(1, 2, 3));
+              row("List.copyOf 1", List.copyOf(List.of(1)));
+              row("Set.of 1", Set.of(1));
+              row("Map.of keySet", Map.of("a", 1).keySet());
+              row("Map.of values", Map.of("a", 1).values());
+              row("Map.of 1 entrySet", Map.of("a", 1).entrySet());
+              row("Map.of 2 entrySet", Map.of("a", 1, "b", 2).entrySet());
+              row("Arrays.asList", Arrays.asList(4, 5));
+              row("nCopies", Collections.nCopies(2, "n"));
+              row("emptyList", Collections.emptyList());
+              row("emptySet", Collections.emptySet());
+              row("emptyMap entrySet", Collections.<String, Integer>emptyMap().entrySet());
+              row("singletonList", Collections.singletonList(7));
+              row("singletonList null", Collections.singletonList(null));
+              row("singleton", Collections.singleton(7));
+              row("unmodifiableList", Collections.unmodifiableList(list));
+              row("unmodifiableSet", Collections.unmodifiableSet(new HashSet<>(list)));
+              row("unmodifiableCollection", Collections.unmodifiableCollection(new LinkedList<>(list)));
+              row("unmodifiableMap entrySet", Collections.unmodifiableMap(linked).entrySet());
+              row("unmodifiableMap 1 entrySet", Collections.unmodifiableMap(Map.of("a", 1)).entrySet());
+              row("synchronizedList", Collections.synchronizedList(new ArrayList<>(list)));
+              row("synchronizedMap keySet", Collections.synchronizedMap(map).keySet());
+              row("CopyOnWriteArrayList", new java.util.concurrent.CopyOnWriteArrayList<>(list));
+              row("CopyOnWriteArraySet", new java.util.concurrent.CopyOnWriteArraySet<>(list));
+              row("ConcurrentLinkedQueue", new java.util.concurrent.ConcurrentLinkedQueue<>(list));
+              row("LinkedBlockingQueue", new java.util.concurrent.LinkedBlockingQueue<>(list));
+              row("ConcurrentHashMap keySet", new java.util.concurrent.ConcurrentHashMap<>(map).keySet());
+              row("ConcurrentHashMap values", new java.util.concurrent.ConcurrentHashMap<>(map).values());
+              row("own AbstractList", new SplitCaseList());
+              row("own AbstractSet", new SplitCaseSet());
+              row("own AbstractCollection", new SplitCaseCollection());
+              row("own Iterable", new SplitCaseThree());
+
+              Spliterator<String> unknown = Spliterators.spliteratorUnknownSize(List.of("u", "v").iterator(), Spliterator.ORDERED | Spliterator.SIZED);
+              System.out.println("unknown size: " + marks(unknown) + " size " + unknown.estimateSize());
+              Spliterator<String> sized = Spliterators.spliterator(List.of("u", "v").iterator(), 2, Spliterator.ORDERED);
+              System.out.println("sized iterator: " + marks(sized) + " size " + sized.estimateSize());
+              Spliterator<String> concurrent = Spliterators.spliterator(List.of("u", "v"), Spliterator.CONCURRENT);
+              System.out.println("concurrent: " + marks(concurrent) + " size " + concurrent.estimateSize() + " exact " + concurrent.getExactSizeIfKnown());
+              Spliterator<String> sorted = Spliterators.spliteratorUnknownSize(List.of("u").iterator(), Spliterator.SORTED);
+              System.out.println("sorted: " + marks(sorted) + " comparator " + sorted.getComparator());
+              Spliterator<Object> empty = Spliterators.emptySpliterator();
+              System.out.println("empty: " + marks(empty) + " size " + empty.estimateSize() + " " + empty.tryAdvance(x -> { }));
+              Spliterator<Integer> array = Spliterators.spliterator(new Integer[] { 1, 2, 3 }, Spliterator.ORDERED);
+              array.tryAdvance(x -> { });
+              System.out.println("array: " + marks(array) + " size " + array.estimateSize());
+              Spliterator<Integer> range = Spliterators.spliterator(new Integer[] { 1, 2, 3 }, 1, 3, 0);
+              System.out.println("array range: " + marks(range) + " size " + range.estimateSize());
+              Spliterator<String> arrays = Arrays.spliterator(new String[] { "a", "b", "c" }, 1, 3);
+              List<String> fromArrays = new ArrayList<>();
+              arrays.forEachRemaining(fromArrays::add);
+              System.out.println("Arrays.spliterator: " + marks(arrays) + " " + fromArrays);
+              System.out.println("hasCharacteristics: " + list.spliterator().hasCharacteristics(Spliterator.SIZED) + " "
+                      + list.spliterator().hasCharacteristics(Spliterator.SIZED | Spliterator.DISTINCT));
+              Iterator<Integer> back = Spliterators.iterator(list.spliterator());
+              StringBuilder walked = new StringBuilder("iterator:");
+              while (back.hasNext()) {
+                  walked.append(' ').append(back.next());
+              }
+              System.out.println(walked);
+              fails("iterator past its end", () -> back.next());
+              fails("getComparator", () -> list.spliterator().getComparator());
+              fails("tryAdvance(null)", () -> list.spliterator().tryAdvance(null));
+              fails("emptySpliterator tryAdvance(null)", () -> Spliterators.emptySpliterator().tryAdvance(null));
+              fails("spliteratorUnknownSize(null)", () -> Spliterators.spliteratorUnknownSize((Iterator<String>) null, 0));
+              fails("past the array", () -> Spliterators.spliterator(new Integer[] { 1 }, 1, 3, 0));
+              fails("a range backwards", () -> Spliterators.spliterator(new Integer[] { 1 }, 1, 0, 0));
+              fails("before the array", () -> Spliterators.spliterator(new Integer[] { 1 }, -1, 0, 0));
+              fails("stream(null)", () -> StreamSupport.stream((Spliterator<Object>) null, false));
+
+              Spliterator<Integer> own = new Spliterators.AbstractSpliterator<Integer>(5, Spliterator.SIZED | Spliterator.ORDERED) {
+                  int i;
+
+                  public boolean tryAdvance(Consumer<? super Integer> action) {
+                      if (i < 3) {
+                          action.accept(i++);
+                          return true;
+                      }
+                      return false;
+                  }
+              };
+              System.out.println("AbstractSpliterator: " + marks(own) + " size " + own.estimateSize() + " count " + StreamSupport.stream(own, false).count());
+
+              List<String> late = new ArrayList<>(List.of("a"));
+              Spliterator<String> lateSplit = late.spliterator();
+              late.add("b");
+              StringBuilder lateLine = new StringBuilder("late:");
+              lateSplit.forEachRemaining(x -> lateLine.append(' ').append(x));
+              System.out.println(lateLine);
+              int[] ran = new int[1];
+              long n = StreamSupport.stream(list.spliterator(), false).peek(x -> ran[0]++).count();
+              System.out.println("count of a list " + n + (ran[0] == 0 ? " known" : " run"));
+              ran[0] = 0;
+              n = StreamSupport.stream(new SplitCaseThree().spliterator(), false).peek(x -> ran[0]++).count();
+              System.out.println("count of an iterable " + n + (ran[0] == 0 ? " known" : " run"));
+              Stream<Integer> parallel = StreamSupport.stream(list.spliterator(), true);
+              System.out.println("parallel " + parallel.isParallel() + " " + parallel.map(x -> x * 10).collect(Collectors.toList()));
+              Stream<String> lazy = StreamSupport.stream(late.spliterator(), false);
+              late.add("c");
+              System.out.println("lazy " + lazy.collect(Collectors.joining(",")));
+              Iterable<? extends Map.Entry<String, ? extends Object>> properties = linked.entrySet();
+              Iterable<? extends Map.Entry<String, ? extends Object>> kept = StreamSupport.stream(properties.spliterator(), false)
+                  .filter(property -> !property.getKey().equals("q"))
+                  .toList();
+              System.out.println("kept " + kept);
+              Stream<String> once = StreamSupport.stream(late.spliterator(), false);
+              once.count();
+              fails("twice", () -> once.count());
+              int[] got = new int[1];
+              Stream<Integer> supplied = StreamSupport.stream(() -> {
+                  got[0]++;
+                  return List.of(5, 6).spliterator();
+              }, Spliterator.SIZED, false);
+              System.out.println("supplier asked " + got[0] + ", count " + supplied.count() + ", asked " + got[0]);
+              Spliterator<Integer> half = new ArrayList<>(List.of(1, 2, 3)).spliterator();
+              half.tryAdvance(x -> { });
+              System.out.println("the rest " + StreamSupport.stream(half, false).toList() + " count " + StreamSupport.stream(half, false).count());
+          }
+      }
+    expected: |
+      ArrayList: 16464 ORDERED|SIZED|SUBSIZED, size 3 exact 3, advanced true size 2, [3, 1, 2] size 0 again false
+      subList: 16464 ORDERED|SIZED|SUBSIZED, size 2 exact 2, advanced true size 1, [3, 1] size 0 again false
+      subList of a subList: 16464 ORDERED|SIZED|SUBSIZED, size 1 exact 1, advanced true size 0, [1] size 0 again false
+      LinkedList: 16464 ORDERED|SIZED|SUBSIZED, size 3 exact 3, advanced true size 2, [3, 1, 2] size 0 again false
+      LinkedList subList: 16464 ORDERED|SIZED|SUBSIZED, size 2 exact 2, advanced true size 2, [3, 1] size 2 again false
+      ArrayDeque: 16720 ORDERED|SIZED|NONNULL|SUBSIZED, size 3 exact 3, advanced true size 2, [3, 1, 2] size 0 again false
+      Vector: 16464 ORDERED|SIZED|SUBSIZED, size 3 exact 3, advanced true size 2, [3, 1, 2] size 0 again false
+      HashSet: 65 DISTINCT|SIZED, size 3 exact 3, advanced true size 3, [1, 2, 3] size 3 again false
+      LinkedHashSet: 16465 ORDERED|DISTINCT|SIZED|SUBSIZED, size 3 exact 3, advanced true size 3, [3, 1, 2] size 3 again false
+      HashMap keySet: 65 DISTINCT|SIZED, size 2 exact 2, advanced true size 2, [a, b] size 2 again false
+      HashMap values: 64 SIZED, size 2 exact 2, advanced true size 2, [1, 2] size 2 again false
+      HashMap entrySet: 65 DISTINCT|SIZED, size 2 exact 2, advanced true size 2, [a=1, b=2] size 2 again false
+      LinkedHashMap keySet: 16465 ORDERED|DISTINCT|SIZED|SUBSIZED, size 2 exact 2, advanced true size 2, [p, q] size 2 again false
+      LinkedHashMap values: 16464 ORDERED|SIZED|SUBSIZED, size 2 exact 2, advanced true size 2, [1, 2] size 2 again false
+      LinkedHashMap entrySet: 16465 ORDERED|DISTINCT|SIZED|SUBSIZED, size 2 exact 2, advanced true size 2, [p=1, q=2] size 2 again false
+      Hashtable entrySet: 16449 DISTINCT|SIZED|SUBSIZED, size 2 exact 2, advanced true size 2, [b=2, a=1] size 2 again false
+      List.of 0: 16464 ORDERED|SIZED|SUBSIZED, size 0 exact 0, advanced false size 0, [] size 0 again false
+      List.of 1: 17745 ORDERED|DISTINCT|SIZED|NONNULL|IMMUTABLE|SUBSIZED, size 1 exact 1, advanced true size 0, [1] size 0 again false
+      List.of 3: 16464 ORDERED|SIZED|SUBSIZED, size 3 exact 3, advanced true size 2, [1, 2, 3] size 0 again false
+      List.copyOf 1: 17745 ORDERED|DISTINCT|SIZED|NONNULL|IMMUTABLE|SUBSIZED, size 1 exact 1, advanced true size 0, [1] size 0 again false
+      Set.of 1: 17745 ORDERED|DISTINCT|SIZED|NONNULL|IMMUTABLE|SUBSIZED, size 1 exact 1, advanced true size 0, [1] size 0 again false
+      Map.of keySet: 16449 DISTINCT|SIZED|SUBSIZED, size 1 exact 1, advanced true size 1, [a] size 1 again false
+      Map.of values: 16448 SIZED|SUBSIZED, size 1 exact 1, advanced true size 1, [1] size 1 again false
+      Map.of 1 entrySet: 17745 ORDERED|DISTINCT|SIZED|NONNULL|IMMUTABLE|SUBSIZED, size 1 exact 1, advanced true size 0, [a=1] size 0 again false
+      Map.of 2 entrySet: 16449 DISTINCT|SIZED|SUBSIZED, size 2 exact 2, advanced true size 2, [a=1, b=2] size 2 again false
+      Arrays.asList: 16464 ORDERED|SIZED|SUBSIZED, size 2 exact 2, advanced true size 1, [4, 5] size 0 again false
+      nCopies: 16464 ORDERED|SIZED|SUBSIZED, size 2 exact 2, advanced true size 1, [n, n] size 0 again false
+      emptyList: 16448 SIZED|SUBSIZED, size 0 exact 0, advanced false size 0, [] size 0 again false
+      emptySet: 16448 SIZED|SUBSIZED, size 0 exact 0, advanced false size 0, [] size 0 again false
+      emptyMap entrySet: 16448 SIZED|SUBSIZED, size 0 exact 0, advanced false size 0, [] size 0 again false
+      singletonList: 17745 ORDERED|DISTINCT|SIZED|NONNULL|IMMUTABLE|SUBSIZED, size 1 exact 1, advanced true size 0, [7] size 0 again false
+      singletonList null: 17489 ORDERED|DISTINCT|SIZED|IMMUTABLE|SUBSIZED, size 1 exact 1, advanced true size 0, [null] size 0 again false
+      singleton: 17745 ORDERED|DISTINCT|SIZED|NONNULL|IMMUTABLE|SUBSIZED, size 1 exact 1, advanced true size 0, [7] size 0 again false
+      unmodifiableList: 16464 ORDERED|SIZED|SUBSIZED, size 3 exact 3, advanced true size 2, [3, 1, 2] size 0 again false
+      unmodifiableSet: 65 DISTINCT|SIZED, size 3 exact 3, advanced true size 3, [1, 2, 3] size 3 again false
+      unmodifiableCollection: 16464 ORDERED|SIZED|SUBSIZED, size 3 exact 3, advanced true size 2, [3, 1, 2] size 0 again false
+      unmodifiableMap entrySet: 16465 ORDERED|DISTINCT|SIZED|SUBSIZED, size 2 exact 2, advanced true size 2, [p=1, q=2] size 2 again false
+      unmodifiableMap 1 entrySet: 17745 ORDERED|DISTINCT|SIZED|NONNULL|IMMUTABLE|SUBSIZED, size 1 exact 1, advanced true size 0, [a=1] size 0 again false
+      synchronizedList: 16464 ORDERED|SIZED|SUBSIZED, size 3 exact 3, advanced true size 2, [3, 1, 2] size 0 again false
+      synchronizedMap keySet: 65 DISTINCT|SIZED, size 2 exact 2, advanced true size 2, [a, b] size 2 again false
+      CopyOnWriteArrayList: 17488 ORDERED|SIZED|IMMUTABLE|SUBSIZED, size 3 exact 3, advanced true size 2, [3, 1, 2] size 0 again false
+      CopyOnWriteArraySet: 17473 DISTINCT|SIZED|IMMUTABLE|SUBSIZED, size 3 exact 3, advanced true size 2, [3, 1, 2] size 0 again false
+      ConcurrentLinkedQueue: 4368 ORDERED|NONNULL|CONCURRENT, size 9223372036854775807 exact -1, advanced true size 9223372036854775807, [3, 1, 2] size 9223372036854775807 again false
+      LinkedBlockingQueue: 4368 ORDERED|NONNULL|CONCURRENT, size 3 exact -1, advanced true size 3, [3, 1, 2] size 3 again false
+      ConcurrentHashMap keySet: 4353 DISTINCT|NONNULL|CONCURRENT, size 2 exact -1, advanced true size 2, [a, b] size 2 again false
+      ConcurrentHashMap values: 4352 NONNULL|CONCURRENT, size 2 exact -1, advanced true size 2, [1, 2] size 2 again false
+      own AbstractList: 16464 ORDERED|SIZED|SUBSIZED, size 2 exact 2, advanced true size 2, [0, 1] size 2 again false
+      own AbstractSet: 16449 DISTINCT|SIZED|SUBSIZED, size 2 exact 2, advanced true size 2, [1, 2] size 2 again false
+      own AbstractCollection: 16448 SIZED|SUBSIZED, size 2 exact 2, advanced true size 2, [1, 2] size 2 again false
+      own Iterable: 0 , size 9223372036854775807 exact -1, advanced true size 9223372036854775807, [x, y, z] size 9223372036854775807 again false
+      unknown size: 16 ORDERED size 9223372036854775807
+      sized iterator: 16464 ORDERED|SIZED|SUBSIZED size 2
+      concurrent: 4096 CONCURRENT size 2 exact -1
+      sorted: 4 SORTED comparator null
+      empty: 16448 SIZED|SUBSIZED size 0 false
+      array: 16464 ORDERED|SIZED|SUBSIZED size 2
+      array range: 16448 SIZED|SUBSIZED size 2
+      Arrays.spliterator: 17488 ORDERED|SIZED|IMMUTABLE|SUBSIZED [b, c]
+      hasCharacteristics: true false
+      iterator: 3 1 2
+      iterator past its end: java.util.NoSuchElementException null
+      getComparator: java.lang.IllegalStateException null
+      tryAdvance(null): java.lang.NullPointerException
+      emptySpliterator tryAdvance(null): java.lang.NullPointerException
+      spliteratorUnknownSize(null): java.lang.NullPointerException
+      past the array: java.lang.ArrayIndexOutOfBoundsException Array index out of range: 3
+      a range backwards: java.lang.ArrayIndexOutOfBoundsException origin(1) > fence(0)
+      before the array: java.lang.ArrayIndexOutOfBoundsException Array index out of range: -1
+      stream(null): java.lang.NullPointerException
+      AbstractSpliterator: 16464 ORDERED|SIZED|SUBSIZED size 5 count 5
+      late: a b
+      count of a list 3 known
+      count of an iterable 3 run
+      parallel true [30, 10, 20]
+      lazy a,b,c
+      kept [p=1]
+      twice: java.lang.IllegalStateException stream has already been operated upon or closed
+      supplier asked 0, count 2, asked 1
+      the rest [2, 3] count 0
   # java.time.Duration: seconds and the nanoseconds past them, each member's answer and
   # each refusal a JDK 25's (.kb/java-frontend.md, "The library").
   - name: a-duration-counts-seconds-and-nanoseconds

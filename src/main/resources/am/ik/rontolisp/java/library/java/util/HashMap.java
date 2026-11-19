@@ -5,6 +5,7 @@ package java.util;
 
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import rontolisp.internal.Splits;
 
 // A table of chains. What a program can see of the order is kept as the specification's
 // own implementation gives it: a key's place is its hash code folded with its upper half
@@ -552,6 +553,10 @@ public class HashMap<K, V> extends AbstractMap<K, V> {
         public Iterator<K> iterator() {
             return new KeyWalk<>(map);
         }
+
+        public Spliterator<K> spliterator() {
+            return Splits.of(this, Spliterator.DISTINCT | Spliterator.SIZED);
+        }
     }
 
     static class ValueCollection<K, V> extends AbstractCollection<V> {
@@ -576,6 +581,10 @@ public class HashMap<K, V> extends AbstractMap<K, V> {
 
         public Iterator<V> iterator() {
             return new ValueWalk<>(map);
+        }
+
+        public Spliterator<V> spliterator() {
+            return Splits.of(this, Spliterator.SIZED);
         }
     }
 
@@ -606,6 +615,10 @@ public class HashMap<K, V> extends AbstractMap<K, V> {
 
         public Iterator<Map.Entry<K, V>> iterator() {
             return new EntryWalk<>(map);
+        }
+
+        public Spliterator<Map.Entry<K, V>> spliterator() {
+            return Splits.of(this, Spliterator.DISTINCT | Spliterator.SIZED);
         }
     }
 }
