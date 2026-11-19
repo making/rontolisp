@@ -48,15 +48,20 @@ public class Server {
         text(exchange, 200, "Hello, " + name + "!\n");
     }
 
-    // POST /echo answers its body in upper case
+    // POST /echo answers its body as it came, under the request's Content-Type
     static void echo(HttpExchange exchange) throws IOException {
         if (!exchange.getRequestMethod().equals("POST")) {
             exchange.getResponseHeaders().set("Allow", "POST");
             text(exchange, 405, "POST a body to /echo\n");
             return;
         }
-        String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-        text(exchange, 200, body.toUpperCase());
+        byte[] body = exchange.getRequestBody().readAllBytes();
+        String type = exchange.getRequestHeaders().getFirst("Content-Type");
+        exchange.getResponseHeaders().set("Content-Type", type == null ? "application/octet-stream" : type);
+        exchange.sendResponseHeaders(200, body.length == 0 ? -1 : body.length);
+        try (OutputStream out = exchange.getResponseBody()) {
+            out.write(body);
+        }
     }
 
     // A body of a length not told ahead: each line is a chunk of its own, on its way

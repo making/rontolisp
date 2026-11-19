@@ -1,7 +1,7 @@
 200 Hello from com.sun.net.httpserver on rontolisp, examples/java
 content-type: text/plain; charset=utf-8
 200 Hello, Ann!
-200 SHOUT THIS
+200 application/json {"foo": 100}
 405 allow POST: POST a body to /echo
 200 3 2 1 liftoff
 404 no route for GET /missing
