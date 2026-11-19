@@ -53,6 +53,7 @@ import am.ik.rontolisp.compiler.UncaughtReport;
 import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.DesignatorSpellings;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
+import am.ik.rontolisp.compiler.FunctionNameUses;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.LispCompiler;
 import am.ik.rontolisp.compiler.NestedDefunNamespace;
@@ -2118,9 +2119,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				|| LispMacroExpander.usesSymbolFunctionWrite(program) || !namespaceNestedDefuns.isEmpty()
 				|| !redefinedDefuns.isEmpty() || computedFunctionWrites || !celledDefuns.isEmpty()
 				|| forcedGroups.contains(GROUP_EVAL);
-		boolean usesEval = writesFunctionNamespace || boundpReadsMirror
-				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.SET)
-				|| programUsesSymbol(program, LispNames.FBOUNDP);
+		boolean usesEval = writesFunctionNamespace || boundpReadsMirror || takesSymbolReaderAsFunction(program);
 		// Of those writers, the ones that can bind a name no definition in the program
 		// has: a call of such a name reads _fenv instead of compiling to the
 		// undefined-function signal alone (fmakunbound only retires, and a quoted
@@ -7060,6 +7059,16 @@ public final class JvmLispCompiler implements LispCompiler {
 				&& programUsesSymbol(program, LispNames.INTERACTIVE_INTERRUPT_QUALIFIED)
 				&& program.stream().noneMatch(JvmExportDirective::isExportForm);
 	}
+
+	// Whether the program calls, references or designates set, symbol-value or
+	// fboundp, which resolve a symbol at run time against the eval runtime's mirror and
+	// registry. A variable named like one (eval/uri.lisp's set) is no use of it.
+	private static boolean takesSymbolReaderAsFunction(List<LispVal> program) {
+		return (programUsesSymbol(program, LispNames.SET) || programUsesSymbol(program, LispNames.SYMBOL_VALUE)
+				|| programUsesSymbol(program, LispNames.FBOUNDP)) && FunctionNameUses.any(program, SYMBOL_READERS);
+	}
+
+	private static final Set<String> SYMBOL_READERS = Set.of(LispNames.SET, LispNames.SYMBOL_VALUE, LispNames.FBOUNDP);
 
 	private static boolean programUsesSymbol(List<LispVal> program, String name) {
 		for (LispVal expr : program) {

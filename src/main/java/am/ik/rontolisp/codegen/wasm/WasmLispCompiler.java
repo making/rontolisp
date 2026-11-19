@@ -58,6 +58,7 @@ import am.ik.rontolisp.compiler.CrossLambdaExitLowering;
 import am.ik.rontolisp.compiler.DesignatorSpellings;
 import am.ik.rontolisp.compiler.FetchResponseShape;
 import am.ik.rontolisp.compiler.FreeVarAnalyzer;
+import am.ik.rontolisp.compiler.FunctionNameUses;
 import am.ik.rontolisp.compiler.GlobalVarCollector;
 import am.ik.rontolisp.compiler.NestedDefunNamespace;
 import am.ik.rontolisp.compiler.NestedDefunRedefinition;
@@ -4149,9 +4150,7 @@ public final class WasmLispCompiler implements LispCompiler {
 				|| LispMacroExpander.writesComputedFunctionName(program);
 		// A computed make-synonym-stream reads its variable through a symbol-value the
 		// lowering synthesizes after this scan.
-		boolean usesEval = writesFunctionNamespace || boundpReadsMirror
-				|| programUsesSymbol(program, LispNames.SYMBOL_VALUE) || programUsesSymbol(program, LispNames.SET)
-				|| programUsesSymbol(program, LispNames.FBOUNDP)
+		boolean usesEval = writesFunctionNamespace || boundpReadsMirror || takesSymbolReaderAsFunction(program)
 				|| LispMacroExpander.makesComputedSynonymStream(program);
 		// A runtime apply -- a computed designator, a multiple-value-call, or a
 		// flet-bound/unknown literal target -- needs _apply and the SPREAD dispatcher,
@@ -11225,6 +11224,16 @@ public final class WasmLispCompiler implements LispCompiler {
 		}
 		return false;
 	}
+
+	// Whether the program calls, references or designates set, symbol-value or
+	// fboundp, which resolve a symbol at run time against the eval runtime's mirror and
+	// registry. A variable named like one (eval/uri.lisp's set) is no use of it.
+	private static boolean takesSymbolReaderAsFunction(List<LispVal> program) {
+		return (programUsesSymbol(program, LispNames.SET) || programUsesSymbol(program, LispNames.SYMBOL_VALUE)
+				|| programUsesSymbol(program, LispNames.FBOUNDP)) && FunctionNameUses.any(program, SYMBOL_READERS);
+	}
+
+	private static final Set<String> SYMBOL_READERS = Set.of(LispNames.SET, LispNames.SYMBOL_VALUE, LispNames.FBOUNDP);
 
 	// Whether some cons of the program -- any list element, at any depth, quoted data
 	// included -- is the named symbol.

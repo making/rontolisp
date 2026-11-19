@@ -188,6 +188,10 @@ wrapper's body reaches the prelude (placed after the pruner, `#'format` called a
   `$fenv`/closure arms, the spread dispatcher, the `_lookup` registry).
   `eval`/`load`/`--dynamic`/`boundp`/`symbol-value`/`set`/`fboundp`/`fmakunbound`/
   `(setf (symbol-value ...))`/`(setf (symbol-function ...))` force the full runtime.
+  `set`, `symbol-value` and `fboundp` count only where taken as a function -- called, `#'`,
+  quoted, a place written (`compiler/FunctionNameUses`, on both backends): until 2026-11-20
+  (k45) any mention did, so `eval/uri.lisp`'s parameter `set` put 54 KB of `_eval`,
+  `_apply` and the spread dispatcher in every wasm program reaching `java.net.URI`.
 - **JVM apply tier** (2026-09-19, `.todo/894`; before it, any `apply`/`multiple-value-call`
   forced the whole eval runtime): `usesApplyRuntime` = `usesEval` ||
   `needsApplyRuntime(program, applyGateWrappers)` (the WASM scan; a literal target naming a compiled

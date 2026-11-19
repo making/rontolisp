@@ -204,7 +204,7 @@ a form's typo: 2 violations
   "nights" must be of type integer
 ```
 
-`member.wasm` is about 660 KB and `booking.wasm` about 1.3 MB: what each program reaches
+`member.wasm` is about 660 KB and `booking.wasm` about 1.2 MB: what each program reaches
 of YAVI, not the whole library. A schema reaches more, because YAVI's reader of an untyped
 input names every type it can read one as, whichever of them the schema asks for.
 Whether a library works is decided by what the program reaches of it: only what the front

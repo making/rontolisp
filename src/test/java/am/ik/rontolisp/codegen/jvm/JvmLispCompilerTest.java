@@ -18195,16 +18195,19 @@ class JvmLispCompilerTest {
 		// answers only names the program spells as values -- so without a spelled
 		// map*/every/some name no applying wrapper can be reached, and the runtime its
 		// body calls is dead weight. Counting every computed target made any
-		// higher-order function 49 KB of class instead of 10.
+		// higher-order function 49 KB of class instead of 10. A variable named like
+		// set/symbol-value/fboundp calls none of them, so it forces no eval runtime.
 		String program = """
 				(defun app (f x) (funcall f x))
+				(defun pick (set symbol-value fboundp) (list set symbol-value fboundp))
+				(print (pick 1 2 3))
 				(print (app (lambda (y) (+ y 1)) 2))
 				(print (app 'car '(9 8)))
 				""";
 		byte[] classBytes = new JvmLispCompiler("Test").compile(LispReader.readAllFromString(program));
 		assertThat(declaredMethodNames(classBytes)).doesNotContain("_eval", "_apply", JvmTailBounce.APPLY_RAW_NAME,
 				"_store", "_envLookup");
-		assertThat(runClass(classBytes)).isEqualTo("3\n9");
+		assertThat(runClass(classBytes)).isEqualTo("(1 2 3)\n3\n9");
 	}
 
 	@Test

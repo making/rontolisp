@@ -412,9 +412,9 @@ mechanism was asked for.
 - **The examples**, each checked in `examples.yaml` on the four (`javaSourceDep`):
   `examples/java/yavi/Member.java` (wasm 662,980 B) and `examples/java/yavi/Booking.java`
   -- a schema of a string, an enum, a `LocalDate` and an integer read from a map and,
-  through `readingParameters()`, from a form's strings: wasm 1,280,340 B, the component
-  1,284,722, the jar 464,923; on the exec jar the interpreter 7.5 s, `-o booking.wasm`
-  15.3 s. Both are written here, like the fixture. The Maven plugin builds such a project
+  through `readingParameters()`, from a form's strings: wasm 1,203,365 B, the component
+  1,207,747, the jar 453,082 (2026-11-20, k45); on the exec jar the interpreter 7.5 s,
+  `-o booking.wasm` 15.3 s. Both are written here, like the fixture. The Maven plugin builds such a project
   (`jvm-export.md`, "The plugin's `wasm` goal").
 - **What stood between** (each fixed for every program, in the order met): annotations
   and the rules of the language under "A library from the source path"; the linked
@@ -424,23 +424,23 @@ mechanism was asked for.
   `.todo/artefacts/k24-java-front-end-a-program-that-uses-an-existing-library/README.md`.
   YAVI was not changed.
 - **Where the bytes go** (`-Drontolisp.wasm.debug-func-sizes`, the functions by what they
-  belong to; the scripts and every column:
+  belong to, `Booking` after k45; the scripts and every column as k33 measured them:
   `.todo/artefacts/k33-yavi-compiles-to-wasm-the-milestone-and-what-stands-before-it/README.md`):
 
   | | `Member` | `Booking` |
   |---|---|---|
-  | the file | 662,980 | 1,280,340 |
-  | data section | 146,506 | 230,571 |
-  | YAVI's functions | 47,762 | 186,124 |
-  | the regex engine | 130,631 | 132,255 |
-  | `java.util` | 54,622 | 92,155 |
-  | `java.time`, `java.math` | 0 | 127,259 |
-  | `java.net` and the URI runtime | 0 | 29,554 |
-  | the library's rest | 29,286 | 46,126 |
-  | lambdas | 46,861 | 55,945 |
-  | dispatch | 16,151 | 92,578 |
-  | the top level and the program | 7,032 | 34,056 |
-  | the runtime's rest | 175,393 | 236,870 |
+  | the file | 662,980 | 1,203,365 |
+  | data section | 146,506 | 219,745 |
+  | YAVI's functions | 47,762 | 184,749 |
+  | the regex engine | 130,631 | 132,203 |
+  | `java.util` | 54,622 | 92,781 |
+  | `java.time`, `java.math` | 0 | 127,483 |
+  | `java.net` and the URI runtime | 0 | 29,626 |
+  | the library's rest | 29,286 | 45,940 |
+  | lambdas | 46,861 | 55,563 |
+  | dispatch | 16,151 | 40,938 |
+  | the top level and the program | 7,032 | 28,718 |
+  | the runtime's rest | 175,393 | 229,529 |
 
   YAVI itself is 7 % of the classic example and 15 % of the schema one: the fifty
   `constraint` overloads are not it, only what is called is lowered. The runtime under any
@@ -451,16 +451,21 @@ mechanism was asked for.
   smaller and the engine is still there.
 - **A schema pays for every type YAVI reads an input as**, whichever it asks for:
   `core/UntypedInput` holds them in one table and one method. A schema of a string and an
-  integer is 1,216,741 B; 951,244 (-21.8 %) over a copy of YAVI without the table of the
-  types read from their text, the `java.util.Date` / `java.sql` arm and the `Year` arm;
-  889,037 (-26.9 %) without the conversion of a number through `BigDecimal` too. Splitting
+  integer is 1,144,352 B (1,216,741 before k45); 951,244 (-16.9 %) over a copy of YAVI
+  without the table of the types read from their text, the `java.util.Date` / `java.sql`
+  arm and the `Year` arm; 889,037 (-22.3 %) without the conversion of a number through
+  `BigDecimal` too. Splitting
   that reader by the type asked for is a change to YAVI's design and the user's to decide
   (`.todo/k46`); the library classes were owed either way.
-- **54 KB of `Booking` is a dispatcher no Java program calls**: `_dispatch_spread`, one case
-  per callable, with `_apply` and `_eval`. `java.net.URI`'s runtime (`eval/uri.lisp`) has a
-  parameter named `set`, which the backends' gate takes for a use of the function `set`
-  (`.todo/k45`). The `URI` entry of the table costs the schema above 108,815 B, 29,553 of
-  them its own code.
+- **A variable named `set` put the eval runtime in `Booking`** (fixed by k45): `java.net.URI`'s
+  runtime (`eval/uri.lisp`) has a parameter named `set`, and both backends' gate for the
+  eval runtime counted any mention of `set`, `symbol-value` or `fboundp`. On wasm that was
+  `_eval`, `_apply` and `_dispatch_spread` (one case per callable, 53,761 B): `Booking`
+  1,280,340 -> 1,203,365 B, the component 1,284,722 -> 1,207,747, the jar 464,923 ->
+  453,082, the schema above 1,216,741 -> 1,144,352. The gate now asks whether the name is
+  called, taken by `#'` or quoted, or a place written (`compiler/FunctionNameUses`). The
+  `URI` entry of the table costs that schema 36,426 B (108,815 before), 29,626 of them its
+  own code.
 
 ## A session (2026-11-17, j74)
 

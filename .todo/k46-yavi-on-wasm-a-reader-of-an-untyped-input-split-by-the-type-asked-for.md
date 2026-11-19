@@ -15,13 +15,12 @@ commit of a clone until the user says to push.
   (`_localDate` handing over its own conversion) would reach what the schema names.
 - **Measured** (`.kb/java-frontend.md`, "YAVI compiled to wasm"; the scripts and the
   program: `.todo/artefacts/k33-yavi-compiles-to-wasm-the-milestone-and-what-stands-before-it/README.md`):
-  such a schema is 1,216,741 B of wasm; 951,244 (-21.8 %) over a copy of YAVI without the
-  table, the `java.util.Date` / `java.sql` arm and the `Year` arm; 889,037 (-26.9 %)
-  without the conversion of a number through `BigDecimal` too. These are bounds from
+  such a schema is 1,144,352 B of wasm (after k45); 951,244 (-16.9 %) over a copy of YAVI
+  without the table, the `java.util.Date` / `java.sql` arm and the `Year` arm; 889,037
+  (-22.3 %) without the conversion of a number through `BigDecimal` too. These are bounds from
   cutting, not a design: a split reader still converts a `long` given for an `Integer`.
 - **What it does not touch**: the regex engine, 130 KB of every YAVI program
-  (`CharSequenceConstraint`'s static patterns and `VariantOptions`' `replaceAll`), and
-  the 54 KB dispatcher that is this repository's own (`.todo/k45`).
+  (`CharSequenceConstraint`'s static patterns and `VariantOptions`' `replaceAll`).
 - **If taken**: measure again with the scripts above, then the sizes in "YAVI compiled to
   wasm" and `examples/java/README.md` once a release has the change (the examples name
   `0.18.0`).

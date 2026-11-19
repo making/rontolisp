@@ -1544,6 +1544,20 @@ class WasmLispCompilerTest {
 	}
 
 	@Test
+	void aVariableNamedLikeAnEvalRuntimeReaderCostsNothing() {
+		// set, symbol-value and fboundp resolve a symbol at run time, so CALLING one puts
+		// the eval runtime and the spread dispatcher in the module. A variable NAMED one
+		// calls nothing: uri.lisp's parameter set cost every Java program reaching
+		// java.net.URI 54 KB of a YAVI schema's module.
+		String neutral = "(defun a (c cs) (list c cs)) (print (a #\\a \"abc\"))"
+				+ " (print (funcall (lambda (c) c) #\\a))";
+		int size = compileForSize(neutral).length;
+		for (String name : List.of("set", "symbol-value", "fboundp")) {
+			assertThat(compileForSize(neutral.replace("cs", name)).length).as(name).isEqualTo(size);
+		}
+	}
+
+	@Test
 	void aFuncallPastTheFixedDispatcherBlockCostsALadderAndNotTheSpreadDispatcher() {
 		// The byte budget behind .kb/wasm-callable-arity.md's derived ceiling. A funcall
 		// past MAX_CALLABLE_ARITY used to be rewritten into apply, and _apply drags in
