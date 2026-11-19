@@ -184,10 +184,10 @@ a `\B` asked at the end on a way given up sets it here and not there):
 - A loop that must run at least twice, whose first iteration took nothing: the oracle
   tries no other way of a later iteration and finds nothing where a match exists
   (`(?:\G|\w){2,}$` over `b`: no match there, `0-1` and `1-1` here). Found 2026-11-18 by
-  j87's random searches, 1 pattern in 6,000; `.todo/k05`.
+  j87's random searches, 1 pattern in 6,000; `.todo/k12`.
 - Which iteration's capture a group keeps differed once in those searches
   (`((?![ab]*\z??)*?|.+?(?>\B{2,}ab)?|x){2}ab?+` over `a\rcaa`: group 1 at 3 there, at 2
-  here); `.todo/k05`.
+  here); `.todo/k12`.
 - The index of an unclosed class at the very end of a comments-mode pattern (the oracle's
   cursor stands one further after skipped space than after a skipped comment) was not
   pinned down: 1 case in 34,000 random patterns.

@@ -285,6 +285,14 @@ algorithm came from, and the answer goes in the file's header.
   texts and hash codes, what a client sees of a handler that throws). Nobody opened
   OpenJDK's source; the answers are the expectations of `java-http-server-spec.yaml`,
   which the JDK leg asks again.
+- **`java.time.Duration`, the client's time limits and the members j98 left (k05,
+  2026-11-19).** Written from the API documentation and JDK 25's answers to probes
+  (3,321 lines of `Duration`, 866 of the members, the client's limits against a held
+  reply and a blackholed address); nobody opened OpenJDK's source. Two things the
+  documentation does not state were read off the answers: `Duration.hashCode` (a second
+  is 1, a nanosecond 51) and the text of `multipliedBy`'s overflow (the product in
+  nanoseconds). The runner's timeouts (`wire.rs`) are Rust's `connect_timeout` and
+  socket read timeouts.
 - **Notices (j93, 2026-11-18): kept with notices.** What the audit filed under "Add notices"
   and "To confirm" stays, under its licence:
   - Root `NOTICE` (rontolisp, and Maven's and Maven Resolver's Apache NOTICE lines) and

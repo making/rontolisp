@@ -24,6 +24,8 @@ imports: |
   import java.nio.charset.Charset;
   import java.nio.charset.StandardCharsets;
   import java.nio.charset.UnsupportedCharsetException;
+  import java.time.Duration;
+  import java.time.format.DateTimeParseException;
   import java.util.AbstractList;
   import java.util.AbstractMap;
   import java.util.ArrayDeque;
@@ -46,6 +48,7 @@ imports: |
   import java.util.NoSuchElementException;
   import java.util.Objects;
   import java.util.Optional;
+  import java.util.OptionalLong;
   import java.util.Queue;
   import java.util.Random;
   import java.util.Set;
@@ -4744,6 +4747,16 @@ cases:
               runtime.gc();
               System.gc();
               System.out.println(sorted + " " + points.get(0)[1] + " " + System.getProperty("line.separator").length() + " " + System.getProperty("no.such.property") + " " + System.getProperty("no.such.property", "fallback") + " " + System.getProperty("file.separator") + System.getProperty("path.separator") + " " + System.getProperty("stdout.encoding") + " " + (runtime.availableProcessors() > 0) + " " + (runtime == Runtime.getRuntime()));
+              OptionalLong some = OptionalLong.of(42), none = OptionalLong.empty();
+              StringBuilder seen = new StringBuilder();
+              some.ifPresent(v -> seen.append(v));
+              none.ifPresentOrElse(v -> seen.append("never"), () -> seen.append("+none"));
+              System.out.println(some + " " + none + " " + some.isPresent() + none.isPresent() + none.isEmpty() + " " + some.getAsLong() + " " + none.orElse(7) + " " + none.orElseGet(() -> 8L) + " " + some.orElseThrow() + " " + some.equals(OptionalLong.of(42)) + some.equals(none) + " " + some.hashCode() + none.hashCode() + " " + seen + " " + System.getenv("RONTOLISP_NO_SUCH_VARIABLE"));
+              try {
+                  none.getAsLong();
+              } catch (NoSuchElementException ex) {
+                  System.out.println(ex);
+              }
           }
       }
     expected: |
@@ -4775,6 +4788,102 @@ cases:
       true false false true false false -480553787 -479630266 0 true true false
       k=1 1 k=5 110 false true k1 null=null false
       [1.0, -1.0][1.0, 2.5][1.0, NaN][2.0, 0.25][2.0, 0.5] -1.0 1 null fallback /: UTF-8 true true
+      OptionalLong[42] OptionalLong.empty truefalsetrue 42 7 8 42 truefalse 420 42+none null
+      java.util.NoSuchElementException: No value present
+  # java.time.Duration: seconds and the nanoseconds past them, each member's answer and
+  # each refusal a JDK 25's (.kb/java-frontend.md, "The library").
+  - name: a-duration-counts-seconds-and-nanoseconds
+    main: DurationCase
+    source: |
+      class DurationCase {
+          static String parts(Duration d) {
+              return d + " " + d.getSeconds() + "+" + d.getNano() + " " + d.toDays() + "d" + d.toHours() + "h" + d.toMinutes() + "m" + d.toSeconds() + "s "
+                      + d.toDaysPart() + "/" + d.toHoursPart() + "/" + d.toMinutesPart() + "/" + d.toSecondsPart() + "/" + d.toMillisPart() + "/" + d.toNanosPart()
+                      + " " + d.isZero() + d.isNegative() + d.isPositive() + " " + d.hashCode();
+          }
+
+          static void attempt(String what, Supplier<Object> made) {
+              try {
+                  System.out.println(what + ": " + made.get());
+              }
+              catch (DateTimeParseException e) {
+                  System.out.println(what + ": " + e + " [" + e.getParsedString() + "] " + e.getErrorIndex() + " / " + e.getCause());
+              }
+              catch (RuntimeException e) {
+                  System.out.println(what + ": " + e);
+              }
+          }
+
+          public static void main(String[] args) {
+              System.out.println(parts(Duration.ZERO) + " | " + parts(Duration.ofSeconds(90061, 123456789)) + " | " + parts(Duration.ofDays(2)));
+              System.out.println(parts(Duration.ofMillis(-1500)) + " | " + parts(Duration.ofNanos(-1)) + " | " + parts(Duration.ofSeconds(-3661, -5)));
+              System.out.println(Duration.ofHours(25) + " " + Duration.ofMinutes(61) + " " + Duration.ofSeconds(1, 1500000000) + " " + Duration.ofSeconds(3, -1)
+                      + " " + Duration.ofMillis(1) + " " + Duration.ofSeconds(Long.MAX_VALUE, 999999999) + " " + Duration.ofSeconds(Long.MIN_VALUE));
+              Duration d = Duration.ofSeconds(3661, 5);
+              System.out.println(d.plus(Duration.ofMillis(-1500)) + " " + d.minus(d) + " " + d.plusDays(1).plusHours(-1).plusMinutes(2).plusSeconds(-3).plusMillis(1500).plusNanos(-6)
+                      + " " + d.minusDays(1).minusHours(-1).minusMinutes(2).minusSeconds(-3).minusMillis(1500).minusNanos(-6) + " " + d.negated() + " " + d.negated().abs()
+                      + " " + d.withSeconds(7) + " " + d.withNanos(7) + " " + (d.minus(d) == Duration.ZERO));
+              System.out.println(d.multipliedBy(3) + " " + d.multipliedBy(-1000000007L) + " " + Duration.ofNanos(-1).multipliedBy(Long.MIN_VALUE) + " " + d.multipliedBy(0)
+                      + " " + d.toMillis() + " " + d.toNanos() + " " + Duration.ofNanos(-1).toMillis() + " " + Duration.ofMillis(-1500).toNanos()
+                      + " " + Duration.ofSeconds(9223372036854775L, 807000000).toMillis() + " " + Duration.ofSeconds(-9223372037L, 145224192).toNanos());
+              attempt("days", () -> Duration.ofDays(106751991167301L));
+              attempt("seconds", () -> Duration.ofSeconds(Long.MAX_VALUE, 1000000000));
+              attempt("plus", () -> Duration.ofSeconds(Long.MAX_VALUE).plusNanos(1000000000));
+              attempt("times", () -> Duration.ofSeconds(Long.MAX_VALUE, 999999999).multipliedBy(Long.MIN_VALUE));
+              attempt("negated", () -> Duration.ofSeconds(Long.MIN_VALUE).negated());
+              attempt("millis", () -> Duration.ofSeconds(9223372036854775L, 808000000).toMillis());
+              attempt("nanos", () -> Duration.ofSeconds(-9223372037L, 145224191).toNanos());
+              attempt("nano of second", () -> Duration.ZERO.withNanos(1000000000));
+              Duration half = Duration.ofMillis(500);
+              Map<Duration, String> named = new HashMap<>();
+              named.put(Duration.ofMinutes(1), "a minute");
+              System.out.println(half.compareTo(Duration.ofSeconds(1)) + " " + Duration.ofSeconds(-1).compareTo(Duration.ofMillis(-1500)) + " " + half.compareTo(Duration.ofNanos(500000000))
+                      + " " + half.equals(Duration.ofNanos(500000000)) + " " + half.equals("PT0.5S") + " " + named.get(Duration.ofSeconds(60)) + " " + named.get(Duration.ofSeconds(61)));
+              for (String text : new String[] { "PT8H6M12.345S", "p2dt3h4m", "-PT-0.5S", "PT-0.5S", "P1DT-24H", "PT1,5S", "PT1.S", "+PT+1H-1M", "PT0.000000001S",
+                      "PT.5S", "P1DT", "PT1M1H", "P1H", "PT1.1234567890S", " PT1S", "PT9223372036854775808S", "P106751991167301D", "P106751991167300DT24H",
+                      "-PT-9223372036854775808S" }) {
+                  attempt(text, () -> parts(Duration.parse(text)));
+              }
+              attempt("no text", () -> Duration.parse(null));
+              attempt("a builder", () -> Duration.parse(new StringBuilder("PT20M")));
+          }
+      }
+    expected: |
+      PT0S 0+0 0d0h0m0s 0/0/0/0/0/0 truefalsefalse 0 | PT25H1M1.123456789S 90061+123456789 1d25h1501m90061s 1/1/1/1/123/123456789 falsefalsetrue 2001419004 | PT48H 172800+0 2d48h2880m172800s 2/0/0/0/0/0 falsefalsetrue 172800
+      PT-1.5S -2+500000000 0d0h0m-2s 0/0/0/-2/500/500000000 falsetruefalse -269803775 | PT-0.000000001S -1+999999999 0d0h0m-1s 0/0/0/-1/999/999999999 falsetruefalse -539607603 | PT-1H-1M-1.000000005S -3662+999999995 0d-1h-61m-3662s 0/-1/-1/-2/999/999999995 falsetruefalse -539604146
+      PT25H PT1H1M PT2.5S PT2.999999999S PT0.001S PT2562047788015215H30M7.999999999S PT-2562047788015215H-30M-8S
+      PT1H59.500000005S PT0S PT24H2M59.499999999S PT-22H-57.499999989S PT-1H-1M-1.000000005S PT1H1M1.000000005S PT7.000000005S PT1H1M1.000000007S true
+      PT3H3M3.000000015S PT-1016944451H-33M-52.000000035S PT2562047H47M16.854775808S PT0S 3661000 3661000000005 0 -1500000000 9223372036854775807 -9223372036854775808
+      days: java.lang.ArithmeticException: long overflow
+      seconds: java.lang.ArithmeticException: long overflow
+      plus: java.lang.ArithmeticException: long overflow
+      times: java.lang.ArithmeticException: Exceeds capacity of Duration: -85070591730234615865843651848718680827145224192
+      negated: java.lang.ArithmeticException: Exceeds capacity of Duration: 9223372036854775808000000000
+      millis: java.lang.ArithmeticException: long overflow
+      nanos: java.lang.ArithmeticException: long overflow
+      nano of second: java.time.DateTimeException: Invalid value for NanoOfSecond (valid values 0 - 999999999): 1000000000
+      -1 1 0 true false a minute null
+      PT8H6M12.345S: PT8H6M12.345S 29172+345000000 0d8h486m29172s 0/8/6/12/345/345000000 falsefalsetrue 415159988
+      p2dt3h4m: PT51H4M 183840+0 2d51h3064m183840s 2/3/4/0/0/0 falsefalsetrue 183840
+      -PT-0.5S: PT0.5S 0+500000000 0d0h0m0s 0/0/0/0/500/500000000 falsefalsetrue -269803776
+      PT-0.5S: PT-0.5S -1+500000000 0d0h0m-1s 0/0/0/-1/500/500000000 falsetruefalse -269803776
+      P1DT-24H: PT0S 0+0 0d0h0m0s 0/0/0/0/0/0 truefalsefalse 0
+      PT1,5S: PT1.5S 1+500000000 0d0h0m1s 0/0/0/1/500/500000000 falsefalsetrue -269803775
+      PT1.S: PT1S 1+0 0d0h0m1s 0/0/0/1/0/0 falsefalsetrue 1
+      +PT+1H-1M: PT59M 3540+0 0d0h59m3540s 0/0/59/0/0/0 falsefalsetrue 3540
+      PT0.000000001S: PT0.000000001S 0+1 0d0h0m0s 0/0/0/0/0/1 falsefalsetrue 51
+      PT.5S: java.time.format.DateTimeParseException: Text cannot be parsed to a Duration [PT.5S] 0 / null
+      P1DT: java.time.format.DateTimeParseException: Text cannot be parsed to a Duration [P1DT] 0 / null
+      PT1M1H: java.time.format.DateTimeParseException: Text cannot be parsed to a Duration [PT1M1H] 0 / null
+      P1H: java.time.format.DateTimeParseException: Text cannot be parsed to a Duration [P1H] 0 / null
+      PT1.1234567890S: java.time.format.DateTimeParseException: Text cannot be parsed to a Duration [PT1.1234567890S] 0 / null
+       PT1S: java.time.format.DateTimeParseException: Text cannot be parsed to a Duration [ PT1S] 0 / null
+      PT9223372036854775808S: java.time.format.DateTimeParseException: Text cannot be parsed to a Duration: seconds [PT9223372036854775808S] 0 / java.lang.NumberFormatException: Error at index 18 in: "9223372036854775808"
+      P106751991167301D: java.time.format.DateTimeParseException: Text cannot be parsed to a Duration: days [P106751991167301D] 0 / java.lang.ArithmeticException: long overflow
+      P106751991167300DT24H: java.time.format.DateTimeParseException: Text cannot be parsed to a Duration: overflow [P106751991167300DT24H] 0 / java.lang.ArithmeticException: long overflow
+      -PT-9223372036854775808S: java.time.format.DateTimeParseException: Text cannot be parsed to a Duration: overflow [-PT-9223372036854775808S] 0 / java.lang.ArithmeticException: Exceeds capacity of Duration: 9223372036854775808000000000
+      no text: java.lang.NullPointerException: text
+      a builder: PT20M
   # == of two strings compares references: the constants of one text are one object, a
   # computed string another, intern the constant's. split takes a pattern; a
   # StringBuilder is edited in place and is a CharSequence, as a string is.
@@ -4837,6 +4946,16 @@ cases:
               } catch (IllegalArgumentException ex) {
                   System.out.println(ex.getMessage());
               }
+              String range = "abcabc";
+              System.out.println(range.codePointCount(1, 4) + " " + range.offsetByCodePoints(1, 3) + " " + range.offsetByCodePoints(6, -6) + " " + range.indexOf('c', 3, 5) + " " + range.indexOf('c', 3, 6) + " " + range.indexOf("bc", 2, 5) + " " + range.indexOf("bc", 2, 6) + " " + range.indexOf("", 6, 6));
+              Runnable[] outside = {() -> range.codePointCount(4, 1), () -> range.offsetByCodePoints(1, 6), () -> range.indexOf('c', 2, 7), () -> range.indexOf("c", -1, 2)};
+              for (Runnable each : outside) {
+                  try {
+                      each.run();
+                  } catch (IndexOutOfBoundsException ex) {
+                      System.out.println(ex);
+                  }
+              }
           }
       }
     expected: |
@@ -4854,6 +4973,11 @@ cases:
       12 0 12 17 12 -1 hello world helloA😀 abababxx😀null
       Not a valid Unicode code point: 0x110000
       count is negative: -1
+      3 4 0 -1 5 -1 4 6
+      java.lang.IndexOutOfBoundsException: Range [4, 1) out of bounds for length 6
+      java.lang.IndexOutOfBoundsException
+      java.lang.StringIndexOutOfBoundsException: Range [2, 7) out of bounds for length 6
+      java.lang.StringIndexOutOfBoundsException: Range [-1, 2) out of bounds for length 6
   # java.util.regex is the engine every front end shares (eval/regex.lisp): Pattern and
   # Matcher over it, the String members that take a pattern, the refusals as the
   # library's exceptions. A split by a constant text with no operator needs no engine.
@@ -5241,6 +5365,17 @@ cases:
               }
               char high = Character.highSurrogate(0x1f600), low = Character.lowSurrogate(0x1f600);
               System.out.println((int) high + " " + (int) low + " " + Character.toCodePoint(high, low) + " " + Character.isSurrogatePair(high, low) + " " + Character.isHighSurrogate(high) + " " + Character.isLowSurrogate(high) + " " + Character.isSurrogate(low) + " " + Character.isLetter('é') + " " + Character.isJavaIdentifierStart('1') + " " + Character.getType('A') + " " + (Character.getType('a') == Character.LOWERCASE_LETTER) + " " + Character.DECIMAL_DIGIT_NUMBER + " " + Character.isValidCodePoint(0x110000) + " " + Character.isBmpCodePoint(0x10000) + " " + Character.isEmoji(0x1f600) + " " + Character.MAX_CODE_POINT + " " + (int) Character.MIN_SURROGATE);
+              char[] room = new char[3];
+              char[] halves = {'a', high, low, low};
+              System.out.println(Math.divideExact(-7, 2) + " " + Math.floorDivExact(-7, 2) + " " + Math.ceilDivExact(-7, 2) + " " + Math.divideExact(7L, -2L) + " " + Math.floorDivExact(7L, -2L) + " " + Math.ceilDivExact(7L, -2L) + " " + StrictMath.floorDivExact(Integer.MIN_VALUE, 1) + " " + (int) Character.reverseBytes((char) 0x1234) + " " + Character.codePointAt(halves, 1) + " " + Character.codePointAt(halves, 2) + " " + Character.codePointAt(halves, 3) + " " + Character.toChars(0x1f600, room, 1) + Character.toChars('x', room, 0) + " " + (int) room[0] + " " + (int) room[1] + " " + (int) room[2]);
+              Runnable[] inexact = {() -> Math.divideExact(Integer.MIN_VALUE, -1), () -> Math.floorDivExact(Long.MIN_VALUE, -1L), () -> Math.ceilDivExact(Integer.MIN_VALUE, -1), () -> Math.ceilDivExact(1L, 0L), () -> Character.toChars(0x110000, room, 0), () -> Character.toChars(0x1f600, room, 2)};
+              for (Runnable each : inexact) {
+                  try {
+                      each.run();
+                  } catch (RuntimeException ex) {
+                      System.out.println(ex);
+                  }
+              }
           }
       }
     expected: |
@@ -5323,6 +5458,13 @@ cases:
       1f600: 28 false false false false false false false false false false false true true 2 2 true
       10000: 5 true false true true false false false false true true false true true 2 2 true
       55357 56832 128512 true true false true true false 1 true 9 false false true 1114111 55296
+      -3 -4 -3 -3 -4 -3 -2147483648 13330 128512 56832 56832 21 120 55357 56832
+      java.lang.ArithmeticException: integer overflow
+      java.lang.ArithmeticException: long overflow
+      java.lang.ArithmeticException: integer overflow
+      java.lang.ArithmeticException: / by zero
+      java.lang.IllegalArgumentException: Not a valid Unicode code point: 0x110000
+      java.lang.ArrayIndexOutOfBoundsException: Index 3 out of bounds for length 3
   # java.io's byte streams are Java source over byte[]: the array pair, the data pair
   # (high byte first, writeUTF's modified UTF-8), mark and reset, the exceptions. A
   # string's bytes are its UTF-8 unless a charset says ISO-8859-1 or US-ASCII; what is no
@@ -6950,6 +7092,7 @@ standalone:
   - name: threads-wait-are-notified-and-interrupted
     file: Waits.java
     source: |
+      import java.time.Duration;
       import java.util.ArrayDeque;
 
       public class Waits {
@@ -7150,6 +7293,16 @@ standalone:
               catch (IllegalArgumentException e) {
                   System.out.println(e);
               }
+              // a duration below zero is no sleep at all, zero is one that can be interrupted
+              Thread.sleep(Duration.ofNanos(1));
+              Thread.currentThread().interrupt();
+              Thread.sleep(Duration.ofMillis(-1));
+              try {
+                  Thread.sleep(Duration.ZERO);
+              }
+              catch (InterruptedException e) {
+                  System.out.println("a duration: " + e.getMessage() + " " + Thread.currentThread().isInterrupted());
+              }
               try {
                   sleeper.join(-1);
               }
@@ -7178,6 +7331,7 @@ standalone:
       wait null
       true false
       java.lang.IllegalArgumentException: timeout value is negative
+      a duration: sleep interrupted false
       java.lang.IllegalArgumentException: timeout value is negative
       done
   # Threads that go on only by waiting for one another, again and again: where a

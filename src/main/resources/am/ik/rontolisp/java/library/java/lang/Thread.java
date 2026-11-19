@@ -8,6 +8,7 @@
 // written here over them.
 package java.lang;
 
+import java.time.Duration;
 import java.util.concurrent.ThreadFactory;
 
 public class Thread implements Runnable {
@@ -282,6 +283,15 @@ public class Thread implements Runnable {
 
     public static void sleep(long millis) throws InterruptedException {
         sleep(millis, 0);
+    }
+
+    public static void sleep(Duration duration) throws InterruptedException {
+        if (duration.isNegative()) {
+            return;
+        }
+        // what passes a century is a century: the count of nanoseconds stays a long
+        long seconds = Math.min(duration.getSeconds(), 3155760000L);
+        sleep(seconds * 1000L + duration.getNano() / 1000000, duration.getNano() % 1000000);
     }
 
     public static void sleep(long millis, int nanos) throws InterruptedException {

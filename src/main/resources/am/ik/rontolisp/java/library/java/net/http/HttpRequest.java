@@ -6,6 +6,7 @@ package java.net.http;
 import java.io.InputStream;
 import java.net.URI;
 import java.nio.charset.Charset;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.function.Supplier;
 import rontolisp.internal.Http;
@@ -25,6 +26,8 @@ public abstract class HttpRequest {
         Builder headers(String... headers);
 
         Builder setHeader(String name, String value);
+
+        Builder timeout(Duration duration);
 
         Builder GET();
 
@@ -102,6 +105,8 @@ public abstract class HttpRequest {
     public abstract Optional<BodyPublisher> bodyPublisher();
 
     public abstract String method();
+
+    public abstract Optional<Duration> timeout();
 
     public abstract boolean expectContinue();
 

@@ -36,9 +36,10 @@ accumulators, a pool's hooks and sizes, a structure named by its class's binary 
 field hiding one above it and `super.x`: k01 (2026-11-18); the HTTP client
 (`java.net.http` over the program's own `rontolisp:fetch`) and `java.net.URI`: k03
 (2026-11-18); the HTTP server (`com.sun.net.httpserver` over the program's own
-`%http-serve-begin`, a wasi:http component under `--component`): k04 (2026-11-19); what
-comes after is `.todo/k05`, `k06`, `k07`, `k08` and `k11` (what j98, j99, k00, k01, k03 and
-k04 left).
+`%http-serve-begin`, a wasi:http component under `--component`): k04 (2026-11-19); the
+time limits of the HTTP client over fetch's two timeouts, `java.time.Duration` and the
+members j98 left refused that a line of Java answers: k05 (2026-11-19); what comes after
+is `.todo/k06`, `k07`, `k08`, `k11` and `k12` (what j99, k00, k01, k04 and k05 left).
 
 ## Where it sits
 
@@ -151,7 +152,7 @@ k04 left).
   Class<..>` is kept as javac gave it over 16 shapes (two literals of two classes, a
   literal of no class under the object's type, two objects of unrelated classes), but
   one: an interface beside a `final` class that does not implement it is compared. A
-  `Class` as a value (a field, an argument, `isInstance`) is `.todo/k05`. `super.toString()`,
+  `Class` as a value (a field, an argument, `isInstance`) is `.todo/k12`. `super.toString()`,
   `super.equals(o)` and `super.hashCode()` with no class above declaring the method are
   those three run-time functions on `this` (j89; refused by name until then, and any other
   member of `Object` through `super` still is). The identity text names a structure by its
@@ -742,7 +743,7 @@ measured programs.
 - A method reference naming a class fits a functional interface by its arity when a call has
   several candidates (`takes`): `thenComparing(Point::label)` against `thenComparing(Comparator)`.
 - Sizes on wasm (2026-11-17, before / after): a list added to and read 3,732 / 25,592; one
-  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/k05` holds what is
+  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/k12` holds what is
   left and the leads.
 - **The library is Java a JDK compiles** (j79, decided by measuring): javac of JDK 25 takes
   all 139 files as a patch of its own `java.base` (`--patch-module java.base=<library>`) with
@@ -854,7 +855,7 @@ measured programs.
   `toUpperCase` / `toLowerCase` (the host's fold is uniform), and `digit` /
   `getNumericValue`, which still ask the host: a digit outside ASCII is read on the
   interpreter and the JVM and not on wasm, `Integer.parseInt` with it (`deviations.md`,
-  `.todo/k05`: a table there would be in every program that parses a number).
+  `.todo/k12`: a table there would be in every program that parses a number).
 - **`%h` hands the format the program's `hashCode()` only where the control may ask**
   (`JavaIntrinsics.formatted`): `%java-format` takes the function as its fourth argument,
   `nil` when the control is a constant with no `%h`. The arm itself is 401 B in every
@@ -864,7 +865,34 @@ measured programs.
   through `rontolisp.internal.CaseInsensitive.order()`.
 - **`System.getProperty` and `Runtime` answer what every target can**: the separators
   and the encodings, `null` for any other key; one processor; `gc` is nothing.
-  `totalMemory` and its kind stay refused.
+  `totalMemory` and its kind stay refused. `System.getenv(name)` is `%host-getenv`
+  (k05): the host's variable on every backend, a `.wasm`'s those its host hands it.
+- **`java.time.Duration` (k05, 2026-11-19)** is Java source (`java.time` joined
+  `LIBRARY_PACKAGES`: it is `java.base`'s), written from the API documentation and JDK
+  25's answers: seconds and the nanoseconds past them; where a member reads the amount
+  as one signed number it is the seconds toward zero and a fraction of the same sign
+  (`whole()` / `fraction()`), which is what makes `toMillis`, `toString` and
+  `multipliedBy` one rule each. `multipliedBy` is exact with no big integer (the seconds
+  and the fraction have one sign, so their products do; the fraction's product in two
+  parts within a long), and its overflow message is the product in decimal, by digits
+  of a thousand million. `hashCode` is `Long.hashCode(seconds) + 51 * nanos`: no part
+  of the API, read off the probe's answers (a second is 1, a nanosecond 51, -1 second
+  0). A probe of 3,321 lines -- every factory over 22 seconds and 14 nanosecond
+  adjustments, the arithmetic over 17 durations, 103 texts through `parse` with each
+  refusal's message, index and cause -- prints a JDK 25's lines on the four backends
+  (`.todo/artefacts/k05-java-front-end-what-the-everyday-members-and-utf-16-slice-left/Dur.java`).
+  Not there: `dividedBy`, `between`, `of` /
+  `get` of a `TemporalUnit`, `truncatedTo`; the rest of `java.time` (`.todo/k12`).
+  `Thread.sleep(Duration)` is there (a duration below zero is no sleep, zero is one an
+  interrupt ends, measured); `join(Duration)` is not.
+- **The members j98 left that a line of Java answers (k05)**: `Math.divideExact` /
+  `floorDivExact` / `ceilDivExact`, `String.codePointCount` / `offsetByCodePoints` (a
+  string's elements are code points, so a range holds as many as it is long) /
+  `indexOf` within a range, `Character.toChars` into an array (the low surrogate
+  first, so an array too short keeps the high one's place) / `codePointAt` of an array
+  / `reverseBytes`, `OptionalLong` and `HttpHeaders.firstValueAsLong`: each in
+  `Support` or a source class, 866 probe lines identical to JDK 25 on four backends
+  (`Members.java` beside `Dur.java`). Still refused: `.todo/k12`.
 
 ## java.io (2026-11-17, j79)
 
@@ -996,7 +1024,7 @@ holds none of it.** No files: `File`, `FileReader`, `java.nio.file` stay refused
   string CONSTANT holding one is `?` on wasm. Measured 2026-11-18 (j98): the two halves
   of a pair appended to a `StringBuilder` one `char` after the other are a string of
   length 2 on the interpreter, 1 on the JVM (a JDK: 2 units, here one character), and
-  on wasm no `equals` of the character they spell (`.todo/k05`).
+  on wasm no `equals` of the character they spell (`.todo/k12`).
 - **`Double.longBitsToDouble`, `Float.intBitsToFloat`** are `%java-bits-binary` over
   `%java-nearest-binary` (exact, the subnormals included).
 - **Measured** (2026-11-17, the box and method of "Measured" below; wasm / class bytes, then
@@ -1108,9 +1136,30 @@ member) or is refused where the request is sent (`deviations.md`, "The HTTP clie
   `RontoLispCliStreamsTest#aJavaFileRunsCompilesAndIsRefusedWhereItCannot` (the Preview
   1 refusal), `NativeFetchTest` (the deferred future beside `%future-new`), the
   `doc/*/java/index.md` example (`DocExamplesTest` points its URLs at its local origin).
-- **Not made** (`.todo/k05`): timeouts (`java.time.Duration`, and fetch has none:
-  `.todo/148`), bodies as they arrive (`ofInputStream` reads a body already in,
-  `ofLines`, a program's own `BodySubscriber`), the `--host-fetch` reactor as a leg.
+- **Time limits (k05, 2026-11-19)**: `HttpRequest.Builder.timeout` and
+  `HttpClient.Builder.connectTimeout` are fetch's `:first-byte-timeout` and
+  `:connect-timeout` ([fetch-http.md](fetch-http.md), "Timeouts"), in milliseconds (a
+  part of one is one, what passes an int is an int). **Only a program that gives a
+  builder a time limit hands fetch the two options**: `Http.limit` makes the `TimedWire`
+  the requests leave by from then on (`timed0`, lowered beside `start0` to the same
+  fetch form with the two keywords), and the plain `Wire` of every other program calls
+  `start0` -- a class a program never makes is in no dispatcher (`lowerReached`), so
+  such a program names no timeout keyword and its transports carry no timeout arm. The
+  timed wire also owns what a timeout is to a program: `HttpTimeoutException` /
+  `HttpConnectTimeoutException` by the texts the four transports give (`request timed
+  out`, `connect timed out`, `CONNECTION-READ-TIMEOUT`, `CONNECTION-TIMEOUT`,
+  `HTTP-RESPONSE-TIMEOUT`), the cause chain a blocking `send` adds. Measured against JDK
+  25 (the corpus's case and a probe against a blackholed address, identical on four
+  legs): `Invalid duration: PT0S`, a request timeout of 100 ms against a head held a
+  second (`request timed out`, no cause), a timeout that passes while connecting is a
+  connect timeout, a redirect keeps its request's timeout. Sizes (component): a blocking
+  GET with no time limit 470,546 -> 472,868 B (the wire's class, a slot in the request
+  and in the client), with one 489,891 B. A program's own `HttpRequest` class stating a
+  `timeout()` is refused by name where no builder was given one. A component that
+  serves cannot time a request (an `IOException` with fetch's refusal: `.todo/148`).
+- **Not made** (`.todo/k12`): bodies as they arrive (`ofInputStream` reads a body
+  already in, `ofLines`, a program's own `BodySubscriber`), the `--host-fetch` reactor
+  as a leg, `URI`'s constructors of several parts.
 
 ## com.sun.net.httpserver (2026-11-19, k04)
 
@@ -2480,4 +2529,13 @@ the last warning of `the-unchecked-warnings-are-printed-before-the-program-runs`
 `#theLibrarysSourceIsJavaAJdkCompiles` (the clauses against the JDK's),
 `RontoLispCliStreamsTest#aJavaFileRunsCompilesAndIsRefusedWhereItCannot` (a session's
 step and a session's method), ci-spec
-`a-cleanup-a-return-from-runs-is-outside-every-handler-it-left` (a cleanup's own exit).
+`a-cleanup-a-return-from-runs-is-outside-every-handler-it-left` (a cleanup's own exit). k05:
+java-spec `a-duration-counts-seconds-and-nanoseconds`, the lines at the end of the string,
+the boxes and the utilities cases (the exact quotients, the ranges of a string, `toChars`
+into an array, `OptionalLong`, `getenv` of no variable), `Thread.sleep` of a `Duration` in
+`threads-wait-are-notified-and-interrupted`; java-http-spec
+`a-request-and-a-connection-have-time-limits` (the one program naming a time limit),
+`firstValueAsLong` in `fields-both-ways` and the timeout of a program's own request class
+in `subset`; `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
+(the fetch form with no timeout keyword, and with both once a builder is given a time
+limit).

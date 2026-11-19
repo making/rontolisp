@@ -4,10 +4,12 @@
 //
 // The one client there is makes its requests through the host's fetch
 // (rontolisp.internal.Http): a connection, its version and its pool are the
-// transport's, so what configures them has no member here.
+// transport's, so what configures them has no member here but the time a connection
+// may take, which fetch hands every transport.
 package java.net.http;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
@@ -24,6 +26,8 @@ public abstract class HttpClient implements AutoCloseable {
     }
 
     public interface Builder {
+
+        Builder connectTimeout(Duration duration);
 
         Builder version(Version version);
 
@@ -44,6 +48,8 @@ public abstract class HttpClient implements AutoCloseable {
     public static Builder newBuilder() {
         return Http.client();
     }
+
+    public abstract Optional<Duration> connectTimeout();
 
     public abstract Redirect followRedirects();
 

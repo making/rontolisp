@@ -43,7 +43,7 @@ final class JavaClasses {
 	/** The packages of the library: what {@code import module java.base} imports. */
 	private static final List<String> LIBRARY_PACKAGES = List.of("java.lang", "java.util", "java.util.function",
 			"java.io", "java.nio.charset", "java.util.concurrent", "java.util.concurrent.atomic",
-			"java.util.concurrent.locks", "java.net");
+			"java.util.concurrent.locks", "java.net", "java.time");
 
 	/** The one package of the module {@code java.net.http}. */
 	private static final String HTTP_MODULE = "java.net.http";

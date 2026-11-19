@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.function.BiPredicate;
 
@@ -58,6 +59,11 @@ public final class HttpHeaders {
     public Optional<String> firstValue(String name) {
         List<String> values = fields.get(name);
         return values == null ? Optional.empty() : Optional.of(values.get(0));
+    }
+
+    public OptionalLong firstValueAsLong(String name) {
+        List<String> values = fields.get(name);
+        return values == null ? OptionalLong.empty() : OptionalLong.of(Long.parseLong(values.get(0)));
     }
 
     public List<String> allValues(String name) {

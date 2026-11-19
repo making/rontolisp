@@ -282,6 +282,8 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 `System.getProperty` は `line.separator`、`file.separator`、`path.separator` と、エンコーディング
 （`file.encoding`、`native.encoding`、`stdin.encoding`、`stdout.encoding`、`stderr.encoding`。
 どれも `UTF-8`）に答えます。それ以外のキーは `null` です。`System.gc()` は何もしません。
+`System.getenv(name)` はホストの環境変数を返します。`.wasm` が読めるのは、ホストが渡した
+変数です（`wasmtime run --env NAME=value`）。すべての変数を返す `getenv()` はありません。
 
 ## スレッド
 
@@ -342,11 +344,21 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 
 **リクエストは、ターゲットのトランスポートが送ります**
 （[`rontolisp:fetch`](../guides/http-fetch.md)）。接続に関する設定はトランスポートが決める
-ため、対応するメンバーはありません。タイムアウト（`timeout`、`connectTimeout`）、プロキシ、
-認証、クッキーハンドラー、`SSLContext`、WebSocket です。`version(..)` で指定した値は保持され、
-問い合わせには答えますが、どのトランスポートもこの値を読みません。応答の `version()` は、
-実際に使われたバージョンにかかわらず `HTTP_1_1` です。`User-Agent` を指定していない
-リクエストには、rontolisp の `User-Agent` が付きます。
+ため、対応するメンバーはありません。プロキシ、認証、クッキーハンドラー、`SSLContext`、
+WebSocket です。`version(..)` で指定した値は保持され、問い合わせには答えますが、どの
+トランスポートもこの値を読みません。応答の `version()` は、実際に使われたバージョンに
+かかわらず `HTTP_1_1` です。`User-Agent` を指定していないリクエストには、rontolisp の
+`User-Agent` が付きます。
+
+**時間制限はトランスポートがミリ秒単位で数えます。** `timeout` と `connectTimeout` は、
+[`rontolisp:fetch`](../reference/functions/rontolisp-fetch.md) の `:first-byte-timeout` と
+`:connect-timeout` です。1 ミリ秒に満たない時間は 1 ミリ秒として扱い、応答のボディの受信に
+時間制限はありません。コンポーネントでは、`timeout` の時間を接続に対して一度、応答の開始に
+対してもう一度数えます。`wasmtime serve` の下のコンポーネントはリクエストに時間制限を
+付けられず、時間制限のあるリクエストは `IOException` になります。
+どのビルダーにも時間制限を渡していないプログラムでは、プログラム自身のクラスの
+`HttpRequest` が `timeout()` で時間を返すと、リクエストを送る時点で
+`UnsupportedOperationException` になります。
 
 **送れるメソッドは `GET`、`HEAD`、`POST`、`PUT`、`DELETE`、`OPTIONS`、`PATCH` です。** ビルダーが
 受け付けたそれ以外のメソッド（`TRACE`、`get`）と `expectContinue(true)` は、リクエストを送る
@@ -447,10 +459,11 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 - `String`、`StringBuilder`、ボックスを継承するクラス。
 - `java.util.concurrent` のうち、[概要](index.md)の表にないもの。優先度順または遅延順の
   キュー、`ConcurrentSkipListMap`、フィールドアップデーターです。`Date` を取る `Timer` の
-  `schedule`、スレッドグループ、`Duration` を取る `sleep` と `join` も拒否されます。
+  `schedule`、スレッドグループ、`Duration` を取る `join` も拒否されます。
 - [概要](index.md)の表にないライブラリのクラスとメンバー。ストリーム（`java.util.stream`）、
   `LinkedList`、`LinkedHashMap`、`TreeMap`、`Scanner`、ファイル（`File`、`FileReader`、
-  `java.nio.file`）、`java.time`、`BigInteger`、`BigDecimal`、リフレクションなどです。
+  `java.nio.file`）、`Duration` 以外の `java.time`、`BigInteger`、`BigDecimal`、
+  リフレクションなどです。
   `java.net` では、`URI`、サーバーのアドレス、[HTTP クライアント](#the-http-client)以外の
   すべてが該当します。
   `URL`、ソケット、`HttpURLConnection` です。

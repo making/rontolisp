@@ -528,4 +528,116 @@ public final class Support {
         }
         return product;
     }
+
+    // Math's exact quotients: the one division that leaves the type is refused.
+    private static void quotient(int x, int y) {
+        if (x == Integer.MIN_VALUE && y == -1) {
+            throw new ArithmeticException("integer overflow");
+        }
+    }
+
+    private static void quotient(long x, long y) {
+        if (x == Long.MIN_VALUE && y == -1) {
+            throw new ArithmeticException("long overflow");
+        }
+    }
+
+    public static int divideExact(int x, int y) {
+        quotient(x, y);
+        return x / y;
+    }
+
+    public static long divideExactLong(long x, long y) {
+        quotient(x, y);
+        return x / y;
+    }
+
+    public static int floorDivExact(int x, int y) {
+        quotient(x, y);
+        return Math.floorDiv(x, y);
+    }
+
+    public static long floorDivExactLong(long x, long y) {
+        quotient(x, y);
+        return Math.floorDiv(x, y);
+    }
+
+    public static int ceilDivExact(int x, int y) {
+        quotient(x, y);
+        return Math.ceilDiv(x, y);
+    }
+
+    public static long ceilDivExactLong(long x, long y) {
+        quotient(x, y);
+        return Math.ceilDiv(x, y);
+    }
+
+    // A range of a string a member reads: its refusal is a class of the member's choosing.
+    private static String outside(int begin, int end, int length) {
+        return "Range [" + begin + ", " + end + ") out of bounds for length " + length;
+    }
+
+    // String.codePointCount: a string's elements are code points, so a range holds as
+    // many as it is long.
+    public static int codePointCount(String s, int beginIndex, int endIndex) {
+        if (beginIndex < 0 || beginIndex > endIndex || endIndex > s.length()) {
+            throw new IndexOutOfBoundsException(outside(beginIndex, endIndex, s.length()));
+        }
+        return endIndex - beginIndex;
+    }
+
+    public static int offsetByCodePoints(String s, int index, int codePointOffset) {
+        int moved = index + codePointOffset;
+        if (index < 0 || index > s.length() || moved < 0 || moved > s.length()) {
+            throw new IndexOutOfBoundsException();
+        }
+        return moved;
+    }
+
+    // String.indexOf within a range: of a character, and of a text that has to end
+    // inside the range.
+    public static int indexOfChar(String s, int ch, int beginIndex, int endIndex) {
+        if (beginIndex < 0 || beginIndex > endIndex || endIndex > s.length()) {
+            throw new StringIndexOutOfBoundsException(outside(beginIndex, endIndex, s.length()));
+        }
+        int at = s.indexOf(ch, beginIndex);
+        return at < endIndex ? at : -1;
+    }
+
+    public static int indexOfText(String s, String str, int beginIndex, int endIndex) {
+        if (str == null) {
+            throw new NullPointerException();
+        }
+        if (beginIndex < 0 || beginIndex > endIndex || endIndex > s.length()) {
+            throw new StringIndexOutOfBoundsException(outside(beginIndex, endIndex, s.length()));
+        }
+        int at = s.substring(beginIndex, endIndex).indexOf(str);
+        return at < 0 ? -1 : at + beginIndex;
+    }
+
+    // Character.toChars into an array: the count of chars written, the low surrogate
+    // of a pair first.
+    public static int toChars(int codePoint, char[] dst, int dstIndex) {
+        if (codePoint < 0 || codePoint > 0x10FFFF) {
+            throw new IllegalArgumentException(
+                    "Not a valid Unicode code point: 0x" + Integer.toHexString(codePoint).toUpperCase());
+        }
+        if (codePoint < 0x10000) {
+            dst[dstIndex] = (char) codePoint;
+            return 1;
+        }
+        dst[dstIndex + 1] = Character.lowSurrogate(codePoint);
+        dst[dstIndex] = Character.highSurrogate(codePoint);
+        return 2;
+    }
+
+    // Character.codePointAt of an array: a high surrogate and the low one after it are
+    // the character they spell.
+    public static int codePointAt(char[] a, int index) {
+        char c = a[index];
+        if (Character.isHighSurrogate(c) && index + 1 < a.length && Character.isLowSurrogate(a[index + 1])) {
+            return Character.toCodePoint(c, a[index + 1]);
+        }
+        return c;
+    }
 }

@@ -4,7 +4,8 @@
 //
 // The client of java.net.http. A request is the host's fetch (rontolisp:fetch, which
 // the lowered program itself calls, so every transport fetch has carries it): start0
-// answers the exchange with the request on its way, reply0 waits for all of its reply.
+// answers the exchange with the request on its way (timed0 under fetch's two
+// timeouts), reply0 waits for all of its reply.
 // What a JDK's client was seen to do with a request is written here over the two: the
 // refusals of a builder, the redirects, the body a handler makes.
 package rontolisp.internal;
@@ -16,11 +17,14 @@ import java.io.UncheckedIOException;
 import java.net.ConnectException;
 import java.net.URI;
 import java.net.http.HttpClient;
+import java.net.http.HttpConnectTimeoutException;
 import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -116,13 +120,100 @@ public final class Http {
         return true;
     }
 
-    /** What a transport's failure is to a program: a connection refused, or the transport's own words. */
-    static IOException failure(String text) {
-        if (text.contains("ConnectException") || text.contains("CONNECTION-REFUSED")
-                || text.contains("cannot connect")) {
-            return new ConnectException();
+    /**
+     * How a request leaves and what its failure is: fetch with its three options. A
+     * program that gives a client or a request a time limit makes the wire that hands
+     * fetch the two timeouts and knows a time limit passed, so only such a program
+     * holds what a transport carries for them.
+     */
+    private static class Wire {
+
+        Object start(String url, String method, String[] fields, byte[] body, Duration connect, Duration reply) {
+            if (reply != null) {
+                // no builder was given a time limit: the request is of a program's own class
+                throw new UnsupportedOperationException("the timeout of an HttpRequest of a program's own class"
+                        + " is not supported by the experimental Java subset: HttpRequest.Builder makes the"
+                        + " requests a client times");
+            }
+            return start0(url, method, fields, body);
         }
-        return new IOException(text);
+
+        /**
+         * What a transport's failure is to a program: a connection refused, or the
+         * transport's own words. Each is told by the texts the transports give.
+         */
+        IOException failure(String text) {
+            if (text.contains("ConnectException") || text.contains("CONNECTION-REFUSED")
+                    || text.contains("cannot connect")) {
+                return new ConnectException();
+            }
+            return new IOException(text);
+        }
+
+        /** What a blocking send throws for a failure: what failed is its cause. */
+        IOException thrown(IOException failed) {
+            if (failed instanceof ConnectException) {
+                ConnectException thrown = new ConnectException(failed.getMessage());
+                thrown.initCause(failed);
+                return thrown;
+            }
+            return failed;
+        }
+    }
+
+    private static final class TimedWire extends Wire {
+
+        /**
+         * A time limit in the milliseconds fetch counts, 0 for none: a part of a
+         * millisecond is one, and what passes an int is the longest there is.
+         */
+        private static long millis(Duration limit) {
+            if (limit == null) {
+                return 0;
+            }
+            long millis = limit.getSeconds() >= Integer.MAX_VALUE / 1000 ? Integer.MAX_VALUE : limit.toMillis();
+            return millis == 0 ? 1 : millis;
+        }
+
+        Object start(String url, String method, String[] fields, byte[] body, Duration connect, Duration reply) {
+            return timed0(url, method, fields, body, millis(connect), millis(reply));
+        }
+
+        IOException failure(String text) {
+            if (text.contains("connect timed out") || text.contains("CONNECTION-TIMEOUT")) {
+                HttpConnectTimeoutException late = new HttpConnectTimeoutException("HTTP connect timed out");
+                late.initCause(new ConnectException("HTTP connect timed out"));
+                return late;
+            }
+            if (text.contains("request timed out") || text.contains("CONNECTION-READ-TIMEOUT")
+                    || text.contains("HTTP-RESPONSE-TIMEOUT")) {
+                return new HttpTimeoutException("request timed out");
+            }
+            return super.failure(text);
+        }
+
+        IOException thrown(IOException failed) {
+            if (failed instanceof HttpConnectTimeoutException) {
+                HttpConnectTimeoutException thrown = new HttpConnectTimeoutException(failed.getMessage());
+                thrown.initCause(failed);
+                return thrown;
+            }
+            return super.thrown(failed);
+        }
+    }
+
+    private static Wire wire = new Wire();
+
+    /**
+     * A time limit a builder is given. From here on the program's requests leave by the
+     * wire that hands fetch its timeouts.
+     */
+    private static Duration limit(Duration duration) {
+        if (duration.isNegative() || duration.isZero()) {
+            throw new IllegalArgumentException("Invalid duration: " + duration);
+        }
+        wire = new TimedWire();
+        return duration;
     }
 
     private static final class Body implements HttpRequest.BodyPublisher {
@@ -186,14 +277,21 @@ public final class Http {
 
         private final HttpClient.Version version;
 
+        private final Duration timeout;
+
         Request(String method, URI uri, HttpHeaders headers, BodyPublisher body, boolean expect,
-                HttpClient.Version version) {
+                HttpClient.Version version, Duration timeout) {
             this.method = method;
             this.uri = uri;
             this.headers = headers;
             this.body = body;
             this.expect = expect;
             this.version = version;
+            this.timeout = timeout;
+        }
+
+        public Optional<Duration> timeout() {
+            return Optional.ofNullable(timeout);
         }
 
         public Optional<BodyPublisher> bodyPublisher() {
@@ -236,6 +334,8 @@ public final class Http {
         private boolean expect;
 
         private HttpClient.Version version;
+
+        private Duration timeout;
 
         /** The names as first written, and the values of each. */
         private final ArrayList<String> names = new ArrayList<>();
@@ -345,6 +445,11 @@ public final class Http {
             return this;
         }
 
+        public RequestBuilder timeout(Duration duration) {
+            this.timeout = limit(duration);
+            return this;
+        }
+
         public RequestBuilder GET() {
             this.method = "GET";
             this.body = null;
@@ -398,7 +503,7 @@ public final class Http {
                 fields.put(names.get(i), new ArrayList<String>(values.get(i)));
             }
             return new Request(method, uri, HttpHeaders.of(fields, (String name, String value) -> true), body, expect,
-                    version);
+                    version, timeout);
         }
 
         public RequestBuilder copy() {
@@ -408,6 +513,7 @@ public final class Http {
             made.body = this.body;
             made.expect = this.expect;
             made.version = this.version;
+            made.timeout = this.timeout;
             for (int i = 0; i < names.size(); i++) {
                 made.names.add(names.get(i));
                 made.values.add(new ArrayList<String>(values.get(i)));
@@ -501,6 +607,13 @@ public final class Http {
 
         private Executor executor;
 
+        private Duration connect;
+
+        public ClientBuilder connectTimeout(Duration duration) {
+            this.connect = limit(duration);
+            return this;
+        }
+
         public ClientBuilder version(HttpClient.Version version) {
             if (version == null) {
                 throw new NullPointerException();
@@ -526,7 +639,7 @@ public final class Http {
         }
 
         public HttpClient build() {
-            return new Client(redirects, version, executor);
+            return new Client(redirects, version, executor, connect);
         }
     }
 
@@ -538,12 +651,19 @@ public final class Http {
 
         private final Executor executor;
 
+        private final Duration connect;
+
         private volatile boolean closed;
 
-        Client(Redirect redirects, Version version, Executor executor) {
+        Client(Redirect redirects, Version version, Executor executor, Duration connect) {
             this.redirects = redirects;
             this.version = version;
             this.executor = executor;
+            this.connect = connect;
+        }
+
+        public Optional<Duration> connectTimeout() {
+            return Optional.ofNullable(connect);
         }
 
         public Redirect followRedirects() {
@@ -577,11 +697,8 @@ public final class Http {
             try {
                 return answered(request, responseBodyHandler, started(request));
             }
-            catch (ConnectException refused) {
-                // what failed is the cause of what a blocking send throws
-                ConnectException thrown = new ConnectException(refused.getMessage());
-                thrown.initCause(refused);
-                throw thrown;
+            catch (IOException failed) {
+                throw wire.thrown(failed);
             }
         }
 
@@ -613,7 +730,7 @@ public final class Http {
         }
 
         /** The exchange of a request sent: what fetch answered, or the text of its refusal. */
-        private static Object started(HttpRequest request) throws IOException {
+        private Object started(HttpRequest request) throws IOException {
             String method = request.method();
             if (!method.equals("GET") && !method.equals("HEAD") && !method.equals("POST") && !method.equals("PUT")
                     && !method.equals("DELETE") && !method.equals("OPTIONS") && !method.equals("PATCH")) {
@@ -648,7 +765,8 @@ public final class Http {
             // a fragment is the client's own: it is not sent
             String url = request.uri().toString();
             int fragment = url.indexOf('#');
-            return start0(fragment < 0 ? url : url.substring(0, fragment), method, flat.toArray(new String[0]), octets);
+            return wire.start(fragment < 0 ? url : url.substring(0, fragment), method, flat.toArray(new String[0]),
+                    octets, connect, request.timeout().orElse(null));
         }
 
         /** The reply to a request sent, and to the requests its redirects lead to. */
@@ -660,7 +778,7 @@ public final class Http {
             while (true) {
                 Object reply = reply0(exchange);
                 if (failed0(reply)) {
-                    throw failure(text0(reply));
+                    throw wire.failure(text0(reply));
                 }
                 int status = status0(reply);
                 String[] flat = fields0(reply);
@@ -721,11 +839,16 @@ public final class Http {
                         && !name.equalsIgnoreCase("referer"));
             }
             return new Request(get ? "GET" : request.method(), target, kept,
-                    get ? null : request.bodyPublisher().orElse(null), false, request.version().orElse(null));
+                    get ? null : request.bodyPublisher().orElse(null), false, request.version().orElse(null),
+                    request.timeout().orElse(null));
         }
     }
 
     private static native Object start0(String url, String method, String[] fields, byte[] body);
+
+    /** start0 under time limits in milliseconds, 0 for none. */
+    private static native Object timed0(String url, String method, String[] fields, byte[] body, long connect,
+            long reply);
 
     private static native Object reply0(Object exchange);
 

@@ -283,6 +283,8 @@ where one is compared with the other by `==`, `!=` or `equals`, and before `getN
 1. `System.getProperty` answers `line.separator`, `file.separator`, `path.separator` and
 the encodings (`file.encoding`, `native.encoding`, `stdin.encoding`, `stdout.encoding`,
 `stderr.encoding`, each `UTF-8`); any other key is `null`. `System.gc()` does nothing.
+`System.getenv(name)` answers the host's variable -- a `.wasm` has those its host hands it
+(`wasmtime run --env NAME=value`) -- and `getenv()` of every variable is not there.
 
 ## Threads
 
@@ -338,10 +340,20 @@ the threads of the program from 1.
 
 **A request is sent by the transport of the target**
 ([`rontolisp:fetch`](../guides/http-fetch.md)), so what belongs to a connection is the
-transport's and has no member: timeouts (`timeout`, `connectTimeout`), a proxy, an
-authenticator, a cookie handler, an `SSLContext`, WebSocket. `version(..)` is kept and
-answered, and no transport reads it; a reply's `version()` is `HTTP_1_1` whatever was
-spoken. A request with no `User-Agent` of its own carries rontolisp's.
+transport's and has no member: a proxy, an authenticator, a cookie handler, an
+`SSLContext`, WebSocket. `version(..)` is kept and answered, and no transport reads it; a
+reply's `version()` is `HTTP_1_1` whatever was spoken. A request with no `User-Agent` of
+its own carries rontolisp's.
+
+**A time limit is the transport's, in milliseconds.** `timeout` and `connectTimeout` are
+[`rontolisp:fetch`](../reference/functions/rontolisp-fetch.md)'s `:first-byte-timeout` and
+`:connect-timeout`: a part of a millisecond counts as one, and the body of a reply is not
+timed. In a component the limit of `timeout` is counted once for the connection and
+once more for the start of the reply. A component under `wasmtime serve` cannot time a
+request: one with a time limit is an `IOException` there.
+The `timeout()` of an `HttpRequest` of a program's own class is an
+`UnsupportedOperationException` where the request is sent, in a program that gives no
+builder a time limit.
 
 **A request is sent as `GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `OPTIONS` or `PATCH`.** Any
 other method a builder took (`TRACE`, `get`) and `expectContinue(true)` are an
@@ -433,9 +445,10 @@ Each of these is an error naming the construct and its position.
 - A class extending `String`, `StringBuilder` or a box.
 - Of `java.util.concurrent`, what the [overview](index.md) does not list: the queues
   ordered by priority or by delay, `ConcurrentSkipListMap`, the field updaters. A
-  `Timer`'s `schedule` of a `Date`. Thread groups, `sleep` and `join` of a `Duration`.
+  `Timer`'s `schedule` of a `Date`. Thread groups, `join` of a `Duration`.
 - Any class or member of the library not listed in the [overview](index.md): streams
   (`java.util.stream`), `LinkedList`, `LinkedHashMap`, `TreeMap`, `Scanner`, files
-  (`File`, `FileReader`, `java.nio.file`), `java.time`, `BigInteger`, `BigDecimal`,
+  (`File`, `FileReader`, `java.nio.file`), `java.time` but `Duration`, `BigInteger`,
+  `BigDecimal`,
   reflection. Of `java.net`, everything but `URI`, the addresses of a server and the
   [HTTP client](#the-http-client): `URL`, sockets, `HttpURLConnection`.

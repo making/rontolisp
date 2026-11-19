@@ -500,27 +500,32 @@ class JavaLoweringTest {
 		// transport splices and a target with none read a program that fetches --, its
 		// future held in a vector, never a value of the program; a URI is cut by the
 		// rules the front ends share. Where a thread is a body suspended and resumed,
-		// the wait for a reply is one more suspension.
+		// the wait for a reply is one more suspension. Fetch is handed its two timeouts
+		// only by a program that gives a request or a client a time limit, so only such
+		// a program names the keywords a transport carries its timeout arm for.
 		String client = """
 				import java.net.URI;
 				import java.net.http.*;
 				class L8 {
 				    public static void main(String[] args) throws Exception {
 				        HttpClient client = HttpClient.newHttpClient();
-				        HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost/")).build();
+				        HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost/"))%s.build();
 				        %s
 				    }
 				}
 				""";
 		String blocking = "System.out.println(client.send(request, HttpResponse.BodyHandlers.ofString()).body());";
-		assertThat(lower(client.formatted(blocking), "L8.java"))
-			.anyMatch(form -> form.contains("(HANDLER-CASE (VECTOR (RONTOLISP:FETCH ") && form.contains(
-					"(LIST :METHOD |method| :HEADERS (RONTOLISP::%JAVA-HTTP-FIELDS (|java.util.ArrayList.toArray(Object[])| "))
+		assertThat(lower(client.formatted("", blocking), "L8.java"))
+			.anyMatch(form -> form.contains("(HANDLER-CASE (VECTOR (RONTOLISP:FETCH |url| (LIST :METHOD |method| "
+					+ ":HEADERS (RONTOLISP::%JAVA-HTTP-FIELDS |fields|) :BODY |body|))) (ERROR "))
 			.anyMatch(form -> form.contains("(RONTOLISP::%URI-REFUSAL |str|)"))
 			.anyMatch(form -> form.contains("(RONTOLISP::%JAVA-HTTP-REPLY |exchange|)"))
-			.noneMatch(form -> form.contains("%JAVA-SUSPENDING"));
+			.noneMatch(form -> form.contains("%JAVA-SUSPENDING") || form.contains("-TIMEOUT"));
+		assertThat(lower(client.formatted(".timeout(java.time.Duration.ofSeconds(5))", blocking), "L8.java"))
+			.anyMatch(form -> form.contains(":BODY |body| :CONNECT-TIMEOUT (AND (> ")
+					&& form.contains(" :FIRST-BYTE-TIMEOUT (AND (> "));
 		String async = "System.out.println(client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).join().body());";
-		assertThat(Java.read(client.formatted(async), "L8.java", JavaFiles.NONE, null, true)
+		assertThat(Java.read(client.formatted("", async), "L8.java", JavaFiles.NONE, null, true)
 			.stream()
 			.map(LispVal::print)
 			.toList())

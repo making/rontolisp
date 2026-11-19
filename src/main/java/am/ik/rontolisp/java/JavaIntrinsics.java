@@ -338,6 +338,16 @@ final class JavaIntrinsics {
 		return (lowering, call) -> JavaForms.form(JavaForms.runtime(name), operands(call));
 	}
 
+	/**
+	 * A request handed to fetch: the future in a vector, or the text of what fetch
+	 * refused at the call.
+	 */
+	private static LispVal fetched(JavaEmitter.Context lowering, LispVal url, LispVal options) {
+		LispSymbol condition = lowering.temporary();
+		return list(cl("handler-case"), call("vector", list(new LispSymbol("RONTOLISP:FETCH"), url, options)),
+				list(cl("error"), list(condition), call("princ-to-string", condition)));
+	}
+
 	/** A member that is a call of a host operator: its receiver, its arguments. */
 	private static JavaEmitter host(String name) {
 		return (lowering, call) -> JavaForms.form(cl(name), operands(call));
@@ -646,6 +656,10 @@ final class JavaIntrinsics {
 					.statik("getProperty", classes.libraryType(STRING), support("property"),
 							classes.libraryType(STRING))
 					.nullable()
+					// the host's variable, null where it has none: the function every
+					// front end reads the environment through
+					.statik("getenv", classes.libraryType(STRING), host("%host-getenv"), classes.libraryType(STRING))
+					.nullable()
 					.statik("getProperty", classes.libraryType(STRING), support("propertyOr"),
 							classes.libraryType(STRING), classes.libraryType(STRING))
 					.nullable()
@@ -800,6 +814,10 @@ final class JavaIntrinsics {
 			.method("indexOf", i,
 					(lowering, call) -> runtimeCall("index-of-char", call.self(), call.argument(0), integer(0)), i)
 			.method("indexOf", i, runtime("index-of-char"), i, i)
+			.method("indexOf", i, support("indexOfChar"), i, i, i)
+			.method("indexOf", i, support("indexOfText"), string, i, i)
+			.method("codePointCount", i, support("codePointCount"), i, i)
+			.method("offsetByCodePoints", i, support("offsetByCodePoints"), i, i)
 			.method("lastIndexOf", i, runtime("last-index-of"), string)
 			.method("lastIndexOf", i, runtime("last-index-of-char"), i)
 			.method("lastIndexOf", i, runtime("last-index-of-from"), string, i)
@@ -1394,6 +1412,13 @@ final class JavaIntrinsics {
 			.statik("toString", string,
 					(lowering, call) -> runtimeCall("char-string", runtimeCall("code-point", call.argument(0))), i)
 			.statik("toChars", new ArrayType(c), runtime("code-point-chars"), i)
+			.statik("toChars", i, support("toChars"), i, new ArrayType(c), i)
+			.statik("codePointAt", i, support("codePointAt"), new ArrayType(c), i)
+			.statik("reverseBytes", c,
+					(lowering, call) -> call("logior",
+							call("ash", call("logand", call.argument(0), integer(0xFF)), integer(8)),
+							call("ash", call.argument(0), integer(-8))),
+					c)
 			.statik("charCount", i,
 					(lowering, call) -> call("if", call(">=", call.argument(0), integer(0x10000)), integer(2),
 							integer(1)),
@@ -1482,6 +1507,9 @@ final class JavaIntrinsics {
 		builder.statik("negateExact", i, support("negateExact"), i).statik("toIntExact", i, support("toIntExact"), l);
 		for (String name : List.of("absExact", "incrementExact", "decrementExact")) {
 			builder.statik(name, i, support(name), i).statik(name, l, support(name + "Long"), l);
+		}
+		for (String name : List.of("divideExact", "floorDivExact", "ceilDivExact")) {
+			builder.statik(name, i, support(name), i, i).statik(name, l, support(name + "Long"), l, l);
 		}
 		builder.statik("negateExact", l, support("negateExactLong"), l)
 			.statik("multiplyExact", l, support("multiplyExactLong"), l, i)
@@ -1669,12 +1697,23 @@ final class JavaIntrinsics {
 		// the future is held in a vector: a function a thread is suspended in answers
 		// its value through an await, which would wait for a future handed back bare
 		natives.put(http + "start0(String,String,String[],byte[])", (lowering, call) -> {
-			LispSymbol condition = lowering.temporary();
 			LispVal options = call("list", new LispSymbol(":METHOD"), call.argument(1), new LispSymbol(":HEADERS"),
 					runtimeCall("http-fields", call.argument(2)), new LispSymbol(":BODY"), call.argument(3));
-			return list(cl("handler-case"),
-					call("vector", list(new LispSymbol("RONTOLISP:FETCH"), call.argument(0), options)),
-					list(cl("error"), list(condition), call("princ-to-string", condition)));
+			return fetched(lowering, call.argument(0), options);
+		});
+		// the two timeouts in milliseconds, 0 for none: fetch takes an absent option as
+		// nil. Reached only by a program that gives a client or a request a time limit
+		// (Http.TimedWire), so only it names the keywords a transport's timeout arm is
+		// spliced for
+		natives.put(http + "timed0(String,String,String[],byte[],long,long)", (lowering, call) -> {
+			LispSymbol connect = lowering.temporary();
+			LispSymbol reply = lowering.temporary();
+			LispVal options = call("list", new LispSymbol(":METHOD"), call.argument(1), new LispSymbol(":HEADERS"),
+					runtimeCall("http-fields", call.argument(2)), new LispSymbol(":BODY"), call.argument(3),
+					new LispSymbol(":CONNECT-TIMEOUT"), call("and", call(">", connect, integer(0)), connect),
+					new LispSymbol(":FIRST-BYTE-TIMEOUT"), call("and", call(">", reply, integer(0)), reply));
+			return JavaForms.let(connect, call.argument(4), List
+				.of(JavaForms.let(reply, call.argument(5), List.of(fetched(lowering, call.argument(0), options)))));
 		});
 		natives.put(http + "reply0(Object)", runtime("http-reply"));
 		natives.put(http + "failed0(Object)", host("stringp"));

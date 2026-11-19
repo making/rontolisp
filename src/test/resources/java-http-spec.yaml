@@ -11,7 +11,9 @@
 # JDK 25 prints, and the JDK leg checks that it still is; a program `skip`s a leg with
 # the reason: the one of what the subset's client refuses by name has no JDK leg.
 programs:
-  # the blocking client: verbs, fields both ways, bodies, statuses, redirects, java.net.URI
+  # the blocking client: verbs, fields both ways, bodies, statuses, redirects, java.net.URI,
+  # the time limits of a request and of a connection (the one program that names them:
+  # the others send through a fetch with no timeout)
   - name: client
     file: Client.java
     source: |
@@ -22,10 +24,13 @@ programs:
       import java.net.URI;
       import java.net.URISyntaxException;
       import java.net.http.HttpClient;
+      import java.net.http.HttpConnectTimeoutException;
       import java.net.http.HttpHeaders;
       import java.net.http.HttpRequest;
       import java.net.http.HttpResponse;
+      import java.net.http.HttpTimeoutException;
       import java.nio.charset.StandardCharsets;
+      import java.time.Duration;
       import java.util.Arrays;
       import java.util.HashMap;
       import java.util.List;
@@ -126,7 +131,14 @@ programs:
               System.out.println(request.headers().map() + " " + text(request));
               HttpResponse<String> cookies = CLIENT.send(to("/cookies").build(), HttpResponse.BodyHandlers.ofString());
               System.out.println(cookies.headers().allValues("set-cookie") + " " + cookies.headers().firstValue("Set-Cookie") + " "
-                      + cookies.headers().map().get("SET-COOKIE"));
+                      + cookies.headers().map().get("SET-COOKIE") + " " + cookies.headers().firstValueAsLong("content-length") + " "
+                      + cookies.headers().firstValueAsLong("absent"));
+              try {
+                  cookies.headers().firstValueAsLong("set-cookie");
+              }
+              catch (NumberFormatException e) {
+                  System.out.println(e);
+              }
               HttpHeaders made = HttpHeaders.of(Map.of("B", List.of("1", "2"), "a", List.of(" 3 ")),
                       (name, value) -> !value.equals("2"));
               HttpHeaders same = HttpHeaders.of(Map.of("b", List.of("1"), "A", List.of("3")), (name, value) -> true);
@@ -299,6 +311,34 @@ programs:
               }
           }
 
+          static void limits() throws IOException, InterruptedException {
+              System.out.println("== a-request-and-a-connection-have-time-limits");
+              HttpRequest slow = to("/slow").timeout(Duration.ofMillis(100)).build();
+              System.out.println(slow.timeout() + " " + to("/slow").build().timeout() + " " + CLIENT.connectTimeout());
+              try {
+                  System.out.println(text(slow));
+              }
+              catch (HttpTimeoutException e) {
+                  System.out.println(e + " / " + e.getCause() + " " + (e instanceof HttpConnectTimeoutException));
+              }
+              HttpClient patient = HttpClient.newBuilder()
+                  .connectTimeout(Duration.ofSeconds(60))
+                  .followRedirects(HttpClient.Redirect.NORMAL)
+                  .build();
+              HttpRequest.Builder waiting = to("/redirect").timeout(Duration.ofMinutes(1));
+              HttpResponse<String> moved = patient.send(waiting.build(), HttpResponse.BodyHandlers.ofString());
+              System.out.println(patient.connectTimeout() + " " + waiting.copy().build().timeout() + " " + moved.statusCode() + " "
+                      + moved.body() + " " + moved.request().timeout());
+              System.out.println(to("/hello").timeout(Duration.ofNanos(1)).build().timeout() + " "
+                      + to("/hello").timeout(Duration.ofSeconds(Long.MAX_VALUE, 999999999)).build().timeout());
+              refused("no time", () -> to("/hello").timeout(Duration.ZERO));
+              refused("less than none", () -> to("/hello").timeout(Duration.ofMillis(-1)));
+              refused("no duration", () -> to("/hello").timeout(null));
+              refused("no time to connect", () -> HttpClient.newBuilder().connectTimeout(Duration.ZERO));
+              refused("less than none to connect", () -> HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(-3)));
+              refused("no duration to connect", () -> HttpClient.newBuilder().connectTimeout(null));
+          }
+
           public static void main(String[] args) throws IOException, InterruptedException {
               get();
               verbs();
@@ -309,6 +349,7 @@ programs:
               redirects();
               uris();
               failures();
+              limits();
           }
       }
     expected: |
@@ -337,7 +378,8 @@ programs:
       (GET /redirect) 302 moved Optional[/hello]
       == fields-both-ways
       {Accept=[text/plain], X-A=[1, 2], X-B=[3], X-C=[5]} 200 [{accept=[text/plain], x-a=[1, 2], x-b=[3], x-c=[5]}]
-      [a=1, b=2] Optional[a=1] [a=1, b=2]
+      [a=1, b=2] Optional[a=1] [a=1, b=2] OptionalLong[3] OptionalLong.empty
+      java.lang.NumberFormatException: For input string: "a=1"
       {a=[3], B=[1]} Optional[1] true true true
       {X=[1]} {X=[1], Y=[2]} true false true
       == what-a-builder-refuses
@@ -430,6 +472,17 @@ programs:
       HTTP_1_1 HTTP_2 Optional.empty false
       22 hello-from-fetch
       true java.io.IOException: closed
+      == a-request-and-a-connection-have-time-limits
+      Optional[PT0.1S] Optional.empty Optional.empty
+      java.net.http.HttpTimeoutException: request timed out / null false
+      Optional[PT1M] Optional[PT1M] 200 hello-from-fetch Optional[PT1M]
+      Optional[PT0.000000001S] Optional[PT2562047788015215H30M7.999999999S]
+      no time: java.lang.IllegalArgumentException: Invalid duration: PT0S
+      less than none: java.lang.IllegalArgumentException: Invalid duration: PT-0.001S
+      no duration: java.lang.NullPointerException
+      no time to connect: java.lang.IllegalArgumentException: Invalid duration: PT0S
+      less than none to connect: java.lang.IllegalArgumentException: Invalid duration: PT-3S
+      no duration to connect: java.lang.NullPointerException
   # sendAsync and threads: a program that starts threads, which a wasm target lowers resumable
   - name: async
     file: Async.java
@@ -584,12 +637,48 @@ programs:
     source: |
       import java.net.URI;
       import java.net.http.HttpClient;
+      import java.net.http.HttpHeaders;
       import java.net.http.HttpRequest;
       import java.net.http.HttpResponse;
+      import java.time.Duration;
+      import java.util.Map;
+      import java.util.Optional;
       import java.util.concurrent.CompletableFuture;
       import java.util.concurrent.CompletionStage;
 
       public class Subset {
+
+          /** A request of the program's own class: what it states of a time limit is not a builder's. */
+          static class Timed extends HttpRequest {
+
+              public Optional<BodyPublisher> bodyPublisher() {
+                  return Optional.empty();
+              }
+
+              public String method() {
+                  return "GET";
+              }
+
+              public Optional<Duration> timeout() {
+                  return Optional.of(Duration.ofSeconds(30));
+              }
+
+              public boolean expectContinue() {
+                  return false;
+              }
+
+              public URI uri() {
+                  return URI.create(ORIGIN + "/hello");
+              }
+
+              public Optional<HttpClient.Version> version() {
+                  return Optional.empty();
+              }
+
+              public HttpHeaders headers() {
+                  return HttpHeaders.of(Map.of(), (name, value) -> true);
+              }
+          }
 
           static final String ORIGIN = "@ORIGIN@";
 
@@ -615,6 +704,7 @@ programs:
               refused(to("/echo").method("get", HttpRequest.BodyPublishers.noBody()).build(), text);
               refused(to("/echo").expectContinue(true).POST(HttpRequest.BodyPublishers.ofString("x")).build(), text);
               refused(to("/echo").POST(() -> 1L).build(), text);
+              refused(new Timed(), text);
               refused(to("/hello").build(), info -> new HttpResponse.BodySubscriber<String>() {
                   public CompletionStage<String> getBody() {
                       return CompletableFuture.completedFuture("mine");
@@ -636,6 +726,7 @@ programs:
       the method get is not supported by the experimental Java subset: a request is sent as GET, HEAD, POST, PUT, DELETE, OPTIONS or PATCH
       expectContinue(true) is not supported by the experimental Java subset
       a BodyPublisher of a program's own class is not supported by the experimental Java subset: HttpRequest.BodyPublishers makes the ones a client sends
+      the timeout of an HttpRequest of a program's own class is not supported by the experimental Java subset: HttpRequest.Builder makes the requests a client times
       a BodySubscriber of a program's own class is not supported by the experimental Java subset: HttpResponse.BodySubscribers makes the ones a client reads
       refused where it is sent
       HTTP_1_1
