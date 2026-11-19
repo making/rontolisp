@@ -31,10 +31,8 @@ has the two programs, the oracle's lines, the refusals met and how to run it aga
 1. k27 (done 2026-11-19) -- `LinkedHashMap`, `LinkedHashSet`, `LinkedList` (the order of the lines).
 2. k28 (done 2026-11-19) -- `java.text.MessageFormat` (the text of every message).
 3. k29 (done 2026-11-19) -- `java.text.Normalizer` (every string checked).
-   The classic example prints the JDK's lines from the unpatched coordinates. **Next,
-   still to do here**: add it as an opt-in test (network or `~/.m2`, so not in
-   `./mvnw test`) and an example under `examples/java/` -- `examples.yaml` has no field
-   for `--java-source-dep` yet (`cli` is a deps.edn project's command line).
+   The classic example prints the JDK's lines from the unpatched coordinates. The
+   example under `examples/java/` and its check in `examples.yaml` are `.todo/k34`.
 4. `.todo/k30` -- a `Class` as a value, then measure the schema example again and file
    what it meets behind it.
 5. `.todo/k26` -- `java.time`, for a program that validates a date; `.todo/k31` --
