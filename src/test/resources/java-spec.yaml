@@ -10981,12 +10981,15 @@ standalone:
            * Four tasks through invokeAll with a limit in milliseconds: the second waits --
            * when it is held -- for a gate opened after invokeAll has answered, the third
            * throws. A limit that is to pass is asked of a pool of one thread, started
-           * beforehand: the tasks behind the one held never run, whatever the load.
+           * beforehand. Cancelling the held task frees that thread, which would take the
+           * fourth task before invokeAll cancels it, so the held task stays until invokeAll
+           * has answered: the tasks behind it never run, whatever the load.
            */
           static void limited(String what, ExecutorService pool, long limit, boolean held) throws Exception {
               pool.submit(() -> "started").get();
               CountDownLatch gate = new CountDownLatch(1);
               CountDownLatch left = new CountDownLatch(1);
+              CountDownLatch answered = new CountDownLatch(1);
               int[] seen = new int[2];
               List<Callable<String>> tasks = new ArrayList<>();
               tasks.add(() -> "a");
@@ -10999,6 +11002,12 @@ standalone:
                   }
                   catch (InterruptedException e) {
                       seen[1]++;
+                      try {
+                          answered.await();
+                      }
+                      catch (InterruptedException again) {
+                          seen[1] += 100;
+                      }
                   }
                   finally {
                       left.countDown();
@@ -11010,6 +11019,7 @@ standalone:
               });
               tasks.add(() -> "d");
               List<Future<String>> futures = pool.invokeAll(tasks, limit, TimeUnit.MILLISECONDS);
+              answered.countDown();
               StringBuilder told = new StringBuilder(what + ":");
               for (Future<String> future : futures) {
                   told.append(future.isDone() ? " done" : " open").append(future.isCancelled() ? "/cancelled" : "");
