@@ -40,8 +40,8 @@ public class WasmMojo extends AbstractMojo {
 	private boolean skip;
 
 	/**
-	 * The binary name of the class the program starts at ({@code app.Main} is
-	 * {@code src/main/java/app/Main.java}).
+	 * The binary name of the class the program starts at ({@code app.Main} is the file
+	 * {@code app/Main.java} under {@link #sourceDirectory}).
 	 */
 	@Parameter(property = "rontolisp.mainClass", required = true)
 	private @Nullable String mainClass;
