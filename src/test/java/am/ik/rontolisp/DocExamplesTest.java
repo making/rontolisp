@@ -169,11 +169,16 @@ class DocExamplesTest {
 	 * a Clojure example reading a URL it spells says so in a comment naming fetch; or the
 	 * Java subset's {@code java.net.http} client, which goes through it too -- rewrites
 	 * the origin of its http(s) URL string literals to the local test server (keeping the
-	 * path) so evaluation stays offline; otherwise returns the source unchanged.
+	 * path) so evaluation stays offline; otherwise returns the source unchanged. A Java
+	 * example that serves ({@code jdk.httpserver}) asks its own server, on the port it
+	 * was given, and is left as it is.
 	 */
 	private static String rewriteFetchUrls(String source) {
 		if (!source.contains("rontolisp:fetch") && !source.contains("rontolisp.http-client")
 				&& !source.contains("rontolisp.http-urls") && !source.contains("java.net.http")) {
+			return source;
+		}
+		if (source.contains("jdk.httpserver")) {
 			return source;
 		}
 		return source.replaceAll("(?<=\")https?://[^\"/]*", Matcher.quoteReplacement(localFetchOrigin()));

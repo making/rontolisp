@@ -66,7 +66,11 @@ import static org.junit.jupiter.api.DynamicTest.dynamicTest;
  * and {@code clojure.java.io}'s reads of an {@code http:} URL over the same origin and
  * legs, one {@code .clj} program per leg. The third, {@code java-http-spec.yaml}, is the
  * Java subset's {@code java.net.http} client: each of its programs a {@code .java} file
- * per leg, with the JDK running the test as one leg more, the oracle.
+ * per leg, with the JDK running the test as one leg more, the oracle. The fourth,
+ * {@code java-http-server-spec.yaml}, is the other direction, the Java subset's
+ * {@code com.sun.net.httpserver}: a program per leg is started as a server -- on the
+ * transports a served application has, the component under {@code wasmtime serve} -- and
+ * the test asks each the same requests; its handlers reach the origin through the client.
  *
  * <p>
  * Every leg goes through the command line -- this JVM's {@link RontoLispCli}, or the
@@ -85,6 +89,29 @@ class FetchSpecE2eTest {
 	private static final String CLOJURE_SPEC_RESOURCE = "/clojure-http-spec.yaml";
 
 	private static final String JAVA_SPEC_RESOURCE = "/java-http-spec.yaml";
+
+	private static final String JAVA_SERVER_SPEC_RESOURCE = "/java-http-server-spec.yaml";
+
+	/** Stands for the port a served program binds. */
+	private static final String PORT_MARK = "@PORT@";
+
+	/** Starts the lines of a served program's log. */
+	private static final String LOG_LINE = "| ";
+
+	/** What a request no response came back for is recorded as. */
+	private static final String NO_RESPONSE = "(no response)";
+
+	/**
+	 * The readers {@code /seen?<key>} waits for, and for how many seconds: the test
+	 * counts a key's latch down once it has read the first part of a served program's
+	 * reply.
+	 */
+	private static final Map<String, CountDownLatch> SEEN = new ConcurrentHashMap<>();
+
+	private static final Map<String, Integer> SEEN_SECONDS = new ConcurrentHashMap<>();
+
+	/** How long {@code /seen} waits on a leg said to send a reply whole. */
+	private static final int UNSEEN_SECONDS = 3;
 
 	/** Starts the line a Java program prints ahead of each of its cases. */
 	private static final String JAVA_CASE = "== ";
@@ -189,6 +216,39 @@ class FetchSpecE2eTest {
 	}
 
 	record Programs(List<Program> programs) {
+	}
+
+	/**
+	 * One request to a served program: what is sent, what of the response is shown, what
+	 * a JDK answers, what a leg answers instead and the legs it is not sent on.
+	 * {@code unanswered} is for how many seconds the JDK leg waits for an answer a JDK
+	 * never gives.
+	 */
+	record Asked(String name, String request, @Nullable Map<String, String> headers, @Nullable String body,
+			@Nullable String hex, @Nullable List<String> show, @Nullable Integer times, @Nullable String first,
+			@Nullable Integer unanswered, String expected, @Nullable Map<String, String> deviates,
+			@Nullable Map<String, String> skip) {
+
+		boolean sentOn(String leg) {
+			return this.skip == null || !this.skip.containsKey(leg);
+		}
+
+		List<String> expectedOn(String leg) {
+			String deviation = (this.deviates != null) ? this.deviates.get(leg) : null;
+			return lines((deviation != null) ? deviation : this.expected);
+		}
+
+	}
+
+	/** One served Java program: its file, the requests in turn and what it logs. */
+	record Served(String name, String file, String source, String log, List<Asked> requests) {
+	}
+
+	record ServedPrograms(List<Served> programs) {
+	}
+
+	/** What one leg of a served program gave: each response, its log, how it ended. */
+	record Answers(Map<String, List<String>> responses, List<String> log, @Nullable Integer exit) {
 	}
 
 	@TempDir
@@ -428,6 +488,21 @@ class FetchSpecE2eTest {
 				Thread.currentThread().interrupt();
 			}
 		});
+		// /seen?<key> answers whether the test has read the first part of the reply a
+		// served program is writing: it waits for that reader, as long as the key's leg
+		// is given.
+		server.createContext("/seen", exchange -> {
+			String key = String.valueOf(exchange.getRequestURI().getRawQuery());
+			boolean seen = false;
+			try {
+				seen = SEEN.computeIfAbsent(key, made -> new CountDownLatch(1))
+					.await(SEEN_SECONDS.getOrDefault(key, HELD_SECONDS), TimeUnit.SECONDS);
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+			answer(exchange, 200, seen ? "seen" : "unseen");
+		});
 		server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
 		server.start();
 		origin = server;
@@ -566,6 +641,262 @@ class FetchSpecE2eTest {
 				() -> assertThat(printed.keySet()).as("the cases %s printed on %s", program.name(), leg)
 					.containsExactlyElementsOf(expected.keySet())));
 		return dynamicContainer(leg, tests.stream());
+	}
+
+	/**
+	 * The Java subset's {@code com.sun.net.httpserver}
+	 * ({@code java-http-server-spec.yaml}): a program is started as a server under the
+	 * JDK running the test -- the oracle -- and on each transport, and asked the same
+	 * requests in turn.
+	 */
+	@TestFactory
+	Stream<DynamicNode> javaHttpServer() throws Exception {
+		ServedPrograms spec = load(JAVA_SERVER_SPEC_RESOURCE, ServedPrograms.class);
+		String originUrl = "http://127.0.0.1:" + Objects.requireNonNull(origin).getAddress().getPort();
+		List<String> legs = new ArrayList<>(List.of(JDK));
+		for (Leg leg : Leg.values()) {
+			legs.add(leg.key());
+		}
+		List<DynamicNode> programs = new ArrayList<>();
+		for (Served program : spec.programs()) {
+			Map<String, Callable<Answers>> runs = new java.util.LinkedHashMap<>();
+			for (String leg : legs) {
+				runs.put(leg, started(program.name() + "-served-" + leg, () -> serve(leg, program, originUrl)));
+			}
+			List<DynamicNode> ran = new ArrayList<>();
+			runs.forEach((leg, run) -> ran.add(servedLeg(leg, program, run)));
+			programs.add(dynamicContainer(program.name(), ran.stream()));
+		}
+		return programs.stream();
+	}
+
+	private static DynamicContainer servedLeg(String leg, Served program, Callable<Answers> run) {
+		Answers answers;
+		try {
+			answers = run.call();
+		}
+		catch (Skipped skipped) {
+			return dynamicContainer(leg,
+					Stream.of(dynamicTest("(skipped)", () -> abort(Objects.requireNonNull(skipped.getMessage())))));
+		}
+		catch (Exception | StackOverflowError ex) {
+			return dynamicContainer(leg, Stream
+				.of(dynamicTest("(execution failed)", () -> fail(program.name() + " on " + leg + ": " + ex, ex))));
+		}
+		List<DynamicTest> tests = new ArrayList<>();
+		for (Asked asked : program.requests()) {
+			if (asked.sentOn(leg)) {
+				tests.add(dynamicTest(asked.name(),
+						() -> assertThat(answers.responses().get(asked.name()))
+							.as("'%s' (%s) of %s on %s", asked.name(), asked.request(), program.name(), leg)
+							.isEqualTo(asked.expectedOn(leg))));
+			}
+		}
+		if (!leg.equals(Leg.COMPONENT.key())) {
+			// the host starts a component as often as it likes, and never ends it
+			tests.add(dynamicTest("the-lines-it-logged",
+					() -> assertThat(answers.log()).as("the log of %s on %s", program.name(), leg)
+						.isEqualTo(lines(program.log()))));
+			tests.add(dynamicTest("it-ends-once-its-server-stopped",
+					() -> assertThat(answers.exit()).as("the status %s ended with on %s", program.name(), leg)
+						.isEqualTo(0)));
+		}
+		return dynamicContainer(leg, tests.stream());
+	}
+
+	// Starts a program as a server on one leg, asks it the requests in turn and ends
+	// it: the last request stops a program that can stop; the host's is destroyed.
+	private static Answers serve(String leg, Served program, String originUrl) throws Exception {
+		String stem = program.file().substring(0, program.file().lastIndexOf('.'));
+		Path dir = Files.createDirectories(workDir.resolve(stem + "-served-" + leg));
+		boolean component = leg.equals(Leg.COMPONENT.key());
+		boolean nativeLeg = leg.equals(Leg.NATIVE.key());
+		// a port has to be in the source only where the program cannot tell the one it
+		// got: the runner's
+		int reserved = nativeLeg ? ServeComponentE2eSupport.freePort() : 0;
+		Path source = dir.resolve(program.file());
+		Files.writeString(source,
+				program.source()
+					.replace(ORIGIN_MARK, originUrl)
+					.replace(LEG_MARK, leg)
+					.replace(PORT_MARK, Integer.toString(reserved)),
+				StandardCharsets.UTF_8);
+		String launcher = Path.of(System.getProperty("java.home"), "bin", "java").toString();
+		List<String> command;
+		if (leg.equals(JDK)) {
+			command = List.of(launcher, source.toString());
+		}
+		else if (leg.equals(Leg.INTERPRETER.key())) {
+			command = (BINARY != null) ? List.of(Path.of(BINARY).toAbsolutePath().toString(), source.toString())
+					: List.of(launcher, "-cp", System.getProperty("java.class.path"),
+							"am.ik.rontolisp.cli.RontoLispCli", source.toString());
+		}
+		else if (leg.equals(Leg.JVM.key())) {
+			compile(source, dir.resolve("Served.class"), "--class-name", "Served");
+			command = List.of(launcher, "-cp", dir.toString(), "Served");
+		}
+		else if (nativeLeg) {
+			Path executable = dir.resolve(stem);
+			try {
+				compile(source, executable, "--native");
+			}
+			catch (UnsupportedOperationException ex) {
+				String message = String.valueOf(ex.getMessage());
+				if (message.contains(NOT_AVAILABLE) && !REQUIRED) {
+					throw new Skipped(message);
+				}
+				throw ex;
+			}
+			command = List.of(executable.toString());
+		}
+		else {
+			if (!HostWasmtime.isAvailable()) {
+				throw new Skipped("no usable wasmtime on PATH");
+			}
+			Path served = dir.resolve(stem + ".wasm");
+			compile(source, served, "--component");
+			command = List.of("wasmtime", "serve", "-W", "gc=y", "-W", "exceptions=y", "-S", "cli=y", "--addr",
+					"127.0.0.1:0", served.toString());
+		}
+		Path stdout = dir.resolve("served.out");
+		Path stderr = dir.resolve("served.err");
+		Process process = new ProcessBuilder(command).directory(dir.toFile())
+			.redirectInput(ProcessBuilder.Redirect.from(Path.of("/dev/null").toFile()))
+			.redirectOutput(stdout.toFile())
+			.redirectError(stderr.toFile())
+			.start();
+		try {
+			int port = servedPort(process, stdout, stderr,
+					component ? Pattern.compile("Serving HTTP on http://127\\.0\\.0\\.1:(\\d+)/")
+							: Pattern.compile("^listening (\\d+)$", Pattern.MULTILINE));
+			Map<String, List<String>> responses = new java.util.LinkedHashMap<>();
+			try (java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder()
+				.version(java.net.http.HttpClient.Version.HTTP_1_1)
+				.build()) {
+				for (Asked asked : program.requests()) {
+					if (asked.sentOn(leg)) {
+						responses.put(asked.name(), ask(client, port, asked, leg));
+					}
+				}
+			}
+			Integer exit = null;
+			if (!component && process.waitFor(60, TimeUnit.SECONDS)) {
+				exit = process.exitValue();
+			}
+			List<String> log = new ArrayList<>();
+			for (String line : lines(Files.readString(stdout, StandardCharsets.UTF_8))) {
+				if (line.startsWith(LOG_LINE)) {
+					log.add(line);
+				}
+			}
+			return new Answers(responses, log, exit);
+		}
+		finally {
+			process.destroyForcibly().waitFor();
+		}
+	}
+
+	// The port a served program says it listens on: the line is waited for while the
+	// program runs.
+	private static int servedPort(Process process, Path stdout, Path stderr, Pattern line) throws Exception {
+		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120);
+		while (System.nanoTime() < deadline) {
+			// wasmtime serve says it on its standard error
+			Matcher said = line.matcher(Files.readString(stdout, StandardCharsets.UTF_8)
+					+ Files.readString(stderr, StandardCharsets.UTF_8));
+			if (said.find()) {
+				return Integer.parseInt(said.group(1));
+			}
+			if (!process.isAlive()) {
+				break;
+			}
+			Thread.sleep(50);
+		}
+		throw new IllegalStateException("the served program never said where it listens\n--- stdout ---\n"
+				+ Files.readString(stdout) + "--- stderr ---\n" + Files.readString(stderr));
+	}
+
+	// One request, or the same one several times at once, and what came back: the
+	// status, the fields the request shows, the body's lines (its octets in hex where
+	// the request's are).
+	private static List<String> ask(java.net.http.HttpClient client, int port, Asked asked, String leg)
+			throws Exception {
+		int space = asked.request().indexOf(' ');
+		byte[] body = (asked.hex() != null) ? java.util.HexFormat.of().parseHex(asked.hex())
+				: (asked.body() != null) ? asked.body().getBytes(StandardCharsets.UTF_8) : null;
+		java.net.http.HttpRequest.Builder builder = java.net.http.HttpRequest
+			.newBuilder(java.net.URI.create("http://127.0.0.1:" + port + asked.request().substring(space + 1)))
+			.timeout(java.time.Duration
+				.ofSeconds((asked.unanswered() != null && leg.equals(JDK)) ? asked.unanswered() : 120))
+			.method(asked.request().substring(0, space),
+					(body == null) ? java.net.http.HttpRequest.BodyPublishers.noBody()
+							: java.net.http.HttpRequest.BodyPublishers.ofByteArray(body));
+		if (asked.headers() != null) {
+			asked.headers().forEach(builder::header);
+		}
+		java.net.http.HttpRequest request = builder.build();
+		String first = asked.first();
+		if (first != null) {
+			String key = "stream-" + leg;
+			if (asked.deviates() != null && asked.deviates().containsKey(leg)) {
+				SEEN_SECONDS.put(key, UNSEEN_SECONDS);
+			}
+			return answered(() -> {
+				java.net.http.HttpResponse<InputStream> response = client.send(request,
+						java.net.http.HttpResponse.BodyHandlers.ofInputStream());
+				try (InputStream in = response.body()) {
+					byte[] head = in.readNBytes(first.getBytes(StandardCharsets.UTF_8).length);
+					SEEN.computeIfAbsent(key, made -> new CountDownLatch(1)).countDown();
+					ByteArrayOutputStream whole = new ByteArrayOutputStream();
+					whole.write(head);
+					in.transferTo(whole);
+					return shown(asked, response.statusCode(), response.headers(), whole.toByteArray());
+				}
+			});
+		}
+		int times = (asked.times() != null) ? asked.times() : 1;
+		List<Callable<List<String>>> sent = new ArrayList<>();
+		for (int i = 0; i < times; i++) {
+			sent.add(started("ask-" + leg + "-" + i, () -> answered(() -> {
+				java.net.http.HttpResponse<byte[]> response = client.send(request,
+						java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+				return shown(asked, response.statusCode(), response.headers(), response.body());
+			})));
+		}
+		// several at once answer as one when every answer is the same
+		java.util.LinkedHashSet<List<String>> distinct = new java.util.LinkedHashSet<>();
+		for (Callable<List<String>> one : sent) {
+			distinct.add(one.call());
+		}
+		List<String> all = new ArrayList<>();
+		distinct.forEach(all::addAll);
+		return all;
+	}
+
+	private static List<String> answered(Callable<List<String>> exchange) throws Exception {
+		try {
+			return exchange.call();
+		}
+		catch (IOException ex) {
+			return List.of(NO_RESPONSE);
+		}
+	}
+
+	private static List<String> shown(Asked asked, int status, java.net.http.HttpHeaders headers, byte[] body) {
+		List<String> shown = new ArrayList<>();
+		shown.add(Integer.toString(status));
+		if (asked.show() != null) {
+			for (String name : asked.show()) {
+				for (String value : headers.allValues(name)) {
+					shown.add(name + ": " + value);
+				}
+			}
+		}
+		if (body.length > 0) {
+			shown.addAll((asked.hex() != null) ? List.of(java.util.HexFormat.of().formatHex(body))
+					: lines(new String(body, StandardCharsets.UTF_8)));
+		}
+		return shown;
 	}
 
 	private static Stream<DynamicNode> corpus(String resource, String fileName) throws Exception {
@@ -774,8 +1105,8 @@ class FetchSpecE2eTest {
 	}
 
 	// Starts run on a thread of its own and answers its result, rethrowing what it threw.
-	private static Callable<String> started(String leg, Callable<String> run) {
-		FutureTask<String> task = new FutureTask<>(run);
+	private static <T> Callable<T> started(String leg, Callable<T> run) {
+		FutureTask<T> task = new FutureTask<>(run);
 		Thread.ofPlatform().name("fetch-spec-" + leg).start(task);
 		return () -> {
 			try {

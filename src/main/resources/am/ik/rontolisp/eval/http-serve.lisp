@@ -47,6 +47,17 @@
 ;;;; interface); JOIN only to the interpreter's and the JVM's, since no other
 ;;;; leg can go on while it serves. ONE served application per process: the
 ;;;; compiled backends dispatch every request through one handler slot.
+;;;;
+;;;; An adapter whose program goes on after it started a server, and ends when
+;;;; the server has stopped (the Java subset's com.sun.net.httpserver), calls
+;;;; the same legs in two steps: %http-serve-begin binds and answers the server
+;;;; at once on EVERY leg, and %http-serve-run, called where the program has
+;;;; nothing else to do, answers once the server has stopped. On the socket
+;;;; legs run is the join; a --native module, which has one thread, serves in
+;;;; it -- the runner has been accepting since begin and holds what arrived --
+;;;; until %http-serve-stop was called; where the host calls the module run
+;;;; answers at once. %http-serve-port is the port a socket leg bound, nil
+;;;; where the leg cannot tell.
 
 #+(and rontolisp-wasm (not rontolisp-reactor) (not rontolisp-native))
 (defvar rontolisp::%http-serve-current nil)
@@ -71,6 +82,37 @@
 (defun rontolisp::%http-serve-stop (server)
   (rontolisp::%http-server-stop server)
   t)
+
+#-(or rontolisp-wasm rontolisp-servlet)
+(defun rontolisp::%http-serve-begin (app port address)
+  (rontolisp::%http-server-start app port address :raw-body :buffered))
+
+#-(or rontolisp-wasm rontolisp-servlet)
+(defun rontolisp::%http-serve-run (server)
+  (rontolisp::%http-server-join server)
+  nil)
+
+#-(or rontolisp-wasm rontolisp-servlet)
+(defun rontolisp::%http-serve-port (server)
+  (rontolisp::%http-server-port server))
+
+;; Where the host owns the port -- the war's container, wasmtime serve, the host
+;; of a reactor -- begin is the serve that returns, and there is nothing to wait
+;; for or to tell.
+#+(or rontolisp-servlet (and rontolisp-wasm (not rontolisp-native)))
+(defun rontolisp::%http-serve-begin (app port address)
+  (rontolisp::%http-serve app port address nil)
+  t)
+
+#+(or rontolisp-servlet (and rontolisp-wasm (not rontolisp-native)))
+(defun rontolisp::%http-serve-run (server)
+  (declare (ignore server))
+  nil)
+
+#+(or rontolisp-wasm rontolisp-servlet)
+(defun rontolisp::%http-serve-port (server)
+  (declare (ignore server))
+  nil)
 
 #+rontolisp-servlet
 (defun rontolisp::%http-serve (app port address join)
@@ -177,9 +219,29 @@
       (rontolisp::%http-serve-exchange app (rontolisp::%http-serve-next server)
                                        buffered))))
 
+;; The two-step serve of a --native module: the server is #(listener application
+;; stopped). The runner accepts from the listen on and queues each request that
+;; arrived whole, so nothing is lost between begin and run.
+#+rontolisp-native
+(defun rontolisp::%http-serve-begin (app port address)
+  (let ((server (rontolisp::%http-serve-listen (or address "") port)))
+    (when (< server 0)
+      (error
+       (concatenate 'string "http server: " (rontolisp::%http-serve-error))))
+    (vector server app nil)))
+
+#+rontolisp-native
+(defun rontolisp::%http-serve-run (server)
+  (loop
+    (if (aref server 2) (return nil))
+    (rontolisp::%http-serve-exchange (aref server 1)
+     (rontolisp::%http-serve-next (aref server 0)) t)))
+
 ;; Undeploying the war, or the host, is what stops the other legs; a --native
-;; server stops with its process.
+;; server stops with its process, or -- one begun in two steps -- where its run
+;; has answered the request in hand.
 #+(or rontolisp-wasm rontolisp-servlet)
 (defun rontolisp::%http-serve-stop (server)
-  (declare (ignore server))
+  #+rontolisp-native (if (vectorp server) (setf (aref server 2) t))
+  #-rontolisp-native (declare (ignore server))
   nil)

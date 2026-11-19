@@ -257,6 +257,26 @@ examples:
     backends: [interpreter, jvm, wasm, wasm-component-run]
     expect:
       file: .expected/java-shop.txt
+  - path: java/http/Server.java
+    backends: [jvm-compile, wasm-component]
+    note: >-
+      an HTTP server on the JDK's own API, com.sun.net.httpserver: four contexts, a
+      query, a POST body, a status that is no success and a body in chunks. One
+      source for every transport rontolisp::%http-serve has -- a socket on the
+      interpreter and the JVM, the runner's server under --native, `wasmtime serve`
+      under --component. Compile legs, like clojure/ring-hello.clj: a server does
+      not end. The requests on all four transports, beside a JDK's answers, are
+      FetchSpecE2eTest#javaHttpServer (java-http-server-spec.yaml).
+  - path: java/http/Client.java
+    backends: [interpreter, jvm]
+    note: >-
+      java.net.http's client against the application of java/http/Server.java, which
+      the program serves itself on a free local port and stops at its end: a GET, a
+      query, a POST body, a 405, a body in chunks and sendAsync. The server and the
+      client share the process, so only the targets with threads run it; the client
+      on every transport is FetchSpecE2eTest#javaHttpClient.
+    expect:
+      file: .expected/java-http-client.txt
 
   # --- clojure: the experimental Clojure front end (.clj) --------------------
   - path: clojure/demo.clj

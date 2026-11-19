@@ -52,9 +52,12 @@ Clack のレスポンスリスト `(status headers body)` を返します — Cl
   ストリーム（例: プロキシした fetch のボディ）です。**裸の文字列はエラーを
   送出します**（rontolisp の pathname はその namestring であり、Clack では
   pathname のボディが「このファイルを serve せよ」を意味するため）。関数の
-  レスポンスは Clack の delayed 形のみ対応です —
-  `(lambda (responder) ... (funcall responder (list 200 nil (list "later"))))`
-  — streaming writer 形は拒否されます。
+  レスポンスは Clack の delayed 形です —
+  `(lambda (responder) ... (funcall responder (list 200 nil (list "later"))))`。
+  responder にヘッダーまでの `(list status headers)` だけを渡すと、Clack の
+  streaming writer が返ります。writer は `(funcall writer chunk &key start end close)`
+  の形で呼びます。`wasmtime serve` のコンポーネントは、チャンクを書き込むたびに
+  送信します。それ以外のトランスポートは、関数が戻ってからボディ全体を送信します。
 
 **インタープリタ** と **JVM** バックエンドでは、`http-handler` は `port`
 （デフォルト `8080`、リクエストごとに 1 つの仮想スレッド）でブロッキングの

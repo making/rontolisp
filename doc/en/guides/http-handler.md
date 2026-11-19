@@ -73,10 +73,13 @@ The handler returns Clack's positional response list `(status headers body)`:
   signals an error** — deliberately, and faithfully to Clack, which refuses
   strings too. A pathname body means "serve this file" (lack's static-file
   middleware answers one); it is a distinct value here and is refused as
-  unsupported until the transport can serve it. A function response is supported in
-  Clack's delayed form only —
-  `(lambda (responder) ... (funcall responder (list 200 nil (list "later"))))`
-  — and the streaming-writer form is refused.
+  unsupported until the transport can serve it. A function response is Clack's
+  delayed form —
+  `(lambda (responder) ... (funcall responder (list 200 nil (list "later"))))`.
+  A responder handed the head alone, `(list status headers)`, answers Clack's
+  streaming writer, `(funcall writer chunk &key start end close)`: a
+  `wasmtime serve` component sends each chunk as it is written, every other
+  transport the whole body once the function has returned.
 
 One migration hazard is worth spelling out for handlers written against the
 pre-Clack contract: the response side fails loudly (the errors above), but

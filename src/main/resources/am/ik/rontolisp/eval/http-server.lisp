@@ -645,9 +645,46 @@
         ((rontolisp:streamp body) body)
         (t (error "http-handler: unsupported response body type"))))
 
+;;; --- Clack's streaming writer -------------------------------------------------
+;;;
+;;; A DELAYED response -- (lambda (responder) ...) -- hands the responder either a
+;;; whole response or, for a body the application writes piece by piece, the head
+;;; alone, (status headers); the responder then answers a WRITER, a function of
+;;; one chunk (a string or octets) taking :start, :end and :close, as Clack's
+;;; handlers do. Where the transport can send a head ahead of its body it hands
+;;; RESPOND, a function of the status and the header alist answering a function
+;;; of one chunk, called with nil at the body's end: a chunk is then on its way
+;;; when the writer returns. Every other transport sends a response whole, so the
+;;; chunks are kept and joined. The body ends where the application closes the
+;;; writer, or else where the delayed function returns: no transport here goes on
+;;; writing once its request was answered.
+
 (defun rontolisp::%http-writer-refused ()
-  (error
-   "http-handler: the streaming writer response protocol is not supported"))
+  (error "http-handler: a response delivered whole has no writer"))
+
+(defun rontolisp::%http-writer-part (chunk options)
+  ;; The part of CHUNK one writer call names, nil for a call with no chunk.
+  (if (null chunk)
+      nil
+      (let ((from (getf options :start)) (upto (getf options :end)))
+        (if (or from upto)
+            (subseq chunk (or from 0) (or upto (length chunk)))
+            chunk))))
+
+(defun rontolisp::%http-written-body (chunks)
+  ;; The chunks a writer kept, oldest first, as ONE body the transport writes:
+  ;; octets joined, or the strings as a body list. A body mixing the two is
+  ;; refused as a stream's is, rather than guessed at.
+  (let ((octets nil) (text nil) (total 0))
+    (dolist (chunk chunks)
+      (if (stringp chunk) (setq text t) (setq octets t))
+      (setq total (+ total (length chunk))))
+    (cond
+     ((and octets text)
+      (error
+       "http-handler: a written response body mixes string and octet chunks"))
+     (octets (rontolisp::%http-octets-join chunks total))
+     (t chunks))))
 
 (defun rontolisp::%http-normalize-response (res)
   ;; (status headers) or (status headers body) -> (status header-alist
@@ -657,21 +694,62 @@
   ;;
   ;; A FUNCTION is Clack's DELAYED response: call it with a responder that
   ;; captures the real response. That is what lack's accesslog and session
-  ;; middleware and ningle propagate whenever an inner application delayed. The
-  ;; streaming WRITER form -- where the responder must answer a writer closure
-  ;; the application then pushes chunks into -- is refused, loudly, by the
-  ;; closure the responder returns.
+  ;; middleware and ningle propagate whenever an inner application delayed. A
+  ;; responder handed the head alone answers the streaming WRITER; this entry is
+  ;; the one of a transport that sends a response whole.
+  (rontolisp::%http-normalize-streaming res nil))
+
+(defun rontolisp::%http-normalize-streaming (res respond)
+  ;; %http-normalize-response for a transport that may hand RESPOND (above). A
+  ;; response its writer sent is answered with an empty body: nothing of it is
+  ;; left for the transport to write.
   (if (functionp res)
-      (let ((captured nil))
-        (funcall res
-                 (lambda (r)
-                   (setq captured r)
-                   (lambda (&rest ignored)
-                     (declare (ignore ignored))
-                     (rontolisp::%http-writer-refused))))
-        (if (null captured)
-            (error "http-handler: a delayed response delivered no response")
-            (rontolisp::%http-normalize-response captured)))
+      (let ((captured nil) (chunks nil) (sink nil) (live nil))
+        (unwind-protect (funcall res
+                                 (lambda (r)
+                                   (if (and (null captured) (consp r)
+                                            (consp (cdr r))
+                                            (null (cdr (cdr r))))
+                                       (progn
+                                         (setq captured r)
+                                         (setq live t)
+                                         (if respond
+                                             (setq sink
+                                                   (funcall respond (car r)
+                                                            (rontolisp::%http-response-headers-alist
+                                                             (car (cdr r))))))
+                                         (lambda (chunk &rest options)
+                                           (let ((part
+                                                  (rontolisp::%http-writer-part
+                                                   chunk options)))
+                                             (if (and live part
+                                                      (> (length part) 0))
+                                                 (if sink
+                                                     (funcall sink part)
+                                                     (setq chunks
+                                                      (cons part chunks)))))
+                                           (if (and live (getf options :close))
+                                               (progn
+                                                 (setq live nil)
+                                                 (if sink (funcall sink nil))))
+                                           nil))
+                                       (progn
+                                         (setq captured r)
+                                         (lambda (&rest ignored)
+                                           (declare (ignore ignored))
+                                           (rontolisp::%http-writer-refused))))))
+          ;; a body on its way ends here, whichever way the application left
+          (if (and sink live)
+              (progn
+                (setq live nil)
+                (funcall sink nil))))
+        (cond ((null captured)
+               (error "http-handler: a delayed response delivered no response"))
+              (sink (list (car captured) nil ""))
+              (chunks (rontolisp::%http-normalize-response
+                       (list (car captured) (car (cdr captured))
+                             (rontolisp::%http-written-body (reverse chunks)))))
+              (t (rontolisp::%http-normalize-response captured))))
       (progn
         (unless (and (consp res) (integerp (car res)))
           (error
@@ -680,8 +758,15 @@
               (rontolisp::%http-response-headers-alist (car (cdr res)))
               (rontolisp::%http-body-string (car (cdr (cdr res))))))))
 
-(rontolisp:async-defun rontolisp::%http-serve-request (app raw)
+(defun rontolisp::%http-serve-request (app raw)
+  ;; The one server-side request path of a transport that sends a response
+  ;; whole: the future of the (status header-alist body) triple.
+  (rontolisp::%http-serve-responding app raw nil))
+
+(rontolisp:async-defun rontolisp::%http-serve-responding (app raw respond)
   ;; The one server-side request path -- and the ONE asynchronous frame on it.
+  ;; RESPOND is the transport's way to send a head ahead of its body, nil where
+  ;; it sends a response whole (%http-normalize-streaming).
   ;; The application's result is awaited, so a plain defun and a
   ;; rontolisp:async-defun both work as handlers (await passes a non-future
   ;; straight through); the rest of the normalization is synchronous, and only
@@ -690,7 +775,7 @@
   ;; rejects an await in any other position.
   (let* ((env (rontolisp::%http-make-env raw))
          (result (rontolisp:await (funcall app env)))
-         (triple (rontolisp::%http-normalize-response result))
+         (triple (rontolisp::%http-normalize-streaming result respond))
          (body (car (cdr (cdr triple)))))
     (if (rontolisp:streamp body)
         ;; A stream (a proxied fetch) is the ONE body this frame has to resolve:

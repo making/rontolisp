@@ -48,6 +48,19 @@ final class JavaClasses {
 	/** The one package of the module {@code java.net.http}. */
 	private static final String HTTP_MODULE = "java.net.http";
 
+	/** The module of the HTTP server, and the one package of it the library has. */
+	private static final String SERVER_MODULE = "jdk.httpserver";
+
+	private static final String SERVER_PACKAGE = "com.sun.net.httpserver";
+
+	/**
+	 * Whether a qualified name is one of a JDK's packages: a class of it that the library
+	 * does not have is refused by name, and no file of the program is looked for.
+	 */
+	private static boolean isPlatform(String name) {
+		return name.startsWith("java.") || name.startsWith("javax.") || name.startsWith(SERVER_PACKAGE + ".");
+	}
+
 	private static final String COMPARABLE = "java.lang.Comparable";
 
 	private static final String ENUM = "java.lang.Enum";
@@ -373,6 +386,9 @@ final class JavaClasses {
 				if (imported.name().equals(HTTP_MODULE)) {
 					onDemand.add(HTTP_MODULE);
 				}
+				else if (imported.name().equals(SERVER_MODULE)) {
+					onDemand.add(SERVER_PACKAGE);
+				}
 				else if (imported.name().equals("java.base")) {
 					onDemand.addAll(LIBRARY_PACKAGES);
 				}
@@ -406,8 +422,7 @@ final class JavaClasses {
 			if (imported.isStatic()) {
 				importStatic(imported, unit);
 			}
-			else if (!imported.onDemand() && !imported.module() && !imported.name().startsWith("java.")
-					&& !imported.name().startsWith("javax.")) {
+			else if (!imported.onDemand() && !imported.module() && !isPlatform(imported.name())) {
 				// a class of the program is looked for where it is imported, as a
 				// compiler
 				// does; one of the library where it is used, so that a program holds only
@@ -1333,7 +1348,7 @@ final class JavaClasses {
 		}
 		Import imported = unit.imports().get(name);
 		String qualified = imported != null ? imported.name() : name;
-		if (qualified.startsWith("java.") || qualified.startsWith("javax.")) {
+		if (isPlatform(qualified)) {
 			throw unsupported(unit.source(), pos, "the class " + qualified);
 		}
 		throw error(unit.source(), pos, "cannot find symbol: class " + name);
@@ -1387,7 +1402,7 @@ final class JavaClasses {
 	 * several files, where they are first named. The file's other classes join with it.
 	 */
 	private @Nullable JavaClass programClass(String name) {
-		if (this.entry == null || name.startsWith("java.") || name.startsWith("javax.")) {
+		if (this.entry == null || isPlatform(name)) {
 			return null;
 		}
 		JavaFiles.Source found = this.files.find(this.entry, this.root + name.replace('.', '/') + ".java");

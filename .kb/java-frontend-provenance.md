@@ -278,6 +278,13 @@ algorithm came from, and the answer goes in the file's header.
   references through `URI`'s getters, the redirects of a client against a local server).
   Nobody opened OpenJDK's source; the probes' answers are the expectations of
   `java-http-spec.yaml`, which the JDK leg asks again.
+- **The HTTP server (k04, 2026-11-19).** `com.sun.net.httpserver` and the address
+  classes of `java.net` were written from the API documentation and JDK 25's answers to
+  probes (three probe servers asked by curl: the contexts a path finds, an exchange's
+  refusals and their words, `Headers`' names and its CR / LF checks, `InetSocketAddress`'
+  texts and hash codes, what a client sees of a handler that throws). Nobody opened
+  OpenJDK's source; the answers are the expectations of `java-http-server-spec.yaml`,
+  which the JDK leg asks again.
 - **Notices (j93, 2026-11-18): kept with notices.** What the audit filed under "Add notices"
   and "To confirm" stays, under its licence:
   - Root `NOTICE` (rontolisp, and Maven's and Maven Resolver's Apache NOTICE lines) and

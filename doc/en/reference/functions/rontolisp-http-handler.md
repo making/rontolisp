@@ -47,9 +47,12 @@ as is (see [Clack Web Applications](../../guides/clack.md)):
   vector, or a rontolisp stream (e.g. a proxied fetch body) drained by the
   server; a **bare string signals an error** (a rontolisp pathname is its
   namestring, and in Clack a pathname body means "serve this file"). A
-  function response is supported in Clack's delayed form only —
-  `(lambda (responder) ... (funcall responder (list 200 nil (list "later"))))`
-  — and the streaming-writer form is refused.
+  function response is Clack's delayed form —
+  `(lambda (responder) ... (funcall responder (list 200 nil (list "later"))))`.
+  A responder handed the head alone, `(list status headers)`, answers Clack's
+  streaming writer, `(funcall writer chunk &key start end close)`: a
+  `wasmtime serve` component sends each chunk as it is written, every other
+  transport the whole body once the function has returned.
 
 On the **interpreter** and **JVM** backends `http-handler` starts a blocking
 embedded HTTP server on `port` (default `8080`, one virtual thread per request)

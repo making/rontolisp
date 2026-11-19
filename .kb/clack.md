@@ -113,6 +113,16 @@ the Clojure front end's `ring.adapter.rontolisp/run-server` (`.kb/clojure-fronte
   `rontolisp::%http-serve-current` (was `clack.handler.rontolisp::%app` / `*app*`). `join`
   nil on the socket leg answers the handle without the join/unwind (Ring's `:join? false`).
 - `resource-config.json` carries the file (`NativeImageResourceConfigTest`).
+- **A second pair of entry points, for an adapter whose program goes on and ends when its
+  server stopped** (the Java subset's `com.sun.net.httpserver`, 2026-11-19):
+  `%http-serve-begin app port address` binds and answers the server at once on EVERY leg,
+  `%http-serve-run server` answers once it stopped, `%http-serve-port server` the bound
+  port or nil. On the socket legs they are the seam's start, join and port; on
+  `--native` begin is the runner's `serve` (it accepts and queues from then on) and RUN IS
+  THE SERVING LOOP, ended by `%http-serve-stop`'s flag; under a host begin is the serve
+  that returns and run is nothing. `%http-serve` keeps its meaning on every leg (Ring's
+  `:join? false` on `--native` still never returns). `HttpServeLibrary.isServeFunction`
+  names all five.
 
 Why a reader feature and not a front-end rewrite: the shim already branches per target,
 builtin-shim sources are read with the target's features (`ShimLibraries.forms`), and the

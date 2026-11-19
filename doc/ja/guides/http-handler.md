@@ -76,9 +76,12 @@ Clack アプリケーション（lack-request、http-body）が必要とする�
   **裸の文字列はエラーを送出します** — これは意図的で、文字列を拒否する
   Clack に忠実な挙動です。pathname のボディは「このファイルを serve せよ」を
   意味し (lack の静的ファイルミドルウェアが返します)、ここでは独立した値
-  なので、トランスポートが配信できるようになるまで未対応として拒否されます。関数のレスポンスは Clack の delayed 形のみ対応です —
-  `(lambda (responder) ... (funcall responder (list 200 nil (list "later"))))`
-  — streaming writer 形は拒否されます。
+  なので、トランスポートが配信できるようになるまで未対応として拒否されます。関数のレスポンスは Clack の delayed 形です —
+  `(lambda (responder) ... (funcall responder (list 200 nil (list "later"))))`。
+  responder にヘッダーまでの `(list status headers)` だけを渡すと、Clack の
+  streaming writer が返ります。writer は `(funcall writer chunk &key start end close)`
+  の形で呼びます。`wasmtime serve` のコンポーネントは、チャンクを書き込むたびに
+  送信します。それ以外のトランスポートは、関数が戻ってからボディ全体を送信します。
 
 Clack 以前の契約で書かれたハンドラの移行では、次の落とし穴に注意して
 ください: レスポンス側は（上記のエラーで）大きな音を立てて失敗しますが、

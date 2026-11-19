@@ -68,6 +68,9 @@ final class JavaIntrinsics {
 	/** The source class holding the members of these classes that are written in Java. */
 	private static final String SUPPORT = "rontolisp.internal.Support";
 
+	/** The server of {@code com.sun.net.httpserver}, Java source over the transport. */
+	static final String SERVING = "rontolisp.internal.HttpServing";
+
 	private static final String PATTERN = "java.util.regex.Pattern";
 
 	static final String CHARSET = "java.nio.charset.Charset";
@@ -1679,6 +1682,53 @@ final class JavaIntrinsics {
 		natives.put(http + "status0(Object)", (lowering, call) -> call("aref", call.argument(0), integer(0)));
 		natives.put(http + "fields0(Object)", (lowering, call) -> call("aref", call.argument(0), integer(1)));
 		natives.put(http + "octets0(Object)", (lowering, call) -> call("aref", call.argument(0), integer(2)));
+		// com.sun.net.httpserver over the transport every adapter serves through
+		// (http-serve.lisp), which the program itself calls: the passes that splice a
+		// transport's leg read a program that serves. The application is a function of
+		// Clack's environment answering Clack's delayed response, a function of the
+		// transport's responder; each request runs HttpServing.answer
+		String serving = SERVING + ".";
+		natives.put(serving + "open0(Object,int,String)", (lowering, call) -> {
+			LispSymbol server = lowering.temporary();
+			LispSymbol env = lowering.temporary();
+			LispSymbol responder = lowering.temporary();
+			LispSymbol condition = lowering.temporary();
+			LispVal answer = list(cl("lambda"), JavaForms.NIL,
+					lowering.library(SERVING, "answer", List.of(server, env, responder)));
+			LispVal application = list(cl("lambda"), list(env), list(cl("lambda"), list(responder),
+					runtimeCall("http-request", lowering.library(SERVING, "serial", List.of(server)), answer)));
+			return JavaForms.let(server, call.argument(0),
+					List.of(list(cl("handler-case"),
+							list(new LispSymbol("RONTOLISP::%HTTP-SERVE-BEGIN"), application, call.argument(1),
+									call.argument(2)),
+							list(cl("error"), list(condition), call("princ-to-string", condition)))));
+		});
+		natives.put(serving + "failed0(Object)", host("stringp"));
+		natives.put(serving + "text0(Object)", (lowering, call) -> call.argument(0));
+		natives.put(serving + "port0(Object)", (lowering, call) -> call("or",
+				list(new LispSymbol("RONTOLISP::%HTTP-SERVE-PORT"), call.argument(0)), integer(0)));
+		natives.put(serving + "close0(Object)",
+				(lowering, call) -> list(new LispSymbol("RONTOLISP::%HTTP-SERVE-STOP"), call.argument(0)));
+		// the thread the program started on waits for the stop where the host's threads
+		// serve, then for the transport to have stopped; where the target has one
+		// thread the second is the serving itself
+		natives.put(serving + "run0(Object)", (lowering, call) -> call("progn", runtimeCall("http-wait"),
+				list(new LispSymbol("RONTOLISP::%HTTP-SERVE-RUN"), call.argument(0))));
+		natives.put(serving + "shared0()", runtime("http-shared"));
+		natives.put(serving + "gate0()", runtime("http-gate"));
+		natives.put(serving + "turn0(Object,boolean)", (lowering, call) -> runtimeCall("http-turn", call.argument(0),
+				call("if", call.argument(1), new LispSymbol(":STARTED"), new LispSymbol(":STOPPED"))));
+		natives.put(serving + "admitted0(Object)", runtime("http-admitted"));
+		natives.put(serving + "method0(Object)", runtime("http-method"));
+		natives.put(serving + "target0(Object)", runtime("http-target"));
+		natives.put(serving + "protocol0(Object)", runtime("http-protocol"));
+		natives.put(serving + "fields0(Object)", runtime("http-request-fields"));
+		natives.put(serving + "body0(Object)", runtime("http-request-body"));
+		natives.put(serving + "end0(Object,boolean)", runtime("http-end"));
+		natives.put(serving + "respond0(Object,int,String[],byte[])", runtime("http-respond"));
+		natives.put(serving + "stream0(Object,int,String[])", runtime("http-stream"));
+		natives.put(serving + "write0(Object,byte[])", runtime("http-write"));
+		natives.put(serving + "finish0(Object)", runtime("http-finish"));
 		// java.net.URI over the rules the front ends share (eval/uri.lisp)
 		String uri = "java.net.URI.";
 		natives.put(uri + "refusal0(String)", shared("refusal"));

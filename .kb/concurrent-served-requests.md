@@ -79,6 +79,13 @@ bugs, and each looks like someone else's fault.
 - `Environment.NameMap` promotes a scope outgrowing its 8-entry linear arrays to a
   `ConcurrentHashMap` (the global environment always is one); `LispEvaluator.specialVars` likewise.
 
+- Java subset handlers (`.kb/java-frontend.md`, "com.sun.net.httpserver", 2026-11-19): a
+  request thread is no thread the Java run time started, so `%java-http-request` binds
+  `%java-carrier` per request (else every request IS the thread the program started on),
+  `bind` turns the run time's own tables guarded (`%java-shared`), a served program holds
+  monitors with no `Thread` in it, and a server with no executor runs its handlers under
+  one mutex.
+
 ## Tests
 - `LispEvaluatorTest#concurrentFirstCallsOfALazyLoadedLibraryAllResolve` (5 rounds x 16 threads,
   FRESH evaluator per round -- round 1 alone never reproduces it).

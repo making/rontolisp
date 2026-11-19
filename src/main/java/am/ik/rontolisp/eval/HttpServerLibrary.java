@@ -61,6 +61,13 @@ public final class HttpServerLibrary {
 	public static final String SERVE_REQUEST = "%HTTP-SERVE-REQUEST";
 
 	/**
+	 * The request path of a transport that can send a response's head ahead of its body:
+	 * {@link #SERVE_REQUEST} with the transport's responder (the WASI component's
+	 * {@code %serve-handle} calls this one).
+	 */
+	public static final String SERVE_RESPONDING = "%HTTP-SERVE-RESPONDING";
+
+	/**
 	 * The environment builder -- the shape declaration, called by the tests and ci-spec.
 	 */
 	public static final String MAKE_ENV = "%HTTP-MAKE-ENV";
@@ -81,9 +88,9 @@ public final class HttpServerLibrary {
 
 	// A reference to any of these (or to the http-handler directive / the stoppable
 	// server seam) means the program serves, so the library has to be present.
-	private static final Set<String> ENTRY_POINTS = Set.of(SERVE_REQUEST, MAKE_ENV, NORMALIZE_RESPONSE,
-			"%HTTP-PERCENT-DECODE", "%HTTP-HEADERS-TABLE", "%HTTP-BODY-STREAM", "%HTTP-DRAIN",
-			"%HTTP-RESPONSE-HEADERS-ALIST", "%HTTP-BODY-STRING");
+	private static final Set<String> ENTRY_POINTS = Set.of(SERVE_REQUEST, SERVE_RESPONDING, MAKE_ENV,
+			NORMALIZE_RESPONSE, "%HTTP-NORMALIZE-STREAMING", "%HTTP-PERCENT-DECODE", "%HTTP-HEADERS-TABLE",
+			"%HTTP-BODY-STREAM", "%HTTP-DRAIN", "%HTTP-RESPONSE-HEADERS-ALIST", "%HTTP-BODY-STRING");
 
 	@Nullable private static volatile List<LispVal> forms;
 

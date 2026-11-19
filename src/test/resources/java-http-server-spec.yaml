@@ -1,0 +1,465 @@
+# The corpus of the experimental Java subset's HTTP server, com.sun.net.httpserver
+# (FetchSpecE2eTest#javaHttpServer): each program is a Java file started under the JDK
+# running the test and on every transport a served application has -- the interpreter,
+# the JVM, a --native output and a --component under `wasmtime serve` -- and asked the
+# same requests in turn. @PORT@ stands for the port a leg binds (0 where the program
+# can tell the one it got), @ORIGIN@ for the test's local origin and @LEG@ for the
+# leg's name. Written here; nothing is copied or translated from a JDK or its tests
+# (.kb/java-frontend-provenance.md).
+#
+# A request's `expected` is what a JDK 25 answers -- the status, the fields `show`
+# names, the body -- and the JDK leg checks that it still is. `deviates` holds, by leg,
+# what a leg answers instead (each a difference doc/*/java/deviations.md states), and
+# `skip` the legs a request is not sent on, with the reason; `unanswered` is how many
+# seconds the JDK leg waits for an answer a JDK never gives. `log` is what the program
+# prints on lines starting "| ", in order: not read on the component leg, where the
+# host starts the program as often as it likes.
+programs:
+  - name: server
+    file: Server.java
+    source: |
+      import com.sun.net.httpserver.Headers;
+      import com.sun.net.httpserver.HttpContext;
+      import com.sun.net.httpserver.HttpExchange;
+      import com.sun.net.httpserver.HttpHandler;
+      import com.sun.net.httpserver.HttpServer;
+      import java.io.IOException;
+      import java.io.InputStream;
+      import java.io.OutputStream;
+      import java.net.InetSocketAddress;
+      import java.net.URI;
+      import java.net.http.HttpClient;
+      import java.net.http.HttpRequest;
+      import java.net.http.HttpResponse;
+      import java.nio.charset.StandardCharsets;
+      import java.util.concurrent.Executors;
+
+      public class Server {
+
+          static final String ORIGIN = "@ORIGIN@";
+
+          static final Object LOCK = new Object();
+
+          static int count;
+
+          static final Thread MAIN = Thread.currentThread();
+
+          interface Attempt {
+              Object run() throws Exception;
+          }
+
+          static String attempt(Attempt attempt) {
+              try {
+                  return String.valueOf(attempt.run());
+              }
+              catch (Exception e) {
+                  return e.toString();
+              }
+          }
+
+          static void log(String what, Attempt attempt) {
+              System.out.println("| " + what + ": " + attempt(attempt));
+          }
+
+          static void text(HttpExchange exchange, int status, String text) throws IOException {
+              byte[] body = text.getBytes(StandardCharsets.UTF_8);
+              exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
+              exchange.sendResponseHeaders(status, body.length);
+              try (OutputStream out = exchange.getResponseBody()) {
+                  out.write(body);
+              }
+          }
+
+          static void where(HttpExchange exchange) throws IOException {
+              text(exchange, 200, "context " + exchange.getHttpContext().getPath() + " uri " + exchange.getRequestURI());
+          }
+
+          static void request(HttpExchange exchange) throws IOException {
+              URI uri = exchange.getRequestURI();
+              Headers asked = exchange.getRequestHeaders();
+              StringBuilder seen = new StringBuilder();
+              seen.append("method ").append(exchange.getRequestMethod()).append('\n');
+              seen.append("uri ").append(uri).append('\n');
+              seen.append("path ").append(uri.getPath()).append(" raw ").append(uri.getRawPath()).append('\n');
+              seen.append("query ").append(uri.getQuery()).append(" raw ").append(uri.getRawQuery()).append('\n');
+              seen.append("protocol ").append(exchange.getProtocol()).append('\n');
+              seen.append("code ").append(exchange.getResponseCode()).append('\n');
+              seen.append("length ").append(attempt(() -> {
+                  exchange.sendResponseHeaders(200, -2);
+                  return "sent";
+              })).append('\n');
+              seen.append("field ").append(asked.get("x-probe")).append(' ').append(asked.getFirst("X-PROBE")).append(' ')
+                  .append(asked.containsKey("x-Probe")).append(' ').append(asked.containsKey("X-probe")).append('\n');
+              seen.append("no field ").append(asked.get("nope")).append(' ').append(asked.getFirst("nope")).append('\n');
+              seen.append("type ").append(asked.getFirst("content-type")).append('\n');
+              seen.append("fixed ").append(attempt(() -> {
+                  asked.add("x-new", "1");
+                  return "added";
+              })).append('\n');
+              InputStream in = exchange.getRequestBody();
+              int first = in.read();
+              byte[] rest = in.readAllBytes();
+              seen.append("body ").append(first).append(' ').append(new String(rest, StandardCharsets.UTF_8)).append(' ')
+                  .append(in.read()).append(' ').append(in.available()).append('\n');
+              Headers answered = exchange.getResponseHeaders();
+              answered.add("x-multi", "one");
+              answered.add("X-Multi", "two");
+              answered.set("x-single", "old");
+              answered.set("X-SINGLE", "new");
+              seen.append("answered ").append(answered.get("X-MULTI")).append(' ').append(answered.getFirst("x-single"))
+                  .append(' ').append(answered.containsKey("X-multi")).append('\n');
+              text(exchange, 201, seen.toString());
+              log("code after the head", () -> exchange.getResponseCode());
+              log("a head sent twice", () -> {
+                  exchange.sendResponseHeaders(200, -1);
+                  return "sent";
+              });
+              log("a write after the close", () -> {
+                  exchange.getResponseBody().write(1);
+                  return "written";
+              });
+          }
+
+          static void echo(HttpExchange exchange) throws IOException {
+              byte[] body = exchange.getRequestBody().readAllBytes();
+              exchange.getResponseHeaders().add("Content-Type", "application/octet-stream");
+              exchange.sendResponseHeaders(200, body.length == 0 ? -1 : body.length);
+              OutputStream out = exchange.getResponseBody();
+              if (body.length > 0) {
+                  log("too many octets", () -> {
+                      out.write(new byte[body.length + 1]);
+                      return "written";
+                  });
+                  out.write(body, 0, 1);
+                  out.write(body, 1, body.length - 1);
+              }
+              else {
+                  log("an octet of no body", () -> {
+                      out.write(1);
+                      return "written";
+                  });
+              }
+              exchange.close();
+              log("the request body after the close", () -> exchange.getRequestBody().read());
+          }
+
+          static void chunked(HttpExchange exchange) throws IOException {
+              String early = attempt(() -> {
+                  exchange.getResponseBody().write('?');
+                  return "written";
+              });
+              exchange.getResponseHeaders().add("X-Early", early);
+              exchange.sendResponseHeaders(200, 0);
+              OutputStream out = exchange.getResponseBody();
+              out.write("first-".getBytes(StandardCharsets.UTF_8));
+              out.flush();
+              out.write('s');
+              out.write("xecondx".getBytes(StandardCharsets.UTF_8), 1, 5);
+              out.close();
+              out.close();
+          }
+
+          static void stream(HttpExchange exchange) throws IOException {
+              exchange.sendResponseHeaders(200, 0);
+              OutputStream out = exchange.getResponseBody();
+              out.write("first|".getBytes(StandardCharsets.UTF_8));
+              out.flush();
+              String told = attempt(() -> HttpClient.newHttpClient()
+                  .send(HttpRequest.newBuilder(URI.create(ORIGIN + "/seen?stream-@LEG@")).build(),
+                          HttpResponse.BodyHandlers.ofString())
+                  .body());
+              out.write(told.getBytes(StandardCharsets.UTF_8));
+              out.close();
+          }
+
+          static void count(HttpExchange exchange) throws IOException {
+              for (int i = 0; i < 2000; i++) {
+                  synchronized (LOCK) {
+                      int now = count;
+                      count = now + 1;
+                  }
+              }
+              text(exchange, 200, "counted");
+          }
+
+          public static void main(String[] args) throws IOException {
+              HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", @PORT@), 0);
+              log("no executor", () -> server.getExecutor());
+              log("a path with no slash", () -> server.createContext("hello", Server::where));
+              log("no path", () -> server.createContext(null, Server::where));
+              log("no handler", () -> server.createContext("/none", null));
+              HttpContext hello = server.createContext("/hello", exchange -> text(exchange, 200, "hello"));
+              log("a context", () -> hello.getPath() + " " + (hello.getServer() == server) + " " + hello.getAttributes()
+                      + " " + (hello.getHandler() != null));
+              log("a path twice", () -> server.createContext("/hello", Server::where));
+              log("a context that is not there", () -> {
+                  server.removeContext("/gone");
+                  return "removed";
+              });
+              server.createContext("/gone", Server::where);
+              server.removeContext("/gone");
+              server.createContext("/a", Server::where);
+              server.createContext("/a/b", Server::where);
+              server.createContext("/unhandled");
+              server.createContext("/request", Server::request);
+              server.createContext("/echo", Server::echo);
+              server.createContext("/nothing", exchange -> {
+                  exchange.getResponseHeaders().add("X-Nothing", "here");
+                  exchange.sendResponseHeaders(204, -1);
+                  exchange.close();
+              });
+              server.createContext("/chunked", Server::chunked);
+              server.createContext("/stream", Server::stream);
+              server.createContext("/count", Server::count);
+              server.createContext("/counted", exchange -> text(exchange, 200, "count " + count));
+              server.createContext("/thread", exchange -> text(exchange, 200,
+                  "the thread main ran on " + (Thread.currentThread() == MAIN)));
+          server.createContext("/peer", exchange -> text(exchange, 200,
+                      exchange.getRemoteAddress().getAddress().getHostAddress() + " "
+                              + (exchange.getRemoteAddress().getPort() > 0) + " "
+                              + exchange.getLocalAddress().getAddress().getHostAddress() + " "
+                              + (exchange.getLocalAddress().getPort() == server.getAddress().getPort())));
+              server.createContext("/short", exchange -> {
+                  exchange.sendResponseHeaders(200, 5);
+                  OutputStream out = exchange.getResponseBody();
+                  out.write('a');
+                  log("a body cut short", () -> {
+                      out.close();
+                      return "closed";
+                  });
+              });
+              server.createContext("/throws", exchange -> {
+                  throw new IllegalStateException("no answer");
+              });
+              server.createContext("/silent", exchange -> {
+              });
+              server.createContext("/stop", exchange -> {
+                  text(exchange, 200, "bye");
+                  server.stop(0);
+              });
+              log("a negative delay", () -> {
+                  server.stop(-1);
+                  return "stopped";
+              });
+              server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+              log("an executor", () -> server.getExecutor() != null);
+              server.start();
+              log("started twice", () -> {
+                  server.start();
+                  return "started";
+              });
+              log("an executor once started", () -> {
+                  server.setExecutor(null);
+                  return "set";
+              });
+              log("bound twice", () -> {
+                  server.bind(new InetSocketAddress("127.0.0.1", 0), 0);
+                  return "bound";
+              });
+              log("the address", () -> server.getAddress().getHostString() + " " + (server.getAddress().getPort() > 0));
+              System.out.println("listening " + server.getAddress().getPort());
+          }
+      }
+    log: |
+      | no executor: null
+      | a path with no slash: java.lang.IllegalArgumentException: Illegal value for path or protocol
+      | no path: java.lang.NullPointerException: null handler, or path parameter
+      | no handler: java.lang.NullPointerException: null handler, or path parameter
+      | a context: /hello true {} true
+      | a path twice: java.lang.IllegalArgumentException: cannot add context to list
+      | a context that is not there: java.lang.IllegalArgumentException: cannot remove element from list
+      | a negative delay: java.lang.IllegalArgumentException: negative delay parameter
+      | an executor: true
+      | started twice: java.lang.IllegalStateException: server in wrong state
+      | an executor once started: java.lang.IllegalStateException: server already started
+      | bound twice: java.net.BindException: HttpServer already bound
+      | the address: 127.0.0.1 true
+      | code after the head: 201
+      | a head sent twice: java.io.IOException: headers already sent
+      | a write after the close: java.io.IOException: stream closed
+      | too many octets: java.io.IOException: too many bytes to write to stream
+      | the request body after the close: java.io.IOException: Stream is closed
+      | an octet of no body: java.io.IOException: stream closed
+      | the request body after the close: java.io.IOException: Stream is closed
+      | a body cut short: java.io.IOException: insufficient bytes written to stream
+    requests:
+      - name: a-body-of-a-length-told
+        request: GET /hello
+        show: [content-type]
+        expected: |
+          200
+          content-type: text/plain; charset=utf-8
+          hello
+      - name: the-longest-context-a-path-starts-with
+        request: GET /a/b/c?q=1
+        expected: |
+          200
+          context /a/b uri /a/b/c?q=1
+      - name: a-context-is-a-prefix-of-the-path-not-a-segment
+        request: GET /ab
+        expected: |
+          200
+          context /a uri /ab
+      - name: a-context-is-found-by-the-decoded-path
+        request: GET /a%2Fb
+        expected: |
+          200
+          context /a/b uri /a%2Fb
+      - name: a-path-of-no-context
+        request: GET /nowhere
+        show: [content-type]
+        expected: |
+          404
+          content-type: text/html
+          <h1>404 Not Found</h1>No context found for request
+      - name: a-context-removed
+        request: GET /gone
+        expected: |
+          404
+          <h1>404 Not Found</h1>No context found for request
+      - name: a-context-with-no-handler
+        request: GET /unhandled
+        expected: |
+          500
+          <h1>500 Internal Server Error</h1>No handler for context
+      - name: the-request-as-a-handler-reads-it-and-fields-both-ways
+        request: POST /request/x%20y?q=a%20b&r=%C3%A9
+        headers: {X-Probe: p1, Content-Type: text/plain}
+        body: "héllo"
+        show: [x-multi, x-single, content-type]
+        expected: |
+          201
+          x-multi: one
+          x-multi: two
+          x-single: new
+          content-type: text/plain; charset=utf-8
+          method POST
+          uri /request/x%20y?q=a%20b&r=%C3%A9
+          path /request/x y raw /request/x%20y
+          query q=a b&r=é raw q=a%20b&r=%C3%A9
+          protocol HTTP/1.1
+          code -1
+          length java.lang.IllegalArgumentException: Content-Length: -2
+          field [p1] p1 true true
+          no field null null
+          type text/plain
+          fixed java.lang.UnsupportedOperationException: unsupported operation
+          body 104 éllo -1 0
+          answered [one, two] new true
+      - name: octets-both-ways
+        request: POST /echo
+        hex: fffe4100807f
+        show: [content-type]
+        expected: |
+          200
+          content-type: application/octet-stream
+          fffe4100807f
+      - name: no-body-either-way
+        request: GET /echo
+        expected: |
+          200
+      - name: a-status-with-no-body
+        request: GET /nothing
+        show: [x-nothing]
+        expected: |
+          204
+          x-nothing: here
+      - name: a-body-in-chunks
+        request: GET /chunked
+        show: [x-early]
+        expected: |
+          200
+          x-early: java.io.IOException: response headers not sent yet
+          first-second
+      - name: a-head-request
+        request: HEAD /hello
+        show: [content-type]
+        expected: |
+          200
+          content-type: text/plain; charset=utf-8
+      - name: a-handler-runs-on-a-thread-of-its-own
+        request: GET /thread
+        expected: |
+          200
+          the thread main ran on false
+        deviates:
+          native: |
+            200
+            the thread main ran on true
+          component: |
+            200
+            the thread main ran on true
+      - name: the-two-ends-of-the-connection
+        request: GET /peer
+        skip:
+          component: wasi:http tells a handler neither the peer nor the port it is served on
+        expected: |
+          200
+          127.0.0.1 true 127.0.0.1 true
+      # /stream writes "first|", then asks the origin whether the test has read it yet
+      # and writes the answer: "seen" only where a chunk is on its way when its write
+      # returns. The origin waits for the test's reader, briefly on a leg said to
+      # deviate.
+      - name: a-chunk-is-on-its-way-when-its-write-returns
+        request: GET /stream
+        first: "first|"
+        expected: |
+          200
+          first|seen
+        deviates:
+          interpreter: |
+            200
+            first|unseen
+          jvm: |
+            200
+            first|unseen
+          native: |
+            200
+            first|unseen
+      - name: handlers-at-once-under-an-executor
+        request: GET /count
+        times: 16
+        expected: |
+          200
+          counted
+      - name: what-the-handlers-counted-under-one-lock
+        request: GET /counted
+        skip:
+          component: the host starts an instance for the requests it likes, and each counts its own
+        expected: |
+          200
+          count 32000
+      - name: a-body-cut-short
+        request: POST /short
+        unanswered: 3
+        expected: |
+          (no response)
+        deviates:
+          interpreter: "500"
+          jvm: "500"
+          native: "500"
+          component: "500"
+      - name: a-handler-that-throws
+        request: POST /throws
+        expected: |
+          (no response)
+        deviates:
+          interpreter: "500"
+          jvm: "500"
+          native: "500"
+          component: "500"
+      - name: a-handler-that-answers-nothing
+        request: POST /silent
+        unanswered: 3
+        expected: |
+          (no response)
+        deviates:
+          interpreter: "500"
+          jvm: "500"
+          native: "500"
+          component: "500"
+      - name: a-stop-by-a-handler-answers-the-request-in-hand
+        request: GET /stop
+        expected: |
+          200
+          bye

@@ -215,10 +215,13 @@ public final class RontoHttpServer {
 	// HANDLES (the socket/mutex handle convention -- nothing portable may print or
 	// compare one), so the interpreter and the JVM backend share one representation
 	// (a boxed integer).
-	private record StoppableServer(HttpServer server, CountDownLatch stopped) {
+	private record StoppableServer(HttpServer server, CountDownLatch stopped, AtomicBoolean stopping) {
 	}
 
 	private static final Map<Long, StoppableServer> HANDLES = new ConcurrentHashMap<>();
+
+	/** Set on a thread while it runs a handler of a stoppable server. */
+	private static final ThreadLocal<Boolean> IN_HANDLER = new ThreadLocal<>();
 
 	private static final AtomicLong NEXT_HANDLE = new AtomicLong(1);
 
@@ -274,12 +277,20 @@ public final class RontoHttpServer {
 			throw new ServerException(WHERE + ": failed to bind "
 					+ (bindAddress == null ? "port " + port : bindAddress + ":" + port) + ": " + ex.getMessage());
 		}
-		server.createContext("/", exchange -> dispatch(exchange, handler));
+		server.createContext("/", exchange -> {
+			IN_HANDLER.set(Boolean.TRUE);
+			try {
+				dispatch(exchange, handler);
+			}
+			finally {
+				IN_HANDLER.remove();
+			}
+		});
 		server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
 		server.start();
 		registerServer(server);
 		long handle = NEXT_HANDLE.getAndIncrement();
-		HANDLES.put(handle, new StoppableServer(server, new CountDownLatch(1)));
+		HANDLES.put(handle, new StoppableServer(server, new CountDownLatch(1), new AtomicBoolean()));
 		return handle;
 	}
 
@@ -318,16 +329,33 @@ public final class RontoHttpServer {
 	/**
 	 * Stops the given server and releases its joiners. Idempotent: an unknown or
 	 * already-stopped handle is a no-op, so the acceptor's {@code unwind-protect}-cleanup
-	 * stop and an explicit {@code clack:stop} cannot double-fault.
+	 * stop and an explicit {@code clack:stop} cannot double-fault. Called by a handler of
+	 * that server, it returns at once and the server stops once the requests in hand are
+	 * answered -- the caller's own among them.
 	 * @param handle a handle returned by {@link #startServer}
 	 */
 	public static void stopServer(long handle) {
-		StoppableServer stoppable = HANDLES.remove(handle);
-		if (stoppable == null) {
+		StoppableServer stoppable = HANDLES.get(handle);
+		if (stoppable == null || !stoppable.stopping().compareAndSet(false, true)) {
 			return;
 		}
-		stoppable.server().stop(0);
+		if (IN_HANDLER.get() == null) {
+			finishStop(handle, stoppable, 0);
+			return;
+		}
+		// Called by a handler: its own request is in hand, and the response is written
+		// once the handler has returned, so a stop on this thread would close the
+		// connection under it. The listener closes on a thread of its own, which waits
+		// for the requests in hand (bounded by the shutdown grace) before the
+		// connections go; the handle stays joinable until then.
+		final int grace = Math.max(1, shutdownGraceSeconds());
+		Thread.ofPlatform().daemon().name("rontolisp-http-stop").start(() -> finishStop(handle, stoppable, grace));
+	}
+
+	private static void finishStop(long handle, StoppableServer stoppable, int delay) {
+		stoppable.server().stop(delay);
 		SERVERS.remove(stoppable.server());
+		HANDLES.remove(handle);
 		stoppable.stopped().countDown();
 	}
 

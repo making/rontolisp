@@ -84,9 +84,10 @@ Hello, Clack! GET /hello
 rontolisp のストリーム・`nil` のいずれかで、2 要素の `(status headers)` 形も
 有効です。裸の文字列は明確なエラーを送出します。Clack 自身も
 文字列を拒否します。pathname のボディ (lack のファイル配信形) はここでは独立した
-値であり、トランスポートが配信できるようになるまでこちらも拒否されます。関数のボディは Clack の delayed レスポンス形
-(responder が最終的なレスポンスリストで呼ばれる形) に対応し、streaming
-writer 形はエラーを送出します。
+値であり、トランスポートが配信できるようになるまでこちらも拒否されます。関数のボディは Clack の delayed レスポンスです。
+responder は、最終的なレスポンスリストで呼ぶか、ヘッダーまでのリストで呼んで streaming
+writer を受け取ります。`wasmtime serve` のコンポーネントは、チャンクを書き込むたびに
+送信します。それ以外のトランスポートは、関数が戻ってからボディ全体を送信します。
 
 ## 1 つのハンドラからルートの集合へ
 
@@ -593,8 +594,8 @@ UTF-8 としてデコードし、しかも検証しません)、*渡ること自
 - `:swank-port` はインタプリタでは [SWANK サーバ](../getting-started/swank.md#from-a-running-program)
   を起動し、実行中のアプリケーションに SLIME から接続できます。コンパイルしたプログラムには
   提供するインタプリタがないので、エラーを送出します。
-- streaming writer 形のレスポンスと裸の文字列／pathname のボディは上記の
-  とおりエラーを送出します (delayed 形の関数レスポンスは動作します)。
+- 裸の文字列／pathname のボディは上記のとおりエラーを送出します (delayed 形の
+  関数レスポンスと streaming writer は動作します)。
 
 関連: 土台となるサーバは [HTTP を Serve する (http-handler)](http-handler.md)、
 バックエンドごとの実行コマンド付きデモは

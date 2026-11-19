@@ -185,12 +185,55 @@ decides at RUN time, via `%http-reactor-register app [:buffered]` (`.kb/clack.md
   when they are strings; a mixed stream is refused. Join is `%http-octets-join`. A NIL
   element contributes the empty string. **A BARE STRING SIGNALS.** A PATHNAME body
   (`lack/app/file`) is refused by the unsupported-type arm.
-- A FUNCTION response is Clack's DELAYED form only; the streaming WRITER protocol is refused.
+- A FUNCTION response is Clack's DELAYED form: the responder takes the whole response, or
+  the head alone and answers the streaming WRITER ("Clack's streaming writer" below).
 - Migration hazard: the response side fails loudly, the request side SILENTLY —
   `(getf env :method)` just returns nil in a half-migrated handler.
 - Tests: ci-spec `http-response-normalizer`; round trips by `HttpHandlerTest`/
   `HttpHandlerJvmTest`/`WasmLispCompilerIntegrationTest`/`ClackE2eTest`/
   `LackEcosystemE2eTest`/`LackEcosystemWasmE2eTest`.
+
+## Clack's streaming writer (2026-11-19, k04)
+**A responder handed `(status headers)` answers a writer `(chunk &key start end close)`;
+the transport that can sends each chunk as it is written, every other keeps the chunks and
+sends the response whole.** Until then the writer was refused by name on every transport.
+- ONE implementation, `%http-normalize-streaming res respond` (`%http-normalize-response`
+  is it with no `respond`, still the unary defun the JVM glue calls); the interpreter's
+  mirror is `normalizeClackResponse` / `writeClackChunk`. RESPOND is the transport's
+  function of the status and the header alist answering a function of one chunk, called
+  with nil at the end. The body ends at `:close t`, else where the delayed function
+  returns or unwinds (`unwind-protect`): no transport here writes after its request was
+  answered, so a writer kept for later (SSE from another thread) is not served.
+- Chunks are strings or octets; a kept body mixing the two is refused, as a stream's is
+  (the octet join needs no encoder, which a default-mode program does not carry).
+- **The component streams** (`http.lisp` `%serve-respond`, through
+  `%http-serve-responding app raw respond`; `%http-serve-request` is it with nil): the
+  head is delivered by `task.return` from INSIDE the handler, each chunk is the blocking
+  `stream.write` (returns once the host took the bytes), nil drops the writable end and
+  writes the trailers. `%serve-handle` then has nothing to deliver (`sent`), and an
+  application failing after its head is caught there, its body already ended. Measured
+  2026-11-19, wasmtime 49: a handler that wrote a chunk and then asked an origin whether
+  the client had read it was told yes (`java-http-server-spec.yaml` `/stream`); the
+  interpreter, the JVM and `--native` answer no. `.todo/k11`: the JDK transports could
+  stream too (the handler's thread writing the exchange).
+- `HttpServerLibrary.ENTRY_POINTS` names both new entry points: a harness splicing
+  `http.lisp` first (`WasmLispCompilerIntegrationTest#compileServeComponent`) finds the
+  library by `%http-serve-responding`.
+- **Trap, measured**: a local named `write` and one named `open` in these defuns made
+  every served JVM program carry `RontoComplex.class`
+  (`JvmHttpHandlerTravellingRuntimeTest`): a library's locals are symbols the capability
+  scans read. They are `sink` and `live`.
+- Pins: `HttpHandlerTest#directiveSupportsTheDelayedResponse` (interpreter),
+  `FetchSpecE2eTest#javaHttpServer` (the compiled normalizer on the JVM and `--native`,
+  the component's stream).
+
+## A stop called by a handler (2026-11-19, k04)
+`RontoHttpServer.stopServer` on a thread running a handler of that server (`IN_HANDLER`)
+returns at once and stops on a daemon thread of its own, `HttpServer.stop(grace)`, which
+waits for the requests in hand -- the caller's response is written only after its handler
+returned, so the old `stop(0)` there closed the connection under it (the client saw no
+reply). The handle stays in `HANDLES`, joinable, until the stop is done. A stop from any
+other thread is `stop(0)` as before. Pin: `HttpHandlerTest#stoppableSeamServesJoinsAndStops`.
 
 ## A binary response body is byte-exact — everywhere but one named place
 **An `(unsigned-byte 8)` response body reaches the wire as the octets it holds, on every

@@ -51,6 +51,17 @@ public final class HttpServeLibrary {
 	/** The stop entry point: {@code (server)}. */
 	public static final String STOP = "RONTOLISP::%HTTP-SERVE-STOP";
 
+	/** The two-step serve's first: {@code (app port address)}, the server at once. */
+	public static final String BEGIN = "RONTOLISP::%HTTP-SERVE-BEGIN";
+
+	/** The two-step serve's second: {@code (server)}, answering once it has stopped. */
+	public static final String RUN = "RONTOLISP::%HTTP-SERVE-RUN";
+
+	/** The port a begun server bound: {@code (server)}. */
+	public static final String PORT = "RONTOLISP::%HTTP-SERVE-PORT";
+
+	private static final Set<String> ENTRY_POINTS = Set.of(SERVE, STOP, BEGIN, RUN, PORT);
+
 	private static final Map<String, List<LispVal>> FORMS = new ConcurrentHashMap<>();
 
 	private HttpServeLibrary() {
@@ -81,13 +92,14 @@ public final class HttpServeLibrary {
 	}
 
 	/**
-	 * Returns whether the name is one of the two entry points the interpreter loads the
+	 * Returns whether the name is one of the entry points the interpreter loads the
 	 * library for.
 	 * @param symbolName the symbol name, in its canonical spelling
-	 * @return {@code true} for {@link #SERVE} and {@link #STOP}
+	 * @return {@code true} for {@link #SERVE}, {@link #STOP} and the two-step serve's
+	 * {@link #BEGIN}, {@link #RUN} and {@link #PORT}
 	 */
 	public static boolean isServeFunction(String symbolName) {
-		return SERVE.equals(symbolName) || STOP.equals(symbolName);
+		return ENTRY_POINTS.contains(symbolName);
 	}
 
 	/**
@@ -108,7 +120,7 @@ public final class HttpServeLibrary {
 			}
 			referenced = referenced || references(form);
 		}
-		if (!referenced || defined.contains(SERVE) || defined.contains(STOP)) {
+		if (!referenced || defined.contains(SERVE) || defined.contains(STOP) || defined.contains(BEGIN)) {
 			return program;
 		}
 		List<LispVal> out = new ArrayList<>(forms(features));

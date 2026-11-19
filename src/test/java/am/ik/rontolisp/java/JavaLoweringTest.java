@@ -525,7 +525,36 @@ class JavaLoweringTest {
 			.map(LispVal::print)
 			.toList())
 			.anyMatch(form -> form.contains("(RONTOLISP:AWAIT (RONTOLISP::%JAVA-SUSPENDING-HTTP-REPLY |exchange|))"));
-		assertThat(forms).noneMatch(form -> form.contains("RONTOLISP:FETCH") || form.contains("%URI-"));
+		// A server of com.sun.net.httpserver is the program's own call of the transport
+		// every adapter serves through, handed the function that answers a request on
+		// the transport's thread; the program's end waits for the server; and where the
+		// host's threads run the handlers a monitor is held with no Thread in the
+		// program, which one stack has no use for.
+		String server = """
+				import com.sun.net.httpserver.HttpServer;
+				import java.net.InetSocketAddress;
+				class L9 {
+				    static int hits;
+				    static synchronized int hit() { return ++hits; }
+				    public static void main(String[] args) throws Exception {
+				        HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
+				        server.createContext("/", exchange -> exchange.sendResponseHeaders(200 + hit(), -1));
+				        server.start();
+				    }
+				}
+				""";
+		assertThat(lower(server, "L9.java"))
+			.anyMatch(form -> form.contains("(HANDLER-CASE (RONTOLISP::%HTTP-SERVE-BEGIN (LAMBDA (") && form
+				.contains("(RONTOLISP::%JAVA-HTTP-REQUEST (|rontolisp.internal.HttpServing.serial(Object)| "))
+			.anyMatch(
+					form -> form.contains("(|L9.main(String[])| (VECTOR)) (|rontolisp.internal.HttpServing.serve()|)"))
+			.anyMatch(form -> form
+				.startsWith("(DEFUN |L9.hit()| NIL (LET ((|%t0| (RONTOLISP::%JAVA-MONITOR-ENTER '|j%L9|)))"));
+		assertThat(Java.read(server, "L9.java", JavaFiles.NONE, null, true).stream().map(LispVal::print).toList())
+			.anyMatch(form -> form.contains("(RONTOLISP::%HTTP-SERVE-BEGIN "))
+			.noneMatch(form -> form.startsWith("(DEFUN |L9.hit()|") && form.contains("MONITOR"));
+		assertThat(forms).noneMatch(
+				form -> form.contains("RONTOLISP:FETCH") || form.contains("%URI-") || form.contains("%HTTP-SERVE"));
 	}
 
 	@Test

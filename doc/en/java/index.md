@@ -23,7 +23,7 @@ rontolisp -e 'void main() { IO.println(1 + 2); }' --source-language java
 `--source-language java` starts a REPL ([At the prompt](#at-the-prompt)).
 
 [`examples/java/`](https://github.com/making/rontolisp/tree/develop/examples/java) holds a
-program of several packages with its expected output.
+program of several packages with its expected output, and an HTTP server with its client.
 
 ```java
 interface Shape {
@@ -417,6 +417,10 @@ as far as the program reaches it, so a class of the program can extend or implem
 | `HttpRequest` | `newBuilder` with or without a `URI`, with `uri`, `header`, `headers`, `setHeader`, `GET`, `POST`, `PUT`, `DELETE`, `HEAD`, `method`, `version`, `expectContinue`, `copy`, `build`; `method`, `uri`, `headers`, `bodyPublisher`, `version`, `expectContinue`, `equals`, `hashCode`, `toString`; `BodyPublishers.ofString` with or without a `Charset`, `ofByteArray` of an array or a range, `ofInputStream`, `noBody`; `BodyPublisher.contentLength` |
 | `HttpResponse` | `statusCode`, `headers`, `body`, `uri`, `request`, `previousResponse`, `version`, `toString`; `BodyHandlers.ofString` with or without a `Charset`, `ofByteArray`, `ofInputStream`, `discarding`, `replacing`; `BodySubscribers` of the same and `mapping`; a `BodyHandler` of the program's own choosing one by the `ResponseInfo` (`statusCode`, `headers`, `version`) |
 | `HttpHeaders` | `firstValue`, `allValues`, `map`, `HttpHeaders.of`, `equals`, `hashCode`, `toString` |
+| `HttpServer`, `HttpContext`, `HttpHandler` | `HttpServer.create` of nothing or of an address and a backlog, `bind`, `createContext` with or without a handler, `removeContext` of a path or a context, `setExecutor`, `getExecutor`, `start`, `stop`, `getAddress`; `getPath`, `getHandler`, `setHandler`, `getServer`, `getAttributes`; `handle` |
+| `HttpExchange` | `getRequestMethod`, `getRequestURI`, `getProtocol`, `getRequestHeaders`, `getRequestBody`, `getResponseHeaders`, `sendResponseHeaders`, `getResponseBody`, `getResponseCode`, `close`, `getHttpContext`, `getRemoteAddress`, `getLocalAddress`, `getAttribute`, `setAttribute`, `setStreams` |
+| `Headers` | the members of `Map`; `getFirst`, `add`, `set`; `new Headers()` of nothing or a map, `Headers.of` of names and values in turn or of a map |
+| `InetSocketAddress`, `InetAddress`, `BindException` | of a port, of a host and a port, of an `InetAddress` and a port, `createUnresolved`; `getPort`, `getHostString`, `getHostName`, `getAddress`, `isUnresolved`, `equals`, `hashCode`, `toString`; `getHostAddress`, `getHostName`, `isLoopbackAddress`, `isAnyLocalAddress`, `InetAddress.getLoopbackAddress` |
 
 `String.format`, `formatted` and `printf` take `%d`, `%s`, `%S`, `%f`, `%e`, `%E`, `%x`,
 `%X`, `%o`, `%c`, `%b`, `%h`, `%H`, `%n` and `%%`, with the flags `-`, `0`, `+`, a space, `,`, `(` and
@@ -664,5 +668,62 @@ a URI that is no absolute `http` or `https` one. `followRedirects(Redirect.NORMA
 `previousResponse()` answers the replies on the way. A connection that is refused is a
 `ConnectException`. What the transports cannot give and what is not there:
 [Deviations](deviations.md#the-http-client).
+
+`com.sun.net.httpserver` has the server: an `HttpServer`, its contexts, and an `HttpHandler`
+answering an `HttpExchange`. It serves through the transport of the target, so one source
+is a server on each:
+
+| Target | Build | Who listens |
+|---|---|---|
+| Interpreter, JVM | `rontolisp App.java`, `-o App.class` | the program, on the address `create` was given |
+| WASM component | `-o app.wasm --component`, run with `wasmtime serve -S cli=y app.wasm` | the host (`--addr`), which calls the program for each request through `wasi:http` |
+| Native executable | `--native` | the executable, on the address `create` was given |
+
+A plain Preview 1 module cannot listen: `create` throws an `IOException` naming
+`--component`. A compact source file imports the server with `import module jdk.httpserver;`.
+
+A program lives while a server it started runs: `main` returns, and requests are answered
+until `stop`. Under `wasmtime serve` the host starts the program -- `main`, up to its end --
+for the requests it likes, and the address of `create` is not bound.
+`sendResponseHeaders(status, length)` announces a body of that length, `-1` none, and `0` a
+body of a length not told ahead, which goes out chunk by chunk as it is written where the
+transport can (under `wasmtime serve`), and whole elsewhere.
+
+This program serves one context and asks it once, so it runs where the target has threads,
+the interpreter and the JVM:
+
+```java
+import module java.net.http;
+import module jdk.httpserver;
+
+void main() throws IOException, InterruptedException {
+    HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext("/hello", exchange -> {
+        String name = exchange.getRequestURI().getQuery();
+        byte[] body = ("Hello, " + name + "!").getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
+        exchange.sendResponseHeaders(200, body.length);
+        try (OutputStream out = exchange.getResponseBody()) {
+            out.write(body);
+        }
+    });
+    server.start();
+
+    URI uri = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/hello?Ann");
+    HttpResponse<String> response = HttpClient.newHttpClient()
+        .send(HttpRequest.newBuilder(uri).build(), HttpResponse.BodyHandlers.ofString());
+    IO.println(response.statusCode() + " " + response.body());
+    server.stop(0);
+}
+```
+
+```
+200 Hello, Ann!
+```
+
+A server on its own, and how to run it on each target, is
+[`examples/java/http`](https://github.com/making/rontolisp/tree/develop/examples/java/http).
+What the transports cannot give and what is not there:
+[Deviations](deviations.md#the-http-server).
 
 What differs from the language and what is refused: [Deviations](deviations.md).

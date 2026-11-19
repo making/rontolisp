@@ -344,14 +344,47 @@
 ;; default-mode component free of the buffered-body machinery -- no Gray class,
 ;; no UTF-8 encoder -- instead of carrying it behind a runtime flag.
 
+(defun %serve-respond (sent stream status headers)
+  ;; A response whose body follows its head, in chunks (http-server.lisp's
+  ;; streaming writer): the head is DELIVERED here, from inside the handler, and
+  ;; the function answered writes one chunk -- the synchronous stream.write,
+  ;; which returns once the host has taken the bytes -- and, called with nil,
+  ;; ends the body. SENT, #(writable trailers transmission), is how the task
+  ;; knows its response went out. The request body's close protocol runs first,
+  ;; as it does ahead of a response delivered whole.
+  (let ((fields (%http:fields-new)))
+    (%http-add-headers fields headers)
+    (rontolisp:stream-close stream)
+    (let* ((bodypair (%http:body-stream-new))
+           (trailers (%http:trailers-future-new))
+           (rpair (%http:response-new fields (car bodypair) (car trailers)))
+           (response (car rpair))
+           (writable (cdr bodypair)))
+      (%http:response-set-status-code response status)
+      (%http:handle-result-task-return (cons :ok response))
+      (setf (aref sent 0) writable)
+      (setf (aref sent 1) (cdr trailers))
+      (setf (aref sent 2) (car (cdr rpair)))
+      (lambda (chunk)
+        (if chunk
+            (%http:body-stream-write writable chunk)
+            (progn
+              (%http:body-stream-drop-writable writable)
+              (%http:trailers-future-write (aref sent 1) (cons :ok nil))
+              (%http:transmit-future-drop-readable (aref sent 2))))
+        nil))))
+
 (rontolisp:async-defun %serve-handle (request)
   ;; The handler.handle export body (an asynchronous task). Read the transport
-  ;; facts, hand them to the SHARED server model (rontolisp::%http-serve-request in
-  ;; http-server.lisp, which builds the Clack environment, runs the handler --
+  ;; facts, hand them to the SHARED server model (rontolisp::%http-serve-responding
+  ;; in http-server.lisp, which builds the Clack environment, runs the handler --
   ;; awaiting its future, so the handler itself may be an async-defun -- and
   ;; normalizes its Clack response), then DELIVER the response through task.return
   ;; -- only then can the host start reading the contents stream -- and stream the
-  ;; body after it (the rendezvous order verified on wasmtime 46).
+  ;; body after it (the rendezvous order verified on wasmtime 46). A handler that
+  ;; writes its body through Clack's streaming writer has its head delivered and
+  ;; each chunk written while it runs (%serve-respond); nothing is left to do
+  ;; here then.
   ;;
   ;; The request body is the one thing decided at compile time: by default it stays
   ;; a LAZY stream (nothing is buffered; the handler awaits it), and under
@@ -377,19 +410,29 @@
            (raw
             (list method target headers body "HTTP/1.1" "http" nil 80 nil nil
                   ""))
+           (sent (vector nil nil nil))
+           ;; an application that fails with its head already out has ended its
+           ;; body there: the task has nothing else to answer
            (res
-            (rontolisp:await
-             (rontolisp::%http-serve-request (function %serve-dispatch) raw)))
-           (fields (%http:fields-new)))
-      (%http-add-headers fields (car (cdr res)))
-      (rontolisp:stream-close stream)
-      (let* ((bodypair (%http:body-stream-new))
-             (trailers (%http:trailers-future-new))
-             (rpair (%http:response-new fields (car bodypair) (car trailers)))
-             (response (car rpair)))
-        (%http:response-set-status-code response (car res))
-        (%http:handle-result-task-return (cons :ok response))
-        (%http-write-body (cdr bodypair) (car (cdr (cdr res))))
-        (%http:trailers-future-write (cdr trailers) (cons :ok nil))
-        (%http:transmit-future-drop-readable (car (cdr rpair)))
-        nil))))
+            (handler-case (rontolisp:await
+                           (rontolisp::%http-serve-responding
+                            (function %serve-dispatch) raw
+                            (lambda (status fields)
+                              (%serve-respond sent stream status fields))))
+              (error (c) (if (aref sent 0) nil (error c))))))
+      (if (aref sent 0)
+          nil
+          (let ((fields (%http:fields-new)))
+            (%http-add-headers fields (car (cdr res)))
+            (rontolisp:stream-close stream)
+            (let* ((bodypair (%http:body-stream-new))
+                   (trailers (%http:trailers-future-new))
+                   (rpair
+                    (%http:response-new fields (car bodypair) (car trailers)))
+                   (response (car rpair)))
+              (%http:response-set-status-code response (car res))
+              (%http:handle-result-task-return (cons :ok response))
+              (%http-write-body (cdr bodypair) (car (cdr (cdr res))))
+              (%http:trailers-future-write (cdr trailers) (cons :ok nil))
+              (%http:transmit-future-drop-readable (car (cdr rpair)))
+              nil))))))

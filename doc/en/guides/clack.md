@@ -82,9 +82,11 @@ The response `body` may be a list of strings, a
 byte-exact), a rontolisp stream, or `nil`; the two-element `(status headers)`
 form is valid too. A bare string signals a clear error, as Clack itself refuses
 strings; a pathname body (lack's file-serving form) is a distinct value here and
-is refused too, until the transport can serve it. A function body is supported in Clack's delayed-response form (the
-responder is called with the final response list); the streaming-writer form
-signals.
+is refused too, until the transport can serve it. A function body is Clack's delayed response: the
+responder is called with the final response list, or with the head alone, when it
+answers the streaming writer. A `wasmtime serve` component sends each chunk as it
+is written; every other transport sends the body whole once the function has
+returned.
 
 ## Getting from one handler to a set of routes
 
@@ -588,8 +590,8 @@ this is module size and isolate startup.
 - `:swank-port` starts a [SWANK server](../getting-started/swank.md#from-a-running-program)
   on the interpreter, for SLIME to attach to the running application; a compiled
   program signals there, having no interpreter to serve.
-- Streaming-writer responses and bare-string/pathname bodies signal, as noted
-  above (delayed function responses work).
+- Bare-string/pathname bodies signal, as noted above (delayed function responses
+  and the streaming writer work).
 
 See also: [Serving HTTP (http-handler)](http-handler.md) for the underlying
 server, and [`examples/asdf/clack-hello.lisp`](https://github.com/making/rontolisp/blob/develop/examples/asdf/clack-hello.lisp)

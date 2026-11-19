@@ -3025,3 +3025,185 @@
       (rontolisp:await
        (rontolisp::%java-thread-queued (rontolisp::%java-self))))
   (rontolisp::%java-http-reply exchange))
+
+;; --- com.sun.net.httpserver ---------------------------------------------------------
+
+;; The server is Java source (rontolisp.internal.HttpServing) over the transport every
+;; adapter serves through, rontolisp::%http-serve-begin, which the lowered program
+;; itself calls (http-serve.lisp; .kb/http-server.md). The application it hands over
+;; takes Clack's environment and answers Clack's DELAYED response, a function of the
+;; transport's responder: an exchange answers through the responder where its handler
+;; says so -- a whole response at once, or the head and then a writer of the body's
+;; chunks, which a transport that can sends as they are written.
+
+;; The request's facts, off the environment.
+(defun rontolisp::%java-http-method (env) (string (getf env :request-method)))
+
+(defun rontolisp::%java-http-target (env) (getf env :request-uri))
+
+(defun rontolisp::%java-http-protocol (env)
+  (string (getf env :server-protocol)))
+
+;; The host and the port of the peer (LOCAL nil) or of the server as the request
+;; names it: #(host port), each nil where the transport does not know it.
+(defun rontolisp::%java-http-end (env local)
+  (if local
+      (vector (getf env :server-name) (getf env :server-port))
+      (vector (getf env :remote-addr) (getf env :remote-port))))
+
+;; The request fields, an array of names and values in turn: the environment's table,
+;; names in lower case, a field sent more than once one value.
+(defun rontolisp::%java-http-request-fields (env)
+  (let ((flat nil))
+    (maphash (lambda (name value) (setq flat (cons value (cons name flat))))
+             (getf env :headers))
+    (coerce (reverse flat) 'simple-vector)))
+
+;; The request body's octets: the transport's buffered body read to its end, none
+;; without a body.
+(defun rontolisp::%java-http-request-body (env)
+  (let ((raw (getf env :raw-body)) (chunks nil) (total 0))
+    (if raw
+        (let ((reading t))
+          (while reading
+            (let ((chunk (make-array 4096 :element-type '(unsigned-byte 8)))
+                  (n 0)
+                  (b 0))
+              (while (and (< n 4096) (>= b 0))
+                (setq b (read-byte raw nil -1))
+                (if (>= b 0)
+                    (progn
+                      (setf (aref chunk n) b)
+                      (setq n (+ n 1)))))
+              (if (> n 0)
+                  (progn
+                    (setq chunks
+                     (cons (if (< n 4096) (subseq chunk 0 n) chunk) chunks))
+                    (setq total (+ total n))))
+              (if (< n 4096) (setq reading nil))))))
+    (if chunks
+        (rontolisp::%octets-join (reverse chunks) total)
+        (make-array 0 :element-type '(unsigned-byte 8)))))
+
+;; A whole response through the responder: the status, the fields -- an array of names
+;; and values in turn -- and the body's octets.
+(defun rontolisp::%java-http-respond (responder status flat octets)
+  (funcall responder (list status (rontolisp::%java-http-fields flat) octets))
+  nil)
+
+;; The head of a response whose body follows in chunks: the writer the responder
+;; answers for them.
+(defun rontolisp::%java-http-stream (responder status flat)
+  (funcall responder (list status (rontolisp::%java-http-fields flat))))
+
+(defun rontolisp::%java-http-write (writer octets)
+  (funcall writer octets)
+  nil)
+
+(defun rontolisp::%java-http-finish (writer)
+  (funcall writer nil :close t)
+  nil)
+
+;; A server's gate: nil while it is bound and not started, then :started, then
+;; :stopped. A request that arrives before the start waits for it, as one a JDK's
+;; server has not accepted yet does.
+(defun rontolisp::%java-http-gate () (vector nil))
+
+#-rontolisp-wasm (defvar rontolisp::%java-http-guard (rontolisp:make-mutex))
+
+#-rontolisp-wasm
+(defvar rontolisp::%java-http-turned (rontolisp::%condition-variable-new))
+
+;; The servers started and not stopped, and the ticket the thread at the program's end
+;; waits with for the last of them to stop.
+#-rontolisp-wasm (defvar rontolisp::%java-http-running 0)
+
+#-rontolisp-wasm (defvar rontolisp::%java-http-waiter nil)
+
+;; The handlers of a server with no executor run one at a time, as a JDK's do.
+#-rontolisp-wasm (defvar rontolisp::%java-http-serial (rontolisp:make-mutex))
+
+;; A server is bound: from here on the transport's threads run the program beside the
+;; thread it started on, so the run time's own tables are read one thread at a time,
+;; as in a program that started a thread.
+#-rontolisp-wasm
+(defun rontolisp::%java-http-shared ()
+  (if (null rontolisp::%java-shared)
+      (progn
+        (setq rontolisp::%java-main (rontolisp::%java-self))
+        (setq rontolisp::%java-shared
+              (function rontolisp::%java-among-threads))))
+  nil)
+
+#+rontolisp-wasm (defun rontolisp::%java-http-shared () nil)
+
+#-rontolisp-wasm
+(defun rontolisp::%java-http-turn (gate state)
+  (rontolisp:mutex-acquire rontolisp::%java-http-guard)
+  (let ((was (aref gate 0)) (waiter nil))
+    (%aset gate 0 state)
+    (if (eq state :started)
+        (setq rontolisp::%java-http-running
+              (+ rontolisp::%java-http-running 1)))
+    (if (and (eq state :stopped) (eq was :started))
+        (progn
+          (setq rontolisp::%java-http-running
+                (- rontolisp::%java-http-running 1))
+          (setq waiter rontolisp::%java-http-waiter)))
+    (rontolisp::%condition-notify rontolisp::%java-http-turned t)
+    (rontolisp:mutex-release rontolisp::%java-http-guard)
+    (if waiter (rontolisp::%java-unpark (car waiter) waiter nil)))
+  nil)
+
+#+rontolisp-wasm
+(defun rontolisp::%java-http-turn (gate state)
+  (%aset gate 0 state)
+  nil)
+
+;; Whether a request is let in: once the server was started, not once it was stopped.
+#-rontolisp-wasm
+(defun rontolisp::%java-http-admitted (gate)
+  (rontolisp:mutex-acquire rontolisp::%java-http-guard)
+  (while (null (aref gate 0))
+    (rontolisp::%condition-wait rontolisp::%java-http-turned
+                                rontolisp::%java-http-guard nil))
+  (rontolisp:mutex-release rontolisp::%java-http-guard)
+  (eq (aref gate 0) :started))
+
+#+rontolisp-wasm
+(defun rontolisp::%java-http-admitted (gate) (eq (aref gate 0) :started))
+
+;; One request on the transport's thread. The run time never started that thread, so
+;; its carrier is bound here -- without it every request would hold a monitor as the
+;; thread the program started on does -- and SERIAL takes the one lock of the
+;; handlers of a server with no executor. One stack has neither to do.
+#-rontolisp-wasm
+(defun rontolisp::%java-http-request (serial thunk)
+  (let ((rontolisp::%java-carrier nil))
+    (if serial
+        (rontolisp:with-mutex (rontolisp::%java-http-serial) (funcall thunk))
+        (funcall thunk))))
+
+#+rontolisp-wasm
+(defun rontolisp::%java-http-request (serial thunk) (funcall thunk))
+
+;; The end of a program that started a server: where the host's threads serve, the
+;; thread the program started on waits until the last server stopped, or for
+;; System.exit on a thread of the transport's.
+#-rontolisp-wasm
+(defun rontolisp::%java-http-wait ()
+  (let ((carrier (rontolisp::%java-self)) (waiting t))
+    (while waiting
+      (let ((ticket (cons carrier nil)))
+        (rontolisp:mutex-acquire rontolisp::%java-http-guard)
+        (if (> rontolisp::%java-http-running 0)
+            (setq rontolisp::%java-http-waiter ticket)
+            (setq waiting nil))
+        (rontolisp:mutex-release rontolisp::%java-http-guard)
+        (if waiting
+            (progn
+              (rontolisp::%java-park carrier ticket nil)
+              (rontolisp::%java-thread-interrupted carrier t))))))
+  nil)
+
+#+rontolisp-wasm (defun rontolisp::%java-http-wait () nil)

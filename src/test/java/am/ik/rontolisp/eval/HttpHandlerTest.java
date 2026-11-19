@@ -172,6 +172,18 @@ class HttpHandlerTest {
 		// is a no-op.
 		RontoHttpServer.stopServer(handle);
 		assertThatThrownBy(() -> get(port, "/x")).isInstanceOf(IOException.class);
+		// A stop called by a handler is the stop of a server with a request in hand:
+		// that request is answered first, and a joiner goes on once the server has
+		// stopped.
+		long[] own = new long[1];
+		own[0] = RontoHttpServer.startServer(0, "127.0.0.1", request -> {
+			RontoHttpServer.stopServer(own[0]);
+			return RontoHttpServer.Response.of(200, List.of(), "stopped by its handler");
+		});
+		int ownPort = (int) RontoHttpServer.serverPort(own[0]);
+		assertThat(get(ownPort, "/").body()).isEqualTo("stopped by its handler");
+		RontoHttpServer.joinServer(own[0]);
+		assertThatThrownBy(() -> get(ownPort, "/x")).isInstanceOf(IOException.class);
 	}
 
 	@Test
@@ -459,10 +471,22 @@ class HttpHandlerTest {
 		serveInBackground("""
 				(defun handle (env)
 				  (lambda (responder)
-				    (funcall responder (list 200 nil (list "delayed")))))
+				    (if (equal (getf env :path-info) "/written")
+				        (let ((writer (funcall responder (list 201 (list :x-written "yes")))))
+				          (funcall writer "wri")
+				          (funcall writer "-tten-" :start 1 :end 5)
+				          (funcall writer "!" :close t)
+				          (funcall writer "late"))
+				        (funcall responder (list 200 nil (list "delayed"))))))
 				(rontolisp:http-handler 'handle %d)
 				""".formatted(port), port);
 		assertThat(get(port, "/").body()).isEqualTo("delayed");
+		// Handed the head alone, the responder answers Clack's streaming writer: this
+		// transport sends the response whole, once the writer is closed.
+		HttpResponse<String> written = get(port, "/written");
+		assertThat(written.statusCode()).isEqualTo(201);
+		assertThat(written.headers().firstValue("x-written")).hasValue("yes");
+		assertThat(written.body()).isEqualTo("written!");
 	}
 
 	@Test

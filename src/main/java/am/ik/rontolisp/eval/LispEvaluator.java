@@ -20130,19 +20130,39 @@ public final class LispEvaluator {
 	private RontoHttpServer.Response normalizeClackResponse(LispVal response) {
 		if (!(response instanceof LispCons res)) {
 			// Clack's DELAYED response: call it with a responder that captures the real
-			// response. The streaming WRITER form -- where the responder must answer a
-			// writer closure -- is refused by the closure it gets back.
+			// response. Handed the head alone, (status headers), the responder answers
+			// the streaming WRITER: this transport sends a response whole, so the chunks
+			// are kept, and the body ends where the writer is closed or the delayed
+			// function returns (http-server.lisp's %http-normalize-streaming, arm for
+			// arm).
 			LispVal[] captured = new LispVal[1];
+			java.io.ByteArrayOutputStream written = new java.io.ByteArrayOutputStream();
+			boolean[] writing = new boolean[3];
 			LispVal responder = new LispFunction(LispNames.HTTP_HANDLER, args -> {
-				captured[0] = args.isEmpty() ? LispNil.INSTANCE : args.get(0);
+				LispVal delivered = args.isEmpty() ? LispNil.INSTANCE : args.get(0);
+				if (captured[0] == null && delivered instanceof LispCons head && head.cdr() instanceof LispCons rest
+						&& rest.cdr() instanceof LispNil) {
+					captured[0] = delivered;
+					writing[0] = true;
+					return new LispFunction(LispNames.HTTP_HANDLER, call -> writeClackChunk(call, written, writing));
+				}
+				captured[0] = delivered;
 				return new LispFunction(LispNames.HTTP_HANDLER, ignored -> {
-					throw new LispEvalException(
-							LispNames.HTTP_HANDLER + ": the streaming writer response protocol is not supported");
+					throw new LispEvalException(LispNames.HTTP_HANDLER + ": a response delivered whole has no writer");
 				});
 			});
 			apply(response, List.of(responder), this.globalEnv);
 			if (captured[0] == null) {
 				throw new LispEvalException(LispNames.HTTP_HANDLER + ": a delayed response delivered no response");
+			}
+			if (written.size() > 0 && captured[0] instanceof LispCons head) {
+				if (!(head.car() instanceof LispInteger status)) {
+					throw new LispEvalException(LispNames.HTTP_HANDLER
+							+ ": a handler must return (status headers) or (status headers body), got: "
+							+ captured[0].print());
+				}
+				return new RontoHttpServer.Response((int) status.value(), responseHeaders(second(head)),
+						written.toByteArray());
 			}
 			return normalizeClackResponse(captured[0]);
 		}
@@ -20152,6 +20172,59 @@ public final class LispEvaluator {
 		}
 		return new RontoHttpServer.Response((int) status.value(), responseHeaders(second(res)),
 				responseBody(third(res)));
+	}
+
+	// One call of Clack's streaming writer on a transport that sends a response whole:
+	// (chunk &key start end close), the chunk a string or octets, kept in WRITTEN. STATE
+	// is whether the writer is open, and whether it kept a string and octets -- a body
+	// mixing the two is refused as a stream's is.
+	private LispVal writeClackChunk(List<LispVal> call, java.io.ByteArrayOutputStream written, boolean[] state) {
+		LispVal chunk = call.isEmpty() ? LispNil.INSTANCE : call.get(0);
+		LispVal start = LispNil.INSTANCE;
+		LispVal end = LispNil.INSTANCE;
+		boolean close = false;
+		for (int i = 1; i + 1 < call.size(); i += 2) {
+			if (call.get(i) instanceof LispSymbol key) {
+				switch (key.name()) {
+					case ":START" -> start = call.get(i + 1);
+					case ":END" -> end = call.get(i + 1);
+					case ":CLOSE" -> close = !(call.get(i + 1) instanceof LispNil);
+					default -> {
+					}
+				}
+			}
+		}
+		if (state[0] && !(chunk instanceof LispNil)) {
+			LispVal part = chunk;
+			if (!(start instanceof LispNil) || !(end instanceof LispNil)) {
+				part = apply(resolveFunction("SUBSEQ"),
+						List.of(chunk, start instanceof LispNil ? new LispInteger(0) : start, end), this.globalEnv);
+			}
+			switch (part) {
+				case LispString text -> {
+					if (!text.value().isEmpty()) {
+						state[1] = true;
+						written.writeBytes(text.value().getBytes(StandardCharsets.UTF_8));
+					}
+				}
+				case LispIntVector octets -> {
+					if (octets.length() > 0) {
+						state[2] = true;
+						written.writeBytes(octetsBytes(octets));
+					}
+				}
+				default -> throw new LispEvalException(
+						LispNames.HTTP_HANDLER + ": a written response body must hold strings or octets");
+			}
+			if (state[1] && state[2]) {
+				throw new LispEvalException(
+						LispNames.HTTP_HANDLER + ": a written response body mixes string and octet chunks");
+			}
+		}
+		if (close) {
+			state[0] = false;
+		}
+		return LispNil.INSTANCE;
 	}
 
 	// The Clack response headers -- a keyword plist, or (widening, so a fetch result's

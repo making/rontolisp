@@ -24,7 +24,8 @@ rontolisp -e 'void main() { IO.println(1 + 2); }' --source-language java
 （[プロンプトで](#at-the-prompt)）。
 
 [`examples/java/`](https://github.com/making/rontolisp/tree/develop/examples/java) に、
-複数のパッケージからなるプログラムと、その期待される出力があります。
+複数のパッケージからなるプログラムとその期待される出力、および HTTP サーバーとその
+クライアントがあります。
 
 ```java
 interface Shape {
@@ -420,6 +421,10 @@ void main() {
 | `HttpRequest` | `URI` の指定がある、またはない `newBuilder` と、そのビルダーの `uri`、`header`、`headers`、`setHeader`、`GET`、`POST`、`PUT`、`DELETE`、`HEAD`、`method`、`version`、`expectContinue`、`copy`、`build`。`method`、`uri`、`headers`、`bodyPublisher`、`version`、`expectContinue`、`equals`、`hashCode`、`toString`。`Charset` の指定がある、またはない `BodyPublishers.ofString`、配列またはその範囲を取る `ofByteArray`、`ofInputStream`、`noBody`。`BodyPublisher.contentLength` |
 | `HttpResponse` | `statusCode`、`headers`、`body`、`uri`、`request`、`previousResponse`、`version`、`toString`。`Charset` の指定がある、またはない `BodyHandlers.ofString`、`ofByteArray`、`ofInputStream`、`discarding`、`replacing`。同じ名前の `BodySubscribers` と `mapping`。`ResponseInfo`（`statusCode`、`headers`、`version`）を見てサブスクライバーを選ぶ、プログラム独自の `BodyHandler` |
 | `HttpHeaders` | `firstValue`、`allValues`、`map`、`HttpHeaders.of`、`equals`、`hashCode`、`toString` |
+| `HttpServer`、`HttpContext`、`HttpHandler` | 引数なし、またはアドレスとバックログを取る `HttpServer.create`、`bind`、ハンドラーの指定がある、またはない `createContext`、パスまたはコンテキストを取る `removeContext`、`setExecutor`、`getExecutor`、`start`、`stop`、`getAddress`。`getPath`、`getHandler`、`setHandler`、`getServer`、`getAttributes`。`handle` |
+| `HttpExchange` | `getRequestMethod`、`getRequestURI`、`getProtocol`、`getRequestHeaders`、`getRequestBody`、`getResponseHeaders`、`sendResponseHeaders`、`getResponseBody`、`getResponseCode`、`close`、`getHttpContext`、`getRemoteAddress`、`getLocalAddress`、`getAttribute`、`setAttribute`、`setStreams` |
+| `Headers` | `Map` のメンバー。`getFirst`、`add`、`set`。引数なし、またはマップを取る `new Headers()`、名前と値を交互に並べるかマップを取る `Headers.of` |
+| `InetSocketAddress`、`InetAddress`、`BindException` | ポート、ホストとポート、`InetAddress` とポートを取るコンストラクタ、`createUnresolved`。`getPort`、`getHostString`、`getHostName`、`getAddress`、`isUnresolved`、`equals`、`hashCode`、`toString`。`getHostAddress`、`getHostName`、`isLoopbackAddress`、`isAnyLocalAddress`、`InetAddress.getLoopbackAddress` |
 
 `String.format`、`formatted`、`printf` が受け付ける変換は `%d`、`%s`、`%S`、`%f`、`%e`、`%E`、
 `%x`、`%X`、`%o`、`%c`、`%b`、`%h`、`%H`、`%n`、`%%` です。フラグ `-`、`0`、`+`、空白、`,`、`(`、`#` と、
@@ -668,5 +673,65 @@ void main() throws IOException, InterruptedException {
 303、307、308 をたどり、途中の応答は `previousResponse()` で取り出せます。接続を拒否された
 場合は `ConnectException` になります。トランスポートが提供できないものと、用意していない
 メンバーは[言語との差異](deviations.md#the-http-client)にあります。
+
+`com.sun.net.httpserver` には HTTP サーバーがあります。`HttpServer` にコンテキストを登録し、
+`HttpHandler` が `HttpExchange` に応答します。サーバーはターゲットのトランスポートを通して
+リクエストを受けるため、同じソースがどのターゲットでもサーバーになります。
+
+| ターゲット | ビルド | ポートを開くもの |
+|---|---|---|
+| インタプリタ、JVM | `rontolisp App.java`、`-o App.class` | プログラム（`create` に渡したアドレス） |
+| WASM コンポーネント | `-o app.wasm --component`、`wasmtime serve -S cli=y app.wasm` で実行 | ホスト（`--addr`）。リクエストごとに `wasi:http` でプログラムを呼びます |
+| ネイティブ実行ファイル | `--native` | 実行ファイル（`create` に渡したアドレス） |
+
+素の Preview 1 モジュールはポートを開けません。`create` は、`--component` を示す
+`IOException` を投げます。コンパクトソースファイルでは、`import module jdk.httpserver;` で
+サーバーをインポートします。
+
+プログラムは、開始したサーバーが動いているあいだ終了しません。`main` が戻ったあとも、`stop`
+が呼ばれるまでリクエストに応答します。`wasmtime serve` では、ホストが必要に応じてプログラムを
+起動して `main` を最後まで実行し、`create` に渡したアドレスは使われません。
+`sendResponseHeaders(status, length)` の `length` は、ボディの長さです。`-1` はボディが
+ないことを、`0` は長さを事前に知らせないボディを表します。長さを知らせないボディは、
+トランスポートが対応していれば（`wasmtime serve`）、書き込むたびにチャンクとして送られます。
+それ以外のトランスポートでは、全体がまとめて送られます。
+
+次のプログラムは、コンテキストを 1 つ持つサーバーを開始し、自分でそのサーバーにリクエストを
+1 回送ります。サーバーとクライアントが同じプロセスで動くため、実行できるのはスレッドのある
+ターゲット（インタプリタと JVM）です。
+
+```java
+import module java.net.http;
+import module jdk.httpserver;
+
+void main() throws IOException, InterruptedException {
+    HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext("/hello", exchange -> {
+        String name = exchange.getRequestURI().getQuery();
+        byte[] body = ("Hello, " + name + "!").getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
+        exchange.sendResponseHeaders(200, body.length);
+        try (OutputStream out = exchange.getResponseBody()) {
+            out.write(body);
+        }
+    });
+    server.start();
+
+    URI uri = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/hello?Ann");
+    HttpResponse<String> response = HttpClient.newHttpClient()
+        .send(HttpRequest.newBuilder(uri).build(), HttpResponse.BodyHandlers.ofString());
+    IO.println(response.statusCode() + " " + response.body());
+    server.stop(0);
+}
+```
+
+```
+200 Hello, Ann!
+```
+
+サーバーだけのプログラムと、各ターゲットでの実行手順は
+[`examples/java/http`](https://github.com/making/rontolisp/tree/develop/examples/java/http)
+にあります。トランスポートが提供できないものと、用意していないメンバーは
+[言語との差異](deviations.md#the-http-server)にあります。
 
 言語と動作が異なる点と、拒否される構文は[言語との差異](deviations.md)にあります。

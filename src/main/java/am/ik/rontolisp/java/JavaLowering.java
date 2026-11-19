@@ -915,8 +915,11 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (method.emitter == null && isLibrary(method.owner)) {
 			this.classes.reached.add(method);
 			use(method.owner);
-			if (!this.classes.monitors && method.owner.name.equals(THREAD)) {
-				// what was lowered holding no monitor is lowered again holding one
+			if (!this.classes.monitors
+					&& (method.owner.name.equals(THREAD) || (!this.suspended && isServer(method.owner)))) {
+				// what was lowered holding no monitor is lowered again holding one: a
+				// thread of the program's, or the host's threads a server's handlers
+				// run on
 				this.classes.monitors = true;
 				this.classes.changed();
 			}
@@ -1785,6 +1788,11 @@ final class JavaLowering implements JavaEmitter.Context {
 		List<LispVal> body = new ArrayList<>(initialization);
 		body.add(start);
 		int known = this.classes.reached.size();
+		if (serves()) {
+			// the program lives while a server it started runs, as a JDK's does by the
+			// server's own thread
+			body.add(library(JavaIntrinsics.SERVING, "serve", List.of()));
+		}
 		LispSymbol thrown = new LispSymbol("%o");
 		LispVal entry;
 		if (startsThreads()) {
@@ -1860,6 +1868,24 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Whether the program can start a server: some call reaches a member of the library's
+	 * one server.
+	 */
+	private boolean serves() {
+		for (Method method : this.classes.reached) {
+			if (isServer(method.owner)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Whether a class is the library's server, or a class of its own. */
+	private static boolean isServer(JavaClass owner) {
+		return owner.name.equals(JavaIntrinsics.SERVING) || owner.name.startsWith(JavaIntrinsics.SERVING + ".");
 	}
 
 	/**
