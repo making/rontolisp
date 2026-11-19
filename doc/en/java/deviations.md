@@ -250,7 +250,7 @@ constants; `Matcher` has `find`, `lookingAt`, `matches`, `group`, `start`, `end`
 `groupCount`, `hasMatch`, `reset`, `region`, `regionStart`, `regionEnd`, the anchoring and
 transparent bounds, `hitEnd`, `requireEnd`, `replaceAll` and `replaceFirst` of a text or a
 function, `appendReplacement`, `appendTail`, `toMatchResult` and `quoteReplacement`;
-`results`, `usePattern`, `namedGroups` and the streams are not there. After `lookingAt` or
+`results` and `splitAsStream`; `usePattern` and `namedGroups` are not there. After `lookingAt` or
 `matches` in a region with transparent bounds, a JDK's `start()` is 0 when a look-behind
 read before the region; here it is the region's start.
 
@@ -277,7 +277,20 @@ answers another object of the same name.
 
 **No object stands for a class.** `getClass()` and a class literal (`Name.class`) are read
 where one is compared with the other by `==`, `!=` or `equals`, and before `getName()` and
-`getSimpleName()`. Anywhere else each is an error.
+`getSimpleName()`; `Name.class::isInstance` and `Name.class::cast` are the test and the
+cast. Anywhere else each is an error.
+
+**A stream runs in order on the thread that asks for its result.** `parallel()` and
+`parallelStream()` are kept (`isParallel()` answers `true`) and change nothing else: the
+elements go through one at a time in the source's order, and a collector's `combiner` and
+the third argument of `collect` and `reduce` are never called. `String.chars()` and
+`codePoints()` are one stream, of code points. A stream made inside `flatMap` or
+`flatMapping` is closed once its last element is taken; one a `findFirst` or a `limit`
+leaves unfinished is not closed. A collector's `finisher` is always called, whatever its
+`characteristics()` say, and a collector made of a collector of the program's own class
+(`mapping`, `groupingBy`) reports none of that one's characteristics. `mapMulti`,
+`gather`, `spliterator`, `StreamSupport`, `Collectors.groupingByConcurrent` and
+`toConcurrentMap`, and the streams of a `Random` are not there.
 
 **What a program asks of its host has fixed answers.** `Runtime.availableProcessors()` is
 1. `System.getProperty` answers `line.separator`, `file.separator`, `path.separator` and
@@ -492,16 +505,16 @@ Each of these is an error naming the construct and its position.
 - Annotation types, `assert`.
 - A class literal and `getClass()` as a value: each is read compared with a class and
   before `getName()` and `getSimpleName()`, a literal also as the lock of a `synchronized`
-  statement and as the class of a field updater. A class literal of a primitive or an
-  array type.
+  statement, as the class of a field updater and before `::isInstance` and `::cast`. A
+  class literal of a primitive or an array type.
 - A `switch` over a `long`, a `float`, a `double` or a `boolean`; a method reference and a
   field through a qualified `super` (`Interface.super::m`, `Outer.super.x`).
 - A class extending `String`, `StringBuilder` or a box.
 - Of `java.util.concurrent`, what the [overview](index.md) does not list: the queues
   ordered by priority or by delay, `ConcurrentSkipListMap`. A `Timer`'s `schedule` of a
   `Date`. Thread groups.
-- Any class or member of the library not listed in the [overview](index.md): streams
-  (`java.util.stream`), `LinkedList`, `LinkedHashMap`, `TreeMap`, `Scanner`, files
+- Any class or member of the library not listed in the [overview](index.md):
+  `LinkedList`, `LinkedHashMap`, `TreeMap`, `Scanner`, files
   (`File`, `FileReader`, `java.nio.file`), `java.time` but `Duration`, `BigInteger`,
   `BigDecimal`,
   reflection. Of `java.net`, everything but `URI`, the addresses of a server and the

@@ -5,6 +5,8 @@ package java.util;
 
 import java.util.function.IntFunction;
 import java.util.function.Predicate;
+import java.util.stream.Stream;
+import rontolisp.internal.ObjectFlow;
 
 public interface Collection<E> extends Iterable<E> {
 
@@ -35,6 +37,14 @@ public interface Collection<E> extends Iterable<E> {
     boolean retainAll(Collection<?> c);
 
     void clear();
+
+    default Stream<E> stream() {
+        return ObjectFlow.over(this, () -> size());
+    }
+
+    default Stream<E> parallelStream() {
+        return stream().parallel();
+    }
 
     default boolean removeIf(Predicate<? super E> filter) {
         boolean removed = false;

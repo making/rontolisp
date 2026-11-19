@@ -4,7 +4,11 @@
 package java.util.regex;
 
 import java.util.Objects;
+import java.util.Iterator;
+import java.util.NoSuchElementException;
 import java.util.function.Function;
+import java.util.stream.Stream;
+import rontolisp.internal.ObjectFlow;
 
 // The searches of one pattern over one input, in a row. The engine's matcher
 // (eval/regex.lisp) holds the input, the last match and where the next find starts;
@@ -134,6 +138,29 @@ public final class Matcher implements MatchResult {
 
     public boolean hasMatch() {
         return matched0(engine);
+    }
+
+    // each match from where this matcher stands when the stream is read
+    public Stream<MatchResult> results() {
+        return ObjectFlow.over(new Iterator<MatchResult>() {
+            // 0 before a search, 1 with a match not handed on, 2 once a search found none
+            private int state;
+
+            public boolean hasNext() {
+                if (state == 0) {
+                    state = find() ? 1 : 2;
+                }
+                return state == 1;
+            }
+
+            public MatchResult next() {
+                if (!hasNext()) {
+                    throw new NoSuchElementException();
+                }
+                state = 0;
+                return toMatchResult();
+            }
+        });
     }
 
     public MatchResult toMatchResult() {

@@ -45,8 +45,10 @@ that waits leaves its instance to the host, a loop's turn outside its resume bod
 `Thread.State.BLOCKED`: k07 (2026-11-19); a class of Java source under `Number` (the
 atomics, a program's own), the field updaters, `invokeAll` with a limit and
 `join(Duration)`: k08 (2026-11-19); a program that starts threads run compiled in the
-browser, whose interpreter has one stack: k10 (2026-11-19); what comes after is `.todo/k12`, `k15`, `k16`, `k17`,
-`k18`, `k19`, `k20`, `k21` and `k22` (what k00, k05, k11, k06, k07, k08 and k10 left).
+browser, whose interpreter has one stack: k10 (2026-11-19); `java.util.stream`, the
+collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
+(2026-11-19); what comes after is `.todo/k15`, `k16`, `k17`, `k18`, `k19`, `k20`, `k21`,
+`k22` and `k26` (what k00, k11, k06, k07, k08, k10 and k12 left).
 
 ## Where it sits
 
@@ -159,7 +161,9 @@ browser, whose interpreter has one stack: k10 (2026-11-19); what comes after is 
   Class<..>` is kept as javac gave it over 16 shapes (two literals of two classes, a
   literal of no class under the object's type, two objects of unrelated classes), but
   one: an interface beside a `final` class that does not implement it is compared. A
-  `Class` as a value (a field, an argument, `isInstance`) is `.todo/k12`. `super.toString()`,
+  `Class` as a value (a field, an argument, `isInstance`) is `.todo/k26`; a method
+  reference `Name.class::isInstance` / `Name.class::cast` is the test and the cast of its
+  one argument (k12, `referenced`: the literal is never lowered). `super.toString()`,
   `super.equals(o)` and `super.hashCode()` with no class above declaring the method are
   those three run-time functions on `this` (j89; refused by name until then, and any other
   member of `Object` through `super` still is). The identity text names a structure by its
@@ -208,6 +212,16 @@ browser, whose interpreter has one stack: k10 (2026-11-19); what comes after is 
   its interfaces, the walk `supertypes` makes -- the one declared LAST
   (`implementations` reads `methods.reversed()`); `super.m()` of an abstract method says
   `in <class>`. Both were wrong before (`a()` named where javac names `c()`).
+- **An intrinsic class counts in a dispatcher and an interface test only where the
+  program can hold its values** (k12, `JavaClass.held`, `JavaClasses.held`): set where
+  `qualified` answers the class outside the declaration of a library class -- a
+  declaration of the program, a body being lowered, a boxing. Until then a box was in
+  `Comparable%is` and `Comparable.compareTo(Object)%v` as soon as it was in the table,
+  and a library class's member types put it there: `Collection.stream()` names
+  `Stream`, whose `mapToDouble` names `DoubleStream`, which names `Double`, so every
+  program with a collection would have carried a `FLOATP` arm and
+  `%java-double-compare` (measured: `examples/java/shop` 328,194 -> 328,869 B of wasm
+  before the flag, 328,252 with it, the rest being `compareTo`'s null test below).
 - **A simple name finds what a class HAS, not what a class above it declares** (j89;
   `JavaLowering.inherits`, JLS 8.2): a `private` member, and from another package one that
   is neither `public` nor `protected`, is no member of the classes under its class, so the
@@ -616,7 +630,36 @@ lub of the lowers, else an upper, else OPEN.
   (`fn(B::twice)` finds `Function<Integer, Integer>`); an unbound one's first parameter is
   the class, as before.
 - **A switch expression whose arms are lambdas waits for its parameter's type** like a
-  conditional of them (`needsTarget`, `accepts`).
+  conditional of them (`needsTarget`, `accepts`); an arm that is no lambda (`null`, a
+  variable) is lowered as the type (k12: `cond ? () -> x : null` as an argument was
+  `cannot be applied to given types`).
+- **What the collectors needed (k12, 2026-11-19)**, each found by a probe of
+  `collect(groupingBy(.., mapping(.., toList())))` over the program's own classes
+  (`Gathered` in the corpus) before the library was written:
+  - **An argument lowered late is captured as one lowered early is** (`deferred`): a
+    `Collector<T, ?, R>` given for `Collector<? super T, A, R>` after this call's
+    inference was `incompatible types: .. cannot be converted to ..`, its `?` never a
+    type of its own.
+  - **Under captures of `? super T` is `T`** (`Inference.resolved`): two upper bounds that
+    are captures of one wildcard (a function and a collector both `? super T`, passed on
+    by a method of the library to another) had no type under both; what a capture is
+    above is under it.
+  - **The type a parameter has to be is told through its declared bound**
+    (`incorporateExact`): `M extends Map<K, D>` found to be `Map<String, Long>` from the
+    type the call is wanted as makes `K` and `D` those. Said once a parameter, at any
+    `solution(true)`, since the wanted type may be the first to say it.
+  - **An open variable of an argument's type is the parameter it stands at**
+    (`lowerBound`, `tie`): `toList()` given for `Collector<T, A, R>` is a
+    `Collector<OPEN, ?, List<OPEN>>`, and `R` is now `List<T>` -- so the lambda of
+    `collectingAndThen(toList(), l -> ..)` takes a `List<String>` once the target says
+    `T`, where it took a `List<Object>`.
+  - **A call is resolved once more, its lambda-holding arguments waiting** (`resolve`'s
+    outer half, `eager`): where such an argument lowered with no target and the call then
+    failed, the state is put back and the call resolved with those arguments late;
+    failing again, the first error stands. A failure marks it, as before: a program that
+    lowered keeps its forms. Cost on a failing path: one more lowering of the call's
+    lambdas (linear in the depth of nested calls, the waiting arguments not being
+    lowered in the retry).
 - **A lambda's shape picks among overloads**: its parameter count, and whether its body can
   give a value or none. Only where several candidates remain is a body that is a call asked
   whether it gives nothing (`givesNothing`: lowered once and dropped, state restored), and only
@@ -769,7 +812,7 @@ measured programs.
   the forms name. A program's own classes are lowered whole, as before. A local or anonymous
   class of the library is lowered where its method is.
 - **A missing member of a library class is refused by name**, source or intrinsic
-  (`ArrayList.stream()`), never `cannot find symbol`.
+  (`ArrayList.spliterator()`), never `cannot find symbol`.
 - **`HashMap` keeps the order a program sees** (the JDK 25 running the corpus is the oracle,
   `a-hash-map-finds-a-key-by-equals-and-keeps-the-order-a-program-sees`): hash folded with its
   upper half, masked by a power of two that doubles past three quarters, the table made at the
@@ -808,7 +851,7 @@ measured programs.
 - A method reference naming a class fits a functional interface by its arity when a call has
   several candidates (`takes`): `thenComparing(Point::label)` against `thenComparing(Comparator)`.
 - Sizes on wasm (2026-11-17, before / after): a list added to and read 3,732 / 25,592; one
-  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/k12` holds what is
+  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/k26` holds what is
   left and the leads.
 - **The library is Java a JDK compiles** (j79, decided by measuring): javac of JDK 25 takes
   all 139 files as a patch of its own `java.base` (`--patch-module java.base=<library>`) with
@@ -876,8 +919,8 @@ measured programs.
   pattern does not have appends the input before the match and the replacement up to the
   reference, then throws, and moves nothing on (`Matcher.piece` / `pieced`,
   `%java-regex-expand` answering the part written); a match appended twice is the
-  `IndexOutOfBoundsException` of its range. Not there: `results`, `splitAsStream`
-  (streams), `usePattern`, `namedGroups`.
+  `IndexOutOfBoundsException` of its range. `results` and `splitAsStream` since k12
+  ("java.util.stream"). Not there: `usePattern`, `namedGroups`.
 - **A program's class named as a `java.lang` source class** (`Iterable`, `CharSequence`,
   `Comparable`, since j87 `Appendable`, which every `Writer` and `PrintStream` names) is
   refused once the program reaches the library's. Counted 2026-11-18 over every Java
@@ -920,7 +963,7 @@ measured programs.
   `toUpperCase` / `toLowerCase` (the host's fold is uniform), and `digit` /
   `getNumericValue`, which still ask the host: a digit outside ASCII is read on the
   interpreter and the JVM and not on wasm, `Integer.parseInt` with it (`deviations.md`,
-  `.todo/k12`: a table there would be in every program that parses a number).
+  `.todo/k26`: a table there would be in every program that parses a number).
 - **`%h` hands the format the program's `hashCode()` only where the control may ask**
   (`JavaIntrinsics.formatted`): `%java-format` takes the function as its fourth argument,
   `nil` when the control is a constant with no `%h`. The arm itself is 401 B in every
@@ -947,7 +990,7 @@ measured programs.
   refusal's message, index and cause -- prints a JDK 25's lines on the four backends
   (`.todo/artefacts/k05-java-front-end-what-the-everyday-members-and-utf-16-slice-left/Dur.java`).
   Not there: `dividedBy`, `between`, `of` /
-  `get` of a `TemporalUnit`, `truncatedTo`; the rest of `java.time` (`.todo/k12`).
+  `get` of a `TemporalUnit`, `truncatedTo`; the rest of `java.time` (`.todo/k26`).
   `Thread.sleep(Duration)` is there (a duration below zero is no sleep, zero is one an
   interrupt ends, measured); `join(Duration)` since k08 ("java.util.concurrent").
 - **The members j98 left that a line of Java answers (k05)**: `Math.divideExact` /
@@ -957,7 +1000,7 @@ measured programs.
   first, so an array too short keeps the high one's place) / `codePointAt` of an array
   / `reverseBytes`, `OptionalLong` and `HttpHeaders.firstValueAsLong`: each in
   `Support` or a source class, 866 probe lines identical to JDK 25 on four backends
-  (`Members.java` beside `Dur.java`). Still refused: `.todo/k12`.
+  (`Members.java` beside `Dur.java`). Still refused: `.todo/k26`.
 
 ## java.io (2026-11-17, j79)
 
@@ -1089,7 +1132,7 @@ holds none of it.** No files: `File`, `FileReader`, `java.nio.file` stay refused
   string CONSTANT holding one is `?` on wasm. Measured 2026-11-18 (j98): the two halves
   of a pair appended to a `StringBuilder` one `char` after the other are a string of
   length 2 on the interpreter, 1 on the JVM (a JDK: 2 units, here one character), and
-  on wasm no `equals` of the character they spell (`.todo/k12`).
+  on wasm no `equals` of the character they spell (`.todo/k26`).
 - **`Double.longBitsToDouble`, `Float.intBitsToFloat`** are `%java-bits-binary` over
   `%java-nearest-binary` (exact, the subnormals included).
 - **Measured** (2026-11-17, the box and method of "Measured" below; wasm / class bytes, then
@@ -1100,6 +1143,110 @@ holds none of it.** No files: `File`, `FileReader`, `java.nio.file` stay refused
   244,022 / 260,052, 0.43 / 0.66 s against 0.50 / 0.42 s for one `StringBuilder` printed
   (76,122 / 108,409). The corpus case of the byte streams alone is 312,953 B of wasm, the
   one of the print streams and readers 460,101 B.
+
+## java.util.stream (2026-11-19, k12)
+
+**Invariant: a stream is a function answering its next element, each stage a closure over
+the stage before it; nothing runs until the last operation pulls, and what a JDK 25 shows
+of a pipeline -- which stage sees which element when, what `count()` skips, the order of
+a collected map -- is what the corpus pins.** Written from the API documentation and
+JDK 25's answers to probes ([java-frontend-provenance.md](java-frontend-provenance.md));
+the probes are `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-duration-slice-left/`.
+
+- **The shape** (`rontolisp.internal.Flow`, `ObjectFlow`, `IntFlow`, `LongFlow`,
+  `DoubleFlow`: the one class behind each of `Stream`, `IntStream`, `LongStream`,
+  `DoubleStream`, so a call of a stream's member is direct). A stage holds a `Pull` -- a
+  functional interface of the package only lambdas implement, so a pull is a `funcall`
+  with no choice among classes -- and an `Ending` the pull sets when it has no element
+  (what it answers then does not count: no sentinel, so `null` is an element and an
+  `int` needs no box). A stage handing on what the one before it gives (`map`, `filter`,
+  `peek`, `limit`, `takeWhile`) shares that `Ending`; one going on past it (`sorted`,
+  `flatMap`) has its own. The stage's state is a one-element array or a `Held` the
+  lambda closes over. Rejected: `Iterator` classes a stage (two dispatched calls an
+  element over every iterator class the program makes: the 50 to 65 ns an element
+  measured for an enhanced `for` on wasm), a sentinel object (a cast to the element type
+  a stage, a box an `int`), sinks pushed into (no `iterator()`, no lazy `flatMap`).
+- **Laziness is the pull's**: an element goes through every stage before the next is
+  taken, `limit` and `takeWhile` take no element past their last, `sorted` takes all at
+  its first pull, `flatMap` asks an inner stream only as far as it is read, `iterator()`
+  reads one element ahead at `hasNext` only. A collection's iterator is made at the
+  first pull, so a stream sees what was added after it was made. All measured
+  (`Lazy.java`), all a JDK 25's.
+- **`count()` runs no stage where the size is known**, as a JDK 25: `Flow.Count`, a
+  function asked when the stream ends, `null` where a source or a stage cannot tell.
+  Known: every `Collection` but the concurrent ones (`ConcurrentHashMap`'s views,
+  `ConcurrentLinkedQueue` / `Deque`, the blocking queues, `LinkedTransferQueue`, which
+  override `stream()`), an array, `Stream.of`, `empty`, a builder, a range, `chars()`,
+  an `Optional`, `concat` of two known. Kept by `map`, `peek`, `sorted`, `boxed`,
+  `mapToObj`, `asLongStream`, `unordered`, `skip` and `limit` (which adjust it); lost by
+  `filter`, `distinct`, `flatMap`, `takeWhile`, `dropWhile`; never known of `iterate`,
+  `generate`, `lines()`, `splitAsStream`, `results`, a reader's `lines`. A grid of 114
+  sources and stages by four questions (`Sized.java`); the corpus keeps 102 rows of it.
+  One difference: a PARALLEL stream's `sorted().skip(n).count()` runs under a JDK.
+- **A stream is asked once** (`Flow.link`: the JDK's `IllegalStateException` and its
+  words); `parallel()` / `sequential()` / `onClose` answer the stream itself and
+  `unordered()` a new one, as measured. The close handlers and the parallel flag are
+  the pipeline's (`Flow.Origin`, shared from the source on): handlers run once, in the
+  order given, the first failure thrown holding the others suppressed. **Everything
+  runs in order on the calling thread**: `parallel()` only sets the flag, a combiner is
+  never called (`deviations.md`).
+- **A double stream's sum is Kahan's compensated one** (`Flow.add` / `total`: the sum,
+  what the additions lost, and the plain sum, which is the answer where the first two
+  are no number and it is infinite). Which summation a JDK uses is in no documentation:
+  of plain, Kahan, Kahan with the last compensation subtracted and Neumaier, only the
+  third gave a JDK 25's bits on all 20,000 seeded sums (`Sum.java`: 9,816 / 19,879 /
+  20,000 / 15,002). `average`, `summaryStatistics`, `summingDouble`, `averagingDouble`
+  share it; `min` / `max` are `Math.min` / `max` (`-0.0` under `0.0`, a NaN wins).
+- **The collectors** (`Collectors`, `Collected`: a collector of four functions and a bit
+  mask of marks). What the documentation leaves open and a program sees, each measured:
+  `groupingBy` reaches its map by `computeIfAbsent` and `toMap` by `putIfAbsent` /
+  `merge`, which is the order keys sharing a bucket are walked in (`1, 17, 33` in a
+  table of 16); `partitioningBy` answers a map of `false` then `true` that takes no
+  `put` (`Halves`); `toMap`'s `Duplicate key .. (attempted merging values .. and ..)`
+  and `groupingBy`'s `element cannot be mapped to a null key`; `min` / `max` /
+  `minBy` / `maxBy` keep the FIRST of equal elements; `characteristics()` of each
+  collector and of each made of another (102 lines, `Ch.java`: `mapping` / `filtering`
+  / `flatMapping` the downstream's, `collectingAndThen` those without
+  `IDENTITY_FINISH`, `groupingBy` / `partitioningBy` only `IDENTITY_FINISH` where the
+  downstream has it, `teeing` what both have without it). The set is made when asked
+  for, in the enum's order. **Decided: the finisher is always called** and the marks of
+  a collector of the program's own class are not read (`Collected.marks`): reading them
+  is `characteristics()` of every collector made -- a set and a dispatcher in every
+  program that groups -- for a mark only a `finisher()` that is no identity under
+  `IDENTITY_FINISH` would show.
+- **A string's streams** are `rontolisp.internal.Flows` (`chars` / `codePoints`: one
+  stream, of code points; `lines`), members `JavaIntrinsics.meets` adds once
+  `IntStream` / `Stream` is named; `CharSequence` has the two as defaults.
+  `BufferedReader.lines`, `Matcher.results` (from where the matcher stands when the
+  stream is READ, leaving it there: measured) and `Pattern.splitAsStream` (`split`'s
+  pieces, one empty piece of an empty input) are iterators handed to `ObjectFlow.over`.
+- **Measured** (2026-11-19, the box of "Measured" below, best of three; JVM class /
+  precompiled wasm / JDK 25, ns an element over 1,000,000 elements, 20 rounds,
+  `bench/Stages.java`): a loop over an `int[]` 5.3 / 16.0 / 1.3; `Arrays.stream(a).sum()`
+  13.0 / 56.0 / 1.8; with one `map` 54.6 / 88.5 / 2.1; `map` and `filter` 70.7 / 123.5 /
+  2.7; three `map` 86.5 / 156.4 / 8.0; an enhanced `for` over an `ArrayList<Integer>`
+  29.5 / 54.8 / 2.7; `list.stream().mapToInt(..).sum()` 75.9 / 113.2 / 3.9;
+  `filter(..).collect(toList())` 87.8 / 151.7 / 14.1. **A stage is some 33 ns an element
+  on wasm and 16 to 40 on the JVM: a closure call's cost there** (j70 measured
+  20,000,000 calls of a lambda at 1.35 s on wasm), which is the lead, not the library.
+  Sizes, class / wasm bytes (`sizes/`): a list counted by a loop 84,402 / 57,341, by
+  `stream().filter(..).count()` 94,261 / 61,728; mapped into a list by a loop 145,414 /
+  133,052, by `map(..).collect(toList())` 169,378 / 144,046, by `toList()` 176,782 /
+  147,040; `sorted().collect(joining(","))` 192,371 / 157,605;
+  `collect(groupingBy(String::length, counting()))` 217,664 / 167,895; a sum of squares
+  by a loop 47,200 / 32,230, by `IntStream.range(..).map(..).sum()` 91,757 / 61,457.
+  A program calling no stream is unchanged in what it holds
+  (`JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`), but its
+  class table reads 97 files of the library where it read 46 -- `Collection` names
+  `Stream`, and a class's member types are read with it: 1.89 -> 1.95 s for a program of
+  one list on the interpreter (`.todo/k26`).
+- **`String.compareTo(null)` throws** (k12: it answered 1, found by `sorted()` over a
+  `null`): `%java-string-compare` and `-ignore-case` test their argument, 23 B of wasm
+  in a program comparing strings.
+- **Not there** (`.todo/k26`, each refused by name): `mapMulti`, `gather`,
+  `spliterator` / `StreamSupport`, `Collectors.groupingByConcurrent` /
+  `toConcurrentMap`, `Random.ints` and its kin; an inner stream of `flatMap` that a
+  short-circuit leaves unfinished is not closed.
 
 ## java.net.http (2026-11-18, k03)
 
@@ -1224,7 +1371,7 @@ member) or is refused where the request is sent (`deviations.md`, "The HTTP clie
   and in the client), with one 489,891 B. A program's own `HttpRequest` class stating a
   `timeout()` is refused by name where no builder was given one. A component that
   serves cannot time a request (an `IOException` with fetch's refusal: `.todo/148`).
-- **Not made** (`.todo/k12`): bodies as they arrive (`ofInputStream` reads a body
+- **Not made** (`.todo/k26`): bodies as they arrive (`ofInputStream` reads a body
   already in, `ofLines`, a program's own `BodySubscriber`), the `--host-fetch` reactor
   as a leg, `URI`'s constructors of several parts.
 
@@ -3071,4 +3218,15 @@ into an array, `OptionalLong`, `getenv` of no variable), `Thread.sleep` of a `Du
 `firstValueAsLong` in `fields-both-ways` and the timeout of a program's own request class
 in `subset`; `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`
 (the fetch form with no timeout keyword, and with both once a builder is given a time
-limit).
+limit). k12: java-spec `a-stream-hands-its-elements-on-one-at-a-time` (the laziness, the
+count grid, the close handlers, what a stream refuses),
+`the-streams-a-program-writes-over-collections-arrays-texts-and-numbers` (the chains of
+everyday code; the number streams, their optionals, statistics and iterators; the
+compensated sum over 200 seeded doubles; `Name.class::isInstance`) and
+`a-collector-gathers-a-stream-and-the-type-arguments-are-found` (every collector, the
+bucket order, the marks, a collector's parts combined by hand, and `Gathering`: the
+collector shapes over the program's own classes, which hold the inference without the
+library), `compared` in `the-run-time-raises-the-language-s-exceptions`;
+`JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches` (a program
+calling no stream holds no class of them; a stage is a `funcall`, a member's call direct).
+The three cases print 589 lines; the corpus is 61 cases.

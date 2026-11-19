@@ -248,7 +248,7 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 `matches`、`group`、`start`、`end`、`groupCount`、`hasMatch`、`reset`、`region`、`regionStart`、
 `regionEnd`、アンカー境界と透過境界の設定、`hitEnd`、`requireEnd`、文字列または関数を取る
 `replaceAll` と `replaceFirst`、`appendReplacement`、`appendTail`、`toMatchResult`、
-`quoteReplacement` です。`results`、`usePattern`、`namedGroups`、ストリームはありません。
+`quoteReplacement`、`results`、`splitAsStream` です。`usePattern` と `namedGroups` はありません。
 透過境界のリージョンで `lookingAt` または `matches` を呼んだあと、後読みがリージョンより前を
 読んでいると、JDK の `start()` は 0 を返します。ここではリージョンの開始位置を返します。
 
@@ -276,7 +276,19 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 
 **クラスを表すオブジェクトはありません。** `getClass()` とクラスリテラル（`Name.class`）は、
 互いを `==`、`!=`、`equals` で比較する箇所と、`getName()`、`getSimpleName()` の直前でだけ
-読めます。それ以外の箇所ではエラーになります。
+読めます。`Name.class::isInstance` と `Name.class::cast` は、型の検査とキャストになります。
+それ以外の箇所ではエラーになります。
+
+**ストリームは、結果を求めたスレッドで順に実行されます。** `parallel()` と
+`parallelStream()` は記録されるだけです（`isParallel()` は `true` を返します）。要素は
+ソースの順に 1 つずつ流れ、コレクターの `combiner` と、`collect`、`reduce` の第 3 引数は
+呼ばれません。`String.chars()` と `codePoints()` は同じストリームで、コードポイントを
+返します。`flatMap` または `flatMapping` の中で作ったストリームは、最後の要素を取り出した
+ときに閉じられます。`findFirst` や `limit` で途中まで読んだストリームは閉じられません。
+コレクターの `finisher` は、`characteristics()` の内容にかかわらず必ず呼ばれます。
+プログラム自身のクラスのコレクターから作ったコレクター（`mapping`、`groupingBy`）は、
+元のコレクターの特性を引き継ぎません。`mapMulti`、`gather`、`spliterator`、`StreamSupport`、
+`Collectors.groupingByConcurrent` と `toConcurrentMap`、`Random` のストリームはありません。
 
 **ホストへの問い合わせには決まった値を返します。** `Runtime.availableProcessors()` は 1 です。
 `System.getProperty` は `line.separator`、`file.separator`、`path.separator` と、エンコーディング
@@ -512,15 +524,16 @@ WebSocket です。`version(..)` で指定した値は保持され、問い合�
 
 - アノテーション型、`assert`。
 - 値として使うクラスリテラルと `getClass()`。どちらも、クラスとの比較と `getName()`、
-  `getSimpleName()` の直前でだけ読めます。クラスリテラルは `synchronized` 文のロックと
-  フィールドアップデーターのクラスにもなります。プリミティブ型と配列型のクラスリテラル。
+  `getSimpleName()` の直前でだけ読めます。クラスリテラルは `synchronized` 文のロック、
+  フィールドアップデーターのクラス、`::isInstance` と `::cast` の対象にもなります。
+  プリミティブ型と配列型のクラスリテラル。
 - `long`、`float`、`double`、`boolean` に対する `switch`。修飾した `super` を通すメソッド参照と
   フィールド（`Interface.super::m`、`Outer.super.x`）。
 - `String`、`StringBuilder`、ボックスを継承するクラス。
 - `java.util.concurrent` のうち、[概要](index.md)の表にないもの。優先度順または遅延順の
   キュー、`ConcurrentSkipListMap` です。`Date` を取る `Timer` の `schedule`、スレッドグループも
   拒否されます。
-- [概要](index.md)の表にないライブラリのクラスとメンバー。ストリーム（`java.util.stream`）、
+- [概要](index.md)の表にないライブラリのクラスとメンバー。
   `LinkedList`、`LinkedHashMap`、`TreeMap`、`Scanner`、ファイル（`File`、`FileReader`、
   `java.nio.file`）、`Duration` 以外の `java.time`、`BigInteger`、`BigDecimal`、
   リフレクションなどです。

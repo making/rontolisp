@@ -7,6 +7,7 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 public final class Optional<T> {
 
@@ -107,6 +108,10 @@ public final class Optional<T> {
 
     public Optional<T> or(Supplier<Optional<T>> other) {
         return value != null ? this : other.get();
+    }
+
+    public Stream<T> stream() {
+        return value == null ? Stream.empty() : Stream.of(value);
     }
 
     public boolean equals(Object o) {

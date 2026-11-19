@@ -16,6 +16,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
+import java.util.stream.Stream;
+import rontolisp.internal.ObjectFlow;
 
 public class LinkedTransferQueue<E> extends AbstractCollection<E> implements TransferQueue<E> {
 
@@ -310,5 +312,10 @@ public class LinkedTransferQueue<E> extends AbstractCollection<E> implements Tra
 
     public synchronized Iterator<E> iterator() {
         return new Walk<E>(this, elements().iterator());
+    }
+
+    // how many elements a concurrent collection holds is told by running the stream
+    public Stream<E> stream() {
+        return ObjectFlow.over(this, null);
     }
 }

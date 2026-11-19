@@ -576,6 +576,31 @@ class JavaLoweringTest {
 			.noneMatch(form -> form.contains("HttpServing.serve()"));
 		assertThat(forms).noneMatch(
 				form -> form.contains("RONTOLISP:FETCH") || form.contains("%URI-") || form.contains("%HTTP-SERVE"));
+		// A collection's stream() is a member like any other: the program above, which
+		// calls none, holds no class of the streams. A stream's stage is a function the
+		// stage after it calls for the next element -- a funcall, no choice among
+		// classes -- and a call of a stream's member is direct, one class being behind
+		// each kind of stream; a collection tells how many elements it holds through a
+		// function count() asks.
+		assertThat(forms).noneMatch(form -> form.contains("java.util.stream.") || form.contains("Flow"));
+		assertThat(lower("""
+				import java.util.*;
+				class L12 {
+				    public static void main(String[] args) {
+				        List<String> words = new ArrayList<>();
+				        System.out.println(words.stream().filter(w -> w.isEmpty()).count());
+				    }
+				}
+				""", "L12.java"))
+			.contains("(DEFUN |java.util.Collection.stream()| (|this|) (|rontolisp.internal.ObjectFlow.over(Iterable,"
+					+ "rontolisp.internal.Flow.Count)| |this| (LAMBDA NIL (|java.util.ArrayList.size()| |this|))))")
+			.anyMatch(form -> form.startsWith("(DEFUN |L12.main(String[])| ")
+					&& form.contains("(|rontolisp.internal.ObjectFlow.count()| (OR (|rontolisp.internal.ObjectFlow."
+							+ "filter(java.util.function.Predicate)| (OR (|java.util.Collection.stream()| "))
+			.anyMatch(form -> form
+				.startsWith("(DEFUN |rontolisp.internal.ObjectFlow.filter(java.util.function.Predicate)| ")
+					&& form.contains("(LAMBDA NIL ") && form.contains("(FUNCALL (OR |pull| (RONTOLISP::%JAVA-NPE)))"))
+			.noneMatch(form -> form.contains("Pull.next()") || form.contains("IntFlow"));
 		// Number's values are Lisp values, so a member called through it is the run
 		// time's form -- until a class of Java source stands under Number (an atomic, a
 		// program's own): then a function chooses the body by the receiver's class,
@@ -1136,9 +1161,9 @@ class JavaLoweringTest {
 				{ "interface I { default void m() { } } class A implements I { Runnable r = I.super::m; } void main() { }",
 						"1:81: a method reference through a qualified super" },
 				{ "import java.util.Scanner; void main() { Scanner s = null; }", "1:41: the class java.util.Scanner" },
-				{ "void main() { var xs = new ArrayList<String>(); IO.println(xs.stream()); }",
-						"1:63: ArrayList.stream()" },
-				{ "void main() { IO.println(\"a\".chars()); }", "1:30: String.chars()" },
+				{ "void main() { var xs = new ArrayList<String>(); IO.println(xs.spliterator()); }",
+						"1:63: ArrayList.spliterator()" },
+				{ "void main() { IO.println(\"a\".stripIndent()); }", "1:30: String.stripIndent()" },
 				{ "void main() { IO.println(Collections.EMPTY_LIST); }", "1:38: Collections.EMPTY_LIST" },
 				{ "void main() { var s = new StringBuilder(); s.codePointAt(0); }",
 						"1:46: StringBuilder.codePointAt(int)" },

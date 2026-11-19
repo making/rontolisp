@@ -6,6 +6,7 @@ package java.util;
 import java.util.function.LongConsumer;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
+import java.util.stream.LongStream;
 
 public final class OptionalLong {
 
@@ -73,6 +74,10 @@ public final class OptionalLong {
         else {
             emptyAction.run();
         }
+    }
+
+    public LongStream stream() {
+        return present ? LongStream.of(value) : LongStream.empty();
     }
 
     public boolean equals(Object other) {

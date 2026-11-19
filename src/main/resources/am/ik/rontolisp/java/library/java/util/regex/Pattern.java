@@ -3,7 +3,10 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util.regex;
 
+import java.util.Arrays;
 import java.util.function.Predicate;
+import java.util.stream.Stream;
+import rontolisp.internal.ObjectFlow;
 
 // A compiled pattern of the engine every front end shares (eval/regex.lisp, written
 // from the syntax this class's documentation describes). The native members are the
@@ -110,6 +113,12 @@ public final class Pattern {
 
     public String[] split(CharSequence input, int limit) {
         return split0(program, input.toString(), limit);
+    }
+
+    // the pieces split gives, found when the stream is read
+    public Stream<String> splitAsStream(CharSequence input) {
+        String text = input.toString();
+        return ObjectFlow.over(() -> Arrays.asList(split(text, 0)).iterator(), null);
     }
 
     int groupCount() {

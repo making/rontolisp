@@ -2,6 +2,7 @@ package am.ik.rontolisp.java;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -760,13 +761,38 @@ final class JavaTypes implements JavaClasses.Relations {
 				if (above == null || above.arguments().size() != wanted.arguments().size()) {
 					return;
 				}
+				// a variable the call that gave the value left open, where a parameter
+				// stands in the formal type, is that parameter wherever else the value's
+				// type names it: toList() given for Collector<T, A, R> makes R a List<T>
+				Map<TypeParameter, JavaType> tied = new HashMap<>();
 				for (int i = 0; i < wanted.arguments().size(); i++) {
-					argument(wanted.arguments().get(i), above.arguments().get(i));
+					tie(wanted.arguments().get(i), above.arguments().get(i), tied);
+				}
+				for (int i = 0; i < wanted.arguments().size(); i++) {
+					JavaType given = above.arguments().get(i);
+					argument(wanted.arguments().get(i), isOpen(given) ? given : substitute(given, tied));
 				}
 			}
 			else if (formal instanceof ArrayType wanted && actual instanceof ArrayType given
 					&& given.element().isReference()) {
 				lowerBound(wanted.element(), given.element());
+			}
+		}
+
+		/**
+		 * Notes each open variable of a given type that stands where the formal type has
+		 * one of the parameters this inference finds.
+		 */
+		private void tie(JavaType formal, JavaType given, Map<TypeParameter, JavaType> tied) {
+			if (isVariable(formal) && isOpen(given)) {
+				tied.putIfAbsent(((Variable) given).parameter(), formal);
+			}
+			else if (formal instanceof ClassType wanted && given instanceof ClassType named
+					&& wanted.declaration() == named.declaration()
+					&& wanted.arguments().size() == named.arguments().size()) {
+				for (int i = 0; i < wanted.arguments().size(); i++) {
+					tie(wanted.arguments().get(i), named.arguments().get(i), tied);
+				}
 			}
 		}
 
@@ -872,6 +898,7 @@ final class JavaTypes implements JavaClasses.Relations {
 		 * {@code Leaf} is a {@code Comparable<Node>}, makes {@code T} a {@code Node}.
 		 */
 		private void incorporate() {
+			incorporateExact();
 			if (this.incorporated) {
 				return;
 			}
@@ -886,6 +913,29 @@ final class JavaTypes implements JavaClasses.Relations {
 						for (JavaType type : List.copyOf(given)) {
 							lowerBound(bound, type);
 						}
+					}
+				}
+			}
+		}
+
+		private final Set<TypeParameter> incorporatedExact = new HashSet<>();
+
+		/**
+		 * What the type a parameter has to be says through the bound the parameter is
+		 * declared with: {@code M extends Map<K, D>} found to be a
+		 * {@code Map<String, Long>} makes {@code K} a {@code String}. Said once for each
+		 * parameter, when its type is found, which the type a call's value is wanted as
+		 * may be the first to say.
+		 */
+		private void incorporateExact() {
+			for (TypeParameter parameter : this.variables) {
+				JavaType exact = this.exact.get(parameter);
+				if (exact == null || mentions(exact, this.variables) || !this.incorporatedExact.add(parameter)) {
+					continue;
+				}
+				for (JavaType bound : parameter.bounds) {
+					if (bound instanceof ClassType && mentions(bound, this.variables)) {
+						lowerBound(bound, exact);
 					}
 				}
 			}
@@ -923,6 +973,14 @@ final class JavaTypes implements JavaClasses.Relations {
 				for (JavaType candidate : upper) {
 					if (!isVariable(candidate) && upper.stream().allMatch(other -> isSubtype(candidate, other))) {
 						return candidate;
+					}
+				}
+				// under captures of {@code ? super T} is what they are above: T
+				for (JavaType candidate : upper) {
+					JavaType below = candidate instanceof Variable capture ? capture.parameter().lower : null;
+					if (below != null && !isVariable(below)
+							&& upper.stream().allMatch(other -> isSubtype(below, other))) {
+						return below;
 					}
 				}
 				for (JavaType candidate : upper) {

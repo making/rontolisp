@@ -36,19 +36,25 @@ imports: |
   import java.util.Comparator;
   import java.util.ConcurrentModificationException;
   import java.util.Deque;
+  import java.util.DoubleSummaryStatistics;
   import java.util.Enumeration;
   import java.util.HashMap;
   import java.util.HashSet;
   import java.util.Hashtable;
+  import java.util.IntSummaryStatistics;
   import java.util.Iterator;
   import java.util.List;
   import java.util.ListIterator;
   import java.util.Locale;
+  import java.util.LongSummaryStatistics;
   import java.util.Map;
   import java.util.NoSuchElementException;
   import java.util.Objects;
   import java.util.Optional;
+  import java.util.OptionalDouble;
+  import java.util.OptionalInt;
   import java.util.OptionalLong;
+  import java.util.PrimitiveIterator;
   import java.util.Queue;
   import java.util.Random;
   import java.util.Set;
@@ -59,6 +65,7 @@ imports: |
   import java.util.regex.Matcher;
   import java.util.regex.Pattern;
   import java.util.regex.PatternSyntaxException;
+  import java.util.stream.*;
 cases:
   # An int is an integer kept in range by an unconditional mask; a constant expression
   # is folded as the language computes it.
@@ -1669,6 +1676,8 @@ cases:
               attempt("string", () -> System.out.println(s.length()));
               attempt("object", () -> System.out.println(o.hashCode()));
               attempt("list", () -> System.out.println(list.size()));
+              attempt("compared", () -> System.out.println("a".compareTo(s)));
+              attempt("compared ignoring case", () -> System.out.println("a".compareToIgnoreCase(s)));
               attempt("throw", () -> { RuntimeException e = null; throw e; });
               attempt("cast", () -> System.out.println((Integer) text));
               attempt("negative", () -> System.out.println(new int[args.length - 2].length));
@@ -1709,6 +1718,8 @@ cases:
       string: java.lang.NullPointerException true
       object: java.lang.NullPointerException true
       list: java.lang.NullPointerException true
+      compared: java.lang.NullPointerException true
+      compared ignoring case: java.lang.NullPointerException true
       throw: java.lang.NullPointerException true
       cast: true
       negative: java.lang.NegativeArraySizeException: -2
@@ -4794,6 +4805,1703 @@ cases:
       [1.0, -1.0][1.0, 2.5][1.0, NaN][2.0, 0.25][2.0, 0.5] -1.0 1 null fallback /: UTF-8 true true
       OptionalLong[42] OptionalLong.empty truefalsetrue 42 7 8 42 truefalse 420 42+none null
       java.util.NoSuchElementException: No value present
+  # A stream hands its elements on one at a time: each goes through every stage before
+  # the next is taken, a stage that ends the stream takes no element more, a sort takes
+  # all of them first. count() runs no stage where the source and the stages tell how
+  # many elements there are -- which sources and stages do was measured against a JDK
+  # 25, the grid of `sources`. A stream is asked once; its close handlers run once, in
+  # the order given, the first failure holding the others.
+  - name: a-stream-hands-its-elements-on-one-at-a-time
+    main: StreamsRun
+    source: |
+      class StreamsRun {
+          static StringBuilder log = new StringBuilder();
+
+          static int ran;
+
+          static <T> T seen(T x) {
+              log.append(x).append(' ');
+              return x;
+          }
+
+          static String seenSoFar() {
+              return log.isEmpty() ? "" : " | " + log.toString().trim();
+          }
+
+          static void show(String what, Object value) {
+              System.out.println(what + ": " + value + seenSoFar());
+              log.setLength(0);
+          }
+
+          static void fails(String what, Runnable r) {
+              try {
+                  r.run();
+                  System.out.println(what + ": ran" + seenSoFar());
+              }
+              catch (NullPointerException e) {
+                  System.out.println(what + ": " + e.getClass().getName() + seenSoFar());
+              }
+              catch (RuntimeException e) {
+                  System.out.println(what + ": " + e + seenSoFar());
+              }
+              log.setLength(0);
+          }
+
+          // whether a stream of a source knows how many elements it holds: asked for its
+          // count, and for it past a skip, a limit and a sort, it runs its stages or does not
+          static void row(String what, Supplier<Stream<?>> source) {
+              StringBuilder line = new StringBuilder(what + ":");
+              ran = 0;
+              long n = source.get().peek(x -> ran++).count();
+              line.append(" count ").append(n).append(ran == 0 ? " known" : " run");
+              ran = 0;
+              n = source.get().peek(x -> ran++).skip(1).count();
+              line.append(", skip ").append(n).append(ran == 0 ? " known" : " run");
+              ran = 0;
+              n = source.get().peek(x -> ran++).limit(1).count();
+              line.append(", limit ").append(n).append(ran == 0 ? " known" : " run " + ran);
+              ran = 0;
+              n = source.get().peek(x -> ran++).sorted().skip(1).count();
+              line.append(", sorted skip ").append(n).append(ran == 0 ? " known" : " run " + ran);
+              System.out.println(line);
+          }
+
+          static void sources() {
+              List<Integer> list = new ArrayList<>(List.of(1, 2, 3));
+              Map<Integer, Integer> map = new HashMap<>(Map.of(1, 2, 3, 4));
+              Integer[] array = { 1, 2, 3 };
+              row("ArrayList", () -> list.stream());
+              row("subList", () -> list.subList(0, 2).stream());
+              row("List.of 2", () -> List.of(1, 2).stream());
+              row("List.of 3", () -> List.of(1, 2, 3).stream());
+              row("List.of 0", () -> List.of().stream());
+              row("List.copyOf", () -> List.copyOf(list).stream());
+              row("Arrays.asList", () -> Arrays.asList(array).stream());
+              row("Arrays.stream", () -> Arrays.stream(array));
+              row("Arrays.stream range", () -> Arrays.stream(array, 1, 3));
+              row("Stream.of", () -> Stream.of(1, 2, 3));
+              row("Stream.of one", () -> Stream.of(1));
+              row("Stream.empty", () -> Stream.empty());
+              row("Stream.ofNullable", () -> Stream.ofNullable(1));
+              row("Stream.ofNullable null", () -> Stream.ofNullable(null));
+              row("builder", () -> Stream.builder().add(1).add(2).build());
+              row("builder one", () -> Stream.builder().add(1).build());
+              row("builder none", () -> Stream.builder().build());
+              row("concat", () -> Stream.concat(list.stream(), list.stream()));
+              row("concat unknown", () -> Stream.concat(list.stream(), list.stream().filter(x -> true)));
+              row("iterate", () -> Stream.iterate(1, x -> x + 1).limit(3));
+              row("iterate3", () -> Stream.iterate(1, x -> x < 3, x -> x + 1));
+              row("generate", () -> Stream.generate(() -> 1).limit(3));
+              row("HashSet", () -> new HashSet<>(list).stream());
+              row("Set.of", () -> Set.of(1, 2, 3).stream());
+              row("Set.of 2", () -> Set.of(1, 2).stream());
+              row("HashMap keySet", () -> map.keySet().stream());
+              row("HashMap values", () -> map.values().stream());
+              row("HashMap entrySet", () -> map.entrySet().stream());
+              row("Map.of keySet", () -> Map.of(1, 2).keySet().stream());
+              row("Map.of entrySet", () -> Map.of(1, 2, 3, 4).entrySet().stream());
+              row("Hashtable keySet", () -> new Hashtable<>(map).keySet().stream());
+              row("Hashtable values", () -> new Hashtable<>(map).values().stream());
+              row("ArrayDeque", () -> new ArrayDeque<>(list).stream());
+              row("Vector", () -> new Vector<>(list).stream());
+              row("unmodifiableList", () -> Collections.unmodifiableList(list).stream());
+              row("unmodifiableSet", () -> Collections.unmodifiableSet(new HashSet<>(list)).stream());
+              row("unmodifiableCollection", () -> Collections.unmodifiableCollection(list).stream());
+              row("unmodifiableMap keys", () -> Collections.unmodifiableMap(map).keySet().stream());
+              row("unmodifiableMap entries", () -> Collections.unmodifiableMap(map).entrySet().stream());
+              row("synchronizedList", () -> Collections.synchronizedList(list).stream());
+              row("synchronizedSet", () -> Collections.synchronizedSet(new HashSet<>(list)).stream());
+              row("synchronizedMap keys", () -> Collections.synchronizedMap(map).keySet().stream());
+              row("emptyList", () -> Collections.emptyList().stream());
+              row("emptySet", () -> Collections.emptySet().stream());
+              row("singletonList", () -> Collections.singletonList(1).stream());
+              row("singleton", () -> Collections.singleton(1).stream());
+              row("nCopies", () -> Collections.nCopies(3, 1).stream());
+              row("CopyOnWriteArrayList", () -> new java.util.concurrent.CopyOnWriteArrayList<>(list).stream());
+              row("CopyOnWriteArraySet", () -> new java.util.concurrent.CopyOnWriteArraySet<>(list).stream());
+              row("ConcurrentHashMap keys", () -> new java.util.concurrent.ConcurrentHashMap<>(map).keySet().stream());
+              row("ConcurrentHashMap values", () -> new java.util.concurrent.ConcurrentHashMap<>(map).values().stream());
+              row("ConcurrentLinkedQueue", () -> new java.util.concurrent.ConcurrentLinkedQueue<>(list).stream());
+              row("ConcurrentLinkedDeque", () -> new java.util.concurrent.ConcurrentLinkedDeque<>(list).stream());
+              row("LinkedBlockingQueue", () -> new java.util.concurrent.LinkedBlockingQueue<>(list).stream());
+              row("ArrayBlockingQueue", () -> new java.util.concurrent.ArrayBlockingQueue<>(5, false, list).stream());
+              row("LinkedBlockingDeque", () -> new java.util.concurrent.LinkedBlockingDeque<>(list).stream());
+              row("LinkedTransferQueue", () -> new java.util.concurrent.LinkedTransferQueue<>(list).stream());
+              row("SynchronousQueue", () -> new java.util.concurrent.SynchronousQueue<Integer>().stream());
+              row("Optional", () -> Optional.of(1).stream());
+              row("Optional empty", () -> Optional.empty().stream());
+              row("OptionalInt", () -> OptionalInt.of(1).stream().boxed());
+              row("chars", () -> "abc".chars().boxed());
+              row("codePoints", () -> "abc".codePoints().boxed());
+              row("sb chars", () -> new StringBuilder("abc").chars().boxed());
+              row("lines", () -> "a\nb\nc".lines());
+              row("splitAsStream", () -> Pattern.compile(",").splitAsStream("a,b,c"));
+              row("results", () -> Pattern.compile("a").matcher("aaa").results().map(r -> r.group()));
+              row("IntStream.range", () -> IntStream.range(0, 3).boxed());
+              row("IntStream.rangeClosed", () -> IntStream.rangeClosed(0, 3).boxed());
+              row("IntStream.of", () -> IntStream.of(1, 2, 3).boxed());
+              row("IntStream.of one", () -> IntStream.of(1).boxed());
+              row("IntStream.empty", () -> IntStream.empty().boxed());
+              row("IntStream.iterate", () -> IntStream.iterate(0, x -> x + 1).limit(3).boxed());
+              row("IntStream.concat", () -> IntStream.concat(IntStream.range(0, 2), IntStream.of(1)).boxed());
+              row("Arrays.stream int", () -> Arrays.stream(new int[] { 1, 2, 3 }).boxed());
+              row("Arrays.stream int range", () -> Arrays.stream(new int[] { 1, 2, 3 }, 1, 3).boxed());
+              row("LongStream.range", () -> LongStream.range(0, 3).boxed());
+              row("LongStream.rangeClosed", () -> LongStream.rangeClosed(0, 3).boxed());
+              row("DoubleStream.of", () -> DoubleStream.of(1, 2, 3).boxed());
+              row("Arrays.stream double", () -> Arrays.stream(new double[] { 1, 2, 3 }).boxed());
+              row("mapToObj", () -> IntStream.range(0, 3).mapToObj(x -> "s" + x));
+              row("asLongStream", () -> IntStream.range(0, 3).asLongStream().boxed());
+              row("asDoubleStream", () -> IntStream.range(0, 3).asDoubleStream().boxed());
+              row("mapToLong", () -> IntStream.range(0, 3).mapToLong(x -> x).boxed());
+              row("mapToDouble", () -> list.stream().mapToDouble(x -> x).boxed());
+              row("map", () -> list.stream().map(x -> x));
+              row("sorted", () -> list.stream().sorted());
+              row("sorted cmp", () -> list.stream().sorted(Comparator.reverseOrder()));
+              row("unordered", () -> list.stream().unordered());
+              row("skip skip", () -> list.stream().skip(1));
+              row("limit limit", () -> list.stream().limit(2));
+              row("filter", () -> list.stream().filter(x -> true));
+              row("distinct", () -> list.stream().distinct());
+              row("flatMap", () -> list.stream().flatMap(x -> Stream.of(x)));
+              row("takeWhile", () -> list.stream().takeWhile(x -> true));
+              row("dropWhile", () -> list.stream().dropWhile(x -> false));
+              row("int sorted", () -> IntStream.of(3, 1, 2).sorted().boxed());
+              row("int distinct", () -> IntStream.of(3, 1, 2).distinct().boxed());
+              row("int map", () -> IntStream.of(3, 1, 2).map(x -> x).boxed());
+              row("int skip", () -> IntStream.of(3, 1, 2).skip(1).boxed());
+              row("int limit", () -> IntStream.of(3, 1, 2).limit(2).boxed());
+              row("reader lines", () -> new java.io.BufferedReader(new java.io.StringReader("a\nb\nc")).lines());
+          }
+
+          public static void main(String[] args) {
+              List<Integer> list = new ArrayList<>(List.of(1, 2, 3, 4));
+              Set<Integer> set = new HashSet<>(list);
+              Integer[] array = { 1, 2, 3, 4 };
+              // count: which pipelines run their stages
+              show("count list peek", list.stream().peek(StreamsRun::seen).count());
+              show("count list map", list.stream().map(StreamsRun::seen).count());
+              show("count list filter", list.stream().peek(StreamsRun::seen).filter(x -> true).count());
+              show("count list sorted", list.stream().peek(StreamsRun::seen).sorted().count());
+              show("count list distinct", list.stream().peek(StreamsRun::seen).distinct().count());
+              show("count list skip", list.stream().peek(StreamsRun::seen).skip(1).count());
+              show("count list limit", list.stream().peek(StreamsRun::seen).limit(3).count());
+              show("count list limit over", list.stream().peek(StreamsRun::seen).limit(9).count());
+              show("count list skip over", list.stream().peek(StreamsRun::seen).skip(9).count());
+              show("count list skip limit", list.stream().peek(StreamsRun::seen).skip(1).limit(2).count());
+              show("count list boxedmap", list.stream().peek(StreamsRun::seen).mapToInt(x -> x).count());
+              show("count list mapToObj", list.stream().mapToInt(x -> x).peek(StreamsRun::seen).mapToObj(x -> x).count());
+              show("count list boxed", list.stream().mapToInt(x -> x).peek(StreamsRun::seen).boxed().count());
+              show("count list asLong", list.stream().mapToInt(x -> x).peek(StreamsRun::seen).asLongStream().count());
+              show("count list flatMap", list.stream().peek(StreamsRun::seen).flatMap(x -> Stream.of(x)).count());
+              show("count list takeWhile", list.stream().peek(StreamsRun::seen).takeWhile(x -> true).count());
+              show("count list dropWhile", list.stream().peek(StreamsRun::seen).dropWhile(x -> false).count());
+              show("count set peek", set.stream().peek(StreamsRun::seen).count());
+              show("count array peek", Arrays.stream(array).peek(StreamsRun::seen).count());
+              show("count asList peek", Arrays.asList(array).stream().peek(StreamsRun::seen).count());
+              show("count of peek", Stream.of(1, 2, 3).peek(StreamsRun::seen).count());
+              show("count of one peek", Stream.of(1).peek(StreamsRun::seen).count());
+              show("count empty peek", Stream.empty().peek(StreamsRun::seen).count());
+              show("count range peek", IntStream.range(0, 4).peek(StreamsRun::seen).count());
+              show("count rangeClosed peek", IntStream.rangeClosed(0, 4).peek(StreamsRun::seen).count());
+              show("count longrange peek", LongStream.range(0, 4).peek(StreamsRun::seen).count());
+              show("count intof peek", IntStream.of(1, 2).peek(StreamsRun::seen).count());
+              show("count iterate limit", Stream.iterate(1, x -> x + 1).peek(StreamsRun::seen).limit(3).count());
+              show("count generate limit", Stream.generate(() -> 7).peek(StreamsRun::seen).limit(3).count());
+              show("count concat", Stream.concat(list.stream().peek(StreamsRun::seen), list.stream().peek(StreamsRun::seen)).count());
+              show("count builder", Stream.builder().add(1).add(2).build().peek(StreamsRun::seen).count());
+              show("count map keys", new HashMap<>(Map.of(1, 2)).keySet().stream().peek(StreamsRun::seen).count());
+              show("count map entries", new HashMap<>(Map.of(1, 2)).entrySet().stream().peek(StreamsRun::seen).count());
+              show("count deque", new ArrayDeque<>(list).stream().peek(StreamsRun::seen).count());
+              show("count listof", List.of(1, 2).stream().peek(StreamsRun::seen).count());
+              show("count sublist", list.subList(1, 3).stream().peek(StreamsRun::seen).count());
+              show("count chars", "abc".chars().peek(StreamsRun::seen).count());
+              show("count lines", "a\nb".lines().peek(StreamsRun::seen).count());
+              show("count optional", Optional.of(1).stream().peek(StreamsRun::seen).count());
+              show("count arrays int", Arrays.stream(new int[] { 1, 2 }).peek(StreamsRun::seen).count());
+              show("count array range", Arrays.stream(array, 1, 3).peek(StreamsRun::seen).count());
+              show("count parallel", list.stream().parallel().peek(StreamsRun::seen).sequential().count());
+              show("toArray sized", Arrays.toString(list.stream().peek(StreamsRun::seen).toArray()));
+              // laziness and interleaving
+              show("interleave", list.stream().peek(x -> seen("a" + x)).map(x -> x * 2).peek(x -> seen("b" + x)).filter(x -> x > 2).peek(x -> seen("c" + x)).collect(Collectors.toList()));
+              show("sorted barrier", Stream.of(3, 1, 2).peek(x -> seen("a" + x)).sorted().peek(x -> seen("b" + x)).limit(2).collect(Collectors.toList()));
+              show("limit stops", list.stream().peek(StreamsRun::seen).limit(2).collect(Collectors.toList()));
+              show("limit zero", list.stream().peek(StreamsRun::seen).limit(0).collect(Collectors.toList()));
+              show("findFirst", list.stream().peek(StreamsRun::seen).filter(x -> x > 1).findFirst());
+              show("anyMatch", list.stream().peek(StreamsRun::seen).anyMatch(x -> x == 2));
+              show("allMatch", list.stream().peek(StreamsRun::seen).allMatch(x -> x < 2));
+              show("noneMatch", list.stream().peek(StreamsRun::seen).noneMatch(x -> x == 3));
+              show("flatMap lazy", list.stream().flatMap(x -> Stream.of(x, x * 10).peek(StreamsRun::seen)).findFirst());
+              show("flatMap limit", list.stream().flatMap(x -> Stream.of(x, x * 10, x * 100).peek(StreamsRun::seen)).limit(4).collect(Collectors.toList()));
+              show("flatMap null", list.stream().flatMap(x -> x == 2 ? null : Stream.of(x)).collect(Collectors.toList()));
+              show("takeWhile", list.stream().peek(StreamsRun::seen).takeWhile(x -> x < 3).collect(Collectors.toList()));
+              show("dropWhile", list.stream().peek(StreamsRun::seen).dropWhile(x -> x < 3).collect(Collectors.toList()));
+              show("skip", list.stream().peek(StreamsRun::seen).skip(2).collect(Collectors.toList()));
+              show("skip limit", Stream.iterate(1, x -> seen(x + 1)).skip(2).limit(2).collect(Collectors.toList()));
+              show("iterate", Stream.iterate(1, x -> seen(x * 2)).limit(4).collect(Collectors.toList()));
+              show("iterate3", Stream.iterate(1, x -> x < 20, x -> seen(x * 2)).collect(Collectors.toList()));
+              show("generate", Stream.generate(() -> seen("g")).limit(2).collect(Collectors.toList()));
+              show("distinct", Stream.of(3, 1, 3, null, 2, null, 1).peek(StreamsRun::seen).distinct().collect(Collectors.toList()));
+              show("concat", Stream.concat(Stream.of(1).peek(StreamsRun::seen), Stream.of(2).peek(StreamsRun::seen)).findFirst());
+              Iterator<Integer> it = list.stream().peek(StreamsRun::seen).map(x -> x * 3).iterator();
+              show("iterator made", it.hasNext());
+              show("iterator next", it.next());
+              show("iterator next", it.next());
+              // late binding
+              List<String> late = new ArrayList<>(List.of("a", "b"));
+              Stream<String> s = late.stream();
+              late.add("c");
+              show("late", s.collect(Collectors.joining()));
+              // used twice
+              Stream<Integer> once = list.stream();
+              once.map(x -> x);
+              fails("twice map", () -> once.map(x -> x));
+              fails("twice count", () -> once.count());
+              fails("twice onClose", () -> once.onClose(() -> {
+              }));
+              fails("twice parallel", () -> once.parallel());
+              fails("twice iterator", () -> once.iterator());
+              fails("twice close", () -> once.close());
+              show("twice isParallel", once.isParallel());
+              Stream<Integer> closed = list.stream();
+              closed.close();
+              fails("closed map", () -> closed.map(x -> x));
+              Stream<Integer> counted = list.stream();
+              counted.count();
+              fails("counted count", () -> counted.count());
+              fails("counted iterator", () -> counted.iterator());
+              // close handlers
+              Stream<Integer> c = list.stream().onClose(() -> seen("h1")).map(x -> x).onClose(() -> seen("h2"));
+              Stream<Integer> c2 = c.filter(x -> true).onClose(() -> seen("h3"));
+              c2.close();
+              show("closed", "once");
+              c2.close();
+              show("closed again", "no more");
+              fails("close throws", () -> list.stream().onClose(() -> {
+                  seen("x1");
+                  throw new IllegalStateException("one");
+              }).onClose(() -> {
+                  seen("x2");
+                  throw new IllegalArgumentException("two");
+              }).onClose(() -> seen("x3")).close());
+              try {
+                  list.stream().onClose(() -> {
+                      throw new IllegalStateException("one");
+                  }).onClose(() -> {
+                      throw new IllegalArgumentException("two");
+                  }).close();
+              }
+              catch (RuntimeException e) {
+                  show("suppressed", Arrays.toString(e.getSuppressed()));
+              }
+              show("flatMap closes", list.stream().flatMap(x -> Stream.of(x).onClose(() -> seen("closed" + x))).count());
+              show("same onClose", ((Object) once) == once ? "y" : "n");
+              Stream<Integer> p = list.stream();
+              show("onClose same", p.onClose(() -> {
+              }) == p);
+              show("parallelStream", list.parallelStream().isParallel());
+              show("parallel map", list.stream().parallel().map(x -> x).isParallel());
+              show("map parallel", list.stream().map(x -> x).parallel().isParallel());
+              // refusals of arguments
+              fails("limit -1", () -> list.stream().limit(-1));
+              fails("skip -1", () -> list.stream().skip(-1));
+              fails("map null", () -> list.stream().map(null));
+              fails("filter null", () -> list.stream().filter(null));
+              fails("forEach null", () -> list.stream().forEach(null));
+              fails("findFirst null", () -> Stream.of((Integer) null).findFirst());
+              fails("findAny null", () -> Stream.of(null, 1).findAny());
+              fails("max null", () -> Stream.of(1, null).max(Comparator.nullsFirst(Comparator.naturalOrder())));
+              fails("min null", () -> Stream.of(null, 1).min(Comparator.nullsFirst(Comparator.naturalOrder())));
+              fails("reduce null", () -> Stream.of(1, 2).reduce((a, b) -> null));
+              fails("sorted null", () -> Stream.of(1, null).sorted().count());
+              fails("of null array", () -> Stream.of((Object[]) null));
+              fails("toList null", () -> System.out.println(Stream.of(1, null).toList()));
+              fails("toList add", () -> Stream.of(1).toList().add(2));
+              fails("toList set", () -> Stream.of(1).toList().set(0, 2));
+              fails("collect toList add", () -> Stream.of(1).collect(Collectors.toList()).add(2));
+              fails("toUnmodifiableList null", () -> Stream.of(1, null).collect(Collectors.toUnmodifiableList()));
+              fails("toUnmodifiableList add", () -> Stream.of(1).collect(Collectors.toUnmodifiableList()).add(1));
+              fails("iterate null", () -> Stream.iterate(1, null));
+              fails("generate null", () -> Stream.generate(null));
+              fails("range", () -> System.out.println(IntStream.range(5, 1).count() + " " + IntStream.rangeClosed(5, 5).count() + " " + IntStream.rangeClosed(5, 4).count()));
+              fails("iterator remove", () -> {
+                  Iterator<Integer> each = list.stream().iterator();
+                  each.next();
+                  each.remove();
+              });
+              fails("iterator end", () -> {
+                  Iterator<Integer> each = Stream.<Integer>empty().iterator();
+                  each.next();
+              });
+              fails("builder after build", () -> {
+                  Stream.Builder<Integer> b = Stream.builder();
+                  b.accept(1);
+                  b.build();
+                  b.accept(2);
+              });
+              fails("builder build twice", () -> {
+                  Stream.Builder<Integer> b = Stream.builder();
+                  b.build();
+                  b.build();
+              });
+              sources();
+          }
+      }
+    expected: |
+      count list peek: 4
+      count list map: 4
+      count list filter: 4 | 1 2 3 4
+      count list sorted: 4
+      count list distinct: 4 | 1 2 3 4
+      count list skip: 3
+      count list limit: 3
+      count list limit over: 4
+      count list skip over: 0
+      count list skip limit: 2
+      count list boxedmap: 4
+      count list mapToObj: 4
+      count list boxed: 4
+      count list asLong: 4
+      count list flatMap: 4 | 1 2 3 4
+      count list takeWhile: 4 | 1 2 3 4
+      count list dropWhile: 4 | 1 2 3 4
+      count set peek: 4
+      count array peek: 4
+      count asList peek: 4
+      count of peek: 3
+      count of one peek: 1
+      count empty peek: 0
+      count range peek: 4
+      count rangeClosed peek: 5
+      count longrange peek: 4
+      count intof peek: 2
+      count iterate limit: 3 | 1 2 3
+      count generate limit: 3 | 7 7 7
+      count concat: 8
+      count builder: 2
+      count map keys: 1
+      count map entries: 1
+      count deque: 4
+      count listof: 2
+      count sublist: 2
+      count chars: 3
+      count lines: 2 | a b
+      count optional: 1
+      count arrays int: 2
+      count array range: 2
+      count parallel: 4
+      toArray sized: [1, 2, 3, 4] | 1 2 3 4
+      interleave: [4, 6, 8] | a1 b2 a2 b4 c4 a3 b6 c6 a4 b8 c8
+      sorted barrier: [1, 2] | a3 a1 a2 b1 b2
+      limit stops: [1, 2] | 1 2
+      limit zero: []
+      findFirst: Optional[2] | 1 2
+      anyMatch: true | 1 2
+      allMatch: false | 1 2
+      noneMatch: false | 1 2 3
+      flatMap lazy: Optional[1] | 1
+      flatMap limit: [1, 10, 100, 2] | 1 10 100 2
+      flatMap null: [1, 3, 4]
+      takeWhile: [1, 2] | 1 2 3
+      dropWhile: [3, 4] | 1 2 3 4
+      skip: [3, 4] | 1 2 3 4
+      skip limit: [3, 4] | 2 3 4
+      iterate: [1, 2, 4, 8] | 2 4 8
+      iterate3: [1, 2, 4, 8, 16] | 2 4 8 16 32
+      generate: [g, g] | g g
+      distinct: [3, 1, null, 2] | 3 1 3 null 2 null 1
+      concat: Optional[1] | 1
+      iterator made: true | 1
+      iterator next: 3
+      iterator next: 6 | 2
+      late: abc
+      twice map: java.lang.IllegalStateException: stream has already been operated upon or closed
+      twice count: java.lang.IllegalStateException: stream has already been operated upon or closed
+      twice onClose: java.lang.IllegalStateException: stream has already been operated upon or closed
+      twice parallel: ran
+      twice iterator: java.lang.IllegalStateException: stream has already been operated upon or closed
+      twice close: ran
+      twice isParallel: true
+      closed map: java.lang.IllegalStateException: stream has already been operated upon or closed
+      counted count: java.lang.IllegalStateException: stream has already been operated upon or closed
+      counted iterator: java.lang.IllegalStateException: stream has already been operated upon or closed
+      closed: once | h1 h2 h3
+      closed again: no more
+      close throws: java.lang.IllegalStateException: one | x1 x2 x3
+      suppressed: [java.lang.IllegalArgumentException: two]
+      flatMap closes: 4 | closed1 closed2 closed3 closed4
+      same onClose: y
+      onClose same: true
+      parallelStream: true
+      parallel map: true
+      map parallel: true
+      limit -1: java.lang.IllegalArgumentException: -1
+      skip -1: java.lang.IllegalArgumentException: -1
+      map null: java.lang.NullPointerException
+      filter null: java.lang.NullPointerException
+      forEach null: java.lang.NullPointerException
+      findFirst null: java.lang.NullPointerException
+      findAny null: java.lang.NullPointerException
+      max null: ran
+      min null: java.lang.NullPointerException
+      reduce null: java.lang.NullPointerException
+      sorted null: ran
+      of null array: java.lang.NullPointerException
+      [1, null]
+      toList null: ran
+      toList add: java.lang.UnsupportedOperationException
+      toList set: java.lang.UnsupportedOperationException
+      collect toList add: ran
+      toUnmodifiableList null: java.lang.NullPointerException
+      toUnmodifiableList add: java.lang.UnsupportedOperationException
+      iterate null: java.lang.NullPointerException
+      generate null: java.lang.NullPointerException
+      0 1 0
+      range: ran
+      iterator remove: java.lang.UnsupportedOperationException: remove
+      iterator end: java.util.NoSuchElementException
+      builder after build: java.lang.IllegalStateException
+      builder build twice: java.lang.IllegalStateException
+      ArrayList: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      subList: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      List.of 2: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      List.of 3: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      List.of 0: count 0 known, skip 0 known, limit 0 known, sorted skip 0 known
+      List.copyOf: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      Arrays.asList: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      Arrays.stream: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      Arrays.stream range: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      Stream.of: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      Stream.of one: count 1 known, skip 0 known, limit 1 known, sorted skip 0 known
+      Stream.empty: count 0 known, skip 0 known, limit 0 known, sorted skip 0 known
+      Stream.ofNullable: count 1 known, skip 0 known, limit 1 known, sorted skip 0 known
+      Stream.ofNullable null: count 0 known, skip 0 known, limit 0 known, sorted skip 0 known
+      builder: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      builder one: count 1 known, skip 0 known, limit 1 known, sorted skip 0 known
+      builder none: count 0 known, skip 0 known, limit 0 known, sorted skip 0 known
+      concat: count 6 known, skip 5 known, limit 1 known, sorted skip 5 known
+      concat unknown: count 6 run, skip 5 run, limit 1 run 1, sorted skip 5 run 6
+      iterate: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      iterate3: count 2 run, skip 1 run, limit 1 run 1, sorted skip 1 run 2
+      generate: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      HashSet: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      Set.of: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      Set.of 2: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      HashMap keySet: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      HashMap values: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      HashMap entrySet: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      Map.of keySet: count 1 known, skip 0 known, limit 1 known, sorted skip 0 known
+      Map.of entrySet: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      Hashtable keySet: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      Hashtable values: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      ArrayDeque: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      Vector: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      unmodifiableList: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      unmodifiableSet: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      unmodifiableCollection: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      unmodifiableMap keys: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      unmodifiableMap entries: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      synchronizedList: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      synchronizedSet: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      synchronizedMap keys: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      emptyList: count 0 known, skip 0 known, limit 0 known, sorted skip 0 known
+      emptySet: count 0 known, skip 0 known, limit 0 known, sorted skip 0 known
+      singletonList: count 1 known, skip 0 known, limit 1 known, sorted skip 0 known
+      singleton: count 1 known, skip 0 known, limit 1 known, sorted skip 0 known
+      nCopies: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      CopyOnWriteArrayList: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      CopyOnWriteArraySet: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      ConcurrentHashMap keys: count 2 run, skip 1 run, limit 1 run 1, sorted skip 1 run 2
+      ConcurrentHashMap values: count 2 run, skip 1 run, limit 1 run 1, sorted skip 1 run 2
+      ConcurrentLinkedQueue: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      ConcurrentLinkedDeque: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      LinkedBlockingQueue: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      ArrayBlockingQueue: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      LinkedBlockingDeque: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      LinkedTransferQueue: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      SynchronousQueue: count 0 known, skip 0 known, limit 0 known, sorted skip 0 known
+      Optional: count 1 known, skip 0 known, limit 1 known, sorted skip 0 known
+      Optional empty: count 0 known, skip 0 known, limit 0 known, sorted skip 0 known
+      OptionalInt: count 1 known, skip 0 known, limit 1 known, sorted skip 0 known
+      chars: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      codePoints: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      sb chars: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      lines: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      splitAsStream: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      results: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      IntStream.range: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      IntStream.rangeClosed: count 4 known, skip 3 known, limit 1 known, sorted skip 3 known
+      IntStream.of: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      IntStream.of one: count 1 known, skip 0 known, limit 1 known, sorted skip 0 known
+      IntStream.empty: count 0 known, skip 0 known, limit 0 known, sorted skip 0 known
+      IntStream.iterate: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      IntStream.concat: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      Arrays.stream int: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      Arrays.stream int range: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      LongStream.range: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      LongStream.rangeClosed: count 4 known, skip 3 known, limit 1 known, sorted skip 3 known
+      DoubleStream.of: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      Arrays.stream double: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      mapToObj: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      asLongStream: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      asDoubleStream: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      mapToLong: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      mapToDouble: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      map: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      sorted: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      sorted cmp: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      unordered: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      skip skip: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      limit limit: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      filter: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      distinct: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      flatMap: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      takeWhile: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      dropWhile: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      int sorted: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      int distinct: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+      int map: count 3 known, skip 2 known, limit 1 known, sorted skip 2 known
+      int skip: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      int limit: count 2 known, skip 1 known, limit 1 known, sorted skip 1 known
+      reader lines: count 3 run, skip 2 run, limit 1 run 1, sorted skip 2 run 3
+  # The chains everyday code writes over a collection, an array, a text, a pattern and a
+  # reader, and the streams of int, long and double with their optionals, statistics and
+  # iterators. A double stream's sum is Kahan's compensated one, the plain sum where that
+  # is no number and the plain one is infinite (20,000 seeded sums against a JDK 25).
+  # Name.class::isInstance and Name.class::cast are the test and the cast.
+  - name: the-streams-a-program-writes-over-collections-arrays-texts-and-numbers
+    main: StreamsWritten
+    source: |
+      class StreamsWritten {
+          record Item(String name, String kind, int price, List<String> tags) {
+          }
+
+          record Pair<A, B>(A first, B second) {
+          }
+
+          interface Shape {
+              double area();
+          }
+
+          record Circle(double r) implements Shape {
+              public double area() {
+                  return 3 * r * r;
+              }
+          }
+
+          record Square(double side) implements Shape {
+              public double area() {
+                  return side * side;
+              }
+          }
+
+          static void show(Object o) {
+              System.out.println(o);
+          }
+
+          static void fails(String what, Supplier<Object> r) {
+              try {
+                  System.out.println(what + ": " + r.get());
+              }
+              catch (NullPointerException e) {
+                  System.out.println(what + ": " + e.getClass().getName());
+              }
+              catch (RuntimeException e) {
+                  System.out.println(what + ": " + e);
+              }
+          }
+
+          static boolean isPrime(int n) {
+              return n > 1 && IntStream.rangeClosed(2, (int) Math.sqrt(n)).noneMatch(d -> n % d == 0);
+          }
+
+          static <T> List<T> evens(Collection<T> all, Predicate<? super T> keep) {
+              return all.stream().filter(keep).collect(Collectors.toList());
+          }
+
+          static <T extends Comparable<T>> Optional<T> largest(Stream<T> all) {
+              return all.max(Comparator.naturalOrder());
+          }
+
+          static Stream<String> letters(String word) {
+              return word.chars().mapToObj(c -> String.valueOf((char) c));
+          }
+
+          public static void main(String[] args) {
+              try {
+                  written();
+              }
+              catch (IOException e) {
+                  throw new UncheckedIOException(e);
+              }
+              StreamsWrittenNumbers.main(args);
+          }
+
+          static void written() throws IOException {
+              List<Item> items = List.of(new Item("pen", "desk", 120, List.of("blue", "fine")),
+                      new Item("ink", "desk", 480, List.of("blue")), new Item("mug", "kitchen", 650, List.of()),
+                      new Item("pan", "kitchen", 2400, List.of("iron", "heavy")),
+                      new Item("cup", "kitchen", 300, List.of("fine")), new Item("pad", "desk", 250, List.of("heavy")));
+              List<String> words = Arrays.asList("delta", "alpha", "charlie", "bravo", "echo", "alpha");
+              List<Integer> numbers = List.of(5, 3, 8, 1, 9, 2, 8);
+              // the chains a program writes
+              show(items.stream().filter(i -> i.price() > 280).map(Item::name).collect(Collectors.toList()));
+              show(items.stream().map(Item::name).map(String::toUpperCase).sorted().toList());
+              show(items.stream().sorted(Comparator.comparing(Item::price)).map(Item::name).toList());
+              show(items.stream().sorted(Comparator.comparing(Item::price).reversed()).map(Item::name).toList());
+              show(items.stream().sorted(Comparator.comparing(Item::kind).thenComparing(Item::name)).map(Item::name).toList());
+              show(items.stream().sorted(Comparator.comparing(Item::kind).thenComparing(Item::price, Comparator.reverseOrder())).map(Item::name).toList());
+              show(items.stream().sorted(Comparator.comparingInt(i -> -i.price())).map(i -> i.name() + ":" + i.price()).collect(Collectors.joining(" ")));
+              show(items.stream().sorted((a, b) -> b.name().compareTo(a.name())).map(Item::name).findFirst().orElse("none"));
+              show(items.stream().mapToInt(Item::price).sum() + " " + items.stream().mapToInt(Item::price).max().getAsInt() + " " + items.stream().mapToInt(Item::price).average().orElse(0) + " " + items.stream().mapToDouble(i -> i.price() * 1.1).sum());
+              show(items.stream().map(Item::price).reduce(0, Integer::sum) + " " + items.stream().map(Item::price).reduce(Integer::max).get() + " " + items.stream().count() + " " + items.stream().filter(i -> i.kind().equals("desk")).count());
+              show(items.stream().anyMatch(i -> i.price() > 2000) + " " + items.stream().allMatch(i -> i.price() > 200) + " " + items.stream().noneMatch(i -> i.tags().isEmpty()));
+              show(items.stream().filter(i -> i.price() > 9000).findFirst().isPresent() + " " + items.stream().filter(i -> i.price() > 500).findFirst().map(Item::name).orElse("?") + " " + items.stream().map(Item::name).filter(n -> n.startsWith("p")).findAny().get());
+              show(items.stream().max(Comparator.comparingInt(Item::price)).get().name() + " " + items.stream().min(Comparator.comparing(Item::name)).get().name() + " " + items.stream().map(Item::name).max(String::compareTo).get() + " " + items.stream().map(Item::price).max(Integer::compare).get() + " " + items.stream().map(Item::price).min(Comparator.naturalOrder()).get());
+              show(items.stream().flatMap(i -> i.tags().stream()).distinct().sorted().collect(Collectors.toList()));
+              show(items.stream().flatMap(i -> i.tags().stream().map(t -> i.name() + "#" + t)).collect(Collectors.joining(",")));
+              show(items.stream().map(Item::tags).flatMap(List::stream).collect(Collectors.groupingBy(t -> t, Collectors.counting())));
+              show(items.stream().collect(Collectors.groupingBy(Item::kind, Collectors.summingInt(Item::price))));
+              show(items.stream().collect(Collectors.groupingBy(Item::kind, Collectors.mapping(Item::name, Collectors.joining("/")))));
+              show(items.stream().collect(Collectors.partitioningBy(i -> i.price() >= 300, Collectors.mapping(Item::name, Collectors.toList()))));
+              show(items.stream().collect(Collectors.toMap(Item::name, Item::price)).get("pan"));
+              Map<String, Integer> totals = new HashMap<>();
+              items.stream().forEach(i -> totals.merge(i.kind(), i.price(), Integer::sum));
+              show(totals);
+              show(totals.entrySet().stream().sorted(Map.Entry.comparingByValue()).map(Map.Entry::getKey).toList() + " " + totals.entrySet().stream().sorted(Map.Entry.<String, Integer>comparingByValue().reversed()).map(e -> e.getKey() + "=" + e.getValue()).collect(Collectors.joining(", ")) + " " + totals.keySet().stream().sorted().toList() + " " + totals.values().stream().mapToInt(Integer::intValue).sum() + " " + totals.entrySet().stream().max(Map.Entry.comparingByValue()).get().getKey() + " " + totals.entrySet().stream().filter(e -> e.getValue() > 1000).map(Map.Entry::getKey).findFirst().get());
+              show(totals.entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue() / 10)));
+              show(words.stream().distinct().sorted(Comparator.comparing(String::length).thenComparing(Comparator.reverseOrder())).toList());
+              show(words.stream().sorted(Comparator.reverseOrder()).limit(3).toList() + " " + words.stream().sorted(Collections.reverseOrder()).skip(4).toList() + " " + words.stream().sorted(String.CASE_INSENSITIVE_ORDER).findFirst().get() + " " + words.stream().sorted(Comparator.comparing(w -> w.charAt(1))).toList());
+              show(words.stream().map(String::length).collect(Collectors.toList()) + " " + words.stream().mapToInt(String::length).boxed().collect(Collectors.toSet()) + " " + words.stream().collect(Collectors.toMap(w -> w, w -> 1, Integer::sum)));
+              show(words.stream().filter(w -> w.contains("a")).map(w -> w.replace('a', '4')).peek(w -> {
+              }).skip(1).limit(3).collect(Collectors.joining(" ", "<", ">")));
+              show(words.stream().map(w -> w.split("")).flatMap(Arrays::stream).distinct().sorted().collect(Collectors.joining()));
+              show(words.stream().map(w -> w.charAt(0)).map(Character::toUpperCase).map(String::valueOf).collect(Collectors.joining()));
+              show(words.stream().flatMap(StreamsWritten::letters).filter(l -> "aeiou".contains(l)).count() + " " + letters("abc").map(String::toUpperCase).toList());
+              show(numbers.stream().filter(n -> n % 2 == 0).map(n -> n * n).reduce(0, Integer::sum) + " " + numbers.stream().mapToInt(Integer::intValue).filter(StreamsWritten::isPrime).boxed().toList() + " " + numbers.stream().sorted().distinct().skip(1).limit(3).toList() + " " + numbers.stream().mapToInt(n -> n).summaryStatistics().getMax());
+              show(numbers.stream().sorted(Comparator.reverseOrder()).toList() + " " + numbers.stream().sorted(Collections.reverseOrder()).map(String::valueOf).collect(Collectors.joining("")) + " " + numbers.stream().map(n -> n + 0.5).toList() + " " + numbers.stream().map(Integer::doubleValue).mapToDouble(Double::doubleValue).sum() + " " + numbers.stream().map(n -> (long) n).reduce(1L, (a, b) -> a * b));
+              show(IntStream.rangeClosed(1, 30).filter(StreamsWritten::isPrime).boxed().toList() + " " + IntStream.rangeClosed(1, 5).mapToObj(i -> "x".repeat(i)).toList() + " " + IntStream.range(0, words.size()).filter(i -> i % 2 == 0).mapToObj(words::get).toList() + " " + IntStream.range(0, 3).mapToObj(i -> new Pair<>(i, words.get(i))).map(p -> p.first() + p.second()).toList());
+              show(IntStream.rangeClosed(1, 5).reduce(1, (a, b) -> a * b) + " " + LongStream.rangeClosed(1, 15).reduce(1L, (a, b) -> a * b) + " " + IntStream.rangeClosed(1, 100).sum() + " " + IntStream.rangeClosed(1, 100).filter(i -> i % 3 == 0 || i % 5 == 0).sum() + " " + Stream.iterate(new int[] { 0, 1 }, f -> new int[] { f[1], f[0] + f[1] }).limit(10).map(f -> f[0]).toList() + " " + Stream.iterate(1, x -> x * 2).limit(8).mapToInt(x -> x).sum() + " " + Stream.iterate("a", s -> s.length() < 4, s -> s + "b").toList());
+              show(IntStream.rangeClosed(1, 15).mapToObj(i -> i % 15 == 0 ? "FizzBuzz" : i % 3 == 0 ? "Fizz" : i % 5 == 0 ? "Buzz" : String.valueOf(i)).collect(Collectors.joining(" ")));
+              show(evens(numbers, n -> n % 2 == 0) + " " + evens(words, w -> w.length() == 5) + " " + largest(numbers.stream()) + " " + largest(words.stream()).get() + " " + largest(Stream.<String>empty()));
+              List<Shape> shapes = List.of(new Circle(1), new Square(2), new Circle(0.5));
+              show(shapes.stream().mapToDouble(Shape::area).sum() + " " + shapes.stream().filter(s -> s instanceof Circle).count() + " " + shapes.stream().filter(Circle.class::isInstance).map(Circle.class::cast).mapToDouble(Circle::r).sum() + " " + Stream.of(1, "two", 3.0).filter(String.class::isInstance).map(String.class::cast).map(String::length).toList() + " " + shapes.stream().map(s -> s instanceof Circle c ? "c" + c.r() : "s").toList() + " " + shapes.stream().max(Comparator.comparingDouble(Shape::area)).get());
+              List<List<Integer>> nested = List.of(List.of(1, 2), List.of(), List.of(3), List.of(4, 5, 6));
+              show(nested.stream().flatMap(List::stream).map(n -> n * 2).toList() + " " + nested.stream().mapToInt(List::size).max().getAsInt() + " " + nested.stream().filter(l -> !l.isEmpty()).map(l -> l.get(0)).toList() + " " + nested.stream().flatMap(Collection::stream).mapToInt(Integer::intValue).sum() + " " + nested.stream().map(l -> l.stream().mapToInt(n -> n).sum()).toList());
+              String text = "the quick brown fox jumps over the lazy dog the end";
+              Map<String, Long> frequency = Arrays.stream(text.split(" ")).collect(Collectors.groupingBy(Function.identity(), Collectors.counting()));
+              show(frequency.get("the") + " " + frequency.size() + " " + frequency.entrySet().stream().filter(e -> e.getValue() > 1).map(Map.Entry::getKey).toList() + " " + Arrays.stream(text.split(" ")).map(String::length).collect(Collectors.groupingBy(n -> n, Collectors.counting())) + " " + Arrays.stream(text.split(" ")).max(Comparator.comparingInt(String::length)).get() + " " + Stream.of(text.split(" ")).filter(w -> w.length() > 3).map(w -> Character.toUpperCase(w.charAt(0)) + w.substring(1)).collect(Collectors.joining(" ")));
+              show(Stream.of("a", "b", "c").map(String::toUpperCase).toList() + " " + Stream.of(1, 2, 3).mapToInt(Integer::intValue).sum() + " " + Stream.of("x").findFirst().get() + " " + Stream.empty().findFirst().isPresent() + " " + Stream.of(1.5, 2.5).mapToDouble(Double::doubleValue).sum() + " " + Stream.of('a', 'b').map(c -> (int) c).toList() + " " + Stream.of(true, false).filter(b -> b).count() + " " + Stream.concat(Stream.of("a"), Stream.of("b", "c")).toList() + " " + Stream.concat(words.stream().limit(1), numbers.stream().limit(1).map(String::valueOf)).toList() + " " + Stream.ofNullable(null).count() + " " + Stream.ofNullable("v").toList());
+              Stream.Builder<String> builder = Stream.builder();
+              builder.add("one").add("two");
+              builder.accept("three");
+              show(builder.build().collect(Collectors.joining("+")) + " " + Stream.generate(() -> "z").limit(3).collect(Collectors.joining()) + " " + Stream.of("b", "a", "c").sorted().iterator().next() + " " + Stream.of(1, 2, 3, 4).takeWhile(n -> n < 3).toList() + Stream.of(1, 2, 3, 4).dropWhile(n -> n < 3).toList() + " " + Stream.of(3, 1, 2).sorted().peek(n -> {
+              }).unordered().parallel().sequential().map(n -> n + 1).toList());
+              Supplier<Stream<String>> source = () -> words.stream().filter(w -> w.length() > 4);
+              show(source.get().count() + " " + source.get().findFirst().get() + " " + source.get().distinct().count());
+              Function<Item, String> label = i -> i.kind().toUpperCase();
+              Predicate<Item> cheap = i -> i.price() < 400;
+              show(items.stream().filter(cheap.negate()).map(label.andThen(String::toLowerCase)).distinct().toList() + " " + items.stream().filter(cheap.and(i -> i.kind().equals("desk"))).map(Item::name).toList() + " " + items.stream().filter(Predicate.not(cheap)).count() + " " + items.stream().map(Item::tags).filter(Predicate.not(List::isEmpty)).count());
+              Optional<Item> dear = items.stream().filter(i -> i.price() > 1000).findFirst();
+              show(dear.map(Item::name).orElse("none") + " " + dear.stream().count() + " " + items.stream().map(Item::name).filter(n -> n.length() > 5).findFirst().or(() -> Optional.of("short")).get() + " " + items.stream().findFirst().map(Item::tags).map(List::size).orElse(-1));
+              // strings, lines and patterns
+              show("b,a,,c".chars().filter(c -> c == ',').count() + " " + Arrays.stream("b,a,,c".split(",")).filter(s -> !s.isEmpty()).sorted().toList() + " " + "one\ntwo\r\nthree\n".lines().map(String::length).toList() + " " + "  pad \n\n x".lines().map(String::strip).filter(Predicate.not(String::isEmpty)).toList() + " " + "".lines().count() + " " + "abc".chars().mapToObj(c -> (char) c).map(c -> (char) (c + 1)).map(String::valueOf).collect(Collectors.joining()) + " " + String.join("|", Stream.of("x", "y").toList()) + " " + "Hello World".chars().filter(Character::isUpperCase).count() + " " + "abc".chars().map(c -> c - 'a').boxed().toList());
+              show(Pattern.compile("\\s*,\\s*").splitAsStream("a , b,c ,d").toList() + " " + Pattern.compile(",").splitAsStream("").count() + " " + Pattern.compile(",").splitAsStream("a,,b,,").toList().size() + " " + Pattern.compile(",").splitAsStream(",a").toList() + " " + Pattern.compile("").splitAsStream("abc").toList() + " " + Pattern.compile("x").splitAsStream("abc").toList() + " " + Pattern.compile("\\d+").matcher("a1b22c333").results().map(MatchResult::group).toList() + " " + Pattern.compile("(\\w)(\\d)").matcher("a1 b2 c3").results().map(m -> m.group(2) + m.group(1) + m.start()).collect(Collectors.joining()) + " " + Pattern.compile("z").matcher("abc").results().count());
+              Matcher matcher = Pattern.compile("[a-z]+").matcher("ab cd ef gh");
+              matcher.find();
+              Stream<MatchResult> rest = matcher.results();
+              matcher.find();
+              show(rest.map(MatchResult::group).toList() + " " + matcher.results().count());
+              fails("after results", () -> matcher.group());
+              BufferedReader reader = new BufferedReader(new StringReader("first\nsecond\n\nfourth"));
+              show(reader.readLine() + " " + reader.lines().map(String::toUpperCase).toList() + " " + reader.readLine() + " " + new BufferedReader(new StringReader("3\n1\n2")).lines().mapToInt(Integer::parseInt).sorted().boxed().toList() + " " + new BufferedReader(new StringReader("")).lines().count());
+              BufferedReader lazy = new BufferedReader(new StringReader("a\nb\nc\nd"));
+              show(lazy.lines().limit(2).toList() + " " + lazy.readLine());
+              // the collections as sources
+              Deque<Integer> deque = new ArrayDeque<>(List.of(1, 2, 3));
+              Map<String, List<Integer>> multi = new HashMap<>(Map.of("a", List.of(1, 2), "b", List.of(3)));
+              show(deque.stream().map(n -> n * 2).toList() + " " + new HashSet<>(numbers).stream().sorted().toList() + " " + multi.values().stream().flatMap(List::stream).mapToInt(n -> n).sum() + " " + multi.entrySet().stream().sorted(Map.Entry.comparingByKey()).map(e -> e.getKey() + e.getValue().size()).toList() + " " + new Vector<>(numbers).stream().limit(2).toList() + " " + Collections.unmodifiableList(words).stream().count() + " " + words.subList(1, 3).stream().toList() + " " + Collections.nCopies(3, "ab").stream().collect(Collectors.joining()) + " " + new java.util.concurrent.CopyOnWriteArrayList<>(numbers).stream().mapToInt(n -> n).max().getAsInt() + " " + new java.util.concurrent.ConcurrentHashMap<>(Map.of("k", 1)).keySet().stream().toList() + " " + new java.util.concurrent.ConcurrentLinkedQueue<>(words).stream().distinct().count() + " " + new java.util.concurrent.LinkedBlockingQueue<>(numbers).stream().filter(n -> n > 5).count() + " " + numbers.parallelStream().mapToInt(n -> n).sum() + " " + words.parallelStream().map(String::length).reduce(0, Integer::sum));
+              List<String> changing = new ArrayList<>(List.of("a", "b"));
+              Stream<String> made = changing.stream();
+              changing.add("c");
+              show(made.toList());
+              fails("changed while read", () -> {
+                  List<Integer> source2 = new ArrayList<>(List.of(1, 2, 3));
+                  source2.stream().forEach(n -> {
+                      if (n == 2) {
+                          source2.add(9);
+                      }
+                  });
+                  return source2;
+              });
+              // forEach in its forms
+              StringBuilder out = new StringBuilder();
+              words.stream().forEach(out::append);
+              words.stream().map(String::length).forEach(n -> out.append(n));
+              numbers.stream().forEachOrdered(out::append);
+              words.forEach(w -> out.append(w.charAt(0)));
+              IntStream.range(0, 3).forEach(out::append);
+              show(out);
+              numbers.stream().limit(2).forEach(System.out::println);
+              words.stream().limit(2).map(String::toUpperCase).forEach(System.out::println);
+              IntStream.range(0, 2).forEach(System.out::println);
+              DoubleStream.of(0.5).forEach(System.out::println);
+              Stream.of('c', 'd').forEach(System.out::print);
+              System.out.println();
+              // a stream closed, a stream in try with resources
+              List<String> closed = new ArrayList<>();
+              try (Stream<String> s = words.stream().onClose(() -> closed.add("closed"))) {
+                  closed.add(s.findFirst().get());
+              }
+              try (IntStream s = IntStream.range(0, 3).onClose(() -> closed.add("ints"))) {
+                  closed.add("" + s.sum());
+              }
+              show(closed);
+              // the arguments a stream refuses
+              fails("not comparable", () -> {
+                  try {
+                      return Stream.of(new Circle(1), new Circle(2)).sorted().toList();
+                  }
+                  catch (ClassCastException e) {
+                      return "ClassCastException";
+                  }
+              });
+              fails("one not comparable", () -> Stream.of(new Circle(1)).sorted().toList().size());
+              fails("sorted null", () -> Stream.of("a", null).sorted().toList());
+              fails("null element", () -> Stream.of("a", null, "b").map(s -> s == null ? "?" : s).toList());
+              fails("null toList", () -> Stream.of("a", null).toList().contains(null));
+              fails("max of nulls", () -> Stream.of("a", null).max(Comparator.nullsFirst(Comparator.naturalOrder())));
+              fails("first null", () -> Stream.of(null, "a").findFirst());
+              fails("reduce to null", () -> Stream.of("a", "b").reduce((a, b) -> null));
+              fails("toList frozen", () -> words.stream().toList().add("x"));
+              fails("toList remove", () -> words.stream().toList().remove(0));
+              fails("collect toList", () -> words.stream().collect(Collectors.toList()).remove(0));
+              fails("get of none", () -> Stream.empty().findFirst().get());
+              fails("used", () -> {
+                  Stream<String> once = words.stream();
+                  once.count();
+                  return once.count();
+              });
+              fails("used filter", () -> {
+                  Stream<String> once = words.stream();
+                  once.filter(w -> true);
+                  return once.map(w -> w).count();
+              });
+              fails("iterator", () -> {
+                  Iterator<String> each = words.stream().map(String::toUpperCase).iterator();
+                  String firstTwo = each.next() + each.next();
+                  each.forEachRemaining(w -> {
+                  });
+                  return firstTwo + each.hasNext();
+              });
+              fails("infinite", () -> Stream.iterate(1, n -> n + 1).filter(n -> n % 7 == 0).skip(2).findFirst().get());
+              fails("generate", () -> {
+                  int[] next = { 0 };
+                  return Stream.generate(() -> next[0]++).takeWhile(n -> n < 4).toList();
+              });
+          }
+      }
+
+      class StreamsWrittenNumbers {
+          static void show(Object o) {
+              System.out.println(o);
+          }
+
+          static void fails(String what, Supplier<Object> r) {
+              try {
+                  System.out.println(what + ": " + r.get());
+              }
+              catch (NullPointerException e) {
+                  System.out.println(what + ": " + e.getClass().getName());
+              }
+              catch (RuntimeException e) {
+                  System.out.println(what + ": " + e);
+              }
+          }
+
+          public static void main(String[] args) {
+              // ints
+              show(IntStream.range(0, 5).sum() + " " + IntStream.rangeClosed(1, 5).sum() + " " + IntStream.range(5, 0).sum() + " " + IntStream.rangeClosed(3, 3).count());
+              show(Arrays.toString(IntStream.range(0, 5).toArray()) + Arrays.toString(IntStream.rangeClosed(-2, 2).toArray()) + Arrays.toString(IntStream.empty().toArray()));
+              show(Arrays.toString(IntStream.rangeClosed(Integer.MAX_VALUE - 2, Integer.MAX_VALUE).toArray()) + IntStream.rangeClosed(Integer.MIN_VALUE, Integer.MIN_VALUE + 1).count() + " " + IntStream.range(Integer.MIN_VALUE, Integer.MAX_VALUE).count() + " " + IntStream.rangeClosed(Integer.MIN_VALUE, Integer.MAX_VALUE).count() + " " + IntStream.rangeClosed(Integer.MIN_VALUE, Integer.MAX_VALUE).skip(5).limit(9).count());
+              show(IntStream.of(3, 1, 2).sorted().boxed().collect(Collectors.toList()) + " " + IntStream.of(3, 1, 3, 2, 1).distinct().boxed().collect(Collectors.toList()));
+              show(IntStream.of(3, 1, 2).map(x -> x * x).filter(x -> x > 1).boxed().collect(Collectors.toList()));
+              show(IntStream.of(3, 1, 2).min() + " " + IntStream.of(3, 1, 2).max() + " " + IntStream.empty().min() + " " + IntStream.empty().max() + " " + IntStream.of(7).min().getAsInt());
+              show(IntStream.of(3, 1, 2).average() + " " + IntStream.empty().average() + " " + IntStream.of(Integer.MAX_VALUE, Integer.MAX_VALUE).average() + " " + IntStream.of(1, 2).average().getAsDouble());
+              show(IntStream.of(Integer.MAX_VALUE, 1).sum() + " " + IntStream.of(Integer.MAX_VALUE, 1).asLongStream().sum() + " " + IntStream.of(1, 2).asDoubleStream().sum());
+              show(IntStream.of(3, 1, 2).summaryStatistics() + " " + IntStream.empty().summaryStatistics());
+              IntSummaryStatistics st = IntStream.of(3, 1, 2).summaryStatistics();
+              show(st.getMin() + " " + st.getMax() + " " + st.getAverage() + " " + st.getSum() + " " + st.getCount());
+              st.accept(10);
+              IntSummaryStatistics other = new IntSummaryStatistics();
+              other.accept(-5);
+              st.combine(other);
+              show(st);
+              show(IntStream.of(3, 1, 2).reduce(0, Integer::sum) + " " + IntStream.of(3, 1, 2).reduce((a, b) -> a * b) + " " + IntStream.empty().reduce(Integer::max) + " " + IntStream.of(3, 1, 2).reduce(Integer::max).getAsInt());
+              show(IntStream.of(3, 1, 2).anyMatch(x -> x == 2) + " " + IntStream.of(3, 1, 2).allMatch(x -> x > 1) + " " + IntStream.of(3, 1, 2).noneMatch(x -> x > 5) + " " + IntStream.empty().allMatch(x -> false) + " " + IntStream.empty().anyMatch(x -> true) + " " + IntStream.empty().noneMatch(x -> true));
+              show(IntStream.of(3, 1, 2).findFirst() + " " + IntStream.of(3, 1, 2).findAny() + " " + IntStream.empty().findFirst() + " " + IntStream.of(3, 1, 2).filter(x -> x < 3).findFirst().getAsInt());
+              show(IntStream.of(3, 1, 2).mapToObj(x -> "n" + x).collect(Collectors.joining(",")) + " " + IntStream.of(3, 1, 2).mapToLong(x -> x * 10000000000L).sum() + " " + IntStream.of(3, 1, 2).mapToDouble(x -> x / 2.0).sum());
+              show(IntStream.of(1, 2, 3).flatMap(x -> IntStream.range(0, x)).boxed().collect(Collectors.toList()) + " " + IntStream.of(1, 2, 3).flatMap(x -> x == 2 ? null : IntStream.of(x)).sum());
+              show(IntStream.iterate(1, x -> x * 2).limit(10).sum() + " " + IntStream.iterate(1, x -> x < 100, x -> x * 3).boxed().collect(Collectors.toList()) + " " + IntStream.generate(() -> 7).limit(3).sum());
+              show(IntStream.range(0, 10).skip(3).limit(4).boxed().collect(Collectors.toList()) + " " + IntStream.range(0, 10).takeWhile(x -> x < 4).sum() + " " + IntStream.range(0, 10).dropWhile(x -> x < 4).sum() + " " + IntStream.range(0, 10).limit(0).count() + " " + IntStream.range(0, 3).skip(5).count());
+              show(IntStream.concat(IntStream.range(0, 3), IntStream.of(9, 8)).boxed().collect(Collectors.toList()) + " " + IntStream.builder().add(1).add(2).build().sum() + " " + IntStream.of(5).boxed().findFirst().get());
+              StringBuilder seen = new StringBuilder();
+              IntStream.range(0, 3).peek(x -> seen.append("p").append(x)).forEach(x -> seen.append("f").append(x));
+              IntStream.of(2, 1).forEachOrdered(x -> seen.append("o").append(x));
+              show(seen);
+              show(IntStream.range(0, 4).collect(ArrayList::new, ArrayList::add, ArrayList::addAll) + " " + IntStream.of(1, 2).boxed().map(x -> x + 1).mapToInt(Integer::intValue).sum() + " " + IntStream.of(1, 2).boxed().mapToInt(x -> x).max().getAsInt());
+              PrimitiveIterator.OfInt it = IntStream.range(0, 3).iterator();
+              int total = 0;
+              while (it.hasNext()) {
+                  total += it.nextInt();
+              }
+              Iterator<Integer> boxed = IntStream.range(0, 3).iterator();
+              show(total + " " + boxed.next() + " " + boxed.hasNext());
+              fails("it end", () -> it.nextInt());
+              show(IntStream.range(0, 20).parallel().filter(x -> x % 3 == 0).sum() + " " + IntStream.range(0, 3).parallel().isParallel() + " " + IntStream.range(0, 3).sequential().isParallel());
+              show("hello world".chars().filter(ch -> ch == 'o').count() + " " + "hello".chars().mapToObj(ch -> (char) ch).collect(Collectors.toList()) + " " + "hello".chars().map(Character::toUpperCase).collect(StringBuilder::new, StringBuilder::appendCodePoint, StringBuilder::append) + " " + "a1b2".chars().filter(Character::isDigit).map(ch -> ch - '0').sum() + " " + "abc".codePoints().max().getAsInt());
+              show("hello".chars().mapToObj(ch -> String.valueOf((char) ch)).collect(Collectors.joining("-")) + " " + "hello".chars().distinct().count() + " " + "hello".chars().sorted().mapToObj(ch -> "" + (char) ch).collect(Collectors.joining()) + " " + new StringBuilder("xyz").chars().sum());
+              fails("limit -1", () -> IntStream.range(0, 3).limit(-1));
+              fails("skip -2", () -> IntStream.range(0, 3).skip(-2));
+              fails("twice", () -> {
+                  IntStream s = IntStream.range(0, 3);
+                  s.sum();
+                  return s.sum();
+              });
+              fails("getAsInt", () -> IntStream.empty().max().getAsInt());
+              fails("getAsDouble", () -> IntStream.empty().average().getAsDouble());
+              fails("orElseThrow", () -> IntStream.empty().findFirst().orElseThrow());
+              OptionalInt oi = IntStream.of(4).findFirst();
+              OptionalInt none = OptionalInt.empty();
+              show(oi + " " + oi.isPresent() + " " + oi.isEmpty() + " " + oi.orElse(9) + " " + none.orElse(9) + " " + none.orElseGet(() -> 8) + " " + oi.equals(OptionalInt.of(4)) + " " + oi.equals(none) + " " + oi.hashCode() + " " + none.hashCode() + " " + none + " " + oi.stream().sum() + " " + none.stream().count());
+              oi.ifPresent(x -> show("present " + x));
+              none.ifPresentOrElse(x -> show("present " + x), () -> show("absent"));
+              OptionalDouble od = DoubleStream.of(2.5).findFirst();
+              OptionalDouble dnone = OptionalDouble.empty();
+              show(od + " " + od.isPresent() + " " + od.orElse(9) + " " + dnone.orElse(9) + " " + dnone.orElseGet(() -> 8) + " " + od.equals(OptionalDouble.of(2.5)) + " " + od.hashCode() + " " + dnone.hashCode() + " " + dnone + " " + od.stream().sum() + " " + OptionalDouble.of(Double.NaN).equals(OptionalDouble.of(Double.NaN)) + " " + OptionalDouble.of(0.0).equals(OptionalDouble.of(-0.0)) + " " + od.getAsDouble());
+              OptionalLong ol = LongStream.of(5).findFirst();
+              show(ol.stream().sum() + " " + OptionalLong.empty().stream().count() + " " + Optional.of("x").stream().count() + " " + Optional.empty().stream().count() + " " + Stream.of(Optional.of(1), Optional.<Integer>empty(), Optional.of(3)).flatMap(Optional::stream).collect(Collectors.toList()));
+              // longs
+              show(LongStream.range(0, 5).sum() + " " + LongStream.rangeClosed(1, 20).reduce(1, (a, b) -> a * b) + " " + LongStream.range(5, 0).count() + " " + LongStream.rangeClosed(Long.MAX_VALUE - 1, Long.MAX_VALUE).boxed().collect(Collectors.toList()) + " " + LongStream.rangeClosed(Long.MIN_VALUE, Long.MIN_VALUE).sum());
+              show(LongStream.of(3, 1, 2).sorted().boxed().collect(Collectors.toList()) + " " + LongStream.of(3, 1, 3).distinct().count() + " " + LongStream.of(3, 1, 2).max() + " " + LongStream.of(3, 1, 2).min().getAsLong() + " " + LongStream.of(3, 1, 2).average() + " " + LongStream.empty().average() + " " + LongStream.of(Long.MAX_VALUE, Long.MAX_VALUE).average() + " " + LongStream.of(Long.MAX_VALUE, 1).sum());
+              show(LongStream.of(3, 1, 2).summaryStatistics() + " " + LongStream.empty().summaryStatistics() + " " + LongStream.of(3, 1, 2).mapToInt(x -> (int) x).sum() + " " + LongStream.of(3, 1, 2).mapToObj(Long::toString).collect(Collectors.joining()) + " " + LongStream.of(3, 1, 2).mapToDouble(x -> x * 0.5).sum() + " " + LongStream.of(3, 1, 2).asDoubleStream().max());
+              show(Arrays.toString(LongStream.of(3, 1, 2).map(x -> x << 40).toArray()) + " " + LongStream.iterate(1, x -> x * 3).limit(5).boxed().collect(Collectors.toList()) + " " + LongStream.iterate(1, x -> x < 50, x -> x * 3).count() + " " + LongStream.generate(() -> 2L).limit(3).sum() + " " + LongStream.concat(LongStream.of(1), LongStream.of(2)).sum() + " " + LongStream.of(1, 2, 3).flatMap(x -> LongStream.rangeClosed(1, x)).sum());
+              show(LongStream.of(3, 1, 2).filter(x -> x > 1).findFirst() + " " + LongStream.of(3, 1, 2).anyMatch(x -> x == 1) + " " + LongStream.of(3, 1, 2).skip(1).limit(1).boxed().collect(Collectors.toList()) + " " + LongStream.range(0, 9).takeWhile(x -> x < 3).count() + " " + LongStream.range(0, 9).dropWhile(x -> x < 3).count() + " " + LongStream.builder().add(4).build().sum() + " " + LongStream.range(0, 3).collect(ArrayList::new, ArrayList::add, ArrayList::addAll) + " " + LongStream.range(0, 3).iterator().nextLong() + " " + LongStream.of(3, 1, 2).reduce(Long::max).getAsLong());
+              LongSummaryStatistics ls = new LongSummaryStatistics();
+              ls.accept(5);
+              ls.accept(7L);
+              show(ls + " " + ls.getAverage() + " " + ls.getMin() + " " + ls.getMax());
+              show(Stream.of("a", "bb").mapToLong(String::length).sum() + " " + Stream.of("a", "bb").mapToDouble(String::length).average().getAsDouble() + " " + Stream.of("ab", "c").flatMapToInt(String::chars).sum() + " " + Stream.of(1, 2).flatMapToLong(x -> LongStream.of(x, x)).sum() + " " + Stream.of(1, 2).flatMapToDouble(x -> DoubleStream.of(x, 0.5)).sum());
+              // doubles
+              show(DoubleStream.of(0.1, 0.2, 0.3).sum() + " " + DoubleStream.of(0.1, 0.2, 0.3).average() + " " + DoubleStream.empty().sum() + " " + DoubleStream.empty().average() + " " + DoubleStream.of(1e308, 1e308, -1e308).sum() + " " + DoubleStream.of(Double.POSITIVE_INFINITY, 1).sum() + " " + DoubleStream.of(Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY).sum() + " " + DoubleStream.of(Double.NaN, 1).sum() + " " + DoubleStream.of(-0.0, -0.0).sum());
+              show(DoubleStream.of(3, 1, 2).min() + " " + DoubleStream.of(3, 1, 2).max() + " " + DoubleStream.of(-0.0, 0.0).min() + " " + DoubleStream.of(0.0, -0.0).max() + " " + DoubleStream.of(1, Double.NaN).max() + " " + DoubleStream.of(1, Double.NaN).min() + " " + DoubleStream.empty().max());
+              show(Arrays.toString(DoubleStream.of(3, -0.0, Double.NaN, 0.0, 1, Double.NEGATIVE_INFINITY).sorted().toArray()) + " " + Arrays.toString(DoubleStream.of(0.0, -0.0, Double.NaN, Double.NaN, 0.0, 1, 1).distinct().toArray()));
+              show(DoubleStream.of(3, 1, 2).summaryStatistics() + " " + DoubleStream.empty().summaryStatistics() + " " + DoubleStream.of(1, Double.NaN).summaryStatistics() + " " + DoubleStream.of(1, Double.POSITIVE_INFINITY, 2).summaryStatistics());
+              show(DoubleStream.of(3, 1, 2).map(x -> x / 4).boxed().collect(Collectors.toList()) + " " + DoubleStream.of(3.7, 1.2).mapToInt(x -> (int) x).sum() + " " + DoubleStream.of(3.7, 1.2).mapToLong(Math::round).sum() + " " + DoubleStream.of(3.7, 1.2).mapToObj(x -> "d" + x).collect(Collectors.joining()) + " " + DoubleStream.of(3, 1, 2).filter(x -> x > 1).count() + " " + DoubleStream.of(3, 1, 2).reduce(0, Double::sum) + " " + DoubleStream.of(3, 1, 2).reduce(Math::max));
+              show(DoubleStream.iterate(1, x -> x / 2).limit(4).boxed().collect(Collectors.toList()) + " " + DoubleStream.iterate(1, x -> x > 0.2, x -> x / 2).count() + " " + DoubleStream.generate(() -> 0.5).limit(2).sum() + " " + DoubleStream.concat(DoubleStream.of(1), DoubleStream.of(2)).sum() + " " + DoubleStream.of(1, 2).flatMap(x -> DoubleStream.of(x, x)).sum() + " " + DoubleStream.builder().add(1.5).build().sum() + " " + DoubleStream.of(1, 2, 3).skip(1).limit(1).sum() + " " + DoubleStream.of(1, 2, 3).takeWhile(x -> x < 2).count() + " " + DoubleStream.of(1, 2, 3).dropWhile(x -> x < 2).count());
+              show(DoubleStream.of(3, 1, 2).anyMatch(x -> x == 1) + " " + DoubleStream.of(3, 1, 2).allMatch(x -> x > 0) + " " + DoubleStream.of(3, 1, 2).noneMatch(x -> x > 0) + " " + DoubleStream.of(3, 1, 2).findFirst() + " " + DoubleStream.empty().findAny() + " " + DoubleStream.of(1, 2).collect(ArrayList::new, ArrayList::add, ArrayList::addAll) + " " + DoubleStream.of(1, 2).iterator().nextDouble() + " " + DoubleStream.of(1, 2).iterator().next());
+              DoubleSummaryStatistics ds = new DoubleSummaryStatistics();
+              DoubleSummaryStatistics ds2 = new DoubleSummaryStatistics();
+              Random r = new Random(11);
+              double[] all = new double[200];
+              for (int i = 0; i < all.length; i++) {
+                  all[i] = (r.nextInt(2000) - 1000) * 0.01 * Math.pow(10, r.nextInt(12) - 6);
+                  (i < 77 ? ds : ds2).accept(all[i]);
+              }
+              show(DoubleStream.of(all).sum() + " " + DoubleStream.of(all).average().getAsDouble() + " " + ds.getSum() + " " + ds2.getSum());
+              ds.combine(ds2);
+              show(ds.getSum() + " " + ds.getAverage() + " " + ds.getMin() + " " + ds.getMax() + " " + ds.getCount() + " " + ds);
+              show(Arrays.stream(all).boxed().collect(Collectors.summingDouble(x -> x)) + " " + Arrays.stream(all).boxed().collect(Collectors.averagingDouble(x -> x)) + " " + Arrays.stream(all, 10, 50).sum() + " " + Arrays.stream(all).map(Math::abs).max().getAsDouble() + " " + Arrays.stream(all).sorted().skip(100).findFirst().getAsDouble());
+              // the arrays as sources
+              int[] ints = { 5, 3, 8 };
+              long[] longs = { 5, 3, 8 };
+              String[] names = { "x", "y", "z" };
+              show(Arrays.stream(ints).sum() + " " + Arrays.stream(ints, 1, 3).sum() + " " + Arrays.stream(longs).max().getAsLong() + " " + Arrays.stream(longs, 0, 1).sum() + " " + Arrays.stream(names).collect(Collectors.joining()) + " " + Arrays.stream(names, 1, 2).collect(Collectors.toList()) + " " + Stream.of(names).count() + " " + Arrays.asList(names).stream().map(String::toUpperCase).toList() + " " + Arrays.stream(ints).boxed().sorted(Comparator.reverseOrder()).toList() + " " + Arrays.stream(ints).map(x -> -x).sorted().map(x -> -x).boxed().toList());
+              fails("2,1", () -> Arrays.stream(names, 2, 1));
+              fails("-1,2", () -> Arrays.stream(names, -1, 2));
+              fails("0,9", () -> Arrays.stream(ints, 0, 9));
+              fails("4,4", () -> Arrays.stream(longs, 4, 4));
+              show(Arrays.stream(names, 3, 3).count() + " " + Arrays.toString(Arrays.stream(names).toArray(String[]::new)) + " " + Arrays.toString(Stream.of("b", "a").sorted().toArray()) + " " + Stream.of("b", "a").toArray(String[]::new).length + " " + Arrays.toString(Stream.of(1, 2).toArray(Integer[]::new)) + " " + Arrays.toString(IntStream.range(0, 3).mapToObj(i -> new int[] { i, i * i }).map(a -> a[0] + a[1]).toArray()));
+          }
+      }
+    expected: |
+      [ink, mug, pan, cup]
+      [CUP, INK, MUG, PAD, PAN, PEN]
+      [pen, pad, cup, ink, mug, pan]
+      [pan, mug, ink, cup, pad, pen]
+      [ink, pad, pen, cup, mug, pan]
+      [ink, pad, pen, pan, mug, cup]
+      pan:2400 mug:650 ink:480 cup:300 pad:250 pen:120
+      pen
+      4200 2400 700.0 4620.0
+      4200 2400 6 3
+      true false false
+      false mug pen
+      pan cup pen 2400 120
+      [blue, fine, heavy, iron]
+      pen#blue,pen#fine,ink#blue,pan#iron,pan#heavy,cup#fine,pad#heavy
+      {blue=2, fine=2, iron=1, heavy=2}
+      {desk=850, kitchen=3350}
+      {desk=pen/ink/pad, kitchen=mug/pan/cup}
+      {false=[pen, pad], true=[ink, mug, pan, cup]}
+      2400
+      {desk=850, kitchen=3350}
+      [desk, kitchen] kitchen=3350, desk=850 [desk, kitchen] 4200 kitchen kitchen
+      {desk=85, kitchen=335}
+      [echo, delta, bravo, alpha, charlie]
+      [echo, delta, charlie] [alpha, alpha] alpha [echo, delta, charlie, alpha, alpha, bravo]
+      [5, 5, 7, 5, 4, 5] [4, 5, 7] {bravo=1, alpha=2, delta=1, echo=1, charlie=1}
+      <4lph4 ch4rlie br4vo>
+      abcdehiloprtv
+      DACBEA
+      13 [A, B, C]
+      132 [5, 3, 2] [2, 3, 5] 9
+      [9, 8, 8, 5, 3, 2, 1] 9885321 [5.5, 3.5, 8.5, 1.5, 9.5, 2.5, 8.5] 36.0 17280
+      [2, 3, 5, 7, 11, 13, 17, 19, 23, 29] [x, xx, xxx, xxxx, xxxxx] [delta, charlie, echo] [0delta, 1alpha, 2charlie]
+      120 1307674368000 5050 2418 [0, 1, 1, 2, 3, 5, 8, 13, 21, 34] 255 [a, ab, abb]
+      1 2 Fizz 4 Buzz Fizz 7 8 Fizz Buzz 11 Fizz 13 14 FizzBuzz
+      [8, 2, 8] [delta, alpha, bravo, alpha] Optional[9] echo Optional.empty
+      7.75 2 1.5 [3] [c1.0, s, c0.5] Square[side=2.0]
+      [2, 4, 6, 8, 10, 12] 3 [1, 3, 4] 21 [3, 0, 3, 15]
+      3 9 [the] {3=6, 4=2, 5=3} quick Quick Brown Jumps Over Lazy
+      [A, B, C] 6 x false 4.0 [97, 98] 1 [a, b, c] [delta, 5] 0 [v]
+      one+two+three zzz a [1, 2][3, 4] [2, 3, 4]
+      5 delta 4
+      [desk, kitchen] [pen, pad] 3 5
+      pan 1 short 2
+      3 [a, b, c] [3, 3, 5] [pad, x] 0 bcd x|y 2 [0, 1, 2]
+      [a, b, c, d] 1 3 [, a] [a, b, c] [abc] [1, 22, 333] 1a02b33c6 0
+      [ef, gh] 0
+      after results: java.lang.IllegalStateException: No match found
+      first [SECOND, , FOURTH] null [1, 2, 3] 0
+      [a, b] c
+      [2, 4, 6] [1, 2, 3, 5, 8, 9] 6 [a2, b1] [5, 3] 6 [alpha, charlie] ababab 9 [k] 5 3 36 31
+      [a, b, c]
+      changed while read: java.util.ConcurrentModificationException
+      deltaalphacharliebravoechoalpha5575455381928dacbea012
+      5
+      3
+      DELTA
+      ALPHA
+      0
+      1
+      0.5
+      cd
+      [delta, closed, 3, ints]
+      not comparable: ClassCastException
+      one not comparable: 1
+      sorted null: java.lang.NullPointerException
+      null element: [a, ?, b]
+      null toList: true
+      max of nulls: Optional[a]
+      first null: java.lang.NullPointerException
+      reduce to null: java.lang.NullPointerException
+      toList frozen: java.lang.UnsupportedOperationException
+      toList remove: java.lang.UnsupportedOperationException
+      collect toList: delta
+      get of none: java.util.NoSuchElementException: No value present
+      used: java.lang.IllegalStateException: stream has already been operated upon or closed
+      used filter: java.lang.IllegalStateException: stream has already been operated upon or closed
+      iterator: DELTAALPHAfalse
+      infinite: 21
+      generate: [0, 1, 2, 3]
+      10 15 0 1
+      [0, 1, 2, 3, 4][-2, -1, 0, 1, 2][]
+      [2147483645, 2147483646, 2147483647]2 4294967295 4294967296 9
+      [1, 2, 3] [3, 1, 2]
+      [9, 4]
+      OptionalInt[1] OptionalInt[3] OptionalInt.empty OptionalInt.empty 7
+      OptionalDouble[2.0] OptionalDouble.empty OptionalDouble[2.147483647E9] 1.5
+      -2147483648 2147483648 3.0
+      IntSummaryStatistics{count=3, sum=6, min=1, average=2.000000, max=3} IntSummaryStatistics{count=0, sum=0, min=2147483647, average=0.000000, max=-2147483648}
+      1 3 2.0 6 3
+      IntSummaryStatistics{count=5, sum=11, min=-5, average=2.200000, max=10}
+      6 OptionalInt[6] OptionalInt.empty 3
+      true false true true false true
+      OptionalInt[3] OptionalInt[3] OptionalInt.empty 1
+      n3,n1,n2 60000000000 3.0
+      [0, 0, 1, 0, 1, 2] 4
+      1023 [1, 3, 9, 27, 81] 21
+      [3, 4, 5, 6] 6 39 0 0
+      [0, 1, 2, 9, 8] 3 5
+      p0f0p1f1p2f2o2o1
+      [0, 1, 2, 3] 5 2
+      3 0 true
+      it end: java.util.NoSuchElementException
+      63 true false
+      2 [h, e, l, l, o] HELLO 3 99
+      h-e-l-l-o 4 ehllo 363
+      limit -1: java.lang.IllegalArgumentException: -1
+      skip -2: java.lang.IllegalArgumentException: -2
+      twice: java.lang.IllegalStateException: stream has already been operated upon or closed
+      getAsInt: java.util.NoSuchElementException: No value present
+      getAsDouble: java.util.NoSuchElementException: No value present
+      orElseThrow: java.util.NoSuchElementException: No value present
+      OptionalInt[4] true false 4 9 8 true false 4 0 OptionalInt.empty 4 0
+      present 4
+      absent
+      OptionalDouble[2.5] true 2.5 9.0 8.0 true 1074003968 0 OptionalDouble.empty 2.5 true false 2.5
+      5 0 1 0 [1, 3]
+      10 2432902008176640000 0 [9223372036854775806, 9223372036854775807] -9223372036854775808
+      [1, 2, 3] 2 OptionalLong[3] 1 OptionalDouble[2.0] OptionalDouble.empty OptionalDouble[-1.0] -9223372036854775808
+      LongSummaryStatistics{count=3, sum=6, min=1, average=2.000000, max=3} LongSummaryStatistics{count=0, sum=0, min=9223372036854775807, average=0.000000, max=-9223372036854775808} 6 312 3.0 OptionalDouble[3.0]
+      [3298534883328, 1099511627776, 2199023255552] [1, 3, 9, 27, 81] 4 6 3 10
+      OptionalLong[3] true [1] 3 6 4 [0, 1, 2] 0 3
+      LongSummaryStatistics{count=2, sum=12, min=5, average=6.000000, max=7} 6.0 5 7
+      3 1.5 294 6 4.0
+      0.6 OptionalDouble[0.19999999999999998] 0.0 OptionalDouble.empty Infinity Infinity NaN NaN 0.0
+      OptionalDouble[1.0] OptionalDouble[3.0] OptionalDouble[-0.0] OptionalDouble[0.0] OptionalDouble[NaN] OptionalDouble[NaN] OptionalDouble.empty
+      [-Infinity, -0.0, 0.0, 1.0, 3.0, NaN] [0.0, -0.0, NaN, 1.0]
+      DoubleSummaryStatistics{count=3, sum=6.000000, min=1.000000, average=2.000000, max=3.000000} DoubleSummaryStatistics{count=0, sum=0.000000, min=Infinity, average=0.000000, max=-Infinity} DoubleSummaryStatistics{count=2, sum=NaN, min=NaN, average=NaN, max=NaN} DoubleSummaryStatistics{count=3, sum=Infinity, min=1.000000, average=Infinity, max=Infinity}
+      [0.75, 0.25, 0.5] 4 5 d3.7d1.2 2 6.0 OptionalDouble[3.0]
+      [1.0, 0.5, 0.25, 0.125] 3 1.0 3.0 6.0 1.5 2.0 1 2
+      true true false OptionalDouble[3.0] OptionalDouble.empty [1.0, 2.0] 1.0 1.0
+      974545.90795066 4872.7295397533 -1242700.23026376 2217246.13821442
+      974545.90795066 4872.7295397533 -407000.0 808000.0 200 DoubleSummaryStatistics{count=200, sum=974545.907951, min=-407000.000000, average=4872.729540, max=808000.000000}
+      974545.90795066 4872.7295397533 -834345.18072223 808000.0 -3.8499999999999996E-6
+      16 11 8 5 xyz [y] 3 [X, Y, Z] [8, 5, 3] [8, 5, 3]
+      2,1: java.lang.ArrayIndexOutOfBoundsException: origin(2) > fence(1)
+      -1,2: java.lang.ArrayIndexOutOfBoundsException: Array index out of range: -1
+      0,9: java.lang.ArrayIndexOutOfBoundsException: Array index out of range: 9
+      4,4: java.lang.ArrayIndexOutOfBoundsException: Array index out of range: 4
+      0 [x, y, z] [a, b] 2 [1, 2] [0, 2, 6]
+  # Collectors: the maps keep the order a JDK's HashMap shows for keys sharing a bucket
+  # (groupingBy puts ahead of the chain, toMap behind it), partitioningBy answers a map
+  # of false and true, the marks of each collector and of one made of another are a JDK
+  # 25's. The type arguments of collect(groupingBy(.., mapping(.., toList()))) and of
+  # the same shapes over the program's own classes are found: a call given as an argument
+  # waits for its parameter's type where its lambdas need it.
+  - name: a-collector-gathers-a-stream-and-the-type-arguments-are-found
+    main: Gathered
+    source: |
+      class Gathered {
+          record Person(String name, int age, String city, double pay) {
+          }
+
+          enum Size {
+              SMALL, LARGE
+          }
+
+          static void fails(String what, Supplier<Object> r) {
+              try {
+                  System.out.println(what + ": " + r.get());
+              }
+              catch (NullPointerException e) {
+                  System.out.println(what + ": " + e.getClass().getName());
+              }
+              catch (RuntimeException e) {
+                  System.out.println(what + ": " + e);
+              }
+          }
+
+          static void show(Object o) {
+              System.out.println(o);
+          }
+
+          static List<Person> people() {
+              return List.of(new Person("Ann", 31, "Oslo", 410.5), new Person("Bob", 25, "Rome", 300.25),
+                      new Person("Cy", 40, "Oslo", 520.0), new Person("Di", 25, "Lima", 300.25),
+                      new Person("Ed", 58, "Rome", 99.9), new Person("Flo", 31, "Oslo", 0.1));
+          }
+
+          public static void main(String[] args) {
+              List<String> words = List.of("apple", "fig", "kiwi", "plum", "pear", "banana", "fig");
+              List<Person> people = people();
+              // the lists and sets
+              List<String> list = words.stream().collect(Collectors.toList());
+              list.add("more");
+              System.out.println(list);
+              Set<String> set = words.stream().collect(Collectors.toSet());
+              System.out.println(set + " " + set.size());
+              show(words.stream().collect(Collectors.toCollection(ArrayList::new)));
+              show(words.stream().collect(Collectors.toCollection(HashSet::new)));
+              System.out.println(words.stream().collect(Collectors.toCollection(() -> new ArrayDeque<>())).peekLast());
+              ArrayList<Integer> lengths = words.stream().map(String::length).collect(Collectors.toCollection(ArrayList::new));
+              System.out.println(lengths);
+              System.out.println(words.stream().collect(Collectors.toUnmodifiableList()));
+              System.out.println(words.stream().limit(2).collect(Collectors.toUnmodifiableSet()).size());
+              System.out.println(words.stream().toList());
+              // joining
+              System.out.println(words.stream().collect(Collectors.joining()));
+              System.out.println(words.stream().collect(Collectors.joining(", ")));
+              System.out.println(words.stream().collect(Collectors.joining(", ", "{", "}")));
+              System.out.println(Stream.<String>empty().collect(Collectors.joining(", ", "{", "}")));
+              System.out.println(Stream.<String>empty().collect(Collectors.joining(", ")).isEmpty());
+              System.out.println(Stream.of("a", null, "b").collect(Collectors.joining("-")));
+              System.out.println(Stream.of(new StringBuilder("sb"), "s").collect(Collectors.joining("+")));
+              System.out.println(people.stream().map(Person::name).collect(Collectors.joining("/")));
+              System.out.println(IntStream.range(0, 5).mapToObj(Integer::toString).collect(Collectors.joining(",")));
+              System.out.println(IntStream.range(0, 5).mapToObj(i -> "" + i * i).collect(Collectors.joining(" ")));
+              System.out.println(words.stream().map(w -> w.substring(0, 1)).collect(Collectors.joining()));
+              // counting, summing, averaging
+              System.out.println(words.stream().collect(Collectors.counting()));
+              long counted = words.stream().collect(Collectors.counting());
+              System.out.println(counted + 1);
+              System.out.println(people.stream().collect(Collectors.summingInt(Person::age)));
+              int ages = people.stream().collect(Collectors.summingInt(p -> p.age()));
+              System.out.println(ages);
+              System.out.println(people.stream().collect(Collectors.summingLong(p -> (long) p.age() << 33)));
+              System.out.println(people.stream().collect(Collectors.summingDouble(Person::pay)));
+              System.out.println(people.stream().collect(Collectors.averagingInt(Person::age)));
+              System.out.println(people.stream().collect(Collectors.averagingLong(Person::age)));
+              System.out.println(people.stream().collect(Collectors.averagingDouble(Person::pay)));
+              System.out.println(Stream.<Person>empty().collect(Collectors.averagingInt(Person::age)) + " "
+                      + Stream.<Person>empty().collect(Collectors.averagingDouble(Person::pay)) + " "
+                      + Stream.<Person>empty().collect(Collectors.summingInt(Person::age)) + " "
+                      + Stream.<Person>empty().collect(Collectors.counting()));
+              System.out.println(Stream.of(Integer.MAX_VALUE, 1).collect(Collectors.summingInt(x -> x)));
+              System.out.println(Stream.of(Integer.MAX_VALUE, 1).collect(Collectors.averagingInt(x -> x)));
+              System.out.println(Stream.of(Long.MAX_VALUE, 1L).collect(Collectors.averagingLong(x -> x)));
+              // min, max, reducing
+              System.out.println(people.stream().collect(Collectors.minBy(Comparator.comparingInt(Person::age))));
+              System.out.println(people.stream().collect(Collectors.maxBy(Comparator.comparingInt(Person::age))));
+              System.out.println(people.stream().collect(Collectors.maxBy(Comparator.comparing(Person::city))));
+              System.out.println(people.stream().collect(Collectors.minBy(Comparator.comparing(Person::city).reversed())));
+              System.out.println(Stream.<Person>empty().collect(Collectors.minBy(Comparator.comparingInt(Person::age))));
+              System.out.println(people.stream().min(Comparator.comparingInt(Person::age)).get().name() + " "
+                      + people.stream().max(Comparator.comparingInt(Person::age)).get().name() + " "
+                      + people.stream().max(Comparator.comparing(Person::city)).get().name() + " "
+                      + people.stream().min(Comparator.comparing(Person::city).reversed()).get().name());
+              System.out.println(words.stream().collect(Collectors.reducing("", (a, b) -> a + b.charAt(0))));
+              System.out.println(words.stream().collect(Collectors.reducing((a, b) -> a.length() >= b.length() ? a : b)));
+              System.out.println(words.stream().collect(Collectors.reducing(0, String::length, Integer::sum)));
+              System.out.println(Stream.<String>empty().collect(Collectors.reducing((a, b) -> a)));
+              // grouping
+              System.out.println(words.stream().collect(Collectors.groupingBy(String::length)));
+              System.out.println(words.stream().collect(Collectors.groupingBy(w -> w.charAt(0))));
+              System.out.println(words.stream().collect(Collectors.groupingBy(String::length, Collectors.counting())));
+              System.out.println(words.stream().collect(Collectors.groupingBy(w -> w.length(), Collectors.toSet())));
+              System.out.println(words.stream().collect(Collectors.groupingBy(String::length, Collectors.joining("|"))));
+              System.out.println(words.stream().collect(Collectors.groupingBy(String::length, Collectors.mapping(w -> w.charAt(0), Collectors.toList()))));
+              show(words.stream().collect(Collectors.groupingBy(String::length, HashMap::new, Collectors.toList())));
+              Map<String, List<Person>> byCity = people.stream().collect(Collectors.groupingBy(Person::city));
+              System.out.println(byCity.get("Oslo").size() + " " + byCity.keySet());
+              Map<String, Long> cityCount = people.stream().collect(Collectors.groupingBy(Person::city, Collectors.counting()));
+              System.out.println(cityCount);
+              Map<String, Double> cityPay = people.stream().collect(Collectors.groupingBy(Person::city, Collectors.averagingDouble(Person::pay)));
+              System.out.println(cityPay);
+              Map<String, Integer> cityAges = people.stream().collect(Collectors.groupingBy(Person::city, Collectors.summingInt(Person::age)));
+              System.out.println(cityAges);
+              Map<String, Optional<Person>> oldest = people.stream().collect(Collectors.groupingBy(Person::city, Collectors.maxBy(Comparator.comparingInt(Person::age))));
+              System.out.println(oldest.get("Rome").map(Person::name).orElse("none"));
+              Map<String, List<String>> names = people.stream().collect(Collectors.groupingBy(Person::city, Collectors.mapping(Person::name, Collectors.toList())));
+              System.out.println(names);
+              Map<String, String> joined = people.stream().collect(Collectors.groupingBy(p -> p.city(), Collectors.mapping(p -> p.name(), Collectors.joining("+"))));
+              System.out.println(joined);
+              Map<Integer, Map<String, List<String>>> nested = people.stream().collect(Collectors.groupingBy(Person::age, Collectors.groupingBy(Person::city, Collectors.mapping(Person::name, Collectors.toList()))));
+              System.out.println(nested);
+              Map<String, Set<Integer>> ageSets = people.stream().collect(Collectors.groupingBy(Person::city, Collectors.mapping(Person::age, Collectors.toSet())));
+              System.out.println(ageSets);
+              Map<String, IntSummaryStatistics> stats = people.stream().collect(Collectors.groupingBy(Person::city, Collectors.summarizingInt(Person::age)));
+              System.out.println(stats);
+              Map<Boolean, Long> parity = IntStream.rangeClosed(1, 9).boxed().collect(Collectors.groupingBy(i -> i % 2 == 0, Collectors.counting()));
+              System.out.println(parity);
+              Map<Size, List<String>> sized = words.stream().collect(Collectors.groupingBy(w -> w.length() > 4 ? Size.LARGE : Size.SMALL));
+              System.out.println(sized.get(Size.LARGE) + " " + sized.get(Size.SMALL));
+              var grouped = people.stream().collect(Collectors.groupingBy(Person::city, Collectors.collectingAndThen(Collectors.toList(), List::size)));
+              System.out.println(grouped);
+              System.out.println(people.stream().collect(Collectors.groupingBy(Person::city, Collectors.filtering(p -> p.age() > 30, Collectors.counting()))));
+              System.out.println(people.stream().collect(Collectors.groupingBy(Person::city, Collectors.flatMapping(p -> p.name().chars().boxed(), Collectors.toList()))));
+              System.out.println(people.stream().collect(Collectors.groupingBy(Person::city, Collectors.reducing(0, Person::age, Integer::sum))));
+              System.out.println(people.stream().collect(Collectors.groupingBy(Person::city, Collectors.teeing(Collectors.counting(), Collectors.summingInt(Person::age), (n, s) -> n + ":" + s))));
+              // the order of a map's keys that share a bucket
+              System.out.println(Stream.of(1, 17, 33, 2, 18, 49).collect(Collectors.groupingBy(i -> i, Collectors.counting())));
+              System.out.println(Stream.of(17, 1, 33, 18, 2, 49, 1).collect(Collectors.groupingBy(i -> i)));
+              System.out.println(Stream.of(1, 17, 33, 2, 18, 49).collect(Collectors.toMap(i -> i, i -> i * 2)));
+              System.out.println(Stream.of(17, 1, 33, 18, 2, 49).collect(Collectors.toMap(i -> i, i -> i * 2, Integer::sum)));
+              System.out.println(Stream.of(17, 1, 33, 18, 2, 49, 17).collect(Collectors.toMap(i -> i, i -> i * 2, Integer::sum)));
+              System.out.println(Stream.of(17, 1, 33, 18, 2, 49).collect(Collectors.toSet()));
+              show(Stream.of(17, 1, 33, 18, 2, 49).collect(Collectors.toMap(i -> i, i -> "v" + i, (a, b) -> a, HashMap::new)));
+              show(Stream.of(17, 1, 33, 18, 2, 49).collect(Collectors.groupingBy(i -> i, HashMap::new, Collectors.counting())));
+              System.out.println(Stream.of(17, 1, 33, 18, 2, 49).distinct().collect(Collectors.toList()));
+              fails("group null key", () -> Stream.of("a", "b").collect(Collectors.groupingBy(s -> s.equals("b") ? null : s)));
+              // partitioning
+              Map<Boolean, List<String>> parts = words.stream().collect(Collectors.partitioningBy(w -> w.length() > 4));
+              System.out.println(parts + " " + parts.get(true) + " " + parts.get(false) + " " + parts.size() + " " + parts.keySet() + " " + parts.values());
+              System.out.println(words.stream().collect(Collectors.partitioningBy(w -> w.length() > 4, Collectors.counting())));
+              System.out.println(Stream.<String>empty().collect(Collectors.partitioningBy(w -> w.length() > 4)));
+              System.out.println(parts.containsKey(true) + " " + parts.containsKey("x") + " " + parts.get("x") + " " + parts.entrySet().iterator().next().getKey());
+              fails("partition put", () -> parts.put(true, List.of()));
+              fails("partition remove", () -> parts.remove(true));
+              fails("partition list add", () -> parts.get(true).add("x"));
+              parts.forEach((k, v) -> System.out.println(k + " -> " + v));
+              Map<Boolean, Map<Integer, Long>> deep = words.stream().collect(Collectors.partitioningBy(w -> w.contains("a"), Collectors.groupingBy(String::length, Collectors.counting())));
+              System.out.println(deep);
+              // toMap
+              Map<String, Integer> lens = words.stream().distinct().collect(Collectors.toMap(w -> w, String::length));
+              System.out.println(lens);
+              Map<String, Person> byName = people.stream().collect(Collectors.toMap(Person::name, Function.identity()));
+              System.out.println(byName.get("Cy").city());
+              Map<Integer, String> merged = people.stream().collect(Collectors.toMap(Person::age, Person::name, (a, b) -> a + "&" + b));
+              System.out.println(merged);
+              fails("toMap twice", () -> words.stream().collect(Collectors.toMap(w -> w, String::length)));
+              fails("toMap twice people", () -> people.stream().collect(Collectors.toMap(Person::age, Person::name)));
+              fails("toMap null value", () -> Stream.of("a", "b").collect(Collectors.toMap(w -> w, w -> w.equals("b") ? null : w)));
+              fails("toMap null key", () -> Stream.of("a", "b").collect(Collectors.toMap(w -> w.equals("b") ? null : w, w -> w)));
+              fails("toMap merge null value", () -> Stream.of("a", "b").collect(Collectors.toMap(w -> w, w -> w.equals("b") ? null : w, (a, b) -> a)));
+              fails("toMap merge to null", () -> Stream.of("a", "a", "b").collect(Collectors.toMap(w -> w, w -> w, (a, b) -> null)));
+              fails("toUnmodifiableMap", () -> Stream.of("a").collect(Collectors.toUnmodifiableMap(w -> w, w -> 1)));
+              fails("toUnmodifiableMap put", () -> Stream.of("a").collect(Collectors.toUnmodifiableMap(w -> w, w -> 1)).put("b", 2));
+              fails("toUnmodifiableMap merge", () -> Stream.of("a", "a").collect(Collectors.toUnmodifiableMap(w -> w, w -> 1, Integer::sum)));
+              fails("toUnmodifiableMap twice", () -> Stream.of("a", "a").collect(Collectors.toUnmodifiableMap(w -> w, w -> 1)));
+              fails("toUnmodifiableSet null", () -> Stream.of("a", null).collect(Collectors.toUnmodifiableSet()));
+              fails("toUnmodifiableSet add", () -> Stream.of("a").collect(Collectors.toUnmodifiableSet()).add("b"));
+              fails("toSet null", () -> Stream.of("a", null).collect(Collectors.toSet()).size());
+              fails("toList null", () -> Stream.of("a", null).collect(Collectors.toList()));
+              // summarizing, teeing, collectingAndThen
+              System.out.println(people.stream().collect(Collectors.summarizingInt(Person::age)));
+              System.out.println(people.stream().collect(Collectors.summarizingLong(Person::age)));
+              System.out.println(people.stream().collect(Collectors.summarizingDouble(Person::pay)));
+              DoubleSummaryStatistics pay = people.stream().collect(Collectors.summarizingDouble(Person::pay));
+              System.out.println(pay.getMin() + " " + pay.getMax() + " " + pay.getAverage() + " " + pay.getSum() + " " + pay.getCount());
+              show(people.stream().collect(Collectors.teeing(Collectors.minBy(Comparator.comparingInt(Person::age)), Collectors.maxBy(Comparator.comparingInt(Person::age)), (a, b) -> a.get().name() + ".." + b.get().name())));
+              double mean = words.stream().collect(Collectors.teeing(Collectors.summingInt(String::length), Collectors.counting(), (s, n) -> (double) s / n));
+              System.out.println(mean);
+              List<String> frozen = words.stream().collect(Collectors.collectingAndThen(Collectors.toList(), Collections::unmodifiableList));
+              fails("frozen", () -> frozen.add("x"));
+              show(words.stream().collect(Collectors.collectingAndThen(Collectors.toSet(), Set::size)));
+              System.out.println(words.stream().collect(Collectors.collectingAndThen(Collectors.joining(), String::length)));
+              // a collector of the program's own
+              Collector<String, StringBuilder, String> initials = Collector.of(StringBuilder::new, (sb, s) -> sb.append(s.charAt(0)), StringBuilder::append, StringBuilder::toString);
+              System.out.println(words.stream().collect(initials) + " " + initials.characteristics());
+              Collector<String, List<String>, List<String>> reversed = Collector.of(ArrayList::new, (l, s) -> l.add(0, s), (a, b) -> {
+                  b.addAll(a);
+                  return b;
+              });
+              System.out.println(words.stream().collect(reversed) + " " + reversed.characteristics());
+              Collector<String, ?, Integer> total = Collector.of(() -> new int[1], (a, s) -> a[0] += s.length(), (a, b) -> a, a -> a[0], Collector.Characteristics.UNORDERED);
+              System.out.println(words.stream().collect(total) + " " + total.characteristics());
+              System.out.println(Collectors.toList().characteristics() + " " + Collectors.toSet().characteristics() + " " + Collectors.joining().characteristics() + " " + Collectors.counting().characteristics() + " " + Collectors.groupingBy(x -> x).characteristics() + " " + Collectors.toMap(x -> x, x -> x).characteristics() + " " + Collectors.partitioningBy(x -> true).characteristics() + " " + Collectors.toUnmodifiableSet().characteristics() + " " + Collectors.toCollection(ArrayList::new).characteristics() + " " + Collectors.summarizingInt(x -> 1).characteristics() + " " + Collectors.mapping(x -> x, Collectors.toList()).characteristics() + " " + Collectors.minBy(Comparator.<String>naturalOrder()).characteristics());
+              // a collector's parts used by hand
+              Collector<String, ?, List<String>> c = Collectors.toList();
+              System.out.println(collected(c, "x", "y") + " " + collected(Collectors.joining("-"), "x", "y") + " " + collected(Collectors.counting(), "x", "y") + " " + collected(Collectors.groupingBy(String::length), "x", "yy", "z") + " " + collected(Collectors.partitioningBy(s -> s.equals("x")), "x", "y", "x") + " " + collected(Collectors.toMap(s -> s, s -> 1, Integer::sum), "x", "y", "x") + " " + collected(Collectors.summingDouble(s -> 0.1), "x", "y", "x") + " " + collected(Collectors.averagingDouble(s -> 0.1), "x", "y", "x") + " " + collected(Collectors.maxBy(Comparator.<String>naturalOrder()), "x", "y", "x") + " " + collected(Collectors.joining(",", "<", ">"), "x", "y", "z") + " " + collected(Collectors.teeing(Collectors.counting(), Collectors.joining(), (n, s) -> s + n), "x", "y", "z") + " " + collected(Collectors.summarizingDouble(s -> 0.1), "x", "y", "z"));
+              // the three-argument collect and reduce
+              show(words.stream().collect(ArrayList::new, ArrayList::add, ArrayList::addAll));
+              System.out.println(words.stream().collect(StringBuilder::new, StringBuilder::append, StringBuilder::append).toString());
+              System.out.println(words.stream().collect(() -> new HashMap<String, Integer>(), (m, w) -> m.merge(w, 1, Integer::sum), Map::putAll));
+              System.out.println(words.stream().reduce(0, (n, w) -> n + w.length(), Integer::sum));
+              System.out.println(words.stream().reduce("", String::concat));
+              System.out.println(words.stream().reduce((a, b) -> b + a).get());
+              System.out.println(words.stream().map(String::length).reduce(Integer::max).get() + " " + words.stream().map(String::length).reduce(0, Integer::sum) + " " + words.stream().map(String::length).reduce(1, (a, b) -> a * b));
+              show(IntStream.range(0, 4).collect(ArrayList::new, ArrayList::add, ArrayList::addAll));
+              show(IntStream.range(0, 4).collect(StringBuilder::new, (sb, i) -> sb.append(i), StringBuilder::append));        marks();
+              own();
+          }
+
+          static void row(String what, Collector<?, ?, ?> c) {
+              System.out.println(what + ": " + c.characteristics());
+          }
+
+          // what each collector says of itself, and each one made of another
+          static void marks() {
+              Collector<String, ?, List<String>> list = Collectors.toList();
+              Collector<String, ?, Set<String>> set = Collectors.toSet();
+              Collector<String, ?, Long> counting = Collectors.counting();
+              Collector<String, ?, Set<String>> uset = Collectors.toUnmodifiableSet();
+              Collector<String, int[], int[]> own = Collector.of(() -> new int[1], (a, s) -> a[0]++, (a, b) -> a, Collector.Characteristics.CONCURRENT, Collector.Characteristics.UNORDERED);
+              Collector<String, int[], Integer> own2 = Collector.of(() -> new int[1], (a, s) -> a[0]++, (a, b) -> a, a -> a[0], Collector.Characteristics.IDENTITY_FINISH, Collector.Characteristics.CONCURRENT);
+              row("own", own);
+              row("own2", own2);
+              row("toList", list);
+              row("toUnmodifiableList", Collectors.toUnmodifiableList());
+              row("toSet", set);
+              row("toUnmodifiableSet", uset);
+              row("toCollection", Collectors.toCollection(ArrayList::new));
+              row("joining", Collectors.joining());
+              row("joining3", Collectors.joining(",", "a", "b"));
+              row("counting", counting);
+              row("minBy", Collectors.minBy(Comparator.<String>naturalOrder()));
+              row("summingInt", Collectors.summingInt(x -> 1));
+              row("summingLong", Collectors.summingLong(x -> 1));
+              row("summingDouble", Collectors.summingDouble(x -> 1));
+              row("averagingInt", Collectors.averagingInt(x -> 1));
+              row("averagingDouble", Collectors.averagingDouble(x -> 1));
+              row("reducing1", Collectors.reducing((a, b) -> a));
+              row("reducing2", Collectors.reducing("", (a, b) -> a));
+              row("reducing3", Collectors.reducing("", x -> "", (a, b) -> a));
+              row("summarizingInt", Collectors.summarizingInt(x -> 1));
+              row("summarizingLong", Collectors.summarizingLong(x -> 1));
+              row("summarizingDouble", Collectors.summarizingDouble(x -> 1));
+              row("toMap2", Collectors.toMap(x -> x, x -> x));
+              row("toMap3", Collectors.toMap(x -> x, x -> x, (a, b) -> a));
+              row("toMap4", Collectors.toMap(x -> x, x -> x, (a, b) -> a, HashMap::new));
+              row("toUnmodifiableMap2", Collectors.toUnmodifiableMap(x -> x, x -> x));
+              row("toUnmodifiableMap3", Collectors.toUnmodifiableMap(x -> x, x -> x, (a, b) -> a));
+              for (Collector<String, ?, ?> down : List.of(list, set, counting, uset, own, own2)) {
+                  String d = down.characteristics().toString();
+                  row("mapping " + d, Collectors.mapping((String x) -> x, down));
+                  row("filtering " + d, Collectors.filtering(x -> true, down));
+                  row("flatMapping " + d, Collectors.flatMapping((String x) -> Stream.of(x), down));
+                  row("collectingAndThen " + d, Collectors.collectingAndThen(down, x -> x));
+                  row("groupingBy " + d, Collectors.groupingBy(x -> x, down));
+                  row("groupingBy3 " + d, Collectors.groupingBy(x -> x, HashMap::new, down));
+                  row("partitioningBy " + d, Collectors.partitioningBy(x -> true, down));
+                  row("teeing with toList " + d, Collectors.teeing(down, list, (a, b) -> a));
+                  row("teeing with toSet " + d, Collectors.teeing(down, set, (a, b) -> a));
+                  row("teeing with own " + d, Collectors.teeing(down, own, (a, b) -> a));
+                  row("teeing with counting " + d, Collectors.teeing(counting, down, (a, b) -> a));
+              }
+              row("groupingBy1", Collectors.groupingBy(x -> x));
+              row("partitioningBy1", Collectors.partitioningBy(x -> true));
+              Collector<String, ?, Optional<String>> r = Collectors.reducing((a, b) -> null);
+              System.out.println(Stream.of("a", "b").collect(r));
+              System.out.println(Stream.of("a", "b").collect(Collectors.minBy((a, b) -> 0)));
+              try {
+                  System.out.println(new IntSummaryStatistics(-1, 0, 0, 0));
+              }
+              catch (IllegalArgumentException e) {
+                  System.out.println(e);
+              }
+              try {
+                  System.out.println(new IntSummaryStatistics(1, 2, 1, 0));
+              }
+              catch (IllegalArgumentException e) {
+                  System.out.println(e);
+              }
+              try {
+                  System.out.println(new DoubleSummaryStatistics(1, 1, 2, Double.NaN));
+              }
+              catch (IllegalArgumentException e) {
+                  System.out.println(e);
+              }
+              try {
+                  System.out.println(new LongSummaryStatistics(1, 3, 2, 0));
+              }
+              catch (IllegalArgumentException e) {
+                  System.out.println(e);
+              }
+              System.out.println(new IntSummaryStatistics(0, 5, 1, 9) + " " + new IntSummaryStatistics(2, 1, 5, 9) + " " + new DoubleSummaryStatistics(2, 1, 5, 9) + " " + new DoubleSummaryStatistics(2, Double.NaN, Double.NaN, Double.NaN) + " " + new LongSummaryStatistics(2, 1, 5, 9) + " " + new IntSummaryStatistics() + " " + new DoubleSummaryStatistics() + " " + new LongSummaryStatistics());
+          }
+
+          // a collector of the program's own classes: the type arguments are found as the
+          // library's are
+          interface Gathering<T, A, R> {
+              Supplier<A> supplier();
+
+              BiConsumer<A, T> accumulator();
+
+              Function<A, R> finisher();
+          }
+
+          record GatheringOf<T, A, R>(Supplier<A> supplier, BiConsumer<A, T> accumulator, Function<A, R> finisher)
+                  implements Gathering<T, A, R> {
+          }
+
+          static <T> Gathering<T, ?, List<T>> listed() {
+              return new GatheringOf<T, List<T>, List<T>>(ArrayList::new, List::add, x -> x);
+          }
+
+          static <T> Gathering<T, ?, Long> counted() {
+              return new GatheringOf<T, long[], Long>(() -> new long[1], (a, t) -> a[0]++, a -> a[0]);
+          }
+
+          static <T, K> Gathering<T, ?, Map<K, List<T>>> grouped(Function<? super T, ? extends K> key) {
+              return grouped(key, listed());
+          }
+
+          static <T, K, A, D> Gathering<T, ?, Map<K, D>> grouped(Function<? super T, ? extends K> key,
+                  Gathering<? super T, A, D> down) {
+              Supplier<A> made = down.supplier();
+              BiConsumer<A, ? super T> accumulator = down.accumulator();
+              Function<A, D> finisher = down.finisher();
+              return new GatheringOf<T, Map<K, A>, Map<K, D>>(HashMap::new, (groups, item) -> {
+                  K k = key.apply(item);
+                  A group = groups.get(k);
+                  if (group == null) {
+                      group = made.get();
+                      groups.put(k, group);
+                  }
+                  accumulator.accept(group, item);
+              }, groups -> {
+                  Map<K, D> finished = new HashMap<>();
+                  for (Map.Entry<K, A> each : groups.entrySet()) {
+                      finished.put(each.getKey(), finisher.apply(each.getValue()));
+                  }
+                  return finished;
+              });
+          }
+
+          static <T, U, A, R> Gathering<T, ?, R> through(Function<? super T, ? extends U> mapper,
+                  Gathering<? super U, A, R> down) {
+              BiConsumer<A, ? super U> accumulator = down.accumulator();
+              return new GatheringOf<T, A, R>(down.supplier(), (a, t) -> accumulator.accept(a, mapper.apply(t)),
+                      down.finisher());
+          }
+
+          static <T, R, A> R gathered(List<T> items, Gathering<? super T, A, R> gathering) {
+              A container = gathering.supplier().get();
+              BiConsumer<A, ? super T> accumulator = gathering.accumulator();
+              for (T item : items) {
+                  accumulator.accept(container, item);
+              }
+              return gathering.finisher().apply(container);
+          }
+
+          static void own() {
+              List<String> words = List.of("apple", "fig", "kiwi", "plum", "pear", "banana");
+              List<String> all = gathered(words, listed());
+              Map<Integer, List<String>> byLength = gathered(words, grouped(s -> s.length()));
+              Map<Integer, Long> counts = gathered(words, grouped(s -> s.length(), counted()));
+              Map<Integer, Long> again = gathered(words, grouped(String::length, counted()));
+              var initials = gathered(words, grouped(s -> s.charAt(0), through(s -> s.toUpperCase(), listed())));
+              System.out.println(all + " " + byLength + " " + counts + " " + again + " " + initials);
+              show(gathered(words, grouped(String::length, through(String::length, counted()))));
+              // a lambda or null by a condition; a call holding lambdas whose types the target gives
+              Function<String, Integer> length = words.isEmpty() ? null : s -> s.length();
+              Supplier<String> none = words.size() > 99 ? () -> "many" : null;
+              System.out.println(length.apply("four") + " " + (none == null));
+              Collector<String, ?, List<String>> frozen = Collectors.collectingAndThen(Collectors.toList(), l -> Collections.unmodifiableList(l));
+              Collector<String, ?, List<String>> frozenToo = Collectors.collectingAndThen(Collectors.toList(), Collections::unmodifiableList);
+              List<String> first = words.stream().collect(Collectors.collectingAndThen(Collectors.toList(), l -> Collections.unmodifiableList(l)));
+              List<String> second = words.stream().collect(Collectors.collectingAndThen(Collectors.toList(), Collections::unmodifiableList));
+              System.out.println(words.stream().collect(frozen).size() + " " + words.stream().collect(frozenToo).size() + " " + first.size() + " " + second.get(0));
+          }
+
+          // both halves collected apart and combined, as a parallel stream would
+          @SafeVarargs
+          static <T, A, R> R collected(Collector<T, A, R> collector, T... items) {
+              A left = collector.supplier().get();
+              A right = collector.supplier().get();
+              for (int i = 0; i < items.length; i++) {
+                  collector.accumulator().accept(i < items.length / 2 ? left : right, items[i]);
+              }
+              return collector.finisher().apply(collector.combiner().apply(left, right));
+          }
+      }
+    expected: |
+      [apple, fig, kiwi, plum, pear, banana, fig, more]
+      [plum, banana, apple, kiwi, pear, fig] 6
+      [apple, fig, kiwi, plum, pear, banana, fig]
+      [plum, banana, apple, kiwi, pear, fig]
+      fig
+      [5, 3, 4, 4, 4, 6, 3]
+      [apple, fig, kiwi, plum, pear, banana, fig]
+      2
+      [apple, fig, kiwi, plum, pear, banana, fig]
+      applefigkiwiplumpearbananafig
+      apple, fig, kiwi, plum, pear, banana, fig
+      {apple, fig, kiwi, plum, pear, banana, fig}
+      {}
+      true
+      a-null-b
+      sb+s
+      Ann/Bob/Cy/Di/Ed/Flo
+      0,1,2,3,4
+      0 1 4 9 16
+      afkppbf
+      7
+      8
+      210
+      210
+      1803886264320
+      1631.0
+      35.0
+      35.0
+      271.8333333333333
+      0.0 0.0 0 0
+      -2147483648
+      1.073741824E9
+      -4.611686018427388E18
+      Optional[Person[name=Bob, age=25, city=Rome, pay=300.25]]
+      Optional[Person[name=Ed, age=58, city=Rome, pay=99.9]]
+      Optional[Person[name=Bob, age=25, city=Rome, pay=300.25]]
+      Optional[Person[name=Bob, age=25, city=Rome, pay=300.25]]
+      Optional.empty
+      Bob Ed Bob Bob
+      afkppbf
+      Optional[banana]
+      29
+      Optional.empty
+      {3=[fig, fig], 4=[kiwi, plum, pear], 5=[apple], 6=[banana]}
+      {p=[plum, pear], a=[apple], b=[banana], f=[fig, fig], k=[kiwi]}
+      {3=2, 4=3, 5=1, 6=1}
+      {3=[fig], 4=[plum, kiwi, pear], 5=[apple], 6=[banana]}
+      {3=fig|fig, 4=kiwi|plum|pear, 5=apple, 6=banana}
+      {3=[f, f], 4=[k, p, p], 5=[a], 6=[b]}
+      {3=[fig, fig], 4=[kiwi, plum, pear], 5=[apple], 6=[banana]}
+      3 [Oslo, Rome, Lima]
+      {Oslo=3, Rome=2, Lima=1}
+      {Oslo=310.2, Rome=200.075, Lima=300.25}
+      {Oslo=102, Rome=83, Lima=25}
+      Ed
+      {Oslo=[Ann, Cy, Flo], Rome=[Bob, Ed], Lima=[Di]}
+      {Oslo=Ann+Cy+Flo, Rome=Bob+Ed, Lima=Di}
+      {40={Oslo=[Cy]}, 25={Rome=[Bob], Lima=[Di]}, 58={Rome=[Ed]}, 31={Oslo=[Ann, Flo]}}
+      {Oslo=[40, 31], Rome=[25, 58], Lima=[25]}
+      {Oslo=IntSummaryStatistics{count=3, sum=102, min=31, average=34.000000, max=40}, Rome=IntSummaryStatistics{count=2, sum=83, min=25, average=41.500000, max=58}, Lima=IntSummaryStatistics{count=1, sum=25, min=25, average=25.000000, max=25}}
+      {false=5, true=4}
+      [apple, banana] [fig, kiwi, plum, pear, fig]
+      {Oslo=3, Rome=2, Lima=1}
+      {Oslo=3, Rome=1, Lima=0}
+      {Oslo=[65, 110, 110, 67, 121, 70, 108, 111], Rome=[66, 111, 98, 69, 100], Lima=[68, 105]}
+      {Oslo=102, Rome=83, Lima=25}
+      {Oslo=3:102, Rome=2:83, Lima=1:25}
+      {49=1, 33=1, 17=1, 1=1, 18=1, 2=1}
+      {49=[49], 33=[33], 1=[1, 1], 17=[17], 2=[2], 18=[18]}
+      {1=2, 17=34, 33=66, 49=98, 2=4, 18=36}
+      {49=98, 33=66, 1=2, 17=34, 2=4, 18=36}
+      {49=98, 33=66, 1=2, 17=68, 2=4, 18=36}
+      [17, 1, 33, 49, 18, 2]
+      {49=v49, 33=v33, 1=v1, 17=v17, 2=v2, 18=v18}
+      {49=1, 33=1, 1=1, 17=1, 2=1, 18=1}
+      [17, 1, 33, 18, 2, 49]
+      group null key: java.lang.NullPointerException
+      {false=[fig, kiwi, plum, pear, fig], true=[apple, banana]} [apple, banana] [fig, kiwi, plum, pear, fig] 2 [false, true] [[fig, kiwi, plum, pear, fig], [apple, banana]]
+      {false=5, true=2}
+      {false=[], true=[]}
+      true false null false
+      partition put: java.lang.UnsupportedOperationException
+      partition remove: java.lang.UnsupportedOperationException
+      partition list add: true
+      false -> [fig, kiwi, plum, pear, fig]
+      true -> [apple, banana, x]
+      {false={3=2, 4=2}, true={4=1, 5=1, 6=1}}
+      {plum=4, banana=6, apple=5, kiwi=4, pear=4, fig=3}
+      Oslo
+      {40=Cy, 25=Bob&Di, 58=Ed, 31=Ann&Flo}
+      toMap twice: java.lang.IllegalStateException: Duplicate key fig (attempted merging values 3 and 3)
+      toMap twice people: java.lang.IllegalStateException: Duplicate key 25 (attempted merging values Bob and Di)
+      toMap null value: java.lang.NullPointerException
+      toMap null key: {null=b, a=a}
+      toMap merge null value: java.lang.NullPointerException
+      toMap merge to null: {b=b}
+      toUnmodifiableMap: {a=1}
+      toUnmodifiableMap put: java.lang.UnsupportedOperationException
+      toUnmodifiableMap merge: {a=2}
+      toUnmodifiableMap twice: java.lang.IllegalStateException: Duplicate key a (attempted merging values 1 and 1)
+      toUnmodifiableSet null: java.lang.NullPointerException
+      toUnmodifiableSet add: java.lang.UnsupportedOperationException
+      toSet null: 2
+      toList null: [a, null]
+      IntSummaryStatistics{count=6, sum=210, min=25, average=35.000000, max=58}
+      LongSummaryStatistics{count=6, sum=210, min=25, average=35.000000, max=58}
+      DoubleSummaryStatistics{count=6, sum=1631.000000, min=0.100000, average=271.833333, max=520.000000}
+      0.1 520.0 271.8333333333333 1631.0 6
+      Bob..Ed
+      4.142857142857143
+      frozen: java.lang.UnsupportedOperationException
+      6
+      29
+      afkppbf []
+      [fig, banana, pear, plum, kiwi, fig, apple] [IDENTITY_FINISH]
+      29 [UNORDERED]
+      [IDENTITY_FINISH] [UNORDERED, IDENTITY_FINISH] [] [] [IDENTITY_FINISH] [IDENTITY_FINISH] [IDENTITY_FINISH] [UNORDERED] [IDENTITY_FINISH] [IDENTITY_FINISH] [IDENTITY_FINISH] []
+      [x, y] x-y 2 {1=[x, z], 2=[yy]} {false=[y], true=[x, x]} {x=2, y=1} 0.30000000000000004 0.10000000000000002 Optional[y] <x,y,z> xyz3 DoubleSummaryStatistics{count=3, sum=0.300000, min=0.100000, average=0.100000, max=0.100000}
+      [apple, fig, kiwi, plum, pear, banana, fig]
+      applefigkiwiplumpearbananafig
+      {banana=1, plum=1, apple=1, pear=1, kiwi=1, fig=2}
+      29
+      applefigkiwiplumpearbananafig
+      figbananapearplumkiwifigapple
+      6 29 17280
+      [0, 1, 2, 3]
+      0123
+      own: [CONCURRENT, UNORDERED, IDENTITY_FINISH]
+      own2: [CONCURRENT, IDENTITY_FINISH]
+      toList: [IDENTITY_FINISH]
+      toUnmodifiableList: []
+      toSet: [UNORDERED, IDENTITY_FINISH]
+      toUnmodifiableSet: [UNORDERED]
+      toCollection: [IDENTITY_FINISH]
+      joining: []
+      joining3: []
+      counting: []
+      minBy: []
+      summingInt: []
+      summingLong: []
+      summingDouble: []
+      averagingInt: []
+      averagingDouble: []
+      reducing1: []
+      reducing2: []
+      reducing3: []
+      summarizingInt: [IDENTITY_FINISH]
+      summarizingLong: [IDENTITY_FINISH]
+      summarizingDouble: [IDENTITY_FINISH]
+      toMap2: [IDENTITY_FINISH]
+      toMap3: [IDENTITY_FINISH]
+      toMap4: [IDENTITY_FINISH]
+      toUnmodifiableMap2: []
+      toUnmodifiableMap3: []
+      mapping [IDENTITY_FINISH]: [IDENTITY_FINISH]
+      filtering [IDENTITY_FINISH]: [IDENTITY_FINISH]
+      flatMapping [IDENTITY_FINISH]: [IDENTITY_FINISH]
+      collectingAndThen [IDENTITY_FINISH]: []
+      groupingBy [IDENTITY_FINISH]: [IDENTITY_FINISH]
+      groupingBy3 [IDENTITY_FINISH]: [IDENTITY_FINISH]
+      partitioningBy [IDENTITY_FINISH]: [IDENTITY_FINISH]
+      teeing with toList [IDENTITY_FINISH]: []
+      teeing with toSet [IDENTITY_FINISH]: []
+      teeing with own [IDENTITY_FINISH]: []
+      teeing with counting [IDENTITY_FINISH]: []
+      mapping [UNORDERED, IDENTITY_FINISH]: [UNORDERED, IDENTITY_FINISH]
+      filtering [UNORDERED, IDENTITY_FINISH]: [UNORDERED, IDENTITY_FINISH]
+      flatMapping [UNORDERED, IDENTITY_FINISH]: [UNORDERED, IDENTITY_FINISH]
+      collectingAndThen [UNORDERED, IDENTITY_FINISH]: [UNORDERED]
+      groupingBy [UNORDERED, IDENTITY_FINISH]: [IDENTITY_FINISH]
+      groupingBy3 [UNORDERED, IDENTITY_FINISH]: [IDENTITY_FINISH]
+      partitioningBy [UNORDERED, IDENTITY_FINISH]: [IDENTITY_FINISH]
+      teeing with toList [UNORDERED, IDENTITY_FINISH]: []
+      teeing with toSet [UNORDERED, IDENTITY_FINISH]: [UNORDERED]
+      teeing with own [UNORDERED, IDENTITY_FINISH]: [UNORDERED]
+      teeing with counting [UNORDERED, IDENTITY_FINISH]: []
+      mapping []: []
+      filtering []: []
+      flatMapping []: []
+      collectingAndThen []: []
+      groupingBy []: []
+      groupingBy3 []: []
+      partitioningBy []: []
+      teeing with toList []: []
+      teeing with toSet []: []
+      teeing with own []: []
+      teeing with counting []: []
+      mapping [UNORDERED]: [UNORDERED]
+      filtering [UNORDERED]: [UNORDERED]
+      flatMapping [UNORDERED]: [UNORDERED]
+      collectingAndThen [UNORDERED]: [UNORDERED]
+      groupingBy [UNORDERED]: []
+      groupingBy3 [UNORDERED]: []
+      partitioningBy [UNORDERED]: []
+      teeing with toList [UNORDERED]: []
+      teeing with toSet [UNORDERED]: [UNORDERED]
+      teeing with own [UNORDERED]: [UNORDERED]
+      teeing with counting [UNORDERED]: []
+      mapping [CONCURRENT, UNORDERED, IDENTITY_FINISH]: [CONCURRENT, UNORDERED, IDENTITY_FINISH]
+      filtering [CONCURRENT, UNORDERED, IDENTITY_FINISH]: [CONCURRENT, UNORDERED, IDENTITY_FINISH]
+      flatMapping [CONCURRENT, UNORDERED, IDENTITY_FINISH]: [CONCURRENT, UNORDERED, IDENTITY_FINISH]
+      collectingAndThen [CONCURRENT, UNORDERED, IDENTITY_FINISH]: [CONCURRENT, UNORDERED]
+      groupingBy [CONCURRENT, UNORDERED, IDENTITY_FINISH]: [IDENTITY_FINISH]
+      groupingBy3 [CONCURRENT, UNORDERED, IDENTITY_FINISH]: [IDENTITY_FINISH]
+      partitioningBy [CONCURRENT, UNORDERED, IDENTITY_FINISH]: [IDENTITY_FINISH]
+      teeing with toList [CONCURRENT, UNORDERED, IDENTITY_FINISH]: []
+      teeing with toSet [CONCURRENT, UNORDERED, IDENTITY_FINISH]: [UNORDERED]
+      teeing with own [CONCURRENT, UNORDERED, IDENTITY_FINISH]: [CONCURRENT, UNORDERED]
+      teeing with counting [CONCURRENT, UNORDERED, IDENTITY_FINISH]: []
+      mapping [CONCURRENT, IDENTITY_FINISH]: [CONCURRENT, IDENTITY_FINISH]
+      filtering [CONCURRENT, IDENTITY_FINISH]: [CONCURRENT, IDENTITY_FINISH]
+      flatMapping [CONCURRENT, IDENTITY_FINISH]: [CONCURRENT, IDENTITY_FINISH]
+      collectingAndThen [CONCURRENT, IDENTITY_FINISH]: [CONCURRENT]
+      groupingBy [CONCURRENT, IDENTITY_FINISH]: [IDENTITY_FINISH]
+      groupingBy3 [CONCURRENT, IDENTITY_FINISH]: [IDENTITY_FINISH]
+      partitioningBy [CONCURRENT, IDENTITY_FINISH]: [IDENTITY_FINISH]
+      teeing with toList [CONCURRENT, IDENTITY_FINISH]: []
+      teeing with toSet [CONCURRENT, IDENTITY_FINISH]: []
+      teeing with own [CONCURRENT, IDENTITY_FINISH]: [CONCURRENT]
+      teeing with counting [CONCURRENT, IDENTITY_FINISH]: []
+      groupingBy1: [IDENTITY_FINISH]
+      partitioningBy1: [IDENTITY_FINISH]
+      Optional.empty
+      Optional[a]
+      java.lang.IllegalArgumentException: Negative count value
+      java.lang.IllegalArgumentException: Minimum greater than maximum
+      java.lang.IllegalArgumentException: Some, not all, of the minimum, maximum, or sum is NaN
+      java.lang.IllegalArgumentException: Minimum greater than maximum
+      IntSummaryStatistics{count=0, sum=0, min=2147483647, average=0.000000, max=-2147483648} IntSummaryStatistics{count=2, sum=9, min=1, average=4.500000, max=5} DoubleSummaryStatistics{count=2, sum=9.000000, min=1.000000, average=4.500000, max=5.000000} DoubleSummaryStatistics{count=2, sum=NaN, min=NaN, average=NaN, max=NaN} LongSummaryStatistics{count=2, sum=9, min=1, average=4.500000, max=5} IntSummaryStatistics{count=0, sum=0, min=2147483647, average=0.000000, max=-2147483648} DoubleSummaryStatistics{count=0, sum=0.000000, min=Infinity, average=0.000000, max=-Infinity} LongSummaryStatistics{count=0, sum=0, min=9223372036854775807, average=0.000000, max=-9223372036854775808}
+      [apple, fig, kiwi, plum, pear, banana] {3=[fig], 4=[kiwi, plum, pear], 5=[apple], 6=[banana]} {3=1, 4=3, 5=1, 6=1} {3=1, 4=3, 5=1, 6=1} {p=[PLUM, PEAR], a=[APPLE], b=[BANANA], f=[FIG], k=[KIWI]}
+      {3=1, 4=3, 5=1, 6=1}
+      4 true
+      6 6 6 apple
   # java.time.Duration: seconds and the nanoseconds past them, each member's answer and
   # each refusal a JDK 25's (.kb/java-frontend.md, "The library").
   - name: a-duration-counts-seconds-and-nanoseconds

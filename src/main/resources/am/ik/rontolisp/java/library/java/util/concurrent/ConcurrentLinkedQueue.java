@@ -9,6 +9,8 @@ import java.util.Collection;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
 import java.util.Queue;
+import java.util.stream.Stream;
+import rontolisp.internal.ObjectFlow;
 
 // A queue with no bound, first in first out, read and written under its own monitor;
 // no thread waits on it. No element is null. An iterator walks the elements there were
@@ -96,5 +98,10 @@ public class ConcurrentLinkedQueue<E> extends AbstractCollection<E> implements Q
 
     public synchronized Iterator<E> iterator() {
         return new ArrayDeque<>(this.held).iterator();
+    }
+
+    // how many elements a concurrent collection holds is told by running the stream
+    public Stream<E> stream() {
+        return ObjectFlow.over(this, null);
     }
 }

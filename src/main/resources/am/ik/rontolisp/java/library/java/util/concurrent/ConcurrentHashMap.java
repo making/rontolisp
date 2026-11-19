@@ -27,6 +27,8 @@ import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.stream.Stream;
+import rontolisp.internal.ObjectFlow;
 
 public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements ConcurrentMap<K, V> {
 
@@ -691,6 +693,11 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
         public Iterator<K> iterator() {
             return new Keys<>(this.map);
         }
+
+        // how many elements a concurrent collection holds is told by running the stream
+        public Stream<K> stream() {
+            return ObjectFlow.over(this, null);
+        }
     }
 
     private static final class Values<K, V> extends AbstractCollection<V> {
@@ -715,6 +722,11 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
 
         public Iterator<V> iterator() {
             return new ValueWalk<>(this.map);
+        }
+
+        // how many elements a concurrent collection holds is told by running the stream
+        public Stream<V> stream() {
+            return ObjectFlow.over(this, null);
         }
     }
 
@@ -753,6 +765,11 @@ public class ConcurrentHashMap<K, V> extends AbstractMap<K, V> implements Concur
 
         public Iterator<Map.Entry<K, V>> iterator() {
             return new EntryWalk<>(this.map);
+        }
+
+        // how many elements a concurrent collection holds is told by running the stream
+        public Stream<Map.Entry<K, V>> stream() {
+            return ObjectFlow.over(this, null);
         }
     }
 }

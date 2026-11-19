@@ -43,7 +43,7 @@ final class JavaClasses {
 	/** The packages of the library: what {@code import module java.base} imports. */
 	private static final List<String> LIBRARY_PACKAGES = List.of("java.lang", "java.util", "java.util.function",
 			"java.io", "java.nio.charset", "java.util.concurrent", "java.util.concurrent.atomic",
-			"java.util.concurrent.locks", "java.net", "java.time", "java.security");
+			"java.util.concurrent.locks", "java.net", "java.time", "java.security", "java.util.stream");
 
 	/** The one package of the module {@code java.net.http}. */
 	private static final String HTTP_MODULE = "java.net.http";
@@ -1364,11 +1364,18 @@ final class JavaClasses {
 	@Nullable JavaClass qualified(String name) {
 		JavaClass known = this.classes.get(name);
 		if (known != null || this.missing.contains(name)) {
-			return known;
+			return known == null ? null : held(known);
 		}
-		JavaClass intrinsic = this.library.create(name, this);
+		this.declaringLibrary++;
+		JavaClass intrinsic;
+		try {
+			intrinsic = this.library.create(name, this);
+		}
+		finally {
+			this.declaringLibrary--;
+		}
 		if (intrinsic != null) {
-			return intrinsic;
+			return held(intrinsic);
 		}
 		String path = JavaParser.LIBRARY + name.replace('.', '/') + ".java";
 		String text;
@@ -1391,14 +1398,34 @@ final class JavaClasses {
 		List<TypeParameter> parameters = this.methodParameters;
 		this.localScope = null;
 		this.methodParameters = List.of();
+		this.declaringLibrary++;
 		try {
 			declare(JavaParser.parse(text, path, simpleName), new Source(path, text, true));
 		}
 		finally {
+			this.declaringLibrary--;
 			this.localScope = scope;
 			this.methodParameters = parameters;
 		}
 		return java.util.Objects.requireNonNull(this.classes.get(name), () -> path + " does not declare " + name);
+	}
+
+	/** How many declarations of library classes are being read, one inside the other. */
+	private int declaringLibrary;
+
+	/**
+	 * Notes that the program can hold a value of an intrinsic class: a declaration of the
+	 * program or a body being lowered names it. A class of the library that only names it
+	 * in the type of a member -- {@code Stream<Double> boxed()}, which every program with
+	 * a collection reads -- does not, so that such a program's interface tests and
+	 * dispatchers keep to the values it has.
+	 */
+	private JavaClass held(JavaClass named) {
+		if (named.intrinsic && !named.held && this.declaringLibrary == 0) {
+			named.held = true;
+			this.version++;
+		}
+		return named;
 	}
 
 	/**

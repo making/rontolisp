@@ -8,6 +8,8 @@ import java.util.ArrayDeque;
 import java.util.Collection;
 import java.util.Deque;
 import java.util.Iterator;
+import java.util.stream.Stream;
+import rontolisp.internal.ObjectFlow;
 
 // A queue with no bound read and written at both ends, under its own monitor; no
 // thread waits on it. No element is null. An iterator walks the elements there were
@@ -147,5 +149,10 @@ public class ConcurrentLinkedDeque<E> extends AbstractCollection<E> implements D
 
     public synchronized Iterator<E> descendingIterator() {
         return new ArrayDeque<>(this.held).descendingIterator();
+    }
+
+    // how many elements a concurrent collection holds is told by running the stream
+    public Stream<E> stream() {
+        return ObjectFlow.over(this, null);
     }
 }

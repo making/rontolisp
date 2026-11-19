@@ -277,6 +277,12 @@ final class JavaClass {
 	/** Whether its values are Lisp values and its members forms. */
 	final boolean intrinsic;
 
+	/**
+	 * Whether the program can hold a value of an intrinsic class: something other than
+	 * the type of a library class's member named it ({@code JavaClasses.held}).
+	 */
+	boolean held;
+
 	/** The type parameters it declares. */
 	final List<TypeParameter> typeParameters = new ArrayList<>();
 

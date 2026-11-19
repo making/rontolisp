@@ -2130,8 +2130,9 @@ final class JavaLowering implements JavaEmitter.Context {
 				continue;
 			}
 			if (candidate.intrinsic) {
-				// a class's own predicate answers for the Lisp values under it
-				LispSymbol predicate = declaration.isInterface || candidate == declaration
+				// a class's own predicate answers for the Lisp values under it, where
+				// the program can hold one
+				LispSymbol predicate = candidate.held && (declaration.isInterface || candidate == declaration)
 						? JavaIntrinsics.predicate(candidate) : null;
 				if (predicate != null) {
 					tests.add(list(predicate, RECEIVER));
@@ -5376,6 +5377,16 @@ final class JavaLowering implements JavaEmitter.Context {
 				throw error(pos, "invalid method reference: " + asInstance.reason());
 			}
 		}
+		else if (written instanceof JavaSyntax.ClassLiteral literal && arguments.size() == 1
+				&& (reference.name().equals("isInstance") || reference.name().equals("cast"))) {
+			// no object stands for a class: Name.class::isInstance is the test of an
+			// object and Name.class::cast the cast of one
+			Expression object = new JavaSyntax.Lowered(pos, new Typed(parameters.get(0), this.objectType));
+			value = expression(
+					reference.name().equals("cast") ? new JavaSyntax.Cast(pos, literal.type(), object, List.of())
+							: new JavaSyntax.InstanceOf(pos, object, literal.type(), null),
+					hint);
+		}
 		else if (classNamed(written) instanceof JavaClass named) {
 			Typed found;
 			try {
@@ -5719,8 +5730,10 @@ final class JavaLowering implements JavaEmitter.Context {
 				return function != null && (!contested || takes(reference, function.parameters().size()));
 			}
 			case Conditional conditional:
-				return accepts(parameter, conditional.whenTrue(), contested)
-						&& accepts(parameter, conditional.whenFalse(), contested);
+				// an arm that is no lambda (null, a variable) is lowered as the type's
+				return (!needsTarget(conditional.whenTrue()) || accepts(parameter, conditional.whenTrue(), contested))
+						&& (!needsTarget(conditional.whenFalse())
+								|| accepts(parameter, conditional.whenFalse(), contested));
 			case JavaSyntax.Switch choice:
 				return choice.cases()
 					.stream()
@@ -5893,6 +5906,12 @@ final class JavaLowering implements JavaEmitter.Context {
 		JavaType target = JavaTypes.substitute(parameter, inference.solution(false));
 		if (!(argument instanceof Lambda) && !(argument instanceof JavaSyntax.MethodReference)) {
 			Typed value = expression(argument, JavaTypes.substitute(parameter, inference.solution(true)));
+			// each wildcard of its type is a type of its own, as an argument's lowered
+			// ahead of the inference is
+			if (value.type() instanceof ClassType named
+					&& named.arguments().stream().anyMatch(Wildcard.class::isInstance)) {
+				value = new Typed(value.form(), this.types.capture(named), value.constant());
+			}
 			if (mayNeedTarget(argument)) {
 				inference.lowerBound(parameter, value.type());
 			}
@@ -6036,6 +6055,38 @@ final class JavaLowering implements JavaEmitter.Context {
 	private Resolved resolve(List<Method> candidates, @Nullable JavaType site, List<JavaType> explicit,
 			List<Expression> written, @Nullable JavaType expected, String what, JavaClass in, int pos,
 			List<TypeParameter> inferred, @Nullable JavaType made) {
+		Standing standing = standing();
+		boolean flexible = this.flexible;
+		boolean[] eager = new boolean[1];
+		try {
+			return resolve(candidates, site, explicit, written, expected, what, in, pos, inferred, made, eager);
+		}
+		catch (LispReadException failed) {
+			if (!eager[0]) {
+				throw failed;
+			}
+			// an argument that is a call holding lambdas lowered with no target, and may
+			// have settled there on types the rest of this call cannot take
+			// (collectingAndThen(toList(), l -> ..) on a List<Object>): the call is
+			// resolved once more, such arguments waiting for their parameters' types
+			restore(standing);
+			this.flexible = flexible;
+			try {
+				return resolve(candidates, site, explicit, written, expected, what, in, pos, inferred, made, null);
+			}
+			catch (LispReadException again) {
+				throw failed;
+			}
+		}
+	}
+
+	/**
+	 * @param eager set when an argument that is a call holding lambdas lowered with no
+	 * target; {@code null} to have every such argument wait for its parameter's type
+	 */
+	private Resolved resolve(List<Method> candidates, @Nullable JavaType site, List<JavaType> explicit,
+			List<Expression> written, @Nullable JavaType expected, String what, JavaClass in, int pos,
+			List<TypeParameter> inferred, @Nullable JavaType made, boolean @Nullable [] eager) {
 		List<Expression> arguments = charsetsNamed(candidates, written);
 		boolean flexible = this.flexible;
 		this.flexible = false;
@@ -6056,9 +6107,15 @@ final class JavaLowering implements JavaEmitter.Context {
 			this.flexible = argument instanceof Call || (argument instanceof New creation && creation.type().diamond());
 			Typed lowered;
 			if (mayNeedTarget(argument)) {
+				if (eager == null) {
+					late.add(typed.size());
+					typed.add(null);
+					continue;
+				}
 				Standing standing = standing();
 				try {
 					lowered = expression(argument, null);
+					eager[0] = true;
 				}
 				catch (LispReadException ex) {
 					restore(standing);
@@ -6857,8 +6914,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		Map<JavaClass, Method> intrinsics = new LinkedHashMap<>();
 		if (!receiver.intrinsic) {
 			for (JavaClass candidate : this.classes.all()) {
-				LispSymbol predicate = candidate.intrinsic && !candidate.isInterface && candidate.isSubclassOf(receiver)
-						? JavaIntrinsics.predicate(candidate) : null;
+				LispSymbol predicate = candidate.intrinsic && candidate.held && !candidate.isInterface
+						&& candidate.isSubclassOf(receiver) ? JavaIntrinsics.predicate(candidate) : null;
 				if (predicate == null) {
 					continue;
 				}

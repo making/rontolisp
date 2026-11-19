@@ -7,6 +7,14 @@ import java.util.function.IntFunction;
 import java.util.function.IntToDoubleFunction;
 import java.util.function.IntToLongFunction;
 import java.util.function.IntUnaryOperator;
+import java.util.stream.DoubleStream;
+import java.util.stream.IntStream;
+import java.util.stream.LongStream;
+import java.util.stream.Stream;
+import rontolisp.internal.DoubleFlow;
+import rontolisp.internal.IntFlow;
+import rontolisp.internal.LongFlow;
+import rontolisp.internal.ObjectFlow;
 
 // The sorts of the numbers are forms over the host's sort; a sort of objects is a merge
 // sort written here, stable as the specification asks.
@@ -28,6 +36,54 @@ public final class Arrays {
         if (to > length) {
             throw new ArrayIndexOutOfBoundsException("Array index out of range: " + to);
         }
+    }
+
+    private static void slice(int length, int from, int to) {
+        if (from > to) {
+            throw new ArrayIndexOutOfBoundsException("origin(" + from + ") > fence(" + to + ")");
+        }
+        if (from < 0) {
+            throw new ArrayIndexOutOfBoundsException("Array index out of range: " + from);
+        }
+        if (to > length) {
+            throw new ArrayIndexOutOfBoundsException("Array index out of range: " + to);
+        }
+    }
+
+    public static <T> Stream<T> stream(T[] array) {
+        return ObjectFlow.of(array, 0, array.length);
+    }
+
+    public static <T> Stream<T> stream(T[] array, int from, int to) {
+        slice(array.length, from, to);
+        return ObjectFlow.of(array, from, to);
+    }
+
+    public static IntStream stream(int[] array) {
+        return IntFlow.of(array, 0, array.length);
+    }
+
+    public static IntStream stream(int[] array, int from, int to) {
+        slice(array.length, from, to);
+        return IntFlow.of(array, from, to);
+    }
+
+    public static LongStream stream(long[] array) {
+        return LongFlow.of(array, 0, array.length);
+    }
+
+    public static LongStream stream(long[] array, int from, int to) {
+        slice(array.length, from, to);
+        return LongFlow.of(array, from, to);
+    }
+
+    public static DoubleStream stream(double[] array) {
+        return DoubleFlow.of(array, 0, array.length);
+    }
+
+    public static DoubleStream stream(double[] array, int from, int to) {
+        slice(array.length, from, to);
+        return DoubleFlow.of(array, from, to);
     }
 
     @SafeVarargs

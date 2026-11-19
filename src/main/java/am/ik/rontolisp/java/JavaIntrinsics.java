@@ -82,6 +82,13 @@ final class JavaIntrinsics {
 
 	static final String CHARSET = "java.nio.charset.Charset";
 
+	private static final String STREAM = "java.util.stream.Stream";
+
+	private static final String INT_STREAM = "java.util.stream.IntStream";
+
+	/** The streams of a string, written in Java in the library's own source. */
+	private static final String FLOWS = "rontolisp.internal.Flows";
+
 	/** The source class of the UTF-16 charsets, which only a program naming one makes. */
 	private static final String UTF16 = "rontolisp.internal.Utf16";
 
@@ -223,6 +230,12 @@ final class JavaIntrinsics {
 		if (intrinsic.equals(STRING) && (member.equals("getBytes") || member.equals("<init>"))) {
 			return List.of(CHARSET);
 		}
+		if ((member.equals("chars") || member.equals("codePoints")) && (intrinsic.equals(STRING) || builder)) {
+			return List.of(INT_STREAM);
+		}
+		if (intrinsic.equals(STRING) && member.equals("lines")) {
+			return List.of(STREAM);
+		}
 		if (intrinsic.equals(STRING) && member.equals("CASE_INSENSITIVE_ORDER")) {
 			return List.of(COMPARATOR);
 		}
@@ -306,6 +319,20 @@ final class JavaIntrinsics {
 					intrinsic.methods.add(print);
 				}
 			}
+		}
+		if (named.name.equals(INT_STREAM) && (text || builder)) {
+			// a string's elements are its code points, so the two are one stream
+			JavaEmitter chars = (lowering, call) -> lowering.library(FLOWS, "chars",
+					List.of(text ? call.self() : runtimeCall("sb-string", call.self())));
+			for (String name : List.of("chars", "codePoints")) {
+				intrinsic.methods.add(new JavaClass.Method(intrinsic, name, List.of(), new ClassType(named, List.of()),
+						false, false, null, intrinsic.name.equals(STRING_BUFFER) ? guarded(chars) : chars, false));
+			}
+		}
+		if (named.name.equals(STREAM) && text) {
+			intrinsic.methods.add(new JavaClass.Method(intrinsic, "lines", List.of(),
+					new ClassType(named, List.of(new ClassType(intrinsic, List.of()))), false, false, null,
+					(lowering, call) -> lowering.library(FLOWS, "lines", List.of(call.self())), false));
 		}
 		if (named.name.equals(COMPARATOR) && text) {
 			JavaClass.Field order = new JavaClass.Field(intrinsic, "CASE_INSENSITIVE_ORDER",

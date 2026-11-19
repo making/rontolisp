@@ -301,6 +301,20 @@ algorithm came from, and the answer goes in the file's header.
   interrupt). Nobody opened OpenJDK's source; the answers are lines of `java-spec.yaml`,
   which the JDK leg asks again. The same for which abstract method javac names of a
   class leaving several out (seven shapes).
+- **`java.util.stream`, the collectors and the summary statistics (k12, 2026-11-19).**
+  Written from the API documentation and JDK 25's answers to probes: which stage sees
+  which element when and what a stream refuses (`Lazy.java`, 216 lines), which sources
+  and stages let `count()` run nothing (`Sized.java`, 114 rows), every collector with
+  the order of a collected map's keys, the refusals' words and the marks of each
+  (`Collecting.java`, `Marks.java`), the number streams (`Numbers.java`) and the chains
+  of everyday code (`Everyday.java`). Nobody opened OpenJDK's source, and the shape is its
+  own: a stream is a closure answering its next element, where nothing of that kind is
+  in the API. Two things the documentation does not state were read off the answers:
+  the summation of doubles (Kahan's, as published, the last compensation subtracted:
+  the one of four candidates giving a JDK's bits on 20,000 seeded sums) and which `Map`
+  method each collector reaches its map by (the order of keys sharing a bucket). The
+  messages of the statistics' constructors and of `toMap` are the probes' answers. The
+  answers are lines of `java-spec.yaml`, which the JDK leg asks again.
 - **Notices (j93, 2026-11-18): kept with notices.** What the audit filed under "Add notices"
   and "To confirm" stays, under its licence:
   - Root `NOTICE` (rontolisp, and Maven's and Maven Resolver's Apache NOTICE lines) and

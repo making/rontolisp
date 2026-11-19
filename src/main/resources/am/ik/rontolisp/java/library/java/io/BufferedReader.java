@@ -3,7 +3,11 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.io;
 
+import java.util.Iterator;
+import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.stream.Stream;
+import rontolisp.internal.ObjectFlow;
 
 // The characters read ahead are cb[next, end); a mark keeps the characters read since
 // it at the start of cb.
@@ -151,6 +155,37 @@ public class BufferedReader extends Reader {
             end = rest.length;
         }
         return line.substring(0, cr);
+    }
+
+    // the lines readLine gives, each read when the stream asks for it
+    public Stream<String> lines() {
+        return ObjectFlow.over(new Iterator<String>() {
+            private String line;
+
+            private boolean over;
+
+            public boolean hasNext() {
+                if (line == null && !over) {
+                    try {
+                        line = readLine();
+                    }
+                    catch (IOException failed) {
+                        throw new UncheckedIOException(failed);
+                    }
+                    over = line == null;
+                }
+                return line != null;
+            }
+
+            public String next() {
+                if (!hasNext()) {
+                    throw new NoSuchElementException();
+                }
+                String read = line;
+                line = null;
+                return read;
+            }
+        });
     }
 
     public String readLine() throws IOException {

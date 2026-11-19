@@ -641,6 +641,7 @@
 ;; String.compareTo as the API specifies it: the difference of the first two UTF-16
 ;; units that differ, else of the lengths.
 (defun rontolisp::%java-string-compare (a b)
+  (if (null b) (rontolisp::%java-npe))
   (let ((i 0) (n (min (length a) (length b))) (found nil))
     (while (and (< i n) (null found))
       (let ((x (char-code (char a i))) (y (char-code (char b i))))
@@ -1242,6 +1243,7 @@
   (if (and b (string-equal a b)) t nil))
 
 (defun rontolisp::%java-string-compare-ignore-case (a b)
+  (if (null b) (rontolisp::%java-npe))
   (rontolisp::%java-string-compare
    (%string-downcase-piece (%string-upcase-piece a))
    (%string-downcase-piece (%string-upcase-piece b))))

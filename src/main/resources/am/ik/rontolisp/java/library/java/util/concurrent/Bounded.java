@@ -8,6 +8,8 @@ import java.util.ArrayDeque;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
+import java.util.stream.Stream;
+import rontolisp.internal.ObjectFlow;
 
 // What ArrayBlockingQueue, LinkedBlockingQueue and LinkedBlockingDeque are: a queue of
 // at most so many elements, first in first out, read and written under its own monitor, on which a
@@ -293,5 +295,10 @@ abstract class Bounded<E> extends AbstractCollection<E> implements BlockingQueue
 
     public synchronized Iterator<E> iterator() {
         return new ArrayDeque<>(this.held).iterator();
+    }
+
+    // how many elements a concurrent collection holds is told by running the stream
+    public Stream<E> stream() {
+        return ObjectFlow.over(this, null);
     }
 }
