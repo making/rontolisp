@@ -3713,6 +3713,83 @@ cases:
               return "task";
           }
 
+          // a generic method calling itself: the call's type argument is made of the
+          // method's own type parameter
+          static <T> List<T> nest(T value, int depth) {
+              if (depth == 0) {
+                  return List.of(value);
+              }
+              List<List<T>> inner = nest(List.of(value), depth - 1);
+              return inner.get(0);
+          }
+
+          static <U> U again(Supplier<? extends U> made, int depth) {
+              if (depth == 0) {
+                  return made.get();
+              }
+              Supplier<U> wrapped = again(() -> () -> made.get(), depth - 1);
+              return wrapped.get();
+          }
+
+          interface Step<A, X> {
+              X apply(A a);
+
+              default <X2> Step<A, X2> then(Function<? super X, ? extends X2> next) {
+                  return new Step<A, X2>() {
+                      public X2 apply(A a) {
+                          return next.apply(Step.this.apply(a));
+                      }
+
+                      public Step<A, Supplier<X2>> lazy() {
+                          return Step.this.lazy().then(supplier -> () -> next.apply(supplier.get()));
+                      }
+                  };
+              }
+
+              default Step<A, Supplier<X>> lazy() {
+                  return a -> () -> apply(a);
+              }
+          }
+
+          // an instance made with <> of the class it is made in: the type argument is
+          // made of the class's own type parameter
+          static class Held<T> {
+              final T held;
+
+              final Function<? super String, ? extends T> made;
+
+              Held(T held, Function<? super String, ? extends T> made) {
+                  this.held = held;
+                  this.made = made;
+              }
+
+              Held<List<T>> listed() {
+                  return new Held<>(List.of(this.held), s -> List.of(this.made.apply(s)));
+              }
+
+              Held<Supplier<T>> lazy() {
+                  final Function<String, Supplier<T>> lazy = s -> () -> this.made.apply(s);
+                  return new Held<>(() -> this.held, lazy);
+              }
+          }
+
+          // two captures of ? extends A1 share A1: the type argument they are given for
+          static class Composed<A1> {
+              final Function<? super A1, ? extends A1> transform;
+
+              Composed(Function<? super A1, ? extends A1> transform) {
+                  this.transform = transform;
+              }
+
+              Composed<A1> after(Function<? super A1, ? extends A1> first) {
+                  return new Composed<>(composed(first, this.transform));
+              }
+
+              static <A> Function<? super A, ? extends A> composed(Function<? super A, ? extends A> first, Function<? super A, ? extends A> second) {
+                  return a -> second.apply(first.apply(a));
+              }
+          }
+
           public static void main(String[] args) {
               Map<String, List<Integer>> groups = new HashMap<>();
               groups.put("a", new ArrayList<>());
@@ -3751,6 +3828,9 @@ cases:
               // call finds
               Supplier<String> first = pick(() -> "p", () -> "q");
               System.out.println(order(Comparator.comparing(s -> s.length())) + " " + first.get());
+              Step<String, Integer> length = s -> s.length();
+              Held<String> held = new Held<>("held", s -> s + "!");
+              System.out.println(nest("nested", 2) + " " + again(() -> "again", 2) + " " + length.then(n -> n * 2).lazy().apply("four").get() + " " + held.listed().held + " " + held.listed().made.apply("made") + " " + held.lazy().held.get() + " " + held.lazy().made.apply("lazy").get() + " " + new Composed<String>(s -> s + "!").after(s -> s.trim()).transform.apply("  text "));
           }
       }
     expected: |
@@ -3761,6 +3841,7 @@ cases:
       string object list list ran got 42 got block
       [, bb, ccc] [bb, ccc] [0, 4, 6] 41 other
       order 1 p
+      [nested] again 8 [held] [made!] held lazy! text!
   # ? extends T is read as T and written with nothing but null, ? super T written with a
   # T and read as Object; a method taking List<T> takes a List<?>. A raw type reads its
   # members erased.

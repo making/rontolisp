@@ -1460,11 +1460,11 @@ final class JavaLowering implements JavaEmitter.Context {
 				// an enum constructor's name and ordinal; what an anonymous class's
 				// constructor hands on
 				String name = method.owner.isEnum && i < method.hidden ? ENUM_PARAMETERS.get(i) : "%a" + i;
-				local = bind(name, method.parameters.get(i), 0, new Object());
+				local = bind(name, method.inside(method.parameters.get(i)), 0, new Object());
 			}
 			else {
 				Parameter parameter = written.parameters().get(i - method.hidden);
-				local = bind(parameter.name(), method.parameters.get(i), parameter.pos(), parameter);
+				local = bind(parameter.name(), method.inside(method.parameters.get(i)), parameter.pos(), parameter);
 				local.isFinal = parameter.isFinal();
 			}
 			symbols.add(local.symbol());
@@ -1492,9 +1492,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			throw error(written.pos(), "method does not override or implement a method from a supertype");
 		}
 		this.staticContext = method.isStatic;
-		this.returnType = method.returnType;
+		this.returnType = method.inside(method.returnType);
 		this.constructing = null;
-		this.classes.methodParameters = method.typeParameters;
+		this.classes.methodParameters = method.insideParameters();
 		Effects saved = this.effects;
 		this.effects = new Effects();
 		this.methodEffects.put(method, this.effects);
@@ -1609,7 +1609,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		int pos = written != null ? written.pos() : Objects.requireNonNull(owner.declaration).pos();
 		this.staticContext = false;
 		this.returnType = Primitive.VOID;
-		this.classes.methodParameters = constructor.typeParameters;
+		this.classes.methodParameters = constructor.insideParameters();
 		Effects saved = this.effects;
 		this.effects = new Effects();
 		this.methodEffects.put(constructor, this.effects);
@@ -2372,6 +2372,26 @@ final class JavaLowering implements JavaEmitter.Context {
 					: outerInstance(wanted, current.outer, list(slotAccessor(current, outerSlot(current)), THIS));
 		}
 		return outerInstance(wanted, current, THIS);
+	}
+
+	/**
+	 * The instance {@code Name.this} names, or {@code null}: of the class the lowering
+	 * stands in or of one its declaration stands in, and of no class under the one named
+	 * -- an anonymous class of an interface, made in a default method of that interface,
+	 * names the instance around it.
+	 */
+	private @Nullable LispVal lexicallyAround(JavaClass wanted) {
+		if (this.staticContext || (this.early && this.currentClass == wanted)) {
+			return null;
+		}
+		LispVal path = THIS;
+		for (JavaClass type = this.currentClass; type != null && path != null; type = type.outer) {
+			if (type == wanted) {
+				return path;
+			}
+			path = type.hasOuterInstance() ? list(slotAccessor(type, outerSlot(type)), path) : null;
+		}
+		return null;
 	}
 
 	// ---- the class table
@@ -3596,7 +3616,7 @@ final class JavaLowering implements JavaEmitter.Context {
 					if (this.staticContext) {
 						throw error(self.pos(), "non-static variable this cannot be referenced from a static context");
 					}
-					LispVal instance = enclosing(named);
+					LispVal instance = lexicallyAround(named);
 					if (instance == null) {
 						throw error(self.pos(),
 								this.early && this.currentClass.isSubclassOf(named)
@@ -5576,10 +5596,55 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		if (written.diamond()) {
 			// its own parameters, which the creation finds
-			arguments.addAll(member.self().arguments().subList(0, own));
+			arguments.addAll(diamondArguments(member));
 		}
 		arguments.addAll(seen.arguments());
 		return new ClassType(member, List.copyOf(arguments));
+	}
+
+	/**
+	 * What a class's own type parameters are in the type an instance creation with
+	 * {@code <>} makes until the creation finds them: types of their own, bounded as the
+	 * parameters are. The class's own parameters would be the types its body names too,
+	 * and a creation of the class inside it ({@code new Box<>(List.of(held))} in
+	 * {@code Box<T>}) finds an argument made of one.
+	 */
+	private static List<JavaType> diamondArguments(JavaClass made) {
+		Map<TypeParameter, JavaType> found = new LinkedHashMap<>();
+		List<TypeParameter> own = new ArrayList<>();
+		for (TypeParameter declared : made.typeParameters) {
+			TypeParameter one = new TypeParameter(declared.name, false, false);
+			one.owner = declared.owner;
+			own.add(one);
+			found.put(declared, new Variable(one));
+		}
+		for (int i = 0; i < own.size(); i++) {
+			List<JavaType> bounds = new ArrayList<>();
+			for (JavaType bound : made.typeParameters.get(i).bounds) {
+				bounds.add(JavaTypes.substitute(bound, found));
+			}
+			own.get(i).bounds = List.copyOf(bounds);
+		}
+		return List.copyOf(found.values());
+	}
+
+	/**
+	 * The type parameters a creation with {@code <>} finds, of the type it makes: the
+	 * class's own where that type is raw.
+	 */
+	private static List<TypeParameter> diamondParameters(ClassType type) {
+		List<TypeParameter> declared = type.declaration().typeParameters;
+		if (type.arguments().size() < declared.size()) {
+			return declared;
+		}
+		List<TypeParameter> parameters = new ArrayList<>();
+		for (JavaType argument : type.arguments().subList(0, declared.size())) {
+			if (!(argument instanceof Variable variable)) {
+				return declared;
+			}
+			parameters.add(variable.parameter());
+		}
+		return parameters;
 	}
 
 	/**
@@ -5591,7 +5656,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		JavaClass made = type.declaration();
 		JavaType found;
 		if (made.isInterface) {
-			Inference inference = this.types.new Inference(made.typeParameters);
+			Inference inference = this.types.new Inference(diamondParameters(type));
 			if (expected != null && expected.isReference()) {
 				inference.upperBound(type, expected);
 			}
@@ -5600,7 +5665,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		else {
 			// the arguments are lowered again with the class's constructor
 			found = resolve(constructors(made), type, List.of(), creation.arguments(), expected,
-					"constructor " + made.simpleName(), made, pos, made.typeParameters, type)
+					"constructor " + made.simpleName(), made, pos, diamondParameters(type), type)
 				.returnType();
 		}
 		ClassType grounded = (ClassType) this.types.ground(found);
@@ -7707,16 +7772,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			// the arguments are found as a method's are: from the constructor's arguments
 			// and the type the instance is wanted as; the place gives those of the
 			// classes around an inner class
-			List<JavaType> enclosing = this.classes.enclosingArguments(made, this.currentClass);
-			if (enclosing.isEmpty()) {
-				type = made.self();
-			}
-			else {
-				List<JavaType> arguments = new ArrayList<>(
-						made.self().arguments().subList(0, made.typeParameters.size()));
-				arguments.addAll(enclosing);
-				type = new ClassType(made, List.copyOf(arguments));
-			}
+			List<JavaType> arguments = new ArrayList<>(diamondArguments(made));
+			arguments.addAll(this.classes.enclosingArguments(made, this.currentClass));
+			type = new ClassType(made, List.copyOf(arguments));
 		}
 		else if (type(written) instanceof ClassType named) {
 			type = named;
@@ -7745,7 +7803,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (written.diamond()) {
 			this.flexible = flexible;
 			resolved = resolve(constructors(made), type, List.of(), creation.arguments(), expected,
-					"constructor " + made.simpleName(), made, pos, made.typeParameters, type);
+					"constructor " + made.simpleName(), made, pos, diamondParameters(type), type);
 			type = (ClassType) resolved.returnType();
 		}
 		else {

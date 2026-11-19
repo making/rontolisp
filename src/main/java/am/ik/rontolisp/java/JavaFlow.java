@@ -446,7 +446,7 @@ final class JavaFlow {
 		}
 		// a step of a session throws what it likes, as a snippet does
 		if (!(written.implicit() && method.name.startsWith("$step"))) {
-			unreported(this.thrown, method.thrown, null);
+			unreported(this.thrown, method.thrown.stream().map(method::inside).toList(), null);
 		}
 		effectivelyFinal();
 	}
@@ -560,7 +560,7 @@ final class JavaFlow {
 				unassigned(blank, exit.inits(), exit.pos());
 			}
 		}
-		unreported(this.thrown, constructor.thrown, null);
+		unreported(this.thrown, constructor.thrown.stream().map(constructor::inside).toList(), null);
 		effectivelyFinal();
 	}
 

@@ -272,6 +272,55 @@ final class JavaClass {
 		}
 
 		/**
+		 * The type parameters as the method's own body names them, by the declared ones:
+		 * types of their own, so that a call of the method from its body -- whose type
+		 * arguments are found as at any call -- finds them for the declared parameters
+		 * and from types naming these. Made once: a local class of the body keeps them
+		 * over the passes.
+		 */
+		private @Nullable Map<TypeParameter, JavaType> inside;
+
+		/** What each declared type parameter is in the method's own body. */
+		Map<TypeParameter, JavaType> inside() {
+			Map<TypeParameter, JavaType> made = this.inside;
+			if (made == null) {
+				made = new LinkedHashMap<>();
+				List<TypeParameter> named = new ArrayList<>();
+				for (TypeParameter declared : this.typeParameters) {
+					TypeParameter own = new TypeParameter(declared.name, true, false);
+					own.owner = declared.owner;
+					own.method = declared.method;
+					own.intersection = declared.intersection;
+					named.add(own);
+					made.put(declared, new JavaType.Variable(own));
+				}
+				for (int i = 0; i < named.size(); i++) {
+					List<JavaType> bounds = new ArrayList<>();
+					for (JavaType bound : this.typeParameters.get(i).bounds) {
+						bounds.add(JavaTypes.substitute(bound, made));
+					}
+					named.get(i).bounds = List.copyOf(bounds);
+				}
+				this.inside = made;
+			}
+			return made;
+		}
+
+		/** The type parameters the method's body names. */
+		List<TypeParameter> insideParameters() {
+			List<TypeParameter> named = new ArrayList<>();
+			for (JavaType variable : inside().values()) {
+				named.add(((JavaType.Variable) variable).parameter());
+			}
+			return named;
+		}
+
+		/** A type of the method's declaration as its body reads it. */
+		JavaType inside(JavaType declared) {
+			return JavaTypes.substitute(declared, inside());
+		}
+
+		/**
 		 * Whether it is an interface's method with a body an implementing class inherits.
 		 */
 		boolean isDefault() {

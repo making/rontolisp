@@ -624,6 +624,16 @@ final class JavaTypes implements JavaClasses.Relations {
 	}
 
 	/**
+	 * The type a type variable is under: its first bound where that is a type variable
+	 * too -- two captures of {@code ? extends T} share {@code T} --, else the class it is
+	 * read through.
+	 */
+	private JavaType above(Variable variable) {
+		List<JavaType> bounds = variable.parameter().bounds;
+		return !bounds.isEmpty() && bounds.get(0) instanceof Variable bound ? bound : site(variable);
+	}
+
+	/**
 	 * The type two reference types share: the one that is above the other, else the one
 	 * class or interface both are under and no other of theirs is under, else
 	 * {@code Object}.
@@ -648,10 +658,10 @@ final class JavaTypes implements JavaClasses.Relations {
 			return a;
 		}
 		if (a instanceof Variable variable) {
-			return lub(site(variable), b);
+			return lub(above(variable), b);
 		}
 		if (b instanceof Variable variable) {
-			return lub(a, site(variable));
+			return lub(a, above(variable));
 		}
 		if (!(a instanceof ClassType left) || !(b instanceof ClassType right)) {
 			return this.object;

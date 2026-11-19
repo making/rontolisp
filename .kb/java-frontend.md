@@ -505,7 +505,11 @@ goal compiles the program `src/main/java` holds to a `.wasm`, which collides wit
   contains O.I is required`; an anonymous class made with `o.new I() { }` takes it as an argument
   of the function making it (`JavaClass.superOuterGiven`, `%super-outer`). Ahead of `this(..)` or
   `super(..)` the instance is out of reach but its outer instance is set already, so
-  `Outer.this` reads it there (`enclosing`).
+  `Outer.this` reads it there (`enclosing`). **`Name.this` is the instance of `Name`
+  itself, lexically around** (k30, `lexicallyAround`): until then it was the nearest
+  instance of a class UNDER `Name`, as a member's implicit receiver is, so an anonymous
+  `new Step<..>() { .. Step.this.apply(a) .. }` made in a default method of `Step` named
+  itself and ran for ever (YAVI's `Arguments1Validator.this.validate(..)`).
 - **`super.m()`, `Outer.super.m()`, `I.super.m()`** call one body directly (`superCall`): the
   superclass's, the superclass's of the class around on the instance around, the default of an
   interface the class names in its `implements`. `I.super::m` stays refused.
@@ -769,6 +773,30 @@ lub of the lowers, else an upper, else OPEN.
     lowered keeps its forms. Cost on a failing path: one more lowering of the call's
     lambdas (linear in the depth of nested calls, the waiting arguments not being
     lowered in the retry).
+- **A type variable in scope is never the one a call finds** (k30, 2026-11-20; each met
+  by YAVI's schema example, each `List<T> cannot be converted to
+  List<List<List<..>>>`, `lambda expression not expected here` or `no suitable
+  constructor` until then). An inference's variables are the callee's type parameters
+  themselves, so a call whose argument or target names the same parameter as a TYPE
+  solved `T` by a type made of `T` and substituted it into itself:
+  - **A method's type parameters are types of their own inside its body**
+    (`Method.inside`, made once and kept, since a local class of the body holds them
+    over the passes): `method` / `constructor` set `JavaClasses.methodParameters`, the
+    return type and the parameters' types (`bindParameters`) through it, `JavaFlow` the
+    `throws` clause. So `nest(List.of(value), depth - 1)` in `<T> List<T> nest(T, int)`
+    finds the declared `T` as `List<T'>`. Rejected: fresh variables for the callee at
+    every call (the `Method` is what `reached`, the effects and the names are keyed
+    by, and every reader of its types after the resolution would need the view).
+  - **A creation with `<>` finds types of its own** (`diamondArguments`,
+    `diamondParameters`): the type it makes is the class given fresh parameters,
+    bounded as the class's, which `memberType` puts into the constructor's parameter
+    types through the site -- so `new Held<>(List.of(this.held))` in `Held<T>` is a
+    `Held<List<T>>`. A raw site keeps the class's own.
+- **Two captures share the type variable both are under** (k30, `JavaTypes.above` in
+  `lub`): `composed(first, second)` given two `Function<? super A1, ? extends A1>`
+  finds `A1` above both captures; until then a capture climbed to the CLASS its bound
+  is read through, `Object` for a type variable, and the call was `cannot be applied
+  to given types`.
 - **A lambda's shape picks among overloads**: its parameter count, and whether its body can
   give a value or none. Only where several candidates remain is a body that is a call asked
   whether it gives nothing (`givesNothing`: lowered once and dropped, state restored), and only
@@ -3501,4 +3529,7 @@ an enum, the casts' messages), the `refused:` cases
 `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches` (an object
 made with what the program reaches and nothing else; a program comparing classes makes
 none) and `#aConstructTheSubsetDoesNotHaveIsRefusedByNameAtItsPosition`
-(`Class.getInterfaces()`).
+(`Class.getInterfaces()`); the last line of
+`a-type-argument-is-found-from-the-arguments-the-target-and-the-lambdas` (a generic
+method calling itself, a creation with `<>` of the class it stands in, `Name.this` in
+an anonymous class of `Name`, two captures given for one type parameter).
