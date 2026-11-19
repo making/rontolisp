@@ -26,8 +26,27 @@ imports: |
   import java.nio.charset.UnsupportedCharsetException;
   import java.text.MessageFormat;
   import java.text.Normalizer;
+  import java.time.Clock;
+  import java.time.DayOfWeek;
   import java.time.Duration;
+  import java.time.Instant;
+  import java.time.LocalDate;
+  import java.time.LocalDateTime;
+  import java.time.LocalTime;
+  import java.time.Month;
+  import java.time.OffsetDateTime;
+  import java.time.Period;
+  import java.time.Year;
+  import java.time.YearMonth;
+  import java.time.ZoneId;
+  import java.time.ZoneOffset;
+  import java.time.ZonedDateTime;
   import java.time.format.DateTimeParseException;
+  import java.time.temporal.ChronoField;
+  import java.time.temporal.ChronoUnit;
+  import java.time.temporal.Temporal;
+  import java.time.temporal.TemporalAccessor;
+  import java.time.temporal.ValueRange;
   import java.util.AbstractCollection;
   import java.util.AbstractList;
   import java.util.AbstractMap;
@@ -7472,6 +7491,376 @@ cases:
       no text: java.lang.NullPointerException: text
       a builder: PT20M
 
+  # java.time: the classes a value is read from its text as (a date, a time, both, both at
+  # an offset and in a zone, an instant, a year, a month of one, a period), the fields
+  # and units they are asked and moved by, the offsets and the zones that keep one, a
+  # clock. Each answer and each refusal is a JDK 25's (.kb/java-frontend.md, "java.time");
+  # a region with rules of its own is no line here: the library has none.
+  - name: dates-times-and-instants-are-read-from-their-texts-and-computed-with
+    main: TimeCase
+    source: |
+      class TimeCase {
+          static void attempt(String what, Supplier<Object> made) {
+              try {
+                  System.out.println(what + ": " + made.get());
+              }
+              catch (DateTimeParseException e) {
+                  System.out.println(what + ": " + e.getMessage() + " @" + e.getErrorIndex() + " / " + e.getCause());
+              }
+              catch (RuntimeException e) {
+                  System.out.println(what + ": " + e);
+              }
+          }
+
+          static String fields(TemporalAccessor value) {
+              StringBuilder text = new StringBuilder();
+              for (ChronoField field : ChronoField.values()) {
+                  if (value.isSupported(field)) {
+                      text.append(field).append('=').append(value.getLong(field)).append(' ');
+                  }
+              }
+              return text.toString().trim();
+          }
+
+          static String units(Temporal from, Temporal to) {
+              StringBuilder text = new StringBuilder();
+              for (ChronoUnit unit : ChronoUnit.values()) {
+                  if (from.isSupported(unit)) {
+                      text.append(unit).append('=').append(from.until(to, unit)).append(' ');
+                  }
+              }
+              return text.toString().trim();
+          }
+
+          static void texts() {
+              for (String text : new String[] { "2020-02-29", "2021-02-29", "2021-04-31", "2021-13-01", "+12020-01-01", "12020-01-01", "-0001-12-31", "2020-1-01",
+                      "2020-01-01x", "0000-01-01", "+999999999-12-31", "+1000000000-01-01" }) {
+                  attempt(text, () -> LocalDate.parse(text));
+              }
+              for (String text : new String[] { "10:15", "10:15:30.5", "10:15:30.123456789", "10:15:30.", "24:00", "10:60:61", "25:00:61", "1:15", "10:15:3" }) {
+                  attempt(text, () -> LocalTime.parse(text));
+              }
+              for (String text : new String[] { "2020-02-29T10:15", "2020-02-29t23:59:59.999", "2020-02-29 10:15", "2020-02-30T25:00", "2020-02-29T10:15Z" }) {
+                  attempt(text, () -> LocalDateTime.parse(text));
+              }
+              for (String text : new String[] { "2020-02-29T10:15+01:00", "2020-02-29T10:15z", "2020-02-29T10:15-08", "2020-02-29T10:15+01:00:30", "2020-02-29T10:15+0100",
+                      "2020-02-29T10:15+18:01", "2020-02-29T10:15+24:00", "2020-02-29T10:15", "2020-02-29T10:15+01:60" }) {
+                  attempt(text, () -> OffsetDateTime.parse(text));
+              }
+              for (String text : new String[] { "2020-02-29T10:15+01:00", "2020-02-29T10:15Z[UTC]", "2020-02-29T10:15+01:00[UTC+02:00]", "2020-02-29T10:15+01:00[-03:30]",
+                      "2020-02-29T10:15+01:00[Etc/GMT+5]", "2020-02-29T10:15+01:00[GMT+00:00]", "2020-02-29T10:15+01:00[UTC+1]", "2020-02-29T10:15+01:00[Nowhere/None]",
+                      "2020-02-29T10:15[UTC]", "2020-02-29T10:15+01:00[+24:00]" }) {
+                  attempt(text, () -> ZonedDateTime.parse(text));
+              }
+              for (String text : new String[] { "2020-02-29T10:15:30Z", "2020-02-29T10:15:30.000001+09:00", "2020-02-29T24:00:00Z", "2020-12-31T23:59:60Z", "2020-02-29T10:15Z",
+                      "2020-02-30T10:15:30Z", "2020-02-29T10:15:30+09", "+1000000000-12-31T23:59:59.999999999Z", "-1000000000-01-01T00:00:00Z", "2020-02-29T10:15:30+24:00" }) {
+                  attempt(text, () -> Instant.parse(text));
+              }
+              for (String text : new String[] { "2020", "+2020", "-44", "12020", "1000000000", "" }) {
+                  attempt(text, () -> Year.parse(text));
+              }
+              for (String text : new String[] { "2020-02", "+12020-12", "-0044-03", "2020-2", "12020-12" }) {
+                  attempt(text, () -> YearMonth.parse(text));
+              }
+              for (String text : new String[] { "P1Y2M3D", "p4w", "-P1Y-2M", "P1Y2M3W4D", "P0D", "P", "PT1H", "P2147483648D", "-P-2147483648Y", "P306783379W" }) {
+                  attempt(text, () -> Period.parse(text));
+              }
+              attempt("no text", () -> LocalDate.parse(null));
+              // what a JDK says of fields it could make no value of names them in an order
+              // that changes from run to run: the words before them are compared
+              for (String text : new String[] { "+1000000001-01-01T00:00:00Z", "2020-13", "+999999999-12-31T23:59:59Z[+18:00]" }) {
+                  attempt(text, () -> {
+                      try {
+                          return text.length() < 10 ? YearMonth.parse(text) : text.endsWith("]") ? ZonedDateTime.parse(text) : Instant.parse(text);
+                      }
+                      catch (DateTimeParseException e) {
+                          return e.getMessage().substring(0, e.getMessage().indexOf('{')) + e.getErrorIndex() + " " + e.getCause().getClass().getName();
+                      }
+                  });
+              }
+          }
+
+          static void computed() {
+              LocalDate leap = LocalDate.of(2020, 2, 29);
+              System.out.println(leap.getYear() + " " + leap.getMonth() + " " + leap.getDayOfMonth() + " " + leap.getDayOfYear() + " " + leap.getDayOfWeek() + " " + leap.isLeapYear()
+                      + " " + leap.lengthOfMonth() + " " + leap.lengthOfYear() + " " + leap.toEpochDay() + " " + leap.hashCode() + " " + LocalDate.ofEpochDay(-719528) + " "
+                      + LocalDate.ofYearDay(2021, 365) + " " + LocalDate.MIN + " " + LocalDate.MAX + " " + LocalDate.EPOCH);
+              System.out.println(leap.plusYears(1) + " " + leap.plusMonths(12) + " " + leap.minusMonths(1) + " " + LocalDate.of(2021, 1, 31).plusMonths(1) + " " + leap.plusWeeks(-1)
+                      + " " + leap.plusDays(366) + " " + leap.minusDays(60) + " " + leap.withYear(2021) + " " + leap.withMonth(12) + " " + leap.withDayOfMonth(1) + " "
+                      + leap.withDayOfYear(366) + " " + leap.plus(Period.of(1, 2, 3)) + " " + leap.minus(Period.ofDays(29)) + " " + leap.with(Month.JULY) + " "
+                      + leap.with(DayOfWeek.MONDAY) + " " + leap.atStartOfDay() + " " + leap.atTime(23, 59) + " " + leap.atStartOfDay(ZoneId.of("UTC+09:00")));
+              LocalDate other = LocalDate.of(2021, 3, 1);
+              System.out.println(leap.until(other) + " " + other.until(leap) + " " + Period.between(LocalDate.of(2021, 1, 31), other) + " " + leap.compareTo(other) + " "
+                      + leap.isBefore(other) + leap.isAfter(other) + leap.isEqual(other) + leap.equals(LocalDate.parse("2020-02-29")) + " | " + units(leap, other));
+              System.out.println(fields(leap));
+              attempt("of", () -> LocalDate.of(2021, 2, 29));
+              attempt("of a month", () -> LocalDate.of(2021, 13, 1));
+              attempt("of a day", () -> LocalDate.of(2021, 6, 31));
+              attempt("the day after the last", () -> LocalDate.MAX.plusDays(1));
+              attempt("a month after the last", () -> LocalDate.MAX.plusMonths(1));
+              attempt("far after the last", () -> LocalDate.MAX.plusDays(100));
+              attempt("a date's hour", () -> leap.get(ChronoField.HOUR_OF_DAY));
+              attempt("a date's epoch day", () -> leap.get(ChronoField.EPOCH_DAY));
+              attempt("a date plus an hour", () -> leap.plus(1, ChronoUnit.HOURS));
+              LocalTime time = LocalTime.of(23, 59, 59, 999999999);
+              System.out.println(time + " " + time.plusNanos(1) + " " + time.plusHours(-25) + " " + time.minusMinutes(1500) + " " + time.plusSeconds(86401) + " " + time.withNano(0)
+                      + " " + time.truncatedTo(ChronoUnit.MINUTES) + " " + time.toSecondOfDay() + " " + time.toNanoOfDay() + " " + time.hashCode() + " " + LocalTime.ofSecondOfDay(3661)
+                      + " " + LocalTime.NOON.compareTo(time) + " " + LocalTime.MIDNIGHT.isBefore(time) + " | " + units(LocalTime.NOON, time));
+              System.out.println(fields(LocalTime.of(13, 5, 9, 123456789)));
+              attempt("an hour", () -> LocalTime.of(24, 0));
+              attempt("truncated to a week", () -> time.truncatedTo(ChronoUnit.WEEKS));
+              LocalDateTime local = LocalDateTime.of(2020, 2, 29, 23, 59, 59, 500000000);
+              System.out.println(local + " " + local.plusNanos(500000000) + " " + local.plusHours(-48) + " " + local.plusSeconds(86400L * 366) + " " + local.minusMinutes(1)
+                      + " " + local.plusMonths(12) + " " + local.withHour(0) + " " + local.truncatedTo(ChronoUnit.DAYS) + " " + local.plus(Duration.ofMillis(1500)) + " "
+                      + local.plus(Period.ofWeeks(1)) + " " + local.toLocalDate() + " " + local.toLocalTime() + " " + local.hashCode() + " "
+                      + local.toEpochSecond(ZoneOffset.ofHours(9)) + " " + local.toInstant(ZoneOffset.UTC) + " " + local.atOffset(ZoneOffset.ofHours(-8)) + " "
+                      + local.atZone(ZoneId.of("GMT")) + " " + LocalDateTime.ofEpochSecond(-1, 1, ZoneOffset.UTC) + " " + LocalDateTime.MIN + " " + LocalDateTime.MAX);
+              System.out.println(units(local, LocalDateTime.of(2021, 3, 1, 0, 0)) + " | " + Duration.between(local, LocalDateTime.of(2021, 3, 1, 0, 0)));
+              attempt("the nanosecond after the last", () -> LocalDateTime.MAX.plusNanos(1));
+              OffsetDateTime offset = OffsetDateTime.of(local, ZoneOffset.ofHoursMinutes(5, 30));
+              OffsetDateTime same = offset.withOffsetSameInstant(ZoneOffset.UTC);
+              System.out.println(offset + " " + same + " " + offset.withOffsetSameLocal(ZoneOffset.UTC) + " " + offset.toInstant() + " " + offset.toEpochSecond() + " "
+                      + offset.hashCode() + " " + offset.equals(same) + offset.isEqual(same) + offset.isBefore(same) + " " + offset.compareTo(same) + " "
+                      + offset.plusDays(1).until(same, ChronoUnit.HOURS) + " " + offset.atZoneSameInstant(ZoneId.of("UTC")) + " " + offset.toZonedDateTime() + " "
+                      + offset.getLong(ChronoField.INSTANT_SECONDS) + " " + offset.get(ChronoField.OFFSET_SECONDS) + " " + offset.with(ChronoField.OFFSET_SECONDS, -60) + " "
+                      + OffsetDateTime.MIN + " " + OffsetDateTime.MAX);
+              ZonedDateTime zoned = ZonedDateTime.of(local, ZoneId.of("UTC+09:00"));
+              System.out.println(zoned + " " + zoned.getZone() + " " + zoned.getOffset() + " " + zoned.withZoneSameInstant(ZoneId.of("Etc/GMT+5")) + " "
+                      + zoned.withZoneSameLocal(ZoneOffset.UTC) + " " + zoned.withFixedOffsetZone() + " " + zoned.plusHours(1) + " " + zoned.plusMonths(1) + " "
+                      + zoned.toInstant() + " " + zoned.toOffsetDateTime() + " " + zoned.hashCode() + " " + zoned.equals(ZonedDateTime.parse(zoned.toString())) + " "
+                      + zoned.isEqual(zoned.withZoneSameInstant(ZoneOffset.UTC)) + " " + ZonedDateTime.ofInstant(Instant.EPOCH, ZoneId.of("UT-01:00")) + " "
+                      + Integer.signum(zoned.compareTo(zoned.withZoneSameInstant(ZoneOffset.UTC))));
+              Instant instant = Instant.ofEpochSecond(1582934399L, 500000000);
+              System.out.println(instant + " " + instant.getEpochSecond() + " " + instant.getNano() + " " + instant.toEpochMilli() + " " + instant.hashCode() + " "
+                      + instant.plusSeconds(1) + " " + instant.minusMillis(1500) + " " + instant.plusNanos(-500000001) + " " + instant.plus(Duration.ofDays(1)) + " "
+                      + instant.plus(3, ChronoUnit.HALF_DAYS) + " " + instant.truncatedTo(ChronoUnit.HOURS) + " " + instant.atOffset(ZoneOffset.ofHours(9)) + " "
+                      + instant.atZone(ZoneId.of("UTC")) + " " + Instant.ofEpochMilli(-1) + " " + Instant.EPOCH + " " + Instant.MIN + " " + Instant.MAX + " "
+                      + instant.compareTo(Instant.EPOCH) + instant.isAfter(Instant.EPOCH) + " | " + units(Instant.EPOCH, instant) + " | " + fields(instant));
+              attempt("after the last instant", () -> Instant.MAX.plusNanos(1));
+              attempt("an instant plus a month", () -> instant.plus(1, ChronoUnit.MONTHS));
+              attempt("the last instant in milliseconds", () -> Instant.MAX.toEpochMilli());
+              Year year = Year.of(2020);
+              YearMonth month = YearMonth.of(2020, 2);
+              System.out.println(year + " " + year.isLeap() + " " + year.length() + " " + year.plusYears(-2021) + " " + year.atDay(60) + " " + year.atMonth(2) + " "
+                      + year.compareTo(Year.of(2000)) + year.isBefore(Year.of(2021)) + " " + Year.isLeap(1900) + " " + fields(year) + " | " + month + " " + month.lengthOfMonth()
+                      + " " + month.atEndOfMonth() + " " + month.atDay(1) + " " + month.plusMonths(11) + " " + month.minusYears(2021) + " " + month.hashCode() + " "
+                      + month.compareTo(YearMonth.of(2019, 12)) + " " + YearMonth.of(12020, 1) + " " + fields(month) + " | " + units(month, YearMonth.of(3021, 1)));
+              attempt("a year", () -> Year.of(1000000000));
+              attempt("a year's day", () -> Year.of(2021).atDay(366));
+              attempt("a month of a year", () -> YearMonth.of(2020, 13));
+              Period period = Period.of(1, 14, -3);
+              System.out.println(period + " " + period.normalized() + " " + period.negated() + " " + period.multipliedBy(3) + " " + period.plus(Period.ofWeeks(1)) + " "
+                      + period.toTotalMonths() + " " + period.isNegative() + " " + period.getUnits() + " " + period.hashCode() + " " + period.equals(Period.parse("P1Y14M-3D"))
+                      + " " + period.addTo(LocalDate.of(2020, 2, 29)) + " " + Period.ofYears(1).addTo(Year.of(2020)) + " " + (Period.of(0, 0, 0) == Period.ZERO));
+              attempt("a period's weeks", () -> period.get(ChronoUnit.WEEKS));
+              attempt("a period of a duration", () -> Period.from(Duration.ofDays(1)));
+          }
+
+          static void zones() {
+              for (String id : new String[] { "Z", "+9", "-0930", "+01:02:03", "UTC", "GMT+9", "UT-01:30", "UTC+00:00", "Etc/GMT-14", "Etc/UTC", "Zulu", "+18:01", "+19",
+                      "+1:00", "+01000", "x01", "utc", "UTC+19", "Nowhere/None", "1abc", "?" }) {
+                  attempt(id, () -> {
+                      ZoneId zone = ZoneId.of(id);
+                      return zone + " " + zone.getId() + " " + zone.normalized() + " " + zone.getRules() + " " + zone.hashCode() + " " + (zone instanceof ZoneOffset);
+                  });
+              }
+              attempt("hours, minutes and seconds", () -> ZoneOffset.ofHoursMinutesSeconds(-3, -30, -15) + " " + ZoneOffset.ofTotalSeconds(-1) + " "
+                      + ZoneOffset.ofHours(1).compareTo(ZoneOffset.ofHours(2)) + " " + (ZoneOffset.of("-00:00") == ZoneOffset.UTC) + " " + ZoneOffset.MIN + ZoneOffset.MAX);
+              attempt("an hour and a minute of two signs", () -> ZoneOffset.ofHoursMinutes(1, -1));
+              attempt("a prefix", () -> ZoneId.ofOffset("X", ZoneOffset.UTC));
+              StringBuilder days = new StringBuilder();
+              for (DayOfWeek day : DayOfWeek.values()) {
+                  days.append(day.getValue()).append(day).append(day.plus(-8)).append(' ');
+              }
+              for (Month month : Month.values()) {
+                  days.append(month.getValue()).append(month).append(month.minLength()).append(month.maxLength()).append(month.plus(11)).append(month.firstMonthOfQuarter())
+                      .append(' ');
+              }
+              System.out.println(days.toString().trim());
+              attempt("a day of the week", () -> DayOfWeek.of(8));
+              Clock clock = Clock.fixed(Instant.parse("2026-11-20T18:42:49.123456789Z"), ZoneId.of("UTC+09:00"));
+              System.out.println(clock + " " + clock.millis() + " " + LocalDate.now(clock) + " " + LocalTime.now(clock) + " " + LocalDateTime.now(clock) + " "
+                      + OffsetDateTime.now(clock) + " " + ZonedDateTime.now(clock) + " " + Instant.now(clock) + " " + Year.now(clock) + " " + YearMonth.now(clock) + " "
+                      + Clock.offset(clock, Duration.ofHours(6)).instant() + " " + Clock.tick(clock, Duration.ofMinutes(5)).instant() + " "
+                      + Clock.tick(clock, Duration.ofNanos(1000)) + " " + clock.withZone(ZoneOffset.UTC) + " " + Clock.systemUTC() + " "
+                      + (Clock.systemUTC().millis() > 1700000000000L) + " " + (ZonedDateTime.now().toEpochSecond() - Instant.now().getEpochSecond() < 60) + " "
+                      + (LocalDate.now(ZoneOffset.UTC).getYear() > 2023));
+              attempt("a tick of three nanoseconds", () -> Clock.tick(clock, Duration.ofNanos(3)));
+              Duration duration = Duration.ofSeconds(90061, 123456789);
+              System.out.println(Duration.of(3, ChronoUnit.HALF_DAYS) + " " + Duration.of(-1500, ChronoUnit.MICROS) + " " + duration.truncatedTo(ChronoUnit.HOURS) + " "
+                      + duration.truncatedTo(ChronoUnit.MILLIS) + " " + duration.plus(2, ChronoUnit.DAYS) + " " + duration.get(ChronoUnit.NANOS) + " " + duration.getUnits() + " "
+                      + Duration.between(Instant.EPOCH, Instant.ofEpochSecond(1, 5)) + " " + Duration.between(LocalTime.NOON, LocalTime.MIDNIGHT) + " "
+                      + Duration.from(Duration.ofMillis(5)) + " " + duration.addTo(LocalDateTime.of(2020, 2, 28, 0, 0)) + " " + duration.subtractFrom(Instant.EPOCH) + " "
+                      + ChronoUnit.MONTHS.getDuration() + " " + ChronoUnit.FOREVER.getDuration() + " " + ChronoField.DAY_OF_MONTH.range() + " "
+                      + ChronoField.DAY_OF_MONTH.rangeRefinedBy(LocalDate.of(2021, 2, 1)) + " " + ChronoField.YEAR.getBaseUnit() + ChronoField.YEAR.getRangeUnit() + " "
+                      + ChronoUnit.WEEKS.between(LocalDate.of(2020, 1, 1), LocalDate.of(2021, 1, 1)) + " " + ValueRange.of(1, 28, 31).isValidValue(30));
+              attempt("a duration of a month", () -> Duration.of(1, ChronoUnit.MONTHS));
+              attempt("a duration between dates", () -> Duration.between(LocalDate.EPOCH, LocalDate.EPOCH));
+              attempt("a field out of its values", () -> ChronoField.MONTH_OF_YEAR.checkValidValue(13));
+              List<LocalDate> sorted = new ArrayList<>(List.of(LocalDate.of(2021, 1, 1), LocalDate.of(-1, 12, 31), LocalDate.of(2020, 12, 31), LocalDate.of(2020, 2, 29)));
+              Collections.sort(sorted);
+              Map<Object, String> named = new HashMap<>();
+              named.put(LocalDate.of(2020, 2, 29), "a leap day");
+              named.put(Instant.EPOCH, "the epoch");
+              named.put(ZoneOffset.ofHours(9), "nine hours");
+              named.put(YearMonth.of(2020, 2), "a month");
+              System.out.println(sorted + " " + named.get(LocalDate.parse("2020-02-29")) + " " + named.get(Instant.ofEpochSecond(0)) + " " + named.get(ZoneId.of("+09:00")) + " "
+                      + named.get(YearMonth.parse("2020-02")) + " " + named.get(LocalDate.EPOCH));
+          }
+
+          public static void main(String[] args) {
+              texts();
+              computed();
+              zones();
+          }
+      }
+    expected: |
+      2020-02-29: 2020-02-29
+      2021-02-29: Text '2021-02-29' could not be parsed: Invalid date 'February 29' as '2021' is not a leap year @0 / java.time.DateTimeException: Invalid date 'February 29' as '2021' is not a leap year
+      2021-04-31: Text '2021-04-31' could not be parsed: Invalid date 'APRIL 31' @0 / java.time.DateTimeException: Invalid date 'APRIL 31'
+      2021-13-01: Text '2021-13-01' could not be parsed: Invalid value for MonthOfYear (valid values 1 - 12): 13 @0 / java.time.DateTimeException: Invalid value for MonthOfYear (valid values 1 - 12): 13
+      +12020-01-01: +12020-01-01
+      12020-01-01: Text '12020-01-01' could not be parsed at index 0 @0 / null
+      -0001-12-31: -0001-12-31
+      2020-1-01: Text '2020-1-01' could not be parsed at index 5 @5 / null
+      2020-01-01x: Text '2020-01-01x' could not be parsed, unparsed text found at index 10 @10 / null
+      0000-01-01: 0000-01-01
+      +999999999-12-31: +999999999-12-31
+      +1000000000-01-01: Text '+1000000000-01-01' could not be parsed: Invalid value for Year (valid values -999999999 - 999999999): 1000000000 @0 / java.time.DateTimeException: Invalid value for Year (valid values -999999999 - 999999999): 1000000000
+      10:15: 10:15
+      10:15:30.5: 10:15:30.500
+      10:15:30.123456789: 10:15:30.123456789
+      10:15:30.: 10:15:30
+      24:00: Text '24:00' could not be parsed: Invalid value for HourOfDay (valid values 0 - 23): 24 @0 / java.time.DateTimeException: Invalid value for HourOfDay (valid values 0 - 23): 24
+      10:60:61: Text '10:60:61' could not be parsed: Invalid value for MinuteOfHour (valid values 0 - 59): 60 @0 / java.time.DateTimeException: Invalid value for MinuteOfHour (valid values 0 - 59): 60
+      25:00:61: Text '25:00:61' could not be parsed: Invalid value for HourOfDay (valid values 0 - 23): 25 @0 / java.time.DateTimeException: Invalid value for HourOfDay (valid values 0 - 23): 25
+      1:15: Text '1:15' could not be parsed at index 0 @0 / null
+      10:15:3: Text '10:15:3' could not be parsed, unparsed text found at index 5 @5 / null
+      2020-02-29T10:15: 2020-02-29T10:15
+      2020-02-29t23:59:59.999: 2020-02-29T23:59:59.999
+      2020-02-29 10:15: Text '2020-02-29 10:15' could not be parsed at index 10 @10 / null
+      2020-02-30T25:00: Text '2020-02-30T25:00' could not be parsed: Invalid date 'FEBRUARY 30' @0 / java.time.DateTimeException: Invalid date 'FEBRUARY 30'
+      2020-02-29T10:15Z: Text '2020-02-29T10:15Z' could not be parsed, unparsed text found at index 16 @16 / null
+      2020-02-29T10:15+01:00: 2020-02-29T10:15+01:00
+      2020-02-29T10:15z: 2020-02-29T10:15Z
+      2020-02-29T10:15-08: 2020-02-29T10:15-08:00
+      2020-02-29T10:15+01:00:30: 2020-02-29T10:15+01:00:30
+      2020-02-29T10:15+0100: Text '2020-02-29T10:15+0100' could not be parsed, unparsed text found at index 19 @19 / null
+      2020-02-29T10:15+18:01: Text '2020-02-29T10:15+18:01' could not be parsed: Zone offset not in valid range: -18:00 to +18:00 @0 / java.time.DateTimeException: Zone offset not in valid range: -18:00 to +18:00
+      2020-02-29T10:15+24:00: Text '2020-02-29T10:15+24:00' could not be parsed: Value out of range: Hour[0-23], Minute[0-59], Second[0-59] @0 / java.time.DateTimeException: Value out of range: Hour[0-23], Minute[0-59], Second[0-59]
+      2020-02-29T10:15: Text '2020-02-29T10:15' could not be parsed at index 16 @16 / null
+      2020-02-29T10:15+01:60: Text '2020-02-29T10:15+01:60' could not be parsed, unparsed text found at index 19 @19 / null
+      2020-02-29T10:15+01:00: 2020-02-29T10:15+01:00
+      2020-02-29T10:15Z[UTC]: 2020-02-29T10:15Z[UTC]
+      2020-02-29T10:15+01:00[UTC+02:00]: 2020-02-29T11:15+02:00[UTC+02:00]
+      2020-02-29T10:15+01:00[-03:30]: 2020-02-29T05:45-03:30
+      2020-02-29T10:15+01:00[Etc/GMT+5]: 2020-02-29T04:15-05:00[Etc/GMT+5]
+      2020-02-29T10:15+01:00[GMT+00:00]: 2020-02-29T09:15Z[GMT]
+      2020-02-29T10:15+01:00[UTC+1]: Text '2020-02-29T10:15+01:00[UTC+1]' could not be parsed, unparsed text found at index 22 @22 / null
+      2020-02-29T10:15+01:00[Nowhere/None]: Text '2020-02-29T10:15+01:00[Nowhere/None]' could not be parsed, unparsed text found at index 22 @22 / null
+      2020-02-29T10:15[UTC]: Text '2020-02-29T10:15[UTC]' could not be parsed at index 16 @16 / null
+      2020-02-29T10:15+01:00[+24:00]: Text '2020-02-29T10:15+01:00[+24:00]' could not be parsed: Value out of range: Hour[0-23], Minute[0-59], Second[0-59] @0 / java.time.DateTimeException: Value out of range: Hour[0-23], Minute[0-59], Second[0-59]
+      2020-02-29T10:15:30Z: 2020-02-29T10:15:30Z
+      2020-02-29T10:15:30.000001+09:00: 2020-02-29T01:15:30.000001Z
+      2020-02-29T24:00:00Z: 2020-03-01T00:00:00Z
+      2020-12-31T23:59:60Z: 2020-12-31T23:59:59Z
+      2020-02-29T10:15Z: Text '2020-02-29T10:15Z' could not be parsed at index 16 @16 / null
+      2020-02-30T10:15:30Z: Text '2020-02-30T10:15:30Z' could not be parsed at index 0 @0 / null
+      2020-02-29T10:15:30+09: Text '2020-02-29T10:15:30+09' could not be parsed at index 19 @19 / null
+      +1000000000-12-31T23:59:59.999999999Z: +1000000000-12-31T23:59:59.999999999Z
+      -1000000000-01-01T00:00:00Z: -1000000000-01-01T00:00:00Z
+      2020-02-29T10:15:30+24:00: Text '2020-02-29T10:15:30+24:00' could not be parsed: Value out of range: Hour[0-23], Minute[0-59], Second[0-59] @0 / java.time.DateTimeException: Value out of range: Hour[0-23], Minute[0-59], Second[0-59]
+      2020: 2020
+      +2020: 2020
+      -44: -44
+      12020: 12020
+      1000000000: Text '1000000000' could not be parsed, unparsed text found at index 9 @9 / null
+      : Text '' could not be parsed at index 0 @0 / null
+      2020-02: 2020-02
+      +12020-12: 12020-12
+      -0044-03: -0044-03
+      2020-2: Text '2020-2' could not be parsed at index 5 @5 / null
+      12020-12: Text '12020-12' could not be parsed at index 0 @0 / null
+      P1Y2M3D: P1Y2M3D
+      p4w: P28D
+      -P1Y-2M: P-1Y2M
+      P1Y2M3W4D: P1Y2M25D
+      P0D: P0D
+      P: Text cannot be parsed to a Period @0 / null
+      PT1H: Text cannot be parsed to a Period @0 / null
+      P2147483648D: Text cannot be parsed to a Period @0 / java.lang.NumberFormatException: Error at index 9 in: "2147483648"
+      -P-2147483648Y: Text cannot be parsed to a Period @0 / java.lang.ArithmeticException: integer overflow
+      P306783379W: java.lang.ArithmeticException: integer overflow
+      no text: java.lang.NullPointerException: text
+      +1000000001-01-01T00:00:00Z: Text '+1000000001-01-01T00:00:00Z' could not be parsed: Unable to obtain Instant from TemporalAccessor: 0 java.time.DateTimeException
+      2020-13: Text '2020-13' could not be parsed: Unable to obtain YearMonth from TemporalAccessor: 0 java.time.DateTimeException
+      +999999999-12-31T23:59:59Z[+18:00]: Text '+999999999-12-31T23:59:59Z[+18:00]' could not be parsed: Unable to obtain ZonedDateTime from TemporalAccessor: 0 java.time.DateTimeException
+      2020 FEBRUARY 29 60 SATURDAY true 29 366 18321 4137117 0000-01-01 2021-12-31 -999999999-01-01 +999999999-12-31 1970-01-01
+      2021-02-28 2021-02-28 2020-01-29 2021-02-28 2020-02-22 2021-03-01 2019-12-31 2021-02-28 2020-12-29 2020-02-01 2020-12-31 2021-05-02 2020-01-31 2020-07-29 2020-02-24 2020-02-29T00:00 2020-02-29T23:59 2020-02-29T00:00+09:00[UTC+09:00]
+      P1Y1D P-1Y-1D P1M1D -1 truefalsefalsetrue | Days=366 Weeks=52 Months=12 Years=1 Decades=0 Centuries=0 Millennia=0 Eras=0
+      DayOfWeek=6 AlignedDayOfWeekInMonth=1 AlignedDayOfWeekInYear=4 DayOfMonth=29 DayOfYear=60 EpochDay=18321 AlignedWeekOfMonth=5 AlignedWeekOfYear=9 MonthOfYear=2 ProlepticMonth=24241 YearOfEra=2020 Year=2020 Era=1
+      of: java.time.DateTimeException: Invalid date 'February 29' as '2021' is not a leap year
+      of a month: java.time.DateTimeException: Invalid value for MonthOfYear (valid values 1 - 12): 13
+      of a day: java.time.DateTimeException: Invalid date 'JUNE 31'
+      the day after the last: java.time.DateTimeException: Invalid value for Year (valid values -999999999 - 999999999): 1000000000
+      a month after the last: java.time.DateTimeException: Invalid value for Year (valid values -999999999 - 999999999): 1000000000
+      far after the last: java.time.DateTimeException: Invalid value for EpochDay (valid values -365243219162 - 365241780471): 365241780571
+      a date's hour: java.time.temporal.UnsupportedTemporalTypeException: Unsupported field: HourOfDay
+      a date's epoch day: java.time.temporal.UnsupportedTemporalTypeException: Invalid field 'EpochDay' for get() method, use getLong() instead
+      a date plus an hour: java.time.temporal.UnsupportedTemporalTypeException: Unsupported unit: Hours
+      23:59:59.999999999 00:00 22:59:59.999999999 22:59:59.999999999 00:00:00.999999999 23:59:59 23:59 86399 86399999999999 -1857113749 01:01:01 -1 true | Nanos=43199999999999 Micros=43199999999 Millis=43199999 Seconds=43199 Minutes=719 Hours=11 HalfDays=0
+      NanoOfSecond=123456789 NanoOfDay=47109123456789 MicroOfSecond=123456 MicroOfDay=47109123456 MilliOfSecond=123 MilliOfDay=47109123 SecondOfMinute=9 SecondOfDay=47109 MinuteOfHour=5 MinuteOfDay=785 HourOfAmPm=1 ClockHourOfAmPm=1 HourOfDay=13 ClockHourOfDay=13 AmPmOfDay=1
+      an hour: java.time.DateTimeException: Invalid value for HourOfDay (valid values 0 - 23): 24
+      truncated to a week: java.time.temporal.UnsupportedTemporalTypeException: Unit is too large to be used for truncation
+      2020-02-29T23:59:59.500 2020-03-01T00:00 2020-02-27T23:59:59.500 2021-03-01T23:59:59.500 2020-02-29T23:58:59.500 2021-02-28T23:59:59.500 2020-02-29T00:59:59.500 2020-02-29T00:00 2020-03-01T00:00:01 2020-03-07T23:59:59.500 2020-02-29 23:59:59.500 1941894409 1582988399 2020-02-29T23:59:59.500Z 2020-02-29T23:59:59.500-08:00 2020-02-29T23:59:59.500Z[GMT] 1969-12-31T23:59:59.000000001 -999999999-01-01T00:00 +999999999-12-31T23:59:59.999999999
+      Nanos=31536000500000000 Micros=31536000500000 Millis=31536000500 Seconds=31536000 Minutes=525600 Hours=8760 HalfDays=730 Days=365 Weeks=52 Months=11 Years=0 Decades=0 Centuries=0 Millennia=0 Eras=0 | PT8760H0.5S
+      the nanosecond after the last: java.time.DateTimeException: Invalid value for Year (valid values -999999999 - 999999999): 1000000000
+      2020-02-29T23:59:59.500+05:30 2020-02-29T18:29:59.500Z 2020-02-29T23:59:59.500Z 2020-02-29T18:29:59.500Z 1583000999 1941878865 falsetruefalse 1 -24 2020-02-29T18:29:59.500Z[UTC] 2020-02-29T23:59:59.500+05:30 1583000999 19800 2020-02-29T23:59:59.500-00:01 -999999999-01-01T00:00+18:00 +999999999-12-31T23:59:59.999999999-18:00
+      2020-02-29T23:59:59.500+09:00[UTC+09:00] UTC+09:00 +09:00 2020-02-29T09:59:59.500-05:00[Etc/GMT+5] 2020-02-29T23:59:59.500Z 2020-02-29T23:59:59.500+09:00 2020-03-01T00:59:59.500+09:00[UTC+09:00] 2020-03-29T23:59:59.500+09:00[UTC+09:00] 2020-02-29T14:59:59.500Z 2020-02-29T23:59:59.500+09:00 -732177974 true true 1969-12-31T23:00-01:00[UT-01:00] 1
+      2020-02-28T23:59:59.500Z 1582934399 500000000 1582934399500 1313130623 2020-02-29T00:00:00.500Z 2020-02-28T23:59:58Z 2020-02-28T23:59:58.999999999Z 2020-02-29T23:59:59.500Z 2020-03-01T11:59:59.500Z 2020-02-28T23:00:00Z 2020-02-29T08:59:59.500+09:00 2020-02-28T23:59:59.500Z[UTC] 1969-12-31T23:59:59.999Z 1970-01-01T00:00:00Z -1000000000-01-01T00:00:00Z +1000000000-12-31T23:59:59.999999999Z 1true | Nanos=1582934399500000000 Micros=1582934399500000 Millis=1582934399500 Seconds=1582934399 Minutes=26382239 Hours=439703 HalfDays=36641 Days=18320 | NanoOfSecond=500000000 MicroOfSecond=500000 MilliOfSecond=500 InstantSeconds=1582934399
+      after the last instant: java.time.DateTimeException: Instant exceeds minimum or maximum instant
+      an instant plus a month: java.time.temporal.UnsupportedTemporalTypeException: Unsupported unit: Months
+      the last instant in milliseconds: java.lang.ArithmeticException: long overflow
+      2020 true 366 -1 2020-02-29 2020-02 20true false YearOfEra=2020 Year=2020 Era=1 | 2020-02 29 2020-02-29 2020-02-01 2021-01 -0001-02 268437476 1 12020-01 MonthOfYear=2 ProlepticMonth=24241 YearOfEra=2020 Year=2020 Era=1 | Months=12011 Years=1000 Decades=100 Centuries=10 Millennia=1 Eras=0
+      a year: java.time.DateTimeException: Invalid value for Year (valid values -999999999 - 999999999): 1000000000
+      a year's day: java.time.DateTimeException: Invalid date 'DayOfYear 366' as '2021' is not a leap year
+      a month of a year: java.time.DateTimeException: Invalid value for MonthOfYear (valid values 1 - 12): 13
+      P1Y14M-3D P2Y2M-3D P-1Y-14M3D P3Y42M-9D P1Y14M4D 26 true [Years, Months, Days] -127488 true 2022-04-26 2021 true
+      a period's weeks: java.time.temporal.UnsupportedTemporalTypeException: Unsupported unit: Weeks
+      a period of a duration: java.time.DateTimeException: Unit must be Years, Months or Days, but was Seconds
+      Z: Z Z Z ZoneRules[currentStandardOffset=Z] 0 true
+      +9: +09:00 +09:00 +09:00 ZoneRules[currentStandardOffset=+09:00] 32400 true
+      -0930: -09:30 -09:30 -09:30 ZoneRules[currentStandardOffset=-09:30] -34200 true
+      +01:02:03: +01:02:03 +01:02:03 +01:02:03 ZoneRules[currentStandardOffset=+01:02:03] 3723 true
+      UTC: UTC UTC Z ZoneRules[currentStandardOffset=Z] 84356 false
+      GMT+9: GMT+09:00 GMT+09:00 +09:00 ZoneRules[currentStandardOffset=+09:00] 90197364 false
+      UT-01:30: UT-01:30 UT-01:30 -01:30 ZoneRules[currentStandardOffset=-01:30] 685046216 false
+      UTC+00:00: UTC UTC Z ZoneRules[currentStandardOffset=Z] 84356 false
+      Etc/GMT-14: Etc/GMT-14 Etc/GMT-14 +14:00 ZoneRules[currentStandardOffset=+14:00] 1723009309 false
+      Etc/UTC: Etc/UTC Etc/UTC Z ZoneRules[currentStandardOffset=Z] 227139177 false
+      Zulu: Zulu Zulu Z ZoneRules[currentStandardOffset=Z] 2797092 false
+      +18:01: java.time.DateTimeException: Zone offset not in valid range: -18:00 to +18:00
+      +19: java.time.DateTimeException: Zone offset hours not in valid range: value 19 is not in the range -18 to 18
+      +1:00: java.time.DateTimeException: Invalid ID for ZoneOffset, non numeric characters found: +1:00
+      +01000: java.time.DateTimeException: Invalid ID for ZoneOffset, colon not found when expected: +01000
+      x01: java.time.zone.ZoneRulesException: Unknown time-zone ID: x01
+      utc: java.time.zone.ZoneRulesException: Unknown time-zone ID: utc
+      UTC+19: java.time.DateTimeException: Invalid ID for offset-based ZoneId: UTC+19
+      Nowhere/None: java.time.zone.ZoneRulesException: Unknown time-zone ID: Nowhere/None
+      1abc: java.time.DateTimeException: Invalid ID for region-based ZoneId, invalid format: 1abc
+      ?: java.time.DateTimeException: Invalid ID for ZoneOffset, invalid format: ?
+      hours, minutes and seconds: -03:30:15 -00:00:01 3600 true -18:00+18:00
+      an hour and a minute of two signs: java.time.DateTimeException: Zone offset minutes and seconds must be positive because hours is positive
+      a prefix: java.lang.IllegalArgumentException: prefix should be GMT, UTC or UT, is: X
+      1MONDAYSUNDAY 2TUESDAYMONDAY 3WEDNESDAYTUESDAY 4THURSDAYWEDNESDAY 5FRIDAYTHURSDAY 6SATURDAYFRIDAY 7SUNDAYSATURDAY 1JANUARY3131DECEMBERJANUARY 2FEBRUARY2829JANUARYJANUARY 3MARCH3131FEBRUARYJANUARY 4APRIL3030MARCHAPRIL 5MAY3131APRILAPRIL 6JUNE3030MAYAPRIL 7JULY3131JUNEJULY 8AUGUST3131JULYJULY 9SEPTEMBER3030AUGUSTJULY 10OCTOBER3131SEPTEMBEROCTOBER 11NOVEMBER3030OCTOBEROCTOBER 12DECEMBER3131NOVEMBEROCTOBER
+      a day of the week: java.time.DateTimeException: Invalid value for DayOfWeek: 8
+      FixedClock[2026-11-20T18:42:49.123456789Z,UTC+09:00] 1795200169123 2026-11-21 03:42:49.123456789 2026-11-21T03:42:49.123456789 2026-11-21T03:42:49.123456789+09:00 2026-11-21T03:42:49.123456789+09:00[UTC+09:00] 2026-11-20T18:42:49.123456789Z 2026 2026-11 2026-11-21T00:42:49.123456789Z 2026-11-20T18:40:00Z TickClock[FixedClock[2026-11-20T18:42:49.123456789Z,UTC+09:00],PT0.000001S] FixedClock[2026-11-20T18:42:49.123456789Z,Z] SystemClock[Z] true true true
+      a tick of three nanoseconds: java.lang.IllegalArgumentException: Invalid tick duration
+      PT36H PT-0.0015S PT25H PT25H1M1.123S PT73H1M1.123456789S 123456789 [Seconds, Nanos] PT1.000000005S PT-12H PT0.005S 2020-02-29T01:01:01.123456789 1969-12-30T22:58:58.876543211Z PT730H29M6S PT2562047788015215H30M7.999999999S 1 - 28/31 1 - 28 YearsForever 52 true
+      a duration of a month: java.time.temporal.UnsupportedTemporalTypeException: Unit must not have an estimated duration
+      a duration between dates: java.time.temporal.UnsupportedTemporalTypeException: Unsupported unit: Seconds
+      a field out of its values: java.time.DateTimeException: Invalid value for MonthOfYear (valid values 1 - 12): 13
+      [-0001-12-31, 2020-02-29, 2020-12-31, 2021-01-01] a leap day the epoch nine hours a month null
   # A UUID is two longs. fromString splits at the dashes and reads each part as a signed
   # hexadecimal long (a sign, any Unicode digit of one char, no more than a long), cut to its
   # field: the forms that are not canonical, and the refusals, are a JDK's answers.
@@ -13964,7 +14353,7 @@ standalone:
   # annotation of a type its sources jar does not hold (it was compiled against a jar
   # that is not there) too; a sealed interface whose permitted classes stand in other
   # files; an overload picked by what an exact method reference returns, beside one
-  # naming a class the subset lacks (java.time.LocalDate), which is passed by; a
+  # naming a class the subset lacks (java.util.Currency), which is passed by; a
   # wildcard's capture keeping the bound of its parameter. The exception the library
   # throws is located in the jar.
   - name: a-program-uses-a-library-read-as-source-from-its-source-path
@@ -14116,8 +14505,8 @@ standalone:
       geo/Table.java: |
         package geo;
 
-        import java.time.LocalDate;
         import java.util.ArrayList;
+        import java.util.Currency;
         import java.util.List;
         import java.util.function.Function;
 
@@ -14131,7 +14520,7 @@ standalone:
             public interface ToNumber<T> extends Function<T, Integer> {
             }
 
-            public interface ToDay<T> extends Function<T, LocalDate> {
+            public interface ToMoney<T> extends Function<T, Currency> {
             }
 
             private final List<String> names = new ArrayList<>();
@@ -14153,9 +14542,9 @@ standalone:
             }
 
             // names a class the program's world may lack: it is there to be passed by
-            public Table<T> column(String name, ToDay<T> day) {
+            public Table<T> column(String name, ToMoney<T> money) {
                 this.names.add(name);
-                this.columns.add(value -> day.apply(value).plusDays(1).toString());
+                this.columns.add(value -> money.apply(value).getSymbol());
                 return this;
             }
 
@@ -14174,8 +14563,8 @@ standalone:
                 return String.join(" | ", cells);
             }
 
-            public static String describe(LocalDate day) {
-                return day == null ? "no day" : "a day";
+            public static String describe(Currency money) {
+                return money == null ? "no money" : "money";
             }
 
             public static String mark() {
@@ -14193,7 +14582,7 @@ standalone:
       circle | #0 | 3.0
       rect | #4 | 6.0
       rect 4.0
-      no day ✓!
+      no money ✓!
       Range [1, 1 + 1) out of bounds for length 1
       -5
     error: "java.lang.IllegalArgumentException: no value for name | corners | area"

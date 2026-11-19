@@ -1895,6 +1895,10 @@ final class JavaIntrinsics {
 							call("cons", read, java.util.Objects.requireNonNull(JavaForms.boxTag(Primitive.FLOAT))),
 							JavaForms.NIL)));
 		});
+		// java.time: the host's wall clock in nanoseconds, and the offset its zone has
+		// at an instant (seconds east of UTC, doubled, one more in summer time)
+		natives.put("java.time.Instant.wall0()", host("%unix-nano-time"));
+		natives.put("java.time.ZoneId.local0(long)", host("%local-time-offset"));
 		return Map.copyOf(natives);
 	}
 

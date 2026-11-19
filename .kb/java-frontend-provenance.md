@@ -327,6 +327,22 @@ algorithm came from, and the answer goes in the file's header.
   method each collector reaches its map by (the order of keys sharing a bucket). The
   messages of the statistics' constructors and of `toMap` are the probes' answers. The
   answers are lines of `java-spec.yaml`, which the JDK leg asks again.
+- **`java.time` (k35, 2026-11-20).** The dates, times, instants, zones, clocks, fields
+  and units were written from the API documentation and JDK 25's answers to probes
+  (`Grid.java`, 27,197 lines: every text, member, refusal and hash code named in
+  `.kb/java-frontend.md`, "java.time"). Nobody opened OpenJDK's source. The calendar's
+  arithmetic is our own formulation over the day counted from 0000-01-01; the ISO-8601
+  forms are read by one scanner written here, where a JDK builds formatters. What the
+  documentation does not state was read off the answers: the hash codes, the number a
+  date's `compareTo` answers, which refusal a text gets and at which index, the order
+  fields are refused in. The first draft of `LocalDate.plusDays` and of
+  `ValueRange.hashCode` came from memory of how a JDK does them, not from a probe; both
+  were taken out, the first written again from what the grid showed (which message a
+  date past the last day gets), the second left a number of our own. No zone data is
+  shipped: the fixed zones of the tz database are named by rule, and the count of what
+  the regions would cost was asked of a running JDK's `java.time.zone` API
+  (`Zones.java`). The answers are lines of `java-spec.yaml`, which the JDK leg asks
+  again.
 - **Unicode normalization (k29, 2026-11-19).** `eval/unicode-normalization.lisp` was
   written from Unicode Standard Annex #15 and the Unicode Standard's sections 3.11
   (decomposition, canonical ordering, canonical composition) and 3.12 (Hangul by

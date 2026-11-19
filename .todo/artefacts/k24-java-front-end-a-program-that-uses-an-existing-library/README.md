@@ -3,8 +3,8 @@
 `am.ik.yavi:yavi:0.18.0` (Apache-2.0), its sources jar from Maven Central: 380 Java files,
 183,636 lines. Nothing of YAVI is in this directory: the two programs are written here over
 its public API, `patch.sh` holds `sed` lines and `shim/` classes written here (the
-classic example needs none since 2026-11-19; the schema example has five edits since
-2026-11-20 (two since k36, k38 and k31), each around a class the library lacks).
+classic example needs none since 2026-11-19; the schema example had five edits on
+2026-11-20 and has one since k36, k38, k31 and k35, around the classes the library lacks).
 
 ## How to run it again
 
@@ -60,7 +60,7 @@ lines (wasm 655,275 B, the component 659,541 B, the jar 255,602 B). The k24 numb
 |---|---------|-------|------|
 | 1 | `class is not allowed to extend sealed class` (a permitted class in a file of its own, read while the `permits` clause naming it was) | `NullAcceptingValueValidator` | fixed here |
 | 2 | `a class literal but compared with a class or before getName()` (`String.class` as an argument) | `YaviSchema._string` | fixed by k30 (a `Class` is a value) |
-| 3 | `the class java.time.LocalDate` (`LocalTime` .. `Period` after it: `X::parse` in the table of the types read from their text; `Year.of` and `DateTimeException` in the conversion of a number, met once row 9 went) | `core/UntypedInput` | `.todo/k35`; `patch.sh` 1 |
+| 3 | `the class java.time.LocalDate` (`LocalTime` .. `Period` after it: `X::parse` in the table of the types read from their text; `Year.of` and `DateTimeException` in the conversion of a number, met once row 9 went) | `core/UntypedInput` | fixed by k35 (library source); `patch.sh` 1 is gone |
 | 4 | `the class java.util.UUID` (the same table) | `core/UntypedInput` | fixed by k36 (library source); `patch.sh` 2 is gone |
 | 5 | `lambda expression not expected here` (`X.this.lazy().andThen(.. -> .. .map(x2 -> () -> x2))`: a generic method called from its own body, its type argument made of its own type parameter) | `arguments/Arguments1Validator.andThen` | fixed with k30 |
 | 6 | a program that never ended: `Arguments1Validator.this` in an anonymous `Arguments1Validator` named the anonymous instance | the same | fixed with k30 |
@@ -72,7 +72,7 @@ lines (wasm 655,275 B, the component 659,541 B, the jar 255,602 B). The k24 numb
 
 327 files (175,141 lines) are read and declared before the second refusal, in 1.7 s: the
 schema names nearly the whole library in its declarations. Since k30 (2026-11-20) the
-unpatched coordinates stop at row 3, and with `patch.sh`'s edits (rows 3, 8, 9; row 4 went
+unpatched coordinates stopped at row 3, and with `patch.sh`'s edits (rows 3, 8, 9; row 4 went
 with k36, 2026-11-20: wasm 1,019,971 B, the component 1,024,234 B, the jar 385,127 B; row 10
 with k38, 2026-11-20: wasm 1,032,990 B (12.6 s), the component 1,037,253 B, the jar 390,454 B,
 the interpreter 5.4 s; row 9 with k31, 2026-11-20: wasm 1,095,209 B, the component
@@ -83,13 +83,21 @@ conversion of a number (a `long`, two doubles, a `BigDecimal` and a `BigInteger`
 for an `Integer`): 23 lines, wasm 1,095,450 B (13.6 s), the component 1,099,815 B, the
 jar 408,486 B, the interpreter 5.7 s.
 
+**Since k35 (2026-11-20) one edit is left** (row 8, `java.util.Date` and `java.sql`:
+`.todo/k37`), and the unpatched coordinates stop there. The table of the types read from
+their text is lowered whole, with the `Year` arm of the conversion: the same 23 lines on
+the four backends, wasm 1,215,291 B (14.4 s), the component 1,219,661 B, the jar
+438,757 B, the interpreter 6.1 s. A schema of the `java.time` classes themselves is
+`.todo/artefacts/k35-java-time-the-classes-a-value-is-read-from-its-text-as/shelf/Loan.java`.
+
 ```bash
 unzip -q yavi-0.18.0-sources.jar -d /tmp/yavi && ./patch.sh /tmp/yavi /tmp/yavi-patched
 (cd schema && $R --java-source-path /tmp/yavi-patched shelf/Book.java -o /tmp/book.wasm)
 ```
 
-wasm 1,009,805 B (12.8 s of wall time, the interpreter 5.4 s to its last line), the
-component 1,014,068 B, the jar 381,860 B. The edits cut bodies out, so what those bodies
+With the five edits of k30 (2026-11-20): wasm 1,009,805 B (12.8 s of wall time, the
+interpreter 5.4 s to its last line), the component 1,014,068 B, the jar 381,860 B. The
+edits cut bodies out, so what those bodies
 meet once their classes are there is not measured. Found beside the way: one entry left
 in the table (`Map.ofEntries(Map.entry(.., X::parse))`) is `cannot infer type-variable(s)
 V` (`.todo/k39`), and two compiles of the classic example differ in their bytes
@@ -97,8 +105,9 @@ V` (`.todo/k39`), and two compiles of the classic example differ in their bytes
 
 ## What YAVI names of a JDK that the library lacks (by import, all 380 files)
 
-`java.math.BigDecimal` 46, `BigInteger` 44; `java.time` 9 classes about 42 each, `Clock` 9,
-`Period` 2 and seven of `java.time.temporal` / `.format` / `.chrono` once each;
+`java.math.BigDecimal` 46, `BigInteger` 44 (k31); `java.time` 9 classes about 42 each,
+`Clock` 9, `Period` 2 and seven of `java.time.temporal` / `.format` / `.chrono` once each
+(k35, but `DateTimeFormatter` and `ResolverStyle`: `.todo/k43`);
 `java.util.LinkedHashMap` 15, `LinkedHashSet` 9, `LinkedList` 2, `IdentityHashMap` 2, `UUID` 2,
 `EnumSet`, `ResourceBundle`, `MissingResourceException`; `java.text.MessageFormat` 4,
 `Normalizer` 3; `java.net.URL`, `URLEncoder`, `MalformedURLException`;

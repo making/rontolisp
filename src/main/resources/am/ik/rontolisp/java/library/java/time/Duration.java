@@ -9,8 +9,15 @@
 package java.time;
 
 import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoField;
+import java.time.temporal.ChronoUnit;
+import java.time.temporal.Temporal;
+import java.time.temporal.TemporalAmount;
+import java.time.temporal.TemporalUnit;
+import java.time.temporal.UnsupportedTemporalTypeException;
+import java.util.List;
 
-public final class Duration implements Comparable<Duration> {
+public final class Duration implements TemporalAmount, Comparable<Duration> {
 
     public static final Duration ZERO = new Duration(0, 0);
 
@@ -60,6 +67,60 @@ public final class Duration implements Comparable<Duration> {
         return make(0, nanos);
     }
 
+    public static Duration of(long amount, TemporalUnit unit) {
+        return ZERO.plus(amount, unit);
+    }
+
+    public static Duration from(TemporalAmount amount) {
+        Duration sum = ZERO;
+        for (TemporalUnit unit : amount.getUnits()) {
+            sum = sum.plus(amount.get(unit), unit);
+        }
+        return sum;
+    }
+
+    /**
+     * The time from one date-time, time or instant to another: in nanoseconds where
+     * the two can say it so, else in seconds and the difference of their nanoseconds.
+     */
+    public static Duration between(Temporal startInclusive, Temporal endExclusive) {
+        try {
+            return ofNanos(startInclusive.until(endExclusive, ChronoUnit.NANOS));
+        }
+        catch (DateTimeException | ArithmeticException coarse) {
+            long seconds = startInclusive.until(endExclusive, ChronoUnit.SECONDS);
+            long nanos = 0;
+            try {
+                nanos = endExclusive.getLong(ChronoField.NANO_OF_SECOND)
+                        - startInclusive.getLong(ChronoField.NANO_OF_SECOND);
+                if (seconds > 0 && nanos < 0) {
+                    seconds++;
+                }
+                else if (seconds < 0 && nanos > 0) {
+                    seconds--;
+                }
+            }
+            catch (DateTimeException none) {
+                nanos = 0;
+            }
+            return ofSeconds(seconds, nanos);
+        }
+    }
+
+    public long get(TemporalUnit unit) {
+        if (unit == ChronoUnit.SECONDS) {
+            return seconds;
+        }
+        if (unit == ChronoUnit.NANOS) {
+            return nanos;
+        }
+        throw new UnsupportedTemporalTypeException("Unsupported unit: " + unit);
+    }
+
+    public List<TemporalUnit> getUnits() {
+        return List.of(ChronoUnit.SECONDS, ChronoUnit.NANOS);
+    }
+
     /** The seconds counted toward zero. */
     private long whole() {
         return seconds < 0 && nanos > 0 ? seconds + 1 : seconds;
@@ -104,6 +165,73 @@ public final class Duration implements Comparable<Duration> {
 
     public Duration plus(Duration duration) {
         return make(Math.addExact(seconds, duration.seconds), (long) nanos + duration.nanos);
+    }
+
+    /** A count of a unit later: a day is 24 hours, and no unit above it has a length. */
+    public Duration plus(long amountToAdd, TemporalUnit unit) {
+        if (unit == ChronoUnit.DAYS) {
+            return plusDays(amountToAdd);
+        }
+        if (unit.isDurationEstimated()) {
+            throw new UnsupportedTemporalTypeException("Unit must not have an estimated duration");
+        }
+        if (amountToAdd == 0) {
+            return this;
+        }
+        if (unit == ChronoUnit.NANOS) {
+            return plusNanos(amountToAdd);
+        }
+        if (unit == ChronoUnit.MICROS) {
+            return plusSeconds(amountToAdd / 1000000L).plusNanos(amountToAdd % 1000000L * 1000L);
+        }
+        if (unit == ChronoUnit.MILLIS) {
+            return plusMillis(amountToAdd);
+        }
+        Duration length = unit.getDuration();
+        if (length.nanos == 0) {
+            return plusSeconds(Math.multiplyExact(length.seconds, amountToAdd));
+        }
+        Duration product = length.multipliedBy(amountToAdd);
+        return plusSeconds(product.seconds).plusNanos(product.nanos);
+    }
+
+    public Duration minus(long amountToSubtract, TemporalUnit unit) {
+        return amountToSubtract == Long.MIN_VALUE ? plus(Long.MAX_VALUE, unit).plus(1, unit)
+                : plus(-amountToSubtract, unit);
+    }
+
+    /** The duration with nothing below a unit, which has to divide a day. */
+    public Duration truncatedTo(TemporalUnit unit) {
+        if (unit == ChronoUnit.SECONDS && (seconds >= 0 || nanos == 0)) {
+            return make(seconds, 0);
+        }
+        if (unit == ChronoUnit.NANOS) {
+            return this;
+        }
+        Duration length = unit.getDuration();
+        if (length.seconds > 86400L) {
+            throw new UnsupportedTemporalTypeException("Unit is too large to be used for truncation");
+        }
+        long step = length.toNanos();
+        if (86400L * SECOND % step != 0) {
+            throw new UnsupportedTemporalTypeException("Unit must divide into a standard day without remainder");
+        }
+        long ofDay = seconds % 86400L * SECOND + nanos;
+        return plusNanos(ofDay / step * step - ofDay);
+    }
+
+    public Temporal addTo(Temporal temporal) {
+        if (seconds != 0) {
+            temporal = temporal.plus(seconds, ChronoUnit.SECONDS);
+        }
+        return nanos == 0 ? temporal : temporal.plus(nanos, ChronoUnit.NANOS);
+    }
+
+    public Temporal subtractFrom(Temporal temporal) {
+        if (seconds != 0) {
+            temporal = temporal.minus(seconds, ChronoUnit.SECONDS);
+        }
+        return nanos == 0 ? temporal : temporal.minus(nanos, ChronoUnit.NANOS);
     }
 
     public Duration plusDays(long daysToAdd) {

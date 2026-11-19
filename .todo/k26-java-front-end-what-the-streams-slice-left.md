@@ -78,13 +78,13 @@ taking an `Object`.
   runs of ten (`.kb/scheme-frontend.md`, "(scheme char)": `(mod (- code from) 10)`), a
   list small enough to travel, generated from a running JDK and pinned as
   `RegexUnicodeTablesTest` pins the engine's.
-- **`java.time` beyond `Duration`**: the classes a value is read from its text as
-  (`Instant`, `LocalDate` .. `Period`) are `.todo/k35` and `java.util.Date` is
-  `.todo/k37`, both on the path of YAVI's schema example; left here:
-  `ChronoUnit` (and with it `Duration.of` / `get` / `truncatedTo` / `between`),
-  `Duration.dividedBy` (a long by a long of nanoseconds needs 128 bits: `multipliedBy`
-  shows the digits-of-a-thousand-million way),
-  `CompletableFuture.orTimeout` / `completeOnTimeout`, the older `Calendar`.
+- **`Duration.dividedBy`** (a long by a long of nanoseconds needs 128 bits: `multipliedBy`
+  shows the digits-of-a-thousand-million way), `CompletableFuture.orTimeout` /
+  `completeOnTimeout`, the older `Calendar`. The rest of `java.time` came with k35
+  (2026-11-20: the classes read from their text, `ChronoUnit` and `Duration.of` / `get`
+  / `truncatedTo` / `between`; `.kb/java-frontend.md`, "java.time"); what it left is
+  `.todo/k42` (a region's rules) and `.todo/k43` (a formatter, the smaller classes);
+  `java.util.Date` is `.todo/k37`.
 - **`"ß".toUpperCase()` is `ß`**; a JDK answers `SS` (the host's upcase is one character
   to one).
 - **`java.util.regex`**: `Matcher.usePattern`, `namedGroups`; `\N{name}` (no name table

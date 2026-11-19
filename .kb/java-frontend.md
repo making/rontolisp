@@ -51,14 +51,16 @@ collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
 as the program reaches it, annotation types and type annotations, an exact method
 reference in a call's applicability: k24 (2026-11-19); what comes after is `.todo/k15`,
 `k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22` and `k26` (what k00, k11, k06, k07, k08,
-k10 and k12 left) and `.todo/k32`, `k33`, `k35` and `k37` (what stands between k24 and YAVI compiled to
+k10 and k12 left) and `.todo/k32`, `k33` and `k37` (what stands between k24 and YAVI compiled to
 wasm: `.todo/k33` holds the order); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
 `java.text.MessageFormat`: k28 (2026-11-19); `java.text.Normalizer` over the normalization
 forms the front ends share: k29 (2026-11-19); a `Class` as a value, a type variable in
 scope kept apart from the one a call finds, `Name.this` as the instance of `Name`
 itself: k30 (2026-11-20; `.todo/k39`, `k40` and `k41` are what it found beside its way);
 `java.util.UUID`: k36 (2026-11-20); `java.math` (`BigInteger`, `BigDecimal`,
-`MathContext`, `RoundingMode`): k31 (2026-11-20).
+`MathContext`, `RoundingMode`): k31 (2026-11-20); `java.time` (the dates, times and
+instants read from their texts, the fields and units, the zones of one offset, a clock):
+k35 (2026-11-20; `.todo/k42` and `k43` are what it left).
 
 ## Where it sits
 
@@ -344,7 +346,7 @@ is `.todo/artefacts/k24-java-front-end-a-program-that-uses-an-existing-library/`
   / `absent` / `withdraw`). While a dependency's DECLARATION is read, a class it names
   that cannot be found, that the subset lacks or whose own file is refused becomes a
   `JavaClass` holding the refusal, outside the table. It stands in member types, where
-  identity is enough: a method taking a `java.time.LocalDate` is one overload among the
+  identity is enough: a method taking a `java.util.Currency` is one overload among the
   others, and `String` is no subtype of it. Asking what it is made of -- its supertypes
   (`isSubclassOf`), its members (`supertypes`, `field`, `constructors`), a test against it
   (`instanceTest`) -- throws `JavaClass.Absent`, which `expression` turns into the
@@ -357,7 +359,8 @@ is `.todo/artefacts/k24-java-front-end-a-program-that-uses-an-existing-library/`
   `  reached through ..ValidatorBuilder.constraint(..)`. Rejected: dropping a member
   whose signature does not resolve (an overload taken away can change which one a call
   picks: `f(null)` beside `f(Object)`), and refusing the class (YAVI's `ValidatorBuilder`
-  names `java.time` in its `constraint` overloads, so no program would get past it).
+  named `java.time` in its `constraint` overloads before the library had it, so no
+  program would have got past it).
 - **Declared whole, lowered as reached.** A class named is parsed and its members' types
   resolved, which reads the files they name: the classic YAVI program declares 171 of 380
   files (24,858 of 183,636 lines), the schema one 327 (175,141 lines) in 1.7 s, and all 380
@@ -1153,8 +1156,9 @@ measured programs.
   adjustments, the arithmetic over 17 durations, 103 texts through `parse` with each
   refusal's message, index and cause -- prints a JDK 25's lines on the four backends
   (`.todo/artefacts/k05-java-front-end-what-the-everyday-members-and-utf-16-slice-left/Dur.java`).
-  Not there: `dividedBy`, `between`, `of` /
-  `get` of a `TemporalUnit`, `truncatedTo`; the rest of `java.time` (`.todo/k26`).
+  Not there: `dividedBy` (`.todo/k26`). `between`, `of` / `get` of a `TemporalUnit` and
+  `truncatedTo` came with the rest of `java.time` (k35, "java.time" below), which left
+  a program of a `Duration` alone as it was (155,029 B of wasm before and after).
   `Thread.sleep(Duration)` is there (a duration below zero is no sleep, zero is one an
   interrupt ends, measured); `join(Duration)` since k08 ("java.util.concurrent").
 - **`java.text.MessageFormat` (k28, 2026-11-19)** is Java source (`java.text` joined
@@ -1315,7 +1319,7 @@ leaves open is a JDK 25's answers to a grid.
   and rounding the sum 177,312; a program naming neither is byte-identical.
 - **YAVI**: `patch.sh` lost its fourth edit; `UntypedInput.convertNumber`, `decimal` and
   `typeName` are lowered as written, but the `Year` arm, which went to the first edit
-  (`java.time`, `.todo/k35`). The schema example with two edits left prints a JDK's
+  (`java.time`, gone with k35). The schema example with two edits left prints a JDK's
   lines on the four backends: wasm 1,095,209 B (1,032,990 with the conversion cut out),
   the component 1,099,574, the jar 407,992; with five inputs that run the conversion
   (a `long`, two doubles, a `BigDecimal`, a `BigInteger` given for an `Integer`)
@@ -1327,6 +1331,125 @@ leaves open is a JDK 25's answers to a grid.
 - Pins: the `standalone:` case `big-integers-and-decimals-compute-round-and-print-exactly`
   (a file of its own: a class under `Number` changes how the corpus program lowers
   `Number`); `valueOf(int)` of an enum in `an-enum-is-a-class-whose-constants-are-made-once`.
+
+## java.time (2026-11-20, k35)
+
+The classes a value is read from its text as -- `LocalDate`, `LocalTime`, `LocalDateTime`,
+`OffsetDateTime`, `ZonedDateTime`, `Instant`, `Year`, `YearMonth`, `Period` beside k05's
+`Duration` -- with `ZoneOffset`, `ZoneId`, `ZoneRules`, `Clock`, `DayOfWeek`, `Month`,
+`java.time.temporal` (the six interfaces, `ChronoField`, `ChronoUnit`, `ValueRange`) and
+the three interfaces of `java.time.chrono` are Java source, written from the API
+documentation; what it leaves open is a JDK 25's answers to a grid. `java.time.chrono`,
+`.format`, `.temporal` and `.zone` joined `LIBRARY_PACKAGES`.
+
+- **The grid** (`.todo/artefacts/k35-java-time-the-classes-a-value-is-read-from-its-text-as/Grid.java`):
+  27,197 lines -- 503 texts through the ten `parse` methods, 25 dates, 10 times, 28
+  date-times, 32 offset date-times, 30 zoned ones, 15 instants, 13 years, 12 months and
+  17 periods through their members, every pair of each compared and measured in every
+  unit, all 30 fields read and set on each class, 104 zone ids, the clocks, 800 seeded
+  days and seconds. The interpreter (12 s), the JVM (2.3 s), wasm (1.4 s, 959,021 B)
+  and the component (1.5 s) print a JDK's lines, all of them (the JDK itself 2.2 s).
+- **The calendar is arithmetic over the day counted from 0000-01-01** (`Iso`): a year
+  starts `365 y + floor((y + 3) / 4) - floor((y + 99) / 100) + floor((y + 399) / 400)`
+  days in; the year of a day is that count's inverse estimated by 400 years in 146,097
+  days and stepped at most once; a month by a table of twelve starts. Our own
+  formulation, no port: 800 seeded days agree with a JDK over the whole range. An
+  `Instant` is written through it too, since its years go a year past `LocalDate`'s.
+- **A text is read first and its fields checked after** (`IsoText`, one scanner for
+  the eight ISO forms), which is what gives a JDK's three kinds of refusal: `could not
+  be parsed at index n` where the text stops being the form, `unparsed text found at
+  index n` where it goes on past it, and `could not be parsed: <why>` with the
+  `DateTimeException` as its cause where a field has no such value. What the grid
+  decided:
+  - a year is four digits; more (to ten) need a sign, and a `+` needs more; `-0000` is
+    none. `Year.parse` alone takes any sign and one to nine digits.
+  - the seconds of a time and their fraction are optional together (`10:15:3` is
+    `10:15` and unparsed text at 5); a point may stand with no digit after it.
+  - the fields are refused in the order year, month, day, date, minute, hour, second,
+    then the offset's range.
+  - an offset is `Z` in either case or `±hh[:mm[:ss]]`; minutes or seconds of 60 are
+    not read (the text ends before them). The hours alone are an offset for an
+    `OffsetDateTime` and a `ZonedDateTime`, not for an `Instant` nor between brackets.
+    Hours of 24 to 59 are read and refused AT ONCE (`Value out of range: Hour[0-23],
+    Minute[0-59], Second[0-59]`), before a wrong month and before unparsed text; 60 and
+    above are no offset.
+  - `Instant.parse` wants its seconds, takes an offset with its minutes, reads
+    `24:00:00` as the next day's start and a second 60 after `23:59` as 59, and
+    refuses a text whose fields are wrong at index 0 with no cause.
+  - a zone in brackets is `Z`, an offset with its minutes, `UTC` / `GMT` / `UT` with
+    one, or a name; one that is none of them leaves the bracket unread, so the text is
+    refused there as unparsed. Given both, the offset places the instant and the zone
+    says how it is written (`10:15+01:00[+02:00]` is `11:15+02:00`).
+  - a text over 64 characters is cut to 64 and `...` in the message.
+  - Where a JDK lists the fields it could make no value of (`Unable to obtain Instant
+    from TemporalAccessor: {..}`), their order changes from run to run (a hash map of
+    enum constants); the library writes one order, and the corpus compares the words
+    before the brace.
+- **Every zone keeps one offset** (`ZoneId.fixed()`): an offset, `UTC` / `GMT` / `UT`
+  alone or before an offset (`ZoneRegion`, the id normalized as a JDK does:
+  `UTC+1` is `UTC+01:00`, `GMT-00:00` is `GMT`), and the 42 names of the tz database
+  that are a fixed offset by definition (`Etc/GMT+5`, `Etc/UTC`, `Zulu`; computed, no
+  table). **A region with rules is unknown** (`ZoneRulesException: Unknown time-zone
+  ID`, the bracket of a `ZonedDateTime` left unread), as a name its database lacks is
+  under a JDK. Measured before choosing (`Zones.java` of the artefacts, asked of JDK
+  25's `java.time.zone`): 604 names, 322 sets of rules, 18,001 changes of offset and
+  222 yearly rules, some 123 KB in a plain encoding -- more than a tenth of the YAVI
+  schema example, paid by every program that reads a zoned text, since
+  `ZonedDateTime.parse` has to know every name. The host's rules were not taken
+  either: wasm has no host to ask, and a zoned text would be read differently on the
+  four backends. `.todo/k42` holds the table and what would make it cost only where
+  named. So a `ZonedDateTime` has no gap and no overlap, and the members that settle
+  one answer `this`.
+- **`ZoneId.systemDefault()` is the host's offset NOW** as a `ZoneOffset`: the native
+  `ZoneId.local0` is `%local-time-offset`, the one question every backend can answer
+  (`.kb/time-environment-builtins.md`; on wasm `TZ` and the zone files, else UTC, and
+  2.3 KB for the reader). `Instant.now()` is `%unix-nano-time`. Nothing else is
+  native.
+- **The fields and the units are the API's interfaces**, so a program's own
+  `TemporalField`, unit, adjuster or amount goes through; each class answers the
+  `ChronoField` / `ChronoUnit` it has in a `switch` and hands any other to the field
+  or unit itself. `from(TemporalAccessor)` is an `instanceof` over the library's
+  classes (there is no `TemporalQuery`), which a test holds only the made classes of.
+  `Period.addTo` adds years as years where there are no months (a `Year` takes a
+  period of years), the rest as months, then the days.
+- **Read off the grid, in no documentation**: the hash codes (`LocalDate`
+  `(year & 0xFFFFF800) ^ ((year << 11) + (month << 6) + day)`, `LocalTime` its
+  nanosecond of day as a long's, `Instant` as `Duration`, `YearMonth`
+  `year ^ (month << 27)`, `Period` `years + rotl(months, 8) + rotl(days, 16)`, a
+  date-time the xor of its parts, a zoned one with its zone's rotated 3; a region its
+  id's); `compareTo` of two dates is the difference of the first field that differs;
+  `LocalDate.plusDays` past the last day names the year where the day lands within 59
+  days of December's start and the epoch day otherwise; `INSTANT_SECONDS`' range is
+  an `Instant`'s, not a long's; `Instant.until` in milliseconds and microseconds is
+  the exact difference cut toward zero; `ZoneOffset.of` reads by the text's length
+  and refuses non-digits before a missing sign (`UT` is `non numeric characters
+  found: U0T`). `ValueRange`, `ZoneRules` and the clocks hash to numbers of ours.
+- **What a program pays** (wasm): one parsing a date 141,218 B, a time 136,931, a
+  zoned date-time 178,759, `LocalDate.of(..).plusDays(1)` 106,233 (a program that
+  catches an exception 55,019, one parsing a `Duration` 155,029); `LocalDate.now()`
+  118,591. A program naming none is byte-identical (YAVI's classic example 655,716 B
+  before and after). **A class object costs with its interfaces**: of the 119,841 B the
+  schema example grew by, 69 KB are the functions of `java.time`, 14 KB the top level
+  (15 class objects: the eight classes and the seven interfaces above them) and the
+  rest dispatch arms.
+- **YAVI**: `patch.sh` lost its first edit; `UntypedInput`'s table and the `Year` arm of
+  `convertNumber` are lowered as written. The schema example with ONE edit left
+  (`java.util.Date` and `java.sql`, `.todo/k37`) prints a JDK's 23 lines on the four
+  backends: wasm 1,215,291 B (1,095,450 with the table cut), the component 1,219,661,
+  the jar 438,757, the interpreter 6.1 s. `shelf/Loan.java` beside the grid -- a schema
+  of the eight classes with the temporal constraints (`after`, `between`, `past` of a
+  fixed clock, a field's predicate), texts, values already of the type and numbers for
+  the year -- prints a JDK's 77 lines on the four: wasm 1,256,341 B.
+- Not there (`.todo/k43`): `DateTimeFormatter` and `format` / `parse` with one,
+  `MonthDay`, `OffsetTime`, `InstantSource`, `TemporalAdjusters`, `TemporalQuery` /
+  `query`, `IsoFields` / `WeekFields`, the calendars and eras, `getDisplayName`,
+  `datesUntil`, the transitions of `ZoneRules`, `ZoneId.getAvailableZoneIds`; each
+  refused by name. `Duration.dividedBy` stays `.todo/k26`'s.
+- Pins: java-spec `dates-times-and-instants-are-read-from-their-texts-and-computed-with`
+  (146 lines of the grid's kinds); a class the subset lacks is `java.util.Currency` and
+  `java.util.EventListener` in `JavaLoweringTest#aLibraryOfTheSourcePathIsLoweredAsFarAsTheProgramReaches`
+  and in the library of `a-program-uses-a-library-read-as-source-from-its-source-path`
+  (it was `java.time.LocalDate`).
 
 ## java.io (2026-11-17, j79)
 
@@ -3683,4 +3806,10 @@ none) and `#aConstructTheSubsetDoesNotHaveIsRefusedByNameAtItsPosition`
 (`Class.getInterfaces()`); the last line of
 `a-type-argument-is-found-from-the-arguments-the-target-and-the-lambdas` (a generic
 method calling itself, a creation with `<>` of the class it stands in, `Name.this` in
-an anonymous class of `Name`, two captures given for one type parameter).
+an anonymous class of `Name`, two captures given for one type parameter). k35: java-spec
+`dates-times-and-instants-are-read-from-their-texts-and-computed-with` (each class's
+texts with the three kinds of refusal, the members, every field and unit, the zone ids,
+a fixed clock, the amounts; where a JDK lists fields in an order of its run, the words
+before them); the class nobody has of `aLibraryOfTheSourcePathIsLoweredAsFarAsTheProgramReaches`
+and of `a-program-uses-a-library-read-as-source-from-its-source-path` is
+`java.util.Currency`.

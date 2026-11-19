@@ -271,6 +271,25 @@ that read back as it, where a JDK sometimes prints others: `1e23` prints
 of random bits are refused by name. `%d` of a `BigInteger` and `%f` or `%e` of a
 `BigDecimal` are an `IllegalFormatConversionException`, where a JDK writes the number.
 
+**`java.time` has the zones whose offset never changes.** A zone is an offset (`+09:00`,
+`Z`), `UTC`, `GMT` or `UT` alone or with an offset (`UTC+09:00`), or a fixed zone of the tz
+database (`Etc/GMT+5`, `Etc/UTC`, `Zulu`). A region with rules of its own, such as
+`Europe/Paris`, is unknown: `ZoneId.of` throws a `ZoneRulesException`, and
+`ZonedDateTime.parse` refuses a text that names one in its brackets.
+`ZoneId.systemDefault()` is a `ZoneOffset`, the offset the host's zone has when it is
+called. `LocalDate.now()` is the host's date; a date in another season is read at today's
+offset. A `.wasm` learns the host's zone as
+[`decode-universal-time`](../guides/clock-and-random.md) does, and answers UTC where it
+cannot.
+
+**`java.time` has no formatter.** `DateTimeFormatter`, and `format` and `parse` taking
+one, are refused by name; `parse` of a text alone and `toString` read and write the
+ISO-8601 forms. `MonthDay`, `OffsetTime`, `TemporalAdjusters`, `TemporalQuery` and `query`,
+the calendars other than ISO, `getDisplayName`, `datesUntil` and `Duration.dividedBy` are
+refused too. The message of a text whose fields make no value lists them in one order
+(`{Year=2020, MonthOfYear=13}`); a JDK's order changes from run to run. A `ValueRange`,
+a `ZoneRules` and a `Clock` have hash codes of their own.
+
 **`Normalizer` reads the Unicode data of JDK 25.** A character whose data a later JDK's
 Unicode adds or changes is normalized as JDK 25 does it. `normalize` of a text already in
 the form answers that string itself, where a JDK sometimes answers an equal copy.
@@ -539,6 +558,6 @@ Each of these is an error naming the construct and its position.
   `Date`. Thread groups.
 - Any class or member of the library not listed in the [overview](index.md):
   `TreeMap`, `Scanner`, files
-  (`File`, `FileReader`, `java.nio.file`), `java.time` but `Duration`,
+  (`File`, `FileReader`, `java.nio.file`), `java.util.Date` and `Calendar`,
   reflection. Of `java.net`, everything but `URI`, the addresses of a server and the
   [HTTP client](#the-http-client): `URL`, sockets, `HttpURLConnection`.

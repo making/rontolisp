@@ -13,16 +13,10 @@ if [ -d "$here"/shim ]; then
     cp -r "$here"/shim/. "$out"/
 fi
 # The classic example needs none (2026-11-19). The schema example's five (2026-11-20),
-# two since k36, k38 and k31 (java.util.UUID, StreamSupport and java.math are in the
-# library; the numbers keep their places), all in what reads an input of unknown type;
-# GNU sed.
+# one since k36, k38, k31 and k35 (java.util.UUID, StreamSupport, java.math and
+# java.time are in the library; the number keeps its place), in what reads an input of
+# unknown type; GNU sed.
 untyped="$out"/am/ik/yavi/core/UntypedInput.java
-# 1. java.time: the classes read from their text, but Duration, and a number read
-# as a Year
-sed -i -e '/Map\.entry(LocalDate\.class/,/Map\.entry(Year\.class/d' \
-    -e 's/Map\.entry(Duration\.class, Duration::parse), Map\.entry(Period\.class, Period::parse),/Map.entry(Duration.class, Duration::parse),/' \
-    -e '/^\t\t\tif (type == Year\.class) {$/,/^\t\t\t}$/d' \
-    -e 's/catch (ArithmeticException | DateTimeException e)/catch (ArithmeticException e)/' "$untyped"
 # 3. java.util.Date and java.sql
 sed -i -e '/value instanceof java\.util\.Date date/,/^\t\t}$/d' \
     -e '/private static final class SqlTypes/,/^\t}$/d' "$untyped"

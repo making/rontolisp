@@ -1371,22 +1371,22 @@ class JavaLoweringTest {
 		// classes nobody has.
 		Map<String, String> library = Map.of("lib/Lists.java", """
 				package lib;
-				import java.time.LocalDate;
+				import java.util.Currency;
 				import org.marks.Checked;
 				public class Lists {
 				    @Checked public static int twice(int x) { return 2 * x; }
 				    public static int unused(int x) { return Hidden.three() * x; }
-				    public static LocalDate today() {
-				        return LocalDate.now();
+				    public static Currency today() {
+				        return Currency.getInstance("JPY");
 				    }
-				    public static LocalDate none() { return null; }
-				    public static String describe(LocalDate day, Clocked clocked) { return "a day"; }
+				    public static Currency none() { return null; }
+				    public static String describe(Currency money, Clocked clocked) { return "a day"; }
 				    public static int deep() { return today() == null ? 0 : 1; }
 				}
 				""", "lib/Hidden.java", "package lib; class Hidden { static int three() { return 3; } }",
 				"lib/Clocked.java", """
 						package lib;
-						public class Clocked implements java.time.temporal.Temporal { }
+						public class Clocked implements java.util.EventListener { }
 						""", "lib/Mark.java",
 				"package lib; public @interface Mark { String value() default \"\"; int[] at() default { 1 }; }");
 		JavaFiles files = new JavaFiles() {
@@ -1419,16 +1419,16 @@ class JavaLoweringTest {
 				// a body that is reached refuses what it names, where it names it, and
 				// says how the program came there
 				{ "IO.println(lib.Lists.deep());",
-						"lib.jar!/lib/Lists.java:8:16: the class java.time.LocalDate is not supported by the"
+						"lib.jar!/lib/Lists.java:8:16: the class java.util.Currency is not supported by the"
 								+ " experimental Java subset yet\n  reached through lib.Lists.today()"
 								+ "\n  reached through lib.Lists.deep()" },
 				// what a class nobody has is made of is refused where the program asks
-				{ "IO.println(lib.Lists.none().getYear());",
-						"app/Main.java:2:37: the class java.time.LocalDate is not supported by the experimental"
+				{ "IO.println(lib.Lists.none().getSymbol());",
+						"app/Main.java:2:37: the class java.util.Currency is not supported by the experimental"
 								+ " Java subset yet" },
 				// a class under one nobody has is one nobody has
 				{ "new lib.Clocked();",
-						"lib.jar!/lib/Clocked.java:2:33: the class java.time.temporal.Temporal is not supported by"
+						"lib.jar!/lib/Clocked.java:2:33: the class java.util.EventListener is not supported by"
 								+ " the experimental Java subset yet" },
 				// the library's classes are checked for access as the program's are
 				{ "lib.Hidden.three();",

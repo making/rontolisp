@@ -269,6 +269,24 @@ JDK では前後 2 つのパターンが混ざった状態が残ります。
 コンストラクタは、名前を示して拒否されます。`BigInteger` に対する `%d`、`BigDecimal` に対する
 `%f` と `%e` は `IllegalFormatConversionException` になります。JDK はその数値を書きます。
 
+**`java.time` のゾーンは、オフセットが変わらないものだけです。** 使えるゾーンは、オフセット
+（`+09:00`、`Z`）、`UTC`、`GMT`、`UT` とそれにオフセットを付けたもの（`UTC+09:00`）、
+tz データベースの固定ゾーン（`Etc/GMT+5`、`Etc/UTC`、`Zulu`）です。`Europe/Paris` のように
+独自の規則を持つ地域は未知の名前として扱います。`ZoneId.of` は `ZoneRulesException` を投げ、
+`ZonedDateTime.parse` は角括弧内にその名前がある文字列を拒否します。
+`ZoneId.systemDefault()` は `ZoneOffset` で、呼び出した時点でホストのゾーンが持つオフセット
+です。`LocalDate.now()` はホストの日付になります。夏時間の有無が現在と異なる時期の日時も、
+現在のオフセットで読みます。`.wasm` がホストのゾーンを知る方法は
+[`decode-universal-time`](../guides/clock-and-random.md) と同じで、分からなければ UTC です。
+
+**`java.time` にフォーマッターはありません。** `DateTimeFormatter` と、それを取る `format`、
+`parse` は、名前を示して拒否されます。文字列だけを取る `parse` と `toString` は ISO-8601 の
+形式を読み書きします。`MonthDay`、`OffsetTime`、`TemporalAdjusters`、`TemporalQuery` と
+`query`、ISO 以外の暦、`getDisplayName`、`datesUntil`、`Duration.dividedBy` も拒否されます。
+フィールドから値を作れなかった文字列のメッセージは、フィールドを決まった順で並べます
+（`{Year=2020, MonthOfYear=13}`）。JDK では実行のたびに順序が変わります。`ValueRange`、
+`ZoneRules`、`Clock` のハッシュコードは JDK と異なります。
+
 **`Normalizer` は JDK 25 の Unicode データを使います。** それより新しい JDK の Unicode で
 追加または変更された文字も、JDK 25 と同じ結果になります。すでにその形式になっている文字列を
 `normalize` に渡すと、その文字列自体を返します。JDK は内容の等しい別の文字列を返すことが
@@ -562,7 +580,7 @@ WebSocket です。`version(..)` で指定した値は保持され、問い合�
   拒否されます。
 - [概要](index.md)の表にないライブラリのクラスとメンバー。
   `TreeMap`、`Scanner`、ファイル（`File`、`FileReader`、
-  `java.nio.file`）、`Duration` 以外の `java.time`、
+  `java.nio.file`）、`java.util.Date` と `Calendar`、
   リフレクションなどです。
   `java.net` では、`URI`、サーバーのアドレス、[HTTP クライアント](#the-http-client)以外の
   すべてが該当します。
