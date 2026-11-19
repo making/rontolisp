@@ -34,7 +34,7 @@ A Maven project's `src/main/java` (a `main` class and the classes it reaches) bu
   names from a dependency is refused by name, as the CLI refuses it. Say so in the doc.
 - Front-end refusals and warnings reach Maven as a `MojoFailureException` with file and
   position (`cli/CompileDiagnostics`, `warningsAsErrors`).
-- An HTTP server program (`.todo/k04`) built with `--component` should be runnable with
+- An HTTP server program (`.kb/java-frontend.md`, "com.sun.net.httpserver") built with `--component` should be runnable with
   `wasmtime serve` straight from `target/`.
 
 ## Done when
