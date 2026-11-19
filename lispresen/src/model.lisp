@@ -17,6 +17,7 @@
   author
   date
   theme
+  font
   aspect
   runtime
   page-numbers
@@ -1479,10 +1480,23 @@ item or block takes that one's advance."
            (report :error ":lang of deck must be a language tag of letters, digits and -")
            nil))))
 
+(defun parse-font-option (opts)
+  "The :font of the deck header: a CSS font-family list, or nil for the built-in stack.
+It is written into a <style> element, so the characters that end a declaration or the
+element there are refused."
+  (let ((v (raw-string-option opts "FONT" "deck")))
+    (cond ((null v) nil)
+          ((and (string/= (string-trim '(#\Space #\Tab #\Newline) v) "")
+                (every (lambda (c) (not (find c "{};<"))) v))
+           v)
+          (t
+           (report :error ":font of deck must be a font-family list without { } ; <")
+           nil))))
+
 (defun parse-deck-header (form)
   (multiple-value-bind (opts rest) (split-options (cdr form)
                                                   '("TITLE" "AUTHOR" "DATE"
-                                                    "THEME" "ASPECT" "RUNTIME"
+                                                    "THEME" "ASPECT" "RUNTIME" "FONT"
                                                     "PAGE-NUMBERS" "FOOTER" "CALLOUTS"
                                                     "KICKER" "AGENDA" "LOGO"
                                                     "URL" "PROGRESS" "PAGE-URL"
@@ -1494,6 +1508,7 @@ item or block takes that one's advance."
                :date (string-option opts "DATE" "deck")
                :lang (parse-lang-option opts)
                :theme (opt opts "THEME")
+               :font (parse-font-option opts)
                :aspect (opt opts "ASPECT")
                :runtime (parse-runtime (opt opts "RUNTIME"))
                :page-numbers (opt opts "PAGE-NUMBERS")
