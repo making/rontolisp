@@ -405,8 +405,10 @@ of `getLocalAddress()` is 80.
 thread, and `main` may wait for ever after `start()`. A request is taken where no thread
 can go on, so requests are answered one at a time unless a handler waits, and a thread that
 never waits keeps every request from being answered. Under `wasmtime serve` a handler
-waiting for what another request brings is refused as threads that all wait: requests
-arriving at once go to instances of their own.
+waiting for what another request brings never gets it: an instance answers one request at
+a time, and a request the host hands an instance that waits is answered after the one it
+waits in. With no thread left that can go on, the program is refused as threads that all
+wait.
 
 **A handler runs on the executor's thread, and the exchange ends with it.** With no
 executor the thread that takes the requests runs the handlers one at a time, named

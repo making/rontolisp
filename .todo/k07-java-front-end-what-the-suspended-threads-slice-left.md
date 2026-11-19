@@ -66,6 +66,19 @@ left, the first two measured:
   futures together: a `--native` fetch's future is deferred (no way to ask it without
   waiting: the runner has `rlhttp.head` alone), the component settles a host future only
   while something blocks on its scheduler, and its `%future-race` is `sockets.lisp`'s.
+- **A served request that waits holds its instance (moved here by k11, 2026-11-19).**
+  Under `wasmtime serve` a request is a thread of the scheduler's, and the scheduler's
+  loop for it (`%java-thread-run`, `.kb/java-frontend.md`, "com.sun.net.httpserver")
+  runs inside the host's call of `handle`: a sleep passes in the host with the call
+  blocked, and a wait that only another request ends is `%java-stuck`, or for ever
+  while a timed thread keeps waking. Measured: a request the host hands an instance
+  whose handler sleeps 2 s is entered only once that one is answered. A JDK answers
+  both at once. What it takes is the item above: the scheduler waiting on the host's
+  futures -- its timed threads as timers of the host, `handle` returning with its task
+  suspended and the callback driver giving the turns -- and a delayed response that
+  ends when the request's thread does, not where the delayed function returns
+  (`%http-normalize-streaming`). A `--native` module already takes the next request
+  where no thread can go on (`%http-serve-step`), nested in the waiting one's call.
 - **`getState()` never answers `BLOCKED`**: on wasm a thread waiting to enter a monitor is
   now known (the monitor's seventh slot); the host variant still cannot tell.
 - **The thread cases of `java-spec.yaml` flake when the machine is loaded** (seen

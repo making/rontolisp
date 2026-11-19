@@ -39,10 +39,10 @@ scheduler, which serves where no thread can go on, so `main` and a handler may w
   backends; the raw tuple still has them apart, but the runner joins them before the
   module sees them (`serve.rs` `head_json`, the reactor envelope's `headers` object).
 - **Under `wasmtime serve` the program runs only while a request is answered.** A
-  thread asleep, a `Timer`, a scheduled task go on when the next request is; a handler
-  waiting for what another request brings is `%java-stuck` (requests at once go to
-  instances of their own, measured). What would change it is an instance kept running
-  between requests, which is the host's to give.
+  thread asleep, a `Timer`, a scheduled task go on when the next request is: an
+  instance kept running between requests is the host's to give. A request that waits
+  holding its instance is `.todo/k07`'s (the scheduler waiting on the host's futures
+  comes first).
 - **What a served program costs on wasm.** Every one is lowered resumable and carries
   the scheduler, the monitors and the resume bodies: the sizes are in
   `.kb/java-frontend.md` ("Sizes", k11). Not measured: lowering resumable only a program

@@ -1238,10 +1238,14 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   which is also the task whose `task.return` and `stream.write` they then call.
 - **Measured, the instance and requests at once** (2026-11-19, wasmtime 49.0.0): six
   requests at once to a handler sleeping 500 ms went to six instances (each answered
-  `entered 1`), a seventh after them to one of those (`entered 2`). An instance is not
-  entered again while a call of it blocks, so nothing of the run time's (the carrier
-  variable) has to be kept across a blocking call, and a handler waiting for what another
-  request brings waits for ever: `%java-stuck`.
+  `entered 1`), a seventh after them to one of those (`entered 2`); a request sent 0.5 s
+  after one whose handler sleeps 2 s was answered after 1.5 s -- the host handed it to
+  the sleeping instance, which was not entered until its request was answered. So an
+  instance is never entered while a call of it blocks: nothing of the run time's (the
+  carrier variable) has to be kept across a blocking call, a waiting handler holds
+  back what the host queued behind it, and one waiting for what another request brings
+  never gets it -- `%java-stuck`, or for ever while a timed thread of the program keeps
+  waking (a scheduled pool ticking: every request to that instance then waits too).
 - **Measured, `wasmtime serve` 49.0.0**: an instance answers up to 128 requests, 16 at
   once, and is dropped after 1 s idle (`--max-instance-reuse-count`,
   `--max-instance-concurrent-reuse-count`, `--idle-instance-timeout`); a counter in a
