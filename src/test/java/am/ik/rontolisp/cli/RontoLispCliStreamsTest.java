@@ -831,6 +831,12 @@ class RontoLispCliStreamsTest {
 		// --source-language reads any other source as Java: here a compact source file
 		assertThat(runReporting("-e", "void main() { IO.println(1 + 2); }", "--source-language", "java")[1])
 			.isEqualTo("3\n");
+		// a refusal the library can only make where the program runs, by name: a format
+		// type of a MessageFormat's pattern
+		assertThat(runReporting("-e", "void main() { new java.text.MessageFormat(\"{0, Number,#}\"); }",
+				"--source-language", "java")[2])
+			.contains("UnsupportedOperationException: the format type Number of MessageFormat is not supported by the"
+					+ " experimental Java subset yet");
 		// System.exit ends the program with its status, after what it printed
 		assertThat(runReporting("-e", "void main() { IO.println(\"out\"); System.exit(3); IO.println(\"no\"); }",
 				"--source-language", "java"))

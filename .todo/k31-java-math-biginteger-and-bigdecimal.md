@@ -20,3 +20,6 @@ ahead of them for a program that validates money.
   scope" of its first target: this item is where they are taken up.
 - The numbers YAVI compares them with (`ExactNumericConstraintBase`) are the members to
   write first.
+- `MessageFormat` (k28) writes a `Number` it does not know by its `doubleValue`; a JDK
+  writes a `BigInteger` and a `BigDecimal` by their own digits (YAVI's messages print the
+  bound of a constraint), so `MessageFormat.number` learns them here, from a probe.

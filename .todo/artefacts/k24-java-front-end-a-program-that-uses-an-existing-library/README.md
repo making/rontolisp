@@ -34,13 +34,14 @@ The refusals reached, in the order met, and what was done with each:
 | 6 | `the class java.io.Serializable` | `fn/Validation` | fixed here (library source) |
 | 7 | `no suitable constructor found for String(int[],int,int)` | `IdeographicVariationSequence` | fixed here |
 | 8 | `incompatible types: Object cannot be converted to Collection` (the capture of `CollectionValidator<T, ?, ?>` lost the bound of `N extends Collection<E>`) | `Validator.validate` | fixed here |
-| 9 | `java.text.MessageFormat` | `SimpleMessageFormatter` | `shim/` -- `.todo/k28` |
+| 9 | `java.text.MessageFormat` | `SimpleMessageFormatter` | fixed by k28 (library source) |
 
 With the three shims the program lowers and runs on the interpreter, the JVM, wasm and the
 component, and prints the JDK's lines but for their order, which is the shim's (`HashMap`
 where the library keeps insertion order). Since k27 (2026-11-19) two shims are left
 (`MessageFormat`, `Normalizer`) and the four print the JDK's lines in its order: wasm
-590,666 B, the component 594,785 B, the jar 232,947 B. The k24 numbers:
+590,666 B, the component 594,785 B, the jar 232,947 B. Since k28 (2026-11-19) one is left
+(`Normalizer`): wasm 616,785 B, the component 620,879 B, the jar 240,951 B. The k24 numbers:
 
 - 171 of the 380 files read and declared (24,858 lines), 713 top-level forms.
 - `-o book.wasm`: 7.9 s wall (JVM start included), 575,271 B; `--component` 579,253 B;

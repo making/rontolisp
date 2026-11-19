@@ -258,6 +258,13 @@ read before the region; here it is the region's start.
 error naming it. The only locales are the root and the English ones, which format as
 `String.format` without a locale does; the default locale is `Locale.US`.
 
+**A `MessageFormat` has no format types.** A pattern naming one (`{0,number}`, `{0,date}`,
+`{0,choice,...}`) is refused by name when it is read, with an
+`UnsupportedOperationException`. A `Double` of 2^63 or more prints the shortest digits
+that read back as it, where a JDK sometimes prints others: `1e23` prints
+`100,000,000,000,000,000,000,000`, a JDK `99,999,999,999,999,990,000,000`. A pattern
+`applyPattern` refuses leaves the format as it was; a JDK's keeps a mix of the two.
+
 **Two older classes are the newer ones.** A `StringBuffer` is a `StringBuilder` and
 `getClass().getName()` says so; a `Vector` is an `ArrayList` to `instanceof`.
 

@@ -24,6 +24,7 @@ imports: |
   import java.nio.charset.Charset;
   import java.nio.charset.StandardCharsets;
   import java.nio.charset.UnsupportedCharsetException;
+  import java.text.MessageFormat;
   import java.time.Duration;
   import java.time.format.DateTimeParseException;
   import java.util.AbstractList;
@@ -4785,6 +4786,156 @@ cases:
       pop NoSuchElementException null
       [zero, half, one] half zero [half, one]
       window IndexOutOfBoundsException Index: 2
+  # java.text.MessageFormat: {n} and quoting, what toPattern writes back, the refusals of
+  # a pattern, and an argument with no format type -- a number grouped by three, a double
+  # rounded half to even at three digits, a tie decided by its own value, a whole number
+  # from 2^53 to 2^63 with its last digits rounded away. A format type is refused by name
+  # where the pattern is read (RontoLispCliStreamsTest), so no case names one.
+  - name: a-message-format-puts-its-arguments-in-a-pattern
+    main: Messages
+    source: |
+      class MessagesOdd extends Number {
+          final double v;
+
+          MessagesOdd(double v) {
+              this.v = v;
+          }
+
+          public int intValue() {
+              return (int) v;
+          }
+
+          public long longValue() {
+              return 0;
+          }
+
+          public float floatValue() {
+              return (float) v;
+          }
+
+          public double doubleValue() {
+              return v;
+          }
+      }
+
+      class Messages {
+          static void read(String pattern) {
+              try {
+                  MessageFormat f = new MessageFormat(pattern, Locale.US);
+                  System.out.println(pattern + " -> " + f.toPattern() + " -> " + f.format(new Object[] {"A", 1000, null}));
+              } catch (IllegalArgumentException e) {
+                  System.out.println(pattern + " " + e.getMessage());
+              }
+          }
+
+          public static void main(String[] args) {
+              for (String p : new String[] {"it''s {0}", "'it''s' {0}", "'{0}' {0} ''{0}''", "a'b{0}c'd", "'{x{'", "x'{}'y",
+                      "'{''x'", "'''", "{01}{+1}{-0}", "{0,}{1, ,x}{2,,}", "x{0}'{1}", "'{0", "{0}}}", "}}{0}{3}", "{9999}",
+                      "{", "{0", "{'}", "{0,number,'}", "{ 0}", "{a}", "{-1}", "{10000}", "{2147483648}", "{0,foo}",
+                      "{0, foo }", "{0,a{,}b}", "{0,'a,b'}", "{x,foo}"}) {
+                  read(p);
+              }
+              MessageFormat one = new MessageFormat("{0}|", Locale.US);
+              StringBuilder line = new StringBuilder();
+              Object[] values = {0, -1, 999, 1000, -1234567, Integer.MIN_VALUE, Long.MAX_VALUE, Long.MIN_VALUE, (short) -12345,
+                  (byte) -128, new java.util.concurrent.atomic.AtomicInteger(1234),
+                  new java.util.concurrent.atomic.AtomicLong(-98765), 0.0, -0.0, 1.5, 0.0005, 0.0015, 0.0025, 1.0005, 1.0015,
+                  2.0025, 0.0625, -0.0625, 999.9995, 1234.5678, -0.0001, -0.0006, 1e-300, Double.NaN,
+                  Double.NEGATIVE_INFINITY, 1e7, 9.007199254740993E15, 1e16, 9.97886633299938E17, 2.0385462104644035E18,
+                  8.331811185248399E18, 1e30, 0.1f, Float.MAX_VALUE, new MessagesOdd(1234.5678), 'c', true, "text", null,
+                  List.of(1000, 2)};
+              for (Object v : values) {
+                  line.append(one.format(new Object[] {v}));
+              }
+              System.out.println(line);
+              // ties, which the double's own value decides, and magnitudes up to 2^63
+              Random r = new Random(28);
+              line.setLength(0);
+              for (int i = 0; i < 96; i++) {
+                  double x = switch (i % 3) {
+                      case 0 -> r.nextInt(2000000) / 2000.0;
+                      case 1 -> -r.nextInt(200000000) / 20000.0;
+                      default -> r.nextDouble() * Double.parseDouble("1e" + (r.nextInt(25) - 6));
+                  };
+                  line.append(one.format(new Object[] {x}));
+                  if (i % 12 == 11) {
+                      System.out.println(line);
+                      line.setLength(0);
+                  }
+              }
+              System.out.println(MessageFormat.format("{0} and {1} and {2}", 1000, "b") + " "
+                      + MessageFormat.format("{0}{1}", new Object[] {1, 2}) + " " + MessageFormat.format("{0}", (Object[]) null));
+              MessageFormat f = new MessageFormat("a {0}");
+              System.out.println(f.getLocale() + " " + f.format(new Object[] {12345}) + " " + f.format(new Object[0]) + " "
+                      + f.format((Object[]) null));
+              f.applyPattern("b ''{1}'' {0}");
+              Object both = new Object[] {1, 2};
+              System.out.println(f.toPattern() + " " + f.format(both));
+              f.setLocale(null);
+              System.out.println(f.getLocale() + " " + f.format(new Object[] {"x", "y"}));
+              try {
+                  f.format(new Object[] {1, 2});
+              } catch (NullPointerException e) {
+                  System.out.println("a number with no locale");
+              }
+              try {
+                  f.format("x");
+              } catch (ClassCastException e) {
+                  System.out.println("not an array");
+              }
+              try {
+                  new MessageFormat(null);
+              } catch (NullPointerException e) {
+                  System.out.println("no pattern");
+              }
+          }
+      }
+    expected: |
+      it''s {0} -> it''s {0} -> it's A
+      'it''s' {0} -> it''s {0} -> it's A
+      '{0}' {0} ''{0}'' -> '{'0} {0} ''{0}'' -> {0} A 'A'
+      a'b{0}c'd -> ab'{'0}cd -> ab{0}cd
+      '{x{' -> '{'x'{' -> {x{
+      x'{}'y -> x'{'}y -> x{}y
+      '{''x' -> '{'''x -> {'x
+      ''' -> '' -> '
+      {01}{+1}{-0} -> {1}{1}{0} -> 1,0001,000A
+      {0,}{1, ,x}{2,,} -> {0}{1}{2} -> A1,000null
+      x{0}'{1} -> x{0}'{'1} -> xA{1}
+      '{0 -> '{'0 -> {0
+      {0}}} -> {0}}} -> A}}
+      }}{0}{3} -> }}{0}{3} -> }}A{3}
+      {9999} -> {9999} -> {9999}
+      { Unmatched braces in the pattern.
+      {0 Unmatched braces in the pattern.
+      {'} Unmatched braces in the pattern.
+      {0,number,'} Unmatched braces in the pattern.
+      { 0} can't parse argument number:  0
+      {a} can't parse argument number: a
+      {-1} negative argument number: -1
+      {10000} 10000 exceeds the ArgumentIndex implementation limit
+      {2147483648} can't parse argument number: 2147483648
+      {0,foo} unknown format type: foo
+      {0, foo } unknown format type: foo 
+      {0,a{,}b} unknown format type: a{
+      {0,'a,b'} unknown format type: 'a,b'
+      {x,foo} can't parse argument number: x
+      0|-1|999|1,000|-1,234,567|-2,147,483,648|9,223,372,036,854,775,807|-9,223,372,036,854,775,808|-12,345|-128|1,234|-98,765|0|-0|1.5|0.001|0.002|0.003|1|1.002|2.002|0.062|-0.062|1,000|1,234.568|-0|-0.001|0|NaN|-∞|10,000,000|9,007,199,254,740,992|10,000,000,000,000,000|997,886,633,299,938,050|2,038,546,210,464,403,460|8,331,811,185,248,399,400|1,000,000,000,000,000,000,000,000,000,000|0.1|340,282,346,638,528,860,000,000,000,000,000,000,000|1,234.568|c|true|text|null|[1000, 2]|
+      255.429|-1,101.022|562,358.832|831|-5,238.554|949.564|937.731|-108.475|0.071|265.994|-5,190.403|4,716,072,821.307|
+      38.93|-7,584.703|254,413.593|540.584|-9,691.181|0.001|881.13|-1,682.74|88.288|55.393|-8,107.993|5,787,452.358|
+      639.922|-8,751.579|215.253|266.219|-1,548.992|756,499,277,212,433,150|549.923|-5,868.869|0|940.953|-7,808.653|595,657,793.189|
+      589.668|-3,733.064|3,501,868,923,368,665|232.812|-1,352.709|602,569,750,266,899.5|1.101|-9,623.571|9,266.852|301.36|-9,757.502|42,637,424,224.134|
+      995.131|-2,531.584|0.001|321.714|-645.122|7,183,350,557,943,523|500.721|-1,097.124|10,634.884|62.516|-5,784.685|736.487|
+      411.096|-6,663.996|4,623,198,269.639|331.459|-5,213.551|9.545|980.925|-3,872.312|5,379,532,624,635.644|264.314|-5,530.229|0.001|
+      683.931|-1,779.67|3.372|25.717|-3,860.603|0.369|432.166|-7,336.587|0.153|319.937|-2,181.207|0.69|
+      218.22|-4,859.548|1,684,792,241,227,682.8|369.904|-2,941.831|0.518|591.447|-8,502.481|79,338,238,376,305,472|590.402|-7,836.194|72.764|
+      1,000 and b and {2} 12 {0}
+      en_US a 12,345 a {0} a {0}
+      b ''{1}'' {0} b '2' 1
+      null b 'y' x
+      a number with no locale
+      not an array
+      no pattern
   # ArrayDeque, Optional, Objects, Collections, Arrays over each array type, Vector,
   # Stack, Enumeration, StringBuffer and Hashtable, which walks its keys in its own
   # order; Random gives the specified sequence, so a seeded shuffle is the JDK's (one

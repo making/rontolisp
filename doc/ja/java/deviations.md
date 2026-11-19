@@ -256,6 +256,13 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 示すエラーになります。ロケールはルートと英語のものだけで、どれもロケールなしの
 `String.format` と同じ書式になります。デフォルトのロケールは `Locale.US` です。
 
+**`MessageFormat` には書式型がありません。** 書式型を指定したパターン（`{0,number}`、
+`{0,date}`、`{0,choice,...}`）は、読んだ時点で名前を示す `UnsupportedOperationException`
+になります。2^63 以上の `Double` は、読み戻すと同じ値になる最短の桁で書きます。JDK は
+別の桁を書くことがあり、`1e23` はここでは `100,000,000,000,000,000,000,000`、JDK では
+`99,999,999,999,999,990,000,000` です。`applyPattern` が拒否したパターンは書式を変えません。
+JDK では前後 2 つのパターンが混ざった状態が残ります。
+
 **古い 2 つのクラスは新しいクラスと同じものです。** `StringBuffer` は `StringBuilder` であり、
 `getClass().getName()` も `StringBuilder` の名前を返します。`Vector` は `instanceof` で
 `ArrayList` と判定されます。

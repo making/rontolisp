@@ -52,7 +52,8 @@ as the program reaches it, annotation types and type annotations, an exact metho
 reference in a call's applicability: k24 (2026-11-19); what comes after is `.todo/k15`,
 `k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22` and `k26` (what k00, k11, k06, k07, k08,
 k10 and k12 left) and `.todo/k28` to `k33` (what stands between k24 and YAVI compiled to
-wasm); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19).
+wasm); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
+`java.text.MessageFormat`: k28 (2026-11-19).
 
 ## Where it sits
 
@@ -1122,6 +1123,42 @@ measured programs.
   `get` of a `TemporalUnit`, `truncatedTo`; the rest of `java.time` (`.todo/k26`).
   `Thread.sleep(Duration)` is there (a duration below zero is no sleep, zero is one an
   interrupt ends, measured); `join(Duration)` since k08 ("java.util.concurrent").
+- **`java.text.MessageFormat` (k28, 2026-11-19)** is Java source (`java.text` joined
+  `LIBRARY_PACKAGES`), with no `Format` above it: the pattern's text pieces and argument
+  indexes, an argument with no format type only. Learned from a JDK 25 grid of 683
+  lines (`.todo/artefacts/k28-java-text-messageformat/Grid.java`: 81 patterns, 85
+  values, 4,000 seeded doubles; the four backends print it but for the refused types
+  and `1e23` / `2e23`) and 87 more patterns asked of the JDK alone:
+  `''` is a quote everywhere; an argument's index, type and style are split at the first
+  two commas no quote holds, a brace nests, a space opening the type is dropped; the
+  index is `Integer.parseInt` of the text as written (`{+1}`, `{-0}`, `{01}`), refused
+  as `can't parse argument number: `, `negative argument number: ` or `N exceeds the
+  ArgumentIndex implementation limit` (10,000); a type is `trim`med and compared
+  ignoring case -- a JDK's (`number`, `date`, `time`, `choice`, `list`, `dtf_date` ..,
+  the 15 `DateTimeFormatter` constants) is an `UnsupportedOperationException` by name
+  when the pattern is read, any other `unknown format type: ` with the text from its
+  first non-space; `toPattern` quotes each run of `{` in one quote and doubles a quote.
+  An index past the arguments (or a null array) prints `{n}`. A number with no type
+  is what a JDK's English `NumberFormat` writes: an `Integer`, `Long`, `Short`, `Byte`
+  or atomic its long grouped by three; any other `Number` its `doubleValue` rounded
+  half to even at three digits after the point, read from `Double.toString`'s shortest
+  digits, a tie in them decided by the double's exact value (`m * 625` against the
+  digits `<< (j - 4)`, a tie having exactly four decimals); from 2^53 to 2^63 a JDK
+  prints the whole number's own digits with the last 0 (to 2^58), 1 (to 2^61) or 2
+  rounded away (a probe of 20,000 values per exponent, no exception); `NaN`, `\u221E`;
+  `-0` for a negative that rounds to zero; a null locale throws only for a number.
+  Measured against a JDK's `NumberFormat`: the rule is exact below 2^63 (200,000
+  values); at 2^63 and above a JDK's digits come from an older algorithm and differ
+  from the shortest in 1 of 100,000 random doubles, 6 of 2,602 `d*10^p` (`1e23`) and 173
+  of 7,671 `d*2^p` (`deviations.md`). A refused `applyPattern` keeps the old pattern (a
+  JDK's keeps a mix). Cost: a program formatting one message is 154,047 -> 175,771 B of
+  wasm against `String.format`, 11 KB of it the double path (the long arithmetic, no
+  one piece above 400 B; a digit string with `insert` was 5.9 KB more). YAVI's classic
+  example with `Normalizer` the one shim left prints the JDK's lines on the four
+  backends: wasm 616,785 B, the component 620,879 B, the jar 240,951 B. Pins: java-spec
+  `a-message-format-puts-its-arguments-in-a-pattern`;
+  `RontoLispCliStreamsTest#aJavaFileRunsCompilesAndIsRefusedWhereItCannot` (a format
+  type). `BigInteger` / `BigDecimal` arguments wait for `.todo/k31`.
 - **The members j98 left that a line of Java answers (k05)**: `Math.divideExact` /
   `floorDivExact` / `ceilDivExact`, `String.codePointCount` / `offsetByCodePoints` (a
   string's elements are code points, so a range holds as many as it is long) /
