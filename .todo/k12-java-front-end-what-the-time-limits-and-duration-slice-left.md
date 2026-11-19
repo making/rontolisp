@@ -53,7 +53,7 @@ case's `main` may declare no checked exception.
 - **`java.time` beyond `Duration`**: `Instant`, `LocalDate` / `LocalDateTime`,
   `ChronoUnit` (and with it `Duration.of` / `get` / `truncatedTo` / `between`),
   `Duration.dividedBy` (a long by a long of nanoseconds needs 128 bits: `multipliedBy`
-  shows the digits-of-a-thousand-million way), `Thread.join(Duration)`,
+  shows the digits-of-a-thousand-million way),
   `CompletableFuture.orTimeout` / `completeOnTimeout`, the older `Date` / `Calendar`.
 - **`"ß".toUpperCase()` is `ß`**; a JDK answers `SS` (the host's upcase is one character
   to one).
@@ -133,4 +133,4 @@ The rest of `Formatter`, `LinkedList`, `LinkedHashMap` / `LinkedHashSet`,
 `TreeMap` / `TreeSet`, `PriorityQueue`, `EnumMap` / `EnumSet`, `Scanner`,
 `StringTokenizer`, `StringJoiner`, `BitSet`, files, `java.text`,
 `BigInteger` / `BigDecimal`, `java.nio` buffers, `Class` beyond what is above,
-reflection, weak references, `Thread` and the concurrent classes (`.todo/k08`).
+reflection, weak references, `Thread` and the concurrent classes (`.todo/k21`).
