@@ -24,7 +24,8 @@ taking an `Object`.
 
 ## Inside the first target, not done
 
-- **`TreeMap` / `TreeSet` and `LinkedHashMap` / `LinkedHashSet`**: moved up from "after
+- **`TreeMap` / `TreeSet`** (`LinkedHashMap` / `LinkedHashSet` are `.todo/k27` since k24:
+  YAVI's first gap): moved up from "after
   the first target" by the streams -- `groupingBy(f, TreeMap::new, counting())` and
   `toMap(k, v, merge, LinkedHashMap::new)` are how a program asks for a map in an
   order, and `sorted()` over a map's entries is the only way without them. The
@@ -56,7 +57,8 @@ taking an `Object`.
   members at once; members declared when first looked for would read only what a
   program names. k12 made the one visible effect go away (an intrinsic class counts in
   a dispatcher only where `held`), not the reading.
-- **A `Class` as a value**: a field, an argument, `isInstance`, `cast`, `getSuperclass`,
+- **A `Class` as a value** is `.todo/k30` since k24 (what stops YAVI's schema example).
+  What was known here: a field, an argument, `isInstance`, `cast`, `getSuperclass`,
   `Enum.valueOf(Color.class, ..)`, `EnumMap`, a class literal of a primitive or an array
   type. j98 reads a class only where it is compared with a class and before `getName()`
   / `getSimpleName()`, k12 before `::isInstance` and `::cast`; what a `Class` is as a
