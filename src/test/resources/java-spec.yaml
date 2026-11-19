@@ -65,6 +65,7 @@ imports: |
   import java.util.Random;
   import java.util.Set;
   import java.util.Stack;
+  import java.util.UUID;
   import java.util.Vector;
   import java.util.function.*;
   import java.util.regex.MatchResult;
@@ -7149,6 +7150,107 @@ cases:
       -PT-9223372036854775808S: java.time.format.DateTimeParseException: Text cannot be parsed to a Duration: overflow [-PT-9223372036854775808S] 0 / java.lang.ArithmeticException: Exceeds capacity of Duration: 9223372036854775808000000000
       no text: java.lang.NullPointerException: text
       a builder: PT20M
+
+  # A UUID is two longs. fromString splits at the dashes and reads each part as a signed
+  # hexadecimal long (a sign, any Unicode digit of one char, no more than a long), cut to its
+  # field: the forms that are not canonical, and the refusals, are a JDK's answers.
+  - name: a-uuid-is-two-longs-read-from-its-text-as-a-long-is
+    main: UuidCase
+    source: |
+      class UuidCase {
+          static void attempt(String text) {
+              try {
+                  UUID u = UUID.fromString(text);
+                  System.out.println(text + " -> " + u + " " + u.getMostSignificantBits() + " " + u.getLeastSignificantBits());
+              }
+              catch (RuntimeException e) {
+                  System.out.println(text + " ! " + e);
+              }
+          }
+
+          public static void main(String[] args) {
+              UUID id = new UUID(0x123e4567e89b12d3L, 0xa456426614174000L);
+              System.out.println(id + " v" + id.version() + " variant " + id.variant() + " " + id.hashCode() + " " + id.getMostSignificantBits() + " " + id.getLeastSignificantBits());
+              System.out.println(new UUID(0, 0) + " " + new UUID(-1, -1) + " " + new UUID(Long.MIN_VALUE, 0x12L) + " " + new UUID(0x12L, 0x3L).hashCode() + " " + new UUID(-1, 0).hashCode());
+              for (long least : new long[] { 0L, 0x7000000000000000L, 0x8000000000000000L, 0xa000000000000000L, 0xc000000000000000L, 0xe000000000000000L }) {
+                  System.out.print(new UUID(0xf000L, least).variant() + "/" + new UUID(0xf000L, least).version() + " ");
+              }
+              System.out.println();
+              for (String text : new String[] { "123E4567-E89B-12D3-A456-426614174000", "1-1-1-1-1", "+1-+1-+1-+1-+1", "100000000-10000-10000-10000-10000000000", "7fffffffffffffff-1-1-1-7ffffffffff",
+                      "0000000000000000000000000-1-1-1-1", "123e4567e-89b-12d3-a456-42661417400",
+                      "", "-", "1-1-1-1", "1-1-1-1-1-1", "-1-1-1-1-1", "123e4567e89b12d3a456426614174000", "fffffffff-ffff-ffff-ffff-ffffffffffff", "1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1",
+                      "----", "1-1-1-1-", "-1-1-1-1", "1--1-1-1", "1-1-1-1-+", "+-1-1-1-1", "1-1-1-1-1x", "g-1-1-1-1", "x-y-z-w-v", "1-y-z-w-v", " 1-1-1-1-1", "0x1-1-1-1-1", "1x-1x-1x-1x-1x",
+                      "ffffffffffffffff-1-1-1-1", "8000000000000000-1-1-1-1", "1-1-1-1-ffffffffffffffffg", "1-1-1-1-ffffffffffffffffffff", "1-1-1-1-½" }) {
+                  attempt(text);
+              }
+              try {
+                  UUID.fromString(null);
+              }
+              catch (NullPointerException e) {
+                  System.out.println("null");
+              }
+              UUID[] sorted = { new UUID(1, 0), new UUID(-1, 0), new UUID(0, -1), new UUID(0, 1), new UUID(0, 0), new UUID(Long.MAX_VALUE, 0), new UUID(Long.MIN_VALUE, 0) };
+              Arrays.sort(sorted);
+              System.out.println(Arrays.toString(sorted));
+              System.out.println(id.compareTo(new UUID(id.getMostSignificantBits(), id.getLeastSignificantBits())) + " " + id.compareTo(new UUID(0, 0)) + " " + new UUID(0, 0).compareTo(id) + " " + new UUID(0, -1).compareTo(new UUID(0, 1)));
+              Map<UUID, String> named = new HashMap<>();
+              named.put(id, "id");
+              System.out.println(named.get(UUID.fromString("123e4567-e89b-12d3-a456-426614174000")) + " " + named.get(new UUID(0, 0)) + " " + id.equals(UUID.fromString(id.toString())) + " " + id.equals(null) + " " + id.equals("x")
+                      + " " + (UUID.class == id.getClass()) + " " + UUID.class.getName());
+              Set<UUID> seen = new HashSet<>();
+              UUID random = null;
+              for (int i = 0; i < 20; i++) {
+                  random = UUID.randomUUID();
+                  seen.add(random);
+                  if (random.version() != 4 || random.variant() != 2 || random.toString().length() != 36 || !UUID.fromString(random.toString()).equals(random)) {
+                      System.out.println("not a random UUID: " + random);
+                  }
+              }
+              System.out.println(seen.size() + " " + random.toString().charAt(14) + " " + ("89ab".indexOf(random.toString().charAt(19)) >= 0));
+          }
+      }
+    expected: |
+      123e4567-e89b-12d3-a456-426614174000 v1 variant 2 1256478162 1314564453825188563 -6605018797301088256
+      00000000-0000-0000-0000-000000000000 ffffffff-ffff-ffff-ffff-ffffffffffff 80000000-0000-0000-0000-000000000012 17 0
+      0/15 0/15 2/15 2/15 6/15 7/15 
+      123E4567-E89B-12D3-A456-426614174000 -> 123e4567-e89b-12d3-a456-426614174000 1314564453825188563 -6605018797301088256
+      1-1-1-1-1 -> 00000001-0001-0001-0001-000000000001 4295032833 281474976710657
+      +1-+1-+1-+1-+1 -> 00000001-0001-0001-0001-000000000001 4295032833 281474976710657
+      100000000-10000-10000-10000-10000000000 ! java.lang.IllegalArgumentException: UUID string too large
+      7fffffffffffffff-1-1-1-7ffffffffff -> ffffffff-0001-0001-0001-07ffffffffff -4294901759 290271069732863
+      0000000000000000000000000-1-1-1-1 -> 00000000-0001-0001-0001-000000000001 65537 281474976710657
+      123e4567e-89b-12d3-a456-42661417400 -> 23e4567e-089b-12d3-a456-042661417400 2586287185327755987 -6605087240605305856
+       ! java.lang.IllegalArgumentException: Invalid UUID string: 
+      - ! java.lang.IllegalArgumentException: Invalid UUID string: -
+      1-1-1-1 ! java.lang.IllegalArgumentException: Invalid UUID string: 1-1-1-1
+      1-1-1-1-1-1 ! java.lang.IllegalArgumentException: Invalid UUID string: 1-1-1-1-1-1
+      -1-1-1-1-1 ! java.lang.IllegalArgumentException: Invalid UUID string: -1-1-1-1-1
+      123e4567e89b12d3a456426614174000 ! java.lang.IllegalArgumentException: Invalid UUID string: 123e4567e89b12d3a456426614174000
+      fffffffff-ffff-ffff-ffff-ffffffffffff ! java.lang.IllegalArgumentException: UUID string too large
+      1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1-1 ! java.lang.IllegalArgumentException: UUID string too large
+      ---- ! java.lang.NumberFormatException: For input string: "" under radix 16
+      1-1-1-1- ! java.lang.NumberFormatException: For input string: "" under radix 16
+      -1-1-1-1 ! java.lang.NumberFormatException: For input string: "" under radix 16
+      1--1-1-1 ! java.lang.NumberFormatException: For input string: "" under radix 16
+      1-1-1-1-+ ! java.lang.NumberFormatException: Error at index 1 in: "+"
+      +-1-1-1-1 ! java.lang.NumberFormatException: Error at index 1 in: "+"
+      1-1-1-1-1x ! java.lang.NumberFormatException: Error at index 1 in: "1x"
+      g-1-1-1-1 ! java.lang.NumberFormatException: Error at index 0 in: "g"
+      x-y-z-w-v ! java.lang.NumberFormatException: Error at index 0 in: "x"
+      1-y-z-w-v ! java.lang.NumberFormatException: Error at index 0 in: "y"
+       1-1-1-1-1 ! java.lang.NumberFormatException: Error at index 0 in: " 1"
+      0x1-1-1-1-1 ! java.lang.NumberFormatException: Error at index 1 in: "0x1"
+      1x-1x-1x-1x-1x ! java.lang.NumberFormatException: Error at index 1 in: "1x"
+      ffffffffffffffff-1-1-1-1 ! java.lang.NumberFormatException: Error at index 15 in: "ffffffffffffffff"
+      8000000000000000-1-1-1-1 ! java.lang.NumberFormatException: Error at index 15 in: "8000000000000000"
+      1-1-1-1-ffffffffffffffffg ! java.lang.NumberFormatException: Error at index 15 in: "ffffffffffffffffg"
+      1-1-1-1-ffffffffffffffffffff ! java.lang.NumberFormatException: Error at index 15 in: "ffffffffffffffffffff"
+      1-1-1-1-½ ! java.lang.NumberFormatException: Error at index 0 in: "½"
+      null
+      [80000000-0000-0000-0000-000000000000, ffffffff-ffff-ffff-0000-000000000000, 00000000-0000-0000-ffff-ffffffffffff, 00000000-0000-0000-0000-000000000000, 00000000-0000-0000-0000-000000000001, 00000000-0000-0001-0000-000000000000, 7fffffff-ffff-ffff-0000-000000000000]
+      0 1 -1 -1
+      id null true false false true java.util.UUID
+      20 4 true
   # == of two strings compares references: the constants of one text are one object, a
   # computed string another, intern the constant's. split takes a pattern; a
   # StringBuilder is edited in place and is a CharSequence, as a string is.

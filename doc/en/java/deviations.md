@@ -12,7 +12,7 @@ the Basic Multilingual Plane. `hashCode` is the specified number, and `toCharArr
 the UTF-16 units, which `new String(char[])` reads back. `toUpperCase` and `toLowerCase`
 change one character into one: `"ß".toUpperCase()` is `ß`, where a JDK answers `SS`. A
 surrogate with no partner in a string is its three bytes in UTF-8, where a JDK writes `?`.
-`Character.digit`, `getNumericValue` and `Integer.parseInt` read a digit outside ASCII
+`Character.digit`, `getNumericValue`, `Integer.parseInt` and `UUID.fromString` read a digit outside ASCII
 (`'٣'`) on the interpreter and the JVM and not in a `.wasm`.
 
 ```java

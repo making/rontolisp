@@ -51,12 +51,13 @@ collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
 as the program reaches it, annotation types and type annotations, an exact method
 reference in a call's applicability: k24 (2026-11-19); what comes after is `.todo/k15`,
 `k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22` and `k26` (what k00, k11, k06, k07, k08,
-k10 and k12 left) and `.todo/k31` to `k38` (what stands between k24 and YAVI compiled to
+k10 and k12 left) and `.todo/k31` to `k38` but k36 (what stands between k24 and YAVI compiled to
 wasm: `.todo/k33` holds the order); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
 `java.text.MessageFormat`: k28 (2026-11-19); `java.text.Normalizer` over the normalization
 forms the front ends share: k29 (2026-11-19); a `Class` as a value, a type variable in
 scope kept apart from the one a call finds, `Name.this` as the instance of `Name`
-itself: k30 (2026-11-20; `.todo/k39`, `k40` and `k41` are what it found beside its way).
+itself: k30 (2026-11-20; `.todo/k39`, `k40` and `k41` are what it found beside its way);
+`java.util.UUID`: k36 (2026-11-20).
 
 ## Where it sits
 
@@ -1203,6 +1204,25 @@ measured programs.
   changed: the scan below the form's first code point makes its call per string
   checked the cost of a `charAt` loop over it. Pin: java-spec
   `a-normalizer-puts-a-text-in-the-four-forms`.
+- **`java.util.UUID` (k36, 2026-11-20)** is Java source: two longs, `fromString`,
+  `toString`, `equals`, `hashCode`, `compareTo` (signed, as specified), the two halves,
+  `version`, `variant`, `randomUUID` (version 4 over a `Random()` of its own, made at the
+  first call). Learned from a JDK 25's answers, since the specification gives only the
+  canonical form: a text of more than 36 chars is `UUID string too large`; one without
+  exactly four dashes is `Invalid UUID string: ..`; the five parts are read in order, each
+  as a signed hexadecimal long (a leading `+`, a digit one char of Unicode, no `0x`, at
+  most `7fffffffffffffff`) and cut to its field (32, 16, 16, 16, 48 bits), so `1-1-1-1-1`
+  and `100000000-1-1-1-1` are UUIDs; a part that is empty, has a char that is no digit or
+  passes a long is a `NumberFormatException` with the words of `Long.parseLong` of a range
+  (`Error at index N in: "part"`, the index of the char refused or of the digit that
+  overflows). `Character.digit` reads the digits, so a digit outside ASCII follows its
+  deviation (`deviations.md`). Refused by name: `nameUUIDFromBytes` (MD5),
+  `timestamp`, `clockSequence`, `node`. YAVI's `UntypedInput` table keeps its `UUID` entry
+  (`patch.sh` lost its second edit): the schema example compiles and prints a JDK's
+  lines on the four backends with four edits left, wasm 1,019,971 B, the component
+  1,024,234 B, the jar 385,127 B; a validator reading a string as a `UUID` through
+  `untyped(UUID.class)` answers a JDK's lines on the interpreter. Pin: java-spec
+  `a-uuid-is-two-longs-read-from-its-text-as-a-long-is`.
 - **The members j98 left that a line of Java answers (k05)**: `Math.divideExact` /
   `floorDivExact` / `ceilDivExact`, `String.codePointCount` / `offsetByCodePoints` (a
   string's elements are code points, so a range holds as many as it is long) /

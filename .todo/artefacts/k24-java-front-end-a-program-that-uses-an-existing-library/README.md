@@ -4,7 +4,7 @@
 183,636 lines. Nothing of YAVI is in this directory: the two programs are written here over
 its public API, `patch.sh` holds `sed` lines and `shim/` classes written here (the
 classic example needs none since 2026-11-19; the schema example has five edits since
-2026-11-20, each around a class the library lacks).
+2026-11-20 (four since k36), each around a class the library lacks).
 
 ## How to run it again
 
@@ -61,7 +61,7 @@ lines (wasm 655,275 B, the component 659,541 B, the jar 255,602 B). The k24 numb
 | 1 | `class is not allowed to extend sealed class` (a permitted class in a file of its own, read while the `permits` clause naming it was) | `NullAcceptingValueValidator` | fixed here |
 | 2 | `a class literal but compared with a class or before getName()` (`String.class` as an argument) | `YaviSchema._string` | fixed by k30 (a `Class` is a value) |
 | 3 | `the class java.time.LocalDate` (`LocalTime` .. `Period` after it: `X::parse` in the table of the types read from their text) | `core/UntypedInput` | `.todo/k35`; `patch.sh` 1 |
-| 4 | `the class java.util.UUID` (the same table) | `core/UntypedInput` | `.todo/k36`; `patch.sh` 2 |
+| 4 | `the class java.util.UUID` (the same table) | `core/UntypedInput` | fixed by k36 (library source); `patch.sh` 2 is gone |
 | 5 | `lambda expression not expected here` (`X.this.lazy().andThen(.. -> .. .map(x2 -> () -> x2))`: a generic method called from its own body, its type argument made of its own type parameter) | `arguments/Arguments1Validator.andThen` | fixed with k30 |
 | 6 | a program that never ended: `Arguments1Validator.this` in an anonymous `Arguments1Validator` named the anonymous instance | the same | fixed with k30 |
 | 7 | `no suitable constructor found for StringValidator(..)` (`new StringValidator<>(.., lazy, ..)` in `StringValidator<T>` making a `StringValidator<Supplier<T>>`) | `arguments/StringValidator.lazy` | fixed with k30 |
@@ -72,7 +72,7 @@ lines (wasm 655,275 B, the component 659,541 B, the jar 255,602 B). The k24 numb
 
 327 files (175,141 lines) are read and declared before the second refusal, in 1.7 s: the
 schema names nearly the whole library in its declarations. Since k30 (2026-11-20) the
-unpatched coordinates stop at row 3, and with `patch.sh`'s five edits (rows 3, 4, 8, 9, 10)
+unpatched coordinates stop at row 3, and with `patch.sh`'s edits (rows 3, 8, 9, 10; row 4 went with k36, 2026-11-20: wasm 1,019,971 B, the component 1,024,234 B, the jar 385,127 B)
 the program compiles and the interpreter, the JVM, wasm and the component print the JDK's
 eleven lines:
 

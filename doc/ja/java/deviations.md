@@ -12,7 +12,7 @@
 UTF-16 のコード単位を返し、`new String(char[])` はそれを元の文字列に読み戻します。
 `toUpperCase` と `toLowerCase` は 1 文字を 1 文字に変えます。`"ß".toUpperCase()` は `ß` です
 （JDK は `SS` を返します）。相手のないサロゲートは、UTF-8 では 3 バイトになります（JDK は
-`?` を書きます）。`Character.digit`、`getNumericValue`、`Integer.parseInt` は、ASCII の外の
+`?` を書きます）。`Character.digit`、`getNumericValue`、`Integer.parseInt`、`UUID.fromString` は、ASCII の外の
 数字（`'٣'`）をインタプリタと JVM では読み、`.wasm` では読みません。
 
 ```java

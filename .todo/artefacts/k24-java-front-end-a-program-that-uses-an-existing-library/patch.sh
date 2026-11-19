@@ -13,14 +13,12 @@ if [ -d "$here"/shim ]; then
     cp -r "$here"/shim/. "$out"/
 fi
 # The classic example needs none (2026-11-19). The schema example's five (2026-11-20),
+# four since k36 (java.util.UUID is in the library; the numbers keep their places),
 # all in what reads an input of unknown type; GNU sed.
 untyped="$out"/am/ik/yavi/core/UntypedInput.java
 # 1. java.time: the classes read from their text, but Duration
 sed -i -e '/Map\.entry(LocalDate\.class/,/Map\.entry(Year\.class/d' \
     -e 's/Map\.entry(Duration\.class, Duration::parse), Map\.entry(Period\.class, Period::parse),/Map.entry(Duration.class, Duration::parse),/' "$untyped"
-# 2. java.util.UUID
-sed -i -e 's/Map\.entry(UUID\.class, UntypedInput::parseUuid), //' \
-    -e '/private static UUID parseUuid/,/^\t}$/d' "$untyped"
 # 3. java.util.Date and java.sql
 sed -i -e '/value instanceof java\.util\.Date date/,/^\t\t}$/d' \
     -e '/private static final class SqlTypes/,/^\t}$/d' "$untyped"

@@ -26,11 +26,13 @@ has the two programs, the oracle's lines, the refusals met and how to run it aga
 - **The schema example** (the README's first): stopped at a class literal as a value
   until k30 (2026-11-20). **From the unpatched coordinates it now stops at
   `java.time.LocalDate`**, in `core/UntypedInput`'s table of the types read from their
-  string form. **With five edits to YAVI's source, each around a class the library
-  lacks** (`patch.sh` of the artefact: `java.time`, `UUID`, `java.util.Date` and
-  `java.sql`, `BigDecimal` / `BigInteger`, `StreamSupport`), **it compiles and the
+  string form. **With four edits to YAVI's source, each around a class the library
+  lacks** (`patch.sh` of the artefact: `java.time`, `java.util.Date` and
+  `java.sql`, `BigDecimal` / `BigInteger`, `StreamSupport`; the fifth, `UUID`, went with
+  k36, 2026-11-20), **it compiles and the
   interpreter, the JVM, wasm and the component print the JDK's eleven lines**: wasm
-  1,009,805 B (12.8 s), the component 1,014,068 B, the jar 381,860 B. Nothing else
+  1,019,971 B (13.0 s), the component 1,024,234 B, the jar 385,127 B (with `UUID` kept
+  in the table; 1,009,805 / 1,014,068 / 381,860 before). Nothing else
   stands between: the four rules of the language it met behind the class literals
   (a generic method calling itself, a creation with `<>` of the class it stands in,
   `Name.this` in an anonymous class of `Name`, two captures given for one type
@@ -53,7 +55,8 @@ has the two programs, the oracle's lines, the refusals met and how to run it aga
    - `.todo/k31` -- `BigInteger` / `BigDecimal`: the conversion of a number
      (`UntypedInput.convertNumber`, `decimal`, `typeName`). It was thought behind the
      examples; the schema example reaches it.
-   - `.todo/k36` -- `java.util.UUID`.
+   - `.todo/k36` -- `java.util.UUID` (done 2026-11-20: the schema example prints the JDK's
+     lines with four edits left, wasm 1,019,971 B).
    - `.todo/k37` -- `java.util.Date` and `java.sql.Date` / `Time` / `Timestamp`, tested
      by `instanceof` (after `.todo/k35`, for what they convert to).
    - `.todo/k38` -- `StreamSupport` and `Iterable.spliterator()`.
