@@ -2407,7 +2407,12 @@ cases:
           public String toString() { return name().charAt(0) + name().substring(1).toLowerCase(); }
       }
 
-      enum EnumLevel { LOW, MID, HIGH }
+      enum EnumLevel {
+          LOW, MID, HIGH;
+
+          // an overload of the name the enum's own valueOf(String) has
+          static EnumLevel valueOf(int ordinal) { return values()[ordinal]; }
+      }
 
       class Enums {
           static EnumLevel next(EnumLevel level) {
@@ -2428,7 +2433,7 @@ cases:
               System.out.println(next(level) + " " + next(next(level)) + " " + (level == EnumLevel.LOW) + " " + (next(level) != EnumLevel.LOW) + " " + level.equals(EnumLevel.LOW) + " " + labeled.label() + " " + any + " " + (any instanceof EnumLevel) + " " + EnumLevel.values()[1] + " " + EnumOp.NEG.getClass().getName() + " " + level.getClass().getName());
               EnumLevel[] copy = EnumLevel.values();
               copy[0] = null;
-              System.out.println(EnumLevel.values()[0] + " " + copy.length + " " + EnumLevel.valueOf("HIGH").ordinal());
+              System.out.println(EnumLevel.values()[0] + " " + copy.length + " " + EnumLevel.valueOf("HIGH").ordinal() + " " + EnumLevel.valueOf(1));
           }
       }
     expected: |
@@ -2436,7 +2441,7 @@ cases:
       9.802652743337129 Mercury Earth 2 MERCURY
       No enum constant EnumOp.DIV
       MID HIGH true true true * HIGH true MID EnumOp$3 EnumLevel
-      LOW 3 2
+      LOW 3 2 MID
   # A record's components are final fields with an accessor each, a canonical
   # constructor -- a compact one runs ahead of the stores -- and equals, hashCode and
   # toString over the components, unless the record declares its own.

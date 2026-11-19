@@ -1316,8 +1316,10 @@ final class JavaClasses {
 	 * @param name {@code values} or {@code valueOf}
 	 */
 	void enumMethod(JavaClass made, String name) {
+		// an enum may declare an overload of either name: valueOf(int)
+		String implicit = name.equals("values") ? "values()" : "valueOf(String)";
 		if (!made.isEnum || made.declaration == null
-				|| made.methods.stream().anyMatch(method -> method.name.equals(name))) {
+				|| made.methods.stream().anyMatch(method -> method.signature().equals(implicit))) {
 			return;
 		}
 		ClassDeclaration declaration = made.declaration;
