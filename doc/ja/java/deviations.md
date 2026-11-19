@@ -13,7 +13,7 @@ UTF-16 のコード単位を返し、`new String(char[])` はそれを元の文�
 `toUpperCase` と `toLowerCase` は 1 文字を 1 文字に変えます。`"ß".toUpperCase()` は `ß` です
 （JDK は `SS` を返します）。相手のないサロゲートは、UTF-8 では 3 バイトになります（JDK は
 `?` を書きます）。`Character.digit`、`getNumericValue`、`Integer.parseInt`、`UUID.fromString`、
-`BigInteger` と `BigDecimal` に渡す文字列は、ASCII の外の
+`java.sql` の `valueOf`、`BigInteger` と `BigDecimal` に渡す文字列は、ASCII の外の
 数字（`'٣'`）をインタプリタと JVM では読み、`.wasm` では読みません。
 
 ```java
@@ -278,6 +278,12 @@ tz データベースの固定ゾーン（`Etc/GMT+5`、`Etc/UTC`、`Zulu`）で
 です。`LocalDate.now()` はホストの日付になります。夏時間の有無が現在と異なる時期の日時も、
 現在のオフセットで読みます。`.wasm` がホストのゾーンを知る方法は
 [`decode-universal-time`](../guides/clock-and-random.md) と同じで、分からなければ UTC です。
+
+**`java.util.Date` はゾーンをオフセットで書きます。** `toString` は、ホストが UTC なら `UTC`、
+それ以外では `GMT+09:00` のように書きます。JDK はゾーンの略称（`JST`、`EST`）を書きます。
+地域の最初の規則より前のオフセットは、ホストの地方平均時です（ニューヨークの 1883 年より前は
+`GMT-04:56`）。JDK はその地域の最初の標準時のオフセットを使います。`clone` と、JDK 1.1 から
+非推奨のメンバー（`getYear`、`getHours`）は名前を挙げて拒否します。
 
 **`java.time` にフォーマッターはありません。** `DateTimeFormatter` と、それを取る `format`、
 `parse` は、名前を示して拒否されます。文字列だけを取る `parse` と `toString` は ISO-8601 の

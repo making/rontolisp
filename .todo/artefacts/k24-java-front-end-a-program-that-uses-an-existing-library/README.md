@@ -4,7 +4,7 @@
 183,636 lines. Nothing of YAVI is in this directory: the two programs are written here over
 its public API, `patch.sh` holds `sed` lines and `shim/` classes written here (the
 classic example needs none since 2026-11-19; the schema example had five edits on
-2026-11-20 and has one since k36, k38, k31 and k35, around the classes the library lacks).
+2026-11-20, around the classes the library lacked, and needs none since k37).
 
 ## How to run it again
 
@@ -65,7 +65,7 @@ lines (wasm 655,275 B, the component 659,541 B, the jar 255,602 B). The k24 numb
 | 5 | `lambda expression not expected here` (`X.this.lazy().andThen(.. -> .. .map(x2 -> () -> x2))`: a generic method called from its own body, its type argument made of its own type parameter) | `arguments/Arguments1Validator.andThen` | fixed with k30 |
 | 6 | a program that never ended: `Arguments1Validator.this` in an anonymous `Arguments1Validator` named the anonymous instance | the same | fixed with k30 |
 | 7 | `no suitable constructor found for StringValidator(..)` (`new StringValidator<>(.., lazy, ..)` in `StringValidator<T>` making a `StringValidator<Supplier<T>>`) | `arguments/StringValidator.lazy` | fixed with k30 |
-| 8 | `the class java.util.Date`, then `java.sql.Date` / `Time` / `Timestamp` (`instanceof`) | `core/UntypedInput.convert`, `SqlTypes` | `.todo/k37`; `patch.sh` 3 |
+| 8 | `the class java.util.Date`, then `java.sql.Date` / `Time` / `Timestamp` (`instanceof`) | `core/UntypedInput.convert`, `SqlTypes` | fixed by k37 (library source); `patch.sh` 3 is gone |
 | 9 | `the class java.math.BigInteger` (`type == BigInteger.class`), `BigDecimal` in the conversion of a number | `core/UntypedInput.typeName`, `convertNumber` | fixed by k31 (library source); `patch.sh` 4 is gone |
 | 10 | `the class java.util.stream.StreamSupport` (`StreamSupport.stream(properties.spliterator(), false)`) | `input/Projection` | fixed by k38 (library source); `patch.sh` 5 is gone |
 | 11 | `method composed .. cannot be applied to given types` (two `Function<? super A1, ? extends A1>` given for one type parameter) | `arguments/DefaultArguments1Validator.preprocess` | fixed with k30 |
@@ -90,10 +90,13 @@ the four backends, wasm 1,215,291 B (14.4 s), the component 1,219,661 B, the jar
 438,757 B, the interpreter 6.1 s. A schema of the `java.time` classes themselves is
 `.todo/artefacts/k35-java-time-the-classes-a-value-is-read-from-its-text-as/shelf/Loan.java`.
 
-```bash
-unzip -q yavi-0.18.0-sources.jar -d /tmp/yavi && ./patch.sh /tmp/yavi /tmp/yavi-patched
-(cd schema && $R --java-source-path /tmp/yavi-patched shelf/Book.java -o /tmp/book.wasm)
-```
+**Since k37 (2026-11-20) no edit is left: the schema example compiles from the unpatched
+coordinates** (`$R --java-source-dep am.ik.yavi:yavi:0.18.0 shelf/Book.java`, the first
+command above) and the interpreter, the JVM, wasm and the component print the JDK's 23
+lines: wasm 1,216,108 B (14.7 s), the component 1,220,478 B, the jar 439,998 B, the
+interpreter 6.3 s. `UntypedInput.convert` and `SqlTypes` are lowered as written; a row of
+`java.sql` values read through them is
+`.todo/artefacts/k37-java-util-date-and-the-java-sql-classes-a-value-is-tested-as/shelf/Row.java`.
 
 With the five edits of k30 (2026-11-20): wasm 1,009,805 B (12.8 s of wall time, the
 interpreter 5.4 s to its last line), the component 1,014,068 B, the jar 381,860 B. The

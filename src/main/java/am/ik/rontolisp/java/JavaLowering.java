@@ -3558,7 +3558,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (variable(first, 0, true) != null) {
 			return null;
 		}
-		JavaClass found = this.classes.find(name, this.currentClass, this.unit);
+		JavaClass found = this.classes.find(name, this.currentClass, this.unit, expression.pos());
 		if (found != null) {
 			this.classes.accessible(found, this.unit, expression.pos());
 		}
@@ -7758,7 +7758,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			// outer.new Inner(..): Inner is a member of the outer instance's class
 			Typed outer = expression(creation.outer(), null);
 			JavaClass member = outer.type() instanceof ClassType around
-					? this.classes.find(written.name(), around.declaration(), this.unit) : null;
+					? this.classes.find(written.name(), around.declaration(), this.unit, written.pos()) : null;
 			if (member == null || !member.hasOuterInstance()) {
 				throw error(written.pos(), "cannot find symbol: class " + written.name());
 			}

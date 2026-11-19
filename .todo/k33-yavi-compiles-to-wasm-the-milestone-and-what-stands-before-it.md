@@ -25,14 +25,18 @@ has the two programs, the oracle's lines, the refusals met and how to run it aga
   (`.todo/artefacts/k29-java-text-normalizer/shelf/Note.java`).
 - **The schema example** (the README's first): stopped at a class literal as a value
   until k30 (2026-11-20), then at `java.time.LocalDate` in `core/UntypedInput`'s table of
-  the types read from their string form. **Since k35 (`java.time`, 2026-11-20) the
-  unpatched coordinates stop at `java.util.Date`**, in `UntypedInput.convert`
-  (`.todo/k37`). **With ONE edit to YAVI's source** (`patch.sh` of the artefact:
-  `java.util.Date` and `java.sql`; `UUID` went with k36, `StreamSupport` with k38,
-  `BigDecimal` / `BigInteger` with k31 and `java.time` with k35, 2026-11-20), **it
-  compiles and the interpreter, the JVM, wasm and the component print the JDK's lines**
-  (23 since k31 gave the program five inputs that run the conversion of a number): wasm
-  1,215,291 B (14.4 s), the component 1,219,661 B, the jar 438,757 B. Before `java.time`,
+  the types read from their string form, then at `java.util.Date` in
+  `UntypedInput.convert`. **Since k37 (`java.util.Date` and `java.sql`, 2026-11-20)
+  `rontolisp --java-source-dep am.ik.yavi:yavi:0.18.0 shelf/Book.java -o book.wasm`
+  compiles it from the unpatched coordinates, and the interpreter, the JVM, wasm and the
+  component print the JDK's 23 lines**: wasm 1,216,108 B (14.7 s), the component
+  1,220,478 B, the jar 439,998 B. `patch.sh` has no edit left (`UUID` went with k36,
+  `StreamSupport` with k38, `BigDecimal` / `BigInteger` with k31, `java.time` with k35,
+  `java.util.Date` / `java.sql` with k37). With the last edit: wasm 1,215,291 B (14.4 s),
+  the component 1,219,661 B, the jar 438,757 B. A row of `java.sql` values read through
+  `UntypedInput.SqlTypes` prints a JDK's 28 lines on the four
+  (`.todo/artefacts/k37-java-util-date-and-the-java-sql-classes-a-value-is-tested-as/shelf/Row.java`,
+  wasm 1,272,912 B). Before `java.time`,
   with two edits: 1,095,450 / 1,099,815 / 408,486 (the eleven-line program 1,095,209 /
   1,099,574 / 407,992 with the conversion kept, 1,032,990 / 1,037,253 / 390,454 with it
   cut and the projection's stream kept; 1,019,971 / 1,024,234 / 385,127 with `UUID`
@@ -57,7 +61,7 @@ has the two programs, the oracle's lines, the refusals met and how to run it aga
 4. k30 (done 2026-11-20) -- a `Class` as a value, and the four rules above.
 5. What the schema example reaches of a JDK that the library lacks, each one edit of
    `patch.sh` and independent of the others but as said; the milestone is the day the
-   last edit goes:
+   last edit goes (done 2026-11-20 with k37):
    - k35 -- `java.time`: the nine classes read from their text (done 2026-11-20: one
      edit left, wasm 1,215,291 B. A `ZonedDateTime` takes the zones of one offset; a
      region's rules are `.todo/k42`, a formatter -- `CharSequenceConstraint`'s
@@ -69,15 +73,15 @@ has the two programs, the oracle's lines, the refusals met and how to run it aga
      (`.todo/artefacts/k31-java-math-biginteger-and-bigdecimal/shelf/Price.java`).
    - `.todo/k36` -- `java.util.UUID` (done 2026-11-20: the schema example prints the JDK's
      lines with four edits left, wasm 1,019,971 B).
-   - `.todo/k37` -- `java.util.Date` and `java.sql.Date` / `Time` / `Timestamp`, tested
-     by `instanceof` (the last edit; what they convert to is there since k35).
+   - k37 -- `java.util.Date` and `java.sql.Date` / `Time` / `Timestamp`, tested
+     by `instanceof` (done 2026-11-20: the last edit; no edit left, wasm 1,216,108 B).
    - `.todo/k38` -- `StreamSupport` and `Iterable.spliterator()` (done 2026-11-20: three
      edits left, wasm 1,032,990 B).
-   What the last bodies meet once they are lowered is not measured: the edit cuts them out.
+   Every body is lowered as written since k37.
 6. `.todo/k34` (done 2026-11-20) -- `examples/java/yavi/Member.java`, a record checked
    with `ValidatorBuilder`, compiled with `--java-source-dep am.ik.yavi:yavi:0.18.0` and
    checked in `examples.yaml` (`javaSourceDep`) on the four backends: wasm 662,539 B.
-   **Left here: when step 5 is done, the README's schema example (`Yavi.schema()`)
+   **Left here: step 5 is done (k37), so the README's schema example (`Yavi.schema()`)
    joins it as a second program of `examples/java/yavi/`, with its `examples.yaml`
    entry and README lines.**
 7. `.todo/k32` -- the Maven plugin passing a project's dependencies, so that a YAVI
@@ -90,8 +94,8 @@ of two compiles differ). `.todo/k26` keeps the rest of the streams, `.todo/k42` 
 
 ## Not decided here
 
-- Size: 1,215 KB for the schema example as patched, the classes of `.todo/k37` not in it
-  (62 KB of it the conversion of a number through `BigDecimal`, k31; 120 KB `java.time`,
+- Size: 1,216 KB for the schema example, unpatched since k37 (the classes of
+  `java.util.Date` and `java.sql`, only tested, 817 B of it; 62 KB of it the conversion of a number through `BigDecimal`, k31; 120 KB `java.time`,
   k35: 69 KB its functions, the rest the class objects of what the table names and
   their dispatch).
   655 KB for the classic example (575 KB before k27's linked collections, 591 KB

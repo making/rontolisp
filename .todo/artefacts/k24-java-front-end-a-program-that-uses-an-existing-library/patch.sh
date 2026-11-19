@@ -12,11 +12,7 @@ cp -r "$src"/. "$out"/
 if [ -d "$here"/shim ]; then
     cp -r "$here"/shim/. "$out"/
 fi
-# The classic example needs none (2026-11-19). The schema example's five (2026-11-20),
-# one since k36, k38, k31 and k35 (java.util.UUID, StreamSupport, java.math and
-# java.time are in the library; the number keeps its place), in what reads an input of
-# unknown type; GNU sed.
-untyped="$out"/am/ik/yavi/core/UntypedInput.java
-# 3. java.util.Date and java.sql
-sed -i -e '/value instanceof java\.util\.Date date/,/^\t\t}$/d' \
-    -e '/private static final class SqlTypes/,/^\t}$/d' "$untyped"
+# Neither example needs an edit: the classic one since 2026-11-19, the schema one since
+# k37 (2026-11-20), whose five went with k36, k38, k31, k35 and k37 (java.util.UUID,
+# StreamSupport, java.math, java.time, java.util.Date and java.sql are in the library).
+# The next gap a program meets gets its line here.

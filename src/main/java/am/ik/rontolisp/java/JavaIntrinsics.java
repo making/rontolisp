@@ -1899,6 +1899,8 @@ final class JavaIntrinsics {
 		// at an instant (seconds east of UTC, doubled, one more in summer time)
 		natives.put("java.time.Instant.wall0()", host("%unix-nano-time"));
 		natives.put("java.time.ZoneId.local0(long)", host("%local-time-offset"));
+		// java.util.Date and java.sql: the host's offset at any instant, as above
+		natives.put("rontolisp.internal.Dates.local0(long)", host("%local-time-offset"));
 		return Map.copyOf(natives);
 	}
 

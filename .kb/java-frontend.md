@@ -51,7 +51,7 @@ collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
 as the program reaches it, annotation types and type annotations, an exact method
 reference in a call's applicability: k24 (2026-11-19); what comes after is `.todo/k15`,
 `k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22` and `k26` (what k00, k11, k06, k07, k08,
-k10 and k12 left) and `.todo/k32`, `k33` and `k37` (what stands between k24 and YAVI compiled to
+k10 and k12 left) and `.todo/k32` and `k33` (what stands between k24 and YAVI compiled to
 wasm: `.todo/k33` holds the order); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
 `java.text.MessageFormat`: k28 (2026-11-19); `java.text.Normalizer` over the normalization
 forms the front ends share: k29 (2026-11-19); a `Class` as a value, a type variable in
@@ -60,7 +60,9 @@ itself: k30 (2026-11-20; `.todo/k39`, `k40` and `k41` are what it found beside i
 `java.util.UUID`: k36 (2026-11-20); `java.math` (`BigInteger`, `BigDecimal`,
 `MathContext`, `RoundingMode`): k31 (2026-11-20); `java.time` (the dates, times and
 instants read from their texts, the fields and units, the zones of one offset, a clock):
-k35 (2026-11-20; `.todo/k42` and `k43` are what it left).
+k35 (2026-11-20; `.todo/k42` and `k43` are what it left); `java.util.Date` and `java.sql`'s
+`Date`, `Time`, `Timestamp`, `import module java.sql`, the two levels of imports on demand:
+k37 (2026-11-20).
 
 ## Where it sits
 
@@ -1434,7 +1436,7 @@ documentation; what it leaves open is a JDK 25's answers to a grid. `java.time.c
   rest dispatch arms.
 - **YAVI**: `patch.sh` lost its first edit; `UntypedInput`'s table and the `Year` arm of
   `convertNumber` are lowered as written. The schema example with ONE edit left
-  (`java.util.Date` and `java.sql`, `.todo/k37`) prints a JDK's 23 lines on the four
+  (`java.util.Date` and `java.sql`, gone with k37) prints a JDK's 23 lines on the four
   backends: wasm 1,215,291 B (1,095,450 with the table cut), the component 1,219,661,
   the jar 438,757, the interpreter 6.1 s. `shelf/Loan.java` beside the grid -- a schema
   of the eight classes with the temporal constraints (`after`, `between`, `past` of a
@@ -1450,6 +1452,70 @@ documentation; what it leaves open is a JDK 25's answers to a grid. `java.time.c
   `java.util.EventListener` in `JavaLoweringTest#aLibraryOfTheSourcePathIsLoweredAsFarAsTheProgramReaches`
   and in the library of `a-program-uses-a-library-read-as-source-from-its-source-path`
   (it was `java.time.LocalDate`).
+
+## java.util.Date and java.sql (2026-11-20, k37)
+
+`java.util.Date` and `java.sql`'s `Date`, `Time`, `Timestamp` are Java source, written from
+the API documentation; what it leaves open is a JDK 25's answers to a grid
+(`.todo/artefacts/k37-java-util-date-and-the-java-sql-classes-a-value-is-tested-as/Grid.java`,
+2,095 lines: 378 instants through every member, 73 texts of `java.sql.Date`, 40 of `Time`,
+124 of `Timestamp`, conversions of `java.time` values over the calendar's change and the
+long's ends, 300 seeded date-times, the members of each against the others).
+
+- **`java.sql` is the first package of the library outside `java.base`.** It is not in
+  `LIBRARY_PACKAGES`; `import module java.sql` brings `java.sql` and `javax.sql`
+  (`JavaClasses.SQL_MODULE`). With it the library had its first two classes of one simple
+  name, so the imports got a compiler's two levels: a package imported on demand shadows a
+  module imported (the implicit `java.base` of a compact source file included), and two
+  classes of the name brought by one level are `reference to Date is ambiguous` where the
+  name is written (`JavaClasses.imported`; `find` takes the position). Before, the first
+  package of one list won.
+- **The calendar is `rontolisp.internal.Dates`**: Julian before 1582-10-15, Gregorian from
+  then on, the year written as the year of its era (1 BC is `1`, the era lost, as a JDK
+  writes it: `java.sql.Date.valueOf(LocalDate.of(0, 1, 1))` is `0001-01-01`). Our own
+  formulation: one day count per calendar (`365 y + floor((y + 3) / 4)`, the Gregorian one
+  less its centuries), the Julian 1582-10-04 the day before the Gregorian 1582-10-15.
+  A wall time carries its seconds into the day first and THEN picks the calendar by the
+  day (`1582-10-14 24:00:00` is the Gregorian 10-15, `1582-10-10` the Julian, so 10-20).
+- **The zone is the host's at the instant**: `Dates.local0` is `%local-time-offset`,
+  asked of every instant (clamped to the +-8.64e12 s every host answers), where
+  `ZoneId.systemDefault()` keeps today's offset (k35). A JDK's `Date` reads its zone's
+  rules at the instant, so this matches it where `java.time` cannot. A wall time takes
+  the offset a day before or a day after, whichever holds; one the clock skips or shows
+  twice takes the one that is not summer time (the dst bit): New York, London, Sydney and
+  Lord Howe's 30-minute shift agree with a JDK at both changes of 2026. Under New York
+  the grid differs from a JDK only in the zone's name, before 1883 (the host's local mean
+  time, `-04:56:02`; a JDK's `TimeZone` reads EST) and past the year 275,760.
+  `toString` names the zone `UTC` at offset 0 and `GMT+hh:mm` otherwise, what a JDK
+  writes for a zone of no name; a JDK writes `JST`, `EST`, or `GMT` under `TZ=GMT`.
+- **A text is read as a JDK reads it** (the grid): `Timestamp.valueOf` trims, splits at
+  the first space, reads and range-checks the date before it looks at the time; the
+  hours, minutes and seconds are any int (`25:61:61`, `-1:15:30`) and carry; a point at
+  the end is refused before the seconds are read but after the hours; the fraction is 1
+  to 9 characters starting with a digit. `java.sql.Date.valueOf` and `Time.valueOf` do
+  not trim. A number is refused as `Integer.parseInt` of a RANGE refuses it (`Error at
+  index 1 in: "1x"`, `Dates.parse`), not as of a string.
+- **`Timestamp` keeps the whole seconds in `Date`'s milliseconds and the rest in
+  `nanos`**; `getTime` answers both, which is what `Date`'s `hashCode`, `equals`,
+  `before` and `after` read, so `date.equals(timestamp)` can be true and the converse
+  not. Arithmetic past the long's ends wraps as a JDK's does (`new Timestamp(Long.MIN_VALUE)`).
+- Not there, refused by name: `clone` (the subset has no `Cloneable`), the members
+  deprecated since JDK 1.1 (`getYear` .. , the constructors of fields), `Date.parse`,
+  `toGMTString`. A non-ASCII digit is read on the interpreter and the JVM only, as
+  `Integer.parseInt`'s.
+- **What a program pays** (wasm): `new Date(0).getTime()` 20,416 B, its `toString`
+  149,761, `Timestamp.valueOf(..)` printed 206,473.
+- **YAVI**: the schema example compiles from the unpatched coordinates (`patch.sh` has
+  no edit left) and prints a JDK's 23 lines on the four backends: wasm 1,216,108 B
+  (1,215,291 with the edit), the component 1,220,478, the jar 439,998. `shelf/Row.java`
+  beside the grid -- a row of `java.sql` values read by a schema of the `java.time`
+  classes, `UntypedInput.SqlTypes`' conversions and mismatches -- prints a JDK's 28 lines
+  on the four: wasm 1,272,912 B.
+- Pins: java-spec `a-date-is-milliseconds-and-java-sql-reads-and-writes-wall-times` (its
+  lines hold in any zone: a `Date`'s text is printed without the zone's name), the
+  `java.sql.*` line of `a-compact-source-file-starts-at-its-instance-main` (the shadowing),
+  `JavaLoweringTest#anErrorTheLoweringDependsOnIsReportedAtItsPosition` (the two
+  ambiguities).
 
 ## java.io (2026-11-17, j79)
 

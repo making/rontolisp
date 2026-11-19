@@ -24,6 +24,8 @@ imports: |
   import java.nio.charset.Charset;
   import java.nio.charset.StandardCharsets;
   import java.nio.charset.UnsupportedCharsetException;
+  import java.sql.Time;
+  import java.sql.Timestamp;
   import java.text.MessageFormat;
   import java.text.Normalizer;
   import java.time.Clock;
@@ -7961,6 +7963,164 @@ cases:
       0 1 -1 -1
       id null true false false true java.util.UUID
       20 4 true
+  # java.util.Date is the milliseconds since the epoch; java.sql's Timestamp keeps the
+  # whole seconds there and the rest as nanoseconds. A wall time is read in the host's
+  # zone, Julian before 1582-10-15, each field past its range carried; the texts a
+  # valueOf takes and its refusals are a JDK's answers. The lines hold in any zone: a
+  # Date's text is printed without the zone's name.
+  - name: a-date-is-milliseconds-and-java-sql-reads-and-writes-wall-times
+    main: SqlDates
+    source: |
+      class SqlDates {
+          static void attempt(String what, Supplier<Object> value) {
+              try {
+                  System.out.println(what + " -> " + value.get());
+              }
+              catch (NullPointerException e) {
+                  System.out.println(what + " ! null");
+              }
+              catch (RuntimeException e) {
+                  System.out.println(what + " ! " + e + (e.getCause() == null ? "" : " / " + e.getCause()));
+              }
+          }
+
+          // the text of a java.util.Date at the same instant, but its zone, which is the host's
+          static String text(java.util.Date date) {
+              String s = new java.util.Date(date.getTime()).toString();
+              return s.substring(0, 20) + s.substring(s.lastIndexOf(' ') + 1);
+          }
+
+          public static void main(String[] args) {
+              java.util.Date d = new java.util.Date(1700000000123L);
+              Timestamp ts = new Timestamp(-1);
+              System.out.println(d.getTime() + " " + d.hashCode() + " " + d.toInstant() + " " + java.util.Date.from(Instant.ofEpochSecond(1, 999999)).getTime()
+                      + " " + new java.util.Date(Long.MIN_VALUE).hashCode() + " " + d.equals(new java.util.Date(1700000000123L)) + " " + d.equals("x"));
+              System.out.println(ts.getTime() + " " + ts.getNanos() + " " + ts.toInstant() + " " + ts.hashCode() + " " + Timestamp.from(Instant.parse("1969-12-31T23:59:59.123456789Z")).getTime()
+                      + " " + Timestamp.from(Instant.ofEpochSecond(-5, 7)).toInstant());
+              attempt("from max", () -> java.util.Date.from(Instant.MAX));
+              attempt("stamp from max", () -> Timestamp.from(Instant.MAX));
+              attempt("from null", () -> java.util.Date.from(null));
+              // the seconds in the date, the rest in the nanoseconds; getTime answers both
+              Timestamp a = new Timestamp(1000);
+              a.setNanos(500);
+              Timestamp b = new Timestamp(1000);
+              Timestamp c = new Timestamp(1500);
+              java.util.Date e = new java.util.Date(1000);
+              System.out.println(e.equals(a) + " " + a.equals(e) + " " + a.equals(b) + " " + a.equals((Object) null) + " " + e.compareTo(a) + " " + a.compareTo(e) + " " + a.compareTo(b)
+                      + " " + c.compareTo(new java.util.Date(1500)) + " " + e.before(c) + " " + c.after(e) + " " + a.after(b) + " " + a.hashCode() + " " + c.hashCode() + " " + c.getNanos());
+              attempt("nanos", () -> {
+                  a.setNanos(1000000000);
+                  return a;
+              });
+              attempt("setTime", () -> {
+                  a.setTime(-2500);
+                  return a.getTime() + " " + a.getNanos() + " " + a.toInstant();
+              });
+              // a wall time is read in the host's zone and written back as it was
+              for (String s : new String[] { "2024-01-15 10:15:30", "2024-1-5 1:2:3.5", "2024-02-30 10:15:30.000000001", "2024-01-15 25:61:61", "2024-01-15 -1:15:30", " 2024-01-15 10:15:30.120 ",
+                      "1582-10-04 23:59:59.9", "1582-10-10 00:00:00", "1582-10-14 24:00:00", "0000-01-01 12:00:00", "2024-01-15", "2024-01-15 10:15", "2024-13-01 10:15:30", "2024-01-15 10:15:30.",
+                      "2024-01-15 10:15:30.1234567891", "2024-01-15 10:15:30.a", "abcd-01-15 x", "2024-01-15 10::30", "2024-01-15 1x:00:00.", "2024-01-15 10:00:0x.", "2024-01-15 2147483648:00:00" }) {
+                  attempt("stamp " + s, () -> {
+                      Timestamp t = Timestamp.valueOf(s);
+                      return t + " " + t.toLocalDateTime() + " " + text(t);
+                  });
+              }
+              attempt("stamp null", () -> Timestamp.valueOf((String) null));
+              for (String s : new String[] { "2024-01-15", "2024-1-5", "2024-02-31", "1582-10-05", "1500-02-29", "0000-02-29", "+202-01-15", "2024-02-32", "2024-1-", "999-01-01", "2024-0a-15", "2024-01-+", "2024-1-1-" }) {
+                  attempt("date " + s, () -> {
+                      java.sql.Date t = java.sql.Date.valueOf(s);
+                      return t + " " + text(t);
+                  });
+              }
+              attempt("date null", () -> java.sql.Date.valueOf((String) null));
+              for (String s : new String[] { "10:15:30", "1:2:3", "24:00:00", "99:99:99", "0:0:-1", "10:15", ":15:30", "10:15:", "10::30", "10:15:30.5" }) {
+                  attempt("time " + s, () -> {
+                      Time t = Time.valueOf(s);
+                      return t + " " + t.toLocalTime() + " " + text(t);
+                  });
+              }
+              for (LocalDate day : new LocalDate[] { LocalDate.of(2024, 1, 15), LocalDate.of(1582, 10, 10), LocalDate.of(0, 1, 1), LocalDate.of(-5, 3, 1), LocalDate.of(10000, 1, 1) }) {
+                  java.sql.Date t = java.sql.Date.valueOf(day);
+                  Timestamp s = Timestamp.valueOf(day.atTime(10, 15, 30, 123456789));
+                  System.out.println(day + " -> " + t + " " + t.toLocalDate() + " " + text(t) + " | " + s + " " + s.toLocalDateTime());
+              }
+              System.out.println(Time.valueOf(LocalTime.of(10, 15, 30, 999)) + " " + Time.valueOf(LocalTime.of(23, 59, 59)).toLocalTime() + " "
+                      + Timestamp.valueOf(LocalDateTime.of(2024, 1, 15, 0, 0)).getNanos());
+              attempt("date toInstant", () -> java.sql.Date.valueOf("2024-01-15").toInstant());
+              attempt("time toInstant", () -> Time.valueOf("10:15:30").toInstant());
+              // what a library tests a value with: its class, and the classes above it
+              Object o = Timestamp.valueOf("2024-01-15 10:15:30");
+              System.out.println((o instanceof java.util.Date) + " " + (o instanceof java.sql.Date) + " " + (o instanceof Comparable<?>) + " " + o.getClass().getName() + " "
+                      + o.getClass().getSuperclass().getName() + " " + o.getClass().getSuperclass().getSuperclass().getName() + " " + o.getClass().getSuperclass().getSuperclass().getSuperclass()
+                      + " " + Time.class.getPackageName() + " " + java.sql.Date.class.getSimpleName());
+              System.out.println(Math.abs(new java.util.Date().getTime() - System.currentTimeMillis()) < 60000);
+          }
+      }
+    expected: |
+      1700000000123 -807048720 2023-11-14T22:13:20.123Z 1000 -2147483648 true false
+      -1 999000000 1969-12-31T23:59:59.999Z 0 -877 1969-12-31T23:59:55.000000007Z
+      from max ! java.lang.IllegalArgumentException: java.lang.ArithmeticException: long overflow / java.lang.ArithmeticException: long overflow
+      stamp from max ! java.lang.IllegalArgumentException: java.lang.ArithmeticException: long overflow / java.lang.ArithmeticException: long overflow
+      from null ! null
+      true false false false 0 1 1 0 true true true 1000 1500 500000000
+      nanos ! java.lang.IllegalArgumentException: nanos > 999999999 or < 0
+      setTime -> -2500 500000000 1969-12-31T23:59:57.500Z
+      stamp 2024-01-15 10:15:30 -> 2024-01-15 10:15:30.0 2024-01-15T10:15:30 Mon Jan 15 10:15:30 2024
+      stamp 2024-1-5 1:2:3.5 -> 2024-01-05 01:02:03.5 2024-01-05T01:02:03.500 Fri Jan 05 01:02:03 2024
+      stamp 2024-02-30 10:15:30.000000001 -> 2024-03-01 10:15:30.000000001 2024-03-01T10:15:30.000000001 Fri Mar 01 10:15:30 2024
+      stamp 2024-01-15 25:61:61 -> 2024-01-16 02:02:01.0 2024-01-16T02:02:01 Tue Jan 16 02:02:01 2024
+      stamp 2024-01-15 -1:15:30 -> 2024-01-14 23:15:30.0 2024-01-14T23:15:30 Sun Jan 14 23:15:30 2024
+      stamp  2024-01-15 10:15:30.120  -> 2024-01-15 10:15:30.12 2024-01-15T10:15:30.120 Mon Jan 15 10:15:30 2024
+      stamp 1582-10-04 23:59:59.9 -> 1582-10-04 23:59:59.9 1582-10-04T23:59:59.900 Thu Oct 04 23:59:59 1582
+      stamp 1582-10-10 00:00:00 -> 1582-10-20 00:00:00.0 1582-10-20T00:00 Wed Oct 20 00:00:00 1582
+      stamp 1582-10-14 24:00:00 -> 1582-10-15 00:00:00.0 1582-10-15T00:00 Fri Oct 15 00:00:00 1582
+      stamp 0000-01-01 12:00:00 -> 0001-01-01 12:00:00.0 0001-01-01T12:00 Thu Jan 01 12:00:00 1
+      stamp 2024-01-15 ! java.lang.IllegalArgumentException: Timestamp format must be yyyy-mm-dd hh:mm:ss[.fffffffff]
+      stamp 2024-01-15 10:15 ! java.lang.IllegalArgumentException: Timestamp format must be yyyy-mm-dd hh:mm:ss[.fffffffff]
+      stamp 2024-13-01 10:15:30 ! java.lang.IllegalArgumentException: Timestamp format must be yyyy-mm-dd hh:mm:ss[.fffffffff]
+      stamp 2024-01-15 10:15:30. ! java.lang.IllegalArgumentException: Timestamp format must be yyyy-mm-dd hh:mm:ss[.fffffffff]
+      stamp 2024-01-15 10:15:30.1234567891 ! java.lang.IllegalArgumentException: Timestamp format must be yyyy-mm-dd hh:mm:ss[.fffffffff]
+      stamp 2024-01-15 10:15:30.a ! java.lang.IllegalArgumentException: Timestamp format must be yyyy-mm-dd hh:mm:ss[.fffffffff]
+      stamp abcd-01-15 x ! java.lang.NumberFormatException: Error at index 0 in: "abcd"
+      stamp 2024-01-15 10::30 ! java.lang.NumberFormatException: For input string: ""
+      stamp 2024-01-15 1x:00:00. ! java.lang.NumberFormatException: Error at index 1 in: "1x"
+      stamp 2024-01-15 10:00:0x. ! java.lang.IllegalArgumentException: Timestamp format must be yyyy-mm-dd hh:mm:ss[.fffffffff]
+      stamp 2024-01-15 2147483648:00:00 ! java.lang.NumberFormatException: Error at index 9 in: "2147483648"
+      stamp null ! java.lang.IllegalArgumentException: null string
+      date 2024-01-15 -> 2024-01-15 Mon Jan 15 00:00:00 2024
+      date 2024-1-5 -> 2024-01-05 Fri Jan 05 00:00:00 2024
+      date 2024-02-31 -> 2024-03-02 Sat Mar 02 00:00:00 2024
+      date 1582-10-05 -> 1582-10-15 Fri Oct 15 00:00:00 1582
+      date 1500-02-29 -> 1500-02-29 Sat Feb 29 00:00:00 1500
+      date 0000-02-29 -> 0001-02-29 Sun Feb 29 00:00:00 1
+      date +202-01-15 -> 0202-01-15 Fri Jan 15 00:00:00 202
+      date 2024-02-32 ! java.lang.IllegalArgumentException
+      date 2024-1- ! java.lang.IllegalArgumentException
+      date 999-01-01 ! java.lang.IllegalArgumentException
+      date 2024-0a-15 ! java.lang.NumberFormatException: Error at index 1 in: "0a"
+      date 2024-01-+ ! java.lang.NumberFormatException: Error at index 1 in: "+"
+      date 2024-1-1- ! java.lang.NumberFormatException: Error at index 1 in: "1-"
+      date null ! java.lang.IllegalArgumentException
+      time 10:15:30 -> 10:15:30 10:15:30 Thu Jan 01 10:15:30 1970
+      time 1:2:3 -> 01:02:03 01:02:03 Thu Jan 01 01:02:03 1970
+      time 24:00:00 -> 00:00:00 00:00 Fri Jan 02 00:00:00 1970
+      time 99:99:99 -> 04:40:39 04:40:39 Mon Jan 05 04:40:39 1970
+      time 0:0:-1 -> 23:59:59 23:59:59 Wed Dec 31 23:59:59 1969
+      time 10:15 ! java.lang.IllegalArgumentException
+      time :15:30 ! java.lang.IllegalArgumentException
+      time 10:15: ! java.lang.IllegalArgumentException
+      time 10::30 ! java.lang.NumberFormatException: For input string: ""
+      time 10:15:30.5 ! java.lang.NumberFormatException: Error at index 2 in: "30.5"
+      2024-01-15 -> 2024-01-15 2024-01-15 Mon Jan 15 00:00:00 2024 | 2024-01-15 10:15:30.123456789 2024-01-15T10:15:30.123456789
+      1582-10-10 -> 1582-10-20 1582-10-20 Wed Oct 20 00:00:00 1582 | 1582-10-20 10:15:30.123456789 1582-10-20T10:15:30.123456789
+      0000-01-01 -> 0001-01-01 0001-01-01 Thu Jan 01 00:00:00 1 | 0001-01-01 10:15:30.123456789 0001-01-01T10:15:30.123456789
+      -0005-03-01 -> 0006-03-01 0006-03-01 Mon Mar 01 00:00:00 6 | 0006-03-01 10:15:30.123456789 0006-03-01T10:15:30.123456789
+      +10000-01-01 -> 0000-01-01 +10000-01-01 Sat Jan 01 00:00:00 10000 | 10000-01-01 10:15:30.123456789 +10000-01-01T10:15:30.123456789
+      10:15:30 23:59:59 0
+      date toInstant ! java.lang.UnsupportedOperationException
+      time toInstant ! java.lang.UnsupportedOperationException
+      true false true java.sql.Timestamp java.util.Date java.lang.Object null java.sql Date
+      true
   # == of two strings compares references: the constants of one text are one object, a
   # computed string another, intern the constant's. split takes a pattern; a
   # StringBuilder is edited in place and is a CharSequence, as a string is.
@@ -9574,10 +9734,13 @@ standalone:
       Caused by: java.lang.Exception: loop
       Caused by: [CIRCULAR REFERENCE: java.lang.RuntimeException: back]
   # Top-level methods and fields are the members of a class named as the file; java.base
-  # is imported, IO is java.lang's.
+  # is imported, IO is java.lang's. A package imported on demand shadows what a module
+  # import brings: Date is java.sql's, not java.util's.
   - name: a-compact-source-file-starts-at-its-instance-main
     file: Compact.java
     source: |
+      import java.sql.*;
+
       int calls;
 
       int square(int x) {
@@ -9600,6 +9763,7 @@ standalone:
           IO.println(this.calls > 0);
           Tally tally = new Tally(2);
           IO.println(tally.twice() + " " + tally.getClass().getName() + " " + Mode.ON.getClass().getName());
+          IO.println(Date.valueOf("2024-01-15").getClass().getName());
       }
 
       // a class beside the members is a member class of the file's class: an inner class
@@ -9621,6 +9785,7 @@ standalone:
 
       true
       19 Compact$Tally Compact$Mode
+      java.sql.Date
   # The launch protocol: the first class of the file when it has a main, else the class
   # named as the file; main(String[]) before main(), an instance main on an instance
   # made with no argument.

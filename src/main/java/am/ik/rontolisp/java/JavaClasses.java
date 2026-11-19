@@ -49,6 +49,12 @@ final class JavaClasses {
 	/** The one package of the module {@code java.net.http}. */
 	private static final String HTTP_MODULE = "java.net.http";
 
+	/**
+	 * The packages of the module {@code java.sql}, the first of the library outside
+	 * {@code java.base}.
+	 */
+	private static final List<String> SQL_MODULE = List.of("java.sql", "javax.sql");
+
 	/** The module of the HTTP server, and the one package of it the library has. */
 	private static final String SERVER_MODULE = "jdk.httpserver";
 
@@ -73,6 +79,8 @@ final class JavaClasses {
 	 * @param packageName its package, or {@code null}
 	 * @param imports the single-type imports, by simple name
 	 * @param onDemand the packages imported on demand
+	 * @param modules the packages of the modules imported, which those imported on demand
+	 * shadow: {@code java.base}'s for a compact source file
 	 * @param declared the classes it declares, by simple name
 	 * @param statics the classes a static import names, by the simple name of the member
 	 * it imports
@@ -80,8 +88,8 @@ final class JavaClasses {
 	 * @param unchecked where its unchecked warnings are suppressed
 	 */
 	record Unit(Source source, @Nullable String packageName, Map<String, Import> imports, List<String> onDemand,
-			Map<String, JavaClass> declared, Map<String, List<JavaClass>> statics, List<JavaClass> staticOnDemand,
-			List<JavaSyntax.Span> unchecked) {
+			List<String> modules, Map<String, JavaClass> declared, Map<String, List<JavaClass>> statics,
+			List<JavaClass> staticOnDemand, List<JavaSyntax.Span> unchecked) {
 	}
 
 	private final Map<String, JavaClass> classes = new LinkedHashMap<>();
@@ -409,9 +417,10 @@ final class JavaClasses {
 	List<JavaClass> declare(CompilationUnit tree, Source source) {
 		Map<String, Import> imports = new HashMap<>();
 		List<String> onDemand = new ArrayList<>();
+		List<String> modules = new ArrayList<>();
 		boolean compact = tree.classes().stream().anyMatch(ClassDeclaration::implicit);
 		if (compact) {
-			onDemand.addAll(LIBRARY_PACKAGES);
+			modules.addAll(LIBRARY_PACKAGES);
 		}
 		for (Import imported : tree.imports()) {
 			if (imported.isStatic()) {
@@ -419,13 +428,16 @@ final class JavaClasses {
 			}
 			if (imported.module()) {
 				if (imported.name().equals(HTTP_MODULE)) {
-					onDemand.add(HTTP_MODULE);
+					modules.add(HTTP_MODULE);
 				}
 				else if (imported.name().equals(SERVER_MODULE)) {
-					onDemand.add(SERVER_PACKAGE);
+					modules.add(SERVER_PACKAGE);
+				}
+				else if (imported.name().equals("java.sql")) {
+					modules.addAll(SQL_MODULE);
 				}
 				else if (imported.name().equals("java.base")) {
-					onDemand.addAll(LIBRARY_PACKAGES);
+					modules.addAll(LIBRARY_PACKAGES);
 				}
 				else {
 					throw unsupported(source, imported.pos(), "the module " + imported.name());
@@ -438,8 +450,8 @@ final class JavaClasses {
 				imports.put(imported.name().substring(imported.name().lastIndexOf('.') + 1), imported);
 			}
 		}
-		Unit unit = new Unit(source, tree.packageName(), imports, onDemand, new LinkedHashMap<>(), new HashMap<>(),
-				new ArrayList<>(), tree.unchecked());
+		Unit unit = new Unit(source, tree.packageName(), imports, onDemand, modules, new LinkedHashMap<>(),
+				new HashMap<>(), new ArrayList<>(), tree.unchecked());
 		List<JavaClass> declared = new ArrayList<>();
 		List<JavaClass> all = new ArrayList<>();
 		for (ClassDeclaration declaration : tree.classes()) {
@@ -491,9 +503,9 @@ final class JavaClasses {
 				|| ANNOTATIONS.contains(name.startsWith("java.lang.") ? name.substring("java.lang.".length()) : name)) {
 			return;
 		}
-		JavaClass type = find(name, null, unit);
+		JavaClass type = find(name, null, unit, written.pos());
 		for (int i = 0; type == null && i < all.size(); i++) {
-			type = find(name, all.get(i), unit);
+			type = find(name, all.get(i), unit, written.pos());
 		}
 		if (type == null) {
 			throw error(unit.source(), written.pos(), "cannot find symbol: class " + name);
@@ -518,7 +530,7 @@ final class JavaClasses {
 		if (typeName.isEmpty()) {
 			throw error(unit.source(), at, "cannot find symbol: class " + name);
 		}
-		JavaClass type = find(typeName, null, unit);
+		JavaClass type = find(typeName, null, unit, at);
 		if (type == null) {
 			throw error(unit.source(), at,
 					"cannot find symbol: class " + typeName.substring(typeName.lastIndexOf('.') + 1));
@@ -1378,10 +1390,12 @@ final class JavaClasses {
 	 * The class a name written in a class's body means, or {@code null}: a local class in
 	 * scope, the class itself or a member type of it or of a class around it, a class of
 	 * the file, a single-type import, a class of the file's package, of
-	 * {@code java.lang}, of a package imported on demand. A qualified name is a class and
-	 * the member types under it.
+	 * {@code java.lang}, of a package imported on demand, of a module imported. A
+	 * qualified name is a class and the member types under it.
+	 * @param pos where the name is written: a name two packages imported alike have is
+	 * refused there
 	 */
-	@Nullable JavaClass find(String name, @Nullable JavaClass context, Unit unit) {
+	@Nullable JavaClass find(String name, @Nullable JavaClass context, Unit unit, int pos) {
 		int dot = name.indexOf('.');
 		if (dot >= 0) {
 			JavaClass whole = qualified(name);
@@ -1391,7 +1405,7 @@ final class JavaClasses {
 			// the longest prefix that is a class, then member types
 			for (int end = name.lastIndexOf('.'); end > 0; end = name.lastIndexOf('.', end - 1)) {
 				String prefix = name.substring(0, end);
-				JavaClass outer = prefix.indexOf('.') < 0 ? find(prefix, context, unit) : qualified(prefix);
+				JavaClass outer = prefix.indexOf('.') < 0 ? find(prefix, context, unit, pos) : qualified(prefix);
 				if (outer == null) {
 					continue;
 				}
@@ -1437,11 +1451,13 @@ final class JavaClasses {
 		if (implicit != null) {
 			return implicit;
 		}
-		for (String packageName : unit.onDemand()) {
-			JavaClass found = qualified(packageName + "." + name);
-			if (found != null) {
-				return found;
-			}
+		JavaClass onDemand = imported(name, unit.onDemand(), unit, pos);
+		if (onDemand != null) {
+			return onDemand;
+		}
+		JavaClass module = imported(name, unit.modules(), unit, pos);
+		if (module != null) {
+			return module;
 		}
 		for (JavaClass type : unit.staticOnDemand()) {
 			JavaClass member = member(type, name, new HashSet<>());
@@ -1450,6 +1466,25 @@ final class JavaClasses {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * The class of a simple name in the packages one kind of import brings, or
+	 * {@code null}; two of them are the error a compiler reports ({@code java.util.Date}
+	 * and {@code java.sql.Date}).
+	 */
+	private @Nullable JavaClass imported(String name, List<String> packages, Unit unit, int pos) {
+		JavaClass found = null;
+		for (String packageName : packages) {
+			JavaClass candidate = qualified(packageName + "." + name);
+			if (candidate != null && found != null && candidate != found) {
+				throw error(unit.source(), pos, "reference to " + name + " is ambiguous");
+			}
+			if (candidate != null) {
+				found = candidate;
+			}
+		}
+		return found;
 	}
 
 	/** {@link #find}, or the error a compiler reports. */
@@ -1468,7 +1503,7 @@ final class JavaClasses {
 	}
 
 	private JavaClass required(String name, int pos, @Nullable JavaClass context, Unit unit) {
-		JavaClass found = find(name, context, unit);
+		JavaClass found = find(name, context, unit, pos);
 		if (found != null) {
 			accessible(found, unit, pos);
 			return found;

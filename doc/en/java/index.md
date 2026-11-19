@@ -104,7 +104,9 @@ $ rontolisp app/Main.java -o main.wasm
 ```
 
 An `import` names a class, a package on demand, `module java.base` (every class of the
-library), or with `static` a static member of a class, or all of them on demand. A class
+library but `java.sql`'s), `module java.sql`, or with `static` a static member of a class, or
+all of them on demand. A package imported on demand shadows a module imported, and a name
+two packages of one kind bring is refused (`reference to Date is ambiguous`). A class
 that is not `public` and a member with no access modifier are reached from their own
 package only, a `protected` member from its package and from the classes under its class.
 
@@ -549,6 +551,8 @@ as far as the program reaches it, so a class of the program can extend or implem
 | `ZoneOffset`, `ZoneId`, `ZoneRules` | `UTC`, `MIN`, `MAX`; `ZoneOffset.of`, `ofHours`, `ofHoursMinutes`, `ofHoursMinutesSeconds`, `ofTotalSeconds`, `from`, `getTotalSeconds`, `compareTo`; `ZoneId.of`, `ofOffset`, `systemDefault`, `from`, `getId`, `getRules`, `normalized`, `equals`, `hashCode`, `toString`; `ZoneRules.of`, `isFixedOffset`, `getOffset`, `getValidOffsets`, `isValidOffset`, `getStandardOffset`, `getDaylightSavings`, `isDaylightSavings`; `ZoneRulesException`. The [zones](deviations.md) are the ones whose offset never changes |
 | `Clock` | `systemUTC`, `systemDefaultZone`, `system`, `fixed`, `offset`, `tick`, `tickSeconds`, `tickMinutes`, `tickMillis`; `instant`, `millis`, `getZone`, `withZone`; a class extending it |
 | `DayOfWeek`, `Month` | the constants; `of`, `from`, `getValue`, `plus`, `minus`; `Month.length`, `minLength`, `maxLength`, `firstDayOfYear`, `firstMonthOfQuarter` |
+| `java.util.Date` | `new Date()`, `new Date(long)`, `Date.from`; `getTime`, `setTime`, `before`, `after`, `compareTo`, `equals`, `hashCode`, `toInstant`, `toString` |
+| `java.sql.Date`, `Time`, `Timestamp` | the package of the module `java.sql`. `new` of the milliseconds; `valueOf` of a text, of a `LocalDate`, a `LocalTime` or a `LocalDateTime`; `toLocalDate`, `toLocalTime`, `toLocalDateTime`, `toString`; `Timestamp.from`, `toInstant`, `getNanos`, `setNanos`, `equals`, `compareTo`, `before` and `after` of a `Timestamp`. A wall time is read and written in the host's zone, in the Julian calendar before 1582-10-15 |
 | `URI`, `URISyntaxException` | `new URI(String)`, `URI.create`; `getScheme`, `getSchemeSpecificPart`, `getAuthority`, `getUserInfo`, `getHost`, `getPort`, `getPath`, `getQuery`, `getFragment` and the `getRaw..` of each; `isAbsolute`, `isOpaque`, `resolve` of a `URI` or a string, `equals`, `hashCode`, `compareTo`, `toString`; `getInput`, `getReason`, `getIndex` |
 | `HttpClient` | `newHttpClient`; `newBuilder` with `version`, `followRedirects`, `executor`, `connectTimeout`, `build`; `send`, `sendAsync`, `followRedirects`, `version`, `executor`, `connectTimeout`, `close`, `shutdown`, `shutdownNow`, `isTerminated`; `HttpClient.Version`, `HttpClient.Redirect` |
 | `HttpRequest` | `newBuilder` with or without a `URI`, with `uri`, `header`, `headers`, `setHeader`, `GET`, `POST`, `PUT`, `DELETE`, `HEAD`, `method`, `version`, `expectContinue`, `timeout`, `copy`, `build`; `method`, `uri`, `headers`, `bodyPublisher`, `version`, `expectContinue`, `timeout`, `equals`, `hashCode`, `toString`; `BodyPublishers.ofString` with or without a `Charset`, `ofByteArray` of an array or a range, `ofInputStream`, `noBody`; `BodyPublisher.contentLength` |

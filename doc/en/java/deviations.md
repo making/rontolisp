@@ -12,8 +12,8 @@ the Basic Multilingual Plane. `hashCode` is the specified number, and `toCharArr
 the UTF-16 units, which `new String(char[])` reads back. `toUpperCase` and `toLowerCase`
 change one character into one: `"ß".toUpperCase()` is `ß`, where a JDK answers `SS`. A
 surrogate with no partner in a string is its three bytes in UTF-8, where a JDK writes `?`.
-`Character.digit`, `getNumericValue`, `Integer.parseInt`, `UUID.fromString` and the texts a
-`BigInteger` and a `BigDecimal` are made of read a digit outside ASCII
+`Character.digit`, `getNumericValue`, `Integer.parseInt`, `UUID.fromString`, `valueOf` of
+`java.sql` and the texts a `BigInteger` and a `BigDecimal` are made of read a digit outside ASCII
 (`'٣'`) on the interpreter and the JVM and not in a `.wasm`.
 
 ```java
@@ -281,6 +281,13 @@ called. `LocalDate.now()` is the host's date; a date in another season is read a
 offset. A `.wasm` learns the host's zone as
 [`decode-universal-time`](../guides/clock-and-random.md) does, and answers UTC where it
 cannot.
+
+**A `java.util.Date` names its zone by the offset.** `toString` writes `UTC` where the host
+is at UTC and `GMT+09:00` elsewhere, where a JDK writes the zone's abbreviation (`JST`,
+`EST`). Before a region's first rule the offset is the host's local mean time
+(`GMT-04:56` in New York before 1883), where a JDK reads the region's first standard
+offset. `clone` and the members deprecated since JDK 1.1 (`getYear`, `getHours`) are
+refused by name.
 
 **`java.time` has no formatter.** `DateTimeFormatter`, and `format` and `parse` taking
 one, are refused by name; `parse` of a text alone and `toString` read and write the

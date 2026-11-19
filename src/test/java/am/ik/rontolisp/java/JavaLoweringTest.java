@@ -721,8 +721,10 @@ class JavaLoweringTest {
 		try (javax.tools.StandardJavaFileManager files = compiler.getStandardFileManager(reported, null,
 				StandardCharsets.UTF_8)) {
 			compiler.getTask(null, files, reported,
-					// java.net.http is a package of a module of its own: with the modules
-					// limited to java.base it is one of the patch, as every other
+					// java.net.http and java.sql are packages of modules of their own:
+					// with
+					// the modules limited to java.base each is one of the patch, as every
+					// other
 					List.of("--limit-modules", "java.base", "--patch-module", "java.base=" + library, "-d",
 							classes.toString(), "-proc:none", "-Xlint:none", "-Xmaxerrs", "1000"),
 					null, files.getJavaFileObjectsFromPaths(sources))
@@ -1185,7 +1187,7 @@ class JavaLoweringTest {
 	@Test
 	void aConstructTheSubsetDoesNotHaveIsRefusedByNameAtItsPosition() {
 		String[][] refusals = { { "record P(int... xs) {}", "1:17: a variable arity record component" },
-				{ "import module java.sql; void main() { }", "1:1: the module java.sql" },
+				{ "import module java.desktop; void main() { }", "1:1: the module java.desktop" },
 				{ "void main() { assert true; }", "1:15: an assert statement" },
 				{ "void main() { switch (1L) { default -> { } } }", "1:15: a switch over long" },
 				{ "void main() { IO.println(String.class.getInterfaces()); }", "1:39: Class.getInterfaces()" },
@@ -1231,6 +1233,10 @@ class JavaLoweringTest {
 				{ "void main() { foo(); }", "1:15: cannot find symbol: method foo()" },
 				{ "void main() { IO.println(y); }", "1:26: cannot find symbol: variable y" },
 				{ "void main() { Foo f = null; }", "1:15: cannot find symbol: class Foo" },
+				{ "import java.util.*; import java.sql.*; void main() { Date d = null; }",
+						"1:54: reference to Date is ambiguous" },
+				{ "import module java.sql; void main() { IO.println(Date.from(null)); }",
+						"1:50: reference to Date is ambiguous" },
 				{ "void main() { int x = 1; int x = 2; }", "1:30: variable x is already defined" },
 				{ "class A { synchronized int x; } void main() { }", "1:28: modifier synchronized not allowed here" },
 				{ "class A { volatile void m() { } } void main() { }", "1:25: modifier volatile not allowed here" },

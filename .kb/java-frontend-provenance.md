@@ -343,6 +343,18 @@ algorithm came from, and the answer goes in the file's header.
   the regions would cost was asked of a running JDK's `java.time.zone` API
   (`Zones.java`). The answers are lines of `java-spec.yaml`, which the JDK leg asks
   again.
+- **`java.util.Date` and `java.sql` (k37, 2026-11-20).** Written from the API
+  documentation (which states `Date.hashCode`, `equals` and the text forms) and JDK 25's
+  answers to probes (`Grid.java`, 2,095 lines; `Gap.java`, the wall times four zones skip
+  and repeat; the zone's name under eleven `TZ` settings). Nobody opened OpenJDK's
+  source. The calendar is our own day count per calendar (`rontolisp.internal.Dates`);
+  which calendar a day near 1582 is read in, how a field past its range carries, which
+  offset a skipped or repeated time takes, the order a text's parts are read and
+  refused in and the words of the refusals were read off the answers. `Timestamp`'s
+  split of an instant into whole seconds and nanoseconds was first recalled from how a
+  JDK writes it; it is written as floor division and checked against the grid's
+  negative instants and the long's ends, where the answers show the wrap. The answers
+  are lines of `java-spec.yaml`, which the JDK leg asks again.
 - **Unicode normalization (k29, 2026-11-19).** `eval/unicode-normalization.lisp` was
   written from Unicode Standard Annex #15 and the Unicode Standard's sections 3.11
   (decomposition, canonical ordering, canonical composition) and 3.12 (Hangul by

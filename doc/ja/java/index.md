@@ -106,8 +106,10 @@ $ rontolisp app/Main.java
 $ rontolisp app/Main.java -o main.wasm
 ```
 
-`import` には、クラス、オンデマンドのパッケージ、`module java.base`（ライブラリのすべての
-クラス）を指定できます。`static` を付けると、クラスの static メンバー 1 つ、またはオンデマンドで
+`import` には、クラス、オンデマンドのパッケージ、`module java.base`（`java.sql` を除く
+ライブラリのすべてのクラス）、`module java.sql` を指定できます。オンデマンドのパッケージは
+モジュールのインポートより優先します。同じ種類の 2 つのパッケージが同じ名前を持ち込むと、
+その名前は拒否されます（`reference to Date is ambiguous`）。`static` を付けると、クラスの static メンバー 1 つ、またはオンデマンドで
 そのすべてを指定できます。`public` でないクラスとアクセス修飾子のないメンバーには、同じ
 パッケージからだけアクセスできます。`protected` のメンバーには、同じパッケージと、そのクラスの
 サブクラスからアクセスできます。
@@ -555,6 +557,8 @@ void main() {
 | `ZoneOffset`、`ZoneId`、`ZoneRules` | `UTC`、`MIN`、`MAX`。`ZoneOffset.of`、`ofHours`、`ofHoursMinutes`、`ofHoursMinutesSeconds`、`ofTotalSeconds`、`from`、`getTotalSeconds`、`compareTo`。`ZoneId.of`、`ofOffset`、`systemDefault`、`from`、`getId`、`getRules`、`normalized`、`equals`、`hashCode`、`toString`。`ZoneRules.of`、`isFixedOffset`、`getOffset`、`getValidOffsets`、`isValidOffset`、`getStandardOffset`、`getDaylightSavings`、`isDaylightSavings`。`ZoneRulesException`。[ゾーン](deviations.md)はオフセットが変わらないものだけです |
 | `Clock` | `systemUTC`、`systemDefaultZone`、`system`、`fixed`、`offset`、`tick`、`tickSeconds`、`tickMinutes`、`tickMillis`。`instant`、`millis`、`getZone`、`withZone`。`Clock` を継承するクラス |
 | `DayOfWeek`、`Month` | 各定数。`of`、`from`、`getValue`、`plus`、`minus`。`Month.length`、`minLength`、`maxLength`、`firstDayOfYear`、`firstMonthOfQuarter` |
+| `java.util.Date` | `new Date()`、`new Date(long)`、`Date.from`。`getTime`、`setTime`、`before`、`after`、`compareTo`、`equals`、`hashCode`、`toInstant`、`toString` |
+| `java.sql.Date`、`Time`、`Timestamp` | モジュール `java.sql` のパッケージです。ミリ秒を取る `new`。文字列、`LocalDate`、`LocalTime`、`LocalDateTime` を取る `valueOf`。`toLocalDate`、`toLocalTime`、`toLocalDateTime`、`toString`。`Timestamp.from`、`toInstant`、`getNanos`、`setNanos`、`Timestamp` を取る `equals`、`compareTo`、`before`、`after`。日時はホストのゾーンで読み書きし、1582-10-15 より前はユリウス暦です |
 | `URI`、`URISyntaxException` | `new URI(String)`、`URI.create`。`getScheme`、`getSchemeSpecificPart`、`getAuthority`、`getUserInfo`、`getHost`、`getPort`、`getPath`、`getQuery`、`getFragment` と、それぞれの `getRaw..`。`isAbsolute`、`isOpaque`、`URI` または文字列を取る `resolve`、`equals`、`hashCode`、`compareTo`、`toString`。`getInput`、`getReason`、`getIndex` |
 | `HttpClient` | `newHttpClient`。`newBuilder` と、そのビルダーの `version`、`followRedirects`、`executor`、`connectTimeout`、`build`。`send`、`sendAsync`、`followRedirects`、`version`、`executor`、`connectTimeout`、`close`、`shutdown`、`shutdownNow`、`isTerminated`。`HttpClient.Version`、`HttpClient.Redirect` |
 | `HttpRequest` | `URI` の指定がある、またはない `newBuilder` と、そのビルダーの `uri`、`header`、`headers`、`setHeader`、`GET`、`POST`、`PUT`、`DELETE`、`HEAD`、`method`、`version`、`expectContinue`、`timeout`、`copy`、`build`。`method`、`uri`、`headers`、`bodyPublisher`、`version`、`expectContinue`、`timeout`、`equals`、`hashCode`、`toString`。`Charset` の指定がある、またはない `BodyPublishers.ofString`、配列またはその範囲を取る `ofByteArray`、`ofInputStream`、`noBody`。`BodyPublisher.contentLength` |
