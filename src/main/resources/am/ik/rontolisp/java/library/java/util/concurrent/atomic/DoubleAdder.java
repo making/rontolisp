@@ -6,7 +6,7 @@
 // one sum, added to in the order the values came.
 package java.util.concurrent.atomic;
 
-public class DoubleAdder {
+public class DoubleAdder extends Number {
 
     private double sum;
 

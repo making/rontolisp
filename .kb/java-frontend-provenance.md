@@ -293,6 +293,14 @@ algorithm came from, and the answer goes in the file's header.
   is 1, a nanosecond 51) and the text of `multipliedBy`'s overflow (the product in
   nanoseconds). The runner's timeouts (`wire.rs`) are Rust's `connect_timeout` and
   socket read timeouts.
+- **The field updaters, `invokeAll` with a limit and `join(Duration)` (k08,
+  2026-11-19).** Written from the API documentation and JDK 25's answers to probes (the
+  updaters' members over one object, 49 calls of `newUpdater` for the order and
+  the words of its refusals, the names `toString()` shows; what `invokeAll` leaves done,
+  cancelled and never run at four limits; `join` of nine durations with and without an
+  interrupt). Nobody opened OpenJDK's source; the answers are lines of `java-spec.yaml`,
+  which the JDK leg asks again. The same for which abstract method javac names of a
+  class leaving several out (seven shapes).
 - **Notices (j93, 2026-11-18): kept with notices.** What the audit filed under "Add notices"
   and "To confirm" stays, under its licence:
   - Root `NOTICE` (rontolisp, and Maven's and Maven Resolver's Apache NOTICE lines) and

@@ -9,7 +9,7 @@ package java.util.concurrent.atomic;
 import java.util.function.LongBinaryOperator;
 import java.util.function.LongUnaryOperator;
 
-public class AtomicLong {
+public class AtomicLong extends Number {
 
     private long value;
 
@@ -104,6 +104,10 @@ public class AtomicLong {
     }
 
     public long longValue() {
+        return get();
+    }
+
+    public float floatValue() {
         return get();
     }
 

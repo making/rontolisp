@@ -286,6 +286,33 @@ public class Thread implements Runnable {
         }
     }
 
+    /**
+     * Whether the thread ended within a duration. A duration that is none waits for
+     * nothing, so an interrupt is left for the next wait; so does a thread that ended.
+     */
+    public final boolean join(Duration duration) throws InterruptedException {
+        boolean none = duration.isNegative() || duration.isZero();
+        synchronized (this) {
+            if (!this.started) {
+                throw new IllegalThreadStateException("Thread not started");
+            }
+            if (none || !this.alive) {
+                return !this.alive;
+            }
+            // what passes a century is a century: the count of nanoseconds stays a long
+            long seconds = Math.min(duration.getSeconds(), 3155760000L);
+            long deadline = System.nanoTime() + seconds * 1000000000L + duration.getNano();
+            while (this.alive) {
+                long left = deadline - System.nanoTime();
+                if (left <= 0) {
+                    return false;
+                }
+                wait((left + 999999L) / 1000000L);
+            }
+            return true;
+        }
+    }
+
     public static void sleep(long millis) throws InterruptedException {
         sleep(millis, 0);
     }

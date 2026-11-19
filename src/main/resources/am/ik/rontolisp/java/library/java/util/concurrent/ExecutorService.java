@@ -54,6 +54,49 @@ public interface ExecutorService extends Executor, AutoCloseable {
         return futures;
     }
 
+    /**
+     * Every task run to its end or until the time is up, whichever comes first: a task
+     * is handed over while time is left, and one still open when the wait ends -- by
+     * the limit, or by an interrupt -- is cancelled.
+     */
+    default <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks, long timeout, TimeUnit unit)
+            throws InterruptedException {
+        long nanos = unit.toNanos(timeout);
+        List<Future<T>> futures = new ArrayList<>();
+        List<Runnable> runs = new ArrayList<>();
+        for (Callable<T> task : tasks) {
+            FutureTask<T> future = new FutureTask<>(task);
+            futures.add(future);
+            runs.add(future);
+        }
+        long deadline = System.nanoTime() + nanos;
+        try {
+            long left = nanos;
+            for (int i = 0; i < runs.size() && left > 0; i++) {
+                execute(runs.get(i));
+                left = deadline - System.nanoTime();
+            }
+            for (int i = 0; i < futures.size() && left > 0; i++) {
+                try {
+                    futures.get(i).get(left, TimeUnit.NANOSECONDS);
+                }
+                catch (ExecutionException | CancellationException e) {
+                    // the caller reads it from the future
+                }
+                catch (TimeoutException e) {
+                    break;
+                }
+                left = deadline - System.nanoTime();
+            }
+        }
+        finally {
+            for (Future<T> future : futures) {
+                future.cancel(true);
+            }
+        }
+        return futures;
+    }
+
     /** The value of the first task to end with one; the others are cancelled. */
     default <T> T invokeAny(Collection<? extends Callable<T>> tasks) throws InterruptedException, ExecutionException {
         try {

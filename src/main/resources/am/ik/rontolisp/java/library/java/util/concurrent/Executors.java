@@ -64,6 +64,11 @@ public final class Executors {
             return this.pool.invokeAll(tasks);
         }
 
+        public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks, long timeout, TimeUnit unit)
+                throws InterruptedException {
+            return this.pool.invokeAll(tasks, timeout, unit);
+        }
+
         public <T> T invokeAny(Collection<? extends Callable<T>> tasks) throws InterruptedException,
                 ExecutionException {
             return this.pool.invokeAny(tasks);

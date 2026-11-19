@@ -876,33 +876,42 @@ class RontoLispCliStreamsTest {
 		// subclass, a body declared later reaches an earlier caller; a class's static
 		// state lives on; a value shows by its static type; what a step left uncaught
 		// is reported and the session goes on; a step throws what it likes, as a
-		// snippet does, where a method declares what it throws
-		String[] session = runSession(false, """
-				interface Shape { double area(); }
-				record Sq(double s) implements Shape { public double area() { return s * s; } }
-				double total(List<Shape> shapes) { double t = 0; for (Shape s : shapes) t += s.area(); return t; }
-				List<Shape> shapes = new ArrayList<>()
-				shapes.add(new Sq(2))
-				record Circle(double r) implements Shape { public double area() { return 3 * r * r; } }
-				shapes.add(new Circle(1))
-				total(shapes)
-				int twice(int n) { return 2 * n; }
-				int quad(int n) { return twice(twice(n)); }
-				quad(1)
-				int twice(int n) { return n + 1; }
-				quad(1)
-				class Counter { static int n; static int next() { return ++n; } }
-				Counter.next()
-				Counter.next()
-				1 / 0
-				"a\\"b"
-				'c'
-				int[] xs = {1,
-				    2}
-				System.out.println(xs.length)
-				byte[] bs = "ab".getBytes("UTF-8")
-				int nap(int n) { Thread.sleep(n); return n; }
-				""", "--source-language", "java");
+		// snippet does, where a method declares what it throws; a field updater made
+		// by one buffer finds its field in the buffers after it
+		String[] session = runSession(false,
+				"""
+						interface Shape { double area(); }
+						record Sq(double s) implements Shape { public double area() { return s * s; } }
+						double total(List<Shape> shapes) { double t = 0; for (Shape s : shapes) t += s.area(); return t; }
+						List<Shape> shapes = new ArrayList<>()
+						shapes.add(new Sq(2))
+						record Circle(double r) implements Shape { public double area() { return 3 * r * r; } }
+						shapes.add(new Circle(1))
+						total(shapes)
+						int twice(int n) { return 2 * n; }
+						int quad(int n) { return twice(twice(n)); }
+						quad(1)
+						int twice(int n) { return n + 1; }
+						quad(1)
+						class Counter { static int n; static int next() { return ++n; } }
+						Counter.next()
+						Counter.next()
+						1 / 0
+						"a\\"b"
+						'c'
+						int[] xs = {1,
+						    2}
+						System.out.println(xs.length)
+						byte[] bs = "ab".getBytes("UTF-8")
+						class Cell { volatile int hits; }
+						java.util.concurrent.atomic.AtomicIntegerFieldUpdater<Cell> up
+						Cell cell
+						{ up = java.util.concurrent.atomic.AtomicIntegerFieldUpdater.newUpdater(Cell.class, "hits"); cell = new Cell(); }
+						up.incrementAndGet(cell)
+						up.addAndGet(cell, 2)
+						int nap(int n) { Thread.sleep(n); return n; }
+						""",
+				"--source-language", "java");
 		assertThat(session[1]).isEqualTo("""
 				shapes ==> []
 				$1 ==> true
@@ -917,6 +926,10 @@ class RontoLispCliStreamsTest {
 				xs ==> int[2] { 1, 2 }
 				2
 				bs ==> byte[2] { 97, 98 }
+				up ==> null
+				cell ==> null
+				$12 ==> 1
+				$13 ==> 3
 				""");
 		assertThat(session[2]).contains("Exception java.lang.ArithmeticException: / by zero",
 				"unreported exception InterruptedException; must be caught or declared to be thrown");

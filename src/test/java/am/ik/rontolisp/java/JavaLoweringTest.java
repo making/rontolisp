@@ -576,6 +576,70 @@ class JavaLoweringTest {
 			.noneMatch(form -> form.contains("HttpServing.serve()"));
 		assertThat(forms).noneMatch(
 				form -> form.contains("RONTOLISP:FETCH") || form.contains("%URI-") || form.contains("%HTTP-SERVE"));
+		// Number's values are Lisp values, so a member called through it is the run
+		// time's form -- until a class of Java source stands under Number (an atomic, a
+		// program's own): then a function chooses the body by the receiver's class,
+		// its last arm that form, a member Number has a body for narrows what that
+		// function answers, instanceof asks the classes' predicates too and Object's
+		// methods go through the program's.
+		String numbers = """
+				class L10 {
+				    static class Half %s {
+				        public int intValue() { return 1; }
+				        public long longValue() { return 1; }
+				        public float floatValue() { return 0.5f; }
+				        public double doubleValue() { return 0.5; }
+				        public short shortValue() { return 7; }
+				    }
+				    static String show(Object o) { return o instanceof Number n ? n.intValue() + " " + n.shortValue() + n : ""; }
+				    public static void main(String[] args) { System.out.println(show(%s)); }
+				}
+				""";
+		assertThat(lower(numbers.formatted("", "1"), "L10.java")).anyMatch(form -> form
+			.startsWith("(DEFUN |L10.show(Object)| (|o|) (LET ((|n| NIL)) (IF "
+					+ "(RONTOLISP::%JAVA-NUMBER-P |o|) (PROGN (SETQ |n| |o|) ")
+				&& form.contains("(%DECIMAL-PIECE (RONTOLISP::%JAVA-NUMBER-INT (OR |n| (RONTOLISP::%JAVA-NPE))))")
+				&& form.contains("(RONTOLISP::%JAVA-TO-STRING |n|)"))
+			.noneMatch(form -> form.contains("|Number"));
+		assertThat(lower(numbers.formatted("extends Number", "new Half()"), "L10.java")).contains(
+				"(DEFUN |L10.show(Object)| (|o|) (LET ((|n| NIL)) (IF (|Number%is| |o|) (PROGN (SETQ |n| |o|) "
+						+ "(%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT (%DECIMAL-PIECE (|Number.intValue()%v| "
+						+ "(OR |n| (RONTOLISP::%JAVA-NPE)))) \" \") (%DECIMAL-PIECE (|Number.shortValue()%v| (OR |n| "
+						+ "(RONTOLISP::%JAVA-NPE))))) (|%string| |n|))) \"\")))",
+				"(DEFUN |Number.intValue()%v| (|%o|) (COND ((|L10.Half?| |%o|) (|L10.Half.intValue()| |%o|)) "
+						+ "(T (RONTOLISP::%JAVA-NUMBER-INT |%o|))))",
+				"(DEFUN |Number.shortValue()%v| (|%o|) (COND ((|L10.Half?| |%o|) (|L10.Half.shortValue()| |%o|)) "
+						+ "(T (- (LOGAND (+ (|Number.intValue()%v| |%o|) 32768) 65535) 32768))))",
+				"(DEFUN |Number%is| (|%o|) (OR (|L10.Half?| |%o|) (RONTOLISP::%JAVA-NUMBER-P |%o|)))");
+		// newUpdater of a field updater is lowered where it is called, of a class
+		// literal and a constant name: the updater made holds the field's name -- its
+		// accessor's symbol -- and the program's function swaps the field of a name
+		// under the lock of
+		// every volatile access; a field a JDK refuses when the call runs is its
+		// exception thrown there.
+		assertThat(
+				lower("""
+						import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
+						class L11 {
+						    volatile int hits;
+						    static final AtomicIntegerFieldUpdater<L11> HITS = AtomicIntegerFieldUpdater.newUpdater(L11.class, "hits");
+						    public static void main(String[] args) {
+						        Thread.yield();
+						        System.out.println(HITS.compareAndSet(new L11(), 0, 1));
+						        AtomicIntegerFieldUpdater.newUpdater(L11.class, "none");
+						    }
+						}
+						""",
+						"L11.java"))
+			.contains(
+					"(DEFUN |%field-swap| (|%n| |%o| |%a0| |%a1|) (CASE |%n| (|L11.hits| (IF (|j%L11?| |%o|) (RONTOLISP:WITH-MUTEX "
+							+ "((RONTOLISP::%JAVA-VOLATILE)) (IF (EQL (|L11.hits| |%o|) |%a0|) (PROGN (SETF (|L11.hits| |%o|) "
+							+ "|%a1|) T) NIL)) (RONTOLISP::%JAVA-THROW (|ClassCastException.new()|) "
+							+ "#'|Throwable.toString()|)))))")
+			.anyMatch(form -> form.contains(
+					"(SETQ |j%L11.HITS| (|java.util.concurrent.atomic.AtomicIntegerFieldUpdater.of(Object)| '|L11.hits|))"))
+			.anyMatch(form -> form.startsWith("(DEFUN |L11.main(String[])| ")
+					&& form.endsWith("(|java.util.concurrent.atomic.Fields.missing(String)| \"none\")))"));
 	}
 
 	@Test
@@ -1083,6 +1147,13 @@ class JavaLoweringTest {
 						"1:26: getClass() but compared with a class or before getName() and getSimpleName()" },
 				{ "class A { int x; } class B extends A { class C { int y = B.super.x; } } void main() { }",
 						"1:66: a field read through a qualified super" },
+				{ "import java.util.concurrent.atomic.*; class A { volatile int x; } void main() { String n = \"x\"; "
+						+ "AtomicIntegerFieldUpdater.newUpdater(A.class, n); }",
+						"1:123: newUpdater of a field named by no constant" },
+				{ "import java.util.concurrent.atomic.*; class A { private volatile int x; } class Refused { Object u = "
+						+ "AtomicIntegerFieldUpdater.newUpdater(A.class, \"x\"); static void main() { } }",
+						"1:128: newUpdater of a field the class calling it cannot read" },
+				{ "class A extends Integer { } void main() { }", "1:17: a class extending java.lang.Integer" },
 				{ "class String { } class Refused { static void main() { } }",
 						"1:7: a class named as java.lang.String, which the program also uses," } };
 		for (String[] refusal : refusals) {

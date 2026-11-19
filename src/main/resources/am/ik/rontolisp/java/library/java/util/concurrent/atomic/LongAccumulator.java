@@ -9,7 +9,7 @@ package java.util.concurrent.atomic;
 
 import java.util.function.LongBinaryOperator;
 
-public class LongAccumulator {
+public class LongAccumulator extends Number {
 
     private final LongBinaryOperator function;
 

@@ -48,6 +48,13 @@ final class JavaIntrinsics {
 
 	private static final String NUMBER = "java.lang.Number";
 
+	/**
+	 * The three field updaters, whose {@code newUpdater} is lowered where it is called.
+	 */
+	static final List<String> FIELD_UPDATERS = List.of("java.util.concurrent.atomic.AtomicIntegerFieldUpdater",
+			"java.util.concurrent.atomic.AtomicLongFieldUpdater",
+			"java.util.concurrent.atomic.AtomicReferenceFieldUpdater");
+
 	private static final String CHARS = "java.lang.CharSequence";
 
 	private static final String COMPARABLE = "java.lang.Comparable";
@@ -493,6 +500,16 @@ final class JavaIntrinsics {
 			return this;
 		}
 
+		/**
+		 * A member a class of Java source under this one has to declare: abstract, and
+		 * the form given answers for the values that are Lisp values.
+		 */
+		Builder required(String name, JavaType returnType, JavaEmitter emitter) {
+			this.made.methods
+				.add(new JavaClass.Method(this.made, name, List.of(), returnType, false, true, null, emitter, false));
+			return this;
+		}
+
 		private JavaEmitter guarded(String name, JavaEmitter emitter) {
 			return this.guarded && !name.equals("<init>") ? JavaIntrinsics.guarded(emitter) : emitter;
 		}
@@ -610,15 +627,18 @@ final class JavaIntrinsics {
 			case "java.lang.StrictMath":
 				return math(new Builder(name, false, classes));
 			case NUMBER:
-				return new Builder(name, true, classes).method("intValue", Primitive.INT, runtime("number-int"))
-					.method("longValue", Primitive.LONG, runtime("number-long"))
-					.method("floatValue", Primitive.FLOAT,
+				// the four a class under it has to declare are the boxes' here; the two
+				// it has a body for narrow what the receiver's class answers as an int
+				return new Builder(name, true, classes).required("intValue", Primitive.INT, runtime("number-int"))
+					.required("longValue", Primitive.LONG, runtime("number-long"))
+					.required("floatValue", Primitive.FLOAT,
 							(lowering, call) -> call("%single-float", runtimeCall("number-double", call.self())))
-					.method("doubleValue", Primitive.DOUBLE, runtime("number-double"))
+					.required("doubleValue", Primitive.DOUBLE, runtime("number-double"))
 					.method("byteValue", Primitive.BYTE,
-							(lowering, call) -> JavaForms.signed(runtimeCall("number-int", call.self()), 8))
-					.method("shortValue", Primitive.SHORT,
-							(lowering, call) -> JavaForms.signed(runtimeCall("number-int", call.self()), 16)).made;
+							(lowering, call) -> JavaForms.signed(lowering.member(NUMBER, "intValue()", call.receiver()),
+									8))
+					.method("shortValue", Primitive.SHORT, (lowering, call) -> JavaForms
+						.signed(lowering.member(NUMBER, "intValue()", call.receiver()), 16)).made;
 			case "java.lang.Integer":
 				return integerClass(new Builder(name, false, classes), classes);
 			case "java.lang.Long":
@@ -1650,6 +1670,22 @@ final class JavaIntrinsics {
 		natives.put(pool + ".hooks()",
 				(lowering, call) -> lowering.declaresBelow(pool, Set.of("beforeExecute", "afterExecute"))
 						? lowering.library(pool, "hooked", List.of()) : JavaForms.NIL);
+		// the field updaters: a field is the name the lowering gave it where newUpdater
+		// was called, and the program's three functions choose the field by it
+		for (String updater : FIELD_UPDATERS) {
+			String value = updater.endsWith("IntegerFieldUpdater") ? "int"
+					: updater.endsWith("LongFieldUpdater") ? "long" : "Object";
+			natives.put(updater + ".get0(Object,Object)", (lowering, call) -> lowering.updated("get", operands(call)));
+			natives.put(updater + ".set0(Object,Object," + value + ")",
+					(lowering, call) -> lowering.updated("set", operands(call)));
+			natives.put(updater + ".swap0(Object,Object," + value + "," + value + ")",
+					(lowering, call) -> lowering.updated("swap", operands(call)));
+			natives.put(updater + ".newUpdater(Class," + (value.equals("Object") ? "Class," : "") + "String)",
+					(lowering, call) -> {
+						throw lowering.unsupported(call.pos(),
+								"newUpdater but called by its class's name with class literals and a constant name");
+					});
+		}
 		// java.util.regex over the engine every front end shares: compile and matches are
 		// lowered where they are called, with the providers their pattern may need
 		String regex = PATTERN + ".";

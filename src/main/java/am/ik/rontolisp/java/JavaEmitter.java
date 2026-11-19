@@ -93,6 +93,20 @@ interface JavaEmitter {
 		boolean declaresBelow(String className, Set<String> names);
 
 		/**
+		 * A call of an instance member with no parameter of a class whose values are Lisp
+		 * values, found by its signature: the body the receiver's class has for it where
+		 * a class of Java source can be under that class, else the member's own form.
+		 */
+		LispVal member(String className, String signature, @Nullable Typed receiver);
+
+		/**
+		 * A read ({@code get}), a write ({@code set}) or a swap ({@code swap}) of the
+		 * field a field updater holds the name of: a call of the program's function
+		 * choosing the field by that name, the first of the arguments.
+		 */
+		LispVal updated(String operation, List<LispVal> arguments);
+
+		/**
 		 * An array made of another's class, as {@code Arrays.copyOf} makes one: in a
 		 * program that records the class of an array, with the original's.
 		 */

@@ -334,8 +334,15 @@ chains or more in which nine keys share one chain.
 thread waiting to enter a monitor another thread holds; one that was notified and waits
 to take its monitor again may answer `WAITING` or `TIMED_WAITING` until it has it. An
 uncaught-exception handler is asked for the threads a program starts, not for the thread
-of `main`. An `AtomicInteger`, an
-`AtomicLong`, the adders and the accumulators are no `Number`.
+of `main`.
+
+**A field updater is made of class literals and a constant name.**
+`AtomicIntegerFieldUpdater.newUpdater(Node.class, "next")` is read where it is written, so
+the classes are class literals and the name a constant: any other call is refused by name
+when the program is compiled. A field the class calling it cannot read is refused there
+too; a JDK throws when the call runs. What a JDK finds wrong with the field itself -- no
+such field, another type, not `volatile`, `static` -- is its exception where the call
+runs.
 
 **A thread's number is rontolisp's own.** `threadId()` and the number in `toString()` count
 the threads of the program from 1.
@@ -476,13 +483,14 @@ Each of these is an error naming the construct and its position.
 - Annotation types, `assert`.
 - A class literal and `getClass()` as a value: each is read compared with a class and
   before `getName()` and `getSimpleName()`, a literal also as the lock of a `synchronized`
-  statement. A class literal of a primitive or an array type.
+  statement and as the class of a field updater. A class literal of a primitive or an
+  array type.
 - A `switch` over a `long`, a `float`, a `double` or a `boolean`; a method reference and a
   field through a qualified `super` (`Interface.super::m`, `Outer.super.x`).
 - A class extending `String`, `StringBuilder` or a box.
 - Of `java.util.concurrent`, what the [overview](index.md) does not list: the queues
-  ordered by priority or by delay, `ConcurrentSkipListMap`, the field updaters. A
-  `Timer`'s `schedule` of a `Date`. Thread groups, `join` of a `Duration`.
+  ordered by priority or by delay, `ConcurrentSkipListMap`. A `Timer`'s `schedule` of a
+  `Date`. Thread groups.
 - Any class or member of the library not listed in the [overview](index.md): streams
   (`java.util.stream`), `LinkedList`, `LinkedHashMap`, `TreeMap`, `Scanner`, files
   (`File`, `FileReader`, `java.nio.file`), `java.time` but `Duration`, `BigInteger`,

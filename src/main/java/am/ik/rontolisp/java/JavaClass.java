@@ -308,6 +308,13 @@ final class JavaClass {
 
 	@Nullable JavaClass superclass;
 
+	/**
+	 * The class it extends when that one's values are Lisp values, or {@code null}:
+	 * {@code Number}. No {@link #superclass}: such a class gives a class under it a type
+	 * and the members it has a form for, and no slot, no constructor and no body.
+	 */
+	@Nullable JavaClass intrinsicSuperclass;
+
 	final List<JavaClass> interfaces = new ArrayList<>();
 
 	/**
@@ -377,6 +384,9 @@ final class JavaClass {
 			return true;
 		}
 		if (this.superclass != null && this.superclass.isSubclassOf(other)) {
+			return true;
+		}
+		if (this.intrinsicSuperclass != null && this.intrinsicSuperclass.isSubclassOf(other)) {
 			return true;
 		}
 		for (JavaClass implemented : this.interfaces) {

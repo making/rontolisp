@@ -197,6 +197,9 @@ final class JavaTypes implements JavaClasses.Relations {
 				if (declaration.superclass != null) {
 					direct.add(declaration.superclass);
 				}
+				if (declaration.intrinsicSuperclass != null) {
+					direct.add(declaration.intrinsicSuperclass);
+				}
 				direct.addAll(declaration.interfaces);
 				for (JavaClass parent : direct) {
 					ClassType seen = raw ? new ClassType(parent, List.of())
@@ -593,6 +596,9 @@ final class JavaTypes implements JavaClasses.Relations {
 		}
 		if (declaration.superclass != null) {
 			supertypes(declaration.superclass, into);
+		}
+		if (declaration.intrinsicSuperclass != null) {
+			supertypes(declaration.intrinsicSuperclass, into);
 		}
 		for (JavaClass implemented : declaration.interfaces) {
 			supertypes(implemented, into);

@@ -550,6 +550,7 @@ final class JavaClasses {
 			}
 			else {
 				made.superclass = extended.intrinsic ? null : extended;
+				made.intrinsicSuperclass = extended.intrinsic && extended.isAbstract ? extended : null;
 			}
 			if (extendedType != null && !extendedType.arguments().isEmpty()) {
 				made.parameterized.put(extended, extendedType);
@@ -857,7 +858,12 @@ final class JavaClasses {
 				throw error(source, extended.pos(), "no interface expected here");
 			}
 			if (superclass.intrinsic && !superclass.name.equals("java.lang.Object")) {
-				throw unsupported(source, extended.pos(), "a class extending " + superclass.name);
+				// an abstract class whose values are Lisp values can have classes of
+				// Java source under it: Number
+				if (!superclass.isAbstract) {
+					throw unsupported(source, extended.pos(), "a class extending " + superclass.name);
+				}
+				made.intrinsicSuperclass = superclass;
 			}
 			if (superclass.isEnum) {
 				throw error(source, extended.pos(), "cannot inherit from final " + superclass.simpleName());

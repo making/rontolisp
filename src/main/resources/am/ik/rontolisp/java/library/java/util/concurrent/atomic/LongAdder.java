@@ -6,7 +6,7 @@
 // atomics' do: one sum, and no cell a thread.
 package java.util.concurrent.atomic;
 
-public class LongAdder {
+public class LongAdder extends Number {
 
     private long sum;
 

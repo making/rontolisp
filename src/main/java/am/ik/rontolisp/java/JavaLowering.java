@@ -304,6 +304,13 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private static final LispSymbol THROWN = new LispSymbol("%thrown");
 
+	/** The functions reading, writing and swapping the field a field updater names. */
+	private static final LispSymbol FIELD_GET = new LispSymbol("%field-get");
+
+	private static final LispSymbol FIELD_SET = new LispSymbol("%field-set");
+
+	private static final LispSymbol FIELD_SWAP = new LispSymbol("%field-swap");
+
 	/**
 	 * The classes of the exceptions the run time raises as Lisp conditions, which
 	 * {@code %java-exception-of} in {@code java.lisp} -- the one table from a condition
@@ -355,6 +362,9 @@ final class JavaLowering implements JavaEmitter.Context {
 	private final List<LispVal> functions = new ArrayList<>();
 
 	private final Map<String, LispVal> dispatchers = new LinkedHashMap<>();
+
+	/** The fields a field updater was made for, where the lowering saw it made. */
+	private final Set<Field> updated = new LinkedHashSet<>();
 
 	private final List<LispVal> variables = new ArrayList<>();
 
@@ -1093,8 +1103,10 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		Set<JavaClass> above = new LinkedHashSet<>();
 		supertypes(declaration, above);
+		// as a compiler names it: of the first type that has one -- the superclass ahead
+		// of the interfaces -- the one declared last (asked of javac over seven shapes)
 		for (JavaClass type : above) {
-			for (Method method : type.methods) {
+			for (Method method : type.methods.reversed()) {
 				if (method.isAbstract && implementation(declaration, method) == null) {
 					String name = declaration.simpleName().isEmpty() ? "<anonymous " + declaration.binaryName + ">"
 							: declaration.simpleName();
@@ -1112,6 +1124,9 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		if (declaration.superclass != null) {
 			supertypes(declaration.superclass, into);
+		}
+		if (declaration.intrinsicSuperclass != null) {
+			supertypes(declaration.intrinsicSuperclass, into);
 		}
 		for (JavaClass implemented : declaration.interfaces) {
 			supertypes(implemented, into);
@@ -1966,6 +1981,12 @@ final class JavaLowering implements JavaEmitter.Context {
 			.filter(declaration -> !declaration.intrinsic && !declaration.isInterface && isLive(declaration))
 			.sorted(Comparator.comparingInt(JavaClass::depth).reversed())
 			.toList();
+		// ahead of the tests it may ask for: a reference field's type
+		for (LispSymbol name : List.of(FIELD_GET, FIELD_SET, FIELD_SWAP)) {
+			if (this.generated.contains(name)) {
+				forms.add(fieldFunction(name));
+			}
+		}
 		for (JavaClass tested : this.interfaceTests) {
 			forms.add(interfaceTest(tested));
 		}
@@ -2074,10 +2095,11 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	/**
 	 * {@code instanceof} of an interface: the classes implementing it, and the lambdas
-	 * made for it. A lambda is a function, which does not tell the interface it was made
-	 * for: so when the program has lambdas of this interface and of another, the ones of
-	 * this interface are made structures holding the function, and the program is lowered
-	 * again.
+	 * made for it; of a class whose values are Lisp values and that has classes of Java
+	 * source under it, its own predicate and theirs. A lambda is a function, which does
+	 * not tell the interface it was made for: so when the program has lambdas of this
+	 * interface and of another, the ones of this interface are made structures holding
+	 * the function, and the program is lowered again.
 	 */
 	private LispVal interfaceTest(JavaClass declaration) {
 		List<LispVal> tests = new ArrayList<>();
@@ -2108,7 +2130,9 @@ final class JavaLowering implements JavaEmitter.Context {
 				continue;
 			}
 			if (candidate.intrinsic) {
-				LispSymbol predicate = JavaIntrinsics.predicate(candidate);
+				// a class's own predicate answers for the Lisp values under it
+				LispSymbol predicate = declaration.isInterface || candidate == declaration
+						? JavaIntrinsics.predicate(candidate) : null;
 				if (predicate != null) {
 					tests.add(list(predicate, RECEIVER));
 				}
@@ -3251,11 +3275,13 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	/**
 	 * Whether every value of a type is one the run-time library answers {@code Object}'s
-	 * methods for: a box, an array, a {@code StringBuilder}.
+	 * methods for: a box, an array, a {@code StringBuilder}, a {@code Number} in a
+	 * program with no class of its own under it.
 	 */
-	private static boolean isPlain(JavaType type) {
-		return JavaIntrinsics.unboxed(type) != null || type instanceof ArrayType || (type instanceof ClassType named
-				&& named.declaration().intrinsic && JavaIntrinsics.isPlain(named.declaration()));
+	private boolean isPlain(JavaType type) {
+		return JavaIntrinsics.unboxed(type) != null || type instanceof ArrayType
+				|| (type instanceof ClassType named && named.declaration().intrinsic
+						&& JavaIntrinsics.isPlain(named.declaration()) && !isExtended(named.declaration()));
 	}
 
 	@Override
@@ -3689,6 +3715,9 @@ final class JavaLowering implements JavaEmitter.Context {
 					names.add("[L" + type.binaryName + ";");
 					if (type.superclass != null) {
 						pending.add(type.superclass);
+					}
+					if (type.intrinsicSuperclass != null) {
+						pending.add(type.intrinsicSuperclass);
 					}
 					pending.addAll(type.interfaces);
 				}
@@ -4717,6 +4746,174 @@ final class JavaLowering implements JavaEmitter.Context {
 				List.of(call("if", call("or", call("null", checked), test), checked, failure))), to);
 	}
 
+	/** A {@code ClassCastException} with no message. */
+	private LispVal castFailure() {
+		Method failed = constructors(this.classes.library("java.lang.ClassCastException")).stream()
+			.filter(constructor -> constructor.parameters.isEmpty())
+			.findFirst()
+			.orElseThrow();
+		called(failed);
+		makes(failed.owner);
+		return list(JavaNames.creator(failed));
+	}
+
+	/**
+	 * {@code newUpdater(Owner.class, "name")} of a field updater, and of a reference's
+	 * {@code (Owner.class, Value.class, "name")}: the class and the name are written
+	 * where it is called, so the field is found here and the updater made holds its name
+	 * -- its accessor's symbol --, which the program's three functions choose the field
+	 * by ({@link #fieldFunction}). What a JDK finds wrong with the field when the call
+	 * runs -- no such field of the class itself, another type, not volatile, static -- is
+	 * thrown where the call runs, in the order and the words a JDK 25 answered.
+	 */
+	private Typed fieldUpdater(Call call, JavaClass updater) {
+		int pos = call.pos();
+		boolean reference = updater.name.endsWith("AtomicReferenceFieldUpdater");
+		List<Expression> arguments = call.arguments();
+		int classes = reference ? 2 : 1;
+		if (arguments.size() != classes + 1
+				|| !arguments.subList(0, classes).stream().allMatch(JavaSyntax.ClassLiteral.class::isInstance)) {
+			throw unsupported(pos, "newUpdater but of class literals and a constant name");
+		}
+		if (!(type(((JavaSyntax.ClassLiteral) arguments.get(0)).type()) instanceof ClassType holder)) {
+			throw unsupported(pos, "newUpdater of a type that is no class");
+		}
+		JavaType value = reference ? type(((JavaSyntax.ClassLiteral) arguments.get(1)).type()) : null;
+		if (!(expression(arguments.get(classes), this.stringType).constant() instanceof String name)) {
+			throw unsupported(pos, "newUpdater of a field named by no constant");
+		}
+		JavaClass owner = holder.declaration();
+		List<JavaType> typed = new ArrayList<>(List.of(new ClassType(owner, List.of())));
+		if (value != null) {
+			typed.add(value instanceof Primitive primitive ? JavaIntrinsics.boxed(primitive, this.classes) : value);
+		}
+		ClassType type = new ClassType(updater, List.copyOf(typed));
+		Field field = owner.fields.stream().filter(declared -> declared.name.equals(name)).findFirst().orElse(null);
+		String fields = "java.util.concurrent.atomic.Fields";
+		LispVal refusal = null;
+		if (field == null) {
+			refusal = library(fields, "missing", List.of(string(name)));
+		}
+		else if (value != null && !this.types.erased(field.type).equals(this.types.erased(value))) {
+			refusal = library(fields, "mismatched", List.of());
+		}
+		else {
+			JavaType wanted = reference ? null
+					: updater.name.endsWith("LongFieldUpdater") ? Primitive.LONG : Primitive.INT;
+			String message = value instanceof Primitive ? "Must be reference type"
+					: wanted != null && field.type != wanted
+							? "Must be " + (wanted == Primitive.INT ? "integer" : "long") + " type"
+							: !isVolatile(field) ? "Must be volatile type" : null;
+			if (message != null || field.isStatic) {
+				refusal = library(fields, "refused", List.of(message == null ? NIL : string(message)));
+			}
+		}
+		if (refusal != null) {
+			return new Typed(located(refusal, pos), type);
+		}
+		Field found = Objects.requireNonNull(field);
+		try {
+			checkAccess(found.isPrivate, found.declaration, found.owner, found.name, pos);
+		}
+		catch (LispReadException e) {
+			throw unsupported(pos, "newUpdater of a field the class calling it cannot read");
+		}
+		if (found.type.equals(this.stringType) && !this.classes.identicalStrings) {
+			// a swap compares two strings as == does
+			this.classes.identicalStrings = true;
+			this.classes.changed();
+		}
+		this.updated.add(found);
+		return new Typed(located(library(updater.name, "of", List.of(quote(JavaNames.accessor(found)))), pos), type);
+	}
+
+	/**
+	 * The fields the program's three functions have an arm for: the ones an updater was
+	 * seen made for. A session's buffer does not lower the statements of the buffers
+	 * before it, one of which may have made an updater: there, every field of the program
+	 * an updater can be made for.
+	 */
+	private List<Field> updatedFields() {
+		if (this.session == null) {
+			return List.copyOf(this.updated);
+		}
+		List<Field> fields = new ArrayList<>();
+		for (JavaClass declaration : this.classes.all()) {
+			if (declaration.intrinsic || isLibrary(declaration)) {
+				continue;
+			}
+			for (Field field : declaration.fields) {
+				if (!field.isStatic && isVolatile(field)
+						&& (field.type == Primitive.INT || field.type == Primitive.LONG || field.type.isReference())) {
+					fields.add(field);
+				}
+			}
+		}
+		return fields;
+	}
+
+	@Override
+	public LispVal updated(String operation, List<LispVal> arguments) {
+		LispSymbol function = switch (operation) {
+			case "get" -> FIELD_GET;
+			case "set" -> FIELD_SET;
+			default -> FIELD_SWAP;
+		};
+		this.generated.add(function);
+		return form(function, arguments);
+	}
+
+	/**
+	 * The function reading, writing or swapping the field of a name
+	 * ({@link #fieldUpdater}): a {@code case} over the fields the program has an updater
+	 * for ({@link #updatedFields}). An object that is none of the field's class,
+	 * {@code null} too, is a {@code ClassCastException}, and so is a value that is none
+	 * of a reference field's type -- what a program reaches through a raw type. A
+	 * volatile access is one at a time among the threads ({@link #ordered}), and a swap
+	 * is one access: it is atomic beside every plain read and write of the field.
+	 */
+	private LispVal fieldFunction(LispSymbol name) {
+		LispSymbol number = new LispSymbol("%n");
+		LispSymbol expected = new LispSymbol("%a0");
+		LispSymbol given = new LispSymbol("%a1");
+		List<LispVal> parameters = new ArrayList<>(List.of(number, RECEIVER));
+		if (name == FIELD_SWAP) {
+			parameters.add(expected);
+		}
+		if (name != FIELD_GET) {
+			parameters.add(given);
+		}
+		List<LispVal> arms = new ArrayList<>();
+		arms.add(cl("case"));
+		arms.add(number);
+		for (Field field : updatedFields()) {
+			LispVal place = list(JavaNames.accessor(field), RECEIVER);
+			LispVal store = call("setf", place, given);
+			LispVal access;
+			if (name == FIELD_GET) {
+				access = place;
+			}
+			else if (name == FIELD_SET) {
+				access = store;
+			}
+			else {
+				Primitive box = JavaIntrinsics.unboxed(field.type);
+				String identity = field.type.isPrimitive() || (box != null && JavaForms.boxTag(box) == null) ? "eql"
+						: box != null ? "equal" : "eq";
+				access = call("if", call(identity, place, expected), call("progn", store, T), NIL);
+			}
+			LispVal test = list(JavaNames.predicate(field.owner), RECEIVER);
+			JavaType held = this.types.erased(field.type);
+			if (name != FIELD_GET && held instanceof ClassType type && !held.equals(this.objectType)
+					&& (!type.declaration().intrinsic || JavaIntrinsics.predicate(type.declaration()) != null)) {
+				test = call("and", test,
+						call("or", call("null", given), instanceTest(given, this.objectType, held, 0, "a cast")));
+			}
+			arms.add(list(JavaNames.accessor(field), call("if", test, ordered(access), raise(castFailure()))));
+		}
+		return list(cl("defun"), name, list(parameters), list(arms));
+	}
+
 	/**
 	 * The {@code ClassCastException} of a value that is no {@code to}: the message names
 	 * the two classes as a JDK's starts, without what it says of their modules and class
@@ -4726,13 +4923,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		String target = to instanceof ClassType type ? type.declaration().binaryName
 				: to instanceof ArrayType array ? descriptor(array) : null;
 		if (target == null) {
-			Method failed = constructors(this.classes.library("java.lang.ClassCastException")).stream()
-				.filter(constructor -> constructor.parameters.isEmpty())
-				.findFirst()
-				.orElseThrow();
-			called(failed);
-			makes(failed.owner);
-			return list(JavaNames.creator(failed));
+			return castFailure();
 		}
 		this.generated.add(CLASS_NAME);
 		this.namesOfAny.add(CLASS_NAME);
@@ -4936,6 +5127,11 @@ final class JavaLowering implements JavaEmitter.Context {
 			LispSymbol predicate = JavaIntrinsics.predicate(declaration);
 			if (predicate == null) {
 				throw unsupported(pos, what + " to " + to);
+			}
+			if (isExtended(declaration)) {
+				// its own values, and the classes of Java source under it
+				this.interfaceTests.add(declaration);
+				return list(JavaNames.interfaceTest(declaration), value);
 			}
 			return list(predicate, value);
 		}
@@ -6365,6 +6561,10 @@ final class JavaLowering implements JavaEmitter.Context {
 		List<JavaClass> imported = List.of();
 		if (call.target() != null) {
 			JavaClass named = classNamed(call.target());
+			if (named != null && call.name().equals("newUpdater") && JavaIntrinsics.FIELD_UPDATERS.contains(named.name)
+					&& call.arguments().stream().anyMatch(JavaSyntax.ClassLiteral.class::isInstance)) {
+				return fieldUpdater(call, named);
+			}
 			if (named != null) {
 				in = named;
 				qualified = true;
@@ -6461,7 +6661,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			if (receiver != null && call.target() != null) {
 				receiver = new Typed(dereferenced(receiver.form()), receiver.type());
 			}
-			LispVal form = method.emitter.emit(this,
+			LispVal form = intrinsicCall(method,
 					new Invocation(method.isStatic ? null : receiver, resolved.arguments(), discard, pos));
 			if (resolved.returnType().equals(this.stringType) && method.returnType.equals(this.stringType)
 					&& !method.answersNull) {
@@ -6542,7 +6742,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 				self = named;
 			}
-			JavaClass superclass = self.superclass;
+			JavaClass superclass = self.superclass != null ? self.superclass : self.intrinsicSuperclass;
 			above = superclass != null ? superclass : this.objectType.declaration();
 			site = superclass != null ? self.supertype(above) : this.objectType;
 		}
@@ -6563,10 +6763,20 @@ final class JavaLowering implements JavaEmitter.Context {
 			return new Typed(form(JavaForms.runtime(ownBody), prepend(receiver, resolved.forms())),
 					resolved.returnType());
 		}
-		if (body == null || resolved.method().emitter != null) {
-			throw resolved.method().emitter != null
+		if (resolved.method().emitter != null && !resolved.method().isAbstract && isExtended(resolved.method().owner)) {
+			// the body a class whose values are Lisp values has for it: its form, on this
+			// instance
+			LispVal receiver = object != null ? object : thisValue(pos).form();
+			return new Typed(located(
+					resolved.method().emitter.emit(this, new Invocation(
+							new Typed(receiver, resolved.method().owner.self()), resolved.arguments(), false, pos)),
+					pos), resolved.returnType());
+		}
+		if (body == null || (resolved.method().emitter != null && !resolved.method().isAbstract)) {
+			throw resolved.method().emitter != null && !resolved.method().isAbstract
 					? unsupported(pos, "a call of one of Object's methods through super")
-					: error(pos, "abstract method " + resolved.method().signature() + " cannot be accessed directly");
+					: error(pos, "abstract method " + resolved.method().signature() + " in "
+							+ resolved.method().owner.simpleName() + " cannot be accessed directly");
 		}
 		checkAccess(body.isPrivate, body.declaration, body.owner, body.signature(), pos);
 		called(body);
@@ -6739,6 +6949,77 @@ final class JavaLowering implements JavaEmitter.Context {
 			this.dispatchers.put(name.name(), list(cl("defun"), name, list(parameters), list(arms)));
 		}
 		return name;
+	}
+
+	/**
+	 * Whether the program can hold an instance of a class of Java source under a class
+	 * whose values are Lisp values: {@code Number}'s atomics, and a program's own.
+	 */
+	private boolean isExtended(JavaClass intrinsic) {
+		if (!intrinsic.intrinsic || intrinsic.isInterface || !intrinsic.isAbstract) {
+			return false;
+		}
+		for (JavaClass candidate : this.classes.all()) {
+			if (isMade(candidate) && candidate.isSubclassOf(intrinsic)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * A call of an intrinsic member: its form. Where the receiver can be an instance of a
+	 * class of Java source under the member's class, the function choosing the body by
+	 * the receiver's class, deepest first, whose last arm is that form -- for the values
+	 * that are Lisp values, and for a class inheriting the member as it is.
+	 */
+	private LispVal intrinsicCall(Method method, Invocation call) {
+		JavaEmitter emitter = Objects.requireNonNull(method.emitter);
+		JavaClass owner = method.owner;
+		List<Body> bodies = method.isStatic || method.isConstructor() || !isExtended(owner) ? List.of()
+				: bodies(owner, method);
+		if (bodies.isEmpty()) {
+			return emitter.emit(this, call);
+		}
+		for (Body body : bodies) {
+			called(body.method());
+		}
+		LispSymbol name = JavaNames.dispatcher(owner, method);
+		if (!this.dispatchers.containsKey(name.name())) {
+			List<LispVal> parameters = new ArrayList<>();
+			parameters.add(RECEIVER);
+			List<Typed> arguments = new ArrayList<>();
+			for (int i = 0; i < method.parameters.size(); i++) {
+				LispSymbol parameter = new LispSymbol("%a" + i);
+				parameters.add(parameter);
+				arguments.add(new Typed(parameter, method.parameters.get(i)));
+			}
+			List<LispVal> arms = new ArrayList<>();
+			arms.add(cl("cond"));
+			for (Body body : bodies) {
+				arms.add(list(list(JavaNames.predicate(body.tested()), RECEIVER),
+						form(JavaNames.function(body.method()), parameters)));
+			}
+			arms.add(list(T,
+					emitter.emit(this, new Invocation(new Typed(RECEIVER, owner.self()), arguments, false, 0))));
+			this.dispatchers.put(name.name(), list(cl("defun"), name, list(parameters), list(arms)));
+		}
+		List<LispVal> forms = new ArrayList<>();
+		forms.add(call.self());
+		for (Typed argument : call.arguments()) {
+			forms.add(argument.form());
+		}
+		return form(name, forms);
+	}
+
+	@Override
+	public LispVal member(String className, String signature, @Nullable Typed receiver) {
+		for (Method method : this.classes.library(className).methods) {
+			if (!method.isStatic && method.emitter != null && method.signature().equals(signature)) {
+				return intrinsicCall(method, new Invocation(receiver, List.of(), false, 0));
+			}
+		}
+		throw new IllegalStateException("no member " + signature + " of " + className);
 	}
 
 	private LispVal virtual(JavaClass receiver, Method method, LispVal object, List<LispVal> arguments) {
@@ -6925,7 +7206,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	private Typed anonymous(New creation, ClassType extendedType) {
 		JavaClass extended = extendedType.declaration();
 		int pos = creation.pos();
-		if (extended.intrinsic && !extended.name.equals("java.lang.Object")) {
+		if (extended.intrinsic && !extended.isAbstract && !extended.name.equals("java.lang.Object")) {
 			throw unsupported(pos, "an anonymous class of " + extended.name);
 		}
 		JavaClass made = this.classes.local(Objects.requireNonNull(creation.body()), this.currentClass,

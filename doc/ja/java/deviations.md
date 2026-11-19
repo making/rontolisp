@@ -337,8 +337,15 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 保持しているモニターに入るのを待っているスレッドに対して、`getState` は `BLOCKED` を返します。
 一方、`wait` で通知を受けてモニターを取り直そうとしているスレッドに対しては、モニターを
 取り直すまで `WAITING` または `TIMED_WAITING` を返すことがあります。未捕捉例外ハンドラーが呼ばれるのはプログラムが開始したスレッドだけで、
-`main` のスレッドでは呼ばれません。`AtomicInteger`、`AtomicLong`、加算器
-（`LongAdder`、`DoubleAdder`）、アキュムレーターは `Number` ではありません。
+`main` のスレッドでは呼ばれません。
+
+**フィールドアップデーターは、クラスリテラルと定数の名前から作ります。**
+`AtomicIntegerFieldUpdater.newUpdater(Node.class, "next")` は書かれた場所で読まれるので、
+クラスはクラスリテラル、名前は定数でなければなりません。それ以外の呼び出しは、コンパイル時に
+名前を挙げて拒否されます。呼び出すクラスから読めないフィールドもコンパイル時に拒否されます
+（JDK は呼び出しの実行時に例外を投げます）。フィールドそのものの問題（その名前のフィールドが
+ない、型が違う、`volatile` でない、`static` である）は、JDK と同じ例外が呼び出しの実行時に
+投げられます。
 
 **スレッドの番号は rontolisp 独自のものです。** `threadId()` と `toString()` に含まれる番号は、
 プログラムのスレッドを 1 から数えた値です。
@@ -493,14 +500,14 @@ WebSocket です。`version(..)` で指定した値は保持され、問い合�
 
 - アノテーション型、`assert`。
 - 値として使うクラスリテラルと `getClass()`。どちらも、クラスとの比較と `getName()`、
-  `getSimpleName()` の直前でだけ読めます。クラスリテラルは `synchronized` 文のロックにも
-  なります。プリミティブ型と配列型のクラスリテラル。
+  `getSimpleName()` の直前でだけ読めます。クラスリテラルは `synchronized` 文のロックと
+  フィールドアップデーターのクラスにもなります。プリミティブ型と配列型のクラスリテラル。
 - `long`、`float`、`double`、`boolean` に対する `switch`。修飾した `super` を通すメソッド参照と
   フィールド（`Interface.super::m`、`Outer.super.x`）。
 - `String`、`StringBuilder`、ボックスを継承するクラス。
 - `java.util.concurrent` のうち、[概要](index.md)の表にないもの。優先度順または遅延順の
-  キュー、`ConcurrentSkipListMap`、フィールドアップデーターです。`Date` を取る `Timer` の
-  `schedule`、スレッドグループ、`Duration` を取る `join` も拒否されます。
+  キュー、`ConcurrentSkipListMap` です。`Date` を取る `Timer` の `schedule`、スレッドグループも
+  拒否されます。
 - [概要](index.md)の表にないライブラリのクラスとメンバー。ストリーム（`java.util.stream`）、
   `LinkedList`、`LinkedHashMap`、`TreeMap`、`Scanner`、ファイル（`File`、`FileReader`、
   `java.nio.file`）、`Duration` 以外の `java.time`、`BigInteger`、`BigDecimal`、

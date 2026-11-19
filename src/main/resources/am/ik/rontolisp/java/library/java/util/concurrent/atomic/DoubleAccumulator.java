@@ -8,7 +8,7 @@ package java.util.concurrent.atomic;
 
 import java.util.function.DoubleBinaryOperator;
 
-public class DoubleAccumulator {
+public class DoubleAccumulator extends Number {
 
     private final DoubleBinaryOperator function;
 

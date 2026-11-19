@@ -42,8 +42,10 @@ members j98 left refused that a line of Java answers: k05 (2026-11-19); the flow
 of a class and the classes in it in the order a compiler reports them: k06 (2026-11-19);
 the host's events giving a component's threads their turns, so that a served request
 that waits leaves its instance to the host, a loop's turn outside its resume body and
-`Thread.State.BLOCKED`: k07 (2026-11-19); what comes after is `.todo/k08`, `k12`, `k15`,
-`k16`, `k17`, `k18`, `k19` and `k20` (what k00, k01, k05, k11, k06 and k07 left).
+`Thread.State.BLOCKED`: k07 (2026-11-19); a class of Java source under `Number` (the
+atomics, a program's own), the field updaters, `invokeAll` with a limit and
+`join(Duration)`: k08 (2026-11-19); what comes after is `.todo/k12`, `k15`, `k16`, `k17`,
+`k18`, `k19`, `k20` and `k21` (what k00, k05, k11, k06, k07 and k08 left).
 
 ## Where it sits
 
@@ -164,6 +166,47 @@ that waits leaves its instance to the host, a loop's turn outside its resume bod
   `Outer.Inner@1f`, `ThreadLocal@1f`). Cost: the longer names of the made classes of
   `java.lang` (a counter under four threads 109,069 -> 109,253 B of wasm), nothing to a
   program that makes none.
+- **A class of Java source stands under `Number`, which stays an intrinsic** (k08,
+  2026-11-19; until then `a class extending java.lang.Number` was refused and an atomic
+  was no `Number`). `Number` is the one abstract intrinsic class; a class extending it
+  keeps `superclass == null` and names it in `JavaClass.intrinsicSuperclass`, which only
+  the TYPE relations read (`isSubclassOf`, the three `supertypes` walks, `asSuper`, an
+  array's recorded supertypes) -- so no structure is included, no constructor called,
+  no body inherited, and the 60 other walks of `superclass` are as they were. Rejected:
+  `superclass` set to the intrinsic (each of those walks would have to learn that a
+  class above can have no structure), and `Number` as Java source with the boxes under
+  it (a box is a Lisp value: every `instanceof` and every member through `Number` would
+  pay in a program with no such class). What the lowering does, all of it only where
+  the program can hold an instance of such a class (`isExtended`: a made class under an
+  abstract intrinsic; a program with none is byte-identical, measured below):
+  `Number`'s four abstract members are abstract methods holding the boxes' form
+  (`Builder.required`), and a call of one through `Number` is a dispatcher
+  `|Number.intValue()%v|` over the bodies of the made classes, deepest first, whose last
+  arm is that form (`intrinsicCall`); `byteValue` / `shortValue` narrow what the
+  `intValue` dispatcher answers (`Context.member`), are a dispatcher of their own only
+  where a class overrides one, and through `super` are the form on `this`; `instanceof`,
+  a cast and a pattern ask `|Number%is|` (the intrinsic's predicate and the topmost made
+  classes', made by `interfaceTest`); `Number` stops being plain (`isPlain`), so
+  `toString` / `equals` / `hashCode` and a concatenation through it go to the program's
+  `%string` / `%equals` / `%hash`. `new Number() { .. }` is an anonymous class of it. A
+  class leaving one of the four out is the compiler's `.. does not override abstract
+  method doubleValue() in Number`. `AtomicInteger`, `AtomicLong`, `LongAdder`,
+  `DoubleAdder`, `LongAccumulator` and `DoubleAccumulator` extend it in the library's
+  source. Measured (class / wasm bytes, `sizes/` of the k08 artefacts, the base jar
+  against this one): `Plain` (boxes through `Number`) 151,684 / 126,407 and `Count` (an
+  `AtomicInteger` under four threads) 185,612 / 164,198 unchanged, as k01's `Exec`, `Cf`,
+  `Sched1` and `examples/java/shop`; `Under` (`Plain` with one class of its own) 161,555 /
+  132,331; `CountNumber` (`Count` reading its atomic through `Number`) 186,917 /
+  165,166. Pinned by the `standalone:` case `a-class-of-java-source-stands-under-number`
+  (a file of its own, so that the corpus program keeps the plain lowering),
+  `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches` (both
+  lowerings of one source) and the `refused:` case
+  `a-class-under-number-declares-the-members-it-leaves-abstract`.
+- **The abstract method a class leaves out is named as javac names it** (k08, asked over
+  seven shapes): of the first type that has one -- the class's superclass chain ahead of
+  its interfaces, the walk `supertypes` makes -- the one declared LAST
+  (`implementations` reads `methods.reversed()`); `super.m()` of an abstract method says
+  `in <class>`. Both were wrong before (`a()` named where javac names `c()`).
 - **A simple name finds what a class HAS, not what a class above it declares** (j89;
   `JavaLowering.inherits`, JLS 8.2): a `private` member, and from another package one that
   is neither `public` nor `protected`, is no member of the classes under its class, so the
@@ -905,7 +948,7 @@ measured programs.
   Not there: `dividedBy`, `between`, `of` /
   `get` of a `TemporalUnit`, `truncatedTo`; the rest of `java.time` (`.todo/k12`).
   `Thread.sleep(Duration)` is there (a duration below zero is no sleep, zero is one an
-  interrupt ends, measured); `join(Duration)` is not.
+  interrupt ends, measured); `join(Duration)` since k08 ("java.util.concurrent").
 - **The members j98 left that a line of Java answers (k05)**: `Math.divideExact` /
   `floorDivExact` / `ceilDivExact`, `String.codePointCount` / `offsetByCodePoints` (a
   string's elements are code points, so a range holds as many as it is long) /
@@ -1984,8 +2027,8 @@ without it, which ran 11 of the 16 programs below).
   end the program with the status 1); what is shared with no monitor is the
   host's; what a pool is not (`getQueue()`, `defaultExecutor()`, an accumulator's one
   value, a fork/join pool's parallelism and its rethrown exception); a
-  `ConcurrentHashMap`'s long chain; a thread notified in `wait` still `WAITING` while it takes its monitor again; the handlers not asked for `main`'s thread; an atomic is no
-  `Number`; thread numbers are ours; a class literal only as a `synchronized` statement's
+  `ConcurrentHashMap`'s long chain; a thread notified in `wait` still `WAITING` while it takes its monitor again; the handlers not asked for `main`'s thread; a field
+  updater of anything but class literals and a constant name; thread numbers are ours; a class literal only as a `synchronized` statement's
   lock (the quoted structure name, the object a `static synchronized` method holds).
 - **`getState()` answers `BLOCKED` (k07, 2026-11-19).** `Thread.blocked0(carrier)` is
   `%java-thread-blocked`: on one stack whether the carrier is among the threads its
@@ -2056,8 +2099,62 @@ thread suspended under it asked `Support.oneStack()` and did what one stack coul
   pools of one thread and `unconfigurable..`; `CompletableFuture`'s `exceptionallyAsync`,
   `exceptionallyCompose` / `..Async`, `obtrudeValue` / `obtrudeException`,
   `minimalCompletionStage`, `completedStage` / `failedStage`, `newIncompleteFuture`,
-  `defaultExecutor`, and every `..Async` member on `CompletionStage`. Still not there:
-  `.todo/k08`.
+  `defaultExecutor`, and every `..Async` member on `CompletionStage`.
+- **Added by k08** (2026-11-19, learned the same way; probes, `run4.sh` and the sizes
+  in `.todo/artefacts/k08-java-front-end-what-the-stamped-lock-phaser-and-pool-hooks-slice-left/`):
+  the three field updaters, `ExecutorService.invokeAll` with a limit,
+  `Thread.join(Duration)`; the atomics, the adders and the accumulators are `Number`s
+  ("The decisions"). Still not there: `.todo/k21`.
+- **A field updater holds the NAME of its field** (k08). `newUpdater(C.class, "f")`
+  (a reference's `(C.class, V.class, "f")`) is lowered where it is called
+  (`JavaLowering.fieldUpdater`, taken in `invocation` before the arguments are lowered:
+  no object stands for a class): the field is found among the fields the class itself
+  declares, and the call is `(|..FieldUpdater.of(Object)| '|C.f|)`, the accessor's
+  symbol. Not a number counted where the calls are lowered: a session's buffer does
+  not lower the statements of the buffers before it, so an updater made by one buffer
+  found no arm in the next (`NullPointerException`; the session test's `up`). For the
+  same reason a session's functions have an arm for every volatile instance field of
+  the program an updater can be made for (`updatedFields`), a program's for the fields
+  it makes one for. The updater's five abstract members are `native`
+  calls of three functions of the program, `%field-get` / `%field-set` / `%field-swap`
+  (`fieldFunction`: a `case` over the names; an object that is no instance of the
+  field's class, `null` too, and a value that is none of a reference field's erased type
+  are a `ClassCastException` with no message, a JDK's answer to a raw type), and every
+  other member is a loop of swaps in Java. **A swap is ONE volatile access**
+  (`ordered`: under `%java-volatile` in a program holding monitors), so it is atomic
+  beside a plain write of the field -- an updater synchronizing on itself or on the
+  object would lose a write made between its read and its store. Rejected: the field's
+  accessors as lambdas held by the updater (k01's lead): a `funcall` of a value the
+  resumable analysis knows no interface of reaches every lambda of the program
+  (`JavaResumable`, "FUNCALL"), which is what made `Timetable`'s end as a `Runnable`
+  cost 100 KB. A swap compares as `==` does (a `String` field turns
+  `identicalStrings` on; two boxes of one value are one object, so
+  `compareAndSet(o, 1000, 5)` on an `Integer` field succeeds where a JDK's two boxes
+  differ: `Updaters3.java`). **What `newUpdater` refuses is a JDK 25's, in its order,
+  thrown where the call runs** (`java.util.concurrent.atomic.Fields`; 49 calls asked):
+  no field of the name in the class itself, an inherited one included --
+  `RuntimeException` holding a `NoSuchFieldException`; then, of an `int` / `long`
+  updater, another type (`Must be integer type` / `Must be long type`), of a reference
+  updater a field whose erased type is not the class given (`ClassCastException`, a
+  class above or under it too); then not `volatile` (`Must be volatile type`: a final
+  field, an interface's constant); then `static` (`IllegalArgumentException`, no
+  message). Refused by name when the program is lowered, where a JDK throws when it
+  runs: a name that is no constant, a call with anything but class literals, a field
+  the calling class cannot read (`checkAccess`; a JDK's `IllegalAccessException` names
+  the modifiers). The classes are named as a JDK's `toString()` shows them
+  (`AtomicIntegerFieldUpdater$AtomicIntegerFieldUpdaterImpl`,
+  `AtomicLongFieldUpdater$CASUpdater`). Sizes: `CountField` (a volatile field under an
+  updater, four threads) 131,502 B of class / 115,737 B of wasm; a program with no
+  updater holds none of it.
+- **`invokeAll` with a limit hands a task over while time is left** (k08, asked of a
+  JDK): every future is made first (a `null` task refuses before any runs), a limit of
+  zero or less runs nothing, the futures are waited for in order with what is left, and
+  whatever is still open when the wait ends -- the limit, an interrupt -- is cancelled
+  with its thread interrupted, so every future answered is done. `Thread.join(Duration)`
+  answers whether the thread ended: a duration of zero or less and a thread that ended
+  wait for nothing, so an interrupt is left for the next wait (asked: `false true` and
+  `true true`); a thread not started is `IllegalThreadStateException: Thread not
+  started`, after the `NullPointerException` of no duration.
 - **A `StampedLock`'s stamps are a JDK 25's numbers, read from its answers** (k01): one
   monitor holding a sequence that starts at 256 and moves by 128 when the write lock is
   taken and again when it is given back (384 a first write stamp, 512 the next optimistic
@@ -2777,7 +2874,10 @@ still its test's alone: the same loop over a plain field keeps its turn there, m
 artefacts named under "java.util.concurrent");
 and under a JDK a `ThreadPoolExecutor`'s text saying `pool size = 1` after
 `awaitTermination` answered true (the case waits for the text). A limit whose expiry would
-change a line is 60 s, never 1.
+change a line is 60 s, never 1 (k08 found one left, `Waits`' `finished.join(1000)`). The
+one limit that HAS to pass with tasks beside it, `invokeAll`'s in `Handing`, is asked of
+a pool of one thread started beforehand: the tasks behind the one held never run,
+whatever the load.
 `JavaLoweringTest` (the table as emitted forms, names and constants, the
 refusals and the compile errors with their positions;
 `theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`; `aProgramOfSeveralFilesIsReadFromItsSourceTree` over
