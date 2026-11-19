@@ -3,8 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 //
 // The one server there is serves through the transport of the target
-// (rontolisp.internal.HttpServing): what configures a connection, a filter or an
-// authenticator, has no member here.
+// (rontolisp.internal.HttpServing): what configures a connection has no member here.
 package com.sun.net.httpserver;
 
 import java.io.IOException;
@@ -25,6 +24,24 @@ public abstract class HttpServer {
         HttpServer server = HttpServing.server();
         if (addr != null) {
             server.bind(addr, backlog);
+        }
+        return server;
+    }
+
+    public static HttpServer create(InetSocketAddress addr, int backlog, String path, HttpHandler handler,
+            Filter... filters) throws IOException {
+        if (path == null || handler == null || filters == null) {
+            throw new NullPointerException();
+        }
+        for (Filter filter : filters) {
+            if (filter == null) {
+                throw new NullPointerException();
+            }
+        }
+        HttpServer server = create(addr, backlog);
+        HttpContext context = server.createContext(path, handler);
+        for (Filter filter : filters) {
+            context.getFilters().add(filter);
         }
         return server;
     }

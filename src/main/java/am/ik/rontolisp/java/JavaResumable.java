@@ -31,8 +31,8 @@ import static am.ik.rontolisp.java.JavaForms.runtime;
  * call of one an {@code await} -- so a thread that cannot go on is a suspended body,
  * which the run time resumes when it can ({@code eval/java.lisp}, "threads";
  * {@code .kb/java-frontend.md}, "Threads"). Run over the forms of a program that starts
- * threads, for such a target alone: where the host has threads the forms stay as they
- * are.
+ * threads or serves -- a request of a server's is a thread --, for such a target alone:
+ * where the host has threads the forms stay as they are.
  *
  * <p>
  * <strong>What is resumable.</strong> A function is when it reaches a suspension: a
@@ -192,6 +192,8 @@ final class JavaResumable {
 	private static final String THREAD_START = runtime("thread-start").name();
 
 	private static final String THREAD_MAIN = runtime("thread-main").name();
+
+	private static final String HTTP_REQUEST = runtime("http-request").name();
 
 	private static final LispSymbol SLICE = runtime("slice");
 
@@ -775,9 +777,12 @@ final class JavaResumable {
 						this.suspensions.add(form);
 					}
 				}
-				else if (operator.equals(THREAD_START) || operator.equals(THREAD_MAIN)) {
+				else if (operator.equals(THREAD_START) || operator.equals(THREAD_MAIN)
+						|| operator.equals(HTTP_REQUEST)) {
+					// the bodies of the threads: the one a program starts, the one it
+					// started on with what ends it, a request of a server's
 					int from = operator.equals(THREAD_START) ? 2 : 0;
-					int to = operator.equals(THREAD_START) ? 3 : 2;
+					int to = operator.equals(THREAD_START) ? 3 : operator.equals(THREAD_MAIN) ? 2 : 1;
 					for (int i = from; i < to && i < operands.size(); i++) {
 						LispVal lambda = lambdaOf(operands.get(i));
 						Node body = lambda == null ? null : this.lambdas.get(lambda);

@@ -1163,13 +1163,14 @@ member) or is refused where the request is sent (`deviations.md`, "The HTTP clie
   already in, `ofLines`, a program's own `BodySubscriber`), the `--host-fetch` reactor
   as a leg, `URI`'s constructors of several parts.
 
-## com.sun.net.httpserver (2026-11-19, k04)
+## com.sun.net.httpserver (2026-11-19, k04; the threads, the executor, filters and authenticators: k11)
 
 **Invariant: a server is the lowered program's own `rontolisp::%http-serve-begin` call, so
 every transport a served application has carries it and none is new; the API is the JDK's;
 an exchange answers through Clack's delayed response, whole or through its streaming
-writer, which the transport that can sends chunk by chunk.** No class of a package of our
-own was needed (`deviations.md`, "The HTTP server").
+writer, which the transport that can sends chunk by chunk; a request is a task the
+server's executor runs, and on one stack a thread of the program's own scheduler.** No
+class of a package of our own was needed (`deviations.md`, "The HTTP server").
 
 - **Where it sits.** `com.sun.net.httpserver.HttpServer` / `HttpContext` / `HttpExchange`
   (abstract classes), `HttpHandler`, `Headers`, `java.net.InetSocketAddress`,
@@ -1181,13 +1182,15 @@ own was needed (`deviations.md`, "The HTTP server").
   by name, no file of the program is looked for); `import module jdk.httpserver` brings
   the package.
 - **`open0(server, port, host)` is lowered to
-  `(handler-case (%http-serve-begin (lambda (env) (lambda (responder) (%java-http-request serial (lambda () (HttpServing.answer server env responder))))) port host) (error (c) (princ-to-string c)))`**
+  `(handler-case (%http-serve-begin (lambda (env) (lambda (responder) (%java-http-request (lambda () (HttpServing.answer server env responder))))) port host) (error (c) (princ-to-string c)))`**
   where it is called, so the forms the seam hands on NAME the transport:
   `HttpServeLibrary` (first pass of `expand`) splices the target's leg, and under
   `--component` the directive inside it makes the output a `wasi:http/handler` component
   (`.kb/clack.md`, "Transport selection"). A program reaching no member of the server
   holds none of it. A plain Preview 1 module gets the directive's call-time error, which
-  `create` throws as an `IOException` (`HTTP-HANDLER requires --component ..`).
+  `create` throws as an `IOException` in the server's own words (`HttpServing.failure`
+  reads `requires --component` off the text: `an HttpServer needs a transport: compile
+  with --component .. or with --native`).
 - **The two-step serve (`http-serve.lisp`).** `%http-serve` either blocks or cannot be
   joined later, and a Java program goes on after `create` and ends when its server
   stopped. So: `%http-serve-begin app port address` binds and answers the server at once
@@ -1197,17 +1200,48 @@ own was needed (`deviations.md`, "The HTTP server").
   legs; **the serving loop itself on `--native`**, until `%http-serve-stop` set the flag;
   at once under a host), `%http-serve-port` the bound port or nil. `%http-serve` is
   unchanged: Ring's `:join? false` on `--native` still never returns.
-- **When `main` runs, and the program's end.** `bind` (so `create`) binds; `start` opens
-  a gate; **the lowering appends `HttpServing.serve()` after `main`** in a program
-  reaching the server (`JavaLowering.serves`): `run0` is
-  `(progn (%java-http-wait) (%http-serve-run handle))`. Interpreter / JVM: the thread the
+- **When `main` runs, and the program's end, where the host has threads.** `bind` (so
+  `create`) binds; `start` opens a gate; **the lowering appends `HttpServing.serve()`
+  after `main`** in a program reaching the server (`JavaLowering.serves`, not on one
+  stack): `run0` is `(progn (%java-http-wait) (%http-serve-run handle))`. The thread the
   program started on parks (a ticket on its carrier, taken by the last `stop`; a park so
   that the interpreter's `System.exit` on a request thread wakes it, "Threads"), then
-  joins the transport. `--native`: the wait is nothing and the run is the loop, so
-  requests are answered once `main` returned. Component: both nothing; the host
-  instantiates the program, which runs `main` to its end, and calls `handle`. A `main`
-  that waits for ever after `start()` is therefore "every thread waits" on both wasm
-  targets (measured; `.todo/k11`).
+  joins the transport.
+- **On one stack a request is a thread of the scheduler's, and the scheduler serves
+  (k11).** Every program reaching the server is lowered resumable on wasm
+  (`JavaLowering.scheduled`: it starts threads or serves), its entry is
+  `%java-thread-main` and nothing follows `main`. `%java-http-turn gate server state`
+  sets `%java-serving`, a function of the soonest time a thread waits for, while the
+  server is started; `%java-thread-finish` runs while a thread that is no daemon lives OR
+  a server runs, and where no thread can go on it calls it: `%http-serve-step server
+  limit` (`http-serve.lisp`) serves one request of a `--native` module's, waiting `limit`
+  milliseconds at most for it (the runner's `awaitRequest`, then `nextRequest`), and
+  answers `:host` on a component, where the finish returns -- **the instance's start
+  ends where `main` returned or every thread waits**, and the host calls `handle`. The
+  transport's call of the application is `%java-http-request thunk`: a carrier, the
+  `async-defun` `%java-http-thread` queued as a started thread is, and
+  `%java-thread-run`, the scheduler's loop until that thread ended (a `--native` module
+  takes the next request there too, nested, when no thread can go on). `JavaResumable`
+  reads the thunk as awaited (`HTTP_REQUEST`, beside `THREAD_START`), so it is no
+  `%java-now`. So a `main` waiting for ever after `start()`, a handler waiting for a
+  thread, `Thread.currentThread()` of a handler being no thread of `main`'s all hold on
+  both wasm targets (the corpus's `/worker`, `/thread` and its `main`, which awaits a
+  latch the stop counts down).
+- **A thread outlives the request that started it: `%task-swap` (k11).** Measured first:
+  a pool's thread started while request 1 was answered was never resumed while request 3
+  was (`every thread .. waits`, the third request of a component). A frame is owned by
+  the task current when it is made, and `_wake_list` defers a waiter owned by another
+  task to that task's doorbell -- a task long ended. `%java-http-request` therefore runs
+  with no current task (`rontolisp::%task-swap nil`, restored after;
+  [async-await.md](async-await.md), "`%task-swap`"): the frames of the program's threads
+  belong to none and are resumed on the stack of whichever request runs the scheduler,
+  which is also the task whose `task.return` and `stream.write` they then call.
+- **Measured, the instance and requests at once** (2026-11-19, wasmtime 49.0.0): six
+  requests at once to a handler sleeping 500 ms went to six instances (each answered
+  `entered 1`), a seventh after them to one of those (`entered 2`). An instance is not
+  entered again while a call of it blocks, so nothing of the run time's (the carrier
+  variable) has to be kept across a blocking call, and a handler waiting for what another
+  request brings waits for ever: `%java-stuck`.
 - **Measured, `wasmtime serve` 49.0.0**: an instance answers up to 128 requests, 16 at
   once, and is dropped after 1 s idle (`--max-instance-reuse-count`,
   `--max-instance-concurrent-reuse-count`, `--idle-instance-timeout`); a counter in a
@@ -1219,20 +1253,49 @@ own was needed (`deviations.md`, "The HTTP server").
   variable on the host, a flag on one stack), as a connection a JDK has not accepted
   yet; binding at `start` was rejected: `create` would not throw `BindException`, and
   `getAddress()` of port 0 would be 0 until the start.
-- **A handler runs on the transport's thread** (`%java-http-request`). The run time
-  never started that thread, so `%java-carrier` is BOUND to nil around the request and
-  made at first ask: without it every request thread found the global carrier of the
-  thread the program started on and WAS that thread -- `Thread.currentThread()`, a
-  `wait`, an interrupt, the monitor entered last (the corpus's `/thread`; a
-  `synchronized` still excluded, by the host mutex under the monitor: 16 requests at
-  once, 2,000 increments each, counted 32,000 with and without the binding). `bind` also sets
+- **A request is a task, and the thread the transport called on waits for it (k11).**
+  `HttpServing.answer` -> `Server.dispatch`: with no executor `Task.work()` runs under
+  the server's `Turn` monitor (a JDK's `HTTP-Dispatcher` thread runs the handlers of
+  such a server one at a time), else `executor.execute(task)` under that monitor (one
+  thread of a JDK's hands every request over) and `Task.await()`. Why each is as it is:
+  the lock is of a class of its own because `JavaResumable.Lock.mayBe` takes two
+  `new Object()` locks for one, which would make every `synchronized (LOCK)` of a
+  program an entry that may block; with no executor the task is called by its class,
+  since through `Runnable.run`'s dispatcher the call reaches every `Runnable` a program
+  makes. Waiting makes "the exchange ends with its handler" hold on every transport.
+  The host variant binds `%java-carrier` to a carrier of its own per request -- without
+  it every request thread found the global carrier and WAS the thread the program
+  started on (a `wait`, an interrupt, the monitor entered last) --, `bind` sets
   `%java-shared` / `%java-main` as the first `Thread.start()` does, and reaching the
-  server turns `JavaClasses.monitors` on where the target has threads
-  (`!suspended && isServer(owner)`): a served program's `synchronized` is real with no
-  `Thread` member in it. No executor: one host mutex around each handler (a JDK's
-  default runs them one at a time). An executor: the transport's own
-  thread-per-request, and the executor is handed nothing -- calling `execute` would make
-  the transport thread wait for a thread of the program's, a suspension on one stack.
+  server turns `JavaClasses.monitors` on, on every target. The thread a transport calls
+  on has no `Thread` until it is asked for: slot 0 of its carrier holds the name it is
+  given, `HTTP-Dispatcher` (`%java-thread-named`; an `instanceof` and two casts in
+  `currentThread()` were tried first and put `ClassCastException` into every program
+  with a thread).
+- **`stop(delay)` (k11).** Measured, JDK 25: `stop(3)` with a request in hand that takes
+  1 s returns after 1 s and the request is answered; `stop(0)` cuts it; `stop(2)` by a
+  handler takes 2 s (its own request is in hand) and its response, written before, is
+  read. Here the server counts the requests in hand, `stop` waits on its monitor for
+  none or the delay, and the transport's server is closed by the thread that calls
+  `stop` -- or, called by a handler (a `Task` whose `runner` is the calling carrier),
+  by `Server.gave()` once none is in hand: that is the thread the transport called on,
+  where `RontoHttpServer.stopServer` knows it is in a handler and lets the responses
+  out (a close on an executor's thread would cut the caller's own response).
+- **Filters, authenticators, canned handlers (k11)** are Java source
+  (`Filter`, `Request`, `HttpHandlers`, `Authenticator`, `BasicAuthenticator`,
+  `HttpPrincipal`, `java.security.Principal`). A context given neither runs its handler
+  directly: `getFilters()` / `setAuthenticator` make its `HttpServing.Guarded`, so a
+  program naming neither lowers none of it. Measured against JDK 25 (the corpus's
+  requests): the filters in their order, then the authenticator, then the handler (a
+  filter before the handler sees no principal); a chain run a second time runs the
+  handler again; `Request.with` keeps a field already there; an adapted request's fields
+  are fixed; `BasicAuthenticator` asks again (`Retry`, `WWW-Authenticate: Basic
+  realm="..", charset="UTF-8"`, the charset only for UTF-8) with no `Authorization` and
+  after refused credentials (`Failure` with the field), refuses another scheme with no
+  field, takes the scheme in any case, the first colon as the end of the user, padding
+  left out; a realm is refused for a quote, a control, 0x7F or a character past 0xFF
+  with no backslash before it, and for a backslash at its end. The base64 decoder is
+  RFC 4648's, private to the class.
 - **An exchange answers through Clack's delayed response.** `sendResponseHeaders(code, n)`:
   `-1`, a 1xx/204/304 and a HEAD respond at once with no body; `n > 0` keeps the body
   and responds when the n-th octet is written; `0` hands the responder the head alone
@@ -1260,18 +1323,30 @@ own was needed (`deviations.md`, "The HTTP server").
   JDK's own `StreamClosedException`). Two JDK facts not to copy: a stream taken BEFORE
   the head and written after it sends nothing, and a refused `sendResponseHeaders(200, -2)`
   breaks the chunked send after it (the reply's head, then nothing).
-- **Threads of the program on one stack**: a program that starts threads and serves
-  works while its handlers do not wait; a handler that waits for a thread (or sends a
-  request through the client there) ends the program with `a thread waiting inside a
-  method the run time calls ..` (the transport calls the handler; `.todo/k11`).
+- **A handler that sends a request through the client on one stack** waits in the host
+  for the reply ("java.net.http"): the program's other threads take one turn first and
+  none goes on while it waits, so a program asking its own server from `main` still
+  needs the host's threads (`.todo/k07`).
 - **Sizes** (2026-11-19, wasmtime 49.0.0; class / component bytes): a server of one
   context answering `hello` 300,455 / 379,750; `examples/java/http/Server.java` (four
   contexts, a query split, a chunked body) 480,883 as a component;
-  `examples/java/httpbin/Httpbin.java` 618,617 (k13).
+  `examples/java/httpbin/Httpbin.java` 618,617 (k13). **With a request a thread (k11,
+  the same day, measured on the tree before and after)**: the `hello` server 291,832 ->
+  317,405 / 374,807 -> 432,210 (+15%; its `--native` executable 7,199,696 -> 8,046,832),
+  `http/Server.java` 457,988 -> 514,871, `Httpbin.java` 618,617 -> 684,081. Of the
+  component's 57 KB (`-Drontolisp.wasm.debug-func-sizes`): 17 KB are eight more resume
+  bodies (the thread the program starts on, the request's, the waits), 9 KB the monitors
+  (`%java-monitor-enter` / `-exit` / `-left` / `-notify`), 4 KB the scheduler, the rest
+  `Thread`, the task and the server's counts. Every served program pays it: the
+  hand-over to an executor is what reaches `wait`. `.todo/k15` has the alternative not
+  measured (a plain call of the handler in a program none of whose threads can wait).
 - **Pinned by** `FetchSpecE2eTest#javaHttpServer` (`java-http-server-spec.yaml`: the
   program started as a server under the JDK running the test and on the interpreter,
-  the JVM, `--native` and `wasmtime serve`, 22 requests in turn, the log, the exit once
-  stopped; `/stream` asks the test's origin whether its first chunk was read before it
+  the JVM, `--native` and `wasmtime serve`, 39 requests in turn, the log, the exit once
+  stopped -- since k11 every leg binds port 0 and tells its port, `main` awaits a latch
+  the stop counts down, the executor is a pool of four named threads (`/thread`,
+  `/counted`'s bound), `/worker` waits for a thread that answers, and the filters, the
+  canned handlers, the authenticators and the address forms are asked beside a JDK; `/stream` asks the test's origin whether its first chunk was read before it
   writes the second -- `seen` on the JDK and the component, `unseen` where the body goes
   whole; its program `httpbin` is `examples/java/httpbin/Httpbin.java` read as it stands
   (`example:`), bound to the `PORT` the harness sets, never stopped (`endless:`), with
@@ -1279,13 +1354,23 @@ own was needed (`deviations.md`, "The HTTP server").
   JDK's seven bodies byte for byte, k13), `HttpHandlerTest#stoppableSeamServesJoinsAndStops` (the stop by a handler),
   `#directiveSupportsTheDelayedResponse` (the writer on the interpreter's mirror),
   `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches` (the begin
-  form, the wait after `main`, a monitor held on the host and none on one stack),
+  form, the wait after `main` on the host, and on one stack the scheduler's entry, the
+  resumable `answer` and the monitor held),
   `#theLibrarysSourceIsJavaAJdkCompiles`, the `doc/*/java/index.md` example,
   `examples/java/http/` (`ExamplesE2eTest`).
-- **Not made** (`.todo/k11`): a body sent as it is written on the interpreter, the JVM
-  and `--native`; the values of a field sent twice; a handler on the executor's thread;
-  a `main` or a handler that waits on one stack; `HttpsServer`, `Filter`,
-  `Authenticator`, `HttpHandlers`; name lookup.
+- **`InetAddress.getByName` reads numbers and `localhost` (k11)**, as a JDK 25 answered
+  a probe: one to four decimal numbers of any length, each but the last an octet and the
+  last filling the octets left (`1.2.3` is `1.2.0.3`, `65536` is `0.1.0.0`), `null` and
+  `""` the loopback address. Any other name is an `UnknownHostException`: no target has
+  a name service the four share.
+- **A front end bug found by it**: a static method of an interface was found through a
+  class implementing it (`Headers.of("Allow", "GET")` resolved to `Map.of`, which fits
+  with no variable arity). `JavaLowering.methods` leaves it to its interface;
+  `java-spec.yaml` `an-interface-has-defaults-static-and-private-methods-and-constants`.
+- **Not made** (`.todo/k15`): a body sent as it is written on the interpreter, the JVM
+  and `--native`; the values of a field sent twice; a second server; `HttpsServer`
+  (`.todo/050`), `SimpleFileServer`; name lookup; a JDK's thread going on to the next
+  request while an executor's thread answers one.
 
 ## Numbers (2026-11-17, j72)
 
@@ -2203,9 +2288,9 @@ therefore worth making, and k00 made it ("Resumable bodies" below).
 **Invariant: on wasm a program that starts threads is lowered with every function a thread
 can be suspended in as an `async-defun` and every call of one as an `await`
 (`java/JavaResumable`, run over the lowered forms where `SourceLanguage` reads for a wasm
-target and `Thread.start()` is reached); a thread that cannot go on awaits a future of its
-own, and the thread the program started on settles the futures of the threads that can, the
-one waiting longest first (`java.lisp`'s `#+rontolisp-wasm` "threads").** The interpreter
+target and `Thread.start()` or, since k11, the HTTP server is reached); a thread that cannot
+go on awaits a future of its own, and the thread the program started on settles the futures
+of the threads that can, the one waiting longest first (`java.lisp`'s `#+rontolisp-wasm` "threads").** The interpreter
 and the JVM keep host threads and the forms they had.
 
 - **What it took of the backends: one gate and one bug.** The component had the state

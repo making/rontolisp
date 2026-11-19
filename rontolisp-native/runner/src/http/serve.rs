@@ -6,7 +6,8 @@
 //! binds and starts accepting on threads of the runner's own: a thread per connection
 //! reads each request -- the head, then the whole body, `Content-Length` or chunked --
 //! and queues it. The module takes the requests one at a time (`nextRequest`, a handle
-//! whose host data owns the exchange), reads the head as the host-driven reactor's JSON
+//! whose host data owns the exchange; `awaitRequest` first, where it has something else
+//! to do by a certain time), reads the head as the host-driven reactor's JSON
 //! envelope (`http-reactor.lisp`: `method`, `target`, `headers`, `scheme`, and the
 //! `protocol`, address and port keys a socket can fill), pulls the body
 //! (`readRequestBody`), hands the response body over (`writeResponseBody`) and answers
@@ -49,9 +50,36 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 struct Server {
     requests: Mutex<Receiver<Exchange>>,
+    /// The request `awaitRequest` found, which the next `nextRequest` answers.
+    arrived: Mutex<Option<Exchange>>,
     /// The port bound, which `serve` was asked for unless that was 0.
-    #[cfg_attr(not(test), allow(dead_code))]
     port: u16,
+}
+
+impl Server {
+    /// The next request, waited for with no limit.
+    fn next(&self) -> Option<Exchange> {
+        if let Some(ex) = lock(&self.arrived).take() {
+            return Some(ex);
+        }
+        lock(&self.requests).recv().ok()
+    }
+
+    /// Whether a request has arrived within so many milliseconds: it is kept for `next`.
+    fn arrives_within(&self, millis: u64) -> bool {
+        let mut arrived = lock(&self.arrived);
+        if arrived.is_none() {
+            *arrived = lock(&self.requests).recv_timeout(Duration::from_millis(millis)).ok();
+        }
+        arrived.is_some()
+    }
+}
+
+fn server_of(server: i32) -> wasmtime::Result<Arc<Server>> {
+    match usize::try_from(server).ok().and_then(|i| lock(&SERVERS).get(i).cloned()) {
+        Some(server) => Ok(server),
+        None => wasmtime::bail!("rlhttp: not a server"),
+    }
 }
 
 /// One request, from the connection's thread to the module and its response back.
@@ -107,6 +135,7 @@ fn serve(host: &str, port: i32) -> Result<i32, String> {
     let mut servers = lock(&SERVERS);
     servers.push(Arc::new(Server {
         requests: Mutex::new(requests),
+        arrived: Mutex::new(None),
         port: bound,
     }));
     Ok(servers.len() as i32 - 1)
@@ -496,18 +525,26 @@ pub fn add_to_linker(linker: &mut Linker<WasiP1Ctx>) -> wasmtime::Result<()> {
         MODULE,
         "nextRequest",
         |mut caller: Caller<'_, WasiP1Ctx>, server: i32| -> wasmtime::Result<Option<Rooted<ExternRef>>> {
-            let Some(server) = usize::try_from(server)
-                .ok()
-                .and_then(|i| lock(&SERVERS).get(i).cloned())
-            else {
-                wasmtime::bail!("rlhttp: not a server");
-            };
-            let exchange = match lock(&server.requests).recv() {
-                Ok(ex) => ex,
-                Err(_) => wasmtime::bail!("rlhttp: the server stopped accepting"),
+            let Some(exchange) = server_of(server)?.next() else {
+                wasmtime::bail!("rlhttp: the server stopped accepting");
             };
             Ok(Some(ExternRef::new(&mut caller, Handle(Mutex::new(exchange)))?))
         },
+    )?;
+    // awaitRequest(server, millis) -> 1 once a request has arrived whole, 0 when none
+    // has within the milliseconds: what a module with something to do by then asks first.
+    linker.func_wrap(
+        MODULE,
+        "awaitRequest",
+        |_: Caller<'_, WasiP1Ctx>, server: i32, millis: i32| -> wasmtime::Result<i32> {
+            Ok(i32::from(server_of(server)?.arrives_within(millis.max(0) as u64)))
+        },
+    )?;
+    // port(server) -> the port bound: the one the system chose when asked for 0.
+    linker.func_wrap(
+        MODULE,
+        "port",
+        |_: Caller<'_, WasiP1Ctx>, server: i32| -> wasmtime::Result<i32> { Ok(i32::from(server_of(server)?.port)) },
     )?;
     linker.func_wrap(
         MODULE,
@@ -599,9 +636,11 @@ mod tests {
         client.write_all(raw).unwrap();
         let (mut heads, mut bodies) = (Vec::new(), Vec::new());
         loop {
-            let Ok(mut ex) = lock(&server.requests).recv_timeout(Duration::from_secs(2)) else {
+            // as a module with something else to do asks: whether one arrived, then for it
+            if !server.arrives_within(2000) {
                 break;
-            };
+            }
+            let mut ex = server.next().unwrap();
             heads.push(ex.head.clone());
             bodies.push(ex.body.clone());
             let keep_alive = ex.keep_alive;

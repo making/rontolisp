@@ -58,6 +58,10 @@ left, the first two measured:
   "java.net.http"): `%java-suspending-http-reply` gives the threads that can go on one
   turn and then blocks the stack in the host, so a thread asleep does not wake until the
   reply is in, and a reply that waits for what a sleeping thread would send never comes.
+  Since k11 a request of the program's own server is a thread too, taken where no
+  thread can go on: a `main` asking its own server through the client waits in the host
+  and the request is never taken (`doc/*/java/index.md`'s example and
+  `examples/java/http/Client.java` run on the host's threads only).
   The scheduler would have to wait for the soonest of its timed threads and the host's
   futures together: a `--native` fetch's future is deferred (no way to ask it without
   waiting: the runner has `rlhttp.head` alone), the component settles a host future only
@@ -72,7 +76,16 @@ left, the first two measured:
   `Environment.registerMutexes`, the `cond` of a `while`) -- a wake-up that never comes;
   which case was not found (the legs run at once; a jstack of the fork shows the stack,
   not the program). Seen twice in fifteen runs with k05's changes and once in nine on
-  `23ce3b245`. (2) `locks-latches-queues-and-executors-hand-work-between-threads` on the
+  `23ce3b245`. **The case is `a-scheduled-pool-and-a-timer-run-tasks-at-their-times`
+  (`Timed`), found 2026-11-19 by k11** (start and end markers around
+  `standaloneOnInterpreter`; three of four runs of the whole class hung at load 4 to
+  10): its `main` waits with no limit in a `get()` or a latch's `await()`, two more
+  threads of its pools wait with no limit beside it, and the thread at 100% CPU in the
+  dump is another case's, `Turns`' daemon that never ends. It needs no test to show:
+  24 processes at once, each running `Timed` four times in one JVM on the interpreter
+  (a thread per copy evaluating `SourceLanguage.forFile(..).read(..)`'s forms, 25 s
+  each), left 26 of 96 copies waiting on the tree before k11 and 17 of 96 after; six
+  such processes one after another left none. (2) `locks-latches-queues-and-executors-hand-work-between-threads` on the
   JDK leg: `pool size = 1` where the expectation says 0 (the pool's thread had not left
   when `toString` ran; seen on both trees). (3) `threads-wait-for-one-another-again-and-again` on the
   interpreter: `atomic read after some turns false` -- `stops()` gives each spinning

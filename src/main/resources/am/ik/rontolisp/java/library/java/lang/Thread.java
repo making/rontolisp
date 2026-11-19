@@ -130,7 +130,7 @@ public class Thread implements Runnable {
         this.virtual = virtual;
         this.identifier = nextIdentifier();
         if (starting) {
-            this.name = "main";
+            this.name = name != null ? name : "main";
             this.priority = NORM_PRIORITY;
             this.started = true;
             this.alive = true;
@@ -165,7 +165,9 @@ public class Thread implements Runnable {
 
     public static Thread currentThread() {
         Thread current = current0();
-        return current != null ? current : new Thread(null, null, false, true);
+        // a thread the run time did not start has no object until it is asked for: the
+        // one the program started on, or one of a transport's, which has a name
+        return current != null ? current : new Thread(null, named0(), false, true);
     }
 
     /** The name of the thread running: what a static initialization that threw keeps. */
@@ -429,6 +431,9 @@ public class Thread implements Runnable {
     private static native Object adopt0(Thread thread);
 
     private static native Thread current0();
+
+    /** The name of a transport's thread that has no object yet. */
+    private static native String named0();
 
     private static native void start0(Thread thread, Object carrier, boolean daemon);
 

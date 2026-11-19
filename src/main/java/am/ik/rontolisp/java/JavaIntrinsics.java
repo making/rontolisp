@@ -1618,6 +1618,7 @@ final class JavaIntrinsics {
 		natives.put(thread + "carrier0(Thread)", runtime("thread-carrier"));
 		natives.put(thread + "adopt0(Thread)", runtime("thread-adopt"));
 		natives.put(thread + "current0()", runtime("thread-current"));
+		natives.put(thread + "named0()", runtime("thread-named"));
 		natives.put(thread + "sleep0(long)", runtime("thread-sleep"));
 		natives.put(thread + "yield0()", runtime("thread-yield"));
 		natives.put(thread + "interrupt0(Object)", runtime("thread-interrupt"));
@@ -1725,7 +1726,9 @@ final class JavaIntrinsics {
 		// (http-serve.lisp), which the program itself calls: the passes that splice a
 		// transport's leg read a program that serves. The application is a function of
 		// Clack's environment answering Clack's delayed response, a function of the
-		// transport's responder; each request runs HttpServing.answer
+		// transport's responder; each request runs HttpServing.answer, on the
+		// transport's thread or, where the target has one stack, as a thread of the
+		// program's (JavaResumable reads the function handed over as one awaited)
 		String serving = SERVING + ".";
 		natives.put(serving + "open0(Object,int,String)", (lowering, call) -> {
 			LispSymbol server = lowering.temporary();
@@ -1734,8 +1737,8 @@ final class JavaIntrinsics {
 			LispSymbol condition = lowering.temporary();
 			LispVal answer = list(cl("lambda"), JavaForms.NIL,
 					lowering.library(SERVING, "answer", List.of(server, env, responder)));
-			LispVal application = list(cl("lambda"), list(env), list(cl("lambda"), list(responder),
-					runtimeCall("http-request", lowering.library(SERVING, "serial", List.of(server)), answer)));
+			LispVal application = list(cl("lambda"), list(env),
+					list(cl("lambda"), list(responder), runtimeCall("http-request", answer)));
 			return JavaForms.let(server, call.argument(0),
 					List.of(list(cl("handler-case"),
 							list(new LispSymbol("RONTOLISP::%HTTP-SERVE-BEGIN"), application, call.argument(1),
@@ -1750,13 +1753,15 @@ final class JavaIntrinsics {
 				(lowering, call) -> list(new LispSymbol("RONTOLISP::%HTTP-SERVE-STOP"), call.argument(0)));
 		// the thread the program started on waits for the stop where the host's threads
 		// serve, then for the transport to have stopped; where the target has one
-		// thread the second is the serving itself
+		// stack the program's own scheduler serves, and this is not reached
 		natives.put(serving + "run0(Object)", (lowering, call) -> call("progn", runtimeCall("http-wait"),
 				list(new LispSymbol("RONTOLISP::%HTTP-SERVE-RUN"), call.argument(0))));
 		natives.put(serving + "shared0()", runtime("http-shared"));
 		natives.put(serving + "gate0()", runtime("http-gate"));
-		natives.put(serving + "turn0(Object,boolean)", (lowering, call) -> runtimeCall("http-turn", call.argument(0),
-				call("if", call.argument(1), new LispSymbol(":STARTED"), new LispSymbol(":STOPPED"))));
+		natives.put(serving + "turn0(Object,Object,boolean)",
+				(lowering, call) -> runtimeCall("http-turn", call.argument(0), call.argument(1),
+						call("if", call.argument(2), new LispSymbol(":STARTED"), new LispSymbol(":STOPPED"))));
+		natives.put(serving + "self0()", runtime("self"));
 		natives.put(serving + "admitted0(Object)", runtime("http-admitted"));
 		natives.put(serving + "method0(Object)", runtime("http-method"));
 		natives.put(serving + "target0(Object)", runtime("http-target"));

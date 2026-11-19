@@ -860,9 +860,9 @@ final class JavaLowering implements JavaEmitter.Context {
 					LAMBDA_FUNCTION));
 		}
 		forms.addAll(made);
-		if (this.suspended && startsThreads()) {
+		if (this.suspended && scheduled()) {
 			if (!runs) {
-				throw unsupported(0, "a program with no main starting threads on a target with one stack");
+				throw unsupported(0, "a program with no main starting threads or a server on a target with one stack");
 			}
 			this.resumable.dispatchers.addAll(this.dispatchers.keySet());
 			for (LispSymbol dispatching : List.of(OBJECT_STRING, OBJECT_EQUALS, OBJECT_HASH)) {
@@ -915,11 +915,9 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (method.emitter == null && isLibrary(method.owner)) {
 			this.classes.reached.add(method);
 			use(method.owner);
-			if (!this.classes.monitors
-					&& (method.owner.name.equals(THREAD) || (!this.suspended && isServer(method.owner)))) {
+			if (!this.classes.monitors && (method.owner.name.equals(THREAD) || isServer(method.owner))) {
 				// what was lowered holding no monitor is lowered again holding one: a
-				// thread of the program's, or the host's threads a server's handlers
-				// run on
+				// thread of the program's, or the threads a server's handlers run on
 				this.classes.monitors = true;
 				this.classes.changed();
 			}
@@ -1788,14 +1786,15 @@ final class JavaLowering implements JavaEmitter.Context {
 		List<LispVal> body = new ArrayList<>(initialization);
 		body.add(start);
 		int known = this.classes.reached.size();
-		if (serves()) {
+		if (serves() && !this.suspended) {
 			// the program lives while a server it started runs, as a JDK's does by the
-			// server's own thread
+			// server's own thread; on one stack the scheduler serves where no thread
+			// can go on, the one main runs on among them
 			body.add(library(JavaIntrinsics.SERVING, "serve", List.of()));
 		}
 		LispSymbol thrown = new LispSymbol("%o");
 		LispVal entry;
-		if (startsThreads()) {
+		if (startsThreads() || (this.suspended && serves())) {
 			// the program ends when its threads that are no daemons have: the run time
 			// reports what main left uncaught, then waits for them
 			LispSymbol ended = new LispSymbol("%t");
@@ -1868,6 +1867,14 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Whether the program has threads beside the one it starts on: the ones it starts,
+	 * and the ones the handlers of a server run on -- the transport's, or the executor's.
+	 */
+	private boolean scheduled() {
+		return startsThreads() || serves();
 	}
 
 	/**
@@ -2343,7 +2350,9 @@ final class JavaLowering implements JavaEmitter.Context {
 		Set<String> signatures = new HashSet<>();
 		for (JavaClass type : above) {
 			for (Method method : type.methods) {
+				// a static method of an interface is a member of that interface alone
 				if (method.name.equals(name) && !method.isConstructor()
+						&& !(method.isStatic && type.isInterface && type != declaration)
 						&& signatures.add(signatureIn(declaration, method))) {
 					found.add(method);
 				}
@@ -8308,7 +8317,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (this.order.decide(this.initEffects, this.methodEffects, type -> immutable(type, new HashSet<>()))) {
 			this.classes.changed();
 		}
-		boolean threads = startsThreads();
+		boolean threads = scheduled();
 		List<LispVal> forms = new ArrayList<>();
 		for (JavaClass declaration : this.classes.all()) {
 			if (declaration.intrinsic || (isLibrary(declaration) && !this.classes.used.contains(declaration))) {

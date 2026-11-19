@@ -56,8 +56,15 @@
 ;;;; legs run is the join; a --native module, which has one thread, serves in
 ;;;; it -- the runner has been accepting since begin and holds what arrived --
 ;;;; until %http-serve-stop was called; where the host calls the module run
-;;;; answers at once. %http-serve-port is the port a socket leg bound, nil
-;;;; where the leg cannot tell.
+;;;; answers at once. %http-serve-port is the port a socket leg or the runner
+;;;; bound, nil where the leg cannot tell.
+;;;;
+;;;; An adapter with a scheduler of its own (the Java subset's threads on one
+;;;; stack) serves in steps instead of run: %http-serve-step SERVER LIMIT
+;;;; serves one request of a --native module's, waiting LIMIT milliseconds at
+;;;; most for it to arrive (nil: for ever) and answering whether it served one;
+;;;; where the host calls the module it answers :host at once -- there is
+;;;; nothing to take, the adapter returns to its host.
 
 #+(and rontolisp-wasm (not rontolisp-reactor) (not rontolisp-native))
 (defvar rontolisp::%http-serve-current nil)
@@ -109,10 +116,15 @@
   (declare (ignore server))
   nil)
 
-#+(or rontolisp-wasm rontolisp-servlet)
+#+(or rontolisp-servlet (and rontolisp-wasm (not rontolisp-native)))
 (defun rontolisp::%http-serve-port (server)
   (declare (ignore server))
   nil)
+
+#+(or rontolisp-servlet (and rontolisp-wasm (not rontolisp-native)))
+(defun rontolisp::%http-serve-step (server limit)
+  (declare (ignore server limit))
+  :host)
 
 #+rontolisp-servlet
 (defun rontolisp::%http-serve (app port address join)
@@ -138,7 +150,9 @@
 ;; accepting, or answers -1 and leaves the reason for serveError; nextRequest
 ;; blocks until a request has arrived whole and answers its exchange, which the
 ;; runner releases when the collector finds the handle dead (answering 500 if
-;; nothing was answered); respond sends the response the head and the body
+;; nothing was answered); awaitRequest waits so many milliseconds at most and
+;; answers 1 when a request has arrived, which the next nextRequest answers;
+;; port is the port bound; respond sends the response the head and the body
 ;; handed over before it make up.
 #+rontolisp-native
 (rontolisp:wasm-import 'rontolisp::%http-serve-listen
@@ -158,6 +172,18 @@
                        :as "nextRequest"
                        :params '(:s32)
                        :returns :extern)
+#+rontolisp-native
+(rontolisp:wasm-import 'rontolisp::%http-serve-await
+                       :from "rlhttp"
+                       :as "awaitRequest"
+                       :params '(:s32 :s32)
+                       :returns :s32)
+#+rontolisp-native
+(rontolisp:wasm-import 'rontolisp::%http-serve-bound
+                       :from "rlhttp"
+                       :as "port"
+                       :params '(:s32)
+                       :returns :s32)
 #+rontolisp-native
 (rontolisp:wasm-import 'rontolisp::%http-serve-head
                        :from "rlhttp"
@@ -236,6 +262,20 @@
     (if (aref server 2) (return nil))
     (rontolisp::%http-serve-exchange (aref server 1)
      (rontolisp::%http-serve-next (aref server 0)) t)))
+
+#+rontolisp-native
+(defun rontolisp::%http-serve-step (server limit)
+  (if (or (null limit)
+          (= 1 (rontolisp::%http-serve-await (aref server 0) limit)))
+      (progn
+        (rontolisp::%http-serve-exchange (aref server 1)
+         (rontolisp::%http-serve-next (aref server 0)) t)
+        t)
+      nil))
+
+#+rontolisp-native
+(defun rontolisp::%http-serve-port (server)
+  (rontolisp::%http-serve-bound (aref server 0)))
 
 ;; Undeploying the war, or the host, is what stops the other legs; a --native
 ;; server stops with its process, or -- one begun in two steps -- where its run

@@ -477,10 +477,12 @@ as far as the program reaches it, so a class of the program can extend or implem
 | `HttpResponse` | `statusCode`, `headers`, `body`, `uri`, `request`, `previousResponse`, `version`, `toString`; `BodyHandlers.ofString` with or without a `Charset`, `ofByteArray`, `ofInputStream`, `discarding`, `replacing`; `BodySubscribers` of the same and `mapping`; a `BodyHandler` of the program's own choosing one by the `ResponseInfo` (`statusCode`, `headers`, `version`) |
 | `HttpHeaders` | `firstValue`, `firstValueAsLong`, `allValues`, `map`, `HttpHeaders.of`, `equals`, `hashCode`, `toString` |
 | `HttpTimeoutException`, `HttpConnectTimeoutException` | of a message; what `send` throws, and what the future of `sendAsync` completes with, when a time limit passes |
-| `HttpServer`, `HttpContext`, `HttpHandler` | `HttpServer.create` of nothing or of an address and a backlog, `bind`, `createContext` with or without a handler, `removeContext` of a path or a context, `setExecutor`, `getExecutor`, `start`, `stop`, `getAddress`; `getPath`, `getHandler`, `setHandler`, `getServer`, `getAttributes`; `handle` |
-| `HttpExchange` | `getRequestMethod`, `getRequestURI`, `getProtocol`, `getRequestHeaders`, `getRequestBody`, `getResponseHeaders`, `sendResponseHeaders`, `getResponseBody`, `getResponseCode`, `close`, `getHttpContext`, `getRemoteAddress`, `getLocalAddress`, `getAttribute`, `setAttribute`, `setStreams` |
+| `HttpServer`, `HttpContext`, `HttpHandler` | `HttpServer.create` of nothing, of an address and a backlog, or of those with a path, a handler and filters, `bind`, `createContext` with or without a handler, `removeContext` of a path or a context, `setExecutor`, `getExecutor`, `start`, `stop`, `getAddress`; `getPath`, `getHandler`, `setHandler`, `getServer`, `getAttributes`, `getFilters`, `setAuthenticator`, `getAuthenticator`; `handle` |
+| `HttpExchange`, `Request` | `getRequestMethod`, `getRequestURI`, `getProtocol`, `getRequestHeaders`, `getRequestBody`, `getResponseHeaders`, `sendResponseHeaders`, `getResponseBody`, `getResponseCode`, `close`, `getHttpContext`, `getRemoteAddress`, `getLocalAddress`, `getAttribute`, `setAttribute`, `setStreams`, `getPrincipal`; `with` |
+| `Filter`, `HttpHandlers` | `doFilter`, `description`, `Filter.beforeHandler`, `afterHandler`, `adaptRequest`; `new Filter.Chain` of filters and a handler, its `doFilter`; `HttpHandlers.of` a status, fields and a body, `handleOrElse` |
+| `Authenticator`, `BasicAuthenticator`, `HttpPrincipal` | `authenticate`; `Failure`, `Retry` and `Success` with `getResponseCode` or `getPrincipal`; a `BasicAuthenticator` of a realm, with or without a `Charset`, `getRealm`, `checkCredentials`; `new HttpPrincipal` of a user and a realm, `getUsername`, `getRealm`, `getName`, `equals`, `hashCode`, `toString` |
 | `Headers` | the members of `Map`; `getFirst`, `add`, `set`; `new Headers()` of nothing or a map, `Headers.of` of names and values in turn or of a map |
-| `InetSocketAddress`, `InetAddress`, `BindException` | of a port, of a host and a port, of an `InetAddress` and a port, `createUnresolved`; `getPort`, `getHostString`, `getHostName`, `getAddress`, `isUnresolved`, `equals`, `hashCode`, `toString`; `getHostAddress`, `getHostName`, `isLoopbackAddress`, `isAnyLocalAddress`, `InetAddress.getLoopbackAddress` |
+| `InetSocketAddress`, `InetAddress`, `BindException`, `UnknownHostException` | of a port, of a host and a port, of an `InetAddress` and a port, `createUnresolved`; `getPort`, `getHostString`, `getHostName`, `getAddress`, `isUnresolved`, `equals`, `hashCode`, `toString`; `getHostAddress`, `getHostName`, `getAddress`, `isLoopbackAddress`, `isAnyLocalAddress`, `InetAddress.getLoopbackAddress`, `getByName` and `getAllByName` of an address in numbers or `localhost`, `getByAddress` |
 
 `String.format`, `formatted` and `printf` take `%d`, `%s`, `%S`, `%f`, `%e`, `%E`, `%x`,
 `%X`, `%o`, `%c`, `%b`, `%h`, `%H`, `%n` and `%%`, with the flags `-`, `0`, `+`, a space, `,`, `(` and
@@ -743,17 +745,20 @@ is a server on each:
 | Native executable | `--native` | the executable, on the address `create` was given |
 
 A plain Preview 1 module cannot listen: `create` throws an `IOException` naming
-`--component`. A compact source file imports the server with `import module jdk.httpserver;`.
+`--component` and `--native`. A compact source file imports the server with
+`import module jdk.httpserver;`.
 
-A program lives while a server it started runs: `main` returns, and requests are answered
-until `stop`. Under `wasmtime serve` the host starts the program -- `main`, up to its end --
+A program lives while a server it started runs: `main` may return or wait, and requests
+are answered until `stop`. A handler runs on a thread of the executor the server was given
+and may wait for the program's other threads; a context has its filters
+(`getFilters`) and its authenticator. Under `wasmtime serve` the host starts the program
 for the requests it likes, and the address of `create` is not bound.
 `sendResponseHeaders(status, length)` announces a body of that length, `-1` none, and `0` a
 body of a length not told ahead, which goes out chunk by chunk as it is written where the
 transport can (under `wasmtime serve`), and whole elsewhere.
 
-This program serves one context and asks it once, so it runs where the target has threads,
-the interpreter and the JVM:
+This program serves one context and asks it once from `main`, so it runs where the target
+has threads, the interpreter and the JVM:
 
 ```java
 import module java.net.http;

@@ -531,10 +531,13 @@ class JavaLoweringTest {
 			.toList())
 			.anyMatch(form -> form.contains("(RONTOLISP:AWAIT (RONTOLISP::%JAVA-SUSPENDING-HTTP-REPLY |exchange|))"));
 		// A server of com.sun.net.httpserver is the program's own call of the transport
-		// every adapter serves through, handed the function that answers a request on
-		// the transport's thread; the program's end waits for the server; and where the
-		// host's threads run the handlers a monitor is held with no Thread in the
-		// program, which one stack has no use for.
+		// every adapter serves through, handed the function that answers a request; a
+		// monitor is held with no Thread in the program, since the handlers run beside
+		// the thread it started on. Where the host has threads the program's end waits
+		// for the server; on one stack a request is a thread of the program's own
+		// scheduler, which serves where no thread can go on: the entry is the
+		// scheduler's, nothing follows main, and what waits for the executor's thread
+		// is resumable.
 		String server = """
 				import com.sun.net.httpserver.HttpServer;
 				import java.net.InetSocketAddress;
@@ -549,15 +552,22 @@ class JavaLoweringTest {
 				}
 				""";
 		assertThat(lower(server, "L9.java"))
-			.anyMatch(form -> form.contains("(HANDLER-CASE (RONTOLISP::%HTTP-SERVE-BEGIN (LAMBDA (") && form
-				.contains("(RONTOLISP::%JAVA-HTTP-REQUEST (|rontolisp.internal.HttpServing.serial(Object)| "))
+			.anyMatch(form -> form.contains("(HANDLER-CASE (RONTOLISP::%HTTP-SERVE-BEGIN (LAMBDA (")
+					&& form.contains("(RONTOLISP::%JAVA-HTTP-REQUEST (LAMBDA NIL "
+							+ "(|rontolisp.internal.HttpServing.answer(Object,Object,Object)| "))
 			.anyMatch(
 					form -> form.contains("(|L9.main(String[])| (VECTOR)) (|rontolisp.internal.HttpServing.serve()|)"))
 			.anyMatch(form -> form
 				.startsWith("(DEFUN |L9.hit()| NIL (LET ((|%t0| (RONTOLISP::%JAVA-MONITOR-ENTER '|j%L9|)))"));
 		assertThat(Java.read(server, "L9.java", JavaFiles.NONE, null, true).stream().map(LispVal::print).toList())
 			.anyMatch(form -> form.contains("(RONTOLISP::%HTTP-SERVE-BEGIN "))
-			.noneMatch(form -> form.startsWith("(DEFUN |L9.hit()|") && form.contains("MONITOR"));
+			.anyMatch(form -> form.startsWith("(RONTOLISP::%JAVA-THREAD-MAIN (LAMBDA NIL ")
+					&& form.contains("(|L9.main(String[])| (VECTOR)))"))
+			.anyMatch(form -> form
+				.startsWith("(RONTOLISP:ASYNC-DEFUN |rontolisp.internal.HttpServing.answer(Object,Object,Object)| ")
+					&& form.contains("(RONTOLISP:AWAIT (|rontolisp.internal.HttpServing.Task.await()| "))
+			.anyMatch(form -> form.startsWith("(DEFUN |L9.hit()|") && form.contains("%JAVA-MONITOR-ENTER"))
+			.noneMatch(form -> form.contains("HttpServing.serve()"));
 		assertThat(forms).noneMatch(
 				form -> form.contains("RONTOLISP:FETCH") || form.contains("%URI-") || form.contains("%HTTP-SERVE"));
 	}
@@ -873,28 +883,28 @@ class JavaLoweringTest {
 						+ "NIL (UNWIND-PROTECT (HANDLER-CASE (|Thread.body(Thread)| |%t8|) (ERROR (|%t9|) "
 						+ "(|Thread.report(Thread,String)| |%t8| (RONTOLISP::%JAVA-TRACED-TEXT |%t9| (LAMBDA "
 						+ "(|%t10|) (|Throwable.trace(Throwable)| |%t10|)))))) (|Thread.finish(Thread)| |%t8|)))))))",
-				"(DEFUN |Lazy.<clinit>| NIL (IF (EQ |Lazy.<clinit>%done| :ENDED) NIL (LET ((|%t16| "
-						+ "(RONTOLISP::%JAVA-SELF))) (IF (EQ |Lazy.<clinit>%done| |%t16|) NIL (PROGN "
+				"(DEFUN |Lazy.<clinit>| NIL (IF (EQ |Lazy.<clinit>%done| :ENDED) NIL (LET ((|%t17| "
+						+ "(RONTOLISP::%JAVA-SELF))) (IF (EQ |Lazy.<clinit>%done| |%t17|) NIL (PROGN "
 						+ "(RONTOLISP::%JAVA-INIT-ENTER) (WHILE (RONTOLISP::%JAVA-INIT-BUSY |Lazy.<clinit>%done|)) "
 						+ "(IF |Lazy.<clinit>%done| (RONTOLISP::%JAVA-INIT-LEAVE NIL) (PROGN (SETQ "
-						+ "|Lazy.<clinit>%done| |%t16|) (RONTOLISP::%JAVA-INIT-LEAVE NIL) (UNWIND-PROTECT "
+						+ "|Lazy.<clinit>%done| |%t17|) (RONTOLISP::%JAVA-INIT-LEAVE NIL) (UNWIND-PROTECT "
 						+ "(WRITE-LINE \"made\") (PROGN (RONTOLISP::%JAVA-INIT-ENTER) (SETQ |Lazy.<clinit>%done| "
 						+ ":ENDED) (RONTOLISP::%JAVA-INIT-LEAVE T))))))))))",
-				"(DEFUN |Late.<clinit>| NIL (IF (EQ |Late.<clinit>%done| :ENDED) NIL (LET ((|%t19| "
-						+ "(RONTOLISP::%JAVA-SELF))) (IF (EQ |Late.<clinit>%done| |%t19|) NIL (PROGN "
+				"(DEFUN |Late.<clinit>| NIL (IF (EQ |Late.<clinit>%done| :ENDED) NIL (LET ((|%t20| "
+						+ "(RONTOLISP::%JAVA-SELF))) (IF (EQ |Late.<clinit>%done| |%t20|) NIL (PROGN "
 						+ "(RONTOLISP::%JAVA-INIT-ENTER) (WHILE (RONTOLISP::%JAVA-INIT-BUSY |Late.<clinit>%done|)) "
 						+ "(IF |Late.<clinit>%done| (PROGN (RONTOLISP::%JAVA-INIT-LEAVE NIL) (IF (STRINGP "
 						+ "|Late.<clinit>%done|) (RONTOLISP::%JAVA-THROW "
 						+ "(|NoClassDefFoundError.unusable(String,String)| \"Late\" |Late.<clinit>%done|) "
-						+ "#'|Throwable.toString()|) NIL)) (LET ((|%t20| NIL)) (SETQ |Late.<clinit>%done| |%t19|) "
+						+ "#'|Throwable.toString()|) NIL)) (LET ((|%t21| NIL)) (SETQ |Late.<clinit>%done| |%t20|) "
 						+ "(RONTOLISP::%JAVA-INIT-LEAVE NIL) (UNWIND-PROTECT (HANDLER-CASE (IF (> |Late.made| 0) "
 						+ "(RONTOLISP::%JAVA-THROW (|IllegalStateException.new(String)| \"late\") "
-						+ "#'|Throwable.toString()|)) ((SATISFIES RONTOLISP::%JAVA-THROWN) (|%t17|) (LET ((|%t18| "
-						+ "(RONTOLISP::%JAVA-THROWN |%t17|))) (SETQ |%t20| "
-						+ "(|ExceptionInInitializerError.record(Throwable,String)| |%t18| (|Thread.currentName()|))) "
-						+ "(RONTOLISP::%JAVA-THROW (|ExceptionInInitializerError.of(Throwable)| |%t18|) "
+						+ "#'|Throwable.toString()|)) ((SATISFIES RONTOLISP::%JAVA-THROWN) (|%t18|) (LET ((|%t19| "
+						+ "(RONTOLISP::%JAVA-THROWN |%t18|))) (SETQ |%t21| "
+						+ "(|ExceptionInInitializerError.record(Throwable,String)| |%t19| (|Thread.currentName()|))) "
+						+ "(RONTOLISP::%JAVA-THROW (|ExceptionInInitializerError.of(Throwable)| |%t19|) "
 						+ "#'|Throwable.toString()|)))) (PROGN (RONTOLISP::%JAVA-INIT-ENTER) (SETQ "
-						+ "|Late.<clinit>%done| (IF |%t20| |%t20| :ENDED)) (RONTOLISP::%JAVA-INIT-LEAVE T))))))))))",
+						+ "|Late.<clinit>%done| (IF |%t21| |%t21| :ENDED)) (RONTOLISP::%JAVA-INIT-LEAVE T))))))))))",
 				"(RONTOLISP::%JAVA-THREAD-MAIN (LAMBDA NIL (PROGN (SETQ |Cell.hits| 0) (SETQ |Lazy.made| 0) (SETQ "
 						+ "|Late.made| 0) (SETQ |Throwable.traces| 0) (SETQ |Thread.defaultHandler| NIL) (SETQ "
 						+ "|Thread.guarding| NIL) (SETQ |Thread.MIN_PRIORITY| 1) (SETQ |Thread.NORM_PRIORITY| 5) "

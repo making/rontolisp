@@ -479,10 +479,12 @@ void main() {
 | `HttpResponse` | `statusCode`、`headers`、`body`、`uri`、`request`、`previousResponse`、`version`、`toString`。`Charset` の指定がある、またはない `BodyHandlers.ofString`、`ofByteArray`、`ofInputStream`、`discarding`、`replacing`。同じ名前の `BodySubscribers` と `mapping`。`ResponseInfo`（`statusCode`、`headers`、`version`）を見てサブスクライバーを選ぶ、プログラム独自の `BodyHandler` |
 | `HttpHeaders` | `firstValue`、`firstValueAsLong`、`allValues`、`map`、`HttpHeaders.of`、`equals`、`hashCode`、`toString` |
 | `HttpTimeoutException`、`HttpConnectTimeoutException` | メッセージを取るコンストラクタ。時間制限を過ぎたときに `send` が投げ、`sendAsync` の future が失敗の原因として持つ例外です |
-| `HttpServer`、`HttpContext`、`HttpHandler` | 引数なし、またはアドレスとバックログを取る `HttpServer.create`、`bind`、ハンドラーの指定がある、またはない `createContext`、パスまたはコンテキストを取る `removeContext`、`setExecutor`、`getExecutor`、`start`、`stop`、`getAddress`。`getPath`、`getHandler`、`setHandler`、`getServer`、`getAttributes`。`handle` |
-| `HttpExchange` | `getRequestMethod`、`getRequestURI`、`getProtocol`、`getRequestHeaders`、`getRequestBody`、`getResponseHeaders`、`sendResponseHeaders`、`getResponseBody`、`getResponseCode`、`close`、`getHttpContext`、`getRemoteAddress`、`getLocalAddress`、`getAttribute`、`setAttribute`、`setStreams` |
+| `HttpServer`、`HttpContext`、`HttpHandler` | 引数なし、アドレスとバックログ、またはそれにパスとハンドラーとフィルターを加えた引数を取る `HttpServer.create`、`bind`、ハンドラーの指定がある、またはない `createContext`、パスまたはコンテキストを取る `removeContext`、`setExecutor`、`getExecutor`、`start`、`stop`、`getAddress`。`getPath`、`getHandler`、`setHandler`、`getServer`、`getAttributes`、`getFilters`、`setAuthenticator`、`getAuthenticator`。`handle` |
+| `HttpExchange`、`Request` | `getRequestMethod`、`getRequestURI`、`getProtocol`、`getRequestHeaders`、`getRequestBody`、`getResponseHeaders`、`sendResponseHeaders`、`getResponseBody`、`getResponseCode`、`close`、`getHttpContext`、`getRemoteAddress`、`getLocalAddress`、`getAttribute`、`setAttribute`、`setStreams`、`getPrincipal`。`with` |
+| `Filter`、`HttpHandlers` | `doFilter`、`description`、`Filter.beforeHandler`、`afterHandler`、`adaptRequest`。フィルターのリストとハンドラーを取る `new Filter.Chain` と、その `doFilter`。ステータスとフィールドとボディを取る `HttpHandlers.of`、`handleOrElse` |
+| `Authenticator`、`BasicAuthenticator`、`HttpPrincipal` | `authenticate`。`Failure`、`Retry`、`Success` と、その `getResponseCode` または `getPrincipal`。レルムを取り、`Charset` の指定がある、またはない `BasicAuthenticator` のコンストラクタ、`getRealm`、`checkCredentials`。ユーザー名とレルムを取る `new HttpPrincipal`、`getUsername`、`getRealm`、`getName`、`equals`、`hashCode`、`toString` |
 | `Headers` | `Map` のメンバー。`getFirst`、`add`、`set`。引数なし、またはマップを取る `new Headers()`、名前と値を交互に並べるかマップを取る `Headers.of` |
-| `InetSocketAddress`、`InetAddress`、`BindException` | ポート、ホストとポート、`InetAddress` とポートを取るコンストラクタ、`createUnresolved`。`getPort`、`getHostString`、`getHostName`、`getAddress`、`isUnresolved`、`equals`、`hashCode`、`toString`。`getHostAddress`、`getHostName`、`isLoopbackAddress`、`isAnyLocalAddress`、`InetAddress.getLoopbackAddress` |
+| `InetSocketAddress`、`InetAddress`、`BindException`、`UnknownHostException` | ポート、ホストとポート、`InetAddress` とポートを取るコンストラクタ、`createUnresolved`。`getPort`、`getHostString`、`getHostName`、`getAddress`、`isUnresolved`、`equals`、`hashCode`、`toString`。`getHostAddress`、`getHostName`、`getAddress`、`isLoopbackAddress`、`isAnyLocalAddress`、`InetAddress.getLoopbackAddress`、数値で書いたアドレスまたは `localhost` を取る `getByName` と `getAllByName`、`getByAddress` |
 
 `String.format`、`formatted`、`printf` が受け付ける変換は `%d`、`%s`、`%S`、`%f`、`%e`、`%E`、
 `%x`、`%X`、`%o`、`%c`、`%b`、`%h`、`%H`、`%n`、`%%` です。フラグ `-`、`0`、`+`、空白、`,`、`(`、`#` と、
@@ -745,21 +747,24 @@ void main() throws IOException, InterruptedException {
 | WASM コンポーネント | `-o app.wasm --component`、`wasmtime serve -S cli=y app.wasm` で実行 | ホスト（`--addr`）。リクエストごとに `wasi:http` でプログラムを呼びます |
 | ネイティブ実行ファイル | `--native` | 実行ファイル（`create` に渡したアドレス） |
 
-素の Preview 1 モジュールはポートを開けません。`create` は、`--component` を示す
-`IOException` を投げます。コンパクトソースファイルでは、`import module jdk.httpserver;` で
+素の Preview 1 モジュールはポートを開けません。`create` は、`--component` と `--native` を
+示す `IOException` を投げます。コンパクトソースファイルでは、`import module jdk.httpserver;` で
 サーバーをインポートします。
 
-プログラムは、開始したサーバーが動いているあいだ終了しません。`main` が戻ったあとも、`stop`
-が呼ばれるまでリクエストに応答します。`wasmtime serve` では、ホストが必要に応じてプログラムを
-起動して `main` を最後まで実行し、`create` に渡したアドレスは使われません。
+プログラムは、開始したサーバーが動いているあいだ終了しません。`main` が戻っても待機しても、
+`stop` が呼ばれるまでリクエストに応答します。ハンドラーは、サーバーに設定した
+エグゼキューターのスレッドで実行され、プログラムのほかのスレッドを待つことができます。
+コンテキストには、フィルター（`getFilters`）とオーセンティケーターを設定できます。
+`wasmtime serve` では、ホストが必要に応じてプログラムを起動し、`create` に渡したアドレスは
+使われません。
 `sendResponseHeaders(status, length)` の `length` は、ボディの長さです。`-1` はボディが
 ないことを、`0` は長さを事前に知らせないボディを表します。長さを知らせないボディは、
 トランスポートが対応していれば（`wasmtime serve`）、書き込むたびにチャンクとして送られます。
 それ以外のトランスポートでは、全体がまとめて送られます。
 
-次のプログラムは、コンテキストを 1 つ持つサーバーを開始し、自分でそのサーバーにリクエストを
-1 回送ります。サーバーとクライアントが同じプロセスで動くため、実行できるのはスレッドのある
-ターゲット（インタプリタと JVM）です。
+次のプログラムは、コンテキストを 1 つ持つサーバーを開始し、`main` からそのサーバーに
+リクエストを 1 回送ります。サーバーとクライアントが同じプロセスで動くため、実行できるのは
+スレッドのあるターゲット（インタプリタと JVM）です。
 
 ```java
 import module java.net.http;

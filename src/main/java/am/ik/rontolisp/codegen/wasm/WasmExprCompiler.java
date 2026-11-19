@@ -647,6 +647,7 @@ final class WasmExprCompiler {
 				}
 				if (LispNames.FUTURE_NEW_INTERNAL.equals(qn.member())
 						|| LispNames.FUTURE_SETTLE_INTERNAL.equals(qn.member())
+						|| LispNames.TASK_SWAP_INTERNAL.equals(qn.member())
 						|| LispNames.FUTURE_REJECT_INTERNAL.equals(qn.member())
 						|| LispNames.SUBTASK_FUTURE_INTERNAL.equals(qn.member())
 						|| LispNames.STREAM_NEW_INTERNAL.equals(qn.member())

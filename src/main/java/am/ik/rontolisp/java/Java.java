@@ -67,8 +67,8 @@ public final class Java {
 
 	/**
 	 * {@link #read(String, String, JavaFiles, Consumer)} for a target told: where it has
-	 * one stack, a program that starts threads is lowered with every function a thread
-	 * can wait in resumable, so a thread is a body suspended and resumed
+	 * one stack, a program that starts threads or serves is lowered with every function a
+	 * thread can wait in resumable, so a thread is a body suspended and resumed
 	 * ({@code .kb/java-frontend.md}, "Threads").
 	 * @param source the file's text
 	 * @param file the origin file

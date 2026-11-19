@@ -7043,6 +7043,16 @@ public final class LispNames {
 	public static final String FUTURE_SETTLE_INTERNAL = "%FUTURE-SETTLE";
 
 	/**
+	 * The internal {@code rontolisp::%task-swap} primitive of the WASM async state
+	 * machines: makes its argument the CURRENT task record -- {@code nil} for none -- and
+	 * answers the one it replaces. A frame made with no current task belongs to none, so
+	 * whichever task settles the future it waits for resumes it there: what the threads
+	 * of a served Java program are, which outlive the request that started them
+	 * (java.lisp). See {@link #FUTURE_NEW_INTERNAL}.
+	 */
+	public static final String TASK_SWAP_INTERNAL = "%TASK-SWAP";
+
+	/**
 	 * The internal {@code rontolisp::%future-reject} test primitive: rejects a pending
 	 * future with a message (a {@code simple-error} re-signals at await). See
 	 * {@link #FUTURE_NEW_INTERNAL}.

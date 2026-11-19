@@ -9,7 +9,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
 
-public abstract class HttpExchange implements AutoCloseable {
+public abstract class HttpExchange implements AutoCloseable, Request {
 
     protected HttpExchange() {
     }
@@ -45,4 +45,6 @@ public abstract class HttpExchange implements AutoCloseable {
     public abstract void setAttribute(String name, Object value);
 
     public abstract void setStreams(InputStream i, OutputStream o);
+
+    public abstract HttpPrincipal getPrincipal();
 }

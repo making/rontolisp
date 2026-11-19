@@ -2347,9 +2347,15 @@
   (or rontolisp::%java-carrier
       (setq rontolisp::%java-carrier (rontolisp::%java-thread-carrier nil))))
 
-;; Thread.currentThread(): nil for the thread the program started on until the
-;; program asks, when Thread.java makes its object and hands it over.
-(defun rontolisp::%java-thread-current () (aref (rontolisp::%java-self) 0))
+;; Thread.currentThread(): nil for a thread the run time did not start until the
+;; program asks, when Thread.java makes its object and hands it over. Until then the
+;; carrier of a transport's thread holds the name that object is given.
+(defun rontolisp::%java-thread-current ()
+  (let ((thread (aref (rontolisp::%java-self) 0)))
+    (if (stringp thread) nil thread)))
+
+(defun rontolisp::%java-thread-named ()
+  (let ((name (aref (rontolisp::%java-self) 0))) (if (stringp name) name nil)))
 
 (defun rontolisp::%java-thread-adopt (thread)
   (let ((carrier (rontolisp::%java-self)))
@@ -2673,13 +2679,40 @@
         (rontolisp:await (rontolisp::%java-thread-queued carrier))))
   nil)
 
+;; What a started server gives the scheduler where no thread can go on: a function of
+;; the soonest time a thread waits for, or nil. It serves the next request, waiting
+;; for it until that time at most, and answers t when it did; :host where the host
+;; calls the program for each request, so there is nothing to wait for here.
+#+rontolisp-wasm (defvar rontolisp::%java-serving nil)
+
 ;; The end of the program: the threads take their turns until those that are no
-;; daemons have ended; with none that can go on, the time passes until one can.
+;; daemons have ended and no server runs. With none that can go on a server's next
+;; request is served -- a request is a thread, below --, or the program's start ends
+;; here where the host calls it for each request; else the time passes until a
+;; thread can go on.
 #+rontolisp-wasm
 (defun rontolisp::%java-thread-finish ()
-  (while (> rontolisp::%java-live 0)
+  (let ((going t))
+    (while (and going (or (> rontolisp::%java-live 0) rontolisp::%java-serving))
+      (let ((soonest (rontolisp::%java-thread-due)))
+        (cond ((rontolisp::%java-thread-next) nil)
+              (rontolisp::%java-serving
+               (if (eq (funcall rontolisp::%java-serving soonest) :host)
+                   (setq going nil)))
+              (soonest (funcall rontolisp::%java-pausing soonest))
+              (t (rontolisp::%java-stuck)))))))
+
+;; The threads take their turns until ENDED, #(ended ..), says so: what a caller that
+;; is no thread waits with for one it started. With none that can go on a server's
+;; next request is served meanwhile, where the program takes them itself.
+#+rontolisp-wasm
+(defun rontolisp::%java-thread-run (ended)
+  (while (null (aref ended 0))
     (let ((soonest (rontolisp::%java-thread-due)))
       (cond ((rontolisp::%java-thread-next) nil)
+            ((and rontolisp::%java-serving
+                  (not (eq (funcall rontolisp::%java-serving soonest) :host)))
+             nil)
             (soonest (funcall rontolisp::%java-pausing soonest))
             (t (rontolisp::%java-stuck))))))
 
@@ -3120,9 +3153,6 @@
 
 #-rontolisp-wasm (defvar rontolisp::%java-http-waiter nil)
 
-;; The handlers of a server with no executor run one at a time, as a JDK's do.
-#-rontolisp-wasm (defvar rontolisp::%java-http-serial (rontolisp:make-mutex))
-
 ;; A server is bound: from here on the transport's threads run the program beside the
 ;; thread it started on, so the run time's own tables are read one thread at a time,
 ;; as in a program that started a thread.
@@ -3137,8 +3167,9 @@
 
 #+rontolisp-wasm (defun rontolisp::%java-http-shared () nil)
 
+;; A server is started, or stopped: SERVER is the transport's.
 #-rontolisp-wasm
-(defun rontolisp::%java-http-turn (gate state)
+(defun rontolisp::%java-http-turn (gate server state)
   (rontolisp:mutex-acquire rontolisp::%java-http-guard)
   (let ((was (aref gate 0)) (waiter nil))
     (%aset gate 0 state)
@@ -3155,9 +3186,24 @@
     (if waiter (rontolisp::%java-unpark (car waiter) waiter nil)))
   nil)
 
+;; One stack: while the server runs, the scheduler serves where no thread can go on
+;; (rontolisp::%java-serving). The transport takes its limit in milliseconds.
 #+rontolisp-wasm
-(defun rontolisp::%java-http-turn (gate state)
+(defun rontolisp::%java-http-turn (gate server state)
   (%aset gate 0 state)
+  (setq rontolisp::%java-serving
+        (if (eq state :started)
+            (lambda (soonest)
+              (rontolisp::%http-serve-step server
+                                           (if soonest
+                                               (let ((left
+                                                      (- soonest (%nano-time))))
+                                                 (if (> left 0)
+                                                     (+ 1
+                                                        (truncate left 1000000))
+                                                     0))
+                                               nil)))
+            nil))
   nil)
 
 ;; Whether a request is let in: once the server was started, not once it was stopped.
@@ -3175,17 +3221,40 @@
 
 ;; One request on the transport's thread. The run time never started that thread, so
 ;; its carrier is bound here -- without it every request would hold a monitor as the
-;; thread the program started on does -- and SERIAL takes the one lock of the
-;; handlers of a server with no executor. One stack has neither to do.
+;; thread the program started on does --, holding the name of the Thread a handler
+;; asking for it is given.
 #-rontolisp-wasm
-(defun rontolisp::%java-http-request (serial thunk)
-  (let ((rontolisp::%java-carrier nil))
-    (if serial
-        (rontolisp:with-mutex (rontolisp::%java-http-serial) (funcall thunk))
-        (funcall thunk))))
+(defun rontolisp::%java-http-request (thunk)
+  (let ((rontolisp::%java-carrier
+         (rontolisp::%java-thread-carrier "HTTP-Dispatcher")))
+    (funcall thunk)))
 
+;; One stack: a request is a thread of the scheduler's, so its handler can wait for
+;; the program's other threads; the transport's call answers once that thread ended,
+;; the threads taking their turns meanwhile. What the request left uncaught is the
+;; transport's to answer.
 #+rontolisp-wasm
-(defun rontolisp::%java-http-request (serial thunk) (funcall thunk))
+(rontolisp:async-defun rontolisp::%java-http-thread (carrier thunk ended)
+  (rontolisp:await (rontolisp::%java-thread-queued carrier))
+  (unwind-protect (handler-case (rontolisp:await (funcall thunk))
+                    (error (condition) (%aset ended 1 condition)))
+    (%aset ended 0 t)))
+
+;; A thread outlives the request that started it and is resumed by whichever
+;; request runs the scheduler next, so the frames made here belong to no task of the
+;; host's (rontolisp::%task-swap): one owned by a request long answered would wait
+;; for that request to resume it.
+#+rontolisp-wasm
+(defun rontolisp::%java-http-request (thunk)
+  (let ((ended (vector nil nil)) (task (rontolisp::%task-swap nil)))
+    (unwind-protect (progn
+                      (rontolisp::%java-http-thread
+                       (rontolisp::%java-thread-carrier "HTTP-Dispatcher") thunk
+                       ended)
+                      (rontolisp::%java-thread-run ended))
+      (rontolisp::%task-swap task))
+    (if (aref ended 1) (error (aref ended 1)))
+    nil))
 
 ;; The end of a program that started a server: where the host's threads serve, the
 ;; thread the program started on waits until the last server stopped, or for

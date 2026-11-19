@@ -33,10 +33,13 @@ a rontolisp handler. `rontolisp:fetch` keeps `(:status :headers :body)`
 ## --native: the runner's server
 A `--native` module is Preview 1 (no incoming TCP), so the RUNNER owns the socket and the
 protocol and the module owns the application: `http-serve.lisp`'s `#+rontolisp-native` leg over
-seven `rlhttp` imports the network runner answers (`runner/src/http/serve.rs`): `serve(host,
+nine `rlhttp` imports the network runner answers (`runner/src/http/serve.rs`): `serve(host,
 port) -> server | -1` (+ `serveError`), `nextRequest(server) -> extern` (blocks), `requestHead`,
 `readRequestBody` (`:bytes` result, the read(2) shape), `writeResponseBody` (`:bytes` param),
-`respond(exchange, head)`. The module loop is `%http-serve-exchange` = the REACTOR transport
+`respond(exchange, head)`, and since 2026-11-19 (k11) `awaitRequest(server, millis) -> 0 | 1`
+(waits so long for a request, which the next `nextRequest` answers) and `port(server)` (the
+port bound, which `%http-serve-port` answers: a `--native` server bound to port 0 tells its
+port). The module loop is `%http-serve-exchange` = the REACTOR transport
 (`%http-reactor-handle`, `.kb/clack.md`): ONE request model and one 500 arm with the Worker
 host, no third env builder. Since 2026-10-24.
 - **The directive too**: `HttpReactorInliner.lowerHttpHandlerForRunner` (CompileFrontend,
@@ -60,6 +63,13 @@ host, no third env builder. Since 2026-10-24.
   `local-addr`, `local-port`, `remote-port` (`ReactorEnvelope.REQUEST_KEYS`;
   `HostGlueEmitter` leaves them out -- a Worker has none), so `:remote-port`/`:server-port`
   are real here as on the JDK transports.
+- **Serving in steps** (2026-11-19, k11): `%http-serve-step server limit` serves one request,
+  waiting `limit` milliseconds at most for it (nil: for ever), and answers whether it did; on
+  the legs a host calls it answers `:host`. It is what an adapter with a scheduler of its own
+  calls where none of its threads can go on -- the Java subset's threads on one stack
+  (`.kb/java-frontend.md`, "com.sun.net.httpserver"), whose timed threads are why the wait has a
+  limit. Pinned by `FetchSpecE2eTest#javaHttpServer`'s native leg (it binds port 0) and
+  `serve.rs`'s tests, which take every request through `arrives_within` / `next`.
 - **Never returns**: no second thread, so `join`/`:use-thread`/`:join? false` are ignored
   (documented); the server stops with the process. An exchange handle the collector drops
   unanswered answers 500.
@@ -214,7 +224,7 @@ sends the response whole.** Until then the writer was refused by name on every t
   application failing after its head is caught there, its body already ended. Measured
   2026-11-19, wasmtime 49: a handler that wrote a chunk and then asked an origin whether
   the client had read it was told yes (`java-http-server-spec.yaml` `/stream`); the
-  interpreter, the JVM and `--native` answer no. `.todo/k11`: the JDK transports could
+  interpreter, the JVM and `--native` answer no. `.todo/k15`: the JDK transports could
   stream too (the handler's thread writing the exchange).
 - `HttpServerLibrary.ENTRY_POINTS` names both new entry points: a harness splicing
   `http.lisp` first (`WasmLispCompilerIntegrationTest#compileServeComponent`) finds the

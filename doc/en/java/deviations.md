@@ -308,7 +308,7 @@ thread a turn. Four kinds of program show it.
   `toString()` of an exception being reported, cannot wait. One that has to -- it is
   `synchronized` and a sleeping thread holds its monitor -- ends the program the same way.
 - A Java file with no `main` that a Common Lisp program loads is refused when it starts a
-  thread.
+  thread or a server.
 
 **What is shared without a monitor or `volatile` is the host's.** On the interpreter and
 the JVM a field two threads read and write with neither may be read stale, as the language
@@ -385,29 +385,34 @@ brackets, of which only the characters are checked. `hashCode` is not a JDK's nu
 ## The HTTP server
 
 **A server serves through the transport of the target**, the one a Clack application is
-served through, so what belongs to a connection has no class or member: `HttpsServer`, a
-`Filter`, an `Authenticator`, `HttpHandlers`, `SimpleFileServer`; the backlog is not read.
-A program serves through one server: binding a second while one is bound is an
-`UnsupportedOperationException`.
+served through, so what belongs to a connection has no class or member: `HttpsServer` and
+what configures it, `SimpleFileServer`; the backlog is not read. A program serves through
+one server: binding a second while one is bound is an `UnsupportedOperationException`.
 
 **Under `wasmtime serve` the host owns the port and the program's life.** The address of
-`create` is not bound (`--addr` is), `getAddress()` answers it as given, and `stop` does
-nothing. The host starts an instance of the program, running `main` to its end, for the
-requests it likes: wasmtime 49 hands one instance up to 128 requests and drops it after a
-second with none, so a static field lasts as long as its instance and no longer. `wasi:http`
-tells a handler neither its peer nor its port: `getRemoteAddress()` is `0.0.0.0:0`, and the
-port of `getLocalAddress()` is 80.
+`create` is not bound (`--addr` is) and `getAddress()` answers it as given. The host starts
+an instance of the program for the requests it likes: wasmtime 49 hands one instance up to
+128 requests, one at a time, and drops it after a second with none, so a static field lasts
+as long as its instance and no longer. An instance's start is `main` up to its end, or up
+to where no thread of the program can go on; from then on the program runs only while a
+request is answered, so a thread asleep, a `Timer` and a scheduled task go on when the next
+request is. After `stop` an instance answers 503 until the host drops it. `wasi:http` tells
+a handler neither its peer nor its port: `getRemoteAddress()` is `0.0.0.0:0`, and the port
+of `getLocalAddress()` is 80.
 
-**A `--native` executable and a component answer requests once `main` has returned**: there
-is one thread. A `main` that waits for ever after `start()` is refused as a program whose
-[threads all wait](#threads), and so is a handler that waits for another thread; a
-handler's `Thread.currentThread()` is the thread `main` ran on. The executable cannot tell
-the port it got for port 0: `getAddress()` answers 0.
+**On one stack a request is a thread taking turns with the program's others**
+([Threads](#threads)): in a `--native` executable and a component a handler may wait for a
+thread, and `main` may wait for ever after `start()`. A request is taken where no thread
+can go on, so requests are answered one at a time unless a handler waits, and a thread that
+never waits keeps every request from being answered. Under `wasmtime serve` a handler
+waiting for what another request brings is refused as threads that all wait: requests
+arriving at once go to instances of their own.
 
-**A handler runs on a thread of the transport, never of the executor.** A server with no
-executor runs its handlers one at a time, as a JDK's does; with one, the interpreter and
-the JVM run each request on a thread of its own, and the executor itself is handed nothing.
-A `.wasm` runs handlers one at a time whatever the executor.
+**A handler runs on the executor's thread, and the exchange ends with it.** With no
+executor the thread that takes the requests runs the handlers one at a time, named
+`HTTP-Dispatcher` as a JDK's. That thread hands an executor each request and waits until
+its handler has returned, where a JDK's goes on to the next: an exchange still open when
+its handler returns is closed there, and no thread can answer it later.
 
 **A body in chunks goes out as it is written only under `wasmtime serve`.** After
 `sendResponseHeaders(status, 0)` a chunk is on its way there when its write returns; the
@@ -416,21 +421,24 @@ the handler has returned. A body of a length told ahead is sent when all of it i
 The transport frames a response: a `Content-Length` or `Transfer-Encoding` field of the
 handler's is dropped.
 
-**Every request is answered, and an exchange ends with its handler.** A handler that
-throws, one that returns having sent no head, and a body shorter than its length are a 500
-with no body, where a JDK closes the connection or leaves the request unanswered. An
-exchange still open when its handler returns is closed there: no other thread can answer
-it later. The delay of `stop` is not waited for: a stop by a handler lets the requests in
-hand be answered, a stop anywhere else closes the server at once. An exception `main`
-leaves uncaught after `start()` ends the program.
+**Every request is answered.** A handler, a filter or an authenticator that throws, a
+handler that returns having sent no head, and a body shorter than its length are a 500 with
+no body, where a JDK closes the connection or leaves the request unanswered. An executor
+that refuses a request is a 500 too. An exception `main` leaves uncaught after `start()`
+ends the program.
+
+**`stop` waits its delay as a JDK's does**, until the requests in hand are answered or the
+delay has passed, and for all of it when a handler calls it. Requests still in hand after
+a stop by a handler are answered before the server closes, where a JDK cuts them.
 
 **The request is whole before the handler runs**: its body is read in, and a field sent
 more than once is one value, the values joined by `, `. A write after the end of a body in
 chunks is an `IOException` saying `stream closed`, where a JDK throws a class of its own.
 
-**No name is looked up.** An `InetSocketAddress` of a host written as four numbers, or of
-`localhost`, has its `InetAddress`; of any other name it is unresolved, and the transport
-binds the name. `InetAddress.getByName` and the other lookups are not there.
+**No name is looked up.** `InetAddress.getByName` and an `InetSocketAddress` of a host
+take an address written in numbers and `localhost`; any other name is an
+`UnknownHostException` from `getByName`, and an unresolved `InetSocketAddress`, whose name
+the transport binds. `InetAddress.getLocalHost` and the reverse lookups are not there.
 
 ## What is refused
 

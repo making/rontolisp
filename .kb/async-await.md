@@ -416,6 +416,19 @@ timer ([tcp-sockets.md](tcp-sockets.md), "Read deadlines").
   composition on the interpreter/JVM, and on Preview 1 a poll of `%future-settled-p` over futures
   whose host can answer it.
 
+## `%task-swap`
+Internal, asyncMode only (2026-11-19, todo k11): `(rontolisp::%task-swap task)` makes TASK the
+CURRENT task record -- nil for none -- and answers the one it replaces
+(`WasmFutureInternalCompiler`: a `global.get` and a `global.set`). A frame made with no
+current task belongs to none, so `_wake_list` resumes it on the stack of whoever settles the
+future it waits for. Its one consumer is a served Java program (`java.lisp`,
+`%java-http-request`): a thread of the program outlives the request that started it and is
+resumed while a later one is answered. Measured without it: the frame carried the first
+request's task, the settle while the third was answered went to that task's ready list and
+doorbell, the task had ended, and the scheduler found every thread waiting. Not for a frame
+that answers its own task: the callback driver resumes that on its task (the owner exists for
+`task.return` and the context slots).
+
 ## `%future-settled-p`
 Internal; whether a future has settled without waiting (`t` for a non-future). Interpreter
 `LispFuture.future().isDone()`; JVM `_future_settled` (`JvmAsyncRuntimeBuilder`, emitted only

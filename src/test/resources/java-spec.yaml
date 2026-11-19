@@ -3050,8 +3050,10 @@ cases:
       base(order22) field first block one field last block two body 22 again -> order22 22 2
       negative -1 2
   # A default is the body of every class that has none of its own, the most specific
-  # interface's, and of a lambda; a static and a private method are plain functions; a
-  # constant is a static final field, inherited by what implements the interface.
+  # interface's, and of a lambda; a static and a private method are plain functions,
+  # the static one a member of its interface alone (a class implementing it finds its
+  # own of that name); a constant is a static final field, inherited by what
+  # implements the interface.
   - name: an-interface-has-defaults-static-and-private-methods-and-constants
     main: Interfaces
     source: |
@@ -3078,6 +3080,8 @@ cases:
 
       class FacePlain implements FaceGreeter {
           public String greet(String name) { return PREFIX + name; }
+
+          static String polite(String... names) { return "plain " + names.length; }
       }
 
       class FaceShout extends FacePlain implements FaceLoud {
@@ -3096,12 +3100,12 @@ cases:
               FaceGreeter lambda = name -> "<" + name + ">";
               FaceLoud loud = name -> "psst " + name;
               System.out.println(plain.twice("a") + " | " + shout.twice("b") + " | " + quiet.twice("c") + " | " + lambda.twice("d") + " | " + loud.twice("e"));
-              System.out.println(plain.help() + " | " + shout.help() + " | " + lambda.help() + " | " + FaceGreeter.polite().greet("q") + " | " + FaceGreeter.PREFIX + FaceGreeter.LIMIT + FacePlain.PREFIX + FaceLoud.LIMIT);
+              System.out.println(plain.help() + " | " + shout.help() + " | " + lambda.help() + " | " + FaceGreeter.polite().greet("q") + " | " + FaceGreeter.PREFIX + FaceGreeter.LIMIT + FacePlain.PREFIX + FaceLoud.LIMIT + " | " + FacePlain.polite());
           }
       }
     expected: |
       Hi aHi a | HEY B! | (hey c) | <d><d> | PSST E!
-      h6Hi xHi x | loud h6HEY X!? | h6<x><x> | Hi dear q | Hi 6Hi 6
+      h6Hi xHi x | loud h6HEY X!? | h6<x><x> | Hi dear q | Hi 6Hi 6 | plain 0
   # A variable arity call fits last and makes the array; new T[n][m] makes every level;
   # a text block loses the indentation its lines share; _ names nothing; the
   # conditional's type is the one its operands share; a compound assignment casts.

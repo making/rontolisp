@@ -3,6 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package com.sun.net.httpserver;
 
+import java.util.List;
 import java.util.Map;
 
 public abstract class HttpContext {
@@ -19,4 +20,10 @@ public abstract class HttpContext {
     public abstract HttpServer getServer();
 
     public abstract Map<String, Object> getAttributes();
+
+    public abstract List<Filter> getFilters();
+
+    public abstract Authenticator setAuthenticator(Authenticator auth);
+
+    public abstract Authenticator getAuthenticator();
 }

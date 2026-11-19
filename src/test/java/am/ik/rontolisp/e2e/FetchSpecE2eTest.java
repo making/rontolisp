@@ -735,9 +735,8 @@ class FetchSpecE2eTest {
 		Path dir = Files.createDirectories(workDir.resolve(stem + "-served-" + leg));
 		boolean component = leg.equals(Leg.COMPONENT.key());
 		boolean nativeLeg = leg.equals(Leg.NATIVE.key());
-		// a port has to be in the source only where the program cannot tell the one it
-		// got: the runner's
-		int reserved = nativeLeg ? ServeComponentE2eSupport.freePort() : 0;
+		// every leg that binds a port tells the one it got
+		int reserved = 0;
 		Path source = dir.resolve(program.file());
 		Files.createDirectories(source.getParent());
 		Files.writeString(source,

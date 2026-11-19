@@ -2,9 +2,8 @@
 # (FetchSpecE2eTest#javaHttpServer): each program is a Java file started under the JDK
 # running the test and on every transport a served application has -- the interpreter,
 # the JVM, a --native output and a --component under `wasmtime serve` -- and asked the
-# same requests in turn. @PORT@ stands for the port a leg binds (0 where the program
-# can tell the one it got), @ORIGIN@ for the test's local origin and @LEG@ for the
-# leg's name. Written here; nothing is copied or translated from a JDK or its tests
+# same requests in turn. @PORT@ stands for the port a leg binds (0: the program tells
+# the one it got), @ORIGIN@ for the test's local origin and @LEG@ for the leg's name. Written here; nothing is copied or translated from a JDK or its tests
 # (.kb/java-frontend-provenance.md).
 #
 # A request's `expected` is what a JDK 25 answers -- the status, the fields `show`
@@ -23,21 +22,33 @@ programs:
   - name: server
     file: Server.java
     source: |
+      import com.sun.net.httpserver.Authenticator;
+      import com.sun.net.httpserver.BasicAuthenticator;
+      import com.sun.net.httpserver.Filter;
       import com.sun.net.httpserver.Headers;
       import com.sun.net.httpserver.HttpContext;
       import com.sun.net.httpserver.HttpExchange;
       import com.sun.net.httpserver.HttpHandler;
+      import com.sun.net.httpserver.HttpHandlers;
+      import com.sun.net.httpserver.HttpPrincipal;
       import com.sun.net.httpserver.HttpServer;
       import java.io.IOException;
       import java.io.InputStream;
       import java.io.OutputStream;
+      import java.net.InetAddress;
       import java.net.InetSocketAddress;
       import java.net.URI;
       import java.net.http.HttpClient;
       import java.net.http.HttpRequest;
       import java.net.http.HttpResponse;
       import java.nio.charset.StandardCharsets;
+      import java.util.ArrayList;
+      import java.util.Arrays;
+      import java.util.List;
+      import java.util.concurrent.CountDownLatch;
+      import java.util.concurrent.ExecutorService;
       import java.util.concurrent.Executors;
+      import java.util.concurrent.atomic.AtomicInteger;
 
       public class Server {
 
@@ -47,7 +58,44 @@ programs:
 
           static int count;
 
+          static int counting;
+
+          static int most;
+
           static final Thread MAIN = Thread.currentThread();
+
+          static final CountDownLatch STOPPED = new CountDownLatch(1);
+
+          static final List<String> TRAIL = new ArrayList<>();
+
+          static class Around extends Filter {
+
+              final String name;
+
+              Around(String name) {
+                  this.name = name;
+              }
+
+              public void doFilter(HttpExchange exchange, Chain chain) throws IOException {
+                  exchange.getResponseHeaders().add("X-Trail", name);
+                  TRAIL.add(name + " in");
+                  chain.doFilter(exchange);
+                  System.out.println("| the filter " + name + " after its chain: " + TRAIL);
+              }
+
+              public String description() {
+                  return "around " + name;
+              }
+          }
+
+          static BasicAuthenticator basic(String realm) {
+              return new BasicAuthenticator(realm) {
+                  public boolean checkCredentials(String username, String password) {
+                      System.out.println("| credentials: [" + username + "] [" + password + "]");
+                      return username.equals("user") && password.equals("pass:word");
+                  }
+              };
+          }
 
           interface Attempt {
               Object run() throws Exception;
@@ -178,16 +226,159 @@ programs:
           }
 
           static void count(HttpExchange exchange) throws IOException {
+              synchronized (LOCK) {
+                  counting++;
+                  most = Math.max(most, counting);
+              }
               for (int i = 0; i < 2000; i++) {
                   synchronized (LOCK) {
                       int now = count;
                       count = now + 1;
                   }
               }
+              synchronized (LOCK) {
+                  counting--;
+              }
               text(exchange, 200, "counted");
           }
 
-          public static void main(String[] args) throws IOException {
+          // The handler waits for a thread it starts, which answers the exchange.
+          static void worker(HttpExchange exchange) throws IOException {
+              Thread worker = new Thread(() -> {
+                  try {
+                      text(exchange, 200, "answered by " + Thread.currentThread().getName());
+                  }
+                  catch (IOException e) {
+                      System.out.println("| the worker: " + e);
+                  }
+              }, "worker");
+              worker.start();
+              try {
+                  worker.join();
+              }
+              catch (InterruptedException e) {
+                  System.out.println("| the handler: " + e);
+              }
+          }
+
+          static void filters(HttpServer server) {
+              HttpContext filtered = server.createContext("/filtered", exchange -> {
+                  TRAIL.add("handler");
+                  text(exchange, 200, "trail " + TRAIL + " attribute " + exchange.getAttribute("seen") + " added "
+                          + exchange.getRequestHeaders().get("x-added") + " probe " + exchange.getRequestHeaders().get("X-Probe")
+                          + " fixed " + attempt(() -> {
+                              exchange.getRequestHeaders().add("a", "b");
+                              return "added";
+                          }));
+              });
+              log("no filters", () -> filtered.getFilters());
+              Filter before = Filter.beforeHandler("before it", exchange -> {
+                  TRAIL.add("before");
+                  exchange.setAttribute("seen", "yes");
+              });
+              Filter after = Filter.afterHandler("after it", exchange -> TRAIL.add("after " + exchange.getResponseCode()));
+              Filter adapt = Filter.adaptRequest("adapt it", request -> request.with("X-Added", List.of("one", "two"))
+                  .with("X-Probe", List.of("not instead")));
+              filtered.getFilters().add(new Around("a"));
+              filtered.getFilters().add(before);
+              filtered.getFilters().add(after);
+              filtered.getFilters().add(adapt);
+              filtered.getFilters().add(new Around("b"));
+              log("the filters", () -> filtered.getFilters().size() + " " + before.description() + ", " + after.description()
+                      + ", " + adapt.description());
+              log("a filter of no description", () -> Filter.beforeHandler(null, exchange -> {
+              }));
+              log("a filter of no operation", () -> Filter.adaptRequest("adapt", null));
+              HttpContext blocked = server.createContext("/blocked", exchange -> text(exchange, 200, "reached"));
+              blocked.getFilters().add(new Filter() {
+                  public void doFilter(HttpExchange exchange, Chain chain) throws IOException {
+                      if (exchange.getRequestURI().getQuery() == null) {
+                          text(exchange, 403, "stopped by the filter");
+                          return;
+                      }
+                      chain.doFilter(exchange);
+                      log("a chain run again", () -> {
+                          chain.doFilter(exchange);
+                          return "ran";
+                      });
+                  }
+
+                  public String description() {
+                      return "blocks";
+                  }
+              });
+          }
+
+          static void handlers(HttpServer server) {
+              log("a status of two digits", () -> HttpHandlers.of(99, null, null));
+              log("no fields", () -> HttpHandlers.of(200, null, "body"));
+              log("no test", () -> HttpHandlers.handleOrElse(null, exchange -> {
+              }, exchange -> {
+              }));
+              Headers canned = new Headers();
+              canned.add("X-Canned", "yes");
+              HttpHandler of = HttpHandlers.of(203, canned, "canned h\u00e9llo");
+              canned.add("X-Late", "late");
+              server.createContext("/canned", of);
+              server.createContext("/either", HttpHandlers.handleOrElse(request -> request.getRequestMethod().equals("GET"),
+                      exchange -> text(exchange, 200, "a get"), HttpHandlers.of(405, Headers.of("Allow", "GET"), "")));
+          }
+
+          static void authenticators(HttpServer server) {
+              HttpContext basic = server.createContext("/basic", exchange -> {
+                  HttpPrincipal principal = exchange.getPrincipal();
+                  text(exchange, 200, "principal " + principal + " name " + principal.getName() + " user "
+                          + principal.getUsername() + " realm " + principal.getRealm() + " equal "
+                          + principal.equals(new HttpPrincipal("user", "the realm")) + " "
+                          + principal.equals(new HttpPrincipal("user", "another")) + " "
+                          + (principal.hashCode() == new HttpPrincipal("user", "the realm").hashCode()));
+              });
+              BasicAuthenticator authenticator = basic("the realm");
+              log("no authenticator", () -> basic.getAuthenticator());
+              log("an authenticator set", () -> basic.setAuthenticator(authenticator));
+              log("an authenticator set again", () -> basic.setAuthenticator(authenticator) == authenticator);
+              log("the authenticator", () -> (basic.getAuthenticator() == authenticator) + " " + authenticator.getRealm());
+              log("an empty realm", () -> basic(""));
+              log("a quote in a realm", () -> basic("a\"b"));
+              log("a quote after a backslash", () -> basic("a\\\"b").getRealm());
+              log("a realm ending in a backslash", () -> basic("a\\"));
+              log("a control in a realm", () -> attempt(() -> basic("a\tb")).replace('\t', '_'));
+              log("a character past 0xff in a realm", () -> basic("\u0100").getRealm().length());
+              log("no charset", () -> new BasicAuthenticator("realm", null) {
+                  public boolean checkCredentials(String username, String password) {
+                      return true;
+                  }
+              });
+              HttpContext latin = server.createContext("/latin", exchange -> text(exchange, 200, "principal " + exchange.getPrincipal()));
+              latin.setAuthenticator(new BasicAuthenticator("a\\\"b", StandardCharsets.ISO_8859_1) {
+                  public boolean checkCredentials(String username, String password) {
+                      return true;
+                  }
+              });
+              HttpContext custom = server.createContext("/custom", exchange -> text(exchange, 200, "principal " + exchange.getPrincipal()));
+              custom.getFilters()
+                  .add(Filter.beforeHandler("ahead", exchange -> exchange.getResponseHeaders()
+                      .add("X-Ahead", "the filter saw " + exchange.getPrincipal())));
+              custom.setAuthenticator(new Authenticator() {
+                  public Result authenticate(HttpExchange exchange) {
+                      String how = String.valueOf(exchange.getRequestURI().getQuery());
+                      if (how.equals("fail")) {
+                          return new Failure(403);
+                      }
+                      if (how.equals("retry")) {
+                          exchange.getResponseHeaders().add("X-Retry", "again");
+                          return new Retry(407);
+                      }
+                      return new Success(new HttpPrincipal("who", "where"));
+                  }
+              });
+              log("the results", () -> new Authenticator.Failure(403).getResponseCode() + " "
+                      + new Authenticator.Retry(407).getResponseCode() + " "
+                      + new Authenticator.Success(new HttpPrincipal("u", "r")).getPrincipal());
+              log("a principal of no name", () -> new HttpPrincipal(null, "r"));
+          }
+
+          public static void main(String[] args) throws Exception {
               HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", @PORT@), 0);
               log("no executor", () -> server.getExecutor());
               log("a path with no slash", () -> server.createContext("hello", Server::where));
@@ -216,9 +407,16 @@ programs:
               server.createContext("/chunked", Server::chunked);
               server.createContext("/stream", Server::stream);
               server.createContext("/count", Server::count);
-              server.createContext("/counted", exchange -> text(exchange, 200, "count " + count));
+              server.createContext("/counted", exchange -> text(exchange, 200,
+                  "count " + count + " within the pool's bound " + (most >= 1 && most <= 4)));
               server.createContext("/thread", exchange -> text(exchange, 200,
-                  "the thread main ran on " + (Thread.currentThread() == MAIN)));
+                  "the thread main ran on " + (Thread.currentThread() == MAIN) + ", the executor's "
+                          + Thread.currentThread().getName().startsWith("handler-")));
+              server.createContext("/worker", Server::worker);
+              server.createContext("/anonymous", exchange -> text(exchange, 200, "principal " + exchange.getPrincipal()));
+              filters(server);
+              handlers(server);
+              authenticators(server);
           server.createContext("/peer", exchange -> text(exchange, 200,
                       exchange.getRemoteAddress().getAddress().getHostAddress() + " "
                               + (exchange.getRemoteAddress().getPort() > 0) + " "
@@ -240,14 +438,20 @@ programs:
               });
               server.createContext("/stop", exchange -> {
                   text(exchange, 200, "bye");
-                  server.stop(0);
+                  long before = System.nanoTime();
+                  server.stop(1);
+                  log("a stop by a handler waits its delay", () -> System.nanoTime() - before >= 900000000L);
+                  STOPPED.countDown();
               });
               log("a negative delay", () -> {
                   server.stop(-1);
                   return "stopped";
               });
-              server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
-              log("an executor", () -> server.getExecutor() != null);
+              AtomicInteger made = new AtomicInteger();
+              ExecutorService pool = Executors.newFixedThreadPool(4,
+                      task -> new Thread(task, "handler-" + made.incrementAndGet()));
+              server.setExecutor(pool);
+              log("an executor", () -> server.getExecutor() == pool);
               server.start();
               log("started twice", () -> {
                   server.start();
@@ -262,7 +466,23 @@ programs:
                   return "bound";
               });
               log("the address", () -> server.getAddress().getHostString() + " " + (server.getAddress().getPort() > 0));
+              log("a server with a context", () -> {
+                  HttpServer.create(null, 0, "/", null);
+                  return "made";
+              });
+              log("an address in numbers", () -> InetAddress.getByName("1.2.3") + " "
+                      + InetAddress.getByName("65536").getHostAddress() + " " + InetAddress.getByName("") + " "
+                      + InetAddress.getByName(null) + " " + Arrays.toString(InetAddress.getByName("10.1.2.200").getAddress())
+                      + " " + InetAddress.getByAddress("h", new byte[] { 10, 1, 2, 3 }) + " "
+                      + new InetSocketAddress("01.2.3.4", 80));
+              log("numbers that are no address", () -> attempt(() -> InetAddress.getByName("1.2.3.256"))
+                  .startsWith("java.net.UnknownHostException: 1.2.3.256: ") + " "
+                      + attempt(() -> InetAddress.getByAddress(new byte[3])));
               System.out.println("listening " + server.getAddress().getPort());
+              // the program's own thread waits while the server serves
+              STOPPED.await();
+              pool.shutdown();
+              log("main went on once the server stopped", () -> "it did");
           }
       }
     log: |
@@ -273,12 +493,35 @@ programs:
       | a context: /hello true {} true
       | a path twice: java.lang.IllegalArgumentException: cannot add context to list
       | a context that is not there: java.lang.IllegalArgumentException: cannot remove element from list
+      | no filters: []
+      | the filters: 5 before it, after it, adapt it
+      | a filter of no description: java.lang.NullPointerException
+      | a filter of no operation: java.lang.NullPointerException
+      | a status of two digits: java.lang.IllegalArgumentException: statusCode must be 3-digit: 99
+      | no fields: java.lang.NullPointerException
+      | no test: java.lang.NullPointerException
+      | no authenticator: null
+      | an authenticator set: null
+      | an authenticator set again: true
+      | the authenticator: true the realm
+      | an empty realm: java.lang.IllegalArgumentException: realm must not be empty
+      | a quote in a realm: java.lang.IllegalArgumentException: realm invalid: a"b
+      | a quote after a backslash: a\"b
+      | a realm ending in a backslash: java.lang.IllegalArgumentException: realm invalid: a\
+      | a control in a realm: java.lang.IllegalArgumentException: realm invalid: a_b
+      | a character past 0xff in a realm: java.lang.IllegalArgumentException: realm invalid: Ā
+      | no charset: java.lang.NullPointerException
+      | the results: 403 407 r:u
+      | a principal of no name: java.lang.NullPointerException
       | a negative delay: java.lang.IllegalArgumentException: negative delay parameter
       | an executor: true
       | started twice: java.lang.IllegalStateException: server in wrong state
       | an executor once started: java.lang.IllegalStateException: server already started
       | bound twice: java.net.BindException: HttpServer already bound
       | the address: 127.0.0.1 true
+      | a server with a context: java.lang.NullPointerException
+      | an address in numbers: /1.2.0.3 0.1.0.0 localhost/127.0.0.1 localhost/127.0.0.1 [10, 1, 2, -56] h/10.1.2.3 /1.2.3.4:80
+      | numbers that are no address: true java.net.UnknownHostException: addr is of illegal length
       | code after the head: 201
       | a head sent twice: java.io.IOException: headers already sent
       | a write after the close: java.io.IOException: stream closed
@@ -286,7 +529,14 @@ programs:
       | the request body after the close: java.io.IOException: Stream is closed
       | an octet of no body: java.io.IOException: stream closed
       | the request body after the close: java.io.IOException: Stream is closed
+      | the filter b after its chain: [a in, before, b in, handler]
+      | the filter a after its chain: [a in, before, b in, handler, after 200]
+      | a chain run again: java.io.IOException: headers already sent
+      | credentials: [user] [pass:word]
+      | credentials: [user] []
       | a body cut short: java.io.IOException: insufficient bytes written to stream
+      | a stop by a handler waits its delay: true
+      | main went on once the server stopped: it did
     requests:
       - name: a-body-of-a-length-told
         request: GET /hello
@@ -382,18 +632,16 @@ programs:
         expected: |
           200
           content-type: text/plain; charset=utf-8
-      - name: a-handler-runs-on-a-thread-of-its-own
+      - name: a-handler-runs-on-a-thread-of-the-executor
         request: GET /thread
         expected: |
           200
-          the thread main ran on false
-        deviates:
-          native: |
-            200
-            the thread main ran on true
-          component: |
-            200
-            the thread main ran on true
+          the thread main ran on false, the executor's true
+      - name: a-handler-waits-for-a-thread-that-answers
+        request: GET /worker
+        expected: |
+          200
+          answered by worker
       - name: the-two-ends-of-the-connection
         request: GET /peer
         skip:
@@ -433,7 +681,107 @@ programs:
           component: the host starts an instance for the requests it likes, and each counts its own
         expected: |
           200
-          count 32000
+          count 32000 within the pool's bound true
+      - name: filters-around-a-handler-in-their-order
+        request: GET /filtered
+        headers: {X-Probe: p1}
+        show: [x-trail]
+        expected: |
+          200
+          x-trail: a
+          x-trail: b
+          trail [a in, before, b in, handler] attribute yes added [one, two] probe [p1] fixed java.lang.UnsupportedOperationException: unsupported operation
+      - name: a-filter-that-answers-itself
+        request: GET /blocked
+        expected: |
+          403
+          stopped by the filter
+      - name: a-filter-that-runs-its-chain
+        request: GET /blocked?through
+        expected: |
+          200
+          reached
+      - name: a-handler-of-a-response-told-ahead
+        request: POST /canned
+        body: "abc"
+        show: [x-canned, x-late]
+        expected: |
+          203
+          x-canned: yes
+          canned héllo
+      - name: a-handler-by-a-test-of-the-request
+        request: GET /either
+        expected: |
+          200
+          a get
+      - name: the-other-handler
+        request: POST /either
+        body: "x"
+        show: [allow]
+        expected: |
+          405
+          allow: GET
+      - name: no-credentials-are-asked-for
+        request: GET /basic
+        show: [www-authenticate]
+        expected: |
+          401
+          www-authenticate: Basic realm="the realm", charset="UTF-8"
+      - name: credentials-a-colon-in-the-password
+        request: GET /basic
+        headers: {Authorization: "basic dXNlcjpwYXNzOndvcmQ"}
+        expected: |
+          200
+          principal the realm:user name the realm:user user user realm the realm equal true false true
+      - name: credentials-refused-are-asked-for-again
+        request: GET /basic
+        headers: {Authorization: "Basic dXNlcjo="}
+        show: [www-authenticate]
+        expected: |
+          401
+          www-authenticate: Basic realm="the realm", charset="UTF-8"
+      - name: another-scheme-is-refused
+        request: GET /basic
+        headers: {Authorization: "Bearer abc"}
+        show: [www-authenticate]
+        expected: |
+          401
+      - name: credentials-in-another-charset
+        request: GET /latin
+        headers: {Authorization: "Basic /HNlcjpw5HNz"}
+        expected: |
+          200
+          principal a\"b:üser
+      - name: a-realm-as-it-is-quoted
+        request: GET /latin
+        show: [www-authenticate]
+        expected: |
+          401
+          www-authenticate: Basic realm="a\"b"
+      - name: an-authenticator-after-the-filters
+        request: GET /custom
+        show: [x-ahead]
+        expected: |
+          200
+          x-ahead: the filter saw null
+          principal where:who
+      - name: an-authenticator-that-refuses
+        request: GET /custom?fail
+        show: [x-ahead]
+        expected: |
+          403
+          x-ahead: the filter saw null
+      - name: an-authenticator-that-asks-again
+        request: GET /custom?retry
+        show: [x-retry]
+        expected: |
+          407
+          x-retry: again
+      - name: no-authenticator-no-principal
+        request: GET /anonymous
+        expected: |
+          200
+          principal null
       - name: a-body-cut-short
         request: POST /short
         unanswered: 3

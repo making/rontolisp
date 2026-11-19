@@ -5,18 +5,25 @@
 // The server of com.sun.net.httpserver. It serves through the transport of the target
 // (the host's http-serve, which the lowered program itself calls, so every transport a
 // served application has carries it): open0 binds and hands the transport the function
-// it calls for each request, which is answer() below. An exchange answers through the
+// it calls for each request, which is answer() below. A request is a task the server's
+// executor is handed, which the thread the transport called on waits for; with no
+// executor that thread runs it, one request at a time. An exchange answers through the
 // transport's responder: a whole response once it is complete, or, for a body of a
 // length not told ahead, the head and then each chunk as it is written. What a JDK's
 // server was seen to do with a request is written here over that: the context a path
-// finds, the refusals of an exchange, the words of each.
+// finds, the filters and the authenticator before a handler, the refusals of an
+// exchange, the words of each.
 package rontolisp.internal;
 
+import com.sun.net.httpserver.Authenticator;
+import com.sun.net.httpserver.Filter;
 import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpContext;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+import com.sun.net.httpserver.HttpPrincipal;
 import com.sun.net.httpserver.HttpServer;
+import com.sun.net.httpserver.Request;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -65,47 +72,173 @@ public final class HttpServing {
         }
     }
 
-    /** Whether a server's handlers run one at a time: it has no executor. */
-    static boolean serial(Object server) {
-        return ((Server) server).executor == null;
+    /** A request with one more field, unless it has a field of that name. */
+    public static Request with(Request request, String name, List<String> values) {
+        if (name == null || values == null) {
+            throw new NullPointerException();
+        }
+        return new Extended(request, name, values);
     }
 
-    /** One request: the transport's environment, and the responder its response goes through. */
+    /** An exchange a handler reads the request of as a filter adapted it. */
+    public static HttpExchange adapted(HttpExchange exchange, Request request) {
+        return new Adapted(exchange, request);
+    }
+
+    /**
+     * One request: the transport's environment, and the responder its response goes
+     * through. The thread the transport called on hands the executor the request and
+     * waits until it is answered; with no executor it runs the request itself.
+     */
     static void answer(Object served, Object env, Object responder) {
         Server server = (Server) served;
-        if (!admitted0(server.gate)) {
-            respond0(responder, 503, new String[0], new byte[0]);
-            return;
+        Task handed = server.dispatch(env, responder);
+        if (handed != null) {
+            handed.await();
+            server.gave();
         }
-        URI uri;
-        try {
-            uri = new URI(target0(env));
+    }
+
+    /** One request as the executor runs it. */
+    private static final class Task implements Runnable {
+
+        private final Server server;
+
+        private final Object env;
+
+        private final Object responder;
+
+        private Exchange exchange;
+
+        private boolean ended;
+
+        /** The thread running it, as the run time knows it. */
+        Object runner;
+
+        /** The next of the requests a server's handlers are running. */
+        Task next;
+
+        Task(Server server, Object env, Object responder) {
+            this.server = server;
+            this.env = env;
+            this.responder = responder;
         }
-        catch (Exception refused) {
-            page(responder, 400, "<h1>400 Bad Request</h1>URISyntaxException thrown");
-            return;
+
+        public void run() {
+            work();
+            synchronized (this) {
+                ended = true;
+                notifyAll();
+            }
         }
-        Context context = server.find(uri.getPath());
-        if (context == null) {
-            page(responder, 404, "<h1>404 Not Found</h1>No context found for request");
-            return;
+
+        synchronized void await() {
+            while (!ended) {
+                try {
+                    wait();
+                }
+                catch (InterruptedException interrupted) {
+                    // the request is still in hand
+                }
+            }
         }
-        HttpHandler handler = context.handler;
-        if (handler == null) {
-            page(responder, 500, "<h1>500 Internal Server Error</h1>No handler for context");
-            return;
+
+        void work() {
+            runner = self0();
+            server.handles(this, true);
+            try {
+                handle();
+            }
+            catch (Throwable thrown) {
+                // a JDK closes the connection: here every request is answered
+            }
+            if (exchange != null) {
+                exchange.close();
+                if (!exchange.answered) {
+                    respond0(responder, 500, new String[0], new byte[0]);
+                }
+            }
+            server.handles(this, false);
         }
-        Exchange exchange = new Exchange(server, context, env, responder, uri);
-        try {
-            handler.handle(exchange);
+
+        void refuse() {
+            if (exchange == null) {
+                respond0(responder, 500, new String[0], new byte[0]);
+            }
         }
-        catch (Throwable thrown) {
-            exchange.failed = true;
+
+        private void handle() throws IOException {
+            URI uri;
+            try {
+                uri = new URI(target0(env));
+            }
+            catch (Exception refused) {
+                page(responder, 400, "<h1>400 Bad Request</h1>URISyntaxException thrown");
+                return;
+            }
+            Context context = server.find(uri.getPath());
+            if (context == null) {
+                page(responder, 404, "<h1>404 Not Found</h1>No context found for request");
+                return;
+            }
+            HttpHandler handler = context.handler;
+            if (handler == null) {
+                page(responder, 500, "<h1>500 Internal Server Error</h1>No handler for context");
+                return;
+            }
+            exchange = new Exchange(server, context, env, responder, uri);
+            Guarded guarded = context.guarded;
+            if (guarded != null) {
+                guarded.handle(exchange);
+            }
+            else {
+                handler.handle(exchange);
+            }
         }
-        exchange.close();
-        if (!exchange.answered) {
-            // a JDK closes the connection, or leaves it open: here every request is answered
-            respond0(responder, 500, new String[0], new byte[0]);
+    }
+
+    /**
+     * What a context given a filter or an authenticator runs before its handler: the
+     * filters in their order, then the authenticator. Made by such a context alone.
+     */
+    private static final class Guarded implements HttpHandler {
+
+        final Context context;
+
+        final ArrayList<Filter> filters = new ArrayList<>();
+
+        Authenticator authenticator;
+
+        Guarded(Context context) {
+            this.context = context;
+        }
+
+        public void handle(HttpExchange exchange) throws IOException {
+            new Filter.Chain(filters, this::authenticated).doFilter(exchange);
+        }
+
+        private void authenticated(HttpExchange exchange) throws IOException {
+            Authenticator asked = authenticator;
+            if (asked != null) {
+                Authenticator.Result result = asked.authenticate(exchange);
+                if (result instanceof Authenticator.Failure) {
+                    exchange.sendResponseHeaders(((Authenticator.Failure) result).getResponseCode(), -1);
+                    return;
+                }
+                if (result instanceof Authenticator.Retry) {
+                    exchange.sendResponseHeaders(((Authenticator.Retry) result).getResponseCode(), -1);
+                    return;
+                }
+                HttpPrincipal principal = ((Authenticator.Success) result).getPrincipal();
+                HttpExchange under = exchange;
+                while (under instanceof Adapted) {
+                    under = ((Adapted) under).exchange;
+                }
+                if (under instanceof Exchange) {
+                    ((Exchange) under).principal = principal;
+                }
+            }
+            context.handler.handle(exchange);
         }
     }
 
@@ -118,6 +251,11 @@ public final class HttpServing {
         String lower = text.toLowerCase();
         if (lower.contains("address already in use") || lower.contains("address in use")) {
             return new BindException("Address already in use");
+        }
+        if (lower.contains("requires --component")) {
+            // the words of the transport a plain Preview 1 module lacks
+            return new IOException("an HttpServer needs a transport: compile with --component, for `wasmtime serve`,"
+                    + " or with --native; a Preview 1 .wasm cannot listen");
         }
         return new IOException(text);
     }
@@ -135,9 +273,107 @@ public final class HttpServing {
 
         final Object gate = gate0();
 
+        /** Held by the thread that hands the executor a request: one hands them all. */
+        final Turn turn = new Turn();
+
         boolean started;
 
         boolean stopped;
+
+        /** The requests in hand: taken from the transport and not answered. */
+        private int inHand;
+
+        /** The requests whose handlers are running, the newest first. */
+        private Task running;
+
+        /** Whether the transport's server is to close once no request is in hand. */
+        private boolean closing;
+
+        private boolean closed;
+
+        /** What getExecutor() answers of a started server given none. */
+        private Executor own;
+
+        /**
+         * Takes a request from the transport: answers it on this thread when the server
+         * has no executor -- a JDK's own thread runs the handlers of such a server, one
+         * at a time --, else hands the executor the task, which is answered to be waited
+         * for.
+         */
+        Task dispatch(Object env, Object responder) {
+            if (!admitted0(gate)) {
+                respond0(responder, 503, new String[0], new byte[0]);
+                return null;
+            }
+            Task task = new Task(this, env, responder);
+            synchronized (this) {
+                inHand++;
+            }
+            Executor handing = executor;
+            if (handing == null) {
+                synchronized (turn) {
+                    task.work();
+                }
+                gave();
+                return null;
+            }
+            try {
+                // one thread of a JDK's hands the executor every request
+                synchronized (turn) {
+                    handing.execute(task);
+                }
+                return task;
+            }
+            catch (RuntimeException refused) {
+                // an executor that takes no task: a JDK closes the connection
+                task.refuse();
+                gave();
+                return null;
+            }
+        }
+
+        /** A request was answered: the last one in hand of a server stopped closes it. */
+        void gave() {
+            boolean close;
+            synchronized (this) {
+                inHand--;
+                close = inHand == 0 && closing && !closed;
+                if (close) {
+                    closed = true;
+                }
+                notifyAll();
+            }
+            if (close) {
+                close0(handle);
+            }
+        }
+
+        synchronized void handles(Task task, boolean begun) {
+            if (begun) {
+                task.next = running;
+                running = task;
+            }
+            else if (running == task) {
+                running = task.next;
+            }
+            else {
+                for (Task before = running; before != null; before = before.next) {
+                    if (before.next == task) {
+                        before.next = task.next;
+                        return;
+                    }
+                }
+            }
+        }
+
+        private boolean handledBy(Object thread) {
+            for (Task task = running; task != null; task = task.next) {
+                if (task.runner == thread) {
+                    return true;
+                }
+            }
+            return false;
+        }
 
         public void bind(InetSocketAddress addr, int backlog) throws IOException {
             if (addr == null) {
@@ -171,7 +407,7 @@ public final class HttpServing {
                 throw new IllegalStateException("server in wrong state");
             }
             started = true;
-            turn0(gate, true);
+            turn0(gate, handle, true);
         }
 
         public void setExecutor(Executor executor) {
@@ -182,22 +418,59 @@ public final class HttpServing {
         }
 
         public Executor getExecutor() {
+            if (executor == null && started) {
+                // a started server given none has one of its own
+                if (own == null) {
+                    own = new Direct();
+                }
+                return own;
+            }
             return executor;
         }
 
+        /**
+         * No request is taken from here on, and the transport's server closes: at once
+         * with no request in hand; else once the delay has passed -- a JDK waits so long
+         * for the requests in hand, the caller's own among them -- or, called by a
+         * handler, once the requests in hand are answered.
+         */
         public void stop(int delay) {
             if (delay < 0) {
                 throw new IllegalArgumentException("negative delay parameter");
             }
-            if (stopped) {
-                return;
-            }
-            stopped = true;
-            if (address != null) {
+            boolean close;
+            synchronized (this) {
+                if (stopped) {
+                    return;
+                }
+                stopped = true;
+                if (address == null) {
+                    return;
+                }
                 if (bound == this) {
                     bound = null;
                 }
-                turn0(gate, false);
+                turn0(gate, handle, false);
+                closing = true;
+                long deadline = System.nanoTime() + delay * 1000000000L;
+                while (inHand > 0) {
+                    long left = deadline - System.nanoTime();
+                    if (left <= 0) {
+                        break;
+                    }
+                    try {
+                        wait((left + 999999L) / 1000000L);
+                    }
+                    catch (InterruptedException interrupted) {
+                        break;
+                    }
+                }
+                close = !closed && (inHand == 0 || !handledBy(self0()));
+                if (close) {
+                    closed = true;
+                }
+            }
+            if (close) {
                 close0(handle);
             }
         }
@@ -279,6 +552,9 @@ public final class HttpServing {
 
         final HashMap<String, Object> attributes = new HashMap<>();
 
+        /** The filters and the authenticator, once the context was given either. */
+        Guarded guarded;
+
         Context(Server server, String path, HttpHandler handler) {
             this.server = server;
             this.path = path;
@@ -309,6 +585,40 @@ public final class HttpServing {
 
         public Map<String, Object> getAttributes() {
             return attributes;
+        }
+
+        private Guarded guarded() {
+            if (guarded == null) {
+                guarded = new Guarded(this);
+            }
+            return guarded;
+        }
+
+        public List<Filter> getFilters() {
+            return guarded().filters;
+        }
+
+        public Authenticator setAuthenticator(Authenticator auth) {
+            Guarded held = guarded();
+            Authenticator was = held.authenticator;
+            held.authenticator = auth;
+            return was;
+        }
+
+        public Authenticator getAuthenticator() {
+            return guarded == null ? null : guarded.authenticator;
+        }
+    }
+
+    /** What a server's one handing thread holds: no lock of a program's is one. */
+    private static final class Turn {
+    }
+
+    /** The executor of a started server given none: the calling thread runs the task. */
+    private static final class Direct implements Executor {
+
+        public void execute(Runnable command) {
+            command.run();
         }
     }
 
@@ -353,7 +663,8 @@ public final class HttpServing {
 
         boolean closed;
 
-        boolean failed;
+        /** Who the context's authenticator found the request to be from. */
+        HttpPrincipal principal;
 
         Exchange(Server server, Context context, Object env, Object responder, URI uri) {
             this.server = server;
@@ -541,6 +852,10 @@ public final class HttpServing {
             return protocol0(env);
         }
 
+        public HttpPrincipal getPrincipal() {
+            return principal;
+        }
+
         public Object getAttribute(String name) {
             if (name == null) {
                 throw new NullPointerException("null name parameter");
@@ -558,6 +873,116 @@ public final class HttpServing {
             else {
                 context.attributes.put(name, value);
             }
+        }
+    }
+
+    /** A request and one more field. */
+    private static final class Extended implements Request {
+
+        private final Request request;
+
+        private final Headers fields;
+
+        Extended(Request request, String name, List<String> values) {
+            this.request = request;
+            Headers all = new Headers(request.getRequestHeaders());
+            if (!all.containsKey(name)) {
+                all.put(name, new ArrayList<String>(values));
+            }
+            this.fields = new Fixed(all);
+        }
+
+        public URI getRequestURI() {
+            return request.getRequestURI();
+        }
+
+        public String getRequestMethod() {
+            return request.getRequestMethod();
+        }
+
+        public Headers getRequestHeaders() {
+            return fields;
+        }
+    }
+
+    /** An exchange whose request is read as a filter adapted it; all else is the exchange's. */
+    private static final class Adapted extends HttpExchange {
+
+        final HttpExchange exchange;
+
+        private final Request request;
+
+        Adapted(HttpExchange exchange, Request request) {
+            this.exchange = exchange;
+            this.request = request;
+        }
+
+        public Headers getRequestHeaders() {
+            return request.getRequestHeaders();
+        }
+
+        public URI getRequestURI() {
+            return request.getRequestURI();
+        }
+
+        public String getRequestMethod() {
+            return request.getRequestMethod();
+        }
+
+        public Headers getResponseHeaders() {
+            return exchange.getResponseHeaders();
+        }
+
+        public HttpContext getHttpContext() {
+            return exchange.getHttpContext();
+        }
+
+        public void close() {
+            exchange.close();
+        }
+
+        public InputStream getRequestBody() {
+            return exchange.getRequestBody();
+        }
+
+        public OutputStream getResponseBody() {
+            return exchange.getResponseBody();
+        }
+
+        public void sendResponseHeaders(int rCode, long responseLength) throws IOException {
+            exchange.sendResponseHeaders(rCode, responseLength);
+        }
+
+        public InetSocketAddress getRemoteAddress() {
+            return exchange.getRemoteAddress();
+        }
+
+        public int getResponseCode() {
+            return exchange.getResponseCode();
+        }
+
+        public InetSocketAddress getLocalAddress() {
+            return exchange.getLocalAddress();
+        }
+
+        public String getProtocol() {
+            return exchange.getProtocol();
+        }
+
+        public Object getAttribute(String name) {
+            return exchange.getAttribute(name);
+        }
+
+        public void setAttribute(String name, Object value) {
+            exchange.setAttribute(name, value);
+        }
+
+        public void setStreams(InputStream i, OutputStream o) {
+            exchange.setStreams(i, o);
+        }
+
+        public HttpPrincipal getPrincipal() {
+            return exchange.getPrincipal();
         }
     }
 
@@ -710,7 +1135,10 @@ public final class HttpServing {
     private static native Object gate0();
 
     /** A server is started, or stopped: the requests waiting for its start go on. */
-    private static native void turn0(Object gate, boolean started);
+    private static native void turn0(Object gate, Object handle, boolean started);
+
+    /** The thread running, as the run time knows it. */
+    private static native Object self0();
 
     /** Whether a request is let in, once the server was started: not once it was stopped. */
     private static native boolean admitted0(Object gate);
