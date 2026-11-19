@@ -209,8 +209,9 @@ of YAVI, not the whole library. A schema reaches more, because YAVI's reader of 
 input names every type it can read one as, whichever of them the schema asks for.
 Whether a library works is decided by what the program reaches of it: only what the front
 end supports compiles, and a class the subset lacks is an error at the place in the
-library that reaches it. See [Using a library](../../doc/en/java/index.md#using-a-library)
-([ライブラリを使う](../../doc/ja/java/index.md#ライブラリを使う)).
+library that reaches it. See
+[Using a third-party library](../../doc/en/java/index.md#using-a-third-party-library)
+([サードパーティのライブラリを使う](../../doc/ja/java/index.md#サードパーティのライブラリを使う)).
 
 A JDK 25 runs both as they stand, with YAVI on the class path:
 `java -cp yavi-0.18.0.jar examples/java/yavi/Member.java`.

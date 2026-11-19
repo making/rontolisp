@@ -255,7 +255,7 @@ function, `appendReplacement`, `appendTail`, `toMatchResult` and `quoteReplaceme
 `matches` in a region with transparent bounds, a JDK's `start()` is 0 when a look-behind
 read before the region; here it is the region's start.
 
-**`String.format` has the conversions the [overview](index.md) lists**; any other is an
+**`String.format` has the conversions [The JDK classes](classes.md) lists**; any other is an
 error naming it. The only locales are the root and the English ones, which format as
 `String.format` without a locale does; the default locale is `Locale.US`.
 
@@ -321,9 +321,9 @@ answers another object of the same name.
 names, the class above it, whether a value is an instance, a cast and an enum's constants.
 It has no reflection: a class by name (`Class.forName`), the members, constructors and
 annotations of a class and `getInterfaces()` are refused by name. The classes above a
-library class are this library's: `StringBuilder.class.getSuperclass()` is `Object`, where
+JDK class are the subset's: `StringBuilder.class.getSuperclass()` is `Object`, where
 a JDK has a class of its own between the two, and `isAssignableFrom` knows the interfaces
-this library's classes declare (a `String` is a `Comparable` and a `CharSequence`).
+the subset's classes declare (a `String` is a `Comparable` and a `CharSequence`).
 `getClass()` of a lambda is a run-time error. `synchronized (Name.class)` holds the monitor
 the `static synchronized` methods of the class hold, which is not the monitor of the class
 object held in a variable.
@@ -339,7 +339,7 @@ closes it. `iterator()` and `Stream.concat` take the elements of such a stream o
 time, where a JDK takes all of them before it hands on the first. A collector's
 `finisher` is always called, whatever its `characteristics()` say, and a collector made
 of a collector of the program's own class (`mapping`, `groupingBy`) reports none of that
-one's characteristics. A spliterator of the library never splits: `trySplit` answers
+one's characteristics. A spliterator of the subset's classes never splits: `trySplit` answers
 `null`. A collection changed while its spliterator is read throws
 `ConcurrentModificationException` before the next element, where a JDK hands that
 element on first.
@@ -579,10 +579,10 @@ Each of these is an error naming the construct and its position.
 - A `switch` over a `long`, a `float`, a `double` or a `boolean`; a method reference and a
   field through a qualified `super` (`Interface.super::m`, `Outer.super.x`).
 - A class extending `String`, `StringBuilder` or a box.
-- Of `java.util.concurrent`, what the [overview](index.md) does not list: the queues
+- Of `java.util.concurrent`, what [The JDK classes](classes.md) does not list: the queues
   ordered by priority or by delay, `ConcurrentSkipListMap`. A `Timer`'s `schedule` of a
   `Date`. Thread groups.
-- Any class or member of the library not listed in the [overview](index.md):
+- Any JDK class or member [The JDK classes](classes.md) does not list:
   `TreeMap`, `Scanner`, files
   (`File`, `FileReader`, `java.nio.file`), `java.util.Date` and `Calendar`,
   reflection. Of `java.net`, everything but `URI`, the addresses of a server and the

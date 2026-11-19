@@ -253,7 +253,7 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 透過境界のリージョンで `lookingAt` または `matches` を呼んだあと、後読みがリージョンより前を
 読んでいると、JDK の `start()` は 0 を返します。ここではリージョンの開始位置を返します。
 
-**`String.format` の変換は[概要](index.md)に挙げたものだけです。** それ以外の変換は名前を
+**`String.format` の変換は[使える JDK のクラス](classes.md)に挙げたものだけです。** それ以外の変換は名前を
 示すエラーになります。ロケールはルートと英語のものだけで、どれもロケールなしの
 `String.format` と同じ書式になります。デフォルトのロケールは `Locale.US` です。
 
@@ -319,9 +319,9 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 `Class` は、名前、スーパークラス、値がインスタンスかどうかの検査、キャスト、列挙型の定数を
 返します。名前によるクラスの取得（`Class.forName`）、クラスのメンバー、コンストラクタ、
 アノテーションの取得、`getInterfaces()` は、コンパイル時に名前を示して拒否されます。
-ライブラリのクラスのスーパークラスは、このライブラリでの宣言に従います。
+JDK のクラスのスーパークラスは、このサブセットでの宣言に従います。
 `StringBuilder.class.getSuperclass()` は `Object` です（JDK では、間に JDK 独自のクラスが
-あります）。`isAssignableFrom` は、このライブラリのクラスが宣言するインターフェースで判定します
+あります）。`isAssignableFrom` は、このサブセットのクラスが宣言するインターフェースで判定します
 （`String` は `Comparable` であり `CharSequence` です）。ラムダ式の `getClass()` は実行時エラーに
 なります。`synchronized (Name.class)` が保持するモニターは、そのクラスの
 `static synchronized` メソッドが保持するモニターであり、変数に入れたクラスオブジェクトの
@@ -338,7 +338,7 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 取り出します。JDK は全部を取り出してから最初の要素を渡します。
 コレクターの `finisher` は、`characteristics()` の内容にかかわらず必ず呼ばれます。
 プログラム自身のクラスのコレクターから作ったコレクター（`mapping`、`groupingBy`）は、
-元のコレクターの特性を引き継ぎません。ライブラリのスプリッテレーターは分割しません。
+元のコレクターの特性を引き継ぎません。このサブセットのクラスのスプリッテレーターは分割しません。
 `trySplit` は `null` を返します。スプリッテレーターで読んでいる途中にコレクションを変更すると、
 次の要素を渡す前に `ConcurrentModificationException` が投げられます。JDK はその要素を
 渡してから投げます。
@@ -600,10 +600,10 @@ WebSocket です。`version(..)` で指定した値は保持され、問い合�
 - `long`、`float`、`double`、`boolean` に対する `switch`。修飾した `super` を通すメソッド参照と
   フィールド（`Interface.super::m`、`Outer.super.x`）。
 - `String`、`StringBuilder`、ボックスを継承するクラス。
-- `java.util.concurrent` のうち、[概要](index.md)の表にないもの。優先度順または遅延順の
+- `java.util.concurrent` のうち、[使える JDK のクラス](classes.md)の表にないもの。優先度順または遅延順の
   キュー、`ConcurrentSkipListMap` です。`Date` を取る `Timer` の `schedule`、スレッドグループも
   拒否されます。
-- [概要](index.md)の表にないライブラリのクラスとメンバー。
+- [使える JDK のクラス](classes.md)の表にない JDK のクラスとメンバー。
   `TreeMap`、`Scanner`、ファイル（`File`、`FileReader`、
   `java.nio.file`）、`java.util.Date` と `Calendar`、
   リフレクションなどです。
