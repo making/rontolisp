@@ -36,10 +36,12 @@ public class Client {
 
         HttpResponse<String> echoed = client.send(
                 HttpRequest.newBuilder(URI.create(origin + "/echo"))
-                    .POST(HttpRequest.BodyPublishers.ofString("shout this"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"foo\": 100}"))
                     .build(),
                 HttpResponse.BodyHandlers.ofString());
-        System.out.println(echoed.statusCode() + " " + echoed.body());
+        System.out.println(echoed.statusCode() + " " + echoed.headers().firstValue("content-type").orElse("none")
+                + " " + echoed.body());
 
         HttpResponse<String> refused = client.send(HttpRequest.newBuilder(URI.create(origin + "/echo")).build(),
                 HttpResponse.BodyHandlers.ofString());

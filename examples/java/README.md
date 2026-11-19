@@ -35,8 +35,8 @@ output.
 ## An HTTP server and its client: `http/`
 
 [`http/Server.java`](http/Server.java) is a server on the JDK's own API,
-`com.sun.net.httpserver`: `GET /`, `GET /greet?name=Ann`, `POST /echo` (the body in upper
-case, a 405 for any other method) and `GET /countdown`, whose body is written in chunks.
+`com.sun.net.httpserver`: `GET /`, `GET /greet?name=Ann`, `POST /echo` (the body as it
+came, under the request's `Content-Type`; a 405 for any other method) and `GET /countdown`, whose body is written in chunks.
 [`http/Client.java`](http/Client.java) is `java.net.http`'s client asking those four.
 
 One source is a server on every target:
@@ -55,7 +55,7 @@ wasmtime serve -S cli=y --addr 127.0.0.1:8080 server.wasm
 ```bash
 curl http://localhost:8080/                       # Hello from com.sun.net.httpserver on rontolisp, curl/8.x
 curl 'http://localhost:8080/greet?name=Ann'       # Hello, Ann!
-curl -d 'shout this' http://localhost:8080/echo   # SHOUT THIS
+curl --json '{"foo": 100}' http://localhost:8080/echo   # {"foo": 100}
 curl -N http://localhost:8080/countdown           # 3, 2, 1, liftoff: a line a chunk
 ```
 
@@ -75,7 +75,7 @@ java -jar $JAR examples/java/http/Client.java -o Client.class && java Client   #
 200 Hello from com.sun.net.httpserver on rontolisp, examples/java
 content-type: text/plain; charset=utf-8
 200 Hello, Ann!
-200 SHOUT THIS
+200 application/json {"foo": 100}
 405 allow POST: POST a body to /echo
 200 3 2 1 liftoff
 404 no route for GET /missing
