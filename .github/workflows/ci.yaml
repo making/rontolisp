@@ -251,10 +251,18 @@ jobs:
         set -e
         ./target/rontolisp -v
         # The binary owes the notices of the GraalVM runtime linked into it, the JDK
-        # modules it links and the SLEEF of jdk.incubator.vector (src/native/graalvm-notices.sh).
+        # modules it links and every third-party notice the builder JDK ships for them
+        # (src/native/graalvm-notices.sh). The set is the JDK's per platform: the Linux
+        # builds ship jdk.incubator.vector's sleef.md, the macOS build does not.
         ./target/rontolisp notices --tool >notices-tool.txt
-        for notice in 'GraalVM Free Terms and Conditions' 'No-Fee Terms and Conditions' 'SLEEF'; do
-          grep -q "$notice" notices-tool.txt \
+        notices=('GraalVM Free Terms and Conditions' 'No-Fee Terms and Conditions')
+        for file in "$JAVA_HOME"/legal/{java.base,jdk.incubator.vector}/*.md; do
+          [[ -f $file ]] || continue
+          module=$(basename "$(dirname "$file")")
+          notices+=("Third-party component of $module: $(basename "$file" .md)")
+        done
+        for notice in "${notices[@]}"; do
+          grep -qF "$notice" notices-tool.txt \
             || { echo "the native binary's notices lack '$notice'" >&2; exit 1; }
         done
         rm notices-tool.txt
