@@ -24,12 +24,10 @@ taking an `Object`.
 
 ## Inside the first target, not done
 
-- **`TreeMap` / `TreeSet`** (`LinkedHashMap` / `LinkedHashSet` are `.todo/k27` since k24:
-  YAVI's first gap): moved up from "after
-  the first target" by the streams -- `groupingBy(f, TreeMap::new, counting())` and
-  `toMap(k, v, merge, LinkedHashMap::new)` are how a program asks for a map in an
-  order, and `sorted()` over a map's entries is the only way without them. The
-  collectors take any map's supplier already.
+- **`TreeMap` / `TreeSet`** (`LinkedHashMap` / `LinkedHashSet` are there since k27): moved up
+  from "after the first target" by the streams -- `groupingBy(f, TreeMap::new, counting())`
+  is how a program asks for a sorted map, and `sorted()` over a map's entries is the only
+  way without it. The collectors take any map's supplier already.
 - **What the streams left** (each refused by name but the first three, which run):
   - A stream made inside `flatMap` / `flatMapping` is closed when its last element is
     taken; one a short-circuit leaves unfinished (`findFirst`, `limit`) is not, where a
@@ -166,7 +164,7 @@ taking an `Object`.
 
 ## After the first target (from j71)
 
-The rest of `Formatter`, `LinkedList`, `PriorityQueue`, `EnumMap` / `EnumSet`, `Scanner`,
+The rest of `Formatter`, `PriorityQueue`, `EnumMap` / `EnumSet`, `Scanner`,
 `StringTokenizer`, `StringJoiner`, `BitSet`, files, `java.text`,
 `BigInteger` / `BigDecimal`, `java.nio` buffers, `Class` beyond what is above,
 reflection, weak references, `Thread` and the concurrent classes (`.todo/k21`).

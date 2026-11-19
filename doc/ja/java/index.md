@@ -480,8 +480,10 @@ void main() {
 | `List`、`ArrayList` | `Collection` のメンバー。`get`、`set`、添字を指定する `add` と `addAll`、添字を指定する `remove`、`indexOf`、`lastIndexOf`、`subList`、`sort`、`replaceAll`、`getFirst`、`getLast`、`removeFirst`、`removeLast`、`addFirst`、`addLast`、`reversed`、添字の指定がある、またはない `listIterator`（`ListIterator` のメンバーは `hasNext`、`next`、`hasPrevious`、`previous`、`nextIndex`、`previousIndex`、`remove`、`set`、`add`）。`List.of`、`List.copyOf`。引数なし、容量、コレクションを取る `new ArrayList<>()`、`ensureCapacity`、`trimToSize` |
 | `Set`、`HashSet` | `Collection` のメンバー。`Set.of`、`Set.copyOf`。引数なし、容量、コレクションを取る `new HashSet<>()` |
 | `Map`、`HashMap`、`Map.Entry` | `size`、`isEmpty`、`containsKey`、`containsValue`、`get`、`getOrDefault`、`put`、`putIfAbsent`、`putAll`、`remove`、`replace`、`clear`、`keySet`、`values`、`entrySet`、`forEach`、`replaceAll`、`computeIfAbsent`、`computeIfPresent`、`compute`、`merge`、`equals`、`hashCode`、`toString`。10 組までの `Map.of`、`Map.entry`、`Map.ofEntries`、`Map.copyOf`。引数なし、容量、マップを取る `new HashMap<>()`。`getKey`、`getValue`、`setValue`、`Map.Entry.comparingByKey`、`comparingByValue`。キーと値、またはエントリを取る `AbstractMap.SimpleEntry` と `SimpleImmutableEntry` |
+| `LinkedHashMap`、`LinkedHashSet` | `HashMap` と `HashSet` のメンバー。キーを加えた順にたどります。`new LinkedHashMap<>(capacity, loadFactor, true)` は最後に触れた順にたどり、キーを加えるたびに `removeEldestEntry` を呼びます。引数なし、容量、コレクションを取る `new LinkedHashSet<>()` |
 | `Queue`、`Deque`、`ArrayDeque` | `Collection` のメンバー。`offer`、`poll`、`peek`、`element`、`remove`。`addFirst`、`addLast`、`offerFirst`、`offerLast`、`removeFirst`、`removeLast`、`pollFirst`、`pollLast`、`getFirst`、`getLast`、`peekFirst`、`peekLast`、`push`、`pop`、`descendingIterator` |
-| `AbstractCollection`、`AbstractList`、`AbstractSet`、`AbstractMap` | プログラムのクラスがコレクションになるために継承するクラス |
+| `LinkedList` | `List` と `Deque` のメンバー。`removeFirstOccurrence`、`removeLastOccurrence`。要素に `null` を使えます。引数なし、コレクションを取るコンストラクタ |
+| `AbstractCollection`、`AbstractList`、`AbstractSequentialList`、`AbstractSet`、`AbstractMap` | プログラムのクラスがコレクションになるために継承するクラス |
 | `Vector`、`Stack`、`Enumeration` | `ArrayList` のメンバー。`addElement`、`elementAt`、`firstElement`、`lastElement`、`setElementAt`、`insertElementAt`、`removeElementAt`、`removeElement`、`removeAllElements`、`elements`。`push`、`pop`、`peek`、`empty`、`search`。`hasMoreElements`、`nextElement` |
 | `Hashtable` | `Map` のメンバー。`keys`、`elements`、`contains`。キーにも値にも `null` は使えません |
 | `Arrays` | `asList`、`toString`、`fill`、`equals`、`copyOf`、`copyOfRange`、配列全体または範囲に対する、コンパレータの指定がある、またはない `sort`、`binarySearch`。対象は `int`、`long`、`double`、`char`、`boolean`、オブジェクトの配列。`byte[]` には `toString`、`fill`、`equals`、`copyOf`、`copyOfRange`。`short[]` と `float[]` には `toString` と `equals`。`hashCode` はすべての配列。`int[]`、`long[]`、`double[]`、オブジェクトの配列の `setAll`。`deepToString`、`deepEquals`、`deepHashCode`。オブジェクトの配列、`int[]`、`long[]`、`double[]` と、その範囲を取る `stream` |
@@ -618,7 +620,7 @@ SECOND
 ```
 
 `HashMap`、`HashSet`、`Hashtable` は、キーを `equals` と `hashCode` で探し、JDK と同じ順序で
-キーをたどります。
+キーをたどります。`LinkedHashMap` と `LinkedHashSet` は、キーを加えた順にたどります。
 
 ```java
 record Point(int x, int y) {

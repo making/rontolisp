@@ -16,12 +16,14 @@ has the two programs, the oracle's lines, the refusals met and how to run it aga
   `rontolisp --java-source-dep am.ik.yavi:yavi:0.18.0 shelf/Book.java -o book.wasm` stops at
   `java.text.Normalizer`. With three stand-ins it runs on the interpreter, the JVM, wasm
   (575,271 B, 7.9 s) and the component and prints the JDK's lines in another order.
+  Since k27 (the linked collections, 2026-11-19) two stand-ins are left and the four
+  print the JDK's lines in its order (wasm 590,666 B).
 - **The schema example** (the README's first): stops at a class literal as a value;
   unmeasured behind it.
 
 ## The order
 
-1. `.todo/k27` -- `LinkedHashMap`, `LinkedHashSet`, `LinkedList` (the order of the lines).
+1. k27 (done 2026-11-19) -- `LinkedHashMap`, `LinkedHashSet`, `LinkedList` (the order of the lines).
 2. `.todo/k28` -- `java.text.MessageFormat` (the text of every message).
 3. `.todo/k29` -- `java.text.Normalizer` (every string checked).
    After 1 to 3 the classic example is expected to print the JDK's lines from the
@@ -36,9 +38,9 @@ has the two programs, the oracle's lines, the refusals met and how to run it aga
 
 ## Not decided here
 
-- Size: 575 KB for the classic example. Where it goes (the 50 `constraint` overloads are
-  not it: only the three called are lowered) is worth a `--emit-size-report` once the
-  program runs unpatched.
+- Size: 591 KB for the classic example (575 KB before k27's linked collections). Where it
+  goes (the 50 `constraint` overloads are not it: only the three called are lowered) is
+  worth a `--emit-size-report` once the program runs unpatched.
 - YAVI itself was not changed (user, 2026-11-19: it may be, where the change is right for
   YAVI too). None of the gaps is YAVI's doing: each is a JDK class or a rule of the
   language the front end lacked. The one candidate, skipping `Normalizer` for a string

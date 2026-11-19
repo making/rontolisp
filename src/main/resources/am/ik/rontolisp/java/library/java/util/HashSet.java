@@ -25,6 +25,11 @@ public class HashSet<E> extends AbstractSet<E> {
         }
     }
 
+    // A LinkedHashSet's: over a LinkedHashMap.
+    HashSet(HashMap<E, Boolean> map) {
+        this.map = map;
+    }
+
     public Iterator<E> iterator() {
         return map.keySet().iterator();
     }

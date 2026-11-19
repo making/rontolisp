@@ -476,8 +476,10 @@ as far as the program reaches it, so a class of the program can extend or implem
 | `List`, `ArrayList` | the members of `Collection`; `get`, `set`, `add` and `addAll` at an index, `remove` at an index, `indexOf`, `lastIndexOf`, `subList`, `sort`, `replaceAll`, `getFirst`, `getLast`, `removeFirst`, `removeLast`, `addFirst`, `addLast`, `reversed`, `listIterator` with or without an index (a `ListIterator`: `hasNext`, `next`, `hasPrevious`, `previous`, `nextIndex`, `previousIndex`, `remove`, `set`, `add`); `List.of`, `List.copyOf`; `new ArrayList<>()` of nothing, a capacity or a collection, `ensureCapacity`, `trimToSize` |
 | `Set`, `HashSet` | the members of `Collection`; `Set.of`, `Set.copyOf`; `new HashSet<>()` of nothing, a capacity or a collection |
 | `Map`, `HashMap`, `Map.Entry` | `size`, `isEmpty`, `containsKey`, `containsValue`, `get`, `getOrDefault`, `put`, `putIfAbsent`, `putAll`, `remove`, `replace`, `clear`, `keySet`, `values`, `entrySet`, `forEach`, `replaceAll`, `computeIfAbsent`, `computeIfPresent`, `compute`, `merge`, `equals`, `hashCode`, `toString`; `Map.of` up to ten pairs, `Map.entry`, `Map.ofEntries`, `Map.copyOf`; `new HashMap<>()` of nothing, a capacity or a map; `getKey`, `getValue`, `setValue`, `Map.Entry.comparingByKey`, `comparingByValue`; `AbstractMap.SimpleEntry` and `SimpleImmutableEntry` of a key and a value or of an entry |
+| `LinkedHashMap`, `LinkedHashSet` | the members of `HashMap` and `HashSet`, walked in the order the keys were added; `new LinkedHashMap<>(capacity, loadFactor, true)`, walked in the order they were last reached, and `removeEldestEntry`, asked after each key added; `new LinkedHashSet<>()` of nothing, a capacity or a collection |
 | `Queue`, `Deque`, `ArrayDeque` | the members of `Collection`; `offer`, `poll`, `peek`, `element`, `remove`; `addFirst`, `addLast`, `offerFirst`, `offerLast`, `removeFirst`, `removeLast`, `pollFirst`, `pollLast`, `getFirst`, `getLast`, `peekFirst`, `peekLast`, `push`, `pop`, `descendingIterator` |
-| `AbstractCollection`, `AbstractList`, `AbstractSet`, `AbstractMap` | what a class of the program extends to be a collection |
+| `LinkedList` | the members of `List` and `Deque`; `removeFirstOccurrence`, `removeLastOccurrence`; `null` elements; of nothing or a collection |
+| `AbstractCollection`, `AbstractList`, `AbstractSequentialList`, `AbstractSet`, `AbstractMap` | what a class of the program extends to be a collection |
 | `Vector`, `Stack`, `Enumeration` | the members of `ArrayList`; `addElement`, `elementAt`, `firstElement`, `lastElement`, `setElementAt`, `insertElementAt`, `removeElementAt`, `removeElement`, `removeAllElements`, `elements`; `push`, `pop`, `peek`, `empty`, `search`; `hasMoreElements`, `nextElement` |
 | `Hashtable` | the members of `Map`; `keys`, `elements`, `contains`; no `null` key or value |
 | `Arrays` | `asList`, `toString`, `fill`, `equals`, `copyOf`, `copyOfRange`, `sort` of a whole array or a range, with or without a comparator, `binarySearch`; over arrays of `int`, `long`, `double`, `char`, `boolean` and of objects; `toString`, `fill`, `equals`, `copyOf` and `copyOfRange` of a `byte[]`; `toString` and `equals` of a `short[]` and a `float[]`; `hashCode` of every array; `setAll` of an `int[]`, a `long[]`, a `double[]` and an array of objects; `deepToString`, `deepEquals`, `deepHashCode`; `stream` of an array of objects, an `int[]`, a `long[]` or a `double[]`, or of a range of one |
@@ -615,7 +617,8 @@ SECOND
 ```
 
 A `HashMap`, a `HashSet` and a `Hashtable` find a key by its `equals` and `hashCode`, and
-walk their keys in the order a JDK's do.
+walk their keys in the order a JDK's do; a `LinkedHashMap` and a `LinkedHashSet` in the
+order the keys came in.
 
 ```java
 record Point(int x, int y) {

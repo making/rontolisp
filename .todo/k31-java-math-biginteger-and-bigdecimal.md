@@ -8,7 +8,7 @@ YAVI names `BigDecimal` in 46 files and `BigInteger` in 44 (measured 2026-11-19,
 `.todo/artefacts/k24-java-front-end-a-program-that-uses-an-existing-library/`): a constraint
 type each, and the `_bigDecimal` / `_bigInteger` members of every builder. The README's
 two examples do not reach them -- a class a library only names in a declaration is passed
-by (k24) -- so this is behind `.todo/k27` .. `k30` for the milestone (`.todo/k33`) and
+by (k24) -- so this is behind `.todo/k28` .. `k30` for the milestone (`.todo/k33`) and
 ahead of them for a program that validates money.
 
 - `BigInteger` over the host's integers, which are unbounded on every backend: an

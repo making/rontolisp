@@ -14,7 +14,7 @@ import java.util.function.Function;
 // kept: the order of a chain of more than eight keys in a table of 64 or more.
 public class HashMap<K, V> extends AbstractMap<K, V> {
 
-    static final class Node<K, V> implements Map.Entry<K, V> {
+    static class Node<K, V> implements Map.Entry<K, V> {
 
         final int hash;
 
@@ -71,7 +71,7 @@ public class HashMap<K, V> extends AbstractMap<K, V> {
     // while there is no table: the length the first one gets, 0 for 16
     private int limit;
 
-    private int changes;
+    int changes;
 
     public HashMap() {
     }
@@ -107,7 +107,7 @@ public class HashMap<K, V> extends AbstractMap<K, V> {
         return hash ^ (hash >>> 16);
     }
 
-    private Node<K, V> find(Object key) {
+    Node<K, V> find(Object key) {
         Node<K, V>[] buckets = table;
         if (buckets == null) {
             return null;
@@ -228,7 +228,7 @@ public class HashMap<K, V> extends AbstractMap<K, V> {
             node = node.next;
             chain++;
         }
-        Node<K, V> added = new Node<>(hash, key, value);
+        Node<K, V> added = made(hash, key, value);
         if (tail == null) {
             buckets[index] = added;
         }
@@ -241,6 +241,15 @@ public class HashMap<K, V> extends AbstractMap<K, V> {
             grow();
         }
         return null;
+    }
+
+    // Every node a key is put in is made here, and every node taken out is handed to
+    // unlinked: a LinkedHashMap keeps its order through the two.
+    Node<K, V> made(int hash, K key, V value) {
+        return new Node<>(hash, key, value);
+    }
+
+    void unlinked(Node<K, V> node) {
     }
 
     // A chain grown past a length doubles a table shorter than 64.
@@ -271,7 +280,7 @@ public class HashMap<K, V> extends AbstractMap<K, V> {
         for (Node<K, V> node = buckets[index]; node != null; node = node.next) {
             chain++;
         }
-        Node<K, V> added = new Node<>(hash, key, value);
+        Node<K, V> added = made(hash, key, value);
         added.next = buckets[index];
         buckets[index] = added;
         crowded(chain, 7);
@@ -386,6 +395,7 @@ public class HashMap<K, V> extends AbstractMap<K, V> {
                     }
                     count--;
                     changes++;
+                    unlinked(node);
                     return node.value;
                 }
             }
@@ -511,7 +521,7 @@ public class HashMap<K, V> extends AbstractMap<K, V> {
         }
     }
 
-    static final class KeySet<K, V> extends AbstractSet<K> {
+    static class KeySet<K, V> extends AbstractSet<K> {
 
         private final HashMap<K, V> map;
 
@@ -544,7 +554,7 @@ public class HashMap<K, V> extends AbstractMap<K, V> {
         }
     }
 
-    static final class ValueCollection<K, V> extends AbstractCollection<V> {
+    static class ValueCollection<K, V> extends AbstractCollection<V> {
 
         private final HashMap<K, V> map;
 
@@ -569,7 +579,7 @@ public class HashMap<K, V> extends AbstractMap<K, V> {
         }
     }
 
-    static final class EntrySet<K, V> extends AbstractSet<Map.Entry<K, V>> {
+    static class EntrySet<K, V> extends AbstractSet<Map.Entry<K, V>> {
 
         private final HashMap<K, V> map;
 

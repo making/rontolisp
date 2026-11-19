@@ -534,7 +534,7 @@ WebSocket です。`version(..)` で指定した値は保持され、問い合�
   キュー、`ConcurrentSkipListMap` です。`Date` を取る `Timer` の `schedule`、スレッドグループも
   拒否されます。
 - [概要](index.md)の表にないライブラリのクラスとメンバー。
-  `LinkedList`、`LinkedHashMap`、`TreeMap`、`Scanner`、ファイル（`File`、`FileReader`、
+  `TreeMap`、`Scanner`、ファイル（`File`、`FileReader`、
   `java.nio.file`）、`Duration` 以外の `java.time`、`BigInteger`、`BigDecimal`、
   リフレクションなどです。
   `java.net` では、`URI`、サーバーのアドレス、[HTTP クライアント](#the-http-client)以外の

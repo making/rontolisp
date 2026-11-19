@@ -51,8 +51,8 @@ collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
 as the program reaches it, annotation types and type annotations, an exact method
 reference in a call's applicability: k24 (2026-11-19); what comes after is `.todo/k15`,
 `k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22` and `k26` (what k00, k11, k06, k07, k08,
-k10 and k12 left) and `.todo/k27` to `k33` (what stands between k24 and YAVI compiled to
-wasm).
+k10 and k12 left) and `.todo/k28` to `k33` (what stands between k24 and YAVI compiled to
+wasm); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19).
 
 ## Where it sits
 
@@ -936,6 +936,29 @@ measured programs.
   program can tell it from another choice;
   `Vector` extends `ArrayList` and `StringBuffer` is `StringBuilder`'s representation; each
   holds its monitor since j83 ("java.util.concurrent").
+- **`LinkedHashMap` is a second chain through `HashMap`'s nodes** (k27, 2026-11-19):
+  `HashMap` makes every node through `made(hash, key, value)` and hands every node it
+  takes out to `unlinked(node)`; `LinkedHashMap` overrides the two (its `Linked` node
+  extends `Node` with `before` / `after`), its views subclass `HashMap`'s and walk the
+  chain. Measured before choosing: the two hooks cost a program that makes no
+  `LinkedHashMap` 39 B of wasm (149,851 -> 149,890 for a `HashMap` put, merged, removed
+  and walked; a `HashSet` 151,534 -> 151,571) and no time (4,000,000 `put` / `remove`,
+  0.72 s both); the other way, a list beside an untouched table, has to find a key's
+  cell on `remove`, so the table holds the cells and every member of `HashMap` is
+  written again over them. Access order (`new LinkedHashMap<>(n, f, true)`) and
+  `removeEldestEntry` are `LinkedHashMap`'s alone: each member a JDK counts as reaching a
+  key compares the size before and after (`settled`): grown, the eldest is asked for;
+  not, the key is moved to the end. Learned from JDK 25's answers: `computeIfAbsent`
+  whose function answers `null` reaches nothing although the key is there with a
+  `null`; the copy constructor asks for no eldest entry; a move in access order is a
+  change (a `get` while walking throws). `LinkedHashSet` is a `HashSet` over a
+  `LinkedHashMap` (a package-private constructor). `LinkedList` is cells linked both
+  ways under `AbstractSequentialList`, whose `get` .. `remove` walk a program's own
+  list iterator (`Index: n` where the walk has no element there, measured). The
+  `SequencedMap` members (`putFirst`, `firstEntry`, `reversed` as a view) are not
+  there. Pin: `java-spec.yaml` `the-linked-collections-keep-the-order-their-elements-came-in`.
+  YAVI's classic example prints a JDK's lines in their order with `MessageFormat` and
+  `Normalizer` stood in for (wasm 590,666 B, component 594,785, jar 232,947).
 - **`==` of two strings is `eq`**, and the constants of a program holding one are globals set
   through `%java-intern` (`JavaClasses.identicalStrings`; the program is lowered again), so two
   constants of a text are one object and `intern()` answers it. A program with no such

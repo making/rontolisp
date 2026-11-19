@@ -30,7 +30,7 @@ The refusals reached, in the order met, and what was done with each:
 | 2 | `reference to constraint is ambiguous` in effect: the 50 overloads of `constraint` taking a function, told apart by what `Book::title` returns | `ValidatorBuilder` | fixed here (an exact method reference counts by its return type) |
 | 3 | `the class java.math.BigInteger` named by an overload not taken | `ValidatorBuilder.ToBigInteger` | fixed here (a class nobody has is a name until reached) |
 | 4 | `the class java.text.Normalizer` | `CharSequenceConstraint.<init>` | `shim/` -- `.todo/k29` |
-| 5 | `the class java.util.LinkedHashMap` (`LinkedHashSet`, `LinkedList` after it) | `ValidatorBuilder.PredicatesList` | `shim/` -- `.todo/k27` |
+| 5 | `the class java.util.LinkedHashMap` (`LinkedHashSet`, `LinkedList` after it) | `ValidatorBuilder.PredicatesList` | fixed by k27 (library source) |
 | 6 | `the class java.io.Serializable` | `fn/Validation` | fixed here (library source) |
 | 7 | `no suitable constructor found for String(int[],int,int)` | `IdeographicVariationSequence` | fixed here |
 | 8 | `incompatible types: Object cannot be converted to Collection` (the capture of `CollectionValidator<T, ?, ?>` lost the bound of `N extends Collection<E>`) | `Validator.validate` | fixed here |
@@ -38,7 +38,9 @@ The refusals reached, in the order met, and what was done with each:
 
 With the three shims the program lowers and runs on the interpreter, the JVM, wasm and the
 component, and prints the JDK's lines but for their order, which is the shim's (`HashMap`
-where the library keeps insertion order):
+where the library keeps insertion order). Since k27 (2026-11-19) two shims are left
+(`MessageFormat`, `Normalizer`) and the four print the JDK's lines in its order: wasm
+590,666 B, the component 594,785 B, the jar 232,947 B. The k24 numbers:
 
 - 171 of the 380 files read and declared (24,858 lines), 713 top-level forms.
 - `-o book.wasm`: 7.9 s wall (JVM start included), 575,271 B; `--component` 579,253 B;

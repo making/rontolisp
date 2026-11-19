@@ -28,6 +28,7 @@ imports: |
   import java.time.format.DateTimeParseException;
   import java.util.AbstractList;
   import java.util.AbstractMap;
+  import java.util.AbstractSequentialList;
   import java.util.ArrayDeque;
   import java.util.ArrayList;
   import java.util.Arrays;
@@ -43,6 +44,9 @@ imports: |
   import java.util.Hashtable;
   import java.util.IntSummaryStatistics;
   import java.util.Iterator;
+  import java.util.LinkedHashMap;
+  import java.util.LinkedHashSet;
+  import java.util.LinkedList;
   import java.util.List;
   import java.util.ListIterator;
   import java.util.Locale;
@@ -4590,6 +4594,197 @@ cases:
       x22z6 {z=6} 6 true -1 {small=[5, 7], big=[12, 30]} true 96 true
       [c] true 3 true [a=1, b=2] 1 true
       fixed
+  # LinkedHashMap keeps a second chain through the HashMap's nodes: the order keys were
+  # added, or with accessOrder the order they were last reached, removeEldestEntry asked
+  # after each key added but not while a copy is made. LinkedHashSet is over one;
+  # LinkedList is cells linked both ways, a List and a Deque, over the list iterator
+  # AbstractSequentialList's members walk.
+  - name: the-linked-collections-keep-the-order-their-elements-came-in
+    main: LinkedOrder
+    source: |
+      class LinkedOrderLru<K, V> extends LinkedHashMap<K, V> {
+          final int most;
+          int asked;
+
+          LinkedOrderLru(int most) {
+              super(16, 0.75f, true);
+              this.most = most;
+          }
+
+          protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+              asked++;
+              return size() > most;
+          }
+      }
+
+      class LinkedOrderWindow extends AbstractSequentialList<String> {
+          final List<String> held = new ArrayList<>();
+
+          public ListIterator<String> listIterator(int index) {
+              return held.listIterator(index);
+          }
+
+          public int size() {
+              return held.size();
+          }
+      }
+
+      class LinkedOrder {
+          static void attempt(String label, Runnable r) {
+              try {
+                  r.run();
+                  System.out.println(label + " ok");
+              } catch (RuntimeException e) {
+                  System.out.println(label + " " + e.getClass().getSimpleName() + " " + e.getMessage());
+              }
+          }
+
+          public static void main(String[] args) {
+              Map<String, Integer> m = new LinkedHashMap<>();
+              for (String w : "zebra apple mango kiwi banana apple cherry zebra".split(" ")) {
+                  m.merge(w, 1, Integer::sum);
+              }
+              m.put("apple", 9);
+              m.remove("mango");
+              m.put("mango", 4);
+              m.putIfAbsent("fig", 1);
+              m.computeIfAbsent("date", k -> k.length());
+              m.compute("kiwi", (k, v) -> null);
+              m.put(null, null);
+              System.out.println(m + " " + m.keySet() + " " + m.values() + " " + m.get(null) + " " + m.containsKey(null));
+              Iterator<Map.Entry<String, Integer>> each = m.entrySet().iterator();
+              while (each.hasNext()) {
+                  Map.Entry<String, Integer> e = each.next();
+                  if (e.getValue() == null || e.getValue() == 1) {
+                      each.remove();
+                  } else {
+                      e.setValue(e.getValue() + 100);
+                  }
+              }
+              m.keySet().remove("date");
+              attempt("put while walking", () -> {
+                  for (String k : m.keySet()) {
+                      m.put("grape", 3);
+                  }
+              });
+              Map<String, Integer> h = new HashMap<>(m);
+              System.out.println(m + " " + new LinkedHashMap<>(h) + " " + m.equals(h) + " " + (m instanceof HashMap) + " " + m.getClass().getName());
+              // access order: what reaches a key moves it to the end, and the eldest goes
+              LinkedOrderLru<Integer, String> lru = new LinkedOrderLru<>(3);
+              for (int i = 0; i < 5; i++) {
+                  lru.put(i, "v" + i);
+                  lru.get(i - 1);
+              }
+              System.out.print(lru + " " + lru.asked);
+              lru.getOrDefault(2, "none");
+              lru.put(4, "four");
+              System.out.print(" " + lru);
+              lru.putIfAbsent(3, "three");
+              lru.merge(4, "!", String::concat);
+              System.out.print(" " + lru);
+              lru.compute(7, (k, v) -> "seven");
+              lru.replace(4, "FOUR");
+              lru.containsKey(2);
+              System.out.println(" " + lru + " " + lru.asked);
+              attempt("get while walking", () -> {
+                  for (Integer k : lru.keySet()) {
+                      lru.get(k);
+                  }
+              });
+              Map<String, String> a = new LinkedHashMap<>(8, 0.75f, true);
+              a.put("n", null);
+              a.put("x", "1");
+              a.computeIfAbsent("n", k -> null);
+              System.out.print(a);
+              a.putIfAbsent("n", null);
+              System.out.println(" " + a);
+              int[] asked = new int[1];
+              Map<String, String> copy = new LinkedHashMap<>(Map.of("p", "1")) {
+                  protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
+                      asked[0]++;
+                      return size() > 1;
+                  }
+              };
+              System.out.print(copy + " " + asked[0]);
+              copy.put("q", "2");
+              copy.putAll(Map.of("r", "3"));
+              System.out.println(" " + copy + " " + asked[0]);
+              Map<Character, String> byFirst = Stream.of("pear", "fig", "plum", "kiwi").collect(Collectors.toMap(w -> w.charAt(0), w -> w, (x, y) -> x + "+" + y, LinkedHashMap::new));
+              System.out.println(byFirst);
+              Set<String> s = new LinkedHashSet<>();
+              for (String w : "pear fig apple fig date pear kiwi".split(" ")) {
+                  System.out.print(s.add(w) ? "+" : "=");
+              }
+              s.remove("fig");
+              s.add("fig");
+              System.out.println(" " + s + " " + new LinkedHashSet<>(List.of(30, 10, 20, 40)) + " " + s.equals(new HashSet<>(s)) + " " + (s instanceof HashSet));
+              // a list of cells, and a deque
+              LinkedList<Integer> l = new LinkedList<>();
+              for (int i = 0; i < 6; i++) {
+                  l.add(i * 10);
+              }
+              l.addFirst(-1);
+              l.add(3, 15);
+              l.push(-2);
+              l.offer(100);
+              System.out.println(l + " " + l.get(4) + " " + l.set(5, 25) + " " + l.remove(1) + " " + l.remove(Integer.valueOf(100)) + " " + l.pop() + " " + l.pollLast() + " " + l.peekFirst() + " " + l.indexOf(25) + " " + l);
+              l.addAll(2, List.of(7, 8, 7));
+              System.out.print(l + " " + l.removeLastOccurrence(7));
+              ListIterator<Integer> it = l.listIterator(3);
+              System.out.print(" " + it.next() + it.previous() + it.previous());
+              it.set(42);
+              it.add(43);
+              it.next();
+              it.remove();
+              StringBuilder back = new StringBuilder();
+              for (Iterator<Integer> d = l.descendingIterator(); d.hasNext(); ) {
+                  back.append(d.next()).append(' ');
+              }
+              System.out.println(" " + l + " " + it.nextIndex() + " " + back);
+              attempt("get", () -> l.get(l.size()));
+              attempt("add", () -> l.add(-1, 0));
+              attempt("set after add", () -> {
+                  ListIterator<Integer> w = l.listIterator();
+                  w.add(5);
+                  w.set(6);
+              });
+              attempt("add while walking", () -> {
+                  for (Integer x : l) {
+                      l.add(x);
+                  }
+              });
+              LinkedList<String> e = new LinkedList<>();
+              System.out.println(e.peek() + " " + e.poll() + " " + e.pollLast() + " " + e);
+              attempt("getFirst", () -> e.getFirst());
+              attempt("pop", () -> e.pop());
+              LinkedOrderWindow w = new LinkedOrderWindow();
+              w.add("one");
+              w.addAll(0, List.of("zero", "half"));
+              System.out.println(w + " " + w.get(1) + " " + w.remove(0) + " " + w);
+              attempt("window", () -> w.get(2));
+          }
+      }
+    expected: |
+      {zebra=2, apple=9, banana=1, cherry=1, mango=4, fig=1, date=4, null=null} [zebra, apple, banana, cherry, mango, fig, date, null] [2, 9, 1, 1, 4, 1, 4, null] null true
+      put while walking ConcurrentModificationException null
+      {zebra=102, apple=109, mango=104, grape=3} {zebra=102, apple=109, grape=3, mango=104} true true java.util.LinkedHashMap
+      {2=v2, 4=v4, 3=v3} 5 {3=v3, 2=v2, 4=four} {2=v2, 3=v3, 4=four!} {3=v3, 7=seven, 4=FOUR} 6
+      get while walking ConcurrentModificationException null
+      {n=null, x=1} {x=1, n=null}
+      {p=1} 0 {r=3} 2
+      {p=pear+plum, f=fig, k=kiwi}
+      +++=+=+ [pear, apple, date, kiwi, fig] [30, 10, 20, 40] true true
+      [-2, -1, 0, 10, 15, 20, 30, 40, 50, 100] 15 20 -1 true -2 50 0 3 [0, 10, 15, 25, 30, 40]
+      [0, 10, 7, 8, 7, 15, 25, 30, 40] true 887 [0, 10, 43, 8, 15, 25, 30, 40] 3 40 30 25 15 8 43 10 0 
+      get IndexOutOfBoundsException Index: 8, Size: 8
+      add IndexOutOfBoundsException Index: -1, Size: 8
+      set after add IllegalStateException null
+      add while walking ConcurrentModificationException null
+      null null null []
+      getFirst NoSuchElementException null
+      pop NoSuchElementException null
+      [zero, half, one] half zero [half, one]
+      window IndexOutOfBoundsException Index: 2
   # ArrayDeque, Optional, Objects, Collections, Arrays over each array type, Vector,
   # Stack, Enumeration, StringBuffer and Hashtable, which walks its keys in its own
   # order; Random gives the specified sequence, so a seeded shuffle is the JDK's (one

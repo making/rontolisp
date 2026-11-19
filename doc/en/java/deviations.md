@@ -514,7 +514,7 @@ Each of these is an error naming the construct and its position.
   ordered by priority or by delay, `ConcurrentSkipListMap`. A `Timer`'s `schedule` of a
   `Date`. Thread groups.
 - Any class or member of the library not listed in the [overview](index.md):
-  `LinkedList`, `LinkedHashMap`, `TreeMap`, `Scanner`, files
+  `TreeMap`, `Scanner`, files
   (`File`, `FileReader`, `java.nio.file`), `java.time` but `Duration`, `BigInteger`,
   `BigDecimal`,
   reflection. Of `java.net`, everything but `URI`, the addresses of a server and the
