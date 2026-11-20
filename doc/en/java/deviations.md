@@ -232,6 +232,12 @@ hash codes differ in the high bits only), keys of a `Double` with few digits fro
 do the keys of a class whose `hashCode` has few values; strings and integers do not. `Set.of` and `Map.of` have
 one fixed order, where a JDK picks another at every start.
 
+**A `TreeMap` asks its comparator about other pairs of keys than a JDK's.** Its tree is
+balanced another way, so a comparator that counts or prints its calls sees other pairs and
+another number of them; the keys' order and what the map answers are a JDK's. A map's
+`keySet()`, `values()`, `entrySet()` and `descendingMap()` are a new view at each call, where
+a JDK's map answers the same object every time.
+
 **The functions of `Math` are those of `StrictMath`**, so a result is the same on every
 backend and processor. A JDK's `Math.sin`, `Math.exp` and the like may differ from it in
 the last digit.
@@ -450,6 +456,11 @@ again as it is; a JDK throws a copy holding it when another thread ran the task.
 **A `ConcurrentHashMap` keeps the order a JDK 25 walks it in**, but for a table of 64
 chains or more in which nine keys share one chain.
 
+**A `ConcurrentSkipListMap`'s iterator reads the key above the last one it gave.** It gives
+the entry it read ahead even when that was removed since, and never refuses a change; a key
+put after such a removal between the two is given here, where a JDK's iterator may pass it
+by. A function given to `compute`, `merge` and their kind runs once, under the map's monitor.
+
 **A thread notified in `wait` may still be `WAITING`.** `getState` answers `BLOCKED` for a
 thread waiting to enter a monitor another thread holds; one that was notified and waits
 to take its monitor again may answer `WAITING` or `TIMED_WAITING` until it has it. An
@@ -607,10 +618,9 @@ Each of these is an error naming the construct and its position.
   field through a qualified `super` (`Interface.super::m`, `Outer.super.x`).
 - A class extending `String`, `StringBuilder` or a box.
 - Of `java.util.concurrent`, what [The JDK classes](classes.md) does not list: the queues
-  ordered by priority or by delay, `ConcurrentSkipListMap`. A `Timer`'s `schedule` of a
-  `Date`. Thread groups.
+  ordered by priority or by delay. A `Timer`'s `schedule` of a `Date`. Thread groups.
 - Any JDK class or member [The JDK classes](classes.md) does not list:
-  `TreeMap`, `Scanner`, files
-  (`File`, `FileReader`, `java.nio.file`), `java.util.Date` and `Calendar`,
+  `PriorityQueue`, `Scanner`, files
+  (`File`, `FileReader`, `java.nio.file`), `Calendar`,
   reflection. Of `java.net`, everything but `URI`, the addresses of a server and the
   [HTTP client](#the-http-client): `URL`, sockets, `HttpURLConnection`.

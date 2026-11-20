@@ -214,6 +214,41 @@ public final class Collections {
         return new ImmutableCollections.MapN<>(held, ImmutableCollections.HELD);
     }
 
+    public static <T> SortedSet<T> unmodifiableSortedSet(SortedSet<T> set) {
+        return new ImmutableCollections.SortedView<>(Objects.requireNonNull(set));
+    }
+
+    public static <T> NavigableSet<T> unmodifiableNavigableSet(NavigableSet<T> set) {
+        return new ImmutableCollections.NavigableView<>(Objects.requireNonNull(set));
+    }
+
+    public static <K, V> SortedMap<K, V> unmodifiableSortedMap(SortedMap<K, ? extends V> map) {
+        SortedMap<K, V> held = (SortedMap<K, V>) Objects.requireNonNull(map);
+        return new ImmutableCollections.SortedMapView<>(held);
+    }
+
+    public static <K, V> NavigableMap<K, V> unmodifiableNavigableMap(NavigableMap<K, ? extends V> map) {
+        NavigableMap<K, V> held = (NavigableMap<K, V>) Objects.requireNonNull(map);
+        return new ImmutableCollections.NavigableMapView<>(held);
+    }
+
+    // The empty sorted collections: views over an empty tree that nothing changes.
+    public static <E> SortedSet<E> emptySortedSet() {
+        return emptyNavigableSet();
+    }
+
+    public static <E> NavigableSet<E> emptyNavigableSet() {
+        return new ImmutableCollections.NavigableView<>(new TreeSet<E>());
+    }
+
+    public static <K, V> SortedMap<K, V> emptySortedMap() {
+        return emptyNavigableMap();
+    }
+
+    public static <K, V> NavigableMap<K, V> emptyNavigableMap() {
+        return new ImmutableCollections.NavigableMapView<>(new TreeMap<K, V>());
+    }
+
     public static <T> Collection<T> synchronizedCollection(Collection<T> c) {
         return new Synchronized.Each<>(c, null);
     }
@@ -227,7 +262,23 @@ public final class Collections {
     }
 
     public static <K, V> Map<K, V> synchronizedMap(Map<K, V> map) {
-        return new Synchronized.MapOf<>(map);
+        return new Synchronized.MapOf<>(map, null);
+    }
+
+    public static <T> SortedSet<T> synchronizedSortedSet(SortedSet<T> set) {
+        return new Synchronized.SortedSetOf<>(set, null);
+    }
+
+    public static <T> NavigableSet<T> synchronizedNavigableSet(NavigableSet<T> set) {
+        return new Synchronized.NavigableSetOf<>(set, null);
+    }
+
+    public static <K, V> SortedMap<K, V> synchronizedSortedMap(SortedMap<K, V> map) {
+        return new Synchronized.SortedMapOf<>(map, null);
+    }
+
+    public static <K, V> NavigableMap<K, V> synchronizedNavigableMap(NavigableMap<K, V> map) {
+        return new Synchronized.NavigableMapOf<>(map, null);
     }
 
     // The element at i moves to (i + distance) mod size: three reversals.

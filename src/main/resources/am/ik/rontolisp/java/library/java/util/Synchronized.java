@@ -248,111 +248,463 @@ final class Synchronized {
         }
     }
 
-    static final class MapOf<K, V> implements Map<K, V> {
+    static class MapOf<K, V> implements Map<K, V> {
 
         private final Map<K, V> held;
 
-        MapOf(Map<K, V> held) {
+        final Object lock;
+
+        MapOf(Map<K, V> held, Object lock) {
             if (held == null) {
                 throw new NullPointerException();
             }
             this.held = held;
+            this.lock = lock == null ? this : lock;
         }
 
-        public synchronized int size() {
-            return held.size();
+        public int size() {
+            synchronized (lock) {
+                return held.size();
+            }
         }
 
-        public synchronized boolean isEmpty() {
-            return held.isEmpty();
+        public boolean isEmpty() {
+            synchronized (lock) {
+                return held.isEmpty();
+            }
         }
 
-        public synchronized boolean containsKey(Object key) {
-            return held.containsKey(key);
+        public boolean containsKey(Object key) {
+            synchronized (lock) {
+                return held.containsKey(key);
+            }
         }
 
-        public synchronized boolean containsValue(Object value) {
-            return held.containsValue(value);
+        public boolean containsValue(Object value) {
+            synchronized (lock) {
+                return held.containsValue(value);
+            }
         }
 
-        public synchronized V get(Object key) {
-            return held.get(key);
+        public V get(Object key) {
+            synchronized (lock) {
+                return held.get(key);
+            }
         }
 
-        public synchronized V put(K key, V value) {
-            return held.put(key, value);
+        public V put(K key, V value) {
+            synchronized (lock) {
+                return held.put(key, value);
+            }
         }
 
-        public synchronized V remove(Object key) {
-            return held.remove(key);
+        public V remove(Object key) {
+            synchronized (lock) {
+                return held.remove(key);
+            }
         }
 
-        public synchronized void putAll(Map<? extends K, ? extends V> m) {
-            held.putAll(m);
+        public void putAll(Map<? extends K, ? extends V> m) {
+            synchronized (lock) {
+                held.putAll(m);
+            }
         }
 
-        public synchronized void clear() {
-            held.clear();
+        public void clear() {
+            synchronized (lock) {
+                held.clear();
+            }
         }
 
-        public synchronized Set<K> keySet() {
-            return new SetOf<>(held.keySet(), this);
+        public Set<K> keySet() {
+            synchronized (lock) {
+                return new SetOf<>(held.keySet(), lock);
+            }
         }
 
-        public synchronized Collection<V> values() {
-            return new Each<>(held.values(), this);
+        public Collection<V> values() {
+            synchronized (lock) {
+                return new Each<>(held.values(), lock);
+            }
         }
 
-        public synchronized Set<Map.Entry<K, V>> entrySet() {
-            return new SetOf<>(held.entrySet(), this);
+        public Set<Map.Entry<K, V>> entrySet() {
+            synchronized (lock) {
+                return new SetOf<>(held.entrySet(), lock);
+            }
         }
 
-        public synchronized V getOrDefault(Object key, V other) {
-            return held.getOrDefault(key, other);
+        public V getOrDefault(Object key, V other) {
+            synchronized (lock) {
+                return held.getOrDefault(key, other);
+            }
         }
 
-        public synchronized void forEach(BiConsumer<? super K, ? super V> action) {
-            held.forEach(action);
+        public void forEach(BiConsumer<? super K, ? super V> action) {
+            synchronized (lock) {
+                held.forEach(action);
+            }
         }
 
-        public synchronized void replaceAll(BiFunction<? super K, ? super V, ? extends V> function) {
-            held.replaceAll(function);
+        public void replaceAll(BiFunction<? super K, ? super V, ? extends V> function) {
+            synchronized (lock) {
+                held.replaceAll(function);
+            }
         }
 
-        public synchronized V putIfAbsent(K key, V value) {
-            return held.putIfAbsent(key, value);
+        public V putIfAbsent(K key, V value) {
+            synchronized (lock) {
+                return held.putIfAbsent(key, value);
+            }
         }
 
-        public synchronized V replace(K key, V value) {
-            return held.replace(key, value);
+        public boolean remove(Object key, Object value) {
+            synchronized (lock) {
+                return held.remove(key, value);
+            }
         }
 
-        public synchronized V computeIfAbsent(K key, Function<? super K, ? extends V> function) {
-            return held.computeIfAbsent(key, function);
+        public boolean replace(K key, V oldValue, V newValue) {
+            synchronized (lock) {
+                return held.replace(key, oldValue, newValue);
+            }
         }
 
-        public synchronized V computeIfPresent(K key, BiFunction<? super K, ? super V, ? extends V> function) {
-            return held.computeIfPresent(key, function);
+        public V replace(K key, V value) {
+            synchronized (lock) {
+                return held.replace(key, value);
+            }
         }
 
-        public synchronized V compute(K key, BiFunction<? super K, ? super V, ? extends V> function) {
-            return held.compute(key, function);
+        public V computeIfAbsent(K key, Function<? super K, ? extends V> function) {
+            synchronized (lock) {
+                return held.computeIfAbsent(key, function);
+            }
         }
 
-        public synchronized V merge(K key, V value, BiFunction<? super V, ? super V, ? extends V> function) {
-            return held.merge(key, value, function);
+        public V computeIfPresent(K key, BiFunction<? super K, ? super V, ? extends V> function) {
+            synchronized (lock) {
+                return held.computeIfPresent(key, function);
+            }
         }
 
-        public synchronized boolean equals(Object o) {
-            return o == this || held.equals(o);
+        public V compute(K key, BiFunction<? super K, ? super V, ? extends V> function) {
+            synchronized (lock) {
+                return held.compute(key, function);
+            }
         }
 
-        public synchronized int hashCode() {
-            return held.hashCode();
+        public V merge(K key, V value, BiFunction<? super V, ? super V, ? extends V> function) {
+            synchronized (lock) {
+                return held.merge(key, value, function);
+            }
         }
 
-        public synchronized String toString() {
-            return held.toString();
+        public boolean equals(Object o) {
+            synchronized (lock) {
+                return o == this || held.equals(o);
+            }
+        }
+
+        public int hashCode() {
+            synchronized (lock) {
+                return held.hashCode();
+            }
+        }
+
+        public String toString() {
+            synchronized (lock) {
+                return held.toString();
+            }
+        }
+    }
+
+    static class SortedSetOf<E> extends Each<E> implements SortedSet<E> {
+
+        private final SortedSet<E> sorted;
+
+        SortedSetOf(SortedSet<E> sorted, Object lock) {
+            super(sorted, lock);
+            this.sorted = sorted;
+        }
+
+        public Comparator<? super E> comparator() {
+            synchronized (lock) {
+                return sorted.comparator();
+            }
+        }
+
+        public E first() {
+            synchronized (lock) {
+                return sorted.first();
+            }
+        }
+
+        public E last() {
+            synchronized (lock) {
+                return sorted.last();
+            }
+        }
+
+        public SortedSet<E> subSet(E fromElement, E toElement) {
+            synchronized (lock) {
+                return new SortedSetOf<>(sorted.subSet(fromElement, toElement), lock);
+            }
+        }
+
+        public SortedSet<E> headSet(E toElement) {
+            synchronized (lock) {
+                return new SortedSetOf<>(sorted.headSet(toElement), lock);
+            }
+        }
+
+        public SortedSet<E> tailSet(E fromElement) {
+            synchronized (lock) {
+                return new SortedSetOf<>(sorted.tailSet(fromElement), lock);
+            }
+        }
+    }
+
+    static final class NavigableSetOf<E> extends SortedSetOf<E> implements NavigableSet<E> {
+
+        private final NavigableSet<E> navigable;
+
+        NavigableSetOf(NavigableSet<E> navigable, Object lock) {
+            super(navigable, lock);
+            this.navigable = navigable;
+        }
+
+        public E lower(E e) {
+            synchronized (lock) {
+                return navigable.lower(e);
+            }
+        }
+
+        public E floor(E e) {
+            synchronized (lock) {
+                return navigable.floor(e);
+            }
+        }
+
+        public E ceiling(E e) {
+            synchronized (lock) {
+                return navigable.ceiling(e);
+            }
+        }
+
+        public E higher(E e) {
+            synchronized (lock) {
+                return navigable.higher(e);
+            }
+        }
+
+        public E pollFirst() {
+            synchronized (lock) {
+                return navigable.pollFirst();
+            }
+        }
+
+        public E pollLast() {
+            synchronized (lock) {
+                return navigable.pollLast();
+            }
+        }
+
+        public NavigableSet<E> descendingSet() {
+            synchronized (lock) {
+                return new NavigableSetOf<>(navigable.descendingSet(), lock);
+            }
+        }
+
+        public Iterator<E> descendingIterator() {
+            return navigable.descendingIterator();
+        }
+
+        public NavigableSet<E> subSet(E fromElement, boolean fromInclusive, E toElement, boolean toInclusive) {
+            synchronized (lock) {
+                return new NavigableSetOf<>(navigable.subSet(fromElement, fromInclusive, toElement, toInclusive),
+                        lock);
+            }
+        }
+
+        public NavigableSet<E> headSet(E toElement, boolean inclusive) {
+            synchronized (lock) {
+                return new NavigableSetOf<>(navigable.headSet(toElement, inclusive), lock);
+            }
+        }
+
+        public NavigableSet<E> tailSet(E fromElement, boolean inclusive) {
+            synchronized (lock) {
+                return new NavigableSetOf<>(navigable.tailSet(fromElement, inclusive), lock);
+            }
+        }
+    }
+
+    static class SortedMapOf<K, V> extends MapOf<K, V> implements SortedMap<K, V> {
+
+        private final SortedMap<K, V> sorted;
+
+        SortedMapOf(SortedMap<K, V> sorted, Object lock) {
+            super(sorted, lock);
+            this.sorted = sorted;
+        }
+
+        public Comparator<? super K> comparator() {
+            synchronized (lock) {
+                return sorted.comparator();
+            }
+        }
+
+        public K firstKey() {
+            synchronized (lock) {
+                return sorted.firstKey();
+            }
+        }
+
+        public K lastKey() {
+            synchronized (lock) {
+                return sorted.lastKey();
+            }
+        }
+
+        public SortedMap<K, V> subMap(K fromKey, K toKey) {
+            synchronized (lock) {
+                return new SortedMapOf<>(sorted.subMap(fromKey, toKey), lock);
+            }
+        }
+
+        public SortedMap<K, V> headMap(K toKey) {
+            synchronized (lock) {
+                return new SortedMapOf<>(sorted.headMap(toKey), lock);
+            }
+        }
+
+        public SortedMap<K, V> tailMap(K fromKey) {
+            synchronized (lock) {
+                return new SortedMapOf<>(sorted.tailMap(fromKey), lock);
+            }
+        }
+    }
+
+    static final class NavigableMapOf<K, V> extends SortedMapOf<K, V> implements NavigableMap<K, V> {
+
+        private final NavigableMap<K, V> navigable;
+
+        NavigableMapOf(NavigableMap<K, V> navigable, Object lock) {
+            super(navigable, lock);
+            this.navigable = navigable;
+        }
+
+        public Map.Entry<K, V> lowerEntry(K key) {
+            synchronized (lock) {
+                return navigable.lowerEntry(key);
+            }
+        }
+
+        public K lowerKey(K key) {
+            synchronized (lock) {
+                return navigable.lowerKey(key);
+            }
+        }
+
+        public Map.Entry<K, V> floorEntry(K key) {
+            synchronized (lock) {
+                return navigable.floorEntry(key);
+            }
+        }
+
+        public K floorKey(K key) {
+            synchronized (lock) {
+                return navigable.floorKey(key);
+            }
+        }
+
+        public Map.Entry<K, V> ceilingEntry(K key) {
+            synchronized (lock) {
+                return navigable.ceilingEntry(key);
+            }
+        }
+
+        public K ceilingKey(K key) {
+            synchronized (lock) {
+                return navigable.ceilingKey(key);
+            }
+        }
+
+        public Map.Entry<K, V> higherEntry(K key) {
+            synchronized (lock) {
+                return navigable.higherEntry(key);
+            }
+        }
+
+        public K higherKey(K key) {
+            synchronized (lock) {
+                return navigable.higherKey(key);
+            }
+        }
+
+        public Map.Entry<K, V> firstEntry() {
+            synchronized (lock) {
+                return navigable.firstEntry();
+            }
+        }
+
+        public Map.Entry<K, V> lastEntry() {
+            synchronized (lock) {
+                return navigable.lastEntry();
+            }
+        }
+
+        public Map.Entry<K, V> pollFirstEntry() {
+            synchronized (lock) {
+                return navigable.pollFirstEntry();
+            }
+        }
+
+        public Map.Entry<K, V> pollLastEntry() {
+            synchronized (lock) {
+                return navigable.pollLastEntry();
+            }
+        }
+
+        public NavigableMap<K, V> descendingMap() {
+            synchronized (lock) {
+                return new NavigableMapOf<>(navigable.descendingMap(), lock);
+            }
+        }
+
+        public Set<K> keySet() {
+            return navigableKeySet();
+        }
+
+        public NavigableSet<K> navigableKeySet() {
+            synchronized (lock) {
+                return new NavigableSetOf<>(navigable.navigableKeySet(), lock);
+            }
+        }
+
+        public NavigableSet<K> descendingKeySet() {
+            synchronized (lock) {
+                return new NavigableSetOf<>(navigable.descendingKeySet(), lock);
+            }
+        }
+
+        public NavigableMap<K, V> subMap(K fromKey, boolean fromInclusive, K toKey, boolean toInclusive) {
+            synchronized (lock) {
+                return new NavigableMapOf<>(navigable.subMap(fromKey, fromInclusive, toKey, toInclusive), lock);
+            }
+        }
+
+        public NavigableMap<K, V> headMap(K toKey, boolean inclusive) {
+            synchronized (lock) {
+                return new NavigableMapOf<>(navigable.headMap(toKey, inclusive), lock);
+            }
+        }
+
+        public NavigableMap<K, V> tailMap(K fromKey, boolean inclusive) {
+            synchronized (lock) {
+                return new NavigableMapOf<>(navigable.tailMap(fromKey, inclusive), lock);
+            }
         }
     }
 }

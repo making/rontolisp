@@ -390,6 +390,21 @@ algorithm came from, and the answer goes in the file's header.
   JDK writes it; it is written as floor division and checked against the grid's
   negative instants and the long's ends, where the answers show the wrap. The answers
   are lines of `java-spec.yaml`, which the JDK leg asks again.
+- **The sorted collections (k47, 2026-11-20).** `TreeMap`, `TreeSet`, the sorted and
+  navigable interfaces, their wrappers in `Collections` and `ConcurrentSkipListMap` / `Set`
+  were written from the API documentation and JDK 25's answers to probes (the members and
+  refusals of a map and a set, `Bounds.java`'s every bound of 13 views by both flags, the
+  spliterators of every view and wrapper (249 lines), the calls a comparator gets, a skip list's iterator
+  under changes, seeded runs of 184,000 operations; the k47 artefacts). Nobody opened
+  OpenJDK's source, and the shape is its own: the tree is Adelson-Velsky and Landis's (1962),
+  balanced by heights, where a JDK's is red-black; a node leaves it unlinked; a view is the
+  tree and two bounds, one class for every range and direction; the skip list is that tree
+  under a monitor. What the documentation does not state was read off the answers: which
+  check refuses a bound and in what order, with its words (a skip list's are not a tree's),
+  which view's spliterator reports which characteristics and size, and which entries are
+  copies. `AbstractSet.removeAll` and `Map.remove` / `replace` of a value are the
+  documentation's own statements of them. The answers are lines of `java-spec.yaml`, which
+  the JDK leg asks again.
 - **Unicode normalization (k29, 2026-11-19).** `eval/unicode-normalization.lisp` was
   written from Unicode Standard Annex #15 and the Unicode Standard's sections 3.11
   (decomposition, canonical ordering, canonical composition) and 3.12 (Hangul by

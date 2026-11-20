@@ -24,6 +24,16 @@ public interface Map<K, V> {
         static <K, V extends Comparable<? super V>> Comparator<Map.Entry<K, V>> comparingByValue() {
             return (Map.Entry<K, V> a, Map.Entry<K, V> b) -> a.getValue().compareTo(b.getValue());
         }
+
+        static <K, V> Comparator<Map.Entry<K, V>> comparingByKey(Comparator<? super K> order) {
+            Objects.requireNonNull(order);
+            return (Map.Entry<K, V> a, Map.Entry<K, V> b) -> order.compare(a.getKey(), b.getKey());
+        }
+
+        static <K, V> Comparator<Map.Entry<K, V>> comparingByValue(Comparator<? super V> order) {
+            Objects.requireNonNull(order);
+            return (Map.Entry<K, V> a, Map.Entry<K, V> b) -> order.compare(a.getValue(), b.getValue());
+        }
     }
 
     int size();
@@ -73,6 +83,22 @@ public interface Map<K, V> {
             held = put(key, value);
         }
         return held;
+    }
+
+    default boolean remove(Object key, Object value) {
+        if (containsKey(key) && Objects.equals(get(key), value)) {
+            remove(key);
+            return true;
+        }
+        return false;
+    }
+
+    default boolean replace(K key, V oldValue, V newValue) {
+        if (containsKey(key) && Objects.equals(get(key), oldValue)) {
+            put(key, newValue);
+            return true;
+        }
+        return false;
     }
 
     default V replace(K key, V value) {

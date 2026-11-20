@@ -50,8 +50,8 @@ collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
 (2026-11-19); a library read as source from the program's source path and lowered as far
 as the program reaches it, annotation types and type annotations, an exact method
 reference in a call's applicability: k24 (2026-11-19); what comes after is `.todo/k15`,
-`k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22` and `k47` (what k00, k11, k06, k07, k08,
-k10, k12 and k26 left); YAVI compiled to wasm in both of its styles, the milestone k24 was
+`k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22` and `k55` (what k00, k11, k06, k07, k08,
+k10, k12, k26 and k47 left); YAVI compiled to wasm in both of its styles, the milestone k24 was
 asked for, and where its bytes go: k33 (2026-11-20; "YAVI compiled to wasm" below); the
 Maven plugin's `wasm` goal reading a project's
 dependencies from their sources jars, a session reading the source path: k32 (2026-11-20);
@@ -74,7 +74,9 @@ map), a stream inside `flatMap` closed where its stream stops asking, and
 `String.format` of a `BigInteger` and a `BigDecimal`: k26 (2026-11-20); YAVI's reader of an
 untyped input split by the type asked for, sent to YAVI as a pull request and measured
 over its sources: k46 (2026-11-20; "YAVI compiled to wasm" below; the examples' release is
-`.todo/k50`).
+`.todo/k50`); `TreeMap`, `TreeSet`, the sorted and navigable interfaces and their
+views, the wrappers of them, `ConcurrentSkipListMap` / `Set`, `Map.remove` and `replace` of a
+value: k47 (2026-11-20; "The sorted collections" below).
 
 ## Where it sits
 
@@ -1199,7 +1201,7 @@ measured programs.
 - A method reference naming a class fits a functional interface by its arity when a call has
   several candidates (`takes`): `thenComparing(Point::label)` against `thenComparing(Comparator)`.
 - Sizes on wasm (2026-11-17, before / after): a list added to and read 3,732 / 25,592; one
-  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/k47` holds what is
+  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/k55` holds what is
   left and the leads.
 - **The library is Java a JDK compiles** (j79, decided by measuring): javac of JDK 25 takes
   all 139 files as a patch of its own `java.base` (`--patch-module java.base=<library>`) with
@@ -1311,7 +1313,7 @@ measured programs.
   `toUpperCase` / `toLowerCase` (the host's fold is uniform), and `digit` /
   `getNumericValue`, which still ask the host: a digit outside ASCII is read on the
   interpreter and the JVM and not on wasm, `Integer.parseInt` with it (`deviations.md`,
-  `.todo/k47`: a table there would be in every program that parses a number).
+  `.todo/k55`: a table there would be in every program that parses a number).
 - **`%h` hands the format the program's `hashCode()` only where the control may ask**
   (`JavaIntrinsics.formatted`): `%java-format` takes the function as its fourth argument,
   `nil` when the control is a constant with no `%h`. The arm itself is 401 B in every
@@ -1337,7 +1339,7 @@ measured programs.
   adjustments, the arithmetic over 17 durations, 103 texts through `parse` with each
   refusal's message, index and cause -- prints a JDK 25's lines on the four backends
   (`.todo/artefacts/k05-java-front-end-what-the-everyday-members-and-utf-16-slice-left/Dur.java`).
-  Not there: `dividedBy` (`.todo/k47`). `between`, `of` / `get` of a `TemporalUnit` and
+  Not there: `dividedBy` (`.todo/k55`). `between`, `of` / `get` of a `TemporalUnit` and
   `truncatedTo` came with the rest of `java.time` (k35, "java.time" below), which left
   a program of a `Duration` alone as it was (155,029 B of wasm before and after).
   `Thread.sleep(Duration)` is there (a duration below zero is no sleep, zero is one an
@@ -1417,7 +1419,91 @@ measured programs.
   first, so an array too short keeps the high one's place) / `codePointAt` of an array
   / `reverseBytes`, `OptionalLong` and `HttpHeaders.firstValueAsLong`: each in
   `Support` or a source class, 866 probe lines identical to JDK 25 on four backends
-  (`Members.java` beside `Dur.java`). Still refused: `.todo/k47`.
+  (`Members.java` beside `Dur.java`). Still refused: `.todo/k55`.
+
+## The sorted collections (2026-11-20, k47)
+
+**Invariant: a `TreeMap` is a tree balanced as AVL trees are; what a program sees of it --
+the order, every answer and refusal of the map and of its views, what each spliterator
+reports -- is a JDK 25's, learned from probes; which pairs of keys its comparator is asked
+about is the tree's own.** Written from the API documentation and JDK 25's answers
+([java-frontend-provenance.md](java-frontend-provenance.md)); the probes are
+`.todo/artefacts/k47-java-front-end-what-the-stream-members-slice-left/`.
+
+- **The tree** (`TreeMap.Entry` is the node, with its height; `rebalance` walks up from the
+  changed node and stops where a height is what it was). A node with two children gives
+  its place to the next node by relinking, never by taking its key, so an entry a program
+  holds and the node an iterator goes to next stay valid through a removal. A put into an
+  empty map compares the key with itself and `get` / `containsKey` / `remove` under the
+  keys' own order cast the key first: the JDK's refusals of `null` and of a key with no
+  order on an empty map. A copy of a sorted map of the same comparator, `putAll` of one
+  into an empty map and `addAll` of a sorted set into an empty `TreeSet` build the tree
+  from the ordered items with no comparison, as a JDK's do (`Calls.java`).
+- **A view is the tree and its bounds** (`TreeMap.View`, one class for `subMap`, `headMap`,
+  `tailMap` and `descendingMap`: a low and a high bound, each there or not and holding its
+  key or not, and the descending flag). Navigation clamps the tree's `near` (lower, floor,
+  ceiling, higher) to the range; a walk runs from the range's first node to its fence, the
+  first node past it, found once. The refusals and their order are a JDK's (`Bounds.java`:
+  13 views, every bound by both flags): `fromKey > toKey` where a range ends before it
+  starts, the bounds named in the view's own order; of a view of a view `fromKey out of
+  range`, then `toKey out of range`, where a bound holding its key must be inside the range
+  and one leaving it out may sit on the range's edge; `key out of range` for a put.
+- **`TreeSet`** is over a `NavigableMap<E, Object>`, a `TreeMap` or a view (a view of a set
+  is a `TreeSet` over the map's view, as a JDK's); `TreeMap.KeySet` extends it and refuses
+  `add`. A JDK keeps one `keySet`, `entrySet` and `descendingMap` of a map (`==` answers
+  `true`); here each call makes one, as `HashMap`'s do (`deviations.md`): three fields in
+  every `TreeMap` for an identity no probe compared.
+- **Spliterators** (`SplitGrid.java`, 249 lines: the tree, a comparator, the skip list and
+  the wrappers by eight views): the tree's keys `ORDERED|DISTINCT|SORTED|SIZED` with its
+  comparator, its values `ORDERED|SIZED`, its entries those of its keys with a comparator of
+  the keys; the keys of the descending map of the tree itself (of no other view)
+  `ORDERED|DISTINCT|SIZED`; any other view's keys `ORDERED|DISTINCT|SORTED`, or
+  `ORDERED|DISTINCT` against the order, of unknown size, its values and entries the
+  defaults of `Collection` and `Set`. A size is taken when first asked and kept.
+  `Splits.sorted` carries the comparator.
+- **`ConcurrentSkipListMap` is a `TreeMap`, or a view of one, under the map's monitor**
+  (`java.util.concurrent.Ordered`: the map and its `SubMap` views), as `ConcurrentHashMap`
+  is a table under one; there is no skip list. No `null` key or value; a function of
+  `compute`, `merge` and their kind runs once under the monitor. Its views refuse as a
+  JDK's do, which is not as a `TreeMap`'s: a bound below the low bound or above the high
+  one is `key out of range`, a range ending before it starts `inconsistent range`, and a
+  bound holding its key may sit on an edge the range leaves out (`(3,7).headMap(3, true)`
+  is empty, a `TreeMap`'s `toKey out of range`). An iterator holds the entry it read ahead
+  and reads the next by its key (`higherEntry`), so it never refuses; a JDK's follows a
+  removed node's link, so a key put between the two after such a removal is given here
+  and passed by there (`deviations.md`; the corpus case keeps clear of it). Spliterators:
+  the map's keys `ORDERED|DISTINCT|SORTED|NONNULL|CONCURRENT` of the count, its values
+  `ORDERED|NONNULL|CONCURRENT`, its entries as its keys; a view's keys
+  `ORDERED|DISTINCT|SORTED` with the view's comparator (reversed against the order), its
+  values none, its entries `DISTINCT`, of unknown size. `ConcurrentSkipListSet` is over
+  one; its views are sets of its class.
+- **The wrappers**: `unmodifiable`, `synchronized` and `empty` of the four sorted
+  interfaces; a synchronized map holds a lock its views share (`Synchronized.MapOf`). An
+  unmodifiable navigable map answers `SimpleImmutableEntry`s. **Measured and not made**: a
+  JDK's unmodifiable map entry refuses `setValue`, and an unmodifiable view's iterator
+  `remove`, with no message, where these say `not supported` and `remove`; the JDK's
+  words were 2,282 B of wasm in a program walking an unmodifiable map's entries (a second
+  entry class in the dispatchers) and 301 B in one walking an unmodifiable set.
+- **What came with them**: `Map.remove(key, value)` and `replace(key, old, new)` as the
+  documentation states their defaults (`ConcurrentMap` declares them again),
+  `Map.Entry.comparingByKey` / `comparingByValue` of a comparator, `SortedMap`'s
+  `firstEntry` .. `pollLastEntry`, `putFirst` and `putLast`, `SortedSet`'s `getFirst` ..
+  `addLast`, and `AbstractSet.removeAll` as the documentation states it (the smaller of
+  the two is walked, so a set under a case-insensitive order loses `A` to
+  `removeAll(List.of("a"))`). Not there: `SequencedCollection`, `SequencedSet`,
+  `SequencedMap` and the `sequenced*` views, `reversed()` of a `SortedMap` that is no
+  `NavigableMap`, `clone()`.
+- **Measured** (2026-11-20; wasm bytes): a program naming none of them is unchanged to the
+  byte (the size programs of k12 and k26); a word count into a `TreeMap` 136,456, into a
+  `HashMap` 143,443; a `TreeSet` asked `first` / `ceiling` / `headSet` 142,364; the
+  navigation and views of a map 140,539; a `ConcurrentSkipListMap` 164,996; `removeAll` on
+  a `HashSet` 156,880 -> 157,547. 200,000 puts and gets, a walk and 100,000 removes, best of
+  three: JDK 25 196 ms (a `HashMap` 46), the JVM class 369 (209), precompiled wasm 739
+  (270). A seeded run of 24,000 operations over maps, views, sets and iterators
+  (`Stress.java`) and 160,000 over a tree of up to 54,415 keys (`Grow.java`) print a JDK's
+  lines on the four backends.
+- Pins: java-spec `a-tree-map-keeps-its-keys-in-order-and-a-view-is-a-range-of-them` and the
+  sorted rows of `a-spliterator-reports-what-a-jdk-reports-of-each-collection-and-a-stream-is-made-of-one`.
 
 ## java.math (2026-11-20, k31)
 
@@ -1525,7 +1611,7 @@ leaves open is a JDK 25's answers to a grid.
   the scientific forms 2.5 KB, `_dispatch_5` 0.5 KB.
   Found beside it: the zeros of a width were written ahead of a negative number's
   parenthesis (`%(010d` of -5 was `0000000(5)`), now inside it as a JDK writes them.
-- Not there (`.todo/k47`): the primes (`isProbablePrime`, `nextProbablePrime`,
+- Not there (`.todo/k55`): the primes (`isProbablePrime`, `nextProbablePrime`,
   `probablePrime`, the constructors of random bits), refused by name.
 - Pins: the `standalone:` case `big-integers-and-decimals-compute-round-and-print-exactly`
   (a file of its own: a class under `Number` changes how the corpus program lowers
@@ -1648,7 +1734,7 @@ documentation; what it leaves open is a JDK 25's answers to a grid. `java.time.c
 - Not there (`.todo/k52`): `MonthDay`, `OffsetTime`, `InstantSource`,
   `TemporalAdjusters`, `IsoFields` / `WeekFields`, the calendars and eras,
   `getDisplayName`, `datesUntil`; each refused by name. `Duration.dividedBy` stays
-  `.todo/k47`'s. The formatter and the queries came with k43 ("java.time: the formatter"
+  `.todo/k55`'s. The formatter and the queries came with k43 ("java.time: the formatter"
   below).
 - Pins: java-spec `dates-times-and-instants-are-read-from-their-texts-and-computed-with`
   (146 lines of the grid's kinds); a class the subset lacks is `java.util.Currency` and
@@ -2093,7 +2179,7 @@ holds none of it.** No files: `File`, `FileReader`, `java.nio.file` stay refused
   string CONSTANT holding one is `?` on wasm. Measured 2026-11-18 (j98): the two halves
   of a pair appended to a `StringBuilder` one `char` after the other are a string of
   length 2 on the interpreter, 1 on the JVM (a JDK: 2 units, here one character), and
-  on wasm no `equals` of the character they spell (`.todo/k47`).
+  on wasm no `equals` of the character they spell (`.todo/k55`).
 - **`Double.longBitsToDouble`, `Float.intBitsToFloat`** are `%java-bits-binary` over
   `%java-nearest-binary` (exact, the subnormals included).
 - **Measured** (2026-11-17, the box and method of "Measured" below; wasm / class bytes, then
@@ -2250,7 +2336,7 @@ the probes are `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-dura
   (`JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`), but its
   class table reads 97 files of the library where it read 46 -- `Collection` names
   `Stream`, and a class's member types are read with it: 1.89 -> 1.95 s for a program of
-  one list on the interpreter (`.todo/k47`).
+  one list on the interpreter (`.todo/k55`).
 - **`String.compareTo(null)` throws** (k12: it answered 1, found by `sorted()` over a
   `null`): `%java-string-compare` and `-ignore-case` test their argument, 23 B of wasm
   in a program comparing strings.
@@ -2313,7 +2399,7 @@ the probes are `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-dura
   stream's spliterator differs from a JDK's in the marks named in `deviations.md`, in
   its estimate where the count is not known (`Long.MAX_VALUE`; a JDK's is its
   source's), in being no source's own (`StreamSupport.stream(s, false).spliterator()
-  != s`), and `sorted()` always takes every element. Lead (`.todo/k47`): marks kept
+  != s`), and `sorted()` always takes every element. Lead (`.todo/k55`): marks kept
   only in a program that asks for one, which needs a member of the library lowered by
   what the program reaches, as the third function of a format is.
 - **The streams of a `Random`** (k26; `IntFlow.drawn` and its kin: so many elements of
@@ -2330,7 +2416,7 @@ the probes are `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-dura
   `ConcurrentHashMap` with two more marks (`Collectors.grouped`, `once`, `merged`):
   `CONCURRENT`, `UNORDERED`, and `IDENTITY_FINISH` where the downstream has it. A JDK
   checks no argument of them for `null` when the collector is made (`Conmap.java`).
-- **Not there** (`.todo/k47`): a pipeline run in halves (`parallel()` is a flag), the
+- **Not there** (`.todo/k55`): a pipeline run in halves (`parallel()` is a flag), the
   marks of a stream's spliterator, a collector's `finisher` skipped under
   `IDENTITY_FINISH`.
 
@@ -2457,7 +2543,7 @@ member) or is refused where the request is sent (`deviations.md`, "The HTTP clie
   and in the client), with one 489,891 B. A program's own `HttpRequest` class stating a
   `timeout()` is refused by name where no builder was given one. A component that
   serves cannot time a request (an `IOException` with fetch's refusal: `.todo/148`).
-- **Not made** (`.todo/k47`): bodies as they arrive (`ofInputStream` reads a body
+- **Not made** (`.todo/k55`): bodies as they arrive (`ofInputStream` reads a body
   already in, `ofLines`, a program's own `BodySubscriber`), the `--host-fetch` reactor
   as a leg, `URI`'s constructors of several parts.
 

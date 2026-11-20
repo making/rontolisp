@@ -77,6 +77,8 @@ imports: |
   import java.util.Locale;
   import java.util.LongSummaryStatistics;
   import java.util.Map;
+  import java.util.NavigableMap;
+  import java.util.NavigableSet;
   import java.util.NoSuchElementException;
   import java.util.Objects;
   import java.util.Optional;
@@ -87,9 +89,13 @@ imports: |
   import java.util.Queue;
   import java.util.Random;
   import java.util.Set;
+  import java.util.SortedMap;
+  import java.util.SortedSet;
   import java.util.Spliterator;
   import java.util.Spliterators;
   import java.util.Stack;
+  import java.util.TreeMap;
+  import java.util.TreeSet;
   import java.util.UUID;
   import java.util.Vector;
   import java.util.function.*;
@@ -4912,6 +4918,224 @@ cases:
       pop NoSuchElementException null
       [zero, half, one] half zero [half, one]
       window IndexOutOfBoundsException Index: 2
+  # TreeMap is a tree kept balanced, its keys in the order a comparator or their own
+  # compareTo gives: the members that find a neighbour, views that are ranges of it (each
+  # bound in it or not, against its order or not) refusing a key or a bound outside them,
+  # an iterator that refuses a change made around it, entries the navigation answers that
+  # nothing changes. TreeSet is over one; the unmodifiable and synchronized views of the
+  # sorted interfaces; ConcurrentSkipListMap is one under a monitor, whose iterator never
+  # refuses and whose views refuse an inconsistent range.
+  - name: a-tree-map-keeps-its-keys-in-order-and-a-view-is-a-range-of-them
+    main: TreeOrder
+    source: |
+      class TreeOrderPoint implements Comparable<TreeOrderPoint> {
+          final int x;
+          final int y;
+
+          TreeOrderPoint(int x, int y) {
+              this.x = x;
+              this.y = y;
+          }
+
+          public int compareTo(TreeOrderPoint o) {
+              return x != o.x ? Integer.compare(x, o.x) : Integer.compare(y, o.y);
+          }
+
+          public String toString() {
+              return "(" + x + "," + y + ")";
+          }
+      }
+
+      class TreeOrder {
+          static void attempt(String label, Supplier<Object> s) {
+              try {
+                  System.out.println(label + " = " + s.get());
+              } catch (RuntimeException e) {
+                  System.out.println(label + " ! " + e.getClass().getSimpleName() + (e instanceof NullPointerException ? "" : " " + e.getMessage()));
+              }
+          }
+
+          public static void main(String[] args) {
+              // the keys in their order, and the members that find a neighbour
+              TreeMap<String, Integer> m = new TreeMap<>();
+              for (String w : "pear fig apple kiwi date banana cherry fig apple".split(" ")) {
+                  m.merge(w, 1, Integer::sum);
+              }
+              System.out.println(m + " " + m.firstKey() + " " + m.lastKey() + " " + m.get("fig") + " " + m.put("fig", 10) + " " + m.put("grape", 3) + " " + m.remove("pear") + " " + m.containsValue(3) + " " + m.comparator());
+              System.out.println(m.firstEntry() + " " + m.lowerEntry("date") + " " + m.floorKey("dog") + " " + m.ceilingEntry("dog") + " " + m.higherKey("kiwi") + " " + m.pollLastEntry() + " " + m);
+              System.out.println(m.headMap("date") + " " + m.tailMap("date", false) + " " + m.subMap("b", "g") + " " + m.descendingMap() + " " + m.descendingKeySet() + " " + m.descendingMap().headMap("date") + " " + m.reversed().firstKey());
+              System.out.println(m.equals(new HashMap<>(m)) + " " + m.hashCode() + " " + (m.keySet() instanceof NavigableSet) + " " + (m instanceof SortedMap));
+              // a view is a range of the map, and what is done to it is done to the map
+              TreeMap<Integer, String> t = new TreeMap<>();
+              for (int i = 1; i <= 10; i++) {
+                  t.put(i * 10, "n" + i);
+              }
+              NavigableMap<Integer, String> mid = t.subMap(30, true, 70, false);
+              mid.put(35, "x");
+              attempt("put out of range", () -> mid.put(70, "y"));
+              System.out.println(mid + " " + mid.size() + " " + mid.lowerKey(31) + " " + mid.floorKey(100) + " " + mid.ceilingKey(0) + " " + mid.higherKey(60) + " " + mid.get(20) + " " + mid.descendingMap().headMap(50));
+              attempt("headMap past the range", () -> mid.headMap(70, true));
+              attempt("tailMap below the range", () -> mid.tailMap(20));
+              attempt("subMap the wrong way", () -> mid.subMap(50, 40));
+              attempt("subMap of a descending view", () -> mid.descendingMap().subMap(60, 35));
+              attempt("subMap from above to below", () -> t.subMap(90, 10));
+              System.out.println(mid.pollFirstEntry() + " " + mid.pollLastEntry() + " " + t);
+              t.tailMap(70, true).clear();
+              System.out.println(t + " " + t.headMap(35).size() + " " + t.tailMap(200).isEmpty());
+              attempt("firstKey of nothing", () -> t.tailMap(200).firstKey());
+              attempt("firstEntry of nothing", () -> t.headMap(0).firstEntry());
+              // an order of its own: the key first put is the one kept
+              TreeMap<String, Integer> ci = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+              ci.put("Apple", 1);
+              ci.put("apple", 2);
+              ci.put("BANANA", 3);
+              TreeMap<Integer, String> rev = new TreeMap<>(Comparator.reverseOrder());
+              for (int i = 0; i < 6; i++) {
+                  rev.put(i * 3 % 7, "v" + i);
+              }
+              System.out.println(ci + " " + ci.get("APPLE") + " " + (new TreeMap<>(ci).comparator() == String.CASE_INSENSITIVE_ORDER) + " " + rev + " " + rev.headMap(3) + " " + rev.floorKey(4) + " " + rev.descendingMap());
+              TreeMap<String, Integer> nulls = new TreeMap<>(Comparator.nullsFirst(Comparator.naturalOrder()));
+              nulls.put("b", 1);
+              nulls.put(null, 0);
+              System.out.println(nulls + " " + nulls.get(null) + " " + nulls.headMap("b"));
+              attempt("put null", () -> m.put(null, 1));
+              attempt("get null", () -> new TreeMap<String, Integer>().get(null));
+              attempt("ceilingKey null of nothing", () -> new TreeMap<String, Integer>().ceilingKey(null));
+              TreeMap<TreeOrderPoint, String> points = new TreeMap<>();
+              points.put(new TreeOrderPoint(2, 1), "c");
+              points.put(new TreeOrderPoint(1, 5), "b");
+              points.put(new TreeOrderPoint(1, 2), "a");
+              System.out.println(points + " " + points.ceilingKey(new TreeOrderPoint(1, 3)));
+              // walking it: an entry can be set, a change while walking is refused
+              Iterator<Map.Entry<Integer, String>> each = t.entrySet().iterator();
+              while (each.hasNext()) {
+                  Map.Entry<Integer, String> e = each.next();
+                  if (e.getKey() == 20) {
+                      each.remove();
+                  } else {
+                      e.setValue(e.getValue() + "!");
+                  }
+              }
+              System.out.println(t);
+              attempt("put while walking", () -> {
+                  for (Integer k : t.keySet()) {
+                      t.put(k + 1, "w");
+                  }
+                  return t;
+              });
+              attempt("value set while walking", () -> {
+                  for (Integer k : t.keySet()) {
+                      t.put(k, "r");
+                  }
+                  return t;
+              });
+              attempt("firstEntry setValue", () -> t.firstEntry().setValue("no"));
+              attempt("computeIfAbsent that puts", () -> t.computeIfAbsent(99, k -> {
+                  t.put(98, "side");
+                  return "v";
+              }));
+              System.out.println(t + " " + t.putIfAbsent(5, "five") + " " + t.compute(5, (k, v) -> v + "!") + " " + t.merge(5, "?", String::concat) + " " + t.computeIfPresent(98, (k, v) -> null) + " " + t);
+              attempt("putFirst", () -> t.putFirst(1, "one"));
+              // a set over the keys of a tree
+              TreeSet<Integer> s = new TreeSet<>(List.of(50, 20, 80, 10, 30, 70, 90));
+              System.out.println(s + " " + s.add(20) + " " + s.lower(20) + " " + s.ceiling(25) + " " + s.headSet(30, true) + " " + s.tailSet(70, false) + " " + s.subSet(20, 70) + " " + s.descendingSet() + " " + s.pollFirst() + " " + s.pollLast() + " " + s.getFirst() + " " + s.removeLast() + " " + s);
+              NavigableSet<Integer> head = s.headSet(60, false);
+              head.add(25);
+              attempt("add out of range", () -> head.add(60));
+              System.out.println(s + " " + head + " " + (head instanceof TreeSet));
+              TreeSet<String> words = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+              Collections.addAll(words, "b", "A", "a", "C");
+              System.out.println(words + " " + words.contains("c") + " " + words.removeAll(List.of("a")) + " " + words + " " + words.removeAll(List.of("b", "x")) + " " + words);
+              attempt("first of nothing", () -> new TreeSet<Integer>().first());
+              attempt("removeFirst of nothing", () -> new TreeSet<Integer>().removeFirst());
+              attempt("addFirst", () -> {
+                  s.addFirst(1);
+                  return s;
+              });
+              // what a tree is collected into, and what wraps one
+              Map<Integer, Long> byLength = Stream.of("pear", "fig", "apple", "kiwi", "date").collect(Collectors.groupingBy(String::length, TreeMap::new, Collectors.counting()));
+              TreeSet<String> collected = Stream.of("pear", "fig", "apple", "fig").collect(Collectors.toCollection(TreeSet::new));
+              System.out.println(byLength + " " + collected + " " + t.keySet().stream().mapToInt(Integer::intValue).sum());
+              NavigableMap<String, Integer> fixed = Collections.unmodifiableNavigableMap(m);
+              System.out.println(fixed.firstKey() + " " + fixed.descendingMap() + " " + fixed.headMap("c") + " " + Collections.unmodifiableSortedSet(s).first() + " " + Collections.synchronizedNavigableMap(new TreeMap<>(m)).descendingKeySet() + " " + Collections.emptyNavigableSet() + " " + Collections.emptySortedMap());
+              attempt("unmodifiable pollFirstEntry", () -> fixed.pollFirstEntry());
+              attempt("unmodifiable view put", () -> fixed.headMap("c").put("b", 1));
+              attempt("unmodifiable entry setValue", () -> fixed.firstEntry().setValue(0));
+              // a map's remove and replace of a value
+              Map<String, Integer> h = new HashMap<>(Map.of("a", 1, "b", 2));
+              System.out.println(h.remove("a", 2) + " " + h.remove("a", 1) + " " + h.replace("b", 1, 3) + " " + h.replace("b", 2, 3) + " " + h);
+              // the skip list: sorted, shared, no null, an iterator that never refuses
+              java.util.concurrent.ConcurrentSkipListMap<String, Integer> sl = new java.util.concurrent.ConcurrentSkipListMap<>();
+              for (String w : "pear fig apple kiwi date".split(" ")) {
+                  sl.put(w, w.length());
+              }
+              StringBuilder seen = new StringBuilder();
+              for (String k : sl.keySet()) {
+                  seen.append(k).append(' ');
+                  if (k.equals("date")) {
+                      sl.remove("kiwi");
+                      sl.put("cherry", 6);
+                      sl.put("grape", 5);
+                  }
+              }
+              System.out.println(seen + "" + sl + " " + sl.headMap("fig") + " " + sl.descendingMap() + " " + sl.ceilingEntry("e") + " " + sl.pollFirstEntry() + " " + sl.putIfAbsent("kiwi", 9) + " " + sl.replace("kiwi", 4, 44) + " " + sl);
+              attempt("skip list null value", () -> sl.put("x", null));
+              attempt("skip list inconsistent range", () -> sl.subMap("z", "a"));
+              attempt("skip list view out of range", () -> sl.tailMap("d").tailMap("a"));
+              attempt("skip list entry setValue", () -> sl.entrySet().iterator().next().setValue(1));
+              java.util.concurrent.ConcurrentNavigableMap<String, Integer> part = sl.tailMap("d");
+              java.util.concurrent.ConcurrentSkipListSet<Integer> ss = new java.util.concurrent.ConcurrentSkipListSet<>(List.of(5, 3, 8, 1));
+              System.out.println(part + " " + part.firstKey() + " " + ss + " " + ss.headSet(5) + " " + ss.add(3) + " " + ss.pollFirst() + " " + ss.descendingSet());
+          }
+      }
+    expected: |
+      {apple=2, banana=1, cherry=1, date=1, fig=2, kiwi=1, pear=1} apple pear 2 2 null 1 true null
+      apple=2 cherry=1 date fig=10 null kiwi=1 {apple=2, banana=1, cherry=1, date=1, fig=10, grape=3}
+      {apple=2, banana=1, cherry=1} {fig=10, grape=3} {banana=1, cherry=1, date=1, fig=10} {grape=3, fig=10, date=1, cherry=1, banana=1, apple=2} [grape, fig, date, cherry, banana, apple] {grape=3, fig=10} grape
+      true 1731921241 true true
+      put out of range ! IllegalArgumentException key out of range
+      {30=n3, 35=x, 40=n4, 50=n5, 60=n6} 5 30 60 30 null null {60=n6}
+      headMap past the range ! IllegalArgumentException toKey out of range
+      tailMap below the range ! IllegalArgumentException fromKey out of range
+      subMap the wrong way ! IllegalArgumentException fromKey > toKey
+      subMap of a descending view = {60=n6, 50=n5, 40=n4}
+      subMap from above to below ! IllegalArgumentException fromKey > toKey
+      30=n3 60=n6 {10=n1, 20=n2, 35=x, 40=n4, 50=n5, 70=n7, 80=n8, 90=n9, 100=n10}
+      {10=n1, 20=n2, 35=x, 40=n4, 50=n5} 2 true
+      firstKey of nothing ! NoSuchElementException null
+      firstEntry of nothing = null
+      {Apple=2, BANANA=3} 2 true {6=v2, 5=v4, 3=v1, 2=v3, 1=v5, 0=v0} {6=v2, 5=v4} 5 {0=v0, 1=v5, 2=v3, 3=v1, 5=v4, 6=v2}
+      {null=0, b=1} 0 {null=0}
+      put null ! NullPointerException
+      get null ! NullPointerException
+      ceilingKey null of nothing = null
+      {(1,2)=a, (1,5)=b, (2,1)=c} (1,5)
+      {10=n1!, 35=x!, 40=n4!, 50=n5!}
+      put while walking ! ConcurrentModificationException null
+      value set while walking = {10=r, 11=r, 35=r, 40=r, 50=r}
+      firstEntry setValue ! UnsupportedOperationException null
+      computeIfAbsent that puts ! ConcurrentModificationException null
+      {10=r, 11=r, 35=r, 40=r, 50=r, 98=side} null five! five!? null {5=five!?, 10=r, 11=r, 35=r, 40=r, 50=r}
+      putFirst ! UnsupportedOperationException null
+      [10, 20, 30, 50, 70, 80, 90] false 10 30 [10, 20, 30] [80, 90] [20, 30, 50] [90, 80, 70, 50, 30, 20, 10] 10 90 20 80 [20, 30, 50, 70]
+      add out of range ! IllegalArgumentException key out of range
+      [20, 25, 30, 50, 70] [20, 25, 30, 50] true
+      [A, b, C] true true [b, C] true [C]
+      first of nothing ! NoSuchElementException null
+      removeFirst of nothing ! NoSuchElementException null
+      addFirst ! UnsupportedOperationException null
+      {3=1, 4=3, 5=1} [apple, fig, pear] 151
+      apple {grape=3, fig=10, date=1, cherry=1, banana=1, apple=2} {apple=2, banana=1} 20 [grape, fig, date, cherry, banana, apple] [] {}
+      unmodifiable pollFirstEntry ! UnsupportedOperationException null
+      unmodifiable view put ! UnsupportedOperationException null
+      unmodifiable entry setValue ! UnsupportedOperationException null
+      false true false true {b=3}
+      apple date fig grape pear {apple=5, cherry=6, date=4, fig=3, grape=5, pear=4} {apple=5, cherry=6, date=4} {pear=4, grape=5, fig=3, date=4, cherry=6, apple=5} fig=3 apple=5 null false {cherry=6, date=4, fig=3, grape=5, kiwi=9, pear=4}
+      skip list null value ! NullPointerException
+      skip list inconsistent range ! IllegalArgumentException inconsistent range
+      skip list view out of range ! IllegalArgumentException key out of range
+      skip list entry setValue ! UnsupportedOperationException null
+      {date=4, fig=3, grape=5, kiwi=9, pear=4} date [1, 3, 5, 8] [1, 3] false 1 [8, 5, 3]
   # java.text.MessageFormat: {n} and quoting, what toPattern writes back, the refusals of
   # a pattern, and an argument with no format type -- a number grouped by three, a double
   # rounded half to even at three digits, a tie decided by its own value, a whole number
@@ -8004,6 +8228,35 @@ cases:
               row("own AbstractSet", new SplitCaseSet());
               row("own AbstractCollection", new SplitCaseCollection());
               row("own Iterable", new SplitCaseThree());
+              TreeSet<Integer> treeSet = new TreeSet<>(list);
+              TreeMap<String, Integer> tree = new TreeMap<>(map);
+              java.util.concurrent.ConcurrentSkipListMap<String, Integer> skip = new java.util.concurrent.ConcurrentSkipListMap<>(map);
+              row("TreeSet", treeSet);
+              row("TreeSet headSet", treeSet.headSet(3));
+              row("TreeSet descendingSet", treeSet.descendingSet());
+              row("TreeMap keySet", tree.keySet());
+              row("TreeMap values", tree.values());
+              row("TreeMap entrySet", tree.entrySet());
+              row("TreeMap descendingKeySet", tree.descendingKeySet());
+              row("TreeMap headMap keySet", tree.headMap("b", true).keySet());
+              row("TreeMap headMap values", tree.headMap("b", true).values());
+              row("TreeMap headMap entrySet", tree.headMap("b", true).entrySet());
+              row("TreeMap headMap descendingKeySet", tree.headMap("b", true).descendingKeySet());
+              row("TreeMap descendingMap entrySet", tree.descendingMap().entrySet());
+              row("unmodifiableNavigableSet", Collections.unmodifiableNavigableSet(treeSet));
+              row("emptySortedSet", Collections.emptySortedSet());
+              row("ConcurrentSkipListMap keySet", skip.keySet());
+              row("ConcurrentSkipListMap values", skip.values());
+              row("ConcurrentSkipListMap entrySet", skip.entrySet());
+              row("ConcurrentSkipListMap descendingKeySet", skip.descendingKeySet());
+              row("ConcurrentSkipListMap headMap values", skip.headMap("b", true).values());
+              row("ConcurrentSkipListMap headMap entrySet", skip.headMap("b", true).entrySet());
+              row("ConcurrentSkipListSet", new java.util.concurrent.ConcurrentSkipListSet<>(list));
+              TreeSet<String> byLength = new TreeSet<>(Comparator.comparing(String::length));
+              System.out.println("sorted by: " + treeSet.spliterator().getComparator() + " " + (byLength.spliterator().getComparator() == byLength.comparator()) + " "
+                      + tree.entrySet().spliterator().getComparator().compare(Map.entry("a", 9), Map.entry("b", 0)) + " "
+                      + skip.descendingKeySet().spliterator().getComparator().compare("a", "b"));
+              fails("descendingSet getComparator", () -> treeSet.descendingSet().spliterator().getComparator());
 
               Spliterator<String> unknown = Spliterators.spliteratorUnknownSize(List.of("u", "v").iterator(), Spliterator.ORDERED | Spliterator.SIZED);
               System.out.println("unknown size: " + marks(unknown) + " size " + unknown.estimateSize());
@@ -8143,6 +8396,29 @@ cases:
       own AbstractSet: 16449 DISTINCT|SIZED|SUBSIZED, size 2 exact 2, advanced true size 2, [1, 2] size 2 again false
       own AbstractCollection: 16448 SIZED|SUBSIZED, size 2 exact 2, advanced true size 2, [1, 2] size 2 again false
       own Iterable: 0 , size 9223372036854775807 exact -1, advanced true size 9223372036854775807, [x, y, z] size 9223372036854775807 again false
+      TreeSet: 85 ORDERED|DISTINCT|SORTED|SIZED, size 3 exact 3, advanced true size 3, [1, 2, 3] size 3 again false
+      TreeSet headSet: 21 ORDERED|DISTINCT|SORTED, size 9223372036854775807 exact -1, advanced true size 9223372036854775807, [1, 2] size 9223372036854775807 again false
+      TreeSet descendingSet: 81 ORDERED|DISTINCT|SIZED, size 3 exact 3, advanced true size 3, [3, 2, 1] size 3 again false
+      TreeMap keySet: 85 ORDERED|DISTINCT|SORTED|SIZED, size 2 exact 2, advanced true size 2, [a, b] size 2 again false
+      TreeMap values: 80 ORDERED|SIZED, size 2 exact 2, advanced true size 2, [1, 2] size 2 again false
+      TreeMap entrySet: 85 ORDERED|DISTINCT|SORTED|SIZED, size 2 exact 2, advanced true size 2, [a=1, b=2] size 2 again false
+      TreeMap descendingKeySet: 81 ORDERED|DISTINCT|SIZED, size 2 exact 2, advanced true size 2, [b, a] size 2 again false
+      TreeMap headMap keySet: 21 ORDERED|DISTINCT|SORTED, size 9223372036854775807 exact -1, advanced true size 9223372036854775807, [a, b] size 9223372036854775807 again false
+      TreeMap headMap values: 16448 SIZED|SUBSIZED, size 2 exact 2, advanced true size 2, [1, 2] size 2 again false
+      TreeMap headMap entrySet: 16449 DISTINCT|SIZED|SUBSIZED, size 2 exact 2, advanced true size 2, [a=1, b=2] size 2 again false
+      TreeMap headMap descendingKeySet: 17 ORDERED|DISTINCT, size 9223372036854775807 exact -1, advanced true size 9223372036854775807, [b, a] size 9223372036854775807 again false
+      TreeMap descendingMap entrySet: 16449 DISTINCT|SIZED|SUBSIZED, size 2 exact 2, advanced true size 2, [b=2, a=1] size 2 again false
+      unmodifiableNavigableSet: 85 ORDERED|DISTINCT|SORTED|SIZED, size 3 exact 3, advanced true size 3, [1, 2, 3] size 3 again false
+      emptySortedSet: 85 ORDERED|DISTINCT|SORTED|SIZED, size 0 exact 0, advanced false size 0, [] size 0 again false
+      ConcurrentSkipListMap keySet: 4373 ORDERED|DISTINCT|SORTED|NONNULL|CONCURRENT, size 2 exact -1, advanced true size 2, [a, b] size 2 again false
+      ConcurrentSkipListMap values: 4368 ORDERED|NONNULL|CONCURRENT, size 2 exact -1, advanced true size 2, [1, 2] size 2 again false
+      ConcurrentSkipListMap entrySet: 4373 ORDERED|DISTINCT|SORTED|NONNULL|CONCURRENT, size 2 exact -1, advanced true size 2, [a=1, b=2] size 2 again false
+      ConcurrentSkipListMap descendingKeySet: 21 ORDERED|DISTINCT|SORTED, size 9223372036854775807 exact -1, advanced true size 9223372036854775807, [b, a] size 9223372036854775807 again false
+      ConcurrentSkipListMap headMap values: 0 , size 9223372036854775807 exact -1, advanced true size 9223372036854775807, [1, 2] size 9223372036854775807 again false
+      ConcurrentSkipListMap headMap entrySet: 1 DISTINCT, size 9223372036854775807 exact -1, advanced true size 9223372036854775807, [a=1, b=2] size 9223372036854775807 again false
+      ConcurrentSkipListSet: 4373 ORDERED|DISTINCT|SORTED|NONNULL|CONCURRENT, size 3 exact -1, advanced true size 3, [1, 2, 3] size 3 again false
+      sorted by: null true -1 1
+      descendingSet getComparator: java.lang.IllegalStateException null
       unknown size: 16 ORDERED size 9223372036854775807
       sized iterator: 16464 ORDERED|SIZED|SUBSIZED size 2
       concurrent: 4096 CONCURRENT size 2 exact -1

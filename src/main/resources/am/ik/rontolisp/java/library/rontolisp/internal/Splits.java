@@ -28,6 +28,9 @@ public final class Splits<T> implements Spliterator<T> {
 
     private final boolean counted;
 
+    // the order a SORTED one reports: null for the elements' own
+    private Comparator<? super T> order;
+
     // size: -1 for the source's size when the iterator is taken
     public Splits(Collection<? extends T> source, Iterator<? extends T> each, long size, int marks, boolean counted) {
         this.source = source;
@@ -48,6 +51,15 @@ public final class Splits<T> implements Spliterator<T> {
     // a collection that does not know its size without walking it (a concurrent queue)
     public static <T> Spliterator<T> unsized(Collection<? extends T> source, int marks) {
         return new Splits<>(source, null, Long.MAX_VALUE, marks, false);
+    }
+
+    // the keys of a sorted map or set, of a size taken when first asked for (-1) or never
+    // known (Long.MAX_VALUE)
+    public static <T> Spliterator<T> sorted(Collection<? extends T> source, int marks, Comparator<? super T> order,
+            long size) {
+        Splits<T> split = new Splits<>(source, null, size, marks, false);
+        split.order = order;
+        return split;
     }
 
     // a collection of one element nothing changes (Collections.singleton, List.of(e))
@@ -98,7 +110,7 @@ public final class Splits<T> implements Spliterator<T> {
 
     public Comparator<? super T> getComparator() {
         if ((marks & Spliterator.SORTED) != 0) {
-            return null;
+            return order;
         }
         throw new IllegalStateException();
     }

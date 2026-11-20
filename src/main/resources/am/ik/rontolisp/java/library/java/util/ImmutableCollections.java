@@ -241,7 +241,7 @@ final class ImmutableCollections {
         }
     }
 
-    static final class MapN<K, V> extends AbstractMap<K, V> {
+    static class MapN<K, V> extends AbstractMap<K, V> {
 
         private final Map<K, V> held;
 
@@ -269,6 +269,14 @@ final class ImmutableCollections {
         }
 
         public V remove(Object key) {
+            throw new UnsupportedOperationException();
+        }
+
+        public boolean remove(Object key, Object value) {
+            throw new UnsupportedOperationException();
+        }
+
+        public boolean replace(K key, V oldValue, V newValue) {
             throw new UnsupportedOperationException();
         }
 
@@ -341,6 +349,223 @@ final class ImmutableCollections {
 
         public int characteristics() {
             return held.characteristics();
+        }
+
+        public Comparator<? super E> getComparator() {
+            Comparator<?> order = held.getComparator();
+            return (Comparator<? super E>) order;
+        }
+    }
+
+    // Collections.unmodifiableSortedSet: the views of the set are views of this kind.
+    static class SortedView<E> extends Unchanging<E> implements SortedSet<E> {
+
+        private final SortedSet<E> sorted;
+
+        SortedView(SortedSet<E> sorted) {
+            super(sorted, HELD);
+            this.sorted = sorted;
+        }
+
+        public Comparator<? super E> comparator() {
+            return sorted.comparator();
+        }
+
+        public E first() {
+            return sorted.first();
+        }
+
+        public E last() {
+            return sorted.last();
+        }
+
+        public SortedSet<E> subSet(E fromElement, E toElement) {
+            return new SortedView<>(sorted.subSet(fromElement, toElement));
+        }
+
+        public SortedSet<E> headSet(E toElement) {
+            return new SortedView<>(sorted.headSet(toElement));
+        }
+
+        public SortedSet<E> tailSet(E fromElement) {
+            return new SortedView<>(sorted.tailSet(fromElement));
+        }
+    }
+
+    // Collections.unmodifiableNavigableSet.
+    static final class NavigableView<E> extends SortedView<E> implements NavigableSet<E> {
+
+        private final NavigableSet<E> navigable;
+
+        NavigableView(NavigableSet<E> navigable) {
+            super(navigable);
+            this.navigable = navigable;
+        }
+
+        public E lower(E e) {
+            return navigable.lower(e);
+        }
+
+        public E floor(E e) {
+            return navigable.floor(e);
+        }
+
+        public E ceiling(E e) {
+            return navigable.ceiling(e);
+        }
+
+        public E higher(E e) {
+            return navigable.higher(e);
+        }
+
+        public E pollFirst() {
+            throw new UnsupportedOperationException();
+        }
+
+        public E pollLast() {
+            throw new UnsupportedOperationException();
+        }
+
+        public NavigableSet<E> descendingSet() {
+            return new NavigableView<>(navigable.descendingSet());
+        }
+
+        public Iterator<E> descendingIterator() {
+            return new Reading<>(navigable.descendingIterator());
+        }
+
+        public NavigableSet<E> subSet(E fromElement, boolean fromInclusive, E toElement, boolean toInclusive) {
+            return new NavigableView<>(navigable.subSet(fromElement, fromInclusive, toElement, toInclusive));
+        }
+
+        public NavigableSet<E> headSet(E toElement, boolean inclusive) {
+            return new NavigableView<>(navigable.headSet(toElement, inclusive));
+        }
+
+        public NavigableSet<E> tailSet(E fromElement, boolean inclusive) {
+            return new NavigableView<>(navigable.tailSet(fromElement, inclusive));
+        }
+    }
+
+    // Collections.unmodifiableSortedMap: the views of the map are views of this kind.
+    static class SortedMapView<K, V> extends MapN<K, V> implements SortedMap<K, V> {
+
+        private final SortedMap<K, V> sorted;
+
+        SortedMapView(SortedMap<K, V> sorted) {
+            super(sorted, HELD);
+            this.sorted = sorted;
+        }
+
+        public Comparator<? super K> comparator() {
+            return sorted.comparator();
+        }
+
+        public K firstKey() {
+            return sorted.firstKey();
+        }
+
+        public K lastKey() {
+            return sorted.lastKey();
+        }
+
+        public SortedMap<K, V> subMap(K fromKey, K toKey) {
+            return new SortedMapView<>(sorted.subMap(fromKey, toKey));
+        }
+
+        public SortedMap<K, V> headMap(K toKey) {
+            return new SortedMapView<>(sorted.headMap(toKey));
+        }
+
+        public SortedMap<K, V> tailMap(K fromKey) {
+            return new SortedMapView<>(sorted.tailMap(fromKey));
+        }
+    }
+
+    // Collections.unmodifiableNavigableMap: an entry it answers is one nothing changes.
+    static final class NavigableMapView<K, V> extends SortedMapView<K, V> implements NavigableMap<K, V> {
+
+        private final NavigableMap<K, V> navigable;
+
+        NavigableMapView(NavigableMap<K, V> navigable) {
+            super(navigable);
+            this.navigable = navigable;
+        }
+
+        private static <K, V> Map.Entry<K, V> fixed(Map.Entry<K, V> entry) {
+            return entry == null ? null : new AbstractMap.SimpleImmutableEntry<>(entry.getKey(), entry.getValue());
+        }
+
+        public Map.Entry<K, V> lowerEntry(K key) {
+            return fixed(navigable.lowerEntry(key));
+        }
+
+        public K lowerKey(K key) {
+            return navigable.lowerKey(key);
+        }
+
+        public Map.Entry<K, V> floorEntry(K key) {
+            return fixed(navigable.floorEntry(key));
+        }
+
+        public K floorKey(K key) {
+            return navigable.floorKey(key);
+        }
+
+        public Map.Entry<K, V> ceilingEntry(K key) {
+            return fixed(navigable.ceilingEntry(key));
+        }
+
+        public K ceilingKey(K key) {
+            return navigable.ceilingKey(key);
+        }
+
+        public Map.Entry<K, V> higherEntry(K key) {
+            return fixed(navigable.higherEntry(key));
+        }
+
+        public K higherKey(K key) {
+            return navigable.higherKey(key);
+        }
+
+        public Map.Entry<K, V> firstEntry() {
+            return fixed(navigable.firstEntry());
+        }
+
+        public Map.Entry<K, V> lastEntry() {
+            return fixed(navigable.lastEntry());
+        }
+
+        public Map.Entry<K, V> pollFirstEntry() {
+            throw new UnsupportedOperationException();
+        }
+
+        public Map.Entry<K, V> pollLastEntry() {
+            throw new UnsupportedOperationException();
+        }
+
+        public NavigableMap<K, V> descendingMap() {
+            return new NavigableMapView<>(navigable.descendingMap());
+        }
+
+        public NavigableSet<K> navigableKeySet() {
+            return new NavigableView<>(navigable.navigableKeySet());
+        }
+
+        public NavigableSet<K> descendingKeySet() {
+            return new NavigableView<>(navigable.descendingKeySet());
+        }
+
+        public NavigableMap<K, V> subMap(K fromKey, boolean fromInclusive, K toKey, boolean toInclusive) {
+            return new NavigableMapView<>(navigable.subMap(fromKey, fromInclusive, toKey, toInclusive));
+        }
+
+        public NavigableMap<K, V> headMap(K toKey, boolean inclusive) {
+            return new NavigableMapView<>(navigable.headMap(toKey, inclusive));
+        }
+
+        public NavigableMap<K, V> tailMap(K fromKey, boolean inclusive) {
+            return new NavigableMapView<>(navigable.tailMap(fromKey, inclusive));
         }
     }
 

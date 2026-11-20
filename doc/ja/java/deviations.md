@@ -232,6 +232,11 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 文字列と整数のキーはこの状態になりません。
 `Set.of` と `Map.of` の順序は 1 つに決まっています。JDK は起動のたびに別の順序を選びます。
 
+**`TreeMap` がコンパレータに比べさせるキーの組は JDK と異なります。** 木の均衡の取り方が違うため、
+呼び出しを数えたり表示したりするコンパレータには、別の組が別の回数で渡されます。キーの順序とマップの
+答えは JDK と同じです。マップの `keySet()`、`values()`、`entrySet()`、`descendingMap()` は呼ぶたびに
+新しいビューです。JDK のマップは毎回同じオブジェクトを返します。
+
 **`Math` の関数は `StrictMath` の関数です。** そのため、結果はどのバックエンドとプロセッサでも
 同じです。JDK の `Math.sin`、`Math.exp` などは、最後の桁がこれと異なることがあります。
 
@@ -456,6 +461,11 @@ HTTP リクエストを送るプログラムは、その理由を示すメッセ
 **`ConcurrentHashMap` の走査順は JDK 25 と同じです。** ただし、チェーンが 64 本以上ある
 テーブルで、1 本のチェーンに 9 個のキーが入った場合の順序は一致しません。
 
+**`ConcurrentSkipListMap` のイテレータは、最後に返したキーの次のキーを読みます。** 先に読んだ
+エントリは、その後に削除されていても返し、変更を拒否しません。そうした削除の後に 2 つのキーの間へ
+置かれたキーもここでは返しますが、JDK のイテレータは飛ばすことがあります。`compute`、`merge` などに
+渡した関数は、マップのモニターの中で 1 回だけ実行されます。
+
 **`wait` で通知を受けたスレッドの状態は、`WAITING` のままの場合があります。** ほかのスレッドが
 保持しているモニターに入るのを待っているスレッドに対して、`getState` は `BLOCKED` を返します。
 一方、`wait` で通知を受けてモニターを取り直そうとしているスレッドに対しては、モニターを
@@ -628,11 +638,10 @@ WebSocket です。`version(..)` で指定した値は保持され、問い合�
   フィールド（`Interface.super::m`、`Outer.super.x`）。
 - `String`、`StringBuilder`、ボックスを継承するクラス。
 - `java.util.concurrent` のうち、[使える JDK のクラス](classes.md)の表にないもの。優先度順または遅延順の
-  キュー、`ConcurrentSkipListMap` です。`Date` を取る `Timer` の `schedule`、スレッドグループも
-  拒否されます。
+  キューです。`Date` を取る `Timer` の `schedule`、スレッドグループも拒否されます。
 - [使える JDK のクラス](classes.md)の表にない JDK のクラスとメンバー。
-  `TreeMap`、`Scanner`、ファイル（`File`、`FileReader`、
-  `java.nio.file`）、`java.util.Date` と `Calendar`、
+  `PriorityQueue`、`Scanner`、ファイル（`File`、`FileReader`、
+  `java.nio.file`）、`Calendar`、
   リフレクションなどです。
   `java.net` では、`URI`、サーバーのアドレス、[HTTP クライアント](#the-http-client)以外の
   すべてが該当します。

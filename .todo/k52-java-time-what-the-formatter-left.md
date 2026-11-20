@@ -41,6 +41,6 @@ today.
   while lowering (`Patterns` and the builder are 16 KB, and the parts no letter of the
   pattern needs go too; YAVI's `localDate(pattern)` passes its pattern on, so it keeps
   them all); the float arm of a generic `%string` (16 KB, which `"" + field` of an
-  interface type brings: `.todo/k47`'s type flow); `Parsed` (38 KB, of which the
+  interface type brings: `.todo/k55`'s type flow); `Parsed` (38 KB, of which the
   conversion of time fields 12.7 KB) in a program whose patterns have no letter of a
   time.
