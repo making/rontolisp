@@ -122,7 +122,7 @@ class JavaLoweringTest {
 							+ "NIL) (:PREDICATE |Circle?|) (:COPIER NIL)) (|r| 0.0))",
 					"(DEFSTRUCT (|j%L1| (:CONC-NAME L1.) (:CONSTRUCTOR |%make-L1| NIL) (:PREDICATE |j%L1?|) (:COPIER "
 							+ "NIL)))",
-					"(DEFVAR |Base.count|)",
+					"(DEFVAR |Base.count| 0)",
 					"(DEFUN |Base.<init>(String)| (|this| |label|) (PROGN (SETF (|Base.label| |this|) \"b\") (SETF "
 							+ "(|Base.label| |this|) |label|) (SETQ |Base.count| (%MASK-SIGNED-FIELD 32 (+ (THE "
 							+ "(SIGNED-BYTE 32) |Base.count|) 1)))))",
@@ -335,7 +335,8 @@ class JavaLoweringTest {
 					"(DEFUN |%initialization| NIL (PROGN (SETQ |Level.LOW| (|Level.new(String,int)| \"LOW\" 0)) (SETQ "
 							+ "|Level.HIGH| (|Level.new(String,int)| \"HIGH\" 1)) (SETQ |Level.$VALUES| (VECTOR |Level.LOW| "
 							+ "|Level.HIGH|)) (SETQ |Level.ALL| (|Level.values()|))))")
-			.containsSubsequence("(SETQ |Level.$VALUES| NIL)", "(SETQ |Log.lines| 0)", "(SETQ |Log.<clinit>%done| NIL)",
+			.contains("(DEFVAR |Level.$VALUES| NIL)", "(DEFVAR |Log.lines| 0)", "(DEFVAR |Log.<clinit>%done| NIL)")
+			.containsSubsequence(
 					"(%REPORTING-UNCAUGHT #'RONTOLISP::%JAVA-UNCAUGHT-LINE (%HOST-EXIT 1) (|%initialization|) "
 							+ "(|L2.main(String[])| (VECTOR)))");
 	}
@@ -796,7 +797,7 @@ class JavaLoweringTest {
 				}
 				""", "L12.java");
 		String made = "(|Class.new(String,String,String,int,Class,Class[],Class,Object,Object)| ";
-		assertThat(classes).contains("(DEFVAR |Kept%class|)",
+		assertThat(classes).contains("(DEFVAR |Kept%class| NIL)",
 				"(DEFUN |Kept%class-of| (|%o|) (COND ((|Kept?| |%o|) |Kept%class|) (T (RONTOLISP::%JAVA-NO-CLASS |%o|))))",
 				"(DEFUN |L12.main(String[])| (|args|) (LET ((|kept| (|Kept.new()|))) (LET ((|held| (|Kept%class-of| "
 						+ "|kept|))) (WRITE-LINE (%STRING-CONCAT (%STRING-CONCAT (OR (|L12.above(Class)| |held|) \"null\") "

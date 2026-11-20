@@ -3819,9 +3819,15 @@ virtual call can run --, classes used):
   not known to be initialized (`initialized`: the class itself, a subclass, a class declared
   inside one of those and not static). The class the program starts at is initialized by the
   entry form and never tested.
-- Constant variables are set first; a field holds its type's default before its initializer
-  only when something can read it there (no initializer, a lazy class, a read through a method
-  the initialization calls or by a qualified name ahead of the field).
+- Constant variables are set first. Every static field is `(defvar |C.f| <default>)`, its type's
+  default (JLS 12.4: before its initializer, and for a class a read finds not yet initialized);
+  so is each `|C.<clinit>%done|` flag (nil), class object and interned string. A `defvar`
+  without a value is a special without one, every read of it a test of the UNBOUND marker
+  and a call to the `unbound-variable` report ([dynamic-special-variables.md](dynamic-special-variables.md),
+  "A read of a special without a value"): a static is never unbound. Measured 2026-11-21 (k67,
+  wasm P1): the `Europe/Paris` program (`ZonedDateTime.of(..).plusHours(1)`) 173,105 -> 170,858 B
+  (-2,247), `examples/java/shop` 319,781 -> 318,309 B (-1,472; the fields -864, the `%done`
+  flags -608). A session's buffer still sets the defaults of a class it declares again.
 - The decision is made at the end of a pass and the next pass is lowered with it.
 - **Where it runs** (k63): what cannot throw -- the class objects, the constant fields, the
   defaults a field holds ahead of its initializer, the lazy classes' flags -- is set by

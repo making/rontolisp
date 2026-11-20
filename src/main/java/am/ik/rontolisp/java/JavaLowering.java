@@ -1323,11 +1323,12 @@ final class JavaLowering implements JavaEmitter.Context {
 			if (!field.isStatic) {
 				continue;
 			}
-			// a session's variable holds its type's default from its declaration on, also
-			// when the step giving it its value fails
-			this.variables.add(this.session != null && declaration == this.declared.get(0)
-					? list(cl("defvar"), JavaNames.global(field), defaultValue(field.type))
-					: list(cl("defvar"), JavaNames.global(field)));
+			// a variable holds its type's default from its declaration on (JLS 12.4:
+			// before
+			// its initializer runs, and when the step giving it its value fails); one
+			// with no
+			// value would be a special without one, every read of it a test for unbound
+			this.variables.add(list(cl("defvar"), JavaNames.global(field), defaultValue(field.type)));
 			if (field.initializer != null && constantOf(field) == null) {
 				items.add(new Item(field.pos, field, null));
 			}
@@ -8100,7 +8101,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			inits.add(call("if", variable, NIL, call("setq", variable, object)));
 		}
 		else {
-			forms.add(list(cl("defvar"), variable));
+			forms.add(list(cl("defvar"), variable, NIL));
 			inits.add(call("setq", variable, object));
 		}
 		return variable;
@@ -10376,7 +10377,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		// can throw, and one form holding them all can be more than a method of a
 		// JVM class holds
 		for (Map.Entry<String, LispSymbol> constant : this.interned.entrySet()) {
-			this.variables.add(list(cl("defvar"), constant.getValue()));
+			this.variables.add(list(cl("defvar"), constant.getValue(), NIL));
 			this.internings.add(call("setq", constant.getValue(), runtimeCall("intern", string(constant.getKey()))));
 		}
 		for (JavaClass declaration : this.classes.all()) {
@@ -10402,9 +10403,10 @@ final class JavaLowering implements JavaEmitter.Context {
 					settings.add(call("setq", JavaNames.global(field),
 							constant instanceof String text ? constantString(text).form() : constant(constant).form()));
 				}
-				else if (fresh && (field.initializer == null || this.order.isLazy(declaration)
+				else if (fresh && this.session != null && (field.initializer == null || this.order.isLazy(declaration)
 						|| called.reads.contains(field))) {
-					// a field read ahead of its initializer holds its type's default
+					// a buffer declaring the class again starts it from its type's
+					// default
 					settings.add(call("setq", JavaNames.global(field), defaultValue(field.type)));
 				}
 			}
@@ -10419,8 +10421,8 @@ final class JavaLowering implements JavaEmitter.Context {
 				continue;
 			}
 			LispSymbol done = JavaNames.initialized(declaration);
-			this.variables.add(list(cl("defvar"), done));
-			if (isFresh(declaration)) {
+			this.variables.add(list(cl("defvar"), done, NIL));
+			if (this.session != null && isFresh(declaration)) {
 				settings.add(call("setq", done, NIL));
 			}
 			List<LispVal> body = new ArrayList<>();
