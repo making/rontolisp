@@ -32,6 +32,9 @@ public abstract class AbstractList<E> extends AbstractCollection<E> implements L
     }
 
     public boolean addAll(int index, Collection<? extends E> c) {
+        if (index < 0 || index > size()) {
+            throw new IndexOutOfBoundsException("Index: " + index + ", Size: " + size());
+        }
         int at = index;
         for (E e : c) {
             add(at++, e);

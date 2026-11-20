@@ -121,7 +121,7 @@ public final class Arrays {
 
     @SafeVarargs
     public static <T> List<T> asList(T... a) {
-        return new ArrayView<>(a);
+        return new ArrayList<>(a);
     }
 
     private static native void sortRange(int[] a, int from, int to);
@@ -1056,12 +1056,13 @@ public final class Arrays {
         return hash;
     }
 
-    // The list Arrays.asList answers: the array itself, so of a fixed size.
-    static final class ArrayView<E> extends AbstractList<E> implements RandomAccess {
+    // The list Arrays.asList answers: the array itself, so of a fixed size. Its iterator
+    // removes nothing, with the words of Iterator's remove.
+    static final class ArrayList<E> extends AbstractList<E> implements RandomAccess {
 
         private final E[] held;
 
-        ArrayView(E[] held) {
+        ArrayList(E[] held) {
             if (held == null) {
                 throw new NullPointerException();
             }
@@ -1082,6 +1083,10 @@ public final class Arrays {
             return old;
         }
 
+        public Iterator<E> iterator() {
+            return new ArrayItr<>(held);
+        }
+
         public Object[] toArray() {
             Object[] out = new Object[held.length];
             System.arraycopy(held, 0, out, 0, held.length);
@@ -1090,6 +1095,28 @@ public final class Arrays {
 
         public void sort(Comparator<? super E> c) {
             sortObjects(held, 0, held.length, c);
+        }
+    }
+
+    static final class ArrayItr<E> implements Iterator<E> {
+
+        private final E[] held;
+
+        private int cursor;
+
+        ArrayItr(E[] held) {
+            this.held = held;
+        }
+
+        public boolean hasNext() {
+            return cursor < held.length;
+        }
+
+        public E next() {
+            if (cursor >= held.length) {
+                throw new NoSuchElementException();
+            }
+            return held[cursor++];
         }
     }
 }

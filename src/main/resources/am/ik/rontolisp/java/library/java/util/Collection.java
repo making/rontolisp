@@ -52,6 +52,7 @@ public interface Collection<E> extends Iterable<E> {
     }
 
     default boolean removeIf(Predicate<? super E> filter) {
+        Objects.requireNonNull(filter);
         boolean removed = false;
         Iterator<E> each = iterator();
         while (each.hasNext()) {

@@ -443,6 +443,19 @@ algorithm came from, and the answer goes in the file's header.
   refuses (and that `tailSet` of a range keeps only its other end), what a default view's
   ends cost the map. The answers are lines of `java-spec.yaml`, which the JDK leg asks
   again.
+- **The collections of `Collections`, `List.of`'s refusals and a bridge's cast (k60,
+  2026-11-20).** Written from the API documentation (the abstract collections' stated
+  defaults, the null checks `forEach`, `removeIf` and their kind specify) and JDK 25's
+  answers to probes (`Imm.java`, 1,406 lines: every member of 22 immutable and unmodifiable
+  collections; `Imm2.java`: the empty iterators, `singletonMap`'s views, the parts of
+  `List.of`; `Rev.java`: the bulk changes of 12 reversed views; `Raw.java`: a raw
+  `Comparable` given another class; `.todo/artefacts/k60-java-front-end-what-k55-left/`).
+  Nobody opened OpenJDK's source. What the documentation does not state was read off the
+  answers: which members of a collection of one refuse at once (`removeIf`, the iterator's
+  `remove`), the words of each index refusal, that a map of one mapping's `values()` is a
+  set, which bulk changes a reversed view walks, that `CopyOnWriteArrayList`'s view hands
+  an index on unchecked. The answers are lines of `java-spec.yaml`, which the JDK leg asks
+  again.
 - **Computed resource names, `Properties`, `ResourceBundle`, `ServiceLoader` (k58,
   2026-11-20).** Written from the API documentation (`Properties.load`'s grammar and
   `store`'s escapes and order of keys, `ResourceBundle.getBundle`'s lookup with its

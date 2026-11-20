@@ -3,6 +3,14 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.function.UnaryOperator;
+import rontolisp.internal.Splits;
+
 public final class Collections {
 
     private Collections() {
@@ -163,35 +171,43 @@ public final class Collections {
         if (n < 0) {
             throw new IllegalArgumentException("List length = " + n);
         }
-        Object[] held = new Object[n];
-        for (int i = 0; i < n; i++) {
-            held[i] = value;
-        }
-        return new ImmutableCollections.ListN<>(held);
+        return new CopiesList<>(n, value);
     }
 
     public static <T> List<T> emptyList() {
-        return new ImmutableCollections.ListN<>(new Object[0], ImmutableCollections.EMPTY);
+        return (List<T>) EmptyList.SELF;
     }
 
     public static <T> Set<T> emptySet() {
-        return new ImmutableCollections.SetN<>(new HashSet<T>(), ImmutableCollections.EMPTY);
+        return (Set<T>) EmptySet.SELF;
     }
 
     public static <K, V> Map<K, V> emptyMap() {
-        return new ImmutableCollections.MapN<>(new HashMap<K, V>(), ImmutableCollections.EMPTY);
+        return (Map<K, V>) EmptyMap.SELF;
+    }
+
+    public static <T> Iterator<T> emptyIterator() {
+        return (Iterator<T>) EmptyIterator.SELF;
+    }
+
+    public static <T> ListIterator<T> emptyListIterator() {
+        return (ListIterator<T>) EmptyListIterator.EMPTY;
+    }
+
+    public static <T> Enumeration<T> emptyEnumeration() {
+        return (Enumeration<T>) EmptyEnumeration.SELF;
     }
 
     public static <T> List<T> singletonList(T value) {
-        Object[] held = new Object[1];
-        held[0] = value;
-        return new ImmutableCollections.ListN<>(held, ImmutableCollections.ONE);
+        return new SingletonList<>(value);
     }
 
     public static <T> Set<T> singleton(T value) {
-        HashSet<T> held = new HashSet<>();
-        held.add(value);
-        return new ImmutableCollections.SetN<>(held, ImmutableCollections.ONE);
+        return new SingletonSet<>(value);
+    }
+
+    public static <K, V> Map<K, V> singletonMap(K key, V value) {
+        return new SingletonMap<>(key, value);
     }
 
     public static <T> List<T> unmodifiableList(List<? extends T> list) {
@@ -493,5 +509,569 @@ public final class Collections {
                 return elements.next();
             }
         };
+    }
+
+    // The collections of no element, of one, and of n copies of one: their members are
+    // those of the abstract collection each extends, so a change is refused where it
+    // would change something and answered where it would not; what each refuses at once,
+    // and with which words, is a JDK's answer. An empty one is one object.
+
+    static class EmptyIterator<E> implements Iterator<E> {
+
+        static final EmptyIterator<Object> SELF = new EmptyIterator<>();
+
+        public boolean hasNext() {
+            return false;
+        }
+
+        public E next() {
+            throw new NoSuchElementException();
+        }
+
+        public void remove() {
+            throw new IllegalStateException();
+        }
+
+        public void forEachRemaining(Consumer<? super E> action) {
+            Objects.requireNonNull(action);
+        }
+    }
+
+    static final class EmptyListIterator<E> extends EmptyIterator<E> implements ListIterator<E> {
+
+        static final EmptyListIterator<Object> EMPTY = new EmptyListIterator<>();
+
+        public boolean hasPrevious() {
+            return false;
+        }
+
+        public E previous() {
+            throw new NoSuchElementException();
+        }
+
+        public int nextIndex() {
+            return 0;
+        }
+
+        public int previousIndex() {
+            return -1;
+        }
+
+        public void set(E e) {
+            throw new IllegalStateException();
+        }
+
+        public void add(E e) {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    static final class EmptyEnumeration<E> implements Enumeration<E> {
+
+        static final EmptyEnumeration<Object> SELF = new EmptyEnumeration<>();
+
+        public boolean hasMoreElements() {
+            return false;
+        }
+
+        public E nextElement() {
+            throw new NoSuchElementException();
+        }
+
+        public Iterator<E> asIterator() {
+            return emptyIterator();
+        }
+    }
+
+    // The iterator of one element, which removes nothing.
+    static final class One<E> implements Iterator<E> {
+
+        private final E element;
+
+        private boolean given;
+
+        One(E element) {
+            this.element = element;
+        }
+
+        public boolean hasNext() {
+            return !given;
+        }
+
+        public E next() {
+            if (given) {
+                throw new NoSuchElementException();
+            }
+            given = true;
+            return element;
+        }
+
+        public void remove() {
+            throw new UnsupportedOperationException();
+        }
+
+        public void forEachRemaining(Consumer<? super E> action) {
+            Objects.requireNonNull(action);
+            if (!given) {
+                given = true;
+                action.accept(element);
+            }
+        }
+    }
+
+    private static boolean same(Object o, Object e) {
+        return o == null ? e == null : o.equals(e);
+    }
+
+    static final class EmptyList<E> extends AbstractList<E> implements RandomAccess {
+
+        static final EmptyList<Object> SELF = new EmptyList<>();
+
+        public int size() {
+            return 0;
+        }
+
+        public boolean isEmpty() {
+            return true;
+        }
+
+        public boolean contains(Object o) {
+            return false;
+        }
+
+        public boolean containsAll(Collection<?> c) {
+            return c.isEmpty();
+        }
+
+        public E get(int index) {
+            throw new IndexOutOfBoundsException("Index: " + index);
+        }
+
+        public Iterator<E> iterator() {
+            return emptyIterator();
+        }
+
+        public ListIterator<E> listIterator() {
+            return emptyListIterator();
+        }
+
+        public Object[] toArray() {
+            return new Object[0];
+        }
+
+        public <T> T[] toArray(T[] a) {
+            if (a.length > 0) {
+                a[0] = null;
+            }
+            return a;
+        }
+
+        public boolean removeIf(Predicate<? super E> filter) {
+            Objects.requireNonNull(filter);
+            return false;
+        }
+
+        public void replaceAll(UnaryOperator<E> operator) {
+            Objects.requireNonNull(operator);
+        }
+
+        public void sort(Comparator<? super E> c) {
+        }
+
+        public void forEach(Consumer<? super E> action) {
+            Objects.requireNonNull(action);
+        }
+
+        public Spliterator<E> spliterator() {
+            return Splits.counted(this, Spliterator.SIZED | Spliterator.SUBSIZED);
+        }
+
+        public boolean equals(Object o) {
+            return o instanceof List && ((List<?>) o).isEmpty();
+        }
+
+        public int hashCode() {
+            return 1;
+        }
+    }
+
+    static final class SingletonList<E> extends AbstractList<E> implements RandomAccess {
+
+        private final E element;
+
+        SingletonList(E element) {
+            this.element = element;
+        }
+
+        public int size() {
+            return 1;
+        }
+
+        public boolean contains(Object o) {
+            return same(o, element);
+        }
+
+        public E get(int index) {
+            if (index != 0) {
+                throw new IndexOutOfBoundsException("Index: " + index + ", Size: 1");
+            }
+            return element;
+        }
+
+        public Iterator<E> iterator() {
+            return new One<>(element);
+        }
+
+        public boolean removeIf(Predicate<? super E> filter) {
+            throw new UnsupportedOperationException();
+        }
+
+        public void replaceAll(UnaryOperator<E> operator) {
+            throw new UnsupportedOperationException();
+        }
+
+        public void sort(Comparator<? super E> c) {
+        }
+
+        public void forEach(Consumer<? super E> action) {
+            action.accept(element);
+        }
+
+        public Spliterator<E> spliterator() {
+            return Splits.one(this);
+        }
+
+        public int hashCode() {
+            return 31 + (element == null ? 0 : element.hashCode());
+        }
+    }
+
+    static final class CopiesList<E> extends AbstractList<E> implements RandomAccess {
+
+        private final int n;
+
+        private final E element;
+
+        CopiesList(int n, E element) {
+            this.n = n;
+            this.element = element;
+        }
+
+        public int size() {
+            return n;
+        }
+
+        public boolean contains(Object o) {
+            return n != 0 && same(o, element);
+        }
+
+        public int indexOf(Object o) {
+            return contains(o) ? 0 : -1;
+        }
+
+        public int lastIndexOf(Object o) {
+            return contains(o) ? n - 1 : -1;
+        }
+
+        public E get(int index) {
+            Objects.checkIndex(index, n);
+            return element;
+        }
+
+        public Object[] toArray() {
+            Object[] out = new Object[n];
+            for (int i = 0; i < n; i++) {
+                out[i] = element;
+            }
+            return out;
+        }
+
+        public List<E> subList(int from, int to) {
+            if (from < 0) {
+                throw new IndexOutOfBoundsException("fromIndex = " + from);
+            }
+            if (to > n) {
+                throw new IndexOutOfBoundsException("toIndex = " + to);
+            }
+            if (from > to) {
+                throw new IllegalArgumentException("fromIndex(" + from + ") > toIndex(" + to + ")");
+            }
+            return new CopiesList<>(to - from, element);
+        }
+
+        public Spliterator<E> spliterator() {
+            return Splits.counted(this, n == 0 ? Spliterator.SIZED | Spliterator.SUBSIZED
+                    : Spliterator.ORDERED | Spliterator.SIZED | Spliterator.SUBSIZED);
+        }
+    }
+
+    static final class EmptySet<E> extends AbstractSet<E> {
+
+        static final EmptySet<Object> SELF = new EmptySet<>();
+
+        public Iterator<E> iterator() {
+            return emptyIterator();
+        }
+
+        public int size() {
+            return 0;
+        }
+
+        public boolean isEmpty() {
+            return true;
+        }
+
+        public boolean contains(Object o) {
+            return false;
+        }
+
+        public boolean containsAll(Collection<?> c) {
+            return c.isEmpty();
+        }
+
+        public Object[] toArray() {
+            return new Object[0];
+        }
+
+        public <T> T[] toArray(T[] a) {
+            if (a.length > 0) {
+                a[0] = null;
+            }
+            return a;
+        }
+
+        public boolean removeIf(Predicate<? super E> filter) {
+            Objects.requireNonNull(filter);
+            return false;
+        }
+
+        public void forEach(Consumer<? super E> action) {
+            Objects.requireNonNull(action);
+        }
+
+        public Spliterator<E> spliterator() {
+            return Splits.counted(this, Spliterator.SIZED | Spliterator.SUBSIZED);
+        }
+
+        public int hashCode() {
+            return 0;
+        }
+    }
+
+    static final class SingletonSet<E> extends AbstractSet<E> {
+
+        private final E element;
+
+        SingletonSet(E element) {
+            this.element = element;
+        }
+
+        public Iterator<E> iterator() {
+            return new One<>(element);
+        }
+
+        public int size() {
+            return 1;
+        }
+
+        public boolean contains(Object o) {
+            return same(o, element);
+        }
+
+        public boolean removeIf(Predicate<? super E> filter) {
+            throw new UnsupportedOperationException();
+        }
+
+        public void forEach(Consumer<? super E> action) {
+            action.accept(element);
+        }
+
+        public Spliterator<E> spliterator() {
+            return Splits.one(this);
+        }
+
+        public int hashCode() {
+            return element == null ? 0 : element.hashCode();
+        }
+    }
+
+    // A map of no mapping: its views are the empty set.
+    static final class EmptyMap<K, V> extends AbstractMap<K, V> {
+
+        static final EmptyMap<Object, Object> SELF = new EmptyMap<>();
+
+        public int size() {
+            return 0;
+        }
+
+        public boolean isEmpty() {
+            return true;
+        }
+
+        public boolean containsKey(Object key) {
+            return false;
+        }
+
+        public boolean containsValue(Object value) {
+            return false;
+        }
+
+        public V get(Object key) {
+            return null;
+        }
+
+        public V getOrDefault(Object key, V defaultValue) {
+            return defaultValue;
+        }
+
+        public Set<K> keySet() {
+            return emptySet();
+        }
+
+        public Collection<V> values() {
+            return emptySet();
+        }
+
+        public Set<Map.Entry<K, V>> entrySet() {
+            return emptySet();
+        }
+
+        public boolean equals(Object o) {
+            return o instanceof Map && ((Map<?, ?>) o).isEmpty();
+        }
+
+        public int hashCode() {
+            return 0;
+        }
+
+        public void forEach(BiConsumer<? super K, ? super V> action) {
+            Objects.requireNonNull(action);
+        }
+
+        public void replaceAll(BiFunction<? super K, ? super V, ? extends V> function) {
+            Objects.requireNonNull(function);
+        }
+
+        public V putIfAbsent(K key, V value) {
+            throw new UnsupportedOperationException();
+        }
+
+        public boolean remove(Object key, Object value) {
+            throw new UnsupportedOperationException();
+        }
+
+        public boolean replace(K key, V oldValue, V newValue) {
+            throw new UnsupportedOperationException();
+        }
+
+        public V replace(K key, V value) {
+            throw new UnsupportedOperationException();
+        }
+
+        public V computeIfAbsent(K key, Function<? super K, ? extends V> function) {
+            throw new UnsupportedOperationException();
+        }
+
+        public V computeIfPresent(K key, BiFunction<? super K, ? super V, ? extends V> function) {
+            throw new UnsupportedOperationException();
+        }
+
+        public V compute(K key, BiFunction<? super K, ? super V, ? extends V> function) {
+            throw new UnsupportedOperationException();
+        }
+
+        public V merge(K key, V value, BiFunction<? super V, ? super V, ? extends V> function) {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    // A map of one mapping: its views are sets of one element, its entry one nothing
+    // changes.
+    static final class SingletonMap<K, V> extends AbstractMap<K, V> {
+
+        private final K key;
+
+        private final V value;
+
+        SingletonMap(K key, V value) {
+            this.key = key;
+            this.value = value;
+        }
+
+        public int size() {
+            return 1;
+        }
+
+        public boolean isEmpty() {
+            return false;
+        }
+
+        public boolean containsKey(Object k) {
+            return same(k, key);
+        }
+
+        public boolean containsValue(Object v) {
+            return same(v, value);
+        }
+
+        public V get(Object k) {
+            return same(k, key) ? value : null;
+        }
+
+        public V getOrDefault(Object k, V defaultValue) {
+            return same(k, key) ? value : defaultValue;
+        }
+
+        public Set<K> keySet() {
+            return singleton(key);
+        }
+
+        public Collection<V> values() {
+            return singleton(value);
+        }
+
+        public Set<Map.Entry<K, V>> entrySet() {
+            return singleton(new AbstractMap.SimpleImmutableEntry<>(key, value));
+        }
+
+        public void forEach(BiConsumer<? super K, ? super V> action) {
+            action.accept(key, value);
+        }
+
+        public void replaceAll(BiFunction<? super K, ? super V, ? extends V> function) {
+            throw new UnsupportedOperationException();
+        }
+
+        public V putIfAbsent(K key, V value) {
+            throw new UnsupportedOperationException();
+        }
+
+        public boolean remove(Object key, Object value) {
+            throw new UnsupportedOperationException();
+        }
+
+        public boolean replace(K key, V oldValue, V newValue) {
+            throw new UnsupportedOperationException();
+        }
+
+        public V replace(K key, V value) {
+            throw new UnsupportedOperationException();
+        }
+
+        public V computeIfAbsent(K key, Function<? super K, ? extends V> function) {
+            throw new UnsupportedOperationException();
+        }
+
+        public V computeIfPresent(K key, BiFunction<? super K, ? super V, ? extends V> function) {
+            throw new UnsupportedOperationException();
+        }
+
+        public V compute(K key, BiFunction<? super K, ? super V, ? extends V> function) {
+            throw new UnsupportedOperationException();
+        }
+
+        public V merge(K key, V value, BiFunction<? super V, ? super V, ? extends V> function) {
+            throw new UnsupportedOperationException();
+        }
     }
 }

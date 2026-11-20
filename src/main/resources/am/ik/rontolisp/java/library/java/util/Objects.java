@@ -38,12 +38,9 @@ public final class Objects {
         return o != null;
     }
 
-    public static <T> T requireNonNull(T o) {
-        if (o == null) {
-            throw new NullPointerException();
-        }
-        return o;
-    }
+    // the run time's NullPointerException, which has no message: no exception is made
+    // where nothing is null
+    public static native <T> T requireNonNull(T o);
 
     public static <T> T requireNonNull(T o, String message) {
         if (o == null) {

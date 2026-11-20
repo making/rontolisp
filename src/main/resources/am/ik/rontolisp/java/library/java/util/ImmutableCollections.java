@@ -14,13 +14,10 @@ import rontolisp.internal.Splits;
 final class ImmutableCollections {
 
     // What the spliterator of each reports, as a JDK's does: the held collection's, the
-    // default of its interface, an empty collection's (Collections.empty*) or a
-    // collection's of one element (Collections.singleton*, List.of(e), Set.of(e)).
+    // default of its interface, or a collection's of one element (List.of(e), Set.of(e)).
     static final int HELD = 0;
 
     static final int OWN = 1;
-
-    static final int EMPTY = 2;
 
     static final int ONE = 3;
 
@@ -29,12 +26,15 @@ final class ImmutableCollections {
 
     static <E> Spliterator<E> split(Collection<E> self, int how, int own) {
         if (how == ONE) {
-            return Splits.one(self);
+            return Splits.counted(self, Spliterator.ORDERED | Spliterator.DISTINCT | Spliterator.SIZED
+                    | Spliterator.SUBSIZED | Spliterator.IMMUTABLE | Spliterator.NONNULL);
         }
-        return Splits.counted(self, how == EMPTY ? Spliterator.SIZED | Spliterator.SUBSIZED : own);
+        return Splits.counted(self, own);
     }
 
-    static final class ListN<E> extends AbstractList<E> implements RandomAccess {
+    // The list of List.of and List.copyOf: it holds no null, refuses a null asked for,
+    // and refuses every change at once. An index outside it is its array's.
+    static class ListN<E> extends AbstractList<E> implements RandomAccess {
 
         private final Object[] held;
 
@@ -63,10 +63,15 @@ final class ImmutableCollections {
         }
 
         public E get(int index) {
-            if (index < 0 || index >= held.length) {
-                throw new IndexOutOfBoundsException("Index " + index + " out of bounds for length " + held.length);
-            }
             return (E) held[index];
+        }
+
+        public int indexOf(Object o) {
+            return super.indexOf(Objects.requireNonNull(o));
+        }
+
+        public int lastIndexOf(Object o) {
+            return super.lastIndexOf(Objects.requireNonNull(o));
         }
 
         public ListIterator<E> listIterator(int index) {
@@ -74,6 +79,28 @@ final class ImmutableCollections {
                 throw new IndexOutOfBoundsException("Index: " + index + " Size: " + held.length);
             }
             return super.listIterator(index);
+        }
+
+        // a part of the elements, which is a list of its own
+        public List<E> subList(int from, int to) {
+            if (from < 0) {
+                throw new IndexOutOfBoundsException("fromIndex = " + from);
+            }
+            if (to > held.length) {
+                throw new IndexOutOfBoundsException("toIndex = " + to);
+            }
+            if (from > to) {
+                throw new IllegalArgumentException("fromIndex(" + from + ") > toIndex(" + to + ")");
+            }
+            Object[] part = new Object[to - from];
+            System.arraycopy(held, from, part, 0, to - from);
+            return new ImmutableCollections.SubList<>(part);
+        }
+
+        // the array's elements from one index to another, as a view: what
+        // Spliterators.spliterator walks
+        List<E> range(int from, int to) {
+            return super.subList(from, to);
         }
 
         public boolean add(E e) {
@@ -88,11 +115,23 @@ final class ImmutableCollections {
             throw new UnsupportedOperationException();
         }
 
+        public boolean addAll(int index, Collection<? extends E> c) {
+            throw new UnsupportedOperationException();
+        }
+
         public boolean removeAll(Collection<?> c) {
             throw new UnsupportedOperationException();
         }
 
         public boolean retainAll(Collection<?> c) {
+            throw new UnsupportedOperationException();
+        }
+
+        public boolean removeIf(Predicate<? super E> filter) {
+            throw new UnsupportedOperationException();
+        }
+
+        public void replaceAll(UnaryOperator<E> operator) {
             throw new UnsupportedOperationException();
         }
 
@@ -104,10 +143,32 @@ final class ImmutableCollections {
             throw new UnsupportedOperationException();
         }
 
+        public E removeFirst() {
+            throw new UnsupportedOperationException();
+        }
+
+        public E removeLast() {
+            throw new UnsupportedOperationException();
+        }
+
         public Object[] toArray() {
             Object[] out = new Object[held.length];
             System.arraycopy(held, 0, out, 0, held.length);
             return out;
+        }
+    }
+
+    // A part of such a list, a list of its own: an index outside it is refused with
+    // checkIndex's words.
+    static final class SubList<E> extends ListN<E> {
+
+        SubList(Object[] held) {
+            super(held, OWN);
+        }
+
+        public E get(int index) {
+            Objects.checkIndex(index, size());
+            return super.get(index);
         }
     }
 
@@ -159,6 +220,10 @@ final class ImmutableCollections {
             return new Reading<>(held.iterator());
         }
 
+        public boolean addAll(Collection<? extends E> c) {
+            throw new UnsupportedOperationException();
+        }
+
         public boolean remove(Object o) {
             throw new UnsupportedOperationException();
         }
@@ -181,10 +246,18 @@ final class ImmutableCollections {
     }
 
     // A set is equal to a set of the same elements: one of these is to its held set's.
+    // The set of Set.of refuses a null asked for.
     static class SetN<E> extends Unchanging<E> implements Set<E> {
 
         SetN(Set<E> held, int how) {
             super(held, how);
+        }
+
+        public boolean contains(Object o) {
+            if (how != HELD) {
+                Objects.requireNonNull(o);
+            }
+            return held.contains(o);
         }
 
         public boolean equals(Object o) {
@@ -232,6 +305,19 @@ final class ImmutableCollections {
 
         public Spliterator<E> spliterator() {
             return held.spliterator();
+        }
+
+        // a view of the part, which changes nothing either
+        public List<E> subList(int from, int to) {
+            return new ListView<>(held.subList(from, to));
+        }
+
+        public boolean addAll(Collection<? extends E> c) {
+            throw new UnsupportedOperationException();
+        }
+
+        public boolean addAll(int index, Collection<? extends E> c) {
+            throw new UnsupportedOperationException();
         }
 
         public boolean remove(Object o) {
@@ -282,12 +368,31 @@ final class ImmutableCollections {
             return held.size();
         }
 
+        // a null asked of the map of Map.of is refused
+        private void asked(Object o) {
+            if (how != HELD) {
+                Objects.requireNonNull(o);
+            }
+        }
+
         public boolean containsKey(Object key) {
+            asked(key);
             return held.containsKey(key);
         }
 
+        public boolean containsValue(Object value) {
+            asked(value);
+            return held.containsValue(value);
+        }
+
         public V get(Object key) {
+            asked(key);
             return held.get(key);
+        }
+
+        public V getOrDefault(Object key, V defaultValue) {
+            asked(key);
+            return held.getOrDefault(key, defaultValue);
         }
 
         public V remove(Object key) {
@@ -339,12 +444,14 @@ final class ImmutableCollections {
             throw new UnsupportedOperationException();
         }
 
+        // the keys and values of Map.of's map are AbstractMap's, whose changes go through
+        // the entries' iterator, which removes nothing
         public Set<K> keySet() {
-            return new SetN<>(held.keySet(), how);
+            return how == HELD ? new SetN<>(held.keySet(), how) : super.keySet();
         }
 
         public Collection<V> values() {
-            return new Unchanging<>(held.values(), how);
+            return how == HELD ? new Unchanging<>(held.values(), how) : super.values();
         }
 
         public Set<Map.Entry<K, V>> entrySet() {

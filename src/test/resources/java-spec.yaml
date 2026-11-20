@@ -6061,6 +6061,38 @@ cases:
               } catch (NoSuchElementException ex) {
                   System.out.println(ex);
               }
+              immutables();
+          }
+
+          // the collections of no element, one and n copies of Collections answer a change
+          // that changes nothing and refuse one that would; those of List.of, Set.of and
+          // Map.of refuse every change and a null asked for; a raw Comparable's compareTo
+          // casts what it is given, as a JDK's bridge method does
+          @SuppressWarnings({"rawtypes", "unchecked"})
+          static void immutables() {
+              Supplier<?>[] asked = {() -> Collections.emptyList().remove("x"), () -> Collections.singletonList(1).remove(Integer.valueOf(3)), () -> {
+                  List<Integer> one = Collections.singletonList(2);
+                  one.sort(null);
+                  Collections.sort(Collections.<Integer>emptyList());
+                  return one;
+              }, () -> Collections.nCopies(3, "a").removeIf(String::isEmpty), () -> Collections.emptySet().removeAll(List.of(1)) + " " + Collections.singleton(1).retainAll(List.of(1)), () -> Collections.emptyMap().remove("k") + " " + Collections.singletonMap("k", 1).remove("j"), () -> Collections.singletonList(1).removeIf(x -> false), () -> Collections.singleton(1).remove(1), () -> Collections.nCopies(2, "a").get(2), () -> Collections.emptyList().get(0), () -> Collections.singletonList(1).get(1), () -> Collections.singletonMap("k", 1).put("j", 2), () -> Collections.singletonMap("k", 1).entrySet().iterator().next().setValue(2), () -> Collections.emptyIterator().next(), () -> {
+                  Collections.emptyIterator().remove();
+                  return "removed";
+              }, () -> List.of(1, 2, 3).removeIf(x -> false), () -> List.of(1, 2, 3).contains(null), () -> List.of(1, 2, 3).get(3), () -> List.of(1, 2, 3).subList(1, 3).get(2), () -> Set.of(1, 2, 3).contains(null), () -> Map.of("k", 1, "j", 2).containsValue(null), () -> Map.of("k", 1).keySet().remove("j"), () -> Arrays.asList(1, 2).remove(Integer.valueOf(1)), () -> Arrays.asList(1, 2).addAll(5, List.of()), () -> Collections.unmodifiableList(new ArrayList<>(List.of(1))).addAll(List.of()), () -> new java.util.concurrent.CopyOnWriteArrayList<>(List.of(1, 2)).reversed().get(-1), () -> Arrays.asList(1, 2, 3).reversed().retainAll(List.of(1, 3)), () -> ((Comparable) 1).compareTo("a"), () -> new TreeSet<Object>(List.of(1, "b"))};
+              StringBuilder answers = new StringBuilder();
+              for (Supplier<?> each : asked) {
+                  try {
+                      answers.append(each.get());
+                  } catch (RuntimeException ex) {
+                      answers.append(ex.getClass().getSimpleName()).append(ex instanceof ClassCastException || ex instanceof NullPointerException || ex.getMessage() == null ? "" : " " + ex.getMessage());
+                  }
+                  answers.append(", ");
+              }
+              System.out.println(answers);
+              Map<String, Integer> one = Collections.singletonMap("k", 1);
+              Enumeration<String> none = Collections.emptyEnumeration();
+              Iterator<Integer> walked = Collections.enumeration(List.of(1, 2)).asIterator();
+              System.out.println(one + " " + one.get("k") + " " + one.getOrDefault("j", 0) + " " + one.keySet() + one.values() + one.entrySet() + " " + one.equals(Map.of("k", 1)) + " " + one.hashCode() + " " + (Collections.emptyList() == Collections.emptyList()) + " " + Collections.emptyMap().keySet().equals(Set.of()) + " " + none.hasMoreElements() + none.asIterator().hasNext() + " " + walked.next() + walked.next() + walked.hasNext() + " " + Collections.nCopies(3, "ab").lastIndexOf("ab") + Collections.nCopies(4, "x").subList(1, 3) + " " + Collections.emptyListIterator().previousIndex());
           }
 
           // the lines load reads and store writes, the orders of a table and its defaults a
@@ -6200,6 +6232,8 @@ cases:
       [1.0, -1.0][1.0, 2.5][1.0, NaN][2.0, 0.25][2.0, 0.5] -1.0 1 null fallback /: UTF-8 true true
       OptionalLong[42] OptionalLong.empty truefalsetrue 42 7 8 42 truefalse 420 42+none null
       java.util.NoSuchElementException: No value present
+      false, false, [2], false, false false, null null, UnsupportedOperationException, UnsupportedOperationException, IndexOutOfBoundsException Index 2 out of bounds for length 2, IndexOutOfBoundsException Index: 0, IndexOutOfBoundsException Index: 1, Size: 1, UnsupportedOperationException, UnsupportedOperationException, NoSuchElementException, IllegalStateException, UnsupportedOperationException, NullPointerException, ArrayIndexOutOfBoundsException Index 3 out of bounds for length 3, IndexOutOfBoundsException Index 2 out of bounds for length 2, NullPointerException, NullPointerException, false, UnsupportedOperationException remove, IndexOutOfBoundsException Index: 5, Size: 2, UnsupportedOperationException, ArrayIndexOutOfBoundsException Index 2 out of bounds for length 2, UnsupportedOperationException, ClassCastException, ClassCastException, 
+      {k=1} 1 0 [k][1][k=1] true 106 true true falsefalse 12false 2[x, x] -1
       a=b -> [a]=[b] | a = b  -> [a]=[b ] |   a:b -> [a]=[b] | a b c -> [a]=[b c] | a<9>b -> [a]=[b] | a<c>b -> [a]=[b]
       a= -> [a]=[] | a -> [a]=[] | =b -> []=[b] | :b -> []=[b] |   -> | a==b -> [a]=[=b]
       a=:b -> [a]=[:b] | a :=b -> [a]=[=b] | a  =  = b -> [a]=[= b] | a\ b=c -> [a b]=[c] | a\=b=c -> [a=b]=[c] | a\:b:c -> [a:b]=[c]
