@@ -6076,7 +6076,11 @@ final class JavaLowering implements JavaEmitter.Context {
 				// a parameter whose type the call infers says nothing of a lambda's
 				// shape: it waits for the type found
 			}
-			else if (late.indices().contains(i) && late.contested()) {
+			else if (late.indices().contains(i)
+					&& (late.contested() || (candidate.varargs && !spread && i == count - 1))) {
+				// with one argument for a variable arity parameter, the phases taking it
+				// as the array come first: a call that does not lower against the array's
+				// type does not fit there, and is an element in the last phase
 				if (!late.lowers(this, i, arguments.get(i), JavaTypes.substitute(formal, inference.solution(true)))) {
 					return null;
 				}
@@ -6109,7 +6113,8 @@ final class JavaLowering implements JavaEmitter.Context {
 	 *
 	 * @param indices where they are among the arguments
 	 * @param contested whether several candidates have the call's arity: then a candidate
-	 * takes such an argument only when it lowers against its parameter's type
+	 * takes such an argument only when it lowers against its parameter's type, as a
+	 * variable arity candidate always does at its last parameter taken as the array
 	 * @param tried whether each lowered against a type, by index and type
 	 */
 	private record Late(Set<Integer> indices, boolean contested, Map<List<Object>, Boolean> tried) {

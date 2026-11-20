@@ -848,6 +848,16 @@ lub of the lowers, else an upper, else OPEN.
   none taking it is the first error. A failure, not a success, marks it, so a program that
   lowered keeps its forms and its cost. Rejected as before: lowering every such argument a
   second time.
+- **One such call given for a variable arity parameter is tried against the array first**
+  (k39, 2026-11-20): the phases taking it as the array come before the one taking it as
+  an element, so a variable arity candidate takes a waiting argument at its last parameter
+  in those phases only when it lowers against the array's type (`Late.lowers`, as for
+  several candidates). `Map.ofEntries(Map.entry("a", s -> s))` was lowered against
+  `Entry<..>[]` and reported `cannot infer type-variable(s) V`.
+- **An array's element type is not captured** (k39, `lowerBound`'s array arm): a wildcard
+  meets a wildcard, `Entry<? extends K, ? extends W>[]` given for
+  `Entry<? extends K', ? extends V'>[]` says `K <: K'`; captured, it found `K'` a capture
+  the array is no subtype of (`cannot be applied to given types`).
 - **A lambda for a parameter whose type is the call's type variable waits** (j86): its shape
   says nothing there, so it is lowered once the variable is found -- from the other
   arguments or the target (`Supplier<String> s = pick(() -> "p", () -> "q")`); a variable

@@ -3821,6 +3821,13 @@ cases:
               }
           }
 
+          // an array of a type with wildcards given for a variable arity parameter is
+          // the array: its element type is not captured
+          @SafeVarargs
+          static <K, W> Map<K, W> all(Map.Entry<? extends K, ? extends W>... entries) {
+              return Map.ofEntries(entries);
+          }
+
           public static void main(String[] args) {
               Map<String, List<Integer>> groups = new HashMap<>();
               groups.put("a", new ArrayList<>());
@@ -3862,6 +3869,11 @@ cases:
               Step<String, Integer> length = s -> s.length();
               Held<String> held = new Held<>("held", s -> s + "!");
               System.out.println(nest("nested", 2) + " " + again(() -> "again", 2) + " " + length.then(n -> n * 2).lazy().apply("four").get() + " " + held.listed().held + " " + held.listed().made.apply("made") + " " + held.lazy().held.get() + " " + held.lazy().made.apply("lazy").get() + " " + new Composed<String>(s -> s + "!").after(s -> s.trim()).transform.apply("  text "));
+              // one call holding a lambda or a method reference given for a variable
+              // arity parameter is an element, not the array
+              Map<String, Function<String, Object>> entries = Map.ofEntries(Map.entry("a", s -> s + "!"));
+              List<Map.Entry<String, Function<String, Object>>> listed = Arrays.asList(Map.entry("b", Integer::valueOf));
+              System.out.println(entries.get("a").apply("x") + " " + listed.get(0).getValue().apply("3") + " " + all(Map.entry("c", 1)));
           }
       }
     expected: |
@@ -3873,6 +3885,7 @@ cases:
       [, bb, ccc] [bb, ccc] [0, 4, 6] 41 other
       order 1 p
       [nested] again 8 [held] [made!] held lazy! text!
+      x! 3 {c=1}
   # ? extends T is read as T and written with nothing but null, ? super T written with a
   # T and read as Object; a method taking List<T> takes a List<?>. A raw type reads its
   # members erased.

@@ -772,6 +772,15 @@ final class JavaTypes implements JavaClasses.Relations {
 
 		/** A value of a type is given where a formal type is wanted. */
 		void lowerBound(JavaType formal, JavaType actual) {
+			lowerBound(formal, actual, true);
+		}
+
+		/**
+		 * A value of a type is given where a formal type is wanted.
+		 * @param captured whether the wildcards of the value's type are types of their
+		 * own: not those of an array's element type, so that a wildcard meets a wildcard
+		 */
+		private void lowerBound(JavaType formal, JavaType actual, boolean captured) {
 			if (isOpen(actual) && ((Variable) actual).parameter().lower != null) {
 				actual = java.util.Objects.requireNonNull(((Variable) actual).parameter().lower);
 			}
@@ -783,7 +792,7 @@ final class JavaTypes implements JavaClasses.Relations {
 				this.lower.computeIfAbsent(variable.parameter(), key -> new ArrayList<>()).add(actual);
 			}
 			else if (formal instanceof ClassType wanted && !wanted.arguments().isEmpty()) {
-				JavaType source = actual instanceof ClassType named ? capture(named) : actual;
+				JavaType source = captured && actual instanceof ClassType named ? capture(named) : actual;
 				ClassType above = asSuper(source, wanted.declaration());
 				if (above == null || above.arguments().size() != wanted.arguments().size()) {
 					return;
@@ -802,7 +811,7 @@ final class JavaTypes implements JavaClasses.Relations {
 			}
 			else if (formal instanceof ArrayType wanted && actual instanceof ArrayType given
 					&& given.element().isReference()) {
-				lowerBound(wanted.element(), given.element());
+				lowerBound(wanted.element(), given.element(), false);
 			}
 		}
 
