@@ -8557,8 +8557,8 @@ public final class LispEvaluator {
 	 * running stops at its next function call or loop step, running no cleanup, as a
 	 * {@code uiop:quit} stops the thread it is called on ({@link LispExitSignal}); a call
 	 * blocked in a sleep, a wait or a {@code mutex-acquire} wakes. No thread starts
-	 * afterwards. A REPL's buffer or
-	 * a session's input is no program's end: a thread it started outlives it.
+	 * afterwards. A REPL's buffer or a session's input is no program's end: a thread it
+	 * started outlives it.
 	 * @return the threads asked to stop, which a caller may join
 	 */
 	public List<Thread> stopThreads() {
