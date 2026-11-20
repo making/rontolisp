@@ -3611,6 +3611,13 @@ final class JavaLowering implements JavaEmitter.Context {
 		return JavaForms.string(JavaZones.shipped().table(this.classes.everyRegion ? null : this.classes.regions));
 	}
 
+	@Override
+	public LispVal zoneNames(boolean read) {
+		JavaZoneNames names = JavaZoneNames.shipped();
+		java.util.Collection<String> held = this.classes.everyRegion ? null : this.classes.regions;
+		return JavaForms.string(read ? names.read(held) : names.written(held));
+	}
+
 	/**
 	 * The answer to a condition that is a question the library's own source asks of the
 	 * program it is lowered into ({@link JavaIntrinsics#answered}); {@code null} for any

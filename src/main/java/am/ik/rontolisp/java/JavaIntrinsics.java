@@ -198,6 +198,9 @@ final class JavaIntrinsics {
 
 	private static final String REGIONAL = ZONE_ID + ".regional()";
 
+	/** The same question, asked where a formatter reads a zone's name. */
+	private static final String STEP_REGIONAL = "java.time.format.Step.regional()";
+
 	private static final String ZONE_CHANGES = "java.time.zone.ZoneChanges";
 
 	private static final String FOREIGN = "java.time.Iso.foreign()";
@@ -216,9 +219,19 @@ final class JavaIntrinsics {
 
 	/** The letters of a pattern each question of Patterns asks for. */
 	private static final Map<String, String> PATTERN_LETTERS = Map.of("java.time.format.Patterns.weeks()", "YwWec",
-			"java.time.format.Patterns.quarters()", "Qq", "java.time.format.Patterns.julian()", "g");
+			"java.time.format.Patterns.quarters()", "Qq", "java.time.format.Patterns.julian()", "g",
+			"java.time.format.Patterns.zones()", "zv", "java.time.format.Patterns.periods()", "B");
 
-	private static final String TEXTS_QUARTERS = "java.time.format.Texts.quarters()";
+	/**
+	 * The questions answered by whether the program makes an instance of a class of the
+	 * library: the words of a quarter where it makes the fields of IsoFields, the
+	 * resolving of a day's period where it makes the part that reads one, the reading of
+	 * a zone's name in words where it makes the part that writes and reads one.
+	 */
+	private static final Map<String, String> MADE = Map.of("java.time.format.Texts.quarters()",
+			"java.time.temporal.IsoFields.Field", "java.time.format.Parsed.periods()",
+			"java.time.format.Step.DayPeriod", "java.time.format.Parsed.zoneTexts()", "java.time.format.Step.ZoneText",
+			"java.time.format.Step.zoneTexts()", "java.time.format.Step.ZoneText");
 
 	private static final String PARSED_OTHERS = "java.time.format.Parsed.others()";
 
@@ -236,14 +249,14 @@ final class JavaIntrinsics {
 	 */
 	static @Nullable Boolean answered(String member, JavaEmitter.Context lowering) {
 		return switch (member) {
-			case REGIONAL -> lowering.holdsRegions();
+			case REGIONAL, STEP_REGIONAL -> lowering.holdsRegions();
 			case FOREIGN -> lowering.foreignTemporals();
 			case WANTED, ZONE_WANTED -> lowering.wantedField();
-			case TEXTS_QUARTERS -> lowering.makesClass("java.time.temporal.IsoFields.Field");
 			case PARSED_OTHERS -> lowering.makesOtherFields();
 			default -> CALENDARS.contains(member) ? Boolean.valueOf(lowering.asksCalendars())
 					: PATTERN_LETTERS.containsKey(member)
-							? Boolean.valueOf(lowering.namesLetter(PATTERN_LETTERS.get(member))) : null;
+							? Boolean.valueOf(lowering.namesLetter(PATTERN_LETTERS.get(member)))
+							: MADE.containsKey(member) ? Boolean.valueOf(lowering.makesClass(MADE.get(member))) : null;
 		};
 	}
 
@@ -555,6 +568,15 @@ final class JavaIntrinsics {
 			value = body.get(body.size() - 1);
 		}
 		return value instanceof LispSymbol symbol && symbol.name().equals(field);
+	}
+
+	/**
+	 * Whether the style of a localized form's time is short, medium or none, so that its
+	 * pattern names no zone in words: a read of one of those constants or a null.
+	 */
+	private static boolean briefTime(LispVal form) {
+		return form.equals(JavaForms.NIL) || reads(form, "java.time.format.FormatStyle.SHORT")
+				|| reads(form, "java.time.format.FormatStyle.MEDIUM");
 	}
 
 	private static List<LispVal> operands(Invocation call) {
@@ -2042,16 +2064,42 @@ final class JavaIntrinsics {
 			lowering.namesPattern(call.arguments().get(0).constant() instanceof String text ? text : null);
 			return lowering.library(FORMATTER_BUILDER, "appended", operands(call));
 		});
+		// a localized form's time in full or long names its zone in words, the letter z
+		// of its pattern: noted unless the time's style is short, medium or none
+		natives.put(FORMATTER + ".ofLocalizedTime(java.time.format.FormatStyle)", (lowering, call) -> {
+			lowering.namesPattern(briefTime(call.argument(0)) ? "" : "z");
+			return lowering.library(FORMATTER, "localizedTime", operands(call));
+		});
+		natives.put(FORMATTER + ".ofLocalizedDateTime(java.time.format.FormatStyle)", (lowering, call) -> {
+			lowering.namesPattern(briefTime(call.argument(0)) ? "" : "z");
+			return lowering.library(FORMATTER, "localizedDateTime", operands(call));
+		});
+		natives.put(FORMATTER + ".ofLocalizedDateTime(java.time.format.FormatStyle,java.time.format.FormatStyle)",
+				(lowering, call) -> {
+					lowering.namesPattern(briefTime(call.argument(1)) ? "" : "z");
+					return lowering.library(FORMATTER, "localizedDateTime", operands(call));
+				});
+		natives.put(FORMATTER_BUILDER + ".appendLocalized(java.time.format.FormatStyle,java.time.format.FormatStyle)",
+				(lowering, call) -> {
+					lowering.namesPattern(briefTime(call.argument(1)) ? "" : "z");
+					return lowering.library(FORMATTER_BUILDER, "localized", operands(call));
+				});
 		PATTERN_LETTERS.forEach((question, letters) -> natives.put(question,
 				(lowering, call) -> lowering.namesLetter(letters) ? JavaForms.T : JavaForms.NIL));
-		natives.put(TEXTS_QUARTERS, (lowering, call) -> lowering.makesClass("java.time.temporal.IsoFields.Field")
-				? JavaForms.T : JavaForms.NIL);
+		MADE.forEach((question, made) -> natives.put(question,
+				(lowering, call) -> lowering.makesClass(made) ? JavaForms.T : JavaForms.NIL));
 		natives.put(PARSED_OTHERS, (lowering, call) -> lowering.makesOtherFields() ? JavaForms.T : JavaForms.NIL);
 		natives.put("java.time.format.Step.region0(String)", library(ZONE_ID, "region"));
+		natives.put("java.time.format.Step.held0()", library(ZONE_CHANGES, "held"));
+		natives.put("java.time.format.Step.regional()",
+				(lowering, call) -> lowering.holdsRegions() ? JavaForms.T : JavaForms.NIL);
 		// the rules of a region are read and asked in their own package, which the
 		// classes of java.time reach here: a static method each, of the class the rules
 		// of a region are
 		natives.put(ZONE_CHANGES + ".table0()", (lowering, call) -> lowering.regions());
+		// the names in words of the regions a program holds, written and read
+		natives.put("java.time.format.ZoneNames.written0()", (lowering, call) -> lowering.zoneNames(false));
+		natives.put("java.time.format.ZoneNames.read0()", (lowering, call) -> lowering.zoneNames(true));
 		natives.put(ZONE_ID + ".held0(String)", library(ZONE_CHANGES, "find"));
 		natives.put(ZONE_ID + ".names0(java.util.Set)", library(ZONE_CHANGES, "names"));
 		natives.put("java.time.TzRegion.wall0(java.time.zone.ZoneRules,long)", library(ZONE_CHANGES, "wall"));

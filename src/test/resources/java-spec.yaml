@@ -17673,6 +17673,141 @@ standalone:
       lenient MMuuuu 12345: 345
       lenient MM'x'uuuu 123456789012: Text '123456789012' could not be parsed at index 9 @9
       lenient MM'x'uuuu 12345: Text '12345' could not be parsed at index 5 @5
+  - name: localized-forms-a-zones-name-in-words-and-a-days-period
+    file: Localized.java
+    source: |
+      import java.time.*;
+      import java.time.chrono.IsoChronology;
+      import java.time.format.*;
+      import java.time.temporal.*;
+      import java.util.*;
+      import java.util.function.Supplier;
+
+      public class Localized {
+          static String shown(Object value) {
+              return String.valueOf(value).replace(' ', '_');
+          }
+
+          static void attempt(String what, Supplier<Object> made) {
+              try {
+                  System.out.println(what + ": " + shown(made.get()));
+              }
+              catch (DateTimeParseException e) {
+                  System.out.println(what + ": " + shown(e.getMessage()) + " @" + e.getErrorIndex());
+              }
+              catch (RuntimeException e) {
+                  System.out.println(what + ": " + shown(e));
+              }
+          }
+
+          public static void main(String[] args) {
+              ZoneId york = ZoneId.of("America/New_York");
+              ZoneId tokyo = ZoneId.of("Asia/Tokyo");
+              ZonedDateTime winter = ZonedDateTime.of(2026, 1, 15, 9, 5, 4, 0, york);
+              ZonedDateTime summer = ZonedDateTime.of(2026, 7, 4, 15, 30, 0, 0, york);
+              // the localized forms: the pattern a locale has for each style, written and read
+              for (Locale locale : new Locale[] {Locale.ROOT, Locale.US, Locale.UK, Locale.CANADA}) {
+                  for (FormatStyle style : FormatStyle.values()) {
+                      System.out.println(locale.toLanguageTag() + " " + style + ": "
+                              + shown(DateTimeFormatter.ofLocalizedDateTime(style).withLocale(locale).format(winter)) + " | "
+                              + shown(DateTimeFormatterBuilder.getLocalizedDateTimePattern(style, FormatStyle.SHORT,
+                                      IsoChronology.INSTANCE, locale)));
+                  }
+              }
+              DateTimeFormatter medium = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(Locale.US);
+              System.out.println(medium + " " + DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT) + " "
+                      + DateTimeFormatter.ofLocalizedDateTime(FormatStyle.FULL, FormatStyle.MEDIUM));
+              attempt("read medium", () -> LocalDate.parse("Mar 7, 2026", medium));
+              attempt("read long", () -> ZonedDateTime.parse("March 7, 2026, 9:05:04 AM EST",
+                      DateTimeFormatter.ofLocalizedDateTime(FormatStyle.LONG).withLocale(Locale.US)));
+              attempt("long time of a local time", () -> DateTimeFormatter.ofLocalizedTime(FormatStyle.LONG).format(LocalTime.NOON));
+              attempt("no style", () -> new DateTimeFormatterBuilder().appendLocalized(null, null));
+              attempt("by the UK", () -> medium.localizedBy(Locale.UK).format(LocalDate.of(2026, 3, 7)) + " "
+                      + medium.localizedBy(Locale.UK).getLocale());
+              // a zone's name in words: of standard or daylight time at the instant, or as a whole
+              for (Locale locale : new Locale[] {Locale.ROOT, Locale.US, Locale.UK, Locale.CANADA}) {
+                  DateTimeFormatter names = DateTimeFormatter.ofPattern("z|zzzz|v|vvvv", locale);
+                  System.out.println(locale.toLanguageTag() + ": " + names.format(winter) + " " + names.format(summer) + " "
+                          + names.format(ZonedDateTime.of(2026, 7, 4, 15, 30, 0, 0, tokyo)) + " "
+                          + names.format(ZonedDateTime.of(2026, 7, 4, 15, 30, 0, 0, ZoneId.of("UTC"))) + " "
+                          + names.format(ZonedDateTime.of(2026, 7, 4, 15, 30, 0, 0, ZoneOffset.ofHours(2))) + " "
+                          + tokyo.getDisplayName(TextStyle.FULL, locale) + " " + york.getDisplayName(TextStyle.SHORT, locale));
+              }
+              DateTimeFormatter zoned = DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm z", Locale.US);
+              for (String text : new String[] {"2026-11-01 01:30 EDT", "2026-11-01 01:30 EST", "2026-11-01 01:30 ET",
+                      "2026-07-04 10:00 JST", "2026-07-04 10:00 GMT+09:00", "2026-07-04 10:00 XYZ"}) {
+                  attempt(text, () -> ZonedDateTime.parse(text, zoned));
+              }
+              attempt("a zone of none", () -> DateTimeFormatter.ofPattern("z").format(LocalDateTime.of(2026, 7, 4, 10, 0)));
+              attempt("patterns", () -> DateTimeFormatter.ofPattern("z zzzz v vvvv B BBBB BBBBB"));
+              for (String pattern : new String[] {"zzzzz", "vv", "BB"}) {
+                  attempt("pattern " + pattern, () -> DateTimeFormatter.ofPattern(pattern));
+              }
+              // a period of the day, written and read with the hour of half a day or of the day
+              for (Locale locale : new Locale[] {Locale.ROOT, Locale.US, Locale.CANADA}) {
+                  StringBuilder line = new StringBuilder(locale.toLanguageTag() + ":");
+                  for (int hour : new int[] {0, 6, 12, 15, 19, 22}) {
+                      line.append(' ').append(DateTimeFormatter.ofPattern("BBBBB", locale).format(LocalTime.of(hour, 0)));
+                  }
+                  System.out.println(line);
+              }
+              for (String text : new String[] {"3 in the afternoon", "3 in the evening", "7 in the evening", "12 midnight"}) {
+                  attempt(text, () -> LocalTime.parse(text, DateTimeFormatter.ofPattern("h B", Locale.US)));
+              }
+              attempt("in the evening", () -> LocalTime.parse("in the evening", DateTimeFormatter.ofPattern("B", Locale.US)));
+              attempt("15 in the morning", () -> LocalTime.parse("15 in the morning", DateTimeFormatter.ofPattern("H B", Locale.US)));
+              attempt("strictly", () -> DateTimeFormatter.ofPattern("B", Locale.US).withResolverStyle(ResolverStyle.STRICT)
+                  .parse("at night"));
+          }
+      }
+    stdout: |
+      und FULL: 2026 Jan 15, Thu 09:05:04 New York (+0) | y MMMM d, EEEE HH:mm
+      und LONG: 2026 Jan 15 09:05:04 GMT-05:00 | y MMMM d HH:mm
+      und MEDIUM: 2026 Jan 15 09:05:04 | y MMM d HH:mm
+      und SHORT: 2026-01-15 09:05 | y-MM-dd HH:mm
+      en-US FULL: Thursday, January 15, 2026, 9:05:04_AM Eastern Standard Time | EEEE, MMMM d, y, h:mm_a
+      en-US LONG: January 15, 2026, 9:05:04_AM EST | MMMM d, y, h:mm_a
+      en-US MEDIUM: Jan 15, 2026, 9:05:04_AM | MMM d, y, h:mm_a
+      en-US SHORT: 1/15/26, 9:05_AM | M/d/yy, h:mm_a
+      en-GB FULL: Thursday, 15 January 2026, 09:05:04 Eastern Standard Time | EEEE, d MMMM y, HH:mm
+      en-GB LONG: 15 January 2026, 09:05:04 GMT-05:00 | d MMMM y, HH:mm
+      en-GB MEDIUM: 15 Jan 2026, 09:05:04 | d MMM y, HH:mm
+      en-GB SHORT: 15/01/2026, 09:05 | dd/MM/y, HH:mm
+      en-CA FULL: Thursday, January 15, 2026, 9:05:04_a.m. Eastern Standard Time | EEEE, MMMM d, y, h:mm_a
+      en-CA LONG: January 15, 2026, 9:05:04_a.m. EST | MMMM d, y, h:mm_a
+      en-CA MEDIUM: Jan 15, 2026, 9:05:04_a.m. | MMM d, y, h:mm_a
+      en-CA SHORT: 2026-01-15, 9:05_a.m. | y-MM-dd, h:mm_a
+      Localized(MEDIUM,) Localized(,SHORT) Localized(FULL,MEDIUM)
+      read medium: 2026-03-07
+      read long: 2026-03-07T09:05:04-05:00[America/New_York]
+      long time of a local time: java.time.DateTimeException: Unable to extract ZoneId from temporal 12:00 with chronology ISO
+      no style: java.lang.IllegalArgumentException: Either the date or time style must be non-null
+      by the UK: 7 Mar 2026 en_GB
+      und: GMT-05:00|New York (+0)|GMT-05:00|New York GMT-04:00|New York (+1)|GMT-05:00|New York GMT+09:00|Tokyo (+0)|GMT+09:00|Tokyo UTC|GMT|UTC|GMT +02:00|+02:00|+02:00|+02:00 Tokyo GMT-05:00
+      en-US: EST|Eastern Standard Time|ET|Eastern Time EDT|Eastern Daylight Time|ET|Eastern Time JST|Japan Standard Time|JT|Japan Time UTC|Coordinated Universal Time|UTC|Coordinated Universal Time +02:00|+02:00|+02:00|+02:00 Japan Time ET
+      en-GB: GMT-05:00|Eastern Standard Time|GMT-05:00|Eastern Time GMT-04:00|Eastern Daylight Time|GMT-05:00|Eastern Time JST|Japan Standard Time|JT|Japan Time UTC|Coordinated Universal Time|UTC|Coordinated Universal Time +02:00|+02:00|+02:00|+02:00 Japan Time GMT-05:00
+      en-CA: EST|Eastern Standard Time|ET|Eastern Time EDT|Eastern Daylight Saving Time|ET|Eastern Time JST|Japan Standard Time|JT|Japan Time UTC|Coordinated Universal Time|UTC|Coordinated Universal Time +02:00|+02:00|+02:00|+02:00 Japan Time ET
+      2026-11-01 01:30 EDT: 2026-11-01T01:30-04:00[America/New_York]
+      2026-11-01 01:30 EST: 2026-11-01T01:30-05:00[America/New_York]
+      2026-11-01 01:30 ET: 2026-11-01T01:30-05:00[America/New_York]
+      2026-07-04 10:00 JST: 2026-07-04T10:00+09:00[Asia/Tokyo]
+      2026-07-04 10:00 GMT+09:00: 2026-07-04T10:00+09:00[GMT+09:00]
+      2026-07-04 10:00 XYZ: Text '2026-07-04 10:00 XYZ' could not be parsed at index 17 @17
+      a zone of none: java.time.DateTimeException: Unable to extract ZoneId from temporal 2026-07-04T10:00
+      patterns: ZoneText(SHORT)' 'ZoneText(FULL)' 'ZoneText(SHORT)' 'ZoneText(FULL)' 'DayPeriod(SHORT)' 'DayPeriod(FULL)' 'DayPeriod(NARROW)
+      pattern zzzzz: java.lang.IllegalArgumentException: Too many pattern letters: z
+      pattern vv: java.lang.IllegalArgumentException: Wrong number of pattern letters: v
+      pattern BB: java.lang.IllegalArgumentException: Wrong number of pattern letters: B
+      und: AM AM PM PM PM PM
+      en-US: mi in the morning n in the afternoon in the evening at night
+      en-CA: mid mor n aft eve night
+      3 in the afternoon: 15:00
+      3 in the evening: 03:00
+      7 in the evening: 19:00
+      12 midnight: 00:00
+      in the evening: 19:30
+      15 in the morning: Text '15 in the morning' could not be parsed: Conflict found: Resolved time 15:00 conflicts with DayPeriod(00:00-12:00) @0
+      strictly: {},ISO
 refused:
   scaffold: |
     class Refused {

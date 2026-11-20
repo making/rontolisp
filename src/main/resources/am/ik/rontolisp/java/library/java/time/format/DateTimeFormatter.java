@@ -214,6 +214,42 @@ public final class DateTimeFormatter {
         return DateTimeFormatterBuilder.appended(new DateTimeFormatterBuilder(), pattern).toFormatter(locale);
     }
 
+    public static DateTimeFormatter ofLocalizedDate(FormatStyle dateStyle) {
+        Objects.requireNonNull(dateStyle, "dateStyle");
+        return localized(dateStyle, null);
+    }
+
+    /**
+     * A localized form of a time: the compiler notes a zone's name in words where the
+     * style can be full or long, then calls localizedTime.
+     */
+    public static native DateTimeFormatter ofLocalizedTime(FormatStyle timeStyle);
+
+    public static native DateTimeFormatter ofLocalizedDateTime(FormatStyle dateTimeStyle);
+
+    public static native DateTimeFormatter ofLocalizedDateTime(FormatStyle dateStyle, FormatStyle timeStyle);
+
+    static DateTimeFormatter localizedTime(FormatStyle timeStyle) {
+        Objects.requireNonNull(timeStyle, "timeStyle");
+        return localized(null, timeStyle);
+    }
+
+    static DateTimeFormatter localizedDateTime(FormatStyle dateTimeStyle) {
+        Objects.requireNonNull(dateTimeStyle, "dateTimeStyle");
+        return localized(dateTimeStyle, dateTimeStyle);
+    }
+
+    static DateTimeFormatter localizedDateTime(FormatStyle dateStyle, FormatStyle timeStyle) {
+        Objects.requireNonNull(dateStyle, "dateStyle");
+        Objects.requireNonNull(timeStyle, "timeStyle");
+        return localized(dateStyle, timeStyle);
+    }
+
+    private static DateTimeFormatter localized(FormatStyle dateStyle, FormatStyle timeStyle) {
+        return DateTimeFormatterBuilder.localized(new DateTimeFormatterBuilder(), dateStyle, timeStyle)
+            .formatter(Locale.getDefault(), ResolverStyle.SMART, IsoChronology.INSTANCE);
+    }
+
     public static TemporalQuery<Period> parsedExcessDays() {
         return Parsed.EXCESS_DAYS;
     }
@@ -229,6 +265,22 @@ public final class DateTimeFormatter {
     public DateTimeFormatter withLocale(Locale locale) {
         Objects.requireNonNull(locale, "locale");
         return locale.equals(this.locale) ? this : new DateTimeFormatter(root, locale, style, zone, chronology);
+    }
+
+    /**
+     * The formatter of a locale and of what the locale names: a calendar, a zone, a style
+     * of digits. None of the locales the library has names one, so the calendar is the
+     * locale's own, ISO's.
+     */
+    public DateTimeFormatter localizedBy(Locale locale) {
+        if (locale == null) {
+            throw new NullPointerException(
+                    "Cannot invoke \"java.util.Locale.getUnicodeLocaleType(String)\" because \"locale\" is null");
+        }
+        if (locale.equals(this.locale) && chronology == IsoChronology.INSTANCE) {
+            return this;
+        }
+        return new DateTimeFormatter(root, locale, style, zone, IsoChronology.INSTANCE);
     }
 
     public ResolverStyle getResolverStyle() {
@@ -260,7 +312,7 @@ public final class DateTimeFormatter {
 
     public String format(TemporalAccessor temporal) {
         Objects.requireNonNull(temporal, "temporal");
-        Writing out = new Writing(zoned(temporal), Texts.kind(locale));
+        Writing out = new Writing(zoned(temporal), Texts.kind(locale), chronology);
         root.print(out);
         return out.text.toString();
     }

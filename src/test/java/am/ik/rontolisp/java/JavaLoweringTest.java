@@ -542,11 +542,14 @@ class JavaLoweringTest {
 					&& form.contains("TemporalQueries.localDate()"));
 		assertThat(lower(formatted.formatted(""), "L14.java"))
 			.noneMatch(form -> form.contains("TemporalQueries") || form.contains("java.time.format."));
-		// The letters of weeks, quarters and the modified Julian day make their parts
-		// only in a program whose patterns can name them -- a constant pattern names the
-		// letters outside its quotes, a computed one all of them --; a field that is no
-		// ChronoField is resolved only in a program that makes one, and a value is asked
-		// its calendar only in a program that reaches the question.
+		// The letters of weeks, quarters, the modified Julian day, a zone's name in words
+		// and a day's period make their parts only in a program whose patterns can name
+		// them -- a constant pattern names the letters outside its quotes, a computed one
+		// all of them, a localized form the zone's name where its time can be full or
+		// long
+		// --; a field that is no ChronoField is resolved only in a program that makes
+		// one,
+		// and a value is asked its calendar only in a program that reaches the question.
 		String patterned = """
 				import java.time.format.DateTimeFormatter;
 				import java.time.temporal.TemporalQueries;
@@ -556,14 +559,32 @@ class JavaLoweringTest {
 				    }
 				}
 				""";
-		assertThat(lower(patterned.formatted("\"uuuu'Y'\"", ""), "L15.java")).noneMatch(
-				form -> form.contains("WeekFields") || form.contains("IsoFields") || form.contains("JulianFields")
-						|| form.contains("Parsed.resolveOthers") || form.contains("IsoChronology"));
+		assertThat(lower(patterned.formatted("\"uuuu'Y'\"", ""), "L15.java"))
+			.noneMatch(form -> form.contains("WeekFields") || form.contains("IsoFields")
+					|| form.contains("JulianFields") || form.contains("Parsed.resolveOthers")
+					|| form.contains("IsoChronology") || form.contains("ZoneNames") || form.contains("Step.DayPeriod")
+					|| form.contains("OfPeriod()|"));
 		assertThat(lower(patterned.formatted("args[0]", ".query(TemporalQueries.chronology())"), "L15.java"))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.temporal.WeekFields.of(java.time.DayOfWeek,int)| "))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.resolveOthers()| "))
 			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.query(")
-					&& form.contains("java.time.chrono.IsoChronology.INSTANCE"));
+					&& form.contains("java.time.chrono.IsoChronology.INSTANCE"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.ZoneNames.read(java.time.format.Reading,"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Parsed.middleOfPeriod()| "));
+		String localized = """
+				import java.time.LocalTime;
+				import java.time.format.*;
+				class L16 {
+				    public static void main(String[] args) {
+				        System.out.println(DateTimeFormatter.ofLocalizedTime(FormatStyle.%s).format(LocalTime.NOON));
+				    }
+				}
+				""";
+		assertThat(lower(localized.formatted("MEDIUM"), "L16.java"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.Step.Styled.parts(int)| "))
+			.noneMatch(form -> form.contains("ZoneNames"));
+		assertThat(lower(localized.formatted("LONG"), "L16.java"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.ZoneNames.name("));
 		assertThat(lower(pool.formatted("{ protected void afterExecute(Runnable r, Throwable t) { } }"), "L7.java"))
 			.anyMatch(form -> form.contains("(DEFUN |java.util.concurrent.ThreadPoolExecutor.hooked()| NIL "
 					+ "(|java.util.concurrent.ThreadPoolExecutor.Hooked.new()|))"));

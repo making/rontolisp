@@ -14,6 +14,8 @@ package java.time.format;
 import java.time.DateTimeException;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoField;
@@ -21,6 +23,8 @@ import java.time.temporal.TemporalField;
 import java.time.temporal.TemporalQueries;
 import java.time.temporal.ValueRange;
 import java.time.temporal.WeekFields;
+import java.time.zone.ZoneRules;
+import java.util.Set;
 
 abstract class Step {
 
@@ -32,6 +36,25 @@ abstract class Step {
 
     /** A zone by its name alone, or null: ZoneId's own lookup, which notes no name. */
     static native ZoneId region0(String id);
+
+    /**
+     * Whether the program holds a region of the tz database: answered by the compiler,
+     * and the statement it decides is all that is compiled of it (ZoneId.regional()).
+     */
+    static native boolean regional();
+
+    /** The names of the regions the program holds: the table's own, which notes none. */
+    static native String[] held0();
+
+    /**
+     * Whether the program makes the part that writes and reads a zone's name in words:
+     * answered by the compiler, so that a program reading zones by their ids alone has
+     * nothing of the names.
+     */
+    static native boolean zoneTexts();
+
+    /** The names of the zones every program knows, the regions aside: UT, UTC, GMT and their kin. */
+    private static final String[] FIXED = {"UT", "UTC", "GMT", "UCT", "GMT0", "Greenwich", "Universal", "Zulu"};
 
     static String quoted(String text) {
         StringBuilder quoted = new StringBuilder("'");
@@ -888,7 +911,7 @@ abstract class Step {
                 if (out.optional > 0) {
                     return false;
                 }
-                throw new DateTimeException("Unable to extract ZoneId from temporal " + out.temporal.toString());
+                throw new DateTimeException("Unable to extract ZoneId from temporal " + out.shown());
             }
             out.text.append(zone.getId());
             return true;
@@ -899,7 +922,10 @@ abstract class Step {
                     || c == '.' || c == '_' || c == '+' || c == '-';
         }
 
-        /** An offset of hours and minutes, and seconds where they follow: where it ends, or -1. */
+        /**
+         * An offset of hours and minutes, and seconds where they follow: where it ends, -1
+         * where none stands there, -2 where it is past eighteen hours.
+         */
         private static int offset(Reading in, int at, int[] seconds) {
             Reading probe = new Reading(in.text, in.texts);
             probe.length = in.length;
@@ -909,13 +935,67 @@ abstract class Step {
             }
             int total = (int) probe.values[probe.indexOf(ChronoField.OFFSET_SECONDS)];
             if (total < -64800 || total > 64800) {
-                return -1;
+                return -2;
             }
             seconds[0] = total;
             return end;
         }
 
         int parse(Reading in, int at) {
+            return read(in, at, null);
+        }
+
+        /**
+         * The longest name of a zone the program has standing at a position, its letters
+         * compared as the reading compares them, longer than a length: a fixed one (UTC,
+         * Etc/GMT+5) or a region it holds; or null. The regions are looked through once
+         * per reading, where asking ZoneId for each length would read the program's table
+         * at every name it lacks.
+         */
+        private static String longestId(Reading in, int at, int than) {
+            String found = null;
+            for (int etc = 0; etc < 2; etc++) {
+                String area = etc == 0 ? "" : "Etc/";
+                for (String name : FIXED) {
+                    String id = area + name;
+                    if (id.length() > than && (found == null || id.length() > found.length()) && !id.equals("Etc/UT")
+                            && in.matches(at, id)) {
+                        found = id;
+                    }
+                }
+            }
+            if (in.matches(at, "Etc/GMT")) {
+                // Etc/GMT+5 and the like: the sign and the hours as the library has them
+                for (int digits = 2; digits >= 1; digits--) {
+                    String exact = at + 8 + digits <= in.length
+                            ? "Etc/GMT" + in.text.subSequence(at + 7, at + 8 + digits).toString() : "";
+                    if (exact.length() > than && (found == null || exact.length() > found.length())
+                            && region0(exact) != null) {
+                        found = exact;
+                        break;
+                    }
+                }
+            }
+            // asked of the class by name: the question is answered where it is the
+            // condition (JavaIntrinsics.answered)
+            if (Step.regional()) {
+                for (String id : held0()) {
+                    if (id.length() > than && (found == null || id.length() > found.length()) && in.matches(at, id)) {
+                        found = id;
+                    }
+                }
+            }
+            return found;
+        }
+
+        /**
+         * Reads a zone: an offset, UTC, GMT or UT with or without an offset behind them, or
+         * the longest name of a zone the program has; for a zone's name in words (text) the
+         * longest of the names the program's zones are read by too, which beats a name of
+         * a zone as long. A name read in words is noted with its time (Parsed resolves an
+         * overlap by it), any other with none.
+         */
+        static int read(Reading in, int at, ZoneText text) {
             if (at >= in.length) {
                 return ~at;
             }
@@ -927,6 +1007,7 @@ abstract class Step {
                     return ~at;
                 }
                 in.zone = ZoneOffset.ofTotalSeconds(seconds[0]);
+                in.zoneTime = -1;
                 return end;
             }
             int run = at;
@@ -940,20 +1021,40 @@ abstract class Step {
                 int end = offset(in, at + prefix, seconds);
                 if (end > 0) {
                     in.zone = ZoneId.ofOffset(name.substring(0, prefix), ZoneOffset.ofTotalSeconds(seconds[0]));
+                    in.zoneTime = -1;
                     return end;
                 }
+                if (end == -2) {
+                    // an offset past eighteen hours is no zone at all, not the prefix alone
+                    return ~at;
+                }
                 in.zone = region0(name.substring(0, prefix));
+                in.zoneTime = -1;
                 return at + prefix;
             }
-            for (int length = name.length(); length > 0; length--) {
-                ZoneId zone = region0(name.substring(0, length));
-                if (zone != null) {
-                    in.zone = zone;
-                    return at + length;
+            String[] named = {null};
+            int[] time = {-1};
+            int words = 0;
+            if (Step.zoneTexts()) {
+                if (text != null && prefix == 0) {
+                    boolean full = text.style.asNormal() == TextStyle.FULL;
+                    words = ZoneNames.read(in, at, full, text.preferred, named, time);
                 }
             }
-            if (c == 'Z') {
+            String found = longestId(in, at, words);
+            if (found != null) {
+                in.zone = region0(found);
+                in.zoneTime = -1;
+                return at + found.length();
+            }
+            if (words > 0) {
+                in.zone = region0(named[0]);
+                in.zoneTime = time[0];
+                return at + words;
+            }
+            if (in.same(c, 'Z')) {
                 in.zone = ZoneOffset.UTC;
+                in.zoneTime = -1;
                 return at + 1;
             }
             return ~at;
@@ -1226,6 +1327,199 @@ abstract class Step {
 
         public String toString() {
             return "Pad(" + step.toString() + "," + width + (pad == ' ' ? ")" : ",'" + pad + "')");
+        }
+    }
+
+    /**
+     * A localized form: the pattern its styles have in the formatter's kind of locale
+     * (Texts), made into parts the first time a kind writes or reads one.
+     */
+    static final class Styled extends Step {
+
+        final FormatStyle date;
+
+        final FormatStyle time;
+
+        private final Group[] parts = new Group[4];
+
+        Styled(FormatStyle date, FormatStyle time) {
+            this.date = date;
+            this.time = time;
+        }
+
+        private Group parts(int kind) {
+            Group made = parts[kind];
+            if (made == null) {
+                made = DateTimeFormatterBuilder.parts(Texts.pattern(kind, date, time));
+                parts[kind] = made;
+            }
+            return made;
+        }
+
+        boolean print(Writing out) {
+            return parts(out.texts).print(out);
+        }
+
+        int parse(Reading in, int at) {
+            return parts(in.texts).parse(in, at);
+        }
+
+        public String toString() {
+            return "Localized(" + (date == null ? "" : date.name()) + "," + (time == null ? "" : time.name()) + ")";
+        }
+    }
+
+    /**
+     * A period of the day in words (the letter B): written by the minute of the day, a
+     * minute that is a period of its own (midnight, noon) before the span it lies in.
+     * Read, the longest of the style's words and its halves of a day (AM, PM) standing
+     * there, leniently of every style's; what it resolves to is Parsed's.
+     */
+    static final class DayPeriod extends Step {
+
+        /** 0 full, 1 short, 2 narrow. */
+        final int style;
+
+        DayPeriod(int style) {
+            this.style = style;
+        }
+
+        private static TextStyle textStyle(int style) {
+            return style == 0 ? TextStyle.FULL : style == 1 ? TextStyle.SHORT : TextStyle.NARROW;
+        }
+
+        /** Whether a minute of the day is in a period, from its first minute to the one after its last. */
+        static boolean contains(int from, int to, long minute) {
+            return from == to ? minute == from || (from == 0 && minute == 1440) : minute >= from && minute < to;
+        }
+
+        static String shown(int from, int to) {
+            return "DayPeriod(" + clock(from) + (from == to ? "" : "-" + clock(to)) + ")";
+        }
+
+        private static String clock(int minute) {
+            int hour = minute / 60;
+            int rest = minute % 60;
+            return (hour < 10 ? "0" : "") + hour + (rest < 10 ? ":0" : ":") + rest;
+        }
+
+        boolean print(Writing out) {
+            if (!out.has(ChronoField.HOUR_OF_DAY)) {
+                return false;
+            }
+            long minute = out.value(ChronoField.HOUR_OF_DAY) * 60 + out.value(ChronoField.MINUTE_OF_HOUR);
+            String spans = Texts.periods(out.texts);
+            int i = 0;
+            while (!contains(hour(spans, 2 * i), hour(spans, 2 * i + 1), minute)) {
+                i++;
+            }
+            out.text.append(Texts.piece(Texts.periodWords(out.texts, style), i));
+            return true;
+        }
+
+        /** A minute of the day a period begins or ends at: its hour, a letter from A. */
+        private static int hour(String spans, int at) {
+            return (spans.charAt(at) - 'A') * 60;
+        }
+
+        int parse(Reading in, int at) {
+            int kind = in.texts;
+            String spans = Texts.periods(kind);
+            int length = 0;
+            int from = 0;
+            int to = 0;
+            for (int s = in.strict ? style : 0; s <= (in.strict ? style : 2); s++) {
+                // the style's words, then its halves of a day: the morning and the afternoon
+                String words = Texts.periodWords(kind, s);
+                String[] halves = Texts.of(kind, ChronoField.AMPM_OF_DAY, textStyle(s));
+                words = words + halves[0] + "|" + halves[1] + "|";
+                int count = spans.length() / 2;
+                for (int i = 0, start = 0; start < words.length(); i++) {
+                    int end = words.indexOf('|', start);
+                    if (end - start > length && in.matches(at, words.substring(start, end))) {
+                        length = end - start;
+                        from = i < count ? hour(spans, 2 * i) : (i - count) * 720;
+                        to = i < count ? hour(spans, 2 * i + 1) : (i - count) * 720 + 720;
+                    }
+                    start = end + 1;
+                }
+            }
+            if (length == 0) {
+                return ~at;
+            }
+            in.period = new int[] {from, to};
+            return at + length;
+        }
+
+        public String toString() {
+            return "DayPeriod(" + textStyle(style).name() + ")";
+        }
+    }
+
+    /**
+     * A zone's name in words (the letters z and v): of the time it stands for at the
+     * instant written -- standard or daylight -- or of the zone as a whole (generic), in
+     * full or short, as a JDK writes them (ZoneNames); an offset, and a zone with no
+     * names, by its id. Read as ZoneName reads, an offset or a name of a zone the
+     * program holds, or as one of the names the program's zones are read by.
+     */
+    static final class ZoneText extends Step {
+
+        final TextStyle style;
+
+        final boolean generic;
+
+        /** The zones a name several have is read as, first; or null. */
+        final Set<ZoneId> preferred;
+
+        ZoneText(TextStyle style, boolean generic, Set<ZoneId> preferred) {
+            this.style = style;
+            this.generic = generic;
+            this.preferred = preferred;
+        }
+
+        /** 0 standard, 1 daylight, 2 the zone as a whole: what a value writes the name of. */
+        private int time(Writing out, ZoneId zone) {
+            if (generic) {
+                return 2;
+            }
+            if (out.temporal.isSupported(ChronoField.INSTANT_SECONDS)) {
+                return ZoneNames.daylight(zone, out.temporal.getLong(ChronoField.INSTANT_SECONDS)) ? 1 : 0;
+            }
+            if (out.temporal.isSupported(ChronoField.EPOCH_DAY) && out.temporal.isSupported(ChronoField.NANO_OF_DAY)) {
+                // a local date-time: generic in a gap or an overlap, else the time of its offset
+                LocalDate date = LocalDate.ofEpochDay(out.temporal.getLong(ChronoField.EPOCH_DAY));
+                LocalDateTime local = LocalDateTime.of(date,
+                        LocalTime.ofNanoOfDay(out.temporal.getLong(ChronoField.NANO_OF_DAY)));
+                ZoneRules rules = zone.getRules();
+                if (rules.getTransition(local) != null) {
+                    return 2;
+                }
+                return rules.isDaylightSavings(local.toInstant(rules.getOffset(local))) ? 1 : 0;
+            }
+            return 2;
+        }
+
+        boolean print(Writing out) {
+            ZoneId zone = out.temporal.query(TemporalQueries.zoneId());
+            if (zone == null) {
+                if (out.optional > 0) {
+                    return false;
+                }
+                throw new DateTimeException("Unable to extract ZoneId from temporal " + out.shown());
+            }
+            String name = zone instanceof ZoneOffset || style == TextStyle.NARROW ? null
+                    : ZoneNames.name(zone.getId(), out.texts, style.asNormal() == TextStyle.FULL, time(out, zone));
+            out.text.append(name != null ? name : zone.getId());
+            return true;
+        }
+
+        int parse(Reading in, int at) {
+            return ZoneName.read(in, at, this);
+        }
+
+        public String toString() {
+            return "ZoneText(" + style.name() + ")";
         }
     }
 

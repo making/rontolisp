@@ -362,13 +362,15 @@ Files:
   src/main/resources/am/ik/rontolisp/eval/regex-unicode.lisp
   src/main/resources/am/ik/rontolisp/eval/unicode-normalization-tables.lisp
   src/main/resources/am/ik/rontolisp/java/library/java/time/format/Texts.java
+  src/main/resources/am/ik/rontolisp/java/library/java/time/format/ZoneNames.java
   src/main/resources/am/ik/rontolisp/java/library/java/time/temporal/ChronoField.java
   src/main/resources/am/ik/rontolisp/java/library/java/time/temporal/IsoFields.java
   src/main/resources/am/ik/rontolisp/java/library/java/time/temporal/WeekFields.java
+  src/main/resources/am/ik/rontolisp/java/zone-names.txt
 Use: The case-mapping, character-property, grapheme and normalization tables compiled programs
-  carry are UCD data; the words of months, days, eras, quarters and half days a java.time
-  formatter writes, the names of fields and the weeks of a locale are CLDR data, as a JDK
-  writes them.
+  carry are UCD data; the words of months, days, eras, quarters, half days and periods of
+  the day a java.time formatter writes, its localized patterns, the names of zones in words,
+  the names of fields and the weeks of a locale are CLDR data, as a JDK writes them.
 --------------------------------------------------------------------------------
 UNICODE LICENSE V3
 
