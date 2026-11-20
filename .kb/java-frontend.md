@@ -1917,6 +1917,59 @@ from the API documentation and JDK 25's answers to probes
 - Pins: java-spec `a-deque-an-optional-the-utilities-and-the-older-classes` (`immutables()`,
   `priorities()`), `JavaLoweringTest#typeParametersLambdasAndBoxes` (the bridged arms).
 
+## The sublist and the walks of a list (2026-11-20, k62)
+
+**Invariant: `AbstractList` keeps `protected int modCount`; `ArrayList`, `LinkedList` and
+`Vector` count their changes of size in it (they kept a private `changes`); a walk of an
+`AbstractList` and a `SubList` of one refuse with `ConcurrentModificationException` once the
+count moved behind them, where a JDK's do.** Written from the API documentation and JDK 25's
+answers to probes ([java-frontend-provenance.md](java-frontend-provenance.md)); the probes
+are `.todo/artefacts/k62-java-library-a-sublist-and-an-index-walk-see-no-change-behind-them/`
+(`Sub.java`, 130 lines over every member of a part of an `ArrayList`, a `LinkedList`, a
+`Vector`, a program's list that counts and one that does not; `Sub2.java`, 164 lines: the
+order of an index error and the refusal, the iterators, `ArrayList`'s own count).
+
+- **A walk** (`IndexIterator`, `IndexWalk`) holds the count it saw and compares at `next`,
+  `previous`, `remove`, `set` and `add`, re-reading it after its own change (`set` too: a
+  program's `set` may count); `hasNext` is `cursor != size()` as a JDK's, so a removal that
+  leaves the cursor past the end is a refusal at `next` and not a silent stop.
+- **A part** (`SubList`) keeps the root list (the part of a part has the same one) and the
+  count it saw last in its own `modCount`; `size`, `get`, `set`, `add`, `remove`, `iterator`
+  and `spliterator` compare it with the root's, after the index check for `get`, `set`,
+  `remove` and `add` (`Index 9 out of bounds for length 2`, `Index: 9, Size: 2`: a stale part
+  refuses a bad index first, a JDK's order) and before it for `listIterator`; the rest of
+  its members go through those. A change through it re-reads the root's count, so a part of
+  a part, its parent and its own walks see it and a sibling does not. A program's list that
+  never counts is never refused, as under a JDK (a probe ran a part's loop 21 times).
+- **`ArrayList`'s count** moves as a JDK's does: `addAll` and `addAll(int, ..)` of nothing,
+  `trimToSize`, `ensureCapacity` past the array, `replaceAll` (new: it is the list's own,
+  refusing a change its operator makes) and `sort` (refusing one its comparator makes); not
+  `set`, `removeIf` and `removeAll` of nothing, `ensureCapacity` within the array. `Vector`'s
+  `replaceAll` is `ArrayList`'s.
+- **The reversed views**: `ReversedList.subList` is the list's part of the other range,
+  reversed (a JDK's; it was a part of the view, which saw no change of the list, and its
+  reversed part is not `RandomAccess` either); `LinkedList.Reversed.subList` is the view's
+  (`Range [2, 1) out of bounds for length 5`, as a JDK's).
+- **Measured** (wasm bytes, the jar of 2b27ce6f7 against this one; `sizes/` of the
+  artefacts, with `size.sh` of k26): a program of one `ArrayList` 123,358 -> 123,504, of a
+  `LinkedList` 119,199 -> 119,371, of a `List.of` and an unmodifiable view 1,500 B more
+  (`MapOnly` 136,846 -> 137,628, `SzUnmod` 170,514 -> 171,086, `FlatOnly` 126,708 ->
+  128,183), of a program's own `AbstractList` and a walk 86,870 -> 88,385
+  (`ConcurrentModificationException` itself is some 1 KB), with a part `SzSub` 140,055 ->
+  141,754, `SzOwn` 90,896 -> 93,493; the sorted and hash maps and `Fo` unchanged. Measured
+  and not made: a `hasNext` that reads the part's own size so that a stale part does not
+  refuse there (`list instanceof SubList` in each walk) 800 B in `FlatOnly` and
+  `SzRemoveAll`; a part's own `subList` (the range checked before the change, shared with
+  `AbstractList`'s) with its iterator as the walk both ways: `SzOwn` 96,089 against 93,493
+  without them (a program iterating a part needs only `IndexIterator`).
+- **Left** (`deviations.md`, `.todo/k74`): `CopyOnWriteArrayList`'s part; what a stale part
+  answers where a JDK's differs (`hasNext`, `estimateSize`, the range errors, the part of a
+  `LinkedList` or a program's list); `removeRange`; the class name of a part.
+- Pins: java-spec `a-collection-is-java-source-and-a-program-s-class-can-be-one` (a walk
+  over a part of three lists, the count of a program's class, `ArrayList`'s moves),
+  `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches` (`ArrayList`'s
+  struct holds no `changes`).
+
 ## java.math (2026-11-20, k31)
 
 `BigInteger`, `BigDecimal`, `MathContext` and `RoundingMode` are Java source

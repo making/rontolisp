@@ -256,6 +256,22 @@ before it refuses a change. `List.of()`, `Set.of()` and `Map.of()` are a new obj
 call. An iterator of a list of `AbstractList`'s past its end throws `NoSuchElementException`
 with no cause, where a JDK's has the list's `IndexOutOfBoundsException` as its cause.
 
+**A part of a list (`subList`) and an iterator of a list refuse a change made behind them**,
+as a JDK's do, through the count `AbstractList.modCount` which `ArrayList`, `LinkedList` and
+`Vector` keep and a class of the program under `AbstractList` keeps up if it wants them to.
+A part of a list that was changed some other way refuses its members with
+`ConcurrentModificationException`, and so does an iterator of a list after a change made
+behind it. A few answers of such a part differ from a JDK's: `hasNext`, `estimateSize()` and the
+spliterator's `forEachRemaining` of a part whose list changed refuse where a JDK's answer; a
+range or an index outside such a part (`subList`, `addAll` at an index) is refused as the
+change is; the part of a `LinkedList` or of a program's list refuses `subList` where a JDK's
+makes one; the iterator of such a part throws `ConcurrentModificationException` for a `next()`
+past the end where a JDK's throws `NoSuchElementException`, and that of a `LinkedList`'s part
+`IllegalStateException` for a `remove()` before `next()` where a JDK's throws
+`ConcurrentModificationException`; the class of a part is `java.util.AbstractList$SubList`. A part of a
+`CopyOnWriteArrayList` refuses nothing and its iterator sees what is added, where a JDK's
+refuses a change made behind it and walks the elements it had.
+
 **The functions of `Math` are those of `StrictMath`**, so a result is the same on every
 backend and processor. A JDK's `Math.sin`, `Math.exp` and the like may differ from it in
 the last digit.

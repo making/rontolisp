@@ -103,10 +103,7 @@ public class Vector<E> extends ArrayList<E> {
     }
 
     public synchronized void replaceAll(UnaryOperator<E> operator) {
-        int n = super.size();
-        for (int i = 0; i < n; i++) {
-            super.set(i, operator.apply(super.get(i)));
-        }
+        super.replaceAll(operator);
     }
 
     public synchronized Object[] toArray() {
