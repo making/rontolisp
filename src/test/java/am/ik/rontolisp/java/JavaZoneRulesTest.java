@@ -402,9 +402,9 @@ class JavaZoneRulesTest {
 		}
 		// A library of the source path reaches a parse it may never make (YAVI's table of
 		// types): only the program's own files bring regions by reading zoned texts.
-		for (String all : List.of("ZoneId.of(args[1])", "ZoneId.of(\"JST\", java.util.Map.of())",
+		for (String every : List.of("ZoneId.of(args[1])", "ZoneId.of(\"JST\", java.util.Map.of())",
 				"ZonedDateTime.parse(args[1])")) {
-			assertThat(lower(program.formatted(all))).as(all).anyMatch(form -> form.contains("Paris!"));
+			assertThat(lower(program.formatted(every))).as(every).anyMatch(form -> form.contains("Paris!"));
 		}
 		// A session goes on holding what a buffer named: the zone lives on in a variable.
 		JavaSession session = new JavaSession(JavaFiles.NONE);
