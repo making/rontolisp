@@ -3868,10 +3868,25 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   6,085 -> 5,939); `Zone` 155,833 -> 155,201; `Sieve` 19,699 -> 19,253; `SieveLoop` 16,797 ->
   16,402 and 8.9 -> 1.8 s (the JVM 2.9 s); `ZoneLoop` 104,378 -> 103,839, `LongSum` 17,358 ->
   17,237, both times unchanged; YAVI `Booking.java` 1,106,560 -> 1,098,196, `Member.java`
-  641,617 -> 637,212. No function of these grew. Left: `new T[n][m]` (`%java-new-array`'s
-  sizes prove nothing), and a `long[]` store, a general array's, still boxes its index
-  (10^8 stores 0.68 s against an `int[]`'s 0.48;
-  `.todo/artefacts/k76-java-wasm-what-is-left-of-an-arrays-making-and-store/`).
+  641,617 -> 637,212. No function of these grew.
+- **A `long[]` store, an array of references', takes a raw index too; `new T[n][m]` is
+  lowered at its site** (2026-11-21, k84). The first is the `GENERAL` arm of the pinned
+  store (`.kb/declarations-type-checks.md`, "Declaration-driven array emission"). The second
+  was `%java-new-array`: a list of the lengths, a call per row and a `make-array` of the
+  dims of any rank; now the lengths are evaluated, then checked into variables declared
+  `(integer 0 2147483647)`, and each level but the last is a `while` over a declared index
+  filling a vector (`JavaLowering.newArray`). Measured (base `46d8ae6c2`, wasm unless named,
+  CPU seconds best of three on a loaded 64-core box; the programs in
+  `.todo/artefacts/k84-java-wasm-a-general-arrays-store-and-new-of-several-sizes/`):
+  10^8 stores into a `long[1000]` 0.60 -> 0.45 s (an `int[]`'s 0.42 both), into a
+  `String[1000]` 0.58 -> 0.41; 10^6 `new int[4][4]` 0.59 -> 0.29 s (a loop the program
+  writes by hand 0.27), the module 27,611 -> 18,313 B (`%java-new-rows` was 1,605 B, the
+  site grew 1,280 -> 1,341), the JVM 10^7 of them 4.5-4.8 -> 4.0-4.7 s, the interpreter
+  10^5 3.4-4.0 -> 3.2 s. Sizes: the zone reader 10,289 -> 10,008, `Zone` 155,201 ->
+  154,862, `ZoneLoop` 103,839 -> 103,501, YAVI `Booking.java` 1,100,061 -> 1,098,914,
+  `Member.java` 638,954 -> 638,239 (one function of them grew a byte). `new T[n][m]` is
+  rare where measured: none in YAVI 0.18.0, one in the examples (`GlyphGen.java`), none in
+  the library's sources.
 - **`byte` and `short`** are integers an operator promotes to `int` and an assignment of a
   constant that fits, a cast or a compound assignment narrows (`JavaForms.signed`).
   **`float` is the double of its value** -- every binary32 is a binary64 -- and each operation's
@@ -4143,7 +4158,7 @@ virtual call can run --, classes used):
   array's length (`(or x (%java-npe))`; `this`, a literal, a `new`, a concatenation are not
   tested; a dispatcher's last arm answers null) -- measured free (a direct call per node of a
   list walked 10^8 times: JVM 0.47 -> 0.45 s, wasm 1.02 -> 1.03 s); a negative array length
-  (`%java-array-length`, every length of `%java-new-array` first); `charAt` (the host's
+  (`%java-array-length`, of `new T[n][m]..` once every length is evaluated); `charAt` (the host's
   `char` checks nothing compiled: the JVM gave a `type-error` of datum NIL, wasm a garbage
   code), one read answering -1 outside the string ("`charAt` is one read" below); a failed
   cast's message,
@@ -5350,7 +5365,7 @@ are not askable (`.todo/k18`).
 | `yield v` | the value in tail position of its arm, else `(return-from %yield v)` |
 | `o instanceof Circle c` | `(and (Circle? o) (progn (setq c o) t))`, `c` a `let` of the statement; `if (o instanceof Circle c) a` is `(if (Circle? o) (progn (setq c o) a))` |
 | `new Inner()`, a local class | `(Outer.Inner.new outer args.. captured..)` |
-| `new int[n][m]` | `(%java-new-array (list n m) kind default)` |
+| `new int[n][m]` | `(let ((a n) (b m)) (let ((n' (%java-array-length a)) ..) (declare (type (integer 0 2147483647) n' ..)) rows))`, each level but the last a `while` filling a vector of `nil` |
 | `f(1, 2)` to `f(int...)` | `(f (make-array 2 .. :initial-contents (list 1 2)))` |
 | `x -> e` | `(lambda (x) e)`; `(%make-Iface%lambda (lambda (x) e))` where the program can tell the interface |
 | `String::length`, `obj::m` | `(lambda (%t0) (length %t0))`; `(let ((%t1 obj)) (lambda (%t0) (m %t1 %t0)))` |

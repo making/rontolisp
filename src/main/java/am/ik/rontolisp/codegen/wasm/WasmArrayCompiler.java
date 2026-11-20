@@ -2197,7 +2197,41 @@ final class WasmArrayCompiler {
 				}
 			}
 			case GENERAL -> {
-				if (checksFirst || WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
+				int savedI64 = ctx.nextI64Local;
+				WasmIntFusionCompiler.Range raw = given == 1
+						? WasmIntFusionCompiler.tryCompileRawSubscript(idxExpr, ctx) : null;
+				if (raw != null) {
+					// a subscript that is an integer whatever it is, raw: boxed only
+					// on the way to what the inline arm refuses
+					int rawSlot = ctx.allocI64Temp();
+					ctx.writer.write(Instruction.SET_LOCAL);
+					ctx.writeI64LocalIndex(rawSlot);
+					WasmExprCompiler.compileExpr(valueExpr, ctx);
+					int valSlot = setTemp(ctx);
+					int idxSlot = ctx.allocTemp();
+					emitSimpleVectorAccess(ctx, arrSlot, idxSlot, rawSlot,
+							raw.lo() >= 0 && raw.hi() <= Integer.MAX_VALUE, valSlot, () -> {
+								ctx.writer.write(Instruction.GET_LOCAL);
+								ctx.writeI64LocalIndex(rawSlot);
+								if (raw.fixnum()) {
+									ctx.writer.write(Instruction.I32_WRAP_I64);
+									boxI31(ctx);
+								}
+								else {
+									WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_INT_NEW);
+								}
+								setLocal(ctx, idxSlot);
+								emitReadChecks(ctx, arrSlot, idxSlot, given);
+								getLocal(ctx, arrSlot);
+								castCellGet0(ctx);
+								getLocal(ctx, idxSlot);
+								WasmEmitHelper.castI31GetS(ctx);
+								getLocal(ctx, valSlot);
+								callArrSet(ctx);
+							});
+					ctx.nextI64Local = savedI64;
+				}
+				else if (checksFirst || WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
 					// at the speed levels the inline arm, as an unpinned vector's store
 					compileSubscript(idxExpr, ctx);
 					int idxSlot = setTemp(ctx);
@@ -2533,6 +2567,18 @@ final class WasmArrayCompiler {
 			slow.run();
 			return;
 		}
+		emitSimpleVectorAccess(ctx, arrSlot, idxSlot, -1, false, valSlot, slow);
+	}
+
+	/**
+	 * {@link #emitSimpleVectorAccess(WasmLispCompiler.Ctx, int, int, int, Runnable)}
+	 * whose subscript is the raw i64 in {@code rawSlot} (an i64 local) when that is not
+	 * -1, the boxed one in {@code idxSlot} otherwise: compared unsigned with the
+	 * storage's length -- as an i32 where {@code narrow} says it lies in [0, 2^31) -- so
+	 * a negative or wide one is the miss, which {@code slow} reports.
+	 */
+	private static void emitSimpleVectorAccess(WasmLispCompiler.Ctx ctx, int arrSlot, int idxSlot, int rawSlot,
+			boolean narrow, int valSlot, Runnable slow) {
 		am.ik.wasm.WasmWriter w = ctx.writer;
 		boolean typed = ctx.asyncResume == null;
 		int dataSlot = typed ? -1 : ctx.allocTemp();
@@ -2560,16 +2606,38 @@ final class WasmArrayCompiler {
 			setLocal(ctx, dataSlot);
 		}
 		// the subscript a fixnum below its length
-		getLocal(ctx, idxSlot);
-		brOnCastFail(w, Type.I31.code());
-		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		if (rawSlot < 0) {
+			getLocal(ctx, idxSlot);
+			brOnCastFail(w, Type.I31.code());
+			w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		}
+		else {
+			w.write(Instruction.GET_LOCAL);
+			ctx.writeI64LocalIndex(rawSlot);
+			if (narrow) {
+				w.write(Instruction.I32_WRAP_I64);
+			}
+		}
 		pushStorage(ctx, typed, dataSlot, true);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
-		w.write(Instruction.I32_GE_U);
+		if (rawSlot >= 0 && !narrow) {
+			w.write(Instruction.I64_EXTEND_U_I32);
+			w.write(Instruction.I64_GE_U);
+		}
+		else {
+			w.write(Instruction.I32_GE_U);
+		}
 		w.write(Instruction.BR_IF, 1);
 		pushStorage(ctx, typed, dataSlot, false);
-		getLocal(ctx, idxSlot);
-		WasmEmitHelper.castI31GetS(ctx);
+		if (rawSlot < 0) {
+			getLocal(ctx, idxSlot);
+			WasmEmitHelper.castI31GetS(ctx);
+		}
+		else {
+			w.write(Instruction.GET_LOCAL);
+			ctx.writeI64LocalIndex(rawSlot);
+			w.write(Instruction.I32_WRAP_I64);
+		}
 		if (valSlot < 0) {
 			arrayGet(ctx);
 		}

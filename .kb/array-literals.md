@@ -285,7 +285,9 @@ it (`WasmIntFusionCompiler.knownRange`, a `the` included) or integer arithmetic 
 (`answersInteger`). No list arm; a packed integer width no rank test and no general arm; a
 character array its rank-1 marker. A range within `[0, array-dimension-limit)` is checked by
 nothing; otherwise in EH mode an i31 test and the compare hand anything else to `_arr_dims`,
-which reports it, then `unreachable`. Java's `new T[n]` asserts its size
+which reports it, then `unreachable`. Java's `new T[n]` asserts its size, `new T[n][m]`
+declares its sizes (a `let` variable bound to a `the` proves nothing at the dimension; a
+declaration of it does)
 ([java-frontend.md](java-frontend.md), "Numbers"). Sizes: a method making a `long[]` 174 ->
 150 B, an `int[]` 153 -> 61, an `Object[]` 127 -> 103; Lisp examples the same or smaller
 (`llm.lisp` 1,117,390 -> 1,116,044).

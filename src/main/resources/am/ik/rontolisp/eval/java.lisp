@@ -598,39 +598,6 @@
 
 ;; --- arrays, switch -----------------------------------------------------------------
 
-;; new T[n][m]..: every level but the last holds arrays. KIND is the leaf's element
-;; type (JavaLowering.arrayKind): 1 an int, 2 a double, 3 a byte, 4 a short or a char,
-;; 5 a float, 6 a boolean; 0 any other, which starts as INITIAL.
-(defun rontolisp::%java-new-array (lengths kind initial)
-  (let ((rest lengths))
-    (while rest
-      (rontolisp::%java-array-length (car rest))
-      (setq rest (cdr rest))))
-  (rontolisp::%java-new-rows lengths kind initial))
-
-(defun rontolisp::%java-new-rows (lengths kind initial)
-  (let ((n (car lengths)))
-    (if (null (cdr lengths))
-        (cond
-         ((eql kind 1)
-          (make-array n :element-type '(unsigned-byte 32) :initial-element 0))
-         ((eql kind 2)
-          (make-array n :element-type 'double-float :initial-element 0d0))
-         ((eql kind 3)
-          (make-array n :element-type '(unsigned-byte 8) :initial-element 0))
-         ((eql kind 4)
-          (make-array n :element-type '(unsigned-byte 16) :initial-element 0))
-         ((eql kind 5)
-          (make-array n :element-type 'single-float :initial-element 0d0))
-         ((eql kind 6) (make-array n :element-type 'bit :initial-element 0))
-         (t (make-array n :initial-element initial)))
-        (let ((rows (make-array n :initial-element nil)) (i 0))
-          (while (< i n)
-            (setf (aref rows i)
-                  (rontolisp::%java-new-rows (cdr lengths) kind initial))
-            (setq i (+ i 1)))
-          rows))))
-
 (defun rontolisp::%java-null-switch () (rontolisp::%java-npe))
 
 ;; A switch that covers its selector's type by its cases reaches this only when the
