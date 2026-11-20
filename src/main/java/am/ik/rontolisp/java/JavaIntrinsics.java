@@ -2057,6 +2057,13 @@ final class JavaIntrinsics {
 		natives.put("java.time.TzRegion.wall0(java.time.zone.ZoneRules,long)", library(ZONE_CHANGES, "wall"));
 		natives.put("java.time.TzRegion.placed0(java.time.zone.ZoneRules,long,long[])",
 				library(ZONE_CHANGES, "placed"));
+		// the resources a program reads: found while it is lowered
+		natives.put("java.lang.Class.getResourceAsStream(String)", (lowering, call) -> lowering.classResource(call));
+		natives.put("java.lang.Class.getClassLoader()", (lowering, call) -> lowering.classLoader(call));
+		natives.put("java.lang.ClassLoader.getResourceAsStream(String)",
+				(lowering, call) -> lowering.loaderResource(call));
+		natives.put("java.lang.ClassLoader.getSystemResourceAsStream(String)",
+				(lowering, call) -> lowering.loaderResource(call));
 		// java.util.Date and java.sql: the host's offset at any instant, as above
 		natives.put("rontolisp.internal.Dates.local0(long)", host("%local-time-offset"));
 		return Map.copyOf(natives);

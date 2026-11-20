@@ -3781,6 +3781,9 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (found != null) {
 			this.classes.accessible(found, this.unit, expression.pos());
 		}
+		else if (this.classes.namesPlatformClass(name, this.currentClass, this.unit, expression.pos())) {
+			throw unsupported(expression.pos(), "the class " + name);
+		}
 		return found;
 	}
 
@@ -7106,6 +7109,210 @@ final class JavaLowering implements JavaEmitter.Context {
 		return named;
 	}
 
+	// ---- resources
+
+	private static final String RESOURCES = "rontolisp.internal.Resources";
+
+	private static final String CLASS_LOADER = "java.lang.ClassLoader";
+
+	/**
+	 * The name a resource is asked for by: a constant, since the resource is found while
+	 * the program is lowered and its octets travel with the program.
+	 */
+	private String resourceName(Typed name, int pos) {
+		if (!(name.constant() instanceof String text)) {
+			throw unsupported(pos, "getResourceAsStream of a resource named by no constant");
+		}
+		return text;
+	}
+
+	/**
+	 * The class a resource is found beside for the class of a type: an array's element
+	 * class; {@code null} for a primitive type.
+	 */
+	private @Nullable JavaClass locatedClass(JavaType type) {
+		JavaType erased = this.types.erased(type);
+		while (erased instanceof ArrayType array) {
+			erased = this.types.erased(array.element());
+		}
+		return erased instanceof ClassType named ? named.declaration() : null;
+	}
+
+	/**
+	 * The loader of a class whose resources the program has, as a source launcher has
+	 * them: {@code true} the program's (its source tree, then the source path), for a
+	 * class of the program; {@code false} the system's (the source path), for one of a
+	 * library there; {@code null} for a class of the JDK -- the library's --, whose
+	 * bootstrap loader finds none of them.
+	 */
+	private static @Nullable Boolean loader(@Nullable JavaClass declaration) {
+		if (declaration == null || declaration.intrinsic || declaration.absent != null || declaration.source == null
+				|| declaration.source.library()) {
+			return null;
+		}
+		return !declaration.source.dependency();
+	}
+
+	/** A resource's name below a root, asked for beside a class. */
+	private String resolvedName(JavaClass declaration, String name) {
+		if (name.startsWith("/")) {
+			return name.substring(1);
+		}
+		String packageName = this.classes.packageOf(declaration);
+		return packageName == null || packageName.isEmpty() ? name : packageName.replace('.', '/') + "/" + name;
+	}
+
+	/**
+	 * What a class's {@code getResourceAsStream} answers: the stream of the resource its
+	 * loader finds, its key (which loader, which name) and the stream; {@code null} where
+	 * it finds none.
+	 */
+	private @Nullable Answer resourceBeside(@Nullable JavaClass declaration, String name) {
+		Boolean program = loader(declaration);
+		if (program == null) {
+			return null;
+		}
+		String resolved = resolvedName(Objects.requireNonNull(declaration), name);
+		LispVal stream = resourceStream(resolved, program);
+		return stream == NIL ? null : new Answer((program ? "program " : "system ") + resolved, stream);
+	}
+
+	/** What a class's {@code getClassLoader} answers, or {@code null} for none. */
+	private @Nullable Answer loaderOf(@Nullable JavaClass declaration) {
+		Boolean program = loader(declaration);
+		return program == null ? null
+				: new Answer(program.toString(), program ? library(CLASS_LOADER, "program", List.of())
+						: library(CLASS_LOADER, "getSystemClassLoader", List.of()));
+	}
+
+	/**
+	 * An answer told by the class a class object stands for: equal keys, equal forms.
+	 */
+	private record Answer(String key, LispVal form) {
+	}
+
+	/**
+	 * A new stream of a resource's octets, which travel as a text of one character an
+	 * octet, or {@code nil} where the loader finds none. A loader finds nothing of a name
+	 * starting with {@code /}: {@code Class} takes one away, so {@code "//top.txt"}
+	 * beside a class is none.
+	 * @param program whether it is the program's loader, which looks in the program's
+	 * source tree first
+	 */
+	private LispVal resourceStream(String name, boolean program) {
+		if (name.startsWith("/")) {
+			return NIL;
+		}
+		byte[] octets = program ? this.classes.treeResource(name) : null;
+		if (octets == null) {
+			octets = this.classes.libraryResource(name);
+		}
+		if (octets == null) {
+			return NIL;
+		}
+		char[] text = new char[octets.length];
+		for (int i = 0; i < octets.length; i++) {
+			text[i] = (char) (octets[i] & 0xff);
+		}
+		return library(RESOURCES, "stream", List.of(string(new String(text))));
+	}
+
+	/**
+	 * A member of a class object answering by the class it stands for: {@code Class<X>}
+	 * is the object of {@code X} alone; any other is told by its name at run time among
+	 * the classes of the program and of its libraries under the type's bound, grouped by
+	 * what each answers. Any other class answers {@code nil}.
+	 */
+	private LispVal byClass(Typed receiver, Function<@Nullable JavaClass, @Nullable Answer> answer) {
+		JavaType argument = receiver.type() instanceof ClassType type && type.arguments().size() == 1
+				? type.arguments().get(0) : null;
+		if (argument != null && !(argument instanceof Wildcard) && !(argument instanceof Variable)) {
+			Answer exact = answer.apply(locatedClass(argument));
+			return call("progn", dereferenced(receiver.form()), exact == null ? NIL : exact.form());
+		}
+		JavaType upper = argument instanceof Wildcard wildcard ? wildcard.upper() : argument;
+		JavaClass bound = upper == null ? null : locatedClass(upper);
+		Map<String, Answer> answers = new LinkedHashMap<>();
+		Map<String, List<LispVal>> classesByAnswer = new LinkedHashMap<>();
+		for (JavaClass candidate : List.copyOf(this.classes.all())) {
+			if (loader(candidate) != null && (bound == null || candidate.isSubclassOf(bound))) {
+				Answer found = answer.apply(candidate);
+				if (found != null) {
+					answers.putIfAbsent(found.key(), found);
+					classesByAnswer.computeIfAbsent(found.key(), key -> new ArrayList<>())
+						.add(string(candidate.binaryName));
+				}
+			}
+		}
+		LispVal locatedName = library(CLASS, "located", List.of(receiver.form()));
+		if (answers.isEmpty()) {
+			return call("progn", locatedName, NIL);
+		}
+		LispSymbol located = temporary();
+		List<LispVal> arms = new ArrayList<>();
+		arms.add(cl("cond"));
+		classesByAnswer.forEach((key, names) -> {
+			List<LispVal> tests = new ArrayList<>();
+			for (LispVal binaryName : names) {
+				tests.add(call("equal", located, binaryName));
+			}
+			arms.add(list(form(cl("or"), tests), Objects.requireNonNull(answers.get(key)).form()));
+		});
+		return JavaForms.let(located, locatedName, List.of(list(arms)));
+	}
+
+	@Override
+	public LispVal classResource(Invocation call) {
+		String name = resourceName(call.arguments().get(0), call.pos());
+		return byClass(Objects.requireNonNull(call.receiver()), declaration -> resourceBeside(declaration, name));
+	}
+
+	@Override
+	public LispVal classLoader(Invocation call) {
+		return byClass(Objects.requireNonNull(call.receiver()), this::loaderOf);
+	}
+
+	/**
+	 * {@code getResourceAsStream} of a class loader, told at run time by whether it is
+	 * the program's where that finds another resource than the system's; and
+	 * {@code getSystemResourceAsStream}: a name as it is.
+	 */
+	@Override
+	public LispVal loaderResource(Invocation call) {
+		String name = resourceName(call.arguments().get(0), call.pos());
+		LispVal system = resourceStream(name, false);
+		if (call.receiver() == null) {
+			return system;
+		}
+		LispVal tree = name.startsWith("/") ? null
+				: this.classes.treeResource(name) == null ? null : resourceStream(name, true);
+		LispVal searches = library(CLASS_LOADER, "searchesTree", List.of(call.self()));
+		return tree == null ? call("progn", searches, system) : call("if", searches, tree, system);
+	}
+
+	/**
+	 * A class literal asked for a resource or its loader: the class is known, so no
+	 * object of it is made. {@code null} for any other call.
+	 */
+	private @Nullable Typed literalResource(JavaSyntax.ClassLiteral literal, Call call) {
+		if (call.name().equals("getResourceAsStream") && call.arguments().size() == 1) {
+			Typed argument = expression(call.arguments().get(0), this.stringType);
+			if (!isSubtype(argument.type(), this.stringType)) {
+				throw error(call.arguments().get(0).pos(),
+						"incompatible types: " + argument.type() + " cannot be converted to String");
+			}
+			Answer found = resourceBeside(locatedClass(literalType(literal)), resourceName(argument, call.pos()));
+			return new Typed(found == null ? NIL : found.form(),
+					new ClassType(this.classes.library("java.io.InputStream"), List.of()));
+		}
+		if (call.name().equals("getClassLoader") && call.arguments().isEmpty()) {
+			Answer found = loaderOf(locatedClass(literalType(literal)));
+			return new Typed(found == null ? NIL : found.form(),
+					new ClassType(this.classes.library(CLASS_LOADER), List.of()));
+		}
+		return null;
+	}
+
 	/** What {@code Class<..>} of a type's class names: a primitive type's box. */
 	private JavaType boxOf(JavaType type) {
 		return type == Primitive.VOID ? this.classes.libraryType("java.lang.Void")
@@ -7405,6 +7612,10 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 			if (call.name().equals("equals") && call.arguments().size() == 1 && isClass(call.arguments().get(0))) {
 				return new Typed(sameClass(named, call.arguments().get(0), false, pos), Primitive.BOOLEAN);
+			}
+			if (named instanceof JavaSyntax.ClassLiteral literal
+					&& literalResource(literal, call) instanceof Typed read) {
+				return read;
 			}
 		}
 		if (call.name().equals("getClass") && call.arguments().isEmpty() && !call.onSuper()) {

@@ -185,6 +185,24 @@ interface JavaEmitter {
 		 */
 		boolean makesOtherFields();
 
+		/**
+		 * What {@code getResourceAsStream} of a class object answers: the stream of the
+		 * resource found beside the class it stands for at run time, or {@code null}.
+		 */
+		LispVal classResource(Invocation call);
+
+		/**
+		 * What {@code getResourceAsStream} of the class loader, or
+		 * {@code getSystemResourceAsStream}, answers.
+		 */
+		LispVal loaderResource(Invocation call);
+
+		/**
+		 * What {@code getClassLoader} of a class object answers: the loader of the class
+		 * it stands for at run time, or {@code null}.
+		 */
+		LispVal classLoader(Invocation call);
+
 	}
 
 	LispVal emit(Context context, Invocation invocation);

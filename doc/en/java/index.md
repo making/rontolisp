@@ -158,6 +158,27 @@ library was compiled whole. In the program's own source tree, such a class is fo
 that file was read, as the `java` launcher finds it. A source file of the program wins over
 one of the same name on the source path.
 
+### Resources
+
+`getResourceAsStream` of a class or a class loader reads a file of the program's source
+tree or of a library on the source path. The file is found when the program is compiled
+and its bytes are compiled into the output, so a `.wasm` reads it with no file system.
+The name must be a constant; a name computed when the program runs is refused.
+
+```
+InputStream in = Main.class.getResourceAsStream("data.txt");   // app/data.txt beside app/Main.java
+InputStream top = Main.class.getResourceAsStream("/top.txt");  // top.txt at the top of the tree
+```
+
+The loaders are those of the `java` launcher. A class of the program has the program's
+loader, which looks in the source tree and then under each root of the source path, in
+order. A class of a library on the source path has the system loader
+(`ClassLoader.getSystemClassLoader()`), which looks under the roots only. A JDK class
+finds none of them. In the source tree a name is matched as written: `..` and `.` are not
+resolved, as the launcher does not resolve them. Under a directory of the source path
+they are, as a class path directory resolves them. In a jar the name must match an entry
+exactly. The playground's uploaded files are its program's source tree.
+
 ## At the prompt
 
 `--source-language java` with no program, and the playground's Java pick, read a buffer at a

@@ -505,6 +505,39 @@ public enum SourceLanguage {
 			}
 
 			@Override
+			public byte @Nullable [] findResource(String from, String path) {
+				return bytes(loader, SourceLoader.resolve(SourceLoader.parentDir(from), path));
+			}
+
+			@Override
+			public byte @Nullable [] treeResource(String path) {
+				return sourceTree == null ? null : bytes(loader, SourceLoader.resolve(sourceTree, path));
+			}
+
+			@Override
+			public byte @Nullable [] libraryResource(String name) {
+				for (String root : sourcePath) {
+					if (loader.isDirectory(root)) {
+						String below = JavaFiles.below(name);
+						byte[] found = below == null ? null : bytes(loader, SourceLoader.resolve(root, below));
+						if (found != null) {
+							return found;
+						}
+						continue;
+					}
+					if (!name.endsWith("/") && entries.apply(root).contains(name)) {
+						try {
+							return loader.loadArchiveEntryBytes(root, name);
+						}
+						catch (IOException ex) {
+							// an entry that cannot be read is no resource of the root
+						}
+					}
+				}
+				return null;
+			}
+
+			@Override
 			public String absolute(String path) {
 				try {
 					return java.nio.file.Path.of(path).toAbsolutePath().normalize().toString();
@@ -515,6 +548,22 @@ public enum SourceLanguage {
 				}
 			}
 		};
+	}
+
+	/**
+	 * The octets of a file a resource names, or {@code null} when there is none to read:
+	 * a directory is none.
+	 */
+	private static byte @Nullable [] bytes(SourceLoader loader, String resolved) {
+		if (!loader.exists(resolved) || loader.isDirectory(resolved)) {
+			return null;
+		}
+		try {
+			return loader.loadBytes(resolved);
+		}
+		catch (IOException | RuntimeException ex) {
+			return null;
+		}
 	}
 
 	/** The text of a file a source names, or {@code null} when there is none to read. */

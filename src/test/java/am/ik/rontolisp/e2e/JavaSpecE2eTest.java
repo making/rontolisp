@@ -101,7 +101,8 @@ class JavaSpecE2eTest {
 	 * standard error under the JDK and the interpreter, what a compile prints for the JVM
 	 * and wasm; {@code null} when not checked
 	 * @param library the files of a library the program uses, by path, or {@code null}: a
-	 * sources jar on the program's source path, classes the JDK leg compiles first
+	 * sources jar on the program's source path, classes the JDK leg compiles first, with
+	 * any file that is no {@code .java} a resource beside them
 	 * @param provided what the library was compiled against and its sources jar does not
 	 * hold, by path, or {@code null}: only the JDK leg's compile of the library reads it
 	 */
@@ -151,7 +152,17 @@ class JavaSpecE2eTest {
 				sources.putAll(this.provided);
 			}
 			for (Map.Entry<String, String> source : sources.entrySet()) {
-				command.add(JavaSpecE2eTest.write(leg + "-library/src", source.getKey(), source.getValue()).toString());
+				if (source.getKey().endsWith(".java")) {
+					command.add(
+							JavaSpecE2eTest.write(leg + "-library/src", source.getKey(), source.getValue()).toString());
+				}
+				else {
+					// a resource, which the jar of the library's classes holds beside
+					// them
+					Path resource = classes.resolve(source.getKey());
+					Files.createDirectories(java.util.Objects.requireNonNull(resource.getParent()));
+					Files.writeString(resource, source.getValue(), StandardCharsets.UTF_8);
+				}
 			}
 			Ended compiled = ended(new ProcessBuilder(command).start());
 			assertThat(compiled.exit()).as("javac of the library of '%s': %s", this.name, compiled.stderr()).isZero();

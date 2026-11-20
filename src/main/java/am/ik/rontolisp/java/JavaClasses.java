@@ -12,6 +12,7 @@ import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -1549,6 +1550,26 @@ final class JavaClasses {
 		return found;
 	}
 
+	/**
+	 * Whether a qualified name no class has, read as a value, names a class of a JDK's
+	 * packages the library lacks: it starts with one of their packages and no name before
+	 * its last is a class ({@code java.util.ResourceBundle} in
+	 * {@code java.util.ResourceBundle.getBundle("m")}), so it is refused as the class it
+	 * names and not as an unknown variable {@code java}.
+	 */
+	boolean namesPlatformClass(String name, @Nullable JavaClass context, Unit unit, int pos) {
+		if (!isPlatform(name)) {
+			return false;
+		}
+		for (int end = name.lastIndexOf('.'); end > 0; end = name.lastIndexOf('.', end - 1)) {
+			String prefix = name.substring(0, end);
+			if ((prefix.indexOf('.') < 0 ? find(prefix, context, unit, pos) : qualified(prefix)) != null) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	/** {@link #find}, or the error a compiler reports. */
 	JavaClass require(String name, int pos, @Nullable JavaClass context, Unit unit) {
 		if (this.lenient == 0 || !unit.source().dependency()) {
@@ -1729,6 +1750,40 @@ final class JavaClasses {
 		}
 		return this.classes.get(name);
 	}
+
+	/**
+	 * The octets of a resource of the program's source tree, or {@code null}: what the
+	 * class loader of a source launcher holds in memory, which finds a name as it is
+	 * written -- no {@code .}, {@code ..} or empty segment is resolved, so a name holding
+	 * one is none. A program given with {@code -e} has no tree.
+	 * @param name the name below the top of the tree, with no leading {@code /}
+	 */
+	byte @Nullable [] treeResource(String name) {
+		return this.treeResources.computeIfAbsent(name, key -> {
+			for (String segment : key.split("/", -1)) {
+				if (segment.isEmpty() || segment.equals(".") || segment.equals("..")) {
+					return Optional.empty();
+				}
+			}
+			return Optional.ofNullable(this.entry == null ? this.files.treeResource(key)
+					: this.files.findResource(this.entry, this.root + key));
+		}).orElse(null);
+	}
+
+	/**
+	 * The octets of a resource under the roots of the program's source path, which hold
+	 * its libraries' resources, or {@code null} ({@link JavaFiles#libraryResource}).
+	 * @param name the name below a root, with no leading {@code /}
+	 */
+	byte @Nullable [] libraryResource(String name) {
+		return this.libraryResources.computeIfAbsent(name, key -> Optional.ofNullable(this.files.libraryResource(key)))
+			.orElse(null);
+	}
+
+	/** The resources looked for, by name: a pass lowered again asks again. */
+	private final Map<String, Optional<byte[]>> treeResources = new HashMap<>();
+
+	private final Map<String, Optional<byte[]>> libraryResources = new HashMap<>();
 
 	/**
 	 * The file of a library that declares a class not named after it, or {@code null}. A

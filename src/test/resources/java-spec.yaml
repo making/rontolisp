@@ -15898,27 +15898,93 @@ standalone:
   # files; an overload picked by what an exact method reference returns, beside one
   # naming a class the subset lacks (java.util.Currency), which is passed by; a
   # wildcard's capture keeping the bound of its parameter. The exception the library
-  # throws is located in the jar.
+  # throws is located in the jar. The resources: the program's loader finds one in the
+  # program's source tree by the name as written (no '..' resolved), then in the jar; the
+  # system's, the library's classes' loader, in the jar alone; through getClass() and a
+  # Class<?> by the class the object is; none of a JDK's class; the octets as they are.
   - name: a-program-uses-a-library-read-as-source-from-its-source-path
     file: tables/Main.java
     source: |
       package tables;
 
+      import java.io.IOException;
+      import java.io.InputStream;
+      import java.nio.charset.StandardCharsets;
+      import java.util.Arrays;
+
       import geo.Circle;
       import geo.Group;
       import geo.Label;
+      import geo.Notes;
       import geo.Rect;
       import geo.Shape;
       import geo.Table;
 
       public class Main {
 
+          static final String DATA = "data.txt";
+
+          static class Inner {
+          }
+
+          static class Noted extends Notes {
+          }
+
           static String area(Shape shape) {
               return String.valueOf(shape.area());
           }
 
+          static String read(InputStream in) throws IOException {
+              if (in == null) {
+                  return "none";
+              }
+              try (in) {
+                  return new String(in.readAllBytes(), StandardCharsets.UTF_8).strip();
+              }
+          }
+
+          // the program's loader finds a resource in its source tree, a name as written,
+          // then in the library's jar; the system's, which loads the library's classes,
+          // in the jar alone
+          static void resources() throws IOException {
+              System.out.println(read(Main.class.getResourceAsStream(DATA)) + " "
+                      + read(Main.class.getResourceAsStream("/top.txt")) + " "
+                      + read(Main.class.getResourceAsStream("../top.txt")) + " "
+                      + read(Main.class.getResourceAsStream("sub/../data.txt")) + " "
+                      + read(Main.class.getResourceAsStream("missing.txt")) + " "
+                      + read(Main.class.getResourceAsStream("//top.txt")));
+              System.out.println(read(Inner.class.getResourceAsStream("sub/deep.txt")) + " "
+                      + read(Main[][].class.getResourceAsStream(DATA)) + " "
+                      + read(String.class.getResourceAsStream("/top.txt")) + " "
+                      + read(int.class.getResourceAsStream("/top.txt")));
+              Class<?> held = Inner.class;
+              String found = read(held.getResourceAsStream(DATA));
+              held = String.class;
+              found += " " + read(held.getResourceAsStream("/top.txt"));
+              held = Notes.class;
+              found += " " + read(held.getResourceAsStream("note.txt"));
+              System.out.println(found + " " + read(new Main().getClass().getResourceAsStream(DATA)));
+              System.out.println(new Notes().note() + " " + new Noted().note() + " " + Notes.fixed() + " "
+                      + read(Main.class.getResourceAsStream("/geo/note.txt")));
+              ClassLoader loader = Main.class.getClassLoader();
+              ClassLoader context = Thread.currentThread().getContextClassLoader();
+              System.out.println(read(loader.getResourceAsStream("tables/data.txt")) + " "
+                      + read(loader.getResourceAsStream("/tables/data.txt")) + " "
+                      + read(ClassLoader.getSystemResourceAsStream("geo/note.txt")) + " "
+                      + read(context.getResourceAsStream("geo/note.txt")) + " "
+                      + read(ClassLoader.getSystemResourceAsStream("top.txt")) + " " + (loader == context) + " "
+                      + String.class.getClassLoader() + " " + int.class.getClassLoader() + " "
+                      + (Notes.class.getClassLoader() == ClassLoader.getSystemClassLoader()) + " "
+                      + (Notes.class.getClassLoader() == loader));
+              byte[] octets = Main.class.getResourceAsStream("unicode.txt").readAllBytes();
+              System.out.println(octets.length + " " + Arrays.toString(octets) + " "
+                      + new String(octets, StandardCharsets.UTF_8).strip());
+              InputStream twice = Main.class.getResourceAsStream(DATA);
+              System.out.println(twice.read() + " " + read(Main.class.getResourceAsStream(DATA)) + " " + twice.available());
+          }
+
           @Label("where the program starts")
-          public static void main(String[] args) {
+          public static void main(String[] args) throws IOException {
               Table<Shape> table = new Table<Shape>().column("name", Shape::name)
                   .column("corners", Shape::corners)
                   .column("area", Main::area);
@@ -15939,10 +16005,57 @@ standalone:
               catch (IllegalArgumentException ex) {
                   System.out.println(ex.getMessage());
               }
+              resources();
               System.out.println(table.row(null));
           }
       }
+    files:
+      top.txt: |
+        top
+      tables/data.txt: |
+        data
+      tables/sub/deep.txt: |
+        deep
+      tables/note.txt: |
+        program-note
+      tables/unicode.txt: |
+        é ∑ 😀
+      geo/note.txt: |
+        tree-note
     library:
+      geo/note.txt: |
+        library-note
+      geo/Notes.java: |
+        package geo;
+
+        import java.io.IOException;
+        import java.io.InputStream;
+        import java.io.UncheckedIOException;
+        import java.nio.charset.StandardCharsets;
+
+        public class Notes {
+
+            // beside the class this object is
+            public String note() {
+                return read(getClass().getResourceAsStream("note.txt"));
+            }
+
+            public static String fixed() {
+                return read(Notes.class.getResourceAsStream("note.txt"));
+            }
+
+            private static String read(InputStream in) {
+                if (in == null) {
+                    return "none";
+                }
+                try (in) {
+                    return new String(in.readAllBytes(), StandardCharsets.UTF_8).strip();
+                }
+                catch (IOException ex) {
+                    throw new UncheckedIOException(ex);
+                }
+            }
+        }
       geo/Shape.java: |
         package geo;
 
@@ -16147,6 +16260,13 @@ standalone:
       no money ✓!
       Range [1, 1 + 1) out of bounds for length 1
       -5
+      data top none none none none
+      deep data none none
+      data none library-note data
+      library-note program-note library-note tree-note
+      data none library-note tree-note none true null null true false
+      12 [-61, -87, 32, -30, -120, -111, 32, -16, -97, -104, -128, 10] é ∑ 😀
+      100 data 4
     error: "java.lang.IllegalArgumentException: no value for name | corners | area"
     at: "library-sources.jar!/geo/Table.java:52 in geo.Table.row(Object)"
   # java.math: a BigInteger is the host's integer held in a field, a BigDecimal one of

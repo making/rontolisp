@@ -3,6 +3,8 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.lang;
 
+import java.io.InputStream;
+
 // The object standing for a class, an interface, an array type or a primitive type. The
 // lowering makes one of each type a program has as a value -- a class literal or
 // getClass() read as anything but a comparison with another or its name -- before
@@ -148,6 +150,25 @@ public final class Class<T> {
     @SuppressWarnings("unchecked")
     public T[] getEnumConstants() {
         return constants == null ? null : (T[]) constants0(constants);
+    }
+
+    // a resource beside the class, as its loader finds it: a name with no leading '/' in
+    // the class's package. The lowering finds it, so the name is a constant; a class of
+    // the JDK and a primitive type have none of the program's
+    public native InputStream getResourceAsStream(String name);
+
+    // the program's loader for a class of the program, the system's for one of a library
+    // on the source path, none for a class of the JDK and a primitive type
+    public native ClassLoader getClassLoader();
+
+    // the binary name of the class a resource is found beside -- an array's element
+    // class --, or null for a primitive type
+    static String located(Class<?> type) {
+        Class<?> element = type;
+        while (element.component != null) {
+            element = element.component;
+        }
+        return (element.kind & 4) != 0 ? null : element.name;
     }
 
     public String toString() {

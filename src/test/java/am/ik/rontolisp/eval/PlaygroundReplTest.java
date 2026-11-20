@@ -171,14 +171,16 @@ class PlaygroundReplTest {
 			.isEqualTo("3\n");
 		// The uploads are the source tree of a program the page reads from no file: a
 		// class it names, or a buffer of its session, is read from the upload its name
-		// spells and checked as the program's own.
+		// spells and checked as the program's own; a resource is read from them too.
 		PlaygroundRepl uploaded = new PlaygroundRepl(
 				files(Map.of("geo/Place.java", "package geo; public record Place(String name) { }", "Helper.java",
 						"class Helper { static int twice(int n) { return 2 * n; } }", "Bad.java",
-						"class Bad { static int unused() { return \"s\"; } }")))
+						"class Bad { static int unused() { return \"s\"; } }", "geo/name.txt", "é")))
 			.pick(SourceLanguage.JAVA);
-		assertThat(uploaded.run("void main() { IO.println(new geo.Place(\"x\").name() + Helper.twice(2)); }"))
-			.isEqualTo("x4\n");
+		assertThat(
+				uploaded.run("void main() throws Exception { IO.println(new geo.Place(\"x\").name() + Helper.twice(2)"
+						+ " + new String(geo.Place.class.getResourceAsStream(\"name.txt\").readAllBytes())); }"))
+			.isEqualTo("x4é\n");
 		assertThat(uploaded.eval("new geo.Place(\"y\")")).isEqualTo("$1 ==> Place[name=y]");
 		assertThatThrownBy(() -> uploaded.run("void main() { Bad.unused(); }"))
 			.hasMessage("Bad.java:1:42: incompatible types: String cannot be converted to int");

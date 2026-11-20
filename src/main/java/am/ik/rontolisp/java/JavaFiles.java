@@ -61,6 +61,63 @@ public interface JavaFiles {
 	}
 
 	/**
+	 * The octets of a resource of the program's source tree, named relative to the file
+	 * it starts at, as {@link #find} reads a file of it.
+	 * @param from the file whose directory {@code path} is relative to
+	 * @param path the path, climbing out of that directory to the top of the tree with
+	 * {@code ..} only
+	 * @return the octets, or {@code null} when there is no file to read (a directory is
+	 * none)
+	 */
+	default byte @Nullable [] findResource(String from, String path) {
+		return null;
+	}
+
+	/**
+	 * The octets of a resource of the source tree of a program that starts at no file, as
+	 * {@link #tree} reads a file of it.
+	 * @param path the path below the top of the tree, with no {@code .} or {@code ..}
+	 * @return the octets, or {@code null} when the tree has none or there is no tree
+	 */
+	default byte @Nullable [] treeResource(String path) {
+		return null;
+	}
+
+	/**
+	 * The octets of a resource of a library the program uses: the first root of its
+	 * source path that has it, as a class loader finds it there -- below a directory the
+	 * name's {@code .} and {@code ..} resolved ({@link #below}), in a jar the entry of
+	 * the name as it is.
+	 * @param name the resource's name below a root
+	 * @return the octets, or {@code null} when no root has it or there is no source path
+	 */
+	default byte @Nullable [] libraryResource(String name) {
+		return null;
+	}
+
+	/**
+	 * A resource's name below the top of a directory, as a class loader reads it there:
+	 * its {@code .} and empty segments dropped and a {@code ..} taking the segment before
+	 * it away.
+	 * @param name the name
+	 * @return the path, or {@code null} where a {@code ..} climbs above the top
+	 */
+	static @Nullable String below(String name) {
+		java.util.ArrayDeque<String> segments = new java.util.ArrayDeque<>();
+		for (String segment : name.split("/", -1)) {
+			if (segment.equals("..")) {
+				if (segments.pollLast() == null) {
+					return null;
+				}
+			}
+			else if (!segment.isEmpty() && !segment.equals(".")) {
+				segments.addLast(segment);
+			}
+		}
+		return String.join("/", segments);
+	}
+
+	/**
 	 * A path made absolute, so that the directories above a file can be compared with its
 	 * package; a host with no working directory keeps the spelling.
 	 * @param path a path

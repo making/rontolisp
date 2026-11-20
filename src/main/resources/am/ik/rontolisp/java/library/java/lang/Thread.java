@@ -395,6 +395,11 @@ public class Thread implements Runnable {
         return this.name;
     }
 
+    // the loader of the program's classes
+    public ClassLoader getContextClassLoader() {
+        return ClassLoader.program();
+    }
+
     public final void setName(String name) {
         this.name = named(name);
     }

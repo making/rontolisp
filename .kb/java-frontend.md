@@ -56,7 +56,8 @@ asked for, and where its bytes go: k33 (2026-11-20; "YAVI compiled to wasm" belo
 Maven plugin's `wasm` goal reading a project's
 dependencies from their sources jars, a session reading the source path: k32 (2026-11-20);
 a library's class in the file of another, the playground's uploads as a program's source
-tree, a sources jar's resources measured: k44 (2026-11-20; what it left is `.todo/k53`); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
+tree, a sources jar's resources measured: k44 (2026-11-20); the resources a program and its
+libraries read: k53 (2026-11-20; "Resources" below); `LinkedHashMap`, `LinkedHashSet`, `LinkedList`: k27 (2026-11-19);
 `java.text.MessageFormat`: k28 (2026-11-19); `java.text.Normalizer` over the normalization
 forms the front ends share: k29 (2026-11-19); a `Class` as a value, a type variable in
 scope kept apart from the one a call finds, `Name.this` as the instance of `Name`
@@ -412,15 +413,10 @@ is refused by name where it is reached, never where a class is read.** Asked for
   354 ms cold), a scan by characters 0.3 s too (305 ms), a zip opened for each entry
   ~0.1 s; the keyword search reads all 380 in 75 ms cold, and the lowering is 5.6 s cold
   with and without the search. The modules (`Booking`, `Member`) are the same bytes.
-- **Resources are not read.** Measured k44: a sources jar does hold them --
-  maven-source-plugin packs `src/main/resources` by default. YAVI 0.18.0's carries
-  `META-INF/services/javax.annotation.processing.Processor` and its native-image
-  `reflect-config.json`, all its binary jar has but the compiler's `yavi.kotlin_module`;
-  netty's carry `module-info.yml` and `META-INF/native-image/..`. YAVI reads none at run
-  time (its `services` entry is for javac). `Class.getResource*`, `ResourceBundle` and
-  `ServiceLoader` are refused by name where reached; a source launcher finds a resource in
-  its source tree (`Main.class.getResourceAsStream("data.txt")` beside `app/Main.java`, and
-  `"/top.txt"` at its root). What embeds one is `.todo/k53`.
+- **Resources**: a sources jar holds them (k44: maven-source-plugin packs
+  `src/main/resources`; YAVI 0.18.0's carries `META-INF/services/..Processor` and its
+  native-image `reflect-config.json`, netty's `META-INF/native-image/..`). Read since k53:
+  "Resources" below.
 - **What the front end lacked that a library showed** (each a rule of the language, fixed
   for every program, pinned by the fixture):
   - An **exact method reference** naming a class counts in applicability by what its
@@ -441,6 +437,71 @@ is refused by name where it is reached, never where a class is read.** Asked for
   (`java-spec.yaml` `a-program-uses-a-library-read-as-source-from-its-source-path`:
   `library:` is zipped to a sources jar for the four legs and compiled by javac for the
   JDK leg, `provided:` is what javac alone reads).
+
+## Resources (2026-11-20, k53)
+
+**Invariant: a resource is found while the program is lowered, by the loader a source
+launcher would give the class, and its octets travel in the output; its name is a
+constant, and a computed one is refused by name.** Measured against JDK 25.0.5's
+`java -cp libcls app/Main.java` (the class path holding the library's classes and
+resources, NOT the tree: with no `-cp` the default `.` is often the tree's top, and its
+directory rule then answers for the launcher -- `../top.txt` found -- which misled the
+first measurement).
+
+- **Two loaders** (`java/lang/ClassLoader.java`, two objects of a private subclass). The
+  launcher's in-memory loader holds the program's classes and finds a resource in the
+  SOURCE TREE first (a tree `lib/label.txt` wins over the class path's), then its parent's;
+  the parent is the application loader, `getSystemClassLoader()`, whose class path holds
+  the library and which loads its classes. So `JavaLowering.loader`: a `PROGRAM` class
+  the program's (tree, then roots), a `DEPENDENCY` class the system's (roots only), a class
+  of the library or an intrinsic none (the bootstrap loader: `String.class
+  .getResourceAsStream("/top.txt")` is null under a JDK). `getClassLoader()` of a JDK class
+  and of a primitive type is `null`; `getContextClassLoader()` is the program's; the
+  program's loader is not the system's (launcher: `false`).
+- **Names.** `Class` drops one leading `/`, else prefixes the package of the class (an
+  array's element class; a nested or anonymous class's top-level package). A loader finds
+  nothing of a name starting `/` (`"//top.txt"` beside a class, `"/app/data.txt"` of a
+  loader: none, measured). In the tree the name is matched as written: a `.`, `..` or empty
+  segment finds nothing (`JavaClasses.treeResource`; launcher measured: `../top.txt`,
+  `./data.txt`, `sub//x.txt`, `sub/../x.txt` none). Under a DIRECTORY root of the source
+  path they are resolved (`JavaFiles.below`, a `..` out of the root none: a class path
+  directory measured so), in a jar the entry is the name exactly. A directory is no
+  resource here (`null`); the launcher answers a `ByteArrayInputStream` of a listing for
+  `""`, `"sub"`, `"/"` (`deviations.md`).
+- **Lowering.** `Name.class.getResourceAsStream(c)` and `.getClassLoader()` are answered
+  where they are written (`literalResource`, beside `getName`'s road), so no class object
+  is made. Any other `Class` receiver (`getClass()`, a `Class<?>` held) goes through the
+  natives `Class.getResourceAsStream(String)` / `getClassLoader()` (`byClass`): a
+  `Class<X>` with `X` no wildcard is `X`'s object alone; otherwise the program's and the
+  libraries' classes under the bound, grouped by what each answers, in a `cond` over
+  `Class.located` (the binary name at run time), anything else `nil` -- so a library's
+  `getClass().getResourceAsStream("note.txt")` reads the SUBCLASS's package, as a JDK
+  does. A loader's `getResourceAsStream` is `(if (ClassLoader.searchesTree l) tree
+  roots)` where the tree has another answer, `getSystemResourceAsStream` the roots'.
+- **The octets** travel as a text of one character an octet (`Resources.stream`, a new
+  `ByteArrayInputStream` every read). Not their UTF-8 text: one road for every file,
+  binary or not. Measured (wasm): a program printing 5 octets 41,606 B (its
+  `ByteArrayInputStream` over a literal's `getBytes()` 42,424); a 200,256-octet resource
+  adds 200,155 B of ASCII and 300,160 B of random octets (1.5 an octet: a character above
+  127 is two in the string data); 200,256 random octets read back hash-identical on the
+  four backends, NUL included. A program naming no resource is byte-identical (a thread
+  and class-object program 107,548 B, `examples/java/shop` 328,166 B, before and after).
+- **Roots.** The tree is the entry's (`JavaFiles.findResource`), the playground's uploads
+  (`treeResource`; an upload's octets are its text's UTF-8), none for `-e`; the roots are
+  `--java-source-path` / `--java-source-dep` (`libraryResource`). The Maven plugin's `wasm`
+  goal passes no resource directory of the project (`.todo/k59`).
+- **Left** (`.todo/k58`): a name computed at run time, `getResource` (no `java.net.URL`),
+  `getResources`, `ResourceBundle`, `ServiceLoader`.
+- **Beside it** (k53): a qualified name of a JDK package naming no class the subset has,
+  read as a value (`java.util.ResourceBundle.getBundle("m")`), is `the class
+  java.util.ResourceBundle` and no longer `cannot find symbol: variable java`
+  (`JavaClasses.namesPlatformClass`: a JDK package's name no prefix of which is a class).
+- Pinned by java-spec `a-program-uses-a-library-read-as-source-from-its-source-path`
+  (`resources()`: the JDK leg's library classes carry the `library:` entries that are no
+  `.java` beside them), `JavaLoweringTest#aConstructTheSubsetDoesNotHaveIsRefusedByNameAtItsPosition`
+  (a computed name, the qualified JDK classes),
+  `PlaygroundReplTest#theJavaPickKeepsItsDeclarationsAcrossBuffersAndRunsAProgram` (an
+  upload read as a resource).
 
 ## YAVI compiled to wasm (2026-11-20, k33)
 

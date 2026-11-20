@@ -373,6 +373,12 @@ the subset's classes declare (a `String` is a `Comparable` and a `CharSequence`)
 the `static synchronized` methods of the class hold, which is not the monitor of the class
 object held in a variable.
 
+**A resource is found when the program is compiled.** Its name must be a constant, and the
+bytes the program reads are those of the file at the compile. A directory is no resource:
+`getResourceAsStream` of one answers `null`, where the launcher answers a stream. The
+stream is a `ByteArrayInputStream`. A JDK class finds no resource, not even the JDK's own.
+`getResource`, `getResources`, `ResourceBundle` and `ServiceLoader` are refused by name.
+
 **A stream runs in order on the thread that asks for its result.** `parallel()` and
 `parallelStream()` are kept (`isParallel()` answers `true`) and change nothing else: the
 elements go through one at a time in the source's order, and a collector's `combiner` and

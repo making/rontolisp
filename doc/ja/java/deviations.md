@@ -370,6 +370,12 @@ JDK のクラスのスーパークラスは、このサブセットでの宣言�
 `static synchronized` メソッドが保持するモニターであり、変数に入れたクラスオブジェクトの
 モニターとは別のものです。
 
+**リソースはコンパイル時に見つけます。** 名前は定数でなければならず、プログラムが読む内容は
+コンパイル時のファイルの内容です。ディレクトリはリソースではありません。ディレクトリに対する
+`getResourceAsStream` は `null` を返します（ランチャーはストリームを返します）。返すストリームは
+`ByteArrayInputStream` です。JDK のクラスは、JDK 自身のものも含めてリソースを見つけません。
+`getResource`、`getResources`、`ResourceBundle`、`ServiceLoader` は名前を示して拒否されます。
+
 **ストリームは、結果を求めたスレッドで順に実行されます。** `parallel()` と
 `parallelStream()` は記録されるだけです（`isParallel()` は `true` を返します）。要素は
 ソースの順に 1 つずつ流れ、コレクターの `combiner` と、`collect`、`reduce` の第 3 引数は
