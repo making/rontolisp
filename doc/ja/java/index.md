@@ -284,7 +284,7 @@ $ rontolisp main.lisp
 `Object[]` はベクタです。Common Lisp のリストは `List` ではありません。Java のメソッドには
 ベクタを渡します。`int`、`long`、`short`、`byte`、`char` の引数に渡す整数はその型の値でなければ
 なりません。コンパイルしたプログラムは型の宣言どおりに扱います（wasm では型の範囲を超える整数で
-トラップします）。`int`、`long`、`short`、`byte` を返す `native` メソッドが返す整数は、
+トラップし、JVM では整数でない値でエラーになります）。`int`、`long`、`short`、`byte` を返す `native` メソッドが返す整数は、
 その型の値と同じく型の幅の下位ビットに切り詰めます。
 
 ## ツール

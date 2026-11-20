@@ -138,6 +138,34 @@ public final class DeclaredIntegerTypes {
 	}
 
 	/**
+	 * {@link #declared} of a function body's head, and of the head of the sole
+	 * {@code %fn-block}/{@code block} the body's last form wraps around the rest, the
+	 * shape a {@code defun}'s body is lowered to. The caller removes special variable
+	 * names.
+	 * @param bodyExprs the function body forms as lowered
+	 * @param registry the registry holding {@code deftype} expansions, or null
+	 * @return declared variable name to its interval (empty when none declare one)
+	 */
+	public static Map<String, Interval> functionBody(List<LispVal> bodyExprs, @Nullable ClosRegistry registry) {
+		Map<String, Interval> intervals = new LinkedHashMap<>(declared(bodyExprs, registry));
+		for (int i = 0; i < bodyExprs.size(); i++) {
+			LispVal form = bodyExprs.get(i);
+			if (form instanceof LispString || am.ik.rontolisp.SpecialDeclarations.isDeclaration(form)) {
+				continue;
+			}
+			if (i == bodyExprs.size() - 1 && form instanceof LispCons wrapper && wrapper.isProperList()
+					&& wrapper.car() instanceof LispSymbol head
+					&& (LispNames.FN_BLOCK_INTERNAL.equals(head.name()) || LispNames.BLOCK.equals(head.name()))
+					&& wrapper.toList().size() >= 3) {
+				List<LispVal> wrapped = wrapper.toList();
+				declared(wrapped.subList(2, wrapped.size()), registry).forEach(intervals::putIfAbsent);
+			}
+			break;
+		}
+		return intervals;
+	}
+
+	/**
 	 * The specifier with its {@code deftype} aliases followed -- the whole of it, and
 	 * each conjunct of an {@code (and ...)} -- or null where an alias does not end within
 	 * {@link #ALIAS_HOPS}.
