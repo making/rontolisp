@@ -13994,12 +13994,22 @@ standalone:
               System.out.println(before + " " + purged.getQueue().size());
               hold.countDown();
               purged.shutdown();
-              // a pool with no core thread still runs what waits in its queue
+              // a pool with no core thread still runs what waits in its queue, also a task
+              // handed over while the worker that ran the one before is ending, at once or
+              // when its keep-alive time is up
               ThreadPoolExecutor none = new ThreadPoolExecutor(0, 2, 0, TimeUnit.SECONDS, new LinkedBlockingQueue<>());
+              ThreadPoolExecutor brief = new ThreadPoolExecutor(0, 2, 1, TimeUnit.NANOSECONDS, new LinkedBlockingQueue<>());
               CountDownLatch ran = new CountDownLatch(2);
               none.execute(ran::countDown);
               none.execute(ran::countDown);
-              System.out.println(ran.await(60, TimeUnit.SECONDS) + " " + none.prestartCoreThread() + " "
+              boolean each = ran.await(60, TimeUnit.SECONDS);
+              for (int i = 0; i < 200 && each; i++) {
+                  CountDownLatch one = new CountDownLatch(1);
+                  (i < 100 ? none : brief).execute(one::countDown);
+                  each = one.await(60, TimeUnit.SECONDS);
+              }
+              brief.shutdown();
+              System.out.println(each + " " + none.prestartCoreThread() + " "
                       + none.prestartAllCoreThreads() + " " + purged.awaitTermination(60, TimeUnit.SECONDS) + " " + events);
               none.shutdown();
               // a pool of one thread is behind a wrapper: no ThreadPoolExecutor to set the size of

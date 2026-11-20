@@ -3793,6 +3793,16 @@ thread suspended under it asked `Support.oneStack()` and did what one stack coul
   corpus). `CompletableFuture`'s tasks with no executor run on a growing pool of daemons
   named as a JDK's common pool's. Until k00 a worker with no task left ended on wasm and a
   later task started a thread of its name.
+  **A worker that ends leaves `workers` in the monitor hold that decides it** (k54,
+  2026-11-20: `next` answers `leave(worker)`). Until then it left later, in `ended`, and
+  an `execute` between the two counted it, queued the task and woke nobody: the task
+  never ran (`main` in a latch's `await`). Measured with a probe of 300 tasks in a row on
+  one pool of no core thread, each awaited before the next: 76 stranded on the
+  interpreter and 70 on the JVM with a keep-alive of 0, 129 on the interpreter with one
+  of a nanosecond (the timed wait's end); 0 on both wasm targets, whose threads take
+  turns, and 0 under the JDK. The corpus's
+  `locks-latches-queues-and-executors-hand-work-between-threads` runs 200 such tasks on
+  two pools.
 - **`ConcurrentHashMap` keeps the order a JDK 25 walks it in, derived from outputs alone**
   (rule 2 of the provenance file: no source was read; each rule below is the reading of a
   probe run under the JDK, then checked by differential runs: 80 seeds of 300 random

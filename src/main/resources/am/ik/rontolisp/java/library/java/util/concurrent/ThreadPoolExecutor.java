@@ -334,7 +334,11 @@ public class ThreadPoolExecutor implements ExecutorService {
         this.completed++;
     }
 
-    /** The next task of a worker that ended one; null when the worker is to end. */
+    /**
+     * The next task of a worker that ended one; null when the worker is to end, which it
+     * has by then: it leaves the workers where it finds that it ends, so a task handed over
+     * after that finds no worker to wait for and is given a new one.
+     */
     private synchronized Runnable next(Worker worker) {
         long deadline = 0L;
         boolean timed = false;
@@ -344,11 +348,11 @@ public class ThreadPoolExecutor implements ExecutorService {
                 return task;
             }
             if (this.shutdown) {
-                return null;
+                return leave(worker);
             }
             boolean ending = this.coreEnds || this.workers.size() > this.core;
             if (ending && this.keepAlive == 0) {
-                return null;
+                return leave(worker);
             }
             if (ending && !timed) {
                 // the time runs from where the worker found that it is to end
@@ -361,7 +365,7 @@ public class ThreadPoolExecutor implements ExecutorService {
                     wait();
                 }
                 else if (!Timing.await(this, deadline) && queued() == 0) {
-                    return null;
+                    return leave(worker);
                 }
             }
             catch (InterruptedException e) {
@@ -373,6 +377,12 @@ public class ThreadPoolExecutor implements ExecutorService {
         }
     }
 
+    /** A worker that ends, out of the workers: null, its next task. */
+    private Runnable leave(Worker worker) {
+        this.workers.remove(worker);
+        return null;
+    }
+
     /**
      * A worker's end. One a task's exception ended is replaced by a thread of the next
      * name: started with the next task when one waits, else kept for the task to come.
@@ -380,6 +390,7 @@ public class ThreadPoolExecutor implements ExecutorService {
     private void ended(Worker worker, boolean thrown) {
         Thread started = null;
         synchronized (this) {
+            // one that found no task has left already
             this.workers.remove(worker);
             if (thrown) {
                 // a task that threw is a task the pool is done with
