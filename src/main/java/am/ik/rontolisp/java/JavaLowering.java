@@ -1527,11 +1527,11 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/**
-	 * A body with the integral ones among its variables declared of their types
-	 * ({@link JavaForms#integerType}) ahead of its forms.
+	 * A body with the integral ones and the arrays among its variables declared of their
+	 * types ({@link JavaForms#declaredType}) ahead of its forms.
 	 */
 	private static List<LispVal> declaring(List<Local> locals, List<LispVal> forms) {
-		LispVal declaration = JavaForms.integerDeclaration(symbols(locals), locals.stream().map(Local::type).toList());
+		LispVal declaration = JavaForms.typeDeclaration(symbols(locals), locals.stream().map(Local::type).toList());
 		if (declaration == null) {
 			return forms;
 		}
@@ -1543,11 +1543,12 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	/**
 	 * Locals bound in turn around a body: one {@code let} each where one of them is of an
-	 * integral type, which its own {@code let} declares; one {@code let*} where none is.
+	 * integral or an array type, which its own {@code let} declares; one {@code let*}
+	 * where none is.
 	 */
 	private static LispVal boundInTurn(List<Declared> locals, List<LispVal> body, String binder) {
-		boolean integral = locals.stream().anyMatch(declared -> JavaForms.integerType(declared.local().type()) != null);
-		if (!integral) {
+		boolean typed = locals.stream().anyMatch(declared -> JavaForms.declaredType(declared.local().type()) != null);
+		if (!typed) {
 			List<LispVal> bindings = new ArrayList<>();
 			locals.forEach(declared -> bindings.add(list(declared.local().symbol(), declared.value())));
 			return form(cl(bindings.size() == 1 ? binder : "let*"), prepend(list(bindings), body));
@@ -4536,9 +4537,10 @@ final class JavaLowering implements JavaEmitter.Context {
 				Typed object = assigning && this.early && select.target() instanceof This
 						? new Typed(THIS, this.currentClass.self()) : expression(select.target(), null);
 				if (object.type() instanceof ArrayType && select.name().equals("length")) {
-					return new Place(Primitive.INT, call("length", dereferenced(object.form())), value -> {
-						throw error(select.pos(), "cannot assign a value to final variable length");
-					}, bindings);
+					return new Place(Primitive.INT,
+							call("length", JavaForms.vector(object.type(), dereferenced(object.form()))), value -> {
+								throw error(select.pos(), "cannot assign a value to final variable length");
+							}, bindings);
 				}
 				if (!(object.type() instanceof ClassType) && !(object.type() instanceof Variable)) {
 					throw error(select.pos(), object.type() + " cannot be dereferenced");
@@ -4585,7 +4587,7 @@ final class JavaLowering implements JavaEmitter.Context {
 					throw error(index.index().pos(),
 							"incompatible types: " + at.type() + " cannot be converted to int");
 				}
-				LispVal element = call("aref", stabilized(array.form(), stable, bindings),
+				LispVal element = call("aref", stabilized(JavaForms.knownArray(type, array.form()), stable, bindings),
 						stabilized(at.form(), stable, bindings));
 				return new Place(type.element(), elementRead(type.element(), element),
 						value -> call("setf", element, elementStored(type.element(), value)), bindings);
@@ -9333,7 +9335,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		LispVal test;
 		if (through == null) {
 			round.add(call("setq", index, call("+", index, integer(1))));
-			bindings.add(list(items, dereferenced(iterable.form())));
+			bindings.add(list(items, JavaForms.vector(iterable.type(), dereferenced(iterable.form()))));
 			bindings.add(list(count, call("length", items)));
 			bindings.add(list(index, integer(0)));
 			test = call("<", index, count);

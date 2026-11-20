@@ -5572,7 +5572,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			// (declare (type ...)) at the body head: array kinds for the parameters, so
 			// a declared site emits the single-arm accessor
 			// (.kb/declarations-type-checks.md).
-			funcCtx.declaredArrays = WasmArrayCompiler.functionBodyDeclaredKinds(defun.bodyExprs, funcCtx);
+			funcCtx.declaredArrays = WasmArrayCompiler.functionBodyDeclaredPins(defun.bodyExprs, funcCtx);
 			// and integer ranges, which a fused site takes with no bail
 			funcCtx.declaredIntegers = WasmIntFusionCompiler.functionBodyDeclaredIntegers(defun.bodyExprs, funcCtx);
 
@@ -5849,7 +5849,7 @@ public final class WasmLispCompiler implements LispCompiler {
 			lambdaCtx.nextLocal = lambda.paramNames.size() + 1;
 			// (declare (type ...)) at the body head (a local function's sits inside its
 			// (block name ...) wrap): array kinds for the parameters.
-			lambdaCtx.declaredArrays = WasmArrayCompiler.functionBodyDeclaredKinds(lambda.bodyExprs, lambdaCtx);
+			lambdaCtx.declaredArrays = WasmArrayCompiler.functionBodyDeclaredPins(lambda.bodyExprs, lambdaCtx);
 			lambdaCtx.declaredIntegers = WasmIntFusionCompiler.functionBodyDeclaredIntegers(lambda.bodyExprs,
 					lambdaCtx);
 
@@ -12537,7 +12537,7 @@ public final class WasmLispCompiler implements LispCompiler {
 		 * registered by the defun/lambda body setup and {@link WasmLetCompiler}, shadowed
 		 * names removed, restored on scope exit.
 		 */
-		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind> declaredArrays = Map.of();
+		Map<String, am.ik.rontolisp.compiler.DeclaredArrayTypes.Pin> declaredArrays = Map.of();
 
 		/**
 		 * Lexical variables in scope a declaration pins to an interval of i64

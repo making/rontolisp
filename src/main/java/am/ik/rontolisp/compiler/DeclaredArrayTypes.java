@@ -81,19 +81,68 @@ public final class DeclaredArrayTypes {
 	}
 
 	/**
-	 * The declared array kinds of a body's leading {@code (declare (type spec var...))}
-	 * forms: variable name to the representation kind its declaration proves. Only
-	 * leading declarations count (CL syntax; an optional docstring before or between them
-	 * is skipped), only {@code type} specifiers are read, and a variable whose specifier
-	 * proves no single representation is simply absent. Later duplicate declarations of
-	 * one name keep the FIRST kind (chipz never declares one name twice; disagreeing
-	 * declarations prove nothing anyway).
+	 * What a declaration pins a value to: the representation of the array it is, whether
+	 * {@code nil} may stand in its place -- {@code (or null (simple-array ...))}, what
+	 * the Java front end declares of a variable of an array type -- and the integers a
+	 * general array's elements are. An element access reads either the same way: its
+	 * checks run ahead of the one representation's read, and they answer {@code nil} as
+	 * the generic access does. What reads the kind alone -- a packed vector's
+	 * {@code length}, a {@code fill} through the array arm -- takes it only where
+	 * {@code nil} cannot be.
+	 *
+	 * <p>
+	 * The elements are what CLHS's {@code type} declaration says of an array type's:
+	 * within its scope every element read is of the EXPRESSED element type, not the
+	 * upgraded one -- {@code (simple-array (signed-byte 64) (*))} is the general array,
+	 * each element an integer of i64. A packed kind's elements are its width's and need
+	 * none.
+	 *
+	 * @param kind the representation of the array
+	 * @param orNull whether the value may be {@code nil} instead
+	 * @param elements the interval of i64 every element of a {@link Kind#GENERAL} array
+	 * is in, or null where the element type proves none
+	 */
+	public record Pin(Kind kind, boolean orNull, DeclaredIntegerTypes.@Nullable Interval elements) {
+
+		/**
+		 * The kind of a value that is surely an array, or null where it may be
+		 * {@code nil}.
+		 * @return the kind, or null
+		 */
+		public @Nullable Kind arrayKind() {
+			return this.orNull ? null : this.kind;
+		}
+
+		/**
+		 * What this and another pin of the same value prove together: {@code nil} only
+		 * where both admit it, the elements in both intervals; this pin alone where the
+		 * two disagree on the kind, which only a false declaration makes.
+		 * @param other the other pin, or null
+		 * @return the conjunction
+		 */
+		public Pin and(@Nullable Pin other) {
+			if (other == null || other.kind != this.kind) {
+				return this;
+			}
+			return new Pin(this.kind, this.orNull && other.orNull, meet(this.elements, other.elements));
+		}
+
+	}
+
+	/**
+	 * The declared array pins of a body's leading {@code (declare (type spec var...))}
+	 * forms: variable name to the representation (and whether {@code nil} may stand in
+	 * for it) its declaration proves. Only leading declarations count (CL syntax; an
+	 * optional docstring before or between them is skipped), only {@code type} specifiers
+	 * are read, and a variable whose specifier proves no single representation is simply
+	 * absent. Later duplicate declarations of one name keep the FIRST pin (chipz never
+	 * declares one name twice; disagreeing declarations prove nothing anyway).
 	 * @param bodyExprs the body forms, declarations included
 	 * @param registry the registry holding {@code deftype} expansions, or null
-	 * @return declared variable name to array kind (empty when none declare one)
+	 * @return declared variable name to its pin (empty when none declare one)
 	 */
-	public static Map<String, Kind> declaredKinds(List<LispVal> bodyExprs, @Nullable ClosRegistry registry) {
-		Map<String, Kind> kinds = new LinkedHashMap<>();
+	public static Map<String, Pin> declared(List<LispVal> bodyExprs, @Nullable ClosRegistry registry) {
+		Map<String, Pin> pins = new LinkedHashMap<>();
 		for (LispVal form : bodyExprs) {
 			if (form instanceof LispString) {
 				continue;
@@ -113,65 +162,125 @@ public final class DeclaredArrayTypes {
 				if (parts.size() < 3) {
 					continue;
 				}
-				Kind kind = kindOfSpec(parts.get(1), registry);
-				if (kind == null) {
+				Pin pin = pinOfSpec(parts.get(1), registry);
+				if (pin == null) {
 					continue;
 				}
 				for (int v = 2; v < parts.size(); v++) {
 					if (parts.get(v) instanceof LispSymbol var) {
-						kinds.putIfAbsent(var.name(), kind);
+						pins.putIfAbsent(var.name(), pin);
 					}
 				}
 			}
 		}
-		return kinds;
+		return pins;
 	}
 
 	/**
-	 * The array representation kind a type specifier proves, or null when it proves none
-	 * (including every non-array specifier). A symbol specifier follows registered
-	 * {@code deftype} aliases; an {@code (and ...)} answers the one kind its components
-	 * agree on.
+	 * The array representation a type specifier proves, and whether it admits {@code nil}
+	 * beside it, or null when it proves none (including every non-array specifier). A
+	 * symbol specifier follows registered {@code deftype} aliases; an {@code (and ...)}
+	 * answers the one kind its components agree on, admitting {@code nil} unless one of
+	 * them excludes it; an {@code (or ...)} of {@code null} and array types of one kind
+	 * answers that kind with {@code nil}.
 	 * @param spec the type specifier as written in the declaration
 	 * @param registry the registry holding {@code deftype} expansions, or null
-	 * @return the kind, or null
+	 * @return the pin, or null
 	 */
-	@Nullable public static Kind kindOfSpec(@Nullable LispVal spec, @Nullable ClosRegistry registry) {
+	@Nullable public static Pin pinOfSpec(@Nullable LispVal spec, @Nullable ClosRegistry registry) {
 		LispVal resolved = LispMacroExpander.resolveElementTypeAlias(spec, registry);
 		if (resolved instanceof LispSymbol sym) {
-			return switch (plainName(sym.name())) {
-				case "SIMPLE-VECTOR" -> Kind.GENERAL;
-				default -> null;
-			};
+			return "SIMPLE-VECTOR".equals(plainName(sym.name())) ? new Pin(Kind.GENERAL, false, null) : null;
 		}
 		if (!(resolved instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)) {
 			return null;
 		}
 		List<LispVal> parts = cons.toList();
-		return switch (plainName(head.name())) {
+		switch (plainName(head.name())) {
 			case "AND" -> {
-				Kind agreed = null;
+				// every component holds: the one kind they agree on, nil only where none
+				// excludes it, the elements in every interval given
+				Pin agreed = null;
 				for (int i = 1; i < parts.size(); i++) {
-					Kind component = kindOfSpec(parts.get(i), registry);
+					Pin component = pinOfSpec(parts.get(i), registry);
 					if (component == null) {
 						continue;
 					}
-					if (agreed != null && agreed != component) {
-						yield null;
+					if (agreed != null && agreed.kind() != component.kind()) {
+						return null;
 					}
-					agreed = component;
+					agreed = agreed == null ? component : agreed.and(component);
 				}
-				yield agreed;
+				return agreed;
 			}
-			case "SIMPLE-VECTOR" -> Kind.GENERAL;
+			case "OR" -> {
+				// one branch holds: nil, or an array of the one kind every other branch
+				// proves, its elements in the hull of theirs
+				Pin agreed = null;
+				boolean orNull = false;
+				for (int i = 1; i < parts.size(); i++) {
+					LispVal branch = parts.get(i);
+					if (branch instanceof LispNil) {
+						// the empty type adds nothing
+						continue;
+					}
+					if (branch instanceof LispSymbol n && "NULL".equals(plainName(n.name()))) {
+						orNull = true;
+						continue;
+					}
+					Pin component = pinOfSpec(branch, registry);
+					if (component == null || agreed != null && agreed.kind() != component.kind()) {
+						return null;
+					}
+					agreed = agreed == null ? component : new Pin(agreed.kind(), agreed.orNull() || component.orNull(),
+							hull(agreed.elements(), component.elements()));
+				}
+				return agreed == null ? null : new Pin(agreed.kind(), agreed.orNull() || orNull, agreed.elements());
+			}
+			case "SIMPLE-VECTOR" -> {
+				return new Pin(Kind.GENERAL, false, null);
+			}
 			// (vector [elt [len]]) is rank-1 by definition; (simple-array elt (dim)) /
 			// (array elt (dim)) must spell ONE dimension for the packed kinds -- an
 			// unknown rank could be a rank-n general array of the same element type.
-			case "VECTOR" -> parts.size() >= 2 ? elementKind(parts.get(1), registry, true) : null;
-			case "ARRAY", "SIMPLE-ARRAY" -> parts.size() >= 2
-					? elementKind(parts.get(1), registry, parts.size() >= 3 && isRank1Dims(parts.get(2))) : null;
-			default -> null;
-		};
+			case "VECTOR" -> {
+				return parts.size() >= 2 ? arrayPin(parts.get(1), registry, true) : null;
+			}
+			case "ARRAY", "SIMPLE-ARRAY" -> {
+				return parts.size() >= 2
+						? arrayPin(parts.get(1), registry, parts.size() >= 3 && isRank1Dims(parts.get(2))) : null;
+			}
+			default -> {
+				return null;
+			}
+		}
+	}
+
+	// The pin of an array type of an element type: its kind, and for the general kind
+	// the interval its elements are in.
+	@Nullable private static Pin arrayPin(LispVal elementSpec, @Nullable ClosRegistry registry, boolean rank1) {
+		Kind kind = elementKind(elementSpec, registry, rank1);
+		if (kind == null) {
+			return null;
+		}
+		return new Pin(kind, false, kind == Kind.GENERAL ? DeclaredIntegerTypes.of(elementSpec, registry) : null);
+	}
+
+	private static DeclaredIntegerTypes.@Nullable Interval meet(DeclaredIntegerTypes.@Nullable Interval a,
+			DeclaredIntegerTypes.@Nullable Interval b) {
+		if (a == null || b == null) {
+			return a == null ? b : a;
+		}
+		long lo = Math.max(a.lo(), b.lo());
+		long hi = Math.min(a.hi(), b.hi());
+		// an empty meet proves nothing
+		return lo <= hi ? new DeclaredIntegerTypes.Interval(lo, hi) : null;
+	}
+
+	private static DeclaredIntegerTypes.@Nullable Interval hull(DeclaredIntegerTypes.@Nullable Interval a,
+			DeclaredIntegerTypes.@Nullable Interval b) {
+		return a == null || b == null ? null
+				: new DeclaredIntegerTypes.Interval(Math.min(a.lo(), b.lo()), Math.max(a.hi(), b.hi()));
 	}
 
 	// The kind an ELEMENT type contributes: a packed width only when the surrounding

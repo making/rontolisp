@@ -81,6 +81,14 @@ accessor behind a trapping `ref.cast` instead of the inline 4-way dispatch chain
 generic `+`/`logand`/`ash` is one 2-byte helper call; at the speed levels a fused site's fallback
 is (the next section).
 
+**Measured: in a closed module the dispatch is mostly gone already** (2026-11-20, k64): the
+type-test fold (`.kb/wasm-ref-type-fold.md`) prunes each site's arms down to the representations
+the module's constructors reach, so an undeclared read of a parameter only cells reach was the
+general arm alone. Declaring every array of the zone reader (`ZoneChanges.region`, `find`,
+`rule`, `written`, `number`) took 13,217 -> 12,765 B: what a pin buys there is speed and the
+reads whose array nothing pinned before (below, the bullet on nil and a general array's
+elements).
+
 `compiler.DeclaredArrayTypes` (backend-free) maps a specifier to a `Kind`: `U8`/`U16`/`U32`
 (requires an explicitly rank-1 dims spec, since an unknown-rank spec could be a rank-n GENERAL
 array of the same element type), `FLOAT`, `GENERAL`. A string specifier (`simple-string`
@@ -124,13 +132,17 @@ arm keeping the raw-value fast path (`tryCompileRaw`); `length` of a packed kind
 `GENERAL` kind, at the speed levels, the fill pointer or the storage's length off the cell's
 fields with `_seq_len` behind it (`.kb/length-runtime.md`), the generic call elsewhere.
 
-- **A `GENERAL` declaration is not always the faster access** (measured 2026-11-16,
-  `.todo/artefacts/j63-starlark-under-cpython/general-move.lisp`): `(setf (aref es2 place)
-  (aref es i))` in a loop of 10,000,000, both vectors parameters declared `(simple-array t
-  (*))`, is 66 ns a move on wasm and 118 on the JVM; with the declaration deleted, through
-  the inline arm of an unpinned vector (`.kb/adjustable-arrays.md`, "What an element access
-  costs"), 21 and 85. Not looked into; the Starlark library's radix sort moves places in
-  packed vectors instead.
+- **A `GENERAL` site takes the inline arm of an unpinned vector at the speed levels**
+  (`.kb/adjustable-arrays.md`, "What an element access costs"), in and out of EH mode, and
+  what the arm refuses is checked as an unpinned read's is: one `_idx_ref` of rank 1 (the
+  subscript's type, the rank, the bound), then the general array's read or store. Until
+  2026-11-20 a pinned site outside EH mode had no arm, and inside it called `_arr_check_rank`
+  and `_idx_ref` and checked the subscript where it was evaluated: `(setf (aref es2 place)
+  (aref es i))` over two parameters declared `(simple-array t (*))`
+  (`.todo/artefacts/j63-starlark-under-cpython/general-move.lisp`, 10,000,000 moves, no
+  handler) was 66 ns a move on wasm with the declaration and 21-25 without it; now 9 ns with
+  it (1,189-1,266 -> 640-646 ms the run, the undeclared 793-848 -> 824-839). The JVM reads no
+  array declaration (118 / 85 ns, 2026-11-16).
 - **The checks before the access** (2026-11-09). A one-subscript site of a packed kind tests the
   array against that ONE type inline and calls `_arr_check_rank` only when the test fails (a packed
   vector is rank 1 by construction, `emitKindedCheckRank`) -- it was the call every time, 9% of an
@@ -141,10 +153,32 @@ fields with `_seq_len` behind it (`.kb/length-runtime.md`), the generic call els
 - **A fused read takes the pin too** (`.kb/wasm-int-fusion.md`): one width tested where the integer
   tree's aref leaf tested all three, and a DIRECT read -- a site with no signalling operation --
   casts like the unfused read, so a false declaration traps there as well; it used to bail to the
-  generic read and answer. A constant's packed vector (`WasmArrayCompiler.constantArrays`) is
+  generic read and answer. A general array whose elements a pin (or a `the` of the read) makes
+  integers is read off the vector's storage and taken in their range with no bail
+  (`.kb/wasm-int-fusion.md`, "Ranges, and sites with nothing to bail on"). A constant's packed vector (`WasmArrayCompiler.constantArrays`) is
   a fused read's kind only, never `arrayKindOfExpr`'s: its global is nothing before the
   definition ran, which the unfused read must keep reporting as the generic read does.
 
+- **nil and a general array's elements** (2026-11-20, k64; what the Java front end declares
+  of an array variable, `.kb/java-frontend.md`, "Numbers"). A declaration pins a
+  `DeclaredArrayTypes.Pin`: the kind, whether nil may stand in for the array (`orNull`: an
+  `(or null X)`, an `(and ..)` of pins admits nil only where every one does) and, for the
+  `GENERAL` kind, the integers its elements are (`elements`, the element type's range,
+  `DeclaredIntegerTypes.of`): CLHS's `type` declaration of an array type makes every element
+  read of the EXPRESSED element type, so `(simple-array (signed-byte 64) (*))` and `(simple-array
+  bit (*))` are general arrays of integers. `WasmArrayCompiler.arrayPinOfExpr` answers it
+  (`arrayKindOfExpr` its kind); a `(the spec x)` proves what both prove (`Pin.and`). An element
+  access reads nil as the generic one does -- its checks run before the one representation's
+  cast, after the subscript and a store's value (`emitKindedAset1` evaluates the value first
+  where nil may be the array, as the checked shape does) -- so it takes the kind either way;
+  what reads the kind alone takes it only of a surely-array value (`Pin.arrayKind`): a packed
+  `length` (nil's is 0, `_seq_len`'s), `provesArrayValue` (`fill` of nil answers nil). A
+  `let` binding declared `(or null X)` whose init is a `make-array` or a surely-array pin and
+  which the body never reassigns is no nil (`WasmLetCompiler`). Pins:
+  `ArefRankAndSubscriptChecksFixture.ORDER_SOURCE`'s last rows (every backend and level, the
+  component: nil, a bound, a wide and a non-integer subscript through each pinned read and
+  store, the order the subscript and the value run in); java-spec
+  `the-run-time-raises-the-language-s-exceptions` (a null array a method declares).
 - `(setf (aref var i) v)` on a VARIABLE place of a pinned kind skips the expansion's
   `stringp`/`schar-set` branch (`nonStringArefStore`, intercepted at both `WasmExprCompiler` setf
   sites).

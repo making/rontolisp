@@ -952,6 +952,19 @@ final class WasmArrayCompiler {
 			// the full dispatch chain (.kb/declarations-type-checks.md).
 			LispVal subscript = subscriptCount == 1 ? args.get(2) : new LispInteger(0);
 			DeclaredArrayTypes.Kind kind = arrayKindOfExpr(args.get(1), ctx);
+			if (kind == DeclaredArrayTypes.Kind.GENERAL && subscriptCount == 1
+					&& WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
+				// a general vector: its element inline, and what the arm refuses checked
+				// as an unpinned vector's read is -- the subscript's type, the rank and
+				// the bound in the one _idx_ref call -- then the general array's read
+				compileSubscript(subscript, ctx, reportsBounds(ctx));
+				int idxSlot = setTemp(ctx);
+				emitSimpleVectorAccess(ctx, arrSlot, idxSlot, -1, () -> {
+					emitReadChecks(ctx, arrSlot, idxSlot, subscriptCount);
+					emitKindedAref1(ctx, kind, arrSlot, idxSlot, reportsBounds(ctx));
+				});
+				return;
+			}
 			if (kind != null && reportsBounds(ctx) && WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
 				// One representation: its bound compares inline after the subscript's
 				// type check and the rank check, which a packed vector passes inline too
@@ -959,16 +972,6 @@ final class WasmArrayCompiler {
 				// check (compileSubscript).
 				compileSubscript(subscript, ctx);
 				int idxSlot = setTemp(ctx);
-				if (kind == DeclaredArrayTypes.Kind.GENERAL && subscriptCount == 1) {
-					// a general vector: its element inline, and the bound of what the arm
-					// refuses through its call
-					emitSimpleVectorAccess(ctx, arrSlot, idxSlot, -1, () -> {
-						emitKindedCheckRank(ctx, kind, arrSlot, subscriptCount);
-						emitFlatCheck(ctx, arrSlot, idxSlot, false);
-						emitKindedAref1(ctx, kind, arrSlot, idxSlot, true);
-					});
-					return;
-				}
 				emitKindedCheckRank(ctx, kind, arrSlot, subscriptCount);
 				emitFlatCheck(ctx, arrSlot, idxSlot, false, kindedBound(ctx, kind, arrSlot, subscriptCount));
 				emitKindedAref1(ctx, kind, arrSlot, idxSlot, true);
@@ -1164,6 +1167,22 @@ final class WasmArrayCompiler {
 	 * where the accessor's body is not the only definition the call could reach).
 	 */
 	static DeclaredArrayTypes.@Nullable Kind arrayKindOfExpr(LispVal expr, WasmLispCompiler.Ctx ctx) {
+		DeclaredArrayTypes.Pin pin = arrayPinOfExpr(expr, ctx);
+		return pin == null ? null : pin.kind();
+	}
+
+	/**
+	 * {@link #arrayKindOfExpr}'s representation, and whether {@code nil} may stand in for
+	 * the array ({@code DeclaredArrayTypes.Pin}): an element access reads either the same
+	 * way, but what reads the kind alone -- a packed vector's {@code length}, the array
+	 * arm of a {@code fill} -- takes it only where {@code nil} cannot be
+	 * ({@link DeclaredArrayTypes.Pin#arrayKind}). A {@code (the spec expr)} proves what
+	 * its spec and {@code expr} prove together.
+	 * @param expr the expression at the array position
+	 * @param ctx the compile context
+	 * @return the pin, or null when nothing pins the representation
+	 */
+	static DeclaredArrayTypes.@Nullable Pin arrayPinOfExpr(LispVal expr, WasmLispCompiler.Ctx ctx) {
 		if (expr instanceof LispSymbol sym) {
 			return ctx.declaredArrays.get(sym.name());
 		}
@@ -1172,14 +1191,15 @@ final class WasmArrayCompiler {
 		}
 		List<LispVal> parts = cons.toList();
 		if (LispNames.THE.equals(localName(head.name())) && parts.size() == 3) {
-			DeclaredArrayTypes.Kind kind = DeclaredArrayTypes.kindOfSpec(parts.get(1), ctx.closRegistry);
-			return kind != null ? kind : arrayKindOfExpr(parts.get(2), ctx);
+			DeclaredArrayTypes.Pin pin = DeclaredArrayTypes.pinOfSpec(parts.get(1), ctx.closRegistry);
+			DeclaredArrayTypes.Pin inner = arrayPinOfExpr(parts.get(2), ctx);
+			return pin == null ? inner : pin.and(inner);
 		}
 		if (parts.size() == 2 && !ctx.dynamic && ctx.closRegistry != null
 				&& !ctx.duplicatedDefunNames.contains(head.name())) {
 			LispVal slotType = ctx.closRegistry.structAccessorType(head.name());
 			if (slotType != null) {
-				return DeclaredArrayTypes.kindOfSpec(slotType, ctx.closRegistry);
+				return DeclaredArrayTypes.pinOfSpec(slotType, ctx.closRegistry);
 			}
 		}
 		return null;
@@ -1218,14 +1238,14 @@ final class WasmArrayCompiler {
 		if (expr instanceof LispSymbol sym && ctx.arrayLocals.contains(sym.name())) {
 			return true;
 		}
-		DeclaredArrayTypes.Kind kind = arrayKindOfExpr(expr, ctx);
-		return kind != null || makeArrayBuildsArrayValue(expr, ctx);
+		DeclaredArrayTypes.Pin pin = arrayPinOfExpr(expr, ctx);
+		return pin != null && pin.arrayKind() != null || makeArrayBuildsArrayValue(expr, ctx);
 	}
 
 	/**
 	 * Whether an expression is a {@code make-array} call that cannot answer a STRING --
 	 * i.e. one whose value {@code %arrayp} is true whatever its rank turns out to be at
-	 * run time, which is what lets this answer where {@link #initExprKind} cannot (that
+	 * run time, which is what lets this answer where {@link #initExprPin} cannot (that
 	 * one must know the rank, because rank decides packed-or-general).
 	 *
 	 * <p>
@@ -1283,17 +1303,17 @@ final class WasmArrayCompiler {
 	}
 
 	/**
-	 * The declared array kinds a FUNCTION body's leading {@code (declare (type ...))}
+	 * The declared array pins a FUNCTION body's leading {@code (declare (type ...))}
 	 * forms establish for its parameters (and free names), specials filtered out. The
 	 * declarations may sit one wrapper deep: {@code LambdaLists} wraps a
 	 * return-from-using body in {@code (%fn-block name ...)} and the flet lowering wraps
 	 * a local function's body in {@code (block name ...)} -- both still declare the
 	 * function body, so the scan follows a sole trailing wrapper of either spelling.
 	 */
-	static Map<String, DeclaredArrayTypes.Kind> functionBodyDeclaredKinds(List<LispVal> bodyExprs,
+	static Map<String, DeclaredArrayTypes.Pin> functionBodyDeclaredPins(List<LispVal> bodyExprs,
 			WasmLispCompiler.Ctx ctx) {
-		Map<String, DeclaredArrayTypes.Kind> kinds = new java.util.HashMap<>(
-				DeclaredArrayTypes.declaredKinds(bodyExprs, ctx.closRegistry));
+		Map<String, DeclaredArrayTypes.Pin> kinds = new java.util.HashMap<>(
+				DeclaredArrayTypes.declared(bodyExprs, ctx.closRegistry));
 		for (int i = 0; i < bodyExprs.size(); i++) {
 			LispVal form = bodyExprs.get(i);
 			if (form instanceof am.ik.rontolisp.LispString || isDeclareForm(form)) {
@@ -1304,7 +1324,7 @@ final class WasmArrayCompiler {
 							|| LispNames.BLOCK.equals(localName(head.name())))
 					&& wrapper.toList().size() >= 3) {
 				List<LispVal> wrapped = wrapper.toList();
-				DeclaredArrayTypes.declaredKinds(wrapped.subList(2, wrapped.size()), ctx.closRegistry)
+				DeclaredArrayTypes.declared(wrapped.subList(2, wrapped.size()), ctx.closRegistry)
 					.forEach(kinds::putIfAbsent);
 			}
 			break;
@@ -1548,19 +1568,25 @@ final class WasmArrayCompiler {
 	}
 
 	/**
-	 * The array kind a {@code let} binding's INIT expression proves without any
+	 * The array pin a {@code let} binding's INIT expression proves without any
 	 * declaration -- this compile's own representation choice, so the kind is exact, not
 	 * trusted: a literal packed {@code make-array} (the same recognizers
-	 * {@link #compileMake} uses), or a kinded source through {@link #arrayKindOfExpr} (a
-	 * declared outer variable, an accessor call). The caller must still verify the
-	 * binding is never reassigned; a declaration needs no such check (it covers
-	 * assignments too).
+	 * {@link #compileMake} uses), or a kinded source through {@link #arrayPinOfExpr} (a
+	 * declared outer variable, an accessor call, a {@code the}), whose {@code nil} the
+	 * binding may hold too. The caller must still verify the binding is never reassigned;
+	 * a declaration needs no such check (it covers assignments too).
 	 */
-	static DeclaredArrayTypes.@Nullable Kind initExprKind(LispVal init, WasmLispCompiler.Ctx ctx) {
-		DeclaredArrayTypes.Kind direct = arrayKindOfExpr(init, ctx);
+	static DeclaredArrayTypes.@Nullable Pin initExprPin(LispVal init, WasmLispCompiler.Ctx ctx) {
+		DeclaredArrayTypes.Pin direct = arrayPinOfExpr(init, ctx);
 		if (direct != null) {
 			return direct;
 		}
+		DeclaredArrayTypes.Kind made = madeKind(init, ctx);
+		return made == null ? null : new DeclaredArrayTypes.Pin(made, false, null);
+	}
+
+	// The kind a make-array at a binding's init makes, or null.
+	private static DeclaredArrayTypes.@Nullable Kind madeKind(LispVal init, WasmLispCompiler.Ctx ctx) {
 		if (!(init instanceof LispCons cons) || !cons.isProperList() || !(cons.car() instanceof LispSymbol head)
 				|| !LispNames.MAKE_ARRAY.equals(localName(head.name()))) {
 			return null;
@@ -1888,9 +1914,9 @@ final class WasmArrayCompiler {
 			// slot :type / this compile's own initializer choice) emits that ONE arm. A
 			// packed integer vector is rank 1, so a rank-0 store to one is the generic
 			// path's: the kinded arm coerces the value before the rank check could run.
-			DeclaredArrayTypes.Kind kind = arrayKindOfExpr(args.get(1), ctx);
-			if (kind != null && (kind.packedIntWidth() == 0 || subscriptCount == 1)) {
-				emitKindedAset1(args, idxExpr, kind, ctx, resultNeeded, subscriptCount);
+			DeclaredArrayTypes.Pin pin = arrayPinOfExpr(args.get(1), ctx);
+			if (pin != null && (pin.kind().packedIntWidth() == 0 || subscriptCount == 1)) {
+				emitKindedAset1(args, idxExpr, pin, ctx, resultNeeded, subscriptCount);
 				return;
 			}
 			if (!WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
@@ -2028,9 +2054,13 @@ final class WasmArrayCompiler {
 	// because the single arm needs the value only once; the result -- the value AS
 	// STORED -- materializes only when the caller consumes it. `given` is the caller's
 	// original subscript count (0 or 1; compileAset never dispatches here for 2+), fed
-	// straight to emitArefCheckRank.
-	private static void emitKindedAset1(List<LispVal> args, LispVal idxExpr, DeclaredArrayTypes.Kind kind,
+	// straight to emitArefCheckRank. Where nil may stand in for the array, the value
+	// is evaluated before anything takes the array as its kind, as the checked shape
+	// does: the rank check answers nil as the generic store does, after the value.
+	private static void emitKindedAset1(List<LispVal> args, LispVal idxExpr, DeclaredArrayTypes.Pin pin,
 			WasmLispCompiler.Ctx ctx, boolean resultNeeded, int given) {
+		DeclaredArrayTypes.Kind kind = pin.kind();
+		boolean checksFirst = reportsBounds(ctx) || pin.orNull();
 		LispVal valueExpr = args.get(args.size() - 1);
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int arrSlot = setTemp(ctx);
@@ -2039,7 +2069,7 @@ final class WasmArrayCompiler {
 				int type = intArrType(kind.packedIntWidth());
 				compileSubscript(idxExpr, ctx);
 				int idxSlot = setTemp(ctx);
-				if (reportsBounds(ctx)) {
+				if (checksFirst) {
 					// The value before the bound: evaluated into a raw temp first, stored
 					// once the subscript passed.
 					int savedI64 = ctx.nextI64Local;
@@ -2094,14 +2124,16 @@ final class WasmArrayCompiler {
 				}
 			}
 			case GENERAL -> {
-				if (reportsBounds(ctx)) {
+				if (checksFirst || WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
+					// at the speed levels the inline arm, as an unpinned vector's store
 					compileSubscript(idxExpr, ctx);
 					int idxSlot = setTemp(ctx);
 					WasmExprCompiler.compileExpr(valueExpr, ctx);
 					int valSlot = setTemp(ctx);
 					Runnable store = () -> {
-						emitArefCheckRank(ctx, arrSlot, given);
-						emitFlatCheck(ctx, arrSlot, idxSlot, false);
+						// the rank and the bound: the subscript's type passed where it
+						// was evaluated, which _idx_ref asks again
+						emitReadChecks(ctx, arrSlot, idxSlot, given);
 						getLocal(ctx, arrSlot);
 						castCellGet0(ctx);
 						getLocal(ctx, idxSlot);
@@ -2659,6 +2691,23 @@ final class WasmArrayCompiler {
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writeI64LocalIndex(raw);
 		};
+	}
+
+	/**
+	 * The element of the general array in {@code arrSlot} at the boxed fixnum subscript
+	 * in {@code idxSlot}, a view's included, read with no check of its own: what the
+	 * caller has checked is a rank-1 array and a subscript in its bound. Leaves the
+	 * element; a value of another representation traps on the cast.
+	 * @param ctx the compile context
+	 * @param arrSlot the local holding the array
+	 * @param idxSlot the local holding the boxed subscript
+	 */
+	static void emitGeneralRead(WasmLispCompiler.Ctx ctx, int arrSlot, int idxSlot) {
+		getLocal(ctx, arrSlot);
+		castCellGet0(ctx);
+		getLocal(ctx, idxSlot);
+		WasmEmitHelper.castI31GetS(ctx);
+		callArrGet(ctx);
 	}
 
 	// The general-array read: expects [header, i32 flat] on the stack, leaves the

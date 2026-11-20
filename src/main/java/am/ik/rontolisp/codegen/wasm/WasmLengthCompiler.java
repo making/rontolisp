@@ -42,11 +42,15 @@ final class WasmLengthCompiler {
 		// A declared packed integer vector's length is its array.len, with the same
 		// trapping ref.cast as the declared accessors (.kb/declarations-type-checks.md)
 		// -- rank-1 by construction, no fill pointer possible, so no dispatch is needed.
-		am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind kind = WasmArrayCompiler.arrayKindOfExpr(args.get(1), ctx);
-		if (kind != null && kind.packedIntWidth() != 0) {
+		// Not where nil may stand in for it, whose length is 0: the general arm's miss
+		// answers that.
+		am.ik.rontolisp.compiler.DeclaredArrayTypes.Pin pin = WasmArrayCompiler.arrayPinOfExpr(args.get(1), ctx);
+		am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind kind = pin == null ? null : pin.kind();
+		am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind vector = pin == null ? null : pin.arrayKind();
+		if (vector != null && vector.packedIntWidth() != 0) {
 			WasmExprCompiler.compileExpr(args.get(1), ctx);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-			ctx.writer.writeHeapType(WasmArrayCompiler.intArrType(kind.packedIntWidth()));
+			ctx.writer.writeHeapType(WasmArrayCompiler.intArrType(vector.packedIntWidth()));
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
 			return;

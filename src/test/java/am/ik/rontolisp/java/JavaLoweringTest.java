@@ -141,9 +141,14 @@ class JavaLoweringTest {
 							+ "(%STRING-CONCAT \"s=\" (|%string| |s|)) (|%string| |o|)) (RONTOLISP::%JAVA-CHAR-STRING "
 							+ "|c|)) (IF |b| \"true\" \"false\")) (RONTOLISP::%JAVA-DOUBLE-STRING (|Shape.area()%v| "
 							+ "|s|))))",
-					"(DEFUN |L1.loop(int[])| (|xs|) (LET ((|sum| 0)) (DECLARE (TYPE (SIGNED-BYTE 32) |sum|)) (LET "
+					// an array is declared of its vector or nil, and asserted of its
+					// vector
+					// where it is no null
+					"(DEFUN |L1.loop(int[])| (|xs|) (DECLARE (TYPE (OR NULL (SIMPLE-ARRAY (UNSIGNED-BYTE 32) (*))) "
+							+ "|xs|)) (LET ((|sum| 0)) (DECLARE (TYPE (SIGNED-BYTE 32) |sum|)) (LET "
 							+ "((|i| 0)) (DECLARE (TYPE (SIGNED-BYTE 32) |i|)) (BLOCK |%break| (WHILE (< |i| (THE "
-							+ "(SIGNED-BYTE 32) (LENGTH (OR |xs| (RONTOLISP::%JAVA-NPE))))) (BLOCK |%continue| (IF (< "
+							+ "(SIGNED-BYTE 32) (LENGTH (THE (SIMPLE-ARRAY (UNSIGNED-BYTE 32) (*)) (OR |xs| "
+							+ "(RONTOLISP::%JAVA-NPE)))))) (BLOCK |%continue| (IF (< "
 							+ "(%MASK-SIGNED-FIELD 32 (AREF |xs| |i|)) 0) (RETURN-FROM |%continue| NIL)) (IF (> "
 							+ "(%MASK-SIGNED-FIELD 32 (AREF |xs| |i|)) 99) (RETURN-FROM |%break| NIL)) (SETQ |sum| "
 							+ "(%MASK-SIGNED-FIELD 32 (+ |sum| (%MASK-SIGNED-FIELD 32 (AREF |xs| |i|)))))) (SETQ |i| "
@@ -163,7 +168,8 @@ class JavaLoweringTest {
 							+ "(|%lisp-error| |%c|))))",
 					"(DEFUN |L1.adder(int)| (|n|) (DECLARE (TYPE (SIGNED-BYTE 32) |n|)) (LAMBDA (|x|) (DECLARE "
 							+ "(TYPE (SIGNED-BYTE 32) |x|)) (%MASK-SIGNED-FIELD 32 (+ |x| |n|))))",
-					"(DEFUN |L1.main(String[])| (|args|) (LET ((|s| (|Circle.new(double)| 1.5))) (LET ((|boxed| "
+					"(DEFUN |L1.main(String[])| (|args|) (DECLARE (TYPE (OR NULL (SIMPLE-ARRAY T (*))) |args|)) "
+							+ "(LET ((|s| (|Circle.new(double)| 1.5))) (LET ((|boxed| "
 							+ "(|L1.twice(int)| 3))) (LET ((|flag| (IF (> (THE (SIGNED-BYTE 32) (OR |boxed| "
 							+ "(RONTOLISP::%JAVA-NULL-UNBOX))) 3) T :FALSE))) (WRITE-LINE (%STRING-CONCAT (%STRING-CONCAT "
 							+ "(%STRING-CONCAT (OR (|L1.show(Shape,Object,char,boolean)| |s| |boxed| 99 "
@@ -317,8 +323,10 @@ class JavaLoweringTest {
 							+ "(RONTOLISP::%JAVA-NULL-SWITCH)) (T (RONTOLISP::%JAVA-NO-MATCH))))",
 					"(DEFUN |L2.size(Object)| (|o|) (LET ((|s| NIL)) (IF (NOT (AND (SIMPLE-STRING-P |o|) (PROGN "
 							+ "(SETQ |s| |o|) T))) -1 (LENGTH (OR |s| (RONTOLISP::%JAVA-NPE))))))",
-					"(DEFUN |L2.sum(int[])| (|xs|) (LET ((|t| 0)) (DECLARE (TYPE (SIGNED-BYTE 32) |t|)) (BLOCK "
-							+ "|outer%break| (LET* ((|%t1| (OR |xs| (RONTOLISP::%JAVA-NPE))) (|%t3| (LENGTH |%t1|)) "
+					"(DEFUN |L2.sum(int[])| (|xs|) (DECLARE (TYPE (OR NULL (SIMPLE-ARRAY (UNSIGNED-BYTE 32) (*))) "
+							+ "|xs|)) (LET ((|t| 0)) (DECLARE (TYPE (SIGNED-BYTE 32) |t|)) (BLOCK "
+							+ "|outer%break| (LET* ((|%t1| (THE (SIMPLE-ARRAY (UNSIGNED-BYTE 32) (*)) (OR |xs| "
+							+ "(RONTOLISP::%JAVA-NPE)))) (|%t3| (LENGTH |%t1|)) "
 							+ "(|%t2| 0)) (WHILE (< |%t2| |%t3|) (LET ((|x| (%MASK-SIGNED-FIELD 32 (AREF |%t1| |%t2|)))) "
 							+ "(DECLARE (TYPE (SIGNED-BYTE 32) |x|)) (IF (< |x| 0) (RETURN-FROM |outer%break| NIL)) (SETQ "
 							+ "|t| (%MASK-SIGNED-FIELD 32 (+ |t| |x|)))) (SETQ |%t2| (+ |%t2| 1))))) |t|))",
@@ -394,7 +402,8 @@ class JavaLoweringTest {
 					"(DEFUN |L3.sum(Long,Integer)| (|a| |b|) (%MASK-SIGNED-FIELD 64 (+ (THE (SIGNED-BYTE 64) (CAR "
 							+ "(OR |a| (RONTOLISP::%JAVA-NULL-UNBOX)))) (THE (SIGNED-BYTE 64) (OR |b| "
 							+ "(RONTOLISP::%JAVA-NULL-UNBOX))))))",
-					"(DEFUN |L3.main(String[])| (|args|) (LET ((|v| (|Box.new(Comparable)| (|Version.new(int)| "
+					"(DEFUN |L3.main(String[])| (|args|) (DECLARE (TYPE (OR NULL (SIMPLE-ARRAY T (*))) |args|)) "
+							+ "(LET ((|v| (|Box.new(Comparable)| (|Version.new(int)| "
 							+ "2)))) (LET ((|s| (|Box.new(Comparable)| \"b\"))) (LET ((|named| (|%make-Named%lambda| "
 							+ "(LAMBDA NIL \"n\")))) (LET ((|task| (LAMBDA NIL NIL))) (LET ((|o| |named|)) (LET ((|big| "
 							+ "(CONS 5 :LONG))) (LET ((|len| (OR (|Box.with(java.util.function.Function)| (OR |s| "
@@ -448,18 +457,21 @@ class JavaLoweringTest {
 						+ "NIL)) (|items| NIL) (|count| 0) (|changes| 0))",
 				"(DEFUN |Bag.iterator()| (|this|) (|java.util.ArrayList.iterator()| (OR (|Bag.items| |this|) "
 						+ "(RONTOLISP::%JAVA-NPE))))",
-				"(DEFUN |L4.main(String[])| (|args|) (LET ((|bag| (|Bag.new()|))) "
+				"(DEFUN |L4.main(String[])| (|args|) (DECLARE (TYPE (OR NULL (SIMPLE-ARRAY T (*))) |args|)) "
+						+ "(LET ((|bag| (|Bag.new()|))) "
 						+ "(|java.util.ArrayList.add(Object)| (OR (|Bag.items| |bag|) (RONTOLISP::%JAVA-NPE)) "
 						+ "|%string0|) (LET ((|first| |%string0|)) (LET* ((|%t0| (|Bag.iterator()| (OR |bag| "
 						+ "(RONTOLISP::%JAVA-NPE))))) (WHILE (|java.util.ArrayList.Each.hasNext()| |%t0|) (LET "
 						+ "((|item| (|java.util.ArrayList.Each.next()| |%t0|))) (WRITE-LINE (IF (EQ |item| |first|) "
 						+ "\"true\" \"false\"))))) (LET ((|ns| (MAKE-ARRAY 2 :ELEMENT-TYPE '(UNSIGNED-BYTE 32) "
-						+ ":INITIAL-CONTENTS (LIST 2 1)))) (|java.util.Arrays.sort(int[])| |ns|) (WRITE-LINE "
+						+ ":INITIAL-CONTENTS (LIST 2 1)))) (DECLARE (TYPE (OR NULL (SIMPLE-ARRAY (UNSIGNED-BYTE 32) "
+						+ "(*))) |ns|)) (|java.util.Arrays.sort(int[])| |ns|) (WRITE-LINE "
 						+ "(RONTOLISP::%JAVA-DOUBLE-STRING (+ (FLOAT "
 						+ "(|rontolisp.internal.Support.parseInt(String,int)| |%string1| 10) 1.0) (%STRICT-MATH :SQRT "
 						+ "(FLOAT (%MASK-SIGNED-FIELD 32 (AREF |ns| 0)) 1.0)))))))))",
-				"(DEFUN |java.util.Arrays.sort(int[])| (|a|) (RONTOLISP::%JAVA-SORT-INTS |a| 0 (LENGTH (OR "
-						+ "|a| (RONTOLISP::%JAVA-NPE)))))");
+				"(DEFUN |java.util.Arrays.sort(int[])| (|a|) (DECLARE (TYPE (OR NULL (SIMPLE-ARRAY "
+						+ "(UNSIGNED-BYTE 32) (*))) |a|)) (RONTOLISP::%JAVA-SORT-INTS |a| 0 (LENGTH (THE (SIMPLE-ARRAY "
+						+ "(UNSIGNED-BYTE 32) (*)) (OR |a| (RONTOLISP::%JAVA-NPE))))))");
 		// System.out as the receiver of a print is the host's stream, so the program
 		// above holds no class of java.io; as a value it is an object of the library's
 		// PrintStream, made by the static method the field is read through, and a printf
@@ -477,7 +489,8 @@ class JavaLoweringTest {
 				    }
 				}
 				""", "L5.java")).contains(
-				"(DEFUN |L5.main(String[])| (|args|) (PROGN (WRITE-LINE \"1\") (WRITE-STRING (RONTOLISP::%JAVA-FORMAT "
+				"(DEFUN |L5.main(String[])| (|args|) (DECLARE (TYPE (OR NULL (SIMPLE-ARRAY T (*))) |args|)) "
+						+ "(PROGN (WRITE-LINE \"1\") (WRITE-STRING (RONTOLISP::%JAVA-FORMAT "
 						+ "\"%d%n\" (VECTOR 2) #'|%string| NIL NIL)) (LET ((|out| (|java.io.StandardOutput.out()|))) "
 						+ "(|java.io.PrintStream.println(int)| (OR |out| (RONTOLISP::%JAVA-NPE)) 3) "
 						+ "(|java.io.StandardOutput.flush()| (OR (|java.io.PrintStream.printf(String,Object[])| "
@@ -790,7 +803,8 @@ class JavaLoweringTest {
 		String made = "(|Class.new(String,String,String,int,Class,Class[],Class,Object,Object)| ";
 		assertThat(classes).contains("(DEFVAR |Kept%class|)",
 				"(DEFUN |Kept%class-of| (|%o|) (COND ((|Kept?| |%o|) |Kept%class|) (T (RONTOLISP::%JAVA-NO-CLASS |%o|))))",
-				"(DEFUN |L12.main(String[])| (|args|) (LET ((|kept| (|Kept.new()|))) (LET ((|held| (|Kept%class-of| "
+				"(DEFUN |L12.main(String[])| (|args|) (DECLARE (TYPE (OR NULL (SIMPLE-ARRAY T (*))) |args|)) "
+						+ "(LET ((|kept| (|Kept.new()|))) (LET ((|held| (|Kept%class-of| "
 						+ "|kept|))) (WRITE-LINE (%STRING-CONCAT (%STRING-CONCAT (OR (|L12.above(Class)| |held|) \"null\") "
 						+ "(IF (EQ |held| |Kept%class|) \"true\" \"false\")) (IF (EQUAL (|%class-name| |kept|) \"Kept\") "
 						+ "\"true\" \"false\"))))))")
@@ -1006,7 +1020,8 @@ class JavaLoweringTest {
 				"(DEFUN |demo.app.T.CDR(int)| (|this| |j%LIST|) (DECLARE (TYPE (SIGNED-BYTE 32) |j%LIST|)) "
 						+ "(%MASK-SIGNED-FIELD 32 (+ (%MASK-SIGNED-FIELD 32 (+ |j%LIST| (THE (SIGNED-BYTE 32) "
 						+ "(|demo.app.T.j%CAR| |this|)))) 16)))",
-				"(DEFUN |demo.app.Main.main(String[])| (|args|) (LET ((|j%T| (|demo.app.T.new()|))) (LET ((|c| "
+				"(DEFUN |demo.app.Main.main(String[])| (|args|) (DECLARE (TYPE (OR NULL (SIMPLE-ARRAY T (*))) "
+						+ "|args|)) (LET ((|j%T| (|demo.app.T.new()|))) (LET ((|c| "
 						+ "98)) (DECLARE (TYPE (INTEGER 0 1114111) |c|)) (LET ((|big| 2147483648)) (DECLARE (TYPE "
 						+ "(SIGNED-BYTE 64) |big|)) (WRITE-LINE (%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT "
 						+ "(%STRING-CONCAT (%STRING-CONCAT (%STRING-CONCAT (%DECIMAL-PIECE (|demo.app.T.CDR(int)| (OR "
@@ -1172,7 +1187,8 @@ class JavaLoweringTest {
 							+ "|lock| (RONTOLISP::%JAVA-NPE)) 0)) (|Thread.signal(Object,boolean)| (OR |lock| "
 							+ "(RONTOLISP::%JAVA-NPE)) T)) (RONTOLISP::%JAVA-MONITOR-EXIT |%t5|))))",
 					"(DEFUN |Thread.join()| (|this|) (|Thread.join(long)| |this| 0))",
-					"(RONTOLISP:ASYNC-DEFUN |T1.main(String[])| (|args|) (LET ((|cell| (|Cell.new()|))) (LET "
+					"(RONTOLISP:ASYNC-DEFUN |T1.main(String[])| (|args|) (DECLARE (TYPE (OR NULL (SIMPLE-ARRAY T "
+							+ "(*))) |args|)) (LET ((|cell| (|Cell.new()|))) (LET "
 							+ "((|worker| (|Thread.new(Runnable)| (LAMBDA NIL (|Cell.add(Cell)| (OR |cell| "
 							+ "(RONTOLISP::%JAVA-NPE)) |cell|))))) (|Thread.start()| (OR |worker| "
 							+ "(RONTOLISP::%JAVA-NPE))) (RONTOLISP:AWAIT (|Thread.join()| (OR |worker| "

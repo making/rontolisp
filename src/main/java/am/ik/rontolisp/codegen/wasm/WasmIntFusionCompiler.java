@@ -292,11 +292,33 @@ final class WasmIntFusionCompiler {
 		/** The vector's length when {@link #constant}, else -1. */
 		final int length;
 
+		/**
+		 * Whether a declaration lets {@code nil} stand in for the array
+		 * ({@code DeclaredArrayTypes.Pin#orNull}): a direct read then tests for it, which
+		 * the generic read reports, where the declaration's cast would trap.
+		 */
+		final boolean orNull;
+
+		/**
+		 * Whether a declaration pins the array to the general representation, whose
+		 * element a read takes off the vector's storage ({@link #emitGeneralArefRead}).
+		 */
+		final boolean general;
+
+		/**
+		 * The integers a general array's elements are, by the declaration of the array
+		 * ({@code DeclaredArrayTypes.Pin#elements}) or a {@code the} of the read, or
+		 * null: the element is then taken in that range and checked against it
+		 * ({@link #emitTrustedUnbox}), and the read needs no bail of its own.
+		 */
+		@Nullable Range elements;
+
 		ArefLeaf(LispVal arrayExpr, @Nullable LispCons source, @Nullable String owner, WasmLispCompiler.Ctx ctx) {
 			this.arrayExpr = arrayExpr;
 			this.source = source;
 			this.owner = owner;
-			am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind kind = WasmArrayCompiler.arrayKindOfExpr(arrayExpr, ctx);
+			am.ik.rontolisp.compiler.DeclaredArrayTypes.Pin pin = WasmArrayCompiler.arrayPinOfExpr(arrayExpr, ctx);
+			am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind kind = pin == null ? null : pin.kind();
 			WasmArrayCompiler.ConstantArray constantArray = kind == null && arrayExpr instanceof LispSymbol sym
 					&& !ctx.locals.containsKey(sym.name()) && !ctx.rawLocals.containsKey(sym.name())
 					&& !ctx.captures.containsKey(sym.name()) ? ctx.constantArrays.get(sym.name()) : null;
@@ -307,6 +329,10 @@ final class WasmIntFusionCompiler {
 			this.length = constantArray != null ? constantArray.length() : -1;
 			this.packedType = kind == null || kind.packedIntWidth() == 0 ? -1
 					: WasmArrayCompiler.intArrType(kind.packedIntWidth());
+			this.orNull = pin != null && pin.orNull();
+			this.general = kind == am.ik.rontolisp.compiler.DeclaredArrayTypes.Kind.GENERAL;
+			am.ik.rontolisp.compiler.DeclaredIntegerTypes.Interval elements = pin == null ? null : pin.elements();
+			this.elements = this.general && elements != null ? new Range(elements.lo(), elements.hi()) : null;
 		}
 
 	}
@@ -1482,9 +1508,21 @@ final class WasmIntFusionCompiler {
 	 * or a {@code TYPE_BIGNUM}'s field, with no bail. Anything else traps on the cast,
 	 * and a value outside the range on {@link #emitRangeTrap}, each arm checking only
 	 * what its representation does not prove: an i31 is within every range that holds the
-	 * i31 range, a {@code TYPE_BIGNUM} within i64.
+	 * i31 range, a {@code TYPE_BIGNUM} within i64. A range within the i31 range has the
+	 * i31 arm alone: an integer there is never a {@code TYPE_BIGNUM}
+	 * ({@code .kb/wasm-bignum.md}), so the cast traps on what the range check would.
 	 */
 	private static void emitTrustedUnbox(int slot, Range range, WasmLispCompiler.Ctx ctx) {
+		if (range.fixnum()) {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writer.writeUnsignedLeb128(slot);
+			WasmEmitHelper.castI31GetS(ctx);
+			ctx.writer.write(Instruction.I64_EXTEND_S_I32);
+			if (!within(new Range(I31_MIN, I31_MAX), range)) {
+				emitRangeTrap(range, ctx);
+			}
+			return;
+		}
 		ctx.writer.write(Instruction.GET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(slot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -2074,6 +2112,10 @@ final class WasmIntFusionCompiler {
 			Range declared = declaredRange(parts.get(1), ctx);
 			if (inner instanceof ExprLeaf leaf && declared != null) {
 				leaf.trusted = meet(leaf.trusted, declared);
+			}
+			if (inner instanceof ArefLeaf leaf && leaf.general && declared != null) {
+				// a general array's element asserted of an integer type
+				leaf.elements = meet(leaf.elements, declared);
 			}
 			return inner;
 		}
@@ -3330,6 +3372,10 @@ final class WasmIntFusionCompiler {
 	 * it, where the unfused declared read would trap.
 	 */
 	private static void emitArefRead(ArefLeaf leaf, WasmLispCompiler.Ctx ctx) {
+		if (leaf.elements != null) {
+			emitGeneralArefRead(leaf, ctx);
+			return;
+		}
 		if (leaf.direct) {
 			emitDirectArefRead(leaf, ctx);
 			return;
@@ -3447,35 +3493,42 @@ final class WasmIntFusionCompiler {
 				writeI64LocalRead(slot, ctx);
 			}
 		};
-		if (leaf.constant) {
-			// A constant's global holds its vector, or nothing before the definition
-			// ran -- which the generic read reports.
+		// A constant's global holds its vector, or nothing before the definition ran --
+		// which the generic read reports; so does a nil a declaration lets stand in for
+		// the array.
+		boolean tested = leaf.constant || leaf.orNull;
+		// A constant's own length bounds every index the range allows.
+		boolean inBounds = leaf.constant && indexRange.lo() >= 0 && indexRange.hi() < leaf.length;
+		boolean bounded = !inBounds && WasmArrayCompiler.reportsBounds(ctx);
+		if (tested) {
 			ctx.writer.write(Instruction.GET_LOCAL);
 			ctx.writer.writeUnsignedLeb128(leaf.arrSlot);
 			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
 			ctx.writer.writeHeapType(type);
-			ctx.writer.write(Instruction.I32_EQZ);
+			if (bounded) {
+				// the vector's bound only where it is the vector: one report for both
+				ctx.writer.write(Instruction.IF);
+				ctx.writer.write(Type.I32);
+				emitPastBound(leaf, pushIndex64, ctx);
+				ctx.writer.write(Instruction.ELSE);
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128(1);
+				ctx.writer.write(Instruction.END);
+			}
+			else {
+				ctx.writer.write(Instruction.I32_EQZ);
+			}
 			ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 			emitReadReport(leaf, pushIndex64, indexRange, ctx);
 			ctx.writer.write(Instruction.END);
 		}
-		// A constant's own length bounds every index the range allows.
-		boolean inBounds = leaf.constant && indexRange.lo() >= 0 && indexRange.hi() < leaf.length;
-		if (!inBounds && WasmArrayCompiler.reportsBounds(ctx)) {
-			// Unsigned, so a negative index is out of the bound too.
-			pushIndex64.run();
-			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(leaf.arrSlot);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
-			ctx.writer.writeHeapType(type);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
-			ctx.writer.write(Instruction.I64_EXTEND_U_I32);
-			ctx.writer.write(Instruction.I64_GE_U);
+		else if (bounded) {
+			emitPastBound(leaf, pushIndex64, ctx);
 			ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
 			emitReadReport(leaf, pushIndex64, indexRange, ctx);
 			ctx.writer.write(Instruction.END);
 		}
-		else if (!inBounds && (indexRange.lo() < Integer.MIN_VALUE || indexRange.hi() > Integer.MAX_VALUE)) {
+		if (!bounded && !inBounds && (indexRange.lo() < Integer.MIN_VALUE || indexRange.hi() > Integer.MAX_VALUE)) {
 			// Only an index the i32 holds reads where it says: a wider one is no i31,
 			// which the generic read's unboxing traps on.
 			pushIndex64.run();
@@ -3495,6 +3548,161 @@ final class WasmIntFusionCompiler {
 		}, type);
 		leaf.i64Slot = ctx.allocI64Temp();
 		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writeI64LocalIndex(leaf.i64Slot);
+	}
+
+	/**
+	 * Pushes whether the index is past the bound of the packed vector a direct read's
+	 * array is, an i32: unsigned, so a negative index is past it too.
+	 */
+	private static void emitPastBound(ArefLeaf leaf, Runnable pushIndex64, WasmLispCompiler.Ctx ctx) {
+		pushIndex64.run();
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(leaf.arrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(leaf.packedType);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		ctx.writer.write(Instruction.I64_EXTEND_U_I32);
+		ctx.writer.write(Instruction.I64_GE_U);
+	}
+
+	/**
+	 * The read of an element of a general array a declaration pins the array to, whose
+	 * integers the declaration or a {@code the} gives ({@link ArefLeaf#elements}): the
+	 * vector's own storage when the cell names it ({@code .kb/adjustable-arrays.md},
+	 * "What an element access costs") and the index is in its bound, the element taken in
+	 * the range and checked against it ({@link #emitTrustedUnbox}, which traps on what
+	 * contradicts it, as a declared leaf does). Anything else -- {@code nil}, a view,
+	 * another rank, an index out of the bound -- bails, or in a direct read
+	 * ({@link ArefLeaf#direct}) is the generic read of the general array: the one
+	 * {@code _idx_ref} call reports what it refuses ({@link #emitReadReport}'s), the
+	 * element of what it passes is read, a value of another representation trapping on
+	 * the cast.
+	 */
+	private static void emitGeneralArefRead(ArefLeaf leaf, WasmLispCompiler.Ctx ctx) {
+		Node index = java.util.Objects.requireNonNull(leaf.indexNode);
+		Range indexRange = range(index);
+		int slot;
+		if (index instanceof ConstLeaf) {
+			slot = -1;
+		}
+		else if (index instanceof OpNode || index instanceof CelledCall) {
+			emitFast(index, ctx);
+			slot = ctx.allocI64Temp();
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writeI64LocalIndex(slot);
+		}
+		else {
+			slot = rawSlotOf(index);
+		}
+		Runnable pushIndex64 = () -> {
+			if (index instanceof ConstLeaf c) {
+				ctx.writer.write(Instruction.I64_CONST);
+				ctx.writer.writeSignedLeb128(c.value());
+			}
+			else {
+				writeI64LocalRead(slot, ctx);
+			}
+		};
+		// an index whose range is in [0, 2^31) is compared and read as the i32 it is
+		boolean narrow = indexRange.lo() >= 0 && indexRange.hi() <= Integer.MAX_VALUE;
+		Runnable pushIndex32 = () -> {
+			if (index instanceof ConstLeaf c) {
+				ctx.writer.write(Instruction.I32_CONST);
+				ctx.writer.writeSignedLeb128((int) c.value());
+			}
+			else {
+				writeI64LocalRead(slot, ctx);
+				ctx.writer.write(Instruction.I32_WRAP_I64);
+			}
+		};
+		am.ik.wasm.WasmWriter w = ctx.writer;
+		// block $got (result eqref) { block $miss { block $cast (result eqref) { the
+		// storage's element; br $got } drop } miss }: a failed cast leaves through $cast
+		// with the value it refused, a cell with no storage or an index out of its bound
+		// through $miss.
+		w.write(Instruction.BLOCK);
+		w.writeRefType(true, Type.EQ.code());
+		w.write(Instruction.BLOCK, WasmLispCompiler.BLOCKTYPE_EMPTY);
+		w.write(Instruction.BLOCK);
+		w.writeRefType(true, Type.EQ.code());
+		w.write(Instruction.GET_LOCAL);
+		w.writeUnsignedLeb128(leaf.arrSlot);
+		w.write(Instruction.GC_PREFIX, Instruction.BR_ON_CAST_FAIL);
+		w.write(0x01); // the operand nullable, the cast not
+		w.writeUnsignedLeb128(0);
+		w.writeHeapType(Type.EQ.code());
+		w.writeHeapType(WasmLispCompiler.TYPE_CELL);
+		w.write(Instruction.GC_PREFIX, Instruction.STRUCT_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_CELL);
+		w.writeUnsignedLeb128(WasmLispCompiler.CELL_STORAGE_FIELD);
+		w.write(Instruction.TEE_LOCAL);
+		ctx.writeScratchIndex(WasmLispCompiler.Ctx.Scratch.STORAGE);
+		w.write(Instruction.REF_IS_NULL);
+		w.write(Instruction.BR_IF, 1);
+		// unsigned, so a negative index is out of the bound too, and a wide one
+		if (narrow) {
+			pushIndex32.run();
+		}
+		else {
+			pushIndex64.run();
+		}
+		w.write(Instruction.GET_LOCAL);
+		ctx.writeScratchIndex(WasmLispCompiler.Ctx.Scratch.STORAGE);
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+		if (narrow) {
+			w.write(Instruction.I32_GE_U);
+		}
+		else {
+			w.write(Instruction.I64_EXTEND_U_I32);
+			w.write(Instruction.I64_GE_U);
+		}
+		w.write(Instruction.BR_IF, 1);
+		w.write(Instruction.GET_LOCAL);
+		ctx.writeScratchIndex(WasmLispCompiler.Ctx.Scratch.STORAGE);
+		pushIndex32.run();
+		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_GET);
+		w.writeUnsignedLeb128(WasmLispCompiler.TYPE_HASH_BUCKETS);
+		w.write(Instruction.BR, 2);
+		w.write(Instruction.END);
+		w.write(Instruction.DROP);
+		w.write(Instruction.END);
+		if (!leaf.direct) {
+			// to the bail block around $got
+			w.write(Instruction.BR, 1);
+		}
+		else {
+			int idxSlot = ctx.allocTemp();
+			if (indexRange.fixnum()) {
+				pushIndex32.run();
+				w.write(Instruction.GC_PREFIX, Instruction.I31_REF_NEW);
+			}
+			else {
+				pushIndex64.run();
+				WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_INT_NEW);
+			}
+			w.write(Instruction.SET_LOCAL);
+			w.writeUnsignedLeb128(idxSlot);
+			WasmUncaughtLocations.Operation located = WasmUncaughtLocations.enterOperation(leaf.source, leaf.owner,
+					ctx);
+			WasmOperandTypes.withOperator(ctx, LispNames.AREF, () -> {
+				if (WasmArrayCompiler.reportsBounds(ctx)) {
+					WasmArrayCompiler.emitIndexReport(ctx, leaf.arrSlot, idxSlot);
+				}
+				else {
+					WasmArrayCompiler.emitRank1Check(ctx, leaf.arrSlot);
+				}
+				WasmArrayCompiler.emitGeneralRead(ctx, leaf.arrSlot, idxSlot);
+			});
+			WasmUncaughtLocations.leaveOperation(located, ctx);
+		}
+		w.write(Instruction.END);
+		int element = ctx.allocTemp();
+		w.write(Instruction.SET_LOCAL);
+		w.writeUnsignedLeb128(element);
+		emitTrustedUnbox(element, java.util.Objects.requireNonNull(leaf.elements), ctx);
+		leaf.i64Slot = ctx.allocI64Temp();
+		w.write(Instruction.SET_LOCAL);
 		ctx.writeI64LocalIndex(leaf.i64Slot);
 	}
 
@@ -3588,8 +3796,9 @@ final class WasmIntFusionCompiler {
 		return switch (node) {
 			case ConstLeaf c -> new Range(c.value(), c.value());
 			case ExprLeaf leaf -> leaf.trusted != null ? leaf.trusted : Range.FULL;
-			case ArefLeaf leaf -> Range.unsigned(leaf.packedType == WasmLispCompiler.TYPE_I8ARR ? 8
-					: leaf.packedType == WasmLispCompiler.TYPE_I16ARR ? 16 : 32);
+			case ArefLeaf leaf ->
+				leaf.elements != null ? leaf.elements : Range.unsigned(leaf.packedType == WasmLispCompiler.TYPE_I8ARR
+						? 8 : leaf.packedType == WasmLispCompiler.TYPE_I16ARR ? 16 : 32);
 			case RawLeaf leaf -> new Range(leaf.src.lo(), leaf.src.hi());
 			case CelledCall call -> range(call.body);
 			case OpNode op -> opRange(op);
@@ -3693,28 +3902,42 @@ final class WasmIntFusionCompiler {
 	}
 
 	/**
-	 * Marks the reads of the site's arrays a declaration pins to a packed kind as direct
-	 * ({@link ArefLeaf#direct}) when nothing the interpreter applies before a read can
-	 * signal: the leaves' guards and the cells' checks run before every read and bail on
-	 * their own, so what remains is an operation over integers, which signals only as a
-	 * {@code mod}/{@code rem} by a divisor that may be zero or an {@code ash} by a
-	 * computed count. With none of those, the first thing to go wrong in the
+	 * Marks the reads of the site's arrays a declaration pins to a packed kind, or to the
+	 * general kind with integer elements, as direct ({@link ArefLeaf#direct}) when
+	 * nothing the interpreter applies before a read can signal but what its own index
+	 * computes: the leaves' guards and the cells' checks run before every read and bail
+	 * on their own, so what remains is an operation over integers, which signals only as
+	 * a {@code mod}/{@code rem} by a divisor that may be zero or an {@code ash} by a
+	 * computed count -- and one in the read's index is computed ahead of the read in the
+	 * fast path too. With none other before it, the first thing to go wrong in the
 	 * interpreter's order at a read is the read itself, so it may report there, and a
 	 * site whose reads are all direct has no fallback to keep for them.
 	 */
 	private static void markDirectReads(Site site) {
-		boolean orderSafe = true;
+		List<OpNode> signalling = new ArrayList<>();
 		for (Event event : site.events) {
+			if (!event.applies()) {
+				continue;
+			}
 			if (event.node() instanceof OpNode op && signalsOnIntegers(op)) {
-				orderSafe = false;
-				break;
+				signalling.add(op);
+			}
+			else if (event.node() instanceof ArefLeaf aref) {
+				Node index = java.util.Objects.requireNonNull(aref.indexNode);
+				aref.direct = (aref.packedType >= 0 || aref.elements != null)
+						&& signalling.stream().allMatch(op -> computes(index, op));
 			}
 		}
-		for (Node leaf : site.leaves) {
-			if (leaf instanceof ArefLeaf aref) {
-				aref.direct = orderSafe && aref.packedType >= 0;
-			}
-		}
+	}
+
+	/** Whether {@code node}'s fast path computes {@code op}: it is in its subtree. */
+	private static boolean computes(Node node, Node op) {
+		return node == op || switch (node) {
+			case OpNode inner -> inner.args().stream().anyMatch(arg -> computes(arg, op));
+			case ArefLeaf leaf -> computes(java.util.Objects.requireNonNull(leaf.indexNode), op);
+			case CelledCall call -> computes(call.body, op);
+			default -> false;
+		};
 	}
 
 	/**

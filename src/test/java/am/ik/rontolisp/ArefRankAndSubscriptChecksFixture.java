@@ -18,8 +18,11 @@ package am.ik.rontolisp;
  * read, store, push and length of a vector whose storage, dimension or header was
  * replaced under it -- a push that grows, an {@code adjust-array} in place, to a view and
  * back, a full view that grows -- since the cell of a wasm vector names its storage and
- * an access trusts it. Shared by the backend suites, so every backend at every optimize
- * level is held to one expected text.
+ * an access trusts it. Last, the same reads and stores of an array a declaration pins --
+ * with nil allowed in its place, as the Java front end declares an array variable, and a
+ * general array's elements integers -- which report what the undeclared ones do, nil
+ * included, after the subscript and the value are evaluated. Shared by the backend
+ * suites, so every backend at every optimize level is held to one expected text.
  */
 public final class ArefRankAndSubscriptChecksFixture {
 
@@ -172,7 +175,26 @@ public final class ArefRankAndSubscriptChecksFixture {
 			(ao-check (list (ao-push *ao-d* :p) (ao-get *ao-d* 2) (ao-put *ao-d* 0 :q) (ao-len *ao-d*) *ao-d* *ao-t*))
 			(ao-check (list (ao-len *ao-v*) (ao-len *ao-fp*) (ao-push *ao-fp* :r) (ao-len *ao-fp*)))
 			(ao-check (ao-push *ao-v* 4))
-			(ao-check (ao-push 5 4))""";
+			(ao-check (ao-push 5 4))
+			(defvar *ao-w* (vector 1 2 3))
+			(defun ao-dget (v i) (declare (type (or null simple-vector) v)) (aref v i))
+			(defun ao-dput (v i x) (declare (type (or null simple-vector) v)) (setf (aref v i) x) (list (aref v i) (length v)))
+			(defun ao-dsum (v i) (declare (type (or null (simple-array (signed-byte 64) (*))) v)) (+ (aref v i) 1))
+			(defun ao-d8 (v i) (declare (type (or null (simple-array (unsigned-byte 8) (*))) v)) (+ (aref v i) 1))
+			(defun ao-d8len (v) (declare (type (or null (simple-array (unsigned-byte 8) (*))) v)) (length v))
+			(ao-check (list (ao-dget *ao-w* 2) (ao-dput (vector 1 2 3) 1 :x) (ao-dsum (vector 1 2 3) 2) (ao-d8 *ao-v8* 2)
+			                (ao-d8len nil)))
+			(ao-check (ao-dget *ao-w* 3))
+			(ao-check (ao-dget *ao-w* *ao-big*))
+			(ao-check (ao-dget *ao-w* 'x))
+			(ao-check (ao-dget nil 0))
+			(ao-check (ao-dput nil (ao-note 10) (ao-note 11)))
+			(ao-check (ao-dput (vector 1 2 3) 3 :x))
+			(ao-check (ao-dsum nil 0))
+			(ao-check (ao-dsum (vector 1 2 3) 3))
+			(ao-check (ao-d8 nil (ao-note 12)))
+			(ao-check (ao-d8 *ao-v8* -1))
+			(ao-check (reverse *ao-log*))""";
 
 	/** What every backend prints for {@link #ORDER_SOURCE}. */
 	public static final String ORDER_EXPECTED = """
@@ -229,6 +251,18 @@ public final class ArefRankAndSubscriptChecksFixture {
 			(2 :P (:Q 3) 3 #(:Q :V :P) #(10 :V 30 40))
 			(3 2 2 3)
 			VECTOR-PUSH-EXTEND: The value #(1 2 :Z) is not of type (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P)) | (AND VECTOR (SATISFIES ARRAY-HAS-FILL-POINTER-P))
-			VECTOR-PUSH-EXTEND: The value 5 is not of type ARRAY | ARRAY""";
+			VECTOR-PUSH-EXTEND: The value 5 is not of type ARRAY | ARRAY
+			(3 (:X 3) 4 4 0)
+			AREF: The value 3 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
+			AREF: The value 1180591620717411303424 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
+			AREF: The value X is not of type INTEGER | INTEGER
+			AREF: The value NIL is not of type ARRAY | ARRAY
+			(SETF AREF): The value NIL is not of type ARRAY | ARRAY
+			(SETF AREF): The value 3 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
+			AREF: The value NIL is not of type ARRAY | ARRAY
+			AREF: The value 3 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
+			AREF: The value NIL is not of type ARRAY | ARRAY
+			AREF: The value -1 is not of type (INTEGER 0 (3)) | (INTEGER 0 (3))
+			(7 8 9 10 11 12)""";
 
 }
