@@ -417,11 +417,13 @@ JDK のクラスのスーパークラスは、このサブセットでの宣言�
 含められる量を超えるときは、コンパイル時に拒否します（[リソース](index.md#resources)）。
 ディレクトリはリソースではありません。ディレクトリに対する `getResourceAsStream` は `null` を
 返します（ランチャーはストリームを返します）。返すストリームは `ByteArrayInputStream` です。
-JDK のクラスは、JDK 自身のものも含めてリソースを見つけません。`getResource`、`getResources`、
-`ClassLoader.getParent` は名前を示して拒否されます。型がサービスを示さない `Class`（`Class<?>`
-など）を渡す `ServiceLoader.load` も名前を示して拒否されます。`ResourceBundle.getBundle` が定数の
-基底名で見つけるバンドルクラスは、自身の名前のファイルにあるクラスです。実行時に組み立てた
-基底名で見つけるのは、プログラムがほかの箇所で使っているクラスです。`ResourceBundle.Control`、
+JDK のクラスは、JDK 自身のものも含めてリソースを見つけません。プラットフォームローダーも
+見つけません。リソースの URL はコンパイル時のファイルを指し、出力に含めた内容を読みます。それ以外の
+`URL` には読むものがなく、`openStream` は `FileNotFoundException` を投げます。リソースの URL の
+テキストから作り直した URL も同じです。`Class<?>` が示すサービスは、プログラムが持つクラスのものです。
+`ResourceBundle.getBundle` が定数の基底名で見つけるバンドルクラスは、自身の名前のファイルにある
+クラスか、そのメンバーです。実行時に組み立てた基底名で見つけるのは、プログラムがほかの箇所で使っている
+クラスです。`ResourceBundle.Control`、
 `Properties.loadFromXML`、`storeToXML` は名前を示して拒否されます。`Properties.store` が書く
 日付の行は `java.util.Date` のテキストです（前述）。
 
@@ -604,7 +606,12 @@ WebSocket です。`version(..)` で指定した値は保持され、問い合�
 **`URI`** は、JDK と同じ検査を同じメッセージで行います。ただし、角括弧で囲んだアドレスに
 ついては、使われている文字だけを検査します。`hashCode` の値は JDK と一致せず、`compareTo` は
 文字列としての順序で比較します。複数の部分を取るコンストラクタ、`normalize`、`relativize`、
-`toURL`、`toASCIIString` はありません。
+`toASCIIString` はありません。
+
+**`URL`** は、JDK がハンドラーを持つプロトコルについて、JDK と同じ分け方と拒否を同じメッセージで
+行います。`equals` はホストを文字列で比較します（JDK はまずアドレスを問い合わせます）。`hashCode` の
+値は JDK と一致しません。`URL.of`、コンテキストと文字列を取るコンストラクタ、`openConnection`、
+`getContent` はありません。
 
 ## HTTP サーバー
 
@@ -714,6 +721,6 @@ WebSocket です。`version(..)` で指定した値は保持され、問い合�
   `Scanner`、ファイル（`File`、`FileReader`、
   `java.nio.file`）、`Calendar`、
   リフレクションなどです。
-  `java.net` では、`URI`、サーバーのアドレス、[HTTP クライアント](#the-http-client)以外の
+  `java.net` では、`URI`、`URL`、サーバーのアドレス、[HTTP クライアント](#the-http-client)以外の
   すべてが該当します。
-  `URL`、ソケット、`HttpURLConnection` です。
+  ソケット、`HttpURLConnection` です。

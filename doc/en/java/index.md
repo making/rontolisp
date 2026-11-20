@@ -161,7 +161,7 @@ one of the same name on the source path.
 ### Resources
 
 `getResourceAsStream` of a class or a class loader reads a file of the program's source
-tree or of a library on the source path. The files are found when the program is compiled
+tree or of a library on the source path, and `getResource` answers its URL. The files are found when the program is compiled
 and their bytes are compiled into the output, so a `.wasm` reads them with no file system.
 A constant name brings the one file it names. A name computed when the program runs brings
 every file its loader may find: those of the source path, and those of the source tree where
@@ -183,7 +183,20 @@ order. A class of a library on the source path has the system loader
 finds none of them. In the source tree a name is matched as written: `..` and `.` are not
 resolved, as the launcher does not resolve them. Under a directory of the source path
 they are, as a class path directory resolves them. In a jar the name must match an entry
-exactly. The playground's uploaded files are its program's source tree.
+exactly. The program's loader's parent is the system loader, whose parent is the platform
+loader (`ClassLoader.getPlatformClassLoader()`), which finds none of them. The playground's
+uploaded files are its program's source tree.
+
+A resource's URL names the file where the program was compiled: `file:` and its absolute
+path in the source tree or a directory of the source path, `jar:file:` and the jar's path,
+`!/` and the entry in a jar, written as the launcher writes them. `openStream` reads the
+bytes compiled into the output, so the URL reads on a machine that has no such file.
+`getResources` answers the URL of every place holding the name, the source tree first.
+
+```
+URL url = Main.class.getResource("data.txt");   // file:/home/me/app/data.txt
+String text = new String(url.openStream().readAllBytes());
+```
 
 `ResourceBundle.getBundle` finds a bundle as a JDK does: for each candidate locale from the
 most specific, a public class of the bundle's name extending `ResourceBundle`, else a
@@ -191,18 +204,20 @@ most specific, a public class of the bundle's name extending `ResourceBundle`, e
 base bundle or none is found, the default locale's candidates. A constant base name brings
 its `.properties` files and the classes of its package named after it; a base name computed
 when the program runs brings every file, as a computed resource name does, and the bundle
-classes the program reaches otherwise. `getBundle` of a base name, and of a base name and a
-locale, asks the loader of the class calling it.
+classes the program reaches otherwise. A member class is a bundle of a name with a `$`
+(`app.Texts$Words`), as a JDK finds one. `getBundle` of a base name, and of a base name and
+a locale, asks the loader of the class calling it.
 
 ```
 ResourceBundle messages = ResourceBundle.getBundle("app.messages", Locale.UK);
 // app/messages_en_GB.properties, then app/messages_en.properties, then app/messages.properties
 ```
 
-`ServiceLoader.load` of a class literal finds the providers the files
-`META-INF/services/<service>` of its loader's resources name when the program is compiled,
-the source tree's first and then the source path's in order, and makes each where the
-program asks for it. A provider fails where a JDK's does: a class not found, of another
+`ServiceLoader.load` finds the providers the files `META-INF/services/<service>` of its
+loader's resources name when the program is compiled, the source tree's first and then the
+source path's in order, and makes each where the program asks for it. A `Class<?>`, or a
+`Class<T>` in a generic method, is told by its name when the program runs among the services
+those files name. A provider fails where a JDK's does: a class not found, of another
 type, with no public constructor of no parameters, or that cannot be made.
 
 ## At the prompt

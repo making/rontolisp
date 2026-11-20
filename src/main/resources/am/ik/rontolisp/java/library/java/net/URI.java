@@ -270,6 +270,14 @@ public final class URI implements Comparable<URI> {
         return decoded(fragment);
     }
 
+    // the URL of the text: an absolute reference whose scheme is a URL's protocol
+    public URL toURL() throws MalformedURLException {
+        if (scheme == null) {
+            throw new IllegalArgumentException("URI is not absolute");
+        }
+        return new URL(text);
+    }
+
     public URI resolve(URI uri) {
         if (uri.isOpaque() || this.isOpaque()) {
             return uri;

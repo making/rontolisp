@@ -1780,6 +1780,58 @@ final class JavaClasses {
 			.orElse(null);
 	}
 
+	/**
+	 * A resource found, with where it was found, for its URL.
+	 *
+	 * @param kind 0 the source tree, 1 a directory of the source path, 2 a jar
+	 * @param place the absolute path of the tree's top or of the root
+	 * @param name the name below it: as asked in the tree and a jar, resolved in a
+	 * directory
+	 * @param octets its octets
+	 */
+	record Located(int kind, String place, String name, byte[] octets) {
+	}
+
+	/** Where the top of the program's source tree is, or the empty string for none. */
+	private String treeTop() {
+		String top = this.files.treeTop(this.entry, this.root);
+		return top == null ? "" : top;
+	}
+
+	/**
+	 * Every place a loader finds a resource in, the source tree first where the loader
+	 * searches it, then the roots of the source path in order.
+	 * @param name the name, with no leading {@code /}
+	 * @param tree whether the loader searches the program's source tree
+	 * @param first whether the first place is enough
+	 */
+	List<Located> located(String name, boolean tree, boolean first) {
+		return this.locatedResources.computeIfAbsent((tree ? "T" : "S") + (first ? "1" : "*") + name,
+				key -> locate(name, tree, first));
+	}
+
+	private final Map<String, List<Located>> locatedResources = new HashMap<>();
+
+	private List<Located> locate(String name, boolean tree, boolean first) {
+		List<Located> found = new ArrayList<>();
+		byte[] own = tree ? treeResource(name) : null;
+		if (own != null) {
+			found.add(new Located(0, treeTop(), name, own));
+		}
+		for (int root = 0; root < this.files.libraryRoots() && !(first && !found.isEmpty()); root++) {
+			boolean archive = this.files.libraryArchive(root);
+			String key = archive ? name : JavaFiles.below(name);
+			if (key == null || key.isEmpty() || key.endsWith("/")) {
+				continue;
+			}
+			byte[] octets = this.files.libraryResource(root, key);
+			if (octets != null) {
+				found.add(new Located(archive ? 2 : 1, this.files.libraryTop(root), key, octets));
+			}
+		}
+		return List.copyOf(found);
+	}
+
 	/** The resources looked for, by name: a pass lowered again asks again. */
 	private final Map<String, Optional<byte[]>> treeResources = new HashMap<>();
 
@@ -1823,7 +1875,7 @@ final class JavaClasses {
 		if (!this.selections.contains("R " + selection)) {
 			for (int i = 0; i < this.files.libraryRoots(); i++) {
 				int root = i;
-				this.carried.select(root, this.files.libraryArchive(root) ? 'J' : 'D',
+				this.carried.select(root, this.files.libraryArchive(root) ? 'J' : 'D', this.files.libraryTop(root),
 						path -> this.files.libraryListing(root, path), path -> this.files.libraryResource(root, path),
 						directory, deep, wanted, "the source path");
 			}
@@ -1832,7 +1884,7 @@ final class JavaClasses {
 		}
 		if (tree && !this.selections.contains("T " + selection)) {
 			String entry = this.entry;
-			this.carried.select(-1, 'T',
+			this.carried.select(-1, 'T', treeTop(),
 					path -> entry == null ? this.files.treeListing(path)
 							: this.files.findListing(entry, this.root + path),
 					this::treeResource, directory, deep, wanted, "the source tree");
@@ -1841,9 +1893,22 @@ final class JavaClasses {
 		}
 	}
 
+	/**
+	 * Notes a URL asked of a name computed where the program runs: the table then names
+	 * where each place is, which a program reading only streams does without.
+	 */
+	void carryPlaces() {
+		if (!this.placesCarried) {
+			this.placesCarried = true;
+			changed();
+		}
+	}
+
+	private boolean placesCarried;
+
 	/** The table of what is carried, as the library reads it: empty when nothing is. */
 	String carriedTable() {
-		return this.carried.text();
+		return this.carried.text(this.placesCarried);
 	}
 
 	/**
@@ -1891,6 +1956,34 @@ final class JavaClasses {
 	}
 
 	/**
+	 * The services the files of a loader's resources name: the names of the files in
+	 * {@code META-INF/services/} of the source tree, where the loader searches it, and of
+	 * each root, a name once.
+	 * @param tree whether the loader searches the program's source tree
+	 */
+	Set<String> serviceNames(boolean tree) {
+		String directory = "META-INF/services/";
+		List<@Nullable List<String>> listings = new ArrayList<>();
+		String entry = this.entry;
+		if (tree) {
+			listings.add(entry == null ? this.files.treeListing(directory)
+					: this.files.findListing(entry, this.root + directory));
+		}
+		for (int root = 0; root < this.files.libraryRoots(); root++) {
+			listings.add(this.files.libraryListing(root, directory));
+		}
+		Set<String> names = new java.util.TreeSet<>();
+		for (List<String> listing : listings) {
+			for (String file : listing == null ? List.<String>of() : listing) {
+				if (!file.endsWith("/") && !file.startsWith(".")) {
+					names.add(file);
+				}
+			}
+		}
+		return names;
+	}
+
+	/**
 	 * The classes {@code ResourceBundle.getBundle} of the constant base names some pass
 	 * met may make by their names, by binary name.
 	 */
@@ -1925,15 +2018,36 @@ final class JavaClasses {
 			listings.add(this.files.libraryListing(root, directory));
 		}
 		Set<String> names = new java.util.LinkedHashSet<>();
+		int dollar = simple.indexOf('$');
 		for (List<String> listing : listings) {
 			for (String file : listing == null ? List.<String>of() : listing) {
-				if (file.endsWith(".java") && (file.equals(simple + ".java") || file.startsWith(simple + "_"))
-						&& !simple.isEmpty()) {
+				if (dollar > 0 && file.equals(simple.substring(0, dollar) + ".java")) {
+					// a member class's bundles: the classes nested in the file's class
+					JavaClass outer = binaryNamed(packageName + simple.substring(0, dollar));
+					if (outer != null) {
+						nestedBundles(outer, base, names);
+					}
+				}
+				else if (dollar < 0 && file.endsWith(".java")
+						&& (file.equals(simple + ".java") || file.startsWith(simple + "_")) && !simple.isEmpty()) {
 					names.add(packageName + file.substring(0, file.length() - ".java".length()));
 				}
 			}
 		}
 		return List.copyOf(names);
+	}
+
+	/**
+	 * The binary names of the classes nested in a class that may be bundles of a base
+	 * name: named as it, or as it and a {@code _}.
+	 */
+	private static void nestedBundles(JavaClass outer, String base, Set<String> names) {
+		for (JavaClass member : outer.members.values()) {
+			if (member.binaryName.equals(base) || member.binaryName.startsWith(base + "_")) {
+				names.add(member.binaryName);
+			}
+			nestedBundles(member, base, names);
+		}
 	}
 
 	/**
