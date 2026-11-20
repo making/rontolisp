@@ -359,6 +359,7 @@ Files:
   src/main/java/am/ik/rontolisp/clojure/ClojureCaseMapping.java
   src/main/java/am/ik/rontolisp/codegen/wasm/WasmCaseFoldRuntimeBuilder.java
   src/main/java/am/ik/rontolisp/scheme/SchemeCharacters.java
+  src/main/resources/am/ik/rontolisp/eval/java.lisp
   src/main/resources/am/ik/rontolisp/eval/regex-unicode.lisp
   src/main/resources/am/ik/rontolisp/eval/unicode-normalization-tables.lisp
   src/main/resources/am/ik/rontolisp/java/library/java/time/format/Texts.java

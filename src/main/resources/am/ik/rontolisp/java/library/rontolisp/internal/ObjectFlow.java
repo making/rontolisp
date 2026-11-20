@@ -4,7 +4,6 @@
 package rontolisp.internal;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -735,7 +734,7 @@ public final class ObjectFlow<T> extends Flow implements Stream<T> {
 
     public List<T> toList() {
         link();
-        return Collections.unmodifiableList(taken());
+        return listed(taken().toArray());
     }
 
     public Optional<T> min(Comparator<? super T> comparator) {

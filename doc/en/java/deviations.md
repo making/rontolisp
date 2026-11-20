@@ -12,9 +12,8 @@ the Basic Multilingual Plane. `hashCode` is the specified number, and `toCharArr
 the UTF-16 units, which `new String(char[])` reads back. `toUpperCase` and `toLowerCase`
 change one character into one: `"ß".toUpperCase()` is `ß`, where a JDK answers `SS`. A
 surrogate with no partner in a string is its three bytes in UTF-8, where a JDK writes `?`.
-`Character.digit`, `getNumericValue`, `Integer.parseInt`, `UUID.fromString`, `valueOf` of
-`java.sql` and the texts a `BigInteger` and a `BigDecimal` are made of read a digit outside ASCII
-(`'٣'`) on the interpreter and the JVM and not in a `.wasm`.
+`Character.getNumericValue` of a character that is a number and no digit (`'Ⅷ'`, `'²'`,
+`'½'`) is -1, where a JDK answers 8, 2 and -2.
 
 ```java
 void main() {
@@ -244,16 +243,14 @@ time: `m.values().equals(m.values())` is `false`.
 
 **A few answers of the unmodifiable collections differ.** A list of `List.of` of one or two
 elements refuses an index outside it with `ArrayIndexOutOfBoundsException: Index 2 out of
-bounds for length 2`, a JDK's with `IndexOutOfBoundsException: Index: 2 Size: 2`, and its
-iterator's `remove()` before `next()` throws `IllegalStateException`, a JDK's
+bounds for length 2`, a JDK's with `IndexOutOfBoundsException: Index: 2 Size: 2`. The iterator
+of a list of `List.of`, of `Stream.toList()` and of a gatherer's window throws
+`IllegalStateException` for a `remove()` before `next()`, a JDK's
 `UnsupportedOperationException`. A set of `Set.of` and a map of `Map.of` answer a `null` asked
 for (`contains(null)` is `false`), where a JDK's throw `NullPointerException`, and the views of
 such a map refuse even a change that changes nothing. A list of `Arrays.asList` refuses a
-removal with no message, a JDK's with `remove`. The list of `Stream.toList()` is
-`Collections.unmodifiableList`'s, where a JDK's is a list of `List.of`'s kind that holds nulls:
-an index outside it is an `IndexOutOfBoundsException`, and its reversed view checks an index
-before it refuses a change. `List.of()`, `Set.of()` and `Map.of()` are a new object at each
-call. An iterator of a list of `AbstractList`'s past its end throws `NoSuchElementException`
+removal with no message, a JDK's with `remove`. `List.of()`, `Set.of()`, `Map.of()` and
+the list `toList()` makes of an empty stream are a new object at each call. An iterator of a list of `AbstractList`'s past its end throws `NoSuchElementException`
 with no cause, where a JDK's has the list's `IndexOutOfBoundsException` as its cause.
 
 **A part of a list (`subList`) and an iterator of a list refuse a change made behind them**,

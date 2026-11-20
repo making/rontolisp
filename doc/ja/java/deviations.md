@@ -12,9 +12,8 @@
 UTF-16 のコード単位を返し、`new String(char[])` はそれを元の文字列に読み戻します。
 `toUpperCase` と `toLowerCase` は 1 文字を 1 文字に変えます。`"ß".toUpperCase()` は `ß` です
 （JDK は `SS` を返します）。相手のないサロゲートは、UTF-8 では 3 バイトになります（JDK は
-`?` を書きます）。`Character.digit`、`getNumericValue`、`Integer.parseInt`、`UUID.fromString`、
-`java.sql` の `valueOf`、`BigInteger` と `BigDecimal` に渡す文字列は、ASCII の外の
-数字（`'٣'`）をインタプリタと JVM では読み、`.wasm` では読みません。
+`?` を書きます）。`Character.getNumericValue` は、数を表すが数字ではない文字（`'Ⅷ'`、`'²'`、
+`'½'`）に -1 を返します（JDK は 8、2、-2 を返します）。
 
 ```java
 void main() {
@@ -243,15 +242,13 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 
 **変更できないコレクションの答えのいくつかは JDK と異なります。** 要素が 1 個か 2 個の
 `List.of` のリストは、範囲外の添字を `ArrayIndexOutOfBoundsException: Index 2 out of bounds for
-length 2` で拒みます。JDK は `IndexOutOfBoundsException: Index: 2 Size: 2` です。そのイテレータの
-`next()` 前の `remove()` は `IllegalStateException` を投げます。JDK は
-`UnsupportedOperationException` です。`Set.of` のセットと `Map.of` のマップは、`null` を問われても
+length 2` で拒みます。JDK は `IndexOutOfBoundsException: Index: 2 Size: 2` です。`List.of` のリスト、
+`Stream.toList()` のリスト、ギャザラーの窓のイテレータは、`next()` 前の `remove()` で
+`IllegalStateException` を投げます。JDK は `UnsupportedOperationException` です。`Set.of` のセットと `Map.of` のマップは、`null` を問われても
 答えます（`contains(null)` は `false`）。JDK は `NullPointerException` を投げます。そのマップの
 ビューは、何も変えない変更も拒みます。`Arrays.asList` のリストは削除をメッセージなしで拒みます。
-JDK のメッセージは `remove` です。`Stream.toList()` のリストは `Collections.unmodifiableList` の
-リストです。JDK では null を持てる `List.of` 系のリストです。そのため範囲外の添字は
-`IndexOutOfBoundsException` になり、逆順ビューは変更を拒む前に添字を検査します。`List.of()`、
-`Set.of()`、`Map.of()` は呼ぶたびに新しいオブジェクトです。`AbstractList` 系のリストのイテレータが
+JDK のメッセージは `remove` です。`List.of()`、`Set.of()`、`Map.of()` と、空のストリームの
+`toList()` が作るリストは、呼ぶたびに新しいオブジェクトです。`AbstractList` 系のリストのイテレータが
 末尾を越えると `NoSuchElementException` を投げ、その原因は空です。JDK ではリストの
 `IndexOutOfBoundsException` が原因になります。
 

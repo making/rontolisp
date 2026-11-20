@@ -5,7 +5,6 @@ package java.util.stream;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.BiFunction;
@@ -60,10 +59,10 @@ public final class Gatherers {
                         return true;
                     }
                     held.value = new ArrayList<TR>();
-                    return downstream.push(Collections.unmodifiableList(window));
+                    return downstream.push(Flow.listed(window.toArray()));
                 }, (held, downstream) -> {
                     if (!held.value.isEmpty()) {
-                        downstream.push(Collections.unmodifiableList(held.value));
+                        downstream.push(Flow.listed(held.value.toArray()));
                     }
                 });
     }
@@ -90,10 +89,10 @@ public final class Gatherers {
                         return true;
                     }
                     sliding.pushed = true;
-                    return downstream.push(Collections.unmodifiableList(new ArrayList<TR>(window)));
+                    return downstream.push(Flow.listed(window.toArray()));
                 }, (sliding, downstream) -> {
                     if (!sliding.pushed && !sliding.window.isEmpty()) {
-                        downstream.push(Collections.unmodifiableList(new ArrayList<TR>(sliding.window)));
+                        downstream.push(Flow.listed(sliding.window.toArray()));
                     }
                 });
     }

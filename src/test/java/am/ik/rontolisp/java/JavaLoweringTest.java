@@ -203,6 +203,9 @@ class JavaLoweringTest {
 		while (named.find()) {
 			assertThat(JavaLowering.RAISED).as("java.lisp names %s", named.group(1)).contains(named.group(1));
 		}
+		// the decimal digits above ASCII Character.digit reads are the running JDK's
+		assertThat(runtimeLibrary().replaceAll("\\s+", " ")).as("java.lisp's %java-unicode-digit")
+			.contains("'(" + decimalZeros() + ")");
 		// the prelude keeps a function a program names in any position, so a variable or
 		// a slot of java.lisp named as one keeps it in every program reaching the
 		// definition: `describe` kept 10 KB of wasm in each program that throws
@@ -211,6 +214,20 @@ class JavaLoweringTest {
 			bound(form, bound);
 		}
 		assertThat(bound).isNotEmpty().noneMatch(LispPreludeLibrary::isPreludeFunction);
+	}
+
+	/**
+	 * The zeros of the sets of ten code points above ASCII whose general category is Nd,
+	 * as java.lisp's {@code %java-unicode-digit} lists them.
+	 */
+	private static String decimalZeros() {
+		List<String> zeros = new ArrayList<>();
+		for (int code = 0x80; code <= Character.MAX_CODE_POINT; code++) {
+			if (Character.getType(code) == Character.DECIMAL_DIGIT_NUMBER && Character.digit(code, 10) == 0) {
+				zeros.add(Integer.toString(code));
+			}
+		}
+		return String.join(" ", zeros);
 	}
 
 	/**
@@ -1332,7 +1349,7 @@ class JavaLoweringTest {
 				{ "void main() { Object o = java.util.Currency.CANADA; }", "1:36: the class java.util.Currency" },
 				{ "void main() { var r = new java.util.Random(1); r.nextExponential(); }",
 						"1:50: Random.nextExponential()" },
-				{ "void main() { IO.println(\"a\".stripIndent()); }", "1:30: String.stripIndent()" },
+				{ "void main() { IO.println(\"a\".describeConstable()); }", "1:30: String.describeConstable()" },
 				{ "void main() { IO.println(Collections.EMPTY_LIST); }", "1:38: Collections.EMPTY_LIST" },
 				{ "void main() { var s = new StringBuilder(); s.codePointAt(0); }",
 						"1:46: StringBuilder.codePointAt(int)" },
