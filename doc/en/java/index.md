@@ -192,6 +192,9 @@ path in the source tree or a directory of the source path, `jar:file:` and the j
 `!/` and the entry in a jar, written as the launcher writes them. `openStream` reads the
 bytes compiled into the output, so the URL reads on a machine that has no such file.
 `getResources` answers the URL of every place holding the name, the source tree first.
+A directory is a resource too, as the launcher has it: its URL ends in `/` in the source tree,
+and its stream reads the names of its entries, one a line. In a jar a directory is found only
+where the jar holds an entry of it.
 
 ```
 URL url = Main.class.getResource("data.txt");   // file:/home/me/app/data.txt
@@ -203,8 +206,9 @@ most specific, a public class of the bundle's name extending `ResourceBundle`, e
 `.properties` file, read as UTF-8 or, where it is no UTF-8, as ISO 8859-1; where only the
 base bundle or none is found, the default locale's candidates. A constant base name brings
 its `.properties` files and the classes of its package named after it; a base name computed
-when the program runs brings every file, as a computed resource name does, and the bundle
-classes the program reaches otherwise. A member class is a bundle of a name with a `$`
+when the program runs brings every file, as a computed resource name does, and every bundle
+class of the source tree and the source path: a class under `ResourceBundle`, or under such a
+class, by the name its file declares it under. A member class is a bundle of a name with a `$`
 (`app.Texts$Words`), as a JDK finds one. `getBundle` of a base name, and of a base name and
 a locale, asks the loader of the class calling it.
 

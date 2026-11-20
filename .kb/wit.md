@@ -425,8 +425,10 @@ a dep without a package, and a parse error each name `file:line`.
   interface-level `use store.{...}` reaches a sibling file, which is the WIT rule.
 - `wit-export` on a directory counts/searches only the package's own (top-level) worlds, not
   its deps' (`selectWorld`); the message says "the package declares".
-- The playground's loader lists no directories: the read error says "a WIT package directory
-  is read only where the loader lists directories" (`WitImportInlinerTest`).
+- A loader that lists no directories is refused a package directory: "a WIT package
+  directory is read only where the loader lists directories" (`WitImportInlinerTest`). The
+  playground's lists the directories its uploads' names make since 2026-11-21
+  (`eval/UploadedFiles`), so `wit/gl/gl.wit` uploaded is a package directory there.
 - Not done (a separate decision): rontolisp's own libraries (`http.wit`, `sockets.wit`, ...)
   still read their concatenated copies, not `src/wasm-component/deps/` -- a resource
   directory is not listed in a native image.

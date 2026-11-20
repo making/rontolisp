@@ -17,7 +17,8 @@ import java.util.Enumeration;
 // place a letter (T the tree, D a directory, J a jar), its count of files, a ';', the
 // length of its path where the program was compiled, a ';' and the path, then for each
 // file the length of its name, a ';', the name, its count of octets, a ';' and the
-// octets, one character an octet. A lookup walks the text: what a program carries is read
+// octets, one character an octet. A directory is a file whose name ends in '/' (a
+// directory's top is the empty name), its octets what it answers as a resource. A lookup walks the text: what a program carries is read
 // where it is asked, and no table is made of it. A loader's reach is how far it looks:
 // 0 nowhere, 1 the roots, 2 the tree and then the roots.
 public final class ResourceTable {
@@ -70,7 +71,7 @@ public final class ResourceTable {
                 end = TABLE.indexOf(';', at);
                 int size = number(at, end);
                 at = end + 1 + size;
-                if (asked && length == key.length() && TABLE.startsWith(key, named)) {
+                if (asked && matches(key, named, length)) {
                     return Resources.stream(TABLE.substring(end + 1, at));
                 }
             }
@@ -79,33 +80,51 @@ public final class ResourceTable {
     }
 
     public static URL findUrl(int reach, String name) {
-        int[] found = new int[3];
+        int[] found = new int[4];
         return search(reach, name, 0, found) < 0 ? null : located(found, name);
     }
 
     // the URL of every place holding the name, in the table's order
     public static Enumeration<URL> findAll(int reach, String name) {
         ArrayList<URL> every = new ArrayList<>();
-        int[] found = new int[3];
+        int[] found = new int[4];
         for (int at = search(reach, name, 0, found); at >= 0; at = search(reach, name, at, found)) {
             every.add(located(found, name));
         }
         return Collections.enumeration(every);
     }
 
-    // the URL of a file found: its place's kind and path, the name as the place reads it
+    // the URL of a file found: its place's kind and path, the name as the place reads it;
+    // a directory of the tree named with its slash, a name below a directory with the
+    // slash it ends in or that a last '.' or '..' leaves
     private static URL located(int[] found, String name) {
         char kind = TABLE.charAt(found[0]);
         int end = TABLE.indexOf(';', found[0] + 1);
         int length = TABLE.indexOf(';', end + 1);
         String place = TABLE.substring(length + 1, length + 1 + number(end + 1, length));
-        return located0(kind == 'T' ? 0 : kind == 'D' ? 1 : 2, place, kind == 'D' ? below(name) : name,
-                TABLE.substring(found[1], found[2]));
+        String named = name;
+        if (kind == 'D') {
+            named = below(name);
+            if (!named.isEmpty() && (name.endsWith("/") || name.endsWith("/.") || name.endsWith("/.."))) {
+                named = named + "/";
+            }
+        }
+        else if (kind == 'T' && found[3] == 1 && !name.endsWith("/")) {
+            named = name + "/";
+        }
+        return located0(kind == 'T' ? 0 : kind == 'D' ? 1 : 2, place, named, TABLE.substring(found[1], found[2]));
+    }
+
+    // whether a name of the table is the one asked: the name itself, or a directory's,
+    // which ends in a '/' the name asked need not
+    private static boolean matches(String key, int named, int length) {
+        return TABLE.startsWith(key, named) && (length == key.length()
+                || length == key.length() + 1 && TABLE.charAt(named + key.length()) == '/');
     }
 
     // the first file of the name a place from a point of the table on holds: where its
-    // place starts, where its octets start and end; answers where the next place starts,
-    // or -1 where none holds it
+    // place starts, where its octets start and end, and whether it is a directory;
+    // answers where the next place starts, or -1 where none holds it
     private static int search(int reach, String name, int from, int[] found) {
         if (reach == 0 || name.startsWith("/")) {
             return -1;
@@ -139,10 +158,11 @@ public final class ResourceTable {
                 end = TABLE.indexOf(';', at);
                 int size = number(at, end);
                 at = end + 1 + size;
-                if (asked && !held && length == key.length() && TABLE.startsWith(key, named)) {
+                if (asked && !held && matches(key, named, length)) {
                     found[0] = placed;
                     found[1] = end + 1;
                     found[2] = at;
+                    found[3] = length == 0 || TABLE.charAt(named + length - 1) == '/' ? 1 : 0;
                     held = true;
                 }
             }

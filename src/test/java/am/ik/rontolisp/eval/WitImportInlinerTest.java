@@ -118,16 +118,9 @@ class WitImportInlinerTest {
 	private static final String KV_DIRECTIVE = "(rontolisp:wit-import \"kv.wit\" "
 			+ ":interface \"wasi:keyvalue/store@0.2.0\" :package kv)";
 
-	// A no-filesystem loader, exactly the shape the browser playground backs its uploads
-	// with: a map of logical path -> text, and the loader's own error for anything else.
+	// The browser playground's no-filesystem loader: its uploads by name.
 	private static SourceLoader uploads(Map<String, String> files) {
-		return path -> {
-			String content = files.get(path);
-			if (content == null) {
-				throw new FileNotFoundException(path + " (upload it first)");
-			}
-			return content;
-		};
+		return new UploadedFiles(files);
 	}
 
 	@Test
@@ -156,13 +149,17 @@ class WitImportInlinerTest {
 	 */
 	@Test
 	void aWitIsReadThroughTheSourceLoaderSoABrowserCanBindOne() {
-		List<LispVal> out = WitImportInliner.inline(LispReader.readAllFromString(DIRECTIVE + BODY), null,
-				WitExportDirective.Backend.WASM_GC, uploads(Map.of("gl.wit", GL_WIT)));
-		assertThat(String.join("\n", out.stream().map(LispVal::print).toList())).doesNotContain("wit-import")
-			.contains(
-					"(DEFPACKAGE GL (:USE CL) (:EXPORT |create-shader| |shader-source| |compile-shader| |clear-color|))")
-			.contains("(RONTOLISP:WASM-IMPORT 'GL:|create-shader| :FROM \"gl\" :AS \"createShader\" "
-					+ ":PARAMS '(:INT) :RETURNS :INT)");
+		// a file, and a package directory the uploads' names make
+		for (String path : List.of("gl.wit", "wit/gl")) {
+			List<LispVal> out = WitImportInliner.inline(
+					LispReader.readAllFromString(DIRECTIVE.replace("gl.wit", path) + BODY), null,
+					WitExportDirective.Backend.WASM_GC, uploads(Map.of("gl.wit", GL_WIT, "wit/gl/gl.wit", GL_WIT)));
+			assertThat(String.join("\n", out.stream().map(LispVal::print).toList())).doesNotContain("wit-import")
+				.contains(
+						"(DEFPACKAGE GL (:USE CL) (:EXPORT |create-shader| |shader-source| |compile-shader| |clear-color|))")
+				.contains("(RONTOLISP:WASM-IMPORT 'GL:|create-shader| :FROM \"gl\" :AS \"createShader\" "
+						+ ":PARAMS '(:INT) :RETURNS :INT)");
+		}
 	}
 
 	@Test
@@ -174,7 +171,9 @@ class WitImportInlinerTest {
 		// a package directory, where the loader lists none, says why it is not read
 		assertThatThrownBy(() -> WitImportInliner.inline(
 				LispReader.readAllFromString("(rontolisp:wit-import \"wit/gl\" :interface \"local:webgl/gl\")"), null,
-				WitExportDirective.Backend.WASM_GC, uploads(Map.of("wit/gl/gl.wit", GL_WIT))))
+				WitExportDirective.Backend.WASM_GC, path -> {
+					throw new FileNotFoundException(path);
+				}))
 			.cause()
 			.hasMessageContaining("a WIT package directory is read only where the loader lists directories");
 	}

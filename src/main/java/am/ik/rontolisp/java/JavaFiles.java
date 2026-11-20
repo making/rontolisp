@@ -84,18 +84,6 @@ public interface JavaFiles {
 	}
 
 	/**
-	 * The octets of a resource of a library the program uses: the first root of its
-	 * source path that has it, as a class loader finds it there -- below a directory the
-	 * name's {@code .} and {@code ..} resolved ({@link #below}), in a jar the entry of
-	 * the name as it is.
-	 * @param name the resource's name below a root
-	 * @return the octets, or {@code null} when no root has it or there is no source path
-	 */
-	default byte @Nullable [] libraryResource(String name) {
-		return null;
-	}
-
-	/**
 	 * The entries of a directory of the program's source tree, named relative to the file
 	 * it starts at, as {@link #findResource} reads a file of it.
 	 * @param from the file whose directory {@code path} is relative to
@@ -159,6 +147,19 @@ public interface JavaFiles {
 	 */
 	default byte @Nullable [] libraryResource(int root, String path) {
 		return null;
+	}
+
+	/**
+	 * Whether a jar of the source path holds an entry of a name: a directory is a
+	 * resource of a jar only where the jar holds its entry ({@code app/}), which a jar
+	 * need not, though the names of the files below it make the directory its listing
+	 * has.
+	 * @param root the root's index, in the source path's order
+	 * @param path the entry's name, a directory's ending in {@code /}
+	 * @return {@code true} where the root is a jar holding the entry
+	 */
+	default boolean libraryEntry(int root, String path) {
+		return false;
 	}
 
 	/**

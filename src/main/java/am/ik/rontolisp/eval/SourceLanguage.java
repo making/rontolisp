@@ -570,26 +570,9 @@ public enum SourceLanguage {
 			}
 
 			@Override
-			public byte @Nullable [] libraryResource(String name) {
-				for (String root : sourcePath) {
-					if (loader.isDirectory(root)) {
-						String below = JavaFiles.below(name);
-						byte[] found = below == null ? null : bytes(loader, SourceLoader.resolve(root, below));
-						if (found != null) {
-							return found;
-						}
-						continue;
-					}
-					if (!name.endsWith("/") && entries.apply(root).contains(name)) {
-						try {
-							return loader.loadArchiveEntryBytes(root, name);
-						}
-						catch (IOException ex) {
-							// an entry that cannot be read is no resource of the root
-						}
-					}
-				}
-				return null;
+			public boolean libraryEntry(int root, String path) {
+				String top = sourcePath.get(root);
+				return !loader.isDirectory(top) && entries.apply(top).contains(path);
 			}
 
 			@Override

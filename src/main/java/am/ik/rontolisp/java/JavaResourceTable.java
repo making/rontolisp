@@ -14,13 +14,13 @@ import org.jspecify.annotations.Nullable;
  * carries: those of its source tree, where a lookup through the program's loader computes
  * a name, and those of every root of its source path. A lookup of a name computed in full
  * selects every file of a place but a source file ({@code .java}) and a class file
- * ({@code .class}); {@code ResourceBundle.getBundle} of a constant base name the
- * {@code .properties} files of its bundles in one directory. An entry whose name starts
- * with a dot is left out, a directory is no file, and the entries of a directory are
- * taken in the order of their names, so that what is carried does not depend on the host.
- * More than {@link #FILES} files or {@link #OCTETS} octets to carry, or more than
- * {@link #VISITS} entries to look at, are refused: a tree whose top is a home directory
- * is not carried.
+ * ({@code .class}), and every directory as what it answers, its name ending in {@code /};
+ * {@code ResourceBundle.getBundle} of a constant base name the {@code .properties} files
+ * of its bundles in one directory. An entry whose name starts with a dot is left out, and
+ * the entries of a directory are taken in the order of their names, so that what is
+ * carried does not depend on the host. More than {@link #FILES} files or {@link #OCTETS}
+ * octets to carry, or more than {@link #VISITS} entries to look at, are refused: a tree
+ * whose top is a home directory is not carried.
  * <p>
  * The table is a text the run time reads once ({@code rontolisp.internal.ResourceTable}):
  * for each place a letter ({@code T} the tree, {@code D} a directory of the source path,
@@ -83,21 +83,41 @@ final class JavaResourceTable {
 	 * @param directory where to look, ending in {@code /} or the top
 	 * @param deep whether the directories below it are looked in too
 	 * @param wanted which file names are selected
+	 * @param directories what a directory walked through answers as a resource, by its
+	 * path and its entries, or {@code null} where it is none; {@code null} where no
+	 * directory is selected
 	 * @param named what the place is called in a refusal
 	 */
 	void select(int index, char kind, String path, Function<String, @Nullable List<String>> listing,
 			Function<String, byte @Nullable []> reading, String directory, boolean deep, Predicate<String> wanted,
-			String named) throws Bounded {
+			@Nullable Directories directories, String named) throws Bounded {
 		Place place = this.places.computeIfAbsent(index, key -> new Place(kind, path, new TreeMap<>()));
-		walk(place, directory, listing, reading, deep, wanted, named);
+		walk(place, directory, listing, reading, deep, wanted, directories, named);
+	}
+
+	/** What a directory answers as a resource. */
+	@FunctionalInterface
+	interface Directories {
+
+		/**
+		 * The octets of a directory, or {@code null} where it is no resource.
+		 * @param path the directory, the top the empty string, any other ending in
+		 * {@code /}
+		 * @param entries its entries
+		 */
+		byte @Nullable [] octets(String path, List<String> entries);
+
 	}
 
 	private void walk(Place place, String directory, Function<String, @Nullable List<String>> listing,
-			Function<String, byte @Nullable []> reading, boolean deep, Predicate<String> wanted, String named)
-			throws Bounded {
+			Function<String, byte @Nullable []> reading, boolean deep, Predicate<String> wanted,
+			@Nullable Directories directories, String named) throws Bounded {
 		List<String> entries = listing.apply(directory);
 		if (entries == null) {
 			return;
+		}
+		if (directories != null && !place.files().containsKey(directory)) {
+			carry(place, directory, directories.octets(directory, entries), named);
 		}
 		List<String> sorted = new ArrayList<>(entries);
 		sorted.sort(null);
@@ -111,26 +131,28 @@ final class JavaResourceTable {
 			String path = directory + entry;
 			if (entry.endsWith("/")) {
 				if (deep) {
-					walk(place, path, listing, reading, true, wanted, named);
+					walk(place, path, listing, reading, true, wanted, directories, named);
 				}
 				continue;
 			}
-			if (!wanted.test(entry) || place.files().containsKey(path)) {
-				continue;
+			if (wanted.test(entry) && !place.files().containsKey(path)) {
+				carry(place, path, reading.apply(path), named);
 			}
-			byte[] read = reading.apply(path);
-			if (read == null) {
-				continue;
-			}
-			if (++this.files > FILES) {
-				throw new Bounded(named + " holds more than " + FILES + " files to carry");
-			}
-			this.octets += read.length;
-			if (this.octets > OCTETS) {
-				throw new Bounded(named + " holds more than " + OCTETS + " octets to carry");
-			}
-			place.files().put(path, read);
 		}
+	}
+
+	private void carry(Place place, String path, byte @Nullable [] read, String named) throws Bounded {
+		if (read == null) {
+			return;
+		}
+		if (++this.files > FILES) {
+			throw new Bounded(named + " holds more than " + FILES + " files to carry");
+		}
+		this.octets += read.length;
+		if (this.octets > OCTETS) {
+			throw new Bounded(named + " holds more than " + OCTETS + " octets to carry");
+		}
+		place.files().put(path, read);
 	}
 
 	/** Whether a file name is one a name computed in full may find. */

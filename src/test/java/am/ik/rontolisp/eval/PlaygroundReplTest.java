@@ -1,6 +1,5 @@
 package am.ik.rontolisp.eval;
 
-import java.io.FileNotFoundException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -18,13 +17,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class PlaygroundReplTest {
 
 	private static SourceLoader files(Map<String, String> files) {
-		return path -> {
-			String text = files.get(path);
-			if (text == null) {
-				throw new FileNotFoundException(path);
-			}
-			return text;
-		};
+		return new UploadedFiles(files);
 	}
 
 	private static final SourceLoader NO_FILES = files(Map.of());
@@ -130,16 +123,19 @@ class PlaygroundReplTest {
 	@Test
 	void aClojureRequireReadsTheUploadedDepsEdnLikeEveryOtherRoute() {
 		// the uploads are the working directory: their deps.edn names the roots, as it
-		// does for the CLI; a :local/root needs a directory, which the browser has none
-		// of
+		// does for the CLI, and the names' slashes make its directories, so a :local/root
+		// is one
 		SourceLoader loader = files(
 				Map.of("deps.edn", "{:paths [\"lib\"]}", "lib/app/x.clj", "(ns app.x) (defn f [] :from-lib)"));
 		PlaygroundRepl repl = new PlaygroundRepl(loader).pick(SourceLanguage.CLOJURE);
 		assertThat(repl.run("(require 'app.x) (println (app.x/f))")).isEqualTo(":from-lib\n");
 		assertThat(repl.eval("(require '[app.x :as x]) (x/f)")).isEqualTo(":from-lib");
-		SourceLoader local = files(Map.of("deps.edn", "{:deps {my/lib {:local/root \"lib\"}}}"));
-		assertThatThrownBy(() -> new PlaygroundRepl(local).pick(SourceLanguage.CLOJURE).run("(require 'app.x)"))
-			.hasMessageContaining("Local lib my/lib not found: lib");
+		SourceLoader local = files(Map.of("deps.edn", "{:deps {my/lib {:local/root \"lib\"}}}", "lib/deps.edn",
+				"{:paths [\"src\"]}", "lib/src/app/x.clj", "(ns app.x) (defn f [] :from-local)"));
+		assertThat(new PlaygroundRepl(local).pick(SourceLanguage.CLOJURE).eval("(require 'app.x) (app.x/f)"))
+			.isEqualTo(":from-local");
+		assertThat(new PlaygroundRepl(local).eval("(list (directory \"*.edn\") (probe-file \"lib\"))"))
+			.isEqualTo("((#P\"deps.edn\") #P\"lib/\")");
 	}
 
 	@Test
@@ -171,16 +167,18 @@ class PlaygroundReplTest {
 			.isEqualTo("3\n");
 		// The uploads are the source tree of a program the page reads from no file: a
 		// class it names, or a buffer of its session, is read from the upload its name
-		// spells and checked as the program's own; a resource is read from them too.
+		// spells and checked as the program's own; a resource is read from them too, by a
+		// name computed where the program runs as well.
 		PlaygroundRepl uploaded = new PlaygroundRepl(
 				files(Map.of("geo/Place.java", "package geo; public record Place(String name) { }", "Helper.java",
 						"class Helper { static int twice(int n) { return 2 * n; } }", "Bad.java",
 						"class Bad { static int unused() { return \"s\"; } }", "geo/name.txt", "é")))
 			.pick(SourceLanguage.JAVA);
-		assertThat(
-				uploaded.run("void main() throws Exception { IO.println(new geo.Place(\"x\").name() + Helper.twice(2)"
-						+ " + new String(geo.Place.class.getResourceAsStream(\"name.txt\").readAllBytes())); }"))
-			.isEqualTo("x4é\n");
+		assertThat(uploaded
+			.run("void main() throws Exception { IO.println(new geo.Place(\"x\").name() + Helper.twice(2)"
+					+ " + new String(geo.Place.class.getResourceAsStream(\"name.txt\").readAllBytes())"
+					+ " + new String(geo.Place.class.getResourceAsStream(\"NAME.TXT\".toLowerCase()).readAllBytes())); }"))
+			.isEqualTo("x4éé\n");
 		assertThat(uploaded.eval("new geo.Place(\"y\")")).isEqualTo("$1 ==> Place[name=y]");
 		assertThatThrownBy(() -> uploaded.run("void main() { Bad.unused(); }"))
 			.hasMessage("Bad.java:1:42: incompatible types: String cannot be converted to int");

@@ -1,6 +1,5 @@
 package am.ik.rontolisp.web;
 
-import java.io.FileNotFoundException;
 import java.io.PrintStream;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -19,6 +18,7 @@ import am.ik.rontolisp.codegen.wasm.WasmLispCompiler;
 import am.ik.rontolisp.eval.SourceLoader;
 import am.ik.rontolisp.eval.PlaygroundRepl;
 import am.ik.rontolisp.eval.SourceLanguage;
+import am.ik.rontolisp.eval.UploadedFiles;
 import am.ik.rontolisp.reader.Features;
 
 /**
@@ -67,18 +67,12 @@ public final class RontoPlayground {
 	private static final Map<String, String> uploadedFiles = new LinkedHashMap<>();
 
 	/**
-	 * Reads an uploaded file. Backs {@code (load "x.lisp")} and a Scheme {@code include}
-	 * on the REPL, and {@code (rontolisp:wit-export "w.wit")} on both compile paths, so a
-	 * WIT world is dropped onto the page like any other companion file.
+	 * The uploaded files as the directory a program runs in. Backs {@code (load "x.lisp")}
+	 * and a Scheme {@code include} on the REPL, {@code directory} and {@code probe-file},
+	 * a Java program's source tree, and {@code (rontolisp:wit-export "w.wit")} on both
+	 * compile paths, so a WIT world is dropped onto the page like any other companion file.
 	 */
-	private static final SourceLoader uploads = path -> {
-		String content = uploadedFiles.get(path);
-		if (content == null) {
-			throw new FileNotFoundException(
-					path + " (upload it first; available: " + String.join(", ", uploadedFiles.keySet()) + ")");
-		}
-		return content;
-	};
+	private static final SourceLoader uploads = new UploadedFiles(uploadedFiles);
 
 	/** The page's persistent interpreter, whose pick every call reads. */
 	private static final PlaygroundRepl repl = new PlaygroundRepl(uploads, "", source -> runCompiled(source, ""));

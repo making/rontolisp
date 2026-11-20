@@ -17160,6 +17160,26 @@ standalone:
               }
           }
 
+          // a directory of the tree as a resource: its URL, named with its slash, and its
+          // listing as what it reads; a bundle class only a computed base name finds
+          static void directories() throws Exception {
+              java.net.URL sub = Main.class.getResource("sub");
+              java.net.URL computed = Main.class.getResource(DATA.substring(0, 0) + "sub");
+              ClassLoader loader = Main.class.getClassLoader();
+              System.out.println(sub.toString().endsWith("/tables/sub/") + " " + read(sub.openStream()) + " "
+                      + sub.equals(computed) + " " + read(computed.openStream()) + " "
+                      + read(Main.class.getResourceAsStream("sub/")) + " "
+                      + read(loader.getResourceAsStream("geo")).replace('\n', ',') + " "
+                      + read(loader.getResourceAsStream(DATA.substring(0, 0) + "geo/")).replace('\n', ',') + " "
+                      + Main.class.getResource("").toString().endsWith("/tables/") + " "
+                      + Main.class.getResource("sub/deep.txt/") + " "
+                      + Main.class.getResource(DATA.substring(0, 0) + "sub/deep.txt/") + " "
+                      + Main.class.getResourceAsStream("sub//"));
+              ResourceBundle late = ResourceBundle.getBundle(DATA.substring(0, 0) + "tables.Late", Locale.UK);
+              System.out.println(late.getClass().getName() + " [" + late.getLocale() + "] " + late.getString("a") + " "
+                      + late.getString("b"));
+          }
+
           // a service told by a class object at run time
           static <T> List<String> providers(Class<T> service) {
               return ServiceLoader.load(service, ClassLoader.getSystemClassLoader()).stream()
@@ -17194,6 +17214,7 @@ standalone:
               bundles();
               services();
               urls();
+              directories();
               Class<?> service = Greeter.class;
               System.out.println(providers(Greeter.class) + " " + providers(Runnable.class) + " "
                       + ServiceLoader.load(service).findFirst().map(Object::getClass).map(Class::getName) + " "
@@ -17262,6 +17283,24 @@ standalone:
         }
       tables/Texts_en.properties: |
         b=a class wins over a file
+      tables/Late.java: |
+        package tables;
+
+        import java.util.ListResourceBundle;
+
+        public class Late extends ListResourceBundle {
+            protected Object[][] getContents() {
+                return new Object[][] { { "a", "late a" }, { "b", "late b" } };
+            }
+        }
+      tables/Late_en_GB.java: |
+        package tables;
+
+        public class Late_en_GB extends Late {
+            protected Object[][] getContents() {
+                return new Object[][] { { "a", "late en_GB a" } };
+            }
+        }
       tables/Texts_en_GB.properties: |
         a=texts en_GB a
       geo/texts_en_GB.properties: |
@@ -17605,6 +17644,8 @@ standalone:
       top.txt: top.txt top true 1 true 0 none
       true true null null null false null Optional.empty
       Can't find bundle for base name geo.texts, locale en_GB
+      true deep.txt true deep.txt deep.txt note.txt,texts_en_GB.properties note.txt,texts_en_GB.properties true null null null
+      tables.Late_en_GB [en_GB] late en_GB a late b
       made Mine
       [geo.Hello] [] Optional[tables.Main$Mine] geo.Hello
       java.util.PropertyResourceBundle [en_GB] member file en_GB member x

@@ -7682,6 +7682,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		else {
 			carries(tree, call.pos());
+			this.classes.declareBundleClasses(tree);
 			if (!this.classes.everyClassBundle) {
 				this.classes.everyClassBundle = true;
 				this.classes.changed();
@@ -7769,14 +7770,8 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (name.startsWith("/")) {
 			return NIL;
 		}
-		byte[] octets = program ? this.classes.treeResource(name) : null;
-		if (octets == null) {
-			octets = this.classes.libraryResource(name);
-		}
-		if (octets == null) {
-			return NIL;
-		}
-		return library(RESOURCES, "stream", List.of(string(octets(octets))));
+		List<JavaClasses.Located> found = this.classes.located(name, program, true);
+		return found.isEmpty() ? NIL : library(RESOURCES, "stream", List.of(string(octets(found.get(0).octets()))));
 	}
 
 	/** Octets as the library reads them: a text of one character an octet. */

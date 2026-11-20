@@ -450,7 +450,7 @@ is refused by name where it is reached, never where a class is read.** Asked for
   `library:` is zipped to a sources jar for the four legs and compiled by javac for the
   JDK leg, `provided:` is what javac alone reads).
 
-## Resources (2026-11-20, k53; a computed name, bundles, services: k58; URLs, a computed service: k69)
+## Resources (2026-11-20, k53; a computed name, bundles, services: k58; URLs, a computed service: k69; directories, the playground's uploads, a bundle class only a computed name finds: k75)
 
 **Invariant: a resource is found while the program is lowered, by the loader a source
 launcher would give the class, and its octets travel in the output: a constant name's one
@@ -478,9 +478,8 @@ first measurement).
   segment finds nothing (`JavaClasses.treeResource`; launcher measured: `../top.txt`,
   `./data.txt`, `sub//x.txt`, `sub/../x.txt` none). Under a DIRECTORY root of the source
   path they are resolved (`JavaFiles.below`, a `..` out of the root none: a class path
-  directory measured so), in a jar the entry is the name exactly. A directory is no
-  resource here (`null`); the launcher answers a `ByteArrayInputStream` of a listing for
-  `""`, `"sub"`, `"/"` (`deviations.md`).
+  directory measured so), in a jar the entry is the name exactly. A directory is a
+  resource (k75, below).
 - **Lowering.** `Name.class.getResourceAsStream(c)` and `.getClassLoader()` are answered
   where they are written (`literalResource`, beside `getName`'s road), so no class object
   is made. Any other `Class` receiver (`getClass()`, a `Class<?>` held) goes through the
@@ -540,8 +539,7 @@ first measurement).
     host. Bounds: 10,000 files, 16 MiB, 100,000 entries looked at, refused at the lookup
     (`unsupported`: `a resource named where the program runs while the source tree holds
     more than 10000 files to carry`) -- a tree whose top is a home directory. The
-    playground's uploads list as no directory (its `SourceLoader` has no
-    `listDirectory`), so a computed name finds none of them (`.todo/k75`).
+    playground's uploads are listed since k75 ("The playground's uploads").
   - **The table** (`ResourceTable.table0()`, a native answered by
     `JavaClasses.carriedTable()`): one text, the tree first then the roots in order, each
     place a letter (`T`, `D`, `J`), its count and `;`, each file its name's length, `;`,
@@ -680,10 +678,61 @@ first measurement).
   public static one with a public constructor of no parameters, skipping a non-public or
   an inner one (probed; `app.Outer.Texts` with dots finds no member). The files are
   `Outer$Texts_en_GB.properties`, which the base's path already selects.
-- **Left** (`.todo/k75`): the playground's uploads for a computed name,
-  `ResourceBundle.Control` and `getBundle(.., Module)`, `Properties`' XML, a bundle
-  class only a computed base name finds, the candidate locales of a script and a
-  variant.
+- **A directory (k75)**: measured against JDK 25.0.5's launcher with a tree, a class path
+  directory, a jar holding directory entries and one holding none (the k75 probes, every
+  line of which the four backends now print, the listing's order aside):
+  - **The tree** (the launcher's in-memory loader): a directory named as written, with or
+    without a last `/` (`sub`, `sub/`, `sub/emptydir`), its URL `file:/<tree>/<name>/`
+    (always the slash: `Path.toUri`); its stream the names of its entries, each and `\n`
+    (a directory's no slash; `.java`, `.class` and dot names included). The top (`""` of
+    the loader) is none -- the loader's `""` is the first class path directory's --, a
+    file with a last `/` (`sub/a.txt/`) none, `sub//` and `sub/./` none.
+  - **A class path directory**: the name's `.` and `..` resolved (`app/./sub`,
+    `app/sub/deeper/..`), the top `""` the directory itself; its URL keeps the slash the
+    name ends in or that a last `.` or `..` leaves (`app/sub/.` is `.../app/sub/`), a FILE's
+    too (`app/sub/l.txt/` finds the file, URL `.../l.txt/`), a `//` kept (`lone//x`: here
+    `lone/x`, not carried over).
+  - **A jar**: the entry exactly, a directory only where the jar holds its entry
+    (`jaronly/`; a jar written with no directory entries has no directory resource), read
+    as empty (`JarURLInputStream` there, a `ByteArrayInputStream` here); `""` and
+    `jaronly/.` none.
+  - **The order of a listing** is the launcher's default locale's collation (`_u`,
+    `.hidden`, `10`, `9`, `a.txt`, `Alpha`, `b.txt`: punctuation first, case ignored at the
+    first level), so it depends on the host that runs the program. Here it is the names'
+    characters (`String.compareTo`), fixed when compiled (`deviations.md`); the corpus lists
+    only directories where the two agree.
+  - **Where**: `JavaClasses.treeResource` answers a directory's listing
+    (`listing`) and notes it (`treeDirectories`, for the URL's slash); `inDirectory` and
+    `inArchive` the roots' (`JavaFiles.libraryEntry`, a jar's own entry); a constant name's
+    stream goes through `located` now, the one road (`JavaFiles.libraryResource(String)` is
+    gone). For a computed name the table carries each directory a `*` selection walks as a
+    file whose name ends in `/` (a directory root's top the empty name, the tree's top
+    none), its octets the listing; `ResourceTable.matches` takes a name or the name and a
+    `/`, and `located` gives the URL its slash.
+  - **Measured** (wasm P1, 2026-11-21, a tree of five files): a constant stream, loader
+    stream, `getResource(..).getPath()`, `examples/java/shop` byte-identical (39,683,
+    41,104, 26,957, 314,223 B); a computed class stream 45,258 -> 45,860, loader stream
+    47,041 -> 47,572, `getResource(..).openStream()` 75,427 -> 76,642; `getBundle` of a
+    constant base name 253,415 -> 253,841 and of a computed one 254,817 -> 255,342 (a
+    bundle's `.properties` read goes through `ResourceTable.find`, which holds the
+    directory match). The listings are what a large tree pays: a computed `getBundle` over
+    a tree of 2,003 classes in 41 directories carries ~18 KB of names.
+- **A bundle class only a computed base name finds (k75)**: the launcher's loader compiles
+  the class `getBundle` asks for, which nothing else of the program named; k58 made only
+  the bundle classes the program had. `JavaClasses.declareBundleClasses` (once a loader's
+  reach) reads the `.java` files of the tree (where the loader looks there) and of every
+  root, and declares those that hold a class, nested or not, under `ResourceBundle`,
+  `ListResourceBundle` or `PropertyResourceBundle`, or under a class so found, by the
+  simple name its `extends` names (a fixed point); only a file whose text holds one of the
+  names is parsed. Declaring every file was the alternative the todo feared: a class of the
+  program is lowered whole, so an unused file of the tree with a type error would refuse a
+  program the launcher runs (probed: `Unused.java`, `return "s"` from an `int`, stays
+  unread here). `isBundleClass` still decides. Measured: a 2,003-class tree compiles in
+  5.9 -> 6.0 s; with YAVI's sources jar (415 files) as a root 6.2 to 6.7 s before and
+  after (a box under load); the program gains the bundle classes it makes (5.1 KB for a
+  `ListResourceBundle` and its `en_GB` subclass).
+- **Left** (`.todo/k75`): `ResourceBundle.Control` and `getBundle(.., Module)`,
+  `Properties`' XML, the candidate locales of a script and a variant.
 - **Beside it** (k53): a qualified name of a JDK package naming no class the subset has,
   read as a value (`java.util.ResourceBundle.getBundle("m")`), is `the class
   java.util.ResourceBundle` and no longer `cannot find symbol: variable java`
@@ -696,13 +745,16 @@ first measurement).
   `urls()`, the providers of a `Class<?>` and a member class's bundles in the first,
   `a-url-is-cut-into-its-parts-as-a-jdk-cuts-it`,
   `a-program-of-several-files-finds-its-classes-by-package` (a provider the one
-  `Supplier` of a program),
+  `Supplier` of a program), k75's `directories()` in the first (a directory of the tree by
+  a constant and a computed name, a bundle class only a computed base name finds),
   `JavaLoweringTest#aConstructTheSubsetDoesNotHaveIsRefusedByNameAtItsPosition`
   (the qualified JDK classes),
   `JavaLoweringTest#aProgramOfSeveralFilesIsReadFromItsSourceTree` (a tree of more files
   than a program carries),
   `PlaygroundReplTest#theJavaPickKeepsItsDeclarationsAcrossBuffersAndRunsAProgram` (an
-  upload read as a resource).
+  upload read as a resource, by a constant and a computed name),
+  `PlaygroundReplTest#aClojureRequireReadsTheUploadedDepsEdnLikeEveryOtherRoute` (the
+  uploads' directories to Clojure and Common Lisp).
 
 ## YAVI compiled to wasm (2026-11-20, k33)
 
@@ -867,6 +919,18 @@ whole, located and checked as the program's own (`Origin.PROGRAM`), on the inter
   package is not refused for where it is not.
 - **The page uploads a file by its base name**, so an uploaded file is a class of the
   unnamed package; `rontoPutFile("geo/Place.java", ..)` spells a package's.
+- **The uploads are a directory (k75, `eval/UploadedFiles`)**: the names' slashes make its
+  directories (`listDirectory`, `exists` of a directory), the top `""`, `.` or `./`. So a
+  name computed where a Java program runs finds an upload, as one in a tree does. Measured
+  first what the listing changes in the page's other languages (a probe through
+  `PlaygroundRepl` with the old loader and the new): Common Lisp's `directory`,
+  `probe-file "geo"`, `uiop:directory-exists-p`, `directory-files` and `subdirectories`
+  answered `nil` and now the uploads; Clojure's `:local/root "lib"` was `Local lib my/lib
+  not found` and now reads `lib/deps.edn`, and `(io/file "geo")` is a directory; a WIT
+  package directory (`wit/gl/gl.wit`) was refused (`a WIT package directory is read only
+  where the loader lists directories`) and now binds. Each was the answer of a host with no
+  directories, not one a user chose. `PlaygroundReplTest` and `WitImportInlinerTest` take
+  the page's loader itself, no longer a copy of its shape.
 - Pinned by `PlaygroundReplTest#theJavaPickKeepsItsDeclarationsAcrossBuffersAndRunsAProgram`
   (a run, a buffer, an upload's error at its own position) and `web/playground-check.js`
   (the image: a run and the `.wasm` button over an upload).

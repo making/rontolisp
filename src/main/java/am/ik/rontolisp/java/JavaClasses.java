@@ -1762,29 +1762,59 @@ final class JavaClasses {
 	 * The octets of a resource of the program's source tree, or {@code null}: what the
 	 * class loader of a source launcher holds in memory, which finds a name as it is
 	 * written -- no {@code .}, {@code ..} or empty segment is resolved, so a name holding
-	 * one is none. A program given with {@code -e} has no tree.
+	 * one is none, but for the {@code /} a directory's name may end in. A directory's
+	 * octets are its listing ({@link #listing}); the top of the tree is none. A program
+	 * given with {@code -e} has no tree.
 	 * @param name the name below the top of the tree, with no leading {@code /}
 	 */
 	byte @Nullable [] treeResource(String name) {
 		return this.treeResources.computeIfAbsent(name, key -> {
-			for (String segment : key.split("/", -1)) {
-				if (segment.isEmpty() || segment.equals(".") || segment.equals("..")) {
+			String[] segments = key.split("/", -1);
+			for (int i = 0; i < segments.length; i++) {
+				String segment = segments[i];
+				if ((segment.isEmpty() && (i == 0 || i < segments.length - 1)) || segment.equals(".")
+						|| segment.equals("..")) {
 					return Optional.empty();
 				}
 			}
-			return Optional.ofNullable(this.entry == null ? this.files.treeResource(key)
-					: this.files.findResource(this.entry, this.root + key));
+			String entry = this.entry;
+			byte[] file = key.endsWith("/") ? null
+					: entry == null ? this.files.treeResource(key) : this.files.findResource(entry, this.root + key);
+			if (file != null) {
+				return Optional.of(file);
+			}
+			String directory = key.endsWith("/") ? key : key + "/";
+			List<String> entries = entry == null ? this.files.treeListing(directory)
+					: this.files.findListing(entry, this.root + directory);
+			if (entries == null) {
+				return Optional.empty();
+			}
+			this.treeDirectories.add(key);
+			return Optional.of(listing(entries));
 		}).orElse(null);
 	}
 
+	/** The names {@link #treeResource} found a directory of. */
+	private final Set<String> treeDirectories = new HashSet<>();
+
 	/**
-	 * The octets of a resource under the roots of the program's source path, which hold
-	 * its libraries' resources, or {@code null} ({@link JavaFiles#libraryResource}).
-	 * @param name the name below a root, with no leading {@code /}
+	 * What a directory answers as a resource: the names of its entries, each followed by
+	 * a line end, a directory's with no {@code /}, in the order of their characters, as
+	 * UTF-8. The launcher sorts them as the default locale's collation does, which
+	 * depends on the host that runs the program.
+	 * @param entries the entries, as a listing names them
 	 */
-	byte @Nullable [] libraryResource(String name) {
-		return this.libraryResources.computeIfAbsent(name, key -> Optional.ofNullable(this.files.libraryResource(key)))
-			.orElse(null);
+	static byte[] listing(List<String> entries) {
+		List<String> names = new ArrayList<>();
+		for (String entry : entries) {
+			names.add(entry.endsWith("/") ? entry.substring(0, entry.length() - 1) : entry);
+		}
+		names.sort(null);
+		StringBuilder text = new StringBuilder();
+		for (String name : names) {
+			text.append(name).append('\n');
+		}
+		return text.toString().getBytes(StandardCharsets.UTF_8);
 	}
 
 	/**
@@ -1823,26 +1853,57 @@ final class JavaClasses {
 		List<Located> found = new ArrayList<>();
 		byte[] own = tree ? treeResource(name) : null;
 		if (own != null) {
-			found.add(new Located(0, treeTop(), name, own));
+			// the tree's directory is named with its slash
+			found.add(new Located(0, treeTop(),
+					this.treeDirectories.contains(name) && !name.endsWith("/") ? name + "/" : name, own));
 		}
 		for (int root = 0; root < this.files.libraryRoots() && !(first && !found.isEmpty()); root++) {
-			boolean archive = this.files.libraryArchive(root);
-			String key = archive ? name : JavaFiles.below(name);
-			if (key == null || key.isEmpty() || key.endsWith("/")) {
-				continue;
-			}
-			byte[] octets = this.files.libraryResource(root, key);
-			if (octets != null) {
-				found.add(new Located(archive ? 2 : 1, this.files.libraryTop(root), key, octets));
+			Located located = this.files.libraryArchive(root) ? inArchive(root, name) : inDirectory(root, name);
+			if (located != null) {
+				found.add(located);
 			}
 		}
 		return List.copyOf(found);
 	}
 
+	/**
+	 * A resource of a jar of the source path: the entry of the name as it is, a file's
+	 * or, where the jar holds the entry, a directory's, which reads as empty.
+	 */
+	private @Nullable Located inArchive(int root, String name) {
+		if (name.isEmpty()) {
+			return null;
+		}
+		byte[] octets = name.endsWith("/") ? null : this.files.libraryResource(root, name);
+		if (octets == null && this.files.libraryEntry(root, name.endsWith("/") ? name : name + "/")) {
+			octets = new byte[0];
+		}
+		return octets == null ? null : new Located(2, this.files.libraryTop(root), name, octets);
+	}
+
+	/**
+	 * A resource of a directory of the source path: the name's {@code .} and {@code ..}
+	 * resolved, a file's or a directory's listing, the root itself the empty name. Its
+	 * URL keeps the slash the name ends in, or that a last {@code .} or {@code ..}
+	 * leaves.
+	 */
+	private @Nullable Located inDirectory(int root, String name) {
+		String key = JavaFiles.below(name);
+		if (key == null) {
+			return null;
+		}
+		String named = !key.isEmpty() && (name.endsWith("/") || name.endsWith("/.") || name.endsWith("/..")) ? key + "/"
+				: key;
+		byte[] octets = key.isEmpty() ? null : this.files.libraryResource(root, key);
+		if (octets == null) {
+			List<String> entries = this.files.libraryListing(root, key.isEmpty() ? "" : key + "/");
+			octets = entries == null ? null : listing(entries);
+		}
+		return octets == null ? null : new Located(1, this.files.libraryTop(root), named, octets);
+	}
+
 	/** The resources looked for, by name: a pass lowered again asks again. */
 	private final Map<String, Optional<byte[]>> treeResources = new HashMap<>();
-
-	private final Map<String, Optional<byte[]>> libraryResources = new HashMap<>();
 
 	/**
 	 * The files a resource name computed where the program runs may find, which the
@@ -1860,7 +1921,7 @@ final class JavaClasses {
 	 * @throws JavaResourceTable.Bounded where the files are too many to carry
 	 */
 	void carry(boolean tree) throws JavaResourceTable.Bounded {
-		select(tree, "", true, JavaResourceTable::anyFile, "*");
+		select(tree, "", true, JavaResourceTable::anyFile, true, "*");
 	}
 
 	/**
@@ -1874,17 +1935,26 @@ final class JavaClasses {
 		int slash = path.lastIndexOf('/');
 		String base = path.substring(slash + 1);
 		select(tree, path.substring(0, slash + 1), false, name -> name.endsWith(".properties")
-				&& (name.equals(base + ".properties") || name.startsWith(base + "_")), "bundle " + path);
+				&& (name.equals(base + ".properties") || name.startsWith(base + "_")), false, "bundle " + path);
 	}
 
+	/**
+	 * Selects files of the places a loader looks in, once: the roots, and the tree where
+	 * the loader looks there. A directory selected is what {@link #inDirectory} and
+	 * {@link #inArchive} find of it, the tree's top none.
+	 */
 	private void select(boolean tree, String directory, boolean deep, java.util.function.Predicate<String> wanted,
-			String selection) throws JavaResourceTable.Bounded {
+			boolean directories, String selection) throws JavaResourceTable.Bounded {
 		if (!this.selections.contains("R " + selection)) {
 			for (int i = 0; i < this.files.libraryRoots(); i++) {
 				int root = i;
-				this.carried.select(root, this.files.libraryArchive(root) ? 'J' : 'D', this.files.libraryTop(root),
+				boolean archive = this.files.libraryArchive(root);
+				JavaResourceTable.Directories answers = !directories ? null : archive
+						? (path, entries) -> !path.isEmpty() && this.files.libraryEntry(root, path) ? new byte[0] : null
+						: (path, entries) -> listing(entries);
+				this.carried.select(root, archive ? 'J' : 'D', this.files.libraryTop(root),
 						path -> this.files.libraryListing(root, path), path -> this.files.libraryResource(root, path),
-						directory, deep, wanted, "the source path");
+						directory, deep, wanted, answers, "the source path");
 			}
 			this.selections.add("R " + selection);
 			changed();
@@ -1894,7 +1964,9 @@ final class JavaClasses {
 			this.carried.select(-1, 'T', treeTop(),
 					path -> entry == null ? this.files.treeListing(path)
 							: this.files.findListing(entry, this.root + path),
-					this::treeResource, directory, deep, wanted, "the source tree");
+					this::treeResource, directory, deep, wanted,
+					directories ? (path, entries) -> path.isEmpty() ? null : listing(entries) : null,
+					"the source tree");
 			this.selections.add("T " + selection);
 			changed();
 		}
@@ -2042,6 +2114,130 @@ final class JavaClasses {
 			}
 		}
 		return List.copyOf(names);
+	}
+
+	/**
+	 * Declares the classes a base name computed where the program runs may find as its
+	 * bundles, which the program need name nowhere else: as a launcher's loader compiles
+	 * the class {@code ResourceBundle} asks it for, which no other part of the program
+	 * named. Only a file declaring a class under one of the bundle classes of the library
+	 * or under such a class of its own, nested or not, is read past its text: a class
+	 * declared is lowered whole where it is the program's, so a file of the tree the
+	 * program never uses stays unread, as the launcher leaves it uncompiled. The files
+	 * are those of the tree, where the loader looks there, and of every root.
+	 * @param tree whether the loader searches the program's source tree
+	 */
+	void declareBundleClasses(boolean tree) {
+		if (!this.selections.add("B " + tree)) {
+			return;
+		}
+		List<JavaFiles.Source> sources = new ArrayList<>();
+		String entry = this.entry;
+		if (tree) {
+			Function<String, @Nullable List<String>> listing = path -> entry == null ? this.files.treeListing(path)
+					: this.files.findListing(entry, this.root + path);
+			Set<String> directories = new java.util.TreeSet<>();
+			directories(listing, "", directories);
+			for (String directory : directories) {
+				List<String> names = listing.apply(directory);
+				for (String name : names == null ? List.<String>of() : names) {
+					JavaFiles.Source file = !name.endsWith(".java") ? null : entry == null
+							? this.files.tree(directory + name) : this.files.find(entry, this.root + directory + name);
+					if (file != null) {
+						sources.add(file);
+					}
+				}
+			}
+		}
+		Set<String> directories = new java.util.TreeSet<>();
+		for (int i = 0; i < this.files.libraryRoots(); i++) {
+			int root = i;
+			directories(path -> this.files.libraryListing(root, path), "", directories);
+		}
+		for (String directory : directories) {
+			sources.addAll(this.files.libraryPackage(directory));
+		}
+		// the simple names of the classes a bundle class is under: the library's, then
+		// those of the files read that are under one of them
+		Set<String> bases = new HashSet<>(Set.of("ResourceBundle", "ListResourceBundle", "PropertyResourceBundle"));
+		Map<JavaFiles.Source, Optional<CompilationUnit>> parsed = new IdentityHashMap<>();
+		boolean grew;
+		do {
+			for (JavaFiles.Source source : sources) {
+				if (!parsed.containsKey(source) && bases.stream().anyMatch(source.text()::contains)) {
+					parsed.put(source, parsed(source));
+				}
+			}
+			int known = bases.size();
+			for (Optional<CompilationUnit> unit : parsed.values()) {
+				for (ClassDeclaration declared : unit.map(CompilationUnit::classes).orElse(List.of())) {
+					underBundle(declared, bases);
+				}
+			}
+			grew = bases.size() > known;
+		}
+		while (grew);
+		for (Optional<CompilationUnit> read : parsed.values()) {
+			if (read.isEmpty()) {
+				continue;
+			}
+			CompilationUnit unit = read.get();
+			for (ClassDeclaration declared : unit.classes()) {
+				if (underBundle(declared, bases)) {
+					String packageName = unit.packageName();
+					try {
+						binaryNamed(packageName == null ? declared.name() : packageName + "." + declared.name());
+					}
+					catch (LispReadException ex) {
+						// a class that cannot be declared is no bundle the program has
+					}
+				}
+			}
+		}
+		changed();
+	}
+
+	/** The directories below one, it included, whose names start with no dot. */
+	private static void directories(Function<String, @Nullable List<String>> listing, String directory,
+			Set<String> into) {
+		List<String> entries = listing.apply(directory);
+		if (entries == null || !into.add(directory)) {
+			return;
+		}
+		for (String entry : entries) {
+			if (entry.endsWith("/") && !entry.startsWith(".")) {
+				directories(listing, directory + entry, into);
+			}
+		}
+	}
+
+	/** A file read as the class it is named after, or none where it is no Java. */
+	private static Optional<CompilationUnit> parsed(JavaFiles.Source source) {
+		String file = source.path().substring(source.path().lastIndexOf('/') + 1);
+		try {
+			return Optional.of(JavaParser.parse(source.text(), source.path(),
+					file.endsWith(".java") ? file.substring(0, file.length() - ".java".length()) : file));
+		}
+		catch (LispReadException ex) {
+			return Optional.empty();
+		}
+	}
+
+	/**
+	 * Whether a class or one nested in it is under a class of the simple names given; the
+	 * names of those that are are added to them.
+	 */
+	private static boolean underBundle(ClassDeclaration declared, Set<String> bases) {
+		boolean under = false;
+		TypeName superclass = declared.superclass();
+		if (superclass != null && bases.contains(superclass.name().substring(superclass.name().lastIndexOf('.') + 1))) {
+			bases.add(declared.name());
+			under = true;
+		}
+		for (ClassDeclaration nested : declared.nested()) {
+			under |= underBundle(nested, bases);
+		}
+		return under;
 	}
 
 	/**

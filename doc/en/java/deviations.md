@@ -413,17 +413,16 @@ object held in a variable.
 **A resource is found when the program is compiled.** The bytes the program reads are
 those of the file at the compile. A name computed when the program runs finds no source
 file (`.java`), no class file and no file or directory whose name starts with a dot, where
-the launcher finds them, and in the playground none of the uploads, which cannot be listed;
+the launcher finds them;
 a program whose loaders may find more than it carries is refused when it is compiled
-([Resources](index.md#resources)). A directory is no resource: `getResourceAsStream` of
-one answers `null`, where the launcher answers a stream. The stream is a
+([Resources](index.md#resources)). The names a directory's stream reads are in the order of
+their characters, where the launcher sorts them as the host's default locale does. The stream is a
 `ByteArrayInputStream`. A JDK class finds no resource, not even the JDK's own, and the
 platform loader none. A resource's URL names the file at the compile and reads the bytes
 compiled into the output; any other `URL` has nothing to read: `openStream` throws a
 `FileNotFoundException`, a URL made again from a resource's text included. A service a
 `Class<?>` names is one whose class the program has. A bundle class `ResourceBundle.getBundle`
-finds by a constant base name is a class of its own file or a member of it; by a base name
-computed when the program runs, one the program reaches otherwise.
+finds by a constant base name is a class of its own file or a member of it.
 `ResourceBundle.Control`, `Properties.loadFromXML` and `storeToXML` are refused by name. The line of the date `Properties.store` writes is a `java.util.Date`'s text
 (above).
 

@@ -67,8 +67,8 @@ Every expectation above is the same answer SBCL gives for the same tree.
 ## Backend support
 
 All four backends, through one primitive each: the source-loader abstraction on
-the interpreter (so a host without a filesystem, such as the browser playground,
-answers `nil` rather than failing), `java.io.File.list` on the JVM, and WASI
+the interpreter (in the browser playground the uploaded files, whose names' slashes
+make the directories), `java.io.File.list` on the JVM, and WASI
 `fd_readdir` on both WASM backends -- Preview 1 binds the real host function,
 `--component` an adapter over `wasi:filesystem`'s `read-directory`. A WASM module
 resolves the path against its preopened directories -- a relative path against the

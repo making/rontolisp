@@ -17,6 +17,6 @@ It is also what tells an EMPTY directory from a missing one:
 
 ## Backend support
 
-All four backends, over [`probe-file`](probe-file.md) -- so a host without a
-filesystem (the browser playground) answers `nil` rather than failing, and a WASM
-module answers `nil` for everything unless it was run with `--dir`.
+All four backends, over [`probe-file`](probe-file.md) -- so the browser playground
+answers for the directories its uploaded files' names make, and a WASM module answers
+`nil` for everything unless it was run with `--dir`.
