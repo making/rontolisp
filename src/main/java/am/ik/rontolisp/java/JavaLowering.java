@@ -4006,9 +4006,11 @@ final class JavaLowering implements JavaEmitter.Context {
 								defaultValue(leaf)), type);
 					}
 					// a negative length is the language's exception, which the run time
-					// makes
+					// makes; what it answers is an int's length, which tells the backends
+					// the array is of rank 1
 					LispVal length = lengths.get(0) instanceof LispInteger n && n.value() >= 0 ? lengths.get(0)
-							: runtimeCall("array-length", lengths.get(0));
+							: list(cl("the"), list(cl("integer"), integer(0), integer(Integer.MAX_VALUE)),
+									runtimeCall("array-length", lengths.get(0)));
 					List<LispVal> made = new ArrayList<>(List.of(cl("make-array"), length));
 					made.addAll(elementType(type.element()));
 					made.add(new LispSymbol(":INITIAL-ELEMENT"));

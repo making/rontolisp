@@ -160,6 +160,16 @@ fields with `_seq_len` behind it (`.kb/length-runtime.md`), the generic call els
   (`.kb/wasm-int-fusion.md`, "Ranges, and sites with nothing to bail on"). A constant's packed vector (`WasmArrayCompiler.constantArrays`) is
   a fused read's kind only, never `arrayKindOfExpr`'s: its global is nothing before the
   definition ran, which the unfused read must keep reporting as the generic read does.
+- **A pinned packed store takes a raw subscript** (2026-11-21, k76;
+  `WasmArrayCompiler.emitRawSubscriptAset1`): at the speed levels a rank-1 store in statement
+  position whose subscript is an integer tree, an unboxed local or a literal with no bail
+  (`WasmIntFusionCompiler.tryCompileRawSubscript`) evaluates it into an i64, then the value,
+  then makes the direct read's checks -- the bound compared raw, nil where the pin admits it,
+  one `_idx_ref` report for both (outside a module that reports bounds: nil as before, a
+  subscript past the i32 a trap, the rest `array.set`'s). It boxed the subscript, tested it for
+  an i31 and unboxed it again. `composite[j] = 1` in `SieveLoop` 90 -> 50 B; a sieve of
+  50,000,000 8.9 -> 1.8 s on wasm (JVM 2.9 s): k64's "bound by memory" was the store's
+  boxing. Pin: `ArefRankAndSubscriptChecksFixture.ORDER_SOURCE`'s `ao-d8put` rows.
 
 - **nil and a general array's elements** (2026-11-20, k64; what the Java front end declares
   of an array variable, `.kb/java-frontend.md`, "Numbers"). A declaration pins a
