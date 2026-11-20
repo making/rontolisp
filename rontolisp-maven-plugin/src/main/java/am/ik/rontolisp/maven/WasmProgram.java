@@ -22,15 +22,16 @@ import am.ik.rontolisp.cli.WasmSourceCompiler;
  * The program starts at its main class's file, {@code app/Main.java} for
  * {@code app.Main}, and the front end reads every other class it names from the same
  * tree, as {@code rontolisp app/Main.java -o out.wasm} does, and a library's from the
- * source path's directories and jars, as {@code --java-source-path} does. Which files
- * that is, only the compile knows, so staleness is all-or-nothing over every
- * {@code .java} file of the tree and of a directory on the source path, and every jar on
- * it: the output is rebuilt when any of them is newer than the last build, when one is
- * added or removed, when the configuration changed, or when the output is gone.
+ * source path's directories and jars, as {@code --java-source-path} does. A resource is
+ * read the same way. Which files that is, only the compile knows, so staleness is
+ * all-or-nothing over every file of the tree and of a directory on the source path, and
+ * every jar on it: the output is rebuilt when any of them is newer than the last build,
+ * when one is added or removed, when the configuration changed, or when the output is
+ * gone.
  */
 public final class WasmProgram {
 
-	/** The extension of the files the program is read from. */
+	/** The extension of the file a class is read from. */
 	public static final String EXTENSION = ".java";
 
 	private final Path sourceDirectory;
@@ -143,10 +144,7 @@ public final class WasmProgram {
 
 	private static List<Path> sources(Path directory) throws IOException {
 		try (Stream<Path> tree = Files.walk(directory)) {
-			return tree.filter(Files::isRegularFile)
-				.filter(path -> path.getFileName().toString().endsWith(EXTENSION))
-				.sorted(Comparator.comparing(Path::toString))
-				.toList();
+			return tree.filter(Files::isRegularFile).sorted(Comparator.comparing(Path::toString)).toList();
 		}
 	}
 

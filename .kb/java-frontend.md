@@ -497,7 +497,13 @@ first measurement).
 - **Roots.** The tree is the entry's (`JavaFiles.findResource`), the playground's uploads
   (`treeResource`; an upload's octets are its text's UTF-8), none for `-e`; the roots are
   `--java-source-path` / `--java-source-dep` (`libraryResource`). The Maven plugin's `wasm`
-  goal passes no resource directory of the project (`.todo/k59`).
+  goal (k59) passes `${project.build.outputDirectory}` (`classesDirectory`) as the FIRST root,
+  ahead of `<javaSourcePath>` and the dependencies' sources jars: javac's class path order,
+  and it holds the resources as the resources plugin left them (filtering, includes, excludes,
+  `targetPath`), which `src/main/resources` read in place would not. It is left out when it
+  does not exist (`mvn rontolisp:wasm` before `compile`). Staleness (`WasmProgram`) covers
+  every file of the tree and of a directory root, not only `.java` (a changed resource
+  rebuilds); pinned in `MavenBuildE2eTest` (a filtered `app.properties`, changed, rebuilt).
 - **A computed name (k58): carried, not read where the program runs.** Measured first:
   every call naming a resource in the class files of the 753 libraries of the local
   repository (the k58 artefacts' `Scan.java`, the class-file API following each argument

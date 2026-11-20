@@ -344,7 +344,10 @@ $ wasmtime run target/app-component.wasm
   jar の後です。sources jar のない依存は警告になり、プログラムがそのクラスを名指しすると、
   ゴールはその名前と位置を示して失敗します。そうした jar の `@Nullable` なら
   `.../app/Main.java:7:9: cannot find symbol: class Nullable` です。
-- 前回のビルドより新しいファイル（ツリーとソースパス上のディレクトリの `.java` ファイル、
+- プロジェクトの[リソース](#resources)は `target/classes`（`classesDirectory`）のもので、
+  `process-resources` がコピー（フィルタ処理を含む）したものです。`java` のクラスパスと同じ順で、
+  `<javaSourcePath>` と依存より先に探します。
+- 前回のビルドより新しいファイル（ツリーとソースパス上のディレクトリのファイル、
   ソースパス上の jar）がなく、追加も削除もなく、パラメータとソースパスが同じで出力が存在する
   ときは、何もコンパイルしません。そうでなければプログラム全体をコンパイルします。
 - `component` でビルドした [HTTP](#http) サーバーは、`target/` から `wasmtime serve` で

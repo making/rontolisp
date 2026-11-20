@@ -336,7 +336,10 @@ $ wasmtime run target/app-component.wasm
   and joins the source path, after the directories and jars `<javaSourcePath>` lists. A dependency with no sources jar is a warning; a class of it the
   program names fails the goal with its name and position, for `@Nullable` from such a jar:
   `.../app/Main.java:7:9: cannot find symbol: class Nullable`.
-- When no `.java` file of the tree or of a directory on the source path and no jar on it is
+- The project's [resources](#resources) are those of `target/classes` (`classesDirectory`),
+  where `process-resources` has copied and filtered them, searched ahead of `<javaSourcePath>`
+  and the dependencies, as the class path of `java` orders them.
+- When no file of the tree or of a directory on the source path, no resource and no jar on it is
   newer than the last build, none was added or removed, the parameters and the source path are
   the same and the output exists, nothing is compiled. Otherwise the whole program is.
 - An [HTTP](#http) server built with `component` runs from `target/` under
