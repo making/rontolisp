@@ -88,6 +88,7 @@ imports: |
   import java.util.OptionalInt;
   import java.util.OptionalLong;
   import java.util.PrimitiveIterator;
+  import java.util.PriorityQueue;
   import java.util.Properties;
   import java.util.Queue;
   import java.util.Random;
@@ -4574,7 +4575,42 @@ cases:
           }
       }
 
+      class SourceListsLog extends AbstractList<Integer> {
+          private final List<Integer> held = new ArrayList<>(List.of(0, 1, 2, 3));
+
+          public Integer get(int index) {
+              return held.get(index);
+          }
+
+          public int size() {
+              return held.size();
+          }
+
+          public void add(int index, Integer e) {
+              held.add(index, e);
+              modCount++;
+          }
+
+          public Integer remove(int index) {
+              modCount++;
+              return held.remove(index);
+          }
+
+          int changes() {
+              return modCount;
+          }
+      }
+
       class SourceLists {
+          static String outcome(Runnable action) {
+              try {
+                  action.run();
+                  return "ok";
+              } catch (RuntimeException e) {
+                  return e.getClass().getSimpleName();
+              }
+          }
+
           public static void main(String[] args) {
               List<String> xs = new ArrayList<>();
               xs.add("pear");
@@ -4634,6 +4670,35 @@ cases:
               }
               Object asObject = nums;
               System.out.println((asObject instanceof List<?> list ? list.size() : -1) + " " + (asObject instanceof Collection) + " " + (asObject instanceof Set) + " " + nums.getClass().getName() + " " + asObject.equals(List.of(1, 2, 3, 1)));
+              // a walk and a sublist see a change made behind them, through the count a list keeps
+              SourceListsLog log = new SourceListsLog();
+              for (List<Integer> base : List.of(new ArrayList<>(List.of(0, 1, 2, 3)), new LinkedList<>(List.of(0, 1, 2, 3)), log)) {
+                  List<Integer> part = base.subList(1, 3);
+                  int[] steps = {0};
+                  String own = outcome(() -> {
+                      for (Integer x : part) {
+                          part.add(0, x);
+                          if (steps[0]++ > 20) {
+                              break;
+                          }
+                      }
+                  });
+                  Iterator<Integer> walk = base.iterator();
+                  walk.next();
+                  List<Integer> deeper = part.subList(0, 1);
+                  base.add(0, 9);
+                  System.out.println(base.getClass().getSimpleName() + " " + own + " " + outcome(walk::next) + " " + outcome(part::size) + " " + outcome(() -> part.get(0)) + " " + outcome(() -> part.get(7)) + " " + outcome(() -> part.add(7, 1)) + " " + outcome(part::iterator) + " " + outcome(() -> deeper.get(0)) + " " + outcome(() -> base.subList(1, 3).get(0)));
+              }
+              System.out.println(log.changes() + " " + log);
+              ArrayList<Integer> bumps = new ArrayList<>(List.of(0, 1, 2));
+              List<Runnable> moves = List.of(() -> bumps.set(0, 1), () -> bumps.removeIf(x -> false), () -> bumps.ensureCapacity(2), () -> bumps.ensureCapacity(100), () -> bumps.trimToSize(), () -> bumps.addAll(List.of()), () -> bumps.replaceAll(x -> x), () -> bumps.sort(null));
+              StringBuilder moved = new StringBuilder();
+              for (Runnable move : moves) {
+                  Iterator<Integer> walk = bumps.iterator();
+                  move.run();
+                  moved.append(outcome(walk::next)).append(' ');
+              }
+              System.out.println(moved.toString().trim());
           }
       }
     expected: |
@@ -4648,6 +4713,11 @@ cases:
       changed [1, 2, 3, 1]
       none null
       4 true false java.util.ArrayList true
+      ArrayList ConcurrentModificationException ConcurrentModificationException ConcurrentModificationException ConcurrentModificationException IndexOutOfBoundsException IndexOutOfBoundsException ConcurrentModificationException ConcurrentModificationException ok
+      LinkedList ConcurrentModificationException ConcurrentModificationException ConcurrentModificationException ConcurrentModificationException IndexOutOfBoundsException IndexOutOfBoundsException ConcurrentModificationException ConcurrentModificationException ok
+      SourceListsLog ConcurrentModificationException ConcurrentModificationException ConcurrentModificationException ConcurrentModificationException IndexOutOfBoundsException IndexOutOfBoundsException ConcurrentModificationException ConcurrentModificationException ok
+      2 [9, 0, 1, 1, 2, 3]
+      ok ok ok ConcurrentModificationException ConcurrentModificationException ConcurrentModificationException ConcurrentModificationException ConcurrentModificationException
   # A HashMap finds a key by its hashCode and equals, a class of the program included,
   # and walks its table in the order the JDK's does: the folded hash, a table that
   # doubles, chains in the order put (compute and merge put ahead), and the lengths a
@@ -6110,6 +6180,101 @@ cases:
               } catch (NoSuchElementException ex) {
                   System.out.println(ex);
               }
+              immutables();
+              priorities();
+          }
+
+          // the collections of no element, one and n copies of Collections answer a change
+          // that changes nothing and refuse one that would; the list of List.of refuses
+          // every change and a null asked for; a raw Comparable's compareTo casts what it is
+          // given, as a JDK's bridge method does
+          @SuppressWarnings({"rawtypes", "unchecked"})
+          static void immutables() {
+              Supplier<?>[] asked = {() -> Collections.emptyList().remove("x"), () -> Collections.singletonList(1).remove(Integer.valueOf(3)), () -> {
+                  List<Integer> one = Collections.singletonList(2);
+                  one.sort(null);
+                  Collections.sort(Collections.<Integer>emptyList());
+                  return one;
+              }, () -> Collections.nCopies(3, "a").removeIf(String::isEmpty), () -> Collections.emptySet().removeAll(List.of(1)) + " " + Collections.singleton(1).retainAll(List.of(1)), () -> Collections.emptyMap().remove("k") + " " + Collections.singletonMap("k", 1).remove("j"), () -> Collections.singletonList(1).removeIf(x -> false), () -> Collections.singleton(1).remove(1), () -> Collections.nCopies(2, "a").get(2), () -> Collections.emptyList().get(0), () -> Collections.singletonList(1).get(1), () -> Collections.singletonMap("k", 1).put("j", 2), () -> Collections.singletonMap("k", 1).entrySet().iterator().next().setValue(2), () -> Collections.emptyIterator().next(), () -> {
+                  Collections.emptyIterator().remove();
+                  return "removed";
+              }, () -> List.of(1, 2, 3).removeIf(x -> false), () -> List.of(1, 2, 3).contains(null), () -> List.of(1, 2, 3).get(3), () -> List.of(1, 2, 3).subList(1, 3).get(2), () -> Arrays.asList(1, 2).addAll(5, List.of()), () -> Collections.unmodifiableList(new ArrayList<>(List.of(1))).addAll(List.of()), () -> new java.util.concurrent.CopyOnWriteArrayList<>(List.of(1, 2)).reversed().get(-1), () -> Arrays.asList(1, 2, 3).reversed().retainAll(List.of(1, 3)), () -> ((Comparable) 1).compareTo("a"), () -> new TreeSet<Object>(List.of(1, "b"))};
+              StringBuilder answers = new StringBuilder();
+              for (Supplier<?> each : asked) {
+                  try {
+                      answers.append(each.get());
+                  } catch (RuntimeException ex) {
+                      answers.append(ex.getClass().getSimpleName()).append(ex instanceof ClassCastException || ex instanceof NullPointerException || ex.getMessage() == null ? "" : " " + ex.getMessage());
+                  }
+                  answers.append(", ");
+              }
+              System.out.println(answers);
+              Map<String, Integer> one = Collections.singletonMap("k", 1);
+              Enumeration<String> none = Collections.emptyEnumeration();
+              Iterator<Integer> walked = Collections.enumeration(List.of(1, 2)).asIterator();
+              System.out.println(one + " " + one.get("k") + " " + one.getOrDefault("j", 0) + " " + one.keySet() + one.values() + one.entrySet() + " " + one.equals(Map.of("k", 1)) + " " + one.hashCode() + " " + (Collections.emptyList() == Collections.emptyList()) + " " + Collections.emptyMap().keySet().equals(Set.of()) + " " + none.hasMoreElements() + none.asIterator().hasNext() + " " + walked.next() + walked.next() + walked.hasNext() + " " + Collections.nCopies(3, "ab").lastIndexOf("ab") + Collections.nCopies(4, "x").subList(1, 3) + " " + Collections.emptyListIterator().previousIndex());
+          }
+
+          // a priority queue is a binary heap in an array: its text and its walk are the
+          // array's order, the order a JDK's has, a walk that removes gives what a removal
+          // moved behind it last
+          record Chore(String name, int rank) {
+          }
+
+          static void priorities() {
+              PriorityQueue<Integer> heap = new PriorityQueue<>();
+              for (int x : new int[] {5, 3, 8, 1, 9, 2, 7, 3, 6, 1}) {
+                  heap.add(x);
+              }
+              PriorityQueue<Integer> copy = new PriorityQueue<>(heap);
+              StringBuilder polled = new StringBuilder();
+              while (!copy.isEmpty()) {
+                  polled.append(copy.poll());
+              }
+              System.out.println(heap + " " + heap.peek() + " " + polled + " " + heap.remove(Integer.valueOf(3)) + " " + heap + " " + heap.removeIf(x -> x % 2 == 0) + " " + heap + " " + new PriorityQueue<>(List.of(9, 8, 7, 6, 5, 4, 3, 2, 1)) + " " + heap.contains(9) + heap.size());
+              PriorityQueue<Integer> walked = new PriorityQueue<>(List.of(1, 9, 2, 8, 3, 7, 4, 6, 5));
+              StringBuilder walk = new StringBuilder();
+              for (Iterator<Integer> it = walked.iterator(); it.hasNext();) {
+                  int x = it.next();
+                  walk.append(x);
+                  if (x == 8 || x == 7 || x == 4) {
+                      it.remove();
+                      walk.append('x');
+                  }
+                  walk.append(' ');
+              }
+              PriorityQueue<Chore> tasks = new PriorityQueue<>(Comparator.comparingInt(t -> -t.rank()));
+              tasks.addAll(List.of(new Chore("low", 1), new Chore("high", 9), new Chore("mid", 5), new Chore("top", 9)));
+              TreeSet<String> backward = new TreeSet<>(Comparator.reverseOrder());
+              backward.addAll(List.of("b", "c", "a"));
+              PriorityQueue<String> sorted = new PriorityQueue<>(backward);
+              System.out.println(walk + "| " + walked + " " + tasks.poll().name() + tasks.poll().name() + tasks + " " + sorted + sorted.poll() + " " + (sorted.comparator() != null));
+              Supplier<?>[] refused = {() -> new PriorityQueue<Integer>(0), () -> new PriorityQueue<Integer>().offer(null), () -> new PriorityQueue<Integer>().element(), () -> {
+                  Iterator<Integer> it = new PriorityQueue<>(List.of(1)).iterator();
+                  it.remove();
+                  return it;
+              }, () -> {
+                  PriorityQueue<Integer> q = new PriorityQueue<>(List.of(2, 1));
+                  Iterator<Integer> it = q.iterator();
+                  it.next();
+                  q.poll();
+                  return it.next();
+              }, () -> {
+                  PriorityQueue<Object> q = new PriorityQueue<>();
+                  q.add(1);
+                  q.add("a");
+                  return q;
+              }, () -> heap.addAll(heap)};
+              StringBuilder answers = new StringBuilder();
+              for (Supplier<?> each : refused) {
+                  try {
+                      answers.append(each.get());
+                  } catch (RuntimeException ex) {
+                      answers.append(ex.getClass().getSimpleName());
+                  }
+                  answers.append(", ");
+              }
+              System.out.println(answers);
           }
 
           // the lines load reads and store writes, the orders of a table and its defaults a
@@ -6249,6 +6414,11 @@ cases:
       [1.0, -1.0][1.0, 2.5][1.0, NaN][2.0, 0.25][2.0, 0.5] -1.0 1 null fallback /: UTF-8 true true
       OptionalLong[42] OptionalLong.empty truefalsetrue 42 7 8 42 truefalse 420 42+none null
       java.util.NoSuchElementException: No value present
+      false, false, [2], false, false false, null null, UnsupportedOperationException, UnsupportedOperationException, IndexOutOfBoundsException Index 2 out of bounds for length 2, IndexOutOfBoundsException Index: 0, IndexOutOfBoundsException Index: 1, Size: 1, UnsupportedOperationException, UnsupportedOperationException, NoSuchElementException, IllegalStateException, UnsupportedOperationException, NullPointerException, ArrayIndexOutOfBoundsException Index 3 out of bounds for length 3, IndexOutOfBoundsException Index 2 out of bounds for length 2, IndexOutOfBoundsException Index: 5, Size: 2, UnsupportedOperationException, ArrayIndexOutOfBoundsException Index 2 out of bounds for length 2, UnsupportedOperationException, ClassCastException, ClassCastException, 
+      {k=1} 1 0 [k][1][k=1] true 106 true true falsefalse 12false 2[x, x] -1
+      [1, 1, 2, 3, 3, 8, 7, 5, 6, 9] 1 1123356789 true [1, 1, 2, 5, 3, 8, 7, 9, 6] true [1, 1, 5, 3, 7, 9] [1, 2, 3, 6, 5, 4, 7, 8, 9] true6
+      1 3 2 5 9 7x 8x 6 4x | [1, 3, 2, 5, 9, 6] hightop[Chore[name=mid, rank=5], Chore[name=low, rank=1]] [c, b, a]c true
+      IllegalArgumentException, NullPointerException, NoSuchElementException, IllegalStateException, ConcurrentModificationException, ClassCastException, IllegalArgumentException, 
       a=b -> [a]=[b] | a = b  -> [a]=[b ] |   a:b -> [a]=[b] | a b c -> [a]=[b c] | a<9>b -> [a]=[b] | a<c>b -> [a]=[b]
       a= -> [a]=[] | a -> [a]=[] | =b -> []=[b] | :b -> []=[b] |   -> | a==b -> [a]=[=b]
       a=:b -> [a]=[:b] | a :=b -> [a]=[=b] | a  =  = b -> [a]=[= b] | a\ b=c -> [a b]=[c] | a\=b=c -> [a=b]=[c] | a\:b:c -> [a:b]=[c]

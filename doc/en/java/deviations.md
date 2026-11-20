@@ -52,7 +52,10 @@ A JDK prints `false false true`.
 through a type argument where it is used; rontolisp trusts the type. A value of another
 class gets there only through a raw type or a cast a compiler warns of as unchecked, and it
 is then used as it is, where the language throws `ClassCastException`. A cast to a type
-variable tests its bound, a cast to a parameterized type its class.
+variable tests its bound, a cast to a parameterized type its class. A method taking a
+narrower type than the one a call names tests its argument as a JDK's bridge method does when
+the call can go to more than one class: `((Comparable) 1).compareTo("a")` throws
+`ClassCastException`. A lambda tests nothing, nor does the one method a call can go to.
 
 **A store into an array is not checked.** A value stored through an array type above the
 array's own (`Object[] a = new String[1]; a[0] = 1;`) is stored, where the language throws
@@ -232,21 +235,42 @@ hash codes differ in the high bits only), keys of a `Double` with few digits fro
 do the keys of a class whose `hashCode` has few values; strings and integers do not. `Set.of` and `Map.of` have
 one fixed order, where a JDK picks another at every start.
 
-**A `TreeMap` asks its comparator about other pairs of keys than a JDK's.** Its tree is
-balanced another way, so a comparator that counts or prints its calls sees other pairs and
-another number of them; the keys' order and what the map answers are a JDK's. A map's
-`keySet()`, `values()`, `entrySet()` and `descendingMap()` are a new view at each call, where
-a JDK's map answers the same object every time.
+**A `TreeMap` and a sort ask their comparator about other pairs than a JDK's.** The tree is
+balanced another way and a sort of objects is a merge sort of rontolisp's own, so a comparator
+that counts or prints its calls sees other pairs and another number of them; the order and
+what the map answers are a JDK's. A map's `keySet()`, `values()`, `entrySet()` and
+`descendingMap()` are a new view at each call, where a JDK's map answers the same object every
+time: `m.values().equals(m.values())` is `false`.
 
-**The immutable lists of `Collections` refuse a change that would change nothing.** The
-lists of `emptyList`, `singletonList` and `nCopies` refuse every change at once, as the lists
-of `List.of` do, where a JDK refuses only a change that would be made:
-`Collections.singletonList(1).remove(Integer.valueOf(3))` answers `false` there and
-`emptyList().clear()` does nothing. Their reversed views refuse the same way. The reversed
-view of a `Stream.toList()` list checks an index before it refuses a change, where a JDK's
-refuses first; that of a `CopyOnWriteArrayList` checks an index against itself, where a
-JDK's hands the list the index of the other end (`ArrayIndexOutOfBoundsException: Index 6
-out of bounds for length 6` for `get(-1)` of six elements).
+**A few answers of the unmodifiable collections differ.** A list of `List.of` of one or two
+elements refuses an index outside it with `ArrayIndexOutOfBoundsException: Index 2 out of
+bounds for length 2`, a JDK's with `IndexOutOfBoundsException: Index: 2 Size: 2`, and its
+iterator's `remove()` before `next()` throws `IllegalStateException`, a JDK's
+`UnsupportedOperationException`. A set of `Set.of` and a map of `Map.of` answer a `null` asked
+for (`contains(null)` is `false`), where a JDK's throw `NullPointerException`, and the views of
+such a map refuse even a change that changes nothing. A list of `Arrays.asList` refuses a
+removal with no message, a JDK's with `remove`. The list of `Stream.toList()` is
+`Collections.unmodifiableList`'s, where a JDK's is a list of `List.of`'s kind that holds nulls:
+an index outside it is an `IndexOutOfBoundsException`, and its reversed view checks an index
+before it refuses a change. `List.of()`, `Set.of()` and `Map.of()` are a new object at each
+call. An iterator of a list of `AbstractList`'s past its end throws `NoSuchElementException`
+with no cause, where a JDK's has the list's `IndexOutOfBoundsException` as its cause.
+
+**A part of a list (`subList`) and an iterator of a list refuse a change made behind them**,
+as a JDK's do, through the count `AbstractList.modCount` which `ArrayList`, `LinkedList` and
+`Vector` keep and a class of the program under `AbstractList` keeps up if it wants them to.
+A part of a list that was changed some other way refuses its members with
+`ConcurrentModificationException`, and so does an iterator of a list after a change made
+behind it. A few answers of such a part differ from a JDK's: `hasNext`, `estimateSize()` and the
+spliterator's `forEachRemaining` of a part whose list changed refuse where a JDK's answer; a
+range or an index outside such a part (`subList`, `addAll` at an index) is refused as the
+change is; the part of a `LinkedList` or of a program's list refuses `subList` where a JDK's
+makes one; the iterator of such a part throws `ConcurrentModificationException` for a `next()`
+past the end where a JDK's throws `NoSuchElementException`, and that of a `LinkedList`'s part
+`IllegalStateException` for a `remove()` before `next()` where a JDK's throws
+`ConcurrentModificationException`; the class of a part is `java.util.AbstractList$SubList`. A part of a
+`CopyOnWriteArrayList` refuses nothing and its iterator sees what is added, where a JDK's
+refuses a change made behind it and walks the elements it had.
 
 **The functions of `Math` are those of `StrictMath`**, so a result is the same on every
 backend and processor. A JDK's `Math.sin`, `Math.exp` and the like may differ from it in
@@ -667,7 +691,7 @@ Each of these is an error naming the construct and its position.
 - Of `java.util.concurrent`, what [The JDK classes](classes.md) does not list: the queues
   ordered by priority or by delay. A `Timer`'s `schedule` of a `Date`. Thread groups.
 - Any JDK class or member [The JDK classes](classes.md) does not list:
-  `PriorityQueue`, `Scanner`, files
+  `Scanner`, files
   (`File`, `FileReader`, `java.nio.file`), `Calendar`,
   reflection. Of `java.net`, everything but `URI`, the addresses of a server and the
   [HTTP client](#the-http-client): `URL`, sockets, `HttpURLConnection`.

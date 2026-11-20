@@ -1744,6 +1744,8 @@ final class JavaIntrinsics {
 						call("make-array", call.argument(1), new LispSymbol(":INITIAL-ELEMENT"), JavaForms.NIL),
 						call.argument(0)));
 		natives.put(arrays + "sortRange(int[],int,int)", runtime("sort-ints"));
+		natives.put("java.util.Objects.requireNonNull(Object)",
+				(lowering, call) -> call("or", call.argument(0), JavaForms.runtimeCall("npe")));
 		natives.put(arrays + "sortRange(long[],int,int)", runtime("sort-numbers"));
 		natives.put(arrays + "sortRange(double[],int,int)", runtime("sort-doubles"));
 		natives.put(arrays + "sortRange(char[],int,int)", runtime("sort-numbers"));

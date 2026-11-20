@@ -9,6 +9,10 @@ import rontolisp.internal.Splits;
 // at an index.
 public abstract class AbstractList<E> extends AbstractCollection<E> implements List<E> {
 
+    // how many times the list changed size: a list of a program that changes keeps it up,
+    // and a walk or a sublist made before refuses once it moved
+    protected int modCount;
+
     protected AbstractList() {
     }
 
@@ -32,6 +36,9 @@ public abstract class AbstractList<E> extends AbstractCollection<E> implements L
     }
 
     public boolean addAll(int index, Collection<? extends E> c) {
+        if (index < 0 || index > size()) {
+            throw new IndexOutOfBoundsException("Index: " + index + ", Size: " + size());
+        }
         int at = index;
         for (E e : c) {
             add(at++, e);
@@ -129,21 +136,27 @@ public abstract class AbstractList<E> extends AbstractCollection<E> implements L
 
     static final class IndexIterator<E> implements Iterator<E> {
 
-        private final List<E> list;
+        private final AbstractList<E> list;
 
         private int cursor;
 
         private int last = -1;
 
-        IndexIterator(List<E> list) {
+        private int expected;
+
+        IndexIterator(AbstractList<E> list) {
             this.list = list;
+            this.expected = list.modCount;
         }
 
         public boolean hasNext() {
-            return cursor < list.size();
+            return cursor != list.size();
         }
 
         public E next() {
+            if (list.modCount != expected) {
+                throw new ConcurrentModificationException();
+            }
             if (cursor >= list.size()) {
                 throw new NoSuchElementException();
             }
@@ -155,32 +168,46 @@ public abstract class AbstractList<E> extends AbstractCollection<E> implements L
             if (last < 0) {
                 throw new IllegalStateException();
             }
+            if (list.modCount != expected) {
+                throw new ConcurrentModificationException();
+            }
             list.remove(last);
             cursor = last;
             last = -1;
+            expected = list.modCount;
         }
     }
 
     // An iterator both ways over get, set, add and remove at an index.
     static final class IndexWalk<E> implements ListIterator<E> {
 
-        private final List<E> list;
+        private final AbstractList<E> list;
 
         private int cursor;
 
         // the element next() or previous() gave last, -1 once it was removed or one added
         private int last = -1;
 
-        IndexWalk(List<E> list, int index) {
+        private int expected;
+
+        IndexWalk(AbstractList<E> list, int index) {
             this.list = list;
             this.cursor = index;
+            this.expected = list.modCount;
+        }
+
+        private void unchanged() {
+            if (list.modCount != expected) {
+                throw new ConcurrentModificationException();
+            }
         }
 
         public boolean hasNext() {
-            return cursor < list.size();
+            return cursor != list.size();
         }
 
         public E next() {
+            unchanged();
             if (cursor >= list.size()) {
                 throw new NoSuchElementException();
             }
@@ -189,10 +216,11 @@ public abstract class AbstractList<E> extends AbstractCollection<E> implements L
         }
 
         public boolean hasPrevious() {
-            return cursor > 0;
+            return cursor != 0;
         }
 
         public E previous() {
+            unchanged();
             if (cursor <= 0) {
                 throw new NoSuchElementException();
             }
@@ -212,27 +240,38 @@ public abstract class AbstractList<E> extends AbstractCollection<E> implements L
             if (last < 0) {
                 throw new IllegalStateException();
             }
+            unchanged();
             list.remove(last);
             cursor = last;
             last = -1;
+            expected = list.modCount;
         }
 
         public void set(E e) {
             if (last < 0) {
                 throw new IllegalStateException();
             }
+            unchanged();
             list.set(last, e);
+            expected = list.modCount;
         }
 
         public void add(E e) {
+            unchanged();
             list.add(cursor++, e);
             last = -1;
+            expected = list.modCount;
         }
     }
 
+    // A part of a list, in place: a change through it is the list's, and a change made to the
+    // list some other way refuses it. The count it keeps is the list's as it saw it last.
     static final class SubList<E> extends AbstractList<E> {
 
-        private final List<E> whole;
+        private final AbstractList<E> whole;
+
+        // the list itself, the part of a part included
+        private final AbstractList<?> root;
 
         private final int offset;
 
@@ -241,48 +280,72 @@ public abstract class AbstractList<E> extends AbstractCollection<E> implements L
         // a part of a list of random access, or of a part of one
         private final boolean random;
 
-        SubList(List<E> whole, int offset, int length) {
+        SubList(AbstractList<E> whole, int offset, int length) {
             this.whole = whole;
+            this.root = whole instanceof SubList<?> part ? part.root : whole;
             this.offset = offset;
             this.length = length;
             this.random = whole instanceof RandomAccess || whole instanceof SubList<?> part && part.random;
+            this.modCount = root.modCount;
         }
 
-        public Spliterator<E> spliterator() {
-            int marks = Spliterator.ORDERED | Spliterator.SIZED | Spliterator.SUBSIZED;
-            return random ? Splits.counted(this, marks) : Splits.of(this, marks);
+        private void fresh() {
+            if (root.modCount != modCount) {
+                throw new ConcurrentModificationException();
+            }
         }
 
-        private void check(int index, int limit) {
-            if (index < 0 || index >= limit) {
+        private void inside(int index) {
+            if (index < 0 || index >= length) {
                 throw new IndexOutOfBoundsException("Index " + index + " out of bounds for length " + length);
             }
         }
 
+        public Spliterator<E> spliterator() {
+            fresh();
+            int marks = Spliterator.ORDERED | Spliterator.SIZED | Spliterator.SUBSIZED;
+            return random ? Splits.counted(this, marks) : Splits.of(this, marks);
+        }
+
         public int size() {
+            fresh();
             return length;
         }
 
+        public Iterator<E> iterator() {
+            fresh();
+            return super.iterator();
+        }
+
         public E get(int index) {
-            check(index, length);
+            inside(index);
+            fresh();
             return whole.get(offset + index);
         }
 
         public E set(int index, E element) {
-            check(index, length);
+            inside(index);
+            fresh();
             return whole.set(offset + index, element);
         }
 
         public void add(int index, E element) {
-            check(index, length + 1);
+            if (index < 0 || index > length) {
+                throw new IndexOutOfBoundsException("Index: " + index + ", Size: " + length);
+            }
+            fresh();
             whole.add(offset + index, element);
+            modCount = root.modCount;
             length++;
         }
 
         public E remove(int index) {
-            check(index, length);
+            inside(index);
+            fresh();
+            E old = whole.remove(offset + index);
+            modCount = root.modCount;
             length--;
-            return whole.remove(offset + index);
+            return old;
         }
     }
 }

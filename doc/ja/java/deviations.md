@@ -52,7 +52,10 @@ JDK は `false false true` を表示します。
 されます。rontolisp は型を信頼します。型引数と異なるクラスの値が入るのは、raw 型を通した
 場合か、コンパイラが unchecked と警告するキャストを通した場合だけです。その値は、言語仕様では
 `ClassCastException` になる箇所でも、そのまま使われます。型変数へのキャストはその境界を、
-型引数付きの型へのキャストはそのクラスを検査します。
+型引数付きの型へのキャストはそのクラスを検査します。呼び出しが名指すメソッドより狭い型を取る
+メソッドは、呼び出し先が複数のクラスにありうる場合、JDK のブリッジメソッドと同じく引数を検査
+します。`((Comparable) 1).compareTo("a")` は `ClassCastException` を投げます。ラムダは何も検査
+せず、呼び出し先が 1 つしかないメソッドも検査しません。
 
 **配列への格納は検査しません。** 配列自身の型より上の配列型を通して格納した値
 （`Object[] a = new String[1]; a[0] = 1;`）は、言語仕様では `ArrayStoreException` になる場合でも
@@ -232,19 +235,41 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 文字列と整数のキーはこの状態になりません。
 `Set.of` と `Map.of` の順序は 1 つに決まっています。JDK は起動のたびに別の順序を選びます。
 
-**`TreeMap` がコンパレータに比べさせるキーの組は JDK と異なります。** 木の均衡の取り方が違うため、
-呼び出しを数えたり表示したりするコンパレータには、別の組が別の回数で渡されます。キーの順序とマップの
-答えは JDK と同じです。マップの `keySet()`、`values()`、`entrySet()`、`descendingMap()` は呼ぶたびに
-新しいビューです。JDK のマップは毎回同じオブジェクトを返します。
+**`TreeMap` とソートがコンパレータに比べさせる組は JDK と異なります。** 木の均衡の取り方が違い、
+オブジェクトのソートは rontolisp 独自のマージソートであるため、呼び出しを数えたり表示したりする
+コンパレータには、別の組が別の回数で渡されます。順序とマップの答えは JDK と同じです。マップの
+`keySet()`、`values()`、`entrySet()`、`descendingMap()` は呼ぶたびに新しいビューです。JDK のマップは
+毎回同じオブジェクトを返します。そのため `m.values().equals(m.values())` は `false` です。
 
-**`Collections` の変更できないリストは、何も変えない変更も拒みます。** `emptyList`、`singletonList`、
-`nCopies` のリストは、`List.of` のリストと同じく、どの変更もすぐに拒みます。JDK が拒むのは実際に
-変わる変更だけで、`Collections.singletonList(1).remove(Integer.valueOf(3))` は `false` を返し、
-`emptyList().clear()` は何もしません。これらのリストの逆順ビューも同じように拒みます。
-`Stream.toList()` のリストの逆順ビューは、変更を拒む前に添字を検査します。JDK のビューは先に
-拒みます。`CopyOnWriteArrayList` の逆順ビューは添字をビュー自身に対して検査します。JDK のビューは
-反対側から数えた添字をそのままリストに渡します（要素 6 個の `get(-1)` は
-`ArrayIndexOutOfBoundsException: Index 6 out of bounds for length 6`）。
+**変更できないコレクションの答えのいくつかは JDK と異なります。** 要素が 1 個か 2 個の
+`List.of` のリストは、範囲外の添字を `ArrayIndexOutOfBoundsException: Index 2 out of bounds for
+length 2` で拒みます。JDK は `IndexOutOfBoundsException: Index: 2 Size: 2` です。そのイテレータの
+`next()` 前の `remove()` は `IllegalStateException` を投げます。JDK は
+`UnsupportedOperationException` です。`Set.of` のセットと `Map.of` のマップは、`null` を問われても
+答えます（`contains(null)` は `false`）。JDK は `NullPointerException` を投げます。そのマップの
+ビューは、何も変えない変更も拒みます。`Arrays.asList` のリストは削除をメッセージなしで拒みます。
+JDK のメッセージは `remove` です。`Stream.toList()` のリストは `Collections.unmodifiableList` の
+リストです。JDK では null を持てる `List.of` 系のリストです。そのため範囲外の添字は
+`IndexOutOfBoundsException` になり、逆順ビューは変更を拒む前に添字を検査します。`List.of()`、
+`Set.of()`、`Map.of()` は呼ぶたびに新しいオブジェクトです。`AbstractList` 系のリストのイテレータが
+末尾を越えると `NoSuchElementException` を投げ、その原因は空です。JDK ではリストの
+`IndexOutOfBoundsException` が原因になります。
+
+**リストの一部（`subList`）とリストのイテレータは、背後で行われた変更を JDK と同じように拒みます。**
+`AbstractList.modCount` という変更回数を使います。`ArrayList`、`LinkedList`、`Vector` はこれを
+更新し、`AbstractList` を継承するプログラムのクラスは、拒んでほしいときに自分で更新します。
+リストが別の経路で変更された一部は、そのメンバーで `ConcurrentModificationException` を
+投げます。背後で変更されたリストのイテレータも同じです。
+このような一部の答えのうち、JDK と異なるものがあります。リストが変更された一部では、JDK が
+答える `hasNext`、`estimateSize()`、スプリッテレータの `forEachRemaining` も拒みます。範囲外の範囲や
+添字（`subList`、添字を指定する `addAll`）は、範囲の誤りではなく変更の拒否になります。
+`LinkedList` の一部やプログラムのリストの一部は、JDK なら部分リストを作れる `subList` を拒みます。
+そのような一部のイテレータは、末尾を越えた `next()` で `ConcurrentModificationException` を
+投げます。JDK は `NoSuchElementException` です。`LinkedList` の一部のイテレータは `next()` 前の
+`remove()` で `IllegalStateException` を投げます。JDK は `ConcurrentModificationException` です。
+一部のクラスは
+`java.util.AbstractList$SubList` です。`CopyOnWriteArrayList` の一部は何も拒まず、そのイテレータは
+追加された要素を見ます。JDK では背後の変更を拒み、手元にあった要素を歩きます。
 
 **`Math` の関数は `StrictMath` の関数です。** そのため、結果はどのバックエンドとプロセッサでも
 同じです。JDK の `Math.sin`、`Math.exp` などは、最後の桁がこれと異なることがあります。
@@ -686,7 +711,7 @@ WebSocket です。`version(..)` で指定した値は保持され、問い合�
 - `java.util.concurrent` のうち、[使える JDK のクラス](classes.md)の表にないもの。優先度順または遅延順の
   キューです。`Date` を取る `Timer` の `schedule`、スレッドグループも拒否されます。
 - [使える JDK のクラス](classes.md)の表にない JDK のクラスとメンバー。
-  `PriorityQueue`、`Scanner`、ファイル（`File`、`FileReader`、
+  `Scanner`、ファイル（`File`、`FileReader`、
   `java.nio.file`）、`Calendar`、
   リフレクションなどです。
   `java.net` では、`URI`、サーバーのアドレス、[HTTP クライアント](#the-http-client)以外の

@@ -1310,24 +1310,8 @@ final class WasmIntFusionCompiler {
 	 */
 	static java.util.Map<String, Range> functionBodyDeclaredIntegers(List<LispVal> bodyExprs,
 			WasmLispCompiler.Ctx ctx) {
-		java.util.Map<String, am.ik.rontolisp.compiler.DeclaredIntegerTypes.Interval> intervals = new java.util.LinkedHashMap<>(
-				am.ik.rontolisp.compiler.DeclaredIntegerTypes.declared(bodyExprs, ctx.closRegistry));
-		for (int i = 0; i < bodyExprs.size(); i++) {
-			LispVal form = bodyExprs.get(i);
-			if (form instanceof am.ik.rontolisp.LispString || am.ik.rontolisp.SpecialDeclarations.isDeclaration(form)) {
-				continue;
-			}
-			if (i == bodyExprs.size() - 1 && form instanceof LispCons wrapper && wrapper.isProperList()
-					&& wrapper.car() instanceof LispSymbol head
-					&& (LispNames.FN_BLOCK_INTERNAL.equals(head.name()) || LispNames.BLOCK.equals(head.name()))
-					&& wrapper.toList().size() >= 3) {
-				List<LispVal> wrapped = wrapper.toList();
-				am.ik.rontolisp.compiler.DeclaredIntegerTypes
-					.declared(wrapped.subList(2, wrapped.size()), ctx.closRegistry)
-					.forEach(intervals::putIfAbsent);
-			}
-			break;
-		}
+		java.util.Map<String, am.ik.rontolisp.compiler.DeclaredIntegerTypes.Interval> intervals = am.ik.rontolisp.compiler.DeclaredIntegerTypes
+			.functionBody(bodyExprs, ctx.closRegistry);
 		java.util.Map<String, Range> ranges = new java.util.HashMap<>();
 		intervals.forEach((name, interval) -> {
 			if (!ctx.specialVars.contains(name)) {

@@ -13,8 +13,9 @@ program's own); the three field updaters; `ExecutorService.invokeAll` with a lim
 `.todo/artefacts/k08-java-front-end-what-the-stamped-lock-phaser-and-pool-hooks-slice-left/`.
 What follows is what k01 left that k08 did not take, and what k08 found.
 
-- **`java.util.concurrent`, not there**: `PriorityBlockingQueue` and `DelayQueue` (no
-  `PriorityQueue` yet: `.todo/k60`), a `Timer`'s `schedule` of a `Date` (`java.util.Date`
+- **`java.util.concurrent`, not there**: `PriorityBlockingQueue` and `DelayQueue`
+  (`PriorityQueue` came with k60: `.kb/java-frontend.md`, "The collections of Collections,
+  a bridge's cast and PriorityQueue"), a `Timer`'s `schedule` of a `Date` (`java.util.Date`
   came with k37). `ConcurrentSkipListMap` / `Set` came with k47.
 - **What a field updater does not take** (`deviations.md`; `Updaters3.java` of the k08
   probes holds a JDK's answers): a class literal of a primitive or an array type

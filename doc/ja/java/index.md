@@ -284,12 +284,12 @@ $ rontolisp main.lisp
 `Object[]` はベクタです。Common Lisp のリストは `List` ではありません。Java のメソッドには
 ベクタを渡します。`int`、`long`、`short`、`byte`、`char` の引数に渡す整数はその型の値でなければ
 なりません。コンパイルしたプログラムは型の宣言どおりに扱います（wasm では型の範囲を超える整数で
-トラップします）。配列型の引数に渡す配列も、その型が作るベクタで、要素型の値を持つものでなければ
-なりません。`int[]` は
-`(make-array n :element-type '(unsigned-byte 32))`、`byte[]` は `'(unsigned-byte 8)`、`char[]` と
-`short[]` は `'(unsigned-byte 16)`、`double[]` は `'double-float`、`float[]` は `'single-float`、
-`boolean[]` は `'bit`、その他は要素型のないベクタです（wasm ではそれ以外のベクタを読む箇所で
-トラップします）。`int`、`long`、`short`、`byte` を返す `native` メソッドが返す整数は、
+トラップし、JVM では整数でない値でエラーになります）。配列型の引数に渡す配列も、その型が作るベクタで、
+要素型の値を持つものでなければなりません。`int[]` は `(make-array n :element-type '(unsigned-byte 32))`、
+`byte[]` は `'(unsigned-byte 8)`、`char[]` と `short[]` は `'(unsigned-byte 16)`、`double[]` は
+`'double-float`、`float[]` は `'single-float`、`boolean[]` は `'bit`、その他は要素型のないベクタです
+（wasm ではそれ以外のベクタを読む箇所でトラップします）。`int`、`long`、`short`、`byte` を返す
+`native` メソッドが返す整数は、
 その型の値と同じく型の幅の下位ビットに切り詰めます。
 
 ## ツール

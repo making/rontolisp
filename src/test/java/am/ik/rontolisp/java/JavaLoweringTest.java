@@ -353,7 +353,8 @@ class JavaLoweringTest {
 		// A type parameter is erased: a method's name has its bound, and a member typed
 		// by one is converted where the type it is read through gives a box. An override
 		// through a type parameter is one entry of the dispatcher, beside the predicates
-		// of the library's own values. A lambda is a function, called by funcall; the
+		// of the library's own values, each testing an argument it takes narrower as a
+		// bridge method casts it. A lambda is a function, called by funcall; the
 		// lambdas of an interface instanceof asks for are structures holding it. A method
 		// reference is the lambda calling the method. A boxed long is the number in a
 		// cons, and an unboxing tests for null.
@@ -418,10 +419,17 @@ class JavaLoweringTest {
 							+ "|task| (RONTOLISP::%JAVA-NPE)))))))))))",
 					"(DEFUN |Named.name()%v| (|%o|) (COND ((|Named%lambda?| |%o|) (FUNCALL (|Named%lambda-%f| "
 							+ "|%o|))) (T (RONTOLISP::%JAVA-NO-RECEIVER |%o| \"name()\"))))",
-					"(DEFUN |Comparable.compareTo(Object)%v| (|%o| |%a0|) (COND ((|Version?| |%o|) (|Version.compareTo(Version)| "
-							+ "|%o| |%a0|)) ((SIMPLE-STRING-P |%o|) (RONTOLISP::%JAVA-STRING-COMPARE |%o| |%a0|)) ((RONTOLISP::%JAVA-LONG-P "
-							+ "|%o|) (RONTOLISP::%JAVA-COMPARE (CAR |%o|) (CAR |%a0|))) ((INTEGERP |%o|) (RONTOLISP::%JAVA-COMPARE "
-							+ "|%o| |%a0|)) (T (RONTOLISP::%JAVA-NO-RECEIVER |%o| \"compareTo(Object)\"))))",
+					"(DEFUN |Comparable.compareTo(Object)%v| (|%o| |%a0|) (COND ((|Version?| |%o|) (IF (OR (NULL |%a0|) "
+							+ "(|Version?| |%a0|)) (|Version.compareTo(Version)| |%o| |%a0|) (|%cast-refused| |%a0| \"Version\"))) "
+							+ "((SIMPLE-STRING-P |%o|) (IF (OR (NULL |%a0|) (SIMPLE-STRING-P |%a0|)) (RONTOLISP::%JAVA-STRING-COMPARE "
+							+ "|%o| |%a0|) (|%cast-refused| |%a0| \"java.lang.String\"))) ((RONTOLISP::%JAVA-LONG-P |%o|) (IF (OR "
+							+ "(NULL |%a0|) (RONTOLISP::%JAVA-LONG-P |%a0|)) (RONTOLISP::%JAVA-COMPARE (CAR |%o|) (CAR |%a0|)) "
+							+ "(|%cast-refused| |%a0| \"java.lang.Long\"))) ((INTEGERP |%o|) (IF (OR (NULL |%a0|) (INTEGERP |%a0|)) "
+							+ "(RONTOLISP::%JAVA-COMPARE |%o| |%a0|) (|%cast-refused| |%a0| \"java.lang.Integer\"))) (T "
+							+ "(RONTOLISP::%JAVA-NO-RECEIVER |%o| \"compareTo(Object)\"))))",
+					"(DEFUN |%cast-refused| (|%v| |%t|) (RONTOLISP::%JAVA-THROW (|ClassCastException.new(String)| (IF (OR "
+							+ "(FUNCTIONP |%v|) (|Named%lambda?| |%v|)) NIL (%STRING-CONCAT (%STRING-CONCAT \"class \" (|%class-name| "
+							+ "|%v|)) (%STRING-CONCAT \" cannot be cast to class \" |%t|)))) #'|Throwable.toString()|))",
 					"(DEFUN |Named%is| (|%o|) (OR (|Named%lambda?| |%o|)))");
 	}
 
@@ -454,7 +462,7 @@ class JavaLoweringTest {
 		assertThat(forms).contains(
 				"(DEFSTRUCT (|java.util.ArrayList| (:INCLUDE |java.util.AbstractList|) (:CONC-NAME |java.util.ArrayList.|) "
 						+ "(:CONSTRUCTOR |%make-java.util.ArrayList| NIL) (:PREDICATE |java.util.ArrayList?|) (:COPIER "
-						+ "NIL)) (|items| NIL) (|count| 0) (|changes| 0))",
+						+ "NIL)) (|items| NIL) (|count| 0))",
 				"(DEFUN |Bag.iterator()| (|this|) (|java.util.ArrayList.iterator()| (OR (|Bag.items| |this|) "
 						+ "(RONTOLISP::%JAVA-NPE))))",
 				"(DEFUN |L4.main(String[])| (|args|) (DECLARE (TYPE (OR NULL (SIMPLE-ARRAY T (*))) |args|)) "

@@ -50,6 +50,7 @@ import am.ik.rontolisp.reader.LispReader;
 import am.ik.rontolisp.testsupport.CliStackExtension;
 import am.ik.rontolisp.testsupport.CorpusFixtures;
 import am.ik.rontolisp.testsupport.DeclaredArityReportPrograms;
+import am.ik.rontolisp.testsupport.DeclaredIntegerProgram;
 import am.ik.rontolisp.testsupport.HashTableCopyPrograms;
 import am.ik.rontolisp.testsupport.HashTableKeyPrograms;
 import am.ik.rontolisp.testsupport.LoweredBuiltinValues;
@@ -17902,6 +17903,52 @@ class JvmLispCompilerTest {
 		assertThat(declaredMethodNames(small)).noneMatch(name -> name.startsWith("_fx$"));
 		assertThat(runClass(fast)).isEqualTo(MaskSignedFieldProgram.EXPECTED);
 		assertThat(runClass(small)).isEqualTo(MaskSignedFieldProgram.EXPECTED);
+	}
+
+	@Test
+	void aDeclaredIntegerLeafIsCastAndAMethodWithNothingElseToBailOnHasNoFallback() throws Exception {
+		// .kb/declarations-type-checks.md, "Declared integer ranges": step32's fused
+		// method
+		// takes its declared parameters with a cast and keeps no fallback and no handler;
+		// the size level fuses nothing and answers the same. A non-integer passed as a
+		// declared one is a catchable type-error.
+		String source = DeclaredIntegerProgram.PROGRAM + """
+				(print (handler-case (step32 1.5 2) (type-error () :caught)))
+				""";
+		String expected = DeclaredIntegerProgram.EXPECTED + "\n:CAUGHT";
+		List<LispVal> program = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString(source));
+		byte[] fast = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.DEFAULT)
+			.build()
+			.compile(program);
+		byte[] small = JvmLispCompiler.builder()
+			.className("Test")
+			.optimize(OptimizeLevel.SIZE)
+			.build()
+			.compile(program);
+		java.lang.classfile.ClassModel model = java.lang.classfile.ClassFile.of().parse(fast);
+		List<String> stepCalls = new java.util.ArrayList<>();
+		for (java.lang.classfile.MethodModel method : model.methods()) {
+			if (method.methodName().equalsString("STEP32")) {
+				for (java.lang.classfile.CodeElement element : method.code().orElseThrow()) {
+					if (element instanceof java.lang.classfile.instruction.InvokeInstruction invoke
+							&& invoke.name().stringValue().startsWith("_fx$")) {
+						stepCalls.add(invoke.name().stringValue());
+					}
+				}
+			}
+		}
+		assertThat(stepCalls).hasSize(1);
+		for (java.lang.classfile.MethodModel method : model.methods()) {
+			if (stepCalls.contains(method.methodName().stringValue())) {
+				assertThat(
+						((java.lang.classfile.attribute.CodeAttribute) method.code().orElseThrow()).exceptionHandlers())
+					.isEmpty();
+			}
+		}
+		assertThat(runClass(fast)).isEqualTo(expected);
+		assertThat(runClass(small)).isEqualTo(expected);
 	}
 
 	private static List<String> fusedMethodsUsing(byte[] classBytes, java.lang.classfile.Opcode opcode) {

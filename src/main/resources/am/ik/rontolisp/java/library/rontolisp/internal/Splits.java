@@ -62,7 +62,7 @@ public final class Splits<T> implements Spliterator<T> {
         return split;
     }
 
-    // a collection of one element nothing changes (Collections.singleton, List.of(e))
+    // a collection of one element nothing changes (Collections.singleton, singletonList)
     public static <T> Spliterator<T> one(Collection<? extends T> source) {
         int marks = Spliterator.ORDERED | Spliterator.DISTINCT | Spliterator.SIZED | Spliterator.SUBSIZED
                 | Spliterator.IMMUTABLE;

@@ -1,0 +1,214 @@
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class Imm {
+    static void attempt(String label, Supplier<Object> s) {
+        try {
+            System.out.println(label + " = " + s.get());
+        } catch (RuntimeException e) {
+            System.out.println(label + " ! " + e.getClass().getName() + " " + e.getMessage());
+        }
+    }
+
+    static void list(String label, Supplier<List<Integer>> make) {
+        List<Integer> l = make.get();
+        System.out.println(label + " " + l + " " + l.size() + " " + l.isEmpty() + " " + l.hashCode() + " " + l.equals(new ArrayList<>(l)) + " " + new ArrayList<>(l).equals(l));
+        attempt(label + " get(0)", () -> make.get().get(0));
+        attempt(label + " get(-1)", () -> make.get().get(-1));
+        attempt(label + " get(size)", () -> { List<Integer> m = make.get(); return m.get(m.size()); });
+        attempt(label + " contains(1)", () -> make.get().contains(1));
+        attempt(label + " contains(null)", () -> make.get().contains(null));
+        attempt(label + " indexOf(null)", () -> make.get().indexOf(null));
+        attempt(label + " lastIndexOf(null)", () -> make.get().lastIndexOf(null));
+        attempt(label + " indexOf(1)", () -> make.get().indexOf(1) + " " + make.get().lastIndexOf(1));
+        attempt(label + " containsAll()", () -> make.get().containsAll(List.of()));
+        attempt(label + " containsAll(null)", () -> make.get().containsAll(null));
+        attempt(label + " add(1)", () -> make.get().add(1));
+        attempt(label + " add(0, 1)", () -> { make.get().add(0, 1); return "ok"; });
+        attempt(label + " add(9, 1)", () -> { make.get().add(9, 1); return "ok"; });
+        attempt(label + " set(0, 1)", () -> make.get().set(0, 1));
+        attempt(label + " set(9, 1)", () -> make.get().set(9, 1));
+        attempt(label + " remove(0)", () -> make.get().remove(0));
+        attempt(label + " remove(9)", () -> make.get().remove(9));
+        attempt(label + " remove(Integer 3)", () -> make.get().remove(Integer.valueOf(3)));
+        attempt(label + " remove(Integer 1)", () -> make.get().remove(Integer.valueOf(1)));
+        attempt(label + " remove(null)", () -> make.get().remove(null));
+        attempt(label + " addAll()", () -> make.get().addAll(List.of()));
+        attempt(label + " addAll(1)", () -> make.get().addAll(List.of(1)));
+        attempt(label + " addAll(null)", () -> make.get().addAll(null));
+        attempt(label + " addAll(0, ())", () -> make.get().addAll(0, List.of()));
+        attempt(label + " addAll(9, ())", () -> make.get().addAll(9, List.of()));
+        attempt(label + " addAll(0, (1))", () -> make.get().addAll(0, List.of(1)));
+        attempt(label + " removeAll()", () -> make.get().removeAll(List.of()));
+        attempt(label + " removeAll(3)", () -> make.get().removeAll(List.of(3)));
+        attempt(label + " removeAll(1)", () -> make.get().removeAll(List.of(1)));
+        attempt(label + " removeAll(null)", () -> make.get().removeAll(null));
+        attempt(label + " retainAll(1)", () -> make.get().retainAll(List.of(1)));
+        attempt(label + " retainAll()", () -> make.get().retainAll(List.of()));
+        attempt(label + " retainAll(null)", () -> make.get().retainAll(null));
+        attempt(label + " removeIf(false)", () -> make.get().removeIf(x -> false));
+        attempt(label + " removeIf(true)", () -> make.get().removeIf(x -> true));
+        attempt(label + " removeIf(null)", () -> make.get().removeIf(null));
+        attempt(label + " replaceAll(id)", () -> { make.get().replaceAll(x -> x); return "ok"; });
+        attempt(label + " replaceAll(null)", () -> { make.get().replaceAll(null); return "ok"; });
+        attempt(label + " sort(null)", () -> { make.get().sort(null); return "ok"; });
+        attempt(label + " sort(rev)", () -> { make.get().sort(Comparator.reverseOrder()); return "ok"; });
+        attempt(label + " clear", () -> { make.get().clear(); return "ok"; });
+        attempt(label + " addFirst", () -> { make.get().addFirst(1); return "ok"; });
+        attempt(label + " addLast", () -> { make.get().addLast(1); return "ok"; });
+        attempt(label + " removeFirst", () -> make.get().removeFirst());
+        attempt(label + " removeLast", () -> make.get().removeLast());
+        attempt(label + " getFirst", () -> make.get().getFirst());
+        attempt(label + " getLast", () -> make.get().getLast());
+        attempt(label + " iterator.remove", () -> { Iterator<Integer> it = make.get().iterator(); it.remove(); return "ok"; });
+        attempt(label + " iterator.next.remove", () -> { Iterator<Integer> it = make.get().iterator(); it.next(); it.remove(); return "ok"; });
+        attempt(label + " iterator.next past", () -> { Iterator<Integer> it = make.get().iterator(); while (it.hasNext()) it.next(); return it.next(); });
+        attempt(label + " listIterator(0).set", () -> { ListIterator<Integer> it = make.get().listIterator(0); it.next(); it.set(1); return "ok"; });
+        attempt(label + " listIterator(0).add", () -> { ListIterator<Integer> it = make.get().listIterator(0); it.add(1); return "ok"; });
+        attempt(label + " listIterator(9)", () -> make.get().listIterator(9));
+        attempt(label + " listIterator(-1)", () -> make.get().listIterator(-1));
+        attempt(label + " listIterator previous", () -> { ListIterator<Integer> it = make.get().listIterator(); return it.hasPrevious() + " " + it.nextIndex() + " " + it.previousIndex(); });
+        attempt(label + " subList(0,0)", () -> make.get().subList(0, 0));
+        attempt(label + " subList(0,1)", () -> make.get().subList(0, 1));
+        attempt(label + " subList(0,9)", () -> make.get().subList(0, 9));
+        attempt(label + " subList(-1,0)", () -> make.get().subList(-1, 0));
+        attempt(label + " subList(1,0)", () -> make.get().subList(1, 0));
+        attempt(label + " subList.clear", () -> { List<Integer> m = make.get(); m.subList(0, 0).clear(); return m; });
+        attempt(label + " subList.add", () -> { List<Integer> m = make.get(); m.subList(0, 0).add(5); return m; });
+        attempt(label + " toArray", () -> Arrays.toString(make.get().toArray()) + Arrays.toString(make.get().toArray(new Integer[0])) + Arrays.toString(make.get().toArray(new Integer[3])));
+        attempt(label + " stream", () -> make.get().stream().map(x -> x + 1).toList());
+        attempt(label + " forEach", () -> { StringBuilder b = new StringBuilder(); make.get().forEach(x -> b.append(x).append(',')); return b; });
+        attempt(label + " forEach(null)", () -> { make.get().forEach(null); return "ok"; });
+        attempt(label + " reversed", () -> make.get().reversed());
+        attempt(label + " reversed.remove(Integer 3)", () -> make.get().reversed().remove(Integer.valueOf(3)));
+        attempt(label + " reversed.clear", () -> { make.get().reversed().clear(); return "ok"; });
+        attempt(label + " reversed.removeIf(false)", () -> make.get().reversed().removeIf(x -> false));
+        attempt(label + " reversed.sort", () -> { make.get().reversed().sort(null); return "ok"; });
+        attempt(label + " reversed.add", () -> make.get().reversed().add(5));
+        attempt(label + " reversed.set(0, 1)", () -> make.get().reversed().set(0, 1));
+        attempt(label + " reversed.get(-1)", () -> make.get().reversed().get(-1));
+        attempt(label + " reversed.set(-1, 1)", () -> make.get().reversed().set(-1, 1));
+        attempt(label + " reversed.remove(-1)", () -> make.get().reversed().remove(-1));
+        attempt(label + " reversed.add(-1, 1)", () -> { make.get().reversed().add(-1, 1); return "ok"; });
+        attempt(label + " reversed.retainAll", () -> make.get().reversed().retainAll(make.get()));
+        attempt(label + " reversed.replaceAll", () -> { make.get().reversed().replaceAll(x -> x); return "ok"; });
+        attempt(label + " reversed.removeFirst", () -> make.get().reversed().removeFirst());
+        attempt(label + " reversed.class", () -> make.get().reversed().getClass().getName());
+        attempt(label + " class", () -> make.get().getClass().getName());
+        attempt(label + " RandomAccess", () -> make.get() instanceof RandomAccess);
+        attempt(label + " ==", () -> make.get() == make.get());
+        attempt(label + " spliterator", () -> { Spliterator<Integer> s = make.get().spliterator(); return s.characteristics() + " " + s.estimateSize(); });
+    }
+
+    static void set(String label, Supplier<Set<Integer>> make) {
+        Set<Integer> s = make.get();
+        System.out.println(label + " " + s + " " + s.size() + " " + s.hashCode() + " " + s.equals(new HashSet<>(s)) + " " + new HashSet<>(s).equals(s));
+        attempt(label + " contains(null)", () -> make.get().contains(null));
+        attempt(label + " add(1)", () -> make.get().add(1));
+        attempt(label + " add(2)", () -> make.get().add(2));
+        attempt(label + " remove(3)", () -> make.get().remove(3));
+        attempt(label + " remove(1)", () -> make.get().remove(1));
+        attempt(label + " remove(null)", () -> make.get().remove(null));
+        attempt(label + " addAll()", () -> make.get().addAll(List.of()));
+        attempt(label + " addAll(1)", () -> make.get().addAll(List.of(1)));
+        attempt(label + " removeAll()", () -> make.get().removeAll(List.of()));
+        attempt(label + " removeAll(3)", () -> make.get().removeAll(List.of(3)));
+        attempt(label + " removeAll(1)", () -> make.get().removeAll(List.of(1)));
+        attempt(label + " removeAll(null)", () -> make.get().removeAll(null));
+        attempt(label + " retainAll(1)", () -> make.get().retainAll(List.of(1)));
+        attempt(label + " retainAll()", () -> make.get().retainAll(List.of()));
+        attempt(label + " retainAll(null)", () -> make.get().retainAll(null));
+        attempt(label + " removeIf(false)", () -> make.get().removeIf(x -> false));
+        attempt(label + " removeIf(true)", () -> make.get().removeIf(x -> true));
+        attempt(label + " removeIf(null)", () -> make.get().removeIf(null));
+        attempt(label + " clear", () -> { make.get().clear(); return "ok"; });
+        attempt(label + " iterator.remove", () -> { Iterator<Integer> it = make.get().iterator(); it.remove(); return "ok"; });
+        attempt(label + " iterator.next.remove", () -> { Iterator<Integer> it = make.get().iterator(); it.next(); it.remove(); return "ok"; });
+        attempt(label + " iterator.next past", () -> { Iterator<Integer> it = make.get().iterator(); while (it.hasNext()) it.next(); return it.next(); });
+        attempt(label + " toArray", () -> Arrays.toString(make.get().toArray()) + Arrays.toString(make.get().toArray(new Integer[0])));
+        attempt(label + " forEach(null)", () -> { make.get().forEach(null); return "ok"; });
+        attempt(label + " class", () -> make.get().getClass().getName());
+        attempt(label + " ==", () -> make.get() == make.get());
+        attempt(label + " spliterator", () -> { Spliterator<Integer> sp = make.get().spliterator(); return sp.characteristics() + " " + sp.estimateSize(); });
+    }
+
+    static void map(String label, Supplier<Map<Integer, String>> make) {
+        Map<Integer, String> m = make.get();
+        System.out.println(label + " " + m + " " + m.size() + " " + m.hashCode() + " " + m.equals(new HashMap<>(m)) + " " + new HashMap<>(m).equals(m));
+        attempt(label + " get(null)", () -> make.get().get(null));
+        attempt(label + " containsKey(null)", () -> make.get().containsKey(null));
+        attempt(label + " containsValue(null)", () -> make.get().containsValue(null));
+        attempt(label + " getOrDefault(3)", () -> make.get().getOrDefault(3, "d"));
+        attempt(label + " put(1)", () -> make.get().put(1, "a"));
+        attempt(label + " put(2)", () -> make.get().put(2, "b"));
+        attempt(label + " remove(3)", () -> make.get().remove(3));
+        attempt(label + " remove(1)", () -> make.get().remove(1));
+        attempt(label + " remove(3, a)", () -> make.get().remove(3, "a"));
+        attempt(label + " remove(1, a)", () -> make.get().remove(1, "a"));
+        attempt(label + " putAll()", () -> { make.get().putAll(Map.of()); return "ok"; });
+        attempt(label + " putAll(2)", () -> { make.get().putAll(Map.of(2, "b")); return "ok"; });
+        attempt(label + " putIfAbsent(1)", () -> make.get().putIfAbsent(1, "a"));
+        attempt(label + " putIfAbsent(3)", () -> make.get().putIfAbsent(3, "c"));
+        attempt(label + " replace(3)", () -> make.get().replace(3, "c"));
+        attempt(label + " replace(1)", () -> make.get().replace(1, "c"));
+        attempt(label + " replace(3, a, b)", () -> make.get().replace(3, "a", "b"));
+        attempt(label + " replace(1, a, b)", () -> make.get().replace(1, "a", "b"));
+        attempt(label + " replaceAll", () -> { make.get().replaceAll((k, v) -> v); return "ok"; });
+        attempt(label + " replaceAll(null)", () -> { make.get().replaceAll(null); return "ok"; });
+        attempt(label + " computeIfAbsent(3, null)", () -> make.get().computeIfAbsent(3, k -> null));
+        attempt(label + " computeIfAbsent(1)", () -> make.get().computeIfAbsent(1, k -> "z"));
+        attempt(label + " computeIfPresent(3)", () -> make.get().computeIfPresent(3, (k, v) -> "z"));
+        attempt(label + " compute(3, null)", () -> make.get().compute(3, (k, v) -> null));
+        attempt(label + " merge(3)", () -> make.get().merge(3, "z", (a, b) -> a));
+        attempt(label + " clear", () -> { make.get().clear(); return "ok"; });
+        attempt(label + " keySet.remove(3)", () -> make.get().keySet().remove(3));
+        attempt(label + " keySet.clear", () -> { make.get().keySet().clear(); return "ok"; });
+        attempt(label + " values.remove(z)", () -> make.get().values().remove("z"));
+        attempt(label + " entrySet.clear", () -> { make.get().entrySet().clear(); return "ok"; });
+        attempt(label + " entry.setValue", () -> { Map.Entry<Integer, String> e = make.get().entrySet().iterator().next(); return e.setValue("q"); });
+        attempt(label + " entry.class", () -> make.get().entrySet().iterator().next().getClass().getName());
+        attempt(label + " class", () -> make.get().getClass().getName());
+        attempt(label + " keySet.class", () -> make.get().keySet().getClass().getName());
+        attempt(label + " ==", () -> make.get() == make.get());
+        attempt(label + " views ==", () -> { Map<Integer, String> x = make.get(); return (x.keySet() == x.keySet()) + " " + (x.values() == x.values()) + " " + (x.entrySet() == x.entrySet()) + " " + x.values().equals(x.values()); });
+    }
+
+    public static void main(String[] args) {
+        list("emptyList", Collections::emptyList);
+        list("singletonList", () -> Collections.singletonList(1));
+        list("nCopies(0)", () -> Collections.nCopies(0, 1));
+        list("nCopies(3)", () -> Collections.nCopies(3, 1));
+        list("List.of()", List::of);
+        list("List.of(1)", () -> List.of(1));
+        list("List.of(1,2)", () -> List.of(1, 2));
+        list("toList()", () -> Stream.<Integer>of().toList());
+        list("toList(1,2)", () -> Stream.of(1, 2).toList());
+        list("toUnmodifiableList", () -> Stream.of(1, 2).collect(Collectors.toUnmodifiableList()));
+        list("unmodifiableList", () -> Collections.unmodifiableList(new ArrayList<>(List.of(1, 2))));
+        list("asList", () -> Arrays.asList(1, 2));
+        set("emptySet", Collections::emptySet);
+        set("singleton", () -> Collections.singleton(1));
+        set("Set.of()", Set::of);
+        set("Set.of(1)", () -> Set.of(1));
+        set("unmodifiableSet", () -> Collections.unmodifiableSet(new HashSet<>(Set.of(1))));
+        map("emptyMap", Collections::emptyMap);
+        map("singletonMap", () -> Collections.singletonMap(1, "a"));
+        map("Map.of()", Map::of);
+        map("Map.of(1)", () -> Map.of(1, "a"));
+        map("unmodifiableMap", () -> Collections.unmodifiableMap(new HashMap<>(Map.of(1, "a"))));
+        map("HashMap", () -> new HashMap<>(Map.of(1, "a")));
+        attempt("emptyIterator", () -> { Iterator<Integer> it = Collections.emptyIterator(); return it.hasNext() + " " + it.getClass().getName(); });
+        attempt("emptyIterator remove", () -> { Iterator<Integer> it = Collections.emptyIterator(); it.remove(); return "ok"; });
+        attempt("emptyListIterator", () -> { ListIterator<Integer> it = Collections.emptyListIterator(); return it.hasNext() + " " + it.hasPrevious() + " " + it.nextIndex() + " " + it.previousIndex(); });
+        attempt("emptyEnumeration", () -> Collections.emptyEnumeration().hasMoreElements());
+        attempt("nCopies(-1)", () -> Collections.nCopies(-1, 1));
+        attempt("nCopies(2, null)", () -> Collections.nCopies(2, null) + " " + Collections.nCopies(2, null).contains(null) + " " + Collections.nCopies(2, null).indexOf(null));
+        attempt("singletonList(null)", () -> Collections.singletonList(null) + " " + Collections.singletonList(null).contains(null));
+        attempt("nCopies hashCode", () -> Collections.nCopies(4, "x").hashCode() + " " + Collections.nCopies(4, "x").equals(List.of("x", "x", "x", "x")) + " " + Collections.nCopies(3, "a").toString());
+        attempt("nCopies subList", () -> Collections.nCopies(5, "x").subList(1, 3) + " " + Collections.nCopies(5, "x").subList(1, 3).getClass().getName());
+        attempt("nCopies stream", () -> Collections.nCopies(3, "x").stream().collect(Collectors.joining("-")));
+        attempt("nCopies indexOf", () -> Collections.nCopies(3, "x").indexOf("x") + " " + Collections.nCopies(3, "x").lastIndexOf("x") + " " + Collections.nCopies(3, "x").indexOf("y"));
+        attempt("emptyList ==", () -> (Collections.emptyList() == Collections.emptyList()) + " " + (Collections.emptySet() == Collections.emptySet()) + " " + (Collections.emptyMap() == Collections.emptyMap()));
+    }
+}

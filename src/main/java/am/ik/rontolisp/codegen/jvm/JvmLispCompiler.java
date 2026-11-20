@@ -3317,6 +3317,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				.functionBodyDeclaredDoubles(defun.bodyExprs, closRegistry));
 			funcDeclaredDoubles.removeAll(specialVars);
 			funcCtx.declaredDoubles = funcDeclaredDoubles.isEmpty() ? Set.of() : funcDeclaredDoubles;
+			funcCtx.declaredIntegers = JvmIntFusionCompiler.functionBodyDeclaredIntegers(defun.bodyExprs, funcCtx);
 			// The head a self tail call jumps back to, ahead of the boxing below so each
 			// round boxes its own cells; it costs nothing unless one does
 			// (JvmSelfTailCall).
@@ -3651,6 +3652,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				.functionBodyDeclaredDoubles(lambda.bodyExprs, closRegistry));
 			lambdaDeclaredDoubles.removeAll(specialVars);
 			lambdaCtx.declaredDoubles = lambdaDeclaredDoubles.isEmpty() ? Set.of() : lambdaDeclaredDoubles;
+			lambdaCtx.declaredIntegers = JvmIntFusionCompiler.functionBodyDeclaredIntegers(lambda.bodyExprs, lambdaCtx);
 			if (lambda.selfVar() != null) {
 				// A labels function: its calls through its own variable are self calls,
 				// and the tail ones jump back here, ahead of the boxing below
@@ -9037,6 +9039,17 @@ public final class JvmLispCompiler implements LispCompiler {
 		 * restored on scope exit. Specials are never registered.
 		 */
 		Set<String> declaredDoubles = Set.of();
+
+		/**
+		 * The variables in scope a declaration gives an integer range within {@code long}
+		 * ({@link am.ik.rontolisp.compiler.DeclaredIntegerTypes}), each of which holds a
+		 * {@code Long}: a fused method takes such a leaf with a cast, no bail and no
+		 * fallback ({@code .kb/declarations-type-checks.md}, "Declared integer ranges").
+		 * Each name maps to the binding it was declared over, which a read must still
+		 * resolve to ({@link JvmIntFusionCompiler#declaredLong}); scoped as
+		 * {@link #declaredDoubles}.
+		 */
+		Map<String, Object> declaredIntegers = Map.of();
 
 		/**
 		 * The declared-float locals kept in a raw {@code double} slot pair, keyed by name

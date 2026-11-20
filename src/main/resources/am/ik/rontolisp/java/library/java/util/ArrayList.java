@@ -4,6 +4,7 @@
 package java.util;
 
 import java.util.function.Consumer;
+import java.util.function.UnaryOperator;
 
 // A list over an array that grows by half when it is full.
 public class ArrayList<E> extends AbstractList<E> implements RandomAccess {
@@ -11,9 +12,6 @@ public class ArrayList<E> extends AbstractList<E> implements RandomAccess {
     private Object[] items;
 
     private int count;
-
-    // how many times the list changed size: an iterator made before a change refuses
-    private int changes;
 
     public ArrayList() {
         items = new Object[10];
@@ -41,10 +39,14 @@ public class ArrayList<E> extends AbstractList<E> implements RandomAccess {
     }
 
     public void ensureCapacity(int capacity) {
-        room(capacity);
+        if (capacity > items.length) {
+            room(capacity);
+            modCount++;
+        }
     }
 
     public void trimToSize() {
+        modCount++;
         if (count < items.length) {
             Object[] exact = new Object[count];
             System.arraycopy(items, 0, exact, 0, count);
@@ -85,7 +87,7 @@ public class ArrayList<E> extends AbstractList<E> implements RandomAccess {
             room(count + 1);
         }
         items[count++] = e;
-        changes++;
+        modCount++;
         return true;
     }
 
@@ -97,7 +99,7 @@ public class ArrayList<E> extends AbstractList<E> implements RandomAccess {
         System.arraycopy(items, index, items, index + 1, count - index);
         items[index] = element;
         count++;
-        changes++;
+        modCount++;
     }
 
     public E remove(int index) {
@@ -107,7 +109,7 @@ public class ArrayList<E> extends AbstractList<E> implements RandomAccess {
         E old = (E) items[index];
         System.arraycopy(items, index + 1, items, index, count - index - 1);
         items[--count] = null;
-        changes++;
+        modCount++;
         return old;
     }
 
@@ -145,18 +147,18 @@ public class ArrayList<E> extends AbstractList<E> implements RandomAccess {
             items[i] = null;
         }
         count = 0;
-        changes++;
+        modCount++;
     }
 
     public boolean addAll(Collection<? extends E> c) {
         Object[] added = c.toArray();
+        modCount++;
         if (added.length == 0) {
             return false;
         }
         room(count + added.length);
         System.arraycopy(added, 0, items, count, added.length);
         count += added.length;
-        changes++;
         return true;
     }
 
@@ -165,6 +167,7 @@ public class ArrayList<E> extends AbstractList<E> implements RandomAccess {
             throw new IndexOutOfBoundsException("Index: " + index + ", Size: " + count);
         }
         Object[] added = c.toArray();
+        modCount++;
         if (added.length == 0) {
             return false;
         }
@@ -172,7 +175,6 @@ public class ArrayList<E> extends AbstractList<E> implements RandomAccess {
         System.arraycopy(items, index, items, index + added.length, count - index);
         System.arraycopy(added, 0, items, index, added.length);
         count += added.length;
-        changes++;
         return true;
     }
 
@@ -193,15 +195,30 @@ public class ArrayList<E> extends AbstractList<E> implements RandomAccess {
     }
 
     public void sort(Comparator<? super E> c) {
+        int expected = modCount;
         Arrays.sortObjects(items, 0, count, c);
-        changes++;
+        if (modCount != expected) {
+            throw new ConcurrentModificationException();
+        }
+        modCount++;
+    }
+
+    public void replaceAll(UnaryOperator<E> operator) {
+        int expected = modCount;
+        for (int i = 0; i < count && modCount == expected; i++) {
+            items[i] = operator.apply((E) items[i]);
+        }
+        if (modCount != expected) {
+            throw new ConcurrentModificationException();
+        }
+        modCount++;
     }
 
     public void forEach(Consumer<? super E> action) {
-        int expected = changes;
+        int expected = modCount;
         for (int i = 0; i < count; i++) {
             action.accept((E) items[i]);
-            if (changes != expected) {
+            if (modCount != expected) {
                 throw new ConcurrentModificationException();
             }
         }
@@ -232,11 +249,11 @@ public class ArrayList<E> extends AbstractList<E> implements RandomAccess {
         EachWay(ArrayList<E> list, int index) {
             this.list = list;
             this.cursor = index;
-            this.expected = list.changes;
+            this.expected = list.modCount;
         }
 
         private void unchanged() {
-            if (list.changes != expected) {
+            if (list.modCount != expected) {
                 throw new ConcurrentModificationException();
             }
         }
@@ -283,7 +300,7 @@ public class ArrayList<E> extends AbstractList<E> implements RandomAccess {
             list.remove(last);
             cursor = last;
             last = -1;
-            expected = list.changes;
+            expected = list.modCount;
         }
 
         public void set(E e) {
@@ -298,7 +315,7 @@ public class ArrayList<E> extends AbstractList<E> implements RandomAccess {
             unchanged();
             list.add(cursor++, e);
             last = -1;
-            expected = list.changes;
+            expected = list.modCount;
         }
     }
 
@@ -314,7 +331,7 @@ public class ArrayList<E> extends AbstractList<E> implements RandomAccess {
 
         Each(ArrayList<E> list) {
             this.list = list;
-            this.expected = list.changes;
+            this.expected = list.modCount;
         }
 
         public boolean hasNext() {
@@ -324,7 +341,7 @@ public class ArrayList<E> extends AbstractList<E> implements RandomAccess {
         public E next() {
             ArrayList<E> all = list;
             int at = cursor;
-            if (all.changes != expected) {
+            if (all.modCount != expected) {
                 throw new ConcurrentModificationException();
             }
             if (at >= all.count) {
@@ -339,13 +356,13 @@ public class ArrayList<E> extends AbstractList<E> implements RandomAccess {
             if (last < 0) {
                 throw new IllegalStateException();
             }
-            if (list.changes != expected) {
+            if (list.modCount != expected) {
                 throw new ConcurrentModificationException();
             }
             list.remove(last);
             cursor = last;
             last = -1;
-            expected = list.changes;
+            expected = list.modCount;
         }
     }
 }

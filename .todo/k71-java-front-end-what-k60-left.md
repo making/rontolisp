@@ -1,59 +1,67 @@
-# k60. Java front end: what k55 left (the stream members, the collections, the members met)
+# k71. Java front end: what k60 left (the streams, the members met, the collections)
 
 Difficulty: High
 
 **Important -- licence and naming: read `.kb/java-frontend-provenance.md` before writing
 anything.** The library is Java source embedded in every compiled program.
 
-State after k55 (2026-11-20, `.kb/java-frontend.md`, "The sequenced collections"): the
-sequenced collections and their reversed views, `LinkedHashMap.putFirst` and its kin, the
-views of a sorted set or map that is not navigable, `Collections`' sequenced wrappers,
-`HashMap.newHashMap` and its kin are in, with what their probes found beside them fixed
-(`subList`'s refusals, `reverseOrder(null)`, the concurrent queues' iterators). What follows
-is what j98, k03, k05, k12, k26, k47 and k55 left, most valuable first.
+State after k60 (2026-11-20, `.kb/java-frontend.md`, "The collections of Collections, a
+bridge's cast and PriorityQueue"): `Collections`' empty, single and copied collections as
+classes of their own, `singletonMap` and the empty iterators, `List.of`'s refusals, a
+bridge's cast in a dispatcher's arms, `PriorityQueue`, and a waiting argument tried against
+what the target says. What follows is what j98, k03, k05, k12, k26, k47, k55 and k60 left,
+most valuable first. The classes j71 left (`Scanner`, `StringJoiner`, files ..) are
+`.todo/k72`.
 
 **How a member's answer is learned**: a Java program printing a transcript, run under a
 JDK and under the four backends and compared -- a grid where the cases can be listed, a
-seeded generator where they cannot. The scripts: `compare.sh` and `refused.py` of
-`.todo/artefacts/k12-java-front-end-what-the-time-limits-and-duration-slice-left/`;
-`sizes/size.sh` and `functions.sh` of
-`.todo/artefacts/k26-java-front-end-what-the-streams-slice-left/` (what a change costs a
-program that does not use it). The probes of the collections:
-`.todo/artefacts/k47-java-front-end-what-the-stream-members-slice-left/` and
-`.todo/artefacts/k55-java-front-end-what-the-stream-members-and-the-sorted-collections-left/`.
-The JDK leg of `JavaSpecE2eTest` compiles the corpus with javac: a case's `main` may
-declare no checked exception, and a line that differs from a JDK by decision can be in no
-case.
+seeded generator where they cannot. The scripts: `four.sh`, `sz.sh` and `fn.sh` of
+`.todo/artefacts/k60-java-front-end-what-k55-left/` (two jars compared; its README);
+`compare.sh` and `refused.py` of
+`.todo/artefacts/k12-java-front-end-what-the-time-limits-and-duration-slice-left/`. The JDK
+leg of `JavaSpecE2eTest` compiles the corpus with javac: a case's `main` may declare no
+checked exception, and a line that differs from a JDK by decision can be in no case.
+
+## Inference met by k60
+
+- **`Collections.max(raw)` is refused** (`RawMax.java` of the k60 probes): a raw `List`
+  given for `<T extends Object & Comparable<? super T>> T max(Collection<? extends T>)` is
+  `inferred type does not conform to upper bound(s)`, where javac applies the method by an
+  unchecked conversion and answers its erasure. A program of raw collections meets it at
+  `max`, `min`, `sort`.
 
 ## The collections
 
+- **`Stream.toList()` is `Collections.unmodifiableList`'s list**, a JDK's a list of
+  `List.of`'s kind that holds nulls (`deviations.md`): `rontolisp.internal.ObjectFlow`
+  reaches no class of `java.util` that is not public, and a public member a JDK does not
+  have would be one a program could name. A way for the library to make a package's list
+  from another package is the lead.
+- **What k60 measured and left** (`deviations.md`): `List.of` of one or two refuses an
+  index with the array's words (a check in `ListN.get` was 440 B in every `List.of`
+  program); `List.of`'s iterator's `remove()` before `next()` is `IllegalStateException`
+  (an iterator class of its own); `Set.of` and `Map.of` answer a null asked for (some 300 B
+  in a program asking them) and `Map.of`'s views refuse a change that changes nothing
+  (`AbstractMap`'s views were 500 B); `Arrays.asList` refuses a removal with no message, a
+  JDK's says `remove` (its own iterator was 0.9 to 1.4 KB);
+  `List.of()`, `Set.of()`, `Map.of()` are new objects; an `AbstractList` iterator past its
+  end has no cause (a `catch` would be in every program walking such a list); a map's
+  views are new at each call, so `m.values().equals(m.values())` is `false` (a field a
+  view in every `HashMap` is some 275 B each).
+- **A sort and a `TreeMap` ask their comparator about other pairs than a JDK's**
+  (`SortCalls.java`; `deviations.md`): `Arrays.sortObjects` is a merge sort of our own; a
+  JDK's call sequence is its documented adaptive merge sort's. Matching it is writing that
+  sort from its published description and comparing call sequences on seeded runs.
+- **A bridge's cast is made in a dispatcher's arms only**: a call going straight to its one
+  body and a lambda take a value of another class unchecked (`deviations.md`). A dispatcher
+  made for the one body was 2.6 KB in a program putting into an `EnumMap` through `Map`.
 - **A `ConcurrentSkipListMap`'s iterator reads the key above the one it gave**, where a
   JDK's follows a removed node's link (`deviations.md`): the tree would keep a removed
-  node's successor, and the skip list reaches the tree only through public members, its
-  views being views of a `TreeMap` from another package.
-- **The immutable lists of `Collections` refuse a change that changes nothing**
-  (`deviations.md`, k55): `emptyList`, `singletonList` and `nCopies` are
-  `ImmutableCollections.ListN`, as `List.of`'s lists are, where a JDK's are lists of
-  `AbstractList` (`singletonList(1).remove(Integer.valueOf(3))` is `false`,
-  `emptyList().clear()` and `sort` do nothing, `retainAll` of what they hold is `false`;
-  `SeqList.java` of the k55 probes). `ListN` would have to tell the two kinds apart with no
-  cost to a program of `List.of` (k55 measured a bit of the `how` field: `(LOGIOR 4 ..)` in
-  every `List.of`, 100 B of wasm).
-- **What k55's probes found and left** (each `deviations.md` or below): the reversed view of
-  a `CopyOnWriteArrayList` checks an index against itself, where a JDK's hands the list the
-  index of the other end; that of `Stream.toList()` checks an index before it refuses (the
-  list is `Collections.unmodifiableList` over an `ArrayList`: `rontolisp.internal.ObjectFlow`
-  cannot make a `ListN`, a class of `java.util`); `Arrays.asList(..).removeIf` refuses with no
-  message, a JDK's says `remove` (the list walks with `AbstractList`'s iterator); a map's
-  `values()` is a new view at each call, so `m.values().equals(m.values())` is `false` here
-  (a collection of values is equal only to itself).
+  node's successor, and the skip list reaches the tree only through public members.
+- **`PriorityQueue` is 2.5 us an operation on wasm** (`Bench.java`: 1,000,000 adds and
+  polls 5.0 s, the JVM class 3.7 s, a JDK 0.57 s): two dispatched `compareTo` a level of a
+  sink. Where the time goes was not looked at.
 - **`clone()` of the maps and sets** is `.todo/k16`'s.
-- **A box compared with another class through a raw `Comparable`** (met by k47's probe of a
-  raw `TreeMap`): `Integer.compareTo` of a `String` fails with the run time's words in a
-  `RuntimeException`, where a JDK's bridge method throws `ClassCastException`. The arm of an
-  intrinsic class in a dispatcher passes the argument unchecked (`JavaLowering`, the
-  intrinsic arms); a cast there is a test an arm in every program comparing through
-  `Comparable` (`Collections.sort`, a `TreeMap` of its own order). Not measured.
 
 ## The streams (each runs; `doc/*/java/deviations.md` states them)
 
@@ -84,7 +92,7 @@ case.
   needs the stages to split, which a closure answering the next element does not; a JDK's
   parallel `sorted().skip(n).count()` runs its stages where a sequential one does not, the
   one line of the count grid that differs. `trySplit` answers `null` everywhere (a JDK's
-  `Random.ints()` and `AbstractIntSpliterator` split).
+  `Random.ints()`, `AbstractIntSpliterator` and `PriorityQueue`'s split).
 - A collector's `finisher` is always called and the marks of a collector of the program's
   own class are not read by the collectors wrapping it (`Collected.marks`).
 - `unordered()` of a source in no order is a new stream here and the stream itself under a
@@ -174,7 +182,6 @@ case.
 - **`java.util.regex`**: `Matcher.usePattern`, `namedGroups`; `\N{name}` (no name table is
   shipped) and a class under `CANON_EQ`. Two differences from JDK 25 the random searches found
   (`.kb/regex-engine.md`, "Deviations").
-- **`Readable`**: its one method reads into a `CharBuffer`; it comes with `Scanner`.
 - **A locale that is not English** needs the number symbols of its language; `Locale` has no
   constructor.
 - **`System.in` on wasm** reads a bulk read to the line's end because `listen` of the standard
@@ -186,7 +193,9 @@ case.
   `toTitleCase` / `codePointCount`; `Runtime.totalMemory` / `freeMemory` / `maxMemory`;
   `System.getenv()` of every variable; a `StringBuilder` as a `Comparable`; the charsets'
   `aliases()`, `UTF-32` and the other names a JDK has; `Random.nextGaussian(mean, stddev)` and
-  `nextExponential`, which a JDK draws by an algorithm of its own (k47's `Rand.java`).
+  `nextExponential`, which a JDK draws by an algorithm of its own (k47's `Rand.java`);
+  `Collections.EMPTY_LIST`, `EMPTY_SET`, `EMPTY_MAP` (a static field of `Collections` would
+  make its collection in every program naming `Collections`).
 - **What a format does not refuse**: the exceptions a JDK throws for a flag or a precision a
   conversion does not take (`%#h`, `%,x`, `%,e`: `FormatFlagsConversionMismatchException`;
   `%.2d`: `IllegalFormatPrecisionException`; k26's `Fmt.java`), written as if the flag were
@@ -203,11 +212,3 @@ case.
   address in brackets, and `hashCode`'s number; a time limit in a component that serves, on a
   reactor and in the playground (`.todo/148`); a `sendAsync` whose time limit passes has no
   corpus line. The corpus is `java-http-spec.yaml` (`FetchSpecE2eTest#javaHttpClient`).
-
-## After the first target (from j71)
-
-The rest of `Formatter`, `PriorityQueue`, `Scanner`, `StringTokenizer`, `StringJoiner`,
-`BitSet`, files, `java.text`, `java.nio` buffers, `Class` beyond what is there, reflection,
-weak references, `Thread` and the concurrent classes (`.todo/k21`). Of `java.math` (k31): the
-primes (`isProbablePrime`, `nextProbablePrime`, `probablePrime`, the constructors of random
-bits), refused by name.
