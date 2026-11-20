@@ -174,7 +174,7 @@ checked exception, and a line that differs from a JDK by decision can be in no c
   points.
 - **`Duration.dividedBy`** (a long by a long of nanoseconds needs 128 bits: `multipliedBy`
   shows the digits-of-a-thousand-million way), `CompletableFuture.orTimeout` /
-  `completeOnTimeout`, the older `Calendar`. What is left of `java.time` is `.todo/k70`'s.
+  `completeOnTimeout`, the older `Calendar`. What is left of `java.time` is `.todo/k77` .. `k80`.
 - **`"ß".toUpperCase()` is `ß`**; a JDK answers `SS` (the host's upcase is one character to
   one).
 - **`java.util.regex`**: `Matcher.usePattern`, `namedGroups`; `\N{name}` (no name table is
@@ -187,7 +187,7 @@ checked exception, and a line that differs from a JDK by decision can be in no c
   preview 1, a pollable on the component) would make the two variants of `%java-input-more`
   one.
 - **Members met and left refused** (each refused by name; add where one is met):
-  `String.describeConstable`; `Runtime.totalMemory` / `freeMemory` / `maxMemory`;
+  `Runtime.totalMemory` / `freeMemory` / `maxMemory`;
   `System.getenv()` of every variable; a `StringBuilder` as a `Comparable`; the charsets'
   `aliases()`, `UTF-32` and the other names a JDK has; `Random.nextGaussian(mean, stddev)` and
   `nextExponential`, which a JDK draws by an algorithm of its own (k47's `Rand.java`);
