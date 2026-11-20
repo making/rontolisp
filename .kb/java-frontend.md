@@ -2882,7 +2882,8 @@ it reaches the member that makes it.** Provenance:
   formatter, behind which only the lenient week rule is so far (`.todo/k79`) -- and
   `Patterns.localizedOffsets()` by the letters `O` and `Z` (`GmtOffset`, 3.7 KB, was in every
   program of a pattern).
-- **What a program pays** (wasm, base `358f6b493` -> after): `LocalDate.parse` of a text,
+- **What a program pays** (wasm, base `358f6b493` -> the k70 commit `ca6c72ecb`, before
+  merging k64's arrays, which made the grid 75 KB smaller): `LocalDate.parse` of a text,
   `ZonedDateTime` in UTC and in Tokyo, `plusDays` the same bytes; a date written by a pattern
   306,048 -> 304,922, read 403,287 -> 402,498; a pattern computed where the program runs,
   written and read, 508,946 -> 512,488; `ISO_LOCAL_DATE_TIME.format` 270,570 -> 271,385,

@@ -36,7 +36,8 @@ holds each locale, not its size (a JDK's has 1,158).
 
 ## Sizes (wasm)
 
-Before (`358f6b493`) and after, one statement in `main`:
+Before (`358f6b493`) and after (`ca6c72ecb`, before merging k64, whose arrays made the grid
+1,009,815 B), one statement in `main`:
 
 | Program | Before | After |
 |---|---|---|

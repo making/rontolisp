@@ -4,10 +4,11 @@ Difficulty: Medium
 
 **Read `.kb/java-frontend.md`, "java.time: what k57 left", "What a program pays" first.**
 
-The sizes on 2026-11-21 (wasm, after k70; the base `358f6b493` in brackets): a date written
-by a pattern 304,922 (306,048), read 402,498 (403,287); a pattern computed where the program
-runs, written and read 512,488 (508,946); k43's `yavi/Event.java` 994,489 (989,578), whose
-`localDate(pattern)` passes its pattern on and so names every letter. Leads, each to measure:
+The sizes on 2026-11-21 (wasm, at k70's `ca6c72ecb`, before merging k64's arrays; the base
+`358f6b493` in brackets): a date written by a pattern 304,922 (306,048), read 402,498
+(403,287); a pattern computed where the program runs, written and read 512,488 (508,946);
+k43's `yavi/Event.java` 994,489 (989,578), whose `localDate(pattern)` passes its pattern on
+and so names every letter. Leads, each to measure:
 
 - **A constant passed on to `ofPattern`**: a parameter every call of whose method passes a
   constant names those constants' letters alone (YAVI's `localDate(pattern)`); today it is
