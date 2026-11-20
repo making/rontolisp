@@ -23,3 +23,9 @@ request's sources: `.kb/java-frontend.md`, "YAVI compiled to wasm".
   reaches more because YAVI's reader names every type: rewrite or drop that sentence.
 - **Verify**: `ExamplesE2eTest` with `-Drontolisp.examples.only=java/yavi/` (the four
   backends) and the expected files unchanged; `PathCitationTest`.
+- **Then, `java.time`** (left by k51): a zoned text a file of the program parses brings
+  the regions it names, or all of them, where a library of the source path brings none,
+  since YAVI 0.18.0 reaches `ZonedDateTime::parse` in every schema
+  (`.kb/java-frontend.md`, "java.time: the regions", "Who pays"). Measure whether the
+  release still reaches it (`Booking`'s `--dump-ir` holding no `ZoneChanges`); where it
+  does not, decide whether a dependency's parse brings regions too, and say so there.

@@ -1776,13 +1776,24 @@ has nothing of what a region needs -- the forms it had before.** Provenance:
   the names sets `everyRegion`, any other constant (`"UTC"`, `"+09:00"`, a name no
   database has) notes nothing. A call written in the front end's own library notes
   nothing either. The first of each lowers the program again (`changed()`); a session
-  carries both (`Session.regions`: a zone lives on in a variable). **A zoned text and the
-  host's zone read what the program holds and bring nothing** (`ZonedDateTime.parse`,
-  `ZoneId.systemDefault`): YAVI 0.18.0 reaches `ZonedDateTime::parse` in every schema
-  through its table of types, and `LocalDate.now()` reaches `systemDefault`; had either
-  brought the table, `Booking` and every program telling the date would have grown by
-  it. A program that reads zoned texts and names no zone holds all regions by one call of
-  `ZoneId.getAvailableZoneIds()` (`doc/*/java/deviations.md`).
+  carries both (`Session.regions`: a zone lives on in a variable). The other natives that
+  name a zone note the same way (k51): `ZoneRulesProvider.getRules` / `getVersions` as
+  `ZoneId.of`, its `getAvailableZoneIds` as `ZoneId`'s; `ZoneId.of(id, map)` the region
+  `ZoneId.SHORT_IDS` gives a constant where the map is that field (`JavaIntrinsics.reads`:
+  its variable, after its class's initialization), every region for any other map.
+- **A zoned text the program's own files parse brings what it names** (k51,
+  `JavaLowering.readsZones`): `ZonedDateTime.parse` of a constant text the regions whose
+  names occur in it (`JavaZones.within`; `"...+02:00"` none), of a text computed where
+  the program runs every region. **A library of the source path brings none**
+  (`Origin.DEPENDENCY`, as the front end's own): YAVI 0.18.0 reaches
+  `ZonedDateTime::parse` in every schema through its table of types, where `Booking`
+  parses nothing, and would grow by the whole table (`.todo/k50` measures the release
+  without that reach). **The host's zone brings nothing**: `LocalDate.now()` reaches
+  `systemDefault`. **No option of the compile holds regions** (decided k51): the source
+  says it already -- a constant `ZoneId.of` per region, one `ZoneId.getAvailableZoneIds()`
+  for all -- the same way on the CLI, the Maven plugin, the playground and a session,
+  where an option would be one more input to four embedders and the same text would
+  compile to two behaviours.
 - **`ZoneId.regional()` is a question answered while lowering**
   (`JavaIntrinsics.answered`, `JavaLowering.answered`): where it is the whole condition of
   an `if` statement or of a conditional expression in the library's own source, only the
@@ -1808,7 +1819,10 @@ has nothing of what a region needs -- the forms it had before.** Provenance:
   JDK 25.0.5 answers tz database 2026e: 562 names beside the 42 computed ones (the seven
   fixed names of `SystemV/` are in the table), 329 sets of rules. A line of the file is the
   names sharing a set, then the set's text; `tzdb` names the version
-  (`ZoneRulesProvider.getVersions`). **A JDK with a newer tz database fails the test**,
+  (`ZoneRulesProvider.getVersions`), `short` the pairs of `ZoneId.SHORT_IDS` (read by
+  `JavaZones` for the noting, and by the library as `ZoneId.short0()` where a program
+  reads the field: JDK 25 maps `EST` to `America/Panama`, `MST` and `HST` to regions too,
+  where the documentation of JDK 8 had offsets). **A JDK with a newer tz database fails the test**,
   which writes `target/zone-rules.txt` to copy over the shipped file; an older one is
   skipped, saying so (a JDK update moves the tz database inside one feature release,
   where it does not move Unicode).
@@ -1827,14 +1841,24 @@ has nothing of what a region needs -- the forms it had before.** Provenance:
   year as a bit, what ships, 40,825 B. Not taken: sharing the tail of a set with another
   (a sixth of the changes saved); a dictionary of rules across sets (about half of the
   runs' rules are distinct: the references cost what it saves); a general compressor over
-  the sets --
-  gzip makes some 15 KB of them, so about 25 KB is there for a program holding all, at the
-  price of a table no longer cut by name (`.todo/k51`).
+  the sets (gzip makes some 15 KB of them). **Copies of an earlier set's runs** (k51,
+  measured over the shipped table, a run equal in its years, rule and three offsets):
+  415 copies of five characters save 11,492 B of the 35,456 the runs are, only in a
+  program holding all; a reader following them (find the set, skip its head, read its
+  runs into this set's offsets) is 8,629 B of wasm, paid by every program holding a
+  region, and `JavaZones.table` would have to resolve a copy whose set is not held. Not
+  taken; measured again after `.todo/k56`.
 - **A program's table** (`JavaZones.table`, the constant `ZoneChanges.table0()` is) holds
   the regions it holds: the areas its names are shortened by (`America/`: a name up to
   its last slash, written as one character from `#`; an area is named where that saves
   more than it costs), then for each set the names that have it and its text. All of them
   46,661 B; `Asia/Tokyo` alone 57, `Europe/Paris` 328, Paris and New York 475.
+- **Not taken: a region as arrays the compiler writes** (k51), to spare a program naming
+  its regions the reader: Paris's 102 listed changes as three `long[]` literals are
+  38,732 B of wasm (each second past an `i31` a boxed literal) against its 328 B of text,
+  so the reader (17.9 KB) is the cheaper half from the first region on. What the reader
+  costs is the arithmetic's: some 200 B of wasm per `int` or `long` operation
+  (`.todo/k56`).
 - **The rules in the library**: `ZoneChanges` (under `ZoneRules`, which stays the rules
   of one offset: a program making none has `ZoneRules` as it was) holds the seconds of
   the changes with the clock's and the standard offset after each, and the yearly rules
@@ -1861,10 +1885,31 @@ has nothing of what a region needs -- the forms it had before.** Provenance:
   region says how it is written; `LocalDate.atStartOfDay(zone)` of a day whose midnight
   the zone skips is where the gap ends, not midnight moved by its length (Toronto
   1919-03-31 is `00:30`: the one line the first walk differed in).
-- **`ZoneId.systemDefault()`** is the region `TZ` names where the program holds it (the
-  four backends under `TZ=Asia/Tokyo`; wasmtime with `--env`), the host's offset now
-  otherwise. A JDK reads the host's zone file; this reads the name alone.
-- **What a program pays** (wasm, `ZonedDateTime.of(.., ZoneId.of(..)).plusHours(1)`):
+- **`ZoneId.systemDefault()`** in a program holding a region is the zone the host names
+  where the program knows it (a region it holds, or a fixed name such as `Etc/UTC`), the
+  host's offset now otherwise. The name, as JDK 25.0.5 answered on Linux: `TZ` with a
+  leading colon dropped; where `TZ` is unset or empty, the path the link `/etc/localtime`
+  holds after `zoneinfo/` (`ZoneId.hostZone`, through `%read-link`, so a `.wasm` reads it
+  where `/etc` is granted). A JDK answers `GMT+09:00` for `TZ=JST-9` and `GMT` for a name
+  it lacks; here the offset now. Pinned by `LocalTimeZoneTest` (`TZ=:<zone>` on the four
+  backends, an `/etc` of the test's on the two wasm legs).
+- **Five years of yearly rules are kept** (k51): `ZoneChanges.ruled` made a `LocalDate`
+  and six `Yearly.at` for each question past the last change; it now keeps the changes of
+  five years about the one the second's seconds divided by an average Gregorian year
+  (31,556,952) give -- that number is the second's year or one beside it (the calendar is
+  never more than 1.2 days off the average, measured over a 400-year cycle), so the
+  window holds the year before and after -- until a question leaves it. Measured (Paris,
+  best of five, wasm / JVM / JDK in ns): `ZonedDateTime.of(local, zone)` in 2026
+  5,286 -> 2,214 / 1,367 -> 724 / 282; `ZoneRules.getOffset(Instant)` 3,572 -> 1,089 /
+  1,654 -> 437 / 81; `ZonedDateTime.now(zone)` about 6,000 -> 1,800 / about 1,200 -> 600 /
+  233; `now(zone).toString()` 8,361 -> 6,687 / 5,659 -> 4,858 / 614. The walk: JVM 15 ->
+  14 s, wasm 29 -> 26 s, the interpreter 5.9 -> 5.7 min: the rest is its lines' strings.
+  The bytes: a program holding a region +6.7 KB of wasm (`ruled` 3,546 -> 7,528,
+  `placed` 5,426 -> 7,699 from the same forms), the arithmetic's again (`.todo/k56`); a
+  window of one year with its bounds made by `LocalDate` was +8.9 KB, an index computed
+  per element instead of two loops +9.7.
+- **What a program pays** (wasm, `ZonedDateTime.of(.., ZoneId.of(..)).plusHours(1)`;
+  k42's numbers, before the kept years' 6.7 KB):
   `"UTC"` 139,793 B before and after; `"Asia/Tokyo"` 190,054 (+50,261: `ZoneChanges`
   30.8 KB -- reading the table 18 KB of it, `placed` 5.8, the yearly rules 3.8 --,
   `Yearly` 4.0, the static initialization 4.2, `LocalDateTime` 3.6); `"Europe/Paris"`
@@ -1889,13 +1934,17 @@ has nothing of what a region needs -- the forms it had before.** Provenance:
   fails and writes `target/zone-rules.txt`; copy it over the shipped file, run the test
   again, then `-Dtest=JavaSpecE2eTest` (the region case's lines are the JDK's own) and
   the walk on the four backends.
-- Not there: `ZoneRulesProvider`, `ZoneId.SHORT_IDS` and `ZoneId.of(String, Map)`, a way
-  to hold every region without a call in the source (`.todo/k51`).
+- **`ZoneRulesProvider`** (k51) is the provider of the table the program was compiled
+  with: `getRules` of a name of the tz database (not `UT`, no offset alone or after a
+  prefix: a JDK's `ZoneRulesException`), `getVersions` a new `TreeMap` of the table's
+  version, `getAvailableZoneIds` the names unmodifiable, `refresh` false.
+  `registerProvider` and a provider's own methods are not there.
 - Pins: `JavaZoneRulesTest` (the shipped table is the JDK's; a program's table holds what
-  it names; a program naming none has no form of `ZoneChanges`; a session goes on
-  holding); java-spec `a-program-holds-the-regions-of-the-tz-database-it-names` (a file
-  of its own, 101 lines: the corpus's one program holds no region, which is what its
-  `dates-times-and-instants` case runs as).
+  it names -- by `ZoneId.of`, a short name, the provider, a zoned text -- and a library of
+  the source path's parse nothing; a program naming none has no form of `ZoneChanges`; a
+  session goes on holding); java-spec `a-program-holds-the-regions-of-the-tz-database-it-names`
+  (a file of its own, 108 lines: the corpus's one program holds no region, which is what
+  its `dates-times-and-instants` case runs as); `LocalTimeZoneTest` (the host's zone).
 
 ## java.time: the formatter (2026-11-20, k43)
 

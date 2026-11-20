@@ -3467,6 +3467,18 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	@Override
+	public void readsZones(@Nullable String text) {
+		if (this.unit.source().partial()) {
+			return;
+		}
+		if (text == null) {
+			namesZone(null);
+			return;
+		}
+		JavaZones.shipped().within(text).forEach(this::namesZone);
+	}
+
+	@Override
 	public boolean holdsRegions() {
 		return this.classes.everyRegion || !this.classes.regions.isEmpty();
 	}

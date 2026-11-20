@@ -19,12 +19,38 @@ import java.time.temporal.TemporalAccessor;
 import java.time.temporal.TemporalQueries;
 import java.time.zone.ZoneRules;
 import java.time.zone.ZoneRulesException;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 public abstract class ZoneId implements Serializable {
 
+    /** The short names a JDK gives zones, made only in a program that reads them. */
+    public static final Map<String, String> SHORT_IDS = wanted() ? shortIds() : null;
+
     ZoneId() {
+    }
+
+    /** Whether a constant of the class is read: answered by the compiler. */
+    private static native boolean wanted();
+
+    /** The short names and their zones, each name=zone, separated by spaces. */
+    private static native String short0();
+
+    private static Map<String, String> shortIds() {
+        String text = short0();
+        Map<String, String> ids = new HashMap<>();
+        for (int at = 0; at < text.length();) {
+            int equals = text.indexOf('=', at);
+            int end = text.indexOf(' ', equals);
+            end = end < 0 ? text.length() : end;
+            ids.put(text.substring(at, equals), text.substring(equals + 1, end));
+            at = end + 1;
+        }
+        return Map.copyOf(ids);
     }
 
     /** The offset the host's clock has now: the one zone the run time can tell. */
@@ -36,11 +62,31 @@ public abstract class ZoneId implements Serializable {
      */
     static native boolean regional();
 
+    /** The target a symbolic link of the host holds, or null. */
+    private static native String link0(String path);
+
+    /**
+     * The name of the host's zone, or null: TZ without a leading colon, or where that is
+     * unset or empty the file of the zone database the link /etc/localtime leads to.
+     */
+    private static String hostZone() {
+        String named = System.getenv("TZ");
+        if (named != null && named.startsWith(":")) {
+            named = named.substring(1);
+        }
+        if (named == null || named.isEmpty()) {
+            String link = link0("/etc/localtime");
+            int at = link == null ? -1 : link.indexOf("zoneinfo/");
+            named = at < 0 ? null : link.substring(at + 9);
+        }
+        return named;
+    }
+
     public static ZoneId systemDefault() {
         if (regional()) {
-            // the region the host names, where the program holds it
-            String named = System.getenv("TZ");
-            ZoneId region = named == null ? null : held(named);
+            // the zone the host names, where the program knows it
+            String named = hostZone();
+            ZoneId region = named == null ? null : region(named);
             if (region != null) {
                 return region;
             }
@@ -113,8 +159,39 @@ public abstract class ZoneId implements Serializable {
     /** A program naming a zone holds it: the compiler notes the name, then this is called. */
     public static native ZoneId of(String zoneId);
 
+    /**
+     * A zone by its name or the one a map gives it: the compiler notes the name the map
+     * gives a constant where the map is SHORT_IDS, every region otherwise.
+     */
+    public static native ZoneId of(String zoneId, Map<String, String> aliasMap);
+
+    static ZoneId aliased(String zoneId, Map<String, String> aliasMap) {
+        Objects.requireNonNull(zoneId, "zoneId");
+        Objects.requireNonNull(aliasMap, "aliasMap");
+        String alias = aliasMap.get(zoneId);
+        return ofId(alias != null ? alias : zoneId);
+    }
+
     /** The names of the zones, which only a program holding every region can ask for. */
     public static native Set<String> getAvailableZoneIds();
+
+    /** The names ZoneRulesProvider has: those of the zones, not to be changed. */
+    static Set<String> providedIds() {
+        return Collections.unmodifiableSet(ids());
+    }
+
+    /**
+     * The rules of a name of the tz database, as ZoneRulesProvider gives them: no offset,
+     * alone or after a prefix, and not UT, is such a name.
+     */
+    static ZoneRules provided(String zoneId, boolean forCaching) {
+        Objects.requireNonNull(zoneId, "zoneId");
+        ZoneId zone = zoneId.equals("UT") || prefixed(zoneId) > 0 ? null : region(zoneId);
+        if (zone == null) {
+            throw new ZoneRulesException("Unknown time-zone ID: " + zoneId);
+        }
+        return zone.getRules();
+    }
 
     static Set<String> ids() {
         Set<String> ids = new HashSet<>();

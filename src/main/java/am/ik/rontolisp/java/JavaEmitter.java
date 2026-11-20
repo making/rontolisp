@@ -134,6 +134,14 @@ interface JavaEmitter {
 		 */
 		void namesZone(@Nullable String name);
 
+		/**
+		 * Notes that the program reads a zoned text where this is called: the regions a
+		 * constant text names are ones it holds, and a text it computes where it runs
+		 * ({@code null} here) makes it hold them all. Only a file of the program reads a
+		 * zone so: a library of its source path may reach a parse it never makes.
+		 */
+		void readsZones(@Nullable String text);
+
 		/** Whether the program holds a region of the tz database. */
 		boolean holdsRegions();
 

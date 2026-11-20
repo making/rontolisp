@@ -22,6 +22,7 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 
 import am.ik.rontolisp.LispVal;
+import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -298,6 +299,12 @@ class JavaZoneRulesTest {
 		return ZoneRulesProvider.getVersions("UTC").lastKey();
 	}
 
+	private static String shortIds() {
+		List<String> pairs = new ArrayList<>();
+		new TreeMap<>(ZoneId.SHORT_IDS).forEach((name, zone) -> pairs.add(name + "=" + zone));
+		return String.join(" ", pairs);
+	}
+
 	/** The generated file: a line for each set of rules, the names that have it first. */
 	static String text() {
 		Map<String, List<String>> sets = new TreeMap<>();
@@ -324,6 +331,7 @@ class JavaZoneRulesTest {
 				+ "# (.kb/java-frontend.md, \"java.time: the regions\").\n"
 				+ "# Third-party: the tz database, which is in the public domain.\n"
 				+ "# Notice: THIRD-PARTY-NOTICES.txt, \"tz database\".\n" + "tzdb " + version() + "\n"
+				+ "# The short names ZoneId.SHORT_IDS maps to zones.\n" + "short " + shortIds() + "\n"
 				+ String.join("\n", lines) + "\n";
 	}
 
@@ -368,23 +376,36 @@ class JavaZoneRulesTest {
 		String all = zones.table(null);
 		assertThat(all).contains("Japan!").hasSizeLessThan(48_000);
 		assertThat(all.chars()).allMatch(c -> c >= ' ' && c <= '~' && c != '"' && c != '\\');
-		// A program that names no region holds none, though it reads a zoned text; a
-		// constant brings its region alone, a name computed where the program runs all.
+		// A program that names no region holds none, though it reads a zoned text with an
+		// offset alone; a constant brings its region alone, a name computed where the
+		// program runs all. A short name of SHORT_IDS brings the region it stands for, a
+		// zoned text the regions it names, and so does a name the provider is asked for.
 		String program = """
 				import java.time.*;
 				class Z {
 				    public static void main(String[] args) {
-				        System.out.println(ZonedDateTime.parse(args[0]).plusHours(1) + " " + %s);
+				        System.out.println(ZonedDateTime.parse("2026-07-01T10:15+02:00").plusHours(1) + " " + %s);
 				    }
 				}
 				""";
-		assertThat(lower(program.formatted("ZoneId.of(\"UTC\")")))
-			.noneMatch(form -> form.contains("java.time.Tz") || form.contains("java.time.zone.ZoneChanges"));
-		assertThat(lower(program.formatted("ZoneId.of(\"Asia/Tokyo\")")))
-			.anyMatch(form -> form.contains("\" Asia/Tokyo!"))
-			.anyMatch(form -> form.contains("|java.time.zone.ZoneChanges.find(String)|"))
-			.noneMatch(form -> form.contains("Paris!"));
-		assertThat(lower(program.formatted("ZoneId.of(args[1])"))).anyMatch(form -> form.contains("Paris!"));
+		for (String none : List.of("ZoneId.of(\"UTC\")", "lib.Reader.read(args[0])")) {
+			assertThat(lower(program.formatted(none)))
+				.noneMatch(form -> form.contains("java.time.Tz") || form.contains("java.time.zone.ZoneChanges"));
+		}
+		for (String tokyo : List.of("ZoneId.of(\"Asia/Tokyo\")", "ZoneId.of(\"JST\", ZoneId.SHORT_IDS)",
+				"java.time.zone.ZoneRulesProvider.getRules(\"Asia/Tokyo\", false)",
+				"ZonedDateTime.parse(\"2026-07-01T10:15+09:00[Asia/Tokyo]\")")) {
+			assertThat(lower(program.formatted(tokyo))).as(tokyo)
+				.anyMatch(form -> form.contains("\" Asia/Tokyo!"))
+				.anyMatch(form -> form.contains("|java.time.zone.ZoneChanges.find(String)|"))
+				.noneMatch(form -> form.contains("Paris!"));
+		}
+		// A library of the source path reaches a parse it may never make (YAVI's table of
+		// types): only the program's own files bring regions by reading zoned texts.
+		for (String all : List.of("ZoneId.of(args[1])", "ZoneId.of(\"JST\", java.util.Map.of())",
+				"ZonedDateTime.parse(args[1])")) {
+			assertThat(lower(program.formatted(all))).as(all).anyMatch(form -> form.contains("Paris!"));
+		}
 		// A session goes on holding what a buffer named: the zone lives on in a variable.
 		JavaSession session = new JavaSession(JavaFiles.NONE);
 		session.read("var tokyo = java.time.ZoneId.of(\"Asia/Tokyo\");");
@@ -395,7 +416,25 @@ class JavaZoneRulesTest {
 	}
 
 	private static List<String> lower(String source) {
-		return Java.read(source, "Z.java", JavaFiles.NONE).stream().map(LispVal::print).toList();
+		JavaFiles files = new JavaFiles() {
+			@Override
+			public JavaFiles.@Nullable Source find(String from, String path) {
+				return null;
+			}
+
+			@Override
+			public JavaFiles.@Nullable Source library(String path) {
+				return path.equals("lib/Reader.java") ? new JavaFiles.Source("lib.jar!/" + path, """
+						package lib;
+						public class Reader {
+						    public static Object read(String text) {
+						        return java.time.ZonedDateTime.parse(text);
+						    }
+						}
+						""") : null;
+			}
+		};
+		return Java.read(source, "Z.java", files).stream().map(LispVal::print).toList();
 	}
 
 }

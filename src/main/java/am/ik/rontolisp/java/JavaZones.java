@@ -54,9 +54,13 @@ final class JavaZones {
 	/** The rules of each name, as their text. */
 	private final Map<String, String> rules;
 
-	private JavaZones(String version, Map<String, String> rules) {
+	/** The zones {@code ZoneId.SHORT_IDS} maps its short names to. */
+	private final Map<String, String> shortIds;
+
+	private JavaZones(String version, Map<String, String> rules, Map<String, String> shortIds) {
 		this.version = version;
 		this.rules = rules;
+		this.shortIds = shortIds;
 	}
 
 	/** The table the jar ships. */
@@ -79,12 +83,14 @@ final class JavaZones {
 	}
 
 	/**
-	 * Reads the file: comment lines, the version of the tz database, then a line for each
-	 * set of rules -- the names that have it and its text, separated by spaces.
+	 * Reads the file: comment lines, the version of the tz database, the short names of
+	 * {@code ZoneId.SHORT_IDS} (each {@code name=zone}), then a line for each set of
+	 * rules -- the names that have it and its text, separated by spaces.
 	 */
 	static JavaZones parse(String text) {
 		String version = "";
 		Map<String, String> rules = new TreeMap<>();
+		Map<String, String> shortIds = new TreeMap<>();
 		for (String line : text.split("\n")) {
 			if (line.isEmpty() || line.startsWith("# ")) {
 				continue;
@@ -94,11 +100,18 @@ final class JavaZones {
 				version = words[1];
 				continue;
 			}
+			if (words[0].equals("short")) {
+				for (int i = 1; i < words.length; i++) {
+					int equals = words[i].indexOf('=');
+					shortIds.put(words[i].substring(0, equals), words[i].substring(equals + 1));
+				}
+				continue;
+			}
 			for (int i = 0; i < words.length - 1; i++) {
 				rules.put(words[i], words[words.length - 1]);
 			}
 		}
-		return new JavaZones(version, rules);
+		return new JavaZones(version, rules, shortIds);
 	}
 
 	/** The version of the tz database the table was made of. */
@@ -106,9 +119,37 @@ final class JavaZones {
 		return this.version;
 	}
 
+	/** The short names of {@code ZoneId.SHORT_IDS} and the zones they stand for. */
+	Map<String, String> shortIds() {
+		return this.shortIds;
+	}
+
+	/**
+	 * The short names as the library reads them: {@code name=zone}, separated by spaces.
+	 */
+	String shortIdsText() {
+		StringBuilder text = new StringBuilder();
+		this.shortIds
+			.forEach((name, zone) -> text.append(text.isEmpty() ? "" : " ").append(name).append('=').append(zone));
+		return text.toString();
+	}
+
 	/** Whether a name is a region of the table. */
 	boolean has(String name) {
 		return this.rules.containsKey(name);
+	}
+
+	/** The regions of the table a text names, anywhere in it. */
+	Set<String> within(String text) {
+		Set<String> named = new TreeSet<>();
+		for (int at = 0; at < text.length(); at++) {
+			for (String name : this.rules.keySet()) {
+				if (text.startsWith(name, at)) {
+					named.add(name);
+				}
+			}
+		}
+		return named;
 	}
 
 	Set<String> names() {

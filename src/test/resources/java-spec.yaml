@@ -16531,13 +16531,17 @@ standalone:
               }
               System.out.println(until + " " + eve.plusHours(1).until(next, ChronoUnit.DAYS) + " "
                       + Duration.between(eve, next) + " " + ChronoUnit.HOURS.between(eve, next.withZoneSameInstant(ZoneOffset.UTC)));
-              // a text: the offset places the instant, the region says how it is written
-              for (String text : new String[] {"2026-07-01T10:15+02:00[Europe/Paris]", "2026-07-01T10:15+01:00[Europe/Paris]",
-                      "2026-10-25T02:30+01:00[Europe/Paris]", "2026-10-25T02:30+02:00[Europe/Paris]",
-                      "2026-03-29T02:30+01:00[Europe/Paris]", "2026-11-01T01:30-05:00[America/New_York]",
-                      "2026-07-01T10:15Z[Asia/Tokyo]", "2026-07-01T10:15+02:00[Europe/Nowhere]"}) {
-                  attempt(text, () -> ZonedDateTime.parse(text));
-              }
+              // a text: the offset places the instant, the region says how it is written; each
+              // a constant, which brings the regions it names (Adelaide is named nowhere else)
+              attempt("2026-07-01T10:15+02:00[Europe/Paris]", () -> ZonedDateTime.parse("2026-07-01T10:15+02:00[Europe/Paris]"));
+              attempt("2026-07-01T10:15+01:00[Europe/Paris]", () -> ZonedDateTime.parse("2026-07-01T10:15+01:00[Europe/Paris]"));
+              attempt("2026-10-25T02:30+01:00[Europe/Paris]", () -> ZonedDateTime.parse("2026-10-25T02:30+01:00[Europe/Paris]"));
+              attempt("2026-10-25T02:30+02:00[Europe/Paris]", () -> ZonedDateTime.parse("2026-10-25T02:30+02:00[Europe/Paris]"));
+              attempt("2026-03-29T02:30+01:00[Europe/Paris]", () -> ZonedDateTime.parse("2026-03-29T02:30+01:00[Europe/Paris]"));
+              attempt("2026-11-01T01:30-05:00[America/New_York]", () -> ZonedDateTime.parse("2026-11-01T01:30-05:00[America/New_York]"));
+              attempt("2026-07-01T10:15Z[Asia/Tokyo]", () -> ZonedDateTime.parse("2026-07-01T10:15Z[Asia/Tokyo]"));
+              attempt("2026-01-15T10:15+10:30[Australia/Adelaide]", () -> ZonedDateTime.parse("2026-01-15T10:15+10:30[Australia/Adelaide]"));
+              attempt("2026-07-01T10:15+02:00[Europe/Nowhere]", () -> ZonedDateTime.parse("2026-07-01T10:15+02:00[Europe/Nowhere]"));
               ZonedDateTime parsed = ZonedDateTime.parse("2026-07-01T10:15+02:00[Europe/Paris]");
               System.out.println(parsed.equals(ZonedDateTime.of(2026, 7, 1, 10, 15, 0, 0, PARIS)) + " "
                       + (parsed.hashCode() == ZonedDateTime.of(2026, 7, 1, 10, 15, 0, 0, PARIS).hashCode()) + " "
@@ -16632,12 +16636,29 @@ standalone:
               attempt("no offset", () -> ZoneRules.of(null, one, List.of(), List.of(), List.of()));
           }
 
+          // a short name of SHORT_IDS brings the region it stands for, a name the provider is
+          // asked for the region of that name
+          static void provided() {
+              System.out.println(new TreeMap<>(ZoneId.SHORT_IDS) + " " + ZoneId.of("ECT", ZoneId.SHORT_IDS) + " "
+                      + ZoneId.of("EST", ZoneId.SHORT_IDS).getRules() + " " + ZoneId.of("+01:00", ZoneId.SHORT_IDS) + " "
+                      + ZoneId.of("Asia/Tokyo", ZoneId.SHORT_IDS));
+              attempt("a short name changed", () -> ZoneId.SHORT_IDS.put("JST", "UTC"));
+              System.out.println(ZoneRulesProvider.getRules("Europe/Paris", false).equals(PARIS.getRules()) + " "
+                      + ZoneRulesProvider.getVersions("Asia/Tokyo").values() + " "
+                      + ZoneRulesProvider.getRules("Etc/GMT+5", true) + " " + ZoneRulesProvider.getRules("GMT0", true) + " "
+                      + ZoneRulesProvider.refresh());
+              attempt("the provider of UT", () -> ZoneRulesProvider.getRules("UT", false));
+              attempt("the provider of an offset", () -> ZoneRulesProvider.getVersions("UTC+01:00"));
+              attempt("the provider of a region not held", () -> ZoneRulesProvider.getRules("Europe/Nowhere", false));
+          }
+
           public static void main(String[] args) {
               zones();
               instants();
               localTimes();
               moves();
               made();
+              provided();
           }
       }
     stdout: |
@@ -16690,6 +16711,7 @@ standalone:
       2026-03-29T02:30+01:00[Europe/Paris]: 2026-03-29T03:30+02:00[Europe/Paris]
       2026-11-01T01:30-05:00[America/New_York]: 2026-11-01T01:30-05:00[America/New_York]
       2026-07-01T10:15Z[Asia/Tokyo]: 2026-07-01T19:15+09:00[Asia/Tokyo]
+      2026-01-15T10:15+10:30[Australia/Adelaide]: 2026-01-15T10:15+10:30[Australia/Adelaide]
       2026-07-01T10:15+02:00[Europe/Nowhere]: java.time.format.DateTimeParseException: Text '2026-07-01T10:15+02:00[Europe/Nowhere]' could not be parsed, unparsed text found at index 22
       true true Europe/Paris +02:00 2026-07-01T08:15:00Z
       Transition[Gap at 2000-06-01T00:00+01:00 to +02:00] true false false
@@ -16742,6 +16764,12 @@ standalone:
       seventeen rules: java.lang.IllegalArgumentException: Too many transition rules
       no list: java.lang.NullPointerException: standardOffsetTransitionList
       no offset: java.lang.NullPointerException: baseStandardOffset
+      {ACT=Australia/Darwin, AET=Australia/Sydney, AGT=America/Argentina/Buenos_Aires, ART=Africa/Cairo, AST=America/Anchorage, BET=America/Sao_Paulo, BST=Asia/Dhaka, CAT=Africa/Harare, CNT=America/St_Johns, CST=America/Chicago, CTT=Asia/Shanghai, EAT=Africa/Addis_Ababa, ECT=Europe/Paris, EST=America/Panama, HST=Pacific/Honolulu, IET=America/Indiana/Indianapolis, IST=Asia/Kolkata, JST=Asia/Tokyo, MIT=Pacific/Apia, MST=America/Phoenix, NET=Asia/Yerevan, NST=Pacific/Auckland, PLT=Asia/Karachi, PNT=America/Phoenix, PRT=America/Puerto_Rico, PST=America/Los_Angeles, SST=Pacific/Guadalcanal, VST=Asia/Ho_Chi_Minh} Europe/Paris ZoneRules[currentStandardOffset=-05:00] +01:00 Asia/Tokyo
+      a short name changed: java.lang.UnsupportedOperationException
+      true [ZoneRules[currentStandardOffset=+09:00]] ZoneRules[currentStandardOffset=-05:00] ZoneRules[currentStandardOffset=Z] false
+      the provider of UT: java.time.zone.ZoneRulesException: Unknown time-zone ID: UT
+      the provider of an offset: java.time.zone.ZoneRulesException: Unknown time-zone ID: UTC+01:00
+      the provider of a region not held: java.time.zone.ZoneRulesException: Unknown time-zone ID: Europe/Nowhere
   # A formatter writes a value through the parts a pattern or a builder names and reads
   # a text back through them, then makes the fields a date and a time in its resolver
   # style: a program of its own, since the corpus above makes no formatter and so takes

@@ -281,23 +281,29 @@ whose offset never changes: an offset (`+09:00`, `Z`), `UTC`, `GMT` or `UT` alon
 offset (`UTC+09:00`), and the fixed zones of the tz database (`Etc/GMT+5`, `Etc/UTC`,
 `Zulu`). A region whose offset changes, such as `Europe/Paris`, is compiled into the program
 with its rules, and only where the program names it. `ZoneId.of("Europe/Paris")`, the name
-a constant, brings that one region; `ZoneId.of` of a name computed where the program runs,
-and `ZoneId.getAvailableZoneIds()`, bring all of them. A region the program does not hold is
-unknown to it: `ZoneId.of` throws a `ZoneRulesException`, and `ZonedDateTime.parse` refuses
-a text that names it in its brackets. So a program that reads zoned texts and names no zone
-holds no region; one call of `ZoneId.getAvailableZoneIds()` anywhere in it makes it hold
-them all. The first region costs a `.wasm` about 50 KB, each further one a few hundred
-bytes, all of them about 48 KB more. The rules are the tz database's as rontolisp was
-built with them, not the host's: a later change of the database reaches a program when a
-later rontolisp compiles it.
+a constant, brings that one region, and so do `ZoneId.of("ECT", ZoneId.SHORT_IDS)` and
+`ZoneRulesProvider.getRules("Europe/Paris", false)`; `ZoneId.of` of a name computed where
+the program runs, `ZoneId.of` with a map of aliases other than `SHORT_IDS`, and
+`getAvailableZoneIds()` bring all of them. `ZonedDateTime.parse` written in the program's
+own files brings the regions a constant text names (`"2026-07-01T10:15+02:00[Europe/Paris]"`
+brings Paris) and all of them for a text computed where the program runs; written in a
+library of its source path, it brings none. A region the program does not hold is unknown
+to it: `ZoneId.of` throws a `ZoneRulesException`, and `ZonedDateTime.parse` refuses a text
+that names it in its brackets. One call of `ZoneId.getAvailableZoneIds()` anywhere in a
+program makes it hold them all. The first region costs a `.wasm` about 57 KB, each further
+one a few hundred bytes, all of them about 48 KB more. The rules are the tz database's as
+rontolisp was built with them, not the host's: a later change of the database reaches a
+program when a later rontolisp compiles it. `ZoneRulesProvider` is the provider of those
+rules alone: `registerProvider` and a provider's own methods are not there.
 
-`ZoneId.systemDefault()` is the region the environment variable `TZ` names where the
-program holds it, and otherwise a `ZoneOffset`, the offset the host's zone has when it is
-called: `LocalDate.now()` is the host's date, and a date in another season is then read at
-today's offset. A `.wasm` learns the host's zone as
+`ZoneId.systemDefault()` in a program that holds a region is the zone the host names where
+the program knows it: the one the environment variable `TZ` names (a leading colon
+dropped), or where `TZ` is unset or empty the one the link `/etc/localtime` leads to, which
+a `.wasm` reads where the host grants it `/etc`. Otherwise it is a `ZoneOffset`, the offset
+the host's zone has when it is called: `LocalDate.now()` is the host's date, and a date in
+another season is then read at today's offset. A `.wasm` learns the host's offset as
 [`decode-universal-time`](../guides/clock-and-random.md) does, and answers UTC where it
-cannot. `ZoneRulesProvider`, `ZoneId.SHORT_IDS` and `ZoneId.of` with a map of aliases are
-not there.
+cannot.
 
 **A `java.util.Date` names its zone by the offset.** `toString` writes `UTC` where the host
 is at UTC and `GMT+09:00` elsewhere, where a JDK writes the zone's abbreviation (`JST`,

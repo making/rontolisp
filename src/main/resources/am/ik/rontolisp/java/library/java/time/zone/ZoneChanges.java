@@ -28,7 +28,6 @@ package java.time.zone;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -36,11 +35,6 @@ import java.util.List;
 import java.util.Set;
 
 final class ZoneChanges extends ZoneRules {
-
-    /** The first and the last day a date has, counted from 1970-01-01. */
-    private static final long FIRST_DAY = -365243219162L;
-
-    private static final long LAST_DAY = 365241780471L;
 
     /** The regions read so far and their names: few, so they are looked through. */
     private static String[] names = new String[4];
@@ -316,9 +310,17 @@ final class ZoneChanges extends ZoneRules {
     }
 
     /**
+     * The changes the yearly rules make in five years, each its second sixteen times and
+     * which rule, after the number of the years since 1970 the middle one is about: kept
+     * from the last asked, since a program asks of one year many times over.
+     */
+    private volatile long[] near;
+
+    /**
      * The change a yearly rule makes that is the last at or before a second, or with
      * next the first after it: its second sixteen times, and which rule; Long.MIN_VALUE
-     * where the rules make none there.
+     * where the rules make none there. Every rule makes a change every year, so the two
+     * are within a year of the second's.
      */
     private long ruled(long second, boolean next) {
         if (yearly.length == 0 || clocked == 0) {
@@ -328,18 +330,31 @@ final class ZoneChanges extends ZoneRules {
         if (!next && second <= edge) {
             return Long.MIN_VALUE;
         }
-        long day = Math.floorDiv(second > edge ? second : edge, 86400L);
-        int year = LocalDate.ofEpochDay(day < FIRST_DAY ? FIRST_DAY : day > LAST_DAY ? LAST_DAY : day).getYear();
+        // years of the calendar's average length are within two days of its own, so this
+        // is the year of the second or one beside it, and two years either side hold the
+        // year before and the year after the second's
+        long about = Math.floorDiv(second > edge ? second : edge, 31556952L);
+        long[] near = this.near;
+        if (near == null || near[0] != about) {
+            near = new long[1 + 5 * yearly.length];
+            near[0] = about;
+            int place = 1;
+            for (int of = (int) about + 1968; of <= (int) about + 1972; of++) {
+                for (int i = 0; i < yearly.length; i++) {
+                    // past the last year a date has, a change before any the rules count
+                    near[place++] = of > 999999999 ? Long.MIN_VALUE : yearly[i].at(of) * 16 + i;
+                }
+            }
+            this.near = near;
+        }
         long found = Long.MIN_VALUE;
-        for (int of = year - 1; of <= year + 1 && of <= 999999999; of++) {
-            for (int i = 0; i < yearly.length; i++) {
-                long changed = yearly[i].at(of);
-                if (changed <= edge || (next ? changed <= second : changed > second)) {
-                    continue;
-                }
-                if (found == Long.MIN_VALUE || (next ? changed < found >> 4 : changed > found >> 4)) {
-                    found = changed * 16 + i;
-                }
+        for (int place = 1; place < near.length; place++) {
+            long changed = near[place] >> 4;
+            if (changed <= edge || (next ? changed <= second : changed > second)) {
+                continue;
+            }
+            if (found == Long.MIN_VALUE || (next ? changed < found >> 4 : changed > found >> 4)) {
+                found = near[place];
             }
         }
         return found;

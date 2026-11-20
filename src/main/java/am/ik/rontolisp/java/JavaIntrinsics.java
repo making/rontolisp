@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import am.ik.rontolisp.LispCons;
 import am.ik.rontolisp.LispDouble;
 import am.ik.rontolisp.LispSymbol;
 import am.ik.rontolisp.LispVal;
@@ -203,6 +204,12 @@ final class JavaIntrinsics {
 
 	private static final String WANTED = "java.time.format.DateTimeFormatter.wanted()";
 
+	private static final String ZONE_WANTED = ZONE_ID + ".wanted()";
+
+	private static final String ZONED = "java.time.ZonedDateTime";
+
+	private static final String ZONE_RULES_PROVIDER = "java.time.zone.ZoneRulesProvider";
+
 	/**
 	 * What a member of the library's Java source with no parameter asks of the program it
 	 * is lowered into, where it is such a question; {@code null} for any other member.
@@ -215,7 +222,7 @@ final class JavaIntrinsics {
 		return switch (member) {
 			case REGIONAL -> lowering.holdsRegions();
 			case FOREIGN -> lowering.foreignTemporals();
-			case WANTED -> lowering.wantedField();
+			case WANTED, ZONE_WANTED -> lowering.wantedField();
 			default -> null;
 		};
 	}
@@ -515,6 +522,19 @@ final class JavaIntrinsics {
 	private static JavaEmitter strict(String name) {
 		return (lowering, call) -> JavaForms.form(cl("%strict-math"),
 				prepend(new LispSymbol(":" + name.toUpperCase(java.util.Locale.ROOT)), operands(call)));
+	}
+
+	/**
+	 * Whether a form reads a static field: its variable, after the initialization of its
+	 * class where that is another's.
+	 */
+	private static boolean reads(LispVal form, String field) {
+		LispVal value = form;
+		if (form instanceof LispCons cons && cons.car() instanceof LispSymbol head && head.name().equals("PROGN")) {
+			List<LispVal> body = cons.toList();
+			value = body.get(body.size() - 1);
+		}
+		return value instanceof LispSymbol symbol && symbol.name().equals(field);
 	}
 
 	private static List<LispVal> operands(Invocation call) {
@@ -1946,6 +1966,38 @@ final class JavaIntrinsics {
 			lowering.namesZone(null);
 			return lowering.library(ZONE_ID, "ids", List.of());
 		});
+		// a short name of SHORT_IDS brings the zone it stands for, any other map them all
+		natives.put(ZONE_ID + ".of(String,java.util.Map)", (lowering, call) -> {
+			lowering.namesZone(call.arguments().get(0).constant() instanceof String name
+					&& reads(call.argument(1), ZONE_ID + ".SHORT_IDS")
+							? JavaZones.shipped().shortIds().getOrDefault(name, name) : null);
+			return lowering.library(ZONE_ID, "aliased", operands(call));
+		});
+		natives.put(ZONE_ID + ".wanted()", (lowering, call) -> lowering.wantedField() ? JavaForms.T : JavaForms.NIL);
+		natives.put(ZONE_ID + ".short0()", (lowering, call) -> JavaForms.string(JavaZones.shipped().shortIdsText()));
+		natives.put(ZONE_ID + ".link0(String)", host("%read-link"));
+		natives.put(ZONE_RULES_PROVIDER + ".getAvailableZoneIds()", (lowering, call) -> {
+			lowering.namesZone(null);
+			return lowering.library(ZONE_ID, "providedIds", List.of());
+		});
+		natives.put(ZONE_RULES_PROVIDER + ".getRules(String,boolean)", (lowering, call) -> {
+			lowering.namesZone(call.arguments().get(0).constant() instanceof String name ? name : null);
+			return lowering.library(ZONE_ID, "provided", operands(call));
+		});
+		natives.put(ZONE_RULES_PROVIDER + ".getVersions(String)", (lowering, call) -> {
+			lowering.namesZone(call.arguments().get(0).constant() instanceof String name ? name : null);
+			return lowering.library(ZONE_RULES_PROVIDER, "versions", operands(call));
+		});
+		natives.put(ZONE_RULES_PROVIDER + ".version0()",
+				(lowering, call) -> JavaForms.string(JavaZones.shipped().version()));
+		// a zoned text the program's own files parse: the regions a constant names, all
+		// of them for one computed where the program runs
+		JavaEmitter parse = (lowering, call) -> {
+			lowering.readsZones(call.arguments().get(0).constant() instanceof String text ? text : null);
+			return lowering.library(ZONED, "parsed", operands(call));
+		};
+		natives.put(ZONED + ".parse(CharSequence)", parse);
+		natives.put(ZONED + ".parse(CharSequence,java.time.format.DateTimeFormatter)", parse);
 		natives.put(REGIONAL, (lowering, call) -> lowering.holdsRegions() ? JavaForms.T : JavaForms.NIL);
 		// java.time's classes read a date of another class through its fields only in a
 		// program that can hold one; a formatter's ISO constants are made where read; a

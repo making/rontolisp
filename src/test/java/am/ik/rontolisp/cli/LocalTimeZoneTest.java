@@ -29,6 +29,12 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * spring-forward gap and a fall-back overlap encoded where SBCL puts them), and Kolkata's
  * half-hour zone as a rational. An explicit zone is untouched. The {@code --native} leg
  * is {@code NativeOutputE2eTest}'s.
+ *
+ * <p>
+ * The Java subset's {@code ZoneId.systemDefault()} in a program holding the region is the
+ * region {@code TZ} names, a leading colon dropped as a JDK drops it, and where
+ * {@code TZ} is empty the one the link {@code /etc/localtime} leads to -- shown on the
+ * WASM legs, whose {@code /etc} is a directory of the test's.
  */
 class LocalTimeZoneTest {
 
@@ -68,25 +74,51 @@ class LocalTimeZoneTest {
 	void theLocalZoneIsTheOneTzNames(String backend) throws Exception {
 		Path src = this.dir.resolve("probe.lisp");
 		Files.writeString(src, PROGRAM);
-		List<String> command = switch (backend) {
-			case "interpreter" -> List.of(java(), "-cp", System.getProperty("java.class.path"),
-					"am.ik.rontolisp.cli.RontoLispCli", src.toString());
-			case "jvm" -> {
-				compile(src, this.dir.resolve("LocalTimeProbe.class"));
-				yield List.of(java(), "-cp", this.dir.toString(), "LocalTimeProbe");
-			}
-			default -> {
-				assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
-				assumeTrue(Files.isRegularFile(ZONEINFO.resolve("America/New_York")), "no zone files in " + ZONEINFO);
-				Path module = this.dir.resolve(backend + ".wasm");
-				compile(src, module, "component".equals(backend) ? new String[] { "--component" } : new String[0]);
-				yield List.of("wasmtime", "run", "--env", "TZ", "--dir", ZONEINFO.toString(), module.toString());
-			}
-		};
+		List<String> command = command(backend, src, "LocalTimeProbe");
 		for (Map.Entry<String, String> zone : EXPECTED.entrySet()) {
 			assertThat(run(command, zone.getKey())).as("%s under TZ=%s", backend, zone.getKey())
 				.isEqualTo(zone.getValue());
 		}
+		Path java = this.dir.resolve("Zoned.java");
+		Files.writeString(java, """
+				import java.time.*;
+				public class Zoned {
+				    public static void main(String[] args) {
+				        ZoneId.of("America/New_York");
+				        ZoneId.of("Asia/Kolkata");
+				        System.out.println(ZoneId.systemDefault());
+				    }
+				}
+				""");
+		command = command(backend, java, "Zoned");
+		for (String zone : EXPECTED.keySet()) {
+			assertThat(run(command, ":" + zone)).as("%s under TZ=:%s", backend, zone).isEqualTo(zone + "\n");
+		}
+		if (command.get(0).equals("wasmtime")) {
+			Path etc = Files.createDirectories(this.dir.resolve("etc"));
+			Files.createSymbolicLink(etc.resolve("localtime"), Path.of("../usr/share/zoneinfo/Asia/Kolkata"));
+			List<String> linked = new ArrayList<>(command);
+			linked.addAll(2, List.of("--dir", etc + "::/etc"));
+			assertThat(run(linked, "")).as("%s under /etc/localtime", backend).isEqualTo("Asia/Kolkata\n");
+		}
+	}
+
+	private List<String> command(String backend, Path src, String className) throws Exception {
+		return switch (backend) {
+			case "interpreter" -> List.of(java(), "-cp", System.getProperty("java.class.path"),
+					"am.ik.rontolisp.cli.RontoLispCli", src.toString());
+			case "jvm" -> {
+				compile(src, this.dir.resolve(className + ".class"), "--class-name", className);
+				yield List.of(java(), "-cp", this.dir.toString(), className);
+			}
+			default -> {
+				assumeTrue(HostWasmtime.isAvailable(), "no usable wasmtime on PATH");
+				assumeTrue(Files.isRegularFile(ZONEINFO.resolve("America/New_York")), "no zone files in " + ZONEINFO);
+				Path module = this.dir.resolve(className + "-" + backend + ".wasm");
+				compile(src, module, "component".equals(backend) ? new String[] { "--component" } : new String[0]);
+				yield List.of("wasmtime", "run", "--env", "TZ", "--dir", ZONEINFO.toString(), module.toString());
+			}
+		};
 	}
 
 	private static void compile(Path src, Path output, String... flags) throws Exception {

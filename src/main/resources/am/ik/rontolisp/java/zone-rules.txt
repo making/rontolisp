@@ -6,6 +6,8 @@
 # Third-party: the tz database, which is in the public domain.
 # Notice: THIRD-PARTY-NOTICES.txt, "tz database".
 tzdb 2026e
+# The short names ZoneId.SHORT_IDS maps to zones.
+short ACT=Australia/Darwin AET=Australia/Sydney AGT=America/Argentina/Buenos_Aires ART=Africa/Cairo AST=America/Anchorage BET=America/Sao_Paulo BST=Asia/Dhaka CAT=Africa/Harare CNT=America/St_Johns CST=America/Chicago CTT=Asia/Shanghai EAT=Africa/Addis_Ababa ECT=Europe/Paris EST=America/Panama HST=Pacific/Honolulu IET=America/Indiana/Indianapolis IST=Asia/Kolkata JST=Asia/Tokyo MIT=Pacific/Apia MST=America/Phoenix NET=Asia/Yerevan NST=Pacific/Auckland PLT=Asia/Karachi PNT=America/Phoenix PRT=America/Puerto_Rico PST=America/Los_Angeles SST=Pacific/Guadalcanal VST=Asia/Ho_Chi_Minh
 Africa/Abidjan Africa/Accra Africa/Bamako Africa/Banjul Africa/Conakry Africa/Dakar Africa/Freetown Africa/Lome Africa/Nouakchott Africa/Ouagadougou Africa/Timbuktu Atlantic/Reykjavik Atlantic/St_Helena Iceland &d]'$$$E+$%$*
 Africa/Addis_Ababa Africa/Asmara Africa/Asmera Africa/Dar_es_Salaam Africa/Djibouti Africa/Kampala Africa/Mogadishu Africa/Nairobi Indian/Antananarivo Indian/Comoro Indian/Mayotte (UTF%L%T%P%$$^*(%$8M%*%$M%)$)$:3$%$b%/+%$O%
 Africa/Algiers )U`&IJ&$4D%$$[)&4$BM%&/$b%/)2])G&$&9&$d%'&<])G&'&-])G&'&%])G&'%2])G&%-<$d%'&2])G&%):$d%I%,/])G&%.7,d%'%=4a&,$3%4F'%-,4c&',4,c&'-+$d%9$A$a&3'2$d%5'=])G&%,?$d%1(*$G&%-9$b&'&<,F'%,:<c&'->$d%''=$G&%-C4d%'(%$a&

@@ -216,7 +216,15 @@ public final class ZonedDateTime implements Temporal, ChronoZonedDateTime<LocalD
         return zone;
     }
 
-    public static ZonedDateTime parse(CharSequence text) {
+    /**
+     * A zoned text: the compiler notes the regions a constant text names where the
+     * program's own files parse it, every region where they parse a text they compute.
+     */
+    public static native ZonedDateTime parse(CharSequence text);
+
+    public static native ZonedDateTime parse(CharSequence text, DateTimeFormatter formatter);
+
+    static ZonedDateTime parsed(CharSequence text) {
         IsoText in = new IsoText(text);
         in.date();
         in.mark();
@@ -239,7 +247,7 @@ public final class ZonedDateTime implements Temporal, ChronoZonedDateTime<LocalD
         }
     }
 
-    public static ZonedDateTime parse(CharSequence text, DateTimeFormatter formatter) {
+    static ZonedDateTime parsed(CharSequence text, DateTimeFormatter formatter) {
         Objects.requireNonNull(formatter, "formatter");
         return formatter.parse(text, ZonedDateTime::from);
     }
