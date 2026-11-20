@@ -13,9 +13,9 @@ import java.util.stream.StreamSupport;
 // and made here (.kb/java-frontend.md, "Resources"). What a JDK 25 answers decides where
 // a provider fails: an iterator's next for every failure, a stream's advance for a class
 // not found, of another type or with no public constructor of no parameters, a
-// provider's get for one that cannot be made. The iterator's
-// instances and the stream's providers are kept apart, each in the order they were
-// found, and each goes on from where its lookup stopped.
+// provider's get for one that cannot be made. The iterator's instances and the stream's
+// providers are kept apart, each in the order they were found, and each goes on from
+// where its lookup stopped.
 public final class ServiceLoader<S> implements Iterable<S> {
 
     public interface Provider<S> extends Supplier<S> {
@@ -25,7 +25,7 @@ public final class ServiceLoader<S> implements Iterable<S> {
         S get();
     }
 
-    // what the lowering found of a provider named in a file
+    // what the lowering found of a provider named in a file (JavaLowering's PROVIDER_..)
     static final int FOUND = 0;
 
     static final int NOT_FOUND = 1;

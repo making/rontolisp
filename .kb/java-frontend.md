@@ -557,7 +557,9 @@ first measurement).
   sends a locale other than the default to the default locale's candidates (probed under
   four `-Duser.language/-Duser.country`: the root asked finds the base and stops, a
   locale finding only the base takes the default's). One bundle per loader, name and
-  locale (`MADE`): `getBundle(US)` and `getBundle(CANADA)` answer one object. Orders read
+  locale (`MADE`): `getBundle(US)` and `getBundle(CANADA)` answer one object. A
+  session's `getBundle` carries every file, a constant base name too: `ResourceTable`'s
+  text is read once, and a later buffer may name any bundle. Orders read
   off the answers: a `PropertyResourceBundle`'s own keys are a `HashMap` copied from the
   `Properties` it read, a `ListResourceBundle`'s a `HashMap` of `contents.length` (3 keys
   in 4 buckets, probed against 16), `getKeys` its own then its parents' it lacks,

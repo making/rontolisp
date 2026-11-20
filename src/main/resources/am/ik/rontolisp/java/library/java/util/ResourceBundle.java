@@ -8,16 +8,16 @@ import java.io.InputStream;
 import rontolisp.internal.ResourceTable;
 
 // A table of objects by key, with a parent it asks for a key it lacks. getBundle finds
-// one of a base name and a locale as the API documentation states, a class of the
-// name or else a .properties file of the loader's resources a bundle: the candidate
-// locales from the most to the least
-// specific, the first that has a bundle the result and the ones after it its parents;
-// where only the base bundle or none is found for a locale that is not the root, the
-// default locale's candidates instead, unless it is the locale asked for. The files are
-// those the program carries (rontolisp.internal.ResourceTable): the lowering makes a
-// call of getBundle name the loader of the class calling it, and carries the files of a
-// constant base name, or every file for a name computed where the program runs
-// (.kb/java-frontend.md, "Resources"). A bundle is made once a loader, name and locale.
+// one of a base name and a locale as the API documentation states: for each candidate
+// locale from the most to the least specific, a class of the bundle's name or else a
+// .properties file of the loader's resources; the first found is the result and the
+// ones after it its parents; where only the base bundle or none is found for a locale
+// that is not the root, the default locale's candidates instead, unless it is the
+// locale asked for. The files are those the program carries
+// (rontolisp.internal.ResourceTable): the lowering makes a call of getBundle name the
+// loader of the class calling it, and carries the files of a constant base name, or
+// every file for a name computed where the program runs (.kb/java-frontend.md,
+// "Resources"). A bundle is made once a loader, base name and locale.
 public abstract class ResourceBundle {
 
     protected ResourceBundle parent;
@@ -29,7 +29,8 @@ public abstract class ResourceBundle {
     public ResourceBundle() {
     }
 
-    // the files of the program's source tree and source path, or of the source path alone
+    // the bundles made, by loader (T the program's, S the system's), base name and
+    // locale; NONE where no class or file is one
     private static final HashMap<String, ResourceBundle> MADE = new HashMap<>();
 
     // a bundle no file holds
@@ -115,7 +116,7 @@ public abstract class ResourceBundle {
 
     private static ResourceBundle made(String baseName, Locale locale, boolean tree) {
         String bundleName = locale.toString().isEmpty() ? baseName : baseName + "_" + locale;
-        String key = (tree ? "T" : "S") + bundleName;
+        String key = (tree ? "T" : "S") + baseName + "\n" + locale;
         ResourceBundle bundle = MADE.get(key);
         if (bundle == null) {
             bundle = classBundle(bundleName, tree);

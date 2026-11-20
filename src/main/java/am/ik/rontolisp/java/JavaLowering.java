@@ -7161,6 +7161,19 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private static final String SERVICE_LOADER = "java.util.ServiceLoader";
 
+	/** What {@code ServiceLoader} is told of a provider: its constants of these names. */
+	private static final int PROVIDER_FOUND = 0;
+
+	private static final int PROVIDER_NOT_FOUND = 1;
+
+	private static final int PROVIDER_NOT_SUBTYPE = 2;
+
+	private static final int PROVIDER_NO_CONSTRUCTOR = 3;
+
+	private static final int PROVIDER_ABSTRACT = 4;
+
+	private static final int PROVIDER_INACCESSIBLE = 5;
+
 	/**
 	 * {@code ServiceLoader.load} of a class literal ({@code Class<S>} of an exact
 	 * {@code S}): the providers the service's files name are found while the program is
@@ -7203,8 +7216,10 @@ final class JavaLowering implements JavaEmitter.Context {
 		LispVal chain = made;
 		for (String name : this.classes.serviceProviders(service.binaryName, tree)) {
 			JavaClass found = this.classes.binaryNamed(name);
-			chain = library(SERVICE_LOADER, "with", found == null || (!tree && Boolean.TRUE.equals(loader(found)))
-					? List.of(chain, string(name), integer(1), NIL, NIL) : provider(chain, name, found, service, pos));
+			chain = library(SERVICE_LOADER, "with",
+					found == null || (!tree && Boolean.TRUE.equals(loader(found)))
+							? List.of(chain, string(name), integer(PROVIDER_NOT_FOUND), NIL, NIL)
+							: provider(chain, name, found, service, pos));
 		}
 		return chain;
 	}
@@ -7216,17 +7231,19 @@ final class JavaLowering implements JavaEmitter.Context {
 	 */
 	private List<LispVal> provider(LispVal chain, String name, JavaClass found, JavaClass service, int pos) {
 		if (!found.isSubclassOf(service)) {
-			return List.of(chain, string(name), integer(2), NIL, NIL);
+			return List.of(chain, string(name), integer(PROVIDER_NOT_SUBTYPE), NIL, NIL);
 		}
 		Method constructor = publicConstructor(found);
 		if (constructor == null) {
-			return List.of(chain, string(name), integer(3), NIL, NIL);
+			return List.of(chain, string(name), integer(PROVIDER_NO_CONSTRUCTOR), NIL, NIL);
 		}
 		LispVal type = list(cl("lambda"), NIL, classValue(raw(found)));
 		if (found.isAbstract || !isPublic(found)) {
-			return List.of(chain, string(name), integer(found.isAbstract ? 4 : 5), NIL, type);
+			return List.of(chain, string(name), integer(found.isAbstract ? PROVIDER_ABSTRACT : PROVIDER_INACCESSIBLE),
+					NIL, type);
 		}
-		return List.of(chain, string(name), integer(0), list(cl("lambda"), NIL, made(found, constructor, pos)), type);
+		return List.of(chain, string(name), integer(PROVIDER_FOUND),
+				list(cl("lambda"), NIL, made(found, constructor, pos)), type);
 	}
 
 	private static boolean isPublic(JavaClass declaration) {
@@ -7305,14 +7322,15 @@ final class JavaLowering implements JavaEmitter.Context {
 	 * {@code getBundle(base)} and {@code getBundle(base, locale)} ask the loader of the
 	 * class calling them, {@code getBundle(base, locale, loader)} the one given, which
 	 * may be the program's. A constant base name carries the {@code .properties} files of
-	 * its bundles, one computed where the program runs every file.
+	 * its bundles, one computed where the program runs every file, as a session's call
+	 * does: a later buffer may name any bundle of the table its first lookup read.
 	 */
 	@Override
 	public LispVal bundle(Invocation call) {
 		Typed base = call.arguments().get(0);
 		int given = call.arguments().size();
 		boolean tree = given == 3 || Boolean.TRUE.equals(loader(this.currentClass));
-		if (base.constant() instanceof String name) {
+		if (base.constant() instanceof String name && !this.classes.session) {
 			try {
 				this.classes.carryBundle(tree, name.replace('.', '/'));
 			}
