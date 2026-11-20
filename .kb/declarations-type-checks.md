@@ -81,55 +81,6 @@ accessor behind a trapping `ref.cast` instead of the inline 4-way dispatch chain
 generic `+`/`logand`/`ash` is one 2-byte helper call; at the speed levels a fused site's fallback
 is (the next section).
 
-## Declared integer ranges (wasm-GC, 2026-11-20, `.todo/k56`)
-**A variable or a `the` value a declaration gives an integer range within i64 is taken raw: a
-fused site unboxes it with no bail, so a site with nothing else to bail on has no fallback.**
-What the Java front end lowers every `int` and `long` operation to (`.kb/java-frontend.md`,
-"Numbers"), and any program spelling such a declaration.
-
-- **Which specifiers** (`compiler/DeclaredIntegerTypes`, over `macro/IntegerTypeRange`):
-  `(signed-byte n)`, `(unsigned-byte n)`, `(integer lo hi)`, `(mod n)`, `bit`, an `(and ...)`
-  of them and a `deftype` alias of one, bounded within i64 at both ends. **`fixnum` proves no
-  bound**: its `typep` is `integerp` here (above), so `(the fixnum (expt 2 70))` is a true
-  declaration and must answer; inside an `(and ...)` it reads as `integer`. Read from a
-  body's leading `(declare (type spec var...))` (the short form `(spec var...)` is not read,
-  as for arrays): a defun's and a lambda's head (`functionBodyDeclaredIntegers`, through a sole
-  `block` wrap) and a `let`'s, bound and free names, into `Ctx.declaredIntegers`, scoped and
-  shadowed as `Ctx.declaredArrays` is (an inline `((lambda (v) ..) x)` shadows both since
-  2026-11-20: a declared array of the same name around it trapped on the cast). `let*` puts
-  every declaration in its innermost `let`, so an outer binding's is free there, its reads
-  trusted and its slot not kept raw. Specials are left out; nothing at top level or in an
-  async body.
-- **A trusted leaf** (`ExprLeaf.trusted`, `trustedRange`): a declared variable no raw local
-  holds, or a `(the spec X)` whose X is a leaf. `emitTrustedUnbox` checks what the
-  representation does not prove: an i31 nothing unless the range is narrower than the i31
-  range, a `TYPE_BIGNUM` nothing for all of i64 -- the cast traps on anything else -- and a
-  narrower range by `emitRangeTrap` (a sign extension for 8, 16 and 32 bits, the bits above
-  for an unsigned field, one unsigned compare otherwise), then `unreachable`. Its range is
-  the declared one; it is not a guard of an order boundary (`pendingGuard`).
-- **An exact local over a declared range** (`RawLocal.declared`, `checked`): a declared `let`
-  binding no proof bounds as narrowly, and a declared required parameter
-  (`unboxDeclaredParameters`, unboxed once at the entry), each only where nothing captures it,
-  only `setq`/`setf` assign it and it is **read mostly raw** (`readMostlyRaw`: operands of
-  integer operations and comparisons, and assignments of such operations, outnumber the reads
-  anywhere else, which box it again -- past the fixnum range an allocation each). A store
-  checks the range unless the stored value's range is within it (`emitStoreCheck`; the
-  fallback's and an unfused value's always).
-- **A false declaration traps where the trusted value is taken** -- the unbox, the store --
-  and never yields a wrong value: no range is used before its check. The interpreter and the
-  JVM read none of these (the JVM's guard is one `instanceof Long` and its fused methods are
-  outlined and shared, `.kb/jvm-int-fusion.md`); the size level fuses nothing, so reads none.
-- **Measured** (wasm, base `e9313f180`; the Java programs of `.kb/java-frontend.md`,
-  "Numbers"): of the variables a declaration made exact, keeping each one raw was better than
-  none (Booking 1,143,837 -> 1,136,369 B) and the raw-use rule better still (1,133,686); every
-  declared parameter raw was worse (1,143,772: one boxed back for each call it is passed to),
-  by the rule better (Zone 175,349 -> 173,697).
-- Pins: `WasmLispCompilerIntegrationTest.fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath`
-  (the `declared` program on P1 and the component, fixnum included; two false declarations that
-  trap), `.declaredArrayTypesEmitSingleArmAccessorsWithoutChangingResults` (the lambda that
-  shadows); ci-spec `declared-integer-ranges-answer-what-undeclared-code-answers` (the four
-  backends).
-
 `compiler.DeclaredArrayTypes` (backend-free) maps a specifier to a `Kind`: `U8`/`U16`/`U32`
 (requires an explicitly rank-1 dims spec, since an unknown-rank spec could be a rank-n GENERAL
 array of the same element type), `FLOAT`, `GENERAL`. A string specifier (`simple-string`
@@ -207,6 +158,55 @@ fields with `_seq_len` behind it (`.kb/length-runtime.md`), the generic call els
   arm compiles the value RAW through fusion.
 - Emission at EVERY optimize level, in the generic (array, index, value) evaluation order; a false
   declaration may observe index/value side effects before the cast traps -- inside UB.
+
+## Declared integer ranges (wasm-GC, 2026-11-20, `.todo/k56`)
+**A variable or a `the` value a declaration gives an integer range within i64 is taken raw: a
+fused site unboxes it with no bail, so a site with nothing else to bail on has no fallback.**
+What the Java front end lowers every `int` and `long` operation to (`.kb/java-frontend.md`,
+"Numbers"), and any program spelling such a declaration.
+
+- **Which specifiers** (`compiler/DeclaredIntegerTypes`, over `macro/IntegerTypeRange`):
+  `(signed-byte n)`, `(unsigned-byte n)`, `(integer lo hi)`, `(mod n)`, `bit`, an `(and ...)`
+  of them and a `deftype` alias of one, bounded within i64 at both ends. **`fixnum` proves no
+  bound**: its `typep` is `integerp` here (above), so `(the fixnum (expt 2 70))` is a true
+  declaration and must answer; inside an `(and ...)` it reads as `integer`. Read from a
+  body's leading `(declare (type spec var...))` (the short form `(spec var...)` is not read,
+  as for arrays): a defun's and a lambda's head (`functionBodyDeclaredIntegers`, through a sole
+  `block` wrap) and a `let`'s, bound and free names, into `Ctx.declaredIntegers`, scoped and
+  shadowed as `Ctx.declaredArrays` is (an inline `((lambda (v) ..) x)` shadows both since
+  2026-11-20: a declared array of the same name around it trapped on the cast). `let*` puts
+  every declaration in its innermost `let`, so an outer binding's is free there, its reads
+  trusted and its slot not kept raw. Specials are left out; nothing at top level or in an
+  async body.
+- **A trusted leaf** (`ExprLeaf.trusted`, `trustedRange`): a declared variable no raw local
+  holds, or a `(the spec X)` whose X is a leaf. `emitTrustedUnbox` checks what the
+  representation does not prove: an i31 nothing unless the range is narrower than the i31
+  range, a `TYPE_BIGNUM` nothing for all of i64 -- the cast traps on anything else -- and a
+  narrower range by `emitRangeTrap` (a sign extension for 8, 16 and 32 bits, the bits above
+  for an unsigned field, one unsigned compare otherwise), then `unreachable`. Its range is
+  the declared one; it is not a guard of an order boundary (`pendingGuard`).
+- **An exact local over a declared range** (`RawLocal.declared`, `checked`): a declared `let`
+  binding no proof bounds as narrowly, and a declared required parameter
+  (`unboxDeclaredParameters`, unboxed once at the entry), each only where nothing captures it,
+  only `setq`/`setf` assign it and it is **read mostly raw** (`readMostlyRaw`: operands of
+  integer operations and comparisons, and assignments of such operations, outnumber the reads
+  anywhere else, which box it again -- past the fixnum range an allocation each). A store
+  checks the range unless the stored value's range is within it (`emitStoreCheck`; the
+  fallback's and an unfused value's always).
+- **A false declaration traps where the trusted value is taken** -- the unbox, the store --
+  and never yields a wrong value: no range is used before its check. The interpreter and the
+  JVM read none of these (the JVM's guard is one `instanceof Long` and its fused methods are
+  outlined and shared, `.kb/jvm-int-fusion.md`); the size level fuses nothing, so reads none.
+- **Measured** (wasm, base `e9313f180`; the Java programs of `.kb/java-frontend.md`,
+  "Numbers"): of the variables a declaration made exact, keeping each one raw was better than
+  none (Booking 1,143,837 -> 1,136,369 B) and the raw-use rule better still (1,133,686); every
+  declared parameter raw was worse (1,143,772: one boxed back for each call it is passed to),
+  by the rule better (Zone 175,349 -> 173,697).
+- Pins: `WasmLispCompilerIntegrationTest.fusedLocalFunctionsAndUnboxedLocalsMatchTheGenericPath`
+  (the `declared` program on P1 and the component, fixnum included; two false declarations that
+  trap), `.declaredArrayTypesEmitSingleArmAccessorsWithoutChangingResults` (the lambda that
+  shadows); ci-spec `declared-integer-ranges-answer-what-undeclared-code-answers` (the four
+  backends).
 
 ## makeTypeTest (shared type-specifier tests)
 `LispMacroExpander.makeTypeTest(value, spec)` builds a truthy test form; `makeTypecaseTest`
@@ -715,7 +715,8 @@ collect declaration specifiers); `expandBuiltinMacro`.
   `declaredArrayTypesEmitSingleArmAccessorsWithoutChangingResults`; `ChipzE2eTest`.
 - ci-spec: `declarations-eval-when-check-type-assert`, `check-type-tests-what-typep-tests`,
   `standard-type-names-answer-literal-and-computed`, `declared-array-types-single-arm-access`,
-  `declared-float-scalars-answer-what-undeclared-code-answers`, `computed-compound-type-specifier`,
+  `declared-float-scalars-answer-what-undeclared-code-answers`,
+  `declared-integer-ranges-answer-what-undeclared-code-answers`, `computed-compound-type-specifier`,
   `array-type-of-and-compound-array-specifier`, `vectorp-and-the-vector-specifier-check-the-rank`,
   `runtime-typep-deftype-alias`, `computed-compound-subtypep-specifier`,
   `simple-type-name-subtypep-lattice`, `simple-type-name-typep-simplicity`,

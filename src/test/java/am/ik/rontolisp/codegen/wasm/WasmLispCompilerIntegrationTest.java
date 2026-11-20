@@ -1616,7 +1616,7 @@ class WasmLispCompilerIntegrationTest {
 		// and its shift count, digit's (unsigned-byte 16) and a conjunction with fixnum
 		// are taken raw with no fallback; a fixnum alone proves no bound, so loose
 		// doubles a bignum. Java's int and long arithmetic, which is what the front end
-		// lowers to; the interpreter's output, which a JDK prints for the first three.
+		// lowers to; the interpreter's output, and a JDK's for the hash and the shifts.
 		String declared = """
 				(deftype int32 () '(signed-byte 32))
 				(defun step32 (h c)
