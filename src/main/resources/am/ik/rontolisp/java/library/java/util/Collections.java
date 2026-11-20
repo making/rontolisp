@@ -90,7 +90,7 @@ public final class Collections {
         shuffle(list, new Random());
     }
 
-    public static <T extends Comparable<? super T>> T max(Collection<? extends T> c) {
+    public static <T extends Object & Comparable<? super T>> T max(Collection<? extends T> c) {
         Iterator<? extends T> each = c.iterator();
         T best = each.next();
         while (each.hasNext()) {
@@ -114,7 +114,7 @@ public final class Collections {
         return best;
     }
 
-    public static <T extends Comparable<? super T>> T min(Collection<? extends T> c) {
+    public static <T extends Object & Comparable<? super T>> T min(Collection<? extends T> c) {
         Iterator<? extends T> each = c.iterator();
         T best = each.next();
         while (each.hasNext()) {

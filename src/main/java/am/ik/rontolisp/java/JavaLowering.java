@@ -780,6 +780,15 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	/**
+	 * An unchecked warning about a value converted to the type it is wanted as, said
+	 * after what was said while the value was lowered.
+	 * @param since how many warnings there were before the value was lowered
+	 */
+	private void unchecked(int caret, int since, String message, List<String> details, List<JavaType> mentioned) {
+		this.warnings.unchecked(this.unit, caret, since, message, details, mentioned);
+	}
+
+	/**
 	 * Where a compiler puts the caret of what it says of a call: the parenthesis after a
 	 * method's name, an instance creation's {@code new}; {@code -1} where the call is
 	 * written as no such thing (a method reference).
@@ -1361,9 +1370,7 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 				this.makingConstant = field.isConstant;
 				Expression initializer = Objects.requireNonNull(field.initializer);
-				LispVal value = patterned(
-						() -> List.of(assign(expression(initializer, field.type), field.type, field.pos, initializer)))
-					.get(0);
+				LispVal value = patterned(() -> List.of(assigned(initializer, field.type, field.pos))).get(0);
 				return List.of(call("setq", JavaNames.global(field), value));
 			}));
 		}
@@ -1701,9 +1708,7 @@ final class JavaLowering implements JavaEmitter.Context {
 					return patterned(() -> scoped(Objects.requireNonNull(item.block()).body(), false));
 				}
 				Expression initializer = Objects.requireNonNull(field.initializer);
-				LispVal value = patterned(
-						() -> List.of(assign(expression(initializer, field.type), field.type, field.pos, initializer)))
-					.get(0);
+				LispVal value = patterned(() -> List.of(assigned(initializer, field.type, field.pos))).get(0);
 				return List.of(call("setf", list(JavaNames.accessor(field), THIS), value));
 			}));
 		}
@@ -3066,14 +3071,24 @@ final class JavaLowering implements JavaEmitter.Context {
 	/**
 	 * {@link #assign(Typed, JavaType, int)} of an expression a compiler warns of where
 	 * its value converts only by the unchecked conversion of a raw type.
+	 * @param since how many warnings there were before the expression was lowered
 	 */
-	private LispVal assign(Typed value, JavaType to, int pos, Expression written) {
+	private LispVal assign(Typed value, JavaType to, int pos, Expression written, int since) {
 		LispVal form = assign(value, to, pos);
 		if (uncheckedConversion(value.type(), to)) {
-			unchecked(caret(written), "unchecked conversion", List.of("required: " + to, "found:    " + value.type()),
-					List.of(to, value.type()));
+			unchecked(caret(written), since, "unchecked conversion",
+					List.of("required: " + to, "found:    " + value.type()), List.of(to, value.type()));
 		}
 		return form;
+	}
+
+	/**
+	 * An expression lowered and taken as its target takes it in an initializer:
+	 * {@link #assign(Typed, JavaType, int, Expression, int)}.
+	 */
+	private LispVal assigned(Expression written, JavaType to, int pos) {
+		int since = this.warnings.size();
+		return assign(expression(written, to), to, pos, written, since);
 	}
 
 	/**
@@ -3094,15 +3109,16 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	/**
 	 * Whether a type is one the program that runs has whole: no type variable, and no
-	 * argument but {@code ?}.
+	 * argument but {@code ?}, which {@code ? extends Object} is (JLS 4.5.1).
 	 */
 	private static boolean reifiable(JavaType type) {
 		return switch (type) {
 			case Variable variable -> false;
 			case ClassType named -> named.arguments()
 				.stream()
-				.allMatch(argument -> argument instanceof Wildcard wildcard && wildcard.upper() == null
-						&& wildcard.lower() == null);
+				.allMatch(argument -> argument instanceof Wildcard wildcard && wildcard.lower() == null
+						&& (wildcard.upper() == null || wildcard.upper() instanceof ClassType bound
+								&& bound.declaration().name.equals("java.lang.Object")));
 			case ArrayType array -> reifiable(array.element());
 			default -> true;
 		};
@@ -4275,8 +4291,7 @@ final class JavaLowering implements JavaEmitter.Context {
 	private Typed arrayInitializer(ArrayInitializer initializer, ArrayType type) {
 		List<LispVal> elements = new ArrayList<>();
 		for (Expression element : initializer.elements()) {
-			elements.add(elementStored(type.element(),
-					assign(expression(element, type.element()), type.element(), element.pos(), element)));
+			elements.add(elementStored(type.element(), assigned(element, type.element(), element.pos())));
 		}
 		return new Typed(arrayOf(type, elements), type);
 	}
@@ -4673,11 +4688,12 @@ final class JavaLowering implements JavaEmitter.Context {
 	private Typed assignment(Assign assignment) {
 		boolean simple = assignment.operator().equals("=");
 		Place place = place(assignment.target(), !simple, simple);
+		int since = this.warnings.size();
 		Typed value = expression(assignment.value(), place.type());
 		Typed read = new Typed(place.read(), place.type());
 		LispVal stored;
 		if (assignment.operator().equals("=")) {
-			stored = assign(value, place.stored(), assignment.pos(), assignment.value());
+			stored = assign(value, place.stored(), assignment.pos(), assignment.value(), since);
 		}
 		else {
 			// a compound assignment casts its result to the place's type
@@ -6884,9 +6900,19 @@ final class JavaLowering implements JavaEmitter.Context {
 			throw error(pos, "reference to " + name + " is ambiguous");
 		}
 		Inference inference = Objects.requireNonNull(inferences.get(chosen));
+		// applicable only by the unchecked conversion of a raw argument (JLS 18.5.2): the
+		// type the value is wanted as says nothing of the type parameters, and the value
+		// is of the erasure of the type returned
+		boolean uncheckedApplied = false;
+		for (int i = 0; i < arguments.size() && !chosen.raw; i++) {
+			Typed argument = typed.get(i);
+			uncheckedApplied |= argument != null
+					&& uncheckedConversion(argument.type(), parameterAt(chosen, i, site, spread));
+		}
 		// the value's type against the type it is wanted as
 		JavaType returned = made != null ? made : this.types.memberType(chosen.returnType, site, chosen.owner);
-		if (expected != null && expected != Primitive.VOID && JavaTypes.mentions(returned, inference.variables)) {
+		if (!uncheckedApplied && expected != null && expected != Primitive.VOID
+				&& JavaTypes.mentions(returned, inference.variables)) {
 			if (!expected.isPrimitive()) {
 				inference.upperBound(returned, expected);
 			}
@@ -6911,8 +6937,10 @@ final class JavaLowering implements JavaEmitter.Context {
 		if (!inference.withinBounds(solution)) {
 			throw error(pos, "incompatible types: inferred type does not conform to upper bound(s)");
 		}
+		// where the method applies by an unchecked conversion, what the type parameters
+		// nothing said of are: what the value's type is the erasure of
+		Map<TypeParameter, JavaType> bounded = uncheckedApplied ? bounded(inference, solution) : solution;
 		List<Typed> converted = new ArrayList<>();
-		boolean uncheckedArguments = false;
 		for (int i = 0; i < arguments.size(); i++) {
 			JavaType parameter = JavaTypes.substitute(parameterAt(chosen, i, site, spread), solution);
 			Typed argument = Objects.requireNonNull(lowered.get(i));
@@ -6926,29 +6954,34 @@ final class JavaLowering implements JavaEmitter.Context {
 				int last = chosen.parameters.size() - 1;
 				JavaType declared = spread && i >= last ? ((ArrayType) chosen.parameters.get(last)).element()
 						: chosen.parameters.get(i);
-				uncheckedArguments |= !chosen.raw && uncheckedConversion(argument.type(), parameter);
-				converted.add(new Typed(
-						chosen.raw ? argument.form()
-								: widened(assign(argument, parameter, arguments.get(i).pos(), arguments.get(i)),
-										argument.type(), declared),
-						this.types.ground(argument.type()), argument.constant()));
+				if (!chosen.raw && uncheckedConversion(argument.type(),
+						JavaTypes.substitute(parameterAt(chosen, i, site, spread), bounded))) {
+					// a compiler names the parameter as the method declares it
+					unchecked(caret(arguments.get(i)), "unchecked conversion",
+							List.of("required: " + declared, "found:    " + argument.type()),
+							List.of(declared, argument.type()));
+				}
+				converted
+					.add(new Typed(
+							chosen.raw ? argument.form() : widened(assign(argument, parameter, arguments.get(i).pos()),
+									argument.type(), declared),
+							this.types.ground(argument.type()), argument.constant()));
 			}
 		}
 		int caret = callCaret(pos, isConstructor ? null : name);
-		if (uncheckedArguments) {
+		if (uncheckedApplied) {
 			List<JavaType> found = new ArrayList<>();
 			for (Typed argument : lowered) {
 				found.add(Objects.requireNonNull(argument).type());
 			}
 			List<JavaType> required = chosen.parameters.subList(chosen.hidden, chosen.parameters.size());
-			List<JavaType> mentioned = new ArrayList<>(List.of(chosen.owner.self()));
-			mentioned.addAll(required);
 			unchecked(caret,
 					"unchecked method invocation: " + (isConstructor ? "constructor <init>" : "method " + name) + " in "
-							+ kind(chosen.owner) + " " + chosen.owner.self() + " is applied to given types",
+							+ kind(chosen.owner) + " " + this.types.erased(chosen.owner.self())
+							+ " is applied to given types",
 					List.of("required: " + String.join(",", required.stream().map(JavaType::toString).toList()),
 							"found:    " + String.join(",", found.stream().map(JavaType::toString).toList())),
-					mentioned);
+					required);
 		}
 		if (spread) {
 			JavaType varargs = JavaTypes.substitute(
@@ -7010,8 +7043,36 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 		}
 		return new Resolved(chosen, converted,
-				inScope(this.types.upward(JavaTypes.substitute(returned, solution)), pos),
+				inScope(uncheckedApplied ? this.types.erased(JavaTypes.substitute(returned, bounded))
+						: this.types.upward(JavaTypes.substitute(returned, solution)), pos),
 				thrownBy(named, site, solution));
+	}
+
+	/**
+	 * What a call applicable only by the unchecked conversion of a raw argument finds for
+	 * its type parameters (JLS 18.5.2), the type it returns being the erasure of what
+	 * they make of it: what the other arguments said of one, else the least of its
+	 * bounds, as a compiler takes it ({@code Collections.max(raw)} is a raw
+	 * {@code Comparable}).
+	 */
+	private Map<TypeParameter, JavaType> bounded(Inference inference, Map<TypeParameter, JavaType> solution) {
+		Map<TypeParameter, JavaType> bounded = new HashMap<>(solution);
+		for (TypeParameter parameter : inference.variables) {
+			JavaType found = solution.get(parameter);
+			if (found != null && !isOpen(found)) {
+				continue;
+			}
+			JavaType below = found == null ? null : ((Variable) found).parameter().lower;
+			JavaType least = this.types.object;
+			for (JavaType bound : parameter.bounds) {
+				if (!(bound instanceof ClassType named && named.declaration().name.equals("java.lang.Object"))) {
+					least = bound;
+					break;
+				}
+			}
+			bounded.put(parameter, below != null ? below : least);
+		}
+		return bounded;
 	}
 
 	/**
@@ -9121,6 +9182,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		else {
 			List<Local> saved = this.patternVariables;
 			this.patternVariables = new ArrayList<>();
+			int since = this.warnings.size();
 			Typed initial = expression(initializer, type);
 			if (type == null) {
 				type = this.types.ground(initial.type());
@@ -9128,7 +9190,7 @@ final class JavaLowering implements JavaEmitter.Context {
 					throw error(declarator.pos(), "cannot infer type for local variable " + declarator.name());
 				}
 			}
-			value = assign(initial, type, declarator.pos(), initializer);
+			value = assign(initial, type, declarator.pos(), initializer, since);
 			if (!this.patternVariables.isEmpty()) {
 				value = declared(this.patternVariables, List.of(value));
 			}
@@ -9385,10 +9447,11 @@ final class JavaLowering implements JavaEmitter.Context {
 						value = returned.form();
 					}
 					else {
+						int since = this.warnings.size();
 						Typed given = expression(exit.value(), this.returnType);
 						value = returned(given, this.returnType, exit.value().pos());
 						if (!this.lambdaBody && uncheckedConversion(given.type(), this.returnType)) {
-							unchecked(caret(exit.value()), "unchecked conversion",
+							unchecked(caret(exit.value()), since, "unchecked conversion",
 									List.of("required: " + this.returnType, "found:    " + given.type()),
 									List.of(this.returnType, given.type()));
 						}

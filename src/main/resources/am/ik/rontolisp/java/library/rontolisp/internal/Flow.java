@@ -4,6 +4,7 @@
 package rontolisp.internal;
 
 import java.util.Comparator;
+import java.util.List;
 import java.util.Spliterator;
 
 // What the four kinds of stream are made of. A stream hands its elements on one at a
@@ -273,6 +274,11 @@ public abstract class Flow {
         sum[0] = next;
         sum[2] += value;
     }
+
+    // The elements as a list of List.of's kind that holds nulls, what Stream.toList() and a
+    // gatherer's windows answer: java.util.ImmutableCollections.listed, a class of a
+    // package this one cannot name (JavaIntrinsics' natives).
+    public static native <E> List<E> listed(Object[] held);
 
     public static double total(double[] sum) {
         double total = sum[0] - sum[1];

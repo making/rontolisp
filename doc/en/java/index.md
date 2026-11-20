@@ -477,7 +477,10 @@ A type parameter exists only while the program is read: the type arguments of a 
 `new Box<>(..)` are found from the arguments, from the type the value is wanted as and from
 the lambdas among the arguments, and a value is boxed or unboxed where a type argument is a
 box. A lambda and a method reference are made for any interface with one abstract method,
-the program's or the library's.
+the program's or the library's. A call that gives a raw type where its method wants a
+parameterized one is typed as a compiler types it: the type its value is wanted as says
+nothing of the type arguments, and its value is of the erasure of the type the method
+returns, so `Collections.max(rawList)` is a `Comparable`.
 
 ```java
 record Pair<A, B>(A first, B second) {

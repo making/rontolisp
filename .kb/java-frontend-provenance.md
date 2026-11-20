@@ -497,6 +497,18 @@ algorithm came from, and the answer goes in the file's header.
   notices were read off a JDK's answers to seeded runs compared with a heap written beside
   it (`PQOrder.java`, `PQWalk.java`, `PQMore.java`). The answers are lines of
   `java-spec.yaml`, which the JDK leg asks again.
+- **A raw argument, `Stream.toList()`'s list, the digits and the members met (k71,
+  2026-11-21).** Written from the JLS (18.5.2 and 15.12.2.6 for a call applicable by an
+  unchecked conversion, 4.5.1 for `? extends Object`), the API documentation (`stripIndent`'s
+  lines and indentation, `translateEscapes`' escapes, `Character.digit`'s digits, the title
+  case) and JDK 25's answers to probes (javac's types and warnings of a call given a raw
+  argument, the lists' refusals, every code point's `digit` and title case, the lines of
+  `stripIndent` and `translateEscapes`; `.todo/artefacts/k71-java-front-end-what-k60-left/`).
+  Nobody opened OpenJDK's source. What the documentation does not state was read off the
+  answers: which type a type parameter nothing found is erased from (its first bound that is
+  not `Object`), when javac warns of a raw argument and in which order, the words of
+  `translateEscapes`' refusal. The zeros of the decimal digits are Unicode's as a running JDK
+  answers them, under the Unicode entry of `THIRD-PARTY-NOTICES.txt`.
 - **Computed resource names, `Properties`, `ResourceBundle`, `ServiceLoader` (k58,
   2026-11-20).** Written from the API documentation (`Properties.load`'s grammar and
   `store`'s escapes and order of keys, `ResourceBundle.getBundle`'s lookup with its

@@ -35,9 +35,11 @@ final class JavaWarnings {
 	 *
 	 * @param source the file it is in
 	 * @param pos where the caret goes
+	 * @param order where it is printed among the others of its file: its place, or past
+	 * those of the value it is about
 	 * @param text what it says: its first line, then the lines under the caret
 	 */
-	private record Warning(Source source, int pos, String text) {
+	private record Warning(Source source, int pos, int order, String text) {
 	}
 
 	private final List<Warning> warnings = new ArrayList<>();
@@ -62,6 +64,18 @@ final class JavaWarnings {
 	 * variables among them are explained under it
 	 */
 	void unchecked(JavaClasses.Unit unit, int pos, String message, List<String> details, List<JavaType> mentioned) {
+		unchecked(unit, pos, size(), message, details, mentioned);
+	}
+
+	/**
+	 * An unchecked warning about a value converted to the type it is wanted as, which a
+	 * compiler says once it has said what the value's own expression warns of: printed
+	 * after those, whatever their places ({@code Comparable<String> c = max(raw)} warns
+	 * of {@code raw} before the value of the call).
+	 * @param since how many were gathered before the value was lowered
+	 */
+	void unchecked(JavaClasses.Unit unit, int pos, int since, String message, List<String> details,
+			List<JavaType> mentioned) {
 		if (unit.source().partial() || pos < 0 || unit.unchecked().stream().anyMatch(span -> span.contains(pos))) {
 			return;
 		}
@@ -69,7 +83,13 @@ final class JavaWarnings {
 		for (String detail : details) {
 			text.append("\n  ").append(detail);
 		}
-		this.warnings.add(new Warning(unit.source(), pos, text.append(where(mentioned)).toString()));
+		int order = pos;
+		for (Warning inside : this.warnings.subList(Math.min(since, this.warnings.size()), this.warnings.size())) {
+			if (inside.source() == unit.source()) {
+				order = Math.max(order, inside.order());
+			}
+		}
+		this.warnings.add(new Warning(unit.source(), pos, order, text.append(where(mentioned)).toString()));
 	}
 
 	/**
@@ -80,14 +100,15 @@ final class JavaWarnings {
 	 */
 	void warn(JavaClasses.Unit unit, int pos, String text) {
 		if (!unit.source().partial()) {
-			this.warnings.add(new Warning(unit.source(), pos, text));
+			this.warnings.add(new Warning(unit.source(), pos, pos, text));
 		}
 	}
 
 	/**
 	 * What a compiler prints of the warnings, or the empty string for none: the program's
 	 * own file first, then the others in the order a warning was first found in them;
-	 * each file's in the order of their places.
+	 * each file's in the order of their places, one about a converted value after those
+	 * of the value's expression.
 	 * @param program the file the program starts at
 	 * @return the text, each line ended
 	 */
@@ -103,7 +124,7 @@ final class JavaWarnings {
 			}
 		}
 		distinct.sort(Comparator.comparingInt((Warning warning) -> order.get(warning.source()))
-			.thenComparingInt(Warning::pos));
+			.thenComparingInt(Warning::order));
 		StringBuilder out = new StringBuilder();
 		for (Warning warning : distinct.subList(0, Math.min(SHOWN, distinct.size()))) {
 			String text = warning.source().text();

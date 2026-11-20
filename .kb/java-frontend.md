@@ -50,8 +50,8 @@ collectors and the inference they need, `Name.class::isInstance` / `::cast`: k12
 (2026-11-19); a library read as source from the program's source path and lowered as far
 as the program reaches it, annotation types and type annotations, an exact method
 reference in a call's applicability: k24 (2026-11-19); what comes after is `.todo/k15`,
-`k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22`, `k71` and `k72` (what k00, k11, k06, k07,
-k08, k10, k12, k26, k47, k55 and k60 left); YAVI compiled to wasm in both of its styles, the milestone k24 was
+`k16`, `k17`, `k18`, `k19`, `k20`, `k21`, `k22`, `k72` and `k82` (what k00, k11, k06, k07,
+k08, k10, k12, k26, k47, k55, k60 and k71 left); YAVI compiled to wasm in both of its styles, the milestone k24 was
 asked for, and where its bytes go: k33 (2026-11-20; "YAVI compiled to wasm" below); the
 Maven plugin's `wasm` goal reading a project's
 dependencies from their sources jars, a session reading the source path: k32 (2026-11-20);
@@ -1260,6 +1260,10 @@ lub of the lowers, else an upper, else OPEN.
   whether it gives nothing (`givesNothing`: lowered once and dropped, state restored), and only
   for a lambda that writes its parameter types or has none -- as the language does. A
   functional interface giving a value is more specific than one giving none.
+- **A call that applies only by the unchecked conversion of a raw argument** (k71, JLS
+  18.5.2): the type it is wanted as is not told, and its value is the erasure of the type
+  returned (`Collections.max(raw)` a `Comparable`; "A raw argument, `Stream.toList()`, the
+  digits and the members met").
 - **The errors are the compiler's first lines**: `incompatible types: inference variable T has
   incompatible bounds` (one type given), `inferred type does not conform to upper bound(s)`
   (several), `cannot infer type arguments for Box<>`, `method m in class C<T> cannot be applied
@@ -1372,6 +1376,11 @@ measured programs.
   `List.of`, `Set.of`, `Arrays.asList`, `Collections.addAll`, `Map.ofEntries` carry it as the
   JDK's do). The `where` lines name each type variable the warning mentions, in the order
   mentioned, then those its bounds mention.
+- **A call given a raw argument** (k71): the invocation warning names the class raw and the
+  argument's conversion names the parameter as declared, said where javac says them (`? extends
+  Object` is `?`); a converted value's warning comes after those of its expression
+  (`JavaWarnings.Warning.order`; "A raw argument, `Stream.toList()`, the digits and the
+  members met").
 - **`@SuppressWarnings("unchecked")`** (`JavaParser.suppressed`): the parser records the span
   of each declaration so annotated -- a top-level, member or local class, a field, a method,
   a constructor, a local variable --, and a warning whose caret is inside one is not said.
@@ -1496,7 +1505,7 @@ measured programs.
 - A method reference naming a class fits a functional interface by its arity when a call has
   several candidates (`takes`): `thenComparing(Point::label)` against `thenComparing(Comparator)`.
 - Sizes on wasm (2026-11-17, before / after): a list added to and read 3,732 / 25,592; one
-  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/k71` holds what is
+  printed 43,929 / 56,779; a `HashMap` put and read 37,802 / 57,847. `.todo/k82` holds what is
   left and the leads.
 - **The library is Java a JDK compiles** (j79, decided by measuring): javac of JDK 25 takes
   all 139 files as a patch of its own `java.base` (`--patch-module java.base=<library>`) with
@@ -1606,9 +1615,8 @@ measured programs.
   (4.37 s before the vector) and 18.6 -> 34.8 s on the interpreter. A program calling
   none holds none. Not moved: `isWhitespace` / `isSpaceChar` (code, as before),
   `toUpperCase` / `toLowerCase` (the host's fold is uniform), and `digit` /
-  `getNumericValue`, which still ask the host: a digit outside ASCII is read on the
-  interpreter and the JVM and not on wasm, `Integer.parseInt` with it (`deviations.md`,
-  `.todo/k71`: a table there would be in every program that parses a number).
+  `getNumericValue`, which asked the host until k71 ("A raw argument, `Stream.toList()`, the
+  digits and the members met" below: a list of Unicode's zeros, one rule everywhere).
 - **`%h` hands the format the program's `hashCode()` only where the control may ask**
   (`JavaIntrinsics.formatted`): `%java-format` takes the function as its fourth argument,
   `nil` when the control is a constant with no `%h`. The arm itself is 401 B in every
@@ -1634,7 +1642,7 @@ measured programs.
   adjustments, the arithmetic over 17 durations, 103 texts through `parse` with each
   refusal's message, index and cause -- prints a JDK 25's lines on the four backends
   (`.todo/artefacts/k05-java-front-end-what-the-everyday-members-and-utf-16-slice-left/Dur.java`).
-  Not there: `dividedBy` (`.todo/k71`). `between`, `of` / `get` of a `TemporalUnit` and
+  Not there: `dividedBy` (`.todo/k82`). `between`, `of` / `get` of a `TemporalUnit` and
   `truncatedTo` came with the rest of `java.time` (k35, "java.time" below), which left
   a program of a `Duration` alone as it was (155,029 B of wasm before and after).
   `Thread.sleep(Duration)` is there (a duration below zero is no sleep, zero is one an
@@ -1714,7 +1722,7 @@ measured programs.
   first, so an array too short keeps the high one's place) / `codePointAt` of an array
   / `reverseBytes`, `OptionalLong` and `HttpHeaders.firstValueAsLong`: each in
   `Support` or a source class, 866 probe lines identical to JDK 25 on four backends
-  (`Members.java` beside `Dur.java`). Still refused: `.todo/k71`.
+  (`Members.java` beside `Dur.java`). Still refused: `.todo/k82`.
 
 ## The sorted collections (2026-11-20, k47)
 
@@ -1988,16 +1996,88 @@ from the API documentation and JDK 25's answers to probes
   (some 300 B in a program asking them), `Map.of`'s keys and values as `AbstractMap`'s views
   (500 B), `Arrays.asList`'s iterator of its own for the words `remove` (0.9 to 1.4 KB in a
   program walking it and another list).
-- **Left** (`deviations.md`, `.todo/k71`): a list of `List.of` of one or two refuses an index
+- **Left** (`deviations.md`, `.todo/k82`): a list of `List.of` of one or two refuses an index
   with the array's words; `List.of`'s iterator's `remove()` before `next()` is
   `IllegalStateException`; `Set.of` and `Map.of` answer a null, and `Map.of`'s views refuse a
-  change that changes nothing; `Arrays.asList` refuses a removal with no message;
-  `Stream.toList()` is `unmodifiableList`'s list (`rontolisp.internal` reaches no class of
-  `java.util` that is not public); the empty `List.of()` is a new object; an `AbstractList`
+  change that changes nothing; `Arrays.asList` refuses a removal with no message
+  (`Stream.toList()` came with k71: "A raw argument, `Stream.toList()`, the digits and the
+  members met" below); the empty `List.of()` is a new object; an `AbstractList`
   iterator past the end has no cause (a `catch` there would be in every program walking such
   a list); a map's views are new at each call, so `values().equals(values())` is `false`.
 - Pins: java-spec `a-deque-an-optional-the-utilities-and-the-older-classes` (`immutables()`,
   `priorities()`), `JavaLoweringTest#typeParametersLambdasAndBoxes` (the bridged arms).
+
+## A raw argument, `Stream.toList()`, the digits and the members met (2026-11-21, k71)
+
+**Invariant: a call that applies only by the unchecked conversion of a raw argument is typed
+as JLS 18.5.2 and javac type it -- the type it is wanted as says nothing of its type
+parameters, its value is the erasure of the type returned -- and warned of as javac warns;
+the list of `Stream.toList()` and of a gatherer's window is a list of `List.of`'s kind that
+holds nulls; `Character.digit` is one rule on every backend, Unicode's decimal digits read
+from a list of their zeros.** Written from the API documentation, the JLS and JDK 25's
+answers to probes ([java-frontend-provenance.md](java-frontend-provenance.md)); the probes
+are `.todo/artefacts/k71-java-front-end-what-k60-left/`.
+
+- **A raw argument** (`JavaLowering.resolve`, `uncheckedApplied`, `bounded`):
+  `Collections.max(raw)` was `inferred type does not conform to upper bound(s)` -- the
+  target `Object` made `T` an `Object`, which is no `Comparable<? super T>`. Now the target
+  is not told and the value is the erasure of the type returned, each type parameter what
+  the other arguments found or else the first of its bounds that is not `Object`: javac's
+  `Comparable` for `Collections.max(raw)`, `Number` for `T extends Number`, `Integer` for
+  `top(raw, 3)`; a creation with `<>` is raw (`new ArrayList<>(raw)` an `ArrayList`), one
+  with written type arguments keeps them. Read off javac's refusal of `int x = call(raw)`,
+  which names the type (`Types.java`). `Collections.max` / `min` declare `T extends Object &
+  Comparable<? super T>`, as the API does (a warning's `where` line names both bounds).
+- **Its warnings** (`JavaWarnings`; `Warnings.java`): `unchecked method invocation` names
+  the class raw (`in interface List`, no where line for its parameters) and is said where
+  the call applies by the conversion; an argument's `unchecked conversion` names the
+  parameter as the method declares it (`Collection<? extends E>` through a `List<String>`)
+  and is said where the parameter, its type parameters found or at their bounds, still
+  needs the conversion. `? extends Object` is `?` (JLS 4.5.1; `reifiable`), so
+  `new ArrayList<>(raw)` and `m(raw)` of `<T> m(Collection<? extends T>)` say no conversion
+  and `lo.addAll(raw)` of a `List<Object>` nothing at all, as javac. A value's conversion is
+  said after what its expression said, whatever the places (`Comparable<String> c =
+  max(raw)`: the argument's caret is past the call's; `Warning.order`, `assign(.., since)`).
+- **`Stream.toList()` and a window of `Gatherers.windowFixed` / `windowSliding`** are an
+  `ImmutableCollections.ListN` of the kind `NULLS` (a fourth `how`: its spliterator is
+  `OWN`'s, `indexOf`, `lastIndexOf` and a part take a null). The streams' classes cannot
+  name a class of `java.util` that is not public (javac compiles the library as
+  `java.base`), so `Flow.listed(Object[])` is a `native` member whose form calls
+  `ImmutableCollections.listed` (`JavaIntrinsics.NATIVES`, `lowering.library`): no member a
+  program could name. k60's `Imm.java`: 125 -> 99 lines differ from a JDK, the rest
+  `List.of`'s own.
+- **`Character.digit`** (`%java-digit`): ASCII through `digit-char-p` of base 36, the
+  fullwidth Latin letters as the ASCII ones, a decimal digit of Unicode (category Nd) as
+  its distance from the zero of its set of ten, the 75 zeros above ASCII a quoted list
+  (`%java-unicode-digit`, pinned to the running JDK by `JavaLoweringTest#theLoweringTable`).
+  The host's `digit-char-p` answered until then: Unicode's digits on the interpreter and
+  the JVM, none on wasm. A number's text (`Double.parseDouble`) and a format's control read
+  ASCII digits only (`%java-ascii-digit`), as a JDK does (the interpreter read `"１２"` as
+  12.0). A sweep of every code point (`Sweep.java`) gives a JDK's `digit` of radix 10 and 36
+  and `toTitleCase` on the JVM and wasm. Measured for the table (wasm bytes): the list 670
+  and its scan 590, +1,538 in a program parsing an int; a string of bounds decoded into a
+  vector was 3,166, a vector literal +3.8 KB and a string of the zeros as characters +2.6 KB
+  in a small Lisp program. **Not made**: `getNumericValue` of the numbers that are no digit
+  (`Ⅷ`, `²`, `½`; 1,159 code points in some 520 runs, 4 KB as text) -- in every program
+  calling it, and programs call it for ASCII digits.
+- **Members**: `String.stripIndent`, `translateEscapes` (`Support`; the refusal's words a
+  JDK's, U+0000 named after a final backslash), `Character.toTitleCase` (the uppercase, but
+  for the digraphs `Ǆ` .. `ǌ`, `Ǳ` .. `ǳ`, and Georgian's Mkhedruli, which has none),
+  `codePointAt` and `codePointCount` of a `CharSequence` (`named` / `meets`). Probes:
+  `Strip.java` (33 lines), `Title.java`.
+- **Measured** (wasm bytes, the size programs of k12, k26, k47, k55, k60 and k62 and four
+  more, `sizes/` of the artefacts): unchanged but `SzParse` 58,309 -> 59,847 and `FoBig`
+  189,254 -> 190,252 (the digits), `Fo` and `SzFormat` -590 and `SzDouble` -437 (no
+  `digit-char-p`), `SzToList` -901, `MapOnly` -709, `MultiOnly` -707, `GatherOnly` -504 (a
+  `ListN` for an unmodifiable view), `SzUnmod` +124, `SzUnmodSet` +212, `SzRemoveAll` +119,
+  `SzSub` +96 (the `NULLS` test). YAVI's `Member.java` 643,806 -> 645,561, `Booking.java`
+  1,118,067 -> 1,119,947 (the digits).
+- Pins: java-spec `the-unchecked-warnings-are-printed-before-the-program-runs` (a raw
+  argument), `a-deque-an-optional-the-utilities-and-the-older-classes` (`toList()`'s list),
+  `a-gatherer-is-a-stage-holding-what-it-pushes-until-it-is-asked` (a window),
+  `the-boxes-parse-print-and-compare-and-math-is-strict` (the digits),
+  `a-string-has-its-everyday-surface-and-two-constants-of-a-text-are-one` (the members);
+  `JavaLoweringTest#theLoweringTable` (the zeros).
 
 ## The sublist and the walks of a list (2026-11-20, k62)
 
@@ -2279,7 +2359,7 @@ documentation; what it leaves open is a JDK 25's answers to a grid. `java.time.c
   fixed clock, a field's predicate), texts, values already of the type and numbers for
   the year -- prints a JDK's 77 lines on the four: wasm 1,256,341 B.
 - The classes k35 left came with k52 ("java.time: what the formatter left" below).
-  `Duration.dividedBy` stays `.todo/k71`'s. The formatter and the queries came with k43
+  `Duration.dividedBy` stays `.todo/k82`'s. The formatter and the queries came with k43
   ("java.time: the formatter" below).
 - Pins: java-spec `dates-times-and-instants-are-read-from-their-texts-and-computed-with`
   (146 lines of the grid's kinds); a class the subset lacks is `java.util.Currency` and
@@ -3097,7 +3177,7 @@ holds none of it.** No files: `File`, `FileReader`, `java.nio.file` stay refused
   string CONSTANT holding one is `?` on wasm. Measured 2026-11-18 (j98): the two halves
   of a pair appended to a `StringBuilder` one `char` after the other are a string of
   length 2 on the interpreter, 1 on the JVM (a JDK: 2 units, here one character), and
-  on wasm no `equals` of the character they spell (`.todo/k71`).
+  on wasm no `equals` of the character they spell (`.todo/k82`).
 - **`Double.longBitsToDouble`, `Float.intBitsToFloat`** are `%java-bits-binary` over
   `%java-nearest-binary` (exact, the subnormals included).
 - **Measured** (2026-11-17, the box and method of "Measured" below; wasm / class bytes, then
@@ -3254,7 +3334,7 @@ the probes are `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-dura
   (`JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches`), but its
   class table reads 97 files of the library where it read 46 -- `Collection` names
   `Stream`, and a class's member types are read with it: 1.89 -> 1.95 s for a program of
-  one list on the interpreter (`.todo/k71`).
+  one list on the interpreter (`.todo/k82`).
 - **`String.compareTo(null)` throws** (k12: it answered 1, found by `sorted()` over a
   `null`): `%java-string-compare` and `-ignore-case` test their argument, 23 B of wasm
   in a program comparing strings.
@@ -3317,7 +3397,7 @@ the probes are `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-dura
   stream's spliterator differs from a JDK's in the marks named in `deviations.md`, in
   its estimate where the count is not known (`Long.MAX_VALUE`; a JDK's is its
   source's), in being no source's own (`StreamSupport.stream(s, false).spliterator()
-  != s`), and `sorted()` always takes every element. Lead (`.todo/k71`): marks kept
+  != s`), and `sorted()` always takes every element. Lead (`.todo/k82`): marks kept
   only in a program that asks for one, which needs a member of the library lowered by
   what the program reaches, as the third function of a format is.
 - **The streams of a `Random`** (k26; `IntFlow.drawn` and its kin: so many elements of
@@ -3341,7 +3421,7 @@ the probes are `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-dura
   `ConcurrentHashMap` with two more marks (`Collectors.grouped`, `once`, `merged`):
   `CONCURRENT`, `UNORDERED`, and `IDENTITY_FINISH` where the downstream has it. A JDK
   checks no argument of them for `null` when the collector is made (`Conmap.java`).
-- **Not there** (`.todo/k71`): a pipeline run in halves (`parallel()` is a flag), the
+- **Not there** (`.todo/k82`): a pipeline run in halves (`parallel()` is a flag), the
   marks of a stream's spliterator, a collector's `finisher` skipped under
   `IDENTITY_FINISH`.
 
@@ -3468,7 +3548,7 @@ member) or is refused where the request is sent (`deviations.md`, "The HTTP clie
   and in the client), with one 489,891 B. A program's own `HttpRequest` class stating a
   `timeout()` is refused by name where no builder was given one. A component that
   serves cannot time a request (an `IOException` with fetch's refusal: `.todo/148`).
-- **Not made** (`.todo/k71`): bodies as they arrive (`ofInputStream` reads a body
+- **Not made** (`.todo/k82`): bodies as they arrive (`ofInputStream` reads a body
   already in, `ofLines`, a program's own `BodySubscriber`), the `--host-fetch` reactor
   as a leg, `URI`'s constructors of several parts.
 

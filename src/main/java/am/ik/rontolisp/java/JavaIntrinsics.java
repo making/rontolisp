@@ -317,6 +317,10 @@ final class JavaIntrinsics {
 		if (member.equals("subSequence") && (intrinsic.equals(STRING) || builder)) {
 			return List.of(CHARS);
 		}
+		if ((member.equals("codePointAt") || member.equals("codePointCount"))
+				&& intrinsic.equals("java.lang.Character")) {
+			return List.of(CHARS);
+		}
 		if (intrinsic.equals(STRING) && (member.equals("getBytes") || member.equals("<init>"))) {
 			return List.of(CHARSET);
 		}
@@ -351,6 +355,15 @@ final class JavaIntrinsics {
 			intrinsic.methods.add(new JavaClass.Method(intrinsic, "subSequence", List.of(Primitive.INT, Primitive.INT),
 					new ClassType(named, List.of()), false, false, null,
 					intrinsic.name.equals(STRING_BUFFER) ? guarded(emitter) : emitter, false));
+		}
+		if (named.name.equals(CHARS) && intrinsic.name.equals("java.lang.Character")) {
+			// the members of a sequence of characters: a code point and a count of them
+			ClassType characters = new ClassType(named, List.of());
+			intrinsic.methods.add(new JavaClass.Method(intrinsic, "codePointAt", List.of(characters, Primitive.INT),
+					Primitive.INT, true, false, null, support("sequenceCodePointAt"), false));
+			intrinsic.methods.add(
+					new JavaClass.Method(intrinsic, "codePointCount", List.of(characters, Primitive.INT, Primitive.INT),
+							Primitive.INT, true, false, null, support("sequenceCodePointCount"), false));
 		}
 		if (named.name.equals(APPENDABLE) && builder) {
 			// the three members as the interface spells them, which a call through it
@@ -997,6 +1010,8 @@ final class JavaIntrinsics {
 			.method("contentEquals", b, support("contentEquals"), object)
 			.method("getChars", Primitive.VOID, runtime("get-chars"), i, i, characters, i)
 			.method("indent", string, support("indent"), i)
+			.method("stripIndent", string, support("stripIndent"))
+			.method("translateEscapes", string, support("translateEscapes"))
 			.method("contains", b,
 					(lowering, call) -> call("if", call("search", text(lowering, call, 0), call.self()), JavaForms.T,
 							JavaForms.NIL),
@@ -1516,6 +1531,7 @@ final class JavaIntrinsics {
 			.statik("forDigit", c, runtime("for-digit"), i, i)
 			.statik("toUpperCase", c, runtime("char-upcase"), c)
 			.statik("toLowerCase", c, runtime("char-downcase"), c)
+			.statik("toTitleCase", c, runtime("char-titlecase"), c)
 			.method("compareTo", i,
 					(lowering, call) -> call("-", call("char-code", call.self()), call("char-code", call.argument(0))),
 					self)
@@ -1613,7 +1629,8 @@ final class JavaIntrinsics {
 			.statik("getNumericValue", i, runtime("numeric-value"), i)
 			.statik("digit", i, runtime("digit"), i, i)
 			.statik("toUpperCase", i, runtime("char-upcase"), i)
-			.statik("toLowerCase", i, runtime("char-downcase"), i);
+			.statik("toLowerCase", i, runtime("char-downcase"), i)
+			.statik("toTitleCase", i, runtime("char-titlecase"), i);
 		return builder.made;
 	}
 
@@ -1768,6 +1785,10 @@ final class JavaIntrinsics {
 		natives.put(arrays + "sortRange(long[],int,int)", runtime("sort-numbers"));
 		natives.put(arrays + "sortRange(double[],int,int)", runtime("sort-doubles"));
 		natives.put(arrays + "sortRange(char[],int,int)", runtime("sort-numbers"));
+		// a list of List.of's kind that holds nulls, made by a class of java.util the
+		// streams' package cannot name
+		natives.put("rontolisp.internal.Flow.listed(Object[])", (lowering, call) -> lowering
+			.library("java.util.ImmutableCollections", "listed", List.of(call.argument(0))));
 		natives.put("rontolisp.internal.Support.readDouble(String)", runtime("read-double"));
 		natives.put("rontolisp.internal.Support.utf8(String)", runtime("utf8-bytes"));
 		natives.put("rontolisp.internal.Support.utf8String(byte[],int,int)", runtime("utf8-string"));

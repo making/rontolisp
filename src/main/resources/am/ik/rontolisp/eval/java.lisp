@@ -1058,13 +1058,14 @@
             ((equal (%substring s i n) "NaN") (rontolisp::%java-nan))
             (t
              (while (and (< i n)
-                         (or (digit-char-p (char s i))
+                         (or (rontolisp::%java-ascii-digit (char s i))
                              (and (char= (char s i) #\.) (null seen-point))))
                (if (char= (char s i) #\.)
                    (setq seen-point t)
                    (progn
                      (setq mantissa
-                           (+ (* mantissa 10) (digit-char-p (char s i))))
+                           (+ (* mantissa 10)
+                              (rontolisp::%java-ascii-digit (char s i))))
                      (setq digits (+ digits 1))
                      (if seen-point (setq scale (+ scale 1)))))
                (setq i (+ i 1)))
@@ -1078,10 +1079,12 @@
                        (progn
                          (setq minus (char= (char s i) #\-))
                          (setq i (+ i 1))))
-                   (while (and (< i n) (digit-char-p (char s i)))
+                   (while (and (< i n)
+                               (rontolisp::%java-ascii-digit (char s i)))
                      (if (< exponent 100000)
                          (setq exponent
-                               (+ (* exponent 10) (digit-char-p (char s i)))))
+                               (+ (* exponent 10)
+                                  (rontolisp::%java-ascii-digit (char s i)))))
                      (setq count (+ count 1))
                      (setq i (+ i 1)))
                    (if (= count 0) (setq bad t))
@@ -1170,11 +1173,53 @@
 (defun rontolisp::%java-char-downcase (code)
   (char-code (char-downcase (code-char code))))
 
+;; Character.toTitleCase: the uppercase, but for the three digraphs, whose title case is
+;; the form of a capital and a small letter, and Georgian's Mkhedruli, which has none.
+(defun rontolisp::%java-char-titlecase (code)
+  (cond ((and (>= code 452) (<= code 460))
+         (cond ((<= code 454) 453) ((<= code 457) 456) (t 459)))
+        ((and (>= code 497) (<= code 499)) 498)
+        ((and (>= code 4304) (<= code 4351)) code)
+        (t (rontolisp::%java-char-upcase code))))
+
+;; Character.digit above ASCII: a fullwidth Latin letter as the ASCII one, a decimal
+;; digit of Unicode (the general category Nd) as its distance from the zero of its set
+;; of ten, the zeros in order. A running JDK's, as the regular-expression engine's
+;; tables are (JavaLoweringTest#theLoweringTable pins them to it). Third-party: Unicode
+;; Character Database data (Unicode-3.0), Copyright (c) 1991-2026 Unicode, Inc.
+;; Notice: THIRD-PARTY-NOTICES.txt, "Unicode".
+(defun rontolisp::%java-unicode-digit (code)
+  (if (and (>= code 65313) (<= code 65370))
+      (digit-char-p (code-char (- code 65248)) 36)
+      (let ((zeros
+             '(1632 1776 1984 2406 2534 2662 2790 2918 3046 3174 3302 3430 3558
+               3664 3792 3872 4160 4240 6112 6160 6470 6608 6784 6800 6992 7088
+               7232 7248 42528 43216 43264 43472 43504 43600 44016 65296 66720
+               68912 68928 69734 69872 69942 70096 70384 70736 70864 71248 71360
+               71376 71386 71472 71904 72016 72688 72784 73040 73120 73552 90416
+               92768 92864 93008 93552 118000 120782 120792 120802 120812 120822
+               123200 123632 124144 124401 125264 130032))
+            (found nil))
+        (while zeros
+          (let ((above (- code (car zeros))))
+            (if (and (>= above 0) (< above 10)) (setq found above)))
+          (setq zeros (cdr zeros)))
+        found)))
+
+;; Character.digit: an ASCII digit or letter as Common Lisp reads it in base 36, which
+;; every backend does alike, anything above as Unicode has it; -1 for what is no digit
+;; under the radix, and for a radix outside 2 to 36.
 (defun rontolisp::%java-digit (code radix)
   (let ((value
-         (digit-char-p (code-char code)
-                       (if (and (>= radix 2) (<= radix 36)) radix 10))))
-    (if (and value (>= radix 2) (<= radix 36)) value -1)))
+         (cond ((< code 0) nil)
+               ((< code 128) (digit-char-p (code-char code) 36))
+               (t (rontolisp::%java-unicode-digit code)))))
+    (if (and value (>= radix 2) (<= radix 36) (< value radix)) value -1)))
+
+;; An ASCII digit's value, or nil: what a number's text and a format's control read.
+(defun rontolisp::%java-ascii-digit (c)
+  (let ((code (char-code c)))
+    (if (and (>= code 48) (<= code 57)) (- code 48) nil)))
 
 (defun rontolisp::%java-numeric-value (code) (rontolisp::%java-digit code 36))
 
@@ -2252,7 +2297,8 @@
                   (index nil))
               ;; an argument index: digits and a dollar sign
               (let ((k j))
-                (while (and (< k n) (digit-char-p (char control k)))
+                (while (and (< k n)
+                            (rontolisp::%java-ascii-digit (char control k)))
                   (setq k (+ k 1)))
                 (if (and (> k j) (< k n) (char= (char control k) #\$))
                     (progn
@@ -2261,16 +2307,21 @@
               (while (and (< j n) (position (char control j) "-#+ 0,("))
                 (vector-push-extend (char control j) flags)
                 (setq j (+ j 1)))
-              (while (and (< j n) (digit-char-p (char control j)))
-                (setq width (+ (* width 10) (digit-char-p (char control j))))
+              (while (and (< j n)
+                          (rontolisp::%java-ascii-digit (char control j)))
+                (setq width
+                      (+ (* width 10)
+                         (rontolisp::%java-ascii-digit (char control j))))
                 (setq j (+ j 1)))
               (if (and (< j n) (char= (char control j) #\.))
                   (progn
                     (setq j (+ j 1))
                     (setq precision 0)
-                    (while (and (< j n) (digit-char-p (char control j)))
+                    (while (and (< j n)
+                                (rontolisp::%java-ascii-digit (char control j)))
                       (setq precision
-                       (+ (* precision 10) (digit-char-p (char control j))))
+                            (+ (* precision 10)
+                               (rontolisp::%java-ascii-digit (char control j))))
                       (setq j (+ j 1)))))
               (if (>= j n)
                   (rontolisp::%java-raise
