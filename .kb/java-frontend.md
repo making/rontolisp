@@ -3659,8 +3659,14 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   general arm, `region`'s arrays were general by their `make-array` inits, and a general
   array's `length` at the speed levels is a 57 B arm where the call is 3 (nine in `region`).
   What is left of the reader: five `make-array`s of a computed size (some 150 B each: the dims
-  of any rank, `_vec_sync`), three generic divisions of declared integers and the checks of
-  what the inline arms refuse.
+  of any rank, `_vec_sync`), three generic divisions of declared integers (an `i64.div_s` since
+  k68, below) and the checks of what the inline arms refuse.
+- **A quotient is an `i64.div_s` on wasm** (2026-11-20, k68): `a / b` and `Math.floorDiv` of
+  declared or asserted operands (`floorDiv` asserts its operands as an operator does) are an
+  operation of the fused tree, a zero divisor reported as before and `MIN_VALUE / -1` wrapped by
+  the mask (`.kb/wasm-int-fusion.md`, "Quotients of two integers", where the numbers are: the
+  zone reader 12,765 -> 10,951 B, `Zone` 166,183 -> 157,926, 30,000,000 divisions 1.80 -> 0.67
+  s). The JVM's `_iquo` was already a `LDIV`.
 - **`byte` and `short`** are integers an operator promotes to `int` and an assignment of a
   constant that fits, a cast or a compound assignment narrows (`JavaForms.signed`).
   **`float` is the double of its value** -- every binary32 is a binary64 -- and each operation's

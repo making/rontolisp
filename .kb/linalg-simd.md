@@ -374,7 +374,9 @@ JDK 25.0.5, wasmtime 49, Xeon E5-2697A v4 (`loop` = `(setq s (+ s (op i 7)))` in
 
 Integer fusion does not take `floor`/`truncate` (`.kb/jvm-int-fusion.md`): the loop above already
 matches the fused `mod` on the JVM (`_iquo` inlines) and beats it on wasm, where Cranelift turns the
-inline division by a literal into a multiply and the fused `mod` stays a `_fx_mod` call. The wasm arm
+inline division by a literal into a multiply and the fused `mod` stays a `_fx_mod` call. On wasm a
+quotient whose operands read no leaf that can bail is an op since k68 (`.kb/wasm-int-fusion.md`,
+"Quotients of two integers"); over one that can, it stays this inline division. The wasm arm
 was a call into `_big_fdiv` first: 24-27 ns, and 32-35 with `rem_s` beside `div_s` (one more
 hardware division on this machine).
 

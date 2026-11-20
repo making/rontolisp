@@ -2584,8 +2584,13 @@ final class WasmExprCompiler {
 			case LispNames.FLOAT -> WasmFloatConvCompiler.compile(LispMacroExpander.normalizeFloatCall(cons), ctx);
 			case LispNames.TRUNCATE, LispNames.FLOOR, LispNames.CEILING, LispNames.ROUND -> {
 				// (floor a b) -> (floor (/ a b)); the one-argument form compiles
-				// natively.
+				// natively. (truncate a b) or (floor a b) of integers may be a fused
+				// tree's i64.div_s.
 				LispVal withDivisor = LispMacroExpander.expandFloorFamilyDivisor(cons);
+				if (withDivisor != null && (LispNames.TRUNCATE.equals(sym.name()) || LispNames.FLOOR.equals(sym.name()))
+						&& WasmIntFusionCompiler.tryCompile(cons, ctx)) {
+					return true;
+				}
 				if (withDivisor != null) {
 					WasmExprCompiler.compileExpr(withDivisor, ctx);
 				}

@@ -1602,6 +1602,15 @@ final class JavaIntrinsics {
 		return call("<=", integer(least), number, integer(most));
 	}
 
+	/**
+	 * {@code Math.floorDiv}: the floored quotient wrapped to its type, each operand
+	 * asserted of its own as an operator's are ({@link JavaForms#known}).
+	 */
+	private static LispVal floorDiv(Primitive type, Primitive divisor, JavaEmitter.Invocation call) {
+		return JavaForms.wrap(type, call("values",
+				call("floor", JavaForms.known(type, call.argument(0)), JavaForms.known(divisor, call.argument(1)))));
+	}
+
 	private static JavaClass math(Builder builder) {
 		Primitive i = Primitive.INT;
 		Primitive l = Primitive.LONG;
@@ -1627,14 +1636,8 @@ final class JavaIntrinsics {
 					(lowering, call) -> call("*", call.argument(0), new LispDouble(0.017453292519943295)), d)
 			.statik("toDegrees", d, (lowering, call) -> call("*", call.argument(0), new LispDouble(57.29577951308232)),
 					d)
-			.statik("floorDiv", i,
-					(lowering, call) -> JavaForms.wrap(i,
-							call("values", call("floor", call.argument(0), call.argument(1)))),
-					i, i)
-			.statik("floorDiv", l,
-					(lowering, call) -> JavaForms.wrap(l,
-							call("values", call("floor", call.argument(0), call.argument(1)))),
-					l, l)
+			.statik("floorDiv", i, (lowering, call) -> floorDiv(i, i, call), i, i)
+			.statik("floorDiv", l, (lowering, call) -> floorDiv(l, l, call), l, l)
 			.statik("floorMod", i, host("mod"), i, i)
 			.statik("floorMod", l, host("mod"), l, l);
 		for (String name : List.of("sqrt", "cbrt", "floor", "ceil", "rint", "exp", "log", "log10", "sin", "cos", "tan",
@@ -1690,11 +1693,7 @@ final class JavaIntrinsics {
 			Primitive wide = operands.get(0);
 			Primitive divisor = operands.get(1);
 			if (divisor != wide) {
-				builder
-					.statik("floorDiv", wide,
-							(lowering, call) -> JavaForms.wrap(wide,
-									call("values", call("floor", call.argument(0), call.argument(1)))),
-							wide, divisor)
+				builder.statik("floorDiv", wide, (lowering, call) -> floorDiv(wide, divisor, call), wide, divisor)
 					.statik("floorMod", divisor, host("mod"), wide, divisor);
 			}
 			builder

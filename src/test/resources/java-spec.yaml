@@ -172,7 +172,7 @@ cases:
               System.out.println(fact(20) + " " + fact(21) + " " + (1L << 40) * 3 + " " + (int) (1L << 40) + " " + (int) 0x1FFFFFFFFL + " " + 0xFFFFFFFFFFL);
               seed = seed * 6364136223846793005L + 1442695040888963407L;
               System.out.println(seed + " " + (seed >> 60) + " " + (seed >>> 60) + " " + (seed << 4) + " " + (i << 33) + " " + (1L << 33) + " " + ~seed);
-              System.out.println(seed / 7 + " " + seed % 7 + " " + (seed & 0xFF) + " " + (seed ^ -1L) + " " + Math.abs(-9L) + " " + Math.max(3, 7L) + " " + Math.min(i, -7L));
+              System.out.println(seed / 7 + " " + seed % 7 + " " + (seed & 0xFF) + " " + (seed ^ -1L) + " " + Math.abs(-9L) + " " + Math.max(3, 7L) + " " + Math.min(i, -7L) + " " + Long.MIN_VALUE / (i - 4) + " " + Math.floorDiv(Long.MIN_VALUE, i - 4L) + " " + Math.floorDiv(seed, -i));
               System.out.println((seed >>> 1) + " " + (-1L >>> 63) + " " + (-1L >>> i) + " " + (seed >>> 0) + " " + (-8 >>> 1) + " " + (Long.MIN_VALUE >> 63) + " " + (1L << i * 21) + " " + (-1L >>> 64 + i));
           }
       }
@@ -180,7 +180,7 @@ cases:
       0 -9223372036854775808 9223372036854775807 9223372036854775807 -9223372036854775806
       2432902008176640000 -4249290049419214848 3298534883328 0 -1 1099511627775
       -7964744663189004623 -7 9 1691293904942787344 6 8589934592 7964744663189004622
-      -1137820666169857803 -2 177 7964744663189004622 9 7 -7
+      -1137820666169857803 -2 177 7964744663189004622 9 7 -7 -9223372036854775808 -9223372036854775808 2654914887729668207
       5240999705260273496 1 2305843009213693951 -7964744663189004623 2147483644 -1 -9223372036854775808 2305843009213693951
   # The host's printer has the JDK's digits and layout; a cast to int goes toward zero
   # and stops at the type's ends; a division by zero is an infinity.

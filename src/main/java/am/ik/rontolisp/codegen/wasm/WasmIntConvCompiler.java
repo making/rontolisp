@@ -87,66 +87,92 @@ final class WasmIntConvCompiler {
 			ctx.writer.writeUnsignedLeb128(bSlot);
 			// The inline arm is a speed trade, and an async resume body has no i64
 			// scratch run (as for the fused trees).
-			boolean fixnumArm = WasmIntFusionCompiler.speedTradesEnabled(ctx) && ctx.asyncResume == null;
-			if (fixnumArm) {
-				emitFixnumQuotient(ctx, aSlot, bSlot, fdivMode);
-			}
-			emitIsExactInt(ctx, aSlot);
-			emitIsExactInt(ctx, bSlot);
-			ctx.writer.write(Instruction.I32_AND);
-			ctx.writer.write(Instruction.IF);
-			ctx.writer.writeRefType(true, am.ik.wasm.Type.EQ.code());
-			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(aSlot);
-			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(bSlot);
-			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(fdivMode);
-			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_BIG_FDIV);
-			ctx.writer.write(Instruction.ELSE);
-			// A FLOAT operand divides exactly too: _f64_fdiv reads both operands as the
-			// exact rationals they are, so the quotient is the mathematical integer at
-			// any magnitude rather than the rounded double (/ a b) narrowed into an i64,
-			// and the remainder beside it stays rem/mod (.kb/linalg-simd.md, "mod / rem
-			// and the floor family").
-			// It answers a null for the pairs it does not improve on -- a ratio operand,
-			// a non-finite float, a zero divisor outside EH mode -- which fall through to
-			// the ordinary division below.
-			int exactSlot = ctx.allocTemp();
-			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(aSlot);
-			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(bSlot);
-			ctx.writer.write(Instruction.I32_CONST);
-			ctx.writer.writeSignedLeb128(fdivMode);
-			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_F64_FDIV);
-			ctx.writer.write(Instruction.TEE_LOCAL);
-			ctx.writer.writeUnsignedLeb128(exactSlot);
-			ctx.writer.write(Instruction.REF_IS_NULL);
-			ctx.writer.write(Instruction.IF);
-			ctx.writer.writeRefType(true, am.ik.wasm.Type.EQ.code());
-			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(aSlot);
-			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(bSlot);
-			WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_DIV);
-			ctx.writer.write(Instruction.SET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(tmpSlot);
-			emitGenericFromSlot(ctx, tmpSlot, f64RoundingOp, ratioFunc, fdivMode);
-			ctx.writer.write(Instruction.ELSE);
-			ctx.writer.write(Instruction.GET_LOCAL);
-			ctx.writer.writeUnsignedLeb128(exactSlot);
-			ctx.writer.write(Instruction.END);
-			ctx.writer.write(Instruction.END);
-			if (fixnumArm) {
-				ctx.writer.write(Instruction.END);
-			}
+			emitQuotient(ctx, aSlot, bSlot, tmpSlot, f64RoundingOp, ratioFunc, fdivMode,
+					WasmIntFusionCompiler.speedTradesEnabled(ctx) && ctx.asyncResume == null);
 			return;
 		}
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		ctx.writer.write(Instruction.SET_LOCAL);
 		ctx.writer.writeUnsignedLeb128(tmpSlot);
 		emitGenericFromSlot(ctx, tmpSlot, f64RoundingOp, ratioFunc, fdivMode);
+	}
+
+	/**
+	 * The quotient of the two values in {@code aSlot} and {@code bSlot}, as
+	 * {@code (truncate a b)} or {@code (floor a b)} over them answers it with no inline
+	 * arm: the fallback of a fused tree's quotient ({@link WasmIntFusionCompiler}).
+	 * @param op {@code truncate} or {@code floor}
+	 * @param ctx the emission context
+	 * @param aSlot the dividend's local
+	 * @param bSlot the divisor's local
+	 */
+	static void emitQuotientOfSlots(String op, WasmLispCompiler.Ctx ctx, int aSlot, int bSlot) {
+		boolean floor = LispNames.FLOOR.equals(op);
+		emitQuotient(ctx, aSlot, bSlot, ctx.allocTemp(), floor ? Instruction.F64_FLOOR : -1,
+				floor ? WasmLispCompiler.FUNC_RAT_FLOOR : WasmLispCompiler.FUNC_RAT_TRUNC, floor ? 1 : 0, false);
+	}
+
+	/**
+	 * {@code (op (/ a b))} over the values in {@code aSlot} and {@code bSlot}, leaving
+	 * the quotient: the i31 arm when {@code fixnumArm}, two exact integers through
+	 * {@code _big_fdiv}, anything else through the exact float division or the plain
+	 * division and the generic conversion.
+	 */
+	private static void emitQuotient(WasmLispCompiler.Ctx ctx, int aSlot, int bSlot, int tmpSlot, int f64RoundingOp,
+			int ratioFunc, int fdivMode, boolean fixnumArm) {
+		if (fixnumArm) {
+			emitFixnumQuotient(ctx, aSlot, bSlot, fdivMode);
+		}
+		emitIsExactInt(ctx, aSlot);
+		emitIsExactInt(ctx, bSlot);
+		ctx.writer.write(Instruction.I32_AND);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, am.ik.wasm.Type.EQ.code());
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(aSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(bSlot);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(fdivMode);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_BIG_FDIV);
+		ctx.writer.write(Instruction.ELSE);
+		// A FLOAT operand divides exactly too: _f64_fdiv reads both operands as the
+		// exact rationals they are, so the quotient is the mathematical integer at
+		// any magnitude rather than the rounded double (/ a b) narrowed into an i64,
+		// and the remainder beside it stays rem/mod (.kb/linalg-simd.md, "mod / rem
+		// and the floor family").
+		// It answers a null for the pairs it does not improve on -- a ratio operand,
+		// a non-finite float, a zero divisor outside EH mode -- which fall through to
+		// the ordinary division below.
+		int exactSlot = ctx.allocTemp();
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(aSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(bSlot);
+		ctx.writer.write(Instruction.I32_CONST);
+		ctx.writer.writeSignedLeb128(fdivMode);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_F64_FDIV);
+		ctx.writer.write(Instruction.TEE_LOCAL);
+		ctx.writer.writeUnsignedLeb128(exactSlot);
+		ctx.writer.write(Instruction.REF_IS_NULL);
+		ctx.writer.write(Instruction.IF);
+		ctx.writer.writeRefType(true, am.ik.wasm.Type.EQ.code());
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(aSlot);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(bSlot);
+		WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_RAT_DIV);
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(tmpSlot);
+		emitGenericFromSlot(ctx, tmpSlot, f64RoundingOp, ratioFunc, fdivMode);
+		ctx.writer.write(Instruction.ELSE);
+		ctx.writer.write(Instruction.GET_LOCAL);
+		ctx.writer.writeUnsignedLeb128(exactSlot);
+		ctx.writer.write(Instruction.END);
+		ctx.writer.write(Instruction.END);
+		if (fixnumArm) {
+			ctx.writer.write(Instruction.END);
+		}
 	}
 
 	/**
