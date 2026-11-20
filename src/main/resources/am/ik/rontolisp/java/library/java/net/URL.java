@@ -13,7 +13,7 @@ import rontolisp.internal.Resources;
 
 // A locator: a protocol of the ones a JDK 25 knows, an authority (its user, host and
 // port), a path, a query and a fragment, read and refused as a JDK's answers show
-// (.kb/java-frontend.md, "Resources: URLs"). A URL a class or a loader answers for a
+// (.kb/java-frontend.md, "Resources"). A URL a class or a loader answers for a
 // resource names the file where the program was compiled -- file: for the source tree
 // and a directory of the source path, jar:file: for a jar -- and holds the octets the
 // program carries, which openStream reads; any other URL has nothing to read here.
