@@ -16,7 +16,7 @@ import rontolisp.internal.Splits;
 
 // A queue with no bound, first in first out, read and written under its own monitor;
 // no thread waits on it. No element is null. An iterator walks the elements there were
-// when it was made.
+// when it was made and takes out of the queue the one it gave (Copied).
 public class ConcurrentLinkedQueue<E> extends AbstractCollection<E> implements Queue<E> {
 
     private final ArrayDeque<E> held = new ArrayDeque<>();
@@ -99,7 +99,7 @@ public class ConcurrentLinkedQueue<E> extends AbstractCollection<E> implements Q
     }
 
     public synchronized Iterator<E> iterator() {
-        return new ArrayDeque<>(this.held).iterator();
+        return new Copied<>(this, this.held, new ArrayDeque<>(this.held).iterator(), false);
     }
 
     public Spliterator<E> spliterator() {

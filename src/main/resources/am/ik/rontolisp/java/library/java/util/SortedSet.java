@@ -3,7 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
-public interface SortedSet<E> extends Set<E> {
+public interface SortedSet<E> extends Set<E>, SequencedSet<E> {
 
     Comparator<? super E> comparator();
 
@@ -17,14 +17,8 @@ public interface SortedSet<E> extends Set<E> {
 
     E last();
 
-    // A sorted set puts an element where its order says.
-    default void addFirst(E e) {
-        throw new UnsupportedOperationException();
-    }
-
-    default void addLast(E e) {
-        throw new UnsupportedOperationException();
-    }
+    // A sorted set puts an element where its order says: addFirst and addLast refuse,
+    // as SequencedCollection's do.
 
     default E getFirst() {
         return first();
@@ -44,5 +38,9 @@ public interface SortedSet<E> extends Set<E> {
         E e = last();
         remove(e);
         return e;
+    }
+
+    default SortedSet<E> reversed() {
+        return new ReversedSortedSet<>(this);
     }
 }

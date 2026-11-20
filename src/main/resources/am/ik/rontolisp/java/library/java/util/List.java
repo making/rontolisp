@@ -6,7 +6,7 @@ package java.util;
 import java.util.function.UnaryOperator;
 import rontolisp.internal.Splits;
 
-public interface List<E> extends Collection<E> {
+public interface List<E> extends SequencedCollection<E> {
 
     boolean add(E e);
 
@@ -89,11 +89,7 @@ public interface List<E> extends Collection<E> {
     }
 
     default List<E> reversed() {
-        List<E> out = new ArrayList<>(size());
-        for (int i = size() - 1; i >= 0; i--) {
-            out.add(get(i));
-        }
-        return out;
+        return ReversedList.of(this, true);
     }
 
     @SafeVarargs

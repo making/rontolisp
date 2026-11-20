@@ -16,7 +16,8 @@ import rontolisp.internal.Splits;
 // What ArrayBlockingQueue, LinkedBlockingQueue and LinkedBlockingDeque are: a queue of
 // at most so many elements, first in first out, read and written under its own monitor, on which a
 // thread putting into a full queue and one taking from an empty queue wait. No element
-// is null. An iterator walks the elements there were when it was made.
+// is null. An iterator walks the elements there were when it was made and takes out of
+// the queue the one it gave (Copied).
 abstract class Bounded<E> extends AbstractCollection<E> implements BlockingQueue<E> {
 
     private final ArrayDeque<E> held = new ArrayDeque<>();
@@ -123,7 +124,7 @@ abstract class Bounded<E> extends AbstractCollection<E> implements BlockingQueue
 
     /** The elements there are, last to first. */
     final synchronized Iterator<E> backwards() {
-        return new ArrayDeque<>(this.held).descendingIterator();
+        return new Copied<>(this, this.held, new ArrayDeque<>(this.held).descendingIterator(), true);
     }
 
     public synchronized int size() {
@@ -256,6 +257,15 @@ abstract class Bounded<E> extends AbstractCollection<E> implements BlockingQueue
         return false;
     }
 
+    // LinkedBlockingDeque.removeLastOccurrence
+    synchronized boolean removeLastOf(Object o) {
+        if (this.held.removeLastOccurrence(o)) {
+            notifyAll();
+            return true;
+        }
+        return false;
+    }
+
     public synchronized void clear() {
         this.held.clear();
         notifyAll();
@@ -296,7 +306,7 @@ abstract class Bounded<E> extends AbstractCollection<E> implements BlockingQueue
     }
 
     public synchronized Iterator<E> iterator() {
-        return new ArrayDeque<>(this.held).iterator();
+        return new Copied<>(this, this.held, new ArrayDeque<>(this.held).iterator(), false);
     }
 
     public Spliterator<E> spliterator() {

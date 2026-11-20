@@ -214,6 +214,127 @@ public final class Collections {
         return new ImmutableCollections.MapN<>(held, ImmutableCollections.HELD);
     }
 
+    public static <T> SequencedCollection<T> unmodifiableSequencedCollection(SequencedCollection<? extends T> c) {
+        SequencedCollection<T> held = (SequencedCollection<T>) Objects.requireNonNull(c);
+        return new ImmutableCollections.SequencedView<>(held);
+    }
+
+    public static <T> SequencedSet<T> unmodifiableSequencedSet(SequencedSet<? extends T> s) {
+        SequencedSet<T> held = (SequencedSet<T>) Objects.requireNonNull(s);
+        return new ImmutableCollections.SequencedSetView<>(held);
+    }
+
+    public static <K, V> SequencedMap<K, V> unmodifiableSequencedMap(SequencedMap<? extends K, ? extends V> m) {
+        SequencedMap<K, V> held = (SequencedMap<K, V>) Objects.requireNonNull(m);
+        return new ImmutableCollections.SequencedMapView<>(held);
+    }
+
+    public static <E> Set<E> newSetFromMap(Map<E, Boolean> map) {
+        if (!map.isEmpty()) {
+            throw new IllegalArgumentException("Map is non-empty");
+        }
+        return new SetFromMap<>(map);
+    }
+
+    public static <E> SequencedSet<E> newSequencedSetFromMap(SequencedMap<E, Boolean> map) {
+        if (!map.isEmpty()) {
+            throw new IllegalArgumentException("Map is non-empty");
+        }
+        return new SequencedSetFromMap<>(map);
+    }
+
+    // The set newSetFromMap answers: an element is a key the map holds TRUE for.
+    static class SetFromMap<E> extends AbstractSet<E> {
+
+        final Map<E, Boolean> map;
+
+        SetFromMap(Map<E, Boolean> map) {
+            this.map = map;
+        }
+
+        public int size() {
+            return map.size();
+        }
+
+        public boolean isEmpty() {
+            return map.isEmpty();
+        }
+
+        public boolean contains(Object o) {
+            return map.containsKey(o);
+        }
+
+        public boolean add(E e) {
+            return map.put(e, Boolean.TRUE) == null;
+        }
+
+        public boolean remove(Object o) {
+            return map.remove(o) != null;
+        }
+
+        public void clear() {
+            map.clear();
+        }
+
+        public Iterator<E> iterator() {
+            return map.keySet().iterator();
+        }
+
+        public Spliterator<E> spliterator() {
+            return map.keySet().spliterator();
+        }
+
+        public String toString() {
+            return map.keySet().toString();
+        }
+    }
+
+    // newSequencedSetFromMap: its ends are the map's, reversed it is over the map reversed.
+    static final class SequencedSetFromMap<E> extends SetFromMap<E> implements SequencedSet<E> {
+
+        private final SequencedMap<E, Boolean> sequenced;
+
+        SequencedSetFromMap(SequencedMap<E, Boolean> sequenced) {
+            super(sequenced);
+            this.sequenced = sequenced;
+        }
+
+        private static <E> E key(Map.Entry<E, Boolean> entry) {
+            if (entry == null) {
+                throw new NoSuchElementException();
+            }
+            return entry.getKey();
+        }
+
+        public SequencedSet<E> reversed() {
+            return new SequencedSetFromMap<>(sequenced.reversed());
+        }
+
+        public void addFirst(E e) {
+            sequenced.putFirst(e, Boolean.TRUE);
+        }
+
+        public void addLast(E e) {
+            sequenced.putLast(e, Boolean.TRUE);
+        }
+
+        public E getFirst() {
+            return key(sequenced.firstEntry());
+        }
+
+        public E getLast() {
+            return key(sequenced.lastEntry());
+        }
+
+        public E removeFirst() {
+            return key(sequenced.pollFirstEntry());
+        }
+
+        public E removeLast() {
+            return key(sequenced.pollLastEntry());
+        }
+    }
+
     public static <T> SortedSet<T> unmodifiableSortedSet(SortedSet<T> set) {
         return new ImmutableCollections.SortedView<>(Objects.requireNonNull(set));
     }
@@ -345,6 +466,9 @@ public final class Collections {
     }
 
     public static <T> Comparator<T> reverseOrder(Comparator<T> order) {
+        if (order == null) {
+            return reverseOrder();
+        }
         return (T a, T b) -> order.compare(b, a);
     }
 }

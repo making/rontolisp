@@ -18956,7 +18956,11 @@ class JvmLispCompilerTest {
 		// cycle would have two entries, which Graal's on-stack replacement cannot
 		// compile. R's method stores the target's index and re-enters a switch instead
 		// (its first instructions); rooted at A every cycle passes A, so A's jumps are
-		// direct.
+		// direct. The defuns DR, DA and DB are such a group, of members taking one and
+		// two parameters, DB keeping a local where DA's second parameter is: every slot
+		// a member takes a parameter in holds an object on each way into the switch,
+		// as the verifier asks (met by the reversed views of the Java front end's
+		// lists, whose next and previous call each other's).
 		List<LispVal> forms = am.ik.rontolisp.eval.LispPreludeLibrary.process(LispReader.readAllFromString("""
 				(print (labels ((r (n acc) (cond ((= n 0) (list :r acc))
 				                                 ((evenp n) (a (- n 1) (+ acc 1)))
@@ -18966,15 +18970,22 @@ class JvmLispCompilerTest {
 				                                 (t (b (- n 1) (+ acc 10)))))
 				                (b (n acc) (if (= n 0) (list :b acc) (a (- n 1) (+ acc 100)))))
 				         (list (r 1000000 0) (r 7 0) (funcall #'a 5 0) (funcall #'b 1000001 0))))
+				(defun dr (n) (cond ((= n 0) :dr) ((evenp n) (da (- n 1) 1)) (t (db (- n 1)))))
+				(defun da (n k) (cond ((= n 0) (list :da k)) ((= (mod n 3) 0) (dr (- n 1))) (t (db (- n 1)))))
+				(defun db (n) (let ((i (* n 2))) (if (= n 0) :db (da (- n 1) i))))
+				(print (list (dr 1000000) (dr 7)))
 				"""));
 		byte[] classBytes = new JvmLispCompiler("Test").compile(forms);
-		long dispatching = declaredMethodNames(classBytes).stream().filter(name -> {
+		java.util.function.Predicate<String> dispatches = name -> {
 			List<java.lang.classfile.Opcode> first = firstOpcodes(classBytes, name, 2);
-			return name.startsWith("_lambda_") && first.size() == 2
-					&& first.get(0) == java.lang.classfile.Opcode.ICONST_0 && first.get(1).name().startsWith("ISTORE");
-		}).count();
-		assertThat(dispatching).isEqualTo(1);
-		assertThat(compileAndRun(forms)).isEqualTo("((:B 38499868) (:B 232) (:B 131) (:B 38500067))");
+			return first.size() == 2 && first.get(0) == java.lang.classfile.Opcode.ICONST_0
+					&& first.get(1).name().startsWith("ISTORE");
+		};
+		assertThat(declaredMethodNames(classBytes).stream()
+			.filter(name -> name.startsWith("_lambda_") && dispatches.test(name))
+			.count()).isEqualTo(1);
+		assertThat(dispatches.test("DR")).isTrue();
+		assertThat(compileAndRun(forms)).isEqualTo("((:B 38499868) (:B 232) (:B 131) (:B 38500067))\n(:DB :DB)");
 	}
 
 	@Test

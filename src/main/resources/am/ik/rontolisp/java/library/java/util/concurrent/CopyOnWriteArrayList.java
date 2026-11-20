@@ -8,8 +8,10 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.Iterator;
+import java.util.List;
 import java.util.ListIterator;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.RandomAccess;
 import java.util.Spliterator;
 import java.util.function.Consumer;
@@ -159,6 +161,24 @@ public class CopyOnWriteArrayList<E> extends AbstractList<E> implements RandomAc
         }
         this.items = Arrays.copyOf(kept, count);
         return true;
+    }
+
+    public boolean removeAll(Collection<?> c) {
+        Objects.requireNonNull(c);
+        return removeIf(e -> c.contains(e));
+    }
+
+    public boolean retainAll(Collection<?> c) {
+        Objects.requireNonNull(c);
+        return removeIf(e -> !c.contains(e));
+    }
+
+    // a range outside the list is refused with no message
+    public List<E> subList(int from, int to) {
+        if (from < 0 || to > size() || from > to) {
+            throw new IndexOutOfBoundsException();
+        }
+        return super.subList(from, to);
     }
 
     @SuppressWarnings("unchecked")

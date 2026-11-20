@@ -133,6 +133,14 @@ public class LinkedBlockingDeque<E> extends Bounded<E> implements BlockingDeque<
         return removeFirst();
     }
 
+    public boolean removeFirstOccurrence(Object o) {
+        return remove(o);
+    }
+
+    public boolean removeLastOccurrence(Object o) {
+        return removeLastOf(o);
+    }
+
     public Iterator<E> descendingIterator() {
         return backwards();
     }

@@ -34,8 +34,11 @@ What a JDK 25 and javac answer: `.todo/artefacts/k06-java-front-end-what-the-che
 - **The library's public `clone()`**: of the library's classes a JDK's `ArrayList`,
   `ArrayDeque`, `HashMap`, `HashSet`, `Hashtable`, `Vector` (and `Stack`), `Locale`,
   `CopyOnWriteArrayList` are `Cloneable` with a public `clone()` (asked by reflection);
-  each needs its own copy of what it holds (a shallow copy of the structure would share
-  the backing array or table). `Enum.clone()` is final and throws with no message.
+  since k47 and k55 also `TreeMap`, `TreeSet`, `LinkedList`, `EnumSet`, `EnumMap`,
+  `ConcurrentSkipListMap` / `Set` (each declaring one) and `LinkedHashMap` /
+  `LinkedHashSet` (`HashMap`'s and `HashSet`'s; asked of JDK 25 by reflection,
+  2026-11-20). Each needs its own copy of what it holds (a shallow copy of the structure
+  would share the backing array, table or tree). `Enum.clone()` is final and throws with no message.
 - **`finalize()`**: protected, `throws Throwable`, does nothing; nothing calls it (a JDK
   need not). javac's `[removal]` warning is one of those not printed (`deviations.md`).
 - Probes: the j99 `compare.sh` over `clone/K2`..`K9`; `K1` as a java-spec case on four

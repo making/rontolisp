@@ -237,6 +237,15 @@ rontolisp が割り当てる識別番号と、`Name@` にその番号の 16 進�
 答えは JDK と同じです。マップの `keySet()`、`values()`、`entrySet()`、`descendingMap()` は呼ぶたびに
 新しいビューです。JDK のマップは毎回同じオブジェクトを返します。
 
+**`Collections` の変更できないリストは、何も変えない変更も拒みます。** `emptyList`、`singletonList`、
+`nCopies` のリストは、`List.of` のリストと同じく、どの変更もすぐに拒みます。JDK が拒むのは実際に
+変わる変更だけで、`Collections.singletonList(1).remove(Integer.valueOf(3))` は `false` を返し、
+`emptyList().clear()` は何もしません。これらのリストの逆順ビューも同じように拒みます。
+`Stream.toList()` のリストの逆順ビューは、変更を拒む前に添字を検査します。JDK のビューは先に
+拒みます。`CopyOnWriteArrayList` の逆順ビューは添字をビュー自身に対して検査します。JDK のビューは
+反対側から数えた添字をそのままリストに渡します（要素 6 個の `get(-1)` は
+`ArrayIndexOutOfBoundsException: Index 6 out of bounds for length 6`）。
+
 **`Math` の関数は `StrictMath` の関数です。** そのため、結果はどのバックエンドとプロセッサでも
 同じです。JDK の `Math.sin`、`Math.exp` などは、最後の桁がこれと異なることがあります。
 
@@ -482,6 +491,11 @@ HTTP リクエストを送るプログラムは、その理由を示すメッセ
 エントリは、その後に削除されていても返し、変更を拒否しません。そうした削除の後に 2 つのキーの間へ
 置かれたキーもここでは返しますが、JDK のイテレータは飛ばすことがあります。`compute`、`merge` などに
 渡した関数は、マップのモニターの中で 1 回だけ実行されます。
+
+**`ConcurrentLinkedQueue`、`ConcurrentLinkedDeque`、ブロッキングキューのイテレータは、作られた時点の
+要素をたどります。** その `remove` は、返した要素をキューから取り除きます。その間にキューが変わり、
+その要素が複数あるときは、等しい最初の要素（逆向きにたどるときは最後の要素）を取り除きます。
+JDK のイテレータは返した要素そのものを取り除きます。
 
 **`wait` で通知を受けたスレッドの状態は、`WAITING` のままの場合があります。** ほかのスレッドが
 保持しているモニターに入るのを待っているスレッドに対して、`getState` は `BLOCKED` を返します。

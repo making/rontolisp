@@ -15,7 +15,7 @@ import rontolisp.internal.Splits;
 
 // A queue with no bound read and written at both ends, under its own monitor; no
 // thread waits on it. No element is null. An iterator walks the elements there were
-// when it was made.
+// when it was made and takes out of the deque the one it gave (Copied).
 public class ConcurrentLinkedDeque<E> extends AbstractCollection<E> implements Deque<E> {
 
     private final ArrayDeque<E> held = new ArrayDeque<>();
@@ -129,6 +129,20 @@ public class ConcurrentLinkedDeque<E> extends AbstractCollection<E> implements D
         return o != null && this.held.remove(o);
     }
 
+    public synchronized boolean removeFirstOccurrence(Object o) {
+        if (o == null) {
+            throw new NullPointerException();
+        }
+        return this.held.removeFirstOccurrence(o);
+    }
+
+    public synchronized boolean removeLastOccurrence(Object o) {
+        if (o == null) {
+            throw new NullPointerException();
+        }
+        return this.held.removeLastOccurrence(o);
+    }
+
     public synchronized void clear() {
         this.held.clear();
     }
@@ -146,11 +160,11 @@ public class ConcurrentLinkedDeque<E> extends AbstractCollection<E> implements D
     }
 
     public synchronized Iterator<E> iterator() {
-        return new ArrayDeque<>(this.held).iterator();
+        return new Copied<>(this, this.held, new ArrayDeque<>(this.held).iterator(), false);
     }
 
     public synchronized Iterator<E> descendingIterator() {
-        return new ArrayDeque<>(this.held).descendingIterator();
+        return new Copied<>(this, this.held, new ArrayDeque<>(this.held).descendingIterator(), true);
     }
 
     public Spliterator<E> spliterator() {

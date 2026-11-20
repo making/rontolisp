@@ -214,6 +214,22 @@ public class ArrayDeque<E> extends AbstractCollection<E> implements Deque<E> {
         return false;
     }
 
+    public boolean removeFirstOccurrence(Object o) {
+        return remove(o);
+    }
+
+    public boolean removeLastOccurrence(Object o) {
+        if (o != null) {
+            for (int i = count - 1; i >= 0; i--) {
+                if (o.equals(ring[slot(i)])) {
+                    removeAt(i);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     public Iterator<E> iterator() {
         return new Each<>(this, false);
     }

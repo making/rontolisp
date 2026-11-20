@@ -238,6 +238,16 @@ another number of them; the keys' order and what the map answers are a JDK's. A 
 `keySet()`, `values()`, `entrySet()` and `descendingMap()` are a new view at each call, where
 a JDK's map answers the same object every time.
 
+**The immutable lists of `Collections` refuse a change that would change nothing.** The
+lists of `emptyList`, `singletonList` and `nCopies` refuse every change at once, as the lists
+of `List.of` do, where a JDK refuses only a change that would be made:
+`Collections.singletonList(1).remove(Integer.valueOf(3))` answers `false` there and
+`emptyList().clear()` does nothing. Their reversed views refuse the same way. The reversed
+view of a `Stream.toList()` list checks an index before it refuses a change, where a JDK's
+refuses first; that of a `CopyOnWriteArrayList` checks an index against itself, where a
+JDK's hands the list the index of the other end (`ArrayIndexOutOfBoundsException: Index 6
+out of bounds for length 6` for `get(-1)` of six elements).
+
 **The functions of `Math` are those of `StrictMath`**, so a result is the same on every
 backend and processor. A JDK's `Math.sin`, `Math.exp` and the like may differ from it in
 the last digit.
@@ -478,6 +488,11 @@ chains or more in which nine keys share one chain.
 the entry it read ahead even when that was removed since, and never refuses a change; a key
 put after such a removal between the two is given here, where a JDK's iterator may pass it
 by. A function given to `compute`, `merge` and their kind runs once, under the map's monitor.
+
+**An iterator of `ConcurrentLinkedQueue`, `ConcurrentLinkedDeque` and the blocking queues walks
+the elements there were when it was made.** Its `remove` takes the element it gave out of the
+queue; where the queue changed meanwhile and holds that element more than once, it takes the
+first equal one (walking back, the last), where a JDK's takes the one it gave.
 
 **A thread notified in `wait` may still be `WAITING`.** `getState` answers `BLOCKED` for a
 thread waiting to enter a monitor another thread holds; one that was notified and waits

@@ -8,7 +8,7 @@ import rontolisp.internal.Splits;
 // A set over the keys of a HashMap, so in a HashMap's order.
 public class HashSet<E> extends AbstractSet<E> {
 
-    private final HashMap<E, Boolean> map;
+    final HashMap<E, Boolean> map;
 
     public HashSet() {
         map = new HashMap<>();
@@ -30,6 +30,18 @@ public class HashSet<E> extends AbstractSet<E> {
     // A LinkedHashSet's: over a LinkedHashMap.
     HashSet(HashMap<E, Boolean> map) {
         this.map = map;
+    }
+
+    public static <T> HashSet<T> newHashSet(int numElements) {
+        return new HashSet<>(capacityFor(numElements));
+    }
+
+    // what newHashSet and its kin ask for: room for so many under three quarters
+    static int capacityFor(int elements) {
+        if (elements < 0) {
+            throw new IllegalArgumentException("Negative number of elements: " + elements);
+        }
+        return (int) Math.ceil(elements / 0.75);
     }
 
     public Iterator<E> iterator() {

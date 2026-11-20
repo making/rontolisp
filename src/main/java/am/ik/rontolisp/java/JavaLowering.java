@@ -368,6 +368,9 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private final List<LispVal> variables = new ArrayList<>();
 
+	/** The settings of the constant strings a program compares by reference. */
+	private final List<LispVal> internings = new ArrayList<>();
+
 	private final List<LispVal> initializers = new ArrayList<>();
 
 	/** The interfaces {@code instanceof} or a cast tests. */
@@ -869,6 +872,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		made.addAll(this.dispatchers.values());
 		made.addAll(this.catchTests.values());
 		made.addAll(generated);
+		made.addAll(this.internings);
 		LispVal started = runs ? uncaught(initialization, entry) : progn(initialization);
 		if (this.reporter != null) {
 			made.add(this.reporter);
@@ -9730,9 +9734,13 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 			}
 		}
+		// the constant strings of a program comparing strings by reference are
+		// set ahead of the initialization, each a top-level form of its own: none
+		// can throw, and one form holding them all can be more than a method of a
+		// JVM class holds
 		for (Map.Entry<String, LispSymbol> constant : this.interned.entrySet()) {
 			this.variables.add(list(cl("defvar"), constant.getValue()));
-			forms.add(call("setq", constant.getValue(), runtimeCall("intern", string(constant.getKey()))));
+			this.internings.add(call("setq", constant.getValue(), runtimeCall("intern", string(constant.getKey()))));
 		}
 		for (JavaClass declaration : this.classes.all()) {
 			if (declaration.intrinsic || (isPartial(declaration) && !this.classes.used.contains(declaration))) {

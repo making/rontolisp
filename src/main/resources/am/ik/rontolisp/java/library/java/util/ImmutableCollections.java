@@ -3,7 +3,11 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.function.UnaryOperator;
 import rontolisp.internal.Splits;
 
 // The collections List.of, Set.of and Map.of answer: nothing changes them.
@@ -47,6 +51,11 @@ final class ImmutableCollections {
 
         public Spliterator<E> spliterator() {
             return split(this, how, Spliterator.ORDERED | Spliterator.SIZED | Spliterator.SUBSIZED);
+        }
+
+        // refuses every change at once, as the list does
+        public List<E> reversed() {
+            return ReversedList.of(this, false);
         }
 
         public int size() {
@@ -118,9 +127,9 @@ final class ImmutableCollections {
     // A view of a collection that reads it and changes nothing.
     static class Unchanging<E> extends AbstractCollection<E> {
 
-        private final Collection<E> held;
+        final Collection<E> held;
 
-        private final int how;
+        final int how;
 
         Unchanging(Collection<E> held, int how) {
             this.held = held;
@@ -162,8 +171,20 @@ final class ImmutableCollections {
             throw new UnsupportedOperationException();
         }
 
+        public boolean removeIf(Predicate<? super E> filter) {
+            throw new UnsupportedOperationException();
+        }
+
         public void clear() {
             throw new UnsupportedOperationException();
+        }
+    }
+
+    // A set is equal to a set of the same elements: one of these is to its held set's.
+    static class SetN<E> extends Unchanging<E> implements Set<E> {
+
+        SetN(Set<E> held, int how) {
+            super(held, how);
         }
 
         public boolean equals(Object o) {
@@ -172,13 +193,6 @@ final class ImmutableCollections {
 
         public int hashCode() {
             return held.hashCode();
-        }
-    }
-
-    static final class SetN<E> extends Unchanging<E> implements Set<E> {
-
-        SetN(Set<E> held, int how) {
-            super(held, how);
         }
     }
 
@@ -236,6 +250,14 @@ final class ImmutableCollections {
             throw new UnsupportedOperationException();
         }
 
+        public boolean removeIf(Predicate<? super E> filter) {
+            throw new UnsupportedOperationException();
+        }
+
+        public void replaceAll(UnaryOperator<E> operator) {
+            throw new UnsupportedOperationException();
+        }
+
         public void sort(Comparator<? super E> c) {
             throw new UnsupportedOperationException();
         }
@@ -280,6 +302,39 @@ final class ImmutableCollections {
             throw new UnsupportedOperationException();
         }
 
+        // what may change the map is refused even where it would not
+        public V replace(K key, V value) {
+            throw new UnsupportedOperationException();
+        }
+
+        public void putAll(Map<? extends K, ? extends V> m) {
+            throw new UnsupportedOperationException();
+        }
+
+        public V putIfAbsent(K key, V value) {
+            throw new UnsupportedOperationException();
+        }
+
+        public V computeIfAbsent(K key, Function<? super K, ? extends V> function) {
+            throw new UnsupportedOperationException();
+        }
+
+        public V computeIfPresent(K key, BiFunction<? super K, ? super V, ? extends V> function) {
+            throw new UnsupportedOperationException();
+        }
+
+        public V compute(K key, BiFunction<? super K, ? super V, ? extends V> function) {
+            throw new UnsupportedOperationException();
+        }
+
+        public V merge(K key, V value, BiFunction<? super V, ? super V, ? extends V> function) {
+            throw new UnsupportedOperationException();
+        }
+
+        public void replaceAll(BiFunction<? super K, ? super V, ? extends V> function) {
+            throw new UnsupportedOperationException();
+        }
+
         public void clear() {
             throw new UnsupportedOperationException();
         }
@@ -293,35 +348,37 @@ final class ImmutableCollections {
         }
 
         public Set<Map.Entry<K, V>> entrySet() {
+            Set<Map.Entry<K, V>> entries = held.entrySet();
             ArrayList<Map.Entry<K, V>> ordered = new ArrayList<>();
-            for (Map.Entry<K, V> entry : held.entrySet()) {
+            for (Map.Entry<K, V> entry : entries) {
                 ordered.add(new Pair<>(entry.getKey(), entry.getValue()));
             }
-            if (how == HELD) {
-                return new Entries<>(ordered, held.entrySet());
-            }
-            return new Entries<>(ordered, how == OWN && ordered.size() == 1 ? ONE : how);
+            return new Entries<>(ordered, how == OWN && ordered.size() == 1 ? ONE : how, entries);
         }
     }
 
-    // The entries of an unchanging map, in the map's order.
+    // The entries of an unchanging map, in the map's order: a set equal to what the map's
+    // own entries are equal to.
     static final class Entries<E> extends Unchanging<E> implements Set<E> {
 
-        // the entries of the map an unmodifiable view holds, or null
+        // the map's own entries
         private final Set<? extends Map.Entry<?, ?>> viewed;
 
-        Entries(Collection<E> held, int how) {
+        Entries(Collection<E> held, int how, Set<? extends Map.Entry<?, ?>> viewed) {
             super(held, how);
-            this.viewed = null;
-        }
-
-        Entries(Collection<E> held, Set<? extends Map.Entry<?, ?>> viewed) {
-            super(held, HELD);
             this.viewed = viewed;
         }
 
         public Spliterator<E> spliterator() {
-            return viewed == null ? super.spliterator() : new Paired<E>(viewed.spliterator());
+            return how == HELD ? new Paired<E>(viewed.spliterator()) : super.spliterator();
+        }
+
+        public boolean equals(Object o) {
+            return o == this || viewed.equals(o);
+        }
+
+        public int hashCode() {
+            return viewed.hashCode();
         }
     }
 
@@ -358,7 +415,7 @@ final class ImmutableCollections {
     }
 
     // Collections.unmodifiableSortedSet: the views of the set are views of this kind.
-    static class SortedView<E> extends Unchanging<E> implements SortedSet<E> {
+    static class SortedView<E> extends SetN<E> implements SortedSet<E> {
 
         private final SortedSet<E> sorted;
 
@@ -566,6 +623,93 @@ final class ImmutableCollections {
 
         public NavigableMap<K, V> tailMap(K fromKey, boolean inclusive) {
             return new NavigableMapView<>(navigable.tailMap(fromKey, inclusive));
+        }
+    }
+
+    // Collections.unmodifiableSequencedCollection: its ends are the held collection's,
+    // reversed it is a view of the held collection reversed.
+    static class SequencedView<E> extends Unchanging<E> implements SequencedCollection<E> {
+
+        final SequencedCollection<E> sequenced;
+
+        SequencedView(SequencedCollection<E> sequenced) {
+            super(sequenced, HELD);
+            this.sequenced = sequenced;
+        }
+
+        public SequencedCollection<E> reversed() {
+            return new SequencedView<>(sequenced.reversed());
+        }
+
+        public E getFirst() {
+            return sequenced.getFirst();
+        }
+
+        public E getLast() {
+            return sequenced.getLast();
+        }
+
+        public E removeFirst() {
+            throw new UnsupportedOperationException();
+        }
+
+        public E removeLast() {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    // Collections.unmodifiableSequencedSet: equal to a set of the same elements.
+    static final class SequencedSetView<E> extends SequencedView<E> implements SequencedSet<E> {
+
+        SequencedSetView(SequencedSet<E> sequenced) {
+            super(sequenced);
+        }
+
+        public SequencedSet<E> reversed() {
+            return new SequencedSetView<>((SequencedSet<E>) sequenced.reversed());
+        }
+
+        public boolean equals(Object o) {
+            return o == this || held.equals(o);
+        }
+
+        public int hashCode() {
+            return held.hashCode();
+        }
+    }
+
+    // Collections.unmodifiableSequencedMap: an entry at an end is a copy nothing changes.
+    static final class SequencedMapView<K, V> extends MapN<K, V> implements SequencedMap<K, V> {
+
+        private final SequencedMap<K, V> sequenced;
+
+        SequencedMapView(SequencedMap<K, V> sequenced) {
+            super(sequenced, HELD);
+            this.sequenced = sequenced;
+        }
+
+        public SequencedMap<K, V> reversed() {
+            return new SequencedMapView<>(sequenced.reversed());
+        }
+
+        private static <K, V> Map.Entry<K, V> fixed(Map.Entry<K, V> entry) {
+            return entry == null ? null : new Pair<>(entry.getKey(), entry.getValue());
+        }
+
+        public Map.Entry<K, V> firstEntry() {
+            return fixed(sequenced.firstEntry());
+        }
+
+        public Map.Entry<K, V> lastEntry() {
+            return fixed(sequenced.lastEntry());
+        }
+
+        public Map.Entry<K, V> pollFirstEntry() {
+            throw new UnsupportedOperationException();
+        }
+
+        public Map.Entry<K, V> pollLastEntry() {
+            throw new UnsupportedOperationException();
         }
     }
 

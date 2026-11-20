@@ -86,8 +86,14 @@ public abstract class AbstractList<E> extends AbstractCollection<E> implements L
     }
 
     public List<E> subList(int from, int to) {
-        if (from < 0 || to > size() || from > to) {
-            throw new IndexOutOfBoundsException("fromIndex: " + from + ", toIndex: " + to + ", size: " + size());
+        if (from < 0) {
+            throw new IndexOutOfBoundsException("fromIndex = " + from);
+        }
+        if (to > size()) {
+            throw new IndexOutOfBoundsException("toIndex = " + to);
+        }
+        if (from > to) {
+            throw new IllegalArgumentException("fromIndex(" + from + ") > toIndex(" + to + ")");
         }
         return new SubList<>(this, from, to - from);
     }

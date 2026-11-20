@@ -714,7 +714,7 @@ final class JvmTailGroup {
 		if (this.complete()) {
 			for (Member root : this.roots(called)) {
 				LaidOut laidOut = this.rootAt(root);
-				if (laidOut.body().size() > limit) {
+				if (laidOut == null || laidOut.body().size() > limit) {
 					rooted.clear();
 					break;
 				}
@@ -798,15 +798,29 @@ final class JvmTailGroup {
 
 	/**
 	 * The group rooted at {@code root}: the members its jumps reach, its own code first,
-	 * laid out of the members' compiled bodies, which stay as they were.
+	 * laid out of the members' compiled bodies, which stay as they were; null where no
+	 * such method can be laid out.
 	 */
-	private LaidOut rootAt(Member root) {
+	private @Nullable LaidOut rootAt(Member root) {
 		List<Member> order = this.reachable(root);
 		Map<Member, Integer> position = new IdentityHashMap<>();
 		for (Member member : order) {
 			position.put(member, position.size());
 		}
 		boolean direct = reducible(order, position);
+		int first = this.closures ? 1 : 0;
+		int params = 0;
+		boolean mixed = false;
+		for (Member member : order) {
+			params = Math.max(params, member.paramCount());
+			mixed |= member.paramCount() != root.paramCount();
+		}
+		if (!direct && mixed && this.bounces()) {
+			// Each member's value-tail depth is past its own parameters, so where another
+			// takes a parameter: the switch would be entered with an int there on one way
+			// and an object on another, which no verifier takes.
+			return null;
+		}
 		MethodCode body = new MethodCode();
 		MethodCode.Label[] heads = new MethodCode.Label[order.size()];
 		for (int i = 0; i < heads.length; i++) {
@@ -818,12 +832,15 @@ final class JvmTailGroup {
 		if (!direct) {
 			// Past every member's parameters -- and value-tail depth -- which a jump has
 			// just stored when it stores the index.
-			int params = 0;
-			for (Member member : order) {
-				params = Math.max(params, member.paramCount());
-			}
-			memberSlot = (this.closures ? 1 : 0) + params + 1;
+			memberSlot = first + params + 1;
 			body.iconst_0().istore(memberSlot);
+			// Every slot a member takes a parameter in holds an object on each way
+			// into the switch, one frame for the verifier: null past the root's
+			// parameters on the way in, and past the target's at a reentry, where
+			// the jumping member's own locals may be.
+			for (int slot = first + root.paramCount(); slot < first + params; slot++) {
+				body.aconst_null().astore(slot);
+			}
 			top = body.newBoundLabel();
 			emitEntry(body, memberSlot, heads);
 		}
@@ -867,11 +884,32 @@ final class JvmTailGroup {
 			MethodCode.Label reentry = reentries[i];
 			if (reentry != null) {
 				body.labelBinding(reentry);
+				for (int slot = first + order.get(i).paramCount(); slot < first + params; slot++) {
+					body.aconst_null().astore(slot);
+				}
 				body.loadConstant(i).istore(memberSlot).goto_(java.util.Objects.requireNonNull(top));
 			}
 		}
 		body.checkComplete();
 		return new LaidOut(body, lines);
+	}
+
+	/**
+	 * {@return whether the members have a value-tail depth past their parameters}: every
+	 * {@code labels} function, and the defuns of a group whose registry entries may
+	 * bounce ({@link Member#depthSlot})
+	 */
+	private boolean bounces() {
+		if (this.closures) {
+			return true;
+		}
+		for (Member member : this.members) {
+			JvmLispCompiler.FunctionInfo function = member.function;
+			if (function != null && function.bounceVisible()) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** The members {@code root}'s jumps reach, itself first, then in member order. */

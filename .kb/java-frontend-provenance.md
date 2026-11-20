@@ -427,6 +427,22 @@ algorithm came from, and the answer goes in the file's header.
   and, for bounds too far apart, from the one of five candidate formulas giving a JDK's
   bits on 24,000 draws. The answers are lines of `java-spec.yaml`, which the JDK leg asks
   again.
+- **The sequenced collections (k55, 2026-11-20).** `SequencedCollection`, `SequencedSet`,
+  `SequencedMap`, the reversed views of a list, a deque, a linked set and map and a sorted set
+  and map that is not navigable, `putFirst` and its kin, `Collections`' sequenced wrappers
+  and `newHashMap` were written from the API documentation (the defaults' stated
+  implementations: where the ends are read, what `sequencedKeySet` delegates and refuses) and
+  JDK 25's answers to probes (`SeqList.java`, `SeqDeque.java`, `SeqSet.java`, `SeqMap.java`,
+  `Seq2.java`, `Seq3.java` of `.todo/artefacts/k55-java-front-end-what-the-stream-members-and-the-sorted-collections-left/`:
+  every member of a view of 16 lists, 4 deques, 4 sets and 3 maps, each bound of three ranges
+  of a sorted view, a counted `keySet()`). Nobody opened OpenJDK's source, and the shape is
+  its own: a list's view walks the list's own iterator backward, a sorted view finds each
+  next element as the last of a head. What the documentation does not state was read off the
+  answers: which index a view checks against and with which words, that a new key of a
+  linked map's reversed view goes to the map's end, which bound a range of a sorted view
+  refuses (and that `tailSet` of a range keeps only its other end), what a default view's
+  ends cost the map. The answers are lines of `java-spec.yaml`, which the JDK leg asks
+  again.
 - **Unicode normalization (k29, 2026-11-19).** `eval/unicode-normalization.lisp` was
   written from Unicode Standard Annex #15 and the Unicode Standard's sections 3.11
   (decomposition, canonical ordering, canonical composition) and 3.12 (Hangul by

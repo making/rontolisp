@@ -92,6 +92,18 @@ public class HashMap<K, V> extends AbstractMap<K, V> {
         putAll(m);
     }
 
+    public static <K, V> HashMap<K, V> newHashMap(int numMappings) {
+        return new HashMap<>(capacityFor(numMappings));
+    }
+
+    // what newHashMap and its kin ask for: room for so many under three quarters
+    static int capacityFor(int mappings) {
+        if (mappings < 0) {
+            throw new IllegalArgumentException("Negative number of mappings: " + mappings);
+        }
+        return (int) Math.ceil(mappings / 0.75);
+    }
+
     private static int powerOfTwo(int capacity) {
         int length = 1;
         while (length < capacity && length < 1073741824) {

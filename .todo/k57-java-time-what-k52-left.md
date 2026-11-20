@@ -42,5 +42,5 @@ name today.
   instant, a fraction are in every pattern program); a constant pattern made into its
   parts while lowering (`Patterns` and the builder are 16 KB); the masked `int` / `long`
   operations of `WeekFields`' arithmetic (`.todo/k56`); the float arm of a generic
-  `%string` (16 KB, `"" + field` of an interface type: `.todo/k55`'s type flow); `Parsed`'s
+  `%string` (16 KB, `"" + field` of an interface type: `.todo/k60`'s type flow); `Parsed`'s
   conversion of time fields in a program whose patterns have no letter of a time.

@@ -3,6 +3,8 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
+import java.util.function.Predicate;
+import java.util.function.UnaryOperator;
 import rontolisp.internal.Splits;
 
 // Cells linked both ways: a list, and a deque whose elements may be null. An index is
@@ -348,6 +350,194 @@ public class LinkedList<E> extends AbstractSequentialList<E> implements List<E>,
 
     public Spliterator<E> spliterator() {
         return Splits.counted(this, Spliterator.ORDERED | Spliterator.SIZED | Spliterator.SUBSIZED);
+    }
+
+    public LinkedList<E> reversed() {
+        return new Reversed<>(this);
+    }
+
+    // The view reversed() answers, a LinkedList that holds no cell: a member that has an
+    // index is the list's reversed view's, one that has an end is the list's member of
+    // the other end.
+    static final class Reversed<E> extends LinkedList<E> {
+
+        private final LinkedList<E> list;
+
+        private final ReversedList<E> view;
+
+        Reversed(LinkedList<E> list) {
+            this.list = list;
+            this.view = new ReversedList<>(list, true);
+        }
+
+        public LinkedList<E> reversed() {
+            return list;
+        }
+
+        public int size() {
+            return list.size();
+        }
+
+        public boolean isEmpty() {
+            return list.isEmpty();
+        }
+
+        public boolean contains(Object o) {
+            return list.contains(o);
+        }
+
+        public boolean add(E e) {
+            list.addFirst(e);
+            return true;
+        }
+
+        public void add(int index, E element) {
+            view.add(index, element);
+        }
+
+        public boolean addAll(Collection<? extends E> c) {
+            return view.addAll(c);
+        }
+
+        public boolean addAll(int index, Collection<? extends E> c) {
+            return view.addAll(index, c);
+        }
+
+        public E get(int index) {
+            return view.get(index);
+        }
+
+        public E set(int index, E element) {
+            return view.set(index, element);
+        }
+
+        public E remove(int index) {
+            return view.remove(index);
+        }
+
+        public boolean remove(Object o) {
+            return list.removeLastOccurrence(o);
+        }
+
+        public boolean removeFirstOccurrence(Object o) {
+            return list.removeLastOccurrence(o);
+        }
+
+        public boolean removeLastOccurrence(Object o) {
+            return list.removeFirstOccurrence(o);
+        }
+
+        public int indexOf(Object o) {
+            return view.indexOf(o);
+        }
+
+        public int lastIndexOf(Object o) {
+            return view.lastIndexOf(o);
+        }
+
+        public void clear() {
+            list.clear();
+        }
+
+        public void addFirst(E e) {
+            list.addLast(e);
+        }
+
+        public void addLast(E e) {
+            list.addFirst(e);
+        }
+
+        public boolean offerFirst(E e) {
+            return list.offerLast(e);
+        }
+
+        public boolean offerLast(E e) {
+            return list.offerFirst(e);
+        }
+
+        public boolean offer(E e) {
+            return list.offerFirst(e);
+        }
+
+        public E getFirst() {
+            return list.getLast();
+        }
+
+        public E getLast() {
+            return list.getFirst();
+        }
+
+        public E element() {
+            return list.getLast();
+        }
+
+        public E peekFirst() {
+            return list.peekLast();
+        }
+
+        public E peekLast() {
+            return list.peekFirst();
+        }
+
+        public E peek() {
+            return list.peekLast();
+        }
+
+        public E removeFirst() {
+            return list.removeLast();
+        }
+
+        public E removeLast() {
+            return list.removeFirst();
+        }
+
+        public E remove() {
+            return list.removeLast();
+        }
+
+        public E pollFirst() {
+            return list.pollLast();
+        }
+
+        public E pollLast() {
+            return list.pollFirst();
+        }
+
+        public E poll() {
+            return list.pollLast();
+        }
+
+        public void push(E e) {
+            list.addLast(e);
+        }
+
+        public E pop() {
+            return list.removeLast();
+        }
+
+        public ListIterator<E> listIterator(int index) {
+            return view.listIterator(index);
+        }
+
+        public Iterator<E> descendingIterator() {
+            return list.iterator();
+        }
+
+        public Spliterator<E> spliterator() {
+            return Splits.of(this, Spliterator.ORDERED | Spliterator.SIZED | Spliterator.SUBSIZED);
+        }
+
+        public boolean removeIf(Predicate<? super E> filter) {
+            return list.removeIf(filter);
+        }
+
+        public void replaceAll(UnaryOperator<E> operator) {
+            list.replaceAll(operator);
+        }
+
+        public void sort(Comparator<? super E> c) {
+            view.sort(c);
+        }
     }
 
     static final class Walk<E> implements ListIterator<E> {

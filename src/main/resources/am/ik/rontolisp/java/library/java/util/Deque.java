@@ -3,7 +3,7 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 package java.util;
 
-public interface Deque<E> extends Queue<E> {
+public interface Deque<E> extends Queue<E>, SequencedCollection<E> {
 
     void addFirst(E e);
 
@@ -33,5 +33,13 @@ public interface Deque<E> extends Queue<E> {
 
     E pop();
 
+    boolean removeFirstOccurrence(Object o);
+
+    boolean removeLastOccurrence(Object o);
+
     Iterator<E> descendingIterator();
+
+    default Deque<E> reversed() {
+        return new ReversedDeque<>(this);
+    }
 }

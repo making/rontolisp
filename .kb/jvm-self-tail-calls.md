@@ -111,7 +111,19 @@ as a self tail call does. Landed 2026-10-03 (`.todo/c02`).
   the plain-call rate; rooting EVERY
   member instead puts the whole group into each method a dispatcher names. When the jumps form a cycle the root does not close
   (`JvmTailGroup.reducible`), that root's method dispatches instead: `iconst_0; istore m`, a
-  switch on `m`, each jump storing its target's index and re-entering the switch.
+  switch on `m`, each jump storing its target's index and re-entering the switch. The switch
+  is one frame for every way in, so a slot a member takes a parameter in must hold an object
+  on each: `aconst_null` into every slot past the root's parameters at the entry, and past
+  the target's at each reentry (the jumping member's own locals may be there). Until
+  2026-11-20 (k55) neither was stored and a group of members of two arities failed the
+  verifier (`Bad local variable type ... Type top (current frame, locals[1])`): the Java front
+  end's reversed list view, whose `next` and `previous` call each other's through
+  `ListIterator`'s dispatchers, joined `List.get`'s group of one and two parameters. A group
+  that may bounce and whose members differ in arity is not rooted at all: each member's
+  value-tail depth is past its own parameters, where another takes one, so the switch would
+  be entered with an `int` there on one way and an object on another; each keeps its own
+  code (`rootAt` answers null). Pin:
+  `JvmLispCompilerTest#aCycleTheRootDoesNotCloseDispatchesOnAMemberIndex` (DR, DA, DB).
 - **Bounces**: a member's method may run any member's code, so every member's
   `FunctionInfo.bounceVisible` is the group's OR, set before Pass 2a
   (`JvmTailBounce.bouncingDefuns`); a `labels` member is a lambda, which may always bounce.
