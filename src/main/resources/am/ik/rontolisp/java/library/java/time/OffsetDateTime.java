@@ -7,6 +7,7 @@
 package java.time;
 
 import java.io.Serializable;
+import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoField;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.Temporal;
@@ -14,9 +15,12 @@ import java.time.temporal.TemporalAccessor;
 import java.time.temporal.TemporalAdjuster;
 import java.time.temporal.TemporalAmount;
 import java.time.temporal.TemporalField;
+import java.time.temporal.TemporalQueries;
+import java.time.temporal.TemporalQuery;
 import java.time.temporal.TemporalUnit;
 import java.time.temporal.UnsupportedTemporalTypeException;
 import java.time.temporal.ValueRange;
+import java.util.Objects;
 
 public final class OffsetDateTime implements Temporal, TemporalAdjuster, Comparable<OffsetDateTime>, Serializable {
 
@@ -77,6 +81,18 @@ public final class OffsetDateTime implements Temporal, TemporalAdjuster, Compara
         if (temporal instanceof ZonedDateTime dateTime) {
             return dateTime.toOffsetDateTime();
         }
+        if (Iso.foreign()) {
+            try {
+                ZoneOffset offset = ZoneOffset.from(temporal);
+                LocalDate date = temporal.query(TemporalQueries.localDate());
+                LocalTime time = temporal.query(TemporalQueries.localTime());
+                return date != null && time != null ? of(date, time, offset) : ofInstant(Instant.from(temporal), offset);
+            }
+            catch (DateTimeException refused) {
+                throw new DateTimeException("Unable to obtain OffsetDateTime from TemporalAccessor: " + temporal
+                        + " of type " + temporal.getClass().getName(), refused);
+            }
+        }
         throw new DateTimeException("Unable to obtain OffsetDateTime from TemporalAccessor: " + temporal
                 + " of type " + temporal.getClass().getName());
     }
@@ -90,6 +106,11 @@ public final class OffsetDateTime implements Temporal, TemporalAdjuster, Compara
         in.end();
         LocalDateTime local = in.localDateTime();
         return new OffsetDateTime(local, in.zoneOffset());
+    }
+
+    public static OffsetDateTime parse(CharSequence text, DateTimeFormatter formatter) {
+        Objects.requireNonNull(formatter, "formatter");
+        return formatter.parse(text, OffsetDateTime::from);
     }
 
     private OffsetDateTime with(LocalDateTime newDateTime, ZoneOffset newOffset) {
@@ -412,6 +433,17 @@ public final class OffsetDateTime implements Temporal, TemporalAdjuster, Compara
 
     public int hashCode() {
         return dateTime.hashCode() ^ offset.hashCode();
+    }
+
+    @SuppressWarnings("unchecked")
+    public <R> R query(TemporalQuery<R> query) {
+        return query == TemporalQueries.precision() ? (R) ChronoUnit.NANOS
+                : query == TemporalQueries.zoneId() ? null : query.queryFrom(this);
+    }
+
+    public String format(DateTimeFormatter formatter) {
+        Objects.requireNonNull(formatter, "formatter");
+        return formatter.format(this);
     }
 
     public String toString() {

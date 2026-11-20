@@ -23,6 +23,14 @@ final class Iso {
     private Iso() {
     }
 
+    /**
+     * Whether the program can hold a date or a time of a class outside this package -- a
+     * formatter's result, a class of its own --, which the classes' from() read through
+     * their fields: answered by the compiler, so a program holding none has only the
+     * classes' own cases.
+     */
+    static native boolean foreign();
+
     static boolean leap(long year) {
         return (year & 3) == 0 && (year % 100 != 0 || year % 400 == 0);
     }

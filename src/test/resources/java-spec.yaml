@@ -16306,6 +16306,184 @@ standalone:
       seventeen rules: java.lang.IllegalArgumentException: Too many transition rules
       no list: java.lang.NullPointerException: standardOffsetTransitionList
       no offset: java.lang.NullPointerException: baseStandardOffset
+  # A formatter writes a value through the parts a pattern or a builder names and reads
+  # a text back through them, then makes the fields a date and a time in its resolver
+  # style: a program of its own, since the corpus above makes no formatter and so takes
+  # the classes' own ways of reading one another. The grid every line of the library was
+  # compared on is the program .kb/java-frontend.md names ("java.time: the formatter").
+  - name: a-formatter-writes-and-reads-a-date-by-a-pattern
+    file: Formatted.java
+    source: |
+      import java.time.*;
+      import java.time.format.*;
+      import java.time.temporal.*;
+      import java.util.*;
+      import java.util.function.Supplier;
+
+      public class Formatted {
+          static void attempt(String what, Supplier<Object> made) {
+              try {
+                  System.out.println(what + ": " + made.get());
+              }
+              catch (DateTimeParseException e) {
+                  System.out.println(what + ": " + e.getMessage() + " @" + e.getErrorIndex());
+              }
+              catch (RuntimeException e) {
+                  System.out.println(what + ": " + e);
+              }
+          }
+
+          public static void main(String[] args) {
+              LocalDateTime at = LocalDateTime.of(2026, 3, 7, 9, 5, 4, 120000000);
+              // a pattern is the parts it shows, and writes a value through them
+              for (String pattern : new String[] {"uuuu-MM-dd HH:mm:ss.SSS", "EEEE, MMMM d, yyyy h:mm a", "EEE, d MMM yy",
+                      "D DDD LLL", "G GGGG GGGGG", "''hh'h'mm", "[uuuu][VV]", "ppd|k|K"}) {
+                  DateTimeFormatter formatter = DateTimeFormatter.ofPattern(pattern);
+                  System.out.println(pattern + " = " + formatter + " -> " + formatter.format(at));
+              }
+              for (Locale locale : new Locale[] {Locale.ROOT, Locale.US, Locale.UK, Locale.CANADA}) {
+                  System.out.println(locale.toLanguageTag() + ": "
+                          + DateTimeFormatter.ofPattern("MMM MMMMM EEEE a G", locale).format(LocalDateTime.of(2026, 9, 1, 15, 0)));
+              }
+              for (String pattern : new String[] {"ddd", "[yyyy", "yyyy]", "'abc", "{", "b", "VVV", "p", "OO"}) {
+                  attempt("pattern " + pattern, () -> DateTimeFormatter.ofPattern(pattern));
+              }
+              attempt("no field", () -> DateTimeFormatter.ofPattern("HH:mm").format(LocalDate.of(2026, 3, 7)));
+              attempt("too wide", () -> DateTimeFormatter.ofPattern("uuuu").withResolverStyle(ResolverStyle.STRICT)
+                  .format(LocalDate.MAX));
+              // what a text is read as, in each resolver style
+              for (ResolverStyle style : ResolverStyle.values()) {
+                  DateTimeFormatter formatter = DateTimeFormatter.ofPattern("uuuu-MM-dd").withResolverStyle(style);
+                  for (String text : new String[] {"2026-02-28", "2026-02-29", "2026-04-31", "2026-13-01", "26-01-01",
+                          "2026-01-01x"}) {
+                      attempt(style + " " + text, () -> LocalDate.parse(text, formatter));
+                  }
+              }
+              // a year of an era resolves into no date strictly: a check of a pattern that only
+              // parses takes any day up to 31
+              DateTimeFormatter era = DateTimeFormatter.ofPattern("yyyy-MM-dd").withResolverStyle(ResolverStyle.STRICT);
+              attempt("strict yyyy", () -> era.parse("2026-02-30").isSupported(ChronoField.YEAR));
+              attempt("strict yyyy field", () -> era.parse("2026-02-28").getLong(ChronoField.YEAR_OF_ERA));
+              DateTimeFormatter iso = DateTimeFormatter.ofPattern("uuuu-MM-dd").withResolverStyle(ResolverStyle.STRICT);
+              for (String text : new String[] {"2026-12-01", "2026-02-29", "2026-13-01", "next Monday"}) {
+                  attempt("strict uuuu " + text, () -> iso.parse(text) != null);
+              }
+              attempt("24:00", () -> DateTimeFormatter.ofPattern("uuuu-MM-dd HH:mm").parse("2026-12-31 24:00"));
+              attempt("excess", () -> DateTimeFormatter.ofPattern("HH:mm").parse("24:00").query(DateTimeFormatter.parsedExcessDays()));
+              attempt("half a day", () -> DateTimeFormatter.ofPattern("hh:mm a").parse("12:30 AM", LocalTime::from));
+              attempt("conflict", () -> DateTimeFormatter.ofPattern("uuuu-MM-dd EEE").parse("2026-03-07 Mon"));
+              attempt("adjacent", () -> LocalDate.parse("20260307", DateTimeFormatter.ofPattern("uuuuMMdd")));
+              attempt("unparsed", () -> LocalDate.parse("2026-03-07T", DateTimeFormatter.ISO_LOCAL_DATE));
+              // offsets, zones and instants
+              ZonedDateTime zoned = ZonedDateTime.of(at, ZoneOffset.ofHoursMinutes(5, 30));
+              for (String pattern : new String[] {"XXX", "xx", "Z", "ZZZZ", "O", "VV"}) {
+                  System.out.println(pattern + " -> " + DateTimeFormatter.ofPattern(pattern).format(zoned));
+              }
+              System.out.println(DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(zoned) + " "
+                      + DateTimeFormatter.ISO_INSTANT.format(zoned) + " " + DateTimeFormatter.ISO_LOCAL_TIME.format(at) + " "
+                      + DateTimeFormatter.BASIC_ISO_DATE.format(zoned) + " " + DateTimeFormatter.RFC_1123_DATE_TIME.format(zoned)
+                      + " " + DateTimeFormatter.ISO_ORDINAL_DATE.format(at));
+              System.out.println(DateTimeFormatter.ISO_ZONED_DATE_TIME.format(ZonedDateTime.of(at, ZoneId.of("UTC"))) + " "
+                      + DateTimeFormatter.ISO_LOCAL_DATE.withZone(ZoneOffset.UTC).format(Instant.ofEpochSecond(86400 * 365)));
+              attempt("zoned", () -> ZonedDateTime.parse("2026-03-07T09:05+05:30[UTC]", DateTimeFormatter.ISO_ZONED_DATE_TIME));
+              attempt("offset", () -> OffsetDateTime.parse("07/03/2026 09:05 +0530",
+                      DateTimeFormatter.ofPattern("dd/MM/uuuu HH:mm xx")));
+              attempt("instant", () -> DateTimeFormatter.ISO_INSTANT.parse("2026-03-07T23:59:60Z", Instant::from));
+              attempt("leap", () -> DateTimeFormatter.ISO_INSTANT.parse("2026-03-07T23:59:60Z")
+                  .query(DateTimeFormatter.parsedLeapSecond()));
+              TemporalAccessor parsed = DateTimeFormatter.ISO_DATE_TIME.parse("2026-03-07T09:05:04.5+01:00");
+              System.out.println(parsed.query(TemporalQueries.localDate()) + " " + parsed.query(TemporalQueries.localTime())
+                      + " " + parsed.query(TemporalQueries.offset()) + " " + parsed.query(TemporalQueries.zoneId()) + " "
+                      + LocalDateTime.from(parsed) + " " + Instant.from(parsed) + " " + YearMonth.from(parsed));
+              attempt("not a date", () -> LocalDate.from(DateTimeFormatter.ofPattern("HH:mm").parse("09:05")));
+              // a formatter made part by part
+              DateTimeFormatter built = new DateTimeFormatterBuilder().parseCaseInsensitive()
+                  .appendText(ChronoField.MONTH_OF_YEAR, TextStyle.SHORT)
+                  .appendLiteral(' ')
+                  .appendValue(ChronoField.DAY_OF_MONTH)
+                  .optionalStart()
+                  .appendLiteral(", ")
+                  .appendValue(ChronoField.YEAR, 4)
+                  .optionalEnd()
+                  .parseDefaulting(ChronoField.YEAR, 2026)
+                  .toFormatter(Locale.US);
+              attempt("built JAN 5", () -> LocalDate.parse("JAN 5", built));
+              attempt("built mar 7, 2027", () -> LocalDate.parse("mar 7, 2027", built));
+              System.out.println(built.format(at) + " " + LocalDate.of(2026, 1, 5).format(built) + " "
+                      + at.format(DateTimeFormatter.ofPattern("uuuu/MM/dd")));
+          }
+      }
+    stdout: |
+      uuuu-MM-dd HH:mm:ss.SSS = Value(Year,4,19,EXCEEDS_PAD)'-'Value(MonthOfYear,2)'-'Value(DayOfMonth,2)' 'Value(HourOfDay,2)':'Value(MinuteOfHour,2)':'Value(SecondOfMinute,2)'.'Fraction(NanoOfSecond,3,3) -> 2026-03-07 09:05:04.120
+      EEEE, MMMM d, yyyy h:mm a = Text(DayOfWeek)','' 'Text(MonthOfYear)' 'Value(DayOfMonth)','' 'Value(YearOfEra,4,19,EXCEEDS_PAD)' 'Value(ClockHourOfAmPm)':'Value(MinuteOfHour,2)' 'Text(AmPmOfDay,SHORT) -> Saturday, March 7, 2026 9:05 AM
+      EEE, d MMM yy = Text(DayOfWeek,SHORT)','' 'Value(DayOfMonth)' 'Text(MonthOfYear,SHORT)' 'ReducedValue(YearOfEra,2,2,2000-01-01) -> Sat, 7 Mar 26
+      D DDD LLL = Value(DayOfYear)' 'Value(DayOfYear,3)' 'Text(MonthOfYear,SHORT_STANDALONE) -> 66 066 Mar
+      G GGGG GGGGG = Text(Era,SHORT)' 'Text(Era)' 'Text(Era,NARROW) -> AD Anno Domini A
+      ''hh'h'mm = ''Value(ClockHourOfAmPm,2)'h'Value(MinuteOfHour,2) -> '09h05
+      [uuuu][VV] = [Value(Year,4,19,EXCEEDS_PAD)][ZoneId()] -> 2026
+      ppd|k|K = Pad(Value(DayOfMonth),2)'|'Value(ClockHourOfDay)'|'Value(HourOfAmPm) ->  7|9|9
+      und: Sep 9 Tue PM CE
+      en-US: Sep S Tuesday PM AD
+      en-GB: Sept S Tuesday pm AD
+      en-CA: Sep S Tuesday p.m. AD
+      pattern ddd: java.lang.IllegalArgumentException: Too many pattern letters: d
+      pattern [yyyy: [Value(YearOfEra,4,19,EXCEEDS_PAD)]
+      pattern yyyy]: java.lang.IllegalArgumentException: Pattern invalid as it contains ] without previous [
+      pattern 'abc: java.lang.IllegalArgumentException: Pattern ends with an incomplete string literal: 'abc
+      pattern {: java.lang.IllegalArgumentException: Pattern includes reserved character: '{'
+      pattern b: java.lang.IllegalArgumentException: Unknown pattern letter: b
+      pattern VVV: java.lang.IllegalArgumentException: Pattern letter count must be 2: V
+      pattern p: java.lang.IllegalArgumentException: Pad letter 'p' must be followed by valid pad pattern: p
+      pattern OO: java.lang.IllegalArgumentException: Pattern letter count must be 1 or 4: O
+      no field: java.time.temporal.UnsupportedTemporalTypeException: Unsupported field: HourOfDay
+      too wide: +999999999
+      STRICT 2026-02-28: 2026-02-28
+      STRICT 2026-02-29: Text '2026-02-29' could not be parsed: Invalid date 'February 29' as '2026' is not a leap year @0
+      STRICT 2026-04-31: Text '2026-04-31' could not be parsed: Invalid date 'APRIL 31' @0
+      STRICT 2026-13-01: Text '2026-13-01' could not be parsed: Invalid value for MonthOfYear (valid values 1 - 12): 13 @0
+      STRICT 26-01-01: Text '26-01-01' could not be parsed at index 0 @0
+      STRICT 2026-01-01x: Text '2026-01-01x' could not be parsed, unparsed text found at index 10 @10
+      SMART 2026-02-28: 2026-02-28
+      SMART 2026-02-29: 2026-02-28
+      SMART 2026-04-31: 2026-04-30
+      SMART 2026-13-01: Text '2026-13-01' could not be parsed: Invalid value for MonthOfYear (valid values 1 - 12): 13 @0
+      SMART 26-01-01: Text '26-01-01' could not be parsed at index 0 @0
+      SMART 2026-01-01x: Text '2026-01-01x' could not be parsed, unparsed text found at index 10 @10
+      LENIENT 2026-02-28: 2026-02-28
+      LENIENT 2026-02-29: 2026-03-01
+      LENIENT 2026-04-31: 2026-05-01
+      LENIENT 2026-13-01: 2027-01-01
+      LENIENT 26-01-01: Text '26-01-01' could not be parsed at index 0 @0
+      LENIENT 2026-01-01x: Text '2026-01-01x' could not be parsed, unparsed text found at index 10 @10
+      strict yyyy: false
+      strict yyyy field: 2026
+      strict uuuu 2026-12-01: true
+      strict uuuu 2026-02-29: Text '2026-02-29' could not be parsed: Invalid date 'February 29' as '2026' is not a leap year @0
+      strict uuuu 2026-13-01: Text '2026-13-01' could not be parsed: Invalid value for MonthOfYear (valid values 1 - 12): 13 @0
+      strict uuuu next Monday: Text 'next Monday' could not be parsed at index 0 @0
+      24:00: {},ISO resolved to 2027-01-01T00:00
+      excess: P1D
+      half a day: 00:30
+      conflict: Text '2026-03-07 Mon' could not be parsed: Conflict found: Field DayOfWeek 6 differs from DayOfWeek 1 derived from 2026-03-07 @0
+      adjacent: 2026-03-07
+      unparsed: Text '2026-03-07T' could not be parsed, unparsed text found at index 10 @10
+      XXX -> +05:30
+      xx -> +0530
+      Z -> +0530
+      ZZZZ -> GMT+05:30
+      O -> GMT+5:30
+      VV -> +05:30
+      2026-03-07T09:05:04.12+05:30 2026-03-07T03:35:04.120Z 09:05:04.12 20260307+0530 Sat, 7 Mar 2026 09:05:04 +0530 2026-066
+      2026-03-07T09:05:04.12Z[UTC] 1971-01-01
+      zoned: 2026-03-07T03:35Z[UTC]
+      offset: 2026-03-07T09:05+05:30
+      instant: 2026-03-07T23:59:59Z
+      leap: true
+      2026-03-07 09:05:04.500 +01:00 null 2026-03-07T09:05:04.500 2026-03-07T08:05:04.500Z 2026-03
+      not a date: java.time.DateTimeException: Unable to obtain LocalDate from TemporalAccessor: {},ISO resolved to 09:05 of type java.time.format.Parsed
+      built JAN 5: 2026-01-05
+      built mar 7, 2027: 2027-03-07
+      Mar 7, 2026 Jan 5, 2026 2026/03/07
 refused:
   scaffold: |
     class Refused {

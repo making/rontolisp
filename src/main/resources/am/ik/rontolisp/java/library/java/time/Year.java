@@ -7,6 +7,7 @@
 package java.time;
 
 import java.io.Serializable;
+import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoField;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.Temporal;
@@ -14,9 +15,12 @@ import java.time.temporal.TemporalAccessor;
 import java.time.temporal.TemporalAdjuster;
 import java.time.temporal.TemporalAmount;
 import java.time.temporal.TemporalField;
+import java.time.temporal.TemporalQueries;
+import java.time.temporal.TemporalQuery;
 import java.time.temporal.TemporalUnit;
 import java.time.temporal.UnsupportedTemporalTypeException;
 import java.time.temporal.ValueRange;
+import java.util.Objects;
 
 public final class Year implements Temporal, TemporalAdjuster, Comparable<Year>, Serializable {
 
@@ -76,6 +80,11 @@ public final class Year implements Temporal, TemporalAdjuster, Comparable<Year>,
         }
         in.end();
         return new Year(negative ? -value : value);
+    }
+
+    public static Year parse(CharSequence text, DateTimeFormatter formatter) {
+        Objects.requireNonNull(formatter, "formatter");
+        return formatter.parse(text, Year::from);
     }
 
     public static boolean isLeap(long year) {
@@ -261,6 +270,17 @@ public final class Year implements Temporal, TemporalAdjuster, Comparable<Year>,
 
     public int hashCode() {
         return year;
+    }
+
+    @SuppressWarnings("unchecked")
+    public <R> R query(TemporalQuery<R> query) {
+        return query == TemporalQueries.precision() ? (R) ChronoUnit.YEARS
+                : query == TemporalQueries.zoneId() ? null : query.queryFrom(this);
+    }
+
+    public String format(DateTimeFormatter formatter) {
+        Objects.requireNonNull(formatter, "formatter");
+        return formatter.format(this);
     }
 
     public String toString() {

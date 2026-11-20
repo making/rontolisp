@@ -199,15 +199,25 @@ final class JavaIntrinsics {
 
 	private static final String ZONE_CHANGES = "java.time.zone.ZoneChanges";
 
+	private static final String FOREIGN = "java.time.Iso.foreign()";
+
+	private static final String WANTED = "java.time.format.DateTimeFormatter.wanted()";
+
 	/**
 	 * What a member of the library's Java source with no parameter asks of the program it
 	 * is lowered into, where it is such a question; {@code null} for any other member.
 	 * The lowering answers it before it lowers what the answer decides, so the statement
 	 * or the operand not taken is in no program: a program holding no region of the tz
-	 * database has nothing of what a region needs.
+	 * database has nothing of what a region needs, one making no date of a formatter's
+	 * nothing of reading a date's fields, one reading no ISO formatter none of them.
 	 */
 	static @Nullable Boolean answered(String member, JavaEmitter.Context lowering) {
-		return member.equals(REGIONAL) ? lowering.holdsRegions() : null;
+		return switch (member) {
+			case REGIONAL -> lowering.holdsRegions();
+			case FOREIGN -> lowering.foreignTemporals();
+			case WANTED -> lowering.wantedField();
+			default -> null;
+		};
 	}
 
 	/** The intrinsic classes, as the class table asks for them. */
@@ -1937,6 +1947,12 @@ final class JavaIntrinsics {
 			return lowering.library(ZONE_ID, "ids", List.of());
 		});
 		natives.put(REGIONAL, (lowering, call) -> lowering.holdsRegions() ? JavaForms.T : JavaForms.NIL);
+		// java.time's classes read a date of another class through its fields only in a
+		// program that can hold one; a formatter's ISO constants are made where read; a
+		// formatter reads a zone's name through ZoneId's own lookup, which notes none
+		natives.put(FOREIGN, (lowering, call) -> lowering.foreignTemporals() ? JavaForms.T : JavaForms.NIL);
+		natives.put(WANTED, (lowering, call) -> lowering.wantedField() ? JavaForms.T : JavaForms.NIL);
+		natives.put("java.time.format.Step.region0(String)", library(ZONE_ID, "region"));
 		// the rules of a region are read and asked in their own package, which the
 		// classes of java.time reach here: a static method each, of the class the rules
 		// of a region are

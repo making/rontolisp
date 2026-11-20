@@ -11,6 +11,7 @@ import java.time.temporal.Temporal;
 import java.time.temporal.TemporalAccessor;
 import java.time.temporal.TemporalAdjuster;
 import java.time.temporal.TemporalField;
+import java.time.temporal.TemporalQueries;
 import java.time.temporal.UnsupportedTemporalTypeException;
 import java.time.zone.ZoneRules;
 
@@ -139,6 +140,12 @@ public final class ZoneOffset extends ZoneId implements TemporalAccessor, Tempor
         }
         if (temporal instanceof ZonedDateTime dateTime) {
             return dateTime.getOffset();
+        }
+        if (Iso.foreign()) {
+            ZoneOffset offset = temporal.query(TemporalQueries.offset());
+            if (offset != null) {
+                return offset;
+            }
         }
         throw new DateTimeException("Unable to obtain ZoneOffset from TemporalAccessor: " + temporal + " of type "
                 + temporal.getClass().getName());

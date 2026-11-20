@@ -518,6 +518,30 @@ class JavaLoweringTest {
 				}
 				""";
 		assertThat(lower(pool.formatted(""), "L7.java")).noneMatch(form -> form.contains("ThreadPoolExecutor.Hooked"));
+		// A formatter's ISO form is made only in a program that reads it; what a
+		// formatter reads is a date of another class, which the classes of java.time
+		// read through its fields -- as they read a class of the program's own -- only
+		// in a program that can hold one.
+		String formatted = """
+				import java.time.*;
+				import java.time.format.DateTimeFormatter;
+				class L14 {
+				    public static void main(String[] args) {
+				        System.out.println(LocalDate.from(LocalDateTime.MIN)%s);
+				    }
+				}
+				""";
+		assertThat(
+				lower(formatted.formatted(" + LocalDate.parse(args[0], DateTimeFormatter.ISO_LOCAL_DATE).toString()"),
+						"L14.java"))
+			.anyMatch(form -> form.contains("(SETQ |java.time.format.DateTimeFormatter.ISO_LOCAL_DATE| "
+					+ "(|java.time.format.DateTimeFormatterBuilder.formatter("))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.format.DateTimeFormatter.<clinit>| ")
+					&& form.contains("(SETQ |java.time.format.DateTimeFormatter.ISO_INSTANT| NIL)"))
+			.anyMatch(form -> form.startsWith("(DEFUN |java.time.LocalDate.from(")
+					&& form.contains("TemporalQueries.localDate()"));
+		assertThat(lower(formatted.formatted(""), "L14.java"))
+			.noneMatch(form -> form.contains("TemporalQueries") || form.contains("java.time.format."));
 		assertThat(lower(pool.formatted("{ protected void afterExecute(Runnable r, Throwable t) { } }"), "L7.java"))
 			.anyMatch(form -> form.contains("(DEFUN |java.util.concurrent.ThreadPoolExecutor.hooked()| NIL "
 					+ "(|java.util.concurrent.ThreadPoolExecutor.Hooked.new()|))"));

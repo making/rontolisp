@@ -360,6 +360,24 @@ algorithm came from, and the answer goes in the file's header.
   `THIRD-PARTY-NOTICES.txt` is "tz database"; the version is the file's `tzdb` line, and
   [java-frontend.md](java-frontend.md), "java.time: the regions", says how a newer one
   is taken. The answers are lines of `java-spec.yaml`, which the JDK leg asks again.
+- **The formatter of `java.time` (k43, 2026-11-20).** `DateTimeFormatter`, its builder,
+  `ResolverStyle`, `SignStyle`, `TextStyle`, `TemporalQuery` and `TemporalQueries` were
+  written from the API documentation (the table of pattern letters and what each count
+  appends, the builder's members, the resolver styles, the queries) and JDK 25's answers
+  to probes (`Grid.java` of `.todo/artefacts/k43-java-time-a-formatter-and-the-classes-k35-left/`,
+  8,394 lines: every letter written and shown, numbers, words, offsets and zones read
+  strictly and leniently, every resolver style over the fields alone and combined, the
+  ISO forms, the builder). Nobody opened OpenJDK's source, and the shape is its own: a
+  formatter is parts that print and read with a position that is negative where they
+  fail, the fields read are two arrays, and resolving is one ordered pass. What the
+  documentation does not state was read off the answers: which digits a run of numbers
+  gives each, which sign a style takes leniently, which of two equal words wins, where an
+  offset with an hour of one digit ends, the order fields are resolved and refused in and
+  the words of each refusal, the text of a formatter and of what it read. `Parsed` has the
+  name a JDK's refusals show. The words of months, days, eras and half days of the five
+  locales are CLDR's as a running JDK writes them, under the Unicode entry of
+  `THIRD-PARTY-NOTICES.txt`. The answers are lines of `java-spec.yaml`, which the JDK leg
+  asks again.
 - **`java.util.Date` and `java.sql` (k37, 2026-11-20).** Written from the API
   documentation (which states `Date.hashCode`, `equals` and the text forms) and JDK 25's
   answers to probes (`Grid.java`, 2,095 lines; `Gap.java`, the wall times four zones skip

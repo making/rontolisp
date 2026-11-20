@@ -8,6 +8,7 @@ package java.time;
 
 import java.io.Serializable;
 import java.time.chrono.ChronoLocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoField;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.Temporal;
@@ -15,8 +16,11 @@ import java.time.temporal.TemporalAccessor;
 import java.time.temporal.TemporalAdjuster;
 import java.time.temporal.TemporalAmount;
 import java.time.temporal.TemporalField;
+import java.time.temporal.TemporalQueries;
+import java.time.temporal.TemporalQuery;
 import java.time.temporal.TemporalUnit;
 import java.time.temporal.ValueRange;
+import java.util.Objects;
 
 public final class LocalDateTime
         implements Temporal, TemporalAdjuster, ChronoLocalDateTime<LocalDate>, Serializable {
@@ -108,6 +112,15 @@ public final class LocalDateTime
         if (temporal instanceof OffsetDateTime dateTime) {
             return dateTime.toLocalDateTime();
         }
+        if (Iso.foreign()) {
+            try {
+                return of(LocalDate.from(temporal), LocalTime.from(temporal));
+            }
+            catch (DateTimeException refused) {
+                throw new DateTimeException("Unable to obtain LocalDateTime from TemporalAccessor: " + temporal
+                        + " of type " + temporal.getClass().getName(), refused);
+            }
+        }
         throw new DateTimeException("Unable to obtain LocalDateTime from TemporalAccessor: " + temporal + " of type "
                 + temporal.getClass().getName());
     }
@@ -119,6 +132,11 @@ public final class LocalDateTime
         in.time();
         in.end();
         return in.localDateTime();
+    }
+
+    public static LocalDateTime parse(CharSequence text, DateTimeFormatter formatter) {
+        Objects.requireNonNull(formatter, "formatter");
+        return formatter.parse(text, LocalDateTime::from);
     }
 
     private LocalDateTime with(LocalDate newDate, LocalTime newTime) {
@@ -464,6 +482,17 @@ public final class LocalDateTime
 
     public int hashCode() {
         return date.hashCode() ^ time.hashCode();
+    }
+
+    @SuppressWarnings("unchecked")
+    public <R> R query(TemporalQuery<R> query) {
+        return query == TemporalQueries.precision() ? (R) ChronoUnit.NANOS
+                : query == TemporalQueries.zoneId() ? null : query.queryFrom(this);
+    }
+
+    public String format(DateTimeFormatter formatter) {
+        Objects.requireNonNull(formatter, "formatter");
+        return formatter.format(this);
     }
 
     public String toString() {

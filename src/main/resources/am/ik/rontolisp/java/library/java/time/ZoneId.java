@@ -16,6 +16,7 @@ package java.time;
 
 import java.io.Serializable;
 import java.time.temporal.TemporalAccessor;
+import java.time.temporal.TemporalQueries;
 import java.time.zone.ZoneRules;
 import java.time.zone.ZoneRulesException;
 import java.util.HashSet;
@@ -176,6 +177,12 @@ public abstract class ZoneId implements Serializable {
         }
         if (temporal instanceof ZoneOffset || temporal instanceof OffsetDateTime) {
             return ZoneOffset.from(temporal);
+        }
+        if (Iso.foreign()) {
+            ZoneId zone = temporal.query(TemporalQueries.zone());
+            if (zone != null) {
+                return zone;
+            }
         }
         throw new DateTimeException("Unable to obtain ZoneId from TemporalAccessor: " + temporal + " of type "
                 + temporal.getClass().getName());

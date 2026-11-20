@@ -33,4 +33,10 @@ public interface TemporalAccessor {
         }
         return (int) value;
     }
+
+    @SuppressWarnings("unchecked")
+    default <R> R query(TemporalQuery<R> query) {
+        return query == TemporalQueries.zoneId() || query == TemporalQueries.precision() ? null
+                : query.queryFrom(this);
+    }
 }

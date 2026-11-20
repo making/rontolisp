@@ -140,6 +140,17 @@ interface JavaEmitter {
 		/** The table of the regions the program holds, as its library reads it. */
 		LispVal regions();
 
+		/**
+		 * Whether the program can hold a {@code TemporalAccessor} of a class outside
+		 * {@code java.time} itself: a formatter's result, a class of its own.
+		 */
+		boolean foreignTemporals();
+
+		/**
+		 * Whether the program reads the static field whose initializer is being lowered.
+		 */
+		boolean wantedField();
+
 	}
 
 	LispVal emit(Context context, Invocation invocation);

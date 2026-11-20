@@ -1961,6 +1961,8 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private static final String THREAD = "java.lang.Thread";
 
+	private static final String TEMPORAL_ACCESSOR = "java.time.temporal.TemporalAccessor";
+
 	/**
 	 * Whether the program can start a thread: some call reaches {@code Thread.start()}.
 	 */
@@ -3470,6 +3472,41 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	@Override
+	public boolean foreignTemporals() {
+		if (this.classes.session) {
+			// a later buffer may declare one
+			return true;
+		}
+		JavaClass accessor = this.classes.library(TEMPORAL_ACCESSOR);
+		for (JavaClass candidate : this.classes.all()) {
+			String name = candidate.name;
+			boolean ours = name.startsWith("java.time.") && name.indexOf('.', "java.time.".length()) < 0;
+			if (!ours && isMade(candidate) && candidate.isSubclassOf(accessor)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	@Override
+	public boolean wantedField() {
+		Initializing at = this.initializing;
+		return this.classes.session || (at != null && at.field() != null && this.classes.wanted.contains(at.field()));
+	}
+
+	/**
+	 * Notes a read of a static field of the library whose initializer asks whether it is
+	 * wanted: the first read lowers the program again, the field then made.
+	 */
+	private void noteWanted(Field field) {
+		if (field.initializer instanceof Conditional conditional && conditional.condition() instanceof Call call
+				&& call.target() == null && call.arguments().isEmpty() && call.name().equals("wanted")
+				&& field.owner.source != null && field.owner.source.library() && this.classes.wanted.add(field)) {
+			this.classes.changed();
+		}
+	}
+
+	@Override
 	public LispVal regions() {
 		return JavaForms.string(JavaZones.shipped().table(this.classes.everyRegion ? null : this.classes.regions));
 	}
@@ -4090,6 +4127,7 @@ final class JavaLowering implements JavaEmitter.Context {
 			return constant instanceof String text ? constantString(text) : constant(constant);
 		}
 		this.effects.reads.add(field);
+		noteWanted(field);
 		uses(field.owner);
 		if (forward(field)) {
 			this.effects.forward.add(field);

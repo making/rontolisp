@@ -199,6 +199,12 @@ final class JavaClasses {
 	boolean everyRegion;
 
 	/**
+	 * The static fields of the library some pass read whose initializers ask whether they
+	 * are wanted: a constant no program reads is not made (a formatter's ISO forms).
+	 */
+	final Set<JavaClass.Field> wanted = new java.util.LinkedHashSet<>();
+
+	/**
 	 * Whether the program can ask the class of an array whose vector does not say it --
 	 * an array of {@code long}, of {@code short} or of references other than
 	 * {@code Object}: it casts or tests such a type, or asks the class name of a value

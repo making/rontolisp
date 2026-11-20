@@ -63,8 +63,9 @@ itself: k30 (2026-11-20; `.todo/k39`, `k40` and `k41` are what it found beside i
 `java.util.UUID`: k36 (2026-11-20); `java.math` (`BigInteger`, `BigDecimal`,
 `MathContext`, `RoundingMode`): k31 (2026-11-20); `java.time` (the dates, times and
 instants read from their texts, the fields and units, the zones of one offset, a clock):
-k35 (2026-11-20; `.todo/k43` is what it left, and the regions of the tz database are
-k42's: "java.time: the regions"); `java.util.Date` and `java.sql`'s
+k35 (2026-11-20; the regions of the tz database are k42's: "java.time: the regions");
+the formatter and the queries of `java.time`: k43 (2026-11-20; `.todo/k52` is what it
+left: "java.time: the formatter"); `java.util.Date` and `java.sql`'s
 `Date`, `Time`, `Timestamp`, `import module java.sql`, the two levels of imports on demand:
 k37 (2026-11-20); the stream members k12 left (`mapMulti`, the gatherers, a stream's and
 the numbers' spliterators, the streams of a `Random`, the collectors of a concurrent
@@ -1558,7 +1559,8 @@ documentation; what it leaves open is a JDK 25's answers to a grid. `java.time.c
   `TemporalField`, unit, adjuster or amount goes through; each class answers the
   `ChronoField` / `ChronoUnit` it has in a `switch` and hands any other to the field
   or unit itself. `from(TemporalAccessor)` is an `instanceof` over the library's
-  classes (there is no `TemporalQuery`), which a test holds only the made classes of.
+  classes, which a test holds only the made classes of, and since k43 `query` and the
+  fields where the program can hold a value of another class ("java.time: the formatter").
   `Period.addTo` adds years as years where there are no months (a `Year` takes a
   period of years), the rest as months, then the days.
 - **Read off the grid, in no documentation**: the hash codes (`LocalDate`
@@ -1589,10 +1591,11 @@ documentation; what it leaves open is a JDK 25's answers to a grid. `java.time.c
   of the eight classes with the temporal constraints (`after`, `between`, `past` of a
   fixed clock, a field's predicate), texts, values already of the type and numbers for
   the year -- prints a JDK's 77 lines on the four: wasm 1,256,341 B.
-- Not there (`.todo/k43`): `DateTimeFormatter` and `format` / `parse` with one,
-  `MonthDay`, `OffsetTime`, `InstantSource`, `TemporalAdjusters`, `TemporalQuery` /
-  `query`, `IsoFields` / `WeekFields`, the calendars and eras, `getDisplayName`,
-  `datesUntil`; each refused by name. `Duration.dividedBy` stays `.todo/k47`'s.
+- Not there (`.todo/k52`): `MonthDay`, `OffsetTime`, `InstantSource`,
+  `TemporalAdjusters`, `IsoFields` / `WeekFields`, the calendars and eras,
+  `getDisplayName`, `datesUntil`; each refused by name. `Duration.dividedBy` stays
+  `.todo/k47`'s. The formatter and the queries came with k43 ("java.time: the formatter"
+  below).
 - Pins: java-spec `dates-times-and-instants-are-read-from-their-texts-and-computed-with`
   (146 lines of the grid's kinds); a class the subset lacks is `java.util.Currency` and
   `java.util.EventListener` in `JavaLoweringTest#aLibraryOfTheSourcePathIsLoweredAsFarAsTheProgramReaches`
@@ -1733,6 +1736,114 @@ has nothing of what a region needs -- the forms it had before.** Provenance:
   holding); java-spec `a-program-holds-the-regions-of-the-tz-database-it-names` (a file
   of its own, 101 lines: the corpus's one program holds no region, which is what its
   `dates-times-and-instants` case runs as).
+
+## java.time: the formatter (2026-11-20, k43)
+
+**Invariant: a formatter writes a value through the parts its pattern or builder names,
+reads a text back through them and makes the fields a date and a time in its resolver
+style, as a JDK 25 answers; a program that makes no formatter has nothing of it, one that
+reads no ISO form makes none, and the classes read a value of another class through its
+fields only in a program that can hold one.** Provenance:
+[java-frontend-provenance.md](java-frontend-provenance.md).
+
+- **The shape** (`java.time.format`, Java source): a formatter is a `Step.Group` of
+  parts (a literal, a number, a reduced number, a fraction, words, an offset, a localized
+  offset, a zone's name, an instant, a group, a setting, a pad, a default), a locale, a
+  resolver style and a zone. Writing asks each part to print (`Writing`: inside an
+  optional part a field the value lacks writes nothing); reading asks each part to read at
+  a position (`Reading`), which answers where it ends or the complement of where it
+  failed, then `Parsed.resolve`. `Patterns` makes a pattern's parts by the API
+  documentation's table of letters; `Texts` holds the words of months, days, eras and
+  half days of the five locales `Locale` has (CLDR's as a JDK writes them: the root's
+  `BCE`, the British `Sept` and `am`, the Canadian `a.m.`). `Parsed` has the name a JDK's
+  refusals show (`of type java.time.format.Parsed`).
+- **The classes' own `parse` stays `IsoText`'s**, the formatter a second reader of the
+  same fields: measured, `LocalDate.parse(text)` is 141,206 B of wasm and
+  `LocalDate.parse(text, ISO_LOCAL_DATE)` 365,475, which one engine would put in every
+  program that reads a date. The 503 texts of k35's grid read through the ISO forms give
+  the JDK's answers, so the two readers agree.
+- **What the grid decided** (`Grid.java` below), in no documentation:
+  - a run of numbers with no text between: the first keeps the digits of the fixed-width
+    numbers after it, which read their width exactly and take no sign; the first reads
+    at least its least width and at most 19 digits, one fewer where 19 pass a long.
+    Strictly a sign is the style's (`EXCEEDS_PAD`: a `+` only past the pad width, none
+    without one past it; no `-0`); leniently any sign unless the width is fixed, and any
+    count of digits. A reduced number read in its width is the value nearest after the
+    base; in another width, or signed, it is the number itself.
+  - words: the longest standing there, of two equal ones the later value (`J` is July);
+    leniently those of every style, then a number; a field with no words is a number.
+  - an offset: the no-offset text first, whatever follows (`x` reads `+0030` as `+00`);
+    hours of two digits are no offset from 60 and refused at once from 24; an hour of
+    one digit takes the digits the pattern can read, an odd count one digit, and is
+    refused at once past 23 with its minutes and seconds; leniently the minutes and the
+    seconds may each be there, with colons only in a pattern of the hours alone or one
+    with colons; with an empty no-offset text a text that is no offset is a zero one,
+    reading nothing.
+  - a zone's name: an offset, `UTC` / `GMT` / `UT` with an offset or alone, or the
+    longest name of a zone the program has (`ZoneId.region` through the native
+    `Step.region0`, which notes no name: "java.time: the regions").
+  - an instant is read as `ISO_INSTANT` writes it with any offset within 18 hours, the end
+    of a day as the next day's start and a second 60 as 59 (`parsedLeapSecond`); one past
+    that is refused at the part's start.
+  - a pad reads its width whole strictly; a setting changed inside an optional part that
+    fails stays changed (a JDK's answer); a field read twice must be read the same.
+  - resolving: a year of an era is a year (strictly only with an era or a year; an era
+    alone is checked in every style); then a date of the year, month and day (strictly
+    `LocalDate.of`; smartly the day cut to the month's last; leniently added up), of the
+    day of the year, or of an aligned week and a day; an epoch day is the date the other
+    fields are checked against. The time fields are converted (clock hours, half days,
+    the fields of a day, thousandths and millionths into nanoseconds, each conflict
+    `while resolving` the field), then a time of the hour, minute, second and nanosecond,
+    each where the one before is: checked minute, hour (smartly `24:00` is the next day),
+    second, nanosecond. A time not made gets its nanoseconds and their thousandths and
+    millionths where there is a second or an instant; with no hour each field is checked
+    by itself. Every field left is checked against the date or the time (`Conflict found:
+    Field .. derived from ..`). An instant read with a zone or an offset is the date and
+    the time there, over what the fields made; a date and a time with one get their
+    instant. Half a day alone is its middle (`AM` is `06:00`).
+- **Who pays: two questions answered while lowering** (`JavaIntrinsics.answered`):
+  - `DateTimeFormatter.wanted()`: each ISO form's initializer is `wanted() ? .. : null`,
+    answered by whether the program reads that static field (`JavaLowering.noteWanted`,
+    `JavaClasses.wanted`; the first read lowers the program again). Measured: a format
+    by a pattern 322,993 B, 333,055 with every form made; a parse 428,993 against
+    446,350.
+  - `Iso.foreign()`: `from` of `LocalDate`, `LocalTime`, `LocalDateTime`,
+    `OffsetDateTime`, `ZonedDateTime`, `ZoneOffset` and `ZoneId` read a value of another
+    class through `query` and its fields only where the program can hold one
+    (`JavaLowering.foreignTemporals`: a class it makes outside `java.time` itself, a
+    formatter's `Parsed` or a class of its own; a session always). Measured: a program of
+    `LocalDate.until` is 167,943 B, 202,041 with that reading in every program.
+- **A program making no formatter is unchanged**: YAVI's `Member.java` the same bytes,
+  `Booking.java` and every program of the k35 and k42 tables the same bytes or the same
+  forms in another order (`LocalDate` now names `DateTimeFormatter` and `TemporalQuery`,
+  which moves classes in the table). The table is in the artefacts.
+- **What a program pays** (wasm): a date written by a pattern 322,993 B, one read by a
+  pattern 428,993, by `ISO_LOCAL_DATE` 365,475; YAVI's `isoLocalDate()` constraint
+  946,257 (`Member` 663,174). Of the format program's functions (262 KB): the run time 50
+  KB more than a program adding a day (the float arm of a generic `%string` 16 KB, which
+  `"" + field` of an interface type brings), the parts 27, the top level 25 (the class
+  initializations of `ChronoUnit`, the texts, the patterns of an offset), `Patterns` and
+  the builder 16; a parse adds `Parsed` (38 KB) and the parts' reading.
+- **The grid** (`.todo/artefacts/k43-java-time-a-formatter-and-the-classes-k35-left/Grid.java`):
+  8,394 lines; the interpreter (7.2 s), the JVM (2.2 s), wasm (0.8 s, 1,072,395 B) and
+  the component (0.9 s) print a JDK's lines (the JDK 2.0 s). The k35 grid and the k42
+  walk print theirs as before.
+- **YAVI**: `CharSequenceConstraint.isoLocalDate()` and `localDate(pattern)`
+  (`DateTimeFormatter.ofPattern(pattern).withResolverStyle(ResolverStyle.STRICT)
+  .parse(x)`) run: the artefacts' `yavi/Event.java` prints a JDK's lines on the four
+  backends. Strictly a pattern of `yyyy` makes no date (the year of an era stays a
+  field), so such a check takes `2026-02-30` as a JDK does.
+- **Not there** (`.todo/k52`): the pattern letters of a locale's weeks (`Y`, `w`, `W`,
+  `e` and `c` of one or two letters), a quarter (`Q`, `q`), the modified Julian day
+  (`g`), a period of the day (`B`) and a zone's name in words (`z`, `v`), each an
+  `UnsupportedOperationException` by name when the pattern is read; `ISO_WEEK_DATE`,
+  `ofLocalized..`, `DecimalStyle`, `withChronology` and `getChronology`, `toFormat`,
+  `parseUnresolved`, `parse` at a `ParsePosition`, `withResolverFields`,
+  `TemporalQueries.chronology()`, refused by name.
+- Pins: java-spec `a-formatter-writes-and-reads-a-date-by-a-pattern` (standalone, 70
+  lines; the corpus program above makes no formatter and so keeps the classes' own
+  ways); `JavaLoweringTest#theLibraryIsJavaSourceLoweredAsFarAsTheProgramReaches` (the
+  two questions).
 
 ## java.util.Date and java.sql (2026-11-20, k37)
 

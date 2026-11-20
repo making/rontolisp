@@ -9,6 +9,7 @@ package java.time;
 
 import java.io.Serializable;
 import java.time.chrono.ChronoLocalDate;
+import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoField;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.Temporal;
@@ -16,9 +17,12 @@ import java.time.temporal.TemporalAccessor;
 import java.time.temporal.TemporalAdjuster;
 import java.time.temporal.TemporalAmount;
 import java.time.temporal.TemporalField;
+import java.time.temporal.TemporalQueries;
+import java.time.temporal.TemporalQuery;
 import java.time.temporal.TemporalUnit;
 import java.time.temporal.UnsupportedTemporalTypeException;
 import java.time.temporal.ValueRange;
+import java.util.Objects;
 
 public final class LocalDate implements Temporal, TemporalAdjuster, ChronoLocalDate, Serializable {
 
@@ -107,6 +111,12 @@ public final class LocalDate implements Temporal, TemporalAdjuster, ChronoLocalD
         if (temporal instanceof OffsetDateTime dateTime) {
             return dateTime.toLocalDate();
         }
+        if (Iso.foreign()) {
+            LocalDate date = temporal.query(TemporalQueries.localDate());
+            if (date != null) {
+                return date;
+            }
+        }
         throw new DateTimeException("Unable to obtain LocalDate from TemporalAccessor: " + temporal + " of type "
                 + temporal.getClass().getName());
     }
@@ -116,6 +126,11 @@ public final class LocalDate implements Temporal, TemporalAdjuster, ChronoLocalD
         in.date();
         in.end();
         return in.localDate();
+    }
+
+    public static LocalDate parse(CharSequence text, DateTimeFormatter formatter) {
+        Objects.requireNonNull(formatter, "formatter");
+        return formatter.parse(text, LocalDate::from);
     }
 
     /** The date of a year and a month with a day, or with the month's last where it has none. */
@@ -509,6 +524,17 @@ public final class LocalDate implements Temporal, TemporalAdjuster, ChronoLocalD
 
     public int hashCode() {
         return (year & 0xFFFFF800) ^ ((year << 11) + (month << 6) + day);
+    }
+
+    @SuppressWarnings("unchecked")
+    public <R> R query(TemporalQuery<R> query) {
+        return query == TemporalQueries.precision() ? (R) ChronoUnit.DAYS
+                : query == TemporalQueries.zoneId() ? null : query.queryFrom(this);
+    }
+
+    public String format(DateTimeFormatter formatter) {
+        Objects.requireNonNull(formatter, "formatter");
+        return formatter.format(this);
     }
 
     public String toString() {

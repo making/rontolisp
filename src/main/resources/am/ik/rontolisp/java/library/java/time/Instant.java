@@ -17,6 +17,8 @@ import java.time.temporal.TemporalAccessor;
 import java.time.temporal.TemporalAdjuster;
 import java.time.temporal.TemporalAmount;
 import java.time.temporal.TemporalField;
+import java.time.temporal.TemporalQueries;
+import java.time.temporal.TemporalQuery;
 import java.time.temporal.TemporalUnit;
 import java.time.temporal.UnsupportedTemporalTypeException;
 
@@ -383,6 +385,12 @@ public final class Instant implements Temporal, TemporalAdjuster, Comparable<Ins
 
     public int hashCode() {
         return Long.hashCode(seconds) + 51 * nanos;
+    }
+
+    @SuppressWarnings("unchecked")
+    public <R> R query(TemporalQuery<R> query) {
+        return query == TemporalQueries.precision() ? (R) ChronoUnit.NANOS
+                : query == TemporalQueries.zoneId() ? null : query.queryFrom(this);
     }
 
     public String toString() {

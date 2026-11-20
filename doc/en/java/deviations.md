@@ -300,14 +300,28 @@ is at UTC and `GMT+09:00` elsewhere, where a JDK writes the zone's abbreviation 
 offset. `clone` and the members deprecated since JDK 1.1 (`getYear`, `getHours`) are
 refused by name.
 
-**`java.time` has no formatter.** `DateTimeFormatter`, and `format` and `parse` taking
-one, are refused by name; `parse` of a text alone and `toString` read and write the
-ISO-8601 forms. `MonthDay`, `OffsetTime`, `TemporalAdjusters`, `TemporalQuery` and `query`,
-the calendars other than ISO, `getDisplayName`, `datesUntil` and `Duration.dividedBy` are
-refused too. The message of a text whose fields make no value lists them in one order
-(`{Year=2020, MonthOfYear=13}`); a JDK's order changes from run to run. A `ValueRange`,
-a `ZoneRules`, a `ZoneOffsetTransition`, a `ZoneOffsetTransitionRule` and a `Clock` have
-hash codes of their own.
+**A formatter writes the words of the locales `Locale` has.** The months, the days, the
+eras and the halves of a day are those of the root locale, `ENGLISH`, `US`, `UK` and
+`CANADA`; `ofPattern` without a locale and the ISO forms take `US`, the default locale.
+A letter of a pattern that needs the weeks of a locale (`Y`, `w`, `W`, and `e` and `c` of
+one or two letters), a quarter (`Q`, `q`), the modified Julian day (`g`), a period of the
+day (`B`) or the name of a zone in words (`z`, `v`) is an `UnsupportedOperationException`
+when the pattern is read. `ISO_WEEK_DATE`, `ofLocalizedDate` and its kind,
+`DecimalStyle`, `withChronology`, `toFormat`, `parseUnresolved` and a `parse` at a
+`ParsePosition` are refused by name. A zone's name in a text is read among the zones the
+program has (above). In the text of a formatter, `parseDefaulting` shows as
+`Default(field,value)`, where a JDK shows the identity of an object. Where a JDK fails
+with an index error inside a full localized offset (`OOOO` reading `GMT+1`), the text is
+refused at its start; read leniently, a JDK takes `CE` for an era and places a day of the
+week in an aligned week of the year by a rule that is not followed here.
+
+**`java.time` has the ISO calendar alone.** The calendars other than ISO, `MonthDay`,
+`OffsetTime`, `TemporalAdjusters`, `getDisplayName`, `datesUntil` and `Duration.dividedBy`
+are refused by name. The message of a text whose fields make no value lists them in one
+order (`{Year=2020, MonthOfYear=13}`), and of several fields of a time with no hour out of
+range the same one is refused first; a JDK's order changes from run to run. A
+`ValueRange`, a `ZoneRules`, a `ZoneOffsetTransition`, a `ZoneOffsetTransitionRule` and a
+`Clock` have hash codes of their own.
 
 **`Normalizer` reads the Unicode data of JDK 25.** A character whose data a later JDK's
 Unicode adds or changes is normalized as JDK 25 does it. `normalize` of a text already in

@@ -4,10 +4,13 @@
 package java.time;
 
 import java.time.temporal.ChronoField;
+import java.time.temporal.ChronoUnit;
 import java.time.temporal.Temporal;
 import java.time.temporal.TemporalAccessor;
 import java.time.temporal.TemporalAdjuster;
 import java.time.temporal.TemporalField;
+import java.time.temporal.TemporalQueries;
+import java.time.temporal.TemporalQuery;
 import java.time.temporal.UnsupportedTemporalTypeException;
 
 // The seven days of a week, Monday the first, as ISO-8601 counts them.
@@ -64,5 +67,11 @@ public enum DayOfWeek implements TemporalAccessor, TemporalAdjuster {
 
     public Temporal adjustInto(Temporal temporal) {
         return temporal.with(ChronoField.DAY_OF_WEEK, getValue());
+    }
+
+    @SuppressWarnings("unchecked")
+    public <R> R query(TemporalQuery<R> query) {
+        return query == TemporalQueries.precision() ? (R) ChronoUnit.DAYS
+                : query == TemporalQueries.zoneId() ? null : query.queryFrom(this);
     }
 }

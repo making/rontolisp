@@ -4,10 +4,13 @@
 package java.time;
 
 import java.time.temporal.ChronoField;
+import java.time.temporal.ChronoUnit;
 import java.time.temporal.Temporal;
 import java.time.temporal.TemporalAccessor;
 import java.time.temporal.TemporalAdjuster;
 import java.time.temporal.TemporalField;
+import java.time.temporal.TemporalQueries;
+import java.time.temporal.TemporalQuery;
 import java.time.temporal.UnsupportedTemporalTypeException;
 
 // The twelve months of a year.
@@ -84,5 +87,11 @@ public enum Month implements TemporalAccessor, TemporalAdjuster {
 
     public Temporal adjustInto(Temporal temporal) {
         return temporal.with(ChronoField.MONTH_OF_YEAR, getValue());
+    }
+
+    @SuppressWarnings("unchecked")
+    public <R> R query(TemporalQuery<R> query) {
+        return query == TemporalQueries.precision() ? (R) ChronoUnit.MONTHS
+                : query == TemporalQueries.zoneId() ? null : query.queryFrom(this);
     }
 }

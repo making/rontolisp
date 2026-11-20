@@ -361,8 +361,10 @@ Files:
   src/main/java/am/ik/rontolisp/scheme/SchemeCharacters.java
   src/main/resources/am/ik/rontolisp/eval/regex-unicode.lisp
   src/main/resources/am/ik/rontolisp/eval/unicode-normalization-tables.lisp
+  src/main/resources/am/ik/rontolisp/java/library/java/time/format/Texts.java
 Use: The case-mapping, character-property, grapheme and normalization tables compiled programs
-  carry are UCD data.
+  carry are UCD data; the words of months, days, eras and half days a java.time formatter
+  writes are CLDR data, as a JDK writes them.
 --------------------------------------------------------------------------------
 UNICODE LICENSE V3
 

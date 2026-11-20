@@ -17,6 +17,7 @@ package java.time;
 
 import java.io.Serializable;
 import java.time.chrono.ChronoZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoField;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.Temporal;
@@ -24,9 +25,12 @@ import java.time.temporal.TemporalAccessor;
 import java.time.temporal.TemporalAdjuster;
 import java.time.temporal.TemporalAmount;
 import java.time.temporal.TemporalField;
+import java.time.temporal.TemporalQueries;
+import java.time.temporal.TemporalQuery;
 import java.time.temporal.TemporalUnit;
 import java.time.temporal.UnsupportedTemporalTypeException;
 import java.time.temporal.ValueRange;
+import java.util.Objects;
 
 public final class ZonedDateTime implements Temporal, ChronoZonedDateTime<LocalDate>, Serializable {
 
@@ -159,6 +163,20 @@ public final class ZonedDateTime implements Temporal, ChronoZonedDateTime<LocalD
         if (temporal instanceof OffsetDateTime dateTime) {
             return dateTime.toZonedDateTime();
         }
+        if (Iso.foreign()) {
+            try {
+                ZoneId zone = ZoneId.from(temporal);
+                if (temporal.isSupported(ChronoField.INSTANT_SECONDS)) {
+                    return ofInstant(Instant.ofEpochSecond(temporal.getLong(ChronoField.INSTANT_SECONDS),
+                            temporal.get(ChronoField.NANO_OF_SECOND)), zone);
+                }
+                return of(LocalDate.from(temporal), LocalTime.from(temporal), zone);
+            }
+            catch (DateTimeException refused) {
+                throw new DateTimeException("Unable to obtain ZonedDateTime from TemporalAccessor: " + temporal
+                        + " of type " + temporal.getClass().getName(), refused);
+            }
+        }
         throw new DateTimeException("Unable to obtain ZonedDateTime from TemporalAccessor: " + temporal
                 + " of type " + temporal.getClass().getName());
     }
@@ -219,6 +237,11 @@ public final class ZonedDateTime implements Temporal, ChronoZonedDateTime<LocalD
                     + "{InstantSeconds=" + local.toEpochSecond(offset) + ", OffsetSeconds=" + offset.getTotalSeconds()
                     + "},ISO," + zone + ",-1 resolved to " + local + " of type java.time.format.Parsed"));
         }
+    }
+
+    public static ZonedDateTime parse(CharSequence text, DateTimeFormatter formatter) {
+        Objects.requireNonNull(formatter, "formatter");
+        return formatter.parse(text, ZonedDateTime::from);
     }
 
     /** The local date-time moved to, in this zone. */
@@ -608,6 +631,17 @@ public final class ZonedDateTime implements Temporal, ChronoZonedDateTime<LocalD
 
     public int hashCode() {
         return dateTime.hashCode() ^ offset.hashCode() ^ Integer.rotateLeft(zone.hashCode(), 3);
+    }
+
+    @SuppressWarnings("unchecked")
+    public <R> R query(TemporalQuery<R> query) {
+        return query == TemporalQueries.zoneId() ? (R) zone
+                : query == TemporalQueries.precision() ? (R) ChronoUnit.NANOS : query.queryFrom(this);
+    }
+
+    public String format(DateTimeFormatter formatter) {
+        Objects.requireNonNull(formatter, "formatter");
+        return formatter.format(this);
     }
 
     public String toString() {

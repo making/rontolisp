@@ -1,0 +1,561 @@
+// Written for rontolisp's experimental Java subset from the API specification's names
+// and behaviour; nothing here is copied or translated from a JDK
+// (.kb/java-frontend-provenance.md). Lowered with every program that names it.
+//
+// What a formatter read: the fields, made a date and a time where they make one, and the
+// zone. The class has the name a JDK's has, which a refusal shows ("of type
+// java.time.format.Parsed"). How fields are made a date and a time in each resolver
+// style, in which order they are refused and in which words, and which fields stay are
+// a JDK 25's answers to a grid (.kb/java-frontend.md, "java.time: the formatter"):
+// a year of an era is a year, then a date of the year, month and day (or of the day of
+// the year, or of a week and a day), then the fields of a time of day, which ones make a
+// time, and every field left is checked against what was made.
+package java.time.format;
+
+import java.time.DateTimeException;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.Period;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoField;
+import java.time.temporal.TemporalAccessor;
+import java.time.temporal.TemporalField;
+import java.time.temporal.TemporalQueries;
+import java.time.temporal.TemporalQuery;
+import java.time.temporal.UnsupportedTemporalTypeException;
+
+final class Parsed implements TemporalAccessor {
+
+    static final TemporalQuery<Period> EXCESS_DAYS = temporal -> temporal instanceof Parsed parsed
+            ? Period.ofDays((int) parsed.excessDays) : Period.ZERO;
+
+    static final TemporalQuery<Boolean> LEAP_SECOND = temporal -> temporal instanceof Parsed parsed
+            && parsed.leapSecond;
+
+    private static final long NANOS_PER_SECOND = 1000000000L;
+
+    private static final long NANOS_PER_DAY = 86400L * NANOS_PER_SECOND;
+
+    private TemporalField[] fields;
+
+    private long[] values;
+
+    private int count;
+
+    private ZoneId zone;
+
+    private LocalDate date;
+
+    private LocalTime time;
+
+    private long excessDays;
+
+    private boolean leapSecond;
+
+    private ResolverStyle style;
+
+    Parsed(Reading in) {
+        this.fields = java.util.Arrays.copyOf(in.fields, in.count + 4);
+        this.values = java.util.Arrays.copyOf(in.values, in.count + 4);
+        this.count = in.count;
+        this.zone = in.zone;
+        this.leapSecond = in.leapSecond;
+    }
+
+    private int index(TemporalField field) {
+        for (int i = 0; i < count; i++) {
+            if (fields[i] == field) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private boolean has(TemporalField field) {
+        return index(field) >= 0;
+    }
+
+    private long valueOf(TemporalField field) {
+        return values[index(field)];
+    }
+
+    private long remove(TemporalField field) {
+        int index = index(field);
+        long value = values[index];
+        for (int i = index; i < count - 1; i++) {
+            fields[i] = fields[i + 1];
+            values[i] = values[i + 1];
+        }
+        count--;
+        return value;
+    }
+
+    /** A field made of others; the one read first wins, another value is a conflict. */
+    private void put(TemporalField field, long value, TemporalField resolving) {
+        int index = index(field);
+        if (index >= 0) {
+            if (values[index] != value) {
+                throw new DateTimeException("Conflict found: " + field.toString() + " " + values[index] + " differs from "
+                        + field.toString() + " " + value + (resolving == null ? "" : " while resolving  " + resolving.toString()));
+            }
+            return;
+        }
+        if (count == fields.length) {
+            fields = java.util.Arrays.copyOf(fields, count * 2);
+            values = java.util.Arrays.copyOf(values, count * 2);
+        }
+        fields[count] = field;
+        values[count] = value;
+        count++;
+    }
+
+    private void date(LocalDate made) {
+        if (date != null && !date.equals(made)) {
+            throw new DateTimeException("Conflict found: Fields resolved to two different dates: " + date + " " + made);
+        }
+        date = made;
+    }
+
+    void resolve(ResolverStyle style, ZoneId override) {
+        this.style = style;
+        if (zone == null) {
+            zone = override;
+        }
+        resolveDate();
+        resolveTimeFields();
+        resolveTime();
+        check();
+        if (date != null && excessDays != 0) {
+            date = date.plusDays(excessDays);
+            excessDays = 0;
+        }
+        instant();
+    }
+
+    private boolean lenient() {
+        return style == ResolverStyle.LENIENT;
+    }
+
+    private long checked(ChronoField field, long value) {
+        return lenient() ? value : field.checkValidValue(value);
+    }
+
+    private void resolveDate() {
+        if (has(ChronoField.YEAR_OF_ERA)) {
+            long yearOfEra = checked(ChronoField.YEAR_OF_ERA, valueOf(ChronoField.YEAR_OF_ERA));
+            if (has(ChronoField.ERA)) {
+                long era = remove(ChronoField.ERA);
+                remove(ChronoField.YEAR_OF_ERA);
+                if (era == 1) {
+                    put(ChronoField.YEAR, yearOfEra, null);
+                }
+                else if (era == 0) {
+                    put(ChronoField.YEAR, Math.subtractExact(1, yearOfEra), null);
+                }
+                else {
+                    throw new DateTimeException("Invalid value for era: " + era);
+                }
+            }
+            else if (has(ChronoField.YEAR)) {
+                long year = valueOf(ChronoField.YEAR);
+                remove(ChronoField.YEAR_OF_ERA);
+                put(ChronoField.YEAR, year > 0 ? yearOfEra : Math.subtractExact(1, yearOfEra), null);
+            }
+            else if (style != ResolverStyle.STRICT) {
+                remove(ChronoField.YEAR_OF_ERA);
+                put(ChronoField.YEAR, yearOfEra, null);
+            }
+        }
+        else if (has(ChronoField.ERA)) {
+            ChronoField.ERA.checkValidValue(valueOf(ChronoField.ERA));
+        }
+        if (has(ChronoField.PROLEPTIC_MONTH)) {
+            long month = checked(ChronoField.PROLEPTIC_MONTH, remove(ChronoField.PROLEPTIC_MONTH));
+            put(ChronoField.MONTH_OF_YEAR, Math.floorMod(month, 12L) + 1, null);
+            put(ChronoField.YEAR, Math.floorDiv(month, 12L), null);
+        }
+        if (has(ChronoField.EPOCH_DAY)) {
+            // the other fields of a date are checked against this one
+            date(LocalDate.ofEpochDay(remove(ChronoField.EPOCH_DAY)));
+            return;
+        }
+        if (!has(ChronoField.YEAR)) {
+            return;
+        }
+        if (has(ChronoField.MONTH_OF_YEAR)) {
+            if (has(ChronoField.DAY_OF_MONTH)) {
+                yearMonthDay();
+                return;
+            }
+            if (has(ChronoField.ALIGNED_WEEK_OF_MONTH)) {
+                if (has(ChronoField.ALIGNED_DAY_OF_WEEK_IN_MONTH) || has(ChronoField.DAY_OF_WEEK)) {
+                    weekOfMonth();
+                }
+                return;
+            }
+        }
+        if (has(ChronoField.DAY_OF_YEAR)) {
+            int year = ChronoField.YEAR.checkValidIntValue(remove(ChronoField.YEAR));
+            long day = remove(ChronoField.DAY_OF_YEAR);
+            date(lenient() ? LocalDate.ofYearDay(year, 1).plusDays(Math.subtractExact(day, 1))
+                    : LocalDate.ofYearDay(year, ChronoField.DAY_OF_YEAR.checkValidIntValue(day)));
+            return;
+        }
+        if (has(ChronoField.ALIGNED_WEEK_OF_YEAR)
+                && (has(ChronoField.ALIGNED_DAY_OF_WEEK_IN_YEAR) || has(ChronoField.DAY_OF_WEEK))) {
+            weekOfYear();
+        }
+    }
+
+    private void yearMonthDay() {
+        int year = ChronoField.YEAR.checkValidIntValue(remove(ChronoField.YEAR));
+        long month = remove(ChronoField.MONTH_OF_YEAR);
+        long day = remove(ChronoField.DAY_OF_MONTH);
+        if (lenient()) {
+            date(LocalDate.of(year, 1, 1).plusMonths(Math.subtractExact(month, 1)).plusDays(Math.subtractExact(day, 1)));
+            return;
+        }
+        int m = ChronoField.MONTH_OF_YEAR.checkValidIntValue(month);
+        int d = ChronoField.DAY_OF_MONTH.checkValidIntValue(day);
+        if (style == ResolverStyle.SMART && d > 28) {
+            // a day past the month's last is its last
+            d = Math.min(d, LocalDate.of(year, m, 1).lengthOfMonth());
+        }
+        date(LocalDate.of(year, m, d));
+    }
+
+    /** The day of a week of the month: by the day in the week, or the day of the week after its start. */
+    private void weekOfMonth() {
+        int year = ChronoField.YEAR.checkValidIntValue(remove(ChronoField.YEAR));
+        long month = remove(ChronoField.MONTH_OF_YEAR);
+        long week = remove(ChronoField.ALIGNED_WEEK_OF_MONTH);
+        boolean aligned = has(ChronoField.ALIGNED_DAY_OF_WEEK_IN_MONTH);
+        long day = remove(aligned ? ChronoField.ALIGNED_DAY_OF_WEEK_IN_MONTH : ChronoField.DAY_OF_WEEK);
+        if (lenient()) {
+            LocalDate start = LocalDate.of(year, 1, 1).plusMonths(Math.subtractExact(month, 1));
+            date(weekDay(start.plusWeeks(Math.subtractExact(week, 1)), day, aligned, true));
+            return;
+        }
+        int m = ChronoField.MONTH_OF_YEAR.checkValidIntValue(month);
+        int w = ChronoField.ALIGNED_WEEK_OF_MONTH.checkValidIntValue(week);
+        (aligned ? ChronoField.ALIGNED_DAY_OF_WEEK_IN_MONTH : ChronoField.DAY_OF_WEEK).checkValidValue(day);
+        LocalDate made = weekDay(LocalDate.of(year, m, 1).plusDays((w - 1) * 7L), day, aligned, false);
+        if (style == ResolverStyle.STRICT && made.getMonthValue() != m) {
+            throw new DateTimeException("Strict mode rejected resolved date as it is in a different month");
+        }
+        date(made);
+    }
+
+    private void weekOfYear() {
+        int year = ChronoField.YEAR.checkValidIntValue(remove(ChronoField.YEAR));
+        long week = remove(ChronoField.ALIGNED_WEEK_OF_YEAR);
+        boolean aligned = has(ChronoField.ALIGNED_DAY_OF_WEEK_IN_YEAR);
+        long day = remove(aligned ? ChronoField.ALIGNED_DAY_OF_WEEK_IN_YEAR : ChronoField.DAY_OF_WEEK);
+        if (lenient()) {
+            date(weekDay(LocalDate.of(year, 1, 1).plusWeeks(Math.subtractExact(week, 1)), day, aligned, true));
+            return;
+        }
+        int w = ChronoField.ALIGNED_WEEK_OF_YEAR.checkValidIntValue(week);
+        (aligned ? ChronoField.ALIGNED_DAY_OF_WEEK_IN_YEAR : ChronoField.DAY_OF_WEEK).checkValidValue(day);
+        LocalDate made = weekDay(LocalDate.of(year, 1, 1).plusDays((w - 1) * 7L), day, aligned, false);
+        if (style == ResolverStyle.STRICT && made.getYear() != year) {
+            throw new DateTimeException("Strict mode rejected resolved date as it is in a different year");
+        }
+        date(made);
+    }
+
+    /**
+     * The day of a week that starts at a date: the aligned day counted from it, or the day
+     * of the week on or after it (leniently, the one of its week of the calendar, a day
+     * earlier: a JDK's answer).
+     */
+    private static LocalDate weekDay(LocalDate start, long day, boolean aligned, boolean lenient) {
+        if (aligned) {
+            return start.plusDays(Math.subtractExact(day, 1));
+        }
+        long from = start.getDayOfWeek().getValue();
+        return lenient ? start.plusDays(day - from - 1) : start.plusDays(Math.floorMod(day - from, 7L));
+    }
+
+    private void resolveTimeFields() {
+        if (has(ChronoField.CLOCK_HOUR_OF_DAY)) {
+            long hour = remove(ChronoField.CLOCK_HOUR_OF_DAY);
+            if (style == ResolverStyle.STRICT || (style == ResolverStyle.SMART && hour != 0)) {
+                ChronoField.CLOCK_HOUR_OF_DAY.checkValidValue(hour);
+            }
+            put(ChronoField.HOUR_OF_DAY, hour == 24 ? 0 : hour, ChronoField.CLOCK_HOUR_OF_DAY);
+        }
+        if (has(ChronoField.CLOCK_HOUR_OF_AMPM)) {
+            long hour = remove(ChronoField.CLOCK_HOUR_OF_AMPM);
+            if (style == ResolverStyle.STRICT || (style == ResolverStyle.SMART && hour != 0)) {
+                ChronoField.CLOCK_HOUR_OF_AMPM.checkValidValue(hour);
+            }
+            put(ChronoField.HOUR_OF_AMPM, hour == 12 ? 0 : hour, ChronoField.CLOCK_HOUR_OF_AMPM);
+        }
+        if (has(ChronoField.AMPM_OF_DAY) && has(ChronoField.HOUR_OF_AMPM)) {
+            long half = remove(ChronoField.AMPM_OF_DAY);
+            long hour = remove(ChronoField.HOUR_OF_AMPM);
+            if (lenient()) {
+                put(ChronoField.HOUR_OF_DAY, Math.addExact(Math.multiplyExact(half, 12), hour), ChronoField.AMPM_OF_DAY);
+            }
+            else {
+                ChronoField.AMPM_OF_DAY.checkValidValue(half);
+                ChronoField.HOUR_OF_AMPM.checkValidValue(hour);
+                put(ChronoField.HOUR_OF_DAY, half * 12 + hour, ChronoField.AMPM_OF_DAY);
+            }
+        }
+        if (has(ChronoField.NANO_OF_DAY)) {
+            long nanos = checked(ChronoField.NANO_OF_DAY, remove(ChronoField.NANO_OF_DAY));
+            put(ChronoField.HOUR_OF_DAY, nanos / 3600000000000L, ChronoField.NANO_OF_DAY);
+            put(ChronoField.MINUTE_OF_HOUR, nanos / 60000000000L % 60, ChronoField.NANO_OF_DAY);
+            put(ChronoField.SECOND_OF_MINUTE, nanos / NANOS_PER_SECOND % 60, ChronoField.NANO_OF_DAY);
+            put(ChronoField.NANO_OF_SECOND, nanos % NANOS_PER_SECOND, ChronoField.NANO_OF_DAY);
+        }
+        if (has(ChronoField.MICRO_OF_DAY)) {
+            long micros = checked(ChronoField.MICRO_OF_DAY, remove(ChronoField.MICRO_OF_DAY));
+            put(ChronoField.SECOND_OF_DAY, micros / 1000000L, ChronoField.MICRO_OF_DAY);
+            put(ChronoField.MICRO_OF_SECOND, micros % 1000000L, ChronoField.MICRO_OF_DAY);
+        }
+        if (has(ChronoField.MILLI_OF_DAY)) {
+            long millis = checked(ChronoField.MILLI_OF_DAY, remove(ChronoField.MILLI_OF_DAY));
+            put(ChronoField.SECOND_OF_DAY, millis / 1000, ChronoField.MILLI_OF_DAY);
+            put(ChronoField.MILLI_OF_SECOND, millis % 1000, ChronoField.MILLI_OF_DAY);
+        }
+        if (has(ChronoField.SECOND_OF_DAY)) {
+            long seconds = checked(ChronoField.SECOND_OF_DAY, remove(ChronoField.SECOND_OF_DAY));
+            put(ChronoField.HOUR_OF_DAY, seconds / 3600, ChronoField.SECOND_OF_DAY);
+            put(ChronoField.MINUTE_OF_HOUR, seconds / 60 % 60, ChronoField.SECOND_OF_DAY);
+            put(ChronoField.SECOND_OF_MINUTE, seconds % 60, ChronoField.SECOND_OF_DAY);
+        }
+        if (has(ChronoField.MINUTE_OF_DAY)) {
+            long minutes = checked(ChronoField.MINUTE_OF_DAY, remove(ChronoField.MINUTE_OF_DAY));
+            put(ChronoField.HOUR_OF_DAY, minutes / 60, ChronoField.MINUTE_OF_DAY);
+            put(ChronoField.MINUTE_OF_HOUR, minutes % 60, ChronoField.MINUTE_OF_DAY);
+        }
+        // a fraction of a second in thousandths or millionths joins the finer one; it is
+        // checked where that one was read too
+        if (has(ChronoField.MILLI_OF_SECOND)) {
+            long millis = remove(ChronoField.MILLI_OF_SECOND);
+            if (has(ChronoField.MICRO_OF_SECOND)) {
+                put(ChronoField.MICRO_OF_SECOND, millis * 1000 + valueOf(ChronoField.MICRO_OF_SECOND) % 1000,
+                        ChronoField.MILLI_OF_SECOND);
+            }
+            else if (has(ChronoField.NANO_OF_SECOND)) {
+                checked(ChronoField.MILLI_OF_SECOND, millis);
+                put(ChronoField.NANO_OF_SECOND, millis * 1000000 + valueOf(ChronoField.NANO_OF_SECOND) % 1000000,
+                        ChronoField.MILLI_OF_SECOND);
+            }
+            else {
+                put(ChronoField.NANO_OF_SECOND, millis * 1000000, ChronoField.MILLI_OF_SECOND);
+            }
+        }
+        if (has(ChronoField.MICRO_OF_SECOND)) {
+            long micros = remove(ChronoField.MICRO_OF_SECOND);
+            if (has(ChronoField.NANO_OF_SECOND)) {
+                checked(ChronoField.MICRO_OF_SECOND, micros);
+                put(ChronoField.NANO_OF_SECOND, micros * 1000 + valueOf(ChronoField.NANO_OF_SECOND) % 1000,
+                        ChronoField.MICRO_OF_SECOND);
+            }
+            else {
+                put(ChronoField.NANO_OF_SECOND, micros * 1000, ChronoField.MICRO_OF_SECOND);
+            }
+        }
+        if (style != ResolverStyle.STRICT && has(ChronoField.AMPM_OF_DAY) && !has(ChronoField.HOUR_OF_DAY)
+                && !has(ChronoField.HOUR_OF_AMPM) && !has(ChronoField.MINUTE_OF_HOUR)
+                && !has(ChronoField.SECOND_OF_MINUTE) && !has(ChronoField.NANO_OF_SECOND)) {
+            // half a day alone is its middle
+            long half = remove(ChronoField.AMPM_OF_DAY);
+            if (!lenient()) {
+                ChronoField.AMPM_OF_DAY.checkValidValue(half);
+            }
+            put(ChronoField.HOUR_OF_DAY, Math.addExact(Math.multiplyExact(half, 12), 6), ChronoField.AMPM_OF_DAY);
+        }
+        else if (!lenient() && has(ChronoField.AMPM_OF_DAY)) {
+            ChronoField.AMPM_OF_DAY.checkValidValue(valueOf(ChronoField.AMPM_OF_DAY));
+        }
+        if (!lenient() && has(ChronoField.HOUR_OF_AMPM)) {
+            ChronoField.HOUR_OF_AMPM.checkValidValue(valueOf(ChronoField.HOUR_OF_AMPM));
+        }
+    }
+
+    /** A time of the hour, the minute, the second and the nanosecond, each where the one before is. */
+    private void resolveTime() {
+        if (has(ChronoField.HOUR_OF_DAY)) {
+            boolean minute = has(ChronoField.MINUTE_OF_HOUR);
+            boolean second = has(ChronoField.SECOND_OF_MINUTE);
+            boolean nano = has(ChronoField.NANO_OF_SECOND);
+            if ((minute || (!second && !nano)) && (second || !nano)) {
+                long h = remove(ChronoField.HOUR_OF_DAY);
+                long m = minute ? remove(ChronoField.MINUTE_OF_HOUR) : 0;
+                long s = second ? remove(ChronoField.SECOND_OF_MINUTE) : 0;
+                long n = nano ? remove(ChronoField.NANO_OF_SECOND) : 0;
+                if (lenient()) {
+                    long total = Math.addExact(Math.addExact(Math.addExact(Math.multiplyExact(h, 3600000000000L),
+                            Math.multiplyExact(m, 60000000000L)), Math.multiplyExact(s, NANOS_PER_SECOND)), n);
+                    excessDays = Math.floorDiv(total, NANOS_PER_DAY);
+                    time = LocalTime.ofNanoOfDay(Math.floorMod(total, NANOS_PER_DAY));
+                    return;
+                }
+                int checkedMinute = ChronoField.MINUTE_OF_HOUR.checkValidIntValue(m);
+                if (style == ResolverStyle.SMART && h == 24 && checkedMinute == 0 && s == 0 && n == 0) {
+                    // the end of a day is the next one's start
+                    time = LocalTime.MIDNIGHT;
+                    excessDays = 1;
+                    return;
+                }
+                int checkedHour = ChronoField.HOUR_OF_DAY.checkValidIntValue(h);
+                time = LocalTime.of(checkedHour, checkedMinute, ChronoField.SECOND_OF_MINUTE.checkValidIntValue(s),
+                        ChronoField.NANO_OF_SECOND.checkValidIntValue(n));
+                return;
+            }
+        }
+        if (!lenient() && !has(ChronoField.HOUR_OF_DAY)) {
+            // with no hour each field is checked by itself, the finest first
+            for (ChronoField field : new ChronoField[] {ChronoField.NANO_OF_SECOND, ChronoField.SECOND_OF_MINUTE,
+                    ChronoField.MINUTE_OF_HOUR}) {
+                if (has(field)) {
+                    field.checkValidValue(get(field));
+                }
+            }
+        }
+        if (has(ChronoField.SECOND_OF_MINUTE) || has(ChronoField.INSTANT_SECONDS)) {
+            // a second with no time: its fraction in each of the three fields
+            long nano = has(ChronoField.NANO_OF_SECOND) ? valueOf(ChronoField.NANO_OF_SECOND) : 0;
+            put(ChronoField.NANO_OF_SECOND, nano, null);
+            put(ChronoField.MICRO_OF_SECOND, nano / 1000, null);
+            put(ChronoField.MILLI_OF_SECOND, nano / 1000000, null);
+        }
+    }
+
+    /** Every field left that the date or the time has is checked against it. */
+    private void check() {
+        for (int i = 0; i < count;) {
+            TemporalField field = fields[i];
+            TemporalAccessor made = !(field instanceof ChronoField) ? null
+                    : field.isDateBased() ? date : field.isTimeBased() ? time : null;
+            if (made != null && made.isSupported(field)) {
+                long value = made.getLong(field);
+                if (value != values[i]) {
+                    throw new DateTimeException("Conflict found: Field " + field.toString() + " " + value + " differs from "
+                            + field.toString() + " " + values[i] + " derived from " + made.toString());
+                }
+                remove(field);
+            }
+            else {
+                i++;
+            }
+        }
+    }
+
+    /**
+     * The instant a date and a time are at their offset or zone; or, where an instant was
+     * read and a zone or an offset is known, the date and the time it is there.
+     */
+    private void instant() {
+        if (has(ChronoField.INSTANT_SECONDS) && (zone != null || has(ChronoField.OFFSET_SECONDS))) {
+            long second = valueOf(ChronoField.INSTANT_SECONDS);
+            int nano = has(ChronoField.NANO_OF_SECOND) ? (int) remove(ChronoField.NANO_OF_SECOND) : 0;
+            if (has(ChronoField.MICRO_OF_SECOND)) {
+                remove(ChronoField.MICRO_OF_SECOND);
+            }
+            if (has(ChronoField.MILLI_OF_SECOND)) {
+                remove(ChronoField.MILLI_OF_SECOND);
+            }
+            java.time.OffsetDateTime local = zone != null
+                    ? java.time.ZonedDateTime.ofInstant(java.time.Instant.ofEpochSecond(second, nano), zone)
+                        .toOffsetDateTime()
+                    : java.time.OffsetDateTime.ofInstant(java.time.Instant.ofEpochSecond(second, nano),
+                            ZoneOffset.ofTotalSeconds(Math.toIntExact(valueOf(ChronoField.OFFSET_SECONDS))));
+            date = local.toLocalDate();
+            time = local.toLocalTime();
+            put(ChronoField.OFFSET_SECONDS, local.getOffset().getTotalSeconds(), null);
+            return;
+        }
+        if (date == null || time == null) {
+            return;
+        }
+        if (has(ChronoField.OFFSET_SECONDS)) {
+            ZoneOffset offset = ZoneOffset.ofTotalSeconds(Math.toIntExact(valueOf(ChronoField.OFFSET_SECONDS)));
+            put(ChronoField.INSTANT_SECONDS, date.atTime(time).toEpochSecond(offset), null);
+        }
+        else if (zone != null) {
+            put(ChronoField.INSTANT_SECONDS, date.atTime(time).atZone(zone).toEpochSecond(), null);
+        }
+    }
+
+    public boolean isSupported(TemporalField field) {
+        if (has(field) || (date != null && date.isSupported(field)) || (time != null && time.isSupported(field))) {
+            return true;
+        }
+        return field != null && !(field instanceof ChronoField) && field.isSupportedBy(this);
+    }
+
+    public long getLong(TemporalField field) {
+        java.util.Objects.requireNonNull(field, "field");
+        int index = index(field);
+        if (index >= 0) {
+            return values[index];
+        }
+        if (date != null && date.isSupported(field)) {
+            return date.getLong(field);
+        }
+        if (time != null && time.isSupported(field)) {
+            return time.getLong(field);
+        }
+        if (field instanceof ChronoField) {
+            throw new UnsupportedTemporalTypeException("Unsupported field: " + field.toString());
+        }
+        return field.getFrom(this);
+    }
+
+    @SuppressWarnings("unchecked")
+    public <R> R query(TemporalQuery<R> query) {
+        if (query == TemporalQueries.zoneId()) {
+            return (R) zone;
+        }
+        if (query == TemporalQueries.localDate()) {
+            return (R) date;
+        }
+        if (query == TemporalQueries.localTime()) {
+            return (R) time;
+        }
+        if (query == TemporalQueries.offset() || query == TemporalQueries.zone()) {
+            ZoneId offset = has(ChronoField.OFFSET_SECONDS)
+                    ? ZoneOffset.ofTotalSeconds(Math.toIntExact(valueOf(ChronoField.OFFSET_SECONDS)))
+                    : zone instanceof ZoneOffset ? zone : null;
+            return (R) (query == TemporalQueries.zone() && zone != null ? zone : offset);
+        }
+        if (query == TemporalQueries.precision()) {
+            return null;
+        }
+        return query.queryFrom(this);
+    }
+
+    public String toString() {
+        StringBuilder text = new StringBuilder("{");
+        for (int i = 0; i < count; i++) {
+            if (i > 0) {
+                text.append(", ");
+            }
+            text.append(fields[i].toString()).append('=').append(values[i]);
+        }
+        text.append("},ISO");
+        if (zone != null) {
+            text.append(',').append(zone.getId()).append(",-1");
+        }
+        if (date != null || time != null) {
+            text.append(" resolved to ");
+            if (date != null) {
+                text.append(date.toString());
+                if (time != null) {
+                    text.append('T');
+                }
+            }
+            if (time != null) {
+                text.append(time.toString());
+            }
+        }
+        return text.toString();
+    }
+}

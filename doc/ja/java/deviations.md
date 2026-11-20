@@ -297,12 +297,25 @@ rontolisp でコンパイルし直すとプログラムに反映されます。
 `GMT-04:56`）。JDK はその地域の最初の標準時のオフセットを使います。`clone` と、JDK 1.1 から
 非推奨のメンバー（`getYear`、`getHours`）は名前を挙げて拒否します。
 
-**`java.time` にフォーマッターはありません。** `DateTimeFormatter` と、それを取る `format`、
-`parse` は、名前を示して拒否されます。文字列だけを取る `parse` と `toString` は ISO-8601 の
-形式を読み書きします。`MonthDay`、`OffsetTime`、`TemporalAdjusters`、`TemporalQuery` と
-`query`、ISO 以外の暦、`getDisplayName`、`datesUntil`、`Duration.dividedBy` も拒否されます。
-フィールドから値を作れなかった文字列のメッセージは、フィールドを決まった順で並べます
-（`{Year=2020, MonthOfYear=13}`）。JDK では実行のたびに順序が変わります。`ValueRange`、
+**フォーマッターが書く語は `Locale` にあるロケールのものです。** 月、曜日、紀元、午前と午後は、
+ルートロケール、`ENGLISH`、`US`、`UK`、`CANADA` の語です。ロケールを指定しない `ofPattern` と
+ISO の形式は、デフォルトのロケールである `US` を使います。パターンの文字のうち、ロケールの週を
+使うもの（`Y`、`w`、`W`、1 文字または 2 文字の `e` と `c`）、四半期（`Q`、`q`）、修正ユリウス日
+（`g`）、一日の時間帯（`B`）、ゾーンの語による名前（`z`、`v`）は、パターンを読む時点で
+`UnsupportedOperationException` になります。`ISO_WEEK_DATE`、`ofLocalizedDate` とその仲間、
+`DecimalStyle`、`withChronology`、`toFormat`、`parseUnresolved`、`ParsePosition` から読む
+`parse` は、名前を示して拒否されます。文字列中のゾーンの名前は、プログラムが持つゾーン（上記）
+の中から読みます。フォーマッターの文字列表現では、`parseDefaulting` は `Default(field,value)`
+と表示されます。JDK はオブジェクトの識別子を表示します。完全な形式の地域化オフセット（`OOOO` で
+`GMT+1` を読む場合など）の読み取り中に JDK がインデックスの例外で失敗する文字列は、先頭の位置で
+拒否します。また、寛容な読み取りで JDK は `CE` を紀元として読み、年の整列週の中の曜日を
+ここでは従っていない規則で決めます。
+
+**`java.time` の暦は ISO だけです。** ISO 以外の暦、`MonthDay`、`OffsetTime`、
+`TemporalAdjusters`、`getDisplayName`、`datesUntil`、`Duration.dividedBy` は、名前を示して
+拒否されます。フィールドから値を作れなかった文字列のメッセージは、フィールドを決まった順で並べます
+（`{Year=2020, MonthOfYear=13}`）。時のない時刻の複数のフィールドが範囲外のときも、決まった
+フィールドを先に拒否します。JDK ではどちらの順序も実行のたびに変わります。`ValueRange`、
 `ZoneRules`、`ZoneOffsetTransition`、`ZoneOffsetTransitionRule`、`Clock` のハッシュコードは
 JDK と異なります。
 
