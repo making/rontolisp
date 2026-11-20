@@ -119,7 +119,8 @@ JDK by decision can be in no case.
   `completeOnTimeout`, the older `Calendar`. The rest of `java.time` came with k35
   (2026-11-20: the classes read from their text, `ChronoUnit` and `Duration.of` / `get`
   / `truncatedTo` / `between`; `.kb/java-frontend.md`, "java.time"); what it left is
-  `.todo/k42` (a region's rules) and `.todo/k43` (a formatter, the smaller classes);
+  `.todo/k43` (a formatter, the smaller classes), a region's rules having come with k42
+  (`.kb/java-frontend.md`, "java.time: the regions");
   `java.util.Date` and `java.sql` came with k37 (`.kb/java-frontend.md`, "java.util.Date
   and java.sql").
 - **`"ß".toUpperCase()` is `ß`**; a JDK answers `SS` (the host's upcase is one character

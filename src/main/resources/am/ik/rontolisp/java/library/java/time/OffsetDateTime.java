@@ -65,7 +65,7 @@ public final class OffsetDateTime implements Temporal, TemporalAdjuster, Compara
     }
 
     public static OffsetDateTime ofInstant(Instant instant, ZoneId zone) {
-        ZoneOffset offset = zone.fixed();
+        ZoneOffset offset = ZoneId.regional() ? zone.offsetAt(instant.getEpochSecond()) : zone.fixed();
         return new OffsetDateTime(LocalDateTime.ofEpochSecond(instant.getEpochSecond(), instant.getNano(), offset),
                 offset);
     }

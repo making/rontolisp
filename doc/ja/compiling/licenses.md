@@ -9,7 +9,8 @@ rontolisp がコンパイルしたプログラムには、利用者自身が書�
   実行ファイル) に含まれます。rontolisp のライセンスは Apache License 2.0 で、配布物にライセンスの
   写しと rontolisp の `NOTICE` を添えることを求めています。
 - **rontolisp が取り込んでいる第三者のコードとデータ**: 使う出力にだけ含まれます。大文字小文字の
-  変換や文字分類の Unicode テーブル、WASM バックエンドの数学関数 (fdlibm) と浮動小数点数の印字
+  変換や文字分類の Unicode テーブル、Java のプログラムが名前を書いた tz データベースの地域の規則
+  (パブリックドメイン)、WASM バックエンドの数学関数 (fdlibm) と浮動小数点数の印字
   (Schubfach)、組み込みの Ring と riddley の名前空間、ASDF・UIOP・CFFI のランタイム、tiny-routes の
   パステンプレート、Starlark の `str.format`、Q8_0 量子化 (ggml)、`--component` の WASI
   インターフェースです。

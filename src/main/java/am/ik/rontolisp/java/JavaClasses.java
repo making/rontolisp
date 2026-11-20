@@ -186,6 +186,19 @@ final class JavaClasses {
 	boolean monitors;
 
 	/**
+	 * The regions of the tz database the program holds ({@link JavaZones}): the ones it
+	 * names as constants, in the order of their names. Until a pass finds one, a region
+	 * is unknown to the program and nothing a region needs is lowered.
+	 */
+	final Set<String> regions = new java.util.TreeSet<>();
+
+	/**
+	 * Whether the program holds every region: it computes a zone's name where it runs, or
+	 * asks for the names.
+	 */
+	boolean everyRegion;
+
+	/**
 	 * Whether the program can ask the class of an array whose vector does not say it --
 	 * an array of {@code long}, of {@code short} or of references other than
 	 * {@code Object}: it casts or tests such a type, or asks the class name of a value

@@ -126,6 +126,20 @@ interface JavaEmitter {
 		 */
 		LispVal holding(Invocation call, JavaEmitter member);
 
+		/**
+		 * Notes that the program names a zone where this is called: a region of the tz
+		 * database named by a constant is one the program holds, and a name it computes
+		 * where it runs ({@code null} here) makes it hold them all. A call written in the
+		 * front end's own library names no zone of the program's.
+		 */
+		void namesZone(@Nullable String name);
+
+		/** Whether the program holds a region of the tz database. */
+		boolean holdsRegions();
+
+		/** The table of the regions the program holds, as its library reads it. */
+		LispVal regions();
+
 	}
 
 	LispVal emit(Context context, Invocation invocation);

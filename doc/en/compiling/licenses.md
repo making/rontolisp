@@ -9,7 +9,8 @@ passing on the licence notices of that code.
   native executable). rontolisp is licensed under the Apache License 2.0, which asks for
   a copy of the licence and of rontolisp's `NOTICE` to go with it.
 - **Third-party code and data rontolisp is built from**, in the outputs that use them:
-  the Unicode tables behind case mapping and character classes, the WASM backends'
+  the Unicode tables behind case mapping and character classes, the rules of the tz
+  database's regions a Java program names (public domain), the WASM backends'
   math functions (fdlibm) and float printing (Schubfach), the built-in Ring and riddley
   namespaces, the ASDF, UIOP and CFFI run time, tiny-routes' path templates, Starlark's
   `str.format`, the Q8_0 quantization (ggml) and the WASI interfaces of `--component`.

@@ -193,6 +193,23 @@ final class JavaIntrinsics {
 		};
 	}
 
+	private static final String ZONE_ID = "java.time.ZoneId";
+
+	private static final String REGIONAL = ZONE_ID + ".regional()";
+
+	private static final String ZONE_CHANGES = "java.time.zone.ZoneChanges";
+
+	/**
+	 * What a member of the library's Java source with no parameter asks of the program it
+	 * is lowered into, where it is such a question; {@code null} for any other member.
+	 * The lowering answers it before it lowers what the answer decides, so the statement
+	 * or the operand not taken is in no program: a program holding no region of the tz
+	 * database has nothing of what a region needs.
+	 */
+	static @Nullable Boolean answered(String member, JavaEmitter.Context lowering) {
+		return member.equals(REGIONAL) ? lowering.holdsRegions() : null;
+	}
+
 	/** The intrinsic classes, as the class table asks for them. */
 	static final JavaClasses.Library LIBRARY = new JavaClasses.Library() {
 		@Override
@@ -389,6 +406,11 @@ final class JavaIntrinsics {
 	/** A member that is a call of a host operator: its receiver, its arguments. */
 	private static JavaEmitter host(String name) {
 		return (lowering, call) -> JavaForms.form(cl(name), operands(call));
+	}
+
+	/** A member that is a static method of another class of the library's Java source. */
+	private static JavaEmitter library(String className, String name) {
+		return (lowering, call) -> lowering.library(className, name, operands(call));
 	}
 
 	/** A member written in Java, in the library's own source. */
@@ -1903,6 +1925,27 @@ final class JavaIntrinsics {
 		// at an instant (seconds east of UTC, doubled, one more in summer time)
 		natives.put("java.time.Instant.wall0()", host("%unix-nano-time"));
 		natives.put("java.time.ZoneId.local0(long)", host("%local-time-offset"));
+		// the regions of the tz database: a program holds the ones it names, so a call
+		// naming a zone is noted before it is the library's own lookup, and what the
+		// library asks of the program is answered here (answered, below)
+		natives.put(ZONE_ID + ".of(String)", (lowering, call) -> {
+			lowering.namesZone(call.arguments().get(0).constant() instanceof String name ? name : null);
+			return lowering.library(ZONE_ID, "ofId", List.of(call.argument(0)));
+		});
+		natives.put(ZONE_ID + ".getAvailableZoneIds()", (lowering, call) -> {
+			lowering.namesZone(null);
+			return lowering.library(ZONE_ID, "ids", List.of());
+		});
+		natives.put(REGIONAL, (lowering, call) -> lowering.holdsRegions() ? JavaForms.T : JavaForms.NIL);
+		// the rules of a region are read and asked in their own package, which the
+		// classes of java.time reach here: a static method each, of the class the rules
+		// of a region are
+		natives.put(ZONE_CHANGES + ".table0()", (lowering, call) -> lowering.regions());
+		natives.put(ZONE_ID + ".held0(String)", library(ZONE_CHANGES, "find"));
+		natives.put(ZONE_ID + ".names0(java.util.Set)", library(ZONE_CHANGES, "names"));
+		natives.put("java.time.TzRegion.wall0(java.time.zone.ZoneRules,long)", library(ZONE_CHANGES, "wall"));
+		natives.put("java.time.TzRegion.placed0(java.time.zone.ZoneRules,long,long[])",
+				library(ZONE_CHANGES, "placed"));
 		// java.util.Date and java.sql: the host's offset at any instant, as above
 		natives.put("rontolisp.internal.Dates.local0(long)", host("%local-time-offset"));
 		return Map.copyOf(natives);

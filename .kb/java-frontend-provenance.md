@@ -339,10 +339,27 @@ algorithm came from, and the answer goes in the file's header.
   `ValueRange.hashCode` came from memory of how a JDK does them, not from a probe; both
   were taken out, the first written again from what the grid showed (which message a
   date past the last day gets), the second left a number of our own. No zone data is
-  shipped: the fixed zones of the tz database are named by rule, and the count of what
-  the regions would cost was asked of a running JDK's `java.time.zone` API
-  (`Zones.java`). The answers are lines of `java-spec.yaml`, which the JDK leg asks
-  again.
+  shipped by k35: the fixed zones of the tz database are named by rule, and the count of
+  what the regions would cost was asked of a running JDK's `java.time.zone` API
+  (`Zones.java`); the regions came with k42, below. The answers are lines of
+  `java-spec.yaml`, which the JDK leg asks again.
+- **The regions of the tz database (k42, 2026-11-20).** `java.time.zone`'s
+  `ZoneOffsetTransition`, `ZoneOffsetTransitionRule`, the rules of a zone whose offset
+  changes and what `ZonedDateTime` does in one were written from the API documentation
+  and JDK 25's answers to probes (the gap and the overlap of a change and their ends,
+  which neighbour an instant on a change has, where the yearly rules start, the rules a
+  program states itself, the texts and the refusals; then the walk of every region,
+  362,528 lines). Nobody opened OpenJDK's source, and the shape is its own: the changes
+  of the clock and of the standard offset are one list of seconds with two offsets, and
+  a local date-time is placed by walking back from the changes within eighteen hours.
+  **The data** (`zone-rules.txt`, embedded in a program that names a region) is the tz
+  database's, which is in the public domain: `JavaZoneRulesTest` asks a running JDK's
+  public `java.time.zone` for every zone's transitions, yearly rules and standard
+  offsets (use, not copying: no `tzdb.dat`, no file of a JDK and none of the tz database
+  is read) and writes them in an encoding made here. Its entry of
+  `THIRD-PARTY-NOTICES.txt` is "tz database"; the version is the file's `tzdb` line, and
+  [java-frontend.md](java-frontend.md), "java.time: the regions", says how a newer one
+  is taken. The answers are lines of `java-spec.yaml`, which the JDK leg asks again.
 - **`java.util.Date` and `java.sql` (k37, 2026-11-20).** Written from the API
   documentation (which states `Date.hashCode`, `equals` and the text forms) and JDK 25's
   answers to probes (`Grid.java`, 2,095 lines; `Gap.java`, the wall times four zones skip

@@ -268,15 +268,28 @@ JDK では前後 2 つのパターンが混ざった状態が残ります。
 `nextProbablePrime`、`probablePrime`、乱数のビットを取るコンストラクタは、名前を示して
 拒否されます。
 
-**`java.time` のゾーンは、オフセットが変わらないものだけです。** 使えるゾーンは、オフセット
-（`+09:00`、`Z`）、`UTC`、`GMT`、`UT` とそれにオフセットを付けたもの（`UTC+09:00`）、
-tz データベースの固定ゾーン（`Etc/GMT+5`、`Etc/UTC`、`Zulu`）です。`Europe/Paris` のように
-独自の規則を持つ地域は未知の名前として扱います。`ZoneId.of` は `ZoneRulesException` を投げ、
-`ZonedDateTime.parse` は角括弧内にその名前がある文字列を拒否します。
-`ZoneId.systemDefault()` は `ZoneOffset` で、呼び出した時点でホストのゾーンが持つオフセット
-です。`LocalDate.now()` はホストの日付になります。夏時間の有無が現在と異なる時期の日時も、
+**プログラムが持つ tz データベースの地域は、プログラムが名前を書いたものだけです。** オフセットが
+変わらないゾーンは、どのプログラムでも使えます。オフセット（`+09:00`、`Z`）、`UTC`、`GMT`、
+`UT` とそれにオフセットを付けたもの（`UTC+09:00`）、tz データベースの固定ゾーン
+（`Etc/GMT+5`、`Etc/UTC`、`Zulu`）です。`Europe/Paris` のようにオフセットが変わる地域は、
+規則ごとコンパイル結果に埋め込みます。埋め込むのは、プログラムが名前を書いた地域だけです。
+`ZoneId.of("Europe/Paris")` のように名前が定数なら、その地域 1 つを埋め込みます。
+実行時に決まる名前を `ZoneId.of` に渡すか、`ZoneId.getAvailableZoneIds()` を呼ぶと、
+すべての地域を埋め込みます。埋め込まれていない地域は未知の名前として扱います。`ZoneId.of` は
+`ZoneRulesException` を投げ、`ZonedDateTime.parse` は角括弧内にその名前がある文字列を拒否
+します。そのため、ゾーン付きの文字列を読むだけでゾーンの名前を書かないプログラムには、地域が
+1 つも入りません。プログラムのどこかで `ZoneId.getAvailableZoneIds()` を 1 回呼べば、
+すべての地域が入ります。`.wasm` のサイズは、最初の地域で約 50 KB、2 つ目以降は 1 つにつき
+数百バイト、すべての地域ではさらに約 48 KB 増えます。規則は、rontolisp をビルドした時点の
+tz データベースのもので、ホストのものではありません。データベースの更新は、更新後の
+rontolisp でコンパイルし直すとプログラムに反映されます。
+
+`ZoneId.systemDefault()` は、環境変数 `TZ` の地域をプログラムが持っていればその地域です。
+持っていなければ `ZoneOffset` で、呼び出した時点でホストのゾーンが持つオフセットです。
+このとき `LocalDate.now()` はホストの日付になり、夏時間の有無が現在と異なる時期の日時も
 現在のオフセットで読みます。`.wasm` がホストのゾーンを知る方法は
 [`decode-universal-time`](../guides/clock-and-random.md) と同じで、分からなければ UTC です。
+`ZoneRulesProvider`、`ZoneId.SHORT_IDS`、別名の表を取る `ZoneId.of` はありません。
 
 **`java.util.Date` はゾーンをオフセットで書きます。** `toString` は、ホストが UTC なら `UTC`、
 それ以外では `GMT+09:00` のように書きます。JDK はゾーンの略称（`JST`、`EST`）を書きます。
@@ -290,7 +303,8 @@ tz データベースの固定ゾーン（`Etc/GMT+5`、`Etc/UTC`、`Zulu`）で
 `query`、ISO 以外の暦、`getDisplayName`、`datesUntil`、`Duration.dividedBy` も拒否されます。
 フィールドから値を作れなかった文字列のメッセージは、フィールドを決まった順で並べます
 （`{Year=2020, MonthOfYear=13}`）。JDK では実行のたびに順序が変わります。`ValueRange`、
-`ZoneRules`、`Clock` のハッシュコードは JDK と異なります。
+`ZoneRules`、`ZoneOffsetTransition`、`ZoneOffsetTransitionRule`、`Clock` のハッシュコードは
+JDK と異なります。
 
 **`Normalizer` は JDK 25 の Unicode データを使います。** それより新しい JDK の Unicode で
 追加または変更された文字も、JDK 25 と同じ結果になります。すでにその形式になっている文字列を

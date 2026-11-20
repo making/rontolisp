@@ -86,7 +86,8 @@ public final class LocalDateTime
     }
 
     public static LocalDateTime ofInstant(Instant instant, ZoneId zone) {
-        return ofEpochSecond(instant.getEpochSecond(), instant.getNano(), zone.fixed());
+        return ofEpochSecond(instant.getEpochSecond(), instant.getNano(),
+                ZoneId.regional() ? zone.offsetAt(instant.getEpochSecond()) : zone.fixed());
     }
 
     public static LocalDateTime ofEpochSecond(long epochSecond, int nanoOfSecond, ZoneOffset offset) {

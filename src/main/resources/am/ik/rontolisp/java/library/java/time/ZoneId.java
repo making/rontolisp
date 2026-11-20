@@ -2,19 +2,24 @@
 // and behaviour; nothing here is copied or translated from a JDK
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 //
-// A zone: an offset from UTC, or a name with the offset it stands for. The library holds
-// no region's rules (the tz database is larger than the programs it would travel in), so
-// the names it knows are the ones whose offset never changes: UTC, GMT and UT, alone or
-// with an offset behind them, and the fixed zones of the tz database (Etc/GMT+5). A
-// region with rules of its own (Europe/Paris) is unknown here, as a name a JDK's
-// database lacks is unknown there. Which text is which kind, and the refusals' words,
-// are a JDK's answers.
+// A zone: an offset from UTC, or a name with the offset it stands for. The names every
+// program knows are the ones whose offset never changes: UTC, GMT and UT, alone or with
+// an offset behind them, and the fixed zones of the tz database (Etc/GMT+5), computed.
+// A region whose offset changes (Europe/Paris) is known to a program that HOLDS it: the
+// tz database is larger than most programs it would travel in, so the compiler gives a
+// program the regions it names -- each one a constant names, all of them where a name is
+// computed or the names are asked for -- and regional() answers whether it gave any.
+// What is written under it is in no program that holds none, and to such a program a
+// region is unknown, as a name a JDK's database lacks is unknown there. Which text is
+// which kind, and the refusals' words, are a JDK's answers.
 package java.time;
 
 import java.io.Serializable;
 import java.time.temporal.TemporalAccessor;
 import java.time.zone.ZoneRules;
 import java.time.zone.ZoneRulesException;
+import java.util.HashSet;
+import java.util.Set;
 
 public abstract class ZoneId implements Serializable {
 
@@ -24,7 +29,21 @@ public abstract class ZoneId implements Serializable {
     /** The offset the host's clock has now: the one zone the run time can tell. */
     private static native long local0(long epochSecond);
 
+    /**
+     * Whether the program holds a region of the tz database: answered by the compiler,
+     * and the statement or the operand it decides is all that is compiled of the two.
+     */
+    static native boolean regional();
+
     public static ZoneId systemDefault() {
+        if (regional()) {
+            // the region the host names, where the program holds it
+            String named = System.getenv("TZ");
+            ZoneId region = named == null ? null : held(named);
+            if (region != null) {
+                return region;
+            }
+        }
         // the host answers the seconds east of UTC, doubled, and one more in summer time
         return ZoneOffset.ofTotalSeconds((int) (local0(Instant.now().getEpochSecond()) >> 1));
     }
@@ -55,8 +74,27 @@ public abstract class ZoneId implements Serializable {
         return Integer.MIN_VALUE;
     }
 
+    /** The rules of a region the program holds, or null: read in their own package. */
+    private static native ZoneRules held0(String id);
+
+    private static native void names0(Set<String> names);
+
+    /** A region the program holds by its name, or null. */
+    private static ZoneId held(String id) {
+        ZoneRules rules = held0(id);
+        return rules == null ? null
+                // the one offset of rules that change nothing is theirs at any instant
+                : rules.isFixedOffset() ? new ZoneRegion(id, rules.getStandardOffset(null)) : new TzRegion(id, rules);
+    }
+
     /** A zone by its name alone, or null where the text is none the library knows. */
     static ZoneId region(String id) {
+        if (regional()) {
+            ZoneId held = held(id);
+            if (held != null) {
+                return held;
+            }
+        }
         if (id.equals("UT")) {
             return new ZoneRegion(id, ZoneOffset.UTC);
         }
@@ -71,7 +109,30 @@ public abstract class ZoneId implements Serializable {
                 : 0;
     }
 
-    public static ZoneId of(String zoneId) {
+    /** A program naming a zone holds it: the compiler notes the name, then this is called. */
+    public static native ZoneId of(String zoneId);
+
+    /** The names of the zones, which only a program holding every region can ask for. */
+    public static native Set<String> getAvailableZoneIds();
+
+    static Set<String> ids() {
+        Set<String> ids = new HashSet<>();
+        String[] greenwich = {"UTC", "GMT", "UCT", "GMT0", "Greenwich", "Universal", "Zulu"};
+        for (String name : greenwich) {
+            ids.add(name);
+            ids.add("Etc/" + name);
+        }
+        for (int hours = 0; hours <= 14; hours++) {
+            ids.add("Etc/GMT-" + hours);
+            if (hours <= 12) {
+                ids.add("Etc/GMT+" + hours);
+            }
+        }
+        names0(ids);
+        return ids;
+    }
+
+    static ZoneId ofId(String zoneId) {
         if (zoneId.length() <= 1 || zoneId.charAt(0) == '+' || zoneId.charAt(0) == '-') {
             return ZoneOffset.of(zoneId);
         }
@@ -124,8 +185,23 @@ public abstract class ZoneId implements Serializable {
 
     public abstract ZoneRules getRules();
 
-    /** The one offset the zone has: every zone of the library is fixed. */
+    /** The one offset the zone has; a region whose offset changes has none. */
     abstract ZoneOffset fixed();
+
+    /** The offset the zone has at a second, asked where a program holds a region. */
+    ZoneOffset offsetAt(long epochSecond) {
+        return fixed();
+    }
+
+    /**
+     * What a local second is in the zone, asked where a program holds a region: 0 where
+     * it has one offset, the third of the numbers; 1 in the gap and 2 in the overlap of a
+     * change, whose second and offsets before and after are the three numbers.
+     */
+    int placed(long localSecond, long[] change) {
+        change[2] = fixed().getTotalSeconds();
+        return 0;
+    }
 
     public ZoneId normalized() {
         return fixed();

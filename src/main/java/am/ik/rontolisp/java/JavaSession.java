@@ -58,6 +58,13 @@ public final class JavaSession {
 	/** Whether a buffer reached {@code Thread}: a monitor may be held. */
 	private boolean monitors;
 
+	/**
+	 * The regions of the tz database the buffers so far hold, and whether all of them.
+	 */
+	private final Set<String> regions = new java.util.TreeSet<>();
+
+	private boolean everyRegion;
+
 	/** The number of the last generated variable. */
 	private int echoes;
 
@@ -103,6 +110,8 @@ public final class JavaSession {
 		SessionTree tree = JavaParser.session(text, own.length(), CLASS, this.echoes);
 		JavaLowering.Session session = new JavaLowering.Session(declaredTypes, this.initialized, this.made,
 				this.lambdas, this.monitors);
+		session.regions.addAll(this.regions);
+		session.everyRegion = this.everyRegion;
 		List<LispVal> forms = JavaLowering.lower(tree.unit(), text, null, this.files, session, false, null);
 		// what the buffer leaves for the next ones
 		Map<String, String> declarations = new LinkedHashMap<>(kept);
@@ -147,6 +156,8 @@ public final class JavaSession {
 		this.made.addAll(session.made);
 		this.lambdas.addAll(session.lambdas);
 		this.monitors = session.monitors;
+		this.regions.addAll(session.regions);
+		this.everyRegion = session.everyRegion;
 		this.echoes = tree.echoes();
 		return steps;
 	}

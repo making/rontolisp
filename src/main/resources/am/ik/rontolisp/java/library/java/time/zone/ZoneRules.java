@@ -10,13 +10,14 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 
-// The offsets of a zone over time. Every zone of the library keeps one offset for good
-// (java.time.ZoneId), so the rules are that offset.
-public final class ZoneRules implements Serializable {
+// The offsets of a zone over time. This class is the rules of a zone that keeps one
+// offset for good; a zone whose offset changes has ZoneChanges, the class under it, which
+// a program holds only when it holds such a zone (java.time.ZoneId).
+public class ZoneRules implements Serializable {
 
     private final ZoneOffset offset;
 
-    private ZoneRules(ZoneOffset offset) {
+    ZoneRules(ZoneOffset offset) {
         this.offset = offset;
     }
 
@@ -25,6 +26,31 @@ public final class ZoneRules implements Serializable {
             throw new NullPointerException("offset");
         }
         return new ZoneRules(offset);
+    }
+
+    private static void given(Object value, String name) {
+        if (value == null) {
+            throw new NullPointerException(name);
+        }
+    }
+
+    public static ZoneRules of(ZoneOffset baseStandardOffset, ZoneOffset baseWallOffset,
+            List<ZoneOffsetTransition> standardOffsetTransitionList, List<ZoneOffsetTransition> transitionList,
+            List<ZoneOffsetTransitionRule> lastRules) {
+        given(baseStandardOffset, "baseStandardOffset");
+        given(baseWallOffset, "baseWallOffset");
+        given(standardOffsetTransitionList, "standardOffsetTransitionList");
+        given(transitionList, "transitionList");
+        given(lastRules, "lastRules");
+        if (lastRules.size() > 16) {
+            throw new IllegalArgumentException("Too many transition rules");
+        }
+        if (baseStandardOffset.equals(baseWallOffset) && standardOffsetTransitionList.isEmpty()
+                && transitionList.isEmpty() && lastRules.isEmpty()) {
+            return new ZoneRules(baseWallOffset);
+        }
+        return ZoneChanges.stated(baseStandardOffset, baseWallOffset, standardOffsetTransitionList, transitionList,
+                lastRules);
     }
 
     public boolean isFixedOffset() {
@@ -59,8 +85,29 @@ public final class ZoneRules implements Serializable {
         return false;
     }
 
+    public ZoneOffsetTransition getTransition(LocalDateTime localDateTime) {
+        return null;
+    }
+
+    public ZoneOffsetTransition nextTransition(Instant instant) {
+        return null;
+    }
+
+    public ZoneOffsetTransition previousTransition(Instant instant) {
+        return null;
+    }
+
+    public List<ZoneOffsetTransition> getTransitions() {
+        return List.of();
+    }
+
+    public List<ZoneOffsetTransitionRule> getTransitionRules() {
+        return List.of();
+    }
+
     public boolean equals(Object other) {
-        return other instanceof ZoneRules that && that.offset.equals(offset);
+        // the rules of a zone whose offset changes hold no offset here
+        return other instanceof ZoneRules that && offset.equals(that.offset);
     }
 
     public int hashCode() {
@@ -68,6 +115,6 @@ public final class ZoneRules implements Serializable {
     }
 
     public String toString() {
-        return "ZoneRules[currentStandardOffset=" + offset + "]";
+        return "ZoneRules[currentStandardOffset=" + offset.getId() + "]";
     }
 }

@@ -270,16 +270,28 @@ that read back as it, where a JDK sometimes prints others: `1e23` prints
 `nextProbablePrime`, `probablePrime` and the constructors of random bits are refused by
 name.
 
-**`java.time` has the zones whose offset never changes.** A zone is an offset (`+09:00`,
-`Z`), `UTC`, `GMT` or `UT` alone or with an offset (`UTC+09:00`), or a fixed zone of the tz
-database (`Etc/GMT+5`, `Etc/UTC`, `Zulu`). A region with rules of its own, such as
-`Europe/Paris`, is unknown: `ZoneId.of` throws a `ZoneRulesException`, and
-`ZonedDateTime.parse` refuses a text that names one in its brackets.
-`ZoneId.systemDefault()` is a `ZoneOffset`, the offset the host's zone has when it is
-called. `LocalDate.now()` is the host's date; a date in another season is read at today's
-offset. A `.wasm` learns the host's zone as
+**A program holds the regions of the tz database it names.** Every program knows the zones
+whose offset never changes: an offset (`+09:00`, `Z`), `UTC`, `GMT` or `UT` alone or with an
+offset (`UTC+09:00`), and the fixed zones of the tz database (`Etc/GMT+5`, `Etc/UTC`,
+`Zulu`). A region whose offset changes, such as `Europe/Paris`, is compiled into the program
+with its rules, and only where the program names it. `ZoneId.of("Europe/Paris")`, the name
+a constant, brings that one region; `ZoneId.of` of a name computed where the program runs,
+and `ZoneId.getAvailableZoneIds()`, bring all of them. A region the program does not hold is
+unknown to it: `ZoneId.of` throws a `ZoneRulesException`, and `ZonedDateTime.parse` refuses
+a text that names it in its brackets. So a program that reads zoned texts and names no zone
+holds no region; one call of `ZoneId.getAvailableZoneIds()` anywhere in it makes it hold
+them all. The first region costs a `.wasm` about 50 KB, each further one a few hundred
+bytes, all of them about 48 KB more. The rules are the tz database's as rontolisp was
+built with them, not the host's: a later change of the database reaches a program when a
+later rontolisp compiles it.
+
+`ZoneId.systemDefault()` is the region the environment variable `TZ` names where the
+program holds it, and otherwise a `ZoneOffset`, the offset the host's zone has when it is
+called: `LocalDate.now()` is the host's date, and a date in another season is then read at
+today's offset. A `.wasm` learns the host's zone as
 [`decode-universal-time`](../guides/clock-and-random.md) does, and answers UTC where it
-cannot.
+cannot. `ZoneRulesProvider`, `ZoneId.SHORT_IDS` and `ZoneId.of` with a map of aliases are
+not there.
 
 **A `java.util.Date` names its zone by the offset.** `toString` writes `UTC` where the host
 is at UTC and `GMT+09:00` elsewhere, where a JDK writes the zone's abbreviation (`JST`,
@@ -294,7 +306,8 @@ ISO-8601 forms. `MonthDay`, `OffsetTime`, `TemporalAdjusters`, `TemporalQuery` a
 the calendars other than ISO, `getDisplayName`, `datesUntil` and `Duration.dividedBy` are
 refused too. The message of a text whose fields make no value lists them in one order
 (`{Year=2020, MonthOfYear=13}`); a JDK's order changes from run to run. A `ValueRange`,
-a `ZoneRules` and a `Clock` have hash codes of their own.
+a `ZoneRules`, a `ZoneOffsetTransition`, a `ZoneOffsetTransitionRule` and a `Clock` have
+hash codes of their own.
 
 **`Normalizer` reads the Unicode data of JDK 25.** A character whose data a later JDK's
 Unicode adds or changes is normalized as JDK 25 does it. `normalize` of a text already in

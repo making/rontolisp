@@ -63,7 +63,8 @@ itself: k30 (2026-11-20; `.todo/k39`, `k40` and `k41` are what it found beside i
 `java.util.UUID`: k36 (2026-11-20); `java.math` (`BigInteger`, `BigDecimal`,
 `MathContext`, `RoundingMode`): k31 (2026-11-20); `java.time` (the dates, times and
 instants read from their texts, the fields and units, the zones of one offset, a clock):
-k35 (2026-11-20; `.todo/k42` and `k43` are what it left); `java.util.Date` and `java.sql`'s
+k35 (2026-11-20; `.todo/k43` is what it left, and the regions of the tz database are
+k42's: "java.time: the regions"); `java.util.Date` and `java.sql`'s
 `Date`, `Time`, `Timestamp`, `import module java.sql`, the two levels of imports on demand:
 k37 (2026-11-20); the stream members k12 left (`mapMulti`, the gatherers, a stream's and
 the numbers' spliterators, the streams of a `Random`, the collectors of a concurrent
@@ -1532,22 +1533,23 @@ documentation; what it leaves open is a JDK 25's answers to a grid. `java.time.c
     from TemporalAccessor: {..}`), their order changes from run to run (a hash map of
     enum constants); the library writes one order, and the corpus compares the words
     before the brace.
-- **Every zone keeps one offset** (`ZoneId.fixed()`): an offset, `UTC` / `GMT` / `UT`
-  alone or before an offset (`ZoneRegion`, the id normalized as a JDK does:
+- **A zone every program knows keeps one offset** (`ZoneId.fixed()`): an offset, `UTC` /
+  `GMT` / `UT` alone or before an offset (`ZoneRegion`, the id normalized as a JDK does:
   `UTC+1` is `UTC+01:00`, `GMT-00:00` is `GMT`), and the 42 names of the tz database
   that are a fixed offset by definition (`Etc/GMT+5`, `Etc/UTC`, `Zulu`; computed, no
-  table). **A region with rules is unknown** (`ZoneRulesException: Unknown time-zone
-  ID`, the bracket of a `ZonedDateTime` left unread), as a name its database lacks is
-  under a JDK. Measured before choosing (`Zones.java` of the artefacts, asked of JDK
-  25's `java.time.zone`): 604 names, 322 sets of rules, 18,001 changes of offset and
-  222 yearly rules, some 123 KB in a plain encoding -- more than a tenth of the YAVI
-  schema example, paid by every program that reads a zoned text, since
-  `ZonedDateTime.parse` has to know every name. The host's rules were not taken
-  either: wasm has no host to ask, and a zoned text would be read differently on the
-  four backends. `.todo/k42` holds the table and what would make it cost only where
-  named. So a `ZonedDateTime` has no gap and no overlap, and the members that settle
-  one answer `this`.
-- **`ZoneId.systemDefault()` is the host's offset NOW** as a `ZoneOffset`: the native
+  table). **A region whose offset changes is known to a program that holds it**
+  ("java.time: the regions" below); to any other it is unknown (`ZoneRulesException:
+  Unknown time-zone ID`, the bracket of a `ZonedDateTime` left unread), as a name its
+  database lacks is under a JDK, and its `ZonedDateTime` has no gap and no overlap: the
+  members that settle one answer `this`. Measured before k35 chose (`Zones.java` of the
+  artefacts, asked of JDK 25's `java.time.zone`): 604 names, 322 sets of rules, 18,001
+  changes of offset and 222 yearly rules, some 123 KB in a plain encoding -- more than a
+  tenth of the YAVI schema example, paid by every program that reads a zoned text if
+  `ZonedDateTime.parse` had to know every name. The host's rules were not taken either:
+  wasm has no host to ask, and a zoned text would be read differently on the four
+  backends.
+- **`ZoneId.systemDefault()` is the host's offset NOW** as a `ZoneOffset` (the region
+  `TZ` names where the program holds it: "java.time: the regions"): the native
   `ZoneId.local0` is `%local-time-offset`, the one question every backend can answer
   (`.kb/time-environment-builtins.md`; on wasm `TZ` and the zone files, else UTC, and
   2.3 KB for the reader). `Instant.now()` is `%unix-nano-time`. Nothing else is
@@ -1590,13 +1592,147 @@ documentation; what it leaves open is a JDK 25's answers to a grid. `java.time.c
 - Not there (`.todo/k43`): `DateTimeFormatter` and `format` / `parse` with one,
   `MonthDay`, `OffsetTime`, `InstantSource`, `TemporalAdjusters`, `TemporalQuery` /
   `query`, `IsoFields` / `WeekFields`, the calendars and eras, `getDisplayName`,
-  `datesUntil`, the transitions of `ZoneRules`, `ZoneId.getAvailableZoneIds`; each
-  refused by name. `Duration.dividedBy` stays `.todo/k47`'s.
+  `datesUntil`; each refused by name. `Duration.dividedBy` stays `.todo/k47`'s.
 - Pins: java-spec `dates-times-and-instants-are-read-from-their-texts-and-computed-with`
   (146 lines of the grid's kinds); a class the subset lacks is `java.util.Currency` and
   `java.util.EventListener` in `JavaLoweringTest#aLibraryOfTheSourcePathIsLoweredAsFarAsTheProgramReaches`
   and in the library of `a-program-uses-a-library-read-as-source-from-its-source-path`
   (it was `java.time.LocalDate`).
+
+## java.time: the regions (2026-11-20, k42)
+
+**Invariant: a program holds the regions of the tz database it names, each with the
+changes of its offset as a JDK's `java.time.zone` answers them; a program that holds none
+has nothing of what a region needs -- the forms it had before.** Provenance:
+[java-frontend-provenance.md](java-frontend-provenance.md).
+
+- **Who pays.** `ZoneId.of` and `ZoneId.getAvailableZoneIds` are `native`, so every call
+  of the program's -- a method reference too -- comes through an emitter that notes the
+  name first (`JavaLowering.namesZone`): a constant naming a region of the table adds it
+  to `JavaClasses.regions`, a name computed where the program runs or the question for
+  the names sets `everyRegion`, any other constant (`"UTC"`, `"+09:00"`, a name no
+  database has) notes nothing. A call written in the front end's own library notes
+  nothing either. The first of each lowers the program again (`changed()`); a session
+  carries both (`Session.regions`: a zone lives on in a variable). **A zoned text and the
+  host's zone read what the program holds and bring nothing** (`ZonedDateTime.parse`,
+  `ZoneId.systemDefault`): YAVI 0.18.0 reaches `ZonedDateTime::parse` in every schema
+  through its table of types, and `LocalDate.now()` reaches `systemDefault`; had either
+  brought the table, `Booking` and every program telling the date would have grown by
+  it. A program that reads zoned texts and names no zone holds all regions by one call of
+  `ZoneId.getAvailableZoneIds()` (`doc/*/java/deviations.md`).
+- **`ZoneId.regional()` is a question answered while lowering**
+  (`JavaIntrinsics.answered`, `JavaLowering.answered`): where it is the whole condition of
+  an `if` statement or of a conditional expression in the library's own source, only the
+  statement or the operand the answer takes is lowered, and nothing after a taken
+  statement that never completes. Everything a region needs in a class a program without
+  one reaches stands behind it (`ZonedDateTime`, the four `ofInstant`, `atStartOfDay`,
+  `ZoneId.region`, `systemDefault`), written so that what is left is the old statement
+  untouched. Measured against the build before (wasm): `examples/java/yavi/Member.java`
+  663,174 B, the same bytes; `Booking.java` 1,204,017 B, the same size and, compared as
+  `--dump-ir` lines, the same forms in another order (the tokens of the 10 lines that
+  differ are equal as multisets: the arms of a dispatch, the order classes are
+  initialized in); `LocalDate.now().getYear()` 118,491 -> 118,482 (the same forms, a
+  structure defined two lines later). The order moves because `ZoneRules` now names
+  `ZoneOffsetTransition` and `ZoneOffsetTransitionRule` in its members, and a class enters
+  the table where a member of a class already there names it: no new API member can keep
+  the bytes.
+- **The table** (`src/main/resources/am/ik/rontolisp/java/zone-rules.txt`, read by
+  `JavaZones`) is generated by `JavaZoneRulesTest` from the running JDK's public
+  `java.time.zone` and pinned to it, the `UnicodeNormalizationTablesTest` way: a zone's
+  `getTransitions()`, its `getTransitionRules()`, and its standard offset, which no list
+  holds, asked every five days from 1800 to 2100 and a change found to the second (1,110
+  changes over the 322 sets, 189 of them of the standard offset alone, at no transition).
+  JDK 25.0.5 answers tz database 2026e: 562 names beside the 42 computed ones (the seven
+  fixed names of `SystemV/` are in the table), 329 sets of rules. A line of the file is the
+  names sharing a set, then the set's text; `tzdb` names the version
+  (`ZoneRulesProvider.getVersions`). **A JDK with a newer tz database fails the test**,
+  which writes `target/zone-rules.txt` to copy over the shipped file; an older one is
+  skipped, saying so (a JDK update moves the tz database inside one feature release,
+  where it does not move Unicode).
+- **The encoding** (`JavaZoneRulesTest.text`, read by `java.time.zone.ZoneChanges` of the
+  library): numbers in digits of five bits and a sixth saying more follow, in the
+  characters `$` to `d` without the backslash. A set is its offsets (at most eight; in
+  quarters of an hour where they are whole ones), the two it starts with, its yearly
+  rules, then its changes as RUNS: years in a row that one rule read from the wall clock
+  gives -- for each change not yet in a run, the day as it is, as the first such day of
+  the week on or after one of the seven days before, or as the last on or before one of
+  the seven after, whichever goes on for the most years (a change at midnight may be the
+  end of the day before). 18,190 changes (the 18,001 transitions and the 189 of the
+  standard offset alone) are 5,555 runs, 3,475 of them a single year. Measured, the
+  rules of all sets: a change as the seconds since the one before and an offset 123 KB
+  (k35); runs with three offsets each some 51 KB; the offsets as one number and a single
+  year as a bit, what ships, 40,825 B. Not taken: sharing the tail of a set with another
+  (a sixth of the changes saved); a dictionary of rules across sets (about half of the
+  runs' rules are distinct: the references cost what it saves); a general compressor over
+  the sets --
+  gzip makes some 15 KB of them, so about 25 KB is there for a program holding all, at the
+  price of a table no longer cut by name (`.todo/k51`).
+- **A program's table** (`JavaZones.table`, the constant `ZoneChanges.table0()` is) holds
+  the regions it holds: the areas its names are shortened by (`America/`: a name up to
+  its last slash, written as one character from `#`; an area is named where that saves
+  more than it costs), then for each set the names that have it and its text. All of them
+  46,661 B; `Asia/Tokyo` alone 57, `Europe/Paris` 328, Paris and New York 475.
+- **The rules in the library**: `ZoneChanges` (under `ZoneRules`, which stays the rules
+  of one offset: a program making none has `ZoneRules` as it was) holds the seconds of
+  the changes with the clock's and the standard offset after each, and the yearly rules
+  as numbers (`Yearly`). `ZoneOffsetTransition` and `ZoneOffsetTransitionRule` are made
+  where a program asks for one. What a JDK answered and no documentation states: a
+  yearly rule counts only past the last listed change of the clock and not at all where
+  none is listed (`ZoneRules.of` with rules alone answers its base offset for good); a
+  change is before any instant after its second, to the nanosecond; a local date-time
+  from the lesser to the greater of a change's two local times is in its gap or its
+  overlap, the greater excluded; `isFixedOffset` wants no list and equal base offsets,
+  and such rules equal `ZoneRules.of(offset)`.
+- **The doors between the two packages are natives**: `ZoneId.held0` / `names0` and
+  `TzRegion.wall0` / `placed0` are static methods of `ZoneChanges`
+  (`JavaIntrinsics.library`), so `java.time` asks the rules in numbers -- the offset at a
+  second, and what a local second is: one offset, or in the gap or the overlap of a
+  change -- and `java.time.zone` has no public member a JDK lacks.
+- **A `ZonedDateTime` in a region** (a JDK's answers, pinned): a local date-time in a gap
+  is later by the gap's length, one in an overlap takes the offset it is given where that
+  is the later and the earlier otherwise; a date-based field or unit, `truncatedTo` and a
+  `Period` (added whole, then settled once) move the local date-time and keep the offset
+  where it holds; a time-based unit and a `Duration` move the instant; `until` in a
+  time-based unit is the instants'; `with(ZoneOffset)` and `OFFSET_SECONDS` change the
+  offset only to the other one of an overlap; a text's offset places the instant and its
+  region says how it is written; `LocalDate.atStartOfDay(zone)` of a day whose midnight
+  the zone skips is where the gap ends, not midnight moved by its length (Toronto
+  1919-03-31 is `00:30`: the one line the first walk differed in).
+- **`ZoneId.systemDefault()`** is the region `TZ` names where the program holds it (the
+  four backends under `TZ=Asia/Tokyo`; wasmtime with `--env`), the host's offset now
+  otherwise. A JDK reads the host's zone file; this reads the name alone.
+- **What a program pays** (wasm, `ZonedDateTime.of(.., ZoneId.of(..)).plusHours(1)`):
+  `"UTC"` 139,793 B before and after; `"Asia/Tokyo"` 190,054 (+50,261: `ZoneChanges`
+  30.8 KB -- reading the table 18 KB of it, `placed` 5.8, the yearly rules 3.8 --,
+  `Yearly` 4.0, the static initialization 4.2, `LocalDateTime` 3.6); `"Europe/Paris"`
+  190,327; a computed name 237,821. `LocalDate.now(ZoneId.of("Asia/Tokyo"))` 82,239 ->
+  124,099. **How it came down from +172 KB** (311,703 for Tokyo), each step measured with
+  `-Drontolisp.wasm.debug-func-sizes`: lists of `ZoneOffsetTransition`, a `HashMap` of the
+  regions read and a `Duration` for a gap's length made every class of them with its
+  `toString` / `equals` / `hashCode` (236,399 with arrays of numbers); a cast to
+  `ZoneChanges` brought `ClassCastException` and `%class-name`, `System.arraycopy` 6 KB of
+  `replace`, and two passes one list per kind of change (217,871 with one list of
+  changes); and `"..." + offset` in `ZoneRules.toString` is the generic `%string` of a
+  value the backend cannot type, which kept the float arm of `%java-to-string` and 17 KB
+  of float printing (190,054 with `offset.getId()`). Every `int` and `long` operation of
+  the library is masked to its width, which is what the reader's 18 KB are.
+- **The walk** (`.todo/artefacts/k42-java-time-the-rules-of-a-region/Regions.java`): every
+  zone's changes and yearly rules, the instants and local date-times on, beside and
+  between every change (and those the yearly rules make in five later years), seeded
+  ones anywhere, a zoned date-time moved across the changes: 604 zones, 362,528 lines,
+  each zone a line of their hash. The interpreter (5.9 min), the JVM (15 s), wasm (29 s,
+  594,888 B) and the component (28 s) print a JDK's 605 lines (the JDK 3.2 s).
+- **A newer tz database**: under a JDK that has it, `./mvnw test -Dtest=JavaZoneRulesTest`
+  fails and writes `target/zone-rules.txt`; copy it over the shipped file, run the test
+  again, then `-Dtest=JavaSpecE2eTest` (the region case's lines are the JDK's own) and
+  the walk on the four backends.
+- Not there: `ZoneRulesProvider`, `ZoneId.SHORT_IDS` and `ZoneId.of(String, Map)`, a way
+  to hold every region without a call in the source (`.todo/k51`).
+- Pins: `JavaZoneRulesTest` (the shipped table is the JDK's; a program's table holds what
+  it names; a program naming none has no form of `ZoneChanges`; a session goes on
+  holding); java-spec `a-program-holds-the-regions-of-the-tz-database-it-names` (a file
+  of its own, 101 lines: the corpus's one program holds no region, which is what its
+  `dates-times-and-instants` case runs as).
 
 ## java.util.Date and java.sql (2026-11-20, k37)
 

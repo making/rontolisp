@@ -339,6 +339,12 @@
       },
       {
         "condition": {
+          "typeReachable": "am.ik.rontolisp.java.JavaZones"
+        },
+        "pattern": "am/ik/rontolisp/java/zone-rules\\.txt"
+      },
+      {
+        "condition": {
           "typeReachable": "am.ik.rontolisp.eval.ClojureLibrary"
         },
         "pattern": "am/ik/rontolisp/eval/clojure\\.lisp"

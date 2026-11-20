@@ -73,7 +73,8 @@ public final class LocalTime implements Temporal, TemporalAdjuster, Comparable<L
     }
 
     public static LocalTime ofInstant(Instant instant, ZoneId zone) {
-        int ofDay = (int) Math.floorMod(instant.getEpochSecond() + zone.fixed().getTotalSeconds(), Iso.DAY);
+        int ofDay = (int) Math.floorMod(instant.getEpochSecond()
+                + (ZoneId.regional() ? zone.offsetAt(instant.getEpochSecond()) : zone.fixed()).getTotalSeconds(), Iso.DAY);
         return new LocalTime(ofDay / 3600, ofDay / 60 % 60, ofDay % 60, instant.getNano());
     }
 

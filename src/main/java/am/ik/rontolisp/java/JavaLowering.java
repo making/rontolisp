@@ -573,6 +573,15 @@ final class JavaLowering implements JavaEmitter.Context {
 		 */
 		boolean monitors;
 
+		/**
+		 * The regions of the tz database an earlier buffer held, and whether one held
+		 * them all: a zone it made lives on in a variable, and what a later buffer does
+		 * with it has to be lowered for a region.
+		 */
+		final Set<String> regions = new java.util.TreeSet<>();
+
+		boolean everyRegion;
+
 		Session(Set<String> declared, Set<String> initialized, Set<String> made, Set<String> lambdas,
 				boolean monitors) {
 			this.declared = declared;
@@ -691,6 +700,8 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 			}
 			classes.monitors |= session.monitors;
+			classes.regions.addAll(session.regions);
+			classes.everyRegion |= session.everyRegion;
 		}
 		Map<Source, SourceProvenance.@Nullable Unit> provenance = new IdentityHashMap<>();
 		JavaInitOrder order = new JavaInitOrder();
@@ -715,6 +726,8 @@ final class JavaLowering implements JavaEmitter.Context {
 					classes.made.forEach(made -> session.made.add(made.name));
 					classes.lambdaTargets.forEach(target -> session.lambdas.add(target.name));
 					session.monitors = classes.monitors;
+					session.regions.addAll(classes.regions);
+					session.everyRegion = classes.everyRegion;
 				}
 				String warned = lowering.warnings.text(program);
 				if (warnings != null && !warned.isEmpty()) {
@@ -3436,6 +3449,45 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	@Override
+	public void namesZone(@Nullable String name) {
+		if (this.unit.source().library() || this.classes.everyRegion) {
+			return;
+		}
+		if (name == null) {
+			this.classes.everyRegion = true;
+		}
+		else if (!JavaZones.shipped().has(name) || !this.classes.regions.add(name)) {
+			return;
+		}
+		// what was lowered for a program holding no region, or not this one, is lowered
+		// again
+		this.classes.changed();
+	}
+
+	@Override
+	public boolean holdsRegions() {
+		return this.classes.everyRegion || !this.classes.regions.isEmpty();
+	}
+
+	@Override
+	public LispVal regions() {
+		return JavaForms.string(JavaZones.shipped().table(this.classes.everyRegion ? null : this.classes.regions));
+	}
+
+	/**
+	 * The answer to a condition that is a question the library's own source asks of the
+	 * program it is lowered into ({@link JavaIntrinsics#answered}); {@code null} for any
+	 * other condition. What the answer does not take is not lowered.
+	 */
+	private @Nullable Boolean answered(Expression condition) {
+		if (!(condition instanceof Call call) || !call.arguments().isEmpty() || !this.unit.source().library()) {
+			return null;
+		}
+		JavaClass owner = call.target() == null ? this.currentClass : classNamed(call.target());
+		return owner == null ? null : JavaIntrinsics.answered(owner.name + "." + call.name() + "()", this);
+	}
+
+	@Override
 	public LispVal library(String className, String name, List<LispVal> arguments) {
 		JavaClass owner = this.classes.library(className);
 		for (Method method : owner.methods) {
@@ -4764,6 +4816,10 @@ final class JavaLowering implements JavaEmitter.Context {
 	}
 
 	private Typed conditional(Conditional conditional, @Nullable JavaType expected) {
+		Boolean answer = answered(conditional.condition());
+		if (answer != null) {
+			return expression(answer ? conditional.whenTrue() : conditional.whenFalse(), expected);
+		}
 		Flow flow = test(conditional.condition());
 		Typed test = flow.value();
 		Typed a = within(flow.whenTrue(), () -> expression(conditional.whenTrue(), expected));
@@ -7986,6 +8042,23 @@ final class JavaLowering implements JavaEmitter.Context {
 				}
 				forms.add(located(localVariable(variable, statements, i + 1, tail), variable.pos()));
 				return forms;
+			}
+			if (statement instanceof If asked) {
+				// a question of the library's answered here: only what it takes is
+				// lowered
+				Boolean answer = answered(asked.condition());
+				if (answer != null) {
+					Statement taken = answer ? asked.then() : asked.otherwise();
+					if (taken == null) {
+						continue;
+					}
+					if (exits(taken)) {
+						// and nothing after a statement that never completes
+						forms.addAll(scoped(taken, tail));
+						return forms;
+					}
+					statement = taken;
+				}
 			}
 			List<Local> saved = this.patternVariables;
 			this.patternVariables = new ArrayList<>();

@@ -15932,6 +15932,378 @@ standalone:
       42 and 4.250000 and 7|4.3e+00 42|1 2 3|1.500000 1.500000|null null|1,234,567|1,234,567.892
       99 1.235e+04
       IllegalFormatConversionException: f != java.math.BigInteger|IllegalFormatConversionException: e != java.math.BigInteger|IllegalFormatConversionException: c != java.math.BigInteger|IllegalFormatConversionException: d != java.math.BigDecimal|IllegalFormatConversionException: x != java.math.BigDecimal|IllegalFormatConversionException: o != java.math.BigDecimal|IllegalFormatConversionException: c != java.math.BigDecimal|IllegalFormatConversionException: d != java.lang.String|true a
+  # A region of the tz database is in a program that names it, with the changes of its
+  # offset: a program of its own, since the corpus above holds none and takes the
+  # shorter ways of a program that does not. Every name here is a constant, so the
+  # program holds these regions and no other; the walk of every region beside a JDK
+  # is the program .kb/java-frontend.md names ("java.time: the regions").
+  - name: a-program-holds-the-regions-of-the-tz-database-it-names
+    file: Zoned.java
+    source: |
+      import java.time.*;
+      import java.time.temporal.ChronoUnit;
+      import java.time.zone.*;
+      import java.time.zone.ZoneOffsetTransitionRule.TimeDefinition;
+      import java.util.*;
+      import java.util.function.Supplier;
+
+      public class Zoned {
+          static final ZoneId PARIS = ZoneId.of("Europe/Paris");
+
+          static final String NEW_YORK = "America/New_York";
+
+          static void attempt(String what, Supplier<Object> made) {
+              try {
+                  System.out.println(what + ": " + made.get());
+              }
+              catch (RuntimeException e) {
+                  System.out.println(what + ": " + e);
+              }
+          }
+
+          static void zones() {
+              ZoneId newYork = ZoneId.of(NEW_YORK);
+              ZoneId tokyo = ZoneId.of("Asia/Tokyo");
+              System.out.println(PARIS + " " + PARIS.getId() + " " + PARIS.normalized() + " " + PARIS.getRules() + " "
+                      + PARIS.getRules().isFixedOffset() + " " + (PARIS.hashCode() == "Europe/Paris".hashCode()));
+              System.out.println(PARIS.equals(ZoneId.of("Europe/Paris")) + " " + PARIS.equals(newYork) + " "
+                      + PARIS.getRules().equals(ZoneId.of("Europe/Paris").getRules()) + " "
+                      + PARIS.getRules().equals(newYork.getRules()));
+              // two names of one region: the rules are equal, the zones are not
+              ZoneId kolkata = ZoneId.of("Asia/Kolkata");
+              ZoneId calcutta = ZoneId.of("Asia/Calcutta");
+              System.out.println(kolkata.getRules().equals(calcutta.getRules()) + " " + kolkata.equals(calcutta) + " "
+                      + ZonedDateTime.of(2026, 1, 1, 0, 0, 0, 0, calcutta));
+              // a name of the database whose offset never changed is a region all the same
+              ZoneId ast = ZoneId.of("SystemV/AST4");
+              System.out.println(ast + " " + ast.getRules().isFixedOffset() + " " + ast.normalized() + " "
+                      + tokyo.getRules().isFixedOffset() + " " + tokyo.normalized());
+              attempt("no such region", () -> ZoneId.of("Europe/Nowhere"));
+              attempt("another case", () -> ZoneId.of("europe/paris"));
+              attempt("a space", () -> ZoneId.of("Europe/Par is"));
+              System.out.println(ZoneId.from(ZonedDateTime.of(2026, 7, 1, 10, 15, 0, 0, PARIS)) + " "
+                      + Clock.fixed(Instant.parse("2026-07-01T00:00:00Z"), tokyo) + " "
+                      + LocalDateTime.now(Clock.fixed(Instant.parse("2026-07-01T00:00:00Z"), tokyo)));
+          }
+
+          static void instants() {
+              ZoneRules rules = PARIS.getRules();
+              Instant winter = Instant.parse("2026-01-15T12:00:00Z");
+              Instant summer = Instant.parse("2026-07-15T12:00:00Z");
+              for (Instant at : new Instant[] {Instant.parse("1900-01-01T00:00:00Z"), Instant.parse("1943-06-01T00:00:00Z"),
+                      winter, summer, Instant.parse("2026-03-29T00:59:59.999999999Z"), Instant.parse("2026-03-29T01:00:00Z"),
+                      Instant.parse("9999-08-01T00:00:00Z")}) {
+                  System.out.println(at + " " + rules.getOffset(at) + " " + rules.getStandardOffset(at) + " "
+                          + rules.getDaylightSavings(at) + " " + rules.isDaylightSavings(at) + " " + at.atZone(PARIS) + " "
+                          + LocalDate.ofInstant(at, PARIS) + " " + LocalTime.ofInstant(at, PARIS) + " "
+                          + OffsetDateTime.ofInstant(at, PARIS));
+              }
+              ZoneOffsetTransition spring = rules.nextTransition(winter);
+              ZoneOffsetTransition autumn = rules.nextTransition(spring.getInstant());
+              System.out.println(spring + " " + spring.getInstant() + " " + spring.toEpochSecond() + " "
+                      + spring.getDateTimeBefore() + " " + spring.getDateTimeAfter() + " " + spring.getDuration() + " "
+                      + spring.isGap() + " " + spring.isOverlap() + " " + spring.isValidOffset(ZoneOffset.ofHours(1)));
+              System.out.println(autumn + " " + autumn.getDuration() + " " + autumn.isGap() + " " + autumn.isOverlap() + " "
+                      + autumn.isValidOffset(ZoneOffset.ofHours(1)) + autumn.isValidOffset(ZoneOffset.ofHours(2))
+                      + autumn.isValidOffset(ZoneOffset.ofHours(3)) + " " + spring.compareTo(autumn) + " "
+                      + autumn.equals(rules.previousTransition(Instant.parse("2027-01-01T00:00:00Z"))) + " "
+                      + (autumn.hashCode() == rules.previousTransition(Instant.parse("2027-01-01T00:00:00Z")).hashCode()));
+              // a change is after the instant before it, and before any instant after its second
+              System.out.println(rules.previousTransition(spring.getInstant()) + " "
+                      + rules.previousTransition(spring.getInstant().plusNanos(1)) + " "
+                      + rules.nextTransition(spring.getInstant().minusNanos(1)) + " "
+                      + rules.previousTransition(Instant.parse("1800-01-01T00:00:00Z")) + " "
+                      + rules.nextTransition(Instant.MAX) + " " + rules.previousTransition(Instant.MAX) + " "
+                      + rules.getOffset(Instant.MIN) + rules.getOffset(Instant.MAX));
+              List<ZoneOffsetTransition> listed = rules.getTransitions();
+              System.out.println(listed.get(0) + " " + listed.contains(spring) + " " + rules.getTransitionRules());
+              attempt("a list of its own", () -> listed.add(spring));
+              ZoneOffsetTransitionRule yearly = ZoneId.of(NEW_YORK).getRules().getTransitionRules().get(0);
+              System.out.println(yearly + " " + yearly.getMonth() + " " + yearly.getDayOfMonthIndicator() + " "
+                      + yearly.getDayOfWeek() + " " + yearly.getLocalTime() + " " + yearly.isMidnightEndOfDay() + " "
+                      + yearly.getTimeDefinition() + " " + yearly.getStandardOffset() + " " + yearly.getOffsetBefore() + " "
+                      + yearly.getOffsetAfter() + " " + yearly.createTransition(2031) + " "
+                      + yearly.equals(ZoneId.of(NEW_YORK).getRules().getTransitionRules().get(0)) + " "
+                      + yearly.equals(rules.getTransitionRules().get(0)));
+              // the half hour of Lord Howe Island, and a region with no yearly rule
+              ZoneRules lordHowe = ZoneId.of("Australia/Lord_Howe").getRules();
+              System.out.println(lordHowe.nextTransition(winter) + " " + lordHowe.getDaylightSavings(winter) + " "
+                      + lordHowe.getTransitionRules());
+              ZoneRules tokyo = ZoneId.of("Asia/Tokyo").getRules();
+              System.out.println(tokyo.getTransitions().size() + " " + tokyo.getTransitionRules() + " "
+                      + tokyo.nextTransition(winter) + " " + tokyo.previousTransition(winter) + " "
+                      + tokyo.getOffset(Instant.parse("1887-01-01T00:00:00Z")));
+          }
+
+          static void localTimes() {
+              ZoneRules rules = PARIS.getRules();
+              LocalDateTime gap = LocalDateTime.parse("2026-03-29T02:30");
+              LocalDateTime overlap = LocalDateTime.parse("2026-10-25T02:30");
+              ZoneOffset one = ZoneOffset.ofHours(1);
+              ZoneOffset two = ZoneOffset.ofHours(2);
+              for (String text : new String[] {"2026-03-29T01:59:59.999999999", "2026-03-29T02:00", "2026-03-29T02:30",
+                      "2026-03-29T03:00", "2026-10-25T01:59:59.999999999", "2026-10-25T02:00", "2026-10-25T02:30",
+                      "2026-10-25T03:00", "1891-03-16T00:00:05"}) {
+                  LocalDateTime at = LocalDateTime.parse(text);
+                  System.out.println(at + " " + rules.getValidOffsets(at) + " " + rules.getOffset(at) + " "
+                          + rules.getTransition(at) + " " + rules.isValidOffset(at, one) + rules.isValidOffset(at, two) + " "
+                          + at.atZone(PARIS) + " " + ZonedDateTime.ofLocal(at, PARIS, one) + " "
+                          + ZonedDateTime.ofInstant(at, one, PARIS));
+              }
+              attempt("strict in a gap", () -> ZonedDateTime.ofStrict(gap, one, PARIS));
+              attempt("strict at another offset", () -> ZonedDateTime.ofStrict(overlap, ZoneOffset.ofHours(5), PARIS));
+              attempt("strict", () -> ZonedDateTime.ofStrict(overlap, one, PARIS));
+              attempt("strict of an offset", () -> ZonedDateTime.ofStrict(overlap, two, one));
+              ZonedDateTime earlier = ZonedDateTime.of(overlap, PARIS);
+              ZonedDateTime later = earlier.withLaterOffsetAtOverlap();
+              System.out.println(earlier + " " + later + " " + later.withEarlierOffsetAtOverlap() + " "
+                      + earlier.withEarlierOffsetAtOverlap().equals(earlier) + " " + later.plusDays(0) + " "
+                      + later.withMinute(40) + " " + later.with(two) + " " + earlier.with(one) + " "
+                      + earlier.with(ZoneOffset.ofHours(7)) + " " + later.plusHours(1) + " " + earlier.plusHours(1) + " "
+                      + later.withZoneSameLocal(ZoneId.of(NEW_YORK)) + " " + later.withZoneSameInstant(ZoneId.of(NEW_YORK))
+                      + " " + later.withFixedOffsetZone() + " " + later.toOffsetDateTime().atZoneSimilarLocal(PARIS) + " "
+                      + earlier.toOffsetDateTime().atZoneSameInstant(ZoneId.of("Asia/Tokyo")) + " "
+                      + earlier.isBefore(later) + " " + earlier.compareTo(later));
+              // a day whose midnight a zone skipped starts where the gap ends
+              System.out.println(LocalDate.parse("2018-11-04").atStartOfDay(ZoneId.of("America/Sao_Paulo")) + " "
+                      + LocalDate.parse("2026-03-29").atStartOfDay(PARIS) + " " + ZonedDateTime.of(LocalDateTime.MAX, PARIS)
+                      + " " + ZonedDateTime.of(LocalDateTime.MIN, PARIS));
+          }
+
+          static void moves() {
+              ZonedDateTime eve = ZonedDateTime.of(LocalDateTime.parse("2026-03-28T02:30"), PARIS);
+              // a date-based move keeps the local time, a time-based one the length
+              System.out.println(eve.plusDays(1) + " " + eve.plusHours(24) + " " + eve.plus(Duration.ofDays(1)) + " "
+                      + eve.plus(Period.ofDays(1)) + " " + eve.plus(1, ChronoUnit.DAYS) + " "
+                      + eve.plus(2, ChronoUnit.HALF_DAYS) + " " + eve.plusMonths(7) + " " + eve.plusMinutes(1440) + " "
+                      + eve.plusSeconds(86400) + " " + eve.plusNanos(86400000000000L) + " " + eve.plusWeeks(1));
+              ZonedDateTime day = eve.plusDays(2);
+              System.out.println(day.minusDays(1) + " " + day.minusHours(24) + " " + day.minus(Duration.ofDays(1)) + " "
+                      + day.minus(Period.ofDays(1)) + " " + day.minusMinutes(1440) + " " + day.minusSeconds(86400) + " "
+                      + day.minusNanos(86400000000000L) + " " + day.minus(1, ChronoUnit.DAYS) + " "
+                      + day.minus(24, ChronoUnit.HOURS) + " " + day.withDayOfMonth(29) + " " + day.withHour(2).withDayOfMonth(29)
+                      + " " + day.with(LocalDate.parse("2026-03-29")) + " " + day.truncatedTo(ChronoUnit.DAYS));
+              // a period is added whole, to the local date-time
+              System.out.println(ZonedDateTime.of(LocalDateTime.parse("2026-01-29T02:30"), PARIS).plus(Period.of(0, 2, 1)));
+              ZonedDateTime next = ZonedDateTime.of(LocalDateTime.parse("2026-03-29T03:30"), PARIS);
+              StringBuilder until = new StringBuilder();
+              for (ChronoUnit unit : new ChronoUnit[] {ChronoUnit.SECONDS, ChronoUnit.MINUTES, ChronoUnit.HOURS,
+                      ChronoUnit.HALF_DAYS, ChronoUnit.DAYS, ChronoUnit.WEEKS}) {
+                  until.append(unit).append('=').append(eve.until(next, unit)).append(' ');
+              }
+              System.out.println(until + " " + eve.plusHours(1).until(next, ChronoUnit.DAYS) + " "
+                      + Duration.between(eve, next) + " " + ChronoUnit.HOURS.between(eve, next.withZoneSameInstant(ZoneOffset.UTC)));
+              // a text: the offset places the instant, the region says how it is written
+              for (String text : new String[] {"2026-07-01T10:15+02:00[Europe/Paris]", "2026-07-01T10:15+01:00[Europe/Paris]",
+                      "2026-10-25T02:30+01:00[Europe/Paris]", "2026-10-25T02:30+02:00[Europe/Paris]",
+                      "2026-03-29T02:30+01:00[Europe/Paris]", "2026-11-01T01:30-05:00[America/New_York]",
+                      "2026-07-01T10:15Z[Asia/Tokyo]", "2026-07-01T10:15+02:00[Europe/Nowhere]"}) {
+                  attempt(text, () -> ZonedDateTime.parse(text));
+              }
+              ZonedDateTime parsed = ZonedDateTime.parse("2026-07-01T10:15+02:00[Europe/Paris]");
+              System.out.println(parsed.equals(ZonedDateTime.of(2026, 7, 1, 10, 15, 0, 0, PARIS)) + " "
+                      + (parsed.hashCode() == ZonedDateTime.of(2026, 7, 1, 10, 15, 0, 0, PARIS).hashCode()) + " "
+                      + parsed.getZone() + " " + parsed.getOffset() + " " + parsed.toInstant());
+          }
+
+          static void made() {
+              ZoneOffset one = ZoneOffset.ofHours(1);
+              ZoneOffset two = ZoneOffset.ofHours(2);
+              LocalDateTime june = LocalDateTime.parse("2000-06-01T00:00");
+              ZoneOffsetTransition change = ZoneOffsetTransition.of(june, one, two);
+              System.out.println(change + " " + change.equals(ZoneOffsetTransition.of(june, one, two)) + " "
+                      + change.equals(ZoneOffsetTransition.of(june, two, one)) + " " + change.equals(null));
+              attempt("a change to the same offset", () -> ZoneOffsetTransition.of(LocalDateTime.parse("2000-06-01T00:00:00.5"), one, one));
+              attempt("a change within a second", () -> ZoneOffsetTransition.of(LocalDateTime.parse("2000-06-01T00:00:00.5"), one, two));
+              attempt("a change of nothing", () -> ZoneOffsetTransition.of(null, one, two));
+              attempt("a change from nothing", () -> ZoneOffsetTransition.of(june, null, two));
+              attempt("a change to nothing", () -> ZoneOffsetTransition.of(june, one, null));
+              System.out.println(Arrays.toString(TimeDefinition.values()) + " "
+                      + TimeDefinition.UTC.createDateTime(june, one, two) + " "
+                      + TimeDefinition.WALL.createDateTime(june, one, two) + " "
+                      + TimeDefinition.STANDARD.createDateTime(june, one, two));
+              // a rule's day: of the month, counted from its end, moved to a day of the week
+              for (int day : new int[] {1, 29, -1, -2, -28}) {
+                  for (DayOfWeek dayOfWeek : new DayOfWeek[] {null, DayOfWeek.MONDAY}) {
+                      for (boolean end : new boolean[] {false, true}) {
+                          attempt("day " + day + " " + dayOfWeek + " " + end, () -> {
+                              ZoneOffsetTransitionRule rule = ZoneOffsetTransitionRule.of(Month.FEBRUARY, day, dayOfWeek,
+                                      end ? LocalTime.MIDNIGHT : LocalTime.of(1, 30, 15), end, TimeDefinition.STANDARD, one, one,
+                                      two);
+                              return rule + " " + rule.createTransition(2028) + " " + rule.createTransition(2027);
+                          });
+                      }
+                  }
+              }
+              for (TimeDefinition clock : TimeDefinition.values()) {
+                  System.out.println(ZoneOffsetTransitionRule
+                      .of(Month.OCTOBER, -1, DayOfWeek.SUNDAY, LocalTime.of(3, 0), false, clock, one, two, one)
+                      .createTransition(2026));
+              }
+              attempt("day 0", () -> ZoneOffsetTransitionRule.of(Month.MARCH, 0, null, LocalTime.NOON, false, TimeDefinition.UTC, one, one, two));
+              attempt("day 32", () -> ZoneOffsetTransitionRule.of(Month.MARCH, 32, null, LocalTime.NOON, false, TimeDefinition.UTC, one, one, two));
+              attempt("day -29", () -> ZoneOffsetTransitionRule.of(Month.MARCH, -29, null, LocalTime.NOON, false, TimeDefinition.UTC, one, one, two));
+              attempt("noon at the end of day", () -> ZoneOffsetTransitionRule.of(Month.MARCH, 1, null, LocalTime.NOON, true, TimeDefinition.UTC, one, one, two));
+              attempt("nanos", () -> ZoneOffsetTransitionRule.of(Month.MARCH, 1, null, LocalTime.of(1, 0, 0, 5), false, TimeDefinition.UTC, one, one, two));
+              attempt("the same offset", () -> ZoneOffsetTransitionRule.of(Month.MARCH, 1, null, LocalTime.NOON, false, TimeDefinition.UTC, one, one, one));
+              attempt("no month", () -> ZoneOffsetTransitionRule.of(null, 1, null, LocalTime.NOON, false, TimeDefinition.UTC, one, one, two));
+              attempt("no time", () -> ZoneOffsetTransitionRule.of(Month.MARCH, 1, null, null, false, TimeDefinition.UTC, one, one, two));
+              attempt("no clock", () -> ZoneOffsetTransitionRule.of(Month.MARCH, 1, null, LocalTime.NOON, false, null, one, one, two));
+              attempt("no standard", () -> ZoneOffsetTransitionRule.of(Month.MARCH, 1, null, LocalTime.NOON, false, TimeDefinition.UTC, null, one, two));
+              attempt("no before", () -> ZoneOffsetTransitionRule.of(Month.MARCH, 1, null, LocalTime.NOON, false, TimeDefinition.UTC, one, null, two));
+              attempt("no after", () -> ZoneOffsetTransitionRule.of(Month.MARCH, 1, null, LocalTime.NOON, false, TimeDefinition.UTC, one, one, null));
+              // rules of a program's own
+              List<ZoneOffsetTransitionRule> yearly = PARIS.getRules().getTransitionRules();
+              Instant winter = Instant.parse("2001-01-15T00:00:00Z");
+              Instant summer = Instant.parse("2001-07-15T00:00:00Z");
+              ZoneRules none = ZoneRules.of(one, one, List.of(), List.of(), List.of());
+              System.out.println(none + " " + none.isFixedOffset() + " " + none.equals(ZoneRules.of(one)) + " "
+                      + ZoneRules.of(one).equals(none) + " " + none.getTransitions() + none.getTransitionRules() + " "
+                      + none.getTransition(june) + " " + none.nextTransition(winter) + " " + none.previousTransition(winter));
+              ZoneRules ahead = ZoneRules.of(one, two, List.of(), List.of(), List.of());
+              System.out.println(ahead + " " + ahead.isFixedOffset() + " " + ahead.getOffset(winter) + ahead.getStandardOffset(winter)
+                      + " " + ahead.getDaylightSavings(winter) + " " + ahead.equals(ZoneRules.of(two)) + " "
+                      + ZoneRules.of(two).equals(ahead) + " " + ahead.getValidOffsets(june) + ahead.getOffset(june));
+              ZoneRules standard = ZoneRules.of(one, one, List.of(change), List.of(), List.of());
+              System.out.println(standard + " " + standard.isFixedOffset() + " " + standard.getOffset(winter)
+                      + standard.getStandardOffset(winter) + standard.getStandardOffset(change.getInstant().minusNanos(1))
+                      + standard.getStandardOffset(change.getInstant()) + " " + standard.isDaylightSavings(winter));
+              ZoneRules once = ZoneRules.of(one, one, List.of(), List.of(change), List.of());
+              System.out.println(once + " " + once.isFixedOffset() + " " + once.getOffset(winter) + once.getOffset(Instant.MAX)
+                      + once.getOffset(change.getInstant().minusNanos(1)) + " " + once.getTransitions() + " "
+                      + once.nextTransition(Instant.MIN) + " " + once.nextTransition(winter) + " "
+                      + once.equals(ZoneRules.of(one, one, List.of(), List.of(ZoneOffsetTransition.of(june, one, two)), List.of()))
+                      + " " + once.equals(standard) + " " + once.getValidOffsets(june) + once.getValidOffsets(june.plusHours(1)));
+              // yearly rules go on after the last change given, and not at all without one
+              ZoneRules alone = ZoneRules.of(one, one, List.of(), List.of(), yearly);
+              ZoneRules after = ZoneRules.of(one, one, List.of(), List.of(change), yearly);
+              System.out.println(alone.isFixedOffset() + " " + alone.getOffset(summer) + " " + alone.nextTransition(winter) + " "
+                      + alone.getTransitionRules().size() + " " + after.nextTransition(change.getInstant()) + " "
+                      + after.getOffset(change.getInstant().plusSeconds(86400)) + after.getOffset(winter)
+                      + after.getOffset(summer) + " " + after.previousTransition(summer) + " "
+                      + after.getValidOffsets(LocalDateTime.parse("2001-03-25T02:30"))
+                      + after.getValidOffsets(LocalDateTime.parse("2001-10-28T02:30")) + " " + after.equals(alone));
+              attempt("seventeen rules", () -> {
+                  List<ZoneOffsetTransitionRule> many = new ArrayList<>();
+                  for (int i = 0; i < 17; i++) {
+                      many.add(yearly.get(i % 2));
+                  }
+                  return ZoneRules.of(one, one, List.of(), List.of(change), many);
+              });
+              attempt("no list", () -> ZoneRules.of(one, one, null, List.of(), List.of()));
+              attempt("no offset", () -> ZoneRules.of(null, one, List.of(), List.of(), List.of()));
+          }
+
+          public static void main(String[] args) {
+              zones();
+              instants();
+              localTimes();
+              moves();
+              made();
+          }
+      }
+    stdout: |
+      Europe/Paris Europe/Paris Europe/Paris ZoneRules[currentStandardOffset=+01:00] false true
+      true false true false
+      true false 2026-01-01T00:00+05:30[Asia/Calcutta]
+      SystemV/AST4 true -04:00 false Asia/Tokyo
+      no such region: java.time.zone.ZoneRulesException: Unknown time-zone ID: Europe/Nowhere
+      another case: java.time.zone.ZoneRulesException: Unknown time-zone ID: europe/paris
+      a space: java.time.DateTimeException: Invalid ID for region-based ZoneId, invalid format: Europe/Par is
+      Europe/Paris FixedClock[2026-07-01T00:00:00Z,Asia/Tokyo] 2026-07-01T09:00
+      1900-01-01T00:00:00Z +00:09:21 +00:09:21 PT0S false 1900-01-01T00:09:21+00:09:21[Europe/Paris] 1900-01-01 00:09:21 1900-01-01T00:09:21+00:09:21
+      1943-06-01T00:00:00Z +02:00 +01:00 PT1H true 1943-06-01T02:00+02:00[Europe/Paris] 1943-06-01 02:00 1943-06-01T02:00+02:00
+      2026-01-15T12:00:00Z +01:00 +01:00 PT0S false 2026-01-15T13:00+01:00[Europe/Paris] 2026-01-15 13:00 2026-01-15T13:00+01:00
+      2026-07-15T12:00:00Z +02:00 +01:00 PT1H true 2026-07-15T14:00+02:00[Europe/Paris] 2026-07-15 14:00 2026-07-15T14:00+02:00
+      2026-03-29T00:59:59.999999999Z +01:00 +01:00 PT0S false 2026-03-29T01:59:59.999999999+01:00[Europe/Paris] 2026-03-29 01:59:59.999999999 2026-03-29T01:59:59.999999999+01:00
+      2026-03-29T01:00:00Z +02:00 +01:00 PT1H true 2026-03-29T03:00+02:00[Europe/Paris] 2026-03-29 03:00 2026-03-29T03:00+02:00
+      9999-08-01T00:00:00Z +02:00 +01:00 PT1H true 9999-08-01T02:00+02:00[Europe/Paris] 9999-08-01 02:00 9999-08-01T02:00+02:00
+      Transition[Gap at 2026-03-29T02:00+01:00 to +02:00] 2026-03-29T01:00:00Z 1774746000 2026-03-29T02:00 2026-03-29T03:00 PT1H true false false
+      Transition[Overlap at 2026-10-25T03:00+02:00 to +01:00] PT-1H false true truetruefalse -1 true true
+      Transition[Overlap at 2025-10-26T03:00+02:00 to +01:00] Transition[Gap at 2026-03-29T02:00+01:00 to +02:00] Transition[Gap at 2026-03-29T02:00+01:00 to +02:00] null null Transition[Overlap at +999999999-10-31T03:00+02:00 to +01:00] +00:09:21+01:00
+      Transition[Overlap at 1911-03-11T00:00+00:09:21 to Z] false [TransitionRule[Gap +01:00 to +02:00, SUNDAY on or after MARCH 25 at 01:00 UTC, standard offset +01:00], TransitionRule[Overlap +02:00 to +01:00, SUNDAY on or after OCTOBER 25 at 01:00 UTC, standard offset +01:00]]
+      a list of its own: java.lang.UnsupportedOperationException
+      TransitionRule[Gap -05:00 to -04:00, SUNDAY on or after MARCH 8 at 02:00 WALL, standard offset -05:00] MARCH 8 SUNDAY 02:00 false WALL -05:00 -05:00 -04:00 Transition[Gap at 2031-03-09T02:00-05:00 to -04:00] true false
+      Transition[Overlap at 2026-04-05T02:00+11:00 to +10:30] PT30M [TransitionRule[Overlap +11:00 to +10:30, SUNDAY on or after APRIL 1 at 02:00 WALL, standard offset +10:30], TransitionRule[Gap +10:30 to +11:00, SUNDAY on or after OCTOBER 1 at 02:00 WALL, standard offset +10:30]]
+      9 [] null Transition[Overlap at 1951-09-09T01:00+10:00 to +09:00] +09:18:59
+      2026-03-29T01:59:59.999999999 [+01:00] +01:00 null truefalse 2026-03-29T01:59:59.999999999+01:00[Europe/Paris] 2026-03-29T01:59:59.999999999+01:00[Europe/Paris] 2026-03-29T01:59:59.999999999+01:00[Europe/Paris]
+      2026-03-29T02:00 [] +01:00 Transition[Gap at 2026-03-29T02:00+01:00 to +02:00] falsefalse 2026-03-29T03:00+02:00[Europe/Paris] 2026-03-29T03:00+02:00[Europe/Paris] 2026-03-29T03:00+02:00[Europe/Paris]
+      2026-03-29T02:30 [] +01:00 Transition[Gap at 2026-03-29T02:00+01:00 to +02:00] falsefalse 2026-03-29T03:30+02:00[Europe/Paris] 2026-03-29T03:30+02:00[Europe/Paris] 2026-03-29T03:30+02:00[Europe/Paris]
+      2026-03-29T03:00 [+02:00] +02:00 null falsetrue 2026-03-29T03:00+02:00[Europe/Paris] 2026-03-29T03:00+02:00[Europe/Paris] 2026-03-29T04:00+02:00[Europe/Paris]
+      2026-10-25T01:59:59.999999999 [+02:00] +02:00 null falsetrue 2026-10-25T01:59:59.999999999+02:00[Europe/Paris] 2026-10-25T01:59:59.999999999+02:00[Europe/Paris] 2026-10-25T02:59:59.999999999+02:00[Europe/Paris]
+      2026-10-25T02:00 [+02:00, +01:00] +02:00 Transition[Overlap at 2026-10-25T03:00+02:00 to +01:00] truetrue 2026-10-25T02:00+02:00[Europe/Paris] 2026-10-25T02:00+01:00[Europe/Paris] 2026-10-25T02:00+01:00[Europe/Paris]
+      2026-10-25T02:30 [+02:00, +01:00] +02:00 Transition[Overlap at 2026-10-25T03:00+02:00 to +01:00] truetrue 2026-10-25T02:30+02:00[Europe/Paris] 2026-10-25T02:30+01:00[Europe/Paris] 2026-10-25T02:30+01:00[Europe/Paris]
+      2026-10-25T03:00 [+01:00] +01:00 null truefalse 2026-10-25T03:00+01:00[Europe/Paris] 2026-10-25T03:00+01:00[Europe/Paris] 2026-10-25T03:00+01:00[Europe/Paris]
+      1891-03-16T00:00:05 [+00:09:21] +00:09:21 null falsefalse 1891-03-16T00:00:05+00:09:21[Europe/Paris] 1891-03-16T00:00:05+00:09:21[Europe/Paris] 1891-03-15T23:09:26+00:09:21[Europe/Paris]
+      strict in a gap: java.time.DateTimeException: LocalDateTime '2026-03-29T02:30' does not exist in zone 'Europe/Paris' due to a gap in the local time-line, typically caused by daylight savings
+      strict at another offset: java.time.DateTimeException: ZoneOffset '+05:00' is not valid for LocalDateTime '2026-10-25T02:30' in zone 'Europe/Paris'
+      strict: 2026-10-25T02:30+01:00[Europe/Paris]
+      strict of an offset: java.time.DateTimeException: ZoneOffset '+02:00' is not valid for LocalDateTime '2026-10-25T02:30' in zone '+01:00'
+      2026-10-25T02:30+02:00[Europe/Paris] 2026-10-25T02:30+01:00[Europe/Paris] 2026-10-25T02:30+02:00[Europe/Paris] true 2026-10-25T02:30+01:00[Europe/Paris] 2026-10-25T02:40+01:00[Europe/Paris] 2026-10-25T02:30+02:00[Europe/Paris] 2026-10-25T02:30+01:00[Europe/Paris] 2026-10-25T02:30+02:00[Europe/Paris] 2026-10-25T03:30+01:00[Europe/Paris] 2026-10-25T02:30+01:00[Europe/Paris] 2026-10-25T02:30-04:00[America/New_York] 2026-10-24T21:30-04:00[America/New_York] 2026-10-25T02:30+01:00 2026-10-25T02:30+01:00[Europe/Paris] 2026-10-25T09:30+09:00[Asia/Tokyo] true -1
+      2018-11-04T01:00-02:00[America/Sao_Paulo] 2026-03-29T00:00+01:00[Europe/Paris] +999999999-12-31T23:59:59.999999999+01:00[Europe/Paris] -999999999-01-01T00:00+00:09:21[Europe/Paris]
+      2026-03-29T03:30+02:00[Europe/Paris] 2026-03-29T03:30+02:00[Europe/Paris] 2026-03-29T03:30+02:00[Europe/Paris] 2026-03-29T03:30+02:00[Europe/Paris] 2026-03-29T03:30+02:00[Europe/Paris] 2026-03-29T03:30+02:00[Europe/Paris] 2026-10-28T02:30+01:00[Europe/Paris] 2026-03-29T03:30+02:00[Europe/Paris] 2026-03-29T03:30+02:00[Europe/Paris] 2026-03-29T03:30+02:00[Europe/Paris] 2026-04-04T02:30+02:00[Europe/Paris]
+      2026-03-29T03:30+02:00[Europe/Paris] 2026-03-29T01:30+01:00[Europe/Paris] 2026-03-29T01:30+01:00[Europe/Paris] 2026-03-29T03:30+02:00[Europe/Paris] 2026-03-29T01:30+01:00[Europe/Paris] 2026-03-29T01:30+01:00[Europe/Paris] 2026-03-29T01:30+01:00[Europe/Paris] 2026-03-29T03:30+02:00[Europe/Paris] 2026-03-29T01:30+01:00[Europe/Paris] 2026-03-29T03:30+02:00[Europe/Paris] 2026-03-29T03:30+02:00[Europe/Paris] 2026-03-29T03:30+02:00[Europe/Paris] 2026-03-30T00:00+02:00[Europe/Paris]
+      2026-03-30T02:30+02:00[Europe/Paris]
+      Seconds=86400 Minutes=1440 Hours=24 HalfDays=2 Days=1 Weeks=0  1 PT24H 24
+      2026-07-01T10:15+02:00[Europe/Paris]: 2026-07-01T10:15+02:00[Europe/Paris]
+      2026-07-01T10:15+01:00[Europe/Paris]: 2026-07-01T11:15+02:00[Europe/Paris]
+      2026-10-25T02:30+01:00[Europe/Paris]: 2026-10-25T02:30+01:00[Europe/Paris]
+      2026-10-25T02:30+02:00[Europe/Paris]: 2026-10-25T02:30+02:00[Europe/Paris]
+      2026-03-29T02:30+01:00[Europe/Paris]: 2026-03-29T03:30+02:00[Europe/Paris]
+      2026-11-01T01:30-05:00[America/New_York]: 2026-11-01T01:30-05:00[America/New_York]
+      2026-07-01T10:15Z[Asia/Tokyo]: 2026-07-01T19:15+09:00[Asia/Tokyo]
+      2026-07-01T10:15+02:00[Europe/Nowhere]: java.time.format.DateTimeParseException: Text '2026-07-01T10:15+02:00[Europe/Nowhere]' could not be parsed, unparsed text found at index 22
+      true true Europe/Paris +02:00 2026-07-01T08:15:00Z
+      Transition[Gap at 2000-06-01T00:00+01:00 to +02:00] true false false
+      a change to the same offset: java.lang.IllegalArgumentException: Offsets must not be equal
+      a change within a second: java.lang.IllegalArgumentException: Nano-of-second must be zero
+      a change of nothing: java.lang.NullPointerException: transition
+      a change from nothing: java.lang.NullPointerException: offsetBefore
+      a change to nothing: java.lang.NullPointerException: offsetAfter
+      [UTC, WALL, STANDARD] 2000-06-01T02:00 2000-06-01T00:00 2000-06-01T01:00
+      day 1 null false: TransitionRule[Gap +01:00 to +02:00, FEBRUARY 1 at 01:30:15 STANDARD, standard offset +01:00] Transition[Gap at 2028-02-01T01:30:15+01:00 to +02:00] Transition[Gap at 2027-02-01T01:30:15+01:00 to +02:00]
+      day 1 null true: TransitionRule[Gap +01:00 to +02:00, FEBRUARY 1 at 24:00 STANDARD, standard offset +01:00] Transition[Gap at 2028-02-02T00:00+01:00 to +02:00] Transition[Gap at 2027-02-02T00:00+01:00 to +02:00]
+      day 1 MONDAY false: TransitionRule[Gap +01:00 to +02:00, MONDAY on or after FEBRUARY 1 at 01:30:15 STANDARD, standard offset +01:00] Transition[Gap at 2028-02-07T01:30:15+01:00 to +02:00] Transition[Gap at 2027-02-01T01:30:15+01:00 to +02:00]
+      day 1 MONDAY true: TransitionRule[Gap +01:00 to +02:00, MONDAY on or after FEBRUARY 1 at 24:00 STANDARD, standard offset +01:00] Transition[Gap at 2028-02-08T00:00+01:00 to +02:00] Transition[Gap at 2027-02-02T00:00+01:00 to +02:00]
+      day 29 null false: java.time.DateTimeException: Invalid date 'February 29' as '2027' is not a leap year
+      day 29 null true: java.time.DateTimeException: Invalid date 'February 29' as '2027' is not a leap year
+      day 29 MONDAY false: java.time.DateTimeException: Invalid date 'February 29' as '2027' is not a leap year
+      day 29 MONDAY true: java.time.DateTimeException: Invalid date 'February 29' as '2027' is not a leap year
+      day -1 null false: TransitionRule[Gap +01:00 to +02:00, FEBRUARY -1 at 01:30:15 STANDARD, standard offset +01:00] Transition[Gap at 2028-02-29T01:30:15+01:00 to +02:00] Transition[Gap at 2027-02-28T01:30:15+01:00 to +02:00]
+      day -1 null true: TransitionRule[Gap +01:00 to +02:00, FEBRUARY -1 at 24:00 STANDARD, standard offset +01:00] Transition[Gap at 2028-03-01T00:00+01:00 to +02:00] Transition[Gap at 2027-03-01T00:00+01:00 to +02:00]
+      day -1 MONDAY false: TransitionRule[Gap +01:00 to +02:00, MONDAY on or before last day of FEBRUARY at 01:30:15 STANDARD, standard offset +01:00] Transition[Gap at 2028-02-28T01:30:15+01:00 to +02:00] Transition[Gap at 2027-02-22T01:30:15+01:00 to +02:00]
+      day -1 MONDAY true: TransitionRule[Gap +01:00 to +02:00, MONDAY on or before last day of FEBRUARY at 24:00 STANDARD, standard offset +01:00] Transition[Gap at 2028-02-29T00:00+01:00 to +02:00] Transition[Gap at 2027-02-23T00:00+01:00 to +02:00]
+      day -2 null false: TransitionRule[Gap +01:00 to +02:00, FEBRUARY -2 at 01:30:15 STANDARD, standard offset +01:00] Transition[Gap at 2028-02-28T01:30:15+01:00 to +02:00] Transition[Gap at 2027-02-27T01:30:15+01:00 to +02:00]
+      day -2 null true: TransitionRule[Gap +01:00 to +02:00, FEBRUARY -2 at 24:00 STANDARD, standard offset +01:00] Transition[Gap at 2028-02-29T00:00+01:00 to +02:00] Transition[Gap at 2027-02-28T00:00+01:00 to +02:00]
+      day -2 MONDAY false: TransitionRule[Gap +01:00 to +02:00, MONDAY on or before last day minus 1 of FEBRUARY at 01:30:15 STANDARD, standard offset +01:00] Transition[Gap at 2028-02-28T01:30:15+01:00 to +02:00] Transition[Gap at 2027-02-22T01:30:15+01:00 to +02:00]
+      day -2 MONDAY true: TransitionRule[Gap +01:00 to +02:00, MONDAY on or before last day minus 1 of FEBRUARY at 24:00 STANDARD, standard offset +01:00] Transition[Gap at 2028-02-29T00:00+01:00 to +02:00] Transition[Gap at 2027-02-23T00:00+01:00 to +02:00]
+      day -28 null false: TransitionRule[Gap +01:00 to +02:00, FEBRUARY -28 at 01:30:15 STANDARD, standard offset +01:00] Transition[Gap at 2028-02-02T01:30:15+01:00 to +02:00] Transition[Gap at 2027-02-01T01:30:15+01:00 to +02:00]
+      day -28 null true: TransitionRule[Gap +01:00 to +02:00, FEBRUARY -28 at 24:00 STANDARD, standard offset +01:00] Transition[Gap at 2028-02-03T00:00+01:00 to +02:00] Transition[Gap at 2027-02-02T00:00+01:00 to +02:00]
+      day -28 MONDAY false: TransitionRule[Gap +01:00 to +02:00, MONDAY on or before last day minus 27 of FEBRUARY at 01:30:15 STANDARD, standard offset +01:00] Transition[Gap at 2028-01-31T01:30:15+01:00 to +02:00] Transition[Gap at 2027-02-01T01:30:15+01:00 to +02:00]
+      day -28 MONDAY true: TransitionRule[Gap +01:00 to +02:00, MONDAY on or before last day minus 27 of FEBRUARY at 24:00 STANDARD, standard offset +01:00] Transition[Gap at 2028-02-01T00:00+01:00 to +02:00] Transition[Gap at 2027-02-02T00:00+01:00 to +02:00]
+      Transition[Overlap at 2026-10-25T05:00+02:00 to +01:00]
+      Transition[Overlap at 2026-10-25T03:00+02:00 to +01:00]
+      Transition[Overlap at 2026-10-25T04:00+02:00 to +01:00]
+      day 0: java.lang.IllegalArgumentException: Day of month indicator must be between -28 and 31 inclusive excluding zero
+      day 32: java.lang.IllegalArgumentException: Day of month indicator must be between -28 and 31 inclusive excluding zero
+      day -29: java.lang.IllegalArgumentException: Day of month indicator must be between -28 and 31 inclusive excluding zero
+      noon at the end of day: java.lang.IllegalArgumentException: Time must be midnight when end of day flag is true
+      nanos: java.lang.IllegalArgumentException: Time's nano-of-second must be zero
+      the same offset: TransitionRule[Overlap +01:00 to +01:00, MARCH 1 at 12:00 UTC, standard offset +01:00]
+      no month: java.lang.NullPointerException: month
+      no time: java.lang.NullPointerException: time
+      no clock: java.lang.NullPointerException: timeDefinition
+      no standard: java.lang.NullPointerException: standardOffset
+      no before: java.lang.NullPointerException: offsetBefore
+      no after: java.lang.NullPointerException: offsetAfter
+      ZoneRules[currentStandardOffset=+01:00] true true true [][] null null null
+      ZoneRules[currentStandardOffset=+01:00] false +02:00+01:00 PT1H false false [+02:00]+02:00
+      ZoneRules[currentStandardOffset=+02:00] false +01:00+02:00+01:00+02:00 true
+      ZoneRules[currentStandardOffset=+01:00] false +02:00+02:00+01:00 [Transition[Gap at 2000-06-01T00:00+01:00 to +02:00]] Transition[Gap at 2000-06-01T00:00+01:00 to +02:00] null true false [][+02:00]
+      false +01:00 null 2 Transition[Overlap at 2000-10-29T03:00+02:00 to +01:00] +02:00+01:00+02:00 Transition[Gap at 2001-03-25T02:00+01:00 to +02:00] [][+02:00, +01:00] false
+      seventeen rules: java.lang.IllegalArgumentException: Too many transition rules
+      no list: java.lang.NullPointerException: standardOffsetTransitionList
+      no offset: java.lang.NullPointerException: baseStandardOffset
 refused:
   scaffold: |
     class Refused {

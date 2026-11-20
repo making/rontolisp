@@ -82,7 +82,8 @@ public final class LocalDate implements Temporal, TemporalAdjuster, ChronoLocalD
     }
 
     public static LocalDate ofInstant(Instant instant, ZoneId zone) {
-        return ofEpochDay(Math.floorDiv(instant.getEpochSecond() + zone.fixed().getTotalSeconds(), Iso.DAY));
+        return ofEpochDay(Math.floorDiv(instant.getEpochSecond()
+                + (ZoneId.regional() ? zone.offsetAt(instant.getEpochSecond()) : zone.fixed()).getTotalSeconds(), Iso.DAY));
     }
 
     public static LocalDate ofEpochDay(long epochDay) {
@@ -461,6 +462,13 @@ public final class LocalDate implements Temporal, TemporalAdjuster, ChronoLocalD
     }
 
     public ZonedDateTime atStartOfDay(ZoneId zone) {
+        if (ZoneId.regional()) {
+            // a day whose midnight a zone skips starts where the gap ends
+            long[] change = new long[3];
+            if (zone.placed(toEpochDay() * Iso.DAY, change) == 1) {
+                return ZonedDateTime.of(LocalDateTime.ofEpochSecond(change[0] + change[2], 0, ZoneOffset.UTC), zone);
+            }
+        }
         return ZonedDateTime.of(atStartOfDay(), zone);
     }
 
