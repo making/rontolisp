@@ -52,6 +52,7 @@ public final class Year implements Temporal, TemporalAdjuster, Comparable<Year>,
     }
 
     public static Year from(TemporalAccessor temporal) {
+        Objects.requireNonNull(temporal, "temporal");
         if (temporal instanceof Year year) {
             return year;
         }

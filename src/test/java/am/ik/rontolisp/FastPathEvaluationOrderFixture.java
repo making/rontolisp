@@ -71,6 +71,8 @@ public final class FastPathEvaluationOrderFixture {
 			(eo-report (+ (mod 5 *eo-zero*) (eo-mark "m " 1)))
 			(eo-report (+ (rem 5 *eo-zero*) (eo-mark "m " 1)))
 			(eo-report (+ (mod 7 (- *eo-ten* 10)) (eo-mark "m " 1)))
+			(eo-report (+ (truncate 5 *eo-zero*) (eo-mark "m " 1)))
+			(eo-report (+ (truncate *eo-a* 2) (eo-mark "t " 1)))
 			(eo-report (+ (aref *eo-v* *eo-ten*) (eo-mark "r " 1)))
 			(eo-report (+ (aref *eo-u8* *eo-ten*) (eo-mark "r " 1)))
 			(eo-report (+ (random *eo-zero*) (eo-mark "q " 1)))
@@ -133,6 +135,8 @@ public final class FastPathEvaluationOrderFixture {
 			Division by zero
 			Division by zero
 			Division by zero
+			Division by zero
+			TRUNCATE: The value A is not of type REAL
 			AREF: The value 10 is not of type (INTEGER 0 (3))
 			AREF: The value 10 is not of type (INTEGER 0 (3))
 			RANDOM: The value 0 is not of type REAL

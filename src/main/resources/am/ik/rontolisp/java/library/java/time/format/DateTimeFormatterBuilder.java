@@ -185,7 +185,10 @@ public final class DateTimeFormatterBuilder {
 
     public DateTimeFormatterBuilder appendFraction(TemporalField field, int minWidth, int maxWidth,
             boolean decimalPoint) {
-        Objects.requireNonNull(field, "field");
+        if (field == null) {
+            throw new NullPointerException(
+                    "Cannot invoke \"java.time.temporal.TemporalField.range()\" because \"field\" is null");
+        }
         if (!field.range().isFixed()) {
             throw new IllegalArgumentException("Field must have a fixed set of values: " + field.toString());
         }
@@ -301,10 +304,10 @@ public final class DateTimeFormatterBuilder {
         return add(new Step.ZoneText(textStyle, true, null));
     }
 
+    /** A zone's name as a whole; null preferred zones are none (a JDK 25's answer). */
     public DateTimeFormatterBuilder appendGenericZoneText(TextStyle textStyle, Set<ZoneId> preferredZones) {
         Objects.requireNonNull(textStyle, "textStyle");
-        Objects.requireNonNull(preferredZones, "preferredZones");
-        return add(new Step.ZoneText(textStyle, true, Set.copyOf(preferredZones)));
+        return add(new Step.ZoneText(textStyle, true, preferredZones == null ? null : Set.copyOf(preferredZones)));
     }
 
     public DateTimeFormatterBuilder appendDayPeriodText(TextStyle style) {
@@ -436,7 +439,7 @@ public final class DateTimeFormatterBuilder {
         while (groups.size() > 1) {
             optionalEnd();
         }
-        return new DateTimeFormatter(new Step.Group(open().toArray(new Step[0]), false), locale, style, null,
-                chronology);
+        return new DateTimeFormatter(new Step.Group(open().toArray(new Step[0]), false), locale, null, style, null,
+                null, chronology);
     }
 }

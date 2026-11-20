@@ -104,6 +104,7 @@ public final class LocalDateTime
     }
 
     public static LocalDateTime from(TemporalAccessor temporal) {
+        Objects.requireNonNull(temporal, "temporal");
         if (temporal instanceof LocalDateTime dateTime) {
             return dateTime;
         }

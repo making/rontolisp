@@ -1428,8 +1428,8 @@ final class WasmIntFusionCompiler {
 		return form instanceof LispCons cons && cons.car() instanceof LispSymbol head && switch (head.name()) {
 			case LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.MOD, LispNames.REM, LispNames.LOGAND,
 					LispNames.LOGIOR, LispNames.LOGXOR, LispNames.LOGNOT, LispNames.ASH, LispNames.ONE_PLUS,
-					LispNames.ONE_MINUS, LispNames.MASK_SIGNED_FIELD, LispNames.LT, LispNames.GT, LispNames.LE,
-					LispNames.GE, LispNames.EQ ->
+					LispNames.ONE_MINUS, LispNames.MASK_SIGNED_FIELD, LispNames.TRUNCATE, LispNames.FLOOR, LispNames.LT,
+					LispNames.GT, LispNames.LE, LispNames.GE, LispNames.EQ ->
 				true;
 			default -> false;
 		};
@@ -2184,10 +2184,15 @@ final class WasmIntFusionCompiler {
 			Node arg = classify(parts.get(2), ctx, env, site, depth);
 			return arg == null ? null : applied(makeOp(op, List.of(new ConstLeaf(size), arg), site), site);
 		}
+		if (LispNames.VALUES.equals(op) && arity == 1 && parts.get(1) instanceof LispCons quotient
+				&& quotient.car() instanceof LispSymbol quotientOp && LispNames.FLOOR.equals(quotientOp.name())) {
+			// (values (floor a b)), Java's floorDiv: the one value an operand takes
+			return classify(quotient, ctx, env, site, depth);
+		}
 		boolean fusable = switch (op) {
 			case LispNames.ADD, LispNames.SUB, LispNames.MUL, LispNames.LOGAND, LispNames.LOGIOR, LispNames.LOGXOR ->
 				arity >= 2;
-			case LispNames.MOD, LispNames.REM, LispNames.ASH -> arity == 2;
+			case LispNames.MOD, LispNames.REM, LispNames.ASH, LispNames.TRUNCATE, LispNames.FLOOR -> arity == 2;
 			case LispNames.LOGNOT, LispNames.ONE_PLUS, LispNames.ONE_MINUS -> arity == 1;
 			default -> false;
 		};
@@ -2206,6 +2211,10 @@ final class WasmIntFusionCompiler {
 				return env.isEmpty() ? registerLeaf(exprLeaf(expr, ctx), site) : null;
 			}
 		}
+		int leafMark = leaves.size();
+		int eventMark = site.events.size();
+		int celledMark = site.celledCalls.size();
+		java.util.Set<String> shared = new java.util.HashSet<>(site.sharedRawLeaves.keySet());
 		List<Node> args = new ArrayList<>(arity);
 		for (int i = 1; i < parts.size(); i++) {
 			Node arg = classify(parts.get(i), ctx, env, site, depth);
@@ -2213,6 +2222,18 @@ final class WasmIntFusionCompiler {
 				return null;
 			}
 			args.add(arg);
+		}
+		if ((LispNames.TRUNCATE.equals(op) || LispNames.FLOOR.equals(op))
+				&& args.stream().anyMatch(WasmIntFusionCompiler::readsBailingLeaf)) {
+			// A quotient over a leaf that can bail stays the leaf it was: unfused it
+			// divides two i31s inline, where fused it brings its generic division into
+			// the fallback and into every order probe -- and over bignums, which bail
+			// every time, it is the faster.
+			leaves.subList(leafMark, leaves.size()).clear();
+			site.events.subList(eventMark, site.events.size()).clear();
+			site.celledCalls.subList(celledMark, site.celledCalls.size()).clear();
+			site.sharedRawLeaves.keySet().retainAll(shared);
+			return env.isEmpty() ? registerLeaf(exprLeaf(expr, ctx), site) : null;
 		}
 		return applied(switch (op) {
 			case LispNames.ONE_PLUS -> makeOp(LispNames.ADD, List.of(args.get(0), new ConstLeaf(1)), site);
@@ -2252,6 +2273,12 @@ final class WasmIntFusionCompiler {
 					case LispNames.LOGXOR -> acc ^ v;
 					case LispNames.MOD -> Math.floorMod(acc, v);
 					case LispNames.REM -> acc % v;
+					case LispNames.TRUNCATE, LispNames.FLOOR -> {
+						if (acc == Long.MIN_VALUE && v == -1) {
+							throw new ArithmeticException("quotient out of i64");
+						}
+						yield LispNames.FLOOR.equals(op) ? Math.floorDiv(acc, v) : acc / v;
+					}
 					case LispNames.ASH -> foldAsh(acc, v);
 					case LispNames.MASK_SIGNED_FIELD -> signExtend(v, (int) acc);
 					default -> throw new ArithmeticException("not foldable");
@@ -2537,6 +2564,23 @@ final class WasmIntFusionCompiler {
 			}
 		}
 		return null;
+	}
+
+	/**
+	 * Whether a leaf {@code node} reads can bail: an unboxed expression no declaration
+	 * gives a range, a shadowed local, an element read of an array no declaration pins, a
+	 * substituted name's cell.
+	 */
+	private static boolean readsBailingLeaf(Node node) {
+		return switch (node) {
+			case ExprLeaf leaf -> leaf.trusted == null;
+			case RawLeaf leaf -> leaf.src.shadowed();
+			case ArefLeaf leaf -> leaf.packedType < 0 && leaf.elements == null
+					|| readsBailingLeaf(java.util.Objects.requireNonNull(leaf.indexNode));
+			case CelledCall ignored -> true;
+			case ConstLeaf ignored -> false;
+			case OpNode op -> op.args().stream().anyMatch(WasmIntFusionCompiler::readsBailingLeaf);
+		};
 	}
 
 	/**
@@ -2981,7 +3025,7 @@ final class WasmIntFusionCompiler {
 		if (!(item instanceof OpNode op)) {
 			return false;
 		}
-		if (LispNames.MOD.equals(op.op()) || LispNames.REM.equals(op.op()) || LispNames.ASH.equals(op.op())) {
+		if (divides(op) || LispNames.ASH.equals(op.op())) {
 			Node operand = op.args().get(1);
 			return operand instanceof ConstLeaf || operand instanceof ExprLeaf || operand instanceof RawLeaf;
 		}
@@ -3023,7 +3067,7 @@ final class WasmIntFusionCompiler {
 					if (!guardable(op)) {
 						return null;
 					}
-					boolean divides = LispNames.MOD.equals(op.op()) || LispNames.REM.equals(op.op());
+					boolean divides = divides(op);
 					if (divides || LispNames.ASH.equals(op.op())) {
 						Node operand = op.args().get(1);
 						if (operand instanceof ConstLeaf c) {
@@ -3823,6 +3867,9 @@ final class WasmIntFusionCompiler {
 				}
 				return Range.FULL;
 			}
+			case LispNames.TRUNCATE, LispNames.FLOOR -> {
+				return quotientRange(op.op(), range(args.get(0)), args.get(1));
+			}
 			case LispNames.ASH -> {
 				if (args.get(1) instanceof ConstLeaf c && c.value() <= 0) {
 					int shift = c.value() <= -63 ? 63 : (int) -c.value();
@@ -3930,7 +3977,7 @@ final class WasmIntFusionCompiler {
 	 */
 	private static boolean signalsOnIntegers(OpNode op) {
 		return switch (op.op()) {
-			case LispNames.MOD, LispNames.REM -> !(op.args().get(1) instanceof ConstLeaf c && c.value() != 0);
+			case LispNames.MOD, LispNames.REM, LispNames.TRUNCATE, LispNames.FLOOR -> mayBeZero(op.args().get(1));
 			case LispNames.ASH -> !(op.args().get(1) instanceof ConstLeaf)
 					&& !countWithin(op.args().get(1), Integer.MIN_VALUE, Integer.MAX_VALUE);
 			default -> false;
@@ -3941,6 +3988,9 @@ final class WasmIntFusionCompiler {
 		List<Node> args = op.args();
 		if (LispNames.MASK_SIGNED_FIELD.equals(op.op())) {
 			return wrappedBails(args.get(1));
+		}
+		if (isQuotient(op)) {
+			return fastBails(args.get(0)) || fastBails(args.get(1)) || quotientOverflows(op);
 		}
 		if (LispNames.MOD.equals(op.op()) && args.get(1) instanceof ConstLeaf c && c.value() > 0
 				&& Long.bitCount(c.value()) == 1) {
@@ -3994,6 +4044,8 @@ final class WasmIntFusionCompiler {
 					? wrappedBails(op.args().get(0))
 					: !(op.args().get(1) instanceof ConstLeaf) && countWithin(op.args().get(1), 0, 63)
 							? wrappedBails(op.args().get(0)) || fastBails(op.args().get(1)) : fastBails(node);
+			// the quotient past i64 wraps
+			case LispNames.TRUNCATE, LispNames.FLOOR -> fastBails(op.args().get(0)) || fastBails(op.args().get(1));
 			default -> fastBails(node);
 		};
 	}
@@ -4053,6 +4105,10 @@ final class WasmIntFusionCompiler {
 			case OpNode op -> {
 				// (%mask-signed-field k x) keeps the low k <= 64 bits, which the WRAPPED
 				// subtree computes exactly; a narrower field sign-extends from bit k-1.
+				if (isQuotient(op)) {
+					emitQuotient(op, false, ctx);
+					return;
+				}
 				if (LispNames.MASK_SIGNED_FIELD.equals(op.op())) {
 					long size = ((ConstLeaf) op.args().get(0)).value();
 					emitFastWrapped(op.args().get(1), ctx);
@@ -4225,8 +4281,175 @@ final class WasmIntFusionCompiler {
 					emitFast(node, ctx);
 				}
 			}
+			case LispNames.TRUNCATE, LispNames.FLOOR -> emitQuotient(op, true, ctx);
 			default -> emitFast(node, ctx);
 		}
+	}
+
+	/**
+	 * {@code (truncate a b)} or {@code (floor a b)} of two integers: {@code i64.div_s},
+	 * which truncates, and for {@code floor} one step down where a remainder's sign
+	 * differs from the divisor's. A divisor that may be zero is tested first and reports
+	 * as the generic division does ({@code _div_zero}, a trap outside EH mode).
+	 * {@code MIN_VALUE / -1}, the one quotient past i64 and the one {@code i64.div_s}
+	 * traps on, bails where the operands' ranges hold it, or under a mask
+	 * ({@code wrapped}) is the negation, which wraps to the low bits the mask keeps.
+	 */
+	private static void emitQuotient(OpNode op, boolean wrapped, WasmLispCompiler.Ctx ctx) {
+		Node divisor = op.args().get(1);
+		boolean overflows = quotientOverflows(op);
+		boolean floor = LispNames.FLOOR.equals(op.op());
+		emitFast(op.args().get(0), ctx);
+		ConstLeaf literal = divisor instanceof ConstLeaf c && c.value() != 0 ? c : null;
+		if (literal != null && !overflows && !floor) {
+			ctx.writer.write(Instruction.I64_CONST);
+			ctx.writer.writeSignedLeb128(literal.value());
+			ctx.writer.write(Instruction.I64_DIV_S);
+			return;
+		}
+		int x = ctx.allocI64Temp();
+		int y = literal != null ? -1 : ctx.allocI64Temp();
+		Runnable pushDivisor = () -> {
+			if (literal != null) {
+				ctx.writer.write(Instruction.I64_CONST);
+				ctx.writer.writeSignedLeb128(literal.value());
+			}
+			else {
+				writeI64LocalRead(y, ctx);
+			}
+		};
+		if (literal == null) {
+			emitFast(divisor, ctx);
+			ctx.writer.write(Instruction.SET_LOCAL);
+			ctx.writeI64LocalIndex(y);
+		}
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writeI64LocalIndex(x);
+		if (literal == null && mayBeZero(divisor)) {
+			pushDivisor.run();
+			ctx.writer.write(Instruction.I64_EQZ);
+			ctx.writer.write(Instruction.IF, 0x40);
+			ctx.writer.write(Instruction.CALL);
+			ctx.writer.writeUnsignedLeb128(WasmLispCompiler.FUNC_DIV_ZERO);
+			ctx.writer.write(Instruction.UNREACHABLE);
+			ctx.writer.write(Instruction.END);
+		}
+		if (overflows && !wrapped) {
+			writeI64LocalRead(x, ctx);
+			ctx.writer.write(Instruction.I64_CONST);
+			ctx.writer.writeSignedLeb128(Long.MIN_VALUE);
+			ctx.writer.write(Instruction.I64_EQ);
+			pushDivisor.run();
+			ctx.writer.write(Instruction.I64_CONST);
+			ctx.writer.writeSignedLeb128(-1);
+			ctx.writer.write(Instruction.I64_EQ);
+			ctx.writer.write(Instruction.I32_AND);
+			ctx.writer.write(Instruction.BR_IF, 0);
+		}
+		if (overflows && wrapped) {
+			pushDivisor.run();
+			ctx.writer.write(Instruction.I64_CONST);
+			ctx.writer.writeSignedLeb128(-1);
+			ctx.writer.write(Instruction.I64_EQ);
+			ctx.writer.write(Instruction.IF);
+			ctx.writer.write(Type.I64);
+			ctx.writer.write(Instruction.I64_CONST);
+			ctx.writer.writeSignedLeb128(0);
+			writeI64LocalRead(x, ctx);
+			ctx.writer.write(Instruction.I64_SUB);
+			ctx.writer.write(Instruction.ELSE);
+		}
+		writeI64LocalRead(x, ctx);
+		pushDivisor.run();
+		ctx.writer.write(Instruction.I64_DIV_S);
+		if (floor) {
+			// q - (r != 0 & (r ^ y) < 0), r = x - q*y: |q*y| <= |x|, so r is exact
+			int q = ctx.allocI64Temp();
+			int r = ctx.allocI64Temp();
+			ctx.writer.write(Instruction.TEE_LOCAL);
+			ctx.writeI64LocalIndex(q);
+			writeI64LocalRead(x, ctx);
+			writeI64LocalRead(q, ctx);
+			pushDivisor.run();
+			ctx.writer.write(Instruction.I64_MUL);
+			ctx.writer.write(Instruction.I64_SUB);
+			ctx.writer.write(Instruction.TEE_LOCAL);
+			ctx.writeI64LocalIndex(r);
+			ctx.writer.write(Instruction.I64_CONST);
+			ctx.writer.writeSignedLeb128(0);
+			ctx.writer.write(Instruction.I64_NE);
+			writeI64LocalRead(r, ctx);
+			pushDivisor.run();
+			ctx.writer.write(Instruction.I64_XOR);
+			ctx.writer.write(Instruction.I64_CONST);
+			ctx.writer.writeSignedLeb128(0);
+			ctx.writer.write(Instruction.I64_LT_S);
+			ctx.writer.write(Instruction.I32_AND);
+			ctx.writer.write(Instruction.I64_EXTEND_U_I32);
+			ctx.writer.write(Instruction.I64_SUB);
+		}
+		if (overflows && wrapped) {
+			ctx.writer.write(Instruction.END);
+		}
+	}
+
+	/** Whether the fast value of {@code node} may be zero. */
+	private static boolean mayBeZero(Node node) {
+		Range r = range(node);
+		return r.lo() <= 0 && r.hi() >= 0;
+	}
+
+	/** Whether the operation divides: {@code mod}, {@code rem}, {@code truncate}. */
+	private static boolean divides(OpNode op) {
+		return LispNames.MOD.equals(op.op()) || LispNames.REM.equals(op.op()) || isQuotient(op);
+	}
+
+	/**
+	 * Whether the operation is a quotient of two integers: {@code truncate},
+	 * {@code floor}.
+	 */
+	private static boolean isQuotient(OpNode op) {
+		return LispNames.TRUNCATE.equals(op.op()) || LispNames.FLOOR.equals(op.op());
+	}
+
+	/**
+	 * Whether a {@code truncate}'s operands' ranges hold {@code MIN_VALUE / -1}, whose
+	 * quotient {@code 2^63} is past i64.
+	 */
+	private static boolean quotientOverflows(OpNode op) {
+		Range divisor = range(op.args().get(1));
+		return range(op.args().get(0)).lo() == Long.MIN_VALUE && divisor.lo() <= -1 && divisor.hi() >= -1;
+	}
+
+	/**
+	 * The range of the truncating or floored quotient of a dividend in {@code x} by
+	 * {@code divisor} where it does not bail: by a literal its two ends divided,
+	 * otherwise within the dividend's magnitude (a floored step past a truncated quotient
+	 * stays within it: the dividend is a nonzero integer there) and of its sign or the
+	 * other, as the divisor's range allows.
+	 */
+	private static Range quotientRange(String op, Range x, Node divisor) {
+		Range d = range(divisor);
+		if (divisor instanceof ConstLeaf c && c.value() != 0 && !(c.value() == -1 && x.lo() == Long.MIN_VALUE)) {
+			boolean floor = LispNames.FLOOR.equals(op);
+			long p = floor ? Math.floorDiv(x.lo(), c.value()) : x.lo() / c.value();
+			long q = floor ? Math.floorDiv(x.hi(), c.value()) : x.hi() / c.value();
+			return new Range(Math.min(p, q), Math.max(p, q));
+		}
+		Range same = new Range(Math.min(x.lo(), 0), Math.max(x.hi(), 0));
+		Range flipped = new Range(Math.min(negated(x.hi()), 0), Math.max(negated(x.lo()), 0));
+		if (d.lo() >= 1) {
+			return same;
+		}
+		if (d.hi() <= -1) {
+			return flipped;
+		}
+		return new Range(Math.min(same.lo(), flipped.lo()), Math.max(same.hi(), flipped.hi()));
+	}
+
+	/** {@code -v}, {@code MIN_VALUE}'s saturated: past i64 the quotient bails. */
+	private static long negated(long v) {
+		return v == Long.MIN_VALUE ? Long.MAX_VALUE : -v;
 	}
 
 	/**
@@ -4536,6 +4759,24 @@ final class WasmIntFusionCompiler {
 						() -> emitCall(WasmLispCompiler.FUNC_BIG_AND, ctx));
 				WasmEmitHelper.compileIntegerLiteral(negativeSignBit, ctx);
 				WasmOperandTypes.withOperator(ctx, LispNames.ADD, () -> emitCall(WasmLispCompiler.FUNC_RAT_ADD, ctx));
+				WasmUncaughtLocations.leaveOperation(located, ctx);
+			}
+			case OpNode op when isQuotient(op) -> {
+				// The quotient as the unfused (truncate a b) or (floor a b) divides, over
+				// the operands' values: exact integers through _big_fdiv, a float or a
+				// ratio as the generic conversion takes it.
+				WasmUncaughtLocations.Operation located = WasmUncaughtLocations.enterOperation(op.source(), op.owner(),
+						ctx);
+				int aSlot = ctx.allocTemp();
+				int bSlot = ctx.allocTemp();
+				emitFallback(op.args().get(0), ctx);
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(aSlot);
+				emitFallback(op.args().get(1), ctx);
+				ctx.writer.write(Instruction.SET_LOCAL);
+				ctx.writer.writeUnsignedLeb128(bSlot);
+				WasmOperandTypes.withOperator(ctx, op.op(),
+						() -> WasmIntConvCompiler.emitQuotientOfSlots(op.op(), ctx, aSlot, bSlot));
 				WasmUncaughtLocations.leaveOperation(located, ctx);
 			}
 			case OpNode op -> {

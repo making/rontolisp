@@ -68,7 +68,7 @@ abstract class Step {
         return quoted.append('\'').toString();
     }
 
-    /** The digits standing at a position, counted as far as a limit. */
+    /** The ASCII digits standing at a position, counted as far as a limit: an offset's. */
     static int digits(Reading in, int at, int limit) {
         int count = 0;
         while (count < limit && in.digit(at + count)) {
@@ -83,6 +83,15 @@ abstract class Step {
             value = value * 10 + (in.text.charAt(i) - '0');
         }
         return value;
+    }
+
+    /** The digits of the decimal style standing at a position, counted as far as a limit: a number's. */
+    static int numerals(Reading in, int at, int limit) {
+        int count = 0;
+        while (count < limit && in.numeral(at + count) >= 0) {
+            count++;
+        }
+        return count;
     }
 
     /** A text written as it is. */
@@ -177,6 +186,7 @@ abstract class Step {
                         + " exceeds the maximum print width of " + most);
             }
             StringBuilder text = out.text;
+            int mark = text.length();
             if (value >= 0) {
                 if (sign == SignStyle.ALWAYS || (sign == SignStyle.EXCEEDS_PAD && digits.length() > least)) {
                     text.append('+');
@@ -193,6 +203,9 @@ abstract class Step {
                 text.append('0');
             }
             text.append(digits);
+            if (DateTimeFormatter.decimals()) {
+                out.localize(mark);
+            }
             return true;
         }
 
@@ -216,8 +229,17 @@ abstract class Step {
                 return ~at;
             }
             char c = in.text.charAt(at);
-            boolean plus = c == '+';
-            boolean minus = c == '-';
+            char plusSign = '+';
+            char minusSign = '-';
+            if (DateTimeFormatter.decimals()) {
+                if (in.decimals != null) {
+                    plusSign = in.decimals.getPositiveSign();
+                    minusSign = in.decimals.getNegativeSign();
+                }
+            }
+            // a sign is the decimal style's, the positive one first where the two are one
+            boolean plus = c == plusSign;
+            boolean minus = !plus && c == minusSign;
             if (plus || minus) {
                 if (follows || !signed(plus, in.strict)) {
                     return ~at;
@@ -231,7 +253,7 @@ abstract class Step {
             int low = exact ? least : 1;
             int high = exact ? most : 9;
             int kept = ended ? 0 : reserved;
-            int available = digits(in, at, high + kept);
+            int available = numerals(in, at, high + kept);
             int count = Math.min(high, Math.max(low, available - kept));
             if (available < count) {
                 return ~at;
@@ -240,7 +262,7 @@ abstract class Step {
             long limit = minus ? Long.MIN_VALUE : -Long.MAX_VALUE;
             long read = 0;
             for (int i = 0; i < count; i++) {
-                int digit = in.text.charAt(at + i) - '0';
+                int digit = in.numeral(at + i);
                 if (read < (limit + digit) / 10) {
                     count = i;
                     break;
@@ -326,10 +348,14 @@ abstract class Step {
                 shown = Math.abs(value % most);
             }
             String digits = Long.toString(shown);
+            int mark = out.text.length();
             for (int i = digits.length(); i < least; i++) {
                 out.text.append('0');
             }
             out.text.append(digits);
+            if (DateTimeFormatter.decimals()) {
+                out.localize(mark);
+            }
             return true;
         }
 
@@ -452,10 +478,14 @@ abstract class Step {
                 length--;
             }
             if (length > 0) {
+                int mark = out.text.length();
                 if (point) {
                     out.text.append('.');
                 }
                 out.text.append(digits, 0, length);
+                if (DateTimeFormatter.decimals()) {
+                    out.localize(mark);
+                }
             }
             return true;
         }
@@ -464,24 +494,31 @@ abstract class Step {
             int low = in.strict ? least : 0;
             int high = in.strict ? most : 9;
             int start = at;
-            if (point ? at >= in.length || in.text.charAt(at) != '.' : at >= in.length) {
+            char separator = '.';
+            if (DateTimeFormatter.decimals()) {
+                if (in.decimals != null) {
+                    separator = in.decimals.getDecimalSeparator();
+                }
+            }
+            if (point ? at >= in.length || in.text.charAt(at) != separator : at >= in.length) {
                 // no point, or the text's end: no field (a JDK's answer)
                 return low > 0 ? ~at : at;
             }
             if (point) {
                 at++;
             }
-            int count = digits(in, at, high);
+            int count = numerals(in, at, high);
             if (count < low) {
                 return ~at;
             }
             ValueRange range = field.range();
             long scale = 1;
+            long read = 0;
             for (int i = 0; i < count; i++) {
                 scale *= 10;
+                read = read * 10 + in.numeral(at + i);
             }
-            long value = range.getMinimum()
-                    + number(in, at, count) * (range.getMaximum() - range.getMinimum() + 1) / scale;
+            long value = range.getMinimum() + read * (range.getMaximum() - range.getMinimum() + 1) / scale;
             return in.put(field, value, start, at + count);
         }
 
@@ -584,6 +621,11 @@ abstract class Step {
                     best(in, at, full, first, null, found);
                     best(in, at, brief, first, null, found);
                     best(in, at, narrow, first, null, found);
+                    if (field == ChronoField.ERA && in.texts != 0 && found[1] <= 2 && in.matches(at, "CE")) {
+                        // English reads the root's CE too, but not its BCE (a JDK 25's answer)
+                        found[0] = 1;
+                        found[1] = 2;
+                    }
                     any = full != null && in.strict;
                 }
             }
@@ -811,7 +853,13 @@ abstract class Step {
         }
     }
 
-    /** An offset as GMT and the hours, minutes and seconds from it, in full or short. */
+    /**
+     * An offset as GMT and the hours, minutes and seconds from it, in full or short. Read
+     * as a JDK 25 reads it: no part is checked against its range; in full the hours and
+     * the minutes are two digits each, read a pair at a time where the text may already
+     * have ended (an index error, as a JDK's), the seconds only where they stand whole;
+     * short, an hour of one digit or two and the minutes and seconds where they stand.
+     */
     static final class GmtOffset extends Step {
 
         final boolean full;
@@ -847,6 +895,26 @@ abstract class Step {
             return true;
         }
 
+        /** The character at an index, where the text may have ended: a JDK's index error. */
+        private static char at(Reading in, int index) {
+            if (index >= in.length) {
+                throw new StringIndexOutOfBoundsException("Index " + index + " out of bounds for length " + in.length);
+            }
+            return in.text.charAt(index);
+        }
+
+        /** Two digits read at a position, the text's end an index error: their value, or -1. */
+        private static int two(Reading in, int index) {
+            char tens = at(in, index);
+            char ones = at(in, index + 1);
+            return tens >= '0' && tens <= '9' && ones >= '0' && ones <= '9' ? (tens - '0') * 10 + ones - '0' : -1;
+        }
+
+        /** A colon and two digits standing whole at a position: their value, or -1. */
+        private static int part(Reading in, int index) {
+            return index + 3 <= in.length && in.text.charAt(index) == ':' ? two(in, index + 1) : -1;
+        }
+
         int parse(Reading in, int at) {
             if (!in.matches(at, "GMT")) {
                 return ~at;
@@ -857,28 +925,39 @@ abstract class Step {
             }
             boolean negative = in.text.charAt(position) == '-';
             position++;
-            int count = digits(in, position, 2);
-            if (count == 0 || (full && count < 2)) {
-                return ~at;
+            int hours;
+            int minutes = -1;
+            if (full) {
+                hours = two(in, position);
+                if (hours < 0 || at(in, position + 2) != ':') {
+                    return ~at;
+                }
+                minutes = two(in, position + 3);
+                if (minutes < 0) {
+                    return ~at;
+                }
+                position += 5;
             }
-            int hours = (int) number(in, position, count);
-            position += count;
-            int minutes = 0;
-            int seconds = 0;
-            int value = Offset.pair(in, position, true);
-            if (value >= 0) {
-                minutes = value;
-                position += 3;
-                int second = Offset.pair(in, position, true);
-                if (second >= 0) {
-                    seconds = second;
+            else {
+                char first = at(in, position);
+                if (first < '0' || first > '9') {
+                    return ~at;
+                }
+                hours = first - '0';
+                position++;
+                if (in.digit(position)) {
+                    hours = hours * 10 + in.text.charAt(position++) - '0';
+                }
+                minutes = part(in, position);
+                if (minutes >= 0) {
                     position += 3;
                 }
             }
-            else if (full) {
-                return ~at;
+            int seconds = minutes >= 0 ? part(in, position) : -1;
+            if (seconds >= 0) {
+                position += 3;
             }
-            int total = hours * 3600 + minutes * 60 + seconds;
+            int total = hours * 3600 + Math.max(minutes, 0) * 60 + Math.max(seconds, 0);
             return in.put(ChronoField.OFFSET_SECONDS, negative ? -total : total, at, position);
         }
 
@@ -1107,8 +1186,10 @@ abstract class Step {
         }
 
         int parse(Reading in, int at) {
+            // read in the formatter's decimal style, though it is written in the standard one
             Reading read = new Reading(in.text, in.texts);
             read.length = in.length;
+            read.decimals = in.decimals;
             int end = form(digits).parse(read, at);
             if (end < 0) {
                 return end;

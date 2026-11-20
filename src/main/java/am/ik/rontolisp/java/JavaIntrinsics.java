@@ -220,7 +220,8 @@ final class JavaIntrinsics {
 	/** The letters of a pattern each question of Patterns asks for. */
 	private static final Map<String, String> PATTERN_LETTERS = Map.of("java.time.format.Patterns.weeks()", "YwWec",
 			"java.time.format.Patterns.quarters()", "Qq", "java.time.format.Patterns.julian()", "g",
-			"java.time.format.Patterns.zones()", "zv", "java.time.format.Patterns.periods()", "B");
+			"java.time.format.Patterns.zones()", "zv", "java.time.format.Patterns.periods()", "B",
+			"java.time.format.Patterns.localizedOffsets()", "OZ");
 
 	/**
 	 * The questions answered by whether the program makes an instance of a class of the
@@ -234,6 +235,23 @@ final class JavaIntrinsics {
 			"java.time.format.Step.zoneTexts()", "java.time.format.Step.ZoneText");
 
 	private static final String PARSED_OTHERS = "java.time.format.Parsed.others()";
+
+	/**
+	 * The questions answered by whether the program reaches a method of the library: the
+	 * characters of a formatter's numbers where it can give one a decimal style, the
+	 * cutting of the fields read where it can name the fields to resolve.
+	 */
+	private static final Map<String, String> REACHES = Map.of("java.time.format.DateTimeFormatter.decimals()",
+			FORMATTER + ".withDecimalStyle", "java.time.format.Parsed.filtered()", FORMATTER + ".withResolverFields",
+			"java.time.format.Parsed.lenients()", FORMATTER + ".withResolverStyle");
+
+	/**
+	 * Whether reaching a method of the library, by its class and name, answers a
+	 * question.
+	 */
+	static boolean watched(String member) {
+		return REACHES.containsValue(member);
+	}
 
 	private static final String ZONED = "java.time.ZonedDateTime";
 
@@ -256,7 +274,9 @@ final class JavaIntrinsics {
 			default -> CALENDARS.contains(member) ? Boolean.valueOf(lowering.asksCalendars())
 					: PATTERN_LETTERS.containsKey(member)
 							? Boolean.valueOf(lowering.namesLetter(PATTERN_LETTERS.get(member)))
-							: MADE.containsKey(member) ? Boolean.valueOf(lowering.makesClass(MADE.get(member))) : null;
+							: MADE.containsKey(member) ? Boolean.valueOf(lowering.makesClass(MADE.get(member)))
+									: REACHES.containsKey(member)
+											? Boolean.valueOf(lowering.reaches(REACHES.get(member))) : null;
 		};
 	}
 
@@ -1619,6 +1639,15 @@ final class JavaIntrinsics {
 		return call("<=", integer(least), number, integer(most));
 	}
 
+	/**
+	 * {@code Math.floorDiv}: the floored quotient wrapped to its type, each operand
+	 * asserted of its own as an operator's are ({@link JavaForms#known}).
+	 */
+	private static LispVal floorDiv(Primitive type, Primitive divisor, JavaEmitter.Invocation call) {
+		return JavaForms.wrap(type, call("values",
+				call("floor", JavaForms.known(type, call.argument(0)), JavaForms.known(divisor, call.argument(1)))));
+	}
+
 	private static JavaClass math(Builder builder) {
 		Primitive i = Primitive.INT;
 		Primitive l = Primitive.LONG;
@@ -1644,14 +1673,8 @@ final class JavaIntrinsics {
 					(lowering, call) -> call("*", call.argument(0), new LispDouble(0.017453292519943295)), d)
 			.statik("toDegrees", d, (lowering, call) -> call("*", call.argument(0), new LispDouble(57.29577951308232)),
 					d)
-			.statik("floorDiv", i,
-					(lowering, call) -> JavaForms.wrap(i,
-							call("values", call("floor", call.argument(0), call.argument(1)))),
-					i, i)
-			.statik("floorDiv", l,
-					(lowering, call) -> JavaForms.wrap(l,
-							call("values", call("floor", call.argument(0), call.argument(1)))),
-					l, l)
+			.statik("floorDiv", i, (lowering, call) -> floorDiv(i, i, call), i, i)
+			.statik("floorDiv", l, (lowering, call) -> floorDiv(l, l, call), l, l)
 			.statik("floorMod", i, host("mod"), i, i)
 			.statik("floorMod", l, host("mod"), l, l);
 		for (String name : List.of("sqrt", "cbrt", "floor", "ceil", "rint", "exp", "log", "log10", "sin", "cos", "tan",
@@ -1707,11 +1730,7 @@ final class JavaIntrinsics {
 			Primitive wide = operands.get(0);
 			Primitive divisor = operands.get(1);
 			if (divisor != wide) {
-				builder
-					.statik("floorDiv", wide,
-							(lowering, call) -> JavaForms.wrap(wide,
-									call("values", call("floor", call.argument(0), call.argument(1)))),
-							wide, divisor)
+				builder.statik("floorDiv", wide, (lowering, call) -> floorDiv(wide, divisor, call), wide, divisor)
 					.statik("floorMod", divisor, host("mod"), wide, divisor);
 			}
 			builder
@@ -2112,6 +2131,8 @@ final class JavaIntrinsics {
 		MADE.forEach((question, made) -> natives.put(question,
 				(lowering, call) -> lowering.makesClass(made) ? JavaForms.T : JavaForms.NIL));
 		natives.put(PARSED_OTHERS, (lowering, call) -> lowering.makesOtherFields() ? JavaForms.T : JavaForms.NIL);
+		REACHES.forEach((question, member) -> natives.put(question,
+				(lowering, call) -> lowering.reaches(member) ? JavaForms.T : JavaForms.NIL));
 		natives.put("java.time.format.Step.region0(String)", library(ZONE_ID, "region"));
 		natives.put("java.time.format.Step.held0()", library(ZONE_CHANGES, "held"));
 		natives.put("java.time.format.Step.regional()",

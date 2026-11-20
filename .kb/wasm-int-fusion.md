@@ -243,6 +243,47 @@ fast path alone, with no `block $bail` and no fallback: in `tryCompile`, `tryCom
 - Measured with the Java programs of [java-frontend.md](java-frontend.md), "Numbers", where
   the numbers are.
 
+## Quotients of two integers (2026-11-20, `.todo/k68`)
+
+**`(truncate a b)` and `(floor a b)` whose operands read no leaf that can bail are an
+operation of the tree** (`emitQuotient`): `i64.div_s`, and for `floor` one step down where the
+remainder `x - q*y` (exact) differs in sign from the divisor. `(values (floor a b))`, Java's
+`floorDiv`, reads as its `floor`. A literal divisor is an `i64.const` (Cranelift multiplies).
+
+- **A divisor whose range holds 0** is tested and calls `_div_zero` (`unreachable` outside EH
+  mode), the report `_fx_rem` and the generic division make; `signalsOnIntegers`, the order
+  guard (`pendingGuard`, `divides`) and the fold treat a quotient as `mod`/`rem`.
+- **`MIN_VALUE / -1`** (2^63, and `i64.div_s`'s trap): where the operands' ranges hold it, a
+  bail; under a mask (`emitFastWrapped`, Java's `long` `/` and `floorDiv`) the negation, which
+  wraps to the bits the mask keeps. An `int`'s range never holds it.
+- **The fallback** is the unfused quotient over the operands' values
+  (`WasmIntConvCompiler.emitQuotientOfSlots`: `_big_fdiv` for two exact integers, the float and
+  ratio arms otherwise, no i31 arm).
+- **Over a leaf that can bail it stays a leaf** (`readsBailingLeaf`: an undeclared expression
+  leaf, a shadowed local, a read of an unpinned array, a cell; classification rolls back what
+  its operands registered): unfused it divides two i31s inline (`.kb/linalg-simd.md`, "Two
+  integers"), and fused its generic division went into the fallback and into every order
+  probe -- `gguf::%type-bytes` 598 -> 919 B (through `compileRawStore`), `%java-nearest-binary`
+  5,064 -> 5,226 B, bignums there bailing every time. Not taken with it: `(+ s (truncate i d))`
+  over a parameter `d` in a counted loop, 30,000,000 steps 1.25 -> 0.94 s.
+- **Measured** (base `b089a691d`, wasmtime 49, user seconds best of three on a loaded box):
+  a method of one `int` `a / b` 161 -> 96 B, of one `long` 715 -> 102 B; the zone reader
+  (`ZoneChanges.region`, `find`, `rule`, `written`, `number`) 12,765 -> 10,951 B (`rule` 2,208
+  -> 1,194, `region` 6,975 -> 6,175), `ruled` 3,028 -> 2,841 with `floorDiv`'s operands
+  asserted (`JavaIntrinsics.floorDiv`; 3,028 without); `ZonedDateTime.of(..,
+  ZoneId.of("Europe/Paris")).plusHours(1)` 166,183 -> 157,926; `ZoneLoop` (k64's artefact)
+  114,673 -> 106,721, 3.10 -> 2.57 s; YAVI `Booking.java` 1,130,697 -> 1,119,167, `Member.java`
+  646,656 -> 644,446; no function of these grew; `SieveLoop`, `LongSum` unchanged.
+  `DivLoop` (`.todo/artefacts/k68-wasm-a-quotient-of-declared-integers/`: 30,000,000 `int` and
+  `long` `/` over computed divisors) 15,538 -> 11,676 B, 1.80 -> 0.67 s. 11 Starlark programs
+  of j54, the Scheme examples, 15 Lisp examples naming `floor`/`truncate`/`round` and
+  `llm.lisp` the same bytes but `collatz.scm` 48,248 -> 48,195.
+- Pins: `testsupport/DeclaredIntegerProgram` (`quot`, `qf`: `MIN_VALUE / -1` masked at 32 and
+  64 bits and exact, a zero divisor, a float and a ratio through the fallback; JVM, P1 and the
+  component), `FastPathEvaluationOrderFixture` (a zero divisor before a later leaf, a symbol
+  dividend), ci-spec `declared-integer-ranges-answer-what-undeclared-code-answers`, java-spec
+  `a-long-wraps-at-64-bits` (`Long.MIN_VALUE / -1` and `floorDiv` of it).
+
 ## A leaf compiled twice (2026-11-09, `.todo/j36`)
 
 **A leaf defun runs nothing that can run user code, so what holds when it starts holds until it
@@ -308,8 +349,8 @@ measured 28 KB of `update-sha256-block`'s 60 KB). The test runs once per call, a
   `rontolisp:async-defun` -- the name never enters `Ctx.inlinableDefuns` because a call must
   answer the `TYPE_FUTURE` its state machine builds (`.kb/async-await.md`).
 - Division (`/`) is never fused (exact ratios).
-- `floor`/`truncate` of two integers are not ops (measured 2026-11-16): the site's inline i31
-  division already beats a fused `mod` (`.kb/linalg-simd.md`, "Two integers").
+- A `floor`/`truncate` of two integers over a leaf that can bail is a leaf, not an op (below,
+  "Quotients of two integers").
 
 ## The generic helpers' i31 head (the unfused single op)
 

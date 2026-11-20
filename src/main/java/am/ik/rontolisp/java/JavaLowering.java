@@ -1005,6 +1005,11 @@ final class JavaLowering implements JavaEmitter.Context {
 				this.classes.reachedFrom.put(method, this.reaching);
 			}
 			use(method.owner);
+			String member = method.owner.name + "." + method.name;
+			if (JavaIntrinsics.watched(member) && this.classes.reachedMembers.add(member)) {
+				// what a question this member answers decided is lowered again
+				this.classes.changed();
+			}
 			if (!this.classes.calendars && method.owner.name.equals(TEMPORAL_QUERIES)
 					&& method.name.equals("chronology")) {
 				// the classes of java.time answer the question of a calendar again
@@ -3692,6 +3697,11 @@ final class JavaLowering implements JavaEmitter.Context {
 			}
 		}
 		return false;
+	}
+
+	@Override
+	public boolean reaches(String member) {
+		return this.classes.session || this.classes.reachedMembers.contains(member);
 	}
 
 	@Override

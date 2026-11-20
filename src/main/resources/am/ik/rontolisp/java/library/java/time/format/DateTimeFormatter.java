@@ -3,15 +3,23 @@
 // (.kb/java-frontend-provenance.md). Lowered with every program that names it.
 //
 // A formatter: parts that write a date or a time and read one back (Step), the locale
-// whose words they write, how what is read is made a date and a time (Parsed), and a
-// zone that overrides the value's. A text is read whole first, then its fields are made
-// a date and a time; the three kinds of refusal and their words are a JDK's: where the
-// text stops being the form, where it goes on past it, and why the fields make no value.
-// The ISO constants are the forms of ISO-8601 the API documentation gives; each is made
-// only in a program that reads it (wanted(), a question the compiler answers).
+// whose words they write, the characters of its numbers (DecimalStyle), how what is read
+// is made a date and a time (Parsed) and of which fields, and a zone that overrides the
+// value's. A text is read first, then its fields are made a date and a time; the three
+// kinds of refusal and their words are a JDK's: where the text stops being the form,
+// where it goes on past it, and why the fields make no value. Which of them a reading
+// from a position and a java.text.Format throw, wrap or note in the position are a JDK
+// 25's answers. The ISO constants are the forms of ISO-8601 the API documentation gives;
+// each is made only in a program that reads it (wanted(), a question the compiler
+// answers); a program that never names a decimal style or the fields to resolve has
+// nothing of them (decimals(), Parsed.filtered()).
 package java.time.format;
 
 import java.io.IOException;
+import java.text.FieldPosition;
+import java.text.Format;
+import java.text.ParseException;
+import java.text.ParsePosition;
 import java.time.DateTimeException;
 import java.time.Instant;
 import java.time.Period;
@@ -26,8 +34,12 @@ import java.time.temporal.TemporalAccessor;
 import java.time.temporal.TemporalField;
 import java.time.temporal.TemporalQuery;
 import java.time.temporal.TemporalQueries;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 
 public final class DateTimeFormatter {
 
@@ -151,17 +163,33 @@ public final class DateTimeFormatter {
 
     private final Locale locale;
 
+    /** The characters of the numbers, or null for the standard ones. */
+    private final DecimalStyle decimals;
+
     private final ResolverStyle style;
+
+    /**
+     * The fields a text's fields are cut to before they are resolved, each once, or null
+     * for all: an array, so that a program naming them hashes no field (a set of them
+     * made only where it is asked for).
+     */
+    private final TemporalField[] resolverFields;
+
+    /** The set getResolverFields answers, made the first time it is asked. */
+    private Set<TemporalField> resolverSet;
 
     private final ZoneId zone;
 
     /** The calendar, or null: ISO's for the ISO forms of a date, any a program gave. */
     private final Chronology chronology;
 
-    DateTimeFormatter(Step.Group root, Locale locale, ResolverStyle style, ZoneId zone, Chronology chronology) {
+    DateTimeFormatter(Step.Group root, Locale locale, DecimalStyle decimals, ResolverStyle style,
+            TemporalField[] resolverFields, ZoneId zone, Chronology chronology) {
         this.root = root;
         this.locale = locale;
+        this.decimals = decimals;
         this.style = style;
+        this.resolverFields = resolverFields;
         this.zone = zone;
         this.chronology = chronology;
     }
@@ -171,6 +199,13 @@ public final class DateTimeFormatter {
      * so a constant no program reads is never made, nor the parts only it needs.
      */
     static native boolean wanted();
+
+    /**
+     * Whether the program can give a formatter a decimal style of its own: answered by
+     * whether it reaches withDecimalStyle, so a program that cannot writes and reads the
+     * standard characters with nothing of the others.
+     */
+    static native boolean decimals();
 
     private static DateTimeFormatter rfc1123() {
         return new DateTimeFormatterBuilder().parseCaseInsensitive()
@@ -264,23 +299,37 @@ public final class DateTimeFormatter {
 
     public DateTimeFormatter withLocale(Locale locale) {
         Objects.requireNonNull(locale, "locale");
-        return locale.equals(this.locale) ? this : new DateTimeFormatter(root, locale, style, zone, chronology);
+        return locale.equals(this.locale) ? this
+                : new DateTimeFormatter(root, locale, decimals, style, resolverFields, zone, chronology);
     }
 
     /**
      * The formatter of a locale and of what the locale names: a calendar, a zone, a style
      * of digits. None of the locales the library has names one, so the calendar is the
-     * locale's own, ISO's.
+     * locale's own, ISO's, and the digits are the standard ones.
      */
     public DateTimeFormatter localizedBy(Locale locale) {
         if (locale == null) {
             throw new NullPointerException(
                     "Cannot invoke \"java.util.Locale.getUnicodeLocaleType(String)\" because \"locale\" is null");
         }
-        if (locale.equals(this.locale) && chronology == IsoChronology.INSTANCE) {
+        if (locale.equals(this.locale) && chronology == IsoChronology.INSTANCE && decimals == null) {
             return this;
         }
-        return new DateTimeFormatter(root, locale, style, zone, IsoChronology.INSTANCE);
+        return new DateTimeFormatter(root, locale, null, style, resolverFields, zone, IsoChronology.INSTANCE);
+    }
+
+    public DecimalStyle getDecimalStyle() {
+        return decimals != null ? decimals : DecimalStyle.STANDARD;
+    }
+
+    public DateTimeFormatter withDecimalStyle(DecimalStyle decimalStyle) {
+        Objects.requireNonNull(decimalStyle, "decimalStyle");
+        if (decimalStyle.equals(getDecimalStyle())) {
+            return this;
+        }
+        return new DateTimeFormatter(root, locale, decimalStyle.equals(DecimalStyle.STANDARD) ? null : decimalStyle,
+                style, resolverFields, zone, chronology);
     }
 
     public ResolverStyle getResolverStyle() {
@@ -289,7 +338,56 @@ public final class DateTimeFormatter {
 
     public DateTimeFormatter withResolverStyle(ResolverStyle resolverStyle) {
         Objects.requireNonNull(resolverStyle, "resolverStyle");
-        return resolverStyle == style ? this : new DateTimeFormatter(root, locale, resolverStyle, zone, chronology);
+        return resolverStyle == style ? this
+                : new DateTimeFormatter(root, locale, decimals, resolverStyle, resolverFields, zone, chronology);
+    }
+
+    public Set<TemporalField> getResolverFields() {
+        if (resolverSet == null && resolverFields != null) {
+            resolverSet = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(resolverFields)));
+        }
+        return resolverSet;
+    }
+
+    /** The fields a text's fields are cut to before they are resolved; null for all of them. */
+    public DateTimeFormatter withResolverFields(TemporalField... resolverFields) {
+        return resolving(resolverFields);
+    }
+
+    public DateTimeFormatter withResolverFields(Set<TemporalField> resolverFields) {
+        return resolving(resolverFields == null ? null : resolverFields.toArray(new TemporalField[0]));
+    }
+
+    /** The formatter of these fields to resolve, each once; this one where they are the same. */
+    private DateTimeFormatter resolving(TemporalField[] given) {
+        TemporalField[] fields = null;
+        if (given != null) {
+            fields = new TemporalField[given.length];
+            int count = 0;
+            for (TemporalField field : given) {
+                if (Parsed.among(field, fields, count) < 0) {
+                    fields[count++] = field;
+                }
+            }
+            fields = Arrays.copyOf(fields, count);
+        }
+        if (fields == null ? resolverFields == null : resolverFields != null && same(fields, resolverFields)) {
+            return this;
+        }
+        return new DateTimeFormatter(root, locale, decimals, style, fields, zone, chronology);
+    }
+
+    /** Whether two arrays of fields, each holding a field once, hold the same ones. */
+    private static boolean same(TemporalField[] one, TemporalField[] other) {
+        if (one.length != other.length) {
+            return false;
+        }
+        for (TemporalField field : one) {
+            if (Parsed.among(field, other, other.length) < 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
     public Chronology getChronology() {
@@ -299,7 +397,7 @@ public final class DateTimeFormatter {
     /** The calendar a text is read in and a value written in; the library has ISO's alone. */
     public DateTimeFormatter withChronology(Chronology chronology) {
         return Objects.equals(chronology, this.chronology) ? this
-                : new DateTimeFormatter(root, locale, style, zone, chronology);
+                : new DateTimeFormatter(root, locale, decimals, style, resolverFields, zone, chronology);
     }
 
     public ZoneId getZone() {
@@ -307,12 +405,16 @@ public final class DateTimeFormatter {
     }
 
     public DateTimeFormatter withZone(ZoneId zone) {
-        return Objects.equals(zone, this.zone) ? this : new DateTimeFormatter(root, locale, style, zone, chronology);
+        return Objects.equals(zone, this.zone) ? this
+                : new DateTimeFormatter(root, locale, decimals, style, resolverFields, zone, chronology);
     }
 
     public String format(TemporalAccessor temporal) {
         Objects.requireNonNull(temporal, "temporal");
         Writing out = new Writing(zoned(temporal), Texts.kind(locale), chronology);
+        if (decimals()) {
+            out.decimals = decimals;
+        }
         root.print(out);
         return out.text.toString();
     }
@@ -381,7 +483,66 @@ public final class DateTimeFormatter {
                 // the next query is asked
             }
         }
-        throw new DateTimeException("Unable to convert parsed text using any of the specified queries");
+        throw refusal(text, new DateTimeException("Unable to convert parsed text using any of the specified queries"));
+    }
+
+    /**
+     * The text read from a position and resolved, the position moved past what was read:
+     * an index error is thrown as it is, any other refusal as a parse's.
+     */
+    public TemporalAccessor parse(CharSequence text, ParsePosition position) {
+        Objects.requireNonNull(text, "text");
+        Objects.requireNonNull(position, "position");
+        try {
+            Parsed parsed = unresolved(text, position);
+            if (parsed == null || position.getErrorIndex() >= 0) {
+                // an error index the position already held is a failure too (a JDK's answer)
+                throw new DateTimeParseException(shown(text) + " at index " + position.getErrorIndex(), text,
+                        position.getErrorIndex());
+            }
+            return resolved(parsed);
+        }
+        catch (DateTimeParseException | IndexOutOfBoundsException refused) {
+            throw refused;
+        }
+        catch (RuntimeException refused) {
+            throw refusal(text, refused);
+        }
+    }
+
+    /**
+     * The fields read from a position, not resolved, the position moved past them; null
+     * where the text is no such form, the index it failed at noted in the position.
+     */
+    public TemporalAccessor parseUnresolved(CharSequence text, ParsePosition position) {
+        Objects.requireNonNull(text, "text");
+        Objects.requireNonNull(position, "position");
+        return unresolved(text, position);
+    }
+
+    Parsed unresolved(CharSequence text, ParsePosition position) {
+        int index = position.getIndex();
+        if (index < 0 || index > text.length()) {
+            throw new StringIndexOutOfBoundsException("Index " + index + " out of bounds for length " + text.length());
+        }
+        Reading in = reading(text);
+        int end = root.parse(in, index);
+        if (end < 0) {
+            position.setErrorIndex(~end);
+            return null;
+        }
+        position.setIndex(end);
+        return new Parsed(in);
+    }
+
+    /** A java.text.Format writing and reading through this formatter; one reading a query's value. */
+    public Format toFormat() {
+        return new ClassicFormat(this, null);
+    }
+
+    public Format toFormat(TemporalQuery<?> parseQuery) {
+        Objects.requireNonNull(parseQuery, "parseQuery");
+        return new ClassicFormat(this, parseQuery);
     }
 
     private static String shown(CharSequence text) {
@@ -393,11 +554,17 @@ public final class DateTimeFormatter {
         return new DateTimeParseException(shown(text) + ": " + cause.getMessage(), text, 0, cause);
     }
 
-    private Parsed parsed(CharSequence text) {
+    private Reading reading(CharSequence text) {
         Reading in = new Reading(text, Texts.kind(locale));
-        int end;
+        if (decimals()) {
+            in.decimals = decimals;
+        }
+        return in;
+    }
+
+    private Parsed parsed(CharSequence text) {
         try {
-            end = root.parse(in, 0);
+            return whole(text);
         }
         catch (DateTimeParseException refused) {
             throw refused;
@@ -405,24 +572,114 @@ public final class DateTimeFormatter {
         catch (RuntimeException refused) {
             throw refusal(text, refused);
         }
+    }
+
+    /**
+     * The whole text read and resolved: a refusal where the text stops being the form or
+     * goes on past it, what a part or the resolving throws as it is.
+     */
+    Parsed whole(CharSequence text) {
+        Reading in = reading(text);
+        int end = root.parse(in, 0);
         if (end < 0) {
             throw new DateTimeParseException(shown(text) + " at index " + ~end, text, ~end);
         }
         if (end < text.length()) {
             throw new DateTimeParseException(shown(text) + ", unparsed text found at index " + end, text, end);
         }
-        Parsed parsed = new Parsed(in);
-        try {
-            parsed.resolve(style, zone);
-        }
-        catch (RuntimeException refused) {
-            throw refusal(text, refused);
-        }
+        return resolved(new Parsed(in));
+    }
+
+    Parsed resolved(Parsed parsed) {
+        parsed.resolve(style, zone, resolverFields);
         return parsed;
     }
 
     public String toString() {
         return root.inner();
+    }
+
+    /**
+     * A formatter as a java.text.Format: what it writes, what it reads resolved or a
+     * query's value. Which refusal becomes which ParseException, and what a reading from
+     * a position notes, are a JDK 25's answers.
+     */
+    static final class ClassicFormat extends Format {
+
+        private final DateTimeFormatter formatter;
+
+        private final TemporalQuery<?> query;
+
+        ClassicFormat(DateTimeFormatter formatter, TemporalQuery<?> query) {
+            this.formatter = formatter;
+            this.query = query;
+        }
+
+        public StringBuffer format(Object obj, StringBuffer toAppendTo, FieldPosition pos) {
+            Objects.requireNonNull(obj, "obj");
+            Objects.requireNonNull(toAppendTo, "toAppendTo");
+            Objects.requireNonNull(pos, "pos");
+            if (!(obj instanceof TemporalAccessor temporal)) {
+                throw new IllegalArgumentException("Format target must implement TemporalAccessor");
+            }
+            pos.setBeginIndex(0);
+            pos.setEndIndex(0);
+            try {
+                toAppendTo.append(formatter.format(temporal));
+            }
+            catch (RuntimeException refused) {
+                throw new IllegalArgumentException(refused.getMessage(), refused);
+            }
+            return toAppendTo;
+        }
+
+        public Object parseObject(String text) throws ParseException {
+            Objects.requireNonNull(text, "text");
+            try {
+                return query == null ? formatter.whole(text) : formatter.parse(text, query);
+            }
+            catch (DateTimeParseException refused) {
+                throw new ParseException(refused.getMessage(), refused.getErrorIndex());
+            }
+            catch (RuntimeException refused) {
+                ParseException failed = new ParseException(refused.getMessage(), 0);
+                failed.initCause(refused);
+                throw failed;
+            }
+        }
+
+        public Object parseObject(String text, ParsePosition pos) {
+            Objects.requireNonNull(text, "text");
+            if (pos == null) {
+                throw new NullPointerException(
+                        "Cannot invoke \"java.text.ParsePosition.getErrorIndex()\" because \"pos\" is null");
+            }
+            Parsed unresolved;
+            try {
+                unresolved = formatter.unresolved(text, pos);
+            }
+            catch (RuntimeException refused) {
+                return failed(pos);
+            }
+            if (unresolved == null) {
+                return failed(pos);
+            }
+            try {
+                Parsed resolved = formatter.resolved(unresolved);
+                return query == null ? resolved : query.queryFrom(resolved);
+            }
+            catch (RuntimeException refused) {
+                return failed(pos);
+            }
+        }
+
+        /** No value: the position's error index made 0 where it is none. */
+        private static Object failed(ParsePosition pos) {
+            if (pos.getErrorIndex() < 0) {
+                pos.setErrorIndex(0);
+            }
+            return null;
+        }
     }
 
     /** A value that has no zone of its own told the formatter's. */

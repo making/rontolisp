@@ -29,6 +29,10 @@ public enum DayOfWeek implements TemporalAccessor, TemporalAdjuster {
     }
 
     public static DayOfWeek from(TemporalAccessor temporal) {
+        if (temporal == null) {
+            throw new NullPointerException(
+                    "Cannot invoke \"java.time.temporal.TemporalAccessor.get(java.time.temporal.TemporalField)\" because \"temporal\" is null");
+        }
         if (temporal instanceof DayOfWeek day) {
             return day;
         }

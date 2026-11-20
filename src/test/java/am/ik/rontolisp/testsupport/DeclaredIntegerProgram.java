@@ -15,8 +15,10 @@ public final class DeclaredIntegerProgram {
 	 * fixnum alone proves no bound, so loose doubles a bignum. Java's int and long
 	 * arithmetic, which is what the front end lowers to. A handler-case clause's variable
 	 * is no outer binding of its name: not hc's raw e, not its celled k, not nd's
-	 * declared n. The values are the interpreter's, and a JDK's for the hash and the
-	 * shifts.
+	 * declared n. Java's quotients: an int's, a long's under its mask and the exact one,
+	 * each over MIN_VALUE / -1, and a zero divisor; qf's undeclared dividend takes the
+	 * generic quotient. The values are the interpreter's, and a JDK's for the hash, the
+	 * shifts and the masked quotients.
 	 */
 	public static final String PROGRAM = """
 			(deftype int32 () '(signed-byte 32))
@@ -53,6 +55,11 @@ public final class DeclaredIntegerProgram {
 			(defun nd (n)
 			  (declare (type (integer 0 100) n))
 			  (handler-case (expt 2 n) (:no-error (n) (+ n 1))))
+			(defun quot (a b c)
+			  (declare (type (signed-byte 32) a b) (type (signed-byte 64) c))
+			  (list (%mask-signed-field 32 (the (integer -2147483648 2147483648) (truncate a b)))
+			        (%mask-signed-field 64 (truncate c b)) (truncate c b) (+ 1 (truncate c 7))))
+			(defun qf (x) (+ 6 (truncate x 2)))
 			(print (hash32 "the quick brown fox jumps over the lazy dog"))
 			(print (lanes 9223372036854775807 3))
 			(print (lanes -9223372036854775808 63))
@@ -60,6 +67,10 @@ public final class DeclaredIntegerProgram {
 			(print (loose (expt 2 70)))
 			(print (hc 5))
 			(print (nd 70))
+			(print (quot -2147483648 -1 -9223372036854775808))
+			(print (quot 7 -2 -7))
+			(print (handler-case (quot 1 0 1) (division-by-zero () :zero)))
+			(print (list (qf 7.5) (qf 7/2) (qf (expt 2 70))))
 			""";
 
 	/** What {@link #PROGRAM} prints. */
@@ -70,6 +81,10 @@ public final class DeclaredIntegerProgram {
 			(0 9 10 15)
 			2361183241434822606848
 			("boom" (10) ("cell" 5))
-			1180591620717411303425""";
+			1180591620717411303425
+			(-2147483648 -9223372036854775808 9223372036854775808 -1317624576693539400)
+			(-3 3 3 0)
+			:ZERO
+			(9 7 590295810358705651718)""";
 
 }
