@@ -57,6 +57,11 @@ programs:
 
           static final Object LOCK = new Object();
 
+          // A handler that logs after its response is out holds ORDER from before the response
+          // to its last line: the client sends its next request on the response, and the next
+          // handler, on another thread of the executor, would log first.
+          static final Object ORDER = new Object();
+
           static int count;
 
           static int counting;
@@ -82,8 +87,10 @@ programs:
               public void doFilter(HttpExchange exchange, Chain chain) throws IOException {
                   exchange.getResponseHeaders().add("X-Trail", name);
                   TRAIL.add(name + " in");
-                  chain.doFilter(exchange);
-                  System.out.println("| the filter " + name + " after its chain: " + TRAIL);
+                  synchronized (ORDER) {
+                      chain.doFilter(exchange);
+                      System.out.println("| the filter " + name + " after its chain: " + TRAIL);
+                  }
               }
 
               public String description() {
@@ -131,6 +138,12 @@ programs:
           }
 
           static void request(HttpExchange exchange) throws IOException {
+              synchronized (ORDER) {
+                  answer(exchange);
+              }
+          }
+
+          static void answer(HttpExchange exchange) throws IOException {
               URI uri = exchange.getRequestURI();
               Headers asked = exchange.getRequestHeaders();
               StringBuilder seen = new StringBuilder();
@@ -177,6 +190,12 @@ programs:
           }
 
           static void echo(HttpExchange exchange) throws IOException {
+              synchronized (ORDER) {
+                  repeat(exchange);
+              }
+          }
+
+          static void repeat(HttpExchange exchange) throws IOException {
               byte[] body = exchange.getRequestBody().readAllBytes();
               exchange.getResponseHeaders().add("Content-Type", "application/octet-stream");
               exchange.sendResponseHeaders(200, body.length == 0 ? -1 : body.length);
@@ -313,15 +332,17 @@ programs:
               HttpContext blocked = server.createContext("/blocked", exchange -> text(exchange, 200, "reached"));
               blocked.getFilters().add(new Filter() {
                   public void doFilter(HttpExchange exchange, Chain chain) throws IOException {
-                      if (exchange.getRequestURI().getQuery() == null) {
-                          text(exchange, 403, "stopped by the filter");
-                          return;
-                      }
-                      chain.doFilter(exchange);
-                      log("a chain run again", () -> {
+                      synchronized (ORDER) {
+                          if (exchange.getRequestURI().getQuery() == null) {
+                              text(exchange, 403, "stopped by the filter");
+                              return;
+                          }
                           chain.doFilter(exchange);
-                          return "ran";
-                      });
+                          log("a chain run again", () -> {
+                              chain.doFilter(exchange);
+                              return "ran";
+                          });
+                      }
                   }
 
                   public String description() {
