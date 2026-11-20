@@ -1469,14 +1469,16 @@ class WasmLispCompilerTest {
 		// destination is a parameter nothing pins down, an array at one call and a list
 		// at the other, so both sites keep the wide dispatch and the module carries its
 		// non-array arms. (With arrays at its only call, the type-test fold decides the
-		// wide dispatch without the gate.)
+		// wide dispatch without the gate.) Its arrays are made as the proven ones are, of
+		// a size that may be a list: a literal size is rank 1, and the module then makes
+		// no general array, whose arms the fold drops from both runtimes.
 		String unproven = """
 				(defun sq-work2 (a b)
 				  (fill b 7 :start 1)
 				  (replace a b :start1 1)
 				  (elt a 1))
-				(print (sq-work2 (make-array 8 :element-type '(unsigned-byte 8))
-				                 (make-array 8 :element-type '(unsigned-byte 8))))
+				(defun sq-make (n) (make-array (* 2 n) :element-type '(unsigned-byte 8)))
+				(print (sq-work2 (sq-make 4) (sq-make 4)))
 				(print (sq-work2 (list 1 2 3) (list 4 5 6)))
 				""";
 		assertThat(compileForSize(proven).length).isLessThan(compileForSize(unproven).length - 2000);

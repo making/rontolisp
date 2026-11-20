@@ -1,5 +1,6 @@
 package am.ik.rontolisp.eval;
 
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -22,7 +23,7 @@ import com.oracle.svm.core.annotate.TargetClass;
 final class Target_AsyncRuntime {
 
 	@Substitute
-	static LispFuture run(Function<LispFuture, LispVal> body) {
+	static LispFuture run(Function<LispFuture, LispVal> body, Consumer<Thread> starting) {
 		java.util.concurrent.CompletableFuture<LispVal> result = new java.util.concurrent.CompletableFuture<>();
 		LispFuture future = LispFuture.of(result);
 		// Run to its end before returning: the future is known settled.
@@ -44,9 +45,10 @@ final class Target_AsyncRuntime {
 	}
 
 	@Substitute
-	static LispThread spawnThread(Supplier<LispVal> body, LispVal name) {
+	static LispThread spawnThread(Supplier<LispVal> body, LispVal name, Consumer<Thread> starting) {
 		// no threads in the browser worker: the body runs synchronously to completion
 		// and an already-settled handle is returned (the async-run precedent above).
+		// No thread starts, so STARTING is told none.
 		java.util.concurrent.CompletableFuture<LispVal> result = new java.util.concurrent.CompletableFuture<>();
 		try {
 			result.complete(body.get());

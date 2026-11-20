@@ -95,6 +95,27 @@ what another thread printed meanwhile, and two overlapping expansions left it se
 nothing the program printed afterwards appeared, exit status 0. Pinned by
 `ThreadTest#aCompilerMacroExpandingOnAThreadMutesOnlyThatThread`.
 
+## A program's end ends its threads (interpreter, in process; 2026-11-21, k83)
+A process's end ends every thread of the program (each interpreter thread is a virtual one, a daemon). A
+runner holding the evaluator for one whole program in process has no process to end, so the evaluator keeps
+the threads the program started (`make-thread`, an async body: `AsyncRuntime`'s `starting` hook records one
+before it starts, its body's end forgets it) and `LispEvaluator.stopThreads` ends them: each stops at its
+next call or loop step (`interrupt`; a sleep, a wait or a `mutex-acquire` wakes) by `LispExitSignal`,
+so it runs no cleanup, as a process's end runs none. No thread starts afterwards (a `simple-error`). It
+answers the threads, which a caller may join.
+- **Called by** `RontoLispCli.interpret` when the program did not run off its end (a quit, an uncaught
+  condition: `main` ends the process) and at a Java entry's end, whose lowering has waited for its threads
+  that are no daemons and its servers (`%java-thread-finish`, `%java-http-wait`); `JavaSpecE2eTest`'s
+  interpreter leg always, joining them. NOT at a Lisp program's normal end: a thread that is no daemon (a
+  server's) may hold its process, serving on a thread the program started (clack's `:use-thread`). Not by a
+  REPL buffer, a session's input or `PlaygroundRepl` (a buffer's thread outlives it; the browser starts none).
+- **Left**: a thread stopped between its own `mutex-acquire` and `mutex-release` leaves the mutex held, and a
+  thread retaking it after a wait (`RontoConditionVariable.await`) stays blocked, using no CPU.
+- Found by k81: `java-spec.yaml`'s `threads-wait-for-one-another-again-and-again` ends with a daemon
+  `while (true) counter.incrementAndGet();`, which spun in the surefire fork until it exited (100 s of CPU in
+  103 s); `threads-share-concurrent-collections-and-completable-futures` left parked pool workers. Pinned by
+  that leg: both legs ran into the 300 s limit before the stop.
+
 ## bt2 shim
 `bordeaux-threads.lisp` (ShimLibraries) provides BOTH namespaces of the one built-in
 `bordeaux-threads` system; `BT2` canonical, nickname `BORDEAUX-THREADS-2`. Cross-package IMPORT

@@ -190,6 +190,7 @@ final class WasmArrayCompiler {
 			return;
 		}
 		// dims -> dimsSlot, init -> initSlot
+		WasmIntFusionCompiler.Range integer = integerDimension(args.get(1), ctx);
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int dimsSlot = setTemp(ctx);
 		LispVal init = findInitialElement(args);
@@ -209,7 +210,7 @@ final class WasmArrayCompiler {
 		int initSlot = setTemp(ctx);
 		int dimsArrSlot = ctx.allocTemp();
 		int totalSlot = ctx.allocTemp(); // holds an i31-boxed total element count
-		emitParseDims(ctx, dimsSlot, dimsArrSlot, totalSlot);
+		emitParseDims(ctx, dimsSlot, dimsArrSlot, totalSlot, integer);
 
 		// data = array.new buckets (init, total)
 		getLocal(ctx, initSlot);
@@ -264,12 +265,17 @@ final class WasmArrayCompiler {
 			// an (unsigned-byte 8) request takes above rank 1 -- and the marker instead
 			// REMEMBERS the character element type (elementTypeMarker below), which is
 			// the one trace it leaves. Rank 1 gives 2 - 1 = 1, rank n gives 2 - 0 = 2.
-			i32Const(ctx, elementTypeMarker(ArrayElementTypes.CHARACTER));
-			getBuckets(ctx, dimsArrSlot);
-			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
-			i32Const(ctx, 1);
-			ctx.writer.write(Instruction.I32_EQ);
-			ctx.writer.write(Instruction.I32_SUB);
+			if (integer != null) {
+				i32Const(ctx, elementTypeMarker(ArrayElementTypes.CHARACTER) - 1);
+			}
+			else {
+				i32Const(ctx, elementTypeMarker(ArrayElementTypes.CHARACTER));
+				getBuckets(ctx, dimsArrSlot);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+				i32Const(ctx, 1);
+				ctx.writer.write(Instruction.I32_EQ);
+				ctx.writer.write(Instruction.I32_SUB);
+			}
 		}
 		else {
 			i32Const(ctx, elementTypeMarker(elementTypeCode));
@@ -401,11 +407,12 @@ final class WasmArrayCompiler {
 	// general path. Under --simd the data is a TYPE_VBLOCK of v128 lane groups instead;
 	// see compilePackedMakeVblock.
 	private static void compilePackedMake(List<LispVal> args, WasmLispCompiler.Ctx ctx, boolean single) {
+		WasmIntFusionCompiler.Range integer = integerDimension(args.get(1), ctx);
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int dimsSlot = setTemp(ctx);
 		int dimsArrSlot = ctx.allocTemp();
 		int totalSlot = ctx.allocTemp();
-		emitParseDims(ctx, dimsSlot, dimsArrSlot, totalSlot);
+		emitParseDims(ctx, dimsSlot, dimsArrSlot, totalSlot, integer);
 		LispVal init = findInitialElement(args);
 		if (ctx.simd) {
 			compilePackedMakeVblock(ctx, dimsArrSlot, totalSlot, single, init);
@@ -448,11 +455,12 @@ final class WasmArrayCompiler {
 	// init; the general arm mirrors the ordinary make-array construction with the same
 	// evaluated init (nil default).
 	private static void compilePackedIntMake(List<LispVal> args, WasmLispCompiler.Ctx ctx, int width) {
+		WasmIntFusionCompiler.Range integer = integerDimension(args.get(1), ctx);
 		WasmExprCompiler.compileExpr(args.get(1), ctx);
 		int dimsSlot = setTemp(ctx);
 		int dimsArrSlot = ctx.allocTemp();
 		int totalSlot = ctx.allocTemp();
-		emitParseDims(ctx, dimsSlot, dimsArrSlot, totalSlot);
+		emitParseDims(ctx, dimsSlot, dimsArrSlot, totalSlot, integer);
 		// An unsupplied element is 0, not nil: the packed branch is zero-filled by
 		// array.new_default anyway, and the rank-n GENERAL fallback below must fill with
 		// an integer too -- an array asked to hold bytes holds bytes at every rank.
@@ -460,12 +468,14 @@ final class WasmArrayCompiler {
 		WasmExprCompiler.compileExpr(init, ctx);
 		int initSlot = setTemp(ctx);
 		int type = intArrType(width);
-		// rank == 1?
-		getBuckets(ctx, dimsArrSlot);
-		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
-		i32Const(ctx, 1);
-		ctx.writer.write(Instruction.I32_EQ);
-		emitIfEq(ctx);
+		if (integer == null) {
+			// rank == 1?
+			getBuckets(ctx, dimsArrSlot);
+			ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+			i32Const(ctx, 1);
+			ctx.writer.write(Instruction.I32_EQ);
+			emitIfEq(ctx);
+		}
 		// packed: arr = array.new_default (zero-filled), plus a mask-store fill loop
 		// for a non-zero :initial-element.
 		getLocal(ctx, totalSlot);
@@ -497,6 +507,10 @@ final class WasmArrayCompiler {
 			ctx.writer.write(Instruction.END); // block
 		}
 		getLocal(ctx, arrSlot);
+		if (integer != null) {
+			// an integer dimension is rank 1
+			return;
+		}
 		ctx.writer.write(Instruction.ELSE);
 		// general: data = array.new buckets(init, total); header; cell. The header
 		// REMEMBERS the (unsigned-byte width) that selected no representation at this
@@ -846,6 +860,62 @@ final class WasmArrayCompiler {
 	// negative or limit-sized i31 meets the allocation's own trap, and the site keeps
 	// its bytes.
 	private static void emitParseDims(WasmLispCompiler.Ctx ctx, int dimsSlot, int dimsArrSlot, int totalSlot) {
+		emitParseDims(ctx, dimsSlot, dimsArrSlot, totalSlot, null);
+	}
+
+	/**
+	 * The range of a {@code make-array} dimension form that answers an integer whenever
+	 * it answers -- a literal, a form whose shape or declaration bounds it
+	 * ({@link WasmIntFusionCompiler#knownRange}), integer arithmetic over such
+	 * ({@link WasmIntFusionCompiler#answersInteger}, all of i64) -- or null: the
+	 * dimension may be a list, of any rank. Java's {@code new T[n]} asserts its size
+	 * ({@code .kb/java-frontend.md}, "Numbers").
+	 */
+	private static WasmIntFusionCompiler.@Nullable Range integerDimension(LispVal dims, WasmLispCompiler.Ctx ctx) {
+		WasmIntFusionCompiler.Range known = WasmIntFusionCompiler.knownRange(dims, ctx);
+		if (known != null) {
+			return known;
+		}
+		return WasmIntFusionCompiler.answersInteger(dims, ctx) ? WasmIntFusionCompiler.Range.FULL : null;
+	}
+
+	// emitParseDims, or with `integer` -- the range of a dimension form proven an
+	// integer (integerDimension) -- the rank-1 shorthand alone: no list arm, and no
+	// check at all for a range within [0, array-dimension-limit). Outside that range an
+	// integer that is no i31, or an i31 past the limit, goes to _arr_dims in EH mode,
+	// which reports it and never returns; outside EH mode the unboxing and the
+	// allocation trap as the shorthand's do. A false declaration traps there too.
+	private static void emitParseDims(WasmLispCompiler.Ctx ctx, int dimsSlot, int dimsArrSlot, int totalSlot,
+			WasmIntFusionCompiler.@Nullable Range integer) {
+		if (integer != null) {
+			int limit = (int) ClConstants.arraySizeLimit(true);
+			if (WasmEmitHelper.checksConsFields(ctx) && (integer.lo() < 0 || integer.hi() >= limit)) {
+				getLocal(ctx, dimsSlot);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+				ctx.writer.writeHeapType(Type.I31.code());
+				ctx.writer.write(Instruction.IF);
+				ctx.writer.write(Type.I32);
+				getLocal(ctx, dimsSlot);
+				WasmEmitHelper.castI31GetS(ctx);
+				i32Const(ctx, limit);
+				ctx.writer.write(Instruction.I32_GE_U);
+				ctx.writer.write(Instruction.ELSE);
+				i32Const(ctx, 1);
+				ctx.writer.write(Instruction.END);
+				ctx.writer.write(Instruction.IF, 0x40);
+				getLocal(ctx, dimsSlot);
+				WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_ARR_DIMS);
+				ctx.writer.write(Instruction.UNREACHABLE);
+				ctx.writer.write(Instruction.END);
+			}
+			getLocal(ctx, dimsSlot);
+			i32Const(ctx, 1);
+			arrayNew(ctx);
+			setLocal(ctx, dimsArrSlot);
+			getLocal(ctx, dimsSlot);
+			setLocal(ctx, totalSlot);
+			return;
+		}
 		// if dims is an i31 (rank-1 shorthand: an integer) ...
 		getLocal(ctx, dimsSlot);
 		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
@@ -2067,6 +2137,9 @@ final class WasmArrayCompiler {
 		switch (kind) {
 			case U8, U16, U32 -> {
 				int type = intArrType(kind.packedIntWidth());
+				if (given == 1 && !resultNeeded && emitRawSubscriptAset1(idxExpr, valueExpr, pin, arrSlot, ctx)) {
+					return;
+				}
 				compileSubscript(idxExpr, ctx);
 				int idxSlot = setTemp(ctx);
 				if (checksFirst) {
@@ -2124,7 +2197,41 @@ final class WasmArrayCompiler {
 				}
 			}
 			case GENERAL -> {
-				if (checksFirst || WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
+				int savedI64 = ctx.nextI64Local;
+				WasmIntFusionCompiler.Range raw = given == 1
+						? WasmIntFusionCompiler.tryCompileRawSubscript(idxExpr, ctx) : null;
+				if (raw != null) {
+					// a subscript that is an integer whatever it is, raw: boxed only
+					// on the way to what the inline arm refuses
+					int rawSlot = ctx.allocI64Temp();
+					ctx.writer.write(Instruction.SET_LOCAL);
+					ctx.writeI64LocalIndex(rawSlot);
+					WasmExprCompiler.compileExpr(valueExpr, ctx);
+					int valSlot = setTemp(ctx);
+					int idxSlot = ctx.allocTemp();
+					emitSimpleVectorAccess(ctx, arrSlot, idxSlot, rawSlot,
+							raw.lo() >= 0 && raw.hi() <= Integer.MAX_VALUE, valSlot, () -> {
+								ctx.writer.write(Instruction.GET_LOCAL);
+								ctx.writeI64LocalIndex(rawSlot);
+								if (raw.fixnum()) {
+									ctx.writer.write(Instruction.I32_WRAP_I64);
+									boxI31(ctx);
+								}
+								else {
+									WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_INT_NEW);
+								}
+								setLocal(ctx, idxSlot);
+								emitReadChecks(ctx, arrSlot, idxSlot, given);
+								getLocal(ctx, arrSlot);
+								castCellGet0(ctx);
+								getLocal(ctx, idxSlot);
+								WasmEmitHelper.castI31GetS(ctx);
+								getLocal(ctx, valSlot);
+								callArrSet(ctx);
+							});
+					ctx.nextI64Local = savedI64;
+				}
+				else if (checksFirst || WasmIntFusionCompiler.speedTradesEnabled(ctx)) {
 					// at the speed levels the inline arm, as an unpinned vector's store
 					compileSubscript(idxExpr, ctx);
 					int idxSlot = setTemp(ctx);
@@ -2162,6 +2269,105 @@ final class WasmArrayCompiler {
 				}
 			}
 		}
+	}
+
+	/**
+	 * The rank-1 store into an array a declaration pins to a packed integer kind whose
+	 * subscript compiles raw with no bail
+	 * ({@link WasmIntFusionCompiler#tryCompileRawSubscript}: an integer whatever it is,
+	 * so nothing checks its type and nothing boxes it): the subscript and then the value
+	 * into raw temps, in the generic order, then the checks a fused direct read of the
+	 * same array makes -- in a module that {@link #reportsBounds}, the bound compared raw
+	 * (unsigned: a negative subscript is past it too) and nil where the pin lets it stand
+	 * in for the array, a miss reported by the one {@code _idx_ref} call; elsewhere nil
+	 * as the boxed store reports it, a subscript the i32 cannot hold a trap and the rest
+	 * the engine's own bound -- and the store behind the trapping cast. Answers false,
+	 * emitting nothing, when the subscript does not compile raw.
+	 */
+	private static boolean emitRawSubscriptAset1(LispVal idxExpr, LispVal valueExpr, DeclaredArrayTypes.Pin pin,
+			int arrSlot, WasmLispCompiler.Ctx ctx) {
+		int savedI64 = ctx.nextI64Local;
+		WasmIntFusionCompiler.Range range = WasmIntFusionCompiler.tryCompileRawSubscript(idxExpr, ctx);
+		if (range == null) {
+			return false;
+		}
+		int idx = ctx.allocI64Temp();
+		ctx.writer.write(Instruction.SET_LOCAL);
+		ctx.writeI64LocalIndex(idx);
+		Runnable pushIndex = () -> {
+			ctx.writer.write(Instruction.GET_LOCAL);
+			ctx.writeI64LocalIndex(idx);
+		};
+		Runnable value = compileIntStoreValue(valueExpr, ctx);
+		int type = intArrType(pin.kind().packedIntWidth());
+		if (reportsBounds(ctx)) {
+			Runnable pastBound = () -> {
+				pushIndex.run();
+				getLocal(ctx, arrSlot);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+				ctx.writer.writeHeapType(type);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
+				ctx.writer.write(Instruction.I64_EXTEND_U_I32);
+				ctx.writer.write(Instruction.I64_GE_U);
+			};
+			if (pin.orNull()) {
+				// the bound only where the array is the vector: one report for both
+				getLocal(ctx, arrSlot);
+				ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_TEST);
+				ctx.writer.writeHeapType(type);
+				ctx.writer.write(Instruction.IF);
+				ctx.writer.write(Type.I32);
+				pastBound.run();
+				ctx.writer.write(Instruction.ELSE);
+				i32Const(ctx, 1);
+				ctx.writer.write(Instruction.END);
+			}
+			else {
+				pastBound.run();
+			}
+			ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+			pushIndex.run();
+			if (range.fixnum()) {
+				ctx.writer.write(Instruction.I32_WRAP_I64);
+				boxI31(ctx);
+			}
+			else {
+				WasmOperandTypes.emitCall(ctx, WasmLispCompiler.FUNC_INT_NEW);
+			}
+			int boxed = setTemp(ctx);
+			emitIndexReport(ctx, arrSlot, boxed);
+			ctx.writer.write(Instruction.UNREACHABLE);
+			ctx.writer.write(Instruction.END);
+		}
+		else {
+			if (pin.orNull()) {
+				emitKindedCheckRank(ctx, pin.kind(), arrSlot, 1);
+			}
+			if (range.lo() < Integer.MIN_VALUE || range.hi() > Integer.MAX_VALUE) {
+				// only a subscript the i32 holds stores where it says
+				pushIndex.run();
+				ctx.writer.write(Instruction.I64_CONST);
+				ctx.writer.writeSignedLeb128(1L << 31);
+				ctx.writer.write(Instruction.I64_ADD);
+				ctx.writer.write(Instruction.I64_CONST);
+				ctx.writer.writeSignedLeb128(1L << 32);
+				ctx.writer.write(Instruction.I64_GE_U);
+				ctx.writer.write(Instruction.IF, WasmLispCompiler.BLOCKTYPE_EMPTY);
+				ctx.writer.write(Instruction.UNREACHABLE);
+				ctx.writer.write(Instruction.END);
+			}
+		}
+		getLocal(ctx, arrSlot);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.REF_CAST);
+		ctx.writer.writeHeapType(type);
+		pushIndex.run();
+		ctx.writer.write(Instruction.I32_WRAP_I64);
+		value.run();
+		ctx.writer.write(Instruction.I32_WRAP_I64);
+		ctx.writer.write(Instruction.GC_PREFIX, Instruction.ARRAY_SET);
+		ctx.writer.writeUnsignedLeb128(type);
+		ctx.nextI64Local = savedI64;
+		return true;
 	}
 
 	// The size-level generic rank-1 store: array/index/value hoisted into temps ONCE,
@@ -2361,6 +2567,18 @@ final class WasmArrayCompiler {
 			slow.run();
 			return;
 		}
+		emitSimpleVectorAccess(ctx, arrSlot, idxSlot, -1, false, valSlot, slow);
+	}
+
+	/**
+	 * {@link #emitSimpleVectorAccess(WasmLispCompiler.Ctx, int, int, int, Runnable)}
+	 * whose subscript is the raw i64 in {@code rawSlot} (an i64 local) when that is not
+	 * -1, the boxed one in {@code idxSlot} otherwise: compared unsigned with the
+	 * storage's length -- as an i32 where {@code narrow} says it lies in [0, 2^31) -- so
+	 * a negative or wide one is the miss, which {@code slow} reports.
+	 */
+	private static void emitSimpleVectorAccess(WasmLispCompiler.Ctx ctx, int arrSlot, int idxSlot, int rawSlot,
+			boolean narrow, int valSlot, Runnable slow) {
 		am.ik.wasm.WasmWriter w = ctx.writer;
 		boolean typed = ctx.asyncResume == null;
 		int dataSlot = typed ? -1 : ctx.allocTemp();
@@ -2388,16 +2606,38 @@ final class WasmArrayCompiler {
 			setLocal(ctx, dataSlot);
 		}
 		// the subscript a fixnum below its length
-		getLocal(ctx, idxSlot);
-		brOnCastFail(w, Type.I31.code());
-		w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		if (rawSlot < 0) {
+			getLocal(ctx, idxSlot);
+			brOnCastFail(w, Type.I31.code());
+			w.write(Instruction.GC_PREFIX, Instruction.I31_GET_S);
+		}
+		else {
+			w.write(Instruction.GET_LOCAL);
+			ctx.writeI64LocalIndex(rawSlot);
+			if (narrow) {
+				w.write(Instruction.I32_WRAP_I64);
+			}
+		}
 		pushStorage(ctx, typed, dataSlot, true);
 		w.write(Instruction.GC_PREFIX, Instruction.ARRAY_LEN);
-		w.write(Instruction.I32_GE_U);
+		if (rawSlot >= 0 && !narrow) {
+			w.write(Instruction.I64_EXTEND_U_I32);
+			w.write(Instruction.I64_GE_U);
+		}
+		else {
+			w.write(Instruction.I32_GE_U);
+		}
 		w.write(Instruction.BR_IF, 1);
 		pushStorage(ctx, typed, dataSlot, false);
-		getLocal(ctx, idxSlot);
-		WasmEmitHelper.castI31GetS(ctx);
+		if (rawSlot < 0) {
+			getLocal(ctx, idxSlot);
+			WasmEmitHelper.castI31GetS(ctx);
+		}
+		else {
+			w.write(Instruction.GET_LOCAL);
+			ctx.writeI64LocalIndex(rawSlot);
+			w.write(Instruction.I32_WRAP_I64);
+		}
 		if (valSlot < 0) {
 			arrayGet(ctx);
 		}

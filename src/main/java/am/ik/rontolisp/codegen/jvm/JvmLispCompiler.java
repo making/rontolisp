@@ -4183,7 +4183,7 @@ public final class JvmLispCompiler implements LispCompiler {
 		Utf8Entry rdStructsName = cp.utf8Entry(JvmReadRuntimeBuilder.STRUCT_TABLE_FIELD);
 		Utf8Entry rdStructsDesc = cp.utf8Entry(JvmReadRuntimeBuilder.STRUCT_TABLE_DESC);
 		List<JvmReadRuntimeBuilder.ReadMethod> readMethods = List.of();
-		@Nullable MethodCode structTableClinit = null;
+		@Nullable JvmClinitSteps structTableClinit = null;
 		if (usesRead) {
 			FunctionInfo readHome = functions.get(LispNames.READ_HOME_INTERNAL);
 			// The reader reads #S(...) and #P"..." only when an instance can exist at
@@ -4218,7 +4218,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				.methods();
 		}
 		final List<JvmReadRuntimeBuilder.ReadMethod> readMethodsFinal = readMethods;
-		final @Nullable MethodCode structTableClinitFinal = structTableClinit;
+		final @Nullable JvmClinitSteps structTableClinitFinal = structTableClinit;
 
 		// Build the hash-table runtime helpers, only when the program uses hash tables.
 		final List<JvmHashRuntimeBuilder.HashMethod> hashMethods = usesHashTables ? JvmHashRuntimeBuilder.build(cp,
@@ -5582,7 +5582,7 @@ public final class JvmLispCompiler implements LispCompiler {
 				}
 			}
 			if (structTableClinitFinal != null) {
-				clinitHeadCode.append(structTableClinitFinal);
+				clinitSegmentCodes.addAll(structTableClinitFinal.appendTo(clinitHeadCode, definition, cp, thisClass));
 			}
 			if (funcrefsFieldRef != null) {
 				// _funcrefs = new Object[maxId + 1], then one canonical box per

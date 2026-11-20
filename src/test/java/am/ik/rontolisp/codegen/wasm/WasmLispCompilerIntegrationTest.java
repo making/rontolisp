@@ -23143,7 +23143,8 @@ class WasmLispCompilerIntegrationTest {
 		// The evaluator twin is aBignumDimensionOrRandomLimitIsCheckedOrDrawnInFull,
 		// against this backend's own array-dimension-limit. A bignum or non-integer
 		// dimension parsed as an empty list (a rank-0 array) or failed a cast, and a
-		// bignum random limit trapped in _int_val's limb arm.
+		// bignum random limit trapped in _int_val's limb arm. A dimension proven an
+		// integer (a the, a logior) is parsed as the rank-1 shorthand alone.
 		String source = """
 				(defun te (thunk)
 				  (handler-case (progn (funcall thunk) :no-error)
@@ -23158,6 +23159,15 @@ class WasmLispCompilerIntegrationTest {
 				(print (te (lambda () (make-array '(2 . 3)))))
 				(print (te (lambda () (make-array *big* :element-type 'double-float))))
 				(print (te (lambda () (make-array (expt 2 40) :element-type '(unsigned-byte 8)))))
+				(defvar *b30* (expt 2 30))
+				(defvar *neg* -1)
+				(defvar *three* 3)
+				(print (te (lambda () (make-array (the (integer 0 2147483647) *b30*) :element-type '(unsigned-byte 8)))))
+				(print (te (lambda () (make-array (logior *neg* 0)))))
+				(print (list (make-array (the (integer 0 10) *three*) :element-type '(unsigned-byte 8))
+				             (make-array (the (integer 0 10) *three*) :initial-element 7)
+				             (stringp (make-array (the (integer 0 10) *three*) :element-type 'character))
+				             (make-array (logior *three* 0) :element-type 'double-float)))
 				(let ((ok t) (odd nil) (even nil))
 				  (dotimes (i 64)
 				    (let ((r (random *big*)))
@@ -23175,6 +23185,9 @@ class WasmLispCompilerIntegrationTest {
 				("MAKE-ARRAY: The value 3 is not of type LIST" 3 LIST)
 				("MAKE-ARRAY: The value 1267650600228229401496703205376 is not of type (INTEGER 0 (1073741823))" 1267650600228229401496703205376 (INTEGER 0 (1073741823)))
 				("MAKE-ARRAY: The value 1099511627776 is not of type (INTEGER 0 (1073741823))" 1099511627776 (INTEGER 0 (1073741823)))
+				("MAKE-ARRAY: The value 1073741824 is not of type (INTEGER 0 (1073741823))" 1073741824 (INTEGER 0 (1073741823)))
+				("MAKE-ARRAY: The value -1 is not of type (INTEGER 0 (1073741823))" -1 (INTEGER 0 (1073741823)))
+				(#(0 0 0) #(7 7 7) T #d(0.0 0.0 0.0))
 				(T T T)
 				("RANDOM: The value -1267650600228229401496703205376 is not of type REAL" -1267650600228229401496703205376 REAL)""";
 		assertThat(compileAndRunPrelude(source)).isEqualTo(expected);

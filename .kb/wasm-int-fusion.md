@@ -134,7 +134,10 @@ its index is part of the tree (below). What is this backend's own:
   (`.kb/wasm-ref-type-fold.md`): a condition never boxes to `t`/`nil`.
 - **Raw stores**: `%aset` values compile raw through `tryCompileRaw` + `_iv_set`;
   `tryCompileRaw`/`compileRawStore` accept a bare ArefLeaf/ConstLeaf root, so
-  `(setf (aref dst i) (aref src j))` loops move bytes without boxing.
+  `(setf (aref dst i) (aref src j))` loops move bytes without boxing. A pinned packed store's
+  subscript compiles raw too where its site cannot bail (`tryCompileRawSubscript`;
+  [declarations-type-checks.md](declarations-type-checks.md), "Declaration-driven array
+  emission").
 - `(ldb (byte s p) x)` with literal specs classifies through its expansion. The symbol `t` is
   built once in a module global (`_t_sym`, FUNC_T_SYM / TYPE_T_SYM / the always-last global);
   same id = the intern offset of "T".

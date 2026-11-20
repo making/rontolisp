@@ -118,7 +118,7 @@ deliberate boundaries the audit must not undo: user-facing operator catalogues l
 
 - [error-handling.md](error-handling.md) -- `unwind-protect`, condition objects, `handler-case`, restarts, per-backend mechanics (the JVM's condition and wrong-type records keyed by their throwable); a closed stream and a stream of the wrong direction refused off what the value can do; a signal renders nothing, its report running where the text is read; the uncaught report (a program's own line in it: `%reporting-uncaught`) and wasm-GC's opt-in `--report-locations` frames with their measured cost; a `--no-wasi` module nothing can read a report from; SIGINT as `rontolisp:interactive-interrupt`
 - [async-await.md](async-await.md) -- async-defun/await, futures, asynchronous streams; a body's eager part as a call (its caller's handlers, a handler's exit), an exit crossing a future; withdrawing a component stream read, the component's `%future-race`, `%task-swap` (a frame owned by no task)
-- [threads.md](threads.md) -- `rontolisp:make-thread` and friends; what a thread keeps of its own (the handler and restart stacks, whatever started it)
+- [threads.md](threads.md) -- `rontolisp:make-thread` and friends; what a thread keeps of its own (the handler and restart stacks, whatever started it); a program's end ending its threads in process (`LispEvaluator.stopThreads`)
 - [mutexes.md](mutexes.md) -- `rontolisp:make-mutex`/`with-mutex`
 - [concurrent-served-requests.md](concurrent-served-requests.md) -- one virtual thread per request over shared interpreter/JVM state
 

@@ -199,6 +199,13 @@ computed divisor.
   integer assignment, few enough sites. A LEXICAL binding still wins at every site
   (`JvmIntFusionCompiler.resolveRaw`). Three emissions know the representation:
   `JvmExprCompiler.compileSpecialRead`, `JvmSetqCompiler`, `JvmDefvarCompiler`.
+  **`JvmRawGlobals.collect` counts every candidate's sites in ONE walk of the program** (k81,
+  2026-11-21): it walked the program once per global, and when k67 gave each Java static a
+  value (no longer an UNBOUND-checked global, so a candidate) the `java-spec.yaml` corpus's JVM
+  compile went 37-52 s -> 339 s (k67's parent / k67, same corpus) and `JavaSpecE2eTest` 73 ->
+  377 s. One walk: 362.6 -> 46-64 s, the same 4,319,737 B; the test 59.6 s. Its statics now
+  take the triple: that corpus's class 3,914,270 -> 4,338,420 B at k67, the trade this is.
+  `JvmRawGlobalsTest` (a hang the timeout cuts).
 - **The counted-loop STEP is emitted INLINE, ahead of the outlined method**
   (`emitRawStepFastPath`), guarded by the source's flag and by `Math.addExact`'s overflow condition
   spelled out for the constant addend; exactly two declines branch into the outlined call (a stale

@@ -844,6 +844,67 @@ final class WasmIntFusionCompiler {
 	}
 
 	/**
+	 * Compiles an element access's subscript to a raw {@code i64} on the stack when it is
+	 * an integer operation tree, an unboxed local or a literal whose site cannot bail
+	 * ({@link #canBail}) -- the value is then an integer whatever it is, needing no type
+	 * check and no box -- and answers its range; emits nothing and answers null
+	 * otherwise, a boxed variable alone included: its box is the subscript the boxed
+	 * access takes as it is.
+	 * @param expr the subscript form
+	 * @param ctx the compile context
+	 * @return the range of the raw subscript left on the stack, or null
+	 */
+	static @Nullable Range tryCompileRawSubscript(LispVal expr, WasmLispCompiler.Ctx ctx) {
+		if (!speedTradesEnabled(ctx) || ctx.asyncResume != null || LispMacroExpander.containsComplex(expr)) {
+			return null;
+		}
+		Classified classified = classifyOrdered(expr, ctx,
+				site -> nodes(classify(expr, ctx, java.util.Map.of(), site, 0)));
+		if (classified == null) {
+			return null;
+		}
+		Node root = classified.roots().get(0);
+		if (root instanceof ExprLeaf || countOps(root) > MAX_OPS || classified.site().leaves.size() > MAX_EXPR_LEAVES
+				|| canBail(classified.site(), List.of(root))) {
+			return null;
+		}
+		if (root instanceof ConstLeaf c) {
+			ctx.writer.write(Instruction.I64_CONST);
+			ctx.writer.writeSignedLeb128(c.value());
+			return range(root);
+		}
+		int savedI64 = ctx.nextI64Local;
+		evalLeaves(classified, ctx);
+		ctx.fxLitTempSlot = -1;
+		emitFastEntry(classified.site(), ctx);
+		emitFast(root, ctx);
+		ctx.nextI64Local = savedI64;
+		return range(root);
+	}
+
+	/**
+	 * The range of every integer a form can answer, or null when it might answer
+	 * something else: its shape's ({@link #valueRange}) over the unboxed locals' ranges
+	 * and the declared variables', met with what a declaration or a {@code the} says of
+	 * it ({@link #trustedRange}). A false declaration is the one way to answer outside
+	 * it, and what takes the range on trust then traps
+	 * ({@code .kb/declarations-type-checks.md}).
+	 * @param expr the form
+	 * @param ctx the compile context, whose locals and declarations are the ones in scope
+	 * @return the range, or null
+	 */
+	static @Nullable Range knownRange(LispVal expr, WasmLispCompiler.Ctx ctx) {
+		Range shape = valueRange(expr, ctx, name -> {
+			RawLocal raw = ctx.rawLocals.get(name);
+			if (raw != null) {
+				return raw.shadowed() ? null : raw.range();
+			}
+			return ctx.declaredIntegers.get(name);
+		}, true);
+		return meet(shape, trustedRange(expr, ctx));
+	}
+
+	/**
 	 * How many nested defun/local-function body substitutions a fused tree may perform.
 	 */
 	private static final int MAX_INLINE_DEPTH = 4;

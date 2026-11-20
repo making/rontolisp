@@ -440,11 +440,13 @@ final class JvmReadRuntimeBuilder {
 	}
 
 	/**
-	 * Builds the {@code <clinit>} chunk filling {@link #STRUCT_TABLE_FIELD}: one
+	 * Builds the {@code <clinit>} work filling {@link #STRUCT_TABLE_FIELD}: one
 	 * {@code Object[]{pkg, member, layout, initTexts}} entry per registered layout, in
 	 * registration order (classes carry null layout/initTexts -- they exist only for the
 	 * "it names a class" hint). The struct layouts must already be interned in the layout
-	 * pool.
+	 * pool. A table that fits one segment is built on the operand stack, the array stored
+	 * last; a longer one stores the array first and writes each entry as a step of its
+	 * own (read back with {@code getstatic}), cut into methods as any run of steps is.
 	 * @param cp the constant pool (still open -- this mints CONSTANT_String entries)
 	 * @param thisClass the generated class
 	 * @param pool the layout pool holding the interned struct layout fields
@@ -453,9 +455,9 @@ final class JvmReadRuntimeBuilder {
 	 * @param objectArrayClass {@code [Ljava/lang/Object;}
 	 * @param stringClass {@code java/lang/String}
 	 * @param homing whether the reader asks {@code %read-home} for a symbol token
-	 * @return the code chunk (no trailing RETURN)
+	 * @return the steps (no trailing RETURN)
 	 */
-	static MethodCode structTableClinit(ConstantPool cp, ClassEntry thisClass, JvmLispCompiler.LayoutPool pool,
+	static JvmClinitSteps structTableClinit(ConstantPool cp, ClassEntry thisClass, JvmLispCompiler.LayoutPool pool,
 			ClosRegistry registry, ClassEntry objectClass, ClassEntry objectArrayClass, ClassEntry stringClass,
 			boolean homing) {
 		FieldRefEntry field = cp.fieldRef(thisClass, STRUCT_TABLE_FIELD, STRUCT_TABLE_DESC);
@@ -469,54 +471,75 @@ final class JvmReadRuntimeBuilder {
 				layouts.add(layout);
 			}
 		}
-		MethodCode a = new MethodCode();
-		a.loadConstant(layouts.size());
-		a.anewarray(objectArrayClass);
+		MethodCode inline = new MethodCode();
+		inline.loadConstant(layouts.size());
+		inline.anewarray(objectArrayClass);
 		for (int i = 0; i < layouts.size(); i++) {
-			LispLayout layout = layouts.get(i);
-			boolean isStruct = layout.kind() == LispLayout.Kind.STRUCT;
-			String prefix = isStruct ? LispLayout.STRUCT_TAG_PREFIX : LispLayout.CLASS_TAG_PREFIX;
-			String registered = layout.tag().substring(prefix.length());
-			PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(registered);
-			String pkg = qn == null ? "" : qn.pkg();
-			String member = qn == null ? registered : qn.member();
+			inline.dup();
+			emitStructEntry(inline, cp, pool, layouts.get(i), i, objectClass, stringClass, homing);
+		}
+		inline.putstatic(field);
+		JvmClinitSteps steps = new JvmClinitSteps("_clinit$structs");
+		if (inline.size() <= JvmClinitSteps.SEGMENT_BUDGET) {
+			steps.step().append(inline);
+			return steps;
+		}
+		MethodCode head = steps.step();
+		head.loadConstant(layouts.size());
+		head.anewarray(objectArrayClass);
+		head.putstatic(field);
+		for (int i = 0; i < layouts.size(); i++) {
+			MethodCode a = steps.step();
+			a.getstatic(field);
+			emitStructEntry(a, cp, pool, layouts.get(i), i, objectClass, stringClass, homing);
+		}
+		return steps;
+	}
+
+	/**
+	 * Stores entry {@code index} into the table array on top of the stack, consuming it.
+	 */
+	private static void emitStructEntry(MethodCode a, ConstantPool cp, JvmLispCompiler.LayoutPool pool,
+			LispLayout layout, int index, ClassEntry objectClass, ClassEntry stringClass, boolean homing) {
+		boolean isStruct = layout.kind() == LispLayout.Kind.STRUCT;
+		String prefix = isStruct ? LispLayout.STRUCT_TAG_PREFIX : LispLayout.CLASS_TAG_PREFIX;
+		String registered = layout.tag().substring(prefix.length());
+		PackageRegistry.QualifiedName qn = PackageRegistry.splitQualified(registered);
+		String pkg = qn == null ? "" : qn.pkg();
+		String member = qn == null ? registered : qn.member();
+		a.loadConstant(index);
+		a.loadConstant(4);
+		a.anewarray(objectClass);
+		a.dup();
+		a.loadConstant(0);
+		a.ldc(cp.stringEntry(pkg));
+		a.aastore();
+		a.dup();
+		a.loadConstant(1);
+		a.ldc(cp.stringEntry(member));
+		a.aastore();
+		if (isStruct) {
+			FieldRefEntry layoutField = layoutFieldFor(pool, layout.tag());
 			a.dup();
-			a.loadConstant(i);
-			a.loadConstant(4);
-			a.anewarray(objectClass);
-			a.dup();
-			a.loadConstant(0);
-			a.ldc(cp.stringEntry(pkg));
+			a.loadConstant(2);
+			a.getstatic(layoutField);
 			a.aastore();
+			@Nullable String[] inits = EmittedReaderInitforms.initTexts(layout, false, homing);
 			a.dup();
-			a.loadConstant(1);
-			a.ldc(cp.stringEntry(member));
-			a.aastore();
-			if (isStruct) {
-				FieldRefEntry layoutField = layoutFieldFor(pool, layout.tag());
-				a.dup();
-				a.loadConstant(2);
-				a.getstatic(layoutField);
-				a.aastore();
-				@Nullable String[] inits = EmittedReaderInitforms.initTexts(layout, false, homing);
-				a.dup();
-				a.loadConstant(3);
-				a.loadConstant(inits.length);
-				a.anewarray(stringClass);
-				for (int k = 0; k < inits.length; k++) {
-					if (inits[k] != null) {
-						a.dup();
-						a.loadConstant(k);
-						a.ldc(cp.stringEntry(inits[k]));
-						a.aastore();
-					}
+			a.loadConstant(3);
+			a.loadConstant(inits.length);
+			a.anewarray(stringClass);
+			for (int k = 0; k < inits.length; k++) {
+				if (inits[k] != null) {
+					a.dup();
+					a.loadConstant(k);
+					a.ldc(cp.stringEntry(inits[k]));
+					a.aastore();
 				}
-				a.aastore();
 			}
 			a.aastore();
 		}
-		a.putstatic(field);
-		return a;
+		a.aastore();
 	}
 
 	private static FieldRefEntry layoutFieldFor(JvmLispCompiler.LayoutPool pool, String tag) {

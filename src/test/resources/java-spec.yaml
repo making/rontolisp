@@ -1757,7 +1757,7 @@ cases:
               attempt("throw", () -> { RuntimeException e = null; throw e; });
               attempt("cast", () -> System.out.println((Integer) text));
               attempt("negative", () -> System.out.println(new int[args.length - 2].length));
-              attempt("negative rows", () -> System.out.println(new int[2][args.length - 3].length));
+              attempt("negative rows", () -> System.out.println(new int[2][args.length - 3][next() + 1].length));
               attempt("index", () -> (new int[2][2])[args.length][args.length + 2] = 1);
               attempt("charAt", () -> System.out.println("abc".charAt(args.length + 5)));
               attempt("charAt below", () -> System.out.println("abc".charAt(args.length - 1)));
@@ -1828,7 +1828,7 @@ cases:
       declared long element: java.lang.NullPointerException true
       declared long index: java.lang.ArrayIndexOutOfBoundsException: Index 5 out of bounds for length 2
       declared store: java.lang.NullPointerException true
-      indexes evaluated 2 22
+      indexes evaluated 3 22
       multi-catch NullPointerException
   # try-with-resources is the statement the language specifies: the resources closed in
   # reverse, a null one skipped, an exception of close suppressed by the body's, a

@@ -243,9 +243,16 @@ conversion tooling live in `.todo/artefacts/a8*`/`a9*` and git history.
   `_clinit$layouts$N`, `_clinit$bignums$N`, `_clinit$dynvar$N` called in order. Measured
   2026-11-20: 12,000 `(defvar *vN*)` were a `<clinit>` of 72,011 B, 2,000 Java classes of
   three static fields each 86,049 B; 5,000 Java classes with a static block each, or with
-  three static fields each, now compile and print the JDK's line. Not cut:
-  `JvmReadRuntimeBuilder.structTableClinit` (the `#S` directory, one entry a struct type
-  under `read`), which keeps its array on the stack across entries (`.todo/k73`).
+  three static fields each, now compile and print the JDK's line. The `#S` directory a program
+  that `read`s fills (`JvmReadRuntimeBuilder.structTableClinit`, ~40 B a struct type) kept its
+  array on the stack across entries, so 3,000 `defstruct`s were a `<clinit>` of 102,762 B; a
+  table past one segment now stores the array first and writes each entry as a step
+  (`getstatic`, entry, `aastore`) into `_clinit$structs$N`, while one that fits a segment is
+  built on the stack exactly as before. Pin:
+  `JvmLispCompilerTest#theStructDirectoryThatARunTimeReadResolvesIsCutPastOneMethod` (2,100
+  structs; interpreter, JVM and both WASM backends print the same). Note a test reading
+  the main class's methods sees only that class: a program past one pool is split and the
+  segments may land in a `$PartN`.
 
 - An array literal of any family is filled by `_ql$N` builders past a budget, and a run of equal
   immediates costs one `addAll` ([array-literals.md](array-literals.md), "A long literal").
@@ -319,4 +326,5 @@ is never reused.
 - `Uax15E2eTest`, `ClUnicodeTablesTest`; ci-spec `runtime-type-dispatch-and-symbol-designators`
 - `JvmLispCompilerTest#anArrayLiteralOfAnyFamilyIsHeldToNoMethodLimit`,
   `#aTopLevelFormOrAnInitializerPastTheMethodSizeLimitIsCut` (12,000 globals of no value),
+  `#theStructDirectoryThatARunTimeReadResolvesIsCutPastOneMethod`,
   `JavaSpecE2eTest#aStaticInitializationPastOneMethodOfAJvmClassRuns`

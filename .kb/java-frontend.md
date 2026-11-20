@@ -3975,7 +3975,7 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   2,779, `rule` 2,355 -> 2,208), its instance methods `placed` 5,166 -> 2,793 and `ruled` 4,829
   -> 3,028; `ZonedDateTime.of(.., ZoneId.of("Europe/Paris")).plusHours(1)` 173,105 -> 166,183;
   `Sieve` 21,305 -> 19,699; `SieveLoop` 18,402 -> 16,797, its time 8.2-9.0 -> 7.6-8.3 s (a
-  sieve of 50,000,000 bound by memory); YAVI `Booking.java` 1,128,428 -> 1,125,245,
+  sieve of 50,000,000 -- not bound by memory: the store's boxed index, k76 below); YAVI `Booking.java` 1,128,428 -> 1,125,245,
   `Member.java` 648,210 -> 646,545; 2,000,000 offsets of an instant and a local date-time in
   Europe/Paris 4.83 -> 2.59 s; a `long[1000]` summed 10^5 times 93.8 -> 1.44 s
   (`.kb/wasm-int-fusion.md`). The JVM (that offsets program's jar 65,079 -> 65,003 B, both
@@ -3992,6 +3992,34 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   the mask (`.kb/wasm-int-fusion.md`, "Quotients of two integers", where the numbers are: the
   zone reader 12,765 -> 10,951 B, `Zone` 166,183 -> 157,926, 30,000,000 divisions 1.80 -> 0.67
   s). The JVM's `_iquo` was already a `LDIV`.
+- **`new T[n]` is a rank-1 `make-array` on wasm** (2026-11-21, k76): the size is asserted
+  `(the (integer 0 2147483647) (%java-array-length n))`, which the dimension parse reads as an
+  integer (`.kb/array-literals.md`, "What a wasm `make-array` site costs"); and a store into an
+  array of an `int`, `char`, `short` or `byte` takes a raw index (`.kb/declarations-type-checks.md`,
+  "Declaration-driven array emission"). Measured (base `57598eafd`, bytes of wasm; the
+  programs and `measure.sh` of k64's artefact): the zone reader 10,483 -> 10,289 (`region`
+  6,085 -> 5,939); `Zone` 155,833 -> 155,201; `Sieve` 19,699 -> 19,253; `SieveLoop` 16,797 ->
+  16,402 and 8.9 -> 1.8 s (the JVM 2.9 s); `ZoneLoop` 104,378 -> 103,839, `LongSum` 17,358 ->
+  17,237, both times unchanged; YAVI `Booking.java` 1,106,560 -> 1,098,196, `Member.java`
+  641,617 -> 637,212. No function of these grew.
+- **A `long[]` store, an array of references', takes a raw index too; `new T[n][m]` is
+  lowered at its site** (2026-11-21, k84). The first is the `GENERAL` arm of the pinned
+  store (`.kb/declarations-type-checks.md`, "Declaration-driven array emission"). The second
+  was `%java-new-array`: a list of the lengths, a call per row and a `make-array` of the
+  dims of any rank; now the lengths are evaluated, then checked into variables declared
+  `(integer 0 2147483647)`, and each level but the last is a `while` over a declared index
+  filling a vector (`JavaLowering.newArray`). Measured (base `46d8ae6c2`, wasm unless named,
+  CPU seconds best of three on a loaded 64-core box; the programs in
+  `.todo/artefacts/k84-java-wasm-a-general-arrays-store-and-new-of-several-sizes/`):
+  10^8 stores into a `long[1000]` 0.60 -> 0.45 s (an `int[]`'s 0.42 both), into a
+  `String[1000]` 0.58 -> 0.41; 10^6 `new int[4][4]` 0.59 -> 0.29 s (a loop the program
+  writes by hand 0.27), the module 27,611 -> 18,313 B (`%java-new-rows` was 1,605 B, the
+  site grew 1,280 -> 1,341), the JVM 10^7 of them 4.5-4.8 -> 4.0-4.7 s, the interpreter
+  10^5 3.4-4.0 -> 3.2 s. Sizes: the zone reader 10,289 -> 10,008, `Zone` 155,201 ->
+  154,862, `ZoneLoop` 103,839 -> 103,501, YAVI `Booking.java` 1,100,061 -> 1,098,914,
+  `Member.java` 638,954 -> 638,239 (one function of them grew a byte). `new T[n][m]` is
+  rare where measured: none in YAVI 0.18.0, one in the examples (`GlyphGen.java`), none in
+  the library's sources.
 - **`byte` and `short`** are integers an operator promotes to `int` and an assignment of a
   constant that fits, a cast or a compound assignment narrows (`JavaForms.signed`).
   **`float` is the double of its value** -- every binary32 is a binary64 -- and each operation's
@@ -4187,7 +4215,9 @@ virtual call can run --, classes used):
   "A read of a special without a value"): a static is never unbound. Measured 2026-11-21 (k67,
   wasm P1): the `Europe/Paris` program (`ZonedDateTime.of(..).plusHours(1)`) 173,105 -> 170,858 B
   (-2,247), `examples/java/shop` 319,781 -> 318,309 B (-1,472; the fields -864, the `%done`
-  flags -608). A session's buffer still sets the defaults of a class it declares again.
+  flags -608). A session's buffer still sets the defaults of a class it declares again. On
+  the JVM a valued static is a raw-global candidate, which made a per-global walk minutes
+  ([jvm-int-fusion.md](jvm-int-fusion.md), "Entry points beyond plain trees", k81).
 - The decision is made at the end of a pass and the next pass is lowered with it.
 - **Where it runs** (k63): what cannot throw -- the class objects, the constant fields, the
   defaults a field holds ahead of its initializer, the lazy classes' flags -- is set by
@@ -4261,7 +4291,7 @@ virtual call can run --, classes used):
   array's length (`(or x (%java-npe))`; `this`, a literal, a `new`, a concatenation are not
   tested; a dispatcher's last arm answers null) -- measured free (a direct call per node of a
   list walked 10^8 times: JVM 0.47 -> 0.45 s, wasm 1.02 -> 1.03 s); a negative array length
-  (`%java-array-length`, every length of `%java-new-array` first); `charAt` (the host's
+  (`%java-array-length`, of `new T[n][m]..` once every length is evaluated); `charAt` (the host's
   `char` checks nothing compiled: the JVM gave a `type-error` of datum NIL, wasm a garbage
   code), one read answering -1 outside the string ("`charAt` is one read" below); a failed
   cast's message,
@@ -5468,7 +5498,7 @@ are not askable (`.todo/k18`).
 | `yield v` | the value in tail position of its arm, else `(return-from %yield v)` |
 | `o instanceof Circle c` | `(and (Circle? o) (progn (setq c o) t))`, `c` a `let` of the statement; `if (o instanceof Circle c) a` is `(if (Circle? o) (progn (setq c o) a))` |
 | `new Inner()`, a local class | `(Outer.Inner.new outer args.. captured..)` |
-| `new int[n][m]` | `(%java-new-array (list n m) kind default)` |
+| `new int[n][m]` | `(let ((a n) (b m)) (let ((n' (%java-array-length a)) ..) (declare (type (integer 0 2147483647) n' ..)) rows))`, each level but the last a `while` filling a vector of `nil` |
 | `f(1, 2)` to `f(int...)` | `(f (make-array 2 .. :initial-contents (list 1 2)))` |
 | `x -> e` | `(lambda (x) e)`; `(%make-Iface%lambda (lambda (x) e))` where the program can tell the interface |
 | `String::length`, `obj::m` | `(lambda (%t0) (length %t0))`; `(let ((%t1 obj)) (lambda (%t0) (m %t1 %t0)))` |
@@ -5570,7 +5600,9 @@ lines); a `refused:` case is the scaffold with the case's statements, which the 
 `error` at that line and the front end at the same line with a message starting the same. In
 process, part of `./mvnw test`. The interpreter's `standalone:` leg has the 300 s a process of the
 other legs has (`CliStack.callWithin`): a program whose threads wait for ever fails its leg
-by name and the run goes on (until k14 it stopped the run: full run 19, 50 minutes).
+by name and the run goes on (until k14 it stopped the run: full run 19, 50 minutes). The leg
+ends the threads the program left, daemons, as the other legs' process end does
+([threads.md](threads.md), "A program's end ends its threads").
 **No thread case orders two threads by a sleep or a delay** (k14, 2026-11-19): what one
 thread prints before another does is held by a latch the other waits for, or by a wait for
 the state the line prints (`while (..) Thread.sleep(1)`); a sleep stays where it IS the
