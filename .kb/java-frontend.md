@@ -2090,7 +2090,7 @@ whose program names no pattern holds no regular expression.** Written from the A
 documentation and JDK 25's answers to probes
 ([java-frontend-provenance.md](java-frontend-provenance.md)); the probes are
 `.todo/artefacts/k72-java-library-the-everyday-classes-j71-left/probes/` (each run on the four
-backends by `four.sh` of the scratch beside them, the JDK's lines in `*.jdk.txt`).
+backends by the `four.sh` above them, the JDK's lines in `*.jdk.txt`).
 
 - **`StringJoiner`**: the elements so far are one text without the prefix and suffix; `add`
   takes `String.valueOf` of the element (a `CharSequence`'s `toString`, not its characters);
@@ -2192,7 +2192,7 @@ backends by `four.sh` of the scratch beside them, the JDK's lines in `*.jdk.txt`
   50,211, a scanner of lines over `System.in` 103,351, of a million ints 146,358 (265,496 when
   one member parsed every kind: `java.math` came with it), splitting by `useDelimiter(",")`
   311,455 (the engine; `Pattern.compile(",")` and a matcher alone 286,623). A million ints from
-  `System.in` (10 MB, mean of one run on the loaded box): a JDK 2.16 s, the JVM class 2.35 s,
+  `System.in` (10 MB, one run each on the loaded box): a JDK 2.16 s, the JVM class 2.35 s,
   wasm 7.84 s, of which reading the 10 MB through an `InputStreamReader` is 5.63 s
   (`StandardInput` asks the host for a character at a time; `ReadChars.java`);
   `BufferedReader` and `StringTokenizer` 0.95 / 2.81 / 13.62 s.
@@ -2204,8 +2204,9 @@ backends by `four.sh` of the scratch beside them, the JDK's lines in `*.jdk.txt`
 - Pins: java-spec `a-scanner-reads-tokens-numbers-and-lines-of-a-text` (tokens and lines over
   each kind of whitespace and separator, seven delimiters, 22 tokens through every kind and
   radix with the refusals' words, a refused token's position, finds and skips with their
-  matches and horizons, what `hasNext` keeps, a closed scanner, the streams, a `Readable` in
-  pieces, a charset, a failing source, a `CharBuffer`), the `standalone:` case
+  matches and horizons, a search finding nothing concatenated, what `hasNext` keeps, a closed
+  scanner, the streams, a `Readable` in pieces, a charset, a failing source, a `CharBuffer`),
+  the `standalone:` case
   `a-scanner-reads-the-standard-input` (a contest's input, the closed `System.in`),
   `joiners`, `tokens` and `bits` in `a-deque-an-optional-the-utilities-and-the-older-classes`,
   the hexadecimal and leading-zero parses of `the-boxes-parse-print-and-compare-and-math-is-strict`;
