@@ -181,7 +181,9 @@ checked exception, and a line that differs from a JDK by decision can be in no c
   shipped) and a class under `CANON_EQ`. Two differences from JDK 25 the random searches found
   (`.kb/regex-engine.md`, "Deviations").
 - **A locale that is not English** needs the number symbols of its language; `Locale` has no
-  constructor.
+  constructor. Once it has such locales, `ResourceBundle.Control.getCandidateLocales` needs
+  the candidates of a script and a variant and the Norwegian and Chinese cases its
+  documentation states (k75 wrote `Control` for the locales `Locale` has).
 - **`System.in` on wasm** reads a bulk read to the line's end because `listen` of the standard
   input traps there (wasmtime 49). A `listen` the wasm backends answer (WASI `poll_oneoff` on
   preview 1, a pollable on the component) would make the two variants of `%java-input-more`

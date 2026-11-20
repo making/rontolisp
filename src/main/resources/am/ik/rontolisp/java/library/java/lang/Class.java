@@ -164,6 +164,9 @@ public final class Class<T> {
     // on the source path, none for a class of the JDK and a primitive type
     public native ClassLoader getClassLoader();
 
+    // the unnamed module of that loader, java.base for none
+    public native Module getModule();
+
     // the binary name of the class a resource is found beside -- an array's element
     // class --, or null for a primitive type
     static String located(Class<?> type) {

@@ -34,6 +34,8 @@ public abstract class ClassLoader {
 
     private final ClassLoader parent;
 
+    private Module unnamed;
+
     protected ClassLoader() {
         this(SYSTEM);
     }
@@ -59,9 +61,26 @@ public abstract class ClassLoader {
         return parent;
     }
 
+    public final synchronized Module getUnnamedModule() {
+        if (unnamed == null) {
+            unnamed = new Module(null, this);
+        }
+        return unnamed;
+    }
+
     // the loader of the program's classes
     static ClassLoader program() {
         return PROGRAM;
+    }
+
+    // the program's, the system's or the platform's loader, by how far it reaches
+    static ClassLoader ofReach(int reach) {
+        return reach == TREE ? PROGRAM : reach == ROOTS ? SYSTEM : PLATFORM;
+    }
+
+    // the module of a class: java.base for a class of the JDK, which has no loader
+    static Module moduleOf(ClassLoader loader) {
+        return loader == null ? Module.BASE : loader.getUnnamedModule();
     }
 
     static boolean searchesTree(ClassLoader loader) {

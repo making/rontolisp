@@ -423,8 +423,10 @@ compiled into the output; any other `URL` has nothing to read: `openStream` thro
 `FileNotFoundException`, a URL made again from a resource's text included. A service a
 `Class<?>` names is one whose class the program has. A bundle class `ResourceBundle.getBundle`
 finds by a constant base name is a class of its own file or a member of it.
-`ResourceBundle.Control`, `Properties.loadFromXML` and `storeToXML` are refused by name. The line of the date `Properties.store` writes is a `java.util.Date`'s text
-(above).
+A `Control`'s time to live keeps a bundle for good unless it is `TTL_DONT_CACHE`:
+`needsReload` is never asked. `Properties.loadFromXML` refuses a document with the words a
+JDK's `InvalidPropertiesFormatException` has, but with no cause. The line of the date
+`Properties.store` writes is a `java.util.Date`'s text (above).
 
 **A stream runs in order on the thread that asks for its result.** `parallel()` and
 `parallelStream()` are kept (`isParallel()` answers `true`) and change nothing else: the

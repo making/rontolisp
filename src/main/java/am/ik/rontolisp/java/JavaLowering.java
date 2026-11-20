@@ -7656,16 +7656,24 @@ final class JavaLowering implements JavaEmitter.Context {
 	/**
 	 * {@code getBundle(base)} and {@code getBundle(base, locale)} ask the loader of the
 	 * class calling them, {@code getBundle(base, locale, loader)} the one given, which
-	 * may be the program's. A constant base name carries the {@code .properties} files of
-	 * its bundles, one computed where the program runs every file, as a session's call
-	 * does: a later buffer may name any bundle of the table its first lookup read.
+	 * may be the program's, and each with a {@code Control} too; {@code getBundle} of a
+	 * module the module's loader. A constant base name carries the {@code .properties}
+	 * files of its bundles; one computed where the program runs, a {@code Control} --
+	 * which may name any file and any class -- and a module every file and every bundle
+	 * class, as a session's call does: a later buffer may name any bundle of the table
+	 * its first lookup read.
 	 */
 	@Override
 	public LispVal bundle(Invocation call) {
 		Typed base = call.arguments().get(0);
 		int given = call.arguments().size();
-		boolean tree = given == 3 || Boolean.TRUE.equals(loader(this.currentClass));
-		if (base.constant() instanceof String name && !this.classes.session) {
+		JavaClass last = locatedClass(call.arguments().get(given - 1).type());
+		boolean controlled = given > 1 && last != null
+				&& last.isSubclassOf(Objects.requireNonNull(this.classes.binaryNamed(RESOURCE_BUNDLE + "$Control")));
+		boolean module = given > 1 && last != null && last.isSubclassOf(this.classes.library("java.lang.Module"));
+		int plain = controlled || module ? given - 1 : given;
+		boolean tree = plain == 3 || module || Boolean.TRUE.equals(loader(this.currentClass));
+		if (base.constant() instanceof String name && !this.classes.session && !controlled && !module) {
 			try {
 				this.classes.carryBundle(tree, name.replace('.', '/'));
 			}
@@ -7688,9 +7696,17 @@ final class JavaLowering implements JavaEmitter.Context {
 				this.classes.changed();
 			}
 		}
-		LispVal locale = given == 1 ? library("java.util.Locale", "getDefault", List.of()) : call.argument(1);
-		return given == 3 ? library(RESOURCE_BUNDLE, "given", List.of(base.form(), locale, call.argument(2)))
-				: library(RESOURCE_BUNDLE, "called", List.of(base.form(), locale, integer(tree ? 2 : 1)));
+		LispVal locale = plain == 1 ? library("java.util.Locale", "getDefault", List.of()) : call.argument(1);
+		List<LispVal> arguments = new ArrayList<>(List.of(base.form(), locale));
+		if (module) {
+			arguments.add(call.argument(given - 1));
+			return library(RESOURCE_BUNDLE, "inModule", arguments);
+		}
+		arguments.add(plain == 3 ? call.argument(2) : integer(tree ? 2 : 1));
+		if (controlled) {
+			arguments.add(call.argument(given - 1));
+		}
+		return library(RESOURCE_BUNDLE, plain == 3 ? "given" : "called", arguments);
 	}
 
 	/**

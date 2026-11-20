@@ -8,16 +8,18 @@ import java.io.InputStream;
 import rontolisp.internal.ResourceTable;
 
 // A table of objects by key, with a parent it asks for a key it lacks. getBundle finds
-// one of a base name and a locale as the API documentation states: for each candidate
-// locale from the most to the least specific, a class of the bundle's name or else a
-// .properties file of the loader's resources; the first found is the result and the
-// ones after it its parents; where only the base bundle or none is found for a locale
-// that is not the root, the default locale's candidates instead, unless it is the
-// locale asked for. The files are those the program carries
+// one of a base name and a locale as the API documentation states, through a Control:
+// for each candidate locale it answers, from the least to the most specific, a bundle of
+// each format it names in turn (a class of the bundle's name, else a .properties file of
+// the loader's resources), each the parent of the next one found; where only the base
+// bundle or none is found for a locale that is not the root, the same for its fallback
+// locale. The order of the Control's calls is a JDK 25's (.kb/java-frontend.md,
+// "Resources"). The files are those the program carries
 // (rontolisp.internal.ResourceTable): the lowering makes a call of getBundle name the
 // loader of the class calling it, and carries the files of a constant base name, or
-// every file for a name computed where the program runs (.kb/java-frontend.md,
-// "Resources"). A bundle is made once a loader, base name and locale.
+// every file for a name computed where the program runs or a Control the program gives.
+// A bundle is made once a loader, base name and locale, unless the Control says not to
+// keep it.
 public abstract class ResourceBundle {
 
     protected ResourceBundle parent;
@@ -42,46 +44,166 @@ public abstract class ResourceBundle {
 
     public static native ResourceBundle getBundle(String baseName, Locale targetLocale, ClassLoader loader);
 
+    public static final native ResourceBundle getBundle(String baseName, Control control);
+
+    public static final native ResourceBundle getBundle(String baseName, Locale targetLocale, Control control);
+
+    public static native ResourceBundle getBundle(String baseName, Locale targetLocale, ClassLoader loader,
+            Control control);
+
+    public static final native ResourceBundle getBundle(String baseName, Module module);
+
+    public static final native ResourceBundle getBundle(String baseName, Locale targetLocale, Module module);
+
+    // what the lowering makes of getBundle(String, Module) and getBundle(String, Locale,
+    // Module): the unnamed module of a loader finds that loader's bundles; java.base
+    // holds none of a program's
+    static ResourceBundle inModule(String baseName, Locale targetLocale, Module module) {
+        if (baseName == null || targetLocale == null || module == null) {
+            throw new NullPointerException();
+        }
+        if (module.isNamed()) {
+            throw missing(baseName, targetLocale, null);
+        }
+        return found(baseName, targetLocale, reach(module.getClassLoader()), module.getClassLoader(), null);
+    }
+
     // what the lowering makes of getBundle(String) and getBundle(String, Locale): the
-    // loader of the class calling it, by its reach (ClassLoader's)
+    // loader of the class calling it, by its reach (ClassLoader's); and of the forms
+    // with a Control
     static ResourceBundle called(String baseName, Locale locale, int reach) {
-        if (baseName == null || locale == null) {
+        return found(baseName, locale, reach, null, null);
+    }
+
+    static ResourceBundle called(String baseName, Locale locale, int reach, Control control) {
+        if (control == null) {
+            throw new NullPointerException();
+        }
+        return found(baseName, locale, reach, loader0(reach), control);
+    }
+
+    // what the lowering makes of getBundle(String, Locale, ClassLoader), with a Control
+    // or not
+    static ResourceBundle given(String baseName, Locale locale, ClassLoader loader) {
+        if (loader == null) {
+            throw new NullPointerException();
+        }
+        return found(baseName, locale, reach(loader), loader, null);
+    }
+
+    static ResourceBundle given(String baseName, Locale locale, ClassLoader loader, Control control) {
+        if (loader == null || control == null) {
+            throw new NullPointerException();
+        }
+        return found(baseName, locale, reach(loader), loader, control);
+    }
+
+    private static native int reach(ClassLoader loader);
+
+    // the loader of a reach
+    private static native ClassLoader loader0(int reach);
+
+    // the default Control's answers where control is null: a program that gives none
+    // holds no Control, and its loader need not be made
+    private static ResourceBundle found(String baseName, Locale target, int reach, ClassLoader loader,
+            Control control) {
+        if (baseName == null || target == null) {
             throw new NullPointerException();
         }
         synchronized (MADE) {
-            List<Locale> candidates = candidates(locale);
-            ResourceBundle found = chain(baseName, candidates, reach);
-            if (found != null && (!found.locale.getLanguage().isEmpty() || candidates.size() == 1)) {
-                return found;
-            }
-            Locale fallback = Locale.getDefault();
-            if (!fallback.toString().equals(locale.toString())) {
-                ResourceBundle other = chain(baseName, candidates(fallback), reach);
-                if (other != null && (found == null || !other.locale.getLanguage().isEmpty())) {
-                    return other;
+            List<String> formats = control == null ? null : control.getFormats(baseName);
+            Throwable[] cause = new Throwable[1];
+            ResourceBundle found = null;
+            ResourceBundle base = null;
+            for (Locale locale = target; locale != null; locale = control == null ? fallback(locale)
+                    : control.getFallbackLocale(baseName, locale)) {
+                List<Locale> candidates = control == null ? candidates(locale)
+                        : control.getCandidateLocales(baseName, locale);
+                found = chain(baseName, candidates, 0, formats, reach, loader, control, base, cause);
+                if (found != null) {
+                    boolean root = found.locale.toString().isEmpty();
+                    if (!root || found.locale == locale
+                            || (candidates.size() == 1 && found.locale == candidates.get(0))) {
+                        break;
+                    }
+                    if (base == null) {
+                        base = found;
+                    }
                 }
             }
             if (found == null) {
-                throw new MissingResourceException(
-                        "Can't find bundle for base name " + baseName + ", locale " + locale, baseName + "_" + locale,
-                        "");
+                if (base == null) {
+                    throw missing(baseName, target, cause[0]);
+                }
+                found = base;
             }
             return found;
         }
     }
 
-    // what the lowering makes of getBundle(String, Locale, ClassLoader)
-    static ResourceBundle given(String baseName, Locale locale, ClassLoader loader) {
-        if (loader == null) {
-            throw new NullPointerException();
-        }
-        return called(baseName, locale, reach(loader));
+    private static MissingResourceException missing(String baseName, Locale locale, Throwable cause) {
+        return new MissingResourceException("Can't find bundle for base name " + baseName + ", locale " + locale,
+                baseName + "_" + locale, "", cause);
     }
 
-    private static native int reach(ClassLoader loader);
+    // the bundle of a candidate and its parents, the less specific ones made first; the
+    // base bundle found for an earlier locale stands for the root
+    private static ResourceBundle chain(String baseName, List<Locale> candidates, int index, List<String> formats,
+            int reach, ClassLoader loader, Control control, ResourceBundle base, Throwable[] cause) {
+        Locale locale = candidates.get(index);
+        ResourceBundle parent = null;
+        if (index == candidates.size() - 1) {
+            if (base != null && locale.toString().isEmpty()) {
+                return base;
+            }
+        }
+        else {
+            parent = chain(baseName, candidates, index + 1, formats, reach, loader, control, base, cause);
+        }
+        ResourceBundle bundle = made(baseName, locale, formats, reach, loader, control, cause);
+        if (bundle == null) {
+            return parent;
+        }
+        if (parent != null && bundle.parent == null) {
+            bundle.setParent(parent);
+        }
+        return bundle;
+    }
 
-    // the locale's language and country, its language, then the root: of the locales
-    // Locale has, a language alone is ENGLISH
+    private static ResourceBundle made(String baseName, Locale locale, List<String> formats, int reach,
+            ClassLoader loader, Control control, Throwable[] cause) {
+        String key = reach + baseName + "\n" + locale;
+        ResourceBundle bundle = MADE.get(key);
+        if (bundle != null) {
+            return bundle == NONE ? null : bundle;
+        }
+        if (control == null) {
+            String bundleName = bundleName(baseName, locale);
+            bundle = reach == 0 ? null : classBundle(bundleName, reach == 2);
+            if (bundle == null) {
+                try {
+                    bundle = properties(bundleName, reach);
+                }
+                catch (IOException ex) {
+                    cause[0] = ex;
+                }
+            }
+        }
+        else {
+            bundle = control.made(baseName, locale, formats, loader, cause);
+        }
+        if (bundle != null) {
+            bundle.name = baseName;
+            bundle.locale = locale;
+        }
+        if (control == null || control.getTimeToLive(baseName, locale) != Control.TTL_DONT_CACHE) {
+            MADE.put(key, bundle == null ? NONE : bundle);
+        }
+        return bundle;
+    }
+
+    // the language and country, the language, then the root: of the locales Locale
+    // has, a language alone is ENGLISH
     private static List<Locale> candidates(Locale locale) {
         List<Locale> candidates = new ArrayList<>();
         if (!locale.getCountry().isEmpty()) {
@@ -94,55 +216,192 @@ public abstract class ResourceBundle {
         return candidates;
     }
 
-    // the first candidate's bundle there is, its parent the next one's, and so on
-    private static ResourceBundle chain(String baseName, List<Locale> candidates, int reach) {
-        ResourceBundle first = null;
-        ResourceBundle last = null;
-        for (Locale candidate : candidates) {
-            ResourceBundle bundle = made(baseName, candidate, reach);
-            if (bundle == null) {
-                continue;
-            }
-            if (first == null) {
-                first = bundle;
-            }
-            else {
-                last.setParent(bundle);
-            }
-            last = bundle;
-        }
-        return first;
+    // the default locale, unless it is the one asked
+    private static Locale fallback(Locale locale) {
+        Locale fallback = Locale.getDefault();
+        return fallback == locale ? null : fallback;
     }
 
-    private static ResourceBundle made(String baseName, Locale locale, int reach) {
-        String bundleName = locale.toString().isEmpty() ? baseName : baseName + "_" + locale;
-        String key = reach + baseName + "\n" + locale;
-        ResourceBundle bundle = MADE.get(key);
-        if (bundle == null) {
-            bundle = reach == 0 ? null : classBundle(bundleName, reach == 2);
-            InputStream in = bundle != null ? null
-                    : ResourceTable.find(reach, bundleName.replace('.', '/') + ".properties");
-            if (in != null) {
-                try (in) {
-                    bundle = new PropertyResourceBundle(in);
-                }
-                catch (IOException ex) {
-                    throw new MissingResourceException("Can't find bundle for base name " + baseName + ", locale "
-                            + locale, bundleName, "");
-                }
-            }
-            if (bundle != null) {
-                bundle.name = baseName;
-                bundle.locale = locale;
-            }
-            MADE.put(key, bundle == null ? NONE : bundle);
+    private static String bundleName(String baseName, Locale locale) {
+        String suffix = locale.toString();
+        return suffix.isEmpty() ? baseName : baseName + "_" + suffix;
+    }
+
+    // a .properties file of a loader's resources, or null
+    private static ResourceBundle properties(String bundleName, int reach) throws IOException {
+        InputStream in = ResourceTable.find(reach, bundleName.replace('.', '/') + ".properties");
+        if (in == null) {
+            return null;
         }
-        return bundle == NONE ? null : bundle;
+        try (in) {
+            return new PropertyResourceBundle(in);
+        }
     }
 
     // a bundle of the class of the name, which the lowering finds where the program
     // names a base name, or null
     private static native ResourceBundle classBundle(String name, boolean tree);
+
+    // How getBundle finds a bundle: the formats, the candidate locales, the fallback
+    // locale, how a bundle is made of a format, how long it is kept. A time to live is
+    // kept or not: a bundle kept is never made again (needsReload is not asked).
+    public static class Control {
+
+        public static final List<String> FORMAT_DEFAULT = List.of("java.class", "java.properties");
+
+        public static final List<String> FORMAT_CLASS = List.of("java.class");
+
+        public static final List<String> FORMAT_PROPERTIES = List.of("java.properties");
+
+        public static final long TTL_DONT_CACHE = -1;
+
+        public static final long TTL_NO_EXPIRATION_CONTROL = -2;
+
+        private static final Control INSTANCE = new Control(FORMAT_DEFAULT);
+
+        private static final Control CLASS = new Control(FORMAT_CLASS);
+
+        private static final Control PROPERTIES = new Control(FORMAT_PROPERTIES);
+
+        private final List<String> formats;
+
+        protected Control() {
+            this(FORMAT_DEFAULT);
+        }
+
+        Control(List<String> formats) {
+            this.formats = formats;
+        }
+
+        public static final Control getControl(List<String> formats) {
+            if (formats.equals(FORMAT_PROPERTIES)) {
+                return PROPERTIES;
+            }
+            if (formats.equals(FORMAT_CLASS)) {
+                return CLASS;
+            }
+            if (formats.equals(FORMAT_DEFAULT)) {
+                return INSTANCE;
+            }
+            throw new IllegalArgumentException();
+        }
+
+        public static final Control getNoFallbackControl(List<String> formats) {
+            if (formats.equals(FORMAT_DEFAULT)) {
+                return NoFallbackControl.DEFAULT;
+            }
+            if (formats.equals(FORMAT_PROPERTIES)) {
+                return NoFallbackControl.PROPERTIES;
+            }
+            if (formats.equals(FORMAT_CLASS)) {
+                return NoFallbackControl.CLASS;
+            }
+            throw new IllegalArgumentException();
+        }
+
+        public List<String> getFormats(String baseName) {
+            if (baseName == null) {
+                throw new NullPointerException();
+            }
+            return formats;
+        }
+
+        public List<Locale> getCandidateLocales(String baseName, Locale locale) {
+            if (baseName == null || locale == null) {
+                throw new NullPointerException();
+            }
+            return candidates(locale);
+        }
+
+        public Locale getFallbackLocale(String baseName, Locale locale) {
+            if (baseName == null || locale == null) {
+                throw new NullPointerException();
+            }
+            return fallback(locale);
+        }
+
+        // the bundle of the first format newBundle makes one of; what it throws is the
+        // cause of the refusal if none is found
+        ResourceBundle made(String baseName, Locale locale, List<String> formats, ClassLoader loader,
+                Throwable[] cause) {
+            for (int i = 0; i < formats.size(); i++) {
+                try {
+                    ResourceBundle bundle = newBundle(baseName, locale, formats.get(i), loader, false);
+                    if (bundle != null) {
+                        return bundle;
+                    }
+                }
+                catch (Exception ex) {
+                    cause[0] = ex;
+                }
+            }
+            return null;
+        }
+
+        // a public class of the bundle's name under ResourceBundle the loader has, or a
+        // .properties file of its resources
+        public ResourceBundle newBundle(String baseName, Locale locale, String format, ClassLoader loader,
+                boolean reload) throws IllegalAccessException, InstantiationException, IOException {
+            String bundleName = toBundleName(baseName, locale);
+            int reach = reach(loader);
+            if (format.equals("java.class")) {
+                return reach == 0 ? null : classBundle(bundleName, reach == 2);
+            }
+            if (format.equals("java.properties")) {
+                return properties(bundleName, reach);
+            }
+            throw new IllegalArgumentException("unknown format: " + format);
+        }
+
+        public long getTimeToLive(String baseName, Locale locale) {
+            if (baseName == null || locale == null) {
+                throw new NullPointerException();
+            }
+            return TTL_NO_EXPIRATION_CONTROL;
+        }
+
+        public boolean needsReload(String baseName, Locale locale, String format, ClassLoader loader,
+                ResourceBundle bundle, long loadTime) {
+            if (bundle == null) {
+                throw new NullPointerException();
+            }
+            return false;
+        }
+
+        public String toBundleName(String baseName, Locale locale) {
+            if (baseName == null || locale == null) {
+                throw new NullPointerException();
+            }
+            return bundleName(baseName, locale);
+        }
+
+        public final String toResourceName(String bundleName, String suffix) {
+            if (bundleName == null || suffix == null) {
+                throw new NullPointerException();
+            }
+            return bundleName.replace('.', '/') + "." + suffix;
+        }
+    }
+
+    private static final class NoFallbackControl extends Control {
+
+        static final Control DEFAULT = new NoFallbackControl(Control.FORMAT_DEFAULT);
+
+        static final Control CLASS = new NoFallbackControl(Control.FORMAT_CLASS);
+
+        static final Control PROPERTIES = new NoFallbackControl(Control.FORMAT_PROPERTIES);
+
+        NoFallbackControl(List<String> formats) {
+            super(formats);
+        }
+
+        public Locale getFallbackLocale(String baseName, Locale locale) {
+            if (baseName == null || locale == null) {
+                throw new NullPointerException();
+            }
+            return null;
+        }
+    }
 
     public static final void clearCache() {
         synchronized (MADE) {

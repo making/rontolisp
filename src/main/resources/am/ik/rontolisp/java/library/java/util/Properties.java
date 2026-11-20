@@ -12,6 +12,7 @@ import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.io.Reader;
 import java.io.Writer;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
@@ -396,6 +397,80 @@ public class Properties extends Hashtable<Object, Object> {
                         written.append(c);
                     }
                 }
+            }
+        }
+        return written.toString();
+    }
+
+    // ---- XML: a document of the properties DTD
+
+    public synchronized void loadFromXML(InputStream in) throws IOException, InvalidPropertiesFormatException {
+        Objects.requireNonNull(in);
+        rontolisp.internal.PropertiesXml.load(this, in);
+    }
+
+    public void storeToXML(OutputStream os, String comment) throws IOException {
+        storeToXML(os, comment, StandardCharsets.UTF_8);
+    }
+
+    public void storeToXML(OutputStream os, String comment, String encoding) throws IOException {
+        Objects.requireNonNull(os, "OutputStream");
+        Objects.requireNonNull(encoding, "Encoding");
+        storeToXML(os, comment, rontolisp.internal.Support.charset(encoding));
+    }
+
+    // the declaration, the DOCTYPE, a comment unless there is none or it is empty, then
+    // the table's own entries in its order, each line ended by '\n'; a character the
+    // charset has no byte for, or one past the first 65536, written as &#x..;
+    public void storeToXML(OutputStream os, String comment, Charset charset) throws IOException {
+        Objects.requireNonNull(os, "OutputStream");
+        Objects.requireNonNull(charset, "Charset");
+        List<String> entries = new ArrayList<>();
+        synchronized (this) {
+            for (Map.Entry<Object, Object> entry : map.entrySet()) {
+                if (!(entry.getKey() instanceof String key) || !(entry.getValue() instanceof String value)) {
+                    throw new ClassCastException("Keys and values in Properties must be Strings");
+                }
+                entries.add(key);
+                entries.add(value);
+            }
+        }
+        int last = charset == StandardCharsets.ISO_8859_1 ? 0xff : charset == StandardCharsets.US_ASCII ? 0x7f : 0xffff;
+        Writer writer = new BufferedWriter(new OutputStreamWriter(os, charset));
+        writer.write("<?xml version=\"1.0\" encoding=\"" + charset.name() + "\"?>\n"
+                + "<!DOCTYPE properties SYSTEM \"http://java.sun.com/dtd/properties.dtd\">\n<properties>\n");
+        if (comment != null && !comment.isEmpty()) {
+            writer.write("<comment>" + xml(comment, false, last) + "</comment>\n");
+        }
+        for (int i = 0; i < entries.size(); i += 2) {
+            writer.write("<entry key=\"" + xml(entries.get(i), true, last) + "\">" + xml(entries.get(i + 1), false, last)
+                    + "</entry>\n");
+        }
+        writer.write("</properties>\n");
+        writer.flush();
+    }
+
+    private static String xml(String text, boolean attribute, int last) {
+        StringBuilder written = new StringBuilder();
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '&') {
+                written.append("&amp;");
+            }
+            else if (c == '<') {
+                written.append("&lt;");
+            }
+            else if (c == '>') {
+                written.append("&gt;");
+            }
+            else if (c == '"' && attribute) {
+                written.append("&quot;");
+            }
+            else if (c > last || (c >= 0xd800 && c <= 0xdfff)) {
+                written.append("&#x").append(Integer.toHexString(c)).append(';');
+            }
+            else {
+                written.append(c);
             }
         }
         return written.toString();

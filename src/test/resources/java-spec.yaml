@@ -70,6 +70,7 @@ imports: |
   import java.util.HashSet;
   import java.util.Hashtable;
   import java.util.IntSummaryStatistics;
+  import java.util.InvalidPropertiesFormatException;
   import java.util.Iterator;
   import java.util.LinkedHashMap;
   import java.util.LinkedHashSet;
@@ -6342,6 +6343,34 @@ cases:
               System.out.println(stored(text.toString()));
               System.out.println(stored(new String(bytes.toByteArray(), StandardCharsets.ISO_8859_1)));
               System.out.println(stored(none.toString()));
+              // the XML document of the properties DTD, written in two charsets and read back
+              ByteArrayOutputStream xml = new ByteArrayOutputStream();
+              written.storeToXML(xml, "a comment -- <tags> & \u00e9");
+              ByteArrayOutputStream ascii = new ByteArrayOutputStream();
+              written.storeToXML(ascii, null, "us-ascii");
+              Properties fromXml = new Properties();
+              fromXml.loadFromXML(new ByteArrayInputStream(xml.toByteArray()));
+              Properties fromAscii = new Properties();
+              fromAscii.loadFromXML(new ByteArrayInputStream(ascii.toByteArray()));
+              System.out.println(stored(xml.toString(StandardCharsets.UTF_8)));
+              System.out.println(stored(ascii.toString(StandardCharsets.US_ASCII)));
+              StringBuilder readXml = new StringBuilder();
+              new TreeMap<>(fromXml).forEach((key, value) -> readXml.append('[').append(shown((String) key)).append("]=[").append(shown((String) value)).append("] "));
+              System.out.println(readXml + "" + fromAscii.equals(fromXml));
+              String doctype = "<!DOCTYPE properties SYSTEM \"http://java.sun.com/dtd/properties.dtd\">";
+              String[] documents = {"<?xml version=\"1.0\"?>" + doctype + "<properties><comment>c</comment><entry key='a'>x&lt;&#65;&#x42;<![CDATA[<c>&amp;]]><!-- c --></entry><entry key=\"e\"/>\r\n<entry key=\" k\tl\nm \">1\r\n2\r3</entry></properties>", "<properties/>", doctype + "<props/>", doctype + "<properties><entry>1</entry></properties>", doctype + "<properties><x/></properties>", doctype + "<properties><comment/><comment/></properties>", doctype + "<properties><entry key=\"a\">1</entry>", doctype.replace(">", " [ ]>") + "<properties/>", doctype + "<properties><entry key=\"a\">&nope;</entry><entry key=\"b\">2</entry></properties>"};
+              StringBuilder loadedXml = new StringBuilder();
+              for (String document : documents) {
+                  Properties loaded = new Properties();
+                  try {
+                      loaded.loadFromXML(new ByteArrayInputStream(document.getBytes(StandardCharsets.UTF_8)));
+                      loaded.forEach((key, value) -> loadedXml.append('[').append(shown((String) key)).append("]=[").append(shown((String) value)).append("] "));
+                  } catch (InvalidPropertiesFormatException ex) {
+                      loadedXml.append(ex.getMessage());
+                  }
+                  loadedXml.append("\n");
+              }
+              System.out.print(loadedXml);
               Properties deeper = new Properties();
               for (int i = 0; i < 9; i++) {
                   deeper.setProperty("x" + i * 3, "xv" + i);
@@ -6435,6 +6464,19 @@ cases:
       #comment line / #second / #third / #fourth # <e9>\u2211\u20AC<7><9> x / #already / !bang / # / = / \#start=\!start / back\\slash=back\\slash / ctl\t\n\r\f=ctl\t\n\r\f<8> / eq\=colon\:hash\#bang\!=eq\=colon\:hash\#bang\! / plain=value / tilde~del<7f>=<7f>~ / uni<e9><2211>=uni<e9><2211><1f600><20ac><ff> / with\ space=\ lead and trail 
       #c<e9>\u2211 / = / \#start=\!start / back\\slash=back\\slash / ctl\t\n\r\f=ctl\t\n\r\f\u0008 / eq\=colon\:hash\#bang\!=eq\=colon\:hash\#bang\! / plain=value / tilde~del\u007F=\u007F~ / uni\u00E9\u2211=uni\u00E9\u2211\uD83D\uDE00\u20AC\u00FF / with\ space=\ lead and trail 
       = / \#start=\!start / back\\slash=back\\slash / ctl\t\n\r\f=ctl\t\n\r\f<8> / eq\=colon\:hash\#bang\!=eq\=colon\:hash\#bang\! / plain=value / tilde~del<7f>=<7f>~ / uni<e9><2211>=uni<e9><2211><1f600><20ac><ff> / with\ space=\ lead and trail 
+      <?xml version="1.0" encoding="UTF-8"?> / <!DOCTYPE properties SYSTEM "http://java.sun.com/dtd/properties.dtd"> / <properties> / <comment>a comment -- &lt;tags&gt; &amp; <e9></comment> / <entry key=""></entry> / <entry key="tilde~del<7f>"><7f>~</entry> / <entry key="with space"> lead and trail </entry> / <entry key="plain">value</entry> / <entry key="back\slash">back\slash</entry> / <entry key="eq=colon:hash#bang!">eq=colon:hash#bang!</entry> / <entry key="ctl<9> / <d><c>">ctl<9> / <d><c><8></entry> / <entry key="#start">!start</entry> / <entry key="uni<e9><2211>">uni<e9><2211>&#x1f600;<20ac><ff></entry> / </properties>
+      <?xml version="1.0" encoding="US-ASCII"?> / <!DOCTYPE properties SYSTEM "http://java.sun.com/dtd/properties.dtd"> / <properties> / <entry key=""></entry> / <entry key="tilde~del<7f>"><7f>~</entry> / <entry key="with space"> lead and trail </entry> / <entry key="plain">value</entry> / <entry key="back\slash">back\slash</entry> / <entry key="eq=colon:hash#bang!">eq=colon:hash#bang!</entry> / <entry key="ctl<9> / <d><c>">ctl<9> / <d><c><8></entry> / <entry key="#start">!start</entry> / <entry key="uni&#xe9;&#x2211;">uni&#xe9;&#x2211;&#x1f600;&#x20ac;&#xff;</entry> / </properties>
+      []=[] [#start]=[!start] [back\slash]=[back\slash] [ctl   <c>]=[ctl<9><a><a><c><8>] [eq=colon:hash#bang!]=[eq=colon:hash#bang!] [plain]=[value] [tilde~del<7f>]=[<7f>~] [uni<e9><2211>]=[uni<e9><2211><1f600><20ac><ff>] [with space]=[ lead and trail ] true
+      [a]=[x<AB<c>&amp;] [e]=[] [ k l m ]=[1<a>2<a>3] 
+      jdk.internal.org.xml.sax.SAXParseException; An XML properties document must contain the DOCTYPE declaration as defined by java.util.Properties.
+      jdk.internal.org.xml.sax.SAXParseException; Document root element "props", must match DOCTYPE root "properties"
+      jdk.internal.org.xml.sax.SAXParseException; Attribute "key" is required and must be specified for element type "entry"
+      jdk.internal.org.xml.sax.SAXParseException; Element type "x" must be declared.
+      jdk.internal.org.xml.sax.SAXParseException; Only one comment element may be allowed. The content of element type "properties" must match "(comment?,entry*)"
+      jdk.internal.org.xml.sax.SAXParseException; 
+      jdk.internal.org.xml.sax.SAXParseException; Internal DTD subset is not allowed. The Properties XML document must have the following DOCTYPE declaration: 
+      <!DOCTYPE properties SYSTEM "http://java.sun.com/dtd/properties.dtd">
+      [a]=[] [b]=[2] 
       [k0, k1, k2, k3, k4, k5, k11, k6, k10, k7, k13, k8, k12, k9, long, k14, longer] {k0=v0, k1=v1, k2=v2, k3=v3, k4=v4, k5=v5, k11=v11, k6=v6, k10=v10, k7=v7, k13=v13, k8=v8, k12=v12, k9=v9, long=0123456789012345678901234567890123456789, k14=v14, longer=01234567890123456789012345678901234567890}
       [k14, k13, k12, k11, k10, d35, x9, x24, d63, x6, x21, x3, x0, longer, k9, k8, long, k7, k6, d28, x18, k5, k4, k3, x15, k2, d56, k1, k0, x12, d21, BB, Aa, d7, d49, d0, d14, d77, d42, d70] [Aa, BB, x9, d56, d77, d14, d35, k11, k10, d0, k13, k12, long, k14, d7, x12, x15, x18, d63, d21, d42, k0, k1, k2, d49, k3, k4, k5, d28, k6, k7, k8, k9, longer, x21, x0, x3, x24, d70, x6]
       -- listing properties -- / Aa=deep Aa / BB=def BB / x9=xv3 / d56=dv8 / d77=dv11 / d14=dv2 / d35=dv5 / k11=v11 / k10=v10 / d0=dv0 / k13=v13 / k12=v12 / long=0123456789012345678901234567890123456789 / k14=v14 / d7=dv1 / x12=xv4 / x15=xv5 / x18=xv6 / d63=dv9 / d21=dv3 / d42=dv6 / k0=v0 / k1=v1 / k2=v2 / d49=dv7 / k3=v3 / k4=v4 / k5=v5 / d28=dv4 / k6=v6 / k7=v7 / k8=v8 / k9=v9 / longer=0123456789012345678901234567890123456... / x21=xv7 / x0=xv0 / x3=xv1 / x24=xv8 / d70=dv10 / x6=xv2 / 404
@@ -17180,6 +17222,63 @@ standalone:
                       + late.getString("b"));
           }
 
+          // a Control: the library's, one of the program's, and the order getBundle asks it
+          // in; the bundles of a module
+          static void controls() {
+              ResourceBundle.Control standard = ResourceBundle.Control.getControl(ResourceBundle.Control.FORMAT_DEFAULT);
+              System.out.println(standard.getFormats("x") + " " + standard.getCandidateLocales("x", Locale.UK) + " "
+                      + standard.getFallbackLocale("x", Locale.UK) + " " + standard.toBundleName("a.b", Locale.UK) + " "
+                      + standard.toResourceName("a.b_en", "properties") + " " + standard.getTimeToLive("x", Locale.UK)
+                      + " " + (ResourceBundle.Control.getControl(List.of("java.class", "java.properties")) == standard)
+                      + " " + ResourceBundle.Control.getNoFallbackControl(ResourceBundle.Control.FORMAT_PROPERTIES)
+                          .getFallbackLocale("x", Locale.UK));
+              try {
+                  ResourceBundle.Control.getControl(List.of("x"));
+              }
+              catch (IllegalArgumentException ex) {
+                  System.out.println("IllegalArgumentException " + ex.getMessage());
+              }
+              ResourceBundle none = ResourceBundle.getBundle("tables.msgs", Locale.US,
+                      ResourceBundle.Control.getNoFallbackControl(ResourceBundle.Control.FORMAT_DEFAULT));
+              StringBuilder asked = new StringBuilder();
+              ResourceBundle.Control traced = new ResourceBundle.Control() {
+                  public List<Locale> getCandidateLocales(String baseName, Locale locale) {
+                      asked.append("candidates ").append(locale).append(", ");
+                      return super.getCandidateLocales(baseName, locale);
+                  }
+
+                  public ResourceBundle newBundle(String baseName, Locale locale, String format, ClassLoader loader,
+                          boolean reload) throws IllegalAccessException, InstantiationException, IOException {
+                      asked.append(format.substring(5)).append(" [").append(locale).append("], ");
+                      return super.newBundle(baseName, locale, format, loader, reload);
+                  }
+
+                  public Locale getFallbackLocale(String baseName, Locale locale) {
+                      asked.append("fallback ").append(locale).append(", ");
+                      return super.getFallbackLocale(baseName, locale);
+                  }
+
+                  public long getTimeToLive(String baseName, Locale locale) {
+                      return TTL_DONT_CACHE;
+                  }
+              };
+              ResourceBundle fallback = ResourceBundle.getBundle("tables.traced", Locale.UK, traced);
+              System.out.println(none.getLocale() + " " + none.getString("a") + " " + fallback.getLocale() + " "
+                      + fallback.getString("a") + " " + asked);
+              Module module = Main.class.getModule();
+              ResourceBundle inModule = ResourceBundle.getBundle("tables.msgs", Locale.UK, module);
+              System.out.println(module.isNamed() + " " + module.getName() + " "
+                      + (module.getClassLoader() == Main.class.getClassLoader()) + " " + String.class.getModule() + " "
+                      + (Notes.class.getModule() == ClassLoader.getSystemClassLoader().getUnnamedModule()) + " "
+                      + inModule.getLocale() + " " + inModule.getString("a"));
+              try {
+                  ResourceBundle.getBundle("tables.msgs", String.class.getModule());
+              }
+              catch (MissingResourceException ex) {
+                  System.out.println(ex.getMessage());
+              }
+          }
+
           // a service told by a class object at run time
           static <T> List<String> providers(Class<T> service) {
               return ServiceLoader.load(service, ClassLoader.getSystemClassLoader()).stream()
@@ -17215,6 +17314,7 @@ standalone:
               services();
               urls();
               directories();
+              controls();
               Class<?> service = Greeter.class;
               System.out.println(providers(Greeter.class) + " " + providers(Runnable.class) + " "
                       + ServiceLoader.load(service).findFirst().map(Object::getClass).map(Class::getName) + " "
@@ -17261,6 +17361,10 @@ standalone:
         a=fallback base
       tables/fallback_en_US.properties: |
         a=fallback en_US
+      tables/traced.properties: |
+        a=traced base
+      tables/traced_en_US.properties: |
+        a=traced en_US
       tables/Texts.java: |
         package tables;
 
@@ -17646,6 +17750,11 @@ standalone:
       Can't find bundle for base name geo.texts, locale en_GB
       true deep.txt true deep.txt deep.txt note.txt,texts_en_GB.properties note.txt,texts_en_GB.properties true null null null
       tables.Late_en_GB [en_GB] late en_GB a late b
+      [java.class, java.properties] [en_GB, en, ] en_US a.b_en_GB a/b_en.properties -2 true null
+      IllegalArgumentException null
+      en en a en_US traced en_US candidates en_GB, class [], properties [], class [en], properties [en], class [en_GB], properties [en_GB], fallback en_GB, candidates en_US, class [en], properties [en], class [en_US], properties [en_US], 
+      false null true module java.base true en_GB en_GB a
+      Can't find bundle for base name tables.msgs, locale en_US
       made Mine
       [geo.Hello] [] Optional[tables.Main$Mine] geo.Hello
       java.util.PropertyResourceBundle [en_GB] member file en_GB member x

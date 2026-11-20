@@ -679,8 +679,9 @@ first measurement).
   an inner one (probed; `app.Outer.Texts` with dots finds no member). The files are
   `Outer$Texts_en_GB.properties`, which the base's path already selects.
 - **A directory (k75)**: measured against JDK 25.0.5's launcher with a tree, a class path
-  directory, a jar holding directory entries and one holding none (the k75 probes, every
-  line of which the four backends now print, the listing's order aside):
+  directory, a jar holding directory entries and one holding none
+  (`.todo/artefacts/k75-java-resources-what-k69-left/`, every line of which the four
+  backends now print, the listing's order aside):
   - **The tree** (the launcher's in-memory loader): a directory named as written, with or
     without a last `/` (`sub`, `sub/`, `sub/emptydir`), its URL `file:/<tree>/<name>/`
     (always the slash: `Path.toUri`); its stream the names of its entries, each and `\n`
@@ -731,8 +732,74 @@ first measurement).
   5.9 -> 6.0 s; with YAVI's sources jar (415 files) as a root 6.2 to 6.7 s before and
   after (a box under load); the program gains the bundle classes it makes (5.1 KB for a
   `ListResourceBundle` and its `en_GB` subclass).
-- **Left** (`.todo/k75`): `ResourceBundle.Control` and `getBundle(.., Module)`,
-  `Properties`' XML, the candidate locales of a script and a variant.
+- **`ResourceBundle.Control` (k75)**: measured against JDK 25.0.5 (the k75 probes; the
+  corpus's `controls()` keeps a program's `Control` logging every call). `getBundle` with a
+  `Control` asks `getFormats` once, then for each locale from the target on through
+  `getFallbackLocale`: `getCandidateLocales`, and the candidates from the LEAST specific
+  up (the parent first, a recursion), each the `newBundle` of each format until one is
+  made, then `getTimeToLive`; the base bundle found for an earlier locale stands for the
+  root of a later one (not asked again). It stops at a bundle that is not the base, or is
+  of the locale asked, or of the one candidate there is. A bundle kept (by loader, base
+  name and locale, whatever the `Control`) is not asked for again: a second `getBundle` of
+  `tables.fallback` with a logging `Control` logged no `newBundle`, under a JDK too. A
+  bundle `newBundle` makes directly has no name and no locale; `getBundle` sets them. An
+  exception `newBundle` throws is the cause of the refusal if nothing is found.
+  `getControl` / `getNoFallbackControl` answer one object a format list
+  (`ResourceBundle$Control`, `ResourceBundle$NoFallbackControl`), another list is
+  `IllegalArgumentException` with no message; `newBundle` of an unknown format `unknown
+  format: x`. Not kept: a time to live other than `TTL_DONT_CACHE` keeps the bundle for
+  good (`needsReload` is never asked, `deviations.md`); a JDK's helpful `NullPointerException`
+  texts.
+  - **One road**: `getBundle` without a `Control` runs the same walk with `control` null
+    (`found`, `chain`, `made`): the default answers are static methods (`candidates`,
+    `fallback`, `bundleName`, `properties`) the library's `Control` calls too, so a program
+    that gives no `Control` holds none, makes no loader object and has no `catch` of
+    `newBundle` (`Control.made`). Measured (wasm P1): `getBundle` of a constant base name
+    253,841 -> 255,430 B (the walk the JDK's order, a refusal's cause); written first with
+    `Control.INSTANCE` as the default it was 268,514 (`List.of` of the formats, the
+    `Control` class and its static fields, the `catch`). A `Control` given: 268,854.
+  - **Lowering**: `JavaLowering.bundle` tells the forms by the last argument's class (a
+    subclass of `ResourceBundle$Control`, or `java.lang.Module`); a `Control` or a module
+    carries every file and declares every bundle class, as a computed base name does -- a
+    `Control` may name any file (`toResourceName`) and any class (`toBundleName`).
+- **`getBundle(.., Module)` and `Class.getModule()` (k75)**: `java.lang.Module` is the
+  unnamed module of a loader (`ClassLoader.getUnnamedModule`, one a loader) or `java.base`
+  (`Module.BASE`, a JDK class's and a primitive type's: `module java.base`). `getModule()`
+  is a native (`ClassLoader.moduleOf` of what `getClassLoader` answers by class): written
+  first in Java as `ClassLoader.moduleOf(getClassLoader())` in `Class`, it answered
+  `java.base` for a program class -- a `getClassLoader()` in a body of `Class` is told by
+  `byClass` over a `Class<T>` of the type variable, which the native's road does not
+  reach (not looked into). `getBundle` of an unnamed module asks its loader; of
+  `java.base`, `Can't find bundle for base name B, locale L` (probed). It reflects on
+  nothing else.
+- **`Properties.storeToXML` / `loadFromXML` (k75)**: written from the API documentation,
+  XML 1.0 and the properties DTD, every answer a JDK's (98 probe lines; the corpus's
+  `properties()`). Writing: the declaration with the charset's canonical name
+  (`utf-8` -> `UTF-8`, `latin1` -> `ISO-8859-1`), the DOCTYPE, a `<comment>` unless the
+  comment is null or EMPTY, the own entries in the table's order (not sorted, as `store`
+  is), `&amp; &lt; &gt;` and in a key `&quot;`, a character the charset lacks or past
+  the first plane or a lone surrogate as `&#x..;` (in UTF-8 too: `&#x1f600;`), `\t`,
+  `\r`, a control character raw; a key or value that is no `String` is `ClassCastException:
+  Keys and values in Properties must be Strings` before a byte is written; the stream is
+  flushed, not closed. Reading (`rontolisp.internal.PropertiesXml`): the charset of a mark,
+  of `<?` in two octets (UTF-16 with no mark), else of the declaration (an unknown one
+  `UnsupportedEncodingException` of its name in capitals), else UTF-8; line ends one
+  `\n` (`&#13;` kept); an attribute's tab and line end a space. A JDK's reader is lenient
+  where the DTD is not, and so is this one: text outside an entry and an attribute other
+  than `key` are dropped, a `comment` after an entry is taken, an entry inside an entry
+  starts a new one (`{b=}`), an entity no declaration names is nothing in text (and refused
+  in a value), `&#0;` is a NUL, `PUBLIC` with the DTD's URI passes. Refused, each with the
+  JDK's words after `jdk.internal.org.xml.sax.SAXParseException; `: no DOCTYPE or another
+  root or URI, an internal subset, a root other than `properties`, an element not
+  declared (`properties` below the root included), an entry with no key, a second
+  comment; a document not well formed with nothing after the `; ` (a JDK's parser says
+  nothing there either); `&#x110000;` is the `IllegalArgumentException` of `Character`.
+  The refusal has no cause (a JDK's is its parser's exception, `deviations.md`). Measured
+  (wasm P1): a program storing one entry 213,706 B, loading one 229,934 (`store` of one
+  244,487, unchanged).
+- **Left** (`.todo/k82`, its locale bullet): the candidate locales of a script and a
+  variant and the Norwegian and Chinese cases `Control`'s documentation states, once
+  `Locale` has such locales.
 - **Beside it** (k53): a qualified name of a JDK package naming no class the subset has,
   read as a value (`java.util.ResourceBundle.getBundle("m")`), is `the class
   java.util.ResourceBundle` and no longer `cannot find symbol: variable java`
@@ -751,6 +818,8 @@ first measurement).
   (the qualified JDK classes),
   `JavaLoweringTest#aProgramOfSeveralFilesIsReadFromItsSourceTree` (a tree of more files
   than a program carries),
+  k75's `controls()` there (the library's `Control`s, a program's logging one, a module's
+  bundles) and the XML lines of `properties()` in the second,
   `PlaygroundReplTest#theJavaPickKeepsItsDeclarationsAcrossBuffersAndRunsAProgram` (an
   upload read as a resource, by a constant and a computed name),
   `PlaygroundReplTest#aClojureRequireReadsTheUploadedDepsEdnLikeEveryOtherRoute` (the
@@ -930,7 +999,8 @@ whole, located and checked as the program's own (`Origin.PROGRAM`), on the inter
   package directory (`wit/gl/gl.wit`) was refused (`a WIT package directory is read only
   where the loader lists directories`) and now binds. Each was the answer of a host with no
   directories, not one a user chose. `PlaygroundReplTest` and `WitImportInlinerTest` take
-  the page's loader itself, no longer a copy of its shape.
+  the page's loader itself, no longer a copy of its shape; `web/playground-check.js` reads
+  an upload by a computed name on the image's interpreter and its `.wasm` button.
 - Pinned by `PlaygroundReplTest#theJavaPickKeepsItsDeclarationsAcrossBuffersAndRunsAProgram`
   (a run, a buffer, an upload's error at its own position) and `web/playground-check.js`
   (the image: a run and the `.wasm` button over an upload).

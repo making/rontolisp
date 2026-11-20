@@ -210,7 +210,14 @@ when the program runs brings every file, as a computed resource name does, and e
 class of the source tree and the source path: a class under `ResourceBundle`, or under such a
 class, by the name its file declares it under. A member class is a bundle of a name with a `$`
 (`app.Texts$Words`), as a JDK finds one. `getBundle` of a base name, and of a base name and
-a locale, asks the loader of the class calling it.
+a locale, asks the loader of the class calling it. A `ResourceBundle.Control` of the library
+(`Control.getControl`, `getNoFallbackControl`) or of the program decides the formats, the
+candidate and fallback locales, how a bundle is made and whether it is kept, and is asked in
+the order a JDK asks it; `getBundle` with one brings every file and every bundle class, as a
+computed base name does, since it may name any. `getBundle` of a module finds the bundles of
+the module's loader: a class's module is its loader's unnamed module, or `java.base` for a
+JDK class, which holds none. `Properties.storeToXML` and `loadFromXML` write and read the
+XML document of the properties DTD.
 
 ```
 ResourceBundle messages = ResourceBundle.getBundle("app.messages", Locale.UK);

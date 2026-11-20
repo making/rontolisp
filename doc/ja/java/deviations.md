@@ -420,9 +420,10 @@ JDK のクラスは、JDK 自身のものも含めてリソースを見つけま
 `URL` には読むものがなく、`openStream` は `FileNotFoundException` を投げます。リソースの URL の
 テキストから作り直した URL も同じです。`Class<?>` が示すサービスは、プログラムが持つクラスのものです。
 `ResourceBundle.getBundle` が定数の基底名で見つけるバンドルクラスは、自身の名前のファイルにある
-クラスか、そのメンバーです。`ResourceBundle.Control`、
-`Properties.loadFromXML`、`storeToXML` は名前を示して拒否されます。`Properties.store` が書く
-日付の行は `java.util.Date` のテキストです（前述）。
+クラスか、そのメンバーです。`Control` の有効期間は、`TTL_DONT_CACHE` でなければバンドルを
+保持し続けます。`needsReload` は呼びません。`Properties.loadFromXML` は JDK の
+`InvalidPropertiesFormatException` と同じ文言で文書を拒否しますが、原因の例外を持ちません。
+`Properties.store` が書く日付の行は `java.util.Date` のテキストです（前述）。
 
 **ストリームは、結果を求めたスレッドで順に実行されます。** `parallel()` と
 `parallelStream()` は記録されるだけです（`isParallel()` は `true` を返します）。要素は

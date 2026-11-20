@@ -32,8 +32,9 @@ const POOL = `void main() {
 }
 `;
 
-const PLACED = `void main() {
-    IO.println(new geo.Place("x"));
+// a resource by a name computed where the program runs: the uploads are listed
+const PLACED = `void main() throws Exception {
+    IO.println(new geo.Place("x") + new String(geo.Place.class.getResourceAsStream("NAME.TXT".toLowerCase()).readAllBytes()));
 }
 `;
 
@@ -70,9 +71,12 @@ const CHECKS = [
 	["a file is uploaded", "java", "rontoPutFile",
 		["geo/Place.java", "package geo;\npublic record Place(String name) { }\n"],
 		(answer) => answer.split("\n").includes("geo/Place.java")],
+	["a resource is uploaded", "java", "rontoPutFile", ["geo/name.txt", " named"],
+		(answer) => answer.split("\n").includes("geo/name.txt")],
 	["the uploads are a Java program's source tree: a class it names is read from one", "java", "rontoRunProgram",
-		[PLACED, ""], "Place[name=x]\n"],
-	["and so on the compile path", "java", "rontoCompileWasm", [PLACED], (answer) => printed(answer) === "Place[name=x]\n"],
+		[PLACED, ""], "Place[name=x] named\n"],
+	["and so on the compile path", "java", "rontoCompileWasm", [PLACED],
+		(answer) => printed(answer) === "Place[name=x] named\n"],
 ];
 
 // What a module the compile button answered prints: it writes through fd_write alone.

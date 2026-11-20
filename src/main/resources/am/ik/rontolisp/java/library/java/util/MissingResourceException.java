@@ -15,6 +15,13 @@ public class MissingResourceException extends RuntimeException {
         this.key = key;
     }
 
+    // with what made the bundle fail, where something threw
+    MissingResourceException(String s, String className, String key, Throwable cause) {
+        super(s, cause);
+        this.className = className;
+        this.key = key;
+    }
+
     public String getClassName() {
         return className;
     }

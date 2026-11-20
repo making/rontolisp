@@ -2154,6 +2154,8 @@ final class JavaIntrinsics {
 				(lowering, call) -> lowering.classResource(call, false));
 		natives.put("java.lang.Class.getResource(String)", (lowering, call) -> lowering.classResource(call, true));
 		natives.put("java.lang.Class.getClassLoader()", (lowering, call) -> lowering.classLoader(call));
+		natives.put("java.lang.Class.getModule()", (lowering, call) -> lowering.library("java.lang.ClassLoader",
+				"moduleOf", List.of(lowering.classLoader(call))));
 		for (String loader : List.of("java.lang.ClassLoader.get", "java.lang.ClassLoader.getSystem")) {
 			natives.put(loader + "ResourceAsStream(String)", (lowering, call) -> lowering.loaderResource(call, 0));
 			natives.put(loader + "Resource(String)", (lowering, call) -> lowering.loaderResource(call, 1));
@@ -2166,7 +2168,16 @@ final class JavaIntrinsics {
 		natives.put("java.util.ResourceBundle.getBundle(String)", bundle);
 		natives.put("java.util.ResourceBundle.getBundle(String,java.util.Locale)", bundle);
 		natives.put("java.util.ResourceBundle.getBundle(String,java.util.Locale,ClassLoader)", bundle);
+		natives.put("java.util.ResourceBundle.getBundle(String,java.util.ResourceBundle.Control)", bundle);
+		natives.put("java.util.ResourceBundle.getBundle(String,java.util.Locale,java.util.ResourceBundle.Control)",
+				bundle);
+		natives.put(
+				"java.util.ResourceBundle.getBundle(String,java.util.Locale,ClassLoader,java.util.ResourceBundle.Control)",
+				bundle);
+		natives.put("java.util.ResourceBundle.getBundle(String,Module)", bundle);
+		natives.put("java.util.ResourceBundle.getBundle(String,java.util.Locale,Module)", bundle);
 		natives.put("java.util.ResourceBundle.reach(ClassLoader)", library("java.lang.ClassLoader", "reach"));
+		natives.put("java.util.ResourceBundle.loader0(int)", library("java.lang.ClassLoader", "ofReach"));
 		natives.put("java.util.ResourceBundle.classBundle(String,boolean)",
 				(lowering, call) -> lowering.classBundle(call));
 		natives.put("java.util.ServiceLoader.load(Class)", (lowering, call) -> lowering.services(call, 0));

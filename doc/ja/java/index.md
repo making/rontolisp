@@ -213,7 +213,14 @@ String text = new String(url.openStream().readAllBytes());
 含め、ソースツリーとソースパスのバンドルクラスをすべて探します。`ResourceBundle` を継承するクラスと、
 そのようなクラスを継承するクラスで、ファイルが宣言している名前で探します。メンバークラスは、JDK と同じく
 `$` を含む名前（`app.Texts$Words`）のバンドルになります。基底名だけ、または基底名と
-ロケールを渡す `getBundle` は、呼び出したクラスのローダーに問い合わせます。
+ロケールを渡す `getBundle` は、呼び出したクラスのローダーに問い合わせます。ライブラリの
+`ResourceBundle.Control`（`Control.getControl`、`getNoFallbackControl`）やプログラムの
+`Control` は、形式、候補とフォールバックのロケール、バンドルの作り方、保持するかどうかを決め、
+JDK と同じ順に呼ばれます。`Control` を渡す `getBundle` は、どの名前でも指しうるため、
+組み立てた基底名と同じくすべてのファイルとバンドルクラスを含めます。モジュールを渡す
+`getBundle` は、そのモジュールのローダーのバンドルを探します。クラスのモジュールはローダーの
+名前のないモジュールで、JDK のクラスでは `java.base` です。`java.base` はバンドルを持ちません。
+`Properties.storeToXML` と `loadFromXML` は、properties DTD の XML 文書を書き、読みます。
 
 ```
 ResourceBundle messages = ResourceBundle.getBundle("app.messages", Locale.UK);
