@@ -499,6 +499,20 @@ algorithm came from, and the answer goes in the file's header.
   of the capacity given). The answers are lines of `java-spec.yaml`, which the JDK leg asks
   again; the scan of the libraries' class files (`Scan.java`) reads third-party class files
   as data and copies nothing.
+- **`java.net.URL`, a resource's URL, the loaders above the program's, a computed service
+  (k69, 2026-11-20).** Written from the API documentation (`URL`'s members and
+  constructors, `ClassLoader.getResources`, `getParent`, `getPlatformClassLoader`) and JDK
+  25's answers to probes (the programs of
+  `.todo/artefacts/k69-java-resources-urls-a-computed-service-and-what-k58-left/`: 98
+  texts and parts through `URL`, every ASCII character in a host and in a file's name of
+  each kind of place, the URLs and the order of `getResources` of a launcher's loaders, a
+  member class as a bundle). Nobody opened OpenJDK's source, and the shape is its own: a
+  resource's URL is made with its fields set and holds the octets it reads. What the
+  documentation does not state was read off the answers: the protocols known, the words
+  and indices of each refusal, which characters each kind of place escapes and in which
+  case, an empty authority printed as none, what `equals` compares. `hashCode` is a
+  number of our own. The answers are lines of `java-spec.yaml`, which the JDK leg asks
+  again.
 - **Unicode normalization (k29, 2026-11-19).** `eval/unicode-normalization.lisp` was
   written from Unicode Standard Annex #15 and the Unicode Standard's sections 3.11
   (decomposition, canonical ordering, canonical composition) and 3.12 (Hangul by

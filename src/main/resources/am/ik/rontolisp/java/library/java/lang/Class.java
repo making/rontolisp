@@ -157,6 +157,9 @@ public final class Class<T> {
     // the JDK and a primitive type have none of the program's
     public native InputStream getResourceAsStream(String name);
 
+    // where that resource was found when the program was compiled
+    public native java.net.URL getResource(String name);
+
     // the program's loader for a class of the program, the system's for one of a library
     // on the source path, none for a class of the JDK and a primitive type
     public native ClassLoader getClassLoader();

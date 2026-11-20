@@ -1313,8 +1313,6 @@ class JavaLoweringTest {
 				{ "void main() { Object b = java.util.prefs.Preferences.userRoot(); }",
 						"1:42: the class java.util.prefs.Preferences" },
 				{ "void main() { Object o = java.util.Currency.CANADA; }", "1:36: the class java.util.Currency" },
-				{ "void main() { Class<? extends Runnable> c = null; java.util.ServiceLoader.load(c); }",
-						"1:75: ServiceLoader.load of a service named by no class literal" },
 				{ "void main() { var r = new java.util.Random(1); r.nextExponential(); }",
 						"1:50: Random.nextExponential()" },
 				{ "void main() { IO.println(\"a\".stripIndent()); }", "1:30: String.stripIndent()" },

@@ -402,13 +402,14 @@ the launcher finds them, and in the playground none of the uploads, which cannot
 a program whose loaders may find more than it carries is refused when it is compiled
 ([Resources](index.md#resources)). A directory is no resource: `getResourceAsStream` of
 one answers `null`, where the launcher answers a stream. The stream is a
-`ByteArrayInputStream`. A JDK class finds no resource, not even the JDK's own.
-`getResource`, `getResources` and `ClassLoader.getParent` are refused by name.
-`ServiceLoader.load` of a `Class` whose type does not name the service (a `Class<?>`) is
-refused by name. A bundle class `ResourceBundle.getBundle` finds by a constant base name is a
-class of its own file; by a base name computed when the program runs, one the program
-reaches otherwise. `ResourceBundle.Control`, `Properties.loadFromXML` and `storeToXML` are
-refused by name. The line of the date `Properties.store` writes is a `java.util.Date`'s text
+`ByteArrayInputStream`. A JDK class finds no resource, not even the JDK's own, and the
+platform loader none. A resource's URL names the file at the compile and reads the bytes
+compiled into the output; any other `URL` has nothing to read: `openStream` throws a
+`FileNotFoundException`, a URL made again from a resource's text included. A service a
+`Class<?>` names is one whose class the program has. A bundle class `ResourceBundle.getBundle`
+finds by a constant base name is a class of its own file or a member of it; by a base name
+computed when the program runs, one the program reaches otherwise.
+`ResourceBundle.Control`, `Properties.loadFromXML` and `storeToXML` are refused by name. The line of the date `Properties.store` writes is a `java.util.Date`'s text
 (above).
 
 **A stream runs in order on the thread that asks for its result.** `parallel()` and
@@ -579,7 +580,12 @@ the program's own server: a `main` asking its own server waits for ever there.
 **A `URI`** is checked as a JDK checks one, with its messages, but for an address in
 brackets, of which only the characters are checked. `hashCode` is not a JDK's number, and
 `compareTo` orders by the text. The constructors of several parts, `normalize`,
-`relativize`, `toURL` and `toASCIIString` are not there.
+`relativize` and `toASCIIString` are not there.
+
+**A `URL`** is cut and refused as a JDK cuts one, with its messages, of the protocols a JDK
+has a handler for. `equals` compares the host's text, where a JDK first asks for its
+address. `hashCode` is not a JDK's number. `URL.of`, the constructor of a context and a
+text, `openConnection` and `getContent` are not there.
 
 ## The HTTP server
 
@@ -677,5 +683,5 @@ Each of these is an error naming the construct and its position.
 - Any JDK class or member [The JDK classes](classes.md) does not list:
   `Scanner`, files
   (`File`, `FileReader`, `java.nio.file`), `Calendar`,
-  reflection. Of `java.net`, everything but `URI`, the addresses of a server and the
-  [HTTP client](#the-http-client): `URL`, sockets, `HttpURLConnection`.
+  reflection. Of `java.net`, everything but `URI`, `URL`, the addresses of a server and the
+  [HTTP client](#the-http-client): sockets, `HttpURLConnection`.

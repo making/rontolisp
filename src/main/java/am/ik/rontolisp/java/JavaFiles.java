@@ -162,6 +162,27 @@ public interface JavaFiles {
 	}
 
 	/**
+	 * Where the top of the program's source tree is, for the URL of a resource found
+	 * there.
+	 * @param from the file the program starts at, or {@code null} for the tree the host
+	 * holds as the program's own ({@link #tree})
+	 * @param root the path from that file's directory up to the top of the tree
+	 * @return the top's absolute path, or {@code null} when there is no tree
+	 */
+	default @Nullable String treeTop(@Nullable String from, String root) {
+		return null;
+	}
+
+	/**
+	 * Where a root of the source path is, for the URL of a resource found under it.
+	 * @param root the root's index, in the source path's order
+	 * @return the root's absolute path, a directory's or a jar's
+	 */
+	default String libraryTop(int root) {
+		return "";
+	}
+
+	/**
 	 * A resource's name below the top of a directory, as a class loader reads it there:
 	 * its {@code .} and empty segments dropped and a {@code ..} taking the segment before
 	 * it away.
