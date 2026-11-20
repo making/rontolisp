@@ -68,7 +68,10 @@ k35 (2026-11-20; `.todo/k42` and `k43` are what it left); `java.util.Date` and `
 k37 (2026-11-20); the stream members k12 left (`mapMulti`, the gatherers, a stream's and
 the numbers' spliterators, the streams of a `Random`, the collectors of a concurrent
 map), a stream inside `flatMap` closed where its stream stops asking, and
-`String.format` of a `BigInteger` and a `BigDecimal`: k26 (2026-11-20).
+`String.format` of a `BigInteger` and a `BigDecimal`: k26 (2026-11-20); YAVI's reader of an
+untyped input split by the type asked for, sent to YAVI as a pull request and measured
+over its sources: k46 (2026-11-20; "YAVI compiled to wasm" below; the examples' release is
+`.todo/k50`).
 
 ## Where it sits
 
@@ -454,16 +457,36 @@ mechanism was asked for.
   a string constraint reaches `CharSequenceConstraint`'s three static patterns and
   `VariantOptions`' `replaceAll`. Without the three patterns the classic example is 937 B
   smaller and the engine is still there.
-- **A schema pays for every type YAVI reads an input as**, whichever it asks for:
-  `core/UntypedInput` holds them in one table and one method. A schema of a string and an
-  integer is 1,144,352 B (1,216,741 before k45); 951,244 (-16.9 %) over a copy of YAVI
-  without the table of the types read from their text, the `java.util.Date` / `java.sql`
-  arm and the `Year` arm; 889,037 (-22.3 %) without the conversion of a number through
-  `BigDecimal` too. Splitting
-  that reader by the type asked for is a change to YAVI's design and the user's to decide
-  (`.todo/k46`); the library classes were owed either way. It needs a new public member of
-  YAVI (2026-11-20): the callers that know the type are in `builder` and `arguments`, whose
-  only way into `core` is `ValueValidator.untyped(Class)`, which converts any type.
+- **A schema of 0.18.0 pays for every type YAVI reads an input as**, whichever it asks
+  for: `core/UntypedInput` holds them in one table and one method. A schema of a string
+  and an integer is 1,144,352 B (1,216,741 before k45); 951,244 (-16.9 %) over a copy of
+  YAVI without the table of the types read from their text, the `java.util.Date` /
+  `java.sql` arm and the `Year` arm; 889,037 (-22.3 %) without the conversion of a number
+  through `BigDecimal` too. The library classes were owed either way.
+- **Split in YAVI by https://github.com/making/yavi/pull/604** (k46, 2026-11-20, to
+  `develop`, open): the callers that know the type are in `builder` and `arguments`, whose
+  only way into `core` was `ValueValidator.untyped(Class)`, which converts any type. Added
+  public API, nothing changed: `UntypedConversions` (one conversion a type, `toInteger()`
+  .. `toUri()`, `toEnum(Class)`, `instanceOf(Class)`) and
+  `ValueValidator.untyped(Class, Function)`, which the typed builders and validators name;
+  `untyped(Class)` picks among the same conversions. Over that branch's sources (the k33
+  scripts with `--java-source-path <checkout>/src/main/java`), each printing the JDK's
+  lines on the four:
+
+  | | 0.18.0's code | the pull request |
+  |---|---|---|
+  | the schema of a string and an integer | 1,145,000 | 947,719 (-17.2 %) |
+  | `Booking` | 1,204,017 | 1,040,183 (-13.6 %), the component 1,044,555 |
+  | `Member` (no untyped input) | 663,174 | 663,174 |
+
+  Gone: `java.net` and the URI runtime, all of `java.time` from the schema and all but
+  `LocalDate` from `Booking` (97,001 -> 18,135 B of code). `java.math` stays (29 KB): an
+  integer may be given as a `BigDecimal` or a `double`, and one read from a form's string
+  is one; the rest of the way to the 889,037 bound is that conversion, which YAVI's rules
+  keep. The examples name 0.18.0, so their numbers above stand until a release has it
+  (`.todo/k50`). YAVI's `scripts/generate-args.sh` (the builders, `DefaultArguments1Validator`)
+  runs to its end only under bash 3.2 (`docker run bash:3.2`; 5.1 and 5.2 stop early
+  without failing), and its last step needs `perl`.
 - **A variable named `set` put the eval runtime in `Booking`** (fixed by k45): `java.net.URI`'s
   runtime (`eval/uri.lisp`) has a parameter named `set`, and both backends' gate for the
   eval runtime counted any mention of `set`, `symbol-value` or `fboundp`. On wasm that was
