@@ -289,6 +289,19 @@ JDK のメッセージは `remove` です。`List.of()`、`Set.of()`、`Map.of()
 透過境界のリージョンで `lookingAt` または `matches` を呼んだあと、後読みがリージョンより前を
 読んでいると、JDK の `start()` は 0 を返します。ここではリージョンの開始位置を返します。
 
+**`Scanner` が数値を読んだあとのマッチはトークンだけです。** `nextInt` から `nextBigDecimal` まで
+と、それぞれの `hasNext` のあとの `match()` にはグループがありません。JDK のマッチには、JDK
+自身の数値のパターンのグループがあります。`match()` と `toString()` の位置は、スキャナーが保持
+する入力の先頭から数えます。`String` ならそのテキスト全体です。JDK は最初の 1024 文字を過ぎると
+自身のバッファーの先頭から数えます。`Readable` には読み込みのたびに 1024 文字の空の
+`CharBuffer` を渡します。JDK はスキャナー自身のバッファーを、まだ保持している文字の後ろに
+位置を置いて渡します。
+
+**`CharBuffer` は 1 つのクラスです。** どのバッファーでも `getClass().getName()` は
+`java.nio.CharBuffer` です。JDK は種類の名前（`java.nio.HeapCharBuffer`）を返します。`String`
+ではない `CharSequence` は、`charAt` で読むままにラップするので、基本多言語面の外の文字は
+1 要素です。JDK では 2 要素です。`order()` は名前を示して拒否します。
+
 **`String.format` の変換は[使える JDK のクラス](classes.md)に挙げたものだけです。** それ以外の変換は名前を
 示すエラーになります。ロケールはルートと英語のものだけで、どれもロケールなしの
 `String.format` と同じ書式になります。デフォルトのロケールは `Locale.US` です。
@@ -389,7 +402,9 @@ UTF-8 のバイト列として読みます。そのため、テキストでな�
 その最後のバイトが書かれたときに出力します。`System.in` から複数のバイトを読むと、最初の
 1 バイトを待ち、その時点で読めるバイトまでを返します。`.wasm` は読めるバイトの有無をホストに
 問い合わせられないため、行末まで読みます。`System.out` と `System.err` は差し替えられず
-（`System.setOut`）、`close()` の後も出力できます。
+（`System.setOut`）、`close()` の後も出力できます。閉じた `System.in` は入力の終わりに
+あるので、その上に作り直した `Scanner` にはトークンがありません。JDK でも同じ結果ですが、JDK
+では読み込みが `IOException` を投げます。
 
 **文字セットは 6 つです。** デフォルトの `UTF-8` と、`ISO-8859-1`、`US-ASCII`、`UTF-16`、
 `UTF-16BE`、`UTF-16LE` です。それ以外の名前は `UnsupportedEncodingException` または
@@ -716,9 +731,8 @@ WebSocket です。`version(..)` で指定した値は保持され、問い合�
 - `String`、`StringBuilder`、ボックスを継承するクラス。
 - `java.util.concurrent` のうち、[使える JDK のクラス](classes.md)の表にないもの。優先度順または遅延順の
   キューです。`Date` を取る `Timer` の `schedule`、スレッドグループも拒否されます。
-- [使える JDK のクラス](classes.md)の表にない JDK のクラスとメンバー。
-  `Scanner`、ファイル（`File`、`FileReader`、
-  `java.nio.file`）、`Calendar`、
+- [使える JDK のクラス](classes.md)の表にない JDK のクラスとメンバー。ファイル（`File`、
+  `FileReader`、`java.nio.file`、ファイルを読む `Scanner`）、`Calendar`、
   リフレクションなどです。
   `java.net` では、`URI`、`URL`、サーバーのアドレス、[HTTP クライアント](#the-http-client)以外の
   すべてが該当します。

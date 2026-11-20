@@ -1,0 +1,16 @@
+ret empty hasMore: java.lang.NullPointerException
+ret empty count: 0
+ret empty next: java.lang.NullPointerException
+space count: java.lang.NullPointerException
+ret abc count: java.lang.NullPointerException
+ret abc next: java.lang.NullPointerException
+elements: java.lang.NullPointerException
+a true ,b c
+a 1 ,b
+true ,,a
+true a;b
+w next(;): java.util.NoSuchElementException
+true ;a|b
+true| |x| y |0
+3 a b c
+5

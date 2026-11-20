@@ -45,7 +45,8 @@ final class JavaClasses {
 	private static final List<String> LIBRARY_PACKAGES = List.of("java.lang", "java.util", "java.util.function",
 			"java.io", "java.nio.charset", "java.util.concurrent", "java.util.concurrent.atomic",
 			"java.util.concurrent.locks", "java.net", "java.time", "java.time.chrono", "java.time.format",
-			"java.time.temporal", "java.time.zone", "java.security", "java.util.stream", "java.text", "java.math");
+			"java.time.temporal", "java.time.zone", "java.security", "java.util.stream", "java.text", "java.math",
+			"java.nio");
 
 	/** The one package of the module {@code java.net.http}. */
 	private static final String HTTP_MODULE = "java.net.http";
@@ -305,6 +306,15 @@ final class JavaClasses {
 		 * {@code null}: found by its class's name, its own and its erased parameters.
 		 */
 		@Nullable JavaEmitter emitter(String member);
+
+		/**
+		 * Whether the {@code String} a {@code native} member of the library's Java source
+		 * answers may be {@code null}, so that a concatenation writes {@code null} for
+		 * it.
+		 */
+		default boolean answersNull(String member) {
+			return false;
+		}
 
 	}
 
@@ -1165,6 +1175,7 @@ final class JavaClasses {
 			Set<String> modifiers = method.modifiers();
 			boolean isStatic = modifiers.contains("static");
 			JavaEmitter emitter = null;
+			String nativeMember = null;
 			if (modifiers.contains("native") && source.dependency()) {
 				throw unsupported(source, method.pos(), "a native method of a library");
 			}
@@ -1181,7 +1192,8 @@ final class JavaClasses {
 				for (int i = 0; i < parameters.size(); i++) {
 					member.append(i > 0 ? "," : "").append(parameters.get(i).erasure());
 				}
-				emitter = this.library.emitter(member.append(')').toString());
+				nativeMember = member.append(')').toString();
+				emitter = this.library.emitter(nativeMember);
 				if (emitter == null || method.body() != null) {
 					throw new IllegalStateException(member + " is native and has no form, or has a body");
 				}
@@ -1217,6 +1229,7 @@ final class JavaClasses {
 					isAbstract, method, emitter, false);
 			member.typeParameters = List.copyOf(typeParameters);
 			member.thrown = List.copyOf(thrown);
+			member.answersNull = nativeMember != null && this.library.answersNull(nativeMember);
 			typeParameters.forEach(parameter -> parameter.method = member);
 			if (made.isEnum && isConstructor) {
 				member.hidden = 2;

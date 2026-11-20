@@ -81,6 +81,12 @@ final class JavaIntrinsics {
 
 	private static final String PATTERN = "java.util.regex.Pattern";
 
+	private static final String SCANNER = "java.util.Scanner";
+
+	/** The natives of the library whose {@code String} may be {@code null}. */
+	private static final Set<String> NULLABLE_NATIVES = Set.of(SCANNER + ".findInLine(String)",
+			SCANNER + ".findWithinHorizon(String,int)");
+
 	static final String CHARSET = "java.nio.charset.Charset";
 
 	/** The interface of the numbers a format writes by their own digits. */
@@ -299,6 +305,11 @@ final class JavaIntrinsics {
 		@Override
 		public @Nullable JavaEmitter emitter(String member) {
 			return NATIVES.get(member);
+		}
+
+		@Override
+		public boolean answersNull(String member) {
+			return NULLABLE_NATIVES.contains(member);
 		}
 
 		@Override
@@ -560,6 +571,31 @@ final class JavaIntrinsics {
 		List<LispVal> all = new ArrayList<>(arguments);
 		all.addAll(regexProviders(regex, flags));
 		return lowering.library(PATTERN, entry, all);
+	}
+
+	/**
+	 * A member of {@code Scanner} taking a pattern's text: the static member of
+	 * {@code bridge} with the scanner, the text where {@code text} says, the pattern
+	 * compiled here with the providers the text may need, and the arguments after the
+	 * text. The scanner and the text are taken once, in that order.
+	 */
+	private static JavaEmitter scanning(String bridge, boolean text) {
+		return (lowering, call) -> {
+			LispSymbol scanner = lowering.temporary();
+			LispSymbol regex = lowering.temporary();
+			Typed written = call.arguments().get(0);
+			List<LispVal> arguments = new ArrayList<>();
+			arguments.add(scanner);
+			if (text) {
+				arguments.add(regex);
+			}
+			arguments.add(pattern(lowering, "make", List.of(regex, integer(0)), written, null));
+			for (int i = 1; i < call.arguments().size(); i++) {
+				arguments.add(call.argument(i));
+			}
+			return JavaForms.let(scanner, call.self(), List
+				.of(JavaForms.let(regex, written.form(), List.of(lowering.library(SCANNER, bridge, arguments)))));
+		};
 	}
 
 	/**
@@ -1867,6 +1903,14 @@ final class JavaIntrinsics {
 				List.of(call.argument(0), call.argument(1)), call.arguments().get(0), call.arguments().get(1)));
 		natives.put(regex + "matches(String,CharSequence)", (lowering, call) -> pattern(lowering, "matchesText",
 				List.of(call.argument(0), call.argument(1)), call.arguments().get(0), null));
+		// a Scanner's members of a pattern's text compile it where they are called
+		natives.put(SCANNER + ".hasNext(String)", scanning("hasNextText", true));
+		natives.put(SCANNER + ".next(String)", scanning("nextText", true));
+		natives.put(SCANNER + ".useDelimiter(String)", scanning("delimiterText", false));
+		natives.put(SCANNER + ".findInLine(String)", scanning("findInLineText", false));
+		natives.put(SCANNER + ".findWithinHorizon(String,int)", scanning("findWithinHorizonText", false));
+		natives.put(SCANNER + ".skip(String)", scanning("skipText", false));
+		natives.put(SCANNER + ".findAll(String)", scanning("findAllText", false));
 		// a charset named by a constant is that charset; any other name is looked up
 		natives.put(CHARSET + ".forName(String)", (lowering, call) -> {
 			JavaClass.Accessor named = call.arguments().get(0).constant() instanceof String name ? charsetNamed(name)

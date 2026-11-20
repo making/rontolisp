@@ -1,0 +1,117 @@
+int16 overflow: java.util.InputMismatchException <For input string: "80000000" under radix 16>
+int grouped overflow: java.util.InputMismatchException <For input string: "2147483648">
+int arabic overflow: java.util.InputMismatchException <For input string: "٣٣٣٣٣٣٣٣٣٣">
+long overflow: java.util.InputMismatchException <For input string: "9223372036854775808">
+short: java.util.InputMismatchException <Value out of range. Value:"32768" Radix:10>
+short16: java.util.InputMismatchException <Value out of range. Value:"8000" Radix:16>
+byte -129: java.util.InputMismatchException <Value out of range. Value:"-129" Radix:10>
+byte2: java.util.InputMismatchException <Value out of range. Value:"10000000" Radix:2>
+float radix16 ff: java.util.InputMismatchException null
+float radix16 1.5: <1.5>
+float radix2 12: <12.0>
+float radix2 1,000: <true>
+exp arabic: <1000.0>
+dec arabic: <3.4>
+bigdec exp: <1.5E+3>
+big radix16: <-1208925819614629174706175>
+big grouped: <1234567890123456789>
+big radix 3: <5>
+big radix 3 bad: java.util.InputMismatchException <For input string: "13" under radix 3>
+hex float: <4.9E-324>
+hex float big: <1.7976931348623157E308>
+hex float f: java.util.InputMismatchException <For input string: "0x1.8">
+dec int-ish: <0>
+float -0.0: <-0.0>
+double 1,000,000.5e-3: <1000.0005>
+double +.5: <0.5>
+double -5.: <-5.0>
+double .: <false>
+double e5: <false>
+double 1.2.3: <false>
+double 1,000.5,5: <false>
+double +-1: <false>
+double 1e+-5: <false>
+double 1e5.5: <false>
+double NaN1: <false>
+double +NaN: <NaN>
+double -Infinity: <-Infinity>
+findInLine \d+: <123>
+[4,7 <123> 0]
+next: <def>
+[8,11 <def> 0]
+findInLine x: null
+findInLine (\w)(\w): null
+[No match result available]
+nextLine: <>
+[11,12 <\n> 1 <\n>]
+findInLine 4: <4>
+next: <5>
+findInLine at end: null
+findInLine at newline: null
+findInLine empty at newline: null
+then nextLine: <>
+findInLine abc: <abc>
+horizon 0 five: <four>
+[14,18 <four> 0]
+next after: <five>
+horizon 5 two: null
+horizon 7 two: <two>
+horizon 3 \w+: <th>
+horizon -1: java.lang.IllegalArgumentException <horizon < 0>
+horizon \b: null
+horizon $: null
+horizon lookahead: <abc>
+horizon ^: null
+skip \s*: <java.util.Scanner[delimiters=\p{javaWhitespace}+][position=2][match valid=true][need input=false][source closed=false][skipped=false][group separator=\x{2c}][decimal separator=\x{2e}][positive prefix=][negative prefix=\Q-\E][positive suffix=][negative suffix=][NaN string=\QNaN\E][infinity string=\Q∞\E]>
+[0,2 <  > 0]
+next: <abc>
+skip x: java.util.NoSuchElementException null
+skip \s+d: <java.util.Scanner[delimiters=\p{javaWhitespace}+][position=7][match valid=true][need input=false][source closed=true][skipped=false][group separator=\x{2c}][decimal separator=\x{2e}][positive prefix=][negative prefix=\Q-\E][positive suffix=][negative suffix=][NaN string=\QNaN\E][infinity string=\Q∞\E]>
+next: <ef>
+skip at end: <java.util.Scanner[delimiters=\p{javaWhitespace}+][position=9][match valid=true][need input=false][source closed=true][skipped=false][group separator=\x{2c}][decimal separator=\x{2e}][positive prefix=][negative prefix=\Q-\E][positive suffix=][negative suffix=][NaN string=\QNaN\E][infinity string=\Q∞\E]>
+skip at end 2: java.util.NoSuchElementException null
+skip b (not at start): java.util.NoSuchElementException null
+next: <abc>
+nextInt: <12>
+[0,2 <12> 35 <12> <12> <12> <12> <12> <2> null null null null null null null null null null null null null null null null null null null null null null null null null null null null null]
+hasNextInt: <false>
+[No match result available]
+hasNext: <true>
+[No match result available]
+next: <ab>
+[3,5 <ab> 0]
+hasNextDouble: <true>
+[6,9 <3.5> 132 <3.5> <3.5> <3.5> null null <3> <3> null null null null null null null null null null null null <3> <3> <3> <3> null null null null null null null null null null null null <5> <5> null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null]
+nextDouble: <3.5>
+[6,9 <3.5> 132 <3.5> <3.5> <3.5> null null <3> <3> null null null null null null null null null null null null <3> <3> <3> <3> null null null null null null null null null null null null <5> <5> null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null null]
+nextBoolean: <true>
+[10,14 <true> 0]
+hasNextLine: <true>
+[14,24 < line one\n> 1 <\n>]
+nextLine: < line one>
+[14,24 < line one\n> 1 <\n>]
+next(\w+): <line>
+[24,28 <line> 0]
+next(\d): java.util.InputMismatchException null
+[No match result available]
+hasNext(t.o): <true>
+[29,32 <two> 0]
+next(Pattern): <two>
+[29,32 <two> 1 <w>]
+hasNextInt at end: <false>
+[No match result available]
+next at end: java.util.NoSuchElementException null
+[No match result available]
+[a, b, c, d]
+[1@1, 22@3, 333@6]
+[x1, y22] false
+[q, r] false
+java.util.Scanner[delimiters=\p{javaWhitespace}+][position=0][match valid=false][need input=false][source closed=false][skipped=false][group separator=\x{2c}][decimal separator=\x{2e}][positive prefix=][negative prefix=\Q-\E][positive suffix=][negative suffix=][NaN string=\QNaN\E][infinity string=\Q∞\E]
+java.util.Scanner[delimiters=\p{javaWhitespace}+][position=5][match valid=true][need input=false][source closed=false][skipped=false][group separator=\x{2c}][decimal separator=\x{2e}][positive prefix=][negative prefix=\Q-\E][positive suffix=][negative suffix=][NaN string=\QNaN\E][infinity string=\Q∞\E]
+java.util.Scanner[delimiters=\p{javaWhitespace}+][position=5][match valid=true][need input=false][source closed=false][skipped=false][group separator=\x{2c}][decimal separator=\x{2e}][positive prefix=][negative prefix=\Q-\E][positive suffix=][negative suffix=][NaN string=\QNaN\E][infinity string=\Q∞\E]
+java.util.Scanner[delimiters=o][position=5][match valid=true][need input=false][source closed=false][skipped=false][group separator=\x{2c}][decimal separator=\x{2e}][positive prefix=][negative prefix=\Q-\E][positive suffix=][negative suffix=][NaN string=\QNaN\E][infinity string=\Q∞\E]
+java.util.Scanner[delimiters=o][position=5][match valid=true][need input=false][source closed=true][skipped=false][group separator=\x{2c}][decimal separator=\x{2e}][positive prefix=][negative prefix=\Q-\E][positive suffix=][negative suffix=][NaN string=\QNaN\E][infinity string=\Q∞\E]
+cached after delimiter change: <5>
+cached radix 16, ask 10: <5>
+cached ff radix 16 ask 10: java.util.InputMismatchException null
+then next: <ff>

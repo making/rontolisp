@@ -1,0 +1,218 @@
+9 r2 has false: InputMismatchException For input string: "9" under radix 2
+9 r3 has false: InputMismatchException For input string: "9" under radix 3
+9 r8 has false: InputMismatchException For input string: "9" under radix 8
+9 r10 has true: 9
+9 r16 has true: 9
+9 r36 has true: 9
+9 long r3: InputMismatchException For input string: "9" under radix 3
+9 big r3: InputMismatchException For input string: "9" under radix 3
+9 short r3: InputMismatchException For input string: "9" under radix 3
+9 byte r3: InputMismatchException For input string: "9" under radix 3
+9 double: 9.0
+9 dec: 9
+19 r2 has false: InputMismatchException For input string: "19" under radix 2
+19 r3 has false: InputMismatchException For input string: "19" under radix 3
+19 r8 has false: InputMismatchException For input string: "19" under radix 8
+19 r10 has true: 19
+19 r16 has true: 25
+19 r36 has true: 45
+19 long r3: InputMismatchException For input string: "19" under radix 3
+19 big r3: InputMismatchException For input string: "19" under radix 3
+19 short r3: InputMismatchException For input string: "19" under radix 3
+19 byte r3: InputMismatchException For input string: "19" under radix 3
+19 double: 19.0
+19 dec: 19
+3,000 r2 has false: InputMismatchException For input string: "3000" under radix 2
+3,000 r3 has false: InputMismatchException For input string: "3000" under radix 3
+3,000 r8 has true: 1536
+3,000 r10 has true: 3000
+3,000 r16 has true: 12288
+3,000 r36 has true: 139968
+3,000 long r3: InputMismatchException For input string: "3000" under radix 3
+3,000 big r3: InputMismatchException For input string: "3000" under radix 3
+3,000 short r3: InputMismatchException For input string: "3000" under radix 3
+3,000 byte r3: InputMismatchException For input string: "3000" under radix 3
+3,000 double: 3000.0
+3,000 dec: 3000
+1,239 r2 has false: InputMismatchException For input string: "1239" under radix 2
+1,239 r3 has false: InputMismatchException For input string: "1239" under radix 3
+1,239 r8 has false: InputMismatchException For input string: "1239" under radix 8
+1,239 r10 has true: 1239
+1,239 r16 has true: 4665
+1,239 r36 has true: 49365
+1,239 long r3: InputMismatchException For input string: "1239" under radix 3
+1,239 big r3: InputMismatchException For input string: "1239" under radix 3
+1,239 short r3: InputMismatchException For input string: "1239" under radix 3
+1,239 byte r3: InputMismatchException For input string: "1239" under radix 3
+1,239 double: 1239.0
+1,239 dec: 1239
+٩ r2 has false: InputMismatchException For input string: "٩" under radix 2
+٩ r3 has false: InputMismatchException For input string: "٩" under radix 3
+٩ r8 has false: InputMismatchException For input string: "٩" under radix 8
+٩ r10 has true: 9
+٩ r16 has true: 9
+٩ r36 has true: 9
+٩ long r3: InputMismatchException For input string: "٩" under radix 3
+٩ big r3: InputMismatchException For input string: "٩" under radix 3
+٩ short r3: InputMismatchException For input string: "٩" under radix 3
+٩ byte r3: InputMismatchException For input string: "٩" under radix 3
+٩ double: 9.0
+٩ dec: 9
+٠,٠٠٠ r2 has true: 0
+٠,٠٠٠ r3 has true: 0
+٠,٠٠٠ r8 has true: 0
+٠,٠٠٠ r10 has true: 0
+٠,٠٠٠ r16 has true: 0
+٠,٠٠٠ r36 has true: 0
+٠,٠٠٠ long r3: 0
+٠,٠٠٠ big r3: 0
+٠,٠٠٠ short r3: 0
+٠,٠٠٠ byte r3: 0
+٠,٠٠٠ double: 0.0
+٠,٠٠٠ dec: 0
+١,٩٩٩ r2 has false: InputMismatchException For input string: "١٩٩٩" under radix 2
+١,٩٩٩ r3 has false: InputMismatchException For input string: "١٩٩٩" under radix 3
+١,٩٩٩ r8 has false: InputMismatchException For input string: "١٩٩٩" under radix 8
+١,٩٩٩ r10 has true: 1999
+١,٩٩٩ r16 has true: 6553
+١,٩٩٩ r36 has true: 58653
+١,٩٩٩ long r3: InputMismatchException For input string: "١٩٩٩" under radix 3
+١,٩٩٩ big r3: InputMismatchException For input string: "١٩٩٩" under radix 3
+١,٩٩٩ short r3: InputMismatchException For input string: "١٩٩٩" under radix 3
+١,٩٩٩ byte r3: InputMismatchException For input string: "١٩٩٩" under radix 3
+١,٩٩٩ double: 1999.0
+١,٩٩٩ dec: 1999
+a,bcd r2 has false: InputMismatchException null
+a,bcd r3 has false: InputMismatchException null
+a,bcd r8 has false: InputMismatchException null
+a,bcd r10 has false: InputMismatchException null
+a,bcd r16 has false: InputMismatchException null
+a,bcd r36 has false: InputMismatchException null
+a,bcd long r3: InputMismatchException null
+a,bcd big r3: InputMismatchException null
+a,bcd short r3: InputMismatchException null
+a,bcd byte r3: InputMismatchException null
+a,bcd double: InputMismatchException null
+a,bcd dec: InputMismatchException null
+0,abc r2 has false: InputMismatchException null
+0,abc r3 has false: InputMismatchException null
+0,abc r8 has false: InputMismatchException null
+0,abc r10 has false: InputMismatchException null
+0,abc r16 has false: InputMismatchException null
+0,abc r36 has false: InputMismatchException null
+0,abc long r3: InputMismatchException null
+0,abc big r3: InputMismatchException null
+0,abc short r3: InputMismatchException null
+0,abc byte r3: InputMismatchException null
+0,abc double: InputMismatchException null
+0,abc dec: InputMismatchException null
+g r2 has false: InputMismatchException null
+g r3 has false: InputMismatchException null
+g r8 has false: InputMismatchException null
+g r10 has false: InputMismatchException null
+g r16 has false: InputMismatchException null
+g r36 has true: 16
+g long r3: InputMismatchException null
+g big r3: InputMismatchException null
+g short r3: InputMismatchException null
+g byte r3: InputMismatchException null
+g double: InputMismatchException null
+g dec: InputMismatchException null
+-z r2 has false: InputMismatchException null
+-z r3 has false: InputMismatchException null
+-z r8 has false: InputMismatchException null
+-z r10 has false: InputMismatchException null
+-z r16 has false: InputMismatchException null
+-z r36 has true: -35
+-z long r3: InputMismatchException null
+-z big r3: InputMismatchException null
+-z short r3: InputMismatchException null
+-z byte r3: InputMismatchException null
+-z double: InputMismatchException null
+-z dec: InputMismatchException null
++Z,ZZZ r2 has false: InputMismatchException null
++Z,ZZZ r3 has false: InputMismatchException null
++Z,ZZZ r8 has false: InputMismatchException null
++Z,ZZZ r10 has false: InputMismatchException null
++Z,ZZZ r16 has false: InputMismatchException null
++Z,ZZZ r36 has false: InputMismatchException null
++Z,ZZZ long r3: InputMismatchException null
++Z,ZZZ big r3: InputMismatchException null
++Z,ZZZ short r3: InputMismatchException null
++Z,ZZZ byte r3: InputMismatchException null
++Z,ZZZ double: InputMismatchException null
++Z,ZZZ dec: InputMismatchException null
+8 r2 has false: InputMismatchException For input string: "8" under radix 2
+8 r3 has false: InputMismatchException For input string: "8" under radix 3
+8 r8 has false: InputMismatchException For input string: "8" under radix 8
+8 r10 has true: 8
+8 r16 has true: 8
+8 r36 has true: 8
+8 long r3: InputMismatchException For input string: "8" under radix 3
+8 big r3: InputMismatchException For input string: "8" under radix 3
+8 short r3: InputMismatchException For input string: "8" under radix 3
+8 byte r3: InputMismatchException For input string: "8" under radix 3
+8 double: 8.0
+8 dec: 8
+2 r2 has false: InputMismatchException For input string: "2" under radix 2
+2 r3 has true: 2
+2 r8 has true: 2
+2 r10 has true: 2
+2 r16 has true: 2
+2 r36 has true: 2
+2 long r3: 2
+2 big r3: 2
+2 short r3: 2
+2 byte r3: 2
+2 double: 2.0
+2 dec: 2
+９ r2 has false: InputMismatchException For input string: "９" under radix 2
+９ r3 has false: InputMismatchException For input string: "９" under radix 3
+９ r8 has false: InputMismatchException For input string: "９" under radix 8
+９ r10 has true: 9
+９ r16 has true: 9
+９ r36 has true: 9
+９ long r3: InputMismatchException For input string: "９" under radix 3
+９ big r3: InputMismatchException For input string: "９" under radix 3
+９ short r3: InputMismatchException For input string: "９" under radix 3
+９ byte r3: InputMismatchException For input string: "９" under radix 3
+９ double: 9.0
+９ dec: 9
+1,٣٣٣ r2 has false: InputMismatchException For input string: "1٣٣٣" under radix 2
+1,٣٣٣ r3 has false: InputMismatchException For input string: "1٣٣٣" under radix 3
+1,٣٣٣ r8 has true: 731
+1,٣٣٣ r10 has true: 1333
+1,٣٣٣ r16 has true: 4915
+1,٣٣٣ r36 has true: 50655
+1,٣٣٣ long r3: InputMismatchException For input string: "1٣٣٣" under radix 3
+1,٣٣٣ big r3: InputMismatchException For input string: "1٣٣٣" under radix 3
+1,٣٣٣ short r3: InputMismatchException For input string: "1٣٣٣" under radix 3
+1,٣٣٣ byte r3: InputMismatchException For input string: "1٣٣٣" under radix 3
+1,٣٣٣ double: 1333.0
+1,٣٣٣ dec: 1333
+٣,333 r2 has false: InputMismatchException For input string: "٣333" under radix 2
+٣,333 r3 has false: InputMismatchException For input string: "٣333" under radix 3
+٣,333 r8 has true: 1755
+٣,333 r10 has true: 3333
+٣,333 r16 has true: 13107
+٣,333 r36 has true: 143967
+٣,333 long r3: InputMismatchException For input string: "٣333" under radix 3
+٣,333 big r3: InputMismatchException For input string: "٣333" under radix 3
+٣,333 short r3: InputMismatchException For input string: "٣333" under radix 3
+٣,333 byte r3: InputMismatchException For input string: "٣333" under radix 3
+٣,333 double: 3333.0
+٣,333 dec: 3333
+exp 1e٣: 1000.0
+1٫5: false
+big 0x: 485
+double big: 1.2345678901234568E20
+float of 1e39: Infinity
+float of 0x1p-150: 0.0
+dec of 1e+5: 1E+5
+dec of 1E-0: 1
+dec of -00.0: 0.0
+dec of 1e99999999999: false
+dec of 1e2147483648: 1E+2147483648
+whitespace 9 a b c d 1c 1d 1e 1f 20 1680 2000 2001 2002 2003 2004 2005 2006 2008 2009 200a 2028 2029 205f 3000 
+non-ascii digits 750 39890925
+34 -12 3

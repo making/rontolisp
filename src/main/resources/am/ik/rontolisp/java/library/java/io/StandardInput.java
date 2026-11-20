@@ -6,10 +6,14 @@ package java.io;
 // System.in: the host's standard input, a stream of characters, read as the bytes of
 // their UTF-8. A read of several bytes or characters waits for the first and goes on
 // while the host has the next at hand; where the host cannot say (wasm), to the end of
-// the line -- so that a program reading lines does not wait for more than one.
+// the line -- so that a program reading lines does not wait for more than one. Once
+// closed it is at its end (a Scanner closed over it closes it), where a JDK's refuses a
+// read: no exception class in a program that reads bytes and throws none.
 final class StandardInput extends InputStream {
 
     private static StandardInput in;
+
+    private boolean closed;
 
     // the bytes of the character read last that no read has taken yet
     private final byte[] left = new byte[4];
@@ -39,7 +43,14 @@ final class StandardInput extends InputStream {
     // Whether a read of several goes on after the byte or character read last.
     private static native boolean more0(int last);
 
+    public void close() {
+        closed = true;
+    }
+
     public int read() {
+        if (closed) {
+            return -1;
+        }
         if (leftAt < leftEnd) {
             return left[leftAt++] & 0xff;
         }
@@ -85,6 +96,9 @@ final class StandardInput extends InputStream {
     }
 
     public int available() {
+        if (closed) {
+            return 0;
+        }
         return leftEnd - leftAt > 0 ? leftEnd - leftAt : ready0() ? 1 : 0;
     }
 
@@ -95,13 +109,16 @@ final class StandardInput extends InputStream {
 
     // The next line without the \n that ends it, null at the end.
     String line() {
-        return line0();
+        return closed ? null : line0();
     }
 
     private static native String line0();
 
     // The next UTF-16 unit, for a reader of characters: -1 at the end.
     int unit() {
+        if (closed) {
+            return -1;
+        }
         if (low >= 0) {
             int unit = low;
             low = -1;

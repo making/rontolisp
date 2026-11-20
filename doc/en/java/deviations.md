@@ -292,6 +292,19 @@ function, `appendReplacement`, `appendTail`, `toMatchResult` and `quoteReplaceme
 `matches` in a region with transparent bounds, a JDK's `start()` is 0 when a look-behind
 read before the region; here it is the region's start.
 
+**A `Scanner`'s match after a number is the token alone.** `match()` after `nextInt` ..
+`nextBigDecimal`, and after their `hasNext`, has no group; a JDK's has the groups of its own
+pattern of a number. The positions of `match()` and of `toString()` count from the start of
+what the scanner holds: all of a `String`'s text, where a JDK's count from its buffer past the
+first 1024 characters. A `Readable` is handed an empty `CharBuffer` of 1024 characters at each
+read; a JDK hands it the scanner's buffer, positioned after what the scanner still holds.
+
+**A `CharBuffer` is one class.** `getClass().getName()` of every buffer is
+`java.nio.CharBuffer`, where a JDK names its kind (`java.nio.HeapCharBuffer`). A
+`CharSequence` that is no `String` is wrapped as it is read through `charAt`, so a character
+outside the Basic Multilingual Plane is one element of it, where a JDK's is two. `order()` is
+refused by name.
+
 **`String.format` has the conversions [The JDK classes](classes.md) lists**; any other is an
 error naming it. The only locales are the root and the English ones, which format as
 `String.format` without a locale does; the default locale is `Locale.US`.
@@ -391,7 +404,9 @@ come through as its bytes; a byte written to `System.out` or `System.err` is a b
 UTF-8, and its character is written once its last byte is. A read of several bytes from
 `System.in` waits for the first and takes what is at hand after it; a `.wasm` cannot ask
 its host what is at hand and reads to the end of the line. `System.out` and `System.err`
-cannot be replaced (`System.setOut`) and stay open after `close()`.
+cannot be replaced (`System.setOut`) and stay open after `close()`. A closed `System.in`
+is at its end, so a `Scanner` made over it again has no token, as under a JDK, whose read
+throws `IOException` there.
 
 **Six charsets.** `UTF-8`, which is the default, `ISO-8859-1`, `US-ASCII`, `UTF-16`,
 `UTF-16BE` and `UTF-16LE`; any other name is an `UnsupportedEncodingException` or an
@@ -695,8 +710,7 @@ Each of these is an error naming the construct and its position.
 - A class extending `String`, `StringBuilder` or a box.
 - Of `java.util.concurrent`, what [The JDK classes](classes.md) does not list: the queues
   ordered by priority or by delay. A `Timer`'s `schedule` of a `Date`. Thread groups.
-- Any JDK class or member [The JDK classes](classes.md) does not list:
-  `Scanner`, files
-  (`File`, `FileReader`, `java.nio.file`), `Calendar`,
+- Any JDK class or member [The JDK classes](classes.md) does not list: files
+  (`File`, `FileReader`, `java.nio.file`, a `Scanner` of one), `Calendar`,
   reflection. Of `java.net`, everything but `URI`, `URL`, the addresses of a server and the
   [HTTP client](#the-http-client): sockets, `HttpURLConnection`.
