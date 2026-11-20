@@ -245,7 +245,7 @@ conversion tooling live in `.todo/artefacts/a8*`/`a9*` and git history.
   three static fields each 86,049 B; 5,000 Java classes with a static block each, or with
   three static fields each, now compile and print the JDK's line. Not cut:
   `JvmReadRuntimeBuilder.structTableClinit` (the `#S` directory, one entry a struct type
-  under `read`), which keeps its array on the stack across entries.
+  under `read`), which keeps its array on the stack across entries (`.todo/k73`).
 
 - An array literal of any family is filled by `_ql$N` builders past a budget, and a run of equal
   immediates costs one `addAll` ([array-literals.md](array-literals.md), "A long literal").
