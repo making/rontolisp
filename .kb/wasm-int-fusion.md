@@ -198,6 +198,33 @@ fast path alone, with no `block $bail` and no fallback: in `tryCompile`, `tryCom
   has a cell, a celled root proves no range and no celled site is free of bails (the same ten
   derivations 28.5 G -> 19.5 G).
 
+## Declared leaves and what else the Java front end needed (2026-11-20, `.todo/k56`)
+
+- **A declared leaf has no bail** (`ExprLeaf.trusted`): a variable a declaration gives an
+  integer range within i64, or the leaf under a `(the spec X)` of one, unboxes checked against
+  the range and trapping on what contradicts it (`emitTrustedUnbox`;
+  [declarations-type-checks.md](declarations-type-checks.md), "Declared integer ranges"), and
+  its range is the declared one. A site over such leaves and wrapped or range-proven steps
+  has no fallback.
+- **A shift by a counted range is one i64 shift**: a left `ash` whose count's range is
+  within `[0, 62]` is a step of its own range (its corners, `combine`), under a mask within
+  `[0, 63]` the wrapped `i64.shl`; an `ash` whose count is within `[-63, 0]` is `i64.shr_s` of
+  the negated count. Java's `x << n` and `x >> n` are such counts (`(logand n 31)`), and
+  `signalsOnIntegers` and the order guards treat a count whose range fits an i32 as one that
+  cannot signal, a divisor whose range leaves out 0 as non-zero.
+- **`logand`, `logior`, `logxor` stay in the narrowest signed field holding every operand**
+  (`bitwiseRange`, the fused ranges and `valueRange` alike): an `int`'s `|=` stays an `int`.
+  `valueRange` reads `%mask-signed-field` as its field, so a binding assigned one is exact.
+- **An order boundary with nothing to check is no boundary** (`planOrder`): every pending
+  operation over exact, counted or declared operands, no divisor or count to test -- the
+  probe it emitted could never run.
+- **A masked signed field over a lone leaf it cannot bail on is fused**: its unfused form is
+  the lowering, inline (`expandMaskSignedField`), where the fused one is an unbox, two
+  shifts and a box. Over a leaf that can bail it still declines, as before; the JVM fuses
+  every such field ([jvm-int-fusion.md](jvm-int-fusion.md)).
+- Measured with the Java programs of [java-frontend.md](java-frontend.md), "Numbers", where
+  the numbers are.
+
 ## A leaf compiled twice (2026-11-09, `.todo/j36`)
 
 **A leaf defun runs nothing that can run user code, so what holds when it starts holds until it

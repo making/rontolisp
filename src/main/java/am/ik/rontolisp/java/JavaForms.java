@@ -128,22 +128,90 @@ final class JavaForms {
 	}
 
 	/**
-	 * The mask keeping an integer in the range of its type, a shape the backends compile
-	 * raw; a double is left as it is. A {@code long} is the low 64 bits as a signed
-	 * field, one wrapping machine operation on both compilers where the masks of an
-	 * {@code int} would need a bignum literal.
+	 * The Common Lisp type of the values of an integral type -- {@code (signed-byte 32)}
+	 * for an {@code int}; for a {@code char} every code, a string's elements being code
+	 * points here -- or {@code null} for any other type. What the lowering declares of a
+	 * variable and asserts of a value with {@code the}: the backends that keep integers
+	 * raw take such a value without the test that would send another to their generic
+	 * path ({@code .kb/java-frontend.md}, "Numbers").
+	 */
+	static @Nullable LispVal integerType(JavaType type) {
+		if (!(type instanceof JavaType.Primitive primitive)) {
+			return null;
+		}
+		return switch (primitive) {
+			case BYTE -> list(cl("signed-byte"), integer(8));
+			case SHORT -> list(cl("signed-byte"), integer(16));
+			case CHAR -> list(cl("integer"), integer(0), integer(Character.MAX_CODE_POINT));
+			case INT -> list(cl("signed-byte"), integer(32));
+			case LONG -> list(cl("signed-byte"), integer(64));
+			default -> null;
+		};
+	}
+
+	/**
+	 * {@code (declare (type spec var...) ...)} for the variables of an integral type, or
+	 * {@code null} when none is.
+	 */
+	static @Nullable LispVal integerDeclaration(List<LispSymbol> variables, List<JavaType> types) {
+		java.util.Map<String, List<LispVal>> byType = new java.util.LinkedHashMap<>();
+		java.util.Map<String, LispVal> specs = new java.util.HashMap<>();
+		for (int i = 0; i < variables.size(); i++) {
+			LispVal spec = integerType(types.get(i));
+			if (spec != null) {
+				specs.putIfAbsent(spec.print(), spec);
+				byType.computeIfAbsent(spec.print(), key -> new ArrayList<>()).add(variables.get(i));
+			}
+		}
+		if (byType.isEmpty()) {
+			return null;
+		}
+		List<LispVal> clauses = new ArrayList<>();
+		clauses.add(cl("declare"));
+		byType.forEach((key, named) -> {
+			List<LispVal> clause = new ArrayList<>();
+			clause.add(cl("type"));
+			clause.add(specs.get(key));
+			clause.addAll(named);
+			clauses.add(list(clause));
+		});
+		return list(clauses);
+	}
+
+	/**
+	 * A value of an integral type as an operand: asserted of its type with {@code the}
+	 * where the form does not tell it -- a call, a field, a conditional -- and as it is
+	 * where it does: a literal, a variable (declared where it is bound), an operation the
+	 * backends bound by their own arithmetic.
+	 */
+	static LispVal known(JavaType type, LispVal form) {
+		if (!(form instanceof LispCons cons) || !(cons.car() instanceof LispSymbol head)) {
+			return form;
+		}
+		return switch (head.name()) {
+			case "+", "-", "*", "LOGAND", "LOGIOR", "LOGXOR", "LOGNOT", "ASH", "REM", "%MASK-SIGNED-FIELD", "THE" ->
+				form;
+			default -> asserted(type, form);
+		};
+	}
+
+	/** {@code (the spec form)} of a value of an integral type; any other as it is. */
+	static LispVal asserted(JavaType type, LispVal form) {
+		LispVal spec = integerType(type);
+		return spec == null ? form : list(cl("the"), spec, form);
+	}
+
+	/**
+	 * An integer kept in the range of its type: its low 32 or 64 bits as a signed field,
+	 * which both compilers fuse with the operation under it into one wrapping machine
+	 * operation and a sign extension, the interpreter answers in one call; a double is
+	 * left as it is.
 	 */
 	static LispVal wrap(JavaType type, LispVal form) {
 		if (type.isFloating()) {
 			return form;
 		}
-		if (type == JavaType.Primitive.LONG) {
-			return call("%mask-signed-field", integer(64), form);
-		}
-		BigInteger half = BigInteger.ONE.shiftLeft(31);
-		LispVal offset = integer(half);
-		return call("-", call("logand", call("+", form, offset), integer(half.shiftLeft(1).subtract(BigInteger.ONE))),
-				offset);
+		return call("%mask-signed-field", integer(type == JavaType.Primitive.LONG ? 64 : 32), form);
 	}
 
 	/**
@@ -151,8 +219,7 @@ final class JavaForms {
 	 * backends compile raw.
 	 */
 	static LispVal signed(LispVal form, int bits) {
-		long half = 1L << (bits - 1);
-		return call("-", call("logand", call("+", form, integer(half)), integer((half << 1) - 1)), integer(half));
+		return call("%mask-signed-field", integer(bits), form);
 	}
 
 	/**
@@ -177,8 +244,9 @@ final class JavaForms {
 	/**
 	 * A {@code native} method of a program: a call of the Common Lisp function its name
 	 * names. A {@code char} crosses as a character, a {@code boolean} back as {@code T}
-	 * or {@code NIL}, a string back as the program's immutable string; every other value
-	 * as it is.
+	 * or {@code NIL}, a string back as the program's immutable string, an integer back as
+	 * a value of the integral type returned -- its low bits, which the type declares
+	 * ({@link #integerType}); every other value as it is.
 	 */
 	static JavaEmitter lispFunction(String method, List<JavaType> parameters, JavaType returnType) {
 		LispSymbol function = new LispSymbol(lispName(method));
@@ -191,6 +259,13 @@ final class JavaForms {
 			LispVal result = form(function, arguments);
 			if (returnType == JavaType.Primitive.CHAR) {
 				return call("char-code", result);
+			}
+			if (returnType == JavaType.Primitive.BYTE || returnType == JavaType.Primitive.SHORT) {
+				return signed(result, returnType == JavaType.Primitive.BYTE ? 8 : 16);
+			}
+			if (returnType == JavaType.Primitive.INT || returnType == JavaType.Primitive.LONG) {
+				// a value of the type, as a method of it answers: its low bits
+				return wrap(returnType, result);
 			}
 			if (returnType == JavaType.Primitive.BOOLEAN) {
 				return call("if", result, LispTrue.INSTANCE, LispNil.INSTANCE);

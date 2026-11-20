@@ -1611,6 +1611,69 @@ class WasmLispCompilerIntegrationTest {
 		// on empty cells and +tbl+'s vector, and the one peek runs before the
 		// definition.
 		assertThat(compileAndRun("(defun run-data (form) (eval form))\n" + exact)).isEqualTo(exactExpected);
+		// Declared integer ranges (.kb/declarations-type-checks.md, "Declared integer
+		// ranges"): step32's parameters through a deftype, hash32's locals, lanes' long
+		// and its shift count, digit's (unsigned-byte 16) and a conjunction with fixnum
+		// are taken raw with no fallback; a fixnum alone proves no bound, so loose
+		// doubles a bignum. Java's int and long arithmetic, which is what the front end
+		// lowers to; the interpreter's output, and a JDK's for the hash and the shifts.
+		String declared = """
+				(deftype int32 () '(signed-byte 32))
+				(defun step32 (h c)
+				  (declare (type int32 h c))
+				  (%mask-signed-field 32 (+ (* 31 h) c)))
+				(defun hash32 (s)
+				  (let ((h 0) (i 0))
+				    (declare (type (signed-byte 32) h i))
+				    (loop while (< i (length s))
+				          do (setq h (step32 h (char-code (char s i))))
+				             (setq i (1+ i)))
+				    h))
+				(defun lanes (x k)
+				  (declare (type (signed-byte 64) x) (type (integer 0 63) k))
+				  (let ((y (%mask-signed-field 64 (* x 6364136223846793005))))
+				    (declare (type (signed-byte 64) y))
+				    (list y (ash y (- k)) (%mask-signed-field 64 (ash y k)) (logand y (lognot (ash 1 k))) (< y x))))
+				(defun digit (c)
+				  (declare (type (unsigned-byte 16) c))
+				  (let ((d (- c 48)))
+				    (declare (type (and fixnum (integer -48 65487)) d))
+				    (if (< d 10) d (- d 7))))
+				(defun loose (n)
+				  (declare (type fixnum n))
+				  (+ n n))
+				(print (hash32 "the quick brown fox jumps over the lazy dog"))
+				(print (lanes 9223372036854775807 3))
+				(print (lanes -9223372036854775808 63))
+				(print (mapcar #'digit '(48 57 65 70)))
+				(print (loose (expt 2 70)))
+				""";
+		String declaredExpected = """
+				-2082818701
+				(2859235813007982803 357404476625997850 4427142430354310808 2859235813007982803 T)
+				(-9223372036854775808 -1 0 -18446744073709551616 NIL)
+				(0 9 10 15)
+				2361183241434822606848""";
+		assertThat(compileAndRun(declared)).isEqualTo(declaredExpected);
+		assertThat(compileComponentAndRun(declared)).isEqualTo(declaredExpected);
+		// A false declaration is a trap where the trusted value meets it, never a wrong
+		// value: an int32 the call answers past its range, read in a fused site, and an
+		// octet assigned 256, stored into its raw slot.
+		assertThat(compileAndRunExpectTrap("""
+				(defun wide (n) (expt 2 n))
+				(defun bump (n) (* (+ (the (signed-byte 32) (wide n)) 1) 2))
+				(print (bump 3))
+				(print (bump 40))
+				""")).contains("unreachable");
+		assertThat(compileAndRunExpectTrap("""
+				(defun octet (n)
+				  (let ((o 0))
+				    (declare (type (unsigned-byte 8) o))
+				    (setq o (+ n o 1))
+				    (+ o o)))
+				(print (octet 254))
+				(print (octet 255))
+				""")).contains("unreachable");
 	}
 
 	@Test
@@ -2261,7 +2324,9 @@ class WasmLispCompilerIntegrationTest {
 		// rank-unknown declaration at a rank-2 site). A (vector t) is the general kind
 		// too -- the reader's T is no symbol, and the specifier proved nothing -- and
 		// its length honours the fill pointer inline, before and after a push grows the
-		// storage. Both optimize levels must agree with each other and with the
+		// storage. A lambda's parameter is no declared variable of the same name around
+		// it: shadowed's inner v is a string (it trapped on the u8 cast until
+		// 2026-11-20). Both optimize levels must agree with each other and with the
 		// interpreter/JVM text.
 		String program = """
 				(deftype octet-vec (&optional length)
@@ -2294,6 +2359,9 @@ class WasmLispCompilerIntegrationTest {
 				(defun count-general (v)
 				  (declare (type (vector t) v))
 				  (+ (aref v 0) (length v)))
+				(defun shadowed (v)
+				  (declare (type (simple-array (unsigned-byte 8) (*)) v))
+				  (+ (aref v 0) ((lambda (v) (length v)) "abcde")))
 				(let ((u32 (make-array 3 :element-type '(unsigned-byte 32)))
 				      (f (make-array 2 :element-type 'double-float :initial-element 0.5d0))
 				      (gen (make-array 2)))
@@ -2331,7 +2399,8 @@ class WasmLispCompilerIntegrationTest {
 				  (let ((maybe (make-array '(2 2))))
 				    (declare (type (simple-array t *) maybe))
 				    (setf (aref maybe 0 0) 5)
-				    (print (aref maybe 0 0))))
+				    (print (aref maybe 0 0)))
+				  (print (shadowed (make-array 2 :element-type '(unsigned-byte 8) :initial-element 7))))
 				""";
 		List<LispVal> parsed = LispReader.readAllFromString(program);
 		byte[] fast = WasmLispCompiler.builder().optimize(OptimizeLevel.DEFAULT).build().compile(parsed);
@@ -2352,7 +2421,8 @@ class WasmLispCompilerIntegrationTest {
 				(#\\x #\\x #\\x #\\q)
 				T
 				900
-				5""");
+				5
+				12""");
 	}
 
 	@Test

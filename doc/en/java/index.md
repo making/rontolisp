@@ -276,6 +276,10 @@ $ rontolisp main.lisp
 Nothing is converted but this: a `char` crosses as a character, a `boolean` comes back as `T`
 or `NIL`. A number is a number, a string a string, `null` is `NIL`, an object of the program a
 structure, an `Object[]` a vector. A Common Lisp list is no `List`: hand a Java method a vector.
+An integer handed to an `int`, `long`, `short`, `byte` or `char` parameter must be one of the
+type's values: the compiled program takes it as that type declares (on wasm an integer past the
+type's range traps). An integer a `native` method answers for an `int`, `long`, `short` or
+`byte` is cut to the type's width, its low bits, as a value of the type is.
 
 ## The tools
 

@@ -122,10 +122,11 @@ beside them: k55 (2026-11-20; "The sequenced collections" below).
   Rejected: `null` as `:null` (every reference test and every slot default pays, where only a
   `Boolean` box does now). A boxed `long`, `byte`, `short` and `float` is the cons
   `(value . tag)` ("Boxes" below).
-- **`int` is an integer kept in range** by the unconditional mask
-  `(- (logand (+ x 2^31) (2^32 - 1)) 2^31)`, `short` and `byte` the same at 16 and 8 bits;
-  `long` is `(%mask-signed-field 64 x)`; `char` an integer whose static type prints it, a
-  `float` the double of its value. No declaration is emitted ("Numbers" below).
+- **`int` is an integer kept in range** by `(%mask-signed-field 32 x)`, `short` and `byte`
+  the same at 16 and 8 bits, `long` at 64 (the unconditional mask
+  `(- (logand (+ x 2^31) (2^32 - 1)) 2^31)` until k56); `char` an integer whose static type
+  prints it, a `float` the double of its value. A variable of an integral type is declared of
+  its range, an operand the form does not bound asserted with `the` ("Numbers" below).
 - **A class is a `defstruct`** named by the class's BINARY name (`Outer$Inner`,
   `java.lang.ThreadLocal`; k01, `JavaNames.structure`: the structure's name is the one
   thing of a class the run time reads, for `Object.toString()`, and every other Lisp name
@@ -2137,7 +2138,12 @@ has nothing of what a region needs -- the forms it had before.** Provenance:
   program holding all; a reader following them (find the set, skip its head, read its
   runs into this set's offsets) is 8,629 B of wasm, paid by every program holding a
   region, and `JavaZones.table` would have to resolve a copy whose set is not held. Not
-  taken; measured again after `.todo/k56`.
+  taken. **Measured again after k56** (2026-11-20, a reader re-written from that
+  description into `region`, `copied` and `place`, a program holding Paris): +8,394 B on the
+  build before, +5,867 after (`copied` 6,661 -> 4,651 B, most of what is left its `long[]`
+  reads, the generic dispatch); one with an `int[]` and an exception of its own also cost
+  `placed` 2,181 B of proofs the type-test fold had. Every program holding a region pays
+  it, 11,492 B come back only where one holds them all: still not taken.
 - **A program's table** (`JavaZones.table`, the constant `ZoneChanges.table0()` is) holds
   the regions it holds: the areas its names are shortened by (`America/`: a name up to
   its last slash, written as one character from `#`; an area is named where that saves
@@ -2146,9 +2152,9 @@ has nothing of what a region needs -- the forms it had before.** Provenance:
 - **Not taken: a region as arrays the compiler writes** (k51), to spare a program naming
   its regions the reader: Paris's 102 listed changes as three `long[]` literals are
   38,732 B of wasm (each second past an `i31` a boxed literal) against its 328 B of text,
-  so the reader (17.9 KB) is the cheaper half from the first region on. What the reader
-  costs is the arithmetic's: some 200 B of wasm per `int` or `long` operation
-  (`.todo/k56`).
+  so the reader (17.9 KB) is the cheaper half from the first region on. Some 200 B of
+  wasm per `int` or `long` operation were most of what the reader cost; since k56 it is
+  13.2 KB ("Numbers"), most of what is left its array accesses.
 - **The rules in the library**: `ZoneChanges` (under `ZoneRules`, which stays the rules
   of one offset: a program making none has `ZoneRules` as it was) holds the seconds of
   the changes with the clock's and the standard offset after each, and the yearly rules
@@ -2195,7 +2201,7 @@ has nothing of what a region needs -- the forms it had before.** Provenance:
   233; `now(zone).toString()` 8,361 -> 6,687 / 5,659 -> 4,858 / 614. The walk: JVM 15 ->
   14 s, wasm 29 -> 26 s, the interpreter 5.9 -> 5.7 min: the rest is its lines' strings.
   The bytes: a program holding a region +6.7 KB of wasm (`ruled` 3,546 -> 7,528,
-  `placed` 5,426 -> 7,699 from the same forms), the arithmetic's again (`.todo/k56`); a
+  `placed` 5,426 -> 7,699 from the same forms; since k56 4,829 and 5,166); a
   window of one year with its bounds made by `LocalDate` was +8.9 KB, an index computed
   per element instead of two loops +9.7.
 - **What a program pays** (wasm, `ZonedDateTime.of(.., ZoneId.of(..)).plusHours(1)`;
@@ -2213,7 +2219,8 @@ has nothing of what a region needs -- the forms it had before.** Provenance:
   changes); and `"..." + offset` in `ZoneRules.toString` is the generic `%string` of a
   value the backend cannot type, which kept the float arm of `%java-to-string` and 17 KB
   of float printing (190,054 with `offset.getId()`). Every `int` and `long` operation of
-  the library is masked to its width, which is what the reader's 18 KB are.
+  the library is masked to its width, which was what the reader's 18 KB were ("Numbers":
+  13.2 KB since k56).
 - **The walk** (`.todo/artefacts/k42-java-time-the-rules-of-a-region/Regions.java`): every
   zone's changes and yearly rules, the instants and local date-times on, beside and
   between every change (and those the yearly rules make in five later years), seeded
@@ -3347,10 +3354,50 @@ class of a package of our own was needed (`deviations.md`, "The HTTP server").
   (`.kb/jvm-int-fusion.md`, `.kb/wasm-int-fusion.md`), where the mask of an `int` at 64 bits
   needs the bignum literal `2^63`, which declines fusion: every step built a bignum. `x >>> k`
   with a literal `k` is `(logand (ash x -k) (2^(w-k) - 1))`, no bignum either.
-- **`int` keeps the unconditional mask.** `(%mask-signed-field 32 x)` measured the same time
-  (`WrapInt` x10: 0.85 / 0.77 s against 0.91 / 0.74) and `Sieve.wasm` 10,380 -> 10,988 bytes
-  (its fallback is `logxor`'s): not made. A mask in a `let` or behind a test loses 4x (the j68
-  artefact README).
+- **What the types prove reaches the backends as declarations** (2026-11-20, k56). A
+  parameter, a local, a `for` and an enhanced `for` variable and a lambda's parameter of an
+  integral type are declared of its Common Lisp type at the head of the body binding it
+  (`JavaForms.integerType`: `(signed-byte 32)` an `int`, `64` a `long`, `16` and `8` a
+  `short` and a `byte`, `(integer 0 1114111)` a `char`, a string's elements being code
+  points (`doc/*/java/deviations.md`; `(unsigned-byte 16)` trapped on the first one past
+  U+FFFF, `Properties.escaped` of the corpus); `declaring`, and `boundInTurn`, a
+  `let` each for several declarators, since a `let*` gives its inner `let` every
+  declaration). An operand of an integer operation whose form does not say its range -- a
+  call, a field, a conditional -- is asserted with `the` (`JavaForms.known`), a static field
+  where it is read (a global no declaration covers), an `int` quotient as `(integer -2^31
+  2^31)`: `MIN_VALUE / -1` is the one value past the type, which the wrap takes back. On
+  wasm-GC that is a site with no fallback and a variable kept raw where it is read mostly raw
+  (`.kb/declarations-type-checks.md`, "Declared integer ranges"); the interpreter and the
+  JVM read none, the JVM's fused methods being outlined, shared by shape and guarded by one
+  `instanceof Long` (`.kb/jvm-int-fusion.md`). `JavaResumable` drops a `the` around an await.
+  A Common Lisp caller handing a method a value out of a parameter's range is a false
+  declaration (on wasm a trap; `doc/*/java/index.md`); a `native` method's integral result is
+  wrapped to its type.
+- **Every integral wrap is `(%mask-signed-field w x)`** (`JavaForms.wrap`, `signed`). Until
+  k56 `int` kept the unconditional mask `(- (logand (+ x 2^31) 2^32-1) 2^31)`: the masked
+  field measured the same time (`WrapInt` x10: 0.85 / 0.77 s against 0.91 / 0.74) and
+  `Sieve.wasm` 10,380 -> 10,988 bytes, its fallback being `logxor`'s. With the fallbacks gone
+  the field is two shifts where the mask is three operations over five-byte constants, and on
+  the interpreter one call where the mask is three (2,000,000 steps of `h = 31 * h + i % 7`:
+  2.5 -> 2.0-2.2 s); over a lone leaf both compilers fuse it now, its lowering being inline.
+  A mask in a `let` or behind a test loses 4x (the j68 artefact README).
+- **Measured** (2026-11-20, base `e9313f180`; bytes of wasm unless named): a method of ten
+  `x = x + b;` over `int` parameters 2,098 -> 298, over `long` 1,948 -> 214; the zone reader
+  (`ZoneChanges.region`, `find`, `rule`, `written`, `number`) 17,920 -> 13,217;
+  `ZonedDateTime.of(.., ZoneId.of("Europe/Paris")).plusHours(1)` 197,022 -> 173,608
+  (`Zone.class` 278,339 -> 271,945); `Sieve` 22,493 -> 21,305; YAVI `Booking.java`
+  1,204,473 -> 1,129,086, `Member.java` 663,174 -> 647,893; the walk of the regions 599,559
+  -> 534,113 (`Regions.jar` 221,955 -> 217,368). The choices, by the same programs: every
+  declared local raw against none, Booking 1,136,369 against 1,143,837, by raw use
+  1,133,686; every declared parameter raw 1,143,772 (Zone 178,508), by raw use 1,133,686
+  (173,697); the mask against the field, Booking 1,133,686 / 1,129,086, Zone 173,697 /
+  173,608, `ten` 448 / 298. Times (wasm / JVM, best of three, CPU seconds unless named):
+  the walk 31 / 16.5 s of wall time before and after, its lines' strings, and on the
+  interpreter 6.9 -> 6.4 min (the masked field one call); 50,000,000 steps of the sieve loop
+  9.0 s before and after; 200 walks of `Sieve`'s tree 4.2 -> 4.0 / 1.8 s; 30,000,000 `int`
+  and 10,000,000 `long` steps 0.164 -> 0.110 / 0.50 s. What is left of the reader is its array accesses: a
+  `long[]` read is the generic dispatch, the arrays of a program being undeclared (a null
+  array raises `NullPointerException` where it is read).
 - **`byte` and `short`** are integers an operator promotes to `int` and an assignment of a
   constant that fits, a cast or a compound assignment narrows (`JavaForms.signed`).
   **`float` is the double of its value** -- every binary32 is a binary64 -- and each operation's
@@ -4643,8 +4690,8 @@ and the JVM keep host threads and the forms they had.
   sharing the loop's assigned local 1.67 s; the local copied in and out 1.57 s; a named
   function handed and answering it 1.55 s; and a plain lambda that never counts a turn --
   the bound -- 1.65 s. So what the resume body cost the loop was 0.9 s (110 ns a round: a
-  body a thread is resumed in keeps no number unboxed, and the `int` mask is four generic
-  operations), every plain shape reaches the bound, and the backend's way (keeping the
+  body a thread is resumed in keeps no number unboxed, and the `int` mask was four generic
+  operations then), every plain shape reaches the bound, and the backend's way (keeping the
   fusions between two suspend sites: every `ctx.asyncResume != null` in the expression
   compilers) could give this loop no more than the bound. Made: the simplest shape,
   `(let ((run (lambda () (block left (while test body.. (if (< (setq slice (- slice 1)) 0)
@@ -4804,15 +4851,16 @@ are not askable (`.todo/k18`).
 
 | Java | core forms |
 |---|---|
-| `a + b` (int) | `(- (logand (+ (+ a b) 2147483648) 4294967295) 2147483648)`; `/` is `truncate`, `%` `rem` |
+| `a + b` (int) | `(%mask-signed-field 32 (+ a b))`, a call or a field operand as `(the (signed-byte 32) ..)`; `/` is `truncate` asserted `(integer -2147483648 2147483648)`, `%` `rem` |
+| `int x = v;`, `int f(int p)` | `(let ((x v)) (declare (type (signed-byte 32) x)) ..)`; `(defun .. (p) (declare (type (signed-byte 32) p)) ..)` |
 | `a << n`, `a >>> n` | `(ash a n)` wrapped; `(ash (logand a mask) (- n))` wrapped; a variable count `(logand n 31)` |
 | `s + x` | `(%string-concat s' x')`, each operand by its type: `(or s "null")`, `(%decimal-piece i)`, `(%java-char-string c)`, `(if b "true" "false")`, `(%java-double-string d)`, `(%string o)` |
 | `a && b`, `a & b` (boolean) | `(and a b)`; both operands bound first unless the second runs nothing |
 | `x op= v`, `x++` | the place's operands bound once (`let*`) when more than a variable; the result cast to the place's type |
 | `a * b` (long), `a >>> 3` | `(%mask-signed-field 64 (* a b))`; `(logand (ash a -3) 2305843009213693951)` |
 | `f * g` (float), `x % y` (double) | `(%single-float (* f g))`; `(%java-double-rem x y)` |
-| `(int) d`, `(byte) i` | `(%java-double-to-int d)`: toward zero, the type's ends outside it; `(- (logand (+ i 128) 255) 128)` |
-| `new int[n]`, `{1, 2}`, `xs[i]` | `(make-array n :element-type '(unsigned-byte 32) :initial-element 0)` (each primitive its own, "Numbers"); `(vector ..)` / `:initial-contents`; `(- (logand (+ (aref xs i) 2147483648) 4294967295) 2147483648)` |
+| `(int) d`, `(byte) i` | `(%java-double-to-int d)`: toward zero, the type's ends outside it; `(%mask-signed-field 8 i)` |
+| `new int[n]`, `{1, 2}`, `xs[i]` | `(make-array n :element-type '(unsigned-byte 32) :initial-element 0)` (each primitive its own, "Numbers"); `(vector ..)` / `:initial-contents`; `(%mask-signed-field 32 (aref xs i))` |
 | `while`, `for`, `do` | `(while test body.. update..)`; `(block %break ..)` around it and `(block %continue ..)` around the body only when the body has that exit; `do` tests a flag set after the body |
 | `for (T x : xs)` | an array: a counter, the length taken once; an `Iterable`: `(let* ((it (iterator xs))) (while (hasNext it) (let ((x (next it))) ..)))`, each call direct or dispatched as any call |
 | `return v` | the value in tail position, else `(return-from %fn v)` and a `(block %fn ..)` |
