@@ -481,6 +481,19 @@ final class JavaLowering implements JavaEmitter.Context {
 	/** The local and anonymous classes lowered already in this pass. */
 	private final Set<JavaClass> loweredLocals = new LinkedHashSet<>();
 
+	/**
+	 * The anonymous classes made with {@code <>} in this pass, and what lowering each
+	 * made: the class may be lowered again against another supertype.
+	 */
+	private final Map<JavaClass, Lowering> inferredLowerings = new HashMap<>();
+
+	/**
+	 * What lowering an anonymous class made: its functions and the classes lowered with
+	 * it, itself first.
+	 */
+	private record Lowering(List<LispVal> forms, List<JavaClass> classes) {
+	}
+
 	/** The bindings of the patterns of the statement being lowered. */
 	private List<Local> patternVariables = new ArrayList<>();
 
@@ -1511,7 +1524,11 @@ final class JavaLowering implements JavaEmitter.Context {
 
 	private void method(Method method) {
 		JavaSyntax.Method written = Objects.requireNonNull(method.declaration);
-		if (written.modifiers().contains("@Override") && !isPartial(method.owner) && !overrides(method)) {
+		// with <>, every method an anonymous class declares that is not private
+		// overrides one
+		if ((written.modifiers().contains("@Override")
+				|| (!method.isPrivate && this.inferredLowerings.containsKey(method.owner))) && !isPartial(method.owner)
+				&& !overrides(method)) {
 			throw error(written.pos(), "method does not override or implement a method from a supertype");
 		}
 		this.staticContext = method.isStatic;
@@ -5892,6 +5909,18 @@ final class JavaLowering implements JavaEmitter.Context {
 	 */
 	private ClassType anonymousType(ClassType type, New creation, @Nullable JavaType expected, int pos) {
 		JavaClass made = type.declaration();
+		boolean conforms = switch (expected) {
+			case null -> true;
+			case ClassType named ->
+				named.declaration().name.equals("java.lang.Object") || made.isSubclassOf(named.declaration());
+			case Primitive primitive -> primitive == Primitive.VOID;
+			case ArrayType array -> false;
+			default -> true;
+		};
+		if (!conforms) {
+			// no type arguments make the class one: said before its body is lowered
+			throw error(pos, "incompatible types: cannot infer type arguments for " + made.simpleName() + "<>");
+		}
 		JavaType found;
 		if (made.isInterface) {
 			Inference inference = this.types.new Inference(diamondParameters(type));
@@ -6092,15 +6121,32 @@ final class JavaLowering implements JavaEmitter.Context {
 	/**
 	 * Whether an argument is a call whose own arguments may need the type it is wanted
 	 * as: a lambda or a method reference among them takes the types of its parameters
-	 * from what the call infers, which can come from that type alone.
+	 * from what the call infers, which can come from that type alone; or an anonymous
+	 * class made with {@code <>}, whose supertype can come from that type alone.
 	 */
 	private static boolean mayNeedTarget(Expression argument) {
+		if (argument instanceof New creation && creation.type().diamond() && creation.body() != null) {
+			return true;
+		}
 		List<Expression> arguments = switch (argument) {
 			case Call call -> call.arguments();
 			case New creation when creation.type().diamond() && creation.body() == null -> creation.arguments();
 			default -> List.of();
 		};
 		return arguments.stream().anyMatch(each -> needsTarget(each) || mayNeedTarget(each));
+	}
+
+	/**
+	 * Whether an argument is an anonymous class made with {@code <>}, or a call or a
+	 * creation with {@code <>} holding one among its arguments.
+	 */
+	private static boolean anonymousDiamond(Expression argument) {
+		return switch (argument) {
+			case New creation when creation.type().diamond() ->
+				creation.body() != null || creation.arguments().stream().anyMatch(JavaLowering::anonymousDiamond);
+			case Call call -> call.arguments().stream().anyMatch(JavaLowering::anonymousDiamond);
+			default -> false;
+		};
 	}
 
 	/**
@@ -6544,6 +6590,7 @@ final class JavaLowering implements JavaEmitter.Context {
 		int count = arguments.size();
 		Set<Integer> late = new HashSet<>();
 		LispReadException lateError = null;
+		boolean typedAsGiven = candidates.stream().anyMatch(candidate -> candidate.raw);
 		for (Expression argument : arguments) {
 			if (needsTarget(argument)) {
 				typed.add(null);
@@ -6553,7 +6600,9 @@ final class JavaLowering implements JavaEmitter.Context {
 			this.flexible = argument instanceof Call || (argument instanceof New creation && creation.type().diamond());
 			Typed lowered;
 			if (mayNeedTarget(argument)) {
-				if (eager == null) {
+				if (eager == null || (anonymousDiamond(argument) && !typedAsGiven)) {
+					// an anonymous class made with <> is lowered once, against the type
+					// its parameter gives it -- unless a member takes it as it is typed
 					late.add(typed.size());
 					typed.add(null);
 					continue;
@@ -8540,6 +8589,20 @@ final class JavaLowering implements JavaEmitter.Context {
 		}
 		JavaClass made = this.classes.local(Objects.requireNonNull(creation.body()), this.currentClass,
 				this.staticContext || this.early, extendedType);
+		if (creation.type().diamond() && !extendedType.equals(made.supertype(extended))) {
+			// made with <> against another type (a candidate tried, a call lowered once
+			// more, an earlier pass): what lowering it made in this pass is dropped, the
+			// body lowered again
+			Lowering earlier = this.inferredLowerings.remove(made);
+			if (earlier != null) {
+				Set<LispVal> dropped = Collections.newSetFromMap(new IdentityHashMap<>());
+				dropped.addAll(earlier.forms());
+				this.functions.removeIf(dropped::contains);
+				earlier.classes().forEach(this.loweredLocals::remove);
+			}
+			// what the passes repeat for is not this: a pass tries the same types
+			made.parameterized.put(extended, extendedType);
+		}
 		// outer.new Inner() { .. }: the instance around its superclass is the one given
 		made.superOuterGiven = creation.outer() != null;
 		if (!made.superOuterGiven && givesSuperOuter(made)) {
@@ -8581,7 +8644,22 @@ final class JavaLowering implements JavaEmitter.Context {
 			made.methods.add(constructor);
 			this.classes.changed();
 		}
-		lowerLocal(made);
+		if (creation.type().diamond() && !this.loweredLocals.contains(made)) {
+			int forms = this.functions.size();
+			int classes = this.loweredLocals.size();
+			this.inferredLowerings.put(made, new Lowering(List.of(), List.of()));
+			try {
+				lowerLocal(made);
+			}
+			finally {
+				this.inferredLowerings.put(made,
+						new Lowering(List.copyOf(this.functions.subList(forms, this.functions.size())),
+								this.loweredLocals.stream().skip(classes).toList()));
+			}
+		}
+		else {
+			lowerLocal(made);
+		}
 		called(constructor);
 		uses(made);
 		makes(made);

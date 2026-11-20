@@ -1189,6 +1189,27 @@ lub of the lowers, else an upper, else OPEN.
   with `<>` finds -- from the target for an interface, from the constructor's arguments
   (lowered a second time with the class's constructor) for a class --, refused as javac
   refuses when an argument found is a capture (`cannot infer type arguments for G<>`).
+- **As an argument it waits for its parameter's type** (k61, 2026-11-20; `mayNeedTarget`,
+  `anonymousDiamond`): such an argument, or a call or a `<>` creation holding one, is never
+  lowered with no target first (the `eager` try), but after the call's inference, as a
+  call holding a lambda is; with several candidates, against each one's parameter. It was
+  lowered with no target, extended `ArrayList<Object>` and was refused (`cannot be applied
+  to given types; .. found: String,`, the anonymous class's name being empty). A member
+  taking its argument as typed (`raw`, `println`) still takes it lowered with no target,
+  as javac's `Object` would. A class the expected type cannot be an instance of by its
+  class is refused before the body is lowered, with javac's line (`incompatible types:
+  cannot infer type arguments for HashMap<>`), so that a candidate whose parameter it
+  cannot be (`order(Runnable)` beside `order(Comparator<String>)`) is not taken.
+  - **Lowered again against another supertype** (`inferredLowerings`): an anonymous class
+    is one `JavaClass` per declaration (`JavaClasses.local`) lowered once a pass
+    (`loweredLocals`), so a candidate tried first (`total(Object)` beside
+    `total(List<Integer>)`) fixed its supertype, and a lowering that threw marked it
+    lowered with no functions. Now its supertype is set anew when a creation finds
+    another, and the functions and the classes its earlier lowering in the pass made are
+    dropped and lowered again. Not a `classes.changed()`: every pass tries the types in
+    the same order, so the passes never settled.
+  - **With `<>`, every method it declares that is not private overrides one** (JLS
+    15.9.5; javac's `method does not override or implement a method from a supertype`).
 - **Measured: `functionp` first is kept.** 20,000,000 calls of a lambda and 20,000,000 of a
   class through one interface, the lambda a function / a structure holding it: JVM 0.76 /
   1.57 s, wasm 1.35 / 1.41 s (2026-11-17, the `bench.sh` method, best of three).

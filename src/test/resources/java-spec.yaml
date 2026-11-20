@@ -3757,6 +3757,18 @@ cases:
               return "task";
           }
 
+          static String total(Object o) {
+              return "object";
+          }
+
+          static String total(List<Integer> xs) {
+              int sum = 0;
+              for (int x : xs) {
+                  sum += x;
+              }
+              return "total " + sum;
+          }
+
           // a generic method calling itself: the call's type argument is made of the
           // method's own type parameter
           static <T> List<T> nest(T value, int depth) {
@@ -3887,6 +3899,10 @@ cases:
               Map<String, Function<String, Object>> entries = Map.ofEntries(Map.entry("a", s -> s + "!"));
               List<Map.Entry<String, Function<String, Object>>> listed = Arrays.asList(Map.entry("b", Integer::valueOf));
               System.out.println(entries.get("a").apply("x") + " " + listed.get(0).getValue().apply("3") + " " + all(Map.entry("c", 1)));
+              // an anonymous class made with <> as an argument extends the type its
+              // parameter gives it, through a generic call too; among overloads, the
+              // most specific of those whose parameter it can extend
+              System.out.println(size(new ArrayList<>() {{ add("a"); }}) + " " + size(pick(new ArrayList<>() {{ add("b"); add(get(0) + "c"); }}, null)) + " " + order(new Comparator<>() { public int compare(String x, String y) { return x.length() - y.length(); } }) + " " + filter(squares, new Predicate<>() { public boolean test(Integer x) { return x > 4; } }) + " " + total(new ArrayList<>() {{ add(1); add(get(0) * 2); }}));
           }
       }
     expected: |
@@ -3899,6 +3915,7 @@ cases:
       order 1 p
       [nested] again 8 [held] [made!] held lazy! text!
       x! 3 {c=1}
+      1 2 order 1 [9, 16] total 3
   # ? extends T is read as T and written with nothing but null, ? super T written with a
   # T and read as Object; a method taking List<T> takes a List<?>. A raw type reads its
   # members erased.
@@ -18417,6 +18434,10 @@ refused:
     - name: a-diamond-with-the-constructor-s-type-arguments
       body: 'Box<String> b = new <Integer>Box<>("a");'
       error: "cannot infer type arguments for Box<T>"
+    # with <>, every method an anonymous class declares that is not private overrides one
+    - name: a-method-of-an-anonymous-diamond-that-overrides-none
+      body: 'Box<Integer> b = new Box<>(1) { int twice() { return 2; } };'
+      error: "method does not override or implement a method from a supertype"
     - name: a-type-parameter-the-argument-and-the-target-disagree-on
       body: 'String s = id(1);'
       error: "incompatible types: inference variable T has incompatible bounds"
