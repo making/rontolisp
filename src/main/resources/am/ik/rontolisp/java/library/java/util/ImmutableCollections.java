@@ -19,6 +19,10 @@ final class ImmutableCollections {
 
     static final int OWN = 1;
 
+    // the list of Stream.toList() and of a gatherer's windows: a list of List.of's kind
+    // that holds nulls, which reports as OWN
+    static final int NULLS = 2;
+
     static final int ONE = 3;
 
     private ImmutableCollections() {
@@ -33,7 +37,8 @@ final class ImmutableCollections {
     }
 
     // The list of List.of and List.copyOf: it holds no null, refuses a null asked for,
-    // and refuses every change at once. An index outside it is its array's.
+    // and refuses every change at once. An index outside it is its array's. The list of
+    // Stream.toList() is one that holds nulls (NULLS).
     static class ListN<E> extends AbstractList<E> implements RandomAccess {
 
         private final Object[] held;
@@ -67,11 +72,11 @@ final class ImmutableCollections {
         }
 
         public int indexOf(Object o) {
-            return super.indexOf(Objects.requireNonNull(o));
+            return super.indexOf(how == NULLS ? o : Objects.requireNonNull(o));
         }
 
         public int lastIndexOf(Object o) {
-            return super.lastIndexOf(Objects.requireNonNull(o));
+            return super.lastIndexOf(how == NULLS ? o : Objects.requireNonNull(o));
         }
 
         public ListIterator<E> listIterator(int index) {
@@ -94,7 +99,7 @@ final class ImmutableCollections {
             }
             Object[] part = new Object[to - from];
             System.arraycopy(held, from, part, 0, to - from);
-            return new ImmutableCollections.SubList<>(part);
+            return new ImmutableCollections.SubList<>(part, how == NULLS ? NULLS : OWN);
         }
 
         // the array's elements from one index to another, as a view: what
@@ -162,14 +167,20 @@ final class ImmutableCollections {
     // checkIndex's words.
     static final class SubList<E> extends ListN<E> {
 
-        SubList(Object[] held) {
-            super(held, OWN);
+        SubList(Object[] held, int how) {
+            super(held, how);
         }
 
         public E get(int index) {
             Objects.checkIndex(index, size());
             return super.get(index);
         }
+    }
+
+    // The list Stream.toList() answers, reached from rontolisp.internal.Flow.listed: the
+    // elements as they came, nulls among them.
+    static <E> List<E> listed(Object[] held) {
+        return new ListN<>(held, NULLS);
     }
 
     static <K, V> Map<K, V> map(Object... pairs) {

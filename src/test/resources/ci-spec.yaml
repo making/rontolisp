@@ -254,6 +254,11 @@ cases:
           (let ((fn (lambda () (+ s 1))))
             (setq s (%mask-signed-field 32 (* s 3)))
             (funcall fn))))
+      (defun dcli-quot (a b c)
+        (declare (type (signed-byte 32) a b) (type (signed-byte 64) c))
+        (list (%mask-signed-field 32 (the (integer -2147483648 2147483648) (truncate a b)))
+              (%mask-signed-field 64 (truncate c b)) (truncate c b) (+ 1 (truncate c 7))))
+      (defun dcli-qf (x) (+ 6 (truncate x 2)))
       (print (dcli-hash "the quick brown fox jumps over the lazy dog"))
       (print (dcli-lanes 9223372036854775807 3))
       (print (dcli-lanes -9223372036854775808 63))
@@ -264,6 +269,10 @@ cases:
       (let ((dcli-n (expt 2 70)))
         (declare (type fixnum dcli-n))
         (print (+ dcli-n dcli-n)))
+      (print (dcli-quot -2147483648 -1 -9223372036854775808))
+      (print (dcli-quot 7 -2 -7))
+      (print (handler-case (dcli-quot 1 0 1) (division-by-zero () :zero)))
+      (print (list (dcli-qf 7.5) (dcli-qf 7/2) (dcli-qf (expt 2 70))))
     expected: |
       -2082818701
       (2859235813007982803 357404476625997850 4427142430354310808 T)
@@ -271,6 +280,10 @@ cases:
       -1294967295
       (-3 4611686011984936962)
       2361183241434822606848
+      (-2147483648 -9223372036854775808 9223372036854775808 -1317624576693539400)
+      (-3 3 3 0)
+      :ZERO
+      (9 7 590295810358705651718)
 
   - name: fused-integer-expression-trees
     source: |

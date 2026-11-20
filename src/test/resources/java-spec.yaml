@@ -172,7 +172,7 @@ cases:
               System.out.println(fact(20) + " " + fact(21) + " " + (1L << 40) * 3 + " " + (int) (1L << 40) + " " + (int) 0x1FFFFFFFFL + " " + 0xFFFFFFFFFFL);
               seed = seed * 6364136223846793005L + 1442695040888963407L;
               System.out.println(seed + " " + (seed >> 60) + " " + (seed >>> 60) + " " + (seed << 4) + " " + (i << 33) + " " + (1L << 33) + " " + ~seed);
-              System.out.println(seed / 7 + " " + seed % 7 + " " + (seed & 0xFF) + " " + (seed ^ -1L) + " " + Math.abs(-9L) + " " + Math.max(3, 7L) + " " + Math.min(i, -7L));
+              System.out.println(seed / 7 + " " + seed % 7 + " " + (seed & 0xFF) + " " + (seed ^ -1L) + " " + Math.abs(-9L) + " " + Math.max(3, 7L) + " " + Math.min(i, -7L) + " " + Long.MIN_VALUE / (i - 4) + " " + Math.floorDiv(Long.MIN_VALUE, i - 4L) + " " + Math.floorDiv(seed, -i));
               System.out.println((seed >>> 1) + " " + (-1L >>> 63) + " " + (-1L >>> i) + " " + (seed >>> 0) + " " + (-8 >>> 1) + " " + (Long.MIN_VALUE >> 63) + " " + (1L << i * 21) + " " + (-1L >>> 64 + i));
           }
       }
@@ -180,7 +180,7 @@ cases:
       0 -9223372036854775808 9223372036854775807 9223372036854775807 -9223372036854775806
       2432902008176640000 -4249290049419214848 3298534883328 0 -1 1099511627775
       -7964744663189004623 -7 9 1691293904942787344 6 8589934592 7964744663189004622
-      -1137820666169857803 -2 177 7964744663189004622 9 7 -7
+      -1137820666169857803 -2 177 7964744663189004622 9 7 -7 -9223372036854775808 -9223372036854775808 2654914887729668207
       5240999705260273496 1 2305843009213693951 -7964744663189004623 2147483644 -1 -9223372036854775808 2305843009213693951
   # The host's printer has the JDK's digits and layout; a cast to int goes toward zero
   # and stops at the type's ends; a division by zero is an infinity.
@@ -6198,7 +6198,10 @@ cases:
               }, () -> Collections.nCopies(3, "a").removeIf(String::isEmpty), () -> Collections.emptySet().removeAll(List.of(1)) + " " + Collections.singleton(1).retainAll(List.of(1)), () -> Collections.emptyMap().remove("k") + " " + Collections.singletonMap("k", 1).remove("j"), () -> Collections.singletonList(1).removeIf(x -> false), () -> Collections.singleton(1).remove(1), () -> Collections.nCopies(2, "a").get(2), () -> Collections.emptyList().get(0), () -> Collections.singletonList(1).get(1), () -> Collections.singletonMap("k", 1).put("j", 2), () -> Collections.singletonMap("k", 1).entrySet().iterator().next().setValue(2), () -> Collections.emptyIterator().next(), () -> {
                   Collections.emptyIterator().remove();
                   return "removed";
-              }, () -> List.of(1, 2, 3).removeIf(x -> false), () -> List.of(1, 2, 3).contains(null), () -> List.of(1, 2, 3).get(3), () -> List.of(1, 2, 3).subList(1, 3).get(2), () -> Arrays.asList(1, 2).addAll(5, List.of()), () -> Collections.unmodifiableList(new ArrayList<>(List.of(1))).addAll(List.of()), () -> new java.util.concurrent.CopyOnWriteArrayList<>(List.of(1, 2)).reversed().get(-1), () -> Arrays.asList(1, 2, 3).reversed().retainAll(List.of(1, 3)), () -> ((Comparable) 1).compareTo("a"), () -> new TreeSet<Object>(List.of(1, "b"))};
+              }, () -> List.of(1, 2, 3).removeIf(x -> false), () -> List.of(1, 2, 3).contains(null), () -> List.of(1, 2, 3).get(3), () -> List.of(1, 2, 3).subList(1, 3).get(2), () -> Arrays.asList(1, 2).addAll(5, List.of()), () -> Collections.unmodifiableList(new ArrayList<>(List.of(1))).addAll(List.of()), () -> new java.util.concurrent.CopyOnWriteArrayList<>(List.of(1, 2)).reversed().get(-1), () -> Arrays.asList(1, 2, 3).reversed().retainAll(List.of(1, 3)), () -> ((Comparable) 1).compareTo("a"), () -> new TreeSet<Object>(List.of(1, "b")), () -> Stream.of(1, null, 2).toList().get(3), () -> Stream.of(1, null, 2).toList().reversed().set(0, 1), () -> {
+                  List<Integer> listed = Stream.of(1, null, 2).toList();
+                  return listed.contains(null) + " " + listed.subList(0, 2).indexOf(null) + " " + listed.getClass().getName();
+              }};
               StringBuilder answers = new StringBuilder();
               for (Supplier<?> each : asked) {
                   try {
@@ -6414,7 +6417,7 @@ cases:
       [1.0, -1.0][1.0, 2.5][1.0, NaN][2.0, 0.25][2.0, 0.5] -1.0 1 null fallback /: UTF-8 true true
       OptionalLong[42] OptionalLong.empty truefalsetrue 42 7 8 42 truefalse 420 42+none null
       java.util.NoSuchElementException: No value present
-      false, false, [2], false, false false, null null, UnsupportedOperationException, UnsupportedOperationException, IndexOutOfBoundsException Index 2 out of bounds for length 2, IndexOutOfBoundsException Index: 0, IndexOutOfBoundsException Index: 1, Size: 1, UnsupportedOperationException, UnsupportedOperationException, NoSuchElementException, IllegalStateException, UnsupportedOperationException, NullPointerException, ArrayIndexOutOfBoundsException Index 3 out of bounds for length 3, IndexOutOfBoundsException Index 2 out of bounds for length 2, IndexOutOfBoundsException Index: 5, Size: 2, UnsupportedOperationException, ArrayIndexOutOfBoundsException Index 2 out of bounds for length 2, UnsupportedOperationException, ClassCastException, ClassCastException, 
+      false, false, [2], false, false false, null null, UnsupportedOperationException, UnsupportedOperationException, IndexOutOfBoundsException Index 2 out of bounds for length 2, IndexOutOfBoundsException Index: 0, IndexOutOfBoundsException Index: 1, Size: 1, UnsupportedOperationException, UnsupportedOperationException, NoSuchElementException, IllegalStateException, UnsupportedOperationException, NullPointerException, ArrayIndexOutOfBoundsException Index 3 out of bounds for length 3, IndexOutOfBoundsException Index 2 out of bounds for length 2, IndexOutOfBoundsException Index: 5, Size: 2, UnsupportedOperationException, ArrayIndexOutOfBoundsException Index 2 out of bounds for length 2, UnsupportedOperationException, ClassCastException, ClassCastException, ArrayIndexOutOfBoundsException Index 3 out of bounds for length 3, UnsupportedOperationException, true 1 java.util.ImmutableCollections$ListN, 
       {k=1} 1 0 [k][1][k=1] true 106 true true falsefalse 12false 2[x, x] -1
       [1, 1, 2, 3, 3, 8, 7, 5, 6, 9] 1 1123356789 true [1, 1, 2, 5, 3, 8, 7, 9, 6] true [1, 1, 5, 3, 7, 9] [1, 2, 3, 6, 5, 4, 7, 8, 9] true6
       1 3 2 5 9 7x 8x 6 4x | [1, 3, 2, 5, 9, 6] hightop[Chore[name=mid, rank=5], Chore[name=low, rank=1]] [c, b, a]c true
@@ -8535,6 +8538,7 @@ cases:
               List<Integer> window = Stream.of(1, 2, 3).gather(Gatherers.windowFixed(2)).findFirst().get();
               fails("window add", () -> window.add(1));
               fails("window set", () -> window.set(0, 1));
+              fails("window get", () -> window.get(2));
               List<Integer> sliding = Stream.of(1, 2, 3).gather(Gatherers.windowSliding(2)).findFirst().get();
               fails("sliding add", () -> sliding.add(1));
           }
@@ -8686,6 +8690,7 @@ cases:
       gather null: java.lang.NullPointerException
       window add: java.lang.UnsupportedOperationException
       window set: java.lang.UnsupportedOperationException
+      window get: java.lang.ArrayIndexOutOfBoundsException: Index 2 out of bounds for length 2
       sliding add: java.lang.UnsupportedOperationException
       times: [10, 11, 20, 21] | push10=true push11=true push20=true push21=true
       times count: 4 | push10=true push11=true push20=true push21=true
@@ -10122,6 +10127,15 @@ cases:
                       System.out.println(ex);
                   }
               }
+              System.out.println("  a\n    b\n  ".stripIndent().replace("\n", "/") + "|" + " a\r\n\n  b \n ".stripIndent().replace("\n", "/") + "|" + "x\\ty\\101\\400\\\nz\\s".translateEscapes() + "|" + Character.toTitleCase('\u01C6') + Character.toTitleCase('q') + " " + Character.toTitleCase(0x10D0) + " " + Character.codePointAt(new StringBuilder("ab"), 1) + " " + Character.codePointCount("hello", 1, 4));
+              Runnable[] refused = {() -> "a\\q".translateEscapes(), () -> Character.codePointCount(new StringBuilder("abc"), 2, 1)};
+              for (Runnable each : refused) {
+                  try {
+                      each.run();
+                  } catch (RuntimeException ex) {
+                      System.out.println(ex);
+                  }
+              }
           }
       }
     expected: |
@@ -10144,6 +10158,9 @@ cases:
       java.lang.IndexOutOfBoundsException
       java.lang.StringIndexOutOfBoundsException: Range [2, 7) out of bounds for length 6
       java.lang.StringIndexOutOfBoundsException: Range [-1, 2) out of bounds for length 6
+      a/  b/|a// b/|x	yA 0z |ǅQ 4304 98 3
+      java.lang.IllegalArgumentException: Invalid escape sequence: \q \\u0071
+      java.lang.IndexOutOfBoundsException: Range [2, 1) out of bounds for length 3
   # java.util.regex is the engine every front end shares (eval/regex.lisp): Pattern and
   # Matcher over it, the String members that take a pattern, the refusals as the
   # library's exceptions. A split by a constant text with no operator needs no engine.
@@ -10469,8 +10486,9 @@ cases:
                       System.out.println(ex.getMessage());
                   }
               }
+              System.out.println(Integer.parseInt("\u0663\u0664") + " " + Long.parseLong("-\u0967\u0968", 16) + " " + Character.digit('\uFF21', 16) + " " + Character.digit(0x1D7D9, 10) + " " + Character.getNumericValue('\u096B') + " " + Character.digit('\u0663', 2) + " " + new java.math.BigInteger("\uFF11\uFF12"));
               try {
-                  Double.parseDouble("x1");
+                  Double.parseDouble("\uFF11");
               } catch (NumberFormatException ex) {
                   System.out.println(ex.getMessage() + " " + (System.currentTimeMillis() > 1700000000000L) + " " + (System.nanoTime() != 0) + " " + (System.identityHashCode(n) == System.identityHashCode(n)) + " " + System.lineSeparator().length());
               }
@@ -10560,7 +10578,8 @@ cases:
       For input string: "99999999999"
       For input string: "-"
       Cannot parse null string
-      For input string: "x1" true true true 1
+      34 -18 10 1 5 -1 12
+      For input string: "１" true true true 1
       true false false true java.lang.Object true [1, 1, 2, 3, 4]
       -1 255 4294967295 4294967295 -0.0 Infinity 4.9E-324 3.141592653589793 NaN 1.4E-45 3.1415927 -0.0
       2.220446049250313E-16 7.450581E-9 1.99584030953472E292 1.4E-45 1.0000001 -9.9E-324 -3.4028235E38 -4.9E-324 5.551115123125783E-17 1.4901161E-8 Infinity -0.0 6.0 9.9E-324 1.0239945E-37 Infinity -1071644672 4602678819172646912
@@ -11616,7 +11635,9 @@ standalone:
   # What a compiler warns of as unchecked is printed on standard error before the
   # program runs, as a JDK prints it, by the interpreter and by a compile; a declaration
   # annotated @SuppressWarnings("unchecked") says none of its own (`warnings`). So is a
-  # catch clause that every exception of its try it could take was taken before.
+  # catch clause that every exception of its try it could take was taken before. A call
+  # given a raw type where its method wants a parameterized one is of the erasure of the
+  # type the method returns, whatever its value is wanted as (`Collections.max(raw)`).
   - name: the-unchecked-warnings-are-printed-before-the-program-runs
     file: Unchecked.java
     source: |
@@ -11662,6 +11683,11 @@ standalone:
               @SuppressWarnings("unchecked") List<String> named = raw;
               Map<String, Integer> map = (Map<String, Integer>) new HashMap();
               System.out.println(count(raw) + " " + listOf(strings, named).size() + " " + box.value + " " + map.size() + " " + Unchecked.<String>unsafe("u") + quiet("q"));
+              Collections.sort(raw);
+              List<String> copy = new ArrayList<>(raw);
+              copy.addAll(raw);
+              Comparable<String> most = Collections.max(raw);
+              System.out.println(most + " " + copy);
               try {
                   if (raw.isEmpty()) {
                       throw new java.io.FileNotFoundException("none");
@@ -11725,13 +11751,73 @@ standalone:
       Unchecked.java:42: warning: [unchecked] unchecked generic array creation for varargs parameter of type List<String>[]
               System.out.println(count(raw) + " " + listOf(strings, named).size() + " " + box.value + " " + map.size() + " " + Unchecked.<String>unsafe("u") + quiet("q"));
                                                           ^
-      Unchecked.java:48: warning: unreachable catch clause
+      Unchecked.java:43: warning: [unchecked] unchecked method invocation: method sort in class Collections is applied to given types
+              Collections.sort(raw);
+                              ^
+        required: List<T>
+        found:    List
+        where T is a type-variable:
+          T extends Comparable<? super T> declared in method <T>sort(List<T>)
+      Unchecked.java:43: warning: [unchecked] unchecked conversion
+              Collections.sort(raw);
+                               ^
+        required: List<T>
+        found:    List
+        where T is a type-variable:
+          T extends Comparable<? super T> declared in method <T>sort(List<T>)
+      Unchecked.java:44: warning: [unchecked] unchecked method invocation: constructor <init> in class ArrayList is applied to given types
+              List<String> copy = new ArrayList<>(raw);
+                                  ^
+        required: Collection<? extends E>
+        found:    List
+        where E is a type-variable:
+          E extends Object declared in class ArrayList
+      Unchecked.java:44: warning: [unchecked] unchecked conversion
+              List<String> copy = new ArrayList<>(raw);
+                                  ^
+        required: List<String>
+        found:    ArrayList
+      Unchecked.java:45: warning: [unchecked] unchecked method invocation: method addAll in interface List is applied to given types
+              copy.addAll(raw);
+                         ^
+        required: Collection<? extends E>
+        found:    List
+        where E is a type-variable:
+          E extends Object declared in interface List
+      Unchecked.java:45: warning: [unchecked] unchecked conversion
+              copy.addAll(raw);
+                          ^
+        required: Collection<? extends E>
+        found:    List
+        where E is a type-variable:
+          E extends Object declared in interface List
+      Unchecked.java:46: warning: [unchecked] unchecked method invocation: method max in class Collections is applied to given types
+              Comparable<String> most = Collections.max(raw);
+                                                       ^
+        required: Collection<? extends T>
+        found:    List
+        where T is a type-variable:
+          T extends Object,Comparable<? super T> declared in method <T>max(Collection<? extends T>)
+      Unchecked.java:46: warning: [unchecked] unchecked conversion
+              Comparable<String> most = Collections.max(raw);
+                                                        ^
+        required: Collection<? extends T>
+        found:    List
+        where T is a type-variable:
+          T extends Object,Comparable<? super T> declared in method <T>max(Collection<? extends T>)
+      Unchecked.java:46: warning: [unchecked] unchecked conversion
+              Comparable<String> most = Collections.max(raw);
+                                                       ^
+        required: Comparable<String>
+        found:    Comparable
+      Unchecked.java:53: warning: unreachable catch clause
               } catch (java.io.IOException e) {
                 ^
         thrown type FileNotFoundException has already been caught
-      12 warnings
+      21 warnings
     stdout: |
       1 2 2 0 uq
+      x [x, x]
   # An uncaught exception is the line a JDK writes on standard error -- the exception's
   # toString() -- and the status 1; where a JDK's stack trace follows, the interpreter and
   # the JVM name where it was raised (`at`).

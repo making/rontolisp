@@ -647,6 +647,118 @@ public final class Support {
         return 2;
     }
 
+    // Character.codePointAt of a sequence: its element there, which is a code point here,
+    // or the character a high surrogate and the low one after it spell.
+    public static int sequenceCodePointAt(CharSequence seq, int index) {
+        char c = seq.charAt(index);
+        if (Character.isHighSurrogate(c) && index + 1 < seq.length() && Character.isLowSurrogate(seq.charAt(index + 1))) {
+            return Character.toCodePoint(c, seq.charAt(index + 1));
+        }
+        return c;
+    }
+
+    // Character.codePointCount of a sequence: as String.codePointCount.
+    public static int sequenceCodePointCount(CharSequence seq, int beginIndex, int endIndex) {
+        int length = seq.length();
+        if (beginIndex < 0 || beginIndex > endIndex || endIndex > length) {
+            throw new IndexOutOfBoundsException(outside(beginIndex, endIndex, length));
+        }
+        return endIndex - beginIndex;
+    }
+
+    // How many characters of white space a line starts with.
+    private static int leading(String line) {
+        int at = 0;
+        while (at < line.length() && Character.isWhitespace(line.charAt(at))) {
+            at++;
+        }
+        return at;
+    }
+
+    // String.stripIndent: the lines -- cut at a \n, a \r or the two, the one after the
+    // last cut a line too -- lose as much leading white space as every line that is not
+    // blank has, and the last line, and all their trailing white space; a blank line is
+    // empty; they are joined by \n.
+    public static String stripIndent(String s) {
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        int length = s.length();
+        int start = 0;
+        for (int i = 0; i < length; i++) {
+            char c = s.charAt(i);
+            if (c == '\n' || c == '\r') {
+                lines.add(s.substring(start, i));
+                if (c == '\r' && i + 1 < length && s.charAt(i + 1) == '\n') {
+                    i++;
+                }
+                start = i + 1;
+            }
+        }
+        lines.add(s.substring(start));
+        int least = Integer.MAX_VALUE;
+        for (int k = 0; k < lines.size(); k++) {
+            String line = lines.get(k);
+            int lead = leading(line);
+            if (lead < line.length() || k == lines.size() - 1) {
+                least = Math.min(least, lead);
+            }
+        }
+        StringBuilder stripped = new StringBuilder();
+        for (int k = 0; k < lines.size(); k++) {
+            String line = lines.get(k);
+            if (k > 0) {
+                stripped.append('\n');
+            }
+            if (leading(line) < line.length()) {
+                int end = line.length();
+                while (Character.isWhitespace(line.charAt(end - 1))) {
+                    end--;
+                }
+                stripped.append(line, least, end);
+            }
+        }
+        return stripped.toString();
+    }
+
+    // String.translateEscapes: the escapes of a literal but a Unicode one -- b t n f r s,
+    // a quote, a backslash, an octal number of up to three digits (two where the first
+    // is above 3), a backslash and a line's end dropped together; any other is refused,
+    // naming what follows the backslash (U+0000 where nothing does) and its code.
+    public static String translateEscapes(String s) {
+        StringBuilder translated = new StringBuilder();
+        int length = s.length();
+        int i = 0;
+        while (i < length) {
+            char c = s.charAt(i++);
+            if (c != '\\') {
+                translated.append(c);
+                continue;
+            }
+            char e = i < length ? s.charAt(i++) : (char) 0;
+            if (e >= '0' && e <= '7') {
+                int value = e - '0';
+                for (int more = e <= '3' ? 2 : 1; more > 0 && i < length && s.charAt(i) >= '0' && s.charAt(i) <= '7'; more--) {
+                    value = value * 8 + s.charAt(i++) - '0';
+                }
+                translated.append((char) value);
+            }
+            else if (e == '\r') {
+                if (i < length && s.charAt(i) == '\n') {
+                    i++;
+                }
+            }
+            else if (e != '\n') {
+                int at = "btnfrs\"'\\".indexOf(e);
+                if (at < 0) {
+                    String code = Integer.toHexString(e).toUpperCase();
+                    throw new IllegalArgumentException(
+                            "Invalid escape sequence: \\" + e + " \\\\u" + "0000".substring(Math.min(4, code.length())) + code);
+                }
+                translated.append("\b\t\n\f\r \"'\\".charAt(at));
+            }
+        }
+        return translated.toString();
+    }
+
     // Character.codePointAt of an array: a high surrogate and the low one after it are
     // the character they spell.
     public static int codePointAt(char[] a, int index) {

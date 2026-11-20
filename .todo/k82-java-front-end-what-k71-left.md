@@ -1,42 +1,35 @@
-# k71. Java front end: what k60 left (the streams, the members met, the collections)
+# k82. Java front end: what k71 left (the streams, the members met, the collections)
 
 Difficulty: High
 
 **Important -- licence and naming: read `.kb/java-frontend-provenance.md` before writing
 anything.** The library is Java source embedded in every compiled program.
 
-State after k60 (2026-11-20, `.kb/java-frontend.md`, "The collections of Collections, a
-bridge's cast and PriorityQueue"): `Collections`' empty, single and copied collections as
-classes of their own, `singletonMap` and the empty iterators, `List.of`'s refusals, a
-bridge's cast in a dispatcher's arms, `PriorityQueue`, and a waiting argument tried against
-what the target says. What follows is what j98, k03, k05, k12, k26, k47, k55 and k60 left,
-most valuable first. The classes j71 left (`Scanner`, `StringJoiner`, files ..) are
-`.todo/k72`.
+State after k71 (2026-11-21, `.kb/java-frontend.md`, "A raw argument, `Stream.toList()`, the
+digits and the members met"): a call given a raw argument is typed and warned of as javac
+does it, the list of `Stream.toList()` and of a gatherer's window is one of `List.of`'s kind
+that holds nulls, `Character.digit` and the parses are one rule on every backend, and
+`stripIndent`, `translateEscapes`, `toTitleCase` and the code points of a `CharSequence` are
+there. What follows is what j98, k03, k05, k12, k26, k47, k55, k60 and k71 left, most
+valuable first. The classes j71 left (`Scanner`, `StringJoiner`, files ..) are `.todo/k72`.
 
 **How a member's answer is learned**: a Java program printing a transcript, run under a
 JDK and under the four backends and compared -- a grid where the cases can be listed, a
 seeded generator where they cannot. The scripts: `four.sh`, `sz.sh` and `fn.sh` of
 `.todo/artefacts/k60-java-front-end-what-k55-left/` (two jars compared; its README);
+`sz.sh`, `extract.py` and `update.py` of `.todo/artefacts/k71-java-front-end-what-k60-left/`
+(a corpus case run alone under a JDK and its lines put back);
 `compare.sh` and `refused.py` of
 `.todo/artefacts/k12-java-front-end-what-the-time-limits-and-duration-slice-left/`. The JDK
 leg of `JavaSpecE2eTest` compiles the corpus with javac: a case's `main` may declare no
 checked exception, and a line that differs from a JDK by decision can be in no case.
 
-## Inference met by k60
-
-- **`Collections.max(raw)` is refused** (`RawMax.java` of the k60 probes): a raw `List`
-  given for `<T extends Object & Comparable<? super T>> T max(Collection<? extends T>)` is
-  `inferred type does not conform to upper bound(s)`, where javac applies the method by an
-  unchecked conversion and answers its erasure. A program of raw collections meets it at
-  `max`, `min`, `sort`.
-
 ## The collections
 
-- **`Stream.toList()` is `Collections.unmodifiableList`'s list**, a JDK's a list of
-  `List.of`'s kind that holds nulls (`deviations.md`): `rontolisp.internal.ObjectFlow`
-  reaches no class of `java.util` that is not public, and a public member a JDK does not
-  have would be one a program could name. A way for the library to make a package's list
-  from another package is the lead.
+- **`List.copyOf`, `Set.copyOf` and `Map.copyOf` copy a collection of `List.of`'s, `Set.of`'s
+  and `Map.of`'s**, where a JDK answers that collection itself (`CopyOf.java` of the k71
+  probes; a part of such a list and a list that holds nulls are copied there too). A test of
+  the class and of `ListN`'s kind in each `copyOf`.
 - **What k60 measured and left** (`deviations.md`): `List.of` of one or two refuses an
   index with the array's words (a check in `ListN.get` was 440 B in every `List.of`
   program); `List.of`'s iterator's `remove()` before `next()` is `IllegalStateException`
@@ -146,6 +139,10 @@ checked exception, and a line that differs from a JDK by decision can be in no c
   and 0.68 -> 0.99 s for 10,500,000 calls. A table of one test is some 5 KB (`.todo/269`'s
   sketch, the Scheme front end's `SchemeCharacters`); `.todo/269` done on the host would make
   `isLetter` and `isDigit` the host's again.
+- **A program that parses an int pays 1.5 KB for Unicode's digits** (k71: `SzParse` 58,309 ->
+  59,847; YAVI's examples 1.8 KB): a quoted list of 75 zeros (670 B) and its scan (590 B, most
+  of it generic arithmetic). Leads: the scan with the integer operations its declared types
+  prove; the list only where a program reads text it did not write.
 - **A program that throws or catches at all is ~47 KB of wasm** since j88; what is left is the
   pipeline's print seam, `.todo/k17`'s lead.
 - **A `BufferedReader` over `System.in` is 0.17 s over `IO.readln` in 200,000 lines on wasm**
@@ -167,16 +164,17 @@ checked exception, and a line that differs from a JDK by decision can be in no c
   disagree: what a `StringBuilder` holds when a low surrogate follows a high one has to be
   one rule, and a concatenation of two strings meeting at the halves of a pair has the same
   question.
-- **`Character.digit`, `getNumericValue` and the parses outside ASCII**: they ask the host's
-  `digit-char-p`, which is ASCII-only on wasm (`.todo/269`), so `Integer.parseInt("٣٤")` is 34
-  on the interpreter and the JVM and a `NumberFormatException` on wasm; `getNumericValue` of
-  a number that is no digit (`'Ⅷ'`, `'²'`) is -1 everywhere where a JDK answers 8 and 2. The
-  decimal digits alone are 71 runs of ten (`.kb/scheme-frontend.md`, "(scheme char)"), a list
-  small enough to travel, generated from a running JDK and pinned as
-  `RegexUnicodeTablesTest` pins the engine's.
+- **`getNumericValue` of a number that is no digit** (`'Ⅷ'`, `'²'`, `'½'`) is -1 where a JDK
+  answers 8, 2 and -2: 1,159 code points in some 520 runs (`NumericValues.java` of the k71
+  probes), 4 KB as text, which would be in every program calling `getNumericValue` -- and
+  programs call it for ASCII digits. A form of the table a program pays for only where it
+  can meet such a character is the lead; the digits' list costs 1.5 KB (k71).
+- **`translateEscapes` of a character outside the first plane after a backslash** names its
+  code point (`\\u1F600`), where a JDK names its high surrogate: a string's elements are code
+  points.
 - **`Duration.dividedBy`** (a long by a long of nanoseconds needs 128 bits: `multipliedBy`
   shows the digits-of-a-thousand-million way), `CompletableFuture.orTimeout` /
-  `completeOnTimeout`, the older `Calendar`. What is left of `java.time` is `.todo/k57`.
+  `completeOnTimeout`, the older `Calendar`. What is left of `java.time` is `.todo/k77` .. `k80`.
 - **`"ß".toUpperCase()` is `ß`**; a JDK answers `SS` (the host's upcase is one character to
   one).
 - **`java.util.regex`**: `Matcher.usePattern`, `namedGroups`; `\N{name}` (no name table is
@@ -189,8 +187,7 @@ checked exception, and a line that differs from a JDK by decision can be in no c
   preview 1, a pollable on the component) would make the two variants of `%java-input-more`
   one.
 - **Members met and left refused** (each refused by name; add where one is met):
-  `String.stripIndent` / `translateEscapes`; `Character.codePointAt` of a `CharSequence` /
-  `toTitleCase` / `codePointCount`; `Runtime.totalMemory` / `freeMemory` / `maxMemory`;
+  `Runtime.totalMemory` / `freeMemory` / `maxMemory`;
   `System.getenv()` of every variable; a `StringBuilder` as a `Comparable`; the charsets'
   `aliases()`, `UTF-32` and the other names a JDK has; `Random.nextGaussian(mean, stddev)` and
   `nextExponential`, which a JDK draws by an algorithm of its own (k47's `Rand.java`);
